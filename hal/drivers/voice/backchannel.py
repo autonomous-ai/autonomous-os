@@ -79,6 +79,11 @@ class Backchannel:
         self._last_cue_time: float = 0.0
         self._lock = threading.Lock()
         self._timer: Optional[threading.Timer] = None
+        # A cue can wait behind normal TTS while the STT session that requested
+        # it ends. Tag every request with this epoch so it cannot play into a
+        # later mic session and be transcribed as a user turn.
+        self._session_epoch: int = 0
+        self._session_active = False
         # Monotonic deadline until which our own cue audio is in the room.
         self._self_audio_until: float = 0.0
 
@@ -112,16 +117,34 @@ class Backchannel:
                 return
             self._last_partial = text
             self._cancel_timer()
+            session_epoch = self._session_epoch
             if STALL_TIMEOUT_S <= 0:
-                self._fire_cue()
+                fire_now = True
             else:
-                self._timer = threading.Timer(STALL_TIMEOUT_S, self._fire_cue)
+                fire_now = False
+                self._timer = threading.Timer(
+                    STALL_TIMEOUT_S, self._fire_cue, args=(session_epoch,)
+                )
                 self._timer.daemon = True
                 self._timer.start()
+        if fire_now:
+            self._fire_cue(session_epoch)
+
+    def begin_session(self) -> None:
+        """Mark the STT session whose partials may receive a listening cue."""
+        with self._lock:
+            self._session_epoch += 1
+            self._session_active = True
+
+    def _session_is_current(self, session_epoch: int) -> bool:
+        with self._lock:
+            return self._session_active and session_epoch == self._session_epoch
 
     def reset(self) -> None:
-        """Reset state when STT session ends."""
+        """Reset state when STT session ends and invalidate queued cue audio."""
         with self._lock:
+            self._session_epoch += 1
+            self._session_active = False
             self._cancel_timer()
             self._last_partial = ""
 
@@ -130,8 +153,11 @@ class Backchannel:
             self._timer.cancel()
             self._timer = None
 
-    def _fire_cue(self) -> None:
+    def _fire_cue(self, session_epoch: int) -> None:
         """Check interval, then play a random filler in background thread."""
+        if not self._session_is_current(session_epoch):
+            logger.info("Backchannel skipped: originating STT session ended")
+            return
         now = time.time()
         if (now - self._last_cue_time) < MIN_INTERVAL_S:
             logger.info("Backchannel skipped: interval cooldown (%.1fs < %.1fs)",
@@ -145,11 +171,16 @@ class Backchannel:
         self._last_cue_time = now
         filler = random.choice(FILLERS)
         logger.info("Backchannel: '%s'", filler)
-        threading.Thread(target=self._play, args=(filler,), daemon=True, name="bc-cue").start()
+        threading.Thread(
+            target=self._play, args=(filler, session_epoch), daemon=True, name="bc-cue"
+        ).start()
 
-    def _play(self, text: str) -> None:
+    def _play(self, text: str, session_epoch: int) -> None:
         """Play a short TTS cue directly, bypassing tts_service.speak()."""
         import hal.app_state as _state
+        if not self._session_is_current(session_epoch):
+            logger.info("Backchannel skipped: originating STT session ended before playback")
+            return
         if _state._speaker_muted:
             return
         tts = self._tts
@@ -186,9 +217,23 @@ class Backchannel:
             # for the VAD loop running in parallel.
             duration_s = len(samples) / float(dst_rate)
             with self._lock:
+                if (
+                    not self._session_active
+                    or session_epoch != self._session_epoch
+                ):
+                    logger.info(
+                        "Backchannel skipped: originating STT session ended before output"
+                    )
+                    return
                 self._self_audio_until = time.monotonic() + duration_s + ECHO_TAIL_S
             try:
                 with tts._stream_lock:
+                    if not self._session_is_current(session_epoch):
+                        logger.info(
+                            "Backchannel skipped: originating STT session ended while "
+                            "waiting for TTS output"
+                        )
+                        return
                     stream = tts._ensure_stream(dst_rate)
                     stream.write(samples_2d)
             finally:

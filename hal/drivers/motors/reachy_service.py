@@ -214,7 +214,7 @@ class ReachyMotionService:
 
     # --- Lifecycle ---
 
-    def start(self) -> None:
+    def start(self, skip_wake: bool = False) -> None:
         with self._lock:
             # media_backend="no_media": HAL owns camera/audio via its own
             # drivers — the SDK must not grab them too.
@@ -222,10 +222,15 @@ class ReachyMotionService:
                 host=self._host, port=self._port, media_backend="no_media"
             )
             self._enable_motors()
-            try:
-                self._mini.wake_up()
-            except Exception as e:
-                logger.warning("[reachy] wake_up failed (continuing): %s", e)
+            # wake_up() is a goto + a sound: exactly the performance a device
+            # that was asleep must not put on just because HAL restarted.
+            if skip_wake:
+                logger.info("[reachy] wake_up skipped -- device was asleep")
+            else:
+                try:
+                    self._mini.wake_up()
+                except Exception as e:
+                    logger.warning("[reachy] wake_up failed (continuing): %s", e)
         logger.info(
             "[reachy] connected to daemon at %s:%s (play ramp %.2fs%s)",
             self._host, self._port, _PLAY_RAMP_S,

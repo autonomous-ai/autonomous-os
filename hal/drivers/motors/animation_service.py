@@ -328,8 +328,13 @@ class AnimationService:
     # touches needs no backstop.
     _SERVO_REST_SPEED = {1: 0}
 
-    def _configure_servos_raw(self):
+    def _configure_servos_raw(self, energize: bool = True):
         """Configure servos directly via scservo_sdk, bypassing lerobot.
+
+        energize=False leaves Torque_Enable at 0: the gains and mode are still
+        written, but the body stays limp. Used when HAL restarts on a sleeping
+        device — a sleeping lamp rests with torque off, and switching it on just
+        to switch it off again a second later is a visible twitch for no gain.
 
         lerobot's bus.write() requires a fully successful connect() handshake.
         When servos are offline, connect() fails and bus.write() raises
@@ -356,16 +361,30 @@ class AnimationService:
                 pk.write1ByteTxRx(ph, sid, 23, igain)  # I_Coefficient
                 pk.write1ByteTxRx(ph, sid, 22, 32)  # D_Coefficient
                 # See _SERVO_REST_SPEED: clears a cap a killed sweep left behind.
+                # Outside the energize gate on purpose: this is configuration,
+                # like the gains above it, and a device that restarted asleep
+                # must still come back with a known speed rather than whatever
+                # cap a killed sweep left in the register.
                 if rest_speed is not None:
                     pk.write2ByteTxRx(ph, sid, self._GOAL_SPEED_REG, rest_speed)
-                pk.write1ByteTxRx(ph, sid, 40, 1)   # Torque_Enable = 1
+                if energize:
+                    pk.write1ByteTxRx(ph, sid, 40, 1)   # Torque_Enable = 1
                 logger.info(
                     f"{motor_name} (ID {sid}): P={pgain}, I={igain}"
                     + (f", speed={rest_speed}" if rest_speed is not None else "")
-                    + ", torque ON"
+                    + f", torque {'ON' if energize else 'OFF (asleep)'}"
                 )
 
-    def start(self):
+    def start(self, skip_wake: bool = False):
+        """skip_wake: come up without the startup pose + idle loop.
+
+        Used when HAL restarts on a device that was asleep (OTA, deploy). The
+        wake move takes 5s of visible motion and the idle loop keeps the body
+        going after it — so a sleeping lamp would stand up, breathe, and only
+        then be told to go back to sleep once lifespan finishes. The sleep flag
+        is restored at import, before this runs, so the whole performance can
+        simply be skipped instead of undone afterwards.
+        """
         self.robot = LeLampFollower(self.robot_config)
         try:
             self.robot.connect(calibrate=False)
@@ -374,7 +393,7 @@ class AnimationService:
 
         # Configure servos directly — works even if connect() partially failed
         try:
-            self._configure_servos_raw()
+            self._configure_servos_raw(energize=not skip_wake)
         except Exception as e:
             logger.warning(f"Raw configure failed: {e}")
 
@@ -387,6 +406,9 @@ class AnimationService:
         self._running.set()
         self._event_thread = threading.Thread(target=self._event_loop, daemon=True)
         self._event_thread.start()
+        if skip_wake:
+            logger.info("Servo startup move + idle skipped -- device was asleep")
+            return
         self.dispatch(SERVO_CMD_STARTUP_MOVE, None)
 
         # Auto-play idle (same as upstream) so lamp moves immediately after boot

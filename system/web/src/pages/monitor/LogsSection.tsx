@@ -4,10 +4,11 @@ import { S } from "./styles";
 import { API } from "./types";
 import { StatusBadge } from "./components";
 
-type LogSource = "hal" | "os-server" | "openclaw" | "openclaw-service" | "buddy";
+type LogSource = "hal" | "os-server" | "bootstrap" | "openclaw" | "openclaw-service" | "buddy";
 const LOG_SOURCES: { id: LogSource; label: string; color: string }[] = [
   { id: "hal",              label: "HAL",        color: "var(--lm-green)" },
   { id: "os-server",        label: "OS",         color: "var(--lm-amber)" },
+  { id: "bootstrap",        label: "Bootstrap",  color: "var(--lm-purple)" },
   { id: "openclaw",         label: "Agent",      color: "var(--lm-blue)" },
   { id: "openclaw-service", label: "Agent Service", color: "var(--lm-purple)" },
   { id: "buddy",            label: "Claude Desktop Buddy", color: "var(--lm-cyan)" },

@@ -133,7 +133,7 @@ component scripts in order. Each of those also runs standalone:
 | 3 | `spike-os.sh` | `os-server` → `/usr/local/bin/os-server`, seeds `/root/config/config.json`, runs it **as root with `WorkingDirectory=/root`** |
 | 4 | `spike-web.sh` | `web` → `/usr/share/nginx/html/setup`, installs nginx, writes the spike vhost |
 | 5 | `spike-agent.sh` | Node.js 22 (NodeSource) + `openclaw` at the OTA-pinned version, seeds `/root/.openclaw`, runs `openclaw gateway run` on loopback `18789` |
-| 6 | `spike-bootstrap.sh` | `bootstrap` → `/usr/local/bin/bootstrap-server`, seeds `/root/config/bootstrap.json`, installs `robots/reachy-mini/software-update` → `/usr/local/bin/software-update` (the helper the worker execs; without it every apply fails with `executable file not found in $PATH` while all units report healthy) |
+| 6 | `spike-bootstrap.sh` | `bootstrap` → `/usr/local/bin/bootstrap-server`, seeds `/root/config/bootstrap.json`, installs the `software-update` staged at the device-package root by `upload-device.sh` (canonical `scripts/provision/software-update`) → `/usr/local/bin/software-update` (the helper the worker execs; without it every apply fails with `executable file not found in $PATH` while all units report healthy) |
 
 Why that order, specifically:
 

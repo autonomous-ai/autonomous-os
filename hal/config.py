@@ -96,6 +96,12 @@ TRACKING_FACE_DETECTOR_ENABLED: bool = os.environ.get(
     "HAL_TRACKING_FACE_DETECTOR", "true"
 ).strip().lower() in ("1", "true", "yes", "on")
 
+# Wall-clock limit for one object-tracking session. Read at HAL startup; set
+# HAL_TRACKING_MAX_DURATION_S per device to tune it without changing code.
+TRACKING_MAX_DURATION_S: float = float(
+    os.environ.get("HAL_TRACKING_MAX_DURATION_S", "10")
+)
+
 # --- Data layout ---
 
 # --- Sensing: os-server integration ---
@@ -142,6 +148,13 @@ FACE_STRANGER_FORGET_S = float(os.environ.get("HAL_FACE_STRANGER_FORGET_S", "180
 # turn every FACE_COOLDOWN_S (10s). Friend enters are not affected.
 FACE_STRANGER_ENTER_FLOOR_S = float(os.environ.get("HAL_FACE_STRANGER_ENTER_FLOOR_S", "300.0"))
 FACE_STRANGER_FLUSH_S = float(os.environ.get("HAL_FACE_STRANGER_FLUSH_S", "10.0"))
+# An enrolled face can grant voice focus on presence.enter. Keep stranger-only
+# enters agent-visible without granting focus unless a deployment explicitly
+# opts into guest-first conversation.
+PRESENCE_WAKE_STRANGERS: bool = (
+    os.environ.get("HAL_PRESENCE_WAKE_STRANGERS", "false").lower()
+    in ("1", "true", "yes")
+)
 # Minimum face bbox HEIGHT as a fraction of frame height. Height, not area:
 # area falls off as 1/d^2 while a linear dimension falls off as 1/d, so the
 # area form made the knob twice as sensitive for the same change in reach.
@@ -814,6 +827,12 @@ REALTIME_NOISE_SPEECH_RATIO: float = float(
 REALTIME_REQUIRE_TRANSCRIPT: bool = os.environ.get(
     "HAL_REALTIME_REQUIRE_TRANSCRIPT", "true"
 ).lower() in ("1", "true", "yes")
+# Register the explicit `reject_turn` tool and allow only that tool call to
+# suppress the main-agent fallback. A plain silent completion, timeout, or error
+# still falls back as before. Set false to turn this experimental AI filter off.
+REALTIME_AI_REJECT_FILTER: bool = os.environ.get(
+    "HAL_REALTIME_AI_REJECT_FILTER", "true"
+).lower() in ("1", "true", "yes")
 # Noise guard for turns that DO have a transcript. The guards above only run when
 # STT came back empty, so a noise turn whose STT invented a word ("Ừ", "Okay",
 # "Thank you" — nova-3 reports confidence 1.0 for these) bypasses every check and
@@ -1348,13 +1367,20 @@ REALTIME_REPLY_SYNC_MAX_CHARS: int = int(os.environ.get("HAL_REALTIME_REPLY_SYNC
 # later turn until recycle; Gemini only needs the gist to avoid repeating
 # itself.
 REALTIME_TTS_HISTORY_MAX_CHARS: int = int(os.environ.get("HAL_REALTIME_TTS_HISTORY_MAX_CHARS", "300"))
-# Dead air while the realtime model works on a committed turn. Chit-chat answers
-# start in ~1s and need nothing, but a turn the model grounds with Google Search
-# emits no token until the search returns — 3-6s of a device that looks awake and
-# sounds dead. After this many seconds with no output yet, HAL asks os-server to
-# speak one opening filler ("one sec", "let me check"); the model's own first
-# sentence interrupts it. Set high enough that a normal answer never races it.
+# Dead air while the realtime model works on a committed turn. After this many
+# seconds with no output yet, HAL asks os-server to speak one opening filler
+# ("one sec", "let me check"); the model's own first sentence interrupts it.
 # 0 disables.
+#
+# The 1.5s default assumes a chit-chat answer starts in ~1s, so the filler only
+# covers the slow class (a turn grounded with Google Search emits no token until
+# the search returns). That assumption is per-model, and is already false on at
+# least one shipped body: measured on lamp-0c89 26/08/2026 against
+# gemini-3.1-flash-live-preview behind the campaign-api proxy, EVERY turn took
+# 3.0-8.0s to its first sentence (median 4.0s, n=31). There the filler is not
+# covering an outlier, it is the only thing the user hears for the first few
+# seconds, and the body lowers this in its own .env. Tune it per device from
+# measured time-to-first-sentence, not from this default.
 REALTIME_FILLER_DELAY_S: float = float(os.environ.get("HAL_REALTIME_FILLER_DELAY_S", "1.5"))
 
 # --- Realtime: Summarizer (Anthropic Messages API) ---

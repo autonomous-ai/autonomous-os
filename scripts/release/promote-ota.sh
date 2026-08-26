@@ -13,7 +13,7 @@
 # Usage:
 #   ./scripts/release/promote-ota.sh <component> [min_version]
 #     <component>  flat key (os-server | bootstrap | web | hal |
-#                  claude-desktop-buddy | openclaw) OR device:<type> (e.g. device:lamp)
+#                  claude-desktop-buddy | openclaw | codex) OR device:<type> (e.g. device:lamp)
 #     [min_version] optional explicit floor; defaults to the entry's current version
 #
 # Examples:

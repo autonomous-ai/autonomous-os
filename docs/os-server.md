@@ -368,13 +368,19 @@ HAL (Python): FastAPI standard JSON responses.
 
 ## Logging
 
-When `GELF_URL` is configured, OS Server ships INFO-and-higher records to that
-central collector through one worker with a bounded queue of 256 records. Logging
-never blocks the request path or creates a goroutine per record: when the collector
-is slow or unavailable and the queue is full, newly produced GELF records are
-dropped (with rate-limited stderr notices) while console and local rotating-file
-logging continue. On shutdown, the worker flushes queued records for up to five
-seconds before cancelling any remaining delivery.
+`HAL_LOG_LEVEL` in the shared `/opt/hal/.env` controls the level for HAL,
+OS Server, and bootstrap. Allowed values are `DEBUG`, `INFO` (the default),
+`WARN`, and `ERROR`. OS Server writes records at that level and higher to stdout
+and the rotating local file `/var/log/os-server.log` (2 MB per file, retaining
+the 10 newest backups).
+
+When `GELF_URL` is configured, OS Server ships records at the same configured
+level and higher to that central collector through one worker with a bounded queue
+of 256 records. Logging never blocks the request path or creates a goroutine per
+record: when the collector is slow or unavailable and the queue is full, newly
+produced GELF records are dropped (with rate-limited stderr notices) while console
+and local rotating-file logging continue. On shutdown, the worker flushes queued
+records for up to five seconds before cancelling any remaining delivery.
 
 ## Local Intent Matching
 

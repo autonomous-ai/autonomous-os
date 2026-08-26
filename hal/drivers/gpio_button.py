@@ -30,9 +30,7 @@ import time
 
 import hal.app_state as state
 from hal.presets import (
-    LED_FACTORY_RESET,
-    LED_SHUTDOWN_WARN,
-    LED_SLEEP_WARN,
+    BUTTON_LED_PRESETS,
     RGB_CMD_SOLID,
 )
 from hal.board.board import board_profile
@@ -57,10 +55,18 @@ logger = logging.getLogger(__name__)
 # tells them shutdown is armed. Red solid at 10s+ means factory-reset.
 # Both dispatch at HIGH priority so they preempt the current emotion LED.
 # The purple comes from sleepy's previous display preset.
-# The three warn colors live in hal/presets.py (LED_SLEEP_WARN /
-# LED_SHUTDOWN_WARN / LED_FACTORY_RESET) alongside the other LED presets —
-# this file owns the staging (when to blink, when to go solid), not the look.
+# The three warn colors live in hal/presets.py (BUTTON_LED_PRESETS) alongside
+# the other LED presets, so a device can restyle them via presets.json — this
+# file owns the staging (when to blink, when to go solid), not the look. Read
+# them through _warn_color() at call time: the overlay merges the table in
+# place at boot, so a name imported once would keep the pre-override value.
 LED_OFF = (0, 0, 0)
+
+
+def _warn_color(tier: str):
+    """Current color for a button hold tier, read from the (possibly
+    device-overridden) preset table at call time."""
+    return tuple(BUTTON_LED_PRESETS[tier]["color"])
 # Blink: 0.25 s on + 0.25 s off = 2 Hz full cycle.
 LED_BLINK_HALF_PERIOD_S = 0.25
 
@@ -131,13 +137,13 @@ class GPIOButtonHandler:
             # Stage 3 entry: set red solid once (no blink). Subsequent loops
             # leave it alone so the LED doesn't flicker.
             if stage != last_stage and stage == 3:
-                self._dispatch_led(LED_FACTORY_RESET)
+                self._dispatch_led(_warn_color("factory_reset"))
             last_stage = stage
 
             if stage in (1, 2):
                 # Half-period toggle gives a 2 Hz blink (0.25 s on, 0.25 s off).
                 blink_on = not blink_on
-                color = LED_SLEEP_WARN if stage == 1 else LED_SHUTDOWN_WARN
+                color = _warn_color("sleep_warn" if stage == 1 else "shutdown_warn")
                 self._dispatch_led(color if blink_on else LED_OFF)
                 wait = LED_BLINK_HALF_PERIOD_S
             else:
@@ -226,7 +232,7 @@ class GPIOButtonHandler:
                 self._click_timer = None
             # Lock the LED at red solid until reboot kills us. Watcher already
             # set it but reaffirm (idempotent at HIGH priority).
-            self._dispatch_led(LED_FACTORY_RESET)
+            self._dispatch_led(_warn_color("factory_reset"))
             # Off-thread: factory_reset_action blocks ~3s (TTS announce) +
             # servo release + HTTP POST. lgpio callback must return promptly
             # or subsequent edges queue up. Original `_on_long_press` ran in
@@ -246,7 +252,7 @@ class GPIOButtonHandler:
                 self._click_timer = None
             # Freeze LED at red solid (was blinking). Confirms the gesture
             # committed to shutdown, stays on through the 5 s TTS announce.
-            self._dispatch_led(LED_SHUTDOWN_WARN)
+            self._dispatch_led(_warn_color("shutdown_warn"))
             # Off-thread: same reasoning as factory-reset above (announce +
             # 5s sleep + servo release + subprocess.Popen shutdown).
             threading.Thread(

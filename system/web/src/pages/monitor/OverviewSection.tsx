@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { Satellite, Globe, Eye, Volume2, Cpu, Drama, Clapperboard, Bot, Tag, Wifi, LayoutDashboard } from "lucide-react";
 import { S } from "./styles";
-import { HW } from "./types";
+import { API, HW } from "./types";
 
 const EMOTION_EMOJI: Record<string, string> = {
   happy: "😊", curious: "🤔", thinking: "💭", sad: "😢", excited: "🤩",
@@ -11,6 +11,20 @@ const EMOTION_EMOJI: Record<string, string> = {
   stretching: "🙆", caring: "🤗", music_chill: "🎵", music_strong: "🎸",
   scan: "👀", nod: "👍", headshake: "🙅",
 };
+
+type OtaVersions = Record<string, { current?: string; update_available?: boolean }>;
+
+async function fetchOtaVersions(): Promise<OtaVersions | null> {
+  try {
+    const response = await fetch(`${API}/system/ota-versions`);
+    if (!response.ok) return null;
+    const body = await response.json();
+    return body?.data as OtaVersions | null;
+  } catch {
+    // Bootstrap down → no buttons, same as nothing to update.
+    return null;
+  }
+}
 
 function rgbToHex(rgb: number[]): string {
   return "#" + rgb.map(c => c.toString(16).padStart(2, "0")).join("");
@@ -107,6 +121,84 @@ export function OverviewSection({
   // so the regular monitor view doesn't ship one-click OTA triggers (rate
   // limit + admin auth still apply on the server side either way).
   const isDebug = new URLSearchParams(window.location.search).get("debug") === "true";
+
+  // Which components actually HAVE a newer build. Without this the card showed
+  // an `update` button on every row, and pressing one with nothing to install
+  // looked broken: the worker logs "held by min_version floor" and the button
+  // just says OK. Fetched once per mount (a human opening a page, not a hot
+  // path) and only in debug, where the buttons can appear at all.
+  const [otaVersions, setOtaVersions] = useState<OtaVersions>({});
+  const refreshOtaVersions = useCallback(() => {
+    void fetchOtaVersions().then((versions) => {
+      if (versions) setOtaVersions(versions);
+    });
+  }, []);
+  useEffect(() => {
+    if (!isDebug) return;
+    let cancelled = false;
+    fetchOtaVersions().then((versions) => {
+      if (!cancelled && versions) setOtaVersions(versions);
+    });
+    return () => { cancelled = true; };
+  }, [isDebug]);
+  // held_by_floor is deliberately NOT consulted: that floor stages the
+  // automatic fleet rollout, while this button installs the published version
+  // on this one device — the same thing `software-update <key>` over SSH has
+  // always done.
+  const canUpdate = (target: string) => isDebug && !!otaVersions[target]?.update_available;
+
+  // Which rows are installing right now. Polled from the cheap /ota-updating
+  // (no metadata fetch) every 2s while something runs, and every 10s otherwise
+  // so a card opened mid-update — or an update started from another tab or over
+  // SSH — still shows the label. When the set empties, re-read /ota-versions so
+  // the row picks up its new version and the button disappears.
+  const [otaUpdating, setOtaUpdating] = useState<string[]>([]);
+  const otaUpdatingRef = useRef<string[]>([]);
+  // Optimistic overlay: keyed by target, value = when the click was accepted.
+  // Held for a few seconds so a component that installs faster than one poll
+  // still flashes the label instead of jumping straight to "done".
+  const [justTriggered, setJustTriggered] = useState<Record<string, number>>({});
+  const pokePollRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    if (!isDebug) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const poll = async () => {
+      try {
+        const r = await fetch(`${API}/system/ota-updating`);
+        const j = r.ok ? await r.json() : null;
+        const list: string[] = j?.data?.updating ?? [];
+        if (!cancelled) {
+          const wasBusy = otaUpdatingRef.current.length > 0;
+          otaUpdatingRef.current = list;
+          setOtaUpdating(list);
+          if (wasBusy && list.length === 0) void refreshOtaVersions();
+        }
+      } catch { /* bootstrap down → treat as "nothing running" */ }
+      if (!cancelled) timer = setTimeout(poll, otaUpdatingRef.current.length > 0 ? 2000 : 10000);
+    };
+    // Let a click jump the queue instead of waiting out the idle interval.
+    pokePollRef.current = () => { if (timer) clearTimeout(timer); void poll(); };
+    void poll();
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+  }, [isDebug, refreshOtaVersions]);
+
+  const onUpdateTriggered = useCallback((target: string) => {
+    setJustTriggered((prev) => ({ ...prev, [target]: Date.now() }));
+    pokePollRef.current();
+    // Clear the overlay after the grace window and re-read versions: by then
+    // either the server reports it (label stays via otaUpdating) or it is done.
+    setTimeout(() => {
+      setJustTriggered((prev) => {
+        const next = { ...prev };
+        delete next[target];
+        return next;
+      });
+      void refreshOtaVersions();
+    }, 6000);
+  }, [refreshOtaVersions]);
+
+  const isUpdating = (target: string) => otaUpdating.includes(target) || target in justTriggered;
 
   // Volume slider: local state for smooth dragging, API call only on release
   const [localVolume, setLocalVolume] = useState<number | null>(null);
@@ -477,10 +569,12 @@ export function OverviewSection({
           <div style={{ marginBottom: 10 }}><CardLabel icon={<Tag size={13} />} text="Versions" /></div>
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             <VersionRow name="Host"   color="var(--lm-text)"   version={null}                    uptime={sys?.uptime ?? null}                                   updateTarget={null} />
-            <VersionRow name="Web"    color="var(--lm-teal)"   version={webVersion}              uptime={null}                                                  updateTarget={isDebug ? "web" : null} />
-            <VersionRow name="OS"     color="var(--lm-amber)"  version={sys?.version ?? null}    uptime={sys?.serviceUptime ?? null}                            updateTarget={isDebug ? "os-server" : null} />
-            <VersionRow name="HAL"    color="var(--lm-blue)"   version={halVersion}              uptime={sys?.halUptime ?? null}                                updateTarget={isDebug ? "hal" : null} />
-            <VersionRow name="Agent"  color="var(--lm-purple)" version={oc?.version ?? null}     uptime={oc?.connected ? (oc?.agentUptime ?? null) : null}      updateTarget={null} />
+            <VersionRow name="Web"    color="var(--lm-teal)"   version={webVersion}              uptime={null}                                                  updateTarget={canUpdate("web") ? "web" : null} updating={isUpdating("web")} onTriggered={onUpdateTriggered} />
+            <VersionRow name="OS"     color="var(--lm-amber)"  version={sys?.version ?? null}    uptime={sys?.serviceUptime ?? null}                            updateTarget={canUpdate("os-server") ? "os-server" : null} updating={isUpdating("os-server")} onTriggered={onUpdateTriggered} />
+            <VersionRow name="HAL"    color="var(--lm-blue)"   version={halVersion}              uptime={sys?.halUptime ?? null}                                updateTarget={canUpdate("hal") ? "hal" : null} updating={isUpdating("hal")} onTriggered={onUpdateTriggered} />
+            <VersionRow name="Agent"  color="var(--lm-purple)" version={oc?.version ?? null}     uptime={oc?.connected ? (oc?.agentUptime ?? null) : null}      updateTarget={canUpdate("agent") ? "agent" : null} updating={isUpdating("agent")} onTriggered={onUpdateTriggered} />
+            {isDebug && <VersionRow name="Bootstrap" color="var(--lm-text-dim)" version={otaVersions.bootstrap?.current ?? null} uptime={null} updateTarget={canUpdate("bootstrap") ? "bootstrap" : null} updating={isUpdating("bootstrap")} onTriggered={onUpdateTriggered} />}
+            {isDebug && <VersionRow name="Device" color="var(--lm-text-dim)" version={otaVersions.device?.current ?? null} uptime={null} updateTarget={canUpdate("device") ? "device" : null} updating={isUpdating("device")} onTriggered={onUpdateTriggered} />}
           </div>
         </div>
         </div>
@@ -888,12 +982,18 @@ function ToggleButton({ active, label, onClick, disabled = false }: {
   );
 }
 
-function VersionRow({ name, color, version, uptime, updateTarget }: {
+function VersionRow({ name, color, version, uptime, updateTarget, updating = false, onTriggered }: {
   name: string;
   color: string;
   version: string | null;
   uptime: number | null;
-  updateTarget: "os-server" | "web" | "hal" | null;
+  updateTarget: "os-server" | "bootstrap" | "web" | "hal" | "device" | "agent" | null;
+  // An install runs for tens of seconds (the component stops, is rebuilt and
+  // restarts). Without a label the row just sits there — on HAL it even shows a
+  // stale version while /opt/hal does not exist — and the natural reaction is to
+  // press the button again, which is how a device lost its runtime.
+  updating?: boolean;
+  onTriggered?: (target: string) => void;
 }) {
   // 4-column grid keeps name/version/uptime/button vertically aligned across rows.
   return (
@@ -909,7 +1009,9 @@ function VersionRow({ name, color, version, uptime, updateTarget }: {
         {uptime != null ? formatUptime(uptime) : "—"}
       </span>
       <span style={{ display: "flex", justifyContent: "flex-end" }}>
-        {updateTarget && <SoftwareUpdateButton target={updateTarget} label="update" />}
+        {updating
+          ? <span style={{ fontSize: 9.5, fontWeight: 600, color: "var(--lm-amber)" }} title="Installing — the component restarts when it finishes">updating…</span>
+          : updateTarget && <SoftwareUpdateButton target={updateTarget} label="update" onTriggered={onTriggered} />}
       </span>
     </div>
   );

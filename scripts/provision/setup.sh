@@ -437,7 +437,7 @@ UDEV_EOF
 
   # uv sync downloads Python 3.12 standalone (includes Python.h) + all deps
   cd "$HAL_DIR"
-  uv sync --python 3.12 --extra hardware
+  uv sync --python 3.12 --extra hardware --extra aec
   cd /
 
   # Patch webrtcvad: replace pkg_resources import (removed in Python 3.12+)

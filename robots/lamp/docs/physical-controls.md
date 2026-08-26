@@ -41,9 +41,11 @@ The 1-tap gesture is Lamp's primary **barge-in and attention-cancel mechanism**:
 
 When wake word is enabled, the click also **counts as a wake event**: `single_click_action` calls `voice_service.grant_wakeword_focus(source)`, which opens the same follow-up focus window (`HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S`, default 20 s) a spoken wake phrase opens. Without it the device would announce "Listening" and then drop the user's answer for missing the wake phrase. The window is re-checked at dispatch time, not only latched at mic-session start, so a click during an already-open session still authorizes the sentence being spoken. No-op when wake word is off (every utterance already dispatches) or when the follow-up timeout is 0.
 
-### Turning toward the lamp as a third wake trigger
+### Presence enter and turning toward the lamp as wake triggers
 
-The wake gate has three openers, not two. Alongside the spoken wake phrase and the single click, **turning toward the lamp and speaking** opens the same window (`hal/drivers/tracking/gaze.py`), through the same `voice_service.grant_wakeword_focus(source)` seam the click uses — nothing downstream of the gate changes.
+The wake gate has four openers: a spoken wake phrase, a single click, a newly recognized person, and turning toward the lamp before speaking. A `presence.enter` that contains an enrolled identity opens the same follow-up focus window through `SensingService`, so a recognized person can say “hello, Leo” without first saying the wake phrase. A stranger-only enter remains visible to the agent but does not open voice focus by default; they can use a wake phrase, click, or gaze instead. Set `HAL_PRESENCE_WAKE_STRANGERS=true` for a guest-first deployment where a stranger entering view may start the conversation. Focus is granted only after the presence event has passed its normal cooldown; it does not unmute or start an unavailable microphone.
+
+**Turning toward the lamp and speaking** uses that same window (`hal/drivers/tracking/gaze.py`), through `voice_service.grant_wakeword_focus(source)` just like presence enter and the click — nothing downstream of the gate changes.
 
 The reason is device shape rather than preference. A desk lamp sits an arm's length from its user and is in view all day, so a wake phrase repeated dozens of times reads as addressing an appliance, and a button press reads as operating one. Between two people the cue is neither: you turn toward someone and speak. Products that popularised "hey <name>" have no camera and sit across a room, so the comparison does not carry.
 
@@ -62,7 +64,8 @@ When several faces are in frame, the one whose head counts is the one **nearest 
 
 | Env var | Default | Tunes |
 |---|---|---|
-| `HAL_GAZE_WAKE` | `false` | Master switch. Off means today's two openers only. |
+| `HAL_GAZE_WAKE` | `false` | Master switch for the gaze opener. Off leaves the spoken, click, and presence-enter openers available. |
+| `HAL_PRESENCE_WAKE_STRANGERS` | `false` | Let a stranger-only `presence.enter` open voice focus. Leave off to require a spoken, touch, or gaze signal from guests. |
 | `HAL_GAZE_SHADOW` | `true` | Log the decision without opening the gate. Costs nothing — no turn opens, so no LLM or TTS is spent. |
 | `HAL_GAZE_MAX_YAW_DEG` | 25 | Acceptance cone at frame centre. |
 | `HAL_GAZE_EDGE_CONE_SCALE` | 1.8 | How much wider the cone grows at the frame edge, where barrel distortion inflates the angle. |
@@ -86,7 +89,7 @@ Nobody has been visible for a while and the lamp turns: that is `REPOINT`, and i
 
 Thresholds are meant to be chosen from measurement, not guessed — shadow mode exists so a run beside a real user produces the counts (`[gaze] speech: yaw=… hold=…/… -> WOULD_WAKE`) that settle what angle reads as "addressing the lamp".
 
-Degradation is by omission in both directions. On a device with **no camera** the watcher never arms and the other two openers are untouched — no separate configuration. When `HAL_WAKEWORD_ENABLED` is **false** the watcher does not start at all: with no wake word every utterance already dispatches, so there is no gate left to open and the check would burn CPU to decide nothing. A gaze sample is also skipped while the head is relocating, when the camera is disabled for privacy, and whenever the detector lock is held by a live `look`.
+Degradation is by omission in both directions. On a device with **no camera** neither gaze nor camera-derived presence enter can arm, while the spoken and click openers are untouched — no separate configuration. When `HAL_WAKEWORD_ENABLED` is **false** the watcher does not start at all: with no wake word every utterance already dispatches, so there is no gate left to open and the check would burn CPU to decide nothing. A gaze sample is also skipped while the head is relocating, when the camera is disabled for privacy, and whenever the detector lock is held by a live `look`.
 
 **Relocating, not merely writing.** Two states write the servos continuously without moving the head anywhere: the idle loop breathing, and a tracking session pursuing the user's face. Treating either as a move means `last_servo_write` is never stale and nearly every frame is refused — measured, idle: 0.3 samples/s recorded against 4.9/s blocked; measured, tracking: 0.7/s against 4.5/s, refusing a user at yaw 0.9° with a 130 px face dead centre for having one sample in the window instead of two. Tracking matters most: it is the lamp following this user's face, so refusing to notice they are addressing it precisely then is the most broken-looking moment available — which is why the settling test must not become `_tracking_active` by the back door. Both are small continuous corrections and the yaw survives them. The `[gaze] sampling at N/s; blocked: …` line breaks the blocked count down by reason, because the two gates are fixed in different places.
 
@@ -97,13 +100,17 @@ End-to-end chain:
 2b. `state.note_music_cancel()` → stamps a HAL-side music cancel watermark, and `audio_stop()` runs on **both** branches (mic-unmute and stop-speaker), not just the stop-speaker one. Needed because the OS server's cancel is TTS-only: the cancelled turn keeps running and its pending music tool call still reaches `POST /audio/play` a moment later, where a fresh `music-play` thread clears its own `_stop_event` — so a point-in-time stop always loses that race and the user hears music they just cancelled once `yt-dlp` finishes resolving (1–5 s). While the watermark is fresh (`app_state.MUSIC_CANCEL_GUARD_S`, 3 s) `/audio/play` answers `{"status": "suppressed"}` instead of playing. The window is sized to cover the in-flight tool call but stay under the floor of a genuinely new request (speak → STT → LLM → tool is never under ~3 s), so "tap, then ask for a song" still works.
 3. `stop_tts()` → `tts_service.stop()` sets `_stop_event`; every blocking loop in TTS streaming (synth, render, playback) honors the event and aborts cleanly without leaving the speaker pegged
 
-### Voice barge-in (optional, off by default)
+### Voice barge-in (on by default)
 
-Voice-driven interrupt — speak during TTS to make Lamp stop and listen — is gated behind `HAL_BARGE_IN_ENABLED=true` in `hal/.env`. When enabled, `voice_service._monitor_barge_in()` opens a parallel mic capture during TTS playback, computes RMS over 256ms blocks, and calls `tts_service.stop()` when N consecutive blocks exceed `HAL_BARGE_IN_RMS_THRESHOLD`. Same downstream chain as tap-to-interrupt.
+Voice-driven interrupt — speak during TTS to make Lamp stop and listen — follows `HAL_BARGE_IN_ENABLED`, which defaults to `HAL_AEC_ENABLED` — `false` in code, but the lamp `.env` pins both to `true`. Cancellation is what makes it safe, so the two turn on together, and barge-in stays inert whenever the canceller is not actually running.
 
-Why off by default: software-only AEC is not viable on this hardware (Speex AEC integration degrades to ~13-30% reduction under multi-chunk TTS streaming). With only physical mic-speaker separation, bleed RMS (1-7500 observed) and user voice RMS (6-14k observed) overlap in the 7-9k zone, so a single RMS threshold cannot discriminate cleanly. Threshold 9000 + 1-frame trigger biases toward zero false-trigger at the cost of needing loud, deliberate utterance to trigger; threshold 6000-7000 biases the other way. Tuning per deployment is unavoidable until the device gains hardware AEC (e.g. ReSpeaker XVF3800).
+The active path is the **warm mic** loop, not `_monitor_barge_in()`. With `HAL_WARM_MIC=true` (the default) `arecord` stays open through playback and the capture loop drains and discards frames; barge-in is detected there, on the loop's own 64 ms frames, when `HAL_BARGE_IN_WARM_FRAMES` consecutive frames exceed `HAL_BARGE_IN_RMS_THRESHOLD` **and** a Silero pass agrees it is speech **and** `aec.uncancelled()` says the frame was really cancelled. `_monitor_barge_in()` (256 ms blocks, level only) is the legacy path and is unreachable while warm mic is on — `HAL_BARGE_IN_BLOCK_MS` and `HAL_BARGE_IN_TRIGGER_FRAMES` only size that one. Downstream chain is the same as tap-to-interrupt.
 
-When enabled, tail the log for `Barge-in monitor session end: max_rms_seen=N` (peak per session) and `BARGE-IN: RMS=N` events to characterize the deployed mic, then set `HAL_BARGE_IN_RMS_THRESHOLD` midway between observed bleed-max and voice-min. Tap-to-interrupt remains active regardless.
+**The two levels still overlap, and no threshold separates them.** Measured on `lamp-ee17` (speaker 25 %, `HAL_AEC_DELAY_MS=205`) with the gate parked at 30000 so nothing could fire, three full replies into a silent room peaked at **9804 / 6510 / 7849** — that is the echo ceiling. A confirmed real interruption on the same unit measured **8027**, *below* it. So a threshold under the ceiling self-interrupts (at 4500 it fired on 5530 / 6446 / 6637 / 7749, twice transcribing Lamp's own words as the user's turn) and one above it misses quiet interruptions. Separating them needs the envelope-decorrelation test — echo tracks the far-end envelope, a person does not — which is not implemented. The shipped default of 5000 deliberately favours catching a normal speaking voice; raise toward 11000 to trade the other way.
+
+Do not expect the Silero gate to reject Lamp's own voice: echo *is* speech, and it scored 0.50, 0.75 and 1.00 on separate events while real interruptions scored 0.08, 0.88 and 1.00. It rejects loud non-speech (door slam, keys, cough); level does the rest.
+
+To characterise a new deployment: park `HAL_BARGE_IN_RMS_THRESHOLD` at 30000, say nothing, and read the `drain peak RMS=… , longest run N frames` line each reply logs. Tap-to-interrupt remains active regardless.
 
 ## GPIO button detection (`hal/drivers/gpio_button.py`)
 
@@ -133,6 +140,8 @@ The watcher thread polls the hold duration and drives the RGB LED at HIGH priori
 | 10 s+ | red, solid | factory-reset armed — releasing now wipes + reboots |
 
 Purple identifies the sleep tier; red blink vs red solid differentiates shutdown from factory-reset. The LED is a silent no-op when the RGB service is unavailable (dev machines) — the button still works.
+
+The three colors are presets, not constants baked into the driver: `BUTTON_LED_PRESETS` in `hal/presets.py` (`sleep_warn` / `shutdown_warn` / `factory_reset`), overridable per device through the `button_led` section of `robots/<id>/presets.json` like every other LED table. The driver owns the staging — when to blink, when to go solid — and reads the color at the moment it paints, because the overlay merges the table in place at boot.
 
 Per-edge debounce is 200 ms (press and release ticks tracked independently so a quick tap isn't dropped while bouncy repeats of the same edge are filtered).
 
@@ -191,6 +200,20 @@ The actions live in one place so the GPIO button, TTP223, and any future input (
 The reset is **single-flight** with a 5-minute cooldown (`FactoryResetMinInterval`) shared across all trigger surfaces (GPIO hold, HTTP, MQTT) — a circuit breaker against runaway callers and accidental repeats.
 
 ## Mute/disable persistence across HAL restarts
+
+**Sleep persists the same way** (`/tmp/hal-sleep-state.json`). It is the same
+class of user-visible switch: someone — or a night scene — put the device to
+sleep, and restarting HAL must not undo that. An OTA restarts HAL, so before
+this sidecar an update at 3 am woke the device up: strip back on, mic listening,
+sensing ungated. The sidecar also carries the mic/speaker mutes **sleep itself owns** — those are deliberately kept out of the mic/speaker sidecars so waking hands the switches back to whatever the user chose, which used to mean a restart came back listening, with a still-in-flight agent turn free to speak out loud. `POST /emotion` persists the flag whenever it flips, and
+`server.py` lifespan re-expresses `sleepy` once the drivers are up, so the device
+LOOKS asleep again rather than booting into the resting look with the flag
+quietly set. The motion driver is also told to come up **without** its wake
+sequence (`start(skip_wake=True)`): the startup pose is a 5 s move followed by
+the idle loop, so undoing it afterwards meant a sleeping lamp stood up, moved,
+and only then lay back down. Restoring the flag at import — before the drivers
+start — is what makes skipping possible instead of reverting. A full device reboot still starts awake.
+
 
 Mic mute, speaker mute, and camera disable each persist to their own boot-scoped
 sidecar — `/tmp/hal-mic-state.json`, `/tmp/hal-speaker-state.json`,

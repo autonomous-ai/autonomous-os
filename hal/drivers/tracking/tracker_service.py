@@ -427,6 +427,12 @@ class TrackerService:
             while state.running.is_set():
                 t0 = time.perf_counter()
 
+                # This is a wall-clock session limit. Check before reading the
+                # frame so a stalled camera cannot keep tracking alive forever.
+                if time.perf_counter() - track_start_t > C.MAX_TRACK_DURATION_S:
+                    logger.warning("Tracking timeout after %ds, stopping", C.MAX_TRACK_DURATION_S)
+                    break
+
                 frame = camera_capture.last_frame
                 if frame is None:
                     time.sleep(1.0 / C.FAST_LOOP_FPS)
@@ -836,10 +842,6 @@ class TrackerService:
                     t_csrt_acc = 0.0
                     servo_count = 0
                     fps_t0 = time.perf_counter()
-
-                if time.perf_counter() - track_start_t > C.MAX_TRACK_DURATION_S:
-                    logger.warning("Tracking timeout after %ds, stopping", C.MAX_TRACK_DURATION_S)
-                    break
 
                 dt = time.perf_counter() - t0
                 sleep_time = (1.0 / C.FAST_LOOP_FPS) - dt

@@ -11,6 +11,7 @@ The caller (voice_service) drives the orchestrator:
   3. Iterate stream_output():
      - Yields AudioOutput / TextOutput / FunctionCallOutput chunks
      - Yields DelegateSignal if model called delegate_to_main (then stops)
+     - Yields RejectSignal if model explicitly rejects a non-user turn (then stops)
 """
 
 import json
@@ -46,7 +47,7 @@ from hal.realtime.models import (
     OutputBase,
     TextInput,
 )
-from hal.realtime.models.signal import DelegateSignal, LookReplaySignal
+from hal.realtime.models.signal import DelegateSignal, LookReplaySignal, RejectSignal
 from hal.realtime.summarizer import RealtimeSummarizer
 from hal.realtime.voice_agent.base import VoiceAgentBase
 
@@ -83,6 +84,25 @@ DELEGATE_TOOL: dict[str, Any] = {
             },
         },
         "required": ["message"],
+    },
+}
+
+REJECT_TURN_TOOL_NAME: str = "reject_turn"
+REJECT_TURN_TOOL_DESCRIPTION: str = (
+    "Call this only when you are confident this audio is background noise, "
+    "other people's conversation, an incomplete fragment, or otherwise not "
+    "addressed to this device. This explicitly drops the turn: never call it "
+    "for a request you could answer or delegate, and never call it merely "
+    "because you are uncertain. Keep voice output completely blank."
+)
+
+REJECT_TURN_TOOL: dict[str, Any] = {
+    "type": "function",
+    "name": REJECT_TURN_TOOL_NAME,
+    "description": REJECT_TURN_TOOL_DESCRIPTION,
+    "parameters": {
+        "type": "object",
+        "properties": {},
     },
 }
 
@@ -234,6 +254,10 @@ class RealtimeOrchestrator:
         # the model can't call it and nothing fires.
         self._expression_enabled: bool = enable_expression
         tools: list[dict[str, Any]] = [DELEGATE_TOOL]
+        # Keep the AI rejection policy behind one explicit runtime flag. When
+        # disabled, a silent model turn follows the existing main-agent fallback.
+        if config.REALTIME_AI_REJECT_FILTER:
+            tools.append(REJECT_TURN_TOOL)
         if enable_expression:
             tools.append(EMOTION_TOOL)
         # `look` (in-session vision) is registered only when ALL hold: a camera is
@@ -761,12 +785,13 @@ class RealtimeOrchestrator:
 
     def stream_output(
         self,
-    ) -> Generator[OutputBase | DelegateSignal | LookReplaySignal, None, None]:
+    ) -> Generator[OutputBase | DelegateSignal | RejectSignal | LookReplaySignal, None, None]:
         """Yield outputs from the model one by one as they arrive.
 
         Yields:
           - AudioOutput / TextOutput / FunctionCallOutput as they stream in
           - DelegateSignal if model called delegate_to_main (then stops)
+          - RejectSignal if model explicitly rejected the turn (then stops)
           - LookReplaySignal if model called look and a fresh frame was sent —
             the caller must re-append the turn's audio and commit again so the
             frame joins the replayed turn (then stops)
@@ -811,6 +836,44 @@ class RealtimeOrchestrator:
                 # _handle_emotion_call.
                 self._handle_emotion_call(output, spoken=produced)
                 continue
+            if (
+                isinstance(output, FunctionCallOutput)
+                and output.name == REJECT_TURN_TOOL_NAME
+            ):
+                # A rejection is only safe before any user-visible output. The
+                # prompt requires this tool to be the whole turn; this guard
+                # prevents a malformed late call from hiding a real response.
+                if produced:
+                    logger.warning(
+                        "[realtime] Ignoring reject_turn after output already began"
+                    )
+                    self._agent.send(
+                        [
+                            FunctionCallResultInput(
+                                call_id=output.call_id,
+                                output='{"error": "reject_turn must be the only turn outcome"}',
+                            )
+                        ]
+                    )
+                    # End rather than letting an acknowledgement generate a
+                    # second response after the model has already spoken.
+                    self._agent.end_turn()
+                    break
+                logger.info("[realtime] Model explicitly rejected this turn")
+                # Acknowledge like delegation so Gemini does not leave a pending
+                # tool call that poisons the next manual-VAD activity.
+                self._agent.send(
+                    [
+                        FunctionCallResultInput(
+                            call_id=output.call_id,
+                            output='{"result": "turn dropped"}',
+                        )
+                    ]
+                )
+                produced = True
+                self._agent.end_turn()
+                yield RejectSignal()
+                break
             if (
                 isinstance(output, FunctionCallOutput)
                 and output.name == DELEGATE_TOOL_NAME

@@ -41,9 +41,11 @@ Cử chỉ 1 chạm là **cơ chế barge-in và huỷ attention chính** của 
 
 Khi wake word đang bật, cú click cũng **được tính như một wake event**: `single_click_action` gọi `voice_service.grant_wakeword_focus(source)`, mở đúng cửa sổ follow-up focus (`HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S`, mặc định 20 s) mà câu wake phrase mở ra. Không có nó thì thiết bị nói "Nghe đây" rồi lại bỏ câu trả lời của user vì thiếu wake phrase. Cửa sổ được kiểm tra lại ở thời điểm dispatch, không chỉ latch lúc mở mic session, nên click giữa lúc session đang chạy vẫn authorize câu user đang nói. No-op khi wake word tắt (mọi câu đã dispatch sẵn) hoặc timeout follow-up = 0.
 
-### Quay về phía đèn — trigger wake thứ ba
+### Presence enter và quay về phía đèn — trigger wake
 
-Wake gate có **ba** cửa vào, không phải hai. Bên cạnh wake phrase nói ra và single click, **quay mặt về phía đèn rồi nói** cũng mở đúng cửa sổ đó (`hal/drivers/tracking/gaze.py`), qua đúng seam `voice_service.grant_wakeword_focus(source)` mà cú click dùng — mọi thứ phía sau gate không đổi.
+Wake gate có **bốn** cửa vào: wake phrase nói ra, single click, một người mới đã nhận diện, và quay về phía đèn trước khi nói. Một `presence.enter` có identity đã enrolled sẽ mở đúng cửa sổ follow-up focus qua `SensingService`, nên người đã nhận diện có thể nói “hello, Leo” mà không cần gọi wake phrase trước. Event chỉ có stranger vẫn được Agent nhìn thấy nhưng mặc định không mở voice focus; họ vẫn có thể dùng wake phrase, click hoặc gaze. Đặt `HAL_PRESENCE_WAKE_STRANGERS=true` cho deployment ưu tiên guest, nơi stranger xuất hiện trong khung có thể bắt đầu hội thoại. Focus chỉ được grant sau khi event presence đã qua cooldown bình thường; nó không tự unmute hoặc tự khởi động mic đang không sẵn sàng.
+
+**Quay mặt về phía đèn rồi nói** cũng mở cùng cửa sổ đó (`hal/drivers/tracking/gaze.py`), qua `voice_service.grant_wakeword_focus(source)` giống presence enter và cú click — mọi thứ phía sau gate không đổi.
 
 Lý do nằm ở hình dạng sản phẩm chứ không phải sở thích. Đèn bàn nằm cách user một cánh tay và trong tầm nhìn cả ngày, nên lặp wake phrase vài chục lần một ngày nghe như đang ra lệnh cho một thiết bị, còn bấm nút thì như đang vận hành máy. Giữa hai người, tín hiệu không phải hai thứ đó: người ta **quay về phía nhau rồi nói**. Các sản phẩm phổ biến hoá "hey <name>" đều không có camera và đặt ở đầu kia phòng, nên không so sánh trực tiếp được.
 
@@ -62,7 +64,8 @@ Khi trong khung có nhiều mặt, mặt được tính là mặt **gần tâm k
 
 | Env var | Mặc định | Chỉnh cái gì |
 |---|---|---|
-| `HAL_GAZE_WAKE` | `false` | Công tắc tổng. Tắt = chỉ còn hai cửa như hiện nay. |
+| `HAL_GAZE_WAKE` | `false` | Công tắc tổng cho cửa gaze. Tắt vẫn giữ cửa wake phrase, click và presence enter. |
+| `HAL_PRESENCE_WAKE_STRANGERS` | `false` | Cho `presence.enter` chỉ có stranger mở voice focus. Để tắt nếu guest phải dùng tín hiệu nói ra, chạm hoặc gaze. |
 | `HAL_GAZE_SHADOW` | `true` | Chỉ log quyết định, không mở gate. Không tốn gì — không turn nào mở nên không tốn LLM hay TTS. |
 | `HAL_GAZE_MAX_YAW_DEG` | 25 | Nón chấp nhận ở giữa khung. |
 | `HAL_GAZE_EDGE_CONE_SCALE` | 1.8 | Nón nới rộng bao nhiêu ở rìa khung, nơi barrel distortion thổi phồng góc. |
@@ -86,7 +89,7 @@ Lâu không thấy ai mà đèn tự quay: đó là `REPOINT`, và là thứ **d
 
 Shadow mode tồn tại chính để một buổi chạy cạnh user thật cho ra số liệu (`[gaze] speech: yaw=… facing=…%/…% -> WOULD_WAKE`) đủ để chốt các ngưỡng trên.
 
-Suy biến sạch theo cả hai chiều. Máy **không có camera** thì watcher không bao giờ arm, hai cửa kia nguyên vẹn — không cần cấu hình riêng. Khi `HAL_WAKEWORD_ENABLED` **false** thì watcher không khởi động luôn: không có wake word thì mọi câu đã dispatch sẵn, không còn gate nào để mở, chạy tiếp chỉ tốn CPU để quyết định một thứ vô nghĩa. Một mẫu gaze cũng bị bỏ qua khi đầu đang **đổi chỗ**, khi camera bị tắt vì quyền riêng tư, và khi detector lock đang do một `look` đang chạy giữ.
+Suy biến sạch theo cả hai chiều. Máy **không có camera** thì gaze lẫn presence enter từ camera đều không thể arm, còn cửa wake phrase và click vẫn nguyên vẹn — không cần cấu hình riêng. Khi `HAL_WAKEWORD_ENABLED` **false** thì watcher không khởi động luôn: không có wake word thì mọi câu đã dispatch sẵn, không còn gate nào để mở, chạy tiếp chỉ tốn CPU để quyết định một thứ vô nghĩa. Một mẫu gaze cũng bị bỏ qua khi đầu đang **đổi chỗ**, khi camera bị tắt vì quyền riêng tư, và khi detector lock đang do một `look` đang chạy giữ.
 
 **Đổi chỗ, chứ không phải chỉ đang ghi servo.** Có hai trạng thái ghi servo liên tục mà không đưa đầu đi đâu cả: vòng idle đang thở, và một phiên tracking đang bám mặt user. Coi hai thứ đó là "đang di chuyển" thì `last_servo_write` không bao giờ cũ và gần như mọi frame đều bị từ chối — đo thật, idle: ghi được 0.3 mẫu/s trên 4.9/s bị chặn; đo thật, tracking: 0.7/s trên 4.5/s, từ chối một user ở yaw 0.9° với mặt 130px ngay giữa khung chỉ vì cửa sổ có 1 mẫu thay vì 2. Tracking là trường hợp quan trọng nhất: đó chính là lúc đèn đang bám theo mặt user, nên từ chối nhận ra người ta đang nói với nó đúng lúc đó là khoảnh khắc trông hỏng nhất có thể — vì vậy test settle không được phép biến thành `_tracking_active` qua cửa sau. Cả hai đều là chỉnh nhỏ liên tục, góc yaw sống sót qua chúng. Dòng `[gaze] sampling at N/s; blocked: …` tách số frame bị chặn theo từng lý do, vì hai cổng đó sửa ở hai chỗ khác nhau.
 
@@ -97,13 +100,17 @@ Chuỗi end-to-end:
 2b. `state.note_music_cancel()` → đóng dấu watermark huỷ nhạc ở phía HAL, và `audio_stop()` chạy ở **cả hai** nhánh (unmute mic và stop loa), không chỉ nhánh stop loa. Cần vì cancel ở OS server chỉ tác động lên TTS: turn bị huỷ vẫn chạy tiếp và tool call nhạc còn treo của nó vẫn tới `POST /audio/play` ngay sau đó, nơi một thread `music-play` mới tự `_stop_event.clear()` — nên một cú stop tại một thời điểm luôn thua cuộc đua này, và user nghe đúng bài nhạc mình vừa huỷ sau khi `yt-dlp` resolve xong (1–5 s). Trong lúc watermark còn tươi (`app_state.MUSIC_CANCEL_GUARD_S`, 3 s), `/audio/play` trả `{"status": "suppressed"}` thay vì phát. Cửa sổ được chọn đủ phủ tool call đang bay nhưng vẫn dưới sàn của một yêu cầu mới thật sự (nói → STT → LLM → tool không bao giờ dưới ~3 s), nên "chạm xong xin bài hát" vẫn chạy bình thường.
 3. `stop_tts()` → `tts_service.stop()` set `_stop_event`; mọi blocking loop trong TTS stream (synth, render, playback) check event và abort sạch, không để loa kẹt
 
-### Voice barge-in (tuỳ chọn, mặc định tắt)
+### Voice barge-in (mặc định bật)
 
-Cắt bằng giọng nói — nói trong lúc Lamp đang nói để Lamp dừng và lắng nghe — được gate bởi `HAL_BARGE_IN_ENABLED=true` trong `hal/.env`. Khi bật, `voice_service._monitor_barge_in()` mở mic capture song song trong lúc TTS phát, tính RMS trên block 256ms, gọi `tts_service.stop()` khi N block liên tiếp vượt `HAL_BARGE_IN_RMS_THRESHOLD`. Cùng chuỗi downstream với tap-to-interrupt.
+Cắt bằng giọng nói — nói trong lúc Lamp đang nói để Lamp dừng và lắng nghe — theo `HAL_BARGE_IN_ENABLED`, vốn mặc định bằng `HAL_AEC_ENABLED` — trong code là `false`, nhưng `.env` của lamp ghim cả hai thành `true`. Việc khử vọng âm là thứ làm cho nó an toàn, nên hai cái bật cùng nhau, và barge-in nằm im mỗi khi bộ khử không thật sự chạy.
 
-Tại sao tắt mặc định: software-only AEC không khả thi trên hardware này (Speex AEC tích hợp xuống còn ~13-30% reduction dưới TTS multi-chunk streaming). Chỉ với physical separation mic-loa, bleed RMS (1-7500 đo được) và user voice RMS (6-14k đo được) chồng nhau ở zone 7-9k → 1 threshold RMS không discriminate sạch được. Threshold 9000 + 1 frame trigger thiên về 0 false-trigger, đổi lại phải nói lớn để cắt; threshold 6000-7000 thiên ngược lại. Tune theo deployment là không tránh khỏi cho tới khi device có hardware AEC (ví dụ ReSpeaker XVF3800).
+Đường đang chạy là vòng **warm mic**, không phải `_monitor_barge_in()`. Với `HAL_WARM_MIC=true` (mặc định), `arecord` vẫn mở suốt lúc phát và vòng capture rút rồi bỏ frame; barge-in được phát hiện ngay ở đó, trên chính frame 64 ms của vòng lặp, khi `HAL_BARGE_IN_WARM_FRAMES` frame liên tiếp vượt `HAL_BARGE_IN_RMS_THRESHOLD` **và** Silero đồng ý đó là tiếng nói **và** `aec.uncancelled()` xác nhận frame đó thật sự đã được khử. `_monitor_barge_in()` (block 256 ms, chỉ xét mức) là đường cũ và không thể tới được khi warm mic bật — `HAL_BARGE_IN_BLOCK_MS` và `HAL_BARGE_IN_TRIGGER_FRAMES` chỉ định cỡ cho đường đó. Chuỗi downstream giống tap-to-interrupt.
 
-Khi bật, tail log để xem `Barge-in monitor session end: max_rms_seen=N` (peak mỗi session) và sự kiện `BARGE-IN: RMS=N`, sau đó set `HAL_BARGE_IN_RMS_THRESHOLD` ở giữa bleed-max và voice-min quan sát được. Tap-to-interrupt vẫn active bất kể.
+**Hai mức vẫn chồng nhau, và không threshold nào tách được.** Đo trên `lamp-ee17` (loa 25 %, `HAL_AEC_DELAY_MS=205`) với gate đặt tạm ở 30000 để không gì kích được, ba lượt trả lời đầy đủ trong phòng im lặng đạt đỉnh **9804 / 6510 / 7849** — đó là trần vọng âm. Một lần cắt lời thật đã xác nhận trên cùng máy đo được **8027**, tức *thấp hơn* trần đó. Vậy nên threshold dưới trần sẽ tự cắt lời mình (ở 4500 nó kích ở 5530 / 6446 / 6637 / 7749, hai lần chuyển chính lời Lamp thành lượt của người dùng), còn threshold trên trần sẽ bỏ sót những lần cắt lời nói nhỏ. Muốn tách được cần phép thử envelope-decorrelation — vọng âm bám theo envelope đầu xa, con người thì không — hiện chưa làm. Mặc định 5000 cố ý thiên về việc bắt được giọng nói bình thường; nâng dần lên 11000 để đổi theo hướng ngược lại.
+
+Đừng kỳ vọng cổng Silero loại được giọng của chính Lamp: vọng âm *là* tiếng nói, và nó đạt 0.50, 0.75 và 1.00 ở các sự kiện khác nhau, trong khi các lần cắt lời thật đạt 0.08, 0.88 và 1.00. Nó loại tiếng động lớn không phải giọng nói (đập cửa, chìa khoá, ho); phần còn lại do mức RMS lo.
+
+Để đặc tả một deployment mới: đặt tạm `HAL_BARGE_IN_RMS_THRESHOLD` ở 30000, không nói gì, và đọc dòng `drain peak RMS=… , longest run N frames` mà mỗi lượt trả lời ghi ra. Tap-to-interrupt vẫn active bất kể.
 
 ## Detect nút GPIO (`hal/drivers/gpio_button.py`)
 
@@ -133,6 +140,8 @@ Thread watcher poll thời lượng giữ và đẩy LED RGB ở priority HIGH (
 | 10 s+ | đỏ, đứng | đã arm factory-reset — nhả bây giờ là wipe + reboot |
 
 Màu tím nhận diện mức sleep; đỏ nháy vs đỏ đứng phân biệt shutdown với factory-reset. LED là no-op im lặng khi RGB service không có (máy dev) — nút vẫn hoạt động.
+
+Ba màu này là preset chứ không phải hằng nhúng cứng trong driver: `BUTTON_LED_PRESETS` trong `hal/presets.py` (`sleep_warn` / `shutdown_warn` / `factory_reset`), device override được qua section `button_led` của `robots/<id>/presets.json` giống mọi bảng LED khác. Driver giữ phần staging — lúc nào nháy, lúc nào để đứng — và đọc màu ngay lúc paint, vì overlay merge bảng tại chỗ lúc boot.
 
 Debounce mỗi edge là 200 ms (tick nhấn và nhả track độc lập để tap nhanh không bị drop trong khi bounce lặp của cùng một edge bị lọc).
 
@@ -191,6 +200,20 @@ Các action sống ở một chỗ để nút GPIO, TTP223, và mọi input tư�
 Reset là **single-flight** + cooldown 5 phút (`FactoryResetMinInterval`) dùng chung cho mọi trigger (giữ GPIO, HTTP, MQTT) — circuit breaker chống caller chạy loạn và lặp do vô tình.
 
 ## Persist mute/disable qua HAL restart
+
+**Sleep cũng persist theo cách này** (`/tmp/hal-sleep-state.json`). Nó cùng loại
+với các switch người dùng thấy được: ai đó — hoặc một scene ban đêm — đã cho
+thiết bị ngủ, và restart HAL không được phép huỷ điều đó. OTA thì restart HAL,
+nên trước khi có sidecar này, một lần update lúc 3 giờ sáng là thiết bị tỉnh dậy:
+đèn sáng lại, mic nghe lại, sensing hết bị gate. Sidecar này còn mang theo mute mic/loa **do chính sleep sở hữu** — chúng cố ý không nằm trong sidecar mic/speaker để lúc thức trả switch về đúng lựa chọn của user, mà hệ quả trước đây là restart xong máy nghe lại được và một turn agent còn đang bay vẫn nói thành tiếng. `POST /emotion` ghi cờ mỗi lần
+nó đổi, và lifespan trong `server.py` express lại `sleepy` sau khi driver đã lên,
+để thiết bị TRÔNG vẫn đang ngủ chứ không phải boot vào look nghỉ với cái cờ được
+set âm thầm. Driver chuyển động cũng được yêu cầu khởi động **không** kèm chuỗi
+thức dậy (`start(skip_wake=True)`): startup pose là một cú move 5 giây rồi tới
+idle loop, nên sửa sau nghĩa là con lamp đang ngủ vẫn đứng dậy, cử động, rồi mới
+nằm xuống lại. Khôi phục cờ ngay lúc import — trước khi driver start — chính là
+thứ cho phép BỎ QUA thay vì hoàn tác. Reboot cả máy thì vẫn tỉnh như cũ.
+
 
 Mic mute, speaker mute và camera disable mỗi cái persist vào một sidecar
 boot-scoped riêng — `/tmp/hal-mic-state.json`, `/tmp/hal-speaker-state.json`,

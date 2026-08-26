@@ -195,6 +195,10 @@ func (s *OpenCodeService) EnsureOnboarding() error {
 	// servo-control on a motionless device). Skill dirs are read per-turn from
 	// disk, so no gateway reload is needed.
 	s.pruneUnsupportedSkills()
+	// Re-sync all supported skills at boot/config reconciliation, mirroring
+	// OpenClaw. The watcher only reacts to metadata changes after it starts, so
+	// this self-heals a stale local skill when os-server starts after a CDN update.
+	changedSkills := s.downloadSkills()
 
 	// OS-managed markdown blocks (incl. the persona inline block below).
 	// Refreshing them never requires a gateway restart: the gatewayd spawns a
@@ -263,6 +267,10 @@ func (s *OpenCodeService) EnsureOnboarding() error {
 			return fmt.Errorf("restart opencode after onboarding: %w", err)
 		}
 	}
+
+	// Skills are read per turn, so no gateway restart is needed. Notify after a
+	// possible restart so the bridge is available to deliver the re-read request.
+	s.notifySkillChanges(changedSkills)
 
 	// (openclaw additionally pins messages.queue.mode — N/A for opencode: the
 	// gatewayd strictly serializes turns through one `opencode run` at a time, so

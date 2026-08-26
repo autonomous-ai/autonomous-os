@@ -37,13 +37,15 @@ Type them at the very start of your reply. They are NOT tool calls. The system r
 | `presence.enter` (stranger) | Yes | `[HW:/emotion:{"emotion":"curious","intensity":0.8}][HW:/servo/aim:{"direction":"user"}][HW:/servo/track:{"target":["face"]}]` | YES — cautious acknowledgment |
 | `presence.leave` | No | `[HW:/emotion:{"emotion":"idle","intensity":0.4}][HW:/servo/track/stop:{}]` | NO (`NO_REPLY`) — always silent |
 | `presence.away` | No | `[HW:/emotion:{"emotion":"sleepy","intensity":0.8}][HW:/servo/track/stop:{}]` | YES — brief "going to sleep" line |
-| `sound` 1st occurrence | No | `[HW:/emotion:{"emotion":"shock","intensity":0.8}]` | NO (`NO_REPLY`) |
-| `sound` 2nd | No | `[HW:/emotion:{"emotion":"curious","intensity":0.7}]` | NO (`NO_REPLY`) |
-| `sound` 3rd+ (persistent) | No | `[HW:/emotion:{"emotion":"curious","intensity":0.9}][HW:/servo/play:{"recording":"shock"}]` | YES — speak once |
+| `sound` 1st occurrence | No | `[HW:/emotion:{"emotion":"curious","intensity":0.6}]` | NO (`NO_REPLY`) |
+| `sound` 2nd | No | `[HW:/emotion:{"emotion":"scan","intensity":0.7}]` | NO (`NO_REPLY`) |
+| `sound` 3rd+ (persistent) | No | `[HW:/emotion:{"emotion":"shock","intensity":0.9}][HW:/servo/play:{"recording":"shock"}]` | YES — speak once |
 | `light.level` | No | `[HW:/emotion:{"emotion":"idle","intensity":0.4}]` | Optional brief remark — AND adjust brightness via `led-control/SKILL.md` |
 | `fire_hazard.detected` (hazard_fire) | Yes | `[HW:/emotion:{"emotion":"shock","intensity":1.0}][HW:/servo/play:{"recording":"shock"}]` | **URGENT** — "Fire! There's fire near furniture!" Maximum alarm. Always speak. |
 
 Every event emits at least one `[HW:/emotion:...]` marker, even on `NO_REPLY`. No silent reactions.
+
+> **Sound escalates, it does not start at the top.** Look up (`curious`) → keep watching (`scan`) → startle (`shock`). One loud noise is ordinary; only noise that keeps coming back (3rd+, persistent) earns `shock`. Never emit `shock` on the 1st or 2nd occurrence.
 
 > **Fire hazard:** Only `hazard_fire` is handled here (outside guard mode). Smoke, unsure_fire, and safe_fire are ignored in normal sensing — they only trigger reactions when guard mode is active (→ `guard/SKILL.md`). `hazard_fire` is safety-critical and should ALWAYS speak — never `NO_REPLY`.
 

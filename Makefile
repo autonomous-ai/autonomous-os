@@ -189,7 +189,7 @@ autonomous-build-chat:
 OTA_SIGNING_KEY_DIR ?= $(HOME)/.config/autonomous/ota
 OTA_SIGNING_KEY_ID ?= ota-$(shell date +%Y%m%d)
 
-.PHONY: ota-keygen upload-os-server upload-bootstrap upload-hal upload-claude-desktop-buddy upload-autonomous-buddy upload-web upload-skills upload-hooks upload-setup upload-setup-ap upload-openclaw upload-device upload-twitch-irc upload-autonomous-chat upload-all promote-os-server promote-bootstrap promote-web promote-hal promote-claude-desktop-buddy promote-openclaw promote-device
+.PHONY: hal-deploy os-deploy device-deploy ota-keygen upload-aec-wheel upload-os-server upload-bootstrap upload-hal upload-claude-desktop-buddy upload-autonomous-buddy upload-web upload-skills upload-hooks upload-setup upload-setup-ap upload-openclaw upload-codex upload-claudecode upload-opencode upload-hermes upload-picoclaw upload-device upload-twitch-irc upload-autonomous-chat upload-all promote-os-server promote-bootstrap promote-web promote-hal promote-claude-desktop-buddy promote-openclaw promote-codex promote-claudecode promote-opencode promote-hermes promote-picoclaw promote-device
 
 # Generate a deployment-owned Ed25519 keypair outside the repository. The
 # private PEM is for release writers only; the printed public key is provisioned
@@ -211,6 +211,26 @@ ota-keygen:
 	printf 'export OTA_SIGNING_KEY_ID=%s\n' "$$key_id"; \
 	printf 'export OTA_SIGNING_PUBLIC_KEY=%s\n' "$$public_key"
 
+# ============================================================================
+# Dev deploy — push the working tree to ONE device by IP.
+# NOT the OTA path: upload-*/promote-* version and roll out to the whole fleet.
+#
+#   IP=172.168.20.255 make device-deploy   # hal + os-server
+#   IP=172.168.20.255 make hal-deploy      # hal only (no build step)
+#   IP=172.168.20.255 make os-deploy       # cross-compile + swap the binary
+#
+# Auth: PI_USER (default orangepi), PI_PASS (default orangepi; set PI_PASS=""
+# to use your SSH key). Never overwrites .env, .venv or calibration/.
+# ============================================================================
+hal-deploy:
+	bash scripts/deploy-device.sh --hal
+
+os-deploy:
+	bash scripts/deploy-device.sh --os-server
+
+device-deploy:
+	bash scripts/deploy-device.sh
+
 upload-os-server:
 	bash scripts/release/upload-os-server.sh
 
@@ -231,6 +251,10 @@ upload-web:
 
 upload-skills:
 	bash scripts/release/upload-skills.sh
+
+# Publishes dist/aec/*.whl, built by scripts/release/build-aec-wheel.sh <ip>.
+upload-aec-wheel:
+	bash scripts/release/upload-aec-wheel.sh
 
 upload-hooks:
 	bash scripts/release/upload-hooks.sh
@@ -263,6 +287,71 @@ upload-openclaw:
 	@if [ -z "$(OPENCLAW_VERSION_ARG)" ]; then echo "Usage: make upload-openclaw <version>" >&2; exit 1; fi
 	bash scripts/release/upload-openclaw.sh "$(OPENCLAW_VERSION_ARG)"
 
+# Same positional-version trick for the Codex CLI: `make upload-codex 0.149.1`.
+# Bare semver, no "rust-v" prefix (the script rejects the tag form).
+ifeq (upload-codex,$(firstword $(MAKECMDGOALS)))
+  CODEX_VERSION_ARG := $(word 2,$(MAKECMDGOALS))
+  ifneq ($(CODEX_VERSION_ARG),)
+    $(eval $(CODEX_VERSION_ARG):;@:)
+  endif
+endif
+
+upload-codex:
+	@if [ -z "$(CODEX_VERSION_ARG)" ]; then echo "Usage: make upload-codex <version>   (bare semver, e.g. 0.149.1)" >&2; exit 1; fi
+	bash scripts/release/upload-codex.sh "$(CODEX_VERSION_ARG)"
+
+# Claude Code CLI: `make upload-claudecode 2.1.218` (bare semver, no leading v).
+ifeq (upload-claudecode,$(firstword $(MAKECMDGOALS)))
+  CLAUDECODE_VERSION_ARG := $(word 2,$(MAKECMDGOALS))
+  ifneq ($(CLAUDECODE_VERSION_ARG),)
+    $(eval $(CLAUDECODE_VERSION_ARG):;@:)
+  endif
+endif
+
+upload-claudecode:
+	@if [ -z "$(CLAUDECODE_VERSION_ARG)" ]; then echo "Usage: make upload-claudecode <version>   (bare semver, e.g. 2.1.218)" >&2; exit 1; fi
+	bash scripts/release/upload-claudecode.sh "$(CLAUDECODE_VERSION_ARG)"
+
+# OpenCode CLI: `make upload-opencode 1.18.4` (bare semver, no leading v).
+ifeq (upload-opencode,$(firstword $(MAKECMDGOALS)))
+  OPENCODE_VERSION_ARG := $(word 2,$(MAKECMDGOALS))
+  ifneq ($(OPENCODE_VERSION_ARG),)
+    $(eval $(OPENCODE_VERSION_ARG):;@:)
+  endif
+endif
+
+upload-opencode:
+	@if [ -z "$(OPENCODE_VERSION_ARG)" ]; then echo "Usage: make upload-opencode <version>   (bare semver, e.g. 1.18.4)" >&2; exit 1; fi
+	bash scripts/release/upload-opencode.sh "$(OPENCODE_VERSION_ARG)"
+
+# Hermes CLI: `make upload-hermes 0.5.2`. NOT pinnable — `hermes update` always
+# moves to upstream HEAD, so the version published here decides WHEN the fleet
+# updates, not WHICH build it lands on. See scripts/release/upload-hermes.sh.
+ifeq (upload-hermes,$(firstword $(MAKECMDGOALS)))
+  HERMES_VERSION_ARG := $(word 2,$(MAKECMDGOALS))
+  ifneq ($(HERMES_VERSION_ARG),)
+    $(eval $(HERMES_VERSION_ARG):;@:)
+  endif
+endif
+
+upload-hermes:
+	@if [ -z "$(HERMES_VERSION_ARG)" ]; then echo "Usage: make upload-hermes <version>   (bare semver, e.g. 0.5.2)" >&2; exit 1; fi
+	bash scripts/release/upload-hermes.sh "$(HERMES_VERSION_ARG)"
+
+# PicoClaw: `make upload-picoclaw v0.3.1-fixvision`. Takes the GitHub release
+# TAG, not a bare semver — `picoclaw version` reports an unrelated build
+# description. See scripts/release/upload-picoclaw.sh.
+ifeq (upload-picoclaw,$(firstword $(MAKECMDGOALS)))
+  PICOCLAW_VERSION_ARG := $(word 2,$(MAKECMDGOALS))
+  ifneq ($(PICOCLAW_VERSION_ARG),)
+    $(eval $(PICOCLAW_VERSION_ARG):;@:)
+  endif
+endif
+
+upload-picoclaw:
+	@if [ -z "$(PICOCLAW_VERSION_ARG)" ]; then echo "Usage: make upload-picoclaw <release-tag>   (e.g. v0.3.1-fixvision)" >&2; exit 1; fi
+	bash scripts/release/upload-picoclaw.sh "$(PICOCLAW_VERSION_ARG)"
+
 # Allow positional device type: `make upload-device lamp` (publishes ONE device
 # profile). Per-device by design — each type versions + publishes independently,
 # so it's NOT in upload-all (publishing lamp must not touch intern).
@@ -284,15 +373,17 @@ upload-device:
 #   make promote-hal                # min_version = hal.version
 #   make promote-os-server V=1.4.0  # pin floor explicitly
 #   make promote-device DT=lamp     # devices.lamp profile
-promote-os-server promote-bootstrap promote-web promote-hal promote-claude-desktop-buddy promote-openclaw:
+promote-os-server promote-bootstrap promote-web promote-hal promote-claude-desktop-buddy promote-openclaw promote-codex promote-claudecode promote-opencode promote-hermes promote-picoclaw:
 	bash scripts/release/promote-ota.sh $(patsubst promote-%,%,$@) $(V)
 
 promote-device:
 	@if [ -z "$(DT)" ]; then echo "Usage: make promote-device DT=<type> [V=<min_version>]" >&2; exit 1; fi
 	bash scripts/release/promote-ota.sh device "$(DT)" $(V)
 
-# upload-openclaw is intentionally NOT in upload-all — bumping the OpenClaw
-# version is an explicit decision, not a side effect of pushing other artifacts.
+# upload-openclaw / upload-codex / upload-claudecode / upload-opencode /
+# upload-hermes / upload-picoclaw are intentionally NOT in upload-all — bumping an
+# agent CLI version is an explicit decision, not a side effect of pushing other
+# artifacts.
 upload-all: upload-os-server upload-bootstrap upload-hal upload-claude-desktop-buddy upload-web upload-skills upload-hooks
 
 # ============================================================================

@@ -121,7 +121,7 @@ class MockMotionService:
 
     # --- Lifecycle ---
 
-    def start(self) -> None:
+    def start(self, skip_wake: bool = False) -> None:
         self._connected = True
         self._record("start")
         logger.info("[mock] motion up — %d joints, no hardware", len(self._joints))

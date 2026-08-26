@@ -27,6 +27,7 @@ import (
 var allowedLogs = map[string]string{
 	"hal":              "/var/log/hal/server.log",
 	"os-server":        "/var/log/os-server.log",
+	"bootstrap":        "journal:bootstrap.service",
 	"openclaw":         "/var/log/openclaw/agent.log",
 	"openclaw-service": "journal:openclaw.service",
 	"buddy":            "/var/log/claude-desktop-buddy.log",
@@ -131,7 +132,7 @@ func resolveLogPaths(pattern string) ([]string, error) {
 }
 
 // logTail returns the last N lines of a whitelisted log file (or merged glob).
-// GET /api/logs/tail?source=hal|os-server|openclaw|openclaw-service&lines=200
+// GET /api/logs/tail?source=hal|os-server|bootstrap|openclaw|openclaw-service|buddy&lines=200
 func (s *Server) logTail(c *gin.Context) {
 	source := c.DefaultQuery("source", "os-server")
 	pattern, ok := s.resolveLogSource(source)
@@ -195,7 +196,7 @@ func (s *Server) logTail(c *gin.Context) {
 }
 
 // logStream streams new log lines via SSE from one or more log files.
-// GET /api/logs/stream?source=hal|os-server|openclaw|openclaw-service
+// GET /api/logs/stream?source=hal|os-server|bootstrap|openclaw|openclaw-service|buddy
 func (s *Server) logStream(c *gin.Context) {
 	source := c.DefaultQuery("source", "os-server")
 	pattern, ok := s.resolveLogSource(source)

@@ -250,8 +250,9 @@ trong doc backend (vd `docs/agentic/hermes.md`), không phải đảm bảo chun
   (`FetchSkillVersions`/`DownloadToTempFile`/`FolderHash`/`ExtractSkillZip`). Thêm
   `runtimes/<name>/skill_watcher.go` mỏng song song với
   `runtimes/openclaw/skill_watcher.go` — chỉ khác **thư mục đích** và **đường
-  notify**. Gate bằng `skills.Supported(device.Capabilities(...))`. Notify agent
-  bằng `SendSystemChatMessage`.
+  notify**. Gate bằng `skills.Supported(device.Capabilities(...))`. Chỉ cập nhật
+  version đã theo dõi sau khi download và extract thành công, để lỗi tạm thời được
+  retry ở poll kế tiếp. Notify agent bằng `SendSystemChatMessage`.
 
 ---
 

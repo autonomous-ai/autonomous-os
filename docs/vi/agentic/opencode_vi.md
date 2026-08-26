@@ -88,7 +88,10 @@ backend đầy đủ):
    test installer **vẫn** đặt binary vào mặc định `~/.opencode/bin` của nó — nên
    một bước belt-and-suspenders copy bất kỳ thứ gì installer tạo ra vào
    `/usr/local/bin/opencode` (đường dẫn mà unit + hook `verify` dùng).
-   `OPENCODE_VERSION` được pin (hiện tại `1.18.4`);
+   `OPENCODE_VERSION` được pin (hiện tại `1.18.4`) — chỉ là baseline cho image
+   mới flash: máy đã ngoài thực địa update qua `make upload-opencode
+   <semver-trần>` + `make promote-opencode`, bootstrap worker áp dụng bằng
+   `software-update opencode` (`docs/vi/bootstrap-ota.md` §5);
 3. chạy hook presync một lần (`/usr/local/bin/runtime-opencode-presync`, được
    os-server materialize TRƯỚC installer — §1.2);
 4. ghi + enable **`opencode.service`** (`ExecStart=/usr/local/bin/os-server
@@ -167,6 +170,11 @@ thư mục project và `~/.claude/skills/` để tương thích Claude). Mọi n
 `skill_watcher.go` (tải CDN + thông điệp notify khi skill đổi), và
 `pruneUnsupportedSkills` (capability gate). Factory reset xoá `~/.config/opencode`,
 nên bộ skills được migrate lại từ openclaw ở lần `EnsureOnboarding` kế tiếp.
+`EnsureOnboarding` cũng tải lại mọi skill được hỗ trợ từ CDN khi boot hoặc reconcile
+config, tự phục hồi skill local đã cũ trước khi watcher chạy. Nó gửi thông báo skill
+đổi sau khi gateway có thể đã restart.
+Watcher log mỗi lần poll metadata thành công là `skill watcher: checked`; nếu tải ZIP
+hoặc extract lỗi, version của skill đó vẫn pending để thử lại ở poll kế tiếp.
 
 ## 2. Transport & gửi một turn
 

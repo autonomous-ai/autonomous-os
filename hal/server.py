@@ -399,7 +399,9 @@ async def lifespan(app: FastAPI):
                 # ramp is computed in the driver, with no route to pass it in
                 # the way aim/nudge do.
                 svc = AnimationService(safety_policy=_safety)
-            svc.start()
+            # A device that was asleep must not perform its wake sequence just
+            # because HAL restarted (see AnimationService.start docstring).
+            svc.start(skip_wake=state._sleeping)
             state.animation_service = svc
             logger.info("Motion service started (%s)", type(svc).__name__)
         except Exception as e:
@@ -925,6 +927,30 @@ async def lifespan(app: FastAPI):
             state._start_mic_muted_effect()
         except Exception as e:
             logger.warning(f"Mic-muted LED repaint failed: {e}")
+
+    # Sleep restored from the sidecar. Do NOT re-express `sleepy` here: that
+    # PLAYS the going-to-sleep animation, so a device that was already resting
+    # in the sleep pose energised its servos, moved, and released again — from
+    # the outside, exactly the "it woke up, then went back to sleep" this whole
+    # change exists to prevent. The body is left as sleep left it (limp, servos
+    # not energised — see AnimationService.start(skip_wake)), the strip stays
+    # dark because nothing paints it, and every `_sleeping` gate is already
+    # armed from the import-time restore. All that is missing is the emotion
+    # bookkeeping the restore did not go through.
+    if state._sleeping:
+        try:
+            from hal.presets import EMO_SLEEPY
+
+            # Everything sleep owns — the flag and the mic/speaker mutes — comes
+            # back from its sidecar at import. All that is left is the emotion
+            # bookkeeping the restore did not go through.
+            state._current_emotion = EMO_SLEEPY
+            logger.info(
+                "Sleep restored: asleep, mic_muted=%s speaker_muted=%s (no wake performance)",
+                state._mic_muted, state._speaker_muted,
+            )
+        except Exception as e:
+            logger.warning(f"Sleep restore bookkeeping failed: {e}")
 
     # Thermal fail-safe monitor (only when `thermal` bounds are declared).
     if _safety and _safety.thermal:

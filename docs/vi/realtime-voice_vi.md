@@ -21,6 +21,10 @@ lượt, model sẽ:
 - **Delegate** bằng cách gọi tool `delegate_to_main` → dừng output realtime và
   chuyển một dòng tóm tắt yêu cầu tới OS server (→ OpenClaw / Hermes) để xử lý
   phần nặng.
+- **Từ chối rõ ràng** một turn chắc chắn không phải người nói với thiết bị bằng
+  tool `reject_turn` → bỏ turn trước khi agent chính nhìn thấy STT text. Nó khác
+  hẳn model im lặng: im lặng, timeout và lỗi transport vẫn fallback bình thường
+  sang agent chính.
 
 Tool `delegate_to_main` được orchestrator đăng ký tự động (`orchestrator.py`,
 `DELEGATE_TOOL`).
@@ -34,10 +38,11 @@ cuối một turn. Các giá trị (`ROUTE_*` trong `realtime_turn.py`):
 |---|---|
 | `realtime_handled` | Realtime đã nói. Agent chính nhận `voice_agent_handled` và im lặng. |
 | `delegated` | Model gọi `delegate_to_main`. |
+| `ai_rejected` | Model gọi `reject_turn` rõ ràng; turn không tới đâu cả. |
 | `realtime_no_output` | Đã commit nhưng không có gì trả về (`receive()` timeout, WS chết) — agent chính trả lời. |
 | `realtime_error` | Turn ném lỗi; forward xuống thay vì mất luôn. |
 | `realtime_unavailable` | Không có session sống để commit — agent chính trả lời. |
-| `noise_dropped` | Noise guard chặn; không commit, và nếu không có transcript thì không tới ai cả. |
+| `noise_dropped` | Noise guard chặn; đây là terminal kể cả khi STT bịa transcript ngắn, nên turn không tới ai cả. |
 | `realtime_not_started` | Realtime tắt, hoặc capture này không mở turn nào. |
 
 Khi model gọi delegate, `stream_output()` **break turn ngay lập tức** sau khi
@@ -142,6 +147,12 @@ session kế — rồi reset LSTM của Silero khi resume, đúng phần dọn d
 drain vẫn làm. Chỉ chặn việc **mở** session; session đang stream không bị đụng, đó
 mới là mục đích của tính năng.
 
+Mỗi cue còn được buộc vào epoch của phiên STT đã yêu cầu nó. Nếu TTS bình thường
+giữ output stream đủ lâu để phiên gốc kết thúc, cue đang chờ bị huỷ ngay trước lúc
+phát; nó không thể lọt vào một phiên mic mới thành transcript bịa. Cơ chế này chỉ
+huỷ lời nói tuỳ chọn của thiết bị — không đóng, xoá hay mute mic của người dùng, nên
+vẫn hỗ trợ barge-in.
+
 `robots/lamp/rootfs/opt/hal/.env` hạ `HAL_MAX_SESSION_DURATION_S` xuống `20`
 (default trong code vẫn là `30`); trần đó chỉ chạm tới khi đồng hồ im lặng không
 bao giờ hết hạn, mà người nói thật luôn ngừng lâu hơn `SILENCE_TIMEOUT` trong
@@ -155,6 +166,130 @@ tối đa 60s). Nó tách biệt
 với reconnect send/receive của provider, vì các loop đó chưa tồn tại trước khi
 `connect()` thành công. Không cần restart HAL hay chờ audio mới; các lượt voice
 vẫn fallback xuống agent chính cho tới khi kết nối hồi phục.
+
+## Khử vọng âm (AEC)
+
+`hal/drivers/voice/aec.py` đưa audio mic qua APM của WebRTC (AEC3), lấy audio
+đang phát làm tín hiệu tham chiếu. Nó **độc lập với provider**: tham chiếu được
+lấy tại `_WatchedStream.write` (`tts/service.py`) — điểm duy nhất mà mọi đường
+phát ra loa đều đi qua: giọng tổng hợp, phần drain của `speak_queue`, và **native
+audio** của realtime. Lấy ở đó thay vì tại lúc tổng hợp là có chủ ý: TTS render
+một câu nhanh hơn thời gian thực rất nhiều, còn output stream ghi đúng tốc độ
+phát — đúng nhịp mà mic nghe thấy.
+
+**Mặc định tắt** (`HAL_AEC_ENABLED=false`); image lamp bật lên qua `.env` của
+thiết bị. Nó cần binding
+`aec-audio-processing`, vốn **không** phải dependency gốc của hal — PyPI không
+có wheel Linux nào, nên thiết bị phải build từ source. Nó nằm sau extra `aec`
+(`uv sync --extra aec`), cố ý để ngoài `dependencies` và ngoài `hardware`: bước
+build cần meson/ninja mà image lamp không cài, nên khai hard dep sẽ làm hỏng cả
+build image lẫn `software-update hal` cho một tính năng vốn mặc định tắt. Khi import thất bại,
+`configure()` log một lần và mọi entry point trở thành no-op; đường voice hoạt
+động y như trước, nên mặc định bật vẫn an toàn với thiết bị không có binding.
+Tuy nhiên nó cũng bật luôn **barge-in** (xem bên dưới), và cái đó thì không phải
+no-op.
+
+| Env | Mặc định | Ý nghĩa |
+|-----|----------|---------|
+| `HAL_AEC_ENABLED` | `false` | Công tắc chính. Cũng là mặc định của `HAL_BARGE_IN_ENABLED` |
+| `HAL_AEC_DELAY_MS` | `205` | Gợi ý độ trễ loa→mic. **Theo từng thiết bị** — phải đo, đừng chép lại |
+| `HAL_AEC_NS` | `true` | Bật thêm khử nhiễu của APM. Trên phần cứng này nó gánh phần lớn việc khử |
+| `HAL_AEC_TAIL_S` | `2.0` | Tiếp tục khử trong khoảng này sau lần ghi loa cuối, rồi bypass APM |
+| `HAL_AEC_REF_MS` | `500` | Độ sâu FIFO của tham chiếu vọng âm |
+| `HAL_AEC_DUMP_DIR` | — | Ghi `aec_mic/ref/out.wav` để phân tích ERLE offline |
+
+### Cài binding
+
+PyPI chỉ phát hành **wheel Windows** cho `aec-audio-processing`, nên mọi nền
+tảng khác phải build từ sdist. Sdist đó đã vendor sẵn toàn bộ source
+webrtc-audio-processing + abseil và một wrapper SWIG sinh sẵn, nên build khép
+kín: không cần `libwebrtc-audio-processing` của hệ thống, cũng không cần SWIG hệ
+thống. Các build requirement của nó (`swig`, `meson`, `ninja`, `cmake`) đều có
+wheel trên PyPI, nên **không cần `apt install` gì cả** — điều này quan trọng, vì
+người dùng cuối không thể chạy apt trên thiết bị đã xuất xưởng.
+
+Vấn đề nằm ở chính bước build: đo trên lamp (A523, 8 core) mất **5m35s thực /
+36m CPU**. Chạy một lần trên máy của dev thì được; chạy trên mọi thiết bị, mọi
+lần build image và mọi lần `software-update hal` thì không. Nên dự án build một
+wheel rồi đính vào một GitHub release:
+
+```bash
+scripts/release/build-aec-wheel.sh <device-ip>   # → dist/aec/*.whl
+make upload-aec-wheel                            # → CDN, in ra URL + sha256
+```
+
+`build-aec-wheel.sh` biên dịch ngay trên thiết bị, trong `/tmp`, bằng một venv
+dùng xong bỏ với meson/ninja lấy từ PyPI — `/opt/hal` và các gói hệ thống không
+bị đụng tới — rồi copy wheel về, cài vào một venv sạch để chứng minh nó import
+được, và xoá thư mục tạm.
+
+**Build trên máy CŨ nhất, không phải máy mới nhất.** Wheel chỉ link
+`libstdc++/libm/libgcc_s/libc` và cần **glibc ≥ 2.34**. glibc tương thích tiến,
+nên wheel build trên lamp (Debian 12, glibc 2.36) chạy được trên Reachy Mini
+(Debian 13, glibc 2.41) — chiều ngược lại thì không. Wheel mang tag
+`cp312-cp312-linux_aarch64`: `uv` trên mọi body đều chạy CPython 3.12 nên tag đó
+phủ hết đội máy, và `upload-aec-wheel.sh` từ chối publish thứ khác thay vì để
+lệch ABI lộ ra trên máy khách hàng.
+
+Asset nằm trên một tag riêng cho wheel (`wheels/aec-<version>`), không phải tag
+phiên bản OS — wheel không đi theo nhịp release của OS, và tag riêng thì không bị
+trỏ lại, nên URL đã pin không thể đổi nội dung sau lưng lockfile. Chọn GitHub
+release thay vì bucket OTA là có chủ đích: repo này public nên một fork có thể tự
+build và tự host wheel của họ, còn bucket thì chỉ nội bộ org.
+
+`hal/pyproject.toml` pin URL đó trong `[tool.uv.sources]`, giới hạn ở
+linux/aarch64/CPython 3.12. Đo trên `lamp-0c89`: cài wheel host sẵn mất **1.9
+giây**, so với **5m35s** nếu compile. Nằm ngoài marker đó — máy Mac của dev, hay
+3.13 sau này — sẽ rơi về sdist trên PyPI và compile, nên `uv sync --extra aec`
+lúc nào cũng chạy; chỉ đường nhanh mới được pin.
+
+Vòng VAD chính được bọc, và với `HAL_WARM_MIC=true` (nay là mặc định) mic vẫn mở
+suốt lúc phát, nên việc khử chạy ngay trong lúc thiết bị đang nói chứ không chỉ
+trong barge-in monitor cũ. Cổng reverb cố ý không khử để giữ nguyên timing.
+
+**Đo trên lamp** (OrangePi sun60 / A523, mic USB + loa USB — hai miền clock độc
+lập). Gợi ý độ trễ phải theo từng thiết bị vì hai clock USB chạy tự do: trên
+`lamp-ee17` độ trễ thật là 204 ms (trung vị, một lượt 93 s) và 192 ms ở lượt
+khác, trôi 154→215 ms ngay trong một lượt (~667 ppm). Sửa 150→205 đưa ERLE đạt
+được từ 15.2 lên 17.9 dB. Trước đó sửa 80→150 trên cùng máy đưa từ 10.9 lên
+18.6 dB.
+
+Chi phí ~3.9 % một core A523 ở thời gian thực. Cùng bộ khử này trên MacBook đạt
+~42 dB; khoảng cách là do phần cứng — hai clock USB tự do và đường analog rẻ.
+Chỉ ~1.6 dB vọng âm ở đây là dự đoán được **tuyến tính** (coherence 0.31), nên
+gần như toàn bộ việc khử là suppression — đó là lý do tắt `HAL_AEC_NS` mất ~10 dB
+ERLE và làm residual tăng gấp ba.
+
+### Hạn chế đã biết: tham chiếu bị đói
+
+`EchoReference` là một FIFO được lấy tại lúc ALSA **nhận** audio, nhưng mic chỉ
+nghe thấy audio đó sau trọn một output buffer, còn TTS thì ghi theo từng cụm
+theo nhịp mạng. Khi phần ghi chạy trước xa hơn độ sâu FIFO, những byte cũ nhất —
+đúng những byte mic sắp nghe — bị bỏ, và tham chiếu cạn khô cho phần còn lại của
+cụm. Đo trên `lamp-ee17`: tham chiếu **underrun trên 30–86 % số khung xử lý**
+trong một lượt trả lời, và ERLE mỗi cửa sổ dao động từ −25.1 dB tới 23.2 dB theo
+đó. Ở những khung *có* tham chiếu, bộ khử đạt 15–23 dB — nên thiếu hụt là do đói
+tham chiếu, không phải do APM.
+
+Tăng độ sâu FIFO không sửa được mà còn tệ hơn (`HAL_AEC_REF_MS=1500` đo được
+3.6 / 2.3 dB so với 23.2 / 19.1 dB ở 500) vì độ trễ dẫn trước trở nên thay đổi
+và vượt cửa sổ căn chỉnh của AEC3. Cách sửa thật sự là ghi tham chiếu theo nhịp
+**phát** thay vì nhịp ghi, cộng với một thread capture riêng để mic thôi rút
+`arecord` theo từng cụm. Cả hai đều chưa làm.
+
+`aec.uncancelled()` cho biết khung vừa đọc có đi qua mà **không** được khử thật
+hay không — tham chiếu underrun, stream bị bypass, hoặc mic overrun. Barge-in
+gate theo cờ này để không quyết định dựa trên vọng âm thô.
+
+`process()` gom audio về khung cố định 10 ms của APM và trả về đúng số mẫu mà
+caller yêu cầu (mồi một lần bằng tối đa 10 ms im lặng), nên khung 64 ms của hal
+không đổi. ERLE được log định kỳ khi loa đang hoạt động — **0 dB nghĩa là bộ khử
+không làm gì cả**.
+
+> Image đã load sẵn `module-echo-cancel` của PulseAudio (`setup.sh`), nhưng
+> không có gì đi tới nó: một udev rule đặt `PULSE_IGNORE=1` cho card loa để hal
+> tự sở hữu, còn capture đi thẳng qua `arecord -D plughw:`. Module đó không có
+> tham chiếu lẫn client; nó không phải thứ đang khử vọng âm ở đây.
 
 ## Biểu cảm cảm xúc (fire-and-forget)
 
@@ -586,9 +721,11 @@ sớm ("hello") ngay sau khi restart sẽ rớt xuống main agent.
    Ở mode always-listening, prepass speaker-ID (`identify_and_decorate`, chạy **một
    lần** cuối session) chỉ giải được người nói *sau khi* context đã gửi đi kèm tên
    từ khuôn mặt. HAL gửi tiếp một correction `[TURN CONTEXT UPDATE]` nêu đúng người
-   nói — vẫn **trước** `commit_audio()` nên thuộc cùng một lượt. Bỏ qua khi context
-   đã mang đúng tên, hoặc khi lượt đó là noise. Kết quả prepass được xài lại ở hạ
-   nguồn — speaker recognition không bao giờ chạy hai lần.
+   nói — vẫn **trước** `commit_audio()` nên thuộc cùng một lượt. Transcript ngắn
+   trong vùng mơ hồ AI-rejection sẽ hoãn external embedding call tới khi realtime
+   quyết định xong; một lần reject rõ ràng tránh luôn call này, còn mọi turn không
+   reject vẫn nhận cùng một kết quả identity duy nhất trước khi đi hạ nguồn. Bỏ qua
+   khi context đã mang đúng tên, hoặc khi lượt đó là noise.
 
    **Lưu ý Gemini native-audio:** `send_text()` bỏ **toàn bộ** text không tạo
    response trên các model Gemini `*native-audio*` (`gemini_needs_idle_workaround()`),
@@ -616,9 +753,19 @@ sớm ("hello") ngay sau khi restart sẽ rớt xuống main agent.
    chưa có output nào, HAL gọi `POST /api/sensing/filler` và os-server phát một
    câu filler mở đầu từ cache — pool phrase, ngôn ngữ và WAV cache đều nằm ở
    os-server, nên khoảng chờ realtime và khoảng chờ main agent nghe giống nhau.
-   Câu chit-chat bình thường (~1s) không bao giờ chạm timer; lượt model dùng
-   Google Search — không ra token nào cho tới khi search xong — thì có. Filler
-   phát interruptible nên câu đầu tiên của model cắt ngang nó; mọi đường thoát
+   Filler bắn ở mọi lượt hay chỉ ở lượt chậm là **tính chất của model**, và giá
+   trị mặc định giả định model nhanh: câu chit-chat về trong ~1s thì không chạm
+   timer, còn lượt dùng Google Search thì có. Phải ĐO trước khi tin điều đó trên
+   một body cụ thể — trên `lamp-0c89` (26/08/2026, `gemini-3.1-flash-live-preview`
+   qua proxy campaign-api) không lượt nào ra câu đầu dưới 3.0s (median 4.0s,
+   n=31), nên filler là thứ duy nhất người dùng nghe được lúc đầu, và lamp hạ
+   ngưỡng xuống 0.5s trong `.env` của nó. Đặt giá trị này theo thời gian
+   time-to-first-sentence đo được, đừng theo mặc định. Filler
+   **không được arm cho transcript ngắn nằm trong vùng mơ hồ của noise guard**
+   (tối đa `HAL_REALTIME_NOISE_GUARD_MAX_WORDS`, mặc định 3 từ): model có thể
+   `reject_turn` rõ ràng cho `o`, `you.` hay `Yeah.` ngay sau commit, và filler
+   sớm sẽ biến một lần từ chối im lặng thành âm thanh gây khó chịu. Filler phát
+   interruptible nên câu đầu tiên của model cắt ngang nó; mọi đường thoát
    (trả lời, delegate, turn rỗng, exception) đều cancel timer, riêng delegate
    cancel tường minh vì chặng main agent ngay sau đó tự bắn filler của nó. `0`
    để tắt.
@@ -803,6 +950,7 @@ trong `config.json`:
 | `HAL_REALTIME_RECV_QUEUE_TIMEOUT_S` | `8.0` | Số giây tối đa `receive()` chờ output event kế tiếp trước khi kết thúc lượt im lặng (fallback sang main agent) |
 | `HAL_REALTIME_LOOK_RECV_TIMEOUT_S` | `20.0` | Watchdog im-lặng dùng thay mặc định cho turn có `look` (theo từng turn, qua `extend_recv_timeout()`). Gemini bị ép thinking trên frame dày chữ có thể im >8 s ngay trước khi trả lời — watchdog mặc định giết nhầm mấy turn đó. Nâng nó lên là hoãn luôn handoff frame `look`, nên phải giữ `HAL_GEMINI_VISION_HANDOFF_MAX_AGE_S` cao hơn |
 | `HAL_REALTIME_REQUIRE_TRANSCRIPT` | `true` | Không bao giờ commit turn empty-STT lên model. Final transcript chỉ có dấu câu/ký hiệu (ví dụ `.`) được chuẩn hoá thành empty trước gaze, speaker-ID, realtime, dispatch hay refresh follow-up; nó không thể tạo `voice_followup`. Giọng thật mà nova-3 miss (câu ngắn) vẫn là voiced nên qua hết guard VAD/Silero, commit audio thô khiến model bịa câu trả lời cho khoảng im lặng (lời chào chung chung, thường kèm tên không ai nói). Khi `true`, mọi turn empty-STT bị bỏ bất kể duration/voicing — im còn hơn trả lời sai. Đặt `false` để quay về đường audio-only gated bằng Silero bên dưới. |
+| `HAL_REALTIME_AI_REJECT_FILTER` | `true` | Đăng ký `reject_turn` và bật policy gate tách riêng `should_drop_realtime_rejection()`. Tool call rõ ràng sẽ bỏ transcript trước OS dispatch; model im lặng, timeout hay lỗi vẫn fallback sang main agent. Noise guard deterministic riêng cũng terminal cho audio mà nó đã phân loại là không phải tiếng nói. Đặt `false` để tắt filter AI thử nghiệm này mà không đổi phần routing realtime còn lại. |
 | `HAL_REALTIME_MIN_COMMIT_DURATION_S` | `0.8` | Session ngắn hơn ngưỡng này mà không có STT transcript bị coi là nhiễu VAD, không commit lên model. Chỉ xét khi `HAL_REALTIME_REQUIRE_TRANSCRIPT=false`. |
 | `HAL_REALTIME_NOISE_GUARD_MAX_WORDS` | `3` | Mở rộng guard voiced-ratio của Silero sang cả turn CÓ transcript, tối đa ngần này từ. STT bịa một từ đệm ngắn từ tiếng ồn phòng và báo confidence tối đa cho nó, nên turn kiểu đó trước đây lọt hết mọi guard (guard chỉ chạy khi transcript rỗng) và commit nhiễu thuần lên model. Transcript nhiều nhất ngần này từ sẽ bị kiểm lại theo `HAL_REALTIME_NOISE_SPEECH_RATIO` và bị bỏ nếu audio chưa từng voiced; lệnh ngắn nói thật vẫn là voiced nên vẫn commit. Transcript dài hơn không bao giờ bị kiểm lại, nên ngưỡng voiced-ratio không thể làm câm một câu nói thật. `0` = tắt. |
 | `HAL_REALTIME_SESSION_IDLE_RESET_S` | `240` | Kiểm soát chi phí: khi một turn đến sau ngần này giây im lặng, recycle (rebuild) session **sau** turn đó để turn kế tiếp bỏ phần context mỗi-turn mà provider re-bill trên session sống lâu. Turn sau khoảng nghỉ dài coi như cuộc hội thoại mới; trí nhớ dài hạn vẫn còn nhờ nạp lại `summary.md`. Với Gemini native-audio, bước này bị bỏ qua nếu pre-turn recycle thành công đã làm mới session cho chính idle gap đó. `0` = tắt. Dùng lại đường rebuild của zombie-recovery. |
@@ -848,3 +996,4 @@ trong `config.json`:
 | `models/`, `enums/` | Kiểu input/output/event, enum provider + gateway |
 | `resources/` | System prompt (chung + theo provider) |
 | `../voice/voice_service.py` | Tích hợp: stream audio mic, tiêu thụ output, route delegate/handled |
+| `../voice/aec.py` | WebRTC AEC3 trên đường mic; tham chiếu lấy tại TTS output stream (mọi provider) |

@@ -7,6 +7,14 @@ class DelegateSignal(BaseModel):
     message: str = ""
 
 
+class RejectSignal(BaseModel):
+    """Yielded when the model explicitly rejects a non-user turn.
+
+    This is intentionally distinct from a turn that merely ends with no output:
+    only this signal is allowed to suppress the normal main-agent fallback.
+    """
+
+
 class LookReplaySignal(BaseModel):
     """Yielded by stream_output() when the model called `look` and a FRESH
     camera frame was sent. The Live API queues a frame sent mid-turn for the
