@@ -2382,3 +2382,53 @@ def test_the_wake_gate_still_wants_a_real_face():
         "a person box advanced the face clock; the wake gate would treat a "
         "turned-away body as someone facing the lamp"
     )
+
+
+def test_a_repoint_that_lands_on_a_body_asks_the_head_to_climb(neck, monkeypatch):
+    """A repoint should end on a FACE.
+
+    Landing on a body means the camera is aimed too low. Leaving the climb to
+    notice by itself costs ten seconds — the repoint has just discarded the
+    pitch window, so a fresh one has to be rebuilt before it can act.
+    """
+    _repoint_scored(monkeypatch)
+    t = gaze.time.monotonic()
+    gaze._repoint_pending_t = t - config.GAZE_REPOINT_VERIFY_S - 1
+    gaze._repoint_subject_t_before = t - 100.0
+    gaze._last_face_t = t - 100.0        # no face...
+    gaze._last_subject_t = t - 1.0       # ...but a body, just now
+    # Two torso readings is all the evidence the torso path can ever give.
+    gaze.discard_samples()
+    for i in range(2):
+        gaze.record_dy(-0.5, False, now=t - 1.0 + i * 0.2)
+    gaze._last_pitch_t = t - 10_000.0
+
+    gaze._verify_repoint(t)
+    assert neck.moves, "it found a body and left the head where it was"
+
+
+def test_a_repoint_that_lands_on_a_face_does_not_climb(neck, monkeypatch):
+    """The job is finished; lifting further would push them out of frame."""
+    _repoint_scored(monkeypatch)
+    t = gaze.time.monotonic()
+    gaze._repoint_pending_t = t - config.GAZE_REPOINT_VERIFY_S - 1
+    gaze._repoint_subject_t_before = t - 100.0
+    gaze._last_face_t = gaze._last_subject_t = t - 1.0
+    gaze._last_pitch_t = t - 10_000.0
+
+    gaze._verify_repoint(t)
+    assert neck.moves == []
+
+
+def test_the_relaxed_window_only_applies_to_torso_evidence(neck):
+    """The span and median average out noise in FACE offsets, which vary. The
+    torso path returns a constant, so more of them add nothing — but a face
+    still has to earn its full window."""
+    gaze.discard_samples()
+    t = gaze.time.monotonic()
+    for i in range(3):
+        gaze.record_dy(-0.4, True, now=t - 0.5 + i * 0.1)   # faces, few, close together
+
+    assert gaze._dy_estimate(t, prompt=True) is None, (
+        "a face-driven correction skipped the window it needs"
+    )

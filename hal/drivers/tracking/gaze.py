@@ -215,7 +215,7 @@ def _dx_estimate(now: Optional[float] = None):
     return med, len(rows), span
 
 
-def _dy_estimate(now: Optional[float] = None):
+def _dy_estimate(now: Optional[float] = None, *, prompt: bool = False):
     """``(median dy, from_face, n, span_s)`` over the window, or None.
 
     Median, not mean: idle's roll disturbance is periodic and roughly
@@ -233,9 +233,24 @@ def _dy_estimate(now: Optional[float] = None):
         return None
     face_rows = [r for r in rows if r[2]]
     use = face_rows if face_rows else rows
-    if len(use) < config.GAZE_PITCH_MIN_SAMPLES:
+    # `prompt` relaxes the window, and ONLY for torso evidence. The span and the
+    # median exist to average out noise in FACE offsets, which genuinely vary
+    # frame to frame. The torso path returns a fixed -0.5 every time, so eight of
+    # them spanning ten seconds say exactly what two of them say — the loop would
+    # be waiting out a safeguard against noise that cannot occur.
+    #
+    # It matters after a repoint, which discards the window because those offsets
+    # describe the pose the camera has just left. Without this the climb sat
+    # blind for ten seconds at the very moment it had been asked to look up.
+    relaxed = prompt and not face_rows
+    need = (config.GAZE_PITCH_PROMPT_MIN_SAMPLES if relaxed
+            else config.GAZE_PITCH_MIN_SAMPLES)
+    if len(use) < need:
         return None
     span = use[-1][0] - use[0][0]
+    if relaxed:
+        med = sorted(r[1] for r in use)[len(use) // 2]
+        return med, False, len(use), span
     # A full period, not a biased arc of one: half a roll cycle's worth of
     # samples has the disturbance's mean in it, not zero.
     if span < config.GAZE_PITCH_WINDOW_S * 0.8:
@@ -1341,7 +1356,7 @@ def _return_to_known_height(now: float) -> None:
         logger.debug("[gaze] could not restore the known height: %s", e)
 
 
-def _maybe_pitch(now: float) -> None:
+def _maybe_pitch(now: float, *, prompt: bool = False) -> None:
     """Raise or lower the camera so a face sits inside the frame, not above it.
 
     This is the neck the aim never had — see GAZE_PITCH_ENABLED for which joint
@@ -1360,7 +1375,7 @@ def _maybe_pitch(now: float) -> None:
 
     if not (config.GAZE_PITCH_ENABLED and config.GAZE_WAKE_ENABLED):
         return
-    est = _dy_estimate(now)
+    est = _dy_estimate(now, prompt=prompt)
     if est is None:
         with _dy_lock:
             have = len(_dy_samples)
@@ -1700,6 +1715,10 @@ def _verify_repoint(now: float) -> None:
         return
     if (now - _repoint_pending_t) < config.GAZE_REPOINT_VERIFY_S:
         return
+    # Three outcomes, not two. A face is the finished job; a body is the user
+    # found but framed too low, which is a different thing to say and a different
+    # thing to do about it.
+    saw_face = _last_face_t > _repoint_subject_t_before
     hit = _last_subject_t > _repoint_subject_t_before
     _repoint_pending_t = 0.0
     try:
@@ -1711,10 +1730,19 @@ def _verify_repoint(now: float) -> None:
         return
     logger.info(
         "[gaze] repoint %s — %s%s",
-        "found the user" if hit else "found nobody",
+        "found their face" if saw_face
+        else "found their body, no face yet" if hit
+        else "found nobody",
         "bearing confirmed" if hit else "counted against the bearing",
         " (estimate dropped)" if dropped else "",
     )
+    if hit and not saw_face:
+        # A repoint should end on a FACE. It landed on a body, so the camera is
+        # aimed too low — ask the climb to lift now rather than leaving it to
+        # notice by itself, which takes a fresh window and the repoint has just
+        # discarded the old one.
+        logger.info("[gaze] climbing to find the face the repoint turned up")
+        _maybe_pitch(now, prompt=True)
     if not hit:
         # A repoint that moved and missed is the strongest evidence there is:
         # the best guess was acted on and was wrong. No waiting.

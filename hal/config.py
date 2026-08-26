@@ -1537,6 +1537,15 @@ GAZE_PITCH_WINDOW_S: float = float(
 GAZE_PITCH_MIN_SAMPLES: int = int(
     os.environ.get("HAL_GAZE_PITCH_MIN_SAMPLES", "8")
 )
+# How few torso readings are enough when the climb has been asked for directly —
+# a repoint that landed on a body and wants the head lifted now.
+#
+# Small because the torso path reports a CONSTANT -0.5, so more of them add no
+# information. The full window still applies to face-driven corrections, where
+# the offset actually varies and the median is doing real work.
+GAZE_PITCH_PROMPT_MIN_SAMPLES: int = int(
+    os.environ.get("HAL_GAZE_PITCH_PROMPT_MIN_SAMPLES", "2")
+)
 # Write an annotated frame beside every pitch correction, into
 # SNAPSHOT_PERSIST_DIR/sensing_gaze/ (newest GAZE_SNAPSHOT_KEEP kept).
 #
