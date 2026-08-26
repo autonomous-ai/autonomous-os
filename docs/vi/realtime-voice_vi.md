@@ -198,6 +198,51 @@ no-op.
 | `HAL_AEC_REF_MS` | `500` | Độ sâu FIFO của tham chiếu vọng âm |
 | `HAL_AEC_DUMP_DIR` | — | Ghi `aec_mic/ref/out.wav` để phân tích ERLE offline |
 
+### Cài binding
+
+PyPI chỉ phát hành **wheel Windows** cho `aec-audio-processing`, nên mọi nền
+tảng khác phải build từ sdist. Sdist đó đã vendor sẵn toàn bộ source
+webrtc-audio-processing + abseil và một wrapper SWIG sinh sẵn, nên build khép
+kín: không cần `libwebrtc-audio-processing` của hệ thống, cũng không cần SWIG hệ
+thống. Các build requirement của nó (`swig`, `meson`, `ninja`, `cmake`) đều có
+wheel trên PyPI, nên **không cần `apt install` gì cả** — điều này quan trọng, vì
+người dùng cuối không thể chạy apt trên thiết bị đã xuất xưởng.
+
+Vấn đề nằm ở chính bước build: đo trên lamp (A523, 8 core) mất **5m35s thực /
+36m CPU**. Chạy một lần trên máy của dev thì được; chạy trên mọi thiết bị, mọi
+lần build image và mọi lần `software-update hal` thì không. Nên dự án build một
+wheel rồi đính vào một GitHub release:
+
+```bash
+scripts/release/build-aec-wheel.sh <device-ip>   # → dist/aec/*.whl
+make upload-aec-wheel                            # → CDN, in ra URL + sha256
+```
+
+`build-aec-wheel.sh` biên dịch ngay trên thiết bị, trong `/tmp`, bằng một venv
+dùng xong bỏ với meson/ninja lấy từ PyPI — `/opt/hal` và các gói hệ thống không
+bị đụng tới — rồi copy wheel về, cài vào một venv sạch để chứng minh nó import
+được, và xoá thư mục tạm.
+
+**Build trên máy CŨ nhất, không phải máy mới nhất.** Wheel chỉ link
+`libstdc++/libm/libgcc_s/libc` và cần **glibc ≥ 2.34**. glibc tương thích tiến,
+nên wheel build trên lamp (Debian 12, glibc 2.36) chạy được trên Reachy Mini
+(Debian 13, glibc 2.41) — chiều ngược lại thì không. Wheel mang tag
+`cp312-cp312-linux_aarch64`: `uv` trên mọi body đều chạy CPython 3.12 nên tag đó
+phủ hết đội máy, và `upload-aec-wheel.sh` từ chối publish thứ khác thay vì để
+lệch ABI lộ ra trên máy khách hàng.
+
+Asset nằm trên một tag riêng cho wheel (`wheels/aec-<version>`), không phải tag
+phiên bản OS — wheel không đi theo nhịp release của OS, và tag riêng thì không bị
+trỏ lại, nên URL đã pin không thể đổi nội dung sau lưng lockfile. Chọn GitHub
+release thay vì bucket OTA là có chủ đích: repo này public nên một fork có thể tự
+build và tự host wheel của họ, còn bucket thì chỉ nội bộ org.
+
+`hal/pyproject.toml` pin URL đó trong `[tool.uv.sources]`, giới hạn ở
+linux/aarch64/CPython 3.12. Đo trên `lamp-0c89`: cài wheel host sẵn mất **1.9
+giây**, so với **5m35s** nếu compile. Nằm ngoài marker đó — máy Mac của dev, hay
+3.13 sau này — sẽ rơi về sdist trên PyPI và compile, nên `uv sync --extra aec`
+lúc nào cũng chạy; chỉ đường nhanh mới được pin.
+
 Vòng VAD chính được bọc, và với `HAL_WARM_MIC=true` (nay là mặc định) mic vẫn mở
 suốt lúc phát, nên việc khử chạy ngay trong lúc thiết bị đang nói chứ không chỉ
 trong barge-in monitor cũ. Cổng reverb cố ý không khử để giữ nguyên timing.

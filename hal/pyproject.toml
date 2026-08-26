@@ -80,6 +80,20 @@ required-environments = [
 
 [tool.uv.sources]
 lerobot = { git = "https://github.com/huggingface/lerobot", rev = "55198de096f46a8e0447a8795129dd9ee84c088c" }
+# Prebuilt aarch64 wheel for the `aec` extra — see docs/realtime-voice.md.
+# PyPI has Windows wheels only, so without this every install compiles the
+# vendored webrtc + abseil: 5m35s of device CPU, and build tools the image does
+# not ship. Rebuild with scripts/release/build-aec-wheel.sh and republish with
+# `make upload-aec-wheel`, then re-pin the URL here. It is a GitHub release
+# asset on a per-wheel tag (`wheels/aec-<version>`), not the OTA bucket: this
+# repo is public and a fork can host its own, while gs:// is org-only.
+# The marker is narrow on purpose. linux/aarch64 because the wheel is tagged
+# linux_aarch64 and a dev Mac must not try to install it; python < 3.13 because
+# the wheel is cp312 and `requires-python = ">=3.12"` makes uv resolve 3.13 too
+# — without the bound the lock fails outright. Anything outside the marker falls
+# back to the PyPI sdist and compiles, which is correct: only devices (all
+# CPython 3.12) get the fast path.
+aec-audio-processing = { url = "https://github.com/autonomous-ai/autonomous-os/releases/download/wheels/aec-1.0.1/aec_audio_processing-1.0.1-cp312-cp312-linux_aarch64.whl", marker = "sys_platform == 'linux' and platform_machine == 'aarch64' and python_full_version < '3.13'" }
 
 # Static metadata for sdist-only deps of the `reachy` extra. Without this,
 # resolving the lock (on ANY machine, even when the extra is not installed)

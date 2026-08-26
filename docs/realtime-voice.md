@@ -205,6 +205,51 @@ not a no-op.
 | `HAL_AEC_REF_MS` | `500` | Echo-reference FIFO depth |
 | `HAL_AEC_DUMP_DIR` | — | Write `aec_mic/ref/out.wav` for offline ERLE analysis |
 
+### Installing the binding
+
+PyPI publishes **Windows wheels only** for `aec-audio-processing`, so every
+other platform builds from its sdist. That sdist vendors the full
+webrtc-audio-processing + abseil sources and a pre-generated SWIG wrapper, so
+the build is self-contained: it needs no system `libwebrtc-audio-processing`
+and no system SWIG. Its build requirements (`swig`, `meson`, `ninja`, `cmake`)
+all ship wheels on PyPI, so **no `apt install` is required** — which matters,
+because an end user cannot run apt on a shipped device.
+
+The build itself is the problem: measured on a lamp (A523, 8 cores) it takes
+**5m35s wall / 36m CPU**. That is fine once, on a developer's device; it is not
+fine on every device, every image build, and every `software-update hal`. So the
+project builds one wheel and attaches it to a GitHub release:
+
+```bash
+scripts/release/build-aec-wheel.sh <device-ip>   # → dist/aec/*.whl
+make upload-aec-wheel                            # → CDN, prints URL + sha256
+```
+
+`build-aec-wheel.sh` compiles on the device, in `/tmp`, in a throwaway venv with
+meson/ninja from PyPI — `/opt/hal` and the system packages are never touched —
+then copies the wheel back, installs it into a clean venv to prove it imports,
+and deletes its scratch directory.
+
+**Build on the OLDEST target, not the newest.** The wheel links only
+`libstdc++/libm/libgcc_s/libc` and requires **glibc ≥ 2.34**. glibc is forward
+compatible, so a wheel built on the lamp (Debian 12, glibc 2.36) also runs on
+Reachy Mini (Debian 13, glibc 2.41) — the reverse does not hold. The wheel is
+tagged `cp312-cp312-linux_aarch64`: `uv` on every body runs CPython 3.12, so
+that tag covers the fleet, and `upload-aec-wheel.sh` refuses to publish anything
+else rather than let the mismatch surface on a customer device.
+
+The asset lives on a per-wheel tag (`wheels/aec-<version>`), never the OS
+version tag — the wheel does not move with OS releases, and a dedicated tag is
+not re-pointed, so a pinned URL cannot change content under the lockfile. It is
+a GitHub release rather than the OTA bucket on purpose: this repo is public, so
+a fork can build and host its own wheel, while the bucket is org-only.
+
+`hal/pyproject.toml` pins that URL under `[tool.uv.sources]`, scoped to
+linux/aarch64/CPython 3.12. Measured on `lamp-0c89`, installing the hosted wheel
+takes **1.9 s** against **5m35s** to compile. Anything outside that marker —
+a dev Mac, a future 3.13 — falls back to the PyPI sdist and compiles, so
+`uv sync --extra aec` always works; only the fast path is pinned.
+
 The main VAD loop is wrapped, and with `HAL_WARM_MIC=true` (now the default)
 the mic stays open through playback, so cancellation runs during the device's
 own speech rather than only in the legacy barge-in monitor. The reverb gate is
