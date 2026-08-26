@@ -836,11 +836,23 @@ elif [ "$APP" = "device" ]; then
   mv "$DIR_TMP" "$DEST"
   DIR_TMP=""
   clear_publish_pending
-  # Keep local tuning in .env exactly as the existing updater did.
-  ENV_BACKUP=""
-  if [ -f /opt/hal/.env ]; then ENV_BACKUP=$(mktemp); cp -a /opt/hal/.env "$ENV_BACKUP"; fi
+  # Apply the profile's rootfs overlay, /opt/hal/.env included.
+  #
+  # The repo is the only source of a device's .env: a dev edits
+  # robots/<type>/rootfs/opt/hal/.env, publishes with `make upload-device`, and
+  # every device picks it up on its next `software-update device`. Anything
+  # edited directly on a device is a temporary experiment from an SSH session,
+  # and is MEANT to be overwritten by the next update — that is how the machine
+  # gets back to what the repo says.
+  #
+  # This used to back .env up and restore it afterwards, which quietly broke
+  # that flow: the new file reached /opt/devices/<type>/rootfs/opt/hal/.env and
+  # was then thrown away, so no running device ever received an .env change
+  # again — only freshly flashed ones did. Device-observed 26/08/2026 on
+  # lamp-0c89: a published HAL_REALTIME_FILLER_DELAY_S never reached the live
+  # file and HAL kept running the old value. Do not re-add the backup; if a
+  # value has to differ per unit, it belongs in that unit's profile in the repo.
   [ ! -d "$DEST/rootfs" ] || cp -a "$DEST/rootfs/." /
-  if [ -n "$ENV_BACKUP" ]; then cp -a "$ENV_BACKUP" /opt/hal/.env; rm -f "$ENV_BACKUP"; fi
   if ! restore_device_service_state || ! check_device_profile; then
     echo "device profile health check failed; restoring the known-good profile" >&2
     systemctl stop os-server 2>/dev/null || true
