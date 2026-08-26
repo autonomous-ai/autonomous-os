@@ -321,6 +321,37 @@ restore_hal_backup() {
 }
 
 [ "$(id -u)" -ne 0 ] && { echo "Run as root."; exit 1; }
+
+# Move into a transient scope of our own before touching anything.
+#
+# Every branch here stops the service it is about to replace, and `systemctl
+# stop <unit>` kills that unit's ENTIRE cgroup. An updater launched from inside
+# the unit — the agent runtime runs under os-server, and the web Versions card
+# reaches the device through nginx — therefore kills itself the moment it does
+# its job. That kill escalates to SIGKILL once the unit's stop timeout elapses,
+# so no trap can save it: device-observed 26/08/2026 on lamp-0c89,
+# `software-update web` stopped nginx and vanished, leaving nginx down and its
+# staging directory behind — the surviving staging dir is the proof that the
+# EXIT trap never ran.
+#
+# A scope is a cgroup of its own, so stopping the service no longer reaches us.
+# --slice=system.slice also keeps it clear of the caller's login session, so an
+# SSH hangup cannot take it down mid-publish.
+#
+# Probe first, then `exec`: the probe decides whether transient units can be
+# created here at all (a box without systemd, or without dbus, must still be
+# updatable — it falls through and runs inline exactly as before), and exec
+# makes the scoped run's exit status ours, with no chance of the update being
+# attempted twice.
+if [ -z "${SOFTWARE_UPDATE_SCOPED:-}" ] && command -v systemd-run >/dev/null 2>&1; then
+  if systemd-run --scope --collect --quiet --slice=system.slice -- true >/dev/null 2>&1; then
+    SELF="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+    exec systemd-run --scope --collect --quiet --slice=system.slice \
+      --setenv=SOFTWARE_UPDATE_SCOPED=1 -- "$SELF" "$@"
+  fi
+  echo "[software-update] transient scopes unavailable — running inline" >&2
+fi
+
 # One update at a time, whoever asks. Two concurrent runs destroy each other:
 # the component branches move the installed tree to <name>.previous, so a second
 # run `rm -rf`s the first run's ONLY backup and then fails on the missing source
