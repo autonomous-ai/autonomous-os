@@ -280,6 +280,12 @@ func StopTTS() error { return post("/tts/stop", nil) }
 // StopAudio stops any audio playback (music, etc.).
 func StopAudio() error { return post("/audio/stop", nil) }
 
+// RebootOS requests HAL's full reboot action (cue, then OS reboot).
+func RebootOS() error { return post("/system/reboot", nil) }
+
+// ShutdownOS requests HAL's full shutdown action (cue, servo release, then OS shutdown).
+func ShutdownOS() error { return post("/system/shutdown", nil) }
+
 // SetVolume sets speaker volume (0-100).
 func SetVolume(pct int) error {
 	body, _ := json.Marshal(map[string]int{"volume": pct})

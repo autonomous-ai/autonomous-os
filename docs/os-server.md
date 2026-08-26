@@ -19,6 +19,15 @@
 | GET | `/api/system/network` | WiFi SSID, IP, signal, internet status |
 | GET | `/api/system/dashboard` | Aggregated snapshot (agent + config + HW) |
 | GET | `/api/system/ota-security` | OTA trust posture from the bootstrap worker: `legacy` vs `verified`, pinned key fingerprint, last metadata fetch (see `bootstrap-ota.md`) |
+| POST | `/api/system/reboot` | Admin-gated: acknowledge, then ask HAL to announce and reboot the OS |
+| POST | `/api/system/shutdown` | Admin-gated: acknowledge, then ask HAL to announce, release servos, and shut down the OS |
+
+The power endpoints return `202 Accepted` before scheduling their HAL call, so
+the browser can receive the acknowledgement before the device becomes
+unreachable. Only one reboot or shutdown can be pending at a time; a second
+request receives `409 Conflict`. HAL owns the physical sequence: reboot plays
+the reboot cue, while shutdown plays its cue and releases servos before issuing
+the OS power command.
 
 ### Device Setup
 
