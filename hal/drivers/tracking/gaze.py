@@ -659,6 +659,39 @@ def _conversation_open() -> bool:
         return False
 
 
+_conversation_was_open: Optional[bool] = None
+
+
+def _note_conversation_edge() -> None:
+    """Log the moment the framing window opens or closes.
+
+    voice_service logs the GRANT ("wake-word focus granted for 60s"), but the
+    window expires lazily — `is_active()` simply starts returning False, with no
+    timer and no event to hook. So "when did the lamp stop framing me" had no
+    answer in the log except an inference from a throttled decline line that
+    only prints when a correction happened to be wanted; a user sitting neatly
+    centred could watch the window close and see nothing at all.
+
+    Edge-triggered, so a quiet lamp costs one line per conversation rather than
+    one per tick. The FIRST observation is recorded silently: the watcher
+    starting is not a transition, and announcing "closed" at every boot would
+    put a line in the log that means nothing happened.
+    """
+    global _conversation_was_open
+    open_now = _conversation_open()
+    if open_now == _conversation_was_open:
+        return
+    first = _conversation_was_open is None
+    _conversation_was_open = open_now
+    if first:
+        return
+    logger.info(
+        "[gaze] conversation %s — framing %s",
+        "open" if open_now else "closed",
+        "live" if open_now else "released (idle has the arm)",
+    )
+
+
 def following_a_face(svc: Any) -> bool:
     """Whether the servo writes are a tracking session pursuing the user.
 
@@ -1794,6 +1827,7 @@ def _loop() -> None:
                 # Framing first: a face inside the frame is what everything
                 # else is measured from, and turning to a bearing that still
                 # points at the desk finds nobody however right the bearing is.
+                _note_conversation_edge()
                 _maybe_pitch(now)
                 # Pan after tilt, never in the same breath: both own the body
                 # and both clear their own window, so running them together
@@ -1851,6 +1885,7 @@ def stop() -> None:
 
 def reset_for_test() -> None:
     """Clear buffered samples and the cooldown between tests."""
+    globals()["_conversation_was_open"] = None
     global _last_grant_t, _last_face_t, _last_repoint_t
     global _speech_repoint_requested_t
     with _samples_lock:

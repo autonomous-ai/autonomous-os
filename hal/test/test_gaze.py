@@ -6,6 +6,7 @@ what it currently outputs.
 """
 
 import json
+import logging
 import math
 from pathlib import Path
 
@@ -2391,3 +2392,46 @@ def test_a_missing_voice_service_reads_as_no_conversation(monkeypatch):
     monkeypatch.setattr(state, "voice_service", None, raising=False)
     monkeypatch.setattr(gaze, "_conversation_open", _REAL_CONVERSATION_OPEN)
     assert gaze._conversation_open() is False
+
+
+def test_the_close_of_the_framing_window_is_logged(monkeypatch, caplog):
+    """voice_service logs the grant; nothing logged the expiry.
+
+    The window lapses lazily — is_active() just starts returning False — so
+    "when did the lamp stop framing me" was only inferable from a throttled
+    decline line that prints when a correction happened to be wanted.
+    """
+    open_now = {"v": True}
+    monkeypatch.setattr(gaze, "_conversation_open", lambda: open_now["v"])
+    gaze._note_conversation_edge()                       # first: recorded silently
+    with caplog.at_level(logging.INFO):
+        open_now["v"] = False
+        gaze._note_conversation_edge()
+    assert "conversation closed" in caplog.text
+    assert "released" in caplog.text
+
+
+def test_the_open_is_logged_too(monkeypatch, caplog):
+    open_now = {"v": False}
+    monkeypatch.setattr(gaze, "_conversation_open", lambda: open_now["v"])
+    gaze._note_conversation_edge()
+    with caplog.at_level(logging.INFO):
+        open_now["v"] = True
+        gaze._note_conversation_edge()
+    assert "conversation open" in caplog.text
+
+
+def test_a_steady_state_logs_nothing(monkeypatch, caplog):
+    """Edge-triggered: a quiet lamp costs one line per conversation, not per tick."""
+    monkeypatch.setattr(gaze, "_conversation_open", lambda: False)
+    gaze._note_conversation_edge()
+    with caplog.at_level(logging.INFO):
+        for _ in range(20):
+            gaze._note_conversation_edge()
+    assert "conversation" not in caplog.text
+
+
+def test_the_watcher_loop_watches_the_edge():
+    import inspect
+
+    assert "_note_conversation_edge()" in inspect.getsource(gaze._loop)
