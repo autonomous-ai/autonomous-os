@@ -768,6 +768,11 @@ export interface PiperJob {
   kind: string;      // "engine" | "voice"
   target: string;
   percent: number;
+  // Bytes of the main artefact. A percentage alone barely moves on a slow
+  // link; a byte counter visibly does, which is the difference between
+  // "downloading" and "stuck" to whoever is watching.
+  bytes_done: number;
+  bytes_total: number;
   error: string;
   done: boolean;
 }
@@ -779,22 +784,39 @@ export interface PiperStatus {
   job: PiperJob;
 }
 
+/** Reply to an install/download request. `job` is present when one started. */
+export interface PiperJobStart {
+  status: string;    // "started" | "busy" | "ok" | "error"
+  already?: boolean;
+  job?: PiperJob;
+  message?: string;
+}
+
 export async function getPiperStatus(): Promise<PiperStatus> {
   return apiRequest<PiperStatus>(`${API_BASE}/api/voice/piper/status`);
 }
 
 /** Install the Piper engine. Already-installed returns ok, not an error. */
-export async function installPiperEngine(): Promise<{ status: string }> {
-  return apiRequest<{ status: string }>(`${API_BASE}/api/voice/piper/install`, {
+export async function installPiperEngine(): Promise<PiperJobStart> {
+  return apiRequest<PiperJobStart>(`${API_BASE}/api/voice/piper/install`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: "{}",
   });
 }
 
+/** Delete a downloaded voice. Refused for the voice currently in use. */
+export async function removePiperVoice(name: string): Promise<PiperJobStart> {
+  return apiRequest<PiperJobStart>(`${API_BASE}/api/voice/piper/voice/remove`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+}
+
 /** Download one catalogue voice (~63 MB). */
-export async function installPiperVoice(name: string): Promise<{ status: string }> {
-  return apiRequest<{ status: string }>(`${API_BASE}/api/voice/piper/voice`, {
+export async function installPiperVoice(name: string): Promise<PiperJobStart> {
+  return apiRequest<PiperJobStart>(`${API_BASE}/api/voice/piper/voice`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name }),

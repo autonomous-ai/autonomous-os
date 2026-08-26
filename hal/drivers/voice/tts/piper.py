@@ -32,7 +32,10 @@ logger = logging.getLogger("hal.voice.tts")
 
 PIPER_BIN = os.environ.get("HAL_PIPER_BIN", "/opt/piper/piper")
 PIPER_VOICES_DIR = os.environ.get("HAL_PIPER_VOICES", "/opt/piper/voices")
-PIPER_DEFAULT_VOICE = os.environ.get("HAL_PIPER_VOICE", "en_US-lessac-medium")
+# Public domain, so shipping it carries no obligation. Kept in step with
+# piper_catalog.DEFAULT_VOICE — lessac, the old value here, is a Blizzard
+# research licence and is deliberately not in the catalogue.
+PIPER_DEFAULT_VOICE = os.environ.get("HAL_PIPER_VOICE", "en_US-ljspeech-medium")
 
 # Piper ships its own espeak-ng and phonemize libraries next to the binary and
 # does not rpath them, so the loader needs pointing at that directory.
@@ -112,12 +115,41 @@ class PiperTTSBackend(TTSBackend):
             voice += ".onnx"
         return os.path.join(self._voices_dir, voice)
 
+    def _any_installed_voice(self) -> str:
+        """Any model actually present, newest-installed order not required.
+
+        Used as the last fallback so a device that has *a* voice is never
+        silent. Speaking in the wrong voice is a visible, self-explaining
+        fault; a robot that says nothing reads as broken hardware.
+        """
+        try:
+            names = sorted(
+                f[: -len(".onnx")]
+                for f in os.listdir(self._voices_dir)
+                if f.endswith(".onnx")
+            )
+        except OSError:
+            return ""
+        return names[0] if names else ""
+
     @property
     def available(self) -> bool:
-        return (
+        """Binary present, plus at least one voice — not specifically the
+        configured one. The operator can save a voice before its download
+        finishes, or pick one and have the file removed underneath; gating on
+        the exact name would take the whole backend offline, and the service
+        answers that with a 503 that looks like the API died rather than like
+        one missing file."""
+        have_bin = (
             (os.path.isfile(self._bin) and os.access(self._bin, os.X_OK))
             or shutil.which(self._bin) is not None
-        ) and os.path.isfile(self._model_path(self._default_voice))
+        )
+        if not have_bin:
+            return False
+        return (
+            os.path.isfile(self._model_path(self._default_voice))
+            or bool(self._any_installed_voice())
+        )
 
     def rate_for(self, voice: str = "") -> int:
         """Sample rate of a specific model. Piper voices are not all 22.05 kHz —
@@ -231,8 +263,14 @@ class PiperTTSBackend(TTSBackend):
                 self._warned_voices.add(voice)
                 logger.warning("Piper: voice %r not found at %s, using %s instead",
                                voice, model_path, self._default_voice)
-            model_path = self._model_path(self._default_voice)
-            self._current_voice = self._default_voice
+            fallback = self._default_voice
+            if not os.path.isfile(self._model_path(fallback)):
+                fallback = self._any_installed_voice()
+                if not fallback:
+                    logger.warning("Piper: no voice models installed, nothing to speak")
+                    return
+            model_path = self._model_path(fallback)
+            self._current_voice = fallback
 
         # Piper expresses tempo as length scale — the inverse of speed. Guard
         # against a zero or negative speed reaching the process as a divide.

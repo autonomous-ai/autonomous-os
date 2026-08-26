@@ -665,5 +665,16 @@ class VoiceStartRequest(BaseModel):
     )
 
 
+class TTSConfigRequest(BaseModel):
+    """Partial TTS settings applied to the running service by POST
+    /voice/tts/config. Every field optional: only what is sent is changed."""
+
+    provider: Optional[str] = None
+    voice: Optional[str] = None
+    api_key: Optional[str] = None
+    base_url: Optional[str] = None
+    speed: Optional[float] = None
+
+
 class VoiceConfigRequest(BaseModel):
     wake_words: list[str] = Field(..., min_length=1, description="Wake word list (lowercase matched)")

@@ -2,6 +2,7 @@ package device
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -105,7 +106,8 @@ type updateChanges struct {
 	apiKey   bool // llm_api_key rotated → RefreshModelsConfig (openclaw.json holds its OWN apiKey copy)
 	wifi     bool // ssid changed → reconnect WiFi
 	lang     bool // stt_language changed → new agent session + hal restart
-	voice    bool // a field hal reads at boot changed → hal restart
+	halBoot  bool // a field hal reads at boot changed → hal restart
+	tts      bool // voice/provider changed → pushed into the running hal
 	realtime bool // realtime block sent → hal restart
 	channel  bool // messaging channel/tokens changed → re-push into gateway
 
@@ -117,34 +119,64 @@ type updateChanges struct {
 	chanReq     domain.AddChannelRequest
 }
 
-// voiceSnapshot is the set of config fields hal reads at boot (hal/server.py
-// :317-388 + hal/config.py:103-104). Comparable, so a plain before/after
-// equality check gates the hal restart — wifi/channel/MQTT/admin-only saves
-// must not bounce TTS.
-type voiceSnapshot struct {
+// bootSnapshot is the set of config fields hal reads at boot (hal/server.py
+// :317-388 + hal/config.py:103-104) and has no way to be told about at
+// runtime. Comparable, so a plain before/after equality check gates the hal
+// restart — wifi/channel/MQTT/admin-only saves must not bounce TTS.
+type bootSnapshot struct {
 	llmAPIKey      string
 	llmBaseURL     string
 	deepgramAPIKey string
 	sttAPIKey      string
-	ttsAPIKey      string
 	sttBaseURL     string
-	ttsBaseURL     string
-	ttsProvider    string
-	ttsVoice       string
 }
 
-func voiceFields(c *config.Config) voiceSnapshot {
-	return voiceSnapshot{
+func bootFields(c *config.Config) bootSnapshot {
+	return bootSnapshot{
 		llmAPIKey:      c.LLMAPIKey,
 		llmBaseURL:     c.LLMBaseURL,
 		deepgramAPIKey: c.DeepgramAPIKey,
 		sttAPIKey:      c.STTAPIKey,
-		ttsAPIKey:      c.TTSAPIKey,
 		sttBaseURL:     c.STTBaseURL,
-		ttsBaseURL:     c.TTSBaseURL,
-		ttsProvider:    c.TTSProvider,
-		ttsVoice:       c.TTSVoice,
 	}
+}
+
+// ttsSnapshot is the part hal can be told about while it runs, via POST
+// /voice/tts/config. Kept separate from bootSnapshot because a voice change is
+// the single most common save an operator makes, and restarting hal for it
+// takes the device deaf and mute for ten to fifteen seconds — long enough that
+// any admin click landing in the window is lost.
+type ttsSnapshot struct {
+	ttsProvider string
+	ttsVoice    string
+	ttsAPIKey   string
+	ttsBaseURL  string
+}
+
+func ttsFields(c *config.Config) ttsSnapshot {
+	return ttsSnapshot{
+		ttsProvider: c.TTSProvider,
+		ttsVoice:    c.TTSVoice,
+		ttsAPIKey:   c.TTSAPIKey,
+		ttsBaseURL:  c.TTSBaseURL,
+	}
+}
+
+// realtimeFingerprint renders the realtime block as JSON so before and after
+// can be compared. The struct holds pointers, which makes it uncomparable with
+// ==, and this runs once per save, so serialising is the simpler answer.
+func realtimeFingerprint(c *config.Config) string {
+	if c.Realtime == nil {
+		return ""
+	}
+	b, err := json.Marshal(c.Realtime)
+	if err != nil {
+		// Cannot happen for this struct; if it ever did, reporting "unchanged"
+		// on both sides is the safe reading — the other flags still gate the
+		// restart.
+		return ""
+	}
+	return string(b)
 }
 
 // channelSnapshot is the messaging channel identity + tokens. Comparable; a
@@ -183,7 +215,8 @@ func channelFields(c *config.Config) channelSnapshot {
 // caller because bcrypt is too CPU-heavy for the lock.
 func applyUpdate(c *config.Config, data domain.UpdateConfigRequest, adminHash string) updateChanges {
 	var ch updateChanges
-	prevVoice := voiceFields(c)
+	prevBoot := bootFields(c)
+	prevTTS := ttsFields(c)
 	prevWakeWord := c.WakeWordEnabled()
 	prevChannel := channelFields(c)
 	ch.prevLang = c.STTLanguage
@@ -205,7 +238,8 @@ func applyUpdate(c *config.Config, data domain.UpdateConfigRequest, adminHash st
 		c.AdminPasswordHash = adminHash
 	}
 
-	ch.voice = voiceFields(c) != prevVoice || c.WakeWordEnabled() != prevWakeWord
+	ch.halBoot = bootFields(c) != prevBoot || c.WakeWordEnabled() != prevWakeWord
+	ch.tts = ttsFields(c) != prevTTS
 	ch.channel = channelFields(c) != prevChannel
 	// Build the request from the post-save config (full current values, since
 	// PATCH semantics mean a token the operator didn't touch keeps its value).
@@ -286,11 +320,15 @@ func applyVoicePipelineFields(c *config.Config, data domain.UpdateConfigRequest,
 	if data.TTSVoice != "" {
 		c.TTSVoice = data.TTSVoice
 	}
-	// Realtime block (validated by the caller before the lock). Sent = apply +
-	// restart hal.
+	// Realtime block (validated by the caller before the lock).
 	if data.Realtime != nil {
+		before := realtimeFingerprint(c)
 		applyRealtimeSet(c, *data.Realtime)
-		ch.realtime = true
+		// Sent is not the same as changed. The settings page puts the realtime
+		// block in *every* save, so treating its presence as a change restarted
+		// hal on every save — including a voice-only one, which is precisely
+		// what pushing TTS config live exists to avoid.
+		ch.realtime = realtimeFingerprint(c) != before
 	}
 }
 
@@ -451,8 +489,12 @@ func (s *Service) fireConfigSideEffects(ch updateChanges) {
 	// Restart hal only when a field it reads at boot actually changed.
 	// stt_language is covered by ch.lang (hal reads it via stt_language /
 	// derived stt_model). Wifi/channel/MQTT/admin saves skip the restart.
-	if ch.voice || ch.lang || ch.realtime {
+	switch {
+	case ch.halBoot || ch.lang || ch.realtime:
 		s.restartHAL("voice config change")
+	case ch.tts:
+		// The common case, and the one that used to bounce hal for nothing.
+		s.applyTTSConfig(s.config)
 	}
 }
 
@@ -526,7 +568,12 @@ func (s *Service) UpdateVoiceConfig(provider, voice, language string) error {
 			}()
 		}
 	}
-	s.restartHAL("voice config change")
+	if language != "" && prevLang != s.config.STTLanguage {
+		// stt_language is read at boot; nothing can be pushed for it.
+		s.restartHAL("stt language change")
+	} else {
+		s.applyTTSConfig(s.config)
+	}
 	return nil
 }
 
