@@ -639,6 +639,24 @@ different centre. Scoped to idle deliberately — an emotion recording may fling
 because by then the user has already been heard; what must hold is that the *resting* pose can see
 whoever speaks next.
 
+An anchor names **both axes**, height and heading. A joint left out of an anchor is not held — it eases
+back to the recording's baseline — so a pitch-only anchor actively undid completed turns: a horizontal
+correction anchored `base_yaw`/`wrist_roll`, then the next *vertical* correction rebuilt the anchor
+from the pitch joints alone and idle walked the heading back to the middle of the room. The heading is
+also kept when a repoint's remembered *vertical* half is refused as stale: what a bearing memory is
+unambiguously good for is which way to face. `HAL_GAZE_IDLE_ANCHOR_YAW=false` restores the pitch-only
+anchor.
+
+**The framing loops hold still during a conversation.** Centring a face is in service of the wake
+decision — the gate needs a face it can measure the heading of. Once the follow-up window is open that
+decision is made, so every further correction answers a question nobody is asking, and pays for it in
+the most visible currency the lamp has: creeping after each lean mid-sentence. With
+`HAL_GAZE_HOLD_STILL_IN_CONVERSATION` the pitch and pan loops stop while the window is open. The
+watcher is untouched — it keeps sampling, and the wake gate keeps deciding and logging `WOULD_WAKE`;
+only the servo work stops. This depends on the idle anchor to be safe rather than merely quiet: the
+resting pose is already the one a face was last seen from, so the lamp keeps facing the user for the
+whole conversation without correcting once. A climb that was *asked* for is exempt.
+
 | Knob | Default | Meaning |
 |---|---|---|
 | `HAL_GAZE_PITCH` | `true` | Vertical centring on/off. |
@@ -655,6 +673,8 @@ whoever speaks next.
 | `HAL_GAZE_PITCH_STALL_REST_S` | 60 | How long a stalled joint is left out. Matched to measured recovery. |
 | `HAL_GAZE_PITCH_STALL_BACKOFF_DEG` | 2.0 | Stop short of where it stalled. |
 | `HAL_GAZE_IDLE_ANCHOR` | `true` | Let idle breathe around the last good pose. |
+| `HAL_GAZE_IDLE_ANCHOR_YAW` | `true` | Anchor the heading as well as the height. Off, the yaw joints are omitted — which eases them back to the recording, not leaves them be. |
+| `HAL_GAZE_HOLD_STILL_IN_CONVERSATION` | `true` | Stop the pitch and pan loops while the follow-up window is open. The watcher and the wake gate keep running. |
 | `HAL_GAZE_SNAPSHOT` / `_KEEP` | `true` / 40 | Annotated frame beside every correction, in `SNAPSHOT_PERSIST_DIR/sensing_gaze/`. The log says the median was −0.41 of frame height; it cannot say whether that was the user, a colleague, or a coat on a chair. |
 
 ### Climbing to find a face above the frame

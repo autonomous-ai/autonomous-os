@@ -1802,3 +1802,39 @@ GAZE_PITCH_STALL_BACKOFF_DEG: float = float(
 GAZE_IDLE_ANCHOR: bool = (
     os.environ.get("HAL_GAZE_IDLE_ANCHOR", "true").lower() in ("1", "true", "yes")
 )
+# Whether that anchor covers the HEADING as well as the height.
+#
+# On, an anchor always names both axes. Off, it names only the pitch joints and
+# the yaw is left to the recording — which is not "leave the heading alone" but
+# "walk the heading back to where the recording was made", because a joint
+# missing from an anchor eases to its baseline. That was the behaviour before
+# this switch existed, and it undid completed turns: a yaw correction anchored
+# base_yaw and wrist_roll by merging its own target in, and the next PITCH
+# correction rebuilt the anchor from the pitch joints alone and dropped them.
+#
+# Separate from GAZE_IDLE_ANCHOR because the two axes fail differently and are
+# worth being able to disable apart. A wrong height is invisible until the user
+# is out of frame; a wrong heading is the lamp facing the wrong way across a
+# room, which is the more startling of the two to get wrong on a device.
+GAZE_IDLE_ANCHOR_YAW: bool = (
+    os.environ.get("HAL_GAZE_IDLE_ANCHOR_YAW", "true").lower() in ("1", "true", "yes")
+)
+# Stop correcting the framing while the follow-up window is open.
+#
+# The framing loops exist to serve the wake decision: the gate needs a face it
+# can measure, so the lamp keeps one in frame. Once the window is open that
+# decision is already made, and every further correction answers a question
+# nobody is asking — while being the most visible thing the lamp does, creeping
+# after each lean mid-sentence.
+#
+# Depends on the idle anchor to be safe rather than merely quiet: the resting
+# pose is already the one a face was last seen from, so the lamp keeps facing
+# the user for the whole conversation without correcting once. Off, the loops
+# run in conversation as they did before.
+#
+# The watcher is untouched — it keeps sampling, and the wake gate keeps
+# deciding and logging. Only the servo work stops.
+GAZE_HOLD_STILL_IN_CONVERSATION: bool = (
+    os.environ.get("HAL_GAZE_HOLD_STILL_IN_CONVERSATION", "true").lower()
+    in ("1", "true", "yes")
+)

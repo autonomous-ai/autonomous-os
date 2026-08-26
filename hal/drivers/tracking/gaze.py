@@ -547,6 +547,25 @@ def _headroom_from_person(frame: Any, detector: Any) -> Tuple[Optional[float], b
 # what a remembered (and therefore stale) posture must not be allowed to undo.
 PITCH_JOINTS = ("base_pitch.pos", "elbow_pitch.pos", "wrist_pitch.pos")
 
+# Every joint the yaw loop steers — the two `servo_follow.distribute_yaw`
+# allocates across, in the same order it weights them.
+YAW_JOINTS = ("base_yaw.pos", "wrist_roll.pos")
+
+# What an idle anchor covers. BOTH axes, always, even when the correction that
+# triggered the anchor only touched one of them.
+#
+# The anchor is rebuilt from scratch on every call and handed to set_idle_anchor
+# whole, and a joint MISSING from it is not "leave that one alone" — it is
+# "ease that one back to the recording's baseline" (see _advance_idle_anchor).
+# So an anchor listing only the pitch joints actively undoes the yaw.
+#
+# That is what used to happen. A yaw correction anchored base_yaw and wrist_roll
+# by merging its own target in, and then the next pitch correction — which reads
+# only PITCH_JOINTS from the pose — dropped them, and idle walked the lamp's
+# heading back to the middle of the room while the user was still sitting where
+# it had just turned to face them.
+ANCHOR_JOINTS = PITCH_JOINTS + YAW_JOINTS
+
 _last_anchor: Optional[Dict[str, float]] = None
 
 # Joints that were commanded somewhere and did not arrive.
@@ -673,10 +692,18 @@ def _anchor_idle_from_pose(svc: Any, pose: Any) -> None:
     setter = getattr(svc, "set_idle_anchor", None)
     if setter is None:
         return
+    # The yaw joints are included, and unlike the vertical ones they are never
+    # dropped below. This is the one thing a remembered bearing is unambiguously
+    # good for: the comment below already says the memory "is worth believing
+    # about which way to FACE, which is what the move itself uses" — so the idle
+    # loop should rest on that heading too, instead of being the one consumer
+    # that lets the recording pull the lamp back off it.
+    wanted = ("base_pitch.pos", "wrist_pitch.pos") + (
+        YAW_JOINTS if config.GAZE_IDLE_ANCHOR_YAW else ()
+    )
     anchor = {
         j: float(v) for j, v in pose.items()
-        if j in ("base_pitch.pos", "wrist_pitch.pos")
-        and isinstance(v, (int, float))
+        if j in wanted and isinstance(v, (int, float))
     }
     # The remembered wrist_pitch is a stale vertical aim, and re-resting on it
     # undoes every correction the pitch loop has made. Device-observed after
@@ -723,10 +750,18 @@ def _anchor_idle_here(svc: Any, pitch: Optional[Dict[str, float]] = None) -> Non
     # elbow_pitch joined that list once the correction started using it: it is
     # the joint carrying most of the lift (weight 0.90), so an anchor without it
     # holds the two minor joints steady and lets idle walk the lift itself back.
+    #
+    # The yaw joints are read for exactly the same reason, one axis over: an
+    # anchor that names only the pitch joints tells idle to ease the heading
+    # back to the recording's own, which throws away the turn that put the user
+    # in frame. Reading the CURRENT pose for whichever axis this call did not
+    # correct keeps the anchor a complete posture, so each correction moves its
+    # own axis and preserves the other rather than reverting it.
     anchor: Dict[str, float] = {}
     try:
         pose = svc.get_positions()
-        for joint in PITCH_JOINTS:
+        joints = ANCHOR_JOINTS if config.GAZE_IDLE_ANCHOR_YAW else PITCH_JOINTS
+        for joint in joints:
             if joint in pose:
                 anchor[joint] = float(pose[joint])
     except (TypeError, ValueError, AttributeError):
@@ -861,6 +896,41 @@ def _yaw_quiet(reason: str, now: float, detail: str = "") -> None:
         return
     _yaw_quiet_logged[reason] = now
     logger.info("[gaze] no pan: %s%s", reason, f" ({detail})" if detail else "")
+
+
+def _in_conversation() -> bool:
+    """Whether the follow-up window is open, i.e. a turn is already under way.
+
+    Only the framing loops consult this, and only to STOP MOVING. The watcher
+    keeps sampling and the wake gate keeps deciding and logging exactly as
+    before — what is switched off is the servo work, not the seeing.
+
+    Centring the face is in service of the wake decision: the gate needs a face
+    it can measure the heading of, so the framing loops exist to keep one in
+    frame. Once the window is open that decision is made and being remade for
+    free, so the corrections are answering a question nobody is asking — and
+    paying for it in the most visible currency there is, a lamp that creeps
+    after every lean while the user is mid-sentence.
+
+    The pose is not abandoned in the meantime, which is what makes this safe to
+    switch off rather than merely quieter: idle is anchored on the last pose a
+    face was seen from (see _anchor_idle_here), so the lamp keeps facing the
+    user through the whole conversation without a single correction.
+    """
+    if not config.GAZE_HOLD_STILL_IN_CONVERSATION:
+        return False
+    try:
+        import hal.app_state as state
+
+        voice = getattr(state, "voice_service", None)
+        focus = getattr(voice, "_wakeword_focus", None)
+        return bool(focus is not None and focus.is_active())
+    except Exception as e:
+        # Never let a missing voice service freeze the framing loops: failing
+        # this check open means the lamp keeps correcting, which is the old
+        # behaviour rather than a new failure.
+        logger.debug("[gaze] conversation check skipped: %s", e)
+        return False
 
 
 def _skip(reason: str) -> str:
@@ -1035,6 +1105,10 @@ def _maybe_yaw(now: float) -> None:
     """
     global _last_yaw_t
     if not config.GAZE_YAW_ENABLED:
+        return
+    if _in_conversation():
+        _yaw_quiet("a conversation is under way", now,
+                   "idle is anchored on the pose that framed them")
         return
     if now - _last_yaw_t < config.GAZE_PITCH_COOLDOWN_S:
         return   # cooling down; not worth a line every frame
@@ -1374,6 +1448,12 @@ def _maybe_pitch(now: float, *, prompt: bool = False) -> None:
     global _last_pitch_t, _blind_pitch_steps, _climb_gave_up
 
     if not (config.GAZE_PITCH_ENABLED and config.GAZE_WAKE_ENABLED):
+        return
+    # `prompt` is exempt: that path is a climb somebody ASKED for, so it is not
+    # the unprompted creeping this holds still for.
+    if not prompt and _in_conversation():
+        _pitch_quiet("a conversation is under way", now,
+                     "idle is anchored on the pose that framed them")
         return
     est = _dy_estimate(now, prompt=prompt)
     if est is None:
