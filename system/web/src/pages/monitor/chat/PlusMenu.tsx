@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Plus, Paperclip, Sparkles, ChevronRight, PenLine, Store, FolderTree, Upload,
+  CalendarClock, CalendarPlus, ListChecks,
 } from "lucide-react";
 import { MenuDivider, MenuItem } from "./MenuPanel";
 import { menuPanel } from "./styles";
@@ -15,23 +16,33 @@ import { menuPanel } from "./styles";
 
 export type SkillsAction = "write" | "upload" | "browse" | "manage";
 
+// "new" opens the Scheduled settings section with the editor already open;
+// "manage" just goes to the list.
+export type ScheduledAction = "new" | "manage";
+
 export function PlusMenu({
-  disabled, onAttachFile, onSkillsAction, onCreateWithAgent,
+  disabled, onAttachFile, onSkillsAction, onCreateWithAgent, onScheduledAction,
 }: {
   disabled: boolean;
   onAttachFile: () => void;
   onSkillsAction: (action: SkillsAction) => void;
   onCreateWithAgent: () => void;
+  onScheduledAction: (action: ScheduledAction) => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [skillsOpen, setSkillsOpen] = useState(false);
+  const [scheduledOpen, setScheduledOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
 
   // Sending disables the composer — derive the menu closed rather than closing
   // it from an effect, so a disabled composer can never render a live menu.
   const open = menuOpen && !disabled;
 
-  const close = useCallback(() => { setMenuOpen(false); setSkillsOpen(false); }, []);
+  const close = useCallback(() => {
+    setMenuOpen(false);
+    setSkillsOpen(false);
+    setScheduledOpen(false);
+  }, []);
 
   // Outside click + Escape close the whole menu. Bound only while open so the
   // composer doesn't pay for a document listener on every keystroke.
@@ -82,7 +93,7 @@ export function PlusMenu({
               it too so it feels like a native sub-menu; the click target stays
               for keyboard/touch. */}
           <div
-            onMouseEnter={() => setSkillsOpen(true)}
+            onMouseEnter={() => { setSkillsOpen(true); setScheduledOpen(false); }}
             style={{ position: "relative" }}
           >
             <MenuItem
@@ -102,6 +113,28 @@ export function PlusMenu({
                 <MenuDivider />
                 <MenuItem icon={Store} label="Browse skills" hint="Autonomous skill store" onClick={() => run(() => onSkillsAction("browse"))} />
                 <MenuItem icon={FolderTree} label="Manage skills" hint="installed on this runtime" onClick={() => run(() => onSkillsAction("manage"))} />
+              </div>
+            )}
+          </div>
+
+          {/* Scheduled sits alongside Skills: both are "things this device can
+              do on its own", as opposed to Attach file which acts on THIS
+              message. Same hover-to-open sub-menu behaviour. */}
+          <div
+            onMouseEnter={() => { setScheduledOpen(true); setSkillsOpen(false); }}
+            style={{ position: "relative" }}
+          >
+            <MenuItem
+              icon={CalendarClock}
+              label="Scheduled"
+              active={scheduledOpen}
+              trailing={<ChevronRight size={14} style={{ opacity: 0.7 }} />}
+              onClick={() => setScheduledOpen((v) => !v)}
+            />
+            {scheduledOpen && (
+              <div role="menu" className="lm-pop" style={{ ...menuPanel, bottom: -6, left: "calc(100% + 6px)", minWidth: 208 }}>
+                <MenuItem icon={CalendarPlus} label="New scheduled task" hint="run something on a schedule" onClick={() => run(() => onScheduledAction("new"))} />
+                <MenuItem icon={ListChecks} label="Manage scheduled tasks" hint="edit, pause or remove" onClick={() => run(() => onScheduledAction("manage"))} />
               </div>
             )}
           </div>

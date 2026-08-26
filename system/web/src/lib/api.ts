@@ -579,6 +579,99 @@ export async function uninstallPlugin(name: string): Promise<boolean> {
   });
 }
 
+// Scheduled tasks — a READ-ONLY mirror of the recurring-task list the
+// Autonomous app pushes to this device over MQTT (schedule.sync). The cloud
+// is authoritative: every sync is a full-state replace of schedules.json, so
+// there is deliberately no create/update/delete API here — only GET (list)
+// and a local "Run now" POST. See system/schedule/spec.go for the cadence
+// wire contract this mirrors field-for-field.
+export interface ScheduleCadence {
+  repeat: "daily" | "weekly" | "monthly" | "interval" | "once" | "manual";
+  // 0=Sunday..6=Saturday (matches Go's time.Weekday, NOT ISO-8601 where
+  // Monday=1) — 7 is also accepted as a Sunday alias. Only [1,2,3,4,5] can't
+  // tell the two conventions apart; Sunday is where they disagree.
+  days?: number[];
+  day_of_month?: number; // "monthly", 1-31 (clamped to the month's real last day)
+  time?: string; // "HH:MM" wall clock, in the response's `timezone`
+  every_ms?: number; // "interval" gap — MILLISECONDS, not seconds
+  at?: string; // "once" — absolute RFC3339 instant
+}
+
+export interface ScheduleItem {
+  id: string;
+  name: string;
+  instructions: string;
+  enabled: boolean;
+  schedule: ScheduleCadence;
+  end_at?: string;
+  next_run_at?: string; // absent = not currently due (paused, manual, or a spent "once")
+  last_run_at?: string; // absent = never run — render as "Never", not a date
+  last_run_status?: "success" | "failure";
+
+  /** Backend revision of this row. Quoted back as base_rev when editing, which
+   *  is how the backend compare-and-swaps a device edit against a concurrent
+   *  one from the app. */
+  rev?: number;
+
+  /** Set when a local change is queued but the backend has not confirmed it.
+   *  "create" additionally means the task is NOT armed yet — the device
+   *  deliberately does not run a task the cloud has not acknowledged. */
+  pending?: "create" | "update" | "delete";
+
+  /** Correlates a pending row with its queue entry. */
+  intent_id?: string;
+}
+
+/** Body of the device-side create/update endpoints — only the user-editable
+ *  subset. id, rev and status are backend-owned and are never sent. */
+export interface ScheduleWriteBody {
+  name: string;
+  instructions: string;
+  enabled?: boolean;
+  template_code?: string;
+  schedule: ScheduleCadence;
+  end_at?: string;
+}
+
+/** What the write endpoints return: an ACCEPTED proposal, not a finished row.
+ *  The change becomes real when the backend confirms it and the resulting
+ *  schedule.sync arrives. */
+export interface SchedulePendingResult {
+  intent_id: string;
+  pending: "create" | "update" | "delete";
+  id?: string;
+  base_rev?: number;
+}
+
+export interface ScheduleList {
+  timezone: string;
+  schedules: ScheduleItem[];
+}
+
+/** GET /api/schedule/list */
+export async function listSchedules(): Promise<ScheduleList> {
+  return apiRequest<ScheduleList>(`${API_BASE}/api/schedule/list`);
+}
+
+export interface ScheduleRunResult {
+  id: string;
+  run_id: string;
+  started_at: string;
+  status: "success" | "failure";
+  summary: string;
+}
+
+/** POST /api/schedule/:id/run — the web UI's local "Run now". Fires through
+ *  the exact same on-device runner the cloud's own schedule.run command uses;
+ *  never touches the schedule's cadence or next_run_at. Throws (via
+ *  apiRequest) with a 404 message for an unknown id, or a 409 "agent busy"
+ *  message when the agent is mid-turn (single-flight — try again shortly). */
+export async function runScheduleNow(id: string): Promise<ScheduleRunResult> {
+  return apiRequest<ScheduleRunResult>(`${API_BASE}/api/schedule/${encodeURIComponent(id)}/run`, {
+    method: "POST",
+  });
+}
+
 // HuggingFace plugin discovery — PARKED, not deleted (#213). Plugins move to
 // our own catalog, beside skills. Restore this pair together with the Go
 // handler and its route, and point the request at the catalog endpoint; the
@@ -745,4 +838,39 @@ export async function installStoreSkill(
 export async function logout(): Promise<boolean> {
   setApiToken("");
   return apiRequest<boolean>(`${API_BASE}/api/logout`, { method: "POST" });
+}
+
+/** POST /api/schedule — queue a device-originated create.
+ *
+ *  Returns 202: the task is queued as a PROPOSAL, not created. It shows up in
+ *  the list immediately (marked pending) but does not run until the backend
+ *  confirms it. On an offline device the proposal is held and delivered on
+ *  reconnect, so this succeeding does NOT mean the cloud has it yet. */
+export async function createSchedule(body: ScheduleWriteBody): Promise<SchedulePendingResult> {
+  return apiRequest<SchedulePendingResult>(`${API_BASE}/api/schedule`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+/** PATCH /api/schedule/:id — queue a device-originated edit. Same 202
+ *  proposal semantics as createSchedule. Fields omitted from the body are left
+ *  as they are, so editing just a name cannot silently pause the task. */
+export async function updateSchedule(
+  id: string,
+  body: Partial<ScheduleWriteBody>,
+): Promise<SchedulePendingResult> {
+  return apiRequest<SchedulePendingResult>(`${API_BASE}/api/schedule/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+
+/** DELETE /api/schedule/:id — queue a device-originated delete. The task keeps
+ *  running until the backend confirms the removal; a delete the backend
+ *  rejects must not have already stopped it. */
+export async function deleteSchedule(id: string): Promise<SchedulePendingResult> {
+  return apiRequest<SchedulePendingResult>(`${API_BASE}/api/schedule/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
 }

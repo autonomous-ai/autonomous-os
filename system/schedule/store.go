@@ -22,6 +22,14 @@ type Schedule struct {
 	// JSON tag still matches the wire contract exactly.
 	Cadence Spec `json:"schedule"`
 
+	// Rev is the backend-assigned revision of this row, carried straight
+	// through from schedule.sync. The device never invents or increments it —
+	// it only quotes it back as base_rev when proposing an edit, so the backend
+	// can compare-and-swap. A row the device has never synced has rev 0, which
+	// no backend row ever has (they start at 1), so a stale proposal is
+	// naturally rejected rather than silently applied.
+	Rev uint64 `json:"rev,omitempty"`
+
 	// EndAt is a sibling of "schedule" on the wire, not nested inside it (see
 	// Spec's doc comment). nil means "no expiry".
 	EndAt *time.Time `json:"end_at,omitempty"`

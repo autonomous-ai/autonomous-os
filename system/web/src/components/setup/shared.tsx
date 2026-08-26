@@ -286,7 +286,7 @@ export function ConfiguredHint({ label, editPath = "/setting" }: { label: string
 export function SectionCard({ id, title, description, icon, active, children }: {
   // EditConfig-only sections (e.g. "runtime", "timezone") aren't part of the
   // Setup SectionId union; the id is only used as a DOM anchor, so accept those too.
-  id: SectionId | "runtime" | "timezone" | "mcp" | "plugins"; title: string; description?: string; icon?: React.ReactNode; active: boolean; children: React.ReactNode;
+  id: SectionId | "runtime" | "timezone" | "mcp" | "plugins" | "scheduled"; title: string; description?: string; icon?: React.ReactNode; active: boolean; children: React.ReactNode;
 }) {
   // Stay mounted when inactive (display:none) so form inputs keep their
   // refs and any controlled state remains live. Sidebar tabs gate visibility

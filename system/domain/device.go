@@ -548,6 +548,21 @@ const (
 	// KindScheduleRun runs ONE stored schedule immediately (the "Run now" button).
 	// Does not change the schedule's cadence or its next_run_at.
 	KindScheduleRun = "schedule.run"
+
+	// KindScheduleMutate is OUTBOUND (fd_channel) — the only schedule kind the
+	// device originates rather than answers. Published when the user creates,
+	// edits or deletes a task from this unit's own Settings or chat UI. It is a
+	// PROPOSAL: the backend applies it under an idempotency key and a
+	// compare-and-swap, and the resulting schedule.sync is what the device
+	// treats as truth. See system/schedule/intent.go.
+	KindScheduleMutate = "schedule.mutate"
+
+	// KindScheduleMutateAck is INBOUND (fa_channel) — the backend's verdict on
+	// one proposal, carrying its intent_id. It exists so the device knows when
+	// to stop retrying: a queued intent is dropped on ANY terminal verdict,
+	// applied or rejected. Without it a proposal the backend refuses would be
+	// replayed on every reconnect for the life of the device.
+	KindScheduleMutateAck = "schedule.mutate.ack"
 )
 
 // Connector (MCP) data-kind prefixes. The connector code is the suffix, e.g.

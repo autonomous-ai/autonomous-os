@@ -61,6 +61,13 @@ type DeviceMQTTHandler struct {
 	// started by StartScheduleRunnerLoop from config_watch.go alongside the
 	// other background loops (OAuth/connector refresh).
 	scheduleRunner *schedule.Runner
+
+	// scheduleIntents queues device-originated schedule changes until the
+	// backend confirms them. Deliberately a SEPARATE store from scheduleStore:
+	// the runner fires only from scheduleStore, so a task the backend has not
+	// yet confirmed is not merely flagged un-runnable, it is absent from the
+	// file the runner reads. See system/schedule/intent.go.
+	scheduleIntents *schedule.IntentStore
 }
 
 // mcpConnectorSpec lists the remote-MCP connectors that the generic writer
@@ -172,6 +179,7 @@ func ProvideDeviceMQTTHandler(cfg *config.Config, mqttFactory *mqtt.Factory, ds 
 	// schedules.json is a SIBLING of config.json, never inside it — see
 	// schedule.Store's doc comment and config.Dir().
 	scheduleStore := schedule.NewStore(filepath.Join(config.Dir(), "schedules.json"))
+	scheduleIntents := schedule.NewIntentStore(filepath.Join(config.Dir(), "schedule-intents.json"))
 
 	h := DeviceMQTTHandler{
 		config:         cfg,
@@ -186,6 +194,7 @@ func ProvideDeviceMQTTHandler(cfg *config.Config, mqttFactory *mqtt.Factory, ds 
 		oauthAlertStatus:        map[string]string{},
 		chatStream:              chatStream,
 		scheduleStore:           scheduleStore,
+		scheduleIntents:         scheduleIntents,
 	}
 	// h.publishScheduleRunReport is bound to THIS local h, not to whatever copy
 	// the caller eventually stores (wire_gen.go copies the return value into
@@ -315,6 +324,8 @@ func (h *DeviceMQTTHandler) dispatchData(env domain.MQTTDataCommand) error {
 		return h.handleChatFileGet(env)
 	case domain.KindScheduleSync:
 		return h.handleScheduleSync(env)
+	case domain.KindScheduleMutateAck:
+		return h.handleScheduleMutateAck(env)
 	case domain.KindScheduleRun:
 		return h.handleScheduleRun(env)
 	default:
