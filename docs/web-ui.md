@@ -152,6 +152,36 @@ The legacy standalone `/edit` page was removed; its `SettingsPanel` is now reach
 
 ---
 
+#### Voice — the Piper panel
+
+`TTSSection` (`system/web/src/pages/settings/TTSSection.tsx`) gains a fourth
+provider, **Piper (Local — free)**. It is unlike the other three in that it has
+no base URL and no API key, so selecting it hides both fields, and hides the
+language filter as well — a Piper voice *is* a language, so filtering the list
+would only conceal models the operator installed on purpose.
+
+In their place the panel renders the install state, in the order the dependency
+actually runs: the engine first, then voices. Voice rows stay hidden until the
+engine exists, because downloading a 63 MB model the device cannot yet load is
+63 MB wasted. Each row shows its licence next to the model name — every voice
+offered is safe to ship, but the licences differ, and the person choosing one
+should be able to see which.
+
+Progress polls every two seconds and **only while a job is running**; this is
+the one part of the page whose state changes without the operator touching
+anything. Downloads happen on the device, so the panel reads `job` out of
+`GET /api/voice/piper/status` rather than tracking anything itself.
+
+Two details worth keeping if this code is refactored. The preview language is
+derived from the voice name (`vi_VN-…` → `vi`) rather than from the language
+filter, which Piper hides — without that the Test Voice button sends the
+device's STT language and speaks an English sample line through a Vietnamese
+model, which sounds like a broken voice rather than a mismatched one. And
+attribution is deliberately *not* surfaced here: it is owed by whoever
+distributes a voice, not by the person switching one on, and `CREDITS.md` is
+what discharges it.
+
+
 ## 4. Polling & Data Sources
 
 Monitor polls system/HW APIs every **3 seconds**. Flow uses file-backed hybrid mode: REST seed + live stream.

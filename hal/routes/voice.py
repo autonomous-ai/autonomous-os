@@ -202,6 +202,19 @@ def get_voices(provider: Optional[str] = None, lang: Optional[str] = None):
     from hal.drivers.voice.tts import PROVIDER_ELEVENLABS, PROVIDER_OPENAI as _PO
     if provider is None:
         provider = getattr(state.tts_service, "_provider", _PO) if state.tts_service else _PO
+    if provider == "piper":
+        # Piper voices are model files, so the truth is the filesystem rather
+        # than a curated list: whatever .onnx is installed can be selected.
+        # `lang` is ignored — a Piper model IS a language, so filtering would
+        # only hide models the operator deliberately put there.
+        import glob
+        import os
+        voices_dir = os.environ.get("HAL_PIPER_VOICES", "/opt/piper/voices")
+        names = sorted(
+            os.path.basename(p)[: -len(".onnx")]
+            for p in glob.glob(os.path.join(voices_dir, "*.onnx"))
+        )
+        return {"provider": provider, "voices": names}
     if provider == PROVIDER_ELEVENLABS:
         return {
             "provider": provider,
@@ -527,3 +540,18 @@ def voice_status():
         "mic_muted": state._mic_muted,
         "hw_mic_switch_muted": state._hw_mic_switch_muted,
     }
+
+
+# Piper install + voice download live in their own module but mount under this
+# router: they are not a hardware capability, so they must not need a ROBOT.md
+# declaration of their own, and `voice` is already mounted wherever audio is.
+# Guarded: an OTA lands files one at a time, so this module can briefly exist
+# on a device where hal/routes/piper.py does not. An unguarded import would
+# take the WHOLE voice router down with it — no TTS, no STT, a mute device —
+# to add a feature nobody had asked for yet. Losing the install endpoints is
+# the correct failure here; losing speech is not.
+try:
+    from hal.routes.piper import router as _piper_router  # noqa: E402
+    router.include_router(_piper_router)
+except Exception as _e:  # pragma: no cover - depends on partial deployments
+    state.logger.warning("Piper install routes unavailable: %s", _e)

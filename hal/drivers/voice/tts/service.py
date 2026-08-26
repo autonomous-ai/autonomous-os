@@ -67,6 +67,14 @@ TTS_CHANNELS = 1
 # gating the mic). The watchdog aborts the stream to unblock it.
 TTS_WRITE_STALL_S = 8.0
 
+# Slice size for the paced write below. Every slice costs one blocking
+# PortAudio write plus one echo-reference write, both in Python holding the
+# GIL. At 10ms a single reply is ~1600 round trips, and on lamp-0c89 — where
+# vision keeps the interpreter's main thread pinned at ~100% — enough of them
+# lost the GIL mid-utterance to be audible as stutter. 40ms cuts that 4x and
+# still paces the reference far finer than AEC_REF_MS (500ms) of buffer.
+TTS_REF_SLICE_S = 0.040
+
 
 class _WatchedStream:
     """Thin wrapper over sounddevice.OutputStream that stamps when a blocking
@@ -103,8 +111,8 @@ class _WatchedStream:
         # Slice the caller's own object so an ndarray stays an ndarray (its
         # dtype is what tells the device how to read the samples); len() is
         # frames for an ndarray and bytes for a buffer, hence the two steps.
-        per_10ms = max(1, int(rate * 0.010))
-        step = per_10ms * 2 if isinstance(data, (bytes, bytearray, memoryview)) else per_10ms
+        per_slice = max(1, int(rate * TTS_REF_SLICE_S))
+        step = per_slice * 2 if isinstance(data, (bytes, bytearray, memoryview)) else per_slice
         try:
             total = len(data)
         except TypeError:
@@ -118,7 +126,26 @@ class _WatchedStream:
             result = None
             for off in range(0, total, step):
                 chunk = data[off:off + step]
-                result = self._stream.write(chunk)
+                try:
+                    result = self._stream.write(chunk)
+                except self._owner._sd.PortAudioError:
+                    # Someone tore this stream down while we were mid-write:
+                    # the stall watchdog aborting it, stop()/barge-in, or
+                    # release_stream() handing the device to aplay. The owner
+                    # has already dropped or replaced us, so the remaining
+                    # slices have nowhere to go. Return quietly — raising here
+                    # reaches the caller's generic handler, which reopens the
+                    # device and re-speaks the whole utterance, replaying
+                    # speech the user just cancelled. A stream that is still
+                    # the owner's own is a genuine device failure: re-raise.
+                    if self._owner._stream is self:
+                        raise
+                    logger.info(
+                        "TTS write stopped mid-utterance at %d/%d — stream was "
+                        "torn down by another thread; dropping the remainder",
+                        off, total,
+                    )
+                    return result
                 # Re-stamp per slice: the stall watchdog times ONE blocking
                 # write, and a long block is now many short ones.
                 self._owner._write_started_ts = time.monotonic()

@@ -507,18 +507,29 @@ class VoiceService:
                 logger.warning("Realtime noise-guard Silero load failed: %s", e)
                 return True
         try:
-            peak, mean, ratio = self._rt_noise_vad.speech_metrics(
+            peak, mean, ratio, span_ratio = self._rt_noise_vad.speech_metrics(
                 pcm_int16, voice_cfg.STT_RATE
             )
             self._rt_noise_vad.reset_state()
             # Judge by VOICED RATIO, not peak: a real speaking turn is voiced
             # across most of its length; sustained noise only spikes sparsely.
             # (is_speech is peak-only — one transient chunk would pass noise.)
-            is_speech = ratio >= hal_config.REALTIME_NOISE_SPEECH_RATIO
+            #
+            # Measured over the voiced SPAN, not the whole buffer. A captured
+            # turn arrives padded — VAD pre-roll at the front, a 200ms tail at
+            # the back — and that padding is a fixed cost, so it dilutes a short
+            # utterance far more than a long one. Measured on lamp-0c89, a real
+            # "Yes, that's right." (~1s of speech in a 2.05s buffer, peak=1.000)
+            # scored 0.500 whole-buffer and was dropped as noise by a 0.55
+            # threshold. That inverted the guard's purpose: the short turns it
+            # exists to screen are exactly the ones padding penalises hardest.
+            # Sustained noise still fails — its voiced chunks are sparse WITHIN
+            # the span too, so discounting the padding does not rescue it.
+            is_speech = span_ratio >= hal_config.REALTIME_NOISE_SPEECH_RATIO
             logger.info(
                 "[realtime] noise-guard metrics: peak=%.3f mean=%.3f voiced_ratio=%.3f "
-                "(>= %.2f? %s)",
-                peak, mean, ratio,
+                "span_ratio=%.3f (span >= %.2f? %s)",
+                peak, mean, ratio, span_ratio,
                 hal_config.REALTIME_NOISE_SPEECH_RATIO, is_speech,
             )
             return is_speech
@@ -545,7 +556,10 @@ class VoiceService:
                 logger.warning("Barge-in speech gate unavailable (%s) — level only", e)
                 return True
         try:
-            peak, _mean, ratio = self._rt_noise_vad.speech_metrics(
+            # Whole-window ratio, not the span: a live sliding window carries no
+            # capture padding to discount, and a span measure would only make
+            # the device easier to interrupt with a burst of noise.
+            peak, _mean, ratio, _span = self._rt_noise_vad.speech_metrics(
                 window, voice_cfg.STT_RATE
             )
             self._rt_noise_vad.reset_state()

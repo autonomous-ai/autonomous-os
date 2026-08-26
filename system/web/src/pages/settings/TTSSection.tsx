@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { getPiperStatus, installPiperEngine, installPiperVoice, type PiperStatus } from "@/lib/api";
 import { Loader2, Volume2, Check, AlertCircle } from "lucide-react";
 import { C, LockedField, LockedPasswordField, SectionCard } from "@/components/setup/shared";
 import { testTTSVoice } from "@/lib/api";
@@ -30,7 +31,7 @@ export interface TtsLoadedState {
 // Deepgram out until a real Deepgram TTS backend lands, so the operator
 // can't paint themselves into a dead-end. STT works with Deepgram on a
 // different code path (this is TTS-only).
-type ProviderChoice = "autonomous" | "openai" | "elevenlabs" | "custom";
+type ProviderChoice = "autonomous" | "openai" | "elevenlabs" | "piper" | "custom";
 
 // Vendor covers only the choices that have a distinct audio backend on disk.
 // Autonomous supports two vendors; every other choice has exactly one vendor
@@ -65,6 +66,14 @@ const CHOICES: Record<ProviderChoice, ChoiceMeta> = {
     baseUrl: "https://api.elevenlabs.io/v1",
     vendor: "elevenlabs",
   },
+  piper: {
+    label: "Piper (Local — free)",
+    baseUrl: "",
+    // No vendor sub-picker and no key: synthesis happens here, so there is
+    // no account to authenticate and no shared quota to share. Voices are
+    // the .onnx models installed on the device, listed by HAL.
+    hint: "Runs on the device — no API key, no quota, works offline. Lower quality than a hosted voice.",
+  },
   custom: {
     label: "Custom (BYO URL)",
     baseUrl: "",
@@ -78,7 +87,10 @@ const CHOICES: Record<ProviderChoice, ChoiceMeta> = {
 // than mis-labelling as Autonomous — an operator with a self-hosted URL
 // should see "Custom", not "Autonomous", so switching provider doesn't
 // silently overwrite their URL with the campaign-api endpoint.
-function detectChoice(baseUrl: string): ProviderChoice {
+function detectChoice(baseUrl: string, provider?: string): ProviderChoice {
+  // Piper is URL-less, so the URL heuristic below cannot see it. The saved
+  // provider is the only evidence it is selected.
+  if (provider === "piper") return "piper";
   let host = "";
   try { host = new URL(baseUrl).hostname.toLowerCase(); } catch { /* invalid — fall through */ }
   if (!host) return "autonomous";  // empty URL = default to the proxy (matches "leave blank → reuse AI brain")
@@ -204,11 +216,11 @@ export function TTSSection({
   // Re-sync happens during render (not in an effect) by comparing the URL we
   // last synced against: setting state in an effect would cascade an extra
   // render pass on every URL change.
-  const [choice, setChoice] = useState<ProviderChoice>(() => detectChoice(ttsBaseUrl));
+  const [choice, setChoice] = useState<ProviderChoice>(() => detectChoice(ttsBaseUrl, ttsProvider));
   const [syncedUrl, setSyncedUrl] = useState(ttsBaseUrl);
   if (syncedUrl !== ttsBaseUrl) {
     setSyncedUrl(ttsBaseUrl);
-    if (choice !== "custom") setChoice(detectChoice(ttsBaseUrl));
+    if (choice !== "custom") setChoice(detectChoice(ttsBaseUrl, ttsProvider));
   }
   const meta = CHOICES[choice];
 
@@ -228,7 +240,14 @@ export function TTSSection({
   // English names, and vice-versa. OpenAI's voices are language-agnostic,
   // so the language dropdown is a no-op there (voice list stays the same).
   const [lang, setLang] = useState<Lang>("");
-  const voices = voicesFor(vendor, lang, sttLanguage);
+  // Language of the Piper voice itself, parsed from its name. Used for the
+  // preview phrase so Test Voice speaks the language the model was trained on.
+  const piperLang: string = choice === "piper" ? (ttsVoice.split("_")[0] || "") : "";
+  // Piper's catalogue is whatever .onnx files exist on the device, which only
+  // the server knows; the curated pools above describe hosted vendors.
+  const voices = choice === "piper"
+    ? (ttsVoices.length > 0 ? ttsVoices : ["en_US-lessac-medium"])
+    : voicesFor(vendor, lang, sttLanguage);
 
   const onChoice = (next: ProviderChoice) => {
     setChoice(next);   // always commit the pick — even Custom, so the picker doesn't snap back
@@ -238,6 +257,15 @@ export function TTSSection({
     // where they were. Vendor: keep whatever was on disk; the Custom vendor
     // sub-picker below lets them flip protocol.
     if (next === "custom") {
+      return;
+    }
+    if (next === "piper") {
+      // No URL and no key to set. Clearing the URL matters: detectChoice reads
+      // it on reload, and a stale hosted URL would drag the picker back.
+      setTtsBaseUrl("");
+      setTtsProvider("piper");
+      const pool = ttsVoices.length > 0 ? ttsVoices : ["en_US-lessac-medium"];
+      if (!pool.includes(ttsVoice)) setTtsVoice(pool[0]);
       return;
     }
     setTtsBaseUrl(nextMeta.baseUrl);
@@ -304,6 +332,10 @@ export function TTSSection({
         )}
       </div>
 
+      {/* 2a. Piper install panel — engine first, then voices. Only Piper needs
+          this: every other provider is a URL that already exists. */}
+      {choice === "piper" && <PiperPanel voice={ttsVoice} onPickVoice={setTtsVoice} />}
+
       {/* 2. Vendor sub-picker — only when Autonomous. Other presets pin
           vendor via their meta.vendor. */}
       {choice === "autonomous" && (
@@ -324,7 +356,7 @@ export function TTSSection({
       {/* 3. Base URL — read-only for presets, editable ONLY for Custom.
           Preset URLs come from the CHOICES table, not from the operator's
           keyboard — a wrong URL was the reported bug. */}
-      {choice === "custom" ? (
+      {choice === "piper" ? null : choice === "custom" ? (
         <LockedField
           lockedInitially={ttsLoaded.baseUrl || llmLoaded.baseUrl}
           label="Base URL"
@@ -362,7 +394,9 @@ export function TTSSection({
         </div>
       )}
 
-      {/* 5. API Key — always editable. Blank inherits AI brain key. */}
+      {/* 5. API Key — always editable. Blank inherits AI brain key. Hidden for
+          Piper: there is no service to authenticate to. */}
+      {choice !== "piper" && (<>
       {/* Label shows a "configured" badge when tts_api_key is on file so
           the operator has visual confirmation the save landed — the actual
           value never leaves the device (server returns has_tts_api_key
@@ -387,12 +421,14 @@ export function TTSSection({
         onChange={setTtsApiKey}
         placeholder={ttsLoaded.apiKey ? "•••••••• saved (click ✎ to rotate)" : "sk-..."}
       />
+      </>)}
 
       {/* 6a. Language — filters the Voice list. Session-local (not saved to
           config). Autonomous(ElevenLabs) has distinct voice pools per
           language (English "Rachel" vs Vietnamese "Ngan" vs Chinese "Amy"),
           so surfacing this picker lets the operator narrow the Voice
           picker without hunting through a mixed list. */}
+      {choice !== "piper" && (
       <div style={{ marginBottom: 12 }}>
         <label htmlFor="tts_lang" style={labelStyle}>Language (voice list filter)</label>
         <select
@@ -412,6 +448,7 @@ export function TTSSection({
           </div>
         )}
       </div>
+      )}
 
       {/* 6b. Voice — options filter to the vendor AND language so the picker
           doesn't offer names that don't exist on the target combination
@@ -430,7 +467,7 @@ export function TTSSection({
         </select>
         <TestVoiceButton
           voice={ttsVoice}
-          lang={lang || sttLanguage}
+          lang={piperLang || lang || sttLanguage}
           provider={ttsProvider}
           baseUrl={ttsBaseUrl}
           apiKey={ttsApiKey}
@@ -532,4 +569,108 @@ const selectStyle = {
   background: C.surface, border: `1px solid ${C.border}`,
   borderRadius: 7, padding: "8px 11px",
   fontSize: 12.5, color: C.text, outline: "none", cursor: "pointer",
+};
+
+// PiperPanel — install state for the on-device engine, and the voice
+// catalogue with a download button per entry.
+//
+// Two steps in order, because that is the real dependency: the engine has to
+// exist before a voice can be loaded. The panel refuses to let the operator
+// skip ahead rather than letting them download 63 MB that cannot be used yet.
+//
+// Licence is shown per voice on purpose. Every entry here is safe to ship,
+// but "CC BY 4.0" means someone owes an attribution line, and that obligation
+// is invisible unless the person choosing the voice can see it.
+function PiperPanel({ voice, onPickVoice }: { voice: string; onPickVoice: (v: string) => void }) {
+  const [st, setSt] = useState<PiperStatus | null>(null);
+  const [err, setErr] = useState("");
+
+  const load = () => getPiperStatus().then(setSt).catch((e) => setErr(String(e?.message ?? e)));
+  useEffect(() => { load(); }, []);
+
+  // Poll only while a job is running — a background download is the one time
+  // this page has state that changes without the operator touching anything.
+  useEffect(() => {
+    if (!st?.job?.active) return;
+    const t = setInterval(load, 2000);
+    return () => clearInterval(t);
+  }, [st?.job?.active]);
+
+  if (err) return <div style={{ fontSize: 12, color: C.red, marginBottom: 12 }}>Piper status unavailable: {err}</div>;
+  if (!st) return <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 12 }}>Checking device…</div>;
+
+  const job = st.job;
+  const busy = job.active;
+
+  return (
+    <div style={{ marginBottom: 14, padding: "12px 14px", background: "var(--lm-surface-2, #1a1a1a)", borderRadius: 8 }}>
+      {/* Step 1 — the engine */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: st.engine_installed ? 12 : 0 }}>
+        <span style={{ fontSize: 12, color: st.engine_installed ? C.green : C.textDim }}>
+          {st.engine_installed ? "✓ Engine installed" : "Engine not installed (~26 MB)"}
+        </span>
+        {!st.engine_installed && (
+          <button
+            onClick={() => { installPiperEngine().then(load).catch((e) => setErr(String(e))); }}
+            disabled={busy}
+            style={{ ...smallBtn, opacity: busy ? 0.5 : 1 }}
+          >
+            {busy && job.kind === "engine" ? `Installing ${job.percent}%` : "Install engine"}
+          </button>
+        )}
+      </div>
+
+      {/* Step 2 — voices. Hidden until the engine exists: downloading a model
+          the device cannot load yet is 63 MB of wasted bandwidth. */}
+      {st.engine_installed && (
+        <>
+          <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 8 }}>
+            Voices are downloaded to the device. Each is about 63 MB and stays offline once installed.
+          </div>
+          {st.catalog.map((v) => {
+            const downloading = busy && job.kind === "voice" && job.target === v.name;
+            return (
+              <div key={v.name} style={{
+                display: "flex", alignItems: "center", gap: 8, padding: "5px 0",
+                borderTop: "1px solid var(--lm-border, #2a2a2a)",
+              }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 12.5, color: C.text }}>{v.language}</div>
+                  <div style={{ fontSize: 10.5, color: C.textMuted }}>
+                    {/* Licence shown, obligation not: attribution is owed by
+                        whoever distributes the voice, not by the person
+                        switching it on here. CREDITS.md is what discharges it. */}
+                    {v.name} · {v.license}
+                  </div>
+                </div>
+                {v.installed ? (
+                  <button
+                    onClick={() => onPickVoice(v.name)}
+                    style={{ ...smallBtn, opacity: voice === v.name ? 0.5 : 1 }}
+                    disabled={voice === v.name}
+                  >{voice === v.name ? "In use" : "Use"}</button>
+                ) : (
+                  <button
+                    onClick={() => { installPiperVoice(v.name).then(load).catch((e) => setErr(String(e))); }}
+                    disabled={busy}
+                    style={{ ...smallBtn, opacity: busy ? 0.5 : 1 }}
+                  >{downloading ? `${job.percent}%` : `Download ${v.size_mb} MB`}</button>
+                )}
+              </div>
+            );
+          })}
+        </>
+      )}
+
+      {job.error && (
+        <div style={{ fontSize: 11.5, color: C.red, marginTop: 8 }}>Last job failed: {job.error}</div>
+      )}
+    </div>
+  );
+}
+
+const smallBtn: React.CSSProperties = {
+  fontSize: 11, padding: "4px 9px", borderRadius: 5, cursor: "pointer",
+  background: "var(--lm-surface, #222)", color: "var(--lm-text, #eee)",
+  border: "1px solid var(--lm-border, #333)", whiteSpace: "nowrap",
 };

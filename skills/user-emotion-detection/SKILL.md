@@ -22,6 +22,24 @@ For any other event (`[sensing:presence.*]`, `[activity]`, `[sensing:sound]`, `[
 
 > **This skill is silent.** It only logs mood data — no spoken reply needed. All steps stay in `thinking`. If you want to speak, follow normal sensing reply rules. NEVER narrate mood logging, mapping, or workflow steps in the reply.
 
+> **EMOTION TURN OUTPUT CONTRACT — highest priority.** For a triggered
+> `[emotion]` / `[speech_emotion]` turn, your entire final assistant message
+> must be exactly one of these two shapes:
+>
+> ```text
+> [zero or more HW markers] NO_REPLY
+> [zero or more HW markers] <one natural sentence addressed to the user>
+> ```
+>
+> Nothing may appear before, between, or after those parts. In particular, do
+> **not** output the detected label or confidence; describe the cue as weak;
+> name a bucket, route, rule, source, prefix, marker, log, decision, or mood;
+> state what you are about to do; draft a line; or count its words/sentences.
+> Those are private scratch work, never user-facing text. Do the writes via HW
+> markers, then start immediately with the first word the user should hear.
+> Bad: `Emotion: Anger. Weak camera cue. Route = checkin. Let me compose...`
+> Good: `[HW:...] That sounds rough — I'm right here.`
+
 ## What this skill does
 
 On every `[emotion]` or `[speech_emotion]` event, turn the detected user emotion into a mood signal. Log it via the Mood skill, then route a response (music / checkin / action) based on the pre-fetched context.
