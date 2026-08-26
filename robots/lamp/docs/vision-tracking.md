@@ -632,12 +632,12 @@ loop manufactured the condition it kept tripping over. Now the arm is polled unt
 short by more than `HAL_GAZE_PITCH_LAND_TOL_DEG` is rested for `HAL_GAZE_PITCH_STALL_REST_S` and its
 target backed off `HAL_GAZE_PITCH_STALL_BACKOFF_DEG`, so the retry does not lean on the stop again.
 
-**Corrections stop being undone.** The idle recording is absolute on every joint and loops forever, so
-within one cycle it walked the camera back to the pose it was recorded at — on a desk, the keyboard.
-`HAL_GAZE_IDLE_ANCHOR` shifts the whole idle loop by `anchor − baseline` instead: same motion,
-different centre. Scoped to idle deliberately — an emotion recording may fling the head anywhere,
-because by then the user has already been heard; what must hold is that the *resting* pose can see
-whoever speaks next.
+**Corrections are not held against idle.** The idle recording is absolute on every joint and loops
+forever, so within one cycle it walks the camera back toward the pose it was recorded at — on a desk,
+the keyboard. An idle anchor (`HAL_GAZE_IDLE_ANCHOR`) used to counter this by shifting the whole loop
+onto the last good pose; **it has been removed**. So the pull-back is live: a correction decays over
+an idle cycle rather than persisting, and the loop re-corrects on its next window. That is the main
+reason the same offset can reappear after a successful correction.
 
 | Knob | Default | Meaning |
 |---|---|---|
@@ -654,7 +654,6 @@ whoever speaks next.
 | `HAL_GAZE_PITCH_LAND_TOL_DEG` | 2.0 | Shortfall that counts as a stall. |
 | `HAL_GAZE_PITCH_STALL_REST_S` | 60 | How long a stalled joint is left out. Matched to measured recovery. |
 | `HAL_GAZE_PITCH_STALL_BACKOFF_DEG` | 2.0 | Stop short of where it stalled. |
-| `HAL_GAZE_IDLE_ANCHOR` | `true` | Let idle breathe around the last good pose. |
 | `HAL_GAZE_SNAPSHOT` / `_KEEP` | `true` / 40 | Annotated frame beside every correction, in `SNAPSHOT_PERSIST_DIR/sensing_gaze/`. The log says the median was −0.41 of frame height; it cannot say whether that was the user, a colleague, or a coat on a chair. |
 
 ### Climbing to find a face above the frame

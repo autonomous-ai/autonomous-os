@@ -1258,87 +1258,6 @@ def test_repointing_also_discards_them(body):
     assert body.moves and gaze.snapshot() == []
 
 
-def test_repoint_does_not_re_anchor_a_vertical_aim_the_pitch_loop_has_corrected(body):
-    """The slow half of the same fight.
-
-    Device-observed: pitch lifted the camera to -31.5 where it could see a
-    face, and thirty-four seconds later the repoint anchored idle back on the
-    remembered -46.1, from where the face is clipped again. The bearing memory
-    is worth believing about which way to face — that is what the move uses —
-    but not about how high to look.
-
-    That rule used to cover wrist_pitch alone. Every joint the pitch loop
-    steers is a vertical one, so a remembered base_pitch or elbow_pitch undoes
-    the correction just as surely; the pitch loop's own anchor holds the
-    posture instead.
-    """
-    anchored = {}
-    body.set_idle_anchor = lambda j: anchored.update(j or {})
-    _absent_for(config.GAZE_REPOINT_AFTER_S + 1)
-    gaze._last_pitch_t = gaze.time.monotonic() - config.GAZE_REPOINT_AFTER_S - 1.0
-    gaze._maybe_repoint(gaze.time.monotonic())
-    assert body.moves                                  # it still turned
-    assert not (set(anchored) & set(gaze.PITCH_JOINTS)), (
-        f"repoint re-anchored a vertical joint the pitch loop owns: {sorted(anchored)}"
-    )
-
-
-def test_with_no_correction_yet_the_remembered_pose_is_anchored_whole(body, monkeypatch):
-    from hal.drivers.tracking import user_bearing
-
-    class _EstWithPitch(_Est):
-        pose = {"base_yaw.pos": 4.0, "base_pitch.pos": 0.0, "wrist_pitch.pos": -70.0}
-
-    monkeypatch.setattr(user_bearing, "read_estimate", lambda: _EstWithPitch())
-    anchored = {}
-    body.set_idle_anchor = lambda j: anchored.update(j or {})
-    _absent_for(config.GAZE_REPOINT_AFTER_S + 1)
-    gaze._last_pitch_t = 0.0                           # pitch has never spoken
-    gaze._last_anchor = None
-    gaze._maybe_repoint(gaze.time.monotonic())
-    assert anchored.get("wrist_pitch.pos") == pytest.approx(-70.0)
-
-
-def test_a_face_driven_correction_anchors_the_idle_loop(neck, monkeypatch):
-    """Anchoring must not wait for a perfectly centred face.
-
-    Waiting was circular: idle drags the camera back within a cycle, so the
-    centred frame that would justify anchoring never arrives and every
-    correction is undone before the next one lands.
-    """
-    anchored = {}
-    neck.set_idle_anchor = lambda j: anchored.update(j or {})
-    gaze._last_anchor = None
-    _fill_dy(-0.4, from_face=True)
-    gaze._maybe_pitch(gaze.time.monotonic())
-    assert anchored.get("wrist_pitch.pos") == pytest.approx(
-        neck.moves[0]["wrist_pitch.pos"]
-    )
-
-
-def test_a_guessed_correction_anchors_too_so_idle_does_not_undo_it(neck, monkeypatch):
-    """A search whose progress is erased between steps is not a search.
-
-    Leaving the anchor behind during a blind search let idle pull back to where
-    the search started — device-observed the head reaching -32.4 and being
-    dragged to -41.5 before the next look. The blind budget bounds how far a
-    guess can take this; the anchor only stops it being wasted.
-    """
-    monkeypatch.setattr(config, "GAZE_FACE_SEARCH_MAX_STEPS", 3)
-    anchored = {}
-    neck.set_idle_anchor = lambda j: anchored.update(j or {})
-    gaze._last_anchor = None
-    gaze._blind_pitch_steps = 0
-    _fill_dy(-0.5, from_face=False)
-    gaze._maybe_pitch(gaze.time.monotonic())
-    assert anchored.get("wrist_pitch.pos") == pytest.approx(
-        neck.moves[0]["wrist_pitch.pos"]
-    )
-
-
-# --- The pitch window: idle's roll sweep must not drive corrections (F25) ---
-
-
 def test_one_sample_is_not_enough_to_move_the_neck(neck):
     """The bug this window exists for.
 
@@ -1882,22 +1801,6 @@ def test_a_joint_that_arrives_is_not_benched(neck):
     _fill_dy(-0.4)
     gaze._maybe_pitch(gaze.time.monotonic())
     assert gaze._pitch_stalls == {}, "a correction that landed is not a stall"
-
-
-def test_idle_is_anchored_on_where_the_arm_got_to_not_where_it_was_sent(neck):
-    """Anchoring an unreached target tells idle to hold a pose the servo has
-    already refused — the same command that heats it."""
-    neck.stalls["elbow_pitch.pos"] = (-90.0, 8.0)
-    anchored = {}
-    neck.set_idle_anchor = lambda j: anchored.update(j or {})
-
-    _fill_dy(-0.6)
-    gaze._maybe_pitch(gaze.time.monotonic())
-
-    assert anchored, "precondition: the correction anchored idle"
-    assert anchored["elbow_pitch.pos"] == pytest.approx(8.0), (
-        f"anchored on {anchored['elbow_pitch.pos']:+.1f}, but the elbow stopped at +8.0"
-    )
 
 
 def test_a_move_still_in_flight_is_not_called_a_failure(neck, monkeypatch):

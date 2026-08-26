@@ -631,11 +631,12 @@ tục cho tới khi tới nơi; khớp nào hụt quá `HAL_GAZE_PITCH_LAND_TOL_
 `HAL_GAZE_PITCH_STALL_REST_S` và lùi đích lại `HAL_GAZE_PITCH_STALL_BACKOFF_DEG`, để lần thử sau không
 tì vào chặn cơ khí ngay lập tức nữa.
 
-**Các hiệu chỉnh thôi bị xoá đi.** Recording idle là tuyệt đối trên mọi khớp và lặp vô tận, nên trong
-vòng một chu kỳ nó kéo camera về đúng pose lúc ghi — trên bàn làm việc thì đó là bàn phím.
-`HAL_GAZE_IDLE_ANCHOR` thay vào đó dịch cả vòng idle đi `anchor − baseline`: cùng chuyển động, khác tâm.
-Cố ý chỉ áp cho idle — một recording cảm xúc có thể quăng đầu đi đâu cũng được, vì tới lúc nó chạy thì
-user đã được nghe rồi; thứ phải đúng chỉ là pose *nghỉ* phải nhìn được người sắp nói.
+**Các hiệu chỉnh không được giữ lại trước idle.** Recording idle là tuyệt đối trên mọi khớp và lặp vô
+tận, nên trong vòng một chu kỳ nó kéo camera về lại pose lúc ghi — trên bàn làm việc thì đó là bàn
+phím. Trước đây có một idle anchor (`HAL_GAZE_IDLE_ANCHOR`) chống lại điều đó bằng cách dịch cả vòng
+idle sang pose tốt gần nhất; **nó đã bị gỡ bỏ**. Nên lực kéo về vẫn còn: một hiệu chỉnh phai dần qua
+một chu kỳ idle thay vì trụ lại, và vòng lặp sẽ hiệu chỉnh lại ở cửa sổ kế tiếp. Đó là lý do chính
+khiến cùng một độ lệch có thể xuất hiện lại sau một lần hiệu chỉnh thành công.
 
 | Tham số | Mặc định | Ý nghĩa |
 |---|---|---|
@@ -652,7 +653,6 @@ user đã được nghe rồi; thứ phải đúng chỉ là pose *nghỉ* phả
 | `HAL_GAZE_PITCH_LAND_TOL_DEG` | 2.0 | Mức hụt được tính là kẹt. |
 | `HAL_GAZE_PITCH_STALL_REST_S` | 60 | Khớp kẹt bị loại ra bao lâu. Khớp với thời gian hồi phục đo được. |
 | `HAL_GAZE_PITCH_STALL_BACKOFF_DEG` | 2.0 | Dừng trước chỗ nó đã kẹt. |
-| `HAL_GAZE_IDLE_ANCHOR` | `true` | Cho idle thở quanh pose tốt gần nhất. |
 | `HAL_GAZE_SNAPSHOT` / `_KEEP` | `true` / 40 | Lưu khung hình có chú thích cạnh mỗi lần hiệu chỉnh, trong `SNAPSHOT_PERSIST_DIR/sensing_gaze/`. Log nói trung vị là −0,41 chiều cao khung; nó không nói được đó là user, một đồng nghiệp, hay một cái áo khoác vắt trên ghế. |
 
 ### Leo tìm cái mặt nằm trên khung hình

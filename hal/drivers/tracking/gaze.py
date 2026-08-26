@@ -547,8 +547,6 @@ def _headroom_from_person(frame: Any, detector: Any) -> Tuple[Optional[float], b
 # what a remembered (and therefore stale) posture must not be allowed to undo.
 PITCH_JOINTS = ("base_pitch.pos", "elbow_pitch.pos", "wrist_pitch.pos")
 
-_last_anchor: Optional[Dict[str, float]] = None
-
 # Joints that were commanded somewhere and did not arrive.
 #   joint -> (position it stopped at, +1 blocked going up / -1 going down, rest until)
 # Emptied as each entry expires, so a joint is only ever benched temporarily.
@@ -648,103 +646,6 @@ def _verify_landed(svc: Any, target: Dict[str, float], now: float,
             config.GAZE_PITCH_STALL_REST_S,
         )
     return short
-
-
-def _anchor_is_new(anchor: Dict[str, float]) -> bool:
-    """True when this anchor differs enough from the last one to be worth sending.
-
-    Keyed on the WHOLE posture, not on wrist_pitch alone. Once the pitch
-    correction was spread across three joints the wrist stopped moving at all
-    (it carries weight 0.0), so a wrist-only test reported "unchanged" for every
-    correction and suppressed the anchor every time — leaving idle free to drag
-    the head straight back down after each lift, which is the exact symptom this
-    anchor exists to prevent.
-    """
-    if _last_anchor is None or set(anchor) != set(_last_anchor):
-        return True
-    return any(abs(anchor[j] - _last_anchor[j]) >= 1.0 for j in anchor)
-
-
-def _anchor_idle_from_pose(svc: Any, pose: Any) -> None:
-    """Rest the idle loop on a remembered pose known to have seen a face."""
-    global _last_anchor
-    if not config.GAZE_IDLE_ANCHOR or not isinstance(pose, dict):
-        return
-    setter = getattr(svc, "set_idle_anchor", None)
-    if setter is None:
-        return
-    anchor = {
-        j: float(v) for j, v in pose.items()
-        if j in ("base_pitch.pos", "wrist_pitch.pos")
-        and isinstance(v, (int, float))
-    }
-    # The remembered wrist_pitch is a stale vertical aim, and re-resting on it
-    # undoes every correction the pitch loop has made. Device-observed after
-    # the two stopped firing in the same second: pitch lifted the camera to
-    # -31.5, then thirty-four seconds later this anchored idle back on -46.1,
-    # from where the face is clipped again. The bearing memory is worth
-    # believing about which way to FACE, which is what the move itself uses;
-    # about how high to look, a correction made seconds ago from a face on
-    # screen beats a number recorded minutes ago. So once pitch has spoken,
-    # leave the wrist where it put it and anchor the rest.
-    #
-    # Every joint the pitch loop steers is a vertical one, so once it has spoken
-    # the whole remembered vertical posture is stale, not just the wrist.
-    if _last_pitch_t > 0.0:
-        for joint in PITCH_JOINTS:
-            anchor.pop(joint, None)
-    if not anchor or not _anchor_is_new(anchor):
-        return
-    setter(anchor)
-    _last_anchor = dict(anchor)
-    logger.info(
-        "[gaze] idle now rests at %s",
-        " ".join(f"{k.split('.')[0]}={v:+.1f}" for k, v in sorted(anchor.items())),
-    )
-
-
-def _anchor_idle_here(svc: Any, pitch: Optional[Dict[str, float]] = None) -> None:
-    """Tell the idle loop to breathe around the pose we can see the user from."""
-    global _last_anchor
-    if not config.GAZE_IDLE_ANCHOR:
-        return
-    setter = getattr(svc, "set_idle_anchor", None)
-    if setter is None:
-        return
-    # Anchor the whole pitch posture, not one joint. Camera direction depends on
-    # base_pitch and wrist_pitch TOGETHER — the arm folds at the base, so that
-    # joint both rotates and translates the camera, and the same wrist angle
-    # points somewhere different for every base angle. Device-measured: with
-    # base_pitch near 0 no wrist angle framed the user (the search reached +14
-    # and still missed), while base_pitch -30 with wrist_pitch -78 framed them
-    # perfectly. Anchoring one joint therefore preserves a posture that was
-    # never the reason the framing worked.
-    #
-    # elbow_pitch joined that list once the correction started using it: it is
-    # the joint carrying most of the lift (weight 0.90), so an anchor without it
-    # holds the two minor joints steady and lets idle walk the lift itself back.
-    anchor: Dict[str, float] = {}
-    try:
-        pose = svc.get_positions()
-        for joint in PITCH_JOINTS:
-            if joint in pose:
-                anchor[joint] = float(pose[joint])
-    except (TypeError, ValueError, AttributeError):
-        return
-    # The commanded target, not the pose read back: the read happens while the
-    # move is still settling, so the pose lags where the correction just put it.
-    for joint, value in (pitch or {}).items():
-        anchor[joint] = float(value)
-    if not anchor or not _anchor_is_new(anchor):
-        return
-    setter(anchor)
-    _last_anchor = dict(anchor)
-    logger.info(
-        "[gaze] idle now breathes around %s",
-        " ".join(f"{k.split('.')[0]}={v:+.1f}" for k, v in sorted(anchor.items())),
-    )
-
-
 def following_a_face(svc: Any) -> bool:
     """Whether the servo writes are a tracking session pursuing the user.
 
@@ -1023,9 +924,8 @@ def _maybe_yaw(now: float) -> None:
     """Turn toward a face sitting off to one side.
 
     The horizontal twin of _maybe_pitch, and it inherits that loop's scars:
-    own the body for the move, anchor idle BEFORE measuring (idle resumes the
-    instant ownership drops and will drag the arm back while you time it), and
-    check the correction actually arrived instead of trusting that it did.
+    own the body for the move, and check the correction actually arrived
+    instead of trusting that it did.
 
     Deliberately lazier than the pitch loop. Vertical framing fails in one
     direction — a user stands and leaves the top of frame — so it is worth
@@ -1103,12 +1003,9 @@ def _maybe_yaw(now: float) -> None:
         )
         with aim.servo_ownership():
             svc.move_and_hold(target, duration=duration)
-            _anchor_idle_here(svc, target)
             short = _verify_landed(svc, target, now, bench=False)
         landed = dict(target)
         landed.update(short)
-        if short:
-            _anchor_idle_here(svc, landed)
         discard_dx_samples()
         _last_yaw_t = now
         logger.info(
@@ -1347,7 +1244,6 @@ def _return_to_known_height(now: float) -> None:
         )
         with aim.servo_ownership():
             svc.move_and_hold(target, duration=duration)
-            _anchor_idle_here(svc, target)
         logger.info(
             "[gaze] climb gave up; back to the last height a face was seen from (%s)",
             " ".join(f"{j.split('.')[0]}={v:+.1f}" for j, v in sorted(target.items())),
@@ -1506,27 +1402,11 @@ def _maybe_pitch(now: float, *, prompt: bool = False) -> None:
         # cleared, so a tracking session that began meanwhile is not released.
         with aim.servo_ownership():
             svc.move_and_hold(target, duration=duration)
-            # Anchor BEFORE measuring, not after. Idle resumes the instant the
-            # move returns, and an unanchored idle walks the arm back toward the
-            # recorded pose — so verifying first timed the correction while
-            # something else was actively undoing it, and blamed the servo.
-            _anchor_idle_here(svc, target)
             # Verify inside the lock: once ownership drops, an emotion can re-pose
             # the head and the read would measure that instead.
             short = _verify_landed(svc, target, now)
         landed = dict(target)
         landed.update(short)
-        if short:
-            # Re-anchor on what the arm actually did. Leaving idle aimed at a
-            # pose the joint could not reach means it spends every cycle pulling
-            # toward somewhere unreachable.
-            _anchor_idle_here(svc, landed)
-        # Anchor on EVERY correction, including the guessed ones. Leaving the
-        # anchor behind during a search means idle keeps pulling back to where
-        # the search started and erases it step by step — device-observed the
-        # head reaching -32.4 and being dragged to -41.5 before the next look.
-        # A search whose progress is undone between steps is not a search. The
-        # blind budget already bounds how far a guess may take this.
         discard_samples()
         _last_pitch_t = now
         _blind_pitch_steps = 0 if from_face else _blind_pitch_steps + 1
@@ -1664,13 +1544,6 @@ def _maybe_repoint(now: float, *, force: bool = False) -> bool:
         # either of them.
         with aim.servo_ownership():
             svc.move_and_hold(target, duration=duration)
-        # Make idle rest here too. Turning to the remembered pose is undone
-        # within one idle cycle otherwise — idle is absolute and loops, so it
-        # walks the camera back to the pose the recording was made at. The
-        # anchor comes from the REMEMBERED pose rather than from wherever the
-        # watcher happens to be standing: that pose is the one a face was
-        # actually seen from, which is the only reason to rest anywhere.
-        _anchor_idle_from_pose(svc, getattr(est, "pose", None))
         discard_samples()
         _last_repoint_t = now
         # Owe the estimate a verdict. Deliberately not measured here: a
@@ -1979,7 +1852,6 @@ def reset_for_test() -> None:
     _blind_pitch_steps = 0
     globals()["_climb_gave_up"] = False
     _last_dy_from_face = False
-    globals()["_last_anchor"] = None
     _pitch_stalls.clear()
     discard_dx_samples()
     globals()["_last_yaw_t"] = 0.0

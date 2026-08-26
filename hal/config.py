@@ -1787,18 +1787,3 @@ GAZE_PITCH_STALL_REST_S: float = float(
 GAZE_PITCH_STALL_BACKOFF_DEG: float = float(
     os.environ.get("HAL_GAZE_PITCH_STALL_BACKOFF_DEG", "2.0")
 )
-
-# Let the idle loop breathe around the pose the user was last seen from.
-#
-# The idle recording is absolute on every joint and loops forever, so within a
-# cycle of any correction it walks the camera back to the pose it was recorded
-# at — on a desk, the keyboard. Every framing fix was therefore temporary, and
-# gaze spent its time re-correcting instead of watching. Anchoring shifts the
-# whole loop without changing its shape: same motion, different centre.
-#
-# Scoped to idle deliberately. Emotion recordings may fling the head anywhere,
-# because by the time one plays the user has already been heard; what has to be
-# true is only that the RESTING pose can see whoever might speak next.
-GAZE_IDLE_ANCHOR: bool = (
-    os.environ.get("HAL_GAZE_IDLE_ANCHOR", "true").lower() in ("1", "true", "yes")
-)
