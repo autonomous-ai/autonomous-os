@@ -1429,10 +1429,14 @@ type UpdateConfigRequest struct {
 const (
 	TTSProviderOpenAI     = "openai"
 	TTSProviderElevenLabs = "elevenlabs"
+	// TTSProviderPiper synthesises on the device. No base URL and no API key
+	// apply, and there is no shared rate limit to queue behind — every unit
+	// renders its own audio.
+	TTSProviderPiper = "piper"
 )
 
 // TTSProviders is the list of supported TTS providers.
-var TTSProviders = []string{TTSProviderOpenAI, TTSProviderElevenLabs}
+var TTSProviders = []string{TTSProviderOpenAI, TTSProviderElevenLabs, TTSProviderPiper}
 
 // IsValidTTSProvider reports whether p is a supported TTS provider. Used to
 // reject a bad ROBOT.md `voice.tts_provider` before seeding it into config.
@@ -1465,7 +1469,11 @@ func DefaultElevenLabsVoiceForLang(lang string) string {
 
 // TTSVoicesByProvider maps provider name to its available voices.
 var TTSVoicesByProvider = map[string][]string{
-	TTSProviderOpenAI:     {"alloy", "ash", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer"},
+	TTSProviderOpenAI: {"alloy", "ash", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer"},
+	// Piper voices are files on the device, so the live list comes from HAL
+	// (which enumerates the installed .onnx models). This is only the fallback
+	// used when HAL cannot be reached — the voice every image ships with.
+	TTSProviderPiper:      {"en_US-lessac-medium"},
 	TTSProviderElevenLabs: {"Rachel", "Sarah", "Grace", "Freya", "Matilda", "Emily", "Alice", "Lily", "Charlotte", "Nicole", "Glinda", "Serena", "Jessie", "Brian", "Adam", "Daniel", "George", "James", "Liam", "Callum", "Harry", "Charlie", "Chris", "Sam"},
 }
 
