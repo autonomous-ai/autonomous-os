@@ -291,6 +291,13 @@ class AecStream:
         try:
             cleaned = self._canceller.process(data.tobytes())
         except Exception as e:
+            # Mark the frame raw before handing it back. The bypass branch above
+            # does this; forgetting it here left `_uncancelled` holding whatever
+            # the PREVIOUS frame set, so a failure right after a successful frame
+            # published full speaker bleed as "cancelled" — and barge-in, whose
+            # only echo defence is that flag, would interrupt the device on its
+            # own voice.
+            self._canceller._uncancelled = True
             logger.warning("AEC process failed, passing mic through: %s", e)
             return data, overflowed
         return (
