@@ -568,8 +568,22 @@ Khớp theo branch guard chứ không theo key trần: key còn xuất hiện tr
 và trong usage string của bản updater không hề implement nó.
 
 **Chữa máy đang dùng updater cũ.** `make upload-setup` còn publish bản raw tại
-`{CDN}/software-update`, nên một lệnh SSH là đủ đưa máy ngoài thực địa lên bản
-hiện tại:
+`{CDN}/software-update`. Bootstrap giờ **tự động** làm mới bản trên máy từ đó, ở
+đầu mỗi vòng kiểm tra, trước khi reconcile bất kỳ component nào — updater không
+phải OTA component nên đây là đường tự động duy nhất nó có
+(`system/bootstrap/updater_refresh.go`). URL được suy ra từ `metadata_url`
+(`{base}/ota/metadata.json` → `{base}/software-update`) chứ không cấu hình riêng,
+nên hai thứ không thể trỏ về hai bản khác nhau.
+
+Cơ chế làm mới này cố ý rụt rè. Nó bỏ qua khi đang có force update chạy (bash
+đọc script theo kiểu lười, đè lên updater *đang chạy* sẽ khiến nó thực thi tiếp ở
+một offset bất kỳ — cũng chính là lý do script không được tự cập nhật chính nó),
+nó validate bản tải về bằng `bash -n` **trước** khi đụng vào file thật, nó ghi
+file tạm cùng thư mục rồi `rename` nên việc thay thế là atomic, và mọi thất bại
+đều giữ nguyên updater cũ. Thiết bị không bao giờ được rơi vào cảnh mất updater.
+
+Lệnh thủ công bên dưới vẫn dùng được, và vẫn là cách đúng khi bạn cần bản updater
+mới **ngay** thay vì chờ vòng poll kế tiếp:
 
 ```bash
 sudo curl -fsSL https://cdn.autonomous.ai/os/software-update -o /tmp/su \

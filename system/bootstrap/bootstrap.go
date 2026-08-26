@@ -300,6 +300,12 @@ func (b *Bootstrap) checkOnce(ctx context.Context) error {
 		return nil
 	}
 
+	// Bring the on-device updater current BEFORE reconciling: the components
+	// below delegate their installs to it, and a fix shipped in the updater is
+	// only useful if it lands before the run that needs it. `software-update` is
+	// not an OTA component, so this is the only automatic path it has.
+	b.refreshUpdater(ctx)
+
 	// Reset per-cycle so a later cycle that finds new updates can announce
 	// again. Without this reset the operator would only hear the cue once per
 	// bootstrap-process lifetime, and long-running boxes would go silent even

@@ -584,8 +584,24 @@ branch guard, not the bare key: the key also appears in comments and in the usag
 strings of an updater that does not implement it.
 
 **Healing a device that has an old updater.** `make upload-setup` also publishes
-the updater raw at `{CDN}/software-update`, so one SSH command brings a field
-device up to the current one:
+the updater raw at `{CDN}/software-update`. Bootstrap now refreshes the on-device
+copy from there **automatically**, at the top of every check cycle, before it
+reconciles any component — the updater is not an OTA component, so this is the
+only automatic path it has (`system/bootstrap/updater_refresh.go`). The URL is
+derived from `metadata_url` (`{base}/ota/metadata.json` → `{base}/software-update`)
+rather than configured separately, so the two can never point at different
+releases.
+
+The refresh is deliberately timid. It skips while a force update is installing
+(bash reads a script lazily, so replacing a *running* updater would resume
+execution at an arbitrary offset — which is also why the script must never
+update itself), it validates the download with `bash -n` **before** anything
+touches the live file, it stages into the same directory and `rename`s so the
+swap is atomic, and every failure leaves the existing updater untouched. A
+device must never end up without a working updater.
+
+The manual one-liner below still works and is still the right tool when you need
+the new updater *now* rather than at the next poll:
 
 ```bash
 sudo curl -fsSL https://cdn.autonomous.ai/os/software-update -o /tmp/su \
