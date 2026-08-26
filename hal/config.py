@@ -1598,10 +1598,12 @@ GAZE_SWEEP_COOLDOWN_S: float = float(
 # by a calibration change, so every reacquire declined, and the lamp sat looking
 # at nothing for as long as it was left.
 #
-# Comfortably longer than GAZE_REPOINT_AFTER_S (12s) so the cheap move is always
-# tried first and the half-minute sweep stays the escalation, not the reflex.
+# Longer than GAZE_REPOINT_AFTER_S (12s) so the cheap move is always tried first
+# and the half-minute sweep stays the escalation, not the reflex. Note that is a
+# different number from GAZE_REPOINT_COOLDOWN_S (60s), which is the gap BETWEEN
+# repoints rather than the wait before one.
 GAZE_SWEEP_AFTER_S: float = float(
-    os.environ.get("HAL_GAZE_SWEEP_AFTER_S", "60")
+    os.environ.get("HAL_GAZE_SWEEP_AFTER_S", "30")
 )
 
 # --- climbing to find a face ------------------------------------------------
