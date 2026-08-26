@@ -253,10 +253,38 @@ PENDING_MOVED_FROM=""
 PENDING_MOVED_TO=""
 PENDING_RESTORE_SERVICES=""
 
+# Services this run has stopped and not yet brought back.
+#
+# Separate from the pending-publish state above, and armed EARLIER, because the
+# two windows are not the same. A branch stops its services first and only then
+# starts moving trees around, so an exit between those two points used to leave
+# the device with its services down and nothing to bring them back:
+# mark_publish_pending had not run yet, so on_exit had no restore function to
+# call. Device-observed 26/08/2026 on lamp-0c89: `software-update device` wrote
+# its service snapshot, ran `systemctl stop os-server`, and died on the SIGTERM
+# that same stop delivered (the updater was inside os-server's cgroup). hal was
+# never even reached, os-server stayed down, and the run left no other trace.
+#
+# Arm this immediately before the first `systemctl stop` of a branch and disarm
+# it once services are confirmed back, so EVERY exit path in between — signal,
+# `set -e`, an explicit `exit 1` — restores them.
+STOPPED_SERVICES_RESTORE=""
+
+arm_service_restore() {
+  STOPPED_SERVICES_RESTORE="$1"
+}
+
+disarm_service_restore() {
+  STOPPED_SERVICES_RESTORE=""
+}
+
 mark_publish_pending() {
   PENDING_MOVED_FROM="$1"   # where the live tree used to be
   PENDING_MOVED_TO="$2"     # where it was moved to
   PENDING_RESTORE_SERVICES="${3:-}"  # optional function that brings services back
+  # Callers that publish also stopped services; keep the longer-lived latch in
+  # step so it stays armed for a branch that never called arm_service_restore.
+  [ -z "${3:-}" ] || arm_service_restore "$3"
 }
 
 clear_publish_pending() {
@@ -270,7 +298,14 @@ on_exit() {
   if [ -n "$PENDING_MOVED_FROM" ] && [ ! -e "$PENDING_MOVED_FROM" ] && [ -d "$PENDING_MOVED_TO" ]; then
     echo "[software-update] interrupted mid-publish — putting $PENDING_MOVED_FROM back" >&2
     mv "$PENDING_MOVED_TO" "$PENDING_MOVED_FROM" 2>/dev/null || true
-    [ -z "$PENDING_RESTORE_SERVICES" ] || "$PENDING_RESTORE_SERVICES" || true
+  fi
+  # After the tree is back, not before: restarting a service onto a half-moved
+  # tree would start it against the staging path. One call only — the latch is
+  # what the publish window used to duplicate.
+  if [ -n "$STOPPED_SERVICES_RESTORE" ]; then
+    echo "[software-update] exiting with services stopped — bringing them back" >&2
+    "$STOPPED_SERVICES_RESTORE" || true
+    disarm_service_restore
   fi
   rm -f "$METADATA_TMP" "$METADATA_PAYLOAD" "$ZIP_TMP" 2>/dev/null || true
   [ -z "$DIR_TMP" ] || rm -rf "$DIR_TMP"
@@ -660,6 +695,7 @@ elif [ "$APP" = "web" ]; then
   echo "$VERSION" > "$DIR_TMP/VERSION"
   [ -f "$DIR_TMP/index.html" ] || { echo "No index.html in web zip"; exit 1; }
   save_web_service_state
+  arm_service_restore restore_web_service_state
   systemctl stop nginx 2>/dev/null || true
   rm -rf "$ROLLBACK_DIR/web.previous"
   mv "$WEB_ROOT" "$ROLLBACK_DIR/web.previous"
@@ -676,6 +712,7 @@ elif [ "$APP" = "web" ]; then
     check_web || true
     exit 1
   fi
+  disarm_service_restore
   echo "web updated to $VERSION"
 elif [ "$APP" = "hal" ]; then
   [ -z "$URL" ] && { echo "Metadata has no url for hal"; exit 1; }
@@ -685,6 +722,7 @@ elif [ "$APP" = "hal" ]; then
   [ -n "$UV_BIN" ] || [ ! -x /root/.local/bin/uv ] || UV_BIN=/root/.local/bin/uv
   [ -n "$UV_BIN" ] || { echo "uv not found"; exit 1; }
   save_hal_service_state
+  arm_service_restore restore_hal_service_state
   systemctl stop hal 2>/dev/null || true
   # A missing $HAL_DIR is a REINSTALL, not an error: an interrupted earlier run
   # can leave the runtime moved away with nothing to move back, and aborting
@@ -754,6 +792,7 @@ elif [ "$APP" = "hal" ]; then
     check_hal || true
     exit 1
   fi
+  disarm_service_restore
   echo "hal updated to $VERSION"
 elif [ "$APP" = "claude-desktop-buddy" ]; then
   [ -z "$URL" ] && { echo "Metadata has no url for claude-desktop-buddy"; exit 1; }
@@ -780,6 +819,7 @@ elif [ "$APP" = "device" ]; then
   [ -f "$DIR_TMP/ROBOT.md" ] || { echo "No ROBOT.md in device profile"; exit 1; }
   [ -d "$DEST" ] || { echo "No installed device profile at $DEST"; exit 1; }
   save_device_service_state
+  arm_service_restore restore_device_service_state
   systemctl stop os-server 2>/dev/null || true
   systemctl stop hal 2>/dev/null || true
   snapshot_device_rootfs "$DEST/rootfs" "$DIR_TMP/rootfs"
@@ -804,5 +844,6 @@ elif [ "$APP" = "device" ]; then
     check_device_profile || true
     exit 1
   fi
+  disarm_service_restore
   echo "device profile ($DEVICE_TYPE) updated to $VERSION"
 fi
