@@ -101,9 +101,12 @@ func TestCompareVersions(t *testing.T) {
 	}
 }
 
-func TestForceTargetAllowedIncludesBootstrap(t *testing.T) {
+func TestForceTargetAllowedIncludesDebugVersionTargets(t *testing.T) {
 	if !forceTargetAllowed[domain.OTAKeyBootstrap] {
 		t.Fatal("bootstrap must be a force-update target so the debug Versions card can trigger its self-update")
+	}
+	if !forceTargetAllowed[domain.OTAKeyDevice] {
+		t.Fatal("device must be a force-update target so the debug Versions card can update the installed profile")
 	}
 }
 

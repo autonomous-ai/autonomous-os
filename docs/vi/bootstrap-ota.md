@@ -510,7 +510,7 @@ Hai việc khác nhau, và lẫn lộn chúng chính là thứ làm nút web tr�
 
 Nút `update` trong card Versions là `force-update` (qua
 `POST /api/system/software-update/:target`). Cả hai dùng chung allowlist target,
-bao gồm `bootstrap`; Bootstrap tách installer nền để worker thay thế restart an
+bao gồm `bootstrap` và `device`; Bootstrap tách installer nền để worker thay thế restart an
 toàn. `componentInstalled` vẫn từ chối component thiết bị không có.
 
 ### `GET /versions` (bootstrap, loopback)
@@ -520,7 +520,8 @@ component thiết bị THỰC SỰ có (`componentInstalled`), nên mục CLI ch
 nó đang chạy, không có cái nào khác. `held_by_floor` nghĩa là đã publish bản mới
 nhưng `min_version` chưa được promote lên — worker sẽ từ chối, nên card Versions
 trên web coi component bị giữ là "không có update". os-server proxy thành
-`GET /api/system/ota-versions`.
+`GET /api/system/ota-versions`. Device profile đang cài được báo thành `device`,
+resolve từ `metadata.devices.<device_type>` lồng nhau thay vì danh sách component phẳng.
 
 ### Phát hiện version hiện tại
 
@@ -529,6 +530,7 @@ trên web coi component bị giữ là "không có update". os-server proxy thà
 | `os-server` | Chạy `os-server --version`, parse output |
 | `bootstrap` | Hằng số compile-time `config.BootstrapVersion` (ldflags) |
 | `web` | Đọc file `/usr/share/nginx/html/setup/VERSION` |
+| `device` | Đọc `/opt/devices/<device_type>/VERSION` |
 | `openclaw` | Chạy `openclaw --version`, trích xuất semver bằng regex |
 | `hal` | Chạy `/opt/hal/venv/bin/python -m hal --version` HOẶC đọc `/opt/hal/VERSION` |
 | `codex` / `claudecode` / `opencode` | Chạy `<cli> --version`, lấy semver ở dòng đầu (`cliSemver`) |
@@ -542,6 +544,7 @@ trên web coi component bị giữ là "không có update". os-server proxy thà
 | `os-server` | Chạy `software-update os-server` (block tối đa 10 phút) |
 | `bootstrap` | Spawn detached `software-update bootstrap` (tự cập nhật, sống sót sau restart) |
 | `web` | Chạy `software-update web` |
+| `device` | Chạy `software-update device` cho profile `devices.<device_type>` đã resolve; rootfs overlay được áp dụng nhưng vẫn giữ `.env` HAL local của thiết bị |
 | `openclaw` | ~~Chạy `npm install -g openclaw@{version}` → `systemctl restart openclaw`~~ (tạm thời tắt) |
 | `hal` | Chạy `software-update hal` → `systemctl restart hal` |
 | `codex` / `claudecode` / `opencode` / `picoclaw` | Chạy `software-update <key>` — CHỈ trên thiết bị có `agent_runtime` đúng bằng runtime đó |

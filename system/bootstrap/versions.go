@@ -67,5 +67,30 @@ func (b *Bootstrap) versionReport(ctx context.Context) map[string]ComponentVersi
 			HeldByFloor:     newer && compareVersions(current, minVersion) >= 0,
 		}
 	}
+	// Device profiles are nested below metadata.devices.<device_type>, rather
+	// than in the flat component map above. Report the resolved profile as the
+	// stable "device" key the Versions card and force-update endpoint use.
+	if deviceType := resolveDeviceType(); deviceType != "" && b.componentInstalled(domain.OTAKeyDevice) {
+		component, ok, err := b.fetchDeviceComponent(ctx, deviceType)
+		if err != nil {
+			slog.Warn("version report: device metadata fetch failed", "component", "bootstrap", "device_type", deviceType, "error", err)
+		} else if ok {
+			current := b.detectVersion(ctx, domain.OTAKeyDevice)
+			if current == "" {
+				current = b.state.Components[domain.OTAKeyDevice]
+			}
+			target := strings.TrimSpace(component.Version)
+			minVersion := strings.TrimSpace(component.MinVersion)
+			if minVersion == "" {
+				minVersion = target
+			}
+			newer := compareVersions(current, target) < 0
+			out[domain.OTAKeyDevice] = ComponentVersion{
+				Current: current, Target: target, MinVersion: minVersion,
+				UpdateAvailable: newer,
+				HeldByFloor:     newer && compareVersions(current, minVersion) >= 0,
+			}
+		}
+	}
 	return out
 }

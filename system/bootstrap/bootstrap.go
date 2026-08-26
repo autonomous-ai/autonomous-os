@@ -87,7 +87,8 @@ func compareVersions(a, b string) int {
 // refused), so a stray call cannot push a CLI onto a device that does not run it.
 var forceTargetAllowed = map[string]bool{
 	domain.OTAKeyOSServer: true, domain.OTAKeyBootstrap: true, domain.OTAKeyWeb: true, domain.OTAKeyHal: true,
-	domain.OTAKeyCodex: true, domain.OTAKeyClaudeCode: true, domain.OTAKeyOpenCode: true, domain.OTAKeyPicoClaw: true,
+	domain.OTAKeyDevice: true,
+	domain.OTAKeyCodex:  true, domain.OTAKeyClaudeCode: true, domain.OTAKeyOpenCode: true, domain.OTAKeyPicoClaw: true,
 }
 
 // Bootstrap is the simplified OTA worker.

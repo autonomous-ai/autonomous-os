@@ -523,7 +523,7 @@ Two different acts, and mixing them up is what made the web button look broken:
 
 The web Versions card's `update` button is `force-update` (via
 `POST /api/system/software-update/:target`). Both are limited to the same target
-allowlist, including `bootstrap`; a Bootstrap update detaches its installer so
+allowlist, including `bootstrap` and `device`; a Bootstrap update detaches its installer so
 the replacement worker can restart safely. `componentInstalled` still refuses a
 component this device does not have.
 
@@ -534,6 +534,8 @@ component this device actually has (`componentInstalled`), so the agent-CLI entr
 is the runtime it runs and nothing else. `held_by_floor` means a newer build is
 published but `min_version` was not promoted to it — the worker will refuse it,
 which is why the web Versions card treats held components as "no update".
+The installed device profile is reported as `device`, resolved from nested
+`metadata.devices.<device_type>` rather than the flat component list.
 os-server proxies this as `GET /api/system/ota-versions`.
 
 ### Version Detection Per Component
@@ -543,6 +545,7 @@ os-server proxies this as `GET /api/system/ota-versions`.
 | `os-server` | Run `os-server --version`, parse output |
 | `bootstrap` | Compiled-in constant `config.BootstrapVersion` (ldflags) |
 | `web` | Read file `/usr/share/nginx/html/setup/VERSION` |
+| `device` | Read `/opt/devices/<device_type>/VERSION` |
 | `openclaw` | Run `openclaw --version`, extract semver with regex |
 | `hal` | Run `/opt/hal/venv/bin/python -m hal --version` OR read `/opt/hal/VERSION` file |
 | `codex` / `claudecode` / `opencode` | Run `<cli> --version`, extract semver from line one (`cliSemver`) |
@@ -556,6 +559,7 @@ os-server proxies this as `GET /api/system/ota-versions`.
 | `os-server` | Run `software-update os-server` (blocks up to 10 min) |
 | `bootstrap` | Spawn detached `software-update bootstrap` (self-update, survives restart) |
 | `web` | Run `software-update web` |
+| `device` | Run `software-update device` for the resolved `devices.<device_type>` profile; its rootfs overlay is applied while preserving device-local HAL `.env` |
 | `openclaw` | ~~Run `npm install -g openclaw@{version}` → `systemctl restart openclaw`~~ (temporarily disabled) |
 | `hal` | Run `software-update hal` → `systemctl restart hal` |
 | `codex` / `claudecode` / `opencode` / `picoclaw` | Run `software-update <key>` — only on the device whose `agent_runtime` IS that runtime |
