@@ -2287,3 +2287,26 @@ def test_a_sweep_that_finds_nobody_teaches_nothing(sweeper, monkeypatch):
                         lambda: asked.append(True) or True)
     gaze._maybe_sweep(gaze.time.monotonic())
     assert sweeper and asked == []
+
+
+def test_the_cooldown_says_so_once_a_minute_not_once_a_pass(sweeper, caplog):
+    """The watcher passes several times a second and the wait is minutes long.
+
+    Throttling by time still produced runs of identical "1 min ago" lines before
+    anything had changed. Keyed on the minute itself, each line says something
+    new.
+    """
+    import logging
+
+    now = gaze.time.monotonic()
+    gaze._maybe_sweep(now)                      # the sweep that starts the wait
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="hal.drivers.tracking.gaze"):
+        for tick in range(0, 200):              # ~200 passes across 200s
+            gaze._maybe_sweep(now + 1.0 + tick)
+
+    waits = [r.getMessage() for r in caplog.records
+             if "not looking around — last sweep" in r.getMessage()]
+    minutes = waits
+    assert len(waits) == len(set(minutes)), f"repeated the same minute: {minutes}"
+    assert 2 <= len(waits) <= 5, f"expected roughly one line per minute, got {len(waits)}"

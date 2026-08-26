@@ -781,6 +781,12 @@ def _pitch_quiet(reason: str, now: float, detail: str = "") -> None:
 
 
 _sweep_quiet_logged: Dict[str, float] = {}
+# The whole minute last reported while waiting out a sweep cooldown. The wait is
+# minutes long and the watcher passes several times a second, so throttling by
+# TIME still gave three identical "1 min ago" lines before anything changed.
+# Keyed on the number itself, the line appears once per minute and each one says
+# something new.
+_sweep_wait_minute: int = -1
 
 
 def _sweep_quiet(reason: str, now: float, detail: str = "") -> None:
@@ -1693,7 +1699,7 @@ def _maybe_sweep(now: float, *, confirmed_miss: bool = False) -> None:
     fire every GAZE_REPOINT_AFTER_S, so without the cooldown an absent user would
     have the lamp sweeping the room every ~35s indefinitely.
     """
-    global _last_sweep_t
+    global _last_sweep_t, _sweep_wait_minute
     if not config.GAZE_SWEEP_ENABLED:
         return
     if not confirmed_miss and (now - _last_face_t) < config.GAZE_SWEEP_AFTER_S:
@@ -1719,12 +1725,16 @@ def _maybe_sweep(now: float, *, confirmed_miss: bool = False) -> None:
     cooldown = (config.GAZE_SWEEP_COOLDOWN_LOST_S if lost
                 else config.GAZE_SWEEP_COOLDOWN_S)
     if _last_sweep_t > 0.0 and (now - _last_sweep_t) < cooldown:
-        logger.info(
-            "[gaze] not looking around — last sweep was %.0f min ago (waiting %.0f%s)",
-            (now - _last_sweep_t) / 60.0, cooldown / 60.0,
-            ", no bearing" if lost else "",
-        )
+        elapsed_min = int((now - _last_sweep_t) / 60.0)
+        if elapsed_min != _sweep_wait_minute:
+            _sweep_wait_minute = elapsed_min
+            logger.info(
+                "[gaze] not looking around — last sweep was %d min ago (waiting %.0f%s)",
+                elapsed_min, cooldown / 60.0,
+                ", no bearing" if lost else "",
+            )
         return
+    _sweep_wait_minute = -1
     _last_sweep_t = now
     try:
         from hal.drivers.tracking.search import search_for_subject
@@ -1895,5 +1905,6 @@ def reset_for_test() -> None:
     discard_dx_samples()
     globals()["_last_yaw_t"] = 0.0
     globals()["_last_sweep_t"] = 0.0
+    globals()["_sweep_wait_minute"] = -1
     _speech_repoint_requested_t = 0.0
     _speech_repoint_requested.clear()
