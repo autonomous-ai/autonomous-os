@@ -152,6 +152,34 @@ Trang `/edit` độc lập (cũ) đã bị gỡ bỏ; `SettingsPanel` của nó 
 
 ---
 
+#### Voice — panel Piper
+
+`TTSSection` (`system/web/src/pages/settings/TTSSection.tsx`) có thêm provider
+thứ tư, **Piper (Local — free)**. Nó khác ba cái kia ở chỗ không có base URL và
+không có API key, nên chọn nó là hai ô đó ẩn đi — và bộ lọc ngôn ngữ cũng ẩn
+luôn, vì với Piper thì *model chính là ngôn ngữ*, lọc chỉ khiến người dùng không
+thấy model mà chính họ đã cài.
+
+Thay vào đó panel hiện trạng thái cài đặt, theo đúng thứ tự phụ thuộc thật:
+engine trước, giọng sau. Danh sách giọng chỉ hiện **sau khi** engine tồn tại, vì
+tải một model 63 MB mà máy chưa chạy được là 63 MB đổ đi. Mỗi dòng hiện license
+ngay cạnh tên model — mọi giọng được mời tải đều dùng thương mại được, nhưng
+license khác nhau, và người chọn nên nhìn thấy điều đó.
+
+Tiến độ được poll mỗi hai giây và **chỉ khi có job đang chạy**; đây là phần duy
+nhất của trang có trạng thái tự đổi mà người dùng không đụng vào. Việc tải diễn
+ra trên thiết bị, nên panel đọc trường `job` từ
+`GET /api/voice/piper/status` chứ không tự theo dõi gì.
+
+Hai chi tiết nên giữ nếu sau này refactor. Ngôn ngữ câu thử được suy ra từ **tên
+giọng** (`vi_VN-…` → `vi`) chứ không lấy từ bộ lọc ngôn ngữ vốn đã bị Piper ẩn —
+thiếu chỗ này thì nút Test Voice gửi ngôn ngữ STT của máy và đọc câu mẫu tiếng
+Anh bằng model tiếng Việt, nghe ra như giọng hỏng chứ không phải như chọn sai
+ngôn ngữ. Và phần ghi công **cố tình không** hiện ở đây: nghĩa vụ đó thuộc về
+bên phân phối giọng, không phải người bật nó lên, và `CREDITS.md` mới là chỗ
+hoàn thành nghĩa vụ.
+
+
 ## 4. Polling & Data Sources
 
 Monitor poll API system/HW mỗi **3 giây**. Flow dùng hybrid theo file: REST seed + stream live.

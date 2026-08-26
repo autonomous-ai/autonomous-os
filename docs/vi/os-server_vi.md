@@ -331,6 +331,47 @@ Cần sensing có camera (InsightFace). Mặc định ảnh người đã đăng
 | POST | `/voice/speak` | TTS — chuyển text thành giọng nói. Body fields: `text`, `voice?`, `interruptible?`, `provider?`, `tts_api_key?`, `tts_base_url?`, `cached?` (dùng WAV cache, render+save khi miss), `prerender?` (render+save không play — warmup lúc boot) |
 | GET | `/voice/status` | voice_available, voice_listening, tts_available, tts_speaking |
 
+### Piper — TTS chạy trên thiết bị
+
+Provider TTS thứ ba bên cạnh `openai` và `elevenlabs`, chọn bằng
+`tts_provider: "piper"`. Tổng hợp giọng chạy ngay trên máy, gỡ được hai giới
+hạn mà nhà cung cấp đám mây áp đặt: không còn hạn mức đồng thời dùng chung để
+phải xếp hàng (mỗi máy tự dựng tiếng của mình, nên năng lực tăng theo số máy
+bán ra và không tốn phí mỗi câu), và không còn vòng mạng, nên thời gian tới âm
+thanh đầu tiên giảm mạnh — đo được 129–236 ms với câu ngắn, so với 2–5 s của
+một lượt gọi đám mây. Đánh đổi là chất lượng: Piper nghe rõ ràng kém hơn giọng
+neural đám mây, nên nó đóng vai giọng mặc định miễn phí chứ không phải bản thay
+thế.
+
+**Không có gì nằm trong image.** Engine (~26 MB) và mỗi giọng (~63 MB) chỉ được
+tải về khi người dùng yêu cầu trong Settings → Voice. Nhờ vậy image không phình,
+máy nào không dùng thì không tốn gì — và vì chính thiết bị của người dùng tải từ
+nguồn gốc, Autonomous không rơi vào vai bên phân phối lại phần mềm GPL-3.0.
+Nhét Piper vào image sẽ đảo ngược điều đó; xem `CREDITS.md`.
+
+| Method | Endpoint | Mô tả |
+|--------|----------|-------|
+| GET | `/api/voice/piper/status` | Engine đã cài chưa, giọng nào đã có, danh mục tải được, và job đang chạy nếu có. Proxy sang HAL rồi bọc lại theo envelope chuẩn — client web từ chối payload trần. |
+| POST | `/api/voice/piper/install` | Cài engine. Idempotent: đã cài rồi thì trả ok, nên UI gọi thẳng không cần kiểm tra trước. |
+| POST | `/api/voice/piper/voice` | Tải một giọng trong danh mục. Body `{name}`; tên ngoài danh mục bị từ chối, nên không ai biến endpoint này thành đường tải file tuỳ ý vào `/opt/piper`. |
+
+Cả ba đều admin-gated: chúng cài phần mềm và ghi ~63 MB mỗi giọng. HAL phục vụ
+đúng ba endpoint đó dưới `/voice/piper/*`; việc tải chạy trên luồng nền và báo
+tiến độ qua trường `job` trong status, vì kéo 63 MB lâu hơn nhiều so với thời
+gian nên giữ một HTTP request mở.
+
+Hai chỗ dễ làm sai nếu chép lại cẩu thả. Đầu ra của Piper vốn đã đạt biên độ tối
+đa, nên `volume_boost` 2.5 mà các backend đám mây dùng sẽ **clip nát mọi nguyên
+âm** — backend này khai `1.0`. Và nạp model tốn ~700 ms, đủ để chi phối thời gian
+tới âm thanh đầu tiên với câu ngắn, cho tới khi backend giữ sẵn một tiến trình
+đã nạp model và sinh cái thay thế sau mỗi lượt nói.
+
+Danh sách giọng đọc từ filesystem (`/opt/piper/voices/*.onnx`) chứ không phải từ
+danh sách cứng, nên thả một model vào là chọn được ngay. Còn model nào được
+**mời tải** lại là quyết định về license, ghi kèm từng mục trong
+`hal/drivers/voice/tts/piper_catalog.py`.
+
+
 ### System
 
 | Method | Endpoint | Mô tả |
