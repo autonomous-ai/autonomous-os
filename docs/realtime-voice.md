@@ -283,7 +283,16 @@ Deepening the FIFO does not fix it and makes it worse (`HAL_AEC_REF_MS=1500`
 measured 3.6 / 2.3 dB against 23.2 / 19.1 dB at 500) because the lead becomes
 variable and exceeds AEC3's alignment window. The real fix is to pace the
 reference to playback time rather than write time, plus a dedicated capture
-thread so the mic stops draining `arecord` in bursts. Neither is implemented.
+thread so the mic stops draining `arecord` in bursts.
+
+The pacing half is implemented: `_WatchedStream.write` slices each caller
+buffer into `TTS_REF_SLICE_S` (40 ms) pieces and publishes the reference only
+after the device has accepted that slice, so the loop advances at roughly
+speaker rate. The slice size is a GIL tradeoff, not an acoustic one — every
+slice costs one blocking PortAudio write plus one reference write in Python,
+and at 10 ms the ~1600 round trips per reply were audible as playback stutter
+on a board whose main thread is already saturated by vision. The dedicated
+capture thread is still not implemented.
 
 `aec.uncancelled()` reports whether the frame just read went through *without*
 real cancellation — reference underrun, bypassed stream, or mic overrun. Barge-in

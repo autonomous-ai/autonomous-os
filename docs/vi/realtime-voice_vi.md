@@ -275,7 +275,15 @@ Tăng độ sâu FIFO không sửa được mà còn tệ hơn (`HAL_AEC_REF_MS=
 3.6 / 2.3 dB so với 23.2 / 19.1 dB ở 500) vì độ trễ dẫn trước trở nên thay đổi
 và vượt cửa sổ căn chỉnh của AEC3. Cách sửa thật sự là ghi tham chiếu theo nhịp
 **phát** thay vì nhịp ghi, cộng với một thread capture riêng để mic thôi rút
-`arecord` theo từng cụm. Cả hai đều chưa làm.
+`arecord` theo từng cụm.
+
+Nửa "theo nhịp phát" đã làm: `_WatchedStream.write` cắt mỗi buffer của caller
+thành các lát `TTS_REF_SLICE_S` (40 ms) và chỉ ghi tham chiếu **sau** khi thiết
+bị đã nhận lát đó, nên vòng lặp chạy xấp xỉ tốc độ loa phát. Kích thước lát là
+đánh đổi về GIL chứ không phải về âm học — mỗi lát tốn một lần blocking write
+xuống PortAudio cộng một lần ghi tham chiếu, đều trong Python; ở mức 10 ms thì
+~1600 vòng mỗi câu trả lời nghe thành **giật tiếng** trên board mà thread chính
+đã bị vision chiếm gần hết. Thread capture riêng vẫn chưa làm.
 
 `aec.uncancelled()` cho biết khung vừa đọc có đi qua mà **không** được khử thật
 hay không — tham chiếu underrun, stream bị bypass, hoặc mic overrun. Barge-in
