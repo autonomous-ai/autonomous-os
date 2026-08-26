@@ -1589,6 +1589,20 @@ GAZE_SWEEP_ENABLED: bool = (
 GAZE_SWEEP_COOLDOWN_S: float = float(
     os.environ.get("HAL_GAZE_SWEEP_COOLDOWN_S", "900")
 )
+# How long nobody has to have been visible before the watcher looks around of
+# its own accord.
+#
+# The sweep used to hang off a repoint that had MOVED and then missed, which
+# made it unreachable in the two cases it is most wanted: no bearing to turn to,
+# and already sitting on the bearing. Device-observed — the estimate was dropped
+# by a calibration change, so every reacquire declined, and the lamp sat looking
+# at nothing for as long as it was left.
+#
+# Comfortably longer than GAZE_REPOINT_AFTER_S (12s) so the cheap move is always
+# tried first and the half-minute sweep stays the escalation, not the reflex.
+GAZE_SWEEP_AFTER_S: float = float(
+    os.environ.get("HAL_GAZE_SWEEP_AFTER_S", "60")
+)
 
 # --- climbing to find a face ------------------------------------------------
 #

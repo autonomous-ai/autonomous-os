@@ -1657,22 +1657,35 @@ def _verify_repoint(now: float) -> None:
         " (estimate dropped)" if dropped else "",
     )
     if not hit:
-        _maybe_sweep(now)
+        # A repoint that moved and missed is the strongest evidence there is:
+        # the best guess was acted on and was wrong. No waiting.
+        _maybe_sweep(now, confirmed_miss=True)
 
 
-def _maybe_sweep(now: float) -> None:
-    """Look around, after turning to the remembered bearing found nobody.
+def _maybe_sweep(now: float, *, confirmed_miss: bool = False) -> None:
+    """Look around when nobody can be found.
 
     The bearing is a guess about where someone WAS. Having acted on it and found
     an empty chair, the honest next step is to look rather than to conclude.
 
-    Rate-limited hard, because nobody asked for this. A repoint can fire every
-    GAZE_REPOINT_AFTER_S, so without the cooldown an absent user would have the
-    lamp sweeping the room every ~35s indefinitely.
+    Two ways in, and the second was missing for a while. A CONFIRMED miss — the
+    lamp turned to the remembered bearing and found an empty chair — is strong
+    evidence and sweeps at once. Plain absence is weaker, so it waits out
+    GAZE_SWEEP_AFTER_S first.
+
+    Hanging this off the repoint alone made it unreachable in exactly the cases
+    it is most wanted: no bearing to turn to, and already sitting on the bearing.
+    Both return before anything is scored, so no verdict is ever reached.
+
+    Rate-limited hard either way, because nobody asked for this. A repoint can
+    fire every GAZE_REPOINT_AFTER_S, so without the cooldown an absent user would
+    have the lamp sweeping the room every ~35s indefinitely.
     """
     global _last_sweep_t
     if not config.GAZE_SWEEP_ENABLED:
         return
+    if not confirmed_miss and (now - _last_face_t) < config.GAZE_SWEEP_AFTER_S:
+        return  # someone was here recently; not worth a line every pass
     if _last_sweep_t > 0.0 and (now - _last_sweep_t) < config.GAZE_SWEEP_COOLDOWN_S:
         logger.info(
             "[gaze] not looking around — last sweep was %.0f min ago (waiting %.0f)",
@@ -1766,6 +1779,10 @@ def _loop() -> None:
                 # and both clear their own window, so running them together
                 # would have each measuring a pose the other has just left.
                 _maybe_yaw(now)
+                # Last of the three, and gated on a long absence: a sweep owns
+                # the body for half a minute, so it must never pre-empt a
+                # correction that could have framed someone already in view.
+                _maybe_sweep(now)
                 _consume_speech_repoint(now)
                 _maybe_repoint(now)
                 _verify_repoint(now)

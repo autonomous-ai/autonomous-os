@@ -2169,3 +2169,56 @@ def test_every_way_the_repoint_can_decline_says_so(neck, monkeypatch):
     assert reported == declines - 1, (
         f"{declines} ways to decline, only {reported} of them say why"
     )
+
+
+def test_a_long_absence_looks_around_without_needing_a_repoint(sweeper):
+    """The two cases the old trigger could never reach.
+
+    Hanging the sweep off a repoint that MOVED and then missed made it
+    unreachable when there is no bearing to turn to, or when the lamp is already
+    sitting on it — both return before anything is scored, so no verdict arrives.
+    Device-observed: a calibration change dropped the estimate, every reacquire
+    declined, and the lamp sat looking at nothing for as long as it was left.
+    """
+    gaze._last_face_t = gaze.time.monotonic() - config.GAZE_SWEEP_AFTER_S - 1.0
+    gaze._maybe_sweep(gaze.time.monotonic())
+    assert sweeper, "nobody visible for a minute and it never looked around"
+
+
+def test_a_brief_absence_is_left_alone(sweeper):
+    """A sweep owns the body for half a minute. Someone who looked away for a
+    moment has not earned that."""
+    gaze._last_face_t = gaze.time.monotonic() - 5.0
+    gaze._maybe_sweep(gaze.time.monotonic())
+    assert sweeper == []
+
+
+def test_a_confirmed_miss_does_not_wait_out_the_absence_timer(sweeper):
+    """Turning to the remembered bearing and finding an empty chair is the
+    strongest evidence there is — the best guess was acted on and was wrong."""
+    gaze._last_face_t = gaze.time.monotonic()      # seen a moment ago
+    gaze._maybe_sweep(gaze.time.monotonic(), confirmed_miss=True)
+    assert sweeper, "a confirmed miss still waited"
+
+
+def test_the_cooldown_still_applies_however_the_sweep_was_triggered(sweeper):
+    """Whichever door it comes through, it is the same expensive half minute."""
+    now = gaze.time.monotonic()
+    gaze._last_face_t = now - config.GAZE_SWEEP_AFTER_S - 1.0
+    gaze._maybe_sweep(now)
+    gaze._maybe_sweep(now + 30.0, confirmed_miss=True)
+    gaze._maybe_sweep(now + 60.0)
+    assert len(sweeper) == 1, f"swept {len(sweeper)} times inside the cooldown"
+
+
+def test_the_watcher_loop_looks_around_as_well_as_correcting():
+    """A source check: the failure being guarded against is nothing CALLING it,
+    which no test of the function itself can catch."""
+    import inspect
+
+    body = inspect.getsource(gaze._loop)
+    assert "_maybe_sweep(now)" in body, "the watcher never looks around"
+    assert body.index("_maybe_pitch(now)") < body.index("_maybe_sweep(now)"), (
+        "a sweep owns the body for half a minute; it must not pre-empt a "
+        "correction that could have framed someone already in view"
+    )
