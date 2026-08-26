@@ -481,25 +481,34 @@ and it separates "the lamp is slow" from "the lamp finished in 2 s and then wait
 model". Sub-stages are nested inside their roll-up and excluded from the device total, so the
 residual is honest. The same numbers appear on one `LOOK-PROFILE` log line per look.
 
-### Search sweep — asked for, never inline
+### Search sweep — four ways in, all of them affordable
 
-Distinct from the look-aim, and deliberately kept off the capture path. The aim runs inside a live
-turn under a deadline; a sweep takes seconds, which is exactly the dead air that design avoids. So a
-sweep is only entered where the time is affordable:
+Distinct from the look-aim and still kept off the capture path: the aim runs inside a live turn under
+a deadline, and a sweep takes seconds. What changed is that "affordable" now includes two cases the
+lamp decides for itself. A sweep is entered when:
 
 - the user asks outright — *"where are you?"*, *"can you find me?"* (`skills/servo-control`)
 - they accept an offer after a failed look — *"I can't see it. Want me to look around?"*
+- **the look-aim is about to give up** — before `look_lost` claims *"I can't find you"*, which until
+  now it said having only turned toward a remembered bearing. A bearing is a guess about where
+  someone *was*, not a search, so the phrase should be earned. The aim's deadline **stops counting**
+  for the duration (`t_end += time.monotonic() - swept_at` in `aim_for_look`): that deadline exists so
+  a live turn never stalls in *silence*, the `look_searching` announcement has already dealt with
+  that, and charging the sweep against a budget it cannot fit in would mean never sweeping at all.
+- **the gaze watcher has been alone too long** — `HAL_GAZE_SWEEP_AFTER_S` (30 s) with nobody seen, or
+  a repoint that turned to the bearing and found nobody there. Nobody asked for this one, which is
+  why it is the only entry with a cooldown — see *Looking around on its own*.
 
 `POST /servo/search` — sweeps and stops on the first subject seen. Budget roughly **2 seconds per
 stop** (measured on device): ~0.65 s of movement and settling, the rest frame grab and detection. A
 full 3×3 sweep that finds nobody therefore costs about 20 seconds, which is why this is entered only
 when the time is affordable.
 
-**Three stops: the remembered bearing first, then left to right** — `seed`, `seed−90°`, `seed+90°`,
+**Three stops: the remembered bearing first, then right, then left** — `seed`, `seed+90°`, `seed−90°`,
 clamped to the mechanical range rather than dropped. The seed goes first because the sweep stops on
 the *first* subject it sees, and "first" has to mean the person who was asked about: with pure
 left-to-right ordering the sweep found a colleague at another desk (yaw −102°) while the user sat at
-the seed, −12°, which it never reached. Everything after the seed runs left to right, because the base
+the seed, −12°, which it never reached. After the seed it goes right, then left, because the base
 swinging back and forth across centre reads as agitation once the head is also looking around at each
 stop. One reversal on the way out is enough.
 
@@ -530,8 +539,9 @@ blurred frame and a detector that misses what is plainly in view. `wrist_roll` r
 turntable, turning the head at a fixed body reads as something looking around. Roll pans the view
 while leaving the horizon level, so it cannot tilt the camera toward the floor part-way through.
 
-Steps are `STEP_DEG` (45°), deliberately **smaller than the camera FOV** so tiles overlap — stepping
-by a full FOV would leave seams where someone straddling two tiles is missed by both. Stops are
+Steps are `STEP_DEG` (90°). The tiles still overlap, but the overlap is bought by the head rather
+than by a small base step: as the paragraph above works through, one yaw stop plus its three
+`wrist_roll` looks sees a continuous `yaw±95°`, so a 90° step leaves no seam. Stops are
 clamped to the ±135° mechanical range, and the head is given `SETTLE_S` to stop ringing before each
 frame is read, since a moving head yields a blurred frame and a detector that misses what is in view.
 
@@ -556,16 +566,176 @@ decides **when**, via `POST /api/sensing/filler` with `{"pool": "..."}`.
 |---|---|---|
 | `look_searching` | the first step toward the remembered bearing | **on** (`HAL_LOOK_AIM_SPEAK`) |
 | `look_found` | a subject appears **after** a search was announced | on (same flag) |
-| `look_capturing` | the aim had work to do before the shutter | on (`HAL_LOOK_AIM_SPEAK_CAPTURE`) |
+| `look_still_searching` | the midpoint of a sweep — stop 2 of 3, head centred (`_say_at_the_midpoint`) | on (`HAL_LOOK_AIM_SPEAK`) |
+| `look_capturing` | the aim actually moved before the shutter | on (`HAL_LOOK_AIM_SPEAK_CAPTURE`) |
 
 The gating matters more than the phrases. **Nothing is said when the subject is already centred** —
 that capture completes in a few hundred milliseconds, so every phrase here is conditional on the aim
 having actually moved. *"There you are"* only fires as the resolution of an announced search, never
-on its own. Searching announces **once**, not per step. And the capture line fires only when the aim
-had work to do, which is what keeps it from prefixing every visual question.
+on its own. Searching announces **once** per sweep rather than per step, plus a single
+`look_still_searching` line at the midpoint — the sweep is ~20 s long, and without it the opening
+phrase and the verdict sit either side of twenty seconds of silence, which reads as a lamp that has
+stopped rather than one that is looking. And the capture line fires only when the aim actually moved
+(`res.aimed and res.iterations > 0`): an aim that moved nothing says nothing, and — the part that was
+wrong until this branch — neither does an aim that searched and **failed**, which used to follow
+*"I can't find you"* with *"let me take a look"*.
 
 A fast, silent, correct capture is already the good outcome — speech is reserved for the moments the
 user is genuinely left waiting.
+
+## Gaze framing — keeping the user in shot
+
+Everything above is asked for: a look, a track, a search. This section is the watcher in
+`hal/drivers/tracking/gaze.py` doing it unprompted, so that when the user does speak the camera is
+already pointed somewhere useful. All of it is downstream of `HAL_GAZE_WAKE` (see
+`physical-controls.md`) — that flag gates the whole watcher, not just the wake opener its name
+suggests, so with it off none of the behaviour below runs.
+
+The unifying constraint: **nobody asked for any of this**, so every loop is bounded — a dead zone, a
+cooldown, a step budget. A lamp that corrects its framing is attentive; one that corrects constantly
+is a head that nods along.
+
+### Vertical centring, and why it reads a median
+
+A desk lamp sits below head height, so its camera points at a chest. The correction is a median of
+the vertical offset over `HAL_GAZE_PITCH_WINDOW_S`, **not the latest frame** — and that is the whole
+reason this loop converges.
+
+`wrist_roll` is a second *aiming* axis on this arm (device-proven by pinning every other joint and
+varying only roll: the horizon stayed level while the view panned), and the idle recording sweeps it
+~32° every ~10 s, forever. So the offset a single frame reports is the framing error **plus** a
+periodic disturbance from wherever idle's roll happens to be. Measured on three frames with the
+subject unmoved: `dy` +0.101 at roll −1.8° against +0.143 at roll +29.3° — 0.042 of frame height from
+roll alone, about 28% of the dead zone, on a loop that used to fire every 4 s from one sample. A
+median over a full idle cycle cancels a periodic disturbance while a real framing error survives it.
+
+The correction is spread across all three pitch joints by `distribute_pitch`
+(`servo_follow.py`), weighted `base_pitch` 0.20 / `elbow_pitch` 0.60 / `wrist_pitch` 0.20 — the elbow
+carries the most on a healthy arm. Allocation is **headroom-aware in the requested direction** and runs
+two passes: the first honours the weights, the second hands any overflow to whichever joint still has
+room. A single joint driven alone hits its mechanical stop while the face is still out of frame.
+
+**A move that does not arrive is noticed.** `move_and_hold` reports nothing, so a stalled joint used
+to be indistinguishable from a working one and the loop re-commanded the same unreachable target
+every ~10 s forever — observed across six consecutive corrections with `elbow_pitch` reading +12.3
+while being sent to +25.8. Worse, re-commanding a stall is what heats a servo into giving up, so the
+loop manufactured the condition it kept tripping over. Now the arm is polled until it arrives; a joint
+short by more than `HAL_GAZE_PITCH_LAND_TOL_DEG` is rested for `HAL_GAZE_PITCH_STALL_REST_S` and its
+target backed off `HAL_GAZE_PITCH_STALL_BACKOFF_DEG`, so the retry does not lean on the stop again.
+
+**Corrections stop being undone.** The idle recording is absolute on every joint and loops forever, so
+within one cycle it walked the camera back to the pose it was recorded at — on a desk, the keyboard.
+`HAL_GAZE_IDLE_ANCHOR` shifts the whole idle loop by `anchor − baseline` instead: same motion,
+different centre. Scoped to idle deliberately — an emotion recording may fling the head anywhere,
+because by then the user has already been heard; what must hold is that the *resting* pose can see
+whoever speaks next.
+
+| Knob | Default | Meaning |
+|---|---|---|
+| `HAL_GAZE_PITCH` | `true` | Vertical centring on/off. |
+| `HAL_GAZE_PITCH_WINDOW_S` | 12 | Median window. Longer than idle's ~10 s roll cycle, so it always spans a whole period rather than a biased arc. |
+| `HAL_GAZE_PITCH_MIN_SAMPLES` | 8 | Floor for acting on a partly-filled window. |
+| `HAL_GAZE_PITCH_PROMPT_MIN_SAMPLES` | 2 | Floor when the climb was asked for directly — the torso path reports a constant −0.5, so more samples add no information. |
+| `HAL_GAZE_PITCH_DEAD_ZONE_FRAC` | 0.15 | Offset (fraction of frame height) that counts as centred enough. The aim is the face *inside* the frame with room around it, not perfectly centred. |
+| `HAL_GAZE_PITCH_DEG_PER_FRAME` | 45 | Degrees per full frame height. A seed, not a calibration — the loop re-measures every step. |
+| `HAL_GAZE_PITCH_MAX_STEP_DEG` | 15 | Largest single correction. |
+| `HAL_GAZE_PITCH_COOLDOWN_S` | 4 | Floor between corrections. |
+| `HAL_GAZE_PITCH_MOVE_S` | 1.0 | Move duration. Separate from the aim's 0.25 s: gaze makes one unrequested move every ~10 s and nothing waits on it, so it can afford to be gentle. |
+| `HAL_GAZE_PITCH_SETTLE_S` | 1.8 | Settle before reading back — a read taken mid-glide reports a short move that is merely still moving. |
+| `HAL_GAZE_PITCH_LAND_TOL_DEG` | 2.0 | Shortfall that counts as a stall. |
+| `HAL_GAZE_PITCH_STALL_REST_S` | 60 | How long a stalled joint is left out. Matched to measured recovery. |
+| `HAL_GAZE_PITCH_STALL_BACKOFF_DEG` | 2.0 | Stop short of where it stalled. |
+| `HAL_GAZE_IDLE_ANCHOR` | `true` | Let idle breathe around the last good pose. |
+| `HAL_GAZE_SNAPSHOT` / `_KEEP` | `true` / 40 | Annotated frame beside every correction, in `SNAPSHOT_PERSIST_DIR/sensing_gaze/`. The log says the median was −0.41 of frame height; it cannot say whether that was the user, a colleague, or a coat on a chair. |
+
+### Climbing to find a face above the frame
+
+A person box that **touches the top edge** means the body continues past it, so the head is above and
+the camera is aimed too low. That is the only evidence used: an unclipped body with no face means the
+head *is* in frame and simply was not detected — turned away, in profile, backlit — and climbing then
+aims at the ceiling for no reason.
+
+Fixed steps rather than proportional ones, because the torso says "the head is up there somewhere" and
+never how far. Proportional control needs an error signal; this is a search.
+
+| Knob | Default | Meaning |
+|---|---|---|
+| `HAL_GAZE_FACE_SEARCH_STEP_DEG` | 15 | One climb step. |
+| `HAL_GAZE_FACE_SEARCH_MAX_STEPS` | 4 | ~60° of climb, then stop. The evidence stays true however far the neck has travelled, so acting on it forever is a loop, not a search. |
+
+**Where a working height is remembered** — `hal/drivers/tracking/face_height.py`, at
+`/var/lib/hal/face_height.json` (`HAL_FACE_HEIGHT_PATH`), deliberately **separate** from
+`user_bearing.json`. The bearing answers *"which way is the user?"* and is read by look-aim, the
+search and the repoint; writing height into it would change what look-aim restores on every call. This
+answers a different question — *"how high must this camera aim to see a head from here?"* — and only
+the gaze pitch loop reads it. They also decay differently: a bearing is a guess about a person, who
+moves, so it fades; a height is a fact about the furniture. The full pose is recorded because a pitch
+angle only means something alongside the rest of the posture, but **only the pitch joints are applied
+on restore** — yaw belongs to the bearing and the pan loop, and handing it back here would give two
+subsystems the same steering wheel.
+
+### Panning, and why it is lazier than pitch
+
+Vertical framing fails in one direction — a user stands and leaves the top of frame — so it is worth
+chasing. Horizontal drift is mostly someone shifting in a chair, and a lamp that swings to follow
+every lean is exactly the twitchiness this whole loop is damped against. Correction is shared between
+`base_yaw` and `wrist_roll` via `distribute_yaw`.
+
+The dead zone is nonetheless **narrower** than pitch's (0.10 against 0.15), which looks backwards until
+you note that the value tested is the *median* over the window: the window is what rejects leaning and
+fidgeting, and making the dead zone do that job a second time only costs the correction it was meant to
+allow. It started at 0.22 on the opposite reasoning and device testing killed it — deliberately moving
+side to side at a desk peaked at `dx` +20%, so the loop measured the movement correctly and declined
+every time.
+
+| Knob | Default | Meaning |
+|---|---|---|
+| `HAL_GAZE_YAW` | `true` | Pan correction on/off. |
+| `HAL_GAZE_YAW_WINDOW_S` / `_MIN_SAMPLES` | 12 / 8 | As pitch. |
+| `HAL_GAZE_YAW_DEAD_ZONE_FRAC` | 0.10 | Fraction of full frame width (`dx` runs −0.5 … +0.5). |
+| `HAL_GAZE_YAW_DEG_PER_FRAME` | 40 | Degrees per full frame width. |
+| `HAL_GAZE_YAW_MAX_STEP_DEG` | 12 | Largest single correction. |
+| `HAL_GAZE_YAW_MOVE_S` | 1.0 | Neither pan joint fights gravity, but the whole lamp turning is a bigger visual event than a head tilt. |
+
+### Repointing at the remembered bearing
+
+When nobody has been seen for `HAL_GAZE_REPOINT_AFTER_S`, the watcher turns to the remembered bearing
+and then checks, for `HAL_GAZE_REPOINT_VERIFY_S`, whether that worked. Three behaviours here are worth
+stating because each was a bug first:
+
+- **A body counts as finding the user.** The verifier tracks faces and bodies on separate clocks; a
+  torso at the bearing means the bearing was *right*. Scoring it as a miss deleted correct bearings
+  while the user sat in front of the lamp.
+- **A repoint must end on a face.** Landing on a body is a half-success, so it prompts the climb
+  above rather than returning "found them" — which is why the climb has a `_PROMPT_MIN_SAMPLES` of 2.
+- **It will not turn away from a face already in frame.** If a face was seen within
+  `HAL_GAZE_REPOINT_SKIP_IF_FACE_S`, a speech-triggered reacquire declines: after a climb has found
+  the user's face *above* the bearing, obeying the bearing means turning back down to look at nobody.
+
+Every decline is logged with its reason (`[gaze] no repoint: …`), throttled so a standing condition
+prints once a minute rather than once a pass.
+
+### Looking around on its own
+
+If the bearing turns up nothing — or there is no bearing at all — the watcher can call the same
+`/servo/search` sweep documented above. This is the only autonomous entry, so it is the only one that
+needs a cooldown, and the two cooldowns exist because the two situations are not alike.
+
+Fifteen minutes is right for *"I have a bearing, it missed, stop thrashing"*. It is wrong for *"I have
+no idea where you are"*, because then the sweep is the only way to find out and the lamp is forbidden
+from trying — device-observed: three failed repoints dropped the estimate, and the lamp then sat unable
+to repoint (nothing to turn to) and unable to sweep (11 minutes left) while the user was talking to it.
+
+The trigger is **absence**, not a failed repoint. Hanging it off a repoint that had moved and then
+missed made it unreachable in the two cases it is most wanted: no bearing to turn to, and already
+sitting on the bearing. A successful sweep samples a fresh bearing on the spot.
+
+| Knob | Default | Meaning |
+|---|---|---|
+| `HAL_GAZE_SWEEP` | `true` | Autonomous look-around on/off. |
+| `HAL_GAZE_SWEEP_AFTER_S` | 30 | Nobody seen for this long. Longer than `HAL_GAZE_REPOINT_AFTER_S` (12 s) so the cheap move is always tried first and the ~20 s sweep stays the escalation, not the reflex. |
+| `HAL_GAZE_SWEEP_COOLDOWN_S` | 900 | Between sweeps when a bearing exists. |
+| `HAL_GAZE_SWEEP_COOLDOWN_LOST_S` | 120 | Between sweeps when there is no bearing at all. |
 
 ### Remembered user bearing
 

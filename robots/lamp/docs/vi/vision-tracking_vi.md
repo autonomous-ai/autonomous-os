@@ -479,25 +479,34 @@ tách bạch "lamp chậm" với "lamp xong trong 2 s rồi ngồi chờ model 2
 chặng cha và bị loại khỏi tổng của thiết bị, nên phần dư là trung thực. Cùng bộ số đó xuất hiện trên
 một dòng log `LOOK-PROFILE` mỗi lần look.
 
-### Quét tìm kiếm — chỉ khi được yêu cầu, không bao giờ nội tuyến
+### Quét tìm kiếm — bốn đường vào, đường nào cũng đủ thong thả
 
-Khác với look-aim, và cố ý nằm ngoài đường chụp. Pha ngắm chạy trong một lượt hội thoại đang diễn ra
-với hạn chót; một pha quét mất vài giây, đúng là khoảng lặng chết mà thiết kế đó sinh ra để tránh. Nên
-pha quét chỉ được vào ở nơi có thể thong thả:
+Khác với look-aim, và vẫn cố ý nằm ngoài đường chụp: pha ngắm chạy trong một lượt hội thoại đang diễn
+ra với hạn chót, còn một pha quét mất vài giây. Điều đã thay đổi là "thong thả" giờ bao gồm cả hai
+trường hợp đèn tự quyết định. Pha quét được vào khi:
 
 - người dùng yêu cầu thẳng — *"bạn đang ở đâu?"*, *"tìm tôi được không?"* (`skills/servo-control`)
 - họ đồng ý với đề nghị sau một lần nhìn thất bại — *"Tôi không thấy nó. Bạn có muốn tôi quay quanh tìm thử không?"*
+- **look-aim sắp bỏ cuộc** — trước khi `look_lost` tuyên bố *"Tôi không tìm thấy bạn"*, câu mà đến giờ
+  nó vẫn nói sau khi mới chỉ quay về một bearing đã ghi nhớ. Bearing là phỏng đoán về nơi người ta
+  *từng* ở, không phải một lần tìm, nên câu đó phải được xứng đáng. Hạn chót của pha ngắm **ngừng đếm**
+  trong suốt thời gian quét (`t_end += time.monotonic() - swept_at` trong `aim_for_look`): hạn chót tồn
+  tại để một lượt đang chạy không bao giờ đứng im trong *im lặng*, câu thông báo `look_searching` đã lo
+  chuyện đó rồi, và tính pha quét vào một ngân sách nó không thể vừa nghĩa là không bao giờ được quét.
+- **watcher gaze ở một mình quá lâu** — `HAL_GAZE_SWEEP_AFTER_S` (30 s) không thấy ai, hoặc một lần
+  repoint đã quay về bearing mà không thấy ai ở đó. Đường này không ai yêu cầu, nên nó là đường duy
+  nhất có cooldown — xem *Tự quay quanh tìm*.
 
 `POST /servo/search` — quét và dừng ngay ở đối tượng đầu tiên nhìn thấy. Hãy tính khoảng **2 giây mỗi
 điểm dừng** (đo trên máy thật): ~0,65 s để di chuyển và ổn định, phần còn lại là lấy khung hình và nhận
 diện. Một pha quét 3×3 đầy đủ mà không thấy ai vì thế tốn khoảng 20 giây — đó là lý do chỉ vào đây khi
 còn dư thời gian.
 
-**Ba điểm dừng: bearing đã ghi nhớ trước, rồi quét từ trái sang phải** — `seed`, `seed−90°`,
-`seed+90°`, bị kẹp vào giới hạn cơ khí chứ không bị loại bỏ. Seed đi trước vì pha quét dừng ngay ở đối
+**Ba điểm dừng: bearing đã ghi nhớ trước, rồi sang phải, rồi sang trái** — `seed`, `seed+90°`,
+`seed−90°`, bị kẹp vào giới hạn cơ khí chứ không bị loại bỏ. Seed đi trước vì pha quét dừng ngay ở đối
 tượng ĐẦU TIÊN nhìn thấy, mà "đầu tiên" phải là người được hỏi tới: với thứ tự thuần trái-sang-phải,
 pha quét đã tìm thấy một đồng nghiệp ở bàn khác (yaw −102°) trong khi người dùng ngồi ngay tại seed,
-−12°, chỗ mà nó không bao giờ tới. Phần còn lại chạy từ trái sang phải, vì để đế lắc qua lắc lại quanh
+−12°, chỗ mà nó không bao giờ tới. Sau seed thì sang phải rồi sang trái, vì để đế lắc qua lắc lại quanh
 tâm trông như bồn chồn khi đầu đèn cũng đang ngó quanh ở từng điểm dừng. Một lần đảo chiều trên đường
 đi là đủ.
 
@@ -527,8 +536,9 @@ nhoè và bộ nhận diện bỏ sót thứ đang hiện rành rành trong khun
 mâm xoay, còn xoay đầu trên một thân đứng yên trông như một sinh vật đang ngó quanh. Roll đảo hướng
 nhìn nhưng giữ đường chân trời nằm ngang, nên không thể chúc camera xuống sàn giữa chừng.
 
-Mỗi bước là `STEP_DEG` (45°), cố ý **nhỏ hơn FOV của camera** để các ô chồng lấn — bước bằng đúng cả
-FOV sẽ để lại khe hở, nơi một người đứng vắt giữa hai ô bị cả hai ô bỏ sót. Các điểm dừng bị kẹp trong
+Mỗi bước là `STEP_DEG` (90°). Các ô vẫn chồng lấn, nhưng phần chồng lấn do cái đầu tạo ra chứ không
+phải do bước đế nhỏ: như đoạn trên đã tính, một điểm dừng yaw cùng ba lần ngoái `wrist_roll` nhìn được
+liên tục `yaw±95°`, nên bước 90° không để lại khe hở. Các điểm dừng bị kẹp trong
 tầm cơ khí ±135°, và đầu được cho `SETTLE_S` để hết rung trước mỗi lần đọc khung hình, vì đầu đang
 chuyển động cho ảnh nhòe và bộ phát hiện sẽ bỏ sót thứ đang nằm ngay trong tầm nhìn.
 
@@ -553,16 +563,178 @@ os-server sở hữu các câu, phần phân giải ngôn ngữ và cache WAV (`
 |---|---|---|
 | `look_searching` | bước đầu tiên về phía bearing đã ghi nhớ | **bật** (`HAL_LOOK_AIM_SPEAK`) |
 | `look_found` | có người xuất hiện **sau khi** đã thông báo đang tìm | bật (cùng cờ) |
-| `look_capturing` | pha ngắm có việc phải làm trước khi bấm máy | bật (`HAL_LOOK_AIM_SPEAK_CAPTURE`) |
+| `look_still_searching` | điểm giữa của pha quét — điểm dừng 2/3, đầu ở giữa (`_say_at_the_midpoint`) | bật (`HAL_LOOK_AIM_SPEAK`) |
+| `look_capturing` | pha ngắm thực sự đã di chuyển trước khi bấm máy | bật (`HAL_LOOK_AIM_SPEAK_CAPTURE`) |
 
 Phần chặn quan trọng hơn bản thân các câu nói. **Không nói gì khi đối tượng đã nằm giữa sẵn** — lần chụp
 đó xong trong vài trăm mili giây, nên mọi câu ở đây đều có điều kiện là pha ngắm thực sự đã phải di
 chuyển. *"Bạn đây rồi"* chỉ phát ra như phần kết của một lần tìm đã được thông báo, không bao giờ đứng
-một mình. Trạng thái đang tìm chỉ thông báo **một lần**, không phải mỗi bước. Còn câu lúc chụp chỉ phát
-khi pha ngắm có việc phải làm — đó là thứ giữ cho nó không mở đầu mọi câu hỏi thị giác.
+một mình. Trạng thái đang tìm chỉ thông báo **một lần** mỗi pha quét chứ không phải mỗi bước, cộng
+thêm đúng một câu `look_still_searching` ở điểm giữa — pha quét dài ~20 s, và không có câu đó thì câu
+mở đầu và câu kết luận nằm hai bên một khoảng lặng hai mươi giây, nghe như một cái đèn đã đứng máy chứ
+không phải một cái đèn đang tìm. Còn câu lúc chụp chỉ phát khi pha ngắm thực sự đã di chuyển
+(`res.aimed and res.iterations > 0`): pha ngắm không động gì thì không nói gì, và — phần đã sai cho tới
+nhánh này — pha ngắm đã tìm rồi **thất bại** cũng không nói gì, trước đây nó nối ngay
+*"Tôi không tìm thấy bạn"* với *"Để tôi nhìn thử"*.
 
 Một lần chụp nhanh, im lặng và đúng vốn đã là kết quả tốt — lời nói chỉ dành cho những khoảnh khắc người
 dùng thực sự phải chờ.
+
+## Canh khung gaze — giữ user trong khung hình
+
+Mọi thứ ở trên đều là do được yêu cầu: một lệnh nhìn, một phiên track, một lần tìm. Phần này là
+watcher trong `hal/drivers/tracking/gaze.py` tự làm những việc đó mà không ai bảo, để đến lúc user
+thực sự cất tiếng thì camera đã hướng về chỗ có ích. Toàn bộ nằm dưới `HAL_GAZE_WAKE` (xem
+`physical-controls_vi.md`) — cờ đó chặn cả watcher chứ không riêng cửa wake như tên gọi gợi ý, nên tắt
+nó thì không hành vi nào dưới đây chạy.
+
+Ràng buộc xuyên suốt: **không ai yêu cầu những việc này**, nên mọi vòng lặp đều bị chặn — một vùng
+chết, một cooldown, một hạn mức số bước. Một cái đèn biết chỉnh khung hình thì có vẻ đang chú ý; một
+cái chỉnh liên tục thì thành cái đầu gật gù theo.
+
+### Canh giữa theo chiều dọc, và vì sao nó đọc trung vị
+
+Đèn bàn đứng thấp hơn tầm đầu người, nên camera của nó chĩa vào ngực. Phép hiệu chỉnh lấy **trung vị**
+độ lệch dọc trong `HAL_GAZE_PITCH_WINDOW_S`, **không phải khung hình mới nhất** — và đó chính là lý do
+vòng lặp này hội tụ.
+
+`wrist_roll` là một trục *ngắm* thứ hai trên cánh tay này (chứng minh trên máy thật bằng cách ghim mọi
+khớp khác và chỉ đổi roll: đường chân trời giữ nguyên trong khi tầm nhìn quét ngang), và recording idle
+quét khớp đó ~32° mỗi chu kỳ ~10 s, mãi mãi. Nên độ lệch mà một khung hình đơn lẻ báo về là sai số khung
+hình **cộng** một nhiễu tuần hoàn đến từ chỗ roll của idle đang đứng. Đo trên ba khung hình với đối
+tượng không nhúc nhích: `dy` +0,101 ở roll −1,8° so với +0,143 ở roll +29,3° — 0,042 chiều cao khung
+hình chỉ do roll, khoảng 28% vùng chết, trên một vòng lặp trước đây bắn mỗi 4 s từ một mẫu duy nhất.
+Trung vị qua trọn một chu kỳ idle triệt tiêu nhiễu tuần hoàn trong khi sai số khung hình thật thì sống
+sót qua nó.
+
+Phép hiệu chỉnh được chia cho cả ba khớp pitch bởi `distribute_pitch` (`servo_follow.py`), trọng số
+`base_pitch` 0,20 / `elbow_pitch` 0,60 / `wrist_pitch` 0,20 — trên một cánh tay lành lặn thì khuỷu gánh
+nhiều nhất. Việc chia có **tính đến khoảng trống còn lại theo đúng chiều được yêu cầu** và chạy hai
+lượt: lượt đầu tôn trọng trọng số, lượt sau đưa phần tràn cho khớp nào còn chỗ. Một khớp chạy một mình
+sẽ đụng chặn cơ khí trong khi mặt vẫn còn ngoài khung.
+
+**Một lệnh không tới nơi sẽ bị phát hiện.** `move_and_hold` không báo lại gì, nên một khớp bị kẹt trước
+đây không thể phân biệt với một khớp chạy tốt, và vòng lặp cứ ra lại đúng cái đích không với tới đó mỗi
+~10 s mãi mãi — quan sát được qua sáu lần hiệu chỉnh liên tiếp với `elbow_pitch` đọc +12,3 trong khi
+được gửi tới +25,8. Tệ hơn, ra lệnh lại vào một khớp đang kẹt chính là thứ làm nóng servo tới mức nó bỏ
+cuộc, nên vòng lặp tự chế tạo ra đúng cái điều kiện mà nó liên tục vấp phải. Giờ cánh tay được hỏi liên
+tục cho tới khi tới nơi; khớp nào hụt quá `HAL_GAZE_PITCH_LAND_TOL_DEG` sẽ được cho nghỉ
+`HAL_GAZE_PITCH_STALL_REST_S` và lùi đích lại `HAL_GAZE_PITCH_STALL_BACKOFF_DEG`, để lần thử sau không
+tì vào chặn cơ khí ngay lập tức nữa.
+
+**Các hiệu chỉnh thôi bị xoá đi.** Recording idle là tuyệt đối trên mọi khớp và lặp vô tận, nên trong
+vòng một chu kỳ nó kéo camera về đúng pose lúc ghi — trên bàn làm việc thì đó là bàn phím.
+`HAL_GAZE_IDLE_ANCHOR` thay vào đó dịch cả vòng idle đi `anchor − baseline`: cùng chuyển động, khác tâm.
+Cố ý chỉ áp cho idle — một recording cảm xúc có thể quăng đầu đi đâu cũng được, vì tới lúc nó chạy thì
+user đã được nghe rồi; thứ phải đúng chỉ là pose *nghỉ* phải nhìn được người sắp nói.
+
+| Tham số | Mặc định | Ý nghĩa |
+|---|---|---|
+| `HAL_GAZE_PITCH` | `true` | Bật/tắt canh giữa theo chiều dọc. |
+| `HAL_GAZE_PITCH_WINDOW_S` | 12 | Cửa sổ trung vị. Dài hơn chu kỳ roll ~10 s của idle, nên luôn phủ trọn một chu kỳ thay vì một cung bị lệch. |
+| `HAL_GAZE_PITCH_MIN_SAMPLES` | 8 | Sàn để hành động trên một cửa sổ mới đầy một phần. |
+| `HAL_GAZE_PITCH_PROMPT_MIN_SAMPLES` | 2 | Sàn khi việc leo tìm được yêu cầu trực tiếp — nhánh thân người báo hằng số −0,5, nên thêm mẫu cũng không thêm thông tin. |
+| `HAL_GAZE_PITCH_DEAD_ZONE_FRAC` | 0.15 | Độ lệch (theo tỉ lệ chiều cao khung) được tính là đã đủ giữa. Mục tiêu là mặt *nằm trong* khung và có khoảng thở, không phải giữa hoàn hảo. |
+| `HAL_GAZE_PITCH_DEG_PER_FRAME` | 45 | Số độ trên trọn chiều cao khung. Là mầm khởi tạo, không phải calibration — vòng lặp tự đo lại sau mỗi bước. |
+| `HAL_GAZE_PITCH_MAX_STEP_DEG` | 15 | Bước hiệu chỉnh lớn nhất một lần. |
+| `HAL_GAZE_PITCH_COOLDOWN_S` | 4 | Sàn khoảng cách giữa hai lần hiệu chỉnh. |
+| `HAL_GAZE_PITCH_MOVE_S` | 1.0 | Thời lượng di chuyển. Khác 0,25 s của pha ngắm: gaze chỉ động một lần mỗi ~10 s mà không ai đợi, nên nó có thể đi nhẹ nhàng. |
+| `HAL_GAZE_PITCH_SETTLE_S` | 1.8 | Chờ ổn định trước khi đọc lại — đọc giữa lúc đang trôi sẽ báo một cú đi ngắn mà thật ra chỉ là đang còn chạy. |
+| `HAL_GAZE_PITCH_LAND_TOL_DEG` | 2.0 | Mức hụt được tính là kẹt. |
+| `HAL_GAZE_PITCH_STALL_REST_S` | 60 | Khớp kẹt bị loại ra bao lâu. Khớp với thời gian hồi phục đo được. |
+| `HAL_GAZE_PITCH_STALL_BACKOFF_DEG` | 2.0 | Dừng trước chỗ nó đã kẹt. |
+| `HAL_GAZE_IDLE_ANCHOR` | `true` | Cho idle thở quanh pose tốt gần nhất. |
+| `HAL_GAZE_SNAPSHOT` / `_KEEP` | `true` / 40 | Lưu khung hình có chú thích cạnh mỗi lần hiệu chỉnh, trong `SNAPSHOT_PERSIST_DIR/sensing_gaze/`. Log nói trung vị là −0,41 chiều cao khung; nó không nói được đó là user, một đồng nghiệp, hay một cái áo khoác vắt trên ghế. |
+
+### Leo tìm cái mặt nằm trên khung hình
+
+Một khung thân người **chạm cạnh trên** nghĩa là thân còn tiếp tục vượt ra ngoài, tức đầu ở phía trên và
+camera đang chĩa quá thấp. Đó là dạng bằng chứng duy nhất được dùng: một thân người không bị cắt mà
+không có mặt nghĩa là đầu *đang ở trong khung* và chỉ là không được nhận diện — quay đi, nghiêng
+nghiêng, ngược sáng — và leo lúc đó là chĩa vào trần nhà không vì lý do gì.
+
+Bước cố định chứ không tỉ lệ, vì thân người nói "cái đầu ở đâu đó phía trên kia" chứ không bao giờ nói
+xa bao nhiêu. Điều khiển tỉ lệ cần một tín hiệu sai số; đây là một cuộc tìm.
+
+| Tham số | Mặc định | Ý nghĩa |
+|---|---|---|
+| `HAL_GAZE_FACE_SEARCH_STEP_DEG` | 15 | Một bước leo. |
+| `HAL_GAZE_FACE_SEARCH_MAX_STEPS` | 4 | Khoảng 60° rồi dừng. Bằng chứng vẫn đúng dù cổ đã đi bao xa, nên hành động theo nó mãi là một vòng lặp chứ không phải một cuộc tìm. |
+
+**Chỗ ghi nhớ một độ cao đã dùng được** — `hal/drivers/tracking/face_height.py`, tại
+`/var/lib/hal/face_height.json` (`HAL_FACE_HEIGHT_PATH`), cố ý **tách khỏi** `user_bearing.json`.
+Bearing trả lời *"user ở hướng nào?"* và được look-aim, search và repoint đọc; ghi độ cao vào đó sẽ đổi
+luôn thứ mà look-aim khôi phục ở mỗi lần gọi. File này trả lời câu khác — *"camera phải ngắm cao bao
+nhiêu để thấy một cái đầu từ chỗ này?"* — và chỉ vòng lặp pitch của gaze đọc nó. Hai thứ cũng phai theo
+hai kiểu: bearing là phỏng đoán về một con người, mà người thì di chuyển, nên nó phai; độ cao là một sự
+thật về đồ đạc. Toàn bộ pose được ghi vì một góc pitch chỉ có nghĩa khi đi kèm phần còn lại của tư thế,
+nhưng **chỉ các khớp pitch được áp khi khôi phục** — yaw thuộc về bearing và vòng xoay ngang, trả nó về
+đây là giao cùng một vô-lăng cho hai hệ thống.
+
+### Xoay ngang, và vì sao nó lười hơn pitch
+
+Khung hình theo chiều dọc hỏng theo một chiều — user đứng dậy và ra khỏi mép trên — nên đáng đuổi theo.
+Trôi ngang thì phần lớn là người ta xê dịch trên ghế, và một cái đèn đảo theo mọi cú nghiêng người đúng
+là kiểu giật cục mà cả vòng lặp này được giảm chấn để tránh. Phép hiệu chỉnh chia cho `base_yaw` và
+`wrist_roll` qua `distribute_yaw`.
+
+Dù vậy vùng chết lại **hẹp hơn** của pitch (0,10 so với 0,15), nghe ngược đời cho tới khi để ý rằng giá
+trị đem ra kiểm tra là *trung vị* trong cửa sổ: chính cửa sổ mới là thứ loại bỏ nghiêng người và cựa
+quậy, và bắt vùng chết làm lại việc đó lần nữa chỉ tốn mất đúng phép hiệu chỉnh mà nó lẽ ra phải cho
+qua. Nó khởi điểm ở 0,22 theo lập luận ngược lại và bị thử nghiệm trên máy thật bác bỏ — cố ý dịch qua
+dịch lại ở bàn làm việc chỉ đạt đỉnh `dx` +20%, tức vòng lặp đo đúng chuyển động rồi từ chối mọi lần.
+
+| Tham số | Mặc định | Ý nghĩa |
+|---|---|---|
+| `HAL_GAZE_YAW` | `true` | Bật/tắt hiệu chỉnh xoay ngang. |
+| `HAL_GAZE_YAW_WINDOW_S` / `_MIN_SAMPLES` | 12 / 8 | Như pitch. |
+| `HAL_GAZE_YAW_DEAD_ZONE_FRAC` | 0.10 | Tỉ lệ trên trọn chiều rộng khung (`dx` chạy −0,5 … +0,5). |
+| `HAL_GAZE_YAW_DEG_PER_FRAME` | 40 | Số độ trên trọn chiều rộng khung. |
+| `HAL_GAZE_YAW_MAX_STEP_DEG` | 12 | Bước hiệu chỉnh lớn nhất một lần. |
+| `HAL_GAZE_YAW_MOVE_S` | 1.0 | Cả hai khớp xoay ngang đều không chống trọng lực, nhưng cả cái đèn xoay là một sự kiện thị giác lớn hơn một cú nghiêng đầu. |
+
+### Repoint về bearing đã ghi nhớ
+
+Khi đã lâu không thấy ai trong `HAL_GAZE_REPOINT_AFTER_S`, watcher quay về bearing đã ghi nhớ rồi kiểm
+tra trong `HAL_GAZE_REPOINT_VERIFY_S` xem việc đó có ăn thua không. Ba hành vi ở đây đáng nói ra vì cái
+nào cũng từng là một con bug:
+
+- **Thấy thân người cũng tính là tìm được user.** Bộ kiểm tra theo dõi mặt và thân trên hai đồng hồ
+  riêng; một cái thân ở đúng bearing nghĩa là bearing *đúng*. Chấm nó là trượt đã xoá mất những bearing
+  đúng trong khi user đang ngồi ngay trước đèn.
+- **Một lần repoint phải kết thúc trên một cái mặt.** Dừng ở thân người mới là nửa thành công, nên nó
+  kích hoạt phần leo tìm ở trên thay vì báo "đã thấy" — đó là lý do phần leo có `_PROMPT_MIN_SAMPLES`
+  bằng 2.
+- **Nó sẽ không quay đi khỏi một cái mặt đang có trong khung.** Nếu vừa thấy mặt trong
+  `HAL_GAZE_REPOINT_SKIP_IF_FACE_S`, một lần reacquire do speech kích hoạt sẽ từ chối: sau khi leo tìm
+  đã thấy mặt user *cao hơn* bearing, nghe theo bearing nghĩa là quay ngược xuống nhìn vào chỗ không có
+  ai.
+
+Mọi lần từ chối đều được log kèm lý do (`[gaze] no repoint: …`), có tiết chế để một điều kiện kéo dài in
+ra mỗi phút một lần thay vì mỗi vòng một lần.
+
+### Tự quay quanh tìm
+
+Nếu bearing không ra ai — hoặc chưa có bearing nào — watcher có thể gọi chính pha quét `/servo/search`
+mô tả ở trên. Đây là đường vào tự động duy nhất, nên cũng là đường duy nhất cần cooldown, và có tới hai
+cooldown vì hai tình huống không giống nhau.
+
+Mười lăm phút là đúng cho *"tôi có bearing, nó trượt, thôi đừng quẫy nữa"*. Nó sai cho *"tôi không biết
+bạn ở đâu cả"*, vì khi đó pha quét là cách duy nhất để biết mà đèn lại bị cấm thử — quan sát trên máy
+thật: ba lần repoint hỏng đã xoá ước lượng, rồi đèn ngồi đó vừa không repoint được (không có gì để quay
+về) vừa không quét được (còn 11 phút cooldown) trong khi user đang nói chuyện với nó.
+
+Cò kích hoạt là **sự vắng mặt**, không phải một lần repoint hỏng. Treo nó vào một lần repoint đã di
+chuyển rồi trượt khiến nó không với tới được trong đúng hai trường hợp cần nó nhất: không có bearing nào
+để quay về, và đang ngồi sẵn ngay trên bearing. Một pha quét thành công sẽ lấy mẫu một bearing mới ngay
+tại chỗ.
+
+| Tham số | Mặc định | Ý nghĩa |
+|---|---|---|
+| `HAL_GAZE_SWEEP` | `true` | Bật/tắt tự quay quanh tìm. |
+| `HAL_GAZE_SWEEP_AFTER_S` | 30 | Không thấy ai trong bao lâu. Dài hơn `HAL_GAZE_REPOINT_AFTER_S` (12 s) để nước đi rẻ luôn được thử trước và pha quét ~20 s vẫn là bước leo thang chứ không phải phản xạ. |
+| `HAL_GAZE_SWEEP_COOLDOWN_S` | 900 | Giữa hai pha quét khi đã có bearing. |
+| `HAL_GAZE_SWEEP_COOLDOWN_LOST_S` | 120 | Giữa hai pha quét khi chưa có bearing nào. |
 
 ### Bearing người dùng đã ghi nhớ
 
