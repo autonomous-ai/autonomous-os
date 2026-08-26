@@ -60,13 +60,20 @@ RECORD_DEADBAND_FRAC: float = 0.02
 # asked to look at.
 RECENT_SIGHTING_S: float = 4.0
 RECENT_SIGHTING_YAW_TOL_DEG: float = 25.0
-# Priority 3 — remembered-bearing fallback, taken in STEPS. nudge() blocks until
-# the move completes, so a single large move travels blind and can pass straight
-# over someone standing between here and there. Keep each step well under the
-# camera FOV so detection runs at least once per FOV of travel.
-# Retained as the cap on how far one bearing move may travel in a single
-# command, not as a hop size — the move goes directly to the remembered pose.
-BEARING_STEP_DEG: float = 20.0
+# Priority 3 — the remembered-bearing fallback.
+#
+# It used to advance in fixed-size hops, re-detecting between them so it
+# could not sail past somebody standing en route. `0dc1b667` removed the hops:
+# the lens sees ~110 deg, so anyone between here and there is already in frame
+# before the head moves at all, and each hop cost a detect plus a settle —
+# most of a second against the aim's deadline. The move now goes straight to
+# the remembered pose in one absolute command.
+#
+# So MAX_BEARING_STEPS no longer bounds hops. It bounds ATTEMPTS, and in
+# practice never binds: after the first move `_bearing_step_target` finds every
+# joint inside POSE_TOLERANCE_DEG and returns None, so a second attempt never
+# happens. Kept as a backstop against a move that reports success without
+# arriving — a stuck servo would otherwise retry forever.
 MAX_BEARING_STEPS: int = 3
 # Below this the estimate is too green or too stale to be worth turning for.
 MIN_BEARING_CONFIDENCE: float = 0.2
@@ -276,6 +283,72 @@ def _is_near_enough(box: Tuple[int, int, int, int], frame: Any, target: str) -> 
         return True  # never let the filter itself lose a subject
 
 
+def _nearest_person(detector: Any, frame: Any):
+    """The closest person big enough to be the asker, or None.
+
+    Caller holds `_detector_lock_use`. Returns the same
+    ``(box, target, confidence)`` shape as `_detect_subject`, or None when the
+    candidate path is unavailable (an older detector, a failure, or nobody
+    clearing the floor) so the caller can fall back to `detect`.
+    """
+    getter = getattr(detector, "detect_candidates", None)
+    if not callable(getter):
+        return None  # detector predates the candidate path
+    try:
+        candidates = getter(
+            frame, "person", strict=False,
+            min_conf=config.LOOK_AIM_MIN_CONFIDENCE,
+        )
+        # isinstance, not truthiness: a test double's attribute is a Mock, which
+        # is callable AND truthy but not iterable, and the comprehension below
+        # would raise out of the aim entirely. The same guard the bearing step
+        # already applies to a malformed estimate.
+        if not isinstance(candidates, (list, tuple)) or not candidates:
+            return None
+        # Floor FIRST, then rank. Both halves matter — see _detect_subject.
+        near = [(b, c) for b, c in candidates if _is_near_enough(b, frame, "person")]
+    except Exception as e:
+        logger.debug("[look-aim] person candidates failed: %s", e)
+        return None
+    if not near:
+        logger.debug(
+            "[look-aim] %d person box(es), none near enough to be the asker",
+            len(candidates),
+        )
+        return None
+    # Tallest wins; confidence only breaks a tie between similar heights.
+    box, conf = max(near, key=lambda bc: (bc[0][3], bc[1]))
+    if len(near) > 1:
+        logger.info(
+            "[look-aim] %d people in frame — taking the nearest (h=%dpx conf=%.2f) "
+            "over %s",
+            len(near), box[3], conf,
+            ", ".join(f"h={b[3]}px conf={c:.2f}" for b, c in near if b is not box),
+        )
+    return box, "person", conf
+
+
+def _sweep_for_subject() -> bool:
+    """Look around for the subject. True if the sweep stopped on one.
+
+    Imported here rather than at module scope: `search` imports from this file,
+    so a top-level import either way is a cycle. The aim asking the sweep for
+    help is the only direction that edge runs.
+    """
+    try:
+        from hal.drivers.tracking.search import search_for_subject
+
+        res = search_for_subject()
+        logger.info("[look-aim] looked around: %s after %d stop(s)",
+                    res.reason, res.stops_visited)
+        return bool(res.found)
+    except Exception as e:
+        # A sweep that cannot run must not sink the aim — the caller still needs
+        # an answer, even if it is "I could not find you".
+        logger.warning("[look-aim] look-around unavailable: %s", e)
+        return False
+
+
 def _detect_subject(detector: Any, frame: Any):
     """Nearest plausible person box preferred, face as fallback.
 
@@ -288,10 +361,32 @@ def _detect_subject(detector: Any, frame: Any):
     bearing, which is a far better answer than turning to a stranger at the
     other end of the room.
 
+    Among several people, the one CLOSEST is taken as the asker — apparent
+    height, the only distance cue a single camera has. Not the detector's own
+    pick: `detect` ranks by confidence, which measures how CANONICAL a shape
+    is, and that inverts the answer exactly when it matters. Device-proven
+    2026-08-24 (look_logs/20260824-112802): a small, fully-visible colleague at
+    the back scored 0.71 while the person actually asking — clipped by the
+    frame edge, occluded by the toy they were holding up, close enough to be a
+    face and one shoulder — did not win at all, and the aim turned 19.8 deg
+    away from them.
+
+    The size floor therefore has to run BEFORE the choice. Applied after, as it
+    was, it only ever rubber-stamps a decision already made: `detect` returns
+    ONE box, so the asker was discarded before `_is_near_enough` saw anything.
+    The same lesson is written out in detection._measurable_faces, for faces.
+
+    Faces need none of this: `_detect_face_yunet` already picks the LARGEST,
+    and largest is tallest, so a floor applied afterwards can only reject — it
+    cannot pick the wrong one.
+
     Returns (box, target, confidence); confidence is None for detectors that do
     not report one.
     """
     with _detector_lock_use:
+        nearest = _nearest_person(detector, frame)
+        if nearest is not None:
+            return nearest
         for target in ("person", "face"):
             try:
                 box = detector.detect(
@@ -523,8 +618,8 @@ def _bearing_step_target(svc: Any, est: Any, current: dict):
     Returns (target, step_deg), or (None, 0.0) when the head is already in the
     remembered shape.
 
-    The move goes straight to the remembered pose. It used to advance in
-    BEARING_STEP_DEG hops, re-detecting between them so it could not sail past
+    The move goes straight to the remembered pose. It used to advance in fixed
+    hops, re-detecting between them so it could not sail past
     someone standing en route — but the lens sees about 110 deg, so anyone
     between here and there is already in frame before the head moves at all.
     The hops bought no extra coverage and cost a detect plus a settle each,
@@ -636,13 +731,32 @@ def aim_for_look(deadline_s: float, detector: Any = None) -> AimResult:
     pending_calib: Optional[Tuple[float, float]] = None
     last_move_deg = 0.0
     announced_found = False
+    # Whether `look_searching` was ever spoken. Only an ANNOUNCED search
+    # owes the user a resolution — see the give-up branch.
+    announced_search = False
+    # Did this aim ever confirm a subject? Read by _result to score the
+    # remembered bearing exactly once, whichever way the aim exits.
+    found_any = False
     start_yaw = _yaw_of(svc)
     steps: list = []
     bearing_consulted: Optional[dict] = None
 
     def _result(aimed: bool, reason: str) -> AimResult:
         """Build the outcome with the pose actually reached, so a trace shows
-        whether the head moved rather than just what was decided."""
+        whether the head moved rather than just what was decided.
+
+        Also scores the remembered bearing, HERE rather than at each exit. The
+        aim leaves by five doors — centred, deadline, max iterations, no fresh
+        frame, occlusion hold, give-up — and only the give-up one used to
+        report a miss. A bearing move plus its settle is most of a second
+        against an 8s deadline, so timing out right after turning is ordinary,
+        and every one of those was an invisible failure: the estimate kept its
+        confidence while repeatedly finding nobody.
+
+        Scoring in the single place every exit passes through means a door
+        added later cannot forget to.
+        """
+        _score_prediction(bearing_steps, found=found_any)
         return AimResult(
             aimed, reason, iterations, yaw_total, last_dx_frac, bearing_steps,
             start_yaw, _yaw_of(svc), bearing_consulted, steps, last_move_deg,
@@ -681,8 +795,9 @@ def aim_for_look(deadline_s: float, detector: Any = None) -> AimResult:
                                   "action": "hold (recent sighting — likely occluded)",
                                   "yaw": _yaw_of(svc)})
                     return _result(False, "holding: seen here moments ago (likely occluded)")
-                # Priority 3 — step toward the remembered bearing, re-detecting after
-                # every step so we cannot sail past someone en route.
+                # Priority 3 — go to the remembered bearing, then re-detect from
+                # a post-move frame. One absolute move, not a series of hops:
+                # see MAX_BEARING_STEPS for why the hops were removed.
                 probe: dict = {}
                 if bearing_steps < MAX_BEARING_STEPS and _step_toward_bearing(svc, probe):
                     bearing_consulted = probe.get("bearing")
@@ -692,15 +807,50 @@ def aim_for_look(deadline_s: float, detector: Any = None) -> AimResult:
                     if bearing_steps == 0 and config.LOOK_AIM_SPEAK:
                         # Only on the FIRST step: the lamp is about to turn away from
                         # the user mid-question, which reads as broken unless explained.
+                        announced_search = True
                         _say("look_searching")
                     bearing_steps += 1
                     iterations += 1
                     continue
-                _score_prediction(bearing_steps, found=False)
                 bearing_consulted = probe.get("bearing", bearing_consulted)
                 steps.append({"n": iterations + 1, "saw": None,
                               "action": probe.get("skipped", "give up — nothing found"),
                               "yaw": _yaw_of(svc)})
+                # Before giving up, actually look around. `look_lost` claims
+                # "I can't find you", and until now it said that having only
+                # turned toward a remembered bearing — which is a guess about
+                # where someone WAS, not a search. The phrase should be earned.
+                if not announced_search and config.LOOK_AIM_SPEAK:
+                    # The lamp is about to move a lot and take seconds over it.
+                    # Saying so is what turns that from dead air into waiting.
+                    announced_search = True
+                    _say("look_searching")
+                swept_at = time.monotonic()
+                found_by_sweep = _sweep_for_subject()
+                # The clock stops while sweeping. The deadline exists so a live
+                # turn never stalls in SILENCE; the announcement above has
+                # already dealt with that, and charging the sweep against a
+                # budget it cannot fit in would mean never sweeping at all.
+                t_end += time.monotonic() - swept_at
+                steps.append({"n": iterations + 1,
+                              "action": "looked around",
+                              "saw": "subject" if found_by_sweep else None,
+                              "yaw": _yaw_of(svc)})
+                if found_by_sweep:
+                    # Back into the loop: the sweep stopped on a subject but did
+                    # not centre them, and centring is this function's job.
+                    iterations += 1
+                    continue
+
+                # Close the loop the announcement opened. `look_searching`
+                # promises to look; going silent here leaves the lamp turned
+                # away mid-question with nothing said, while the model answers
+                # about whatever the camera happened to be facing. Only when a
+                # search was actually announced — a look that never turned owes
+                # no explanation, and narrating every failed detection would be
+                # the noise `look_capturing` is already gated to avoid.
+                if announced_search and config.LOOK_AIM_SPEAK:
+                    _say("look_lost")
                 return _result(False, "subject not found")
 
             if bearing_steps > 0 and not announced_found and config.LOOK_AIM_SPEAK:
@@ -710,7 +860,7 @@ def aim_for_look(deadline_s: float, detector: Any = None) -> AimResult:
                 # 2026-08-19 said "bạn đây rồi" four times in three seconds.
                 announced_found = True
                 _say("look_found")
-            _score_prediction(bearing_steps, found=True)
+            found_any = True
             _note_sighting(svc)
             x, _y, w, _h = box
             w_fr = float(frame.shape[1])

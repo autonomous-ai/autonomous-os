@@ -12,6 +12,13 @@ logger = logging.getLogger(__name__)
 # Default interpolation duration for move_to (seconds)
 DEFAULT_MOVE_DURATION = 2.0
 
+# How fast the applied idle anchor may travel toward a newly requested one
+# (degrees per second, per joint). Gaze re-aims by tens of degrees at once, and
+# applying that to the next frame is a step no recording ever contains. Sized
+# below the idle recording's own pitch peaks (~70 deg/s) so a re-aim reads as a
+# deliberate move rather than a snap: a 40 deg re-aim takes about a second.
+IDLE_ANCHOR_SLEW_DPS = 40.0
+
 # Zero/hold position in raw encoder units — the physical resting pose after release.
 ZERO_RAW = {
     "base_yaw":    2025,
@@ -90,6 +97,25 @@ class AnimationService:
         self.idle_recording = idle_recording
         self.hold_s = hold_s
         self._hold_until: float = 0.0  # timestamp until which to hold pose before returning to idle
+        # Idle anchor: {joint: absolute degrees} the IDLE recording should breathe
+        # around, instead of around the pose it happens to have been recorded at.
+        #
+        # An idle recording is absolute on every joint and loops forever, so
+        # wherever anything else leaves the head, idle walks it back to the
+        # recorded pose within a cycle. On a desk that pose points at the
+        # keyboard, which is why a camera aimed at the user does not stay aimed
+        # at them. Anchoring shifts the whole loop without changing its shape:
+        # the lamp breathes exactly as before, around a different centre.
+        # The anchor currently APPLIED to frames. It follows _idle_anchor_target
+        # at a bounded rate rather than jumping: the offset is a position command
+        # in disguise, so replacing it outright teleports the arm by the whole
+        # difference in one frame (see _advance_idle_anchor).
+        self._idle_anchor: Dict[str, float] = {}
+        # Where the anchor is being asked to go. set_idle_anchor writes this.
+        self._idle_anchor_target: Dict[str, float] = {}
+        # First-frame value per joint of the idle recording — the centre the
+        # offset is measured from. Captured when the recording is loaded.
+        self._idle_baseline: Dict[str, float] = {}
         self._no_idle_recordings = NO_IDLE_RECORDINGS
         # disable_torque_on_disconnect=False: dropping torque is what `release()`
         # does, deliberately and on request ("arm limp"). A shutdown is not that
@@ -161,14 +187,146 @@ class AnimationService:
         # Tracking lock — stricter than hold_mode: absolutely no servo writes
         # from the animation loop, and in-progress recordings are dropped so
         # they don't fight the tracker or resume jerking when tracking ends.
-        # Set only by the tracker service.
-        self._tracking_active = False
+        #
+        # Two ways to hold it, because there are two kinds of owner:
+        #   * the flag, assigned directly (`svc._tracking_active = True`) by code
+        #     that owns the body for a bounded stretch — aim.servo_ownership.
+        #   * the counter, held by a WRITER for as long as its thread is alive.
+        #
+        # The counter exists because the flag alone described the wrong span.
+        # `_track_loop` set it on entry and cleared it on exit, but the thing
+        # actually writing the bus is `ServoFollower._worker`, which outlives
+        # that loop. Between the clear and the worker stopping, the lock read
+        # free while the follower was still writing every joint at 30fps.
+        #
+        # Device-traced 2026-08-25: five subsystems wrote elbow_pitch in one
+        # minute — the follower 130 times at a fixed goal, idle 37, gaze 32,
+        # look.aim 16. Gaze declines to move a body someone else owns, asked,
+        # was told the body was free, and had every correction overwritten
+        # 33ms later. It reported the servo as failing to reach its target.
+        self._tracking_flag = False
+        self._body_owners = 0
+        self._body_owner_lock = threading.Lock()
 
         # When True, idle recording finished and pose is held — loop sleeps longer to save CPU
         self._idle_settled = False
 
-    # P gain — match upstream default (16 for all). Higher values cause jerky motion.
-    _SERVO_PGAIN = {1: 16, 2: 16, 3: 16, 4: 16, 5: 16}
+    @property
+    def _tracking_active(self) -> bool:
+        """True while anything owns the body — a flag holder or a live writer."""
+        return self._tracking_flag or self._body_owners > 0
+
+    @_tracking_active.setter
+    def _tracking_active(self, value: bool) -> None:
+        # Assignment sets the FLAG only. It cannot release a writer that is still
+        # running, which is what `_track_loop` clearing it used to do.
+        self._tracking_flag = bool(value)
+
+    # Goal_Speed register on the STS3215. 0 means "no limit".
+    _GOAL_SPEED_REG = 46
+    # What the servos behave as WITHOUT this register ever being written. They
+    # read 0 (no limit) but move as if capped — device-measured, base_yaw does
+    # 16 deg/s untouched and 115 deg/s straight after writing that same 0 back.
+    # So "put it back how it was" cannot be done by writing 0; it needs the
+    # value that reproduces the original pace. 0.062 deg/s per unit measured,
+    # so ~175 is the ~16 deg/s the arm has always run at.
+    @property
+    def UNWRITTEN_SPEED_EQUIVALENT(self) -> int:
+        """What base_yaw rests at — the same value startup writes. 0 = no cap."""
+        return self._SERVO_REST_SPEED.get(1, 0)
+
+    def set_joint_speed(self, motor_name: str, speed: int) -> bool:
+        """Cap one joint's velocity, or lift the cap with 0. Never raises.
+
+        Deliberately not applied at startup for every joint: writing it there
+        would change how the whole robot moves — idle, emotions, every recorded
+        animation — which is a far larger decision than any one caller should
+        make on its own. Callers that need a particular pace set it around their
+        own work and put it back.
+        """
+        try:
+            with self.bus_lock:
+                motor = self.robot.bus.motors.get(motor_name)
+                if motor is None:
+                    return False
+                self.robot.bus.packet_handler.write2ByteTxRx(
+                    self.robot.bus.port_handler, motor.id,
+                    self._GOAL_SPEED_REG, int(speed),
+                )
+            return True
+        except Exception as e:
+            logger.warning("could not set %s speed to %s: %s", motor_name, speed, e)
+            return False
+
+    def acquire_body(self) -> None:
+        """Claim the body for as long as the caller keeps writing to it.
+
+        For owners whose lifetime is a THREAD rather than a block: the follow
+        worker holds this from the moment it starts until it stops, so the lock
+        covers every frame it writes rather than only the loop that spawned it.
+        Re-entrant by count, so nested or overlapping owners each release once.
+        """
+        with self._body_owner_lock:
+            self._body_owners += 1
+
+    def release_body(self) -> None:
+        with self._body_owner_lock:
+            self._body_owners = max(0, self._body_owners - 1)
+
+    # P gain — upstream default is 16 for all. Higher values cause jerky motion,
+    # so this stays at 16 except where a joint has been measured to need more.
+    #
+    # elbow_pitch (3) is the exception. It carries the most gravity torque of any
+    # joint (the whole forearm plus head), and with P=16 and no integral term the
+    # commanded torque — proportional to error — could not overcome gravity plus
+    # static friction for a SMALL error. It did not move a little; it did not move
+    # at all. Device-measured 2026-08-25, lifting the elbow, 3 trials each:
+    #
+    #                  +3 deg    +6 deg   +10 deg
+    #   P=16 I=0        0/3       2/3       3/3
+    #   P=32 I=10       3/3       3/3       3/3
+    #
+    # Which is why the servo page always looked fine — a slider drag is a big
+    # move, comfortably over the threshold — while gaze, whose corrections are
+    # 6-13 deg, sat in the dead band and silently did nothing for an afternoon.
+    # wrist_pitch (5) joined elbow_pitch (3) once it started carrying a real
+    # share of the vertical correction. Same failure, same fix: it sat at +9.7
+    # with ~43 deg of travel above it, was asked for 3 deg, and did not move.
+    # Not a limit — the deadband. base_pitch (2) is deliberately left alone; it
+    # lands every ask it is given, and adding integral to a joint that already
+    # works risks hunting for no gain.
+    _SERVO_PGAIN = {1: 16, 2: 16, 3: 32, 4: 16, 5: 32}
+
+    # I gain — 0 everywhere by default, which is what the servos ship with. An
+    # integral term is what lets a joint keep pushing on a small error instead of
+    # settling for whatever P alone can deliver, so it is the half of the fix that
+    # addresses stiction rather than droop. Only elbow_pitch has been measured to
+    # need it; the other joints are left alone rather than retuned on a guess.
+    _SERVO_IGAIN = {3: 10, 5: 10}
+
+    # Resting Goal_Speed, written at startup so a joint the search retunes always
+    # starts from a known value. 0 means NO velocity limit.
+    #
+    # It has to be 0 rather than a number that looks like the old pace. Untouched,
+    # this register imposes no cap at all — base_yaw merely crossed a LARGE error
+    # slowly, because of its P gain, while still following small steps as fast as
+    # it liked. Animations are exactly small steps at 30fps, so any real cap
+    # throttles them. A first attempt used 175, chosen because it reproduced the
+    # ~20 deg/s seen on a point-to-point move, and that turned out to clamp idle
+    # and every emotion to a crawl — a global slowdown, from a value picked to be
+    # a no-op.
+    #
+    # There is no setting that reproduces "never written": writing the register
+    # at all clears whatever the servo powers up with (16 deg/s untouched, 115
+    # after writing the same 0 back). So the choice is cap-everything or
+    # cap-nothing, and animations need cap-nothing.
+    #
+    # The search still caps ITSELF to ~80 deg/s while sweeping, which against an
+    # uncapped base is a reduction rather than a licence.
+    #
+    # Only base_yaw, because only base_yaw is ever retuned. A joint nobody
+    # touches needs no backstop.
+    _SERVO_REST_SPEED = {1: 0}
 
     def _configure_servos_raw(self, energize: bool = True):
         """Configure servos directly via scservo_sdk, bypassing lerobot.
@@ -190,6 +348,8 @@ class AnimationService:
             for motor_name, motor_obj in self.robot.bus.motors.items():
                 sid = motor_obj.id
                 pgain = self._SERVO_PGAIN.get(sid, 32)
+                igain = self._SERVO_IGAIN.get(sid, 0)
+                rest_speed = self._SERVO_REST_SPEED.get(sid)
                 # Ping first
                 _, result, _ = pk.ping(ph, sid)
                 if result != COMM_SUCCESS:
@@ -198,12 +358,21 @@ class AnimationService:
                 pk.write1ByteTxRx(ph, sid, 40, 0)   # Torque_Enable = 0
                 pk.write1ByteTxRx(ph, sid, 33, 0)   # Operating_Mode = position
                 pk.write1ByteTxRx(ph, sid, 21, pgain)  # P_Coefficient
-                pk.write1ByteTxRx(ph, sid, 23, 0)   # I_Coefficient
+                pk.write1ByteTxRx(ph, sid, 23, igain)  # I_Coefficient
                 pk.write1ByteTxRx(ph, sid, 22, 32)  # D_Coefficient
+                # See _SERVO_REST_SPEED: clears a cap a killed sweep left behind.
+                # Outside the energize gate on purpose: this is configuration,
+                # like the gains above it, and a device that restarted asleep
+                # must still come back with a known speed rather than whatever
+                # cap a killed sweep left in the register.
+                if rest_speed is not None:
+                    pk.write2ByteTxRx(ph, sid, self._GOAL_SPEED_REG, rest_speed)
                 if energize:
                     pk.write1ByteTxRx(ph, sid, 40, 1)   # Torque_Enable = 1
                 logger.info(
-                    f"{motor_name} (ID {sid}): P={pgain}, torque {'ON' if energize else 'OFF (asleep)'}"
+                    f"{motor_name} (ID {sid}): P={pgain}, I={igain}"
+                    + (f", speed={rest_speed}" if rest_speed is not None else "")
+                    + f", torque {'ON' if energize else 'OFF (asleep)'}"
                 )
 
     def start(self, skip_wake: bool = False):
@@ -393,6 +562,10 @@ class AnimationService:
         # Set up new playback
         self._current_recording = recording_name
         self._current_actions = actions
+        if recording_name == self.idle_recording and actions:
+            # The pose the recording itself starts from — anchoring is measured
+            # as a displacement from this, so the loop keeps its own shape.
+            self._idle_baseline = dict(actions[0])
         self._current_frame_index = 0
         
         # If we have a current state, set up interpolation to the first frame.
@@ -505,7 +678,19 @@ class AnimationService:
                 progress = 1.0 - (self._interpolation_frames / denom)
                 progress = max(0.0, min(1.0, progress))
                 
-                target = self._interpolation_target
+                # Anchor the TARGET, never the interpolated result. _current_state
+                # always holds an already-anchored pose, and _interpolation_target
+                # is the raw first frame, so shifting the blend of the two applied
+                # the anchor offset a second time to the part that came from
+                # _current_state: at progress 0 the very first command was
+                # `current + offset`, a whole-offset jump in one frame before the
+                # recording had played anything. With gaze anchoring idle that
+                # offset is the distance between the recording's baseline and
+                # where gaze wants the head — over 180 deg for a recording
+                # authored around wrist_pitch -186. Both ends of the blend live
+                # in anchored space now, so progress 0 is exactly the current
+                # pose and the move starts from standstill.
+                target = self._anchor_action(self._interpolation_target)
                 interpolated_action = {}
                 for joint in target.keys():
                     # Default 0 is unsafe if _current_state is incomplete (see _sync_state_from_hardware).
@@ -527,7 +712,9 @@ class AnimationService:
 
             # Play current frame
             if self._current_frame_index < len(self._current_actions):
-                action = self._current_actions[self._current_frame_index]
+                action = self._anchor_action(
+                    self._current_actions[self._current_frame_index]
+                )
                 with self.bus_lock:
                     self.robot.send_action(action)
                 self._current_state = action.copy()
@@ -684,6 +871,73 @@ class AnimationService:
         next frame would clear it.
         """
         self._halt.clear()
+
+    def set_idle_anchor(self, joints: Optional[Dict[str, float]]) -> None:
+        """Re-centre the idle loop on these absolute joint positions.
+
+        Pass None or {} to go back to playing idle exactly as recorded. Joints
+        not named are untouched, so anchoring one axis does not freeze the rest.
+
+        The move is a request, not an immediate jump — the applied anchor slews
+        toward it at IDLE_ANCHOR_SLEW_DPS.
+        """
+        self._idle_anchor_target = dict(joints) if joints else {}
+
+    def _advance_idle_anchor(self) -> None:
+        """Step the applied anchor one frame closer to the requested one.
+
+        The anchor offset is added to every idle frame, so a change in it is a
+        position command: assigning a new anchor outright moved the arm by the
+        whole difference within one frame. Gaze re-aims in steps of tens of
+        degrees (device-observed: wrist_pitch anchor -4.9 -> +36.7 in one go,
+        a 41 deg jump at ~830 deg/s), which is faster than anything the
+        recordings themselves contain. Bounding the travel keeps a re-aim a
+        move the eye can follow, without damping the loop's own swing.
+        """
+        target = self._idle_anchor_target
+        applied = self._idle_anchor
+        if applied == target:
+            return
+        step = IDLE_ANCHOR_SLEW_DPS / max(self.fps, 1)
+        for joint in set(applied) | set(target):
+            # A joint dropped from the target eases back to the recorded pose,
+            # i.e. to an offset of zero, which is the baseline itself.
+            want = target.get(joint, self._idle_baseline.get(joint))
+            if want is None:
+                # No baseline to ease back to; nothing to measure a step against.
+                applied.pop(joint, None)
+                continue
+            have = applied.get(joint, self._idle_baseline.get(joint))
+            if have is None:
+                # First anchor before the recording loaded: no baseline means
+                # _anchor_action ignores this joint anyway, so there is no jump
+                # to spread out.
+                applied[joint] = float(want)
+                continue
+            delta = float(want) - float(have)
+            if abs(delta) <= step:
+                if joint in target:
+                    applied[joint] = float(want)
+                else:
+                    applied.pop(joint, None)
+                continue
+            applied[joint] = float(have) + (step if delta > 0 else -step)
+
+    def _anchor_action(self, action: Dict[str, float]) -> Dict[str, float]:
+        """Shift one idle frame onto the anchor. Returns it unchanged if there
+        is nothing to anchor, so the normal path allocates nothing extra."""
+        self._advance_idle_anchor()
+        if not self._idle_anchor or self._current_recording != self.idle_recording:
+            return action
+        shifted = dict(action)
+        for joint, anchor in self._idle_anchor.items():
+            if joint not in shifted:
+                continue
+            base = self._idle_baseline.get(joint)
+            if base is None:
+                continue
+            shifted[joint] = shifted[joint] + (float(anchor) - float(base))
+        return shifted
 
     def halt(self) -> None:
         """Abort any move/recording in flight and hold position. Torque stays ON."""
