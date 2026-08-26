@@ -173,6 +173,141 @@ which do not exist until the first `connect()` succeeds. No HAL restart or new
 audio is required; voice turns keep using the main-agent fallback until the
 connection recovers.
 
+## Echo cancellation (AEC)
+
+`hal/drivers/voice/aec.py` runs the mic through WebRTC's APM (AEC3) with the
+audio being played as the reference. It is **provider-independent**: the
+reference is tapped in `_WatchedStream.write` (`tts/service.py`), the single
+point every playback path reaches the device through — synthesized speech, the
+`speak_queue` drain, and realtime **native audio**. Tapping there rather than at
+synthesis is deliberate: TTS renders a sentence far faster than real time, while
+the output stream writes at playback rate, which is the timing the mic sees.
+
+**Off by default** (`HAL_AEC_ENABLED=false`); the lamp image opts in via its
+device `.env`. It needs the
+`aec-audio-processing` binding, which is **not** a base hal dependency — PyPI
+ships no Linux wheels for it, so a device builds it from source. It lives behind
+the `aec` extra (`uv sync --extra aec`), deliberately kept out of `dependencies`
+and out of `hardware`: the build needs meson/ninja, which the lamp image does
+not install, so a hard dep would break both the image build and
+`software-update hal` for a feature that is off by default. When the import
+fails, `configure()` logs once and every entry point becomes a no-op; the voice
+path behaves exactly as before, so the default is safe on a device without the
+binding. It does, however, also switch **barge-in** on (see below), and that is
+not a no-op.
+
+| Env | Default | Meaning |
+|-----|---------|---------|
+| `HAL_AEC_ENABLED` | `false` | Master switch. Also the default for `HAL_BARGE_IN_ENABLED` |
+| `HAL_AEC_DELAY_MS` | `205` | Speaker→mic delay hint. **Per-device** — measure it, don't inherit it |
+| `HAL_AEC_NS` | `true` | Also run APM noise suppression. Carries most of the cancellation on this hardware |
+| `HAL_AEC_TAIL_S` | `2.0` | Keep cancelling this long after the last speaker write, then bypass the APM |
+| `HAL_AEC_REF_MS` | `500` | Echo-reference FIFO depth |
+| `HAL_AEC_DUMP_DIR` | — | Write `aec_mic/ref/out.wav` for offline ERLE analysis |
+
+### Installing the binding
+
+PyPI publishes **Windows wheels only** for `aec-audio-processing`, so every
+other platform builds from its sdist. That sdist vendors the full
+webrtc-audio-processing + abseil sources and a pre-generated SWIG wrapper, so
+the build is self-contained: it needs no system `libwebrtc-audio-processing`
+and no system SWIG. Its build requirements (`swig`, `meson`, `ninja`, `cmake`)
+all ship wheels on PyPI, so **no `apt install` is required** — which matters,
+because an end user cannot run apt on a shipped device.
+
+The build itself is the problem: measured on a lamp (A523, 8 cores) it takes
+**5m35s wall / 36m CPU**. That is fine once, on a developer's device; it is not
+fine on every device, every image build, and every `software-update hal`. So the
+project builds one wheel and attaches it to a GitHub release:
+
+```bash
+scripts/release/build-aec-wheel.sh <device-ip>   # → dist/aec/*.whl
+make upload-aec-wheel                            # → CDN, prints URL + sha256
+```
+
+`build-aec-wheel.sh` compiles on the device, in `/tmp`, in a throwaway venv with
+meson/ninja from PyPI — `/opt/hal` and the system packages are never touched —
+then copies the wheel back, installs it into a clean venv to prove it imports,
+and deletes its scratch directory.
+
+**Build on the OLDEST target, not the newest.** The wheel links only
+`libstdc++/libm/libgcc_s/libc` and requires **glibc ≥ 2.34**. glibc is forward
+compatible, so a wheel built on the lamp (Debian 12, glibc 2.36) also runs on
+Reachy Mini (Debian 13, glibc 2.41) — the reverse does not hold. The wheel is
+tagged `cp312-cp312-linux_aarch64`: `uv` on every body runs CPython 3.12, so
+that tag covers the fleet, and `upload-aec-wheel.sh` refuses to publish anything
+else rather than let the mismatch surface on a customer device.
+
+The asset lives on a per-wheel tag (`wheels/aec-<version>`), never the OS
+version tag — the wheel does not move with OS releases, and a dedicated tag is
+not re-pointed, so a pinned URL cannot change content under the lockfile. It is
+a GitHub release rather than the OTA bucket on purpose: this repo is public, so
+a fork can build and host its own wheel, while the bucket is org-only.
+
+`hal/pyproject.toml` pins that URL under `[tool.uv.sources]`, scoped to
+linux/aarch64/CPython 3.12. Measured on `lamp-0c89`, installing the hosted wheel
+takes **1.9 s** against **5m35s** to compile. Anything outside that marker —
+a dev Mac, a future 3.13 — falls back to the PyPI sdist and compiles, so
+`uv sync --extra aec` always works; only the fast path is pinned.
+
+The main VAD loop is wrapped, and with `HAL_WARM_MIC=true` (now the default)
+the mic stays open through playback, so cancellation runs during the device's
+own speech rather than only in the legacy barge-in monitor. The reverb gate is
+deliberately left uncancelled so its timing is unchanged.
+
+**Measured on a lamp** (OrangePi sun60 / A523, USB mic + USB speaker — two
+independent clock domains). The delay hint is per-device because the two USB
+clocks free-run: on `lamp-ee17` the real lag is 204 ms median over one 93 s take
+and 192 ms over another, drifting 154→215 ms within a single take (~667 ppm).
+Correcting 150→205 raised achieved ERLE from 15.2 to 17.9 dB. An earlier
+80→150 correction on the same unit took it from 10.9 to 18.6 dB.
+
+Cost is ~3.9 % of one A523 core at realtime. The MacBook reference figure for
+the same canceller is ~42 dB; the gap is the hardware — two free-running USB
+clocks and a cheap analog path. Only ~1.6 dB of the echo here is *linearly*
+predictable (coherence 0.31), so nearly all cancellation is suppression, which
+is why turning `HAL_AEC_NS` off costs ~10 dB of ERLE and triples the residual.
+
+### Known limitation: the reference starves
+
+`EchoReference` is a FIFO tapped when ALSA **accepts** audio, but the mic hears
+that audio a full output buffer later, and TTS writes in network-paced bursts.
+When writes run further ahead than the FIFO is deep, the oldest bytes — exactly
+the ones the mic is about to hear — are dropped, and the reference then runs dry
+for the rest of the burst. Measured on `lamp-ee17`, the reference underran on
+**30–86 % of processed frames** during a reply, and ERLE per window swings from
+−25.1 dB to 23.2 dB accordingly. On the frames where a reference *is* present
+the canceller reaches 15–23 dB, so the deficit is starvation, not the APM.
+
+Deepening the FIFO does not fix it and makes it worse (`HAL_AEC_REF_MS=1500`
+measured 3.6 / 2.3 dB against 23.2 / 19.1 dB at 500) because the lead becomes
+variable and exceeds AEC3's alignment window. The real fix is to pace the
+reference to playback time rather than write time, plus a dedicated capture
+thread so the mic stops draining `arecord` in bursts.
+
+The pacing half is implemented: `_WatchedStream.write` slices each caller
+buffer into `TTS_REF_SLICE_S` (40 ms) pieces and publishes the reference only
+after the device has accepted that slice, so the loop advances at roughly
+speaker rate. The slice size is a GIL tradeoff, not an acoustic one — every
+slice costs one blocking PortAudio write plus one reference write in Python,
+and at 10 ms the ~1600 round trips per reply were audible as playback stutter
+on a board whose main thread is already saturated by vision. The dedicated
+capture thread is still not implemented.
+
+`aec.uncancelled()` reports whether the frame just read went through *without*
+real cancellation — reference underrun, bypassed stream, or mic overrun. Barge-in
+gates on it so it cannot decide on raw echo.
+
+`process()` buffers to the APM's fixed 10 ms frames and returns exactly as many
+samples as the caller asked for (priming once with up to 10 ms of silence), so
+hal's 64 ms framing is unaffected. ERLE is logged periodically while the
+speaker is active — **0 dB means the canceller is doing nothing**.
+
+> The image already loads PulseAudio's `module-echo-cancel` (`setup.sh`), but
+> nothing reaches it: a udev rule sets `PULSE_IGNORE=1` on the speaker codec so
+> hal can own it, and capture goes through `arecord -D plughw:` directly. That
+> module has no reference and no client; it is not what cancels echo here.
+
 ## Emotion expression (fire-and-forget)
 
 If the device declares the `expression` capability
@@ -652,9 +787,15 @@ turn ("hello") right after a restart would leak to the main agent.
    still no output, HAL calls `POST /api/sensing/filler` and os-server speaks
    one opening filler from its cache — os-server owns the phrase pools, the
    language, and the WAV cache, so the realtime wait and the main-agent wait
-   sound alike. A normal chit-chat reply (~1 s) never reaches the timer; a turn
-   the model grounds with Google Search, which emits no token until the search
-   returns, does. **It is not armed for a short transcript in the noise-guard
+   sound alike. Whether this fires on every turn or only on slow ones is a
+   property of the model, and the default assumes a fast one: a chit-chat reply
+   arriving in ~1 s never reaches the timer, while a turn grounded with Google
+   Search does. Measure before trusting that on a given body — on `lamp-0c89`
+   (26/08/2026, `gemini-3.1-flash-live-preview` behind the campaign-api proxy)
+   no turn reached its first sentence in under 3.0 s (median 4.0 s, n=31), so
+   the filler is the only thing the user hears early and the lamp lowers the
+   delay to 0.5 s in its device `.env`. Set it from measured
+   time-to-first-sentence, not from the default. **It is not armed for a short transcript in the noise-guard
    ambiguity range** (up to `HAL_REALTIME_NOISE_GUARD_MAX_WORDS`, default 3):
    the model may explicitly reject `o`, `you.`, or `Yeah.` shortly after commit,
    and an early filler would turn that silent rejection into an audible nuisance.
@@ -854,7 +995,7 @@ is a top-level `config.json` flag:
 | `HAL_REALTIME_REQUIRE_TRANSCRIPT` | `true` | Never commit an empty-STT turn to the model. A final transcript containing only punctuation or symbols (for example `.`) is normalized to empty before gaze, speaker-ID, realtime, dispatch, or follow-up refresh; it cannot create a `voice_followup`. Real speech that nova-3 missed (short utterances) is voiced and passes the VAD/Silero guards, so committing its raw audio makes the model invent a reply to silence (a generic greeting, often with a name nobody said). When `true`, any empty-STT turn is dropped regardless of duration/voicing — silence beats a wrong reply. Set `false` to fall back to the Silero-gated audio-only path below. |
 | `HAL_REALTIME_AI_REJECT_FILTER` | `true` | Registers `reject_turn` and enables the isolated `should_drop_realtime_rejection()` policy gate. An explicit tool call drops a transcript before OS dispatch; a silent model completion, timeout, or error still falls back to the main agent. The separate deterministic noise guard is also terminal for audio it already classified as non-speech. Set `false` to disable this experimental AI filter without changing the rest of realtime routing. |
 | `HAL_REALTIME_MIN_COMMIT_DURATION_S` | `0.8` | Sessions shorter than this with no STT transcript are treated as VAD noise and not committed to the model. Only consulted when `HAL_REALTIME_REQUIRE_TRANSCRIPT=false`. |
-| `HAL_REALTIME_NOISE_GUARD_MAX_WORDS` | `3` | Extends the Silero voiced-ratio guard to turns that DO have a transcript, up to this many words. STT invents a short filler out of room noise and reports full confidence for it, so such a turn used to bypass every guard (they all only ran on an empty transcript) and commit pure noise to the model. A transcript of at most this many words is re-checked against `HAL_REALTIME_NOISE_SPEECH_RATIO` and dropped when the audio was never voiced; a real short command is voiced and still commits. Longer transcripts are never re-checked, so the voiced-ratio floor can't silence a real utterance. `0` disables. |
+| `HAL_REALTIME_NOISE_GUARD_MAX_WORDS` | `3` | Extends the Silero voiced-ratio guard to turns that DO have a transcript, up to this many words. STT invents a short filler out of room noise and reports full confidence for it, so such a turn used to bypass every guard (they all only ran on an empty transcript) and commit pure noise to the model. A transcript of at most this many words is re-checked against `HAL_REALTIME_NOISE_SPEECH_RATIO` and dropped when the audio was never voiced; a real short command is voiced and still commits. The ratio is measured over the voiced SPAN — first to last voiced chunk — not the whole buffer, because a capture carries VAD pre-roll at the front and a 200ms tail at the back, and that fixed padding dilutes a short utterance far more than a long one. Measuring the whole buffer dropped a real `Yes, that's right.` at 0.500 (`peak=1.000`), inverting the guard's purpose against the very turns it screens. Sustained noise still fails, since its voiced chunks are sparse within the span too. Longer transcripts are never re-checked, so the floor can't silence a real utterance. `0` disables. |
 | `HAL_REALTIME_SESSION_IDLE_RESET_S` | `240` | Cost control: when a turn arrives after this many seconds of silence, recycle (rebuild) the session **after** that turn so the next turn drops the per-turn context the provider re-bills on a long-lived session. A post-pause turn is effectively a new conversation; long-term continuity survives via the reloaded `summary.md`. For native-audio Gemini, this is skipped when a successful pre-turn recycle already made the same idle gap fresh. `0` disables. Reuses the zombie-recovery rebuild path. |
 | `HAL_GEMINI_SESSION_RESUMPTION` | `false` | Resume the same Gemini session across reconnects. OFF by default — the `campaign-api` proxy doesn't forward the resumption handshake, so resuming through it yields a zombie session (cold reconnects work). Enable only against an endpoint that supports it. |
 | `HAL_GEMINI_PRE_TURN_RECYCLE_S` | `120` | Gemini transport guard: when a new spoken turn starts after this much idle time, rebuild the Gemini session **before** streaming pre-roll/audio so the turn does not hit a proxy/SDK idle-dead socket. `0` disables. A successful pre-turn recycle suppresses the generic post-turn idle recycle for that same turn, so one idle gap creates at most one cost/transport rebuild. |
@@ -898,3 +1039,4 @@ is a top-level `config.json` flag:
 | `models/`, `enums/` | Input/output/event types, provider + gateway enums |
 | `resources/` | System prompts (shared + per-provider) |
 | `../voice/voice_service.py` | Integration: streams mic audio, consumes output, routes delegate/handled |
+| `../voice/aec.py` | WebRTC AEC3 on the mic path; reference tapped at the TTS output stream (all providers) |

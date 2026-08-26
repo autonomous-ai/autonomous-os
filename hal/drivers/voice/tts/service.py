@@ -20,6 +20,7 @@ from typing import Optional
 
 import numpy as np
 
+from hal.drivers.voice import aec
 from hal.drivers.voice.tts.backend import (
     TTSBackend,
     TTS_SAMPLE_RATE,
@@ -66,6 +67,14 @@ TTS_CHANNELS = 1
 # gating the mic). The watchdog aborts the stream to unblock it.
 TTS_WRITE_STALL_S = 8.0
 
+# Slice size for the paced write below. Every slice costs one blocking
+# PortAudio write plus one echo-reference write, both in Python holding the
+# GIL. At 10ms a single reply is ~1600 round trips, and on lamp-0c89 — where
+# vision keeps the interpreter's main thread pinned at ~100% — enough of them
+# lost the GIL mid-utterance to be audible as stutter. 40ms cuts that 4x and
+# still paces the reference far finer than AEC_REF_MS (500ms) of buffer.
+TTS_REF_SLICE_S = 0.040
+
 
 class _WatchedStream:
     """Thin wrapper over sounddevice.OutputStream that stamps when a blocking
@@ -78,6 +87,81 @@ class _WatchedStream:
         self._owner = owner
 
     def write(self, data):
+        self._owner._write_started_ts = time.monotonic()
+        # Echo reference, paced to PLAYBACK, not to synthesis.
+        #
+        # Covers synthesized speech, the queue drain and realtime native audio,
+        # since all three reach the device through this one stream.
+        #
+        # The reference goes in AFTER each slice has been handed to the device,
+        # one slice at a time, because `self._stream.write` blocks until the sink
+        # accepts the audio — so this loop advances at roughly the rate the
+        # speaker plays. Publishing the whole `data` up front instead (what this
+        # did until 26/08/2026) dumped a caller-sized block into a FIFO that only
+        # holds REF_MS of audio: TTS synthesises far faster than realtime, so the
+        # buffer overflowed and its overflow policy drops the OLDEST bytes —
+        # exactly the audio the microphone was about to hear. What remained was
+        # the reply's future, misaligned with the mic, and then nothing at all.
+        # Measured on lamp-0c89 that left 59% of echo-bearing mic frames with no
+        # reference, and the frames that had one cancelled just 5.4 dB. It also
+        # explains why raising REF_MS made things WORSE (3.6 dB at 1500 vs 23.2
+        # at 500): a bigger buffer lets the reference run further ahead of the
+        # speaker, so the misalignment grows instead of the coverage.
+        rate = self._owner._stream_rate
+        # Slice the caller's own object so an ndarray stays an ndarray (its
+        # dtype is what tells the device how to read the samples); len() is
+        # frames for an ndarray and bytes for a buffer, hence the two steps.
+        per_slice = max(1, int(rate * TTS_REF_SLICE_S))
+        step = per_slice * 2 if isinstance(data, (bytes, bytearray, memoryview)) else per_slice
+        try:
+            total = len(data)
+        except TypeError:
+            total = 0
+        if total == 0:
+            try:
+                return self._stream.write(data)
+            finally:
+                self._owner._write_started_ts = None
+        try:
+            result = None
+            for off in range(0, total, step):
+                chunk = data[off:off + step]
+                try:
+                    result = self._stream.write(chunk)
+                except self._owner._sd.PortAudioError:
+                    # Someone tore this stream down while we were mid-write:
+                    # the stall watchdog aborting it, stop()/barge-in, or
+                    # release_stream() handing the device to aplay. The owner
+                    # has already dropped or replaced us, so the remaining
+                    # slices have nowhere to go. Return quietly — raising here
+                    # reaches the caller's generic handler, which reopens the
+                    # device and re-speaks the whole utterance, replaying
+                    # speech the user just cancelled. A stream that is still
+                    # the owner's own is a genuine device failure: re-raise.
+                    if self._owner._stream is self:
+                        raise
+                    logger.info(
+                        "TTS write stopped mid-utterance at %d/%d — stream was "
+                        "torn down by another thread; dropping the remainder",
+                        off, total,
+                    )
+                    return result
+                # Re-stamp per slice: the stall watchdog times ONE blocking
+                # write, and a long block is now many short ones.
+                self._owner._write_started_ts = time.monotonic()
+                aec.reference_write(chunk, rate)
+            return result
+        finally:
+            self._owner._write_started_ts = None
+
+    def write_untapped(self, data):
+        """Write without recording an echo reference.
+
+        For audio that is not playback: the idle keepalive below pushes silence
+        purely to stop the codec suspending. Tapping it kept EchoReference
+        permanently non-idle, which defeated AecStream's bypass and left the APM
+        gating the microphone between every word.
+        """
         self._owner._write_started_ts = time.monotonic()
         try:
             return self._stream.write(data)
@@ -308,7 +392,13 @@ class TTSService:
                     if self._speaking:
                         continue
                     silence = np.zeros((self._stream_rate // 50, 1), dtype=np.float32)
-                    self._stream.write(silence)
+                    # Untapped: this is not playback, and recording it as an
+                    # echo reference would keep the canceller permanently awake.
+                    writer = getattr(self._stream, "write_untapped", None)
+                    if writer is not None:
+                        writer(silence)
+                    else:
+                        self._stream.write(silence)
             except Exception as e:
                 logger.debug("Silence keepalive write failed, invalidating: %s", e)
                 # Don't call _invalidate_stream() under lock recursively.

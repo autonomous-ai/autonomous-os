@@ -15,10 +15,17 @@ Two accuracy rules, both about not teaching the lamp something false:
   * The bearing tolerates a horizontal offset, recovered as `yaw + dx x scale`,
     but only a bounded one — that correction leans on the very FOV constant the
     aim was rewritten to stop trusting.
-  * The POSTURE is recorded only when the subject is vertically centred too.
-    Pitch cannot be corrected arithmetically here, so a subject high or low in
-    frame means the current pitch is NOT looking at them, and storing it would
-    teach a posture aimed at the floor.
+  * Only a FACE is learned from, never a `person` box. A body fills the frame
+    whenever the camera is aimed low, so learning from one memorises the pose
+    that was pointing at the desk and calls it "where the user is". A face in
+    frame proves the opposite by construction: this posture sees a head, so
+    restoring it will see one again.
+
+The POSTURE is recorded wherever in frame the face sat. The vertical gate that
+once guarded it was written for person boxes, where a centred torso said nothing
+about whether the head was in frame; keeping it for faces was self-defeating,
+because while the camera is aimed low every face sits near the top edge, so
+every sighting failed the gate and nothing was ever stored to restore.
 """
 
 from __future__ import annotations
@@ -179,10 +186,10 @@ def _sample_once() -> bool:
 
     bearing = yaw + dx_frac * float(config.LOOK_AIM_FOV_DEG)
     # Posture is recorded whenever a FACE was the thing seen, wherever it sat in
-    # frame. The vertical gate below was written for `person` boxes, where a
-    # centred torso said nothing about whether the head was in frame — a posture
-    # learned from one could be aimed at a chest. A face carries its own proof:
-    # this posture sees a head.
+    # frame. The vertical gate that used to stand here was written for `person`
+    # boxes, where a centred torso said nothing about whether the head was in
+    # frame — a posture learned from one could be aimed at a chest. A face
+    # carries its own proof: this posture sees a head.
     #
     # Keeping the gate for faces was self-defeating. While the camera is aimed
     # low every face sits near the top edge, so every sighting failed the gate,
@@ -192,26 +199,22 @@ def _sample_once() -> bool:
     # posture that catches the user at the frame edge is imperfect; it is also
     # incomparably better than one pointing at the desk, and the estimate's EMA
     # walks it toward centre as the framing it enables improves.
-    pose = positions if kind == "face" else (
-        positions if abs(dy_frac) <= config.BEARING_SAMPLE_MAX_DY_FRAC else None
-    )
-    if pose is not None:
-        pose = dict(pose)
-        pose["base_yaw.pos"] = bearing
+    pose = dict(positions)
+    pose["base_yaw.pos"] = bearing
 
     recorded = user_bearing.record_sighting(bearing, pose=pose)
-    note = "" if pose is not None else " (bearing only, not vertically centred)"
-    if pose is not None and abs(dy_frac) > config.BEARING_SAMPLE_MAX_DY_FRAC:
-        note = f" (posture from a face {abs(dy_frac) * 100:.0f}% off centre)"
     if recorded:
+        # dy rides along in the caption because how far off centre the face sat
+        # is what tells a reader whether this posture is a good one — the log
+        # line below already carries it, the picture did not.
         _save_snapshot(
             frame, box,
             f"recorded {kind}{_conf_txt(conf)} dx={dx_frac * 100:+.1f}% "
-            f"-> bearing {bearing:+.1f}{note}",
+            f"dy={dy_frac * 100:+.1f}% -> bearing {bearing:+.1f}",
         )
         logger.info(
-            "[bearing-sample] near %s at dx=%+.1f%% dy=%+.1f%% -> bearing %+.1f%s",
-            kind, dx_frac * 100.0, dy_frac * 100.0, bearing, note,
+            "[bearing-sample] near %s at dx=%+.1f%% dy=%+.1f%% -> bearing %+.1f",
+            kind, dx_frac * 100.0, dy_frac * 100.0, bearing,
         )
         return True
     # Rejected by the estimate's own rate limit — still worth a picture.
@@ -232,6 +235,25 @@ def _loop() -> None:
             logger.debug("[bearing-sample] skipped: %s", e)
         if _stop.wait(interval):
             return
+
+
+def sample_now() -> bool:
+    """Take a sighting immediately, instead of waiting for the next tick.
+
+    For callers who have just made the arm point at somebody and would otherwise
+    throw that away — a search that stopped on a subject knows WHERE it stopped,
+    but not whether they are centred, and record_sighting cannot be given an
+    off-centre yaw without silently biasing the estimate. So the honest move is
+    to let the sampler look for itself: it already checks framing, privacy and
+    whether the body is free.
+
+    Returns whether a sighting was actually recorded.
+    """
+    try:
+        return _sample_once()
+    except Exception as e:
+        logger.debug("[bearing-sample] on-demand sample skipped: %s", e)
+        return False
 
 
 def start() -> None:

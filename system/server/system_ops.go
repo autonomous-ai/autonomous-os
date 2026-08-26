@@ -38,7 +38,7 @@ const softwareUpdateMinInterval = 30 * time.Second
 // The staged-rollout floor (min_version) governs the AUTOMATIC worker only; an
 // operator updating one device on purpose is not subject to it.
 // POST /api/system/software-update/:target
-// target: os-server | bootstrap | web | hal | agent (resolves to the configured runtime's CLI)
+// target: os-server | bootstrap | web | hal | device | agent (resolves to the configured runtime's CLI)
 func (s *Server) softwareUpdate(c *gin.Context) {
 	target := c.Param("target")
 	// "agent" is a virtual target: the caller (the Versions card) knows there is
@@ -59,7 +59,8 @@ func (s *Server) softwareUpdate(c *gin.Context) {
 	}
 	allowed := map[string]bool{
 		"os-server": true, domain.OTAKeyBootstrap: true, "web": true, "hal": true,
-		domain.OTAKeyCodex: true, domain.OTAKeyClaudeCode: true, domain.OTAKeyOpenCode: true, domain.OTAKeyPicoClaw: true,
+		domain.OTAKeyDevice: true,
+		domain.OTAKeyCodex:  true, domain.OTAKeyClaudeCode: true, domain.OTAKeyOpenCode: true, domain.OTAKeyPicoClaw: true,
 	}
 	if !allowed[target] {
 		c.JSON(http.StatusBadRequest, serializers.ResponseError("unknown target: "+target))
