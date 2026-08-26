@@ -256,9 +256,20 @@ def test_every_box_unusable_reads_as_no_face(monkeypatch):
 # --- the rolling buffer -----------------------------------------------------
 
 
+# The autouse fixture below patches `_conversation_open`, so keep a handle on
+# the real one for the test that has to exercise it.
+_REAL_CONVERSATION_OPEN = gaze._conversation_open
+
+
 @pytest.fixture(autouse=True)
-def _clean_buffer():
+def _clean_buffer(monkeypatch):
     gaze.reset_for_test()
+    # Default the tests into an OPEN conversation, because that is the state the
+    # framing loops were written against: "a face off to the right turns the
+    # lamp" is a claim about a lamp someone is talking to. The closed case is
+    # pinned explicitly by the tests below rather than left as an ambient
+    # default, so a test that means to exercise the gate has to say so.
+    monkeypatch.setattr(gaze, "_conversation_open", lambda: True)
     yield
     gaze.reset_for_test()
 
@@ -1675,9 +1686,9 @@ def test_the_watcher_loop_still_calls_the_pitch_correction():
 
     body = inspect.getsource(gaze._loop)
     assert "_maybe_pitch(now)" in body, "the watcher must drive the pitch correction"
-    # Framing before bearing: turning to a bearing that still points at the desk
-    # finds nobody however right the bearing is.
-    assert body.index("_maybe_pitch(now)") < body.index("_maybe_repoint(now)")
+    # Framing before anything speech asks for: turning to a bearing that still
+    # points at the desk finds nobody however right the bearing is.
+    assert body.index("_maybe_pitch(now)") < body.index("_consume_speech_repoint(now)")
 
 
 # --- the correction has to actually arrive -------------------------------------
@@ -2081,17 +2092,31 @@ def test_the_cooldown_still_applies_however_the_sweep_was_triggered(sweeper):
     assert len(sweeper) == 1, f"swept {len(sweeper)} times inside the cooldown"
 
 
-def test_the_watcher_loop_looks_around_as_well_as_correcting():
-    """A source check: the failure being guarded against is nothing CALLING it,
-    which no test of the function itself can catch."""
+def test_the_watcher_loop_never_sweeps_or_repoints_of_its_own_accord():
+    """Both used to be driven from the loop on absence alone. They are not now.
+
+    A sweep and a repoint each move the body a long way, and doing either
+    because the room merely LOOKS empty is the lamp searching for someone who
+    never asked. The repoint was worse than conspicuous: it scored the
+    remembered bearing as wrong every time nobody happened to be in frame, so
+    leaning out of view three times deleted a bearing that was correct.
+
+    Both are reached from speech instead — _consume_speech_repoint calls
+    _maybe_repoint(force=True), and a repoint that misses calls
+    _maybe_sweep(confirmed_miss=True) from _verify_repoint. A source check,
+    because the failure being guarded against is a call site reappearing.
+    """
     import inspect
 
     body = inspect.getsource(gaze._loop)
-    assert "_maybe_sweep(now)" in body, "the watcher never looks around"
-    assert body.index("_maybe_pitch(now)") < body.index("_maybe_sweep(now)"), (
-        "a sweep owns the body for half a minute; it must not pre-empt a "
-        "correction that could have framed someone already in view"
+    assert "_maybe_sweep(now)" not in body, (
+        "the watcher must not sweep on absence alone"
     )
+    assert "_maybe_repoint(now)" not in body, (
+        "the watcher must not repoint on absence alone — it burns bearing strikes"
+    )
+    assert "_consume_speech_repoint(now)" in body, "speech must still reach the repoint"
+    assert "_verify_repoint(now)" in body, "a repoint must still be scored"
 
 
 def test_with_no_bearing_it_may_look_again_much_sooner(sweeper, monkeypatch):
@@ -2316,3 +2341,53 @@ def test_it_still_reacquires_once_the_face_is_actually_gone(body):
     _absent_for(config.GAZE_REPOINT_SKIP_IF_FACE_S + 1.0)
     assert gaze._maybe_repoint(gaze.time.monotonic(), force=True) is True
     assert body.moves
+
+
+# --- framing moves only while somebody is talking to the lamp ------------------
+#
+# The loops MEASURE all the time — the wake gate reads the window before speech,
+# so the samples have to already be there — but they only MOVE inside an open
+# wake-word follow-up window.
+#
+# Device-observed 2026-08-26 with nobody speaking: thirteen pan corrections in
+# twenty minutes, alternating direction, every one starting from base_yaw ~= -2.
+# idle.csv pins base_yaw at -2.40 with 1.58 deg of swing in the whole recording
+# and plays absolute frames, so each correction was overwritten by the next idle
+# frame and re-measured. Not drift — an immediate overwrite, forever.
+
+
+def test_pan_measures_but_does_not_move_with_no_conversation_open(neck, monkeypatch):
+    monkeypatch.setattr(gaze, "_conversation_open", lambda: False)
+    _fill_dx(0.20)
+    gaze._maybe_yaw(gaze.time.monotonic())
+    assert not neck.moves, "the lamp must not re-aim at a room nobody is talking in"
+
+
+def test_pitch_measures_but_does_not_move_with_no_conversation_open(neck, monkeypatch):
+    monkeypatch.setattr(gaze, "_conversation_open", lambda: False)
+    _fill_dy(-0.6)
+    gaze._maybe_pitch(gaze.time.monotonic())
+    assert not neck.moves, "the same rule as pan, for the same reason"
+
+
+def test_a_prompted_climb_still_runs_with_no_conversation_open(neck, monkeypatch):
+    """The one exception, and it is not an exception to the rule.
+
+    A prompted climb comes from a repoint that landed on a body, and that
+    repoint is itself speech-driven — somebody spoke, the lamp turned, and found
+    a torso. Refusing to lift the head then would strand it aimed at a chest for
+    the whole utterance.
+    """
+    monkeypatch.setattr(gaze, "_conversation_open", lambda: False)
+    _fill_dy(-0.5, from_face=False, n=4)
+    gaze._maybe_pitch(gaze.time.monotonic(), prompt=True)
+    assert neck.moves, "a climb the repoint asked for must still happen"
+
+
+def test_a_missing_voice_service_reads_as_no_conversation(monkeypatch):
+    """Fail closed. Guessing "yes" would restore the unasked movement."""
+    import hal.app_state as state
+
+    monkeypatch.setattr(state, "voice_service", None, raising=False)
+    monkeypatch.setattr(gaze, "_conversation_open", _REAL_CONVERSATION_OPEN)
+    assert gaze._conversation_open() is False

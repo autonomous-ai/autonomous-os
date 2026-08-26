@@ -277,6 +277,19 @@ class VoiceService:
     def set_music_service(self, music_service) -> None:
         self._music = music_service
 
+    def conversation_focus_active(self) -> bool:
+        """Whether a wake-word follow-up window is currently open.
+
+        Public because gaze reads it to decide whether the lamp may re-aim: the
+        framing loops move the body, and moving it unasked in an empty room is
+        the lamp fidgeting rather than paying attention. Mirrors the guard every
+        internal caller uses, so a device with the wake word off reports no
+        conversation rather than a permanently open one.
+        """
+        return bool(
+            hal_config.WAKEWORD_ENABLED and self._wakeword_focus.is_active()
+        )
+
     def grant_wakeword_focus(self, source: str = "button",
                              timeout_s: float | None = None) -> bool:
         """Open the wake-word follow-up window without a spoken wake phrase.

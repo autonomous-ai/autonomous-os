@@ -628,6 +628,37 @@ def _verify_landed(svc: Any, target: Dict[str, float], now: float,
             config.GAZE_PITCH_STALL_REST_S,
         )
     return short
+def _conversation_open() -> bool:
+    """Whether a wake-word follow-up window is currently open.
+
+    The framing loops MEASURE all the time — the wake gate reads the window
+    before speech, so the samples have to be there already — but they only MOVE
+    while a conversation is open. Re-aiming an empty room is the lamp fidgeting,
+    and on this arm it cannot even persist: idle plays absolute frames and pins
+    base_yaw at about -2.4 (1.58 deg of swing in the whole recording), so a pan
+    correction is overwritten by the next idle frame and re-measured, forever.
+    Device-observed 2026-08-26: thirteen pan corrections in twenty minutes with
+    nobody speaking, alternating direction, every one starting from idle's own
+    band.
+
+    Released is therefore free: stop correcting and idle reclaims the arm by
+    itself within a frame. There is nothing to restore and no ownership to drop.
+
+    Fails CLOSED when voice is unavailable — no conversation can be open on a
+    device with no voice service, and guessing "yes" would restore exactly the
+    unasked movement this exists to stop.
+    """
+    try:
+        import hal.app_state as state
+
+        voice = getattr(state, "voice_service", None)
+        check = getattr(voice, "conversation_focus_active", None)
+        return bool(check()) if callable(check) else False
+    except Exception as e:
+        logger.debug("[gaze] conversation check skipped: %s", e)
+        return False
+
+
 def following_a_face(svc: Any) -> bool:
     """Whether the servo writes are a tracking session pursuing the user.
 
@@ -937,6 +968,11 @@ def _maybe_yaw(now: float) -> None:
             "already centred enough", now,
             f"dx={dx * 100:+.0f}% within +/-{config.GAZE_YAW_DEAD_ZONE_FRAC * 100:.0f}%",
         )
+        return
+    # Measured, worth acting on — but only while someone is actually talking to
+    # the lamp. See _conversation_open.
+    if not _conversation_open():
+        _yaw_quiet("no conversation open", now, f"dx={dx * 100:+.0f}%")
         return
 
     import hal.app_state as state
@@ -1259,6 +1295,12 @@ def _maybe_pitch(now: float, *, prompt: bool = False) -> None:
         return
     if (now - _last_pitch_t) < config.GAZE_PITCH_COOLDOWN_S:
         _pitch_quiet("cooling down", now)
+        return
+    # As with pan: measure always, move only inside a conversation. `prompt` is
+    # the one exception — a repoint that landed on a body asked for the climb,
+    # and that request is already speech-driven.
+    if not prompt and not _conversation_open():
+        _pitch_quiet("no conversation open", now, f"dy={dy * 100:+.0f}%")
         return
     # The fallback is a guess, not a measurement — a clipped torso says "the head
     # is up there somewhere" and never how far. So a torso-driven correction is a
@@ -1757,12 +1799,18 @@ def _loop() -> None:
                 # and both clear their own window, so running them together
                 # would have each measuring a pose the other has just left.
                 _maybe_yaw(now)
-                # Last of the three, and gated on a long absence: a sweep owns
-                # the body for half a minute, so it must never pre-empt a
-                # correction that could have framed someone already in view.
-                _maybe_sweep(now)
+                # Neither the sweep nor the repoint is driven from here any
+                # more. Both move the body a long way, and doing that because
+                # the room merely looks empty is the lamp searching for someone
+                # who never asked for it — which also scored the remembered
+                # bearing as wrong on evidence that says nothing about whether
+                # it is: lean out of frame three times and a correct bearing is
+                # deleted. Both are now reached from speech instead:
+                #   _consume_speech_repoint -> _maybe_repoint(force=True)
+                #     -> _verify_repoint -> _maybe_sweep(confirmed_miss=True)
+                # so the lamp turns and searches when somebody speaks and it
+                # cannot see them, and stays still otherwise.
                 _consume_speech_repoint(now)
-                _maybe_repoint(now)
                 _verify_repoint(now)
             except Exception as e:  # a background watcher must never take HAL down
                 logger.debug("[gaze] sample skipped: %s", e)
