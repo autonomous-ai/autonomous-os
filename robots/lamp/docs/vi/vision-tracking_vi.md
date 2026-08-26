@@ -637,22 +637,6 @@ vòng một chu kỳ nó kéo camera về đúng pose lúc ghi — trên bàn l�
 Cố ý chỉ áp cho idle — một recording cảm xúc có thể quăng đầu đi đâu cũng được, vì tới lúc nó chạy thì
 user đã được nghe rồi; thứ phải đúng chỉ là pose *nghỉ* phải nhìn được người sắp nói.
 
-Một anchor nêu **cả hai trục**, cả độ cao lẫn hướng. Khớp bị bỏ ra khỏi anchor không phải là được giữ
-nguyên — nó trôi về baseline của recording — nên anchor chỉ-pitch thật ra xoá đi những cú quay đã hoàn
-tất: một hiệu chỉnh ngang neo `base_yaw`/`wrist_roll`, rồi lần hiệu chỉnh *dọc* kế tiếp dựng lại anchor
-chỉ từ các khớp pitch, và idle kéo hướng về giữa phòng. Hướng cũng được giữ cả khi nửa *dọc* của pose
-nhớ được bị từ chối vì đã cũ: thứ mà bộ nhớ bearing chắc chắn đúng là *quay về phía nào*.
-`HAL_GAZE_IDLE_ANCHOR_YAW=false` trả lại anchor chỉ-pitch.
-
-**Các vòng canh khung đứng yên trong lúc hội thoại.** Canh mặt vào giữa là để phục vụ quyết định
-wake — cửa gate cần một khuôn mặt đo được hướng. Khi cửa sổ follow-up đã mở thì quyết định đó xong
-rồi, nên mọi hiệu chỉnh tiếp theo đang trả lời một câu hỏi không ai hỏi, mà lại trả bằng thứ dễ thấy
-nhất: đèn nhích theo từng cú nghiêng người giữa câu nói. Với `HAL_GAZE_HOLD_STILL_IN_CONVERSATION`,
-vòng pitch và pan dừng trong lúc cửa sổ mở. Watcher không bị đụng tới — vẫn lấy mẫu, và gate wake vẫn
-quyết định và vẫn log `WOULD_WAKE`; chỉ phần chạy servo là dừng. Điều này an toàn được là nhờ idle
-anchor: pose nghỉ vốn đã là pose thấy mặt lần cuối, nên đèn giữ hướng về user suốt cuộc trò chuyện mà
-không cần hiệu chỉnh lần nào. Một cú leo được *yêu cầu* thì vẫn chạy.
-
 | Tham số | Mặc định | Ý nghĩa |
 |---|---|---|
 | `HAL_GAZE_PITCH` | `true` | Bật/tắt canh giữa theo chiều dọc. |
@@ -669,8 +653,6 @@ không cần hiệu chỉnh lần nào. Một cú leo được *yêu cầu* thì
 | `HAL_GAZE_PITCH_STALL_REST_S` | 60 | Khớp kẹt bị loại ra bao lâu. Khớp với thời gian hồi phục đo được. |
 | `HAL_GAZE_PITCH_STALL_BACKOFF_DEG` | 2.0 | Dừng trước chỗ nó đã kẹt. |
 | `HAL_GAZE_IDLE_ANCHOR` | `true` | Cho idle thở quanh pose tốt gần nhất. |
-| `HAL_GAZE_IDLE_ANCHOR_YAW` | `true` | Neo cả hướng chứ không chỉ độ cao. Tắt thì các khớp yaw bị bỏ ra — nghĩa là chúng trôi về recording, không phải được để yên. |
-| `HAL_GAZE_HOLD_STILL_IN_CONVERSATION` | `true` | Dừng vòng pitch và pan trong lúc cửa sổ follow-up mở. Watcher và gate wake vẫn chạy. |
 | `HAL_GAZE_SNAPSHOT` / `_KEEP` | `true` / 40 | Lưu khung hình có chú thích cạnh mỗi lần hiệu chỉnh, trong `SNAPSHOT_PERSIST_DIR/sensing_gaze/`. Log nói trung vị là −0,41 chiều cao khung; nó không nói được đó là user, một đồng nghiệp, hay một cái áo khoác vắt trên ghế. |
 
 ### Leo tìm cái mặt nằm trên khung hình
