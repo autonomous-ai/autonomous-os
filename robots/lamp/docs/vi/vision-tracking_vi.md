@@ -665,9 +665,9 @@ xa bao nhiêu. Điều khiển tỉ lệ cần một tín hiệu sai số; đây
 `/var/lib/hal/face_height.json` (`HAL_FACE_HEIGHT_PATH`), cố ý **tách khỏi** `user_bearing.json`.
 Bearing trả lời *"user ở hướng nào?"* và được look-aim, search và repoint đọc; ghi độ cao vào đó sẽ đổi
 luôn thứ mà look-aim khôi phục ở mỗi lần gọi. File này trả lời câu khác — *"camera phải ngắm cao bao
-nhiêu để thấy một cái đầu từ chỗ này?"* — và chỉ vòng lặp pitch của gaze đọc nó. Hai thứ cũng phai theo
-hai kiểu: bearing là phỏng đoán về một con người, mà người thì di chuyển, nên nó phai; độ cao là một sự
-thật về đồ đạc. Toàn bộ pose được ghi vì một góc pitch chỉ có nghĩa khi đi kèm phần còn lại của tư thế,
+nhiêu để thấy một cái đầu từ chỗ này?"* — và chỉ vòng lặp pitch của gaze đọc nó. Hai thứ cũng cũ đi theo
+hai kiểu: bearing là phỏng đoán về một con người, mà người thì di chuyển, nên nó bị loại bỏ khi ngừng
+hoạt động (ba lần dự đoán hỏng); độ cao là một sự thật về đồ đạc, và cứ thế giữ nguyên. Toàn bộ pose được ghi vì một góc pitch chỉ có nghĩa khi đi kèm phần còn lại của tư thế,
 nhưng **chỉ các khớp pitch được áp khi khôi phục** — yaw thuộc về bearing và vòng xoay ngang, trả nó về
 đây là giao cùng một vô-lăng cho hai hệ thống.
 
@@ -738,7 +738,7 @@ tại chỗ.
 
 ### Bearing người dùng đã ghi nhớ
 
-`hal/drivers/tracking/user_bearing.py` gộp các lần nhìn thấy thành một ước lượng suy giảm duy nhất
+`hal/drivers/tracking/user_bearing.py` gộp các lần nhìn thấy thành một ước lượng duy nhất
 tại `/var/lib/hal/user_bearing.json` (`HAL_USER_BEARING_PATH`). Một chỗ duy nhất, không phải histogram
 — lamp chỉ bao giờ cần một tư thế để quay về.
 
@@ -750,16 +750,35 @@ thế chúi xuống sàn sẽ quét sàn theo vòng tròn dù yaw có đúng t�
 tốc độ như yaw; khi phát hiện dời chỗ thì tư thế bị thay hẳn chứ không lấy trung bình, vì tư thế cũ mô
 tả chỗ cũ.
 
+**Độ tin cậy đo mức ước lượng đã được HỌC tới đâu, không phải nó mới tới đâu.** Nó tăng theo số lần
+nhìn thấy — đạt ~1.0 sau `CONFIDENCE_FULL_SAMPLES` (8) — rồi **đứng yên ở đó**. Nó không suy giảm theo
+thời gian. Độ mới vẫn được báo ra, dưới dạng `age_s`, cho bất kỳ caller nào cần; hiện chưa có chỗ nào
+chặn theo nó.
+
+Đây là một cú đảo chiều có chủ ý. Trước đây độ tin cậy giảm một nửa mỗi sáu tiếng, theo lập luận rằng
+một ước lượng cũ nên tự khai là cũ thay vì trông có vẻ đáng tin. Lập luận thì đúng, còn số học thì
+không: các lần nhìn thấy tới chậm hơn nhiều so với tốc độ chu kỳ bán rã ăn mất chúng, nên trên máy
+thật ước lượng mất nhanh hơn được và nằm lì dưới cái ngưỡng cho phép dùng nó — một bearing không ai
+được phép tra tới không phải là một bearing thận trọng, đó là một bearing không tồn tại.
+
+Việc phát hiện cũ nay là nhiệm vụ của đường dự-đoán-hỏng, vốn là tín hiệu sắc nét hơn: thay vì đoán từ
+một cái đồng hồ rằng bearing đã hỏng, lamp quay về đó, nhìn, rồi chấm điểm thứ nó thấy. Ba lần hỏng
+xảy ra cụm nhau sẽ loại bỏ nó hẳn — xem *Phát hiện lamp đã bị dời chỗ* bên dưới. Một bearing hoặc vẫn
+chạy được, hoặc bị bỏ; nó không còn phai dần vào vùng xám vừa quá yếu để dùng vừa quá mạnh để thay.
+
 Các lần nhìn thấy đi vào đây theo hai đường:
 
 - **Từ một lần look aim**, khi đối tượng kết thúc trong phạm vi **2%** quanh tâm khung — chặt hơn cả
   dung sai căn khung của chính pha ngắm, và cố ý như vậy: ở tâm khung thì vị trí servo **chính là**
   bearing, không có phép quy đổi pixel→góc nào và do đó không phụ thuộc vào hằng số FOV đang tranh cãi.
 - **Từ bộ lấy mẫu thụ động** (`bearing_sampler.py`), mỗi `HAL_BEARING_SAMPLE_INTERVAL_S` (300 s).
-  Đường chỉ-qua-aim ghi được khoảng hai mẫu một ngày so với chu kỳ bán rã độ tin cậy sáu tiếng — nó
-  suy giảm nhanh hơn tốc độ học, nên thứ duy nhất cứu được một lần look khi không thấy ai lại chẳng
-  bao giờ đủ tự tin để được tra tới. Bộ lấy mẫu **không bao giờ làm lamp chuyển động**: nó đọc một
-  khung hình và vị trí servo hiện tại, rồi suy ra bearing bằng số học `yaw + dx × scale`.
+  Đường chỉ-qua-aim ghi được khoảng hai lần nhìn thấy một ngày, quá chậm để dựng nên một ước lượng mà
+  pha ngắm chịu dùng — độ tin cậy lớn lên theo số lần nhìn thấy, và với nhịp đó một máy mới toanh mất
+  nhiều ngày nằm dưới ngưỡng, trong khi thứ duy nhất cứu được một lần look khi không thấy ai thì nằm
+  không. (Trước đây còn tệ hơn, khi độ tin cậy còn suy giảm theo chu kỳ bán rã sáu tiếng: ước lượng
+  mất nhanh hơn được và không bao giờ ổn định nổi. Phần suy giảm đó nay đã bỏ — xem bên dưới.) Bộ lấy
+  mẫu **không bao giờ làm lamp chuyển động**: nó đọc một khung hình và vị trí servo hiện tại, rồi suy
+  ra bearing bằng số học `yaw + dx × scale`.
 
 Bộ lấy mẫu thà từ chối còn hơn đoán. Độ lệch ngang chỉ được chấp nhận tới
 `HAL_BEARING_SAMPLE_MAX_DX_FRAC` (0.25), vì phép hiệu chỉnh đó dựa vào đúng cái hằng số FOV mà aim

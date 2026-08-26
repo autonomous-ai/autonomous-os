@@ -1,7 +1,7 @@
 """Remember roughly where the user is, as a single servo yaw.
 
 The lamp only ever needs ONE angle to turn to, so this deliberately stores one
-decaying estimate rather than a per-user, per-hour histogram. When the user is
+estimate rather than a per-user, per-hour histogram. When the user is
 visible the offset is computed live and this is not consulted at all; it exists
 for the moments they are NOT visible.
 
@@ -29,7 +29,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import math
 import os
 import tempfile
 import time
@@ -138,11 +137,18 @@ PREDICTION_MISS_LIMIT: int = 3
 # spread over weeks. Without a window those look identical after enough time, and
 # a perfectly good bearing gets dropped for three unrelated absences months apart.
 MISS_STREAK_WINDOW_S: float = 24 * 3600.0
-# Confidence reaches ~1.0 after this many sightings...
+# Confidence reaches ~1.0 after this many sightings, and STAYS there.
+#
+# It deliberately does not decay with age. Confidence answers "how well is this
+# estimate learned", not "how recent is it" — age is reported separately as
+# `age_s` for anyone who wants it. Staleness is caught by the prediction-failure
+# path instead (MISS_STREAK above): a bearing that stops working is dropped
+# outright, which is a sharper and more honest signal than a number sagging on a
+# timer. The old six-hour half-life also fought the sampler that feeds this
+# file — an aim-only device recorded roughly two sightings a day, so the
+# estimate decayed faster than it could learn and the bearing was usually
+# refused for low confidence exactly when it was needed.
 CONFIDENCE_FULL_SAMPLES: int = 8
-# ...and decays with this time constant once they stop, so a stale estimate
-# reports itself as stale instead of looking authoritative.
-CONFIDENCE_HALFLIFE_S: float = 6 * 3600.0
 
 
 @dataclass
@@ -238,10 +244,10 @@ def _write_raw(d: dict) -> bool:
         return False
 
 
-def _confidence(samples: int, age_s: float) -> float:
-    grown = min(1.0, samples / float(CONFIDENCE_FULL_SAMPLES)) if samples > 0 else 0.0
-    decay = math.exp(-max(0.0, age_s) / CONFIDENCE_HALFLIFE_S)
-    return round(grown * decay, 4)
+def _confidence(samples: int) -> float:
+    if samples <= 0:
+        return 0.0
+    return round(min(1.0, samples / float(CONFIDENCE_FULL_SAMPLES)), 4)
 
 
 def _blend_pose(
@@ -290,7 +296,7 @@ def record_sighting(
             return False
         prev_bearing = float(prev.get("bearing_deg", yaw_deg))
         samples = int(prev.get("samples", 0)) + 1
-        settled = _confidence(int(prev.get("samples", 0)), t - last) >= OUTLIER_MIN_CONFIDENCE
+        settled = _confidence(int(prev.get("samples", 0))) >= OUTLIER_MIN_CONFIDENCE
 
         if settled and abs(yaw_deg - prev_bearing) > OUTLIER_DEG:
             streak = int(prev.get("outlier_streak", 0)) + 1
@@ -324,7 +330,7 @@ def record_sighting(
         "calibration": _calibration_fingerprint(),
         "bearing_deg": round(bearing, 3),
         "pose": blended,
-        "confidence": _confidence(samples, 0.0),
+        "confidence": _confidence(samples),
         "samples": samples,
         "outlier_streak": streak,
         "updated": t,
@@ -338,7 +344,11 @@ def record_sighting(
 
 
 def read_estimate(now: Optional[float] = None) -> Optional[BearingEstimate]:
-    """Current estimate with confidence decayed to now, or None if never set."""
+    """Current estimate, or None if never set.
+
+    `confidence` reflects how many sightings built the estimate and does NOT
+    fall with age; `age_s` carries the recency for callers that want it.
+    """
     d = _load_raw()
     if not d:
         return None
@@ -348,7 +358,7 @@ def read_estimate(now: Optional[float] = None) -> Optional[BearingEstimate]:
     samples = int(d.get("samples", 0))
     return BearingEstimate(
         bearing_deg=float(d.get("bearing_deg", 0.0)),
-        confidence=_confidence(samples, age),
+        confidence=_confidence(samples),
         samples=samples,
         updated=updated,
         age_s=age,

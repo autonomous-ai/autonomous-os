@@ -59,7 +59,15 @@ def test_rate_limit_drops_rapid_sightings():
         assert ub.read_estimate(now=t + 1.0).samples == 1
 
 
-def test_confidence_decays_with_age():
+def test_confidence_does_not_decay_with_age():
+    """Confidence measures how well the estimate is LEARNED, not how recent.
+
+    It used to halve every six hours, which fought the thing that feeds this
+    file: a device recording ~2 sightings a day decayed faster than it learned,
+    so the bearing was refused for low confidence exactly when it was needed.
+    Staleness is now the prediction-failure path's job (see the miss-streak
+    tests) — a bearing that stops working is dropped outright rather than fading.
+    """
     with tempfile.TemporaryDirectory() as d, _with_path(d):
         t = 1_000_000.0
         for i in range(ub.CONFIDENCE_FULL_SAMPLES):
@@ -67,7 +75,21 @@ def test_confidence_decays_with_age():
         fresh = ub.read_estimate(now=t + 8 * 60.0).confidence
         stale = ub.read_estimate(now=t + 8 * 60.0 + 48 * 3600).confidence
         assert fresh > 0.9
-        assert stale < fresh / 4.0, "a two-day-old estimate must not look authoritative"
+        assert stale == fresh, "age must not move confidence"
+        # ...but the age is still reported, so a caller that cares can ask.
+        assert ub.read_estimate(now=t + 8 * 60.0 + 48 * 3600).age_s > 47 * 3600
+
+
+def test_confidence_still_grows_with_sightings():
+    with tempfile.TemporaryDirectory() as d, _with_path(d):
+        t = 1_000_000.0
+        ub.record_sighting(15.0, now=t)
+        one = ub.read_estimate(now=t).confidence
+        for i in range(1, ub.CONFIDENCE_FULL_SAMPLES):
+            ub.record_sighting(15.0, now=t + i * 60.0)
+        full = ub.read_estimate(now=t + 8 * 60.0).confidence
+        assert 0.0 < one < full
+        assert full > 0.9
 
 
 def test_no_estimate_reads_as_none_not_zero():

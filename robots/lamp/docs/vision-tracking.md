@@ -668,8 +668,9 @@ never how far. Proportional control needs an error signal; this is a search.
 `user_bearing.json`. The bearing answers *"which way is the user?"* and is read by look-aim, the
 search and the repoint; writing height into it would change what look-aim restores on every call. This
 answers a different question — *"how high must this camera aim to see a head from here?"* — and only
-the gaze pitch loop reads it. They also decay differently: a bearing is a guess about a person, who
-moves, so it fades; a height is a fact about the furniture. The full pose is recorded because a pitch
+the gaze pitch loop reads it. They also go stale differently: a bearing is a guess about a person, who
+moves, so it is retired when it stops working (three failed predictions); a height is a fact about
+the furniture, and simply keeps. The full pose is recorded because a pitch
 angle only means something alongside the rest of the posture, but **only the pitch joints are applied
 on restore** — yaw belongs to the bearing and the pan loop, and handing it back here would give two
 subsystems the same steering wheel.
@@ -739,7 +740,7 @@ sitting on the bearing. A successful sweep samples a fresh bearing on the spot.
 
 ### Remembered user bearing
 
-`hal/drivers/tracking/user_bearing.py` folds sightings into one decaying estimate at
+`hal/drivers/tracking/user_bearing.py` folds sightings into one estimate at
 `/var/lib/hal/user_bearing.json` (`HAL_USER_BEARING_PATH`). One place, not a histogram — the lamp
 only ever needs one pose to return to.
 
@@ -751,16 +752,36 @@ head left pointing at the floor sweeps the floor in a circle no matter how right
 joint gets its own EMA at the same rate as the yaw; a relocation replaces the pose outright rather
 than averaging, since the old posture describes the old place.
 
+**Confidence measures how well learned the estimate is, not how recent.** It rises with sightings —
+~1.0 after `CONFIDENCE_FULL_SAMPLES` (8) — and then **stays there**. It does not decay with age.
+Recency is still reported, as `age_s`, for any caller that wants it; nothing currently gates on it.
+
+That is a deliberate reversal. Confidence used to halve every six hours, on the reasoning that a
+stale estimate should report itself as stale rather than look authoritative. The reasoning was sound
+and the arithmetic was not: sightings arrive far more slowly than the half-life consumed them, so on
+a real device the estimate lost ground faster than it gained it and sat permanently below the
+threshold that would let anything use it — a bearing nobody was allowed to consult is not a cautious
+bearing, it is an absent one.
+
+Staleness is now the prediction-failure path's job instead, which is a sharper signal: rather than
+guessing from a clock that a bearing has gone bad, the lamp turns to it, looks, and scores what it
+finds. Three clustered failures retire it outright — see *Noticing that the lamp has been moved*
+below. A bearing either still works or it is dropped; it no longer fades into a grey zone where it is
+too weak to use and too strong to replace.
+
 Sightings reach it two ways:
 
 - **From a look aim**, when the subject ends within **2%** of frame centre — tighter than the aim's
   own framing tolerance, and deliberately so: at frame centre the servo position **is** the bearing,
   with no pixel→angle conversion and therefore no dependency on the disputed camera FOV constant.
 - **From the passive sampler** (`bearing_sampler.py`), every `HAL_BEARING_SAMPLE_INTERVAL_S` (300 s).
-  The aim-only path recorded roughly two samples a day against a six-hour confidence half-life — it
-  decayed faster than it learned, so the one thing that rescues a look when nobody is visible was
-  never confident enough to be consulted. The sampler **never moves the lamp**: it reads a frame and
-  the current servo positions, and recovers the bearing arithmetically as `yaw + dx × scale`.
+  The aim-only path recorded roughly two sightings a day, which is too slow to build an estimate the
+  aim will act on — confidence grows with sightings, and at that rate a fresh device spends days
+  below the threshold with the one thing that rescues a look when nobody is visible sitting unused.
+  (It was worse still when confidence also decayed on a six-hour half-life: the estimate lost ground
+  faster than it gained it and could never settle. That decay has since been removed — see below.)
+  The sampler **never moves the lamp**: it reads a frame and the current servo positions, and
+  recovers the bearing arithmetically as `yaw + dx × scale`.
 
 The sampler declines rather than guess. Horizontal offset is tolerated only to
 `HAL_BEARING_SAMPLE_MAX_DX_FRAC` (0.25), because that correction leans on the very FOV constant the
