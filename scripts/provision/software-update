@@ -321,6 +321,52 @@ restore_hal_backup() {
 }
 
 [ "$(id -u)" -ne 0 ] && { echo "Run as root."; exit 1; }
+
+# Hand the work to a transient systemd SERVICE and wait for it.
+#
+# Every branch stops the component it replaces, and three of them stop whatever
+# is hosting the caller: `os-server` and `device` stop os-server, which serves
+# the web CLI; `web` stops nginx, which carries that CLI's connection. Run
+# inline, the updater is a child of that shell, so the stop kills its cgroup —
+# SIGKILL, no trap, update abandoned half-done. Device-observed 26/08/2026 on
+# lamp-0c89: `software-update device` published the profile and died before
+# applying its rootfs, leaving os-server down and a staging dir behind.
+#
+# A transient service has no client process to kill: systemd owns it, in its own
+# cgroup, so it runs to completion no matter what happens to the caller. --wait
+# keeps the familiar CLI behaviour — the shell blocks and gets the real exit
+# code — but if that shell dies, the update carries on instead of aborting.
+#
+# NOT `--scope`: a scope IS owned by the systemd-run client, which lives in the
+# caller's cgroup, so killing the caller stops the scope. That was tried on
+# 26/08/2026 and made things worse (it broke the SSH-hangup path that used to
+# recover cleanly), so do not swap this back.
+#
+# Output goes to the journal rather than the terminal; the line below says how
+# to follow it. Probe first so a box without systemd-run still updates inline.
+if [ -z "${SOFTWARE_UPDATE_DETACHED:-}" ] && command -v systemd-run >/dev/null 2>&1; then
+  SU_UNIT="software-update-$1-$$"
+  if systemd-run --unit="probe-$SU_UNIT" --collect --quiet --wait \
+      --service-type=oneshot -- /bin/true >/dev/null 2>&1; then
+    SELF="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+    # Carry the caller's overrides across. A transient unit starts from a clean
+    # environment, so anything the operator exported would be dropped —
+    # SILENTLY, which is the dangerous part: `OTA_METADATA_URL=<staging-feed>
+    # software-update web` ran against the PRODUCTION feed and reported success
+    # (measured 26/08/2026). Every variable this script reads from the
+    # environment belongs in this list; keep it in step with the `${VAR:-}`
+    # reads above.
+    SU_ENV=()
+    for v in OTA_METADATA_URL HAL_UV_CACHE; do
+      [ -z "${!v:-}" ] || SU_ENV+=("--setenv=$v=${!v}")
+    done
+    echo "[software-update] running as $SU_UNIT.service — follow with: journalctl -fu $SU_UNIT"
+    exec systemd-run --unit="$SU_UNIT" --collect --quiet --wait \
+      --service-type=oneshot --setenv=SOFTWARE_UPDATE_DETACHED=1 \
+      "${SU_ENV[@]}" -- "$SELF" "$@"
+  fi
+  echo "[software-update] transient units unavailable — running inline" >&2
+fi
 # One update at a time, whoever asks. Two concurrent runs destroy each other:
 # the component branches move the installed tree to <name>.previous, so a second
 # run `rm -rf`s the first run's ONLY backup and then fails on the missing source
