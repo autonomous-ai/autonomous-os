@@ -79,7 +79,7 @@ POST /led/effect
 |--------|-------|--------|
 | `breathing` | Sine-wave brightness lên xuống | color, speed |
 | `candle` | Nến lung linh ngẫu nhiên | color |
-| `rainbow` | Xoay hue qua toàn bộ strip | speed |
+| `rainbow` | Xoay hue qua toàn bộ strip | brightness (0.0-1.0, mức sáng), speed — tự sinh hue, bỏ qua `color` |
 | `notification_flash` | Flash nhanh 3 lần | color |
 | `pulse` | Pulse đơn từ tâm ra ngoài | color, speed |
 

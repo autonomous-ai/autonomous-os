@@ -21,13 +21,13 @@ Nguồn: màu trong bảng là màu **lamp** thực sự hiển thị — `robot
 | `caring` | 3, 1, 2 | `#030102` hồng dịu | overlay | breathing | 0.4 | nod |
 | `acknowledge` | 0, 3, 0 | `#000300` xanh lá dịu | overlay | breathing | 0.5 | acknowledge |
 | `stretching` | 3, 2, 1 | `#030201` amber ấm dịu | overlay | breathing | 0.6 | stretching |
-| `music_strong` | 8, 12, 8 | `#080c08` xanh lá nhạt (màu vô tác dụng — xem dưới) | base | rainbow | 1.0 | music_rock |
+| `music_strong` | base 8, 12, 8 (không dùng) | hue do effect tự quét; mức sáng lấy từ `brightness` 0.012 — xem dưới | overlay | rainbow | 1.0 | music_rock |
 | `music_chill` | 0, 3, 2 | `#000302` aqua dịu | overlay | breathing | 0.3 | music_rock \| music_groove \| music_jazz \| music_waltz |
 | `scan` | 0, 2, 3 | `#000203` xanh trời dịu | overlay | pulse | 0.3 | scanning |
 | `nod` | 2, 3, 1 | `#020301` xanh-vàng dịu | overlay | breathing | 0.5 | nod |
 | `headshake` | 3, 0, 0 | `#030000` đỏ dịu | overlay | breathing | 0.5 | headshake |
 
-Màu của `music_strong` là vô tác dụng: nó chạy effect `rainbow`, mà `rainbow()` trong `hal/drivers/rgb/effects.py` bỏ qua tham số `color` và tự quét trọn vòng hue — nên overlay không buồn set màu cho nó.
+Màu của `music_strong` là vô tác dụng: nó chạy effect `rainbow`, mà `rainbow()` trong `hal/drivers/rgb/effects.py` tự quét trọn vòng hue. Mức sáng của nó đến từ field riêng `brightness` (0.0-1.0, đúng field mà bảng scene dùng), lamp đặt 0.012.
 
 ## Palette low-glare theo từng emotion
 
@@ -76,7 +76,16 @@ Ngày 24/08/2026 peak bị hạ ba lượt trong cùng một ngày, mỗi lượ
 Ghi chú kỹ thuật:
 
 - **`shock` được override dù không thuộc 6 nhóm hue.** Nó dùng `[2, 2, 2]`, giữ cue báo động trắng dưới cap test.
-- **`music_strong` cố tình không có** trong bảng override. Nó dùng effect `rainbow`, mà `rainbow()` trong `hal/drivers/rgb/effects.py` bỏ qua hoàn toàn tham số `color` — nó tự quét trọn vòng hue. Gán màu cho nó là vô nghĩa.
+- **`music_strong` được override qua `brightness`, không phải `color`.** Nó là cue duy nhất chạy effect `rainbow`, mà `rainbow()` trong `hal/drivers/rgb/effects.py` tự sinh hue nên không bao giờ đọc `color` — trước khi có `brightness`, nó luôn vẽ ở value 1.0 và là cue duy nhất không palette per-device nào với tới được: chạy thẳng lên trần `light.max_brightness` (120) trên cả 32 pixel, gấp ~40 lần mọi emotion khác. `brightness` (0.0-1.0, cùng field bảng scene dùng) giờ là mức sáng duy nhất của nó.
+
+  Có HAI cue rainbow quanh chuyện nhạc, đến từ hai chỗ khác nhau, và cả hai đều đọc con số này:
+
+  | Ai bật | Effect | Kéo dài |
+  |--------|--------|---------|
+  | agent gọi `POST /emotion {"emotion": "music_strong"}` (xem `skills/emotion/SKILL.md`) | `rainbow` | một cue, ~16 giây rồi restore |
+  | `_on_music_play_start()` trong `hal/app_state.py`, khi user chưa set màu LED | `speaking_wave_rainbow` | suốt cả bài |
+
+  `speaking_wave_rainbow` cũng tự sinh hue nên lấy đúng `brightness` của `music_strong`, envelope VU chạy dưới mức đó. Route nhạc không tự phát emotion `music_strong` — agent phát.
 - **Bảng này nằm trong `robots/lamp/presets.json`**, overlay riêng cho device, merge từng field lúc boot qua `hal/board/presets_overlay.py` — `hal/presets.py` *không* bị sửa. Nên các robot khác (reachy, intern) vẫn giữ palette gốc, và muốn trả lamp về palette gốc thì chỉ cần xoá section `emotion` trong file JSON đó.
 - **Đừng nhầm `EMO_IDLE` với `AMBIENT_RESTING_LED`.** Cái sau là `[0, 0, 0]` (quyết định sản phẩm 30/07/2026: strip lúc nghỉ thì tắt hẳn); `EMO_IDLE` là một emotion agent chủ động phát ra và vẫn có màu.
 

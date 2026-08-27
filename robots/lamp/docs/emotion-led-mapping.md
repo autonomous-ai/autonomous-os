@@ -21,13 +21,13 @@ Source: colors are what the **lamp** actually shows — `robots/lamp/presets.jso
 | `caring` | 3, 1, 2 | `#030102` dim pink | overlay | breathing | 0.4 | nod |
 | `acknowledge` | 0, 3, 0 | `#000300` dim green | overlay | breathing | 0.5 | acknowledge |
 | `stretching` | 3, 2, 1 | `#030201` dim warm amber | overlay | breathing | 0.6 | stretching |
-| `music_strong` | 8, 12, 8 | `#080c08` pale green (no effect — see below) | base | rainbow | 1.0 | music_rock |
+| `music_strong` | base 8, 12, 8 (unused) | hue swept by the effect; level from `brightness` 0.012 — see below | overlay | rainbow | 1.0 | music_rock |
 | `music_chill` | 0, 3, 2 | `#000302` dim aqua | overlay | breathing | 0.3 | music_rock \| music_groove \| music_jazz \| music_waltz |
 | `scan` | 0, 2, 3 | `#000203` dim sky blue | overlay | pulse | 0.3 | scanning |
 | `nod` | 2, 3, 1 | `#020301` dim yellow-green | overlay | breathing | 0.5 | nod |
 | `headshake` | 3, 0, 0 | `#030000` dim red | overlay | breathing | 0.5 | headshake |
 
-`music_strong`'s color is inert: it runs the `rainbow` effect, and `rainbow()` in `hal/drivers/rgb/effects.py` ignores the `color` argument and sweeps the whole hue circle itself — which is why the overlay does not bother to set it.
+`music_strong`'s color is inert: it runs the `rainbow` effect, and `rainbow()` in `hal/drivers/rgb/effects.py` sweeps the whole hue circle itself. Its level comes from a separate `brightness` field (0.0-1.0, the same field the scene table uses), which the lamp sets to 0.012.
 
 ## Per-emotion low-glare palette
 
@@ -76,7 +76,16 @@ On 24/08/2026 the peaks came down again, in three passes on device the same day.
 Technical notes:
 
 - **`shock` is overridden even though it is not one of the six hue groups.** It uses `[2, 2, 2]`, keeping the white alarm cue below the test cap.
-- **`music_strong` is intentionally absent** from the override table. It uses the `rainbow` effect, and `rainbow()` in `hal/drivers/rgb/effects.py` ignores the `color` argument entirely — it sweeps the whole hue circle itself. Assigning it a color would mean nothing.
+- **`music_strong` is overridden through `brightness`, not `color`.** It is the only cue on the `rainbow` effect, and `rainbow()` in `hal/drivers/rgb/effects.py` generates its own hue, so it never reads `color` — until `brightness` was added it painted at value 1.0 and was the one cue no per-device palette could reach, running straight to the `light.max_brightness` ceiling (120) on all 32 pixels at once, roughly 40x every other emotion. `brightness` (0.0-1.0, the same field the scene table uses) is now its only level.
+
+  Two different cues light a rainbow around music, from two different places, and both read this one number:
+
+  | Lit by | Effect | Duration |
+  |--------|--------|----------|
+  | the agent calling `POST /emotion {"emotion": "music_strong"}` (see `skills/emotion/SKILL.md`) | `rainbow` | one cue, ~16 s then restore |
+  | `_on_music_play_start()` in `hal/app_state.py`, when the user has set no LED color | `speaking_wave_rainbow` | the whole song |
+
+  `speaking_wave_rainbow` also generates its own hue, so it takes the same `music_strong` `brightness` and rides its VU envelope under it. `music/routes` never emits the `music_strong` emotion itself — the agent does.
 - **This table lives in `robots/lamp/presets.json`**, the per-device overlay merged field by field at boot via `hal/board/presets_overlay.py` — `hal/presets.py` is *not* edited. Other robots (reachy, intern) therefore keep the base palette, and reverting the lamp to the base palette is just deleting the `emotion` section from that JSON file.
 - **Do not confuse `EMO_IDLE` with `AMBIENT_RESTING_LED`.** The latter is `[0, 0, 0]` (product call 30/07/2026: a resting strip is fully off); `EMO_IDLE` is an emotion the agent actively emits and still has a color.
 
