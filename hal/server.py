@@ -597,12 +597,27 @@ async def lifespan(app: FastAPI):
         dgk = os_cfg.get("deepgram_api_key", "")
         llm_key = os_cfg.get("llm_api_key", "")
         llm_url = os_cfg.get("llm_base_url", "")
+        # Per-service credentials, falling back to the AI Brain's. On most
+        # devices all three are the same string — the settings page mirrors the
+        # brain's key/URL into the TTS and STT fields while those are blank — so
+        # this reads identically to what it replaced.
+        #
+        # It matters when the brain points somewhere else. A device with
+        # llm_base_url on openrouter and tts_base_url on the autonomous proxy
+        # was building openrouter.ai/api/v1/elevenlabs/text-to-speech/... and
+        # taking a 404 on every spoken reply: the ElevenLabs backend appends
+        # /elevenlabs to whatever base it is handed, and it was being handed the
+        # brain's. The config had the right URL all along; nothing read it.
+        tts_key = os_cfg.get("tts_api_key", "") or llm_key
+        tts_url = os_cfg.get("tts_base_url", "") or llm_url
+        stt_key = os_cfg.get("stt_api_key", "") or llm_key
+        stt_url = os_cfg.get("stt_base_url", "") or llm_url
         voice = os_cfg.get("tts_voice", "") or TTS_VOICE
         tts_provider = os_cfg.get("tts_provider", PROVIDER_OPENAI)
-        if llm_key and llm_url and TTSService and not state.tts_service:
+        if tts_key and tts_url and TTSService and not state.tts_service:
             state.tts_service = TTSService(
-                api_key=llm_key,
-                base_url=llm_url,
+                api_key=tts_key,
+                base_url=tts_url,
                 sound_device_module=sd,
                 numpy_module=np,
                 output_device=state.audio_output_device,
@@ -628,7 +643,7 @@ async def lifespan(app: FastAPI):
             stt_keywords = state._stt_boost_terms()
             if dgk and DeepgramSTT:
                 stt_provider = DeepgramSTT(api_key=dgk, keywords=stt_keywords)
-            elif llm_key and llm_url and AutonomousSTT:
+            elif stt_key and stt_url and AutonomousSTT:
                 stt_model = (os_cfg.get("stt_model") or "").strip() or None
                 stt_language = (os_cfg.get("stt_language") or "").strip() or None
                 stt_kwargs = {}
@@ -637,7 +652,7 @@ async def lifespan(app: FastAPI):
                 if stt_language:
                     stt_kwargs["language"] = stt_language
                 stt_provider = AutonomousSTT(
-                    api_key=llm_key, base_url=llm_url,
+                    api_key=stt_key, base_url=stt_url,
                     keywords=stt_keywords, **stt_kwargs
                 )
             if stt_provider:

@@ -84,7 +84,12 @@ gãy sau reset. Soát mọi stub: ghi `// no-op because <lý do>` hoặc
 `nil` khiến caller tưởng thay đổi đã được áp dụng trong khi không có gì xảy ra.
 Caller phân nhánh bằng `errors.Is`: đường save model/baseURL LLM
 (`system/device/config_update.go`) log dạng informational rồi fallback
-`EnsureOnboarding` (presync đọc lại `llm_*` từ config.json), còn endpoint
+`EnsureOnboarding` (presync đọc lại `llm_*` từ config.json) — ở **cả hai** nhánh,
+kể cả nhánh chỉ đổi model. Nhánh đó trước đây chỉ log, chấp nhận được khi mấy
+runtime này còn ghim một alias model cố định; nhưng khi máy đã chạy được model
+riêng của người dùng thì một lần lưu chỉ đổi model sẽ nằm im cho tới khi có thứ
+khác restart gateway. Sentinel nghĩa là "không vá tại chỗ được", không bao giờ
+có nghĩa "không cần làm gì". Còn endpoint
 gw-config báo "no device-side config file" thay vì `{}`. Các stub hiện trả
 sentinel: `UpdatePrimaryModel`, `RefreshModelsConfig`, `CompactSession`
 (hermes + picoclaw), `GetConfigJSON` (chỉ hermes — picoclaw có config.json

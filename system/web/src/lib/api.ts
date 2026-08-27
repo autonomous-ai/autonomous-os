@@ -386,6 +386,14 @@ export interface DeviceConfig {
   has_network_password: boolean;
   has_mqtt_password: boolean;
   has_admin_password: boolean;
+  /** True once the shipped credential set has been preserved — i.e. the
+   *  operator has replaced a credential at least once, so there is something
+   *  to offer restoring back to. */
+  has_autonomous_defaults: boolean;
+  /** Non-secret half of the stored Autonomous set, so the UI can tell whether
+   *  the device is still on it. The key is never returned. */
+  autonomous_default_base_url?: string;
+  autonomous_default_model?: string;
 }
 
 export async function getTTSVoices(provider?: string, lang?: string): Promise<string[]> {
@@ -790,6 +798,19 @@ export interface PiperJobStart {
   already?: boolean;
   job?: PiperJob;
   message?: string;
+}
+
+/** Put one settings section back on the credentials the device shipped with.
+ *  The AI Brain restores url + key + model; realtime and voice restore url +
+ *  key. All three read the same stored set, captured before the first edit. */
+export async function restoreAutonomousDefaults(
+  section: "llm" | "voice" | "realtime",
+): Promise<boolean> {
+  return apiRequest<boolean>(`${API_BASE}/api/device/restore-defaults`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ section }),
+  });
 }
 
 export async function getPiperStatus(): Promise<PiperStatus> {
