@@ -111,7 +111,10 @@ class GeminiLiveAgent(VoiceAgentBase):
         self._loop: asyncio.AbstractEventLoop | None = None
         self._io_thread: threading.Thread | None = None
         self._resumption_handle: str | None = None
-        self._speech_ended_at: float | None = None
+        # Per-turn timing markers. These intentionally use monotonic time so
+        # NTP adjustments cannot skew latency diagnostics.
+        self._last_audio_sent_at: float | None = None
+        self._activity_end_sent_at: float | None = None
         self._first_audio_received: bool = False
         self._vad_disabled: bool = not config.vad_enabled
         self._activity_started: bool = False
@@ -375,7 +378,6 @@ class GeminiLiveAgent(VoiceAgentBase):
                 self._activity_started = True
                 logger.debug("[realtime] Sent activityStart (manual VAD)")
 
-            self._speech_ended_at = time.monotonic()
             pcm_bytes: bytes = float32_to_pcm16_bytes(input.audio)
             await self._session.send_realtime_input(
                 audio=types.Blob(
@@ -383,6 +385,9 @@ class GeminiLiveAgent(VoiceAgentBase):
                     mime_type=f"audio/pcm;rate={self._config.sample_rate}",
                 )
             )
+            # This is updated per frame; once AudioCommitEvent is processed it
+            # represents the final frame that reached the provider.
+            self._last_audio_sent_at = time.monotonic()
         elif isinstance(input, TextInput):
             await self._session.send_client_content(
                 turns=types.Content(
@@ -457,7 +462,7 @@ class GeminiLiveAgent(VoiceAgentBase):
             if not self._pending_tool_calls:
                 self._clear_pending_tool_calls()
 
-    async def _async_commit(self) -> None:
+    async def _async_commit(self, turn_end_queued_at: float | None = None) -> None:
         if self._session is None:
             return
         if self._vad_disabled and self._activity_started:
@@ -469,9 +474,16 @@ class GeminiLiveAgent(VoiceAgentBase):
                 self._activity_started = False
                 return
             await self._session.send_realtime_input(activity_end=types.ActivityEnd())
+            self._activity_end_sent_at = time.monotonic()
             self._activity_started = False
             self._turn_done.clear()
-            logger.debug("[realtime] Sent activityEnd (manual VAD)")
+            if turn_end_queued_at is not None:
+                logger.info(
+                    "[realtime] Turn timing: local_end->activityEnd_sent=%.0fms",
+                    (self._activity_end_sent_at - turn_end_queued_at) * 1000,
+                )
+            else:
+                logger.debug("[realtime] Sent activityEnd (manual VAD)")
 
     async def _async_receive_turn(self) -> None:
         """Read one full turn from the session, put outputs on _recv_queue."""
@@ -554,12 +566,27 @@ class GeminiLiveAgent(VoiceAgentBase):
                         if part.inline_data and part.inline_data.data:
                             if not self._first_audio_received:
                                 self._first_audio_received = True
-                                if self._speech_ended_at is not None:
-                                    latency_ms: float = (
-                                        time.monotonic() - self._speech_ended_at
-                                    ) * 1000
-                                    logger.info("[realtime] Response latency: %.0fms", latency_ms)
-                                    self._speech_ended_at = None
+                                now = time.monotonic()
+                                last_audio_sent_at = self._last_audio_sent_at
+                                activity_end_sent_at = self._activity_end_sent_at
+                                if last_audio_sent_at is not None:
+                                    latency_ms: float = (now - last_audio_sent_at) * 1000
+                                    if activity_end_sent_at is not None:
+                                        logger.info(
+                                            "[realtime] Response latency: %.0fms "
+                                            "(last_audio_sent->first_audio; "
+                                            "activityEnd_sent->first_audio=%.0fms)",
+                                            latency_ms,
+                                            (now - activity_end_sent_at) * 1000,
+                                        )
+                                    else:
+                                        logger.info(
+                                            "[realtime] Response latency: %.0fms "
+                                            "(last_audio_sent->first_audio; server VAD)",
+                                            latency_ms,
+                                        )
+                                self._last_audio_sent_at = None
+                                self._activity_end_sent_at = None
                             self._recv_queue.put(
                                 OutputEvent(
                                     output=AudioOutput(
@@ -824,7 +851,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                         if not self._turn_done.wait(timeout=10.0):
                             logger.warning("[realtime] Timed out waiting for turn to finish — forcing commit")
                         self._submit_and_wait(
-                            self._async_commit(), timeout=self._send_timeout_s
+                            self._async_commit(event.queued_at), timeout=self._send_timeout_s
                         )
                     elif isinstance(event, InputEvent) and event.input is not None:
                         self._submit_and_wait(
