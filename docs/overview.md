@@ -66,6 +66,10 @@ integrations/                     — Off-device: companions/, chat-bridges/, pe
 
 ## Lamp Simulator on a Laptop
 
+> **Setup and run instructions live in [simulator.md](simulator.md)** — prerequisites,
+> the config file and its example, the four `make` targets, and troubleshooting.
+> This section covers what the simulator *is*.
+
 `make sim` boots the production `lamp` declaration on a laptop. It keeps the
 normal HAL routes and safety gates, but substitutes virtual motion, LED,
 camera, microphone, speaker, voice and sensing services; it never opens a

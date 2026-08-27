@@ -16,6 +16,18 @@ log() { echo "[os-dev-seed] $*"; }
 
 mkdir -p "$STATE_DIR/config"
 CONFIG_JSON="$STATE_DIR/config/config.json"
+CONFIG_EXAMPLE="$(dirname "$0")/config.example.json"
+
+# The config is the developer's to write — this script never invents one. Silently
+# creating a near-empty file was worse than stopping: os-server booted, answered
+# nothing useful, and nothing pointed back at the missing credentials.
+if [ ! -f "$CONFIG_JSON" ]; then
+  log "ERROR: $CONFIG_JSON not found."
+  log "Copy the template and fill it in, then run again:"
+  log "    cp $CONFIG_EXAMPLE $CONFIG_JSON"
+  log "    \$EDITOR $CONFIG_JSON        # set llm_api_key + llm_base_url"
+  exit 1
+fi
 
 # set_up_completed gates the whole startup sequence (server/config_watch.go):
 # presync + EnsureOnboarding never run while it is false, so an off-device run
@@ -33,6 +45,19 @@ cfg["set_up_completed"] = True
 with open(path, "w") as f:
     json.dump(cfg, f, indent=2)
 print(f"[os-dev-seed] {path}: device_type={device_type} agent_runtime={runtime} set_up_completed=true")
+
+# Name what each missing credential costs, at the moment the dev can act on it.
+# A silent empty key surfaces much later as "the device never speaks" or a turn
+# that answers blind, and neither points back here.
+missing = []
+if not str(cfg.get("llm_api_key", "")).strip() or not str(cfg.get("llm_base_url", "")).strip():
+    missing.append("llm_api_key + llm_base_url — no TTS (silent replies), no STT, "
+                   "no Gemini Live, no image description. The agent still answers text.")
+if not str(cfg.get("admin_password_hash", "")).strip():
+    missing.append("admin_password_hash — cannot log into the web UI (make web-dev). "
+                   "Store a bcrypt hash, not the password.")
+for m in missing:
+    print(f"[os-dev-seed] NOTE: {m}")
 PY
 
 # presync.sh regenerates config.toml from config.json on every boot and keeps

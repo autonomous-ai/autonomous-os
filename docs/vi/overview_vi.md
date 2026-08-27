@@ -66,6 +66,10 @@ integrations/                     — Off-device: companions/, chat-bridges/, pe
 
 ## Lamp Simulator trên Laptop
 
+> **Hướng dẫn cài đặt và chạy nằm ở [simulator_vi.md](simulator_vi.md)** — điều kiện
+> chuẩn bị, file config và bản mẫu, bốn target `make`, và xử lý sự cố. Mục này nói
+> simulator *là gì*.
+
 `make sim` khởi động declaration `lamp` production trên laptop. HAL vẫn dùng
 route và safety gate bình thường, nhưng thay motion, LED, camera, microphone,
 speaker, voice và sensing bằng service ảo; nó không mở servo bus, camera/mic
