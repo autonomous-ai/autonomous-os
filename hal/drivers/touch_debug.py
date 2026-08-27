@@ -300,75 +300,24 @@ def _summarise_session(edges: List[Dict[str, Any]], count: int,
     }
 
 
-def _traversal(trace: Dict[str, Any]) -> Dict[str, Any]:
-    """Pad sequence across the whole cycle, and its reversal count.
+def note_classifier(**fields: Any) -> None:
+    """Record the DRIVER's own view of the cycle.
 
-    Reversal is what separates a swipe from a stroke: a swipe is one monotonic
-    pass, a pet turns around at least once. That needs an ORDERING of the pads,
-    which is `axis`. Until the pads are physically labelled there is no measured
-    order, so this falls back to declared line order and records which it used —
-    a reversal count against an assumed axis is still useful evidence, but the
-    reader must know it is provisional.
-
-    The sequence is built from EVERY pad touched, in time order, concatenated
-    across sessions — not one entry per session. Measured on orange-lamp
-    2026-08-27: a stroke collapses into one or two sessions while cross-talk from
-    a single finger already reaches all three pads (41% of contacts), so a
-    per-session sequence never reached three distinct pads and `reversals` came
-    back None on all 30 traces. The spatial information lives inside the session,
-    in `first_touch_order`, so that is what this reads.
-
-    Consecutive repeats are collapsed: a pad re-firing without an intervening
-    different pad is FastMode re-triggering under a stationary finger, not a
-    move, and counting it would invent direction changes that never happened.
+    The tracer used to recompute traversal itself, and once the driver's model
+    changed the two silently disagreed — a trace read `reversals: 3,
+    "stroke-shaped"` next to a `DOUBLE_TAP` verdict, which is worse than no
+    trace at all because it looks authoritative (device-observed 2026-08-27,
+    trace 160546). There is one source of truth now: the driver classifies, and
+    reports what it saw.
     """
-    seq: List[List[Any]] = []
-    for s in trace["sessions"]:
-        for pad, t in s.get("first_touch_order") or []:
-            if seq and seq[-1][0] == pad:
-                continue
-            seq.append([pad, t])
-
-    axis = trace.get("axis") or trace["lines"]
-    axis_source = "boards.json" if trace.get("axis") else "assumed line order"
-    pos_of = {_pad(l): i for i, l in enumerate(axis)}
-    positions = [pos_of.get(p) for p, _ in seq]
-
-    known = [p for p in positions if p is not None]
-    reversals: Optional[int] = None
-    monotonic: Optional[bool] = None
-    if len(known) >= 3:
-        deltas = [b - a for a, b in zip(known, known[1:]) if b != a]
-        reversals = sum(
-            1 for a, b in zip(deltas, deltas[1:]) if (a > 0) != (b > 0)
-        )
-        monotonic = reversals == 0
-
-    distinct = len({p for p, _ in seq})
-    if distinct == 0:
-        # No contact ever formed — every edge was suppressed by the settle
-        # guard, or the cycle was flushed before a session closed. Distinct
-        # from "one pad", which means a finger really did land.
-        verdict = "no contacts recorded"
-    elif distinct < 2:
-        verdict = "no traversal — contact stayed on one pad"
-    elif reversals is None:
-        verdict = f"traversal over {distinct} pads, too few steps to judge reversal"
-    elif monotonic:
-        verdict = f"monotonic over {distinct} pads (swipe-shaped, axis={axis_source})"
-    else:
-        verdict = f"{reversals} reversal(s) over {distinct} pads (stroke-shaped, axis={axis_source})"
-
-    return {
-        "pad_sequence": seq,
-        "axis_positions": positions,
-        "axis_source": axis_source,
-        "distinct_pads": distinct,
-        "steps": len(seq),
-        "reversals": reversals,
-        "monotonic": monotonic,
-        "verdict": verdict,
-    }
+    if not _init():
+        return
+    try:
+        with _lock:
+            if _current is not None:
+                _current["classifier"] = dict(fields)
+    except Exception as e:
+        logger.debug("TOUCH-DEBUG note_classifier failed: %s", e)
 
 
 def note_decision(gesture: str, reason: str, session_count: int) -> None:
@@ -450,7 +399,6 @@ def finish(status: str) -> None:
                 _summarise_session(trace["_pending"], -1, trace)
             )
         trace["_pending"] = []
-        trace["traversal"] = _traversal(trace)
         trace["total_ms"] = round((time.monotonic() - trace.pop("_t0")) * 1000, 1)
         dropped = trace.pop("_dropped_edges", 0)
         if dropped:
@@ -491,18 +439,16 @@ def _log_summary(status: str, trace: Dict[str, Any]) -> None:
     never appear at the shipped HAL_LOG_LEVEL, which is the gap this closes.
     """
     try:
-        tv = trace.get("traversal") or {}
+        cl = trace.get("classifier") or {}
         pads = sorted({e["pad"] for e in trace["edges"] if not e["suppressed"]})
-        seq = [p for p, _ in tv.get("pad_sequence", [])]
         spans = [s["span_ms"] for s in trace["sessions"] if s.get("span_ms")]
         action = (trace.get("action") or {}).get("fn", "-")
-        rev = tv.get("reversals")
         logger.info(
-            "TOUCH-TRACE %s pads=%s edges=%d sessions=%d span=%sms seq=%s rev=%s "
-            "-> %s (resolved +%.0fms)",
+            "TOUCH-TRACE %s pads=%s edges=%d contacts=%d span=%sms moved=%s "
+            "swipe=%s -> %s (resolved +%.0fms)",
             status, pads, len(trace["edges"]), len(trace["sessions"]),
-            max(spans) if spans else 0, seq,
-            "?" if rev is None else rev, action, trace["total_ms"],
+            max(spans) if spans else 0, cl.get("moved"), cl.get("is_swipe"),
+            action, trace["total_ms"],
         )
     except Exception:
         pass

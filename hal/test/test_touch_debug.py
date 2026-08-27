@@ -99,110 +99,57 @@ class TestSessionArithmetic(unittest.TestCase):
             self.assertEqual(tr["sessions"][0]["pads_touched"], [])
 
 
-class TestTraversal(unittest.TestCase):
-    """Reversal count is what separates a swipe from a stroke."""
+class TestClassifierBlock(unittest.TestCase):
+    """The driver classifies; the tracer only records what it was told.
 
-    def _traversal(self, tmp):
-        tr = json.loads(next(Path(tmp).glob("*.json")).read_text())
-        return tr["traversal"]
+    The tracer used to recompute traversal itself. When the driver's model
+    changed the two silently diverged and a trace showed `reversals: 3,
+    "stroke-shaped"` beside a DOUBLE_TAP verdict (device trace 160546) — an
+    instrument that contradicts the thing it is measuring is worse than none,
+    because it reads as authoritative. One source of truth now.
+    """
 
-    def _run(self, tmp, pad_lines):
-        td = _fresh(True, tmp, pads="96=S1,98=S2,100=S4")
-        td.start_cycle(0, [96, 98, 100])
-        for n, line in enumerate(pad_lines, 1):
-            td.note_edge(line, 0)
-            td.note_session_end(n)
-        td.finish("TEST")
-        import time as _t
-        _t.sleep(0.2)
+    def _trace(self, tmp):
+        return json.loads(next(Path(tmp).glob("*.json")).read_text())
 
-    def test_monotonic_traversal_is_swipe_shaped(self):
+    def test_classifier_fields_round_trip_into_the_file(self):
         with tempfile.TemporaryDirectory() as tmp:
-            self._run(tmp, [96, 98, 100])
-            tv = self._traversal(tmp)
-            self.assertEqual(tv["reversals"], 0)
-            self.assertTrue(tv["monotonic"])
-            self.assertEqual(tv["distinct_pads"], 3)
+            td = _fresh(True, tmp, pads="96=S1,98=S2,100=S4")
+            td.start_cycle(0, [96, 98, 100])
+            td.note_edge(96, 0)
+            td.note_session_end(1)
+            td.note_classifier(
+                is_swipe=False, moved=True, min_gap_ms=108.1, contacts=2,
+                move_floor_ms=40.0, contact_pads=[["S2", "S4", "S1"]],
+            )
+            td.note_decision("PET", "2 contacts, the hand moved", 2)
+            td.finish("PET")
+            import time as _t
+            _t.sleep(0.2)
 
-    def test_turning_around_is_stroke_shaped(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            self._run(tmp, [96, 98, 100, 98, 96])
-            tv = self._traversal(tmp)
-            self.assertEqual(tv["reversals"], 1)
-            self.assertFalse(tv["monotonic"])
+            cl = self._trace(tmp)["classifier"]
+            self.assertFalse(cl["is_swipe"])
+            self.assertTrue(cl["moved"])
+            self.assertEqual(cl["min_gap_ms"], 108.1)
+            self.assertEqual(cl["move_floor_ms"], 40.0)
+            self.assertEqual(cl["contact_pads"], [["S2", "S4", "S1"]])
 
-    def test_no_contacts_is_distinct_from_one_pad(self):
-        """A settle burst forms no contact at all. Reporting that as "stayed on
-        one pad" would imply a finger landed, which is exactly the wrong read
-        when the question is whether a pad fired spuriously."""
+    def test_a_trace_without_a_classifier_block_still_writes(self):
+        """The settle burst resolves before any classification happens."""
         with tempfile.TemporaryDirectory() as tmp:
             td = _fresh(True, tmp)
-            td.start_cycle(0, [96, 98])
+            td.start_cycle(0, [96])
             td.note_edge(96, 1, suppressed=True)
-            td.note_session_end(0)
             td.finish("IGNORED-settle")
             import time as _t
             _t.sleep(0.2)
-            tv = json.loads(next(Path(tmp).glob("*.json")).read_text())["traversal"]
-            self.assertEqual(tv["distinct_pads"], 0)
-            self.assertEqual(tv["verdict"], "no contacts recorded")
+            self.assertNotIn("classifier", self._trace(tmp))
 
-    def test_repeated_same_pad_has_no_traversal(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            self._run(tmp, [96, 96, 96])
-            tv = self._traversal(tmp)
-            self.assertEqual(tv["distinct_pads"], 1)
-            self.assertIn("no traversal", tv["verdict"])
-
-    def test_traversal_reads_within_session_pad_order(self):
-        """Device-driven regression. Measured on orange-lamp 2026-08-27: a stroke
-        collapses into one or two sessions while cross-talk already spreads a
-        single contact across all three pads, so a per-SESSION sequence never
-        reached three pads and `reversals` was None on all 30 traces. The order
-        lives inside the session, so that is what traversal must read."""
-        with tempfile.TemporaryDirectory() as tmp:
-            td = _fresh(True, tmp, pads="96=S1,98=S2,100=S4")
-            td.start_cycle(0, [96, 98, 100])
-            # ONE contact spanning all three pads — the 41% case.
-            td.note_edge(96, 0)
-            td.note_edge(98, 0)
-            td.note_edge(100, 0)
-            td.note_session_end(1)
-            td.finish("TAP")
-            import time as _t
-            _t.sleep(0.2)
-            tv = json.loads(next(Path(tmp).glob("*.json")).read_text())["traversal"]
-            self.assertEqual(tv["steps"], 3)
-            self.assertEqual(tv["reversals"], 0)
-            self.assertTrue(tv["monotonic"])
-
-    def test_a_pad_refiring_under_a_still_finger_is_not_a_direction_change(self):
-        """FastMode re-triggers on a stationary finger. Counting a repeat as a
-        step would invent reversals that never happened."""
-        with tempfile.TemporaryDirectory() as tmp:
-            td = _fresh(True, tmp, pads="96=S1,98=S2,100=S4")
-            td.start_cycle(0, [96, 98, 100])
-            td.note_edge(96, 0)
-            td.note_session_end(1)
-            td.note_edge(96, 0)          # same pad again — not a move
-            td.note_session_end(2)
-            td.note_edge(98, 0)
-            td.note_session_end(3)
-            td.note_edge(100, 0)
-            td.note_session_end(4)
-            td.finish("TEST")
-            import time as _t
-            _t.sleep(0.2)
-            tv = json.loads(next(Path(tmp).glob("*.json")).read_text())["traversal"]
-            self.assertEqual([p for p, _ in tv["pad_sequence"]], ["S1", "S2", "S4"])
-            self.assertEqual(tv["reversals"], 0)
-
-    def test_axis_source_is_reported_as_assumed_without_boards_json_axis(self):
-        """Reversal against a guessed axis is still evidence, but the reader
-        has to know it is provisional until the pads are physically labelled."""
-        with tempfile.TemporaryDirectory() as tmp:
-            self._run(tmp, [96, 98, 100])
-            self.assertEqual(self._traversal(tmp)["axis_source"], "assumed line order")
+    def test_the_tracer_no_longer_computes_traversal_itself(self):
+        """Guards the regression directly: if a future change re-adds a
+        tracer-side traversal, the two models can drift apart again."""
+        td = _fresh(True, tempfile.gettempdir())
+        self.assertFalse(hasattr(td, "_traversal"))
 
 
 class TestPadLabels(unittest.TestCase):

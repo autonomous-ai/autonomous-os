@@ -190,6 +190,17 @@ class TestSwipe(_Base):
 class TestPetKeepsWorking(_Base):
     swipe = True
 
+    def test_a_back_and_forth_stroke_is_a_pet_not_a_swipe(self):
+        """Device trace 160546: the user stroked left-right-left and got
+        DOUBLE_TAP. Each leg of a stroke is itself a clean one-direction pass,
+        so a swipe has to be the whole gesture — one contact — or every pet
+        resolves as a swipe."""
+        for lines in ((98, 100, 96), (100, 98, 96)):
+            for i, line in enumerate(lines):
+                self.hz.touch(line, at_ms=len(self.hz.h._contacts) * 1000 + i * 120)
+            self.hz.end_session()
+        self.assertEqual(self.hz.fired, ["head_pat_action"])
+
     def test_a_hand_moving_between_contacts_fires_pet_immediately(self):
         """A stroke is contacts in DIFFERENT places. Once they share no pad the
         gesture cannot be a double tap, so pet keeps its fast path rather than
@@ -250,16 +261,25 @@ class TestDoubleTap(_Base):
         self.assertEqual(self.hz.fired, ["mic_toggle_action"])
 
     def test_a_MULTI_FINGER_double_tap_in_one_place_still_toggles_the_mic(self):
-        """The reported bug, 2026-08-27: double tap only worked with a single
-        fingertip. Two or three fingers spread the contact across pads, and the
-        old flat sequence read that spread as movement and fired PET instead.
-        Pad sets from real trace 154222."""
-        for pads in ((98, 100), (96, 98, 100)):
-            for line in pads:
-                self.hz.touch(line)
+        """Double tap must not need a single fingertip. Three fingers light up
+        three pads, but they land TOGETHER — device-measured spread 1-23ms,
+        against 53-322ms for a finger that travels. Timing is what separates
+        them; pad count cannot."""
+        for c in range(2):
+            for i, line in enumerate((98, 100, 96)):
+                self.hz.touch(line, at_ms=c * 1000 + i * 8)   # ~8ms apart
             self.hz.end_session()
         self.hz.decide()
         self.assertEqual(self.hz.fired, ["mic_toggle_action"])
+
+    def test_a_three_finger_tap_is_one_tap_not_a_swipe(self):
+        """Three fingers light every pad at once. Without the timing test that
+        looks identical to a hand crossing the surface."""
+        for i, line in enumerate((96, 98, 100)):
+            self.hz.touch(line, at_ms=i * 8)
+        self.hz.end_session()
+        self.hz.decide()
+        self.assertEqual(self.hz.fired, ["single_click_action"])
 
     def test_a_contact_that_recorded_no_pads_still_counts(self):
         """Device trace 154507: the second contact's touch edge fell the other
