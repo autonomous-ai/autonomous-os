@@ -1457,6 +1457,47 @@ class TTSService:
     def _tts_cache_path(self, text: str) -> Path:
         return _TTS_CACHE_DIR / f"{self._tts_cache_key(text)}.wav"
 
+    def warm_lifecycle_phrases(self) -> int:
+        """Render the phrases the device says on its own initiative into the cache.
+
+        These play at the worst possible moments. The restart notice is spoken
+        while HAL is shutting down; the boot cue while every other service is
+        still coming up. A cache miss there means loading a 63 MB Piper model on
+        a CPU that is already saturated — measured on an 8-core sun60iw2, the
+        model load alone is 2-3.4 s, and the restart phrase synthesises at 1.1x
+        realtime, close enough to breaking even that a little extra load starves
+        the audio stream and the speech comes out slurred.
+
+        Rendering ahead costs one synthesis per phrase, once, off the hot path.
+        The cache key includes provider and voice, so this has to run again
+        whenever either changes — not only at boot.
+
+        Returns how many phrases are now cached.
+        """
+        from hal.i18n import (
+            PHRASE_REBOOT,
+            PHRASE_SERVICE_RESTART,
+            PHRASE_SHUTDOWN,
+            PHRASE_SLEEP,
+            localized_phrase,
+        )
+
+        warmed = 0
+        for key in (PHRASE_SERVICE_RESTART, PHRASE_REBOOT, PHRASE_SHUTDOWN, PHRASE_SLEEP):
+            text = localized_phrase(key)
+            if not text:
+                continue
+            try:
+                if self.speak_cached(text, prerender=True):
+                    warmed += 1
+            except Exception:
+                logger.exception("Lifecycle phrase warm failed for %r", key)
+        logger.info(
+            "Lifecycle phrases warmed: %d cached (provider=%s, voice=%s)",
+            warmed, self._provider, self._voice,
+        )
+        return warmed
+
     def speak_cached(self, text: str, interruptible: bool = False, prerender: bool = False, realtime_feedback: bool = False) -> bool:
         """Cache-aware speak. On hit -> ~50ms playback. On miss -> render+save
         then play. prerender=True skips playback (warmup-only).

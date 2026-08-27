@@ -273,15 +273,14 @@ export function TTSSection({
       // it on reload, and a stale hosted URL would drag the picker back.
       setTtsBaseUrl("");
       setTtsProvider("piper");
-      // Only ever select a voice the device actually has. `ttsVoices` is the
-      // filesystem listing from HAL, so an empty list means nothing is
-      // downloaded yet — and picking a name anyway (as a hardcoded fallback
-      // once did) configures the device for a model it cannot load, which
-      // leaves Piper silent with no visible cause. Empty is honest: the panel
-      // right above tells the operator to download one.
-      if (!ttsVoices.includes(ttsVoice)) setTtsVoice(ttsVoices[0] ?? "");
-      // piperInstalled is empty until the panel's first status arrives, so the
-      // page-level list is what is available at this moment.
+      // Only ever keep a voice the device actually has. `ttsVoices` cannot
+      // answer that here: it is fetched per provider and still holds the
+      // *previous* provider's list at this instant, so a hosted name like
+      // "Rachel" passes its includes() check and survives the switch — which
+      // then saves the device as provider=piper, voice=Rachel, a model it can
+      // never load. The panel's own listing is the only authority, and empty
+      // is the honest answer until it has one.
+      if (!piperInstalled.includes(ttsVoice)) setTtsVoice("");
       return;
     }
     setTtsBaseUrl(nextMeta.baseUrl);
@@ -494,9 +493,13 @@ export function TTSSection({
           baseUrl={ttsBaseUrl}
           apiKey={ttsApiKey}
           blockedReason={
+            // Read from what the device has, not from what is selected. The
+            // selection can still hold the previous provider's voice ("Rachel"),
+            // and inferring "still downloading" from a name that is simply not a
+            // Piper voice announced a download that was never started.
             choice !== "piper" ? ""
-              : !ttsVoice ? "Download a voice first"
-              : !piperInstalled.includes(ttsVoice) ? "That voice is still downloading"
+              : piperInstalled.length === 0 ? "Download a voice first"
+              : !piperInstalled.includes(ttsVoice) ? "Select a downloaded voice"
               : ""
           }
         />

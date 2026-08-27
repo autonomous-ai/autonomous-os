@@ -238,6 +238,15 @@ def update_tts_config(req: TTSConfigRequest):
         "TTS config applied live (provider=%s, voice=%s, speed=%s)",
         svc._provider, svc._voice, svc._speed,
     )
+    # The TTS cache is keyed by provider, voice, model and speed, so a change
+    # here invalidates every clip the device has ready to play about itself.
+    # Re-render them now, on a thread: the operator is waiting on this response,
+    # and the point of warming is that nobody ever waits for it.
+    threading.Thread(
+        target=lambda: svc.warm_lifecycle_phrases(),
+        daemon=True,
+        name="warm-lifecycle-phrases",
+    ).start()
     return {"status": "ok"}
 
 
