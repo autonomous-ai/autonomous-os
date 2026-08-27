@@ -56,6 +56,13 @@ class ButtonConfig:
 class TouchConfig:
     chip: int
     lines: List[int]
+    # Lines in physical left-to-right order along the swipe axis. OPTIONAL and
+    # absent by default: line order is NOT spatial order on this board — the
+    # pads were relocated twice to escape noise, so line 98 carries S2's pad on
+    # S3's pin and line 100 carries S4's on a third. Only a labelled press-one-
+    # pad-at-a-time run can establish it (build-plan Phase 2.2). Absent means
+    # gesture classification falls back to declared line order and says so.
+    axis: Optional[List[int]] = None
 
 
 @dataclass(frozen=True)

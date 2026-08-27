@@ -731,6 +731,24 @@ async def lifespan(app: FastAPI):
         # when the TTS provider later returns 429 / quota-exhausted mid-turn.
         # (Go-owned notices — e.g. the LLM-limit phrase — warm themselves via
         # /voice/speak prerender=true from the os-server side.)
+        # Warm the touch-gesture acks too. The mic toggle's confirmation is the
+        # only audible feedback that gesture has, and it is non-interrupting —
+        # paying a first-use TTS round-trip makes it far likelier to arrive late
+        # or lose the lock and drop entirely.
+        try:
+            from hal.drivers.button_actions import _current_lang
+            from hal.i18n import (
+                DEFAULT_LANG,
+                MIC_MUTED_PHRASES_BY_LANG,
+                MIC_UNMUTED_PHRASES_BY_LANG,
+            )
+
+            lang = _current_lang()
+            for pools in (MIC_MUTED_PHRASES_BY_LANG, MIC_UNMUTED_PHRASES_BY_LANG):
+                for phrase in pools.get(lang) or pools.get(DEFAULT_LANG, []):
+                    state.tts_service.speak_cached(phrase, prerender=True)
+        except Exception as e:
+            logger.warning("Gesture ack prerender failed: %s", e)
         try:
             from hal.i18n import PHRASE_RATE_LIMIT, localized_phrase
 
