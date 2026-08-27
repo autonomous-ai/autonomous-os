@@ -41,6 +41,14 @@ PHRASE_REBOOT = "reboot"
 PHRASE_SLEEP = "sleep"
 PHRASE_SHUTDOWN = "shutdown"
 PHRASE_SERVICE_RESTART = "service_restart"
+# Spoken confirmation for the TTP223 double-tap mic toggle. The mic-muted LED is
+# the only other feedback this gesture has, and a muted mic has no audible
+# acknowledgement of its own — without these the gesture lands in silence and
+# the user cannot tell it registered. Deliberately states the resulting STATE
+# rather than the action, because the gesture is a toggle and the user may not
+# know which way it went.
+PHRASE_MIC_MUTED = "mic_muted"
+PHRASE_MIC_UNMUTED = "mic_unmuted"
 # Spoken when a music/audio play request is suppressed by the audio.quiet_hours
 # safety window, so the user hears WHY nothing played instead of silent failure.
 PHRASE_QUIET_HOURS = "quiet_hours"
@@ -73,6 +81,18 @@ PHRASES_BY_LANG = {
         LANG_VI:    "Nghe đây.",
         LANG_ZH_CN: "在听。",
         LANG_ZH_TW: "在聽。",
+    },
+    PHRASE_MIC_MUTED: {
+        LANG_EN:    "Microphone off.",
+        LANG_VI:    "Đã tắt micro.",
+        LANG_ZH_CN: "麦克风已关闭。",
+        LANG_ZH_TW: "麥克風已關閉。",
+    },
+    PHRASE_MIC_UNMUTED: {
+        LANG_EN:    "Microphone on.",
+        LANG_VI:    "Đã bật micro.",
+        LANG_ZH_CN: "麦克风已开启。",
+        LANG_ZH_TW: "麥克風已開啟。",
     },
     PHRASE_REBOOT: {
         LANG_EN:    "Rebooting now.",

@@ -1,5 +1,6 @@
 """Focused tests for shared physical-button actions."""
 
+import threading
 from unittest import mock
 
 import hal.app_state as state
@@ -161,3 +162,71 @@ def test_swipe_on_a_sleeping_device_still_routes_to_sleep():
         button_actions.swipe_action(source="TTP223")
     slept.assert_called_once_with("TTP223")
     woke.assert_not_called()
+
+
+class _FakeTTS:
+    def __init__(self, available=True):
+        self.available = available
+        self.spoken = []
+
+    def speak_cached(self, text, interruptible=False, **kw):
+        self.spoken.append(text)
+        return True
+
+
+def _mic_toggle(muted: bool, speaker_muted=False, enrolling=False, hw_switch=None):
+    """Run the double-tap toggle against a fake TTS and report what it said."""
+    tts = _FakeTTS()
+    with mock.patch.object(state, "_mic_muted", muted), \
+         mock.patch.object(state, "_speaker_muted", speaker_muted), \
+         mock.patch.object(state, "_enrolling", enrolling), \
+         mock.patch.object(state, "_hw_mic_switch_muted", hw_switch), \
+         mock.patch.object(state, "tts_service", tts), \
+         mock.patch("hal.routes.voice.mute_mic") as mute, \
+         mock.patch("hal.routes.voice.unmute_mic") as unmute:
+        button_actions.mic_toggle_action(source="TTP223")
+    for t in threading.enumerate():
+        if t.name.endswith("gesture-ack"):
+            t.join(timeout=1)
+    return tts.spoken, mute, unmute
+
+
+def test_muting_the_mic_says_so():
+    """The double tap's only other feedback is an LED. Landing in silence is
+    what the user reported; this pins the fix.
+
+    Asserted against the resolved phrase rather than an English literal — the
+    device under test runs Vietnamese, and hardcoding "Microphone off." made
+    this fail on hardware while the behaviour was correct.
+    """
+    from hal.i18n import PHRASE_MIC_MUTED
+
+    spoken, mute, unmute = _mic_toggle(muted=False)
+    mute.assert_called_once()
+    unmute.assert_not_called()
+    assert spoken == [button_actions._phrase(PHRASE_MIC_MUTED)], spoken
+
+
+def test_unmuting_the_mic_says_so():
+    from hal.i18n import PHRASE_MIC_UNMUTED
+
+    spoken, mute, unmute = _mic_toggle(muted=True)
+    unmute.assert_called_once()
+    mute.assert_not_called()
+    assert spoken == [button_actions._phrase(PHRASE_MIC_UNMUTED)], spoken
+
+
+def test_a_muted_speaker_stays_silent():
+    """A muted speaker means the user chose silence; the LED still reports."""
+    spoken, mute, _ = _mic_toggle(muted=False, speaker_muted=True)
+    mute.assert_called_once()
+    assert spoken == [], spoken
+
+
+def test_a_refused_toggle_says_nothing():
+    """Enrolment blocks the toggle — announcing a mute that did not happen
+    would be worse than silence."""
+    spoken, mute, unmute = _mic_toggle(muted=False, enrolling=True)
+    mute.assert_not_called()
+    unmute.assert_not_called()
+    assert spoken == [], spoken

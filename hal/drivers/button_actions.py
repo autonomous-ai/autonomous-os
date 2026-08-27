@@ -23,6 +23,8 @@ import hal.app_state as state
 from hal.i18n import (
     HEAD_PAT_PHRASES_BY_LANG,
     PHRASE_LISTENING,
+    PHRASE_MIC_MUTED,
+    PHRASE_MIC_UNMUTED,
     PHRASE_REBOOT,
     PHRASE_SLEEP,
     PHRASE_SHUTDOWN,
@@ -189,6 +191,22 @@ def _wake_if_sleepy(source: str):
         express_emotion(EmotionRequest(emotion="stretching"))
     except Exception as e:
         logger.warning("Wake emotion call failed: %s", e)
+
+
+def _speak_gesture_ack(text: str, source: str):
+    """Speak a short confirmation for a resolved physical gesture, off-thread.
+
+    Non-interrupting by design — a gesture ack must never truncate a reply the
+    user is listening to. Silent no-op when TTS is unavailable or the speaker is
+    muted, which is also correct: a muted speaker means the user chose silence.
+    """
+    if not text or not _tts_available():
+        return
+    threading.Thread(
+        target=lambda: state.tts_service.speak_cached(text, interruptible=True),
+        daemon=True,
+        name=f"{source}-gesture-ack",
+    ).start()
 
 
 def play_ack_chime(source: str = "button"):
@@ -462,12 +480,26 @@ def mic_toggle_action(source: str = "touch"):
         if state._mic_muted:
             logger.info("%s double tap -- unmuting mic", source)
             unmute_mic()
+            phrase = PHRASE_MIC_UNMUTED
         else:
             logger.info("%s double tap -- muting mic", source)
             mute_mic()
+            phrase = PHRASE_MIC_MUTED
     except Exception as e:
         # Never let a mute failure escape into the lgpio callback path.
         logger.warning("%s double tap -- mic toggle failed: %s", source, e)
+        return
+
+    # Speak the resulting STATE, after the flip, so the voice and the LED agree.
+    # Muting the microphone does not touch the speaker, so this is audible on
+    # both legs. Spoken AFTER the state change deliberately: if the toggle
+    # raised, the user should not be told about a mute that did not happen.
+    #
+    # Off-thread and non-interrupting, like head_pat_action: this must not add
+    # latency to the mute itself, and it must not talk over a reply in flight.
+    # When TTS is busy the confirmation drops and the mic-muted LED carries the
+    # feedback alone — the same trade the pet giggle makes.
+    _speak_gesture_ack(_phrase(phrase), source)
 
 
 def sleep_action(source: str = "button"):

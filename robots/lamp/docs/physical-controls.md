@@ -202,7 +202,7 @@ Nothing in between, and `HAL_TOUCH_SWIPE_MIN_GAP_MS` (40) sits in the gap. Every
 Resolution order, first match wins:
 
 1. **SWIPE** → sleep. One contact, every pad, monotonic along the axis, all gaps above the floor. **One contact only**: each leg of a back-and-forth stroke is itself a clean one-direction pass, so letting any leg carry the verdict turns every pet into a swipe. Checked first so a resolved swipe never also fires a tap.
-2. **DOUBLE TAP** → mic mute toggle. Two or more **tight multi-pad bursts** overlapping in place. Fast taps share one contact (the session never lapses); slow taps arrive as separate contacts — both count. Checked before pet, because the second tap re-touches the same pads. A stroke cannot reach this rule: its steps are all above the floor, so every "burst" is a single step and the rule needs multi-pad ones.
+2. **DOUBLE TAP** → mic mute toggle, with a spoken state confirmation. Two or more **tight multi-pad bursts** overlapping in place. Fast taps share one contact (the session never lapses); slow taps arrive as separate contacts — both count. Checked before pet, because the second tap re-touches the same pads. A stroke cannot reach this rule: its steps are all above the floor, so every "burst" is a single step and the rule needs multi-pad ones.
 3. **PET** → giggle. The finger **revisited** a pad it had left (more steps than distinct pads), or contacts landed in places with no pad in common. No contact-count gate.
 4. **TAP** → everything else, including several fingers landing at once. That lights every pad, but within ~20 ms, which is not movement.
 
@@ -256,7 +256,7 @@ The actions live in one place so the GPIO button, TTP223, and any future input (
 | `shutdown_action(source)` | Speak "Shutting down now" → wait 5 s → `release_servos()` (so the lamp doesn't slam down mid-pose) → `shutdown_os()` (`sudo shutdown -h now`). | Yes |
 | `factory_reset_action(source)` | Speak "Factory reset starting. Rebooting now" → `release_servos()` → POST `/api/system/factory-reset` on the OS server (the server owns the wipe + reboot, see below). | Yes |
 | `swipe_action(source)` | Always `sleep_action`. Not keyed on direction (a swipe the "wrong" way would otherwise do nothing, with no feedback saying why) and not keyed on state (one gesture meaning two things depending on something invisible). On an already-sleeping device `sleep_action` returns early. | Yes |
-| `mic_toggle_action(source)` | Mic mute toggle for a resolved double tap (fast or slow). Refuses while the HW mic switch is off or a voice enrollment is recording. The mic-muted LED is the only confirmation — a muted mic has no audible ack. | No |
+| `mic_toggle_action(source)` | Mic mute toggle for a resolved double tap (fast or slow). Refuses while the HW mic switch is off or a voice enrollment is recording. Speaks the resulting **state** ("Microphone off." / "Microphone on.") after the flip, so the voice and the mic-muted LED agree; a refused toggle stays silent rather than announcing a mute that did not happen. | No — non-interrupting, drops if TTS is busy |
 | `head_pat_action(source)` | Pick a random localized pet phrase, speak it via `speak_cached` on a daemon thread. **Non-interrupting**: if TTS is still busy the phrase is dropped silently. In practice on TTP223 the first touch session already cut any in-flight speech and sounded the ack chime (`_ack_first_session`), so by pet time TTS is usually free and the giggle plays. | No |
 
 ### Factory-reset: what gets wiped
