@@ -99,6 +99,31 @@ class _Base(unittest.TestCase):
         self.addCleanup(lambda: [p.stop() for p in self._p])
 
 
+class TestShippedDefaults(unittest.TestCase):
+    """The two flags ship in opposite states, and both matter."""
+
+    def test_gesture_classification_is_ON_by_default(self):
+        """Enabled 2026-08-27 after hands-on validation. A double tap toggles
+        the microphone and a swipe sleeps the device, so this default is a
+        user-visible commitment, not an implementation detail."""
+        for var in ("HAL_TOUCH_SWIPE", "HAL_TOUCH_SWIPE_MIN_GAP_MS"):
+            os.environ.pop(var, None)
+        import hal.drivers.ttp223 as t
+
+        importlib.reload(t)
+        self.assertTrue(t.SWIPE_ENABLED)
+        self.assertEqual(t.SWIPE_MIN_GAP_MS, 40.0)
+
+    def test_tracing_is_OFF_by_default(self):
+        """The tracer sits in the lgpio callback path and writes files. It must
+        cost nothing on a device nobody is debugging."""
+        os.environ.pop("HAL_TOUCH_DEBUG", None)
+        import hal.drivers.touch_debug as td
+
+        importlib.reload(td)
+        self.assertFalse(td._init())
+
+
 class TestFlagOffIsUnchanged(_Base):
     """The default path must behave exactly as the shipped driver always has."""
 

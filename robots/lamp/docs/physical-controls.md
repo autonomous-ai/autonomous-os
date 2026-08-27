@@ -27,9 +27,9 @@ Board detection in both handlers reads `/proc/device-tree/model`:
 | Gesture | GPIO button | TTP223 touchpad |
 |---|---|---|
 | **1 tap** | Stop active object tracking, then stop speaker / unmute mic + speaker + ack chime (~120 ms ping) — all fire immediately on release (no click-window wait); the "Listening" cue plays once the 0.4 s click window resolves | Same after the 1.2 s tap-vs-pet decision resolves — active tracking stops, then the mic/speaker action and cue run. The initial touch still stops in-flight TTS and plays its ack chime immediately. |
-| **2 taps** (≤ 0.4 s apart, button) / (≤ 1.2 s apart, TTP223) | Nothing beyond the single-click already fired on tap 1 (panic-click guard) | Pet response. With `HAL_TOUCH_SWIPE` on, repeated taps in one place — fast or slow, one finger or several — are a **double tap** → mic mute toggle; pet then means the finger revisited a pad |
+| **2 taps** (≤ 0.4 s apart, button) / (≤ 1.2 s apart, TTP223) | Nothing beyond the single-click already fired on tap 1 (panic-click guard) | Pet response. With `HAL_TOUCH_SWIPE` on (the default), repeated taps in one place — fast or slow, one finger or several — are a **double tap** → mic mute toggle; pet then means the finger revisited a pad |
 | **3 taps** (≤ 0.4 s apart, button) | Reboot OS (TTS announce → `sudo reboot`) | n/a — TTP223 stops at 2 (any further taps absorbed by cooldown) |
-| **Swipe** across the pads | n/a | **`HAL_TOUCH_SWIPE` only, default off.** One contact running monotonically over all three pads, gaps above the movement floor → **sleep**. Direction is not used — left-to-right and right-to-left are the same gesture — and neither is device state. Wake stays on tap / double tap. |
+| **Swipe** across the pads | n/a | **`HAL_TOUCH_SWIPE`, default on.** One contact running monotonically over all three pads, gaps above the movement floor → **sleep**. Direction is not used — left-to-right and right-to-left are the same gesture — and neither is device state. Wake stays on tap / double tap. |
 | **Hold 2–5 s, then release** | Speak the localized sleep announcement, then enter `sleepy`: LED off, camera/mic/speaker off; servo releases after 1 s. LED blinks sleepy purple while held. | n/a — TTP223 hardware cannot reliably hold (see "FastMode" below) |
 | **Hold 5–10 s, then release** | Shutdown OS (TTS announce → release servos → `sudo shutdown -h now`). LED blinks red while armed. | n/a — TTP223 hardware cannot reliably hold (see "FastMode" below) |
 | **Hold 10 s+, then release** | Factory-reset: wipe device state + reboot into AP setup (TTS announce → release servos → POST `/api/system/factory-reset` on the OS server). LED goes solid red while armed. | n/a |
@@ -182,9 +182,11 @@ After a session ends:
    - `count >= 2` → fire `head_pat_action` immediately, arm 1.5 s pet cooldown
    - `count < 2` → schedule a 1.2 s decision timer. When that timer fires with `count == 1`, fire `single_click_action`.
 
-### Layer 3: Gesture classification (`HAL_TOUCH_SWIPE`, default OFF)
+### Layer 3: Gesture classification (`HAL_TOUCH_SWIPE`, default ON)
 
-**Off by default.** With the flag unset the driver resolves only tap and count-based pet, exactly as the two-gesture version above.
+**On by default** since 2026-08-27, after hands-on validation on orange-lamp across tap, fast and slow double tap, pet and swipe. Setting `HAL_TOUCH_SWIPE=false` restores the two-gesture behaviour in one step and without a redeploy — that is the rollback if a field unit misbehaves.
+
+Turning it on means a double tap toggles the **microphone** and a swipe **sleeps** the device. Both are reversible (double tap again; one tap wakes), and nothing destructive is reachable here — FastMode cannot measure a hold, so reboot / shutdown / factory-reset stay on the mechanical button.
 
 **The signal is *when* pads fire, not which.** Device-measured on orange-lamp, 2026-08-27 — inter-pad gaps inside a single contact:
 
@@ -208,8 +210,8 @@ Resolution order, first match wins:
 
 | Env var | Default | Tunes |
 |---|---|---|
-| `HAL_TOUCH_SWIPE` | `false` | Master switch for rules 1–3. Off restores the two-gesture behaviour exactly. |
-| `HAL_TOUCH_SWIPE_MIN_GAP_MS` | 40 | The movement floor, used by every rule: gaps at or above it mean the hand travelled, below it mean fingers arrived together. Sits inside the measured 23–53 ms gap. Raise it if taps are being read as swipes; lower it if real swipes are missed. `HAL_TOUCH_DEBUG` records the gaps it is measured against. |
+| `HAL_TOUCH_SWIPE` | **`true`** | Master switch for rules 1–3. Set `false` to restore the two-gesture behaviour exactly — the rollback path. |
+| `HAL_TOUCH_SWIPE_MIN_GAP_MS` | 40 | The movement floor, and the one number every rule derives from: gaps at or above it mean the hand travelled, below it mean fingers arrived together. Sits inside the measured 23–53 ms empty band. **Load-bearing now that the classifier ships enabled** — raise it if firm taps read as swipes, lower it if real swipes are missed. `HAL_TOUCH_DEBUG` records the gaps it is measured against. |
 
 `boards.json` gains an optional `axis` on the `touch` entry — lines in physical left-to-right order, e.g. `"axis": [96, 100, 98]`. It is **absent** today: line order is not spatial order on this board, and only a labelled press-one-pad-at-a-time run can establish it. Absent, classification falls back to declared line order. A wrong axis costs only the swipe *direction*, which the driver deliberately does not use.
 

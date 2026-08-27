@@ -27,9 +27,9 @@ Cả hai handler đều detect board qua `/proc/device-tree/model`:
 | Cử chỉ | Nút GPIO | Touchpad TTP223 |
 |---|---|---|
 | **1 chạm** | Dừng object tracking đang chạy, rồi stop loa / unmute mic + speaker + chime ack (~120 ms ping) — tất cả fire ngay khi nhả nút (không đợi click window); cue "Nghe đây" phát sau khi click window 0.4 s phân giải xong | Tương tự sau khi quyết định tap-vs-pet 1.2 s xong — tracking đang chạy dừng, rồi action mic/loa và cue chạy. Chạm đầu tiên vẫn cắt TTS đang phát và kêu chime ack ngay. |
-| **2 chạm** (≤ 0.4 s, nút) / (≤ 1.2 s, TTP223) | Không thêm gì ngoài single-click đã fire ở chạm 1 (panic-click guard) | Pet response. Khi bật `HAL_TOUCH_SWIPE`, các cú tap lặp lại tại cùng một chỗ — nhanh hay chậm, một ngón hay nhiều ngón — là **double tap** → toggle mute mic; khi đó pet nghĩa là ngón tay đã quay lại một pad |
+| **2 chạm** (≤ 0.4 s, nút) / (≤ 1.2 s, TTP223) | Không thêm gì ngoài single-click đã fire ở chạm 1 (panic-click guard) | Pet response. Khi bật `HAL_TOUCH_SWIPE` (mặc định), các cú tap lặp lại tại cùng một chỗ — nhanh hay chậm, một ngón hay nhiều ngón — là **double tap** → toggle mute mic; khi đó pet nghĩa là ngón tay đã quay lại một pad |
 | **3 chạm** (≤ 0.4 s, nút) | Reboot OS (TTS báo → `sudo reboot`) | n/a — TTP223 dừng ở 2 (chạm thêm bị cooldown nuốt) |
-| **Swipe** qua các pad | n/a | **Chỉ khi bật `HAL_TOUCH_SWIPE`, mặc định tắt.** Một lần tiếp xúc chạy đơn điệu qua cả ba pad, các khoảng đều trên ngưỡng di chuyển → **sleep**. Không dùng hướng — trái-sang-phải và phải-sang-trái là cùng một cử chỉ — và cũng không dùng trạng thái thiết bị. Wake vẫn thuộc về tap / double tap. |
+| **Swipe** qua các pad | n/a | **`HAL_TOUCH_SWIPE`, mặc định bật.** Một lần tiếp xúc chạy đơn điệu qua cả ba pad, các khoảng đều trên ngưỡng di chuyển → **sleep**. Không dùng hướng — trái-sang-phải và phải-sang-trái là cùng một cử chỉ — và cũng không dùng trạng thái thiết bị. Wake vẫn thuộc về tap / double tap. |
 | **Giữ 2–5 s rồi nhả** | Phát thông báo sleep theo ngôn ngữ, rồi vào `sleepy`: LED tắt, camera/mic/speaker tắt; servo release sau 1 s. Khi đang giữ LED nháy tím sleepy. | n/a — phần cứng TTP223 không hold đáng tin được (xem "FastMode" dưới) |
 | **Giữ 5–10 s rồi nhả** | Shutdown OS (TTS báo → release servo → `sudo shutdown -h now`). LED nháy đỏ khi đã arm. | n/a — phần cứng TTP223 không hold đáng tin được (xem "FastMode" dưới) |
 | **Giữ 10 s+ rồi nhả** | Factory-reset: wipe state thiết bị + reboot vào AP setup (TTS báo → release servo → POST `/api/system/factory-reset` trên OS server). LED đỏ đứng khi đã arm. | n/a |
@@ -182,9 +182,11 @@ Sau khi session kết thúc:
    - `count >= 2` → fire `head_pat_action` ngay lập tức, arm pet cooldown 1.5 s
    - `count < 2` → schedule decision timer 1.2 s. Khi timer fire với `count == 1`, fire `single_click_action`.
 
-### Tầng 3: Phân loại cử chỉ (`HAL_TOUCH_SWIPE`, mặc định TẮT)
+### Tầng 3: Phân loại cử chỉ (`HAL_TOUCH_SWIPE`, mặc định BẬT)
 
-**Mặc định tắt.** Khi không đặt cờ, driver chỉ phân giải tap và pet theo số đếm, đúng như bản hai-cử-chỉ ở trên.
+**Mặc định bật** từ 2026-08-27, sau khi kiểm chứng trực tiếp trên orange-lamp với tap, double tap nhanh và chậm, pet và swipe. Đặt `HAL_TOUCH_SWIPE=false` sẽ khôi phục hành vi hai-cử-chỉ trong một bước và không cần deploy lại — đó là đường lùi nếu một máy ngoài thực địa hành xử sai.
+
+Bật nó lên nghĩa là một cú double tap sẽ toggle **microphone** và một cú swipe sẽ đưa thiết bị vào **giấc ngủ**. Cả hai đều đảo ngược được (double tap lần nữa; một cú tap là thức dậy), và không có hành động phá hủy nào với tới được từ đây — FastMode không đo được thao tác giữ, nên reboot / shutdown / factory-reset vẫn ở lại trên nút bấm cơ.
 
 **Tín hiệu nằm ở *thời điểm* các pad bắn, không phải pad nào.** Đo trên orange-lamp ngày 2026-08-27 — khoảng cách giữa các pad bên trong một lần tiếp xúc:
 
@@ -208,8 +210,8 @@ Thứ tự phân giải, khớp cái nào trước thì thắng:
 
 | Biến env | Mặc định | Điều chỉnh |
 |---|---|---|
-| `HAL_TOUCH_SWIPE` | `false` | Công tắc chính cho luật 1–3. Tắt thì khôi phục đúng hành vi hai-cử-chỉ. |
-| `HAL_TOUCH_SWIPE_MIN_GAP_MS` | 40 | Ngưỡng di chuyển, dùng chung cho mọi luật: khoảng cách từ mức này trở lên nghĩa là bàn tay đã di chuyển, dưới mức này nghĩa là các ngón đặt xuống cùng lúc. Nằm trong khoảng trống 23–53 ms đã đo. Nâng lên nếu tap bị đọc thành swipe; hạ xuống nếu swipe thật bị bỏ sót. `HAL_TOUCH_DEBUG` ghi lại chính các khoảng dùng để đo. |
+| `HAL_TOUCH_SWIPE` | **`true`** | Công tắc chính cho luật 1–3. Đặt `false` để khôi phục đúng hành vi hai-cử-chỉ — đường lùi. |
+| `HAL_TOUCH_SWIPE_MIN_GAP_MS` | 40 | Ngưỡng di chuyển, và là con số duy nhất mà mọi luật đều rút ra từ đó: khoảng cách từ mức này trở lên nghĩa là bàn tay đã di chuyển, dưới mức này nghĩa là các ngón đặt xuống cùng lúc. Nằm trong dải trống 23–53 ms đã đo. **Giờ mang tính then chốt vì bộ phân loại đã ship ở trạng thái bật** — nâng lên nếu tap dứt khoát bị đọc thành swipe, hạ xuống nếu swipe thật bị bỏ sót. `HAL_TOUCH_DEBUG` ghi lại chính các khoảng dùng để đo. |
 
 `boards.json` có thêm trường tùy chọn `axis` trong mục `touch` — các line theo thứ tự vật lý trái sang phải, ví dụ `"axis": [96, 100, 98]`. Hiện tại nó **vắng mặt**: thứ tự line không phải thứ tự không gian trên board này, và chỉ một đợt chạy có nhãn nhấn từng pad một mới xác định được. Khi vắng, phân loại lùi về thứ tự line khai báo. Một axis sai chỉ làm sai **hướng** swipe, thứ mà driver cố ý không dùng.
 

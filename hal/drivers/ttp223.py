@@ -17,8 +17,8 @@ the surface — but NOT one gesture: a continuous stroke never lets the timer
 lapse, so a whole 1s pet arrives as a single contact, and two fast taps arrive
 as one contact too. Everything below was written after learning that on device.
 
-LAYER 2 — GESTURE. Off by default (SWIPE_ENABLED); with the flag off the driver
-resolves only tap and count-based pet, exactly as it always did.
+LAYER 2 — GESTURE. On by default (SWIPE_ENABLED); HAL_TOUCH_SWIPE=false makes the driver
+resolve only tap and count-based pet, exactly as it always did.
 
 The signal is WHEN pads fire, not which. Device-measured on orange-lamp
 2026-08-27, inter-pad gaps inside one contact:
@@ -112,30 +112,33 @@ PET_COOLDOWN_S = 1.5
 # claim so the startup transient never starts a session.
 SETTLE_S = 0.5
 
-# --- Traversal classification (swipe / double tap / spatial pet) ------------
+# --- Gesture classification (swipe / double tap / spatial pet) --------------
 #
-# DEFAULT OFF. The labelled measurement that was supposed to authorise this has
-# not been run — see the build plan's Phase 2.6. With the flag off, every path
-# below falls through to the two-gesture behaviour this driver has always had.
+# DEFAULT ON since 2026-08-27, after hands-on validation on orange-lamp across
+# tap, fast and slow double tap, pet and swipe. Setting HAL_TOUCH_SWIPE=false
+# restores the two-gesture behaviour this driver shipped with, in one step and
+# without a redeploy — that is the rollback if a field unit misbehaves.
 #
-# A swipe and a stroke are the same motion until one of them turns around, so
-# the discriminator is REVERSAL, not timing: a swipe is one monotonic pass, a
-# pet turns around at least once. That also means a reversal can fire pet
-# IMMEDIATELY — once the direction changes the gesture cannot be a swipe — which
-# preserves the responsiveness trade documented above.
-SWIPE_ENABLED = os.environ.get("HAL_TOUCH_SWIPE", "false").lower() in ("1", "true", "yes")
+# Note what turning this on means: a double tap now toggles the MICROPHONE, and
+# a swipe puts the device to sleep. Both are reversible (double tap again; one
+# tap wakes), and nothing destructive is reachable from this surface — FastMode
+# cannot measure a hold, so reboot / shutdown / factory-reset stay on the
+# mechanical button.
+SWIPE_ENABLED = os.environ.get("HAL_TOUCH_SWIPE", "true").lower() in ("1", "true", "yes")
 
 # Distinct pads a traversal must span to count as a swipe. With three wired this
 # is all of them, so there is no margin: one dropped edge collapses the gesture.
 SWIPE_MIN_PADS = 3
 
-# Minimum gap between adjacent pads before a traversal counts as deliberate
-# rather than cross-talk. PROVISIONAL — device data from orange-lamp on
-# 2026-08-27 (n=36, unlabelled) put inter-pad deltas on one continuous
-# 7-345 ms distribution with no gap in it, so this cannot yet be set from
-# evidence. 40 ms excludes the tightest third of that set. Recalibrate from the
-# labelled run before shipping the flag on; HAL_TOUCH_DEBUG records the deltas
-# this is measured against.
+# The movement floor, and the one number every rule derives from: gaps at or
+# above it mean the hand travelled between pads, below it mean several fingers
+# arrived together. Device-measured on orange-lamp 2026-08-27 — fingers landing
+# together spread 1-23 ms, a finger travelling 53-322 ms, nothing in between —
+# so 40 sits inside the empty band rather than being a guess.
+#
+# Now load-bearing, since the classifier ships enabled. Raise it if firm taps
+# are read as swipes; lower it if real swipes are missed. HAL_TOUCH_DEBUG
+# records the gaps it is measured against.
 SWIPE_MIN_GAP_MS = float(os.environ.get("HAL_TOUCH_SWIPE_MIN_GAP_MS", "40"))
 
 
