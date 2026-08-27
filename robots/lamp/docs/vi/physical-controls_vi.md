@@ -27,8 +27,9 @@ Cả hai handler đều detect board qua `/proc/device-tree/model`:
 | Cử chỉ | Nút GPIO | Touchpad TTP223 |
 |---|---|---|
 | **1 chạm** | Dừng object tracking đang chạy, rồi stop loa / unmute mic + speaker + chime ack (~120 ms ping) — tất cả fire ngay khi nhả nút (không đợi click window); cue "Nghe đây" phát sau khi click window 0.4 s phân giải xong | Tương tự sau khi quyết định tap-vs-pet 1.2 s xong — tracking đang chạy dừng, rồi action mic/loa và cue chạy. Chạm đầu tiên vẫn cắt TTS đang phát và kêu chime ack ngay. |
-| **2 chạm** (≤ 0.4 s, nút) / (≤ 1.2 s, TTP223) | Không thêm gì ngoài single-click đã fire ở chạm 1 (panic-click guard) | Pet response — TTS chọn ngẫu nhiên 1 câu từ pool theo ngôn ngữ |
+| **2 chạm** (≤ 0.4 s, nút) / (≤ 1.2 s, TTP223) | Không thêm gì ngoài single-click đã fire ở chạm 1 (panic-click guard) | Pet response. Khi bật `HAL_TOUCH_SWIPE`, hai lần tiếp xúc không rời khỏi một pad là **double tap** → toggle mute mic; khi đó pet nghĩa là một traversal có quay đầu |
 | **3 chạm** (≤ 0.4 s, nút) | Reboot OS (TTS báo → `sudo reboot`) | n/a — TTP223 dừng ở 2 (chạm thêm bị cooldown nuốt) |
+| **Swipe** qua các pad | n/a | **Chỉ khi bật `HAL_TOUCH_SWIPE`, mặc định tắt.** Một lượt đơn điệu qua cả ba pad → sleep, hoặc wake nếu đang ngủ. Không dùng hướng. |
 | **Giữ 2–5 s rồi nhả** | Phát thông báo sleep theo ngôn ngữ, rồi vào `sleepy`: LED tắt, camera/mic/speaker tắt; servo release sau 1 s. Khi đang giữ LED nháy tím sleepy. | n/a — phần cứng TTP223 không hold đáng tin được (xem "FastMode" dưới) |
 | **Giữ 5–10 s rồi nhả** | Shutdown OS (TTS báo → release servo → `sudo shutdown -h now`). LED nháy đỏ khi đã arm. | n/a — phần cứng TTP223 không hold đáng tin được (xem "FastMode" dưới) |
 | **Giữ 10 s+ rồi nhả** | Factory-reset: wipe state thiết bị + reboot vào AP setup (TTS báo → release servo → POST `/api/system/factory-reset` trên OS server). LED đỏ đứng khi đã arm. | n/a |
@@ -181,6 +182,29 @@ Sau khi session kết thúc:
    - `count >= 2` → fire `head_pat_action` ngay lập tức, arm pet cooldown 1.5 s
    - `count < 2` → schedule decision timer 1.2 s. Khi timer fire với `count == 1`, fire `single_click_action`.
 
+### Tầng 3: Phân loại traversal (`HAL_TOUCH_SWIPE`, mặc định TẮT)
+
+**Mặc định tắt.** Đợt đo có nhãn lẽ ra phải cho phép tính năng này vẫn chưa chạy, nên khi không đặt cờ, driver hành xử đúng như bản hai-cử-chỉ ở trên.
+
+Khi bật, driver giữ lại thứ tự các pad được chạm lần đầu — các lần lặp liên tiếp bị gộp, vì FastMode kích lại dưới một ngón tay đứng yên không phải là một cú di chuyển — rồi phân loại dựa trên việc thứ tự đó có **quay đầu** hay không. Đảo chiều, chứ không phải thời gian, mới là yếu tố phân biệt: swipe là một lượt đơn điệu, còn vuốt ve thì quay đầu ít nhất một lần. Điều đó cũng có nghĩa là đảo chiều quyết định được ngay khi nó xảy ra, nên **pet giữ được đường phản hồi nhanh**, chỉ các trường hợp nhập nhằng mới phải chờ hết cửa sổ quyết định.
+
+Thứ tự phân giải, khớp cái nào trước thì thắng:
+
+1. **SWIPE** — đủ cả ba pad, đơn điệu, mọi khoảng liền kề ≥ `HAL_TOUCH_SWIPE_MIN_GAP_MS`. Thứ tự quan trọng: kiểm tra trước để một cú swipe đã phân giải không bao giờ bắn thêm một tap. → sleep, hoặc wake nếu đang ngủ.
+2. **PET** — có đảo chiều (bắn ngay tại cuối session), hoặc ≥2 lần tiếp xúc trải trên ≥2 pad mà không có đảo chiều rõ ràng (phương án dự phòng theo số đếm, để một cú vuốt nhiễu không bị câm).
+3. **DOUBLE TAP** — ≥2 lần tiếp xúc không rời khỏi một pad. → toggle mute mic.
+4. **TAP** — mọi trường hợp còn lại.
+
+**Một điểm đụng độ cần biết.** "Hai lần tiếp xúc, cùng một pad" đồng thời là chữ ký của double tap và chữ ký của phương án dự phòng pet theo số đếm, và hai cái đó không phân biệt được ở mức tín hiệu. Double tap thắng. Nên một cú vuốt nhiễu tới mức chỉ ghi nhận được một pad sẽ **mute mic thay vì cười khúc khích**. Đó là cái giá đã chấp nhận khi gán hành động cho double tap; điều kiện `≥2 pad` ở luật 2 là thứ giữ trường hợp phổ biến hơn ở lại phía pet.
+
+| Biến env | Mặc định | Điều chỉnh |
+|---|---|---|
+| `HAL_TOUCH_SWIPE` | `false` | Công tắc chính cho luật 1–3. Tắt thì khôi phục đúng hành vi hai-cử-chỉ. |
+| `HAL_TOUCH_SWIPE_MIN_GAP_MS` | 40 | Khoảng cách tối thiểu giữa hai pad liền kề để một traversal được tính là có chủ đích thay vì cross-talk. **Tạm thời** — dữ liệu từ orange-lamp (n=36, chưa gán nhãn) cho thấy delta giữa các pad nằm trên một phân bố liên tục 7–345 ms không có khoảng trống, nên chưa thể đặt giá trị này từ bằng chứng. Cần hiệu chỉnh lại từ một đợt chạy có nhãn; `HAL_TOUCH_DEBUG` ghi lại chính các delta dùng để đo. |
+
+`boards.json` có thêm trường tùy chọn `axis` trong mục `touch` — các line theo thứ tự vật lý trái sang phải, ví dụ `"axis": [96, 100, 98]`. Hiện tại nó **vắng mặt**: thứ tự line không phải thứ tự không gian trên board này, và chỉ một đợt chạy có nhãn nhấn từng pad một mới xác định được. Khi vắng, phân loại lùi về thứ tự line khai báo. Một axis sai chỉ làm sai **hướng** swipe, thứ mà driver cố ý không dùng — quay đầu vẫn là quay đầu bất kể pad được đánh số theo chiều nào.
+
+
 ### Hằng số (`ttp223.py`)
 
 | Hằng số | Giá trị | Lý do |
@@ -221,6 +245,8 @@ Các action sống ở một chỗ để nút GPIO, TTP223, và mọi input tư�
 | `hold_release_action(held, source)` | Mapping signal hold: chọn sleep, shutdown hoặc factory reset theo duration lúc nhả. | Tuỳ action được chọn |
 | `shutdown_action(source)` | Nói "Đang tắt máy" → đợi 5 s → `release_servos()` (để đèn không slam xuống giữa pose) → `shutdown_os()` (`sudo shutdown -h now`). | Có |
 | `factory_reset_action(source)` | Nói "Đang khôi phục cài đặt gốc. Đang khởi động lại" → `release_servos()` → POST `/api/system/factory-reset` trên OS server (server lo phần wipe + reboot, xem dưới). | Có |
+| `swipe_action(source)` | Toggle sleep/wake: đánh thức nếu `_sleeping`, ngược lại gọi `sleep_action`. Không dựa vào hướng — một cú swipe "sai chiều" sẽ không làm gì mà cũng không có phản hồi giải thích vì sao. | Tùy action được chọn |
+| `mic_toggle_action(source)` | Toggle mute mic cho một double tap đã phân giải. Từ chối khi công tắc mic phần cứng đang tắt hoặc đang ghi âm enroll giọng. Đèn mic-muted là xác nhận duy nhất — mic đã mute thì không có ack bằng âm thanh. | Không |
 | `head_pat_action(source)` | Chọn ngẫu nhiên 1 câu pet local, nói qua `speak_cached` trên daemon thread. **Không cắt**: nếu TTS vẫn busy thì câu pet bị drop im lặng. Thực tế trên TTP223, session chạm đầu tiên đã cắt lời đang nói và phát tiếng ack chime (`_ack_first_session`) nên tới lúc pet fire thì TTS thường rảnh và câu giggle phát được. | Không |
 
 ### Factory-reset: wipe những gì

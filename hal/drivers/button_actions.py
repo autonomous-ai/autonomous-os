@@ -176,10 +176,13 @@ def _wake_if_sleepy(source: str):
     click pulls her out of sleep before the listening cue lands. Calls
     the /emotion handler in-process — it clears `_sleeping`, cancels the
     sleepy auto-release timer, plays the wake animation, and auto-deactivates
-    any active scene (e.g. Night mode)."""
+    any active scene (e.g. Night mode).
+
+    Called from single_click_action and from swipe_action, so the log line says
+    which gesture woke her rather than assuming a click."""
     if not state._sleeping:
         return
-    logger.info("%s single click -- waking from sleep", source)
+    logger.info("%s -- waking from sleep", source)
     try:
         from hal.models import EmotionRequest
         from hal.routes.emotion import express_emotion
@@ -397,6 +400,63 @@ def head_pat_action(source: str = "touch"):
         daemon=True,
         name=f"{source}-head-pat-tts",
     ).start()
+
+
+def swipe_action(source: str = "touch"):
+    """Map a resolved touchpad swipe to the sleep/wake toggle.
+
+    Deliberately NOT keyed on direction. The surface yields one usable
+    traversal gesture, and keying sleep to one direction and wake to the other
+    would make a swipe in the "wrong" direction do nothing, with no feedback
+    saying why. Reading `_sleeping` instead makes any swipe do the only sensible
+    thing for the current state — a sleeping device has no competing reading of
+    any input, which is the same argument that keeps the wake path unambiguous.
+
+    Non-destructive by construction: sleep is reversible with a single tap.
+    Shutdown / reboot / factory-reset stay on the mechanical button, because
+    FastMode cannot measure a hold and a mis-detected swipe must never be able
+    to strand the device.
+    """
+    if state._sleeping:
+        _wake_if_sleepy(f"{source} swipe")
+        return
+    logger.info("%s swipe -- sleeping", source)
+    sleep_action(source)
+
+
+def mic_toggle_action(source: str = "touch"):
+    """Map a resolved double tap to the mic mute toggle.
+
+    Lamp has no hardware mic switch (`_hw_mic_switch_muted` is None here), so
+    this is the only physical path to the microphone. The mic-muted LED is the
+    whole user-facing confirmation — a muted mic has no audible acknowledgement
+    — and both routes below repaint it themselves.
+    """
+    # The HW kill switch is the authority on boards that have one. Lamp reports
+    # None and falls through; a board that does have the switch must not have it
+    # overridden by a touch gesture. Guarding here as well as in unmute_mic
+    # keeps the refusal quiet rather than raising the route's 409.
+    if state._hw_mic_switch_muted is True:
+        logger.info("%s double tap ignored -- HW mic switch is off", source)
+        return
+    # A voice enrollment is recording into a WAV. Toggling the mic mid-capture
+    # truncates it, and the user gets a silently corrupt enrollment.
+    if state._enrolling:
+        logger.info("%s double tap ignored -- voice enrollment in progress", source)
+        return
+
+    from hal.routes.voice import mute_mic, unmute_mic
+
+    try:
+        if state._mic_muted:
+            logger.info("%s double tap -- unmuting mic", source)
+            unmute_mic()
+        else:
+            logger.info("%s double tap -- muting mic", source)
+            mute_mic()
+    except Exception as e:
+        # Never let a mute failure escape into the lgpio callback path.
+        logger.warning("%s double tap -- mic toggle failed: %s", source, e)
 
 
 def sleep_action(source: str = "button"):
