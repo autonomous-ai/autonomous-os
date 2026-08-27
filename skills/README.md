@@ -72,6 +72,7 @@ System-only skills may be hidden from the default storefront or shown with a
 | `computer-use` | Productivity | macos, browser, desktop, companion | Lamp, Intern v2, Reachy Mini |
 | `claude-buddy` | Productivity | claude-code, approvals, companion, agent | Lamp, Intern v2, Reachy Mini |
 | `connectors` | Productivity | gmail, calendar, drive, notion, github | Lamp, Intern v2, Reachy Mini |
+| `faq` | Productivity | local-web, dashboard, settings, help | Lamp, Intern v2, Reachy Mini |
 | `input-branching` | Not published | routing, realtime, internal | Lamp, Intern v2, Reachy Mini |
 
 ## Adding a skill
