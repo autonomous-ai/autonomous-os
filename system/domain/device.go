@@ -1238,6 +1238,14 @@ func IsValidAgentRuntime(r string) bool {
 type AgentRuntimeStatus struct {
 	Current string   `json:"current"`
 	Options []string `json:"options"`
+
+	// Ready reports whether the backend is actually answering, not merely
+	// selected. config.agent_runtime flips as soon as the switch lands, but the
+	// gateway behind it may still be booting — hermes downloads nothing but
+	// still takes tens of seconds to come up. A UI that calls that "active"
+	// invites the operator to start a turn against a backend that is not
+	// listening yet, which reads as a broken device.
+	Ready bool `json:"ready"`
 }
 
 // TimezoneStatus is returned by GET /api/device/timezone: the device's active
