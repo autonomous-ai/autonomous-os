@@ -268,7 +268,10 @@ export const NAV: NavEntry[] = [
       { id: "settings:tts",      label: "Voice",     icon: "♫" },
       { id: "settings:realtime", label: "Realtime",  icon: "⚡" },
       { id: "settings:voice",    label: "My Voice",  icon: "◉" },
-      { id: "settings:face",     label: "Face",      icon: "☺" },
+      // Enrolling a face needs a camera to recognise it with. Without this the
+      // leaf showed on every device, offering an upload that could never be
+      // matched against anything.
+      { id: "settings:face",     label: "Face",      icon: "☺", cap: Cap.Vision },
       { id: "settings:channel",  label: "Channels",  icon: "✉" },
       { id: "settings:mqtt",     label: "MQTT",      icon: "⇄" },
       { id: "settings:mcp",      label: "MCP Tools", icon: "⬡" },
@@ -286,7 +289,13 @@ export const NAV: NavEntry[] = [
       { id: "flow",        label: "Flow",      icon: "⇄" },
       { id: "face-owners", label: "Users",     icon: "☺", cap: Cap.Vision }, // user roster needs the camera
       { id: "camera",      label: "Camera",    icon: "◎", cap: Cap.Vision },
-      { id: "sensing",     label: "Sensing",   icon: "◉", cap: Cap.Sensing },
+      // Vision, not Sensing, despite the name. The declared `sensing` capability
+      // is not a reliable predicate for this page: Intern declares it — the
+      // agent posts voice events to /api/sensing/event — while running no
+      // SensingService at all (HAL has no /sensing/state route there), so all
+      // four cards sit on "No data" forever. What actually fills them is the
+      // vision-backed service, which only a device declaring `vision` runs.
+      { id: "sensing",     label: "Sensing",   icon: "◉", cap: Cap.Vision },
       // Analytics hidden from the menu for now (section code kept; re-enable
       // by uncommenting).
       // { id: "analytics",   label: "Analytics", icon: "⊟" },
