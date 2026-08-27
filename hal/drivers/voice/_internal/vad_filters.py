@@ -36,8 +36,18 @@ class WebRTCVADFilter:
             import webrtcvad as _webrtcvad
             self._vad = _webrtcvad.Vad(aggressiveness)
             logger.info("WebRTC VAD loaded (aggressiveness=%d)", aggressiveness)
-        except ImportError:
-            logger.warning("webrtcvad not installed — pip install webrtcvad")
+        except ImportError as e:
+            # Name the module that actually failed. webrtcvad imports
+            # pkg_resources at its own line 1, and Python 3.12 stopped seeding
+            # setuptools into new venvs — so an installed webrtcvad still
+            # raises ModuleNotFoundError, a subclass of ImportError. Reporting
+            # that as "webrtcvad not installed" sends whoever reads the log to
+            # reinstall a package that was already there (measured on
+            # lamp-0c89, where the fix was setuptools). This gate fails OPEN,
+            # so the only sign anything is wrong is this one line.
+            logger.warning(
+                "WebRTC VAD unavailable, entry gate disabled (passes everything): %s", e
+            )
         except Exception as e:
             logger.warning("WebRTC VAD not available: %s", e)
 
