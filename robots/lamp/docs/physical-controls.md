@@ -27,9 +27,9 @@ Board detection in both handlers reads `/proc/device-tree/model`:
 | Gesture | GPIO button | TTP223 touchpad |
 |---|---|---|
 | **1 tap** | Stop active object tracking, then stop speaker / unmute mic + speaker + ack chime (~120 ms ping) — all fire immediately on release (no click-window wait); the "Listening" cue plays once the 0.4 s click window resolves | Same after the 1.2 s tap-vs-pet decision resolves — active tracking stops, then the mic/speaker action and cue run. The initial touch still stops in-flight TTS and plays its ack chime immediately. |
-| **2 taps** (≤ 0.4 s apart, button) / (≤ 1.2 s apart, TTP223) | Nothing beyond the single-click already fired on tap 1 (panic-click guard) | Pet response. With `HAL_TOUCH_SWIPE` on, two contacts that never leave one pad are a **double tap** → mic mute toggle instead; pet then means a traversal that turns around |
+| **2 taps** (≤ 0.4 s apart, button) / (≤ 1.2 s apart, TTP223) | Nothing beyond the single-click already fired on tap 1 (panic-click guard) | Pet response. With `HAL_TOUCH_SWIPE` on, repeated taps in one place — fast or slow, one finger or several — are a **double tap** → mic mute toggle; pet then means the finger revisited a pad |
 | **3 taps** (≤ 0.4 s apart, button) | Reboot OS (TTS announce → `sudo reboot`) | n/a — TTP223 stops at 2 (any further taps absorbed by cooldown) |
-| **Swipe** across the pads | n/a | **`HAL_TOUCH_SWIPE` only, default off.** One monotonic pass over all three pads → **sleep**. Direction is not used — left-to-right and right-to-left are the same gesture — and neither is device state. Wake stays on tap / double tap. |
+| **Swipe** across the pads | n/a | **`HAL_TOUCH_SWIPE` only, default off.** One contact running monotonically over all three pads, gaps above the movement floor → **sleep**. Direction is not used — left-to-right and right-to-left are the same gesture — and neither is device state. Wake stays on tap / double tap. |
 | **Hold 2–5 s, then release** | Speak the localized sleep announcement, then enter `sleepy`: LED off, camera/mic/speaker off; servo releases after 1 s. LED blinks sleepy purple while held. | n/a — TTP223 hardware cannot reliably hold (see "FastMode" below) |
 | **Hold 5–10 s, then release** | Shutdown OS (TTS announce → release servos → `sudo shutdown -h now`). LED blinks red while armed. | n/a — TTP223 hardware cannot reliably hold (see "FastMode" below) |
 | **Hold 10 s+, then release** | Factory-reset: wipe device state + reboot into AP setup (TTS announce → release servos → POST `/api/system/factory-reset` on the OS server). LED goes solid red while armed. | n/a |
@@ -182,28 +182,36 @@ After a session ends:
    - `count >= 2` → fire `head_pat_action` immediately, arm 1.5 s pet cooldown
    - `count < 2` → schedule a 1.2 s decision timer. When that timer fires with `count == 1`, fire `single_click_action`.
 
-### Layer 3: Traversal classification (`HAL_TOUCH_SWIPE`, default OFF)
+### Layer 3: Gesture classification (`HAL_TOUCH_SWIPE`, default OFF)
 
-**Off by default.** The labelled measurement that was meant to authorise this has not been run, so with the flag unset the driver behaves exactly as the two-gesture version above.
+**Off by default.** With the flag unset the driver resolves only tap and count-based pet, exactly as the two-gesture version above.
 
-With it on, the driver keeps the order pads are first touched in — consecutive repeats collapsed, because FastMode re-triggering under a stationary finger is not a move — and classifies on whether that order **turns around**. Reversal, not timing, is the discriminator: a swipe is one monotonic pass, a stroke turns around at least once. That also means a reversal is decidable the instant it happens, so **pet keeps its fast path** and only the ambiguous cases wait out the decision window.
+**The signal is *when* pads fire, not which.** Device-measured on orange-lamp, 2026-08-27 — inter-pad gaps inside a single contact:
+
+| | |
+|---|---|
+| several fingers landing together | **1 – 23 ms** |
+| one finger travelling across pads | **53 – 322 ms** |
+
+Nothing in between, and `HAL_TOUCH_SWIPE_MIN_GAP_MS` (40) sits in the gap. Every rule below is derived from that one threshold.
+
+**A contact is not a gesture.** This is the thing the first three attempts got wrong. Layer 1 ends a contact when no edge arrives for 200 ms, so a *continuous* stroke never ends one — a whole ~1 s pet arrives as a **single** contact, and two fast taps arrive as a single contact too. Counting contacts therefore cannot identify anything on its own.
 
 Resolution order, first match wins:
 
-1. **SWIPE** — all three pads, monotonic, every adjacent gap ≥ `HAL_TOUCH_SWIPE_MIN_GAP_MS`. Ordering matters: checked first so a resolved swipe never also fires a tap. → **sleep**, in either direction and whatever the device is doing.
-2. **PET** — a direction reversal (fired inline at session end), or ≥2 contacts spanning ≥2 pads with no clean reversal (the count fallback, so a noisy stroke does not go silent).
-3. **DOUBLE TAP** — ≥2 contacts that never left one pad. → mic mute toggle.
-4. **TAP** — anything else.
+1. **SWIPE** → sleep. One contact, every pad, monotonic along the axis, all gaps above the floor. **One contact only**: each leg of a back-and-forth stroke is itself a clean one-direction pass, so letting any leg carry the verdict turns every pet into a swipe. Checked first so a resolved swipe never also fires a tap.
+2. **DOUBLE TAP** → mic mute toggle. Two or more **tight multi-pad bursts** overlapping in place. Fast taps share one contact (the session never lapses); slow taps arrive as separate contacts — both count. Checked before pet, because the second tap re-touches the same pads. A stroke cannot reach this rule: its steps are all above the floor, so every "burst" is a single step and the rule needs multi-pad ones.
+3. **PET** → giggle. The finger **revisited** a pad it had left (more steps than distinct pads), or contacts landed in places with no pad in common. No contact-count gate.
+4. **TAP** → everything else, including several fingers landing at once. That lights every pad, but within ~20 ms, which is not movement.
 
-**A collision worth knowing about.** "Two contacts, same pad" is simultaneously the double-tap signature and the pet count-fallback signature, and the two are indistinguishable at the signal level. Double tap wins. So a stroke so noisy it registers as a single pad **mutes the mic instead of giggling**. That is the accepted cost of giving double tap an action; the `≥2 pads` condition on rule 2 is what keeps the commoner case on the pet side.
+**What is genuinely ambiguous.** A single one-direction sweep with tight timing — three pads, no revisit, gaps under the floor — is indistinguishable from a firm three-finger tap and resolves as TAP. There is no signal on this surface that separates them.
 
 | Env var | Default | Tunes |
 |---|---|---|
 | `HAL_TOUCH_SWIPE` | `false` | Master switch for rules 1–3. Off restores the two-gesture behaviour exactly. |
-| `HAL_TOUCH_SWIPE_MIN_GAP_MS` | 40 | Minimum gap between adjacent pads before a traversal counts as deliberate rather than cross-talk. **Provisional** — device data from orange-lamp (n=36, unlabelled) put inter-pad deltas on one continuous 7–345 ms distribution with no gap, so this cannot yet be set from evidence. Recalibrate from a labelled run; `HAL_TOUCH_DEBUG` records the deltas it is measured against. |
+| `HAL_TOUCH_SWIPE_MIN_GAP_MS` | 40 | The movement floor, used by every rule: gaps at or above it mean the hand travelled, below it mean fingers arrived together. Sits inside the measured 23–53 ms gap. Raise it if taps are being read as swipes; lower it if real swipes are missed. `HAL_TOUCH_DEBUG` records the gaps it is measured against. |
 
-`boards.json` gains an optional `axis` on the `touch` entry — lines in physical left-to-right order, e.g. `"axis": [96, 100, 98]`. It is **absent** today: line order is not spatial order on this board, and only a labelled press-one-pad-at-a-time run can establish it. Absent, classification falls back to declared line order. A wrong axis costs the swipe *direction*, which this driver deliberately does not use — a turn is a turn whichever way the pads are numbered.
-
+`boards.json` gains an optional `axis` on the `touch` entry — lines in physical left-to-right order, e.g. `"axis": [96, 100, 98]`. It is **absent** today: line order is not spatial order on this board, and only a labelled press-one-pad-at-a-time run can establish it. Absent, classification falls back to declared line order. A wrong axis costs only the swipe *direction*, which the driver deliberately does not use.
 
 ### Constants (`ttp223.py`)
 
@@ -246,7 +254,7 @@ The actions live in one place so the GPIO button, TTP223, and any future input (
 | `shutdown_action(source)` | Speak "Shutting down now" → wait 5 s → `release_servos()` (so the lamp doesn't slam down mid-pose) → `shutdown_os()` (`sudo shutdown -h now`). | Yes |
 | `factory_reset_action(source)` | Speak "Factory reset starting. Rebooting now" → `release_servos()` → POST `/api/system/factory-reset` on the OS server (the server owns the wipe + reboot, see below). | Yes |
 | `swipe_action(source)` | Always `sleep_action`. Not keyed on direction (a swipe the "wrong" way would otherwise do nothing, with no feedback saying why) and not keyed on state (one gesture meaning two things depending on something invisible). On an already-sleeping device `sleep_action` returns early. | Yes |
-| `mic_toggle_action(source)` | Mic mute toggle for a resolved double tap. Refuses while the HW mic switch is off or a voice enrollment is recording. The mic-muted LED is the only confirmation — a muted mic has no audible ack. | No |
+| `mic_toggle_action(source)` | Mic mute toggle for a resolved double tap (fast or slow). Refuses while the HW mic switch is off or a voice enrollment is recording. The mic-muted LED is the only confirmation — a muted mic has no audible ack. | No |
 | `head_pat_action(source)` | Pick a random localized pet phrase, speak it via `speak_cached` on a daemon thread. **Non-interrupting**: if TTS is still busy the phrase is dropped silently. In practice on TTP223 the first touch session already cut any in-flight speech and sounded the ack chime (`_ack_first_session`), so by pet time TTS is usually free and the giggle plays. | No |
 
 ### Factory-reset: what gets wiped

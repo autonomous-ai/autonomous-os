@@ -5,40 +5,52 @@ How many pads and which lines is board data, not a constant here — see the
 relocated to escape LED/servo/audio coupling), so any count written into this
 docstring goes stale; ask the board profile.
 
-Two gestures:
-- Single tap   → stop speaker / unmute mic (same as GPIO button single click)
-- Pet / stroke → playful TTS response ("hihi nhột quá!", etc.)
-
 Destructive gestures (reboot / shutdown) are intentionally OFF on TTP223
 because the IC on this board runs in FastMode: output drops LOW within
 ~50ms of touch even with finger still on the pad, so a true "hold 5s"
 is impossible without rewiring the FM pin. GPIO button still owns those.
 
-Gesture detection is two-layered:
+LAYER 1 — SESSION. Any edge, either direction, any pad, restarts a 200ms timer.
+When it lapses the "contact" ends. This coalesces the burst of cross-talk and
+FastMode auto-release edges that one finger produces. A contact is one touch of
+the surface — but NOT one gesture: a continuous stroke never lets the timer
+lapse, so a whole 1s pet arrives as a single contact, and two fast taps arrive
+as one contact too. Everything below was written after learning that on device.
 
-1. Session: any edge (rising or falling, any pad) keeps a 200ms window
-   alive. Coalesces the burst of cross-talk + FastMode auto-LOW edges
-   from one physical touch into a single "session". One session = one
-   touch event from the user's POV.
+LAYER 2 — GESTURE. Off by default (SWIPE_ENABLED); with the flag off the driver
+resolves only tap and count-based pet, exactly as it always did.
 
-2. Pet vs tap: after a session ends, wait DECISION_WINDOW (1.2s) for
-   more sessions. A second session inside the window = the user is
-   stroking the head → head_pat_action. One session that's not followed
-   by more = single tap → single_click_action.
+The signal is WHEN pads fire, not which. Device-measured on orange-lamp
+2026-08-27, inter-pad gaps inside one contact:
 
-The 1.2s decision delay is the cost of distinguishing the two gestures
-on this hardware — TTP223 FastMode can't tell us "finger currently down",
-so we infer continuous stroking from session frequency.
+    fingers landing together    1 .. 23 ms
+    a finger travelling        53 .. 322 ms
 
-Two parts of the tap action escape the wait, both at the FIRST session
+Nothing in between, and SWIPE_MIN_GAP_MS sits in the gap. From that one
+threshold everything else follows:
+
+  SWIPE       one contact, every pad, monotonic along the axis, gaps above the
+              floor. One contact only — each leg of a back-and-forth stroke is
+              itself a clean pass, so allowing any leg to carry the verdict
+              turns every pet into a swipe.
+  DOUBLE TAP  two or more tight multi-pad BURSTS overlapping in place. Fast taps
+              share a contact; slow taps arrive as separate contacts. Checked
+              before pet, because the second tap re-touches the same pads.
+  PET         the finger revisited a pad it had left (more steps than distinct
+              pads), or contacts landed in different places. A stroke's steps are
+              evenly spread, so it has no bursts to be mistaken for taps.
+  TAP         anything else, including several fingers landing at once — that
+              lights every pad but within ~20ms, which is not movement.
+
+Two parts of the tap action escape the decision wait, both at the FIRST contact
 end of a burst (~0.2s after the finger lifts): in-flight TTS is stopped
-immediately, and a short ack chime plays — stop latency and "did it hear
-me" feedback are the parts of the gesture users actually feel. Deliberate
-semantic change that comes with it: petting her head while she talks now
-cuts her off (the pet giggle follows) — touch means "attention here"
-either way. Only TTS is cut early; music keeps playing until the burst
-actually resolves as a tap, so petting during music never kills the
-playlist. Unmute + the listening cue also still wait for resolution.
+immediately, and a short ack chime plays — stop latency and "did it hear me"
+feedback are the parts of the gesture users actually feel. Deliberate semantic
+change that comes with it: petting her head while she talks now cuts her off
+(the pet giggle follows) — touch means "attention here" either way. Only TTS is
+cut early; music keeps playing until the burst actually resolves as a tap, so
+petting during music never kills the playlist. Unmute + the listening cue also
+still wait for resolution.
 """
 
 import logging
@@ -78,12 +90,11 @@ SESSION_GAP_S = 0.2
 # every pet motion.
 DECISION_WINDOW_S = 1.2
 
-# Number of sessions to qualify as pet. 2 keeps pet detection generous
-# for continuous stroking — any second touch within DECISION_WINDOW
-# fires pet immediately. The cost is that two intentional single taps
-# spaced <0.9s apart will fire pet instead of two singles; this is
-# acceptable because users who want two stops just need to space their
-# taps slightly (1s+ apart).
+# Contacts needed before the COUNT-based rules apply — the pet fallback for a
+# stroke with no readable traversal, and the slow double tap. With SWIPE_ENABLED
+# the spatial rules resolve most gestures before these are reached; with it off
+# this is the whole of pet detection, and two taps under ~0.9s apart fire pet
+# rather than two singles (users who want two stops space them 1s+).
 PET_SESSION_THRESHOLD = 2
 
 # After head_pat fires, swallow further sessions for this long so a
@@ -298,6 +309,10 @@ class TTP223Handler:
         def gaps_of(c):
             return [(b - a) * 1000.0 for (_, a), (_, b) in zip(c, c[1:])]
 
+        # Reported on every trace, not only when a swipe was found — the whole
+        # point of recording it is to see how near the floor a gesture landed.
+        all_gaps = [x for c in contacts for x in gaps_of(c)]
+
         def bursts_of(c):
             """Split a contact into runs of steps that arrived TOGETHER.
 
@@ -331,7 +346,6 @@ class TTP223Handler:
 
         sets_nonempty = [c for c in contacts if c]
         is_swipe = False
-        min_gap = 0.0
         moved_within = False
         # A stroke goes back over ground it already covered: more steps than
         # distinct pads means the finger returned to a pad it had left. A tap
@@ -359,13 +373,13 @@ class TTP223Handler:
             # the verdict turns every pet into a swipe. One contact, one pass.
             if len(sets_nonempty) == 1 and g and min(g) >= SWIPE_MIN_GAP_MS:
                 is_swipe = True
-                min_gap = min(g)
 
         sets = [{l for l, _ in c} for c in contacts if c]
         # Disjoint contacts are movement too, even when each one was a single
         # instantaneous touch — that is a hand hopping from pad to pad.
         disjoint = len(sets) >= 2 and not set.intersection(*sets)
-        return (is_swipe, (moved_within or disjoint), min_gap, len(sets),
+        return (is_swipe, (moved_within or disjoint),
+                min(all_gaps) if all_gaps else 0.0, len(sets),
                 revisited, repeat_taps)
 
     def _pad_name(self, line):

@@ -13,10 +13,16 @@ So when a touch does the wrong thing there is no way to tell whether the pad
 misfired, the session layer mis-grouped it, the classifier mis-read it, or the
 action did something unexpected. This puts all four in one file per gesture.
 
-It is also the measuring instrument for the swipe/pet question: `adjacent_deltas_ms`
-and the `traversal` block are emitted for every contact whether or not swipe
-classification exists, so the cross-talk-vs-stroke histogram accumulates from the
-first touch without any classifier being written.
+It is also the measuring instrument the classifier was designed from: per-contact
+`adjacent_deltas_ms` are emitted whether or not gesture classification is on, and
+those deltas are what showed fingers-landing-together (1-23ms) separating cleanly
+from a finger travelling (53-322ms).
+
+This module does NOT classify. It records edges and sessions, and stores whatever
+the driver reports through `note_classifier`. An earlier version recomputed its
+own traversal, and once the driver's model changed the two silently disagreed —
+a trace read `reversals: 3, "stroke-shaped"` beside a DOUBLE_TAP verdict, which
+is worse than no trace at all because it looks authoritative.
 
 Env knobs (all optional):
   HAL_TOUCH_DEBUG              "true" to enable (OFF by default)
@@ -31,7 +37,7 @@ Layout — one file per resolved gesture, named so a wrong classification is
 visible from `ls` alone:
   <root>/20260827-114032_TAP.json
   <root>/20260827-114107_PET.json
-  <root>/20260827-114230_SWIPE-lr.json
+  <root>/20260827-114230_SWIPE.json
   <root>/20260827-114251_IGNORED-pet_cooldown.json
   <root>/20260827-114301_IGNORED-settle.json
 
@@ -295,7 +301,7 @@ def _summarise_session(edges: List[Dict[str, Any]], count: int,
         "span_ms": round(times[-1] - times[0], 1) if len(times) > 1 else 0.0,
         # First line to fire in this contact — the proxy for "where the finger
         # was". Its reliability under cross-talk is the open assumption the
-        # traversal model rests on, and what this field exists to measure.
+        # spatial model rests on, and what this field exists to measure.
         "primary_pad": _pad(order[0][0]) if order else None,
     }
 
