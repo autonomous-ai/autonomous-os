@@ -276,7 +276,7 @@ class TTP223Handler:
             self._contact = []
 
     def _classify(self):
-        """Read the cycle as (is_swipe, moved, min_gap, n_contacts, revisited, repeat_taps).
+        """Read the cycle as (is_swipe, moved, gaps, n_contacts, revisited, repeat_taps).
 
         The discriminator is WHEN pads fire, not which. Device-measured on
         orange-lamp 2026-08-27, per-contact inter-pad deltas:
@@ -314,6 +314,8 @@ class TTP223Handler:
 
         # Reported on every trace, not only when a swipe was found — the whole
         # point of recording it is to see how near the floor a gesture landed.
+        # Both ends: reporting only the minimum hid the asymmetric-landing bug
+        # for a full round of testing, because the gap that mattered was the max.
         all_gaps = [x for c in contacts for x in gaps_of(c)]
 
         def bursts_of(c):
@@ -374,7 +376,16 @@ class TTP223Handler:
             # stroke contains a clean one-direction pass in nearly every
             # contact — device trace 160546 — so allowing any contact to carry
             # the verdict turns every pet into a swipe. One contact, one pass.
-            if len(sets_nonempty) == 1 and g and min(g) >= SWIPE_MIN_GAP_MS:
+            #
+            # ANY gap above the floor, not every gap. The surface is not
+            # symmetric: starting a swipe from the right lands on L100 and L98
+            # together (they are adjacent and cross-talk bridges them, 5-28ms)
+            # and only then travels to L96 over 65-104ms. Requiring every gap to
+            # clear the floor made right-to-left swipes impossible while
+            # left-to-right worked — device traces 164757/164804/164807/164810.
+            # "Did the hand travel at all" is also exactly what `moved` means
+            # everywhere else in this classifier.
+            if len(sets_nonempty) == 1 and any(x >= SWIPE_MIN_GAP_MS for x in g):
                 is_swipe = True
 
         sets = [{l for l, _ in c} for c in contacts if c]
@@ -382,7 +393,7 @@ class TTP223Handler:
         # instantaneous touch — that is a hand hopping from pad to pad.
         disjoint = len(sets) >= 2 and not set.intersection(*sets)
         return (is_swipe, (moved_within or disjoint),
-                min(all_gaps) if all_gaps else 0.0, len(sets),
+                (min(all_gaps), max(all_gaps)) if all_gaps else (0.0, 0.0), len(sets),
                 revisited, repeat_taps)
 
     def _pad_name(self, line):
@@ -514,7 +525,8 @@ class TTP223Handler:
             # Same finish-before-dispatch rule as _dispatch: the trace closes
             # before the action can block or raise.
             touch_debug.note_classifier(
-                revisited=_revisited, repeat_taps=_repeat_taps, is_swipe=_is_swipe, moved=_moved, min_gap_ms=round(_min_gap, 1),
+                revisited=_revisited, repeat_taps=_repeat_taps, is_swipe=_is_swipe, moved=_moved,
+                gap_min_ms=round(_min_gap[0], 1), gap_max_ms=round(_min_gap[1], 1),
                 contacts=_n, move_floor_ms=SWIPE_MIN_GAP_MS,
                 contact_pads=[[self._pad_name(l) for l, _ in c] for c in self._contacts],
             )
@@ -555,7 +567,7 @@ class TTP223Handler:
             self._session_count = 0
             self._decision_timer = None
         self._close_contact()
-        (is_swipe, moved, min_gap, n_contacts, revisited,
+        (is_swipe, moved, gaps, n_contacts, revisited,
          repeat_taps) = self._classify()
 
         if count < 1:
@@ -570,7 +582,7 @@ class TTP223Handler:
             #    Checked first so a resolved swipe never also fires a tap.
             if is_swipe:
                 self._dispatch(
-                    "SWIPE", f"one contact traversed all pads, min gap {min_gap:.0f}ms",
+                    "SWIPE", f"one contact traversed all pads, gaps {gaps[0]:.0f}-{gaps[1]:.0f}ms",
                     count, "swipe_action", swipe_action,
                 )
                 return
@@ -638,10 +650,11 @@ class TTP223Handler:
         (device-observed 2026-08-27). Writing first also means the trace
         survives an action that raises.
         """
-        is_swipe, moved, min_gap, n, revisited, repeat_taps = self._classify()
+        is_swipe, moved, gaps, n, revisited, repeat_taps = self._classify()
         touch_debug.note_classifier(
             revisited=revisited, repeat_taps=repeat_taps,
-            is_swipe=is_swipe, moved=moved, min_gap_ms=round(min_gap, 1),
+            is_swipe=is_swipe, moved=moved,
+            gap_min_ms=round(gaps[0], 1), gap_max_ms=round(gaps[1], 1),
             contacts=n, move_floor_ms=SWIPE_MIN_GAP_MS,
             contact_pads=[[self._pad_name(l) for l, _ in c] for c in self._contacts],
         )

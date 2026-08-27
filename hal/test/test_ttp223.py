@@ -195,6 +195,20 @@ class TestSwipe(_Base):
             self.hz.decide()
             self.assertEqual(self.hz.fired, ["swipe_action"], lines)
 
+    def test_a_RIGHT_TO_LEFT_swipe_registers_despite_a_bridged_landing(self):
+        """The reported bug, 2026-08-27: L->R swipes worked, R->L never did.
+
+        The surface is not symmetric. Starting from the right lands on L100 and
+        L98 together — adjacent pads, cross-talk bridges them in 5-28ms — and
+        only then travels to L96 over 65-104ms. Requiring EVERY gap to clear the
+        floor made that impossible. Real timings from trace 164804.
+        """
+        for at, line in ((0, 100), (5, 98), (109, 96)):
+            self.hz.touch(line, at_ms=at)
+        self.hz.end_session()
+        self.hz.decide()
+        self.assertEqual(self.hz.fired, ["swipe_action"])
+
     def test_cross_talk_burst_is_not_a_swipe(self):
         """Device-measured shape: three pads inside ~20ms from one finger.
         Ordering alone is not evidence — the gaps have to clear the floor."""
