@@ -16,6 +16,10 @@ Enforced bounds:
              stretching a move's duration (see min_move_duration)
   - slice 4: thermal.max_temp_c              — SoC over-temp → health event +
              stop discretionary motion (background monitor, see thermal_over)
+  - slice 5: audio.max_volume                — speaker volume ceiling (%), clamped
+             in the /audio/volume request path (see clamp_volume)
+  - slice 5: audio.max_volume                — speaker volume ceiling (%), clamped
+             in the /audio/volume request path (see clamp_volume)
 
 Enforcement is presence-driven and uniform across capabilities: a declared bound
 is enforced, an absent one is pass-through — the engine never invents a limit
@@ -50,6 +54,7 @@ _RE_SCHEMA = re.compile(r"^schema:\s*(\S+)\s*$", re.MULTILINE)
 _RE_SCHEMA_VERSION = re.compile(r"^" + re.escape(SCHEMA_NAMESPACE) + r"\.v(\d+)$")
 
 MAX_CHANNEL = 255  # 8-bit per-channel RGB ceiling
+MAX_VOLUME_PCT = 100  # speaker volume is a percentage, the same scale /audio/volume takes
 
 
 @dataclass(frozen=True)
@@ -93,6 +98,10 @@ class SafetyPolicy:
     max_brightness: Optional[int] = None
     light_quiet: Optional[QuietHours] = None   # nightly reduced LED ceiling
     audio_quiet: Optional[QuietHours] = None    # nightly window: suppress loud audio
+    # speaker volume ceiling (0–100 %). None = no ceiling declared → pass-through,
+    # the same presence-driven rule as every other bound. Independent of
+    # audio_quiet: this one applies all day, to every caller of /audio/volume.
+    max_volume: Optional[int] = None
     # Motion bounds. None = no machine motion bounds declared → pass-through, the
     # same presence-driven rule as light/audio: a declared bound is enforced, an
     # absent one is not (the engine never invents a limit nobody wrote). The only
@@ -166,6 +175,12 @@ def _validate_brightness(val: Optional[int], where: str) -> Optional[int]:
     return val
 
 
+def _validate_volume(val: Optional[int], where: str) -> Optional[int]:
+    if val is not None and not (0 <= val <= MAX_VOLUME_PCT):
+        raise ValueError(f"SAFETY.md {where} {val} out of range 0–{MAX_VOLUME_PCT}")
+    return val
+
+
 def _parse_hhmm(s: str) -> dtime:
     h, m = s.split(":")
     hi, mi = int(h), int(m)
@@ -230,13 +245,17 @@ def parse_safety(text: str) -> SafetyPolicy:
     fm = "\n".join(ln for ln in fm.splitlines() if not ln.lstrip().startswith("#"))
     light_body = _section_body(fm, "light")
     audio_body = _section_body(fm, "audio")
-    # base light ceiling = max_brightness outside the quiet_hours object
+    # Base ceilings = the fields outside the quiet_hours object, so a
+    # `max_brightness`/`max_volume` nested inside the window is never mistaken
+    # for the all-day bound.
     light_base_body = re.sub(r"quiet_hours:\s*\{[^}]*\}", "", light_body)
+    audio_base_body = re.sub(r"quiet_hours:\s*\{[^}]*\}", "", audio_body)
     return SafetyPolicy(
         schema=schema,
         max_brightness=_validate_brightness(_int_field(light_base_body, "max_brightness"), "light.max_brightness"),
         light_quiet=_parse_quiet_hours(light_body, with_brightness=True),
         audio_quiet=_parse_quiet_hours(audio_body, with_brightness=False),
+        max_volume=_validate_volume(_int_field(audio_base_body, "max_volume"), "audio.max_volume"),
         motion=_parse_motion(_section_body(fm, "motion")),
         thermal=_parse_thermal(_section_body(fm, "thermal")),
     )
@@ -310,6 +329,26 @@ def audio_quiet_now(policy: Optional[SafetyPolicy], now: Optional[dtime] = None)
     if now is None:
         now = _now()
     return in_window(policy.audio_quiet, now)
+
+
+def max_volume_pct(policy: Optional[SafetyPolicy]) -> Optional[int]:
+    """The declared speaker ceiling (%), or None when none is declared. Exposed so
+    a UI can present the real ceiling instead of letting an operator drag a slider
+    to a value the gate will silently pull back down."""
+    return policy.max_volume if policy is not None else None
+
+
+def clamp_volume(policy: Optional[SafetyPolicy], value: int) -> int:
+    """Clamp a requested speaker volume (%) to the declared ceiling.
+
+    Absent bound = pass-through (only the 0–100 scale clamp applies), the same
+    presence-driven rule as clamp_brightness. Lives here rather than in the route
+    so every caller of /audio/volume is bound identically — agent, local intent,
+    web slider, os-server boot restore.
+    """
+    value = max(0, min(MAX_VOLUME_PCT, value))
+    ceiling = max_volume_pct(policy)
+    return value if ceiling is None else min(value, ceiling)
 
 
 def cap_speed_dps(policy: Optional[SafetyPolicy], requested: float) -> float:

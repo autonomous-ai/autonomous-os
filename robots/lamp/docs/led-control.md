@@ -79,7 +79,7 @@ POST /led/effect
 |--------|-------------|--------|
 | `breathing` | Sine-wave brightness up/down | color, speed |
 | `candle` | Random flickering candle | color |
-| `rainbow` | Hue rotation across strip | speed |
+| `rainbow` | Hue rotation across strip | brightness (0.0-1.0, level), speed — generates its own hue, ignores `color` |
 | `notification_flash` | Quick flash 3 times | color |
 | `pulse` | Single pulse from center outward | color, speed |
 

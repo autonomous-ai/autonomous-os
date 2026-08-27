@@ -12,11 +12,13 @@ from fastapi.responses import Response
 
 import hal.app_state as state
 from hal.config import AUDIO_OUTPUT_ALSA, VOLUME_STATE_PATH
+from hal.safety.policy import clamp_volume, max_volume_pct
 from hal.models import (
     AudioDevicesResponse,
     StatusResponse,
     VolumeRequest,
     VolumeResponse,
+    VolumeSetResponse,
 )
 
 router = APIRouter(tags=["Audio"])
@@ -155,22 +157,30 @@ def _persist_volume(pct: int) -> None:
         pass
 
 
-@router.post("/audio/volume", response_model=StatusResponse)
+@router.post("/audio/volume", response_model=VolumeSetResponse)
 def set_volume(req: VolumeRequest):
     """Set system speaker volume (0-100%). Routes to the BT headset sink
-    (PulseAudio) when one is active, else to the built-in speaker (amixer)."""
-    pct = max(0, min(100, req.volume))
+    (PulseAudio) when one is active, else to the built-in speaker (amixer).
+
+    Clamped to SAFETY.md `audio.max_volume` here, above the sink split, so the
+    ceiling holds on the built-in speaker and a Bluetooth headset alike and for
+    every caller (agent, local intent, web slider, os-server boot restore)."""
+    pct = clamp_volume(state.safety_policy, req.volume)
+    if pct != req.volume:
+        state.logger.info(
+            "POST /audio/volume: %d%% clamped to safety ceiling %d%%", req.volume, pct
+        )
     if state.simulation_audio:
         state.simulation_volume = pct
         _persist_volume(pct)
-        return {"status": "ok"}
+        return _vol_set_response(pct)
     sink = _bt_sink()
     if sink:
         from hal.drivers.bluetooth_manager import BluetoothManager
         if not BluetoothManager().set_pa_sink_volume(sink, pct):
             raise HTTPException(503, "Bluetooth sink volume change failed")
         _persist_volume(pct)
-        return {"status": "ok"}
+        return _vol_set_response(pct)
     controls, dev = _detect_playback_controls()
     if not controls:
         raise HTTPException(503, "No audio mixer controls found")
@@ -189,7 +199,29 @@ def set_volume(req: VolumeRequest):
         except Exception:
             pass
     _persist_volume(pct)
-    return {"status": "ok"}
+    return _vol_set_response(pct)
+
+
+def _vol_set_response(volume: int) -> dict:
+    """POST reply: the volume actually applied plus the ceiling that produced it.
+    Same reason as _vol_response — every write path reports what really landed,
+    so a client is never left believing an over-ceiling request went through."""
+    return {
+        "status": "ok",
+        "volume": volume,
+        "max_volume": max_volume_pct(state.safety_policy),
+    }
+
+
+def _vol_response(control: str, volume: int) -> dict:
+    """Every /audio/volume read carries the safety ceiling alongside the current
+    value. Built here rather than inline so no read path (virtual, Bluetooth, DAC
+    dB, raw %) can quietly ship without it."""
+    return {
+        "control": control,
+        "volume": volume,
+        "max_volume": max_volume_pct(state.safety_policy),
+    }
 
 
 @router.get("/audio/volume", response_model=VolumeResponse)
@@ -203,13 +235,13 @@ def get_volume():
     range differs from our [-60dB, +2dB] envelope (e.g. WM8960, Rockchip).
     """
     if state.simulation_audio:
-        return {"control": "virtual", "volume": state.simulation_volume}
+        return _vol_response("virtual", state.simulation_volume)
     sink = _bt_sink()
     if sink:
         from hal.drivers.bluetooth_manager import BluetoothManager
         vol = BluetoothManager().pa_sink_volume(sink)
         if vol is not None:
-            return {"control": "bluetooth", "volume": vol}
+            return _vol_response("bluetooth", vol)
     controls, dev = _detect_playback_controls()
     cmd_prefix = ["amixer", "-D", dev] if dev else ["amixer"]
     sorted_controls = sorted(
@@ -228,10 +260,10 @@ def get_volume():
             if ctrl.upper() in _DAC_CONTROLS:
                 db_match = re.search(r"\[(-?\d+(?:\.\d+)?)dB\]", result.stdout)
                 if db_match:
-                    return {"control": ctrl, "volume": _db_to_pct(float(db_match.group(1)))}
+                    return _vol_response(ctrl, _db_to_pct(float(db_match.group(1))))
             pct_match = re.search(r"\[(\d+)%\]", result.stdout)
             if pct_match:
-                return {"control": ctrl, "volume": int(pct_match.group(1))}
+                return _vol_response(ctrl, int(pct_match.group(1)))
         except Exception:
             continue
     raise HTTPException(503, "Audio volume control not available")

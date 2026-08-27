@@ -19,6 +19,7 @@ from hal.presets import (
     ambient_resting_is_dark,
     EMO_IDLE,
     EMO_LISTENING,
+    EMO_MUSIC_STRONG,
     EMO_SLEEPY,
     EMO_THINKING,
     EMOTION_PRESETS,
@@ -837,6 +838,7 @@ def _start_preset_effect(preset: dict, thread_name: str):
     _effect_thread = threading.Thread(
         target=_run_effect,
         args=(preset["effect"], color, preset.get("speed", 1.0), None, _effect_stop, rgb_service),
+        kwargs={"brightness": preset.get("brightness", 1.0)},
         daemon=True,
         name=thread_name,
     )
@@ -1079,12 +1081,16 @@ def _restore_user_led():
             color = tuple(state["color"])
             speed = state.get("speed", 1.0)
             effect = state["effect"]
+            # Saved before rainbow had a level: old state files have no
+            # "brightness", and 1.0 is what they were painted at.
+            brightness = state.get("brightness", 1.0)
             _effect_stop.clear()
             _effect_name = effect
             _effect_base_color = color
             _effect_thread = threading.Thread(
                 target=_run_effect,
                 args=(effect, color, speed, None, _effect_stop, rgb_service),
+                kwargs={"brightness": brightness},
                 daemon=True,
                 name=f"led-restore-{effect}",
             )
@@ -1286,6 +1292,12 @@ def _on_music_play_start():
     _effect_thread = threading.Thread(
         target=_run_effect,
         args=(effect, color, 2.5, None, _effect_stop, rgb_service),
+        # speaking_wave_rainbow generates its own hue, so no color scales it —
+        # its level comes from the music_strong preset's "brightness", the one
+        # per-device knob for "how bright is the rainbow during music". The
+        # plain speaking_wave branch ignores this: it is scaled by the user's
+        # own color, which the device palette already governs.
+        kwargs={"brightness": EMOTION_PRESETS[EMO_MUSIC_STRONG].get("brightness", 1.0)},
         daemon=True,
         name=name,
     )
@@ -1380,6 +1392,9 @@ def _apply_emotion_led_display(
                         _effect_stop,
                         rgb_service,
                     ),
+                    # rainbow has no color to scale, so `intensity` cannot dim
+                    # it — the preset's own `brightness` is its only level.
+                    kwargs={"brightness": preset.get("brightness", 1.0)},
                     daemon=True,
                     name=f"led-emotion-{emotion}",
                 )

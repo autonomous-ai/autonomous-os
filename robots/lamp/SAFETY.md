@@ -13,8 +13,9 @@ light:
   # Quiet hours lower the ceiling on real wall-clock time (device runs all day; not a nightlight).
   quiet_hours: { start: "22:00", end: "07:00", max_brightness: 40 }   # 22:00–07:00 → ring dims to 40, agent-independent
 
-#audio:
-#  quiet_hours: { start: "22:00", end: "07:00" }   # suppress loud discretionary output (music) in-window; spoken replies still play
+audio:
+  max_volume: 40             # 0–100 % speaker ceiling; the volume route clamps any higher request
+  # quiet_hours: { start: "22:00", end: "07:00" }   # (optional) suppress loud discretionary output (music) in-window; spoken replies still play
 
 motion:
   max_speed: 120             # deg/s ceiling; the servo route stretches a move's duration so no joint exceeds it
@@ -64,7 +65,14 @@ That is the template for everything here.
 
 ## audio
 
-- No loud output without reason; respect quiet hours.
+- Speaker volume is capped by `audio.max_volume` in the front matter above and
+  enforced in the request path (`hal/safety/policy.py`), so it holds for every
+  caller alike — agent, local intent ("volume up"), the web slider, and the
+  os-server boot restore. This is a small desk lamp in a quiet room; the ceiling
+  is set where speech stays intelligible, not where the driver stops.
+- No loud output without reason. Quiet hours for audio are available
+  (`audio.quiet_hours`) but left unset — the volume ceiling applies all day
+  instead of a nightly window.
 - Never repeat secrets or overheard private speech back aloud.
 
 ## autonomy

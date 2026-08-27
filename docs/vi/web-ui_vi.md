@@ -119,6 +119,15 @@ Góc dưới sidebar hiển thị trạng thái OpenClaw (online/offline) và th
 
 ### 3.4 Settings (`/setting`) — shell dùng chung
 
+**Mirror key/URL từ AI Brain.** Panel tự điền ô TTS hoặc STT còn trống bằng key
+và base URL của AI Brain, để lần setup đầu chỉ phải nhập một bộ. Riêng phần key
+còn phải thoả điều kiện máy **chưa có key nào** (`has_tts_api_key` /
+`has_stt_api_key`): mấy ô đó là write-only nên lần mở trang nào cũng trống bất
+kể máy đã lưu key hay chưa, tức "trống" không thể hiểu là "chưa đặt" như với
+base URL — thứ luôn load lên kèm giá trị thật. Thiếu điều kiện đó thì gõ một key
+AI Brain mới là ghi đè im lặng lên key TTS/STT đang cố tình khác: đã có máy giữ
+key openrouter đi kèm URL proxy autonomous, một cặp không thể chạy.
+
 Settings **không phải là một trang riêng**. Nó là một khu vực (area) của chính shell Monitor (`system/web/src/pages/monitor/index.tsx`), truy cập tại route `/setting`. Trong `App.tsx`, `/monitor` và `/setting` là các route con của một layout route duy nhất có element render `<Monitor/>`; React Router giữ element đó luôn mounted khi chỉ đường dẫn con thay đổi, nên sidebar **không** bị remount khi chuyển giữa Monitor và Settings (không có hiện tượng nháy toàn trang). Shell suy ra khu vực — `"monitor"` hoặc `"setting"` — từ `useLocation().pathname`.
 
 Nhóm Settings có thể thu gọn nằm trong `NAV` của sidebar dùng chung (`system/web/src/pages/monitor/types.ts`). Bấm một mục Settings sẽ điều hướng tới `/setting` và render `SettingsPanel` (`system/web/src/pages/settings/SettingsPanel.tsx`) ở khu vực chính; bấm một mục Monitor sẽ điều hướng tới `/monitor`.

@@ -296,7 +296,78 @@ capture thread is still not implemented.
 
 `aec.uncancelled()` reports whether the frame just read went through *without*
 real cancellation — reference underrun, bypassed stream, or mic overrun. Barge-in
-gates on it so it cannot decide on raw echo.
+gates on it so it cannot decide on raw echo. Note what it does **not** say:
+it reports whether a reference *arrived*, not whether cancellation *worked*, so
+a frame with 0.9 dB of ERLE still counts as cancelled.
+
+### Barge-in: level cannot separate echo from a person
+
+The residual that survives cancellation is loud enough to look like a user
+interrupting, and it **is** speech, so neither the level gate nor the speech
+classifier can reject it. Measured in a silent room, echo ceiling (the
+`drain peak RMS=` each reply logs) against real interruptions:
+
+| Speaker volume | Mixer | Echo ceiling | Real interruption |
+|---|---|---|---|
+| 25 % (`lamp-ee17`) | −45 dB | 9804 | 8027 |
+| 40 % (`lamp-0c89`) | −36 dB | 9969 | 6956–8027 |
+| 65 % (`lamp-0c89`) | −21 dB | 13560 | 6956 |
+
+The echo ceiling sits **above** the real interruptions at every volume, so a
+threshold below it self-interrupts and one above it misses ordinary speech.
+Lowering the speaker is not a workaround either: 24 dB of mixer range moved the
+ceiling by under 3 dB, because the coupling is not dominated by the airborne
+path. Do not spend time re-tuning `HAL_BARGE_IN_RMS_THRESHOLD` — no value works.
+
+What does separate them is `aec.echo_envelope_match()`
+(`HAL_BARGE_IN_ECHO_MATCH`, default `0.65`), which runs third, only on
+candidates that already passed level and speech. It works in three steps on
+log-energy envelopes at 8 ms resolution, taken from the **raw** mic:
+
+1. **Align.** Cross-correlate the candidate window against the retained
+   reference and take the best lag. Correlation only locates the window — it is
+   not the verdict, because during double talk the raw mic carries the echo well
+   above the person and correlates highly whatever they say.
+2. **Subtract.** Remove the aligned reference plus the coupling gain (median
+   offset), keeping only frames where the reply is actually loud. In the gaps
+   between its words the reference predicts near-silence, so room noise there
+   would read as a huge unexplained excess.
+3. **Measure the skew, not the size.** Echo never fits perfectly — reverb, mic
+   noise and a coupling that is not a clean scaling leave a couple of dB either
+   way. A person is one-sided: they can only *add* energy. So a top tail that
+   outruns the bottom tail is someone else in the room, and a symmetric
+   residual is echo however large it is.
+
+Measured on `lamp-0c89`, speaker 40 %, labelled against the transcript that
+followed each candidate:
+
+| | Residual skew |
+|---|---|
+| Echo, silent room (15 windows) | −2.8 … +2.1 dB |
+| Echo, mixed run (~40 windows) | −50.0 … **+4.8** dB |
+| Confirmed real interruption | **+8.4** … +40.4 dB |
+
+The effective cut sits near 6.6 dB, inside that gap and biased towards missing a
+quiet interruption over cutting the reply off. Verification run: 12 replies into
+a silent room fired **zero** barge-ins.
+
+Two things that were tried and rejected, both recorded in the code so they are
+not retried: comparing the **cancelled** signal instead of the raw one (the APM
+is a time-varying gain and eats the contour — echo scored 0.42–0.45 and leaked
+through), and the textbook double-talk variable σ_e/σ_d, still logged as `supp`
+(echo 0.3–10.1 dB against person 0.1–8.2 dB — fully overlapping, because ERLE
+here is 6 dB at best and swings per frame).
+
+`None` means *unknown*, not clean — too little reference, or a fit pinned at the
+oldest edge of the retained reference, which means the true alignment fell off
+the end. The caller treats it as "do not fire": the speaker is audibly playing
+at that moment, which is the one situation where unknown has to mean no.
+
+`EchoReference` keeps a 2 s **history** alongside the FIFO, and the canceller
+keeps the same span of raw mic. The FIFO is drained by `process()`, so by the
+time a candidate is judged the reference for its frames is already gone; 800 ms
+was not enough because the TTS tap fires when ALSA *accepts* audio and runs
+ahead of playback in bursts.
 
 `process()` buffers to the APM's fixed 10 ms frames and returns exactly as many
 samples as the caller asked for (priming once with up to 10 ms of silence), so

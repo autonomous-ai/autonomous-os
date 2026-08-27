@@ -128,12 +128,18 @@ class LEDEffectRequest(BaseModel):
         False,
         description="If true, don't overwrite user LED state (used by Buddy/transient overlays).",
     )
+    brightness: float = Field(
+        1.0,
+        ge=0.0,
+        le=1.0,
+        description="Level for effects that generate their own color (rainbow). Ignored by color-driven effects, which take their level from `color`.",
+    )
 
     model_config = {
         "json_schema_extra": {
             "examples": [
                 {"effect": "breathing", "color": [255, 100, 0], "speed": 1.0},
-                {"effect": "rainbow", "speed": 0.5},
+                {"effect": "rainbow", "speed": 0.5, "brightness": 0.05},
                 {
                     "effect": "notification_flash",
                     "color": [255, 0, 0],
@@ -332,9 +338,23 @@ class MusicStatusResponse(BaseModel):
     speaker_muted: bool = False
 
 
+class VolumeSetResponse(BaseModel):
+    """POST /audio/volume reply. Carries the volume actually applied, which is
+    the request clamped to the SAFETY.md ceiling — so a caller never has to
+    assume its request landed verbatim, and a UI can correct its control
+    immediately instead of drifting until the next poll."""
+    status: str
+    volume: int
+    max_volume: Optional[int] = None
+
+
 class VolumeResponse(BaseModel):
     control: str
     volume: int
+    # SAFETY.md `audio.max_volume` ceiling (%), or None when the device declares
+    # none. Reported so a client (web slider) can bound its own control instead of
+    # letting an operator drag past a value the gate will pull back down.
+    max_volume: Optional[int] = None
 
 
 class ServoPositionResponse(BaseModel):

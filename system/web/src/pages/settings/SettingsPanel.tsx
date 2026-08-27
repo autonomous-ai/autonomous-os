@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { toast } from "sonner";
-import { getDeviceConfig, updateDeviceConfig, getTTSVoices, getTTSProviders, hwUrl } from "@/lib/api";
+import { getDeviceConfig, updateDeviceConfig, getTTSVoices, getTTSProviders, hwUrl, restoreAutonomousDefaults } from "@/lib/api";
 import type { DeviceConfig } from "@/lib/api";
 import type { ChannelType } from "@/types";
 import type { FaceOwner } from "@/hooks/setup/useFaceEnroll";
 import { C, ADMIN_PASSWORD_MIN } from "@/components/setup/shared";
 import { DeviceSection } from "@/components/setup/DeviceSection";
-import { LLMSection } from "@/components/setup/LLMSection";
+import { LLMSection, type LlmMode } from "@/components/setup/LLMSection";
+import { RestoreDefaultsButton } from "@/components/setup/shared";
 import { WifiSection } from "@/pages/settings/WifiSection";
 import { VoiceSection as EditVoiceSection } from "@/pages/settings/VoiceSection";
 import { FaceSection as EditFaceSection } from "@/pages/settings/FaceSection";
@@ -143,6 +144,15 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
   const [wifiLoaded, setWifiLoaded] = useState({ ssid: false, password: false });
   const [llmLoaded, setLlmLoaded] = useState({ apiKey: false, baseUrl: false, model: false });
   const [ttsLoaded, setTtsLoaded] = useState({ apiKey: false, baseUrl: false });
+  // True once the device has preserved its shipped credentials — i.e. the
+  // operator has replaced one at least once. Nothing to offer before that.
+  const [hasDefaults, setHasDefaults] = useState(false);
+  // Which brain the AI Brain section is showing. Derived from the config on
+  // load — a device whose llm_base_url and llm_model still match the stored
+  // Autonomous set is on it, and one that has never been edited is on it by
+  // definition — then held locally so picking "Custom" unlocks the fields
+  // before anything has been typed into them.
+  const [llmMode, setLlmMode] = useState<LlmMode>("autonomous");
   const [realtimeLoaded, setRealtimeLoaded] = useState({ apiKey: false });
   const [sttLoaded, setSttLoaded] = useState({ deepgram: false, apiKey: false, baseUrl: false });
 
@@ -264,6 +274,14 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
           baseUrl: !!cfg.llm_base_url,
           model: !!cfg.llm_model,
         });
+        setHasDefaults(!!cfg.has_autonomous_defaults);
+        setLlmMode(
+          !cfg.has_autonomous_defaults ||
+            ((cfg.llm_base_url ?? "") === (cfg.autonomous_default_base_url ?? "") &&
+              (cfg.llm_model ?? "") === (cfg.autonomous_default_model ?? ""))
+            ? "autonomous"
+            : "custom",
+        );
         setTtsLoaded({
           apiKey: cfg.has_tts_api_key,
           baseUrl: !!cfg.tts_base_url,
@@ -348,18 +366,28 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
   // but change commit timing. All three are behavior changes, so the pattern
   // stays as-is and is left for a deliberate follow-up.
   useEffect(() => {
+    // Only when the device has no key of its own. The field is write-only, so
+    // it is blank on every load whether or not one is stored — "empty" cannot
+    // mean "unset" here the way it does for the base URL, which loads with its
+    // real value. Without the `!ttsLoaded.apiKey` guard, typing a new AI Brain
+    // key silently overwrote a deliberately different TTS key on save: a device
+    // ended up holding an openrouter key against the autonomous proxy URL,
+    // which is a pairing that cannot work.
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (!ttsApiKey && llmApiKey) setTtsApiKey(llmApiKey);
-  }, [llmApiKey, ttsApiKey]);
+    if (!ttsApiKey && llmApiKey && !ttsLoaded.apiKey) setTtsApiKey(llmApiKey);
+  }, [llmApiKey, ttsApiKey, ttsLoaded.apiKey]);
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if (!ttsBaseUrl && llmUrl) setTtsBaseUrl(llmUrl);
   }, [llmUrl, ttsBaseUrl]);
   // Same auto-mirror for STT in autonomous mode (Deepgram has its own key).
   useEffect(() => {
+    // Same guard as TTS above, same reason.
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (sttProvider === "autonomous" && !sttApiKey && llmApiKey) setSttApiKey(llmApiKey);
-  }, [llmApiKey, sttApiKey, sttProvider]);
+    if (sttProvider === "autonomous" && !sttApiKey && llmApiKey && !sttLoaded.apiKey) {
+      setSttApiKey(llmApiKey);
+    }
+  }, [llmApiKey, sttApiKey, sttProvider, sttLoaded.apiKey]);
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if (sttProvider === "autonomous" && !sttBaseUrl && llmUrl) setSttBaseUrl(llmUrl);
@@ -588,6 +616,18 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
               llmApiKey={llmApiKey} setLlmApiKey={setLlmApiKey}
               llmUrl={llmUrl} setLlmUrl={setLlmUrl}
               llmModel={llmModel} setLlmModel={setLlmModel}
+              mode={llmMode}
+              onModeChange={(m) => {
+                if (m === "custom") { setLlmMode("custom"); return; }
+                // Back to Autonomous is a restore, not just an unlock: the
+                // stored set has to be written back before the fields can
+                // honestly claim to show it. Nothing to restore on a device
+                // that was never edited — it is already there.
+                if (!hasDefaults) { setLlmMode("autonomous"); return; }
+                restoreAutonomousDefaults("llm")
+                  .then(() => { toast.success("Back on the Autonomous brain"); window.location.reload(); })
+                  .catch((e: Error) => toast.error(e.message || "Could not switch back"));
+              }}
             />
 
             <AgentRuntimeSection active={activeSection === "runtime"} />
@@ -619,6 +659,9 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
               ttsVoices={ttsVoices}
               sttLanguage={sttLanguage}
             />
+            {activeSection === "tts" && hasDefaults && (
+              <RestoreDefaultsButton section="voice" />
+            )}
 
             <RealtimeSection
               active={activeSection === "realtime"}
@@ -631,6 +674,9 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
               apiKey={realtimeApiKey} setApiKey={setRealtimeApiKey}
               baseUrl={realtimeBaseUrl} setBaseUrl={setRealtimeBaseUrl}
             />
+            {activeSection === "realtime" && hasDefaults && (
+              <RestoreDefaultsButton section="realtime" />
+            )}
 
             <STTSection
               active={activeSection === "stt"}

@@ -17,6 +17,8 @@ from hal.safety.policy import (
     audio_quiet_now,
     clamp_brightness,
     clamp_color,
+    clamp_volume,
+    max_volume_pct,
     in_window,
     load_safety,
     cap_speed_dps,
@@ -218,6 +220,60 @@ class TestQuietHoursGate(unittest.TestCase):
     def test_audio_quiet_none_when_no_policy(self):
         self.assertFalse(audio_quiet_now(None, dtime(23, 30)))
         self.assertFalse(audio_quiet_now(parse_safety(_FM), dtime(23, 30)))
+
+
+_FM_VOLUME = (
+    "---\n"
+    "schema: autonomous.safety.v1\n"
+    "audio:\n"
+    "  max_volume: 40\n"
+    "  quiet_hours: { start: \"22:00\", end: \"07:00\" }\n"
+    "---\n"
+)
+
+
+class TestVolumeCeiling(unittest.TestCase):
+    def setUp(self):
+        self.p = parse_safety(_FM_VOLUME)
+
+    def test_parses_ceiling(self):
+        self.assertEqual(self.p.max_volume, 40)
+        self.assertEqual(max_volume_pct(self.p), 40)
+
+    def test_clamps_above_ceiling(self):
+        self.assertEqual(clamp_volume(self.p, 100), 40)
+        self.assertEqual(clamp_volume(self.p, 41), 40)
+
+    def test_passes_through_below_ceiling(self):
+        self.assertEqual(clamp_volume(self.p, 25), 25)
+        self.assertEqual(clamp_volume(self.p, 0), 0)
+
+    def test_absent_bound_is_pass_through(self):
+        # presence-driven: no audio.max_volume declared -> only the 0-100 scale
+        # clamp applies. The engine never invents a ceiling nobody wrote.
+        self.assertIsNone(parse_safety(_FM).max_volume)
+        self.assertEqual(clamp_volume(parse_safety(_FM), 100), 100)
+        self.assertEqual(clamp_volume(None, 100), 100)
+        self.assertIsNone(max_volume_pct(None))
+
+    def test_clamps_to_scale(self):
+        self.assertEqual(clamp_volume(None, 150), 100)
+        self.assertEqual(clamp_volume(None, -5), 0)
+
+    def test_ceiling_is_independent_of_quiet_hours(self):
+        # The ceiling is all-day; the quiet window only suppresses loud output.
+        # A max_volume nested inside quiet_hours must not be read as the bound.
+        p = parse_safety(
+            "---\nschema: autonomous.safety.v1\n"
+            "audio:\n  quiet_hours: { start: \"22:00\", end: \"07:00\", max_volume: 10 }\n---\n"
+        )
+        self.assertIsNone(p.max_volume)
+
+    def test_out_of_range_is_fail_loud(self):
+        with self.assertRaises(ValueError):
+            parse_safety(
+                "---\nschema: autonomous.safety.v1\naudio:\n  max_volume: 120\n---\n"
+            )
 
 
 class TestMotionParse(unittest.TestCase):

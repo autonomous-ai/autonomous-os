@@ -415,10 +415,71 @@ Applying a voice does not restart HAL either. `POST /voice/tts/config` sets
 provider, voice, key and base URL on the running TTS service, which reads all of
 them per utterance, so the change takes effect on the next sentence.
 
+The phrases the device says about itself — restart, shutdown, reboot, sleep —
+are **rendered into the TTS cache ahead of time**, at boot and again whenever
+`/voice/tts/config` changes provider or voice (the cache key includes both, so a
+voice change invalidates every clip). They play at the worst possible moments:
+the restart notice is spoken while HAL is tearing down, the boot cue while every
+other service is still coming up. On Piper a cache miss there means loading a
+63 MB model on a saturated CPU — measured on an 8-core sun60iw2, the load alone
+is 2–3.4 s and the restart phrase synthesises at 1.1x realtime, close enough to
+breaking even that a little extra load starves the audio stream and the speech
+comes out slurred. A hit costs no synthesis at all.
+
 The realtime flag compares before and after rather than reacting to presence.
 The settings page puts a `realtime` block in *every* save, so treating it as a
 change restarted HAL on every save — which would have made the live TTS push
 above dead code.
+
+### Autonomous defaults
+
+A shipped device carries the Autonomous team's proxy credentials in
+`llm_api_key`, `llm_model` and `llm_base_url`, and every other section starts
+from those same three values. Typing a personal key over them used to destroy
+them outright — devices reached the field with no way back to the credentials
+they were sold with.
+
+`autonomous_defaults` is a top-level object in `config.json` holding
+`base_url` / `api_key` / `model`. It is written **once**, by
+`captureAutonomousDefaults`, immediately before the first save that carries any
+credential — LLM, TTS, STT, or realtime key/URL — and never written again.
+Capturing twice would store the operator's own key under the Autonomous name
+and lose the real one for good, which is the exact failure it exists to prevent.
+A save touching nothing credential-shaped (wifi, rename, channels) does not
+trigger it, and a config with no credentials to preserve is skipped so an empty
+set is never mistaken for a valid default. Only a factory reset clears it.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/device/restore-defaults` | Put one section back on the shipped credentials. Body `{"section": "llm" \| "voice" \| "realtime"}`. Admin-gated. |
+
+Restore is **per section**, because that is how an operator thinks about it —
+they swapped the brain, or the voice provider, and want that one thing back.
+Each section takes the slice of the stored set it started from: the AI Brain
+url + key + model, realtime and the voice pipeline url + key. Qwen realtime is
+refused: it talks straight to the Alibaba host with its own credentials, and the
+shipped set would produce a 401 there.
+
+It is implemented as an ordinary `UpdateConfig` rather than a direct write, so
+it inherits every side effect a manual edit gets — hal restart or the live TTS
+push, gateway model sync, agent session reset. A hand-rolled save would drift
+from that list the first time someone adds to it.
+
+`has_autonomous_defaults` on `GET /api/device/config` says whether anything is
+stored, never the values. The web uses it to decide whether to offer the action
+at all.
+
+HAL reads **each service's own credentials**, falling back to the AI Brain's
+when they are blank: `tts_api_key`/`tts_base_url` for TTS, `stt_api_key`/
+`stt_base_url` for STT, `llm_api_key`/`llm_base_url` otherwise. On most devices
+all three are the same string, because the settings page mirrors the brain's
+key and URL into the other two while those are blank. It matters when the brain
+points elsewhere: a device with `llm_base_url` on openrouter and `tts_base_url`
+on the autonomous proxy was building
+`openrouter.ai/api/v1/elevenlabs/text-to-speech/…` and taking a 404 on every
+spoken reply, because the ElevenLabs backend appends `/elevenlabs` to whatever
+base it is handed and it was being handed the brain's. The config had the right
+URL all along; nothing read it.
 
 `device/config_update.go` splits what used to be one `voiceSnapshot` in two:
 `bootSnapshot` (LLM and STT keys and URLs — genuinely read at import, still
