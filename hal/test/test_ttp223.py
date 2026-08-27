@@ -265,6 +265,33 @@ class TestPetKeepsWorking(_Base):
 class TestDoubleTap(_Base):
     swipe = True
 
+    def test_a_FAST_double_tap_lands_in_one_contact_and_still_toggles_the_mic(self):
+        """The reported bug, 2026-08-27: fast multi-finger double taps came back
+        PET, slow ones worked.
+
+        Tapping quickly never lets the 200ms session lapse, so both taps arrive
+        in a SINGLE contact — and the second tap re-touches the same pads, which
+        the revisit rule reads as a stroke. What separates them is shape: a
+        double tap is two TIGHT bursts with a gap between (fingers landing
+        together), a stroke is evenly spread. Real sequence from trace 163036.
+        """
+        # burst 1 at 0/2/12 ms, burst 2 at 300/302/312 ms
+        for base in (0, 300):
+            for off, line in ((0, 98), (2, 96), (12, 100)):
+                self.hz.touch(line, at_ms=base + off)
+        self.hz.end_session()
+        self.hz.decide()
+        self.assertEqual(self.hz.fired, ["mic_toggle_action"])
+
+    def test_an_evenly_spread_stroke_is_NOT_read_as_burst_pairs(self):
+        """The other side of the same rule. A stroke's steps are evenly spaced,
+        so it has no multi-pad clusters and can never look like repeated taps —
+        this is what keeps the fast-double-tap fix from eating pets."""
+        for i, line in enumerate((98, 100, 96, 98, 100, 96)):
+            self.hz.touch(line, at_ms=i * 120)
+        self.hz.end_session()
+        self.assertEqual(self.hz.fired, ["head_pat_action"])
+
     def test_repeated_contact_on_one_pad_toggles_the_mic(self):
         for _ in range(2):
             self.hz.touch(96)

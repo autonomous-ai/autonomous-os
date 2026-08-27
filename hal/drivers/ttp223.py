@@ -262,7 +262,7 @@ class TTP223Handler:
             self._contact = []
 
     def _classify(self):
-        """Read the cycle as (is_swipe, moved, min_gap_ms, n_contacts, revisited).
+        """Read the cycle as (is_swipe, moved, min_gap, n_contacts, revisited, repeat_taps).
 
         The discriminator is WHEN pads fire, not which. Device-measured on
         orange-lamp 2026-08-27, per-contact inter-pad deltas:
@@ -297,6 +297,37 @@ class TTP223Handler:
 
         def gaps_of(c):
             return [(b - a) * 1000.0 for (_, a), (_, b) in zip(c, c[1:])]
+
+        def bursts_of(c):
+            """Split a contact into runs of steps that arrived TOGETHER.
+
+            A fast double tap does not let the session lapse, so both taps land
+            in one contact — but they stay two tight clusters with a gap
+            between. A stroke has no clusters: its steps are evenly spread.
+            """
+            if not c:
+                return []
+            out = [[c[0]]]
+            for prev, cur in zip(c, c[1:]):
+                if (cur[1] - prev[1]) * 1000.0 >= SWIPE_MIN_GAP_MS:
+                    out.append([cur])
+                else:
+                    out[-1].append(cur)
+            return out
+
+        # Repeated taps too fast to split into separate contacts. Every burst
+        # must be multi-pad (fingers landing together, which is what makes a
+        # cluster) and they must overlap in place — a stroke's "bursts" are
+        # single steps, so it can never satisfy this.
+        # Device-measured 2026-08-27: fast double taps came through as
+        # [L98,L96,L100, L98,L96,L100] in ONE contact and read as a pet.
+        repeat_taps = False
+        for c in contacts:
+            b = bursts_of(c)
+            if len(b) >= 2 and all(len(x) >= 2 for x in b):
+                pad_sets = [{l for l, _ in x} for x in b]
+                if set.intersection(*pad_sets):
+                    repeat_taps = True
 
         sets_nonempty = [c for c in contacts if c]
         is_swipe = False
@@ -334,7 +365,8 @@ class TTP223Handler:
         # Disjoint contacts are movement too, even when each one was a single
         # instantaneous touch — that is a hand hopping from pad to pad.
         disjoint = len(sets) >= 2 and not set.intersection(*sets)
-        return is_swipe, (moved_within or disjoint), min_gap, len(sets), revisited
+        return (is_swipe, (moved_within or disjoint), min_gap, len(sets),
+                revisited, repeat_taps)
 
     def _pad_name(self, line):
         """Label a line the way the tracer does, so both read alike."""
@@ -363,7 +395,8 @@ class TTP223Handler:
         # Close the contact first, then read the cycle. Both take the lock
         # themselves, so they run before entering the block below.
         self._close_contact()
-        _is_swipe, _moved, _min_gap, _n, _revisited = self._classify()
+        (_is_swipe, _moved, _min_gap, _n, _revisited,
+         _repeat_taps) = self._classify()
         pet_now = False
         with self._lock:
             self._session_end_timer = None
@@ -395,7 +428,7 @@ class TTP223Handler:
                 # ~1s pet arrives as ONE contact — device-measured, five pets in
                 # a row came back count=1 and fell through to TAP. A revisit is
                 # therefore enough on its own; the contact count is not a gate.
-                pet_now = SWIPE_ENABLED and (
+                pet_now = SWIPE_ENABLED and not _repeat_taps and (
                     _revisited or (_moved and count >= PET_SESSION_THRESHOLD)
                 )
                 # First session of a burst: cut in-flight TTS NOW rather than
@@ -464,7 +497,7 @@ class TTP223Handler:
             # Same finish-before-dispatch rule as _dispatch: the trace closes
             # before the action can block or raise.
             touch_debug.note_classifier(
-                revisited=_revisited, is_swipe=_is_swipe, moved=_moved, min_gap_ms=round(_min_gap, 1),
+                revisited=_revisited, repeat_taps=_repeat_taps, is_swipe=_is_swipe, moved=_moved, min_gap_ms=round(_min_gap, 1),
                 contacts=_n, move_floor_ms=SWIPE_MIN_GAP_MS,
                 contact_pads=[[self._pad_name(l) for l, _ in c] for c in self._contacts],
             )
@@ -505,7 +538,8 @@ class TTP223Handler:
             self._session_count = 0
             self._decision_timer = None
         self._close_contact()
-        is_swipe, moved, min_gap, n_contacts, revisited = self._classify()
+        (is_swipe, moved, min_gap, n_contacts, revisited,
+         repeat_taps) = self._classify()
 
         if count < 1:
             # The decision timer outlived its count (pet consumed it inline).
@@ -524,7 +558,20 @@ class TTP223Handler:
                 )
                 return
 
-            # 2) PET — the finger went back over a pad it had left, or
+            # 2) DOUBLE TAP, fast — two taps too quick to split into separate
+            #    contacts, so they arrive as one contact holding two tight
+            #    bursts. Checked BEFORE pet: the second tap re-touches the same
+            #    pads, which the revisit rule below would otherwise read as a
+            #    stroke. A stroke cannot reach here — its steps are evenly
+            #    spread, so it has no multi-pad bursts to cluster.
+            if repeat_taps:
+                self._dispatch(
+                    "DOUBLE_TAP", "two tight bursts in one contact -- taps, not a stroke",
+                    count, "mic_toggle_action", mic_toggle_action,
+                )
+                return
+
+            # 3) PET — the finger went back over a pad it had left, or
             #    successive contacts landed in different places. No contact-count
             #    gate: a continuous stroke is a single contact.
             if revisited or (count >= PET_SESSION_THRESHOLD and moved):
@@ -536,8 +583,8 @@ class TTP223Handler:
                 )
                 return
 
-            # 3) DOUBLE TAP — repeated contact that never revisited a pad and
-            #    never moved: the hand stayed put. Deliberately NOT "only one pad
+            # 4) DOUBLE TAP, slow — separate contacts that never revisited a pad
+            #    and never moved: the hand stayed put. Deliberately NOT "only one pad
             #    touched": several fingers land on several pads at once, and
             #    requiring a single pad made this reachable only with a fingertip.
             if count >= PET_SESSION_THRESHOLD:
@@ -547,7 +594,7 @@ class TTP223Handler:
                 )
                 return
 
-        # 4) TAP. Also the whole classifier when SWIPE_ENABLED is off, in which
+        # 5) TAP. Also the whole classifier when SWIPE_ENABLED is off, in which
         #    case count is 1 or 2 — 2 is tolerated because cross-talk
         #    occasionally splits one physical touch into two close sessions and
         #    treating both as one tap is friendlier than ignoring.
@@ -574,9 +621,9 @@ class TTP223Handler:
         (device-observed 2026-08-27). Writing first also means the trace
         survives an action that raises.
         """
-        is_swipe, moved, min_gap, n, revisited = self._classify()
+        is_swipe, moved, min_gap, n, revisited, repeat_taps = self._classify()
         touch_debug.note_classifier(
-            revisited=revisited,
+            revisited=revisited, repeat_taps=repeat_taps,
             is_swipe=is_swipe, moved=moved, min_gap_ms=round(min_gap, 1),
             contacts=n, move_floor_ms=SWIPE_MIN_GAP_MS,
             contact_pads=[[self._pad_name(l) for l, _ in c] for c in self._contacts],
