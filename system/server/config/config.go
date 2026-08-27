@@ -128,6 +128,18 @@ type Config struct {
 	LLMModel   string `json:"llm_model" yaml:"llmModel" validate:"required"`
 	LLMBaseURL string `json:"llm_base_url" yaml:"llmBaseURL" validate:"required"`
 
+	// AutonomousDefaults preserves the credential set the device shipped with —
+	// the Autonomous team's proxy. Captured once, the first time an operator
+	// replaces any credential, and never written again: the point is to survive
+	// every later edit, so restoring is always possible. Only a factory reset
+	// (which wipes config.json) clears it.
+	//
+	// One stored set serves every section, because on a shipped device they all
+	// start from the same three values: the AI Brain restores url + key + model,
+	// Realtime and the voice pipeline restore url + key. Before this existed,
+	// typing a personal key over the shipped one destroyed it with no way back.
+	AutonomousDefaults *AutonomousDefaults `json:"autonomous_defaults,omitempty" yaml:"autonomousDefaults"`
+
 	// AlertsDisabled mutes device ops-alerts to bff-campaign-service (POST
 	// {LLMBaseURL}/alert). Alerts report device actions/state only — never
 	// customer content — for product improvement + troubleshooting. Default
@@ -642,4 +654,13 @@ func migrateOpenclawDir(oldDir, newDir string) error {
 	}
 	slog.Info("migrating openclaw config dir", "component", "config", "from", oldDir, "to", newDir)
 	return os.Rename(oldDir, newDir)
+}
+
+// AutonomousDefaults is the shipped credential set, kept so an operator can get
+// back to it after trying their own. Written by captureAutonomousDefaults and
+// read by RestoreAutonomousDefaults; nothing else touches it.
+type AutonomousDefaults struct {
+	BaseURL string `json:"base_url,omitempty" yaml:"baseURL"`
+	APIKey  string `json:"api_key,omitempty" yaml:"apiKey"`
+	Model   string `json:"model,omitempty" yaml:"model"`
 }

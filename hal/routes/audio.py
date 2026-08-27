@@ -18,6 +18,7 @@ from hal.models import (
     StatusResponse,
     VolumeRequest,
     VolumeResponse,
+    VolumeSetResponse,
 )
 
 router = APIRouter(tags=["Audio"])
@@ -156,7 +157,7 @@ def _persist_volume(pct: int) -> None:
         pass
 
 
-@router.post("/audio/volume", response_model=StatusResponse)
+@router.post("/audio/volume", response_model=VolumeSetResponse)
 def set_volume(req: VolumeRequest):
     """Set system speaker volume (0-100%). Routes to the BT headset sink
     (PulseAudio) when one is active, else to the built-in speaker (amixer).
@@ -172,14 +173,14 @@ def set_volume(req: VolumeRequest):
     if state.simulation_audio:
         state.simulation_volume = pct
         _persist_volume(pct)
-        return {"status": "ok"}
+        return _vol_set_response(pct)
     sink = _bt_sink()
     if sink:
         from hal.drivers.bluetooth_manager import BluetoothManager
         if not BluetoothManager().set_pa_sink_volume(sink, pct):
             raise HTTPException(503, "Bluetooth sink volume change failed")
         _persist_volume(pct)
-        return {"status": "ok"}
+        return _vol_set_response(pct)
     controls, dev = _detect_playback_controls()
     if not controls:
         raise HTTPException(503, "No audio mixer controls found")
@@ -198,7 +199,18 @@ def set_volume(req: VolumeRequest):
         except Exception:
             pass
     _persist_volume(pct)
-    return {"status": "ok"}
+    return _vol_set_response(pct)
+
+
+def _vol_set_response(volume: int) -> dict:
+    """POST reply: the volume actually applied plus the ceiling that produced it.
+    Same reason as _vol_response — every write path reports what really landed,
+    so a client is never left believing an over-ceiling request went through."""
+    return {
+        "status": "ok",
+        "volume": volume,
+        "max_volume": max_volume_pct(state.safety_policy),
+    }
 
 
 def _vol_response(control: str, volume: int) -> dict:

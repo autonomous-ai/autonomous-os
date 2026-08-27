@@ -338,6 +338,16 @@ class MusicStatusResponse(BaseModel):
     speaker_muted: bool = False
 
 
+class VolumeSetResponse(BaseModel):
+    """POST /audio/volume reply. Carries the volume actually applied, which is
+    the request clamped to the SAFETY.md ceiling — so a caller never has to
+    assume its request landed verbatim, and a UI can correct its control
+    immediately instead of drifting until the next poll."""
+    status: str
+    volume: int
+    max_volume: Optional[int] = None
+
+
 class VolumeResponse(BaseModel):
     control: str
     volume: int

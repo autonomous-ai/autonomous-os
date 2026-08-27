@@ -253,7 +253,10 @@ output *tuỳ ý* (nhạc), còn trần giới hạn *mọi thứ to tới đâu
       Monitor, và bước khôi phục lúc boot của os-server (`config_watch.go` →
       `hal.SetVolume`). Gate nằm trong route chứ không nằm ở caller, nên không caller nào
       là thứ quyết định.
-- [x] **Báo ra ngoài:** `GET /audio/volume` trả `max_volume` (null khi không khai).
+- [x] **Báo ra ngoài:** cả `GET` lẫn `POST /audio/volume` đều trả `max_volume` (null khi
+      không khai); riêng reply của `POST` còn mang giá trị thực đã áp, nên caller không phải
+      đoán request có vào nguyên vẹn hay không và UI tự sửa ngay thay vì trôi tới vòng poll
+      kế tiếp.
       `system/lib/hal.MaxVolume()` và slider Monitor đọc trường này — chỉ mang tính tham
       khảo, client bỏ qua vẫn không vượt được trần, chỉ mất khả năng chia bước theo dải
       thật. Slider giới hạn track đúng bằng trần thay vì để tay kéo vào vùng chết rồi bị

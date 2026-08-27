@@ -85,7 +85,12 @@ return `domain.ErrNotSupportedByRuntime`** (domain/agent.go), never `nil` —
 `nil` tells the caller the change was applied when nothing happened. Callers
 branch on `errors.Is`: the LLM model/baseURL save path
 (`system/device/config_update.go`) logs it as informational and falls back to
-`EnsureOnboarding` (whose presync re-reads `llm_*` from config.json), and the
+`EnsureOnboarding` (whose presync re-reads `llm_*` from config.json) — on **both**
+branches, the model-only one included. That branch used to only log, which was
+survivable while these runtimes pinned a fixed model alias; once a device could
+run the operator's own model, a model-only save sat unapplied until something
+else restarted the gateway. The sentinel means "not patchable in place", never
+"nothing to do". The
 gw-config endpoint reports "no device-side config file" instead of `{}`.
 Current sentinel-returning stubs: `UpdatePrimaryModel`, `RefreshModelsConfig`,
 `CompactSession` (hermes + picoclaw), `GetConfigJSON` (hermes only — picoclaw

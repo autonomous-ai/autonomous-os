@@ -1263,6 +1263,14 @@ func IsValidAgentRuntime(r string) bool {
 type AgentRuntimeStatus struct {
 	Current string   `json:"current"`
 	Options []string `json:"options"`
+
+	// Ready reports whether the backend is actually answering, not merely
+	// selected. config.agent_runtime flips as soon as the switch lands, but the
+	// gateway behind it may still be booting — hermes downloads nothing but
+	// still takes tens of seconds to come up. A UI that calls that "active"
+	// invites the operator to start a turn against a backend that is not
+	// listening yet, which reads as a broken device.
+	Ready bool `json:"ready"`
 }
 
 // TimezoneStatus is returned by GET /api/device/timezone: the device's active
@@ -1395,6 +1403,18 @@ type ConfigPublicResponse struct {
 	HasNetworkPassword  bool `json:"has_network_password"`
 	HasMQTTPassword     bool `json:"has_mqtt_password"`
 	HasAdminPassword    bool `json:"has_admin_password"`
+
+	// True once the shipped credential set has been preserved. Drives the
+	// "restore Autonomous default" affordance — there is nothing to offer on a
+	// device that has never had an operator edit, because nothing was replaced.
+	HasAutonomousDefaults bool `json:"has_autonomous_defaults"`
+
+	// The non-secret half of the stored set. The web compares these against the
+	// live values to tell whether the device is still on the Autonomous brain or
+	// on one the operator supplied — a mode it shows as a dropdown. The key is
+	// never returned, here or anywhere else.
+	AutonomousDefaultBaseURL string `json:"autonomous_default_base_url,omitempty"`
+	AutonomousDefaultModel   string `json:"autonomous_default_model,omitempty"`
 }
 
 // UpdateConfigRequest is used by PUT /api/device/config to update device settings.

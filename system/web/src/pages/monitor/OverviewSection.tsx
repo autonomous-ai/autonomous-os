@@ -236,7 +236,16 @@ export function OverviewSection({
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ volume: vol }),
-    }).catch(() => {});
+    })
+      // Snap to what HAL actually applied. The slider already stops at the
+      // ceiling, but a stale ceiling (SAFETY.md changed under a long-open tab)
+      // would otherwise leave the handle showing a value the device rejected
+      // until the next poll — which reads as the control being broken.
+      .then((r) => r.json())
+      .then((r) => {
+        if (typeof r?.volume === "number") setLocalVolume(r.volume);
+      })
+      .catch(() => {});
   }, []);
 
   // Base card style for the Overview: the `.lm-mon-card` class owns the

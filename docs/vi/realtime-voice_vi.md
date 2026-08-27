@@ -287,7 +287,76 @@ xuống PortAudio cộng một lần ghi tham chiếu, đều trong Python; ở 
 
 `aec.uncancelled()` cho biết khung vừa đọc có đi qua mà **không** được khử thật
 hay không — tham chiếu underrun, stream bị bypass, hoặc mic overrun. Barge-in
-gate theo cờ này để không quyết định dựa trên vọng âm thô.
+gate theo cờ này để không quyết định dựa trên vọng âm thô. Lưu ý điều nó **không**
+nói: nó báo tham chiếu có *tới* hay không, chứ không báo việc khử có *hiệu quả*
+hay không — một khung ERLE 0,9 dB vẫn được tính là đã khử.
+
+### Barge-in: mức âm lượng không tách được vọng âm với người thật
+
+Phần dư sót lại sau khi khử đủ to để trông như người đang chen ngang, và nó
+**đúng là** tiếng nói, nên cả cổng mức lẫn bộ phân loại speech đều không loại
+được. Đo trong phòng im, trần vọng âm (dòng `drain peak RMS=` mỗi câu trả lời
+đều ghi) so với lần chen ngang thật:
+
+| Âm lượng loa | Mixer | Trần vọng âm | Người chen ngang thật |
+|---|---|---|---|
+| 25 % (`lamp-ee17`) | −45 dB | 9804 | 8027 |
+| 40 % (`lamp-0c89`) | −36 dB | 9969 | 6956–8027 |
+| 65 % (`lamp-0c89`) | −21 dB | 13560 | 6956 |
+
+Trần vọng âm nằm **trên** mức người thật ở mọi âm lượng, nên ngưỡng đặt dưới nó
+thì đèn tự cắt lời mình, đặt trên nó thì bỏ sót giọng nói bình thường. Hạ âm
+lượng loa cũng không phải cách chữa: cả 24 dB dải mixer chỉ kéo trần xuống chưa
+tới 3 dB, vì đường ghép không do đường truyền qua không khí chi phối. Đừng mất
+thời gian tinh chỉnh lại `HAL_BARGE_IN_RMS_THRESHOLD` — không có giá trị nào đúng.
+
+Thứ tách được hai nhóm là `aec.echo_envelope_match()`
+(`HAL_BARGE_IN_ECHO_MATCH`, mặc định `0.65`), chạy thứ ba và chỉ trên những ứng
+viên đã qua cổng mức và cổng speech. Nó làm ba bước trên đường bao log-năng
+lượng độ phân giải 8 ms, lấy từ mic **thô**:
+
+1. **Căn.** Tương quan chéo cửa sổ ứng viên với tham chiếu đang giữ, lấy độ trễ
+   tốt nhất. Tương quan chỉ để *định vị* cửa sổ, không phải để phán — vì lúc hai
+   bên cùng nói, mic thô mang vọng âm lớn hơn hẳn tiếng người nên vẫn tương quan
+   cao bất kể người đó nói gì.
+2. **Trừ.** Bỏ đi phần tham chiếu đã căn cộng hệ số ghép (độ lệch trung vị), chỉ
+   giữ những khung mà câu trả lời đang thật sự to. Ở khe im giữa các từ, tham
+   chiếu đoán gần như im lặng nên tiếng ồn phòng bình thường sẽ thành phần dư
+   khổng lồ.
+3. **Đo độ LỆCH, không đo độ lớn.** Vọng âm không bao giờ khớp hoàn hảo — vang
+   phòng, nhiễu mic, và đường ghép không phải phép nhân thuần đều để lại vài dB
+   về cả hai phía. Người thì một chiều: họ chỉ có thể *thêm* năng lượng. Nên đuôi
+   trên vượt đuôi dưới là có người khác trong phòng, còn phần dư đối xứng là vọng
+   âm dù nó lớn đến đâu.
+
+Đo trên `lamp-0c89`, loa 40 %, gán nhãn theo bản ghi lời nói ngay sau mỗi ứng viên:
+
+| | Độ lệch phần dư |
+|---|---|
+| Vọng âm, phòng im (15 cửa sổ) | −2.8 … +2.1 dB |
+| Vọng âm, mẻ trộn (~40 cửa sổ) | −50.0 … **+4.8** dB |
+| Người chen ngang đã xác nhận | **+8.4** … +40.4 dB |
+
+Ngưỡng hiệu dụng nằm quanh 6.6 dB — trong khoảng trống đó, và nghiêng về phía
+thà bỏ sót một lần chen ngang nhỏ còn hơn cắt ngang câu trả lời. Mẻ kiểm chứng:
+12 câu trả lời trong phòng im, **không** bắn lần nào.
+
+Hai hướng đã thử và bị loại, đều ghi lại trong code để người sau khỏi thử lại:
+so trên tín hiệu **đã khử** thay vì mic thô (APM là bộ khuếch đại thay đổi theo
+thời gian, nó ăn mất chính đường bao cần so — vọng âm chấm 0.42–0.45 và lọt
+qua), và biến quyết định double-talk kinh điển σ_e/σ_d, vẫn được log dưới tên
+`supp` (vọng âm 0.3–10.1 dB so với người 0.1–8.2 dB — chồng lấn hoàn toàn, vì
+ERLE ở đây giỏi lắm 6 dB và dao động theo từng khung).
+
+`None` nghĩa là *chưa biết*, không phải sạch — hoặc quá ít tham chiếu, hoặc phép
+căn bị dồn về mép cũ nhất, tức điểm căn đúng đã trôi ra ngoài. Caller coi đó là
+"đừng bắn": loa đang phát ngay lúc đó, và đây đúng là tình huống mà "chưa biết"
+bắt buộc phải là "không".
+
+`EchoReference` giữ vùng **history** 2 giây bên cạnh FIFO, và bộ khử giữ đúng
+chừng đó mic thô. FIFO bị `process()` rút cạn, nên tới lúc phán một ứng viên thì
+phần tham chiếu ứng với các khung tạo ra nó đã mất; 800 ms không đủ vì TTS ghi
+vào loa lúc ALSA *chấp nhận* audio, chạy trước lúc phát theo từng cụm.
 
 `process()` gom audio về khung cố định 10 ms của APM và trả về đúng số mẫu mà
 caller yêu cầu (mồi một lần bằng tối đa 10 ms im lặng), nên khung 64 ms của hal

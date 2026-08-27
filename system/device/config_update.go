@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"golang.org/x/crypto/bcrypt"
 
@@ -58,17 +59,20 @@ func (s *Service) GetPublicConfig() domain.ConfigPublicResponse {
 		FAChannel:          s.config.FAChannel,
 		FDChannel:          s.config.FDChannel,
 
-		HasTelegramBotToken: s.config.TelegramBotToken != "",
-		HasSlackBotToken:    s.config.SlackBotToken != "",
-		HasSlackAppToken:    s.config.SlackAppToken != "",
-		HasDiscordBotToken:  s.config.DiscordBotToken != "",
-		HasLLMAPIKey:        s.config.LLMAPIKey != "",
-		HasDeepgramAPIKey:   s.config.DeepgramAPIKey != "",
-		HasSTTAPIKey:        s.config.STTAPIKey != "",
-		HasTTSAPIKey:        s.config.TTSAPIKey != "",
-		HasNetworkPassword:  s.config.NetworkPassword != "",
-		HasMQTTPassword:     s.config.MQTTPassword != "",
-		HasAdminPassword:    s.config.AdminPasswordHash != "",
+		HasTelegramBotToken:      s.config.TelegramBotToken != "",
+		HasSlackBotToken:         s.config.SlackBotToken != "",
+		HasSlackAppToken:         s.config.SlackAppToken != "",
+		HasDiscordBotToken:       s.config.DiscordBotToken != "",
+		HasLLMAPIKey:             s.config.LLMAPIKey != "",
+		HasDeepgramAPIKey:        s.config.DeepgramAPIKey != "",
+		HasSTTAPIKey:             s.config.STTAPIKey != "",
+		HasTTSAPIKey:             s.config.TTSAPIKey != "",
+		HasAutonomousDefaults:    s.config.AutonomousDefaults != nil,
+		AutonomousDefaultBaseURL: autonomousDefaultBaseURL(s.config),
+		AutonomousDefaultModel:   autonomousDefaultModel(s.config),
+		HasNetworkPassword:       s.config.NetworkPassword != "",
+		HasMQTTPassword:          s.config.MQTTPassword != "",
+		HasAdminPassword:         s.config.AdminPasswordHash != "",
 		Realtime: domain.RealtimePublic{
 			Enabled:   s.config.RealtimeEnabled(),
 			Provider:  s.config.RealtimeProvider(),
@@ -221,6 +225,11 @@ func applyUpdate(c *config.Config, data domain.UpdateConfigRequest, adminHash st
 	prevChannel := channelFields(c)
 	ch.prevLang = c.STTLanguage
 
+	// Before anything is overwritten. Ordering matters: the snapshot has to see
+	// the values as they were, not as this save leaves them.
+	if requestChangesCredentials(data) {
+		captureAutonomousDefaults(c)
+	}
 	applyLLMFields(c, data, &ch)
 	applyVoicePipelineFields(c, data, &ch)
 
@@ -250,6 +259,39 @@ func applyUpdate(c *config.Config, data domain.UpdateConfigRequest, adminHash st
 		DiscordBotToken: c.DiscordBotToken, DiscordGuildID: c.DiscordGuildID, DiscordUserID: c.DiscordUserID,
 	}
 	return ch
+}
+
+// requestChangesCredentials reports whether this save carries a key or URL for
+// any of the four credential surfaces. Model counts too: it is one of the three
+// values the shipped set is made of.
+func requestChangesCredentials(d domain.UpdateConfigRequest) bool {
+	if d.LLMAPIKey != "" || d.LLMBaseURL != "" || d.LLMModel != "" ||
+		d.TTSAPIKey != "" || d.TTSBaseURL != "" ||
+		d.STTAPIKey != "" || d.STTBaseURL != "" {
+		return true
+	}
+	return d.Realtime != nil && (d.Realtime.APIKey != "" || d.Realtime.BaseURL != "")
+}
+
+// captureAutonomousDefaults snapshots the shipped credentials before the first
+// operator edit overwrites them. Runs at most once per device: the stored copy
+// is what "restore" reads later, so re-capturing after an edit would preserve
+// the operator's own values under the Autonomous name and lose the real ones
+// for good — which is exactly the state devices were reaching before this.
+//
+// Skips a device with nothing to preserve (a config that never had credentials),
+// so an empty set is never mistaken for a valid default.
+func captureAutonomousDefaults(c *config.Config) {
+	if c.AutonomousDefaults != nil || c.LLMAPIKey == "" || c.LLMBaseURL == "" {
+		return
+	}
+	c.AutonomousDefaults = &config.AutonomousDefaults{
+		BaseURL: c.LLMBaseURL,
+		APIKey:  c.LLMAPIKey,
+		Model:   c.LLMModel,
+	}
+	slog.Info("captured autonomous defaults before first credential change",
+		"component", "device", "base_url", c.LLMBaseURL, "model", c.LLMModel)
 }
 
 func applyLLMFields(c *config.Config, data domain.UpdateConfigRequest, ch *updateChanges) {
@@ -510,9 +552,22 @@ func (s *Service) syncLLMToGateway(ch updateChanges) {
 	if ch.model && !ch.thinking && !ch.baseURL && !ch.apiKey {
 		if err := s.agentGateway.UpdatePrimaryModel(ch.newModel); err != nil {
 			if errors.Is(err, domain.ErrNotSupportedByRuntime) {
-				// hermes/picoclaw: the device model is not what the runtime runs
-				// on, so there is nothing to apply — informational, not a failure.
-				slog.Info("primary model sync not supported by runtime", "component", "device", "backend", s.agentGateway.Name())
+				// hermes/picoclaw cannot be patched in place, but their presync
+				// reads llm_model out of the config.json just saved — so the
+				// self-heal applies it now rather than at the next boot. Same
+				// response as the baseURL/key branch below; the sentinel means
+				// "not patchable", never "nothing to do".
+				//
+				// It used to only log. That was survivable while those runtimes
+				// pinned a fixed model alias, but a device on a custom brain runs
+				// the operator's model, and a model-only change sat unapplied
+				// until something else happened to restart the gateway.
+				slog.Info("primary model not device-patchable, running onboarding self-heal", "component", "device", "backend", s.agentGateway.Name())
+				go func() {
+					if err := s.agentGateway.EnsureOnboarding(); err != nil {
+						slog.Warn("onboarding self-heal after model change failed", "component", "device", "error", err)
+					}
+				}()
 			} else {
 				slog.Warn("update primary model failed", "component", "device", "error", err)
 			}
@@ -592,4 +647,57 @@ func sttModelForLanguage(lang string) string {
 	default:
 		return "nova-3-general"
 	}
+}
+
+// RestoreAutonomousDefaults puts one section back on the credentials the device
+// shipped with. Sections take different slices of the same stored set, because
+// that is how they started out: the AI Brain uses url + key + model, Realtime
+// and the voice pipeline use url + key.
+//
+// Implemented as an ordinary config update rather than a direct write, so it
+// inherits every side effect a manual edit gets — hal restart or live TTS push,
+// gateway model sync, agent session reset. A hand-rolled save would drift from
+// that list the first time someone adds to it.
+func (s *Service) RestoreAutonomousDefaults(section string) error {
+	d := s.config.AutonomousDefaults
+	if d == nil {
+		return errors.New("no autonomous defaults stored on this device")
+	}
+
+	var req domain.UpdateConfigRequest
+	switch strings.ToLower(strings.TrimSpace(section)) {
+	case "llm":
+		req.LLMAPIKey, req.LLMBaseURL, req.LLMModel = d.APIKey, d.BaseURL, d.Model
+	case "voice":
+		req.TTSAPIKey, req.TTSBaseURL = d.APIKey, d.BaseURL
+		req.STTAPIKey, req.STTBaseURL = d.APIKey, d.BaseURL
+	case "realtime":
+		// Qwen talks straight to the Alibaba host with its own credentials; the
+		// shipped set is campaign-api and would produce a 401 there. Refusing is
+		// kinder than restoring something that cannot work.
+		if s.config.Realtime != nil &&
+			strings.EqualFold(strings.TrimSpace(s.config.Realtime.Provider), "qwen") {
+			return errors.New("qwen realtime uses its own credentials — nothing to restore")
+		}
+		req.Realtime = &domain.RealtimeSetData{APIKey: d.APIKey, BaseURL: d.BaseURL}
+	default:
+		return fmt.Errorf("unknown section %q (want llm, voice or realtime)", section)
+	}
+
+	slog.Info("restoring autonomous defaults", "component", "device", "section", section)
+	return s.UpdateConfig(req)
+}
+
+func autonomousDefaultBaseURL(c *config.Config) string {
+	if c.AutonomousDefaults == nil {
+		return ""
+	}
+	return c.AutonomousDefaults.BaseURL
+}
+
+func autonomousDefaultModel(c *config.Config) string {
+	if c.AutonomousDefaults == nil {
+		return ""
+	}
+	return c.AutonomousDefaults.Model
 }
