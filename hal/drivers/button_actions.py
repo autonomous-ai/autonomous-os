@@ -411,23 +411,26 @@ def head_pat_action(source: str = "touch"):
 
 
 def swipe_action(source: str = "touch"):
-    """Map a resolved touchpad swipe to the sleep/wake toggle.
+    """Map a resolved touchpad swipe to sleep. Always sleep — one meaning.
 
-    Deliberately NOT keyed on direction. The surface yields one usable
-    traversal gesture, and keying sleep to one direction and wake to the other
-    would make a swipe in the "wrong" direction do nothing, with no feedback
-    saying why. Reading `_sleeping` instead makes any swipe do the only sensible
-    thing for the current state — a sleeping device has no competing reading of
-    any input, which is the same argument that keeps the wake path unambiguous.
+    Direction is not read, and neither is device state. Both were considered and
+    dropped:
+
+    * **Direction** — the surface yields one usable traversal gesture, and
+      keying sleep to one direction and wake to the other would make a swipe the
+      "wrong" way do nothing, with no feedback saying why. Left-to-right and
+      right-to-left are the same gesture here.
+    * **State** — an earlier version woke a sleeping device instead of sleeping
+      it. That made one gesture mean two things depending on a state the user
+      cannot see, and waking is already covered by tap and double tap, which is
+      the behaviour the device shipped with. A swipe on a sleeping lamp now
+      reaches `sleep_action`, which returns early on "already sleeping".
 
     Non-destructive by construction: sleep is reversible with a single tap.
     Shutdown / reboot / factory-reset stay on the mechanical button, because
     FastMode cannot measure a hold and a mis-detected swipe must never be able
     to strand the device.
     """
-    if state._sleeping:
-        _wake_if_sleepy(f"{source} swipe")
-        return
     logger.info("%s swipe -- sleeping", source)
     sleep_action(source)
 

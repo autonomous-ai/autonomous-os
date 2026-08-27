@@ -142,3 +142,22 @@ def test_hold_release_maps_each_duration_to_one_explicit_action():
 
         button_actions.hold_release_action(button_actions.FACTORY_RESET_DURATION, "test button")
         factory_reset.assert_called_once_with("test button")
+
+
+def test_swipe_sleeps_when_awake():
+    """A swipe means sleep — one meaning, no direction, no state branch."""
+    with mock.patch.object(state, "_sleeping", False), \
+         mock.patch.object(button_actions, "sleep_action") as slept:
+        button_actions.swipe_action(source="TTP223")
+    slept.assert_called_once_with("TTP223")
+
+
+def test_swipe_on_a_sleeping_device_still_routes_to_sleep():
+    """It does NOT wake. Waking is tap / double tap, which is what the device
+    shipped with; sleep_action returns early on "already sleeping"."""
+    with mock.patch.object(state, "_sleeping", True), \
+         mock.patch.object(button_actions, "sleep_action") as slept, \
+         mock.patch.object(button_actions, "_wake_if_sleepy") as woke:
+        button_actions.swipe_action(source="TTP223")
+    slept.assert_called_once_with("TTP223")
+    woke.assert_not_called()

@@ -158,13 +158,17 @@ class TestSwipe(_Base):
         self.hz.decide()
         self.assertNotIn("single_click_action", self.hz.fired)
 
-    def test_reverse_direction_is_also_a_swipe(self):
-        """Direction is deliberately not used to select the action."""
-        for i, line in enumerate((100, 98, 96)):
-            self.hz.touch(line, at_ms=i * 100)
-        self.hz.end_session()
-        self.hz.decide()
-        self.assertEqual(self.hz.fired, ["swipe_action"])
+    def test_both_directions_are_the_same_gesture(self):
+        """Left-to-right and right-to-left both resolve to swipe_action, which
+        always sleeps. Direction is not read anywhere in the path."""
+        for lines in ((96, 98, 100), (100, 98, 96)):
+            self.hz.fired.clear()
+            self.hz.h._reset_cycle()
+            for i, line in enumerate(lines):
+                self.hz.touch(line, at_ms=i * 100)
+            self.hz.end_session()
+            self.hz.decide()
+            self.assertEqual(self.hz.fired, ["swipe_action"], lines)
 
     def test_cross_talk_burst_is_not_a_swipe(self):
         """Device-measured shape: three pads inside ~20ms from one finger.

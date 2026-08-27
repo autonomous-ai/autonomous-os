@@ -29,7 +29,7 @@ Board detection in both handlers reads `/proc/device-tree/model`:
 | **1 tap** | Stop active object tracking, then stop speaker / unmute mic + speaker + ack chime (~120 ms ping) — all fire immediately on release (no click-window wait); the "Listening" cue plays once the 0.4 s click window resolves | Same after the 1.2 s tap-vs-pet decision resolves — active tracking stops, then the mic/speaker action and cue run. The initial touch still stops in-flight TTS and plays its ack chime immediately. |
 | **2 taps** (≤ 0.4 s apart, button) / (≤ 1.2 s apart, TTP223) | Nothing beyond the single-click already fired on tap 1 (panic-click guard) | Pet response. With `HAL_TOUCH_SWIPE` on, two contacts that never leave one pad are a **double tap** → mic mute toggle instead; pet then means a traversal that turns around |
 | **3 taps** (≤ 0.4 s apart, button) | Reboot OS (TTS announce → `sudo reboot`) | n/a — TTP223 stops at 2 (any further taps absorbed by cooldown) |
-| **Swipe** across the pads | n/a | **`HAL_TOUCH_SWIPE` only, default off.** One monotonic pass over all three pads → sleep, or wake if already asleep. Direction is not used. |
+| **Swipe** across the pads | n/a | **`HAL_TOUCH_SWIPE` only, default off.** One monotonic pass over all three pads → **sleep**. Direction is not used — left-to-right and right-to-left are the same gesture — and neither is device state. Wake stays on tap / double tap. |
 | **Hold 2–5 s, then release** | Speak the localized sleep announcement, then enter `sleepy`: LED off, camera/mic/speaker off; servo releases after 1 s. LED blinks sleepy purple while held. | n/a — TTP223 hardware cannot reliably hold (see "FastMode" below) |
 | **Hold 5–10 s, then release** | Shutdown OS (TTS announce → release servos → `sudo shutdown -h now`). LED blinks red while armed. | n/a — TTP223 hardware cannot reliably hold (see "FastMode" below) |
 | **Hold 10 s+, then release** | Factory-reset: wipe device state + reboot into AP setup (TTS announce → release servos → POST `/api/system/factory-reset` on the OS server). LED goes solid red while armed. | n/a |
@@ -190,7 +190,7 @@ With it on, the driver keeps the order pads are first touched in — consecutive
 
 Resolution order, first match wins:
 
-1. **SWIPE** — all three pads, monotonic, every adjacent gap ≥ `HAL_TOUCH_SWIPE_MIN_GAP_MS`. Ordering matters: checked first so a resolved swipe never also fires a tap. → sleep, or wake if already asleep.
+1. **SWIPE** — all three pads, monotonic, every adjacent gap ≥ `HAL_TOUCH_SWIPE_MIN_GAP_MS`. Ordering matters: checked first so a resolved swipe never also fires a tap. → **sleep**, in either direction and whatever the device is doing.
 2. **PET** — a direction reversal (fired inline at session end), or ≥2 contacts spanning ≥2 pads with no clean reversal (the count fallback, so a noisy stroke does not go silent).
 3. **DOUBLE TAP** — ≥2 contacts that never left one pad. → mic mute toggle.
 4. **TAP** — anything else.
@@ -245,7 +245,7 @@ The actions live in one place so the GPIO button, TTP223, and any future input (
 | `hold_release_action(held, source)` | Hold-signal mapping: chooses sleep, shutdown, or factory reset from the released duration. | Depends on selected action |
 | `shutdown_action(source)` | Speak "Shutting down now" → wait 5 s → `release_servos()` (so the lamp doesn't slam down mid-pose) → `shutdown_os()` (`sudo shutdown -h now`). | Yes |
 | `factory_reset_action(source)` | Speak "Factory reset starting. Rebooting now" → `release_servos()` → POST `/api/system/factory-reset` on the OS server (the server owns the wipe + reboot, see below). | Yes |
-| `swipe_action(source)` | Sleep/wake toggle: wakes if `_sleeping`, else calls `sleep_action`. Not keyed on direction — a swipe the "wrong" way would otherwise do nothing with no feedback saying why. | Via the selected action |
+| `swipe_action(source)` | Always `sleep_action`. Not keyed on direction (a swipe the "wrong" way would otherwise do nothing, with no feedback saying why) and not keyed on state (one gesture meaning two things depending on something invisible). On an already-sleeping device `sleep_action` returns early. | Yes |
 | `mic_toggle_action(source)` | Mic mute toggle for a resolved double tap. Refuses while the HW mic switch is off or a voice enrollment is recording. The mic-muted LED is the only confirmation — a muted mic has no audible ack. | No |
 | `head_pat_action(source)` | Pick a random localized pet phrase, speak it via `speak_cached` on a daemon thread. **Non-interrupting**: if TTS is still busy the phrase is dropped silently. In practice on TTP223 the first touch session already cut any in-flight speech and sounded the ack chime (`_ack_first_session`), so by pet time TTS is usually free and the giggle plays. | No |
 
