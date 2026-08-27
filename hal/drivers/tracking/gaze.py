@@ -13,22 +13,23 @@ seam the button uses. Nothing downstream of the gate changes.
 Two design points worth keeping straight:
 
   * ORDER. People turn BEFORE they speak, never after. Waiting for the mic and
-    then looking would arrive after the gesture is over, and — worse — could
-    never see the TRANSITION from looking away to looking here, which is the
-    whole signal. So the camera samples continuously into a short ring buffer
-    and speech normally triggers a read BACKWARDS through it. This mirrors what
-    the mic already does with its own pre-roll: it records into a lookback and
-    recovers the ~640 ms before the trigger, or it would lose the start of every
-    sentence. If no usable face evidence exists at all, the watcher first
-    restores the remembered pose and the completed same utterance gets one
-    constrained recovery check.
+    then looking would arrive after the gesture is over. So the camera samples
+    continuously into a short ring buffer and speech triggers a read BACKWARDS
+    through it. This mirrors what the mic already does with its own pre-roll: it
+    records into a lookback and recovers the ~640 ms before the trigger, or it
+    would lose the start of every sentence. If no usable face evidence exists at
+    all, the watcher first restores the remembered pose and the completed same
+    utterance gets one constrained recovery check.
 
-  * PRESENCE IS NOT THE SIGNAL. The user sits beside this lamp all day, so "a
-    person is visible" is true almost always and gates nothing. "A face is
-    visible" is barely better — a face turned to a monitor still detects. The
-    signal is head ORIENTATION, and the acceptance cone has to be tight enough
-    to reject the common posture of talking to a colleague with the torso still
-    square to the desk.
+  * THE SIGNAL IS ORIENTATION, NOT A GESTURE. An earlier design required a
+    measured TRANSITION from looking away to looking here, on the grounds that
+    presence alone gates nothing. It was removed: demanding a deliberate turn
+    made the opener unusable, because a user sitting square to their desk and
+    already looking at the lamp was refused on every utterance — device log
+    2026-08-26 — and "turn your head first" is a worse instruction than the wake
+    phrase it replaces. So what is measured is head ORIENTATION during the
+    window before speech, with an acceptance cone tight enough to reject the
+    common posture of talking to a colleague with the torso square to the desk.
 
 Head yaw is estimated from the five landmarks YuNet already returns, so no
 second model is loaded and no extra inference is run.
@@ -474,25 +475,6 @@ def _ratio_between(samples: List[Tuple[float, float, float, float]],
     return facing / float(len(measured)), len(measured)
 
 
-def facing_before(now: Optional[float] = None) -> Tuple[float, int]:
-    """The same ratio over the window IMMEDIATELY BEFORE the decision window.
-
-    This is the baseline the whole design rests on and never had. The module
-    docstring says the signal is "the TRANSITION from looking away to looking
-    here" — but facing_ratio only ever measured the present, so a user who sits
-    facing the lamp's direction all day passed on every utterance. Presence
-    became the signal, which is precisely what the design says must not happen.
-    Device-measured 2026-08-24 in shadow: nine of nine accepted gestures had
-    flat trails like [13,12,12,11,12,11,13,21] — already facing, no turn.
-
-    The samples were always there. GAZE_BUFFER_S retains more history than
-    GAZE_WINDOW_S reads, and the older half was simply never consulted.
-    """
-    t = time.monotonic() if now is None else now
-    window = max(0.0, config.GAZE_WINDOW_S)
-    return _ratio_between(snapshot(), t - 2.0 * window, t - window)
-
-
 def _headroom_from_person(frame: Any, detector: Any) -> Tuple[Optional[float], bool]:
     """``(vertical offset to correct by, whether a person was seen at all)``.
 
@@ -546,8 +528,6 @@ def _headroom_from_person(frame: Any, detector: Any) -> Tuple[Optional[float], b
 # Every joint the pitch loop steers. All three are vertical, so all three are
 # what a remembered (and therefore stale) posture must not be allowed to undo.
 PITCH_JOINTS = ("base_pitch.pos", "elbow_pitch.pos", "wrist_pitch.pos")
-
-_last_anchor: Optional[Dict[str, float]] = None
 
 # Joints that were commanded somewhere and did not arrive.
 #   joint -> (position it stopped at, +1 blocked going up / -1 going down, rest until)
@@ -648,100 +628,67 @@ def _verify_landed(svc: Any, target: Dict[str, float], now: float,
             config.GAZE_PITCH_STALL_REST_S,
         )
     return short
+def _conversation_open() -> bool:
+    """Whether a wake-word follow-up window is currently open.
 
+    The framing loops MEASURE all the time — the wake gate reads the window
+    before speech, so the samples have to be there already — but they only MOVE
+    while a conversation is open. Re-aiming an empty room is the lamp fidgeting,
+    and on this arm it cannot even persist: idle plays absolute frames and pins
+    base_yaw at about -2.4 (1.58 deg of swing in the whole recording), so a pan
+    correction is overwritten by the next idle frame and re-measured, forever.
+    Device-observed 2026-08-26: thirteen pan corrections in twenty minutes with
+    nobody speaking, alternating direction, every one starting from idle's own
+    band.
 
-def _anchor_is_new(anchor: Dict[str, float]) -> bool:
-    """True when this anchor differs enough from the last one to be worth sending.
+    Released is therefore free: stop correcting and idle reclaims the arm by
+    itself within a frame. There is nothing to restore and no ownership to drop.
 
-    Keyed on the WHOLE posture, not on wrist_pitch alone. Once the pitch
-    correction was spread across three joints the wrist stopped moving at all
-    (it carries weight 0.0), so a wrist-only test reported "unchanged" for every
-    correction and suppressed the anchor every time — leaving idle free to drag
-    the head straight back down after each lift, which is the exact symptom this
-    anchor exists to prevent.
+    Fails CLOSED when voice is unavailable — no conversation can be open on a
+    device with no voice service, and guessing "yes" would restore exactly the
+    unasked movement this exists to stop.
     """
-    if _last_anchor is None or set(anchor) != set(_last_anchor):
-        return True
-    return any(abs(anchor[j] - _last_anchor[j]) >= 1.0 for j in anchor)
-
-
-def _anchor_idle_from_pose(svc: Any, pose: Any) -> None:
-    """Rest the idle loop on a remembered pose known to have seen a face."""
-    global _last_anchor
-    if not config.GAZE_IDLE_ANCHOR or not isinstance(pose, dict):
-        return
-    setter = getattr(svc, "set_idle_anchor", None)
-    if setter is None:
-        return
-    anchor = {
-        j: float(v) for j, v in pose.items()
-        if j in ("base_pitch.pos", "wrist_pitch.pos")
-        and isinstance(v, (int, float))
-    }
-    # The remembered wrist_pitch is a stale vertical aim, and re-resting on it
-    # undoes every correction the pitch loop has made. Device-observed after
-    # the two stopped firing in the same second: pitch lifted the camera to
-    # -31.5, then thirty-four seconds later this anchored idle back on -46.1,
-    # from where the face is clipped again. The bearing memory is worth
-    # believing about which way to FACE, which is what the move itself uses;
-    # about how high to look, a correction made seconds ago from a face on
-    # screen beats a number recorded minutes ago. So once pitch has spoken,
-    # leave the wrist where it put it and anchor the rest.
-    #
-    # Every joint the pitch loop steers is a vertical one, so once it has spoken
-    # the whole remembered vertical posture is stale, not just the wrist.
-    if _last_pitch_t > 0.0:
-        for joint in PITCH_JOINTS:
-            anchor.pop(joint, None)
-    if not anchor or not _anchor_is_new(anchor):
-        return
-    setter(anchor)
-    _last_anchor = dict(anchor)
-    logger.info(
-        "[gaze] idle now rests at %s",
-        " ".join(f"{k.split('.')[0]}={v:+.1f}" for k, v in sorted(anchor.items())),
-    )
-
-
-def _anchor_idle_here(svc: Any, pitch: Optional[Dict[str, float]] = None) -> None:
-    """Tell the idle loop to breathe around the pose we can see the user from."""
-    global _last_anchor
-    if not config.GAZE_IDLE_ANCHOR:
-        return
-    setter = getattr(svc, "set_idle_anchor", None)
-    if setter is None:
-        return
-    # Anchor the whole pitch posture, not one joint. Camera direction depends on
-    # base_pitch and wrist_pitch TOGETHER — the arm folds at the base, so that
-    # joint both rotates and translates the camera, and the same wrist angle
-    # points somewhere different for every base angle. Device-measured: with
-    # base_pitch near 0 no wrist angle framed the user (the search reached +14
-    # and still missed), while base_pitch -30 with wrist_pitch -78 framed them
-    # perfectly. Anchoring one joint therefore preserves a posture that was
-    # never the reason the framing worked.
-    #
-    # elbow_pitch joined that list once the correction started using it: it is
-    # the joint carrying most of the lift (weight 0.90), so an anchor without it
-    # holds the two minor joints steady and lets idle walk the lift itself back.
-    anchor: Dict[str, float] = {}
     try:
-        pose = svc.get_positions()
-        for joint in PITCH_JOINTS:
-            if joint in pose:
-                anchor[joint] = float(pose[joint])
-    except (TypeError, ValueError, AttributeError):
+        import hal.app_state as state
+
+        voice = getattr(state, "voice_service", None)
+        check = getattr(voice, "conversation_focus_active", None)
+        return bool(check()) if callable(check) else False
+    except Exception as e:
+        logger.debug("[gaze] conversation check skipped: %s", e)
+        return False
+
+
+_conversation_was_open: Optional[bool] = None
+
+
+def _note_conversation_edge() -> None:
+    """Log the moment the framing window opens or closes.
+
+    voice_service logs the GRANT ("wake-word focus granted for 60s"), but the
+    window expires lazily — `is_active()` simply starts returning False, with no
+    timer and no event to hook. So "when did the lamp stop framing me" had no
+    answer in the log except an inference from a throttled decline line that
+    only prints when a correction happened to be wanted; a user sitting neatly
+    centred could watch the window close and see nothing at all.
+
+    Edge-triggered, so a quiet lamp costs one line per conversation rather than
+    one per tick. The FIRST observation is recorded silently: the watcher
+    starting is not a transition, and announcing "closed" at every boot would
+    put a line in the log that means nothing happened.
+    """
+    global _conversation_was_open
+    open_now = _conversation_open()
+    if open_now == _conversation_was_open:
         return
-    # The commanded target, not the pose read back: the read happens while the
-    # move is still settling, so the pose lags where the correction just put it.
-    for joint, value in (pitch or {}).items():
-        anchor[joint] = float(value)
-    if not anchor or not _anchor_is_new(anchor):
+    first = _conversation_was_open is None
+    _conversation_was_open = open_now
+    if first:
         return
-    setter(anchor)
-    _last_anchor = dict(anchor)
     logger.info(
-        "[gaze] idle now breathes around %s",
-        " ".join(f"{k.split('.')[0]}={v:+.1f}" for k, v in sorted(anchor.items())),
+        "[gaze] conversation %s — framing %s",
+        "open" if open_now else "closed",
+        "live" if open_now else "released (idle has the arm)",
     )
 
 
@@ -1023,9 +970,8 @@ def _maybe_yaw(now: float) -> None:
     """Turn toward a face sitting off to one side.
 
     The horizontal twin of _maybe_pitch, and it inherits that loop's scars:
-    own the body for the move, anchor idle BEFORE measuring (idle resumes the
-    instant ownership drops and will drag the arm back while you time it), and
-    check the correction actually arrived instead of trusting that it did.
+    own the body for the move, and check the correction actually arrived
+    instead of trusting that it did.
 
     Deliberately lazier than the pitch loop. Vertical framing fails in one
     direction — a user stands and leaves the top of frame — so it is worth
@@ -1055,6 +1001,11 @@ def _maybe_yaw(now: float) -> None:
             "already centred enough", now,
             f"dx={dx * 100:+.0f}% within +/-{config.GAZE_YAW_DEAD_ZONE_FRAC * 100:.0f}%",
         )
+        return
+    # Measured, worth acting on — but only while someone is actually talking to
+    # the lamp. See _conversation_open.
+    if not _conversation_open():
+        _yaw_quiet("no conversation open", now, f"dx={dx * 100:+.0f}%")
         return
 
     import hal.app_state as state
@@ -1103,12 +1054,9 @@ def _maybe_yaw(now: float) -> None:
         )
         with aim.servo_ownership():
             svc.move_and_hold(target, duration=duration)
-            _anchor_idle_here(svc, target)
             short = _verify_landed(svc, target, now, bench=False)
         landed = dict(target)
         landed.update(short)
-        if short:
-            _anchor_idle_here(svc, landed)
         discard_dx_samples()
         _last_yaw_t = now
         logger.info(
@@ -1182,19 +1130,7 @@ def _check_speech(stage: str, *, request_repoint: bool) -> bool:
         measured_enough = considered >= config.GAZE_MIN_SAMPLES
         facing_now = ratio >= config.GAZE_MIN_FACING_RATIO
 
-        # Did they TURN, or were they already pointing this way? See
-        # facing_before. An unmeasurable baseline is not evidence against a
-        # turn, so it does not veto — but it is reported, because "we could not
-        # tell" and "they turned" must not read alike in the log.
-        before_ratio, before_n = facing_before()
-        baseline_known = before_n >= config.GAZE_MIN_SAMPLES
-        turned = (
-            not config.GAZE_REQUIRE_TRANSITION
-            or not baseline_known
-            or before_ratio <= config.GAZE_TRANSITION_MAX_BEFORE
-        )
-
-        would = measured_enough and facing_now and turned
+        would = measured_enough and facing_now
         # Observed, never acted on — see _who_is_in_frame and F21.
         who, who_age = _who_is_in_frame()
 
@@ -1219,10 +1155,9 @@ def _check_speech(stage: str, *, request_repoint: bool) -> bool:
         )
         logger.info(
             "[gaze] %s: yaw=%s face=%spx edge=%s facing=%.0f%%/%.0f%% of %d "
-            "was=%s who=%s trail=[%s] -> %s%s",
+            "who=%s trail=[%s] -> %s%s",
             stage, yaw_txt, px_txt, edge_txt, ratio * 100.0,
             config.GAZE_MIN_FACING_RATIO * 100.0, considered,
-            f"{before_ratio * 100:.0f}%/{before_n}" if baseline_known else "?",
             f"{who}({who_age:.0f}s)" if who else "?",
             trail, verdict,
             " (shadow)" if config.GAZE_WAKE_SHADOW else "",
@@ -1347,7 +1282,6 @@ def _return_to_known_height(now: float) -> None:
         )
         with aim.servo_ownership():
             svc.move_and_hold(target, duration=duration)
-            _anchor_idle_here(svc, target)
         logger.info(
             "[gaze] climb gave up; back to the last height a face was seen from (%s)",
             " ".join(f"{j.split('.')[0]}={v:+.1f}" for j, v in sorted(target.items())),
@@ -1394,6 +1328,12 @@ def _maybe_pitch(now: float, *, prompt: bool = False) -> None:
         return
     if (now - _last_pitch_t) < config.GAZE_PITCH_COOLDOWN_S:
         _pitch_quiet("cooling down", now)
+        return
+    # As with pan: measure always, move only inside a conversation. `prompt` is
+    # the one exception — a repoint that landed on a body asked for the climb,
+    # and that request is already speech-driven.
+    if not prompt and not _conversation_open():
+        _pitch_quiet("no conversation open", now, f"dy={dy * 100:+.0f}%")
         return
     # The fallback is a guess, not a measurement — a clipped torso says "the head
     # is up there somewhere" and never how far. So a torso-driven correction is a
@@ -1506,27 +1446,11 @@ def _maybe_pitch(now: float, *, prompt: bool = False) -> None:
         # cleared, so a tracking session that began meanwhile is not released.
         with aim.servo_ownership():
             svc.move_and_hold(target, duration=duration)
-            # Anchor BEFORE measuring, not after. Idle resumes the instant the
-            # move returns, and an unanchored idle walks the arm back toward the
-            # recorded pose — so verifying first timed the correction while
-            # something else was actively undoing it, and blamed the servo.
-            _anchor_idle_here(svc, target)
             # Verify inside the lock: once ownership drops, an emotion can re-pose
             # the head and the read would measure that instead.
             short = _verify_landed(svc, target, now)
         landed = dict(target)
         landed.update(short)
-        if short:
-            # Re-anchor on what the arm actually did. Leaving idle aimed at a
-            # pose the joint could not reach means it spends every cycle pulling
-            # toward somewhere unreachable.
-            _anchor_idle_here(svc, landed)
-        # Anchor on EVERY correction, including the guessed ones. Leaving the
-        # anchor behind during a search means idle keeps pulling back to where
-        # the search started and erases it step by step — device-observed the
-        # head reaching -32.4 and being dragged to -41.5 before the next look.
-        # A search whose progress is undone between steps is not a search. The
-        # blind budget already bounds how far a guess may take this.
         discard_samples()
         _last_pitch_t = now
         _blind_pitch_steps = 0 if from_face else _blind_pitch_steps + 1
@@ -1664,13 +1588,6 @@ def _maybe_repoint(now: float, *, force: bool = False) -> bool:
         # either of them.
         with aim.servo_ownership():
             svc.move_and_hold(target, duration=duration)
-        # Make idle rest here too. Turning to the remembered pose is undone
-        # within one idle cycle otherwise — idle is absolute and loops, so it
-        # walks the camera back to the pose the recording was made at. The
-        # anchor comes from the REMEMBERED pose rather than from wherever the
-        # watcher happens to be standing: that pose is the one a face was
-        # actually seen from, which is the only reason to rest anywhere.
-        _anchor_idle_from_pose(svc, getattr(est, "pose", None))
         discard_samples()
         _last_repoint_t = now
         # Owe the estimate a verdict. Deliberately not measured here: a
@@ -1910,17 +1827,24 @@ def _loop() -> None:
                 # Framing first: a face inside the frame is what everything
                 # else is measured from, and turning to a bearing that still
                 # points at the desk finds nobody however right the bearing is.
+                _note_conversation_edge()
                 _maybe_pitch(now)
                 # Pan after tilt, never in the same breath: both own the body
                 # and both clear their own window, so running them together
                 # would have each measuring a pose the other has just left.
                 _maybe_yaw(now)
-                # Last of the three, and gated on a long absence: a sweep owns
-                # the body for half a minute, so it must never pre-empt a
-                # correction that could have framed someone already in view.
-                _maybe_sweep(now)
+                # Neither the sweep nor the repoint is driven from here any
+                # more. Both move the body a long way, and doing that because
+                # the room merely looks empty is the lamp searching for someone
+                # who never asked for it — which also scored the remembered
+                # bearing as wrong on evidence that says nothing about whether
+                # it is: lean out of frame three times and a correct bearing is
+                # deleted. Both are now reached from speech instead:
+                #   _consume_speech_repoint -> _maybe_repoint(force=True)
+                #     -> _verify_repoint -> _maybe_sweep(confirmed_miss=True)
+                # so the lamp turns and searches when somebody speaks and it
+                # cannot see them, and stays still otherwise.
                 _consume_speech_repoint(now)
-                _maybe_repoint(now)
                 _verify_repoint(now)
             except Exception as e:  # a background watcher must never take HAL down
                 logger.debug("[gaze] sample skipped: %s", e)
@@ -1961,6 +1885,7 @@ def stop() -> None:
 
 def reset_for_test() -> None:
     """Clear buffered samples and the cooldown between tests."""
+    globals()["_conversation_was_open"] = None
     global _last_grant_t, _last_face_t, _last_repoint_t
     global _speech_repoint_requested_t
     with _samples_lock:
@@ -1979,7 +1904,6 @@ def reset_for_test() -> None:
     _blind_pitch_steps = 0
     globals()["_climb_gave_up"] = False
     _last_dy_from_face = False
-    globals()["_last_anchor"] = None
     _pitch_stalls.clear()
     discard_dx_samples()
     globals()["_last_yaw_t"] = 0.0
