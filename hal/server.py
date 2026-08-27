@@ -711,14 +711,17 @@ async def lifespan(app: FastAPI):
         # paying a first-use TTS round-trip makes it far likelier to arrive late
         # or lose the lock and drop entirely.
         try:
+            from hal.drivers.button_actions import _current_lang
             from hal.i18n import (
-                PHRASE_MIC_MUTED,
-                PHRASE_MIC_UNMUTED,
-                localized_phrase,
+                DEFAULT_LANG,
+                MIC_MUTED_PHRASES_BY_LANG,
+                MIC_UNMUTED_PHRASES_BY_LANG,
             )
 
-            for key in (PHRASE_MIC_MUTED, PHRASE_MIC_UNMUTED):
-                state.tts_service.speak_cached(localized_phrase(key), prerender=True)
+            lang = _current_lang()
+            for pools in (MIC_MUTED_PHRASES_BY_LANG, MIC_UNMUTED_PHRASES_BY_LANG):
+                for phrase in pools.get(lang) or pools.get(DEFAULT_LANG, []):
+                    state.tts_service.speak_cached(phrase, prerender=True)
         except Exception as e:
             logger.warning("Gesture ack prerender failed: %s", e)
         try:

@@ -41,14 +41,9 @@ PHRASE_REBOOT = "reboot"
 PHRASE_SLEEP = "sleep"
 PHRASE_SHUTDOWN = "shutdown"
 PHRASE_SERVICE_RESTART = "service_restart"
-# Spoken confirmation for the TTP223 double-tap mic toggle. The mic-muted LED is
-# the only other feedback this gesture has, and a muted mic has no audible
-# acknowledgement of its own — without these the gesture lands in silence and
-# the user cannot tell it registered. Deliberately states the resulting STATE
-# rather than the action, because the gesture is a toggle and the user may not
-# know which way it went.
-PHRASE_MIC_MUTED = "mic_muted"
-PHRASE_MIC_UNMUTED = "mic_unmuted"
+# Spoken confirmation for the TTP223 double-tap mic toggle lives in the pools at
+# the bottom of this file (MIC_MUTED_PHRASES_BY_LANG / MIC_UNMUTED_...), not as a
+# single fixed phrase — see the note there.
 # Spoken when a music/audio play request is suppressed by the audio.quiet_hours
 # safety window, so the user hears WHY nothing played instead of silent failure.
 PHRASE_QUIET_HOURS = "quiet_hours"
@@ -81,18 +76,6 @@ PHRASES_BY_LANG = {
         LANG_VI:    "Nghe đây.",
         LANG_ZH_CN: "在听。",
         LANG_ZH_TW: "在聽。",
-    },
-    PHRASE_MIC_MUTED: {
-        LANG_EN:    "Microphone off.",
-        LANG_VI:    "Đã tắt micro.",
-        LANG_ZH_CN: "麦克风已关闭。",
-        LANG_ZH_TW: "麥克風已關閉。",
-    },
-    PHRASE_MIC_UNMUTED: {
-        LANG_EN:    "Microphone on.",
-        LANG_VI:    "Đã bật micro.",
-        LANG_ZH_CN: "麦克风已开启。",
-        LANG_ZH_TW: "麥克風已開啟。",
     },
     PHRASE_REBOOT: {
         LANG_EN:    "Rebooting now.",
@@ -496,4 +479,65 @@ MUSIC_BACKCHANNEL_POOLS = {
     (LANG_ZH_CN, True):  MUSIC_BACKCHANNEL_PHRASES_ZH_CN_ELEVENLABS,
     (LANG_ZH_TW, False): MUSIC_BACKCHANNEL_PHRASES_ZH_TW,
     (LANG_ZH_TW, True):  MUSIC_BACKCHANNEL_PHRASES_ZH_TW_ELEVENLABS,
+}
+
+
+# Mic-toggle confirmations for the TTP223 double tap. Pools rather than one fixed
+# line, and in the same voice as the pet phrases, because the same gesture saying
+# the same sentence forever is the thing that reads as a machine.
+#
+# CONSTRAINT, and it is not decorative: every line must still say WHICH WAY the
+# toggle went. This is a privacy control — a confirmation the user cannot decode
+# is worse than a robotic one, because they are left unsure whether the
+# microphone is live. `physical-controls.md` states the same rule for the
+# destructive announcements. Warmth goes in the delivery, never in the meaning:
+# "Shh, my ears are closed" is fine, a bare "Shh!" is not.
+#
+# Audio tags ([whispers] / [excited] / [calm]) are eleven_v3 markers, same as
+# HEAD_PAT_PHRASES_BY_LANG uses, and are chosen to match the state — hushed going
+# quiet, bright coming back.
+MIC_MUTED_PHRASES_BY_LANG = {
+    LANG_EN: [
+        "[whispers] Okay, I'll stop listening.",
+        "[whispers] Shh, my ears are closed.",
+        "[calm] I'm not listening now.",
+    ],
+    LANG_VI: [
+        "[whispers] Ừm, mình ngừng nghe đây.",
+        "[whispers] Suỵt, mình bịt tai lại rồi.",
+        "[calm] Mình không nghe nữa đâu nhé.",
+    ],
+    LANG_ZH_CN: [
+        "[whispers] 好，我不听啦。",
+        "[whispers] 嘘，我捂住耳朵咯。",
+        "[calm] 我现在不听了。",
+    ],
+    LANG_ZH_TW: [
+        "[whispers] 好，我不聽啦。",
+        "[whispers] 噓，我摀住耳朵囉。",
+        "[calm] 我現在不聽了。",
+    ],
+}
+
+MIC_UNMUTED_PHRASES_BY_LANG = {
+    LANG_EN: [
+        "[excited] I'm listening again!",
+        "[excited] My ears are open!",
+        "I can hear you again.",
+    ],
+    LANG_VI: [
+        "[excited] Mình nghe lại được rồi!",
+        "[excited] Mình mở tai ra rồi nè!",
+        "Mình nghe thấy bạn rồi.",
+    ],
+    LANG_ZH_CN: [
+        "[excited] 我又能听见啦！",
+        "[excited] 我的耳朵张开咯！",
+        "我又听得到你了。",
+    ],
+    LANG_ZH_TW: [
+        "[excited] 我又能聽見啦！",
+        "[excited] 我的耳朵張開囉！",
+        "我又聽得到你了。",
+    ],
 }

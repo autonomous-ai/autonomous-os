@@ -22,9 +22,9 @@ import requests
 import hal.app_state as state
 from hal.i18n import (
     HEAD_PAT_PHRASES_BY_LANG,
+    MIC_MUTED_PHRASES_BY_LANG,
+    MIC_UNMUTED_PHRASES_BY_LANG,
     PHRASE_LISTENING,
-    PHRASE_MIC_MUTED,
-    PHRASE_MIC_UNMUTED,
     PHRASE_REBOOT,
     PHRASE_SLEEP,
     PHRASE_SHUTDOWN,
@@ -131,13 +131,15 @@ def _phrase(key: str) -> str:
     return pool.get(_current_lang()) or pool.get(DEFAULT_LANG, "")
 
 
+def _random_from(pools: dict) -> str:
+    """Pick a random phrase for the current language from a per-language pool."""
+    pool = pools.get(_current_lang()) or pools.get(DEFAULT_LANG, [])
+    return random.choice(pool) if pool else ""
+
+
 def _random_head_pat_phrase() -> str:
     """Pick a random pet-response phrase for the current language."""
-    pool = (
-        HEAD_PAT_PHRASES_BY_LANG.get(_current_lang())
-        or HEAD_PAT_PHRASES_BY_LANG.get(DEFAULT_LANG, [])
-    )
-    return random.choice(pool) if pool else ""
+    return _random_from(HEAD_PAT_PHRASES_BY_LANG)
 
 
 def _announce_listening():
@@ -480,17 +482,20 @@ def mic_toggle_action(source: str = "touch"):
         if state._mic_muted:
             logger.info("%s double tap -- unmuting mic", source)
             unmute_mic()
-            phrase = PHRASE_MIC_UNMUTED
+            pool = MIC_UNMUTED_PHRASES_BY_LANG
         else:
             logger.info("%s double tap -- muting mic", source)
             mute_mic()
-            phrase = PHRASE_MIC_MUTED
+            pool = MIC_MUTED_PHRASES_BY_LANG
     except Exception as e:
         # Never let a mute failure escape into the lgpio callback path.
         logger.warning("%s double tap -- mic toggle failed: %s", source, e)
         return
 
     # Speak the resulting STATE, after the flip, so the voice and the LED agree.
+    # Drawn from a pool in the lamp's own voice rather than one fixed line — the
+    # same sentence every time is what reads as a machine. Every line in both
+    # pools still says which way the toggle went; see the note in i18n.py.
     # Muting the microphone does not touch the speaker, so this is audible on
     # both legs. Spoken AFTER the state change deliberately: if the toggle
     # raised, the user should not be told about a mute that did not happen.
@@ -499,7 +504,7 @@ def mic_toggle_action(source: str = "touch"):
     # latency to the mute itself, and it must not talk over a reply in flight.
     # When TTS is busy the confirmation drops and the mic-muted LED carries the
     # feedback alone — the same trade the pet giggle makes.
-    _speak_gesture_ack(_phrase(phrase), source)
+    _speak_gesture_ack(_random_from(pool), source)
 
 
 def sleep_action(source: str = "button"):

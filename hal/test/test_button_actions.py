@@ -191,29 +191,66 @@ def _mic_toggle(muted: bool, speaker_muted=False, enrolling=False, hw_switch=Non
     return tts.spoken, mute, unmute
 
 
+def _pool(pools):
+    """The pool the device's current language will actually draw from."""
+    from hal.i18n import DEFAULT_LANG
+
+    return pools.get(button_actions._current_lang()) or pools.get(DEFAULT_LANG, [])
+
+
 def test_muting_the_mic_says_so():
     """The double tap's only other feedback is an LED. Landing in silence is
     what the user reported; this pins the fix.
 
-    Asserted against the resolved phrase rather than an English literal — the
+    Asserted against the language's pool rather than an English literal — the
     device under test runs Vietnamese, and hardcoding "Microphone off." made
     this fail on hardware while the behaviour was correct.
     """
-    from hal.i18n import PHRASE_MIC_MUTED
+    from hal.i18n import MIC_MUTED_PHRASES_BY_LANG
 
     spoken, mute, unmute = _mic_toggle(muted=False)
     mute.assert_called_once()
     unmute.assert_not_called()
-    assert spoken == [button_actions._phrase(PHRASE_MIC_MUTED)], spoken
+    assert spoken and spoken[0] in _pool(MIC_MUTED_PHRASES_BY_LANG), spoken
 
 
 def test_unmuting_the_mic_says_so():
-    from hal.i18n import PHRASE_MIC_UNMUTED
+    from hal.i18n import MIC_UNMUTED_PHRASES_BY_LANG
 
     spoken, mute, unmute = _mic_toggle(muted=True)
     unmute.assert_called_once()
     mute.assert_not_called()
-    assert spoken == [button_actions._phrase(PHRASE_MIC_UNMUTED)], spoken
+    assert spoken and spoken[0] in _pool(MIC_UNMUTED_PHRASES_BY_LANG), spoken
+
+
+def test_every_mic_phrase_states_which_way_the_toggle_went():
+    """The pools exist to sound alive, not to be cryptic. This is a privacy
+    control: a confirmation the user cannot decode is worse than a robotic one,
+    because they are left unsure whether the microphone is live. Guards against
+    a future 'Shh!' with no state in it.
+
+    Checked structurally — every line must carry a listening/hearing/ear word in
+    its own language, and the two pools must never share a line.
+    """
+    from hal.i18n import (
+        MIC_MUTED_PHRASES_BY_LANG as MUTED,
+        MIC_UNMUTED_PHRASES_BY_LANG as UNMUTED,
+    )
+
+    cues = {
+        "en": ("listen", "hear", "ear"),
+        "vi": ("nghe", "tai"),
+        "zh-CN": ("听", "耳"),
+        "zh-TW": ("聽", "耳"),
+    }
+    for pools in (MUTED, UNMUTED):
+        for lang, phrases in pools.items():
+            assert phrases, lang
+            for text in phrases:
+                low = text.lower()
+                assert any(c in low for c in cues[lang]), (lang, text)
+    for lang in MUTED:
+        assert not set(MUTED[lang]) & set(UNMUTED[lang]), lang
 
 
 def test_a_muted_speaker_stays_silent():
