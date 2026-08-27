@@ -878,7 +878,18 @@ class VoiceService:
         reopen latency (no clipped first words after a push-to-talk cue)."""
         speech_start = None
         speech_pre_buffer = []  # frames buffered during holdoff period
-        lookback = deque(maxlen=voice_cfg.PRE_ROLL_FRAMES)
+        # Sized for the barge-in path, which needs far more history than an
+        # ordinary turn (see BARGE_IN_PRE_ROLL_FRAMES). The ordinary path trims
+        # back to PRE_ROLL_FRAMES where it consumes this, so widening the buffer
+        # does not lengthen normal turns.
+        lookback = deque(
+            maxlen=max(
+                voice_cfg.PRE_ROLL_FRAMES,
+                voice_cfg.BARGE_IN_PRE_ROLL_FRAMES
+                if voice_cfg.BARGE_IN_ENABLED
+                else 0,
+            )
+        )
         draining = False  # warm-mic: True while draining frames during TTS/music
         barge_hits = 0  # consecutive over-threshold frames while draining
         barged = False  # True from the barge-in until VAD resumes
@@ -987,11 +998,46 @@ class VoiceService:
                 ):
                     barge_hits = 0
                     continue
+                # Loud AND speech — but the lamp's own reply is both. The one
+                # thing that separates them is whether this rises and falls with
+                # what the speaker is playing. Judged on the same lookback the
+                # speech test used, so the two agree on what they are judging.
+                match = None
+                if voice_cfg.BARGE_IN_ECHO_MATCH > 0:
+                    match = aec.echo_envelope_match(
+                        voice_cfg.BARGE_IN_SPEECH_FRAMES
+                        * voice_cfg.FRAME_DURATION_MS,
+                        self._np,
+                    )
+                    # None means the test could not judge, NOT that the frame is
+                    # clean. Firing on it is firing with no echo defence at all
+                    # — the speaker is audibly playing right here, which is the
+                    # one situation where "unknown" has to mean "don't".
+                    if match is None or match >= voice_cfg.BARGE_IN_ECHO_MATCH:
+                        logger.info(
+                            "BARGE-IN rejected as echo: RMS=%.0f, envelope %s",
+                            level,
+                            "could not be judged"
+                            if match is None
+                            else "matches the reply at %.2f (>= %.2f)"
+                            % (match, voice_cfg.BARGE_IN_ECHO_MATCH),
+                        )
+                        barge_hits = 0
+                        drain_run = 0
+                        continue
+                # Name the sentence being cut off. Without it a false barge-in
+                # is only visible as a gap in the audio, and telling "the lamp
+                # interrupted itself" from "the user interrupted" after the fact
+                # means guessing from timestamps.
+                cut = getattr(self._tts, "last_spoken_text", "") or "(unknown)"
                 logger.info(
-                    "BARGE-IN: RMS=%.0f > %d for %d frames → stop TTS",
+                    "BARGE-IN: RMS=%.0f > %d for %d frames, envelope match %s "
+                    "→ stop TTS mid-sentence: %r",
                     level,
                     voice_cfg.BARGE_IN_RMS_THRESHOLD,
                     barge_hits,
+                    "n/a" if match is None else "%.2f" % match,
+                    cut[:100],
                 )
                 if self._tts is not None:
                     self._tts.stop()
@@ -1147,6 +1193,14 @@ class VoiceService:
                     history = (
                         list(lookback)[:-buffered] if buffered > 0 else list(lookback)
                     )
+                    # Only a barge-in turn gets the long pre-roll: it was
+                    # detected late and its opening words live nowhere else.
+                    # An ordinary turn keeps the short one, or every utterance
+                    # would start with a second of room noise.
+                    if not force_open:
+                        history = history[-voice_cfg.PRE_ROLL_FRAMES:]
+                    else:
+                        history = history[-voice_cfg.BARGE_IN_PRE_ROLL_FRAMES:]
                     all_frames = history + speech_pre_buffer
                     logger.info(
                         "Speech detected (RMS=%.0f) — pre-roll=%d frames (~%dms) + holdoff=%d frames",
