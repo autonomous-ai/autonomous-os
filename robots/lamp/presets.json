@@ -1,36 +1,36 @@
 {
-  "_comment": "Per-device preset overrides for lamp. See robots/contract/ROBOT-SPEC.md § Per-device presets. Lamp's LED ring is 32 pixels (vs the platform default of 64). All RGB channels in this overlay are capped at 3 for the low-glare device test; colors retain their hue as closely as integer channel values allow.",
+  "_comment": "Per-device preset overrides for lamp. See robots/contract/ROBOT-SPEC.md § Per-device presets. Lamp's LED ring is 32 pixels (vs the platform default of 64). Every emotion uses its own low-glare color from a quantized RGB wheel: each channel is 0-3, so the palette stays diverse without exceeding the tested brightness cap.",
   "led_count": 32,
   "_comment_listening": "Speed only; the color is the blue group value below. Base speed is 1.2, the fastest in EMOTION_PRESETS (every other breathing preset is 0.2-0.6), and it was reported as glaring on the lamp. Lowering the color had already been tried and did not help, because the level was never this cue's problem. breathing() sweeps 0 -> peak -> 0 over 100 steps of 0.03/speed, so modulation depth is 100% at every speed and only the period moves: 2.5 s at 1.2. A full-ring, full-depth swing that fast, sustained for as long as the user keeps talking, reads as pulsing rather than as light. 0.3 puts it back with the family. Confirmed by eye on lamp-0c89, 21/08/2026.",
-  "_comment_processing_group": "The processing group (curious/thinking/scan/acknowledge) is dim purple-rose [3, 0, 2], hue 320 deg, NOT the green 120 deg slot the six-hue layout originally gave it. Green was reported as glaring on 25/08/2026 at [0, 4, 0], which is already the lowest the green tier goes: intensity 0.7 turns it into [0, 2, 0] on the strip, and one step lower is [0, 1, 0], where breathing/pulse truncate per frame and the cycle visibly steps. Level was therefore not the lever. The cause is the emitter, not the amplitude -- WS2812's green die is brighter than its red at the same value (the same finding that put the green tier at 4 while every other tier is 5), so EVERY green-dominant hue, 60 through 180 deg, carries the problem and no amount of dimming escapes it. Moving the group off green entirely is the only fix that keeps the whole ring lit. Green is held at exactly 0 for that reason -- this is about not waking the green die, not about keeping colors saturated, so red and blue may be mixed freely here. Red is reduced from 5 to 3 while blue remains at 2, lowering glare while keeping the color visibly purple.",
+  "_comment_emotion_palette": "The former six-color grouping is retired. Emotion colors now use distinct positions on one quantized RGB wheel, capped at 3 per channel. Effects, speeds, and servo animations remain inherited from the base presets unless explicitly overridden below.",
   "emotion": {
-    "sad":          { "color": [3, 0, 0] },
-    "shy":          { "color": [3, 0, 0] },
-    "confused":     { "color": [3, 0, 0] },
+    "sad":          { "color": [0, 1, 3] },
+    "shy":          { "color": [3, 0, 1] },
+    "confused":     { "color": [3, 2, 0] },
     "headshake":    { "color": [3, 0, 0] },
 
     "happy":        { "color": [3, 3, 0] },
-    "laugh":        { "color": [3, 3, 0] },
-    "excited":      { "color": [3, 3, 0] },
+    "laugh":        { "color": [2, 3, 0] },
+    "excited":      { "color": [3, 1, 0] },
 
-    "curious":      { "color": [3, 0, 2] },
-    "thinking":     { "color": [3, 0, 2], "servo": null },
-    "scan":         { "color": [3, 0, 2] },
-    "acknowledge":  { "color": [3, 0, 2] },
+    "curious":      { "color": [0, 3, 3] },
+    "thinking":     { "color": [2, 0, 3], "servo": null },
+    "scan":         { "color": [0, 2, 3] },
+    "acknowledge":  { "color": [0, 3, 0] },
 
-    "music_chill":  { "color": [0, 3, 3] },
+    "music_chill":  { "color": [0, 3, 2] },
 
     "listening":    { "color": [0, 0, 3], "speed": 0.3 },
 
     "shock":        { "color": [2, 2, 2] },
 
     "greeting":     { "color": [3, 0, 3] },
-    "goodbye":      { "color": [3, 0, 3] },
-    "caring":       { "color": [3, 0, 3] },
+    "goodbye":      { "color": [3, 0, 2] },
+    "caring":       { "color": [3, 1, 2] },
 
-    "idle":         { "color": [3, 2, 0] },
-    "nod":          { "color": [3, 2, 0] },
-    "stretching":   { "color": [3, 2, 0] }
+    "idle":         { "color": [1, 2, 3] },
+    "nod":          { "color": [2, 3, 1] },
+    "stretching":   { "color": [3, 2, 1] }
   },
   "_comment_status_led": "All status LED RGB channels are capped at 3 for the low-glare device test. Effects and speeds remain inherited from the base presets. Verify that alert and privacy cues remain readable and that low-level breathing does not visibly step.",
   "status_led": {

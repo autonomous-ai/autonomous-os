@@ -4,32 +4,38 @@ Source: colors are what the **lamp** actually shows — `robots/lamp/presets.jso
 
 | Emotion | Color (RGB) | Hex | Color source | Effect | Speed | Servo Animation |
 |---|---|---|---|---|---|---|
-| `curious` | 3, 0, 2 | `#030002` dim purple-rose | overlay | candle | 0.3 | curious |
+| `curious` | 0, 3, 3 | `#000303` dim cyan | overlay | candle | 0.3 | curious |
 | `happy` | 3, 3, 0 | `#030300` dim yellow | overlay | candle | 0.2 | happy_wiggle |
-| `sad` | 3, 0, 0 | `#030000` dim red | overlay | breathing | 0.4 | sad |
-| `thinking` | 3, 0, 2 | `#030002` dim purple-rose | overlay | pulse | 0.3 | — (see note) |
-| `idle` | 3, 2, 0 | `#030200` dim amber | overlay | breathing | 0.2 | idle |
-| `excited` | 3, 3, 0 | `#030300` dim yellow | overlay | candle | 0.5 | excited |
-| `shy` | 3, 0, 0 | `#030000` dim red | overlay | breathing | 0.3 | shy |
+| `sad` | 0, 1, 3 | `#000103` dim blue | overlay | breathing | 0.4 | sad |
+| `thinking` | 2, 0, 3 | `#020003` dim violet | overlay | pulse | 0.3 | — (see note) |
+| `idle` | 1, 2, 3 | `#010203` dim steel blue | overlay | breathing | 0.2 | idle |
+| `excited` | 3, 1, 0 | `#030100` dim orange | overlay | candle | 0.5 | excited |
+| `shy` | 3, 0, 1 | `#030001` dim rose | overlay | breathing | 0.3 | shy |
 | `shock` | 2, 2, 2 | `#020202` soft white | overlay | notification_flash | 1.0 | shock |
 | `listening` | 0, 0, 3 | `#000003` dim blue | overlay | breathing | 1.2 | — (see note) |
-| `laugh` | 3, 3, 0 | `#030300` dim yellow | overlay | candle | 0.2 | laugh |
-| `confused` | 3, 0, 0 | `#030000` dim red | overlay | candle | 0.2 | confused |
+| `laugh` | 2, 3, 0 | `#020300` dim lime | overlay | candle | 0.2 | laugh |
+| `confused` | 3, 2, 0 | `#030200` dim amber | overlay | candle | 0.2 | confused |
 | `sleepy` | 0, 0, 0 | `#000000` black (off) | base | solid | — | sleepy |
-| `greeting` | 3, 0, 3 | `#030003` dim purple | overlay | breathing | 0.3 | greeting \| wake_up |
-| `goodbye` | 3, 0, 3 | `#030003` dim purple | overlay | breathing | 0.5 | goodbye |
-| `caring` | 3, 0, 3 | `#030003` dim purple | overlay | breathing | 0.4 | nod |
-| `acknowledge` | 3, 0, 2 | `#030002` dim purple-rose | overlay | breathing | 0.5 | acknowledge |
-| `stretching` | 3, 2, 0 | `#030200` dim amber | overlay | breathing | 0.6 | stretching |
+| `greeting` | 3, 0, 3 | `#030003` dim magenta | overlay | breathing | 0.3 | greeting \| wake_up |
+| `goodbye` | 3, 0, 2 | `#030002` dim purple | overlay | breathing | 0.5 | goodbye |
+| `caring` | 3, 1, 2 | `#030102` dim pink | overlay | breathing | 0.4 | nod |
+| `acknowledge` | 0, 3, 0 | `#000300` dim green | overlay | breathing | 0.5 | acknowledge |
+| `stretching` | 3, 2, 1 | `#030201` dim warm amber | overlay | breathing | 0.6 | stretching |
 | `music_strong` | 8, 12, 8 | `#080c08` pale green (no effect — see below) | base | rainbow | 1.0 | music_rock |
-| `music_chill` | 0, 3, 3 | `#000303` dim cyan | overlay | breathing | 0.3 | music_rock \| music_groove \| music_jazz \| music_waltz |
-| `scan` | 3, 0, 2 | `#030002` dim purple-rose | overlay | pulse | 0.3 | scanning |
-| `nod` | 3, 2, 0 | `#030200` dim amber | overlay | breathing | 0.5 | nod |
+| `music_chill` | 0, 3, 2 | `#000302` dim aqua | overlay | breathing | 0.3 | music_rock \| music_groove \| music_jazz \| music_waltz |
+| `scan` | 0, 2, 3 | `#000203` dim sky blue | overlay | pulse | 0.3 | scanning |
+| `nod` | 2, 3, 1 | `#020301` dim yellow-green | overlay | breathing | 0.5 | nod |
 | `headshake` | 3, 0, 0 | `#030000` dim red | overlay | breathing | 0.5 | headshake |
 
 `music_strong`'s color is inert: it runs the `rainbow` effect, and `rainbow()` in `hal/drivers/rgb/effects.py` ignores the `color` argument and sweeps the whole hue circle itself — which is why the overlay does not bother to set it.
 
-## Six hue groups
+## Per-emotion low-glare palette
+
+Every emotion has its own color rather than sharing a group color. The palette uses a single quantized RGB wheel: each channel is an integer from 0 to 3, keeping every cue below the tested glare cap while retaining as much hue separation as the low range allows. Effects, speeds, and servo mappings remain the mechanisms that add motion and personality; the table above is the current source of truth.
+
+## Retired six-hue grouping
+
+The following section records the prior grouping rationale and is not the active palette.
 
 The table above is the base palette from `hal/presets.py`. On the lamp it is overridden, because at indicator brightness that palette has no usable color space left.
 
