@@ -301,7 +301,7 @@ def _summarise_session(edges: List[Dict[str, Any]], count: int,
 
 
 def _traversal(trace: Dict[str, Any]) -> Dict[str, Any]:
-    """Cross-session pad sequence and its reversal count.
+    """Pad sequence across the whole cycle, and its reversal count.
 
     Reversal is what separates a swipe from a stroke: a swipe is one monotonic
     pass, a pet turns around at least once. That needs an ORDERING of the pads,
@@ -309,11 +309,25 @@ def _traversal(trace: Dict[str, Any]) -> Dict[str, Any]:
     order, so this falls back to declared line order and records which it used —
     a reversal count against an assumed axis is still useful evidence, but the
     reader must know it is provisional.
+
+    The sequence is built from EVERY pad touched, in time order, concatenated
+    across sessions — not one entry per session. Measured on orange-lamp
+    2026-08-27: a stroke collapses into one or two sessions while cross-talk from
+    a single finger already reaches all three pads (41% of contacts), so a
+    per-session sequence never reached three distinct pads and `reversals` came
+    back None on all 30 traces. The spatial information lives inside the session,
+    in `first_touch_order`, so that is what this reads.
+
+    Consecutive repeats are collapsed: a pad re-firing without an intervening
+    different pad is FastMode re-triggering under a stationary finger, not a
+    move, and counting it would invent direction changes that never happened.
     """
     seq: List[List[Any]] = []
     for s in trace["sessions"]:
-        if s.get("primary_pad"):
-            seq.append([s["primary_pad"], s.get("t_ms")])
+        for pad, t in s.get("first_touch_order") or []:
+            if seq and seq[-1][0] == pad:
+                continue
+            seq.append([pad, t])
 
     axis = trace.get("axis") or trace["lines"]
     axis_source = "boards.json" if trace.get("axis") else "assumed line order"
@@ -339,7 +353,7 @@ def _traversal(trace: Dict[str, Any]) -> Dict[str, Any]:
     elif distinct < 2:
         verdict = "no traversal — contact stayed on one pad"
     elif reversals is None:
-        verdict = f"traversal over {distinct} pads, too few contacts to judge reversal"
+        verdict = f"traversal over {distinct} pads, too few steps to judge reversal"
     elif monotonic:
         verdict = f"monotonic over {distinct} pads (swipe-shaped, axis={axis_source})"
     else:
@@ -350,6 +364,7 @@ def _traversal(trace: Dict[str, Any]) -> Dict[str, Any]:
         "axis_positions": positions,
         "axis_source": axis_source,
         "distinct_pads": distinct,
+        "steps": len(seq),
         "reversals": reversals,
         "monotonic": monotonic,
         "verdict": verdict,

@@ -154,6 +154,49 @@ class TestTraversal(unittest.TestCase):
             self.assertEqual(tv["distinct_pads"], 1)
             self.assertIn("no traversal", tv["verdict"])
 
+    def test_traversal_reads_within_session_pad_order(self):
+        """Device-driven regression. Measured on orange-lamp 2026-08-27: a stroke
+        collapses into one or two sessions while cross-talk already spreads a
+        single contact across all three pads, so a per-SESSION sequence never
+        reached three pads and `reversals` was None on all 30 traces. The order
+        lives inside the session, so that is what traversal must read."""
+        with tempfile.TemporaryDirectory() as tmp:
+            td = _fresh(True, tmp, pads="96=S1,98=S2,100=S4")
+            td.start_cycle(0, [96, 98, 100])
+            # ONE contact spanning all three pads — the 41% case.
+            td.note_edge(96, 0)
+            td.note_edge(98, 0)
+            td.note_edge(100, 0)
+            td.note_session_end(1)
+            td.finish("TAP")
+            import time as _t
+            _t.sleep(0.2)
+            tv = json.loads(next(Path(tmp).glob("*.json")).read_text())["traversal"]
+            self.assertEqual(tv["steps"], 3)
+            self.assertEqual(tv["reversals"], 0)
+            self.assertTrue(tv["monotonic"])
+
+    def test_a_pad_refiring_under_a_still_finger_is_not_a_direction_change(self):
+        """FastMode re-triggers on a stationary finger. Counting a repeat as a
+        step would invent reversals that never happened."""
+        with tempfile.TemporaryDirectory() as tmp:
+            td = _fresh(True, tmp, pads="96=S1,98=S2,100=S4")
+            td.start_cycle(0, [96, 98, 100])
+            td.note_edge(96, 0)
+            td.note_session_end(1)
+            td.note_edge(96, 0)          # same pad again — not a move
+            td.note_session_end(2)
+            td.note_edge(98, 0)
+            td.note_session_end(3)
+            td.note_edge(100, 0)
+            td.note_session_end(4)
+            td.finish("TEST")
+            import time as _t
+            _t.sleep(0.2)
+            tv = json.loads(next(Path(tmp).glob("*.json")).read_text())["traversal"]
+            self.assertEqual([p for p, _ in tv["pad_sequence"]], ["S1", "S2", "S4"])
+            self.assertEqual(tv["reversals"], 0)
+
     def test_axis_source_is_reported_as_assumed_without_boards_json_axis(self):
         """Reversal against a guessed axis is still evidence, but the reader
         has to know it is provisional until the pads are physically labelled."""
