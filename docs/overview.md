@@ -115,7 +115,37 @@ The camera in host mode uses a simulation-only driver
 the webcam through the platform's native OpenCV backend — AVFoundation on
 macOS, where the production V4L2 path and its USB power-cycle healing do not
 exist. Production bodies still resolve their `driver:` from ROBOT.md.
-The STT/TTS voice pipeline stays virtual in both modes.
+
+Host mode also runs the **real voice pipeline**: entry VAD, Silero, STT, the
+realtime agent (Gemini Live), wake word, and the `[turn] route=…` dispatch that
+forwards to os-server — the same code a board runs, not a stub. The gate is
+`state.simulation_audio`, so the two decisions can never drift apart: a laptop
+using its own microphone gets the pipeline that microphone exists for, and a
+macOS permission denial flips the flag back and lands on the inert
+`VirtualVoiceService` with a logged reason rather than a real pipeline reading a
+dead device. `SIM_MEDIA=virtual` keeps the stub, so tests stay silent and offline.
+
+Credentials come from the config.json HAL shares with os-server, exactly as on a
+board — point `OS_CONFIG_PATH` at the `make os-dev` state dir and one file feeds
+both processes. `llm_api_key` alone covers LLM, `AutonomousSTT`, ElevenLabs TTS,
+image description, **and** Gemini Live (whose key falls back to it and whose
+endpoint is `llm_base_url` + `/ws/gemini`); `deepgram_api_key` is optional and
+only swaps the STT provider.
+
+Music plays too. `MusicService` streams yt-dlp → ffmpeg → **aplay** (ALSA), or
+**paplay** when a Bluetooth sink is active — neither exists on macOS, so both
+routes failed at `Popen` and the device apologised out loud with "Sorry, I can't
+play that right now". macOS gets a third route: ffmpeg's own AudioToolbox output
+device, chosen over `ffplay` because ffmpeg is already a hard dependency here and
+`ffplay` is not in every build. `SIM_MEDIA=virtual` keeps the same pipeline into
+a null sink — the search and decode still run, the laptop just stays quiet.
+
+Two HAL paths are device-absolute and must move for a laptop, both already
+env-driven and set by the `sim` target: `HAL_SNAPSHOT_DIR` (where
+`GET /camera/snapshot?save=true` writes — it has to sit under the agent
+runtime's own home, `/root/.codex/media/hal-snapshots` on a board, or the agent
+cannot read the frame back and os-server cannot serve its thumbnail) and
+`HAL_SNAPSHOT_PERSIST_DIR` (`/var/lib/hal/snapshots` is root-only).
 
 ## Voice Pipeline
 

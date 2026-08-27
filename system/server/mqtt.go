@@ -5,6 +5,7 @@ import (
 	"log/slog"
 
 	"go.autonomous.ai/os/system/lib/safego"
+	"go.autonomous.ai/os/system/lib/syspath"
 	"go.autonomous.ai/os/system/server/config"
 )
 
@@ -26,6 +27,13 @@ func (s *Server) startMQTT() {
 	}
 	if s.mqttFactory == nil {
 		s.mqttMu.Unlock()
+		return
+	}
+	// Client IDs are derived from device_id, so two processes carrying the same
+	// config fight over one broker session and neither stays connected.
+	if !syspath.BackendUplink() {
+		s.mqttMu.Unlock()
+		slog.Info("backend uplink off — mqtt not started", "component", "mqtt")
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())

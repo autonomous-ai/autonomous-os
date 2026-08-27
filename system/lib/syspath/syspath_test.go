@@ -31,3 +31,48 @@ func TestDeviceDefaults(t *testing.T) {
 		}
 	}
 }
+
+// AgentRuntimeHome is the one accessor that is not a bare env lookup, so the
+// device contract has to be asserted per runtime: on a board every runtime must
+// still resolve to /root/.<runtime> with nothing set. Codex additionally has to
+// track CODEX_HOME rather than OS_AGENT_HOME — off-device those two point at
+// different places (a real codex install vs. throwaway state), and composing
+// them would name a directory HAL never writes a snapshot to.
+func TestAgentRuntimeHome(t *testing.T) {
+	t.Setenv("OS_AGENT_HOME", "")
+	t.Setenv("CODEX_HOME", "")
+	for _, rt := range []string{"codex", "openclaw", "hermes", "picoclaw", "claudecode", "opencode"} {
+		if got, want := AgentRuntimeHome(rt), "/root/."+rt; got != want {
+			t.Errorf("%s unset env: got %q, want %q", rt, got, want)
+		}
+	}
+
+	t.Setenv("CODEX_HOME", "/Users/dev/.codex")
+	t.Setenv("OS_AGENT_HOME", "/tmp/state")
+	if got, want := AgentRuntimeHome("codex"), "/Users/dev/.codex"; got != want {
+		t.Errorf("codex: got %q, want %q — must follow CODEX_HOME, not OS_AGENT_HOME", got, want)
+	}
+	if got, want := AgentRuntimeHome("openclaw"), "/tmp/state/.openclaw"; got != want {
+		t.Errorf("openclaw: got %q, want %q", got, want)
+	}
+}
+
+// The board must keep reporting to the backend: unset (and any value other than
+// the explicit "off") has to stay on, or a fleet upgrade would silently take
+// every device off its uplink. Only `make os-dev`'s explicit "off" disables it.
+func TestBackendUplink(t *testing.T) {
+	for _, c := range []struct {
+		env  string
+		want bool
+	}{
+		{"", true},         // unset — the device default
+		{"on", true},       // what a deliberate off-device opt-in sets
+		{"off", false},     // what make os-dev sets
+		{"anything", true}, // a typo must fail SAFE for the board, i.e. stay on
+	} {
+		t.Setenv("OS_BACKEND_UPLINK", c.env)
+		if got := BackendUplink(); got != c.want {
+			t.Errorf("OS_BACKEND_UPLINK=%q: got %v, want %v", c.env, got, c.want)
+		}
+	}
+}

@@ -437,7 +437,24 @@ A full laptop stack is three terminals:
 make sim          # HAL on :5001
 make codex-dev    # codex bridge on $CODEX_PORT
 make os-dev       # API on :5000
+make web-dev      # web UI on :5173 (optional)
 ```
+
+os-server serves no HTML: on a board nginx serves `web/dist` and proxies `/api`
+and `/hw` to it. `make web-dev` puts Vite in nginx's place, with `LAMP_PROXY`
+(default `http://127.0.0.1:5000`) naming the device the SPA talks to — a `.env`
+in `web/` still wins, so pointing at a real Pi is unchanged. Open
+**`http://localhost:5173/monitor`**; Vite binds `[::1]` only, so `127.0.0.1:5173`
+is refused. Admin routes need auth — log in with the device password, or append
+`?llm_api_key=<the key in config.json>` once and the SPA exchanges it for a
+session cookie and scrubs it from the address bar.
+
+Three of the six log tabs work off-device. `hal` and `os-server` follow
+`OS_HAL_LOG_FILE` / `OS_LOG_FILE`, and the Agent tabs follow
+`OS_AGENT_BRIDGE_LOG` — `make codex-dev` tees the bridge to a file because a
+laptop has no journal to read. `bootstrap` (the worker is not run off-device)
+and `buddy` (a Mac app with no log here) stay empty by design; unset env leaves
+all six exactly as they resolve on a board.
 
 Makefile knobs: `OS_STATE_DIR` (default `/tmp/autonomous-os`), `OS_AGENT_RUNTIME`
 (default `codex`), `CODEX_HOME` (default `$HOME/.codex`), `CODEX_PORT`,
@@ -462,8 +479,52 @@ consumers are the skill watcher and the runtimes' `otaBaseURL()` helpers, so
 setting it off-device enables skills and nothing else — OTA self-update lives in
 the separate `bootstrap-server` binary, which `make os-dev` does not run.
 
+### Full media + voice on the laptop
+
+`make sim` alone boots HAL with virtual devices. `make sim SIM_MEDIA=host` opens
+the Mac's microphone, speaker and camera **and** runs the real voice pipeline
+(STT → realtime → `[turn] route=…` dispatch → this server), so a spoken turn
+travels the same path it does on a board. The `sim` target sets three paths for
+it:
+
+| Env | Points at | Why |
+|-----|-----------|-----|
+| `OS_CONFIG_PATH` | `$OS_STATE_DIR/config/config.json` | The one file HAL and os-server share, as `/root/config/config.json` is on a board. Carries the credentials **and** `agent_runtime` |
+| `HAL_SNAPSHOT_DIR` | `$CODEX_HOME/media/hal-snapshots` | Where `?save=true` writes. Must sit under the runtime's own home or the agent cannot read the frame and `GET /api/sensing/agent-snapshot/…` cannot serve it |
+| `HAL_SNAPSHOT_PERSIST_DIR` | `$SIM_STATE_DIR/snapshots` | `/var/lib/hal/snapshots` is root-only |
+| `HAL_TTS_CACHE_DIR`, `HAL_CALIBRATION_DIR`, `HAL_USER_BEARING_PATH`, `HAL_FACE_HEIGHT_PATH`, `HAL_VOICE_STRANGERS_DIR`, `HAL_DL_STALL_LOG` | `$SIM_STATE_DIR/…` | The rest of HAL's writable state, rooted at `/var/lib/hal` or `/root/local` on a board |
+| `HAL_CODEX_WORKSPACE_DIR` | `$CODEX_HOME/workspace` | The realtime agent's `memory.jsonl` is derived from it |
+
+These fail far from their cause, which is why they are set as a block rather
+than one at a time: the TTS cache one surfaced as `POST /voice/speak 409` with
+the real `PermissionError: /var/lib/hal` buried in a background thread's
+traceback. Two remaining defaults are read-only model paths
+(`/root/local/models`, `/opt/piper`) — absent on a laptop, the feature that
+needs them simply stays off. `POST /audio/volume` answering 503 is also
+expected: macOS has no ALSA mixer.
+
+Put the credentials in that config.json (Settings in the web UI writes the same
+file). `llm_api_key` + `llm_base_url` alone cover LLM, `AutonomousSTT`, TTS,
+image description and Gemini Live — the realtime key falls back to `llm_api_key`
+and its endpoint to `llm_base_url` + `/ws/gemini` (`hal/config.py`), so no
+separate Google credential is involved. `deepgram_api_key` is optional.
+
+Copying a real device's config.json is the fastest way to a full-option laptop,
+but blank two keys first: `telegram_bot_token` (one bot cannot have two pollers —
+the laptop would steal the device's messages) and `mqtt_endpoint` (the laptop
+would subscribe the device's own topics). Neither is an AI capability, so
+nothing above is lost.
+
+Servo has no physical body here: `http://127.0.0.1:5001/simulator` is the
+readout, driving the same `/servo/*` and `/led/*` endpoints a skill calls.
+
 Two things to know on macOS:
 
+- Microphone and Camera access must be granted to the terminal app running HAL
+  (System Settings > Privacy & Security). Enumeration is not permission — the
+  device list is populated either way and only the first real read fails — so
+  HAL probes both at boot and falls back to the virtual device with a logged
+  `[sim-media]` reason rather than failing a turn later.
 - AirPlay Receiver also listens on `*:5000`. os-server binds `127.0.0.1:5000`,
   but a request to `localhost:5000` can still land on AirTunes — turn the
   receiver off (System Settings > General > AirDrop & Handoff) or change

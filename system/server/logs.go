@@ -19,14 +19,19 @@ import (
 
 	"go.autonomous.ai/os/system/device"
 	"go.autonomous.ai/os/system/domain"
+	"go.autonomous.ai/os/system/lib/syspath"
 	"go.autonomous.ai/os/system/server/serializers"
 )
 
 // allowedLogs maps source names to their log file paths (supports glob patterns).
 // Entries prefixed with "journal:" use journalctl instead of file reading.
+//
+// "hal" and "os-server" are resolved in resolveLogSource through syspath rather
+// than listed here: both processes already take their log location from an env
+// var, so hardcoding the device path would make the web UI read a file nobody
+// writes whenever they are pointed elsewhere. Unset env still yields exactly the
+// two paths this map used to carry.
 var allowedLogs = map[string]string{
-	"hal":              "/var/log/hal/server.log",
-	"os-server":        "/var/log/os-server.log",
 	"bootstrap":        "journal:bootstrap.service",
 	"openclaw":         "/var/log/openclaw/agent.log",
 	"openclaw-service": "journal:openclaw.service",
@@ -58,19 +63,39 @@ const picoclawAgentLog = "/root/.picoclaw/logs/gateway.log"
 // "openclaw" also bakes in resolveOpenclawLog()'s /tmp fallback so callers don't
 // special-case it. The explicit "hermes"/"picoclaw"/"codex"/"claudecode" ids
 // always map to that backend's log.
+//
+// Every `journal:` mapping for a bridge-only runtime is overridable by
+// OS_AGENT_BRIDGE_LOG (syspath.AgentBridgeLog). Unset on a board, so the units
+// above stand; off-device there is no systemd and `make codex-dev` tees the
+// bridge to a file instead.
 func (s *Server) resolveLogSource(source string) (string, bool) {
 	runtime := device.CurrentAgentRuntimeFromConfig(s.config)
+
+	// bridgeLog names a file to read the agent bridge from instead of its
+	// journal unit. Empty on a board, so every `journal:` mapping below stands.
+	bridgeLog := syspath.AgentBridgeLog()
+	journalOrBridge := func(unit string) string {
+		if bridgeLog != "" {
+			return bridgeLog
+		}
+		return unit
+	}
+
 	switch source {
+	case "hal":
+		return syspath.HALLogFile(), true
+	case "os-server":
+		return syspath.LogFile(), true
 	case "hermes":
 		return hermesAgentLog, true
 	case "picoclaw":
 		return picoclawAgentLog, true
 	case "codex":
-		return "journal:codex.service", true
+		return journalOrBridge("journal:codex.service"), true
 	case "claudecode":
-		return "journal:claudecode.service", true
+		return journalOrBridge("journal:claudecode.service"), true
 	case "opencode":
-		return "journal:opencode.service", true
+		return journalOrBridge("journal:opencode.service"), true
 	case "openclaw":
 		switch runtime {
 		case domain.AgentRuntimeHermes:
@@ -78,11 +103,11 @@ func (s *Server) resolveLogSource(source string) (string, bool) {
 		case domain.AgentRuntimePicoclaw:
 			return picoclawAgentLog, true
 		case domain.AgentRuntimeCodex:
-			return "journal:codex.service", true
+			return journalOrBridge("journal:codex.service"), true
 		case domain.AgentRuntimeClaudeCode:
-			return "journal:claudecode.service", true
+			return journalOrBridge("journal:claudecode.service"), true
 		case domain.AgentRuntimeOpenCode:
-			return "journal:opencode.service", true
+			return journalOrBridge("journal:opencode.service"), true
 		}
 		return resolveOpenclawLog(), true
 	case "openclaw-service":
@@ -92,11 +117,11 @@ func (s *Server) resolveLogSource(source string) (string, bool) {
 		case domain.AgentRuntimePicoclaw:
 			return "journal:picoclaw.service", true
 		case domain.AgentRuntimeCodex:
-			return "journal:codex.service", true
+			return journalOrBridge("journal:codex.service"), true
 		case domain.AgentRuntimeClaudeCode:
-			return "journal:claudecode.service", true
+			return journalOrBridge("journal:claudecode.service"), true
 		case domain.AgentRuntimeOpenCode:
-			return "journal:opencode.service", true
+			return journalOrBridge("journal:opencode.service"), true
 		}
 	}
 	p, ok := allowedLogs[source]

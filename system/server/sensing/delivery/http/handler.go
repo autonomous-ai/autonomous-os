@@ -26,6 +26,7 @@ import (
 	"go.autonomous.ai/os/system/lib/hal"
 	"go.autonomous.ai/os/system/lib/i18n"
 	"go.autonomous.ai/os/system/lib/sensingmsg"
+	"go.autonomous.ai/os/system/lib/syspath"
 	"go.autonomous.ai/os/system/lib/usercanon"
 	"go.autonomous.ai/os/system/monitor"
 	"go.autonomous.ai/os/system/server/config"
@@ -798,12 +799,16 @@ func (h *SensingHandler) GetAgentSnapshot(c *gin.Context) {
 		c.Status(http.StatusNotFound)
 		return
 	}
+	// /root/.<runtime> on a board; off-device the developer's own install. Same
+	// resolution HAL uses for HAL_SNAPSHOT_DIR, so the Monitor reads back the
+	// exact directory HAL wrote the frame to.
+	home := syspath.AgentRuntimeHome(runtime)
 	var dir string
 	switch source {
 	case "workspace":
-		dir = filepath.Join("/root/."+runtime, "workspace")
+		dir = filepath.Join(home, "workspace")
 	case "media-hal-snapshots":
-		dir = filepath.Join("/root/."+runtime, "media", "hal-snapshots")
+		dir = filepath.Join(home, "media", "hal-snapshots")
 	default:
 		c.Status(http.StatusNotFound)
 		return

@@ -59,6 +59,12 @@ OS_AGENT_RUNTIME ?= codex
 CODEX_HOME       ?= $(HOME)/.codex
 CODEX_PORT       ?= 18792
 CODEX_BIN        ?= $(shell command -v codex 2>/dev/null)
+# The backend identifies a device by its llm_api_key, not by device_id, so a
+# laptop running a copy of a device's config.json IS that device as far as the
+# backend can tell: the 15s ping overwrites the board's local_ip/mac/version and
+# the MQTT client ids collide, evicting each other from the broker roughly once a
+# second. Off by default here; `make os-dev OS_BACKEND_UPLINK=on` is deliberate.
+OS_BACKEND_UPLINK ?= off
 
 # One env set shared by both processes so the bridge and its client can never
 # disagree about where codex's state lives.
@@ -70,6 +76,9 @@ OS_DEV_ENV = \
 	OS_AGENT_HOME=$(OS_STATE_DIR) \
 	OS_AGENT_STATE_PATH=$(OS_STATE_DIR)/config/agent_state.json \
 	OS_BOOTSTRAP_CONFIG=$(OS_STATE_DIR)/config/bootstrap.json \
+	OS_BACKEND_UPLINK=$(OS_BACKEND_UPLINK) \
+	OS_HAL_LOG_FILE=$(SIM_STATE_DIR)/log/server.log \
+	OS_AGENT_BRIDGE_LOG=$(OS_STATE_DIR)/codex-gatewayd.log \
 	OS_LOG_FILE=$(OS_STATE_DIR)/os-server.log
 
 .PHONY: os-dev os-dev-build os-dev-seed codex-dev
@@ -90,7 +99,8 @@ os-dev: os-dev-build os-dev-seed
 codex-dev: os-dev-build
 	@test -n "$(CODEX_BIN)" || { echo "codex CLI not found on PATH — set CODEX_BIN=<path>"; exit 1; }
 	@echo "codex bridge: ws://127.0.0.1:$(CODEX_PORT)/codex/ws/ (CODEX_HOME=$(CODEX_HOME))"
-	$(OS_DEV_ENV) CODEX_BIN=$(CODEX_BIN) $(OS_STATE_DIR)/os-server codex-gatewayd
+	@mkdir -p $(OS_STATE_DIR)
+	$(OS_DEV_ENV) CODEX_BIN=$(CODEX_BIN) $(OS_STATE_DIR)/os-server codex-gatewayd 2>&1 | tee $(OS_STATE_DIR)/codex-gatewayd.log
 
 # ============================================================================
 # HAL (Python) — dev | run | test
@@ -108,12 +118,49 @@ hal-dev:
 DEVICE_TYPE ?= lamp
 SIM_STATE_DIR ?= /tmp/autonomous-sim
 # virtual is deterministic and permission-free; host opts into the developer
-# machine's camera, microphone and speaker for manual media checks.
+# machine's camera, microphone and speaker. host is also what turns the REAL
+# voice pipeline on (STT → realtime → dispatch) instead of the inert stub —
+# see the state.simulation_audio gate in hal/server.py.
 SIM_MEDIA ?= virtual
+
+# The device-absolute paths HAL owns that a laptop cannot use as-is. Same
+# env-per-concern rule as system/lib/syspath: unset = the board's path.
+# The first three carry meaning beyond "somewhere writable":
+#   OS_CONFIG_PATH   the config.json HAL shares with os-server. Carries the LLM /
+#                    STT / TTS / realtime credentials AND agent_runtime, which is
+#                    what SNAPSHOT_DIR keys off — point it at the os-dev state dir
+#                    so both processes read one file, as /root/config does on a board.
+#   HAL_SNAPSHOT_DIR where ?save=true writes. MUST sit under the agent's own home
+#                    (device: /root/.codex/media/hal-snapshots) — os-server serves
+#                    it from there, and it is inside the agent's read allow-list.
+#   HAL_SNAPSHOT_PERSIST_DIR  sensing's persistent copies; /var/lib is root-only.
+#
+# The rest are HAL's writable state, all rooted at /var/lib/hal or /root on a
+# board. Each failure is silent-ish and far from its cause: the TTS cache one
+# surfaced as `POST /voice/speak 409` with the real PermissionError buried in a
+# thread traceback. Redirect them all rather than one at a time.
+SIM_HAL_ENV = \
+	OS_CONFIG_PATH=$(OS_STATE_DIR)/config/config.json \
+	HAL_SNAPSHOT_DIR=$(CODEX_HOME)/media/hal-snapshots \
+	HAL_SNAPSHOT_PERSIST_DIR=$(SIM_STATE_DIR)/snapshots \
+	HAL_TTS_CACHE_DIR=$(SIM_STATE_DIR)/tts_cache \
+	HAL_CALIBRATION_DIR=$(SIM_STATE_DIR)/calibration/robots/hal_follower \
+	HAL_USER_BEARING_PATH=$(SIM_STATE_DIR)/user_bearing.json \
+	HAL_FACE_HEIGHT_PATH=$(SIM_STATE_DIR)/face_height.json \
+	HAL_VOICE_STRANGERS_DIR=$(SIM_STATE_DIR)/voice_strangers \
+	HAL_DL_STALL_LOG=$(SIM_STATE_DIR)/dl_ws_stall.log \
+	HAL_CODEX_WORKSPACE_DIR=$(CODEX_HOME)/workspace \
+	HAL_LOG_DIR=$(SIM_STATE_DIR)/log
+
 sim:
 	@echo "HAL simulator: http://127.0.0.1:$(HAL_PORT)/docs"
 	$(if $(filter lamp,$(DEVICE_TYPE)),@echo "Lamp visualizer: http://127.0.0.1:$(HAL_PORT)/simulator (drag to orbit; wheel to zoom)",@echo "No Lamp visualizer for DEVICE_TYPE=$(DEVICE_TYPE)")
-	HAL_SIMULATE=1 HAL_SIM_MEDIA=$(SIM_MEDIA) HAL_BOARD=sim DEVICE_TYPE=$(DEVICE_TYPE) HAL_USERS_DIR=$(SIM_STATE_DIR)/users HAL_STRANGERS_DIR=$(SIM_STATE_DIR)/strangers HAL_BT_STATE_DIR=$(SIM_STATE_DIR) HAL_VOLUME_STATE_PATH=$(SIM_STATE_DIR)/volume $(MAKE) hal-dev
+	@if [ "$(SIM_MEDIA)" = "host" ]; then \
+	  echo "Media: host — the Mac's mic/speaker/camera and the REAL voice pipeline (STT + realtime + dispatch). macOS will ask for Microphone and Camera access."; \
+	else \
+	  echo "Media: virtual — deterministic and permission-free; the voice pipeline stays inert. Pass SIM_MEDIA=host for the full stack."; \
+	fi
+	HAL_SIMULATE=1 HAL_SIM_MEDIA=$(SIM_MEDIA) HAL_BOARD=sim DEVICE_TYPE=$(DEVICE_TYPE) HAL_USERS_DIR=$(SIM_STATE_DIR)/users HAL_STRANGERS_DIR=$(SIM_STATE_DIR)/strangers HAL_BT_STATE_DIR=$(SIM_STATE_DIR) HAL_VOLUME_STATE_PATH=$(SIM_STATE_DIR)/volume $(SIM_HAL_ENV) $(MAKE) hal-dev
 
 hal-run:
 	cd $(HAL_DIR) && PYTHONPATH=.. .venv/bin/python -m hal.server
@@ -193,11 +240,29 @@ cts-runtime:
 
 web: web-dev
 
+# web-install stays unconditional — it is what you run after package.json
+# changes. The node_modules target below is the first-run convenience web-dev
+# depends on, and only fires when the directory is absent.
 web-install:
 	cd $(WEB_DIR) && npm install
 
-web-dev:
-	cd $(WEB_DIR) && npm run dev
+$(WEB_DIR)/node_modules:
+	cd $(WEB_DIR) && npm install
+
+# os-server serves no HTML — on a board nginx serves web/dist and proxies /api
+# and /hw to :5000. Off-device Vite plays nginx: LAMP_PROXY is the device the
+# SPA talks to, and for `make os-dev` that device is this laptop. A .env in
+# web/ still wins (vite.config reads it first), so pointing at a real Pi is
+# unchanged.
+LAMP_PROXY ?= http://127.0.0.1:5000
+
+# Vite binds [::1] only, so the URL must say localhost — 127.0.0.1:5173 is
+# refused. Admin routes need auth: log in with the device password, or append
+# ?llm_api_key=<the key in config.json> once and the SPA exchanges it for a
+# session cookie and scrubs it from the address bar.
+web-dev: $(WEB_DIR)/node_modules
+	@echo "Web UI: http://localhost:5173/monitor  (API proxied to $(LAMP_PROXY))"
+	cd $(WEB_DIR) && LAMP_PROXY=$(LAMP_PROXY) npm run dev
 
 web-build:
 	cd $(WEB_DIR) && npm run build
