@@ -313,6 +313,8 @@ func (s *Server) Serve(closeFn func()) error {
 	system.GET("ota-versions", s.otaVersions)
 	system.GET("ota-updating", s.otaUpdating)
 	system.POST("software-update/:target", adminAuthMiddleware(s.config), s.softwareUpdate)
+	system.POST("reboot", adminAuthMiddleware(s.config), systemshell.Reboot)
+	system.POST("shutdown", adminAuthMiddleware(s.config), systemshell.Shutdown)
 	system.POST("factory-reset", adminOrLoopbackAuth(s.config), func(c *gin.Context) {
 		systemshell.FactoryReset(c, s.agentGateway)
 	})

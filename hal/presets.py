@@ -186,7 +186,15 @@ EMOTION_PRESETS = {
                       "camera": "on"},
     EMO_STRETCHING: {"servo": SERVO_STRETCHING, "color": [12, 12, 2], "effect": FX_BREATHING, "speed": 0.6,
                      "camera": "on"},
-    EMO_MUSIC_STRONG: {"servo": SERVO_MUSIC_ROCK, "color": [8, 12, 8], "effect": FX_RAINBOW, "speed": 1.0},
+    # music_strong is the one cue on FX_RAINBOW. rainbow sweeps the hue itself
+    # and never reads "color" (the color is kept only because the emotion LED
+    # path requires one to start an effect at all), so the peak budget above
+    # cannot reach it and neither can the request's intensity. Its level is
+    # "brightness" (0.0-1.0, same meaning as in SCENE_PRESETS) — the knob a
+    # per-device presets.json overrides to dim the sweep. 1.0 here keeps the
+    # base behavior; lamp turns it down.
+    EMO_MUSIC_STRONG: {"servo": SERVO_MUSIC_ROCK, "color": [8, 12, 8], "effect": FX_RAINBOW, "speed": 1.0,
+                       "brightness": 1.0},
     EMO_MUSIC_CHILL: {"servo": SERVO_MUSIC_ROCK, "color": [16, 9, 0], "effect": FX_BREATHING, "speed": 0.3},
     EMO_SCAN: {"servo": SERVO_SCANNING, "color": [5, 12, 3], "effect": FX_PULSE, "speed": 0.3, "camera": "on"},
     EMO_NOD: {"servo": SERVO_NOD, "color": [12, 8, 1], "effect": FX_BREATHING, "speed": 0.5, "camera": "on"},

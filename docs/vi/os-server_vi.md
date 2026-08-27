@@ -19,6 +19,14 @@
 | GET | `/api/system/network` | WiFi SSID, IP, signal, internet status |
 | GET | `/api/system/dashboard` | Snapshot tổng hợp (agent + config + HW) |
 | GET | `/api/system/ota-security` | Trạng thái tin cậy OTA lấy từ bootstrap worker: `legacy` hay `verified`, fingerprint key đã pin, lần fetch metadata gần nhất (xem `bootstrap-ota.md`) |
+| POST | `/api/system/reboot` | Cần admin auth: trả ACK, rồi yêu cầu HAL phát cue và reboot OS |
+| POST | `/api/system/shutdown` | Cần admin auth: trả ACK, rồi yêu cầu HAL phát cue, release servo và shutdown OS |
+
+Hai endpoint power trả `202 Accepted` trước khi đặt lịch gọi HAL, để trình duyệt
+nhận được ACK trước lúc thiết bị không còn truy cập được. Mỗi lúc chỉ có một
+reboot hoặc shutdown chờ chạy; request thứ hai nhận `409 Conflict`. HAL sở hữu
+chuỗi thao tác vật lý: reboot phát cue reboot; shutdown phát cue rồi release
+servo trước khi chạy lệnh power của OS.
 
 ### Device Setup
 

@@ -6,6 +6,7 @@ what it currently outputs.
 """
 
 import json
+import logging
 import math
 from pathlib import Path
 
@@ -256,9 +257,20 @@ def test_every_box_unusable_reads_as_no_face(monkeypatch):
 # --- the rolling buffer -----------------------------------------------------
 
 
+# The autouse fixture below patches `_conversation_open`, so keep a handle on
+# the real one for the test that has to exercise it.
+_REAL_CONVERSATION_OPEN = gaze._conversation_open
+
+
 @pytest.fixture(autouse=True)
-def _clean_buffer():
+def _clean_buffer(monkeypatch):
     gaze.reset_for_test()
+    # Default the tests into an OPEN conversation, because that is the state the
+    # framing loops were written against: "a face off to the right turns the
+    # lamp" is a claim about a lamp someone is talking to. The closed case is
+    # pinned explicitly by the tests below rather than left as an ambient
+    # default, so a test that means to exercise the gate has to say so.
+    monkeypatch.setattr(gaze, "_conversation_open", lambda: True)
     yield
     gaze.reset_for_test()
 
@@ -1258,87 +1270,6 @@ def test_repointing_also_discards_them(body):
     assert body.moves and gaze.snapshot() == []
 
 
-def test_repoint_does_not_re_anchor_a_vertical_aim_the_pitch_loop_has_corrected(body):
-    """The slow half of the same fight.
-
-    Device-observed: pitch lifted the camera to -31.5 where it could see a
-    face, and thirty-four seconds later the repoint anchored idle back on the
-    remembered -46.1, from where the face is clipped again. The bearing memory
-    is worth believing about which way to face — that is what the move uses —
-    but not about how high to look.
-
-    That rule used to cover wrist_pitch alone. Every joint the pitch loop
-    steers is a vertical one, so a remembered base_pitch or elbow_pitch undoes
-    the correction just as surely; the pitch loop's own anchor holds the
-    posture instead.
-    """
-    anchored = {}
-    body.set_idle_anchor = lambda j: anchored.update(j or {})
-    _absent_for(config.GAZE_REPOINT_AFTER_S + 1)
-    gaze._last_pitch_t = gaze.time.monotonic() - config.GAZE_REPOINT_AFTER_S - 1.0
-    gaze._maybe_repoint(gaze.time.monotonic())
-    assert body.moves                                  # it still turned
-    assert not (set(anchored) & set(gaze.PITCH_JOINTS)), (
-        f"repoint re-anchored a vertical joint the pitch loop owns: {sorted(anchored)}"
-    )
-
-
-def test_with_no_correction_yet_the_remembered_pose_is_anchored_whole(body, monkeypatch):
-    from hal.drivers.tracking import user_bearing
-
-    class _EstWithPitch(_Est):
-        pose = {"base_yaw.pos": 4.0, "base_pitch.pos": 0.0, "wrist_pitch.pos": -70.0}
-
-    monkeypatch.setattr(user_bearing, "read_estimate", lambda: _EstWithPitch())
-    anchored = {}
-    body.set_idle_anchor = lambda j: anchored.update(j or {})
-    _absent_for(config.GAZE_REPOINT_AFTER_S + 1)
-    gaze._last_pitch_t = 0.0                           # pitch has never spoken
-    gaze._last_anchor = None
-    gaze._maybe_repoint(gaze.time.monotonic())
-    assert anchored.get("wrist_pitch.pos") == pytest.approx(-70.0)
-
-
-def test_a_face_driven_correction_anchors_the_idle_loop(neck, monkeypatch):
-    """Anchoring must not wait for a perfectly centred face.
-
-    Waiting was circular: idle drags the camera back within a cycle, so the
-    centred frame that would justify anchoring never arrives and every
-    correction is undone before the next one lands.
-    """
-    anchored = {}
-    neck.set_idle_anchor = lambda j: anchored.update(j or {})
-    gaze._last_anchor = None
-    _fill_dy(-0.4, from_face=True)
-    gaze._maybe_pitch(gaze.time.monotonic())
-    assert anchored.get("wrist_pitch.pos") == pytest.approx(
-        neck.moves[0]["wrist_pitch.pos"]
-    )
-
-
-def test_a_guessed_correction_anchors_too_so_idle_does_not_undo_it(neck, monkeypatch):
-    """A search whose progress is erased between steps is not a search.
-
-    Leaving the anchor behind during a blind search let idle pull back to where
-    the search started — device-observed the head reaching -32.4 and being
-    dragged to -41.5 before the next look. The blind budget bounds how far a
-    guess can take this; the anchor only stops it being wasted.
-    """
-    monkeypatch.setattr(config, "GAZE_FACE_SEARCH_MAX_STEPS", 3)
-    anchored = {}
-    neck.set_idle_anchor = lambda j: anchored.update(j or {})
-    gaze._last_anchor = None
-    gaze._blind_pitch_steps = 0
-    _fill_dy(-0.5, from_face=False)
-    gaze._maybe_pitch(gaze.time.monotonic())
-    assert anchored.get("wrist_pitch.pos") == pytest.approx(
-        neck.moves[0]["wrist_pitch.pos"]
-    )
-
-
-# --- The pitch window: idle's roll sweep must not drive corrections (F25) ---
-
-
 def test_one_sample_is_not_enough_to_move_the_neck(neck):
     """The bug this window exists for.
 
@@ -1625,81 +1556,18 @@ def _turn_trail(values, now, span=None):
         gaze.record_sample(yaw, 90.0, 0.05, now=now - span + span * i / (n - 1))
 
 
-def test_a_user_already_facing_the_lamp_opens_the_gate_by_default(armed, voice):
-    """The trade-off, as it is configured TODAY: this flat trail is accepted.
+def test_a_user_already_facing_the_lamp_opens_the_gate(armed, voice):
+    """A flat trail — already facing, no turn — is accepted, deliberately.
 
-    Same trail as the shadow measurement below, and the transition test would
-    refuse it. GAZE_REQUIRE_TRANSITION defaults off because refusing it was
-    worse: a user sitting square to their desk, looking straight at the lamp,
-    was refused on every utterance (device log 2026-08-26). Presence is the
-    signal again, deliberately — this test is what will fail first if that
-    default is ever flipped back without the rest of the reasoning.
+    A transition test used to refuse exactly this, and it was removed because
+    refusing it was worse: a user sitting square to their desk, looking straight
+    at the lamp, was refused on every utterance (device log 2026-08-26).
+    Orientation is the signal; a gesture the user must remember to perform is a
+    worse instruction than the wake phrase it replaces. This test is what fails
+    first if a gesture requirement is ever reintroduced.
     """
     t = gaze.time.monotonic()
     _turn_trail([13, 12, 12, 11, 12, 11, 13, 21], t)
-    assert gaze.on_speech_start() is True
-
-
-def test_a_user_already_facing_the_lamp_is_not_a_gesture(armed, voice, monkeypatch):
-    """The device failure, reproduced (shadow, 2026-08-24).
-
-    Nine of nine accepted gestures had flat trails like this one. Every one
-    would have opened the gate for a user who simply sits square to their desk —
-    presence as the signal, which the module docstring says must not happen.
-
-    Kept with the switch forced ON: the rule is off by default but still has to
-    WORK, so that turning it back on is a config change and not a code change.
-    """
-    monkeypatch.setattr(config, "GAZE_REQUIRE_TRANSITION", True)
-    t = gaze.time.monotonic()
-    _turn_trail([13, 12, 12, 11, 12, 11, 13, 21], t)
-    assert gaze.on_speech_start() is False
-
-
-def test_turning_toward_the_lamp_still_opens_the_gate(armed, voice, monkeypatch):
-    """Away for the baseline, facing for the decision window — a clean turn."""
-    monkeypatch.setattr(config, "GAZE_REQUIRE_TRANSITION", True)
-    t = gaze.time.monotonic()
-    _turn_trail([90, 88, 85, 90, 12, 10, 8, 9], t)
-    assert gaze.on_speech_start() is True
-
-
-def test_a_turn_caught_mid_buffer_is_marginal_by_construction():
-    """Recorded because it bit: the real device trail [90,61,24,15,20,14,7,15]
-    lands the turn in the MIDDLE of the buffer, so half the baseline window
-    already shows facing and the ratio sits exactly on the threshold.
-
-    That is inherent, not a tuning error — the buffer is only 2x the window, so
-    a slow turn spans both. It means GAZE_TRANSITION_MAX_BEFORE trades late
-    gestures against steady-facing false positives, and a gesture caught
-    half-way may legitimately fail.
-    """
-    t = 10_000.0
-    _turn_trail([90, 61, 24, 15, 20, 14, 7, 15], t)
-    before_ratio, before_n = gaze.facing_before(t)
-    assert before_n >= config.GAZE_MIN_SAMPLES
-    assert 0.4 <= before_ratio <= 0.7, before_ratio
-
-
-def test_the_transition_test_is_off_by_default(armed, voice):
-    """Pinned as a value, not just as behaviour: the default IS the decision."""
-    assert config.GAZE_REQUIRE_TRANSITION is False
-    t = gaze.time.monotonic()
-    _turn_trail([13, 12, 12, 11, 12, 11, 13, 21], t)
-    assert gaze.on_speech_start() is True
-
-
-def test_an_unmeasurable_baseline_does_not_veto(armed, voice):
-    """"We could not tell" is not evidence against a turn.
-
-    The baseline is often missing — the buffer is cleared whenever the camera
-    moves — and vetoing on that would make the feature fire almost never.
-    """
-    t = gaze.time.monotonic()
-    # samples only inside the decision window; nothing before it
-    for i in range(8):
-        gaze.record_sample(5.0, 90.0, 0.05,
-                           now=t - config.GAZE_WINDOW_S + i * 0.1)
     assert gaze.on_speech_start() is True
 
 
@@ -1819,9 +1687,9 @@ def test_the_watcher_loop_still_calls_the_pitch_correction():
 
     body = inspect.getsource(gaze._loop)
     assert "_maybe_pitch(now)" in body, "the watcher must drive the pitch correction"
-    # Framing before bearing: turning to a bearing that still points at the desk
-    # finds nobody however right the bearing is.
-    assert body.index("_maybe_pitch(now)") < body.index("_maybe_repoint(now)")
+    # Framing before anything speech asks for: turning to a bearing that still
+    # points at the desk finds nobody however right the bearing is.
+    assert body.index("_maybe_pitch(now)") < body.index("_consume_speech_repoint(now)")
 
 
 # --- the correction has to actually arrive -------------------------------------
@@ -1882,22 +1750,6 @@ def test_a_joint_that_arrives_is_not_benched(neck):
     _fill_dy(-0.4)
     gaze._maybe_pitch(gaze.time.monotonic())
     assert gaze._pitch_stalls == {}, "a correction that landed is not a stall"
-
-
-def test_idle_is_anchored_on_where_the_arm_got_to_not_where_it_was_sent(neck):
-    """Anchoring an unreached target tells idle to hold a pose the servo has
-    already refused — the same command that heats it."""
-    neck.stalls["elbow_pitch.pos"] = (-90.0, 8.0)
-    anchored = {}
-    neck.set_idle_anchor = lambda j: anchored.update(j or {})
-
-    _fill_dy(-0.6)
-    gaze._maybe_pitch(gaze.time.monotonic())
-
-    assert anchored, "precondition: the correction anchored idle"
-    assert anchored["elbow_pitch.pos"] == pytest.approx(8.0), (
-        f"anchored on {anchored['elbow_pitch.pos']:+.1f}, but the elbow stopped at +8.0"
-    )
 
 
 def test_a_move_still_in_flight_is_not_called_a_failure(neck, monkeypatch):
@@ -2241,17 +2093,31 @@ def test_the_cooldown_still_applies_however_the_sweep_was_triggered(sweeper):
     assert len(sweeper) == 1, f"swept {len(sweeper)} times inside the cooldown"
 
 
-def test_the_watcher_loop_looks_around_as_well_as_correcting():
-    """A source check: the failure being guarded against is nothing CALLING it,
-    which no test of the function itself can catch."""
+def test_the_watcher_loop_never_sweeps_or_repoints_of_its_own_accord():
+    """Both used to be driven from the loop on absence alone. They are not now.
+
+    A sweep and a repoint each move the body a long way, and doing either
+    because the room merely LOOKS empty is the lamp searching for someone who
+    never asked. The repoint was worse than conspicuous: it scored the
+    remembered bearing as wrong every time nobody happened to be in frame, so
+    leaning out of view three times deleted a bearing that was correct.
+
+    Both are reached from speech instead — _consume_speech_repoint calls
+    _maybe_repoint(force=True), and a repoint that misses calls
+    _maybe_sweep(confirmed_miss=True) from _verify_repoint. A source check,
+    because the failure being guarded against is a call site reappearing.
+    """
     import inspect
 
     body = inspect.getsource(gaze._loop)
-    assert "_maybe_sweep(now)" in body, "the watcher never looks around"
-    assert body.index("_maybe_pitch(now)") < body.index("_maybe_sweep(now)"), (
-        "a sweep owns the body for half a minute; it must not pre-empt a "
-        "correction that could have framed someone already in view"
+    assert "_maybe_sweep(now)" not in body, (
+        "the watcher must not sweep on absence alone"
     )
+    assert "_maybe_repoint(now)" not in body, (
+        "the watcher must not repoint on absence alone — it burns bearing strikes"
+    )
+    assert "_consume_speech_repoint(now)" in body, "speech must still reach the repoint"
+    assert "_verify_repoint(now)" in body, "a repoint must still be scored"
 
 
 def test_with_no_bearing_it_may_look_again_much_sooner(sweeper, monkeypatch):
@@ -2476,3 +2342,96 @@ def test_it_still_reacquires_once_the_face_is_actually_gone(body):
     _absent_for(config.GAZE_REPOINT_SKIP_IF_FACE_S + 1.0)
     assert gaze._maybe_repoint(gaze.time.monotonic(), force=True) is True
     assert body.moves
+
+
+# --- framing moves only while somebody is talking to the lamp ------------------
+#
+# The loops MEASURE all the time — the wake gate reads the window before speech,
+# so the samples have to already be there — but they only MOVE inside an open
+# wake-word follow-up window.
+#
+# Device-observed 2026-08-26 with nobody speaking: thirteen pan corrections in
+# twenty minutes, alternating direction, every one starting from base_yaw ~= -2.
+# idle.csv pins base_yaw at -2.40 with 1.58 deg of swing in the whole recording
+# and plays absolute frames, so each correction was overwritten by the next idle
+# frame and re-measured. Not drift — an immediate overwrite, forever.
+
+
+def test_pan_measures_but_does_not_move_with_no_conversation_open(neck, monkeypatch):
+    monkeypatch.setattr(gaze, "_conversation_open", lambda: False)
+    _fill_dx(0.20)
+    gaze._maybe_yaw(gaze.time.monotonic())
+    assert not neck.moves, "the lamp must not re-aim at a room nobody is talking in"
+
+
+def test_pitch_measures_but_does_not_move_with_no_conversation_open(neck, monkeypatch):
+    monkeypatch.setattr(gaze, "_conversation_open", lambda: False)
+    _fill_dy(-0.6)
+    gaze._maybe_pitch(gaze.time.monotonic())
+    assert not neck.moves, "the same rule as pan, for the same reason"
+
+
+def test_a_prompted_climb_still_runs_with_no_conversation_open(neck, monkeypatch):
+    """The one exception, and it is not an exception to the rule.
+
+    A prompted climb comes from a repoint that landed on a body, and that
+    repoint is itself speech-driven — somebody spoke, the lamp turned, and found
+    a torso. Refusing to lift the head then would strand it aimed at a chest for
+    the whole utterance.
+    """
+    monkeypatch.setattr(gaze, "_conversation_open", lambda: False)
+    _fill_dy(-0.5, from_face=False, n=4)
+    gaze._maybe_pitch(gaze.time.monotonic(), prompt=True)
+    assert neck.moves, "a climb the repoint asked for must still happen"
+
+
+def test_a_missing_voice_service_reads_as_no_conversation(monkeypatch):
+    """Fail closed. Guessing "yes" would restore the unasked movement."""
+    import hal.app_state as state
+
+    monkeypatch.setattr(state, "voice_service", None, raising=False)
+    monkeypatch.setattr(gaze, "_conversation_open", _REAL_CONVERSATION_OPEN)
+    assert gaze._conversation_open() is False
+
+
+def test_the_close_of_the_framing_window_is_logged(monkeypatch, caplog):
+    """voice_service logs the grant; nothing logged the expiry.
+
+    The window lapses lazily — is_active() just starts returning False — so
+    "when did the lamp stop framing me" was only inferable from a throttled
+    decline line that prints when a correction happened to be wanted.
+    """
+    open_now = {"v": True}
+    monkeypatch.setattr(gaze, "_conversation_open", lambda: open_now["v"])
+    gaze._note_conversation_edge()                       # first: recorded silently
+    with caplog.at_level(logging.INFO):
+        open_now["v"] = False
+        gaze._note_conversation_edge()
+    assert "conversation closed" in caplog.text
+    assert "released" in caplog.text
+
+
+def test_the_open_is_logged_too(monkeypatch, caplog):
+    open_now = {"v": False}
+    monkeypatch.setattr(gaze, "_conversation_open", lambda: open_now["v"])
+    gaze._note_conversation_edge()
+    with caplog.at_level(logging.INFO):
+        open_now["v"] = True
+        gaze._note_conversation_edge()
+    assert "conversation open" in caplog.text
+
+
+def test_a_steady_state_logs_nothing(monkeypatch, caplog):
+    """Edge-triggered: a quiet lamp costs one line per conversation, not per tick."""
+    monkeypatch.setattr(gaze, "_conversation_open", lambda: False)
+    gaze._note_conversation_edge()
+    with caplog.at_level(logging.INFO):
+        for _ in range(20):
+            gaze._note_conversation_edge()
+    assert "conversation" not in caplog.text
+
+
+def test_the_watcher_loop_watches_the_edge():
+    import inspect
+
+    assert "_note_conversation_edge()" in inspect.getsource(gaze._loop)

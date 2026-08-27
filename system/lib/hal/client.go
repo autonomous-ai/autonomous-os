@@ -280,10 +280,41 @@ func StopTTS() error { return post("/tts/stop", nil) }
 // StopAudio stops any audio playback (music, etc.).
 func StopAudio() error { return post("/audio/stop", nil) }
 
+// RebootOS requests HAL's full reboot action (cue, then OS reboot).
+func RebootOS() error { return post("/system/reboot", nil) }
+
+// ShutdownOS requests HAL's full shutdown action (cue, servo release, then OS shutdown).
+func ShutdownOS() error { return post("/system/shutdown", nil) }
+
 // SetVolume sets speaker volume (0-100).
 func SetVolume(pct int) error {
 	body, _ := json.Marshal(map[string]int{"volume": pct})
 	return post("/audio/volume", body)
+}
+
+// MaxVolume returns the speaker ceiling (%) HAL enforces from the device's
+// SAFETY.md `audio.max_volume`, and true when one is declared. False means the
+// device declares no ceiling — the full 0-100 scale is available.
+//
+// This is advisory only: HAL clamps every /audio/volume request regardless, so a
+// caller that skips this (or whose read fails) cannot exceed the bound — it just
+// loses the ability to scale its steps to the real range.
+func MaxVolume() (int, bool) {
+	resp, err := doGet("/audio/volume")
+	if err != nil {
+		return 0, false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return 0, false
+	}
+	var r struct {
+		MaxVolume *int `json:"max_volume"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil || r.MaxVolume == nil {
+		return 0, false
+	}
+	return *r.MaxVolume, true
 }
 
 // VoiceStartConfig configures the voice pipeline started by StartVoice.

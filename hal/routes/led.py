@@ -266,7 +266,7 @@ def start_led_effect(req: LEDEffectRequest):
             state._effect_stop,
             state.rgb_service,
         ),
-        kwargs={"base_color": overlay_base},
+        kwargs={"base_color": overlay_base, "brightness": req.brightness},
         daemon=True,
         name=f"led-effect-{req.effect}",
     )
@@ -289,6 +289,7 @@ def start_led_effect(req: LEDEffectRequest):
                 "effect": req.effect,
                 "color": list(base_color),
                 "speed": req.speed,
+                "brightness": req.brightness,
             }
         )
 

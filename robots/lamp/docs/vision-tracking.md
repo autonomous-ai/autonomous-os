@@ -595,6 +595,22 @@ The unifying constraint: **nobody asked for any of this**, so every loop is boun
 cooldown, a step budget. A lamp that corrects its framing is attentive; one that corrects constantly
 is a head that nods along.
 
+**The loops measure all the time, but only move while a conversation is open.** `_conversation_open()`
+reads `voice_service.conversation_focus_active()` — the wake-word follow-up window, refreshed by every
+opener (phrase, click, presence, gaze). Measuring cannot be gated: the wake gate reads the window
+*before* speech, so those samples must already exist. Moving can, and must be.
+
+Why: outside a conversation a correction cannot survive on this arm. `idle.csv` plays absolute frames
+and pins `base_yaw` at −2.40 — **1.58° of swing across the whole recording** — so the next idle frame
+overwrites the correction and the loop measures the same offset again. Device-observed 2026-08-26 with
+nobody speaking: thirteen pan corrections in twenty minutes, alternating direction, every one starting
+from idle's own band. Not drift — an immediate overwrite, repeating forever.
+
+Release is therefore free: stop correcting and idle reclaims the arm within a frame, so there is no
+pose to restore and no ownership to drop. The check fails **closed** when voice is unavailable. The one
+exception is a *prompted* climb, which a speech-driven repoint asked for and which would otherwise
+leave the head aimed at a chest for the whole utterance.
+
 ### Vertical centring, and why it reads a median
 
 A desk lamp sits below head height, so its camera points at a chest. The correction is a median of
@@ -632,12 +648,12 @@ loop manufactured the condition it kept tripping over. Now the arm is polled unt
 short by more than `HAL_GAZE_PITCH_LAND_TOL_DEG` is rested for `HAL_GAZE_PITCH_STALL_REST_S` and its
 target backed off `HAL_GAZE_PITCH_STALL_BACKOFF_DEG`, so the retry does not lean on the stop again.
 
-**Corrections stop being undone.** The idle recording is absolute on every joint and loops forever, so
-within one cycle it walked the camera back to the pose it was recorded at — on a desk, the keyboard.
-`HAL_GAZE_IDLE_ANCHOR` shifts the whole idle loop by `anchor − baseline` instead: same motion,
-different centre. Scoped to idle deliberately — an emotion recording may fling the head anywhere,
-because by then the user has already been heard; what must hold is that the *resting* pose can see
-whoever speaks next.
+**Corrections are not held against idle.** The idle recording is absolute on every joint and loops
+forever, so within one cycle it walks the camera back toward the pose it was recorded at — on a desk,
+the keyboard. An idle anchor (`HAL_GAZE_IDLE_ANCHOR`) used to counter this by shifting the whole loop
+onto the last good pose; **it has been removed**. So the pull-back is live: a correction decays over
+an idle cycle rather than persisting, and the loop re-corrects on its next window. That is the main
+reason the same offset can reappear after a successful correction.
 
 | Knob | Default | Meaning |
 |---|---|---|
@@ -654,7 +670,6 @@ whoever speaks next.
 | `HAL_GAZE_PITCH_LAND_TOL_DEG` | 2.0 | Shortfall that counts as a stall. |
 | `HAL_GAZE_PITCH_STALL_REST_S` | 60 | How long a stalled joint is left out. Matched to measured recovery. |
 | `HAL_GAZE_PITCH_STALL_BACKOFF_DEG` | 2.0 | Stop short of where it stalled. |
-| `HAL_GAZE_IDLE_ANCHOR` | `true` | Let idle breathe around the last good pose. |
 | `HAL_GAZE_SNAPSHOT` / `_KEEP` | `true` / 40 | Annotated frame beside every correction, in `SNAPSHOT_PERSIST_DIR/sensing_gaze/`. The log says the median was −0.41 of frame height; it cannot say whether that was the user, a colleague, or a coat on a chair. |
 
 ### Climbing to find a face above the frame
@@ -709,9 +724,20 @@ every time.
 
 ### Repointing at the remembered bearing
 
-When nobody has been seen for `HAL_GAZE_REPOINT_AFTER_S`, the watcher turns to the remembered bearing
-and then checks, for `HAL_GAZE_REPOINT_VERIFY_S`, whether that worked. Three behaviours here are worth
-stating because each was a bug first:
+**Speech drives this, and nothing else does.** When somebody speaks and the watcher has no usable face
+evidence, it turns to the remembered bearing and then checks, for `HAL_GAZE_REPOINT_VERIFY_S`, whether
+that worked. The request is made on the mic thread and consumed on the watcher thread
+(`_consume_speech_repoint` → `_maybe_repoint(force=True)`), which skips both the absence wait and the
+cooldown.
+
+It used to *also* fire by itself after `HAL_GAZE_REPOINT_AFTER_S` (12 s) with nobody visible. That was
+removed. A repoint scores the bearing, and firing on "nobody happens to be in frame" — constantly true
+for a desk lamp when you lean out of view, turn to a colleague, or stand up — scored a bearing as wrong
+on evidence that says nothing about whether it is. Three such strikes delete the estimate, so a correct
+bearing was erodible by an empty chair. Scored only on utterances, each strike means something: someone
+spoke, the lamp turned to where it thought they were, and they were not there.
+
+Three further behaviours are worth stating because each was a bug first:
 
 - **A body counts as finding the user.** The verifier tracks faces and bodies on separate clocks; a
   torso at the bearing means the bearing was *right*. Scoring it as a miss deleted correct bearings
@@ -727,18 +753,21 @@ prints once a minute rather than once a pass.
 
 ### Looking around on its own
 
-If the bearing turns up nothing — or there is no bearing at all — the watcher can call the same
-`/servo/search` sweep documented above. This is the only autonomous entry, so it is the only one that
-needs a cooldown, and the two cooldowns exist because the two situations are not alike.
+If a repoint turns up nothing, `_verify_repoint` calls the same `/servo/search` sweep documented above
+with `confirmed_miss=True`. Since the repoint above is speech-driven, so is the sweep: the lamp
+searches because somebody spoke and it could not find them, never because a room merely looks empty.
+An absence trigger (`HAL_GAZE_SWEEP_AFTER_S`) still exists in `_maybe_sweep` but nothing reaches it —
+the watcher loop no longer calls the sweep at all. The cooldowns still apply, and the two exist because
+the two situations are not alike.
 
 Fifteen minutes is right for *"I have a bearing, it missed, stop thrashing"*. It is wrong for *"I have
 no idea where you are"*, because then the sweep is the only way to find out and the lamp is forbidden
 from trying — device-observed: three failed repoints dropped the estimate, and the lamp then sat unable
 to repoint (nothing to turn to) and unable to sweep (11 minutes left) while the user was talking to it.
 
-The trigger is **absence**, not a failed repoint. Hanging it off a repoint that had moved and then
-missed made it unreachable in the two cases it is most wanted: no bearing to turn to, and already
-sitting on the bearing. A successful sweep samples a fresh bearing on the spot.
+`confirmed_miss` skips the absence wait by design — a repoint that moved and missed is the strongest
+evidence there is, so there is nothing to wait for. A successful sweep samples a fresh bearing on the
+spot.
 
 | Knob | Default | Meaning |
 |---|---|---|
