@@ -263,6 +263,31 @@ class MusicService:
                 )
         except Exception as e:
             logger.warning("BT route check failed, using ALSA: %s", e)
+
+        # macOS (the laptop simulator) has neither aplay nor paplay, so both
+        # routes above fail at Popen and the user just hears "Sorry, I can't
+        # play that right now". AudioToolbox is ffmpeg's own CoreAudio output
+        # device — ffmpeg is already a hard dependency here, unlike ffplay,
+        # which not every build ships. The two-process shape is unchanged: the
+        # second ffmpeg reads the same WAV stream from stdin that aplay would.
+        # A board is Linux and never reaches this branch.
+        if sys.platform == "darwin":
+            sink = ["-f", "audiotoolbox", "-"]
+            try:
+                from hal import app_state
+                # Virtual media means "make no sound on the developer's machine"
+                # — same contract the virtual speaker keeps. Still runs the full
+                # search → resolve → decode path, just into a null sink.
+                if app_state.simulation_audio:
+                    sink = ["-f", "null", "-"]
+            except Exception as e:
+                logger.warning("sim-audio check failed, playing out loud: %s", e)
+            return (
+                ["-f", "wav"],
+                ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", "pipe:0", *sink],
+                {},
+            )
+
         return (["-f", "wav"], ["aplay", "-D", self._alsa_device, "-q"], {})
 
     @property

@@ -583,8 +583,17 @@ async def lifespan(app: FastAPI):
         state.audio_output_device = 0
         state.audio_input_device = 0
 
-    # Auto-start voice pipeline from os-server config
-    if _simulation and "voice" in _plan.mounted:
+    # Auto-start voice pipeline from os-server config.
+    #
+    # Gated on state.simulation_audio, not on _simulation: `HAL_SIM_MEDIA=host`
+    # means "use the developer machine's devices", and the mic is one of them —
+    # so host mode falls through to the real pipeline below (STT, realtime,
+    # dispatch) exactly as a board runs it. The flag is also what
+    # _sim_audio_probe flips back to True when macOS denies the microphone, so a
+    # refused permission lands on the stub with a logged reason instead of a
+    # real pipeline reading a dead device. Same flag routes/voice.py keys off,
+    # so /voice/start and this boot path can never disagree.
+    if state.simulation_audio and "voice" in _plan.mounted:
         from hal.drivers.voice.virtual_service import VirtualTTSService, VirtualVoiceService
         state.tts_service = VirtualTTSService(voice=TTS_VOICE, instructions=TTS_INSTRUCTIONS)
         state.voice_service = VirtualVoiceService(tts_service=state.tts_service)
