@@ -165,11 +165,10 @@ that saved state rather than retaining it as a user LED preference.
 
 ### Mic-muted idle indicator
 
-`STATUS_LED_PRESETS["mic_muted"]` — dark red `(10, 0, 0)` breathing at speed 0.8, far dimmer
-than the `light.max_brightness` ceiling would force (the gate alone clamps to 120): it is a
-resting look that stays lit for as long as the mic is muted, often pointed at the user, so it
-is tuned to be glanceable rather than bright. Red helps — at the same value it carries about
-a quarter the luminance of white. HAL-local
+The lamp overlay sets `STATUS_LED_PRESETS["mic_muted"]` to dark red `(3, 0, 0)`, breathing at
+speed 0.8. It is a resting look that stays lit for as long as the mic is muted, often pointed
+at the user, so it is tuned to be glanceable rather than bright. Red helps — at the same value
+it carries about a quarter the luminance of white. HAL-local
 key (no Go statusled state): applied by `POST /voice/mute`, cleared by `POST /voice/unmute`
 (`app_state._mic_muted_led`). It is the strip's **resting look** while the mic is muted —
 nothing is blocked:
