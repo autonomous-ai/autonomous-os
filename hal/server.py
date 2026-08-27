@@ -690,12 +690,22 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"MusicService failed to start: {e}")
 
-    # Pre-render music backchannel cues so audio_play hits the cache (~50ms)
-    # instead of paying a TTS round-trip on the first play. Runs in a daemon
-    # thread so a slow first render doesn't delay startup.
-    def _prerender_music_backchannel():
+    # Pre-render the phrases that play from cache, so the first use of each is
+    # ~50ms instead of a TTS round-trip. Runs in a daemon thread so a slow
+    # render doesn't delay startup.
+    #
+    # Order matters, and it is the reverse of what it looks like. The lifecycle
+    # phrases go first even though the music cues are the bigger set: measured
+    # on a cold cache with Piper, rendering the music pool first left the
+    # restart notice unwarmed for 30 s — and that notice is precisely what plays
+    # in the first seconds after boot, while nobody opens music that early.
+    def _prerender_cached_phrases():
         if not state.tts_service or not getattr(state.tts_service, "available", False):
             return
+        try:
+            state.tts_service.warm_lifecycle_phrases()
+        except Exception as e:
+            logger.warning("Lifecycle phrase prerender failed: %s", e)
         try:
             from hal.routes.music import _backchannel_pool
             for phrase in _backchannel_pool():
@@ -716,9 +726,9 @@ async def lifespan(app: FastAPI):
             logger.warning("Rate-limit notice prerender failed: %s", e)
 
     threading.Thread(
-        target=_prerender_music_backchannel,
+        target=_prerender_cached_phrases,
         daemon=True,
-        name="prerender-music-backchannel",
+        name="prerender-cached-phrases",
     ).start()
 
     # --- Phase 3: Wait for hardware threads, then start hardware-dependent services ---

@@ -415,6 +415,17 @@ Applying a voice does not restart HAL either. `POST /voice/tts/config` sets
 provider, voice, key and base URL on the running TTS service, which reads all of
 them per utterance, so the change takes effect on the next sentence.
 
+The phrases the device says about itself — restart, shutdown, reboot, sleep —
+are **rendered into the TTS cache ahead of time**, at boot and again whenever
+`/voice/tts/config` changes provider or voice (the cache key includes both, so a
+voice change invalidates every clip). They play at the worst possible moments:
+the restart notice is spoken while HAL is tearing down, the boot cue while every
+other service is still coming up. On Piper a cache miss there means loading a
+63 MB model on a saturated CPU — measured on an 8-core sun60iw2, the load alone
+is 2–3.4 s and the restart phrase synthesises at 1.1x realtime, close enough to
+breaking even that a little extra load starves the audio stream and the speech
+comes out slurred. A hit costs no synthesis at all.
+
 The realtime flag compares before and after rather than reacting to presence.
 The settings page puts a `realtime` block in *every* save, so treating it as a
 change restarted HAL on every save — which would have made the live TTS push
