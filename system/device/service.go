@@ -101,6 +101,12 @@ func (s *Service) WaitForAgentReadyStable(timeout, stableFor time.Duration) bool
 	return waitForAgentReady(s.agentGateway, timeout, stableFor, 500*time.Millisecond)
 }
 
+// AgentReady reports whether the active gateway is answering right now. A
+// single probe, not a wait: callers that need to block have WaitForAgentReady.
+func (s *Service) AgentReady() bool {
+	return s.agentGateway != nil && s.agentGateway.IsReady()
+}
+
 type agentReadiness interface {
 	IsReady() bool
 }

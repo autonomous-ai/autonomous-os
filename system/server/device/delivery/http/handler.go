@@ -397,6 +397,7 @@ func (h *DeviceHandler) GetAgentRuntime(c *gin.Context) {
 	c.JSON(http.StatusOK, serializers.ResponseSuccess(domain.AgentRuntimeStatus{
 		Current: h.service.CurrentAgentRuntime(),
 		Options: domain.AgentRuntimes,
+		Ready:   h.service.AgentReady(),
 	}))
 }
 

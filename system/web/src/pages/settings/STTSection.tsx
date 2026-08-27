@@ -28,10 +28,11 @@ export function STTSection({
   sttBaseUrl: string; setSttBaseUrl: (v: string) => void;
 }) {
   return (
-    <SectionCard id="stt" title="Language" active={active}>
+    <SectionCard id="stt" title="Language" active={active}
+      description="The language your device listens in — and the one it speaks its own notices in, like “Be right back”. It does not change the language the agent replies in; that follows whoever is talking to it.">
       <div style={{ marginBottom: 12 }}>
         <label htmlFor="stt_language" style={{ display: "block", fontSize: 11, color: C.textDim, marginBottom: 5 }}>
-          Language (what your device listens for)
+          Language
         </label>
         <select
           id="stt_language"
@@ -54,7 +55,11 @@ export function STTSection({
 
       <div style={{ marginTop: 18, paddingTop: 12, borderTop: `1px solid ${C.border}` }}>
         <div style={{ fontSize: 11, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 8 }}>
-          Advanced
+          Speech recognition (STT)
+        </div>
+        <div style={{ fontSize: 11, color: C.textDim, marginBottom: 10, lineHeight: 1.55 }}>
+          Which service turns speech into text. The default reuses your AI Brain
+          credentials, so there is nothing to fill in unless you want a different one.
         </div>
         <div style={{ marginBottom: 12 }}>
           <label htmlFor="stt_provider" style={{ display: "block", fontSize: 11, color: C.textDim, marginBottom: 5 }}>

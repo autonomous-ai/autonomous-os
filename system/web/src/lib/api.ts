@@ -421,6 +421,10 @@ export async function getRealtimeOptions(): Promise<RealtimeOptions> {
 export interface AgentRuntimeStatus {
   current: string;
   options: string[];
+  /** Whether the backend is actually answering, not merely selected.
+   *  `current` flips as soon as the switch lands; the gateway behind it can
+   *  still be booting for tens of seconds after that. */
+  ready: boolean;
 }
 
 export async function getAgentRuntime(): Promise<AgentRuntimeStatus> {
