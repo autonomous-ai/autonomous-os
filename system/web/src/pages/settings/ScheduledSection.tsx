@@ -6,8 +6,9 @@ import {
   createSchedule, deleteSchedule, listSchedules, runScheduleNow, updateSchedule,
 } from "@/lib/api";
 import type { ScheduleCadence, ScheduleItem } from "@/lib/api";
-import { ScheduleEditor, bodyFromDraft, draftFromSchedule } from "./ScheduleEditor";
-import type { ScheduleDraft } from "./ScheduleEditor";
+import { ScheduleEditor } from "./ScheduleEditor";
+import { bodyFromDraft, draftFromSchedule } from "./scheduleDraft";
+import type { ScheduleDraft } from "./scheduleDraft";
 
 // Scheduled tasks on the device itself — list, create, edit, pause, delete,
 // plus a local "Run now" per row.
