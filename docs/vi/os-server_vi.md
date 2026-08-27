@@ -403,6 +403,16 @@ Việc apply một giọng cũng **không** còn restart HAL. `POST /voice/tts/c
 đặt provider, voice, key và base URL thẳng vào TTS service đang chạy, mà service
 đọc cả bốn thứ đó theo từng câu nói, nên thay đổi ăn ngay từ câu kế tiếp.
 
+Những câu máy nói về chính nó — restart, shutdown, reboot, sleep — được
+**dựng sẵn vào cache TTS**, lúc boot và mỗi khi `/voice/tts/config` đổi provider
+hoặc giọng (cache key gồm cả hai, nên đổi giọng là mất sạch clip cũ). Chúng phát
+đúng vào những lúc tệ nhất: câu báo restart nói trong lúc HAL đang tắt, câu chào
+boot nói lúc mọi service khác còn đang lên. Với Piper, cache miss ở đó nghĩa là
+nạp model 63 MB trên một CPU đang nghẹt — đo trên sun60iw2 8 nhân, riêng phần
+nạp đã 2–3,4 giây và câu báo restart tổng hợp ở mức 1,1x realtime, sát ngưỡng
+tới mức chỉ cần tải nặng thêm chút là luồng audio đói dữ liệu và giọng nghe
+nhão. Còn cache hit thì không tốn tổng hợp gì cả.
+
 Cờ realtime giờ so sánh trước/sau chứ không phản ứng theo việc "có gửi kèm".
 Trang settings nhét khối `realtime` vào **mọi** lần lưu, nên coi nó là thay đổi
 thì lần lưu nào cũng restart HAL — và việc đẩy TTS live ở trên sẽ thành code
