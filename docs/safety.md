@@ -78,6 +78,7 @@ pass-through.
 | 3 | `motion.max_speed` (presence-driven) | `min_move_duration` | servo route | **enforced (v1)** (`max_accel` reserved) |
 | 3b | `motion.stop_always` | — | — | **declared / structurally guaranteed** — no route-level gate consumes this field (see below) |
 | 4 | fail-safe states (network/gateway loss → stop tracking; board fault → 503 isolation; `thermal.max_temp_c` → SoC over-temp health event + stop tracking; setup + servo over-current reserved) | WS-disconnect hook + per-capability `503` + thermal monitor (`thermal_over`/`read_soc_temp_c`) | `services` on WS disconnect + HAL routes/`/health` + `server.py` `_thermal_monitor` | **partially enforced (v1)** (setup + over-current reserved) |
+| 5 | `audio.max_volume` ceiling | `clamp_volume` | `/audio/volume` route, above the speaker/BT-sink split | **enforced (v1)** |
 
 Each slice adds fields to the `SafetyPolicy` and gate functions and wires one or more
 routes; the loader and the front-matter contract do not change shape between slices
@@ -246,6 +247,38 @@ Three conditions are enforced today; setup-incomplete and servo over-current are
 - [ ] **Runtime (NOT device-verified):** the WS-disconnect → `/servo/track/stop` path and
       the thermal monitor are repo-level only; not yet confirmed on a live device (pull the
       gateway link; heat the SoC past `max_temp_c`).
+
+### Slice 5 — `audio.max_volume` (checklist)
+
+An all-day speaker ceiling, independent of `audio.quiet_hours`: the window suppresses
+*discretionary* output (music), while the ceiling bounds *how loud anything gets*,
+including spoken replies.
+
+- [x] **Gate:** `policy.clamp_volume` — pure, no clock, no caller identity. Absent bound
+      = pass-through (only the 0–100 scale clamp), the same presence-driven rule as
+      `clamp_brightness`.
+- [x] **Enforced where:** `POST /audio/volume` (`hal/routes/audio.py`), clamped **above**
+      the sink split so the ceiling holds on the built-in speaker (amixer/DAC dB) and on a
+      Bluetooth headset sink alike. The persisted volume (`config/.volume`, restored by
+      os-server at boot) stores the clamped value, so a pre-existing higher setting cannot
+      survive a reboot as an unbounded one.
+- [x] **Bypass audit (callers):** every path that sets volume goes through this one route
+      — agent/skill, `system/intent` (`rules_audio.go` "volume up"/"quieter"), the Monitor
+      web slider, and os-server's boot restore (`config_watch.go` → `hal.SetVolume`). The
+      gate sits in the route rather than in the callers, so none of them can be the thing
+      that decides.
+- [x] **Reported:** `GET /audio/volume` returns `max_volume` (null when undeclared).
+      `system/lib/hal.MaxVolume()` and the Monitor slider read it — advisory only, so a
+      client that skips it still cannot exceed the bound; it just loses the ability to
+      scale its steps. The slider bounds its track to the ceiling instead of letting the
+      handle snap back from a dead zone, and `rules_audio.go` expresses "louder"/"quieter"
+      as fractions of the usable range (otherwise, on a device whose ceiling is 40, a
+      fixed "quieter" of 30 stops being distinguishable from "louder").
+- [x] **Unit:** clamp above/below ceiling, pass-through with no bound and no policy,
+      0–100 scale clamp, a `max_volume` nested inside `quiet_hours` not read as the all-day
+      bound, and fail-loud on out-of-range. (`hal/test/test_safety.py`.)
+- [ ] **Runtime (NOT device-verified):** repo-level only — not yet confirmed against a
+      live speaker (set 100 via API, read back the ceiling; check the amixer/BT sink value).
 
 ## Relationship to existing ad-hoc enforcement
 

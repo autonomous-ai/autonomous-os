@@ -104,6 +104,10 @@ export interface DisplayState {
 export interface AudioVolume {
   control: string;
   volume: number;
+  // SAFETY.md `audio.max_volume` ceiling (%), null/absent when the device
+  // declares none. The slider bounds itself to this rather than letting the
+  // operator drag past a value HAL would clamp back down.
+  max_volume?: number | null;
 }
 export interface LEDColor {
   led_count: number;

@@ -341,6 +341,10 @@ class MusicStatusResponse(BaseModel):
 class VolumeResponse(BaseModel):
     control: str
     volume: int
+    # SAFETY.md `audio.max_volume` ceiling (%), or None when the device declares
+    # none. Reported so a client (web slider) can bound its own control instead of
+    # letting an operator drag past a value the gate will pull back down.
+    max_volume: Optional[int] = None
 
 
 class ServoPositionResponse(BaseModel):
