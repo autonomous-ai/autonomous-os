@@ -346,6 +346,7 @@ mounted=['audio','bluetooth','camera','emotion','led','music','scene',
 | Sensing | `SensingService` + face recognition | `VirtualSensingService` — giữ presence state và contract của route; không gọi perception-service, không có face identity |
 | Board profile | đọc device tree | profile `sim` inert |
 | Đầu ra nhạc | `aplay` (ALSA) hoặc `paplay` (PulseAudio) | output device AudioToolbox của ffmpeg trên macOS |
+| Thu âm cho voice enroll | `arecord` qua alias ALSA | PortAudio (`sounddevice`) trên đúng input device mà pipeline giọng nói đang thu; WAV mang theo sample rate của chính nó và recognizer tự resample |
 | GELF logging | bắn về log server | tắt |
 | GPIO button / touchpad | thật | bỏ qua (gate `_board_id != "sim"`) |
 
@@ -423,6 +424,20 @@ tắt.
 | `HAL_PORT` | `5001` |
 | `LAMP_PROXY` | `http://127.0.0.1:5000` |
 
+Mọi path trong bảng biến môi trường ở trên cũng là núm — mỗi cái là một biến
+`?=` riêng, nên dời được một cái mà không đụng phần còn lại:
+
+```bash
+make sim HAL_TTS_CACHE_DIR=/Volumes/sd/tts     # một path
+make sim SIM_STATE_DIR=~/work/sim-a            # cả bộ
+```
+
+Biến export sẵn trong shell cũng thắng mặc định, cùng lý do. Hai cặp được giữ
+khớp qua biến thay vì lặp lại chuỗi, nên override một nửa thì nửa kia đi theo:
+`OS_HAL_LOG_FILE` dẫn từ `HAL_LOG_DIR` (HAL ghi, os-server đọc cho tab HAL trên
+web UI), và đích `tee` của `codex-dev` chính là `OS_AGENT_BRIDGE_LOG` (bridge
+ghi, os-server đọc cho tab Agent).
+
 ---
 
 ## Uplink lên backend đang tắt
@@ -479,6 +494,8 @@ cầm credential của một thiết bị đang sống.
 | `dial 127.0.0.1:5001: connection refused` | HAL chưa lên |
 | `127.0.0.1:5173` không kết nối được | Vite bind `[::1]` — dùng `localhost:5173` |
 | Nói vào mic không phản ứng | Thiếu `SIM_MEDIA=host`, hoặc macOS chặn microphone. Kiểm `media_reasons` trong `/simulator/state` |
+| Voice enroll trả 503 `needs a real microphone` | `SIM_MEDIA=virtual` — enroll từ chối mở mic thật ở chế độ đã hứa là không đụng tới |
+| Voice enroll trả 400 `vad_removed_all` | Clip không có tiếng nói. Đọc to các câu mẫu, gần mic hơn, suốt thời gian đếm ngược |
 | STT nghe sai tên | `flux-general-en` nghe nhầm danh từ riêng; "hi lamp" từng ra "hi lance", và nghe nhầm là **rớt cả lượt trong im lặng**. Các từ wake đã được đẩy làm STT boost term, nhưng vẫn nên nói rõ |
 | `POST /voice/speak 409` + `PermissionError: /var/lib/hal` | Chưa set `HAL_TTS_CACHE_DIR` — target `sim` bản cũ |
 | "Sorry, I can't play that right now" | Nhạc: macOS không có `aplay`/`paplay`. Cần `ffmpeg` trên `PATH` cho đường AudioToolbox |
@@ -513,6 +530,7 @@ hoặc sau một kiểm tra platform mà board không bao giờ thoả:
 |---|---|
 | Cổng pipeline giọng nói | `state.simulation_audio` = False khi `HAL_SIMULATE` unset — y hệt kiểm tra `_simulation` mà nó thay thế |
 | Đường nhạc macOS | Guard `sys.platform == "darwin"` |
+| Backend thu âm của `record-enroll` | `shutil.which("arecord")` tìm thấy nó trên board, nên nhánh PortAudio không bao giờ chạy |
 | `BackendUplink()` | Mặc định bật; biến không xuất hiện ở unit file, rootfs hay script image nào |
 | Mọi accessor `syspath` | Env unset trả về đúng literal đã thay |
 | Makefile, docs | Không ship xuống thiết bị |

@@ -350,6 +350,7 @@ mounted=['audio','bluetooth','camera','emotion','led','music','scene',
 | Sensing | `SensingService` + face recognition | `VirtualSensingService` — keeps presence state and the route contract; no perception-service calls, no face identity |
 | Board profile | reads the device tree | the inert `sim` profile |
 | Music output | `aplay` (ALSA) or `paplay` (PulseAudio) | ffmpeg's AudioToolbox output device on macOS |
+| Voice enroll capture | `arecord` over the ALSA alias | PortAudio (`sounddevice`) on the same input device the voice pipeline records with; the WAV carries its own rate and the recognizer resamples |
 | GELF logging | ships to the log server | off |
 | GPIO button / touchpad | real | skipped (`_board_id != "sim"` gate) |
 
@@ -426,6 +427,20 @@ needs them simply stays off.
 | `HAL_PORT` | `5001` |
 | `LAMP_PROXY` | `http://127.0.0.1:5000` |
 
+Every path in the environment tables above is a knob too — each is its own `?=`
+variable, so one can move without touching the rest:
+
+```bash
+make sim HAL_TTS_CACHE_DIR=/Volumes/sd/tts     # one path
+make sim SIM_STATE_DIR=~/work/sim-a            # all of them
+```
+
+An exported shell variable wins over the default for the same reason. Two pairs
+stay coupled through a variable rather than a repeated literal, so overriding one
+half moves the other: `OS_HAL_LOG_FILE` derives from `HAL_LOG_DIR` (HAL writes,
+os-server reads it for the web UI's HAL tab), and `codex-dev`'s `tee` target is
+`OS_AGENT_BRIDGE_LOG` itself (bridge writes, os-server reads it for the Agent tab).
+
 ---
 
 ## The backend uplink is off
@@ -484,6 +499,8 @@ not carrying a live device's credentials.
 | `dial 127.0.0.1:5001: connection refused` | HAL is not up yet |
 | `127.0.0.1:5173` refuses the connection | Vite binds `[::1]` — use `localhost:5173` |
 | Speaking does nothing | Missing `SIM_MEDIA=host`, or macOS denied the microphone. Check `media_reasons` in `/simulator/state` |
+| Voice enroll returns 503 `needs a real microphone` | `SIM_MEDIA=virtual` — enroll refuses to open the host mic in a mode that promises not to |
+| Voice enroll returns 400 `vad_removed_all` | The clip held no speech. Read the phrases aloud, closer to the mic, for the full countdown |
 | STT hears the wrong name | `flux-general-en` mis-hears proper nouns; "hi lamp" has come back as "hi lance", and a miss drops the whole turn silently. Wake terms are sent as STT boost terms, but say the name clearly |
 | `POST /voice/speak 409` + `PermissionError: /var/lib/hal` | `HAL_TTS_CACHE_DIR` not set — an old `sim` target |
 | "Sorry, I can't play that right now" | Music: macOS has no `aplay`/`paplay`. Needs `ffmpeg` on `PATH` for the AudioToolbox route |
@@ -518,6 +535,7 @@ board's, or behind a platform check a board never satisfies:
 |---|---|
 | Voice-pipeline gate | `state.simulation_audio` is False when `HAL_SIMULATE` is unset — identical to the `_simulation` check it replaced |
 | macOS music route | Guarded by `sys.platform == "darwin"` |
+| `record-enroll` capture backend | `shutil.which("arecord")` finds it on the board, so the PortAudio fallback never runs |
 | `BackendUplink()` | Defaults on; the var appears in no unit file, rootfs or image script |
 | Every `syspath` accessor | Unset env returns the literal it replaced |
 | Makefile, docs | Not shipped to the device |

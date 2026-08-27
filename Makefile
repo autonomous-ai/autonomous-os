@@ -66,20 +66,31 @@ CODEX_BIN        ?= $(shell command -v codex 2>/dev/null)
 # second. Off by default here; `make os-dev OS_BACKEND_UPLINK=on` is deliberate.
 OS_BACKEND_UPLINK ?= off
 
+# The device-absolute paths os-server owns, one variable each.
+DEVICES_DIR         ?= $(CURDIR)/robots
+OS_AGENT_HOME       ?= $(OS_STATE_DIR)
+OS_AGENT_STATE_PATH ?= $(OS_STATE_DIR)/config/agent_state.json
+OS_BOOTSTRAP_CONFIG ?= $(OS_STATE_DIR)/config/bootstrap.json
+OS_LOG_FILE         ?= $(OS_STATE_DIR)/os-server.log
+# `make codex-dev` tees the bridge here; os-server reads it for the Agent tab.
+OS_AGENT_BRIDGE_LOG ?= $(OS_STATE_DIR)/codex-gatewayd.log
+# HAL writes it (HAL_LOG_DIR, HAL section below); os-server reads it for the HAL tab.
+OS_HAL_LOG_FILE     ?= $(HAL_LOG_DIR)/server.log
+
 # One env set shared by both processes so the bridge and its client can never
 # disagree about where codex's state lives.
 OS_DEV_ENV = \
 	DEVICE_TYPE=$(DEVICE_TYPE) \
-	DEVICES_DIR=$(CURDIR)/robots \
+	DEVICES_DIR=$(DEVICES_DIR) \
 	CODEX_HOME=$(CODEX_HOME) \
 	CODEX_PORT=$(CODEX_PORT) \
-	OS_AGENT_HOME=$(OS_STATE_DIR) \
-	OS_AGENT_STATE_PATH=$(OS_STATE_DIR)/config/agent_state.json \
-	OS_BOOTSTRAP_CONFIG=$(OS_STATE_DIR)/config/bootstrap.json \
+	OS_AGENT_HOME=$(OS_AGENT_HOME) \
+	OS_AGENT_STATE_PATH=$(OS_AGENT_STATE_PATH) \
+	OS_BOOTSTRAP_CONFIG=$(OS_BOOTSTRAP_CONFIG) \
 	OS_BACKEND_UPLINK=$(OS_BACKEND_UPLINK) \
-	OS_HAL_LOG_FILE=$(SIM_STATE_DIR)/log/server.log \
-	OS_AGENT_BRIDGE_LOG=$(OS_STATE_DIR)/codex-gatewayd.log \
-	OS_LOG_FILE=$(OS_STATE_DIR)/os-server.log
+	OS_HAL_LOG_FILE=$(OS_HAL_LOG_FILE) \
+	OS_AGENT_BRIDGE_LOG=$(OS_AGENT_BRIDGE_LOG) \
+	OS_LOG_FILE=$(OS_LOG_FILE)
 
 .PHONY: os-dev os-dev-build os-dev-seed codex-dev
 
@@ -100,7 +111,7 @@ codex-dev: os-dev-build
 	@test -n "$(CODEX_BIN)" || { echo "codex CLI not found on PATH — set CODEX_BIN=<path>"; exit 1; }
 	@echo "codex bridge: ws://127.0.0.1:$(CODEX_PORT)/codex/ws/ (CODEX_HOME=$(CODEX_HOME))"
 	@mkdir -p $(OS_STATE_DIR)
-	$(OS_DEV_ENV) CODEX_BIN=$(CODEX_BIN) $(OS_STATE_DIR)/os-server codex-gatewayd 2>&1 | tee $(OS_STATE_DIR)/codex-gatewayd.log
+	$(OS_DEV_ENV) CODEX_BIN=$(CODEX_BIN) $(OS_STATE_DIR)/os-server codex-gatewayd 2>&1 | tee $(OS_AGENT_BRIDGE_LOG)
 
 # ============================================================================
 # HAL (Python) — dev | run | test
@@ -139,18 +150,38 @@ SIM_MEDIA ?= virtual
 # board. Each failure is silent-ish and far from its cause: the TTS cache one
 # surfaced as `POST /voice/speak 409` with the real PermissionError buried in a
 # thread traceback. Redirect them all rather than one at a time.
+OS_CONFIG_PATH           ?= $(OS_STATE_DIR)/config/config.json
+HAL_SNAPSHOT_DIR         ?= $(CODEX_HOME)/media/hal-snapshots
+HAL_SNAPSHOT_PERSIST_DIR ?= $(SIM_STATE_DIR)/snapshots
+HAL_TTS_CACHE_DIR        ?= $(SIM_STATE_DIR)/tts_cache
+HAL_CALIBRATION_DIR      ?= $(SIM_STATE_DIR)/calibration/robots/hal_follower
+HAL_USER_BEARING_PATH    ?= $(SIM_STATE_DIR)/user_bearing.json
+HAL_FACE_HEIGHT_PATH     ?= $(SIM_STATE_DIR)/face_height.json
+HAL_VOICE_STRANGERS_DIR  ?= $(SIM_STATE_DIR)/voice_strangers
+HAL_DL_STALL_LOG         ?= $(SIM_STATE_DIR)/dl_ws_stall.log
+HAL_CODEX_WORKSPACE_DIR  ?= $(CODEX_HOME)/workspace
+HAL_LOG_DIR              ?= $(SIM_STATE_DIR)/log
+HAL_USERS_DIR            ?= $(SIM_STATE_DIR)/users
+HAL_STRANGERS_DIR        ?= $(SIM_STATE_DIR)/strangers
+HAL_BT_STATE_DIR         ?= $(SIM_STATE_DIR)
+HAL_VOLUME_STATE_PATH    ?= $(SIM_STATE_DIR)/volume
+
 SIM_HAL_ENV = \
-	OS_CONFIG_PATH=$(OS_STATE_DIR)/config/config.json \
-	HAL_SNAPSHOT_DIR=$(CODEX_HOME)/media/hal-snapshots \
-	HAL_SNAPSHOT_PERSIST_DIR=$(SIM_STATE_DIR)/snapshots \
-	HAL_TTS_CACHE_DIR=$(SIM_STATE_DIR)/tts_cache \
-	HAL_CALIBRATION_DIR=$(SIM_STATE_DIR)/calibration/robots/hal_follower \
-	HAL_USER_BEARING_PATH=$(SIM_STATE_DIR)/user_bearing.json \
-	HAL_FACE_HEIGHT_PATH=$(SIM_STATE_DIR)/face_height.json \
-	HAL_VOICE_STRANGERS_DIR=$(SIM_STATE_DIR)/voice_strangers \
-	HAL_DL_STALL_LOG=$(SIM_STATE_DIR)/dl_ws_stall.log \
-	HAL_CODEX_WORKSPACE_DIR=$(CODEX_HOME)/workspace \
-	HAL_LOG_DIR=$(SIM_STATE_DIR)/log
+	OS_CONFIG_PATH=$(OS_CONFIG_PATH) \
+	HAL_SNAPSHOT_DIR=$(HAL_SNAPSHOT_DIR) \
+	HAL_SNAPSHOT_PERSIST_DIR=$(HAL_SNAPSHOT_PERSIST_DIR) \
+	HAL_TTS_CACHE_DIR=$(HAL_TTS_CACHE_DIR) \
+	HAL_CALIBRATION_DIR=$(HAL_CALIBRATION_DIR) \
+	HAL_USER_BEARING_PATH=$(HAL_USER_BEARING_PATH) \
+	HAL_FACE_HEIGHT_PATH=$(HAL_FACE_HEIGHT_PATH) \
+	HAL_VOICE_STRANGERS_DIR=$(HAL_VOICE_STRANGERS_DIR) \
+	HAL_DL_STALL_LOG=$(HAL_DL_STALL_LOG) \
+	HAL_CODEX_WORKSPACE_DIR=$(HAL_CODEX_WORKSPACE_DIR) \
+	HAL_LOG_DIR=$(HAL_LOG_DIR) \
+	HAL_USERS_DIR=$(HAL_USERS_DIR) \
+	HAL_STRANGERS_DIR=$(HAL_STRANGERS_DIR) \
+	HAL_BT_STATE_DIR=$(HAL_BT_STATE_DIR) \
+	HAL_VOLUME_STATE_PATH=$(HAL_VOLUME_STATE_PATH)
 
 sim:
 	@echo "HAL simulator: http://127.0.0.1:$(HAL_PORT)/docs"
@@ -160,7 +191,7 @@ sim:
 	else \
 	  echo "Media: virtual — deterministic and permission-free; the voice pipeline stays inert. Pass SIM_MEDIA=host for the full stack."; \
 	fi
-	HAL_SIMULATE=1 HAL_SIM_MEDIA=$(SIM_MEDIA) HAL_BOARD=sim DEVICE_TYPE=$(DEVICE_TYPE) HAL_USERS_DIR=$(SIM_STATE_DIR)/users HAL_STRANGERS_DIR=$(SIM_STATE_DIR)/strangers HAL_BT_STATE_DIR=$(SIM_STATE_DIR) HAL_VOLUME_STATE_PATH=$(SIM_STATE_DIR)/volume $(SIM_HAL_ENV) $(MAKE) hal-dev
+	HAL_SIMULATE=1 HAL_SIM_MEDIA=$(SIM_MEDIA) HAL_BOARD=sim DEVICE_TYPE=$(DEVICE_TYPE) $(SIM_HAL_ENV) $(MAKE) hal-dev
 
 hal-run:
 	cd $(HAL_DIR) && PYTHONPATH=.. .venv/bin/python -m hal.server
