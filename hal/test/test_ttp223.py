@@ -190,6 +190,20 @@ class TestSwipe(_Base):
 class TestPetKeepsWorking(_Base):
     swipe = True
 
+    def test_a_CONTINUOUS_stroke_is_one_contact_and_still_a_pet(self):
+        """The reported bug, 2026-08-27: six pets in a row came back TAP.
+
+        A finger that never leaves the surface never lets the 200ms session
+        lapse, so a whole ~1s stroke arrives as a SINGLE contact and the
+        contact-count gate discarded it. What identifies it is the revisit —
+        the finger goes back over a pad it had left. Real sequence from trace
+        162337.
+        """
+        for i, line in enumerate((98, 100, 96, 98, 100, 96, 98, 100)):
+            self.hz.touch(line, at_ms=i * 120)
+        self.hz.end_session()
+        self.assertEqual(self.hz.fired, ["head_pat_action"])
+
     def test_a_back_and_forth_stroke_is_a_pet_not_a_swipe(self):
         """Device trace 160546: the user stroked left-right-left and got
         DOUBLE_TAP. Each leg of a stroke is itself a clean one-direction pass,
@@ -346,7 +360,7 @@ class TestAxis(_Base):
         self.assertIsNone(self.hz.h._axis)
         for i, line in enumerate((96, 98, 100)):
             self.hz.touch(line, at_ms=i * 100)
-        is_swipe, _, _, _ = self.hz.h._classify()
+        is_swipe, *_ = self.hz.h._classify()
         self.assertTrue(is_swipe)
 
     def test_a_measured_axis_reorders_the_traversal_test(self):
@@ -355,7 +369,7 @@ class TestAxis(_Base):
         hz = _Harness(self.mod, axis=[96, 100, 98])
         for i, line in enumerate((96, 98, 100)):
             hz.touch(line, at_ms=i * 100)
-        is_swipe, _, _, _ = hz.h._classify()
+        is_swipe, *_ = hz.h._classify()
         self.assertFalse(is_swipe)
 
 

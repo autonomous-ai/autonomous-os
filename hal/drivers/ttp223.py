@@ -262,7 +262,7 @@ class TTP223Handler:
             self._contact = []
 
     def _classify(self):
-        """Read the cycle as (is_swipe, moved, min_gap_ms, n_contacts).
+        """Read the cycle as (is_swipe, moved, min_gap_ms, n_contacts, revisited).
 
         The discriminator is WHEN pads fire, not which. Device-measured on
         orange-lamp 2026-08-27, per-contact inter-pad deltas:
@@ -302,6 +302,12 @@ class TTP223Handler:
         is_swipe = False
         min_gap = 0.0
         moved_within = False
+        # A stroke goes back over ground it already covered: more steps than
+        # distinct pads means the finger returned to a pad it had left. A tap
+        # and a swipe each touch a pad at most once. Device-measured on
+        # orange-lamp 2026-08-27 — pets ran 5-8 steps over 3 pads, taps and
+        # swipes exactly 3 over 3.
+        revisited = any(len(c) > len({l for l, _ in c}) for c in contacts)
         for c in contacts:
             g = gaps_of(c)
             # Any pad-to-pad step slower than the floor means the hand travelled
@@ -328,7 +334,7 @@ class TTP223Handler:
         # Disjoint contacts are movement too, even when each one was a single
         # instantaneous touch — that is a hand hopping from pad to pad.
         disjoint = len(sets) >= 2 and not set.intersection(*sets)
-        return is_swipe, (moved_within or disjoint), min_gap, len(sets)
+        return is_swipe, (moved_within or disjoint), min_gap, len(sets), revisited
 
     def _pad_name(self, line):
         """Label a line the way the tracer does, so both read alike."""
@@ -357,7 +363,7 @@ class TTP223Handler:
         # Close the contact first, then read the cycle. Both take the lock
         # themselves, so they run before entering the block below.
         self._close_contact()
-        _is_swipe, _moved, _min_gap, _n = self._classify()
+        _is_swipe, _moved, _min_gap, _n, _revisited = self._classify()
         pet_now = False
         with self._lock:
             self._session_end_timer = None
@@ -385,8 +391,12 @@ class TTP223Handler:
                 # Gated on >=2 at all because a single press's cross-talk
                 # ordering can double back — device-measured, a one-contact trace
                 # fired PET off nothing but noise.
-                pet_now = (
-                    SWIPE_ENABLED and _moved and count >= PET_SESSION_THRESHOLD
+                # A continuous stroke never lets the session lapse, so the whole
+                # ~1s pet arrives as ONE contact — device-measured, five pets in
+                # a row came back count=1 and fell through to TAP. A revisit is
+                # therefore enough on its own; the contact count is not a gate.
+                pet_now = SWIPE_ENABLED and (
+                    _revisited or (_moved and count >= PET_SESSION_THRESHOLD)
                 )
                 # First session of a burst: cut in-flight TTS NOW rather than
                 # after the decision window (see module docstring). Checked
@@ -454,7 +464,7 @@ class TTP223Handler:
             # Same finish-before-dispatch rule as _dispatch: the trace closes
             # before the action can block or raise.
             touch_debug.note_classifier(
-                is_swipe=_is_swipe, moved=_moved, min_gap_ms=round(_min_gap, 1),
+                revisited=_revisited, is_swipe=_is_swipe, moved=_moved, min_gap_ms=round(_min_gap, 1),
                 contacts=_n, move_floor_ms=SWIPE_MIN_GAP_MS,
                 contact_pads=[[self._pad_name(l) for l, _ in c] for c in self._contacts],
             )
@@ -495,7 +505,7 @@ class TTP223Handler:
             self._session_count = 0
             self._decision_timer = None
         self._close_contact()
-        is_swipe, moved, min_gap, _n = self._classify()
+        is_swipe, moved, min_gap, n_contacts, revisited = self._classify()
 
         if count < 1:
             # The decision timer outlived its count (pet consumed it inline).
@@ -514,22 +524,25 @@ class TTP223Handler:
                 )
                 return
 
-            if count >= PET_SESSION_THRESHOLD:
-                # 2) PET — successive contacts with no pad in common: the hand
-                #    moved. The inline path above catches most of these; this
-                #    covers a stroke slow enough to outlast the fast check.
-                if moved:
-                    self._dispatch(
-                        "PET", f"{count} contacts with no pad in common",
-                        count, "head_pat_action", head_pat_action,
-                    )
-                    return
-                # 3) DOUBLE TAP — repeated contacts sharing a pad, i.e. the hand
-                #    stayed put. Deliberately NOT "only one pad touched": several
-                #    fingers land on several pads at once, and requiring a single
-                #    pad made this reachable only with one fingertip.
+            # 2) PET — the finger went back over a pad it had left, or
+            #    successive contacts landed in different places. No contact-count
+            #    gate: a continuous stroke is a single contact.
+            if revisited or (count >= PET_SESSION_THRESHOLD and moved):
                 self._dispatch(
-                    "DOUBLE_TAP", f"{count} contacts, no evidence the hand moved",
+                    "PET",
+                    "the finger revisited a pad" if revisited
+                    else f"{count} contacts with no pad in common",
+                    count, "head_pat_action", head_pat_action,
+                )
+                return
+
+            # 3) DOUBLE TAP — repeated contact that never revisited a pad and
+            #    never moved: the hand stayed put. Deliberately NOT "only one pad
+            #    touched": several fingers land on several pads at once, and
+            #    requiring a single pad made this reachable only with a fingertip.
+            if count >= PET_SESSION_THRESHOLD:
+                self._dispatch(
+                    "DOUBLE_TAP", f"{count} contacts, no revisit and no movement",
                     count, "mic_toggle_action", mic_toggle_action,
                 )
                 return
@@ -561,8 +574,9 @@ class TTP223Handler:
         (device-observed 2026-08-27). Writing first also means the trace
         survives an action that raises.
         """
-        is_swipe, moved, min_gap, n = self._classify()
+        is_swipe, moved, min_gap, n, revisited = self._classify()
         touch_debug.note_classifier(
+            revisited=revisited,
             is_swipe=is_swipe, moved=moved, min_gap_ms=round(min_gap, 1),
             contacts=n, move_floor_ms=SWIPE_MIN_GAP_MS,
             contact_pads=[[self._pad_name(l) for l, _ in c] for c in self._contacts],
