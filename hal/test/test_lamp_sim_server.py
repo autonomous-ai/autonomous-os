@@ -116,7 +116,7 @@ class TestLampSimulationServer(unittest.TestCase):
         # 42 is above Lamp's SAFETY.md audio.max_volume, so the route clamps it
         # and reports the ceiling back alongside the value.
         _, volume = self._json("/audio/volume", "POST", {"volume": 42})
-        self.assertEqual(volume["status"], "ok")
+        self.assertEqual(volume, {"status": "ok", "volume": 40, "max_volume": 40})
         _, current_volume = self._json("/audio/volume")
         self.assertEqual(
             current_volume, {"control": "virtual", "volume": 40, "max_volume": 40}

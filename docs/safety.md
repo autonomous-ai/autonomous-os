@@ -267,7 +267,10 @@ including spoken replies.
       web slider, and os-server's boot restore (`config_watch.go` → `hal.SetVolume`). The
       gate sits in the route rather than in the callers, so none of them can be the thing
       that decides.
-- [x] **Reported:** `GET /audio/volume` returns `max_volume` (null when undeclared).
+- [x] **Reported:** both `GET` and `POST /audio/volume` return `max_volume` (null when
+      undeclared); the `POST` reply also carries the volume actually applied, so a caller
+      never has to assume its request landed verbatim and a UI can correct itself at once
+      instead of drifting until the next poll.
       `system/lib/hal.MaxVolume()` and the Monitor slider read it — advisory only, so a
       client that skips it still cannot exceed the bound; it just loses the ability to
       scale its steps. The slider bounds its track to the ceiling instead of letting the
