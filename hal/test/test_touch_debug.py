@@ -69,8 +69,6 @@ class TestSessionArithmetic(unittest.TestCase):
             td.note_session_end(1)
             td.note_decision("TAP", "decision window expired at count=1", 1)
             td.finish("TAP")
-            for t in td._threads_for_test() if hasattr(td, "_threads_for_test") else []:
-                t.join()
             import time as _t
             _t.sleep(0.2)  # writer is a daemon thread
 
@@ -132,6 +130,22 @@ class TestTraversal(unittest.TestCase):
             tv = self._traversal(tmp)
             self.assertEqual(tv["reversals"], 1)
             self.assertFalse(tv["monotonic"])
+
+    def test_no_contacts_is_distinct_from_one_pad(self):
+        """A settle burst forms no contact at all. Reporting that as "stayed on
+        one pad" would imply a finger landed, which is exactly the wrong read
+        when the question is whether a pad fired spuriously."""
+        with tempfile.TemporaryDirectory() as tmp:
+            td = _fresh(True, tmp)
+            td.start_cycle(0, [96, 98])
+            td.note_edge(96, 1, suppressed=True)
+            td.note_session_end(0)
+            td.finish("IGNORED-settle")
+            import time as _t
+            _t.sleep(0.2)
+            tv = json.loads(next(Path(tmp).glob("*.json")).read_text())["traversal"]
+            self.assertEqual(tv["distinct_pads"], 0)
+            self.assertEqual(tv["verdict"], "no contacts recorded")
 
     def test_repeated_same_pad_has_no_traversal(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -331,7 +331,12 @@ def _traversal(trace: Dict[str, Any]) -> Dict[str, Any]:
         monotonic = reversals == 0
 
     distinct = len({p for p, _ in seq})
-    if distinct < 2:
+    if distinct == 0:
+        # No contact ever formed — every edge was suppressed by the settle
+        # guard, or the cycle was flushed before a session closed. Distinct
+        # from "one pad", which means a finger really did land.
+        verdict = "no contacts recorded"
+    elif distinct < 2:
         verdict = "no traversal — contact stayed on one pad"
     elif reversals is None:
         verdict = f"traversal over {distinct} pads, too few contacts to judge reversal"
