@@ -169,14 +169,20 @@ def test_labelled_device_measurements_land_on_the_right_side(wired):
         assert score_for(person_skew) < threshold, person_skew
 
 
-def test_loud_person_filling_the_window_is_caught_by_coupling(wired):
-    """The person the skew test structurally cannot see.
+def test_coupling_is_measured_but_never_convicts(wired):
+    """Coupling must not override the skew verdict. It was tried and it hurt.
 
-    Someone who talks over the WHOLE window shifts the residual bodily, and
-    subtracting its median takes them out along with the echo — device-observed
-    27/08/2026, an RMS=20452 interruption scored 0.9dB of skew and was rejected
-    against an echo ceiling near 10000. What still gives them away is the
-    speaker->mic coupling: echo holds it steady, they blow past it.
+    The blind spot is real: someone who talks over the WHOLE window shifts the
+    residual bodily, and subtracting its median takes them out along with the
+    echo (device-observed, an RMS=20452 interruption scored 0.9dB of skew).
+    Convicting on coupling was the obvious patch and it was wrong — over 44
+    judged windows it overrode skew exactly once, on echo, cutting the reply
+    off mid-word twice within minutes ('Still on it' came back as 'bill on
+    it.'). Echo's own coupling swings by more than any fixed margin as the
+    reply gets louder and quieter.
+
+    This test exists to keep the number a measurement. Anyone re-enabling it
+    owes labelled data, the way the skew threshold got its.
     """
     reference, canceller = wired
     played = _syllables(1600, seed=1)
@@ -190,9 +196,11 @@ def test_loud_person_filling_the_window_is_caught_by_coupling(wired):
         assert aec.echo_envelope_match(WINDOW_MS, np) is not None
     assert aec._coupling_db is not None
 
-    # Now the same window, but 10dB louder than the echo path allows.
+    # The same window 10dB above what the echo path allows — far past any
+    # margin a coupling gate would use. It is still echo by shape, so the
+    # verdict must stay echo.
     canceller.hear((echo[: int(RATE * 0.4)] * 10 ** (10 / 20.0)).astype(np.int16))
-    assert aec.echo_envelope_match(WINDOW_MS, np) == 0.0
+    assert aec.echo_envelope_match(WINDOW_MS, np) == 1.0
 
 
 def test_returns_none_without_enough_reference(wired):
@@ -239,3 +247,56 @@ def test_clear_drops_history_too(wired):
     reference.write(_syllables(700, seed=1).tobytes())
     reference.clear()
     assert reference.history() == b""
+
+
+def test_raw_tail_returns_pre_apm_frames(wired):
+    """Barge-in capture must read the mic BEFORE the APM deleted the user.
+
+    Measured 27/08/2026: with the speaker active, a frame reading 7426 on the
+    raw mic left the APM at 5. STT got the energy of silence and returned no
+    transcript at all.
+    """
+    _, canceller = wired
+    loud = _syllables(64 * 6, seed=3)
+    canceller.hear(loud)
+
+    frames = aec.raw_tail(4, 1024, np)
+    assert frames is not None and len(frames) == 4
+    assert all(len(f) == 1024 for f in frames)
+    # Concatenated, they are the tail of what the mic actually heard.
+    assert np.array_equal(np.concatenate(frames), loud[-4096:])
+
+
+def test_raw_tail_declines_when_history_is_short(wired):
+    """Too little history — the caller keeps the frames it already had."""
+    _, canceller = wired
+    canceller.hear(_syllables(32, seed=3))
+    assert aec.raw_tail(24, 1024, np) is None
+
+
+def test_raw_tail_without_a_canceller(monkeypatch):
+    monkeypatch.setattr(aec, "_canceller", None)
+    assert aec.raw_tail(4, 1024, np) is None
+
+
+def test_joint_veto_matches_every_labelled_window(wired):
+    """Neither correlation nor skew separates alone; together they do.
+
+    All from lamp-0c89, 27/08/2026, labelled by what the capture produced:
+    echo windows came back as the lamp's own words, interruptions as the
+    user's. The pair that forced this rule is corr=0.92 / skew=7.8dB — it cut
+    'They won four two on aggregate' mid-word and captured 'or two on'.
+    """
+    def verdict(corr, skew_db):
+        score = 1.0 / (
+            1.0
+            + max(0.0, skew_db - aec._SKEW_ECHO_FLOOR_DB) / aec._EXCESS_HALF_DB
+        )
+        if corr >= aec._CORR_CERTAIN_ECHO and skew_db < aec._SKEW_VETO_CEILING_DB:
+            score = 1.0
+        return "echo" if score >= 0.65 else "person"
+
+    for corr, skew in ((0.92, 7.8), (0.96, 2.1), (0.85, 5.6), (0.90, 6.5)):
+        assert verdict(corr, skew) == "echo", (corr, skew)
+    for corr, skew in ((0.45, 54.8), (0.34, 23.3), (0.62, 25.1), (0.88, 11.2)):
+        assert verdict(corr, skew) == "person", (corr, skew)

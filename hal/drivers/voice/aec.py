@@ -57,9 +57,15 @@ _EXCESS_HALF_DB = 3.0
 # effective cut lands near 6.6dB, i.e. inside the gap and biased towards
 # missing a quiet interruption over cutting the reply off.
 _SKEW_ECHO_FLOOR_DB = 5.0
-# Correlation above which the window is echo regardless of the residual.
-# Confirmed interruptions all measured below this (0.22-0.77).
-_CORR_CERTAIN_ECHO = 0.95
+# Correlation at or above which the window tracks the reply closely enough to
+# be echo — but only together with the skew ceiling below, never on its own.
+# Highest confirmed real interruption measured 0.88.
+_CORR_CERTAIN_ECHO = 0.90
+# ...and only while the unexplained energy stays under this. A person loud
+# enough to add 10dB the reference cannot account for is a person even if their
+# rhythm happens to follow the reply; every confirmed interruption that came
+# with a high correlation sat far above it.
+_SKEW_VETO_CEILING_DB = 10.0
 # How far above the measured speaker->mic coupling a window has to sit before
 # level alone convicts it. The skew test cannot catch a person who covers the
 # WHOLE window — subtracting the median then removes them with the echo, which
@@ -471,6 +477,46 @@ def uncancelled() -> bool:
     return _canceller is None or _canceller._uncancelled
 
 
+def _dump_candidate(mic_pcm, ref_bytes, corr, lag, skew_db, offset_db,
+                    supp_db, np) -> None:
+    """Archive one barge-in candidate for offline work. Off unless configured.
+
+    Exists because tuning this live does not converge: each fix is fitted to the
+    last failure seen, and the next batch of data moves the boundary again
+    (echo skew read 4.8dB, then 6.5, then 7.8, then 64.6 across four batches on
+    the same device and the same day). A labelled archive lets a rule be scored
+    against every window at once, and lets features beyond these two be tried
+    without another round trip to the device.
+
+    Set HAL_BARGE_IN_DUMP_DIR to collect, and HAL_BARGE_IN_DUMP_LABEL to say
+    what the batch is — run one batch into a silent room ('echo') and one with
+    someone deliberately interrupting ('person').
+    """
+    dump_dir = os.environ.get("HAL_BARGE_IN_DUMP_DIR", "")
+    if not dump_dir:
+        return
+    try:
+        os.makedirs(dump_dir, exist_ok=True)
+        label = os.environ.get("HAL_BARGE_IN_DUMP_LABEL", "unlabelled")
+        # WALL clock, so a sample can be matched against the journal line that
+        # followed it. The batch label alone is not trustworthy: while
+        # collecting 'person' the device still interrupts itself, and every
+        # such window would be filed under the wrong label. The transcript that
+        # came out of the capture is the real label.
+        stamp = "%.3f" % time.time()
+        np.savez_compressed(
+            os.path.join(dump_dir, f"{label}_{stamp}.npz"),
+            mic=np.frombuffer(mic_pcm, dtype=np.int16),
+            ref=np.frombuffer(ref_bytes, dtype=np.int16),
+            rate=_canceller._rate if _canceller else 0,
+            corr=corr, lag_hops=lag, skew_db=skew_db,
+            offset_db=offset_db, supp_db=supp_db,
+            label=label,
+        )
+    except Exception as e:  # never break the voice loop to collect data
+        logger.debug("barge-in dump skipped: %s", e)
+
+
 def echo_envelope_match(window_ms: int, np) -> Optional[float]:
     """How well the last `window_ms` of RAW mic tracks the reply: -1..1 or None.
 
@@ -623,23 +669,39 @@ def echo_envelope_match(window_ms: int, np) -> Optional[float]:
         clean_p = float(np.mean(clean[-n:] ** 2)) + 1.0
         suppression_db = 10.0 * np.log10(raw_p / clean_p)
 
+    _dump_candidate(mic_pcm, ref_bytes, best, best_lag, excess_db,
+                    offset_db, suppression_db, np)
+
     score = 1.0 / (
         1.0 + max(0.0, excess_db - _SKEW_ECHO_FLOOR_DB) / _EXCESS_HALF_DB
     )
-    # A near-perfect fit at a physically plausible lag is echo whatever the
-    # residual says. Device-observed 27/08/2026: corr=0.96 lag=240ms was the
-    # lamp's own 'Yes! Loud and clear.' and the residual let it through.
-    # Real interruptions in the same domain measured 0.75-0.88.
-    if best >= _CORR_CERTAIN_ECHO:
+    # Joint veto: a window that both TRACKS the reply closely and adds little
+    # unexplained energy is the reply, whatever the residual mapping said.
+    # Neither half convicts alone — that was tried and both overlap:
+    #   echo skew reached 7.8dB (it was 4.8 in the first labelled batch, then
+    #   6.5, then 7.8), which is inside the range real interruptions occupy;
+    #   echo correlation reached 0.92 while a real interruption reached 0.88.
+    # Together they separate cleanly on everything measured 27/08/2026:
+    #   echo      corr 0.92 / skew 7.8   corr 0.96 / skew 2.1   corr 0.85 / 5.6
+    #   person    corr 0.45 / skew 54.8  corr 0.34 / 23.3       corr 0.62 / 25.1
+    # The case this exists for cut 'They won four two on aggregate' mid-word and
+    # captured the lamp's own 'or two on' as the user's turn.
+    if best >= _CORR_CERTAIN_ECHO and excess_db < _SKEW_VETO_CEILING_DB:
         score = 1.0
 
-    # Level check against the learned coupling, for the person the skew test
-    # structurally cannot see: one who fills the window rather than part of it.
+    # Coupling is MEASURED and logged but does NOT convict. It was added to
+    # catch the person the skew test structurally cannot see — one who fills the
+    # whole window, so subtracting the median removes them with the echo — on
+    # the strength of a single observation (RMS=20452, skew 0.9dB). Over the
+    # next 44 judged windows it overrode the skew verdict exactly once, and that
+    # once was wrong: skew=2.4dB (echo range) but 7.9dB over the baseline, so it
+    # cut the reply off and the capture came back '(empty)'. Echo's own coupling
+    # swings by more than the threshold as the reply gets louder and quieter.
+    # Left in the log because the blind spot it was aimed at is real; re-enable
+    # only against labelled data, the way the skew threshold was set.
     global _coupling_db
     over_db = 0.0 if _coupling_db is None else offset_db - _coupling_db
-    if _coupling_db is not None and over_db >= _COUPLING_EXCESS_DB:
-        score = 0.0
-    elif score >= 1.0 or _coupling_db is None:
+    if score >= 1.0 or _coupling_db is None:
         # Learn only from windows this call is calling echo, so a run of
         # interruptions cannot teach the baseline to accept them.
         _coupling_db = (
@@ -655,6 +717,34 @@ def echo_envelope_match(window_ms: int, np) -> Optional[float]:
         suppression_db, score,
     )
     return score
+
+
+def raw_tail(frames: int, samples_per_frame: int, np):
+    """The last `frames` mic frames as they arrived, BEFORE the APM.
+
+    For barge-in capture. The APM does not merely attenuate the near-end talker
+    while the speaker is active — it removes them: measured 27/08/2026 on
+    lamp-0c89, a frame reading 7426 on the raw mic came out of the APM at 5,
+    with the reference loud at 5968. STT is then handed something with the
+    energy of silence and returns no transcript at all, not even a wrong one
+    (device-observed: zero partials, `transcript='(empty)'`).
+
+    The raw frames carry the reply's echo as well as the user, which is why the
+    transcript-level defence exists (session_finalize.strip_echo_prefix): the
+    device's own words can be dropped afterwards, the user's cannot be
+    recovered once the APM has deleted them.
+
+    Returns None when the history is short — the caller keeps what it had.
+    """
+    if _canceller is None:
+        return None
+    want = frames * samples_per_frame * 2
+    history = _canceller._mic_history
+    if len(history) < want or want <= 0:
+        return None
+    block = np.frombuffer(bytes(history[-want:]), dtype=np.int16)
+    return [block[i * samples_per_frame: (i + 1) * samples_per_frame]
+            for i in range(frames)]
 
 
 def wrap_mic(mic_ctx, rate: int, np):
