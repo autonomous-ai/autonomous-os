@@ -7,14 +7,14 @@ Lamp has two physical input devices the user can touch directly. They share the 
 | Device | Role | Where |
 |---|---|---|
 | **GPIO button** | One mechanical button. Used for decisive actions including destructive ones (reboot / shutdown / factory-reset). The mechanical feel and long-hold detection make accidental destructive actions unlikely. | Both Pi 4/5 and OrangePi sun60 |
-| **TTP223 capacitive touchpad** | Four touch pads arranged as a "dog head" surface for petting + soft stop/unmute. No destructive gestures because the IC's FastMode prevents reliable hold detection. | OrangePi sun60 only (4 Pro / A733) |
+| **TTP223 capacitive touchpad** | Three touch pads arranged as a "dog head" surface for petting + soft stop/unmute. No destructive gestures because the IC's FastMode prevents reliable hold detection. | OrangePi sun60 only (4 Pro / A733) |
 
 ## Wiring
 
 | Device | Pi 4/5 | OrangePi sun60 |
 |---|---|---|
 | GPIO button | gpiochip0 BCM 17 (pull-up, active-LOW) | gpiochip1 line 9 (pull-up, active-LOW) |
-| TTP223 | not wired | gpiochip0 lines 96 / 97 / 98 / 99 (named S1–S4), pull-down, active-HIGH |
+| TTP223 | not wired | gpiochip0 lines 96 / 98 / 100, **pull-up, active-LOW** (pads rest HIGH; a touch is the falling edge) |
 
 Board detection in both handlers reads `/proc/device-tree/model`:
 - `"sun60iw2"` → OrangePi 4 Pro / A733
@@ -163,7 +163,7 @@ Per-edge debounce is 200 ms (press and release ticks tracked independently so a 
 
 The TTP223 IC on this board runs in **FastMode**: output goes HIGH on touch, then automatically drops back LOW within ~50-80 ms even with the finger still on the pad. The IC re-triggers only when capacitance changes meaningfully (finger moves). Continuous "hold" is impossible without rewiring the IC's FM pin to LowPowerMode (~12 s max touch).
 
-Cross-talk between adjacent pads is also significant — a single physical touch fires edges on 2-4 pads with staggered timing.
+Cross-talk between adjacent pads is also significant — a single physical touch fires edges on 2-3 pads with staggered timing (the 2-4 figure predates the pad relocations, when four were wired).
 
 The driver compensates with a **two-layer model**:
 
@@ -190,20 +190,38 @@ After a session ends:
 | `PET_SESSION_THRESHOLD` | 2 | Two consecutive sessions within the decision window = pet. Easier than 3 because each "stroke" produces only one session on this hardware |
 | `PET_COOLDOWN_S` | 1.5 | After a pet fires, additional sessions within 1.5 s extend the cooldown rather than starting a new count. Stroking continuously = one pet, then silence |
 
+### Tracing what actually happened (`HAL_TOUCH_DEBUG`)
+
+Two of the four decision log lines above are `logger.debug` and never appear at the shipped `HAL_LOG_LEVEL=INFO`, and `_on_edge` discards which pad fired before anything can record it. So when a touch does the wrong thing there is normally no way to tell whether the pad misfired, the session layer mis-grouped it, or the action did something unexpected.
+
+`hal/drivers/touch_debug.py` closes that gap. **OFF by default** — with the env unset it costs one cached boolean per edge, opens no files and starts no threads. Set `HAL_TOUCH_DEBUG=1` in `/opt/hal/.env` and restart HAL to enable.
+
+It writes one JSON file per resolved gesture, named `<timestamp>_<ACTION>.json` so a wrong classification is visible from `ls` alone (`20260827-114032_TAP.json`, `..._PET.json`, `..._IGNORED-pet_cooldown.json`, `..._IGNORED-settle.json`). Each file holds four layers: `edges` (which line, which level, when, and whether the `SETTLE_S` guard suppressed it), `sessions` (how the 200 ms layer grouped them, plus each contact's `primary_pad`, `adjacent_deltas_ms` and `span_ms`), `traversal` (the cross-session pad sequence and its `reversals` count) and `action` (what ran, against what device state). A one-line `TOUCH-TRACE` summary is also logged at INFO.
+
+It never logs to journald, deliberately: HAL is chatty enough that the `hal.service` journal window is minutes, so a trace kept there ages out before it can be read.
+
+| Env var | Default | Tunes |
+|---|---|---|
+| `HAL_TOUCH_DEBUG` | `false` | Master switch. Off = every entry point is a no-op. |
+| `HAL_TOUCH_DEBUG_DIR` | `touch_logs/` next to the module | Output root. Falls back to the temp dir if the tree is read-only. |
+| `HAL_TOUCH_DEBUG_MAX_ENTRIES` | 200 | File cap, oldest pruned on each write. 0 = unbounded. |
+| `HAL_TOUCH_DEBUG_PADS` | _(unset)_ | Line→label map, e.g. `96=S1,98=S2,100=S4`. Unset, pads are labelled by line number — the historical S-names do not follow line order after two relocations, so the driver does not guess them. |
+
+
 ## Shared action library (`hal/drivers/button_actions.py`)
 
 The actions live in one place so the GPIO button, TTP223, and any future input (touchpad, remote) get identical behavior:
 
 | Function | What it does | Interrupts in-flight TTS? |
 |---|---|---|
-| `single_click_action(source)` | Stop active object tracking. Then relax a user/scene speaker mute (skipped while `_enrolling`). If mic is muted: unmute. Else stop TTS + stop music. Then open the wake-word follow-up window (no-op when wake word is off) and speak the localized "Listening" cue with retry-on-busy. Tracking still stops when the hardware mic kill switch is on; the voice action remains suppressed. | Yes — calls `stop_tts()` and the cue itself preempts. |
+| `single_click_action(source)` | Stop active object tracking. Then relax a user/scene speaker mute (skipped while `_enrolling`). Stamp the music-cancel watermark and stop music — on **both** branches, so a click always silences the loudest thing in the room. Then, if mic is muted: unmute; else stop TTS. Then open the wake-word follow-up window (no-op when wake word is off) and speak the localized "Listening" cue with retry-on-busy. Tracking still stops when the hardware mic kill switch is on; the voice action remains suppressed. | Yes — calls `stop_tts()` and the cue itself preempts. |
 | `triple_click_action(source)` | Gesture mapping only: calls `reboot_action(source)`. | Yes |
 | `reboot_action(source)` | Speak "Rebooting now" → wait 5 s for the cached clip → `reboot_os()` (`sudo reboot`). | Yes |
 | `sleep_action(source)` | Speak the localized sleep announcement, then invoke `sleepy`: LED off, camera/mic/speaker off, then servo release after 1 s. | Yes — the sleepy pipeline stops active TTS/music after the announcement. |
 | `hold_release_action(held, source)` | Hold-signal mapping: chooses sleep, shutdown, or factory reset from the released duration. | Depends on selected action |
 | `shutdown_action(source)` | Speak "Shutting down now" → wait 5 s → `release_servos()` (so the lamp doesn't slam down mid-pose) → `shutdown_os()` (`sudo shutdown -h now`). | Yes |
 | `factory_reset_action(source)` | Speak "Factory reset starting. Rebooting now" → `release_servos()` → POST `/api/system/factory-reset` on the OS server (the server owns the wipe + reboot, see below). | Yes |
-| `head_pat_action(source)` | Pick a random localized pet phrase, speak it via `speak_cached` on a daemon thread. **Non-interrupting**: if TTS is still busy the phrase is dropped silently. In practice on TTP223 the first touch session already cut any in-flight speech (`_grab_floor_if_speaking`), so by pet time TTS is usually free and the giggle plays. | No |
+| `head_pat_action(source)` | Pick a random localized pet phrase, speak it via `speak_cached` on a daemon thread. **Non-interrupting**: if TTS is still busy the phrase is dropped silently. In practice on TTP223 the first touch session already cut any in-flight speech and sounded the ack chime (`_ack_first_session`), so by pet time TTS is usually free and the giggle plays. | No |
 
 ### Factory-reset: what gets wiped
 
@@ -275,7 +293,7 @@ Phrases are intentionally short — they fire mid-stroke and need to feel respon
 | `hal/drivers/ttp223.py` | TTP223 capacitive touchpad handler (OrangePi sun60 only) |
 | `hal/drivers/button_actions.py` | Shared action functions + localized phrase pools |
 | `hal/presets.py` | Language code constants (`LANG_EN`, etc.) |
-| `hal/test_ttp223_probe_orangepi.py` | Standalone probe for verifying TTP223 line mapping |
+| `hal/test_ttp223_probe_orangepi.py` | Standalone pad probe (stdlib ioctl, no gpiod). `info` reads line state with HAL running; `watch` maps pad→line and needs `hal.service` stopped. Lines come from the board profile. |
 | `hal/test_gpio.py` | Standalone probe for verifying GPIO button line |
 
 Both handlers are spawned in `hal/server.py` lifespan startup — failures are logged but never crash the runtime (a board without the hardware just skips silently).

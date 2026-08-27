@@ -1,4 +1,9 @@
-"""TTP223 capacitive touchpad handler (4 pads = dog-head touch surface).
+"""TTP223 capacitive touchpad handler (dog-head touch surface).
+
+How many pads and which lines is board data, not a constant here — see the
+`touch` entry in hal/board/boards.json. It has changed twice (the pads were
+relocated to escape LED/servo/audio coupling), so any count written into this
+docstring goes stale; ask the board profile.
 
 Two gestures:
 - Single tap   → stop speaker / unmute mic (same as GPIO button single click)
@@ -56,7 +61,9 @@ logger = logging.getLogger(__name__)
 
 # Session gap: edges within this window of the previous edge belong to
 # the same session. 200ms comfortably exceeds the observed burst length
-# (~30-100ms across 4 pads) while staying below a natural inter-tap gap.
+# (~30-100ms across the pads a single touch reaches) while staying below a
+# natural inter-tap gap. That figure was measured on green-lamp; HAL_TOUCH_DEBUG
+# re-measures it per unit (see hal/drivers/touch_debug.py).
 SESSION_GAP_S = 0.2
 
 # Decision window: after a session ends, wait this long for more
@@ -309,8 +316,10 @@ class TTP223Handler:
             # sessions; treating both as one tap is friendlier than
             # ignoring. Threshold-reached pet is fired inline by
             # _on_session_end and never reaches this branch.
-            # Disabled: TTP223 false-triggers on this HW → a phantom tap would
-            # stop_tts and cut speech mid-sentence. Re-enable once touch is fixed.
+            # The tap gesture IS live. A `Disabled:` comment and a bare `# pass`
+            # survived here from 01d8ac24, which commented the call out while
+            # phantom triggers were being chased; the call was restored but the
+            # comment was not, so the file claimed the opposite of what it did.
             # chime=False: the ack chime already sounded at the first
             # session end (_ack_first_session) — don't ping twice.
             touch_debug.note_decision(
@@ -321,7 +330,6 @@ class TTP223Handler:
             )
             single_click_action(source="TTP223", chime=False)
             touch_debug.finish("TAP")
-            # pass
         else:
             # No sessions accumulated — the decision timer outlived its count
             # (pet consumed it inline). Nothing fires; close the trace so the
