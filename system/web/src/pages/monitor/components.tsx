@@ -1,7 +1,9 @@
 import { useState, useEffect } from "react";
 import type { ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { RotateCw } from "lucide-react";
 import { getApiToken } from "@/lib/api";
+import { useTheme } from "@/lib/useTheme";
 import { API } from "./types";
 import { S } from "./styles";
 
@@ -170,15 +172,11 @@ export function RestartAgentButton({ agentName }: { agentName?: string }) {
 export function DevicePowerButtons() {
   const [busy, setBusy] = useState<"reboot" | "shutdown" | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [confirmAction, setConfirmAction] = useState<"reboot" | "shutdown" | null>(null);
 
   const trigger = async (action: "reboot" | "shutdown") => {
     if (busy) return;
     const isShutdown = action === "shutdown";
-    const prompt = isShutdown
-      ? "Shut down this device?\n\nIt will announce the shutdown, release its servos, and turn off. You must restore power to use it again."
-      : "Restart this device?\n\nIt will announce the reboot and be unavailable for about 30 seconds.";
-    if (!window.confirm(prompt)) return;
-
     setBusy(action);
     setMessage(null);
     let accepted = false;
@@ -229,10 +227,26 @@ export function DevicePowerButtons() {
   return (
     <div>
       <div style={{ display: "flex", gap: 8 }}>
-        <button onClick={() => trigger("reboot")} disabled={!!busy} style={buttonStyle("reboot")}>Reboot</button>
-        <button onClick={() => trigger("shutdown")} disabled={!!busy} style={buttonStyle("shutdown")}>Shut down</button>
+        <button onClick={() => setConfirmAction("reboot")} disabled={!!busy} style={buttonStyle("reboot")}>Reboot</button>
+        <button onClick={() => setConfirmAction("shutdown")} disabled={!!busy} style={buttonStyle("shutdown")}>Shut down</button>
       </div>
       {message && <div style={{ marginTop: 7, fontSize: 10.5, color: busy ? "var(--lm-text-dim)" : "var(--lm-red)" }}>{message}</div>}
+      {confirmAction && (
+        <ConfirmDialog
+          title={confirmAction === "shutdown" ? "Shut down device?" : "Restart device?"}
+          message={confirmAction === "shutdown"
+            ? "The device will announce the shutdown, release its servos, and turn off. You must restore power before it can come back online."
+            : "The device will announce the reboot and be unavailable for about 30 seconds."}
+          confirmLabel={confirmAction === "shutdown" ? "Shut down" : "Restart"}
+          destructive={confirmAction === "shutdown"}
+          onCancel={() => setConfirmAction(null)}
+          onConfirm={() => {
+            const action = confirmAction;
+            setConfirmAction(null);
+            void trigger(action);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -635,6 +649,7 @@ export function ConfirmDialog({
   onConfirm: () => void;
   onCancel: () => void;
 }) {
+  const [, , themeClass] = useTheme();
   // Esc cancels — matches the click-outside affordance for keyboard users.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -644,8 +659,11 @@ export function ConfirmDialog({
     return () => window.removeEventListener("keydown", onKey);
   }, [onCancel]);
 
-  return (
+  // Portal to <body>: Overview cards use overflow:hidden and a hover transform,
+  // either of which would otherwise clip a position:fixed dialog to the card.
+  return createPortal(
     <div
+      className={`lm-root ${themeClass}`}
       onClick={onCancel}
       role="dialog"
       aria-modal="true"
@@ -653,7 +671,7 @@ export function ConfirmDialog({
       style={{
         position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)",
         display: "flex", justifyContent: "center", alignItems: "center",
-        zIndex: 1100, padding: 20,
+        zIndex: 2000, padding: 20,
       }}
     >
       <div
@@ -675,6 +693,7 @@ export function ConfirmDialog({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
