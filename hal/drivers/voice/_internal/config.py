@@ -166,9 +166,10 @@ STT_KEEPALIVE_PING_S = float(os.environ.get("HAL_STT_KEEPALIVE_PING_S", "3"))
 #                                                    24/08 at the old 150 hint)
 # The populations OVERLAP — 8027 sits under the 9804 ceiling — so no level
 # threshold separates them. A threshold below the ceiling self-interrupts; one
-# above it misses quiet interruptions. Separating them needs the envelope
-# decorrelation test (echo tracks the far-end envelope, a person does not),
-# which is not implemented.
+# above it misses quiet interruptions. Re-measured at three speaker volumes on
+# 27/08/2026 (see BARGE_IN_ECHO_MATCH): they overlap at all three, and lowering
+# the volume does not pull the echo down. What separates them is the envelope
+# test in BARGE_IN_ECHO_MATCH, which the level gate now runs ahead of.
 #
 # BLOCK_MS sizes the per-read chunk of the LEGACY monitor's mic capture, which
 # is unreachable while WARM_MIC is true (the default) — the warm path reuses the
@@ -183,7 +184,9 @@ BARGE_IN_ENABLED = os.environ.get(
 # to cut itself off on the loudest syllables of its own replies — at 4500 that
 # was observed firing on RMS 5530 / 6446 / 6637 / 7749, twice transcribing the
 # lamp's own words as the user's turn. Raise toward 11000 to trade the other
-# way; there is no value that gets both.
+# way; no value of THIS gate alone gets both — BARGE_IN_ECHO_MATCH is what
+# rejects the echo that survives it, so leave this low enough to catch a normal
+# voice and let the envelope test do the separating.
 BARGE_IN_RMS_THRESHOLD = int(os.environ.get("HAL_BARGE_IN_RMS_THRESHOLD", "5000"))
 BARGE_IN_TRIGGER_FRAMES = int(os.environ.get("HAL_BARGE_IN_TRIGGER_FRAMES", "1"))
 BARGE_IN_BLOCK_MS = int(os.environ.get("HAL_BARGE_IN_BLOCK_MS", "64"))
@@ -211,6 +214,52 @@ BARGE_IN_REQUIRE_SPEECH = os.environ.get(
 ).lower() == "true"
 BARGE_IN_SPEECH_RATIO = float(os.environ.get("HAL_BARGE_IN_SPEECH_RATIO", "0.35"))
 BARGE_IN_SPEECH_FRAMES = int(os.environ.get("HAL_BARGE_IN_SPEECH_FRAMES", "6"))
+# Third condition, and the only one that can tell the lamp's voice from a
+# person's: reject the candidate when its loudness envelope tracks what the
+# speaker is playing. See aec.echo_envelope_match.
+#
+# This exists because level cannot do it and re-measuring will not fix it.
+# Silent-room echo ceiling vs real interruptions, same room, same reply:
+#   speaker 25% (lamp-ee17)   echo 9804   person 8027
+#   speaker 40% (lamp-0c89)   echo 9969   person 6956-8027
+#   speaker 65% (lamp-0c89)   echo 13560  person 6956
+# The echo ceiling sits ABOVE the person at every volume, and 24dB of mixer
+# range moved it by under 3dB — so there is no volume to run at and no
+# threshold to pick. Turning the speaker down is not a workaround.
+#
+# Labelled on lamp-0c89 27/08/2026, live, speaker at 40%. The underlying
+# measurement is the residual SKEW in dB (see aec._SKEW_ECHO_FLOOR_DB); this
+# threshold is that number after mapping:
+#   echo, silent room (15 windows)   -2.8 .. +2.1 dB   -> scores 1.00
+#   echo, mixed run (~40 windows)   -50.0 .. +4.8 dB   -> scores 1.00
+#   confirmed real interruption      +8.4 .. +40.4 dB  -> scores 0.07-0.47
+# 0.65 sits in the middle of that gap; a silent-room run of 12 replies fired
+# zero barge-ins with it. It is NOT per-device: a normalised
+# correlation has no units, so mic gain, speaker level and room all cancel out
+# — unlike RMS_THRESHOLD and AEC_DELAY_MS above, which do have to be measured
+# per body. Set to 0 to disable the test (the pre-27/08 behaviour).
+BARGE_IN_ECHO_MATCH = float(os.environ.get("HAL_BARGE_IN_ECHO_MATCH", "0.65"))
+# Pre-roll kept while draining, in 64ms frames. Much longer than PRE_ROLL_FRAMES
+# (8 = 512ms) because interrupting the lamp is detected LATE: the level gate
+# waits for the person to out-shout the echo, frames arriving without
+# cancellation are skipped entirely, and the envelope test only then gets to
+# judge. Everything before that moment exists only in this buffer.
+# It is bounded on BOTH sides, which is why it is a separate number and not
+# simply "as much as possible". Device-observed 27/08/2026:
+#   8 frames (512ms)  -> "What do people there usually do?" reached STT as
+#                        'usually do.' — the session started mid-phrase.
+#   24 frames (1536ms) -> the pre-roll reached back past the interruption into
+#                        the reply's own echo and STT transcribed the LAMP:
+#                        'with your friends. Why do you think they like doing?'
+#   12 frames (768ms)  -> 'Are there any laws in the US?' arrived whole.
+# Detecting the person's exact onset instead was tried and removed: aligning a
+# 1.5s window against the reference is too unreliable to find the boundary, and
+# it returned "no answer" on every candidate on device.
+# Only bounds what a barge-in turn may prepend; ordinary turns are still
+# trimmed back to PRE_ROLL_FRAMES so their leading silence is unchanged.
+BARGE_IN_PRE_ROLL_FRAMES = int(
+    os.environ.get("HAL_BARGE_IN_PRE_ROLL_FRAMES", "12")
+)
 
 
 # ---------------------------------------------------------------------------
