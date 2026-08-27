@@ -84,9 +84,15 @@ class _WaitFiller:
     """Speak one dead-air filler if the realtime model keeps the user waiting.
 
     The thinking cue above covers the wait visually; this covers it audibly.
-    Chit-chat replies start in ~1s and must never be interrupted by a filler, so
-    the phrase only fires after REALTIME_FILLER_DELAY_S with still no output —
-    which in practice means a turn the model is grounding with Google Search.
+    The phrase fires only after REALTIME_FILLER_DELAY_S with still no output, so
+    a reply that starts sooner is never interrupted by one.
+
+    How often that happens is a property of the model, not of this class. On a
+    fast one it catches only the slow class (a turn grounded with Google Search
+    emits nothing until the search returns); where first-sentence latency never
+    drops below a few seconds — measured on lamp-0c89 — it fires on effectively
+    every turn, and the delay is what decides whether the device answers like
+    someone listening or like someone lagging.
 
     os-server picks the phrase and speaks it from its WAV cache (POST
     /api/sensing/filler): keeping the pools there means the realtime wait and

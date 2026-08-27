@@ -19,6 +19,7 @@ from hal.config import AUDIO_INPUT_ALSA, TTS_SPEED, TTS_VOICE, TTS_INSTRUCTIONS
 from hal.models import (
     SpeakRequest,
     StatusResponse,
+    TTSConfigRequest,
     VoiceConfigRequest,
     VoiceStartRequest,
     VoiceStatusResponse,
@@ -187,6 +188,59 @@ def update_voice_config(req: VoiceConfigRequest):
     return {"status": "ok"}
 
 
+@router.post("/voice/tts/config", response_model=StatusResponse)
+def update_tts_config(req: TTSConfigRequest):
+    """Apply TTS settings to the running service, no restart.
+
+    The service reads provider, voice and speed per utterance, so setting them
+    here takes effect on the next sentence. os-server used to apply a voice
+    change with `systemctl restart hal`, which takes the microphone, speaker and
+    wake word down with it for ten to fifteen seconds — and any admin click that
+    lands in that window is simply lost, because HAL is not listening.
+
+    Only fields that are sent are changed; the rest keep their current values,
+    so this is safe to call with a partial config.
+    """
+    if not state.tts_service:
+        raise HTTPException(503, "tts service not running")
+    svc = state.tts_service
+    backend = svc._backend
+    current_key = getattr(backend, "_api_key", "") or ""
+    current_base = (getattr(backend, "_base_url", "") or "").rstrip("/")
+    # ElevenLabs appends /elevenlabs to base_url; strip it for comparison, the
+    # same way the speak-time hot swap does.
+    if current_base.endswith("/elevenlabs"):
+        current_base = current_base[: -len("/elevenlabs")]
+    current_provider = getattr(svc, "_provider", None)
+
+    provider = (req.provider or current_provider or "").strip()
+    api_key = (current_key if req.api_key is None else req.api_key).strip()
+    base_url = (current_base if req.base_url is None else req.base_url).strip()
+
+    if provider != current_provider or api_key != current_key or base_url != current_base:
+        from hal.drivers.voice.tts import create_backend
+        if svc.speaking:
+            svc.stop()
+        try:
+            svc._backend = create_backend(
+                provider=provider, api_key=api_key, base_url=base_url,
+            )
+            svc._provider = provider
+        except Exception as e:
+            state.logger.error("TTS config apply failed: %s", e)
+            raise HTTPException(500, f"Failed to apply TTS config: {e}")
+
+    if req.voice:
+        svc._voice = req.voice
+    if req.speed is not None:
+        svc._speed = max(0.25, min(4.0, float(req.speed)))
+    state.logger.info(
+        "TTS config applied live (provider=%s, voice=%s, speed=%s)",
+        svc._provider, svc._voice, svc._speed,
+    )
+    return {"status": "ok"}
+
+
 @router.get("/voice/voices")
 def get_voices(provider: Optional[str] = None, lang: Optional[str] = None):
     """Return available TTS voices for the requested (or current) provider.
@@ -202,6 +256,19 @@ def get_voices(provider: Optional[str] = None, lang: Optional[str] = None):
     from hal.drivers.voice.tts import PROVIDER_ELEVENLABS, PROVIDER_OPENAI as _PO
     if provider is None:
         provider = getattr(state.tts_service, "_provider", _PO) if state.tts_service else _PO
+    if provider == "piper":
+        # Piper voices are model files, so the truth is the filesystem rather
+        # than a curated list: whatever .onnx is installed can be selected.
+        # `lang` is ignored — a Piper model IS a language, so filtering would
+        # only hide models the operator deliberately put there.
+        import glob
+        import os
+        voices_dir = os.environ.get("HAL_PIPER_VOICES", "/opt/piper/voices")
+        names = sorted(
+            os.path.basename(p)[: -len(".onnx")]
+            for p in glob.glob(os.path.join(voices_dir, "*.onnx"))
+        )
+        return {"provider": provider, "voices": names}
     if provider == PROVIDER_ELEVENLABS:
         return {
             "provider": provider,
@@ -527,3 +594,18 @@ def voice_status():
         "mic_muted": state._mic_muted,
         "hw_mic_switch_muted": state._hw_mic_switch_muted,
     }
+
+
+# Piper install + voice download live in their own module but mount under this
+# router: they are not a hardware capability, so they must not need a ROBOT.md
+# declaration of their own, and `voice` is already mounted wherever audio is.
+# Guarded: an OTA lands files one at a time, so this module can briefly exist
+# on a device where hal/routes/piper.py does not. An unguarded import would
+# take the WHOLE voice router down with it — no TTS, no STT, a mute device —
+# to add a feature nobody had asked for yet. Losing the install endpoints is
+# the correct failure here; losing speech is not.
+try:
+    from hal.routes.piper import router as _piper_router  # noqa: E402
+    router.include_router(_piper_router)
+except Exception as _e:  # pragma: no cover - depends on partial deployments
+    state.logger.warning("Piper install routes unavailable: %s", _e)

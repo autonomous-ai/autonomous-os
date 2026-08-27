@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { getPiperStatus, installPiperEngine, installPiperVoice, removePiperVoice, type PiperJobStart, type PiperStatus } from "@/lib/api";
 import { Loader2, Volume2, Check, AlertCircle } from "lucide-react";
 import { C, LockedField, LockedPasswordField, SectionCard } from "@/components/setup/shared";
 import { testTTSVoice } from "@/lib/api";
@@ -30,7 +31,7 @@ export interface TtsLoadedState {
 // Deepgram out until a real Deepgram TTS backend lands, so the operator
 // can't paint themselves into a dead-end. STT works with Deepgram on a
 // different code path (this is TTS-only).
-type ProviderChoice = "autonomous" | "openai" | "elevenlabs" | "custom";
+type ProviderChoice = "autonomous" | "openai" | "elevenlabs" | "piper" | "custom";
 
 // Vendor covers only the choices that have a distinct audio backend on disk.
 // Autonomous supports two vendors; every other choice has exactly one vendor
@@ -65,6 +66,14 @@ const CHOICES: Record<ProviderChoice, ChoiceMeta> = {
     baseUrl: "https://api.elevenlabs.io/v1",
     vendor: "elevenlabs",
   },
+  piper: {
+    label: "Piper (Local — free)",
+    baseUrl: "",
+    // No vendor sub-picker and no key: synthesis happens here, so there is
+    // no account to authenticate and no shared quota to share. Voices are
+    // the .onnx models installed on the device, listed by HAL.
+    hint: "Runs on the device — no API key, no quota, works offline. Lower quality than a hosted voice.",
+  },
   custom: {
     label: "Custom (BYO URL)",
     baseUrl: "",
@@ -78,7 +87,10 @@ const CHOICES: Record<ProviderChoice, ChoiceMeta> = {
 // than mis-labelling as Autonomous — an operator with a self-hosted URL
 // should see "Custom", not "Autonomous", so switching provider doesn't
 // silently overwrite their URL with the campaign-api endpoint.
-function detectChoice(baseUrl: string): ProviderChoice {
+function detectChoice(baseUrl: string, provider?: string): ProviderChoice {
+  // Piper is URL-less, so the URL heuristic below cannot see it. The saved
+  // provider is the only evidence it is selected.
+  if (provider === "piper") return "piper";
   let host = "";
   try { host = new URL(baseUrl).hostname.toLowerCase(); } catch { /* invalid — fall through */ }
   if (!host) return "autonomous";  // empty URL = default to the proxy (matches "leave blank → reuse AI brain")
@@ -204,11 +216,11 @@ export function TTSSection({
   // Re-sync happens during render (not in an effect) by comparing the URL we
   // last synced against: setting state in an effect would cascade an extra
   // render pass on every URL change.
-  const [choice, setChoice] = useState<ProviderChoice>(() => detectChoice(ttsBaseUrl));
+  const [choice, setChoice] = useState<ProviderChoice>(() => detectChoice(ttsBaseUrl, ttsProvider));
   const [syncedUrl, setSyncedUrl] = useState(ttsBaseUrl);
   if (syncedUrl !== ttsBaseUrl) {
     setSyncedUrl(ttsBaseUrl);
-    if (choice !== "custom") setChoice(detectChoice(ttsBaseUrl));
+    if (choice !== "custom") setChoice(detectChoice(ttsBaseUrl, ttsProvider));
   }
   const meta = CHOICES[choice];
 
@@ -228,7 +240,23 @@ export function TTSSection({
   // English names, and vice-versa. OpenAI's voices are language-agnostic,
   // so the language dropdown is a no-op there (voice list stays the same).
   const [lang, setLang] = useState<Lang>("");
-  const voices = voicesFor(vendor, lang, sttLanguage);
+  // Voices present on the device, reported by the Piper panel. Used to keep
+  // Test Voice from firing at a model that is still downloading — HAL answers
+  // that with a bare 503 that reads like the API died.
+  const [piperInstalled, setPiperInstalled] = useState<string[]>([]);
+  // Language of the Piper voice itself, parsed from its name. Used for the
+  // preview phrase so Test Voice speaks the language the model was trained on.
+  const piperLang: string = choice === "piper" ? (ttsVoice.split("_")[0] || "") : "";
+  // Piper's catalogue is whatever .onnx files exist on the device, which only
+  // the server knows; the curated pools above describe hosted vendors.
+  // For Piper the panel below is the better source: it polls HAL directly, so
+  // the list follows a download or a removal the moment it finishes, and a
+  // transient failure leaves the last good answer in place instead of blanking
+  // the picker. The page-level `ttsVoices` fetch is one snapshot taken when the
+  // provider changed, and nothing refetches it when a model appears on disk.
+  const voices = choice === "piper"
+    ? piperInstalled
+    : voicesFor(vendor, lang, sttLanguage);
 
   const onChoice = (next: ProviderChoice) => {
     setChoice(next);   // always commit the pick — even Custom, so the picker doesn't snap back
@@ -238,6 +266,22 @@ export function TTSSection({
     // where they were. Vendor: keep whatever was on disk; the Custom vendor
     // sub-picker below lets them flip protocol.
     if (next === "custom") {
+      return;
+    }
+    if (next === "piper") {
+      // No URL and no key to set. Clearing the URL matters: detectChoice reads
+      // it on reload, and a stale hosted URL would drag the picker back.
+      setTtsBaseUrl("");
+      setTtsProvider("piper");
+      // Only ever select a voice the device actually has. `ttsVoices` is the
+      // filesystem listing from HAL, so an empty list means nothing is
+      // downloaded yet — and picking a name anyway (as a hardcoded fallback
+      // once did) configures the device for a model it cannot load, which
+      // leaves Piper silent with no visible cause. Empty is honest: the panel
+      // right above tells the operator to download one.
+      if (!ttsVoices.includes(ttsVoice)) setTtsVoice(ttsVoices[0] ?? "");
+      // piperInstalled is empty until the panel's first status arrives, so the
+      // page-level list is what is available at this moment.
       return;
     }
     setTtsBaseUrl(nextMeta.baseUrl);
@@ -304,6 +348,16 @@ export function TTSSection({
         )}
       </div>
 
+      {/* 2a. Piper install panel — engine first, then voices. Only Piper needs
+          this: every other provider is a URL that already exists. */}
+      {choice === "piper" && (
+        <PiperPanel
+          voice={ttsVoice}
+          onPickVoice={setTtsVoice}
+          onInstalledChange={setPiperInstalled}
+        />
+      )}
+
       {/* 2. Vendor sub-picker — only when Autonomous. Other presets pin
           vendor via their meta.vendor. */}
       {choice === "autonomous" && (
@@ -324,7 +378,7 @@ export function TTSSection({
       {/* 3. Base URL — read-only for presets, editable ONLY for Custom.
           Preset URLs come from the CHOICES table, not from the operator's
           keyboard — a wrong URL was the reported bug. */}
-      {choice === "custom" ? (
+      {choice === "piper" ? null : choice === "custom" ? (
         <LockedField
           lockedInitially={ttsLoaded.baseUrl || llmLoaded.baseUrl}
           label="Base URL"
@@ -362,7 +416,9 @@ export function TTSSection({
         </div>
       )}
 
-      {/* 5. API Key — always editable. Blank inherits AI brain key. */}
+      {/* 5. API Key — always editable. Blank inherits AI brain key. Hidden for
+          Piper: there is no service to authenticate to. */}
+      {choice !== "piper" && (<>
       {/* Label shows a "configured" badge when tts_api_key is on file so
           the operator has visual confirmation the save landed — the actual
           value never leaves the device (server returns has_tts_api_key
@@ -387,12 +443,14 @@ export function TTSSection({
         onChange={setTtsApiKey}
         placeholder={ttsLoaded.apiKey ? "•••••••• saved (click ✎ to rotate)" : "sk-..."}
       />
+      </>)}
 
       {/* 6a. Language — filters the Voice list. Session-local (not saved to
           config). Autonomous(ElevenLabs) has distinct voice pools per
           language (English "Rachel" vs Vietnamese "Ngan" vs Chinese "Amy"),
           so surfacing this picker lets the operator narrow the Voice
           picker without hunting through a mixed list. */}
+      {choice !== "piper" && (
       <div style={{ marginBottom: 12 }}>
         <label htmlFor="tts_lang" style={labelStyle}>Language (voice list filter)</label>
         <select
@@ -412,6 +470,7 @@ export function TTSSection({
           </div>
         )}
       </div>
+      )}
 
       {/* 6b. Voice — options filter to the vendor AND language so the picker
           doesn't offer names that don't exist on the target combination
@@ -430,10 +489,16 @@ export function TTSSection({
         </select>
         <TestVoiceButton
           voice={ttsVoice}
-          lang={lang || sttLanguage}
+          lang={piperLang || lang || sttLanguage}
           provider={ttsProvider}
           baseUrl={ttsBaseUrl}
           apiKey={ttsApiKey}
+          blockedReason={
+            choice !== "piper" ? ""
+              : !ttsVoice ? "Download a voice first"
+              : !piperInstalled.includes(ttsVoice) ? "That voice is still downloading"
+              : ""
+          }
         />
       </div>
 
@@ -446,10 +511,15 @@ export function TTSSection({
 // ("Playing on device") for ~2.5s → back to idle. Errors flip to a red
 // "Failed" state for the same window. Prior version fired-and-forgot with no
 // visual change — the operator saw nothing happen and clicked again.
-function TestVoiceButton({ voice, lang, provider, baseUrl, apiKey }: {
+function TestVoiceButton({ voice, lang, provider, baseUrl, apiKey, blockedReason = "" }: {
   voice: string;
   lang: string;
   provider: string;
+  // Non-empty when the device cannot possibly speak yet — a Piper voice whose
+  // .onnx is still downloading. Pressing through would reach a backend that
+  // reports itself unavailable, and HAL answers that with a bare 503 that
+  // reads like the whole API fell over. Say what is actually happening.
+  blockedReason?: string;
   // Pending URL / key from the parent's state — sent alongside the test so
   // the operator's un-saved edits are validated (not the on-disk config).
   // Empty strings fall back to saved config server-side.
@@ -479,7 +549,9 @@ function TestVoiceButton({ voice, lang, provider, baseUrl, apiKey }: {
   // Colour + label track the phase. Loading disables clicks so a slow proxy
   // (5s+ TTFB observed on OpenAI TTS via the campaign-api proxy) can't be
   // re-fired mid-request and stack up multiple synths on the same speaker.
+  const blocked = !!blockedReason;
   const bg =
+    blocked ? "var(--lm-border, #3a3a3a)" :
     phase === "ok" ? "var(--lm-green, #34d399)" :
     phase === "error" ? "var(--lm-red, #ef4444)" :
     "var(--lm-amber, #f5c25a)";
@@ -489,6 +561,7 @@ function TestVoiceButton({ voice, lang, provider, baseUrl, apiKey }: {
     phase === "error" ? <AlertCircle size={14} /> :
     <Volume2 size={14} />;
   const label =
+    blocked ? blockedReason :
     phase === "loading" ? "Sending to device…" :
     phase === "ok" ? "Playing on device" :
     phase === "error" ? "Failed" :
@@ -499,14 +572,14 @@ function TestVoiceButton({ voice, lang, provider, baseUrl, apiKey }: {
       <button
         type="button"
         onClick={onClick}
-        disabled={busy}
+        disabled={busy || blocked}
         aria-live="polite"
         style={{
           marginTop: 8, width: "100%", padding: "10px 0",
           background: bg, color: "#fff", border: "none",
           borderRadius: 7, fontSize: 12, fontWeight: 700,
-          cursor: busy ? "wait" : "pointer",
-          opacity: busy ? 0.85 : 1,
+          cursor: blocked ? "not-allowed" : busy ? "wait" : "pointer",
+          opacity: blocked ? 0.6 : busy ? 0.85 : 1,
           display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
           transition: "background 0.2s ease, opacity 0.15s",
         }}>
@@ -532,4 +605,282 @@ const selectStyle = {
   background: C.surface, border: `1px solid ${C.border}`,
   borderRadius: 7, padding: "8px 11px",
   fontSize: 12.5, color: C.text, outline: "none", cursor: "pointer",
+};
+
+// PiperPanel — install state for the on-device engine, and the voice
+// catalogue with a download button per entry.
+//
+// Two steps in order, because that is the real dependency: the engine has to
+// exist before a voice can be loaded. The panel refuses to let the operator
+// skip ahead rather than letting them download 63 MB that cannot be used yet.
+//
+// Licence is shown per voice on purpose. Every entry here is safe to ship,
+// but "CC BY 4.0" means someone owes an attribution line, and that obligation
+// is invisible unless the person choosing the voice can see it.
+// Every button here carries type="button". The panel renders inside the
+// settings <form>, where a button defaults to type="submit" — so Download, Use
+// and Remove were each submitting the whole form, saving the config and
+// restarting HAL underneath the very request they had just fired. That is what
+// killed downloads mid-transfer, lost Remove clicks to a 502, and made the
+// device announce "Be right back" on a click that was supposed to touch
+// nothing but /opt/piper.
+function PiperPanel({ voice, onPickVoice, onInstalledChange }: {
+  voice: string;
+  onPickVoice: (v: string) => void;
+  onInstalledChange: (installed: string[]) => void;
+}) {
+  const [st, setSt] = useState<PiperStatus | null>(null);
+  // Not an error state. Saving a voice change restarts HAL, so the status call
+  // is refused for a normal 10-15s window every time the operator hits Save.
+  // Treating that as a failure left a red Go error on screen that only a page
+  // reload could clear — the panel now just keeps asking until HAL answers.
+  const [unreachable, setUnreachable] = useState(false);
+  // Voice whose Remove has been pressed once. Deleting a 63 MB model that
+  // takes minutes to fetch again deserves a second press, and an inline
+  // confirm keeps that in the row instead of behind a browser dialog.
+  const [confirmRemove, setConfirmRemove] = useState("");
+  // What HAL refused, when it refuses. These endpoints answer a rejection with
+  // 200 and {status:"error"}, so without this the button would appear to do
+  // nothing at all.
+  const [notice, setNotice] = useState("");
+
+  const load = useCallback(() => {
+    return getPiperStatus()
+      .then((next) => {
+        setSt(next);
+        setUnreachable(false);
+      })
+      .catch(() => setUnreachable(true));
+  }, [onInstalledChange]);
+
+  useEffect(() => { load(); }, [load]);
+
+  // HAL claims the job before it replies, so the reply already describes the
+  // running download. Adopting it here is what makes the panel react to the
+  // click itself: polling only runs while a job is active, so a panel that
+  // waited for the next poll to discover the job could miss it starting and
+  // then never look again.
+  const postAndRefresh = useCallback((run: () => Promise<PiperJobStart>) => {
+    run()
+      .then((res) => {
+        setNotice(res.status === "error" ? res.message || "Request refused" : "");
+        const started = res.job;
+        if (started) setSt((prev) => (prev ? { ...prev, job: started } : prev));
+        load();
+      })
+      .catch(() => {
+        // Almost always a HAL restart: saving any voice setting triggers one,
+        // and a click landing in that window is simply lost. Saying only
+        // "reconnecting" would let the operator believe the voice was removed.
+        setUnreachable(true);
+        setNotice("Device was restarting — nothing changed. Try again in a moment.");
+      });
+  }, [load]);
+
+  // Voices whose removal is in flight. The row has to update on the confirm
+  // press, but the removal itself can take ten seconds when HAL is restarting,
+  // and the status poll keeps running throughout — each poll reports the voice
+  // as still installed, which put the Remove button straight back and made the
+  // confirm look ignored. Masking the polled truth is what holds the row down;
+  // mutating it would just be overwritten again by the next poll.
+  const [removing, setRemoving] = useState<string[]>([]);
+
+  const removeVoice = useCallback((name: string) => {
+    setNotice("");
+    setConfirmRemove("");
+    setRemoving((cur) => [...cur, name]);
+    removePiperVoice(name)
+      .then((res) => {
+        if (res.status === "error") setNotice(res.message || "Request refused");
+        // Lift the mask only once real status is in, or the row would flash
+        // back for the moment between the two.
+        return load();
+      })
+      .catch(() => {
+        setUnreachable(true);
+        setNotice("Device was restarting — nothing changed. Try again in a moment.");
+      })
+      .finally(() => setRemoving((cur) => cur.filter((n) => n !== name)));
+  }, [load]);
+
+  // Poll while a download runs (the one time this page changes on its own),
+  // and while HAL is unreachable so the panel recovers by itself.
+  useEffect(() => {
+    const busy = !!st?.job?.active;
+    if (!busy && !unreachable && st) return;
+    const t = setInterval(load, busy ? 2000 : 3000);
+    return () => clearInterval(t);
+  }, [st, unreachable, load]);
+
+  useEffect(() => {
+    if (st) onInstalledChange(st.voices_installed.filter((n) => !removing.includes(n)));
+  }, [st, removing, onInstalledChange]);
+
+  // No status yet and HAL is not answering: almost always a restart in flight.
+  if (!st) {
+    return (
+      <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 12 }}>
+        {unreachable ? "Device is restarting — reconnecting…" : "Checking device…"}
+      </div>
+    );
+  }
+
+  const job = st.job;
+  const busy = job.active;
+  // What the panel renders: polled truth with in-flight removals taken out.
+  const catalog = st.catalog.map((c) =>
+    removing.includes(c.name) ? { ...c, installed: false } : c);
+  // HAL refuses to delete the last model — the device would have nothing to
+  // speak with. Hiding the button is better than offering one that answers
+  // with a refusal ten seconds later.
+  const onlyOneLeft = catalog.filter((c) => c.installed).length <= 1;
+
+  return (
+    <div style={{ marginBottom: 14, padding: "12px 14px", background: "var(--lm-surface-2, #1a1a1a)", borderRadius: 8 }}>
+      {/* Step 1 — the engine. Shown only while it is missing: once installed
+          the line carries no information the voice list below does not already
+          imply, and a permanent green tick on a finished setup step is just
+          something to read past every time. */}
+      {!st.engine_installed && (
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={{ fontSize: 12, color: C.textDim }}>Engine not installed (~26 MB)</span>
+          <button
+            type="button"
+            onClick={() => postAndRefresh(installPiperEngine)}
+            disabled={busy}
+            style={{ ...smallBtn, opacity: busy ? 0.5 : 1 }}
+          >
+            {busy && job.kind === "engine" ? `Installing ${job.percent}%` : "Install engine"}
+          </button>
+        </div>
+      )}
+
+      {/* The download in flight. Given its own row rather than a number on the
+          button it was started from: on a domestic connection 63 MB takes
+          minutes, and for all of them this is the only thing on the page that
+          is happening. */}
+      {busy && (
+        <div style={{ marginBottom: 12 }}>
+          <div style={{
+            display: "flex", justifyContent: "space-between",
+            alignItems: "baseline", gap: 8, marginBottom: 5,
+          }}>
+            <span style={{ fontSize: 11.5, color: C.text }}>
+              {job.kind === "engine"
+                ? "Installing engine…"
+                : `Downloading ${voiceLabel(st, job.target)}…`}
+            </span>
+            <span style={{
+              fontSize: 11, color: C.textMuted,
+              fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap",
+            }}>
+              {job.bytes_total > 0 && `${mb(job.bytes_done)} / ${mb(job.bytes_total)} MB · `}
+              {job.percent}%
+            </span>
+          </div>
+          <div style={{
+            height: 4, borderRadius: 2, overflow: "hidden",
+            background: "var(--lm-border, #2a2a2a)",
+          }}>
+            <div style={{
+              height: "100%", width: `${Math.max(2, job.percent)}%`,
+              background: C.green, transition: "width 0.4s ease",
+            }} />
+          </div>
+          <div style={{ fontSize: 10.5, color: C.textMuted, marginTop: 5 }}>
+            Running on the device — you can leave this page or reload, it keeps going.
+          </div>
+        </div>
+      )}
+
+      {/* Step 2 — voices. Hidden until the engine exists: downloading a model
+          the device cannot load yet is 63 MB of wasted bandwidth. */}
+      {st.engine_installed && (
+        <>
+          <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 8 }}>
+            Voices are downloaded to the device. Each is 63–79 MB and stays offline once installed.
+          </div>
+          {catalog.map((v) => {
+            const downloading = busy && job.kind === "voice" && job.target === v.name;
+            return (
+              <div key={v.name} style={{
+                display: "flex", alignItems: "center", gap: 8, padding: "5px 0",
+                borderTop: "1px solid var(--lm-border, #2a2a2a)",
+              }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 12.5, color: C.text }}>{v.language}</div>
+                  <div style={{ fontSize: 10.5, color: C.textMuted }}>
+                    {/* Licence shown, obligation not: attribution is owed by
+                        whoever distributes the voice, not by the person
+                        switching it on here. CREDITS.md is what discharges it. */}
+                    {v.name} · {v.license}
+                  </div>
+                </div>
+                {v.installed && voice === v.name ? (
+                  // No Remove here: deleting the voice being spoken with would
+                  // drop the device to a fallback mid-sentence, or to silence
+                  // if it were the only one. Switch first, then remove.
+                  <button type="button" style={{ ...smallBtn, opacity: 0.5 }} disabled>In use</button>
+                ) : v.installed ? (
+                  <>
+                    <button type="button" onClick={() => onPickVoice(v.name)} style={smallBtn}>Use</button>
+                    {!onlyOneLeft && <button
+                      type="button"
+                      onClick={() => {
+                        if (confirmRemove !== v.name) { setConfirmRemove(v.name); return; }
+                        removeVoice(v.name);
+                      }}
+                      onBlur={() => setConfirmRemove((cur) => (cur === v.name ? "" : cur))}
+                      disabled={busy || unreachable}
+                      style={{
+                        ...smallBtn,
+                        color: confirmRemove === v.name ? C.red : C.textMuted,
+                        opacity: busy ? 0.5 : 1,
+                      }}
+                    >{confirmRemove === v.name ? "Confirm" : "Remove"}</button>}
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => postAndRefresh(() => installPiperVoice(v.name))}
+                    disabled={busy || unreachable}
+                    style={{ ...smallBtn, opacity: busy ? 0.5 : 1 }}
+                  >{downloading ? `${job.percent}%` : `Download ${v.size_mb} MB`}</button>
+                )}
+              </div>
+            );
+          })}
+        </>
+      )}
+
+      {unreachable && (
+        <div style={{ fontSize: 11.5, color: C.textMuted, marginTop: 8 }}>
+          Device is restarting — reconnecting…
+        </div>
+      )}
+      {notice && (
+        <div style={{ fontSize: 11.5, color: C.red, marginTop: 8 }}>{notice}</div>
+      )}
+      {job.error && (
+        <div style={{ fontSize: 11.5, color: C.red, marginTop: 8 }}>Last job failed: {job.error}</div>
+      )}
+    </div>
+  );
+}
+
+/** Bytes as decimal MB, matching the unit the catalogue quotes on the button.
+ *  Using MiB here instead would show 60.6 under a button that promised 64. */
+function mb(bytes: number): string {
+  return (bytes / 1e6).toFixed(1);
+}
+
+/** Human name for a voice being downloaded, falling back to its model id. */
+function voiceLabel(st: PiperStatus, name: string): string {
+  return st.catalog.find((c) => c.name === name)?.language || name;
+}
+
+const smallBtn: React.CSSProperties = {
+  fontSize: 11, padding: "4px 9px", borderRadius: 5, cursor: "pointer",
+  background: "var(--lm-surface, #222)", color: "var(--lm-text, #eee)",
+  border: "1px solid var(--lm-border, #333)", whiteSpace: "nowrap",
 };

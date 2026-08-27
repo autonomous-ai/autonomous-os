@@ -161,14 +161,146 @@ class AnimationService:
         # Tracking lock — stricter than hold_mode: absolutely no servo writes
         # from the animation loop, and in-progress recordings are dropped so
         # they don't fight the tracker or resume jerking when tracking ends.
-        # Set only by the tracker service.
-        self._tracking_active = False
+        #
+        # Two ways to hold it, because there are two kinds of owner:
+        #   * the flag, assigned directly (`svc._tracking_active = True`) by code
+        #     that owns the body for a bounded stretch — aim.servo_ownership.
+        #   * the counter, held by a WRITER for as long as its thread is alive.
+        #
+        # The counter exists because the flag alone described the wrong span.
+        # `_track_loop` set it on entry and cleared it on exit, but the thing
+        # actually writing the bus is `ServoFollower._worker`, which outlives
+        # that loop. Between the clear and the worker stopping, the lock read
+        # free while the follower was still writing every joint at 30fps.
+        #
+        # Device-traced 2026-08-25: five subsystems wrote elbow_pitch in one
+        # minute — the follower 130 times at a fixed goal, idle 37, gaze 32,
+        # look.aim 16. Gaze declines to move a body someone else owns, asked,
+        # was told the body was free, and had every correction overwritten
+        # 33ms later. It reported the servo as failing to reach its target.
+        self._tracking_flag = False
+        self._body_owners = 0
+        self._body_owner_lock = threading.Lock()
 
         # When True, idle recording finished and pose is held — loop sleeps longer to save CPU
         self._idle_settled = False
 
-    # P gain — match upstream default (16 for all). Higher values cause jerky motion.
-    _SERVO_PGAIN = {1: 16, 2: 16, 3: 16, 4: 16, 5: 16}
+    @property
+    def _tracking_active(self) -> bool:
+        """True while anything owns the body — a flag holder or a live writer."""
+        return self._tracking_flag or self._body_owners > 0
+
+    @_tracking_active.setter
+    def _tracking_active(self, value: bool) -> None:
+        # Assignment sets the FLAG only. It cannot release a writer that is still
+        # running, which is what `_track_loop` clearing it used to do.
+        self._tracking_flag = bool(value)
+
+    # Goal_Speed register on the STS3215. 0 means "no limit".
+    _GOAL_SPEED_REG = 46
+    # What the servos behave as WITHOUT this register ever being written. They
+    # read 0 (no limit) but move as if capped — device-measured, base_yaw does
+    # 16 deg/s untouched and 115 deg/s straight after writing that same 0 back.
+    # So "put it back how it was" cannot be done by writing 0; it needs the
+    # value that reproduces the original pace. 0.062 deg/s per unit measured,
+    # so ~175 is the ~16 deg/s the arm has always run at.
+    @property
+    def UNWRITTEN_SPEED_EQUIVALENT(self) -> int:
+        """What base_yaw rests at — the same value startup writes. 0 = no cap."""
+        return self._SERVO_REST_SPEED.get(1, 0)
+
+    def set_joint_speed(self, motor_name: str, speed: int) -> bool:
+        """Cap one joint's velocity, or lift the cap with 0. Never raises.
+
+        Deliberately not applied at startup for every joint: writing it there
+        would change how the whole robot moves — idle, emotions, every recorded
+        animation — which is a far larger decision than any one caller should
+        make on its own. Callers that need a particular pace set it around their
+        own work and put it back.
+        """
+        try:
+            with self.bus_lock:
+                motor = self.robot.bus.motors.get(motor_name)
+                if motor is None:
+                    return False
+                self.robot.bus.packet_handler.write2ByteTxRx(
+                    self.robot.bus.port_handler, motor.id,
+                    self._GOAL_SPEED_REG, int(speed),
+                )
+            return True
+        except Exception as e:
+            logger.warning("could not set %s speed to %s: %s", motor_name, speed, e)
+            return False
+
+    def acquire_body(self) -> None:
+        """Claim the body for as long as the caller keeps writing to it.
+
+        For owners whose lifetime is a THREAD rather than a block: the follow
+        worker holds this from the moment it starts until it stops, so the lock
+        covers every frame it writes rather than only the loop that spawned it.
+        Re-entrant by count, so nested or overlapping owners each release once.
+        """
+        with self._body_owner_lock:
+            self._body_owners += 1
+
+    def release_body(self) -> None:
+        with self._body_owner_lock:
+            self._body_owners = max(0, self._body_owners - 1)
+
+    # P gain — upstream default is 16 for all. Higher values cause jerky motion,
+    # so this stays at 16 except where a joint has been measured to need more.
+    #
+    # elbow_pitch (3) is the exception. It carries the most gravity torque of any
+    # joint (the whole forearm plus head), and with P=16 and no integral term the
+    # commanded torque — proportional to error — could not overcome gravity plus
+    # static friction for a SMALL error. It did not move a little; it did not move
+    # at all. Device-measured 2026-08-25, lifting the elbow, 3 trials each:
+    #
+    #                  +3 deg    +6 deg   +10 deg
+    #   P=16 I=0        0/3       2/3       3/3
+    #   P=32 I=10       3/3       3/3       3/3
+    #
+    # Which is why the servo page always looked fine — a slider drag is a big
+    # move, comfortably over the threshold — while gaze, whose corrections are
+    # 6-13 deg, sat in the dead band and silently did nothing for an afternoon.
+    # wrist_pitch (5) joined elbow_pitch (3) once it started carrying a real
+    # share of the vertical correction. Same failure, same fix: it sat at +9.7
+    # with ~43 deg of travel above it, was asked for 3 deg, and did not move.
+    # Not a limit — the deadband. base_pitch (2) is deliberately left alone; it
+    # lands every ask it is given, and adding integral to a joint that already
+    # works risks hunting for no gain.
+    _SERVO_PGAIN = {1: 16, 2: 16, 3: 32, 4: 16, 5: 32}
+
+    # I gain — 0 everywhere by default, which is what the servos ship with. An
+    # integral term is what lets a joint keep pushing on a small error instead of
+    # settling for whatever P alone can deliver, so it is the half of the fix that
+    # addresses stiction rather than droop. Only elbow_pitch has been measured to
+    # need it; the other joints are left alone rather than retuned on a guess.
+    _SERVO_IGAIN = {3: 10, 5: 10}
+
+    # Resting Goal_Speed, written at startup so a joint the search retunes always
+    # starts from a known value. 0 means NO velocity limit.
+    #
+    # It has to be 0 rather than a number that looks like the old pace. Untouched,
+    # this register imposes no cap at all — base_yaw merely crossed a LARGE error
+    # slowly, because of its P gain, while still following small steps as fast as
+    # it liked. Animations are exactly small steps at 30fps, so any real cap
+    # throttles them. A first attempt used 175, chosen because it reproduced the
+    # ~20 deg/s seen on a point-to-point move, and that turned out to clamp idle
+    # and every emotion to a crawl — a global slowdown, from a value picked to be
+    # a no-op.
+    #
+    # There is no setting that reproduces "never written": writing the register
+    # at all clears whatever the servo powers up with (16 deg/s untouched, 115
+    # after writing the same 0 back). So the choice is cap-everything or
+    # cap-nothing, and animations need cap-nothing.
+    #
+    # The search still caps ITSELF to ~80 deg/s while sweeping, which against an
+    # uncapped base is a reduction rather than a licence.
+    #
+    # Only base_yaw, because only base_yaw is ever retuned. A joint nobody
+    # touches needs no backstop.
+    _SERVO_REST_SPEED = {1: 0}
 
     def _configure_servos_raw(self, energize: bool = True):
         """Configure servos directly via scservo_sdk, bypassing lerobot.
@@ -190,6 +322,8 @@ class AnimationService:
             for motor_name, motor_obj in self.robot.bus.motors.items():
                 sid = motor_obj.id
                 pgain = self._SERVO_PGAIN.get(sid, 32)
+                igain = self._SERVO_IGAIN.get(sid, 0)
+                rest_speed = self._SERVO_REST_SPEED.get(sid)
                 # Ping first
                 _, result, _ = pk.ping(ph, sid)
                 if result != COMM_SUCCESS:
@@ -198,12 +332,21 @@ class AnimationService:
                 pk.write1ByteTxRx(ph, sid, 40, 0)   # Torque_Enable = 0
                 pk.write1ByteTxRx(ph, sid, 33, 0)   # Operating_Mode = position
                 pk.write1ByteTxRx(ph, sid, 21, pgain)  # P_Coefficient
-                pk.write1ByteTxRx(ph, sid, 23, 0)   # I_Coefficient
+                pk.write1ByteTxRx(ph, sid, 23, igain)  # I_Coefficient
                 pk.write1ByteTxRx(ph, sid, 22, 32)  # D_Coefficient
+                # See _SERVO_REST_SPEED: clears a cap a killed sweep left behind.
+                # Outside the energize gate on purpose: this is configuration,
+                # like the gains above it, and a device that restarted asleep
+                # must still come back with a known speed rather than whatever
+                # cap a killed sweep left in the register.
+                if rest_speed is not None:
+                    pk.write2ByteTxRx(ph, sid, self._GOAL_SPEED_REG, rest_speed)
                 if energize:
                     pk.write1ByteTxRx(ph, sid, 40, 1)   # Torque_Enable = 1
                 logger.info(
-                    f"{motor_name} (ID {sid}): P={pgain}, torque {'ON' if energize else 'OFF (asleep)'}"
+                    f"{motor_name} (ID {sid}): P={pgain}, I={igain}"
+                    + (f", speed={rest_speed}" if rest_speed is not None else "")
+                    + f", torque {'ON' if energize else 'OFF (asleep)'}"
                 )
 
     def start(self, skip_wake: bool = False):

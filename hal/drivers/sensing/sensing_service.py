@@ -337,6 +337,9 @@ class SensingService:
             if cur_ts - last < cd:
                 return
 
+        if event_type == "presence.enter":
+            self._grant_wakeword_focus_for_presence(message)
+
         # Collect all images to save (single image or list)
         frames = images or []
 
@@ -386,3 +389,27 @@ class SensingService:
                 self._last_event_time[event_type] = cur_ts
         except requests.RequestException as e:
             logger.warning("[sensing] Failed to send event to the OS server: %s", e)
+
+    @staticmethod
+    def _grant_wakeword_focus_for_presence(message: str) -> None:
+        """Let a newly recognized person stand in for the wake phrase.
+
+        Face perception marks enrolled identities in its stable event summary
+        as ``friend (<name>)``. Stranger-only events remain agent-visible but
+        only open the voice gate when ``HAL_PRESENCE_WAKE_STRANGERS`` opts into
+        guest-first conversation. The voice service retains its normal no-op
+        behavior when wake words are off, follow-up focus is disabled, or the
+        microphone pipeline is unavailable.
+        """
+        if "friend (" not in message.lower() and not config.PRESENCE_WAKE_STRANGERS:
+            logger.info("[sensing] stranger-only presence.enter — wake focus not granted")
+            return
+        try:
+            from hal import app_state as state
+
+            voice = state.voice_service
+            if voice is not None and hasattr(voice, "grant_wakeword_focus"):
+                voice.grant_wakeword_focus("presence.enter")
+        except Exception as e:
+            # Presence reporting must continue even when voice is unavailable.
+            logger.warning("[sensing] presence.enter wake-focus grant failed: %s", e)

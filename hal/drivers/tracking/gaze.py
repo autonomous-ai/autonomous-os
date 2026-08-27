@@ -13,22 +13,23 @@ seam the button uses. Nothing downstream of the gate changes.
 Two design points worth keeping straight:
 
   * ORDER. People turn BEFORE they speak, never after. Waiting for the mic and
-    then looking would arrive after the gesture is over, and — worse — could
-    never see the TRANSITION from looking away to looking here, which is the
-    whole signal. So the camera samples continuously into a short ring buffer
-    and speech normally triggers a read BACKWARDS through it. This mirrors what
-    the mic already does with its own pre-roll: it records into a lookback and
-    recovers the ~640 ms before the trigger, or it would lose the start of every
-    sentence. If no usable face evidence exists at all, the watcher first
-    restores the remembered pose and the completed same utterance gets one
-    constrained recovery check.
+    then looking would arrive after the gesture is over. So the camera samples
+    continuously into a short ring buffer and speech triggers a read BACKWARDS
+    through it. This mirrors what the mic already does with its own pre-roll: it
+    records into a lookback and recovers the ~640 ms before the trigger, or it
+    would lose the start of every sentence. If no usable face evidence exists at
+    all, the watcher first restores the remembered pose and the completed same
+    utterance gets one constrained recovery check.
 
-  * PRESENCE IS NOT THE SIGNAL. The user sits beside this lamp all day, so "a
-    person is visible" is true almost always and gates nothing. "A face is
-    visible" is barely better — a face turned to a monitor still detects. The
-    signal is head ORIENTATION, and the acceptance cone has to be tight enough
-    to reject the common posture of talking to a colleague with the torso still
-    square to the desk.
+  * THE SIGNAL IS ORIENTATION, NOT A GESTURE. An earlier design required a
+    measured TRANSITION from looking away to looking here, on the grounds that
+    presence alone gates nothing. It was removed: demanding a deliberate turn
+    made the opener unusable, because a user sitting square to their desk and
+    already looking at the lamp was refused on every utterance — device log
+    2026-08-26 — and "turn your head first" is a worse instruction than the wake
+    phrase it replaces. So what is measured is head ORIENTATION during the
+    window before speech, with an acceptance cone tight enough to reject the
+    common posture of talking to a colleague with the torso square to the desk.
 
 Head yaw is estimated from the five landmarks YuNet already returns, so no
 second model is loaded and no extra inference is run.
@@ -62,12 +63,203 @@ _samples_lock = threading.Lock()
 _last_grant_t: float = 0.0
 # When a usable face was last seen, and when we last turned to look for one.
 _last_face_t: float = 0.0
+# When anything attributable to the user was last measured — a face OR a person
+# box. Deliberately separate from _last_face_t, which stays face-only because
+# the wake gate reads it and a torso says nothing about which way a head is
+# turned. This one answers "were they there", not "were they looking".
+_last_subject_t: float = 0.0
 _last_repoint_t: float = 0.0
+# Vertical offset of the last face seen, as a fraction of frame height: negative
+# means it sat above the centre. None when nothing measurable was in frame.
+_last_dy_frac: Optional[float] = None
+# Whether that offset came from a real face or from the coarse person fallback.
+_last_dy_from_face: bool = False
+_last_pitch_t: float = 0.0
+# When a repoint moved the head, and what _last_face_t was at that moment.
+# Non-zero means a verdict is owed to the bearing — see _verify_repoint.
+_repoint_pending_t: float = 0.0
+_repoint_subject_t_before: float = 0.0
+# Consecutive corrections driven by the fallback rather than by a face.
+_blind_pitch_steps: int = 0
+# True once a climb has spent its budget, so the give-up runs ONCE rather than
+# on every pass. Cleared only by a real face — see _return_to_known_height.
+_climb_gave_up: bool = False
 # A VAD-confirmed utterance found no recent usable face. The watcher consumes
 # this request and restores the remembered pose without blocking the mic loop;
 # the completed utterance gets one final gaze check after the camera settles.
 _speech_repoint_requested = threading.Event()
 _speech_repoint_requested_t: float = 0.0
+
+# (monotonic timestamp, vertical offset as a fraction of frame height, whether
+# it came from a real face). Bounded by GAZE_PITCH_WINDOW_S, and cleared
+# whenever the camera moves — see record_dy.
+_dy_samples: Deque[Tuple[float, float, bool]] = deque()
+_dy_lock = threading.Lock()
+
+# Newest sampled frame and the box measured in it, kept ONLY so a correction can
+# show what it acted on. One downscaled frame, replaced each sample.
+_last_frame: Any = None
+_last_box: Any = None
+
+# Must begin with "sensing_" to be servable by the monitor snapshot route.
+SNAPSHOT_CATEGORY: str = "sensing_gaze"
+
+
+def _save_snapshot(label: str) -> Optional[str]:
+    """Write the frame this correction was computed from, annotated. Never raises.
+
+    Mirrors bearing_sampler._save_snapshot so both debug views read identically:
+    green box on the detection, red line at frame centre.
+    """
+    if not getattr(config, "GAZE_SNAPSHOT_ENABLED", True) or _last_frame is None:
+        return None
+    try:
+        import os
+
+        from hal.drivers.tracking.look_debug import encode_annotated
+
+        # both_axes: this loop servos on dy, so the horizontal pair is the
+        # one that shows the error being corrected. The aim's view stays
+        # vertical-only — it can only move yaw.
+        jpg = encode_annotated(_last_frame, _last_box, label, both_axes=True)
+        if jpg is None:
+            return None
+        root = getattr(config, "SNAPSHOT_PERSIST_DIR", "/var/lib/hal/snapshots")
+        directory = os.path.join(root, SNAPSHOT_CATEGORY)
+        os.makedirs(directory, exist_ok=True)
+        # Timestamped, so lexical order is time order and pruning is a slice.
+        name = time.strftime("%Y%m%d-%H%M%S") + ".jpg"
+        path = os.path.join(directory, name)
+        with open(path, "wb") as f:
+            f.write(jpg)
+        keep = int(getattr(config, "GAZE_SNAPSHOT_KEEP", 40) or 0)
+        if keep > 0:
+            stale = sorted(
+                (f for f in os.listdir(directory) if f.endswith(".jpg")),
+                reverse=True,
+            )[keep:]
+            for old in stale:
+                try:
+                    os.unlink(os.path.join(directory, old))
+                except OSError:
+                    pass
+        return path
+    except Exception as e:
+        logger.debug("[gaze] snapshot skipped: %s", e)
+        return None
+
+
+def record_dy(dy: Optional[float], from_face: bool,
+              now: Optional[float] = None) -> None:
+    """Fold one vertical-offset measurement into the pitch window.
+
+    Unmeasurable frames are dropped rather than recorded as zero: "no face this
+    frame" is not "the face is centred", and feeding it in would drag the median
+    toward the dead zone and stall the correction.
+    """
+    if dy is None:
+        return
+    t = time.monotonic() if now is None else now
+    with _dy_lock:
+        _dy_samples.append((t, float(dy), bool(from_face)))
+        cutoff = t - max(1.0, config.GAZE_PITCH_WINDOW_S)
+        while _dy_samples and _dy_samples[0][0] < cutoff:
+            _dy_samples.popleft()
+
+
+_dx_samples: Deque[Tuple[float, float, bool]] = deque()
+_dx_lock = threading.Lock()
+_last_yaw_t: float = 0.0
+# When the watcher last looked around. In-memory only: a restart clears it, and
+# that is fine — a reboot is a reasonable moment to be allowed to search again.
+_last_sweep_t: float = 0.0
+
+
+def record_dx(dx: Optional[float], from_face: bool,
+              now: Optional[float] = None) -> None:
+    """Fold one horizontal-offset measurement into the pan window."""
+    if dx is None:
+        return
+    t = time.monotonic() if now is None else now
+    with _dx_lock:
+        _dx_samples.append((t, float(dx), bool(from_face)))
+        cutoff = t - max(1.0, config.GAZE_YAW_WINDOW_S)
+        while _dx_samples and _dx_samples[0][0] < cutoff:
+            _dx_samples.popleft()
+
+
+def discard_dx_samples() -> None:
+    """Drop the pan window — the offsets in it describe a pose already left."""
+    with _dx_lock:
+        _dx_samples.clear()
+
+
+def _dx_estimate(now: Optional[float] = None):
+    """``(median dx, n, span_s)`` over the pan window, or None.
+
+    Median for the same reason as dy: idle's own swing is periodic and roughly
+    symmetric, while a face leaving frame produces one-sided outliers a mean
+    would chase.
+    """
+    t = time.monotonic() if now is None else now
+    with _dx_lock:
+        rows = [r for r in _dx_samples if r[0] >= t - config.GAZE_YAW_WINDOW_S]
+    if len(rows) < config.GAZE_YAW_MIN_SAMPLES:
+        return None
+    span = rows[-1][0] - rows[0][0]
+    if span < config.GAZE_YAW_WINDOW_S * 0.8:
+        return None
+    values = sorted(r[1] for r in rows)
+    mid = len(values) // 2
+    med = (values[mid] if len(values) % 2
+           else (values[mid - 1] + values[mid]) / 2.0)
+    return med, len(rows), span
+
+
+def _dy_estimate(now: Optional[float] = None, *, prompt: bool = False):
+    """``(median dy, from_face, n, span_s)`` over the window, or None.
+
+    Median, not mean: idle's roll disturbance is periodic and roughly
+    symmetric, but a face leaving frame produces one-sided outliers, and a mean
+    would follow them.
+
+    Faces outrank the torso fallback outright rather than being averaged with
+    it — the fallback reports a fixed -0.5 whatever the real offset is, so
+    blending the two would corrupt a real measurement with a constant.
+    """
+    t = time.monotonic() if now is None else now
+    with _dy_lock:
+        rows = [r for r in _dy_samples if r[0] >= t - config.GAZE_PITCH_WINDOW_S]
+    if not rows:
+        return None
+    face_rows = [r for r in rows if r[2]]
+    use = face_rows if face_rows else rows
+    # `prompt` relaxes the window, and ONLY for torso evidence. The span and the
+    # median exist to average out noise in FACE offsets, which genuinely vary
+    # frame to frame. The torso path returns a fixed -0.5 every time, so eight of
+    # them spanning ten seconds say exactly what two of them say — the loop would
+    # be waiting out a safeguard against noise that cannot occur.
+    #
+    # It matters after a repoint, which discards the window because those offsets
+    # describe the pose the camera has just left. Without this the climb sat
+    # blind for ten seconds at the very moment it had been asked to look up.
+    relaxed = prompt and not face_rows
+    need = (config.GAZE_PITCH_PROMPT_MIN_SAMPLES if relaxed
+            else config.GAZE_PITCH_MIN_SAMPLES)
+    if len(use) < need:
+        return None
+    span = use[-1][0] - use[0][0]
+    if relaxed:
+        med = sorted(r[1] for r in use)[len(use) // 2]
+        return med, False, len(use), span
+    # A full period, not a biased arc of one: half a roll cycle's worth of
+    # samples has the disturbance's mean in it, not zero.
+    if span < config.GAZE_PITCH_WINDOW_S * 0.8:
+        return None
+    vals = sorted(v for _, v, _ in use)
+    mid = len(vals) // 2
+    med = vals[mid] if len(vals) % 2 else 0.5 * (vals[mid - 1] + vals[mid])
+    return med, bool(face_rows), len(use), span
 
 
 def head_yaw_deg(landmarks: Sequence[float]) -> Optional[float]:
@@ -217,6 +409,13 @@ def discard_samples() -> None:
     """
     with _samples_lock:
         _samples.clear()
+    # The vertical window too: every offset in it was measured from the pose the
+    # camera has just left, so a correction computed from them would be aimed at
+    # where the face used to sit. Clearing also spaces corrections apart — the
+    # loop cannot act again until a fresh window has refilled, which is the real
+    # gap between steps now, not GAZE_PITCH_COOLDOWN_S.
+    with _dy_lock:
+        _dy_samples.clear()
 
 
 def snapshot() -> List[Tuple[float, float, float, float]]:
@@ -260,14 +459,237 @@ def facing_ratio(now: Optional[float] = None) -> Tuple[float, int]:
     # Losing sight of someone entirely is still handled, just not by this ratio:
     # the denominator shrinks below GAZE_MIN_SAMPLES and the caller declines to
     # decide, which is the honest answer when nothing was seen.
+    return _ratio_between(samples, t - window, t)
+
+
+def _ratio_between(samples: List[Tuple[float, float, float, float]],
+                   lo: float, hi: float) -> Tuple[float, int]:
+    """``(fraction facing, samples examined)`` over ``[lo, hi]``."""
     measured = [
         s for s in samples
-        if s[0] >= t - window and s[1] != float("inf") and s[2] >= config.GAZE_MIN_FACE_PX
+        if lo <= s[0] <= hi and s[1] != float("inf") and s[2] >= config.GAZE_MIN_FACE_PX
     ]
     if not measured:
         return 0.0, 0
     facing = sum(1 for _, yaw, px, edge in measured if facing_lamp(yaw, px, edge))
     return facing / float(len(measured)), len(measured)
+
+
+def _headroom_from_person(frame: Any, detector: Any) -> Tuple[Optional[float], bool]:
+    """``(vertical offset to correct by, whether a person was seen at all)``.
+
+    The second half exists because "no face" and "nobody there" are different
+    answers and were being collapsed into one. A person standing at the
+    remembered bearing IS the user; the camera is simply aimed too low to see
+    their face. Scoring that as "found nobody" punished a bearing for being
+    right — three of them dropped the estimate while the user sat in front of
+    the lamp the whole time.
+
+    Returns a negative fraction (meaning "tilt up") when a person is visible
+    with their head cut off by the top of the frame, else None. Deliberately
+    coarse: this only has to get a head back INTO frame, at which point the
+    face path takes over with a real measurement.
+    """
+    if frame is None or detector is None:
+        return None, False
+    try:
+        box = detector.detect(frame, "person", strict=False,
+                              min_conf=config.LOOK_AIM_MIN_CONFIDENCE)
+    except TypeError:
+        try:
+            box = detector.detect(frame, "person", strict=False)
+        except Exception:
+            return None, False
+    except Exception:
+        return None, False
+    if box is None:
+        return None, False
+    _, y, _, h = box
+    frame_h = float(frame.shape[0]) or 1.0
+    if float(h) / frame_h < config.LOOK_AIM_MIN_PERSON_HEIGHT_FRAC:
+        return None, False  # too far away to be the person at this desk
+    # Touching the top edge means the body continues past it — the head is
+    # outside the frame, above.
+    if float(y) > 2.0:
+        # A person, plainly there, just not clipped by the top edge — so their
+        # head is already in frame and climbing would aim at the ceiling.
+        return None, True
+    # A torso filling the frame with no face above it does mean the camera is
+    # pointing too low — heads sit above bodies, and this lamp sits below head
+    # height on a desk. What made that inference dangerous was not the
+    # inference: it was that it stays true no matter how far the neck has
+    # already travelled, so acting on it repeatedly is a loop rather than a
+    # correction (device-observed: wrist_pitch -89.7 -> -34.6 in eight steps,
+    # still climbing). The bound lives in the caller, as a budget of blind
+    # steps, which is where a "keep going until you can see" search belongs.
+    return -0.5, True
+
+
+# Every joint the pitch loop steers. All three are vertical, so all three are
+# what a remembered (and therefore stale) posture must not be allowed to undo.
+PITCH_JOINTS = ("base_pitch.pos", "elbow_pitch.pos", "wrist_pitch.pos")
+
+# Joints that were commanded somewhere and did not arrive.
+#   joint -> (position it stopped at, +1 blocked going up / -1 going down, rest until)
+# Emptied as each entry expires, so a joint is only ever benched temporarily.
+_pitch_stalls: Dict[str, Tuple[float, float, float]] = {}
+
+
+def _pitch_travel_limits(now: float) -> Tuple[Dict[str, float], Dict[str, float]]:
+    """Narrowed travel for joints that recently failed to arrive.
+
+    A stalled joint is benched rather than written off: the same elbow that
+    stopped at +17.4 reached +44 three times running after 60s of rest, so the
+    limit is a rest period, not a permanent verdict.
+    """
+    travel_min: Dict[str, float] = {}
+    travel_max: Dict[str, float] = {}
+    for joint, (stopped_at, direction, until) in list(_pitch_stalls.items()):
+        if now >= until:
+            del _pitch_stalls[joint]
+            logger.info("[gaze] %s rested, allowed back into the correction", joint)
+            continue
+        if direction > 0:
+            travel_max[joint] = stopped_at - config.GAZE_PITCH_STALL_BACKOFF_DEG
+        else:
+            travel_min[joint] = stopped_at + config.GAZE_PITCH_STALL_BACKOFF_DEG
+    return travel_min, travel_max
+
+
+def _verify_landed(svc: Any, target: Dict[str, float], now: float,
+                   bench: bool = True) -> Dict[str, float]:
+    """Read the pose back and bench any joint that did not get where it was sent.
+
+    Without this the loop cannot tell a completed correction from a failed one,
+    so it re-sends the same unreachable target every cycle — which is precisely
+    what heats a servo into refusing. Returns {joint: where it actually stopped}
+    for whatever came up short.
+    """
+    # Wait for the arm to STOP, not for a fixed interval. elbow_pitch is heavy
+    # and gravity-loaded and takes about a second to cross ten degrees, so the
+    # 0.35s flat sleep this used to do was reading it mid-glide and calling a
+    # move in progress a move that failed.
+    try:
+        after = svc.get_positions()
+    except Exception as e:
+        logger.debug("[gaze] could not verify the correction landed: %s", e)
+        return {}
+    # Poll until it ARRIVES, or until the cap. Deliberately not "until it stops
+    # moving": a servo has not started moving in the first few milliseconds after
+    # its goal is written, so a stopped-looking pair of reads is the normal state
+    # BEFORE the move as well as after it. That exit fired one poll in, 0.16s
+    # after the goal was written — device-traced, gaze asked elbow_pitch for
+    # +30.9 from +17.4 and declared failure while the joint was still
+    # accelerating. Reaching it needed ~24 real degrees, or 150 deg/s. So it
+    # benched a healthy joint on every correction, took it out of the
+    # allocation, and made the thing it was measuring worse.
+    deadline = time.monotonic() + config.GAZE_PITCH_SETTLE_S
+    while True:
+        if all(
+            abs(after.get(j, want) - want) <= config.GAZE_PITCH_LAND_TOL_DEG
+            for j, want in target.items()
+        ):
+            break
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.1)
+        try:
+            after = svc.get_positions()
+        except Exception:
+            break
+    short: Dict[str, float] = {}
+    for joint, want in target.items():
+        got = after.get(joint)
+        if got is None:
+            continue
+        gap = float(want) - float(got)
+        if abs(gap) <= config.GAZE_PITCH_LAND_TOL_DEG:
+            # It moved freely, so any earlier verdict about it is stale.
+            _pitch_stalls.pop(joint, None)
+            continue
+        short[joint] = float(got)
+        # `bench` is off for the pan loop: _pitch_stalls feeds the PITCH travel
+        # limits, and filing base_yaw or wrist_roll in there would be a category
+        # error even though nothing would read it.
+        if bench:
+            _pitch_stalls[joint] = (
+                float(got), 1.0 if gap > 0 else -1.0,
+                now + config.GAZE_PITCH_STALL_REST_S,
+            )
+    if short and bench:
+        logger.warning(
+            "[gaze] correction did not land: %s — resting %s for %.0fs and "
+            "correcting with the other joints",
+            ", ".join(
+                f"{j.split('.')[0]} asked {target[j]:+.1f} reached {at:+.1f}"
+                for j, at in sorted(short.items())
+            ),
+            " and ".join(sorted(j.split(".")[0] for j in short)),
+            config.GAZE_PITCH_STALL_REST_S,
+        )
+    return short
+def _conversation_open() -> bool:
+    """Whether a wake-word follow-up window is currently open.
+
+    The framing loops MEASURE all the time — the wake gate reads the window
+    before speech, so the samples have to be there already — but they only MOVE
+    while a conversation is open. Re-aiming an empty room is the lamp fidgeting,
+    and on this arm it cannot even persist: idle plays absolute frames and pins
+    base_yaw at about -2.4 (1.58 deg of swing in the whole recording), so a pan
+    correction is overwritten by the next idle frame and re-measured, forever.
+    Device-observed 2026-08-26: thirteen pan corrections in twenty minutes with
+    nobody speaking, alternating direction, every one starting from idle's own
+    band.
+
+    Released is therefore free: stop correcting and idle reclaims the arm by
+    itself within a frame. There is nothing to restore and no ownership to drop.
+
+    Fails CLOSED when voice is unavailable — no conversation can be open on a
+    device with no voice service, and guessing "yes" would restore exactly the
+    unasked movement this exists to stop.
+    """
+    try:
+        import hal.app_state as state
+
+        voice = getattr(state, "voice_service", None)
+        check = getattr(voice, "conversation_focus_active", None)
+        return bool(check()) if callable(check) else False
+    except Exception as e:
+        logger.debug("[gaze] conversation check skipped: %s", e)
+        return False
+
+
+_conversation_was_open: Optional[bool] = None
+
+
+def _note_conversation_edge() -> None:
+    """Log the moment the framing window opens or closes.
+
+    voice_service logs the GRANT ("wake-word focus granted for 60s"), but the
+    window expires lazily — `is_active()` simply starts returning False, with no
+    timer and no event to hook. So "when did the lamp stop framing me" had no
+    answer in the log except an inference from a throttled decline line that
+    only prints when a correction happened to be wanted; a user sitting neatly
+    centred could watch the window close and see nothing at all.
+
+    Edge-triggered, so a quiet lamp costs one line per conversation rather than
+    one per tick. The FIRST observation is recorded silently: the watcher
+    starting is not a transition, and announcing "closed" at every boot would
+    put a line in the log that means nothing happened.
+    """
+    global _conversation_was_open
+    open_now = _conversation_open()
+    if open_now == _conversation_was_open:
+        return
+    first = _conversation_was_open is None
+    _conversation_was_open = open_now
+    if first:
+        return
+    logger.info(
+        "[gaze] conversation %s — framing %s",
+        "open" if open_now else "closed",
+        "live" if open_now else "released (idle has the arm)",
+    )
 
 
 def following_a_face(svc: Any) -> bool:
@@ -312,6 +734,80 @@ def idle_breathing(svc: Any) -> bool:
 
 
 _skips_logged: set = set()
+
+# Last time each pitch-decline reason was logged, so the loop can say why it is
+# NOT correcting without a line every 170ms.
+_pitch_quiet_logged: Dict[str, float] = {}
+PITCH_QUIET_LOG_EVERY_S: float = 20.0
+
+
+def _pitch_quiet(reason: str, now: float, detail: str = "") -> None:
+    """Say why no correction fired. Throttled per reason.
+
+    Every early return in _maybe_pitch used to be silent, so "the lamp did not
+    move" had seven indistinguishable causes and diagnosing it meant guessing.
+    A loop that declines for a reason it will not state is a loop nobody can
+    debug from the field.
+    """
+    last = _pitch_quiet_logged.get(reason, 0.0)
+    if (now - last) < PITCH_QUIET_LOG_EVERY_S:
+        return
+    _pitch_quiet_logged[reason] = now
+    logger.info("[gaze] no pitch correction: %s%s", reason, f" ({detail})" if detail else "")
+
+
+_sweep_quiet_logged: Dict[str, float] = {}
+# The whole minute last reported while waiting out a sweep cooldown. The wait is
+# minutes long and the watcher passes several times a second, so throttling by
+# TIME still gave three identical "1 min ago" lines before anything changed.
+# Keyed on the number itself, the line appears once per minute and each one says
+# something new.
+_sweep_wait_minute: int = -1
+
+
+def _sweep_quiet(reason: str, now: float, detail: str = "") -> None:
+    """Say why the watcher is not looking around. Throttled per reason."""
+    last = _sweep_quiet_logged.get(reason, 0.0)
+    if (now - last) < PITCH_QUIET_LOG_EVERY_S:
+        return
+    _sweep_quiet_logged[reason] = now
+    logger.info("[gaze] not looking around: %s%s", reason, f" ({detail})" if detail else "")
+
+
+_repoint_quiet_logged: Dict[str, float] = {}
+
+
+def _repoint_quiet(reason: str, now: float, detail: str = "") -> None:
+    """Say why the lamp did not turn to the remembered bearing.
+
+    Every guard in _maybe_repoint returned False without a word, so
+    "reacquire unavailable" had six indistinguishable causes and telling them
+    apart meant reading the source and guessing which one fired. The pitch and
+    pan loops already learned this lesson; this one had not.
+    """
+    last = _repoint_quiet_logged.get(reason, 0.0)
+    if (now - last) < PITCH_QUIET_LOG_EVERY_S:
+        return
+    _repoint_quiet_logged[reason] = now
+    logger.info("[gaze] no repoint: %s%s", reason, f" ({detail})" if detail else "")
+
+
+_yaw_quiet_logged: Dict[str, float] = {}
+
+
+def _yaw_quiet(reason: str, now: float, detail: str = "") -> None:
+    """Say why no pan fired. Throttled per reason, exactly as _pitch_quiet is.
+
+    Written at the same time as the pan loop rather than after a field
+    investigation, because the pitch loop taught this the expensive way: seven
+    silent early returns meant "the lamp did not move" had seven
+    indistinguishable causes.
+    """
+    last = _yaw_quiet_logged.get(reason, 0.0)
+    if (now - last) < PITCH_QUIET_LOG_EVERY_S:
+        return
+    _yaw_quiet_logged[reason] = now
+    logger.info("[gaze] no pan: %s%s", reason, f" ({detail})" if detail else "")
 
 
 def _skip(reason: str) -> str:
@@ -395,12 +891,58 @@ def _sample_once() -> Optional[str]:  # noqa: C901
     finally:
         aim._detector_lock_use.release()
 
+    global _last_dy_frac, _last_dy_from_face, _last_frame, _last_box, _last_subject_t
     if face is None:
+        # No face — but that is exactly the state where the camera is most
+        # likely pointing too low, and correcting it needs SOME vertical
+        # reference. A person box gives one: it says nothing about which way
+        # the head faces, so it can never feed the gate, but a torso whose top
+        # is cut off by the frame edge says the head is above the frame.
+        #
+        # Without this the correction dead-ends. It takes several bounded steps
+        # to undo a large offset, and the first step can push a barely-visible
+        # face out of view entirely — after which nothing is measurable and the
+        # camera stays wrong forever. Device-observed: one correction fired
+        # (-67.1 -> -59.1), then every later sample read `-`.
+        _last_dy_frac, saw_person = _headroom_from_person(frame_or_small, detector)
+        _last_dy_from_face = False
+        if saw_person:
+            # Found at this pose, even without a face. That is what a repoint
+            # asked, and answering it "nobody" cost the bearing three strikes.
+            _last_subject_t = time.monotonic()
+        if _last_dy_frac is None:
+            # No face AND no clipped torso — nothing vertical to measure. This
+            # is the state a user who has stood right out of frame produces,
+            # and it is why the buffer can stay empty while sampling looks fine.
+            # Two different answers, and collapsing them hid the interesting
+            # one: a person standing there whose head is already in frame is
+            # not the same as an empty room.
+            _pitch_quiet(
+                "nothing measurable in frame", time.monotonic(),
+                "a person is visible but not clipped by the top edge, so their "
+                "head is already in frame" if saw_person
+                else "no face and no person at all",
+            )
+        record_dy(_last_dy_frac, False)
+        _last_frame, _last_box = frame_or_small, None
         record_sample(None, 0.0, 0.0)
         return None
     (fx, fy, fw, fh), landmarks = face
     frame_w = float(small.shape[1]) or 1.0
     frame_h = float(small.shape[0]) or 1.0
+    # Negative when the face sits above the frame centre — the case that means
+    # the camera is pointing too low to see who is talking.
+    _last_dy_frac = ((fy + fh / 2.0) - frame_h / 2.0) / frame_h
+    _last_dy_from_face = True
+    record_dy(_last_dy_frac, True)
+    # Signed horizontal offset, from the same box, for the pan correction.
+    # `edge` below is the ABSOLUTE version of this and cannot be used for it:
+    # which side the face is on is the whole question when deciding which way
+    # to turn. Torso has no horizontal fallback — a person box clipped by the
+    # LEFT edge says nothing about where their face is within it.
+    record_dx(((fx + fw / 2.0) - frame_w / 2.0) / frame_w, True)
+    _last_frame, _last_box = small, (fx, fy, fw, fh)
+
     # Distance of the face centre from the frame centre, 0 at the middle and 1
     # at either edge — how far into the lens distortion this sample sits.
     edge = min(1.0, abs((fx + fw / 2.0) - frame_w / 2.0) / (frame_w / 2.0))
@@ -411,7 +953,7 @@ def _sample_once() -> Optional[str]:  # noqa: C901
         # matter: background colleagues fail the size floor, and a user drifting
         # to the edge used to keep resetting this clock while sliding out of
         # view, so the lamp never turned to keep them.
-        _last_face_t = time.monotonic()
+        _last_face_t = _last_subject_t = time.monotonic()
     # A face whose eyes sit outside the frame is a face this camera is pointed
     # too low at, not a face turned away. Record it as unmeasured rather than
     # letting the clamp report it as a profile and vote against facing.
@@ -422,6 +964,142 @@ def _sample_once() -> Optional[str]:  # noqa: C901
     )
     record_sample(yaw, float(fh), edge)
     return None
+
+
+def _maybe_yaw(now: float) -> None:
+    """Turn toward a face sitting off to one side.
+
+    The horizontal twin of _maybe_pitch, and it inherits that loop's scars:
+    own the body for the move, and check the correction actually arrived
+    instead of trusting that it did.
+
+    Deliberately lazier than the pitch loop. Vertical framing fails in one
+    direction — a user stands and leaves the top of frame — so it is worth
+    chasing. Horizontal drift is usually someone shifting in a chair, and a lamp
+    that swings after every lean is exactly the twitchiness this whole watcher
+    is damped to avoid.
+    """
+    global _last_yaw_t
+    if not config.GAZE_YAW_ENABLED:
+        return
+    if now - _last_yaw_t < config.GAZE_PITCH_COOLDOWN_S:
+        return   # cooling down; not worth a line every frame
+
+    est = _dx_estimate(now)
+    if est is None:
+        with _dx_lock:
+            have = len(_dx_samples)
+        _yaw_quiet(
+            "window not filled", now,
+            f"{have} samples, need {config.GAZE_YAW_MIN_SAMPLES} "
+            f"spanning {config.GAZE_YAW_WINDOW_S * 0.8:.0f}s",
+        )
+        return
+    dx, n_dx, span_dx = est
+    if abs(dx) <= config.GAZE_YAW_DEAD_ZONE_FRAC:
+        _yaw_quiet(
+            "already centred enough", now,
+            f"dx={dx * 100:+.0f}% within +/-{config.GAZE_YAW_DEAD_ZONE_FRAC * 100:.0f}%",
+        )
+        return
+    # Measured, worth acting on — but only while someone is actually talking to
+    # the lamp. See _conversation_open.
+    if not _conversation_open():
+        _yaw_quiet("no conversation open", now, f"dx={dx * 100:+.0f}%")
+        return
+
+    import hal.app_state as state
+
+    from hal.drivers.tracking import servo_follow
+
+    svc = getattr(state, "animation_service", None)
+    if svc is None or getattr(svc, "_tracking_active", False):
+        _yaw_quiet("body owned by something else", now)
+        return
+    if getattr(svc, "_music_playing", False):
+        _yaw_quiet("music has the body", now)
+        return
+    try:
+        current = svc.get_positions()
+    except Exception as e:
+        logger.debug("[gaze] pan skipped, no pose: %s", e)
+        return
+
+    # dx > 0 means the face sits RIGHT of centre, and increasing either pan
+    # joint turns the camera right — device-verified by capture on both joints,
+    # so the step carries dx's sign unchanged.
+    step = dx * config.GAZE_YAW_DEG_PER_FRAME
+    step = max(-config.GAZE_YAW_MAX_STEP_DEG,
+               min(config.GAZE_YAW_MAX_STEP_DEG, step))
+    target = servo_follow.distribute_yaw(current, step)
+    moved = max(
+        (abs(target[j] - float(current.get(j, 0.0))) for j in target),
+        default=0.0,
+    )
+    if moved < 0.5:
+        _yaw_quiet(
+            "already at the limit of travel", now,
+            " ".join(
+                f"{j.split('.')[0]} {float(current.get(j, 0.0)):+.1f}->{target[j]:+.1f}"
+                for j in sorted(target)
+            ),
+        )
+        return
+
+    try:
+        from hal.drivers.tracking import aim
+
+        duration = aim.min_move_duration(
+            state.safety_policy, target, current, config.GAZE_YAW_MOVE_S,
+        )
+        with aim.servo_ownership():
+            svc.move_and_hold(target, duration=duration)
+            short = _verify_landed(svc, target, now, bench=False)
+        landed = dict(target)
+        landed.update(short)
+        discard_dx_samples()
+        _last_yaw_t = now
+        logger.info(
+            "[gaze] face %.0f%% %s of centre (median of %d over %.1fs) — "
+            "pan %+.1f deg via %s",
+            abs(dx) * 100.0, "right" if dx > 0 else "left", n_dx, span_dx, step,
+            ", ".join(
+                f"{j.split('.')[0]} {float(current.get(j, 0.0)):+.1f}->{landed[j]:+.1f}"
+                + ("" if j not in short else f" (asked {target[j]:+.1f})")
+                for j in sorted(target)
+                if abs(landed[j] - float(current.get(j, 0.0))) >= 0.05 or j in short
+            ) or "nothing",
+        )
+    except Exception as e:
+        logger.debug("[gaze] pan move skipped: %s", e)
+
+
+def _who_is_in_frame() -> Tuple[str, float]:
+    """``(label, age_s)`` of whoever face perception currently believes is here.
+
+    Recorded on every gate decision, and read by nothing yet — F21 is open, and
+    this is the evidence needed to close it honestly.
+
+    The gap it measures: gaze picks the face nearest frame CENTRE and has no
+    idea who spoke. Speaker recognition resolves at session END, so it cannot
+    inform a decision made at speech start. Both failure directions are
+    ordinary at a shared desk — a colleague facing the lamp while the user
+    speaks, and the user facing it while a colleague speaks — and today nothing
+    in the log distinguishes either from a correct wake.
+
+    NOTE this is not necessarily the face gaze measured. `face_user()` reports
+    the FaceRecognizer's current user, derived from its own people map; the
+    watcher's nearest-to-centre pick may be somebody else entirely. That
+    difference is precisely what wants observing before anyone gates on it.
+    """
+    try:
+        import hal.app_state as state
+
+        label, age = state.face_user()
+        return (label or ""), float(age or 0.0)
+    except Exception as e:
+        logger.debug("[gaze] face identity lookup skipped: %s", e)
+        return "", 0.0
 
 
 def _check_speech(stage: str, *, request_repoint: bool) -> bool:
@@ -449,16 +1127,24 @@ def _check_speech(stage: str, *, request_repoint: bool) -> bool:
         yaw_txt = "none" if latest is None or latest[1] == float("inf") else f"{latest[1]:.1f}"
         px_txt = "0" if latest is None else f"{latest[2]:.0f}"
         edge_txt = "0.00" if latest is None else f"{latest[3]:.2f}"
-        would = (
-            considered >= config.GAZE_MIN_SAMPLES
-            and ratio >= config.GAZE_MIN_FACING_RATIO
-        )
+        measured_enough = considered >= config.GAZE_MIN_SAMPLES
+        facing_now = ratio >= config.GAZE_MIN_FACING_RATIO
+
+        would = measured_enough and facing_now
+        # Observed, never acted on — see _who_is_in_frame and F21.
+        who, who_age = _who_is_in_frame()
 
         now = time.monotonic()
         cooling = would and (now - _last_grant_t) < config.GAZE_COOLDOWN_S
+        # "blind" is not "skip". Nothing measurable in the window means the lamp
+        # could not see, which is a different failure from a user who looked
+        # away — they are fixed in different places, and reading alike in the
+        # log is how the feature's real state stayed hidden (F17).
         verdict = (
             "WOULD_WAKE" if would and not cooling
             else "cooldown" if cooling
+            else "blind" if not measured_enough
+            else "no-turn" if facing_now and not turned
             else "skip"
         )
         # The trail is what makes a refusal diagnosable: a single number cannot
@@ -469,9 +1155,11 @@ def _check_speech(stage: str, *, request_repoint: bool) -> bool:
         )
         logger.info(
             "[gaze] %s: yaw=%s face=%spx edge=%s facing=%.0f%%/%.0f%% of %d "
-            "trail=[%s] -> %s%s",
+            "who=%s trail=[%s] -> %s%s",
             stage, yaw_txt, px_txt, edge_txt, ratio * 100.0,
-            config.GAZE_MIN_FACING_RATIO * 100.0, considered, trail, verdict,
+            config.GAZE_MIN_FACING_RATIO * 100.0, considered,
+            f"{who}({who_age:.0f}s)" if who else "?",
+            trail, verdict,
             " (shadow)" if config.GAZE_WAKE_SHADOW else "",
         )
         if not would:
@@ -495,8 +1183,25 @@ def _check_speech(stage: str, *, request_repoint: bool) -> bool:
         voice = getattr(state, "voice_service", None)
         if voice is None or not hasattr(voice, "grant_wakeword_focus"):
             return False
+        # A shorter floor than the wake phrase or the button get. Those are
+        # deliberate acts; this is an inference from where a head was pointing,
+        # and it opens a window that every later turn EXTENDS. A wrong
+        # inference does not cost one turn, it costs a conversation — so the
+        # opener least sure of itself claims the least floor.
         source = "gaze" if stage == "speech-start" else "gaze-reacquired"
-        granted = bool(voice.grant_wakeword_focus(source))
+        try:
+            granted = bool(
+                voice.grant_wakeword_focus(
+                    source, timeout_s=config.GAZE_WAKE_FOCUS_S
+                )
+            )
+        except TypeError:
+            # Voice service predates the shorter-window argument. Degrade to
+            # the full allowance rather than lose the gate — silently
+            # returning False would disable the feature on a version skew
+            # and look exactly like "nobody ever turns to the lamp".
+            logger.debug("[gaze] voice service has no timeout_s — full window")
+            granted = bool(voice.grant_wakeword_focus(source))
         if granted:
             _last_grant_t = now
         return granted
@@ -531,7 +1236,266 @@ def _consume_speech_repoint(now: float) -> None:
         return
     _speech_repoint_requested.clear()
     if not _maybe_repoint(now, force=True):
-        logger.info("[gaze] speech-start reacquire unavailable")
+        # The reason itself comes from _repoint_quiet, throttled per reason, so
+        # this line says only that a speech-driven request was the one refused —
+        # the automatic ones fail for the same reasons and say so themselves.
+        logger.info(
+            "[gaze] speech-start reacquire unavailable — see the [gaze] no repoint line for why"
+        )
+
+
+def _return_to_known_height(now: float) -> None:
+    """Go back to a height a face was last seen from, and stop climbing.
+
+    The end of a failed search, not a correction. Leaving the arm wherever the
+    climb ran out means it is pointed at the ceiling with nothing measurable in
+    frame — the state the whole loop cannot recover from, because every later
+    sample reads as "no face" and the search has no budget left to try again.
+    """
+    global _last_pitch_t
+    import hal.app_state as state
+
+    from hal.drivers.tracking import face_height
+
+    svc = getattr(state, "animation_service", None)
+    if svc is None or getattr(svc, "_tracking_active", False):
+        return
+    try:
+        current = svc.get_positions()
+    except Exception:
+        return
+    target = face_height.height_target(current)
+    # The budget is deliberately NOT reset here. Resetting would let the loop
+    # climb, give up, reset, and climb again — the one-way ratchet that got the
+    # old blind search disabled (device-observed -45 -> -30 -> -15 -> 0 -> +14,
+    # heading for the ceiling). Only a real face clears it.
+    discard_samples()
+    _last_pitch_t = now
+    if target is None:
+        logger.info("[gaze] climb gave up, and no earlier height is remembered")
+        return
+    try:
+        from hal.drivers.tracking import aim
+
+        duration = aim.min_move_duration(
+            state.safety_policy, target, current, config.GAZE_PITCH_MOVE_S,
+        )
+        with aim.servo_ownership():
+            svc.move_and_hold(target, duration=duration)
+        logger.info(
+            "[gaze] climb gave up; back to the last height a face was seen from (%s)",
+            " ".join(f"{j.split('.')[0]}={v:+.1f}" for j, v in sorted(target.items())),
+        )
+    except Exception as e:
+        logger.debug("[gaze] could not restore the known height: %s", e)
+
+
+def _maybe_pitch(now: float, *, prompt: bool = False) -> None:
+    """Raise or lower the camera so a face sits inside the frame, not above it.
+
+    This is the neck the aim never had — see GAZE_PITCH_ENABLED for which joint
+    turned out to be it and how that was measured. Absolute `move_and_hold`,
+    never a relative nudge: the sign risk that kept pitch out of the aim lives
+    in the relative path, and an absolute target has no sign to get wrong.
+
+    Corrects toward the frame centre and stops there. It does not track a face
+    continuously — the point is only to stop the head pointing at the desk.
+
+    Complements the speech-triggered reacquire above rather than replacing it:
+    that one restores a pose that once worked, this one finds a new one when no
+    remembered pose does.
+    """
+    global _last_pitch_t, _blind_pitch_steps, _climb_gave_up
+
+    if not (config.GAZE_PITCH_ENABLED and config.GAZE_WAKE_ENABLED):
+        return
+    est = _dy_estimate(now, prompt=prompt)
+    if est is None:
+        with _dy_lock:
+            have = len(_dy_samples)
+        _pitch_quiet(
+            "window not filled", now,
+            f"{have} samples, need {config.GAZE_PITCH_MIN_SAMPLES} "
+            f"spanning {config.GAZE_PITCH_WINDOW_S * 0.8:.0f}s",
+        )
+        return
+    dy, from_face, n_dy, span_dy = est
+    if abs(dy) <= config.GAZE_PITCH_DEAD_ZONE_FRAC:
+        _pitch_quiet(
+            "already centred enough", now,
+            f"dy={dy * 100:+.0f}% within +/-{config.GAZE_PITCH_DEAD_ZONE_FRAC * 100:.0f}%",
+        )
+        return
+    if (now - _last_pitch_t) < config.GAZE_PITCH_COOLDOWN_S:
+        _pitch_quiet("cooling down", now)
+        return
+    # As with pan: measure always, move only inside a conversation. `prompt` is
+    # the one exception — a repoint that landed on a body asked for the climb,
+    # and that request is already speech-driven.
+    if not prompt and not _conversation_open():
+        _pitch_quiet("no conversation open", now, f"dy={dy * 100:+.0f}%")
+        return
+    # The fallback is a guess, not a measurement — a clipped torso says "the head
+    # is up there somewhere" and never how far. So a torso-driven correction is a
+    # SEARCH, climbing by a fixed step until a face appears, rather than a
+    # proportional correction toward an error nobody measured.
+    #
+    # Bounded, because the evidence stays true however far the neck has already
+    # travelled: acting on it forever is a loop, not a search. On giving up the
+    # arm goes back to a height that worked before rather than being left
+    # staring at the ceiling, where nothing is measurable and it cannot recover.
+    searching = not from_face
+    if searching and _blind_pitch_steps >= config.GAZE_FACE_SEARCH_MAX_STEPS:
+        if not _climb_gave_up:
+            _climb_gave_up = True
+            logger.info(
+                "[gaze] climb budget spent: %d/%d steps and still no face",
+                _blind_pitch_steps, config.GAZE_FACE_SEARCH_MAX_STEPS,
+            )
+            _return_to_known_height(now)
+        else:
+            _pitch_quiet(
+                "climb budget spent", now,
+                "waiting for a real face before climbing again",
+            )
+        return
+
+    import hal.app_state as state
+
+    from hal.drivers.tracking import servo_follow
+
+    svc = getattr(state, "animation_service", None)
+    if svc is None or getattr(svc, "_tracking_active", False):
+        _pitch_quiet("body owned by something else", now)
+        return
+    if getattr(svc, "_music_playing", False):
+        _pitch_quiet("music has the body", now)
+        return
+
+    try:
+        current = svc.get_positions()
+    except Exception as e:
+        logger.debug("[gaze] pitch skipped, no pose: %s", e)
+        return
+
+    # A face ABOVE centre (dy < 0) needs the camera tilted UP, and up is the
+    # DECREASING direction on this joint — the opposite of what this loop
+    # assumed. Device-measured on lamp-0c89, paired A/B/A with the servo bus
+    # held quiet, 18 face samples per position interleaved over three cycles so
+    # a subject who shifts cancels out:
+    #
+    #   wrist_pitch -75 -> median dy +0.009 | -90 -> +0.113  (moved -15, dy +0.103)
+    #   wrist_pitch -68 -> median dy -0.078 | -98 -> +0.108  (moved -30, dy +0.185)
+    #
+    # Lowering the joint moves the face DOWN the frame, i.e. the camera swung
+    # UP. With the old sign every correction enlarged the error it was
+    # measuring, so the loop ratcheted one way until it hit the stop —
+    # device-observed -72.6 -> -54.7 -> -42.9 -> -28.2 while each look still
+    # reported the face above centre, which is what a wrong sign looks like
+    # from the outside.
+    # A negative step therefore means "tilt the camera UP", and that is the
+    # convention `servo_follow.distribute_pitch` expects, so the two compose
+    # directly.
+    if searching:
+        # dy is a constant -0.5 placeholder from the torso path, so scaling it
+        # would only ever produce the same number dressed as a measurement.
+        step = -abs(config.GAZE_FACE_SEARCH_STEP_DEG)
+    else:
+        step = dy * config.GAZE_PITCH_DEG_PER_FRAME
+        step = max(-config.GAZE_PITCH_MAX_STEP_DEG,
+                   min(config.GAZE_PITCH_MAX_STEP_DEG, step))
+    # Spread the correction over all three pitch joints instead of spending it
+    # all on the wrist. Looking up drives wrist NEGATIVE, and on this arm the
+    # wrist stalls at -34.8 while idle already rests it near -32 — so every
+    # correction used to be commanded into a hard stop. The servo accepted the
+    # target unclamped, reported `position error 14.6 deg`, and the head never
+    # moved. base_pitch and elbow_pitch are where the upward travel actually is.
+    travel_min, travel_max = _pitch_travel_limits(now)
+    target = servo_follow.distribute_pitch(current, step, travel_min, travel_max)
+    moved = max(
+        (abs(target[j] - float(current.get(j, 0.0))) for j in target),
+        default=0.0,
+    )
+    if moved < 0.5:
+        _pitch_quiet(
+            "already at the limit of travel", now,
+            " ".join(
+                f"{j.split('.')[0]} {float(current.get(j, 0.0)):+.1f}->{target[j]:+.1f}"
+                for j in sorted(target)
+            ),
+        )
+        return
+
+    try:
+        from hal.drivers.tracking import aim
+
+        # min_move_duration only ever STRETCHES a move to respect the speed
+        # ceiling, so passing the gentler figure is a floor, not a cap.
+        duration = aim.min_move_duration(
+            state.safety_policy, target, current, config.GAZE_PITCH_MOVE_S,
+        )
+        # Own the body for the move. Without this the correction competes with
+        # whatever else is writing the arm, and something always is: idle plays
+        # absolutely on every joint and never stops, and an emotion dispatched
+        # mid-move re-poses the head entirely (`aim.servo_ownership` exists for
+        # exactly that). Both were listed as candidate causes for this loop
+        # walking rather than converging.
+        #
+        # The guard above already declined to start while someone else owns the
+        # arm, so this only ever claims a free body; ownership is restored, not
+        # cleared, so a tracking session that began meanwhile is not released.
+        with aim.servo_ownership():
+            svc.move_and_hold(target, duration=duration)
+            # Verify inside the lock: once ownership drops, an emotion can re-pose
+            # the head and the read would measure that instead.
+            short = _verify_landed(svc, target, now)
+        landed = dict(target)
+        landed.update(short)
+        discard_samples()
+        _last_pitch_t = now
+        _blind_pitch_steps = 0 if from_face else _blind_pitch_steps + 1
+        if from_face:
+            _climb_gave_up = False
+            # Only a face-driven correction is worth remembering. A pose the
+            # climb merely stopped at proves nothing — the whole point of the
+            # store is that a face was actually measured from there.
+            from hal.drivers.tracking import face_height
+
+            face_height.record(landed if not short else svc.get_positions())
+        logger.info(
+            "[gaze] %s %.0f%% %s centre (median of %d over %.1fs) — "
+            "tilt %+.1f deg via %s%s",
+            "face" if from_face else "head (from torso)",
+            abs(dy) * 100.0, "above" if dy < 0 else "below", n_dy, span_dy,
+            step,
+            # Reports where each joint ENDED UP. The old line printed the
+            # target, so six corrections in a row could claim
+            # "elbow_pitch +12.3->+25.8" while the elbow never left +12.3.
+            ", ".join(
+                f"{j.split('.')[0]} {float(current.get(j, 0.0)):+.1f}->{landed[j]:+.1f}"
+                + ("" if j not in short else f" (asked {target[j]:+.1f})")
+                for j in sorted(target)
+                if abs(landed[j] - float(current.get(j, 0.0))) >= 0.05
+                or j in short
+            ) or "nothing",
+            "" if from_face
+            else f" [climb {_blind_pitch_steps}/{config.GAZE_FACE_SEARCH_MAX_STEPS}]",
+        )
+        # Last, deliberately: this is debug output, and it must not be able to
+        # skip the bookkeeping above. A snapshot that failed before
+        # discard_samples() would leave the window uncleared and let the loop
+        # correct again from offsets measured at the pose it has just left.
+        _save_snapshot(
+            f"{'face' if from_face else 'torso'} dy={dy * 100:+.0f}% "
+            f"(median of {n_dy} over {span_dy:.1f}s) tilt {step:+.1f} deg via "
+            + " ".join(
+                f"{j.split('.')[0]}{float(current.get(j, 0.0)):+.1f}->{landed[j]:+.1f}"
+                for j in sorted(target)
+                if abs(landed[j] - float(current.get(j, 0.0))) >= 0.05
+            )
+        )
+    except Exception as e:
+        logger.debug("[gaze] pitch move skipped: %s", e)
 
 
 def _maybe_repoint(now: float, *, force: bool = False) -> bool:
@@ -545,13 +1509,38 @@ def _maybe_repoint(now: float, *, force: bool = False) -> bool:
     global _last_repoint_t
 
     if not (config.GAZE_REPOINT_ENABLED and config.GAZE_WAKE_ENABLED):
+        _repoint_quiet("disabled", now)
         return False
     if not force and (now - _last_face_t) < config.GAZE_REPOINT_AFTER_S:
+        return False
+    # A face in frame RIGHT NOW means there is nothing to reacquire, and turning
+    # to the bearing would give up better framing than the bearing describes —
+    # the climb may have just lifted the head to find this face. Applies even to
+    # a forced request: "look for them" is answered by already looking at them.
+    if (now - _last_face_t) < config.GAZE_REPOINT_SKIP_IF_FACE_S:
+        _repoint_quiet(
+            "a face is already in frame", now,
+            f"seen {now - _last_face_t:.1f}s ago",
+        )
         return False
     # Voice may bypass the long *absence* delay, but never the movement
     # cooldown. VAD intentionally admits some noise so it cannot make the lamp
     # repeatedly turn just because no face is visible.
-    if (now - _last_repoint_t) < config.GAZE_REPOINT_COOLDOWN_S:
+    # The cooldown guards the AUTOMATIC repoint, which runs every pass of the
+    # watcher loop and would otherwise swing to the bearing over and over
+    # whenever nobody is visible. A speech-triggered reacquire is not that: the
+    # user has spoken and the lamp cannot see them, which is a request, not
+    # thrashing. Rate-limiting it the same way meant talking twice inside a
+    # minute got you one look — device-observed, a reacquire refused with
+    # "cooling down (27s of 60s)" while someone was speaking to it.
+    #
+    # `force` already skipped the absence check; not skipping this one made the
+    # flag mean less than its name.
+    if not force and (now - _last_repoint_t) < config.GAZE_REPOINT_COOLDOWN_S:
+        _repoint_quiet(
+            "cooling down", now,
+            f"{now - _last_repoint_t:.0f}s of {config.GAZE_REPOINT_COOLDOWN_S:.0f}s",
+        )
         return False
     import hal.app_state as state
 
@@ -559,12 +1548,24 @@ def _maybe_repoint(now: float, *, force: bool = False) -> bool:
 
     svc = getattr(state, "animation_service", None)
     if svc is None or getattr(svc, "_tracking_active", False):
+        _repoint_quiet(
+            "no body, or something else owns it", now,
+            "no animation service" if svc is None else "tracking active",
+        )
         return False
     if getattr(svc, "_music_playing", False):
-        return False  # the groove owns the body
+        _repoint_quiet("music has the body", now)
+        return False
 
     est = user_bearing.read_estimate()
-    if est is None or est.confidence < config.GAZE_REPOINT_MIN_CONFIDENCE:
+    if est is None:
+        _repoint_quiet("no bearing remembered yet", now)
+        return False
+    if est.confidence < config.GAZE_REPOINT_MIN_CONFIDENCE:
+        _repoint_quiet(
+            "bearing not trusted enough", now,
+            f"confidence {est.confidence:.2f} < {config.GAZE_REPOINT_MIN_CONFIDENCE:.2f}",
+        )
         return False
 
     try:
@@ -581,9 +1582,22 @@ def _maybe_repoint(now: float, *, force: bool = False) -> bool:
         duration = aim.min_move_duration(
             state.safety_policy, target, current, aim.MOVE_DURATION_S
         )
-        svc.move_and_hold(target, duration=duration)
+        # Owned for the same reason as the pitch correction, and more so: this
+        # one restores a whole posture across four joints, so an emotion landing
+        # in the middle leaves the head in a blend of two poses rather than
+        # either of them.
+        with aim.servo_ownership():
+            svc.move_and_hold(target, duration=duration)
         discard_samples()
         _last_repoint_t = now
+        # Owe the estimate a verdict. Deliberately not measured here: a
+        # synchronous detect would need the detector lock and a settle, inside
+        # a watcher whose whole design is never to make a live look wait. The
+        # sampler is already looking at the new view several times a second, so
+        # the honest answer arrives by itself a few seconds from now.
+        global _repoint_pending_t, _repoint_subject_t_before
+        _repoint_pending_t = now
+        _repoint_subject_t_before = _last_subject_t
         if force:
             logger.info(
                 "[gaze] speech-start reacquire: turning %+.1f deg to remembered "
@@ -598,8 +1612,154 @@ def _maybe_repoint(now: float, *, force: bool = False) -> bool:
             )
         return True
     except Exception as e:
-        logger.debug("[gaze] repoint skipped: %s", e)
+        # At info, not debug: this is a repoint that did not happen, and the
+        # whole point of these lines is that "unavailable" always says why.
+        _repoint_quiet("it raised", now, str(e))
         return False
+
+
+def _verify_repoint(now: float) -> None:
+    """Tell the bearing whether turning to it actually found the user.
+
+    A hit is `_last_subject_t` having advanced past the moment of the turn —
+    which moves for a face OR for a person box, because both answer the question
+    actually asked: "did turning here find them?"
+
+    It used to key on `_last_face_t`, which only moves for a face. So a repoint
+    that landed on the user's torso — them, plainly there, with the camera aimed
+    too low to see their face — scored as "found nobody" and counted against the
+    bearing. Three of those drop the estimate, and that is how a CORRECT bearing
+    got deleted while the user sat in front of the lamp. The climb was already
+    lifting the head to find the face at the time.
+
+    Scored once per repoint. A miss is not conclusive on its own — the user may
+    simply be out of the room — which is why user_bearing requires several
+    clustered misses before dropping anything.
+    """
+    global _repoint_pending_t
+
+    if _repoint_pending_t <= 0.0:
+        return
+    if (now - _repoint_pending_t) < config.GAZE_REPOINT_VERIFY_S:
+        return
+    # Three outcomes, not two. A face is the finished job; a body is the user
+    # found but framed too low, which is a different thing to say and a different
+    # thing to do about it.
+    saw_face = _last_face_t > _repoint_subject_t_before
+    hit = _last_subject_t > _repoint_subject_t_before
+    _repoint_pending_t = 0.0
+    try:
+        from hal.drivers.tracking import user_bearing
+
+        dropped = user_bearing.record_prediction(hit)
+    except Exception as e:
+        logger.debug("[gaze] repoint scoring skipped: %s", e)
+        return
+    logger.info(
+        "[gaze] repoint %s — %s%s",
+        "found their face" if saw_face
+        else "found their body, no face yet" if hit
+        else "found nobody",
+        "bearing confirmed" if hit else "counted against the bearing",
+        " (estimate dropped)" if dropped else "",
+    )
+    if hit and not saw_face:
+        # A repoint should end on a FACE. It landed on a body, so the camera is
+        # aimed too low — ask the climb to lift now rather than leaving it to
+        # notice by itself, which takes a fresh window and the repoint has just
+        # discarded the old one.
+        logger.info("[gaze] climbing to find the face the repoint turned up")
+        _maybe_pitch(now, prompt=True)
+    if not hit:
+        # A repoint that moved and missed is the strongest evidence there is:
+        # the best guess was acted on and was wrong. No waiting.
+        _maybe_sweep(now, confirmed_miss=True)
+
+
+def _maybe_sweep(now: float, *, confirmed_miss: bool = False) -> None:
+    """Look around when nobody can be found.
+
+    The bearing is a guess about where someone WAS. Having acted on it and found
+    an empty chair, the honest next step is to look rather than to conclude.
+
+    Two ways in, and the second was missing for a while. A CONFIRMED miss — the
+    lamp turned to the remembered bearing and found an empty chair — is strong
+    evidence and sweeps at once. Plain absence is weaker, so it waits out
+    GAZE_SWEEP_AFTER_S first.
+
+    Hanging this off the repoint alone made it unreachable in exactly the cases
+    it is most wanted: no bearing to turn to, and already sitting on the bearing.
+    Both return before anything is scored, so no verdict is ever reached.
+
+    Rate-limited hard either way, because nobody asked for this. A repoint can
+    fire every GAZE_REPOINT_AFTER_S, so without the cooldown an absent user would
+    have the lamp sweeping the room every ~35s indefinitely.
+    """
+    global _last_sweep_t, _sweep_wait_minute
+    if not config.GAZE_SWEEP_ENABLED:
+        return
+    if not confirmed_miss and (now - _last_face_t) < config.GAZE_SWEEP_AFTER_S:
+        # Throttled, not silent. This was the last decline path in the watcher
+        # without a voice, and it became the one question the log could not
+        # answer: "it can see nobody, so why is it not looking around?"
+        _sweep_quiet(
+            "somebody was here recently", now,
+            f"{now - _last_face_t:.0f}s of {config.GAZE_SWEEP_AFTER_S:.0f}s",
+        )
+        return
+
+    # A shorter leash when there is nothing to fall back on. With a bearing, a
+    # sweep is a luxury and fifteen minutes between them is right. Without one,
+    # it is the only way to find anybody, and rate-limiting it that hard leaves
+    # the lamp unable to repoint (nowhere to turn) AND unable to look.
+    try:
+        from hal.drivers.tracking import user_bearing
+
+        lost = user_bearing.read_estimate() is None
+    except Exception:
+        lost = False
+    cooldown = (config.GAZE_SWEEP_COOLDOWN_LOST_S if lost
+                else config.GAZE_SWEEP_COOLDOWN_S)
+    if _last_sweep_t > 0.0 and (now - _last_sweep_t) < cooldown:
+        elapsed_min = int((now - _last_sweep_t) / 60.0)
+        if elapsed_min != _sweep_wait_minute:
+            _sweep_wait_minute = elapsed_min
+            logger.info(
+                "[gaze] not looking around — last sweep was %d min ago (waiting %.0f%s)",
+                elapsed_min, cooldown / 60.0,
+                ", no bearing" if lost else "",
+            )
+        return
+    _sweep_wait_minute = -1
+    _last_sweep_t = now
+    try:
+        from hal.drivers.tracking.search import search_for_subject
+
+        res = search_for_subject()
+    except Exception as e:
+        logger.warning("[gaze] look-around unavailable: %s", e)
+        return
+    logger.info("[gaze] looked around: %s after %d stop(s)",
+                res.reason, res.stops_visited)
+    if res.found:
+        # The sweep owned the body and moved the head; every offset measured
+        # before it describes a pose the camera has since left.
+        discard_samples()
+        discard_dx_samples()
+        # Learn from it. The arm is now pointed at somebody, and without this
+        # that is thrown away: the sampler would not look again for another five
+        # minutes, so a lamp that had just FOUND the user still could not say
+        # where they were. Asked rather than recorded directly — the sweep stops
+        # on the first subject seen, not a centred one, and record_sighting
+        # cannot be given an off-centre yaw without biasing the estimate. The
+        # sampler checks framing for itself.
+        try:
+            from hal.drivers.tracking import bearing_sampler
+
+            if bearing_sampler.sample_now():
+                logger.info("[gaze] learned a bearing from the look-around")
+        except Exception as e:
+            logger.debug("[gaze] could not sample after the look-around: %s", e)
 
 
 def _loop() -> None:
@@ -664,8 +1824,28 @@ def _loop() -> None:
                         counted / elapsed, config.GAZE_SAMPLE_FPS, why,
                     )
                     counted, blocked, counted_from = 0, {}, now
+                # Framing first: a face inside the frame is what everything
+                # else is measured from, and turning to a bearing that still
+                # points at the desk finds nobody however right the bearing is.
+                _note_conversation_edge()
+                _maybe_pitch(now)
+                # Pan after tilt, never in the same breath: both own the body
+                # and both clear their own window, so running them together
+                # would have each measuring a pose the other has just left.
+                _maybe_yaw(now)
+                # Neither the sweep nor the repoint is driven from here any
+                # more. Both move the body a long way, and doing that because
+                # the room merely looks empty is the lamp searching for someone
+                # who never asked for it — which also scored the remembered
+                # bearing as wrong on evidence that says nothing about whether
+                # it is: lean out of frame three times and a correct bearing is
+                # deleted. Both are now reached from speech instead:
+                #   _consume_speech_repoint -> _maybe_repoint(force=True)
+                #     -> _verify_repoint -> _maybe_sweep(confirmed_miss=True)
+                # so the lamp turns and searches when somebody speaks and it
+                # cannot see them, and stays still otherwise.
                 _consume_speech_repoint(now)
-                _maybe_repoint(now)
+                _verify_repoint(now)
             except Exception as e:  # a background watcher must never take HAL down
                 logger.debug("[gaze] sample skipped: %s", e)
             if _stop.wait(interval):
@@ -684,8 +1864,8 @@ def start() -> None:
         return
     if _thread is not None and _thread.is_alive():
         return
-    global _last_face_t, _last_repoint_t
-    _last_face_t = _last_repoint_t = time.monotonic()
+    global _last_face_t, _last_subject_t, _last_repoint_t
+    _last_face_t = _last_subject_t = _last_repoint_t = time.monotonic()
     _stop.clear()
     _thread = threading.Thread(target=_loop, daemon=True, name="gaze-watcher")
     _thread.start()
@@ -705,12 +1885,29 @@ def stop() -> None:
 
 def reset_for_test() -> None:
     """Clear buffered samples and the cooldown between tests."""
+    globals()["_conversation_was_open"] = None
     global _last_grant_t, _last_face_t, _last_repoint_t
     global _speech_repoint_requested_t
     with _samples_lock:
         _samples.clear()
+    with _dy_lock:
+        _dy_samples.clear()
     _last_grant_t = 0.0
     _last_face_t = 0.0
     _last_repoint_t = 0.0
+    globals()["_repoint_pending_t"] = 0.0
+    globals()["_repoint_subject_t_before"] = 0.0
+    _last_dy_frac = None
+    globals()["_last_frame"] = None
+    globals()["_last_box"] = None
+    _last_pitch_t = 0.0
+    _blind_pitch_steps = 0
+    globals()["_climb_gave_up"] = False
+    _last_dy_from_face = False
+    _pitch_stalls.clear()
+    discard_dx_samples()
+    globals()["_last_yaw_t"] = 0.0
+    globals()["_last_sweep_t"] = 0.0
+    globals()["_sweep_wait_minute"] = -1
     _speech_repoint_requested_t = 0.0
     _speech_repoint_requested.clear()

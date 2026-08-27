@@ -148,6 +148,13 @@ FACE_STRANGER_FORGET_S = float(os.environ.get("HAL_FACE_STRANGER_FORGET_S", "180
 # turn every FACE_COOLDOWN_S (10s). Friend enters are not affected.
 FACE_STRANGER_ENTER_FLOOR_S = float(os.environ.get("HAL_FACE_STRANGER_ENTER_FLOOR_S", "300.0"))
 FACE_STRANGER_FLUSH_S = float(os.environ.get("HAL_FACE_STRANGER_FLUSH_S", "10.0"))
+# An enrolled face can grant voice focus on presence.enter. Keep stranger-only
+# enters agent-visible without granting focus unless a deployment explicitly
+# opts into guest-first conversation.
+PRESENCE_WAKE_STRANGERS: bool = (
+    os.environ.get("HAL_PRESENCE_WAKE_STRANGERS", "false").lower()
+    in ("1", "true", "yes")
+)
 # Minimum face bbox HEIGHT as a fraction of frame height. Height, not area:
 # area falls off as 1/d^2 while a linear dimension falls off as 1/d, so the
 # area form made the knob twice as sensitive for the same change in reach.
@@ -1003,19 +1010,6 @@ BEARING_SAMPLE_INTERVAL_S: float = float(
 BEARING_SAMPLE_MAX_DX_FRAC: float = float(
     os.environ.get("HAL_BEARING_SAMPLE_MAX_DX_FRAC", "0.25")
 )
-# The POSTURE is only recorded when the subject is also vertically centred:
-# pitch cannot be corrected arithmetically, so an off-centre pitch would teach
-# the lamp a posture that does not look at anyone.
-# 0.30, loosened once the sampler learned from FACES instead of person boxes.
-# The strict value existed because a torso centred vertically said nothing about
-# whether the head was in frame at all, so a posture recorded from one could be
-# aimed at a chest. A face in frame carries its own proof: this posture sees a
-# head. Device-observed at the old value, a sighting 15.8% off centre was
-# refused its posture and stored a bearing with a single joint — leaving nothing
-# to restore, which is the whole point of remembering a pose.
-BEARING_SAMPLE_MAX_DY_FRAC: float = float(
-    os.environ.get("HAL_BEARING_SAMPLE_MAX_DY_FRAC", "0.30")
-)
 # Save what each bearing sample saw, box drawn on, under
 # SNAPSHOT_PERSIST_DIR/sensing_bearing/. Servable by
 # GET /api/sensing/snapshot/sensing_bearing/<name>, so the samples can be
@@ -1109,6 +1103,15 @@ GAZE_MIN_SAMPLES: int = int(os.environ.get("HAL_GAZE_MIN_SAMPLES", "2"))
 #
 # It also subsumes the old frame-fraction floor: anyone far enough away to be a
 # bystander is, by construction, too small in pixels.
+#
+# WHICH pixels: the DOWNSCALED frame the watcher detects on, not the camera's
+# own resolution. `_loop` measures on `frame_utils.downscale(frame)`, which
+# clamps width to VISION_MAX_WIDTH (640) and returns scale = 640/w — so at
+# 1280x720 this 48 px floor is 96 px in the original image, and at 640 or
+# narrower it is 48 px in both. Unlike LOOK_AIM_MIN_FACE_HEIGHT_FRAC, which is
+# a fraction and immune, this constant silently doubles or halves if
+# VISION_MAX_WIDTH or the camera mode changes. The device logs it reads against
+# (`face=49px`) are downscaled readings, so the number matches practice today.
 GAZE_MIN_FACE_PX: int = int(os.environ.get("HAL_GAZE_MIN_FACE_PX", "48"))
 # How much wider the acceptance cone grows for a face at the very edge of frame,
 # as a multiple of GAZE_MAX_YAW_DEG. Scales linearly with distance from the
@@ -1125,8 +1128,12 @@ GAZE_EDGE_CONE_SCALE: float = float(
     os.environ.get("HAL_GAZE_EDGE_CONE_SCALE", "1.8")
 )
 # Seconds of yaw history kept. Must exceed GAZE_WINDOW_S or the lookback cannot
-# see far enough back to judge the gesture.
-GAZE_BUFFER_S: float = float(os.environ.get("HAL_GAZE_BUFFER_S", "3.0"))
+# see far enough back to judge the gesture. It briefly had to be at least TWICE
+# that, because a transition test read the window before the decision window as
+# a baseline; that test is gone, so only the original rule applies. 4.0 is kept
+# rather than trimmed back — the extra second costs nothing and the `trail=`
+# field in the log reads better with more history behind it.
+GAZE_BUFFER_S: float = float(os.environ.get("HAL_GAZE_BUFFER_S", "4.0"))
 # Sampling rate of the watcher.
 #
 # 6, not the 3 that resolving the gesture alone would need. The gesture is slow,
@@ -1144,6 +1151,20 @@ GAZE_SAMPLE_FPS: float = float(os.environ.get("HAL_GAZE_SAMPLE_FPS", "6"))
 # Minimum gap between two gaze-opened gates, so a single conversation cannot
 # open one per sentence. The follow-up window already covers continuing a turn.
 GAZE_COOLDOWN_S: float = float(os.environ.get("HAL_GAZE_COOLDOWN_S", "5"))
+# How much floor a gaze wake claims, against WAKEWORD_FOLLOWUP_TIMEOUT_S for the
+# wake phrase and the button (60 on lamp).
+#
+# The window self-extends: every authorised turn with a transcript refreshes it
+# (voice_service), so one wrong opener does not cost a turn, it costs a
+# conversation — a discussion held near the lamp keeps the lamp in it until a
+# gap longer than the window. The wake phrase and the click are deliberate acts
+# and keep the full allowance; this one is an inference about where a head was
+# pointing, so it claims less. Capped by the default, never above it.
+# 10, not 20: WAKEWORD_FOLLOWUP_TIMEOUT_S's own CODE default is 20, so 20 here
+# would be no reduction at all on any device that has not overridden it — only
+# a lamp with the 60s override would see a difference. The point is a smaller
+# allowance everywhere, not just where someone happened to widen the default.
+GAZE_WAKE_FOCUS_S: float = float(os.environ.get("HAL_GAZE_WAKE_FOCUS_S", "10"))
 # Where the remembered user bearing lives. NOT a boot sidecar: this must survive
 # reboots, unlike the mic/speaker/camera state in app_state.
 USER_BEARING_PATH: str = os.environ.get(
@@ -1326,13 +1347,20 @@ REALTIME_REPLY_SYNC_MAX_CHARS: int = int(os.environ.get("HAL_REALTIME_REPLY_SYNC
 # later turn until recycle; Gemini only needs the gist to avoid repeating
 # itself.
 REALTIME_TTS_HISTORY_MAX_CHARS: int = int(os.environ.get("HAL_REALTIME_TTS_HISTORY_MAX_CHARS", "300"))
-# Dead air while the realtime model works on a committed turn. Chit-chat answers
-# start in ~1s and need nothing, but a turn the model grounds with Google Search
-# emits no token until the search returns — 3-6s of a device that looks awake and
-# sounds dead. After this many seconds with no output yet, HAL asks os-server to
-# speak one opening filler ("one sec", "let me check"); the model's own first
-# sentence interrupts it. Set high enough that a normal answer never races it.
+# Dead air while the realtime model works on a committed turn. After this many
+# seconds with no output yet, HAL asks os-server to speak one opening filler
+# ("one sec", "let me check"); the model's own first sentence interrupts it.
 # 0 disables.
+#
+# The 1.5s default assumes a chit-chat answer starts in ~1s, so the filler only
+# covers the slow class (a turn grounded with Google Search emits no token until
+# the search returns). That assumption is per-model, and is already false on at
+# least one shipped body: measured on lamp-0c89 26/08/2026 against
+# gemini-3.1-flash-live-preview behind the campaign-api proxy, EVERY turn took
+# 3.0-8.0s to its first sentence (median 4.0s, n=31). There the filler is not
+# covering an outlier, it is the only thing the user hears for the first few
+# seconds, and the body lowers this in its own .env. Tune it per device from
+# measured time-to-first-sentence, not from this default.
 REALTIME_FILLER_DELAY_S: float = float(os.environ.get("HAL_REALTIME_FILLER_DELAY_S", "1.5"))
 
 # --- Realtime: Summarizer (Anthropic Messages API) ---
@@ -1372,6 +1400,18 @@ GAZE_REPOINT_AFTER_S: float = float(
 GAZE_REPOINT_COOLDOWN_S: float = float(
     os.environ.get("HAL_GAZE_REPOINT_COOLDOWN_S", "60")
 )
+# Do not turn to the remembered bearing while a face is THIS recently visible,
+# however urgently the turn was asked for.
+#
+# The speech reacquire fires on "no usable face evidence", which means "I cannot
+# tell whether they were facing me" — not "I cannot see them". Device-observed:
+# `face=61px ... facing=0%/60% of 0 -> blind`, a face plainly in frame with the
+# head turned away, and the lamp turned back to a bearing lower than the face
+# the climb had just found. It threw away the framing it had, to go looking for
+# the person it was already looking at.
+GAZE_REPOINT_SKIP_IF_FACE_S: float = float(
+    os.environ.get("HAL_GAZE_REPOINT_SKIP_IF_FACE_S", "3")
+)
 # How far off frame centre a face may sit and still count as "somebody is here,
 # no need to turn". A face at the very edge is about to leave the frame, so
 # treating it as well framed is what let the absence timer reset forever while
@@ -1381,6 +1421,337 @@ GAZE_WELL_FRAMED_EDGE: float = float(
     os.environ.get("HAL_GAZE_WELL_FRAMED_EDGE", "0.6")
 )
 # Below this confidence the bearing is not worth moving for.
+#
+# 0.2, matching aim.MIN_BEARING_CONFIDENCE, so every consumer of the bearing
+# trusts it at the same point. At 0.5 the watcher refused to turn to a bearing
+# that look.aim and the search were both happily using — device-observed after a
+# calibration change dropped the estimate: rebuilt to 0.38, the search seeded
+# from it and the aim stepped toward it, while every reacquire logged
+# "unavailable" and, because the sweep hangs off a repoint that has actually
+# moved, the lamp never looked around either.
+#
+# A bearing good enough to aim a live conversational turn at is good enough to
+# turn the head toward between them.
 GAZE_REPOINT_MIN_CONFIDENCE: float = float(
-    os.environ.get("HAL_GAZE_REPOINT_MIN_CONFIDENCE", "0.5")
+    os.environ.get("HAL_GAZE_REPOINT_MIN_CONFIDENCE", "0.2")
+)
+# How long after turning to the remembered bearing to wait before deciding
+# whether anyone was actually there.
+#
+# The estimate self-heals by being told when it predicted wrongly, and until now
+# only a `look` ever told it — this watcher turned to the bearing and never
+# reported back, so the consumer that acts MOST often was the one contributing
+# nothing. Device-observed 2026-08-24: two repoints onto a confidence-0.99
+# estimate, neither verified, the confidence unchanged afterwards.
+#
+# Long enough for the move to settle and the sampler to get several looks at the
+# new view (it manages 3-6/s), short enough that the verdict still describes the
+# moment the lamp turned.
+GAZE_REPOINT_VERIFY_S: float = float(
+    os.environ.get("HAL_GAZE_REPOINT_VERIFY_S", "6")
+)
+
+# Vertical centring — the neck the aim never had.
+#
+# The look aim drives yaw only, deliberately: the pitch sign was never validated
+# for its relative `nudge()` path, and an inverted pitch is a bug this codebase
+# already hit once. The consequence on a desk is that the camera cannot recover
+# from pointing low, so the user's head sits above the frame and no amount of
+# left-right correction brings it back.
+#
+# Device-measured which joint is actually the neck, by moving each and looking:
+#   base_pitch   folds the whole arm, so it both rotates AND translates the
+#                camera - not monotonic (10.6 raised the view, 18.6 lowered it)
+#   elbow_pitch  0.2 px of vertical effect
+#   wrist_pitch  -70.6 -> -55 -> -45 raised it steadily, bringing a face that
+#                was clipped by the frame edge fully into view at 91 px
+# So: wrist_pitch is the neck. The DIRECTION recorded above did not survive a
+# paired re-measurement: holding the bus quiet and taking 18 face samples per
+# position, interleaved, -75 -> -90 moved the face DOWN the frame (+0.103) and
+# -68 -> -98 likewise (+0.185). Decreasing the joint tilts the camera UP. See
+# _maybe_pitch in gaze.py, where the correction now carries that sign.
+# Note the tracker's own pitch weights
+# spread across base and elbow with PITCH_WEIGHT_WRIST = 0.0, which is likely
+# why this joint was never the one anybody reached for.
+# ON, after being off. The objection that turned it off was real and is worth
+# keeping written down: camera direction depends on base_pitch and wrist_pitch
+# TOGETHER — the arm folds at its base, so that joint rotates AND translates the
+# camera, and the same wrist angle points somewhere different for every base
+# angle. Driving one joint per-degree against a coupled two-link arm, with no
+# kinematic model, walked the head to its limit while still missing the user.
+#
+# What changed is not the kinematics, it is that the corrections stopped being
+# undone between steps. Two things were erasing them: the repoint re-anchoring
+# idle on a remembered wrist angle recorded minutes earlier, and the idle loop
+# pulling back toward the pose the recording was made at. With both fixed the
+# loop converges instead of walking — device-measured, one run, three steps:
+# 45% above centre -> 21% -> 16%, each starting exactly where the last left off.
+#
+# It is still open-loop against a coupled arm, so the limit case remains real:
+# the same session drove wrist_pitch to -90.6 and sat on the mechanical stop
+# before recovering. The per-step cap and the blind-step budget are what bound
+# that, not any model of the arm. The remembered bearing (a full pose, restored
+# in one absolute move — see bearing_sampler) is still the better mechanism when
+# a pose has actually been learned; this loop is what gets a face into frame in
+# the first place, so a pose worth remembering can be learned at all.
+GAZE_PITCH_ENABLED: bool = (
+    os.environ.get("HAL_GAZE_PITCH", "true").lower() in ("1", "true", "yes")
+)
+# Degrees of wrist_pitch per FULL frame height. A seed, not a calibration: the
+# correction re-measures itself every step because it moves and then looks
+# again, so an imperfect constant costs an extra iteration, not accuracy.
+GAZE_PITCH_DEG_PER_FRAME: float = float(
+    os.environ.get("HAL_GAZE_PITCH_DEG_PER_FRAME", "45")
+)
+# Largest single correction. Small enough that a wrong sign is a mistake the
+# next measurement reverses, rather than a head swung to a limit.
+#
+# 15, not 8. The step is the binding constraint, not the estimate: a face 40%
+# above centre asks for 18 degrees and got 8, so each correction fell short and
+# the next frame reported almost the same offset — device-observed 41%, 33%,
+# 42% across three corrections, converging on nothing. The sign is now measured
+# rather than assumed, so the reason for keeping the step tiny is gone.
+GAZE_PITCH_MAX_STEP_DEG: float = float(
+    os.environ.get("HAL_GAZE_PITCH_MAX_STEP_DEG", "15")
+)
+# Vertical offset, as a fraction of frame height, that counts as centred enough.
+# Wider than it needs to be: the aim is to get the face INSIDE the frame with
+# room around it, not to centre it perfectly, and every correction is a visible
+# head movement the user did not ask for.
+GAZE_PITCH_DEAD_ZONE_FRAC: float = float(
+    os.environ.get("HAL_GAZE_PITCH_DEAD_ZONE_FRAC", "0.15")
+)
+# Minimum gap between corrections, so a user who keeps moving does not turn the
+# lamp into a head that nods along. Mostly superseded by GAZE_PITCH_WINDOW_S —
+# the buffer is cleared after every correction, so refilling it already spaces
+# them out — but kept as a floor.
+GAZE_PITCH_COOLDOWN_S: float = float(
+    os.environ.get("HAL_GAZE_PITCH_COOLDOWN_S", "4")
+)
+# How long a stretch of vertical offsets a correction is computed from.
+#
+# NOT the latest sample, which is what this loop used to do and why a validated
+# sign still walked the head. `wrist_roll` is a second AIMING axis on this arm —
+# device-proven 2026-08-24 by pinning every other joint and varying only roll:
+# the horizon stayed level while the view panned, i.e. roll does not rotate the
+# image, it points the camera. And idle.csv sweeps wrist_roll ~32 deg every ~10s
+# cycle, forever.
+#
+# So the vertical offset a single frame reports is the framing error PLUS a
+# periodic disturbance from wherever idle's roll happens to be. Measured on the
+# same three frames, subject unmoved: dy +0.101 at roll -1.8 against +0.143 at
+# roll +29.3 — 0.042 of frame height from roll alone, about 28% of the dead
+# zone below, on a loop that fired every 4s from one sample.
+#
+# A median over a full idle cycle cancels a periodic disturbance while a real
+# framing error survives it.
+#
+# 6, down from 12. The window is also what paces the loop: `_dy_estimate`
+# refuses until the samples span WINDOW_S * 0.8, and the buffer is cleared after
+# every correction, so the span requirement — not GAZE_PITCH_COOLDOWN_S — is the
+# real gap between steps. At 12 that made a ~9.6s wait before the head would
+# move at all, which is a long time to sit visibly badly framed while the user
+# is right there. At 6 the same chain gives ~4.8s.
+#
+# The cost is real and worth stating: half an idle roll cycle, not a whole one.
+# Roll is a second aiming axis and idle sweeps it every ~10s, so a half-period
+# window carries some of that disturbance into the median instead of cancelling
+# it — measured at ~0.042 of frame height, about 28% of the dead zone. Expect
+# slightly noisier corrections that the next measurement walks back; the loop
+# re-measures after every move, so an over-correction costs an extra iteration
+# rather than accuracy. Put this back to 12 if the head starts hunting.
+GAZE_PITCH_WINDOW_S: float = float(
+    os.environ.get("HAL_GAZE_PITCH_WINDOW_S", "6")
+)
+# ...and this many measurements inside it, or the median is one noisy frame
+# wearing a median's clothes. At GAZE_SAMPLE_FPS a full window holds far more;
+# this is the floor for acting on a partly-filled one.
+GAZE_PITCH_MIN_SAMPLES: int = int(
+    os.environ.get("HAL_GAZE_PITCH_MIN_SAMPLES", "8")
+)
+# How few torso readings are enough when the climb has been asked for directly —
+# a repoint that landed on a body and wants the head lifted now.
+#
+# Small because the torso path reports a CONSTANT -0.5, so more of them add no
+# information. The full window still applies to face-driven corrections, where
+# the offset actually varies and the median is doing real work.
+GAZE_PITCH_PROMPT_MIN_SAMPLES: int = int(
+    os.environ.get("HAL_GAZE_PITCH_PROMPT_MIN_SAMPLES", "2")
+)
+# Write an annotated frame beside every pitch correction, into
+# SNAPSHOT_PERSIST_DIR/sensing_gaze/ (newest GAZE_SNAPSHOT_KEEP kept).
+#
+# The log line says the median was -0.41 of frame height. It cannot say whether
+# that was the user's face, a colleague's, or a coat on a chair — and this loop
+# spent a week walking the head while its numbers looked reasonable. Every time
+# this feature was actually understood it was by looking at a picture: the
+# clipped-eyes case (`landmarks_in_frame`), the wrong-person aim (F24), and the
+# roll experiment that proved wrist_roll aims rather than rotates. The log is
+# for noticing; the frame is for diagnosing.
+#
+# Same category convention and viewer as the bearing sampler's snapshots, so
+# the two read identically.
+GAZE_SNAPSHOT_ENABLED: bool = (
+    os.environ.get("HAL_GAZE_SNAPSHOT", "true").lower() in ("1", "true", "yes")
+)
+GAZE_SNAPSHOT_KEEP: int = int(os.environ.get("HAL_GAZE_SNAPSHOT_KEEP", "40"))
+
+# Check that a correction actually arrived, and stop asking a joint that cannot.
+#
+# `move_and_hold` reports nothing, so a stalled joint used to be indistinguish-
+# able from a successful one: the loop re-commanded the same unreachable target
+# every ~10s forever. Device-observed 2026-08-25 across six consecutive
+# corrections, elbow_pitch read +12.3 every single time while being sent to
+# +25.8 — only base_pitch's 10% share was landing, so the offset crept 43% ->
+# 26% instead of closing.
+#
+# That is worse than slow. Re-commanding a stall is what heats a servo into
+# giving up: the same elbow that stalled at +17.4 reached +44 three times out of
+# three after 60s of rest. So the loop was manufacturing the condition it kept
+# tripping over. Noticing the short move is what breaks that cycle.
+GAZE_PITCH_LAND_TOL_DEG: float = float(
+    os.environ.get("HAL_GAZE_PITCH_LAND_TOL_DEG", "2.0")
+)
+# When a repoint turns to the remembered bearing and finds nobody, look around
+# before writing the user off.
+#
+# The cooldown is the whole safety of this. Gaze repoints whenever no face has
+# been seen for GAZE_REPOINT_AFTER_S (12s), so with nothing holding it back a
+# user out at lunch would get: 12s wait, turn, nobody, ~23s sweep, nobody, 12s
+# wait, turn, nobody, sweep... a lamp scanning an empty room every thirty-five
+# seconds for an hour. An absence should produce ONE search, not forty.
+#
+# Nobody asked for this sweep, which is the difference from the look-aim's: it
+# is the same reasoning as GAZE_PITCH_COOLDOWN_S and the climb budget — an
+# autonomous loop needs a bound on how often it may repeat itself.
+GAZE_SWEEP_ENABLED: bool = (
+    os.environ.get("HAL_GAZE_SWEEP", "true").lower() in ("1", "true", "yes")
+)
+GAZE_SWEEP_COOLDOWN_S: float = float(
+    os.environ.get("HAL_GAZE_SWEEP_COOLDOWN_S", "900")
+)
+# How long nobody has to have been visible before the watcher looks around of
+# its own accord.
+#
+# The sweep used to hang off a repoint that had MOVED and then missed, which
+# made it unreachable in the two cases it is most wanted: no bearing to turn to,
+# and already sitting on the bearing. Device-observed — the estimate was dropped
+# by a calibration change, so every reacquire declined, and the lamp sat looking
+# at nothing for as long as it was left.
+#
+# Longer than GAZE_REPOINT_AFTER_S (12s) so the cheap move is always tried first
+# and the half-minute sweep stays the escalation, not the reflex. Note that is a
+# different number from GAZE_REPOINT_COOLDOWN_S (60s), which is the gap BETWEEN
+# repoints rather than the wait before one.
+GAZE_SWEEP_AFTER_S: float = float(
+    os.environ.get("HAL_GAZE_SWEEP_AFTER_S", "30")
+)
+# The cooldown when there is no bearing at all.
+#
+# Fifteen minutes is right for "I have a bearing, it missed, stop thrashing".
+# It is wrong for "I have no idea where you are", because then the sweep is the
+# ONLY way to find out and the lamp is forbidden from trying. Device-observed:
+# three failed repoints dropped the estimate, and the lamp then sat unable to
+# repoint (nothing to turn to) and unable to sweep (11 minutes left on the
+# cooldown) while the user was talking to it.
+GAZE_SWEEP_COOLDOWN_LOST_S: float = float(
+    os.environ.get("HAL_GAZE_SWEEP_COOLDOWN_LOST_S", "120")
+)
+
+# --- climbing to find a face ------------------------------------------------
+#
+# A person box that TOUCHES the top edge of the frame means the body continues
+# past it, so the head is above and this camera is aimed too low. That is the
+# only shape of evidence used: an unclipped body with no face means the head IS
+# in frame and simply was not detected — turned away, in profile, backlit — and
+# climbing then aims at the ceiling for no reason.
+#
+# A fixed step rather than a proportional one, because the torso says "the head
+# is up there somewhere" and never how far. Proportional control needs an error
+# signal; this is a search.
+GAZE_FACE_SEARCH_STEP_DEG: float = float(
+    os.environ.get("HAL_GAZE_FACE_SEARCH_STEP_DEG", "15")
+)
+# About 60 degrees of climb. Bounded because the evidence stays true no matter
+# how far the neck has already travelled, so acting on it forever is a loop and
+# not a search.
+GAZE_FACE_SEARCH_MAX_STEPS: int = int(
+    os.environ.get("HAL_GAZE_FACE_SEARCH_MAX_STEPS", "4")
+)
+
+# Where the arm was standing the last time it could see a face. Separate from
+# USER_BEARING_PATH deliberately — see face_height.py.
+FACE_HEIGHT_PATH: str = os.environ.get(
+    "HAL_FACE_HEIGHT_PATH", "/var/lib/hal/face_height.json"
+)
+
+# --- horizontal (pan) correction -------------------------------------------
+#
+# The mirror of the pitch knobs below, and deliberately LAZIER. Vertical framing
+# fails in one direction — a user stands and leaves the top of frame — so it is
+# worth chasing. Horizontal drift is mostly a person shifting in a chair, and a
+# lamp that swings to follow every lean is the twitchy behaviour the whole gaze
+# loop is damped to avoid. So: a wider dead zone and a smaller step than pitch.
+GAZE_YAW_ENABLED: bool = (
+    os.environ.get("HAL_GAZE_YAW", "true").lower() in ("1", "true", "yes")
+)
+GAZE_YAW_WINDOW_S: float = float(os.environ.get("HAL_GAZE_YAW_WINDOW_S", "12"))
+GAZE_YAW_MIN_SAMPLES: int = int(os.environ.get("HAL_GAZE_YAW_MIN_SAMPLES", "8"))
+# dx runs -0.5 (left edge) to +0.5 (right edge), so this band is a fraction of
+# the FULL frame width: 0.10 lets the face sit a fifth of the way to the edge
+# before the lamp turns.
+#
+# Started at 0.22 on the reasoning that horizontal drift is just someone
+# shifting in a chair and worth ignoring. Device-observed: deliberately moving
+# side to side at a desk peaked at dx=+20%, so the loop measured the movement
+# correctly and declined every time — a threshold that wide barely fires.
+#
+# Narrower than the pitch dead zone (0.15) rather than wider, because the value
+# tested is the MEDIAN over GAZE_YAW_WINDOW_S. The window is what rejects
+# leaning and fidgeting; making the dead zone do that job a second time only
+# costs the correction it was supposed to allow.
+GAZE_YAW_DEAD_ZONE_FRAC: float = float(
+    os.environ.get("HAL_GAZE_YAW_DEAD_ZONE_FRAC", "0.10")
+)
+# dx is a fraction of frame WIDTH, and the lens spans far more degrees
+# horizontally than the correction needs to be aggressive about.
+GAZE_YAW_DEG_PER_FRAME: float = float(
+    os.environ.get("HAL_GAZE_YAW_DEG_PER_FRAME", "40")
+)
+GAZE_YAW_MAX_STEP_DEG: float = float(
+    os.environ.get("HAL_GAZE_YAW_MAX_STEP_DEG", "12")
+)
+# Neither pan joint fights gravity, so they arrive quickly — but the whole lamp
+# turning is a bigger visual event than a head tilt, so it gets the same gentle
+# second as the pitch correction rather than the brisk look.aim quarter.
+GAZE_YAW_MOVE_S: float = float(os.environ.get("HAL_GAZE_YAW_MOVE_S", "1.0"))
+
+# How long a pitch correction takes, in seconds.
+#
+# Separate from aim.MOVE_DURATION_S (0.25) on purpose. That constant is shared
+# with look.aim, which runs up to six iterations per call and wants each one
+# brisk; stretching it there would turn a ~3.5s "look at me" into ~8s. Gaze
+# makes ONE unrequested move every ten seconds or so, and there is nothing
+# waiting on it, so it can afford to be gentle.
+#
+# 0.25s put a full 15 deg correction at 60 deg/s — inside the SAFETY.md ceiling
+# of 120, but a visible snap on a desk lamp and needlessly hard on a joint that
+# spends the move fighting gravity. At 1.0s the same correction runs at 15 deg/s.
+GAZE_PITCH_MOVE_S: float = float(
+    os.environ.get("HAL_GAZE_PITCH_MOVE_S", "1.0")
+)
+# Let the arm arrive before reading it back — a read taken mid-glide reports a
+# short move that is merely still moving.
+GAZE_PITCH_SETTLE_S: float = float(
+    os.environ.get("HAL_GAZE_PITCH_SETTLE_S", "1.8")
+)
+# How long a joint that came up short is left out of the allocation. Matched to
+# the measured recovery: a rested elbow was reliable again after ~60s.
+GAZE_PITCH_STALL_REST_S: float = float(
+    os.environ.get("HAL_GAZE_PITCH_STALL_REST_S", "60")
+)
+# Stop short of where it actually stalled, so the retry does not lean on the
+# stop again the moment the joint is readmitted.
+GAZE_PITCH_STALL_BACKOFF_DEG: float = float(
+    os.environ.get("HAL_GAZE_PITCH_STALL_BACKOFF_DEG", "2.0")
 )

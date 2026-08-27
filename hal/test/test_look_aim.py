@@ -4,11 +4,13 @@ The sign test is the important one: an inverted yaw sign is silent — the lamp
 turns confidently the wrong way and nothing in the code looks wrong.
 """
 
+import time
 from unittest import mock
 
 import numpy as np
 import pytest
 
+import hal.config as config
 import hal.app_state as state
 from hal.drivers.tracking import aim
 
@@ -69,6 +71,11 @@ def _detector(box, target_hit="person"):
     return d
 
 
+# Captured before the autouse fixture below replaces it, so the two tests that
+# exercise the sweep itself can reach past the stub every other test relies on.
+_REAL_SWEEP = aim._sweep_for_subject
+
+
 @pytest.fixture(autouse=True)
 def _reset_module_state():
     """`_last_seen_mono` deliberately persists across look calls in production —
@@ -76,7 +83,11 @@ def _reset_module_state():
     aim._last_seen_mono = 0.0
     aim._last_seen_yaw = 0.0
     aim._abort_evt.clear()
-    yield
+    # The give-up path now looks around before saying it is lost. A real sweep
+    # drives servos and a detector for tens of seconds, which no test of the aim
+    # wants; the tests that care about it patch this themselves.
+    with mock.patch.object(aim, "_sweep_for_subject", return_value=False):
+        yield
 
 
 def _frame(width=640, height=480):
@@ -764,3 +775,237 @@ def test_the_measured_scale_is_biased_low_not_high():
     true scale is lower — so it must be damped, never amplified."""
     assert 0.0 < aim.SCALE_SAFETY < 1.0
     assert aim.MAX_SCALE_DEG <= 250.0, "400 asked for corrections that got clamped"
+
+
+# --- Subject selection: the asker, not the detector's favourite (F24) ---
+
+
+def _candidate_detector(candidates, face=None):
+    """Detector exposing `detect_candidates` for person, `detect` for face."""
+    d = mock.Mock()
+    d.detect_candidates = mock.Mock(
+        side_effect=lambda f, t, strict=False, min_conf=None: (
+            list(candidates) if t == "person" else []
+        )
+    )
+    d.detect = mock.Mock(
+        side_effect=lambda f, t, strict=True, min_conf=None: face if t == "face" else None
+    )
+    d.last_confidence = 0.5
+    return d
+
+
+def test_the_nearest_person_wins_over_a_more_confident_distant_one():
+    """The device failure, reproduced (look_logs/20260824-112802).
+
+    A small, fully-visible colleague at the back scored 0.71 while the person
+    actually asking — clipped, occluded by what they held up — scored lower.
+    Confidence ranked the colleague first and the aim turned 19.8 deg away.
+    """
+    frame = _frame(width=1280, height=720)
+    colleague = ((300, 210, 160, 190), 0.71)   # 190px tall, 26% of frame
+    asker = ((640, 0, 640, 700), 0.52)         # 700px tall, at the edge
+    box, kind, conf = aim._detect_subject(_candidate_detector([colleague, asker]), frame)
+
+    assert box == asker[0], "the closest person is the one talking to the lamp"
+    assert kind == "person"
+    assert conf == 0.52
+
+
+def test_a_detection_too_small_to_be_the_asker_is_not_chosen():
+    """The floor still rejects — it just runs before the choice now."""
+    frame = _frame(width=1280, height=720)
+    far = ((300, 300, 40, 70), 0.95)  # 70px = 9.7% of frame, under the 15% floor
+    box, kind, _ = aim._detect_subject(_candidate_detector([far], face=None), frame)
+
+    assert box is None and kind == ""
+
+
+def test_the_size_floor_is_applied_before_ranking_not_after():
+    """A high-confidence stranger must not shadow a qualifying asker.
+
+    `detect` returns ONE box, so filtering afterwards could only rubber-stamp
+    whatever confidence had already picked — which is how the wrong human got
+    through.
+    """
+    frame = _frame(width=1280, height=720)
+    tiny_but_certain = ((10, 10, 30, 60), 0.99)   # 8% of frame — under the floor
+    real_asker = ((600, 100, 400, 500), 0.40)     # 69% of frame
+    box, _kind, _conf = aim._detect_subject(
+        _candidate_detector([tiny_but_certain, real_asker]), frame
+    )
+
+    assert box == real_asker[0]
+
+
+def test_no_person_candidates_falls_back_to_the_face_path():
+    frame = _frame(width=1280, height=720)
+    face_box = (500, 200, 120, 140)  # 19% of frame height, over the 8% face floor
+    box, kind, _ = aim._detect_subject(_candidate_detector([], face=face_box), frame)
+
+    assert box == face_box and kind == "face"
+
+
+def test_a_detector_without_the_candidate_path_still_works():
+    """Older detector object: fall through to `detect`, do not raise."""
+    frame = _frame(width=1280, height=720)
+    d = mock.Mock(spec=["detect", "last_confidence"])
+    d.detect = mock.Mock(
+        side_effect=lambda f, t, strict=True, min_conf=None: (
+            (100, 100, 300, 400) if t == "person" else None
+        )
+    )
+    d.last_confidence = 0.8
+    box, kind, _ = aim._detect_subject(d, frame)
+
+    assert box == (100, 100, 300, 400) and kind == "person"
+
+
+# --- Task C / F12: every exit scores the remembered bearing ---
+
+
+def _scored(box, target_hit="person", deadline=5.0):
+    """Run an aim WITH a bearing available; return (result, what was scored).
+
+    Not built on `_run`: that helper pins `read_estimate` to None so the aims it
+    drives never consult the bearing, which is exactly the thing under test here.
+    """
+    calls = []
+    from hal.drivers.tracking import user_bearing
+
+    est = mock.Mock()
+    est.bearing_deg = 40.0
+    est.confidence = 0.9
+    est.pose = {"base_yaw.pos": 40.0}
+
+    frame = _frame()
+    svc = _FakeSvc()
+    with (
+        mock.patch.object(state, "camera_capture", _FakeCap(frame)),
+        mock.patch.object(state, "animation_service", svc),
+        mock.patch.object(state, "safety_policy", None),
+        mock.patch.object(state, "_camera_disabled", False, create=True),
+        mock.patch.object(user_bearing, "read_estimate", return_value=est),
+        mock.patch.object(
+            user_bearing, "record_prediction",
+            side_effect=lambda hit, now=None: calls.append(hit) or False,
+        ),
+    ):
+        res = aim.aim_for_look(deadline, detector=_detector(box, target_hit))
+    return res, calls
+
+
+def test_a_bearing_step_that_finds_nobody_is_counted_as_a_miss():
+    """The give-up exit always reported this. It is the other four that did not."""
+    res, calls = _scored(None)
+    assert res.bearing_steps > 0, "precondition: the bearing was consulted"
+    assert calls == [False]
+
+
+def test_an_aim_that_never_consulted_the_bearing_says_nothing_about_it():
+    """A hit or a miss from an aim that never turned there is not evidence."""
+    res, calls = _scored((300, 100, 60, 200))
+    assert res.bearing_steps == 0
+    assert calls == [], "no bearing step means no verdict"
+
+
+def test_the_bearing_is_scored_at_most_once_per_aim():
+    """It used to be called on EVERY iteration a subject was visible."""
+    _res, calls = _scored(None)
+    assert len(calls) <= 1
+
+
+# --- Task H / F13: an announced search owes the user a resolution ---
+
+
+def test_a_failed_search_says_so():
+    """`look_searching` promises to look. Going silent leaves the lamp turned
+    away mid-question while the model answers about the wrong scene."""
+    said = []
+    with mock.patch.object(aim, "_say", side_effect=said.append):
+        res, _calls = _scored(None)
+
+    assert res.bearing_steps > 0, "precondition: a search was announced"
+    assert "look_searching" in said
+    assert said[-1] == "look_lost", said
+
+
+def test_a_look_that_never_searched_stays_quiet():
+    """A look that found the subject immediately owes no explanation, and
+    narrating every visual question is what the filler gating exists to avoid."""
+    said = []
+    with mock.patch.object(aim, "_say", side_effect=said.append):
+        _res, _calls = _scored((300, 100, 60, 200))
+
+    assert "look_searching" not in said
+    assert "look_lost" not in said
+
+
+# --- the aim looks around before it claims to be lost ---
+
+
+def test_look_lost_is_only_said_after_actually_looking_around():
+    """`look_lost` claims "I can't find you".
+
+    Until now it said that having only turned toward a remembered bearing —
+    a guess about where someone WAS, not a search. The phrase has to be earned.
+    """
+    swept = []
+    with mock.patch.object(aim, "_sweep_for_subject",
+                           side_effect=lambda: swept.append(True) or False), \
+         mock.patch.object(aim, "_say", side_effect=(said := []).append):
+        _res, _calls = _scored(None)
+
+    assert swept, "it gave up without looking around"
+    assert said.index("look_searching") < said.index("look_lost"), said
+
+
+def test_a_subject_found_by_the_sweep_is_then_centred():
+    """The sweep stops the moment it SEES someone; it does not centre them, and
+    centring is this function's job."""
+    seen = {"n": 0}
+
+    def found_after_sweep():
+        seen["n"] += 1
+        return True
+
+    with mock.patch.object(aim, "_sweep_for_subject", side_effect=found_after_sweep), \
+         mock.patch.object(aim, "_say", side_effect=(said := []).append):
+        res, _calls = _scored(None)
+
+    assert seen["n"] >= 1
+    assert "look_lost" not in said, "it swept, found someone, and still cried lost"
+
+
+def test_the_deadline_stops_counting_while_the_sweep_runs():
+    """The deadline exists so a live turn never stalls in SILENCE.
+
+    `look_searching` has already dealt with the silence, and a sweep takes
+    longer than the whole 8s budget — charging it against that budget would mean
+    never sweeping at all.
+    """
+    def slow_sweep():
+        time.sleep(0.4)
+        return False
+
+    with mock.patch.object(config, "LOOK_AIM_DEADLINE_S", 0.5), \
+         mock.patch.object(aim, "_sweep_for_subject", side_effect=slow_sweep), \
+         mock.patch.object(aim, "_say", side_effect=(said := []).append):
+        _res, _calls = _scored(None)
+
+    assert "look_lost" in said, (
+        "the deadline swallowed the aim mid-sweep instead of pausing"
+    )
+
+
+def test_a_sweep_that_cannot_run_does_not_sink_the_aim():
+    """The caller still needs an answer, even if it is "I could not find you".
+
+    Tests the guard inside `_sweep_for_subject` rather than around it — patching
+    the whole function would step over the very try/except being checked.
+    """
+    from hal.drivers.tracking import search
+
+    with mock.patch.object(search, "search_for_subject",
+                           side_effect=RuntimeError("no camera")):
+        assert aim._sweep_for_subject() is False

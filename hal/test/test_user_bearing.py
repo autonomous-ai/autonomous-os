@@ -59,7 +59,15 @@ def test_rate_limit_drops_rapid_sightings():
         assert ub.read_estimate(now=t + 1.0).samples == 1
 
 
-def test_confidence_decays_with_age():
+def test_confidence_does_not_decay_with_age():
+    """Confidence measures how well the estimate is LEARNED, not how recent.
+
+    It used to halve every six hours, which fought the thing that feeds this
+    file: a device recording ~2 sightings a day decayed faster than it learned,
+    so the bearing was refused for low confidence exactly when it was needed.
+    Staleness is now the prediction-failure path's job (see the miss-streak
+    tests) — a bearing that stops working is dropped outright rather than fading.
+    """
     with tempfile.TemporaryDirectory() as d, _with_path(d):
         t = 1_000_000.0
         for i in range(ub.CONFIDENCE_FULL_SAMPLES):
@@ -67,7 +75,21 @@ def test_confidence_decays_with_age():
         fresh = ub.read_estimate(now=t + 8 * 60.0).confidence
         stale = ub.read_estimate(now=t + 8 * 60.0 + 48 * 3600).confidence
         assert fresh > 0.9
-        assert stale < fresh / 4.0, "a two-day-old estimate must not look authoritative"
+        assert stale == fresh, "age must not move confidence"
+        # ...but the age is still reported, so a caller that cares can ask.
+        assert ub.read_estimate(now=t + 8 * 60.0 + 48 * 3600).age_s > 47 * 3600
+
+
+def test_confidence_still_grows_with_sightings():
+    with tempfile.TemporaryDirectory() as d, _with_path(d):
+        t = 1_000_000.0
+        ub.record_sighting(15.0, now=t)
+        one = ub.read_estimate(now=t).confidence
+        for i in range(1, ub.CONFIDENCE_FULL_SAMPLES):
+            ub.record_sighting(15.0, now=t + i * 60.0)
+        full = ub.read_estimate(now=t + 8 * 60.0).confidence
+        assert 0.0 < one < full
+        assert full > 0.9
 
 
 def test_no_estimate_reads_as_none_not_zero():
@@ -254,19 +276,24 @@ def test_pose_joints_are_smoothed_like_the_bearing(tmp_path, monkeypatch):
     assert 0.0 < pitch < 20.0, f"expected a smoothed pitch, got {pitch}"
 
 
-def test_v1_file_keeps_its_learned_bearing(tmp_path, monkeypatch):
-    """A schema bump must not throw away hours of sightings — v1 had no pose,
-    so it migrates with an empty one and refills on the next sighting."""
+def test_v1_file_is_no_longer_migrated(tmp_path, monkeypatch):
+    """This used to keep v1's yaw, on the grounds that a schema bump must not
+    throw away hours of sightings. v3 reverses that deliberately.
+
+    The reason the yaw looked safe to keep was that only the POSE was new in
+    v2. But a recalibration moves every joint's degree scale, base_yaw
+    included — `6f0c4ec4` zeroed all five homing offsets — so a v1 bearing is
+    an angle in an unknown frame of reference, not a direction. Restoring it
+    confidently is the failure the calibration fingerprint exists to prevent,
+    and re-learning costs about eight sightings.
+    """
     path = tmp_path / "b.json"
     path.write_text(json.dumps({
         "version": 1, "bearing_deg": 25.709, "confidence": 0.25,
         "samples": 2, "outlier_streak": 0, "updated": __import__("time").time(),
     }))
     monkeypatch.setattr(ub.config, "USER_BEARING_PATH", str(path), raising=False)
-    est = ub.read_estimate()
-    assert est is not None, "v1 estimate was discarded"
-    assert est.bearing_deg == 25.709
-    assert est.pose == {}
+    assert ub.read_estimate() is None
 
 
 def test_relocation_replaces_the_posture_rather_than_averaging_it(tmp_path, monkeypatch):
@@ -298,3 +325,113 @@ def test_a_sighting_without_a_pose_still_moves_the_bearing(tmp_path, monkeypatch
     assert est.bearing_deg > 0.0, "the pose-less sighting was ignored"
     assert est.pose["base_pitch.pos"] == 5.0, "the known posture was lost"
     assert est.pose["base_yaw.pos"] == est.bearing_deg
+
+
+# --- F1: a pose is only valid on the calibration it was recorded against ---
+
+
+def _seed(d, payload):
+    with open(_tmp_path(d), "w", encoding="utf-8") as f:
+        json.dump(payload, f)
+
+
+def _fp(value):
+    return mock.patch.object(ub, "_calibration_fingerprint", lambda: value)
+
+
+def test_a_v2_estimate_is_dropped_because_its_calibration_is_unknown():
+    """Every angle is degrees ON A CALIBRATION, and v2 never recorded which.
+
+    `6f0c4ec4` zeroed all five homing offsets, so the same number names a
+    different posture afterwards. An unverifiable pose restored at confidence
+    1.0 is the failure this schema version exists to stop.
+    """
+    with tempfile.TemporaryDirectory() as d, _with_path(d):
+        _seed(d, {"version": 2, "bearing_deg": 42.0, "pose": {"base_yaw.pos": 42.0},
+                  "confidence": 1.0, "samples": 20, "updated": 1_000_000.0})
+        assert ub.read_estimate(now=1_000_001.0) is None
+
+
+def test_a_v1_estimate_is_dropped_too_not_migrated():
+    """v1's yaw used to be kept. The recalibration moved base_yaw's scale as
+    well, so the direction is as suspect as the posture."""
+    with tempfile.TemporaryDirectory() as d, _with_path(d):
+        _seed(d, {"version": 1, "bearing_deg": 42.0, "samples": 20,
+                  "updated": 1_000_000.0})
+        assert ub.read_estimate(now=1_000_001.0) is None
+
+
+def test_a_pose_from_a_different_calibration_is_refused():
+    with tempfile.TemporaryDirectory() as d, _with_path(d), _fp("beef1234"):
+        _seed(d, {"version": 3, "calibration": "0000dead", "bearing_deg": 42.0,
+                  "pose": {"base_yaw.pos": 42.0}, "confidence": 1.0,
+                  "samples": 20, "updated": 1_000_000.0})
+        assert ub.read_estimate(now=1_000_001.0) is None
+
+
+def test_a_pose_from_the_same_calibration_is_kept():
+    with tempfile.TemporaryDirectory() as d, _with_path(d), _fp("beef1234"):
+        _seed(d, {"version": 3, "calibration": "beef1234", "bearing_deg": 42.0,
+                  "pose": {"base_yaw.pos": 42.0}, "confidence": 1.0,
+                  "samples": 20, "updated": 1_000_000.0})
+        est = ub.read_estimate(now=1_000_001.0)
+        assert est is not None and est.bearing_deg == 42.0
+
+
+def test_an_unreadable_calibration_does_not_wipe_the_estimate():
+    """A missing file or a permissions change usually means the arm is not
+    running, not that the numbers moved — wiping the fleet's bearings over that
+    would be its own bug."""
+    with tempfile.TemporaryDirectory() as d, _with_path(d), _fp(None):
+        _seed(d, {"version": 3, "calibration": "0000dead", "bearing_deg": 42.0,
+                  "pose": {"base_yaw.pos": 42.0}, "confidence": 1.0,
+                  "samples": 20, "updated": 1_000_000.0})
+        est = ub.read_estimate(now=1_000_001.0)
+        assert est is not None and est.bearing_deg == 42.0
+
+
+def test_a_sighting_stamps_the_live_calibration():
+    with tempfile.TemporaryDirectory() as d, _with_path(d), _fp("beef1234"):
+        ub.record_sighting(10.0, pose={"base_yaw.pos": 10.0})
+        with open(_tmp_path(d), encoding="utf-8") as f:
+            assert json.load(f)["calibration"] == "beef1234"
+
+
+def test_the_fingerprint_follows_content_not_timestamp():
+    """An OTA rewrites the calibration's mtime without changing an offset."""
+    with tempfile.TemporaryDirectory() as d:
+        cal = os.path.join(d, "hal.json")
+        with open(cal, "w", encoding="utf-8") as f:
+            f.write('{"base_yaw": {"homing_offset": 0}}')
+        with mock.patch.object(ub, "_calibration_path", lambda: cal):
+            first = ub._calibration_fingerprint()
+            os.utime(cal, (0, 0))          # same bytes, different timestamp
+            assert ub._calibration_fingerprint() == first
+            with open(cal, "w", encoding="utf-8") as f:
+                f.write('{"base_yaw": {"homing_offset": 1909}}')
+            assert ub._calibration_fingerprint() != first
+
+
+def test_the_calibration_path_comes_from_the_robot_not_a_second_derivation():
+    """Two copies of the resolution rule can drift; the arm's own answer cannot.
+
+    A drifted mirror would fingerprint a file the arm never loaded — dropping
+    good bearings on every read, or accepting a stale pose from another unit.
+    """
+    import hal.app_state as state
+
+    robot = mock.Mock()
+    robot.calibration_fpath = "/var/lib/hal/calibration/robots/hal_follower/lamp-ac82.json"
+    svc = mock.Mock()
+    svc.robot = robot
+    with mock.patch.object(state, "animation_service", svc, create=True):
+        assert ub._calibration_path().endswith("lamp-ac82.json")
+
+
+def test_it_falls_back_to_deriving_the_path_with_no_robot_connected():
+    """Off-device tests, and the window before the arm connects."""
+    import hal.app_state as state
+
+    with mock.patch.object(state, "animation_service", None, create=True):
+        path = ub._calibration_path()
+    assert path is None or path.endswith(".json")

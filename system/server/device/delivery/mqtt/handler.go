@@ -304,6 +304,10 @@ func (h *DeviceMQTTHandler) dispatchData(env domain.MQTTDataCommand) error {
 		return h.handleSystemVersion(env)
 	case domain.KindSystemNetwork:
 		return h.handleSystemNetwork(env)
+	case domain.KindSystemReboot:
+		return h.handleSystemReboot(env)
+	case domain.KindSystemShutdown:
+		return h.handleSystemShutdown(env)
 	case domain.KindSkillsInstall:
 		return h.handleSkillsInstall(env)
 	case domain.KindSkillsSave:

@@ -4,6 +4,7 @@ TTS Backend abstraction — pluggable providers for text-to-speech streaming.
 Supported providers:
   - openai (default): OpenAI-compatible API (works with any OpenAI-compatible server)
   - elevenlabs: ElevenLabs TTS API with streaming support
+  - piper: on-device synthesis, no network and no shared rate limit
 """
 
 import logging
@@ -15,6 +16,7 @@ logger = logging.getLogger("hal.voice.tts")
 # Provider constants
 PROVIDER_OPENAI = "openai"
 PROVIDER_ELEVENLABS = "elevenlabs"
+PROVIDER_PIPER = "piper"
 
 # All backends output 24kHz 16-bit mono PCM
 TTS_SAMPLE_RATE = 24000
@@ -70,6 +72,10 @@ def create_backend(
 ) -> TTSBackend:
     """Factory: create a TTS backend by provider name."""
     provider = (provider or PROVIDER_OPENAI).lower().strip()
+    if provider == PROVIDER_PIPER:
+        # No api_key or base_url: synthesis is local, so neither applies.
+        from hal.drivers.voice.tts.piper import PiperTTSBackend
+        return PiperTTSBackend()
     if provider == PROVIDER_ELEVENLABS:
         # WebSocket (stream-input) variant behind a flag; default is HTTP.
         import hal.config as _cfg

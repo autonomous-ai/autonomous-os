@@ -523,7 +523,7 @@ Two different acts, and mixing them up is what made the web button look broken:
 
 The web Versions card's `update` button is `force-update` (via
 `POST /api/system/software-update/:target`). Both are limited to the same target
-allowlist, including `bootstrap`; a Bootstrap update detaches its installer so
+allowlist, including `bootstrap` and `device`; a Bootstrap update detaches its installer so
 the replacement worker can restart safely. `componentInstalled` still refuses a
 component this device does not have.
 
@@ -534,6 +534,8 @@ component this device actually has (`componentInstalled`), so the agent-CLI entr
 is the runtime it runs and nothing else. `held_by_floor` means a newer build is
 published but `min_version` was not promoted to it — the worker will refuse it,
 which is why the web Versions card treats held components as "no update".
+The installed device profile is reported as `device`, resolved from nested
+`metadata.devices.<device_type>` rather than the flat component list.
 os-server proxies this as `GET /api/system/ota-versions`.
 
 ### Version Detection Per Component
@@ -543,6 +545,7 @@ os-server proxies this as `GET /api/system/ota-versions`.
 | `os-server` | Run `os-server --version`, parse output |
 | `bootstrap` | Compiled-in constant `config.BootstrapVersion` (ldflags) |
 | `web` | Read file `/usr/share/nginx/html/setup/VERSION` |
+| `device` | Read `/opt/devices/<device_type>/VERSION` |
 | `openclaw` | Run `openclaw --version`, extract semver with regex |
 | `hal` | Run `/opt/hal/venv/bin/python -m hal --version` OR read `/opt/hal/VERSION` file |
 | `codex` / `claudecode` / `opencode` | Run `<cli> --version`, extract semver from line one (`cliSemver`) |
@@ -556,6 +559,7 @@ os-server proxies this as `GET /api/system/ota-versions`.
 | `os-server` | Run `software-update os-server` (blocks up to 10 min) |
 | `bootstrap` | Spawn detached `software-update bootstrap` (self-update, survives restart) |
 | `web` | Run `software-update web` |
+| `device` | Run `software-update device` for the resolved `devices.<device_type>` profile; its rootfs overlay is applied while preserving device-local HAL `.env` |
 | `openclaw` | ~~Run `npm install -g openclaw@{version}` → `systemctl restart openclaw`~~ (temporarily disabled) |
 | `hal` | Run `software-update hal` → `systemctl restart hal` |
 | `codex` / `claudecode` / `opencode` / `picoclaw` | Run `software-update <key>` — only on the device whose `agent_runtime` IS that runtime |
@@ -584,8 +588,24 @@ branch guard, not the bare key: the key also appears in comments and in the usag
 strings of an updater that does not implement it.
 
 **Healing a device that has an old updater.** `make upload-setup` also publishes
-the updater raw at `{CDN}/software-update`, so one SSH command brings a field
-device up to the current one:
+the updater raw at `{CDN}/software-update`. Bootstrap now refreshes the on-device
+copy from there **automatically**, at the top of every check cycle, before it
+reconciles any component — the updater is not an OTA component, so this is the
+only automatic path it has (`system/bootstrap/updater_refresh.go`). The URL is
+derived from `metadata_url` (`{base}/ota/metadata.json` → `{base}/software-update`)
+rather than configured separately, so the two can never point at different
+releases.
+
+The refresh is deliberately timid. It skips while a force update is installing
+(bash reads a script lazily, so replacing a *running* updater would resume
+execution at an arbitrary offset — which is also why the script must never
+update itself), it validates the download with `bash -n` **before** anything
+touches the live file, it stages into the same directory and `rename`s so the
+swap is atomic, and every failure leaves the existing updater untouched. A
+device must never end up without a working updater.
+
+The manual one-liner below still works and is still the right tool when you need
+the new updater *now* rather than at the next poll:
 
 ```bash
 sudo curl -fsSL https://cdn.autonomous.ai/os/software-update -o /tmp/su \
@@ -638,7 +658,7 @@ aborts with an error if neither is set — no compiled-in URL.
     # are copied from the retained runtime before uv sync.
     unzip -q "$ZIP" -d /opt/.hal.new
     cp -a /root/bootstrap/rollback/hal.previous/{.env,.venv,.uv-cache} /opt/.hal.new/
-    (cd /opt/.hal.new && uv sync --python 3.12 --extra hardware)
+    (cd /opt/.hal.new && uv sync --python 3.12 --extra hardware --extra aec)
     mv /opt/.hal.new /opt/hal
 
     systemctl restart hal
@@ -1007,7 +1027,7 @@ HAL version is a plain text `VERSION` file in the package root. Read by bootstra
 - [x] **HAL HTTP port**: `5001` (OS Server is `5000`).
 - [x] **Bridge protocol**: Simple HTTP proxy. HAL runs FastAPI on `127.0.0.1:5001`, OS Server proxies from port 5000.
 - [x] **Python version**: Pinned to Python 3.12+ (`pyproject.toml`, `.python-version`, `setup.sh` uses `uv sync --python 3.12`).
-- [x] **HAL packaging**: On-device venv via `uv sync --python 3.12 --extra hardware` at `/opt/hal/.venv`. OTA preserves venv, reinstalls only on requirements change.
+- [x] **HAL packaging**: On-device venv via `uv sync --python 3.12 --extra hardware --extra aec` at `/opt/hal/.venv`. OTA preserves venv, reinstalls only on requirements change.
 - [x] **Display driver**: DisplayService (GC9A01) is part of HAL Python at `hal/service/display/display_service.py`.
 - [x] **HAL config**: Environment variable-based (`config.py` reads from env vars). `.env` file support via `python-dotenv`. No separate config file needed.
 

@@ -128,12 +128,18 @@ class LEDEffectRequest(BaseModel):
         False,
         description="If true, don't overwrite user LED state (used by Buddy/transient overlays).",
     )
+    brightness: float = Field(
+        1.0,
+        ge=0.0,
+        le=1.0,
+        description="Level for effects that generate their own color (rainbow). Ignored by color-driven effects, which take their level from `color`.",
+    )
 
     model_config = {
         "json_schema_extra": {
             "examples": [
                 {"effect": "breathing", "color": [255, 100, 0], "speed": 1.0},
-                {"effect": "rainbow", "speed": 0.5},
+                {"effect": "rainbow", "speed": 0.5, "brightness": 0.05},
                 {
                     "effect": "notification_flash",
                     "color": [255, 0, 0],
@@ -663,6 +669,17 @@ class VoiceStartRequest(BaseModel):
     tts_provider: str = Field(
         PROVIDER_OPENAI, description=f"TTS provider: '{PROVIDER_OPENAI}' (default) or '{PROVIDER_ELEVENLABS}'"
     )
+
+
+class TTSConfigRequest(BaseModel):
+    """Partial TTS settings applied to the running service by POST
+    /voice/tts/config. Every field optional: only what is sent is changed."""
+
+    provider: Optional[str] = None
+    voice: Optional[str] = None
+    api_key: Optional[str] = None
+    base_url: Optional[str] = None
+    speed: Optional[float] = None
 
 
 class VoiceConfigRequest(BaseModel):

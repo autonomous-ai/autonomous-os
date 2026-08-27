@@ -65,3 +65,6 @@ integrations/perception-service/src/core/ser/models/emotion2vec_plus_large/emoti
 integrations/perception-service/tests/mock_data/audio/speakers/
 
 # Hardware CAD binaries are stored via Git LFS — see .gitattributes
+
+# Locally built wheels for the hal `aec` extra (scripts/release/build-aec-wheel.sh)
+dist/aec/

@@ -1,7 +1,9 @@
 import { useState, useEffect } from "react";
 import type { ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { RotateCw } from "lucide-react";
 import { getApiToken } from "@/lib/api";
+import { useTheme } from "@/lib/useTheme";
 import { API } from "./types";
 import { S } from "./styles";
 
@@ -25,7 +27,7 @@ export function StatusDot({ ok }: { ok: boolean }) {
 // CLI (codex / claudecode / opencode / picoclaw). The browser deliberately does
 // not learn which runtime is active just to build this URL.
 export function SoftwareUpdateButton({ target, label, onTriggered }: {
-  target: "os-server" | "bootstrap" | "web" | "hal" | "agent";
+  target: "os-server" | "bootstrap" | "web" | "hal" | "device" | "agent";
   label: string;
   // Called the moment the POST is accepted. The card needs this because a small
   // component (os-server, web) finishes in a few seconds — faster than the idle
@@ -159,6 +161,92 @@ export function RestartAgentButton({ agentName }: { agentName?: string }) {
       >
         <RotateCw size={12} className={busy ? "lm-spin-ico" : undefined} />
       </button>
+    </div>
+  );
+}
+
+// DevicePowerButtons uses os-server rather than HAL directly. The server owns
+// admin auth and gives the browser a response before it asks HAL to start the
+// cue-aware power action; a direct HAL call could disappear before the UI knows
+// whether the request was accepted.
+export function DevicePowerButtons() {
+  const [busy, setBusy] = useState<"reboot" | "shutdown" | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const [confirmAction, setConfirmAction] = useState<"reboot" | "shutdown" | null>(null);
+
+  const trigger = async (action: "reboot" | "shutdown") => {
+    if (busy) return;
+    const isShutdown = action === "shutdown";
+    setBusy(action);
+    setMessage(null);
+    let accepted = false;
+    try {
+      const token = getApiToken();
+      const headers: HeadersInit = token ? { Authorization: `Bearer ${token}` } : {};
+      const response = await fetch(`${API}/system/${action}`, { method: "POST", headers });
+      if (response.ok) {
+        accepted = true;
+        setMessage(isShutdown ? "Shutting down…" : "Restarting…");
+        return;
+      }
+      let reason = "Failed";
+      try {
+        const body = await response.json();
+        if (typeof body?.message === "string" && body.message) reason = body.message;
+      } catch { /* Keep the generic error. */ }
+      setMessage(reason);
+    } catch {
+      setMessage("Unreachable");
+    } finally {
+      // Keep both buttons disabled after an accepted request: the device is
+      // deliberately about to leave the network, so a second request is never useful.
+      if (!accepted) {
+        setBusy(null);
+        setTimeout(() => setMessage(null), 5000);
+      }
+    }
+  };
+
+  const buttonStyle = (action: "reboot" | "shutdown"): React.CSSProperties => {
+    const isShutdown = action === "shutdown";
+    const active = busy === action;
+    return {
+      flex: 1,
+      padding: "6px 9px",
+      borderRadius: 6,
+      border: `1px solid ${isShutdown ? "rgba(248,113,113,0.55)" : "rgba(245,158,11,0.55)"}`,
+      background: isShutdown ? "rgba(248,113,113,0.10)" : "var(--lm-amber-dim)",
+      color: isShutdown ? "var(--lm-red)" : "var(--lm-amber)",
+      fontSize: 11,
+      fontWeight: 650,
+      cursor: busy ? "wait" : "pointer",
+      opacity: busy && !active ? 0.45 : 1,
+    };
+  };
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 8 }}>
+        <button onClick={() => setConfirmAction("reboot")} disabled={!!busy} style={buttonStyle("reboot")}>Reboot</button>
+        <button onClick={() => setConfirmAction("shutdown")} disabled={!!busy} style={buttonStyle("shutdown")}>Shut down</button>
+      </div>
+      {message && <div style={{ marginTop: 7, fontSize: 10.5, color: busy ? "var(--lm-text-dim)" : "var(--lm-red)" }}>{message}</div>}
+      {confirmAction && (
+        <ConfirmDialog
+          title={confirmAction === "shutdown" ? "Shut down device?" : "Restart device?"}
+          message={confirmAction === "shutdown"
+            ? "The device will announce the shutdown, release its servos, and turn off. You must restore power before it can come back online."
+            : "The device will announce the reboot and be unavailable for about 30 seconds."}
+          confirmLabel={confirmAction === "shutdown" ? "Shut down" : "Restart"}
+          destructive={confirmAction === "shutdown"}
+          onCancel={() => setConfirmAction(null)}
+          onConfirm={() => {
+            const action = confirmAction;
+            setConfirmAction(null);
+            void trigger(action);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -561,6 +649,7 @@ export function ConfirmDialog({
   onConfirm: () => void;
   onCancel: () => void;
 }) {
+  const [, , themeClass] = useTheme();
   // Esc cancels — matches the click-outside affordance for keyboard users.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -570,8 +659,11 @@ export function ConfirmDialog({
     return () => window.removeEventListener("keydown", onKey);
   }, [onCancel]);
 
-  return (
+  // Portal to <body>: Overview cards use overflow:hidden and a hover transform,
+  // either of which would otherwise clip a position:fixed dialog to the card.
+  return createPortal(
     <div
+      className={`lm-root ${themeClass}`}
       onClick={onCancel}
       role="dialog"
       aria-modal="true"
@@ -579,7 +671,7 @@ export function ConfirmDialog({
       style={{
         position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)",
         display: "flex", justifyContent: "center", alignItems: "center",
-        zIndex: 1100, padding: 20,
+        zIndex: 2000, padding: 20,
       }}
     >
       <div
@@ -601,6 +693,7 @@ export function ConfirmDialog({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

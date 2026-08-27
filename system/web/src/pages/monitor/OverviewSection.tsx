@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { Satellite, Globe, Eye, Volume2, Cpu, Drama, Clapperboard, Bot, Tag, Wifi, LayoutDashboard } from "lucide-react";
+import { Satellite, Globe, Eye, Volume2, Cpu, Drama, Clapperboard, Bot, Tag, Wifi, LayoutDashboard, Power } from "lucide-react";
 import { S } from "./styles";
 import { API, HW } from "./types";
 
@@ -49,7 +49,7 @@ function useEmotionPresets() {
   return { emotions, colors };
 }
 import type { SystemInfo, NetworkInfo, HWHealth, OCStatus, PresenceInfo, VoiceStatus, ServoState, DisplayState, AudioVolume, LEDColor, SceneInfo } from "./types";
-import { StatusDot, HWBadge, SignalBars, Skeleton, SkeletonRows, SoftwareUpdateButton, StatRow, StatusBadge, STATUS_TONE, CardLabel, RestartAgentButton } from "./components";
+import { StatusDot, HWBadge, SignalBars, Skeleton, SkeletonRows, SoftwareUpdateButton, StatRow, StatusBadge, STATUS_TONE, CardLabel, RestartAgentButton, DevicePowerButtons } from "./components";
 import { formatUptime, formatAgo, useCountUp } from "./utils";
 import { BuddyCard } from "./BuddyCard";
 
@@ -574,6 +574,7 @@ export function OverviewSection({
             <VersionRow name="HAL"    color="var(--lm-blue)"   version={halVersion}              uptime={sys?.halUptime ?? null}                                updateTarget={canUpdate("hal") ? "hal" : null} updating={isUpdating("hal")} onTriggered={onUpdateTriggered} />
             <VersionRow name="Agent"  color="var(--lm-purple)" version={oc?.version ?? null}     uptime={oc?.connected ? (oc?.agentUptime ?? null) : null}      updateTarget={canUpdate("agent") ? "agent" : null} updating={isUpdating("agent")} onTriggered={onUpdateTriggered} />
             {isDebug && <VersionRow name="Bootstrap" color="var(--lm-text-dim)" version={otaVersions.bootstrap?.current ?? null} uptime={null} updateTarget={canUpdate("bootstrap") ? "bootstrap" : null} updating={isUpdating("bootstrap")} onTriggered={onUpdateTriggered} />}
+            {isDebug && <VersionRow name="Device" color="var(--lm-text-dim)" version={otaVersions.device?.current ?? null} uptime={null} updateTarget={canUpdate("device") ? "device" : null} updating={isUpdating("device")} onTriggered={onUpdateTriggered} />}
           </div>
         </div>
         </div>
@@ -662,6 +663,14 @@ export function OverviewSection({
             </div>
         </div>
         )}
+
+        {/* Power actions are intentionally routed through os-server: it applies
+            admin auth, acknowledges the browser, then invokes HAL's full
+            cue-aware reboot/shutdown sequence. */}
+        <div className="lm-mon-card" style={monCard}>
+          <div style={{ marginBottom: 12 }}><CardLabel icon={<Power size={13} />} text="Power" /></div>
+          <DevicePowerButtons />
+        </div>
 
         {/* Autonomous Buddy pairing — closes out the compact (left) column. */}
         <BuddyCard />
@@ -986,7 +995,7 @@ function VersionRow({ name, color, version, uptime, updateTarget, updating = fal
   color: string;
   version: string | null;
   uptime: number | null;
-  updateTarget: "os-server" | "bootstrap" | "web" | "hal" | "agent" | null;
+  updateTarget: "os-server" | "bootstrap" | "web" | "hal" | "device" | "agent" | null;
   // An install runs for tens of seconds (the component stops, is rebuilt and
   // restarts). Without a label the row just sits there — on HAL it even shows a
   // stale version while /opt/hal does not exist — and the natural reaction is to

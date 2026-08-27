@@ -313,6 +313,8 @@ func (s *Server) Serve(closeFn func()) error {
 	system.GET("ota-versions", s.otaVersions)
 	system.GET("ota-updating", s.otaUpdating)
 	system.POST("software-update/:target", adminAuthMiddleware(s.config), s.softwareUpdate)
+	system.POST("reboot", adminAuthMiddleware(s.config), systemshell.Reboot)
+	system.POST("shutdown", adminAuthMiddleware(s.config), systemshell.Shutdown)
 	system.POST("factory-reset", adminOrLoopbackAuth(s.config), func(c *gin.Context) {
 		systemshell.FactoryReset(c, s.agentGateway)
 	})
@@ -393,6 +395,13 @@ func (s *Server) Serve(closeFn func()) error {
 	// the previous web-side `testTTSVoice` that POSTed tts_api_key through
 	// the hardware proxy (audit web F13).
 	voice.POST("preview", adminAuthMiddleware(s.config), s.voicePreview)
+	// Piper (on-device TTS) install + voice download, proxied to HAL. Not part
+	// of any OTA component, so the operator pulls it on demand from Settings →
+	// Voice. Admin-gated: it installs software and writes ~63 MB per voice.
+	voice.GET("piper/status", adminAuthMiddleware(s.config), s.piperStatus)
+	voice.POST("piper/install", adminAuthMiddleware(s.config), s.piperInstall)
+	voice.POST("piper/voice", adminAuthMiddleware(s.config), s.piperVoice)
+	voice.POST("piper/voice/remove", adminAuthMiddleware(s.config), s.piperVoiceRemove)
 
 	// Guard endpoints change persistent security state and can broadcast to every
 	// chat session. Device-local HAL and agent-runtime callers are allowed; all

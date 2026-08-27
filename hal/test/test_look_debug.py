@@ -202,3 +202,37 @@ def test_step_frames_can_be_disabled(tmp_path, monkeypatch):
         ld.finish("OK_test")
     written = [p.name for p in next(tmp_path.iterdir()).iterdir()]
     assert not any(n.startswith("step_") for n in written), written
+
+
+def test_the_aim_view_stays_vertical_only():
+    """The aim can only move yaw, so a horizontal line marks an error it has no
+    way to act on. Default stays as it was written."""
+    import cv2
+    import numpy as np
+
+    frame = np.zeros((80, 120, 3), dtype=np.uint8)
+    img = cv2.imdecode(
+        np.frombuffer(ld.encode_annotated(frame, (20, 10, 40, 30), "x"), np.uint8),
+        cv2.IMREAD_COLOR,
+    )
+    mid_row, mid_col = img.shape[0] // 2, img.shape[1] // 2
+    assert int(img[5, mid_col][2]) > 80, "vertical frame-centre line missing"
+    assert int(img[mid_row, 5][2]) < 60, "horizontal line must be opt-in"
+
+
+def test_the_gaze_view_adds_the_axis_it_servos_on():
+    """The pitch loop corrects dy, so its view needs the horizontal pair."""
+    import cv2
+    import numpy as np
+
+    frame = np.zeros((80, 120, 3), dtype=np.uint8)
+    img = cv2.imdecode(
+        np.frombuffer(
+            ld.encode_annotated(frame, (20, 10, 40, 30), "x", both_axes=True),
+            np.uint8,
+        ),
+        cv2.IMREAD_COLOR,
+    )
+    mid_row, mid_col = img.shape[0] // 2, img.shape[1] // 2
+    assert int(img[5, mid_col][2]) > 80, "vertical frame-centre line missing"
+    assert int(img[mid_row, 5][2]) > 80, "horizontal frame-centre line missing"
