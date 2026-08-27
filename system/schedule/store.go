@@ -162,15 +162,65 @@ func (s *Store) Load() ([]Schedule, error) {
 	return s.loadFileLocked().Schedules, nil
 }
 
+// carryLocalBookkeeping copies the DEVICE-LOCAL run fields of prior onto next
+// for schedules that survive a replace, keyed by id.
+//
+// WHY THIS EXISTS: a schedule.sync is a full-state replace built from the wire,
+// and the wire carries only what the backend owns — id, name, instructions,
+// enabled, schedule, end_at, rev. LastRunAt, LastRunStatus and
+// LastFailedOccurrence are local bookkeeping that has NO wire representation
+// (see their doc comments on Schedule), so they arrive zeroed. Overwriting the
+// on-disk values with those zeros loses real state on every single sync.
+//
+// The cosmetic half is that the device's own Settings page reports "Last run:
+// Never" for a task that has run. The half that actually bites is
+// LastFailedOccurrence: it is the memory Runner.fire uses to suppress repeated
+// failure acks for one occurrence. Zero it, and the next failure inside that
+// occurrence's retry window is ack'd again — which is precisely the duplicate
+// schedule_run rows that suppression was added to prevent. Any sync landing
+// during a retry window re-opens it, and device-originated CRUD makes syncs
+// frequent.
+//
+// Only fields the incoming schedule leaves ZERO are filled in, so a caller that
+// deliberately supplies these (tests, or any future path that legitimately
+// knows better) still wins. Ids absent from prior — a genuinely new schedule —
+// simply keep their zero values.
+func carryLocalBookkeeping(next []Schedule, prior []Schedule) []Schedule {
+	if len(prior) == 0 || len(next) == 0 {
+		return next
+	}
+	byID := make(map[string]Schedule, len(prior))
+	for _, p := range prior {
+		byID[p.ID] = p
+	}
+	for i := range next {
+		p, ok := byID[next[i].ID]
+		if !ok {
+			continue
+		}
+		if next[i].LastRunAt.IsZero() {
+			next[i].LastRunAt = p.LastRunAt
+		}
+		if next[i].LastRunStatus == "" {
+			next[i].LastRunStatus = p.LastRunStatus
+		}
+		if next[i].LastFailedOccurrence.IsZero() {
+			next[i].LastFailedOccurrence = p.LastFailedOccurrence
+		}
+	}
+	return next
+}
+
 // Replace swaps in a brand-new schedule list, preserving whatever timezone is
-// already on disk. The schedule.sync handler uses ReplaceWithTimezone instead,
-// since it always has both together; Replace is for callers (and tests) that
-// only care about the schedule list.
+// already on disk, and carrying forward the device-local run bookkeeping of any
+// schedule that survives the swap (see carryLocalBookkeeping). The schedule.sync
+// handler uses ReplaceWithTimezone instead, since it always has both together;
+// Replace is for callers (and tests) that only care about the schedule list.
 func (s *Store) Replace(schedules []Schedule) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	f := s.loadFileLocked()
-	f.Schedules = schedules
+	f.Schedules = carryLocalBookkeeping(schedules, f.Schedules)
 	return s.saveFileLocked(f)
 }
 
@@ -180,7 +230,11 @@ func (s *Store) Replace(schedules []Schedule) error {
 func (s *Store) ReplaceWithTimezone(schedules []Schedule, timezone string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.saveFileLocked(storeFile{Timezone: timezone, Schedules: schedules})
+	prior := s.loadFileLocked().Schedules
+	return s.saveFileLocked(storeFile{
+		Timezone:  timezone,
+		Schedules: carryLocalBookkeeping(schedules, prior),
+	})
 }
 
 // Get returns one schedule by id.
