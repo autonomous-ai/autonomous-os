@@ -22,6 +22,8 @@ import requests
 import hal.app_state as state
 from hal.i18n import (
     HEAD_PAT_PHRASES_BY_LANG,
+    MIC_MUTED_PHRASES_BY_LANG,
+    MIC_UNMUTED_PHRASES_BY_LANG,
     PHRASE_LISTENING,
     PHRASE_REBOOT,
     PHRASE_SLEEP,
@@ -129,13 +131,15 @@ def _phrase(key: str) -> str:
     return pool.get(_current_lang()) or pool.get(DEFAULT_LANG, "")
 
 
+def _random_from(pools: dict) -> str:
+    """Pick a random phrase for the current language from a per-language pool."""
+    pool = pools.get(_current_lang()) or pools.get(DEFAULT_LANG, [])
+    return random.choice(pool) if pool else ""
+
+
 def _random_head_pat_phrase() -> str:
     """Pick a random pet-response phrase for the current language."""
-    pool = (
-        HEAD_PAT_PHRASES_BY_LANG.get(_current_lang())
-        or HEAD_PAT_PHRASES_BY_LANG.get(DEFAULT_LANG, [])
-    )
-    return random.choice(pool) if pool else ""
+    return _random_from(HEAD_PAT_PHRASES_BY_LANG)
 
 
 def _announce_listening():
@@ -176,16 +180,35 @@ def _wake_if_sleepy(source: str):
     click pulls her out of sleep before the listening cue lands. Calls
     the /emotion handler in-process — it clears `_sleeping`, cancels the
     sleepy auto-release timer, plays the wake animation, and auto-deactivates
-    any active scene (e.g. Night mode)."""
+    any active scene (e.g. Night mode).
+
+    Called from single_click_action and from swipe_action, so the log line says
+    which gesture woke her rather than assuming a click."""
     if not state._sleeping:
         return
-    logger.info("%s single click -- waking from sleep", source)
+    logger.info("%s -- waking from sleep", source)
     try:
         from hal.models import EmotionRequest
         from hal.routes.emotion import express_emotion
         express_emotion(EmotionRequest(emotion="stretching"))
     except Exception as e:
         logger.warning("Wake emotion call failed: %s", e)
+
+
+def _speak_gesture_ack(text: str, source: str):
+    """Speak a short confirmation for a resolved physical gesture, off-thread.
+
+    Non-interrupting by design — a gesture ack must never truncate a reply the
+    user is listening to. Silent no-op when TTS is unavailable or the speaker is
+    muted, which is also correct: a muted speaker means the user chose silence.
+    """
+    if not text or not _tts_available():
+        return
+    threading.Thread(
+        target=lambda: state.tts_service.speak_cached(text, interruptible=True),
+        daemon=True,
+        name=f"{source}-gesture-ack",
+    ).start()
 
 
 def play_ack_chime(source: str = "button"):
@@ -327,7 +350,15 @@ def single_click_action(source: str = "button", announce: bool = True, chime: bo
         unmute_speaker()
         logger.info("[sca-trace] unmute_speaker done +%.0fms", (time.monotonic() - t) * 1000)
 
-    if state._mic_muted:
+    if state._mic_muted and state._mic_manual_override:
+        # A mute the user asked for DELIBERATELY — the touchpad double tap, the
+        # web UI, the API — is not undone by a click. Silently reopening a
+        # microphone somebody switched off defeats the point of switching it
+        # off, and the gesture that muted it is the gesture that unmutes it.
+        # Sleep's own mute does NOT set this flag (it uses
+        # _sleepy_auto_muted_mic), so waking with a tap still restores the mic.
+        logger.info("%s single click -- leaving deliberate mic mute in place", source)
+    elif state._mic_muted:
         logger.info("%s single click -- unmuting mic", source)
         t = time.monotonic()
         unmute_mic()
@@ -397,6 +428,83 @@ def head_pat_action(source: str = "touch"):
         daemon=True,
         name=f"{source}-head-pat-tts",
     ).start()
+
+
+def swipe_action(source: str = "touch"):
+    """Map a resolved touchpad swipe to sleep. Always sleep — one meaning.
+
+    Direction is not read, and neither is device state. Both were considered and
+    dropped:
+
+    * **Direction** — the surface yields one usable traversal gesture, and
+      keying sleep to one direction and wake to the other would make a swipe the
+      "wrong" way do nothing, with no feedback saying why. Left-to-right and
+      right-to-left are the same gesture here.
+    * **State** — an earlier version woke a sleeping device instead of sleeping
+      it. That made one gesture mean two things depending on a state the user
+      cannot see, and waking is already covered by tap and double tap, which is
+      the behaviour the device shipped with. A swipe on a sleeping lamp now
+      reaches `sleep_action`, which returns early on "already sleeping".
+
+    Non-destructive by construction: sleep is reversible with a single tap.
+    Shutdown / reboot / factory-reset stay on the mechanical button, because
+    FastMode cannot measure a hold and a mis-detected swipe must never be able
+    to strand the device.
+    """
+    logger.info("%s swipe -- sleeping", source)
+    sleep_action(source)
+
+
+def mic_toggle_action(source: str = "touch"):
+    """Map a resolved double tap to the mic mute toggle.
+
+    Lamp has no hardware mic switch (`_hw_mic_switch_muted` is None here), so
+    this is the only physical path to the microphone. The mic-muted LED is the
+    whole user-facing confirmation — a muted mic has no audible acknowledgement
+    — and both routes below repaint it themselves.
+    """
+    # The HW kill switch is the authority on boards that have one. Lamp reports
+    # None and falls through; a board that does have the switch must not have it
+    # overridden by a touch gesture. Guarding here as well as in unmute_mic
+    # keeps the refusal quiet rather than raising the route's 409.
+    if state._hw_mic_switch_muted is True:
+        logger.info("%s double tap ignored -- HW mic switch is off", source)
+        return
+    # A voice enrollment is recording into a WAV. Toggling the mic mid-capture
+    # truncates it, and the user gets a silently corrupt enrollment.
+    if state._enrolling:
+        logger.info("%s double tap ignored -- voice enrollment in progress", source)
+        return
+
+    from hal.routes.voice import mute_mic, unmute_mic
+
+    try:
+        if state._mic_muted:
+            logger.info("%s double tap -- unmuting mic", source)
+            unmute_mic()
+            pool = MIC_UNMUTED_PHRASES_BY_LANG
+        else:
+            logger.info("%s double tap -- muting mic", source)
+            mute_mic()
+            pool = MIC_MUTED_PHRASES_BY_LANG
+    except Exception as e:
+        # Never let a mute failure escape into the lgpio callback path.
+        logger.warning("%s double tap -- mic toggle failed: %s", source, e)
+        return
+
+    # Speak the resulting STATE, after the flip, so the voice and the LED agree.
+    # Drawn from a pool in the lamp's own voice rather than one fixed line — the
+    # same sentence every time is what reads as a machine. Every line in both
+    # pools still says which way the toggle went; see the note in i18n.py.
+    # Muting the microphone does not touch the speaker, so this is audible on
+    # both legs. Spoken AFTER the state change deliberately: if the toggle
+    # raised, the user should not be told about a mute that did not happen.
+    #
+    # Off-thread and non-interrupting, like head_pat_action: this must not add
+    # latency to the mute itself, and it must not talk over a reply in flight.
+    # When TTS is busy the confirmation drops and the mic-muted LED carries the
+    # feedback alone — the same trade the pet giggle makes.
+    _speak_gesture_ack(_random_from(pool), source)
 
 
 def sleep_action(source: str = "button"):

@@ -57,6 +57,15 @@ This repo is developed in both **Cursor** and **Claude Code**. The following rul
 3. **Code is the single source of truth** — Docs reflect code, not the other way around.
 4. **Do not commit binary artifacts** — Version is injected via ldflags at build time.
 
+5. **Web/TSX lint is a required quality gate** — For every change under
+   `system/web/`, work freely on the implementation but finish with both
+   `npm run lint` and `npm run build` from `system/web/`. Do not hand off a
+   change with ESLint warnings or errors, TypeScript errors, or a skipped
+   validation command. Fix React Hook diagnostics by restructuring the code;
+   do not silence them with `eslint-disable` unless the exception is narrowly
+   scoped, documented in English with why it is safe, and has no practical
+   compliant alternative. Report the exact commands run and any limitation.
+
 See `docs/DEV-MULTI-IDE.md` for full conventions.
 
 ## Subagent Usage
@@ -111,6 +120,8 @@ make hal-test                # Run HAL tests
 make web-install             # npm install
 make web-dev                 # Vite dev server
 make web-build               # Production build → dist/
+cd system/web && npm run lint  # Required after every web/TSX change
+cd system/web && npm run build # Required type-check + production build
 ```
 
 Go version is injected at build time via ldflags. HAL/web versions live in

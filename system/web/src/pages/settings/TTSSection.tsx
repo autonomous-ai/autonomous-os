@@ -654,7 +654,7 @@ function PiperPanel({ voice, onPickVoice, onInstalledChange }: {
         setUnreachable(false);
       })
       .catch(() => setUnreachable(true));
-  }, [onInstalledChange]);
+  }, []);
 
   useEffect(() => { load(); }, [load]);
 
