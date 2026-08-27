@@ -334,6 +334,15 @@ metadata device/version chuẩn cộng với `kind`, `status` (`success|failure`
 | `system.info` | Snapshot tổng hợp: versions + network + host | _(không)_ |
 | `system.version` | Chỉ versions các thành phần (rẻ hơn `system.info`) | _(không)_ |
 | `system.network` | Chỉ thông tin mạng của interface đang giữ default route | _(không)_ |
+| `system.reboot` | Xếp lịch reboot OS qua HAL có cue | _(không)_ |
+| `system.shutdown` | Xếp lịch shutdown OS qua HAL có cue và release servo | _(không)_ |
+
+`system.reboot` và `system.shutdown` publish `status:"starting"` trước khi
+thiết bị đặt lịch action, để backend nhận ACK trước lúc thiết bị rời mạng. Hai
+lệnh dùng chung single-flight guard của os-server: khi đã có power action đang
+chờ, thiết bị publish thêm phản hồi cuối `status:"failure"` kèm lý do. Lệnh gọi
+action đầy đủ của HAL, không chạy lệnh OS trần: reboot phát cue; shutdown phát
+cue và release servo.
 
 **Phản hồi `system.info`:** đồng bộ (không có trạng thái `starting` trung gian); mỗi
 probe lỗi sẽ rơi về zero value của nó.

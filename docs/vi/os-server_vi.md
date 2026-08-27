@@ -19,6 +19,14 @@
 | GET | `/api/system/network` | WiFi SSID, IP, signal, internet status |
 | GET | `/api/system/dashboard` | Snapshot tổng hợp (agent + config + HW) |
 | GET | `/api/system/ota-security` | Trạng thái tin cậy OTA lấy từ bootstrap worker: `legacy` hay `verified`, fingerprint key đã pin, lần fetch metadata gần nhất (xem `bootstrap-ota.md`) |
+| POST | `/api/system/reboot` | Cần admin auth: trả ACK, rồi yêu cầu HAL phát cue và reboot OS |
+| POST | `/api/system/shutdown` | Cần admin auth: trả ACK, rồi yêu cầu HAL phát cue, release servo và shutdown OS |
+
+Hai endpoint power trả `202 Accepted` trước khi đặt lịch gọi HAL, để trình duyệt
+nhận được ACK trước lúc thiết bị không còn truy cập được. Mỗi lúc chỉ có một
+reboot hoặc shutdown chờ chạy; request thứ hai nhận `409 Conflict`. HAL sở hữu
+chuỗi thao tác vật lý: reboot phát cue reboot; shutdown phát cue rồi release
+servo trước khi chạy lệnh power của OS.
 
 ### Device Setup
 
@@ -354,9 +362,152 @@ Nhét Piper vào image sẽ đảo ngược điều đó; xem `CREDITS.md`.
 | GET | `/api/voice/piper/status` | Engine đã cài chưa, giọng nào đã có, danh mục tải được, và job đang chạy nếu có. Proxy sang HAL rồi bọc lại theo envelope chuẩn — client web từ chối payload trần. |
 | POST | `/api/voice/piper/install` | Cài engine. Idempotent: đã cài rồi thì trả ok, nên UI gọi thẳng không cần kiểm tra trước. |
 | POST | `/api/voice/piper/voice` | Tải một giọng trong danh mục. Body `{name}`; tên ngoài danh mục bị từ chối, nên không ai biến endpoint này thành đường tải file tuỳ ý vào `/opt/piper`. |
+| POST | `/api/voice/piper/voice/remove` | Xoá một giọng đã tải, lấy lại ~63 MB. Body `{name}`, cũng chỉ nhận tên trong danh mục vì cùng lý do — tên tuỳ ý ở đây là xoá file tuỳ ý. Từ chối xoá giọng cuối cùng còn lại. |
 
-Cả ba đều admin-gated: chúng cài phần mềm và ghi ~63 MB mỗi giọng. HAL phục vụ
-đúng ba endpoint đó dưới `/voice/piper/*`; việc tải chạy trên luồng nền và báo
+Cả bốn đều admin-gated: chúng cài phần mềm và ghi 63–79 MB mỗi giọng. HAL phục
+vụ đúng bốn endpoint đó dưới `/voice/piper/*`; việc tải chạy nền và báo
+
+`piperProxy` **thử lại POST trong lúc HAL chưa trả lời**, tối đa 25 giây. Mỗi lần
+lưu voice là HAL restart (~8 giây chết, đôi khi gấp đôi vì hai đường config đều
+xin restart), và một cú Download hay Remove rơi đúng cửa sổ đó là mất trắng —
+trang báo không có gì thay đổi còn người dùng phải tự đoán khi nào thử lại.
+Chỉ **dial thất bại** mới được thử lại, và chính chỗ phân biệt này gánh toàn bộ
+lập luận an toàn: dial không kết nối được là bằng chứng request chưa hề được
+gửi đi, nên gửi lại không thể lặp lại tác dụng nào. Còn timeout thì không chứng
+minh được điều đó — deadline bao cả lúc đọc phản hồi, nên HAL hoàn toàn có thể
+đã làm xong việc rồi trả lời chậm — nên timeout bị trả về như một lỗi thường.
+Mọi phản hồi, kể cả một lời từ chối, đều là chung cuộc và được chuyển thẳng về.
+GET cố ý không thử lại —
+chính việc status poll hỏng mới là thứ báo cho trang biết máy đang khởi động
+lại, giữ chúng mở chỉ làm dồn request và giấu mất trạng thái. Có test trong
+`piper_test.go`, dựng lại listener ngay dưới lời gọi.
+
+**Lượt tải không chạy bên trong HAL.** `hal/routes/piper_download.py` được
+`systemd-run` khởi động thành một transient unit, và hai bên thống nhất với
+nhau qua file job `/var/lib/autonomous/piper-job.json` thay vì bộ nhớ chung.
+Đây không phải vẽ vời: lưu **bất kỳ** thiết lập voice nào cũng khiến os-server
+gọi `systemctl restart hal` (`device/config_update.go`), mà hal.service để
+`KillMode=control-group`, nên một luồng trong process — hay bất kỳ tiến trình
+con thường nào — đều bị giết giữa lúc đang tải. Bản ghi job chết theo, nên
+trang quay về `Download 63 MB` như thể chưa hề bấm gì, không lỗi, không có gì
+để thử lại. Worker không import bất cứ thứ gì từ `hal`: package đó kéo theo
+driver phần cứng ngay khi import, thứ mà một trình tải file không có việc gì
+phải đụng vào, và việc không phụ thuộc gì cũng giúp nó chạy tiếp cả khi HAL
+không khởi động nổi.
+
+Mỗi lượt chạy có **tên unit riêng** (`autonomous-piper-download-<ns>`). Tên cố
+định sẽ đụng lượt trước đó: một unit vừa xong còn nằm ở `inactive` một lúc trước
+khi `--collect` dọn, mà `systemd-run` thì từ chối cái tên vẫn còn tồn tại. Cú
+thất bại đó rơi xuống nhánh dự phòng chạy trong process HAL, rồi chết theo lần
+restart kế tiếp và hiện ra thành *download stopped unexpectedly* mà không rõ lý
+do. Nhánh dự phòng giờ log lại đúng stderr của systemd, vì rơi xuống nó trong im
+lặng chính là cách một lượt tải chui vào control group của HAL mà không ai hay.
+
+Không có gì restart HAL vì một lượt tải. Danh sách giọng đọc từ filesystem theo
+từng request, đường dẫn model phân giải theo từng câu nói, nên giọng vừa có file
+là liệt kê và nói được ngay — đã đo: tải xong lúc 18:32:29 trên một HAL khởi
+động lúc 18:31:59, tới 18:33:11 liệt kê và nói được mà không restart lần nào.
+Việc apply một giọng cũng **không** còn restart HAL. `POST /voice/tts/config`
+đặt provider, voice, key và base URL thẳng vào TTS service đang chạy, mà service
+đọc cả bốn thứ đó theo từng câu nói, nên thay đổi ăn ngay từ câu kế tiếp.
+
+Những câu máy nói về chính nó — restart, shutdown, reboot, sleep — được
+**dựng sẵn vào cache TTS**, lúc boot và mỗi khi `/voice/tts/config` đổi provider
+hoặc giọng (cache key gồm cả hai, nên đổi giọng là mất sạch clip cũ). Chúng phát
+đúng vào những lúc tệ nhất: câu báo restart nói trong lúc HAL đang tắt, câu chào
+boot nói lúc mọi service khác còn đang lên. Với Piper, cache miss ở đó nghĩa là
+nạp model 63 MB trên một CPU đang nghẹt — đo trên sun60iw2 8 nhân, riêng phần
+nạp đã 2–3,4 giây và câu báo restart tổng hợp ở mức 1,1x realtime, sát ngưỡng
+tới mức chỉ cần tải nặng thêm chút là luồng audio đói dữ liệu và giọng nghe
+nhão. Còn cache hit thì không tốn tổng hợp gì cả.
+
+Cờ realtime giờ so sánh trước/sau chứ không phản ứng theo việc "có gửi kèm".
+Trang settings nhét khối `realtime` vào **mọi** lần lưu, nên coi nó là thay đổi
+thì lần lưu nào cũng restart HAL — và việc đẩy TTS live ở trên sẽ thành code
+chết.
+
+### Bộ mặc định Autonomous
+
+Máy xuất xưởng mang credential proxy của team Autonomous trong `llm_api_key`,
+`llm_model` và `llm_base_url`, và mọi mục khác đều khởi đi từ đúng ba giá trị
+đó. Gõ key cá nhân đè lên là xoá sổ chúng — đã có máy ra tới tay người dùng mà
+không còn đường nào quay lại bộ credential nó được bán kèm.
+
+`autonomous_defaults` là một object ở **cấp ngoài cùng** của `config.json`, giữ
+`base_url` / `api_key` / `model`. Nó được ghi **đúng một lần**, bởi
+`captureAutonomousDefaults`, ngay trước lần lưu đầu tiên có mang theo bất kỳ
+credential nào — LLM, TTS, STT hay key/URL của realtime — và không bao giờ ghi
+lại. Chụp lần hai là lưu chính key của người dùng dưới tên Autonomous và mất
+hẳn bộ thật, đúng cái hỏng mà nó sinh ra để chặn. Lần lưu không đụng credential
+nào (wifi, đổi tên, channel) thì không kích hoạt, và config không có gì để giữ
+thì bỏ qua, để một bộ rỗng không bị nhầm là mặc định hợp lệ. Chỉ factory reset
+mới xoá nó.
+
+| Method | Endpoint | Mô tả |
+|--------|----------|-------|
+| POST | `/api/device/restore-defaults` | Đưa một mục về lại credential xuất xưởng. Body `{"section": "llm" \| "voice" \| "realtime"}`. Admin-gated. |
+
+Khôi phục theo **từng mục**, vì người dùng nghĩ theo cách đó — họ đổi brain, hoặc
+đổi nhà cung cấp giọng, và muốn lấy lại đúng thứ đó. Mỗi mục lấy phần của bộ đã
+lưu mà nó vốn khởi đi: AI Brain lấy url + key + model, realtime và voice lấy
+url + key. Riêng qwen realtime bị từ chối: nó nói thẳng với host Alibaba bằng
+credential riêng, đưa bộ xuất xưởng vào đó chỉ tổ nhận 401.
+
+Nó được cài đặt như một lượt `UpdateConfig` bình thường chứ không ghi thẳng, nên
+thừa hưởng đủ mọi side-effect của một lần sửa tay — restart hal hoặc đẩy TTS
+live, sync model sang gateway, reset phiên agent. Tự viết một hàm lưu riêng sẽ
+lệch khỏi danh sách đó ngay lần đầu có người thêm việc vào.
+
+`has_autonomous_defaults` trong `GET /api/device/config` chỉ nói có hay không,
+không bao giờ trả giá trị. Web dùng nó để quyết định có hiện nút hay không.
+
+HAL đọc **thông tin đăng nhập của riêng từng dịch vụ**, thiếu thì mới lùi về
+của AI Brain: `tts_api_key`/`tts_base_url` cho TTS, `stt_api_key`/`stt_base_url`
+cho STT, còn lại mới dùng `llm_api_key`/`llm_base_url`. Trên đa số máy cả ba là
+cùng một chuỗi, vì trang settings tự mirror key và URL của brain sang hai chỗ
+kia khi chúng còn trống. Nó chỉ lộ ra khi brain trỏ đi nơi khác: một máy có
+`llm_base_url` ở openrouter và `tts_base_url` ở proxy autonomous đã ghép thành
+`openrouter.ai/api/v1/elevenlabs/text-to-speech/…` và ăn 404 ở mọi câu nói, vì
+backend ElevenLabs nối thêm `/elevenlabs` vào bất kỳ base nào được đưa — mà nó
+được đưa base của brain. Config vốn có URL đúng từ đầu; chỉ là không ai đọc.
+
+`device/config_update.go` tách cái `voiceSnapshot` cũ làm hai: `bootSnapshot`
+(key và URL của LLM, STT — HAL đọc thật lúc import, vẫn đáng restart) và
+`ttsSnapshot` (provider, voice, key và URL của TTS — đẩy thẳng vào lúc chạy).
+Đổi giọng là thao tác lưu thường gặp nhất, mà restart vì nó thì micro, loa và
+wake word chết theo mười tới mười lăm giây; mọi cú bấm rơi vào cửa sổ đó đều
+mất, vì HAL không nghe. Nếu đẩy live thất bại, os-server quay về restart — một
+giọng đã lưu mà không bao giờ tới được HAL còn tệ hơn cái restart nó tránh.
+
+Job được **đánh dấu đang chạy trước khi POST trả lời**, và phản hồi mang theo
+job đó. Để worker tự đánh dấu là thua một cuộc đua mà UI không gỡ lại được:
+panel chỉ poll *trong lúc* job đang chạy, nên nếu lần đọc đầu tiên rơi vào
+trước lần ghi đầu tiên của worker, nó kết luận không có gì bắt đầu rồi thôi
+không hỏi nữa — và một lượt tải dài vài phút chạy xong trong vô hình. Đánh dấu
+trong cùng cái lock đang kiểm tra job cũng làm hai cú double-click chỉ thành
+một lượt tải.
+
+Bên đọc chỉ tin một job là đang chạy khi pid của nó còn sống, nên worker bị
+giết bởi thứ gì khác ngoài chính error handler của nó sẽ hiện là đã dừng, chứ
+không phải một lượt tải đứng hình vĩnh viễn. Việc quét rác lúc khởi động cũng
+chừa ra file của job đang chạy — lượt tải giờ sống lâu hơn HAL, nên lần quét đó
+chạy *trong lúc* đang tải, và xoá file `.part` của nó là phá đúng cái tình
+huống mà thiết kế này sinh ra để bảo vệ.
+
+Job báo thêm `bytes_done`/`bytes_total` bên cạnh `percent`, chỉ đếm cho model —
+file sidecar vài KB sẽ làm bộ đếm nhảy về một tổng bé xíu rồi quay lại. Lượt
+tải giọng thất bại tự xoá file dở của nó, và HAL quét dọn sidecar mồ côi cùng
+file `.part` một lần lúc khởi động: danh sách giọng đọc theo `.onnx`, nên một
+sidecar mà model không bao giờ về là thứ vô hình trên UI nhưng vẫn chiếm chỗ
+thật trên thẻ nhớ.
+
+Việc xoá giữ đúng một bất biến: **không bao giờ xoá model cuối cùng.** HAL không
+được cho biết giọng nào đang cấu hình — os-server gửi kèm trong từng lượt
+`/voice/speak` — nên nó không thể từ chối "cái đang dùng", và nó không giả vờ
+làm được. Xoá giọng khác thì sống sót được, vì giọng không tìm thấy sẽ lùi về
+một giọng đã cài; xoá cái cuối cùng thì không, vì backend hết thứ để nạp và máy
+câm luôn. UI thì ẩn nút Remove ở dòng đang dùng, nên đổi giọng phải xảy ra
+trước khi xoá.
 tiến độ qua trường `job` trong status, vì kéo 63 MB lâu hơn nhiều so với thời
 gian nên giữ một HTTP request mở.
 
@@ -370,6 +521,26 @@ Danh sách giọng đọc từ filesystem (`/opt/piper/voices/*.onnx`) chứ kh�
 danh sách cứng, nên thả một model vào là chọn được ngay. Còn model nào được
 **mời tải** lại là quyết định về license, ghi kèm từng mục trong
 `hal/drivers/voice/tts/piper_catalog.py`.
+
+Backend báo là *sẵn sàng* khi có binary và **bất kỳ** giọng nào, chứ không phải
+đúng giọng đang cấu hình. Máy hoàn toàn có thể đang trỏ tới một giọng chưa có —
+người dùng lưu lựa chọn trong lúc model 63 MB còn đang tải — và nếu chặn theo
+đúng tên thì cả khối TTS tắt luôn. Thay vào đó, giọng không tìm thấy sẽ lùi về
+giọng mặc định, rồi lùi tiếp về bất kỳ giọng nào đã cài, và ghi log một lần cho
+mỗi tên. Nói sai giọng là lỗi tự nó giải thích được; máy im tiếng thì người dùng
+hiểu là hỏng phần cứng.
+
+`GET /api/device/voices?provider=piper` **báo lỗi chứ không trả mảng rỗng** khi
+không gọi được HAL. Giọng là file nằm dưới `/opt/piper`, nên HAL là thứ duy nhất
+biết máy đang có gì; trả về rỗng là nói một điều os-server không có cơ sở để
+nói, mà web thì coi câu trả lời đó là chính thức — dropdown rỗng đi, và vì nó
+chỉ fetch lại khi đổi provider hoặc ngôn ngữ nên rỗng luôn không bao giờ đầy
+lại. Mỗi lần lưu voice là HAL restart, nên cửa sổ đó bị rơi vào thường xuyên.
+Trả lỗi thì client giữ nguyên danh sách tốt cuối cùng.
+
+Cũng vì vậy `domain.TTSVoicesByProvider` để **rỗng** cho Piper: không image nào
+kèm sẵn giọng, nên mọi cái tên đặt ở đó làm fallback đều là tên máy không có —
+và web sẽ lưu đúng cái tên đó thành giọng đang dùng.
 
 
 ### System

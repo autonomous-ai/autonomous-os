@@ -221,6 +221,10 @@ class TTSService:
         self._lock = threading.Lock()
         self._speaking = False
         self._interruptible = False
+        # Queues the active _speak_sync is draining, so stop() can wake a
+        # drain loop parked in queue.get() instead of leaving it to time out.
+        self._drain_queues: list = []
+        self._drain_queues_lock = threading.Lock()
         self._max_retries = max_retries
         self._stop_event = threading.Event()
 
@@ -582,11 +586,46 @@ class TTSService:
         if self._speaking:
             logger.info("TTS stop requested — setting stop event")
             self._stop_event.set()
+            # Setting the event is not enough on its own: both drain loops
+            # only re-check it between queue.get() calls, and the head queue's
+            # get blocks for up to 2s. A newer turn that preempts this one
+            # waits 2.0s for the lock (see speak_queue), so the winding-down
+            # worker routinely lost that race — measured 4s to release on
+            # lamp-0c89, which 503'd the new turn AFTER the old one had
+            # already been cut to 85ms of audio: both turns silent. Feeding
+            # each queue the same None sentinel the loops already treat as
+            # end-of-stream wakes them immediately.
+            self._wake_drain_queues()
         with self._pending_queue_lock:
             cleared = len(self._pending_queue)
             self._pending_queue.clear()
         if cleared:
             logger.info("TTS stop cleared %d pending queued speech item(s)", cleared)
+
+    def _register_drain_queue(self, q) -> None:
+        """Expose a queue the active playback is draining, so stop() can wake it."""
+        with self._drain_queues_lock:
+            self._drain_queues.append(q)
+
+    def _forget_drain_queues(self) -> None:
+        """Drop the registrations once playback is done with them."""
+        with self._drain_queues_lock:
+            self._drain_queues.clear()
+
+    def _wake_drain_queues(self) -> None:
+        """Push the end-of-stream sentinel into every registered queue.
+
+        A full queue raises Full, which is fine to swallow: a full queue is by
+        definition not one anybody is blocked on, so the loop will notice the
+        stop event on its very next iteration anyway.
+        """
+        with self._drain_queues_lock:
+            queues = list(self._drain_queues)
+        for q in queues:
+            try:
+                q.put_nowait(None)
+            except Exception:
+                pass
 
     @property
     def interruptible(self) -> bool:
@@ -1211,6 +1250,7 @@ class TTSService:
         if not chunks:
             self._speaking = False
             self._last_spoken_time = time.time()
+            self._forget_drain_queues()
             self._lock.release()
             return
 
@@ -1235,6 +1275,8 @@ class TTSService:
         # are usually already in the queue.
         head_total = len(chunks)
         head_q: "queue.Queue[Optional[np.ndarray]]" = queue.Queue(maxsize=256)
+        self._forget_drain_queues()
+        self._register_drain_queue(head_q)
         head_thread = threading.Thread(
             target=self._head_producer,
             args=(head_text, dst_rate, head_q, (1, head_total)),
@@ -1255,6 +1297,7 @@ class TTSService:
                     tail_thread: Optional[threading.Thread] = None
                     if tail_chunks:
                         tail_q = queue.Queue(maxsize=128)
+                        self._register_drain_queue(tail_q)
                         tail_thread = threading.Thread(
                             target=self._tail_producer,
                             args=(tail_chunks, dst_rate, tail_q),
@@ -1313,6 +1356,8 @@ class TTSService:
                     # Old head producer is at the stale rate -- orphan it and
                     # restart at the new rate. Daemon thread will exit on its own.
                     head_q = queue.Queue(maxsize=256)
+                    self._forget_drain_queues()
+                    self._register_drain_queue(head_q)
                     head_thread = threading.Thread(
                         target=self._head_producer,
                         args=(head_text, dst_rate, head_q, (1, head_total)),
@@ -1330,6 +1375,9 @@ class TTSService:
 
         self._speaking = False
         self._last_spoken_time = time.time()
+        # Before releasing the lock: a preempting turn takes it the instant it
+        # frees up, and its queues must not be woken by our stop().
+        self._forget_drain_queues()
 
         # Notify LED speaking effect — stop wave and restore previous LED state
         if self._on_speak_end:
@@ -1408,6 +1456,47 @@ class TTSService:
 
     def _tts_cache_path(self, text: str) -> Path:
         return _TTS_CACHE_DIR / f"{self._tts_cache_key(text)}.wav"
+
+    def warm_lifecycle_phrases(self) -> int:
+        """Render the phrases the device says on its own initiative into the cache.
+
+        These play at the worst possible moments. The restart notice is spoken
+        while HAL is shutting down; the boot cue while every other service is
+        still coming up. A cache miss there means loading a 63 MB Piper model on
+        a CPU that is already saturated — measured on an 8-core sun60iw2, the
+        model load alone is 2-3.4 s, and the restart phrase synthesises at 1.1x
+        realtime, close enough to breaking even that a little extra load starves
+        the audio stream and the speech comes out slurred.
+
+        Rendering ahead costs one synthesis per phrase, once, off the hot path.
+        The cache key includes provider and voice, so this has to run again
+        whenever either changes — not only at boot.
+
+        Returns how many phrases are now cached.
+        """
+        from hal.i18n import (
+            PHRASE_REBOOT,
+            PHRASE_SERVICE_RESTART,
+            PHRASE_SHUTDOWN,
+            PHRASE_SLEEP,
+            localized_phrase,
+        )
+
+        warmed = 0
+        for key in (PHRASE_SERVICE_RESTART, PHRASE_REBOOT, PHRASE_SHUTDOWN, PHRASE_SLEEP):
+            text = localized_phrase(key)
+            if not text:
+                continue
+            try:
+                if self.speak_cached(text, prerender=True):
+                    warmed += 1
+            except Exception:
+                logger.exception("Lifecycle phrase warm failed for %r", key)
+        logger.info(
+            "Lifecycle phrases warmed: %d cached (provider=%s, voice=%s)",
+            warmed, self._provider, self._voice,
+        )
+        return warmed
 
     def speak_cached(self, text: str, interruptible: bool = False, prerender: bool = False, realtime_feedback: bool = False) -> bool:
         """Cache-aware speak. On hit -> ~50ms playback. On miss -> render+save

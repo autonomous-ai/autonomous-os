@@ -7,14 +7,14 @@ Lamp có hai thiết bị input vật lý mà user có thể chạm trực tiế
 | Thiết bị | Vai trò | Có ở |
 |---|---|---|
 | **Nút GPIO** | Một nút bấm cơ. Dùng cho các hành động dứt khoát kể cả destructive (reboot / shutdown / factory-reset). Cảm giác cơ + detect giữ lâu khiến destructive action khó xảy ra do vô tình. | Pi 4/5 và OrangePi sun60 |
-| **Touchpad cảm ứng TTP223** | Bốn pad chạm xếp như "đầu cún" để vuốt ve + stop/unmute nhẹ. Không có destructive gesture vì FastMode của IC không cho detect giữ lâu tin cậy. | Chỉ OrangePi sun60 (4 Pro / A733) |
+| **Touchpad cảm ứng TTP223** | Ba pad chạm xếp như "đầu cún" để vuốt ve + stop/unmute nhẹ. Không có destructive gesture vì FastMode của IC không cho detect giữ lâu tin cậy. | Chỉ OrangePi sun60 (4 Pro / A733) |
 
 ## Wiring
 
 | Thiết bị | Pi 4/5 | OrangePi sun60 |
 |---|---|---|
 | Nút GPIO | gpiochip0 BCM 17 (pull-up, active-LOW) | gpiochip1 line 9 (pull-up, active-LOW) |
-| TTP223 | không wire | gpiochip0 line 96 / 97 / 98 / 99 (đặt tên S1–S4), pull-down, active-HIGH |
+| TTP223 | không wire | gpiochip0 line 96 / 98 / 100, **pull-up, active-LOW** (pad nghỉ ở mức HIGH; chạm là edge xuống) |
 
 Cả hai handler đều detect board qua `/proc/device-tree/model`:
 - `"sun60iw2"` → OrangePi 4 Pro / A733
@@ -27,8 +27,9 @@ Cả hai handler đều detect board qua `/proc/device-tree/model`:
 | Cử chỉ | Nút GPIO | Touchpad TTP223 |
 |---|---|---|
 | **1 chạm** | Dừng object tracking đang chạy, rồi stop loa / unmute mic + speaker + chime ack (~120 ms ping) — tất cả fire ngay khi nhả nút (không đợi click window); cue "Nghe đây" phát sau khi click window 0.4 s phân giải xong | Tương tự sau khi quyết định tap-vs-pet 1.2 s xong — tracking đang chạy dừng, rồi action mic/loa và cue chạy. Chạm đầu tiên vẫn cắt TTS đang phát và kêu chime ack ngay. |
-| **2 chạm** (≤ 0.4 s, nút) / (≤ 1.2 s, TTP223) | Không thêm gì ngoài single-click đã fire ở chạm 1 (panic-click guard) | Pet response — TTS chọn ngẫu nhiên 1 câu từ pool theo ngôn ngữ |
+| **2 chạm** (≤ 0.4 s, nút) / (≤ 1.2 s, TTP223) | Không thêm gì ngoài single-click đã fire ở chạm 1 (panic-click guard) | Pet response. Khi bật `HAL_TOUCH_SWIPE` (mặc định), các cú tap lặp lại tại cùng một chỗ — nhanh hay chậm, một ngón hay nhiều ngón — là **double tap** → toggle mute mic; khi đó pet nghĩa là ngón tay đã quay lại một pad |
 | **3 chạm** (≤ 0.4 s, nút) | Reboot OS (TTS báo → `sudo reboot`) | n/a — TTP223 dừng ở 2 (chạm thêm bị cooldown nuốt) |
+| **Swipe** qua các pad | n/a | **`HAL_TOUCH_SWIPE`, mặc định bật.** Một lần tiếp xúc chạy đơn điệu qua cả ba pad, các khoảng đều trên ngưỡng di chuyển → **sleep**. Không dùng hướng — trái-sang-phải và phải-sang-trái là cùng một cử chỉ — và cũng không dùng trạng thái thiết bị. Wake vẫn thuộc về tap / double tap. |
 | **Giữ 2–5 s rồi nhả** | Phát thông báo sleep theo ngôn ngữ, rồi vào `sleepy`: LED tắt, camera/mic/speaker tắt; servo release sau 1 s. Khi đang giữ LED nháy tím sleepy. | n/a — phần cứng TTP223 không hold đáng tin được (xem "FastMode" dưới) |
 | **Giữ 5–10 s rồi nhả** | Shutdown OS (TTS báo → release servo → `sudo shutdown -h now`). LED nháy đỏ khi đã arm. | n/a — phần cứng TTP223 không hold đáng tin được (xem "FastMode" dưới) |
 | **Giữ 10 s+ rồi nhả** | Factory-reset: wipe state thiết bị + reboot vào AP setup (TTS báo → release servo → POST `/api/system/factory-reset` trên OS server). LED đỏ đứng khi đã arm. | n/a |
@@ -51,7 +52,7 @@ Lý do nằm ở hình dạng sản phẩm chứ không phải sở thích. Đè
 
 Hai đặc tính quyết định cách implement:
 
-* **Người ta quay TRƯỚC khi nói, không bao giờ sau.** Bình thường tiếng nói chỉ kích hoạt việc watcher **đọc ngược** ring buffer (`HAL_GAZE_BUFFER_S`, mặc định 3 s) — đúng mô hình pre-roll lookback của mic để không mất âm đầu câu. Có một nhánh recovery: nếu lần đọc này có ít hơn hai mẫu mặt dùng được, VAD yêu cầu watcher khôi phục pose user đã nhớ mà không chặn việc thu audio. Trước khi dispatch **chính transcript đó**, gaze được kiểm tra thêm một lần. Đầu đã đo được là đang quay đi sẽ không vào nhánh này, nên tiếng nói nghe ké vẫn không làm lamp quay về ai đó rồi mở gate.
+* **Người ta quay TRƯỚC khi nói, không bao giờ sau.** Bình thường tiếng nói chỉ kích hoạt việc watcher **đọc ngược** ring buffer (`HAL_GAZE_BUFFER_S`, mặc định 4 s) — đúng mô hình pre-roll lookback của mic để không mất âm đầu câu. Có một nhánh recovery: nếu lần đọc này có ít hơn hai mẫu mặt dùng được, VAD yêu cầu watcher khôi phục pose user đã nhớ mà không chặn việc thu audio. Trước khi dispatch **chính transcript đó**, gaze được kiểm tra thêm một lần. Đầu đã đo được là đang quay đi sẽ không vào nhánh này, nên tiếng nói nghe ké vẫn không làm lamp quay về ai đó rồi mở gate.
 * **Có mặt người KHÔNG phải tín hiệu.** User ngồi cạnh đèn cả ngày nên "phát hiện có người" gần như luôn đúng và không lọc được gì; "phát hiện có mặt" cũng chỉ hơn chút — mặt quay về màn hình vẫn detect ra. Gate đặt trên **hướng đầu**, đủ chặt để loại tư thế rất thường gặp: nói chuyện với đồng nghiệp trong khi thân vẫn hướng về bàn.
 
 Head yaw suy ra từ 5 landmark mà `YuNet` vốn đã trả về (`detect_face_with_landmarks` trong `detection.py`): độ lệch của mũi so với trung điểm hai mắt, đo **dọc theo đường nối hai mắt** và chuẩn hoá bằng nửa khoảng cách hai mắt, chính là `sin(yaw)` dưới phép chiếu pinhole. Đo dọc đường nối mắt thay vì theo trục x của ảnh là thứ giữ cho đầu **nghiêng** (chống tay lên má) không bị đọc thành đầu quay. Không load thêm model nào, không chạy thêm inference nào; ở `HAL_GAZE_SAMPLE_FPS` (mặc định 6) chi phí là số lẻ trên CPU 8 nhân — đo thật chứ không suy đoán: CPU idle 69.2% xuống 68.8% khi watcher chạy.
@@ -74,9 +75,7 @@ Khi trong khung có nhiều mặt, mặt được tính là mặt **gần tâm k
 | `HAL_GAZE_MIN_FACING_RATIO` | 0.6 | Tỉ lệ mẫu trong cửa sổ phải thấy đầu hướng về đèn. Là TỈ LỆ, không phải chuỗi liên tục — yaw từng mẫu nhiễu thật. |
 | `HAL_GAZE_MIN_SAMPLES` | 2 | Dưới mức này không đủ bằng chứng để kết luận theo chiều nào. Vòng lặp thực tế chỉ đạt ~2 mẫu/s dù cấu hình bao nhiêu — nó bị chặn bởi việc lấy frame và chạy detector — nên để 3 là loại oan cả user mà mọi tầng khác đều đồng ý là đang nhìn đèn. Dòng log `[gaze] sampling at N/s` đếm số mẫu THỰC SỰ ghi được, và báo riêng số frame bị chặn trước khi kịp đo (đang chờ servo ổn định, hoặc detector đang bị một lệnh `look` giữ). Đếm số lần thử thay vì số mẫu từng báo 5.7/s trong khi buffer không có gì mới hơn cửa sổ 1.5 s — tức dưới 1 mẫu/s bằng chứng thật. |
 | `HAL_GAZE_SAMPLE_FPS` | 6 | Tần suất lấy mẫu. Cử chỉ thì chậm, nhưng quyết định là một cuộc bỏ phiếu và chỉ mẫu đo được mới tính — ở 3 fps cửa sổ thường chỉ còn một mẫu dùng được, từ chối cả user đang nhìn thẳng vào đèn. |
-| `HAL_GAZE_BUFFER_S` | 4.0 | Lịch sử yaw giữ lại. Phải **gấp ít nhất hai lần** `WINDOW_S`, không chỉ là lớn hơn: phép kiểm tra transition đọc cửa sổ *trước* cửa sổ quyết định làm mốc, nên buffer dưới 2× không chứa đủ cả hai. |
-| `HAL_GAZE_REQUIRE_TRANSITION` | `true` | Đòi bằng chứng user đã *quay về phía* đèn, chứ không chỉ là đang hướng về đèn. Docstring của module luôn gọi transition là tín hiệu, nhưng không chỗ nào tính nó, nên user ngồi thẳng mặt vào bàn làm việc vẫn lọt ở mọi câu nói — đo trong shadow: chín trên chín cử chỉ được chấp nhận đều có trail phẳng như `[13,12,12,11,12,11,13,21]`. Không cái nào là một cú quay. |
-| `HAL_GAZE_TRANSITION_MAX_BEFORE` | 0.5 | Cửa sổ làm mốc phải có tỉ lệ facing dưới ngưỡng này thì cửa sổ hiện tại mới được tính là một cú quay về phía đèn. Cố ý rộng rãi: một cử chỉ chỉ cần bắt đầu từ "không hướng về đèn một cách chắc chắn", không cần bắt đầu từ tư thế nghiêng hẳn. |
+| `HAL_GAZE_BUFFER_S` | 4.0 | Lịch sử yaw giữ lại. Phải lớn hơn `WINDOW_S` để phần đọc ngược nhìn đủ xa về trước. Đã có lúc phải gấp đôi, vì một phép kiểm tra transition nay đã bị gỡ bỏ; giữ 4.0 vì thêm một giây không tốn gì và `trail=` đọc dễ hơn khi có nhiều lịch sử phía sau. |
 | `HAL_GAZE_WAKE_FOCUS_S` | 10 | Cửa sổ follow-up mà một lần wake bằng *gaze* mở ra, ngắn hơn 20 s của wake phrase hay click. Một cái liếc mắt đòi hỏi ít hơn một hành động có chủ ý. Bị chặn trên bởi `HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S`, không bao giờ vượt qua. |
 | `HAL_GAZE_COOLDOWN_S` | 5 | Khoảng cách tối thiểu giữa hai lần gaze mở gate. |
 | `HAL_GAZE_REPOINT` | `true` | Quay về bearing đã nhớ khi lâu không thấy ai. |
@@ -116,11 +115,11 @@ Chuỗi end-to-end:
 2b. `state.note_music_cancel()` → đóng dấu watermark huỷ nhạc ở phía HAL, và `audio_stop()` chạy ở **cả hai** nhánh (unmute mic và stop loa), không chỉ nhánh stop loa. Cần vì cancel ở OS server chỉ tác động lên TTS: turn bị huỷ vẫn chạy tiếp và tool call nhạc còn treo của nó vẫn tới `POST /audio/play` ngay sau đó, nơi một thread `music-play` mới tự `_stop_event.clear()` — nên một cú stop tại một thời điểm luôn thua cuộc đua này, và user nghe đúng bài nhạc mình vừa huỷ sau khi `yt-dlp` resolve xong (1–5 s). Trong lúc watermark còn tươi (`app_state.MUSIC_CANCEL_GUARD_S`, 3 s), `/audio/play` trả `{"status": "suppressed"}` thay vì phát. Cửa sổ được chọn đủ phủ tool call đang bay nhưng vẫn dưới sàn của một yêu cầu mới thật sự (nói → STT → LLM → tool không bao giờ dưới ~3 s), nên "chạm xong xin bài hát" vẫn chạy bình thường.
 3. `stop_tts()` → `tts_service.stop()` set `_stop_event`; mọi blocking loop trong TTS stream (synth, render, playback) check event và abort sạch, không để loa kẹt
 
-### Voice barge-in (mặc định bật)
+### Voice barge-in (tắt trong profile lamp)
 
-Cắt bằng giọng nói — nói trong lúc Lamp đang nói để Lamp dừng và lắng nghe — theo `HAL_BARGE_IN_ENABLED`, vốn mặc định bằng `HAL_AEC_ENABLED` — trong code là `false`, nhưng `.env` của lamp ghim cả hai thành `true`. Việc khử vọng âm là thứ làm cho nó an toàn, nên hai cái bật cùng nhau, và barge-in nằm im mỗi khi bộ khử không thật sự chạy.
+Cắt bằng giọng nói — nói trong lúc Lamp đang nói để Lamp dừng và lắng nghe — theo `HAL_BARGE_IN_ENABLED`, vốn mặc định bằng `HAL_AEC_ENABLED` — trong code là `false`. Profile lamp bật AEC nhưng chủ động đặt barge-in là `false`: mic USB đang dùng ở quá gần loa so với tuning khử vọng hiện tại. Cắt lời bằng chạm vẫn hoạt động.
 
-Đường đang chạy là vòng **warm mic**, không phải `_monitor_barge_in()`. Với `HAL_WARM_MIC=true` (mặc định), `arecord` vẫn mở suốt lúc phát và vòng capture rút rồi bỏ frame; barge-in được phát hiện ngay ở đó, trên chính frame 64 ms của vòng lặp, khi `HAL_BARGE_IN_WARM_FRAMES` frame liên tiếp vượt `HAL_BARGE_IN_RMS_THRESHOLD` **và** Silero đồng ý đó là tiếng nói **và** `aec.uncancelled()` xác nhận frame đó thật sự đã được khử. `_monitor_barge_in()` (block 256 ms, chỉ xét mức) là đường cũ và không thể tới được khi warm mic bật — `HAL_BARGE_IN_BLOCK_MS` và `HAL_BARGE_IN_TRIGGER_FRAMES` chỉ định cỡ cho đường đó. Chuỗi downstream giống tap-to-interrupt.
+Khi barge-in được bật, đường đang chạy là vòng **warm mic**, không phải `_monitor_barge_in()`. Với `HAL_WARM_MIC=true` (mặc định), `arecord` vẫn mở suốt lúc phát và vòng capture rút rồi bỏ frame; barge-in được phát hiện ngay ở đó, trên chính frame 64 ms của vòng lặp, khi `HAL_BARGE_IN_WARM_FRAMES` frame liên tiếp vượt `HAL_BARGE_IN_RMS_THRESHOLD` **và** Silero đồng ý đó là tiếng nói **và** `aec.uncancelled()` xác nhận frame đó thật sự đã được khử. `_monitor_barge_in()` (256 ms blocks, chỉ xét mức) là đường cũ và không thể tới được khi warm mic bật — `HAL_BARGE_IN_BLOCK_MS` và `HAL_BARGE_IN_TRIGGER_FRAMES` chỉ định cỡ cho đường đó. Chuỗi downstream giống tap-to-interrupt.
 
 **Hai mức vẫn chồng nhau, và không threshold nào tách được.** Đo trên `lamp-ee17` (loa 25 %, `HAL_AEC_DELAY_MS=205`) với gate đặt tạm ở 30000 để không gì kích được, ba lượt trả lời đầy đủ trong phòng im lặng đạt đỉnh **9804 / 6510 / 7849** — đó là trần vọng âm. Một lần cắt lời thật đã xác nhận trên cùng máy đo được **8027**, tức *thấp hơn* trần đó. Vậy nên threshold dưới trần sẽ tự cắt lời mình (ở 4500 nó kích ở 5530 / 6446 / 6637 / 7749, hai lần chuyển chính lời Lamp thành lượt của người dùng), còn threshold trên trần sẽ bỏ sót những lần cắt lời nói nhỏ. Muốn tách được cần phép thử envelope-decorrelation — vọng âm bám theo envelope đầu xa, con người thì không — hiện chưa làm. Mặc định 5000 cố ý thiên về việc bắt được giọng nói bình thường; nâng dần lên 11000 để đổi theo hướng ngược lại.
 
@@ -133,10 +132,10 @@ Cắt bằng giọng nói — nói trong lúc Lamp đang nói để Lamp dừng 
 Driver đếm edge nơi **mọi destructive action commit ở rising edge (nhả) dựa trên thời lượng giữ** — không timer nào fire lúc đang giữ. Đây chính là cái cho phép user huỷ giữa chừng (nhả trước ngưỡng) hoặc escalate (giữ tiếp quá 10 s).
 
 1. **Falling edge (nhấn):** ghi `press_start` (đồng hồ monotonic) và spawn thread hold-LED watcher (mỗi lần nhấn 1 thread, có stop `Event` riêng). Không arm timer action nào.
-2. **Rising edge (nhả):** dừng LED watcher, tính `held = now − press_start` rồi rẽ nhánh:
-   - `held >= 10 s` (`FACTORY_RESET_DURATION`) → scrub mọi click đang chờ, khoá LED đỏ đứng, chạy `factory_reset_action` off-thread.
-   - `held >= 5 s` (`LONG_PRESS_DURATION`) → scrub click đang chờ, freeze LED đỏ, chạy `long_press_action` (shutdown) off-thread.
-   - `held >= 2 s` (`SLEEP_HOLD_DURATION`) → scrub click đang chờ, chạy `sleep_action` off-thread; nó gọi pipeline emotion `sleepy` chuẩn.
+2. **Rising edge (nhả):** dừng LED watcher, tính `held = now − press_start`, scrub click đang chờ cho mọi hold từ 2 s trở lên, rồi chốt LED feedback (đỏ đứng cho shutdown/factory reset). Sau đó nó truyền duration vào `hold_release_action(held, source)` off-thread. Mapping action này chọn:
+   - `held >= 10 s` (`FACTORY_RESET_DURATION`) → `factory_reset_action`.
+   - `held >= 5 s` (`LONG_PRESS_DURATION`) → `shutdown_action`.
+   - `held >= 2 s` (`SLEEP_HOLD_DURATION`) → `sleep_action`, hàm gọi pipeline emotion `sleepy` chuẩn.
    - khác (tap ngắn) → `click_count += 1` và (re)start click-window timer 0.4 s. Ở tap **đầu tiên** của chuỗi, phần im lặng của `single_click_action` (`announce=False`) fire ngay off-thread — nó không phá huỷ ("cho tôi nói"), nên không cần đợi window. Cue nói được hoãn lại để không nói đè lên chuỗi triple-click đang bấm dở.
 3. Khi click window hết:
    - `count == 3` → `triple_click_action` (không cue — chỉ announce reboot)
@@ -165,7 +164,7 @@ Debounce mỗi edge là 200 ms (tick nhấn và nhả track độc lập để t
 
 IC TTP223 trên board này chạy ở **FastMode**: output HIGH khi chạm, rồi tự về LOW trong ~50-80 ms dù ngón tay vẫn ở pad. IC chỉ re-trigger khi điện dung thay đổi (ngón tay di chuyển). "Giữ liên tục" là bất khả thi nếu không đổi chân FM của IC sang LowPowerMode (~12 s max touch).
 
-Cross-talk giữa các pad lân cận cũng đáng kể — một lần chạm vật lý fire edge trên 2-4 pad với timing lệch nhau.
+Cross-talk giữa các pad lân cận cũng đáng kể — một lần chạm vật lý fire edge trên 2-3 pad với timing lệch nhau (con số 2-4 có từ trước khi dời chân pad, lúc còn wire bốn pad).
 
 Driver bù bằng **mô hình hai tầng**:
 
@@ -183,6 +182,39 @@ Sau khi session kết thúc:
    - `count >= 2` → fire `head_pat_action` ngay lập tức, arm pet cooldown 1.5 s
    - `count < 2` → schedule decision timer 1.2 s. Khi timer fire với `count == 1`, fire `single_click_action`.
 
+### Tầng 3: Phân loại cử chỉ (`HAL_TOUCH_SWIPE`, mặc định BẬT)
+
+**Mặc định bật** từ 2026-08-27, sau khi kiểm chứng trực tiếp trên orange-lamp với tap, double tap nhanh và chậm, pet và swipe. Đặt `HAL_TOUCH_SWIPE=false` sẽ khôi phục hành vi hai-cử-chỉ trong một bước và không cần deploy lại — đó là đường lùi nếu một máy ngoài thực địa hành xử sai.
+
+Bật nó lên nghĩa là một cú double tap sẽ toggle **microphone** và một cú swipe sẽ đưa thiết bị vào **giấc ngủ**. Cả hai đều đảo ngược được (double tap lần nữa; một cú tap là thức dậy), và không có hành động phá hủy nào với tới được từ đây — FastMode không đo được thao tác giữ, nên reboot / shutdown / factory-reset vẫn ở lại trên nút bấm cơ.
+
+**Tín hiệu nằm ở *thời điểm* các pad bắn, không phải pad nào.** Đo trên orange-lamp ngày 2026-08-27 — khoảng cách giữa các pad bên trong một lần tiếp xúc:
+
+| | |
+|---|---|
+| nhiều ngón tay đặt xuống cùng lúc | **1 – 23 ms** |
+| một ngón tay di chuyển qua các pad | **53 – 322 ms** |
+
+Không có gì ở giữa, và `HAL_TOUCH_SWIPE_MIN_GAP_MS` (40) nằm đúng trong khoảng trống đó. Mọi luật bên dưới đều rút ra từ đúng một ngưỡng này.
+
+**Một lần tiếp xúc không phải một cử chỉ.** Đây chính là điều mà ba lần thử đầu đã hiểu sai. Tầng 1 kết thúc một lần tiếp xúc khi không có edge nào trong 200 ms, nên một cú vuốt *liên tục* không bao giờ kết thúc nó — trọn một cú pet ~1 s đến dưới dạng **một** lần tiếp xúc, và hai cú tap nhanh cũng đến dưới dạng một lần tiếp xúc. Vì vậy tự thân việc đếm số lần tiếp xúc không nhận diện được gì cả.
+
+Thứ tự phân giải, khớp cái nào trước thì thắng:
+
+1. **SWIPE** → sleep. Một lần tiếp xúc, đủ mọi pad, đơn điệu dọc trục, mọi khoảng đều trên ngưỡng. **Chỉ một lần tiếp xúc**: mỗi chặng của một cú vuốt qua-lại tự nó đã là một lượt sạch theo một chiều, nên để bất kỳ chặng nào quyết định sẽ biến mọi cú pet thành swipe. Kiểm tra đầu tiên để một cú swipe đã phân giải không bao giờ bắn thêm một tap.
+2. **DOUBLE TAP** → toggle mute mic, kèm một câu xác nhận trạng thái. Từ hai **cụm (burst) nhiều pad, sít nhau** trở lên, chồng lấn về vị trí. Tap nhanh nằm chung một lần tiếp xúc (session không kịp hết hạn); tap chậm đến thành các lần tiếp xúc riêng — cả hai đều tính. Kiểm tra trước pet, vì cú tap thứ hai chạm lại đúng các pad cũ. Một cú vuốt không thể lọt vào luật này: mọi bước của nó đều trên ngưỡng, nên mỗi "cụm" chỉ có một bước, trong khi luật đòi cụm nhiều pad.
+3. **PET** → cười khúc khích. Ngón tay **quay lại** một pad nó đã rời (số bước nhiều hơn số pad khác nhau), hoặc các lần tiếp xúc rơi vào những vị trí không có pad chung. Không có chốt chặn theo số lần tiếp xúc.
+4. **TAP** → mọi trường hợp còn lại, kể cả nhiều ngón tay đặt xuống cùng lúc. Việc đó làm sáng mọi pad, nhưng trong khoảng ~20 ms, và đó không phải là di chuyển.
+
+**Điều thực sự nhập nhằng.** Một lượt quét đơn theo một chiều với thời gian sít nhau — ba pad, không quay lại, các khoảng dưới ngưỡng — không phân biệt được với một cú tap ba ngón dứt khoát, và sẽ phân giải thành TAP. Trên bề mặt này không có tín hiệu nào tách được hai thứ đó.
+
+| Biến env | Mặc định | Điều chỉnh |
+|---|---|---|
+| `HAL_TOUCH_SWIPE` | **`true`** | Công tắc chính cho luật 1–3. Đặt `false` để khôi phục đúng hành vi hai-cử-chỉ — đường lùi. |
+| `HAL_TOUCH_SWIPE_MIN_GAP_MS` | 40 | Ngưỡng di chuyển, và là con số duy nhất mà mọi luật đều rút ra từ đó: khoảng cách từ mức này trở lên nghĩa là bàn tay đã di chuyển, dưới mức này nghĩa là các ngón đặt xuống cùng lúc. Nằm trong dải trống 23–53 ms đã đo. **Giờ mang tính then chốt vì bộ phân loại đã ship ở trạng thái bật** — nâng lên nếu tap dứt khoát bị đọc thành swipe, hạ xuống nếu swipe thật bị bỏ sót. `HAL_TOUCH_DEBUG` ghi lại chính các khoảng dùng để đo. |
+
+`boards.json` có thêm trường tùy chọn `axis` trong mục `touch` — các line theo thứ tự vật lý trái sang phải, ví dụ `"axis": [96, 100, 98]`. Hiện tại nó **vắng mặt**: thứ tự line không phải thứ tự không gian trên board này, và chỉ một đợt chạy có nhãn nhấn từng pad một mới xác định được. Khi vắng, phân loại lùi về thứ tự line khai báo. Một axis sai chỉ làm sai **hướng** swipe, thứ mà driver cố ý không dùng.
+
 ### Hằng số (`ttp223.py`)
 
 | Hằng số | Giá trị | Lý do |
@@ -192,18 +224,40 @@ Sau khi session kết thúc:
 | `PET_SESSION_THRESHOLD` | 2 | 2 session liên tiếp trong decision window = pet. Dễ hơn 3 vì mỗi "stroke" trên phần cứng này chỉ tạo 1 session |
 | `PET_COOLDOWN_S` | 1.5 | Sau pet fire, session thêm trong 1.5 s extend cooldown chứ không bắt đầu count mới. Vuốt liên tục = 1 pet, rồi im |
 
+### Trace lại chuyện thực sự đã xảy ra (`HAL_TOUCH_DEBUG`)
+
+Hai trong bốn dòng log quyết định ở trên là `logger.debug` nên không bao giờ xuất hiện ở mức `HAL_LOG_LEVEL=INFO` đang ship, còn `_on_edge` thì vứt bỏ thông tin pad nào đã bắn trước khi có gì kịp ghi lại. Vì vậy khi một cú chạm làm sai, bình thường không có cách nào biết được là pad bắn nhầm, tầng session gộp sai, hay action làm điều gì đó ngoài dự tính.
+
+`hal/drivers/touch_debug.py` bịt khoảng trống đó. **Mặc định TẮT** — khi không đặt env, nó tốn đúng một phép kiểm tra boolean đã cache cho mỗi edge, không mở file nào và không tạo thread nào. Đặt `HAL_TOUCH_DEBUG=1` trong `/opt/hal/.env` rồi restart HAL để bật.
+
+Nó ghi một file JSON cho mỗi cử chỉ đã phân giải, đặt tên `<timestamp>_<ACTION>.json` để một phân loại sai nhìn thấy được ngay từ `ls` (`20260827-114032_TAP.json`, `..._PET.json`, `..._IGNORED-pet_cooldown.json`, `..._IGNORED-settle.json`). Mỗi file chứa bốn tầng: `edges` (line nào, mức nào, lúc nào, và có bị chốt chặn `SETTLE_S` chặn không), `sessions` (tầng 200 ms đã gộp chúng ra sao, kèm `primary_pad`, `adjacent_deltas_ms` và `span_ms` của từng lần tiếp xúc), `traversal` (chuỗi pad trải qua nhiều session và số `reversals`) và `action` (cái gì đã chạy, trên trạng thái thiết bị nào). Ngoài ra còn một dòng tóm tắt `TOUCH-TRACE` ghi ở mức INFO.
+
+Nó cố ý không bao giờ log vào journald: HAL log nhiều đến mức cửa sổ journal của `hal.service` chỉ tính bằng phút, nên một bản trace để ở đó sẽ bị đẩy mất trước khi kịp đọc.
+
+| Biến env | Mặc định | Điều chỉnh |
+|---|---|---|
+| `HAL_TOUCH_DEBUG` | `false` | Công tắc chính. Tắt = mọi điểm vào đều là no-op. |
+| `HAL_TOUCH_DEBUG_DIR` | `touch_logs/` cạnh module | Thư mục output. Rơi về thư mục tạm nếu cây mã chỉ đọc. |
+| `HAL_TOUCH_DEBUG_MAX_ENTRIES` | 200 | Giới hạn số file, cũ nhất bị dọn ở mỗi lần ghi. 0 = không giới hạn. |
+| `HAL_TOUCH_DEBUG_PADS` | _(không đặt)_ | Map line→nhãn, ví dụ `96=S1,98=S2,100=S4`. Không đặt thì pad được đặt tên theo số line — các tên S lịch sử không đi theo thứ tự line sau hai lần dời chân, nên driver không đoán chúng. |
+
+
 ## Thư viện action chung (`hal/drivers/button_actions.py`)
 
 Các action sống ở một chỗ để nút GPIO, TTP223, và mọi input tương lai (touchpad, remote) hành xử giống nhau:
 
 | Hàm | Làm gì | Cắt TTS đang phát? |
 |---|---|---|
-| `single_click_action(source)` | Dừng object tracking đang chạy. Sau đó gỡ mute loa do user/scene (bỏ qua khi `_enrolling`). Mic bị mute → unmute. Khác thì stop TTS + stop music. Rồi mở cửa sổ follow-up wake word (no-op khi wake word tắt) và nói câu "Nghe đây" local với retry-on-busy. Tracking vẫn dừng khi hardware mic kill switch đang tắt; action voice vẫn bị chặn. | Có — gọi `stop_tts()` và bản thân câu cue cũng preempt. |
-| `triple_click_action(source)` | Nói "Đang khởi động lại" → đợi 5 s cho clip cached → `sudo reboot`. | Có |
+| `single_click_action(source)` | Dừng object tracking đang chạy. Sau đó gỡ mute loa do user/scene (bỏ qua khi `_enrolling`). Đóng dấu watermark hủy nhạc và dừng nhạc — ở **cả hai** nhánh, để một cú click luôn dập được thứ ồn nhất trong phòng. Rồi nếu mic bị mute → unmute; ngược lại thì stop TTS. Rồi mở cửa sổ follow-up wake word (no-op khi wake word tắt) và nói câu "Nghe đây" local với retry-on-busy. Tracking vẫn dừng khi hardware mic kill switch đang tắt; action voice vẫn bị chặn. | Có — gọi `stop_tts()` và bản thân câu cue cũng preempt. |
+| `triple_click_action(source)` | Chỉ map gesture: gọi `reboot_action(source)`. | Có |
+| `reboot_action(source)` | Nói "Đang khởi động lại" → đợi 5 s cho clip cached → `reboot_os()` (`sudo reboot`). | Có |
 | `sleep_action(source)` | Phát thông báo sleep theo ngôn ngữ, rồi gọi `sleepy`: LED tắt, camera/mic/speaker tắt, rồi release servo sau 1 s. | Có — pipeline sleepy dừng TTS/nhạc đang phát sau thông báo. |
-| `long_press_action(source)` | Nói "Đang tắt máy" → đợi 5 s → `release_servos()` (để đèn không slam xuống giữa pose) → `sudo shutdown -h now`. | Có |
+| `hold_release_action(held, source)` | Mapping signal hold: chọn sleep, shutdown hoặc factory reset theo duration lúc nhả. | Tuỳ action được chọn |
+| `shutdown_action(source)` | Nói "Đang tắt máy" → đợi 5 s → `release_servos()` (để đèn không slam xuống giữa pose) → `shutdown_os()` (`sudo shutdown -h now`). | Có |
 | `factory_reset_action(source)` | Nói "Đang khôi phục cài đặt gốc. Đang khởi động lại" → `release_servos()` → POST `/api/system/factory-reset` trên OS server (server lo phần wipe + reboot, xem dưới). | Có |
-| `head_pat_action(source)` | Chọn ngẫu nhiên 1 câu pet local, nói qua `speak_cached` trên daemon thread. **Không cắt**: nếu TTS vẫn busy thì câu pet bị drop im lặng. Thực tế trên TTP223, session chạm đầu tiên đã cắt lời đang nói (`_grab_floor_if_speaking`) nên tới lúc pet fire thì TTS thường rảnh và câu giggle phát được. | Không |
+| `swipe_action(source)` | Luôn gọi `sleep_action`. Không dựa vào hướng (một cú swipe "sai chiều" sẽ không làm gì mà cũng không có phản hồi giải thích vì sao) và không dựa vào trạng thái (một cử chỉ mang hai nghĩa tùy vào thứ người dùng không nhìn thấy). Trên thiết bị đang ngủ, `sleep_action` thoát sớm. | Có |
+| `mic_toggle_action(source)` | Toggle mute mic cho một double tap đã phân giải (nhanh hoặc chậm). Từ chối khi công tắc mic phần cứng đang tắt hoặc đang ghi âm enroll giọng. Sau khi lật, nó nói ra **trạng thái** kết quả, chọn ngẫu nhiên từ `MIC_MUTED_PHRASES_BY_LANG` / `MIC_UNMUTED_PHRASES_BY_LANG` bằng chính giọng của lamp ("[whispers] Suỵt, mình bịt tai lại rồi." / "[excited] Mình mở tai ra rồi nè!"), để giọng nói và đèn mic-muted khớp nhau; một lần toggle bị từ chối sẽ im lặng chứ không thông báo về một lệnh mute chưa từng xảy ra. | Không — không cắt lời, bỏ qua nếu TTS đang bận |
+| `head_pat_action(source)` | Chọn ngẫu nhiên 1 câu pet local, nói qua `speak_cached` trên daemon thread. **Không cắt**: nếu TTS vẫn busy thì câu pet bị drop im lặng. Thực tế trên TTP223, session chạm đầu tiên đã cắt lời đang nói và phát tiếng ack chime (`_ack_first_session`) nên tới lúc pet fire thì TTS thường rảnh và câu giggle phát được. | Không |
 
 ### Factory-reset: wipe những gì
 
@@ -250,6 +304,8 @@ Thông báo của các action đều local theo `stt_language` từ `config.json
 
 ### Thông báo an toàn (1 câu/ngôn ngữ)
 
+Các câu xác nhận của **toggle mic** là những pool bằng giọng persona, giống các câu pet — nói đi nói lại đúng một câu chính là thứ khiến nó nghe như máy. Ràng buộc giữ cho chúng an toàn là mọi câu vẫn phải nói rõ *toggle đã đi theo chiều nào*: sự ấm áp nằm ở cách diễn đạt, không bao giờ nằm ở nghĩa. "Suỵt, mình bịt tai lại rồi" thì đạt; một câu "Suỵt!" trơ trọi thì không, vì một điều khiển riêng tư mà người dùng không giải mã được còn tệ hơn một câu máy móc. Có test ép buộc điều này.
+
 `reboot`, `shutdown`, `factory-reset`, và câu cue `listening` dùng phrase nghĩa-đen ("Đang khởi động lại", "Đang tắt máy", "Đang khôi phục cài đặt gốc. Đang khởi động lại") ở mọi ngôn ngữ vì user vừa làm cử chỉ destructive và cần xác nhận rõ ràng — đây là thông báo an toàn, không phải khoảnh khắc persona.
 
 ### Phrase pet (15 câu/ngôn ngữ, random)
@@ -274,7 +330,7 @@ Phrase cố tình ngắn — chúng fire giữa lúc vuốt nên cần cảm gi�
 | `hal/drivers/ttp223.py` | Handler touchpad cảm ứng TTP223 (chỉ OrangePi sun60) |
 | `hal/drivers/button_actions.py` | Hàm action chung + pool phrase local |
 | `hal/presets.py` | Hằng số mã ngôn ngữ (`LANG_EN`, v.v.) |
-| `hal/test_ttp223_probe_orangepi.py` | Probe độc lập để verify mapping line TTP223 |
+| `hal/test_ttp223_probe_orangepi.py` | Probe pad độc lập (ioctl thuần stdlib, không cần gpiod). `info` đọc trạng thái line khi HAL vẫn chạy; `watch` map pad→line và cần dừng `hal.service`. Line lấy từ board profile. |
 | `hal/test_gpio.py` | Probe độc lập để verify line nút GPIO |
 
 Cả hai handler được spawn trong startup lifespan `hal/server.py` — fail thì log nhưng không crash runtime (board không có phần cứng tự skip im lặng).

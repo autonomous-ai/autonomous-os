@@ -16,6 +16,7 @@ var Catalog = []string{
 	"display",
 	"emotion",
 	"face-enroll",
+	"faq",
 	"guard",
 	"habit",
 	"input-branching",

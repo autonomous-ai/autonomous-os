@@ -592,6 +592,23 @@ Ràng buộc xuyên suốt: **không ai yêu cầu những việc này**, nên m
 chết, một cooldown, một hạn mức số bước. Một cái đèn biết chỉnh khung hình thì có vẻ đang chú ý; một
 cái chỉnh liên tục thì thành cái đầu gật gù theo.
 
+**Các vòng lặp ĐO liên tục, nhưng chỉ DI CHUYỂN khi đang có một cuộc hội thoại mở.**
+`_conversation_open()` đọc `voice_service.conversation_focus_active()` — cửa sổ follow-up của wake
+word, được làm mới bởi mọi cửa wake (wake phrase, click, presence, gaze). Không thể chặn phần đo: cổng
+wake đọc cửa sổ *trước* lúc nói, nên các mẫu đó phải có sẵn từ trước. Phần di chuyển thì chặn được, và
+phải chặn.
+
+Lý do: ngoài một cuộc hội thoại, một hiệu chỉnh không thể sống sót trên cánh tay này. `idle.csv` phát
+các frame tuyệt đối và ghim `base_yaw` ở −2,40 — **1,58° dao động trên toàn bộ recording** — nên frame
+idle kế tiếp ghi đè lên hiệu chỉnh và vòng lặp lại đo đúng độ lệch cũ. Quan sát trên máy thật
+2026-08-26 khi không ai nói: mười ba lần hiệu chỉnh pan trong hai mươi phút, đổi chiều liên tục, lần
+nào cũng bắt đầu từ đúng dải của idle. Không phải trôi dần — mà là bị ghi đè ngay lập tức, lặp mãi.
+
+Vì thế "thả ra" là miễn phí: ngừng hiệu chỉnh thì idle tự đòi lại cánh tay trong vòng một frame, không
+có pose nào phải khôi phục và không có quyền sở hữu nào phải nhả. Phép kiểm tra này **fail đóng** khi
+không có voice. Ngoại lệ duy nhất là một lần leo *được yêu cầu* (`prompt`), vốn do một repoint từ
+speech đòi, nếu từ chối thì đầu sẽ nằm chĩa vào ngực suốt cả câu nói.
+
 ### Canh giữa theo chiều dọc, và vì sao nó đọc trung vị
 
 Đèn bàn đứng thấp hơn tầm đầu người, nên camera của nó chĩa vào ngực. Phép hiệu chỉnh lấy **trung vị**
@@ -631,11 +648,12 @@ tục cho tới khi tới nơi; khớp nào hụt quá `HAL_GAZE_PITCH_LAND_TOL_
 `HAL_GAZE_PITCH_STALL_REST_S` và lùi đích lại `HAL_GAZE_PITCH_STALL_BACKOFF_DEG`, để lần thử sau không
 tì vào chặn cơ khí ngay lập tức nữa.
 
-**Các hiệu chỉnh thôi bị xoá đi.** Recording idle là tuyệt đối trên mọi khớp và lặp vô tận, nên trong
-vòng một chu kỳ nó kéo camera về đúng pose lúc ghi — trên bàn làm việc thì đó là bàn phím.
-`HAL_GAZE_IDLE_ANCHOR` thay vào đó dịch cả vòng idle đi `anchor − baseline`: cùng chuyển động, khác tâm.
-Cố ý chỉ áp cho idle — một recording cảm xúc có thể quăng đầu đi đâu cũng được, vì tới lúc nó chạy thì
-user đã được nghe rồi; thứ phải đúng chỉ là pose *nghỉ* phải nhìn được người sắp nói.
+**Các hiệu chỉnh không được giữ lại trước idle.** Recording idle là tuyệt đối trên mọi khớp và lặp vô
+tận, nên trong vòng một chu kỳ nó kéo camera về lại pose lúc ghi — trên bàn làm việc thì đó là bàn
+phím. Trước đây có một idle anchor (`HAL_GAZE_IDLE_ANCHOR`) chống lại điều đó bằng cách dịch cả vòng
+idle sang pose tốt gần nhất; **nó đã bị gỡ bỏ**. Nên lực kéo về vẫn còn: một hiệu chỉnh phai dần qua
+một chu kỳ idle thay vì trụ lại, và vòng lặp sẽ hiệu chỉnh lại ở cửa sổ kế tiếp. Đó là lý do chính
+khiến cùng một độ lệch có thể xuất hiện lại sau một lần hiệu chỉnh thành công.
 
 | Tham số | Mặc định | Ý nghĩa |
 |---|---|---|
@@ -652,7 +670,6 @@ user đã được nghe rồi; thứ phải đúng chỉ là pose *nghỉ* phả
 | `HAL_GAZE_PITCH_LAND_TOL_DEG` | 2.0 | Mức hụt được tính là kẹt. |
 | `HAL_GAZE_PITCH_STALL_REST_S` | 60 | Khớp kẹt bị loại ra bao lâu. Khớp với thời gian hồi phục đo được. |
 | `HAL_GAZE_PITCH_STALL_BACKOFF_DEG` | 2.0 | Dừng trước chỗ nó đã kẹt. |
-| `HAL_GAZE_IDLE_ANCHOR` | `true` | Cho idle thở quanh pose tốt gần nhất. |
 | `HAL_GAZE_SNAPSHOT` / `_KEEP` | `true` / 40 | Lưu khung hình có chú thích cạnh mỗi lần hiệu chỉnh, trong `SNAPSHOT_PERSIST_DIR/sensing_gaze/`. Log nói trung vị là −0,41 chiều cao khung; nó không nói được đó là user, một đồng nghiệp, hay một cái áo khoác vắt trên ghế. |
 
 ### Leo tìm cái mặt nằm trên khung hình
@@ -704,9 +721,20 @@ dịch lại ở bàn làm việc chỉ đạt đỉnh `dx` +20%, tức vòng l�
 
 ### Repoint về bearing đã ghi nhớ
 
-Khi đã lâu không thấy ai trong `HAL_GAZE_REPOINT_AFTER_S`, watcher quay về bearing đã ghi nhớ rồi kiểm
-tra trong `HAL_GAZE_REPOINT_VERIFY_S` xem việc đó có ăn thua không. Ba hành vi ở đây đáng nói ra vì cái
-nào cũng từng là một con bug:
+**Chỉ speech mới kích hoạt cái này, không còn gì khác.** Khi ai đó nói mà watcher không có bằng chứng
+mặt dùng được, nó quay về bearing đã ghi nhớ rồi kiểm tra trong `HAL_GAZE_REPOINT_VERIFY_S` xem có ăn
+thua không. Yêu cầu được đặt trên thread mic và được tiêu thụ trên thread watcher
+(`_consume_speech_repoint` → `_maybe_repoint(force=True)`), bỏ qua cả thời gian chờ vắng mặt lẫn
+cooldown.
+
+Trước đây nó *còn* tự bắn sau `HAL_GAZE_REPOINT_AFTER_S` (12 s) không thấy ai. Phần đó đã bị gỡ. Một
+lần repoint sẽ chấm điểm bearing, và bắn vì "tình cờ không có ai trong khung" — điều luôn đúng với một
+cái đèn bàn khi bạn nghiêng người ra khỏi khung, quay sang đồng nghiệp, hay đứng dậy — là chấm một
+bearing là sai dựa trên bằng chứng không nói lên điều gì. Ba lần như vậy sẽ xoá ước lượng, nên một
+bearing đúng có thể bị bào mòn bởi một cái ghế trống. Chỉ chấm điểm trên các câu nói thì mỗi lần trượt
+đều có nghĩa: có người đã nói, đèn đã quay về nơi nó tưởng họ ở, và họ không ở đó.
+
+Ba hành vi nữa đáng nói ra vì cái nào cũng từng là một con bug:
 
 - **Thấy thân người cũng tính là tìm được user.** Bộ kiểm tra theo dõi mặt và thân trên hai đồng hồ
   riêng; một cái thân ở đúng bearing nghĩa là bearing *đúng*. Chấm nó là trượt đã xoá mất những bearing
@@ -724,19 +752,21 @@ ra mỗi phút một lần thay vì mỗi vòng một lần.
 
 ### Tự quay quanh tìm
 
-Nếu bearing không ra ai — hoặc chưa có bearing nào — watcher có thể gọi chính pha quét `/servo/search`
-mô tả ở trên. Đây là đường vào tự động duy nhất, nên cũng là đường duy nhất cần cooldown, và có tới hai
-cooldown vì hai tình huống không giống nhau.
+Nếu một lần repoint không ra ai, `_verify_repoint` gọi chính pha quét `/servo/search` mô tả ở trên với
+`confirmed_miss=True`. Vì repoint ở trên do speech kích hoạt, pha quét cũng vậy: đèn đi tìm vì có người
+đã nói mà nó không tìm ra họ, chứ không bao giờ vì một căn phòng trông có vẻ trống. Cò kích hoạt theo
+vắng mặt (`HAL_GAZE_SWEEP_AFTER_S`) vẫn còn trong `_maybe_sweep` nhưng không còn gì với tới nó — vòng
+lặp watcher không còn gọi pha quét nữa. Các cooldown vẫn áp dụng, và có tới hai vì hai tình huống không
+giống nhau.
 
 Mười lăm phút là đúng cho *"tôi có bearing, nó trượt, thôi đừng quẫy nữa"*. Nó sai cho *"tôi không biết
 bạn ở đâu cả"*, vì khi đó pha quét là cách duy nhất để biết mà đèn lại bị cấm thử — quan sát trên máy
 thật: ba lần repoint hỏng đã xoá ước lượng, rồi đèn ngồi đó vừa không repoint được (không có gì để quay
 về) vừa không quét được (còn 11 phút cooldown) trong khi user đang nói chuyện với nó.
 
-Cò kích hoạt là **sự vắng mặt**, không phải một lần repoint hỏng. Treo nó vào một lần repoint đã di
-chuyển rồi trượt khiến nó không với tới được trong đúng hai trường hợp cần nó nhất: không có bearing nào
-để quay về, và đang ngồi sẵn ngay trên bearing. Một pha quét thành công sẽ lấy mẫu một bearing mới ngay
-tại chỗ.
+`confirmed_miss` bỏ qua thời gian chờ vắng mặt một cách có chủ ý — một lần repoint đã di chuyển rồi
+trượt là bằng chứng mạnh nhất có thể có, nên không còn gì để chờ. Một pha quét thành công sẽ lấy mẫu
+một bearing mới ngay tại chỗ.
 
 | Tham số | Mặc định | Ý nghĩa |
 |---|---|---|

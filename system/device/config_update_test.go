@@ -38,7 +38,7 @@ func TestApplyUpdateEmptyRequestChangesNothing(t *testing.T) {
 	c := baseConfig()
 	ch := applyUpdate(c, domain.UpdateConfigRequest{}, "")
 
-	if ch.model || ch.thinking || ch.baseURL || ch.wifi || ch.lang || ch.voice || ch.realtime || ch.channel {
+	if ch.model || ch.thinking || ch.baseURL || ch.wifi || ch.lang || ch.halBoot || ch.realtime || ch.channel {
 		t.Fatalf("empty request set flags: %+v", ch)
 	}
 	if c.LLMAPIKey != "key-llm" || c.TTSVoice != "alloy" || c.TelegramBotToken != "tg-token" ||
@@ -55,7 +55,7 @@ func TestApplyUpdateModelOnly(t *testing.T) {
 		t.Fatalf("model change not flagged: %+v", ch)
 	}
 	// llm_model is not in hal's boot-read set — must not bounce TTS.
-	if ch.voice || ch.thinking || ch.baseURL {
+	if ch.halBoot || ch.thinking || ch.baseURL {
 		t.Fatalf("model-only change set unrelated flags: %+v", ch)
 	}
 
@@ -66,11 +66,11 @@ func TestApplyUpdateModelOnly(t *testing.T) {
 	}
 }
 
-func TestApplyUpdateLLMKeyTriggersVoiceRestart(t *testing.T) {
+func TestApplyUpdateLLMKeyTriggersHALRestart(t *testing.T) {
 	c := baseConfig()
 	ch := applyUpdate(c, domain.UpdateConfigRequest{LLMAPIKey: "key-new"}, "")
-	if !ch.voice {
-		t.Fatal("llm_api_key change must flag voice (hal reads it at boot)")
+	if !ch.halBoot {
+		t.Fatal("llm_api_key change must flag halBoot (hal reads it at boot)")
 	}
 	if ch.model || ch.baseURL {
 		t.Fatalf("llm_api_key change set unrelated flags: %+v", ch)
@@ -80,12 +80,12 @@ func TestApplyUpdateLLMKeyTriggersVoiceRestart(t *testing.T) {
 func TestApplyUpdateBaseURL(t *testing.T) {
 	c := baseConfig()
 	ch := applyUpdate(c, domain.UpdateConfigRequest{LLMBaseURL: "https://api2.example.com"}, "")
-	if !ch.baseURL || !ch.voice {
+	if !ch.baseURL || !ch.halBoot {
 		t.Fatalf("base_url change not flagged: %+v", ch)
 	}
 	// Re-sending the same URL (post-normalization) is a no-op.
 	ch = applyUpdate(c, domain.UpdateConfigRequest{LLMBaseURL: "https://api2.example.com"}, "")
-	if ch.baseURL || ch.voice {
+	if ch.baseURL || ch.halBoot {
 		t.Fatalf("identical base_url flagged as change: %+v", ch)
 	}
 }
@@ -158,7 +158,7 @@ func TestApplyUpdateChannelTokens(t *testing.T) {
 func TestApplyUpdateMQTTOnlySkipsRestarts(t *testing.T) {
 	c := baseConfig()
 	ch := applyUpdate(c, domain.UpdateConfigRequest{MQTTEndpoint: "mqtt2.example.com", MQTTPort: 8883}, "")
-	if ch.voice || ch.lang || ch.realtime || ch.channel || ch.wifi || ch.model {
+	if ch.halBoot || ch.lang || ch.realtime || ch.channel || ch.wifi || ch.model {
 		t.Fatalf("mqtt-only save set restart flags: %+v", ch)
 	}
 	if c.MQTTEndpoint != "mqtt2.example.com" || c.MQTTPort != 8883 {
@@ -172,7 +172,7 @@ func TestApplyUpdateAdminHash(t *testing.T) {
 	if c.AdminPasswordHash != "new-hash" {
 		t.Fatal("admin hash not replaced")
 	}
-	if ch.voice || ch.channel {
+	if ch.halBoot || ch.channel {
 		t.Fatalf("admin-only save set restart flags: %+v", ch)
 	}
 }
@@ -197,7 +197,7 @@ func TestApplyUpdateWakeWordRestartsHAL(t *testing.T) {
 	c := baseConfig()
 	wakeWord := true
 	ch := applyUpdate(c, domain.UpdateConfigRequest{WakeWord: &wakeWord}, "")
-	if !ch.voice {
+	if !ch.halBoot {
 		t.Fatal("wakeword-only save must restart HAL")
 	}
 	if c.WakeWord == nil || !*c.WakeWord {
@@ -244,5 +244,130 @@ func TestGetPublicConfigReturnsEffectiveWakePhrases(t *testing.T) {
 		if !found {
 			t.Fatalf("WakePhrases = %v, missing %q", cfg.WakePhrases, phrase)
 		}
+	}
+}
+
+// The most common save an operator makes. hal takes provider and voice per
+// utterance, so this must be pushed into the running process — restarting for
+// it left the device deaf and mute for ten to fifteen seconds, and any admin
+// click landing in that window was lost.
+func TestApplyUpdateVoiceOnlyDoesNotRestartHAL(t *testing.T) {
+	c := baseConfig()
+	ch := applyUpdate(c, domain.UpdateConfigRequest{TTSVoice: "vi_VN-vais1000-medium"}, "")
+
+	if !ch.tts {
+		t.Fatalf("voice change not flagged for a live push: %+v", ch)
+	}
+	if ch.halBoot || ch.lang || ch.realtime {
+		t.Fatalf("voice-only change must not restart hal: %+v", ch)
+	}
+	if c.TTSVoice != "vi_VN-vais1000-medium" {
+		t.Fatalf("voice not persisted: %q", c.TTSVoice)
+	}
+
+	// Re-saving the same voice changes nothing at all.
+	ch = applyUpdate(c, domain.UpdateConfigRequest{TTSVoice: "vi_VN-vais1000-medium"}, "")
+	if ch.tts || ch.halBoot {
+		t.Fatalf("identical voice flagged as a change: %+v", ch)
+	}
+}
+
+// An STT key sits in hal's boot-read set, so it still has to bounce the process
+// even though it arrives through the same voice settings page.
+func TestApplyUpdateSTTKeyStillRestartsHAL(t *testing.T) {
+	c := baseConfig()
+	ch := applyUpdate(c, domain.UpdateConfigRequest{STTAPIKey: "stt-new"}, "")
+	if !ch.halBoot {
+		t.Fatalf("stt_api_key must restart hal: %+v", ch)
+	}
+}
+
+// The settings page sends the realtime block on every save, so presence must
+// not read as change: it restarted hal for a voice-only save and undid the
+// whole point of pushing TTS config live.
+func TestApplyUpdateUnchangedRealtimeDoesNotRestartHAL(t *testing.T) {
+	c := baseConfig()
+	enabled := true
+	block := domain.RealtimeSetData{Enabled: &enabled, Provider: "gemini"}
+
+	ch := applyUpdate(c, domain.UpdateConfigRequest{Realtime: &block}, "")
+	if !ch.realtime {
+		t.Fatalf("first realtime apply must count as a change: %+v", ch)
+	}
+
+	// The same block again — what every subsequent save sends.
+	ch = applyUpdate(c, domain.UpdateConfigRequest{Realtime: &block}, "")
+	if ch.realtime {
+		t.Fatalf("re-sending the current realtime block flagged as a change: %+v", ch)
+	}
+
+	// A genuine switch still restarts.
+	other := domain.RealtimeSetData{Enabled: &enabled, Provider: "openai"}
+	ch = applyUpdate(c, domain.UpdateConfigRequest{Realtime: &other}, "")
+	if !ch.realtime {
+		t.Fatalf("a realtime provider switch must restart hal: %+v", ch)
+	}
+}
+
+// The shipped credentials have to be preserved before the first edit lands on
+// them, because that edit is what destroys them. Devices reached the field with
+// the team's key overwritten and no way back.
+func TestFirstCredentialChangeCapturesShippedDefaults(t *testing.T) {
+	c := baseConfig()
+	c.LLMAPIKey, c.LLMBaseURL, c.LLMModel = "team-key", "https://campaign-api.example.com", "team-model"
+
+	applyUpdate(c, domain.UpdateConfigRequest{LLMAPIKey: "my-own-key"}, "")
+
+	d := c.AutonomousDefaults
+	if d == nil {
+		t.Fatal("shipped credentials were not captured")
+	}
+	// The values as they were, not as the save left them.
+	if d.APIKey != "team-key" || d.BaseURL != "https://campaign-api.example.com" || d.Model != "team-model" {
+		t.Fatalf("captured the wrong values: %+v", d)
+	}
+	if c.LLMAPIKey != "my-own-key" {
+		t.Fatalf("the edit itself did not apply: %q", c.LLMAPIKey)
+	}
+}
+
+// Capturing twice would store the operator's own key under the Autonomous name
+// and lose the real one for good — the exact failure this exists to prevent.
+func TestLaterCredentialChangesDoNotOverwriteTheCapture(t *testing.T) {
+	c := baseConfig()
+	c.LLMAPIKey, c.LLMBaseURL, c.LLMModel = "team-key", "https://campaign-api.example.com", "team-model"
+
+	applyUpdate(c, domain.UpdateConfigRequest{LLMAPIKey: "first-key"}, "")
+	applyUpdate(c, domain.UpdateConfigRequest{TTSAPIKey: "second-key"}, "")
+	applyUpdate(c, domain.UpdateConfigRequest{LLMBaseURL: "https://elsewhere.example.com"}, "")
+
+	if got := c.AutonomousDefaults.APIKey; got != "team-key" {
+		t.Fatalf("capture was overwritten: %q", got)
+	}
+}
+
+// A wifi or rename save must not trip the capture — not because storing it
+// early is harmful, but because "captured" is what the restore affordance keys
+// off, and offering to restore on a device nobody has edited is noise.
+func TestNonCredentialSaveDoesNotCapture(t *testing.T) {
+	c := baseConfig()
+	c.LLMAPIKey, c.LLMBaseURL = "team-key", "https://campaign-api.example.com"
+
+	applyUpdate(c, domain.UpdateConfigRequest{DeviceID: "renamed"}, "")
+
+	if c.AutonomousDefaults != nil {
+		t.Fatalf("captured on a save that touched no credential: %+v", c.AutonomousDefaults)
+	}
+}
+
+// An empty set is not a default worth restoring to.
+func TestCaptureSkipsADeviceWithNoCredentials(t *testing.T) {
+	c := baseConfig()
+	c.LLMAPIKey, c.LLMBaseURL = "", ""
+
+	applyUpdate(c, domain.UpdateConfigRequest{LLMAPIKey: "first-ever-key"}, "")
+
+	if c.AutonomousDefaults != nil {
+		t.Fatalf("captured an empty set: %+v", c.AutonomousDefaults)
 	}
 }

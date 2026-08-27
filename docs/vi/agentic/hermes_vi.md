@@ -444,7 +444,17 @@ làm 3 việc theo thứ tự:
 2. **Đảm bảo structure `config.yaml`** (idempotent — tự lành sau khi
    `hermes setup --reset` xoá trắng). Coerce `model: ''` bị reset về map, rồi khẳng định:
    - `.model.provider = custom:autonomous`
-   - `.model.default = "Auto-AI"` — alias model campaign-api **cố định**. os-server
+   - `.model.default = "Auto-AI"` — alias model của campaign-api, proxy đó tự phân
+     giải sang model nào tuỳ nó. Chỉ giữ nguyên **khi máy còn dùng proxy đó**;
+     `llm_model` lúc ấy có thể đang là primary model của OpenClaw, vô nghĩa ở đây.
+
+     Với `llm_base_url` khác, alias này là một model id không tồn tại, và phần
+     DYNAMIC bên dưới thay nó bằng `llm_model` của người dùng. Đo trên
+     intern-v2-d16f trỏ vào openrouter: mọi lượt đều trả
+     `400 Auto-AI is not a valid model ID`, và vì presync tự chữa mỗi lần boot
+     nên sửa tay `config.yaml` không sống qua nổi một lần khởi động lại.
+
+     _(ghi chú cũ)_ os-server
      gửi model request cố định (`constants.go` `Model`) mỗi lượt, nên **không** lấy
      từ `llm_model` (đó là model chính của OpenClaw, không liên quan Hermes).
    - `.custom_providers[0]` → `name: autonomous`, `key_env: AUTONOMOUS_API_KEY`,

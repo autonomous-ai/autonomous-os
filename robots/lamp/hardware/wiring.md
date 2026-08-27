@@ -94,16 +94,21 @@ SBC → USB → USB audio board (DAC) → 3.5 mm line-out → PAM8610 L/R in →
 
 ## Microphones
 
-Two mics: a USB mic for voice capture, an onboard mic for ambient sensing.
+Two microphones are active: the Jieli USB mic handles voice capture and the
+onboard mic handles ambient sensing.
 
 | Role | Device | ALSA alias | Code |
 |---|---|---|---|
-| Voice (Mic 1) | USB mic (`Device` card) | `plug:device_micro2` | `/opt/hal/.env` (`HAL_AUDIO_INPUT_ALSA`) |
-| Sensing (Mic 2) | onboard codec capture | `plug:device_micro1` | `/opt/hal/.env` (`HAL_AUDIO_SENSING_DEVICE`) |
+| Voice (Mic 2) | Jieli USB Composite Device | `plug:device_micro2` | `/opt/hal/.env` (`HAL_AUDIO_INPUT_ALSA`) |
+| Sensing (Mic 1) | onboard codec capture | `plug:device_micro1` | `/opt/hal/.env` (`HAL_AUDIO_SENSING_DEVICE`) |
 
-> Mic 2 is the onboard MEMS mic that ships on the OrangePi 4 Pro PCB. It must be **desoldered from the OPi board and re-mounted in the lamp base with an extended cord** to the original pads. Keep the cord short enough to avoid noise pickup — twist the signal and ground together.
+The OPENAICAM audio endpoint (`device_micro3`) is not selected: a direct tone
+test returned near-digital silence, so it needs a hardware or firmware repair
+before it can be used for voice capture.
 
-> ALSA aliases live in `/etc/asound.conf`. The source of truth is the device rootfs overlay `robots/lamp/rootfs/etc/asound.conf` (one per device type), installed onto `/` at image build and on every device-profile OTA. Cards are addressed by **name** (`Audio` = USB DAC, `Device` = USB mic, `sndi2s4` = onboard codec), not index, since USB card numbers reorder across boots.
+> Mic 1 is the onboard MEMS mic that ships on the OrangePi 4 Pro PCB. It must be **desoldered from the OPi board and re-mounted in the lamp base with an extended cord** to the original pads. Keep the cord short enough to avoid noise pickup — twist the signal and ground together.
+
+> ALSA aliases live in `/etc/asound.conf`. Their tracked source is `robots/lamp/rootfs/etc/asound.conf`, installed onto `/` at image build and on every device-profile OTA. Cards are addressed by **name**, not index, since USB card numbers reorder across boots.
 
 > On Raspberry Pi the wm8960 capture gain has a watchdog that clamps it to 160 — see `project_lamp_pcm_watchdog.md`.
 

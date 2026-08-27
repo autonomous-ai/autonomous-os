@@ -240,6 +240,27 @@ if [ -n "$LLM_BASE_URL" ]; then
     .model_list = ((.model_list // []) | map(if (.model_name == "autonomous" or .model_name == "autonomous_vision") then .api_base = $ab else . end))
   '
   log "model_list[autonomous,autonomous_vision].api_base = $base"
+
+  # The "Auto-AI" model pinned in STRUCTURE above is an alias only the
+  # campaign-api proxy understands — it resolves it to whatever model it picks.
+  # Against any other host it is an unknown model id and every turn fails; hermes
+  # showed this as `400 Auto-AI is not a valid model ID` on a device pointed at
+  # openrouter. So on a custom brain, use the model the operator actually chose.
+  # The vision entry keeps its own model: it is a separate choice, not this one.
+  case "$LLM_BASE_URL" in
+    *campaign-api.autonomous.ai*) ;;
+    *)
+      LLM_MODEL="$(dev llm_model)"
+      if [ -n "$LLM_MODEL" ]; then
+        jq_edit "$PICO_CONFIG" --arg m "$LLM_MODEL" '
+          .model_list = ((.model_list // []) | map(if .model_name == "autonomous" then .model = $m else . end))
+        '
+        log "model_list[autonomous].model = $LLM_MODEL (custom brain — Auto-AI only resolves at campaign-api)"
+      else
+        log "WARNING: custom llm_base_url with no llm_model — leaving the Auto-AI alias, turns will fail"
+      fi
+      ;;
+  esac
 fi
 
 # LLM api key → .security.yml model_list."autonomous:0".api_keys.

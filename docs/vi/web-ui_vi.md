@@ -119,6 +119,15 @@ Góc dưới sidebar hiển thị trạng thái OpenClaw (online/offline) và th
 
 ### 3.4 Settings (`/setting`) — shell dùng chung
 
+**Mirror key/URL từ AI Brain.** Panel tự điền ô TTS hoặc STT còn trống bằng key
+và base URL của AI Brain, để lần setup đầu chỉ phải nhập một bộ. Riêng phần key
+còn phải thoả điều kiện máy **chưa có key nào** (`has_tts_api_key` /
+`has_stt_api_key`): mấy ô đó là write-only nên lần mở trang nào cũng trống bất
+kể máy đã lưu key hay chưa, tức "trống" không thể hiểu là "chưa đặt" như với
+base URL — thứ luôn load lên kèm giá trị thật. Thiếu điều kiện đó thì gõ một key
+AI Brain mới là ghi đè im lặng lên key TTS/STT đang cố tình khác: đã có máy giữ
+key openrouter đi kèm URL proxy autonomous, một cặp không thể chạy.
+
 Settings **không phải là một trang riêng**. Nó là một khu vực (area) của chính shell Monitor (`system/web/src/pages/monitor/index.tsx`), truy cập tại route `/setting`. Trong `App.tsx`, `/monitor` và `/setting` là các route con của một layout route duy nhất có element render `<Monitor/>`; React Router giữ element đó luôn mounted khi chỉ đường dẫn con thay đổi, nên sidebar **không** bị remount khi chuyển giữa Monitor và Settings (không có hiện tượng nháy toàn trang). Shell suy ra khu vực — `"monitor"` hoặc `"setting"` — từ `useLocation().pathname`.
 
 Nhóm Settings có thể thu gọn nằm trong `NAV` của sidebar dùng chung (`system/web/src/pages/monitor/types.ts`). Bấm một mục Settings sẽ điều hướng tới `/setting` và render `SettingsPanel` (`system/web/src/pages/settings/SettingsPanel.tsx`) ở khu vực chính; bấm một mục Monitor sẽ điều hướng tới `/monitor`.
@@ -154,6 +163,14 @@ Trang `/edit` độc lập (cũ) đã bị gỡ bỏ; `SettingsPanel` của nó 
 
 #### Voice — panel Piper
 
+Mọi nút trong panel này đều đặt `type="button"`. Panel nằm trong `<form>` của
+trang settings, mà trong form thì `<button>` mặc định là `type="submit"` — nên
+Download, Use và Remove đều submit cả form settings, lưu config và restart HAL
+ngay dưới chân chính cái request chúng vừa gửi đi. Đó là thứ giết lượt tải giữa
+chừng, làm cú Remove ăn 502, và khiến máy nói *"Be right back"* cho một cú bấm
+lẽ ra chỉ đụng tới `/opt/piper`. Triệu chứng trông như ba lỗi rời rạc, hoá ra là
+một thuộc tính bị thiếu.
+
 `TTSSection` (`system/web/src/pages/settings/TTSSection.tsx`) có thêm provider
 thứ tư, **Piper (Local — free)**. Nó khác ba cái kia ở chỗ không có base URL và
 không có API key, nên chọn nó là hai ô đó ẩn đi — và bộ lọc ngôn ngữ cũng ẩn
@@ -171,6 +188,50 @@ nhất của trang có trạng thái tự đổi mà người dùng không đụ
 ra trên thiết bị, nên panel đọc trường `job` từ
 `GET /api/voice/piper/status` chứ không tự theo dõi gì.
 
+Lượt tải đang chạy có **dòng riêng** — tên giọng, thanh tiến trình, và
+`13.2 / 60.3 MB · 24%` — chứ không phải một con số nhét trên cái nút vừa bấm.
+Với đường truyền gia đình, 63 MB mất vài phút, và suốt từng ấy phút đây là thứ
+duy nhất đang diễn ra trên trang. Có bộ đếm byte vì phần trăm gần như đứng yên
+trên mạng chậm, còn byte thì nhích thấy rõ — đó là khác biệt giữa *đang tải* và
+*treo* trong mắt người ngồi nhìn. Dòng này cũng nói rõ việc tải chạy dưới máy và
+không mất khi rời trang hay F5, điều đúng sự thật mà nhìn vào không đoán ra.
+
+Panel lấy luôn job trong phản hồi của POST thay vì đợi lượt poll kế tiếp phát
+hiện ra. Đó chính là thứ làm cái nút phản ứng lại cú bấm.
+
+Giọng đã cài có hai nút **Use** và **Remove**; riêng giọng đang dùng thì không
+có nút nào, vì phải đổi giọng trước rồi mới xoá được. Remove cần bấm hai lần —
+lần đầu nút đổi thành *Confirm* — vì model 63 MB tải lại mất vài phút, và xác
+nhận ngay trong dòng thì gọn hơn là bật hộp thoại của trình duyệt. Lần bấm thứ
+hai cập nhật dòng đó **ngay lập tức** rồi mới đối chiếu lại với máy: một cái nút
+đứng yên sau cú xác nhận có chủ đích khiến người ta tưởng cú bấm không ăn, mà
+vòng đi-về thì dài vài giây mỗi khi HAL đang restart.
+
+Cách làm là **che** status poll cho riêng giọng đó, chứ không sửa nó. Poll vẫn
+chạy suốt lượt xoá, và mỗi lần poll đều báo giọng vẫn còn cho tới khi lệnh xoá
+xong — nên một bản đã sửa chỉ bị lần poll sau đó hai giây ghi đè lại, nút Remove
+hiện lại và cú xác nhận trông như bị bỏ qua. Lớp che chỉ được gỡ khi status mới
+đã về. Xoá giọng **không** làm HAL restart; chỉ lưu cấu hình voice mới làm.
+Nút Remove cũng bị ẩn ở giọng cuối cùng còn lại, vì HAL sẽ từ chối — ẩn đi vẫn
+hơn là một cái nút mười giây sau trả về một lời từ chối.
+
+Với Piper, dropdown Voice lấy dữ liệu từ **chính status của panel**, không phải
+lượt fetch giọng ở tầng trang. Panel poll thẳng HAL, nên danh sách bám theo một
+lượt tải hay một lượt xoá ngay khi nó xong, và một lần poll hỏng thì giữ nguyên
+câu trả lời trước đó chứ không làm rỗng dropdown.
+
+Khi một thao tác trong panel thất bại vì HAL đang restart — mỗi lần lưu voice là
+có một lần restart, và cú bấm rơi vào đúng cửa sổ đó thì mất trắng — panel nói
+rõ là máy đang khởi động lại và **không có gì thay đổi**, chứ không chỉ nói
+"đang kết nối lại". Chỉ báo kết nối lại khiến người dùng tin là giọng đã bị xoá
+trong khi không hề. Nút Download và Remove cũng bị khoá trong lúc mất kết nối,
+để cú bấm không rơi vào đó ngay từ đầu.
+
+Dòng trạng thái engine **chỉ hiện khi engine chưa có**. Cài xong rồi thì nó
+không nói thêm được gì mà danh sách giọng bên dưới chưa hàm ý sẵn, và một dấu
+tick xanh nằm vĩnh viễn trên một bước setup đã xong chỉ là thứ để mắt lướt qua
+mỗi lần.
+
 Hai chi tiết nên giữ nếu sau này refactor. Ngôn ngữ câu thử được suy ra từ **tên
 giọng** (`vi_VN-…` → `vi`) chứ không lấy từ bộ lọc ngôn ngữ vốn đã bị Piper ẩn —
 thiếu chỗ này thì nút Test Voice gửi ngôn ngữ STT của máy và đọc câu mẫu tiếng
@@ -178,6 +239,15 @@ Anh bằng model tiếng Việt, nghe ra như giọng hỏng chứ không phải
 ngôn ngữ. Và phần ghi công **cố tình không** hiện ở đây: nghĩa vụ đó thuộc về
 bên phân phối giọng, không phải người bật nó lên, và `CREDITS.md` mới là chỗ
 hoàn thành nghĩa vụ.
+
+**Nút Test Voice bị chặn — không phải báo lỗi — cho tới khi giọng đã có trên
+máy.** Bấm giữa lúc đang tải là chạm tới một backend không có model nào để nạp,
+và câu trả lời đúng sự thật (503) khi tới tay người dùng lại giống như API sập.
+Thay vào đó nút xám lại và nói rõ đang xảy ra chuyện gì (*That voice is still
+downloading*, hoặc *Download a voice first* khi chưa chọn gì). Việc chuyển
+provider sang Piper cũng không bao giờ tự bịa ra tên giọng: nó chọn một giọng
+trong danh sách đã cài, hoặc để trống — vì một cái tên được lưu mà máy không có
+sẽ cấu hình thiết bị trỏ tới model nó không nạp được.
 
 
 ## 4. Polling & Data Sources
@@ -200,6 +270,8 @@ Monitor poll API system/HW mỗi **3 giây**. Flow dùng hybrid theo file: REST 
 | `GET /api/system/ota-versions` | Trả `{current, target, min_version, update_available, held_by_floor}` cho từng component (proxy bootstrap `/versions`, gồm device profile đang cài từ `devices.<device_type>`, kèm alias `agent` cho CLI của runtime đang chạy). Card Versions hiện nút `update` ở mọi chỗ `update_available` = true (`held_by_floor` vẫn được trả về nhưng KHÔNG dùng để quyết định nút: nút cài bản đã publish lên chính máy này, giống `software-update <key>` qua SSH, còn sàn chỉ dùng để staging rollout tự động) |
 | `GET /api/system/ota-updating` | Các component worker đang cài ngay lúc này (`{updating: [...]}`, kèm alias `agent`). Cố ý làm rẻ — không fetch metadata — vì card Versions poll nó mỗi 2 giây trong lúc cài và hiện `updating…` ở dòng đó thay cho nút |
 | `POST /api/system/software-update/:target` | Kiểm tra OTA cho một component. `target`: `os-server` \| `bootstrap` \| `web` \| `hal` \| `device` \| `agent`. Bootstrap tự cập nhật bằng cách chạy installer nền, nên có thể restart worker thay thế an toàn; `device` cài profile `devices.<device_type>` đã resolve. **`agent` là target ảo** — os-server tự phân giải sang CLI của runtime đang chạy (`codex`/`claudecode`/`opencode`/`picoclaw`) để trình duyệt không cần biết runtime nào; `hermes` trả 400 (không pin được nên bootstrap không bao giờ auto-apply). Giới hạn 1 lần / target / 30 giây |
+| `POST /api/system/reboot` | Request reboot cần admin auth. OS server trả `202` trước, rồi gọi action reboot có cue của HAL. |
+| `POST /api/system/shutdown` | Request shutdown cần admin auth. OS server trả `202` trước, rồi gọi action shutdown có cue và release servo của HAL. |
 
 > **Lưu ý format**: OS server API trả `{ status: 1, data: <payload>, message: null }` khi thành công.
 
@@ -280,6 +352,10 @@ không kéo giãn card Presence ngắn theo card Audio cao hơn.
 - Hiển thị danh sách scene preset (reading, focus, relax, movie, night, energize). Lấy từ `GET /hw/scene`.
 - Bấm nút để kích hoạt scene qua `POST /hw/scene` với `{"scene": "<tên>"}`.
 - Scene đang active được highlight màu amber.
+
+**Power**
+- Card gọn trên Overview có hai nút **Reboot** và **Shut down**, mỗi nút hỏi xác nhận; sau khi request được nhận, cả hai bị disable để trang không xếp thêm power operation thứ hai.
+- Nút gọi endpoint os-server cần admin auth, không gọi HAL trực tiếp. Server trả ACK trước và có single-flight guard, rồi HAL chạy cùng chuỗi action tường minh với physical control: reboot phát cue rồi restart; shutdown phát cue và release servo trước khi tắt nguồn.
 
 **Servo Pose**
 - Pose đang chạy (current)

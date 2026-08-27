@@ -76,6 +76,7 @@ mới là pass-through.
 | 3 | `motion.max_speed` (theo sự hiện diện) | `min_move_duration` | route servo | **đã thực thi (v1)** (`max_accel` dự trữ) |
 | 3b | `motion.stop_always` | — | — | **được khai báo / đảm bảo theo cấu trúc** — chưa có route-level gate nào dùng field này (xem bên dưới) |
 | 4 | trạng thái fail-safe (mất mạng/gateway → dừng tracking; lỗi board → cô lập `503`; `thermal.max_temp_c` → health event quá nhiệt SoC + dừng tracking; setup + quá dòng servo dự trữ) | hook WS-disconnect + `503` theo từng capability + monitor nhiệt (`thermal_over`/`read_soc_temp_c`) | `services` khi gateway WS disconnect + route HAL/`/health` + `server.py` `_thermal_monitor` | **thực thi một phần (v1)** (setup + quá dòng dự trữ) |
+| 5 | trần `audio.max_volume` | `clamp_volume` | route `/audio/volume`, phía trên chỗ rẽ nhánh loa/sink BT | **thực thi (v1)** |
 
 Mỗi slice thêm field vào `SafetyPolicy` và gate function rồi nối một/nhiều route;
 loader và contract front-matter **không** đổi hình dạng giữa các slice (chỉ thêm field
@@ -234,6 +235,39 @@ kiện đã thực thi; setup-incomplete và over-current servo còn dự trữ.
 - [ ] **Runtime (CHƯA verify trên máy):** đường WS-disconnect → `/servo/track/stop` và
       monitor nhiệt mới ở mức repo; chưa xác nhận trên thiết bị sống (ngắt link gateway;
       đốt nóng SoC vượt `max_temp_c`).
+
+### Slice 5 — `audio.max_volume` (checklist)
+
+Trần âm lượng áp dụng cả ngày, độc lập với `audio.quiet_hours`: khung giờ chỉ chặn
+output *tuỳ ý* (nhạc), còn trần giới hạn *mọi thứ to tới đâu*, kể cả câu trả lời nói.
+
+- [x] **Gate:** `policy.clamp_volume` — thuần tuý, không đọc đồng hồ, không phân biệt
+      caller. Không khai = pass-through (chỉ còn kẹp thang 0–100), đúng luật
+      presence-driven như `clamp_brightness`.
+- [x] **Thực thi ở đâu:** `POST /audio/volume` (`hal/routes/audio.py`), kẹp **phía trên**
+      chỗ rẽ nhánh sink nên trần có hiệu lực như nhau với loa tích hợp (amixer/DAC dB) và
+      tai nghe Bluetooth. Giá trị lưu lại (`config/.volume`, os-server khôi phục lúc boot)
+      là giá trị đã kẹp, nên mức cao đặt từ trước không sống sót qua lần reboot.
+- [x] **Rà đường vòng (caller):** mọi đường đặt volume đều chui qua đúng route này —
+      agent/skill, `system/intent` (`rules_audio.go` "volume up"/"quieter"), slider web
+      Monitor, và bước khôi phục lúc boot của os-server (`config_watch.go` →
+      `hal.SetVolume`). Gate nằm trong route chứ không nằm ở caller, nên không caller nào
+      là thứ quyết định.
+- [x] **Báo ra ngoài:** cả `GET` lẫn `POST /audio/volume` đều trả `max_volume` (null khi
+      không khai); riêng reply của `POST` còn mang giá trị thực đã áp, nên caller không phải
+      đoán request có vào nguyên vẹn hay không và UI tự sửa ngay thay vì trôi tới vòng poll
+      kế tiếp.
+      `system/lib/hal.MaxVolume()` và slider Monitor đọc trường này — chỉ mang tính tham
+      khảo, client bỏ qua vẫn không vượt được trần, chỉ mất khả năng chia bước theo dải
+      thật. Slider giới hạn track đúng bằng trần thay vì để tay kéo vào vùng chết rồi bị
+      bật ngược, còn `rules_audio.go` diễn đạt "louder"/"quieter" theo tỉ lệ của dải dùng
+      được (nếu không, trên máy có trần 40 thì "quieter" cố định 30 gần như không khác
+      "louder").
+- [x] **Unit:** kẹp trên/dưới trần, pass-through khi không có bound và không có policy,
+      kẹp thang 0–100, `max_volume` lồng trong `quiet_hours` không bị đọc thành trần cả
+      ngày, và fail-loud khi ngoài dải. (`hal/test/test_safety.py`.)
+- [ ] **Runtime (CHƯA verify trên thiết bị):** mới ở mức repo — chưa xác nhận trên loa
+      thật (đặt 100 qua API rồi đọc lại trần; kiểm giá trị amixer/sink BT).
 
 ## Quan hệ với enforcement hardcode rời rạc hiện có
 

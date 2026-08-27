@@ -54,16 +54,35 @@ export function AgentRuntimeSection({ active }: { active: boolean }) {
   const [selected, setSelected] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [switching, setSwitching] = useState(false);
+  // Selected is not the same as answering. config.agent_runtime flips the moment
+  // the switch lands, but the gateway behind it is still booting — a backend
+  // reported "Active" while it cannot take a turn sends the operator to the chat
+  // to meet silence, and they read that as a broken device rather than a slow
+  // start. So the label follows the gateway's own readiness probe.
+  const [ready, setReady] = useState(true);
 
   useEffect(() => {
-    getAgentRuntime()
-      .then((r) => {
-        setCurrent(r.current);
-        setSelected(r.current);
-        if (r.options?.length) setOptions(r.options);
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false));
+    let alive = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const poll = () => {
+      getAgentRuntime()
+        .then((r) => {
+          if (!alive) return;
+          setCurrent(r.current);
+          setSelected((sel) => sel || r.current);
+          if (r.options?.length) setOptions(r.options);
+          setReady(r.ready);
+          // Keep asking only while it is still coming up. A backend that is
+          // answering does not go back to booting on its own, so there is
+          // nothing to watch for after that.
+          if (!r.ready) timer = setTimeout(poll, 3000);
+        })
+        .catch(() => { if (alive) timer = setTimeout(poll, 3000); })
+        .finally(() => { if (alive) setLoading(false); });
+    };
+    poll();
+    return () => { alive = false; if (timer) clearTimeout(timer); };
   }, []);
 
   async function onSwitch() {
@@ -107,7 +126,10 @@ export function AgentRuntimeSection({ active }: { active: boolean }) {
       try {
         const r = await getAgentRuntime();
         lastSeen = r.current;
-        if (r.current === target) { landed = true; break; }
+        setReady(r.ready);
+        // Both conditions: the name lands first, the gateway answers later.
+        // Declaring victory on the name alone is what made "Active" a lie.
+        if (r.current === target && r.ready) { landed = true; break; }
       } catch { /* os-server restarting — keep polling */ }
     }
 
@@ -140,7 +162,8 @@ export function AgentRuntimeSection({ active }: { active: boolean }) {
 
           <div style={{ marginBottom: 6 }}>
             <label htmlFor="agent_runtime" style={labelStyle}>
-              Backend (active: <span style={{ color: C.amber }}>{current ? displayRuntime(current) : "?"}</span>)
+              Backend (active: <span style={{ color: C.amber }}>{current ? displayRuntime(current) : "?"}</span>
+              {current && !ready && <span style={{ color: C.textMuted }}> — starting…</span>})
             </label>
             <select
               id="agent_runtime"
@@ -173,7 +196,9 @@ export function AgentRuntimeSection({ active }: { active: boolean }) {
               transition: "all 0.15s",
             }}
           >
-            {switching ? "Switching…" : selected === current ? "Active" : `Switch to ${displayRuntime(selected)}`}
+            {switching ? "Switching…"
+              : selected === current ? (ready ? "Active" : "Starting…")
+              : `Switch to ${displayRuntime(selected)}`}
           </button>
         </>
       )}

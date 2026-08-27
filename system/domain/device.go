@@ -434,9 +434,11 @@ const (
 	AgentRuntimeClaudeCode = "claudecode"
 	AgentRuntimeOpenCode   = "opencode"
 
-	KindSystemInfo    = "system.info"    // aggregate: versions + network + host
-	KindSystemVersion = "system.version" // lamp + bootstrap + hal + openclaw versions
-	KindSystemNetwork = "system.network" // IP, MAC, SSID, gateway of the default-route interface
+	KindSystemInfo     = "system.info"     // aggregate: versions + network + host
+	KindSystemVersion  = "system.version"  // lamp + bootstrap + hal + openclaw versions
+	KindSystemNetwork  = "system.network"  // IP, MAC, SSID, gateway of the default-route interface
+	KindSystemReboot   = "system.reboot"   // cue-aware OS reboot via HAL
+	KindSystemShutdown = "system.shutdown" // cue- and servo-aware OS shutdown via HAL
 
 	// KindSkillsInstall installs a role's skill bundle. Data: {"role":"<role>"}.
 	KindSkillsInstall = "skills.install"
@@ -1236,6 +1238,14 @@ func IsValidAgentRuntime(r string) bool {
 type AgentRuntimeStatus struct {
 	Current string   `json:"current"`
 	Options []string `json:"options"`
+
+	// Ready reports whether the backend is actually answering, not merely
+	// selected. config.agent_runtime flips as soon as the switch lands, but the
+	// gateway behind it may still be booting — hermes downloads nothing but
+	// still takes tens of seconds to come up. A UI that calls that "active"
+	// invites the operator to start a turn against a backend that is not
+	// listening yet, which reads as a broken device.
+	Ready bool `json:"ready"`
 }
 
 // TimezoneStatus is returned by GET /api/device/timezone: the device's active
@@ -1368,6 +1378,18 @@ type ConfigPublicResponse struct {
 	HasNetworkPassword  bool `json:"has_network_password"`
 	HasMQTTPassword     bool `json:"has_mqtt_password"`
 	HasAdminPassword    bool `json:"has_admin_password"`
+
+	// True once the shipped credential set has been preserved. Drives the
+	// "restore Autonomous default" affordance — there is nothing to offer on a
+	// device that has never had an operator edit, because nothing was replaced.
+	HasAutonomousDefaults bool `json:"has_autonomous_defaults"`
+
+	// The non-secret half of the stored set. The web compares these against the
+	// live values to tell whether the device is still on the Autonomous brain or
+	// on one the operator supplied — a mode it shows as a dropdown. The key is
+	// never returned, here or anywhere else.
+	AutonomousDefaultBaseURL string `json:"autonomous_default_base_url,omitempty"`
+	AutonomousDefaultModel   string `json:"autonomous_default_model,omitempty"`
 }
 
 // UpdateConfigRequest is used by PUT /api/device/config to update device settings.
@@ -1471,9 +1493,12 @@ func DefaultElevenLabsVoiceForLang(lang string) string {
 var TTSVoicesByProvider = map[string][]string{
 	TTSProviderOpenAI: {"alloy", "ash", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer"},
 	// Piper voices are files on the device, so the live list comes from HAL
-	// (which enumerates the installed .onnx models). This is only the fallback
-	// used when HAL cannot be reached — the voice every image ships with.
-	TTSProviderPiper:      {"en_US-lessac-medium"},
+	// (which enumerates the installed .onnx models). Empty on purpose: no image
+	// ships a Piper voice — they are downloaded on request — so there is no
+	// name that is safe to offer when HAL is unreachable. Naming one anyway
+	// gets it saved as the configured voice, and the device is then set to a
+	// model it does not have. An empty list makes the UI say so instead.
+	TTSProviderPiper:      {},
 	TTSProviderElevenLabs: {"Rachel", "Sarah", "Grace", "Freya", "Matilda", "Emily", "Alice", "Lily", "Charlotte", "Nicole", "Glinda", "Serena", "Jessie", "Brian", "Adam", "Daniel", "George", "James", "Liam", "Callum", "Harry", "Charlie", "Chris", "Sam"},
 }
 

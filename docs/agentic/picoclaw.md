@@ -149,6 +149,11 @@ the watcher leaves that skill's version pending and retries it on the next poll.
   `restrict_to_workspace:false`, `allow_read_outside_workspace:true`), the `autonomous`
   and `autonomous_vision` (`qwen/qwen3.6-plus`, same campaign-api endpoint) `model_list`
   entries, and the `channel_list` skeleton. `channel_list.pico` is always enabled.
+  The `autonomous` entry's `model` is the `Auto-AI` alias, which only the
+  campaign-api proxy resolves — §2 replaces it with the operator's `llm_model`
+  whenever `llm_base_url` points somewhere else, or the host rejects every turn
+  with an unknown-model error. The vision entry keeps its own model: that is a
+  separate choice, not this one.
 - **§2 dynamic** (secrets from the **project** `/root/config/config.json`, which
   wins) — `model_list[autonomous,autonomous_vision].api_base` from `llm_base_url`
   (PicoClaw needs a trailing `/v1`, unlike hermes), `.security.yml`

@@ -386,6 +386,14 @@ export interface DeviceConfig {
   has_network_password: boolean;
   has_mqtt_password: boolean;
   has_admin_password: boolean;
+  /** True once the shipped credential set has been preserved — i.e. the
+   *  operator has replaced a credential at least once, so there is something
+   *  to offer restoring back to. */
+  has_autonomous_defaults: boolean;
+  /** Non-secret half of the stored Autonomous set, so the UI can tell whether
+   *  the device is still on it. The key is never returned. */
+  autonomous_default_base_url?: string;
+  autonomous_default_model?: string;
 }
 
 export async function getTTSVoices(provider?: string, lang?: string): Promise<string[]> {
@@ -413,6 +421,10 @@ export async function getRealtimeOptions(): Promise<RealtimeOptions> {
 export interface AgentRuntimeStatus {
   current: string;
   options: string[];
+  /** Whether the backend is actually answering, not merely selected.
+   *  `current` flips as soon as the switch lands; the gateway behind it can
+   *  still be booting for tens of seconds after that. */
+  ready: boolean;
 }
 
 export async function getAgentRuntime(): Promise<AgentRuntimeStatus> {
@@ -768,6 +780,11 @@ export interface PiperJob {
   kind: string;      // "engine" | "voice"
   target: string;
   percent: number;
+  // Bytes of the main artefact. A percentage alone barely moves on a slow
+  // link; a byte counter visibly does, which is the difference between
+  // "downloading" and "stuck" to whoever is watching.
+  bytes_done: number;
+  bytes_total: number;
   error: string;
   done: boolean;
 }
@@ -779,22 +796,52 @@ export interface PiperStatus {
   job: PiperJob;
 }
 
+/** Reply to an install/download request. `job` is present when one started. */
+export interface PiperJobStart {
+  status: string;    // "started" | "busy" | "ok" | "error"
+  already?: boolean;
+  job?: PiperJob;
+  message?: string;
+}
+
+/** Put one settings section back on the credentials the device shipped with.
+ *  The AI Brain restores url + key + model; realtime and voice restore url +
+ *  key. All three read the same stored set, captured before the first edit. */
+export async function restoreAutonomousDefaults(
+  section: "llm" | "voice" | "realtime",
+): Promise<boolean> {
+  return apiRequest<boolean>(`${API_BASE}/api/device/restore-defaults`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ section }),
+  });
+}
+
 export async function getPiperStatus(): Promise<PiperStatus> {
   return apiRequest<PiperStatus>(`${API_BASE}/api/voice/piper/status`);
 }
 
 /** Install the Piper engine. Already-installed returns ok, not an error. */
-export async function installPiperEngine(): Promise<{ status: string }> {
-  return apiRequest<{ status: string }>(`${API_BASE}/api/voice/piper/install`, {
+export async function installPiperEngine(): Promise<PiperJobStart> {
+  return apiRequest<PiperJobStart>(`${API_BASE}/api/voice/piper/install`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: "{}",
   });
 }
 
+/** Delete a downloaded voice. Refused for the voice currently in use. */
+export async function removePiperVoice(name: string): Promise<PiperJobStart> {
+  return apiRequest<PiperJobStart>(`${API_BASE}/api/voice/piper/voice/remove`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+}
+
 /** Download one catalogue voice (~63 MB). */
-export async function installPiperVoice(name: string): Promise<{ status: string }> {
-  return apiRequest<{ status: string }>(`${API_BASE}/api/voice/piper/voice`, {
+export async function installPiperVoice(name: string): Promise<PiperJobStart> {
+  return apiRequest<PiperJobStart>(`${API_BASE}/api/voice/piper/voice`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name }),

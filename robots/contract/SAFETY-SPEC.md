@@ -48,6 +48,7 @@ light:
   max_brightness: 180        # 0–255 ceiling; the runtime clamps any higher request
   quiet_hours: { start: "22:00", end: "07:00", max_brightness: 40 }  # reduced ceiling in-window
 audio:
+  max_volume: 40             # 0–100 % speaker ceiling; the volume route clamps any higher request
   quiet_hours: { start: "22:00", end: "07:00" }  # suppress loud output (music) in-window
 motion:
   max_speed: 120             # deg/s; the servo route stretches a move's duration so no joint exceeds it
@@ -65,6 +66,7 @@ request, so the bound changes with the time of day without a restart.
 | `schema` | yes | enforced | Contract version. `autonomous.safety.v1`. Frozen ABI — fields are only added within a major. |
 | `light.max_brightness` | no | **enforced (v1)** | Integer `0–255`. The LED route clamps any requested brightness to this ceiling. |
 | `light.quiet_hours` | no | **enforced (v1)** | `{ start, end, max_brightness }`. Inside the window the LED ceiling drops to this lower `max_brightness`. (Slice 2.) |
+| `audio.max_volume` | no | **enforced (v1)** | Integer `0–100` (%). `POST /audio/volume` clamps any higher request, above the speaker/Bluetooth-sink split, so the ceiling binds every caller alike — agent, local intent, web slider, boot restore. All-day and independent of `audio.quiet_hours`. Both `GET` and `POST /audio/volume` report `max_volume`, and the `POST` reply carries the volume actually applied, so a UI can bound its own control instead of snapping back. (Slice 5.) |
 | `audio.quiet_hours` | no | **enforced (v1)** | `{ start, end }`. Inside the window loud discretionary output (music via `/audio/play`) is suppressed; spoken replies still play. (Slice 2.) |
 | `motion.max_speed` | no | **enforced (v1)** | deg/s ceiling. The servo route stretches a move's duration so no joint exceeds it (the move still reaches its target). (Slice 3.) |
 | `motion.max_accel` | no | reserved | Acceleration ceiling. (Reserved — no accel model yet.) |

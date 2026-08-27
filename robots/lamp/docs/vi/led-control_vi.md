@@ -79,7 +79,7 @@ POST /led/effect
 |--------|-------|--------|
 | `breathing` | Sine-wave brightness lên xuống | color, speed |
 | `candle` | Nến lung linh ngẫu nhiên | color |
-| `rainbow` | Xoay hue qua toàn bộ strip | speed |
+| `rainbow` | Xoay hue qua toàn bộ strip | brightness (0.0-1.0, mức sáng), speed — tự sinh hue, bỏ qua `color` |
 | `notification_flash` | Flash nhanh 3 lần | color |
 | `pulse` | Pulse đơn từ tâm ra ngoài | color, speed |
 
@@ -164,11 +164,10 @@ này thay vì giữ thành user LED preference.
 
 ### Đèn báo mic đang mute (idle indicator)
 
-`STATUS_LED_PRESETS["mic_muted"]` — đỏ sẫm `(10, 0, 0)` breathing speed 0.8, dịu hơn hẳn mức mà
-trần `light.max_brightness` ép xuống (riêng gate đã clamp về 120): đây là resting look sáng liên
-tục suốt thời gian mic bị mute, lại thường chiếu về phía user, nên chỉnh theo tiêu chí "liếc là
-thấy" chứ không phải "sáng". Màu đỏ cũng có lợi — ở cùng giá trị nó chỉ mang khoảng một phần tư
-độ chói so với trắng. Key HAL-local
+Overlay lamp đặt `STATUS_LED_PRESETS["mic_muted"]` thành đỏ sẫm `(3, 0, 0)`, breathing speed
+0.8. Đây là resting look sáng liên tục suốt thời gian mic bị mute, lại thường chiếu về phía user,
+nên chỉnh theo tiêu chí "liếc là thấy" chứ không phải "sáng". Màu đỏ cũng có lợi — ở cùng giá trị
+nó chỉ mang khoảng một phần tư độ chói so với trắng. Key HAL-local
 (không có state Go statusled tương ứng): bật bởi `POST /voice/mute`, tắt bởi `POST /voice/unmute`
 (`app_state._mic_muted_led`). Đây là **trạng thái nghỉ** của strip khi mic đang mute —
 không chặn gì cả:

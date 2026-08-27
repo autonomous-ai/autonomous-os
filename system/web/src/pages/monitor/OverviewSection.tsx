@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { Satellite, Globe, Eye, Volume2, Cpu, Drama, Clapperboard, Bot, Tag, Wifi, LayoutDashboard } from "lucide-react";
+import { Satellite, Globe, Eye, Volume2, Cpu, Drama, Clapperboard, Bot, Tag, Wifi, LayoutDashboard, Power } from "lucide-react";
 import { S } from "./styles";
 import { API, HW } from "./types";
 
@@ -49,7 +49,7 @@ function useEmotionPresets() {
   return { emotions, colors };
 }
 import type { SystemInfo, NetworkInfo, HWHealth, OCStatus, PresenceInfo, VoiceStatus, ServoState, DisplayState, AudioVolume, LEDColor, SceneInfo } from "./types";
-import { StatusDot, HWBadge, SignalBars, Skeleton, SkeletonRows, SoftwareUpdateButton, StatRow, StatusBadge, STATUS_TONE, CardLabel, RestartAgentButton } from "./components";
+import { StatusDot, HWBadge, SignalBars, Skeleton, SkeletonRows, SoftwareUpdateButton, StatRow, StatusBadge, STATUS_TONE, CardLabel, RestartAgentButton, DevicePowerButtons } from "./components";
 import { formatUptime, formatAgo, useCountUp } from "./utils";
 import { BuddyCard } from "./BuddyCard";
 
@@ -220,6 +220,15 @@ export function OverviewSection({
   const animatedLinkRate = useCountUp(net?.linkRate ?? 0);
   const animatedVolume = useCountUp(localVolume ?? audio?.volume ?? 0);
 
+  // Slider ceiling: SAFETY.md `audio.max_volume` when the device declares one,
+  // else the full scale. The gate in HAL is what actually enforces this — the
+  // slider only stops short of a dead zone that would snap the handle back.
+  const volumeCeiling = audio?.max_volume ?? 100;
+  const volumeValue = Math.min(localVolume ?? audio?.volume ?? 50, volumeCeiling);
+  // The track's amber fill is a fraction of the track's own width, so it is
+  // relative to the ceiling, not to 100.
+  const volumeFillPct = volumeCeiling > 0 ? (volumeValue / volumeCeiling) * 100 : 0;
+
   const commitVolume = useCallback((vol: number) => {
     draggingVolume.current = false;
     setDragging(false);
@@ -227,7 +236,16 @@ export function OverviewSection({
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ volume: vol }),
-    }).catch(() => {});
+    })
+      // Snap to what HAL actually applied. The slider already stops at the
+      // ceiling, but a stale ceiling (SAFETY.md changed under a long-open tab)
+      // would otherwise leave the handle showing a value the device rejected
+      // until the next poll — which reads as the control being broken.
+      .then((r) => r.json())
+      .then((r) => {
+        if (typeof r?.volume === "number") setLocalVolume(r.volume);
+      })
+      .catch(() => {});
   }, []);
 
   // Base card style for the Overview: the `.lm-mon-card` class owns the
@@ -410,17 +428,29 @@ export function OverviewSection({
               <div>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
                   <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--lm-text-dim)" }}>Volume</span>
-                  <span style={{ fontSize: 14, fontWeight: 700, color: "var(--lm-amber)", fontFamily: "monospace" }}>
-                    {/* While dragging show the exact handle value (no easing lag);
-                        when idle let it tick to the server-confirmed value. */}
-                    {dragging ? (localVolume ?? audio?.volume ?? "—") : animatedVolume}%
+                  <span style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+                    {/* Why the slider stops short of 100 — without this the
+                        ceiling reads as a broken control. */}
+                    {audio?.max_volume != null && (
+                      <span
+                        style={{ fontSize: 11, fontWeight: 600, color: "var(--lm-text-dim)" }}
+                        title="Speaker ceiling from this device's SAFETY.md (audio.max_volume). Enforced in HAL for every caller, not just this slider."
+                      >
+                        ceiling {audio.max_volume}%
+                      </span>
+                    )}
+                    <span style={{ fontSize: 14, fontWeight: 700, color: "var(--lm-amber)", fontFamily: "monospace" }}>
+                      {/* While dragging show the exact handle value (no easing lag);
+                          when idle let it tick to the server-confirmed value. */}
+                      {dragging ? (localVolume ?? audio?.volume ?? "—") : animatedVolume}%
+                    </span>
                   </span>
                 </div>
                 <input
                   type="range"
                   min={0}
-                  max={100}
-                  value={localVolume ?? audio?.volume ?? 50}
+                  max={volumeCeiling}
+                  value={volumeValue}
                   onChange={(e) => {
                     draggingVolume.current = true;
                     setDragging(true);
@@ -432,7 +462,7 @@ export function OverviewSection({
                   style={{
                     width: "100%", cursor: "pointer",
                     // Drives the amber-fill width in the .lm-mon-range track (paint only).
-                    ["--lm-fill" as string]: `${localVolume ?? audio?.volume ?? 50}%`,
+                    ["--lm-fill" as string]: `${volumeFillPct}%`,
                   }}
                 />
               </div>
@@ -663,6 +693,14 @@ export function OverviewSection({
             </div>
         </div>
         )}
+
+        {/* Power actions are intentionally routed through os-server: it applies
+            admin auth, acknowledges the browser, then invokes HAL's full
+            cue-aware reboot/shutdown sequence. */}
+        <div className="lm-mon-card" style={monCard}>
+          <div style={{ marginBottom: 12 }}><CardLabel icon={<Power size={13} />} text="Power" /></div>
+          <DevicePowerButtons />
+        </div>
 
         {/* Autonomous Buddy pairing — closes out the compact (left) column. */}
         <BuddyCard />

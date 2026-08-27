@@ -1,5 +1,6 @@
 """Focused tests for shared physical-button actions."""
 
+import threading
 from unittest import mock
 
 import hal.app_state as state
@@ -116,3 +117,153 @@ def test_music_cancel_watermark_expires():
         assert state.music_cancel_active() is False
     finally:
         state._music_cancel_ms = 0.0
+
+
+def test_triple_click_only_maps_the_gesture_to_reboot_action():
+    with mock.patch.object(button_actions, "reboot_action") as reboot:
+        button_actions.triple_click_action("test button")
+
+    reboot.assert_called_once_with("test button")
+
+
+def test_hold_release_maps_each_duration_to_one_explicit_action():
+    with (
+        mock.patch.object(button_actions, "sleep_action") as sleep,
+        mock.patch.object(button_actions, "shutdown_action") as shutdown,
+        mock.patch.object(button_actions, "factory_reset_action") as factory_reset,
+    ):
+        button_actions.hold_release_action(button_actions.SLEEP_HOLD_DURATION, "test button")
+        sleep.assert_called_once_with("test button")
+        shutdown.assert_not_called()
+        factory_reset.assert_not_called()
+
+        button_actions.hold_release_action(button_actions.LONG_PRESS_DURATION, "test button")
+        shutdown.assert_called_once_with("test button")
+        factory_reset.assert_not_called()
+
+        button_actions.hold_release_action(button_actions.FACTORY_RESET_DURATION, "test button")
+        factory_reset.assert_called_once_with("test button")
+
+
+def test_swipe_sleeps_when_awake():
+    """A swipe means sleep — one meaning, no direction, no state branch."""
+    with mock.patch.object(state, "_sleeping", False), \
+         mock.patch.object(button_actions, "sleep_action") as slept:
+        button_actions.swipe_action(source="TTP223")
+    slept.assert_called_once_with("TTP223")
+
+
+def test_swipe_on_a_sleeping_device_still_routes_to_sleep():
+    """It does NOT wake. Waking is tap / double tap, which is what the device
+    shipped with; sleep_action returns early on "already sleeping"."""
+    with mock.patch.object(state, "_sleeping", True), \
+         mock.patch.object(button_actions, "sleep_action") as slept, \
+         mock.patch.object(button_actions, "_wake_if_sleepy") as woke:
+        button_actions.swipe_action(source="TTP223")
+    slept.assert_called_once_with("TTP223")
+    woke.assert_not_called()
+
+
+class _FakeTTS:
+    def __init__(self, available=True):
+        self.available = available
+        self.spoken = []
+
+    def speak_cached(self, text, interruptible=False, **kw):
+        self.spoken.append(text)
+        return True
+
+
+def _mic_toggle(muted: bool, speaker_muted=False, enrolling=False, hw_switch=None):
+    """Run the double-tap toggle against a fake TTS and report what it said."""
+    tts = _FakeTTS()
+    with mock.patch.object(state, "_mic_muted", muted), \
+         mock.patch.object(state, "_speaker_muted", speaker_muted), \
+         mock.patch.object(state, "_enrolling", enrolling), \
+         mock.patch.object(state, "_hw_mic_switch_muted", hw_switch), \
+         mock.patch.object(state, "tts_service", tts), \
+         mock.patch("hal.routes.voice.mute_mic") as mute, \
+         mock.patch("hal.routes.voice.unmute_mic") as unmute:
+        button_actions.mic_toggle_action(source="TTP223")
+    for t in threading.enumerate():
+        if t.name.endswith("gesture-ack"):
+            t.join(timeout=1)
+    return tts.spoken, mute, unmute
+
+
+def _pool(pools):
+    """The pool the device's current language will actually draw from."""
+    from hal.i18n import DEFAULT_LANG
+
+    return pools.get(button_actions._current_lang()) or pools.get(DEFAULT_LANG, [])
+
+
+def test_muting_the_mic_says_so():
+    """The double tap's only other feedback is an LED. Landing in silence is
+    what the user reported; this pins the fix.
+
+    Asserted against the language's pool rather than an English literal — the
+    device under test runs Vietnamese, and hardcoding "Microphone off." made
+    this fail on hardware while the behaviour was correct.
+    """
+    from hal.i18n import MIC_MUTED_PHRASES_BY_LANG
+
+    spoken, mute, unmute = _mic_toggle(muted=False)
+    mute.assert_called_once()
+    unmute.assert_not_called()
+    assert spoken and spoken[0] in _pool(MIC_MUTED_PHRASES_BY_LANG), spoken
+
+
+def test_unmuting_the_mic_says_so():
+    from hal.i18n import MIC_UNMUTED_PHRASES_BY_LANG
+
+    spoken, mute, unmute = _mic_toggle(muted=True)
+    unmute.assert_called_once()
+    mute.assert_not_called()
+    assert spoken and spoken[0] in _pool(MIC_UNMUTED_PHRASES_BY_LANG), spoken
+
+
+def test_every_mic_phrase_states_which_way_the_toggle_went():
+    """The pools exist to sound alive, not to be cryptic. This is a privacy
+    control: a confirmation the user cannot decode is worse than a robotic one,
+    because they are left unsure whether the microphone is live. Guards against
+    a future 'Shh!' with no state in it.
+
+    Checked structurally — every line must carry a listening/hearing/ear word in
+    its own language, and the two pools must never share a line.
+    """
+    from hal.i18n import (
+        MIC_MUTED_PHRASES_BY_LANG as MUTED,
+        MIC_UNMUTED_PHRASES_BY_LANG as UNMUTED,
+    )
+
+    cues = {
+        "en": ("listen", "hear", "ear"),
+        "vi": ("nghe", "tai"),
+        "zh-CN": ("听", "耳"),
+        "zh-TW": ("聽", "耳"),
+    }
+    for pools in (MUTED, UNMUTED):
+        for lang, phrases in pools.items():
+            assert phrases, lang
+            for text in phrases:
+                low = text.lower()
+                assert any(c in low for c in cues[lang]), (lang, text)
+    for lang in MUTED:
+        assert not set(MUTED[lang]) & set(UNMUTED[lang]), lang
+
+
+def test_a_muted_speaker_stays_silent():
+    """A muted speaker means the user chose silence; the LED still reports."""
+    spoken, mute, _ = _mic_toggle(muted=False, speaker_muted=True)
+    mute.assert_called_once()
+    assert spoken == [], spoken
+
+
+def test_a_refused_toggle_says_nothing():
+    """Enrolment blocks the toggle — announcing a mute that did not happen
+    would be worse than silence."""
+    spoken, mute, unmute = _mic_toggle(muted=False, enrolling=True)
+    mute.assert_not_called()
+    unmute.assert_not_called()
+    assert spoken == [], spoken

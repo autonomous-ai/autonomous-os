@@ -119,6 +119,17 @@ Defined at `.lm-root` in `index.css`:
 
 ### 3.4 Settings (`/setting`) — shared shell
 
+**AI Brain key/URL mirroring.** The panel fills a blank TTS or STT field from the
+AI Brain's key and base URL, so a first-time setup only asks for one credential.
+The key half is additionally gated on the device having no key on file
+(`has_tts_api_key` / `has_stt_api_key`): those fields are write-only, so they are
+blank on every load whether or not a key is stored, and "empty" cannot mean
+"unset" the way it does for a base URL, which loads with its real value. Without
+that gate, typing a new AI Brain key silently overwrote a deliberately different
+TTS/STT key on save — one device ended up holding an openrouter key against the
+autonomous proxy URL, a pairing that cannot work.
+
+
 Settings is **not a separate page**. It is an area of the same Monitor shell (`system/web/src/pages/monitor/index.tsx`), reached at the `/setting` route. In `App.tsx`, `/monitor` and `/setting` are child routes of a single layout route whose element renders `<Monitor/>`; React Router keeps that element mounted while only the matched child path changes, so the sidebar does **not** remount when switching between Monitor and Settings (no full-page flash). The shell derives its area — `"monitor"` or `"setting"` — from `useLocation().pathname`.
 
 The Settings collapsible group lives in the shared sidebar `NAV` (`system/web/src/pages/monitor/types.ts`). Clicking a Settings leaf navigates to `/setting` and renders `SettingsPanel` (`system/web/src/pages/settings/SettingsPanel.tsx`) in the main area; clicking a Monitor leaf navigates to `/monitor`.
@@ -154,6 +165,14 @@ The legacy standalone `/edit` page was removed; its `SettingsPanel` is now reach
 
 #### Voice — the Piper panel
 
+Every button in this panel sets `type="button"`. The panel renders inside the
+settings `<form>`, where a button defaults to `type="submit"` — so Download, Use
+and Remove each submitted the whole settings form, saving the config and
+restarting HAL underneath the very request they had just fired. That is what
+killed downloads mid-transfer, lost Remove clicks to a 502, and made the device
+say *"Be right back"* on a click that was only supposed to touch `/opt/piper`.
+The symptom looked like three unrelated bugs and was one missing attribute.
+
 `TTSSection` (`system/web/src/pages/settings/TTSSection.tsx`) gains a fourth
 provider, **Piper (Local — free)**. It is unlike the other three in that it has
 no base URL and no API key, so selecting it hides both fields, and hides the
@@ -172,6 +191,53 @@ the one part of the page whose state changes without the operator touching
 anything. Downloads happen on the device, so the panel reads `job` out of
 `GET /api/voice/piper/status` rather than tracking anything itself.
 
+A running download gets **its own row** — name, bar, and `13.2 / 60.3 MB · 24%`
+— rather than a percentage on the button it was started from. On a domestic
+connection 63 MB takes minutes, and for all of them this is the only thing on
+the page that is happening. The byte counter is there because a percentage
+barely moves on a slow link; bytes visibly do, which is the difference between
+*downloading* and *stuck* to whoever is watching. The row also says the download
+runs on the device and survives leaving the page or reloading, which is true and
+otherwise not guessable.
+
+The panel adopts the job returned by the POST instead of waiting for its next
+poll to discover it. That is what makes the button react to the click at all.
+
+An installed voice offers **Use** and **Remove**; the one in use offers neither,
+because switching has to come before deleting. Remove takes two presses — the
+first turns the button into *Confirm* — since a 63 MB model costs minutes to
+fetch again and an inline confirm keeps that decision in the row rather than
+behind a browser dialog. The second press updates the row **immediately**, then
+reconciles: a button that stays put after a deliberate confirm reads as the
+click not having registered, and the round trip is seconds long whenever HAL is
+restarting.
+
+It does this by **masking** the polled status for that voice, not by editing it.
+The status poll keeps running throughout the removal, and each poll reports the
+voice as still installed until the delete lands — an edited copy was simply
+overwritten by the next poll two seconds later, putting the Remove button back
+and making the confirm look ignored. The mask lifts only once fresh status has
+arrived. Removing a voice does **not** restart HAL; only saving the voice
+configuration does. Remove is also hidden on the last installed voice, since HAL
+would refuse it — better than a button that answers with a refusal ten seconds
+later.
+
+For Piper the Voice dropdown is filled from the **panel's own status**, not the
+page-level voice fetch. The panel polls HAL, so the list follows a download or a
+removal the moment it finishes, and a failed poll leaves the previous answer in
+place rather than blanking the picker.
+
+When a panel action fails because HAL is restarting — every voice save triggers
+one, and a click landing in that window is simply lost — the panel says the
+device was restarting and **nothing changed**, rather than only "reconnecting".
+Reporting a reconnection alone let the operator believe the voice had been
+removed when it had not. Download and Remove are also disabled while the device
+is unreachable, so the click cannot be dropped in the first place.
+
+The engine line appears **only while the engine is missing**. Once installed it
+states nothing the voice list below does not already imply, and a permanent
+green tick on a finished setup step is just something to read past every time.
+
 Two details worth keeping if this code is refactored. The preview language is
 derived from the voice name (`vi_VN-…` → `vi`) rather than from the language
 filter, which Piper hides — without that the Test Voice button sends the
@@ -180,6 +246,15 @@ model, which sounds like a broken voice rather than a mismatched one. And
 attribution is deliberately *not* surfaced here: it is owed by whoever
 distributes a voice, not by the person switching one on, and `CREDITS.md` is
 what discharges it.
+
+**Test Voice is blocked, not failed, until the selected voice is on the
+device.** Pressing it mid-download reaches a backend that has no model to load,
+and the honest answer — a 503 — arrives at the operator looking like the API
+fell over. The button instead greys out and says what is happening (*That voice
+is still downloading*, or *Download a voice first* when nothing is selected).
+Switching the provider to Piper never invents a voice name either: it selects
+one from the installed list or leaves the field empty, because a name that is
+saved but absent configures the device for a model it cannot load.
 
 
 ## 4. Polling & Data Sources
@@ -204,6 +279,8 @@ Monitor polls system/HW APIs every **3 seconds**. Flow uses file-backed hybrid m
 | `GET /api/system/ota-versions` | Per-component `{current, target, min_version, update_available, held_by_floor}` (proxies bootstrap `/versions`, including the installed device profile from `devices.<device_type>`, plus an `agent` alias for the configured runtime's CLI). The Versions card shows an `update` button wherever `update_available` is true (`held_by_floor` is reported but NOT used for the button: the button installs the published version on this device, like `software-update <key>` over SSH, and the floor only stages the automatic fleet rollout) |
 | `GET /api/system/ota-updating` | Components the worker is installing right now (`{updating: [...]}`, plus the `agent` alias). Deliberately cheap — no metadata fetch — because the Versions card polls it every 2 s while an install runs and shows `updating…` on that row instead of the button |
 | `POST /api/system/software-update/:target` | Per-component OTA check. `target`: `os-server` \| `bootstrap` \| `web` \| `hal` \| `device` \| `agent`. Bootstrap self-updates by spawning the installer in the background, so its replacement can safely restart the worker; `device` installs the resolved `devices.<device_type>` profile. **`agent` is virtual** — os-server resolves it to the configured runtime's CLI (`codex`/`claudecode`/`opencode`/`picoclaw`) so the browser never needs to know which runtime runs; `hermes` returns 400 (it cannot be pinned, so bootstrap never auto-applies it). Rate-limited to one call per target per 30 s |
+| `POST /api/system/reboot` | Admin-gated reboot request. OS server returns `202` first, then calls HAL's cue-aware reboot action. |
+| `POST /api/system/shutdown` | Admin-gated shutdown request. OS server returns `202` first, then calls HAL's cue-aware, servo-release shutdown action. |
 
 > **Note on format**: The OS server API returns `{ status: 1, data: <payload>, message: null }` on success.
 
@@ -286,6 +363,10 @@ the shorter Presence card from being stretched by the taller Audio card.
 - Shows available scene presets (reading, focus, relax, movie, night, energize). Fetched from `GET /hw/scene`.
 - Clickable buttons activate a scene via `POST /hw/scene` with `{"scene": "<name>"}`.
 - Active scene highlighted with amber accent.
+
+**Power**
+- The compact Overview card has **Reboot** and **Shut down** buttons, each with a confirmation prompt; both stay disabled after an accepted request so a second power operation cannot be queued from the page.
+- Buttons call the admin-gated OS-server endpoints, never HAL directly. The server acknowledges first and has a single-flight guard, then HAL performs the same explicit action sequence used by physical controls: reboot announces before restarting; shutdown announces and releases the servos before power-off.
 
 **Servo Pose**
 - Currently running pose (current)

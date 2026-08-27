@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { toast } from "sonner";
-import { getDeviceConfig, updateDeviceConfig, getTTSVoices, getTTSProviders, hwUrl } from "@/lib/api";
+import { getDeviceConfig, updateDeviceConfig, getTTSVoices, getTTSProviders, hwUrl, restoreAutonomousDefaults } from "@/lib/api";
 import type { DeviceConfig } from "@/lib/api";
 import type { ChannelType } from "@/types";
 import type { FaceOwner } from "@/hooks/setup/useFaceEnroll";
 import { C, ADMIN_PASSWORD_MIN } from "@/components/setup/shared";
 import { DeviceSection } from "@/components/setup/DeviceSection";
-import { LLMSection } from "@/components/setup/LLMSection";
+import { LLMSection, type LlmMode } from "@/components/setup/LLMSection";
+import { RestoreDefaultsButton } from "@/components/setup/shared";
 import { WifiSection } from "@/pages/settings/WifiSection";
 import { VoiceSection as EditVoiceSection } from "@/pages/settings/VoiceSection";
 import { FaceSection as EditFaceSection } from "@/pages/settings/FaceSection";
@@ -143,6 +144,15 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
   const [wifiLoaded, setWifiLoaded] = useState({ ssid: false, password: false });
   const [llmLoaded, setLlmLoaded] = useState({ apiKey: false, baseUrl: false, model: false });
   const [ttsLoaded, setTtsLoaded] = useState({ apiKey: false, baseUrl: false });
+  // True once the device has preserved its shipped credentials — i.e. the
+  // operator has replaced one at least once. Nothing to offer before that.
+  const [hasDefaults, setHasDefaults] = useState(false);
+  // Which brain the AI Brain section is showing. Derived from the config on
+  // load — a device whose llm_base_url and llm_model still match the stored
+  // Autonomous set is on it, and one that has never been edited is on it by
+  // definition — then held locally so picking "Custom" unlocks the fields
+  // before anything has been typed into them.
+  const [llmMode, setLlmMode] = useState<LlmMode>("autonomous");
   const [realtimeLoaded, setRealtimeLoaded] = useState({ apiKey: false });
   const [sttLoaded, setSttLoaded] = useState({ deepgram: false, apiKey: false, baseUrl: false });
 
@@ -210,10 +220,14 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
         setLlmUrl(cfg.llm_base_url ?? "");
         setLlmModel(cfg.llm_model ?? "");
         setLlmDisableThinking(cfg.llm_disable_thinking ?? false);
-        setSttBaseUrl(cfg.stt_base_url ?? "");
-        setSttProvider(cfg.has_deepgram_api_key ? "deepgram" : "autonomous");
+        const llmUrlInit = cfg.llm_base_url ?? "";
+        const sttProviderInit: SttProvider = cfg.has_deepgram_api_key ? "deepgram" : "autonomous";
+        // Apply client-side fallback values with the async config response,
+        // rather than scheduling a second render just to mirror form fields.
+        setSttBaseUrl((cfg.stt_base_url ?? "") || (sttProviderInit === "autonomous" ? llmUrlInit : ""));
+        setSttProvider(sttProviderInit);
         setSttLanguage(cfg.stt_language || "en");
-        setTtsBaseUrl(cfg.tts_base_url ?? "");
+        setTtsBaseUrl((cfg.tts_base_url ?? "") || llmUrlInit);
         setTtsProvider(cfg.tts_provider || "elevenlabs");
         setTtsVoice(cfg.tts_voice || "Rachel");
         setWakeWord(cfg.wakeword ?? false);
@@ -264,6 +278,14 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
           baseUrl: !!cfg.llm_base_url,
           model: !!cfg.llm_model,
         });
+        setHasDefaults(!!cfg.has_autonomous_defaults);
+        setLlmMode(
+          !cfg.has_autonomous_defaults ||
+            ((cfg.llm_base_url ?? "") === (cfg.autonomous_default_base_url ?? "") &&
+              (cfg.llm_model ?? "") === (cfg.autonomous_default_model ?? ""))
+            ? "autonomous"
+            : "custom",
+        );
         setTtsLoaded({
           apiKey: cfg.has_tts_api_key,
           baseUrl: !!cfg.tts_base_url,
@@ -277,8 +299,6 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
         // effects so the baseline matches the rendered state. Without this,
         // a config with llm_base_url but no tts/stt_base_url would show the
         // form as dirty immediately on load.
-        const llmUrlInit = cfg.llm_base_url ?? "";
-        const sttProviderInit: SttProvider = cfg.has_deepgram_api_key ? "deepgram" : "autonomous";
         setBaseline({
           ssid: cfg.network_ssid ?? "",
           deviceId: cfg.device_id ?? "",
@@ -334,36 +354,37 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
     }).catch(() => {});
   }, [ttsProvider, sttLanguage, ttsVoice]);
 
-  // Auto-mirror AI Brain key/URL into TTS while TTS field is empty.
-  // Once the user types into TTS the sync stops; clearing it re-enables mirroring.
-  //
-  // The four effects below trip react-hooks/set-state-in-effect. They are
-  // suppressed rather than rewritten because the mirroring is deliberately
-  // *sticky*: once a field has been filled from the AI Brain value it stops
-  // tracking it, so the value cannot be derived during render (a derived
-  // `ttsBaseUrl || llmUrl` would keep following later llmUrl edits, which is a
-  // different behavior). Folding the mirror into the setters passed to
-  // LLMSection/TTSSection/STTSection would change those components' prop
-  // contracts. Deferring the setState (queueMicrotask) would silence the rule
-  // but change commit timing. All three are behavior changes, so the pattern
-  // stays as-is and is left for a deliberate follow-up.
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (!ttsApiKey && llmApiKey) setTtsApiKey(llmApiKey);
-  }, [llmApiKey, ttsApiKey]);
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (!ttsBaseUrl && llmUrl) setTtsBaseUrl(llmUrl);
-  }, [llmUrl, ttsBaseUrl]);
-  // Same auto-mirror for STT in autonomous mode (Deepgram has its own key).
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (sttProvider === "autonomous" && !sttApiKey && llmApiKey) setSttApiKey(llmApiKey);
-  }, [llmApiKey, sttApiKey, sttProvider]);
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (sttProvider === "autonomous" && !sttBaseUrl && llmUrl) setSttBaseUrl(llmUrl);
-  }, [llmUrl, sttBaseUrl, sttProvider]);
+  // Mirror AI Brain values in the event that changes a source or re-enables a
+  // blank destination. The mirror remains sticky, without scheduling state
+  // updates from an effect after React has already committed a render.
+  const setMirroredLlmApiKey = (value: string) => {
+    setLlmApiKey(value);
+    if (!ttsApiKey && value && !ttsLoaded.apiKey) setTtsApiKey(value);
+    if (sttProvider === "autonomous" && !sttApiKey && value && !sttLoaded.apiKey) setSttApiKey(value);
+  };
+  const setMirroredLlmUrl = (value: string) => {
+    setLlmUrl(value);
+    if (!ttsBaseUrl && value) setTtsBaseUrl(value);
+    if (sttProvider === "autonomous" && !sttBaseUrl && value) setSttBaseUrl(value);
+  };
+  const setMirroredTtsApiKey = (value: string) => {
+    setTtsApiKey(!value && llmApiKey && !ttsLoaded.apiKey ? llmApiKey : value);
+  };
+  const setMirroredTtsBaseUrl = (value: string) => {
+    setTtsBaseUrl(!value && llmUrl ? llmUrl : value);
+  };
+  const setMirroredSttApiKey = (value: string) => {
+    setSttApiKey(!value && sttProvider === "autonomous" && llmApiKey && !sttLoaded.apiKey ? llmApiKey : value);
+  };
+  const setMirroredSttBaseUrl = (value: string) => {
+    setSttBaseUrl(!value && sttProvider === "autonomous" && llmUrl ? llmUrl : value);
+  };
+  const setMirroredSttProvider = (value: SttProvider) => {
+    setSttProvider(value);
+    if (value !== "autonomous") return;
+    if (!sttApiKey && llmApiKey && !sttLoaded.apiKey) setSttApiKey(llmApiKey);
+    if (!sttBaseUrl && llmUrl) setSttBaseUrl(llmUrl);
+  };
 
   // Dirty = any non-secret field diverges from the loaded/last-saved baseline,
   // OR any secret field has user-typed content. Save button uses this to stay
@@ -585,9 +606,21 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
             <LLMSection
               active={activeSection === "llm"}
               llmLoaded={llmLoaded}
-              llmApiKey={llmApiKey} setLlmApiKey={setLlmApiKey}
-              llmUrl={llmUrl} setLlmUrl={setLlmUrl}
+              llmApiKey={llmApiKey} setLlmApiKey={setMirroredLlmApiKey}
+              llmUrl={llmUrl} setLlmUrl={setMirroredLlmUrl}
               llmModel={llmModel} setLlmModel={setLlmModel}
+              mode={llmMode}
+              onModeChange={(m) => {
+                if (m === "custom") { setLlmMode("custom"); return; }
+                // Back to Autonomous is a restore, not just an unlock: the
+                // stored set has to be written back before the fields can
+                // honestly claim to show it. Nothing to restore on a device
+                // that was never edited — it is already there.
+                if (!hasDefaults) { setLlmMode("autonomous"); return; }
+                restoreAutonomousDefaults("llm")
+                  .then(() => { toast.success("Back on the Autonomous brain"); window.location.reload(); })
+                  .catch((e: Error) => toast.error(e.message || "Could not switch back"));
+              }}
             />
 
             <AgentRuntimeSection active={activeSection === "runtime"} />
@@ -611,14 +644,17 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
               active={activeSection === "tts"}
               ttsLoaded={ttsLoaded}
               llmLoaded={llmLoaded}
-              ttsApiKey={ttsApiKey} setTtsApiKey={setTtsApiKey}
-              ttsBaseUrl={ttsBaseUrl} setTtsBaseUrl={setTtsBaseUrl}
+              ttsApiKey={ttsApiKey} setTtsApiKey={setMirroredTtsApiKey}
+              ttsBaseUrl={ttsBaseUrl} setTtsBaseUrl={setMirroredTtsBaseUrl}
               ttsProvider={ttsProvider} setTtsProvider={setTtsProvider}
               ttsProviders={ttsProviders}
               ttsVoice={ttsVoice} setTtsVoice={setTtsVoice}
               ttsVoices={ttsVoices}
               sttLanguage={sttLanguage}
             />
+            {activeSection === "tts" && hasDefaults && (
+              <RestoreDefaultsButton section="voice" />
+            )}
 
             <RealtimeSection
               active={activeSection === "realtime"}
@@ -631,16 +667,19 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
               apiKey={realtimeApiKey} setApiKey={setRealtimeApiKey}
               baseUrl={realtimeBaseUrl} setBaseUrl={setRealtimeBaseUrl}
             />
+            {activeSection === "realtime" && hasDefaults && (
+              <RestoreDefaultsButton section="realtime" />
+            )}
 
             <STTSection
               active={activeSection === "stt"}
               sttLanguage={sttLanguage} setSttLanguage={setSttLanguage}
-              sttProvider={sttProvider} setSttProvider={setSttProvider}
+              sttProvider={sttProvider} setSttProvider={setMirroredSttProvider}
               sttLoaded={sttLoaded}
               llmLoaded={llmLoaded}
               deepgramApiKey={deepgramApiKey} setDeepgramApiKey={setDeepgramApiKey}
-              sttApiKey={sttApiKey} setSttApiKey={setSttApiKey}
-              sttBaseUrl={sttBaseUrl} setSttBaseUrl={setSttBaseUrl}
+              sttApiKey={sttApiKey} setSttApiKey={setMirroredSttApiKey}
+              sttBaseUrl={sttBaseUrl} setSttBaseUrl={setMirroredSttBaseUrl}
             />
 
             <ChannelSection

@@ -7,14 +7,14 @@ Lamp has two physical input devices the user can touch directly. They share the 
 | Device | Role | Where |
 |---|---|---|
 | **GPIO button** | One mechanical button. Used for decisive actions including destructive ones (reboot / shutdown / factory-reset). The mechanical feel and long-hold detection make accidental destructive actions unlikely. | Both Pi 4/5 and OrangePi sun60 |
-| **TTP223 capacitive touchpad** | Four touch pads arranged as a "dog head" surface for petting + soft stop/unmute. No destructive gestures because the IC's FastMode prevents reliable hold detection. | OrangePi sun60 only (4 Pro / A733) |
+| **TTP223 capacitive touchpad** | Three touch pads arranged as a "dog head" surface for petting + soft stop/unmute. No destructive gestures because the IC's FastMode prevents reliable hold detection. | OrangePi sun60 only (4 Pro / A733) |
 
 ## Wiring
 
 | Device | Pi 4/5 | OrangePi sun60 |
 |---|---|---|
 | GPIO button | gpiochip0 BCM 17 (pull-up, active-LOW) | gpiochip1 line 9 (pull-up, active-LOW) |
-| TTP223 | not wired | gpiochip0 lines 96 / 97 / 98 / 99 (named S1–S4), pull-down, active-HIGH |
+| TTP223 | not wired | gpiochip0 lines 96 / 98 / 100, **pull-up, active-LOW** (pads rest HIGH; a touch is the falling edge) |
 
 Board detection in both handlers reads `/proc/device-tree/model`:
 - `"sun60iw2"` → OrangePi 4 Pro / A733
@@ -27,8 +27,9 @@ Board detection in both handlers reads `/proc/device-tree/model`:
 | Gesture | GPIO button | TTP223 touchpad |
 |---|---|---|
 | **1 tap** | Stop active object tracking, then stop speaker / unmute mic + speaker + ack chime (~120 ms ping) — all fire immediately on release (no click-window wait); the "Listening" cue plays once the 0.4 s click window resolves | Same after the 1.2 s tap-vs-pet decision resolves — active tracking stops, then the mic/speaker action and cue run. The initial touch still stops in-flight TTS and plays its ack chime immediately. |
-| **2 taps** (≤ 0.4 s apart, button) / (≤ 1.2 s apart, TTP223) | Nothing beyond the single-click already fired on tap 1 (panic-click guard) | Pet response — TTS picks a random phrase from the language pool |
+| **2 taps** (≤ 0.4 s apart, button) / (≤ 1.2 s apart, TTP223) | Nothing beyond the single-click already fired on tap 1 (panic-click guard) | Pet response. With `HAL_TOUCH_SWIPE` on (the default), repeated taps in one place — fast or slow, one finger or several — are a **double tap** → mic mute toggle; pet then means the finger revisited a pad |
 | **3 taps** (≤ 0.4 s apart, button) | Reboot OS (TTS announce → `sudo reboot`) | n/a — TTP223 stops at 2 (any further taps absorbed by cooldown) |
+| **Swipe** across the pads | n/a | **`HAL_TOUCH_SWIPE`, default on.** One contact running monotonically over all three pads, gaps above the movement floor → **sleep**. Direction is not used — left-to-right and right-to-left are the same gesture — and neither is device state. Wake stays on tap / double tap. |
 | **Hold 2–5 s, then release** | Speak the localized sleep announcement, then enter `sleepy`: LED off, camera/mic/speaker off; servo releases after 1 s. LED blinks sleepy purple while held. | n/a — TTP223 hardware cannot reliably hold (see "FastMode" below) |
 | **Hold 5–10 s, then release** | Shutdown OS (TTS announce → release servos → `sudo shutdown -h now`). LED blinks red while armed. | n/a — TTP223 hardware cannot reliably hold (see "FastMode" below) |
 | **Hold 10 s+, then release** | Factory-reset: wipe device state + reboot into AP setup (TTS announce → release servos → POST `/api/system/factory-reset` on the OS server). LED goes solid red while armed. | n/a |
@@ -51,7 +52,7 @@ The reason is device shape rather than preference. A desk lamp sits an arm's len
 
 Two properties decide the implementation:
 
-* **People turn before they speak, never after.** Normally speech reads the watcher's ring buffer (`HAL_GAZE_BUFFER_S`, default 3 s) **backwards** — the same shape as the mic's own pre-roll lookback, which exists so the start of a sentence is not lost. There is one recovery path: if that read has fewer than two usable face samples, VAD asks the watcher to restore the remembered user pose without blocking audio capture. Before dispatching that *same* transcript it checks gaze once more. A head measured facing away does not take this path, so overheard speech still cannot turn the lamp toward a person and open the gate.
+* **People turn before they speak, never after.** Normally speech reads the watcher's ring buffer (`HAL_GAZE_BUFFER_S`, default 4 s) **backwards** — the same shape as the mic's own pre-roll lookback, which exists so the start of a sentence is not lost. There is one recovery path: if that read has fewer than two usable face samples, VAD asks the watcher to restore the remembered user pose without blocking audio capture. Before dispatching that *same* transcript it checks gaze once more. A head measured facing away does not take this path, so overheard speech still cannot turn the lamp toward a person and open the gate.
 * **Presence is not the signal.** The user is visible beside this lamp all day, so "a person is detected" gates nothing, and "a face is detected" barely more — a face turned to a monitor still detects. The gate is on head **orientation**, tight enough to reject the common posture of talking to a colleague with the torso still square to the desk.
 
 Head yaw is derived from the five landmarks `YuNet` already returns (`detect_face_with_landmarks` in `detection.py`): the nose's offset from the eye midpoint, measured along the eye line and normalised by half the inter-ocular distance, is `sin(yaw)` under a pinhole projection. Measuring along the eye line rather than the image x-axis is what keeps a **rolled** head (resting on a hand) from reading as a turned one. No second model is loaded and no extra inference runs; at `HAL_GAZE_SAMPLE_FPS` (default 6) the cost is a rounding error on the 8-core CPU — measured, not assumed: CPU idle went 69.2% to 68.8% with the watcher running.
@@ -74,9 +75,7 @@ When several faces are in frame, the one whose head counts is the one **nearest 
 | `HAL_GAZE_MIN_FACING_RATIO` | 0.6 | Fraction of that window that must have seen a facing head. A ratio, not an unbroken run — per-sample yaw is genuinely noisy. |
 | `HAL_GAZE_MIN_SAMPLES` | 2 | Below this there is not enough evidence to decide either way. The loop achieves ~2 samples/s whatever the rate asks for — it is paced by fetching a frame and running the detector — so 3 rejected users the rest of the pipeline agreed were facing the lamp. The `[gaze] sampling at N/s` line counts samples actually RECORDED, and reports separately how many frames were blocked before they could be measured (settling from a servo write, or the detector held by a live look). Counting attempts instead once reported 5.7/s while the buffer held nothing newer than the 1.5 s window — under 1/s of real evidence. |
 | `HAL_GAZE_SAMPLE_FPS` | 6 | Sampling rate. The gesture is slow, but the decision is a vote and only measured samples count — at 3 fps a window often held one usable sample, refusing a user facing the lamp dead-on. |
-| `HAL_GAZE_BUFFER_S` | 4.0 | Yaw history retained. Must be at least **twice** `WINDOW_S`, not merely longer: the transition test reads the window *before* the decision window as its baseline, so a buffer under 2× cannot hold both. |
-| `HAL_GAZE_REQUIRE_TRANSITION` | `true` | Require evidence the user *turned toward* the lamp, rather than merely that they are facing it. The module docstring always named the transition as the signal, but nothing computed one, so a user sitting square to their desk passed on every utterance — measured in shadow, nine of nine accepted gestures had flat trails such as `[13,12,12,11,12,11,13,21]`. Not one was a turn. |
-| `HAL_GAZE_TRANSITION_MAX_BEFORE` | 0.5 | The baseline window must be below this facing ratio for the present window to count as a turn. Deliberately generous: a gesture only has to start from "not reliably facing", not from a full profile. |
+| `HAL_GAZE_BUFFER_S` | 4.0 | Yaw history retained. Must exceed `WINDOW_S` so the lookback can see far enough back. It briefly had to be twice that, for a transition test that has since been removed; 4.0 is kept because the extra second costs nothing and `trail=` reads better with more history behind it. |
 | `HAL_GAZE_WAKE_FOCUS_S` | 10 | Follow-up window a *gaze* wake opens, shorter than the 20 s a spoken phrase or click opens. A glance claims less than a deliberate act. Capped by `HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S`, never above it. |
 | `HAL_GAZE_COOLDOWN_S` | 5 | Minimum gap between gaze-opened gates, so one conversation cannot open one per sentence. |
 | `HAL_GAZE_REPOINT` | `true` | Turn toward the remembered bearing when nobody has been visible. |
@@ -116,11 +115,11 @@ End-to-end chain:
 2b. `state.note_music_cancel()` → stamps a HAL-side music cancel watermark, and `audio_stop()` runs on **both** branches (mic-unmute and stop-speaker), not just the stop-speaker one. Needed because the OS server's cancel is TTS-only: the cancelled turn keeps running and its pending music tool call still reaches `POST /audio/play` a moment later, where a fresh `music-play` thread clears its own `_stop_event` — so a point-in-time stop always loses that race and the user hears music they just cancelled once `yt-dlp` finishes resolving (1–5 s). While the watermark is fresh (`app_state.MUSIC_CANCEL_GUARD_S`, 3 s) `/audio/play` answers `{"status": "suppressed"}` instead of playing. The window is sized to cover the in-flight tool call but stay under the floor of a genuinely new request (speak → STT → LLM → tool is never under ~3 s), so "tap, then ask for a song" still works.
 3. `stop_tts()` → `tts_service.stop()` sets `_stop_event`; every blocking loop in TTS streaming (synth, render, playback) honors the event and aborts cleanly without leaving the speaker pegged
 
-### Voice barge-in (on by default)
+### Voice barge-in (disabled in the lamp profile)
 
-Voice-driven interrupt — speak during TTS to make Lamp stop and listen — follows `HAL_BARGE_IN_ENABLED`, which defaults to `HAL_AEC_ENABLED` — `false` in code, but the lamp `.env` pins both to `true`. Cancellation is what makes it safe, so the two turn on together, and barge-in stays inert whenever the canceller is not actually running.
+Voice-driven interrupt — speak during TTS to make Lamp stop and listen — follows `HAL_BARGE_IN_ENABLED`, which defaults to `HAL_AEC_ENABLED` — `false` in code. The lamp profile enables AEC but explicitly sets barge-in to `false`: its active USB voice mic is too close to the speaker for the current echo-cancellation tuning. Tap-to-interrupt remains available.
 
-The active path is the **warm mic** loop, not `_monitor_barge_in()`. With `HAL_WARM_MIC=true` (the default) `arecord` stays open through playback and the capture loop drains and discards frames; barge-in is detected there, on the loop's own 64 ms frames, when `HAL_BARGE_IN_WARM_FRAMES` consecutive frames exceed `HAL_BARGE_IN_RMS_THRESHOLD` **and** a Silero pass agrees it is speech **and** `aec.uncancelled()` says the frame was really cancelled. `_monitor_barge_in()` (256 ms blocks, level only) is the legacy path and is unreachable while warm mic is on — `HAL_BARGE_IN_BLOCK_MS` and `HAL_BARGE_IN_TRIGGER_FRAMES` only size that one. Downstream chain is the same as tap-to-interrupt.
+If barge-in is enabled, the active path is the **warm mic** loop, not `_monitor_barge_in()`. With `HAL_WARM_MIC=true` (the default) `arecord` stays open through playback and the capture loop drains and discards frames; barge-in is detected there, on the loop's own 64 ms frames, when `HAL_BARGE_IN_WARM_FRAMES` consecutive frames exceed `HAL_BARGE_IN_RMS_THRESHOLD` **and** a Silero pass agrees it is speech **and** `aec.uncancelled()` says the frame was really cancelled. `_monitor_barge_in()` (256 ms blocks, level only) is the legacy path and is unreachable while warm mic is on — `HAL_BARGE_IN_BLOCK_MS` and `HAL_BARGE_IN_TRIGGER_FRAMES` only size that one. Downstream chain is the same as tap-to-interrupt.
 
 **The two levels still overlap, and no threshold separates them.** Measured on `lamp-ee17` (speaker 25 %, `HAL_AEC_DELAY_MS=205`) with the gate parked at 30000 so nothing could fire, three full replies into a silent room peaked at **9804 / 6510 / 7849** — that is the echo ceiling. A confirmed real interruption on the same unit measured **8027**, *below* it. So a threshold under the ceiling self-interrupts (at 4500 it fired on 5530 / 6446 / 6637 / 7749, twice transcribing Lamp's own words as the user's turn) and one above it misses quiet interruptions. Separating them needs the envelope-decorrelation test — echo tracks the far-end envelope, a person does not — which is not implemented. The shipped default of 5000 deliberately favours catching a normal speaking voice; raise toward 11000 to trade the other way.
 
@@ -133,10 +132,10 @@ To characterise a new deployment: park `HAL_BARGE_IN_RMS_THRESHOLD` at 30000, sa
 Edge-counting driver where **all destructive actions commit on the release edge based on hold duration** — no timer fires while the button is held. This is what lets the user cancel mid-hold (release before a threshold) or escalate (keep holding past 10 s).
 
 1. **Falling edge (press):** record `press_start` (monotonic clock) and spawn a hold-LED watcher thread (one per press, with its own stop `Event`). No action timer is armed.
-2. **Rising edge (release):** stop the LED watcher, then compute `held = now − press_start` and branch:
-   - `held >= 10 s` (`FACTORY_RESET_DURATION`) → scrub any pending clicks, lock LED solid red, run `factory_reset_action` off-thread.
-   - `held >= 5 s` (`LONG_PRESS_DURATION`) → scrub pending clicks, freeze LED red, run `long_press_action` (shutdown) off-thread.
-   - `held >= 2 s` (`SLEEP_HOLD_DURATION`) → scrub any pending clicks, run `sleep_action` off-thread; it invokes the standard `sleepy` emotion pipeline.
+2. **Rising edge (release):** stop the LED watcher, compute `held = now − press_start`, scrub pending clicks for any hold of at least 2 s, and stage its final LED feedback (solid red for shutdown/factory reset). It then passes the duration to `hold_release_action(held, source)` off-thread. That action mapping selects:
+   - `held >= 10 s` (`FACTORY_RESET_DURATION`) → `factory_reset_action`.
+   - `held >= 5 s` (`LONG_PRESS_DURATION`) → `shutdown_action`.
+   - `held >= 2 s` (`SLEEP_HOLD_DURATION`) → `sleep_action`, which invokes the standard `sleepy` emotion pipeline.
    - else (short tap) → increment `click_count` and (re)start a 0.4 s click-window timer. On the **first** tap of a burst, the silent part of `single_click_action` (`announce=False`) fires immediately off-thread — it's non-destructive ("give me the floor"), so it doesn't wait for the window. The audible cue is deferred so it never talks over a triple-click in progress.
 3. When the click window expires:
    - `count == 3` → `triple_click_action` (no listening cue — only the reboot announce)
@@ -165,7 +164,7 @@ Per-edge debounce is 200 ms (press and release ticks tracked independently so a 
 
 The TTP223 IC on this board runs in **FastMode**: output goes HIGH on touch, then automatically drops back LOW within ~50-80 ms even with the finger still on the pad. The IC re-triggers only when capacitance changes meaningfully (finger moves). Continuous "hold" is impossible without rewiring the IC's FM pin to LowPowerMode (~12 s max touch).
 
-Cross-talk between adjacent pads is also significant — a single physical touch fires edges on 2-4 pads with staggered timing.
+Cross-talk between adjacent pads is also significant — a single physical touch fires edges on 2-3 pads with staggered timing (the 2-4 figure predates the pad relocations, when four were wired).
 
 The driver compensates with a **two-layer model**:
 
@@ -183,6 +182,39 @@ After a session ends:
    - `count >= 2` → fire `head_pat_action` immediately, arm 1.5 s pet cooldown
    - `count < 2` → schedule a 1.2 s decision timer. When that timer fires with `count == 1`, fire `single_click_action`.
 
+### Layer 3: Gesture classification (`HAL_TOUCH_SWIPE`, default ON)
+
+**On by default** since 2026-08-27, after hands-on validation on orange-lamp across tap, fast and slow double tap, pet and swipe. Setting `HAL_TOUCH_SWIPE=false` restores the two-gesture behaviour in one step and without a redeploy — that is the rollback if a field unit misbehaves.
+
+Turning it on means a double tap toggles the **microphone** and a swipe **sleeps** the device. Both are reversible (double tap again; one tap wakes), and nothing destructive is reachable here — FastMode cannot measure a hold, so reboot / shutdown / factory-reset stay on the mechanical button.
+
+**The signal is *when* pads fire, not which.** Device-measured on orange-lamp, 2026-08-27 — inter-pad gaps inside a single contact:
+
+| | |
+|---|---|
+| several fingers landing together | **1 – 23 ms** |
+| one finger travelling across pads | **53 – 322 ms** |
+
+Nothing in between, and `HAL_TOUCH_SWIPE_MIN_GAP_MS` (40) sits in the gap. Every rule below is derived from that one threshold.
+
+**A contact is not a gesture.** This is the thing the first three attempts got wrong. Layer 1 ends a contact when no edge arrives for 200 ms, so a *continuous* stroke never ends one — a whole ~1 s pet arrives as a **single** contact, and two fast taps arrive as a single contact too. Counting contacts therefore cannot identify anything on its own.
+
+Resolution order, first match wins:
+
+1. **SWIPE** → sleep. One contact, every pad, monotonic along the axis, all gaps above the floor. **One contact only**: each leg of a back-and-forth stroke is itself a clean one-direction pass, so letting any leg carry the verdict turns every pet into a swipe. Checked first so a resolved swipe never also fires a tap.
+2. **DOUBLE TAP** → mic mute toggle, with a spoken state confirmation. Two or more **tight multi-pad bursts** overlapping in place. Fast taps share one contact (the session never lapses); slow taps arrive as separate contacts — both count. Checked before pet, because the second tap re-touches the same pads. A stroke cannot reach this rule: its steps are all above the floor, so every "burst" is a single step and the rule needs multi-pad ones.
+3. **PET** → giggle. The finger **revisited** a pad it had left (more steps than distinct pads), or contacts landed in places with no pad in common. No contact-count gate.
+4. **TAP** → everything else, including several fingers landing at once. That lights every pad, but within ~20 ms, which is not movement.
+
+**What is genuinely ambiguous.** A single one-direction sweep with tight timing — three pads, no revisit, gaps under the floor — is indistinguishable from a firm three-finger tap and resolves as TAP. There is no signal on this surface that separates them.
+
+| Env var | Default | Tunes |
+|---|---|---|
+| `HAL_TOUCH_SWIPE` | **`true`** | Master switch for rules 1–3. Set `false` to restore the two-gesture behaviour exactly — the rollback path. |
+| `HAL_TOUCH_SWIPE_MIN_GAP_MS` | 40 | The movement floor, and the one number every rule derives from: gaps at or above it mean the hand travelled, below it mean fingers arrived together. Sits inside the measured 23–53 ms empty band. **Load-bearing now that the classifier ships enabled** — raise it if firm taps read as swipes, lower it if real swipes are missed. `HAL_TOUCH_DEBUG` records the gaps it is measured against. |
+
+`boards.json` gains an optional `axis` on the `touch` entry — lines in physical left-to-right order, e.g. `"axis": [96, 100, 98]`. It is **absent** today: line order is not spatial order on this board, and only a labelled press-one-pad-at-a-time run can establish it. Absent, classification falls back to declared line order. A wrong axis costs only the swipe *direction*, which the driver deliberately does not use.
+
 ### Constants (`ttp223.py`)
 
 | Constant | Value | Why |
@@ -192,18 +224,40 @@ After a session ends:
 | `PET_SESSION_THRESHOLD` | 2 | Two consecutive sessions within the decision window = pet. Easier than 3 because each "stroke" produces only one session on this hardware |
 | `PET_COOLDOWN_S` | 1.5 | After a pet fires, additional sessions within 1.5 s extend the cooldown rather than starting a new count. Stroking continuously = one pet, then silence |
 
+### Tracing what actually happened (`HAL_TOUCH_DEBUG`)
+
+Two of the four decision log lines above are `logger.debug` and never appear at the shipped `HAL_LOG_LEVEL=INFO`, and `_on_edge` discards which pad fired before anything can record it. So when a touch does the wrong thing there is normally no way to tell whether the pad misfired, the session layer mis-grouped it, or the action did something unexpected.
+
+`hal/drivers/touch_debug.py` closes that gap. **OFF by default** — with the env unset it costs one cached boolean per edge, opens no files and starts no threads. Set `HAL_TOUCH_DEBUG=1` in `/opt/hal/.env` and restart HAL to enable.
+
+It writes one JSON file per resolved gesture, named `<timestamp>_<ACTION>.json` so a wrong classification is visible from `ls` alone (`20260827-114032_TAP.json`, `..._PET.json`, `..._IGNORED-pet_cooldown.json`, `..._IGNORED-settle.json`). Each file holds four layers: `edges` (which line, which level, when, and whether the `SETTLE_S` guard suppressed it), `sessions` (how the 200 ms layer grouped them, plus each contact's `primary_pad`, `adjacent_deltas_ms` and `span_ms`), `traversal` (the cross-session pad sequence and its `reversals` count) and `action` (what ran, against what device state). A one-line `TOUCH-TRACE` summary is also logged at INFO.
+
+It never logs to journald, deliberately: HAL is chatty enough that the `hal.service` journal window is minutes, so a trace kept there ages out before it can be read.
+
+| Env var | Default | Tunes |
+|---|---|---|
+| `HAL_TOUCH_DEBUG` | `false` | Master switch. Off = every entry point is a no-op. |
+| `HAL_TOUCH_DEBUG_DIR` | `touch_logs/` next to the module | Output root. Falls back to the temp dir if the tree is read-only. |
+| `HAL_TOUCH_DEBUG_MAX_ENTRIES` | 200 | File cap, oldest pruned on each write. 0 = unbounded. |
+| `HAL_TOUCH_DEBUG_PADS` | _(unset)_ | Line→label map, e.g. `96=S1,98=S2,100=S4`. Unset, pads are labelled by line number — the historical S-names do not follow line order after two relocations, so the driver does not guess them. |
+
+
 ## Shared action library (`hal/drivers/button_actions.py`)
 
 The actions live in one place so the GPIO button, TTP223, and any future input (touchpad, remote) get identical behavior:
 
 | Function | What it does | Interrupts in-flight TTS? |
 |---|---|---|
-| `single_click_action(source)` | Stop active object tracking. Then relax a user/scene speaker mute (skipped while `_enrolling`). If mic is muted: unmute. Else stop TTS + stop music. Then open the wake-word follow-up window (no-op when wake word is off) and speak the localized "Listening" cue with retry-on-busy. Tracking still stops when the hardware mic kill switch is on; the voice action remains suppressed. | Yes — calls `stop_tts()` and the cue itself preempts. |
-| `triple_click_action(source)` | Speak "Rebooting now" → wait 5 s for the cached clip → `sudo reboot`. | Yes |
+| `single_click_action(source)` | Stop active object tracking. Then relax a user/scene speaker mute (skipped while `_enrolling`). Stamp the music-cancel watermark and stop music — on **both** branches, so a click always silences the loudest thing in the room. Then, if mic is muted: unmute; else stop TTS. Then open the wake-word follow-up window (no-op when wake word is off) and speak the localized "Listening" cue with retry-on-busy. Tracking still stops when the hardware mic kill switch is on; the voice action remains suppressed. | Yes — calls `stop_tts()` and the cue itself preempts. |
+| `triple_click_action(source)` | Gesture mapping only: calls `reboot_action(source)`. | Yes |
+| `reboot_action(source)` | Speak "Rebooting now" → wait 5 s for the cached clip → `reboot_os()` (`sudo reboot`). | Yes |
 | `sleep_action(source)` | Speak the localized sleep announcement, then invoke `sleepy`: LED off, camera/mic/speaker off, then servo release after 1 s. | Yes — the sleepy pipeline stops active TTS/music after the announcement. |
-| `long_press_action(source)` | Speak "Shutting down now" → wait 5 s → `release_servos()` (so the lamp doesn't slam down mid-pose) → `sudo shutdown -h now`. | Yes |
+| `hold_release_action(held, source)` | Hold-signal mapping: chooses sleep, shutdown, or factory reset from the released duration. | Depends on selected action |
+| `shutdown_action(source)` | Speak "Shutting down now" → wait 5 s → `release_servos()` (so the lamp doesn't slam down mid-pose) → `shutdown_os()` (`sudo shutdown -h now`). | Yes |
 | `factory_reset_action(source)` | Speak "Factory reset starting. Rebooting now" → `release_servos()` → POST `/api/system/factory-reset` on the OS server (the server owns the wipe + reboot, see below). | Yes |
-| `head_pat_action(source)` | Pick a random localized pet phrase, speak it via `speak_cached` on a daemon thread. **Non-interrupting**: if TTS is still busy the phrase is dropped silently. In practice on TTP223 the first touch session already cut any in-flight speech (`_grab_floor_if_speaking`), so by pet time TTS is usually free and the giggle plays. | No |
+| `swipe_action(source)` | Always `sleep_action`. Not keyed on direction (a swipe the "wrong" way would otherwise do nothing, with no feedback saying why) and not keyed on state (one gesture meaning two things depending on something invisible). On an already-sleeping device `sleep_action` returns early. | Yes |
+| `mic_toggle_action(source)` | Mic mute toggle for a resolved double tap (fast or slow). Refuses while the HW mic switch is off or a voice enrollment is recording. After the flip it speaks the resulting **state**, drawn at random from `MIC_MUTED_PHRASES_BY_LANG` / `MIC_UNMUTED_PHRASES_BY_LANG` in the lamp's own voice ("[whispers] Shh, my ears are closed." / "[excited] My ears are open!"), so the voice and the mic-muted LED agree; a refused toggle stays silent rather than announcing a mute that did not happen. | No — non-interrupting, drops if TTS is busy |
+| `head_pat_action(source)` | Pick a random localized pet phrase, speak it via `speak_cached` on a daemon thread. **Non-interrupting**: if TTS is still busy the phrase is dropped silently. In practice on TTP223 the first touch session already cut any in-flight speech and sounded the ack chime (`_ack_first_session`), so by pet time TTS is usually free and the giggle plays. | No |
 
 ### Factory-reset: what gets wiped
 
@@ -251,6 +305,8 @@ The action announcements are localized per `stt_language` from Lamp's `config.js
 
 ### Safety announcements (one phrase per language)
 
+The **mic-toggle** confirmations are pools in the persona voice, like the pet phrases — the same sentence every time is what reads as a machine. The constraint that keeps them safe is that every line still says *which way the toggle went*: warmth lives in the delivery, never in the meaning. "Shh, my ears are closed" qualifies; a bare "Shh!" would not, because a privacy control the user cannot decode is worse than a robotic one. A test enforces it.
+
 `reboot`, `shutdown`, `factory-reset`, and the `listening` cue use literal-meaning phrases ("Rebooting now", "Shutting down now", "Factory reset starting. Rebooting now") in every language because the user just performed a destructive gesture and needs unambiguous confirmation — this is a safety announcement, not a persona moment.
 
 ### Pet responses (15 phrases per language, random pick)
@@ -275,7 +331,7 @@ Phrases are intentionally short — they fire mid-stroke and need to feel respon
 | `hal/drivers/ttp223.py` | TTP223 capacitive touchpad handler (OrangePi sun60 only) |
 | `hal/drivers/button_actions.py` | Shared action functions + localized phrase pools |
 | `hal/presets.py` | Language code constants (`LANG_EN`, etc.) |
-| `hal/test_ttp223_probe_orangepi.py` | Standalone probe for verifying TTP223 line mapping |
+| `hal/test_ttp223_probe_orangepi.py` | Standalone pad probe (stdlib ioctl, no gpiod). `info` reads line state with HAL running; `watch` maps pad→line and needs `hal.service` stopped. Lines come from the board profile. |
 | `hal/test_gpio.py` | Standalone probe for verifying GPIO button line |
 
 Both handlers are spawned in `hal/server.py` lifespan startup — failures are logged but never crash the runtime (a board without the hardware just skips silently).

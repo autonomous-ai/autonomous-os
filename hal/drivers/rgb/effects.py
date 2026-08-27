@@ -1,7 +1,8 @@
 """
 LED effect loops — each function runs in a background thread until stop_event is set
 or deadline is reached. All effects accept (color, speed, deadline, stop_event, svc)
-except where noted (rainbow omits color; notification_flash omits deadline).
+except where noted (rainbow has no color and takes a `brightness` level
+instead; notification_flash omits deadline).
 """
 
 import math
@@ -83,6 +84,7 @@ def run_effect(
     stop_event: threading.Event,
     svc,
     base_color: Optional[tuple] = None,
+    brightness: float = 1.0,
 ):
     """Dispatch to the appropriate effect loop. Runs in a background thread.
 
@@ -102,7 +104,7 @@ def run_effect(
         elif effect == FX_CANDLE:
             candle(color, speed, deadline, stop_event, svc)
         elif effect == FX_RAINBOW:
-            rainbow(speed, deadline, stop_event, svc)
+            rainbow(speed, deadline, stop_event, svc, brightness)
         elif effect == FX_NOTIFICATION_FLASH:
             notification_flash(color, speed, stop_event, svc)
         elif effect == FX_PULSE:
@@ -112,7 +114,7 @@ def run_effect(
         elif effect == FX_SPEAKING_WAVE:
             speaking_wave(color, speed, deadline, stop_event, svc)
         elif effect == FX_SPEAKING_WAVE_RAINBOW:
-            speaking_wave_rainbow(speed, deadline, stop_event, svc)
+            speaking_wave_rainbow(speed, deadline, stop_event, svc, brightness)
     except Exception as e:
         import logging
         logging.getLogger("hal.led.effects").warning("LED effect '%s' error: %s", effect, e)
@@ -196,16 +198,25 @@ def rainbow(
     deadline: Optional[float],
     stop_event: threading.Event,
     svc,
+    brightness: float = 1.0,
 ):
-    """Cycle through hue spectrum across all pixels."""
+    """Cycle through hue spectrum across all pixels.
+
+    rainbow has no color parameter — it sweeps the hue circle by definition —
+    so it takes its LEVEL from the preset's `brightness` (0.0-1.0, the same
+    field the scene table uses). Before this it always painted at 1.0 and was
+    the one cue no per-device palette could dim: it rode straight up to the
+    light.max_brightness ceiling on every pixel at once.
+    """
     step_delay = 0.03 / speed
     led_count = getattr(svc, "led_count", DEFAULT_LED_COUNT)
+    value = max(0.0, min(1.0, brightness))
     offset = 0.0
     while not is_done(deadline, stop_event):
         pixels = []
         for i in range(led_count):
             hue = (offset + i / led_count) % 1.0
-            r, g, b = hsv_to_rgb(hue, 1.0, 1.0)
+            r, g, b = hsv_to_rgb(hue, 1.0, value)
             pixels.append((r, g, b))
         svc.dispatch(RGB_CMD_PAINT, pixels)
         offset += 0.01
@@ -352,10 +363,19 @@ def speaking_wave_rainbow(
     deadline: Optional[float],
     stop_event: threading.Event,
     svc,
+    brightness: float = 1.0,
 ):
     """Same VU-meter motion as speaking_wave, but each segment paints a
     different hue (rainbow palette) that slowly drifts over time. Used when
     the user hasn't set an LED color but music is playing.
+
+    Like rainbow(), it generates its own color, so `brightness` (0.0-1.0) is
+    the only level it has: the VU envelope rides UNDER it, peaking at
+    255 * brightness. There are two rainbow cues around music and they come
+    from different places — the agent emits the music_strong emotion via
+    skills/emotion (that one is rainbow()), while THIS one is lit by
+    _on_music_play_start for the whole length of a song. Both read the same
+    music_strong "brightness", so a device dims them with one number.
     """
     step_delay = 0.04 / speed
     led_count = getattr(svc, "led_count", DEFAULT_LED_COUNT)
@@ -366,6 +386,7 @@ def speaking_wave_rainbow(
     target = [random.uniform(0.2, 1.0) for _ in range(num_segments)]
     frames_until_new_target = 0
     hue_offset = 0.0
+    level = max(0.0, min(1.0, brightness))
 
     while not is_done(deadline, stop_event):
         if frames_until_new_target <= 0:
@@ -381,7 +402,7 @@ def speaking_wave_rainbow(
         for s in range(num_segments):
             brightness = current[s]
             hue = (hue_offset + s / num_segments) % 1.0
-            r, g, b = hsv_to_rgb(hue, 1.0, brightness)
+            r, g, b = hsv_to_rgb(hue, 1.0, brightness * level)
             seg_color = (r, g, b)
             for p in range(seg_size):
                 idx = s * seg_size + p

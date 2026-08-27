@@ -277,6 +277,19 @@ class VoiceService:
     def set_music_service(self, music_service) -> None:
         self._music = music_service
 
+    def conversation_focus_active(self) -> bool:
+        """Whether a wake-word follow-up window is currently open.
+
+        Public because gaze reads it to decide whether the lamp may re-aim: the
+        framing loops move the body, and moving it unasked in an empty room is
+        the lamp fidgeting rather than paying attention. Mirrors the guard every
+        internal caller uses, so a device with the wake word off reports no
+        conversation rather than a permanently open one.
+        """
+        return bool(
+            hal_config.WAKEWORD_ENABLED and self._wakeword_focus.is_active()
+        )
+
     def grant_wakeword_focus(self, source: str = "button",
                              timeout_s: float | None = None) -> bool:
         """Open the wake-word follow-up window without a spoken wake phrase.
@@ -865,7 +878,18 @@ class VoiceService:
         reopen latency (no clipped first words after a push-to-talk cue)."""
         speech_start = None
         speech_pre_buffer = []  # frames buffered during holdoff period
-        lookback = deque(maxlen=voice_cfg.PRE_ROLL_FRAMES)
+        # Sized for the barge-in path, which needs far more history than an
+        # ordinary turn (see BARGE_IN_PRE_ROLL_FRAMES). The ordinary path trims
+        # back to PRE_ROLL_FRAMES where it consumes this, so widening the buffer
+        # does not lengthen normal turns.
+        lookback = deque(
+            maxlen=max(
+                voice_cfg.PRE_ROLL_FRAMES,
+                voice_cfg.BARGE_IN_PRE_ROLL_FRAMES
+                if voice_cfg.BARGE_IN_ENABLED
+                else 0,
+            )
+        )
         draining = False  # warm-mic: True while draining frames during TTS/music
         barge_hits = 0  # consecutive over-threshold frames while draining
         barged = False  # True from the barge-in until VAD resumes
@@ -974,11 +998,46 @@ class VoiceService:
                 ):
                     barge_hits = 0
                     continue
+                # Loud AND speech — but the lamp's own reply is both. The one
+                # thing that separates them is whether this rises and falls with
+                # what the speaker is playing. Judged on the same lookback the
+                # speech test used, so the two agree on what they are judging.
+                match = None
+                if voice_cfg.BARGE_IN_ECHO_MATCH > 0:
+                    match = aec.echo_envelope_match(
+                        voice_cfg.BARGE_IN_SPEECH_FRAMES
+                        * voice_cfg.FRAME_DURATION_MS,
+                        self._np,
+                    )
+                    # None means the test could not judge, NOT that the frame is
+                    # clean. Firing on it is firing with no echo defence at all
+                    # — the speaker is audibly playing right here, which is the
+                    # one situation where "unknown" has to mean "don't".
+                    if match is None or match >= voice_cfg.BARGE_IN_ECHO_MATCH:
+                        logger.info(
+                            "BARGE-IN rejected as echo: RMS=%.0f, envelope %s",
+                            level,
+                            "could not be judged"
+                            if match is None
+                            else "matches the reply at %.2f (>= %.2f)"
+                            % (match, voice_cfg.BARGE_IN_ECHO_MATCH),
+                        )
+                        barge_hits = 0
+                        drain_run = 0
+                        continue
+                # Name the sentence being cut off. Without it a false barge-in
+                # is only visible as a gap in the audio, and telling "the lamp
+                # interrupted itself" from "the user interrupted" after the fact
+                # means guessing from timestamps.
+                cut = getattr(self._tts, "last_spoken_text", "") or "(unknown)"
                 logger.info(
-                    "BARGE-IN: RMS=%.0f > %d for %d frames → stop TTS",
+                    "BARGE-IN: RMS=%.0f > %d for %d frames, envelope match %s "
+                    "→ stop TTS mid-sentence: %r",
                     level,
                     voice_cfg.BARGE_IN_RMS_THRESHOLD,
                     barge_hits,
+                    "n/a" if match is None else "%.2f" % match,
+                    cut[:100],
                 )
                 if self._tts is not None:
                     self._tts.stop()
@@ -1045,6 +1104,24 @@ class VoiceService:
                         skip_elapsed += voice_cfg.FRAME_DURATION_MS / 1000.0
                         if not ov and rms(d, self._np) < voice_cfg.ECHO_RMS_FLOOR:
                             break
+                    # Cleared, and it has to stay that way until something else
+                    # can tell the device's voice from a person's IN THE
+                    # TRANSCRIPT on every route.
+                    #
+                    # The cost is real and measured: a user who starts talking
+                    # before the reply ends, but too quietly to trip barge-in,
+                    # loses their opening words here — device-observed
+                    # 27/08/2026, "Which season is best for going?" reached STT
+                    # with a first partial of 'for going'.
+                    #
+                    # Keeping the frames was tried the same day and is worse.
+                    # The pre-roll then carried the reply's own echo, STT
+                    # transcribed it ("I'm Rachel."), and it was handled as the
+                    # user's turn — the lamp answered itself. Neither existing
+                    # filter caught it: strip_echo_prefix deliberately leaves a
+                    # wholly-echo transcript alone, and sensing_sender.is_echo
+                    # is not on the realtime route at all. Extend the transcript
+                    # filter to that route BEFORE removing this clear again.
                     lookback.clear()
                     self._silero_reset_state()
                     draining = False
@@ -1134,13 +1211,42 @@ class VoiceService:
                     history = (
                         list(lookback)[:-buffered] if buffered > 0 else list(lookback)
                     )
+                    # Only a barge-in turn gets the long pre-roll: it was
+                    # detected late and its opening words live nowhere else.
+                    # An ordinary turn keeps the short one, or every utterance
+                    # would start with a second of room noise.
+                    if not force_open:
+                        history = history[-voice_cfg.PRE_ROLL_FRAMES:]
+                    else:
+                        history = history[-voice_cfg.BARGE_IN_PRE_ROLL_FRAMES:]
+                        # These frames were captured while the speaker was
+                        # still playing, so the APM has been through them —
+                        # and during double talk it does not attenuate the
+                        # user, it deletes them (see aec.raw_tail). Swap in
+                        # the pre-APM copy or STT gets silence.
+                        raw = aec.raw_tail(len(history), frame_size, self._np)
+                        if raw is not None:
+                            history = raw
+                            logger.info(
+                                "Barge-in pre-roll taken from the RAW mic "
+                                "(%d frames) — the cancelled copy has the "
+                                "user removed", len(history),
+                            )
                     all_frames = history + speech_pre_buffer
+                    # DIAGNOSTIC (27/08/2026): captured turns start mid-phrase
+                    # with a run of EXACT zeros where the pre-roll should be,
+                    # while the room floor reads 5-6 in the same recordings.
+                    # Exact zeros cannot come from a microphone, so something is
+                    # writing synthetic silence into the lookback. Print what the
+                    # pre-roll actually holds to find out where.
                     logger.info(
-                        "Speech detected (RMS=%.0f) — pre-roll=%d frames (~%dms) + holdoff=%d frames",
+                        "Speech detected (RMS=%.0f) — pre-roll=%d frames (~%dms) "
+                        "+ holdoff=%d frames | pre-roll RMS: %s",
                         energy,
                         len(history),
                         len(history) * voice_cfg.FRAME_DURATION_MS,
                         buffered,
+                        " ".join("%.0f" % rms(f, self._np) for f in history),
                     )
                     # Speech is confirmed (Silero has agreed) — the moment to
                     # ask whether the user had turned toward the lamp just
@@ -1762,7 +1868,13 @@ class VoiceService:
             self._listening = False
             stt_session.close()
             combined, ser_audio_buffer, buf_duration = finalize_session(
-                audio_buffer, last_partial, final_segments, last_speech_idx
+                audio_buffer,
+                last_partial,
+                final_segments,
+                last_speech_idx,
+                # What the device last said, so a barge-in turn does not open
+                # with the tail of the reply it interrupted.
+                getattr(self._tts, "last_spoken_text", "") if self._tts else "",
             )
             capture_complete.set()
             if (

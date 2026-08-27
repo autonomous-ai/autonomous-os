@@ -349,16 +349,33 @@ func (h *DeviceHandler) GetVoices(c *gin.Context) {
 	provider := c.DefaultQuery("provider", domain.TTSProviderOpenAI)
 	lang := c.Query("lang")
 
-	if voices, err := hal.ListVoices(provider, lang); err == nil && len(voices) > 0 {
+	voices, err := hal.ListVoices(provider, lang)
+	if err == nil && len(voices) > 0 {
+		c.JSON(http.StatusOK, serializers.ResponseSuccess(voices))
+		return
+	}
+	// Piper voices are files under /opt/piper, so HAL is the only thing that
+	// can know what is installed — there is no static list to fall back to.
+	// Answering an unreachable HAL with an empty success would be a claim this
+	// server cannot make ("no voices installed"), and the web takes it as the
+	// authoritative list: the picker empties and, since it only refetches on a
+	// provider or language change, never fills back in. An error instead leaves
+	// the client holding its last known-good list.
+	if provider == domain.TTSProviderPiper {
+		if err != nil {
+			c.JSON(http.StatusServiceUnavailable,
+				serializers.ResponseError("hal unreachable: "+err.Error()))
+			return
+		}
 		c.JSON(http.StatusOK, serializers.ResponseSuccess(voices))
 		return
 	}
 	// Fallback to static list (no language filtering — static list is EN-only)
-	voices, ok := domain.TTSVoicesByProvider[provider]
+	staticVoices, ok := domain.TTSVoicesByProvider[provider]
 	if !ok {
-		voices = domain.TTSVoices
+		staticVoices = domain.TTSVoices
 	}
-	c.JSON(http.StatusOK, serializers.ResponseSuccess(voices))
+	c.JSON(http.StatusOK, serializers.ResponseSuccess(staticVoices))
 }
 
 // GetTTSProviders returns the list of supported TTS providers.
@@ -380,6 +397,7 @@ func (h *DeviceHandler) GetAgentRuntime(c *gin.Context) {
 	c.JSON(http.StatusOK, serializers.ResponseSuccess(domain.AgentRuntimeStatus{
 		Current: h.service.CurrentAgentRuntime(),
 		Options: domain.AgentRuntimes,
+		Ready:   h.service.AgentReady(),
 	}))
 }
 
@@ -448,6 +466,31 @@ func (h *DeviceHandler) GetTimezone(c *gin.Context) {
 // change takes effect without a HAL restart. An unknown zone returns 400.
 //
 //	@Router	/device/timezone [post]
+//
+// RestoreDefaults puts one settings section back on the credentials the device
+// shipped with.
+//
+// POST /api/device/restore-defaults  {"section": "llm" | "voice" | "realtime"}
+//
+// Per-section rather than all-at-once because that is how an operator thinks
+// about it: they swapped the AI Brain, or the voice provider, and want that one
+// thing back. Sections take different slices of the same stored set — the brain
+// url + key + model, the other two url + key.
+func (h *DeviceHandler) RestoreDefaults(c *gin.Context) {
+	var req struct {
+		Section string `json:"section" validate:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, serializers.ResponseError(err.Error()))
+		return
+	}
+	if err := h.service.RestoreAutonomousDefaults(req.Section); err != nil {
+		c.JSON(http.StatusBadRequest, serializers.ResponseError(err.Error()))
+		return
+	}
+	c.JSON(http.StatusOK, serializers.ResponseSuccess(true))
+}
+
 func (h *DeviceHandler) SetTimezone(c *gin.Context) {
 	var req domain.TimezoneSetData
 	if err := c.ShouldBindJSON(&req); err != nil {
