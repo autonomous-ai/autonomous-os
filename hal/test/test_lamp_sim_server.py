@@ -113,10 +113,14 @@ class TestLampSimulationServer(unittest.TestCase):
             self.assertEqual(response.headers.get_content_type(), "image/jpeg")
             self.assertGreater(len(response.read()), 1_000)
 
+        # 42 is above Lamp's SAFETY.md audio.max_volume, so the route clamps it
+        # and reports the ceiling back alongside the value.
         _, volume = self._json("/audio/volume", "POST", {"volume": 42})
         self.assertEqual(volume["status"], "ok")
         _, current_volume = self._json("/audio/volume")
-        self.assertEqual(current_volume, {"control": "virtual", "volume": 42})
+        self.assertEqual(
+            current_volume, {"control": "virtual", "volume": 40, "max_volume": 40}
+        )
         with self._response("/audio/record?duration_ms=50", "POST") as response:
             with wave.open(BytesIO(response.read())) as captured:
                 self.assertEqual(captured.getframerate(), 16_000)

@@ -220,6 +220,15 @@ export function OverviewSection({
   const animatedLinkRate = useCountUp(net?.linkRate ?? 0);
   const animatedVolume = useCountUp(localVolume ?? audio?.volume ?? 0);
 
+  // Slider ceiling: SAFETY.md `audio.max_volume` when the device declares one,
+  // else the full scale. The gate in HAL is what actually enforces this — the
+  // slider only stops short of a dead zone that would snap the handle back.
+  const volumeCeiling = audio?.max_volume ?? 100;
+  const volumeValue = Math.min(localVolume ?? audio?.volume ?? 50, volumeCeiling);
+  // The track's amber fill is a fraction of the track's own width, so it is
+  // relative to the ceiling, not to 100.
+  const volumeFillPct = volumeCeiling > 0 ? (volumeValue / volumeCeiling) * 100 : 0;
+
   const commitVolume = useCallback((vol: number) => {
     draggingVolume.current = false;
     setDragging(false);
@@ -410,17 +419,29 @@ export function OverviewSection({
               <div>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
                   <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--lm-text-dim)" }}>Volume</span>
-                  <span style={{ fontSize: 14, fontWeight: 700, color: "var(--lm-amber)", fontFamily: "monospace" }}>
-                    {/* While dragging show the exact handle value (no easing lag);
-                        when idle let it tick to the server-confirmed value. */}
-                    {dragging ? (localVolume ?? audio?.volume ?? "—") : animatedVolume}%
+                  <span style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+                    {/* Why the slider stops short of 100 — without this the
+                        ceiling reads as a broken control. */}
+                    {audio?.max_volume != null && (
+                      <span
+                        style={{ fontSize: 11, fontWeight: 600, color: "var(--lm-text-dim)" }}
+                        title="Speaker ceiling from this device's SAFETY.md (audio.max_volume). Enforced in HAL for every caller, not just this slider."
+                      >
+                        ceiling {audio.max_volume}%
+                      </span>
+                    )}
+                    <span style={{ fontSize: 14, fontWeight: 700, color: "var(--lm-amber)", fontFamily: "monospace" }}>
+                      {/* While dragging show the exact handle value (no easing lag);
+                          when idle let it tick to the server-confirmed value. */}
+                      {dragging ? (localVolume ?? audio?.volume ?? "—") : animatedVolume}%
+                    </span>
                   </span>
                 </div>
                 <input
                   type="range"
                   min={0}
-                  max={100}
-                  value={localVolume ?? audio?.volume ?? 50}
+                  max={volumeCeiling}
+                  value={volumeValue}
                   onChange={(e) => {
                     draggingVolume.current = true;
                     setDragging(true);
@@ -432,7 +453,7 @@ export function OverviewSection({
                   style={{
                     width: "100%", cursor: "pointer",
                     // Drives the amber-fill width in the .lm-mon-range track (paint only).
-                    ["--lm-fill" as string]: `${localVolume ?? audio?.volume ?? 50}%`,
+                    ["--lm-fill" as string]: `${volumeFillPct}%`,
                   }}
                 />
               </div>
