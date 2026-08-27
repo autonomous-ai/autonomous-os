@@ -330,7 +330,15 @@ def single_click_action(source: str = "button", announce: bool = True, chime: bo
         unmute_speaker()
         logger.info("[sca-trace] unmute_speaker done +%.0fms", (time.monotonic() - t) * 1000)
 
-    if state._mic_muted:
+    if state._mic_muted and state._mic_manual_override:
+        # A mute the user asked for DELIBERATELY — the touchpad double tap, the
+        # web UI, the API — is not undone by a click. Silently reopening a
+        # microphone somebody switched off defeats the point of switching it
+        # off, and the gesture that muted it is the gesture that unmutes it.
+        # Sleep's own mute does NOT set this flag (it uses
+        # _sleepy_auto_muted_mic), so waking with a tap still restores the mic.
+        logger.info("%s single click -- leaving deliberate mic mute in place", source)
+    elif state._mic_muted:
         logger.info("%s single click -- unmuting mic", source)
         t = time.monotonic()
         unmute_mic()

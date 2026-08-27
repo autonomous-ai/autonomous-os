@@ -147,11 +147,16 @@ class TTP223Handler:
         self._lines = []
         # Physical pad order along the swipe axis; None until measured (2.2).
         self._axis = None
-        # First-touch line sequence for the current gesture cycle, consecutive
-        # repeats collapsed. A pad re-firing under a stationary finger is
-        # FastMode re-triggering, not a move, and counting it would invent
-        # direction changes that never happened.
-        self._pad_seq = []
+        # Per-contact first-touch order for the current gesture cycle:
+        # [[(line, ts), ...], ...], one inner list per contact. NOT flattened —
+        # device-measured 2026-08-27: several fingers landing in one place spread
+        # across pads exactly like one finger moving, so a flat cross-contact
+        # sequence cannot tell a 3-finger double tap from a stroke. The two
+        # questions need different layers: whether a single contact TRAVERSED
+        # (swipe), and whether successive contacts stayed in the same PLACE
+        # (double tap).
+        self._contacts = []
+        self._contact = []
         self._lock = threading.Lock()
         # Session-end timer: fires SESSION_GAP_S after the last edge.
         self._session_end_timer = None
@@ -235,8 +240,8 @@ class TTP223Handler:
         # the classifier would see, which is the point of the instrument.
         if level == 0:
             with self._lock:
-                if not self._pad_seq or self._pad_seq[-1][0] != gpio:
-                    self._pad_seq.append((gpio, time.monotonic()))
+                if not self._contact or self._contact[-1][0] != gpio:
+                    self._contact.append((gpio, time.monotonic()))
         # Any edge keeps the current session alive — cross-talk and
         # FastMode auto-LOW produce flurries of edges per physical
         # touch; coalesce them by resetting the session-end timer.
@@ -249,40 +254,67 @@ class TTP223Handler:
             self._session_end_timer.daemon = True
             self._session_end_timer.start()
 
-    def _traversal(self):
-        """(distinct_pads, reversals, monotonic, min_gap_ms) for this cycle.
+    def _close_contact(self):
+        """Move the open contact into the cycle's list. Called at session end."""
+        with self._lock:
+            if self._contact:
+                self._contacts.append(self._contact)
+            self._contact = []
 
-        Mirrors touch_debug._traversal so the trace and the decision cannot
-        disagree. `reversals` is None when there are fewer than three steps —
-        not enough to have a direction, let alone a change of one.
+    def _classify(self):
+        """Read the cycle as (is_swipe, moved, min_gap_ms, n_contacts).
 
-        Axis falls back to declared line order when the board profile has no
-        measured `axis`. A reversal count against a guessed axis is still the
-        right shape (a turn is a turn whichever way the pads are numbered) —
-        what a wrong axis costs is the swipe DIRECTION, which this driver
-        deliberately does not use.
+        Two independent questions, because the hardware answers them at
+        different layers (device-measured on orange-lamp, 2026-08-27):
+
+        * **Did one contact traverse?** All four real swipes in that run arrived
+          as `sessions=1` — a stroke across the pads completes inside a single
+          contact, because FastMode's auto-release does not end the session.
+          So swipe is an INTRA-contact question: one contact whose first-touch
+          order runs monotonically across every pad with wide enough gaps.
+
+        * **Did successive contacts stay in one place?** Several fingers landing
+          together spread across pads exactly like one finger moving, so pad
+          COUNT cannot answer this and neither can the first pad to fire — in
+          the same run a 3-finger double tap reported primary L98 then L96.
+          What does separate them is whether a pad is common to every contact:
+          tapping one spot always re-touches its centre pad, a stroke moves off
+          it. `moved` is the negation of that.
         """
         with self._lock:
-            seq = list(self._pad_seq)
+            contacts = [list(c) for c in self._contacts]
+            if self._contact:
+                contacts.append(list(self._contact))
         axis = self._axis or self._lines
         pos_of = {line: i for i, line in enumerate(axis)}
-        positions = [pos_of[l] for l, _ in seq if l in pos_of]
-        gaps = [(b - a) * 1000.0 for (_, a), (_, b) in zip(seq, seq[1:])]
-        distinct = len({l for l, _ in seq})
-        reversals = None
-        monotonic = None
-        if len(positions) >= 3:
+
+        is_swipe = False
+        min_gap = 0.0
+        for c in contacts:
+            positions = [pos_of[l] for l, _ in c if l in pos_of]
+            if len(positions) < SWIPE_MIN_PADS:
+                continue
+            if len({l for l, _ in c}) < SWIPE_MIN_PADS:
+                continue
             deltas = [b - a for a, b in zip(positions, positions[1:]) if b != a]
-            reversals = sum(
-                1 for a, b in zip(deltas, deltas[1:]) if (a > 0) != (b > 0)
-            )
-            monotonic = reversals == 0
-        return distinct, reversals, monotonic, (min(gaps) if gaps else 0.0)
+            if not deltas or any((a > 0) != (b > 0) for a, b in zip(deltas, deltas[1:])):
+                continue  # turned around — a stroke, not a pass
+            gaps = [(b - a) * 1000.0 for (_, a), (_, b) in zip(c, c[1:])]
+            if gaps and min(gaps) >= SWIPE_MIN_GAP_MS:
+                is_swipe = True
+                min_gap = min(gaps)
+
+        sets = [{l for l, _ in c} for c in contacts if c]
+        # A pad present in EVERY contact means the hand never left that spot.
+        common = set.intersection(*sets) if sets else set()
+        moved = len(sets) >= 2 and not common
+        return is_swipe, moved, min_gap, len(sets)
 
     def _reset_cycle(self):
-        """Clear the per-gesture sequence once a gesture has resolved."""
+        """Clear the per-gesture contacts once a gesture has resolved."""
         with self._lock:
-            self._pad_seq = []
+            self._contacts = []
+            self._contact = []
 
     def _on_session_end(self):
         # One physical touch ended.
@@ -298,9 +330,11 @@ class TTP223Handler:
         fire_pet = False
         grab_floor = False
         swallowed = False
-        # Traversal takes the lock itself, so read it before entering.
-        _distinct, _reversals, _mono, _min_gap = self._traversal()
-        pet_now = SWIPE_ENABLED and bool(_reversals)
+        # Close the contact first, then read the cycle. Both take the lock
+        # themselves, so they run before entering the block below.
+        self._close_contact()
+        _is_swipe, _moved, _min_gap, _n = self._classify()
+        pet_now = False
         with self._lock:
             self._session_end_timer = None
             now = time.monotonic()
@@ -319,6 +353,17 @@ class TTP223Handler:
             else:
                 self._session_count += 1
                 count = self._session_count
+                # Pet's fast path needs the hand to have MOVED between contacts,
+                # and at least two of them. Gated on the SESSION count rather
+                # than the number of contacts that recorded pads: a contact whose
+                # touch edge fell the other side of a session boundary records
+                # only a release and contributes nothing (device trace 154507).
+                # Gated on >=2 at all because a single press's cross-talk
+                # ordering can double back — device-measured, a one-contact trace
+                # fired PET off nothing but noise.
+                pet_now = (
+                    SWIPE_ENABLED and _moved and count >= PET_SESSION_THRESHOLD
+                )
                 # First session of a burst: cut in-flight TTS NOW rather than
                 # after the decision window (see module docstring). Checked
                 # outside the lock — it does I/O.
@@ -378,15 +423,17 @@ class TTP223Handler:
             self._ack_first_session()
         if fire_pet:
             reason = (
-                f"{_reversals} direction reversal(s) over {_distinct} pads"
+                f"{_n} contacts with no pad in common -- the hand moved"
                 if pet_now
                 else f"session count reached {PET_SESSION_THRESHOLD}"
             )
+            # Same finish-before-dispatch rule as _dispatch: the trace closes
+            # before the action can block or raise.
             touch_debug.note_decision("PET", reason, count)
             touch_debug.note_action("head_pat_action", "TTP223")
-            head_pat_action(source="TTP223")
             touch_debug.finish("PET")
             self._reset_cycle()
+            head_pat_action(source="TTP223")
 
     def _ack_first_session(self):
         """Instant ack for the first touch session of a burst: cut in-flight
@@ -418,7 +465,8 @@ class TTP223Handler:
             count = self._session_count
             self._session_count = 0
             self._decision_timer = None
-        distinct, reversals, monotonic, min_gap = self._traversal()
+        self._close_contact()
+        is_swipe, moved, min_gap, _n = self._classify()
 
         if count < 1:
             # The decision timer outlived its count (pet consumed it inline).
@@ -428,56 +476,33 @@ class TTP223Handler:
             return
 
         if SWIPE_ENABLED:
-            # 1) SWIPE — a single monotonic pass across every pad, with the
-            #    adjacent gaps wide enough that a cross-talk burst cannot fake
-            #    it. Ordering matters: checked before the count rules so a
-            #    resolved swipe never also fires a tap.
-            if (
-                distinct >= SWIPE_MIN_PADS
-                and monotonic
-                and min_gap >= SWIPE_MIN_GAP_MS
-            ):
-                touch_debug.note_decision(
-                    "SWIPE",
-                    f"monotonic over {distinct} pads, min gap {min_gap:.0f}ms "
-                    f">= {SWIPE_MIN_GAP_MS:.0f}ms",
-                    count,
+            # 1) SWIPE — one contact that ran cleanly across every pad in order.
+            #    Checked first so a resolved swipe never also fires a tap.
+            if is_swipe:
+                self._dispatch(
+                    "SWIPE", f"one contact traversed all pads, min gap {min_gap:.0f}ms",
+                    count, "swipe_action", swipe_action,
                 )
-                touch_debug.note_action("swipe_action", "TTP223")
-                swipe_action(source="TTP223")
-                touch_debug.finish("SWIPE")
-                self._reset_cycle()
                 return
 
-            # 2) PET by count — the fallback that keeps a working gesture
-            #    working. A stroke whose pads move but never resolve a clean
-            #    reversal still fires the giggle rather than going silent.
-            #
-            #    NOTE the collision this leaves: "two contacts, same pad" is
-            #    ALSO the double-tap signature, and the two are indistinguishable
-            #    at the signal level. Double tap wins (decided 2026-08-27), so a
-            #    stroke so noisy it registers as a single pad now mutes the mic
-            #    instead of giggling. That is the accepted cost of giving double
-            #    tap an action; `distinct >= 2` is what keeps the commoner case
-            #    on the pet side.
             if count >= PET_SESSION_THRESHOLD:
-                if distinct >= 2:
-                    touch_debug.note_decision(
-                        "PET", f"{count} contacts over {distinct} pads, no reversal", count
+                # 2) PET — successive contacts with no pad in common: the hand
+                #    moved. The inline path above catches most of these; this
+                #    covers a stroke slow enough to outlast the fast check.
+                if moved:
+                    self._dispatch(
+                        "PET", f"{count} contacts with no pad in common",
+                        count, "head_pat_action", head_pat_action,
                     )
-                    touch_debug.note_action("head_pat_action", "TTP223")
-                    head_pat_action(source="TTP223")
-                    touch_debug.finish("PET")
-                    self._reset_cycle()
                     return
-                # 3) DOUBLE TAP — repeated contact that never left one pad.
-                touch_debug.note_decision(
-                    "DOUBLE_TAP", f"{count} contacts, no traversal", count
+                # 3) DOUBLE TAP — repeated contacts sharing a pad, i.e. the hand
+                #    stayed put. Deliberately NOT "only one pad touched": several
+                #    fingers land on several pads at once, and requiring a single
+                #    pad made this reachable only with one fingertip.
+                self._dispatch(
+                    "DOUBLE_TAP", f"{count} contacts, no evidence the hand moved",
+                    count, "mic_toggle_action", mic_toggle_action,
                 )
-                touch_debug.note_action("mic_toggle_action", "TTP223")
-                mic_toggle_action(source="TTP223")
-                touch_debug.finish("DOUBLE_TAP")
-                self._reset_cycle()
                 return
 
         # 4) TAP. Also the whole classifier when SWIPE_ENABLED is off, in which
@@ -491,10 +516,24 @@ class TTP223Handler:
         # comment was not, so the file claimed the opposite of what it did.
         # chime=False: the ack chime already sounded at the first session end
         # (_ack_first_session) — don't ping twice.
-        touch_debug.note_decision(
-            "TAP", f"decision window expired at count={count}", count
+        self._dispatch(
+            "TAP", f"decision window expired at count={count}",
+            count, "single_click_action",
+            lambda source: single_click_action(source=source, chime=False),
+            chime=False,
         )
-        touch_debug.note_action("single_click_action", "TTP223", chime=False)
-        single_click_action(source="TTP223", chime=False)
-        touch_debug.finish("TAP")
+
+    def _dispatch(self, gesture, reason, count, fn_name, fn, **trace_fields):
+        """Record the verdict, CLOSE THE TRACE, then run the action.
+
+        Finishing before dispatch is deliberate. `sleep_action` blocks ~5s
+        waiting out its TTS clip, which outlived the tracer's idle flush and
+        filed four correctly-classified swipes as `IGNORED-unresolved`
+        (device-observed 2026-08-27). Writing first also means the trace
+        survives an action that raises.
+        """
+        touch_debug.note_decision(gesture, reason, count)
+        touch_debug.note_action(fn_name, "TTP223", **trace_fields)
+        touch_debug.finish(gesture)
         self._reset_cycle()
+        fn(source="TTP223")

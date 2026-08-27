@@ -138,7 +138,7 @@ class TestFlagOffIsUnchanged(_Base):
         self.hz.h._ignore_edges_until = self.mod.time.monotonic() + 5
         self.hz.touch(96)
         self.assertIsNone(self.hz.h._session_end_timer)
-        self.assertEqual(self.hz.h._pad_seq, [])
+        self.assertEqual(self.hz.h._contact, [])
 
 
 class TestSwipe(_Base):
@@ -186,15 +186,27 @@ class TestSwipe(_Base):
 class TestPetKeepsWorking(_Base):
     swipe = True
 
-    def test_turning_around_fires_pet_immediately(self):
-        """Reversal cannot later become a swipe, so pet keeps its fast path
-        rather than waiting out the decision window."""
-        for i, line in enumerate((96, 98, 100, 98, 96)):
-            self.hz.touch(line, at_ms=i * 100)
-        self.hz.end_session()
+    def test_a_hand_moving_between_contacts_fires_pet_immediately(self):
+        """A stroke is contacts in DIFFERENT places. Once they share no pad the
+        gesture cannot be a double tap, so pet keeps its fast path rather than
+        waiting out the decision window."""
+        for n, line in enumerate((96, 98), 1):
+            self.hz.touch(line)
+            self.hz.end_session()
         self.assertEqual(self.hz.fired, ["head_pat_action"])
 
-    def test_a_stroke_reading_as_ONE_pad_becomes_a_double_tap_not_a_pet(self):
+    def test_one_contact_wandering_across_pads_is_NOT_a_pet(self):
+        """Device-observed 2026-08-27: a single press whose cross-talk ordering
+        happened to double back fired PET off nothing but noise (trace
+        154411_PET, sessions=1). Pet needs the hand to move BETWEEN contacts."""
+        for i, line in enumerate((98, 96, 100)):
+            self.hz.touch(line, at_ms=i * 30)
+        self.hz.end_session()
+        self.assertEqual(self.hz.fired, [])
+        self.hz.decide()
+        self.assertEqual(self.hz.fired, ["single_click_action"])
+
+    def test_repeated_contact_in_one_place_is_a_double_tap_not_a_pet(self):
         """The accepted cost of giving double tap an action.
 
         "Two contacts, same pad" is simultaneously the double-tap signature and
@@ -229,9 +241,42 @@ class TestDoubleTap(_Base):
             self.hz.touch(96)
             self.hz.end_session()
         self.hz.decide()
-        # Same pad twice, no traversal: the case ttp223.py:70-76 documented as a
-        # known false positive now resolves to its own gesture.
+        # Same pad twice: the case ttp223.py:70-76 documented as a known false
+        # positive now resolves to its own gesture.
         self.assertEqual(self.hz.fired, ["mic_toggle_action"])
+
+    def test_a_MULTI_FINGER_double_tap_in_one_place_still_toggles_the_mic(self):
+        """The reported bug, 2026-08-27: double tap only worked with a single
+        fingertip. Two or three fingers spread the contact across pads, and the
+        old flat sequence read that spread as movement and fired PET instead.
+        Pad sets from real trace 154222."""
+        for pads in ((98, 100), (96, 98, 100)):
+            for line in pads:
+                self.hz.touch(line)
+            self.hz.end_session()
+        self.hz.decide()
+        self.assertEqual(self.hz.fired, ["mic_toggle_action"])
+
+    def test_a_contact_that_recorded_no_pads_still_counts(self):
+        """Device trace 154507: the second contact's touch edge fell the other
+        side of a session boundary, so it recorded only a release and no pads.
+        Counting contacts by pad-set would drop it to a single tap; the session
+        count is what the gate reads."""
+        self.hz.touch(96)
+        self.hz.end_session()
+        self.hz.end_session()          # a contact that recorded nothing
+        self.hz.decide()
+        self.assertEqual(self.hz.fired, ["mic_toggle_action"])
+
+    def test_contacts_in_different_places_are_a_pet_not_a_double_tap(self):
+        """The other side of the same rule — sharing no pad means the hand
+        moved, so multi-pad contacts must not all collapse into double tap."""
+        for pads in ((96,), (100,)):
+            for line in pads:
+                self.hz.touch(line)
+            self.hz.end_session()
+        self.assertIn("head_pat_action", self.hz.fired)
+        self.assertNotIn("mic_toggle_action", self.hz.fired)
 
     def test_a_single_contact_is_not_a_double_tap(self):
         self.hz.touch(96)
@@ -248,22 +293,23 @@ class TestSequenceHygiene(_Base):
         would invent a direction change."""
         for line in (96, 96, 96, 98, 100):
             self.hz.touch(line)
-        self.assertEqual([l for l, _ in self.hz.h._pad_seq], [96, 98, 100])
+        self.assertEqual([l for l, _ in self.hz.h._contact], [96, 98, 100])
 
     def test_release_edges_never_enter_the_sequence(self):
         self.hz.touch(96)
         self.hz.release(96)
         self.hz.touch(98)
-        self.assertEqual([l for l, _ in self.hz.h._pad_seq], [96, 98])
+        self.assertEqual([l for l, _ in self.hz.h._contact], [96, 98])
 
-    def test_sequence_is_cleared_once_a_gesture_resolves(self):
-        """A stale sequence would leak the previous gesture's traversal into
-        the next one and misclassify it."""
+    def test_contacts_are_cleared_once_a_gesture_resolves(self):
+        """Stale contacts would leak the previous gesture into the next one
+        and misclassify it."""
         for i, line in enumerate((96, 98, 100)):
             self.hz.touch(line, at_ms=i * 100)
         self.hz.end_session()
         self.hz.decide()
-        self.assertEqual(self.hz.h._pad_seq, [])
+        self.assertEqual(self.hz.h._contacts, [])
+        self.assertEqual(self.hz.h._contact, [])
 
 
 class TestAxis(_Base):
@@ -276,19 +322,17 @@ class TestAxis(_Base):
         self.assertIsNone(self.hz.h._axis)
         for i, line in enumerate((96, 98, 100)):
             self.hz.touch(line, at_ms=i * 100)
-        _, reversals, monotonic, _ = self.hz.h._traversal()
-        self.assertEqual(reversals, 0)
-        self.assertTrue(monotonic)
+        is_swipe, _, _, _ = self.hz.h._classify()
+        self.assertTrue(is_swipe)
 
-    def test_a_measured_axis_reorders_the_reversal_test(self):
+    def test_a_measured_axis_reorders_the_traversal_test(self):
         """With a real axis where line order != spatial order, the same edge
         sequence reads as a turn rather than a straight pass."""
         hz = _Harness(self.mod, axis=[96, 100, 98])
         for i, line in enumerate((96, 98, 100)):
             hz.touch(line, at_ms=i * 100)
-        _, reversals, monotonic, _ = hz.h._traversal()
-        self.assertEqual(reversals, 1)
-        self.assertFalse(monotonic)
+        is_swipe, _, _, _ = hz.h._classify()
+        self.assertFalse(is_swipe)
 
 
 if __name__ == "__main__":
