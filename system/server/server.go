@@ -503,6 +503,23 @@ func (s *Server) Serve(closeFn func()) error {
 	// against an allow-list of roots + served types — see handler_file.go.
 	agent.GET("file", adminAuthMiddleware(s.config), s.agentHandler.ServeFile)
 
+	// Scheduled tasks: read-only mirror of the backend's schedule.sync list
+	// plus a local "Run now", surfaced by deviceMQTTHandler because that's
+	// where the shared schedule.Store/schedule.Runner already live (see
+	// ProvideDeviceMQTTHandler) — no second copy of the schedule data, and no
+	// new wire provider needed. Admin-gated like the agent group above: both
+	// endpoints expose schedule contents (instructions included) and the run
+	// endpoint can trigger a real agent turn, so this is not local-only.
+	scheduleGroup := api.Group("schedule")
+	scheduleGroup.GET("list", adminAuthMiddleware(s.config), s.deviceMQTTHandler.ListSchedules)
+	scheduleGroup.POST(":id/run", adminAuthMiddleware(s.config), s.deviceMQTTHandler.RunScheduleNow)
+	// Device-side CRUD. These do NOT write schedules.json directly — each one
+	// queues a proposal the backend must confirm (see schedule_crud_handler.go),
+	// so the local UI can never arm a task the cloud does not know about.
+	scheduleGroup.POST("", adminAuthMiddleware(s.config), s.deviceMQTTHandler.CreateSchedule)
+	scheduleGroup.PATCH(":id", adminAuthMiddleware(s.config), s.deviceMQTTHandler.UpdateSchedule)
+	scheduleGroup.DELETE(":id", adminAuthMiddleware(s.config), s.deviceMQTTHandler.DeleteSchedule)
+
 	logs := api.Group("logs")
 	logs.GET("tail", adminAuthMiddleware(s.config), s.logTail)
 	logs.GET("stream", adminAuthMiddleware(s.config), s.logStream)

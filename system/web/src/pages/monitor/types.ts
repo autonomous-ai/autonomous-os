@@ -161,7 +161,7 @@ export interface DisplayEvent extends MonitorEvent {
   _seq: number;
 }
 
-export type Section = "overview" | "system" | "flow" | "camera" | "servo" | "face-owners" | "analytics" | "logs" | "chat" | "cli" | "sensing" | "bluetooth" | "api-docs" | "agent-config" | "settings:device" | "settings:wifi" | "settings:llm" | "settings:runtime" | "settings:voice" | "settings:face" | "settings:tts" | "settings:realtime" | "settings:stt" | "settings:channel" | "settings:mqtt" | "settings:mcp" | "settings:plugins" | "settings:timezone";
+export type Section = "overview" | "system" | "flow" | "camera" | "servo" | "face-owners" | "analytics" | "logs" | "chat" | "cli" | "sensing" | "bluetooth" | "api-docs" | "agent-config" | "settings:device" | "settings:wifi" | "settings:llm" | "settings:runtime" | "settings:voice" | "settings:face" | "settings:tts" | "settings:realtime" | "settings:stt" | "settings:channel" | "settings:mqtt" | "settings:mcp" | "settings:plugins" | "settings:timezone" | "settings:scheduled";
 
 // ─── Area + URL serialization ────────────────────────────────────────────────
 //
@@ -201,6 +201,7 @@ const SHORT_TO_SETTING: Record<string, Section> = {
   mcp: "settings:mcp",
   plugins: "settings:plugins",
   timezone: "settings:timezone",
+  scheduled: "settings:scheduled",
 };
 const SETTING_TO_SHORT: Record<string, string> = Object.fromEntries(
   Object.entries(SHORT_TO_SETTING).map(([short, id]) => [id, short]),
@@ -274,6 +275,7 @@ export const NAV: NavEntry[] = [
       { id: "settings:mcp",      label: "MCP Tools", icon: "⬡" },
       { id: "settings:plugins",  label: "Plugins",   icon: "⧉" },
       { id: "settings:timezone", label: "Timezone",  icon: "◷" },
+      { id: "settings:scheduled", label: "Scheduled", icon: "⏰" },
     ],
   },
   {
