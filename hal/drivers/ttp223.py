@@ -42,6 +42,7 @@ import time
 
 import hal.app_state as state
 from hal.board.board import board_profile
+from hal.drivers import touch_debug
 from hal.drivers.button_actions import (
     head_pat_action,
     play_ack_chime,
@@ -177,7 +178,13 @@ class TTP223Handler:
         # as an edge when the callback is registered. The resting-HIGH pads
         # would otherwise fire a phantom gesture on every HAL start.
         if time.monotonic() < self._ignore_edges_until:
+            # Traced anyway, flagged: a suppressed edge and a pad that never
+            # fired look identical in a trace that omits them.
+            touch_debug.start_cycle(self._chip, self._lines)
+            touch_debug.note_edge(gpio, level, suppressed=True)
             return
+        touch_debug.start_cycle(self._chip, self._lines)
+        touch_debug.note_edge(gpio, level)
         # Any edge keeps the current session alive — cross-talk and
         # FastMode auto-LOW produce flurries of edges per physical
         # touch; coalesce them by resetting the session-end timer.
@@ -203,6 +210,7 @@ class TTP223Handler:
         #    sessions as a single tap when the user stops touching.
         fire_pet = False
         grab_floor = False
+        swallowed = False
         with self._lock:
             self._session_end_timer = None
             now = time.monotonic()
@@ -216,33 +224,53 @@ class TTP223Handler:
                     self._decision_timer.cancel()
                     self._decision_timer = None
                 logger.debug("TTP223 session ignored (pet cooldown)")
-                return
-            self._session_count += 1
-            count = self._session_count
-            # First session of a burst: cut in-flight TTS NOW rather than
-            # after the decision window (see module docstring). Checked
-            # outside the lock — it does I/O.
-            grab_floor = count == 1
-            logger.debug("TTP223 session ended (count=%d)", count)
-            if count >= PET_SESSION_THRESHOLD:
-                if self._decision_timer is not None:
-                    self._decision_timer.cancel()
-                    self._decision_timer = None
-                self._session_count = 0
-                self._pet_cooldown_until = now + PET_COOLDOWN_S
-                fire_pet = True
+                swallowed = True
+                count = self._session_count
             else:
-                if self._decision_timer is not None:
-                    self._decision_timer.cancel()
-                self._decision_timer = threading.Timer(
-                    DECISION_WINDOW_S, self._on_decision
-                )
-                self._decision_timer.daemon = True
-                self._decision_timer.start()
+                self._session_count += 1
+                count = self._session_count
+                # First session of a burst: cut in-flight TTS NOW rather than
+                # after the decision window (see module docstring). Checked
+                # outside the lock — it does I/O.
+                grab_floor = count == 1
+                logger.debug("TTP223 session ended (count=%d)", count)
+                if count >= PET_SESSION_THRESHOLD:
+                    if self._decision_timer is not None:
+                        self._decision_timer.cancel()
+                        self._decision_timer = None
+                    self._session_count = 0
+                    self._pet_cooldown_until = now + PET_COOLDOWN_S
+                    fire_pet = True
+                else:
+                    if self._decision_timer is not None:
+                        self._decision_timer.cancel()
+                    self._decision_timer = threading.Timer(
+                        DECISION_WINDOW_S, self._on_decision
+                    )
+                    self._decision_timer.daemon = True
+                    self._decision_timer.start()
+        # Tracing and actions stay outside the lock: both do I/O, and the
+        # session state above is already committed.
+        touch_debug.note_session_end(count)
+        if swallowed:
+            # Closed as its own cycle rather than folded into the pet that
+            # armed the cooldown: one file per resolved outcome, and a stroke
+            # that keeps extending the window would otherwise grow one file
+            # without bound.
+            touch_debug.note_decision(
+                "IGNORED", "session inside pet cooldown; cooldown extended", count
+            )
+            touch_debug.finish("IGNORED-pet_cooldown")
+            return
         if grab_floor:
             self._ack_first_session()
         if fire_pet:
+            touch_debug.note_decision(
+                "PET", f"session count reached {PET_SESSION_THRESHOLD}", count
+            )
+            touch_debug.note_action("head_pat_action", "TTP223")
             head_pat_action(source="TTP223")
+            touch_debug.finish("PET")
 
     def _ack_first_session(self):
         """Instant ack for the first touch session of a burst: cut in-flight
@@ -285,5 +313,18 @@ class TTP223Handler:
             # stop_tts and cut speech mid-sentence. Re-enable once touch is fixed.
             # chime=False: the ack chime already sounded at the first
             # session end (_ack_first_session) — don't ping twice.
+            touch_debug.note_decision(
+                "TAP", f"decision window expired at count={count}", count
+            )
+            touch_debug.note_action(
+                "single_click_action", "TTP223", chime=False
+            )
             single_click_action(source="TTP223", chime=False)
+            touch_debug.finish("TAP")
             # pass
+        else:
+            # No sessions accumulated — the decision timer outlived its count
+            # (pet consumed it inline). Nothing fires; close the trace so the
+            # cycle does not linger until the idle flush.
+            touch_debug.note_decision("NONE", "decision timer fired at count=0", count)
+            touch_debug.finish("IGNORED-no_sessions")
