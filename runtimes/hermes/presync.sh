@@ -119,12 +119,34 @@ log "ensure config.yaml approvals.mode=off (no command-approval prompts)"
 yq -i '.approvals.mode = "off" | .approvals.mode style="double"' "$CONFIG_YAML"
 
 # ── 2. DYNAMIC (config.json wins) ──────────────────────────────────────────────
-# NOTE: .model.default is NOT synced from llm_model — that is the OpenClaw primary
-# model (e.g. claude-opus-4-6), which is irrelevant to Hermes: os-server sends a
-# fixed request model (constants.go Model) to the campaign-api custom provider, so
-# the Hermes model default is the fixed "Auto-AI" alias set above, not the device's
-# OpenClaw model. Only the provider endpoint + secrets are device-specific.
+# NOTE on .model.default: "Auto-AI" is an alias only the campaign-api proxy
+# understands — it resolves it to whatever model it picks. While the device is on
+# that proxy the alias is exactly right, and llm_model is left alone (it may hold
+# an OpenClaw primary model like claude-opus-4-6, which means nothing here).
+#
+# Point the device at another host — an operator supplying their own brain — and
+# the alias becomes an unknown model id. Measured on intern-v2-d16f against
+# openrouter: every turn came back `400 Auto-AI is not a valid model ID`, and
+# because this script self-heals on each boot, editing config.yaml by hand did
+# not survive a restart. So the alias is kept for the proxy and the operator's
+# llm_model is used everywhere else.
 LLM_BASE_URL="$(jq -r '.llm_base_url // empty' "$CONFIG_JSON" 2>/dev/null || true)"
+LLM_MODEL="$(jq -r '.llm_model // empty' "$CONFIG_JSON" 2>/dev/null || true)"
+
+# Custom brain → the alias cannot resolve; use the operator's model. Empty base
+# URL means the device is on the default proxy, so that keeps the alias too.
+case "$LLM_BASE_URL" in
+  ""|*campaign-api.autonomous.ai*) ;;
+  *)
+    if [ -n "$LLM_MODEL" ]; then
+      yq -i ".model.default = \"$LLM_MODEL\"" "$CONFIG_YAML"
+      log "model.default = $LLM_MODEL (custom brain — Auto-AI only resolves at campaign-api)"
+    else
+      log "WARNING: custom base_url with no llm_model — leaving the Auto-AI alias, turns will 400"
+    fi
+    ;;
+esac
+
 if [ -n "$LLM_BASE_URL" ]; then
   yq -i ".custom_providers[0].base_url = \"$LLM_BASE_URL\"" "$CONFIG_YAML"
   log "custom_providers[0].base_url = $LLM_BASE_URL"

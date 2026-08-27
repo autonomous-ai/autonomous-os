@@ -308,3 +308,66 @@ func TestApplyUpdateUnchangedRealtimeDoesNotRestartHAL(t *testing.T) {
 		t.Fatalf("a realtime provider switch must restart hal: %+v", ch)
 	}
 }
+
+// The shipped credentials have to be preserved before the first edit lands on
+// them, because that edit is what destroys them. Devices reached the field with
+// the team's key overwritten and no way back.
+func TestFirstCredentialChangeCapturesShippedDefaults(t *testing.T) {
+	c := baseConfig()
+	c.LLMAPIKey, c.LLMBaseURL, c.LLMModel = "team-key", "https://campaign-api.example.com", "team-model"
+
+	applyUpdate(c, domain.UpdateConfigRequest{LLMAPIKey: "my-own-key"}, "")
+
+	d := c.AutonomousDefaults
+	if d == nil {
+		t.Fatal("shipped credentials were not captured")
+	}
+	// The values as they were, not as the save left them.
+	if d.APIKey != "team-key" || d.BaseURL != "https://campaign-api.example.com" || d.Model != "team-model" {
+		t.Fatalf("captured the wrong values: %+v", d)
+	}
+	if c.LLMAPIKey != "my-own-key" {
+		t.Fatalf("the edit itself did not apply: %q", c.LLMAPIKey)
+	}
+}
+
+// Capturing twice would store the operator's own key under the Autonomous name
+// and lose the real one for good — the exact failure this exists to prevent.
+func TestLaterCredentialChangesDoNotOverwriteTheCapture(t *testing.T) {
+	c := baseConfig()
+	c.LLMAPIKey, c.LLMBaseURL, c.LLMModel = "team-key", "https://campaign-api.example.com", "team-model"
+
+	applyUpdate(c, domain.UpdateConfigRequest{LLMAPIKey: "first-key"}, "")
+	applyUpdate(c, domain.UpdateConfigRequest{TTSAPIKey: "second-key"}, "")
+	applyUpdate(c, domain.UpdateConfigRequest{LLMBaseURL: "https://elsewhere.example.com"}, "")
+
+	if got := c.AutonomousDefaults.APIKey; got != "team-key" {
+		t.Fatalf("capture was overwritten: %q", got)
+	}
+}
+
+// A wifi or rename save must not trip the capture — not because storing it
+// early is harmful, but because "captured" is what the restore affordance keys
+// off, and offering to restore on a device nobody has edited is noise.
+func TestNonCredentialSaveDoesNotCapture(t *testing.T) {
+	c := baseConfig()
+	c.LLMAPIKey, c.LLMBaseURL = "team-key", "https://campaign-api.example.com"
+
+	applyUpdate(c, domain.UpdateConfigRequest{DeviceID: "renamed"}, "")
+
+	if c.AutonomousDefaults != nil {
+		t.Fatalf("captured on a save that touched no credential: %+v", c.AutonomousDefaults)
+	}
+}
+
+// An empty set is not a default worth restoring to.
+func TestCaptureSkipsADeviceWithNoCredentials(t *testing.T) {
+	c := baseConfig()
+	c.LLMAPIKey, c.LLMBaseURL = "", ""
+
+	applyUpdate(c, domain.UpdateConfigRequest{LLMAPIKey: "first-ever-key"}, "")
+
+	if c.AutonomousDefaults != nil {
+		t.Fatalf("captured an empty set: %+v", c.AutonomousDefaults)
+	}
+}

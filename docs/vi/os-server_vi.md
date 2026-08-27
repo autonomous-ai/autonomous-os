@@ -426,6 +426,51 @@ Trang settings nhét khối `realtime` vào **mọi** lần lưu, nên coi nó l
 thì lần lưu nào cũng restart HAL — và việc đẩy TTS live ở trên sẽ thành code
 chết.
 
+### Bộ mặc định Autonomous
+
+Máy xuất xưởng mang credential proxy của team Autonomous trong `llm_api_key`,
+`llm_model` và `llm_base_url`, và mọi mục khác đều khởi đi từ đúng ba giá trị
+đó. Gõ key cá nhân đè lên là xoá sổ chúng — đã có máy ra tới tay người dùng mà
+không còn đường nào quay lại bộ credential nó được bán kèm.
+
+`autonomous_defaults` là một object ở **cấp ngoài cùng** của `config.json`, giữ
+`base_url` / `api_key` / `model`. Nó được ghi **đúng một lần**, bởi
+`captureAutonomousDefaults`, ngay trước lần lưu đầu tiên có mang theo bất kỳ
+credential nào — LLM, TTS, STT hay key/URL của realtime — và không bao giờ ghi
+lại. Chụp lần hai là lưu chính key của người dùng dưới tên Autonomous và mất
+hẳn bộ thật, đúng cái hỏng mà nó sinh ra để chặn. Lần lưu không đụng credential
+nào (wifi, đổi tên, channel) thì không kích hoạt, và config không có gì để giữ
+thì bỏ qua, để một bộ rỗng không bị nhầm là mặc định hợp lệ. Chỉ factory reset
+mới xoá nó.
+
+| Method | Endpoint | Mô tả |
+|--------|----------|-------|
+| POST | `/api/device/restore-defaults` | Đưa một mục về lại credential xuất xưởng. Body `{"section": "llm" \| "voice" \| "realtime"}`. Admin-gated. |
+
+Khôi phục theo **từng mục**, vì người dùng nghĩ theo cách đó — họ đổi brain, hoặc
+đổi nhà cung cấp giọng, và muốn lấy lại đúng thứ đó. Mỗi mục lấy phần của bộ đã
+lưu mà nó vốn khởi đi: AI Brain lấy url + key + model, realtime và voice lấy
+url + key. Riêng qwen realtime bị từ chối: nó nói thẳng với host Alibaba bằng
+credential riêng, đưa bộ xuất xưởng vào đó chỉ tổ nhận 401.
+
+Nó được cài đặt như một lượt `UpdateConfig` bình thường chứ không ghi thẳng, nên
+thừa hưởng đủ mọi side-effect của một lần sửa tay — restart hal hoặc đẩy TTS
+live, sync model sang gateway, reset phiên agent. Tự viết một hàm lưu riêng sẽ
+lệch khỏi danh sách đó ngay lần đầu có người thêm việc vào.
+
+`has_autonomous_defaults` trong `GET /api/device/config` chỉ nói có hay không,
+không bao giờ trả giá trị. Web dùng nó để quyết định có hiện nút hay không.
+
+HAL đọc **thông tin đăng nhập của riêng từng dịch vụ**, thiếu thì mới lùi về
+của AI Brain: `tts_api_key`/`tts_base_url` cho TTS, `stt_api_key`/`stt_base_url`
+cho STT, còn lại mới dùng `llm_api_key`/`llm_base_url`. Trên đa số máy cả ba là
+cùng một chuỗi, vì trang settings tự mirror key và URL của brain sang hai chỗ
+kia khi chúng còn trống. Nó chỉ lộ ra khi brain trỏ đi nơi khác: một máy có
+`llm_base_url` ở openrouter và `tts_base_url` ở proxy autonomous đã ghép thành
+`openrouter.ai/api/v1/elevenlabs/text-to-speech/…` và ăn 404 ở mọi câu nói, vì
+backend ElevenLabs nối thêm `/elevenlabs` vào bất kỳ base nào được đưa — mà nó
+được đưa base của brain. Config vốn có URL đúng từ đầu; chỉ là không ai đọc.
+
 `device/config_update.go` tách cái `voiceSnapshot` cũ làm hai: `bootSnapshot`
 (key và URL của LLM, STT — HAL đọc thật lúc import, vẫn đáng restart) và
 `ttsSnapshot` (provider, voice, key và URL của TTS — đẩy thẳng vào lúc chạy).

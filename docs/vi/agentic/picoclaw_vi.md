@@ -145,6 +145,10 @@ và thử lại ở poll kế tiếp.
   `restrict_to_workspace:false`, `allow_read_outside_workspace:true`), hai entry
   `autonomous` và `autonomous_vision` (`qwen/qwen3.6-plus`, cùng endpoint campaign-api)
   trong `model_list`, và khung `channel_list`. `channel_list.pico` luôn được bật.
+  Trường `model` của mục `autonomous` là alias `Auto-AI`, chỉ proxy campaign-api
+  phân giải được — §2 thay nó bằng `llm_model` của người dùng mỗi khi
+  `llm_base_url` trỏ đi nơi khác, không thì host sẽ từ chối mọi lượt vì model lạ.
+  Mục vision giữ model riêng của nó: đó là một lựa chọn khác, không phải cái này.
 - **§2 động** (secrets lấy từ `/root/config/config.json` cấp **project**, thắng) —
   `model_list[autonomous,autonomous_vision].api_base` từ `llm_base_url` (PicoClaw cần
   đuôi `/v1`, khác hermes), `.security.yml` `model_list."autonomous:0".api_keys` +

@@ -119,6 +119,17 @@ Defined at `.lm-root` in `index.css`:
 
 ### 3.4 Settings (`/setting`) — shared shell
 
+**AI Brain key/URL mirroring.** The panel fills a blank TTS or STT field from the
+AI Brain's key and base URL, so a first-time setup only asks for one credential.
+The key half is additionally gated on the device having no key on file
+(`has_tts_api_key` / `has_stt_api_key`): those fields are write-only, so they are
+blank on every load whether or not a key is stored, and "empty" cannot mean
+"unset" the way it does for a base URL, which loads with its real value. Without
+that gate, typing a new AI Brain key silently overwrote a deliberately different
+TTS/STT key on save — one device ended up holding an openrouter key against the
+autonomous proxy URL, a pairing that cannot work.
+
+
 Settings is **not a separate page**. It is an area of the same Monitor shell (`system/web/src/pages/monitor/index.tsx`), reached at the `/setting` route. In `App.tsx`, `/monitor` and `/setting` are child routes of a single layout route whose element renders `<Monitor/>`; React Router keeps that element mounted while only the matched child path changes, so the sidebar does **not** remount when switching between Monitor and Settings (no full-page flash). The shell derives its area — `"monitor"` or `"setting"` — from `useLocation().pathname`.
 
 The Settings collapsible group lives in the shared sidebar `NAV` (`system/web/src/pages/monitor/types.ts`). Clicking a Settings leaf navigates to `/setting` and renders `SettingsPanel` (`system/web/src/pages/settings/SettingsPanel.tsx`) in the main area; clicking a Monitor leaf navigates to `/monitor`.

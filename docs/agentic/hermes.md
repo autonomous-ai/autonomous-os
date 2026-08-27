@@ -462,9 +462,16 @@ during install) and does three things, in order:
    factory reset's `hermes setup --reset` blanks it). It coerces a reset-left
    `model: ''` back to a map, then asserts:
    - `.model.provider = custom:autonomous`
-   - `.model.default = "Auto-AI"` — the **fixed** campaign-api model alias. os-server
-     sends a fixed request model (`constants.go` `Model`) per turn, so this is **not**
-     taken from `llm_model` (that is OpenClaw's primary model, irrelevant to Hermes).
+   - `.model.default = "Auto-AI"` — the campaign-api model alias, which that proxy
+     resolves to whatever model it picks. Left as-is **while the device is on that
+     proxy**; `llm_model` may hold an OpenClaw primary model, which means nothing
+     here.
+
+     On any other `llm_base_url` the alias is an unknown model id, and DYNAMIC
+     below replaces it with the operator's `llm_model`. Measured on
+     intern-v2-d16f pointed at openrouter: every turn returned
+     `400 Auto-AI is not a valid model ID`, and because presync self-heals each
+     boot, editing `config.yaml` by hand did not survive a restart.
    - `.custom_providers[0]` → `name: autonomous`, `key_env: AUTONOMOUS_API_KEY`,
      `api_mode: anthropic_messages`, `base_url` (default campaign-api, overridden below).
    - `.auxiliary.vision` (the whole node is **overwritten**) → `provider: custom:autonomous`,

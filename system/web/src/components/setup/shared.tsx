@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
+import { restoreAutonomousDefaults } from "@/lib/api";
 import { Pencil, X, Eye, EyeOff, AlertTriangle } from "lucide-react";
 import type { SectionId } from "@/hooks/setup/types";
 import { C, FIELD_GAP, ADMIN_PASSWORD_MIN, LABEL_STYLE, INPUT_STYLE, INPUT_READONLY_STYLE, INPUT_FOCUS_SHADOW, INPUT_ERROR_SHADOW, INPUT_PAD_ONE_ICON, INPUT_PAD_TWO_ICONS } from "./styles";
@@ -437,5 +439,60 @@ export function SkeletonBlock() {
       <div style={{ width: 80, height: 8, borderRadius: 6, background: C.surface, marginBottom: 14 }} />
       <div style={{ width: "100%", height: 32, borderRadius: 6, background: C.surface, marginBottom: 10 }} />
     </div>
+  );
+}
+
+/** Puts one settings section back on the credentials the device shipped with.
+ *
+ *  Two presses, like every other action here that cannot be undone from the
+ *  same screen: the operator's own key is overwritten by this and the field is
+ *  write-only, so there is no way to read it back afterwards.
+ *
+ *  Reloads the page on success rather than threading a refetch through three
+ *  unrelated section components. A restore *is* a save, so there is nothing
+ *  unsaved to lose, and the reload is what makes the new base URL and model
+ *  visible in their fields.
+ */
+export function RestoreDefaultsButton({ section, label }: {
+  section: "llm" | "voice" | "realtime";
+  label?: string;
+}): React.JSX.Element {
+  const [armed, setArmed] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const fire = () => {
+    if (!armed) { setArmed(true); return; }
+    setBusy(true);
+    restoreAutonomousDefaults(section)
+      .then(() => {
+        toast.success("Restored the Autonomous defaults");
+        window.location.reload();
+      })
+      .catch((e: Error) => {
+        toast.error(e.message || "Could not restore");
+        setBusy(false);
+        setArmed(false);
+      });
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={fire}
+      onBlur={() => setArmed(false)}
+      disabled={busy}
+      style={{
+        marginTop: 6, padding: "5px 10px", borderRadius: 6,
+        fontSize: 11, fontWeight: 600,
+        background: "transparent",
+        color: armed ? "var(--lm-amber, #f5c25a)" : C.textMuted,
+        border: `1px solid ${armed ? "var(--lm-amber, #f5c25a)" : C.border}`,
+        cursor: busy ? "wait" : "pointer",
+        opacity: busy ? 0.6 : 1,
+        transition: "color 0.15s, border-color 0.15s",
+      }}>
+      {busy ? "Restoring…" : armed ? "Confirm — overwrite with Autonomous default"
+        : (label ?? "Restore Autonomous default")}
+    </button>
   );
 }

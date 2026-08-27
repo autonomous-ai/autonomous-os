@@ -351,6 +351,7 @@ func (s *Server) Serve(closeFn func()) error {
 	// scripts/curl must send Authorization: Bearer <llm_api_key>.
 	device.GET("config", adminAuthMiddleware(s.config), s.deviceHandler.GetConfig)
 	device.PUT("config", adminAuthMiddleware(s.config), s.deviceHandler.UpdateConfig)
+	device.POST("restore-defaults", adminAuthMiddleware(s.config), s.deviceHandler.RestoreDefaults)
 	device.GET("voices", s.deviceHandler.GetVoices)
 	device.GET("tts-providers", s.deviceHandler.GetTTSProviders)
 	device.GET("realtime-options", s.deviceHandler.GetRealtimeOptions)
