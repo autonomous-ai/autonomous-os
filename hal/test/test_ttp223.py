@@ -120,6 +120,7 @@ class TestShippedDefaults(unittest.TestCase):
         importlib.reload(t)
         self.assertTrue(t.SWIPE_ENABLED)
         self.assertEqual(t.SWIPE_MIN_GAP_MS, 35.0)
+        self.assertEqual(t.SWIPE_MAX_GAP_MS, 150.0)
 
     def test_tracing_is_OFF_by_default(self):
         """The tracer sits in the lgpio callback path and writes files. It must
@@ -482,6 +483,79 @@ class TestAxis(_Base):
             hz.touch(line, at_ms=i * 100)
         is_swipe, *_ = hz.h._classify()
         self.assertFalse(is_swipe)
+
+
+class TestTravelBand(_Base):
+    """A swipe's gap must be a JOURNEY — not a landing, and not a lift.
+
+    Two deliberate taps landing on different pads produce exactly the shape of
+    a swipe: each pad once, no revisit, a gap above the floor. Only the size of
+    the gap tells them apart. Measured 2026-08-28 on labelled gestures:
+
+        landing   6.4  7.6  27.2 ms
+        travel   69.7  80.6 ms
+        lift    196.7  273.7  291.6  291.8 ms
+    """
+
+    swipe = True
+
+    def test_a_gap_inside_the_band_is_a_swipe(self):
+        for at, line in ((0, 96), (80, 100)):
+            self.hz.touch(line, at_ms=at)
+        self.hz.end_session()
+        self.hz.decide()
+        self.assertEqual(self.hz.fired, ["swipe_action"])
+
+    def test_a_gap_above_the_ceiling_is_a_lift_not_a_swipe(self):
+        """Device trace 120736: two taps on separate pads, 196.7 ms apart, read
+        as a swipe because the rule had a floor but no ceiling."""
+        for at, line in ((0, 100), (197, 96)):
+            self.hz.touch(line, at_ms=at)
+        self.hz.end_session()
+        self.hz.decide()
+        self.assertNotIn("swipe_action", self.hz.fired)
+
+    def test_the_tap_reason_names_the_ceiling_when_it_declined(self):
+        for at, line in ((0, 100), (197, 96)):
+            self.hz.touch(line, at_ms=at)
+        r = self.hz.h._tap_reason(1)
+        self.assertIn("ceiling", r)
+        self.assertIn("lifting", r)
+
+
+class TestReTouchAfterRelease(_Base):
+    """A touch following a RELEASE of the same pad is a real second contact.
+
+    A line cannot emit two falling edges without a rising edge between, so the
+    repeat-collapse that swallows FastMode chatter was also swallowing genuine
+    re-touches. Device trace 120736: tap L100, release, tap L100 again, and the
+    second one vanished — leaving one long journey instead of a double tap.
+    """
+
+    swipe = True
+
+    def test_a_retouch_after_a_release_is_kept(self):
+        self.hz.touch(100, at_ms=0)
+        self.hz.release(100)
+        self.hz.touch(100, at_ms=183)
+        self.assertEqual([l for l, _ in self.hz.h._contact], [100, 100])
+
+    def test_a_duplicate_edge_with_no_release_is_still_collapsed(self):
+        """That case is a driver artefact, not a touch."""
+        self.hz.touch(100, at_ms=0)
+        self.hz.touch(100, at_ms=5)
+        self.assertEqual([l for l, _ in self.hz.h._contact], [100])
+
+    def test_the_full_120736_sequence_resolves_to_a_double_tap(self):
+        for at, line, lvl in ((0, 100, 0), (92, 100, 1), (183, 100, 0),
+                              (197, 96, 0), (288, 96, 1), (291, 100, 1)):
+            if lvl == 0:
+                self.hz.touch(line, at_ms=at)
+            else:
+                self.hz.release(line)
+        self.hz.end_session()
+        self.hz.decide()
+        self.assertEqual(self.hz.fired, ["mic_toggle_action"])
 
 
 class TestGeometryIndependent(_Base):
