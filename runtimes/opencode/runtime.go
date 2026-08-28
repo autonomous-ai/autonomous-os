@@ -5,10 +5,10 @@ import (
 	"log/slog"
 	"regexp"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"go.autonomous.ai/os/system/lib/core/system"
+	"go.autonomous.ai/os/system/lib/versioncache"
 )
 
 // opencodeVersionProbeTimeout caps a single `opencode --version` probe. OpenCode
@@ -31,13 +31,15 @@ const opencodeVersionProbeBackoff = 10 * time.Second
 // opencodeSemverRe extracts the release from `opencode --version` output
 // (e.g. "opencode-cli 0.142.5" → "0.142.5").
 var opencodeSemverRe = regexp.MustCompile(`(\d+\.\d+\.\d+(?:[-+._][0-9A-Za-z.-]+)?)`)
-var opencodeVersion atomic.Pointer[string]
+
+// opencodeVersion caches the parsed OpenCode CLI version and re-probes it when the
+// binary on disk changes, so a CLI updated under a running os-server (OTA
+// `software-update opencode`, or a manual install) is reported without waiting for
+// an os-server restart.
+var opencodeVersion = versioncache.New(opencodeBinary, "opencode-probe", probeOpenCodeVersion)
 
 func GetOpenCodeVersion() string {
-	if v := opencodeVersion.Load(); v != nil {
-		return *v
-	}
-	return ""
+	return opencodeVersion.Get()
 }
 
 // PopulateOpenCodeVersion probes `opencode --version` and caches the semver,
@@ -45,17 +47,7 @@ func GetOpenCodeVersion() string {
 // cold-start slowdown self-heals. Runs in a startup goroutine; a warm probe
 // returns on the first try. Stops once a non-empty version is stored.
 func PopulateOpenCodeVersion() {
-	for attempt := 0; ; attempt++ {
-		if v, ok := probeOpenCodeVersion(); ok {
-			opencodeVersion.Store(&v)
-			return
-		}
-		if attempt >= opencodeVersionProbeRetries {
-			slog.Warn("read opencode version gave up after retries (expected if not on opencode backend)", "component", "opencode-probe", "attempts", attempt+1)
-			return
-		}
-		time.Sleep(opencodeVersionProbeBackoff)
-	}
+	opencodeVersion.Populate(opencodeVersionProbeRetries, opencodeVersionProbeBackoff)
 }
 
 // probeOpenCodeVersion runs a single probe; ok is false on failure/timeout or

@@ -11,6 +11,7 @@ import (
 	"go.autonomous.ai/os/system/lib/flow"
 	"go.autonomous.ai/os/system/lib/hal"
 	"go.autonomous.ai/os/system/lib/i18n"
+	sensinghttp "go.autonomous.ai/os/system/server/sensing/delivery/http"
 )
 
 // llmLimitPatterns fingerprint the plan-usage-limit banner the backend returns
@@ -125,8 +126,15 @@ func (h *AgentHandler) isSpeechCancelled(runID string) bool {
 func (h *AgentHandler) CancelSpeech() {
 	now := time.Now().UnixMilli()
 	h.speechWatermarkMs.Store(now)
+	// Fillers do not go through deliverTTS — they speak straight to HAL — so
+	// the watermark alone never reaches them. A muted turn keeps running and
+	// keeps hitting tool boundaries, and each one re-armed another "one
+	// moment" for a reply the user had just cancelled. Drop the filler state
+	// of every in-flight turn with it; the Opening filler of whatever the user
+	// says NEXT is armed after this and is unaffected.
+	cancelledFillers := sensinghttp.DefaultFillerManager.CancelAllActive()
 	slog.Info("speech cancelled -- in-flight turns muted",
-		"component", "agent", "watermark_ms", now)
+		"component", "agent", "watermark_ms", now, "fillers_cancelled", cancelledFillers)
 	// Monitor bus rather than flow.Log: the click belongs to no single run, and
 	// flow events with an empty runID inherit whatever trace happens to be
 	// active — which would file the gesture under an unrelated turn. The

@@ -350,7 +350,10 @@ XDG state on first run). `/root/config/agent_state.json` is wiped in lockstep wi
   mirroring the codex adapter.
 - **Version uplink**: `opencode --version` is probed at startup
   (`runtime.go` → `GetOpenCodeVersion`) and reported as `opencode_version` on the
-  MQTT `info` message (`domain.MQTTInfoResponse`).
+  MQTT `info` message (`domain.MQTTInfoResponse`). The cache is a
+  `versioncache.Cache`: `GetOpenCodeVersion` re-probes whenever the binary's
+  size/mtime changes, so an update applied under a running os-server shows up
+  without restarting os-server.
 - **Switch triggers**: MQTT `opencode.setup` (`KindOpenCodeSetup`), HTTP
   `POST /api/device/agent-runtime`, and the web Settings **Runtime** dropdown
   (`AgentRuntimeSection.tsx`). `domain.AgentRuntimes` includes `opencode`, so the
