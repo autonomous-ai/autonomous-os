@@ -110,6 +110,12 @@ def express_emotion(req: EmotionRequest):
         state.logger.info("POST /emotion: ignored %s while sleeping", req.emotion)
         return {"status": "ignored", "emotion": req.emotion, "servo": None, "led": None}
 
+    # The gaze+VAD acknowledgement is LED-only and must yield silently to the
+    # real emotion that now owns the device (normally ``listening`` on first
+    # STT partial). Do not restore between the two effects or the user sees a
+    # black/resting LED flash.
+    state.clear_listening_pending_cue(restore=False)
+
     was_sleeping = state._sleeping
     state._sleeping = req.emotion == EMO_SLEEPY
     if state._sleeping != was_sleeping:

@@ -12,7 +12,7 @@ import threading
 from typing import Optional
 
 from hal.presets import (
-    FX_BLINK, FX_BREATHING, FX_CANDLE, FX_NOTIFICATION_FLASH,
+    FX_BLINK, FX_BREATHING, FX_BREATHING_FINE, FX_CANDLE, FX_NOTIFICATION_FLASH,
     FX_PULSE, FX_RAINBOW, FX_SPEAKING_WAVE, FX_SPEAKING_WAVE_RAINBOW,
     RGB_CMD_PAINT, RGB_CMD_SOLID,
 )
@@ -85,6 +85,7 @@ def run_effect(
     svc,
     base_color: Optional[tuple] = None,
     brightness: float = 1.0,
+    start_at_peak: bool = False,
 ):
     """Dispatch to the appropriate effect loop. Runs in a background thread.
 
@@ -100,7 +101,9 @@ def run_effect(
 
     try:
         if effect == FX_BREATHING:
-            breathing(color, speed, deadline, stop_event, svc)
+            breathing(color, speed, deadline, stop_event, svc, start_at_peak)
+        elif effect == FX_BREATHING_FINE:
+            breathing_fine(color, speed, deadline, stop_event, svc, start_at_peak)
         elif effect == FX_CANDLE:
             candle(color, speed, deadline, stop_event, svc)
         elif effect == FX_RAINBOW:
@@ -126,18 +129,95 @@ def breathing(
     deadline: Optional[float],
     stop_event: threading.Event,
     svc,
+    start_at_peak: bool = False,
 ):
-    """Fade in/out with the given color."""
+    """Fade in/out with the given color.
+
+    start_at_peak skips the first half of the opening arc so the very first
+    frame is full brightness, and only then breathes down into the normal
+    cycle. It exists for cues that answer the user NOW: the arc's rise is slow
+    (a full 0 -> 1 -> 0 takes 10s at speed=0.3) and `int()` truncation on a dim
+    preset holds the output at literal (0,0,0) for the first second or so of
+    it, so an acknowledgement painted this way is invisible exactly when it is
+    supposed to be read (device-observed, 28/8: the listening cue fired on the
+    first STT partial but was not seen until the last one). Off by default —
+    an emotion that fades in is meant to fade in. Note the equivalent fix
+    cannot live at the call site: dispatching the colour before starting this
+    thread is erased milliseconds later by the i=0 frame below.
+    """
     step_delay = 0.03 / speed
+    # Only the OPENING arc starts at the peak; every cycle after it breathes
+    # from 0 as usual.
+    start = 50 if start_at_peak else 0
     while not is_done(deadline, stop_event):
         # Full cycle: 0 -> 1 -> 0 over ~3s at speed=1
-        for i in range(100):
+        for i in range(start, 100):
             if is_done(deadline, stop_event):
                 return
             brightness = math.sin(math.pi * i / 100.0)
             scaled = tuple(int(c * brightness) for c in color)
             svc.dispatch(RGB_CMD_SOLID, scaled)
             stop_event.wait(step_delay)
+        start = 0
+
+
+# Spread the fractional level across the ring, one unit at a time. `k` of the
+# pixels sit one step above the rest and are scattered with a stride coprime to
+# the ring size, so the strip reads as one ring at an in-between level instead
+# of a lit arc. 13 and 32 are coprime; DEFAULT_LED_COUNT is a power of two on
+# every board shipped so far, and any odd stride stays coprime with it.
+_DITHER_STRIDE = 13
+
+
+def _dither_ring(low: tuple, high: tuple, k: int, n: int) -> list:
+    """n pixels, k of them at `high` and the rest at `low`, evenly scattered."""
+    if k <= 0:
+        return [low] * n
+    if k >= n:
+        return [high] * n
+    return [high if (i * _DITHER_STRIDE) % n < k else low for i in range(n)]
+
+
+def breathing_fine(
+    color: tuple,
+    speed: float,
+    deadline: Optional[float],
+    stop_event: threading.Event,
+    svc,
+    start_at_peak: bool = False,
+):
+    """Breathing whose resolution comes from the ring, not from 8-bit colour.
+
+    Plain `breathing` scales the colour per frame and truncates, which is fine
+    at a peak of 200 and useless at a peak of 2: the only values reachable are
+    0, 1 and 2, the top one lasts a single frame, and the strip spends a third
+    of every cycle at literal black. On the lamp that turned the listening cue
+    into a blink followed by darkness — the opposite of what the preset asks
+    for ("stays lit for as long as the user is talking"), and the reason the
+    glare passes could not simply be undone: raising the peak was rejected on
+    device (28/08/2026), so the levels had to come from somewhere else.
+
+    Here the breath moves between `color` and one unit below it, and the
+    fraction in between is rendered by raising SOME of the pixels — the eye
+    integrates the ring, so a 32-pixel strip gains ~32 sub-levels per unit
+    while every pixel stays lit and no pixel ever exceeds `color`. Peak
+    brightness is therefore identical to plain breathing; only the floor and
+    the resolution change.
+    """
+    step_delay = 0.03 / speed
+    n = getattr(svc, "led_count", DEFAULT_LED_COUNT) or DEFAULT_LED_COUNT
+    # One unit below the peak on every channel that is lit: the floor of the
+    # breath. Channels that are already 0 stay 0, so the hue never shifts.
+    low = tuple(max(c - 1, 0) for c in color)
+    start = 50 if start_at_peak else 0
+    while not is_done(deadline, stop_event):
+        for i in range(start, 100):
+            if is_done(deadline, stop_event):
+                return
+            brightness = math.sin(math.pi * i / 100.0)
+            svc.dispatch(RGB_CMD_PAINT, _dither_ring(low, color, round(brightness * n), n))
+            stop_event.wait(step_delay)
+        start = 0
 
 
 def candle(

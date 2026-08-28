@@ -140,6 +140,10 @@ func ProvideServer(
 	sled *statusled.Service,
 	chatStream *_deviceMQTTDeliver.ChatStream,
 ) *Server {
+	// A realtime-handled turn means the user has already been answered out
+	// loud about something newer than whatever the main agent is still working
+	// on — that older turn keeps running but loses the speaker.
+	sensingH.SetOnRealtimeHandled(agentH.CancelSpeechForNewerTurn)
 	return &Server{
 		config:            cfg,
 		healthHandler:     hh,

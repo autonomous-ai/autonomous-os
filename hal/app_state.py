@@ -299,6 +299,13 @@ _still_idle_timer: Optional[threading.Timer] = None
 # last-resort net for a turn that never produced the emotion that would have
 # replaced it. Cancelled/re-armed on every /emotion (see routes/emotion.py).
 _thinking_reset_timer: Optional[threading.Timer] = None
+# Gaze has already established intent by the time VAD confirms speech, but STT
+# needs another 1.5-2.5s before its first partial. This short, LED-only cue
+# bridges that gap without claiming the full listening state or halting motion.
+_LISTENING_PENDING_CUE_TIMEOUT_S = 3.0
+_listening_pending_cue_id = 0
+_listening_pending_cue_active_id: Optional[int] = None
+_listening_pending_cue_lock = threading.Lock()
 # Set once sleepy has released torque. Servo routes honor this lock until a
 # wake emotion explicitly resumes the motion service.
 _sleep_servo_released = False
@@ -1144,6 +1151,52 @@ def clear_listening_cue() -> bool:
     return True
 
 
+def show_listening_pending_cue() -> Optional[int]:
+    """Show a dim, LED-only acknowledgement while gaze-authorized STT starts.
+
+    This deliberately does not claim ``_current_emotion``: it must not freeze
+    the body like the real ``listening`` emotion does. The returned token lets
+    the owning STT session clear only its own cue if it ends before a partial.
+    """
+    global _listening_pending_cue_id, _listening_pending_cue_active_id
+    if _sleeping or _tts_speaking or _current_emotion not in (None, EMO_IDLE):
+        return None
+    with _listening_pending_cue_lock:
+        _listening_pending_cue_id += 1
+        cue_id = _listening_pending_cue_id
+        _listening_pending_cue_active_id = cue_id
+
+    # Reuse the established listening hue/effect at a deliberately restrained
+    # level. Calling the LED helper directly keeps this out of the public
+    # emotion API and avoids the servo halt used by EMO_LISTENING.
+    _apply_emotion_led_display(EMO_LISTENING, intensity=0.35, force_led=True)
+
+    timer = threading.Timer(
+        _LISTENING_PENDING_CUE_TIMEOUT_S,
+        clear_listening_pending_cue,
+        kwargs={"cue_id": cue_id},
+    )
+    timer.daemon = True
+    timer.start()
+    return cue_id
+
+
+def clear_listening_pending_cue(cue_id: Optional[int] = None, restore: bool = True) -> bool:
+    """Remove a pending gaze cue without disturbing a newer visual state."""
+    global _listening_pending_cue_active_id
+    with _listening_pending_cue_lock:
+        active_id = _listening_pending_cue_active_id
+        if active_id is None or (cue_id is not None and cue_id != active_id):
+            return False
+        _listening_pending_cue_active_id = None
+
+    # A real emotion/TTS may already own the LED. Restore only when this cue
+    # was still the transient overlay visible to the user.
+    if restore and _current_emotion in (None, EMO_IDLE):
+        _restore_user_led()
+    return True
+
+
 def _schedule_led_restore(delay_s: float):
     """Schedule _restore_user_led to run after delay_s seconds."""
     global _restore_timer
@@ -1394,7 +1447,13 @@ def _apply_emotion_led_display(
                     ),
                     # rainbow has no color to scale, so `intensity` cannot dim
                     # it — the preset's own `brightness` is its only level.
-                    kwargs={"brightness": preset.get("brightness", 1.0)},
+                    # start_at_peak is opt-in per preset (listening only): a
+                    # cue that answers the user has to be visible on its first
+                    # frame, not after the breath has risen. See effects.py.
+                    kwargs={
+                        "brightness": preset.get("brightness", 1.0),
+                        "start_at_peak": preset.get("start_at_peak", False),
+                    },
                     daemon=True,
                     name=f"led-emotion-{emotion}",
                 )

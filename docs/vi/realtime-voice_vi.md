@@ -108,6 +108,40 @@ chính ghi nhớ nhưng im lặng; realtime unavailable, lỗi, timeout hoặc d
 một-lượt, nên Gemini lỗi tạm thời không thể làm rơi voice command hoặc làm frame
 rò sang lượt sau.
 
+Với một gaze wake vừa được grant, VAD đã xác nhận cả tiếng nói lẫn ý định nhìn
+về thiết bị trước khi STT kịp có partial đầu tiên. Vì vậy HAL lập tức vẽ một
+nhịp thở xanh dương mờ, chỉ trên LED. Nó không dừng thân đèn và không nhận là
+`listening`; partial đầu tiên nâng lên cue listening bình thường. Phiên không
+có partial sẽ restore LED trước đó khi đóng (hoặc sau timeout an toàn 3 giây),
+nên các phiên VAD/nhiễu thông thường vẫn không làm LED sáng.
+
+Một turn realtime-handled còn lấy loa khỏi turn agent chính đang chạy dở, không
+chỉ turn của chính nó. Run của nó do `MarkSilentRun` bịt; run cũ hơn do một
+watermark huỷ thứ hai bịt (`autoSpeechWatermarkMs`, xem `docs/os-server.md`),
+đóng mốc ngay lúc event tới. Không có nó thì thiết bị trả lời câu mới nhất bằng
+giọng realtime, rồi một lát sau trả lời câu trước đó bằng giọng agent chính.
+Agent chính chạy mỗi lúc một turn, nên đây là MỘT câu trả lời cũ chứ không phải
+cả một backlog.
+
+Hook nằm **trước** nhánh busy trong `PostEvent`, không nằm cạnh
+`MarkSilentRun`. `voice_agent_handled` được tính là passive, nên agent đang bận
+sẽ queue nó và return sớm — mà "agent đang bận" đúng là tình huống có turn cũ
+đang chạy, khiến vị trí đặt muộn thành no-op đúng lúc cần nhất.
+
+Mốc này cố ý yếu hơn cú click vật lý: nó không bao giờ chặn marker `[HW:]` của
+turn cũ, vì hành động user thật sự yêu cầu thì vẫn phải chạy. Nhưng filler đang
+treo thì **có** bị bỏ — ranh giới là tiếng-nói/phần-cứng, không phải
+click/auto. Filler là lời hứa sắp có câu trả lời chứ không phải thứ user yêu
+cầu, và để nó chạy tiếp là tái hiện đúng cái mà cú click đã phải sửa: thiết bị
+trả lời câu mới, rồi "một giây nhé" cho câu cũ, rồi im. Hành vi này là opt-in theo từng body: đặt `OS_REALTIME_SUPERSEDES_MAIN_REPLY=1` trong
+`/opt/hal/.env` của body (os-server cũng nạp file này). Code mặc định TẮT, vì
+mặc định đó là thứ mà mọi body chưa từng biết tới switch này sẽ nhận — lamp,
+intern-v2, reachy-mini, và cả body không có `.env` nào.
+
+Lỗ hổng đã biết, dùng chung với cú click vật lý: event bị queue lúc agent bận
+được cấp runID vào lúc **replay**, nên nằm phía sau mốc và vẫn nói dù câu hỏi có
+trước mốc đó.
+
 ### Câu trả lời bị bịt tiếng vẫn được nạp cho realtime
 
 Realtime biết agent chính đã trả lời gì qua `VoiceService.feed_realtime_history`

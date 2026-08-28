@@ -5,10 +5,10 @@ import (
 	"log/slog"
 	"regexp"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"go.autonomous.ai/os/system/lib/core/system"
+	"go.autonomous.ai/os/system/lib/versioncache"
 )
 
 // claudecodeBinary is the stable installer-owned symlink. Avoid relying on
@@ -31,13 +31,15 @@ const claudecodeVersionProbeBackoff = 10 * time.Second
 
 // `claude --version` prints e.g. "2.1.83 (Claude Code)".
 var claudecodeSemverRe = regexp.MustCompile(`(\d+\.\d+\.\d+(?:[-+._][0-9A-Za-z.-]+)?)`)
-var claudecodeVersion atomic.Pointer[string]
+
+// claudecodeVersion caches the parsed Claude Code CLI version and re-probes it when the
+// binary on disk changes, so a CLI updated under a running os-server (OTA
+// `software-update claudecode`, or a manual install) is reported without waiting for
+// an os-server restart.
+var claudecodeVersion = versioncache.New(claudecodeBinary, "claudecode-probe", probeClaudeCodeVersion)
 
 func GetClaudeCodeVersion() string {
-	if v := claudecodeVersion.Load(); v != nil {
-		return *v
-	}
-	return ""
+	return claudecodeVersion.Get()
 }
 
 // PopulateClaudeCodeVersion probes `claude --version` and caches the semver,
@@ -45,17 +47,7 @@ func GetClaudeCodeVersion() string {
 // cold-start slowdown self-heals. Runs in a startup goroutine; a warm probe
 // returns on the first try. Stops once a non-empty version is stored.
 func PopulateClaudeCodeVersion() {
-	for attempt := 0; ; attempt++ {
-		if v, ok := probeClaudeCodeVersion(); ok {
-			claudecodeVersion.Store(&v)
-			return
-		}
-		if attempt >= claudecodeVersionProbeRetries {
-			slog.Warn("read claude version gave up after retries (expected if not on claudecode backend)", "component", "claudecode-probe", "attempts", attempt+1)
-			return
-		}
-		time.Sleep(claudecodeVersionProbeBackoff)
-	}
+	claudecodeVersion.Populate(claudecodeVersionProbeRetries, claudecodeVersionProbeBackoff)
 }
 
 // probeClaudeCodeVersion runs a single probe; ok is false on failure/timeout or
