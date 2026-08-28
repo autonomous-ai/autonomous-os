@@ -70,7 +70,11 @@ present and reports the effective top-level wake-word gate from config
 **live** IANA zone (e.g. `Asia/Ho_Chi_Minh`), read fresh from `/etc/timezone`
 (falling back to config), not just the config record. The six per-runtime
 versions are all probed at startup (each from its own `--version`) and
-reported side by side; `agent_runtime` names the active one.
+reported side by side; `agent_runtime` names the active one. Each cache
+(`system/lib/versioncache`) also re-probes when the CLI binary's size/mtime
+changes, so a runtime updated under a running os-server (OTA
+`software-update <runtime>`, or a manual install) is reported on the next
+`info` message instead of waiting for an os-server restart.
 
 `unsupported_channels` (omitted when empty) lists the channels configured on the
 device that the **active** runtime cannot run. It is populated by `ChannelReconcile`

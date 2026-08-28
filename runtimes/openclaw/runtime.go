@@ -6,12 +6,12 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"go.autonomous.ai/os/system/domain"
 	"go.autonomous.ai/os/system/lib/core/system"
 	"go.autonomous.ai/os/system/lib/runtimereg"
+	"go.autonomous.ai/os/system/lib/versioncache"
 )
 
 // Expose the cached version to system/device (backend ping payload) through
@@ -46,20 +46,19 @@ var openclawSemverRe = regexp.MustCompile(`(\d+\.\d+\.\d+(?:[-+._][0-9A-Za-z.-]+
 // normalized semver string (the cached version) for RuntimeInfo comparisons.
 var openclawSemverNumRe = regexp.MustCompile(`^(\d+)\.(\d+)\.(\d+)`)
 
-// openClawVersion caches the normalized OpenClaw binary version (e.g. "2026.5.27"),
-// populated once at startup by PopulateOpenClawVersion(). Single source of truth:
-// the MQTT `info` message reports it AND channel-config writers parse it to pick
-// runtime-compatible field shapes (see RuntimeInfo / currentOpenclawRuntime). Valid
-// until the process restarts.
-var openClawVersion atomic.Pointer[string]
+// openClawVersion caches the normalized OpenClaw binary version (e.g. "2026.5.27").
+// Single source of truth: the MQTT `info` message reports it AND channel-config
+// writers parse it to pick runtime-compatible field shapes (see RuntimeInfo /
+// currentOpenclawRuntime). It caches the parsed OpenClaw CLI version and re-probes it when the
+// binary on disk changes, so a CLI updated under a running os-server (OTA
+// `software-update openclaw`, or a manual install) is reported without waiting for
+// an os-server restart.
+var openClawVersion = versioncache.New("openclaw", "openclaw-probe", probeOpenClawVersion)
 
 // GetOpenClawVersion returns the cached OpenClaw binary version (e.g. "2026.5.27").
 // Empty string if openclaw is not installed or the version hasn't been populated yet.
 func GetOpenClawVersion() string {
-	if v := openClawVersion.Load(); v != nil {
-		return *v
-	}
-	return ""
+	return openClawVersion.Get()
 }
 
 // PopulateOpenClawVersion shells out to `openclaw --version`, normalizes the
@@ -67,19 +66,10 @@ func GetOpenClawVersion() string {
 // (openclawVersionProbeRetries) so a boot-time cold-start slowdown self-heals
 // instead of leaving the Overview card blank until the next restart. Runs in a
 // startup goroutine, so blocking across retries is fine. Once a non-empty version
-// is stored it stops early — the CLI version doesn't change while the process runs.
+// is stored it stops early; a later CLI update is picked up by GetOpenClawVersion,
+// which re-probes when the binary changes.
 func PopulateOpenClawVersion() {
-	for attempt := 0; ; attempt++ {
-		if v, ok := probeOpenClawVersion(); ok {
-			openClawVersion.Store(&v)
-			return
-		}
-		if attempt >= openclawVersionProbeRetries {
-			slog.Warn("read openclaw version gave up after retries (expected if not on openclaw backend)", "component", "openclaw-probe", "attempts", attempt+1)
-			return
-		}
-		time.Sleep(openclawVersionProbeBackoff)
-	}
+	openClawVersion.Populate(openclawVersionProbeRetries, openclawVersionProbeBackoff)
 }
 
 // probeOpenClawVersion runs a single `openclaw --version` probe and returns the

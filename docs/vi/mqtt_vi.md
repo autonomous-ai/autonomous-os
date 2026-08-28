@@ -70,6 +70,10 @@ thiếu giá trị này sẽ báo `false`). `timezone` là múi giờ IANA **tr�
 `Asia/Ho_Chi_Minh`), đọc tươi từ `/etc/timezone` (fallback về config), không chỉ là
 bản ghi trong config. Cả sáu version per-runtime đều được probe lúc startup (mỗi cái
 từ `--version` riêng) và bắn cạnh nhau; `agent_runtime` cho biết cái nào đang active.
+Mỗi cache (`system/lib/versioncache`) còn probe lại khi size/mtime của binary CLI đổi,
+nên một runtime được update trong lúc os-server đang chạy (OTA `software-update
+<runtime>`, hoặc cài tay) sẽ được báo ở message `info` kế tiếp thay vì phải chờ
+restart os-server.
 
 `unsupported_channels` (bỏ qua khi rỗng) liệt kê các channel đã cấu hình trên thiết bị
 mà runtime **đang active** không chạy được. Nó được `ChannelReconcile` điền sau khi

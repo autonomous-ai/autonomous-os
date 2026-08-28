@@ -5,12 +5,12 @@ import (
 	"log/slog"
 	"regexp"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"go.autonomous.ai/os/system/domain"
 	"go.autonomous.ai/os/system/lib/core/system"
 	"go.autonomous.ai/os/system/lib/runtimereg"
+	"go.autonomous.ai/os/system/lib/versioncache"
 )
 
 // Expose the cached version to system/device (backend ping payload) through
@@ -39,34 +39,23 @@ var hermesSemverRe = regexp.MustCompile(`(\d+\.\d+\.\d+(?:[-+._][0-9A-Za-z.-]+)?
 // hermesVersion caches the parsed Hermes CLI version. Single source of truth,
 // mirroring openclaw.openClawVersion: the MQTT `info` message reports it next to
 // openclaw_version, and the agent Status endpoint reads it via HermesService.Version()
-// so the web shows the active backend's version. Populated once at startup by
-// PopulateHermesVersion(); valid until the process restarts.
-var hermesVersion atomic.Pointer[string]
+// so the web shows the active backend's version. It re-probes when the
+// binary on disk changes, so a CLI updated under a running os-server (OTA
+// `software-update hermes`, or a manual install) is reported without waiting for
+// an os-server restart.
+var hermesVersion = versioncache.New(hermesBinary, "hermes-probe", probeHermesVersion)
 
 // GetHermesVersion returns the cached Hermes CLI version (e.g. "0.17.0"). Empty
 // when hermes is not installed or the version hasn't been populated yet.
 func GetHermesVersion() string {
-	if v := hermesVersion.Load(); v != nil {
-		return *v
-	}
-	return ""
+	return hermesVersion.Get()
 }
 
 // PopulateHermesVersion shells out to `hermes --version`, normalizes the semver,
 // and caches it. It retries failed or unparseable probes so boot-time CLI startup
 // races do not leave the Monitor's Agent version blank for the process lifetime.
 func PopulateHermesVersion() {
-	for attempt := 0; ; attempt++ {
-		if v, ok := probeHermesVersion(); ok {
-			hermesVersion.Store(&v)
-			return
-		}
-		if attempt >= hermesVersionProbeRetries {
-			slog.Warn("read hermes version gave up after retries (expected if not on hermes backend)", "component", "hermes-probe", "attempts", attempt+1)
-			return
-		}
-		time.Sleep(hermesVersionProbeBackoff)
-	}
+	hermesVersion.Populate(hermesVersionProbeRetries, hermesVersionProbeBackoff)
 }
 
 // probeHermesVersion runs one version probe. A failed command, timeout, or
