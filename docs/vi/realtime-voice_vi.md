@@ -108,6 +108,26 @@ chính ghi nhớ nhưng im lặng; realtime unavailable, lỗi, timeout hoặc d
 một-lượt, nên Gemini lỗi tạm thời không thể làm rơi voice command hoặc làm frame
 rò sang lượt sau.
 
+### Câu trả lời bị bịt tiếng vẫn được nạp cho realtime
+
+Realtime biết agent chính đã trả lời gì qua `VoiceService.feed_realtime_history`
+— hàm này lưu bền toàn bộ text bằng `save_main_agent_reply_fragment` (sống qua
+recycle session) và đẩy một dòng `[TTS HISTORY]` đã cắt ngắn vào socket đang
+chạy (không sống qua recycle).
+
+Trước đây đường nạp này chỉ treo ở hook `on_speak_end`, nên chỉ chạy với text
+thật sự được phát. Turn bị cú click vật lý bịt tiếng thì bị bỏ ngay ở
+`deliverTTS` của os-server, không bao giờ tới HAL — khiến realtime chỉ còn giữ
+placeholder "its spoken reply follows" của `save_main_handoff` mà không có câu
+trả lời, và lượt sau nó suy luận trên một câu hỏi mà nó tưởng chưa ai đáp.
+os-server giờ POST text đó sang `POST /voice/realtime/history`, nạp vào đúng hai
+đích trên mà không dùng loa.
+
+Fragment lưu bền là toàn bộ câu trả lời trong cả hai trường hợp: đó là kết quả
+đã xử lý, và bộ nhớ cần đủ. Chỉ dòng trong session là khác — nó được gắn nhãn
+`[TTS HISTORY, not spoken]`, vì dòng đó tồn tại để model không lặp lại thứ user
+ĐÃ NGHE, mà ở một turn bị huỷ thì user chưa nghe gì cả.
+
 ### Silero canh đồng hồ im lặng (kết thúc lượt)
 
 Một phiên mic kết thúc khi audio nằm dưới ngưỡng RMS suốt `SILENCE_TIMEOUT_S`.

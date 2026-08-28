@@ -249,30 +249,50 @@ class VoiceService:
                     and not tts_service.native_mode
                     and tts_service.realtime_feedback
                 ):
-                    spoken_text: str = tts_service.last_spoken_text
-                    # [TTS HISTORY] below only exists inside the CURRENT Gemini
-                    # socket. Persist OpenClaw's actual spoken reply as well, or
-                    # a recycle (idle recovery / unresolved Gemini tool call)
-                    # loses it before the next user turn.
-                    self._realtime.save_main_agent_reply_fragment(spoken_text)
-                    text: str = spoken_text
-                    # Direction is INTO the realtime model: whatever was just
-                    # spoken (often an OpenClaw reply, not Gemini's own output) is
-                    # pushed to Gemini as history so it stays aware of what the
-                    # device said and won't repeat it. Not a Gemini-generated line.
-                    # Capped: it accumulates in session context and is re-billed
-                    # on every later turn until recycle — the gist is enough to
-                    # avoid repetition.
-                    max_hist = hal_config.REALTIME_TTS_HISTORY_MAX_CHARS
-                    if len(text) > max_hist:
-                        text = text[:max_hist] + "…"
-                    logger.info(
-                        "[realtime<-tts] Notifying realtime agent of spoken text: %r",
-                        text[:100],
-                    )
-                    self._realtime.send_text(f"[TTS HISTORY] {text}")
+                    self.feed_realtime_history(tts_service.last_spoken_text)
 
             tts_service._on_speak_end = _tts_speak_end_with_realtime_feedback
+
+    def feed_realtime_history(self, text: str, spoken: bool = True) -> bool:
+        """Give the realtime agent a main-agent reply it must stay aware of.
+
+        Two callers, one rule: the on_speak_end hook (the reply was played on
+        the speaker) and POST /voice/realtime/history (os-server dropped the
+        reply before it ever reached TTS — a cancelled turn keeps running and
+        its text is still the answer to what the user asked). Without the
+        second one the realtime session is left holding save_main_handoff's
+        "its spoken reply follows" placeholder and no reply, so the next turn
+        reasons from a question it believes went unanswered.
+
+        `spoken` is False for that second caller. The persisted fragment is the
+        full text either way — it is the processed result, and memory wants all
+        of it — but the in-session line is labelled, because [TTS HISTORY]
+        exists to stop the model repeating what the USER ALREADY HEARD, and on
+        a cancelled turn they heard none of it.
+        """
+        if not hal_config.REALTIME_ENABLED or not text:
+            return False
+        # [TTS HISTORY] below only exists inside the CURRENT Gemini socket.
+        # Persist OpenClaw's actual reply as well, or a recycle (idle recovery
+        # / unresolved Gemini tool call) loses it before the next user turn.
+        self._realtime.save_main_agent_reply_fragment(text)
+        # Direction is INTO the realtime model: the reply (often an OpenClaw
+        # one, not Gemini's own output) is pushed as history so it stays aware
+        # of what the device said and won't repeat it. Not a Gemini-generated
+        # line. Capped: it accumulates in session context and is re-billed on
+        # every later turn until recycle — the gist is enough to avoid
+        # repetition.
+        max_hist = hal_config.REALTIME_TTS_HISTORY_MAX_CHARS
+        if len(text) > max_hist:
+            text = text[:max_hist] + "…"
+        marker = "TTS HISTORY" if spoken else "TTS HISTORY, not spoken"
+        logger.info(
+            "[realtime<-tts] Notifying realtime agent (spoken=%s): %r",
+            spoken,
+            text[:100],
+        )
+        self._realtime.send_text(f"[{marker}] {text}")
+        return True
 
     def set_music_service(self, music_service) -> None:
         self._music = music_service

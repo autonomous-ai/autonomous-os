@@ -186,6 +186,18 @@ func SpeakReply(text string) error {
 	return postSpeak("/voice/speak", body)
 }
 
+// FeedRealtimeHistory records an agent reply with the realtime voice agent
+// WITHOUT speaking it. Needed for a reply the speaker never gets: a turn muted
+// by the physical cancel gesture keeps running and its text is still the
+// answer the user asked for, but the normal history feed rides on TTS
+// completion, so dropping the speech also dropped the realtime session's only
+// record of the answer. Same rule as SpeakReply about what may be sent —
+// genuine agent output only, never hardcoded notices.
+func FeedRealtimeHistory(text string) error {
+	body, _ := json.Marshal(map[string]string{"text": text})
+	return post("/voice/realtime/history", body)
+}
+
 // SpeakQueueReply is SpeakQueue with realtime feedback — the queued sibling of
 // SpeakReply for sentence-streamed agent replies. See SpeakReply.
 func SpeakQueueReply(text string) error {
