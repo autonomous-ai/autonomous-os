@@ -48,6 +48,8 @@ The wake gate has four openers: a spoken wake phrase, a single click, a newly re
 
 **Turning toward the lamp and speaking** uses that same window (`hal/drivers/tracking/gaze.py`), through `voice_service.grant_wakeword_focus(source)` just like presence enter and the click — nothing downstream of the gate changes.
 
+When that gaze check grants focus at VAD-confirmed speech start, Lamp immediately shows a **dim blue breathing acknowledgement**. It is LED-only: it neither claims the `listening` emotion nor halts the body. The first STT partial replaces it with the normal full listening cue; a session with no partial restores the prior LED state on close, with a 3-second safety timeout for a stalled STT connection. This early cue is only for a newly granted, non-shadow gaze wake — ordinary VAD/noise sessions remain visually quiet.
+
 The reason is device shape rather than preference. A desk lamp sits an arm's length from its user and is in view all day, so a wake phrase repeated dozens of times reads as addressing an appliance, and a button press reads as operating one. Between two people the cue is neither: you turn toward someone and speak. Products that popularised "hey <name>" have no camera and sit across a room, so the comparison does not carry.
 
 Two properties decide the implementation:

@@ -48,6 +48,8 @@ Wake gate có **bốn** cửa vào: wake phrase nói ra, single click, một ng�
 
 **Quay mặt về phía đèn rồi nói** cũng mở cùng cửa sổ đó (`hal/drivers/tracking/gaze.py`), qua `voice_service.grant_wakeword_focus(source)` giống presence enter và cú click — mọi thứ phía sau gate không đổi.
 
+Khi kiểm tra gaze vừa grant focus ở lúc VAD xác nhận có tiếng nói, Lamp lập tức hiện một **nhịp thở xanh dương mờ**. Đây chỉ là cue LED: không nhận là emotion `listening` và không dừng thân đèn. STT partial đầu tiên thay nó bằng cue listening đầy đủ; phiên không có partial sẽ restore LED trước đó khi đóng, kèm timeout an toàn 3 giây nếu kết nối STT bị treo. Cue sớm này chỉ dành cho gaze wake mới được grant và không ở shadow mode — VAD/nhiễu thông thường vẫn không làm LED phản hồi.
+
 Lý do nằm ở hình dạng sản phẩm chứ không phải sở thích. Đèn bàn nằm cách user một cánh tay và trong tầm nhìn cả ngày, nên lặp wake phrase vài chục lần một ngày nghe như đang ra lệnh cho một thiết bị, còn bấm nút thì như đang vận hành máy. Giữa hai người, tín hiệu không phải hai thứ đó: người ta **quay về phía nhau rồi nói**. Các sản phẩm phổ biến hoá "hey <name>" đều không có camera và đặt ở đầu kia phòng, nên không so sánh trực tiếp được.
 
 Hai đặc tính quyết định cách implement:

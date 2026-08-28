@@ -198,14 +198,16 @@ func (h *AgentHandler) fireHWCall(c hwCall, flowRunID string, client *http.Clien
 	// markers above and only covers real hardware. Without it the device goes
 	// quiet but keeps moving: servos finishing a gesture and LEDs changing colour
 	// after the user asked it to stop reads as "it ignored me".
-	if h.isSpeechCancelled(flowRunID) {
+	if h.isHWCancelled(flowRunID) {
+		// Only the click reaches here (isHWCancelled ignores the auto mark), so
+		// naming the gesture is accurate on this path.
 		slog.Info("HW marker dropped -- turn cancelled by physical gesture",
 			"component", "agent", "run_id", flowRunID, "path", c.path)
 		// Flow event, not just a log line: a turn can be affected by the click
 		// through its body alone — web-chat turns never speak, so tts_cancelled
 		// never fires for them and the monitor would show nothing at all while
 		// their servo/LED markers were silently dropped.
-		flow.Log("hw_cancelled", map[string]any{"run_id": flowRunID, "path": c.path}, flowRunID)
+		flow.Log("hw_cancelled", map[string]any{"run_id": flowRunID, "path": c.path, "source": cancelSourceClick}, flowRunID)
 		return true
 	}
 	// The OS — not the brain — is the deterministic gate over the body. Drop a

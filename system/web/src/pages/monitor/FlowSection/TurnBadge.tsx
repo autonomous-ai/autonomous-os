@@ -2,7 +2,7 @@ import { useState } from "react";
 import { createPortal } from "react-dom";
 import {
   Megaphone, Timer, PauseCircle, Mic, Armchair, Ban, MessageSquare, Hand,
-  Volume2, TriangleAlert, Moon, Lightbulb, X, Workflow, Circle,
+  Volume2, TriangleAlert, Moon, Lightbulb, X, Workflow, Circle, SkipForward,
 } from "lucide-react";
 import type { Turn } from "./types";
 import { TYPE_LUCIDE, TURN_INPUT_FALLBACK } from "./types";
@@ -90,10 +90,17 @@ export function TurnBadge({ turn, pairTint, userPhotos, onViewPipeline }: {
   // Either signal counts: a turn can lose only its voice (the usual case) or
   // only its body (web-chat turns never speak, so the click shows up purely as
   // dropped HW markers).
-  const wasCancelled = turn.events.some((ev) =>
+  const cancelEvent = turn.events.find((ev) =>
     ev.type === "flow_event" &&
     (ev.detail?.node === "tts_cancelled" || ev.detail?.node === "hw_cancelled")
   );
+  const wasCancelled = cancelEvent !== undefined;
+  // Two things silence a turn and they are not the same story to someone
+  // scanning the timeline: the user pressed the button, or the lamp answered a
+  // newer question through the realtime agent and this reply went stale. Older
+  // events carry no source — they predate the second cause, so read as a click.
+  const cancelBySelf =
+    (cancelEvent?.detail as { source?: string } | undefined)?.source === "realtime_handled";
   const fmtToken = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`);
   const statusLabel = turn.status === "done"
     ? "DONE"
@@ -157,13 +164,17 @@ export function TurnBadge({ turn, pairTint, userPhotos, onViewPipeline }: {
         )}
         {wasCancelled && (
           <span
-            title="Cancelled by a single click — the turn finished but was never spoken"
+            title={cancelBySelf
+              ? "Superseded — the realtime agent answered a newer question, so this reply was never spoken"
+              : "Cancelled by a single click — the turn finished but was never spoken"}
             style={{
               display: "inline-flex", alignItems: "center", gap: 3,
               fontSize: 8, padding: "1px 5px", borderRadius: 3,
               background: "var(--lm-amber-dim)", color: "var(--lm-amber)", fontWeight: 700,
             }}
-          ><Hand size={9} strokeWidth={2.5} /> CANCELLED</span>
+          >{cancelBySelf
+            ? <><SkipForward size={9} strokeWidth={2.5} /> SUPERSEDED</>
+            : <><Hand size={9} strokeWidth={2.5} /> CANCELLED</>}</span>
         )}
         {currentUser && (() => {
           const isUnknown = currentUser === "unknown";

@@ -45,6 +45,26 @@ type AgentHandler struct {
 	// backlog apart from the sentence the user just asked for.
 	speechWatermarkMs atomic.Int64
 
+	// autoSpeechWatermarkMs is the same mark stamped by the SYSTEM instead of
+	// the user: the realtime voice agent answered a NEWER utterance out loud
+	// while the main agent was still working on the previous one. The main
+	// agent runs one turn at a time (activeTurn is a single flag), so this is
+	// one stale answer, not a backlog — but it is the answer to a question the
+	// user has visibly moved on from, and speaking it a moment later in a
+	// different voice is what this prevents.
+	//
+	// Deliberately a SECOND mark rather than a reuse of speechWatermarkMs. The
+	// click is an explicit "stop", so it also drops the turn's servo/LED
+	// markers; this one is a machine judgement and takes the speaker only. If
+	// it dropped HW markers too, a turn whose body the user really did ask for
+	// ("turn the light green") would silently never run because the user
+	// happened to say something else while it worked.
+	//
+	// The line is speech-vs-hardware, NOT click-vs-auto: pending fillers are
+	// dropped by both, because a filler is a promise that an answer is coming
+	// rather than an action the user requested.
+	autoSpeechWatermarkMs atomic.Int64
+
 	// runFirstSeenMs records when a runID was first observed by deliverTTS,
 	// for runIDs whose creation time cannot be read off the id itself.
 	// Device-issued ids carry it ("device-chat-7-1755600000000"); channel ids
