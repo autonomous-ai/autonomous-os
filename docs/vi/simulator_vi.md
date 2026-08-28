@@ -31,6 +31,7 @@ là thứ khiến binary được test *chính là* binary được ship.
 | `codex` CLI | `codex --version` | Tự cài — không có gì ở đây cài giúp |
 | codex đã đăng nhập | `ls ~/.codex/auth.json` | `codex login` |
 | `ffmpeg` | `ffmpeg -version` | Cần cho phát nhạc |
+| `uv` | `uv --version` | Dựng `hal/.venv` cho HAL. `make sim` tự tạo ở lần chạy đầu và sync lại mỗi khi `hal/uv.lock` hoặc `hal/pyproject.toml` mới hơn nó |
 | `node` + `npm` | `node --version` | Chỉ cần cho `make web-dev` |
 
 **Chỉ `codex` chạy được off-device.** Các runtime khác không có target `*-dev`.
@@ -61,7 +62,7 @@ $EDITOR /tmp/autonomous-os/config/config.json
 | Key | Giá trị |
 |---|---|
 | `admin_password_hash` | **bcrypt hash** (cost 10) của mật khẩu đăng nhập — không phải mật khẩu thô |
-| `session_secret` | Chuỗi ngẫu nhiên bất kỳ |
+| `session_secret` | Để trống — os-server tự ghi chuỗi ngẫu nhiên ở lần đăng nhập đầu (`system/server/session/session.go`) |
 
 ### Tuỳ chọn
 
@@ -161,6 +162,7 @@ Nhận trong 5 giây, không cần restart. Giờ `hey lumi` dùng được, son
 | Target | Làm | **Không** làm |
 |---|---|---|
 | `make sim` | Boot HAL với thân lamp, ngoại vi ảo (hoặc thật) | — |
+| `make hal-install` | `uv sync` — đồng bộ **chính xác** `hal/.venv`, gỡ mọi thứ không có trong `uv.lock`. `make sim` tự sync bằng `--inexact` nên pytest cài tay vẫn còn | Không cài extra `dev` (pyflakes); muốn thì thêm `--extra dev` |
 | `make codex-dev` | **Chỉ** chạy `os-server codex-gatewayd`: một listener WebSocket loopback, spawn một `codex exec` mỗi lượt | Không onboarding, không presync, **không sync skill** |
 | `make os-dev` | Ba việc theo thứ tự: `os-dev-build` (biên dịch), `os-dev-seed` (chuẩn bị state dir), rồi chạy API — chính nó cũng lo toàn bộ provisioning cho agent: `presync.sh`, seed `AGENTS.md`/`SOUL.md`/`KNOWLEDGE.md`/`HEARTBEAT.md`, `downloadSkills()`, skill watcher | — |
 | `make web-dev` | Chạy Vite thay vai nginx (os-server không serve HTML) | — |

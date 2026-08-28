@@ -117,11 +117,19 @@ codex-dev: os-dev-build
 # HAL (Python) — dev | run | test
 # ============================================================================
 
-.PHONY: hal hal-dev sim hal-run hal-lint hal-test hal-clean
+.PHONY: hal hal-dev hal-install sim hal-run hal-lint hal-test hal-clean
 
 hal: hal-dev
 
-hal-dev:
+hal-install:
+	cd $(HAL_DIR) && uv sync
+
+$(HAL_DIR)/.venv: $(HAL_DIR)/uv.lock $(HAL_DIR)/pyproject.toml
+	@command -v uv >/dev/null || { echo "uv not found — install: https://docs.astral.sh/uv/getting-started/installation/"; exit 1; }
+	cd $(HAL_DIR) && uv sync --inexact
+	@touch $(HAL_DIR)/.venv
+
+hal-dev: $(HAL_DIR)/.venv
 	cd $(HAL_DIR) && PYTHONPATH=.. HAL_MODE=developer .venv/bin/uvicorn hal.server:app --host 0.0.0.0 --port $(HAL_PORT) --reload
 
 # Boot any declared body on a laptop without opening its physical peripherals.
@@ -193,15 +201,15 @@ sim:
 	fi
 	HAL_SIMULATE=1 HAL_SIM_MEDIA=$(SIM_MEDIA) HAL_BOARD=sim DEVICE_TYPE=$(DEVICE_TYPE) $(SIM_HAL_ENV) $(MAKE) hal-dev
 
-hal-run:
+hal-run: $(HAL_DIR)/.venv
 	cd $(HAL_DIR) && PYTHONPATH=.. .venv/bin/python -m hal.server
 
 # Catch refactor-leftover bugs (broken local imports + undefined names) that
 # py_compile/tests miss off-hardware. Needs the `dev` extra (pyflakes).
-hal-lint:
+hal-lint: $(HAL_DIR)/.venv
 	cd $(HAL_DIR) && .venv/bin/python scripts/lint.py
 
-hal-test:
+hal-test: $(HAL_DIR)/.venv
 	cd $(HAL_DIR) && .venv/bin/python -m pytest test/
 
 hal-clean:

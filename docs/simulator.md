@@ -31,6 +31,7 @@ what makes the tested binary the shipped binary.
 | `codex` CLI | `codex --version` | Install it yourself — nothing here installs it |
 | codex logged in | `ls ~/.codex/auth.json` | `codex login` |
 | `ffmpeg` | `ffmpeg -version` | Needed for music playback |
+| `uv` | `uv --version` | Builds HAL's `hal/.venv`. `make sim` creates it on first run and re-syncs it whenever `hal/uv.lock` or `hal/pyproject.toml` moves ahead of it |
 | `node` + `npm` | `node --version` | Needed for `make web-dev` only |
 
 **Only `codex` works off-device.** Other runtimes have no `*-dev` target.
@@ -61,7 +62,7 @@ $EDITOR /tmp/autonomous-os/config/config.json
 | Key | Value |
 |---|---|
 | `admin_password_hash` | **bcrypt hash** (cost 10) of your login password — not the password |
-| `session_secret` | Any random string |
+| `session_secret` | Leave empty — os-server writes a random one on first login (`system/server/session/session.go`) |
 
 ### Optional
 
@@ -160,6 +161,7 @@ Picked up within 5 seconds, no restart. Now `hey lumi` works, alongside
 | Target | Does | Does **not** |
 |---|---|---|
 | `make sim` | Boots HAL on the lamp body with virtual (or host) peripherals | — |
+| `make hal-install` | `uv sync` — an **exact** reconcile of `hal/.venv`, dropping anything absent from `uv.lock`. `make sim` syncs by itself with `--inexact`, which keeps a hand-installed pytest | Does not install the `dev` extra (pyflakes); add `--extra dev` by hand |
 | `make codex-dev` | **Only** runs `os-server codex-gatewayd`: a loopback WebSocket listener that spawns one `codex exec` per turn | No onboarding, no presync, **no skill sync** |
 | `make os-dev` | Three things in sequence: `os-dev-build` (compile), `os-dev-seed` (prepare the state dir), then run the API — which also does all agent provisioning: `presync.sh`, seeding `AGENTS.md`/`SOUL.md`/`KNOWLEDGE.md`/`HEARTBEAT.md`, `downloadSkills()`, the skill watcher | — |
 | `make web-dev` | Runs Vite in nginx's place (os-server serves no HTML) | — |
