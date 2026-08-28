@@ -252,6 +252,9 @@ class MusicService:
         on the built-in speaker while TTS goes to the headset. In that case
         route through paplay instead (PA default sink = the bluez sink), as
         raw PCM since paplay doesn't parse a WAV header from a pipe."""
+        # BT is checked first, and stays reachable on a board: bt_active() only
+        # reads True after route_to_bt(), a BlueZ/PulseAudio path that never runs
+        # on macOS, so the darwin branch below is never shadowed by it.
         try:
             from hal.drivers import audio_route
             from hal.drivers.bluetooth_manager import pulse_popen_kwargs
