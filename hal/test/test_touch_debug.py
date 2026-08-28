@@ -74,11 +74,11 @@ class TestSessionArithmetic(unittest.TestCase):
 
             tr = self._trace(tmp)
             s = tr["sessions"][0]
-            self.assertEqual(s["pads_touched"], ["S1", "S2", "S4"])
+            self.assertEqual(s["distinct_pads"], ["S1", "S2", "S4"])
             self.assertEqual(s["primary_pad"], "S1")
-            # Release edge (level 1) must not appear in first_touch_order —
-            # it is FastMode's auto-drop, not a second contact.
-            self.assertEqual(len(s["first_touch_order"]), 3)
+            # Release edge (level 1) must not appear in touch_order — it is
+            # FastMode's auto-drop, not a second contact.
+            self.assertEqual(s["steps"], 3)
             self.assertEqual(len(s["adjacent_deltas_ms"]), 2)
 
     def test_suppressed_edges_are_recorded_but_do_not_form_contacts(self):
@@ -96,7 +96,59 @@ class TestSessionArithmetic(unittest.TestCase):
             self.assertEqual(len(tr["edges"]), 2)
             self.assertTrue(all(e["suppressed"] for e in tr["edges"]))
             # Suppressed edges never enter a contact, so no pad was "touched".
-            self.assertEqual(tr["sessions"][0]["pads_touched"], [])
+            self.assertEqual(tr["sessions"][0]["distinct_pads"], [])
+
+
+class TestTouchOrderIsUnreduced(unittest.TestCase):
+    """The deltas must be measured over every step, not one per pad.
+
+    `first_touch_order` kept only the first hit per pad and `adjacent_deltas_ms`
+    was computed from it, so a contact that revisited pads reported fewer gaps
+    than the driver saw — 47 of 130 captured traces, one losing 7 of 9. The
+    inter-pad histogram the classifier's threshold came from was measured
+    through that reduction.
+    """
+
+    def _trace(self, tmp):
+        return json.loads(next(Path(tmp).glob("*.json")).read_text())
+
+    def test_a_revisited_pad_still_contributes_its_gaps(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            td = _fresh(True, tmp, pads="96=S1,98=S2,100=S4")
+            td.start_cycle(0, [96, 98, 100])
+            # A stroke: S1 S2 S4 S2 S1 — 5 steps, 3 distinct pads, 4 gaps.
+            for line in (96, 98, 100, 98, 96):
+                td.note_edge(line, 0)
+            td.note_session_end(1)
+            td.finish("PET")
+            import time as _t
+            _t.sleep(0.2)
+
+            s = self._trace(tmp)["sessions"][0]
+            self.assertEqual([p for p, _ in s["touch_order"]],
+                             ["S1", "S2", "S4", "S2", "S1"])
+            self.assertEqual(s["steps"], 5)
+            self.assertEqual(s["distinct_pads"], ["S1", "S2", "S4"])
+            # 4 gaps, not the 2 the deduplicated version reported.
+            self.assertEqual(len(s["adjacent_deltas_ms"]), 4)
+
+    def test_a_pad_refiring_under_a_still_finger_is_not_a_step(self):
+        """Consecutive repeats still collapse — FastMode re-triggers on a
+        stationary finger, and counting those would invent gaps of ~0 ms and
+        drag the measured floor down."""
+        with tempfile.TemporaryDirectory() as tmp:
+            td = _fresh(True, tmp, pads="96=S1,98=S2")
+            td.start_cycle(0, [96, 98])
+            for line in (96, 96, 96, 98):
+                td.note_edge(line, 0)
+            td.note_session_end(1)
+            td.finish("TAP")
+            import time as _t
+            _t.sleep(0.2)
+
+            s = self._trace(tmp)["sessions"][0]
+            self.assertEqual([p for p, _ in s["touch_order"]], ["S1", "S2"])
+            self.assertEqual(s["steps"], 2)
 
 
 class TestClassifierBlock(unittest.TestCase):
