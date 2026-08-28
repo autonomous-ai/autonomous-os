@@ -54,7 +54,8 @@ def _agent(session: _RecordingSession) -> GeminiLiveAgent:
     agent._config = SimpleNamespace(sample_rate=16000)
     agent._vad_disabled = False
     agent._activity_started = False
-    agent._speech_ended_at = None
+    agent._last_audio_sent_at = None
+    agent._activity_end_sent_at = None
     agent._pending_tool_calls = set()
     agent._gated_audio_frames = 0
     agent._turn_done = threading.Event()

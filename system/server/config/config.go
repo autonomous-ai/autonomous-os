@@ -51,6 +51,14 @@ func Path() string {
 	return configPath
 }
 
+// Dir returns the directory config.json lives in. Sibling stores anchor here
+// (e.g. system/schedule's schedules.json) instead of living inside config.json:
+// config_watch.go reloads device state on every config.json change, which a
+// frequent unrelated write must not trigger.
+func Dir() string {
+	return filepath.Dir(Path())
+}
+
 // OSVersion is injected at build time via ldflags.
 // Example:
 //

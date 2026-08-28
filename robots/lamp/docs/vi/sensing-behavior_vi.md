@@ -693,7 +693,7 @@ Các hằng số cấu hình nằm trong `hal/config.py`:
 ## Quy tắc chung (tất cả event type)
 
 - **Passive sensing events** (`[sensing:*]`) bị drop nếu agent đang bận xử lý turn khác.
-- **Voice events** luôn pass through — người dùng đang chủ động nói chuyện. Voice messages kèm mood scan nudge (`[MANDATORY: Follow Mood skill — log mood now.]`) để agent nhớ detect mood từ conversation flow.
+- **Voice events** luôn pass through — người dùng đang chủ động nói chuyện. Voice messages kèm mood scan nudge (`[MANDATORY: Follow Mood skill — log mood now.]`) để agent nhớ detect mood từ conversation flow. Pass event không có nghĩa bắt buộc phải trả lời: `SOUL.md` trả `NO_REPLY` cho filler, một từ đơn/lặp lại, mảnh câu bị cắt, transcript nhận dạng sai, hoặc input giọng nói không có nghĩa rõ ràng. Với turn đó không được hỏi làm rõ, phản ứng, hoặc log mood.
 - Prefix `[sensing:type]` trong message là cách agent biết đây là ambient event, không phải message từ người dùng.
 - **Pre-turn `thinking` emotion**: Hook `emotion-acknowledge` tự fire `POST /emotion {thinking, 0.7}` server-side ở event `message:preprocessed` cho mọi non-sensing message — agent không cần gọi. Hook skip sensing events vì mỗi type đã có emotion đầu tiên riêng.
 - **Image pruning echo**: OpenClaw strip image payload cũ khỏi conversation history để tiết kiệm token. Model nhỏ (Haiku) có thể echo marker dưới dạng `[image description removed]` trong response. `SOUL.md` hướng dẫn agent không được echo các marker này.

@@ -202,6 +202,12 @@ func (s *Server) handleSetUpCompleteChange(setupCompleted bool) {
 		// refresh:true (with a refresh_token) are rotated before they lapse.
 		safego.Go("connector-refresh", func() { s.deviceMQTTHandler.StartConnectorRefreshLoop(s.monitorCtx) })
 
+		// Run due "Scheduled" tasks (schedule.sync's list) once a minute.
+		// Independent of which agentic runtime is active — it only ever calls
+		// AgentGateway.SendSystemChatMessage, so switching runtimes never
+		// strands a schedule.
+		safego.Go("schedule-runner", func() { s.deviceMQTTHandler.StartScheduleRunnerLoop(s.monitorCtx) })
+
 		s.restartMQTT()
 
 		safego.Go("startup-sequence", func() {

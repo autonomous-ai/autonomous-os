@@ -293,6 +293,21 @@ class SceneResponse(BaseModel):
     color: list[int]
 
 
+class RealtimeHistoryRequest(BaseModel):
+    """A main-agent reply the realtime agent must know about but must not say.
+
+    Posted by os-server when a reply is produced but never reaches the speaker
+    — today, a turn muted by the physical cancel gesture. The turn keeps
+    running and its text is still the answer to what the user asked, so the
+    realtime session has to receive it or it reasons from an unanswered
+    question on the next turn.
+    """
+
+    text: str = Field(
+        ..., min_length=1, max_length=2000, description="Reply text to record as history"
+    )
+
+
 class SpeakRequest(BaseModel):
     text: str = Field(
         ..., min_length=1, max_length=2000, description="Text to speak via TTS"

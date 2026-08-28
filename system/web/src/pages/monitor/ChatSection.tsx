@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback, type ReactNode } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   Paperclip, X, Copy, Check, RotateCcw, Download, ArrowDown, ArrowUp,
   Pin, ChevronRight, Sparkles, Plus, Trash2, History,
@@ -614,6 +615,7 @@ interface Props {
 }
 
 export function ChatSection({ events, isActive }: Props) {
+  const navigate = useNavigate();
   // Language-aware string lookup; re-renders when the active language resolves
   // from the device config (see lib/i18n).
   const t = useT();
@@ -2239,6 +2241,13 @@ export function ChatSection({ events, isActive }: Props) {
                 onCreateWithAgent={() => {
                   setInput(CREATE_SKILL_WITH_AGENT_PROMPT);
                   requestAnimationFrame(() => textareaRef.current?.focus());
+                }}
+                onScheduledAction={(action) => {
+                  // Scheduled tasks live in Settings, so the composer hands the
+                  // user off there rather than growing a second editor here.
+                  // "new" carries ?new=1 so the section opens with the create
+                  // form already open — one click from chat to typing a task.
+                  navigate(action === "new" ? "/setting?new=1#scheduled" : "/setting#scheduled");
                 }}
               />
               <textarea

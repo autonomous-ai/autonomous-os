@@ -156,6 +156,19 @@ func (h *AgentHandler) deliverTTS(send func(string) error, text, flowRunID, errC
 		slog.Info("TTS dropped -- turn cancelled by physical gesture",
 			"component", "agent", "run_id", flowRunID, "text", text[:min(len(text), 80)])
 		flow.Log("tts_cancelled", map[string]any{"run_id": flowRunID, "text": text}, flowRunID)
+		// The click takes the speaker, not the answer. HAL's realtime history
+		// feed rides on TTS completion, so dropping the speech here also
+		// dropped the realtime session's only record of what the main agent
+		// replied — while HAL had ALREADY persisted the question with a
+		// "its spoken reply follows" placeholder (save_main_handoff). The next
+		// realtime turn then reasons from a question it believes went
+		// unanswered. Give it the text without the speaker.
+		go func() {
+			if err := hal.FeedRealtimeHistory(text); err != nil {
+				slog.Warn("realtime history feed failed for cancelled turn",
+					"component", "agent", "run_id", flowRunID, "error", err)
+			}
+		}()
 		return
 	}
 	if isLLMLimitText(text) {
