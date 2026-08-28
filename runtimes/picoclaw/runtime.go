@@ -5,10 +5,10 @@ import (
 	"log/slog"
 	"regexp"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"go.autonomous.ai/os/system/lib/core/system"
+	"go.autonomous.ai/os/system/lib/versioncache"
 )
 
 // picoclawVersionProbeTimeout caps a single `picoclaw version` probe. Kept
@@ -30,13 +30,15 @@ var picoclawNightlyVersionRe = regexp.MustCompile(`nightly-\d+-g[0-9A-Fa-f]+(?:-
 
 var picoclawGoVersionRe = regexp.MustCompile(`(?i)\bgo\d+\.\d+\.\d+\b`)
 var picoclawSemverRe = regexp.MustCompile(`(\d+\.\d+\.\d+(?:[-+._][0-9A-Za-z.-]+)?)`)
-var picoclawVersion atomic.Pointer[string]
+
+// picoclawVersion caches the parsed PicoClaw CLI version and re-probes it when the
+// binary on disk changes, so a CLI updated under a running os-server (OTA
+// `software-update picoclaw`, or a manual install) is reported without waiting for
+// an os-server restart.
+var picoclawVersion = versioncache.New(picoclawBin, "picoclaw-probe", probePicoclawVersion)
 
 func GetPicoclawVersion() string {
-	if v := picoclawVersion.Load(); v != nil {
-		return *v
-	}
-	return ""
+	return picoclawVersion.Get()
 }
 
 // PopulatePicoclawVersion probes `picoclaw version` and caches the semver,
@@ -44,17 +46,7 @@ func GetPicoclawVersion() string {
 // cold-start slowdown self-heals. Runs in a startup goroutine; a warm probe
 // returns on the first try. Stops once a non-empty version is stored.
 func PopulatePicoclawVersion() {
-	for attempt := 0; ; attempt++ {
-		if v, ok := probePicoclawVersion(); ok {
-			picoclawVersion.Store(&v)
-			return
-		}
-		if attempt >= picoclawVersionProbeRetries {
-			slog.Warn("read picoclaw version gave up after retries (expected if not on picoclaw backend)", "component", "picoclaw-probe", "attempts", attempt+1)
-			return
-		}
-		time.Sleep(picoclawVersionProbeBackoff)
-	}
+	picoclawVersion.Populate(picoclawVersionProbeRetries, picoclawVersionProbeBackoff)
 }
 
 // probePicoclawVersion runs a single probe; ok is false on failure/timeout or
