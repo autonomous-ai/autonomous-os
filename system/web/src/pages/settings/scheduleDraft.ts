@@ -1,4 +1,5 @@
-import type { ScheduleCadence, ScheduleItem, ScheduleWriteBody } from "@/lib/api";
+import { MAX_SPEAK_CHARS, resolveScheduleKind } from "@/lib/api";
+import type { ScheduleCadence, ScheduleItem, ScheduleKind, ScheduleWriteBody } from "@/lib/api";
 
 // Draft state + wire mapping for one scheduled task. Kept out of
 // ScheduleEditor.tsx so that file exports components only
@@ -21,6 +22,7 @@ export type ScheduleRepeat = ScheduleCadence["repeat"];
 export type ScheduleDraft = {
   name: string;
   instructions: string;
+  kind: ScheduleKind;
   enabled: boolean;
   repeat: ScheduleRepeat;
   time: string;
@@ -34,6 +36,9 @@ export function draftFromSchedule(sch?: ScheduleItem): ScheduleDraft {
   return {
     name: sch?.name ?? "",
     instructions: sch?.instructions ?? "",
+    // Absent resolves to agent, so a task authored before this field opens on
+    // the behaviour it actually has rather than on a blank third state.
+    kind: resolveScheduleKind(sch?.kind),
     enabled: sch?.enabled ?? true,
     repeat: cadence?.repeat ?? "daily",
     time: cadence?.time ?? "08:00",
@@ -66,6 +71,7 @@ export function bodyFromDraft(d: ScheduleDraft): ScheduleWriteBody {
   return {
     name: d.name.trim(),
     instructions: d.instructions.trim(),
+    kind: d.kind,
     enabled: d.enabled,
     schedule: cadenceFromDraft(d),
   };
@@ -74,7 +80,17 @@ export function bodyFromDraft(d: ScheduleDraft): ScheduleWriteBody {
 /** Returns a user-facing reason the draft cannot be saved, or null. */
 export function validateDraft(d: ScheduleDraft): string | null {
   if (!d.name.trim()) return "Give the task a name.";
-  if (!d.instructions.trim()) return "Tell the device what to do.";
+  if (!d.instructions.trim()) {
+    return d.kind === "speak" ? "Type what the device should say." : "Tell the device what to do.";
+  }
+  // Mirrors ValidateIntentPayload in system/schedule/intent.go, so the form
+  // refuses what the device would refuse instead of queueing a doomed intent.
+  if (d.kind === "speak") {
+    const n = [...d.instructions.trim()].length;
+    if (n > MAX_SPEAK_CHARS) {
+      return `Spoken text must be at most ${MAX_SPEAK_CHARS} characters, got ${n}.`;
+    }
+  }
   if (["daily", "weekly", "monthly"].includes(d.repeat) && !/^\d{2}:\d{2}$/.test(d.time)) {
     return "Pick a valid time.";
   }

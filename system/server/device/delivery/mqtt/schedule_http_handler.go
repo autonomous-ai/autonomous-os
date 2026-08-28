@@ -29,6 +29,17 @@ type scheduleListItem struct {
 	Name          string        `json:"name"`
 	Instructions  string        `json:"instructions"`
 	Enabled       bool          `json:"enabled"`
+
+	// Kind is "agent" or "speak" — WHAT firing this task does, and so how
+	// Instructions is read. It must be echoed here, not just accepted on the
+	// write endpoints: the web UI seeds its editor from this response, so a
+	// missing kind made every stored "speak" task reopen as an "agent" one and
+	// silently demote itself on the next save.
+	//
+	// Written unconditionally rather than with omitempty: ResolveKind always
+	// yields a concrete "agent"/"speak", and an absent key would put the
+	// client back to inferring a default it cannot see.
+	Kind string `json:"kind"`
 	Cadence       schedule.Spec `json:"schedule"`
 	EndAt         *time.Time    `json:"end_at,omitempty"`
 	NextRunAt     *time.Time    `json:"next_run_at,omitempty"`
@@ -58,6 +69,10 @@ func toScheduleListItem(sch schedule.Schedule) scheduleListItem {
 		Name:          sch.Name,
 		Instructions:  sch.Instructions,
 		Enabled:       sch.Enabled,
+		// Normalised, not raw: a row stored before this field holds "", which
+		// the runner already treats as agent — so the UI must be told "agent"
+		// rather than left to guess from an empty string.
+		Kind:          schedule.ResolveKind(sch.Kind),
 		Cadence:       sch.Cadence,
 		EndAt:         sch.EndAt,
 		LastRunStatus: sch.LastRunStatus,
@@ -183,6 +198,11 @@ func overlayPendingIntents(items []scheduleListItem, intents []schedule.Intent) 
 				ID:           "intent:" + in.IntentID,
 				Name:         in.Payload.Name,
 				Instructions: in.Payload.Instructions,
+				// Same reason as toScheduleListItem: without this a pending
+				// speak task renders as an agent one until the backend
+				// confirms it, so the row the user just created misdescribes
+				// itself for as long as it is queued.
+				Kind:         schedule.ResolveKind(in.Payload.Kind),
 				Enabled:      in.Payload.Enabled,
 				Cadence:      in.Payload.Cadence,
 				EndAt:        in.Payload.EndAt,
@@ -196,6 +216,7 @@ func overlayPendingIntents(items []scheduleListItem, intents []schedule.Intent) 
 			}
 			items[idx].Name = in.Payload.Name
 			items[idx].Instructions = in.Payload.Instructions
+			items[idx].Kind = schedule.ResolveKind(in.Payload.Kind)
 			items[idx].Enabled = in.Payload.Enabled
 			items[idx].Cadence = in.Payload.Cadence
 			items[idx].EndAt = in.Payload.EndAt

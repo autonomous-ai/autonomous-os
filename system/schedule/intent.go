@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 // Intent is one device-originated schedule change the user made locally, held
@@ -46,9 +47,21 @@ type Intent struct {
 // whole Schedule: id, rev, status and all run bookkeeping are backend-owned, so
 // they are absent here and the device has no way to propose them.
 type IntentPayload struct {
-	Name         string     `json:"name"`
-	Instructions string     `json:"instructions"`
-	Enabled      bool       `json:"enabled"`
+	Name         string `json:"name"`
+	Instructions string `json:"instructions"`
+	Enabled      bool   `json:"enabled"`
+
+	// Kind is "agent" or "speak" — see Schedule.Kind. It MUST be carried here
+	// even though the local UI has no control for it yet, because an UPDATE
+	// proposal sends the whole mutable subset and the backend writes every
+	// field of it. Omit this and editing a speak task's NAME on the device
+	// would silently demote it to an agent task, which then reads the user's
+	// sentence aloud as a prompt instead of saying it.
+	//
+	// Empty is "agent" here exactly as everywhere else, so a device echoing
+	// back a pre-kind row it synced as "" is lossless rather than a downgrade.
+	Kind string `json:"kind,omitempty"`
+
 	Timezone     string     `json:"timezone,omitempty"`
 	TemplateCode string     `json:"template_code,omitempty"`
 	Cadence      Spec       `json:"schedule"`
@@ -204,6 +217,16 @@ func ValidateIntentPayload(p *IntentPayload) error {
 	}
 	if strings.TrimSpace(p.Instructions) == "" {
 		return fmt.Errorf("instructions are required")
+	}
+	if ResolveKind(p.Kind) == KindSpeak {
+		// HAL's /voice/speak rejects anything longer and does NOT truncate, so
+		// an over-long line is not "mostly spoken" — it is complete silence,
+		// every time the task fires. Counted in RUNES, not bytes: the limit is
+		// a character limit, and counting bytes would refuse a perfectly legal
+		// line the moment it contained an accent or a non-Latin script.
+		if n := utf8.RuneCountInString(p.Instructions); n > MaxSpeakChars {
+			return fmt.Errorf("spoken text must be at most %d characters, got %d", MaxSpeakChars, n)
+		}
 	}
 	return ValidateSpec(p.Cadence)
 }

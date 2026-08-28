@@ -2,6 +2,8 @@ import { useState } from "react";
 import { C } from "@/components/setup/shared";
 import { validateDraft } from "./scheduleDraft";
 import type { ScheduleDraft, ScheduleRepeat } from "./scheduleDraft";
+import { MAX_SPEAK_CHARS } from "@/lib/api";
+import type { ScheduleKind } from "@/lib/api";
 
 // The create/edit form for a scheduled task on the device itself.
 //
@@ -49,6 +51,12 @@ export function ScheduleEditor({
   const [touched, setTouched] = useState(false);
   const problem = validateDraft(draft);
 
+  const speaking = draft.kind === "speak";
+  // Code points, not UTF-16 units, so an emoji counts as the single character
+  // the device's utf8.RuneCountInString will also count.
+  const spokenLength = speaking ? [...draft.instructions].length : 0;
+  const overSpeakLimit = spokenLength > MAX_SPEAK_CHARS;
+
   const set = <K extends keyof ScheduleDraft>(key: K, value: ScheduleDraft[K]) =>
     setDraft((d) => ({ ...d, [key]: value }));
 
@@ -80,13 +88,32 @@ export function ScheduleEditor({
       </div>
 
       <div style={{ marginBottom: 10 }}>
-        <label style={labelStyle}>Instructions</label>
+        <label style={labelStyle}>When it runs, the device will</label>
+        <select
+          style={inputStyle}
+          value={draft.kind}
+          onChange={(e) => set("kind", e.target.value as ScheduleKind)}
+        >
+          <option value="agent">Ask the agent</option>
+          <option value="speak">Speak this text</option>
+        </select>
+      </div>
+
+      <div style={{ marginBottom: 10 }}>
+        <label style={labelStyle}>{speaking ? "What to say" : "Instructions"}</label>
         <textarea
           style={{ ...inputStyle, minHeight: 64, resize: "vertical", fontFamily: "inherit" }}
           value={draft.instructions}
-          placeholder="Summarize my calendar, unread email, and messages for today."
+          placeholder={speaking
+            ? "Time to drink some water."
+            : "Summarize my calendar, unread email, and messages for today."}
           onChange={(e) => set("instructions", e.target.value)}
         />
+        <div style={{ fontSize: 11, color: overSpeakLimit ? C.red : C.textDim, marginTop: 4 }}>
+          {speaking
+            ? <>Spoken out loud word for word. No agent, no thinking time. <span style={{ fontVariantNumeric: "tabular-nums" }}>{spokenLength}/{MAX_SPEAK_CHARS}</span></>
+            : "The agent reads this as a prompt and decides what to say or do."}
+        </div>
       </div>
 
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>

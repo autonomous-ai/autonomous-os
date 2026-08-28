@@ -3,7 +3,7 @@ import { CalendarClock, Pencil, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { C, SectionCard } from "@/components/setup/shared";
 import {
-  createSchedule, deleteSchedule, listSchedules, runScheduleNow, updateSchedule,
+  createSchedule, deleteSchedule, listSchedules, resolveScheduleKind, runScheduleNow, updateSchedule,
 } from "@/lib/api";
 import type { ScheduleCadence, ScheduleItem } from "@/lib/api";
 import { ScheduleEditor } from "./ScheduleEditor";
@@ -329,6 +329,17 @@ export function ScheduledSection({ active }: { active: boolean }) {
                     }}>
                       {sch.enabled ? "Enabled" : "Paused"}
                     </span>
+                    {resolveScheduleKind(sch.kind) === "speak" && (
+                      <span
+                        title="Spoken out loud, word for word — no agent turn"
+                        style={{
+                          fontSize: 10, fontWeight: 600, padding: "1px 7px", borderRadius: 999,
+                          border: `1px solid ${C.border}`, color: C.amber,
+                        }}
+                      >
+                        Speaks
+                      </span>
+                    )}
                     {sch.pending && (
                       <span style={{
                         fontSize: 10, fontWeight: 600, padding: "1px 7px", borderRadius: 999,
