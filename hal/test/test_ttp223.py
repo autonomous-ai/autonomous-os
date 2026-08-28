@@ -46,17 +46,25 @@ class _Harness:
         self.h._chip, self.h._lines, self.h._axis = 0, list(lines), axis
         self.h._ignore_edges_until = 0.0  # settle window already elapsed
         self.fired = []
+        self._now_ms = 0.0
 
     def touch(self, line, at_ms=None):
         """One touch edge, optionally at a controlled monotonic time."""
-        if at_ms is None:
-            self.h._on_edge(0, line, 0, 0)
-            return
-        with mock.patch.object(self.mod.time, "monotonic", return_value=at_ms / 1000.0):
-            self.h._on_edge(0, line, 0, 0)
+        self._edge(line, 0, at_ms)
 
-    def release(self, line):
-        self.h._on_edge(0, line, 1, 0)
+    def release(self, line, at_ms=None):
+        """One release edge. Release times matter too: how long the surface
+        stays empty is what separates a lift from a slide between pads."""
+        self._edge(line, 1, at_ms)
+
+    def _edge(self, line, level, at_ms):
+        # An untimed edge lands at the same instant as the previous one, so a
+        # sequence that never mentions time has no gaps anywhere.
+        if at_ms is None:
+            at_ms = self._now_ms
+        self._now_ms = at_ms
+        with mock.patch.object(self.mod.time, "monotonic", return_value=at_ms / 1000.0):
+            self.h._on_edge(0, line, level, 0)
 
     def end_session(self):
         """Fire the session-end timer by hand."""
@@ -121,6 +129,7 @@ class TestShippedDefaults(unittest.TestCase):
         self.assertTrue(t.SWIPE_ENABLED)
         self.assertEqual(t.SWIPE_MIN_GAP_MS, 35.0)
         self.assertEqual(t.SWIPE_MAX_GAP_MS, 150.0)
+        self.assertEqual(t.PRESS_MIN_EMPTY_MS, 15.0)
 
     def test_tracing_is_OFF_by_default(self):
         """The tracer sits in the lgpio callback path and writes files. It must
@@ -585,9 +594,9 @@ class TestPressCount(_Base):
     def test_two_taps_on_DIFFERENT_pads_is_a_double_tap(self):
         """No revisit and no landing — the press count is the only evidence."""
         self.hz.touch(96, at_ms=0)
-        self.hz.release(96)               # surface empties
+        self.hz.release(96, at_ms=92)     # surface empties, and stays empty
         self.hz.touch(100, at_ms=272)
-        self.hz.release(100)
+        self.hz.release(100, at_ms=345)
         self.assertEqual(self.hz.h._presses, 2)
         self.hz.end_session(); self.hz.decide()
         self.assertEqual(self.hz.fired, ["mic_toggle_action"])
@@ -596,14 +605,38 @@ class TestPressCount(_Base):
         """Even inside the travel band, the hand having left means it did not
         cross the surface — it tapped twice."""
         self.hz.touch(96, at_ms=0)
-        self.hz.release(96)
+        self.hz.release(96, at_ms=20)     # ...and the hand stayed off for 60 ms
         self.hz.touch(100, at_ms=80)      # gap is inside the band
         self.hz.end_session(); self.hz.decide()
         self.assertNotIn("swipe_action", self.hz.fired)
 
+    def test_a_slide_between_pads_is_not_a_second_press(self):
+        """The finger leaves the near pad microseconds after reaching the far
+        one, so the surface is briefly empty mid-swipe. Counting that hole as
+        the hand arriving again turned a swipe into a double tap — device trace
+        135217, a textbook 105.8 ms travel gap lost on a 0.7 ms hole."""
+        self.hz.touch(100, at_ms=0)
+        self.hz.release(100, at_ms=0)  # surface empty...
+        self.hz.touch(96, at_ms=0.7)  # ...for 0.7 ms
+        self.assertEqual(self.hz.h._presses, 1)
+
+    def test_a_real_lift_still_counts(self):
+        """Every genuine lift in the captured traces left the surface empty for
+        at least 23.8 ms; the floor sits at 15."""
+        self.hz.touch(96, at_ms=0)
+        self.hz.release(96, at_ms=0)
+        self.hz.touch(100, at_ms=30)
+        self.assertEqual(self.hz.h._presses, 2)
+
+    def test_the_full_135217_sequence_resolves_to_a_swipe(self):
+        for at, line, lvl in ((0, 100, 0), (105.8, 100, 1), (106.5, 96, 0), (241, 96, 1)):
+            self.hz.touch(line, at_ms=at) if lvl == 0 else self.hz.release(line, at_ms=at)
+        self.hz.end_session(); self.hz.decide()
+        self.assertEqual(self.hz.fired, ["swipe_action"])
+
     def test_the_full_131615_sequence_resolves_to_a_double_tap(self):
         for at, line, lvl in ((0, 96, 0), (92, 96, 1), (272, 100, 0), (345, 100, 1)):
-            self.hz.touch(line, at_ms=at) if lvl == 0 else self.hz.release(line)
+            self.hz.touch(line, at_ms=at) if lvl == 0 else self.hz.release(line, at_ms=at)
         self.hz.end_session(); self.hz.decide()
         self.assertEqual(self.hz.fired, ["mic_toggle_action"])
 

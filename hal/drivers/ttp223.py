@@ -175,6 +175,21 @@ SWIPE_MIN_GAP_MS = float(os.environ.get("HAL_TOUCH_SWIPE_MIN_GAP_MS", "35"))
 # it and read as a tap. Raise it if real swipes are missed.
 SWIPE_MAX_GAP_MS = float(os.environ.get("HAL_TOUCH_SWIPE_MAX_GAP_MS", "150"))
 
+# How long the surface must stay empty before a new touch counts as the hand
+# ARRIVING again rather than sliding between pads.
+#
+# Without it, the handoff mid-swipe counts as a second press: the finger leaves
+# the near pad microseconds after reaching the far one, the surface is briefly
+# empty, and the gesture is read as two taps. Device trace 135217
+# (2026-08-28) was a swipe with a textbook 105.8 ms travel gap that lost on the
+# press count alone — L100 released at 105.8 ms, L96 touched at 106.5 ms, a
+# 0.7 ms hole.
+#
+# Measured across every captured trace, real lifts leave the surface empty for
+# 23.8 ms at minimum and usually 90-180 ms; that 0.7 ms is the only value below
+# 20. 15 sits in wide clearance on both sides.
+PRESS_MIN_EMPTY_MS = float(os.environ.get("HAL_TOUCH_PRESS_MIN_EMPTY_MS", "15"))
+
 
 def _board_label() -> str:
     return board_profile().id
@@ -212,6 +227,9 @@ class TTP223Handler:
         # surface this cycle. See the PRESS note in _on_edge.
         self._held = set()
         self._presses = 0
+        # When the surface last went empty, so a re-touch can be told from a
+        # slide between pads. None = it has not been empty yet this cycle.
+        self._emptied_at_ms = None
         self._lock = threading.Lock()
         # Session-end timer: fires SESSION_GAP_S after the last edge.
         self._session_end_timer = None
@@ -310,8 +328,20 @@ class TTP223Handler:
                 # empties and the whole gesture is ONE press. Two taps always
                 # empty it in between. Device-measured 2026-08-28 over every
                 # labelled gesture: swipes 1 press, double taps 2, no overlap.
+                #
+                # ...but only if it was empty long enough to be a lift. A slide
+                # between pads leaves a hole of well under a millisecond, and
+                # counting that turns a swipe into two taps.
+                now_ms = time.monotonic() * 1000.0
                 if not self._held:
-                    self._presses += 1
+                    empty_for = (
+                        now_ms - self._emptied_at_ms
+                        if self._emptied_at_ms is not None
+                        else None
+                    )
+                    if empty_for is None or empty_for >= PRESS_MIN_EMPTY_MS:
+                        self._presses += 1
+                    self._emptied_at_ms = None
                 self._held.add(gpio)
                 repeat = bool(self._contact) and self._contact[-1][0] == gpio
                 if not repeat or gpio in self._released:
@@ -320,6 +350,8 @@ class TTP223Handler:
             else:
                 self._released.add(gpio)
                 self._held.discard(gpio)
+                if not self._held:
+                    self._emptied_at_ms = time.monotonic() * 1000.0
         # Any edge keeps the current session alive — cross-talk and
         # FastMode auto-LOW produce flurries of edges per physical
         # touch; coalesce them by resetting the session-end timer.
@@ -480,6 +512,7 @@ class TTP223Handler:
             self._released = set()
             self._held = set()
             self._presses = 0
+            self._emptied_at_ms = None
 
     def _on_session_end(self):
         # One physical touch ended.
