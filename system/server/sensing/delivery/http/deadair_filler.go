@@ -564,6 +564,15 @@ func (fm *FillerManager) CancelAllActive() int {
 	return len(runIDs)
 }
 
+// HasActiveRun reports whether runID still holds filler state. Exported for
+// the agent handler's tests, which assert that a muted turn stops re-arming.
+func (fm *FillerManager) HasActiveRun(runID string) bool {
+	fm.mu.Lock()
+	defer fm.mu.Unlock()
+	run, ok := fm.runs[runID]
+	return ok && !run.ended
+}
+
 // armLocked schedules a filler timer for run after delay. Caller holds fm.mu.
 // No-op when the run has ended, the cap is reached, or a timer/filler is already active.
 func (fm *FillerManager) armLocked(runID string, run *fillerRun, delay time.Duration) {

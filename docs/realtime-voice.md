@@ -113,6 +113,43 @@ unavailable, failed, timed-out, or delegated realtime takes the normal
 main-agent path. This also consumes a one-turn vision handoff, so a temporary
 Gemini failure cannot drop a voice command or leak a frame into the next turn.
 
+For a newly granted gaze wake, VAD has already confirmed both speech and visual
+intent before STT can produce its first partial. HAL therefore paints a dim,
+LED-only blue breathing acknowledgement immediately. It does not freeze the
+body or claim `listening`; the first partial upgrades it to the normal listening
+cue. A no-partial session restores the preceding LED state when it closes (or
+after a 3-second safety timeout), so ordinary VAD/noise sessions remain dark.
+
+A realtime-handled turn also takes the speaker away from the main-agent turn
+still in flight, not just its own. Its own run is silenced by `MarkSilentRun`;
+the older one is silenced by a second cancel watermark (`autoSpeechWatermarkMs`,
+see `docs/os-server.md`), stamped the moment the event arrives. Without it the
+device answers the user's newest question in the realtime voice and then, a
+moment later, answers the previous one in the main agent's voice. The main
+agent runs one turn at a time, so this is a single stale answer rather than a
+backlog.
+
+The hook sits **before** the busy fork in `PostEvent`, not next to
+`MarkSilentRun`. `voice_agent_handled` counts as passive, so a busy agent
+queues it and returns early — and "the agent is busy" is exactly the case with
+an older turn in flight, which made the later placement a no-op precisely when
+it was needed.
+
+The mark is deliberately weaker than the physical click: it never drops the
+older turn's `[HW:]` markers, because an action the user genuinely asked for
+must still run. Its pending fillers **are** dropped, though — the dividing line
+is speech-versus-hardware, not click-versus-auto. A filler is a promise that an
+answer is coming, not something the user requested, and leaving it armed
+reproduces what the click had to fix: the device answers the new question, then
+says "one moment" about the old one and goes quiet. The behaviour is opt-in per body: set `OS_REALTIME_AUTO_MUTE=1` in the body's
+`/opt/hal/.env` (os-server loads that file too). The code default is OFF,
+because that default is what every body which has never heard of the switch
+gets — lamp, intern-v2, reachy-mini, and any body with no `.env` at all.
+
+Known gap, shared with the physical click: an event queued while the agent was
+busy is given its runID at **replay** time, so it lands on the far side of the
+mark and speaks even though the question predates it.
+
 ### A muted reply still reaches the realtime agent
 
 The realtime session learns what the main agent replied through
