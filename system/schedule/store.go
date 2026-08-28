@@ -4,11 +4,51 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
 
-// Schedule is one recurring (or one-shot) agent task, exactly as the backend's
+// Task kinds — exact strings per the MQTT schedule.sync wire contract. Do not
+// rename: the backend, the web app and this device all send/expect them
+// verbatim.
+//
+// KindAgent is the ONLY behaviour that existed before this field, which is why
+// the empty string must resolve to it — see Schedule.Kind and ResolveKind.
+const (
+	KindAgent = "agent"
+	KindSpeak = "speak"
+)
+
+// MaxSpeakChars is HAL's hard TTS limit, mirrored here so a locally authored
+// speak task is refused at the form instead of at 8am every morning.
+//
+// The number is not ours to choose: hal/models.py declares the /voice/speak
+// text field as Field(..., min_length=1, max_length=2000). A longer string is
+// rejected with a 422 and is NOT truncated, so the device says nothing at all
+// — a silent, repeating, once-a-day failure that looks like the feature is
+// broken rather than like the text is too long. The backend enforces the same
+// bound on create/update; this is the second line of the same defence, and the
+// one that can report the problem while the user is still looking at the form.
+const MaxSpeakChars = 2000
+
+// ResolveKind maps a raw wire value onto the kind the runner should actually
+// use. Empty resolves to KindAgent because every schedule stored before the
+// field existed carries "", and each of them must keep behaving exactly as it
+// did. An UNRECOGNISED value resolves to KindAgent too, deliberately: a device
+// running older firmware than the backend must degrade to the long-standing
+// behaviour rather than refuse to run the task at all, since silently never
+// firing is the worse failure for something the user scheduled.
+func ResolveKind(kind string) string {
+	switch strings.TrimSpace(strings.ToLower(kind)) {
+	case KindSpeak:
+		return KindSpeak
+	default:
+		return KindAgent
+	}
+}
+
+// Schedule is one recurring (or one-shot) task, exactly as the backend's
 // schedule.sync payload describes it, plus a handful of store-only bookkeeping
 // fields the device needs to run the scheduler across restarts.
 type Schedule struct {
@@ -16,6 +56,18 @@ type Schedule struct {
 	Name         string `json:"name"`
 	Instructions string `json:"instructions"`
 	Enabled      bool   `json:"enabled"`
+
+	// Kind selects WHAT firing this schedule does, and so how Instructions is
+	// read: KindAgent ("agent") hands it to the agent runtime as a prompt;
+	// KindSpeak ("speak") treats it as the literal words to say and posts them
+	// straight to TTS, with no agent turn at all.
+	//
+	// Read through ResolveKind, never directly — "" (every row written before
+	// this field existed) and any value this firmware does not recognise both
+	// mean "agent". omitempty keeps an agent task's on-disk JSON byte-identical
+	// to what it was before this field, so nothing about existing devices
+	// changes on upgrade.
+	Kind string `json:"kind,omitempty"`
 
 	// Cadence is the wire's nested "schedule" object. Named Cadence (not
 	// Schedule) on the Go side only to avoid a Schedule.Schedule stutter — the

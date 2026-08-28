@@ -38,15 +38,39 @@ type RunReport struct {
 	// can actually correlate against (domain/agent.go's doc comment). An
 	// earlier revision fabricated its own id here and threw the real one away
 	// into Summary instead — CRITICAL-3 from the phase-5 review.
+	//
+	// ALWAYS EMPTY for a KindSpeak schedule, success included: speaking runs no
+	// agent turn, so there is no run to correlate with and nothing honest to
+	// put here. Consumers must not read an empty RunID as failure — read
+	// Status.
 	RunID     string
 	StartedAt time.Time
 	// SendLatency is how long the call to hand the message to the runtime
 	// took — NOT how long the agent's turn took. SendSystemChatMessage returns
 	// as soon as the message is sent (fire-and-forget), so this is send
 	// latency, typically single-digit milliseconds, never turn duration.
+	//
+	// For a KindSpeak schedule it is the time HAL took to ACCEPT the text, not
+	// how long the resulting speech lasted — /voice/speak returns on accept.
 	SendLatency time.Duration
-	Status      string // "success" | "failure"
-	Summary     string // the schedule's Name on success; the error text on failure
+
+	// Status is "success" | "failure", and what it certifies differs by kind —
+	// in BOTH cases it is weaker than "the user got their task":
+	//
+	//   KindAgent — the runtime accepted the message and returned a run id. The
+	//     turn itself runs asynchronously afterwards, so a "success" says
+	//     nothing about whether the agent answered well, or at all.
+	//   KindSpeak — HAL accepted the text for playback. hal.Speak returns on
+	//     accept and reports only a transport-level outcome: it cannot tell us
+	//     that audio actually played, that a speaker was attached, that the
+	//     volume was above zero, or that anybody was in the room. "success"
+	//     here means WE SAID IT, not THEY HEARD IT, and no code (or UI copy)
+	//     should claim otherwise.
+	//
+	// A "failure" is meaningful in both cases: the device genuinely could not
+	// hand the task off, and it will be retried within the catch-up window.
+	Status  string
+	Summary string // the schedule's Name on success; the error text on failure
 	// NextRunAt is the freshly computed next occurrence, set by fire() right
 	// after it persists the same value via RecordRunResult (zero value
 	// otherwise: a failed fire never advances NextRunAt, see fire()'s I5
@@ -64,9 +88,12 @@ type RunReport struct {
 }
 
 // Runner is the on-device scheduler loop: once a minute it asks the Store
-// which schedules are due and fires them through domain.AgentGateway's
-// SendSystemChatMessage — the one method all six agentic runtimes implement,
-// which is why the scheduler lives here instead of inside any one of them.
+// which schedules are due and fires them through domain.AgentGateway —
+// SendSystemChatMessage for an "agent" task, Speak for a "speak" one. Both are
+// methods all six agentic runtimes implement, which is why the scheduler lives
+// here instead of inside any one of them, and why it never imports the hal
+// package directly: depending on the interface alone is what keeps this whole
+// loop testable against a fake gateway.
 type Runner struct {
 	store    *Store
 	gw       domain.AgentGateway
@@ -256,21 +283,55 @@ func (r *Runner) RunNow(sch Schedule) (report RunReport, ok bool) {
 // since the ticker's automatic retries must suppress repeated failure acks
 // for the same occurrence (see fire()'s doc comment) while RunNow always acks.
 //
+// THIS IS THE ONE PLACE THE TWO KINDS DIVERGE. Everything around it — when a
+// task is due, the catch-up window, single-flight, I5's retry, failure-ack
+// suppression, next-occurrence math, the ack payload — is deliberately shared,
+// because none of it depends on what firing actually does. A "speak" task is a
+// scheduled task in every respect except which gateway method delivers it.
+//
+//	KindAgent — SendSystemChatMessage. Fire-and-forget; its return value is the
+//	  run id the backend can correlate against.
+//	KindSpeak — Speak. The instructions ARE the words, posted straight to TTS.
+//	  No agent turn runs, so there is no run id (RunReport.RunID stays empty by
+//	  design) and no tokens are spent.
+//
+// Unknown/empty kinds route to the agent path via ResolveKind — see its doc
+// comment for why degrading is right and rejecting is not.
+//
+// Note what is NOT special-cased: tick() still refuses to fire ANY kind while
+// the gateway reports IsBusy(). A speak task runs no agent turn, so it is
+// tempting to let it barge in — but the resource it contends for is the
+// SPEAKER (and the mic, which HAL locks during playback), not the model. Two
+// voices at once is exactly what the single-flight rule exists to prevent, so
+// speak waits its turn like everything else.
+//
 // attemptID is a LOCAL correlation id used only for the "firing" log line
-// before the send completes — it is NOT reported as RunReport.RunID. The
-// actual run id comes from SendSystemChatMessage's own return value once the
-// send completes (see RunReport.RunID's doc comment).
+// before the send completes — it is NOT reported as RunReport.RunID. For an
+// agent task the actual run id comes from SendSystemChatMessage's own return
+// value once the send completes (see RunReport.RunID's doc comment).
 func (r *Runner) send(sch Schedule, attemptID string) RunReport {
 	started := time.Now()
-	slog.Info("schedule: firing", "component", "schedule", "schedule_id", sch.ID, "attempt_id", attemptID)
+	kind := ResolveKind(sch.Kind)
+	slog.Info("schedule: firing", "component", "schedule",
+		"schedule_id", sch.ID, "kind", kind, "attempt_id", attemptID)
 
-	runID, err := r.gw.SendSystemChatMessage(sch.Instructions)
+	var (
+		runID string
+		err   error
+	)
+	if kind == KindSpeak {
+		// No runID: nothing started that anyone could look up later.
+		err = r.gw.Speak(sch.Instructions)
+	} else {
+		runID, err = r.gw.SendSystemChatMessage(sch.Instructions)
+	}
 	latency := time.Since(started)
 
 	status, summary := "success", sch.Name
 	if err != nil {
 		status, summary = "failure", err.Error()
-		slog.Error("schedule: fire failed", "component", "schedule", "schedule_id", sch.ID, "error", err)
+		slog.Error("schedule: fire failed", "component", "schedule",
+			"schedule_id", sch.ID, "kind", kind, "error", err)
 	}
 
 	return RunReport{ScheduleID: sch.ID, RunID: runID, StartedAt: started, SendLatency: latency, Status: status, Summary: summary}

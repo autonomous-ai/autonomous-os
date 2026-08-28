@@ -5,8 +5,9 @@
 //
 // Deliberately lives here — in os-server — rather than inside any runtime
 // (openclaw/hermes/claudecode/codex/picoclaw/opencode): a device owner can
-// switch runtimes at any time, and all six implement the one method this
-// package needs, domain.AgentGateway.SendSystemChatMessage. Putting the
+// switch runtimes at any time, and all six implement the two methods this
+// package needs, domain.AgentGateway.SendSystemChatMessage (for an "agent"
+// task) and domain.AgentGateway.Speak (for a "speak" one). Putting the
 // scheduler in a runtime (e.g. riding OpenClaw's own cron subsystem) would
 // strand every schedule the moment the owner switched away from OpenClaw.
 package schedule

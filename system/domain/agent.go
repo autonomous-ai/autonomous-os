@@ -331,6 +331,33 @@ type AgentGateway interface {
 	// SendToHALTTS posts response text to HAL for TTS playback.
 	SendToHALTTS(text string) error
 
+	// Speak says text out loud and nothing else — no agent turn, no session
+	// entry, no tokens. It exists so callers that already have the exact words
+	// (a "speak" scheduled task, whose instructions ARE the line to say) can
+	// reach the speaker without importing system/lib/hal directly: the
+	// scheduler depends on this interface alone, which is what keeps it
+	// testable against a fake gateway and independent of any one runtime.
+	//
+	// Distinct from SendToHALTTS on purpose. That one is for the AGENT'S OWN
+	// reply and posts with realtime_feedback set, so the spoken text is fed
+	// back to the realtime voice agent as history. A canned line is not
+	// something the agent said, so feeding it back would put words in the
+	// model's mouth — Speak uses plain /voice/speak, the same path hardcoded
+	// fillers and system notices use.
+	//
+	// WHAT THE ERROR MEANS, AND WHAT IT DOES NOT: a nil return means HAL
+	// ACCEPTED the text for playback. It is not evidence that audio was
+	// produced, that the speaker was connected, or that anyone was in the room
+	// to hear it — /voice/speak returns as soon as it has taken the request.
+	// Callers must not report a nil error as "the user heard this".
+	//
+	// Text is bounded by HAL's own contract (1..2000 characters) and is NOT
+	// truncated anywhere: an over-long string is rejected outright and nothing
+	// is said, which is why the length is validated at creation time rather
+	// than discovered at fire time. Empty (or whitespace-only) text is a no-op
+	// returning nil, since there is nothing to say and HAL would reject it.
+	Speak(text string) error
+
 	// SendToHALTTSQueue posts text to /voice/speak-queue: plays
 	// immediately when idle, otherwise queues + pre-synthesizes so the audio
 	// chains seamlessly onto the current speech (used for sentence-streamed

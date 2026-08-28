@@ -20,9 +20,24 @@ type fakeGateway struct {
 	setBusyOnSend bool // simulate the WS lifecycle marking the agent busy the instant a turn starts
 	sendErr       error
 	sent          []string
+
+	// spoken records Speak() calls, kept SEPARATE from sent so a test can
+	// prove not just that the right text went out but that it went out on the
+	// right transport — an "agent" task landing in spoken (or vice versa)
+	// would otherwise look identical to a pass.
+	spoken   []string
+	speakErr error
 }
 
 func (f *fakeGateway) IsBusy() bool { return f.busy }
+
+func (f *fakeGateway) Speak(text string) error {
+	f.spoken = append(f.spoken, text)
+	if f.setBusyOnSend {
+		f.busy = true
+	}
+	return f.speakErr
+}
 
 func (f *fakeGateway) SendSystemChatMessage(msg string) (string, error) {
 	f.sent = append(f.sent, msg)
