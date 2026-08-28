@@ -322,10 +322,11 @@ func (s *Server) handleSetUpCompleteChange(setupCompleted bool) {
 			// lands in the owner's language without relying on the agent
 			// to translate the priming message.
 			if gatewayStable {
+				deviceType := s.config.DeviceTypeOrDefault()
 				slog.Info("INBOUND from system → agent (startup greeting)",
 					"component", "server", "backend", s.agentGateway.Name(),
 					"source", "wake_greeting")
-				if _, err := s.agentGateway.SendSystemChatMessage(wakeGreetingPrompt()); err != nil {
+				if _, err := s.agentGateway.SendSystemChatMessage(wakeGreetingPrompt(s.agentGateway.Name(), deviceType, device.Capabilities(deviceType))); err != nil {
 					slog.Warn("startup greeting failed", "component", "server", "backend", s.agentGateway.Name(), "error", err)
 				}
 			} else {

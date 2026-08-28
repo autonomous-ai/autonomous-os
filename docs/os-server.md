@@ -219,6 +219,13 @@ prevents a greeting from being sent into a gateway that passed an earlier health
 probe but is still restarting. The system greeting also tells the agent that its
 device skills are available; it should use the relevant skill only for a later
 action or device-related request, rather than scanning all skills during boot.
+It includes structured `agent_runtime` context from the ready gateway's display
+name (for example, `OpenClaw` or `Codex`), so the agent can follow that runtime's
+workspace instructions for tool and session conventions. It also includes the
+resolved `device_type` and a sorted `device_capabilities` list from that device's
+`ROBOT.md`; the agent can avoid assuming unavailable hardware exists. This is
+deliberately the ready gateway rather than `config.agent_runtime`, which can be
+transiently out of date while a runtime switch is being reconciled.
 
 Alerts are enabled whenever `llm_base_url` + `llm_api_key` are set; set
 `alerts_disabled: true` in `config/config.json` to mute a device.

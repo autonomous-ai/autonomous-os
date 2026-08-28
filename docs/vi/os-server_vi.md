@@ -214,7 +214,13 @@ trạng thái ready liên tục trong 15 giây. Điều này tránh gửi greeti
 đã pass một health probe cũ nhưng vẫn đang restart. System greeting cũng báo cho
 agent biết các skill của thiết bị đã sẵn sàng; agent chỉ dùng skill phù hợp cho
 yêu cầu hành động hoặc liên quan đến thiết bị ở lượt sau, thay vì quét mọi skill
-khi boot.
+khi boot. Greeting cũng có context có cấu trúc `agent_runtime` lấy từ display
+name của gateway đã ready (ví dụ `OpenClaw` hoặc `Codex`), để agent theo đúng
+workspace instruction về tool và session convention của runtime đó. Nó cũng có
+`device_type` đã resolve cùng danh sách `device_capabilities` đã sort từ
+`ROBOT.md` của device, để agent không giả định phần cứng không tồn tại. Nguồn
+runtime này cố ý là gateway đã ready, không phải `config.agent_runtime`, vì
+config có thể lệch tạm thời trong khi reconcile runtime switch.
 
 Cảnh báo bật khi `llm_base_url` + `llm_api_key` được set; đặt
 `alerts_disabled: true` trong `config/config.json` để tắt cảnh báo cho một thiết bị.
