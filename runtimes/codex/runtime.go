@@ -5,10 +5,10 @@ import (
 	"log/slog"
 	"regexp"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"go.autonomous.ai/os/system/lib/core/system"
+	"go.autonomous.ai/os/system/lib/versioncache"
 )
 
 // codexVersionProbeTimeout caps one `/usr/local/bin/codex --version` probe.
@@ -31,30 +31,22 @@ const codexBinary = "/usr/local/bin/codex"
 // codexSemverRe extracts the release from `codex --version` output
 // (e.g. "codex-cli 0.142.5" → "0.142.5").
 var codexSemverRe = regexp.MustCompile(`(\d+\.\d+\.\d+(?:[-+._][0-9A-Za-z.-]+)?)`)
-var codexVersion atomic.Pointer[string]
+
+// codexVersion caches the parsed Codex CLI version and re-probes it when the
+// binary on disk changes, so a CLI updated under a running os-server (OTA
+// `software-update codex`, or a manual install) is reported without waiting for
+// an os-server restart.
+var codexVersion = versioncache.New(codexBinary, "codex-probe", probeCodexVersion)
 
 func GetCodexVersion() string {
-	if v := codexVersion.Load(); v != nil {
-		return *v
-	}
-	return ""
+	return codexVersion.Get()
 }
 
 // PopulateCodexVersion shells out to `codex --version`, normalizes the semver,
 // and caches it. It retries failed or unparseable probes so boot-time CLI startup
 // races do not leave the Monitor's Agent version blank for the process lifetime.
 func PopulateCodexVersion() {
-	for attempt := 0; ; attempt++ {
-		if v, ok := probeCodexVersion(); ok {
-			codexVersion.Store(&v)
-			return
-		}
-		if attempt >= codexVersionProbeRetries {
-			slog.Warn("read codex version gave up after retries (expected if not on codex backend)", "component", "codex-probe", "attempts", attempt+1)
-			return
-		}
-		time.Sleep(codexVersionProbeBackoff)
-	}
+	codexVersion.Populate(codexVersionProbeRetries, codexVersionProbeBackoff)
 }
 
 // probeCodexVersion runs one version probe. A failed command, timeout, or

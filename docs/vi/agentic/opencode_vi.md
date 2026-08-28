@@ -351,7 +351,10 @@ lần chạy đầu). `/root/config/agent_state.json` được xoá khoá-bướ
   `.env`, mirror adapter codex.
 - **Version uplink**: `opencode --version` được probe lúc startup
   (`runtime.go` → `GetOpenCodeVersion`) và báo cáo dưới dạng `opencode_version`
-  trên message MQTT `info` (`domain.MQTTInfoResponse`).
+  trên message MQTT `info` (`domain.MQTTInfoResponse`). Cache là một
+  `versioncache.Cache`: `GetOpenCodeVersion` probe lại mỗi khi size/mtime của
+  binary đổi, nên update áp trong lúc os-server đang chạy hiện ra ngay mà không
+  cần restart os-server.
 - **Trigger switch**: MQTT `opencode.setup` (`KindOpenCodeSetup`), HTTP
   `POST /api/device/agent-runtime`, và dropdown **Runtime** ở web Settings
   (`AgentRuntimeSection.tsx`). `domain.AgentRuntimes` bao gồm `opencode`, nên các
