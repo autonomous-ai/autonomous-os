@@ -10,6 +10,7 @@ import (
 	"go.autonomous.ai/os/system/domain"
 	"go.autonomous.ai/os/system/lib/flow"
 	"go.autonomous.ai/os/system/lib/sensingmsg"
+	"go.autonomous.ai/os/system/lib/speakergate"
 	"go.autonomous.ai/os/system/skillcontext/mood"
 )
 
@@ -111,6 +112,22 @@ func (s *HermesService) drainPendingEvents() {
 	s.pendingEventsMu.Unlock()
 
 	if len(events) == 0 {
+		return
+	}
+
+	// The turn that just ended may still be coming out of the speaker: a
+	// runtime goes idle when the reply text is queued for TTS, not when it has
+	// been spoken. Replaying a passive event now would open a newer turn and
+	// HAL would hand it the speaker mid-sentence, cutting the answer the user
+	// asked for. Put the batch back and let speakergate call us again.
+	replayTypes := make([]string, len(events))
+	for i, ev := range events {
+		replayTypes[i] = ev.eventType
+	}
+	if speakergate.DeferReplay(replayTypes, s.drainPendingEvents) {
+		s.pendingEventsMu.Lock()
+		s.pendingEvents = append(events, s.pendingEvents...)
+		s.pendingEventsMu.Unlock()
 		return
 	}
 
