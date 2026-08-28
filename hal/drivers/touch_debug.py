@@ -31,7 +31,7 @@ Env knobs (all optional):
   HAL_TOUCH_DEBUG              "true" to enable (OFF by default)
   HAL_TOUCH_DEBUG_DIR          output root (default: ./touch_logs next to this file)
   HAL_TOUCH_DEBUG_MAX_ENTRIES  file cap, oldest pruned (default 200; 0 = unbounded)
-  HAL_TOUCH_DEBUG_PADS         line->label map, e.g. "96=S1,98=S2,100=S4". Without
+  HAL_TOUCH_DEBUG_PADS         line->label map, e.g. "96=S1,100=S4". Without
                                it pads are labelled by line number, because the
                                historical S-names do not follow line order on this
                                board and guessing them would assert something false.
@@ -117,7 +117,7 @@ def _init() -> bool:
 
 
 def _parse_pad_labels(raw: str) -> Dict[int, str]:
-    """Parse "96=S1,98=S2" into {96: "S1", 98: "S2"}. Malformed entries are
+    """Parse "96=S1,100=S4" into {96: "S1", 100: "S4"}. Malformed entries are
     skipped rather than raising — a typo in an env var must not kill touch."""
     out: Dict[int, str] = {}
     for part in raw.split(","):
