@@ -135,6 +135,18 @@ labelled `[TTS HISTORY, not spoken]`, because that line exists to stop the
 model repeating what the user ALREADY HEARD, and on a cancelled turn they heard
 none of it.
 
+The second way a reply goes unheard is inside HAL, and os-server cannot see it:
+`speak_queue` drops a superseded turn (an older `turn_seq` arriving after a
+newer turn already owns the queue) and **returns success**, so the caller
+believes it was spoken. This is the delegate case — the realtime agent hands a
+question to the main agent, the main agent is slow, a newer turn wins the
+speaker, and the answer evaporates while `save_main_handoff`'s placeholder
+stays. The drop sites therefore call `_on_unspoken_reply`, a hook `VoiceService`
+injects next to `_on_speak_end`, which routes into the same
+`feed_realtime_history(..., spoken=False)`. It is gated on `realtime_feedback`
+for the same reason the playback feed is: only the agentic runtime's own reply
+may enter the model's context, never a dropped filler or system notice.
+
 ### Silero guards the silence clock (end of turn)
 
 A mic session ends when the audio stays below the RMS threshold for

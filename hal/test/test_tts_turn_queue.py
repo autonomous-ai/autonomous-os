@@ -38,6 +38,7 @@ def _queue_service():
     service._last_spoken_text = ""
     service._realtime_feedback = False
     service._speaker_muted = lambda: False
+    service._on_unspoken_reply = None
     return service
 
 
@@ -49,6 +50,68 @@ def test_delayed_older_turn_is_dropped_before_it_can_rejoin_queue():
     assert service.speak_queue("late old reply", turn_id="old-run", turn_seq=1) is True
     assert service._latest_queue_turn_id == "new-run"
     assert service._pending_queue == []
+
+
+# A dropped turn is acknowledged as success to os-server, so HAL is the only
+# place that knows the reply existed and was never heard. A delegated turn has
+# already had save_main_handoff record the question with "its spoken reply
+# follows", so losing this leaves the realtime agent holding the placeholder.
+def test_dropped_older_turn_still_reaches_the_realtime_history_hook():
+    service = _queue_service()
+    service._latest_queue_turn_id = "new-run"
+    service._latest_queue_turn_seq = 2
+    unspoken = []
+    service._on_unspoken_reply = unspoken.append
+
+    service.speak_queue(
+        "late old reply", turn_id="old-run", turn_seq=1, realtime_feedback=True
+    )
+
+    assert unspoken == ["late old reply"]
+
+
+def test_conflicting_turn_sequence_also_reports_the_unspoken_reply():
+    service = _queue_service()
+    service._latest_queue_turn_id = "new-run"
+    service._latest_queue_turn_seq = 2
+    unspoken = []
+    service._on_unspoken_reply = unspoken.append
+
+    service.speak_queue(
+        "same seq, other run", turn_id="old-run", turn_seq=2, realtime_feedback=True
+    )
+
+    assert unspoken == ["same seq, other run"]
+
+
+# Only the agentic runtime's own reply may enter the realtime model's context —
+# a dropped filler or system notice must not, exactly as on the playback path.
+def test_dropped_non_agent_speech_is_not_fed_to_realtime():
+    service = _queue_service()
+    service._latest_queue_turn_id = "new-run"
+    service._latest_queue_turn_seq = 2
+    unspoken = []
+    service._on_unspoken_reply = unspoken.append
+
+    service.speak_queue("dead-air filler", turn_id="old-run", turn_seq=1)
+
+    assert unspoken == []
+
+
+# A hook that raises must not turn an acknowledged drop into a 500.
+def test_failing_hook_does_not_break_the_drop_path():
+    service = _queue_service()
+    service._latest_queue_turn_id = "new-run"
+    service._latest_queue_turn_seq = 2
+
+    def boom(_):
+        raise RuntimeError("realtime socket is gone")
+
+    service._on_unspoken_reply = boom
+
+    assert service.speak_queue(
+        "late old reply", turn_id="old-run", turn_seq=1, realtime_feedback=True
+    ) is True
 
 
 def test_newer_turn_stops_current_speech_and_takes_the_lock(monkeypatch, tmp_path):

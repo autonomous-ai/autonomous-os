@@ -128,6 +128,17 @@ Fragment lưu bền là toàn bộ câu trả lời trong cả hai trường h�
 `[TTS HISTORY, not spoken]`, vì dòng đó tồn tại để model không lặp lại thứ user
 ĐÃ NGHE, mà ở một turn bị huỷ thì user chưa nghe gì cả.
 
+Đường thứ hai làm câu trả lời không được nghe nằm trong HAL, và os-server không
+thấy được: `speak_queue` bỏ turn bị vượt mặt (một `turn_seq` cũ tới sau khi turn
+mới hơn đã sở hữu hàng đợi) rồi **trả về thành công**, nên caller tưởng đã nói.
+Đây chính là ca delegate — realtime giao câu hỏi cho agent chính, agent chính
+chậm, một turn mới hơn giành mất loa, câu trả lời bay mất trong khi placeholder
+của `save_main_handoff` vẫn còn. Vì vậy hai chỗ drop gọi `_on_unspoken_reply`,
+hook do `VoiceService` gắn vào cạnh `_on_speak_end`, dẫn về đúng
+`feed_realtime_history(..., spoken=False)`. Hook chỉ bắn khi `realtime_feedback`
+bật, cùng lý do với đường phát: chỉ câu trả lời thật của agentic runtime mới
+được vào context của model, không phải filler hay notice bị bỏ.
+
 ### Silero canh đồng hồ im lặng (kết thúc lượt)
 
 Một phiên mic kết thúc khi audio nằm dưới ngưỡng RMS suốt `SILENCE_TIMEOUT_S`.

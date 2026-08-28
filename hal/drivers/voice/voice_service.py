@@ -253,6 +253,16 @@ class VoiceService:
 
             tts_service._on_speak_end = _tts_speak_end_with_realtime_feedback
 
+            # Same feed for a reply that never plays. speak_queue() drops a
+            # superseded turn and still reports success to os-server, so this
+            # hook is the only signal that the text existed — and a delegated
+            # turn has already had save_main_handoff record the question with
+            # "its spoken reply follows".
+            def _unspoken_reply_to_realtime(text: str) -> None:
+                self.feed_realtime_history(text, spoken=False)
+
+            tts_service._on_unspoken_reply = _unspoken_reply_to_realtime
+
     def feed_realtime_history(self, text: str, spoken: bool = True) -> bool:
         """Give the realtime agent a main-agent reply it must stay aware of.
 
