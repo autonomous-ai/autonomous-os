@@ -33,6 +33,10 @@ SERVO_CMD_MUSIC_STOP = "music_stop"
 
 # --- LED effect name constants ---
 FX_BREATHING = "breathing"
+# Breathing whose fractional level is spread across the ring instead of being
+# truncated per pixel — see effects.breathing_fine. For cues that must stay
+# readable at a peak of a few units, where plain breathing has 2 usable levels.
+FX_BREATHING_FINE = "breathing_fine"
 FX_CANDLE = "candle"
 FX_RAINBOW = "rainbow"
 FX_NOTIFICATION_FLASH = "notification_flash"
@@ -41,7 +45,7 @@ FX_BLINK = "blink"
 FX_SPEAKING_WAVE = "speaking_wave"
 FX_SPEAKING_WAVE_RAINBOW = "speaking_wave_rainbow"
 
-VALID_LED_EFFECTS = [FX_BREATHING, FX_CANDLE, FX_RAINBOW, FX_NOTIFICATION_FLASH, FX_PULSE, FX_BLINK, FX_SPEAKING_WAVE,
+VALID_LED_EFFECTS = [FX_BREATHING, FX_BREATHING_FINE, FX_CANDLE, FX_RAINBOW, FX_NOTIFICATION_FLASH, FX_PULSE, FX_BLINK, FX_SPEAKING_WAVE,
                      FX_SPEAKING_WAVE_RAINBOW]
 
 # --- Scene name constants ---
@@ -173,7 +177,7 @@ EMOTION_PRESETS = {
     # that long. A smooth breath says "open, waiting for you".
     EMO_LISTENING: {"servo": None,  # SERVO_LISTENING,
                     "color": [4, 8, 16],
-                    "effect": FX_BREATHING,
+                    "effect": FX_BREATHING_FINE,
                     "speed": 1.2,
                     # The one cue that must be readable the instant it fires:
                     # it answers the user's first words. The breath's rise is

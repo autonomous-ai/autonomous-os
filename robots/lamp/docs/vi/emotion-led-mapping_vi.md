@@ -12,7 +12,7 @@ Nguồn: màu trong bảng là màu **lamp** thực sự hiển thị — `robot
 | `excited` | 3, 1, 0 | `#030100` cam dịu | overlay | candle | 0.5 | excited |
 | `shy` | 3, 0, 1 | `#030001` hồng rose dịu | overlay | breathing | 0.3 | shy |
 | `shock` | 2, 2, 2 | `#020202` trắng dịu | overlay | notification_flash | 1.0 | shock |
-| `listening` | 0, 0, 3 | `#000003` xanh dương dịu | overlay | breathing (mở ở đỉnh) | 1.2 | — (xem ghi chú) |
+| `listening` | 0, 0, 3 | `#000003` xanh dương dịu | overlay | breathing_fine (mở ở đỉnh) | 1.2 | — (xem ghi chú) |
 | `laugh` | 2, 3, 0 | `#020300` xanh chanh dịu | overlay | candle | 0.2 | laugh |
 | `confused` | 3, 2, 0 | `#030200` amber dịu | overlay | candle | 0.2 | confused |
 | `sleepy` | 0, 0, 0 | `#000000` đen (tắt) | base | solid | — | sleepy |
@@ -96,6 +96,14 @@ Ghi chú kỹ thuật:
 Vì vậy `listening` khai `"start_at_peak": True` (`hal/presets.py`): arc mở màn bắt đầu ở độ sáng đầy đủ rồi thở *xuống*; từ chu kỳ thứ hai trở đi vẫn lên từ 0 như cũ. Peak, hue và `speed` giữ nguyên — không có gì sáng hơn trước, nên nó không đi ngược các đợt hạ chói ở trên.
 
 Đây là cờ opt-in theo từng preset và `listening` là preset duy nhất bật: emotion thì đúng là nên fade in, chỉ có cue trả lời câu nói đầu tiên của user mới bắt buộc đọc được ngay ở frame đầu. Cách sửa tương đương ở call site không dùng được — bật màu lên trước khi start effect thread sẽ bị chính frame `i=0` của thread đó xoá sau vài mili-giây (`hal/drivers/rgb/effects.py`).
+
+### Độ phân giải của nhịp thở đến từ ring, không đến từ màu
+
+Mở màn ở đỉnh chữa được độ trễ nhưng lòi ra thứ nằm dưới: ở peak hiệu dụng 2 thì chỉ với tới được 0, 1 và 2, mức đỉnh sống đúng một frame, và cả strip nằm ở đen tuyệt đối suốt một phần ba mỗi chu kỳ. Trên máy nó đọc thành chớp một cái rồi tắt — mà tắt chính là thứ comment của preset đã loại ("stays lit for as long as the user is talking; pulse's dark gap between beats reads as an alert").
+
+Đã thử nâng peak trước, vì thông thường muốn thêm nấc thì phải có thêm biên độ: chạy thang 4 / 6 / 8 / 12 hiệu dụng trên lamp-0c89 ngày 28/08/2026 và bị **bác vì chói**, đúng như mọi lần thử trước đó. Thử tiếp trôi hue ở độ sáng không đổi thì nhìn ra giật cấp, vì kênh xanh lá ở mức này cũng chỉ lượng tử hoá thành 3 giá trị y như độ sáng.
+
+Nên `listening` chạy `breathing_fine` (`hal/drivers/rgb/effects.py`): nhịp thở đi giữa `color` và một nấc dưới nó, còn phần lẻ ở giữa được thể hiện bằng cách nâng MỘT SỐ trong 32 pixel, rải theo bước nguyên tố cùng nhau với số pixel để strip đọc thành một vòng ở mức trung gian chứ không thành một cung sáng. Mắt gộp cả ring lại nên cue có thêm ~32 nấc nhỏ mỗi đơn vị. Peak không đổi, hue không đổi (kênh đang 0 thì vẫn 0), và không pixel nào tối — độ phân giải lấy từ 32 pixel thay vì từ 8 bit màu.
 
 ## `listening` không có servo
 

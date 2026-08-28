@@ -12,7 +12,7 @@ Source: colors are what the **lamp** actually shows — `robots/lamp/presets.jso
 | `excited` | 3, 1, 0 | `#030100` dim orange | overlay | candle | 0.5 | excited |
 | `shy` | 3, 0, 1 | `#030001` dim rose | overlay | breathing | 0.3 | shy |
 | `shock` | 2, 2, 2 | `#020202` soft white | overlay | notification_flash | 1.0 | shock |
-| `listening` | 0, 0, 3 | `#000003` dim blue | overlay | breathing (opens at peak) | 1.2 | — (see note) |
+| `listening` | 0, 0, 3 | `#000003` dim blue | overlay | breathing_fine (opens at peak) | 1.2 | — (see note) |
 | `laugh` | 2, 3, 0 | `#020300` dim lime | overlay | candle | 0.2 | laugh |
 | `confused` | 3, 2, 0 | `#030200` dim amber | overlay | candle | 0.2 | confused |
 | `sleepy` | 0, 0, 0 | `#000000` black (off) | base | solid | — | sleepy |
@@ -96,6 +96,14 @@ Technical notes:
 `listening` therefore carries `"start_at_peak": True` (`hal/presets.py`), which makes its opening arc start at full brightness and breathe *down*; every cycle after the first rises from 0 as usual. Peak level, hue and `speed` are untouched — nothing gets brighter than it already was, so this does not walk back the glare passes above.
 
 It is opt-in per preset and `listening` is the only preset that sets it: an emotion is meant to fade in, and only a cue that answers the user's first words has to be readable on its first frame. The equivalent fix cannot live at the call site — painting the colour before the effect thread starts is erased milliseconds later by that thread's own `i=0` frame (`hal/drivers/rgb/effects.py`).
+
+### The breath's resolution comes from the ring, not from the colour
+
+Opening at the peak fixed the delay but exposed what was under it: at an effective peak of 2 the only reachable values are 0, 1 and 2, the top one lasts a single frame, and the strip sits at literal black for a third of every cycle. On device that reads as a blink followed by darkness — and darkness is precisely what the preset's own comment rules out ("stays lit for as long as the user is talking; pulse's dark gap between beats reads as an alert").
+
+Raising the peak was tried first, since more levels normally come from more headroom: a ladder of effective 4 / 6 / 8 / 12 was run on lamp-0c89 on 28/08/2026 and **rejected as glaring**, consistent with every earlier attempt. A constant-luminance hue drift was tried next and read as stepped, because the green channel quantises into 3 values at this level exactly as brightness does.
+
+`listening` therefore runs `breathing_fine` (`hal/drivers/rgb/effects.py`): the breath moves between `color` and one unit below it, and the fraction in between is rendered by raising SOME of the 32 pixels, scattered with a stride coprime to the ring size so the strip reads as one ring at an in-between level rather than a lit arc. The eye integrates the ring, so the cue gains ~32 sub-levels per unit. Peak brightness is unchanged, hue is unchanged (a channel already at 0 stays 0), and no pixel is ever dark — the resolution comes from the 32 pixels instead of from 8-bit colour.
 
 ## `thinking` and `listening` have no servo
 

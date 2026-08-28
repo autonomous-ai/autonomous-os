@@ -78,6 +78,7 @@ POST /led/effect
 | Effect | Description | Params |
 |--------|-------------|--------|
 | `breathing` | Sine-wave brightness up/down | color, speed, `start_at_peak` |
+| `breathing_fine` | Same breath, but the fractional level is spread across the ring (spatial dither) instead of truncated per pixel — for dim cues where `breathing` has only 2 usable levels. Never darker than one unit below `color`, never brighter than `color`. | color, speed, `start_at_peak` |
 | `candle` | Random flickering candle | color |
 | `rainbow` | Hue rotation across strip | brightness (0.0-1.0, level), speed — generates its own hue, ignores `color` |
 | `notification_flash` | Quick flash 3 times | color |

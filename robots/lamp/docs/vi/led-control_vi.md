@@ -78,6 +78,7 @@ POST /led/effect
 | Effect | Mô tả | Params |
 |--------|-------|--------|
 | `breathing` | Sine-wave brightness lên xuống | color, speed, `start_at_peak` |
+| `breathing_fine` | Vẫn nhịp thở đó, nhưng phần lẻ được rải ra cả ring (spatial dither) thay vì cắt cụt ở từng pixel — dành cho cue tối, nơi `breathing` chỉ còn 2 mức dùng được. Không bao giờ tối hơn `color` một nấc, không bao giờ sáng hơn `color`. | color, speed, `start_at_peak` |
 | `candle` | Nến lung linh ngẫu nhiên | color |
 | `rainbow` | Xoay hue qua toàn bộ strip | brightness (0.0-1.0, mức sáng), speed — tự sinh hue, bỏ qua `color` |
 | `notification_flash` | Flash nhanh 3 lần | color |
