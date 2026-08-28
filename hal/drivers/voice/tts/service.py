@@ -257,6 +257,15 @@ class TTSService:
         self._on_speak_start = on_speak_start
         self._on_speak_end = on_speak_end
 
+        # on_unspoken_reply(text): an agent reply this service accepted and then
+        # dropped without playing it — today, a superseded turn arriving after a
+        # newer one already owns the queue. Injected by VoiceService (same way
+        # as _on_speak_end) to feed the realtime agent, which otherwise learns
+        # what the main agent replied only through playback. The drop is
+        # acknowledged as success to os-server, so this is the ONLY place that
+        # knows the text existed and was never heard.
+        self._on_unspoken_reply = None
+
         # Echo cancellation: store last spoken text for transcript self-filtering
         self._last_spoken_text: str = ""
         self._last_spoken_time: float = 0.0
@@ -602,6 +611,20 @@ class TTSService:
         if cleared:
             logger.info("TTS stop cleared %d pending queued speech item(s)", cleared)
 
+    def _report_unspoken_reply(self, text: str, realtime_feedback: bool) -> None:
+        """Hand a dropped agent reply to the unspoken-reply hook.
+
+        Gated on realtime_feedback for the same reason the playback feed is:
+        only the agentic runtime's own reply may enter the realtime model's
+        context. A dropped filler or system notice must not.
+        """
+        if not realtime_feedback or not text or self._on_unspoken_reply is None:
+            return
+        try:
+            self._on_unspoken_reply(text)
+        except Exception:
+            logger.exception("on_unspoken_reply callback failed")
+
     def _register_drain_queue(self, q) -> None:
         """Expose a queue the active playback is draining, so stop() can wake it."""
         with self._drain_queues_lock:
@@ -744,12 +767,14 @@ class TTSService:
                         turn_id, turn_seq, self._latest_queue_turn_id,
                         self._latest_queue_turn_seq, text[:60],
                     )
+                    self._report_unspoken_reply(text, realtime_feedback)
                     return True
                 if turn_seq == self._latest_queue_turn_seq and turn_id != self._latest_queue_turn_id:
                     logger.warning(
                         "TTS queued speech dropped -- conflicting turn sequence (turn_id=%s seq=%d latest_id=%s): %s",
                         turn_id, turn_seq, self._latest_queue_turn_id, text[:60],
                     )
+                    self._report_unspoken_reply(text, realtime_feedback)
                     return True
                 if turn_seq > self._latest_queue_turn_seq:
                     previous_id = self._latest_queue_turn_id

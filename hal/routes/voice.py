@@ -17,6 +17,7 @@ from fastapi.responses import StreamingResponse
 import hal.app_state as state
 from hal.config import AUDIO_INPUT_ALSA, TTS_SPEED, TTS_VOICE, TTS_INSTRUCTIONS
 from hal.models import (
+    RealtimeHistoryRequest,
     SpeakRequest,
     StatusResponse,
     TTSConfigRequest,
@@ -379,6 +380,24 @@ def speak_text(req: SpeakRequest):
     if not started:
         raise HTTPException(409, "TTS is busy speaking")
     return {"status": "ok"}
+
+
+@router.post("/voice/realtime/history", response_model=StatusResponse)
+def realtime_history(req: RealtimeHistoryRequest):
+    """Record a main-agent reply with the realtime agent WITHOUT speaking it.
+
+    The speaking path already feeds history from the on_speak_end hook. This is
+    for replies that never get there: os-server drops a cancelled turn's speech
+    before it reaches TTS, and without this call the realtime session keeps
+    save_main_handoff's "its spoken reply follows" placeholder and never learns
+    the answer. Returns skipped (not an error) when realtime is off or no voice
+    service is running — os-server fires this best-effort and must not treat a
+    realtime-less device as a failure.
+    """
+    if state.voice_service is None:
+        return {"status": "skipped"}
+    fed = state.voice_service.feed_realtime_history(req.text, spoken=False)
+    return {"status": "ok" if fed else "skipped"}
 
 
 @router.post("/voice/speak-queue", response_model=StatusResponse)

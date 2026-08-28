@@ -20,12 +20,14 @@ import { ChannelSection } from "@/pages/settings/ChannelSection";
 import { MqttSection } from "@/pages/settings/MqttSection";
 import { MCPToolsSection } from "@/pages/settings/MCPToolsSection";
 import { PluginsSection } from "@/pages/settings/PluginsSection";
+import { ScheduledSection } from "@/pages/settings/ScheduledSection";
 
 // The set of sections this panel can render. Controlled by the parent now (the
 // page shell owns the sidebar / active-section state). `stt` is the Language
 // section (rendered under id="stt"), matching the legacy /edit layout. `runtime`
 // is the agent-backend switch (its own Switch button, not part of Save).
-export type SettingsSectionId = "device" | "wifi" | "llm" | "runtime" | "voice" | "face" | "tts" | "realtime" | "stt" | "channel" | "mqtt" | "mcp" | "plugins" | "timezone";
+// `scheduled` is read-only (see ScheduledSection's doc comment) — no Save flow.
+export type SettingsSectionId = "device" | "wifi" | "llm" | "runtime" | "voice" | "face" | "tts" | "realtime" | "stt" | "channel" | "mqtt" | "mcp" | "plugins" | "timezone" | "scheduled";
 
 // Header-row label lookup. Kept local so the panel can render the active-section
 // title above the form without depending on the page's NAV_GROUPS config.
@@ -44,6 +46,7 @@ const SECTION_LABELS: Record<SettingsSectionId, string> = {
   mcp: "MCP Tools",
   plugins: "Plugins",
   timezone: "Timezone",
+  scheduled: "Scheduled",
 };
 
 // Field / LockedField / LockedPasswordField / SectionCard live in
@@ -220,10 +223,14 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
         setLlmUrl(cfg.llm_base_url ?? "");
         setLlmModel(cfg.llm_model ?? "");
         setLlmDisableThinking(cfg.llm_disable_thinking ?? false);
-        setSttBaseUrl(cfg.stt_base_url ?? "");
-        setSttProvider(cfg.has_deepgram_api_key ? "deepgram" : "autonomous");
+        const llmUrlInit = cfg.llm_base_url ?? "";
+        const sttProviderInit: SttProvider = cfg.has_deepgram_api_key ? "deepgram" : "autonomous";
+        // Apply client-side fallback values with the async config response,
+        // rather than scheduling a second render just to mirror form fields.
+        setSttBaseUrl((cfg.stt_base_url ?? "") || (sttProviderInit === "autonomous" ? llmUrlInit : ""));
+        setSttProvider(sttProviderInit);
         setSttLanguage(cfg.stt_language || "en");
-        setTtsBaseUrl(cfg.tts_base_url ?? "");
+        setTtsBaseUrl((cfg.tts_base_url ?? "") || llmUrlInit);
         setTtsProvider(cfg.tts_provider || "elevenlabs");
         setTtsVoice(cfg.tts_voice || "Rachel");
         setWakeWord(cfg.wakeword ?? false);
@@ -295,8 +302,6 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
         // effects so the baseline matches the rendered state. Without this,
         // a config with llm_base_url but no tts/stt_base_url would show the
         // form as dirty immediately on load.
-        const llmUrlInit = cfg.llm_base_url ?? "";
-        const sttProviderInit: SttProvider = cfg.has_deepgram_api_key ? "deepgram" : "autonomous";
         setBaseline({
           ssid: cfg.network_ssid ?? "",
           deviceId: cfg.device_id ?? "",
@@ -352,46 +357,37 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
     }).catch(() => {});
   }, [ttsProvider, sttLanguage, ttsVoice]);
 
-  // Auto-mirror AI Brain key/URL into TTS while TTS field is empty.
-  // Once the user types into TTS the sync stops; clearing it re-enables mirroring.
-  //
-  // The four effects below trip react-hooks/set-state-in-effect. They are
-  // suppressed rather than rewritten because the mirroring is deliberately
-  // *sticky*: once a field has been filled from the AI Brain value it stops
-  // tracking it, so the value cannot be derived during render (a derived
-  // `ttsBaseUrl || llmUrl` would keep following later llmUrl edits, which is a
-  // different behavior). Folding the mirror into the setters passed to
-  // LLMSection/TTSSection/STTSection would change those components' prop
-  // contracts. Deferring the setState (queueMicrotask) would silence the rule
-  // but change commit timing. All three are behavior changes, so the pattern
-  // stays as-is and is left for a deliberate follow-up.
-  useEffect(() => {
-    // Only when the device has no key of its own. The field is write-only, so
-    // it is blank on every load whether or not one is stored — "empty" cannot
-    // mean "unset" here the way it does for the base URL, which loads with its
-    // real value. Without the `!ttsLoaded.apiKey` guard, typing a new AI Brain
-    // key silently overwrote a deliberately different TTS key on save: a device
-    // ended up holding an openrouter key against the autonomous proxy URL,
-    // which is a pairing that cannot work.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (!ttsApiKey && llmApiKey && !ttsLoaded.apiKey) setTtsApiKey(llmApiKey);
-  }, [llmApiKey, ttsApiKey, ttsLoaded.apiKey]);
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (!ttsBaseUrl && llmUrl) setTtsBaseUrl(llmUrl);
-  }, [llmUrl, ttsBaseUrl]);
-  // Same auto-mirror for STT in autonomous mode (Deepgram has its own key).
-  useEffect(() => {
-    // Same guard as TTS above, same reason.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (sttProvider === "autonomous" && !sttApiKey && llmApiKey && !sttLoaded.apiKey) {
-      setSttApiKey(llmApiKey);
-    }
-  }, [llmApiKey, sttApiKey, sttProvider, sttLoaded.apiKey]);
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (sttProvider === "autonomous" && !sttBaseUrl && llmUrl) setSttBaseUrl(llmUrl);
-  }, [llmUrl, sttBaseUrl, sttProvider]);
+  // Mirror AI Brain values in the event that changes a source or re-enables a
+  // blank destination. The mirror remains sticky, without scheduling state
+  // updates from an effect after React has already committed a render.
+  const setMirroredLlmApiKey = (value: string) => {
+    setLlmApiKey(value);
+    if (!ttsApiKey && value && !ttsLoaded.apiKey) setTtsApiKey(value);
+    if (sttProvider === "autonomous" && !sttApiKey && value && !sttLoaded.apiKey) setSttApiKey(value);
+  };
+  const setMirroredLlmUrl = (value: string) => {
+    setLlmUrl(value);
+    if (!ttsBaseUrl && value) setTtsBaseUrl(value);
+    if (sttProvider === "autonomous" && !sttBaseUrl && value) setSttBaseUrl(value);
+  };
+  const setMirroredTtsApiKey = (value: string) => {
+    setTtsApiKey(!value && llmApiKey && !ttsLoaded.apiKey ? llmApiKey : value);
+  };
+  const setMirroredTtsBaseUrl = (value: string) => {
+    setTtsBaseUrl(!value && llmUrl ? llmUrl : value);
+  };
+  const setMirroredSttApiKey = (value: string) => {
+    setSttApiKey(!value && sttProvider === "autonomous" && llmApiKey && !sttLoaded.apiKey ? llmApiKey : value);
+  };
+  const setMirroredSttBaseUrl = (value: string) => {
+    setSttBaseUrl(!value && sttProvider === "autonomous" && llmUrl ? llmUrl : value);
+  };
+  const setMirroredSttProvider = (value: SttProvider) => {
+    setSttProvider(value);
+    if (value !== "autonomous") return;
+    if (!sttApiKey && llmApiKey && !sttLoaded.apiKey) setSttApiKey(llmApiKey);
+    if (!sttBaseUrl && llmUrl) setSttBaseUrl(llmUrl);
+  };
 
   // Dirty = any non-secret field diverges from the loaded/last-saved baseline,
   // OR any secret field has user-typed content. Save button uses this to stay
@@ -541,8 +537,9 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
   ]);
 
   // Save is hidden for sections that aren't part of the form's PUT flow: Face/My
-  // Voice enroll via their own buttons, and Runtime switches via its own action.
-  const showSave = activeSection !== "face" && activeSection !== "voice" && activeSection !== "runtime" && activeSection !== "timezone";
+  // Voice enroll via their own buttons, Runtime switches via its own action, and
+  // Scheduled is read-only (its only action is per-row "Run now").
+  const showSave = activeSection !== "face" && activeSection !== "voice" && activeSection !== "runtime" && activeSection !== "timezone" && activeSection !== "scheduled";
 
   return (
     <div className="lm-fade-in lm-settings-panel" style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
@@ -613,8 +610,8 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
             <LLMSection
               active={activeSection === "llm"}
               llmLoaded={llmLoaded}
-              llmApiKey={llmApiKey} setLlmApiKey={setLlmApiKey}
-              llmUrl={llmUrl} setLlmUrl={setLlmUrl}
+              llmApiKey={llmApiKey} setLlmApiKey={setMirroredLlmApiKey}
+              llmUrl={llmUrl} setLlmUrl={setMirroredLlmUrl}
               llmModel={llmModel} setLlmModel={setLlmModel}
               mode={llmMode}
               onModeChange={(m) => {
@@ -651,8 +648,8 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
               active={activeSection === "tts"}
               ttsLoaded={ttsLoaded}
               llmLoaded={llmLoaded}
-              ttsApiKey={ttsApiKey} setTtsApiKey={setTtsApiKey}
-              ttsBaseUrl={ttsBaseUrl} setTtsBaseUrl={setTtsBaseUrl}
+              ttsApiKey={ttsApiKey} setTtsApiKey={setMirroredTtsApiKey}
+              ttsBaseUrl={ttsBaseUrl} setTtsBaseUrl={setMirroredTtsBaseUrl}
               ttsProvider={ttsProvider} setTtsProvider={setTtsProvider}
               ttsProviders={ttsProviders}
               ttsVoice={ttsVoice} setTtsVoice={setTtsVoice}
@@ -681,12 +678,12 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
             <STTSection
               active={activeSection === "stt"}
               sttLanguage={sttLanguage} setSttLanguage={setSttLanguage}
-              sttProvider={sttProvider} setSttProvider={setSttProvider}
+              sttProvider={sttProvider} setSttProvider={setMirroredSttProvider}
               sttLoaded={sttLoaded}
               llmLoaded={llmLoaded}
               deepgramApiKey={deepgramApiKey} setDeepgramApiKey={setDeepgramApiKey}
-              sttApiKey={sttApiKey} setSttApiKey={setSttApiKey}
-              sttBaseUrl={sttBaseUrl} setSttBaseUrl={setSttBaseUrl}
+              sttApiKey={sttApiKey} setSttApiKey={setMirroredSttApiKey}
+              sttBaseUrl={sttBaseUrl} setSttBaseUrl={setMirroredSttBaseUrl}
             />
 
             <ChannelSection
@@ -705,6 +702,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
 
             <MCPToolsSection active={activeSection === "mcp"} />
             <PluginsSection active={activeSection === "plugins"} />
+            <ScheduledSection active={activeSection === "scheduled"} />
 
             <MqttSection
               active={activeSection === "mqtt"}

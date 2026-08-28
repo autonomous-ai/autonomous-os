@@ -4,7 +4,9 @@ Send queue: AgentInputEvent subclasses.
 Receive queue: AgentOutputEvent subclasses.
 """
 
-from pydantic import BaseModel, ConfigDict
+import time
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from hal.realtime.enums import InputEventTypeEnum, OutputEventTypeEnum
 from hal.realtime.models.input import InputBase
@@ -31,6 +33,9 @@ class AudioCommitEvent(AgentInputEvent):
     """Send queue: commit buffered audio (end of speech turn)."""
 
     type: InputEventTypeEnum = InputEventTypeEnum.AUDIO_COMMIT
+    # Monotonic timestamp captured on the voice thread when local end-of-turn is
+    # detected. It lets providers separate queue/commit delay from model latency.
+    queued_at: float = Field(default_factory=time.monotonic)
 
 
 # --- Receive queue events ---

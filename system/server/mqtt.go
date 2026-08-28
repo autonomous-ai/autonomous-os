@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"go.autonomous.ai/os/system/lib/safego"
 	"go.autonomous.ai/os/system/server/config"
@@ -44,7 +45,37 @@ func (s *Server) startMQTT() {
 			slog.Error("connect failed", "component", "mqtt", "error", err)
 		}
 	})
+
+	// Deliver schedule edits the user made while this device was offline.
+	//
+	// A periodic sweep rather than a connect callback: the publish path already
+	// fires immediately on each edit, so this only has to catch the cases that
+	// path cannot — no broker at the time, a dropped link, a reboot with a
+	// non-empty queue. Polling covers all three identically, where an
+	// OnConnectionUp hook would need plumbing through the client factory and
+	// would still miss a publish that failed while nominally connected.
+	//
+	// Re-publishing is safe by construction: the backend collapses replays on
+	// intent_id, which is generated once per user action, not once per send.
+	safego.Go("schedule-intent-flush", func() {
+		ticker := time.NewTicker(scheduleIntentFlushInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				s.deviceMQTTHandler.FlushScheduleIntents()
+			}
+		}
+	})
 }
+
+// scheduleIntentFlushInterval is how often queued device-originated schedule
+// changes are retried. Short enough that a reconnect delivers an edit while the
+// user is plausibly still looking at the screen; long enough that a device
+// parked offline for days is not publishing constantly into the void.
+const scheduleIntentFlushInterval = 30 * time.Second
 
 // stopMQTT disconnects and clears the MQTT client. Safe to call when not connected.
 func (s *Server) stopMQTT() {
