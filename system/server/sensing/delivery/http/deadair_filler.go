@@ -539,6 +539,31 @@ func (fm *FillerManager) Cancel(runID string) {
 	}
 }
 
+// CancelAllActive hard-cancels every run currently holding filler state, and
+// reports how many there were. Called by the physical cancel gesture.
+//
+// The click mutes turns but deliberately does not abort them, so a cancelled
+// turn keeps running and keeps reaching tool boundaries — and OnToolEnd would
+// keep re-arming "one moment" for a reply that is now guaranteed never to be
+// spoken. Device-observed: the user clicks, asks something else, and the lamp
+// promises to answer the question it was just told to drop.
+//
+// Cancelling by iteration rather than by watermark on each fire is exact here:
+// the mark is stamped at this instant, so every run already registered is on
+// the old side of it, and a turn started after the click registers fresh.
+func (fm *FillerManager) CancelAllActive() int {
+	fm.mu.Lock()
+	runIDs := make([]string, 0, len(fm.runs))
+	for runID := range fm.runs {
+		runIDs = append(runIDs, runID)
+	}
+	fm.mu.Unlock()
+	for _, runID := range runIDs {
+		fm.Cancel(runID)
+	}
+	return len(runIDs)
+}
+
 // armLocked schedules a filler timer for run after delay. Caller holds fm.mu.
 // No-op when the run has ended, the cap is reached, or a timer/filler is already active.
 func (fm *FillerManager) armLocked(runID string, run *fillerRun, delay time.Duration) {
