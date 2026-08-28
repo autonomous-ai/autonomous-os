@@ -19,7 +19,7 @@ import unittest
 from unittest import mock
 
 
-def _driver(swipe: bool, min_gap_ms: str = "40"):
+def _driver(swipe: bool, min_gap_ms: str = "35"):
     """Re-import the driver with the flag in a given state — SWIPE_ENABLED is
     resolved at import, which is what makes `flag off == today's behaviour`
     testable at all."""
@@ -88,7 +88,9 @@ def _record(mod, harness):
 
 class _Base(unittest.TestCase):
     swipe = False
-    min_gap = "40"
+    # Tracks the shipped default so the suite exercises the real floor; override
+    # per-class only when a test is specifically about a different threshold.
+    min_gap = "35"
 
     def setUp(self):
         self.mod = _driver(self.swipe, self.min_gap)
@@ -112,7 +114,7 @@ class TestShippedDefaults(unittest.TestCase):
 
         importlib.reload(t)
         self.assertTrue(t.SWIPE_ENABLED)
-        self.assertEqual(t.SWIPE_MIN_GAP_MS, 40.0)
+        self.assertEqual(t.SWIPE_MIN_GAP_MS, 35.0)
 
     def test_tracing_is_OFF_by_default(self):
         """The tracer sits in the lgpio callback path and writes files. It must
@@ -387,6 +389,43 @@ class TestDoubleTap(_Base):
         self.hz.end_session()
         self.hz.decide()
         self.assertEqual(self.hz.fired, ["single_click_action"])
+
+
+class TestTapReasonNamesTheNearestMiss(_Base):
+    """TAP is the fall-through, so "decision window expired" is true and
+    useless — it describes the branch that caught the gesture, not the rule that
+    declined it. Device traces 102922/102935 (2026-08-28) were swipes missing
+    the movement floor by 1.1 ms and read identically to a deliberate tap.
+    """
+
+    swipe = True
+
+    def _reason(self):
+        return self.hz.h._tap_reason(1)
+
+    def test_a_swipe_just_under_the_floor_says_so_with_the_number(self):
+        # every pad, single pass, gaps 30/25 ms — both under the 35 ms floor
+        for at, line in ((0, 96), (30, 98), (55, 100)):
+            self.hz.touch(line, at_ms=at)
+        r = self._reason()
+        self.assertIn("fallback", r)
+        self.assertIn("max gap 30.0ms", r)
+        self.assertIn(f"{self.mod.SWIPE_MIN_GAP_MS:.0f}ms floor", r)
+
+    def test_a_partial_pass_says_which_pads_were_missing(self):
+        for at, line in ((0, 96), (60, 98)):
+            self.hz.touch(line, at_ms=at)
+        r = self._reason()
+        self.assertIn("touched 2 of 3 pads", r)
+        self.assertIn("not an end-to-end pass", r)
+
+    def test_it_always_marks_itself_a_fallback(self):
+        self.hz.touch(96)
+        self.assertTrue(self._reason().startswith("fallback"))
+
+    def test_it_never_raises_even_with_no_pads(self):
+        """A reason string must not be able to break a gesture."""
+        self.assertIn("fallback", self.hz.h._tap_reason(1))
 
 
 class TestSequenceHygiene(_Base):

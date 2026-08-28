@@ -132,14 +132,21 @@ SWIPE_MIN_PADS = 3
 
 # The movement floor, and the one number every rule derives from: gaps at or
 # above it mean the hand travelled between pads, below it mean several fingers
-# arrived together. Device-measured on orange-lamp 2026-08-27 — fingers landing
-# together spread 1-23 ms, a finger travelling 53-322 ms, nothing in between —
-# so 40 sits inside the empty band rather than being a guess.
+# arrived together.
 #
-# Now load-bearing, since the classifier ships enabled. Raise it if firm taps
-# are read as swipes; lower it if real swipes are missed. HAL_TOUCH_DEBUG
-# records the gaps it is measured against.
-SWIPE_MIN_GAP_MS = float(os.environ.get("HAL_TOUCH_SWIPE_MIN_GAP_MS", "40"))
+# 35, lowered from 40 on 2026-08-28. The first measurement (orange-lamp,
+# 2026-08-27) read fingers-together at 1-23 ms and travelling at 53-322 ms, and
+# 40 sat in that empty band. A later session swiped faster and landed in it:
+# real swipes at 35.7 and 38.9 ms were read as three-finger taps, one of them
+# missing by 1.1 ms. Re-measured over every 3-pad single-pass contact, the gap
+# in the distribution is between 16.6 and 35.7, not 23 and 53 — so the floor
+# belongs below 35.7, and 35 keeps clear air on both sides.
+#
+# The band narrows as the user swipes faster; it is a property of THEM, not just
+# the hardware. Raise it if firm taps start sleeping the device, lower it if
+# real swipes are missed. HAL_TOUCH_DEBUG records the gaps it is measured
+# against, and a TAP trace now names this number when it is what declined.
+SWIPE_MIN_GAP_MS = float(os.environ.get("HAL_TOUCH_SWIPE_MIN_GAP_MS", "35"))
 
 
 def _board_label() -> str:
@@ -635,11 +642,56 @@ class TTP223Handler:
         # chime=False: the ack chime already sounded at the first session end
         # (_ack_first_session) — don't ping twice.
         self._dispatch(
-            "TAP", f"decision window expired at count={count}",
+            "TAP", self._tap_reason(count),
             count, "single_click_action",
             lambda source: single_click_action(source=source, chime=False),
             chime=False,
         )
+
+    def _tap_reason(self, count):
+        """Why this resolved to TAP — naming the rule that declined, not the
+        branch that caught it.
+
+        TAP is the fall-through after swipe, double tap and pet all decline, so
+        a reason describing how it got here ("decision window expired at
+        count=1") is true and useless: it is the one verdict where the reader
+        most needs to know what was *nearly* matched. A swipe missing the
+        movement floor by 1.1 ms read exactly the same as a deliberate tap
+        (device traces 102922 / 102935, 2026-08-28), and the only way to tell
+        was to open the file and know what `moved: False` implied.
+
+        Names the nearest miss and the number to tune, so the answer is in the
+        trace rather than in someone's head.
+        """
+        try:
+            with self._lock:
+                contacts = [list(c) for c in self._contacts]
+                if self._contact:
+                    contacts.append(list(self._contact))
+            live = [c for c in contacts if c]
+            base = "fallback -- no other gesture matched"
+            if not live:
+                return f"{base}; no pads recorded"
+            if len(live) > 1:
+                return f"{base}; {len(live)} contacts"
+            c = live[0]
+            pads = {l for l, _ in c}
+            wired = set(self._lines)
+            if len(pads) < len(wired):
+                return (
+                    f"{base}; touched {len(pads)} of {len(wired)} pads -- "
+                    "not an end-to-end pass"
+                )
+            gaps = [(b - a) * 1000.0 for (_, a), (_, b) in zip(c, c[1:])]
+            if gaps and max(gaps) < SWIPE_MIN_GAP_MS:
+                return (
+                    f"{base}; every pad, single pass, but max gap "
+                    f"{max(gaps):.1f}ms < {SWIPE_MIN_GAP_MS:.0f}ms floor -- "
+                    "read as fingers landing together, not a hand moving"
+                )
+            return f"{base}; decision window expired at count={count}"
+        except Exception:
+            return f"decision window expired at count={count}"
 
     def _dispatch(self, gesture, reason, count, fn_name, fn, **trace_fields):
         """Record the verdict, CLOSE THE TRACE, then run the action.
