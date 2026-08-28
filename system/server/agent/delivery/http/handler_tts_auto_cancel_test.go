@@ -10,7 +10,7 @@ import (
 // The realtime agent answers the newest question, so the main-agent turn still
 // working on the previous one must not speak its answer afterwards.
 func TestRealtimeHandledMutesOlderInFlightTurn(t *testing.T) {
-	t.Setenv("OS_REALTIME_AUTO_MUTE", "1")
+	t.Setenv("OS_REALTIME_SUPERSEDES_MAIN_REPLY", "1")
 	h := newCancelTestHandler()
 	older := deviceRunID(5, time.Now().Add(-2*time.Second))
 
@@ -25,7 +25,7 @@ func TestRealtimeHandledMutesOlderInFlightTurn(t *testing.T) {
 // the user really did ask for must still run — silently dropping it would read
 // as the device ignoring the request.
 func TestRealtimeHandledDoesNotDropHardware(t *testing.T) {
-	t.Setenv("OS_REALTIME_AUTO_MUTE", "1")
+	t.Setenv("OS_REALTIME_SUPERSEDES_MAIN_REPLY", "1")
 	h := newCancelTestHandler()
 	older := deviceRunID(5, time.Now().Add(-2*time.Second))
 
@@ -41,7 +41,7 @@ func TestRealtimeHandledDoesNotDropHardware(t *testing.T) {
 // the realtime voice, then promises "one moment" about the old one and falls
 // silent. A filler is not an action the user asked for.
 func TestRealtimeHandledDropsPendingFillers(t *testing.T) {
-	t.Setenv("OS_REALTIME_AUTO_MUTE", "1")
+	t.Setenv("OS_REALTIME_SUPERSEDES_MAIN_REPLY", "1")
 	h := newCancelTestHandler()
 	fm := sensinghttp.DefaultFillerManager
 	runID := "device-chat-54-1787885628360"
@@ -58,7 +58,7 @@ func TestRealtimeHandledDropsPendingFillers(t *testing.T) {
 }
 
 // ...but the switch still governs it: not opted in means nothing changes.
-func TestAutoMuteOffLeavesFillersAlone(t *testing.T) {
+func TestSupersedeOffLeavesFillersAlone(t *testing.T) {
 	h := newCancelTestHandler()
 	fm := sensinghttp.DefaultFillerManager
 	runID := "device-chat-55-1787885629999"
@@ -69,7 +69,7 @@ func TestAutoMuteOffLeavesFillersAlone(t *testing.T) {
 	h.CancelSpeechForNewerTurn()
 
 	if !fm.HasActiveRun(runID) {
-		t.Errorf("without OS_REALTIME_AUTO_MUTE=1 filler state must be untouched")
+		t.Errorf("without OS_REALTIME_SUPERSEDES_MAIN_REPLY=1 filler state must be untouched")
 	}
 }
 
@@ -89,7 +89,7 @@ func TestPhysicalClickStillDropsHardware(t *testing.T) {
 // turn is on the far side of the mark and speaks. This is why the mark is a
 // timestamp and not a suppressed flag.
 func TestTurnStartedAfterRealtimeHandledStillSpeaks(t *testing.T) {
-	t.Setenv("OS_REALTIME_AUTO_MUTE", "1")
+	t.Setenv("OS_REALTIME_SUPERSEDES_MAIN_REPLY", "1")
 	h := newCancelTestHandler()
 
 	h.CancelSpeechForNewerTurn()
@@ -103,7 +103,7 @@ func TestTurnStartedAfterRealtimeHandledStillSpeaks(t *testing.T) {
 // The two marks are independent: the auto mark must still mute a turn the click
 // was too early to catch, and must not widen the click's hardware verdict.
 func TestMarksDoNotOverwriteEachOther(t *testing.T) {
-	t.Setenv("OS_REALTIME_AUTO_MUTE", "1")
+	t.Setenv("OS_REALTIME_SUPERSEDES_MAIN_REPLY", "1")
 	h := newCancelTestHandler()
 	h.CancelSpeech()
 	// Strictly between the two marks: after the click, before the realtime answer.
@@ -122,13 +122,13 @@ func TestMarksDoNotOverwriteEachOther(t *testing.T) {
 
 // Off by default: a body that has never heard of this switch keeps the old
 // behaviour — realtime answers, the older turn still speaks.
-func TestAutoMuteIsOffUnlessOptedIn(t *testing.T) {
+func TestSupersedeIsOffUnlessOptedIn(t *testing.T) {
 	h := newCancelTestHandler()
 	older := deviceRunID(5, time.Now().Add(-2*time.Second))
 
 	h.CancelSpeechForNewerTurn()
 
 	if h.isSpeechCancelled(older) {
-		t.Errorf("without OS_REALTIME_AUTO_MUTE=1 the in-flight turn must stay audible")
+		t.Errorf("without OS_REALTIME_SUPERSEDES_MAIN_REPLY=1 the in-flight turn must stay audible")
 	}
 }

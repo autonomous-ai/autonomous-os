@@ -141,7 +141,7 @@ must still run. Its pending fillers **are** dropped, though — the dividing lin
 is speech-versus-hardware, not click-versus-auto. A filler is a promise that an
 answer is coming, not something the user requested, and leaving it armed
 reproduces what the click had to fix: the device answers the new question, then
-says "one moment" about the old one and goes quiet. The behaviour is opt-in per body: set `OS_REALTIME_AUTO_MUTE=1` in the body's
+says "one moment" about the old one and goes quiet. The behaviour is opt-in per body: set `OS_REALTIME_SUPERSEDES_MAIN_REPLY=1` in the body's
 `/opt/hal/.env` (os-server loads that file too). The code default is OFF,
 because that default is what every body which has never heard of the switch
 gets — lamp, intern-v2, reachy-mini, and any body with no `.env` at all.

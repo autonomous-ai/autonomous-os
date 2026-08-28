@@ -133,7 +133,7 @@ turn cũ, vì hành động user thật sự yêu cầu thì vẫn phải chạy
 treo thì **có** bị bỏ — ranh giới là tiếng-nói/phần-cứng, không phải
 click/auto. Filler là lời hứa sắp có câu trả lời chứ không phải thứ user yêu
 cầu, và để nó chạy tiếp là tái hiện đúng cái mà cú click đã phải sửa: thiết bị
-trả lời câu mới, rồi "một giây nhé" cho câu cũ, rồi im. Hành vi này là opt-in theo từng body: đặt `OS_REALTIME_AUTO_MUTE=1` trong
+trả lời câu mới, rồi "một giây nhé" cho câu cũ, rồi im. Hành vi này là opt-in theo từng body: đặt `OS_REALTIME_SUPERSEDES_MAIN_REPLY=1` trong
 `/opt/hal/.env` của body (os-server cũng nạp file này). Code mặc định TẮT, vì
 mặc định đó là thứ mà mọi body chưa từng biết tới switch này sẽ nhận — lamp,
 intern-v2, reachy-mini, và cả body không có `.env` nào.

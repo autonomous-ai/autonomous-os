@@ -132,6 +132,25 @@ func (h *AgentHandler) isHWCancelled(runID string) bool {
 	return h.olderThanWatermark(runID, h.speechWatermarkMs.Load())
 }
 
+// Cancel sources, carried on the tts_cancelled flow event so the Flow Monitor
+// can say WHY a turn went quiet. "the lamp answered something else" and "I
+// pressed the button" are different stories to a person reading the timeline,
+// and only one of them is the user's own doing.
+const (
+	cancelSourceClick    = "click"
+	cancelSourceRealtime = "realtime_handled"
+)
+
+// speechCancelSource names which mark silenced this run. The click wins when
+// both apply: it is the explicit instruction, and it is the stronger one (it
+// also took the turn's hardware).
+func (h *AgentHandler) speechCancelSource(runID string) string {
+	if h.olderThanWatermark(runID, h.speechWatermarkMs.Load()) {
+		return cancelSourceClick
+	}
+	return cancelSourceRealtime
+}
+
 // CancelSpeech silences every turn that is in flight right now. Called by the
 // physical cancel gesture (single click on button/touchpad). It deliberately
 // does NOT abort the turns: aborting is per-backend and, for several runtimes,
@@ -163,7 +182,7 @@ func (h *AgentHandler) CancelSpeech() {
 	}
 }
 
-// realtimeAutoMuteEnabled gates CancelSpeechForNewerTurn. An isolated policy
+// realtimeSupersedesMainReply gates CancelSpeechForNewerTurn. An isolated policy
 // switch, mirroring HAL's HAL_REALTIME_AI_REJECT_FILTER: unlike the physical
 // click, this mark is stamped on the system's own judgement that the user has
 // moved on, so there has to be a way to change the behaviour on a running
@@ -174,8 +193,8 @@ func (h *AgentHandler) CancelSpeech() {
 // heard of this switch gets — lamp, but also intern-v2, reachy-mini, and any
 // body with no .env at all — and this behaviour has not run on real hardware
 // yet. Defaulting on would hand it to all of them without anyone choosing it.
-func realtimeAutoMuteEnabled() bool {
-	v := strings.ToLower(strings.TrimSpace(os.Getenv("OS_REALTIME_AUTO_MUTE")))
+func realtimeSupersedesMainReply() bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv("OS_REALTIME_SUPERSEDES_MAIN_REPLY")))
 	return v == "1" || v == "true"
 }
 
@@ -195,7 +214,7 @@ func realtimeAutoMuteEnabled() bool {
 // armed reproduces exactly what the click had to fix — the device answers the
 // new question, then says "one moment" about the old one and falls silent.
 func (h *AgentHandler) CancelSpeechForNewerTurn() {
-	if !realtimeAutoMuteEnabled() {
+	if !realtimeSupersedesMainReply() {
 		return
 	}
 	now := time.Now().UnixMilli()
@@ -225,9 +244,11 @@ func (h *AgentHandler) CancelSpeechForNewerTurn() {
 // window. Web chat is untouched — it renders the full banner with the link.
 func (h *AgentHandler) deliverTTS(send func(string) error, text, flowRunID, errCtx string) {
 	if h.isSpeechCancelled(flowRunID) {
-		slog.Info("TTS dropped -- turn cancelled by physical gesture",
-			"component", "agent", "run_id", flowRunID, "text", text[:min(len(text), 80)])
-		flow.Log("tts_cancelled", map[string]any{"run_id": flowRunID, "text": text}, flowRunID)
+		source := h.speechCancelSource(flowRunID)
+		slog.Info("TTS dropped -- turn lost the speaker",
+			"component", "agent", "run_id", flowRunID, "source", source,
+			"text", text[:min(len(text), 80)])
+		flow.Log("tts_cancelled", map[string]any{"run_id": flowRunID, "text": text, "source": source}, flowRunID)
 		// The click takes the speaker, not the answer. HAL's realtime history
 		// feed rides on TTS completion, so dropping the speech here also
 		// dropped the realtime session's only record of what the main agent
