@@ -635,3 +635,31 @@ func postSilent(path, body string) {
 	}
 	resp.Body.Close()
 }
+
+// SpeakerBusy reports whether HAL is currently speaking a TTS utterance.
+//
+// The agent turn that produced a reply ends when the text is handed to the TTS
+// queue, not when the speaker finishes with it — a long answer keeps playing
+// for tens of seconds after that. Callers that must not step on a reply in
+// progress (sensing replay, see lib/speakergate) ask here instead of trusting
+// the agent's busy flag.
+//
+// Fails open: any transport or decode error reports "not busy", so a HAL that
+// is down or slow can never wedge the sensing pipeline.
+func SpeakerBusy() bool {
+	resp, err := doGet("/voice/status")
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return false
+	}
+	var r struct {
+		TTSSpeaking bool `json:"tts_speaking"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
+		return false
+	}
+	return r.TTSSpeaking
+}
