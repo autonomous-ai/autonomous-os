@@ -208,6 +208,10 @@ class TTP223Handler:
         # Pads released since their last touch. A re-touch of a released pad is
         # a real second contact; without this the repeat-collapse eats it.
         self._released = set()
+        # Pads currently held, and how many times the hand has arrived on the
+        # surface this cycle. See the PRESS note in _on_edge.
+        self._held = set()
+        self._presses = 0
         self._lock = threading.Lock()
         # Session-end timer: fires SESSION_GAP_S after the last edge.
         self._session_end_timer = None
@@ -300,12 +304,22 @@ class TTP223Handler:
         # artefact rather than a touch.
         with self._lock:
             if level == 0:
+                # A PRESS is the surface going from nothing-held to held: the
+                # hand arriving. During a swipe the finger reaches the far pad
+                # before the near one auto-releases, so the surface never
+                # empties and the whole gesture is ONE press. Two taps always
+                # empty it in between. Device-measured 2026-08-28 over every
+                # labelled gesture: swipes 1 press, double taps 2, no overlap.
+                if not self._held:
+                    self._presses += 1
+                self._held.add(gpio)
                 repeat = bool(self._contact) and self._contact[-1][0] == gpio
                 if not repeat or gpio in self._released:
                     self._contact.append((gpio, time.monotonic()))
                 self._released.discard(gpio)
             else:
                 self._released.add(gpio)
+                self._held.discard(gpio)
         # Any edge keeps the current session alive — cross-talk and
         # FastMode auto-LOW produce flurries of edges per physical
         # touch; coalesce them by resetting the session-end timer.
@@ -326,7 +340,7 @@ class TTP223Handler:
             self._contact = []
 
     def _classify(self):
-        """Read the cycle as (is_swipe, moved, gaps, n_contacts, revisited, landed).
+        """Read the cycle as (is_swipe, moved, gaps, n_contacts, revisited, landed, presses).
 
         The discriminator is WHEN pads fire, not which. Device-measured on
         orange-lamp 2026-08-27, per-contact inter-pad deltas:
@@ -439,7 +453,7 @@ class TTP223Handler:
             # the floor the pads lit together (a landing); above the ceiling the
             # hand lifted and came back (a second tap). Only the middle band is
             # a finger crossing the surface.
-            if len(sets_nonempty) == 1 and any(
+            if len(sets_nonempty) == 1 and self._presses <= 1 and any(
                 SWIPE_MIN_GAP_MS <= x <= SWIPE_MAX_GAP_MS for x in g
             ):
                 is_swipe = True
@@ -448,9 +462,11 @@ class TTP223Handler:
         # Disjoint contacts are movement too, even when each one was a single
         # instantaneous touch — that is a hand hopping from pad to pad.
         disjoint = len(sets) >= 2 and not set.intersection(*sets)
+        with self._lock:
+            presses = self._presses
         return (is_swipe, (moved_within or disjoint),
                 (min(all_gaps), max(all_gaps)) if all_gaps else (0.0, 0.0), len(sets),
-                revisited, landed)
+                revisited, landed, presses)
 
     def _pad_name(self, line):
         """Label a line the way the tracer does, so both read alike."""
@@ -462,6 +478,8 @@ class TTP223Handler:
             self._contacts = []
             self._contact = []
             self._released = set()
+            self._held = set()
+            self._presses = 0
 
     def _on_session_end(self):
         # One physical touch ended.
@@ -481,7 +499,7 @@ class TTP223Handler:
         # themselves, so they run before entering the block below.
         self._close_contact()
         (_is_swipe, _moved, _min_gap, _n, _revisited,
-         _landed) = self._classify()
+         _landed, _presses) = self._classify()
         pet_now = False
         with self._lock:
             self._session_end_timer = None
@@ -582,7 +600,7 @@ class TTP223Handler:
             # Same finish-before-dispatch rule as _dispatch: the trace closes
             # before the action can block or raise.
             touch_debug.note_classifier(
-                revisited=_revisited, landed=_landed, is_swipe=_is_swipe, moved=_moved,
+                revisited=_revisited, landed=_landed, presses=_presses, is_swipe=_is_swipe, moved=_moved,
                 gap_min_ms=round(_min_gap[0], 1), gap_max_ms=round(_min_gap[1], 1),
                 contacts=_n, move_floor_ms=SWIPE_MIN_GAP_MS,
                 contact_pads=[[self._pad_name(l) for l, _ in c] for c in self._contacts],
@@ -625,7 +643,7 @@ class TTP223Handler:
             self._decision_timer = None
         self._close_contact()
         (is_swipe, moved, gaps, n_contacts, revisited,
-         landed) = self._classify()
+         landed, presses) = self._classify()
 
         if count < 1:
             # The decision timer outlived its count (pet consumed it inline).
@@ -648,9 +666,18 @@ class TTP223Handler:
             #    point two pads lit together, which only a landing produces. A
             #    stroke is travel throughout and can never satisfy this, so the
             #    check is safe to run before pet even though both revisit.
-            if revisited and landed:
+            # Two ways the hand tapped twice. Either it came back to a pad it
+            # had left AND something landed (both taps on overlapping pads), or
+            # it simply arrived on the surface more than once — which is what
+            # two taps on DIFFERENT pads look like, with no revisit and no
+            # landing to show for it. Device traces 131615 / 131625: tap L96,
+            # lift, tap L100. Nothing but the press count separates that from a
+            # slow swipe.
+            if (revisited and landed) or (presses >= 2 and not revisited):
                 self._dispatch(
-                    "DOUBLE_TAP", "revisited a pad, and two pads lit together -- landed twice",
+                    "DOUBLE_TAP",
+                    ("revisited a pad, and two pads lit together" if revisited
+                     else f"the hand arrived on the surface {presses} times"),
                     count, "mic_toggle_action", mic_toggle_action,
                 )
                 return
@@ -759,9 +786,9 @@ class TTP223Handler:
         (device-observed 2026-08-27). Writing first also means the trace
         survives an action that raises.
         """
-        is_swipe, moved, gaps, n, revisited, landed = self._classify()
+        is_swipe, moved, gaps, n, revisited, landed, presses = self._classify()
         touch_debug.note_classifier(
-            revisited=revisited, landed=landed,
+            revisited=revisited, landed=landed, presses=presses,
             is_swipe=is_swipe, moved=moved,
             gap_min_ms=round(gaps[0], 1), gap_max_ms=round(gaps[1], 1),
             contacts=n, move_floor_ms=SWIPE_MIN_GAP_MS,

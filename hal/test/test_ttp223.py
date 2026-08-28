@@ -558,6 +558,56 @@ class TestReTouchAfterRelease(_Base):
         self.assertEqual(self.hz.fired, ["mic_toggle_action"])
 
 
+class TestPressCount(_Base):
+    """A PRESS is the hand arriving on the surface — nothing held, then held.
+
+    During a swipe the finger reaches the far pad before the near one
+    auto-releases, so the surface never empties: the whole gesture is ONE press.
+    Two taps always empty it in between. Device-measured 2026-08-28 over every
+    labelled gesture — swipes 1 press, double taps 2, no overlap at all.
+
+    This is what catches two taps on DIFFERENT pads, which have no revisit and
+    no landing and are otherwise shaped exactly like a swipe (traces 131615 and
+    131625: tap L96, lift, tap L100).
+    """
+
+    swipe = True
+
+    def test_a_swipe_is_one_press(self):
+        self.hz.touch(96, at_ms=0)
+        self.hz.touch(100, at_ms=80)      # far pad before the near one releases
+        self.hz.release(96)
+        self.hz.release(100)
+        self.assertEqual(self.hz.h._presses, 1)
+        self.hz.end_session(); self.hz.decide()
+        self.assertEqual(self.hz.fired, ["swipe_action"])
+
+    def test_two_taps_on_DIFFERENT_pads_is_a_double_tap(self):
+        """No revisit and no landing — the press count is the only evidence."""
+        self.hz.touch(96, at_ms=0)
+        self.hz.release(96)               # surface empties
+        self.hz.touch(100, at_ms=272)
+        self.hz.release(100)
+        self.assertEqual(self.hz.h._presses, 2)
+        self.hz.end_session(); self.hz.decide()
+        self.assertEqual(self.hz.fired, ["mic_toggle_action"])
+
+    def test_a_second_press_stops_it_being_a_swipe(self):
+        """Even inside the travel band, the hand having left means it did not
+        cross the surface — it tapped twice."""
+        self.hz.touch(96, at_ms=0)
+        self.hz.release(96)
+        self.hz.touch(100, at_ms=80)      # gap is inside the band
+        self.hz.end_session(); self.hz.decide()
+        self.assertNotIn("swipe_action", self.hz.fired)
+
+    def test_the_full_131615_sequence_resolves_to_a_double_tap(self):
+        for at, line, lvl in ((0, 96, 0), (92, 96, 1), (272, 100, 0), (345, 100, 1)):
+            self.hz.touch(line, at_ms=at) if lvl == 0 else self.hz.release(line)
+        self.hz.end_session(); self.hz.decide()
+        self.assertEqual(self.hz.fired, ["mic_toggle_action"])
+
+
 class TestGeometryIndependent(_Base):
     """The same rules must hold on three pads.
 
