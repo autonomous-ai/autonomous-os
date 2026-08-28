@@ -77,7 +77,7 @@ POST /led/effect
 
 | Effect | Description | Params |
 |--------|-------------|--------|
-| `breathing` | Sine-wave brightness up/down | color, speed |
+| `breathing` | Sine-wave brightness up/down | color, speed, `start_at_peak` |
 | `candle` | Random flickering candle | color |
 | `rainbow` | Hue rotation across strip | brightness (0.0-1.0, level), speed — generates its own hue, ignores `color` |
 | `notification_flash` | Quick flash 3 times | color |

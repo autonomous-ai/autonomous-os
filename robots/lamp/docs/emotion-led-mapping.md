@@ -12,7 +12,7 @@ Source: colors are what the **lamp** actually shows — `robots/lamp/presets.jso
 | `excited` | 3, 1, 0 | `#030100` dim orange | overlay | candle | 0.5 | excited |
 | `shy` | 3, 0, 1 | `#030001` dim rose | overlay | breathing | 0.3 | shy |
 | `shock` | 2, 2, 2 | `#020202` soft white | overlay | notification_flash | 1.0 | shock |
-| `listening` | 0, 0, 3 | `#000003` dim blue | overlay | breathing | 1.2 | — (see note) |
+| `listening` | 0, 0, 3 | `#000003` dim blue | overlay | breathing (opens at peak) | 1.2 | — (see note) |
 | `laugh` | 2, 3, 0 | `#020300` dim lime | overlay | candle | 0.2 | laugh |
 | `confused` | 3, 2, 0 | `#030200` dim amber | overlay | candle | 0.2 | confused |
 | `sleepy` | 0, 0, 0 | `#000000` black (off) | base | solid | — | sleepy |
@@ -88,6 +88,14 @@ Technical notes:
   `speaking_wave_rainbow` also generates its own hue, so it takes the same `music_strong` `brightness` and rides its VU envelope under it. `music/routes` never emits the `music_strong` emotion itself — the agent does.
 - **This table lives in `robots/lamp/presets.json`**, the per-device overlay merged field by field at boot via `hal/board/presets_overlay.py` — `hal/presets.py` is *not* edited. Other robots (reachy, intern) therefore keep the base palette, and reverting the lamp to the base palette is just deleting the `emotion` section from that JSON file.
 - **Do not confuse `EMO_IDLE` with `AMBIENT_RESTING_LED`.** The latter is `[0, 0, 0]` (product call 30/07/2026: a resting strip is fully off); `EMO_IDLE` is an emotion the agent actively emits and still has a color.
+
+### `listening` opens at the peak of its breath
+
+`breathing` normally starts an arc at brightness 0 and rises. At the lamp's own settings that rise is unreadable: a full `0 -> 1 -> 0` arc takes **10s** at `speed` 0.3, and because each frame is truncated (`int(c * brightness)`) a peak of 3 renders as literal `(0, 0, 0)` for the first **~1.1s** and only reaches 2 at ~2.3s. Measured on device 28/08/2026: the listening cue fired on the FIRST STT partial (12:02:17.666) but was not visible until the last one (12:02:18.231) — the delay everyone read as "STT is slow" was the effect's rise time, not the transcript.
+
+`listening` therefore carries `"start_at_peak": True` (`hal/presets.py`), which makes its opening arc start at full brightness and breathe *down*; every cycle after the first rises from 0 as usual. Peak level, hue and `speed` are untouched — nothing gets brighter than it already was, so this does not walk back the glare passes above.
+
+It is opt-in per preset and `listening` is the only preset that sets it: an emotion is meant to fade in, and only a cue that answers the user's first words has to be readable on its first frame. The equivalent fix cannot live at the call site — painting the colour before the effect thread starts is erased milliseconds later by that thread's own `i=0` frame (`hal/drivers/rgb/effects.py`).
 
 ## `thinking` and `listening` have no servo
 

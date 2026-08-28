@@ -85,6 +85,7 @@ def run_effect(
     svc,
     base_color: Optional[tuple] = None,
     brightness: float = 1.0,
+    start_at_peak: bool = False,
 ):
     """Dispatch to the appropriate effect loop. Runs in a background thread.
 
@@ -100,7 +101,7 @@ def run_effect(
 
     try:
         if effect == FX_BREATHING:
-            breathing(color, speed, deadline, stop_event, svc)
+            breathing(color, speed, deadline, stop_event, svc, start_at_peak)
         elif effect == FX_CANDLE:
             candle(color, speed, deadline, stop_event, svc)
         elif effect == FX_RAINBOW:
@@ -126,18 +127,36 @@ def breathing(
     deadline: Optional[float],
     stop_event: threading.Event,
     svc,
+    start_at_peak: bool = False,
 ):
-    """Fade in/out with the given color."""
+    """Fade in/out with the given color.
+
+    start_at_peak skips the first half of the opening arc so the very first
+    frame is full brightness, and only then breathes down into the normal
+    cycle. It exists for cues that answer the user NOW: the arc's rise is slow
+    (a full 0 -> 1 -> 0 takes 10s at speed=0.3) and `int()` truncation on a dim
+    preset holds the output at literal (0,0,0) for the first second or so of
+    it, so an acknowledgement painted this way is invisible exactly when it is
+    supposed to be read (device-observed, 28/8: the listening cue fired on the
+    first STT partial but was not seen until the last one). Off by default —
+    an emotion that fades in is meant to fade in. Note the equivalent fix
+    cannot live at the call site: dispatching the colour before starting this
+    thread is erased milliseconds later by the i=0 frame below.
+    """
     step_delay = 0.03 / speed
+    # Only the OPENING arc starts at the peak; every cycle after it breathes
+    # from 0 as usual.
+    start = 50 if start_at_peak else 0
     while not is_done(deadline, stop_event):
         # Full cycle: 0 -> 1 -> 0 over ~3s at speed=1
-        for i in range(100):
+        for i in range(start, 100):
             if is_done(deadline, stop_event):
                 return
             brightness = math.sin(math.pi * i / 100.0)
             scaled = tuple(int(c * brightness) for c in color)
             svc.dispatch(RGB_CMD_SOLID, scaled)
             stop_event.wait(step_delay)
+        start = 0
 
 
 def candle(

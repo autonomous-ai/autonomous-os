@@ -1447,7 +1447,13 @@ def _apply_emotion_led_display(
                     ),
                     # rainbow has no color to scale, so `intensity` cannot dim
                     # it — the preset's own `brightness` is its only level.
-                    kwargs={"brightness": preset.get("brightness", 1.0)},
+                    # start_at_peak is opt-in per preset (listening only): a
+                    # cue that answers the user has to be visible on its first
+                    # frame, not after the breath has risen. See effects.py.
+                    kwargs={
+                        "brightness": preset.get("brightness", 1.0),
+                        "start_at_peak": preset.get("start_at_peak", False),
+                    },
                     daemon=True,
                     name=f"led-emotion-{emotion}",
                 )

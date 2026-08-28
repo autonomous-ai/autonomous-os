@@ -12,7 +12,7 @@ Nguồn: màu trong bảng là màu **lamp** thực sự hiển thị — `robot
 | `excited` | 3, 1, 0 | `#030100` cam dịu | overlay | candle | 0.5 | excited |
 | `shy` | 3, 0, 1 | `#030001` hồng rose dịu | overlay | breathing | 0.3 | shy |
 | `shock` | 2, 2, 2 | `#020202` trắng dịu | overlay | notification_flash | 1.0 | shock |
-| `listening` | 0, 0, 3 | `#000003` xanh dương dịu | overlay | breathing | 1.2 | — (xem ghi chú) |
+| `listening` | 0, 0, 3 | `#000003` xanh dương dịu | overlay | breathing (mở ở đỉnh) | 1.2 | — (xem ghi chú) |
 | `laugh` | 2, 3, 0 | `#020300` xanh chanh dịu | overlay | candle | 0.2 | laugh |
 | `confused` | 3, 2, 0 | `#030200` amber dịu | overlay | candle | 0.2 | confused |
 | `sleepy` | 0, 0, 0 | `#000000` đen (tắt) | base | solid | — | sleepy |
@@ -88,6 +88,14 @@ Ghi chú kỹ thuật:
   `speaking_wave_rainbow` cũng tự sinh hue nên lấy đúng `brightness` của `music_strong`, envelope VU chạy dưới mức đó. Route nhạc không tự phát emotion `music_strong` — agent phát.
 - **Bảng này nằm trong `robots/lamp/presets.json`**, overlay riêng cho device, merge từng field lúc boot qua `hal/board/presets_overlay.py` — `hal/presets.py` *không* bị sửa. Nên các robot khác (reachy, intern) vẫn giữ palette gốc, và muốn trả lamp về palette gốc thì chỉ cần xoá section `emotion` trong file JSON đó.
 - **Đừng nhầm `EMO_IDLE` với `AMBIENT_RESTING_LED`.** Cái sau là `[0, 0, 0]` (quyết định sản phẩm 30/07/2026: strip lúc nghỉ thì tắt hẳn); `EMO_IDLE` là một emotion agent chủ động phát ra và vẫn có màu.
+
+### `listening` mở màn ở đỉnh nhịp thở
+
+`breathing` bình thường bắt đầu mỗi arc ở độ sáng 0 rồi mới lên. Với thông số của lamp thì đoạn lên đó không đọc được: một arc `0 -> 1 -> 0` đầy đủ mất **10s** ở `speed` 0.3, và vì mỗi frame bị cắt cụt (`int(c * brightness)`) nên peak 3 xuất ra đúng `(0, 0, 0)` trong **~1.1s** đầu, tới ~2.3s mới lên được 2. Đo trên máy 28/08/2026: cue listening bắn ngay ở STT partial ĐẦU TIÊN (12:02:17.666) nhưng tới partial cuối (12:02:18.231) mới nhìn thấy — cái độ trễ ai cũng tưởng là "STT chậm" thực ra là thời gian lên của hiệu ứng.
+
+Vì vậy `listening` khai `"start_at_peak": True` (`hal/presets.py`): arc mở màn bắt đầu ở độ sáng đầy đủ rồi thở *xuống*; từ chu kỳ thứ hai trở đi vẫn lên từ 0 như cũ. Peak, hue và `speed` giữ nguyên — không có gì sáng hơn trước, nên nó không đi ngược các đợt hạ chói ở trên.
+
+Đây là cờ opt-in theo từng preset và `listening` là preset duy nhất bật: emotion thì đúng là nên fade in, chỉ có cue trả lời câu nói đầu tiên của user mới bắt buộc đọc được ngay ở frame đầu. Cách sửa tương đương ở call site không dùng được — bật màu lên trước khi start effect thread sẽ bị chính frame `i=0` của thread đó xoá sau vài mili-giây (`hal/drivers/rgb/effects.py`).
 
 ## `listening` không có servo
 

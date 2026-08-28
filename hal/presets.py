@@ -175,6 +175,15 @@ EMOTION_PRESETS = {
                     "color": [4, 8, 16],
                     "effect": FX_BREATHING,
                     "speed": 1.2,
+                    # The one cue that must be readable the instant it fires:
+                    # it answers the user's first words. The breath's rise is
+                    # too slow to do that on a body that has slowed the speed
+                    # down and dimmed the colour (lamp: [0,0,3] @ 0.3 renders
+                    # black for the first ~1.1s), so this arc opens at full
+                    # brightness and breathes down from there. Peak level and
+                    # hue are untouched — nothing here gets brighter than it
+                    # already was.
+                    "start_at_peak": True,
                     "camera": "on"},
     EMO_LAUGH: {"servo": SERVO_LAUGH, "color": [12, 8, 1], "effect": FX_CANDLE, "speed": 0.2, "camera": "on"},
     EMO_CONFUSED: {"servo": SERVO_CONFUSED, "color": [16, 9, 3], "effect": FX_CANDLE, "speed": 0.2, "camera": "on"},
