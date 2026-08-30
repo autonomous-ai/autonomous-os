@@ -609,11 +609,31 @@ export interface ScheduleCadence {
   at?: string; // "once" — absolute RFC3339 instant
 }
 
+/** What firing a task DOES, and so how `instructions` is read: "agent" hands
+ *  it to the agent as a prompt; "speak" says it out loud verbatim, with no
+ *  agent turn at all. Absent/empty means "agent" — every task authored before
+ *  this field, which is why the device's ResolveKind maps "" (and anything
+ *  unrecognised) back to agent rather than failing. */
+export type ScheduleKind = "agent" | "speak";
+
+/** HAL's hard TTS bound, mirrored from system/schedule/store.go's
+ *  MaxSpeakChars. HAL rejects rather than truncates, so an over-long speak
+ *  task is a device that says NOTHING. Only "speak" is bounded: an agent
+ *  task's text is a prompt, and what reaches TTS is the reply. */
+export const MAX_SPEAK_CHARS = 2000;
+
+/** Normalise a possibly-absent kind. Mirrors ResolveKind in system/schedule/store.go. */
+export function resolveScheduleKind(kind?: string | null): ScheduleKind {
+  return kind?.trim().toLowerCase() === "speak" ? "speak" : "agent";
+}
+
 export interface ScheduleItem {
   id: string;
   name: string;
   instructions: string;
   enabled: boolean;
+  /** Absent/empty means "agent" — use resolveScheduleKind, never a bare read. */
+  kind?: ScheduleKind;
   schedule: ScheduleCadence;
   end_at?: string;
   next_run_at?: string; // absent = not currently due (paused, manual, or a spent "once")
@@ -639,6 +659,8 @@ export interface ScheduleItem {
 export interface ScheduleWriteBody {
   name: string;
   instructions: string;
+  /** Omit for an agent task; the device's handler defaults an absent kind to agent. */
+  kind?: ScheduleKind;
   enabled?: boolean;
   template_code?: string;
   schedule: ScheduleCadence;

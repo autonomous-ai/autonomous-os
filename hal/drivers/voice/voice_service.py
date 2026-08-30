@@ -1284,12 +1284,22 @@ class VoiceService:
                     # backwards; only an empty-evidence result asks the watcher
                     # to restore the remembered pose asynchronously, while this
                     # audio capture keeps running. No-op unless armed.
+                    gaze_focus_granted = False
                     try:
                         from hal.drivers.tracking import gaze
 
-                        gaze.on_speech_start()
+                        gaze_focus_granted = gaze.on_speech_start()
                     except Exception as e:
                         logger.debug("gaze wake check skipped: %s", e)
+                    pending_listening_cue_id = None
+                    if gaze_focus_granted:
+                        # Gaze + VAD has already proved intent, while STT
+                        # normally needs another 1.5-2.5s for its first
+                        # partial. A dim LED-only cue answers immediately;
+                        # the full listening emotion still waits for text.
+                        from hal import app_state
+
+                        pending_listening_cue_id = app_state.show_listening_pending_cue()
                     speech_pre_buffer = [
                         resample_to_stt(f, device_rate, voice_cfg.STT_RATE, self._np)
                         for f in all_frames
@@ -1301,6 +1311,7 @@ class VoiceService:
                         device_rate,
                         preconnected_session=keepalive_session,
                         speech_pre_buffer=speech_pre_buffer,
+                        pending_listening_cue_id=pending_listening_cue_id,
                     )
                     keepalive_session = None
                     speech_start = None
@@ -1339,6 +1350,7 @@ class VoiceService:
         device_rate: int,
         preconnected_session=None,
         speech_pre_buffer=None,
+        pending_listening_cue_id=None,
     ):
         """Stream audio to STT provider until silence or TTS interrupts.
 
@@ -1897,6 +1909,13 @@ class VoiceService:
             self._backchannel.reset()
             self._listening = False
             stt_session.close()
+            if pending_listening_cue_id is not None:
+                # If STT produced a partial, its real listening emotion already
+                # consumed this cue. Otherwise restore the prior LED promptly
+                # instead of leaving the dim gaze acknowledgement to its timer.
+                from hal import app_state
+
+                app_state.clear_listening_pending_cue(pending_listening_cue_id)
             combined, ser_audio_buffer, buf_duration = finalize_session(
                 audio_buffer,
                 last_partial,

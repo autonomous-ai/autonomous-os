@@ -80,6 +80,20 @@ type SensingHandler struct {
 	isSleeping       func() bool  // returns true when agent last expressed "sleepy" emotion
 	lastNotReadyTTS  atomic.Int64 // unix ms; cooldown for "brain restarting" TTS
 	lastAgentTurn    atomic.Int64 // unix ms of the last agent turn created here — ambient floor reference
+
+	// onRealtimeHandled, when set, is called once per voice_agent_handled
+	// event: the realtime agent has spoken an answer to a newer utterance, so
+	// the agent handler mutes the older turn still in flight. A callback rather
+	// than a direct dependency, following isSleeping above — this package must
+	// not import the agent delivery package it is a sibling of.
+	onRealtimeHandled func()
+}
+
+// SetOnRealtimeHandled installs the realtime-handled hook. Wired in
+// ProvideServer, where both handlers exist; left nil in tests and by any
+// caller that does not route voice through the realtime agent.
+func (h *SensingHandler) SetOnRealtimeHandled(fn func()) {
+	h.onRealtimeHandled = fn
 }
 
 // ProvideSensingHandler constructs a SensingHandler.
@@ -241,6 +255,20 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 	// flag also fires the opening filler below, which must never play for a turn
 	// the realtime agent already answered (the run is MarkSilentRun).
 	isRealtimeHandled := req.Type == "voice_agent_handled"
+	// The realtime agent has just answered a NEWER question out loud, so the
+	// main-agent turn still working on the previous one loses the speaker (see
+	// CancelSpeechForNewerTurn).
+	//
+	// This sits BEFORE the busy fork on purpose. voice_agent_handled counts as
+	// passive, so when the agent is busy it is queued and returns early — and
+	// "the agent is busy" is exactly the case with an older turn still in
+	// flight. Hooking it further down, next to MarkSilentRun, makes the whole
+	// thing a no-op precisely when it is needed. The mark is about wall-clock
+	// "the user has already been answered", which holds whether or not the
+	// sync event itself reaches the agent now.
+	if isRealtimeHandled && h.onRealtimeHandled != nil {
+		h.onRealtimeHandled()
+	}
 	isPassive := !isVoiceCommand
 	if isPassive && !isVoice && !isRealtimeHandled && !isChat && req.Type != "presence.enter" && req.Type != "fire_hazard.detected" && h.isSleeping != nil && h.isSleeping() {
 		slog.Info("INBOUND from HAL → SLEEP-DROPPED (lamp sleeping)",
