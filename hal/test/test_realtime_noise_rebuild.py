@@ -1,6 +1,7 @@
 """Regression tests for the non-blocking Gemini noise-drop recovery path."""
 
 import threading
+import time
 
 from hal.realtime.orchestrator import RealtimeOrchestrator
 
@@ -63,6 +64,21 @@ def _orchestrator_for_rebuild(
     return orchestrator, old
 
 
+def _wait_disconnected(agent, timeout=2.0):
+    """The replaced session is closed on its own thread, so poll for it.
+
+    Nothing waits on that close (see RealtimeOrchestrator._disconnect_in_background):
+    it used to sit in the turn's critical path. The invariant these tests guard
+    is that the old session IS dropped, not that it is dropped synchronously.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if agent.disconnected:
+            return True
+        time.sleep(0.01)
+    return agent.disconnected
+
+
 def test_noise_drop_rebuild_reserves_session_before_connecting():
     """Audio capture can identify the in-flight rebuild before its WS is ready."""
     entered = threading.Event()
@@ -79,7 +95,7 @@ def test_noise_drop_rebuild_reserves_session_before_connecting():
     release.set()
     assert orchestrator.wait_until_available(timeout_s=1.0)
     assert orchestrator.available
-    assert old.disconnected
+    assert _wait_disconnected(old)
 
 
 def test_noise_drop_does_not_reuse_contaminated_session_after_connect_failure():
@@ -92,4 +108,4 @@ def test_noise_drop_does_not_reuse_contaminated_session_after_connect_failure():
     assert orchestrator.discard_open_activity("noise-drop")
     assert not orchestrator.wait_until_available(timeout_s=1.0)
     assert orchestrator._agent is None
-    assert old.disconnected
+    assert _wait_disconnected(old)

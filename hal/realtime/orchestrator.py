@@ -488,10 +488,36 @@ class RealtimeOrchestrator:
         finally:
             self._finish_rebuild()
             if old is not None and old is not self._agent:
-                try:
-                    old.disconnect()
-                except Exception:
-                    logger.exception("[realtime] old agent disconnect failed")
+                self._disconnect_in_background(old, reason)
+
+    @staticmethod
+    def _disconnect_in_background(agent, reason: str) -> None:
+        """Tear the replaced session down without holding up the turn.
+
+        The new session is already live by the time we get here — nothing waits
+        on the old one being cleanly closed. Doing it inline did make the turn
+        wait: `disconnect()` awaits the provider's `aclose()` and then joins the
+        IO thread, measured at 0.79s between the fresh Gemini session opening
+        and this turn's [TURN CONTEXT] going out (lamp-0c89, 03/09/2026) — dead
+        time inserted between the user finishing a sentence and the model
+        hearing it. Failures stay logged, they just no longer cost the user a
+        second of silence.
+        """
+        def _close() -> None:
+            try:
+                agent.disconnect()
+            except Exception:
+                logger.exception("[realtime] old agent disconnect failed (%s)", reason)
+
+        try:
+            threading.Thread(
+                target=_close, daemon=True, name="rt-old-session-close"
+            ).start()
+        except Exception:
+            # Thread creation is the one failure worth absorbing inline: leaking
+            # the socket is worse than the delay we were avoiding.
+            logger.warning("[realtime] could not background the old-session close; closing inline")
+            _close()
 
     def _rebuild_now(
         self,
