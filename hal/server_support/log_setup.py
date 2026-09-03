@@ -108,7 +108,9 @@ def setup_logging() -> logging.Logger:
     # GELF handler: send INFO+ logs to centralized Graylog. A simulated body
     # must be fully local — no surprise network traffic while a developer is
     # proving a skill on a laptop.
-    if os.environ.get("DEVICE_TYPE") != "sim" and os.environ.get("HAL_SIMULATE", "").lower() not in ("1", "true", "yes"):
+    from hal import config
+
+    if os.environ.get("DEVICE_TYPE") != "sim" and not config.SIMULATE:
         try:
             from hal.drivers.gelf_handler import GELFHandler
             from hal.config import _os_cfg_get

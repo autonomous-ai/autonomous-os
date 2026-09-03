@@ -43,6 +43,8 @@ from hal.config import (
     SERVO_HOLD_S,
     SERVO_PLAY_RAMP_S,
     SERVO_PORT,
+    SIMULATE,
+    SIM_MEDIA,
     TTS_SPEED,
     TTS_VOICE,
     TTS_INSTRUCTIONS,
@@ -111,8 +113,8 @@ def _device_profile():
 _profile = _device_profile()
 # Full declared route surface (incl. `speaker`), keys usable with `in`.
 _declared = _profile.declared_routes()
-_simulation = os.environ.get("HAL_SIMULATE", "").lower() in ("1", "true", "yes")
-_simulation_media = os.environ.get("HAL_SIM_MEDIA", "virtual").strip().lower()
+_simulation = SIMULATE
+_simulation_media = SIM_MEDIA
 if _simulation_media not in {"virtual", "host"}:
     raise RuntimeError("HAL_SIM_MEDIA must be 'virtual' or 'host'")
 if _simulation:

@@ -3,6 +3,7 @@ import os
 import time
 from typing import Any, List, Union
 from ..base import ServiceBase
+from hal import config
 from hal.presets import RGB_CMD_PAINT, RGB_CMD_SOLID
 from hal.safety.policy import clamp_color
 from hal.board.board import board_profile
@@ -200,7 +201,7 @@ class RGBService(ServiceBase):
 
         led = board_profile().led
         try:
-            if os.environ.get("HAL_SIMULATE", "").lower() in ("1", "true", "yes"):
+            if config.SIMULATE:
                 self._driver = _MemoryStrip(led_count)
                 self.logger.info("RGB using virtual memory strip")
             elif led.transport == "spi":
