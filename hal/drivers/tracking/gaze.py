@@ -1144,7 +1144,6 @@ def _check_speech(stage: str, *, request_repoint: bool) -> bool:
             "WOULD_WAKE" if would and not cooling
             else "cooldown" if cooling
             else "blind" if not measured_enough
-            else "no-turn" if facing_now and not turned
             else "skip"
         )
         # The trail is what makes a refusal diagnosable: a single number cannot
