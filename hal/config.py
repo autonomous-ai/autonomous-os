@@ -1165,6 +1165,28 @@ GAZE_COOLDOWN_S: float = float(os.environ.get("HAL_GAZE_COOLDOWN_S", "5"))
 # a lamp with the 60s override would see a difference. The point is a smaller
 # allowance everywhere, not just where someone happened to widen the default.
 GAZE_WAKE_FOCUS_S: float = float(os.environ.get("HAL_GAZE_WAKE_FOCUS_S", "10"))
+# Directory holding the boot-scoped sidecars app_state and routes/scene write
+# (LED / mic / speaker / camera / sleep / scene). `/tmp` on a body, so they die
+# with the machine but survive a HAL restart — which is the whole point: an OTA
+# must not wake a sleeping device or drop the user's colour.
+#
+# Overridable so a test run gets its own: these files outlive the process, so on
+# the shared default one run that ended with the body asleep left every LATER
+# run starting asleep, and running the suite on a real body would overwrite that
+# body's live switches (observed 03/09/2026).
+STATE_DIR: str = os.environ.get("HAL_STATE_DIR", "/tmp")
+
+# --- Simulation (laptop body: `make sim`) ---
+#
+# SIMULATE is the on/off switch; SIM_MEDIA is what the developer ASKED for.
+# What each subsystem actually ends up running is decided at boot and tracked in
+# app_state (`sim_media_camera` / `sim_media_audio`), because a host camera or
+# mic can be missing, busy, or permission-denied — that is runtime state, not
+# configuration, so it stays there.
+SIMULATE: bool = os.environ.get("HAL_SIMULATE", "").lower() in ("1", "true", "yes")
+SIM_MEDIA: str = os.environ.get("HAL_SIM_MEDIA", "virtual").strip().lower()
+# Who a turn belongs to when neither face nor voice has named anyone.
+DEFAULT_USER: str = os.environ.get("HAL_DEFAULT_USER", "unknown")
 # Where the remembered user bearing lives. NOT a boot sidecar: this must survive
 # reboots, unlike the mic/speaker/camera state in app_state.
 USER_BEARING_PATH: str = os.environ.get(

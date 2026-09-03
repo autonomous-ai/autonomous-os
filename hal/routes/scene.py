@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 
 import hal.app_state as state
+from hal import config
 from hal.models import (
     SceneListResponse,
     SceneRequest,
@@ -24,7 +25,7 @@ router = APIRouter(tags=["Scene"])
 # tmpfs AND carries the kernel boot_id — a full device reboot starts scene-less
 # by design (restoring a days-old focus scene after a power cycle would be
 # wrong), only an in-boot restart (OTA, deploy, crash) restores.
-_SCENE_STATE_PATH = Path(state.STATE_DIR) / "hal-scene-state.json"
+_SCENE_STATE_PATH = Path(config.STATE_DIR) / "hal-scene-state.json"
 
 
 def _boot_id() -> str:

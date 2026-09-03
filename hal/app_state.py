@@ -81,10 +81,7 @@ audio_input_device: Optional[int] = None
 # Simulation exposes an in-memory microphone/speaker pair. Keeping this state
 # here lets the audio routes preserve their HTTP contract without querying the
 # developer's macOS devices.
-simulation_audio: bool = (
-    os.environ.get("HAL_SIMULATE", "").lower() in ("1", "true", "yes")
-    and os.environ.get("HAL_SIM_MEDIA", "virtual").lower() != "host"
-)
+simulation_audio: bool = config.SIMULATE and config.SIM_MEDIA != "host"
 simulation_volume: int = 65
 
 # --- Simulation media mode (HAL_SIM_MEDIA) ---
@@ -97,7 +94,7 @@ simulation_volume: int = 65
 # `sim_media_reasons` carries the human-actionable why for each downgrade and is
 # surfaced at GET /simulator/state so the page never shows a still image while
 # claiming to be live.
-sim_media_requested: str = os.environ.get("HAL_SIM_MEDIA", "virtual").strip().lower()
+sim_media_requested: str = config.SIM_MEDIA
 sim_media_camera: str = sim_media_requested
 sim_media_audio: str = sim_media_requested
 sim_media_reasons: dict = {}
@@ -405,7 +402,7 @@ _snapshot_paths: list = []
 
 # --- Default user ---
 
-DEFAULT_USER = os.environ.get("HAL_DEFAULT_USER", "unknown")
+DEFAULT_USER = config.DEFAULT_USER
 
 # --- Agent workspace ---
 
@@ -441,17 +438,11 @@ def _cancel_pending_restore():
 # _user_led_state, and the os-server's post-boot POST /led/restore then finds
 # "no user state" and CLEARS the strip — the lamp goes dark for ~45s until
 # ambient breathing kicks in, instead of coming back in the user's color.
-# Directory for every boot-scoped sidecar below. `/tmp` on a body; overridable
-# so a test run cannot inherit — or clobber — the live device's switches. The
-# HAL test suite sets it per session: these files outlive a process, so one run
-# that left `sleeping: true` behind made every LATER run start asleep, and the
-# simulator tests then failed on a body that would not move (observed
-# 03/09/2026, and it is why the suite's red count kept changing).
-STATE_DIR = os.environ.get("HAL_STATE_DIR", "/tmp")
-
-
+# Every boot-scoped sidecar below lives here. The directory itself is declared
+# in config.py with the rest of the env-driven settings — this module reads it,
+# it does not own it.
 def _state_path(name: str) -> str:
-    return os.path.join(STATE_DIR, name)
+    return os.path.join(config.STATE_DIR, name)
 
 
 _LED_STATE_PATH = _state_path("hal-led-state.json")

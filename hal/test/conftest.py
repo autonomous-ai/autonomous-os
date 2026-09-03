@@ -16,6 +16,7 @@ server tests do) keeps it.
 """
 
 import os
+import shutil
 import tempfile
 
 _TEST_ROOT = os.path.join(tempfile.gettempdir(), "autonomous-hal-test")
@@ -32,4 +33,12 @@ for _var, _leaf in (
 ):
     os.environ.setdefault(_var, os.path.join(_TEST_ROOT, _leaf))
 
+# Start every session from empty. A fixed path is what makes the run
+# reproducible (subprocess bodies inherit it through os.environ.copy), but a
+# fixed path also SURVIVES the session — and these sidecars are exactly the
+# state that must not: one run that ended with the body asleep made the next
+# run boot asleep, and the simulator tests then failed against a body that
+# would not move. Only the directory this file owns is removed.
+if os.environ["HAL_STATE_DIR"].startswith(_TEST_ROOT):
+    shutil.rmtree(os.environ["HAL_STATE_DIR"], ignore_errors=True)
 os.makedirs(os.environ["HAL_STATE_DIR"], exist_ok=True)
