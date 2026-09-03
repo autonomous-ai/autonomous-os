@@ -23,5 +23,13 @@ _TEST_ROOT = os.path.join(tempfile.gettempdir(), "autonomous-hal-test")
 for _var, _leaf in (
     ("HAL_USERS_DIR", "users"),
     ("HAL_STRANGERS_DIR", "strangers"),
+    # Boot-scoped switch sidecars (LED / mic / speaker / camera / sleep / scene).
+    # They outlive the process on purpose, so on the shared default (/tmp) one
+    # run that ended with the body asleep left every LATER run starting asleep —
+    # the simulator tests then failed against a body that would not move, and
+    # the suite's red count changed depending on what ran before it.
+    ("HAL_STATE_DIR", "state"),
 ):
     os.environ.setdefault(_var, os.path.join(_TEST_ROOT, _leaf))
+
+os.makedirs(os.environ["HAL_STATE_DIR"], exist_ok=True)

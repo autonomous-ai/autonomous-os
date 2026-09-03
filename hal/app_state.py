@@ -441,7 +441,20 @@ def _cancel_pending_restore():
 # _user_led_state, and the os-server's post-boot POST /led/restore then finds
 # "no user state" and CLEARS the strip — the lamp goes dark for ~45s until
 # ambient breathing kicks in, instead of coming back in the user's color.
-_LED_STATE_PATH = "/tmp/hal-led-state.json"
+# Directory for every boot-scoped sidecar below. `/tmp` on a body; overridable
+# so a test run cannot inherit — or clobber — the live device's switches. The
+# HAL test suite sets it per session: these files outlive a process, so one run
+# that left `sleeping: true` behind made every LATER run start asleep, and the
+# simulator tests then failed on a body that would not move (observed
+# 03/09/2026, and it is why the suite's red count kept changing).
+STATE_DIR = os.environ.get("HAL_STATE_DIR", "/tmp")
+
+
+def _state_path(name: str) -> str:
+    return os.path.join(STATE_DIR, name)
+
+
+_LED_STATE_PATH = _state_path("hal-led-state.json")
 
 
 def _boot_id() -> str:
@@ -491,14 +504,14 @@ _user_led_state = _load_user_led_state()
 # physical mic switch re-applies itself at boot regardless).
 # NOT persisted: record-enroll's transient speaker mute (routes/speaker.py
 # writes the flag directly and never calls the persist helpers — by design).
-_MIC_STATE_PATH = "/tmp/hal-mic-state.json"
-_SPEAKER_STATE_PATH = "/tmp/hal-speaker-state.json"
-_CAMERA_STATE_PATH = "/tmp/hal-camera-state.json"
+_MIC_STATE_PATH = _state_path("hal-mic-state.json")
+_SPEAKER_STATE_PATH = _state_path("hal-speaker-state.json")
+_CAMERA_STATE_PATH = _state_path("hal-camera-state.json")
 # Sleep is the same class of user-facing switch: someone (or a night scene) put
 # the device to sleep, and a HAL restart must not undo that. An OTA restarts HAL
 # — so before this sidecar, updating HAL while the device slept woke it up, with
 # the strip back on and the mic listening, in the middle of the night.
-_SLEEP_STATE_PATH = "/tmp/hal-sleep-state.json"
+_SLEEP_STATE_PATH = _state_path("hal-sleep-state.json")
 
 
 def _save_boot_sidecar(path: str, payload: dict):

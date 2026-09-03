@@ -300,6 +300,12 @@ speaker không cần bước apply (TTS check lúc speak). Reboot nguyên máy t
 đầu fresh (Intern v2 Pro có công tắc gạt tự apply lại). Mute speaker transient
 của record-enroll chủ đích KHÔNG persist.
 
+Tất cả sidecar này nằm trong `HAL_STATE_DIR` (mặc định `/tmp`, đúng các đường dẫn
+ở trên). Nó sinh ra để trỏ đi chỗ khác: bộ test HAL cấp cho mỗi lần chạy một thư
+mục riêng, vì các file này sống lâu hơn tiến trình — trước đó một lần chạy kết
+thúc lúc thân máy đang ngủ sẽ khiến **mọi** lần chạy sau khởi động ở trạng thái
+ngủ, và chạy suite trên máy thật thì ghi đè luôn công tắc thật của máy đó.
+
 ## Phrase local
 
 Thông báo của các action đều local theo `stt_language` từ `config.json` của Lamp. Hằng số ngôn ngữ ở `hal/presets.py` (`LANG_EN`, `LANG_VI`, `LANG_ZH_CN`, `LANG_ZH_TW`, `DEFAULT_LANG`). Fallback về `DEFAULT_LANG` (English) khi ngôn ngữ hiện tại chưa có bản dịch.
