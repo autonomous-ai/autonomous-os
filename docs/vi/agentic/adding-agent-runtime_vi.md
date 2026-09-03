@@ -318,6 +318,23 @@ parity. Chỉ làm khi xuất hiện nguồn turn như vậy.
   default PicoClaw về wipe OpenClaw — latent bug, refactor này xoá). Primitive dùng
   chung duy nhất `osreset.WipePath` nằm ở `lib/osreset` để backend dùng được mà
   không phải import `server/system`.
+- **Persona được wipe hộ bạn — nhưng chỉ khi `personaPaths` đúng.**
+  `ResetAgent()` chỉ với tới backend *đang chạy*, trong khi file persona là các
+  **bản sao**: mỗi lần switch runtime, SOUL/IDENTITY/MEMORY/USER/KNOWLEDGE được
+  migrate sang đích và bản của nguồn vẫn nằm nguyên đó — nên một thiết bị đã từng
+  đổi backend giữ cùng một profile ở nhiều cây thư mục. Chỉ dọn cây đang active
+  thì lần switch kế tiếp sẽ migrate ngược một bản cũ vào (quan sát trên máy
+  2026-09-03: tên một chủ cũ nằm trong bốn file `USER.md` giống hệt nhau từng
+  byte, cũ nhất từ 2026-07-08, và đèn vẫn gọi tên đó).
+  Vì vậy `factoryreset.go` còn gọi `migratepersona.PersonaPaths`, hàm này union
+  `personaPaths(opts)` của **mọi** adapter đã đăng ký. Method đó nằm trên
+  interface `runtimeAdapter` nên compiler bắt bạn phải viết — nhưng nó không kiểm
+  được bạn có liệt kê đúng file hay không. Hai quy tắc:
+  - Liệt kê **file**, cộng thư mục `memory/`. **Không bao giờ liệt kê workspace
+    hay home root** — ở đó còn `skills/`, `configs/`, và với Hermes là cả bản cài
+    đặt. `TestPersonaPathsNeverWipeARuntimeRoot` chặn việc này.
+  - Trả về `nil` vẫn compile được và âm thầm để profile sống sót qua reset;
+    `TestEveryAdapterContributesPersonaPaths` bắt lỗi đó.
 - **Wipe `/root/config/agent_state.json` khoá-bước với `config.json`** — chúng là
   một cặp (runtime hiện tại + lịch sử switch). Để lại `agent_state.json` trong khi
   `config.json` reset làm `prev` cũ lệch với `current` bị reset → kích **migration
@@ -457,6 +474,9 @@ là no-op idempotent.
 - [ ] `ResetAgent()` trong `runtimes/<name>/reset.go` (factory-reset gọi
       `gw.ResetAgent()` trên gateway active — không có switch ở `factoryreset.go`); **`agent_state.json` wipe cùng
       `config.json`**.
+- [ ] `personaPaths(opts)` trên persona adapter liệt kê **file** persona của
+      runtime này + thư mục `memory/` — không bao giờ workspace/home root — để
+      factory reset dọn profile ở *mọi* cây thư mục, không chỉ cây active (§7).
 - [ ] Gate capability qua `skills.Supported` / `SupportedHooks`.
 - [ ] **Kênh (§9):** `SupportedChannels()` khai báo capability thật;
       `AddChannel`/`RefreshChannelConfig` trả `domain.ErrChannelNotSupported` cho

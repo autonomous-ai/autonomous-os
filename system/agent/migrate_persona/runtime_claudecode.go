@@ -87,3 +87,8 @@ func rebrandToClaudeCode(text string) string {
 	text = rePicoClaw.ReplaceAllStringFunc(text, repl)
 	return text
 }
+
+// personaPaths implements runtimeAdapter — Claude Code mirrors the OpenClaw layout.
+func (claudecodeAdapter) personaPaths(opts Options) []string {
+	return openclawLayoutPersonaPaths(opts.ClaudecodeWorkspace)
+}

@@ -41,10 +41,15 @@ const (
 )
 
 // runtimeAdapter is the read/write surface every migratable runtime implements.
+//
+// personaPaths is part of the interface (not a side table) so that adding a
+// runtime cannot silently leave its persona behind on a factory reset — the
+// compiler demands it alongside read/write. See PersonaPaths.
 type runtimeAdapter interface {
 	runtime() Runtime
 	read(opts Options) (*PersonaBundle, error)
 	write(b *baseMigrator, bundle *PersonaBundle, opts Options) error
+	personaPaths(opts Options) []string
 }
 
 // adapters is the registry. To make a new runtime migratable, implement

@@ -97,3 +97,8 @@ func rebrandToOpenclaw(text string) string {
 	text = reOpenCode.ReplaceAllStringFunc(text, repl)
 	return text
 }
+
+// personaPaths implements runtimeAdapter — OpenClaw's standard workspace layout.
+func (openclawAdapter) personaPaths(opts Options) []string {
+	return openclawLayoutPersonaPaths(opts.OpenclawWorkspace)
+}

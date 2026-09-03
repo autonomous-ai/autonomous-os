@@ -331,6 +331,23 @@ when such a turn source appears.
   correctly left untouched (the old `switch` defaulted PicoClaw to the OpenClaw
   wipe — a latent bug this removed). The one shared primitive, `osreset.WipePath`,
   lives in `lib/osreset` so a backend can use it without importing `server/system`.
+- **Your persona is wiped for you — but only if `personaPaths` is right.**
+  `ResetAgent()` reaches the *active* backend alone, yet persona files are
+  **copies**: every runtime switch migrates SOUL/IDENTITY/MEMORY/USER/KNOWLEDGE
+  into the destination and leaves the source's copy behind, so a device that has
+  switched backends holds the same profile in several trees. Clearing only the
+  active one lets the next switch migrate a stale copy straight back in (device
+  observed 2026-09-03: a retired owner's name in four byte-identical `USER.md`
+  files, oldest from 2026-07-08, still being spoken by the lamp).
+  `factoryreset.go` therefore also calls `migratepersona.PersonaPaths`, which
+  unions `personaPaths(opts)` across **all** registered adapters. That method is
+  on the `runtimeAdapter` interface, so the compiler makes you write it — but it
+  cannot check that you listed the right files. Two rules:
+  - List **files**, plus the `memory/` dir. **Never the workspace or home root** —
+    those also hold `skills/`, `configs/` and, for Hermes, the installation
+    itself. `TestPersonaPathsNeverWipeARuntimeRoot` enforces this.
+  - Returning `nil` compiles and silently leaks the profile through a reset;
+    `TestEveryAdapterContributesPersonaPaths` catches it.
 - **Wipe `/root/config/agent_state.json` in lockstep with `config.json`** — they
   are a pair (current runtime + switch history). Leaving `agent_state.json` while
   `config.json` resets makes a stale `prev` diverge from the reset `current` and
@@ -470,6 +487,9 @@ re-syncs `.env` before the gateway starts, so the re-apply is an idempotent no-o
 - [ ] `ResetAgent()` in `runtimes/<name>/reset.go` (factory-reset calls
       `gw.ResetAgent()` on the active gateway — no `factoryreset.go` switch); **`agent_state.json` wiped with
       `config.json`**.
+- [ ] `personaPaths(opts)` on the persona adapter lists this runtime's persona
+      **files** + `memory/` dir — never the workspace/home root — so a factory
+      reset clears the profile in *every* tree, not just the active one (§7).
 - [ ] Capability gating via `skills.Supported` / `SupportedHooks`.
 - [ ] **Channels (§9):** `SupportedChannels()` declares real capability;
       `AddChannel`/`RefreshChannelConfig` return `domain.ErrChannelNotSupported`

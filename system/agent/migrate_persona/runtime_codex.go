@@ -89,3 +89,8 @@ func rebrandToCodex(text string) string {
 	text = reMoltBot.ReplaceAllStringFunc(text, repl)
 	return text
 }
+
+// personaPaths implements runtimeAdapter — Codex mirrors the OpenClaw layout.
+func (codexAdapter) personaPaths(opts Options) []string {
+	return openclawLayoutPersonaPaths(opts.CodexWorkspace)
+}

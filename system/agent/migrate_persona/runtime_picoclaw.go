@@ -111,3 +111,19 @@ func rebrandToPicoclaw(text string) string {
 	text = reOpenCode.ReplaceAllStringFunc(text, repl)
 	return text
 }
+
+// personaPaths implements runtimeAdapter. Same as the OpenClaw layout except
+// MEMORY.md lives inside memory/, which the memory/ dir entry already covers.
+func (picoclawAdapter) personaPaths(opts Options) []string {
+	ws := opts.PicoclawWorkspace
+	if ws == "" {
+		return nil
+	}
+	return []string{
+		filepath.Join(ws, "SOUL.md"),
+		filepath.Join(ws, "IDENTITY.md"),
+		filepath.Join(ws, "USER.md"),
+		filepath.Join(ws, "KNOWLEDGE.md"),
+		filepath.Join(ws, "memory"),
+	}
+}

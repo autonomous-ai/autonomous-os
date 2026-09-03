@@ -93,3 +93,8 @@ func rebrandToOpenCode(text string) string {
 	text = reMoltBot.ReplaceAllStringFunc(text, repl)
 	return text
 }
+
+// personaPaths implements runtimeAdapter — OpenCode mirrors the OpenClaw layout.
+func (opencodeAdapter) personaPaths(opts Options) []string {
+	return openclawLayoutPersonaPaths(opts.OpenCodeWorkspace)
+}

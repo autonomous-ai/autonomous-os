@@ -102,3 +102,17 @@ func rebrandToHermes(text string) string {
 	text = reOpenCode.ReplaceAllStringFunc(text, repl)
 	return text
 }
+
+// personaPaths implements runtimeAdapter. Hermes has no workspace subdir: SOUL.md
+// sits at the home root and MEMORY.md / USER.md under memories/. The home dir
+// itself is NOT listed — it holds the Hermes installation and logs.
+func (hermesAdapter) personaPaths(opts Options) []string {
+	root := opts.HermesRoot
+	if root == "" {
+		return nil
+	}
+	return []string{
+		filepath.Join(root, "SOUL.md"),
+		filepath.Join(root, "memories"),
+	}
+}
