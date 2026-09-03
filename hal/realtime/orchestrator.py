@@ -292,6 +292,10 @@ class RealtimeOrchestrator:
         # connect() needs an orchestrator-owned retry loop.
         self._connect_retry_stop: threading.Event = threading.Event()
         self._connect_retry_thread: threading.Thread | None = None
+        # Traceback of the failed initial connect, held until the retry loop
+        # decides whether it mattered: dropped on a recovery, logged at ERROR
+        # once the first retry also fails. See start() / _connect_retry_loop().
+        self._initial_connect_exc: BaseException | None = None
         # Serializes start/stop with session swaps. A reconnect that completes
         # after stop must never publish a live agent back into the stopped HAL.
         self._lifecycle_lock: threading.Lock = threading.Lock()
@@ -676,8 +680,20 @@ class RealtimeOrchestrator:
             if self._rebuild_now(
                 "initial-connect-retry", cancel_event=self._connect_retry_stop
             ):
+                # Recovered — the original failure was transient, so its
+                # traceback is noise and is dropped rather than logged.
+                self._initial_connect_exc = None
                 logger.info("[realtime] Initial connection recovered automatically")
                 return
+            if self._initial_connect_exc is not None:
+                # Retry did not clear it: now the initial failure is worth a
+                # full ERROR. Logged once, then the loop stays at WARNING.
+                logger.error(
+                    "[realtime] Failed to connect realtime agent — retry did not "
+                    "recover it",
+                    exc_info=self._initial_connect_exc,
+                )
+                self._initial_connect_exc = None
             logger.warning(
                 "[realtime] Initial connection still unavailable — retrying in %.0fs",
                 delay_s,
@@ -694,6 +710,7 @@ class RealtimeOrchestrator:
             return
 
         self._connect_retry_stop.clear()
+        self._initial_connect_exc = None
 
         instructions: str = self._context.build_instructions()
         logger.info(
@@ -711,9 +728,16 @@ class RealtimeOrchestrator:
             logger.info(
                 "[realtime] Realtime orchestrator started (provider=%s)", provider
             )
-        except Exception:
-            logger.exception(
-                "[realtime] Failed to connect realtime agent — retrying in background"
+        except Exception as e:
+            # A single failed handshake is usually a transient upstream hiccup
+            # that the retry loop clears within seconds, so it is not an ERROR
+            # yet — one WARNING line here, traceback kept for _connect_retry_loop
+            # to log at ERROR only if the retry does not recover.
+            self._initial_connect_exc = e
+            logger.warning(
+                "[realtime] Failed to connect realtime agent (%s: %s) — "
+                "retrying in background",
+                type(e).__name__, e,
             )
         self._started.set()
         if not self.available:
