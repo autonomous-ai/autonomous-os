@@ -114,6 +114,11 @@ requires-python = ">=3.9"
 [project.optional-dependencies]
 dev = [
     "pyflakes>=3.0",
+    # `make hal-test` runs `.venv/bin/python -m pytest test/`. Declared here so
+    # a plain `uv sync --extra dev` is enough to run the suite: while it was
+    # only ever installed by hand, every re-sync of the venv silently took the
+    # test runner with it.
+    "pytest>=8.0",
 ]
 hardware = [
     "adafruit-circuitpython-neopixel",
