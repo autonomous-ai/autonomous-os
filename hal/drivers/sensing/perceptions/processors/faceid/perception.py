@@ -81,6 +81,7 @@ class FacePerception(Perception[cv2.typing.MatLike]):
         negative_threshold: float | None = 0.2,
         max_strangers: int = 50,
         height_ratio_threshold: float = config.FACE_HEIGHT_RATIO_THRESHOLD,
+        max_truncation: float = config.FACE_MAX_TRUNCATION,
         owners_forget_ts: float = config.FACE_OWNER_FORGET_S,
         strangers_forget_ts: float = config.FACE_STRANGER_FORGET_S,
         max_extended_images: int = 10,
@@ -91,6 +92,7 @@ class FacePerception(Perception[cv2.typing.MatLike]):
         self._presense_service: PresenseService | None = presense_service
         self._face_recognizer: FaceRecognizer = FaceRecognizer(
             height_ratio_threshold=height_ratio_threshold,
+            max_truncation=max_truncation,
             threshold=threshold,
             negative_threshold=negative_threshold,
             max_strangers=max_strangers,

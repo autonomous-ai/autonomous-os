@@ -165,6 +165,19 @@ PRESENCE_WAKE_STRANGERS: bool = (
 FACE_HEIGHT_RATIO_THRESHOLD = float(
     os.environ.get("HAL_FACE_HEIGHT_RATIO_THRESHOLD", "0.10")
 )
+# Max fraction of a detection's bbox allowed to fall OUTSIDE the frame before
+# the face is rejected. A face clipped by a frame edge is not a smaller face —
+# it is a face missing features. SCRFD still returns a plausible box (its top
+# edge simply goes negative), and the landmark mesh will confidently invent the
+# missing half: measured on lamp-ac82 03/09/2026, a face cut off above the
+# eyebrows produced eye points hallucinated onto the cheeks with a landmark
+# confidence of 0.90, an embedding sharing 0.007 similarity with the same
+# person's enrollment photo, and a FRIEND verdict off the auto-captured
+# extended bank. The existing landmark-in-bbox gate cannot catch this: it
+# clamps the bbox to the frame first, so points can never be "outside" on the
+# clipped edge. 0.10 rejects anything meaningfully cut (that case was 0.22)
+# while tolerating an ear grazing the border.
+FACE_MAX_TRUNCATION = float(os.environ.get("HAL_FACE_MAX_TRUNCATION", "0.10"))
 # Per-detection debug capture for face recognition: every recognized face
 # writes its own timestamped folder (input crop + clean frame + annotated frame
 # + result.json) under FACEID_LOG_DIR, named "<time>_<face_id>_<similarity>"

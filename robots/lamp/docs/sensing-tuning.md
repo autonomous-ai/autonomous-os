@@ -164,6 +164,7 @@ INFO lelamp.service.sensing.sensing_service: [sensing] light.level: Ambient ligh
 
 ```python
 FACE_HEIGHT_RATIO_THRESHOLD = 0.10  # Skip faces shorter than 10% of frame height
+FACE_MAX_TRUNCATION = 0.10          # Skip faces with >10% of their bbox off-frame
 FACE_COOLDOWN_S = 10.0              # Min seconds between face presence events
 FACE_OWNER_FORGET_S = 3600.0        # Re-fire presence after N seconds without seeing owner
 FACE_STRANGER_FORGET_S = 1800.0     # Same for strangers
@@ -172,6 +173,10 @@ FACE_STRANGER_FORGET_S = 1800.0     # Same for strangers
 The height ratio threshold filters out faces that are **too small** relative to the frame — typically distant people or false positives where the face crop is too low-resolution for reliable recognition. Faces whose bounding-box height is under the threshold fraction of the frame height are skipped, before classification.
 
 **Why height and not area.** Area falls off as 1/d² while a linear dimension falls off as 1/d, so an area gate is twice as sensitive for the same change in reach — extending range from 0.8 m to 1.5 m needs a 3.8× change in an area threshold but only a 1.95× change in a height threshold. More importantly, yaw (turning the head, the common case) compresses the bbox **width** while leaving height intact, so an area gate rejected angled faces harder than frontal ones at the same distance — working against the extended-set feature that exists to learn those angled views.
+
+**Truncation.** `FACE_MAX_TRUNCATION` is a separate gate for faces clipped by a frame edge, applied after the height gate and before classification. A clipped face is not a smaller face — it is a face missing features. SCRFD still returns a plausible box (the clipped edge simply runs off-frame, e.g. `[573, -34, 710, 121]`), and the landmark mesh confidently invents the part it cannot see. Measured on a lamp on 2026-09-03: a face cut off above the eyebrows produced eye landmarks hallucinated onto the cheeks at a landmark confidence of **0.90**, an embedding sharing **0.007** similarity with that person's own enrollment photo, and a FRIEND verdict carried entirely by the auto-captured extended bank.
+
+The landmark-in-bbox check inside the aligner does **not** catch this: it clamps the bbox to the frame before comparing, so a landmark can never be "outside" on the very edge that clipped the face. The gate measures the fraction of the bbox **area** falling outside the frame; 0.10 rejects anything meaningfully cut (that case was 0.22) while tolerating an ear grazing the border. Rejected faces also never reach `extend_candidates`, so a cut-off view can never be auto-added to a user's extended enrollment set.
 
 **Reach.** At 640×480 with a ~65° horizontal FOV, 0.10 corresponds to a 48 px face box at roughly 2.2 m. Note the gate is scale-invariant: raising `HAL_CAMERA_WIDTH`/`HEIGHT` does not change which faces pass, but it does raise the pixel quality of the crop handed to the recognizer (EdgeFace warps to 112×112, and SCRFD returns bboxes in original-frame coordinates, so the crop comes from the full-resolution frame). At 1280×720 the same 0.10 yields a 72 px crop instead of 48 px.
 
@@ -182,6 +187,8 @@ The height ratio threshold filters out faces that are **too small** relative to 
 | Distant people not recognized | Decrease `FACE_HEIGHT_RATIO_THRESHOLD` (0.10 → 0.07) |
 | False detections from tiny face-like patches | Increase `FACE_HEIGHT_RATIO_THRESHOLD` (0.10 → 0.15) |
 | Recognition flickers / mints new `stranger_N` ids repeatedly | Crop is too small to embed reliably — increase `FACE_HEIGHT_RATIO_THRESHOLD`, or raise camera resolution to 1280×720 |
+| Wrong person matched when someone sits close to a frame edge | Face is clipped — decrease `FACE_MAX_TRUNCATION` (0.10 → 0.05), or re-aim the camera so heads stay fully in frame |
+| People at the frame edge stop being recognized at all | Increase `FACE_MAX_TRUNCATION` (0.10 → 0.20); check for `FAIL-truncated` folders in the face debug log to see how much was actually cut |
 | Presence events fire too often | Increase `FACE_COOLDOWN_S` (10 → 30) |
 | Lamp forgets owner too quickly after leaving | Increase `FACE_OWNER_FORGET_S` |
 

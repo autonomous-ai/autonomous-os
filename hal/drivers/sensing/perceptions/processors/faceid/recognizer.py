@@ -60,6 +60,7 @@ class FaceRecognizer:
     def __init__(
         self,
         height_ratio_threshold: float = config.FACE_HEIGHT_RATIO_THRESHOLD,
+        max_truncation: float = config.FACE_MAX_TRUNCATION,
         threshold: float = 0.3,
         negative_threshold: float | None = 0.2,
         max_strangers: int = 50,
@@ -70,6 +71,7 @@ class FaceRecognizer:
         diversity_threshold: float = 0.7,
     ):
         self._height_ratio_threshold: float = height_ratio_threshold
+        self._max_truncation: float = max_truncation
         self._threshold: float = threshold
         self._negative_threshold: float | None = negative_threshold
         self._max_strangers: int = max_strangers
@@ -875,6 +877,62 @@ class FaceRecognizer:
                         extended_similarity=float(ext_scores[i]),
                         stranger_similarity=s_score,
                         detail="bbox height below FACE_HEIGHT_RATIO_THRESHOLD",
+                    )
+                continue
+
+            # Truncation gate. A face clipped by a frame edge is missing
+            # features, not merely smaller: SCRFD still reports a plausible box
+            # (the clipped edge just runs off-frame), and the landmark mesh
+            # invents the part it cannot see, so the embedding describes a face
+            # that was never photographed. The landmark-in-bbox check upstream
+            # cannot catch this — it clamps the bbox to the frame first, so a
+            # point can never be "outside" on the very edge that clipped it.
+            # Rejecting here also keeps the view out of extend_candidates, so a
+            # cut-off face can never be auto-added to a user's extended set.
+            vis_w = max(0, min(frame_w, x2) - max(0, x1))
+            vis_h = max(0, min(frame_h, y2) - max(0, y1))
+            box_area = (x2 - x1) * face_h
+            truncation = (
+                1.0 - (vis_w * vis_h) / box_area if box_area > 0 else 1.0
+            )
+            if truncation > self._max_truncation:
+                logger.info(
+                    "[face] dropped: bbox %.0f%% off-frame (max %.0f%%) — "
+                    "bbox=%s frame=%dx%d",
+                    truncation * 100, self._max_truncation * 100,
+                    bbox, frame_w, frame_h,
+                )
+                if debug_on:
+                    _ = self._debug.save_failure(
+                        "truncated",
+                        face_crop=face_crop,
+                        aligned=aligned,
+                        frame=frame,
+                        bbox=bbox,
+                        landmarks=landmarks,
+                        kps5=kps5,
+                        landmark_score=landmark_score,
+                        crop_box=[cx1, cy1, cx2, cy2],
+                        frame_size=[frame_w, frame_h],
+                        truncation=truncation,
+                        max_truncation=self._max_truncation,
+                        # Per-edge overflow as a fraction of the box's own
+                        # width/height — which edge clipped it, and by how much.
+                        truncation_edges={
+                            "left": max(0, -x1) / (x2 - x1) if x2 > x1 else 0.0,
+                            "right": max(0, x2 - frame_w) / (x2 - x1)
+                            if x2 > x1
+                            else 0.0,
+                            "top": max(0, -y1) / face_h if face_h else 0.0,
+                            "bottom": max(0, y2 - frame_h) / face_h
+                            if face_h
+                            else 0.0,
+                        },
+                        det_score=det_scores[i],
+                        enroll_similarity=float(upload_scores[i]),
+                        extended_similarity=float(ext_scores[i]),
+                        stranger_similarity=s_score,
+                        detail="bbox clipped by the frame edge beyond FACE_MAX_TRUNCATION",
                     )
                 continue
 
