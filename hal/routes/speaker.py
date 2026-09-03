@@ -614,6 +614,13 @@ def speaker_current_user_reset():
 
     logger.info("POST /speaker/current-user/reset — forgetting current voice user")
     identity_state.clear_voice_user()
+    # The per-turn recognizer cache is the same presence state one layer down:
+    # leaving it would keep handing the next turn the identity this endpoint was
+    # just asked to forget (see SpeakerDecorator._cached_identity).
+    voice = getattr(state, "voice_service", None)
+    decorator = getattr(voice, "_decorator", None) if voice else None
+    if decorator is not None and hasattr(decorator, "forget_identity"):
+        decorator.forget_identity()
     return {"status": "ok"}
 
 

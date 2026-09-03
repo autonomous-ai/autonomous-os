@@ -902,6 +902,31 @@ turn ("hello") right after a restart would leak to the main agent.
    the same one-time identity result. It is skipped when the context already carried
    the right name, or when the turn is noise.
 
+   **The prepass no longer blocks the model.** It used to run inline, strictly
+   before the realtime turn opened, so its whole external round trip sat between
+   the user falling silent and the model receiving the utterance — measured on
+   lamp-0c89 (03/09/2026): 1.49s of a 3.0s gap, the rest being the Gemini
+   pre-turn reconnect. It now runs on its own thread while that reconnect
+   happens, and the turn joins it (`SPEAKER_PREPASS_JOIN_S`, `HAL_SPEAKER_PREPASS_JOIN_S`,
+   default 2.0s) at the first point the name is needed. The wait is a ceiling,
+   not a delay: a prepass that finished during the reconnect costs nothing, and
+   reaching the ceiling only means this turn's context goes out with the speaker
+   unresolved — exactly what the always-listening row above already does, and the
+   `[TURN CONTEXT UPDATE]` correction still covers it. The deferred short-transcript
+   path is unchanged.
+
+   **The verdict is cached.** Recognition used to run once per turn, every turn:
+   a ten-turn conversation paid for ten external calls to be told the same name.
+   `SpeakerDecorator` now reuses the last verdict for `SPEAKER_ID_CACHE_S`
+   (`HAL_SPEAKER_ID_CACHE_S`, default 90s), and for `SPEAKER_ID_CACHE_FOLLOWUP_S`
+   (default 300s) inside a wake-word follow-up window, where the turns are one
+   conversation by definition. **Unknown is cached too** — an utterance the
+   recognizer could not place is the case most likely to repeat, and retrying it
+   every turn pays the full latency for the same non-answer; the only thing lost
+   on a cached unknown is the enrolment WAV path for that turn. `POST
+   /speaker/current-user/reset` clears the cache along with the current voice
+   user, since it is the same presence state one layer down.
+
    **Gemini native-audio caveat:** `send_text()` drops **all** non-response text on
    Gemini `*native-audio*` models (`gemini_needs_idle_workaround()`), because
    repeated SDK `clientContent(turn_complete=False)` messages collide with later
