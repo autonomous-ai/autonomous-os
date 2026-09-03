@@ -250,3 +250,49 @@ func TestUserProfilePathsCoverEveryRuntime(t *testing.T) {
 		}
 	}
 }
+
+// The pass deletes from a live persona and can fire unattended on any boot, so
+// the previous contents must always be recoverable.
+func TestReconcileBacksUpBeforeRetiring(t *testing.T) {
+	opts, path := seedDevice(t, liveDeviceUserMD, "long")
+
+	if _, err := ReconcileUserProfiles(opts, true); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	matches, err := filepath.Glob(path + ".bak-*")
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("want exactly one backup beside %s, got %v (err %v)", path, matches, err)
+	}
+	if readFile(t, matches[0]) != liveDeviceUserMD {
+		t.Errorf("backup does not hold the pre-retire contents:\n%s", readFile(t, matches[0]))
+	}
+}
+
+// A pass that changes nothing must not litter backups either.
+func TestReconcileDoesNotBackUpWhenNothingIsStale(t *testing.T) {
+	opts, path := seedDevice(t, "- **Name:** Long\n", "long")
+
+	if _, err := ReconcileUserProfiles(opts, true); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if matches, _ := filepath.Glob(path + ".bak-*"); len(matches) != 0 {
+		t.Errorf("no-op pass created backups: %v", matches)
+	}
+}
+
+// Retiring a name must leave the form asking its question ONCE. The live device
+// had the stale value appended below the template's own blank slot, so clearing
+// it in place produced two empty "- **Name:**" bullets (device-observed
+// 2026-09-03, first applied run).
+func TestReconcileLeavesExactlyOneBlankNameSlot(t *testing.T) {
+	opts, path := seedDevice(t, liveDeviceUserMD, "long")
+
+	if _, err := ReconcileUserProfiles(opts, true); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	got := readFile(t, path)
+	if n := strings.Count(got, "- **Name:**"); n != 1 {
+		t.Errorf("want exactly one Name slot, got %d:\n%s", n, got)
+	}
+}

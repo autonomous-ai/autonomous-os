@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"go.autonomous.ai/os/system/lib/usercanon"
 )
@@ -136,11 +137,32 @@ func reconcileOneUserProfile(path string, enrolled map[string]bool, execute bool
 
 	var actions []ReconcileAction
 	out := make([]string, 0, len(entries))
+	// Blank slots already emitted, so retiring a value cannot leave a SECOND
+	// empty slot behind. The live device had the stale name appended below the
+	// template's own blank "- **Name:**" (earlier entry-merges did that), so
+	// clearing it in place produced two blank slots — a form asking the same
+	// question twice, and the shape B1 exists to prevent.
+	blankSlot := map[string]bool{}
 	for _, e := range entries {
+		field := userFieldOf(e)
+		if field != "" {
+			mt := userFieldEntryRe.FindStringSubmatch(strings.TrimSpace(e))
+			key := strings.ToLower(field)
+			if !hasRealFieldValue(mt[2]) {
+				// An empty slot. Keep the first, drop any repeat.
+				if blankSlot[key] {
+					continue
+				}
+				blankSlot[key] = true
+				out = append(out, e)
+				continue
+			}
+		}
 		// A stale name is cleared back to the blank slot, never deleted: USER.md
 		// is a form, and the empty "- **Name:**" line is the prompt asking for
-		// the next answer.
-		if field := userFieldOf(e); strings.EqualFold(field, "Name") {
+		// the next answer. When the form already carries that blank slot above,
+		// the retired bullet is simply dropped instead.
+		if strings.EqualFold(field, "Name") {
 			mt := userFieldEntryRe.FindStringSubmatch(strings.TrimSpace(e))
 			value := strings.TrimSpace(mt[2])
 			if hasRealFieldValue(value) && !isEnrolled(value, enrolled) {
@@ -149,7 +171,10 @@ func reconcileOneUserProfile(path string, enrolled map[string]bool, execute bool
 					Detail: fmt.Sprintf("**Name:** %q", value),
 					Reason: fmt.Sprintf("no enrollment for %q", usercanon.Resolve(value)),
 				})
-				out = append(out, "**Name:**")
+				if !blankSlot["name"] {
+					blankSlot["name"] = true
+					out = append(out, "**Name:**")
+				}
 				continue
 			}
 		}
@@ -171,10 +196,27 @@ func reconcileOneUserProfile(path string, enrolled map[string]bool, execute bool
 	if len(actions) == 0 || !execute {
 		return actions, nil
 	}
+	// Back up before retiring anything. This pass deletes from a live persona,
+	// and unlike a migration it can fire unattended on any boot — the operator
+	// is not standing there to undo it. Same `.bak-<nano>` convention as
+	// baseMigrator.backup, and cheap because a write only happens when
+	// something was actually stale.
+	if err := backupFile(path); err != nil {
+		return actions, fmt.Errorf("backup before retire: %w", err)
+	}
 	if err := writeEntriesAtomic(path, out, openclawFormat); err != nil {
 		return actions, err
 	}
 	return actions, nil
+}
+
+// backupFile copies path aside as "<path>.bak-<unixnano>" before it is rewritten.
+func backupFile(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(fmt.Sprintf("%s.bak-%d", path, time.Now().UnixNano()), data, 0o644)
 }
 
 // writeEntriesAtomic writes via a temp file + rename so a live agent reading
