@@ -35,7 +35,7 @@ User: "Lamp, follow the cup"
          |   b. Servo worker: SmoothDamp glide toward the latest goal
          |        (ease-in/ease-out; coalesces tiny setpoint changes)
          |
-    5. Lost / bloated / no-detect / timeout → auto-stop, hold or return to zero
+    5. Lost / bloated / no-detect / timeout → auto-stop, then interpolate to idle
 ```
 
 The vision loop never blocks on motor motion: it publishes an *absolute* servo goal and moves on to the next frame. The servo worker owns the physical motion and continuously eases toward whatever the latest goal is. This is what keeps both the tracker fps high and the head motion smooth.
@@ -99,7 +99,7 @@ Each frame the loop turns the tracker bbox into an absolute servo goal:
 
 `ServoFollower` (`servo_follow.py`) runs a worker on its own thread and continuously eases the joints toward the latest goal using **SmoothDamp** (`smooth_damp`, a critically-damped follower): each joint carries its own velocity, so every move accelerates smoothly and eases out into the target, and a fresh goal arriving mid-move retargets without a restart jerk — the cinematic "film camera" motion. The worker wakes at the bounded `SERVO_SUBSTEP_SLEEP` (30 ms) cadence but calculates SmoothDamp from the actual elapsed monotonic time, capped at `SERVO_SUBSTEP_MAX_DT_S` (60 ms) after a scheduler/serial stall. It sends one multi-joint bus command only when at least one servo command changes by `SERVO_COMMAND_MIN_DELTA` (0.08), coalescing only tiny normalized setpoint changes; the final target is always sent once.
 
-Hardware motion during tracking: at every session start the HAL explicitly writes `TRACKING_GOAL_VELOCITY = 0` (unlimited) to clear any velocity cap left by an earlier mode. The software profiles therefore own the speed; the old 150 steps/s ≈ 13°/s cap flattened the SmoothDamp curves into a constant crawl. `TRACKING_ACCELERATION = 30` supplies the gentle hw ramp. The return-to-zero glide is capped at `TRACKING_RETURN_VELOCITY` (200 steps/s); snappy defaults restored after.
+Hardware motion during tracking: at every session start the HAL explicitly writes `TRACKING_GOAL_VELOCITY = 0` (unlimited) to clear any velocity cap left by an earlier mode. The software profiles therefore own the speed; the old 150 steps/s ≈ 13°/s cap flattened the SmoothDamp curves into a constant crawl. `TRACKING_ACCELERATION = 30` supplies the gentle hw ramp. When tracking stops, HAL reads the physical pose into the animation state and dispatches idle, whose normal interpolation continues directly from that pose. There is no intermediate return-to-zero move.
 
 ### Drift correction & lock management
 
@@ -150,7 +150,7 @@ pitch_correction = clamp(PID(soft_deadband(dy)) + VFF·vy·deg_per_px·dt,  ±5�
 | `SACCADE_OFFSET_FRAC` / `SACCADE_EXIT_FRAC` | 0.22 / 0.12 | Saccade enter/exit thresholds (hysteresis — no speed-cap flip-flop at the boundary) |
 | `SERVO_SUBSTEP_SLEEP` / `SERVO_SUBSTEP_MAX_DT_S` | 0.030 / 0.060 | Servo-worker wake period / maximum measured SmoothDamp step after a stall |
 | `SERVO_COMMAND_MIN_DELTA` | 0.08 | Coalesce only tiny normalized setpoint changes; the final target is sent once |
-| `TRACKING_GOAL_VELOCITY` | 0 (unlimited) | Explicitly written at session start to clear a stale hardware cap; SmoothDamp profiles own the speed envelope (150 steps/s ≈ 13°/s flattened every ease curve into a robotic crawl). `TRACKING_RETURN_VELOCITY` (200) caps only the return-to-zero glide |
+| `TRACKING_GOAL_VELOCITY` | 0 (unlimited) | Explicitly written at session start to clear a stale hardware cap; SmoothDamp profiles own the speed envelope (150 steps/s ≈ 13°/s flattened every ease curve into a robotic crawl) |
 | `TRACKING_ACCELERATION` | 30 | Hardware acceleration ramp |
 | `PITCH_WEIGHT_BASE/ELBOW/WRIST` | 0.10 / 0.90 / 0.0 | Pitch distribution across joints |
 | `ELBOW_PITCH_SIGN` | -1.0 | Elbow polarity (hardware reversed) |
@@ -192,7 +192,7 @@ Set `HAL_TRACKING_MAX_DURATION_S` in the Lamp's `/opt/hal/.env` to choose the wa
 | Tracking duration > `HAL_TRACKING_MAX_DURATION_S` (10 s by default) | Stop — timeout to save motor/CPU |
 | GPIO-button or TTP223 single-click | Stop — explicit user attention-cancel |
 
-Note: a large bbox (e.g. a person filling the frame) is **not** a stop condition — PID drives off the centroid, not bbox size, so a close object still tracks. When tracking ends the arm glides back to zero at tracking speed (no snap), then the idle animation is dispatched again — see [Interaction with Other Systems](#interaction-with-other-systems).
+Note: a large bbox (e.g. a person filling the frame) is **not** a stop condition — PID drives off the centroid, not bbox size, so a close object still tracks. When tracking ends, idle interpolates from the arm's measured current pose instead of first moving through zero — see [Interaction with Other Systems](#interaction-with-other-systems).
 
 ### Auto-stop on gateway/network disconnect
 
@@ -274,7 +274,7 @@ Manual re-init of the tracker with a new bbox without stopping the session (the 
    d. Starts the vision loop + servo worker
 4. Servo pans smoothly to follow the cup, background YOLO corrects drift
 5. User: "OK stop" → agent calls POST /servo/track/stop
-6. Servo glides back to zero
+6. Idle interpolates directly from the final tracking pose
 ```
 
 ### Auto-stop on lost
@@ -283,7 +283,7 @@ Manual re-init of the tracker with a new bbox without stopping the session (the 
 1. Object leaves frame or is occluded
 2. TrackerVit confidence stays below 0.15 for most of the recent window (or ViT lock dissolves)
 3. Background YOLO can't re-find it → after the guards trip → auto-stop
-4. Arm returns to zero
+4. Idle interpolates directly from the final tracking pose
 5. Agent can notify user or re-issue the follow command
 ```
 
@@ -319,7 +319,7 @@ Camera section shows:
 | Camera stream overlay | Green bbox drawn | Normal stream |
 | TTS | Continues normally | Continues normally |
 
-Resuming idle is an **explicit dispatch**, not a side effect of clearing the tracking flag. While `_tracking_active` is set, `AnimationService._continue_playback` drops the in-flight recording (`_current_recording = None`) so nothing fights the tracker. Clearing the flag does not put it back: the event loop returns at its first guard (`if not self._current_recording`), so without a dispatch the arm sits rigid at zero with torque on until the next emotion or play command. The `_track_loop` `finally` therefore ends with `animation_service.dispatch("play", animation_service.idle_recording)` — dispatch rather than `_handle_play` so playback stays owned by the event thread, matching the music-stop, `aim` and `resume` exits.
+Resuming idle is an **explicit dispatch**, not a side effect of clearing the tracking flag. While `_tracking_active` is set, `AnimationService._continue_playback` drops the in-flight recording (`_current_recording = None`) so nothing fights the tracker. Clearing the flag does not put it back: the event loop returns at its first guard (`if not self._current_recording`), so without a dispatch the arm sits rigid at its last tracking pose with torque on until the next emotion or play command. The `_track_loop` `finally` first reads that physical pose into `_current_state`, then calls `animation_service.dispatch("play", animation_service.idle_recording)`. Dispatch rather than `_handle_play` keeps playback owned by the event thread, and the seeded state lets idle interpolate directly from the pose where tracking stopped.
 
 ## Performance Notes
 

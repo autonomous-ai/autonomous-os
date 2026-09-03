@@ -50,6 +50,8 @@ logger = logging.getLogger(__name__)
 # Retries after the tracker+detector both lose the target (search sweep between).
 MAX_TRACKING_RETRIES = 4
 
+_TRACKING_MOTORS = ("base_yaw", "base_pitch", "elbow_pitch", "wrist_pitch")
+
 
 @dataclass
 class TrackingState:
@@ -304,17 +306,16 @@ class TrackerService:
         animation_service._tracking_active = True
         logger.info("Servo hold mode + tracking lock ON")
 
-        _tracking_motors = ["base_yaw", "base_pitch", "elbow_pitch", "wrist_pitch"]
         try:
             with animation_service.bus_lock:
                 # Always write the register, including zero (= unlimited), so
                 # a prior return-to-zero or external command cannot leave a
                 # stale hardware velocity cap on this tracking session.
                 animation_service.robot.bus.sync_write(
-                    "Goal_Velocity", {m: C.TRACKING_GOAL_VELOCITY for m in _tracking_motors}
+                    "Goal_Velocity", {m: C.TRACKING_GOAL_VELOCITY for m in _TRACKING_MOTORS}
                 )
                 animation_service.robot.bus.sync_write(
-                    "Acceleration", {m: C.TRACKING_ACCELERATION for m in _tracking_motors}
+                    "Acceleration", {m: C.TRACKING_ACCELERATION for m in _TRACKING_MOTORS}
                 )
             logger.info("[tracking] Goal_Velocity=%d Acceleration=%d", C.TRACKING_GOAL_VELOCITY, C.TRACKING_ACCELERATION)
         except Exception as e:
@@ -853,39 +854,28 @@ class TrackerService:
             animation_service._hold_mode = False
             state.running.clear()
 
-            # Stop the follow worker before re-centering so it doesn't fight the
-            # zero command (both would write the bus concurrently).
+            # Stop the follow worker before handing the bus back to idle.
             self._follower.join(timeout=2.0)
             self._follower.clear_goal()
 
             try:
-                # Return to zero gently: tracking runs Goal_Velocity unlimited
-                # (software profiles own the envelope), so cap the hw velocity
-                # for this one big move or the arm snaps back.
-                time.sleep(0.8)
+                # Idle must interpolate from the physical pose where tracking
+                # stopped. _current_state belongs to the animation loop and is
+                # stale while the follower owns the bus; using it would make the
+                # first idle frame jump toward a pre-tracking pose.
+                current = animation_service.get_positions()
+                if current:
+                    animation_service._current_state = dict(current)
                 with animation_service.bus_lock:
                     animation_service.robot.bus.sync_write(
-                        "Goal_Velocity", {m: C.TRACKING_RETURN_VELOCITY for m in _tracking_motors}
-                    )
-                    animation_service.robot.send_action({
-                        "base_yaw.pos": 0.0,
-                        "base_pitch.pos": 0.0,
-                        "elbow_pitch.pos": 0.0,
-                        "wrist_roll.pos": 0.0,
-                        "wrist_pitch.pos": 0.0,
-                    })
-                logger.info("Tracking ended — arm returned to zero")
-                # Restore full speed after arm has started moving to zero.
-                time.sleep(1.0)
-                with animation_service.bus_lock:
-                    animation_service.robot.bus.sync_write(
-                        "Goal_Velocity", {m: 0 for m in _tracking_motors}
+                        "Goal_Velocity", {m: 0 for m in _TRACKING_MOTORS}
                     )
                     animation_service.robot.bus.sync_write(
-                        "Acceleration", {m: 254 for m in _tracking_motors}
+                        "Acceleration", {m: 254 for m in _TRACKING_MOTORS}
                     )
+                logger.info("Tracking ended — idle resuming from current pose")
             except Exception as e:
-                logger.warning("Tracking ended — failed to zero arm: %s", e)
+                logger.warning("Tracking ended — failed to seed idle pose: %s", e)
 
             if not animation_service._running.is_set():
                 animation_service._running.set()
@@ -896,8 +886,8 @@ class TrackerService:
 
             # Restart idle. The tracking lock in _continue_playback cleared
             # _current_recording, so the revived event loop has nothing to
-            # play and would return at its first guard forever — arm rigid at
-            # zero with torque on. Every other exit re-enters idle the same
+            # play and would return at its first guard forever — arm rigid with
+            # torque on. Every other exit re-enters idle the same
             # way (music stop, aim, resume); this one used to be the gap.
             # dispatch, not _handle_play: playback belongs to the event thread.
             animation_service.dispatch("play", animation_service.idle_recording)
