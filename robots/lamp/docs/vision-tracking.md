@@ -747,6 +747,14 @@ Three further behaviours are worth stating because each was a bug first:
 - **It will not turn away from a face already in frame.** If a face was seen within
   `HAL_GAZE_REPOINT_SKIP_IF_FACE_S`, a speech-triggered reacquire declines: after a climb has found
   the user's face *above* the bearing, obeying the bearing means turning back down to look at nobody.
+- **The hold ends with the utterance.** A speech-triggered reacquire points the lamp with
+  `move_and_hold`, which drops whatever recording was playing and sets `_idle_settled` — correct
+  for the utterance, wrong afterwards, because nothing else re-arms idle. The lamp simply stopped
+  moving and stayed frozen until a HAL restart (measured on lamp-0c89 03/09/2026: `[preempt]
+  dropped recording 'idle' for a direct move` at 16:23:40, still motionless at 16:25:58, no further
+  log). `on_speech_end` now hands the body back with `dispatch(play, idle)` — the same handover the
+  tracker does when it ends — and skips it when tracking, hold/zero mode or a scene owns the body,
+  since each of those has its own release.
 
 Every decline is logged with its reason (`[gaze] no repoint: …`), throttled so a standing condition
 prints once a minute rather than once a pass.
