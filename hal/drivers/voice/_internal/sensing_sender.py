@@ -56,7 +56,10 @@ class SensingSender:
         """POST decorated message to os-server /api/sensing/event with retry.
 
         ``image_b64`` (raw base64 JPEG, no data-URI prefix) rides the payload's
-        ``image`` field. os-server describes it with a vision model and forwards
+        ``images`` list. HAL only ever has ONE snapshot per event, so it sends a
+        single-element list; the field is a list because a chat client can attach
+        several photos to one turn and every wire format behind os-server already
+        carries `attachments[]`. os-server describes it with a vision model and forwards
         the description as text (describe-first) — required because the main
         model can be text-only: a file path in ``message`` is useless there
         (tool-read image blocks are silently dropped), and a raw attachment
@@ -81,9 +84,9 @@ class SensingSender:
         except Exception:
             logger.exception("[voice] current_user resolution failed")
         if image_b64:
-            payload["image"] = image_b64
+            payload["images"] = [image_b64]
         # Log a copy with the image masked — a ~70KB base64 blob would drown the log.
-        log_payload = {**payload, "image": f"<{len(image_b64)} b64 chars>"} if image_b64 else payload
+        log_payload = {**payload, "images": [f"<{len(image_b64)} b64 chars>"]} if image_b64 else payload
         logger.info(
             "curl -s -X POST %s -H 'Content-Type: application/json' -d '%s'",
             OS_SENSING_URL, _json.dumps(log_payload),

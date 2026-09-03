@@ -57,8 +57,8 @@ func (h *DeviceMQTTHandler) handleChatSend(env domain.MQTTDataCommand) error {
 
 	slog.Info("chat.send accepted", "component", "mqtt-chat",
 		"run_id", runID, "session_id", data.SessionID,
-		"speak", data.Speak, "has_image", data.Image != "",
-		"has_file", data.File != nil, "msg_len", len(data.Message))
+		"speak", data.Speak, "image_count", len(data.Images),
+		"file_count", len(data.Files), "msg_len", len(data.Message))
 
 	return h.publishDataResult(env.Kind, "success", "", domain.MQTTChatSendResult{
 		RunID:     runID,
@@ -70,10 +70,10 @@ func (h *DeviceMQTTHandler) handleChatSend(env domain.MQTTDataCommand) error {
 // the endpoint's own struct: that lives in a package which would import back
 // into this one.
 type sensingRequest struct {
-	Type    string              `json:"type"`
-	Message string              `json:"message"`
-	Image   string              `json:"image,omitempty"`
-	File    *domain.InboundFile `json:"file,omitempty"`
+	Type    string               `json:"type"`
+	Message string               `json:"message"`
+	Images  []string             `json:"images,omitempty"`
+	Files   []domain.InboundFile `json:"files,omitempty"`
 }
 
 // sensingReply is the standard envelope: {"status":1,"data":{"runId":"..."}}.
@@ -101,8 +101,8 @@ func (h *DeviceMQTTHandler) forwardChatToSensing(data domain.MQTTChatSendData) (
 	body, err := json.Marshal(sensingRequest{
 		Type:    evtType,
 		Message: data.Message,
-		Image:   data.Image,
-		File:    data.File,
+		Images:  data.Images,
+		Files:   data.Files,
 	})
 	if err != nil {
 		return "", fmt.Errorf("marshal sensing event: %w", err)

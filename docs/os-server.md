@@ -106,7 +106,7 @@ allowed so internal guard-mode operation remains available.
 ```json
 {
   "message": "Intruder detected in living room",
-  "image": "<base64 JPEG, optional>"
+  "images": ["<base64 JPEG>", "…"]   // optional, one entry per attached photo
 }
 ```
 
@@ -129,7 +129,7 @@ Config field: `guard_mode` in `config/config.json` (bool, default `false`). The 
 {
   "type": "voice_command|voice_followup|voice|web_chat|mqtt_chat|motion|sound|presence.enter|presence.leave|presence.away|light.level|motion.activity",
   "message": "...",
-  "image": "<base64 JPEG, optional>"
+  "images": ["<base64 JPEG>", "…"]   // optional, one entry per attached photo
 }
 ```
 
@@ -152,7 +152,7 @@ Config field: `guard_mode` in `config/config.json` (bool, default `false`). The 
 1. `voice_command`, `voice_followup`, or `voice` + local intent enabled → match intent → execute directly (~50ms). `voice_followup` has the same user priority as `voice_command`; `web_chat` / `mqtt_chat` skip local intent (typed text ≠ wake-word voice).
 2. Ambient turn floor: `motion.activity`, `emotion.detected`, `speech_emotion.detected`, `sound`, `presence.away`, `light.level` are dropped when the last agent turn created by this handler (any type) was less than `sensing_turn_floor_s` seconds ago (config key, default `120`, `0` disables; guard mode bypasses). One cross-type floor on top of HAL's independent per-type gates — a burst of different event types costs at most one agent turn per window. Dropped events surface as `sensing_drop` (reason `ambient_floor`) in the Flow Monitor.
 3. No match → forward to OpenClaw via WebSocket `chat.send`
-4. If event has `image` → call `SendChatMessageWithImage` → send image with text for AI vision analysis. For chat types (`web_chat` / `mqtt_chat`), attached image is saved to `/tmp/web-chat-*.jpg` and tagged `[image: <path>]` so the agent can reference it (e.g. for face enrollment).
+4. If event has `images` → call `SendChatMessageWithImages` → send every attached photo with the text for AI vision analysis. A LIST, not a single field: a chat client can attach several at once and every wire format behind the gateway already carries `attachments[]`; a camera event simply sends one entry. For chat types (`web_chat` / `mqtt_chat`), each image is saved to `/tmp/web-chat-<ms>-<i>.jpg` (indexed so photos attached to the SAME turn cannot collide) and tagged `[image: <path>]` so the agent can reference it (e.g. for face enrollment). When the main model is text-only, the describe-first gate runs once PER image and the descriptions are numbered `(image N of M)`.
 5. Chat runs (`web_chat` / `mqtt_chat`) are tagged via `MarkWebChatRun(runID)` so the SSE handler suppresses TTS at lifecycle end — reply is rendered in the chat UI only (web SSE, or MQTT `chat.event` stream).
 
 ### OpenClaw

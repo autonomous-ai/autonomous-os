@@ -46,9 +46,12 @@ type SensingEventRequest struct {
 	Type string `json:"type" validate:"required"`
 	// Message is a natural-language description of what was detected.
 	Message string `json:"message" validate:"required"`
-	// Image is an optional base64-encoded JPEG snapshot from the camera.
-	// Attached automatically for significant events (large motion, face detected) so AI can see.
-	Image string `json:"image,omitempty"`
+	// Images are optional base64-encoded JPEG snapshots. A camera event attaches
+	// exactly one (large motion, face detected) so the AI can see; a chat client
+	// can attach several at once. A slice, not a single string: every wire format
+	// downstream already carries `attachments[]`, so nothing here has to choose
+	// which photo survives.
+	Images []string `json:"images,omitempty"`
 	// CurrentUser is HAL's view of who is effectively in front of the device
 	// right now (from FaceRecognizer.current_user()). Empty when nobody is
 	// visible. This is the source of truth — do NOT re-derive by parsing
@@ -68,7 +71,7 @@ type SensingEventRequest struct {
 	// image goes through the describe-first vision gate, a document must not —
 	// it would fail there, and before this field existed every attachment rode
 	// the Image field and was written as `.jpg` regardless of what it was.
-	File *domain.InboundFile `json:"file,omitempty"`
+	Files []domain.InboundFile `json:"files,omitempty"`
 }
 
 // SensingHandler handles incoming sensing events from HAL and forwards them to the agent.
@@ -332,9 +335,18 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 	// file directly, no LLM vision needed). Tag uses [image:] not [snapshot:]
 	// to avoid the strip below.
 	// Done here, BEFORE the busy fork, so a queued turn carries the tag too.
-	if isChat && req.Image != "" {
-		if imgData, derr := base64.StdEncoding.DecodeString(req.Image); derr == nil {
-			tmpPath := fmt.Sprintf("/tmp/web-chat-%d.jpg", time.Now().UnixMilli())
+	if isChat {
+		for i, img := range req.Images {
+			if img == "" {
+				continue
+			}
+			imgData, derr := base64.StdEncoding.DecodeString(img)
+			if derr != nil {
+				continue
+			}
+			// Index in the name so several photos attached to ONE turn cannot
+			// collide on the same millisecond and overwrite each other.
+			tmpPath := fmt.Sprintf("/tmp/web-chat-%d-%d.jpg", time.Now().UnixMilli(), i)
 			if werr := os.WriteFile(tmpPath, imgData, 0644); werr == nil {
 				req.Message += "\n[image: " + tmpPath + "]"
 			}
@@ -344,28 +356,33 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 	// Non-image attachment: land it with its REAL extension and tag it as a
 	// file, not an image. Deliberately its own branch rather than more work in
 	// the block above — a document must skip the describe-first gate below,
-	// which keys off req.Image. Same placement, BEFORE the busy fork, so a
+	// which keys off req.Images. Same placement, BEFORE the busy fork, so a
 	// queued turn replays carrying the tag.
 	//
 	// This is the one place both chat paths converge: the web composer POSTs
 	// here directly, and the MQTT chat.send handler re-enters over loopback, so
 	// a phone and a browser attach files through identical code.
-	if req.File != nil && req.File.Content != "" {
-		path, ferr := agentfile.SaveInbound("/tmp", req.File.Name, req.File.Content, time.Now().UnixMilli())
+	for i, f := range req.Files {
+		if f.Content == "" {
+			continue
+		}
+		// Index folded into the millisecond stamp so several files attached to
+		// ONE turn cannot collide on the same generated name.
+		path, ferr := agentfile.SaveInbound("/tmp", f.Name, f.Content, time.Now().UnixMilli()+int64(i))
 		if ferr != nil {
-			// Best-effort: the turn still runs, just without the attachment. The
+			// Best-effort per file: the turn still runs with whatever saved. The
 			// user's question usually stands on its own.
 			slog.Warn("chat attachment not saved", "component", "sensing",
-				"name", req.File.Name, "error", ferr)
-		} else {
-			name := strings.TrimSpace(req.File.Name)
-			if name == "" {
-				name = filepath.Base(path)
-			}
-			// Both the display name and the path: the agent needs the path to
-			// open the file, and the name is what the user will call it.
-			req.Message += fmt.Sprintf("\n[file: %s (%s)]", path, name)
+				"name", f.Name, "error", ferr)
+			continue
 		}
+		name := strings.TrimSpace(f.Name)
+		if name == "" {
+			name = filepath.Base(path)
+		}
+		// Both the display name and the path: the agent needs the path to
+		// open the file, and the name is what the user will call it.
+		req.Message += fmt.Sprintf("\n[file: %s (%s)]", path, name)
 	}
 
 	// Describe-first gate — must also run BEFORE the busy fork: a queued event
@@ -382,10 +399,37 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 	// every later turn routed to a text-only model — one bad turn is cheaper
 	// than a poisoned conversation. Slash commands keep the raw attachment;
 	// motion.activity images never reach the agent at all.
-	if req.Image != "" && req.Type != "motion.activity" &&
+	if len(req.Images) > 0 && req.Type != "motion.activity" &&
 		!(isChat && strings.HasPrefix(strings.TrimSpace(req.Message), "/")) &&
 		!vision.ModelSupportsVision(h.config) {
-		desc, derr := vision.DescribeWithRetry(h.config, req.Image, req.Message)
+		// One describe call per attached photo — a chat client can attach
+		// several, and a text-only main model can only ever see the text these
+		// produce. Numbered when there is more than one so the agent can tell
+		// the user which photo it is talking about. A failure is per-image: the
+		// ones that did describe still reach the model.
+		descs := make([]string, 0, len(req.Images))
+		var derr error
+		for i, img := range req.Images {
+			if img == "" {
+				continue
+			}
+			desc, e := vision.DescribeWithRetry(h.config, img, req.Message)
+			if e != nil {
+				derr = e
+				continue
+			}
+			if len(req.Images) > 1 {
+				desc = fmt.Sprintf("(image %d of %d) %s", i+1, len(req.Images), desc)
+			}
+			descs = append(descs, desc)
+		}
+		desc := strings.Join(descs, "\n")
+		// Only a describe that produced NOTHING is treated as a failure: a
+		// partial result is still worth more to the answer than the "couldn't
+		// see it" notice below.
+		if len(descs) > 0 {
+			derr = nil
+		}
 		// Either way the snapshot file must go: it sits inside the agent's
 		// media allow-list, so any path the agent digs up later (old hints in
 		// session history, an exec `ls` of the dir) could still be `read`
@@ -411,7 +455,7 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 				"[vision-image] (a photo was just captured for this request; answer the visual question from the [image description] below — do NOT take a new snapshot, do NOT read any image file)")
 			req.Message += "\n[image description] " + desc
 		}
-		req.Image = "" // text-only from here on; nothing downstream gets the blob
+		req.Images = nil // text-only from here on; nothing downstream gets the blobs
 	}
 
 	// When agent is busy:
@@ -456,11 +500,11 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 				"backend", h.agentGateway.Name(),
 				"type", req.Type,
 				"runId", queuedRunID,
-				"hasImage", req.Image != "",
+				"imageCount", len(req.Images),
 				"inVoiceWindow", inVoiceWindow,
 				"msgLen", len(req.Message),
 				"message", req.Message)
-			h.agentGateway.QueuePendingEvent(req.Type, req.Message, req.Image, queuedRunID)
+			h.agentGateway.QueuePendingEvent(req.Type, req.Message, req.Images, queuedRunID)
 			if speakerBusy {
 				// Nothing else will drain this one: the drain normally rides on
 				// a turn ending, and there is no turn in flight. Ask
@@ -626,7 +670,7 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 	// swallowed by bound-channel routing and the SSE stream times out.
 	isSlashCommand := isChat && strings.HasPrefix(msg, "/")
 	// motion.activity: snapshot saved for UI but NOT sent to agent (save tokens — action name is enough)
-	hasImage := req.Image != "" && req.Type != "motion.activity"
+	hasImage := len(req.Images) > 0 && req.Type != "motion.activity"
 
 	// Unified entry-point log — every inbound message reaching the agent goes
 	// through one of the INBOUND lines so `grep INBOUND` shows a complete
@@ -642,7 +686,8 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 		"runId", runID,
 		"reqId", reqID,
 		"hasImage", hasImage,
-		"imageBytes", len(req.Image),
+		"imageCount", len(req.Images),
+		"imageBytes", totalBase64Len(req.Images),
 		"isSlash", isSlashCommand,
 		"isChat", isChat,
 		"isVoice", isVoice,
@@ -650,15 +695,15 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 		"message", msg)
 
 	// Note: when the describe-first gate above converted the image to an
-	// [image description] line, req.Image is empty and this turn goes down
+	// [image description] line, req.Images is empty and this turn goes down
 	// the plain-text path. An image here means either a vision-capable main
 	// model (raw attachment is correct) or a describe failure (degraded
 	// fallback).
 	if hasImage {
 		if isSlashCommand {
-			_, err = h.agentGateway.SendSlashCommandWithImageAndRun(msg, req.Image, reqID, runID)
+			_, err = h.agentGateway.SendSlashCommandWithImagesAndRun(msg, req.Images, reqID, runID)
 		} else {
-			_, err = h.agentGateway.SendChatMessageWithImageAndRun(msg, req.Image, reqID, runID)
+			_, err = h.agentGateway.SendChatMessageWithImagesAndRun(msg, req.Images, reqID, runID)
 		}
 	} else {
 		if isSlashCommand {
@@ -685,7 +730,7 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 	slog.Info("flow correlation", "op", "hal_agent_out", "section", "hal_to_openclaw",
 		"device_run_id", runID, "sensing_type", req.Type,
 		"note", "OpenClaw lifecycle UUID maps to device_run_id on lifecycle_start in SSE handler")
-	slog.Info("event forwarded", "component", "sensing", "type", req.Type, "hasImage", req.Image != "", "runId", runID)
+	slog.Info("event forwarded", "component", "sensing", "type", req.Type, "imageCount", len(req.Images), "runId", runID)
 	c.JSON(http.StatusOK, serializers.ResponseSuccess(map[string]string{
 		"runId": runID,
 	}))
@@ -762,6 +807,17 @@ func (h *SensingHandler) GetGuardStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, serializers.ResponseSuccess(map[string]bool{
 		"guard_mode": h.config.GuardModeEnabled(),
 	}))
+}
+
+// totalBase64Len is the combined base64 length of every attached image, for the
+// INBOUND log line. Kept separate from the count so an oversized single photo
+// and many small ones stay distinguishable in the log.
+func totalBase64Len(images []string) int {
+	n := 0
+	for _, img := range images {
+		n += len(img)
+	}
+	return n
 }
 
 // GuardAlertRequest is the payload for manually triggering a guard broadcast.
