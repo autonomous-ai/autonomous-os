@@ -26,6 +26,7 @@ import (
 	"go.autonomous.ai/os/system/lib/hal"
 	"go.autonomous.ai/os/system/lib/i18n"
 	"go.autonomous.ai/os/system/lib/sensingmsg"
+	"go.autonomous.ai/os/system/lib/speakergate"
 	"go.autonomous.ai/os/system/lib/syspath"
 	"go.autonomous.ai/os/system/lib/usercanon"
 	"go.autonomous.ai/os/system/monitor"
@@ -419,7 +420,18 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 	// - During voice window: all passive sensing is queued (not dropped) so events aren't lost.
 	// - Outside voice window: motion/light/sound dropped when busy (low priority, high frequency).
 	inVoiceWindow := time.Now().UnixMilli() < h.voiceActiveUntil.Load()
-	if isPassive && h.agentGateway.IsBusy() {
+	// "The agent is free" is not the same as "the device is free". A runtime
+	// goes idle the moment its reply text is handed to the TTS queue, while
+	// that reply keeps playing for tens of seconds — and HAL gives the speaker
+	// to the newest turn, so an event forwarded during that window cuts the
+	// answer the user actually asked for. The queue-and-replay path already
+	// waits for the speaker (lib/speakergate); this is the same rule for an
+	// event that arrives with no turn in flight at all. Probed only when the
+	// agent is idle and the type is one that can wait, so the ordinary busy
+	// path costs no extra HAL call.
+	speakerBusy := isPassive && !h.agentGateway.IsBusy() &&
+		speakergate.WaitsForSpeaker(req.Type) && speakergate.SpeakerBusy()
+	if isPassive && (h.agentGateway.IsBusy() || speakerBusy) {
 		// motion.activity and emotion.detected get queued (not dropped) because
 		// HAL deduplicates both with a 5-min window at the source — if one
 		// reaches the os-server it's genuinely new. Dropping it here would make HAL's
@@ -435,7 +447,11 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 				_, queuedRunID = h.agentGateway.NextChatRunID()
 				h.agentGateway.MarkWebChatRun(queuedRunID)
 			}
-			slog.Info("INBOUND from HAL → QUEUED (agent busy, will replay on idle)",
+			busyReason := "agent busy, will replay on idle"
+			if speakerBusy {
+				busyReason = "speaker busy, will replay when the reply finishes"
+			}
+			slog.Info("INBOUND from HAL → QUEUED ("+busyReason+")",
 				"component", "sensing",
 				"backend", h.agentGateway.Name(),
 				"type", req.Type,
@@ -445,6 +461,14 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 				"msgLen", len(req.Message),
 				"message", req.Message)
 			h.agentGateway.QueuePendingEvent(req.Type, req.Message, req.Image, queuedRunID)
+			if speakerBusy {
+				// Nothing else will drain this one: the drain normally rides on
+				// a turn ending, and there is no turn in flight. Ask
+				// speakergate to replay it once the speaker frees up.
+				speakergate.DeferReplay(
+					[]string{req.Type}, h.agentGateway.DrainPendingEvents,
+				)
+			}
 			// A queued event consumes an agent turn on replay — counts
 			// against the ambient floor like a live forward.
 			h.lastAgentTurn.Store(time.Now().UnixMilli())

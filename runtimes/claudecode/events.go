@@ -77,6 +77,13 @@ func (s *ClaudeCodeService) QueuePendingEvent(eventType, msg, image, fixedRunID 
 // openclaw / hermes drain: voice events prioritised, expirable high-frequency
 // types (presence / motion / emotion) coalesced to latest-only and stale entries
 // dropped after expireAfter.
+// DrainPendingEvents satisfies domain.AgentGateway. The idle edge is not the
+// only reason a queued event waits — one queued because the SPEAKER was busy
+// has no turn ending behind it to drain the queue.
+func (s *ClaudeCodeService) DrainPendingEvents() {
+	s.drainPendingEvents()
+}
+
 func (s *ClaudeCodeService) drainPendingEvents() {
 	s.pendingEventsMu.Lock()
 	events := s.pendingEvents

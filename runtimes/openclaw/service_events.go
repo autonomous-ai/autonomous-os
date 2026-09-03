@@ -92,6 +92,13 @@ func (s *OpenclawService) QueuePendingEvent(eventType, msg, image, fixedRunID st
 }
 
 // drainPendingEvents replays all buffered sensing events in order and clears the buffer.
+// DrainPendingEvents satisfies domain.AgentGateway. The idle edge is not the
+// only reason a queued event waits — one queued because the SPEAKER was busy
+// has no turn ending behind it to drain the queue.
+func (s *OpenclawService) DrainPendingEvents() {
+	s.drainPendingEvents()
+}
+
 func (s *OpenclawService) drainPendingEvents() {
 	s.pendingEventsMu.Lock()
 	events := s.pendingEvents

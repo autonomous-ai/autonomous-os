@@ -70,6 +70,15 @@ type AgentGateway interface {
 	// other event types pass "" and a fresh runID is allocated at drain.
 	QueuePendingEvent(eventType, msg, image, fixedRunID string)
 
+	// DrainPendingEvents replays whatever QueuePendingEvent buffered. The
+	// runtimes call it themselves on the idle edge; this exposes it because
+	// that edge is not the only reason a queued event has to wait. An event
+	// queued while the DEVICE was busy — the agent long since idle, its reply
+	// still coming out of the speaker — has no turn ending behind it to
+	// trigger a drain, and would otherwise sit in the queue until the next
+	// unrelated turn happened to finish.
+	DrainPendingEvents()
+
 	// SendChatMessage sends a user message to the agent. Returns the run ID.
 	SendChatMessage(msg string) (string, error)
 

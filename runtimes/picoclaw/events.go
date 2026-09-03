@@ -77,6 +77,13 @@ func (s *PicoclawService) QueuePendingEvent(eventType, msg, image, fixedRunID st
 // openclaw / hermes drain: voice events prioritised, expirable high-frequency
 // types (presence / motion / emotion) coalesced to latest-only and stale entries
 // dropped after expireAfter.
+// DrainPendingEvents satisfies domain.AgentGateway. The idle edge is not the
+// only reason a queued event waits — one queued because the SPEAKER was busy
+// has no turn ending behind it to drain the queue.
+func (s *PicoclawService) DrainPendingEvents() {
+	s.drainPendingEvents()
+}
+
 func (s *PicoclawService) drainPendingEvents() {
 	s.pendingEventsMu.Lock()
 	events := s.pendingEvents
