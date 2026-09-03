@@ -8,7 +8,7 @@ import {
 import { API } from "./types";
 import { getDeviceConfig } from "@/lib/api";
 import {
-  putChatImage, getAllChatImages, deleteChatImages, pruneChatImages, clearChatImages,
+  putChatImages, getAllChatImages, deleteChatImages, pruneChatImages, clearChatImages,
 } from "@/lib/chatImageStore";
 import { useT, setLanguage } from "@/lib/i18n";
 import type { DisplayEvent, MonitorEvent } from "./types";
@@ -474,7 +474,7 @@ interface ChatMessage {
   time: string;
   ts?: number;         // epoch ms — used to age-gate pending-run recovery after reload
   date?: string;       // YYYY-MM-DD for date separators
-  imageUrl?: string;   // data: URL for attached images — stripped from localStorage
+  imageUrls?: string[]; // data: URLs for attached images — stripped from localStorage
                        // (quota), persisted separately in IndexedDB (chatImageStore)
                        // and re-attached by the mount rehydrate effect
   fileName?: string;   // original filename for non-image files
@@ -561,10 +561,10 @@ function saveConvos(convos: Conversation[]) {
   try {
     const trimmed = convos.slice(0, MAX_CONVOS).map((c) => ({
       ...c,
-      // Strip large data from localStorage (imageUrl data: URLs are too large).
+      // Strip large data from localStorage (imageUrls data: URLs are too large).
       // The images themselves live in IndexedDB (chatImageStore) keyed by
       // message id and are re-attached on mount.
-      messages: c.messages.slice(-MAX_MESSAGES).map(({ imageUrl: _, ...m }) => m),
+      messages: c.messages.slice(-MAX_MESSAGES).map(({ imageUrls: _, ...m }) => m),
       // fileName/fileSize are kept — they're small strings/numbers
     }));
     const envelope: ConvosEnvelope = { savedAt: Date.now(), convos: trimmed };
@@ -670,7 +670,7 @@ export function ChatSection({ events, isActive }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
 
   // Rehydrate image attachments from IndexedDB — saveConvos() strips
-  // `imageUrl` from localStorage (quota), so after a reload the thumbnails
+  // `imageUrls` from localStorage (quota), so after a reload the thumbnails
   // are gone until this re-attaches them by message id. Also prunes stored
   // images whose message no longer exists in any conversation (trimmed by
   // MAX_MESSAGES/MAX_CONVOS, deleted convos, or TTL-dropped history) —
@@ -688,7 +688,7 @@ export function ChatSection({ events, isActive }: Props) {
       setConvos((prev) => prev.map((c) => ({
         ...c,
         messages: c.messages.map((m) =>
-          !m.imageUrl && stored.has(m.id) ? { ...m, imageUrl: stored.get(m.id) } : m,
+          !m.imageUrls?.length && stored.has(m.id) ? { ...m, imageUrls: stored.get(m.id) } : m,
         ),
       })));
     });
@@ -1514,18 +1514,19 @@ export function ChatSection({ events, isActive }: Props) {
     const dateStr = nowDate.toISOString().slice(0, 10);
     const userMsg: ChatMessage = {
       id: `u-${Date.now()}`, role: "user", text, time: now, ts: nowDate.getTime(), date: dateStr,
-      imageUrl: attachments.find((a) => a.isImage)?.previewUrl ?? undefined,
+      // EVERY attached photo, not just the first: the bubble is the user's only
+      // record of what they actually sent, and showing one thumbnail for a
+      // two-image turn reads as "the second one was dropped".
+      imageUrls: attachments.filter((a) => a.isImage).map((a) => a.previewUrl!).filter(Boolean),
       fileName: attachments.find((a) => !a.isImage)?.name,
       fileSize: attachments.find((a) => !a.isImage)?.size,
-      // Bubble shows the first of each kind plus a count — the composer is the
-      // place to inspect what is staged, the sent bubble only has to say how
-      // much rode along.
-      attachmentCount: attachments.length > 1 ? attachments.length : undefined,
+      attachmentCount: attachments.filter((a) => !a.isImage).length > 1
+        ? attachments.filter((a) => !a.isImage).length
+        : undefined,
     };
-    // Persist the attachment out-of-band: localStorage strips imageUrl on
-    // save, IndexedDB keeps it so the thumbnail survives a reload.
-    const firstPreview = attachments.find((a) => a.isImage)?.previewUrl ?? null;
-    if (firstPreview) void putChatImage(userMsg.id, firstPreview);
+    // Persist the attachments out-of-band: localStorage strips them on save,
+    // IndexedDB keeps them so the thumbnails survive a reload.
+    void putChatImages(userMsg.id, attachments.filter((a) => a.isImage).map((a) => a.previewUrl!).filter(Boolean));
 
     setConvos((prev) =>
       prev.map((c) => {
@@ -1538,6 +1539,21 @@ export function ChatSection({ events, isActive }: Props) {
     setInput("");
     clearFile();
     setSending(true);
+    // Show the waiting bubble NOW, before the POST — not after it returns with a
+    // run id. The request itself can take a minute: the sensing handler runs the
+    // describe-first vision gate inline, once per attached image, so a two-photo
+    // turn sat ~53 s with an empty thread (measured 2026-09-03). With no sign the
+    // message went anywhere, the natural move is to reload the page — which
+    // cancels the in-flight POST, so the reply had nowhere to land and the turn
+    // looked lost even though the device answered it fine.
+    const localReplyId = `l-pending-${Date.now()}`;
+    setConvos((prev) =>
+      prev.map((c) =>
+        c.id === targetId
+          ? { ...c, messages: [...c.messages, { id: localReplyId, role: "agent", text: "", time: now, ts: Date.now(), pending: true }] }
+          : c,
+      ),
+    );
     setTimeout(scrollToBottom, 50);
 
     // Images ride `image` (the device runs its describe-first vision gate on
@@ -1572,10 +1588,16 @@ export function ChatSection({ events, isActive }: Props) {
         pendingRunIdRef.current = runId;
         pendingUserTextRef.current = text;
         const replyTime = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+        // Adopt the bubble that has been spinning since the click — attaching the
+        // run id to it rather than appending a second one, so the user never sees
+        // two agent bubbles for one message. The id changes with it: `l-<runId>`
+        // is what the reload-recovery path looks for.
         setConvos((prev) =>
           prev.map((c) =>
             c.id === targetId
-              ? { ...c, messages: [...c.messages, { id: `l-${runId}`, role: "agent", text: "", time: replyTime, ts: Date.now(), runId, pending: true }] }
+              ? { ...c, messages: c.messages.map((m) => m.id === localReplyId
+                  ? { ...m, id: `l-${runId}`, runId, time: replyTime, ts: Date.now() }
+                  : m) }
               : c,
           ),
         );
@@ -1586,7 +1608,9 @@ export function ChatSection({ events, isActive }: Props) {
         setConvos((prev) =>
           prev.map((c) =>
             c.id === targetId
-              ? { ...c, messages: [...c.messages, { id: `l-local-${Date.now()}`, role: "agent", text: localText, time: now }] }
+              ? { ...c, messages: c.messages.map((m) => m.id === localReplyId
+                  ? { ...m, text: localText, pending: false }
+                  : m) }
               : c,
           ),
         );
@@ -1595,7 +1619,9 @@ export function ChatSection({ events, isActive }: Props) {
         setConvos((prev) =>
           prev.map((c) =>
             c.id === targetId
-              ? { ...c, messages: [...c.messages, { id: `l-drop-${Date.now()}`, role: "agent", text: "⏸ busy — try again", time: now, error: true }] }
+              ? { ...c, messages: c.messages.map((m) => m.id === localReplyId
+                  ? { ...m, text: "⏸ busy — try again", pending: false, error: true }
+                  : m) }
               : c,
           ),
         );
@@ -1604,7 +1630,9 @@ export function ChatSection({ events, isActive }: Props) {
         setConvos((prev) =>
           prev.map((c) =>
             c.id === targetId
-              ? { ...c, messages: [...c.messages, { id: `l-err-${Date.now()}`, role: "agent", text: json.message ?? "error", time: now, error: true }] }
+              ? { ...c, messages: c.messages.map((m) => m.id === localReplyId
+                  ? { ...m, text: json.message ?? "error", pending: false, error: true }
+                  : m) }
               : c,
           ),
         );
@@ -1614,7 +1642,9 @@ export function ChatSection({ events, isActive }: Props) {
       setConvos((prev) =>
         prev.map((c) =>
           c.id === targetId
-            ? { ...c, messages: [...c.messages, { id: `l-err-${Date.now()}`, role: "agent", text: "connection error", time: now, error: true }] }
+            ? { ...c, messages: c.messages.map((m) => m.id === localReplyId
+                ? { ...m, text: "connection error", pending: false, error: true }
+                : m) }
             : c,
         ),
       );
@@ -2128,15 +2158,24 @@ export function ChatSection({ events, isActive }: Props) {
                   fontSize: 13.5, lineHeight: 1.55, wordBreak: "break-word",
                   minWidth: 40, minHeight: 36, position: "relative",
                 }}>
-                  {msg.imageUrl && (
-                    <img
-                      src={msg.imageUrl}
-                      alt="attached"
-                      style={{
-                        maxWidth: 200, maxHeight: 150, borderRadius: 6,
-                        marginBottom: msg.text ? 6 : 0,
-                      }}
-                    />
+                  {msg.imageUrls && msg.imageUrls.length > 0 && (
+                    <div style={{
+                      display: "flex", flexWrap: "wrap", gap: 4,
+                      marginBottom: msg.text ? 6 : 0,
+                    }}>
+                      {msg.imageUrls.map((url, i) => (
+                        <img
+                          key={i}
+                          src={url}
+                          alt={`attached ${i + 1} of ${msg.imageUrls!.length}`}
+                          style={{
+                            maxWidth: msg.imageUrls!.length > 1 ? 120 : 200,
+                            maxHeight: msg.imageUrls!.length > 1 ? 120 : 150,
+                            borderRadius: 6,
+                          }}
+                        />
+                      ))}
+                    </div>
                   )}
                   {msg.fileName && (
                     <div style={{
