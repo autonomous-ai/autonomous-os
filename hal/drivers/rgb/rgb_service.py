@@ -300,7 +300,7 @@ class RGBService(ServiceBase):
         # reproduced since. `after` is the driver's own read-back, so a line
         # showing a non-black `after` means the write path never ran; a black
         # `after` with the lamp still lit means the wire, not the buffer.
-        before = self._read_first_pixel()
+        before = self._read_brightest_pixel()
         self._driver.fill((0, 0, 0), self.led_count)
         self._driver.show()
         time.sleep(0.01)
@@ -312,27 +312,32 @@ class RGBService(ServiceBase):
                 spi.xfer2([0x00] * 100)
             except Exception:
                 pass
-        after = self._read_first_pixel()
+        after = self._read_brightest_pixel()
         if after is None:
             return  # driver has no read-back — nothing to compare, nothing to say
         if after != (0, 0, 0):
             self.logger.error(
-                "LED clear did NOT take: pixel0 %s -> %s (driver buffer still lit)",
+                "LED clear did NOT take: brightest pixel %s -> %s (driver buffer still lit)",
                 before, after,
             )
         elif before != (0, 0, 0):
-            self.logger.info("LED cleared: pixel0 %s -> (0, 0, 0)", before)
+            self.logger.info("LED cleared: brightest pixel %s -> (0, 0, 0)", before)
 
-    def _read_first_pixel(self):
-        """Pixel 0 straight from the driver, or None when it cannot be read.
+    def _read_brightest_pixel(self):
+        """The lit-most pixel on the strip, or None when it cannot be read.
+
+        The WHOLE ring, not pixel 0: a dithered or partial look leaves pixel 0
+        dark while the rest is lit, and reading only that one made this very
+        check silent on the pattern it was written to catch.
 
         Diagnostics must never be the reason a clear raises — a driver without
         read-back simply reports nothing.
         """
         try:
-            return self._driver.getPixelColor(0)
+            pixels = [self._driver.getPixelColor(i) for i in range(self.led_count)]
         except Exception:
             return None
+        return max(pixels, key=max) if pixels else None
 
     def stop(self, timeout: float = 5.0):
         """Override stop to clear LEDs before stopping"""

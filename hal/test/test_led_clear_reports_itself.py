@@ -57,6 +57,21 @@ def test_clearing_an_already_dark_strip_says_nothing():
 
 
 # Diagnostics must never be the reason a clear raises.
+# The check must survive the pattern it exists for: pixel 0 dark, rest lit.
+def test_a_dark_first_pixel_does_not_silence_the_check():
+    class _Ring(_Driver):
+        def __init__(self):
+            super().__init__(sticky=True)
+            self._pixels = [(0, 0, 0)] + [(0, 2, 2)] * 31
+
+        def getPixelColor(self, index):
+            return self._pixels[index]
+
+    svc = _service(_Ring())
+    svc.clear()
+    svc.logger.error.assert_called_once()
+
+
 def test_a_driver_without_read_back_still_clears():
     class _NoReadBack(_Driver):
         def getPixelColor(self, index):
