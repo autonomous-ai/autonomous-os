@@ -20,10 +20,11 @@ class _EdgeFacePipeline:
 
     ``get(frame)`` returns one dict per face, drop-in compatible with
     ``insightface.app.FaceAnalysis.get`` (plus extra ``emotion_box`` /
-    ``aligned`` keys):
+    ``aligned`` / ``landmarks`` / ``landmark_score`` keys):
         {'bbox': float32[4], 'kps': float32[5,2]|None,
          'det_score': np.float32, 'embedding': float32[D],
-         'emotion_box': list[int]|None, 'aligned': uint8[112,112,3]}
+         'emotion_box': list[int]|None, 'aligned': uint8[112,112,3],
+         'landmarks': float32[468,2]|None, 'landmark_score': float}
     Faces that cannot be aligned are skipped (same as the reference).
     """
 
@@ -75,8 +76,8 @@ class _EdgeFacePipeline:
             bbox = det["bbox"]
             kps = det["kps"]
 
-            aligned, kps, emotion_box = self.aligner.align_crop_from_bbox(
-                frame, bbox, kps=kps
+            aligned, kps, emotion_box, landmarks, lm_score = (
+                self.aligner.align_crop_from_bbox(frame, bbox, kps=kps)
             )
             if aligned is None:
                 continue
@@ -94,6 +95,11 @@ class _EdgeFacePipeline:
                     # model input (a misalignment is the usual cause of a
                     # false match, and it is invisible in the frame crop).
                     "aligned": aligned,
+                    # Dense 468-point FaceMesh in full-frame pixels, plus the
+                    # confidence that gated it. Computed for the alignment
+                    # above; carried out for the debug log.
+                    "landmarks": landmarks,
+                    "landmark_score": lm_score,
                 }
             )
         return results

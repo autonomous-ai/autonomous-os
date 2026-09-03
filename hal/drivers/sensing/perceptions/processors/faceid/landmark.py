@@ -164,7 +164,7 @@ class _OnnxLandmarkAligner:
     def align_crop_from_bbox(self, frame: np.ndarray, bbox, kps=None):
         """Aligned 112x112 crop for one detection.
 
-        Returns ``(aligned, pts5, emotion_box)``:
+        Returns ``(aligned, pts5, emotion_box, landmarks, score)``:
             * ``aligned``: 112x112 BGR crop, or None if the face cannot align.
             * ``pts5``: the 5 alignment points used for the warp, or None.
             * ``emotion_box``: axis-aligned ``[x1, y1, x2, y2]`` face box in frame
@@ -172,6 +172,14 @@ class _OnnxLandmarkAligner:
               emotion model expects), or None. Computed here so the emotion
               pipeline can reuse it instead of re-running the face mesh; NO
               rotation is applied.
+            * ``landmarks``: the dense (468, 2) float32 mesh in FULL-FRAME pixel
+              coords, or None. Already computed for the alignment above, so
+              carrying it out is free; the debug log plots it (a skewed mesh is
+              the usual cause of a bad embedding, and it is invisible in the
+              aligned crop alone).
+            * ``score``: the landmark face-presence confidence in [0, 1], 0.0
+              when no mesh was produced. It is the gate that drops a face, so a
+              near-miss is worth seeing.
 
         Faces whose landmark confidence is below ``conf_thresh`` (or whose
         landmarks fall outside the bbox/image) are dropped: there is NO SCRFD
@@ -183,7 +191,7 @@ class _OnnxLandmarkAligner:
             landmarks, score = self._landmarker.detect_in_frame(frame, bbox, kps=kps)
         except Exception as e:  # noqa: BLE001
             logger.debug("[face-v2] landmark inference error: %s", e)
-            return None, None, None
+            return None, None, None, None, 0.0
 
         if landmarks is not None and score >= self._landmarker.conf_thresh:
             pts5 = self._landmarker.to_5points(landmarks)
@@ -192,8 +200,11 @@ class _OnnxLandmarkAligner:
                     aligned = _warp_and_crop_face(frame, pts5)
                     h, w = frame.shape[:2]
                     emotion_box = _box_from_landmarks(landmarks, w, h)
-                    return aligned, pts5, emotion_box
+                    return aligned, pts5, emotion_box, landmarks, score
                 except Exception as e:  # noqa: BLE001
                     logger.debug("[face-v2] landmark alignment error: %s", e)
 
-        return None, None, None
+        # Dropped (low confidence / out of bounds / warp failure). The dense
+        # mesh, when there was one, still rides along so the debug log can show
+        # WHY the face was rejected.
+        return None, None, None, landmarks, score

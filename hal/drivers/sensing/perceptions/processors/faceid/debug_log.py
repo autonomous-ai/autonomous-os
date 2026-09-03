@@ -26,8 +26,17 @@ import time
 from typing import Any
 
 import cv2
+import numpy as np
 
 logger = logging.getLogger(__name__)
+
+# face_with_landmark.jpg framing: the detector bbox padded by this fraction (the
+# FaceMesh covers forehead/jaw that can sit outside a tight bbox, and clipped
+# points are exactly what you need to see), upscaled so the view's longer side
+# is at least this many pixels — 468 dots on a 110 px face are an unreadable
+# smear otherwise.
+_LANDMARK_VIEW_PAD = 0.25
+_LANDMARK_VIEW_MIN_PX = 320
 
 
 class FaceIdDebugLogger:
@@ -48,6 +57,11 @@ class FaceIdDebugLogger:
       - ``aligned.jpg``   the 112x112 aligned crop actually fed to EdgeFace
       - ``frame.jpg``     the clean, unannotated original frame
       - ``annotated.jpg`` full frame with bbox + "<id> <similarity>" drawn
+      - ``face_with_landmark.jpg`` padded face view with the dense 468-point
+        FaceMesh plotted, the 5 alignment points highlighted, and the detector
+        bbox outlined
+      - ``landmarks.json`` the same mesh as numbers (full-frame pixels), for
+        offline re-alignment checks; compact, written only when a mesh exists
       - ``result.json``   identity, every bank's similarity, thresholds, bbox
 
     ``result.json`` records both the raw ``bbox`` and the clamped ``crop_box``
@@ -110,11 +124,87 @@ class FaceIdDebugLogger:
         except Exception:
             return None
 
+    def _draw_landmarks(
+        self,
+        frame: cv2.typing.MatLike,
+        bbox: list[int],
+        landmarks: Any,
+        kps5: Any = None,
+    ) -> cv2.typing.MatLike | None:
+        """Padded face view with the dense mesh plotted over it.
+
+        Magenta = the 468 FaceMesh points, yellow = the 5 canonical points the
+        ArcFace warp is built from (mis-set eyes/nose/mouth corners skew the
+        aligned crop and, with it, the embedding), green = the detector bbox.
+        Landmarks are in full-frame pixels, so they are shifted into the crop
+        and scaled by the same factor the view was upscaled with.
+        """
+        if landmarks is None:
+            return None
+        try:
+            h, w = frame.shape[:2]
+            x1, y1, x2, y2 = bbox
+            bw, bh = x2 - x1, y2 - y1
+            if bw <= 0 or bh <= 0:
+                return None
+            px, py = int(bw * _LANDMARK_VIEW_PAD), int(bh * _LANDMARK_VIEW_PAD)
+            vx1, vy1 = max(0, x1 - px), max(0, y1 - py)
+            vx2, vy2 = min(w, x2 + px), min(h, y2 + py)
+            if vx2 <= vx1 or vy2 <= vy1:
+                return None
+            view = frame[vy1:vy2, vx1:vx2].copy()
+            scale = max(1.0, _LANDMARK_VIEW_MIN_PX / max(view.shape[0], view.shape[1]))
+            if scale > 1.0:
+                view = cv2.resize(
+                    view, None, fx=scale, fy=scale, interpolation=cv2.INTER_LINEAR
+                )
+
+            def _pt(p: Any) -> tuple[int, int]:
+                return (
+                    int(round((float(p[0]) - vx1) * scale)),
+                    int(round((float(p[1]) - vy1) * scale)),
+                )
+
+            _ = cv2.rectangle(view, _pt((x1, y1)), _pt((x2, y2)), (0, 255, 0), 1)
+            for p in np.asarray(landmarks, dtype=np.float32):
+                _ = cv2.circle(view, _pt(p), 1, (255, 0, 255), -1)
+            if kps5 is not None:
+                for p in np.asarray(kps5, dtype=np.float32):
+                    _ = cv2.circle(view, _pt(p), 3, (0, 255, 255), -1)
+            return view
+        except Exception:
+            return None
+
+    @staticmethod
+    def _landmark_summary(landmarks: Any, kps5: Any) -> dict[str, Any]:
+        """The small landmark facts that belong in result.json: how many dense
+        points there were, and the 5 warp points themselves (they are what a
+        bad alignment shows up in, and 5 pairs stay readable inline)."""
+        out: dict[str, Any] = {
+            "landmark_count": 0 if landmarks is None else int(len(landmarks)),
+        }
+        if kps5 is not None:
+            out["kps5"] = np.asarray(kps5, dtype=np.float64).round(2).tolist()
+        return out
+
+    @staticmethod
+    def _landmark_sidecar(landmarks: Any, kps5: Any) -> dict[str, Any] | None:
+        """The dense mesh as its own compact landmarks.json, or None."""
+        if landmarks is None:
+            return None
+        payload: dict[str, Any] = {
+            "landmarks": np.asarray(landmarks, dtype=np.float64).round(2).tolist(),
+        }
+        if kps5 is not None:
+            payload["kps5"] = np.asarray(kps5, dtype=np.float64).round(2).tolist()
+        return {"landmarks.json": payload}
+
     def _write_folder(
         self,
         name: str,
         record: dict[str, Any],
         images: dict[str, cv2.typing.MatLike | None],
+        sidecars: dict[str, Any] | None = None,
     ) -> str | None:
         if not self._enabled:
             return None
@@ -129,6 +219,22 @@ class FaceIdDebugLogger:
                 for filename, image in images.items():
                     if image is not None:
                         _ = cv2.imwrite(os.path.join(folder, filename), image)
+                # Bulk numeric payloads (the dense mesh) go to their own compact
+                # file — inlining 468 points would bury result.json, which has
+                # to stay scannable.
+                for filename, payload in (sidecars or {}).items():
+                    if payload is None:
+                        continue
+                    with open(
+                        os.path.join(folder, filename), "w", encoding="utf-8"
+                    ) as f:
+                        _ = f.write(
+                            json.dumps(
+                                payload,
+                                default=self._json_default,
+                                separators=(",", ":"),
+                            )
+                        )
                 full: dict[str, Any] = {"timestamp": stamp, "ts": now}
                 full.update(record)
                 # Serialize FIRST — a serialization error (e.g. a circular ref)
@@ -171,12 +277,19 @@ class FaceIdDebugLogger:
         frame: cv2.typing.MatLike | None = None,
         bbox: list[int] | None = None,
         color: tuple[int, int, int] = (0, 255, 0),
+        landmarks: Any = None,
+        kps5: Any = None,
         **meta: Any,
     ) -> str | None:
         """One face the recognizer reached an identity decision on → its own
         folder, named ``<timestamp>_<face_id>_<similarity>``."""
         annotated = (
             self._annotate(frame, bbox, face_id, similarity, color)
+            if frame is not None and bbox is not None
+            else None
+        )
+        mesh = (
+            self._draw_landmarks(frame, bbox, landmarks, kps5)
             if frame is not None and bbox is not None
             else None
         )
@@ -189,6 +302,7 @@ class FaceIdDebugLogger:
         if bbox is not None:
             record["bbox"] = list(bbox)
         record.update(meta)
+        record.update(self._landmark_summary(landmarks, kps5))
         # frame.jpg is the clean original → re-crop from it using bbox/crop_box.
         return self._write_folder(
             name,
@@ -198,7 +312,9 @@ class FaceIdDebugLogger:
                 "aligned.jpg": aligned,
                 "frame.jpg": frame,
                 "annotated.jpg": annotated,
+                "face_with_landmark.jpg": mesh,
             },
+            self._landmark_sidecar(landmarks, kps5),
         )
 
     def save_failure(
@@ -207,15 +323,32 @@ class FaceIdDebugLogger:
         face_crop: cv2.typing.MatLike | None = None,
         aligned: cv2.typing.MatLike | None = None,
         frame: cv2.typing.MatLike | None = None,
+        bbox: list[int] | None = None,
+        landmarks: Any = None,
+        kps5: Any = None,
         **meta: Any,
     ) -> str | None:
         """One face that never reached an identity decision → its own folder,
         with the input image (when available) and the reason it was dropped."""
+        mesh = (
+            self._draw_landmarks(frame, bbox, landmarks, kps5)
+            if frame is not None and bbox is not None
+            else None
+        )
         name = "FAIL-" + self._slug(reason)
         record: dict[str, Any] = {"status": "failure", "reason": reason}
+        if bbox is not None:
+            record["bbox"] = list(bbox)
         record.update(meta)
+        record.update(self._landmark_summary(landmarks, kps5))
         return self._write_folder(
             name,
             record,
-            {"input.jpg": face_crop, "aligned.jpg": aligned, "frame.jpg": frame},
+            {
+                "input.jpg": face_crop,
+                "aligned.jpg": aligned,
+                "frame.jpg": frame,
+                "face_with_landmark.jpg": mesh,
+            },
+            self._landmark_sidecar(landmarks, kps5),
         )

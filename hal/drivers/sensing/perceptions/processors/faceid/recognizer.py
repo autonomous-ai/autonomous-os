@@ -846,6 +846,12 @@ class FaceRecognizer:
                 else None
             )
             aligned = raw_results[i].get("aligned") if debug_on else None
+            # Dense 468-point FaceMesh (full-frame pixels) and the 5 canonical
+            # points the alignment warp was built from — both already computed
+            # upstream, plotted into face_with_landmark.jpg.
+            landmarks = raw_results[i].get("landmarks") if debug_on else None
+            kps5 = raw_results[i].get("kps") if debug_on else None
+            landmark_score = raw_results[i].get("landmark_score")
             height_ratio = face_h / frame_h if frame_h else 0.0
 
             # Height, not area — see FACE_HEIGHT_RATIO_THRESHOLD in hal/config.py.
@@ -857,6 +863,9 @@ class FaceRecognizer:
                         aligned=aligned,
                         frame=frame,
                         bbox=bbox,
+                        landmarks=landmarks,
+                        kps5=kps5,
+                        landmark_score=landmark_score,
                         crop_box=[cx1, cy1, cx2, cy2],
                         frame_size=[frame_w, frame_h],
                         face_height_ratio=height_ratio,
@@ -968,6 +977,8 @@ class FaceRecognizer:
                     aligned=aligned,
                     frame=frame,
                     bbox=bbox,
+                    landmarks=landmarks,
+                    kps5=kps5,
                     color=_DEBUG_KIND_COLOR.get(face_kind, (128, 128, 128)),
                     # Clamped [x1, y1, x2, y2] actually cut for input.jpg — apply
                     # it to frame.jpg to reproduce the crop (bbox above is the
@@ -991,6 +1002,7 @@ class FaceRecognizer:
                     threshold=self._threshold,
                     negative_threshold=self._negative_threshold,
                     det_score=det_score,
+                    landmark_score=landmark_score,
                     face_height_ratio=height_ratio,
                     height_ratio_threshold=self._height_ratio_threshold,
                     rescued_by_extended=rescued_by_extended,
