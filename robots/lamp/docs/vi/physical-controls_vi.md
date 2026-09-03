@@ -7,14 +7,14 @@ Lamp có hai thiết bị input vật lý mà user có thể chạm trực tiế
 | Thiết bị | Vai trò | Có ở |
 |---|---|---|
 | **Nút GPIO** | Một nút bấm cơ. Dùng cho các hành động dứt khoát kể cả destructive (reboot / shutdown / factory-reset). Cảm giác cơ + detect giữ lâu khiến destructive action khó xảy ra do vô tình. | Pi 4/5 và OrangePi sun60 |
-| **Touchpad cảm ứng TTP223** | Ba pad chạm xếp như "đầu cún" để vuốt ve + stop/unmute nhẹ. Không có destructive gesture vì FastMode của IC không cho detect giữ lâu tin cậy. | Chỉ OrangePi sun60 (4 Pro / A733) |
+| **Touchpad cảm ứng TTP223** | Hai pad chạm xếp như "đầu cún" để vuốt ve + stop/unmute nhẹ. Không có destructive gesture vì FastMode của IC không cho detect giữ lâu tin cậy. | Chỉ OrangePi sun60 (4 Pro / A733) |
 
 ## Wiring
 
 | Thiết bị | Pi 4/5 | OrangePi sun60 |
 |---|---|---|
 | Nút GPIO | gpiochip0 BCM 17 (pull-up, active-LOW) | gpiochip1 line 9 (pull-up, active-LOW) |
-| TTP223 | không wire | gpiochip0 line 96 / 98 / 100, **pull-up, active-LOW** (pad nghỉ ở mức HIGH; chạm là edge xuống) |
+| TTP223 | không wire | gpiochip0 line 96 / 100, **pull-up, active-LOW** (pad nghỉ ở mức HIGH; chạm là edge xuống). Pad giữa trên line 98 đã bị bỏ ngày 2026-08-28. |
 
 Cả hai handler đều detect board qua `/proc/device-tree/model`:
 - `"sun60iw2"` → OrangePi 4 Pro / A733
@@ -166,7 +166,7 @@ Debounce mỗi edge là 200 ms (tick nhấn và nhả track độc lập để t
 
 IC TTP223 trên board này chạy ở **FastMode**: output HIGH khi chạm, rồi tự về LOW trong ~50-80 ms dù ngón tay vẫn ở pad. IC chỉ re-trigger khi điện dung thay đổi (ngón tay di chuyển). "Giữ liên tục" là bất khả thi nếu không đổi chân FM của IC sang LowPowerMode (~12 s max touch).
 
-Cross-talk giữa các pad lân cận cũng đáng kể — một lần chạm vật lý fire edge trên 2-3 pad với timing lệch nhau (con số 2-4 có từ trước khi dời chân pad, lúc còn wire bốn pad).
+Cross-talk giữa các pad lân cận cũng đáng kể — một lần chạm vật lý fire edge trên cả hai pad với timing lệch nhau. Khi bỏ pad giữa, hai pad còn lại cách xa nhau hơn nên ghép nối yếu đi: một cú tap giờ thường chỉ làm sáng một pad, và đó là lý do các luật cử chỉ không được phụ thuộc vào việc một cú chạm chạm tới bao nhiêu pad.
 
 Driver bù bằng **mô hình hai tầng**:
 
@@ -203,9 +203,9 @@ Không có gì ở giữa, và `HAL_TOUCH_SWIPE_MIN_GAP_MS` (40) nằm đúng tr
 
 Thứ tự phân giải, khớp cái nào trước thì thắng:
 
-1. **SWIPE** → sleep. Một lần tiếp xúc, đủ mọi pad, đơn điệu dọc trục, mọi khoảng đều trên ngưỡng. **Chỉ một lần tiếp xúc**: mỗi chặng của một cú vuốt qua-lại tự nó đã là một lượt sạch theo một chiều, nên để bất kỳ chặng nào quyết định sẽ biến mọi cú pet thành swipe. Kiểm tra đầu tiên để một cú swipe đã phân giải không bao giờ bắn thêm một tap.
-2. **DOUBLE TAP** → toggle mute mic, kèm một câu xác nhận trạng thái. Từ hai **cụm (burst) nhiều pad, sít nhau** trở lên, chồng lấn về vị trí. Tap nhanh nằm chung một lần tiếp xúc (session không kịp hết hạn); tap chậm đến thành các lần tiếp xúc riêng — cả hai đều tính. Kiểm tra trước pet, vì cú tap thứ hai chạm lại đúng các pad cũ. Một cú vuốt không thể lọt vào luật này: mọi bước của nó đều trên ngưỡng, nên mỗi "cụm" chỉ có một bước, trong khi luật đòi cụm nhiều pad.
-3. **PET** → cười khúc khích. Ngón tay **quay lại** một pad nó đã rời (số bước nhiều hơn số pad khác nhau), hoặc các lần tiếp xúc rơi vào những vị trí không có pad chung. Không có chốt chặn theo số lần tiếp xúc.
+1. **SWIPE** → sleep. Một lần tiếp xúc chạm tới **mọi pad đã wire**, không pad nào hai lần, với một khoảng trên ngưỡng. Là "mọi pad" chứ không phải một con số cố định — trên board 3 pad thì hai trong ba chỉ là một cú di chuyển dở dang, không phải một lần băng qua. **Chỉ một lần tiếp xúc**: mỗi chặng của một cú vuốt qua-lại tự nó đã là một lượt sạch theo một chiều, nên để bất kỳ chặng nào quyết định sẽ biến mọi cú pet thành swipe. Kiểm tra đầu tiên để một cú swipe đã phân giải không bao giờ bắn thêm một tap.
+2. **DOUBLE TAP** → toggle mute mic, kèm một câu xác nhận trạng thái. Bàn tay đã ở trên cùng một chỗ hai lần **và tại một thời điểm nào đó có hai pad sáng cùng lúc** — một khoảng dưới ngưỡng, thứ chỉ một lần đặt tay mới tạo ra. Một cú vuốt là di chuyển từ đầu tới cuối nên không bao giờ thỏa được, vì vậy kiểm tra nó trước pet là an toàn dù cả hai đều có quay lại pad.
+3. **PET** → cười khúc khích. Ngón tay **quay lại** một pad nó đã rời mà **không có lần đặt tay nào ở giữa** — mọi bước đều là di chuyển, và đó chính là một cú vuốt. Không có chốt chặn theo số lần tiếp xúc: một cú vuốt liên tục chỉ là một lần tiếp xúc.
 4. **TAP** → mọi trường hợp còn lại, kể cả nhiều ngón tay đặt xuống cùng lúc. Việc đó làm sáng mọi pad, nhưng trong khoảng ~20 ms, và đó không phải là di chuyển.
 
 **Điều thực sự nhập nhằng.** Một lượt quét đơn theo một chiều với thời gian sít nhau — ba pad, không quay lại, các khoảng dưới ngưỡng — không phân biệt được với một cú tap ba ngón dứt khoát, và sẽ phân giải thành TAP. Trên bề mặt này không có tín hiệu nào tách được hai thứ đó.
