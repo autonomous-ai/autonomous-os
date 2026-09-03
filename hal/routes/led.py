@@ -86,8 +86,18 @@ def get_led_color():
         and state._effect_thread.is_alive()
     )
     uniform = True
+    # The ring is read either way — it is the only honest answer to "is the
+    # lamp lit". An effect thread running over a BLACK base reported on=true
+    # while the strip was physically dark (documented hazard in
+    # robots/lamp/docs/led-control.md, seen here as speaking_wave over the
+    # resting look). `color` still reports the effect's base while one runs:
+    # os-server's ambient loop keys off that value, and mid-animation samples
+    # would make it flap.
+    ring = _read_ring(state.rgb_service)
+    ring_lit = any(px != (0, 0, 0) for px in ring)
     if effect_running and state._effect_base_color:
         r, g, b = state._effect_base_color
+        uniform = all(px == ring[0] for px in ring) if ring else True
     else:
         # The WHOLE ring, not pixel 0. Reading one pixel made every
         # non-uniform look report as the strip's state, and a look whose
@@ -96,11 +106,11 @@ def get_led_color():
         # from the API (device-observed 03/09/2026). Effects that dither
         # across the ring (breathing_fine) are non-uniform BY DESIGN, so this
         # is not an edge case; `uniform` says which kind of answer this is.
-        pixels = _read_ring(state.rgb_service)
-        r, g, b = max(pixels, key=lambda px: max(px)) if pixels else (0, 0, 0)
-        uniform = all(px == pixels[0] for px in pixels) if pixels else True
+        r, g, b = max(ring, key=lambda px: max(px)) if ring else (0, 0, 0)
+        uniform = all(px == ring[0] for px in ring) if ring else True
     brightness = round(max(r, g, b) / 255.0, 3)
-    is_on = (r, g, b) != (0, 0, 0) or effect_running
+    # An effect only counts as "on" if it is actually painting light.
+    is_on = (r, g, b) != (0, 0, 0) or ring_lit
     return {
         "led_count": state.rgb_service.led_count,
         "on": is_on,

@@ -29,7 +29,7 @@ stays lit until the first LED command, which may be minutes after boot.
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/led` | LED strip info (count, available) |
-| GET | `/led/color` | Ring state: brightest pixel, `on` if ANY pixel is lit, `uniform: false` when the pixels differ (dithered effects, partial paints). Reads every pixel — sampling only pixel 0 reported a lit ring as "off" whenever pixel 0 happened to be dark. |
+| GET | `/led/color` | Ring state: brightest pixel, `on` if ANY pixel is lit, `uniform: false` when the pixels differ (dithered effects, partial paints). Reads every pixel — sampling only pixel 0 reported a lit ring as "off" whenever pixel 0 happened to be dark. `on` is read from the ring even while an effect runs, so an effect painting a black base reports `on: false` instead of claiming light the lamp is not showing; `color` still reports the effect's base colour, which os-server's ambient loop keys off. |
 | POST | `/led/solid` | Fill entire strip with one color |
 | POST | `/led/paint` | Set per-pixel colors (array up to 32 items), or a gradient with `"gradient": true` |
 | POST | `/led/off` | Turn off all LEDs |

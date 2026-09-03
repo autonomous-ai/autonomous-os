@@ -29,7 +29,7 @@ lệnh LED đầu tiên, có thể vài phút sau khi boot.
 | Method | Endpoint | Mô tả |
 |--------|----------|-------|
 | GET | `/led` | LED strip info (count, available) |
-| GET | `/led/color` | Trạng thái cả ring: pixel sáng nhất, `on` khi CÓ pixel nào sáng, `uniform: false` khi các pixel khác nhau (effect dither, paint từng phần). Đọc mọi pixel — chỉ lấy pixel 0 thì một ring đang sáng bị báo "off" mỗi khi pixel 0 tình cờ tối. |
+| GET | `/led/color` | Trạng thái cả ring: pixel sáng nhất, `on` khi CÓ pixel nào sáng, `uniform: false` khi các pixel khác nhau (effect dither, paint từng phần). Đọc mọi pixel — chỉ lấy pixel 0 thì một ring đang sáng bị báo "off" mỗi khi pixel 0 tình cờ tối. `on` đọc từ ring kể cả khi có effect đang chạy, nên effect thở trên nền đen sẽ báo `on: false` thay vì nhận vơ ánh sáng mà đèn không hề phát; `color` vẫn trả màu nền của effect vì vòng ambient bên Go dựa vào giá trị đó. |
 | POST | `/led/solid` | Fill toàn bộ strip 1 màu |
 | POST | `/led/paint` | Set từng pixel (array tối đa 32 items), hoặc gradient với `"gradient": true` |
 | POST | `/led/off` | Tắt tất cả LED |
