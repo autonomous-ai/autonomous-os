@@ -749,6 +749,10 @@ export function ChatSection({ events, isActive }: Props) {
     fontSize: 11, fontWeight: 600,
   };
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  // Full-size viewer for an attached photo. A chat thumbnail is 120-200px, which
+  // is too small to check what was actually sent — the same lightbox the Flow
+  // section uses for snapshots (FlowSection/PoseBucketModal).
+  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
   // Desktop (≥768px) always opens history by default; user can still collapse
   // for a session. Mobile (<768px) stays collapsed so the chat area gets the
   // full width. We don't persist the desktop preference — the request was that
@@ -1278,6 +1282,28 @@ export function ChatSection({ events, isActive }: Props) {
     if (pendingRunIdRef.current) return; // a live send is already tracked
     const convo = convos.find((c) => c.id === activeId);
     if (!convo) return;
+    // A pending bubble with NO run id belongs to a send whose POST was still
+    // in flight when the page went away — the composer shows the waiting bubble
+    // immediately, and the run id only arrives when the request returns. Nothing
+    // will ever resolve it (the request died with the page), so finalize it
+    // instead of leaving three dots spinning forever. The device may well have
+    // run the turn; the retry button is the honest exit.
+    const strandedIds: string[] = [];
+    for (const m of convo.messages) {
+      if (m.pending && !m.runId && m.role === "agent") strandedIds.push(m.id);
+    }
+    if (strandedIds.length > 0) {
+      const stranded = new Set(strandedIds);
+      setConvos((prev) =>
+        prev.map((c) =>
+          c.id === convo.id
+            ? { ...c, messages: c.messages.map((m) => stranded.has(m.id)
+                ? { ...m, text: "⏹ interrupted — the page reloaded before the device answered", pending: false, error: true }
+                : m) }
+            : c,
+        ),
+      );
+    }
     let idx = -1;
     for (let i = convo.messages.length - 1; i >= 0; i--) {
       const m = convo.messages[i];
@@ -2168,10 +2194,13 @@ export function ChatSection({ events, isActive }: Props) {
                           key={i}
                           src={url}
                           alt={`attached ${i + 1} of ${msg.imageUrls!.length}`}
+                          onClick={() => setLightboxUrl(url)}
+                          title="Click to view full size"
                           style={{
                             maxWidth: msg.imageUrls!.length > 1 ? 120 : 200,
                             maxHeight: msg.imageUrls!.length > 1 ? 120 : 150,
                             borderRadius: 6,
+                            cursor: "zoom-in",
                           }}
                         />
                       ))}
@@ -2324,7 +2353,13 @@ export function ChatSection({ events, isActive }: Props) {
                       border: "1px solid color-mix(in srgb, var(--lm-amber) 25%, transparent)",
                     }}>
                       {att.previewUrl ? (
-                        <img src={att.previewUrl} alt={att.name} style={{ height: 36, width: 36, objectFit: "cover", borderRadius: 6, flexShrink: 0 }} />
+                        <img
+                          src={att.previewUrl}
+                          alt={att.name}
+                          onClick={() => setLightboxUrl(att.previewUrl)}
+                          title="Click to view full size"
+                          style={{ height: 36, width: 36, objectFit: "cover", borderRadius: 6, flexShrink: 0, cursor: "zoom-in" }}
+                        />
                       ) : (
                         <div style={{
                           width: 36, height: 36, borderRadius: 6,
@@ -2429,6 +2464,27 @@ export function ChatSection({ events, isActive }: Props) {
 
       {/* Skills surfaces opened from the composer's "+" menu. Portalled from
           inside each modal, so mounting them here doesn't affect chat layout. */}
+      {/* Full-size viewer — click anywhere (or Esc via the backdrop click) to
+          close. Same shape as FlowSection's snapshot lightbox so the two feel
+          like one control. */}
+      {lightboxUrl && (
+        <div
+          onClick={() => setLightboxUrl(null)}
+          style={{
+            position: "fixed", inset: 0, zIndex: 200,
+            background: "rgba(0,0,0,0.85)", backdropFilter: "blur(4px)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            cursor: "zoom-out",
+          }}
+        >
+          <img
+            src={lightboxUrl}
+            alt="attachment full size"
+            onClick={(e) => e.stopPropagation()}
+            style={{ maxWidth: "92vw", maxHeight: "92vh", objectFit: "contain", borderRadius: 8, cursor: "default" }}
+          />
+        </div>
+      )}
       {skillsView === "write" && <WriteSkillModal onClose={() => setSkillsView(null)} />}
       {skillsView === "upload" && <UploadSkillModal onClose={() => setSkillsView(null)} />}
       {skillsView === "browse" && <BrowseSkillsModal onClose={() => setSkillsView(null)} />}
