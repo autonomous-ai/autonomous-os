@@ -927,6 +927,15 @@ turn ("hello") right after a restart would leak to the main agent.
    /speaker/current-user/reset` clears the cache along with the current voice
    user, since it is the same presence state one layer down.
 
+   **The replaced session is closed in the background.** A pre-turn rebuild
+   swaps in a fresh session and then tears the old one down; doing that inline
+   made the turn wait for `aclose()` plus the IO-thread join — 0.79s measured
+   between the new session opening and this turn's `[TURN CONTEXT]` going out
+   (lamp-0c89, 03/09/2026). Nothing needs the old socket to be closed before the
+   model can hear the user, so the close runs on its own thread (failures are
+   still logged; a thread that cannot start falls back to closing inline rather
+   than leaking the socket).
+
    **Gemini native-audio caveat:** `send_text()` drops **all** non-response text on
    Gemini `*native-audio*` models (`gemini_needs_idle_workaround()`), because
    repeated SDK `clientContent(turn_complete=False)` messages collide with later

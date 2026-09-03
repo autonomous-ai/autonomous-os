@@ -20,7 +20,7 @@ Source: colors are what the **lamp** actually shows — `robots/lamp/presets.jso
 | `goodbye` | 3, 0, 2 | `#030002` dim purple | overlay | breathing | 0.5 | goodbye |
 | `caring` | 3, 1, 2 | `#030102` dim pink | overlay | breathing | 0.4 | nod |
 | `acknowledge` | 0, 3, 0 | `#000300` dim green | overlay | breathing | 0.5 | acknowledge |
-| `stretching` | 3, 2, 1 | `#030201` dim warm amber | overlay | breathing | 0.6 | stretching |
+| `stretching` | 3, 2, 1 | `#030201` dim warm amber | overlay | breathing | 0.6 | idle |
 | `music_strong` | base 8, 12, 8 (unused) | hue swept by the effect; level from `brightness` 0.012 — see below | overlay | rainbow | 1.0 | music_rock |
 | `music_chill` | 0, 3, 2 | `#000302` dim aqua | overlay | breathing | 0.3 | music_rock \| music_groove \| music_jazz \| music_waltz |
 | `scan` | 0, 2, 3 | `#000203` dim sky blue | overlay | pulse | 0.3 | scanning |
@@ -113,6 +113,8 @@ Both set `"servo": None` — LED only, the lamp holds still:
 - `thinking` is fired by the emotion-ack hook on **every** preprocessed message, so a servo there means the body fidgets through the whole conversation. It also moves the camera: `thinking_deep.csv` sweeps wrist_pitch 34° and wrist_roll 32°, and the camera sits in the head — so when the realtime `look` tool fires (it fires during the model's turn, i.e. while `thinking` is showing) the user has to chase a moving, rolling camera to hold an object in frame. The same hook is why its LED sits behind the `_BACKGROUND_EMOTIONS` guard in `hal/app_state.py`, to keep a whole conversation from being repainted green.
 
 On the lamp `thinking` gets `"servo": null` from `robots/lamp/presets.json`; the base preset in `hal/presets.py` still maps it to `thinking_deep` for bodies that want it.
+
+On the lamp `stretching` gets `"servo": "idle"` from the same overlay. The emotion still performs the normal wake transition (clearing sleep and restoring the camera/audio state), but a tap that wakes Lamp now starts the idle recording instead of the stretching movement. Other robot types keep the base `stretching` recording.
 
 `listening.csv` and `thinking_deep.csv` stay in `hal/recordings/` even with no emotion mapping to them: `/servo/play` can still call them by hand, and Reachy still maps them (`hal/drivers/motors/reachy_service.py`).
 

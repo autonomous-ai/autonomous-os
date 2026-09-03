@@ -20,7 +20,7 @@ Nguồn: màu trong bảng là màu **lamp** thực sự hiển thị — `robot
 | `goodbye` | 3, 0, 2 | `#030002` tím dịu | overlay | breathing | 0.5 | goodbye |
 | `caring` | 3, 1, 2 | `#030102` hồng dịu | overlay | breathing | 0.4 | nod |
 | `acknowledge` | 0, 3, 0 | `#000300` xanh lá dịu | overlay | breathing | 0.5 | acknowledge |
-| `stretching` | 3, 2, 1 | `#030201` amber ấm dịu | overlay | breathing | 0.6 | stretching |
+| `stretching` | 3, 2, 1 | `#030201` amber ấm dịu | overlay | breathing | 0.6 | idle |
 | `music_strong` | base 8, 12, 8 (không dùng) | hue do effect tự quét; mức sáng lấy từ `brightness` 0.012 — xem dưới | overlay | rainbow | 1.0 | music_rock |
 | `music_chill` | 0, 3, 2 | `#000302` aqua dịu | overlay | breathing | 0.3 | music_rock \| music_groove \| music_jazz \| music_waltz |
 | `scan` | 0, 2, 3 | `#000203` xanh trời dịu | overlay | pulse | 0.3 | scanning |
@@ -110,6 +110,8 @@ Nên `listening` chạy `breathing_fine` (`hal/drivers/rgb/effects.py`): nhịp 
 Đây là preset duy nhất để `"servo": None` — chỉ LED, đèn đứng yên. `listening` chạy đúng lúc user đang nói, tiếng servo cộng rung thân máy lọt thẳng vào mic và làm bẩn STT.
 
 `thinking` thì **có** servo (`thinking_deep`), nhưng vẫn là ca đặc biệt ở phía LED: hook emotion-ack bắn nó ở **mỗi** message preprocessed, nên LED của nó nằm sau `_BACKGROUND_EMOTIONS` guard trong `hal/app_state.py` để cả cuộc hội thoại không bị sơn xanh lá liên tục.
+
+Trên lamp, `stretching` nhận `"servo": "idle"` từ cùng overlay. Emotion vẫn thực hiện đầy đủ transition thức dậy (xoá trạng thái sleep và khôi phục camera/audio), nhưng cú tap đánh thức Lamp giờ bắt đầu recording idle thay vì chuyển động stretching. Các loại robot khác vẫn giữ recording `stretching` mặc định.
 
 `listening.csv` vẫn giữ trong `hal/recordings/` dù không emotion nào map tới: `/servo/play` vẫn gọi tay được, và Reachy vẫn map nó (`hal/drivers/motors/reachy_service.py`).
 

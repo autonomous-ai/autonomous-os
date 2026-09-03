@@ -893,6 +893,13 @@ sớm ("hello") ngay sau khi restart sẽ rớt xuống main agent.
    /speaker/current-user/reset` xoá luôn cache cùng với voice user hiện tại, vì
    đó là cùng một trạng thái presence ở tầng dưới.
 
+   **Session bị thay được đóng ở nền.** Rebuild trước turn sẽ dựng session mới
+   rồi dọn session cũ; làm inline thì lượt nói phải đợi `aclose()` cộng cú join
+   IO thread — đo được 0.79s giữa lúc session mới mở và lúc `[TURN CONTEXT]` của
+   lượt này bay đi (lamp-0c89, 03/09/2026). Không ai cần socket cũ đóng xong thì
+   model mới nghe được người dùng, nên việc đóng chạy trên thread riêng (lỗi vẫn
+   được log; nếu không tạo nổi thread thì đóng inline chứ không rò socket).
+
    **Lưu ý Gemini native-audio:** `send_text()` bỏ **toàn bộ** text không tạo
    response trên các model Gemini `*native-audio*` (`gemini_needs_idle_workaround()`),
    vì các message SDK `clientContent(turn_complete=False)` lặp lại va với lượt audio

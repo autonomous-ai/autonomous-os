@@ -22,7 +22,23 @@ audio_output = get_audio_device(output=True)
 audio_input = get_audio_device(output=False)
 
 if audio_output is None:
-    raise RuntimeError("No output audio device found! (looked for: %s)" % OUTPUT_NAMES)
+    # This file is a hands-on hardware script, not a unit test: importing it
+    # plays a tone and records from the mic. pytest still collects it, so on a
+    # machine with no ReSpeaker/CD002 the old `raise` here aborted COLLECTION
+    # and took the whole suite down with it — `make hal-test` could not run at
+    # all off-device. Skip instead; running it directly
+    # (`python test/test_audio.py`) is unchanged and still fails loudly.
+    try:
+        import pytest
+
+        pytest.skip(
+            "no %s output device — audio smoke test needs a real body" % OUTPUT_NAMES,
+            allow_module_level=True,
+        )
+    except ImportError:
+        raise RuntimeError(
+            "No output audio device found! (looked for: %s)" % OUTPUT_NAMES
+        )
 
 # Use device native sample rate
 dev_info = sd.query_devices(audio_output)

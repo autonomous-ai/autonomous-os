@@ -223,19 +223,39 @@ class TestLampSimulationServer(unittest.TestCase):
         # AnimationService keeps the current yaw for desk/up/down, changes only
         # base_yaw for left/right, resets it for an explicit center. The
         # simulator must not invent a friendlier two-joint table.
-        _, centered = self._json("/servo/aim", "POST", {"direction": "center", "duration": 0.1})
-        self.assertEqual(centered["positions"]["base_pitch.pos"], -20.0)
-        self.assertEqual(centered["positions"]["elbow_pitch.pos"], 32.0)
+        # Asserted against AIM_PRESETS, never against copied numbers: these
+        # lines used to hardcode base_pitch -20.0 / elbow_pitch 32.0 / yaw
+        # +-90.0 and went red the day the table was retuned (center is
+        # 25.0/43.0 now, the side yaws -91.57/88.36). A copy of the table
+        # cannot catch the simulator drifting from it — it only reports that
+        # someone edited the table.
+        from hal.presets import AIM_PRESETS
 
-        _, right = self._json("/servo/aim", "POST", {"direction": "right", "duration": 0.1})
-        self.assertEqual(right["positions"]["base_yaw.pos"], 90.0)
-        self.assertEqual(right["positions"]["base_pitch.pos"], -20.0)
-        self.assertEqual(right["positions"]["elbow_pitch.pos"], 32.0)
+        def _aim(direction):
+            _, aimed = self._json(
+                "/servo/aim", "POST", {"direction": direction, "duration": 0.1}
+            )
+            return aimed["positions"]
 
-        _, left = self._json("/servo/aim", "POST", {"direction": "left", "duration": 0.1})
-        self.assertEqual(left["positions"]["base_yaw.pos"], -90.0)
-        self.assertEqual(left["positions"]["base_pitch.pos"], -20.0)
-        self.assertEqual(left["positions"]["elbow_pitch.pos"], 32.0)
+        def _assert_joint(positions, joint, expected, label):
+            self.assertAlmostEqual(positions[joint], expected, places=3, msg=label)
+
+        center = AIM_PRESETS["center"]
+        centered = _aim("center")
+        for joint in ("base_yaw.pos", "base_pitch.pos", "elbow_pitch.pos"):
+            _assert_joint(centered, joint, center[joint], f"center {joint}")
+
+        # Left/right own YAW ONLY (animation_service.py: the lamp's 5-DOF
+        # convention) — every other joint keeps the pose it was already in,
+        # which after the center above is center's.
+        for direction in ("right", "left"):
+            aimed = _aim(direction)
+            _assert_joint(
+                aimed, "base_yaw.pos", AIM_PRESETS[direction]["base_yaw.pos"],
+                f"{direction} base_yaw.pos",
+            )
+            for joint in ("base_pitch.pos", "elbow_pitch.pos"):
+                _assert_joint(aimed, joint, center[joint], f"{direction} {joint}")
 
     def test_local_visualizer_is_available(self):
         with self._response("/simulator") as response:
