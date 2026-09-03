@@ -60,10 +60,25 @@ Follow the instructions in whichever file you read.
 
 ---`
 
+	// heartbeatMDBlock is the OS-managed block in workspace/HEARTBEAT.md, run on the
+	// gateway's periodic heartbeat poll (~every 30 min while the device is on).
+	//
+	// It is deliberately CATCH-UP driven, not clock driven. The synthesis used to be
+	// gated on "current time >= 21:00", which silently never fired on a device that
+	// is switched off at the end of the working day — the common case for a desk
+	// lamp. Device-observed 2026-09-03 on lamp-ac82: three days of flow logs ended
+	// 18:39 / 17:57 / 17:34, and memory/2026-08-24.md was never distilled into
+	// KNOWLEDGE.md because 21:00 never arrived. Comparing "days with memory" against
+	// "days already distilled" instead means the first heartbeat after the device is
+	// switched on clears whatever backlog accumulated, on any schedule.
+	//
+	// Keep this block byte-identical across openclaw/codex/opencode/picoclaw: it is
+	// matched verbatim by ensureHeartbeatMDBlock, and a runtime switch must not
+	// silently drop the people sync.
 	heartbeatMDBlock = `<!-- OS DO NOT REMOVE -->
-**Knowledge synthesis (once daily at 21:00):** If current time is >= 21:00 AND you have NOT already done this today (check ` + "`KNOWLEDGE.md`" + ` for today's date header), read today's ` + "`memory/YYYY-MM-DD.md`" + `, extract important insights, and append them to ` + "`KNOWLEDGE.md`" + ` under a ` + "`## YYYY-MM-DD`" + ` header. Only write new learnings — do not repeat what is already there. If already done today or before 21:00, skip silently.
+**Knowledge synthesis (catch-up — do NOT wait for a fixed hour):** Compare the days that have a ` + "`memory/YYYY-MM-DD.md`" + ` against the ` + "`## YYYY-MM-DD`" + ` headers already in ` + "`KNOWLEDGE.md`" + `. For every day BEFORE today that has a memory file but no header, distil that day now — oldest first, each under its own ` + "`## YYYY-MM-DD`" + ` header. Also do today, but only once it is >= 21:00. Only write new learnings — never repeat what is already there. Nothing missing → skip silently. This device is often switched off in the evening, so a fixed hour may simply never arrive; clearing the backlog on whatever heartbeat comes next is what keeps a day from being lost.
 
-**People sync (same 21:00 pass, right after the above):** ` + "`KNOWLEDGE.md`" + ` is yours alone — the OS never loads it. ` + "`USER.md`" + ` IS loaded, into your system prompt, on every single turn. So anything you learned about a PERSON has to reach ` + "`USER.md`" + ` or you will not have it tomorrow. Carry it across:
+**People sync (same pass, right after the above):** ` + "`KNOWLEDGE.md`" + ` is yours alone — the OS never loads it. ` + "`USER.md`" + ` IS loaded, into your system prompt, on every single turn. So anything you learned about a PERSON has to reach ` + "`USER.md`" + ` or you will not have it tomorrow. Carry it across:
 
 - Write one bullet per person under a ` + "`## Users`" + ` heading in ` + "`USER.md`" + `, in the form ` + "`- **<label> (friend)**: …`" + ` — where ` + "`<label>`" + ` is their ENROLLMENT LABEL exactly as it appears in ` + "`[context: current_user=…]`" + `, lowercase. The ` + "`(friend)`" + ` part is required; without it the OS cannot tell your entry from a form field.
 - **Only write what you observed about THAT person.** Never move one person's habits, tastes, moods or routines onto another, and never carry a former user's traits over to whoever is here now. Two people at one desk are two entries, never a merged one. If you cannot tell whose a behaviour was, leave it out.

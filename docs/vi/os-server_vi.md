@@ -770,8 +770,17 @@ chủ vẫn gọi tên chủ cũ (lamp-ac82, 2026-09-03).
 
 ### Đồng bộ người dùng hằng ngày (KNOWLEDGE.md → USER.md)
 
-Lượt heartbeat 21:00 có bước thứ hai sau knowledge synthesis: mang những gì học
-được về *con người* sang `USER.md`.
+Lượt heartbeat có bước thứ hai sau knowledge synthesis: mang những gì học được về
+*con người* sang `USER.md`.
+
+Cả hai bước đều chạy theo kiểu **bù (catch-up), không theo đồng hồ**. Trước đây
+synthesis bị gate bởi `current time >= 21:00`, và trên một thiết bị bị tắt cuối
+giờ làm thì mốc đó âm thầm không bao giờ tới. Quan sát trên lamp-ac82 ngày
+2026-09-03: ba ngày flow log kết thúc lúc 18:39 / 17:57 / 17:34, và
+`memory/2026-08-24.md` chưa bao giờ được distil vì 21:00 không tới. Điều kiện giờ
+là *"có ngày nào TRƯỚC hôm nay có memory file mà chưa có header `## YYYY-MM-DD`
+không?"*, nên heartbeat đầu tiên sau khi bật máy sẽ dọn hết backlog, bất kể lịch
+bật/tắt thế nào.
 
 Lý do là một sự bất đối xứng đã gây bug thật. `KNOWLEDGE.md` là file của riêng
 agent — **OpenClaw không load nó**; nó chỉ tới tay model khi agent chủ động đọc.

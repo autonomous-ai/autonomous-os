@@ -787,8 +787,16 @@ kept greeting its previous owner by name (lamp-ac82, 2026-09-03).
 
 ### Daily people sync (KNOWLEDGE.md → USER.md)
 
-The 21:00 heartbeat pass has a second step after knowledge synthesis: carry what
-was learned about *people* into `USER.md`.
+The heartbeat pass has a second step after knowledge synthesis: carry what was
+learned about *people* into `USER.md`.
+
+Both steps are **catch-up driven, not clock driven**. The synthesis used to be
+gated on `current time >= 21:00`, which silently never fires on a device switched
+off at the end of the working day. Device-observed 2026-09-03 on lamp-ac82:
+three days of flow logs ended 18:39 / 17:57 / 17:34, and `memory/2026-08-24.md`
+was never distilled because 21:00 never arrived. The gate is now *"is there a day
+BEFORE today with a memory file but no `## YYYY-MM-DD` header?"*, so the first
+heartbeat after the device is switched on clears the backlog on any schedule.
 
 This exists because of an asymmetry that caused a real bug. `KNOWLEDGE.md` is
 the agent's own file — **OpenClaw does not load it**; it only reaches the model

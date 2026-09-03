@@ -49,3 +49,22 @@ func TestHeartbeatPeopleSyncCarriesItsConstraints(t *testing.T) {
 		}
 	}
 }
+
+// The synthesis must NOT be gated on a wall-clock hour. A desk device is often
+// switched off before evening, so "at 21:00" never arrives and whole days go
+// undistilled (device-observed: memory/2026-08-24.md was never synthesized).
+// The gate is "is there a finished day that was never distilled", which any
+// heartbeat can satisfy.
+func TestHeartbeatSynthesisIsCatchUpNotClockGated(t *testing.T) {
+	if strings.Contains(heartbeatMDBlock, "If current time is >= 21:00 AND") {
+		t.Error("synthesis is gated on a fixed hour again — it will not fire on a device switched off in the evening")
+	}
+	for _, want := range []string{
+		"catch-up",               // the gate is a backlog check
+		"every day BEFORE today", // never distil a day still in progress
+	} {
+		if !strings.Contains(heartbeatMDBlock, want) {
+			t.Errorf("catch-up gate lost its wording: %q", want)
+		}
+	}
+}
