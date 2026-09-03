@@ -319,6 +319,25 @@ trên tab mới** (`api.ts` khởi tạo token từ `sessionStorage` lúc load m
 effect của `AuthGate` chạy trước `useBearerFromQuery` của `App`), nên vào lại
 `/monitor` lần hai trong cùng tab.
 
+Không có cách thứ ba: `admin_password_hash` rỗng **không** phải là cửa mở.
+`VerifyAdminPassword` (`system/device/config_update.go`) từ chối thẳng khi chưa
+đặt hash, và nó từ chối ngoài thiết bị y như trên board — simulator chạy đúng
+binary được ship nên không có đường tắt auth nào để bật.
+
+#### Đặt mật khẩu của riêng mình
+
+Config copy từ thiết bị mang theo hash của thiết bị đó. Muốn đăng nhập bằng mật
+khẩu của riêng mình thì sinh hash cost 10 rồi đặt vào `admin_password_hash`:
+
+```bash
+htpasswd -bnBC 10 "" 'mat-khau-cua-ban' | tr -d ':\n'
+```
+
+`htpasswd` có sẵn trên macOS. Nó phát prefix `$2y$` trong khi `bcrypt` của Go ghi
+`$2a$`; cả hai cùng thuật toán và `CompareHashAndPassword` chấp nhận cả hai, nên
+dán nguyên đầu ra. Cặp `""` ở đầu là trường username mà os-server không dùng —
+`tr` cắt nó cùng với ký tự xuống dòng.
+
 ---
 
 ## Cái gì được mô phỏng

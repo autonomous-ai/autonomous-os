@@ -323,6 +323,26 @@ misses on the *first* load of a fresh tab (`api.ts` initialises its token from
 `sessionStorage` at module load, and `AuthGate`'s effect runs before `App`'s
 `useBearerFromQuery`), so navigate to `/monitor` a second time in the same tab.
 
+There is no third way: an empty `admin_password_hash` is not an open door.
+`VerifyAdminPassword` (`system/device/config_update.go`) refuses outright when
+no hash is set, and it refuses off-device exactly as it does on a board — the
+simulator runs the shipped binary, so it has no auth bypass to enable.
+
+#### Setting your own password
+
+A config copied from a device carries that device's hash. To log in with a
+password of your own instead, generate a cost-10 hash and put it in
+`admin_password_hash`:
+
+```bash
+htpasswd -bnBC 10 "" 'your-password' | tr -d ':\n'
+```
+
+`htpasswd` ships with macOS. It emits a `$2y$` prefix where Go's `bcrypt` writes
+`$2a$`; both verify against the same algorithm and `CompareHashAndPassword`
+accepts either, so paste the output as-is. The leading `""` is the username
+field, which os-server does not use — `tr` strips it along with the newline.
+
 ---
 
 ## What is simulated
