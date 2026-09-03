@@ -869,6 +869,30 @@ sớm ("hello") ngay sau khi restart sẽ rớt xuống main agent.
    reject vẫn nhận cùng một kết quả identity duy nhất trước khi đi hạ nguồn. Bỏ qua
    khi context đã mang đúng tên, hoặc khi lượt đó là noise.
 
+   **Prepass không còn chặn model.** Trước đây nó chạy nội tuyến, ngay trước khi
+   mở lượt realtime, nên trọn vòng gọi ra ngoài nằm giữa lúc user dứt lời và lúc
+   model nhận được câu nói — đo trên lamp-0c89 (03/09/2026): 1.49s trong khoảng
+   trống 3.0s, phần còn lại là cú reconnect Gemini trước turn. Giờ nó chạy trên
+   thread riêng song song với cú reconnect đó, và lượt nói chỉ join lại
+   (`SPEAKER_PREPASS_JOIN_S`, `HAL_SPEAKER_PREPASS_JOIN_S`, mặc định 2.0s) ở đúng
+   chỗ đầu tiên cần tới tên người nói. Thời gian chờ là **trần**, không phải độ
+   trễ: prepass xong trong lúc reconnect thì không tốn gì, còn chạm trần chỉ có
+   nghĩa là context lượt này gửi đi khi chưa biết người nói — đúng bằng những gì
+   dòng always-listening ở trên vẫn làm, và correction `[TURN CONTEXT UPDATE]` vẫn
+   phủ được. Đường deferred cho transcript ngắn giữ nguyên.
+
+   **Kết quả được cache.** Trước đây nhận dạng chạy mỗi lượt, lượt nào cũng chạy:
+   một cuộc mười lượt trả tiền mười lần gọi ra ngoài để nghe đúng một cái tên.
+   `SpeakerDecorator` giờ dùng lại kết quả gần nhất trong `SPEAKER_ID_CACHE_S`
+   (`HAL_SPEAKER_ID_CACHE_S`, mặc định 90s), và `SPEAKER_ID_CACHE_FOLLOWUP_S`
+   (mặc định 300s) khi đang trong cửa sổ follow-up của wake word — những lượt đó
+   theo định nghĩa là cùng một cuộc trò chuyện. **Unknown cũng được cache** — câu
+   mà recognizer không xếp được chính là ca dễ lặp lại nhất, thử lại mỗi lượt là
+   trả trọn độ trễ để nhận cùng một câu trả lời rỗng; thứ duy nhất mất khi cache
+   unknown là đường dẫn WAV phục vụ enrol của lượt đó. `POST
+   /speaker/current-user/reset` xoá luôn cache cùng với voice user hiện tại, vì
+   đó là cùng một trạng thái presence ở tầng dưới.
+
    **Lưu ý Gemini native-audio:** `send_text()` bỏ **toàn bộ** text không tạo
    response trên các model Gemini `*native-audio*` (`gemini_needs_idle_workaround()`),
    vì các message SDK `clientContent(turn_complete=False)` lặp lại va với lượt audio

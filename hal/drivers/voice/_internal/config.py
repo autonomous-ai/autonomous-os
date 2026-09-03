@@ -148,6 +148,40 @@ STT_KEEPALIVE = os.environ.get("HAL_STT_KEEPALIVE", "false").lower() == "true"
 # idle timeout.
 STT_KEEPALIVE_PING_S = float(os.environ.get("HAL_STT_KEEPALIVE_PING_S", "3"))
 
+# ---------------------------------------------------------------------------
+# Speaker-ID prepass — how long the turn may wait for it before committing
+# ---------------------------------------------------------------------------
+# The prepass is an external embedding call (measured 1.49s on lamp-0c89,
+# 03/09/2026) and it used to run STRICTLY BEFORE the realtime turn opened, so
+# its whole round trip sat in front of the Gemini connect and the audio flush —
+# dead time between the user finishing a sentence and the model hearing it. It
+# now runs on its own thread while that connect happens, and the turn joins it
+# here, just before the point where the speaker's name is actually needed.
+#
+# The wait is a ceiling, not a delay: a prepass that finished during the connect
+# costs nothing. Reaching the ceiling only means this turn's [TURN CONTEXT] goes
+# out with the speaker unresolved — the same thing the always-listening path has
+# always done, and the late-correction path already covers it.
+SPEAKER_PREPASS_JOIN_S = float(os.environ.get("HAL_SPEAKER_PREPASS_JOIN_S", "2.0"))
+
+# How long a resolved speaker identity is reused instead of re-running the
+# recognizer. The prepass is an external inference call on every turn — a
+# conversation of ten turns paid for ten of them to be told the same name, while
+# each call adds ~1.4s in front of the model hearing the audio (lamp-0c89,
+# 03/09/2026). Voices do not change mid-conversation; the cache is what a face
+# identity already gets by aging out rather than being re-derived per frame.
+#
+# UNKNOWN is cached too, and deliberately: an utterance the recognizer could not
+# place is the case most likely to repeat (a guest, a bad angle, a short clip),
+# and retrying it every turn pays the full latency for the same non-answer.
+SPEAKER_ID_CACHE_S = float(os.environ.get("HAL_SPEAKER_ID_CACHE_S", "90"))
+# Inside a wake-word follow-up window the turns are one conversation by
+# definition, so the cache holds for the whole window regardless of the TTL
+# above. 0 disables the extension.
+SPEAKER_ID_CACHE_FOLLOWUP_S = float(
+    os.environ.get("HAL_SPEAKER_ID_CACHE_FOLLOWUP_S", "300")
+)
+
 
 # ---------------------------------------------------------------------------
 # Voice barge-in — interrupt in-flight TTS when the user speaks during playback.

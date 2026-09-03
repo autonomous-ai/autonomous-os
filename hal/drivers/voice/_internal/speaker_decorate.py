@@ -18,6 +18,8 @@ import time
 from typing import Optional
 
 from hal.drivers.voice._internal.config import (
+    SPEAKER_ID_CACHE_FOLLOWUP_S,
+    SPEAKER_ID_CACHE_S,
     SPEAKER_MIN_AUDIO_S,
     SPEAKER_RECOGNITION_ENABLED,
     SPEECH_EMOTION_ENABLED,
@@ -78,6 +80,10 @@ def merge_stt_hypothesis(previous: str, current: str) -> str:
     return " ".join(previous_words + current_words[overlap:])
 
 
+# Sentinel for "the recognizer ran and could not place this voice".
+UNKNOWN_LABEL = "unknown"
+
+
 class SpeakerDecorator:
     """Owns wake-word list + speaker recognizer + speech-emotion service."""
 
@@ -89,6 +95,12 @@ class SpeakerDecorator:
         # restart (acceptable; worst case is one extra prompt after reboot).
         self._last_nudge_time: dict[str, float] = {}
         self._nudge_cooldown_s: float = nudge_cooldown_s
+
+        # Last recognizer verdict, reused for a short while instead of paying an
+        # external inference call per turn. Holds unknowns too — see
+        # _cached_identity. (name, display, monotonic-ish wall clock).
+        self._identity_cache: Optional[tuple[str, Optional[str], float]] = None
+        self._identity_cache_lock = threading.Lock()
 
         self._speaker = self._init_speaker(enable_people_perception)
         self._speech_emotion = self._init_speech_emotion(enable_people_perception)
@@ -283,8 +295,47 @@ class SpeakerDecorator:
             f"otherwise ask the user to introduce themselves longer.)"
         )
 
+    # ------------------------------------------------------------------
+    # Identity cache
+    # ------------------------------------------------------------------
+    def _cached_identity(self, in_followup: bool) -> Optional[tuple[str, Optional[str]]]:
+        """Return (name, display) when the last result is still good enough.
+
+        Recognition is an external call and voices do not change mid-sentence,
+        let alone mid-conversation. Without this the same speaker is re-derived
+        from scratch on every turn, and each derivation sits in front of the
+        model receiving the audio.
+        """
+        with self._identity_cache_lock:
+            entry = self._identity_cache
+        if entry is None:
+            return None
+        name, display, ts = entry
+        ttl = SPEAKER_ID_CACHE_S
+        if in_followup and SPEAKER_ID_CACHE_FOLLOWUP_S > ttl:
+            ttl = SPEAKER_ID_CACHE_FOLLOWUP_S
+        if ttl <= 0:
+            return None
+        age = time.time() - ts
+        if age > ttl:
+            return None
+        logger.info(
+            "Speaker ID: reusing cached identity %r (age=%.1fs, ttl=%.0fs%s)",
+            display or name, age, ttl, ", follow-up window" if in_followup else "",
+        )
+        return name, display
+
+    def _remember_identity(self, name: str, display: Optional[str]) -> None:
+        with self._identity_cache_lock:
+            self._identity_cache = (name, display, time.time())
+
+    def forget_identity(self) -> None:
+        """Drop the cached speaker. The voice twin of clearing a face cooldown."""
+        with self._identity_cache_lock:
+            self._identity_cache = None
+
     def identify_and_decorate(
-        self, transcript: str, audio_buffer: list[bytes],
+        self, transcript: str, audio_buffer: list[bytes], in_followup: bool = False,
     ) -> tuple[str, Optional[str], Optional[str]]:
         """Run speaker recognition; return (OS server message, SER user, display).
 
@@ -295,8 +346,21 @@ class SpeakerDecorator:
           confident match, else None. Used to name the voice speaker in the
           realtime turn context WITHOUT re-running recognition; None on
           unknown / gate-reject / server error so the caller falls back cleanly.
+
+        `in_followup` marks a turn inside a wake-word follow-up window, where a
+        cached identity is held for the whole window: those turns are one
+        conversation by definition.
         """
         logger.info("Identify and decorate transcript: raw transcript is: '%s'", transcript)
+        cached = self._cached_identity(in_followup)
+        if cached is not None:
+            name, display = cached
+            if name != UNKNOWN_LABEL:
+                return f"Speaker - {display}: {transcript}", name, display
+            # A cached unknown returns the plain transcript: the decorated
+            # "unknown speaker" message exists to hand the enrolment UI the WAV
+            # path of THIS utterance, and a cache hit produced no new one.
+            return transcript, UNKNOWN_LABEL, None
         if self._speaker is None:
             logger.info(
                 "Skip speaker ID: recognizer not initialized "
@@ -351,12 +415,14 @@ class SpeakerDecorator:
                 "Speaker ID: %s (confidence=%.2f, audio=%s)",
                 name, confidence, audio_path or "-",
             )
+            self._remember_identity(name, display)
             return f"Speaker - {display}: {transcript}", name, display
 
         logger.info(
             "Speaker ID: unknown (best=%.2f, audio=%s, hash=%s)",
             confidence, audio_path or "-", vp_hash or "-",
         )
+        self._remember_identity(UNKNOWN_LABEL, None)
         return self._format_unknown_speaker_message(
             transcript, audio_path, duration_s, vp_hash,
         ), UNKNOWN_USER_LABEL, None
