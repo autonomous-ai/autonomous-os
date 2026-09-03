@@ -98,3 +98,11 @@ func rebrandToOpenCode(text string) string {
 func (opencodeAdapter) personaPaths(opts Options) []string {
 	return openclawLayoutPersonaPaths(opts.OpenCodeWorkspace)
 }
+
+// userProfilePath implements runtimeAdapter — USER.md at the workspace root.
+func (opencodeAdapter) userProfilePath(opts Options) string {
+	if opts.OpenCodeWorkspace == "" {
+		return ""
+	}
+	return filepath.Join(opts.OpenCodeWorkspace, "USER.md")
+}

@@ -116,3 +116,12 @@ func (hermesAdapter) personaPaths(opts Options) []string {
 		filepath.Join(root, "memories"),
 	}
 }
+
+// userProfilePath implements runtimeAdapter. Hermes has no workspace subdir —
+// the profile lives under memories/, alongside MEMORY.md.
+func (hermesAdapter) userProfilePath(opts Options) string {
+	if opts.HermesRoot == "" {
+		return ""
+	}
+	return filepath.Join(opts.HermesRoot, "memories", "USER.md")
+}

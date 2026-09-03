@@ -498,6 +498,9 @@ là no-op idempotent.
 - [ ] `personaPaths(opts)` trên persona adapter liệt kê **file** persona của
       runtime này + thư mục `memory/` — không bao giờ workspace/home root — để
       factory reset dọn profile ở *mọi* cây thư mục, không chỉ cây active (§7).
+- [ ] `userProfilePath(opts)` trỏ đúng `USER.md` thật của runtime (Hermes để ở
+      `memories/`) để reconcile theo enrollment lúc khởi động có thể retire
+      profile của người không còn enrollment khuôn mặt/giọng nói (§7).
 - [ ] Gate capability qua `skills.Supported` / `SupportedHooks`.
 - [ ] **Kênh (§9):** `SupportedChannels()` khai báo capability thật;
       `AddChannel`/`RefreshChannelConfig` trả `domain.ErrChannelNotSupported` cho

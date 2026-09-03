@@ -55,4 +55,3 @@ func (s *Server) voicePreview(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, serializers.ResponseSuccess(true))
 }
-

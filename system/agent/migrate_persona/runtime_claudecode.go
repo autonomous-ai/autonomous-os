@@ -92,3 +92,11 @@ func rebrandToClaudeCode(text string) string {
 func (claudecodeAdapter) personaPaths(opts Options) []string {
 	return openclawLayoutPersonaPaths(opts.ClaudecodeWorkspace)
 }
+
+// userProfilePath implements runtimeAdapter — USER.md at the workspace root.
+func (claudecodeAdapter) userProfilePath(opts Options) string {
+	if opts.ClaudecodeWorkspace == "" {
+		return ""
+	}
+	return filepath.Join(opts.ClaudecodeWorkspace, "USER.md")
+}

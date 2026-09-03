@@ -94,3 +94,11 @@ func rebrandToCodex(text string) string {
 func (codexAdapter) personaPaths(opts Options) []string {
 	return openclawLayoutPersonaPaths(opts.CodexWorkspace)
 }
+
+// userProfilePath implements runtimeAdapter — USER.md at the workspace root.
+func (codexAdapter) userProfilePath(opts Options) string {
+	if opts.CodexWorkspace == "" {
+		return ""
+	}
+	return filepath.Join(opts.CodexWorkspace, "USER.md")
+}

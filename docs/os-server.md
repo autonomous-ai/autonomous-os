@@ -760,3 +760,27 @@ Keyword matching is whole-phrase with ASCII word boundaries — "unmute speaker"
 Chitchat is **off while the realtime voice agent is enabled** — the model receives every voice turn before os-server does and answers social talk itself, in character. Leaving both on meant a canned reply in a different voice barging in on the turns the model happened to stay silent for. Command rules above stay on either way; they genuinely beat a model round-trip. The gate follows `realtime.enabled` live, so toggling it in Settings needs no restart.
 
 No match → forward to OpenClaw.
+
+### USER.md enrollment reconcile
+
+On startup (after persona migration) os-server retires people from **every**
+runtime's `USER.md` once their face/voice enrollment is gone.
+
+`USER.md` is a bootstrap file — injected into the agent's system prompt on every
+turn — but nothing on the device ever wrote it: the agent records what it learns
+in `KNOWLEDGE.md` and `memory/*.md`, neither of which OpenClaw loads. The file
+that is always read was the one never written, so a device that changed hands
+kept greeting its previous owner by name (lamp-ac82, 2026-09-03).
+
+- **The rule:** a name is stale only when `usercanon.Resolve` maps it to no
+  directory under `/root/local/users/`. **Absence is never the trigger** — a
+  person away for a day or a year keeps their enrollment, and therefore their
+  profile. Only `/face/remove`, `/speaker/remove` or a factory reset removes one.
+- **Writes only on change.** `USER.md` sits in the ~28k-token cached prompt
+  prefix, so an unconditional rewrite would cost a prompt-cache miss on the next
+  turn of every boot. The normal pass reads and writes nothing.
+- **Observe-only by default.** `user_profile_reconcile` in `config.json` gates
+  writes; unset/false logs what it *would* retire and changes nothing.
+- Writes are atomic (temp + rename) because the gateway is live during the pass.
+- An empty enrollment store (fresh device) is a no-op; an unreadable one is an
+  error that changes nothing, rather than a guess.

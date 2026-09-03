@@ -50,6 +50,7 @@ type runtimeAdapter interface {
 	read(opts Options) (*PersonaBundle, error)
 	write(b *baseMigrator, bundle *PersonaBundle, opts Options) error
 	personaPaths(opts Options) []string
+	userProfilePath(opts Options) string
 }
 
 // adapters is the registry. To make a new runtime migratable, implement

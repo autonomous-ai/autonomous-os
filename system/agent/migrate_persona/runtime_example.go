@@ -108,3 +108,37 @@ var reOtherBrand = regexp.MustCompile(`(?i)\b(OpenClaw|Hermes)\b`)
 func rebrandToExample(text string) string {
 	return reOtherBrand.ReplaceAllStringFunc(text, casePreserving("Example"))
 }
+
+// personaPaths implements runtimeAdapter: every file/dir holding this runtime's
+// persona + long-term memory. Factory reset wipes these across ALL runtimes, not
+// just the active one — persona files are copies, so a stale profile left in an
+// inactive tree migrates back on the next switch.
+//
+// List FILES plus the memory/ dir. NEVER the workspace or home root: those also
+// hold skills/, configs/ and (for a home-rooted runtime) the installation
+// itself. Returning nil compiles and silently leaks the profile through a reset.
+func (exampleAdapter) personaPaths(opts Options) []string {
+	root := opts.ExampleRoot
+	if root == "" {
+		return nil
+	}
+	return []string{
+		filepath.Join(root, "SOUL.md"),
+		filepath.Join(root, "IDENTITY.md"),
+		filepath.Join(root, "MEMORY.md"),
+		filepath.Join(root, "USER.md"),
+		filepath.Join(root, "KNOWLEDGE.md"),
+		filepath.Join(root, "memory"),
+	}
+}
+
+// userProfilePath implements runtimeAdapter: where THIS runtime keeps USER.md.
+// The scheduled reconcile uses it to retire a profile whose person no longer has
+// a face/voice enrollment, so it must point at the real file (Hermes, for one,
+// keeps it under memories/).
+func (exampleAdapter) userProfilePath(opts Options) string {
+	if opts.ExampleRoot == "" {
+		return ""
+	}
+	return filepath.Join(opts.ExampleRoot, "USER.md")
+}

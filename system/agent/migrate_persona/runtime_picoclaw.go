@@ -127,3 +127,11 @@ func (picoclawAdapter) personaPaths(opts Options) []string {
 		filepath.Join(ws, "memory"),
 	}
 }
+
+// userProfilePath implements runtimeAdapter — USER.md at the workspace root.
+func (picoclawAdapter) userProfilePath(opts Options) string {
+	if opts.PicoclawWorkspace == "" {
+		return ""
+	}
+	return filepath.Join(opts.PicoclawWorkspace, "USER.md")
+}

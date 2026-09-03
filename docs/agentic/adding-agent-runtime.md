@@ -511,6 +511,9 @@ re-syncs `.env` before the gateway starts, so the re-apply is an idempotent no-o
 - [ ] `personaPaths(opts)` on the persona adapter lists this runtime's persona
       **files** + `memory/` dir — never the workspace/home root — so a factory
       reset clears the profile in *every* tree, not just the active one (§7).
+- [ ] `userProfilePath(opts)` points at this runtime's real `USER.md` (Hermes
+      keeps it under `memories/`) so the startup enrollment reconcile can retire
+      a profile whose person no longer has a face/voice enrollment (§7).
 - [ ] Capability gating via `skills.Supported` / `SupportedHooks`.
 - [ ] **Channels (§9):** `SupportedChannels()` declares real capability;
       `AddChannel`/`RefreshChannelConfig` return `domain.ErrChannelNotSupported`

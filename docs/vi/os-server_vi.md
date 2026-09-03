@@ -743,3 +743,27 @@ Keyword match theo nguyên cụm với word boundary ASCII — "unmute speaker" 
 Chitchat **tắt khi realtime voice agent đang bật** — model nhận mọi lượt voice trước os-server và tự trả lời phần xã giao, đúng nhân cách của nó. Bật cả hai nghĩa là một câu canned với giọng khác chen ngang đúng những lượt model tình cờ im. Các rule lệnh phía trên vẫn chạy trong mọi trường hợp vì chúng thật sự nhanh hơn một vòng model. Cổng này bám theo `realtime.enabled` ngay lúc chạy, đổi trong Settings không cần restart.
 
 Không match → forward OpenClaw.
+
+### Reconcile USER.md theo enrollment
+
+Lúc khởi động (sau persona migration) os-server retire người dùng khỏi `USER.md`
+của **mọi** runtime một khi enrollment khuôn mặt/giọng nói của họ không còn.
+
+`USER.md` là bootstrap file — được nhét vào system prompt của agent mỗi lượt —
+nhưng chưa từng có thứ gì trên thiết bị ghi vào nó: agent ghi thứ nó học được vào
+`KNOWLEDGE.md` và `memory/*.md`, mà OpenClaw không load file nào trong hai file
+đó. File luôn được đọc lại là file không bao giờ được ghi, nên một thiết bị đã đổi
+chủ vẫn gọi tên chủ cũ (lamp-ac82, 2026-09-03).
+
+- **Quy tắc:** một cái tên chỉ cũ khi `usercanon.Resolve` ánh xạ nó tới thư mục
+  không tồn tại trong `/root/local/users/`. **Vắng mặt không bao giờ là điều kiện
+  kích hoạt** — người vắng một ngày hay một năm vẫn giữ enrollment, nên vẫn giữ
+  profile. Chỉ `/face/remove`, `/speaker/remove` hoặc factory reset mới xoá.
+- **Chỉ ghi khi có thay đổi.** `USER.md` nằm trong prefix prompt được cache
+  (~28k token), nên ghi vô điều kiện sẽ tốn một lần miss cache ở lượt kế tiếp của
+  mỗi lần boot. Lượt chạy bình thường đọc xong và không ghi gì.
+- **Mặc định chỉ quan sát.** `user_profile_reconcile` trong `config.json` mở khoá
+  việc ghi; không đặt/false thì chỉ log thứ nó *định* retire và không đổi gì.
+- Ghi theo kiểu atomic (temp + rename) vì gateway đang chạy trong lúc pass chạy.
+- Enrollment store rỗng (máy mới) là no-op; store không đọc được là lỗi và không
+  đổi gì, thay vì đoán.
