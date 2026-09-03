@@ -59,16 +59,8 @@ type Config struct {
 	CodexHome   string        // CODEX_HOME
 	SessionFile string        // CODEX_SESSION_FILE
 	AttachDir   string        // CODEX_ATTACH_DIR
-	TurnTimeout time.Duration // CODEX_TURN_TIMEOUT_S — absolute ceiling
-	// TurnIdleTimeout kills a turn that has produced NO output for this long
-	// (CODEX_TURN_IDLE_TIMEOUT_S). This — not the absolute ceiling — is the
-	// real guard: total duration cannot tell a wedged turn from a slow one,
-	// silence can. A wedged turn is silent (measured on lamp-0c89 2026-09-03:
-	// the session file did not grow for 70 s while two TLS sockets sat open
-	// with empty queues), while a genuinely long turn keeps emitting
-	// item.started / item.completed for every tool call it makes.
-	TurnIdleTimeout time.Duration
-	Home            string // HOME asserted into the subprocess env
+	TurnTimeout time.Duration // CODEX_TURN_TIMEOUT_S
+	Home        string        // HOME asserted into the subprocess env
 }
 
 func envOr(key, def string) string {
@@ -79,32 +71,23 @@ func envOr(key, def string) string {
 }
 
 func configFromEnv() Config {
-	// Absolute ceiling — a last resort only. The idle guard below is what
-	// actually distinguishes a wedged turn from a slow one, so this is set
-	// above any real task rather than tuned to one (a build-me-a-scene prompt
-	// answered over Telegram/OpenClaw ran 35 minutes to completion).
-	timeout := 60 * time.Minute
-	if f, err := strconv.ParseFloat(envOr("CODEX_TURN_TIMEOUT_S", "3600"), 64); err == nil && f > 0 {
+	timeout := 600 * time.Second
+	if f, err := strconv.ParseFloat(envOr("CODEX_TURN_TIMEOUT_S", "600"), 64); err == nil && f > 0 {
 		timeout = time.Duration(f * float64(time.Second))
-	}
-	idle := 5 * time.Minute
-	if f, err := strconv.ParseFloat(envOr("CODEX_TURN_IDLE_TIMEOUT_S", "300"), 64); err == nil && f > 0 {
-		idle = time.Duration(f * float64(time.Second))
 	}
 	// CODEX_HOME anchors the per-file defaults, so setting it alone relocates
 	// the whole state dir (the client side resolves the same var via syspath).
 	home := envOr("CODEX_HOME", "/root/.codex")
 	return Config{
-		Token:           envOr("CODEX_WS_TOKEN", "autonomous_codex_token"),
-		Port:            envOr("CODEX_PORT", "18792"),
-		Workspace:       envOr("CODEX_WORKSPACE", home+"/workspace"),
-		CodexBin:        envOr("CODEX_BIN", "codex"),
-		CodexHome:       home,
-		SessionFile:     envOr("CODEX_SESSION_FILE", home+"/session.json"),
-		AttachDir:       envOr("CODEX_ATTACH_DIR", home+"/attachments"),
-		TurnTimeout:     timeout,
-		TurnIdleTimeout: idle,
-		Home:            envOr("OS_AGENT_HOME", "/root"),
+		Token:       envOr("CODEX_WS_TOKEN", "autonomous_codex_token"),
+		Port:        envOr("CODEX_PORT", "18792"),
+		Workspace:   envOr("CODEX_WORKSPACE", home+"/workspace"),
+		CodexBin:    envOr("CODEX_BIN", "codex"),
+		CodexHome:   home,
+		SessionFile: envOr("CODEX_SESSION_FILE", home+"/session.json"),
+		AttachDir:   envOr("CODEX_ATTACH_DIR", home+"/attachments"),
+		TurnTimeout: timeout,
+		Home:        envOr("OS_AGENT_HOME", "/root"),
 	}
 }
 

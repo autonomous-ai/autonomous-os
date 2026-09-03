@@ -243,13 +243,8 @@ hai con số chặn nó, và thứ tự giữa chúng là bắt buộc:
 
 | Knob | Ở đâu | Mặc định | Nghĩa |
 |---|---|---|---|
-| `CODEX_TURN_IDLE_TIMEOUT_S` | `gatewayd/turn.go` | `300` (5 phút) | **Cái chặn thật sự.** Giết `codex exec` sau ngần này thời gian KHÔNG có output nào trên stdout/stderr. Tổng thời gian không phân biệt được turn treo với turn chậm — cả hai đều lâu — nhưng im lặng thì phân biệt được: turn treo không ra gì cả (đo được: file session đứng yên 70 giây trong khi hai socket TLS mở, hàng đợi rỗng), còn turn đang làm việc thì bắn `item.started` / `item.completed` cho mỗi lần gọi tool. `0` = tắt. |
-| `CODEX_TURN_TIMEOUT_S` | `gatewayd/gatewayd.go` | `3600` (60 phút) | Trần tuyệt đối, chỉ là lưới cuối — đặt cao hơn mọi task thật chứ không tinh chỉnh theo một task nào (prompt dựng cảnh 3D chạy qua Telegram/OpenClaw mất 35 phút mới xong). Cả hai cửa đều kết thúc turn bằng `bridge.error: timeout`; gatewayd LUÔN kết thúc turn. |
+| `CODEX_TURN_TIMEOUT_S` | `gatewayd/gatewayd.go` | `600` (10 phút) | Giết `codex exec` rồi gửi `bridge.error: timeout`. Gatewayd LUÔN kết thúc turn — xong, lỗi, hoặc timeout này. |
 | `busyTTL()` | `events.go` | timeout đó **+ 5 phút** | Gỡ kẹt pipeline sensing khi frame cuối của turn bị RỚT. Suy ra từ chính env var trên nên nâng timeout không bỏ sót nó. |
-
-Nên một prompt dài không bị chặn bởi việc nó chạy bao lâu, chỉ bị chặn khi nó im
-bao lâu. Đây là điều mà con số cố định trước đây không làm được: nâng lên thì turn
-treo giam máy hết trần, hạ xuống thì giết oan việc thật.
 
 **TTL phải dài hơn timeout.** Trước đây TTL cố định 5 phút trong khi timeout là 10
 phút, nên mọi turn chậm quá 5 phút đều rơi vào nhánh "frame bị rớt" — mà nhánh đó

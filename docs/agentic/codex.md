@@ -248,13 +248,8 @@ minutes to completion. Two numbers bound it, and they must stay ordered:
 
 | Knob | Where | Default | Meaning |
 |---|---|---|---|
-| `CODEX_TURN_IDLE_TIMEOUT_S` | `gatewayd/turn.go` | `300` (5 min) | **The real guard.** Kills `codex exec` after this long with NO output on stdout/stderr. Total duration cannot tell a wedged turn from a slow one — both take long — but silence can: a wedged turn produces nothing at all (measured: the session file did not grow for 70 s while two TLS sockets sat open with empty queues), while a working one narrates `item.started` / `item.completed` for every tool call. `0` disables. |
-| `CODEX_TURN_TIMEOUT_S` | `gatewayd/gatewayd.go` | `3600` (60 min) | Absolute ceiling, a last resort only — set above any real task rather than tuned to one (a build-me-a-scene prompt answered over Telegram/OpenClaw ran 35 minutes to completion). Either guard ends the turn with `bridge.error: timeout`; the gatewayd ALWAYS ends a turn. |
+| `CODEX_TURN_TIMEOUT_S` | `gatewayd/gatewayd.go` | `600` (10 min) | Kills `codex exec` and sends `bridge.error: timeout`. The gatewayd ALWAYS ends a turn — completed, failed, or this timeout. |
 | `busyTTL()` | `events.go` | that timeout **+ 5 min** | Unwedges the sensing pipeline when a turn's terminal frame was DROPPED. Derived from the same env var so raising the timeout cannot leave it behind. |
-
-A long prompt is therefore not capped by how long it takes, only by how long it
-goes quiet. That is the distinction the earlier fixed cap could not make: raising
-it let a wedge hold the device for the whole ceiling, lowering it killed real work.
 
 **The TTL must outlast the timeout.** It was a fixed 5 minutes against a 10-minute
 timeout, so every turn slower than 5 minutes tripped the "frame was dropped" path

@@ -57,13 +57,8 @@ type Config struct {
 	Bin         string        // OPENCODE_BIN
 	SessionFile string        // OPENCODE_SESSION_FILE
 	AttachDir   string        // OPENCODE_ATTACH_DIR
-	TurnTimeout time.Duration // OPENCODE_TURN_TIMEOUT_S — absolute ceiling
-	// TurnIdleTimeout kills a turn that has produced NO output for this long
-	// (OPENCODE_TURN_IDLE_TIMEOUT_S). Total duration cannot tell a wedged turn
-	// from a slow one; silence can. See the codex gatewayd for the measurement
-	// this came from.
-	TurnIdleTimeout time.Duration
-	Home            string // HOME asserted into the subprocess env
+	TurnTimeout time.Duration // OPENCODE_TURN_TIMEOUT_S
+	Home        string        // HOME asserted into the subprocess env
 }
 
 func envOr(key, def string) string {
@@ -74,25 +69,19 @@ func envOr(key, def string) string {
 }
 
 func configFromEnv() Config {
-	// Absolute ceiling only — the idle guard above is the real distinction.
-	timeout := 60 * time.Minute
-	if f, err := strconv.ParseFloat(envOr("OPENCODE_TURN_TIMEOUT_S", "3600"), 64); err == nil && f > 0 {
+	timeout := 600 * time.Second
+	if f, err := strconv.ParseFloat(envOr("OPENCODE_TURN_TIMEOUT_S", "600"), 64); err == nil && f > 0 {
 		timeout = time.Duration(f * float64(time.Second))
 	}
-	idle := 5 * time.Minute
-	if f, err := strconv.ParseFloat(envOr("OPENCODE_TURN_IDLE_TIMEOUT_S", "300"), 64); err == nil && f > 0 {
-		idle = time.Duration(f * float64(time.Second))
-	}
 	return Config{
-		Token:           envOr("OPENCODE_WS_TOKEN", "autonomous_opencode_token"),
-		Port:            envOr("OPENCODE_PORT", "18793"),
-		Workspace:       envOr("OPENCODE_WORKSPACE", "/root/.opencode/workspace"),
-		Bin:             envOr("OPENCODE_BIN", "opencode"),
-		SessionFile:     envOr("OPENCODE_SESSION_FILE", "/root/.opencode/session.json"),
-		AttachDir:       envOr("OPENCODE_ATTACH_DIR", "/root/.opencode/attachments"),
-		TurnTimeout:     timeout,
-		TurnIdleTimeout: idle,
-		Home:            "/root",
+		Token:       envOr("OPENCODE_WS_TOKEN", "autonomous_opencode_token"),
+		Port:        envOr("OPENCODE_PORT", "18793"),
+		Workspace:   envOr("OPENCODE_WORKSPACE", "/root/.opencode/workspace"),
+		Bin:         envOr("OPENCODE_BIN", "opencode"),
+		SessionFile: envOr("OPENCODE_SESSION_FILE", "/root/.opencode/session.json"),
+		AttachDir:   envOr("OPENCODE_ATTACH_DIR", "/root/.opencode/attachments"),
+		TurnTimeout: timeout,
+		Home:        "/root",
 	}
 }
 

@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -191,42 +190,6 @@ func (s *Server) execTurn(ctx context.Context, prompt string, images []string, r
 	tctx, cancel := context.WithTimeout(ctx, s.cfg.TurnTimeout)
 	defer cancel()
 
-	// Idle guard: every line codex writes stamps lastOutput, and a turn that
-	// stops writing for TurnIdleTimeout is killed. Total duration cannot tell a
-	// wedged turn from a slow one — both take long — but silence can: a wedged
-	// turn produces nothing at all, while a working one narrates every tool
-	// call. Without this the choice was between killing real work early and
-	// letting a wedge hold the device for the whole ceiling.
-	var lastOutput atomic.Int64
-	lastOutput.Store(time.Now().UnixNano())
-	idleFired := make(chan struct{})
-	idleDone := make(chan struct{})
-	defer close(idleDone)
-	if s.cfg.TurnIdleTimeout > 0 {
-		go func() {
-			tick := time.NewTicker(s.cfg.TurnIdleTimeout / 4)
-			defer tick.Stop()
-			for {
-				select {
-				case <-idleDone:
-					return
-				case <-tctx.Done():
-					return
-				case <-tick.C:
-					since := time.Since(time.Unix(0, lastOutput.Load()))
-					if since < s.cfg.TurnIdleTimeout {
-						continue
-					}
-					log.Printf("%s no output for %s — killing the turn (idle guard)",
-						logPrefix, since.Round(time.Second))
-					close(idleFired)
-					cancel()
-					return
-				}
-			}
-		}()
-	}
-
 	cmd := exec.CommandContext(tctx, argv[0], argv[1:]...)
 	cmd.Dir = s.cfg.Workspace
 	cmd.Env = s.turnEnv()
@@ -263,23 +226,14 @@ func (s *Server) execTurn(ctx context.Context, prompt string, images []string, r
 
 	var wg sync.WaitGroup
 	wg.Add(2)
-	go func() { defer wg.Done(); s.pumpStdout(stdout, &res, resumeID != "", &lastOutput) }()
-	go func() { defer wg.Done(); pumpStderr(stderr, &res, &lastOutput) }()
+	go func() { defer wg.Done(); s.pumpStdout(stdout, &res, resumeID != "") }()
+	go func() { defer wg.Done(); pumpStderr(stderr, &res) }()
 	wg.Wait()
 	err = cmd.Wait()
 
 	res.rc = cmd.ProcessState.ExitCode()
 	if err != nil && res.rc == 0 {
 		res.rc = -1 // killed / wait error without a real exit code
-	}
-	select {
-	case <-idleFired:
-		// Same terminal handling as the absolute ceiling: the caller drops the
-		// resumed thread and reports the failure to the client.
-		res.timedOut = true
-		log.Printf("%s turn killed by the idle guard (no output for %s)",
-			logPrefix, s.cfg.TurnIdleTimeout)
-	default:
 	}
 	if tctx.Err() == context.DeadlineExceeded {
 		log.Printf("%s turn timed out after %s — killed process group",
@@ -298,11 +252,10 @@ func (s *Server) execTurn(ctx context.Context, prompt string, images []string, r
 // instead of forwarded: the caller drops them when it retries fresh, or
 // forwards them when the resumed attempt is terminal. thread.started/item.*
 // frames still flow normally.
-func (s *Server) pumpStdout(r io.Reader, res *turnResult, holdFailures bool, lastOutput *atomic.Int64) {
+func (s *Server) pumpStdout(r io.Reader, res *turnResult, holdFailures bool) {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, scanBufSize), streamLimit)
 	for scanner.Scan() {
-		lastOutput.Store(time.Now().UnixNano())
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
 			continue
@@ -345,11 +298,10 @@ func (s *Server) pumpStdout(r io.Reader, res *turnResult, holdFailures bool, las
 }
 
 // pumpStderr logs stderr lines and keeps a bounded tail for diagnostics.
-func pumpStderr(r io.Reader, res *turnResult, lastOutput *atomic.Int64) {
+func pumpStderr(r io.Reader, res *turnResult) {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, scanBufSize), streamLimit)
 	for scanner.Scan() {
-		lastOutput.Store(time.Now().UnixNano())
 		line := strings.TrimRight(scanner.Text(), " \t\r")
 		log.Printf("%s codex: %s", logPrefix, line)
 		res.stderrTail = tail(res.stderrTail+line+"\n", stderrTailMax)
