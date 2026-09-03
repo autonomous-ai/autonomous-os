@@ -69,6 +69,12 @@ func (s *OpenCodeService) IsBusy() bool {
 			slog.Warn("busy flag expired — auto-clearing (final frame likely missed)",
 				"component", "opencode", "stuck_for_s", int(time.Since(time.UnixMilli(since)).Seconds()))
 			s.activeTurn.Store(false)
+			// Drop the dead run id: ensureTurnStarted returns early while it is
+			// set, so leaving it would attribute the NEXT turn's frames to the
+			// expired run. The codex runtime additionally tells the waiting
+			// client why (failStuckTurn); mirror that here when this backend is
+			// next exercised on a device.
+			s.clearTurn()
 			go s.drainPendingEvents()
 			return s.HasFreshPendingChatSend()
 		}

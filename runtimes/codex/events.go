@@ -1,6 +1,7 @@
 package codex
 
 import (
+	"encoding/json"
 	"log/slog"
 	"os"
 	"sort"
@@ -69,12 +70,48 @@ func (s *CodexService) IsBusy() bool {
 			slog.Warn("busy flag expired — auto-clearing (final frame likely missed)",
 				"component", "codex", "stuck_for_s", int(time.Since(time.UnixMilli(since)).Seconds()))
 			s.activeTurn.Store(false)
+			s.failStuckTurn()
 			go s.drainPendingEvents()
 			return s.HasFreshPendingChatSend()
 		}
 		return true
 	}
 	return s.HasFreshPendingChatSend()
+}
+
+// failStuckTurn ends the in-flight turn when the busy TTL decides its terminal
+// frame is never coming: it drops the run id AND tells the waiting client why.
+//
+// Doing only one of the two is a bug either way. Leaving the id set orphans the
+// NEXT turn — ensureTurnStarted returns early on a non-empty currentRunID, so
+// the new turn's frames are attributed to the dead run and the new chat hangs.
+// Clearing it silently leaves the browser on a pending bubble until its own
+// deadline, which is exactly the "no response" this whole path exists to
+// prevent. Ids are cleared BEFORE the dispatch, matching handleError: the
+// consumer clears busy on lifecycle.error and drains the queue synchronously.
+func (s *CodexService) failStuckTurn() {
+	runID := s.getCurrentRunID()
+	if runID == "" {
+		return // nothing in flight — the TTL fired on a stale busy flag alone
+	}
+	slog.Warn("ending the in-flight turn — busy TTL expired with no terminal frame",
+		"component", "codex", "runID", runID)
+	s.clearTurn()
+	dispatch, _ := s.wsDispatch.Load().(dispatchFn)
+	if dispatch == nil {
+		return // socket already gone; the reconnect path owns the cleanup
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"runId":      runID,
+		"sessionKey": s.GetSessionKey(),
+		"stream":     "lifecycle",
+		"data": map[string]any{
+			"phase":   "error",
+			"error":   "agent stopped responding (no terminal frame)",
+			"endedAt": nowUnixMs(),
+		},
+	})
+	dispatch(domain.WSEvent{Type: "evt", Event: "agent", Payload: payload})
 }
 
 // SetBusy flips active state. Drains pending events on idle.
