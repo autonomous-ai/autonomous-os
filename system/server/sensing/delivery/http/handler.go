@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -25,6 +26,7 @@ import (
 	"go.autonomous.ai/os/system/lib/flow"
 	"go.autonomous.ai/os/system/lib/hal"
 	"go.autonomous.ai/os/system/lib/i18n"
+	"go.autonomous.ai/os/system/lib/safego"
 	"go.autonomous.ai/os/system/lib/sensingmsg"
 	"go.autonomous.ai/os/system/lib/speakergate"
 	"go.autonomous.ai/os/system/lib/syspath"
@@ -407,21 +409,48 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 		// produce. Numbered when there is more than one so the agent can tell
 		// the user which photo it is talking about. A failure is per-image: the
 		// ones that did describe still reach the model.
-		descs := make([]string, 0, len(req.Images))
-		var derr error
+		//
+		// CONCURRENT, not sequential: this runs inside the HTTP handler, so the
+		// caller's POST does not return until every describe finishes. A single
+		// describe measured 8-38 s, so two photos in series left the web chat
+		// with a silent composer for ~53 s (lamp-0c89, 2026-09-03) — long enough
+		// that reloading the page is the natural move, which cancels the request
+		// and loses the turn. Fanning out makes the wait the SLOWEST image
+		// instead of their sum. Results are written by index so the numbering
+		// still matches the order the user attached them in.
+		results := make([]string, len(req.Images))
+		errs := make([]error, len(req.Images))
+		var wg sync.WaitGroup
 		for i, img := range req.Images {
 			if img == "" {
 				continue
 			}
-			desc, e := vision.DescribeWithRetry(h.config, img, req.Message)
-			if e != nil {
-				derr = e
-				continue
+			wg.Add(1)
+			// safego, not a bare goroutine: a panic inside describe (a malformed
+			// response body has done it) must not take the whole os-server down
+			// on a user-attached photo. wg.Done runs via the wrapper's defer.
+			safego.Go("sensing-describe", func() {
+				defer wg.Done()
+				d, e := vision.DescribeWithRetry(h.config, img, req.Message)
+				if e != nil {
+					errs[i] = e
+					return
+				}
+				if len(req.Images) > 1 {
+					d = fmt.Sprintf("(image %d of %d) %s", i+1, len(req.Images), d)
+				}
+				results[i] = d
+			})
+		}
+		wg.Wait()
+		descs := make([]string, 0, len(results))
+		var derr error
+		for i, d := range results {
+			if d != "" {
+				descs = append(descs, d)
+			} else if errs[i] != nil {
+				derr = errs[i]
 			}
-			if len(req.Images) > 1 {
-				desc = fmt.Sprintf("(image %d of %d) %s", i+1, len(req.Images), desc)
-			}
-			descs = append(descs, desc)
 		}
 		desc := strings.Join(descs, "\n")
 		// Only a describe that produced NOTHING is treated as a failure: a
