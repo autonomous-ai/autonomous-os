@@ -317,6 +317,20 @@ EMOTION_SNAPSHOT_DIR = os.environ.get(
     os.path.join(tempfile.gettempdir(), "hal-emotion-snapshots"),
 )
 EMOTION_SNAPSHOT_MAX_COUNT = int(os.environ.get("HAL_EMOTION_SNAPSHOT_MAX_COUNT", "100"))
+# Per-trigger debug capture for face emotion: every recognizer trigger writes
+# its own timestamped folder (input crop + clean frame + annotated frame +
+# result.json) under EMOTION_LOG_DIR, named "<time>_<Emotion>_<conf>" (or
+# "<time>_FAIL-<reason>"), so a misclassification is spottable from the
+# directory listing alone. Debug aid — off-device analysis, not a runtime input.
+EMOTION_DEBUG_LOG_ENABLED = (
+    os.environ.get("HAL_EMOTION_DEBUG_LOG_ENABLED", "true").lower() == "true"
+)
+EMOTION_LOG_DIR = os.environ.get(
+    "HAL_EMOTION_LOG_DIR",
+    "/opt/hal/drivers/sensing/perceptions/processors/emotion-logs",
+)
+# Cap on retained trigger folders (oldest pruned first); 0 = unbounded.
+EMOTION_LOG_MAX_TRIGGERS = int(os.environ.get("HAL_EMOTION_LOG_MAX_TRIGGERS", "500"))
 
 # --- Sensing: Fire hazard detection (object detection via perception-service) ---
 FIRE_HAZARD_ENABLED = os.environ.get("HAL_FIRE_HAZARD_ENABLED", "true").lower() == "true"

@@ -2,6 +2,7 @@ import base64
 import json
 import logging
 import os
+import shutil
 import threading
 import time
 from collections import Counter
@@ -65,6 +66,185 @@ EMOTION_BUCKETS = {
     "Contempt": "negative",
 }
 
+# Per-trigger debug capture. Every emotion-recognizer trigger writes its own
+# timestamped folder (input crop + annotated frame + result.json) under
+# config.EMOTION_LOG_DIR, so misclassifications can be eyeballed against ground
+# truth. Knobs live in hal/config.py with the rest of the HAL environment:
+# HAL_EMOTION_DEBUG_LOG_ENABLED / HAL_EMOTION_LOG_DIR / HAL_EMOTION_LOG_MAX_TRIGGERS.
+
+
+class EmotionDebugLogger:
+    """Persists every emotion-recognizer trigger to its OWN timestamped folder
+    under ``config.EMOTION_LOG_DIR``, so each prediction can be eyeballed against what
+    the person was actually feeling.
+
+    The folder name encodes the verdict up front so a wrong label is obvious
+    from the directory listing alone:
+
+      - prediction: ``<timestamp>_<Emotion>_<confidence>`` — e.g.
+        ``20260713-090001-123456_Sad_0.42``
+      - failure:    ``<timestamp>_FAIL-<reason>`` — e.g.
+        ``20260713-090002-004521_FAIL-no-detection``
+
+    Each folder contains:
+
+      - ``input.jpg``     the exact face crop sent to the model (the input)
+      - ``frame.jpg``     the clean, unannotated original frame (predictions only)
+      - ``annotated.jpg`` full frame with bbox + label drawn (predictions only)
+      - ``result.json``   label, confidence, threshold, bbox coords, context, reason
+
+    ``result.json`` records both the raw ``bbox`` and the clamped ``crop_box``
+    actually used, so the crop can be reproduced from ``frame.jpg`` (or re-cropped
+    with different padding) offline.
+
+    All writes are best-effort and lock-guarded — a logging failure never
+    breaks detection. When ``max_triggers > 0`` the oldest folders are pruned
+    so the log directory stays bounded.
+    """
+
+    def __init__(self, root_dir: str, enabled: bool = True, max_triggers: int = 0):
+        self._root: str = root_dir
+        self._enabled: bool = enabled
+        self._max_triggers: int = max_triggers
+        self._lock: threading.Lock = threading.Lock()
+
+    @staticmethod
+    def _slug(text: Any) -> str:
+        """Filesystem-safe token for a folder name."""
+        s = "".join(c if c.isalnum() else "-" for c in str(text)).strip("-")
+        return s or "unknown"
+
+    @staticmethod
+    def _json_default(o: Any) -> Any:
+        """Coerce non-JSON types (numpy scalars/arrays) to native values so
+        confidences serialize as numbers, not stringified reprs."""
+        if hasattr(o, "item"):  # numpy scalar → python int/float
+            return o.item()
+        if hasattr(o, "tolist"):  # numpy array → list
+            return o.tolist()
+        return str(o)
+
+    def _annotate(
+        self,
+        frame: cv2.typing.MatLike,
+        bbox: list[int],
+        emotion: str,
+        confidence: float,
+    ) -> cv2.typing.MatLike | None:
+        try:
+            vis = frame.copy()
+            x1, y1, x2, y2 = bbox
+            _ = cv2.rectangle(vis, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            _ = cv2.putText(
+                vis,
+                f"{emotion} {confidence:.2f}",
+                (x1, max(0, y1 - 10)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (0, 255, 0),
+                2,
+            )
+            return vis
+        except Exception:
+            return None
+
+    def _write_folder(
+        self,
+        name: str,
+        record: dict[str, Any],
+        images: dict[str, cv2.typing.MatLike | None],
+    ) -> str | None:
+        if not self._enabled:
+            return None
+        try:
+            with self._lock:
+                now = time.time()
+                stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(now)) + (
+                    "-%06d" % int((now % 1) * 1_000_000)
+                )
+                folder = os.path.join(self._root, f"{stamp}_{name}")
+                os.makedirs(folder, exist_ok=True)
+                for filename, image in images.items():
+                    if image is not None:
+                        _ = cv2.imwrite(os.path.join(folder, filename), image)
+                full: dict[str, Any] = {"timestamp": stamp, "ts": now}
+                full.update(record)
+                # Serialize FIRST — a serialization error (e.g. a circular ref)
+                # then raises before the file is opened, so result.json is never
+                # left half-written/truncated.
+                text = json.dumps(full, indent=2, default=self._json_default)
+                with open(
+                    os.path.join(folder, "result.json"), "w", encoding="utf-8"
+                ) as f:
+                    _ = f.write(text)
+                self._prune()
+            return folder
+        except Exception as e:  # never let debug logging break detection
+            logger.debug("[activity.emotion] debug save failed: %s", e)
+            return None
+
+    def _prune(self) -> None:
+        """Drop oldest trigger folders past the cap. Caller holds the lock."""
+        if self._max_triggers <= 0:
+            return
+        try:
+            entries = [
+                e
+                for e in os.listdir(self._root)
+                if os.path.isdir(os.path.join(self._root, e))
+            ]
+            # Names are timestamp-prefixed → lexical sort == chronological.
+            entries.sort()
+            for stale in entries[: max(0, len(entries) - self._max_triggers)]:
+                shutil.rmtree(os.path.join(self._root, stale), ignore_errors=True)
+        except Exception as e:
+            logger.debug("[activity.emotion] debug prune failed: %s", e)
+
+    def save_prediction(
+        self,
+        emotion: str,
+        confidence: float,
+        face_crop: cv2.typing.MatLike,
+        frame: cv2.typing.MatLike | None = None,
+        bbox: list[int] | None = None,
+        **meta: Any,
+    ) -> str | None:
+        """One trigger the model returned a label for → its own folder."""
+        annotated = (
+            self._annotate(frame, bbox, emotion, confidence)
+            if frame is not None and bbox is not None
+            else None
+        )
+        name = f"{self._slug(emotion)}_{confidence:.2f}"
+        record: dict[str, Any] = {
+            "status": "prediction",
+            "emotion": emotion,
+            "confidence": confidence,
+        }
+        if bbox is not None:
+            record["bbox"] = list(bbox)
+        record.update(meta)
+        # frame.jpg is the clean original → re-crop from it using bbox/crop_box.
+        return self._write_folder(
+            name,
+            record,
+            {"input.jpg": face_crop, "frame.jpg": frame, "annotated.jpg": annotated},
+        )
+
+    def save_failure(
+        self,
+        reason: str,
+        face_crop: cv2.typing.MatLike | None = None,
+        **meta: Any,
+    ) -> str | None:
+        """One trigger that produced no usable label → its own folder, with the
+        input image (when available) and the reason it failed."""
+        name = "FAIL-" + self._slug(reason)
+        record: dict[str, Any] = {"status": "failure", "reason": reason}
+        record.update(meta)
+        return self._write_folder(name, record, {"input.jpg": face_crop})
+
+
 class RemoteEmotionRecognizer:
     """Calls the perception-service HTTP emotion-recognize endpoint for a single face crop."""
 
@@ -74,6 +254,7 @@ class RemoteEmotionRecognizer:
         api_key: str,
         threshold: float = config.EMOTION_CONFIDENCE_THRESHOLD,
         timeout: float = 10.0,
+        debug_logger: "EmotionDebugLogger | None" = None,
     ):
         self._url: str = (
             base_url.rstrip("/") + "/" + config.DL_EMOTION_RECOGNIZE_ENDPOINT.strip("/")
@@ -84,6 +265,7 @@ class RemoteEmotionRecognizer:
         self._threshold: float = threshold
         self._timeout: float = timeout
         self._crypto: CryptoSession | None = None
+        self._debug: EmotionDebugLogger | None = debug_logger
         # Rate-limit backoff — same shape as fire_hazard: a 429 means the
         # plan quota is exhausted, every further call (one per face per
         # sensing tick) is a guaranteed failure + a WARNING log. Pause.
@@ -145,11 +327,28 @@ class RemoteEmotionRecognizer:
                     "[activity.emotion] HTTP 429 (quota) — pausing recognition for %.0fs",
                     _RATE_LIMIT_BACKOFF_S,
                 )
+                if self._debug is not None:
+                    _ = self._debug.save_failure(
+                        "http-429",
+                        face_crop=face_crop,
+                        status=resp.status_code,
+                        body=resp.text[:500],
+                        threshold=self._threshold,
+                        detail=f"quota exhausted — recognition paused {_RATE_LIMIT_BACKOFF_S:.0f}s",
+                    )
                 return None
             if resp.status_code != 200:
                 logger.warning(
                     "[activity.emotion] HTTP %d: %s", resp.status_code, resp.text
                 )
+                if self._debug is not None:
+                    _ = self._debug.save_failure(
+                        f"http-{resp.status_code}",
+                        face_crop=face_crop,
+                        status=resp.status_code,
+                        body=resp.text[:500],
+                        threshold=self._threshold,
+                    )
                 return None
 
             if self._crypto is not None:
@@ -160,6 +359,13 @@ class RemoteEmotionRecognizer:
             if not detections:
                 # Endpoint applies the threshold server-side; empty here means
                 # no face detection cleared the confidence bar (a "fail").
+                if self._debug is not None:
+                    _ = self._debug.save_failure(
+                        "no-detection",
+                        face_crop=face_crop,
+                        threshold=self._threshold,
+                        detail="no detection above confidence threshold",
+                    )
                 return None
 
             # Return the top detection (highest confidence) as a shallow COPY
@@ -174,6 +380,10 @@ class RemoteEmotionRecognizer:
             return result
         except requests.RequestException as e:
             logger.warning("[activity.emotion] request failed: %s", e)
+            if self._debug is not None:
+                _ = self._debug.save_failure(
+                    "request-error", face_crop=face_crop, error=str(e)
+                )
             return None
 
 
@@ -207,10 +417,19 @@ class EmotionPerception(Perception[FaceDetectionData]):
         self._base_url: str = base_url
         self._api_key: str = api_key
 
+        self._debug: EmotionDebugLogger = EmotionDebugLogger(
+            root_dir=config.EMOTION_LOG_DIR,
+            enabled=config.EMOTION_DEBUG_LOG_ENABLED,
+            max_triggers=config.EMOTION_LOG_MAX_TRIGGERS,
+        )
+        if config.EMOTION_DEBUG_LOG_ENABLED:
+            logger.info("[activity.emotion] debug logging → %s", config.EMOTION_LOG_DIR)
+
         self._recognizer: RemoteEmotionRecognizer = RemoteEmotionRecognizer(
             base_url=base_url,
             api_key=api_key,
             threshold=config.EMOTION_CONFIDENCE_THRESHOLD,
+            debug_logger=self._debug,
         )
 
         self._last_detection_time: float | None = None
@@ -256,6 +475,7 @@ class EmotionPerception(Perception[FaceDetectionData]):
         # model expects, with NO rotation applied. Fall back to the detector bbox
         # when no mesh box is available (e.g. the v1 recognizer). Both are
         # [x1, y1, x2, y2].
+        box_source = "emotion_box" if face.emotion_box is not None else "bbox"
         x1, y1, x2, y2 = face.emotion_box if face.emotion_box is not None else face.bbox
 
         # Clamp to frame bounds
@@ -270,11 +490,19 @@ class EmotionPerception(Perception[FaceDetectionData]):
 
         try:
             result = self._recognizer.recognize(face_crop)
-        except Exception:
+        except Exception as e:
             logger.exception("[activity.emotion] recognize error")
+            _ = self._debug.save_failure(
+                "recognize-exception",
+                face_crop=face_crop,
+                person_id=face.person_id,
+                error=str(e),
+            )
             return
 
         if result is None:
+            # A failure folder (http error / no-detection / request error) was
+            # already written inside recognize() with the precise reason.
             return
 
         emotion = result["emotion"]
@@ -299,6 +527,33 @@ class EmotionPerception(Perception[FaceDetectionData]):
                     confidence=weighted_confidence,
                 )
             )
+
+        # Every trigger the model labelled → its own timestamped folder holding
+        # the exact input crop, an annotated frame, and result.json. Folder name
+        # is "<time>_<Emotion>_<conf>" so a wrong prediction is spottable at a
+        # glance against what the person was actually feeling.
+        _ = self._debug.save_prediction(
+            emotion=emotion,
+            confidence=confidence,
+            face_crop=face_crop,
+            frame=frame,
+            bbox=face.bbox,
+            # Clamped [x1, y1, x2, y2] actually used for the crop — apply this to
+            # frame.jpg to reproduce input.jpg (bbox above is the raw, unclamped
+            # detector box, which may extend past the frame edges).
+            crop_box=[x1, y1, x2, y2],
+            # Which box produced the crop: the face-mesh re-centered box (reused
+            # from recognition) or the raw detector bbox fallback.
+            box_source=box_source,
+            frame_size=[w, h],
+            person_id=face.person_id,
+            face_confidence=face.confidence,
+            weighted_confidence=weighted_confidence,
+            threshold=config.EMOTION_CONFIDENCE_THRESHOLD,
+            valence=result.get("valence"),
+            arousal=result.get("arousal"),
+            all_detections=result.get("all_detections"),
+        )
 
         logger.debug(
             "[activity.emotion] %s: %s (%.2f)", face.person_id, emotion, confidence
