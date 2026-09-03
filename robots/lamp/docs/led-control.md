@@ -29,7 +29,7 @@ stays lit until the first LED command, which may be minutes after boot.
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/led` | LED strip info (count, available) |
-| GET | `/led/color` | Current color `{"r", "g", "b"}` |
+| GET | `/led/color` | Ring state: brightest pixel, `on` if ANY pixel is lit, `uniform: false` when the pixels differ (dithered effects, partial paints). Reads every pixel — sampling only pixel 0 reported a lit ring as "off" whenever pixel 0 happened to be dark. |
 | POST | `/led/solid` | Fill entire strip with one color |
 | POST | `/led/paint` | Set per-pixel colors (array up to 32 items), or a gradient with `"gradient": true` |
 | POST | `/led/off` | Turn off all LEDs |

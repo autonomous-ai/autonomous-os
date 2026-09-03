@@ -58,6 +58,23 @@ def get_led_state():
     return {"led_count": state.rgb_service.led_count}
 
 
+def _read_ring(rgb_service) -> list[tuple[int, int, int]]:
+    """Every pixel on the strip, as (r, g, b).
+
+    Best-effort: a driver that cannot read back (or throws on a pixel) must not
+    turn a status query into a 500 — the caller then sees an empty ring and
+    reports the strip dark, which is the pre-existing behaviour.
+    """
+    pixels: list[tuple[int, int, int]] = []
+    try:
+        for i in range(rgb_service.led_count):
+            raw = rgb_service.strip.getPixelColor(i)
+            pixels.append(((raw >> 16) & 0xFF, (raw >> 8) & 0xFF, raw & 0xFF))
+    except Exception as e:
+        state.logger.warning("LED read-back failed at pixel %d: %s", len(pixels), e)
+    return pixels
+
+
 @router.get("/led/color", response_model=LEDColorResponse)
 def get_led_color():
     """Get current LED state: actual pixel color read from strip, effect, scene, brightness."""
@@ -68,13 +85,20 @@ def get_led_color():
         and state._effect_thread is not None
         and state._effect_thread.is_alive()
     )
+    uniform = True
     if effect_running and state._effect_base_color:
         r, g, b = state._effect_base_color
     else:
-        raw = state.rgb_service.strip.getPixelColor(0)
-        r = (raw >> 16) & 0xFF
-        g = (raw >> 8) & 0xFF
-        b = raw & 0xFF
+        # The WHOLE ring, not pixel 0. Reading one pixel made every
+        # non-uniform look report as the strip's state, and a look whose
+        # pixel 0 happens to be dark reported as "off" while the ring was
+        # visibly lit — which is exactly how a lit lamp became unanswerable
+        # from the API (device-observed 03/09/2026). Effects that dither
+        # across the ring (breathing_fine) are non-uniform BY DESIGN, so this
+        # is not an edge case; `uniform` says which kind of answer this is.
+        pixels = _read_ring(state.rgb_service)
+        r, g, b = max(pixels, key=lambda px: max(px)) if pixels else (0, 0, 0)
+        uniform = all(px == pixels[0] for px in pixels) if pixels else True
     brightness = round(max(r, g, b) / 255.0, 3)
     is_on = (r, g, b) != (0, 0, 0) or effect_running
     return {
@@ -83,6 +107,7 @@ def get_led_color():
         "color": [r, g, b],
         "hex": f"#{r:02x}{g:02x}{b:02x}",
         "brightness": brightness,
+        "uniform": uniform,
         "effect": state._effect_name,
         "scene": state._active_scene,
     }

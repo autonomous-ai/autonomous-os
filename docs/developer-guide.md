@@ -468,7 +468,7 @@ actually shut up.
 | `POST /led/effect/stop` — stop the running animation, keep last frame | `led.py:229` — `def stop_led_effect()` |
 | `POST /led/restore` — hand strip back to user's saved state (after a transient overlay) | `led.py:206` — `def restore_led()` |
 | `GET /led` — current state | `led.py:35` — `def get_led_state()` |
-| `GET /led/color` — current RGB colour of the whole strip | `led.py:43` — `def get_led_color()` |
+| `GET /led/color` — ring state: brightest pixel + `uniform` flag, read across every pixel | `led.py` — `def get_led_color()` |
 | Named status → colour/effect table (STATUS_LED_PRESETS) | `hal/presets.py:188` |
 
 Concrete calls, all copy-pasteable:
