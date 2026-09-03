@@ -631,6 +631,11 @@ class AnimationService:
         # tracking ends. This is stricter than hold_mode — /servo/hold
         # and focus scenes still let emotion animations play.
         if self._tracking_active:
+            if self._current_recording is not None:
+                logger.info(
+                    "[tracking] dropped recording %r mid-playback (flag=%s owners=%d)",
+                    self._current_recording, self._tracking_flag, self._body_owners,
+                )
             self._idle_settled = True
             self._current_recording = None
             self._current_actions = []
@@ -946,6 +951,17 @@ class AnimationService:
         """
         # Preempt: drop any recording the event loop is playing so it stops
         # sending its frames. _continue_playback short-circuits on empty state.
+        #
+        # Logged because this leaves the body with NOTHING playing and
+        # `_idle_settled` set — idle does not come back on its own, so a lamp
+        # that goes still after a move has to be traceable to the move that
+        # did it. Both silent drop paths (this and the tracking branch above)
+        # were invisible while chasing a motionless lamp on 03/09/2026.
+        if self._current_recording is not None:
+            logger.info(
+                "[preempt] dropped recording %r for a direct move",
+                self._current_recording,
+            )
         self._current_recording = None
         self._current_actions = []
         self._current_frame_index = 0
