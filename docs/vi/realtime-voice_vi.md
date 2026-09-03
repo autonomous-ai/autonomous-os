@@ -173,6 +173,15 @@ hook do `VoiceService` gắn vào cạnh `_on_speak_end`, dẫn về đúng
 bật, cùng lý do với đường phát: chỉ câu trả lời thật của agentic runtime mới
 được vào context của model, không phải filler hay notice bị bỏ.
 
+`turn_seq` là bộ đếm của os-server, còn ngưỡng đem ra so lại nằm trong tiến trình
+HAL, và hai bên restart độc lập. Deploy, OTA hay crash làm bộ đếm bắt đầu lại từ 1
+trong khi HAL vẫn giữ mốc cũ, nên mọi turn của phiên mới trông như đến muộn và bị
+vứt — đo ngày 03/09/2026: `seq=1` gặp `latest_seq=40` làm câm lời chào lúc thức
+(LED và servo vẫn chạy) và sẽ câm tiếp 39 turn sau đó. Run id có mang thời điểm
+tạo (`device-chat-<n>-<unix-ms>`), nên khi một sequence THẤP HƠN đến từ run được
+tạo MUỘN HƠN run đang giữ loa, HAL coi như bộ đếm đã restart và nhận sequence mới.
+Id không có dấu thời gian (`tg-<messageID>`) vẫn theo luật sequence thuần: không có
+gì để so thì một POST cũ thật sự không được phép giành lại loa.
 ### Silero canh đồng hồ im lặng (kết thúc lượt)
 
 Một phiên mic kết thúc khi audio nằm dưới ngưỡng RMS suốt `SILENCE_TIMEOUT_S`.

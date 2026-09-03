@@ -184,6 +184,18 @@ injects next to `_on_speak_end`, which routes into the same
 for the same reason the playback feed is: only the agentic runtime's own reply
 may enter the model's context, never a dropped filler or system notice.
 
+`turn_seq` is os-server's counter, but the threshold it is compared against
+lives in the HAL process, and the two restart independently. A deploy, OTA or
+crash restarts the count at 1 while HAL still holds the old high-water mark, so
+every turn of the new session looks like a late arrival and is dropped —
+measured 03/09/2026: `seq=1` against `latest_seq=40` silenced the wake greeting
+(its LED and servo still ran) and would have silenced the next 39 turns. The run
+id carries its creation time (`device-chat-<n>-<unix-ms>`), so when a LOWER
+sequence arrives from a run created LATER than the one holding the speaker, HAL
+treats the counter as restarted and adopts the new sequence. Ids without a stamp
+(`tg-<messageID>`) keep the plain sequence rule: with nothing to compare, a
+genuinely stale POST must not be able to take the speaker back.
+
 ### Silero guards the silence clock (end of turn)
 
 A mic session ends when the audio stays below the RMS threshold for
