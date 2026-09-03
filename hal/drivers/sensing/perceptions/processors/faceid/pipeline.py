@@ -19,10 +19,11 @@ class _EdgeFacePipeline:
     """SCRFD (detect) -> ONNX landmark (align) -> EdgeFace (embed).
 
     ``get(frame)`` returns one dict per face, drop-in compatible with
-    ``insightface.app.FaceAnalysis.get`` (plus an extra ``emotion_box`` key):
+    ``insightface.app.FaceAnalysis.get`` (plus extra ``emotion_box`` /
+    ``aligned`` keys):
         {'bbox': float32[4], 'kps': float32[5,2]|None,
          'det_score': np.float32, 'embedding': float32[D],
-         'emotion_box': list[int]|None}
+         'emotion_box': list[int]|None, 'aligned': uint8[112,112,3]}
     Faces that cannot be aligned are skipped (same as the reference).
     """
 
@@ -88,6 +89,11 @@ class _EdgeFacePipeline:
                     "det_score": np.float32(det["det_score"]),
                     "embedding": embedding.astype(np.float32),
                     "emotion_box": emotion_box,
+                    # The exact 112x112 BGR crop fed to EdgeFace. Already in
+                    # memory; carried out so the debug log can persist the real
+                    # model input (a misalignment is the usual cause of a
+                    # false match, and it is invisible in the frame crop).
+                    "aligned": aligned,
                 }
             )
         return results

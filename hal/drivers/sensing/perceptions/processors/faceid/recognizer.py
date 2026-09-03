@@ -20,6 +20,7 @@ import hal.config as config
 from hal.drivers.sensing.perceptions.models import Face, PersonKind
 
 from .constants import _NO_MATCH, STRANGER_STATE_DIR, USERS_DIR
+from .debug_log import FaceIdDebugLogger
 from .model_store import (
     _EDGEFACE_MODEL_PATH,
     _LANDMARK_MODEL_PATH,
@@ -42,6 +43,14 @@ logger = logging.getLogger(__name__)
 _EXTENDED_SUBDIR = ".extended"
 _EXTENDED_IMG_EXT = ".jpg"
 _EXTENDED_EMB_EXT = ".npy"
+
+# Box colour per verdict in the debug log's annotated.jpg — same convention as
+# FacePerception._FACE_COLOR (BGR).
+_DEBUG_KIND_COLOR: dict[PersonKind, tuple[int, int, int]] = {
+    PersonKind.FRIEND: (0, 255, 0),  # green
+    PersonKind.STRANGER: (0, 0, 255),  # red
+    PersonKind.UNSURE: (0, 255, 255),  # yellow
+}
 
 
 class FaceRecognizer:
@@ -105,6 +114,16 @@ class FaceRecognizer:
         self._lock: threading.RLock = threading.RLock()
         self._running: bool = False
         self._logger: logging.Logger = logging.getLogger(self.__class__.__name__)
+
+        # Per-detection debug capture (input crop + aligned model input + clean
+        # frame + annotated frame + result.json, one folder per face).
+        self._debug: FaceIdDebugLogger = FaceIdDebugLogger(
+            root_dir=config.FACEID_LOG_DIR,
+            enabled=config.FACEID_DEBUG_LOG_ENABLED,
+            max_triggers=config.FACEID_LOG_MAX_TRIGGERS,
+        )
+        if config.FACEID_DEBUG_LOG_ENABLED:
+            self._logger.info("[face] debug logging → %s", config.FACEID_LOG_DIR)
 
     @property
     def owners(self) -> list[str]:
@@ -748,12 +767,15 @@ class FaceRecognizer:
             msg = f"[{self.__class__.__name__}] service must be started first"
             raise RuntimeError(msg)
 
-        frame_h = frame.shape[0]
+        frame_h, frame_w = frame.shape[:2]
 
         raw_results = self._app.get(frame)
         n_faces = len(raw_results)
 
         if n_faces == 0:
+            # Deliberately NOT debug-logged: detection ticks on every frame
+            # whether or not anybody is in the room, so empty-room captures
+            # would evict every real detection from the capped log directory.
             return
 
         embeds: npt.NDArray[np.float32] = np.stack(
@@ -812,11 +834,50 @@ class FaceRecognizer:
             x1, y1, x2, y2 = bbox
             face_h = max(y2 - y1, 0)
 
+            # Debug capture inputs: the face cut straight out of the original
+            # frame (clamped to its bounds, so crop_box below reproduces it),
+            # and the 112x112 crop the embedder actually saw.
+            debug_on = self._debug.enabled
+            cx1, cy1 = max(0, x1), max(0, y1)
+            cx2, cy2 = min(frame_w, x2), min(frame_h, y2)
+            face_crop = (
+                frame[cy1:cy2, cx1:cx2].copy()
+                if debug_on and cx2 > cx1 and cy2 > cy1
+                else None
+            )
+            aligned = raw_results[i].get("aligned") if debug_on else None
+            height_ratio = face_h / frame_h if frame_h else 0.0
+
             # Height, not area — see FACE_HEIGHT_RATIO_THRESHOLD in hal/config.py.
             if face_h / frame_h < self._height_ratio_threshold:
+                if debug_on:
+                    _ = self._debug.save_failure(
+                        "too-small",
+                        face_crop=face_crop,
+                        aligned=aligned,
+                        frame=frame,
+                        bbox=bbox,
+                        crop_box=[cx1, cy1, cx2, cy2],
+                        frame_size=[frame_w, frame_h],
+                        face_height_ratio=height_ratio,
+                        height_ratio_threshold=self._height_ratio_threshold,
+                        det_score=det_scores[i],
+                        enroll_similarity=float(upload_scores[i]),
+                        extended_similarity=float(ext_scores[i]),
+                        stranger_similarity=s_score,
+                        detail="bbox height below FACE_HEIGHT_RATIO_THRESHOLD",
+                    )
                 continue
 
             det_score = det_scores[i]
+
+            # Debug-log fields describing HOW this face was decided; each
+            # branch below overrides what applies to it.
+            decision_score: float = max(o_score, s_score)
+            matched_label: str | None = None
+            match_source: str | None = None
+            rescued_by_extended: bool = False
+            is_new_stranger: bool = False
 
             if o_score > self._threshold:
                 raw_id = owner_ids[i] or ""
@@ -829,7 +890,11 @@ class FaceRecognizer:
                 # this feature exists to deliver.
                 up_s = float(upload_scores[i])
                 ex_s = float(ext_scores[i])
-                if up_s <= self._threshold < ex_s:
+                decision_score = o_score
+                matched_label = raw_id or None
+                match_source = owner_source[i]
+                rescued_by_extended = up_s <= self._threshold < ex_s
+                if rescued_by_extended:
                     logger.info(
                         "[face] '%s' RESCUED by extended set "
                         "(enroll_sim=%.3f <= thr=%.2f < extended_sim=%.3f)",
@@ -850,6 +915,9 @@ class FaceRecognizer:
                 raw_id = stranger_ids[i] or ""
                 person_id = raw_id.removeprefix(self.STRANGER_PREFIX)
                 face_kind = PersonKind.STRANGER
+                decision_score = s_score
+                matched_label = raw_id or None
+                match_source = "stranger"
             elif (
                 self._negative_threshold is None
                 or max(o_score, s_score) <= self._negative_threshold
@@ -861,6 +929,8 @@ class FaceRecognizer:
                     raw_id = f"{self.STRANGER_PREFIX}stranger_{self._stranger_counter}"
                 person_id = raw_id.removeprefix(self.STRANGER_PREFIX)
                 face_kind = PersonKind.STRANGER
+                matched_label = raw_id
+                is_new_stranger = True
 
                 new_stranger_embeds.append(embeds[i])
                 new_stranger_labels.append(raw_id)
@@ -881,6 +951,53 @@ class FaceRecognizer:
                     emotion_box=raw_results[i].get("emotion_box"),
                 )
             )
+
+            # Every decided face → its own timestamped folder holding the frame
+            # crop, the aligned model input, the clean frame, an annotated frame
+            # and result.json. Folder name is "<time>_<face_id>_<similarity>" so
+            # a false acceptance is spottable at a glance from the listing.
+            if debug_on:
+                _ = self._debug.save_decision(
+                    # "UNSURE" rather than the raw "?" placeholder: it is what
+                    # ends up in the folder name, and "?" slugs to nothing.
+                    face_id=(
+                        person_id if face_kind != PersonKind.UNSURE else "UNSURE"
+                    ),
+                    similarity=decision_score,
+                    face_crop=face_crop,
+                    aligned=aligned,
+                    frame=frame,
+                    bbox=bbox,
+                    color=_DEBUG_KIND_COLOR.get(face_kind, (128, 128, 128)),
+                    # Clamped [x1, y1, x2, y2] actually cut for input.jpg — apply
+                    # it to frame.jpg to reproduce the crop (bbox above is the
+                    # raw detector box, which may extend past the frame edges).
+                    crop_box=[cx1, cy1, cx2, cy2],
+                    frame_size=[frame_w, frame_h],
+                    kind=str(face_kind),
+                    person_id=person_id,
+                    # Bank label behind the match, prefix included, and which
+                    # bank produced it: "enroll" (uploads), "extended"
+                    # (auto-captured views), "stranger", or None when nothing
+                    # cleared a threshold.
+                    matched_label=matched_label,
+                    match_source=match_source,
+                    # Per-bank similarities, so a wrong identity can be traced
+                    # to the exact set that carried it.
+                    owner_similarity=o_score,
+                    enroll_similarity=float(upload_scores[i]),
+                    extended_similarity=float(ext_scores[i]),
+                    stranger_similarity=s_score,
+                    threshold=self._threshold,
+                    negative_threshold=self._negative_threshold,
+                    det_score=det_score,
+                    face_height_ratio=height_ratio,
+                    height_ratio_threshold=self._height_ratio_threshold,
+                    rescued_by_extended=rescued_by_extended,
+                    new_stranger=is_new_stranger,
+                    face_index=i,
+                    n_faces=n_faces,
+                )
 
         if new_stranger_embeds:
             stacked_e = np.stack(new_stranger_embeds, axis=0)

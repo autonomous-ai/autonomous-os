@@ -165,6 +165,23 @@ PRESENCE_WAKE_STRANGERS: bool = (
 FACE_HEIGHT_RATIO_THRESHOLD = float(
     os.environ.get("HAL_FACE_HEIGHT_RATIO_THRESHOLD", "0.10")
 )
+# Per-detection debug capture for face recognition: every recognized face
+# writes its own timestamped folder (input crop + clean frame + annotated frame
+# + result.json) under FACEID_LOG_DIR, named "<time>_<face_id>_<similarity>"
+# (or "<time>_FAIL-<reason>"), so a false acceptance / false rejection is
+# spottable from the directory listing alone. Same shape as the face-emotion
+# debug log. Debug aid — off-device analysis, not a runtime input.
+FACEID_DEBUG_LOG_ENABLED = (
+    os.environ.get("HAL_FACEID_DEBUG_LOG_ENABLED", "true").lower() == "true"
+)
+FACEID_LOG_DIR = os.environ.get(
+    "HAL_FACEID_LOG_DIR",
+    "/opt/hal/drivers/sensing/perceptions/processors/faceid-logs",
+)
+# Cap on retained detection folders (oldest pruned first); 0 = unbounded.
+# One folder per face per sensing tick (HAL_SENSING_INTERVAL, 2s) — 500 is
+# roughly the last 15 minutes of a single person in frame.
+FACEID_LOG_MAX_TRIGGERS = int(os.environ.get("HAL_FACEID_LOG_MAX_TRIGGERS", "500"))
 
 # --- Sensing: Voice identity (speaker-ID as a presence signal) ---
 # How long a confidently matched speaker stays the "current voice user" after
