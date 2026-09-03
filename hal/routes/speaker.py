@@ -25,8 +25,10 @@ from __future__ import annotations
 import logging
 import os
 import re
+import shutil
 import subprocess
 import time
+import wave
 from pathlib import Path
 from typing import Any, Optional
 
@@ -322,6 +324,96 @@ def speaker_enroll(req: EnrollSpeakerRequest) -> EnrollResponse:
 # can't drift from the runtime; device-agnostic fallback for dev/test.
 _DEVICE_MIC_ALSA = os.environ.get("HAL_AUDIO_INPUT_ALSA") or "plug:device_micro2"
 
+# Mono 16-bit is what the embedding model wants; the rate is negotiable because
+# the recognizer resamples from the WAV header.
+_ENROLL_RATE = 16000
+
+
+def _capture_enroll_wav(wav_path: str, duration: int) -> None:
+    """Record `duration` seconds of mono 16-bit audio to `wav_path`.
+
+    arecord is the board path. A laptop has no ALSA at all, so fall back to
+    PortAudio through the same input device the voice pipeline records with —
+    without it the call died on a missing binary and FastAPI answered a
+    plain-text 500 the web UI could not parse into an error message.
+    """
+    if shutil.which("arecord"):
+        _capture_enroll_wav_arecord(wav_path, duration)
+    else:
+        _capture_enroll_wav_sounddevice(wav_path, duration)
+
+
+def _capture_enroll_wav_arecord(wav_path: str, duration: int) -> None:
+    cmd = [
+        "arecord",
+        "-D", _DEVICE_MIC_ALSA,
+        "-f", "S16_LE",
+        "-r", str(_ENROLL_RATE),
+        "-c", "1",
+        "-d", str(duration),
+        "-q",
+        wav_path,
+    ]
+    proc = subprocess.run(cmd, capture_output=True, timeout=duration + 10)
+    if proc.returncode != 0:
+        stderr = proc.stderr.decode(errors="replace").strip()
+        raise HTTPException(
+            status_code=500,
+            detail=f"arecord failed: {stderr or proc.returncode}",
+        )
+
+
+def _capture_enroll_wav_sounddevice(wav_path: str, duration: int) -> None:
+    """PortAudio capture — the simulator and any host without ALSA.
+
+    Uses the voice pipeline's own input device so enroll and recognize hear the
+    same mic. If that device refuses 16 kHz we record at its native rate: the
+    recognizer reads the rate off the WAV header and resamples.
+    """
+    try:
+        import sounddevice as sd
+    except ImportError as e:
+        raise HTTPException(
+            status_code=500,
+            detail="no arecord and sounddevice is not installed — cannot record",
+        ) from e
+
+    device = getattr(state.voice_service, "_input_device", None)
+    rates = [_ENROLL_RATE]
+    try:
+        native = int(sd.query_devices(device, "input")["default_samplerate"])
+        if native != _ENROLL_RATE:
+            rates.append(native)
+    except Exception as e:
+        logger.debug("record-enroll: could not query device %r: %s", device, e)
+
+    last_err: Optional[Exception] = None
+    for rate in rates:
+        try:
+            frames = sd.rec(
+                int(duration * rate),
+                samplerate=rate,
+                channels=1,
+                dtype="int16",
+                device=device,
+            )
+            sd.wait()
+            break
+        except Exception as e:
+            last_err = e
+            logger.info("record-enroll: capture at %dHz failed: %s", rate, e)
+    else:
+        raise HTTPException(
+            status_code=500,
+            detail=f"microphone capture failed: {last_err}",
+        )
+
+    with wave.open(wav_path, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(frames.tobytes())
+
 
 @router.post("/speaker/record-enroll", response_model=EnrollResponse)
 def speaker_record_enroll(req: RecordEnrollRequest) -> EnrollResponse:
@@ -336,6 +428,13 @@ def speaker_record_enroll(req: RecordEnrollRequest) -> EnrollResponse:
     duration = req.duration_sec
     if not name:
         raise HTTPException(status_code=400, detail="name required")
+    # Virtual audio has no microphone to enroll from, and silently recording the
+    # developer's real mic here would contradict what SIM_MEDIA=virtual promises.
+    if state.simulation_audio:
+        raise HTTPException(
+            status_code=503,
+            detail="voice enroll needs a real microphone — restart with SIM_MEDIA=host",
+        )
 
     voice = state.voice_service
     music = state.music_service
@@ -373,24 +472,8 @@ def speaker_record_enroll(req: RecordEnrollRequest) -> EnrollResponse:
 
     wav_path = f"/tmp/voice-enroll-{name}-{int(time.time() * 1000)}.wav"
     try:
-        cmd = [
-            "arecord",
-            "-D", _DEVICE_MIC_ALSA,
-            "-f", "S16_LE",
-            "-r", "16000",
-            "-c", "1",
-            "-d", str(duration),
-            "-q",
-            wav_path,
-        ]
         logger.info("POST /speaker/record-enroll name=%r duration=%ds", name, duration)
-        proc = subprocess.run(cmd, capture_output=True, timeout=duration + 10)
-        if proc.returncode != 0:
-            stderr = proc.stderr.decode(errors="replace").strip()
-            raise HTTPException(
-                status_code=500,
-                detail=f"arecord failed: {stderr or proc.returncode}",
-            )
+        _capture_enroll_wav(wav_path, duration)
         if not Path(wav_path).is_file() or Path(wav_path).stat().st_size < 4096:
             raise HTTPException(status_code=500, detail="recorded file empty/missing")
 
@@ -415,6 +498,14 @@ def speaker_record_enroll(req: RecordEnrollRequest) -> EnrollResponse:
             raise HTTPException(status_code=400, detail=str(e)) from e
 
         return EnrollResponse(status="ok", meta=SpeakerMeta(**meta))
+    except HTTPException:
+        raise
+    except Exception as e:
+        # Anything unhandled here reaches the browser as Starlette's plain-text
+        # "Internal Server Error", which the web UI parses as JSON and reports
+        # as a syntax error instead of the real cause.
+        logger.exception("record-enroll crashed for %r", name)
+        raise HTTPException(status_code=500, detail=f"record-enroll failed: {e}") from e
     finally:
         # Belt-and-braces cleanup of the temp WAV (sr.enroll already copied it).
         try:

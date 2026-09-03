@@ -13,19 +13,19 @@ import (
 	"sync"
 
 	"go.autonomous.ai/os/system/lib/mqtt"
+	"go.autonomous.ai/os/system/lib/syspath"
 	"go.autonomous.ai/os/system/lib/urlnorm"
 )
 
-// bootstrapConfigPath is the OTA worker's config file. The device-wide OTA
-// metadata URL is seeded there at provisioning (single source of truth);
-// os-server's OTA-derived features (skill watcher, onboarding skills/hooks,
-// OTA poller) read it from the same file rather than duplicating it here.
-const bootstrapConfigPath = "/root/config/bootstrap.json"
-
-// otaMetadataURLFromBootstrap returns metadata_url from bootstrap.json, or ""
-// when the file is missing or invalid (e.g. device not yet provisioned).
+// otaMetadataURLFromBootstrap returns metadata_url from the OTA worker's config
+// file, or "" when it is missing or invalid (e.g. device not yet provisioned).
+// The device-wide OTA metadata URL is seeded there at provisioning (single
+// source of truth); os-server's OTA-derived features (skill watcher, onboarding
+// skills/hooks) read it from the same file rather than duplicating it here.
+// Resolved per call so OS_BOOTSTRAP_CONFIG (off-device) is honoured no matter
+// when it is set; unset = the device path.
 func otaMetadataURLFromBootstrap() string {
-	data, err := os.ReadFile(bootstrapConfigPath)
+	data, err := os.ReadFile(syspath.BootstrapConfig())
 	if err != nil {
 		return ""
 	}
@@ -40,15 +40,23 @@ func otaMetadataURLFromBootstrap() string {
 
 var configPath = "config/config.json"
 
-// Dir returns the directory config.json lives in (/root/config in production —
-// os-server runs with WorkingDirectory=/root). Exported so sibling on-disk
-// stores that must NEVER live inside config.json itself (e.g. system/schedule's
-// schedules.json) can still anchor next to it: config_watch.go watches
-// config.json specifically and reloads a good deal of device state on every
-// change to it, which a frequent, unrelated write (like a schedule run
-// timestamp) must not trigger.
+// Path returns the absolute path of config.json. Child processes that read the
+// same file (the codex presync hook) are handed it explicitly, so they cannot
+// disagree with os-server about which config is live. Falls back to the
+// cwd-relative value when the cwd cannot be resolved.
+func Path() string {
+	if abs, err := filepath.Abs(configPath); err == nil {
+		return abs
+	}
+	return configPath
+}
+
+// Dir returns the directory config.json lives in. Sibling stores anchor here
+// (e.g. system/schedule's schedules.json) instead of living inside config.json:
+// config_watch.go reloads device state on every config.json change, which a
+// frequent unrelated write must not trigger.
 func Dir() string {
-	return filepath.Dir(configPath)
+	return filepath.Dir(Path())
 }
 
 // OSVersion is injected at build time via ldflags.
@@ -400,6 +408,15 @@ func ProvideConfig() *Config {
 				slog.Error("save config after migration failed", "component", "config", "error", err)
 			}
 		}
+	}
+
+	// A config.json missing httpPort would bind port 0 — an ephemeral port the
+	// web UI, HAL and the app all fail to reach, with nothing in the log saying
+	// why. Fall back to the default instead of trusting the zero value.
+	if cfg.HttpPort == 0 {
+		cfg.HttpPort = Default().HttpPort
+		slog.Warn("config.json has no httpPort — using default",
+			"component", "config", "port", cfg.HttpPort)
 	}
 
 	// Seed the realtime block with defaults if an already-provisioned config.json

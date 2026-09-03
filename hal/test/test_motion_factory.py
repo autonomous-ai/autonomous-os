@@ -76,7 +76,7 @@ class TestReachyMiniDeclaration(unittest.TestCase):
 _PROTOCOL_MEMBERS = {
     "start", "stop", "is_connected",
     "dispatch", "get_available_recordings", "add_recording", "ensure_running",
-    "is_suppressed",
+    "is_suppressed", "motion_mode",
     "freeze", "unfreeze", "is_frozen",
     "move_to", "move_and_hold", "get_joint_names", "get_positions",
     "send_positions",

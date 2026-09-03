@@ -11,6 +11,7 @@ import (
 	"go.autonomous.ai/os/system/domain"
 	"go.autonomous.ai/os/system/lib/hal"
 	"go.autonomous.ai/os/system/lib/runtimereg"
+	"go.autonomous.ai/os/system/lib/syspath"
 	"go.autonomous.ai/os/system/server/config"
 )
 
@@ -79,6 +80,13 @@ func (s *Service) installedSkillsForPing() []domain.SkillSummary {
 // If the backend response contains MQTT config, it saves to config (triggers config notify).
 func (s *Service) StartStatusReporter(ctx context.Context) {
 	if s.beClient == nil || s.config.LLMAPIKey == "" {
+		return
+	}
+	// The ping IS the device's claim on its backend record — it carries local_ip,
+	// mac, version and skills keyed by an identity the backend derives from the
+	// api key. Off-device that record belongs to a real board.
+	if !syspath.BackendUplink() {
+		slog.Info("backend uplink off — status reporter not started", "component", "status-reporter")
 		return
 	}
 	ticker := time.NewTicker(beclient.StatusReportInterval)

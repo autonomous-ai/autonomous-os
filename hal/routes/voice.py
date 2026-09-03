@@ -370,7 +370,14 @@ def speak_text(req: SpeakRequest):
             realtime_feedback=req.realtime_feedback,
         )
         if not started:
-            raise HTTPException(409, "TTS is busy speaking" if not req.prerender else 503)
+            # HTTPException's second positional arg is `detail`, not a status —
+            # the ternary here used to yield HTTPException(409, 503), reporting
+            # every failed prerender as "409 Conflict" with the literal 503 as
+            # its body. A prerender never conflicts with anything: it warms the
+            # cache and speaks nothing, so a failure is 503, not a busy speaker.
+            if req.prerender:
+                raise HTTPException(503, "TTS prerender failed")
+            raise HTTPException(409, "TTS is busy speaking")
         return {"status": "prerendered" if req.prerender else "ok"}
     started = state.tts_service.speak(
         req.text,

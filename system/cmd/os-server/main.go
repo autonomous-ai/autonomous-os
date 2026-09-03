@@ -12,6 +12,7 @@ import (
 	"go.autonomous.ai/os/runtimes/codex/gatewayd"
 	ocgatewayd "go.autonomous.ai/os/runtimes/opencode/gatewayd"
 	"go.autonomous.ai/os/system/lib/logger"
+	"go.autonomous.ai/os/system/lib/syspath"
 	"go.autonomous.ai/os/system/server"
 	"go.autonomous.ai/os/system/server/config"
 )
@@ -51,7 +52,7 @@ func main() {
 	// Missing file is non-fatal — env may also be supplied by systemd.
 	_ = godotenv.Load("/opt/hal/.env")
 
-	cleanup := logger.Init("/var/log/os-server.log")
+	cleanup := logger.Init(syspath.LogFile())
 	defer cleanup()
 
 	srv, err := server.InitializeServer()

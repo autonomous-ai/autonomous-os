@@ -66,6 +66,10 @@ integrations/                     — Off-device: companions/, chat-bridges/, pe
 
 ## Lamp Simulator trên Laptop
 
+> **Hướng dẫn cài đặt và chạy nằm ở [simulator_vi.md](simulator_vi.md)** — điều kiện
+> chuẩn bị, file config và bản mẫu, bốn target `make`, và xử lý sự cố. Mục này nói
+> simulator *là gì*.
+
 `make sim` khởi động declaration `lamp` production trên laptop. HAL vẫn dùng
 route và safety gate bình thường, nhưng thay motion, LED, camera, microphone,
 speaker, voice và sensing bằng service ảo; nó không mở servo bus, camera/mic
@@ -74,7 +78,11 @@ cho HAL docs và, với body Lamp mặc định, `http://127.0.0.1:5001/simulato
 Link sau có CAD assembly Lamp đã check-in để xem quanh, cùng giá trị live của
 năm joint, playback recording và nút LED effect qua đúng endpoint `/servo/*`
 và `/led/*` mà skill sử dụng: kéo để xoay camera, cuộn để zoom, double-click
-để reset. Motion preview của CAD phản hồi theo joint live, kể cả khi phát
+để reset. Bảng state ghi rõ posture mode đang giữ body (`zero`, `hold`) bên
+cạnh giá trị joint live, và nút Motor control đang giữ mode đó được làm sáng: một
+animation bấm lúc motor đang hold sẽ hiện là bị bỏ qua kèm lý do, không phải
+dấu tích, vì `/servo/play` trả `"ignored"` thay vì `"ok"` cho lệnh nó đã bỏ.
+Motion preview của CAD phản hồi theo joint live, kể cả khi phát
 recording; một control chuyển về assembly tĩnh nguyên bản để đối chiếu. Repo
 chưa có hierarchy cơ khí, pivot, axis hay CAD zero offset đã calibration, nên
 phản hồi hình ảnh này không khẳng định pose `down` hoặc `right` render ra đúng
@@ -107,7 +115,38 @@ Camera ở host mode dùng driver chỉ-dành-cho-simulation
 (`hal/drivers/camera/host_capture_device.py`, đăng ký tên `host`) mở webcam qua
 backend OpenCV gốc của hệ điều hành — AVFoundation trên macOS, nơi đường V4L2
 của production và phần healing power-cycle USB không tồn tại. Body thật vẫn
-chọn `driver:` từ ROBOT.md. Pipeline STT/TTS vẫn là ảo ở cả hai mode.
+chọn `driver:` từ ROBOT.md.
+
+Host mode còn chạy **pipeline giọng nói thật**: entry VAD, Silero, STT, realtime
+agent (Gemini Live), wake word, và phần dispatch `[turn] route=…` forward sang
+os-server — đúng code mà board chạy, không phải stub. Cổng quyết định là
+`state.simulation_audio`, nên hai quyết định không bao giờ lệch nhau: laptop
+đang dùng microphone của chính nó thì được đúng pipeline mà microphone đó sinh
+ra, còn khi macOS từ chối permission thì cờ lật lại và rơi về
+`VirtualVoiceService` kèm log lý do, thay vì dựng pipeline thật lên một thiết bị
+đã chết. `SIM_MEDIA=virtual` vẫn giữ stub, nên test vẫn im lặng và offline.
+
+Credential lấy từ chính file config.json mà HAL dùng chung với os-server, y như
+trên board — trỏ `OS_CONFIG_PATH` vào state dir của `make os-dev` là một file
+nuôi cả hai process. Riêng `llm_api_key` phủ cả LLM, `AutonomousSTT`, TTS
+ElevenLabs, mô tả ảnh, **và cả** Gemini Live (key fallback về nó, endpoint là
+`llm_base_url` + `/ws/gemini`); `deepgram_api_key` là tuỳ chọn, chỉ để đổi
+provider STT.
+
+Nhạc cũng phát được. `MusicService` stream yt-dlp → ffmpeg → **aplay** (ALSA),
+hoặc **paplay** khi có sink Bluetooth — macOS không có cái nào, nên cả hai đường
+đều chết ngay ở `Popen` và thiết bị nói ra "Sorry, I can't play that right now".
+macOS được đường thứ ba: chính output device AudioToolbox của ffmpeg, chọn nó
+thay vì `ffplay` vì ffmpeg vốn đã là dependency bắt buộc ở đây còn `ffplay` thì
+không phải build nào cũng có. `SIM_MEDIA=virtual` giữ nguyên pipeline nhưng đổ
+vào null sink — vẫn search và decode đầy đủ, chỉ là laptop im lặng.
+
+Có hai đường dẫn của HAL là device-absolute và phải dời khi chạy trên laptop,
+cả hai đều đã đọc từ env và được target `sim` set sẵn: `HAL_SNAPSHOT_DIR` (nơi
+`GET /camera/snapshot?save=true` ghi file — bắt buộc nằm dưới home của chính
+agent runtime, trên board là `/root/.codex/media/hal-snapshots`, nếu không agent
+không đọc lại được frame và os-server không serve được thumbnail) và
+`HAL_SNAPSHOT_PERSIST_DIR` (`/var/lib/hal/snapshots` chỉ root ghi được).
 
 ## Voice Pipeline
 

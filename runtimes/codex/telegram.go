@@ -18,12 +18,12 @@ import (
 // first message from the allowlisted user makes Broadcast reach their chat;
 // operators can also seed it by hand. SendToUser / SendToUserWithMedia work
 // with an explicit chat ID whenever config.TelegramBotToken is set. The path
-// lives under Codex's own data dir (/root/.codex, wiped by factory reset) —
+// lives under Codex's own data dir ($CODEX_HOME, wiped by factory reset) —
 // the previous /root/.lumi path was a leftover copied from picoclaw, itself
 // inherited from the pre-fork Lumi repo.
 //
 // Schema: {"targets":[{"chat_id":"...","type":"private|group"}, ...]}
-const telegramTargetsFile = "/root/.codex/telegram_targets.json"
+var telegramTargetsFile = codexHome + "/telegram_targets.json"
 
 type telegramTargetEntry struct {
 	ChatID string `json:"chat_id"`

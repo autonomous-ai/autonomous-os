@@ -154,10 +154,75 @@ class TestLampSimulationServer(unittest.TestCase):
         _, stopped_effect = self._json("/led/effect/stop", "POST", {})
         self.assertEqual(stopped_effect["status"], "ok")
 
+    def test_a_suppressed_motor_refuses_play_and_names_the_mode(self):
+        """A play the driver drops must not come back as "ok", and GET /servo
+        must name the mode that dropped it."""
+        try:
+            _, held = self._json("/servo/hold", "POST", {})
+            self.assertEqual(held["status"], "ok")
+            _, state = self._json("/servo")
+            self.assertEqual(state["motion_mode"], "hold")
+
+            _, dropped = self._json("/servo/play", "POST", {"recording": "nod"})
+            self.assertEqual(dropped["status"], "ignored")
+            self.assertEqual(dropped["reason"], "hold")
+            time.sleep(0.05)
+            _, after = self._json("/servo")
+            self.assertNotEqual(after["current"], "nod")
+
+            self._json("/servo/zero", "POST", {})
+            _, zeroed = self._json("/servo")
+            self.assertEqual(zeroed["motion_mode"], "zero")
+            _, dropped_zero = self._json("/servo/play", "POST", {"recording": "nod"})
+            self.assertEqual(dropped_zero["reason"], "zero")
+        finally:
+            self._json("/servo/resume", "POST", {})
+
+        _, resumed = self._json("/servo")
+        self.assertIsNone(resumed["motion_mode"])
+        _, ok = self._json("/servo/play", "POST", {"recording": "nod"})
+        self.assertEqual(ok["status"], "ok")
+        # A play that ran carries no reason at all, not a null to special-case.
+        self.assertNotIn("reason", ok)
+        time.sleep(0.05)
+        _, playing = self._json("/servo")
+        self.assertEqual(playing["current"], "nod")
+
+    def test_center_is_the_aim_that_recenters_yaw(self):
+        """left/right used to be a one-way trip: no aim could bring yaw back."""
+        from hal.presets import AIM_CENTER, AIM_PRESETS
+
+        _, left = self._json("/servo/aim", "POST", {"direction": "left", "duration": 0.1})
+        self.assertNotAlmostEqual(left["positions"]["base_yaw.pos"], 0.0, places=1)
+
+        _, centered = self._json("/servo/aim", "POST", {"direction": "center", "duration": 0.1})
+        self.assertAlmostEqual(
+            centered["positions"]["base_yaw.pos"],
+            AIM_PRESETS[AIM_CENTER]["base_yaw.pos"],
+            places=3,
+        )
+
+        # Every other aim still keeps the yaw it was given.
+        self._json("/servo/aim", "POST", {"direction": "left", "duration": 0.1})
+        _, up = self._json("/servo/aim", "POST", {"direction": "up", "duration": 0.1})
+        self.assertAlmostEqual(
+            up["positions"]["base_yaw.pos"],
+            AIM_PRESETS["left"]["base_yaw.pos"],
+            places=3,
+        )
+
+        # The fallback lands on center, but a typo must not move yaw.
+        _, unknown = self._json("/servo/aim", "POST", {"direction": "sideways", "duration": 0.1})
+        self.assertAlmostEqual(
+            unknown["positions"]["base_yaw.pos"],
+            AIM_PRESETS["left"]["base_yaw.pos"],
+            places=3,
+        )
+
     def test_named_aims_match_the_reference_lamp_driver(self):
-        # AnimationService keeps the current yaw for center/desk/up/down, and
-        # changes only base_yaw for left/right. The simulator must not invent a
-        # friendlier two-joint table for its visualizer.
+        # AnimationService keeps the current yaw for desk/up/down, changes only
+        # base_yaw for left/right, resets it for an explicit center. The
+        # simulator must not invent a friendlier two-joint table.
         _, centered = self._json("/servo/aim", "POST", {"direction": "center", "duration": 0.1})
         self.assertEqual(centered["positions"]["base_pitch.pos"], -20.0)
         self.assertEqual(centered["positions"]["elbow_pitch.pos"], 32.0)

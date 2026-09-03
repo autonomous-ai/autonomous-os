@@ -33,6 +33,22 @@ class HostCameraUnavailable(RuntimeError):
     """The host webcam could not be opened — permission, absence, or in use."""
 
 
+# AVFoundation returns false for the first reads while the capture session
+# spins up. Judging a camera on one read calls a working webcam dead.
+_WARMUP_ATTEMPTS = 40
+_WARMUP_GAP_S = 0.05
+
+
+def _read_warm(cap) -> "np.ndarray | None":
+    """Read until the capture session delivers, or the warm-up budget runs out."""
+    for _ in range(_WARMUP_ATTEMPTS):
+        ok, frame = cap.read()
+        if ok and frame is not None:
+            return frame
+        time.sleep(_WARMUP_GAP_S)
+    return None
+
+
 def _backends() -> list[int]:
     """OpenCV backends to try, most native for this OS first.
 
@@ -48,7 +64,7 @@ def _backends() -> list[int]:
 
 
 def probe_host_camera(device_id: int | str) -> None:
-    """Open, read one frame, release. Raises HostCameraUnavailable on failure.
+    """Open, read a frame, release. Raises HostCameraUnavailable on failure.
 
     Called before the simulator commits to host media so the fallback to the
     virtual device happens with a reason a human can act on, instead of a
@@ -62,8 +78,7 @@ def probe_host_camera(device_id: int | str) -> None:
             if not cap.isOpened():
                 last = "camera did not open"
                 continue
-            ok, frame = cap.read()
-            if not ok or frame is None:
+            if _read_warm(cap) is None:
                 last = "camera opened but delivered no frame"
                 continue
             return
@@ -94,6 +109,10 @@ class HostVideoCaptureDevice(VideoCaptureDeviceBase):
     # Frame interval when nobody is streaming; a consumer (stream, sensing,
     # tracker) raises the rate to the negotiated FPS.
     _IDLE_INTERVAL_S = 0.2
+
+    # How long a reopened capture may go without a frame before we give up on
+    # it. Shorter than this is just the session starting.
+    _READ_GRACE_S = 3.0
 
     def __init__(self, device_info: VideoCaptureDeviceInfo, name: str | None = None):
         super().__init__(device_info, name)
@@ -211,6 +230,7 @@ class HostVideoCaptureDevice(VideoCaptureDeviceBase):
 
     def _loop(self) -> None:
         cap = None
+        last_good = 0.0
         try:
             while not self._stopped.is_set():
                 if cap is None:
@@ -219,13 +239,23 @@ class HostVideoCaptureDevice(VideoCaptureDeviceBase):
                         logger.warning("Host webcam unavailable; retrying in 2s")
                         self._stopped.wait(2.0)
                         continue
+                    last_good = time.monotonic()
                 ok, frame = cap.read()
                 if not ok or frame is None:
-                    logger.warning("Host webcam read failed; reopening")
+                    # Reopening on the first miss loops forever: every reopen
+                    # starts a fresh session that misses its first reads too.
+                    if time.monotonic() - last_good < self._READ_GRACE_S:
+                        self._stopped.wait(_WARMUP_GAP_S)
+                        continue
+                    logger.warning(
+                        "Host webcam delivered no frame for %.0fs; reopening",
+                        self._READ_GRACE_S,
+                    )
                     cap.release()
                     cap = None
                     self._stopped.wait(0.5)
                     continue
+                last_good = time.monotonic()
                 frame = self._apply_zoom(frame)
                 response = VideoCaptureDeviceResponse(
                     frame=frame, frame_description="Host webcam frame"

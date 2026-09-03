@@ -34,11 +34,11 @@ import (
 // set independently by --cd), its reply is parsed from the JSONL agent_message
 // items, and its env asserts CODEX_HOME (like the gatewayd's turnEnv).
 
-const (
-	// codingSelFileDefault persists chat→thread selections so a restart keeps
-	// each chat in its thread. Overridable via the codingSelPath test seam.
-	codingSelFileDefault = "/root/.codex/telegram_coding.json"
+// codingSelFileDefault persists chat→thread selections so a restart keeps each
+// chat in its thread. Overridable via the codingSelPath test seam.
+var codingSelFileDefault = codexHome + "/telegram_coding.json"
 
+const (
 	// codingTurnTimeout caps one remote-coding turn (tool use can be slow).
 	codingTurnTimeout = 15 * time.Minute
 

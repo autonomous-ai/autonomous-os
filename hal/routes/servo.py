@@ -24,6 +24,7 @@ from hal.models import (
     ServoNudgeRequest,
     ServoMoveRequest,
     ServoMoveResponse,
+    ServoPlayResponse,
     ServoPositionResponse,
     ServoRequest,
     ServoStateResponse,
@@ -95,6 +96,7 @@ def get_servo_state():
     return {
         "available_recordings": svc.get_available_recordings(),
         "current": svc._current_recording,
+        "motion_mode": svc.motion_mode,
     }
 
 
@@ -194,17 +196,22 @@ async def upload_servo_recording(
     return {"status": "ok"}
 
 
-@router.post("/servo/play", response_model=StatusResponse)
+@router.post("/servo/play", response_model=ServoPlayResponse, response_model_exclude_none=True)
 def play_recording(req: ServoRequest):
-    """Play a pre-recorded servo animation by name."""
+    """Play a pre-recorded servo animation by name.
+
+    Both refusals answer "ignored", not "ok": the caller must be able to tell a
+    body that moved from one that did not.
+    """
     state.logger.debug("POST /servo/play recording=%s", req.recording)
     if _sleep_servo_locked():
-        state.logger.info("servo/play blocked -- device is sleeping")
-        return {"status": "ok"}
+        state.logger.info("servo/play ignored -- device is sleeping")
+        return {"status": "ignored", "reason": "sleeping"}
     svc = _svc()
     if svc.is_suppressed:
-        state.logger.debug("servo/play blocked: suppressed mode active")
-        return {"status": "ok"}
+        # INFO, not DEBUG: at the default log level this refusal left no trace.
+        state.logger.info("servo/play ignored -- %s mode active", svc.motion_mode)
+        return {"status": "ignored", "reason": svc.motion_mode}
     svc.ensure_running()
     t0 = time.perf_counter()
     svc.dispatch(SERVO_CMD_PLAY, req.recording)
