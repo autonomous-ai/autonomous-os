@@ -243,7 +243,7 @@ hai con số chặn nó, và thứ tự giữa chúng là bắt buộc:
 
 | Knob | Ở đâu | Mặc định | Nghĩa |
 |---|---|---|---|
-| `CODEX_TURN_TIMEOUT_S` | `gatewayd/gatewayd.go` | `2700` (45 phút) | Giết `codex exec` rồi gửi `bridge.error: timeout`. Gatewayd LUÔN kết thúc turn — xong, lỗi, hoặc timeout này. |
+| `CODEX_TURN_TIMEOUT_S` | `gatewayd/gatewayd.go` | `600` (10 phút) | Giết `codex exec` rồi gửi `bridge.error: timeout`. Gatewayd LUÔN kết thúc turn — xong, lỗi, hoặc timeout này. |
 | `busyTTL()` | `events.go` | timeout đó **+ 5 phút** | Gỡ kẹt pipeline sensing khi frame cuối của turn bị RỚT. Suy ra từ chính env var trên nên nâng timeout không bỏ sót nó. |
 
 **TTL phải dài hơn timeout.** Trước đây TTL cố định 5 phút trong khi timeout là 10
@@ -258,7 +258,19 @@ lúc 15:45:41, và `timeout` lúc 15:50:41 bị báo dưới `device-chat-168`. 
 và `hermes` không hề xoá runId khi TTL hết hạn — đó là lý do turn Telegram dài
 luôn chạy được ở hai runtime đó; đường codex giờ đã giống vậy.
 
-Hạn bỏ cuộc của web chat (`REPLY_IDLE_TIMEOUT_MS`, 50 phút) cũng được đặt dài hơn
+**Lượt resume bị timeout thì BỎ LUÔN thread.** Việc xoay thread
+(`ShouldRotateSession`) đọc kích thước context từ `turn.completed`, nên nó chỉ nổ
+sau khi một lượt THÀNH CÔNG — thread mà mọi lượt resume đều treo thì không bao giờ
+được xoay, và id thread nằm trong session file nên restart service lẫn reboot máy
+đều resume đúng cái thread chết đó. Đo trên lamp-0c89 ngày 3/9/2026: thread
+`01a06665` tạo lúc 15:31, mọi lượt sau 15:40 đều treo không có `turn end` suốt hơn
+một tiếng, qua hai lần restart service và một lần reboot; trong khi `curl` thẳng
+cùng endpoint trả lời đúng payload 75k token đó trong 57 giây, và `codex exec`
+thread mới trả lời trong vài giây — nên endpoint chưa bao giờ là vấn đề. Gatewayd
+giờ gọi `clearSession()` khi resume timeout, đây là đường thoát duy nhất không cần
+người can thiệp.
+
+Hạn bỏ cuộc của web chat (`REPLY_IDLE_TIMEOUT_MS`) cũng được đặt dài hơn
 mức chặn turn vì cùng lý do — và không rút ngắn được, vì `codex exec --json`
 không emit gì trong lúc chạy (run đo được không stream một delta nào suốt 10 phút).
 

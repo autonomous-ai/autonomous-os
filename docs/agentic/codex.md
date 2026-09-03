@@ -248,7 +248,7 @@ minutes to completion. Two numbers bound it, and they must stay ordered:
 
 | Knob | Where | Default | Meaning |
 |---|---|---|---|
-| `CODEX_TURN_TIMEOUT_S` | `gatewayd/gatewayd.go` | `2700` (45 min) | Kills `codex exec` and sends `bridge.error: timeout`. The gatewayd ALWAYS ends a turn — completed, failed, or this timeout. |
+| `CODEX_TURN_TIMEOUT_S` | `gatewayd/gatewayd.go` | `600` (10 min) | Kills `codex exec` and sends `bridge.error: timeout`. The gatewayd ALWAYS ends a turn — completed, failed, or this timeout. |
 | `busyTTL()` | `events.go` | that timeout **+ 5 min** | Unwedges the sensing pipeline when a turn's terminal frame was DROPPED. Derived from the same env var so raising the timeout cannot leave it behind. |
 
 **The TTL must outlast the timeout.** It was a fixed 5 minutes against a 10-minute
@@ -264,7 +264,19 @@ its id at 15:45:41, and the 15:50:41 `timeout` was reported against
 `device-chat-168`. `openclaw` and `hermes` never wiped the id on TTL expiry,
 which is why long Telegram turns always worked there; the codex path now matches.
 
-The web chat's own give-up window (`REPLY_IDLE_TIMEOUT_MS`, 50 min) is sized to
+**A timed-out resumed turn DROPS the thread.** Rotation (`ShouldRotateSession`)
+reads the context size off `turn.completed`, so it can only ever fire after a turn
+SUCCEEDS — a thread whose every resume hangs is therefore never rotated, and the
+thread id lives in the session file, so restarting the service and rebooting the
+device both resume the same dead thread. Measured on lamp-0c89 2026-09-03: thread
+`01a06665` was created 15:31 and every turn after 15:40 hung with no `turn end`
+for over an hour, through two service restarts and a reboot; direct `curl` to the
+same endpoint answered the same 75k-token payload in 57 s, and a FRESH
+`codex exec` answered in seconds, so the endpoint was never the problem. The
+gatewayd now calls `clearSession()` on a resume timeout, which is the only escape
+that does not need a human.
+
+The web chat's own give-up window (`REPLY_IDLE_TIMEOUT_MS`) is sized to
 outlast the turn cap for the same reason — and it cannot be shortened, because
 `codex exec --json` emits nothing at all while it works (the measured run
 streamed zero deltas in ten minutes).

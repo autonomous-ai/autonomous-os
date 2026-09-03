@@ -72,7 +72,7 @@ func envOr(key, def string) string {
 
 func configFromEnv() Config {
 	timeout := 600 * time.Second
-	if f, err := strconv.ParseFloat(envOr("CODEX_TURN_TIMEOUT_S", "2700"), 64); err == nil && f > 0 {
+	if f, err := strconv.ParseFloat(envOr("CODEX_TURN_TIMEOUT_S", "600"), 64); err == nil && f > 0 {
 		timeout = time.Duration(f * float64(time.Second))
 	}
 	// CODEX_HOME anchors the per-file defaults, so setting it alone relocates

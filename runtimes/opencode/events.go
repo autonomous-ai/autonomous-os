@@ -48,8 +48,11 @@ type pendingEvent struct {
 const busyTTLMargin = 5 * time.Minute
 
 func busyTTL() time.Duration {
-	// Same default as the gatewayd's own Config (45 minutes).
-	timeout := 45 * time.Minute
+	// Same default as the gatewayd's own Config (10 minutes). Long enough for a
+	// heavy turn, short enough that a WEDGED one — the upstream stream going
+	// silent mid-turn, measured on lamp-0c89 2026-09-03 — is killed and the
+	// device recovers instead of being held for most of an hour.
+	timeout := 10 * time.Minute
 	if f, err := strconv.ParseFloat(strings.TrimSpace(os.Getenv("OPENCODE_TURN_TIMEOUT_S")), 64); err == nil && f > 0 {
 		timeout = time.Duration(f * float64(time.Second))
 	}
