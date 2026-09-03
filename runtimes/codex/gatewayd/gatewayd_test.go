@@ -91,6 +91,36 @@ EOF
 	return writeScript(t, dir, "fake-codex-resume-hangs", script)
 }
 
+// writeFakeCodexSlowButTalking takes far longer than the idle window overall but
+// never stops narrating — the shape of a genuinely long turn (a tool call every
+// few seconds). It must NOT be killed.
+func writeFakeCodexSlowButTalking(t *testing.T, dir, argvFile string) string {
+	t.Helper()
+	script := fmt.Sprintf(`#!/bin/bash
+echo "ARGV:$*" >> %q
+for i in 1 2 3 4 5 6 7 8; do
+  echo '{"type":"item.completed","item":{"id":"i","type":"agent_message","text":"working"}}'
+  sleep 0.4
+done
+cat <<'EOF'
+%s
+EOF
+`, argvFile, successJSONL)
+	return writeScript(t, dir, "fake-codex-slow-talking", script)
+}
+
+// writeFakeCodexSilent starts a turn and then produces nothing — the wedge
+// measured on lamp-0c89 2026-09-03.
+func writeFakeCodexSilent(t *testing.T, dir, argvFile string) string {
+	t.Helper()
+	script := fmt.Sprintf(`#!/bin/bash
+echo "ARGV:$*" >> %q
+echo '{"type":"thread.started","thread_id":"t123"}'
+sleep 30
+`, argvFile)
+	return writeScript(t, dir, "fake-codex-silent", script)
+}
+
 func writeScript(t *testing.T, dir, name, content string) string {
 	t.Helper()
 	path := filepath.Join(dir, name)
@@ -111,15 +141,23 @@ func startServer(t *testing.T, codexBin string, dir string) (string, Config) {
 // tests that need a turn to actually hit it.
 func startServerTimeout(t *testing.T, codexBin string, dir string, turnTimeout time.Duration) (string, Config) {
 	t.Helper()
+	return startServerTimeouts(t, codexBin, dir, turnTimeout, 0)
+}
+
+// startServerTimeouts sets both guards: the absolute ceiling and the idle one
+// (0 disables the idle guard).
+func startServerTimeouts(t *testing.T, codexBin string, dir string, turnTimeout, idleTimeout time.Duration) (string, Config) {
+	t.Helper()
 	cfg := Config{
-		Token:       testToken,
-		Workspace:   filepath.Join(dir, "workspace"),
-		CodexBin:    codexBin,
-		CodexHome:   dir,
-		SessionFile: filepath.Join(dir, "session.json"),
-		AttachDir:   filepath.Join(dir, "attachments"),
-		TurnTimeout: turnTimeout,
-		Home:        dir,
+		Token:           testToken,
+		Workspace:       filepath.Join(dir, "workspace"),
+		CodexBin:        codexBin,
+		CodexHome:       dir,
+		SessionFile:     filepath.Join(dir, "session.json"),
+		AttachDir:       filepath.Join(dir, "attachments"),
+		TurnTimeout:     turnTimeout,
+		TurnIdleTimeout: idleTimeout,
+		Home:            dir,
 	}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -463,7 +501,6 @@ func TestResumedFailureFramesHeldBack(t *testing.T) {
 	}
 }
 
-
 // A thread whose resume hangs used to wedge the device forever: rotation rides
 // on a COMPLETED turn, so a thread that never completes one is never rotated,
 // and the thread id lives on disk — restarting the service or rebooting the
@@ -500,5 +537,43 @@ func TestResumeTimeoutDropsTheThread(t *testing.T) {
 	}
 	if strings.Contains(lines[2], "resume") {
 		t.Fatalf("after a resume timeout the next turn must be fresh, got argv: %s", lines[2])
+	}
+}
+
+// Total duration cannot tell a wedged turn from a slow one. A turn that keeps
+// narrating must survive well past the idle window.
+func TestIdleGuardSparesATurnThatKeepsTalking(t *testing.T) {
+	dir := t.TempDir()
+	argvFile := filepath.Join(dir, "argv.txt")
+	url, _ := startServerTimeouts(t, writeFakeCodexSlowButTalking(t, dir, argvFile), dir, 30*time.Second, 2*time.Second)
+	conn := dial(t, url, testToken)
+	readFrame(t, conn) // ready status
+
+	sendMessage(t, conn, "long task")
+	frames := readTurnFrames(t, conn)
+	last := frames[len(frames)-1]
+	if last["type"] != "turn.completed" {
+		t.Fatalf("a turn that keeps producing output must not be killed, got %v", last)
+	}
+}
+
+// A turn that goes silent is killed by the idle guard long before the absolute
+// ceiling — that is what frees the device.
+func TestIdleGuardKillsASilentTurn(t *testing.T) {
+	dir := t.TempDir()
+	argvFile := filepath.Join(dir, "argv.txt")
+	url, _ := startServerTimeouts(t, writeFakeCodexSilent(t, dir, argvFile), dir, 30*time.Second, 2*time.Second)
+	conn := dial(t, url, testToken)
+	readFrame(t, conn) // ready status
+
+	start := time.Now()
+	sendMessage(t, conn, "wedged")
+	frames := readTurnFrames(t, conn)
+	last := frames[len(frames)-1]
+	if last["type"] != "bridge.error" {
+		t.Fatalf("a silent turn must end with bridge.error, got %v", last)
+	}
+	if elapsed := time.Since(start); elapsed > 10*time.Second {
+		t.Fatalf("the idle guard must fire well before the absolute ceiling, took %s", elapsed)
 	}
 }

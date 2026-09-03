@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -220,6 +221,38 @@ func (s *Server) execTurn(ctx context.Context, prompt string, images []string, r
 	tctx, cancel := context.WithTimeout(ctx, s.cfg.TurnTimeout)
 	defer cancel()
 
+	// Idle guard — see the codex gatewayd for why silence, not total duration,
+	// is what separates a wedged turn from a slow one.
+	var lastOutput atomic.Int64
+	lastOutput.Store(time.Now().UnixNano())
+	idleFired := make(chan struct{})
+	idleDone := make(chan struct{})
+	defer close(idleDone)
+	if s.cfg.TurnIdleTimeout > 0 {
+		go func() {
+			tick := time.NewTicker(s.cfg.TurnIdleTimeout / 4)
+			defer tick.Stop()
+			for {
+				select {
+				case <-idleDone:
+					return
+				case <-tctx.Done():
+					return
+				case <-tick.C:
+					since := time.Since(time.Unix(0, lastOutput.Load()))
+					if since < s.cfg.TurnIdleTimeout {
+						continue
+					}
+					log.Printf("%s no output for %s — killing the turn (idle guard)",
+						logPrefix, since.Round(time.Second))
+					close(idleFired)
+					cancel()
+					return
+				}
+			}
+		}()
+	}
+
 	cmd := exec.CommandContext(tctx, argv[0], argv[1:]...)
 	cmd.Dir = s.cfg.Workspace
 	cmd.Env = s.turnEnv()
@@ -256,14 +289,21 @@ func (s *Server) execTurn(ctx context.Context, prompt string, images []string, r
 
 	var wg sync.WaitGroup
 	wg.Add(2)
-	go func() { defer wg.Done(); s.pumpStdout(stdout, &res, resumeID != "") }()
-	go func() { defer wg.Done(); pumpStderr(stderr, &res) }()
+	go func() { defer wg.Done(); s.pumpStdout(stdout, &res, resumeID != "", &lastOutput) }()
+	go func() { defer wg.Done(); pumpStderr(stderr, &res, &lastOutput) }()
 	wg.Wait()
 	err = cmd.Wait()
 
 	res.rc = cmd.ProcessState.ExitCode()
 	if err != nil && res.rc == 0 {
 		res.rc = -1 // killed / wait error without a real exit code
+	}
+	select {
+	case <-idleFired:
+		res.timedOut = true
+		log.Printf("%s turn killed by the idle guard (no output for %s)",
+			logPrefix, s.cfg.TurnIdleTimeout)
+	default:
 	}
 	if tctx.Err() == context.DeadlineExceeded {
 		log.Printf("%s turn timed out after %s — killed process group",
@@ -291,10 +331,11 @@ func (s *Server) execTurn(ctx context.Context, prompt string, images []string, r
 // and the top-level error event) are stashed in res.heldFrames instead of
 // forwarded: the caller drops them when it retries fresh, or forwards them when
 // the resumed attempt is terminal. Other frames still flow normally.
-func (s *Server) pumpStdout(r io.Reader, res *turnResult, holdFailures bool) {
+func (s *Server) pumpStdout(r io.Reader, res *turnResult, holdFailures bool, lastOutput *atomic.Int64) {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, scanBufSize), streamLimit)
 	for scanner.Scan() {
+		lastOutput.Store(time.Now().UnixNano())
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
 			continue
@@ -344,10 +385,11 @@ func (s *Server) pumpStdout(r io.Reader, res *turnResult, holdFailures bool) {
 }
 
 // pumpStderr logs stderr lines and keeps a bounded tail for diagnostics.
-func pumpStderr(r io.Reader, res *turnResult) {
+func pumpStderr(r io.Reader, res *turnResult, lastOutput *atomic.Int64) {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, scanBufSize), streamLimit)
 	for scanner.Scan() {
+		lastOutput.Store(time.Now().UnixNano())
 		line := strings.TrimRight(scanner.Text(), " \t\r")
 		log.Printf("%s opencode: %s", logPrefix, line)
 		res.stderrTail = tail(res.stderrTail+line+"\n", stderrTailMax)
