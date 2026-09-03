@@ -206,7 +206,28 @@ prev ≠ current). Mỗi adapter mang gì:
   memory của backend. **Trước hết kiểm tra backend LOAD file nào THEO TÊN** —
   Hermes chỉ load `MEMORY.md` + `USER.md` (không glob `memories/*.md`), nên một
   `KNOWLEDGE.md` riêng sẽ bị bỏ qua; ta fold nó vào `MEMORY.md`.
-- **USER.md** → file user-profile của backend.
+- **USER.md** → file user-profile của backend, qua `writeUserProfile` (KHÔNG
+  phải `writeMemoryEntries`). USER.md vừa là bản ghi vừa là biểu mẫu: các field
+  ĐƠN NHẤT (`Name`, `What to call them`, `Pronouns`, `Timezone`) dùng
+  **replace-or-append** — mỗi field một bullet, bên đến thắng — còn lại giữ
+  dedupe-union cộng dồn. Chỉ entry-merge thì `**Name:** Leo` và `**Name:** Long`
+  là hai chuỗi khác nhau, nên profile chỉ thêm được tên chứ không bao giờ bỏ được
+  tên cũ, và mỗi lần switch lại nhân đôi cặp đó (quan sát trên máy 2026-09-03).
+  Hai bất biến được test khoá lại:
+  - Field đến rỗng hoặc không có **không bao giờ xoá trắng** field đã điền ở đích
+    — một nguồn chưa có profile không được phép xoá thứ thiết bị đã học được.
+  - Chỉ FIELD bị retire. Văn xuôi tự do có nhắc tên người dùng cũ vẫn là nội dung
+    đã học và được giữ; dọn phần đó là việc của prune theo enrollment, không phải
+    của migration.
+  Hãy coi USER.md là **biểu mẫu, không phải nhật ký**. Template của nó ship sẵn
+  các slot trống (`- **Name:**`) kèm hướng dẫn điền vào, nên `writeUserProfile`
+  điền **ngay tại chỗ slot đang đứng** rồi bỏ mọi bullet trùng field xuất hiện sau
+  đó — đúng cách `setIdentityField` làm với IDENTITY.md. Toàn bộ template được giữ
+  nguyên văn: câu hướng dẫn, các gợi ý Context, câu chốt "not building a dossier",
+  slot còn để trống, và cả link `## Related`. USER.md là bootstrap file nên tất cả
+  những thứ đó tới tay agent mỗi lượt, và nó chứa dòng duy nhất bảo agent phải duy
+  trì chính file này. Đừng "dọn dẹp" template — việc của migration là giá trị, không
+  phải cái khung.
 - Đặt **`Overwrite = true`** cho copy soul khi switch: switch nghĩa là "lấy persona
   vừa dùng sang". `copyPersona` backup trước (`.bak-<nano>`).
 - Chiều ngược phải **strip artifact riêng của backend** mà nó đã thêm (vd identity

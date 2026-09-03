@@ -63,7 +63,7 @@ func (claudecodeAdapter) write(m *baseMigrator, b *PersonaBundle, opts Options) 
 	}
 
 	// User profile → USER.md.
-	m.writeMemoryEntries("user-profile", rebrandEntries(b.User, rebrandToClaudeCode),
+	m.writeUserProfile("user-profile", rebrandEntries(b.User, rebrandToClaudeCode),
 		filepath.Join(ws, "USER.md"), opts.UserCharLimit, openclawFormat)
 	return nil
 }

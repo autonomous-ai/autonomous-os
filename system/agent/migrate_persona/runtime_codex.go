@@ -68,7 +68,7 @@ func (codexAdapter) write(m *baseMigrator, b *PersonaBundle, opts Options) error
 	}
 
 	// User profile → USER.md.
-	m.writeMemoryEntries("user-profile", rebrandEntries(b.User, rebrandToCodex),
+	m.writeUserProfile("user-profile", rebrandEntries(b.User, rebrandToCodex),
 		filepath.Join(ws, "USER.md"), opts.UserCharLimit, openclawFormat)
 	return nil
 }

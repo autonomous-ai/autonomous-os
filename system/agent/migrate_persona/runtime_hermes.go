@@ -53,7 +53,7 @@ func (hermesAdapter) write(m *baseMigrator, b *PersonaBundle, opts Options) erro
 		filepath.Join(mem, "MEMORY.md"), opts.MemoryCharLimit, hermesFormat)
 
 	// User profile → memories/USER.md.
-	m.writeMemoryEntries("user-profile", rebrandEntries(b.User, rebrandToHermes),
+	m.writeUserProfile("user-profile", rebrandEntries(b.User, rebrandToHermes),
 		filepath.Join(mem, "USER.md"), opts.UserCharLimit, hermesFormat)
 	return nil
 }

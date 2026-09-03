@@ -211,7 +211,28 @@ Migration runs at os-server boot after a real switch (`Reconcile`, when
   long-term memory file. **First check which files the backend LOADS BY NAME** —
   Hermes loads only `MEMORY.md` + `USER.md` (no `memories/*.md` glob), so a
   separate `KNOWLEDGE.md` would be ignored; we fold it into `MEMORY.md` instead.
-- **USER.md** → backend's user-profile file.
+- **USER.md** → backend's user-profile file, via `writeUserProfile` (NOT
+  `writeMemoryEntries`). USER.md is half record, half form: its SINGULAR fields
+  (`Name`, `What to call them`, `Pronouns`, `Timezone`) are **replace-or-append**
+  — one bullet each, incoming wins — while everything else keeps the additive
+  dedupe-union. Entry-merge alone treats `**Name:** Leo` and `**Name:** Long` as
+  two different strings, so a profile could gain a name but never retire one, and
+  every switch propagated the pair (device-observed 2026-09-03). Two invariants
+  the tests pin:
+  - An absent or unfilled incoming field **never blanks** a filled destination —
+    a source with no profile yet must not erase what the device already learned.
+  - Only the FIELD is retired. Free-form prose that mentions an old user is
+    ordinary learned content and stays; removing that is the enrollment-keyed
+    prune's job, not migration's.
+  Treat USER.md as a **form, not a log**. Its template ships blank slots
+  (`- **Name:**`) under an instruction to fill them in, so `writeUserProfile`
+  fills the slot **where it stands** and drops any later duplicate bullet for the
+  same field — the same move `setIdentityField` makes for IDENTITY.md. The whole
+  template survives verbatim: the instruction, the Context prompts, the "not
+  building a dossier" guardrail, still-blank slots, even the `## Related` link.
+  USER.md is a bootstrap file, so all of that reaches the agent every turn and it
+  carries the only line telling the agent to maintain the file at all. Do not
+  "clean up" the template — the migration's job is the values, not the form.
 - Set **`Overwrite = true`** for the soul copy on a switch: a switch means "adopt
   the persona I was just using." `copyPersona` backs up first (`.bak-<nano>`).
 - The reverse direction must **strip backend-only artifacts** it added (e.g. the

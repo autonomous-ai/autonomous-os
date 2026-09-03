@@ -95,7 +95,7 @@ func (exampleAdapter) write(m *baseMigrator, b *PersonaBundle, opts Options) err
 		filepath.Join(root, "MEMORY.md"), opts.MemoryCharLimit, openclawFormat)
 
 	// USER.
-	m.writeMemoryEntries("user-profile", rebrandEntries(b.User, rebrandToExample),
+	m.writeUserProfile("user-profile", rebrandEntries(b.User, rebrandToExample),
 		filepath.Join(root, "USER.md"), opts.UserCharLimit, openclawFormat)
 	return nil
 }

@@ -71,7 +71,7 @@ func (opencodeAdapter) write(m *baseMigrator, b *PersonaBundle, opts Options) er
 	}
 
 	// User profile → USER.md.
-	m.writeMemoryEntries("user-profile", rebrandEntries(b.User, rebrandToOpenCode),
+	m.writeUserProfile("user-profile", rebrandEntries(b.User, rebrandToOpenCode),
 		filepath.Join(ws, "USER.md"), opts.UserCharLimit, openclawFormat)
 	return nil
 }
