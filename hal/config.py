@@ -1392,6 +1392,19 @@ REALTIME_SUMMARIZER_API_KEY: str = os.environ.get("HAL_REALTIME_SUMMARIZER_API_K
 _summarizer_base: str = os.environ.get("HAL_REALTIME_SUMMARIZER_BASE_URL", "") or _os_cfg_get("llm_base_url", "")
 REALTIME_SUMMARIZER_BASE_URL: str = _summarizer_base.rstrip("/").removesuffix("/v1") if _summarizer_base else ""
 REALTIME_SUMMARIZER_MODEL: str = os.environ.get("HAL_REALTIME_SUMMARIZER_MODEL", "claude-haiku-4-5-20251001")
+# Extra attempts when a summarize call fails. The gateway drops requests
+# intermittently — measured on lamp-0c89 03/09/2026: the SAME payload returned
+# 404 once, then succeeded on four of the next five tries (the sixth timed out),
+# while the superset payload containing it succeeded outright. So a failure says
+# nothing about the input, and one dropped call costs the whole summary until
+# the next rebuild. 0 disables retrying.
+REALTIME_SUMMARIZER_RETRIES: int = int(
+    os.environ.get("HAL_REALTIME_SUMMARIZER_RETRIES", "2")
+)
+# Seconds before the first retry; doubled for each one after it.
+REALTIME_SUMMARIZER_RETRY_BACKOFF_S: float = float(
+    os.environ.get("HAL_REALTIME_SUMMARIZER_RETRY_BACKOFF_S", "1.5")
+)
 
 # Gaze re-point: turn back toward the remembered bearing when nobody has been
 # visible for a while.

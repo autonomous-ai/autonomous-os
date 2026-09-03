@@ -797,6 +797,13 @@ Các lượt realtime được append vào file JSONL (`HAL_REALTIME_MEMORY_PATH
 (giữ lại `HAL_REALTIME_MEMORY_TRIM_KEEP`). `RealtimeSummarizer` (`summarizer.py`)
 nén device + realtime memory qua **Anthropic Messages API**
 (`HAL_REALTIME_SUMMARIZER_MODEL`, mặc định `claude-haiku-4-5-20251001`).
+
+Lời gọi này được **thử lại** (`HAL_REALTIME_SUMMARIZER_RETRIES`, mặc định 2,
+giãn cách `HAL_REALTIME_SUMMARIZER_RETRY_BACKOFF_S`) vì lỗi đến từ gateway chứ
+không từ input: đo trên lamp-0c89 ngày 03/09/2026, cùng một payload trả 404 một
+lần rồi thành công 4 trong 5 lần kế tiếp (một lần timeout), trong khi payload
+LỚN HƠN chứa trọn nó lại chạy ngay lần đầu. Không thử lại thì một cú rớt là mất
+trọn bản tóm tắt cho tới lần rebuild session sau.
 Điều này gồm cả lượt delegate hoặc fallback sang main agent: HAL lưu request của
 user trước khi dispatch, rồi lưu từng fragment TTS opt-in của main agent sau khi
 nói xong. `[TTS HISTORY]` vẫn cập nhật session live hiện tại ngay lập tức, nhưng
@@ -1153,6 +1160,8 @@ trong `config.json`:
 | `HAL_REALTIME_MAX_MEMORY_ENTRIES` / `_TRIM_KEEP` | `1000` / `500` | |
 | `HAL_REALTIME_SUMMARIZER_ENABLED` | `true` | |
 | `HAL_REALTIME_SUMMARIZER_MODEL` | `claude-haiku-4-5-20251001` | Anthropic Messages API |
+| `HAL_REALTIME_SUMMARIZER_RETRIES` | `2` | Số lần thử lại mỗi lượt summarize; `0` là tắt |
+| `HAL_REALTIME_SUMMARIZER_RETRY_BACKOFF_S` | `1.5` | Chờ trước lần thử lại đầu, mỗi lần sau nhân đôi |
 
 ## Bản đồ code
 

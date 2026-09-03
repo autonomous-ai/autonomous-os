@@ -827,6 +827,13 @@ Realtime turns are appended to a JSONL log (`HAL_REALTIME_MEMORY_PATH`, default
 (keeping `HAL_REALTIME_MEMORY_TRIM_KEEP`). `RealtimeSummarizer` (`summarizer.py`)
 condenses device + realtime memory via the **Anthropic Messages API**
 (`HAL_REALTIME_SUMMARIZER_MODEL`, default `claude-haiku-4-5-20251001`).
+
+The call is **retried** (`HAL_REALTIME_SUMMARIZER_RETRIES`, default 2, backoff
+`HAL_REALTIME_SUMMARIZER_RETRY_BACKOFF_S`) because the failures come from the
+gateway, not from the input: measured on lamp-0c89 03/09/2026, the same payload
+returned 404 once and then succeeded on four of the next five attempts (one
+timed out), while the LARGER payload containing it went through first time. A
+dropped call otherwise costs the whole summary until the next session rebuild.
 This includes a turn delegated or fallen back to the main agent: HAL persists the
 user request before dispatch, then persists every opted-in main-agent TTS reply
 fragment when it finishes speaking. `[TTS HISTORY]` still updates the current
@@ -1199,6 +1206,8 @@ is a top-level `config.json` flag:
 | `HAL_REALTIME_MAX_MEMORY_ENTRIES` / `_TRIM_KEEP` | `1000` / `500` | |
 | `HAL_REALTIME_SUMMARIZER_ENABLED` | `true` | |
 | `HAL_REALTIME_SUMMARIZER_MODEL` | `claude-haiku-4-5-20251001` | Anthropic Messages API |
+| `HAL_REALTIME_SUMMARIZER_RETRIES` | `2` | Extra attempts per summarize; `0` disables |
+| `HAL_REALTIME_SUMMARIZER_RETRY_BACKOFF_S` | `1.5` | Wait before the first retry, doubled each time |
 
 ## Code map
 
