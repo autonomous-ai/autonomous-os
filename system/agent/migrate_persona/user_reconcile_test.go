@@ -296,3 +296,40 @@ func TestReconcileLeavesExactlyOneBlankNameSlot(t *testing.T) {
 		t.Errorf("want exactly one Name slot, got %d:\n%s", n, got)
 	}
 }
+
+// The `Users: ` heading prefix is not stable across a serialize round-trip, so a
+// person block must be prunable with or without it.
+func TestReconcilePrunesUsersBlockWithoutHeadingPrefix(t *testing.T) {
+	body := "- **long (friend)**: prefers Vietnamese\n- **leo (friend)**: likes Billie Jean\n"
+	opts, path := seedDevice(t, body, "long")
+
+	if _, err := ReconcileUserProfiles(opts, true); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	got := readFile(t, path)
+	if strings.Contains(got, "leo") {
+		t.Errorf("unenrolled block survived without the heading prefix:\n%s", got)
+	}
+	if !strings.Contains(got, "long (friend)") {
+		t.Errorf("enrolled block was pruned:\n%s", got)
+	}
+}
+
+// An ordinary field bullet must never be read as a person. Without the required
+// `(role)` parenthetical, `**Notes:**` would parse as someone named "Notes:",
+// resolve to no enrollment, and be deleted.
+func TestReconcileNeverTreatsAFieldBulletAsAPerson(t *testing.T) {
+	body := "- **Name:** Long\n- **Notes:** Allergic to cilantro.\n- **What to call them:** anh Long\n"
+	opts, path := seedDevice(t, body, "long")
+
+	actions, err := ReconcileUserProfiles(opts, true)
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if len(actions) != 0 {
+		t.Fatalf("field bullets must not be retired, got %+v", actions)
+	}
+	if readFile(t, path) != body {
+		t.Errorf("file was rewritten:\n%s", readFile(t, path))
+	}
+}

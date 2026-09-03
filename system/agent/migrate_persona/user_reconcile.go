@@ -26,10 +26,19 @@ func (a ReconcileAction) String() string {
 }
 
 // usersBlockRe matches a `## Users` block entry naming a person, e.g.
-// `Users: **long (friend)**: prefers Vietnamese`. Written by the agent's
-// scheduled profile sync; keyed by the person's ENROLLMENT LABEL so the prune
-// below can check it against the enrollment store.
-var usersBlockRe = regexp.MustCompile(`(?i)^Users:\s*\*\*([^*(]+?)\s*(?:\([^)]*\))?\*\*`)
+// `Users: **long (friend)**: prefers Vietnamese`. Written by the agent's daily
+// profile sync (see runtimes/openclaw HEARTBEAT block) and keyed by the person's
+// ENROLLMENT LABEL so the prune below can check it against the enrollment store.
+//
+// The `Users: ` heading prefix is OPTIONAL because it is not stable: entry
+// extraction adds it from the `## Users` heading, but serializing back out
+// flattens headings away, so the same block round-trips both with and without.
+//
+// The `(role)` parenthetical is REQUIRED, and that is the safety catch. Without
+// it this would also match ordinary field bullets — `**Notes:** …` would parse
+// as a person named "Notes:", resolve to no enrollment, and be deleted. The
+// parenthetical is what distinguishes "a person" from "a field".
+var usersBlockRe = regexp.MustCompile(`(?i)^(?:Users:\s*)?\*\*([^*(]+?)\s*\([^)]*\)\*\*`)
 
 // ReconcileUserProfiles retires people from every runtime's USER.md who no
 // longer have a face/voice enrollment on this device.

@@ -784,3 +784,32 @@ kept greeting its previous owner by name (lamp-ac82, 2026-09-03).
 - Writes are atomic (temp + rename) because the gateway is live during the pass.
 - An empty enrollment store (fresh device) is a no-op; an unreadable one is an
   error that changes nothing, rather than a guess.
+
+### Daily people sync (KNOWLEDGE.md → USER.md)
+
+The 21:00 heartbeat pass has a second step after knowledge synthesis: carry what
+was learned about *people* into `USER.md`.
+
+This exists because of an asymmetry that caused a real bug. `KNOWLEDGE.md` is
+the agent's own file — **OpenClaw does not load it**; it only reaches the model
+when the agent tool-reads it. `USER.md` is a bootstrap file and is injected into
+the system prompt on **every turn**. So the file the agent wrote daily was the
+one rarely read, and the file always read was never written: a device that
+changed hands kept greeting its previous owner for two months.
+
+The instruction lives in `heartbeatMDBlock` (`runtimes/<name>/onboarding.go`) and
+is byte-identical across openclaw / codex / opencode / picoclaw — a runtime
+switch must not silently drop it.
+
+Rules the agent is given, and why each one is load-bearing:
+
+| Rule | Why |
+|---|---|
+| One bullet per person under `## Users`, as `- **<label> (friend)**: …` | `<label>` is the enrollment label from `[context: current_user=…]`, which is what the OS reconcile keys on. The `(friend)` parenthetical is what distinguishes a person from a form field — without it, `**Notes:** …` would parse as a person named "Notes:" and get deleted. |
+| Only write what was observed about **that** person | The original failure was two people fused into one profile (`Long/Leo`). Never move one person's habits onto another. |
+| Update and add only — **never delete** | Absence is not departure. Retiring a person is the OS's job (`ReconcileUserProfiles`, keyed on enrollment), not the agent's. |
+| Do not fill `**Name:**` or the other single-value fields | They are singular and cannot represent a multi-user device — filling them from the day's observations would thrash between users. Who is present comes from the per-turn tag. |
+
+`TestHeartbeatPeopleSyncFormatMatchesTheReconciler` pins the written format
+against the reconciler's parser, so the two cannot drift apart into entries
+nobody can prune.

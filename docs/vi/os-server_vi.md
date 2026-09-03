@@ -767,3 +767,30 @@ chủ vẫn gọi tên chủ cũ (lamp-ac82, 2026-09-03).
 - Ghi theo kiểu atomic (temp + rename) vì gateway đang chạy trong lúc pass chạy.
 - Enrollment store rỗng (máy mới) là no-op; store không đọc được là lỗi và không
   đổi gì, thay vì đoán.
+
+### Đồng bộ người dùng hằng ngày (KNOWLEDGE.md → USER.md)
+
+Lượt heartbeat 21:00 có bước thứ hai sau knowledge synthesis: mang những gì học
+được về *con người* sang `USER.md`.
+
+Lý do là một sự bất đối xứng đã gây bug thật. `KNOWLEDGE.md` là file của riêng
+agent — **OpenClaw không load nó**; nó chỉ tới tay model khi agent chủ động đọc.
+`USER.md` là bootstrap file, được nhét vào system prompt **mỗi lượt**. Vậy nên
+file agent ghi hằng ngày lại là file hiếm khi được đọc, còn file luôn được đọc
+thì không bao giờ được ghi: một thiết bị đã đổi chủ vẫn chào chủ cũ suốt hai
+tháng.
+
+Hướng dẫn nằm trong `heartbeatMDBlock` (`runtimes/<name>/onboarding.go`) và
+giống hệt nhau từng byte ở openclaw / codex / opencode / picoclaw — đổi runtime
+không được phép âm thầm làm mất nó.
+
+| Quy tắc | Vì sao quan trọng |
+|---|---|
+| Mỗi người một bullet dưới `## Users`, dạng `- **<label> (friend)**: …` | `<label>` là enrollment label lấy từ `[context: current_user=…]`, đúng khoá mà reconcile của OS dùng. Phần `(friend)` là thứ phân biệt một con người với một field biểu mẫu — thiếu nó, `**Notes:** …` sẽ bị đọc thành người tên "Notes:" và bị xoá. |
+| Chỉ ghi điều quan sát được về **chính** người đó | Lỗi ban đầu là hai người bị gộp thành một profile (`Long/Leo`). Không bao giờ chuyển thói quen của người này sang người khác. |
+| Chỉ thêm và cập nhật — **không bao giờ xoá** | Vắng mặt không phải là rời đi. Retire một người là việc của OS (`ReconcileUserProfiles`, khoá theo enrollment), không phải của agent. |
+| Không điền `**Name:**` và các field đơn giá trị khác | Chúng là đơn nhất, không biểu diễn được thiết bị nhiều người — điền từ quan sát trong ngày sẽ giật qua giật lại giữa các user. Ai đang có mặt lấy từ tag mỗi lượt. |
+
+`TestHeartbeatPeopleSyncFormatMatchesTheReconciler` khoá định dạng được dạy với
+parser của reconciler, để hai bên không trôi ra khỏi nhau thành các entry không
+ai prune được.
