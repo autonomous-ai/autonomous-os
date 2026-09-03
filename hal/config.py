@@ -761,6 +761,20 @@ REALTIME_SESSION_IDLE_RESET_S: float = float(
 REALTIME_GEMINI_PRE_TURN_RECYCLE_S: float = float(
     os.environ.get("HAL_GEMINI_PRE_TURN_RECYCLE_S", "60")
 )
+# Close an idle Gemini session ourselves instead of letting the server close it.
+# An idle session is killed upstream with WS 1008 "The operation was aborted"
+# (measured idle lifetimes: 86s, 98s, 150s, 151s, 152s, 185s, 198s). That close is
+# harmless to turns -- the pre-turn recycle above already replaces the session
+# before any post-idle turn streams audio -- but the backend logs it as an error
+# and pages the dev channel, so the device must not provoke it. Parking closes the
+# transport after this many seconds without turn activity and leaves the
+# orchestrator `available`: the next turn's prepare_turn() connects a fresh session
+# synchronously (voice_service buffers audio across the ~1s handshake), which is
+# exactly what the pre-turn recycle would have done for that turn anyway. Must stay
+# BELOW the shortest observed idle death (86s); 45s keeps a wide margin. 0 disables.
+REALTIME_GEMINI_IDLE_PARK_S: float = float(
+    os.environ.get("HAL_GEMINI_IDLE_PARK_S", "45")
+)
 # Gemini 1011 recovery: how many times to reconnect a FRESH session and replay
 # the just-captured turn audio when a turn produced no output (the campaign-api
 # proxy drops idle 2.5-native-audio sessions → a post-pause turn lands on a dead

@@ -651,6 +651,20 @@ recycle Gemini đồng bộ trước khi stream audio nếu lượt trước đ�
 `HAL_GEMINI_PRE_TURN_RECYCLE_S` giây, để câu nói sau khoảng nghỉ không rơi vào
 socket đã chết vì idle ở proxy.
 
+**Park khi idle.** Session Gemini không ai nói chuyện cùng sẽ bị server đóng bằng
+WS `1008` "The operation was aborted" (thời gian sống khi idle đo được: 86-198
+giây). Cú đóng đó không làm hỏng turn nào — pre-turn recycle ở trên đã thay
+session trước khi turn sau khoảng nghỉ stream audio — nhưng backend ghi nó là lỗi
+và bắn cảnh báo, nên thiết bị phải đóng trước. Sau `HAL_GEMINI_IDLE_PARK_S` giây
+không có hoạt động turn nào, thread watchdog `rt-idle-park` đóng transport và
+đánh dấu session là *parked*. Orchestrator đang parked vẫn báo `available`:
+`prepare_turn()` kế tiếp sẽ nối lại session mới một cách đồng bộ
+(`idle-park-resume`) trước khi có audio nào được stream — đúng bằng việc mà
+pre-turn recycle vốn đã làm cho turn đó — và `voice_service` giữ đệm capture qua
+~1 giây handshake. Không park khi đang có turn chạy dở; nếu resume không nối
+được thì báo unavailable (turn rơi về main agent) nhưng vẫn giữ trạng thái parked
+để turn sau thử lại.
+
 Mọi provider coi teardown là trạng thái kết thúc: sau khi `disconnect()` đặt
 stop signal, worker send/receive không reconnect và cũng không ghi log lỗi
 transport trong lúc socket đã đóng đang unwind.
@@ -1135,6 +1149,7 @@ trong `config.json`:
 | `HAL_REALTIME_NOISE_GUARD_MAX_WORDS` | `3` | Mở rộng guard voiced-ratio của Silero sang cả turn CÓ transcript, tối đa ngần này từ. STT bịa một từ đệm ngắn từ tiếng ồn phòng và báo confidence tối đa cho nó, nên turn kiểu đó trước đây lọt hết mọi guard (guard chỉ chạy khi transcript rỗng) và commit nhiễu thuần lên model. Transcript nhiều nhất ngần này từ sẽ bị kiểm lại theo `HAL_REALTIME_NOISE_SPEECH_RATIO` và bị bỏ nếu audio chưa từng voiced; lệnh ngắn nói thật vẫn là voiced nên vẫn commit. Tỉ lệ được đo trên **span voiced** — từ chunk voiced đầu tới chunk voiced cuối — chứ không phải toàn buffer, vì bản capture luôn kèm pre-roll của VAD ở đầu và 200ms đuôi giữ lại ở cuối; phần đệm cố định đó làm loãng câu ngắn nặng hơn câu dài rất nhiều. Đo toàn buffer từng vứt nhầm một câu `Yes, that's right.` nói thật ở mức 0.500 (`peak=1.000`) — tức là guard quay ra phạt đúng lớp câu nó sinh ra để soi. Tiếng ồn kéo dài vẫn rớt, vì các chunk voiced của nó thưa ngay bên trong span. Transcript dài hơn không bao giờ bị kiểm lại, nên ngưỡng này không thể làm câm một câu nói thật. `0` = tắt. |
 | `HAL_REALTIME_SESSION_IDLE_RESET_S` | `240` | Kiểm soát chi phí: khi một turn đến sau ngần này giây im lặng, recycle (rebuild) session **sau** turn đó để turn kế tiếp bỏ phần context mỗi-turn mà provider re-bill trên session sống lâu. Turn sau khoảng nghỉ dài coi như cuộc hội thoại mới; trí nhớ dài hạn vẫn còn nhờ nạp lại `summary.md`. Với Gemini native-audio, bước này bị bỏ qua nếu pre-turn recycle thành công đã làm mới session cho chính idle gap đó. `0` = tắt. Dùng lại đường rebuild của zombie-recovery. |
 | `HAL_GEMINI_SESSION_RESUMPTION` | `false` | Resume cùng session Gemini qua reconnect. Mặc định OFF — proxy `campaign-api` không forward đúng resumption handshake nên resume qua nó tạo session zombie (cold reconnect thì chạy được). Chỉ bật khi endpoint hỗ trợ. |
+| `HAL_GEMINI_IDLE_PARK_S` | `45` | Park Gemini khi idle: đóng transport của session sau ngần này giây không có hoạt động turn, để server không phải đóng nó bằng WS `1008` (backend ghi thành lỗi và bắn cảnh báo). Orchestrator vẫn `available` trong lúc parked; `prepare_turn()` của turn kế tiếp nối lại đồng bộ trước khi stream audio. Phải nhỏ hơn thời gian idle chết ngắn nhất đo được (86 giây). `0` = tắt. |
 | `HAL_GEMINI_PRE_TURN_RECYCLE_S` | `120` | Guard transport cho Gemini: khi lượt nói mới bắt đầu sau ngần này giây idle, rebuild session Gemini **trước khi** stream pre-roll/audio để turn không đụng socket chết vì idle ở proxy/SDK. `0` = tắt. Pre-turn recycle thành công sẽ chặn idle recycle generic sau chính turn đó, nên một idle gap chỉ tạo tối đa một rebuild phục vụ transport/chi phí. |
 | `HAL_AGENT_GATEWAY` | `openclaw` | Chọn context manager (cũng đọc từ `agent_runtime` trong config.json) |
 | `GEMINI_API_KEY` / `GOOGLE_API_KEY` | — | Key Gemini; fallback về `llm_api_key` |
