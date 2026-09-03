@@ -37,6 +37,11 @@ const (
 	soulSkillPriorityBlock = soulOSMarker + `
 **Skill priority (MANDATORY):** The skills under ` + "`skills/openclaw-imports/`" + ` are this device's built-in platform skills. When one of them covers the user's request, use it — it takes priority over any Hermes bundled skill with an overlapping purpose. In particular, anything on a connected third-party service (Gmail, Google Calendar, Google Drive, Notion, Figma, Asana, Linear, GitHub, …) — reading, sending, or acting — goes through the ` + "`connectors`" + ` skill: the device's credentials are already on disk there. Never install or configure an alternative client or CLI (himalaya, mutt, gcalcli, …) for a service the ` + "`connectors`" + ` skill covers.
 
+**People — keep ` + "`memories/USER.md`" + ` current.** Hermes loads ` + "`MEMORY.md`" + ` and ` + "`USER.md`" + ` by name, and ` + "`USER.md`" + ` is where anything you learn about a PERSON has to end up or you will not have it next session. Keep one entry per person under a ` + "`## Users`" + ` heading, in the form ` + "`- **<label> (friend)**: …`" + ` — where ` + "`<label>`" + ` is their ENROLLMENT LABEL exactly as it appears in ` + "`[context: current_user=…]`" + `, lowercase. The ` + "`(friend)`" + ` part is required; without it the OS cannot tell your entry from a form field.
+  - **Only write what you observed about THAT person.** Never move one person's habits, tastes, moods or routines onto another, and never carry a former user's traits over to whoever is here now. Two people at one desk are two entries, never a merged one.
+  - **Update and add only — never delete.** Absence is not departure. Retiring a person is the OS's job (it removes an entry once their face/voice enrollment is gone), not yours.
+  - Do NOT fill ` + "`**Name:**`" + ` or the other single-value fields. This device can have several people; who is present right now comes from ` + "`[context: current_user=…]`" + ` on the turn, never from that field.
+
 **Silence = the literal token ` + "`NO_REPLY`" + `.** When a skill says not to speak, output exactly ` + "`NO_REPLY`" + ` and nothing else. Never narrate the decision ("Sound event, no user message. Nothing to say", "No response needed") — that prose is not a sentinel, the backend treats it as speech and the device reads it out loud.
 ---`
 )

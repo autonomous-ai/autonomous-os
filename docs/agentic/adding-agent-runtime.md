@@ -514,6 +514,13 @@ re-syncs `.env` before the gateway starts, so the re-apply is an idempotent no-o
 - [ ] `userProfilePath(opts)` points at this runtime's real `USER.md` (Hermes
       keeps it under `memories/`) so the startup enrollment reconcile can retire
       a profile whose person no longer has a face/voice enrollment (§7).
+- [ ] **People sync** in this runtime's own OS-managed instruction block: keep
+      `USER.md`'s `## Users` section current, as `- **<label> (friend)**: …`
+      keyed by the enrollment label, add/update only, never cross-attribute,
+      never fill `**Name:**`. The slot differs per runtime — HEARTBEAT.md where
+      there is a heartbeat loop, CLAUDE.md for claudecode (no loop), the SOUL.md
+      block for hermes (no loop, no KNOWLEDGE.md).
+      `TestEveryRuntimeTeachesThePeopleSync` fails if a runtime ships without it.
 - [ ] Capability gating via `skills.Supported` / `SupportedHooks`.
 - [ ] **Channels (§9):** `SupportedChannels()` declares real capability;
       `AddChannel`/`RefreshChannelConfig` return `domain.ErrChannelNotSupported`

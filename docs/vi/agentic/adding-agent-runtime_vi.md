@@ -501,6 +501,13 @@ là no-op idempotent.
 - [ ] `userProfilePath(opts)` trỏ đúng `USER.md` thật của runtime (Hermes để ở
       `memories/`) để reconcile theo enrollment lúc khởi động có thể retire
       profile của người không còn enrollment khuôn mặt/giọng nói (§7).
+- [ ] **People sync** trong block hướng dẫn OS-managed của chính runtime này:
+      giữ mục `## Users` trong `USER.md` luôn mới, dạng `- **<label> (friend)**: …`
+      khoá theo enrollment label, chỉ thêm/cập nhật, không bao giờ gán chéo người,
+      không điền `**Name:**`. Vị trí đặt khác nhau tùy runtime — HEARTBEAT.md nếu
+      có heartbeat loop, CLAUDE.md cho claudecode (không có loop), block SOUL.md
+      cho hermes (không loop, không KNOWLEDGE.md).
+      `TestEveryRuntimeTeachesThePeopleSync` fail nếu một runtime thiếu nó.
 - [ ] Gate capability qua `skills.Supported` / `SupportedHooks`.
 - [ ] **Kênh (§9):** `SupportedChannels()` khai báo capability thật;
       `AddChannel`/`RefreshChannelConfig` trả `domain.ErrChannelNotSupported` cho
