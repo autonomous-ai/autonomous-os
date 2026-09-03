@@ -235,13 +235,13 @@ Truy cập qua nginx proxy: `/hw/*` → `127.0.0.1:5001`
 
 | Method | Endpoint | Mô tả |
 |--------|----------|-------|
-| GET | `/servo` | Recordings + animation state |
-| POST | `/servo/play` | Phát animation (idle, curious, nod, headshake, happy_wiggle, sad, excited, shock, shy, scanning, wake_up, music_groove, listening, thinking_deep, laugh, confused, sleepy, greeting, acknowledge, stretching). Idle tự chạy khi boot. |
+| GET | `/servo` | Recordings + animation state + `motion_mode` (`zero` / `hold` / `released`, hoặc `null` khi không mode nào đang giữ body) — chế độ tư thế quyết định `/servo/play` có được thực thi hay không |
+| POST | `/servo/play` | Phát animation (idle, curious, nod, headshake, happy_wiggle, sad, excited, shock, shy, scanning, wake_up, music_groove, listening, thinking_deep, laugh, confused, sleepy, greeting, acknowledge, stretching). Idle tự chạy khi boot. Trả `{"status":"ignored","reason":"hold"\|"zero"\|"released"\|"sleeping"}` khi mode hoặc sleep gate bỏ qua lệnh — `"ok"` nghĩa là recording đã thực sự chạy. |
 | POST | `/servo/move` | Gửi joint positions với smooth interpolation |
 | POST | `/servo/release` | Tắt torque tất cả servo |
 | GET | `/servo/position` | Vị trí servo hiện tại |
 | GET | `/servo/aim` | Danh sách aim directions |
-| POST | `/servo/aim` | Aim đầu thiết bị (center, desk, wall, left, right, up, down, user) |
+| POST | `/servo/aim` | Aim đầu thiết bị (center, desk, wall, left, right, up, down, user). `left`/`right` chỉ đổi `base_yaw`; `center` gọi tường minh thì reset nó; các hướng còn lại — và fallback khi hướng lạ — giữ nguyên yaw hiện tại |
 | GET | `/servo/track/targets` | Danh sách target gợi ý cho YOLOWorld |
 | POST | `/servo/track` | Bắt đầu tracking — `{"target":"cup"}` (tự detect) hoặc `{"bbox":[x,y,w,h]}`. Xem [vision-tracking_vi.md](../../robots/lamp/docs/vi/vision-tracking_vi.md) |
 | POST | `/servo/track/stop` | Dừng phiên tracking |
@@ -580,6 +580,127 @@ HAL (Python): FastAPI standard JSON responses.
    - Chờ HAL trả lời `GET :5001/health` (tối đa 120s) trước mọi lời gọi HAL. os-server bind :5000 sớm hơn hẳn lúc FastAPI của HAL lắng nghe, lần boot đầu còn phải dựng venv và load model, nên một lời gọi một-lần không có hàng rào sẽ mất trắng vì connection refused
    - Đặt volume loa: mức user chỉnh gần nhất (HAL ghi lại mỗi lần `/audio/volume`) được ưu tiên; không có thì lấy `startup_volume` của thiết bị (front matter ROBOT.md, mặc định 100)
 4. Nếu chưa setup: chờ `POST /api/device/setup`
+
+## Chạy off-device (laptop)
+
+`make os-dev` chạy **đúng binary** được ship lên board — không build tag, không
+có nhánh code thứ hai. Chỉ các đường dẫn tuyệt đối của thiết bị là thay đổi,
+qua các biến môi trường mà `system/lib/syspath` đọc. **Không set env = mặc định
+của board, giống từng byte** (`runtimes/codex/paths_default_test.go` kiểm chứng
+điều này).
+
+| Biến môi trường | Mặc định (device) | Dùng cho |
+|-----------------|-------------------|----------|
+| `CODEX_HOME` | `/root/.codex` | State dir của Codex — config.toml, auth.json, `.env`, `skills/`, `sessions/`, `workspace/`. Là gốc của mọi đường dẫn codex ở cả client lẫn `codex-gatewayd` |
+| `CODEX_PORT` | `18792` | Cổng WebSocket của bridge (`WSURL` và listener của gatewayd) |
+| `CODEX_WS_TOKEN` | `autonomous_codex_token` | Bearer token os-server gửi tới bridge |
+| `OS_AGENT_HOME` | `/root` | Gốc để một coding session Telegram resolve `~` và đường dẫn tương đối |
+| `OS_AGENT_STATE_PATH` | `/root/config/agent_state.json` | Lịch sử chuyển runtime (persona migration) |
+| `OS_BOOTSTRAP_CONFIG` | `/root/config/bootstrap.json` | File os-server đọc `metadata_url` — base cho skill zip và skill watcher |
+| `OS_LOG_FILE` | `/var/log/os-server.log` | File log xoay vòng |
+| `DEVICE_TYPE` / `DEVICES_DIR` | — / `/opt/devices` | Chọn body và gốc `robots/<type>/` (đã có sẵn) |
+
+`config.json` không cần env: `configPath` là `config/config.json` tương đối theo
+cwd, nên `os-dev` chạy từ state dir đúng như `WorkingDirectory=/root` của systemd
+trên board.
+
+Một stack đầy đủ trên laptop cần ba terminal:
+
+```bash
+make sim          # HAL trên :5001
+make codex-dev    # codex bridge trên $CODEX_PORT
+make os-dev       # API trên :5000
+make web-dev      # web UI trên :5173 (tuỳ chọn)
+```
+
+os-server không serve HTML: trên board là nginx serve `web/dist` rồi proxy `/api`
+và `/hw` xuống nó. `make web-dev` đặt Vite vào đúng vai nginx, với `LAMP_PROXY`
+(mặc định `http://127.0.0.1:5000`) là thiết bị mà SPA nói chuyện cùng — file
+`.env` trong `web/` vẫn thắng, nên trỏ vào Pi thật thì không đổi gì. Mở
+**`http://localhost:5173/monitor`**; Vite chỉ bind `[::1]` nên `127.0.0.1:5173`
+bị từ chối. Các route admin cần auth — đăng nhập bằng mật khẩu thiết bị, hoặc
+thêm `?llm_api_key=<key trong config.json>` một lần, SPA sẽ đổi nó lấy session
+cookie rồi xoá khỏi thanh địa chỉ.
+
+Ba trong sáu tab log chạy được off-device. `hal` và `os-server` đi theo
+`OS_HAL_LOG_FILE` / `OS_LOG_FILE`, còn các tab Agent đi theo
+`OS_AGENT_BRIDGE_LOG` — `make codex-dev` tee bridge ra file vì laptop không có
+journal để đọc. `bootstrap` (worker không chạy off-device) và `buddy` (app Mac,
+không có log ở đây) để trống có chủ đích; env unset thì cả sáu vẫn resolve đúng
+như trên board.
+
+Các núm trong Makefile: `OS_STATE_DIR` (mặc định `/tmp/autonomous-os`),
+`OS_AGENT_RUNTIME` (mặc định `codex`), `CODEX_HOME` (mặc định `$HOME/.codex`),
+`CODEX_PORT`, `CODEX_BIN`. `scripts/dev/os-dev-seed.sh` ghi `device_type`,
+`agent_runtime` và `set_up_completed: true` vào config.json của state dir — cái
+cuối quan trọng vì startup sequence chạy presync và `EnsureOnboarding` bị gate
+bởi nó (`server/config_watch.go`), thiếu nó thì workspace sẽ rỗng. Target không
+tự cài codex CLI — nó được xem như đã có sẵn trên `PATH`.
+
+Nhưng skills thì tự cài. `os-dev-seed.sh` còn seed một `bootstrap.json` chứa
+`metadata_url`, dựng từ chính `GCS_BUCKET` / `BUCKET_PREFIX` khai trong
+`scripts/release/ota-config.sh`, nên URL dev không thể lệch với thứ
+`upload-skills.sh` publish. Có nó rồi thì `EnsureOnboarding` chạy đúng
+`downloadSkills()` như trên board: mọi skill mà `DEVICE_TYPE` này hỗ trợ được tải
+về dạng `<base>/skills/<name>.zip` vào `$CODEX_HOME/skills`, sau đó skill watcher
+tự cập nhật khi version đổi. Object trên CDN là public nên không cần credential.
+Seed một lần — `bootstrap.json` đã sửa sẽ được giữ nguyên.
+
+`metadata_url` là key DUY NHẤT os-server đọc từ file đó, và chỉ có skill watcher
+cùng helper `otaBaseURL()` của các runtime dùng tới, nên bật nó off-device chỉ
+mở đúng phần skills — OTA tự cập nhật nằm ở binary `bootstrap-server` riêng, mà
+`make os-dev` không chạy.
+
+### Đầy đủ media + giọng nói trên laptop
+
+`make sim` không thôi thì HAL boot với thiết bị ảo. `make sim SIM_MEDIA=host` mở
+microphone, speaker và camera của Mac **và** chạy pipeline giọng nói thật (STT →
+realtime → dispatch `[turn] route=…` → server này), nên một lượt nói đi đúng
+đường mà nó đi trên board. Target `sim` set sẵn ba đường dẫn cho việc đó:
+
+| Env | Trỏ tới | Vì sao |
+|-----|---------|--------|
+| `OS_CONFIG_PATH` | `$OS_STATE_DIR/config/config.json` | File duy nhất HAL và os-server dùng chung, đúng vai `/root/config/config.json` trên board. Mang credential **và** `agent_runtime` |
+| `HAL_SNAPSHOT_DIR` | `$CODEX_HOME/media/hal-snapshots` | Nơi `?save=true` ghi file. Bắt buộc nằm dưới home của chính runtime, nếu không agent không đọc lại được frame và `GET /api/sensing/agent-snapshot/…` không serve được |
+| `HAL_SNAPSHOT_PERSIST_DIR` | `$SIM_STATE_DIR/snapshots` | `/var/lib/hal/snapshots` chỉ root ghi được |
+| `HAL_TTS_CACHE_DIR`, `HAL_CALIBRATION_DIR`, `HAL_USER_BEARING_PATH`, `HAL_FACE_HEIGHT_PATH`, `HAL_VOICE_STRANGERS_DIR`, `HAL_DL_STALL_LOG` | `$SIM_STATE_DIR/…` | Phần state ghi được còn lại của HAL, trên board nằm ở `/var/lib/hal` hoặc `/root/local` |
+| `HAL_CODEX_WORKSPACE_DIR` | `$CODEX_HOME/workspace` | `memory.jsonl` của realtime agent suy ra từ đây |
+
+Những cái này hỏng ở rất xa nguyên nhân, nên phải set thành một khối chứ không
+sửa lẻ từng cái: riêng TTS cache lộ ra dưới dạng `POST /voice/speak 409`, còn
+`PermissionError: /var/lib/hal` thật thì nằm lẫn trong traceback của một thread
+nền. Hai default còn lại là đường dẫn model chỉ-đọc (`/root/local/models`,
+`/opt/piper`) — laptop không có thì tính năng cần chúng đơn giản là tắt.
+`POST /audio/volume` trả 503 cũng là bình thường: macOS không có ALSA mixer.
+
+Đặt credential vào chính config.json đó (Settings trên web UI ghi cùng file).
+Riêng `llm_api_key` + `llm_base_url` đã phủ LLM, `AutonomousSTT`, TTS, mô tả ảnh
+và cả Gemini Live — key của realtime fallback về `llm_api_key`, endpoint về
+`llm_base_url` + `/ws/gemini` (`hal/config.py`), nên không cần credential Google
+riêng. `deepgram_api_key` là tuỳ chọn.
+
+Chép config.json của một thiết bị thật là cách nhanh nhất để có laptop full
+option, nhưng phải xoá trắng hai key trước: `telegram_bot_token` (một bot không
+thể có hai poller — laptop sẽ cướp tin nhắn của thiết bị) và `mqtt_endpoint`
+(laptop sẽ subscribe đúng topic của thiết bị). Cả hai đều không phải năng lực
+AI, nên không mất gì ở trên.
+
+Servo ở đây không có thân máy vật lý: `http://127.0.0.1:5001/simulator` là chỗ
+để xem, và nó gọi đúng các endpoint `/servo/*`, `/led/*` mà một skill gọi.
+
+Hai điều cần biết trên macOS:
+
+- Quyền Microphone và Camera phải được cấp cho ứng dụng terminal đang chạy HAL
+  (System Settings > Privacy & Security). Liệt kê thiết bị không phải là quyền —
+  danh sách vẫn hiện ra dù chưa cấp, chỉ lần đọc thật đầu tiên mới lỗi — nên HAL
+  probe cả hai lúc boot và rơi về thiết bị ảo kèm log `[sim-media]` nói rõ lý do,
+  thay vì để hỏng giữa một lượt nói.
+- AirPlay Receiver cũng listen `*:5000`. os-server bind `127.0.0.1:5000`, nhưng
+  request tới `localhost:5000` vẫn có thể rơi vào AirTunes — tắt receiver
+  (System Settings > General > AirDrop & Handoff) hoặc đổi `httpPort`.
+- `presync.sh` sinh lại `config.toml` mỗi lần boot và chỉ giữ `[mcp_servers.*]`.
+  `os-dev-seed.sh` sao lưu file có sẵn thành `config.toml.pre-os-dev` một lần,
+  nên trỏ `CODEX_HOME` vào một bản cài thật không phải đường một chiều.
 
 ## Logging
 

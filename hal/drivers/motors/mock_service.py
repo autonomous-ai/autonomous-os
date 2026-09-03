@@ -107,6 +107,8 @@ class MockMotionService:
         self._lock = threading.Lock()
         self._connected = False
         self._suppressed = False
+        # `_suppressed` has three setters and cannot say which. Write both together.
+        self._mode: Optional[str] = None
         self._frozen = False
         self._torque = True
         # Set by halt(), cleared by the next commanded move — mirrors the real
@@ -172,6 +174,11 @@ class MockMotionService:
     def is_suppressed(self) -> bool:
         return self._suppressed
 
+    @property
+    def motion_mode(self) -> Optional[str]:
+        """Never "released": release() here cuts torque without suppressing."""
+        return self._mode
+
     # --- Motion primitives ---
 
     def move_to(self, target_positions: Dict[str, float], duration: float = 2.0) -> None:
@@ -184,6 +191,7 @@ class MockMotionService:
         self._cancel_playback()
         self._travel(target_positions, duration)
         self._suppressed = True
+        self._mode = "hold"
         self._record("move_and_hold", dict(target_positions), duration)
 
     def get_joint_names(self) -> Set[str]:
@@ -202,6 +210,7 @@ class MockMotionService:
     def zero_pose(self) -> None:
         self._apply({j: 0.0 for j in self._joints})
         self._suppressed = True
+        self._mode = "zero"
         self._record("zero_pose")
 
     def release(self) -> Dict[str, str]:
@@ -226,10 +235,12 @@ class MockMotionService:
         self._halted = False
         self._torque = True
         self._suppressed = False
+        self._mode = None
         self._record("resume")
 
     def hold(self, explicit: bool = False) -> None:
         self._suppressed = True
+        self._mode = "hold"
         self._record("hold", explicit)
 
     def joint_status(self) -> Dict[str, dict]:
@@ -250,6 +261,7 @@ class MockMotionService:
         from hal.safety.policy import min_move_duration
 
         preset = AIM_PRESETS.get(direction)
+        explicit_center = direction == AIM_CENTER
         if preset is None:
             logger.warning("Unknown aim direction %r — defaulting to center", direction)
             direction = AIM_CENTER
@@ -258,8 +270,13 @@ class MockMotionService:
         current = current_positions or self.get_positions()
         if direction in (AIM_LEFT, AIM_RIGHT):
             target = {**current, "base_yaw.pos": preset["base_yaw.pos"]}
+        elif explicit_center:
+            # Same rule as AnimationService.
+            target = dict(preset)
         else:
             target = {**preset, "base_yaw.pos": current.get("base_yaw.pos", preset["base_yaw.pos"])}
+        self._cancel_playback()
+        self._halted = False
         # Same speed ceiling the body obeys: a simulator that swung faster than
         # SAFETY.md allows would show a move the robot cannot make.
         self._travel(target, min_move_duration(safety_policy, target, current, duration))

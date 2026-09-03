@@ -126,6 +126,36 @@ func (s *ClaudeCodeService) StopTTS() error {
 	return nil
 }
 
+// Speak says text out loud and nothing else — no agent turn, no session entry,
+// no tokens. See domain.AgentGateway.Speak for the full contract; the only
+// per-runtime difference is the log component, which is why every backend's
+// implementation is this same delegation to hal.Speak.
+//
+// hal.Speak, NOT hal.SpeakReply: SpeakReply sets realtime_feedback so the
+// spoken text is fed back to the realtime voice agent as history, which is
+// right for the agent's own reply and wrong for a canned line the agent never
+// produced. This is the same path hardcoded fillers and system notices take.
+//
+// The returned error means HAL REFUSED THE TEXT (transport failure, or a
+// rejection such as the 1..2000 character bound it enforces without
+// truncating). A nil error means HAL accepted it for playback — not that audio
+// was produced, and certainly not that anyone heard it.
+func (s *ClaudeCodeService) Speak(text string) error {
+	// Same normalisation the agent's own TTS gets: emoji and markdown read
+	// aloud as noise. It can only ever shorten the string, so it cannot push a
+	// caller-validated length back over HAL's cap.
+	text = stripForTTS(text)
+	if text == "" {
+		return nil // nothing to say; HAL rejects an empty string outright
+	}
+	if err := hal.Speak(text); err != nil {
+		return fmt.Errorf("speak: %w", err)
+	}
+	slog.Info("TTS spoken (verbatim)", "component", "claudecode", "text", truncRunes(text, 80))
+	s.monitorBus.Push(domain.MonitorEvent{Type: "tts", Summary: text})
+	return nil
+}
+
 func (s *ClaudeCodeService) SendToHALTTS(text string) error {
 	text = stripForTTS(text)
 	if text == "" {

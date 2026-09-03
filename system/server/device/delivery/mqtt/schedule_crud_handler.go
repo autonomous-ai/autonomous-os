@@ -19,9 +19,12 @@ import (
 // Enabled is a POINTER so "not supplied" is distinguishable from "false" on a
 // PATCH: without that, editing only a task's name would silently pause it.
 type scheduleWriteRequest struct {
-	Name         string        `json:"name"`
-	Instructions string        `json:"instructions"`
-	Enabled      *bool         `json:"enabled,omitempty"`
+	Name         string `json:"name"`
+	Instructions string `json:"instructions"`
+	Enabled      *bool  `json:"enabled,omitempty"`
+	// Kind is "agent" (default when omitted) or "speak" — see
+	// schedule.Schedule.Kind. Omitting it keeps today's behaviour exactly.
+	Kind         string        `json:"kind,omitempty"`
 	TemplateCode string        `json:"template_code,omitempty"`
 	Cadence      schedule.Spec `json:"schedule"`
 	EndAt        *time.Time    `json:"end_at,omitempty"`
@@ -63,6 +66,7 @@ func (h *DeviceMQTTHandler) CreateSchedule(c *gin.Context) {
 		Name:         strings.TrimSpace(req.Name),
 		Instructions: strings.TrimSpace(req.Instructions),
 		Enabled:      enabled,
+		Kind:         schedule.ResolveKind(req.Kind),
 		TemplateCode: req.TemplateCode,
 		Cadence:      req.Cadence,
 		EndAt:        req.EndAt,
@@ -121,9 +125,13 @@ func (h *DeviceMQTTHandler) UpdateSchedule(c *gin.Context) {
 		Name:         current.Name,
 		Instructions: current.Instructions,
 		Enabled:      current.Enabled,
-		Cadence:      current.Cadence,
-		EndAt:        current.EndAt,
-		Timezone:     h.scheduleStore.Timezone().String(),
+		// Seeded from the stored row, not left blank: the proposal carries the
+		// whole mutable subset, so an unmentioned kind must be re-stated rather
+		// than sent as "" — which the backend would write as "agent".
+		Kind:     schedule.ResolveKind(current.Kind),
+		Cadence:  current.Cadence,
+		EndAt:    current.EndAt,
+		Timezone: h.scheduleStore.Timezone().String(),
 	}
 	if s := strings.TrimSpace(req.Name); s != "" {
 		payload.Name = s
@@ -133,6 +141,9 @@ func (h *DeviceMQTTHandler) UpdateSchedule(c *gin.Context) {
 	}
 	if req.Enabled != nil {
 		payload.Enabled = *req.Enabled
+	}
+	if strings.TrimSpace(req.Kind) != "" {
+		payload.Kind = schedule.ResolveKind(req.Kind)
 	}
 	if req.Cadence.Repeat != "" {
 		payload.Cadence = req.Cadence

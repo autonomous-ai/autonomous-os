@@ -1,0 +1,50 @@
+{
+  "httpPort": 5000,
+  "device_type": "lamp",
+  "agent_runtime": "codex",
+  "set_up_completed": true,
+
+  "llm_api_key": "",
+  "llm_base_url": "",
+  "llm_model": "Auto-AI",
+
+  "stt_api_key": "",
+  "stt_base_url": "",
+  "stt_model": "flux-general-en",
+  "stt_language": "en",
+  "deepgram_api_key": "",
+
+  "tts_api_key": "",
+  "tts_base_url": "",
+  "tts_provider": "elevenlabs",
+  "tts_voice": "Rachel",
+  "tts_instructions": "",
+
+  "realtime": {
+    "enabled": true,
+    "provider": "gemini",
+    "gemini": {
+      "model": "gemini-3.1-flash-live-preview",
+      "voice": "Kore",
+      "thinking_level": "MINIMAL"
+    }
+  },
+
+  "wakeword": true,
+  "timezone": "Asia/Ho_Chi_Minh",
+
+  "admin_password_hash": "",
+  "session_secret": "",
+
+  "channel": "",
+  "telegram_bot_token": "",
+  "telegram_user_id": "",
+
+  "device_id": "",
+  "mqtt_endpoint": "",
+  "mqtt_port": 1883,
+  "mqtt_username": "",
+  "mqtt_password": "",
+  "fa_channel": "",
+  "fd_channel": ""
+}

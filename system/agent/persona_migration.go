@@ -10,11 +10,14 @@ import (
 	"time"
 
 	migratepersona "go.autonomous.ai/os/system/agent/migrate_persona"
+	"go.autonomous.ai/os/system/lib/syspath"
 	"go.autonomous.ai/os/system/server/config"
 )
 
 const hermesHome = "/root/.hermes"
-const agentStatePath = "/root/config/agent_state.json"
+
+var agentStatePath = syspath.AgentStatePath()
+
 const agentStateMaxHistory = 50
 
 type agentRuntimeEntry struct {

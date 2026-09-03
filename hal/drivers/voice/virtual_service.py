@@ -44,6 +44,11 @@ class VirtualVoiceService:
         self._tts = tts_service
         self._music_service = None
 
+    def start(self):
+        # app_state.start_voice_service calls this unconditionally (mic unmute,
+        # sleepy-wake, /voice/start). Without it those routes raise AttributeError.
+        self.listening = True
+
     def stop(self):
         self.listening = False
 

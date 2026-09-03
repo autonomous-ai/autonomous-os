@@ -1077,6 +1077,17 @@ class AnimationService:
         """True when zero_pose or explicit hold is active."""
         return getattr(self, "_zero_mode", False) or self._hold_mode
 
+    @property
+    def motion_mode(self) -> Optional[str]:
+        """Zero wins over hold: zero_pose() parks the body, hold() only freezes
+        it. A released body also reports None — release() cuts torque without
+        setting either flag."""
+        if getattr(self, "_zero_mode", False):
+            return "zero"
+        if self._hold_mode:
+            return "hold"
+        return None
+
     def ensure_running(self) -> None:
         """Restart the event loop if it stopped (e.g. after zero/hold)."""
         if not self._running.is_set():
@@ -1211,6 +1222,8 @@ class AnimationService:
         from hal.safety.policy import min_move_duration
 
         preset = AIM_PRESETS.get(direction)
+        # Only an explicit center owns yaw — the fallback below lands on center too.
+        explicit_center = direction == AIM_CENTER
         if preset is None:
             # Unknown direction (the LLM reached for a word that isn't a preset,
             # e.g. "front") — aim the neutral center pose instead of failing the
@@ -1223,6 +1236,9 @@ class AnimationService:
         # keep current yaw. This is the lamp's 5-DOF kinematic convention.
         if direction in (AIM_LEFT, AIM_RIGHT):
             positions = {**current_positions, "base_yaw.pos": preset["base_yaw.pos"]}
+        elif explicit_center:
+            # Without this, left/right is a one-way trip.
+            positions = dict(preset)
         else:
             positions = {**preset, "base_yaw.pos": current_positions.get("base_yaw.pos", preset["base_yaw.pos"])}
 

@@ -75,16 +75,19 @@ func configFromEnv() Config {
 	if f, err := strconv.ParseFloat(envOr("CODEX_TURN_TIMEOUT_S", "600"), 64); err == nil && f > 0 {
 		timeout = time.Duration(f * float64(time.Second))
 	}
+	// CODEX_HOME anchors the per-file defaults, so setting it alone relocates
+	// the whole state dir (the client side resolves the same var via syspath).
+	home := envOr("CODEX_HOME", "/root/.codex")
 	return Config{
 		Token:       envOr("CODEX_WS_TOKEN", "autonomous_codex_token"),
 		Port:        envOr("CODEX_PORT", "18792"),
-		Workspace:   envOr("CODEX_WORKSPACE", "/root/.codex/workspace"),
+		Workspace:   envOr("CODEX_WORKSPACE", home+"/workspace"),
 		CodexBin:    envOr("CODEX_BIN", "codex"),
-		CodexHome:   envOr("CODEX_HOME", "/root/.codex"),
-		SessionFile: envOr("CODEX_SESSION_FILE", "/root/.codex/session.json"),
-		AttachDir:   envOr("CODEX_ATTACH_DIR", "/root/.codex/attachments"),
+		CodexHome:   home,
+		SessionFile: envOr("CODEX_SESSION_FILE", home+"/session.json"),
+		AttachDir:   envOr("CODEX_ATTACH_DIR", home+"/attachments"),
 		TurnTimeout: timeout,
-		Home:        "/root",
+		Home:        envOr("OS_AGENT_HOME", "/root"),
 	}
 }
 

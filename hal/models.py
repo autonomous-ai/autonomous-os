@@ -20,6 +20,9 @@ class ServoRequest(BaseModel):
 class ServoStateResponse(BaseModel):
     available_recordings: list[str]
     current: Optional[str]
+    # null = no mode holding the body. Key stays present so that is
+    # distinguishable from a HAL too old to send it.
+    motion_mode: Optional[str] = None
 
     model_config = {
         "json_schema_extra": {
@@ -51,6 +54,7 @@ class ServoStateResponse(BaseModel):
                         "music_hype",
                     ],
                     "current": "idle",
+                    "motion_mode": None,
                 }
             ]
         }
@@ -169,6 +173,15 @@ class LEDEffectResponse(BaseModel):
 
 class StatusResponse(BaseModel):
     status: str
+
+
+class ServoPlayResponse(BaseModel):
+    """Status is "ok" only when the recording started. A play the sleep gate or
+    zero/hold dropped answers "ignored" plus the reason — the shape `/emotion`
+    uses."""
+
+    status: str
+    reason: Optional[str] = None
 
 
 class PolicyRunRequest(BaseModel):

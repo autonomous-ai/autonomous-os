@@ -25,6 +25,15 @@ import (
 //go:embed resources/KNOWLEDGE.md
 var knowledgeFS embed.FS
 
+// agentsFS holds the base workspace AGENTS.md. Codex has no `setup` command to
+// regenerate one (openclaw does), so a codex-only device — one that never ran
+// openclaw, leaving presync.sh §1 nothing to migrate — would otherwise have no
+// AGENTS.md at all, and AGENTS.md is the ONLY file codex auto-loads: no file
+// means no OS block and no persona. Seeded, never overwritten.
+//
+//go:embed resources/AGENTS.md
+var agentsFS embed.FS
+
 // Onboarding (Codex). Mirrors runtimes/openclaw/onboarding.go, but trimmed to
 // what Codex actually owns on-device:
 //
@@ -60,12 +69,13 @@ const (
 	// under codex's 32KiB project-doc cap (AGENTS.md is the only file codex
 	// auto-loads, and it truncates past that limit).
 	personaInlineSoulCap = 20_000
+)
 
-	// codexWorkspaceDir is Codex's workspace (HOME=/root → ~/.codex).
-	// TODO(codex-config-dir): there is no CodexConfigDir in server/config yet
-	// (openclaw uses cfg.OpenclawConfigDir). Hardcoded for now; promote to config if
-	// the data dir ever needs to be overridable.
-	codexWorkspaceDir = "/root/.codex/workspace"
+// Path-derived values: resolved from codexHome (CODEX_HOME) at process start,
+// so the block text and the dirs it names can never disagree.
+var (
+	// codexWorkspaceDir is Codex's workspace ($CODEX_HOME/workspace).
+	codexWorkspaceDir = codexHome + "/workspace"
 
 	// codexSkillsDir is the on-device skill store. It is codex's NATIVE skill
 	// discovery root ($CODEX_HOME/skills — codex-cli 0.142.5 auto-discovers every
@@ -95,8 +105,8 @@ const (
 	// content removed (hooks/handler.ts; `openclaw --version`; the injected
 	// `<available_skills>` wording).
 	agentsMDBlock = `<!-- OS DO NOT REMOVE -->
-**MANDATORY (skills):** Your device skills live at ` + "`/root/.codex/skills/<name>/SKILL.md`" + ` (absolute path — reachable from any cwd, including coding sessions in another folder). Before any skill-driven action, determine the skill scope without doing broad filesystem scans. For ordinary chat, simple Q&A, or meta discussion with no action/event/hardware behavior and no connected-service data, do NOT read a SKILL.md — answer normally. A question ABOUT a linked third-party service (see Connectors) is NOT ordinary chat: it needs the skill even when phrased as a simple question.
-  - If the message contains ` + "`[skills: a, b, c]`" + `, treat it as an authoritative whitelist — read ONLY those ` + "`/root/.codex/skills/<name>/SKILL.md`" + ` files. Do NOT scan other skill directories "just in case".
+**MANDATORY (skills):** Your device skills live at ` + "`" + codexSkillsDir + "/<name>/SKILL.md`" + ` (absolute path — reachable from any cwd, including coding sessions in another folder). Before any skill-driven action, determine the skill scope without doing broad filesystem scans. For ordinary chat, simple Q&A, or meta discussion with no action/event/hardware behavior and no connected-service data, do NOT read a SKILL.md — answer normally. A question ABOUT a linked third-party service (see Connectors) is NOT ordinary chat: it needs the skill even when phrased as a simple question.
+  - If the message contains ` + "`[skills: a, b, c]`" + `, treat it as an authoritative whitelist — read ONLY those ` + "`" + codexSkillsDir + "/<name>/SKILL.md`" + ` files. Do NOT scan other skill directories "just in case".
   - If no ` + "`[skills:]`" + ` hint is present and the user asks for a concrete action, hardware behavior, sensing/activity/emotion handling, or a specialized workflow, choose the single most specific matching skill, then read only that SKILL.md.
   - If multiple skills plausibly match, choose the most specific one. If none clearly match, do not read any SKILL.md and answer normally.
   - Never fall back to reading every skill directory. Broad scans are slow and usually reduce quality.
@@ -121,7 +131,7 @@ Follow the instructions in whichever file you read.
 
 **User priority (MANDATORY):** When the turn batches multiple messages, ` + "`[user] ...`" + ` messages are direct human input (voice command or typed chat). Always answer the most recent ` + "`[user]`" + ` message first; treat ` + "`[activity]`" + ` / ` + "`[emotion]`" + ` / ` + "`[speech_emotion]`" + ` / ` + "`[ambient]`" + ` / ` + "`[sensing:*]`" + ` as supporting context, never as the primary prompt. A user who asked a question must get their answer even when sensing events queued alongside look more interesting.
 
-**Connectors (MANDATORY):** The user links third-party services (Gmail, Google Calendar, Google Drive, Notion, Figma, Asana, Linear, GitHub, Ahrefs, …) in the app, and the OS writes their credentials to this device at ` + "`/root/.openclaw/workspace/configs/<code>_access_tokens.json`" + `. ALWAYS use the ` + "`connectors`" + ` skill to answer or act on ANY of them — including "is my gmail connected?", "what's on my calendar", "list my events", "check my email". Read ` + "`/root/.codex/skills/connectors/SKILL.md`" + ` and follow it. This holds in EVERY session — including a coding session started in ` + "`/root`" + `, ` + "`/root/myapp`" + `, or any other folder: the connectors are a property of the DEVICE, not of the folder you happen to be in. Never write your own script (` + "`send_email.py`" + `, gcalcli, …) to reach a service a connector already covers.
+**Connectors (MANDATORY):** The user links third-party services (Gmail, Google Calendar, Google Drive, Notion, Figma, Asana, Linear, GitHub, Ahrefs, …) in the app, and the OS writes their credentials to this device at ` + "`/root/.openclaw/workspace/configs/<code>_access_tokens.json`" + `. ALWAYS use the ` + "`connectors`" + ` skill to answer or act on ANY of them — including "is my gmail connected?", "what's on my calendar", "list my events", "check my email". Read ` + "`" + codexSkillsDir + "/connectors/SKILL.md`" + ` and follow it. This holds in EVERY session — including a coding session started in ` + "`/root`" + `, ` + "`/root/myapp`" + `, or any other folder: the connectors are a property of the DEVICE, not of the folder you happen to be in. Never write your own script (` + "`send_email.py`" + `, gcalcli, …) to reach a service a connector already covers.
   - ` + "`config.toml`" + `/` + "`mcp_servers`" + ` is NOT the connector list. Gmail/Calendar/Drive are token-based and have NO MCP server, so NEVER conclude a service is unconnected because it is missing from the MCP server list — check the credential files via the skill.
   - Never tell the user to set up an MCP server, OAuth app, or another CLI for these services: the credentials are already on disk. Read them only through the ` + "`connectors`" + ` skill, which knows how to keep the secrets safe.
 
@@ -147,7 +157,7 @@ Follow the instructions in whichever file you read.
 	userAgentsMDBlock = `<!-- OS DO NOT REMOVE -->
 **This machine is an Autonomous device.** The facts below hold in EVERY folder and session — they describe the DEVICE, not the directory you are working in.
 
-**Connectors (MANDATORY).** The owner links third-party services (Gmail, Google Calendar, Google Drive, Notion, Figma, Asana, Linear, GitHub, Ahrefs, …) in the Autonomous app, and the OS writes their credentials to ` + "`/root/.openclaw/workspace/configs/<code>_access_tokens.json`" + `. To answer or act on ANY of them — "is my gmail connected?", "what's on my calendar", "send an email to …" — read ` + "`/root/.codex/skills/connectors/SKILL.md`" + ` and follow it.
+**Connectors (MANDATORY).** The owner links third-party services (Gmail, Google Calendar, Google Drive, Notion, Figma, Asana, Linear, GitHub, Ahrefs, …) in the Autonomous app, and the OS writes their credentials to ` + "`/root/.openclaw/workspace/configs/<code>_access_tokens.json`" + `. To answer or act on ANY of them — "is my gmail connected?", "what's on my calendar", "send an email to …" — read ` + "`" + codexSkillsDir + "/connectors/SKILL.md`" + ` and follow it.
   - NEVER conclude a service is unconnected because no MCP server or CLI is configured: the token connectors (Gmail/Calendar/Drive) have NO MCP server. Check the credential files via the skill before answering.
   - NEVER install or write your own client for a service a connector already covers (no ` + "`send_email.py`" + `, no gcalcli, no OAuth setup) — the credentials are already on disk.
 
@@ -186,6 +196,8 @@ func (s *CodexService) EnsureOnboarding() error {
 	// no openclaw copy. Never overwrites an existing file.
 	seedFileIfAbsent(knowledgeFS, "resources/KNOWLEDGE.md",
 		filepath.Join(codexWorkspaceDir, "KNOWLEDGE.md"))
+	seedFileIfAbsent(agentsFS, "resources/AGENTS.md",
+		filepath.Join(codexWorkspaceDir, "AGENTS.md"))
 
 	// Lift any workspace-scoped skills left by an older os-server into codex's
 	// native discovery root FIRST, so the prune below sees the post-migration dir.
@@ -317,17 +329,6 @@ func (s *CodexService) notifySkillChangesWhenReady(changedSkills []string) {
 func (s *CodexService) ensureAgentsMDBlock() (bool, error) {
 	agentsFile := filepath.Join(codexWorkspaceDir, "AGENTS.md")
 
-	if _, err := os.Stat(agentsFile); os.IsNotExist(err) {
-		// TODO(codex-agents-template): openclaw regenerates a base AGENTS.md via
-		// `openclaw setup` when it is missing. Codex's AGENTS.md comes from the
-		// one-time openclaw workspace migration (presync.sh §1) instead — a
-		// codex-only device has none, and the CLI has no regenerate command, so
-		// skip injection rather than write the block into an empty file.
-		slog.Warn("AGENTS.md missing — skipping block injection (no codex regenerate)",
-			"component", "codex-onboarding", "path", agentsFile)
-		return false, nil
-	}
-
 	content, err := os.ReadFile(agentsFile)
 	if err != nil {
 		return false, fmt.Errorf("read AGENTS.md: %w", err)
@@ -378,8 +379,8 @@ func (s *CodexService) ensurePersonaInlineBlock() (bool, error) {
 }
 
 // ensurePersonaInlineBlockIn is the workspace-parameterized body of
-// ensurePersonaInlineBlock (codexWorkspaceDir is a hardcoded const — the parameter
-// exists so tests can point it at a temp dir). Upsert is idempotent: any existing
+// ensurePersonaInlineBlock (codexWorkspaceDir is resolved from CODEX_HOME at
+// start — the parameter exists so tests can point it at a temp dir). Upsert is idempotent: any existing
 // start..end region is stripped, the freshly-built block is prepended, and the file
 // is rewritten (atomically, tmp+rename like UpdateIdentityName) only when the bytes
 // actually differ. A missing SOUL.md removes the block instead.
@@ -388,8 +389,8 @@ func ensurePersonaInlineBlockIn(workspaceDir string) (bool, error) {
 	agentsRaw, err := os.ReadFile(agentsFile)
 	if err != nil {
 		if os.IsNotExist(err) {
-			// Same skip as ensureAgentsMDBlock: a codex-only device without the
-			// openclaw migration has no AGENTS.md to inline into.
+			// EnsureOnboarding seeds AGENTS.md before this runs, so absence
+			// only happens when a caller points us at an unseeded dir (tests).
 			slog.Warn("AGENTS.md missing — skipping persona inline",
 				"component", "codex-onboarding", "path", agentsFile)
 			return false, nil
