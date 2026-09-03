@@ -9,6 +9,15 @@ from hal.drivers.motors import MotorsService
 from hal.drivers.base import Priority
 
 def test_motors_service():
+    # A hands-on bring-up script, not a unit test: it drives real servos over a
+    # serial port named on the command line. pytest collects it anyway and calls
+    # it with no arguments, so argparse used to abort the run with SystemExit: 2.
+    # Skip unless someone actually passed the hardware in.
+    if not {"--id", "--port"}.issubset(set(sys.argv)):
+        import pytest
+
+        pytest.skip("needs --id/--port and a real lamp on a serial port")
+
     parser = argparse.ArgumentParser(description="Test Motors Service")
     parser.add_argument('--id', type=str, required=True, help='ID of the lamp')
     parser.add_argument('--port', type=str, required=True, help='Serial port for the lamp')

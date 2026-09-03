@@ -98,7 +98,12 @@ class TestSimServer(unittest.TestCase):
             method=method,
             headers={"Content-Type": "application/json"} if data else {},
         )
-        with urllib.request.urlopen(request, timeout=2) as response:
+        # Longer than any single simulated motion: the safety gate stretches a
+        # short /servo/move to its minimum duration (1.5s), and the server
+        # answers the NEXT request only once that move is done. At timeout=2
+        # the margin was ~0.5s and the aim call following a clamped move timed
+        # out on a loaded machine.
+        with urllib.request.urlopen(request, timeout=10) as response:
             return response.status, json.load(response)
 
     def test_declared_mock_body_boots_without_host_peripherals(self):
@@ -131,7 +136,14 @@ class TestSimServer(unittest.TestCase):
             body={"direction": "left", "duration": 0.2},
         )
         self.assertEqual(status, 200)
-        self.assertEqual(aimed["positions"]["base_yaw.pos"], -90.0)
+        # From the table, not a copy of it — the real left yaw is -91.57.
+        from hal.presets import AIM_PRESETS
+
+        self.assertAlmostEqual(
+            aimed["positions"]["base_yaw.pos"],
+            AIM_PRESETS["left"]["base_yaw.pos"],
+            places=3,
+        )
 
         status, stopped = self._request("/servo/stop", method="POST", body={})
         self.assertEqual(status, 200)
@@ -139,4 +151,9 @@ class TestSimServer(unittest.TestCase):
 
         status, position = self._request("/servo/position")
         self.assertEqual(status, 200)
-        self.assertEqual(position["positions"]["base_yaw.pos"], -90.0)
+        # /servo/stop holds the pose it was aimed at — the same table value.
+        self.assertAlmostEqual(
+            position["positions"]["base_yaw.pos"],
+            AIM_PRESETS["left"]["base_yaw.pos"],
+            places=3,
+        )
