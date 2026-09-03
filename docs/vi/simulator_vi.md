@@ -31,7 +31,7 @@ là thứ khiến binary được test *chính là* binary được ship.
 | `codex` CLI | `codex --version` | Tự cài — không có gì ở đây cài giúp |
 | codex đã đăng nhập | `ls ~/.codex/auth.json` | `codex login` |
 | `ffmpeg` | `ffmpeg -version` | Cần cho phát nhạc |
-| `uv` | `uv --version` | Dựng `hal/.venv` cho HAL. `make sim` tự tạo ở lần chạy đầu và sync lại mỗi khi `hal/uv.lock` hoặc `hal/pyproject.toml` mới hơn nó |
+| `uv` | `uv --version` | Dựng `hal/.venv` cho HAL. `make sim` tự tạo ở lần chạy đầu và sync lại mỗi khi `hal/uv.lock` hoặc `hal/pyproject.toml` mới hơn nó. Nếu lần sync đầu chết khi build `insightface`, xem *insightface build lỗi* bên dưới |
 | `node` + `npm` | `node --version` | Chỉ cần cho `make web-dev` |
 
 **Chỉ `codex` chạy được off-device.** Các runtime khác không có target `*-dev`.
@@ -319,6 +319,25 @@ trên tab mới** (`api.ts` khởi tạo token từ `sessionStorage` lúc load m
 effect của `AuthGate` chạy trước `useBearerFromQuery` của `App`), nên vào lại
 `/monitor` lần hai trong cùng tab.
 
+Không có cách thứ ba: `admin_password_hash` rỗng **không** phải là cửa mở.
+`VerifyAdminPassword` (`system/device/config_update.go`) từ chối thẳng khi chưa
+đặt hash, và nó từ chối ngoài thiết bị y như trên board — simulator chạy đúng
+binary được ship nên không có đường tắt auth nào để bật.
+
+#### Đặt mật khẩu của riêng mình
+
+Config copy từ thiết bị mang theo hash của thiết bị đó. Muốn đăng nhập bằng mật
+khẩu của riêng mình thì sinh hash cost 10 rồi đặt vào `admin_password_hash`:
+
+```bash
+htpasswd -bnBC 10 "" 'mat-khau-cua-ban' | tr -d ':\n'
+```
+
+`htpasswd` có sẵn trên macOS. Nó phát prefix `$2y$` trong khi `bcrypt` của Go ghi
+`$2a$`; cả hai cùng thuật toán và `CompareHashAndPassword` chấp nhận cả hai, nên
+dán nguyên đầu ra. Cặp `""` ở đầu là trường username mà os-server không dùng —
+`tr` cắt nó cùng với ký tự xuống dòng.
+
 ---
 
 ## Cái gì được mô phỏng
@@ -505,6 +524,31 @@ cầm credential của một thiết bị đang sống.
 | Agent tự xưng "Codex", không persona | `$CODEX_HOME/workspace` phải có `AGENTS.md`, `SOUL.md`, `KNOWLEDGE.md`, `HEARTBEAT.md`. Chúng do **`os-dev`** tạo, không phải `codex-dev` |
 | Workspace rỗng, không thấy log `seeded file` | `set_up_completed` chưa true nên chuỗi khởi động không chạy |
 | `skill download skipped: no ota_metadata_url` | Thiếu `config/bootstrap.json` |
+| `uv sync` chết khi build `insightface`, `ld: library 'c++' not found` | Xem bên dưới |
+
+### insightface build lỗi
+
+`insightface` phải compile C++, và interpreter mà `uv` chọn quyết định lần
+compile đó nhắm vào SDK nào. Python cài từ Homebrew nướng sẵn đường dẫn SDK lúc
+nó được build vào `sysconfig` của chính nó, nên trên máy đã lên bản macOS mới
+hơn, lần build trỏ `-isysroot` vào một SDK không còn được cài:
+
+```
+Compiling with an SDK that doesn't seem to exist:
+/Library/Developer/CommandLineTools/SDKs/MacOSX13.sdk
+ld: library 'c++' not found
+```
+
+Đặt `SDKROOT` không có tác dụng — cờ cũ đến từ `sysconfig`, không phải từ môi
+trường. Thay vào đó dựng venv bằng interpreter do `uv` quản lý, thứ không mang
+theo đường dẫn nướng sẵn nào:
+
+```bash
+uv python install 3.12
+cd hal && uv sync --inexact --python-preference only-managed -p 3.12
+```
+
+`make sim` dùng lại `hal/.venv` sinh ra từ đây, nên chỉ phải chữa một lần.
 
 ---
 

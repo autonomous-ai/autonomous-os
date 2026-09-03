@@ -31,7 +31,7 @@ what makes the tested binary the shipped binary.
 | `codex` CLI | `codex --version` | Install it yourself — nothing here installs it |
 | codex logged in | `ls ~/.codex/auth.json` | `codex login` |
 | `ffmpeg` | `ffmpeg -version` | Needed for music playback |
-| `uv` | `uv --version` | Builds HAL's `hal/.venv`. `make sim` creates it on first run and re-syncs it whenever `hal/uv.lock` or `hal/pyproject.toml` moves ahead of it |
+| `uv` | `uv --version` | Builds HAL's `hal/.venv`. `make sim` creates it on first run and re-syncs it whenever `hal/uv.lock` or `hal/pyproject.toml` moves ahead of it. If that first sync fails compiling `insightface`, see *insightface fails to build* below |
 | `node` + `npm` | `node --version` | Needed for `make web-dev` only |
 
 **Only `codex` works off-device.** Other runtimes have no `*-dev` target.
@@ -323,6 +323,26 @@ misses on the *first* load of a fresh tab (`api.ts` initialises its token from
 `sessionStorage` at module load, and `AuthGate`'s effect runs before `App`'s
 `useBearerFromQuery`), so navigate to `/monitor` a second time in the same tab.
 
+There is no third way: an empty `admin_password_hash` is not an open door.
+`VerifyAdminPassword` (`system/device/config_update.go`) refuses outright when
+no hash is set, and it refuses off-device exactly as it does on a board — the
+simulator runs the shipped binary, so it has no auth bypass to enable.
+
+#### Setting your own password
+
+A config copied from a device carries that device's hash. To log in with a
+password of your own instead, generate a cost-10 hash and put it in
+`admin_password_hash`:
+
+```bash
+htpasswd -bnBC 10 "" 'your-password' | tr -d ':\n'
+```
+
+`htpasswd` ships with macOS. It emits a `$2y$` prefix where Go's `bcrypt` writes
+`$2a$`; both verify against the same algorithm and `CompareHashAndPassword`
+accepts either, so paste the output as-is. The leading `""` is the username
+field, which os-server does not use — `tr` strips it along with the newline.
+
 ---
 
 ## What is simulated
@@ -510,6 +530,31 @@ not carrying a live device's credentials.
 | Agent calls itself "Codex", no persona | `$CODEX_HOME/workspace` must hold `AGENTS.md`, `SOUL.md`, `KNOWLEDGE.md`, `HEARTBEAT.md`. These come from `os-dev`, not `codex-dev` |
 | Empty workspace, no `seeded file` log | `set_up_completed` is not true, so the startup sequence never ran |
 | `skill download skipped: no ota_metadata_url` | `config/bootstrap.json` missing |
+| `uv sync` fails building `insightface`, `ld: library 'c++' not found` | See below |
+
+### insightface fails to build
+
+`insightface` compiles C++, and the interpreter `uv` picked decides which SDK
+that compile targets. A Homebrew Python bakes the SDK path it was built against
+into its own `sysconfig`, so on a machine whose macOS has moved on, the build
+points `-isysroot` at an SDK that is no longer installed:
+
+```
+Compiling with an SDK that doesn't seem to exist:
+/Library/Developer/CommandLineTools/SDKs/MacOSX13.sdk
+ld: library 'c++' not found
+```
+
+Setting `SDKROOT` does not help — the stale flag comes from `sysconfig`, not the
+environment. Build the venv against a `uv`-managed interpreter instead, which
+carries no such baked-in path:
+
+```bash
+uv python install 3.12
+cd hal && uv sync --inexact --python-preference only-managed -p 3.12
+```
+
+`make sim` reuses the resulting `hal/.venv`, so this is a one-time fix.
 
 ---
 
