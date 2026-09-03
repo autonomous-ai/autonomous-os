@@ -77,3 +77,29 @@ def test_speech_end_without_a_pending_reacquire_does_nothing(monkeypatch):
 
     assert gaze.on_speech_end() is False
     assert svc.dispatched == []
+
+
+# --- the empty-transcript case ------------------------------------------------
+#
+# The reacquire fires at speech START and the entry VAD is deliberately wide, so
+# most sessions it opens end with no transcript at all. Those never reach the
+# retry path, and that is the case that left the lamp frozen.
+
+
+def test_a_pending_hold_is_released_without_a_transcript(monkeypatch):
+    svc = _Svc()
+    _with_service(monkeypatch, svc)
+    monkeypatch.setattr(gaze, "_speech_repoint_requested_t", 1.0)
+
+    assert gaze.release_reacquire_hold_if_pending() is True
+    assert svc.dispatched == [("play", "idle")]
+    assert gaze._speech_repoint_requested_t == 0.0
+
+
+def test_no_pending_reacquire_means_no_handover(monkeypatch):
+    svc = _Svc()
+    _with_service(monkeypatch, svc)
+    monkeypatch.setattr(gaze, "_speech_repoint_requested_t", 0.0)
+
+    assert gaze.release_reacquire_hold_if_pending() is False
+    assert svc.dispatched == []

@@ -1214,6 +1214,27 @@ def on_speech_start() -> bool:
     return _check_speech("speech-start", request_repoint=True)
 
 
+def release_reacquire_hold_if_pending() -> bool:
+    """Release a reacquire hold at the end of capture, transcript or not.
+
+    `on_speech_end` covers the utterance that produced words. The freeze does
+    not need words: the reacquire fires at speech START, and the entry VAD is
+    deliberately wide, so most sessions it opens end with an EMPTY transcript
+    (28 of 31 measured, see voice_service). Those sessions took the hold and
+    never reached the retry path that hands the body back, which is precisely
+    the case that left the lamp frozen.
+
+    Returns whether a pending hold was released, so the caller can log it.
+    """
+    global _speech_repoint_requested_t
+    if _speech_repoint_requested_t <= 0.0:
+        return False
+    _speech_repoint_requested_t = 0.0
+    _speech_repoint_requested.clear()
+    _release_reacquire_hold()
+    return True
+
+
 def _release_reacquire_hold() -> None:
     """Hand the body back to idle after a speech-triggered reacquire.
 
