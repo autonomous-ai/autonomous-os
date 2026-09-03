@@ -438,11 +438,21 @@ const MAX_CONVOS = 50;
 const HISTORY_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 // Give-up window for a pending reply. IDLE, not absolute: every event that
 // belongs to the run (delta, thinking, tool call) refreshes it, so a turn that
-// legitimately takes minutes — "build me a Three.js train yard" — stays pending
+// legitimately takes a while — "build me a Three.js train yard" — stays pending
 // as long as the agent keeps working. An ABSOLUTE cap used to finalize such a
 // turn as "no response" while the run was still going; MQTT chat and Telegram
 // never showed the symptom because neither has a client-side deadline.
-const REPLY_IDLE_TIMEOUT_MS = 120_000;
+//
+// Sized to outlast the backend's own per-turn cap (45 min, see
+// CODEX_TURN_TIMEOUT_S) rather than to guess how long an answer should take:
+// the gatewayd always terminates a turn — completed, failed, or its own
+// "timeout" — and that terminal frame now carries the run id the browser is
+// waiting on, so this deadline is only a last-resort net for a frame that never
+// arrives at all. A shorter window cannot be used here because `codex exec`
+// emits nothing at all while it works: the measured 2026-09-03 run streamed
+// zero deltas in ten minutes, so ANY idle window shorter than the turn itself
+// finalizes a healthy turn as "no response".
+const REPLY_IDLE_TIMEOUT_MS = 50 * 60 * 1000;
 // Shorter window for the post-reload recovery path: there the run is normally
 // already finished and only needs to be backfilled (~2s), so silence past this
 // means the reply is genuinely not coming. Refreshed by live events too, so a

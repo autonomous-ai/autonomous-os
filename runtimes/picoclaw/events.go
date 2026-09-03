@@ -23,7 +23,20 @@ type pendingEvent struct {
 	fixedRunID  string
 }
 
-const busyTTL = 5 * time.Minute
+// busyTTL bounds how long the busy flag survives without a terminal frame. It
+// exists for ONE case: the turn's final frame was DROPPED, so the sensing
+// pipeline would otherwise wedge forever — never to cap how long a turn may
+// legitimately run.
+//
+// A chat turn is EXPECTED to be slow: a user opens chat precisely for work that
+// takes a while, and the same prompt answered over Telegram/OpenClaw runs 35
+// minutes to completion. At the old 5 minutes this path also called clearTurn(),
+// wiping the IN-FLIGHT run id, which orphaned the browser's pending run — every
+// later lifecycle/error frame then allocated a fresh id and attached to an
+// unrelated queued turn, leaving the chat on "no response". Measured on the
+// codex path 2026-09-03 (lamp-0c89); openclaw and hermes never wiped the id and
+// serve long turns fine, which is the behaviour restored here.
+const busyTTL = 45 * time.Minute
 
 // IsBusy mirrors openclaw.PicoclawService.IsBusy: true while a turn is in flight OR a
 // chat.send is still waiting for its first inbound frame. Auto-clears after
@@ -35,7 +48,6 @@ func (s *PicoclawService) IsBusy() bool {
 			slog.Warn("busy flag expired — auto-clearing (final frame likely missed)",
 				"component", "picoclaw", "stuck_for_s", int(time.Since(time.UnixMilli(since)).Seconds()))
 			s.activeTurn.Store(false)
-			s.clearTurn()
 			go s.drainPendingEvents()
 			return s.HasFreshPendingChatSend()
 		}
