@@ -86,6 +86,15 @@ func Build(eventType, message, currentUser, guardTag string) string {
 
 	switch eventType {
 	case "presence.enter":
+		// Attribution BEFORE the presence digest. presence.enter is the
+		// greeting trigger and sensing/SKILL.md greets by name, but the event
+		// text carries only a face LABEL ("friend (long)"), which reads as a
+		// detection tag rather than a name. Without this line the only name in
+		// context is the persona's USER.md — a stale single-owner profile that
+		// survives runtime switches — so the device greets whoever used to own
+		// it (device-observed 2026-09-03: "Chào Leo" at a face resolved to
+		// `long`). motion.activity and emotion.detected already ship this tag.
+		msg += "\n[context: current_user=" + currentUser + "]"
 		// Pre-fetch "time since last seen" so sensing/SKILL.md can swap to a
 		// "return after long absence" greeting without a tool turn.
 		// BuildPresenceContext returns "" for unknown.

@@ -234,6 +234,14 @@ func (s *Server) handleSetUpCompleteChange(setupCompleted bool) {
 			// config.json into openclaw.json so they survive gateway restarts.
 			s.deviceService.SyncMCPTools()
 
+			// Retire people from every runtime's USER.md once their face/voice
+			// enrollment is gone. Runs AFTER personaMigration so a freshly
+			// migrated profile is reconciled in the same boot rather than a
+			// stale name surviving until the next one. Writes only when
+			// something is actually stale — USER.md is in the cached prompt
+			// prefix, so an unconditional rewrite would cost a cache miss.
+			s.userReconcile.Reconcile()
+
 			// Seed SOUL.md + IDENTITY.md into workspace (factory defaults, once only)
 			if err := s.agentGateway.EnsureOnboarding(); err != nil {
 				slog.Error("onboarding seed failed", "component", "server", "error", err)

@@ -71,7 +71,7 @@ func (opencodeAdapter) write(m *baseMigrator, b *PersonaBundle, opts Options) er
 	}
 
 	// User profile → USER.md.
-	m.writeMemoryEntries("user-profile", rebrandEntries(b.User, rebrandToOpenCode),
+	m.writeUserProfile("user-profile", rebrandEntries(b.User, rebrandToOpenCode),
 		filepath.Join(ws, "USER.md"), opts.UserCharLimit, openclawFormat)
 	return nil
 }
@@ -92,4 +92,17 @@ func rebrandToOpenCode(text string) string {
 	text = reClawdBot.ReplaceAllStringFunc(text, repl)
 	text = reMoltBot.ReplaceAllStringFunc(text, repl)
 	return text
+}
+
+// personaPaths implements runtimeAdapter — OpenCode mirrors the OpenClaw layout.
+func (opencodeAdapter) personaPaths(opts Options) []string {
+	return openclawLayoutPersonaPaths(opts.OpenCodeWorkspace)
+}
+
+// userProfilePath implements runtimeAdapter — USER.md at the workspace root.
+func (opencodeAdapter) userProfilePath(opts Options) string {
+	if opts.OpenCodeWorkspace == "" {
+		return ""
+	}
+	return filepath.Join(opts.OpenCodeWorkspace, "USER.md")
 }

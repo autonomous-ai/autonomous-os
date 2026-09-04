@@ -89,13 +89,13 @@ Luôn trigger phản ứng đầy đủ — không có ngoại lệ. Agent **ph�
 
 1. `/emotion greeting` (0.9) với chủ nhà — `/emotion curious` (0.8) với người lạ
 2. Với chủ nhà: `/servo/aim {"direction": "user"}` rồi `/servo/track {"target": ["person"]}` — aim xoay camera về phía user trước (~2s), sau đó vision tracker lock vào người và tự bám theo khi user di chuyển trong phòng. Người lạ: `/servo/play {"recording": "scanning"}` (không auto-follow — thận trọng)
-3. Nói: chào ấm áp với chủ nhà (gọi tên), thận trọng với người lạ
+3. Nói: chào ấm áp với chủ nhà (gọi tên lấy từ `[context: current_user=X]`), thận trọng với người lạ
 
 HAL xử lý cooldown. Nếu event đã đến agent thì đủ thời gian rồi — phản ứng đầy đủ.
 
 #### Quay lại sau khi vắng lâu (chỉ chủ nhà)
 
-Với mỗi `presence.enter` của chủ nhà, sensing handler chèn block `[presence_context: {"last_leave_age_min": N, "current_hour": H}]` vào message trước khi forward sang agent. `last_leave_age_min` được tính từ row `leave` gần nhất trong wellbeing log, quét tối đa 3 ngày gần đây (`wellbeing.LastActionTS`); giá trị `-1` nghĩa là không tìm thấy `leave` nào trong khoảng đó.
+Với mỗi `presence.enter` của chủ nhà, sensing handler chèn tag `[context: current_user=X]` (xem [User attribution](#user-attribution--context-current_userx)) rồi tới block `[presence_context: {"last_leave_age_min": N, "current_hour": H}]` vào message trước khi forward sang agent. Tag quy gán chính là nguồn của tên trong lời chào — bản thân text của event chỉ mang *label* khuôn mặt (`friend (long)`), thứ mà agent đọc như một nhãn nhận diện chứ không phải một cái tên. `last_leave_age_min` được tính từ row `leave` gần nhất trong wellbeing log, quét tối đa 3 ngày gần đây (`wellbeing.LastActionTS`); giá trị `-1` nghĩa là không tìm thấy `leave` nào trong khoảng đó.
 
 `sensing/SKILL.md` đọc block này và **chuyển sang câu chào "quay lại sau khi vắng lâu"** khi cả ba điều kiện đúng:
 
@@ -376,7 +376,7 @@ Nếu user uống hoặc nghỉ trước window tiếp theo, entry `drink`/`brea
 
 ### User attribution — `[context: current_user=X]`
 
-Sensing handler inject tag `[context: current_user=X]` vào mọi message `motion.activity`. `X` là **friend có session_start mới nhất** trong số các friend còn trong forget window (xem `FaceRecognizer.current_user()`), hoặc `"unknown"` khi face **chỉ** thấy stranger (không có friend nào còn present). Quan trọng: nếu có friend còn chưa bị "forget", `current_user()` trả về friend đó kể cả khi event `presence.enter` vừa rồi là của stranger — stranger-flicker không đá friend khỏi session.
+Sensing handler inject tag `[context: current_user=X]` vào mọi message `presence.enter`, `motion.activity`, `emotion.detected` và `speech_emotion.detected`. `X` là **friend có session_start mới nhất** trong số các friend còn trong forget window (xem `FaceRecognizer.current_user()`), hoặc `"unknown"` khi face **chỉ** thấy stranger (không có friend nào còn present). Quan trọng: nếu có friend còn chưa bị "forget", `current_user()` trả về friend đó kể cả khi event `presence.enter` vừa rồi là của stranger — stranger-flicker không đá friend khỏi session.
 
 Chọn theo `session_start` (thời điểm re-enter sau leave gần nhất) chứ không phải `last_seen`, để trường hợp 2 friend cùng present liên tục (Chloe 18:00, An 18:30) luôn chọn friend enter mới nhất (An) — deterministic, không phụ thuộc thứ tự dict.
 

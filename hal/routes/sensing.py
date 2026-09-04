@@ -2,15 +2,18 @@
 
 import base64
 import json
+import logging
 import os
 import time
 from pathlib import Path
 
+import requests
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 import hal.app_state as state
+from hal import config
 from hal.models import (
     FaceEnrollRequest,
     FaceEnrollResponse,
@@ -26,6 +29,33 @@ from hal.models import (
     StatusResponse,
     UserInfoResponse,
 )
+
+
+
+logger = logging.getLogger(__name__)
+
+
+def _notify_user_reconcile(reason: str) -> None:
+    """Tell os-server that an enrollment DIRECTORY under USERS_DIR changed.
+
+    os-server retires a person from every runtime's USER.md once their
+    enrollment directory is gone. That check runs at startup, so without this
+    poke a person removed from the UI would keep their profile in the agent's
+    system prompt until the next boot — a half-delete.
+
+    Fire-and-forget: the real work (the directory) is already done, so a failure
+    here must never turn a successful removal into an HTTP error. Worst case the
+    profile is retired at the next start instead of now.
+    """
+    try:
+        requests.post(config.OS_USER_RECONCILE_URL, json={"reason": reason}, timeout=2)
+    except requests.RequestException as e:
+        logger.warning(
+            "[user-reconcile] notify failed after %s: %s "
+            "(profile will be retired on next os-server start)",
+            reason,
+            e,
+        )
 
 
 class UserRenameRequest(BaseModel):
@@ -368,6 +398,7 @@ def face_remove(req: FaceRemoveRequest):
     norm = FacePerception.normalize_label(req.label)
     if not fr.remove_person(req.label):
         raise HTTPException(404, "person not found")
+    _notify_user_reconcile(f"face/remove:{norm}")
     return FaceRemoveResponse(
         status="ok",
         label=norm,
@@ -389,6 +420,7 @@ def face_reset():
     """Clear all enrolled embeddings and delete all photos on disk."""
     fr = _require_face_recognizer()
     fr.reset_enrolled()
+    _notify_user_reconcile("face/reset")
     return FaceResetResponse(status="ok", enrolled_count=0)
 
 
@@ -480,6 +512,10 @@ def user_rename(req: UserRenameRequest):
         os.utime(USERS_DIR, None)
     except OSError:
         pass
+
+    # The old label's directory no longer exists, so any profile still keyed to
+    # it is now stale.
+    _notify_user_reconcile(f"users/rename:{old}->{new}")
 
     return {"status": "ok"}
 

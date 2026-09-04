@@ -10,4 +10,5 @@ var ProviderSet = wire.NewSet(
 	ProvideConfigMigration,
 	ProvideChannelReconcile,
 	ProvideMCPReconcile,
+	ProvideUserProfileReconcile,
 )
