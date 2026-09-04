@@ -69,6 +69,11 @@ Component `FlowDiagram` trong `system/web/src/pages/Monitor.tsx` vẽ **ba vùng
   - **CAM** (`hw_camera`) — `GET /camera/snapshot`; ảnh đã lưu mà tool
     trả về (kể cả file workspace như `cam_face3.jpg`) hiện thumbnail bấm để
     phóng to, giúp debug đúng frame agent nhận được, không chụp lại ảnh mới.
+    Thumbnail cần CẢ arguments LẪN result của tool, mà hai thứ này về ở hai
+    event khác nhau trên các runtime CLI (codex và họ hàng gửi `arguments` chỉ
+    ở `start`, `result` chỉ ở `end`) — nên args được mang qua theo `toolCallId`,
+    xem `rememberToolArgs` trong
+    `system/server/agent/delivery/http/camera_snapshot.go`.
   - **TTS** (`tts_speak`) — `/voice/speak`, text-to-speech
 - Đây là hardware calls trực tiếp từ OpenClaw tools, không qua OS server.
 - Đường nối từ LOCAL → output nodes dùng **elbow routing** (gấp khúc bên trái) để tránh cắt qua node trung gian.
