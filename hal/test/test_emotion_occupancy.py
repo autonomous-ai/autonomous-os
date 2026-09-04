@@ -18,6 +18,7 @@ Two rules follow, and they are asymmetric on purpose:
     genuine ones. The noisy labels sit on the other side of the line.
 """
 
+import tempfile
 import threading
 import time
 import types
@@ -26,6 +27,7 @@ import numpy as np
 
 from hal.drivers.sensing.perceptions.processors.emotion import (
     _NO_READING,
+    EmotionDebugLogger,
     _OCCUPANCY_LOOKBACK_S,
     EmotionData,
     EmotionPerception,
@@ -221,3 +223,29 @@ def test_only_the_person_that_fired_is_cleared():
     assert _labels(sent) == ["Happy"]
     assert PERSON not in p._emotion_buffer
     assert "someone_else" in p._emotion_buffer
+
+
+def test_disabled_debug_capture_costs_nothing(tmp_path=None):
+    """Capture is off by default and must be free when off.
+
+    The enabled check used to live in _write_folder, which runs AFTER
+    _annotate — so every prediction copied a whole frame and drew on it before
+    discovering it had nowhere to put it. At 1280x720 that is a ~2.7MB memcpy
+    per face per tick, on a board that has better things to do.
+    """
+    import os
+
+    class _NoCopy(np.ndarray):
+        def copy(self, *a, **k):
+            raise AssertionError("frame copied while capture is disabled")
+
+    frame = np.zeros((720, 1280, 3), dtype=np.uint8).view(_NoCopy)
+    root = os.path.join(tempfile.gettempdir(), "hal-test-debug-must-not-exist")
+    logger = EmotionDebugLogger(root_dir=root, enabled=False)
+
+    assert logger.save_prediction(
+        emotion="Anger", confidence=0.9, face_crop=frame, frame=frame,
+        bbox=[0, 0, 10, 10],
+    ) is None
+    assert logger.save_failure("no-detection", face_crop=frame) is None
+    assert not os.path.exists(root)

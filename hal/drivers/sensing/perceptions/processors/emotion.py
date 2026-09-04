@@ -210,6 +210,11 @@ class EmotionDebugLogger:
         **meta: Any,
     ) -> str | None:
         """One trigger the model returned a label for → its own folder."""
+        # Bail before _annotate: it copies the whole frame and draws on it, so
+        # leaving the check to _write_folder cost a ~2.7MB memcpy per face per
+        # tick even with capture switched off.
+        if not self._enabled:
+            return None
         annotated = (
             self._annotate(frame, bbox, emotion, confidence)
             if frame is not None and bbox is not None
@@ -239,6 +244,8 @@ class EmotionDebugLogger:
     ) -> str | None:
         """One trigger that produced no usable label → its own folder, with the
         input image (when available) and the reason it failed."""
+        if not self._enabled:
+            return None
         name = "FAIL-" + self._slug(reason)
         record: dict[str, Any] = {"status": "failure", "reason": reason}
         record.update(meta)
@@ -811,13 +818,6 @@ class EmotionPerception(Perception[FaceDetectionData]):
             dom_confidences = [c for e, c in non_neutral if e == dominant_emotion]
             avg_confidence = sum(dom_confidences) / len(dom_confidences)
 
-            snapshots = [
-                self._save_annotated(ed.frame, ed.face.bbox, ed.emotion, ed.confidence)
-                for ed in emotion_data_list
-                if ed.emotion == dominant_emotion
-            ]
-            snapshots = [s for s in snapshots if s is not None]
-
             # Phase 2: dedup by polarity bucket, not raw label. Fear↔Sad
             # ↔Anger noise within the same bucket collapses to one event
             # per window; cross-bucket flips (Fear→Happy) still fire as a
@@ -852,6 +852,18 @@ class EmotionPerception(Perception[FaceDetectionData]):
                 self._last_sent_key = key
                 self._last_sent_ts = cur_ts
                 self._sidecar.save(self._last_sent_by_key)
+
+            # Annotating copies a frame per matching reading, so it happens
+            # only for an event that is actually going out. It used to run
+            # before the dedup check, which was cheap while the vote ran once
+            # per EMOTION_FLUSH_S and wasteful once it began running per tick —
+            # most of those evaluations are dedup drops.
+            snapshots = [
+                self._save_annotated(ed.frame, ed.face.bbox, ed.emotion, ed.confidence)
+                for ed in emotion_data_list
+                if ed.emotion == dominant_emotion
+            ]
+            snapshots = [s for s in snapshots if s is not None]
 
             logger.info("[activity.emotion] flushing: %s", message)
             self._send_event("emotion.detected", message, "emotion", snapshots, None)

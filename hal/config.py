@@ -322,8 +322,12 @@ EMOTION_SNAPSHOT_MAX_COUNT = int(os.environ.get("HAL_EMOTION_SNAPSHOT_MAX_COUNT"
 # result.json) under EMOTION_LOG_DIR, named "<time>_<Emotion>_<conf>" (or
 # "<time>_FAIL-<reason>"), so a misclassification is spottable from the
 # directory listing alone. Debug aid — off-device analysis, not a runtime input.
+# Off by default: this writes four files per face per tick and is a debugging
+# aid, not a runtime input. Turn it on with HAL_EMOTION_DEBUG_LOG_ENABLED=true
+# when investigating misclassifications. With it off the capture path returns
+# before any frame is copied, so it costs nothing.
 EMOTION_DEBUG_LOG_ENABLED = (
-    os.environ.get("HAL_EMOTION_DEBUG_LOG_ENABLED", "true").lower() == "true"
+    os.environ.get("HAL_EMOTION_DEBUG_LOG_ENABLED", "false").lower() == "true"
 )
 EMOTION_LOG_DIR = os.environ.get(
     "HAL_EMOTION_LOG_DIR",
