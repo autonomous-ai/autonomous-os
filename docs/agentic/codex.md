@@ -50,13 +50,22 @@ block on an approval prompt (paired with `approval_policy = "never"` +
 `codex.ProvideService`, anything unknown falls back to OpenClaw. On startup a
 `AGENT BACKEND ACTIVE → CODEX` banner prints `ws_url` + `conversation`.
 
-Wire constants (`runtimes/codex/constants.go`, no per-unit config):
+Wire values (`runtimes/codex/constants.go`). All three device paths below are
+resolved once at process start from the SAME env vars the gatewayd and
+`presync.sh` read (`system/lib/syspath`); unset env gives the device defaults,
+so the board is unaffected:
 
-| Const | Default | Meaning |
-|---|---|---|
-| `WSURL` | `ws://127.0.0.1:18792/codex/ws/` | Local bridge WebSocket endpoint |
-| `Token` | `autonomous_codex_token` | Bearer token on connect; the bridge reads the same value from `/root/.codex/.env` (`CODEX_WS_TOKEN`, presync-owned) |
-| `Conversation` | `device-main` | Label only — Codex owns its thread ids (§3) |
+| Value | Default | Env | Meaning |
+|---|---|---|---|
+| `WSURL` | `ws://127.0.0.1:18792/codex/ws/` | `CODEX_PORT` | Local bridge WebSocket endpoint |
+| `Token` | `autonomous_codex_token` | `CODEX_WS_TOKEN` | Bearer token on connect; the bridge reads the same value from `$CODEX_HOME/.env` (presync-owned) |
+| `codexHome` | `/root/.codex` | `CODEX_HOME` | State dir every other codex path derives from — workspace, skills, sessions, config.toml, `.env`, the telegram state files |
+| `Conversation` | `device-main` | — | Label only — Codex owns its thread ids (§3) |
+
+Setting `CODEX_HOME` alone relocates the whole backend, on both the client and
+`codex-gatewayd` (which anchors its per-file defaults on it). That is what
+`make os-dev` / `make codex-dev` use to run the shipped binary off-device — see
+[os-server.md § Off-device run](../os-server.md#off-device-run-laptop).
 
 ## 1.1 Install (`install.sh`)
 
@@ -130,14 +139,24 @@ restarts the gateway only on a real change. It owns everything stateful:
   API key outranks/conflicts with ChatGPT auth).
 
 On top of the presync run, `EnsureOnboarding` (`onboarding.go`) does the same
-workspace reconcile the other backends get: seeds `KNOWLEDGE.md` from the
-embedded template only if absent, injects the OS-managed
+workspace reconcile the other backends get: seeds `KNOWLEDGE.md` **and
+`AGENTS.md`** from their embedded templates only if absent, injects the OS-managed
 `<!-- OS DO NOT REMOVE -->` blocks into `SOUL.md` / `AGENTS.md` /
 `HEARTBEAT.md` (OpenClaw-derived, stripped of OpenClaw-only bits), refreshes
 the **global** user AGENTS.md block (`ensureUserAgentsMDBlock`, see below), and
 capability-gates skills. Markdown-only changes never restart the gateway —
 each `codex exec` re-reads the workspace; only a presync config change or a
 unit self-heal restarts it.
+
+**Why `AGENTS.md` is seeded.** Codex has no `setup` command to regenerate a base
+`AGENTS.md` the way openclaw does, and a **codex-only device** — one that never
+ran openclaw, leaving presync §1 nothing to migrate — therefore had none at all.
+Since `AGENTS.md` is the only file codex auto-loads, no file meant no OS block
+**and no persona**: the agent introduced itself as "Codex". `EnsureOnboarding`
+now seeds `runtimes/codex/resources/AGENTS.md` (a short workspace base carrying
+the `Your Workspace` heading the block injector anchors on) through
+`seedFileIfAbsent`, which **never overwrites** — a device migrated from openclaw
+keeps its own file untouched.
 
 **Persona inline block (AGENTS.md).** Codex auto-loads ONLY `AGENTS.md` into
 context; the "Session Startup" instruction to read `SOUL.md`/`IDENTITY.md` is
@@ -220,6 +239,56 @@ The bridge saves attachments to `/root/.codex/attachments` and passes them via
 the persisted thread id (§4). Codex processes one turn at a time and does not
 stream tokens, so turns are correlated by a single in-flight `runID` (the
 pending run id is adopted by the first inbound frame of the turn).
+
+## 2.1 Turn duration — timeout and the busy TTL
+
+A chat turn is expected to be slow: a user opens chat precisely for work that
+takes a while, and the same prompt answered over Telegram/OpenClaw runs 35
+minutes to completion. Two numbers bound it, and they must stay ordered:
+
+| Knob | Where | Default | Meaning |
+|---|---|---|---|
+| `CODEX_TURN_TIMEOUT_S` | `gatewayd/gatewayd.go` | `600` (10 min) | Kills `codex exec` and sends `bridge.error: timeout`. The gatewayd ALWAYS ends a turn — completed, failed, or this timeout. |
+| `busyTTL()` | `events.go` | that timeout **+ 5 min** | Unwedges the sensing pipeline when a turn's terminal frame was DROPPED. Derived from the same env var so raising the timeout cannot leave it behind. |
+
+**An expired TTL ends the turn properly — both halves.** It drops the run id AND
+dispatches a lifecycle error carrying that id (`failStuckTurn`, wired through
+`wsDispatch` because the busy check runs on the sensing path, outside the WS read
+loop). Doing only one half is a bug either way: leaving the id set orphans the
+NEXT turn (`ensureTurnStarted` returns early while `currentRunID` is non-empty, so
+the new turn's frames are attributed to the dead run and the new chat hangs);
+clearing it silently leaves the browser on a pending bubble until its own
+deadline, which is the "no response" this path exists to prevent.
+
+**The TTL must outlast the timeout.** It was a fixed 5 minutes against a 10-minute
+timeout, so every turn slower than 5 minutes tripped the "frame was dropped" path
+— and that path also called `clearTurn()`, wiping the id of the turn still
+running. The browser's pending run was then orphaned: later lifecycle/error
+frames found no current run, allocated a fresh id, and attached to an unrelated
+queued turn, so the chat sat on a pending bubble and reported "no response" while
+the backend was working normally.
+
+Measured on lamp-0c89, 2026-09-03: run `device-chat-139` started 15:40:41, lost
+its id at 15:45:41, and the 15:50:41 `timeout` was reported against
+`device-chat-168`. `openclaw` and `hermes` never wiped the id on TTL expiry,
+which is why long Telegram turns always worked there; the codex path now matches.
+
+**A timed-out resumed turn DROPS the thread.** Rotation (`ShouldRotateSession`)
+reads the context size off `turn.completed`, so it can only ever fire after a turn
+SUCCEEDS — a thread whose every resume hangs is therefore never rotated, and the
+thread id lives in the session file, so restarting the service and rebooting the
+device both resume the same dead thread. Measured on lamp-0c89 2026-09-03: thread
+`01a06665` was created 15:31 and every turn after 15:40 hung with no `turn end`
+for over an hour, through two service restarts and a reboot; direct `curl` to the
+same endpoint answered the same 75k-token payload in 57 s, and a FRESH
+`codex exec` answered in seconds, so the endpoint was never the problem. The
+gatewayd now calls `clearSession()` on a resume timeout, which is the only escape
+that does not need a human.
+
+The web chat's own give-up window (`REPLY_IDLE_TIMEOUT_MS`) is sized to
+outlast the turn cap for the same reason — and it cannot be shortened, because
+`codex exec --json` emits nothing at all while it works (the measured run
+streamed zero deltas in ten minutes).
 
 ## 3. Event translation (`translator.go`)
 

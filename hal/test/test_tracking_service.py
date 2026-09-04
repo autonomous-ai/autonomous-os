@@ -34,9 +34,20 @@ class _FakeAnimationService:
         self._running.set()
         self.dispatched: list[tuple[str, str]] = []
         self.idle_recording = "idle"
+        self.positions = {
+            "base_yaw.pos": 18.0,
+            "base_pitch.pos": 7.0,
+            "elbow_pitch.pos": -4.0,
+            "wrist_roll.pos": 3.0,
+            "wrist_pitch.pos": -12.0,
+        }
+        self._current_state = {"base_yaw.pos": -30.0}
 
     def dispatch(self, event: str, recording: str) -> None:
         self.dispatched.append((event, recording))
+
+    def get_positions(self) -> dict[str, float]:
+        return dict(self.positions)
 
 
 class _FakeFollower:
@@ -90,11 +101,6 @@ def test_tracking_timeout_stops_even_when_camera_has_no_frames(monkeypatch):
     assert not animation._hold_mode
     assert service._follower.joined
     assert service._follower.goal_cleared
-    assert animation.robot.actions == [{
-        "base_yaw.pos": 0.0,
-        "base_pitch.pos": 0.0,
-        "elbow_pitch.pos": 0.0,
-        "wrist_roll.pos": 0.0,
-        "wrist_pitch.pos": 0.0,
-    }]
+    assert animation.robot.actions == []
+    assert animation._current_state == animation.positions
     assert animation.dispatched == [("play", "idle")]

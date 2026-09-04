@@ -1963,6 +1963,18 @@ class VoiceService:
                     gaze.on_speech_end()
                 except Exception as e:
                     logger.debug("gaze speech-end check skipped: %s", e)
+            else:
+                # No transcript, but the reacquire at speech START already took
+                # the body — and most sessions the wide entry VAD opens end
+                # exactly here. Without this the hold outlives the capture that
+                # made it and the lamp stays frozen (03/09/2026). The retry
+                # above stays gated on a transcript; only the handover does not.
+                try:
+                    from hal.drivers.tracking import gaze
+
+                    gaze.release_reacquire_hold_if_pending()
+                except Exception as e:
+                    logger.debug("gaze reacquire release skipped: %s", e)
                 wakeword_followup_active = (
                     wakeword_followup_active
                     or (hal_config.WAKEWORD_ENABLED and self._wakeword_focus.is_active())
@@ -2012,7 +2024,7 @@ class VoiceService:
                 _final_text, _ = self._decorator.classify_wake_word(combined)
                 try:
                     turn_identity = self._decorator.identify_and_decorate(
-                        _final_text, audio_buffer
+                        _final_text, audio_buffer, in_followup=wakeword_followup_active
                     )
                     turn_speaker_display = turn_identity[2]
                     # Promote a confident match to the device-wide voice
@@ -2050,13 +2062,46 @@ class VoiceService:
                     ),
                 )
 
+            speaker_prepass_thread = None
             if defer_speaker_prepass:
                 logger.info(
                     "[realtime] Short transcript — deferring speaker-ID prepass "
                     "until after the AI rejection decision"
                 )
             else:
-                resolve_turn_speaker_identity()
+                # Off the critical path. The prepass is an external embedding
+                # call; running it inline put its whole round trip in front of
+                # the Gemini connect and the audio flush, so the model did not
+                # even receive the utterance until it returned (measured on
+                # lamp-0c89 03/09/2026: 1.49s of the 3.0s between the user
+                # falling silent and the audio being committed). Nothing between
+                # here and the join below reads the identity, so it can resolve
+                # while the realtime turn opens.
+                speaker_prepass_thread = threading.Thread(
+                    target=resolve_turn_speaker_identity,
+                    daemon=True,
+                    name="speaker-id-prepass",
+                )
+                speaker_prepass_thread.start()
+
+            def join_speaker_prepass() -> None:
+                """Wait for the backgrounded prepass, bounded.
+
+                Called once the realtime turn is open, which is the first point
+                the speaker's name is needed. A prepass that finished during the
+                connect costs nothing here. Hitting the ceiling only means this
+                turn's context goes out with the speaker unresolved, which the
+                late-correction path below already handles.
+                """
+                if speaker_prepass_thread is None or not speaker_prepass_thread.is_alive():
+                    return
+                waited_from = time.time()
+                speaker_prepass_thread.join(voice_cfg.SPEAKER_PREPASS_JOIN_S)
+                logger.info(
+                    "[realtime] waited %.2fs for speaker-ID prepass (resolved=%s)",
+                    time.time() - waited_from,
+                    not speaker_prepass_thread.is_alive(),
+                )
 
             # Capture can end just after the STT callback. One final check
             # avoids dropping a matched partial that raced the loop exit.
@@ -2080,6 +2125,10 @@ class VoiceService:
                     )
             else:
                 start_realtime_turn()
+
+            # Everything below reads the resolved speaker, so the parallel
+            # window ends here.
+            join_speaker_prepass()
 
             # `discard_open_activity()` starts its replacement session in the
             # background. A user can begin the next utterance before that

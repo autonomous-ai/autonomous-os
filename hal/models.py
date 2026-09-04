@@ -20,6 +20,9 @@ class ServoRequest(BaseModel):
 class ServoStateResponse(BaseModel):
     available_recordings: list[str]
     current: Optional[str]
+    # null = no mode holding the body. Key stays present so that is
+    # distinguishable from a HAL too old to send it.
+    motion_mode: Optional[str] = None
 
     model_config = {
         "json_schema_extra": {
@@ -51,6 +54,7 @@ class ServoStateResponse(BaseModel):
                         "music_hype",
                     ],
                     "current": "idle",
+                    "motion_mode": None,
                 }
             ]
         }
@@ -99,10 +103,11 @@ class LEDStateResponse(BaseModel):
 
 class LEDColorResponse(BaseModel):
     led_count: int
-    on: bool  # True if any pixel is lit
-    color: list[int]  # [R, G, B] — actual pixel 0 from strip
+    on: bool  # True if ANY pixel is lit — the whole ring is read, not pixel 0
+    color: list[int]  # [R, G, B] — the ring's brightest pixel (pixel 0 when uniform)
     hex: str  # e.g. "#ff8800"
     brightness: float  # 0.0–1.0 derived from max channel
+    uniform: bool  # False when the pixels differ (dithered effects, partial paints)
     effect: Optional[str]  # running effect name, or null
     scene: Optional[str]  # active scene name, or null
 
@@ -169,6 +174,15 @@ class LEDEffectResponse(BaseModel):
 
 class StatusResponse(BaseModel):
     status: str
+
+
+class ServoPlayResponse(BaseModel):
+    """Status is "ok" only when the recording started. A play the sleep gate or
+    zero/hold dropped answers "ignored" plus the reason — the shape `/emotion`
+    uses."""
+
+    status: str
+    reason: Optional[str] = None
 
 
 class PolicyRunRequest(BaseModel):

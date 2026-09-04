@@ -1,5 +1,7 @@
 package codex
 
+import "go.autonomous.ai/os/system/lib/syspath"
+
 // Wire constants for the Codex backend. The OpenAI Codex CLI has no server
 // mode of its own, so the device runs a thin local bridge — compiled into the
 // os-server binary (runtimes/codex/gatewayd, systemd unit codex.service runs
@@ -22,23 +24,21 @@ package codex
 //
 // The exec events are translated in translator.go into the same
 // domain.WSEvent shape the OpenClaw handler consumes.
-const (
-	// WSURL is the local bridge WebSocket endpoint (see bridge.py, materialized
-	// by presync.sh).
-	WSURL = "ws://127.0.0.1:18792/codex/ws/"
+const Conversation = "device-main"
+
+// Resolved once at process start from the same env vars the gatewayd and
+// presync.sh read (syspath). Unset env keeps the device defaults.
+var (
+	// WSURL is the local bridge WebSocket endpoint (CODEX_PORT).
+	WSURL = "ws://127.0.0.1:" + syspath.CodexPort() + "/codex/ws/"
 
 	// Token is the bearer token sent in the Authorization header on connect.
-	// The bridge reads the same value from /root/.codex/.env (CODEX_WS_TOKEN,
-	// presync-owned) — a fixed device-local token, mirroring the picoclaw and
-	// claudecode contracts.
-	Token = "autonomous_codex_token"
-
-	// Conversation is a label only — Codex owns its thread ids; the real
-	// thread id is captured from the `thread.started` exec event.
-	Conversation = "device-main"
+	// The bridge reads the same value from $CODEX_HOME/.env (CODEX_WS_TOKEN,
+	// presync-owned) — mirroring the picoclaw and claudecode contracts.
+	Token = syspath.CodexWSToken()
 
 	// codexHome is the backend's device-local state dir: CODEX_HOME for the
-	// CLI (config.toml, auth, sessions/) plus the bridge.py, .env, session.json
-	// and the workspace/ Codex runs in. Wiped whole by ResetAgent.
-	codexHome = "/root/.codex"
+	// CLI (config.toml, auth, sessions/) plus the .env, session.json and the
+	// workspace/ Codex runs in. Wiped whole by ResetAgent.
+	codexHome = syspath.CodexHome()
 )

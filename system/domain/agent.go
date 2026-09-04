@@ -68,7 +68,16 @@ type AgentGateway interface {
 	// Last-write-wins per event type. fixedRunID lets web_chat preallocate the runID
 	// returned to the web client so it can correlate SSE events at replay time;
 	// other event types pass "" and a fresh runID is allocated at drain.
-	QueuePendingEvent(eventType, msg, image, fixedRunID string)
+	QueuePendingEvent(eventType, msg string, images []string, fixedRunID string)
+
+	// DrainPendingEvents replays whatever QueuePendingEvent buffered. The
+	// runtimes call it themselves on the idle edge; this exposes it because
+	// that edge is not the only reason a queued event has to wait. An event
+	// queued while the DEVICE was busy — the agent long since idle, its reply
+	// still coming out of the speaker — has no turn ending behind it to
+	// trigger a drain, and would otherwise sit in the queue until the next
+	// unrelated turn happened to finish.
+	DrainPendingEvents()
 
 	// SendChatMessage sends a user message to the agent. Returns the run ID.
 	SendChatMessage(msg string) (string, error)
@@ -78,9 +87,14 @@ type AgentGateway interface {
 	// payload is identical to SendChatMessage.
 	SendSystemChatMessage(msg string) (string, error)
 
-	// SendChatMessageWithImage sends a message with a base64 JPEG image attachment.
-	// Used by sensing events that include a camera snapshot for AI vision analysis.
-	SendChatMessageWithImage(msg string, imageBase64 string) (string, error)
+	// SendChatMessageWithImages sends a message with base64 JPEG image
+	// attachments. Used by sensing events that include a camera snapshot for AI
+	// vision analysis, and by chat clients that attach photos. A slice, not a
+	// single image: a chat client can attach several at once, and every wire
+	// format behind this (OpenClaw chat.send, the bridge frame) already carries
+	// `attachments[]`. Pass one element for the single-snapshot case; an empty
+	// or nil slice means no attachment.
+	SendChatMessageWithImages(msg string, imagesBase64 []string) (string, error)
 
 	// NextChatRunID allocates the chat request id and idempotency key for the next outbound chat.send.
 	// Call flow.SetTrace(runID) before flow.Start so the sensing_input enter line matches chat_send.
@@ -89,8 +103,8 @@ type AgentGateway interface {
 	// SendChatMessageWithRun sends using a preallocated pair from NextChatRunID (same idempotency as chat.send).
 	SendChatMessageWithRun(msg string, reqID string, runID string) (string, error)
 
-	// SendChatMessageWithImageAndRun is SendChatMessageWithImage with preallocated ids.
-	SendChatMessageWithImageAndRun(msg string, imageBase64 string, reqID string, runID string) (string, error)
+	// SendChatMessageWithImagesAndRun is SendChatMessageWithImages with preallocated ids.
+	SendChatMessageWithImagesAndRun(msg string, imagesBase64 []string, reqID string, runID string) (string, error)
 
 	// SendSlashCommandWithRun sends a slash-prefixed message (e.g. "/status")
 	// with deliver:false so the gateway routes the reply only back to this
@@ -98,8 +112,8 @@ type AgentGateway interface {
 	// starts with "/" and originates from the web monitor chat.
 	SendSlashCommandWithRun(msg string, reqID string, runID string) (string, error)
 
-	// SendSlashCommandWithImageAndRun is SendSlashCommandWithRun with image attachment.
-	SendSlashCommandWithImageAndRun(msg string, imageBase64 string, reqID string, runID string) (string, error)
+	// SendSlashCommandWithImagesAndRun is SendSlashCommandWithRun with image attachments.
+	SendSlashCommandWithImagesAndRun(msg string, imagesBase64 []string, reqID string, runID string) (string, error)
 
 	// GetSessionKey returns the current agent session key, or empty string.
 	GetSessionKey() string

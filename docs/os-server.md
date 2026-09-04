@@ -106,7 +106,7 @@ allowed so internal guard-mode operation remains available.
 ```json
 {
   "message": "Intruder detected in living room",
-  "image": "<base64 JPEG, optional>"
+  "images": ["<base64 JPEG>", "…"]   // optional, one entry per attached photo
 }
 ```
 
@@ -129,7 +129,7 @@ Config field: `guard_mode` in `config/config.json` (bool, default `false`). The 
 {
   "type": "voice_command|voice_followup|voice|web_chat|mqtt_chat|motion|sound|presence.enter|presence.leave|presence.away|light.level|motion.activity",
   "message": "...",
-  "image": "<base64 JPEG, optional>"
+  "images": ["<base64 JPEG>", "…"]   // optional, one entry per attached photo
 }
 ```
 
@@ -152,7 +152,7 @@ Config field: `guard_mode` in `config/config.json` (bool, default `false`). The 
 1. `voice_command`, `voice_followup`, or `voice` + local intent enabled → match intent → execute directly (~50ms). `voice_followup` has the same user priority as `voice_command`; `web_chat` / `mqtt_chat` skip local intent (typed text ≠ wake-word voice).
 2. Ambient turn floor: `motion.activity`, `emotion.detected`, `speech_emotion.detected`, `sound`, `presence.away`, `light.level` are dropped when the last agent turn created by this handler (any type) was less than `sensing_turn_floor_s` seconds ago (config key, default `120`, `0` disables; guard mode bypasses). One cross-type floor on top of HAL's independent per-type gates — a burst of different event types costs at most one agent turn per window. Dropped events surface as `sensing_drop` (reason `ambient_floor`) in the Flow Monitor.
 3. No match → forward to OpenClaw via WebSocket `chat.send`
-4. If event has `image` → call `SendChatMessageWithImage` → send image with text for AI vision analysis. For chat types (`web_chat` / `mqtt_chat`), attached image is saved to `/tmp/web-chat-*.jpg` and tagged `[image: <path>]` so the agent can reference it (e.g. for face enrollment).
+4. If event has `images` → call `SendChatMessageWithImages` → send every attached photo with the text for AI vision analysis. A LIST, not a single field: a chat client can attach several at once and every wire format behind the gateway already carries `attachments[]`; a camera event simply sends one entry. For chat types (`web_chat` / `mqtt_chat`), each image is saved to `/tmp/web-chat-<ms>-<i>.jpg` (indexed so photos attached to the SAME turn cannot collide) and tagged `[image: <path>]` so the agent can reference it (e.g. for face enrollment). When the main model is text-only, the describe-first gate runs once PER image, **concurrently** (`safego`), and the descriptions are numbered `(image N of M)`. Concurrency is not an optimisation here: the gate runs inside the HTTP handler, so the caller's POST does not return until every describe finishes — a single describe measured 8-38 s, so two photos in series left the web chat silent for ~53 s, long enough that reloading the page (which cancels the request and loses the turn) is the natural move. Fanning out makes the wait the slowest image instead of their sum.
 5. Chat runs (`web_chat` / `mqtt_chat`) are tagged via `MarkWebChatRun(runID)` so the SSE handler suppresses TTS at lifecycle end — reply is rendered in the chat UI only (web SSE, or MQTT `chat.event` stream).
 
 ### OpenClaw
@@ -240,13 +240,13 @@ Accessed via nginx proxy: `/hw/*` → `127.0.0.1:5001`
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/servo` | Recordings + animation state |
-| POST | `/servo/play` | Play animation (idle, curious, nod, headshake, happy_wiggle, sad, excited, shock, shy, scanning, wake_up, music_groove, listening, thinking_deep, laugh, confused, sleepy, greeting, acknowledge, stretching). Idle auto-plays on boot. |
+| GET | `/servo` | Recordings + animation state + `motion_mode` (`zero` / `hold` / `released`, or `null` when no mode is holding the body) — the posture mode that decides whether `/servo/play` is honoured |
+| POST | `/servo/play` | Play animation (idle, curious, nod, headshake, happy_wiggle, sad, excited, shock, shy, scanning, wake_up, music_groove, listening, thinking_deep, laugh, confused, sleepy, greeting, acknowledge, stretching). Idle auto-plays on boot. Answers `{"status":"ignored","reason":"hold"\|"zero"\|"released"\|"sleeping"}` when the mode or the sleep gate drops the play — `"ok"` means the recording actually started. |
 | POST | `/servo/move` | Send joint positions with smooth interpolation |
 | POST | `/servo/release` | Disable torque on all servos |
 | GET | `/servo/position` | Current servo positions |
 | GET | `/servo/aim` | List aim directions |
-| POST | `/servo/aim` | Aim device head (center, desk, wall, left, right, up, down, user) |
+| POST | `/servo/aim` | Aim device head (center, desk, wall, left, right, up, down, user). `left`/`right` change only `base_yaw`; an explicit `center` resets it; every other direction — and the unknown-direction fallback — keeps the current yaw |
 | GET | `/servo/track/targets` | List suggested target names for YOLOWorld detection |
 | POST | `/servo/track` | Start tracking — `{"target":"cup"}` (auto-detect) or `{"bbox":[x,y,w,h]}`. See [vision-tracking.md](../robots/lamp/docs/vision-tracking.md) |
 | POST | `/servo/track/stop` | Stop current tracking session |
@@ -592,6 +592,131 @@ HAL (Python): FastAPI standard JSON responses.
    - Wait for HAL to answer `GET :5001/health` (up to 120s) before any HAL call. os-server binds :5000 well before HAL's FastAPI is listening, and a first boot also builds the venv and loads models, so an un-gated one-shot call is lost to a connection refused
    - Set speaker volume: the level the user last set (persisted by HAL on every `/audio/volume` change) wins; otherwise the device's `startup_volume` (ROBOT.md front matter, default 100)
 4. If not yet set up: wait for `POST /api/device/setup`
+
+## Off-device run (laptop)
+
+`make os-dev` runs the **same binary** that ships to the board — no build tag,
+no second code path. Only the device-absolute paths move, through the env vars
+`system/lib/syspath` reads. **Unset env = board defaults, byte for byte**
+(`runtimes/codex/paths_default_test.go` asserts this).
+
+| Env var | Default (device) | Used for |
+|---------|------------------|----------|
+| `CODEX_HOME` | `/root/.codex` | Codex state dir — config.toml, auth.json, `.env`, `skills/`, `sessions/`, `workspace/`. Anchors every codex path on both the client and `codex-gatewayd` |
+| `CODEX_PORT` | `18792` | Bridge WebSocket port (`WSURL` and the gatewayd listener) |
+| `CODEX_WS_TOKEN` | `autonomous_codex_token` | Bearer token os-server sends to the bridge |
+| `OS_AGENT_HOME` | `/root` | Root a Telegram coding session resolves `~` and relative folders against |
+| `OS_AGENT_STATE_PATH` | `/root/config/agent_state.json` | Runtime-switch history (persona migration) |
+| `OS_BOOTSTRAP_CONFIG` | `/root/config/bootstrap.json` | The file os-server reads `metadata_url` from — the base for skill zips and the skill watcher |
+| `OS_LOG_FILE` | `/var/log/os-server.log` | Rotating log file |
+| `DEVICE_TYPE` / `DEVICES_DIR` | — / `/opt/devices` | Body selector and `robots/<type>/` root (pre-existing) |
+
+`config.json` needs no env: `configPath` is `config/config.json` relative to the
+cwd, so `os-dev` runs from the state dir exactly as systemd's
+`WorkingDirectory=/root` does on the board.
+
+A full laptop stack is three terminals:
+
+```bash
+make sim          # HAL on :5001
+make codex-dev    # codex bridge on $CODEX_PORT
+make os-dev       # API on :5000
+make web-dev      # web UI on :5173 (optional)
+```
+
+os-server serves no HTML: on a board nginx serves `web/dist` and proxies `/api`
+and `/hw` to it. `make web-dev` puts Vite in nginx's place, with `LAMP_PROXY`
+(default `http://127.0.0.1:5000`) naming the device the SPA talks to — a `.env`
+in `web/` still wins, so pointing at a real Pi is unchanged. Open
+**`http://localhost:5173/monitor`**; Vite binds `[::1]` only, so `127.0.0.1:5173`
+is refused. Admin routes need auth — log in with the device password, or append
+`?llm_api_key=<the key in config.json>` once and the SPA exchanges it for a
+session cookie and scrubs it from the address bar.
+
+Three of the six log tabs work off-device. `hal` and `os-server` follow
+`OS_HAL_LOG_FILE` / `OS_LOG_FILE`, and the Agent tabs follow
+`OS_AGENT_BRIDGE_LOG` — `make codex-dev` tees the bridge to a file because a
+laptop has no journal to read. `bootstrap` (the worker is not run off-device)
+and `buddy` (a Mac app with no log here) stay empty by design; unset env leaves
+all six exactly as they resolve on a board.
+
+Makefile knobs: `OS_STATE_DIR` (default `/tmp/autonomous-os`), `OS_AGENT_RUNTIME`
+(default `codex`), `CODEX_HOME` (default `$HOME/.codex`), `CODEX_PORT`,
+`CODEX_BIN`. `scripts/dev/os-dev-seed.sh` writes `device_type`, `agent_runtime`
+and `set_up_completed: true` into the state dir's config.json — the last one
+matters because the startup sequence that runs presync and `EnsureOnboarding`
+is gated on it (`server/config_watch.go`), so without it the workspace stays
+empty. Nothing in the target installs the codex CLI itself — that is expected to
+be on `PATH` already.
+
+Skills DO install themselves. `os-dev-seed.sh` also seeds a `bootstrap.json`
+carrying `metadata_url`, derived from the same `GCS_BUCKET` / `BUCKET_PREFIX`
+that `scripts/release/ota-config.sh` defines, so the dev URL cannot drift from
+what `upload-skills.sh` publishes. With it set, `EnsureOnboarding` runs the same
+`downloadSkills()` the board runs: every skill this `DEVICE_TYPE` supports is
+pulled as `<base>/skills/<name>.zip` into `$CODEX_HOME/skills`, and the skill
+watcher then refreshes it on version changes. The CDN objects are public, so no
+credentials are involved. Seeded once — an edited `bootstrap.json` survives.
+
+`metadata_url` is the ONLY key os-server reads from that file, and its only
+consumers are the skill watcher and the runtimes' `otaBaseURL()` helpers, so
+setting it off-device enables skills and nothing else — OTA self-update lives in
+the separate `bootstrap-server` binary, which `make os-dev` does not run.
+
+### Full media + voice on the laptop
+
+`make sim` alone boots HAL with virtual devices. `make sim SIM_MEDIA=host` opens
+the Mac's microphone, speaker and camera **and** runs the real voice pipeline
+(STT → realtime → `[turn] route=…` dispatch → this server), so a spoken turn
+travels the same path it does on a board. The `sim` target sets three paths for
+it:
+
+| Env | Points at | Why |
+|-----|-----------|-----|
+| `OS_CONFIG_PATH` | `$OS_STATE_DIR/config/config.json` | The one file HAL and os-server share, as `/root/config/config.json` is on a board. Carries the credentials **and** `agent_runtime` |
+| `HAL_SNAPSHOT_DIR` | `$CODEX_HOME/media/hal-snapshots` | Where `?save=true` writes. Must sit under the runtime's own home or the agent cannot read the frame and `GET /api/sensing/agent-snapshot/…` cannot serve it |
+| `HAL_SNAPSHOT_PERSIST_DIR` | `$SIM_STATE_DIR/snapshots` | `/var/lib/hal/snapshots` is root-only |
+| `HAL_TTS_CACHE_DIR`, `HAL_CALIBRATION_DIR`, `HAL_USER_BEARING_PATH`, `HAL_FACE_HEIGHT_PATH`, `HAL_VOICE_STRANGERS_DIR`, `HAL_DL_STALL_LOG` | `$SIM_STATE_DIR/…` | The rest of HAL's writable state, rooted at `/var/lib/hal` or `/root/local` on a board |
+| `HAL_CODEX_WORKSPACE_DIR` | `$CODEX_HOME/workspace` | The realtime agent's `memory.jsonl` is derived from it |
+
+These fail far from their cause, which is why they are set as a block rather
+than one at a time: the TTS cache one surfaced as `POST /voice/speak 409` with
+the real `PermissionError: /var/lib/hal` buried in a background thread's
+traceback. Two remaining defaults are read-only model paths
+(`/root/local/models`, `/opt/piper`) — absent on a laptop, the feature that
+needs them simply stays off. `POST /audio/volume` answering 503 is also
+expected: macOS has no ALSA mixer.
+
+Put the credentials in that config.json (Settings in the web UI writes the same
+file). `llm_api_key` + `llm_base_url` alone cover LLM, `AutonomousSTT`, TTS,
+image description and Gemini Live — the realtime key falls back to `llm_api_key`
+and its endpoint to `llm_base_url` + `/ws/gemini` (`hal/config.py`), so no
+separate Google credential is involved. `deepgram_api_key` is optional.
+
+Copying a real device's config.json is the fastest way to a full-option laptop,
+but blank two keys first: `telegram_bot_token` (one bot cannot have two pollers —
+the laptop would steal the device's messages) and `mqtt_endpoint` (the laptop
+would subscribe the device's own topics). Neither is an AI capability, so
+nothing above is lost.
+
+Servo has no physical body here: `http://127.0.0.1:5001/simulator` is the
+readout, driving the same `/servo/*` and `/led/*` endpoints a skill calls.
+
+Two things to know on macOS:
+
+- Microphone and Camera access must be granted to the terminal app running HAL
+  (System Settings > Privacy & Security). Enumeration is not permission — the
+  device list is populated either way and only the first real read fails — so
+  HAL probes both at boot and falls back to the virtual device with a logged
+  `[sim-media]` reason rather than failing a turn later.
+- AirPlay Receiver also listens on `*:5000`. os-server binds `127.0.0.1:5000`,
+  but a request to `localhost:5000` can still land on AirTunes — turn the
+  receiver off (System Settings > General > AirDrop & Handoff) or change
+  `httpPort`.
+- `presync.sh` regenerates `config.toml` on every boot and keeps only
+  `[mcp_servers.*]`. `os-dev-seed.sh` copies a pre-existing one to
+  `config.toml.pre-os-dev` once, so pointing `CODEX_HOME` at a real install is
+  not a one-way door.
 
 ## Logging
 

@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"go.autonomous.ai/os/system/lib/syspath"
 )
 
 // Coding-session (codex thread) discovery for the Telegram remote-coding
@@ -24,11 +26,11 @@ import (
 // file lists resumable threads so Telegram can continue any of them
 // (telegram_coding.go).
 
-const (
-	// codexSessionsDirDefault is the on-device rollout store. Overridable via
-	// the codexSessionsDirPath test seam.
-	codexSessionsDirDefault = "/root/.codex/sessions"
+// codexSessionsDirDefault is the on-device rollout store. Overridable via the
+// codexSessionsDirPath test seam.
+var codexSessionsDirDefault = codexHome + "/sessions"
 
+const (
 	// rolloutMetaScanLimit bounds how many bytes of a rollout are read while
 	// recovering its thread id / cwd / recent prompts. Generous so the tail
 	// (recent prompts) is reached for normal-sized rollouts.
@@ -228,21 +230,22 @@ func mostRecentFirst(recent []string) []string {
 }
 
 // normalizeFolder cleans a user-supplied path: trims quotes/space, expands a
-// leading ~ to /root, makes it absolute (relative paths resolve under /root)
-// and drops any trailing slash.
+// leading ~ to the agent home (/root on device, OS_AGENT_HOME off-device),
+// makes it absolute (relative paths resolve under that home) and drops any trailing slash.
 func normalizeFolder(p string) string {
 	p = strings.TrimSpace(p)
 	p = strings.Trim(p, `"'`)
 	if p == "" {
 		return ""
 	}
+	home := syspath.AgentHome()
 	switch {
 	case p == "~":
-		p = "/root"
+		p = home
 	case strings.HasPrefix(p, "~/"):
-		p = filepath.Join("/root", p[2:])
+		p = filepath.Join(home, p[2:])
 	case !filepath.IsAbs(p):
-		p = filepath.Join("/root", p)
+		p = filepath.Join(home, p)
 	}
 	return filepath.Clean(p)
 }

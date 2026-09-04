@@ -631,6 +631,11 @@ class AnimationService:
         # tracking ends. This is stricter than hold_mode — /servo/hold
         # and focus scenes still let emotion animations play.
         if self._tracking_active:
+            if self._current_recording is not None:
+                logger.info(
+                    "[tracking] dropped recording %r mid-playback (flag=%s owners=%d)",
+                    self._current_recording, self._tracking_flag, self._body_owners,
+                )
             self._idle_settled = True
             self._current_recording = None
             self._current_actions = []
@@ -946,6 +951,17 @@ class AnimationService:
         """
         # Preempt: drop any recording the event loop is playing so it stops
         # sending its frames. _continue_playback short-circuits on empty state.
+        #
+        # Logged because this leaves the body with NOTHING playing and
+        # `_idle_settled` set — idle does not come back on its own, so a lamp
+        # that goes still after a move has to be traceable to the move that
+        # did it. Both silent drop paths (this and the tracking branch above)
+        # were invisible while chasing a motionless lamp on 03/09/2026.
+        if self._current_recording is not None:
+            logger.info(
+                "[preempt] dropped recording %r for a direct move",
+                self._current_recording,
+            )
         self._current_recording = None
         self._current_actions = []
         self._current_frame_index = 0
@@ -1076,6 +1092,17 @@ class AnimationService:
     def is_suppressed(self) -> bool:
         """True when zero_pose or explicit hold is active."""
         return getattr(self, "_zero_mode", False) or self._hold_mode
+
+    @property
+    def motion_mode(self) -> Optional[str]:
+        """Zero wins over hold: zero_pose() parks the body, hold() only freezes
+        it. A released body also reports None — release() cuts torque without
+        setting either flag."""
+        if getattr(self, "_zero_mode", False):
+            return "zero"
+        if self._hold_mode:
+            return "hold"
+        return None
 
     def ensure_running(self) -> None:
         """Restart the event loop if it stopped (e.g. after zero/hold)."""
@@ -1211,6 +1238,8 @@ class AnimationService:
         from hal.safety.policy import min_move_duration
 
         preset = AIM_PRESETS.get(direction)
+        # Only an explicit center owns yaw — the fallback below lands on center too.
+        explicit_center = direction == AIM_CENTER
         if preset is None:
             # Unknown direction (the LLM reached for a word that isn't a preset,
             # e.g. "front") — aim the neutral center pose instead of failing the
@@ -1223,6 +1252,9 @@ class AnimationService:
         # keep current yaw. This is the lamp's 5-DOF kinematic convention.
         if direction in (AIM_LEFT, AIM_RIGHT):
             positions = {**current_positions, "base_yaw.pos": preset["base_yaw.pos"]}
+        elif explicit_center:
+            # Without this, left/right is a one-way trip.
+            positions = dict(preset)
         else:
             positions = {**preset, "base_yaw.pos": current_positions.get("base_yaw.pos", preset["base_yaw.pos"])}
 

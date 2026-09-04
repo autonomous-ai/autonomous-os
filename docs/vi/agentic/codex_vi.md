@@ -50,13 +50,22 @@ prompt approval (đi cặp với `approval_policy = "never"` +
 `codex.ProvideService`, giá trị lạ rơi về OpenClaw. Khi khởi động, banner
 `AGENT BACKEND ACTIVE → CODEX` in `ws_url` + `conversation`.
 
-Hằng số kết nối (`runtimes/codex/constants.go`, không có config theo máy):
+Giá trị kết nối (`runtimes/codex/constants.go`). Cả ba đường dẫn thiết bị dưới
+đây được resolve một lần lúc khởi động process, từ CÙNG các biến môi trường mà
+gatewayd và `presync.sh` đọc (`system/lib/syspath`); không set env thì ra đúng
+mặc định của thiết bị, nên board không bị ảnh hưởng:
 
-| Hằng | Mặc định | Ý nghĩa |
-|---|---|---|
-| `WSURL` | `ws://127.0.0.1:18792/codex/ws/` | Endpoint WebSocket của bridge cục bộ |
-| `Token` | `autonomous_codex_token` | Bearer token khi connect; bridge đọc cùng giá trị từ `/root/.codex/.env` (`CODEX_WS_TOKEN`, do presync sở hữu) |
-| `Conversation` | `device-main` | Chỉ là nhãn — Codex sở hữu thread id của nó (§3) |
+| Giá trị | Mặc định | Env | Ý nghĩa |
+|---|---|---|---|
+| `WSURL` | `ws://127.0.0.1:18792/codex/ws/` | `CODEX_PORT` | Endpoint WebSocket của bridge cục bộ |
+| `Token` | `autonomous_codex_token` | `CODEX_WS_TOKEN` | Bearer token khi connect; bridge đọc cùng giá trị từ `$CODEX_HOME/.env` (do presync sở hữu) |
+| `codexHome` | `/root/.codex` | `CODEX_HOME` | State dir mà mọi đường dẫn codex khác dẫn xuất ra — workspace, skills, sessions, config.toml, `.env`, các file state telegram |
+| `Conversation` | `device-main` | — | Chỉ là nhãn — Codex sở hữu thread id của nó (§3) |
+
+Chỉ cần set `CODEX_HOME` là dời được cả backend, ở cả phía client lẫn
+`codex-gatewayd` (gatewayd lấy nó làm gốc cho mặc định từng file). Đó chính là
+cách `make os-dev` / `make codex-dev` chạy binary được ship ở ngoài thiết bị —
+xem [os-server_vi.md § Chạy off-device](../os-server_vi.md#chạy-off-device-laptop).
 
 ## 1.1 Cài đặt (`install.sh`)
 
@@ -129,13 +138,23 @@ restart gateway khi có thay đổi thật. Nó sở hữu mọi thứ stateful:
   key sẽ lấn át/xung đột với auth ChatGPT).
 
 Trên nền lần chạy presync, `EnsureOnboarding` (`onboarding.go`) làm cùng phần
-reconcile workspace như các backend khác: seed `KNOWLEDGE.md` từ template nhúng
-chỉ khi chưa có, inject các khối OS-managed `<!-- OS DO NOT REMOVE -->` vào
+reconcile workspace như các backend khác: seed `KNOWLEDGE.md` **và `AGENTS.md`**
+từ template nhúng chỉ khi chưa có, inject các khối OS-managed `<!-- OS DO NOT REMOVE -->` vào
 `SOUL.md` / `AGENTS.md` / `HEARTBEAT.md` (gốc OpenClaw, lược phần
 chỉ-OpenClaw), refresh khối AGENTS.md **toàn cục** ở tầng user
 (`ensureUserAgentsMDBlock`, xem bên dưới), và capability-gate skills. Thay đổi
 chỉ-markdown không bao giờ restart gateway — mỗi `codex exec` đọc lại
 workspace; chỉ presync đổi config hoặc self-heal unit mới restart.
+
+**Vì sao phải seed `AGENTS.md`.** Codex không có lệnh `setup` để sinh lại
+`AGENTS.md` nền như openclaw, nên một **thiết bị chỉ chạy codex** — chưa từng
+chạy openclaw, khiến presync §1 không có gì để migrate — hoàn toàn không có file
+này. Mà `AGENTS.md` lại là file duy nhất codex tự nạp, nên không có file nghĩa là
+không có khối OS **và không có persona**: agent tự giới thiệu là "Codex".
+`EnsureOnboarding` giờ seed `runtimes/codex/resources/AGENTS.md` (một bản nền
+ngắn, mang tiêu đề `Your Workspace` mà bộ inject khối bám vào) qua
+`seedFileIfAbsent` — hàm này **không bao giờ ghi đè**, nên thiết bị đã migrate từ
+openclaw vẫn giữ nguyên file của nó.
 
 **Khối persona inline (AGENTS.md).** Codex chỉ tự nạp DUY NHẤT `AGENTS.md` vào
 context; chỉ dẫn "Session Startup" bảo đọc `SOUL.md`/`IDENTITY.md` là tự
@@ -215,6 +234,53 @@ Bridge lưu attachment vào `/root/.codex/attachments` rồi truyền qua
 đã lưu (§4). Codex xử lý một turn mỗi lần và không stream token, nên turn được
 correlate bằng một `runID` in-flight duy nhất (pending run id được frame inbound
 đầu tiên của turn nhận lấy).
+
+## 2.1 Thời lượng một turn — timeout và busy TTL
+
+Một turn chat được kỳ vọng là chậm: người dùng mở chat đúng vào lúc việc cần nhiều
+thời gian, và cùng prompt đó chạy qua Telegram/OpenClaw mất 35 phút mới xong. Có
+hai con số chặn nó, và thứ tự giữa chúng là bắt buộc:
+
+| Knob | Ở đâu | Mặc định | Nghĩa |
+|---|---|---|---|
+| `CODEX_TURN_TIMEOUT_S` | `gatewayd/gatewayd.go` | `600` (10 phút) | Giết `codex exec` rồi gửi `bridge.error: timeout`. Gatewayd LUÔN kết thúc turn — xong, lỗi, hoặc timeout này. |
+| `busyTTL()` | `events.go` | timeout đó **+ 5 phút** | Gỡ kẹt pipeline sensing khi frame cuối của turn bị RỚT. Suy ra từ chính env var trên nên nâng timeout không bỏ sót nó. |
+
+**TTL hết hạn thì kết thúc turn cho ĐỦ, cả hai nửa.** Vừa bỏ runId, vừa bắn một
+lifecycle error mang chính runId đó (`failStuckTurn`, đi qua `wsDispatch` vì việc
+kiểm busy chạy trên đường sensing, nằm ngoài vòng đọc WS). Làm thiếu nửa nào cũng
+thành bug: để runId lại thì turn KẾ TIẾP bị mồ côi (`ensureTurnStarted` thoát sớm
+khi `currentRunID` khác rỗng, nên frame của turn mới bị gán vào run đã chết và
+chat mới treo); còn xoá im lặng thì trình duyệt ngồi chờ tới hết hạn của chính nó
+— đúng cái "no response" mà đường này sinh ra để chặn.
+
+**TTL phải dài hơn timeout.** Trước đây TTL cố định 5 phút trong khi timeout là 10
+phút, nên mọi turn chậm quá 5 phút đều rơi vào nhánh "frame bị rớt" — mà nhánh đó
+còn gọi `clearTurn()`, xoá luôn runId của turn đang chạy. Run mà trình duyệt đang
+chờ thành mồ côi: các frame lifecycle/error sau đó không thấy run hiện hành, cấp
+runId mới và gắn vào một turn xếp hàng không liên quan, nên khung chat treo ở
+trạng thái pending rồi báo "no response" trong khi backend vẫn chạy bình thường.
+
+Đo trên lamp-0c89 ngày 3/9/2026: run `device-chat-139` bắt đầu 15:40:41, mất runId
+lúc 15:45:41, và `timeout` lúc 15:50:41 bị báo dưới `device-chat-168`. `openclaw`
+và `hermes` không hề xoá runId khi TTL hết hạn — đó là lý do turn Telegram dài
+luôn chạy được ở hai runtime đó; đường codex giờ đã giống vậy.
+
+**Lượt resume bị timeout thì BỎ LUÔN thread.** Việc xoay thread
+(`ShouldRotateSession`) đọc kích thước context từ `turn.completed`, nên nó chỉ nổ
+sau khi một lượt THÀNH CÔNG — thread mà mọi lượt resume đều treo thì không bao giờ
+được xoay, và id thread nằm trong session file nên restart service lẫn reboot máy
+đều resume đúng cái thread chết đó. Đo trên lamp-0c89 ngày 3/9/2026: thread
+`01a06665` tạo lúc 15:31, mọi lượt sau 15:40 đều treo không có `turn end` suốt hơn
+một tiếng, qua hai lần restart service và một lần reboot; trong khi `curl` thẳng
+cùng endpoint trả lời đúng payload 75k token đó trong 57 giây, và `codex exec`
+thread mới trả lời trong vài giây — nên endpoint chưa bao giờ là vấn đề. Gatewayd
+giờ gọi `clearSession()` khi resume timeout, đây là đường thoát duy nhất không cần
+người can thiệp.
+
+Hạn bỏ cuộc của web chat (`REPLY_IDLE_TIMEOUT_MS`) cũng được đặt dài hơn
+mức chặn turn vì cùng lý do — và không rút ngắn được, vì `codex exec --json`
+không emit gì trong lúc chạy (run đo được không stream một delta nào suốt 10 phút).
 
 ## 3. Dịch event (`translator.go`)
 

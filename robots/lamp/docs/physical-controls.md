@@ -7,14 +7,14 @@ Lamp has two physical input devices the user can touch directly. They share the 
 | Device | Role | Where |
 |---|---|---|
 | **GPIO button** | One mechanical button. Used for decisive actions including destructive ones (reboot / shutdown / factory-reset). The mechanical feel and long-hold detection make accidental destructive actions unlikely. | Both Pi 4/5 and OrangePi sun60 |
-| **TTP223 capacitive touchpad** | Three touch pads arranged as a "dog head" surface for petting + soft stop/unmute. No destructive gestures because the IC's FastMode prevents reliable hold detection. | OrangePi sun60 only (4 Pro / A733) |
+| **TTP223 capacitive touchpad** | Two touch pads arranged as a "dog head" surface for petting + soft stop/unmute. No destructive gestures because the IC's FastMode prevents reliable hold detection. | OrangePi sun60 only (4 Pro / A733) |
 
 ## Wiring
 
 | Device | Pi 4/5 | OrangePi sun60 |
 |---|---|---|
 | GPIO button | gpiochip0 BCM 17 (pull-up, active-LOW) | gpiochip1 line 9 (pull-up, active-LOW) |
-| TTP223 | not wired | gpiochip0 lines 96 / 98 / 100, **pull-up, active-LOW** (pads rest HIGH; a touch is the falling edge) |
+| TTP223 | not wired | gpiochip0 lines 96 / 100, **pull-up, active-LOW** (pads rest HIGH; a touch is the falling edge). The middle pad on line 98 was removed 2026-08-28. |
 
 Board detection in both handlers reads `/proc/device-tree/model`:
 - `"sun60iw2"` → OrangePi 4 Pro / A733
@@ -166,7 +166,7 @@ Per-edge debounce is 200 ms (press and release ticks tracked independently so a 
 
 The TTP223 IC on this board runs in **FastMode**: output goes HIGH on touch, then automatically drops back LOW within ~50-80 ms even with the finger still on the pad. The IC re-triggers only when capacitance changes meaningfully (finger moves). Continuous "hold" is impossible without rewiring the IC's FM pin to LowPowerMode (~12 s max touch).
 
-Cross-talk between adjacent pads is also significant — a single physical touch fires edges on 2-3 pads with staggered timing (the 2-4 figure predates the pad relocations, when four were wired).
+Cross-talk between adjacent pads is also significant — a single physical touch fires edges on both pads with staggered timing. With the middle pad gone the two are further apart and the coupling is weaker: one tap now often lights only one of them, which is why gesture rules must not depend on how many pads a touch happens to reach.
 
 The driver compensates with a **two-layer model**:
 
@@ -203,9 +203,9 @@ Nothing in between, and `HAL_TOUCH_SWIPE_MIN_GAP_MS` (40) sits in the gap. Every
 
 Resolution order, first match wins:
 
-1. **SWIPE** → sleep. One contact, every pad, monotonic along the axis, all gaps above the floor. **One contact only**: each leg of a back-and-forth stroke is itself a clean one-direction pass, so letting any leg carry the verdict turns every pet into a swipe. Checked first so a resolved swipe never also fires a tap.
-2. **DOUBLE TAP** → mic mute toggle, with a spoken state confirmation. Two or more **tight multi-pad bursts** overlapping in place. Fast taps share one contact (the session never lapses); slow taps arrive as separate contacts — both count. Checked before pet, because the second tap re-touches the same pads. A stroke cannot reach this rule: its steps are all above the floor, so every "burst" is a single step and the rule needs multi-pad ones.
-3. **PET** → giggle. The finger **revisited** a pad it had left (more steps than distinct pads), or contacts landed in places with no pad in common. No contact-count gate.
+1. **SWIPE** → sleep. One contact reaching **every wired pad**, none of them twice, with a gap above the floor. "Every pad" rather than a fixed count — on a 3-pad board two of three is a partial move, not a crossing. **One contact only**: each leg of a back-and-forth stroke is itself a clean one-direction pass, so letting any leg carry the verdict turns every pet into a swipe. Checked first so a resolved swipe never also fires a tap.
+2. **DOUBLE TAP** → mic mute toggle, with a spoken state confirmation. The hand was on the same ground twice **and at some point two pads lit together** — a gap below the floor, which only a landing produces. A stroke is travel throughout and can never satisfy it, so this is safe to check before pet even though both revisit.
+3. **PET** → giggle. The finger **revisited** a pad it had left with **no landing anywhere** — every step was travel, which is what a stroke is. No contact-count gate: a continuous stroke is a single contact.
 4. **TAP** → everything else, including several fingers landing at once. That lights every pad, but within ~20 ms, which is not movement.
 
 **What is genuinely ambiguous.** A single one-direction sweep with tight timing — three pads, no revisit, gaps under the floor — is indistinguishable from a firm three-finger tap and resolves as TAP. There is no signal on this surface that separates them.
@@ -300,6 +300,12 @@ starting the camera capture and re-paints the mic-muted LED indicator, and the
 speaker flag needs no apply step (TTS checks it at speak time). A full device
 reboot starts fresh (on Intern v2 Pro the physical mic switch re-applies itself
 anyway). Record-enroll's transient speaker mute is deliberately NOT persisted.
+
+All of these sidecars live in `HAL_STATE_DIR` (default `/tmp`, i.e. the paths
+above). It exists to be pointed elsewhere: the HAL test suite gives each session
+its own directory, because these files outlive the process — a run that ended
+with the body asleep used to leave every LATER run starting asleep, and running
+the suite on a real body would have overwritten that body's live switches.
 
 ## Localized phrases
 

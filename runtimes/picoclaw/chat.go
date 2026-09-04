@@ -13,17 +13,17 @@ import (
 // SendChatMessage sends a user message to PicoClaw. Returns the run ID the
 // caller uses to correlate flow/monitor events with the resulting turn.
 func (s *PicoclawService) SendChatMessage(message string) (string, error) {
-	return s.sendChat(message, "", "", "", "user")
+	return s.sendChat(message, nil, "", "", "user")
 }
 
 // SendSystemChatMessage flags the flow event as system-originated (skill watcher,
 // wake greeting, /compact). Wire payload is identical to SendChatMessage.
 func (s *PicoclawService) SendSystemChatMessage(message string) (string, error) {
-	return s.sendChat(message, "", "", "", "system")
+	return s.sendChat(message, nil, "", "", "system")
 }
 
-func (s *PicoclawService) SendChatMessageWithImage(message string, imageBase64 string) (string, error) {
-	return s.sendChat(message, imageBase64, "", "", "user")
+func (s *PicoclawService) SendChatMessageWithImages(message string, imagesBase64 []string) (string, error) {
+	return s.sendChat(message, imagesBase64, "", "", "user")
 }
 
 // NextChatRunID allocates the run / req id pair. Same shape as openclaw/hermes so
@@ -35,29 +35,29 @@ func (s *PicoclawService) NextChatRunID() (reqID string, runID string) {
 }
 
 func (s *PicoclawService) SendChatMessageWithRun(message string, reqID string, runID string) (string, error) {
-	return s.sendChat(message, "", reqID, runID, "user")
+	return s.sendChat(message, nil, reqID, runID, "user")
 }
 
-func (s *PicoclawService) SendChatMessageWithImageAndRun(message string, imageBase64 string, reqID string, runID string) (string, error) {
-	return s.sendChat(message, imageBase64, reqID, runID, "user")
+func (s *PicoclawService) SendChatMessageWithImagesAndRun(message string, imagesBase64 []string, reqID string, runID string) (string, error) {
+	return s.sendChat(message, imagesBase64, reqID, runID, "user")
 }
 
 // SendSlashCommandWithRun — PicoClaw has no per-channel "deliver:false" flag, so
 // slash commands look the same as any other user input on the wire. We still tag
 // the flow source so logs distinguish web-monitor input from voice.
 func (s *PicoclawService) SendSlashCommandWithRun(message string, reqID string, runID string) (string, error) {
-	return s.sendChat(message, "", reqID, runID, "user_slash")
+	return s.sendChat(message, nil, reqID, runID, "user_slash")
 }
 
-func (s *PicoclawService) SendSlashCommandWithImageAndRun(message string, imageBase64 string, reqID string, runID string) (string, error) {
-	return s.sendChat(message, imageBase64, reqID, runID, "user_slash")
+func (s *PicoclawService) SendSlashCommandWithImagesAndRun(message string, imagesBase64 []string, reqID string, runID string) (string, error) {
+	return s.sendChat(message, imagesBase64, reqID, runID, "user_slash")
 }
 
 // sendChat allocates ids, marks busy, records the pending trace + runID, emits
 // chat_input / chat_send flow events for parity with openclaw, and writes the
 // message.send frame to the persistent WebSocket. The reply arrives on the read
 // loop and is translated there — this returns as soon as the frame is sent.
-func (s *PicoclawService) sendChat(message, imageBase64, fixedReqID, fixedRunID, sourceType string) (string, error) {
+func (s *PicoclawService) sendChat(message string, imagesBase64 []string, fixedReqID, fixedRunID, sourceType string) (string, error) {
 	if !s.wsConnected.Load() {
 		return "", fmt.Errorf("picoclaw not connected")
 	}
@@ -89,12 +89,23 @@ func (s *PicoclawService) sendChat(message, imageBase64, fixedReqID, fixedRunID,
 	// content is always sent so the turn proceeds even if PicoClaw ignores the
 	// attachment shape.
 	payload := map[string]any{"content": wsMessage}
-	hasImage := imageBase64 != ""
+	// One attachment entry per image: the frame already carries a LIST, so a
+	// chat client that attached several photos sends them in a single turn.
+	hasImage := len(imagesBase64) > 0
 	if hasImage {
-		payload["attachments"] = []map[string]any{{
-			"type": "image",
-			"url":  "data:image/jpeg;base64," + imageBase64,
-		}}
+		attachments := make([]map[string]any, 0, len(imagesBase64))
+		for _, img := range imagesBase64 {
+			if img == "" {
+				continue
+			}
+			attachments = append(attachments, map[string]any{
+				"type": "image",
+				"url":  "data:image/jpeg;base64," + img,
+			})
+		}
+		if len(attachments) > 0 {
+			payload["attachments"] = attachments
+		}
 	}
 	frame := map[string]any{
 		"type":    "message.send",

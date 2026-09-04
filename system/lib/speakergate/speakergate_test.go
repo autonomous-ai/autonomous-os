@@ -9,10 +9,10 @@ import (
 // withSpeaker swaps the speaker probe and speeds the poll up for the test.
 func withSpeaker(t *testing.T, busy func() bool) {
 	t.Helper()
-	origBusy, origPoll, origWait := speakerBusy, pollInterval, maxWait
-	speakerBusy, pollInterval, maxWait = busy, time.Millisecond, 200*time.Millisecond
+	origBusy, origPoll, origWait := SpeakerBusy, pollInterval, maxWait
+	SpeakerBusy, pollInterval, maxWait = busy, time.Millisecond, 200*time.Millisecond
 	t.Cleanup(func() {
-		speakerBusy, pollInterval, maxWait = origBusy, origPoll, origWait
+		SpeakerBusy, pollInterval, maxWait = origBusy, origPoll, origWait
 		deferring.Store(false)
 	})
 }

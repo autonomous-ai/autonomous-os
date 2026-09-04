@@ -298,7 +298,7 @@ func (s *OpenCodeService) injectDiscordTurn(ctx context.Context, text, channelID
 	send := s.discordSendTurn
 	if send == nil {
 		send = func(text, reqID, runID string) error {
-			_, err := s.sendChat(text, "", reqID, runID, "discord")
+			_, err := s.sendChat(text, nil, reqID, runID, "discord")
 			return err
 		}
 	}

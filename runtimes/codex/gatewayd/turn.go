@@ -86,6 +86,22 @@ func (s *Server) runTurn(ctx context.Context, payload turnPayload) {
 
 	switch {
 	case res.timedOut:
+		// A resumed turn that ran out of time takes the thread down with it.
+		// Rotation normally rides on a COMPLETED turn (the client's
+		// ShouldRotateSession reads the token count off turn.completed), so a
+		// thread whose every resume hangs can never be rotated — the next turn
+		// resumes the same thread, hangs the same way, and the device stays
+		// wedged across service restarts and reboots because the thread id is
+		// on disk. Measured on lamp-0c89 2026-09-03: thread 01a06665 was
+		// created 15:31 and every turn after 15:40 hung with no turn end, for
+		// over an hour. Dropping the thread here is the only escape that does
+		// not need a human: the next turn starts fresh, and continuity is
+		// restored the same way any other rotation restores it.
+		if resumeID != "" {
+			log.Printf("%s resumed thread %s timed out after %s — dropping it so the next turn starts fresh",
+				logPrefix, resumeID, s.cfg.TurnTimeout)
+			s.clearSession()
+		}
 		s.sendError("timeout")
 	case !res.turnEnded:
 		errMsg := strings.TrimSpace(res.stderrTail)

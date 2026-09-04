@@ -30,12 +30,12 @@ import (
 // emitFinal via the telegramRuns tracker (translator.go); TTS is suppressed
 // for these turns (MarkSilentRun).
 
-const (
-	// telegramOffsetFile persists the next getUpdates offset across restarts so
-	// already-processed updates are not re-injected. Lives under Codex's own
-	// data dir (wiped by factory reset, like telegram_targets.json).
-	telegramOffsetFile = "/root/.codex/telegram_offset.json"
+// telegramOffsetFile persists the next getUpdates offset across restarts so
+// already-processed updates are not re-injected. Lives under Codex's own data
+// dir (wiped by factory reset, like telegram_targets.json).
+var telegramOffsetFile = codexHome + "/telegram_offset.json"
 
+const (
 	// telegramAPIBaseDefault is the production Bot API host. Tests override the
 	// service field telegramAPIBase with an httptest URL.
 	telegramAPIBaseDefault = "https://api.telegram.org"
@@ -221,7 +221,7 @@ func (s *CodexService) injectTelegramTurn(ctx context.Context, text, chatID stri
 	send := s.telegramSendTurn
 	if send == nil {
 		send = func(text, reqID, runID string) error {
-			_, err := s.sendChat(text, "", reqID, runID, "telegram")
+			_, err := s.sendChat(text, nil, reqID, runID, "telegram")
 			return err
 		}
 	}

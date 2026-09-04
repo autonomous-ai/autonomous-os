@@ -14,9 +14,12 @@ misfired, the session layer mis-grouped it, the classifier mis-read it, or the
 action did something unexpected. This puts all four in one file per gesture.
 
 It is also the measuring instrument the classifier was designed from: per-contact
-`adjacent_deltas_ms` are emitted whether or not gesture classification is on, and
-those deltas are what showed fingers-landing-together (1-23ms) separating cleanly
-from a finger travelling (53-322ms).
+`touch_order` and `adjacent_deltas_ms` are emitted whether or not gesture
+classification is on, and those deltas are what showed fingers-landing-together
+(1-23ms) separating from a finger travelling (53-322ms). `touch_order` is the
+full step sequence and matches the driver's own contact step for step — an
+earlier `first_touch_order` kept one entry per pad and silently under-reported
+the gaps in 47 of 130 traces, so treat pre-2026-08-28 histograms with suspicion.
 
 This module does NOT classify. It records edges and sessions, and stores whatever
 the driver reports through `note_classifier`. An earlier version recomputed its
@@ -28,7 +31,7 @@ Env knobs (all optional):
   HAL_TOUCH_DEBUG              "true" to enable (OFF by default)
   HAL_TOUCH_DEBUG_DIR          output root (default: ./touch_logs next to this file)
   HAL_TOUCH_DEBUG_MAX_ENTRIES  file cap, oldest pruned (default 200; 0 = unbounded)
-  HAL_TOUCH_DEBUG_PADS         line->label map, e.g. "96=S1,98=S2,100=S4". Without
+  HAL_TOUCH_DEBUG_PADS         line->label map, e.g. "96=S1,100=S4". Without
                                it pads are labelled by line number, because the
                                historical S-names do not follow line order on this
                                board and guessing them would assert something false.
@@ -114,7 +117,7 @@ def _init() -> bool:
 
 
 def _parse_pad_labels(raw: str) -> Dict[int, str]:
-    """Parse "96=S1,98=S2" into {96: "S1", 98: "S2"}. Malformed entries are
+    """Parse "96=S1,100=S4" into {96: "S1", 100: "S4"}. Malformed entries are
     skipped rather than raising — a typo in an env var must not kill touch."""
     out: Dict[int, str] = {}
     for part in raw.split(","):
@@ -277,32 +280,52 @@ def note_session_end(count: int) -> None:
 
 def _summarise_session(edges: List[Dict[str, Any]], count: int,
                        trace: Dict[str, Any]) -> Dict[str, Any]:
-    """Per-contact arithmetic. This is the Phase 2 measurement.
+    """Per-contact arithmetic — the measurement the classifier is tuned from.
 
-    `first_touch_order` uses only TOUCH edges (level 0), one per line: the
-    release edge is FastMode's auto-drop, not a second contact, so including it
-    would double-count and destroy the deltas.
+    `touch_order` is the FULL step sequence: every TOUCH edge (level 0), with
+    only *consecutive* repeats collapsed, exactly the way the driver builds its
+    own contact. Release edges are excluded because FastMode's auto-drop is not
+    a second contact and would double every gap.
+
+    It replaced a `first_touch_order` that kept only the first hit per pad, and
+    that reduction was not cosmetic — `adjacent_deltas_ms` was computed from it.
+    Measured over 130 captured traces, **47 reported fewer gaps than the driver
+    actually saw**, one of them 2 instead of 9:
+
+        driver:  L96,L100,L98,L100,L96,L100,L98,L96,L100,L98   (10 steps)
+        tracer:  L96,L100,L98                                  (3 entries)
+
+    So the inter-pad histogram this driver's threshold was chosen from had been
+    measured through a partially blind view. The same reduction had already hid
+    the pet revisit signature once. One unreduced sequence now, matching the
+    driver step for step, so the two views cannot disagree.
     """
-    touches: Dict[int, float] = {}
+    seq: List[List[Any]] = []
     for e in edges:
-        if e["level"] == 0 and e["line"] not in touches:
-            touches[e["line"]] = e["t_ms"]
-    order = sorted(touches.items(), key=lambda kv: kv[1])
-    times = [t for _, t in order]
+        if e["level"] != 0:
+            continue
+        if seq and seq[-1][0] == e["pad"]:
+            continue  # same pad re-firing under a still finger, not a move
+        seq.append([e["pad"], e["t_ms"]])
+
+    times = [t for _, t in seq]
     deltas = [round(b - a, 1) for a, b in zip(times, times[1:])]
+    distinct = list(dict.fromkeys(p for p, _ in seq))
     return {
         "n": count,
         "t_ms": edges[0]["t_ms"] if edges else None,
         "ended_t_ms": round((time.monotonic() - trace["_t0"]) * 1000, 1),
         "edge_count": len(edges),
-        "pads_touched": [_pad(l) for l, _ in order],
-        "first_touch_order": [[_pad(l), t] for l, t in order],
+        "steps": len(seq),
+        # A set, not a sequence — named so it cannot be mistaken for the order.
+        "distinct_pads": distinct,
+        "touch_order": seq,
         "adjacent_deltas_ms": deltas,
         "span_ms": round(times[-1] - times[0], 1) if len(times) > 1 else 0.0,
-        # First line to fire in this contact — the proxy for "where the finger
+        # First pad to fire in this contact — the proxy for "where the finger
         # was". Its reliability under cross-talk is the open assumption the
         # spatial model rests on, and what this field exists to measure.
-        "primary_pad": _pad(order[0][0]) if order else None,
+        "primary_pad": seq[0][0] if seq else None,
     }
 
 
@@ -448,11 +471,12 @@ def _log_summary(status: str, trace: Dict[str, Any]) -> None:
         cl = trace.get("classifier") or {}
         pads = sorted({e["pad"] for e in trace["edges"] if not e["suppressed"]})
         spans = [s["span_ms"] for s in trace["sessions"] if s.get("span_ms")]
+        steps = sum(s.get("steps", 0) for s in trace["sessions"])
         action = (trace.get("action") or {}).get("fn", "-")
         logger.info(
-            "TOUCH-TRACE %s pads=%s edges=%d contacts=%d span=%sms moved=%s "
-            "swipe=%s -> %s (resolved +%.0fms)",
-            status, pads, len(trace["edges"]), len(trace["sessions"]),
+            "TOUCH-TRACE %s pads=%s edges=%d steps=%d contacts=%d span=%sms "
+            "moved=%s swipe=%s -> %s (resolved +%.0fms)",
+            status, pads, len(trace["edges"]), steps, len(trace["sessions"]),
             max(spans) if spans else 0, cl.get("moved"), cl.get("is_swipe"),
             action, trace["total_ms"],
         )

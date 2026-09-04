@@ -81,10 +81,7 @@ audio_input_device: Optional[int] = None
 # Simulation exposes an in-memory microphone/speaker pair. Keeping this state
 # here lets the audio routes preserve their HTTP contract without querying the
 # developer's macOS devices.
-simulation_audio: bool = (
-    os.environ.get("HAL_SIMULATE", "").lower() in ("1", "true", "yes")
-    and os.environ.get("HAL_SIM_MEDIA", "virtual").lower() != "host"
-)
+simulation_audio: bool = config.SIMULATE and config.SIM_MEDIA != "host"
 simulation_volume: int = 65
 
 # --- Simulation media mode (HAL_SIM_MEDIA) ---
@@ -97,7 +94,7 @@ simulation_volume: int = 65
 # `sim_media_reasons` carries the human-actionable why for each downgrade and is
 # surfaced at GET /simulator/state so the page never shows a still image while
 # claiming to be live.
-sim_media_requested: str = os.environ.get("HAL_SIM_MEDIA", "virtual").strip().lower()
+sim_media_requested: str = config.SIM_MEDIA
 sim_media_camera: str = sim_media_requested
 sim_media_audio: str = sim_media_requested
 sim_media_reasons: dict = {}
@@ -405,7 +402,7 @@ _snapshot_paths: list = []
 
 # --- Default user ---
 
-DEFAULT_USER = os.environ.get("HAL_DEFAULT_USER", "unknown")
+DEFAULT_USER = config.DEFAULT_USER
 
 # --- Agent workspace ---
 
@@ -441,7 +438,14 @@ def _cancel_pending_restore():
 # _user_led_state, and the os-server's post-boot POST /led/restore then finds
 # "no user state" and CLEARS the strip — the lamp goes dark for ~45s until
 # ambient breathing kicks in, instead of coming back in the user's color.
-_LED_STATE_PATH = "/tmp/hal-led-state.json"
+# Every boot-scoped sidecar below lives here. The directory itself is declared
+# in config.py with the rest of the env-driven settings — this module reads it,
+# it does not own it.
+def _state_path(name: str) -> str:
+    return os.path.join(config.STATE_DIR, name)
+
+
+_LED_STATE_PATH = _state_path("hal-led-state.json")
 
 
 def _boot_id() -> str:
@@ -491,14 +495,14 @@ _user_led_state = _load_user_led_state()
 # physical mic switch re-applies itself at boot regardless).
 # NOT persisted: record-enroll's transient speaker mute (routes/speaker.py
 # writes the flag directly and never calls the persist helpers — by design).
-_MIC_STATE_PATH = "/tmp/hal-mic-state.json"
-_SPEAKER_STATE_PATH = "/tmp/hal-speaker-state.json"
-_CAMERA_STATE_PATH = "/tmp/hal-camera-state.json"
+_MIC_STATE_PATH = _state_path("hal-mic-state.json")
+_SPEAKER_STATE_PATH = _state_path("hal-speaker-state.json")
+_CAMERA_STATE_PATH = _state_path("hal-camera-state.json")
 # Sleep is the same class of user-facing switch: someone (or a night scene) put
 # the device to sleep, and a HAL restart must not undo that. An OTA restarts HAL
 # — so before this sidecar, updating HAL while the device slept woke it up, with
 # the strip back on and the mic listening, in the middle of the night.
-_SLEEP_STATE_PATH = "/tmp/hal-sleep-state.json"
+_SLEEP_STATE_PATH = _state_path("hal-sleep-state.json")
 
 
 def _save_boot_sidecar(path: str, payload: dict):

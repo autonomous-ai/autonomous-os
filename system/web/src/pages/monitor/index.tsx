@@ -309,7 +309,8 @@ function AgentGWMenu({ section, setSection, closeSidebar }: {
   // browsers reaching the link will be blocked by nginx /gw/ deny-LAN
   // anyway (audit local F6).
   return (
-    <div>
+    // ponytail: parked behind CSS, not deleted — see .lm-nav-agent in index.css.
+    <div className="lm-nav-agent">
       <button
         onClick={() => setOpen((v) => !v)}
         className={"lm-snav-group" + (hasActive ? " lm-snav-group--active" : "")}

@@ -33,10 +33,6 @@ FAST_LOOP_FPS = 15
 # — motion looked robotic AND fast targets were untrackable. The hardware
 # Acceleration ramp (below) still softens each tick.
 TRACKING_GOAL_VELOCITY = 0
-# Gentle hw velocity (steps/s) for the return-to-zero glide when tracking ends
-# (with Goal_Velocity unlimited the arm would snap back).
-TRACKING_RETURN_VELOCITY = 200
-
 # Hardware acceleration for tracking (Feetech STS3215 Acceleration register).
 # 254 = max (default, snappy). Lower = gentler ramp up/down → less jerk.
 # Range: 0-254. ~30 gives smooth glide without being too sluggish.

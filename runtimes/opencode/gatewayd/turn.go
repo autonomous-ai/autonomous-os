@@ -100,6 +100,15 @@ func (s *Server) runTurn(ctx context.Context, payload turnPayload) {
 
 	switch {
 	case res.timedOut:
+		// Same escape as the codex gatewayd: rotation rides on a COMPLETED
+		// turn, so a thread whose every resume hangs can never be rotated and
+		// the device stays wedged across restarts (the thread id is on disk).
+		// Dropping it here makes the next turn start fresh.
+		if resumeID != "" {
+			log.Printf("%s resumed thread %s timed out after %s — dropping it so the next turn starts fresh",
+				logPrefix, resumeID, s.cfg.TurnTimeout)
+			s.clearSession()
+		}
 		s.sendError("timeout")
 	case !res.turnEnded:
 		errMsg := strings.TrimSpace(res.errText)

@@ -35,7 +35,7 @@ User: "Lamp, follow the cup"
          |   b. Servo worker: SmoothDamp glide toward the latest goal
          |        (ease-in/ease-out; gộp các thay đổi setpoint rất nhỏ)
          |
-    5. Lost / bloated / no-detect / timeout → auto-stop, hold or return to zero
+    5. Lost / bloated / no-detect / timeout → auto-stop, rồi nội suy về idle
 ```
 
 Vòng lặp vision không bao giờ block chờ motor di chuyển: nó publish một servo goal *tuyệt đối* rồi chuyển ngay sang frame kế tiếp. Servo worker sở hữu chuyển động vật lý và liên tục ease về phía goal mới nhất. Đây chính là cái giữ cho cả fps của tracker cao lẫn chuyển động đầu mượt.
@@ -99,7 +99,7 @@ Mỗi frame vòng lặp biến bbox của tracker thành một servo goal tuyệ
 
 `ServoFollower` (`servo_follow.py`) chạy worker trên thread riêng và liên tục ease các joint về phía goal mới nhất bằng **SmoothDamp** (`smooth_damp`, một follower critically-damped): mỗi joint mang vận tốc riêng, nên mọi cú di chuyển đều tăng tốc mượt và ease-out vào target, và một goal mới đến giữa cú di chuyển sẽ retarget mà không giật restart — chuyển động "film camera" điện ảnh. Worker thức dậy theo nhịp bị giới hạn bởi `SERVO_SUBSTEP_SLEEP` (30 ms), nhưng tính SmoothDamp từ thời gian monotonic thực tế đã trôi qua và cap ở `SERVO_SUBSTEP_MAX_DT_S` (60 ms) sau một lần scheduler/serial bị stall. Nó chỉ gửi một lệnh bus đa-joint khi có ít nhất một servo command đổi ít nhất `SERVO_COMMAND_MIN_DELTA` (0.08), chỉ gộp các thay đổi normalized rất nhỏ; final target luôn được gửi một lần.
 
-Chuyển động phần cứng khi tracking: ở mỗi lần bắt đầu session, HAL luôn ghi rõ `TRACKING_GOAL_VELOCITY = 0` (unlimited) để xóa giới hạn vận tốc còn sót lại từ mode trước. Vì vậy software profile sở hữu tốc độ; cap cũ 150 steps/s ≈ 13°/s đã làm các đường cong SmoothDamp phẳng thành một chuyển động chậm đều. `TRACKING_ACCELERATION = 30` tạo ramp phần cứng nhẹ nhàng. Lượt trượt về zero bị cap bởi `TRACKING_RETURN_VELOCITY` (200 steps/s); sau đó khôi phục default nhạy bén.
+Chuyển động phần cứng khi tracking: ở mỗi lần bắt đầu session, HAL luôn ghi rõ `TRACKING_GOAL_VELOCITY = 0` (unlimited) để xóa giới hạn vận tốc còn sót lại từ mode trước. Vì vậy software profile sở hữu tốc độ; cap cũ 150 steps/s ≈ 13°/s đã làm các đường cong SmoothDamp phẳng thành một chuyển động chậm đều. `TRACKING_ACCELERATION = 30` tạo ramp phần cứng nhẹ nhàng. Khi tracking dừng, HAL đọc pose vật lý vào state của animation rồi dispatch idle; interpolation bình thường của idle tiếp tục thẳng từ pose đó. Không còn bước trung gian quay về zero.
 
 ### Sửa drift & quản lý lock
 
@@ -150,7 +150,7 @@ pitch_correction = clamp(PID(soft_deadband(dy)) + VFF·vy·deg_per_px·dt,  ±5�
 | `SACCADE_OFFSET_FRAC` / `SACCADE_EXIT_FRAC` | 0.22 / 0.12 | Ngưỡng vào/ra saccade (hysteresis — hết nhấp nháy cap tốc độ ở ranh giới) |
 | `SERVO_SUBSTEP_SLEEP` / `SERVO_SUBSTEP_MAX_DT_S` | 0.030 / 0.060 | Chu kỳ worker thức dậy / bước SmoothDamp đo thực tế lớn nhất sau stall |
 | `SERVO_COMMAND_MIN_DELTA` | 0.08 | Chỉ gộp các thay đổi normalized rất nhỏ; final target được gửi một lần |
-| `TRACKING_GOAL_VELOCITY` | 0 (unlimited) | Được ghi rõ khi session bắt đầu để xóa hardware cap cũ; các profile SmoothDamp sở hữu speed envelope (150 steps/s ≈ 13°/s đã làm mọi đường cong ease thành một chuyển động chậm đều). `TRACKING_RETURN_VELOCITY` (200) chỉ cap lượt trượt về zero |
+| `TRACKING_GOAL_VELOCITY` | 0 (unlimited) | Được ghi rõ khi session bắt đầu để xóa hardware cap cũ; các profile SmoothDamp sở hữu speed envelope (150 steps/s ≈ 13°/s đã làm mọi đường cong ease thành một chuyển động chậm đều) |
 | `TRACKING_ACCELERATION` | 30 | Ramp gia tốc phần cứng |
 | `PITCH_WEIGHT_BASE/ELBOW/WRIST` | 0.10 / 0.90 / 0.0 | Phân bổ pitch qua các joint |
 | `ELBOW_PITCH_SIGN` | -1.0 | Chiều elbow (phần cứng đảo) |
@@ -192,7 +192,7 @@ Mọi knob nằm trong `hal/drivers/tracking/constants.py`. (Đường proportio
 | Thời lượng tracking > `HAL_TRACKING_MAX_DURATION_S` (mặc định 10 giây) | Dừng — timeout để tiết kiệm motor/CPU |
 | Single-click từ nút GPIO hoặc TTP223 | Dừng — user chủ động huỷ attention |
 
-Lưu ý: một bbox lớn (ví dụ một người lấp đầy frame) **không** phải điều kiện dừng — PID chạy theo centroid, không phải kích thước bbox, nên một vật thể ở gần vẫn track. Khi tracking kết thúc, cánh tay trượt về zero ở tốc độ tracking (không snap), rồi idle animation được dispatch lại — xem [Tương tác với các hệ thống khác](#tương-tác-với-các-hệ-thống-khác).
+Lưu ý: một bbox lớn (ví dụ một người lấp đầy frame) **không** phải điều kiện dừng — PID chạy theo centroid, không phải kích thước bbox, nên một vật thể ở gần vẫn track. Khi tracking kết thúc, idle nội suy từ pose hiện tại đo được của cánh tay thay vì đưa tay qua zero trước — xem [Tương tác với các hệ thống khác](#tương-tác-với-các-hệ-thống-khác).
 
 ### Tự động dừng khi mất kết nối gateway/network
 
@@ -274,7 +274,7 @@ Re-init thủ công tracker với một bbox mới mà không dừng session (ba
    d. Starts the vision loop + servo worker
 4. Servo pans smoothly to follow the cup, background YOLO corrects drift
 5. User: "OK stop" → agent calls POST /servo/track/stop
-6. Servo glides back to zero
+6. Idle nội suy thẳng từ pose tracking cuối cùng
 ```
 
 ### Tự động dừng khi mất
@@ -283,7 +283,7 @@ Re-init thủ công tracker với một bbox mới mà không dừng session (ba
 1. Object leaves frame or is occluded
 2. Confidence TrackerVit ở dưới 0.15 trong phần lớn cửa sổ gần nhất (hoặc lock ViT tan rã)
 3. Background YOLO can't re-find it → after the guards trip → auto-stop
-4. Arm returns to zero
+4. Idle nội suy thẳng từ pose tracking cuối cùng
 5. Agent can notify user or re-issue the follow command
 ```
 
@@ -319,7 +319,7 @@ Camera section hiển thị:
 | Camera stream overlay | Vẽ bbox xanh | Stream bình thường |
 | TTS | Tiếp tục bình thường | Tiếp tục bình thường |
 
-Việc quay lại idle là một **dispatch tường minh**, không phải hệ quả phụ của việc xoá cờ tracking. Khi `_tracking_active` đang bật, `AnimationService._continue_playback` bỏ recording đang chạy dở (`_current_recording = None`) để không có gì tranh servo với tracker. Xoá cờ không đặt lại giá trị đó: event loop return ngay ở guard đầu tiên (`if not self._current_recording`), nên nếu không dispatch thì cánh tay đứng cứng ở zero với torque vẫn bật cho tới lệnh emotion hoặc play kế tiếp. Vì vậy khối `finally` của `_track_loop` kết thúc bằng `animation_service.dispatch("play", animation_service.idle_recording)` — dùng dispatch thay vì `_handle_play` để việc phát vẫn thuộc về event thread, giống các đường thoát music-stop, `aim` và `resume`.
+Việc quay lại idle là một **dispatch tường minh**, không phải hệ quả phụ của việc xoá cờ tracking. Khi `_tracking_active` đang bật, `AnimationService._continue_playback` bỏ recording đang chạy dở (`_current_recording = None`) để không có gì tranh servo với tracker. Xoá cờ không đặt lại giá trị đó: event loop return ngay ở guard đầu tiên (`if not self._current_recording`), nên nếu không dispatch thì cánh tay đứng cứng tại pose tracking cuối với torque vẫn bật cho tới lệnh emotion hoặc play kế tiếp. Khối `finally` của `_track_loop` đọc pose vật lý đó vào `_current_state` trước, rồi gọi `animation_service.dispatch("play", animation_service.idle_recording)`. Dùng dispatch thay vì `_handle_play` để playback vẫn thuộc event thread; state vừa seed giúp idle nội suy thẳng từ pose nơi tracking dừng.
 
 ## Ghi chú hiệu năng
 
@@ -746,6 +746,13 @@ Ba hành vi nữa đáng nói ra vì cái nào cũng từng là một con bug:
   `HAL_GAZE_REPOINT_SKIP_IF_FACE_S`, một lần reacquire do speech kích hoạt sẽ từ chối: sau khi leo tìm
   đã thấy mặt user *cao hơn* bearing, nghe theo bearing nghĩa là quay ngược xuống nhìn vào chỗ không có
   ai.
+- **Hold kết thúc cùng câu nói.** Reacquire do speech kích hoạt ngắm đèn bằng `move_and_hold`,
+  hàm này bỏ recording đang phát và set `_idle_settled` — đúng cho lúc đang nói, sai sau khi nói
+  xong, vì không ai bật lại idle nữa. Đèn đứng im luôn cho tới khi restart HAL (đo trên lamp-0c89
+  03/09/2026: `[preempt] dropped recording 'idle' for a direct move` lúc 16:23:40, tới 16:25:58 vẫn
+  bất động, không thêm dòng log nào). `on_speech_end` giờ trả body về bằng `dispatch(play, idle)` —
+  đúng cách tracker bàn giao khi nó kết thúc — và bỏ qua khi tracking, hold/zero mode hoặc scene
+  đang giữ body, vì mỗi thứ đó có đường nhả riêng.
 
 Mọi lần từ chối đều được log kèm lý do (`[gaze] no repoint: …`), có tiết chế để một điều kiện kéo dài in
 ra mỗi phút một lần thay vì mỗi vòng một lần.

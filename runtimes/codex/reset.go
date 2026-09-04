@@ -11,9 +11,10 @@ import (
 )
 
 // Paths + unit set up by install.sh (see install.sh).
+var codexDataDir = codexHome // data dir ($CODEX_HOME)
+
 const (
-	codexDataDir           = "/root/.codex" // data dir (HOME=/root)
-	codexUnit              = "codex"        // systemd unit name
+	codexUnit              = "codex" // systemd unit name
 	codexStopVerifyTimeout = 5 * time.Second
 )
 
