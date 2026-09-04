@@ -228,15 +228,27 @@ class TrackerService:
                 # per session and local detection is ~300ms, so a second or
                 # third look is affordable here in a way it would not be in the
                 # fast loop.
+                # Local sweep first, across ALL candidates, before any of them
+                # is allowed the remote detector. Interleaving them instead
+                # (local then remote, per candidate) makes a miss on the first
+                # word pay 1.3s of network before the second word is tried at
+                # all — measured at 5.7s to seed three candidates, against a
+                # 10s session budget. Remote is the fallback for the QUESTION,
+                # not for each guess at how to word it.
+                probe = list(candidates or [target_label])
                 bbox = None
                 best_conf = -1.0
-                for label in (candidates or [target_label]):
-                    found = self.detect_object(frame, label)
-                    if found is None:
-                        continue
-                    conf = self._detector.last_confidence or 0.0
-                    if conf > best_conf:
-                        bbox, best_conf, target_label = found, conf, label
+                for allow_remote in (False, True):
+                    for label in probe:
+                        found = self.detect_object(frame, label,
+                                                   allow_remote_fallback=allow_remote)
+                        if found is None:
+                            continue
+                        conf = self._detector.last_confidence or 0.0
+                        if conf > best_conf:
+                            bbox, best_conf, target_label = found, conf, label
+                    if bbox is not None:
+                        break
                 if bbox is not None and len(candidates or []) > 1:
                     logger.info("[track-start] chose '%s' conf=%.3f from candidates %s",
                                 target_label, best_conf, candidates)
