@@ -69,7 +69,7 @@ func (picoclawAdapter) write(m *baseMigrator, b *PersonaBundle, opts Options) er
 	}
 
 	// User profile → USER.md.
-	m.writeMemoryEntries("user-profile", rebrandEntries(b.User, rebrandToPicoclaw),
+	m.writeUserProfile("user-profile", rebrandEntries(b.User, rebrandToPicoclaw),
 		filepath.Join(ws, "USER.md"), opts.UserCharLimit, openclawFormat)
 	return nil
 }
@@ -110,4 +110,28 @@ func rebrandToPicoclaw(text string) string {
 	text = reClaudeCode.ReplaceAllStringFunc(text, repl)
 	text = reOpenCode.ReplaceAllStringFunc(text, repl)
 	return text
+}
+
+// personaPaths implements runtimeAdapter. Same as the OpenClaw layout except
+// MEMORY.md lives inside memory/, which the memory/ dir entry already covers.
+func (picoclawAdapter) personaPaths(opts Options) []string {
+	ws := opts.PicoclawWorkspace
+	if ws == "" {
+		return nil
+	}
+	return []string{
+		filepath.Join(ws, "SOUL.md"),
+		filepath.Join(ws, "IDENTITY.md"),
+		filepath.Join(ws, "USER.md"),
+		filepath.Join(ws, "KNOWLEDGE.md"),
+		filepath.Join(ws, "memory"),
+	}
+}
+
+// userProfilePath implements runtimeAdapter — USER.md at the workspace root.
+func (picoclawAdapter) userProfilePath(opts Options) string {
+	if opts.PicoclawWorkspace == "" {
+		return ""
+	}
+	return filepath.Join(opts.PicoclawWorkspace, "USER.md")
 }

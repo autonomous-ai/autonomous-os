@@ -61,7 +61,7 @@ func (openclawAdapter) write(m *baseMigrator, b *PersonaBundle, opts Options) er
 	}
 
 	// User profile → USER.md.
-	m.writeMemoryEntries("user-profile", rebrandEntries(b.User, rebrandToOpenclaw),
+	m.writeUserProfile("user-profile", rebrandEntries(b.User, rebrandToOpenclaw),
 		filepath.Join(ws, "USER.md"), opts.UserCharLimit, openclawFormat)
 	return nil
 }
@@ -96,4 +96,17 @@ func rebrandToOpenclaw(text string) string {
 	text = reClaudeCode.ReplaceAllStringFunc(text, repl)
 	text = reOpenCode.ReplaceAllStringFunc(text, repl)
 	return text
+}
+
+// personaPaths implements runtimeAdapter — OpenClaw's standard workspace layout.
+func (openclawAdapter) personaPaths(opts Options) []string {
+	return openclawLayoutPersonaPaths(opts.OpenclawWorkspace)
+}
+
+// userProfilePath implements runtimeAdapter — USER.md at the workspace root.
+func (openclawAdapter) userProfilePath(opts Options) string {
+	if opts.OpenclawWorkspace == "" {
+		return ""
+	}
+	return filepath.Join(opts.OpenclawWorkspace, "USER.md")
 }
