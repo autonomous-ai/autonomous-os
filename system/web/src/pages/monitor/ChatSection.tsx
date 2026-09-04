@@ -788,6 +788,15 @@ export function ChatSection({ events, isActive }: Props) {
   useEffect(() => { saveConvos(convos); }, [convos]);
   useEffect(() => { saveActiveId(activeId); }, [activeId]);
 
+  // Esc closes the full-size viewer. Window-level because the lightbox is a
+  // plain div — nothing inside it holds focus to receive a key event.
+  useEffect(() => {
+    if (!lightboxUrl) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setLightboxUrl(null); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [lightboxUrl]);
+
   // Keyboard shortcut: Cmd/Ctrl+N for new chat
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
