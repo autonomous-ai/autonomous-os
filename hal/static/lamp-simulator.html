@@ -429,12 +429,66 @@
       // Perceptual (gamma) curve instead — hue and relative ordering are kept,
       // only the low end is lifted into the range a monitor can show.
       const displayLevel = (peak) => Math.pow(Math.min(1, peak / 255), 0.4);
+      // Camera framing. A 38 deg lens instead of the 45 this shipped with: the
+      // wider one splayed the base and read as a fisheye once the head leaned.
+      // ORBIT_R is the matching distance, so the default view frames the same
+      // body it always did. The zoom range used to run 0.65-1.55, barely half a
+      // step either way - you could not back off to see the lamp on its floor
+      // nor push in on the shade. It now spans a factor of ~13, which needs the
+      // far plane pushed out or the far end of it clips the grid away.
+      // Which way the lamp faces. The rig's rest pose aims the shade at az 2.46,
+      // so the old default sat behind its head; this is that heading swung 3/4
+      // round, the same off-axis framing animacy opens with. Dead-on (2.46) puts
+      // the arm edge-on and unlit, which reads flat.
+      const CAM_FOV = 0.663,
+        CAM_AZ = 1.2,
+        CAM_EL = 0.34,
+        ORBIT_R = 780,
+        ZOOM_MIN = 0.3,
+        ZOOM_MAX = 4,
+        // How much room to leave around the body at zoom 1. The bounding box is
+        // measured at the rest pose; a raised head reaches past it, so the fit
+        // has to carry more margin than a static model would need.
+        CAM_MARGIN = 1.18;
+      // A bounding sphere for whatever geometry is on screen, in scene
+      // millimetres. The camera used to sit at a hard-coded distance aiming at a
+      // hard-coded height, which framed the body it was tuned against and
+      // clipped everything else - the head ran off the top of the canvas on a
+      // wide window.
+      function growBox(box, positions) {
+        for (let i = 0; i < positions.length; i += 3)
+          for (let k = 0; k < 3; k++) {
+            const c = positions[i + k];
+            if (c < box.lo[k]) box.lo[k] = c;
+            if (c > box.hi[k]) box.hi[k] = c;
+          }
+        return positions;
+      }
+      const emptyBox = () => ({
+        lo: [Infinity, Infinity, Infinity],
+        hi: [-Infinity, -Infinity, -Infinity],
+      });
+      function boundsOf(box, scale) {
+        if (!box.lo.every(isFinite) || !box.hi.every(isFinite)) return null;
+        const lo = box.lo.map((c) => c * scale),
+          hi = box.hi.map((c) => c * scale);
+        return {
+          center: lo.map((c, k) => (c + hi[k]) / 2),
+          radius: Math.hypot(...hi.map((c, k) => (c - lo[k]) / 2)),
+        };
+      }
+      // Distance at which a sphere of `radius` fills the frame vertically. The
+      // canvas is never taller than it is wide here, so the vertical field is
+      // always the tighter of the two.
+      const fitDistance = (radius) =>
+        (radius / Math.tan(CAM_FOV / 2)) * CAM_MARGIN;
+
       let target = Object.fromEntries(joints.map((j) => [j, 0])),
         pose = { ...target },
         led = [0, 0, 0],
         ringPixels = [],
-        az = -0.68,
-        el = 0.27,
+        az = CAM_AZ,
+        el = CAM_EL,
         zoom = 1,
         drag,
         rawCAD = new URLSearchParams(location.search).has("raw"),
@@ -601,7 +655,13 @@
         // the light reads as coming out of the shade rather than painted on it.
         "float glow=m*LAMP_GAIN;" +
         "vec3 lamp=tint*glow+tint*glow*glow*0.35;" +
-        "vec3 body=color*(.18+.82*d)*(1.-.75*min(m,1.));" +
+                // A single directional light left every surface facing away from it
+        // sitting at a flat ambient floor, which is what made the body read as
+        // a cutout. Add the hemisphere term a real room has - cool light from
+        // above, warm bounce off the floor - at the same total as the constant
+        // it replaces, so nothing in the scene brightens.
+        "float sky=.5+.5*N.y;vec3 amb=mix(vec3(.15,.13,.11),vec3(.20,.22,.26),sky);" +
+        "vec3 body=color*(amb+.82*d)*(1.-.75*min(m,1.));" +
         "gl_FragColor=vec4(body+emit+rim*.10+lamp,1.);}";
       // A shader that fails to compile takes the whole program down with it and
       // every draw call then silently no-ops — an all-black canvas with nothing
@@ -1103,6 +1163,9 @@
           ibm = readAccessor(skin.inverseBindMatrices),
           jointNodes = skin.joints;
         const parts = [];
+        // Every mesh in the file contributes to the frame, so the box is grown
+        // primitive by primitive rather than measured from one of them.
+        const rigBox = emptyBox();
         for (const node of gltf.nodes) {
           if (node.mesh === undefined) continue;
           const skinned = node.skin !== undefined;
@@ -1127,7 +1190,7 @@
                   : gl.UNSIGNED_SHORT,
               index: buffer(indices, gl.ELEMENT_ARRAY_BUFFER),
               position: buffer(
-                readAccessor(prim.attributes.POSITION),
+                growBox(rigBox, readAccessor(prim.attributes.POSITION)),
                 gl.ARRAY_BUFFER,
               ),
               normal: buffer(
@@ -1153,6 +1216,7 @@
           gl.getExtension("OES_element_index_uint");
 
         rig = {
+          bounds: boundsOf(rigBox, RIG_SCALE),
           nodes: gltf.nodes,
           jointNodes,
           ibm,
@@ -1199,6 +1263,97 @@
         return rig.jointNodes.map((node, k) =>
           M.mul(solve(node), Array.from(rig.ibm.slice(k * 16, k * 16 + 16))),
         );
+      }
+
+      // Ground grid. The body used to float in an empty void, which made it hard
+      // to read how far the head had panned or leaned. Lines are cut to a circle
+      // so the floor has no hard square edge, and fade with radius in place of
+      // the fog a full scene graph would give us. Millimetres, like the rest of
+      // the scene: the base is ~120 mm across.
+      const GRID_STEP = 50,
+        GRID_RADIUS = 1600,
+        GRID_MAJOR = 250;
+      // Segments are bucketed by brightness and emitted in bucket order, so the
+      // whole floor is GRID_BUCKETS draw calls no matter how large the grid is.
+      // Sorting matters: laid out geometrically, the buckets interleave and the
+      // same floor cost 163 calls a frame.
+      const GRID_BUCKETS = 6;
+      function gridBuffer() {
+        const buckets = Array.from({ length: GRID_BUCKETS }, () => []);
+        const push = (x0, z0, x1, z1, major) => {
+          const ends = [
+            [x0, z0],
+            [x1, z1],
+          ];
+          const shade =
+            ends.reduce(
+              (a, [x, z]) => a + Math.max(0, 1 - Math.hypot(x, z) / GRID_RADIUS),
+              0,
+            ) / 2;
+          const level = Math.min(
+            GRID_BUCKETS - 1,
+            Math.floor(shade * (major ? 1 : 0.45) * GRID_BUCKETS),
+          );
+          for (const [x, z] of ends) buckets[level].push(x, 0, z);
+        };
+        for (let a = -GRID_RADIUS; a <= GRID_RADIUS; a += GRID_STEP) {
+          const major = Math.abs(a) % GRID_MAJOR === 0;
+          for (let b = -GRID_RADIUS; b < GRID_RADIUS; b += GRID_STEP) {
+            const b1 = b + GRID_STEP;
+            if (Math.hypot(a, b) > GRID_RADIUS || Math.hypot(a, b1) > GRID_RADIUS)
+              continue;
+            push(a, b, a, b1, major);
+            push(b, a, b1, a, major);
+          }
+        }
+        const v = [],
+          ranges = [];
+        buckets.forEach((pts, level) => {
+          if (!pts.length) return;
+          ranges.push({ level, first: v.length / 3, count: pts.length / 3 });
+          v.push(...pts);
+        });
+        // The lines are flat on the floor, so every normal is straight up - the
+        // shader needs the attribute, not a real surface.
+        return { v, n: v.map((_, i) => (i % 3 === 1 ? 1 : 0)), ranges };
+      }
+      const gridData = gridBuffer(),
+        gridPos = gl.createBuffer(),
+        gridNrm = gl.createBuffer();
+      for (const [buf, data] of [
+        [gridPos, gridData.v],
+        [gridNrm, gridData.n],
+      ]) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(data), gl.STATIC_DRAW);
+      }
+      function drawGrid() {
+        gl.uniform1f(L.skinned, 0);
+        gl.uniform1f(L.lampMask, 0);
+        gl.uniform1f(L.lampHeight, 0);
+        gl.uniform1f(L.ringLit, 0);
+        gl.uniform1f(L.ledLevel, 0);
+        gl.uniformMatrix4fv(L.model, false, M.id());
+        gl.uniformMatrix3fv(L.normal, false, [1, 0, 0, 0, 1, 0, 0, 0, 1]);
+        gl.uniform3fv(L.color, [0, 0, 0]);
+        for (const [loc, buf] of [
+          [L.p, gridPos],
+          [L.n, gridNrm],
+        ]) {
+          gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+          gl.enableVertexAttribArray(loc);
+          gl.vertexAttribPointer(loc, 3, gl.FLOAT, false, 0, 0);
+        }
+        for (const loc of [L.joint, L.weight]) {
+          if (loc < 0) continue;
+          gl.disableVertexAttribArray(loc);
+          gl.vertexAttrib4f(loc, 0, 0, 0, 0);
+        }
+        for (const r of gridData.ranges) {
+          const f = ((r.level + 0.5) / GRID_BUCKETS) * 0.34;
+          gl.uniform3fv(L.emit, [f * 0.72, f * 0.82, f]);
+          gl.drawArrays(gl.LINES, r.first, r.count);
+        }
       }
 
       function drawRig() {
@@ -1279,7 +1434,10 @@
             }
           }
           const positions = source.subarray(0, out);
-          cadMesh = { count: out / 3 };
+          cadMesh = {
+            count: out / 3,
+            bounds: boundsOf(growBox(emptyBox(), positions), 1),
+          };
           for (const [k, data] of Object.entries({
             p: positions,
             n: n.subarray(0, out),
@@ -1320,6 +1478,18 @@
         // here invented a trajectory the body never made — slower to start,
         // never quite arriving. The only smoothing left is HAL's own.
         for (const j of joints) pose[j] = target[j];
+        // The backbuffer used to be a fixed 960x720 stretched to whatever width
+        // the layout gave it, so every edge on a wide or retina screen was
+        // resampled - the single biggest reason this read as lower quality than
+        // it is. Track the CSS box instead, capped at 2x like any renderer does
+        // (3x on a phone costs 2.25x the fill for no visible gain).
+        const dpr = Math.min(window.devicePixelRatio || 1, 2),
+          w = Math.round(canvas.clientWidth * dpr) || canvas.width,
+          h = Math.round(canvas.clientHeight * dpr) || canvas.height;
+        if (canvas.width !== w || canvas.height !== h) {
+          canvas.width = w;
+          canvas.height = h;
+        }
         gl.viewport(0, 0, canvas.width, canvas.height);
         gl.enable(gl.DEPTH_TEST);
         gl.clearColor(0.045, 0.052, 0.05, 0);
@@ -1327,10 +1497,14 @@
         // The camera stays where the user put it. In the jointed preview the
         // body itself carries the pose; the static CAD assembly has no joints
         // to carry it, so nothing moves there either.
+        const shown = rawCAD ? cadMesh : rig,
+          bounds = shown && shown.bounds;
         const previewAz = az,
           previewEl = el,
-          r = 660 * zoom,
-          t = [0, 205, 0],
+          // No bounds yet (still loading, or the box stand-in): fall back to the
+          // distance and aim this page shipped with.
+          r = (bounds ? fitDistance(bounds.radius) : ORBIT_R) * zoom,
+          t = bounds ? bounds.center : [0, 205, 0],
           eye = [
             r * Math.sin(previewAz) * Math.cos(previewEl),
             t[1] + r * Math.sin(previewEl),
@@ -1340,8 +1514,9 @@
         gl.uniformMatrix4fv(
           L.proj,
           false,
-          M.pers(0.78, canvas.width / canvas.height, 10, 1800),
+          M.pers(CAM_FOV, canvas.width / canvas.height, 5, 9000),
         );
+        drawGrid();
         // Rig first: it is the only view that is both the real geometry and
         // jointed. drawPreview is the stand-in for when the GLB is missing.
         if (rawCAD) drawCAD();
@@ -1653,9 +1828,13 @@
       canvas.addEventListener("pointermove", (e) => {
         if (!drag) return;
         az += (e.clientX - drag[0]) * 0.011;
+        // Elevation ran -24..43 deg, which could neither get level with the
+        // desk nor look down on the base. Stop just short of straight overhead:
+        // at exactly 90 the eye lands on the up vector and the view matrix goes
+        // singular.
         el = Math.max(
-          -0.42,
-          Math.min(0.75, el + (e.clientY - drag[1]) * 0.009),
+          -0.06,
+          Math.min(1.45, el + (e.clientY - drag[1]) * 0.009),
         );
         drag = [e.clientX, e.clientY];
       });
@@ -1666,15 +1845,15 @@
         (e) => {
           e.preventDefault();
           zoom = Math.max(
-            0.65,
-            Math.min(1.55, zoom * (e.deltaY > 0 ? 1.08 : 0.92)),
+            ZOOM_MIN,
+            Math.min(ZOOM_MAX, zoom * (e.deltaY > 0 ? 1.08 : 0.92)),
           );
         },
         { passive: false },
       );
       canvas.addEventListener("dblclick", () => {
-        az = -0.68;
-        el = 0.27;
+        az = CAM_AZ;
+        el = CAM_EL;
         zoom = 1;
       });
       // Ring pixels on the same fast timer as motion. /led/color reports an
