@@ -601,7 +601,13 @@
         // the light reads as coming out of the shade rather than painted on it.
         "float glow=m*LAMP_GAIN;" +
         "vec3 lamp=tint*glow+tint*glow*glow*0.35;" +
-        "vec3 body=color*(.18+.82*d)*(1.-.75*min(m,1.));" +
+                // A single directional light left every surface facing away from it
+        // sitting at a flat ambient floor, which is what made the body read as
+        // a cutout. Add the hemisphere term a real room has - cool light from
+        // above, warm bounce off the floor - at the same total as the constant
+        // it replaces, so nothing in the scene brightens.
+        "float sky=.5+.5*N.y;vec3 amb=mix(vec3(.15,.13,.11),vec3(.20,.22,.26),sky);" +
+        "vec3 body=color*(amb+.82*d)*(1.-.75*min(m,1.));" +
         "gl_FragColor=vec4(body+emit+rim*.10+lamp,1.);}";
       // A shader that fails to compile takes the whole program down with it and
       // every draw call then silently no-ops — an all-black canvas with nothing
@@ -1201,6 +1207,99 @@
         );
       }
 
+      // Ground grid. The body used to float in an empty void, which made it hard
+      // to read how far the head had panned or leaned. Lines are cut to a circle
+      // so the floor has no hard square edge, and fade with radius in place of
+      // the fog a full scene graph would give us. Millimetres, like the rest of
+      // the scene: the base is ~120 mm across.
+      const GRID_STEP = 50,
+        GRID_RADIUS = 700,
+        GRID_MAJOR = 250;
+      function gridBuffer() {
+        const v = [],
+          n = [],
+          shade = [];
+        const push = (x0, z0, x1, z1, major) => {
+          for (const [x, z] of [
+            [x0, z0],
+            [x1, z1],
+          ]) {
+            v.push(x, 0, z);
+            n.push(0, 1, 0);
+            // One brightness per vertex would need an extra attribute; the fade
+            // is baked per segment instead, which is why the lines are split at
+            // every step rather than drawn edge to edge.
+            const f = 1 - Math.hypot(x, z) / GRID_RADIUS;
+            shade.push(Math.max(0, f) * (major ? 1 : 0.45));
+          }
+        };
+        for (let a = -GRID_RADIUS; a <= GRID_RADIUS; a += GRID_STEP) {
+          const major = Math.abs(a) % GRID_MAJOR === 0;
+          for (let b = -GRID_RADIUS; b < GRID_RADIUS; b += GRID_STEP) {
+            const b1 = b + GRID_STEP;
+            if (Math.hypot(a, b) > GRID_RADIUS || Math.hypot(a, b1) > GRID_RADIUS)
+              continue;
+            push(a, b, a, b1, major);
+            push(b, a, b1, a, major);
+          }
+        }
+        return { v, n, shade, count: v.length / 3 };
+      }
+      const gridData = gridBuffer(),
+        gridPos = gl.createBuffer(),
+        gridNrm = gl.createBuffer();
+      for (const [buf, data] of [
+        [gridPos, gridData.v],
+        [gridNrm, gridData.n],
+      ]) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(data), gl.STATIC_DRAW);
+      }
+      // Segments sorted into brightness buckets so the whole floor is a handful
+      // of draw calls instead of one per line.
+      const GRID_BUCKETS = 6;
+      const gridRanges = [];
+      for (let s = 0; s < gridData.count; s += 2) {
+        const level = Math.min(
+          GRID_BUCKETS - 1,
+          Math.floor(
+            ((gridData.shade[s] + gridData.shade[s + 1]) / 2) * GRID_BUCKETS,
+          ),
+        );
+        const last = gridRanges[gridRanges.length - 1];
+        if (last && last.level === level && last.first + last.count === s)
+          last.count += 2;
+        else gridRanges.push({ level, first: s, count: 2 });
+      }
+      function drawGrid() {
+        gl.uniform1f(L.skinned, 0);
+        gl.uniform1f(L.lampMask, 0);
+        gl.uniform1f(L.lampHeight, 0);
+        gl.uniform1f(L.ringLit, 0);
+        gl.uniform1f(L.ledLevel, 0);
+        gl.uniformMatrix4fv(L.model, false, M.id());
+        gl.uniformMatrix3fv(L.normal, false, [1, 0, 0, 0, 1, 0, 0, 0, 1]);
+        gl.uniform3fv(L.color, [0, 0, 0]);
+        for (const [loc, buf] of [
+          [L.p, gridPos],
+          [L.n, gridNrm],
+        ]) {
+          gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+          gl.enableVertexAttribArray(loc);
+          gl.vertexAttribPointer(loc, 3, gl.FLOAT, false, 0, 0);
+        }
+        for (const loc of [L.joint, L.weight]) {
+          if (loc < 0) continue;
+          gl.disableVertexAttribArray(loc);
+          gl.vertexAttrib4f(loc, 0, 0, 0, 0);
+        }
+        for (const r of gridRanges) {
+          const f = ((r.level + 0.5) / GRID_BUCKETS) * 0.34;
+          gl.uniform3fv(L.emit, [f * 0.72, f * 0.82, f]);
+          gl.drawArrays(gl.LINES, r.first, r.count);
+        }
+      }
+
       function drawRig() {
         if (!rig) return;
         const joints = rigJointMatrices(),
@@ -1320,6 +1419,18 @@
         // here invented a trajectory the body never made — slower to start,
         // never quite arriving. The only smoothing left is HAL's own.
         for (const j of joints) pose[j] = target[j];
+        // The backbuffer used to be a fixed 960x720 stretched to whatever width
+        // the layout gave it, so every edge on a wide or retina screen was
+        // resampled - the single biggest reason this read as lower quality than
+        // it is. Track the CSS box instead, capped at 2x like any renderer does
+        // (3x on a phone costs 2.25x the fill for no visible gain).
+        const dpr = Math.min(window.devicePixelRatio || 1, 2),
+          w = Math.round(canvas.clientWidth * dpr) || canvas.width,
+          h = Math.round(canvas.clientHeight * dpr) || canvas.height;
+        if (canvas.width !== w || canvas.height !== h) {
+          canvas.width = w;
+          canvas.height = h;
+        }
         gl.viewport(0, 0, canvas.width, canvas.height);
         gl.enable(gl.DEPTH_TEST);
         gl.clearColor(0.045, 0.052, 0.05, 0);
@@ -1342,6 +1453,7 @@
           false,
           M.pers(0.78, canvas.width / canvas.height, 10, 1800),
         );
+        drawGrid();
         // Rig first: it is the only view that is both the real geometry and
         // jointed. drawPreview is the stand-in for when the GLB is missing.
         if (rawCAD) drawCAD();
