@@ -746,6 +746,13 @@ Ba hành vi nữa đáng nói ra vì cái nào cũng từng là một con bug:
   `HAL_GAZE_REPOINT_SKIP_IF_FACE_S`, một lần reacquire do speech kích hoạt sẽ từ chối: sau khi leo tìm
   đã thấy mặt user *cao hơn* bearing, nghe theo bearing nghĩa là quay ngược xuống nhìn vào chỗ không có
   ai.
+- **Hold kết thúc cùng câu nói.** Reacquire do speech kích hoạt ngắm đèn bằng `move_and_hold`,
+  hàm này bỏ recording đang phát và set `_idle_settled` — đúng cho lúc đang nói, sai sau khi nói
+  xong, vì không ai bật lại idle nữa. Đèn đứng im luôn cho tới khi restart HAL (đo trên lamp-0c89
+  03/09/2026: `[preempt] dropped recording 'idle' for a direct move` lúc 16:23:40, tới 16:25:58 vẫn
+  bất động, không thêm dòng log nào). `on_speech_end` giờ trả body về bằng `dispatch(play, idle)` —
+  đúng cách tracker bàn giao khi nó kết thúc — và bỏ qua khi tracking, hold/zero mode hoặc scene
+  đang giữ body, vì mỗi thứ đó có đường nhả riêng.
 
 Mọi lần từ chối đều được log kèm lý do (`[gaze] no repoint: …`), có tiết chế để một điều kiện kéo dài in
 ra mỗi phút một lần thay vì mỗi vòng một lần.

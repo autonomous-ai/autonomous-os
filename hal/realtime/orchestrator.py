@@ -56,6 +56,15 @@ logger = logging.getLogger(__name__)
 DEFAULT_SAMPLE_RATE: int = 16000
 INITIAL_CONNECT_RETRY_DELAY_S: float = 2.0
 INITIAL_CONNECT_RETRY_MAX_DELAY_S: float = 60.0
+# How often the idle watchdog checks whether the session should be parked. The
+# park threshold has tens of seconds of margin below the server's idle cut, so a
+# coarse poll is enough and keeps the thread cheap.
+IDLE_PARK_POLL_S: float = 5.0
+# Upper bound on how long prepare_turn()'s in-flight marker suppresses parking.
+# voice_service can prepare a turn and then abandon it (wake word never
+# confirmed) without ever calling stream_output, which would otherwise pin the
+# marker True forever and disable parking until the next completed turn.
+TURN_IN_FLIGHT_MAX_S: float = 120.0
 
 DELEGATE_TOOL_NAME: str = "delegate_to_main"
 DELEGATE_TOOL_DESCRIPTION: str = (
@@ -292,6 +301,23 @@ class RealtimeOrchestrator:
         # connect() needs an orchestrator-owned retry loop.
         self._connect_retry_stop: threading.Event = threading.Event()
         self._connect_retry_thread: threading.Thread | None = None
+        # Traceback of the failed initial connect, held until the retry loop
+        # decides whether it mattered: dropped on a recovery, logged at ERROR
+        # once the first retry also fails. See start() / _connect_retry_loop().
+        self._initial_connect_exc: BaseException | None = None
+        # Idle parking: the transport is closed while nobody is talking so the
+        # server never has to close it (see _idle_park_loop / config
+        # REALTIME_GEMINI_IDLE_PARK_S). `available` stays True while parked --
+        # prepare_turn() reconnects on demand.
+        self._idle_parked: bool = False
+        self._idle_park_stop: threading.Event = threading.Event()
+        self._idle_park_thread: threading.Thread | None = None
+        self._park_resume_failed: bool = False
+        self._turn_in_flight: bool = False
+        self._turn_started_monotonic: float = 0.0
+        # Last moment this session saw turn activity (prepare/audio/text/reply
+        # end). Seeded at connect so a session idle since boot parks too.
+        self._last_activity_monotonic: float = 0.0
         # Serializes start/stop with session swaps. A reconnect that completes
         # after stop must never publish a live agent back into the stopped HAL.
         self._lifecycle_lock: threading.Lock = threading.Lock()
@@ -349,10 +375,18 @@ class RealtimeOrchestrator:
         # WS 1000 (the "async rebuild raced the next turn" failure). Gating on the
         # rebuild lock routes such turns cleanly to the main agent for that ~1s
         # instead, eliminating that whole class of mid-turn closes.
+        # A PARKED session is reported available on purpose: its transport is
+        # closed, but prepare_turn() reconnects a fresh one synchronously before
+        # any audio is streamed. Reporting unavailable instead would route every
+        # post-idle turn to the main agent — the exact regression this guard was
+        # written to prevent, only self-inflicted.
         return (
             self._started.is_set()
             and self._agent is not None
-            and self._agent.available
+            and (
+                self._agent.available
+                or (self._idle_parked and not self._park_resume_failed)
+            )
             and not self._rebuild_lock.locked()
         )
 
@@ -459,6 +493,9 @@ class RealtimeOrchestrator:
                     new.disconnect()
                     return False
                 self._agent = new
+            self._idle_parked = False
+            self._park_resume_failed = False
+            self._last_activity_monotonic = time.monotonic()
             self._consecutive_silent = 0
             self._idle_reset_pending = False
             self._turns_since_recycle = 0
@@ -590,8 +627,27 @@ class RealtimeOrchestrator:
         # A new capture starts a new logical turn. Clear any marker left by a
         # capture that was dropped before it reached stream_output().
         self._skip_post_idle_recycle = False
+        self._last_activity_monotonic = time.monotonic()
+        self._turn_in_flight = True
+        self._turn_started_monotonic = time.monotonic()
         provider: str = config.REALTIME_PROVIDER.strip().lower()
         agent = getattr(self, "_agent", None)
+        if getattr(self, "_idle_parked", False):
+            # The idle watchdog closed the transport; connect a fresh session
+            # now, before any audio is streamed. Identical to the pre-turn idle
+            # recycle below (a parked session is idle by definition), so the
+            # post-turn idle recycle is skipped the same way.
+            if self._rebuild_now("idle-park-resume"):
+                self._skip_post_idle_recycle = True
+                return
+            # Stay parked so the next turn retries the resume, but report
+            # unavailable meanwhile: the transport really is closed, so this
+            # turn must go to the main agent instead of into a dead session.
+            self._park_resume_failed = True
+            logger.warning(
+                "[realtime] Could not resume parked session — falling back for this turn"
+            )
+            return
         # An unanswered Gemini tool call makes the entire Live session
         # non-reusable: audio, turn-context text, video, and manual-VAD
         # activityEnd can all be rejected with 1008. Fire-and-forget expression
@@ -633,6 +689,88 @@ class RealtimeOrchestrator:
         )
         if self._rebuild_now("gemini-idle-pre-turn"):
             self._skip_post_idle_recycle = True
+
+    # --- Idle parking ---
+
+    def _start_idle_park_loop(self) -> None:
+        """Run the idle watchdog that closes a session nobody is using."""
+        if self._idle_park_thread is not None and self._idle_park_thread.is_alive():
+            return
+        self._idle_park_stop.clear()
+        self._idle_park_thread = threading.Thread(
+            target=self._idle_park_loop,
+            daemon=True,
+            name="rt-idle-park",
+        )
+        self._idle_park_thread.start()
+
+    def _idle_park_loop(self) -> None:
+        while not self._idle_park_stop.wait(IDLE_PARK_POLL_S):
+            try:
+                self._maybe_park_idle_session()
+            except Exception:
+                logger.exception("[realtime] Idle park check failed")
+
+    def _maybe_park_idle_session(self) -> None:
+        """Close the transport once the session has gone unused long enough.
+
+        The server kills an idle Gemini session itself (WS 1008 "The operation
+        was aborted"), which the backend logs as an error and alerts on. Closing
+        first keeps that close out of the backend's logs entirely. Nothing is
+        lost by it: any turn arriving after this much silence would have been
+        given a fresh session by the pre-turn recycle anyway.
+        """
+        threshold: float = config.REALTIME_GEMINI_IDLE_PARK_S
+        if threshold <= 0:
+            return
+        if config.REALTIME_PROVIDER.strip().lower() != "gemini":
+            return
+        if not self._started.is_set() or self._idle_parked:
+            return
+        agent = self._agent
+        if agent is None or not agent.available:
+            return  # already down — the reconnect paths own it
+        if self._rebuild_lock.locked():
+            return  # a replacement session is already on its way
+        now: float = time.monotonic()
+        if (
+            self._turn_in_flight
+            and now - self._turn_started_monotonic < TURN_IN_FLIGHT_MAX_S
+        ):
+            return  # a turn is mid-flight; parking would kill it
+        last: float = max(self._last_activity_monotonic, self._last_turn_monotonic)
+        if last <= 0.0 or now - last < threshold:
+            return
+        self._park_idle_session(now - last)
+
+    def _park_idle_session(self, idle_s: float) -> None:
+        """Disconnect the current session and mark it resumable on the next turn.
+
+        Held under the rebuild reservation so no turn dispatches into the session
+        while it is closing — voice_service buffers a capture that starts during
+        a rebuild and flushes it into the replacement (see `rebuilding`).
+        """
+        if not self._begin_rebuild():
+            return
+        try:
+            agent = self._agent
+            if agent is None:
+                return
+            logger.info(
+                "[realtime] %.0fs idle (>= %.0fs) — parking Gemini session "
+                "(closing before the server does)",
+                idle_s,
+                config.REALTIME_GEMINI_IDLE_PARK_S,
+            )
+            try:
+                agent.disconnect()
+            except Exception:
+                logger.exception("[realtime] Idle park disconnect failed")
+                return
+            self._idle_parked = True
+            self._park_resume_failed = False
+        finally:
+            self._finish_rebuild()
 
     def _force_rebuild(self) -> None:
         """Recover a zombie session by building a BRAND-NEW agent and swapping it
@@ -676,8 +814,20 @@ class RealtimeOrchestrator:
             if self._rebuild_now(
                 "initial-connect-retry", cancel_event=self._connect_retry_stop
             ):
+                # Recovered — the original failure was transient, so its
+                # traceback is noise and is dropped rather than logged.
+                self._initial_connect_exc = None
                 logger.info("[realtime] Initial connection recovered automatically")
                 return
+            if self._initial_connect_exc is not None:
+                # Retry did not clear it: now the initial failure is worth a
+                # full ERROR. Logged once, then the loop stays at WARNING.
+                logger.error(
+                    "[realtime] Failed to connect realtime agent — retry did not "
+                    "recover it",
+                    exc_info=self._initial_connect_exc,
+                )
+                self._initial_connect_exc = None
             logger.warning(
                 "[realtime] Initial connection still unavailable — retrying in %.0fs",
                 delay_s,
@@ -694,6 +844,7 @@ class RealtimeOrchestrator:
             return
 
         self._connect_retry_stop.clear()
+        self._initial_connect_exc = None
 
         instructions: str = self._context.build_instructions()
         logger.info(
@@ -711,13 +862,22 @@ class RealtimeOrchestrator:
             logger.info(
                 "[realtime] Realtime orchestrator started (provider=%s)", provider
             )
-        except Exception:
-            logger.exception(
-                "[realtime] Failed to connect realtime agent — retrying in background"
+        except Exception as e:
+            # A single failed handshake is usually a transient upstream hiccup
+            # that the retry loop clears within seconds, so it is not an ERROR
+            # yet — one WARNING line here, traceback kept for _connect_retry_loop
+            # to log at ERROR only if the retry does not recover.
+            self._initial_connect_exc = e
+            logger.warning(
+                "[realtime] Failed to connect realtime agent (%s: %s) — "
+                "retrying in background",
+                type(e).__name__, e,
             )
         self._started.set()
+        self._last_activity_monotonic = time.monotonic()
         if not self.available:
             self._start_connect_retry_loop()
+        self._start_idle_park_loop()
 
         # Catch up on any unsummarized memory from a previous (possibly crashed)
         # session in the background. This is an LLM call and is NOT needed to serve
@@ -742,6 +902,8 @@ class RealtimeOrchestrator:
     def stop(self) -> None:
         """Disconnect the agent and summarize unsummarized memory."""
         self._connect_retry_stop.set()
+        self._idle_park_stop.set()
+        self._idle_parked = False
         with self._lifecycle_lock:
             self._started.clear()
             agent = self._agent
@@ -762,6 +924,7 @@ class RealtimeOrchestrator:
 
     def append_audio(self, frame: npt.NDArray[np.float32]) -> None:
         """Queue a single audio frame to the model (non-blocking)."""
+        self._last_activity_monotonic = time.monotonic()
         if self._agent is not None:
             self._agent.append_audio(frame)
 
@@ -982,7 +1145,10 @@ class RealtimeOrchestrator:
             self._consecutive_silent += 1
 
         # Stamp end-of-turn (next turn's idle measurement) + count this turn.
+        # Also releases the idle watchdog's in-flight hold (see _maybe_park_idle_session).
         self._last_turn_monotonic = time.monotonic()
+        self._last_activity_monotonic = self._last_turn_monotonic
+        self._turn_in_flight = False
         self._turns_since_recycle += 1
 
         # Recycle the session (rebuild → drop the context the provider re-bills

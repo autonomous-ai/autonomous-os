@@ -25,6 +25,8 @@ import logging
 import os
 import threading
 import time
+
+from hal import config
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
@@ -98,10 +100,7 @@ class MockMotionService:
         # A physical Lamp is never visually meaningful with all five joints at
         # zero.  The laptop Lamp starts in the same center pose its real aim
         # driver uses; the generic `sim` body deliberately remains all-zero.
-        if (
-            os.environ.get("HAL_SIMULATE", "").lower() in ("1", "true", "yes")
-            and os.environ.get("DEVICE_TYPE") == "lamp"
-        ):
+        if config.SIMULATE and os.environ.get("DEVICE_TYPE") == "lamp":
             from hal.presets import AIM_CENTER, AIM_PRESETS
             self._positions.update(AIM_PRESETS[AIM_CENTER])
         self._lock = threading.Lock()

@@ -436,6 +436,28 @@ const MAX_CONVOS = 50;
 // same-origin script or browser extension can read it. 7 days is enough to
 // resume a recent conversation without piling up months of history.
 const HISTORY_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+// Give-up window for a pending reply. IDLE, not absolute: every event that
+// belongs to the run (delta, thinking, tool call) refreshes it, so a turn that
+// legitimately takes a while — "build me a Three.js train yard" — stays pending
+// as long as the agent keeps working. An ABSOLUTE cap used to finalize such a
+// turn as "no response" while the run was still going; MQTT chat and Telegram
+// never showed the symptom because neither has a client-side deadline.
+//
+// Sized to outlast the backend's own per-turn cap (10 min, see
+// CODEX_TURN_TIMEOUT_S) rather than to guess how long an answer should take:
+// the gatewayd always terminates a turn — completed, failed, or its own
+// "timeout" — and that terminal frame now carries the run id the browser is
+// waiting on, so this deadline is only a last-resort net for a frame that never
+// arrives at all. A shorter window cannot be used here because `codex exec`
+// emits nothing at all while it works: the measured 2026-09-03 run streamed
+// zero deltas in ten minutes, so ANY idle window shorter than the turn itself
+// finalizes a healthy turn as "no response".
+const REPLY_IDLE_TIMEOUT_MS = 12 * 60 * 1000;
+// Shorter window for the post-reload recovery path: there the run is normally
+// already finished and only needs to be backfilled (~2s), so silence past this
+// means the reply is genuinely not coming. Refreshed by live events too, so a
+// reload in the MIDDLE of a long turn keeps waiting like any other pending run.
+const RECOVERY_IDLE_TIMEOUT_MS = 30_000;
 
 // Storage envelope so the TTL check has a timestamp to look at. Legacy
 // devices have a bare Conversation[] under CONVOS_KEY; loadConvos() handles
@@ -792,6 +814,52 @@ export function ChatSection({ events, isActive }: Props) {
     );
   }, [activeId]);
 
+  // Idle watchdog for the pending reply (see REPLY_IDLE_TIMEOUT_MS). Held in a
+  // ref so the SSE handler, sendText and the reload-recovery path all refresh
+  // the SAME timer instead of each owning a separate deadline.
+  const replyWatchdogRef = useRef<{ runId: string; convoId: string; timer: number } | null>(null);
+
+  const clearReplyWatchdog = useCallback(() => {
+    const w = replyWatchdogRef.current;
+    if (w) window.clearTimeout(w.timer);
+    replyWatchdogRef.current = null;
+  }, []);
+
+  const armReplyWatchdog = useCallback(
+    (runId: string, convoId: string, ms: number) => {
+      clearReplyWatchdog();
+      const timer = window.setTimeout(() => {
+        replyWatchdogRef.current = null;
+        if (pendingRunIdRef.current !== runId) return;
+        pendingRunIdRef.current = null;
+        pendingUserTextRef.current = null;
+        setSending(false);
+        setThinkingText(null);
+        setToolChips([]);
+        const streamed = deltaBufRef.current.get(runId);
+        deltaBufRef.current.delete(runId);
+        thinkingBufRef.current.delete(runId);
+        toolChipsRef.current.clear();
+        setConvos((prev) =>
+          prev.map((c) =>
+            c.id === convoId
+              ? {
+                  ...c,
+                  messages: c.messages.map((m) =>
+                    m.runId === runId && m.pending
+                      ? { ...m, text: streamed || "⏱ no response", pending: false, error: !streamed }
+                      : m,
+                  ),
+                }
+              : c,
+          ),
+        );
+      }, ms);
+      replyWatchdogRef.current = { runId, convoId, timer };
+    },
+    [clearReplyWatchdog],
+  );
+
   // Real-time monitor bus SSE — streaming deltas, thinking, tool calls
   // Uses /api/agent/events (live bus) instead of flow-stream (file-based JSONL)
   const toolChipsRef = useRef<Map<string, ToolChip>>(new Map()); // key → chip for dedup
@@ -832,6 +900,7 @@ export function ChatSection({ events, isActive }: Props) {
     };
 
     const resolveRun = (runId: string) => {
+      clearReplyWatchdog();
       const buf = deltaBufRef.current.get(runId) ?? "";
       const text = stripHWMarkers(buf || "…");
       deltaBufRef.current.delete(runId);
@@ -859,6 +928,12 @@ export function ChatSection({ events, isActive }: Props) {
 
         const evRunId = ev.runId ?? (ev.detail as JsonObject | undefined)?.run_id ?? (ev.detail as JsonObject | undefined)?.runId;
         if (!evRunId || evRunId !== pending) return;
+        // The run is alive — push the give-up deadline back. Without this a
+        // turn longer than the window was declared "no response" mid-work.
+        const watchdog = replyWatchdogRef.current;
+        if (watchdog && watchdog.runId === pending) {
+          armReplyWatchdog(pending, watchdog.convoId, REPLY_IDLE_TIMEOUT_MS);
+        }
 
         // Tool call chips. Dedup key on iconKind+label so the start + result
         // phases of the same tool merge into a single chip — the latest event
@@ -1054,7 +1129,10 @@ export function ChatSection({ events, isActive }: Props) {
       close();
       if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
     };
-  }, [updateMessages, isActive]);
+    // armReplyWatchdog/clearReplyWatchdog are useCallback-stable (they depend on
+    // nothing that changes), so listing them cannot make this effect tear the
+    // EventSource down and reconnect more often than before.
+  }, [updateMessages, isActive, armReplyWatchdog, clearReplyWatchdog]);
 
   // Watch flow events for final response (tts_send, no_reply from JSONL)
   // This catches responses that only appear in flow logs, not on the live bus
@@ -1200,28 +1278,8 @@ export function ChatSection({ events, isActive }: Props) {
     // Same give-up guard as sendText: if neither the live bus nor the flow
     // replay resolves the run, finalize as timed out instead of spinning
     // forever. 30s is plenty — a completed turn backfills within ~2s.
-    const timer = setTimeout(() => {
-      if (pendingRunIdRef.current !== runId) return;
-      pendingRunIdRef.current = null;
-      pendingUserTextRef.current = null;
-      setSending(false);
-      setThinkingText(null);
-      setToolChips([]);
-      const streamed = deltaBufRef.current.get(runId);
-      deltaBufRef.current.delete(runId);
-      thinkingBufRef.current.delete(runId);
-      toolChipsRef.current.clear();
-      setConvos((prev) =>
-        prev.map((c) =>
-          c.id === convo.id
-            ? { ...c, messages: c.messages.map((m) => m.runId === runId && m.pending
-                ? { ...m, text: streamed || "⏱ no response", pending: false, error: !streamed }
-                : m) }
-            : c,
-        ),
-      );
-    }, 30_000);
-    return () => clearTimeout(timer);
+    armReplyWatchdog(runId, convo.id, RECOVERY_IDLE_TIMEOUT_MS);
+    return () => clearReplyWatchdog();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isActive]);
 
@@ -1489,27 +1547,7 @@ export function ChatSection({ events, isActive }: Props) {
               : c,
           ),
         );
-        setTimeout(() => {
-          if (pendingRunIdRef.current === runId) {
-            pendingRunIdRef.current = null;
-            setSending(false);
-            setThinkingText(null);
-            setToolChips([]);
-            const streamed = deltaBufRef.current.get(runId);
-            deltaBufRef.current.delete(runId);
-            thinkingBufRef.current.delete(runId);
-            toolChipsRef.current.clear();
-            setConvos((prev) =>
-              prev.map((c) =>
-                c.id === targetId
-                  ? { ...c, messages: c.messages.map((m) => m.runId === runId && m.pending
-                      ? { ...m, text: streamed || "⏱ no response", pending: false, error: !streamed }
-                      : m) }
-                  : c,
-              ),
-            );
-          }
-        }, 120_000);
+        armReplyWatchdog(runId, targetId, REPLY_IDLE_TIMEOUT_MS);
       } else if (json.data?.handler === "local") {
         setSending(false);
         const localText = json.data?.response || "✓ handled locally";
@@ -1554,7 +1592,9 @@ export function ChatSection({ events, isActive }: Props) {
     // updateMessages is not referenced in this callback (retryMessage uses it);
     // it only changed with activeId, which is already listed, so dropping it
     // leaves the recreation frequency identical.
-  }, [activeId, sending, filePreview, fileBase64, fileIsImage, fileName, fileMime, fileSize, scrollToBottom]);
+    // armReplyWatchdog is useCallback-stable, so listing it leaves sendText's
+    // recreation frequency unchanged.
+  }, [activeId, sending, filePreview, fileBase64, fileIsImage, fileName, fileMime, fileSize, scrollToBottom, armReplyWatchdog]);
 
   // sendText derives the outbound field from fileIsImage. Passing the raw
   // base64 here would make every attachment look like an image.

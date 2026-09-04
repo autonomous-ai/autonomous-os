@@ -184,6 +184,18 @@ injects next to `_on_speak_end`, which routes into the same
 for the same reason the playback feed is: only the agentic runtime's own reply
 may enter the model's context, never a dropped filler or system notice.
 
+`turn_seq` is os-server's counter, but the threshold it is compared against
+lives in the HAL process, and the two restart independently. A deploy, OTA or
+crash restarts the count at 1 while HAL still holds the old high-water mark, so
+every turn of the new session looks like a late arrival and is dropped —
+measured 03/09/2026: `seq=1` against `latest_seq=40` silenced the wake greeting
+(its LED and servo still ran) and would have silenced the next 39 turns. The run
+id carries its creation time (`device-chat-<n>-<unix-ms>`), so when a LOWER
+sequence arrives from a run created LATER than the one holding the speaker, HAL
+treats the counter as restarted and adopts the new sequence. Ids without a stamp
+(`tg-<messageID>`) keep the plain sequence rule: with nothing to compare, a
+genuinely stale POST must not be able to take the speaker back.
+
 ### Silero guards the silence clock (end of turn)
 
 A mic session ends when the audio stays below the RMS threshold for
@@ -675,6 +687,21 @@ a client-side failure. HAL also recycles Gemini synchronously before streaming a
 the previous turn ended more than `HAL_GEMINI_PRE_TURN_RECYCLE_S` seconds ago, so
 post-idle speech does not land on a proxy-dropped session.
 
+**Idle parking.** A Gemini session nobody is talking to is closed by the server
+with WS `1008` "The operation was aborted" (measured idle lifetimes: 86-198 s).
+That close costs no turn — the pre-turn recycle above already replaces the
+session before any post-idle turn streams — but the backend logs it as an error
+and alerts on it, so the device closes first. After
+`HAL_GEMINI_IDLE_PARK_S` seconds with no turn activity, an `rt-idle-park`
+watchdog thread disconnects the transport and marks the session *parked*. A
+parked orchestrator still reports `available`: the next `prepare_turn()`
+reconnects a fresh session synchronously (`idle-park-resume`) before any audio
+is streamed, which is exactly what the pre-turn recycle would have done for that
+turn anyway, and `voice_service` buffers the capture across the ~1 s handshake.
+Parking is skipped while a turn is in flight, and a resume that cannot connect
+reports unavailable (turn falls back to the main agent) while staying parked so
+the next turn retries.
+
 All providers treat teardown as terminal: once `disconnect()` sets the stop
 signal, send/receive workers neither reconnect nor emit transport-failure logs
 while their closed socket unwinds.
@@ -827,6 +854,13 @@ Realtime turns are appended to a JSONL log (`HAL_REALTIME_MEMORY_PATH`, default
 (keeping `HAL_REALTIME_MEMORY_TRIM_KEEP`). `RealtimeSummarizer` (`summarizer.py`)
 condenses device + realtime memory via the **Anthropic Messages API**
 (`HAL_REALTIME_SUMMARIZER_MODEL`, default `claude-haiku-4-5-20251001`).
+
+The call is **retried** (`HAL_REALTIME_SUMMARIZER_RETRIES`, default 2, backoff
+`HAL_REALTIME_SUMMARIZER_RETRY_BACKOFF_S`) because the failures come from the
+gateway, not from the input: measured on lamp-0c89 03/09/2026, the same payload
+returned 404 once and then succeeded on four of the next five attempts (one
+timed out), while the LARGER payload containing it went through first time. A
+dropped call otherwise costs the whole summary until the next session rebuild.
 This includes a turn delegated or fallen back to the main agent: HAL persists the
 user request before dispatch, then persists every opted-in main-agent TTS reply
 fragment when it finishes speaking. `[TTS HISTORY]` still updates the current
@@ -1174,7 +1208,8 @@ is a top-level `config.json` flag:
 | `HAL_REALTIME_NOISE_GUARD_MAX_WORDS` | `3` | Extends the Silero voiced-ratio guard to turns that DO have a transcript, up to this many words. STT invents a short filler out of room noise and reports full confidence for it, so such a turn used to bypass every guard (they all only ran on an empty transcript) and commit pure noise to the model. A transcript of at most this many words is re-checked against `HAL_REALTIME_NOISE_SPEECH_RATIO` and dropped when the audio was never voiced; a real short command is voiced and still commits. The ratio is measured over the voiced SPAN — first to last voiced chunk — not the whole buffer, because a capture carries VAD pre-roll at the front and a 200ms tail at the back, and that fixed padding dilutes a short utterance far more than a long one. Measuring the whole buffer dropped a real `Yes, that's right.` at 0.500 (`peak=1.000`), inverting the guard's purpose against the very turns it screens. Sustained noise still fails, since its voiced chunks are sparse within the span too. Longer transcripts are never re-checked, so the floor can't silence a real utterance. `0` disables. |
 | `HAL_REALTIME_SESSION_IDLE_RESET_S` | `240` | Cost control: when a turn arrives after this many seconds of silence, recycle (rebuild) the session **after** that turn so the next turn drops the per-turn context the provider re-bills on a long-lived session. A post-pause turn is effectively a new conversation; long-term continuity survives via the reloaded `summary.md`. For native-audio Gemini, this is skipped when a successful pre-turn recycle already made the same idle gap fresh. `0` disables. Reuses the zombie-recovery rebuild path. |
 | `HAL_GEMINI_SESSION_RESUMPTION` | `false` | Resume the same Gemini session across reconnects. OFF by default — the `campaign-api` proxy doesn't forward the resumption handshake, so resuming through it yields a zombie session (cold reconnects work). Enable only against an endpoint that supports it. |
-| `HAL_GEMINI_PRE_TURN_RECYCLE_S` | `120` | Gemini transport guard: when a new spoken turn starts after this much idle time, rebuild the Gemini session **before** streaming pre-roll/audio so the turn does not hit a proxy/SDK idle-dead socket. `0` disables. A successful pre-turn recycle suppresses the generic post-turn idle recycle for that same turn, so one idle gap creates at most one cost/transport rebuild. |
+| `HAL_GEMINI_IDLE_PARK_S` | `45` | Gemini idle parking: close the session's transport after this many seconds without turn activity, so the server never closes it with WS `1008` (which the backend logs as an error and alerts on). The orchestrator stays `available` while parked; the next turn's `prepare_turn()` reconnects synchronously before streaming audio. Must stay below the shortest observed idle death (86 s). `0` disables. |
+| `HAL_GEMINI_PRE_TURN_RECYCLE_S` | `60` | Gemini transport guard: when a new spoken turn starts after this much idle time, rebuild the Gemini session **before** streaming pre-roll/audio so the turn does not hit a proxy/SDK idle-dead socket. `0` disables. A successful pre-turn recycle suppresses the generic post-turn idle recycle for that same turn, so one idle gap creates at most one cost/transport rebuild. |
 | `HAL_AGENT_GATEWAY` | `openclaw` | Selects the context manager (also from `agent_runtime` in config.json) |
 | `GEMINI_API_KEY` / `GOOGLE_API_KEY` | — | Gemini key; falls back to `llm_api_key` |
 | `HAL_GEMINI_LIVE_MODEL` | `gemini-2.5-flash-native-audio-preview-12-2025` | |
@@ -1199,6 +1234,8 @@ is a top-level `config.json` flag:
 | `HAL_REALTIME_MAX_MEMORY_ENTRIES` / `_TRIM_KEEP` | `1000` / `500` | |
 | `HAL_REALTIME_SUMMARIZER_ENABLED` | `true` | |
 | `HAL_REALTIME_SUMMARIZER_MODEL` | `claude-haiku-4-5-20251001` | Anthropic Messages API |
+| `HAL_REALTIME_SUMMARIZER_RETRIES` | `2` | Extra attempts per summarize; `0` disables |
+| `HAL_REALTIME_SUMMARIZER_RETRY_BACKOFF_S` | `1.5` | Wait before the first retry, doubled each time |
 
 ## Code map
 

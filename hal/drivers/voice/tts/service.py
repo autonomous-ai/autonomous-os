@@ -724,6 +724,32 @@ class TTSService:
         thread.start()
         return True
 
+    # Trailing unix-ms in a device run id, e.g. "device-chat-7-1788422075499".
+    # Channel ids (tg-<messageID>) have none and fall through to the plain
+    # sequence rule, which is what they had before.
+    _RUN_ID_STAMP = re.compile(r"-(\d{13})$")
+
+    @classmethod
+    def _run_id_stamp(cls, turn_id: str):
+        m = cls._RUN_ID_STAMP.search(turn_id or "")
+        return int(m.group(1)) if m else None
+
+    def _counter_restarted(self, turn_id: str, turn_seq: int) -> bool:
+        """True when a lower sequence belongs to a NEWER turn than the one
+        holding the speaker — i.e. os-server restarted and began counting again.
+
+        Both ids must carry a creation stamp: without one there is nothing to
+        compare, and guessing would let a genuinely stale POST take the speaker
+        back from the turn that superseded it.
+        """
+        if turn_seq >= self._latest_queue_turn_seq:
+            return False
+        incoming = self._run_id_stamp(turn_id)
+        holding = self._run_id_stamp(self._latest_queue_turn_id)
+        if incoming is None or holding is None:
+            return False
+        return incoming > holding
+
     def speak_queue(
         self,
         text: str,
@@ -761,6 +787,26 @@ class TTSService:
         with self._queue_request_lock:
             preempted = False
             if turn_id and turn_seq:
+                # The counter lives in os-server; this threshold lives here.
+                # They restart independently, so a deploy/OTA/crash restarts the
+                # count at 1 while this process still holds the old high-water
+                # mark — and every turn of the new session looks like a late
+                # arrival from the past. Device-observed 03/09/2026: seq=1 against
+                # latest_seq=40 silenced the wake greeting (LED and servo ran, no
+                # sound), and would have stayed silent for the next 39 turns.
+                #
+                # The run id carries its creation time, so wall-clock decides
+                # when the counter itself is untrustworthy: a turn created LATER
+                # than the one holding the speaker is newer, whatever its seq.
+                if self._counter_restarted(turn_id, turn_seq):
+                    logger.warning(
+                        "TTS turn counter restarted (turn_id=%s seq=%d < latest_id=%s "
+                        "latest_seq=%d, but newer) -- adopting the new sequence",
+                        turn_id, turn_seq, self._latest_queue_turn_id,
+                        self._latest_queue_turn_seq,
+                    )
+                    self._latest_queue_turn_seq = 0
+                    self._latest_queue_turn_id = ""
                 if turn_seq < self._latest_queue_turn_seq:
                     logger.info(
                         "TTS queued speech dropped -- superseded turn (turn_id=%s seq=%d latest_id=%s latest_seq=%d): %s",

@@ -301,6 +301,12 @@ speaker flag needs no apply step (TTS checks it at speak time). A full device
 reboot starts fresh (on Intern v2 Pro the physical mic switch re-applies itself
 anyway). Record-enroll's transient speaker mute is deliberately NOT persisted.
 
+All of these sidecars live in `HAL_STATE_DIR` (default `/tmp`, i.e. the paths
+above). It exists to be pointed elsewhere: the HAL test suite gives each session
+its own directory, because these files outlive the process — a run that ended
+with the body asleep used to leave every LATER run starting asleep, and running
+the suite on a real body would have overwritten that body's live switches.
+
 ## Localized phrases
 
 The action announcements are localized per `stt_language` from Lamp's `config.json`. Language constants live in `hal/presets.py` (`LANG_EN`, `LANG_VI`, `LANG_ZH_CN`, `LANG_ZH_TW`, `DEFAULT_LANG`). Falls back to `DEFAULT_LANG` (English) when the active language has no translation.

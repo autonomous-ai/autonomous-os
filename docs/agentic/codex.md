@@ -240,6 +240,47 @@ the persisted thread id (§4). Codex processes one turn at a time and does not
 stream tokens, so turns are correlated by a single in-flight `runID` (the
 pending run id is adopted by the first inbound frame of the turn).
 
+## 2.1 Turn duration — timeout and the busy TTL
+
+A chat turn is expected to be slow: a user opens chat precisely for work that
+takes a while, and the same prompt answered over Telegram/OpenClaw runs 35
+minutes to completion. Two numbers bound it, and they must stay ordered:
+
+| Knob | Where | Default | Meaning |
+|---|---|---|---|
+| `CODEX_TURN_TIMEOUT_S` | `gatewayd/gatewayd.go` | `600` (10 min) | Kills `codex exec` and sends `bridge.error: timeout`. The gatewayd ALWAYS ends a turn — completed, failed, or this timeout. |
+| `busyTTL()` | `events.go` | that timeout **+ 5 min** | Unwedges the sensing pipeline when a turn's terminal frame was DROPPED. Derived from the same env var so raising the timeout cannot leave it behind. |
+
+**The TTL must outlast the timeout.** It was a fixed 5 minutes against a 10-minute
+timeout, so every turn slower than 5 minutes tripped the "frame was dropped" path
+— and that path also called `clearTurn()`, wiping the id of the turn still
+running. The browser's pending run was then orphaned: later lifecycle/error
+frames found no current run, allocated a fresh id, and attached to an unrelated
+queued turn, so the chat sat on a pending bubble and reported "no response" while
+the backend was working normally.
+
+Measured on lamp-0c89, 2026-09-03: run `device-chat-139` started 15:40:41, lost
+its id at 15:45:41, and the 15:50:41 `timeout` was reported against
+`device-chat-168`. `openclaw` and `hermes` never wiped the id on TTL expiry,
+which is why long Telegram turns always worked there; the codex path now matches.
+
+**A timed-out resumed turn DROPS the thread.** Rotation (`ShouldRotateSession`)
+reads the context size off `turn.completed`, so it can only ever fire after a turn
+SUCCEEDS — a thread whose every resume hangs is therefore never rotated, and the
+thread id lives in the session file, so restarting the service and rebooting the
+device both resume the same dead thread. Measured on lamp-0c89 2026-09-03: thread
+`01a06665` was created 15:31 and every turn after 15:40 hung with no `turn end`
+for over an hour, through two service restarts and a reboot; direct `curl` to the
+same endpoint answered the same 75k-token payload in 57 s, and a FRESH
+`codex exec` answered in seconds, so the endpoint was never the problem. The
+gatewayd now calls `clearSession()` on a resume timeout, which is the only escape
+that does not need a human.
+
+The web chat's own give-up window (`REPLY_IDLE_TIMEOUT_MS`) is sized to
+outlast the turn cap for the same reason — and it cannot be shortened, because
+`codex exec --json` emits nothing at all while it works (the measured run
+streamed zero deltas in ten minutes).
+
 ## 3. Event translation (`translator.go`)
 
 The bridge forwards the `codex exec --json` JSONL events **verbatim** (plus its

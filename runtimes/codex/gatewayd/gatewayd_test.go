@@ -71,6 +71,26 @@ EOF
 	return writeScript(t, dir, "fake-codex-resume-turn-failed", script)
 }
 
+// writeFakeCodexResumeHangs answers a fresh run normally but never returns on a
+// resume — the shape measured on lamp-0c89 2026-09-03, where the upstream
+// stream went silent mid-turn and `codex exec ... resume <id>` sat on an open
+// socket until it was killed.
+func writeFakeCodexResumeHangs(t *testing.T, dir, argvFile string) string {
+	t.Helper()
+	script := fmt.Sprintf(`#!/bin/bash
+echo "ARGV:$*" >> %q
+case "$*" in
+  *resume*)
+    sleep 30
+    ;;
+esac
+cat <<'EOF'
+%s
+EOF
+`, argvFile, successJSONL)
+	return writeScript(t, dir, "fake-codex-resume-hangs", script)
+}
+
 func writeScript(t *testing.T, dir, name, content string) string {
 	t.Helper()
 	path := filepath.Join(dir, name)
@@ -84,6 +104,13 @@ func writeScript(t *testing.T, dir, name, content string) string {
 // under t.TempDir(). Returns the ws URL and the config used.
 func startServer(t *testing.T, codexBin string, dir string) (string, Config) {
 	t.Helper()
+	return startServerTimeout(t, codexBin, dir, 30*time.Second)
+}
+
+// startServerTimeout is startServer with an explicit per-turn timeout, for the
+// tests that need a turn to actually hit it.
+func startServerTimeout(t *testing.T, codexBin string, dir string, turnTimeout time.Duration) (string, Config) {
+	t.Helper()
 	cfg := Config{
 		Token:       testToken,
 		Workspace:   filepath.Join(dir, "workspace"),
@@ -91,7 +118,7 @@ func startServer(t *testing.T, codexBin string, dir string) (string, Config) {
 		CodexHome:   dir,
 		SessionFile: filepath.Join(dir, "session.json"),
 		AttachDir:   filepath.Join(dir, "attachments"),
-		TurnTimeout: 30 * time.Second,
+		TurnTimeout: turnTimeout,
 		Home:        dir,
 	}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -433,5 +460,45 @@ func TestResumedFailureFramesHeldBack(t *testing.T) {
 	}
 	if strings.Contains(lines[1], "resume") {
 		t.Fatalf("retry must be fresh, got argv: %s", lines[1])
+	}
+}
+
+
+// A thread whose resume hangs used to wedge the device forever: rotation rides
+// on a COMPLETED turn, so a thread that never completes one is never rotated,
+// and the thread id lives on disk — restarting the service or rebooting the
+// device resumed the same dead thread. The timeout must drop it.
+func TestResumeTimeoutDropsTheThread(t *testing.T) {
+	dir := t.TempDir()
+	argvFile := filepath.Join(dir, "argv.txt")
+	url, cfg := startServerTimeout(t, writeFakeCodexResumeHangs(t, dir, argvFile), dir, 500*time.Millisecond)
+	conn := dial(t, url, testToken)
+	readFrame(t, conn) // ready status
+
+	// First turn is fresh and succeeds, persisting thread t123.
+	sendMessage(t, conn, "first")
+	readTurnFrames(t, conn)
+
+	// Second turn resumes t123 and hangs until the turn timeout.
+	sendMessage(t, conn, "second")
+	frames := readTurnFrames(t, conn)
+	last := frames[len(frames)-1]
+	if last["type"] != "bridge.error" {
+		t.Fatalf("a timed-out turn must end with bridge.error, got %v", last)
+	}
+
+	if _, err := os.Stat(cfg.SessionFile); !os.IsNotExist(err) {
+		t.Fatalf("the timed-out thread must be dropped, but %s still exists (err=%v)", cfg.SessionFile, err)
+	}
+
+	// Third turn must start FRESH — this is the escape the device never had.
+	sendMessage(t, conn, "third")
+	readTurnFrames(t, conn)
+	lines := argvLines(t, argvFile)
+	if len(lines) < 3 {
+		t.Fatalf("expected at least 3 codex invocations, got %d: %v", len(lines), lines)
+	}
+	if strings.Contains(lines[2], "resume") {
+		t.Fatalf("after a resume timeout the next turn must be fresh, got argv: %s", lines[2])
 	}
 }

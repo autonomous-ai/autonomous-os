@@ -768,6 +768,20 @@ REALTIME_SESSION_IDLE_RESET_S: float = float(
 REALTIME_GEMINI_PRE_TURN_RECYCLE_S: float = float(
     os.environ.get("HAL_GEMINI_PRE_TURN_RECYCLE_S", "60")
 )
+# Close an idle Gemini session ourselves instead of letting the server close it.
+# An idle session is killed upstream with WS 1008 "The operation was aborted"
+# (measured idle lifetimes: 86s, 98s, 150s, 151s, 152s, 185s, 198s). That close is
+# harmless to turns -- the pre-turn recycle above already replaces the session
+# before any post-idle turn streams audio -- but the backend logs it as an error
+# and pages the dev channel, so the device must not provoke it. Parking closes the
+# transport after this many seconds without turn activity and leaves the
+# orchestrator `available`: the next turn's prepare_turn() connects a fresh session
+# synchronously (voice_service buffers audio across the ~1s handshake), which is
+# exactly what the pre-turn recycle would have done for that turn anyway. Must stay
+# BELOW the shortest observed idle death (86s); 45s keeps a wide margin. 0 disables.
+REALTIME_GEMINI_IDLE_PARK_S: float = float(
+    os.environ.get("HAL_GEMINI_IDLE_PARK_S", "45")
+)
 # Gemini 1011 recovery: how many times to reconnect a FRESH session and replay
 # the just-captured turn audio when a turn produced no output (the campaign-api
 # proxy drops idle 2.5-native-audio sessions → a post-pause turn lands on a dead
@@ -1172,6 +1186,28 @@ GAZE_COOLDOWN_S: float = float(os.environ.get("HAL_GAZE_COOLDOWN_S", "5"))
 # a lamp with the 60s override would see a difference. The point is a smaller
 # allowance everywhere, not just where someone happened to widen the default.
 GAZE_WAKE_FOCUS_S: float = float(os.environ.get("HAL_GAZE_WAKE_FOCUS_S", "10"))
+# Directory holding the boot-scoped sidecars app_state and routes/scene write
+# (LED / mic / speaker / camera / sleep / scene). `/tmp` on a body, so they die
+# with the machine but survive a HAL restart — which is the whole point: an OTA
+# must not wake a sleeping device or drop the user's colour.
+#
+# Overridable so a test run gets its own: these files outlive the process, so on
+# the shared default one run that ended with the body asleep left every LATER
+# run starting asleep, and running the suite on a real body would overwrite that
+# body's live switches (observed 03/09/2026).
+STATE_DIR: str = os.environ.get("HAL_STATE_DIR", "/tmp")
+
+# --- Simulation (laptop body: `make sim`) ---
+#
+# SIMULATE is the on/off switch; SIM_MEDIA is what the developer ASKED for.
+# What each subsystem actually ends up running is decided at boot and tracked in
+# app_state (`sim_media_camera` / `sim_media_audio`), because a host camera or
+# mic can be missing, busy, or permission-denied — that is runtime state, not
+# configuration, so it stays there.
+SIMULATE: bool = os.environ.get("HAL_SIMULATE", "").lower() in ("1", "true", "yes")
+SIM_MEDIA: str = os.environ.get("HAL_SIM_MEDIA", "virtual").strip().lower()
+# Who a turn belongs to when neither face nor voice has named anyone.
+DEFAULT_USER: str = os.environ.get("HAL_DEFAULT_USER", "unknown")
 # Where the remembered user bearing lives. NOT a boot sidecar: this must survive
 # reboots, unlike the mic/speaker/camera state in app_state.
 USER_BEARING_PATH: str = os.environ.get(
@@ -1377,6 +1413,19 @@ REALTIME_SUMMARIZER_API_KEY: str = os.environ.get("HAL_REALTIME_SUMMARIZER_API_K
 _summarizer_base: str = os.environ.get("HAL_REALTIME_SUMMARIZER_BASE_URL", "") or _os_cfg_get("llm_base_url", "")
 REALTIME_SUMMARIZER_BASE_URL: str = _summarizer_base.rstrip("/").removesuffix("/v1") if _summarizer_base else ""
 REALTIME_SUMMARIZER_MODEL: str = os.environ.get("HAL_REALTIME_SUMMARIZER_MODEL", "claude-haiku-4-5-20251001")
+# Extra attempts when a summarize call fails. The gateway drops requests
+# intermittently — measured on lamp-0c89 03/09/2026: the SAME payload returned
+# 404 once, then succeeded on four of the next five tries (the sixth timed out),
+# while the superset payload containing it succeeded outright. So a failure says
+# nothing about the input, and one dropped call costs the whole summary until
+# the next rebuild. 0 disables retrying.
+REALTIME_SUMMARIZER_RETRIES: int = int(
+    os.environ.get("HAL_REALTIME_SUMMARIZER_RETRIES", "2")
+)
+# Seconds before the first retry; doubled for each one after it.
+REALTIME_SUMMARIZER_RETRY_BACKOFF_S: float = float(
+    os.environ.get("HAL_REALTIME_SUMMARIZER_RETRY_BACKOFF_S", "1.5")
+)
 
 # Gaze re-point: turn back toward the remembered bearing when nobody has been
 # visible for a while.

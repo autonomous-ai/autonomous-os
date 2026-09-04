@@ -173,6 +173,15 @@ hook do `VoiceService` gắn vào cạnh `_on_speak_end`, dẫn về đúng
 bật, cùng lý do với đường phát: chỉ câu trả lời thật của agentic runtime mới
 được vào context của model, không phải filler hay notice bị bỏ.
 
+`turn_seq` là bộ đếm của os-server, còn ngưỡng đem ra so lại nằm trong tiến trình
+HAL, và hai bên restart độc lập. Deploy, OTA hay crash làm bộ đếm bắt đầu lại từ 1
+trong khi HAL vẫn giữ mốc cũ, nên mọi turn của phiên mới trông như đến muộn và bị
+vứt — đo ngày 03/09/2026: `seq=1` gặp `latest_seq=40` làm câm lời chào lúc thức
+(LED và servo vẫn chạy) và sẽ câm tiếp 39 turn sau đó. Run id có mang thời điểm
+tạo (`device-chat-<n>-<unix-ms>`), nên khi một sequence THẤP HƠN đến từ run được
+tạo MUỘN HƠN run đang giữ loa, HAL coi như bộ đếm đã restart và nhận sequence mới.
+Id không có dấu thời gian (`tg-<messageID>`) vẫn theo luật sequence thuần: không có
+gì để so thì một POST cũ thật sự không được phép giành lại loa.
 ### Silero canh đồng hồ im lặng (kết thúc lượt)
 
 Một phiên mic kết thúc khi audio nằm dưới ngưỡng RMS suốt `SILENCE_TIMEOUT_S`.
@@ -651,6 +660,20 @@ recycle Gemini đồng bộ trước khi stream audio nếu lượt trước đ�
 `HAL_GEMINI_PRE_TURN_RECYCLE_S` giây, để câu nói sau khoảng nghỉ không rơi vào
 socket đã chết vì idle ở proxy.
 
+**Park khi idle.** Session Gemini không ai nói chuyện cùng sẽ bị server đóng bằng
+WS `1008` "The operation was aborted" (thời gian sống khi idle đo được: 86-198
+giây). Cú đóng đó không làm hỏng turn nào — pre-turn recycle ở trên đã thay
+session trước khi turn sau khoảng nghỉ stream audio — nhưng backend ghi nó là lỗi
+và bắn cảnh báo, nên thiết bị phải đóng trước. Sau `HAL_GEMINI_IDLE_PARK_S` giây
+không có hoạt động turn nào, thread watchdog `rt-idle-park` đóng transport và
+đánh dấu session là *parked*. Orchestrator đang parked vẫn báo `available`:
+`prepare_turn()` kế tiếp sẽ nối lại session mới một cách đồng bộ
+(`idle-park-resume`) trước khi có audio nào được stream — đúng bằng việc mà
+pre-turn recycle vốn đã làm cho turn đó — và `voice_service` giữ đệm capture qua
+~1 giây handshake. Không park khi đang có turn chạy dở; nếu resume không nối
+được thì báo unavailable (turn rơi về main agent) nhưng vẫn giữ trạng thái parked
+để turn sau thử lại.
+
 Mọi provider coi teardown là trạng thái kết thúc: sau khi `disconnect()` đặt
 stop signal, worker send/receive không reconnect và cũng không ghi log lỗi
 transport trong lúc socket đã đóng đang unwind.
@@ -797,6 +820,13 @@ Các lượt realtime được append vào file JSONL (`HAL_REALTIME_MEMORY_PATH
 (giữ lại `HAL_REALTIME_MEMORY_TRIM_KEEP`). `RealtimeSummarizer` (`summarizer.py`)
 nén device + realtime memory qua **Anthropic Messages API**
 (`HAL_REALTIME_SUMMARIZER_MODEL`, mặc định `claude-haiku-4-5-20251001`).
+
+Lời gọi này được **thử lại** (`HAL_REALTIME_SUMMARIZER_RETRIES`, mặc định 2,
+giãn cách `HAL_REALTIME_SUMMARIZER_RETRY_BACKOFF_S`) vì lỗi đến từ gateway chứ
+không từ input: đo trên lamp-0c89 ngày 03/09/2026, cùng một payload trả 404 một
+lần rồi thành công 4 trong 5 lần kế tiếp (một lần timeout), trong khi payload
+LỚN HƠN chứa trọn nó lại chạy ngay lần đầu. Không thử lại thì một cú rớt là mất
+trọn bản tóm tắt cho tới lần rebuild session sau.
 Điều này gồm cả lượt delegate hoặc fallback sang main agent: HAL lưu request của
 user trước khi dispatch, rồi lưu từng fragment TTS opt-in của main agent sau khi
 nói xong. `[TTS HISTORY]` vẫn cập nhật session live hiện tại ngay lập tức, nhưng
@@ -1128,7 +1158,8 @@ trong `config.json`:
 | `HAL_REALTIME_NOISE_GUARD_MAX_WORDS` | `3` | Mở rộng guard voiced-ratio của Silero sang cả turn CÓ transcript, tối đa ngần này từ. STT bịa một từ đệm ngắn từ tiếng ồn phòng và báo confidence tối đa cho nó, nên turn kiểu đó trước đây lọt hết mọi guard (guard chỉ chạy khi transcript rỗng) và commit nhiễu thuần lên model. Transcript nhiều nhất ngần này từ sẽ bị kiểm lại theo `HAL_REALTIME_NOISE_SPEECH_RATIO` và bị bỏ nếu audio chưa từng voiced; lệnh ngắn nói thật vẫn là voiced nên vẫn commit. Tỉ lệ được đo trên **span voiced** — từ chunk voiced đầu tới chunk voiced cuối — chứ không phải toàn buffer, vì bản capture luôn kèm pre-roll của VAD ở đầu và 200ms đuôi giữ lại ở cuối; phần đệm cố định đó làm loãng câu ngắn nặng hơn câu dài rất nhiều. Đo toàn buffer từng vứt nhầm một câu `Yes, that's right.` nói thật ở mức 0.500 (`peak=1.000`) — tức là guard quay ra phạt đúng lớp câu nó sinh ra để soi. Tiếng ồn kéo dài vẫn rớt, vì các chunk voiced của nó thưa ngay bên trong span. Transcript dài hơn không bao giờ bị kiểm lại, nên ngưỡng này không thể làm câm một câu nói thật. `0` = tắt. |
 | `HAL_REALTIME_SESSION_IDLE_RESET_S` | `240` | Kiểm soát chi phí: khi một turn đến sau ngần này giây im lặng, recycle (rebuild) session **sau** turn đó để turn kế tiếp bỏ phần context mỗi-turn mà provider re-bill trên session sống lâu. Turn sau khoảng nghỉ dài coi như cuộc hội thoại mới; trí nhớ dài hạn vẫn còn nhờ nạp lại `summary.md`. Với Gemini native-audio, bước này bị bỏ qua nếu pre-turn recycle thành công đã làm mới session cho chính idle gap đó. `0` = tắt. Dùng lại đường rebuild của zombie-recovery. |
 | `HAL_GEMINI_SESSION_RESUMPTION` | `false` | Resume cùng session Gemini qua reconnect. Mặc định OFF — proxy `campaign-api` không forward đúng resumption handshake nên resume qua nó tạo session zombie (cold reconnect thì chạy được). Chỉ bật khi endpoint hỗ trợ. |
-| `HAL_GEMINI_PRE_TURN_RECYCLE_S` | `120` | Guard transport cho Gemini: khi lượt nói mới bắt đầu sau ngần này giây idle, rebuild session Gemini **trước khi** stream pre-roll/audio để turn không đụng socket chết vì idle ở proxy/SDK. `0` = tắt. Pre-turn recycle thành công sẽ chặn idle recycle generic sau chính turn đó, nên một idle gap chỉ tạo tối đa một rebuild phục vụ transport/chi phí. |
+| `HAL_GEMINI_IDLE_PARK_S` | `45` | Park Gemini khi idle: đóng transport của session sau ngần này giây không có hoạt động turn, để server không phải đóng nó bằng WS `1008` (backend ghi thành lỗi và bắn cảnh báo). Orchestrator vẫn `available` trong lúc parked; `prepare_turn()` của turn kế tiếp nối lại đồng bộ trước khi stream audio. Phải nhỏ hơn thời gian idle chết ngắn nhất đo được (86 giây). `0` = tắt. |
+| `HAL_GEMINI_PRE_TURN_RECYCLE_S` | `60` | Guard transport cho Gemini: khi lượt nói mới bắt đầu sau ngần này giây idle, rebuild session Gemini **trước khi** stream pre-roll/audio để turn không đụng socket chết vì idle ở proxy/SDK. `0` = tắt. Pre-turn recycle thành công sẽ chặn idle recycle generic sau chính turn đó, nên một idle gap chỉ tạo tối đa một rebuild phục vụ transport/chi phí. |
 | `HAL_AGENT_GATEWAY` | `openclaw` | Chọn context manager (cũng đọc từ `agent_runtime` trong config.json) |
 | `GEMINI_API_KEY` / `GOOGLE_API_KEY` | — | Key Gemini; fallback về `llm_api_key` |
 | `HAL_GEMINI_LIVE_MODEL` | `gemini-2.5-flash-native-audio-preview-12-2025` | |
@@ -1153,6 +1184,8 @@ trong `config.json`:
 | `HAL_REALTIME_MAX_MEMORY_ENTRIES` / `_TRIM_KEEP` | `1000` / `500` | |
 | `HAL_REALTIME_SUMMARIZER_ENABLED` | `true` | |
 | `HAL_REALTIME_SUMMARIZER_MODEL` | `claude-haiku-4-5-20251001` | Anthropic Messages API |
+| `HAL_REALTIME_SUMMARIZER_RETRIES` | `2` | Số lần thử lại mỗi lượt summarize; `0` là tắt |
+| `HAL_REALTIME_SUMMARIZER_RETRY_BACKOFF_S` | `1.5` | Chờ trước lần thử lại đầu, mỗi lần sau nhân đôi |
 
 ## Bản đồ code
 

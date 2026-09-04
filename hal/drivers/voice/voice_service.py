@@ -1963,6 +1963,18 @@ class VoiceService:
                     gaze.on_speech_end()
                 except Exception as e:
                     logger.debug("gaze speech-end check skipped: %s", e)
+            else:
+                # No transcript, but the reacquire at speech START already took
+                # the body — and most sessions the wide entry VAD opens end
+                # exactly here. Without this the hold outlives the capture that
+                # made it and the lamp stays frozen (03/09/2026). The retry
+                # above stays gated on a transcript; only the handover does not.
+                try:
+                    from hal.drivers.tracking import gaze
+
+                    gaze.release_reacquire_hold_if_pending()
+                except Exception as e:
+                    logger.debug("gaze reacquire release skipped: %s", e)
                 wakeword_followup_active = (
                     wakeword_followup_active
                     or (hal_config.WAKEWORD_ENABLED and self._wakeword_focus.is_active())
