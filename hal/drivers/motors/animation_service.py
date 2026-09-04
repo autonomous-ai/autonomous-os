@@ -82,7 +82,7 @@ def _motor_positions_from_bus(robot: LeLampFollower) -> Dict[str, float]:
 
 
 class AnimationService:
-    def __init__(self, port: str, lamp_id: str, fps: int = 30, duration: float = 5.0, idle_recording: str = SERVO_IDLE, hold_s: float = 0.0, safety_policy=None):
+    def __init__(self, port: str, lamp_id: str, fps: int = 30, duration: float = 5.0, idle_recording: str = SERVO_IDLE, hold_s: float = 0.0, safety_policy=None, geometry=None):
         self.port = port
         self.lamp_id = lamp_id
         self.fps = fps
@@ -93,6 +93,8 @@ class AnimationService:
         # time (see _load_recording). aim/nudge take theirs per call from the
         # route; playback has no route to carry it, so the service holds it.
         self._safety_policy = safety_policy
+        # Body geometry for the stability gate (ROBOT.md urdf_ref); None = ungated.
+        self._geometry = geometry
         self._hold_until: float = 0.0  # timestamp until which to hold pose before returning to idle
         self._no_idle_recordings = NO_IDLE_RECORDINGS
         # disable_torque_on_disconnect=False: dropping torque is what `release()`
@@ -806,7 +808,8 @@ class AnimationService:
             # Cached per name, which is safe: the policy is read once at boot
             # and never changes for the life of the process.
             actions = resample_recording(
-                times, actions, recording_name, self.fps, self._safety_policy
+                times, actions, recording_name, self.fps, self._safety_policy,
+                self._geometry,
             )
 
             # Cache the recording

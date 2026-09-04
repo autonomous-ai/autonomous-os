@@ -88,6 +88,7 @@ class MockMotionService:
         self,
         joints: Optional[Set[str]] = None,
         safety_policy: Any = None,
+        geometry: Any = None,
         idle_recording: str = "idle",
     ) -> None:
         self._joints = set(joints or DEFAULT_JOINTS)
@@ -96,6 +97,7 @@ class MockMotionService:
         # HTTP routes still enforce the policy; retaining it here lets the mock
         # boot through the production factory without special cases.
         self._safety_policy = safety_policy
+        self._geometry = geometry
         self._positions: Dict[str, float] = {j: 0.0 for j in self._joints}
         # A physical Lamp is never visually meaningful with all five joints at
         # zero.  The laptop Lamp starts in the same center pose its real aim
@@ -464,7 +466,7 @@ class MockMotionService:
             # No usable time axis: play what was authored rather than invent timing.
             return [(index * step, positions) for index, positions in enumerate(frames)]
         resampled = resample_recording(
-            times, frames, name, PLAYBACK_FPS, self._safety_policy
+            times, frames, name, PLAYBACK_FPS, self._safety_policy, self._geometry
         )
         return [(index * step, positions) for index, positions in enumerate(resampled)]
 

@@ -79,6 +79,7 @@ pass-through.
 | 3b | `motion.stop_always` | — | — | **declared / structurally guaranteed** — no route-level gate consumes this field (see below) |
 | 4 | fail-safe states (network/gateway loss → stop tracking; board fault → 503 isolation; `thermal.max_temp_c` → SoC over-temp health event + stop tracking; setup + servo over-current reserved) | WS-disconnect hook + per-capability `503` + thermal monitor (`thermal_over`/`read_soc_temp_c`) | `services` on WS disconnect + HAL routes/`/health` + `server.py` `_thermal_monitor` | **partially enforced (v1)** (setup + over-current reserved) |
 | 5 | `audio.max_volume` ceiling | `clamp_volume` | `/audio/volume` route, above the speaker/BT-sink split | **enforced (v1)** |
+| 6 | `motion.max_cog_offset_mm` (presence-driven) | whole-body centre-of-gravity score per frame (`recording_stability.py`) | recording load (`resample_recording`), physical + mock drivers | **enforced (v1)** |
 
 Each slice adds fields to the `SafetyPolicy` and gate functions and wires one or more
 routes; the loader and the front-matter contract do not change shape between slices
@@ -187,6 +188,25 @@ impossible and nowhere else (`hal/drivers/motors/recording_timing.py`, shared by
 the physical and mock drivers so the simulator plays what the body plays). The
 ceiling is the lower of the servo's measured limit (`SERVO_MAX_DPS`, 250 deg/s)
 and the declared `motion.max_speed`.
+
+Recorded animations are gated for **stability** as well as speed, at the same
+load-time chokepoint. Every joint can sit inside its own range while the
+*combination* puts the centre of gravity outside the base, and no per-joint bound
+expresses that, so `hal/drivers/motors/recording_stability.py` reconstructs the
+whole-body centre of gravity for every frame and **refuses** a recording that
+reaches further from the base axis than `motion.max_cog_offset_mm` allows. Unlike
+speed, there is no degradation that makes a tipping pose safe — the recording is
+skipped, so the failure mode is a missing animation, not a crash. The geometry
+comes from the body's own URDF via the `ROBOT.md` `urdf_ref` key; the check is
+presence-driven and inert without both declarations, and a body that declares a
+ceiling but no usable `urdf_ref` logs that it cannot score a pose and passes
+through rather than failing closed. Lamp declares 22 mm (measured: the
+third-party clip that tipped lamp-0c89 peaked at 31.6 mm, the worst shipped
+recording at 17.7 mm, the other 28 at or below 17.6 mm — see
+`robots/lamp/docs/motion-playback.md`); no other body declares it, so nothing
+else changes behaviour. Derive the number per body from its own animation
+library — it is millimetres of that body's geometry and mass, never a constant to
+copy.
 
 Recorded moves on the Reachy SDK path are gated differently, because the driver
 does not own the playback loop: `ReachyMotionService` hands a trajectory to
@@ -308,7 +328,10 @@ including spoken replies.
 
 Some safety behaviour already exists, hardcoded and scattered: `motion.stop()` in the
 motors/animation services, lerobot's mechanical position clamp, the LED brightness
-scaling config. The engine does not rip these out at once — it *centralises* them
+scaling config. That mechanical position clamp is still the only per-joint position
+limit: the command path has **no** declared position bound (recordings are gated for
+speed and, since slice 6, for whole-body stability — neither is a per-joint clamp).
+The engine does not rip these out at once — it *centralises* them
 into the declared policy one slice at a time, so the bounds become data a device
 declares rather than constants buried in drivers. Slice 1 introduces the engine with
 a bound that has **no** prior enforcement (an agent-independent brightness ceiling),

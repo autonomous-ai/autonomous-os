@@ -40,6 +40,7 @@ capabilities:
   system:       { routes: [system], required: true }
 soul_ref:   SOUL.md
 safety_ref: SAFETY.md
+urdf_ref:   urdf/lamp.urdf
 memory:     { backend: local }
 startup_volume: 40
 ---

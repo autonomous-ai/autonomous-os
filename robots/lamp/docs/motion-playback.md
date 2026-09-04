@@ -30,3 +30,68 @@ Two consequences worth knowing:
 
 - Servo motion registers are left at their defaults (`Acceleration=254`, `Goal_Velocity=0`). Capping speed in the servo instead of in the trajectory was measured and rejected: it cut jerk ~33% but pushed tracking error from 55° to 71°, and the resulting lag walked the arm into a mechanical jam. Software knows the whole trajectory ahead of time and can stretch it under control; the servo can only lag.
 - `add_recording()` (upload path) **invalidates** the cache rather than filling it. It receives frames already stripped of `timestamp`, so caching them would bypass resampling — the uploaded copy would play at raw frame rate while the identical file read from disk played correctly.
+
+## Stability
+
+Speed is not the only way a recording can hurt the body. Every joint can sit
+inside its own range while the *combination* puts the centre of gravity outside
+the base — measured on lamp-0c89 on 2026-09-04, a third-party CSV whose joints
+were all in range tipped the unit onto its side ([#271]).
+
+No per-joint bound expresses this, so `recording_stability.py` reconstructs the
+whole-body centre of gravity for every frame and refuses a recording that
+reaches further from the base axis than the body allows. The check runs inside
+`resample_recording`, so a body and the simulator refuse the same clip.
+
+Nothing in the check is lamp-specific. It needs two **per-body declarations**,
+and is inert without either:
+
+| what | where | lamp |
+|---|---|---|
+| the ceiling | `SAFETY.md` `motion.max_cog_offset_mm` | 22 mm |
+| the geometry | `ROBOT.md` `urdf_ref` → a URDF in the device folder | `urdf/lamp.urdf` |
+
+Presence-driven like every other bound in `robots/contract/SAFETY-SPEC.md`: a
+body that declares neither is unrestricted, and one that declares a ceiling but
+no usable `urdf_ref` logs that it cannot score a pose and passes through rather
+than failing closed. Reachy Mini declares neither today and is unaffected.
+
+The ceiling is bracketed by measurement rather than chosen:
+
+| | peak CoG offset from the base axis |
+|---|---|
+| the clip that tipped the lamp | 31.6 mm |
+| `confused.csv` — the worst shipped recording | 17.7 mm |
+| the other 28 shipped recordings | ≤ 17.6 mm |
+
+All 29 shipped recordings pass with room to spare. Forward reach is what
+matters: `base_yaw` spins the arm about the very axis the offset is measured
+from and cannot contribute, while `elbow_pitch` moves it most (the worst frame
+of the clip that tipped had the arm folded forward at `elbow_pitch` 53.8° with
+`base_pitch` at only 6.9° — the per-joint extremes of that clip never occurred
+in the same frame).
+
+Every load is logged: `INFO` with the peak and the frame it occurred at, `WARNING`
+once a clip passes above 85% of the ceiling, and `ERROR` with the full offending
+pose when one is refused — a refusal has to be explainable from the journal alone.
+A refused recording is skipped by the normal load path, so the failure mode is a
+missing animation, not a crash.
+
+A frame naming joints that are not in the body's URDF is **skipped and logged as
+skipped** rather than scored: every unknown joint would read as 0° and hand back
+a comfortable number for a pose that was never evaluated, and a false pass is
+worse than no check.
+
+Giving another body this gate is two declarations, no code: ship its URDF and
+derive its own ceiling from its own animation library (widest clip plus
+headroom). Never copy 22 mm — it is millimetres of *this* body's geometry and
+mass, not a universal constant.
+
+`urdf/lamp.urdf` is kinematics and masses only; this repository ships no meshes,
+so the visual and collision elements were removed. It is packaged to devices by
+`make upload-device lamp` along with the rest of the device profile. Link masses are
+estimates and the URDF's inertial origins are all zero, so each link's mass sits
+at its own origin: the absolute millimetres are approximate, the ranking between
+clips is not. Re-derive the constant if the body's mass distribution changes.
+
+[#271]: https://github.com/autonomous-ai/autonomous-os/issues/271

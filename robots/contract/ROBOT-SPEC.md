@@ -43,6 +43,7 @@ tell "no servo by design" from "servo lib missing" from "servo broken."
 | `gateway` | yes | Default agentic gateway (`default`) + wire transport (`protocol`). The transport follows from the runtime (openclaw→websocket, hermes→sse); `protocol` is validated for consistency against `default` (a warning, not a driver). |
 | `capabilities` | yes | Map of capability group → declaration (below). |
 | `soul_ref` | no | Soul artifact for this body: a path read relative to the device folder (e.g. `SOUL.md`), or an `http(s)://` URL the runtime downloads. Absent → the gateway's default soul. |
+| `urdf_ref` | no | The body's kinematic description (URDF): a path read relative to the device folder (e.g. `urdf/lamp.urdf`), or an `http(s)://` URL downloaded. Supplies the link offsets, joint axes and masses that geometric safety bounds are computed against — today `SAFETY.md` `motion.max_cog_offset_mm`. Absent → those bounds cannot be evaluated and pass through with a warning. Visual and collision meshes are optional and unused by the runtime. |
 | `safety_ref` | no | The device's safety document: a path read relative to the device folder (e.g. `SAFETY.md`), or an `http(s)://` URL downloaded. Resolved at boot by HAL into pure gate functions (`hal/safety/policy.py`, see `SAFETY-SPEC.md`); the per-capability anchor-consistency check is a warning. |
 | `manufacturer` | no | Informational, not parsed — who makes the body (`Pollen Robotics`, `Unitree`). |
 | `extends` | no | Informational, not parsed — records which profile a declaration was copied from (`_base`). |

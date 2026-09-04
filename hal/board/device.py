@@ -213,6 +213,9 @@ class DeviceProfile:
     schema: str
     boards: List[str]
     safety_ref: str
+    # Kinematic description (URDF) for geometric safety bounds; see
+    # robots/contract/ROBOT-SPEC.md. Empty when the body declares none.
+    urdf_ref: str
     memory_backend: str
     startup_volume: int
     capabilities: Dict[str, Capability]
@@ -263,6 +266,7 @@ def parse_device(device_type: str, text: str) -> DeviceProfile:
         schema=schema,
         boards=parse_boards(front_matter),
         safety_ref=_parse_scalar(front_matter, "safety_ref"),
+        urdf_ref=_parse_scalar(front_matter, "urdf_ref"),
         memory_backend=_parse_memory_backend(front_matter),
         startup_volume=_parse_startup_volume(front_matter),
         capabilities=capabilities,

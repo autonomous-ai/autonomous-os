@@ -571,7 +571,10 @@ class ServoMoveRequest(BaseModel):
             "elbow_pitch.pos (ID 3, min -90 max 90), "
             "wrist_roll.pos (ID 4, min -90 max 90), "
             "wrist_pitch.pos (ID 5, min -90 max 90). "
-            "Values are clamped to safe limits automatically."
+            "These bounds are the caller's responsibility. Nothing enforces "
+            "them: the only position clamp is the motor bus silently holding "
+            "the normalized range, far outside these numbers. Speed IS gated "
+            "(SAFETY.md motion.max_speed stretches the duration)."
         ),
     )
     duration: float = Field(
