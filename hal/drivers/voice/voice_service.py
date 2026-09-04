@@ -1974,6 +1974,25 @@ class VoiceService:
                     logger.info(
                         "Wake-word confirmed on assembled transcript: %r", combined
                     )
+                elif self._decorator.matches_wake_word_loosely(combined):
+                    # STT rewrote its own hypothesis: the partial that opened
+                    # the gate had the name right and the final came back with
+                    # one letter changed. Device-observed 04/09/2026 on
+                    # lamp-0c89: partial 'hello lamp' → final 'Hello, lamb.',
+                    # exact confirmation failed and the turn was dropped whole —
+                    # realtime never opened and the question fell through to the
+                    # much slower main agent. Only reachable BECAUSE a partial
+                    # matched exactly, so this cannot wake the device on a
+                    # near-miss word alone. Logged separately so it stays
+                    # countable: a lot of these means the boost terms are not
+                    # doing their job.
+                    wake_word_confirmed.set()
+                    logger.info(
+                        "Wake-word confirmed with a one-letter STT slip: %r "
+                        "(exact match failed; the partial that opened the gate "
+                        "had the name right)",
+                        combined,
+                    )
                 else:
                     logger.info(
                         "Wake-word partial rejected — no matching final STT result; dropping turn"
