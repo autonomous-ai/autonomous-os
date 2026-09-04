@@ -14,6 +14,8 @@ import logging
 import os
 from typing import Any, Dict, List, Optional
 
+from hal.drivers.motors.recording_stability import check_stable
+
 logger = logging.getLogger("hal.motion.timing")
 
 # Peak joint speed the STS3215 can actually deliver, in degrees/second.
@@ -77,12 +79,21 @@ def resample_recording(
     name: str,
     fps: float,
     policy: Any = None,
+    geometry: Any = None,
 ) -> List[Dict[str, float]]:
     """Put frames on a playback loop's own 1/fps grid.
 
     The loop steps exactly one frame per tick, so a list sampled at fps plays at
     real time by construction — no timing logic in the hot path.
+
+    Also the gate for whole-body stability: raises if a pose reaches far enough
+    off the base axis to tip the body, per the body's own declared ceiling and
+    geometry. Checked here because both motion drivers come through this
+    function, so the simulator refuses the same clip a body would. Resampling
+    only stretches time, never moves a joint, so checking the authored frames
+    covers the played ones.
     """
+    check_stable(frames, name, policy, geometry)
     stretched = stretch_timeline(times, frames, policy)
     duration = stretched[-1] - stretched[0]
     if duration <= 0:

@@ -76,6 +76,12 @@ class MotionBounds:
     # motion.stop is deterministic and never gated (you must always be able to
     # halt a body — stop/release/zero/hold are recovery actions, never refused).
     stop_always: bool = False
+    # Millimetres the whole-body centre of gravity may sit from the base axis.
+    # A tip-over is a COMBINATION of joint angles, so it cannot be written as a
+    # per-joint bound; scoring a pose needs the body's own geometry, which is
+    # why this one is only enforceable alongside ROBOT.md `urdf_ref`.
+    # None = no stability ceiling declared.
+    max_cog_offset_mm: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -211,9 +217,16 @@ def _parse_motion(motion_body: str) -> Optional[MotionBounds]:
     if max_speed is not None and max_speed <= 0:
         raise ValueError(f"SAFETY.md motion.max_speed {max_speed} must be > 0 (deg/s)")
     stop_always = bool(re.search(r"\bstop_always:\s*true\b", motion_body))
-    if max_speed is None and not stop_always:
+    max_cog = _int_field(motion_body, "max_cog_offset_mm")
+    if max_cog is not None and max_cog <= 0:
+        raise ValueError(
+            f"SAFETY.md motion.max_cog_offset_mm {max_cog} must be > 0 (mm)"
+        )
+    if max_speed is None and not stop_always and max_cog is None:
         return None
-    return MotionBounds(max_speed=max_speed, stop_always=stop_always)
+    return MotionBounds(
+        max_speed=max_speed, stop_always=stop_always, max_cog_offset_mm=max_cog
+    )
 
 
 def _parse_thermal(thermal_body: str) -> Optional[ThermalBounds]:
