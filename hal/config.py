@@ -1399,6 +1399,21 @@ REALTIME_TTS_HISTORY_MAX_CHARS: int = int(os.environ.get("HAL_REALTIME_TTS_HISTO
 # measured time-to-first-sentence, not from this default.
 REALTIME_FILLER_DELAY_S: float = float(os.environ.get("HAL_REALTIME_FILLER_DELAY_S", "1.5"))
 
+# Time-to-first-audio, text (non-native-audio) path only. Sentences are streamed
+# to TTS as they complete, so the first thing the user hears waits for a full
+# sentence terminator — and the model's opening sentence is often long. Below
+# this many characters the first utterance of a turn may instead be cut at a
+# CLAUSE boundary (comma / semicolon / colon) and spoken immediately, with the
+# remainder queued behind it; TTS is a queue, so the reply still comes out in
+# order and the split lands where a speaker would breathe anyway.
+#
+# Only ever applies to the FIRST chunk of a turn — that is the only one whose
+# latency the user is sitting in silence for. 0 disables (wait for the full
+# sentence, the pre-04/09/2026 behaviour).
+REALTIME_FIRST_CHUNK_MAX_CHARS: int = int(
+    os.environ.get("HAL_REALTIME_FIRST_CHUNK_MAX_CHARS", "90")
+)
+
 # --- Realtime: Summarizer (Anthropic Messages API) ---
 REALTIME_SUMMARIZER_ENABLED: bool = os.environ.get("HAL_REALTIME_SUMMARIZER_ENABLED", "true").lower() in ("1", "true", "yes")
 REALTIME_SUMMARIZER_API_KEY: str = os.environ.get("HAL_REALTIME_SUMMARIZER_API_KEY", "") or _os_cfg_get("llm_api_key", "")

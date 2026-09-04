@@ -182,9 +182,27 @@ tạo (`device-chat-<n>-<unix-ms>`), nên khi một sequence THẤP HƠN đến 
 tạo MUỘN HƠN run đang giữ loa, HAL coi như bộ đếm đã restart và nhận sequence mới.
 Id không có dấu thời gian (`tg-<messageID>`) vẫn theo luật sequence thuần: không có
 gì để so thì một POST cũ thật sự không được phép giành lại loa.
-### Silero canh đồng hồ im lặng (kết thúc lượt)
+### Hai đồng hồ im lặng (kết thúc lượt)
 
-Một phiên mic kết thúc khi audio nằm dưới ngưỡng RMS suốt `SILENCE_TIMEOUT_S`.
+Một phiên mic kết thúc khi audio nằm dưới ngưỡng RMS suốt ngân sách im lặng
+hiện hành. Có hai ngân sách: khi STT đã trả về một segment **final** cho lượt
+này, nhà cung cấp đã tự quyết định là người dùng nói xong (Flux phát EndOfTurn,
+nova bắn `is_final` sau cửa sổ endpointing của nó), nên vòng lặp đóng sau
+`ENDPOINT_SILENCE_S` (`HAL_ENDPOINT_SILENCE_S`, mặc định 0.8s) **tính từ lúc
+final đó về**, không phải từ lần nói cuối. Khác biệt này là điểm cốt lõi: Flux
+bắn EndOfTurn cho cả quãng lấy hơi *giữa* một câu nói, nên nếu đo từ lần nói
+cuối thì ngân sách ngắn bị áp ngược vào quãng im lặng đã trôi qua và phiên chết
+ngay frame kế tiếp trong khi người dùng còn đang nói (đo trên lamp-0c89
+04/09/2026: final `'Hello.'` lúc 09:22:50.766, phiên đóng sau đó 114ms, giữa
+câu). Chạy đồng hồ từ final cho người nói một cửa sổ thật để nói tiếp. Ngồi chờ hết
+đồng hồ dài sau bằng chứng đó là dead air nằm trước mọi lần commit realtime —
+đây là chi phí cố định lớn nhất giữa lúc người dùng ngừng nói và lúc model nghe
+được audio. Không có final thì không có bằng chứng đó, nên phiên rỗng hoặc chỉ
+có tiếng ồn vẫn giữ đồng hồ dự phòng dài `SILENCE_TIMEOUT_S` (2.5s). Đặt
+`HAL_ENDPOINT_SILENCE_S=0` để quay lại một đồng hồ dài duy nhất; tăng lên nếu
+thiết bị bắt đầu cắt lời ở những quãng nghỉ giữa câu.
+
+Phần còn lại của mục này nói về bản thân đồng hồ, và áp dụng cho cả hai.
 Chỉ dùng RMS là không đủ trong phòng ồn: tiếng ồn phòng nằm trên
 `RMS_THRESHOLD`, nên frame nào cũng refresh đồng hồ, lượt chạy tới hết
 `MAX_SESSION_DURATION_S`, và audio gần như toàn tiếng ồn vẫn được đẩy sang STT —
@@ -952,7 +970,14 @@ sớm ("hello") ngay sau khi restart sẽ rớt xuống main agent.
    nhìn như đứng hình.
 
    Cùng lúc commit cũng arm **dead-air filler** (`_WaitFiller`) — nửa phần tiếng
-   của chính cue đó. Sau `HAL_REALTIME_FILLER_DELAY_S` (mặc định 1.5s) mà vẫn
+   của chính cue đó. (Câu **đầu tiên** của một lượt không chờ dấu kết câu: khi
+   buffer đã có một mệnh đề dùng được, nó được cắt ở dấu phẩy / chấm phẩy / hai
+   chấm cuối cùng — hoặc ở khoảng trắng cuối nếu đã vượt
+   `HAL_REALTIME_FIRST_CHUNK_MAX_CHARS` — và nói ngay, phần còn lại xếp hàng
+   phía sau. Chỉ chunk đầu được cắt kiểu này vì đó là chunk duy nhất người dùng
+   phải ngồi im chờ; mệnh đề ngắn dưới 8 ký tự bị coi là cụt và tiếp tục chờ.
+   Đặt `=0` để quay lại chờ trọn câu. Native audio không bị ảnh hưởng.)
+   Sau `HAL_REALTIME_FILLER_DELAY_S` (mặc định 1.5s) mà vẫn
    chưa có output nào, HAL gọi `POST /api/sensing/filler` và os-server phát một
    câu filler mở đầu từ cache — pool phrase, ngôn ngữ và WAV cache đều nằm ở
    os-server, nên khoảng chờ realtime và khoảng chờ main agent nghe giống nhau.
