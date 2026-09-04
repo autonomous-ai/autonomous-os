@@ -53,6 +53,26 @@ MAX_TRACKING_RETRIES = 4
 _TRACKING_MOTORS = ("base_yaw", "base_pitch", "elbow_pitch", "wrist_pitch")
 
 
+def trust_window_s(detect_latency_s: float) -> float:
+    """How long to go without a detector confirm before distrusting the tracker.
+
+    Sized from the detector's MEASURED cost rather than fixed, because one loop
+    is served by detectors three orders of magnitude apart: YuNet at ~30ms,
+    local YOLO at ~0.4s, the remote open-vocab model at ~0.55s median. One redetect
+    interval plus two detections is the shortest gap a single missed confirm can
+    produce, so anything tighter reads an ordinary miss as a lost lock — which
+    is what parked the servo in WAIT-YOLO with the object plainly in frame on
+    every target the face detector does not serve.
+
+    C.TRUST_TRACKER_S remains the floor, so a fast detector keeps exactly the
+    behaviour it had.
+    """
+    return max(
+        C.TRUST_TRACKER_S,
+        C.YOLO_REDETECT_S + 2.0 * detect_latency_s + C.TRUST_MARGIN_S,
+    )
+
+
 @dataclass
 class TrackingState:
     """Mutable state for the active tracking session."""
@@ -72,8 +92,8 @@ class TrackerService:
         self._state = TrackingState()
         self._lock = threading.Lock()
         # Serializes start() so two near-simultaneous /servo/track requests don't
-        # both enter detect_object (5-7s) and end up spawning two tracking
-        # threads that fight over the same servo state.
+        # both enter seeding (seconds, worst case) and end up spawning two
+        # tracking threads that fight over the same servo state.
         self._start_lock = threading.Lock()
         self.last_error: str = ""
         self._yaw_pid = PID(C.PID_YAW_KP, C.PID_YAW_KI, C.PID_YAW_KD)
@@ -101,9 +121,11 @@ class TrackerService:
         }
 
     def detect_object(self, frame: npt.NDArray[np.uint8], target: str,
-                      strict: bool = True) -> Optional[Tuple[int, int, int, int]]:
+                      strict: bool = True,
+                      allow_remote_fallback: bool = True) -> Optional[Tuple[int, int, int, int]]:
         """Detect an object by name — see detection.ObjectDetector.detect."""
-        return self._detector.detect(frame, target, strict=strict)
+        return self._detector.detect(frame, target, strict=strict,
+                                     allow_remote_fallback=allow_remote_fallback)
 
     def start(
         self,
@@ -122,11 +144,14 @@ class TrackerService:
             logger.error("tracker start: %s", self.last_error)
             return False
 
-        if isinstance(target_label, (list, tuple)):
-            target_label = next((t for t in target_label if t), "")
+        candidates = ([t for t in target_label if t]
+                      if isinstance(target_label, (list, tuple))
+                      else [target_label] if target_label else [])
+        target_label = candidates[0] if candidates else ""
 
-        # Serialize concurrent /servo/track calls. detect_object can take 5-7s
-        # (remote YOLOWorld or first-time local YOLO load). Without this lock,
+        # Serialize concurrent /servo/track calls. Seeding measured 2.4s for
+        # three candidate labels, and the first call of a session also pays the
+        # model load (~6s). Without this lock,
         # two near-simultaneous calls both pass self.stop() (nothing to stop yet)
         # and spawn two tracking threads that race over servo state.
         if not self._start_lock.acquire(blocking=False):
@@ -135,7 +160,8 @@ class TrackerService:
             return False
         try:
             self.stop()
-            return self._start_locked(bbox, target_label, camera_capture, animation_service)
+            return self._start_locked(bbox, target_label, camera_capture,
+                                      animation_service, candidates)
         finally:
             self._start_lock.release()
 
@@ -145,6 +171,7 @@ class TrackerService:
         target_label: str,
         camera_capture,
         animation_service,
+        candidates: Optional[list] = None,
     ) -> bool:
         """Body of start() — runs while _start_lock is held."""
 
@@ -191,7 +218,41 @@ class TrackerService:
                     animation_service.unfreeze()
                     return False
                 t_yolo0 = time.perf_counter()
-                bbox = self.detect_object(frame, target_label)
+                # Try every candidate label the caller offered and keep the
+                # most confident hit. The API has always documented this
+                # ("pass a list when unsure of the exact word"); until now the
+                # list was truncated to its first entry, so a caller hedging
+                # between near-synonyms got one guess and a failure. It matters
+                # most for exactly the objects this path is weakest on: COCO
+                # splits hairs a speaker does not — bottle is not cup, and a
+                # user holding a water bottle says "cup". Seeding happens once
+                # per session and local detection is ~300ms, so a second or
+                # third look is affordable here in a way it would not be in the
+                # fast loop.
+                # Local sweep first, across ALL candidates, before any of them
+                # is allowed the remote detector. Interleaving them instead
+                # (local then remote, per candidate) makes a miss on the first
+                # word pay a network round-trip before the second word is tried at
+                # all — measured at 5.7s to seed three candidates, against a
+                # 10s session budget. Remote is the fallback for the QUESTION,
+                # not for each guess at how to word it.
+                probe = list(candidates or [target_label])
+                bbox = None
+                best_conf = -1.0
+                for allow_remote in (False, True):
+                    for label in probe:
+                        found = self.detect_object(frame, label,
+                                                   allow_remote_fallback=allow_remote)
+                        if found is None:
+                            continue
+                        conf = self._detector.last_confidence or 0.0
+                        if conf > best_conf:
+                            bbox, best_conf, target_label = found, conf, label
+                    if bbox is not None:
+                        break
+                if bbox is not None and len(candidates or []) > 1:
+                    logger.info("[track-start] chose '%s' conf=%.3f from candidates %s",
+                                target_label, best_conf, candidates)
                 t_yolo_ms = (time.perf_counter() - t_yolo0) * 1000
                 if bbox is None:
                     self.last_error = f"'{target_label}' not found in frame"
@@ -363,6 +424,10 @@ class TrackerService:
         last_yolo_t = track_start_t
         # Detector-gated trust: skip servo if YOLO hasn't confirmed target recently.
         last_yolo_confirm_t = track_start_t
+        # Measured detector cost (EMA, seconds), maintained by _fire_yolo. 0
+        # until the first redetect returns; the trust window falls back to the
+        # constant floor until then.
+        detect_latency_s = 0.0
         fps_t0 = track_start_t
 
         # Queue for background YOLO results (maxsize=1 → latest result only).
@@ -410,9 +475,21 @@ class TrackerService:
             return True
 
         def _fire_yolo(frame_snap: npt.NDArray[np.uint8]) -> None:
+            nonlocal detect_latency_s
             t0_yolo = time.perf_counter()
-            result = self.detect_object(frame_snap, state.target_label, strict=False)
+            # No remote fallback on a routine redetect: this call confirms a
+            # lock we already have, and a remote round-trip would stall the
+            # single-flight detect thread long enough to trip the trust gate
+            # below. Recovery paths (_do_retry, session seeding) still allow it.
+            result = self.detect_object(frame_snap, state.target_label, strict=False,
+                                        allow_remote_fallback=False)
             t_yolo_ms = (time.perf_counter() - t0_yolo) * 1000
+            # EMA of what this detector actually costs, which is what sizes the
+            # trust window (see trust_window_s). Measured rather than declared:
+            # the same code serves YuNet (~30ms), local YOLO (~0.5s) and the
+            # remote model (~2s), and a constant tuned for one starves the others.
+            detect_latency_s = (0.7 * detect_latency_s + 0.3 * (t_yolo_ms / 1000.0)
+                                if detect_latency_s > 0 else t_yolo_ms / 1000.0)
             logger.info("[yolo-bg] detect=%.0fms result=%s bbox=%s target='%s'",
                         t_yolo_ms, "found" if result is not None else "missed", result, state.target_label)
             if result is None:
@@ -611,6 +688,7 @@ class TrackerService:
                 moving_ff = speed_pxs > C.VFF_MOVING_MIN_PXS
                 centered = err_dx == 0.0 and err_dy == 0.0
                 yolo_age = now_t - last_yolo_confirm_t
+                trust_window = trust_window_s(detect_latency_s)
                 # Bbox-trust guard: ViT bloated past its last trusted lock (or the
                 # absolute ceiling) → centroid is garbage. Hold the servo instead
                 # of chasing it; YOLO redetect / ghost-lock retry will relock.
@@ -672,7 +750,7 @@ class TrackerService:
                     self._pitch_pid.reset()
                     motion_state = "LOW-CONF-HOLD"
                     self._follower.hold()
-                elif yolo_age >= C.TRUST_TRACKER_S and confidence < C.TRACKER_TRUST_CONF:
+                elif yolo_age >= trust_window and confidence < C.TRACKER_TRUST_CONF:
                     # Tracker AND detector both unsure — hold servo, don't chase
                     # phantom. If ViT confidence is high we trust the tracker
                     # even without detector confirm (face moving fast often makes

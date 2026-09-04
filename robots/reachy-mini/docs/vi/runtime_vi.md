@@ -410,6 +410,35 @@ thread đang kẹt trong lần tải thư viện HF đầu tiên (chậm) không
 Backend Feetech có sẵn tính chất này: `aim` dừng event loop trước khi move, và
 loop đó là nguồn ghi duy nhất.
 
+### Thư viện move
+
+Move được tra trên nhiều dataset HF theo thứ tự — dataset ĐẦU TIÊN có tên đó
+thắng. Mặc định tìm trong hai thư viện, `pollen-robotics/reachy-mini-emotions-library`
+và `pollen-robotics/reachy-mini-dances-library`; cả hai đều được daemon tải sẵn
+lúc khởi động nên tra thêm không tốn lượt tải nào.
+
+`HAL_REACHY_MOVES` chèn dataset lên đầu thứ tự đó:
+
+```bash
+HAL_REACHY_MOVES="me/my-moves,someone/their-moves"
+```
+
+Move bạn tự ghi rồi đẩy lên Hub sẽ phát được bằng tên qua `/servo/play`, và gắn
+vào `_MOVE_MAP` thì đứng sau một emotion. Vì dataset tự chọn được xếp trước, đặt
+trùng tên với move chính chủ sẽ **che** move đó — đây chính là cách thay một
+emotion mặc định bằng bản của mình.
+
+Hai hệ quả cần biết trước khi thêm:
+
+- Dataset daemon chưa tải sẵn sẽ được tải lúc dùng lần đầu, ngay trong thread
+  phát. Nên lần phát đầu của một community move có thể chậm; robot không treo,
+  nó đang tải.
+- Thư viện nạp lỗi (đổi tên, bị gỡ khỏi Hub, mất mạng) chỉ bị bỏ qua kèm warning
+  chứ không kéo theo các thư viện khác — mất một dataset cộng đồng không được
+  phép làm robot mất luôn emotion chính chủ.
+
+Mọi move đều đi qua speed gate bất kể đến từ đâu, xem **Safety Delta**.
+
 ### Ramp khi vào animation
 
 Move của Pollen là quỹ đạo tuyệt đối bắt đầu ở frame 0 của chính nó, mà
@@ -467,12 +496,28 @@ Machine bounds hiện tại trong `SAFETY.md`:
 
 ```yaml
 motion:
-  max_speed: 60
+  max_speed: 800
   stop_always: true
 ```
 
-Safety layer chung của HAL kéo dài duration để giữ `max_speed`. `stop`, `zero`,
-`hold`, và `release` vẫn là hành động recovery deterministic.
+Safety layer chung của HAL kéo dài duration để giữ `max_speed` cho move được
+yêu cầu (aim/nudge/goto). **Recorded move** thì không kéo dài được: daemon
+stream cả trajectory còn HAL đứng ngoài vòng, nên move bị quét trước khi phát và
+bị từ chối nếu tốc độ xoay đầu đỉnh vượt trần — `peak_head_dps()` /
+`_move_refused()` trong driver.
+
+`max_speed` từng là `60` khi nó mới chỉ là số tạm; quét cả 85 move của
+`pollen-robotics/reachy-mini-emotions-library` cho ra median 111 deg/s, p90 293
+và max 766 — tức 60 sẽ từ chối 63 move của chính hãng. 800 nằm ngay trên trần
+của chính hãng và VẪN cần đo trên phần cứng thật, xem `robots/reachy-mini/SAFETY.md`.
+
+Tốc độ đo bằng góc quay thật giữa hai hướng đầu trên cửa sổ tối thiểu 20 ms. Sai
+phân từng trục euler bị vọt ở điểm gimbal, còn lấy từng cặp frame thô thì biến
+nhiễu timestamp thành tốc độ đầu không bao giờ đạt (`wake-mini-up` đọc ra 17226
+deg/s từ một khoảng 1 ms, đo đúng thì là 766). Chuyển động tịnh tiến của đầu
+không bị bound: `max_speed` tính bằng deg/s còn `head_x/y/z` là milimet.
+
+`stop`, `zero`, `hold`, và `release` vẫn là hành động recovery deterministic.
 
 Chưa thêm block `thermal` cho tới khi đo được thermal profile của Raspberry Pi
 trên bản Wireless thật.

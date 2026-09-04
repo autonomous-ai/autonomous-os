@@ -395,6 +395,7 @@ async def lifespan(app: FastAPI):
                 svc = AnimationService(
                     port=SERVO_PORT, lamp_id=DEVICE_ID, fps=SERVO_FPS,
                     duration=SERVO_PLAY_RAMP_S, hold_s=SERVO_HOLD_S,
+                    safety_policy=_safety,
                 )
             else:
                 # SDK backends carry the safety policy themselves: their play

@@ -51,11 +51,12 @@ The camera runs **1280×720**. Every heavy vision component — the ViT tracker 
 | Path | Detector | When | Speed (A523) |
 |------|----------|------|--------------|
 | 0 | **YuNet** face detector (`face_detection_yunet_2023mar.onnx`) | target ∈ {`face`, `human face`, `khuôn mặt`, `mặt`} | ~30 ms |
-| 1 | **Local YOLOv8n** (COCO classes, `yolov8n.pt`, imgsz=320) | target maps to a COCO class | ~260–770 ms |
-| 2 | **Remote YOLOWorld** open-vocab (`{DL_BACKEND_URL}/detect/yoloworld`) | non-COCO target, or local miss (fallback) | ~1.3–2.8 s |
+| 1 | **Local YOLOv8n** (COCO classes, `yolov8n.pt`, imgsz=448) | target maps to a COCO class | ~310–530 ms, median ~360 ms (measured on lamp-0c89, 1280x720 input) |
+| 2 | **Remote YOLOWorld** open-vocab (`{DL_BACKEND_URL}/detect/yoloworld`) | non-COCO target, or local miss (fallback) | **~0.55 s median** (334 ms min, 1.1 s p90, 2.0 s max; n=49 on lamp-0c89) |
 
 - COCO has no hand/face class, so `hand`/`face` intentionally fall through to YuNet/YOLOWorld instead of mapping to `person` (which locked onto the whole body).
 - On a local-YOLO miss the code falls back to remote YOLOWorld, **throttled** to at most one attempt per `REMOTE_FALLBACK_MIN_INTERVAL` (2.0 s) so a genuinely unseeable target doesn't hit remote every redetect.
+- **The fallback is off for routine redetects** (`allow_remote_fallback=False`, passed by the loop's background scan). Once a COCO target is locked, a local miss is ordinary — the object turned, one blurred frame — and the detect thread is single-flight, so a remote round-trip stretches a ~0.5 s confirm cycle to ~3 s, trips the trust gate and parks the servo with the object still in frame. Local is the authority for a class it was trained on; the next redetect confirms. Seeding and post-loss recovery (`_do_retry`) still allow remote, and an open-vocab target is unaffected — with no local path there is nothing to fall back from.
 - Detection quality filters: confidence ≥ `DETECT_MIN_CONFIDENCE` (0.15), area between `DETECT_MIN_AREA_RATIO` (0.3%) and `DETECT_MAX_AREA_RATIO` (80%) of frame.
 - **Lookalike guard (local path)** — local YOLO detects **unrestricted** (no `classes=` filter) so competing classes stay visible, then: (a) the confusion cluster cell phone / mouse / remote needs conf ≥ 0.35 (`_CONFUSABLE_CONF_FLOOR`) instead of the global 0.15; (b) **cross-class disambiguation** — if a box of another class overlaps the candidate (IoU ≥ 0.5) with *higher* confidence, the candidate is rejected ("that's probably a mouse, not the phone you asked for") and the code falls through to the remote fallback. The 0.35 floor applies only to the session-start detect (`strict=True`); mid-session redetects use the global 0.15 floor (a fast-moving phone reconfirms at conf 0.2–0.3, and the reinit gates already protect the lock) — cross-class disambiguation stays on in both modes.
 
@@ -112,7 +113,7 @@ Hardware motion during tracking: at every session start the HAL explicitly write
   - `BBOX_FREEZE_RATIO` (1.0) — bbox ≥ full frame area ⇒ ViT dissolved.
   - `BLOAT_HOLD_MULT` (3.0) — bbox > 3× the last trusted lock area ⇒ hold and force a re-detect.
 - **Servo confidence floor** — ViT confidence < `SERVO_MIN_CONF` (0.25) holds the servo (`LOW-CONF-HOLD`) even while the detector is still confirming the target; without it, conf 0.15–0.4 with a fresh confirm was a blind zone that kept the servo chasing a barely-held (often ghost) lock. The tracker keeps updating and the PID resumes when confidence recovers.
-- **Detector-gated trust** — if no detector has confirmed for `TRUST_TRACKER_S` (2.5 s) and ViT confidence < `TRACKER_TRUST_CONF` (0.4), hold the servo (`WAIT-YOLO`) rather than chase a phantom; high ViT confidence keeps firing even without a fresh detector confirm.
+- **Detector-gated trust** — if no detector has confirmed within the trust window and ViT confidence < `TRACKER_TRUST_CONF` (0.4), hold the servo (`WAIT-YOLO`) rather than chase a phantom; high ViT confidence keeps firing even without a fresh detector confirm. The window is **sized from the detector's measured latency**, not fixed: `trust_window_s()` returns `max(TRUST_TRACKER_S, YOLO_REDETECT_S + 2 x latency + TRUST_MARGIN_S)`, where latency is an EMA maintained by the background scan. One loop is served by detectors three orders of magnitude apart (YuNet ~30 ms, local YOLO ~0.4 s, remote ~0.55 s median), so a single constant is only correct for the fastest — and 2.5 s meant every slower target sat in `WAIT-YOLO` with the object plainly visible. The floor keeps face behaviour identical.
 - **Hold really holds** — every hold state (`LOW-CONF-HOLD`, `WAIT-YOLO`, `BLOAT-HOLD`, low-confidence skip frames) retargets the follow worker to the *current* pose (`ServoFollower.hold()`). Previously a hold only stopped publishing new goals, so the worker kept gliding toward the last stale goal — the arm visibly chased a ghost for a beat after the lock had gone bad.
 
 ### Pixel-to-Degree Conversion
@@ -162,10 +163,10 @@ pitch_correction = clamp(PID(soft_deadband(dy)) + VFF·vy·deg_per_px·dt,  ±5�
 | `CONFIDENCE_THRESHOLD` | 0.15 | Below this = low-confidence frame |
 | `LOW_CONF_WINDOW` / `LOW_CONF_STOP_COUNT` | 15 / 8 | Sliding window: ≥8 low frames in the last 15 → stop (a consecutive counter was reset by every above-threshold flicker, letting ghost locks live forever) |
 | `SERVO_MIN_CONF` | 0.25 | Confidence floor for firing the servo PID at all |
-| `TRACKER_TRUST_CONF` / `TRUST_TRACKER_S` | 0.4 / 2.5 | Detector-gated trust (see above) |
+| `TRACKER_TRUST_CONF` / `TRUST_TRACKER_S` / `TRUST_MARGIN_S` | 0.4 / 2.5 / 0.5 | Detector-gated trust (see above). `TRUST_TRACKER_S` is the **floor**, not the window — the window is derived per session from measured detector latency |
 | `YOLO_MAX_MISS` | 30 | Consecutive tracker misses before retry |
 | `MAX_TRACK_DURATION_S` | `HAL_TRACKING_MAX_DURATION_S` (10) | Auto-stop timeout (10 s default; configured per device) |
-| `_LOCAL_IMGSZ` | 320 | Local YOLO inference size (640 → 1.3–2.9 s, too slow) |
+| `_LOCAL_IMGSZ` | 448 | Local YOLO inference size. This IS the detector's effective resolution — YOLO letterboxes any input down to it, so against the 1280-wide camera 448 reaches the model at 0.35x where 320 reached it at 0.25x. Small desk objects (cup, book, phone) arrived ~30px at 320 and were missed. Re-export the ONNX after changing it; the size is baked in. (640 measured 1.3–2.9 s on torch — still out of reach.) |
 
 All knobs live in `hal/drivers/tracking/constants.py`. (The old dead `GIMBAL_*` / `EMA_ALPHA` proportional path was removed in the package split.)
 
@@ -305,7 +306,9 @@ Camera section shows:
 
 - `opencv-python>=4.8.0` (already in `pyproject.toml`)
 - `ultralytics` — local YOLOv8n inference
-- `vittrack.onnx`, `yolov8n.pt`, `face_detection_yunet_2023mar.onnx` — checked into `hal/drivers/tracking/models/`
+- `vittrack.onnx`, `yolov8n.pt`, `face_detection_yunet_2023mar.onnx` — checked into `hal/drivers/tracking/models/`, so deploy is one rsync and the device needs no internet at boot.
+
+> **Don't export YOLO to ONNX to speed it up.** Tried and reverted. Benchmarked on lamp-0c89 at imgsz 448, interleaved: `.pt` via torch 310/360/427/526 ms (min/p50/p90/max, n=25) against `.onnx` via onnxruntime 179/245/561/607 ms — ONNX won the median, lost the tail, and a first sequential run had them the other way round. Contention with HAL's camera, voice and servo loops on four cores swamps the difference. It also saves no dependency (`ultralytics` pulls torch regardless and is what loads the `.onnx`), while costing 6 MB and baking `_LOCAL_IMGSZ` into the export.
 - `requests` (already in project)
 - **YOLOWorld API** — DL backend at `{DL_BACKEND_URL}/detect/yoloworld` (open-vocab fallback only)
 
@@ -323,7 +326,7 @@ Resuming idle is an **explicit dispatch**, not a side effect of clearing the tra
 
 ## Performance Notes
 
-- Fast-loop CPU floor on the Allwinner A523 is ViT inference + detector cost; the frame downscale (`VISION_MAX_WIDTH`) and local imgsz=320 are the main levers.
+- Fast-loop CPU floor on the Allwinner A523 is ViT inference + detector cost; the frame downscale (`VISION_MAX_WIDTH`) and local imgsz are the main levers. Note `VISION_MAX_WIDTH` is not a lever on detection *accuracy*: YOLO letterboxes to `_LOCAL_IMGSZ` regardless of the input size, so pre-downscaling the frame changes the tracker's cost, not the scale the detector sees.
 - Motion smoothness comes from the decoupled servo worker + SmoothDamp + velocity feedforward; the alpha-beta filter + reinit gating keep the goal itself stable so the follower isn't chasing noise.
 - Small/far objects (e.g. a cup across the room) can exceed both local and remote detector resolution — a perception limit, not a control bug.
 
@@ -747,6 +750,14 @@ Three further behaviours are worth stating because each was a bug first:
 - **It will not turn away from a face already in frame.** If a face was seen within
   `HAL_GAZE_REPOINT_SKIP_IF_FACE_S`, a speech-triggered reacquire declines: after a climb has found
   the user's face *above* the bearing, obeying the bearing means turning back down to look at nobody.
+- **The hold ends with the utterance.** A speech-triggered reacquire points the lamp with
+  `move_and_hold`, which drops whatever recording was playing and sets `_idle_settled` — correct
+  for the utterance, wrong afterwards, because nothing else re-arms idle. The lamp simply stopped
+  moving and stayed frozen until a HAL restart (measured on lamp-0c89 03/09/2026: `[preempt]
+  dropped recording 'idle' for a direct move` at 16:23:40, still motionless at 16:25:58, no further
+  log). `on_speech_end` now hands the body back with `dispatch(play, idle)` — the same handover the
+  tracker does when it ends — and skips it when tracking, hold/zero mode or a scene owns the body,
+  since each of those has its own release.
 
 Every decline is logged with its reason (`[gaze] no repoint: …`), throttled so a standing condition
 prints once a minute rather than once a pass.

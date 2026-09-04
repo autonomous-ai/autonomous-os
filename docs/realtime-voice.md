@@ -105,7 +105,20 @@ with the `:3` intensifier.
 
 Every STT-final-confirmed wake-word turn reaches dispatch. It opens a 20-second
 follow-up focus window (reset after every authorized turn), so the next spoken
-turn can omit the wake phrase and is sent as `voice_followup`. A follow-up has
+turn can omit the wake phrase and is sent as `voice_followup`.
+
+That window is latched once at session start for **dispatch**, so a window that
+expires mid-sentence cannot cut off someone already speaking. The cues that
+claim to be the addressee — the listening LED, the backchannel — ask
+`is_addressed()` instead, which re-reads the window **live**. Gaze is why: it
+can open the window in the middle of the very sentence it acknowledges.
+Device-observed 04/09/2026 on lamp-0c89 — at speech start the camera had no
+face evidence yet (`of 0` samples) so the latch was False, and the watcher only
+confirmed the user 3.6 s later at speech END. The whole turn ran unaddressed:
+no listening cue, no realtime turn (`route=realtime_not_started`, so no
+thinking cue either), and the device sat dark through the sentence and lit up
+only for the next one. Reading live can only ADD an addressed turn, never
+retract one — the latch is still consulted first. A follow-up has
 the same user priority as `voice_command`, but remains separately observable.
 When realtime already spoke, dispatch sends a `voice_agent_handled`
 synchronization event so the main agent records the exchange but stays silent;
@@ -184,10 +197,46 @@ injects next to `_on_speak_end`, which routes into the same
 for the same reason the playback feed is: only the agentic runtime's own reply
 may enter the model's context, never a dropped filler or system notice.
 
-### Silero guards the silence clock (end of turn)
+`turn_seq` is os-server's counter, but the threshold it is compared against
+lives in the HAL process, and the two restart independently. A deploy, OTA or
+crash restarts the count at 1 while HAL still holds the old high-water mark, so
+every turn of the new session looks like a late arrival and is dropped —
+measured 03/09/2026: `seq=1` against `latest_seq=40` silenced the wake greeting
+(its LED and servo still ran) and would have silenced the next 39 turns. The run
+id carries its creation time (`device-chat-<n>-<unix-ms>`), so when a LOWER OR
+EQUAL sequence arrives from a run created LATER than the one holding the speaker,
+HAL treats the counter as restarted and adopts the new sequence. Equal counts
+because a restart resets to 1, so the new run only falls BELOW the old mark when
+that mark is high — with a low mark (two restarts in a row, or a restart early in
+a session) the sequences collide instead. Measured 04/09/2026: `seq=2` met an
+unrelated `seq=2` from before the restart and the wake greeting was dropped, the
+same silent-device symptom one comparison away. Ids without a stamp
+(`tg-<messageID>`) keep the plain sequence rule: with nothing to compare, a
+genuinely stale POST must not be able to take the speaker back.
 
-A mic session ends when the audio stays below the RMS threshold for
-`SILENCE_TIMEOUT_S`. RMS alone is not enough in a noisy room: room noise sits
+### Two silence clocks (end of turn)
+
+A mic session ends when the audio stays below the RMS threshold for the current
+silence budget. There are two: once STT has delivered a **final** segment for
+this turn, the provider has already decided the user stopped (Flux emits
+EndOfTurn, nova fires `is_final` after its own endpointing window), so the loop
+closes `ENDPOINT_SILENCE_S` (`HAL_ENDPOINT_SILENCE_S`, default 0.8s) **after
+that final arrived** — not after the last speech. The distinction is the whole
+point: Flux emits an EndOfTurn for a breath pause *inside* one utterance, and
+measuring from the last speech applies the short budget retroactively to
+silence already spent, so such a final closes the session on the next frame
+while the user is still talking (device-observed 04/09/2026 on lamp-0c89:
+final `'Hello.'` at 09:22:50.766, session closed 114ms later, mid-sentence).
+Running the clock from the final gives the speaker a real window to carry on.
+Sitting on the long clock after that evidence is dead air in front of every
+realtime commit — it was the largest fixed cost between the user falling silent
+and the model hearing the audio. With no final in hand there is no such
+evidence, so an empty or noise-only session keeps the long fallback clock,
+`SILENCE_TIMEOUT_S` (2.5s). Set `HAL_ENDPOINT_SILENCE_S=0` to go back to the
+single long clock; raise it if the device starts cutting people off at natural
+mid-sentence pauses.
+
+The rest of this section is about the clock itself, and applies to both. RMS alone is not enough in a noisy room: room noise sits
 above `RMS_THRESHOLD`, so every frame refreshed the clock, the turn ran to
 `MAX_SESSION_DURATION_S`, and mostly-noise audio went to STT — the 18/08/2026
 observation was 8–25 second sessions coming back with `transcript='(empty)'`.
@@ -675,6 +724,21 @@ a client-side failure. HAL also recycles Gemini synchronously before streaming a
 the previous turn ended more than `HAL_GEMINI_PRE_TURN_RECYCLE_S` seconds ago, so
 post-idle speech does not land on a proxy-dropped session.
 
+**Idle parking.** A Gemini session nobody is talking to is closed by the server
+with WS `1008` "The operation was aborted" (measured idle lifetimes: 86-198 s).
+That close costs no turn — the pre-turn recycle above already replaces the
+session before any post-idle turn streams — but the backend logs it as an error
+and alerts on it, so the device closes first. After
+`HAL_GEMINI_IDLE_PARK_S` seconds with no turn activity, an `rt-idle-park`
+watchdog thread disconnects the transport and marks the session *parked*. A
+parked orchestrator still reports `available`: the next `prepare_turn()`
+reconnects a fresh session synchronously (`idle-park-resume`) before any audio
+is streamed, which is exactly what the pre-turn recycle would have done for that
+turn anyway, and `voice_service` buffers the capture across the ~1 s handshake.
+Parking is skipped while a turn is in flight, and a resume that cannot connect
+reports unavailable (turn falls back to the main agent) while staying parked so
+the next turn retries.
+
 All providers treat teardown as terminal: once `disconnect()` sets the stop
 signal, send/receive workers neither reconnect nor emit transport-failure logs
 while their closed socket unwinds.
@@ -740,6 +804,18 @@ queue-based contract:
   `OutputBase` until a `TurnDoneEvent`, or until no event arrives within
   `HAL_REALTIME_RECV_QUEUE_TIMEOUT_S` — default 8 s — which ends the turn quietly
   so a silent/no-response turn falls back to the main agent without long dead-air).
+  That gap window alone cannot tell a model that chose not to answer from one
+  that is **working**: a turn grounded with Google Search emits no output at all
+  until the search returns, and ending it there throws away an answer the model
+  was about to give, hands the turn to the far slower main agent, and still pays
+  for the abandoned search (whose chunks land in the session context and are
+  re-billed on every later turn). The two are not alike on the wire, though — a
+  working turn keeps sending messages that never reach the queue (thought parts,
+  grounding metadata, usage-only frames), while an abandoned one goes completely
+  quiet. Providers call `note_server_activity()` on every inbound message, and
+  `receive()` keeps the turn alive past the gap window while those keep arriving,
+  up to `HAL_REALTIME_TURN_MAX_SILENCE_S` (default 20 s) for the whole turn.
+  A turn with no inbound traffic at all still ends on the first gap window.
 - `available` ⇔ the websocket/session is connected (`_connected`).
 
 ### OpenAI connection safety
@@ -1026,6 +1102,16 @@ turn ("hello") right after a restart would leak to the main agent.
    in the middle of a live turn.
 5. **Consume.** `for output in stream_output()`:
    - `TextOutput` → sentences are flushed to TTS (`speak` / `speak_queue`).
+     The **first** utterance of a turn does not wait for a sentence terminator:
+     once the buffer holds a usable clause it is cut at the last comma /
+     semicolon / colon (or, past `HAL_REALTIME_FIRST_CHUNK_MAX_CHARS`, at the
+     last word break) and spoken immediately, with the remainder queued behind
+     it — the split lands where a speaker would breathe, and only the first
+     chunk is ever cut this way because it is the only one the user waits out in
+     silence. A clause shorter than 8 characters is a runt ("Sure,") and keeps
+     buffering. `HAL_REALTIME_FIRST_CHUNK_MAX_CHARS=0` restores waiting for the
+     full sentence. Native audio is unaffected: the model's own audio streams
+     frame by frame and never went through this path.
      If `speak` returns busy (another non-interruptible TTS holds the
      speaker, e.g. an ambient nudge), the sentence falls back to
      `speak_queue` so the reply plays after it instead of being lost.
@@ -1167,21 +1253,26 @@ is a top-level `config.json` flag:
 | Variable | Default | Notes |
 |----------|---------|-------|
 | `HAL_REALTIME_ENABLED` | `true` | Master gate for the realtime pipeline |
-| `wakeword` | ROBOT.md `voice.wakeword` on a fresh config, else `false` | Top-level config-file wake-word gate. When true, a matching interim transcript is provisional only: HAL commits buffered audio to realtime or forwards a command only after an STT **final** result confirms a configured wake phrase. The transcript is split into sentences (`.` `!` `?`) and the phrase is accepted at the start **or the end** of any sentence; mid-sentence occurrences are rejected. The confirmation re-checks the assembled, still-punctuated transcript so the `\w+`-only merge step cannot retract a gate a partial opened. The supported prefixes are `hello`, `hey`, `hi`, `alo`, `okay`, `ok`, and `wake up`, applied to the permanent common alias (`hey autonomous`), device type (`hey lamp`), and current agent name (`hey Luna`). A runtime rename updates only the agent-name aliases. Bare names and other prefixes do not arm the gate. A rejected utterance is discarded and its transient listening LED restores to the normal resting state; it never leaves the persistent idle effect active. A confirmed turn opens the follow-up focus window; turns in that window are forwarded as `voice_followup` without another phrase. Every authorized turn dispatches to os-server: a spoken realtime reply becomes a silent `voice_agent_handled` sync event; unavailable, silent, failed, or delegated realtime follows the normal path. If realtime is disabled, the confirmed final transcript follows the normal os-server path. Missing/false preserves the pre-gate always-listening flow unchanged. On a config.json os-server creates, the initial value comes from the body's `voice.wakeword` (see Wake-word gate above); a config loaded without the key stays `false`. HAL restarts after a local Settings save or MQTT `wakeword.gate`. |
+| `wakeword` | ROBOT.md `voice.wakeword` on a fresh config, else `false` | Top-level config-file wake-word gate. When true, a matching interim transcript is provisional only: HAL commits buffered audio to realtime or forwards a command only after an STT **final** result confirms a configured wake phrase. The transcript is split into sentences (`.` `!` `?`) and the phrase is accepted at the start **or the end** of any sentence; mid-sentence occurrences are rejected. The confirmation re-checks the assembled, still-punctuated transcript so the `\w+`-only merge step cannot retract a gate a partial opened. If that exact re-check fails but a partial had already matched exactly, the name alone may differ by one letter and the gate still confirms: STT rewrites its own hypothesis in the final, and on lamp-0c89 (04/09/2026) the partial `hello lamp` came back as `Hello, lamb.`, which dropped the whole turn — no realtime turn, no thinking cue, and the question fell through to the much slower main agent. The prefix (`hello`, `hey`, …) must still match exactly and the loose rule can never OPEN a gate, only confirm one an exact partial opened, so a near-miss word in ambient speech still wakes nothing. It is logged as `Wake-word confirmed with a one-letter STT slip` so the rate stays countable — many of them means the STT boost terms are not doing their job. The supported prefixes are `hello`, `hey`, `hi`, `alo`, `okay`, `ok`, and `wake up`, applied to the permanent common alias (`hey autonomous`), device type (`hey lamp`), and current agent name (`hey Luna`). A runtime rename updates only the agent-name aliases. Bare names and other prefixes do not arm the gate. A rejected utterance is discarded and its transient listening LED restores to the normal resting state; it never leaves the persistent idle effect active. A confirmed turn opens the follow-up focus window; turns in that window are forwarded as `voice_followup` without another phrase. Every authorized turn dispatches to os-server: a spoken realtime reply becomes a silent `voice_agent_handled` sync event; unavailable, silent, failed, or delegated realtime follows the normal path. If realtime is disabled, the confirmed final transcript follows the normal os-server path. Missing/false preserves the pre-gate always-listening flow unchanged. On a config.json os-server creates, the initial value comes from the body's `voice.wakeword` (see Wake-word gate above); a config loaded without the key stays `false`. HAL restarts after a local Settings save or MQTT `wakeword.gate`. |
 | `HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S` | `20` | Idle seconds for the short post-command focus window. Each accepted `voice_command` or `voice_followup` refreshes it. `0` disables follow-ups and requires a wake phrase for every mic session. Ignored when `wakeword` is false. |
+| `HAL_ENDPOINT_SILENCE_S` | `0.8` | Silence needed to close the turn once STT has emitted a final segment, measured from that final's arrival (a mid-utterance EndOfTurn therefore cannot close the session retroactively). `0` disables it, leaving only the long `HAL_SILENCE_TIMEOUT` clock. |
 | `HAL_SILENCE_VAD_ENABLED` | `true` | Require Silero to confirm speech before the end-of-turn silence clock is refreshed. RMS remains the cheap pre-gate; set `false` to fall back to pure-RMS silence detection. |
 | `HAL_SILENCE_VAD_WINDOW_FRAMES` | `3` | Number of frames batched per Silero run for that check — Silero costs ~20 ms/frame on ARM and its LSTM needs more than one 64 ms frame to settle. |
 | `HAL_REALTIME_PROVIDER` | `gemini` | `none` \| `gemini` \| `openai` \| `qwen` |
 | `HAL_REALTIME_TURN_DETECTION` | `off` | `server_vad` \| `semantic_vad` \| `off` (Gemini: off = manual activity detection) |
 | `HAL_REALTIME_RECV_QUEUE_TIMEOUT_S` | `8.0` | Max seconds `receive()` waits for the next output event before ending a silent turn (fallback to main agent) |
+| `HAL_REALTIME_GROUNDING_DEBUG` | `false` | Dump every field of Gemini's `grounding_metadata` verbatim, once per grounded turn (`grounding_chunks`, `grounding_supports`, `search_entry_point`, …). Diagnostic only and verbose; it exists to tell a turn whose search genuinely returned nothing from one whose payload was stripped in transit. Measured on lamp-0c89 04/09/2026 over four grounded turns, the payload always arrived complete, so a `chunks=0` turn means the model did not ground that answer. |
+| `HAL_REALTIME_TURN_MAX_SILENCE_S` | `20.0` | Ceiling on how long one turn may stay silent while the server keeps sending messages. `receive()` extends a turn past `HAL_REALTIME_RECV_QUEUE_TIMEOUT_S` only while inbound traffic proves the model is still working (a grounded search emits nothing until it returns); this stops a server that chatters without ever producing output from hanging the turn. `0` disables the keep-alive and restores the plain gap watchdog. |
 | `HAL_REALTIME_LOOK_RECV_TIMEOUT_S` | `20.0` | Silent-turn watchdog used instead of the default for turns where a `look` fired (per-turn, via `extend_recv_timeout()`). Gemini's forced thinking over a text-dense frame can stay silent >8 s right before the answer — the default watchdog was killing those turns. Raising it delays the look-frame handoff, so keep `HAL_GEMINI_VISION_HANDOFF_MAX_AGE_S` above it |
 | `HAL_REALTIME_REQUIRE_TRANSCRIPT` | `true` | Never commit an empty-STT turn to the model. A final transcript containing only punctuation or symbols (for example `.`) is normalized to empty before gaze, speaker-ID, realtime, dispatch, or follow-up refresh; it cannot create a `voice_followup`. Real speech that nova-3 missed (short utterances) is voiced and passes the VAD/Silero guards, so committing its raw audio makes the model invent a reply to silence (a generic greeting, often with a name nobody said). When `true`, any empty-STT turn is dropped regardless of duration/voicing — silence beats a wrong reply. Set `false` to fall back to the Silero-gated audio-only path below. |
 | `HAL_REALTIME_AI_REJECT_FILTER` | `true` | Registers `reject_turn` and enables the isolated `should_drop_realtime_rejection()` policy gate. An explicit tool call drops a transcript before OS dispatch; a silent model completion, timeout, or error still falls back to the main agent. The separate deterministic noise guard is also terminal for audio it already classified as non-speech. Set `false` to disable this experimental AI filter without changing the rest of realtime routing. |
+| `HAL_REALTIME_FIRST_CHUNK_MAX_CHARS` | `90` | Time-to-first-audio on the text (non-native-audio) path: the FIRST utterance of a turn is cut at the last clause boundary (`,` `;` `:` `—`) and spoken immediately instead of waiting for a sentence terminator; past this many characters with no clause boundary it is cut at the last word break. The remainder is queued behind it, so the reply is still spoken in order. A clause under 8 characters keeps buffering (a runt like `Sure,` alone sounds like a stutter). Only the first chunk is ever cut this way. `0` restores waiting for the full sentence. |
 | `HAL_REALTIME_MIN_COMMIT_DURATION_S` | `0.8` | Sessions shorter than this with no STT transcript are treated as VAD noise and not committed to the model. Only consulted when `HAL_REALTIME_REQUIRE_TRANSCRIPT=false`. |
 | `HAL_REALTIME_NOISE_GUARD_MAX_WORDS` | `3` | Extends the Silero voiced-ratio guard to turns that DO have a transcript, up to this many words. STT invents a short filler out of room noise and reports full confidence for it, so such a turn used to bypass every guard (they all only ran on an empty transcript) and commit pure noise to the model. A transcript of at most this many words is re-checked against `HAL_REALTIME_NOISE_SPEECH_RATIO` and dropped when the audio was never voiced; a real short command is voiced and still commits. The ratio is measured over the voiced SPAN — first to last voiced chunk — not the whole buffer, because a capture carries VAD pre-roll at the front and a 200ms tail at the back, and that fixed padding dilutes a short utterance far more than a long one. Measuring the whole buffer dropped a real `Yes, that's right.` at 0.500 (`peak=1.000`), inverting the guard's purpose against the very turns it screens. Sustained noise still fails, since its voiced chunks are sparse within the span too. Longer transcripts are never re-checked, so the floor can't silence a real utterance. `0` disables. |
 | `HAL_REALTIME_SESSION_IDLE_RESET_S` | `240` | Cost control: when a turn arrives after this many seconds of silence, recycle (rebuild) the session **after** that turn so the next turn drops the per-turn context the provider re-bills on a long-lived session. A post-pause turn is effectively a new conversation; long-term continuity survives via the reloaded `summary.md`. For native-audio Gemini, this is skipped when a successful pre-turn recycle already made the same idle gap fresh. `0` disables. Reuses the zombie-recovery rebuild path. |
 | `HAL_GEMINI_SESSION_RESUMPTION` | `false` | Resume the same Gemini session across reconnects. OFF by default — the `campaign-api` proxy doesn't forward the resumption handshake, so resuming through it yields a zombie session (cold reconnects work). Enable only against an endpoint that supports it. |
-| `HAL_GEMINI_PRE_TURN_RECYCLE_S` | `120` | Gemini transport guard: when a new spoken turn starts after this much idle time, rebuild the Gemini session **before** streaming pre-roll/audio so the turn does not hit a proxy/SDK idle-dead socket. `0` disables. A successful pre-turn recycle suppresses the generic post-turn idle recycle for that same turn, so one idle gap creates at most one cost/transport rebuild. |
+| `HAL_GEMINI_IDLE_PARK_S` | `45` | Gemini idle parking: close the session's transport after this many seconds without turn activity, so the server never closes it with WS `1008` (which the backend logs as an error and alerts on). The orchestrator stays `available` while parked; the next turn's `prepare_turn()` reconnects synchronously before streaming audio. Must stay below the shortest observed idle death (86 s). `0` disables. |
+| `HAL_GEMINI_PRE_TURN_RECYCLE_S` | `60` | Gemini transport guard: when a new spoken turn starts after this much idle time, rebuild the Gemini session **before** streaming pre-roll/audio so the turn does not hit a proxy/SDK idle-dead socket. `0` disables. A successful pre-turn recycle suppresses the generic post-turn idle recycle for that same turn, so one idle gap creates at most one cost/transport rebuild. |
 | `HAL_AGENT_GATEWAY` | `openclaw` | Selects the context manager (also from `agent_runtime` in config.json) |
 | `GEMINI_API_KEY` / `GOOGLE_API_KEY` | — | Gemini key; falls back to `llm_api_key` |
 | `HAL_GEMINI_LIVE_MODEL` | `gemini-2.5-flash-native-audio-preview-12-2025` | |

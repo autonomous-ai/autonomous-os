@@ -302,7 +302,7 @@ func (s *ClaudeCodeService) injectDiscordTurn(ctx context.Context, text, channel
 	send := s.discordSendTurn
 	if send == nil {
 		send = func(text, reqID, runID string) error {
-			_, err := s.sendChat(text, "", reqID, runID, "discord")
+			_, err := s.sendChat(text, nil, reqID, runID, "discord")
 			return err
 		}
 	}

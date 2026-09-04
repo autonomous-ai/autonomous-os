@@ -23,7 +23,12 @@ DEFAULT_LABEL_THRESHOLDS: dict[str, float] = {
     "happy": 0.5,
     "surprise": 0.6,
     "sad": 0.7,
-    "anger": 0.6,
+    # 0.6 let a non-frontal face read as Anger on 38% of triggers with a median
+    # confidence of 0.62 and never once correctly (device session 2026-09-03,
+    # 500 triggers). Observed max on that session was 0.91, so 0.8 keeps the
+    # label reachable for a genuinely intense expression while removing the
+    # pose-driven noise floor.
+    "anger": 0.8,
     "disgust": 0.7,
     "fear": 0.5,
 }

@@ -291,6 +291,16 @@ class RGBService(ServiceBase):
         """Turn off all LEDs (double show + extra MOSI idle low for reliability)."""
         if not self._driver:
             return
+        # Logged before AND after, because a clear that does not take is the one
+        # LED fault nobody can see from the outside: the strip keeps its last
+        # latched colour with no data on the wire, so a failed clear looks
+        # exactly like something else painting. Observed 03/09/2026 —
+        # POST /led/off four times in a row left the ring lit at [0,2,2] for
+        # minutes, with no SPI write error anywhere in the log, and it has not
+        # reproduced since. `after` is the driver's own read-back, so a line
+        # showing a non-black `after` means the write path never ran; a black
+        # `after` with the lamp still lit means the wire, not the buffer.
+        before = self._read_brightest_pixel()
         self._driver.fill((0, 0, 0), self.led_count)
         self._driver.show()
         time.sleep(0.01)
@@ -302,6 +312,32 @@ class RGBService(ServiceBase):
                 spi.xfer2([0x00] * 100)
             except Exception:
                 pass
+        after = self._read_brightest_pixel()
+        if after is None:
+            return  # driver has no read-back — nothing to compare, nothing to say
+        if after != (0, 0, 0):
+            self.logger.error(
+                "LED clear did NOT take: brightest pixel %s -> %s (driver buffer still lit)",
+                before, after,
+            )
+        elif before != (0, 0, 0):
+            self.logger.info("LED cleared: brightest pixel %s -> (0, 0, 0)", before)
+
+    def _read_brightest_pixel(self):
+        """The lit-most pixel on the strip, or None when it cannot be read.
+
+        The WHOLE ring, not pixel 0: a dithered or partial look leaves pixel 0
+        dark while the rest is lit, and reading only that one made this very
+        check silent on the pattern it was written to catch.
+
+        Diagnostics must never be the reason a clear raises — a driver without
+        read-back simply reports nothing.
+        """
+        try:
+            pixels = [self._driver.getPixelColor(i) for i in range(self.led_count)]
+        except Exception:
+            return None
+        return max(pixels, key=max) if pixels else None
 
     def stop(self, timeout: float = 5.0):
         """Override stop to clear LEDs before stopping"""

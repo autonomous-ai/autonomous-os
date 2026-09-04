@@ -58,8 +58,27 @@ JOINT_KEYS: Set[str] = {*_HEAD_KEYS, *_ANTENNA_KEYS, _BODY_KEY}
 # are documented here for reference): head pitch/roll ±40°, head yaw ±180°,
 # body yaw ±160°, head-vs-body yaw delta ≤ 65°.
 
-# Default HF move library preloaded by the daemon.
+# HF move libraries, searched in order — the first dataset holding a name wins.
+# Both defaults are pre-downloaded by the daemon at startup (its own
+# DEFAULT_DATASETS), so listing them here costs no extra fetch. Add community
+# datasets with HAL_REACHY_MOVES="owner/dataset,owner/other"; put a dataset
+# ahead of the defaults to shadow an official move with your own recording.
+# Every move, whatever its source, goes through the speed gate (_move_refused).
 _EMOTES_DATASET = "pollen-robotics/reachy-mini-emotions-library"
+_DANCES_DATASET = "pollen-robotics/reachy-mini-dances-library"
+
+
+def _move_datasets() -> List[str]:
+    """Dataset names to load, in search order. Duplicates removed, order kept."""
+    raw = os.environ.get("HAL_REACHY_MOVES", "")
+    names = [n.strip() for n in raw.split(",") if n.strip()]
+    names += [_EMOTES_DATASET, _DANCES_DATASET]
+    seen, out = set(), []
+    for n in names:
+        if n not in seen:
+            seen.add(n)
+            out.append(n)
+    return out
 
 # HAL recording name (CSV stem on lamp) → Pollen HF move name.
 # Keys use preset constants from hal.presets; unmatched names are tried verbatim
@@ -144,6 +163,48 @@ def _is_disconnect(err: Exception) -> bool:
     return any(m in str(err).lower() for m in _RECONNECT_MARKERS)
 
 
+# Recordings are authored at ~50-60 Hz but their timestamps jitter: the shipped
+# library has duplicate timestamps (1.1% of frames) and gaps as short as 1 ms
+# against a 16 ms median. Differentiating raw frame pairs turns that jitter into
+# speeds the head never reaches — `wake-mini-up` reads 17226 deg/s from a single
+# 1 ms gap. Speed is therefore measured across a window of at least this long,
+# which is also the timescale the daemon's controller actually tracks.
+_SPEED_WINDOW_S = 0.02
+
+
+def peak_head_dps(timestamps: List[float], trajectory: List[Dict[str, Any]]) -> float:
+    """Highest head rotation speed a recorded move demands, in deg/s.
+
+    Measured as the true angle between two head orientations at least
+    `_SPEED_WINDOW_S` apart, NOT as per-axis euler deltas: xyz euler jumps at
+    gimbal crossings and reports travel the head never makes (measured on the
+    shipped library, euler read 2456 deg/s where the head turned at 2355).
+
+    Head translation is deliberately excluded. `motion.max_speed` is a deg/s
+    ceiling and `head_x/y/z` are millimetres — mixing them would compare
+    millimetres against degrees. Bounding translation needs its own declared
+    limit, which no SAFETY.md has today.
+
+    Takes the raw arrays rather than an SDK object so it is testable without the
+    reachy_mini package installed.
+    """
+    n = min(len(timestamps), len(trajectory))
+    peak = 0.0
+    lo = 0
+    for hi in range(1, n):
+        # Widen from the left until the window is long enough to be meaningful.
+        while lo + 1 < hi and timestamps[hi] - timestamps[lo + 1] >= _SPEED_WINDOW_S:
+            lo += 1
+        dt = timestamps[hi] - timestamps[lo]
+        if dt <= 0:
+            continue
+        prev = np.asarray(trajectory[lo]["head"], dtype=np.float64)[:3, :3]
+        cur = np.asarray(trajectory[hi]["head"], dtype=np.float64)[:3, :3]
+        angle = Rotation.from_matrix(cur @ prev.T).magnitude() * 180.0 / math.pi
+        peak = max(peak, angle / dt)
+    return peak
+
+
 def _joints_from_sdk(head_pose: Any, antennas: Any, body_yaw_rad: Any) -> Dict[str, float]:
     """SDK pose (4x4 meters/rad, antennas rad, body yaw rad) → HAL joints (deg/mm).
 
@@ -202,6 +263,8 @@ class ReachyMotionService:
         self._hold_explicit = False
         self._frozen = False
         self._moves = None          # lazy RecordedMoves loader (None=untried, False=failed)
+        # Peak head speed per HF move name, scanned once (see _move_refused).
+        self._move_peak_dps: Dict[str, float] = {}
         self._play_thread: Optional[threading.Thread] = None
         # Bumped on every play request; the play thread stops repeating once its
         # own generation is stale (a newer play owns the servo).
@@ -360,14 +423,15 @@ class ReachyMotionService:
         of the library is listed verbatim and stays playable — _play_recording
         passes unknown names straight through.
         """
-        moves = self._recorded_moves()
-        if moves is None:
+        libs = self._recorded_moves()
+        if libs is None:
             return []
-        try:
-            hf_moves = set(moves.list_moves())
-        except Exception as e:
-            logger.warning("[reachy] list_moves failed: %s", e)
-            return []
+        hf_moves = set()
+        for lib in libs:
+            try:
+                hf_moves.update(lib.list_moves())
+            except Exception as e:
+                logger.warning("[reachy] list_moves failed on %r: %s", lib, e)
         mapped = {hal for hal, hf in _MOVE_MAP.items() if hf in hf_moves}
         return sorted(mapped | (hf_moves - set(_MOVE_MAP.values())))
 
@@ -753,15 +817,42 @@ class ReachyMotionService:
                 logger.debug("[reachy] cancel_move: %s", e)
 
     def _recorded_moves(self):
-        """Lazy-load the HF emotes library. Returns the loader or None."""
+        """Lazy-load the HF move libraries. Returns the loaders, or None if none.
+
+        One failing dataset does not take the others down: a community dataset
+        that was renamed or pulled from the Hub must not cost the robot its
+        official emotions.
+        """
         if self._moves is None:
+            libs = []
             try:
                 from reachy_mini.motion.recorded_move import RecordedMoves
-                self._moves = RecordedMoves(_EMOTES_DATASET)
             except Exception as e:
                 logger.warning("[reachy] recorded moves unavailable: %s", e)
                 self._moves = False
+                return None
+            for dataset in _move_datasets():
+                try:
+                    libs.append(RecordedMoves(dataset))
+                except Exception as e:
+                    logger.warning("[reachy] move library %r unavailable: %s", dataset, e)
+            if not libs:
+                logger.warning("[reachy] no move library loaded")
+            self._moves = libs or False
         return self._moves or None
+
+    def _find_move(self, hf_name: str) -> Optional[Any]:
+        """First library holding `hf_name`, or None. Search order is load order."""
+        for lib in self._recorded_moves() or []:
+            try:
+                return lib.get(hf_name)
+            except Exception as e:
+                # A miss raises ValueError here, so this is the normal path for
+                # every library that simply does not hold the name. Logged at
+                # debug so a genuine fault (bad cache, unreadable JSON) is still
+                # findable instead of silently reading as "not found".
+                logger.debug("[reachy] '%s' not in %r: %s", hf_name, lib, e)
+        return None
 
     def _ramp_for(self, move: Any) -> float:
         """Seconds to interpolate into the move's first pose before playing it.
@@ -789,6 +880,46 @@ class ReachyMotionService:
         except Exception as e:
             logger.debug("[reachy] ramp estimate failed (%s) — using %.2fs", e, _PLAY_RAMP_S)
             return _PLAY_RAMP_S
+
+    def _move_refused(self, move: Any, hf_name: str) -> bool:
+        """True when the move demands more head speed than SAFETY.md allows.
+
+        This is the only place the declared ceiling can be applied on this
+        backend. `play_move()` hands the whole trajectory to the Pollen daemon,
+        which streams it without HAL in the loop, so there is no frame to slow
+        down mid-move the way the feetech driver stretches a recording
+        (recording_timing.stretch_timeline). The choice is play or do not play,
+        and it has to be made before the trajectory is handed over (#286).
+
+        Refusing matters once a move can come from a stranger's Hub dataset
+        (#287); the shipped library is measured and passes at the declared
+        ceiling. Applied to every source, deliberately: an official move that
+        trips the gate is evidence the declared number is wrong, and excusing
+        it by origin would hide exactly that signal.
+        """
+        policy = self._safety_policy
+        if policy is None or policy.motion is None or policy.motion.max_speed is None:
+            return False
+        peak = self._move_peak_dps.get(hf_name)
+        if peak is None:
+            try:
+                peak = peak_head_dps(move.timestamps, move.trajectory)
+            except Exception as e:
+                # A move whose shape we cannot read is not evidence of danger;
+                # the same presence-driven rule as an undeclared bound.
+                logger.debug("[reachy] cannot scan '%s' (%s) — not gated", hf_name, e)
+                return False
+            self._move_peak_dps[hf_name] = peak
+        ceiling = float(policy.motion.max_speed)
+        if peak <= ceiling:
+            logger.debug("[reachy] move '%s' peak %.0f deg/s — within %.0f", hf_name, peak, ceiling)
+            return False
+        logger.warning(
+            "[reachy] move '%s' REFUSED — peak %.0f deg/s exceeds declared "
+            "motion.max_speed %.0f deg/s",
+            hf_name, peak, ceiling,
+        )
+        return True
 
     def _play_move_once(self, move: Any, name: str, gen: int) -> bool:
         """Play one pass of a recorded move (blocking). False if superseded.
@@ -848,8 +979,7 @@ class ReachyMotionService:
             self._cancel_move()
 
         def _run():
-            moves = self._recorded_moves()
-            if moves is None:
+            if self._recorded_moves() is None:
                 logger.warning("[reachy] play '%s' skipped — no move library", name)
                 return
             current = name
@@ -861,17 +991,18 @@ class ReachyMotionService:
                             "[reachy] mapped recording '%s' → HF move '%s'", current, hf_name
                         )
                     failed = False
-                    move = None
-                    try:
-                        move = moves.get(hf_name)
-                    except Exception as e:
-                        logger.warning(
-                            "[reachy] move '%s' (HF: '%s') unavailable: %s", current, hf_name, e
-                        )
-                        failed = True
+                    move = self._find_move(hf_name)
                     if move is None:
+                        logger.warning(
+                            "[reachy] move '%s' (HF: '%s') not in any library",
+                            current, hf_name,
+                        )
                         # No exception but nothing to play — treat as a failure
                         # so the loop can't spin without doing any work.
+                        failed = True
+                    elif self._move_refused(move, hf_name):
+                        # Same shape as an unavailable move: the groove logic
+                        # decides what happens next, nothing reaches the daemon.
                         failed = True
                     else:
                         try:

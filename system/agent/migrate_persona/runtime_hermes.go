@@ -53,7 +53,7 @@ func (hermesAdapter) write(m *baseMigrator, b *PersonaBundle, opts Options) erro
 		filepath.Join(mem, "MEMORY.md"), opts.MemoryCharLimit, hermesFormat)
 
 	// User profile → memories/USER.md.
-	m.writeMemoryEntries("user-profile", rebrandEntries(b.User, rebrandToHermes),
+	m.writeUserProfile("user-profile", rebrandEntries(b.User, rebrandToHermes),
 		filepath.Join(mem, "USER.md"), opts.UserCharLimit, hermesFormat)
 	return nil
 }
@@ -101,4 +101,27 @@ func rebrandToHermes(text string) string {
 	text = reClaudeCode.ReplaceAllStringFunc(text, repl)
 	text = reOpenCode.ReplaceAllStringFunc(text, repl)
 	return text
+}
+
+// personaPaths implements runtimeAdapter. Hermes has no workspace subdir: SOUL.md
+// sits at the home root and MEMORY.md / USER.md under memories/. The home dir
+// itself is NOT listed — it holds the Hermes installation and logs.
+func (hermesAdapter) personaPaths(opts Options) []string {
+	root := opts.HermesRoot
+	if root == "" {
+		return nil
+	}
+	return []string{
+		filepath.Join(root, "SOUL.md"),
+		filepath.Join(root, "memories"),
+	}
+}
+
+// userProfilePath implements runtimeAdapter. Hermes has no workspace subdir —
+// the profile lives under memories/, alongside MEMORY.md.
+func (hermesAdapter) userProfilePath(opts Options) string {
+	if opts.HermesRoot == "" {
+		return ""
+	}
+	return filepath.Join(opts.HermesRoot, "memories", "USER.md")
 }

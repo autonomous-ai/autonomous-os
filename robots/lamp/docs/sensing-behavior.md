@@ -89,13 +89,13 @@ Always triggers a full reaction — no exceptions. The agent **must** do all thr
 
 1. `/emotion greeting` (0.9) for friend — `/emotion curious` (0.8) for stranger
 2. For friend: `/servo/aim {"direction": "user"}` then `/servo/track {"target": ["person"]}` — aim orients the camera toward the user's region first (~2s), then the vision tracker locks onto the person and follows them around the room. Stranger: `/servo/play {"recording": "scanning"}` (no auto-follow — caution)
-3. Speak: warm greeting for friend (by name), cautious acknowledgment for stranger
+3. Speak: warm greeting for friend (by the name in `[context: current_user=X]`), cautious acknowledgment for stranger
 
 The system handles cooldowns on the HAL side. If the event reached the agent, enough time has passed — react fully.
 
 #### Return after long absence (friend only)
 
-On every friend `presence.enter` event, the sensing handler injects a `[presence_context: {"last_leave_age_min": N, "current_hour": H}]` block before forwarding to the agent. `last_leave_age_min` is computed from the most recent `leave` row in the user's wellbeing log, scanning up to 3 days back (`wellbeing.LastActionTS`); `-1` means no leave was found in that window.
+On every friend `presence.enter` event, the sensing handler injects a `[context: current_user=X]` tag (see [User attribution](#user-attribution--context-current_userx)) followed by a `[presence_context: {"last_leave_age_min": N, "current_hour": H}]` block before forwarding to the agent. The attribution tag is what the greeting is spoken from — the event text itself carries only a face *label* (`friend (long)`), which the agent reads as a detection tag rather than a name. `last_leave_age_min` is computed from the most recent `leave` row in the user's wellbeing log, scanning up to 3 days back (`wellbeing.LastActionTS`); `-1` means no leave was found in that window.
 
 `sensing/SKILL.md` reads this block and swaps to a **return-after-long-absence** greeting when ALL three conditions hold:
 
@@ -404,7 +404,7 @@ If the user drinks or takes a break before the next window, the regular `drink` 
 
 ### User attribution — `[context: current_user=X]`
 
-The sensing handler injects a `[context: current_user=X]` tag into every `motion.activity` message. `X` is the **friend with the newest session_start** among friends still in the forget window (see `FaceRecognizer.current_user()`), or `"unknown"` when face sees **only** strangers (no friend is still present). Crucially: if a friend is still within their forget window, `current_user()` returns that friend even if the most recent raw `presence.enter` was for a stranger — stranger flicker does not kick a friend out of the session.
+The sensing handler injects a `[context: current_user=X]` tag into every `presence.enter`, `motion.activity`, `emotion.detected` and `speech_emotion.detected` message. `X` is the **friend with the newest session_start** among friends still in the forget window (see `FaceRecognizer.current_user()`), or `"unknown"` when face sees **only** strangers (no friend is still present). Crucially: if a friend is still within their forget window, `current_user()` returns that friend even if the most recent raw `presence.enter` was for a stranger — stranger flicker does not kick a friend out of the session.
 
 Sorting by `session_start` (the timestamp of the re-enter after the last leave) rather than `last_seen` makes the answer deterministic when two friends are continuously present (Chloe 18:00, An 18:30 → An wins because her session started later), instead of depending on dict iteration order.
 
@@ -652,7 +652,10 @@ Includes the `face_id` in parentheses so the agent knows which person the activi
 
 Lamp detects the **user's** emotional state via three channels:
 
-1. **Facial expression** (primary) — `emotion.detected` event from `hal/drivers/sensing/perceptions/emotion.py`. Uses a dedicated emotion classifier running on self-hosted perception-service via WebSocket. Detects 7 emotions: Angry, Disgust, Fear, Happy, Sad, Surprise, Neutral. Configurable confidence threshold (`EMOTION_CONFIDENCE_THRESHOLD`).
+1. **Facial expression** (primary) — `emotion.detected` event from `hal/drivers/sensing/perceptions/processors/emotion.py`. Each detected face is cropped and POSTed to perception-service `/emotion-recognize` (HTTP, one call per face per sensing tick). Detects 7 emotions: Neutral, Happy, Sad, Surprise, Fear, Disgust, Anger. A reading passes three gates before it becomes an event:
+   1. **Per-label gate (service side)** — the argmax must clear its own bar in `label_gating.py` (`anger 0.8`, `happy 0.5`, `surprise 0.6`, `sad/disgust 0.7`, `fear 0.5`) or it is replaced by Neutral carrying Neutral's own probability. HAL's `EMOTION_CONFIDENCE_THRESHOLD` is then applied to whatever came back; below it the response is empty and HAL records no reading.
+   2. **Occupancy (HAL side)** — on each `EMOTION_FLUSH_S` flush, `Happy` fires on a single frame, but every other label must hold a **strict majority of that person's recognition attempts in the trailing 10s**, counting attempts that returned nothing (an exact tie does not qualify), **and be at least 2 readings**. Attempts are counted per face detection, not per sensing tick, so without that floor a face seen once in the window makes a single reading a trivial 1-of-1 majority. A face turned toward a monitor reads as Anger, so a lone Anger frame among a dozen empty responses used to win the vote outright.
+   3. **Bucket dedup** — `(user, positive|negative)` with a `EMOTION_DEDUP_WINDOW_S` TTL (300s), so each polarity reports at most once per 5 minutes.
 2. **Speech emotion** (secondary) — `speech_emotion.detected` event from `hal/drivers/voice/speech_emotion/`. Runs at the end of every speaker-identified STT session against the same WAV used for speaker recognition. Uses `emotion2vec_plus_large` on perception-service via HTTP. See [Speech Emotion Recognition](../../../docs/speech-emotion.md) for the full pipeline.
 3. **Body action** (tertiary) — emotional X3D actions from action recognition are **intentionally dropped** from `motion.activity` (which is purely physical: sedentary/drink/break/celebrate). A dedicated `motion.emotional` event type is planned for these.
 

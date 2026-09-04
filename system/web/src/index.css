@@ -1921,3 +1921,7 @@
   .lm-root .lm-send-ready:active,
   .lm-root .lm-convo-row:hover { animation: none; transform: none; }
 }
+
+/* Agent gateway menu — parked, not removed. Flip to `display: block` to bring
+   the whole submenu back; nothing else needs touching. */
+.lm-nav-agent { display: none; }

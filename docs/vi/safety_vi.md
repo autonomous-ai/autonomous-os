@@ -170,9 +170,29 @@ chính vòng lặp (55 / 100 deg/s, `hal/drivers/tracking/constants.py`) xuống
 trên Lamp (`max_speed: 120`) hôm nay không có gì bị kẹp; gate này dành cho thân nào
 khai trần thấp hơn.
 
-**Vẫn CHƯA gate:** recorded animation. Chúng phát lại frame đã lưu ở fps cố định,
-nên bound tốc độ nghĩa là đổi cách animation trông ra sao, không phải kéo dài một
-con số — đây là câu hỏi mở chứ không phải thiếu một dòng code.
+Recorded animation được gate lúc load chứ không phải từng frame. Recording được
+resample lên đúng lưới fps của vòng phát, và đoạn nào đòi hơn trần thì bị *giãn
+theo thời gian* — cùng kiểu suy giảm mà gate ở route dùng, áp theo từng đoạn nên
+recording chỉ chậm lại đúng chỗ bất khả thi, không chỗ nào khác
+(`hal/drivers/motors/recording_timing.py`, dùng chung cho driver thật và mock để
+simulator phát đúng thứ body phát). Trần là giá trị nhỏ hơn giữa giới hạn đo được
+của servo (`SERVO_MAX_DPS`, 250 deg/s) và `motion.max_speed` đã khai.
+
+Recorded move trên đường SDK của Reachy được gate theo kiểu khác, vì driver
+KHÔNG sở hữu vòng phát: `ReachyMotionService` giao trajectory cho
+`mini.play_move()` rồi daemon Pollen stream nó. Không có frame nào để làm chậm,
+nên move được **quét trước khi phát và bị TỪ CHỐI** nếu tốc độ xoay đầu đỉnh
+vượt trần đã khai (`peak_head_dps`, `_move_refused`). Tốc độ đo bằng góc quay
+thật giữa hai hướng đầu trên cửa sổ ≥20 ms — sai phân từng trục euler bị vọt ở
+điểm gimbal, còn lấy từng cặp frame thô thì biến nhiễu timestamp thành tốc độ
+mà đầu không bao giờ đạt. Chuyển động **tịnh tiến** của đầu không bị bound:
+`max_speed` tính bằng deg/s còn `head_x/y/z` là milimet, và chưa body nào khai
+giới hạn tịnh tiến — không enforce thì không tuyên bố là có.
+
+Từ chối áp cho MỌI nguồn, kể cả thư viện chính chủ của Pollen, và đó là chủ ý:
+một move chính chủ rớt gate là bằng chứng con số đã khai bị sai, đặc cách theo
+nguồn sẽ che mất tín hiệu đó. `robots/reachy-mini/SAFETY.md` ghi rõ trần đó suy
+ra từ đâu và thứ gì vẫn cần robot thật mới xác nhận được.
 
 ### Interface learned-policy (dry run)
 

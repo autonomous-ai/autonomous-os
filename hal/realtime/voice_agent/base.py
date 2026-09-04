@@ -3,6 +3,7 @@
 import logging
 import queue
 import threading
+import time
 from abc import ABC, abstractmethod
 from collections.abc import Generator
 from typing import Any
@@ -55,6 +56,9 @@ class VoiceAgentBase(ABC):
         # (device-observed 2026-07-06 — watchdog killed the turn seconds
         # after express_emotion fired). Cleared when receive() exits.
         self._recv_timeout_override_s: float | None = None
+        # monotonic() of the last message the SERVER sent us, whatever it was.
+        # Liveness, not output — see note_server_activity / receive().
+        self._last_server_msg_at: float = 0.0
 
     @property
     def available(self) -> bool:
@@ -179,6 +183,20 @@ class VoiceAgentBase(ABC):
         """
         self._skip_stale_turn_done = True
 
+    def note_server_activity(self) -> None:
+        """Record that the server just sent us something, output or not.
+
+        The silent-turn watchdog in receive() cannot tell a model that decided
+        not to answer from one that is busy — grounding a search, thinking —
+        because both look identical from the queue: nothing arrives. They are
+        NOT identical on the wire, though. A working turn keeps producing
+        messages we deliberately drop before the queue (thought parts, grounding
+        metadata, usage-only frames), while a turn the model abandoned goes
+        completely quiet. Providers call this on every inbound message so the
+        watchdog can use that difference instead of guessing.
+        """
+        self._last_server_msg_at = time.monotonic()
+
     def extend_recv_timeout(self, seconds: float) -> None:
         """Raise the silent-turn watchdog for the CURRENT turn only.
 
@@ -200,6 +218,7 @@ class VoiceAgentBase(ABC):
         # (GeneratorExit) — the extended watchdog must survive into the
         # replayed turn, so only a normal end clears the override.
         turn_ended = False
+        turn_started: float = time.monotonic()
         try:
             while True:
                 recv_timeout: float = (
@@ -209,12 +228,38 @@ class VoiceAgentBase(ABC):
                 try:
                     event = self._recv_queue.get(timeout=recv_timeout)
                 except queue.Empty:
-                    # No output within the gap window — almost always the model
-                    # staying silent on a noise / non-directed turn (correct), not an
-                    # error. End the turn quietly so it can fall back to the main agent.
+                    # No OUTPUT within the gap window. Usually the model staying
+                    # silent on a noise / non-directed turn, which is correct —
+                    # end quietly and let the main agent have it.
+                    #
+                    # But a turn can also be silent because it is WORKING: a
+                    # Google Search grounding produces no output until the search
+                    # returns, and killing it here throws away an answer the
+                    # model was about to give and forwards the turn to the main
+                    # agent, which is far slower (and the abandoned search is
+                    # still billed, and its chunks still land in the session
+                    # context). Tell the two apart by liveness on the wire: a
+                    # working turn keeps sending messages we drop before the
+                    # queue, a silent one sends nothing at all.
+                    since_msg: float = time.monotonic() - self._last_server_msg_at
+                    waited: float = time.monotonic() - turn_started
+                    if (
+                        self._last_server_msg_at > 0
+                        and since_msg < recv_timeout
+                        and waited < app_config.REALTIME_TURN_MAX_SILENCE_S
+                    ):
+                        logger.info(
+                            "receive() no output for %.1fs but the server is still "
+                            "talking (last message %.1fs ago, %.1fs into the turn) "
+                            "— keeping the turn alive",
+                            recv_timeout, since_msg, waited,
+                        )
+                        continue
                     logger.info(
-                        "receive() got no output within %.1fs — ending turn (model stayed silent)",
+                        "receive() got no output within %.1fs — ending turn "
+                        "(model stayed silent; last server message %.1fs ago)",
                         recv_timeout,
+                        since_msg if self._last_server_msg_at > 0 else -1.0,
                     )
                     turn_ended = True
                     break

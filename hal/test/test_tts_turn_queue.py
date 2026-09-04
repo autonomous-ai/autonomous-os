@@ -145,3 +145,89 @@ def test_newer_turn_stops_current_speech_and_takes_the_lock(monkeypatch, tmp_pat
     assert played == ["new reply"]
     assert service._latest_queue_turn_id == "new-run"
     assert service._latest_queue_turn_seq == 2
+
+
+# --- os-server restarting its turn counter -----------------------------------
+#
+# The counter lives in os-server, this threshold lives in HAL, and they restart
+# independently. Device-observed 03/09/2026: after an os-server deploy, seq=1
+# met latest_seq=40 and the wake greeting was dropped — LED and servo ran, no
+# sound — and the next 39 turns would have gone the same way.
+
+
+def test_a_lower_sequence_from_a_newer_run_is_adopted_not_dropped(monkeypatch, tmp_path):
+    service = _queue_service()
+    service._latest_queue_turn_id = "device-chat-505-1788420332920"
+    service._latest_queue_turn_seq = 40
+    service._tts_cache_path = lambda _: tmp_path / "missing.wav"
+    played = []
+    service._speak_sync = played.append
+    monkeypatch.setattr(tts_service_module.threading, "Thread", _InlineThread)
+
+    # Same shape as the greeting that was silenced: seq 1, but created later.
+    assert service.speak_queue(
+        "Good morning", turn_id="device-chat-1-1788422075499", turn_seq=1
+    ) is True
+
+    assert played == ["Good morning"]
+    assert service._latest_queue_turn_id == "device-chat-1-1788422075499"
+    assert service._latest_queue_turn_seq == 1
+
+
+def test_a_genuinely_older_run_is_still_dropped():
+    service = _queue_service()
+    service._latest_queue_turn_id = "device-chat-505-1788422075499"
+    service._latest_queue_turn_seq = 40
+
+    # Lower seq AND created earlier: a late POST from a superseded turn.
+    assert service.speak_queue(
+        "late old reply", turn_id="device-chat-1-1788420332920", turn_seq=1
+    ) is True
+    assert service._latest_queue_turn_seq == 40
+
+
+# Channel ids carry no creation stamp, so there is nothing to compare and the
+# plain sequence rule must still hold.
+def test_an_id_without_a_stamp_keeps_the_sequence_rule():
+    service = _queue_service()
+    service._latest_queue_turn_id = "tg-991"
+    service._latest_queue_turn_seq = 40
+
+    assert service.speak_queue("late", turn_id="tg-990", turn_seq=1) is True
+    assert service._latest_queue_turn_seq == 40
+
+
+# A restart resets the counter to 1, so the new run does not always land BELOW
+# the old high-water mark — when that mark is itself low (two restarts in a row,
+# or a restart early in a session) the sequences collide instead. Device-observed
+# 04/09/2026: seq=2 met an unrelated seq=2 from before the restart and the wake
+# greeting was dropped — LED and servo ran, no sound, the same symptom as the
+# 03/09 case one comparison away.
+def test_an_equal_sequence_from_a_newer_run_is_adopted_not_dropped(monkeypatch, tmp_path):
+    service = _queue_service()
+    service._latest_queue_turn_id = "device-chat-2-1788500426762"
+    service._latest_queue_turn_seq = 2
+    service._tts_cache_path = lambda _: tmp_path / "missing.wav"
+    played = []
+    service._speak_sync = played.append
+    monkeypatch.setattr(tts_service_module.threading, "Thread", _InlineThread)
+
+    assert service.speak_queue(
+        "Hey — morning light to you", turn_id="device-chat-2-1788500830940", turn_seq=2
+    ) is True
+
+    assert played == ["Hey — morning light to you"]
+    assert service._latest_queue_turn_id == "device-chat-2-1788500830940"
+    assert service._latest_queue_turn_seq == 2
+
+
+def test_an_equal_sequence_from_an_older_run_is_still_dropped():
+    service = _queue_service()
+    service._latest_queue_turn_id = "device-chat-2-1788500830940"
+    service._latest_queue_turn_seq = 2
+
+    # Same seq, created EARLIER: a late POST from the run that was superseded.
+    assert service.speak_queue(
+        "late old reply", turn_id="device-chat-2-1788500426762", turn_seq=2
+    ) is True
+    assert service._latest_queue_turn_id == "device-chat-2-1788500830940"

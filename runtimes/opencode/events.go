@@ -2,7 +2,9 @@ package opencode
 
 import (
 	"log/slog"
+	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,13 +19,45 @@ import (
 type pendingEvent struct {
 	eventType   string
 	msg         string
-	image       string
+	images      []string
 	queuedAt    time.Time
 	currentUser string
 	fixedRunID  string
 }
 
-const busyTTL = 5 * time.Minute
+// busyTTL bounds how long the busy flag survives without a terminal frame. It
+// exists for ONE case: the turn's final frame was DROPPED, so the sensing
+// pipeline would otherwise wedge forever. It must therefore stay LONGER than
+// the gatewayd's per-turn timeout — the gatewayd always ends a turn (completed,
+// failed, or its own "timeout"), so any TTL shorter than that fires on turns
+// that are merely SLOW.
+//
+// A chat turn is EXPECTED to be slow: a user opens chat precisely for work that
+// takes a while ("build me a Three.js scene"), and the same prompt answered over
+// Telegram/OpenClaw runs 35 minutes to completion. The old fixed 5 minutes was
+// half the 10-minute turn timeout, so every such turn tripped it — and this path
+// additionally called clearTurn(), wiping the IN-FLIGHT run id. That orphaned the
+// browser's pending run: every later lifecycle/error frame found no current run,
+// allocated a fresh id, and attached to an unrelated queued turn, so the chat sat
+// on a pending bubble until its own deadline and reported "no response".
+// Measured 2026-09-03 on lamp-0c89: run device-chat-139 started 15:40:41, lost
+// its id at 15:45:41, and the 15:50:41 "timeout" landed on device-chat-168.
+//
+// Derived from OPENCODE_TURN_TIMEOUT_S (the same value the gatewayd enforces) plus a
+// margin, so raising the turn timeout cannot silently re-open this bug.
+const busyTTLMargin = 5 * time.Minute
+
+func busyTTL() time.Duration {
+	// Same default as the gatewayd's own Config (10 minutes). Long enough for a
+	// heavy turn, short enough that a WEDGED one — the upstream stream going
+	// silent mid-turn, measured on lamp-0c89 2026-09-03 — is killed and the
+	// device recovers instead of being held for most of an hour.
+	timeout := 10 * time.Minute
+	if f, err := strconv.ParseFloat(strings.TrimSpace(os.Getenv("OPENCODE_TURN_TIMEOUT_S")), 64); err == nil && f > 0 {
+		timeout = time.Duration(f * float64(time.Second))
+	}
+	return timeout + busyTTLMargin
+}
 
 // IsBusy mirrors openclaw's OpenclawService.IsBusy: true while a turn is in flight OR a
 // chat.send is still waiting for its first inbound frame. Auto-clears after
@@ -31,10 +65,15 @@ const busyTTL = 5 * time.Minute
 func (s *OpenCodeService) IsBusy() bool {
 	if s.activeTurn.Load() {
 		since := s.busySince.Load()
-		if since > 0 && time.Since(time.UnixMilli(since)) > busyTTL {
+		if since > 0 && time.Since(time.UnixMilli(since)) > busyTTL() {
 			slog.Warn("busy flag expired — auto-clearing (final frame likely missed)",
 				"component", "opencode", "stuck_for_s", int(time.Since(time.UnixMilli(since)).Seconds()))
 			s.activeTurn.Store(false)
+			// Drop the dead run id: ensureTurnStarted returns early while it is
+			// set, so leaving it would attribute the NEXT turn's frames to the
+			// expired run. The codex runtime additionally tells the waiting
+			// client why (failStuckTurn); mirror that here when this backend is
+			// next exercised on a device.
 			s.clearTurn()
 			go s.drainPendingEvents()
 			return s.HasFreshPendingChatSend()
@@ -55,14 +94,14 @@ func (s *OpenCodeService) SetBusy(busy bool) {
 	}
 }
 
-func (s *OpenCodeService) QueuePendingEvent(eventType, msg, image, fixedRunID string) {
+func (s *OpenCodeService) QueuePendingEvent(eventType, msg string, images []string, fixedRunID string) {
 	now := time.Now()
 	curUser := mood.CurrentUser()
 	if curUser == "" {
 		curUser = "unknown"
 	}
 	s.pendingEventsMu.Lock()
-	s.pendingEvents = append(s.pendingEvents, pendingEvent{eventType: eventType, msg: msg, image: image, queuedAt: now, currentUser: curUser, fixedRunID: fixedRunID})
+	s.pendingEvents = append(s.pendingEvents, pendingEvent{eventType: eventType, msg: msg, images: images, queuedAt: now, currentUser: curUser, fixedRunID: fixedRunID})
 	s.pendingEventsMu.Unlock()
 	slog.Info("sensing event queued — agent busy", "component", "sensing", "type", eventType, "runId", fixedRunID)
 
@@ -206,8 +245,8 @@ func (s *OpenCodeService) drainPendingEvents() {
 		}
 
 		var err error
-		if ev.image != "" {
-			_, err = s.SendChatMessageWithImageAndRun(msg, ev.image, reqID, runID)
+		if len(ev.images) > 0 {
+			_, err = s.SendChatMessageWithImagesAndRun(msg, ev.images, reqID, runID)
 		} else {
 			_, err = s.SendChatMessageWithRun(msg, reqID, runID)
 		}

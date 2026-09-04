@@ -207,7 +207,8 @@ Common knobs:
 | `HAL_AUDIO_INPUT_ALSA` | Mic ALSA device (`plug:device_micro2` on Intern v2 Pro) |
 | `HAL_AUDIO_OUTPUT_ALSA` | Speaker ALSA device |
 | `HAL_VAD_THRESHOLD` | Voice-activity RMS floor (lower = more sensitive) |
-| `HAL_SILENCE_TIMEOUT` | Seconds of silence before committing a turn |
+| `HAL_SILENCE_TIMEOUT` | Seconds of silence before committing a turn (fallback clock, no STT final) |
+| `HAL_ENDPOINT_SILENCE_S` | Seconds of silence before committing a turn once STT emitted a final |
 | `HAL_REALTIME_TURN_DETECTION` | `on` = server-side VAD (Gemini/OpenAI), `off` = client VAD |
 | `HAL_GEMINI_LIVE_MODEL` | Gemini realtime model id |
 | `HAL_OPENAI_REALTIME_MODEL` | OpenAI realtime model id |
@@ -468,7 +469,7 @@ actually shut up.
 | `POST /led/effect/stop` — stop the running animation, keep last frame | `led.py:229` — `def stop_led_effect()` |
 | `POST /led/restore` — hand strip back to user's saved state (after a transient overlay) | `led.py:206` — `def restore_led()` |
 | `GET /led` — current state | `led.py:35` — `def get_led_state()` |
-| `GET /led/color` — current RGB colour of the whole strip | `led.py:43` — `def get_led_color()` |
+| `GET /led/color` — ring state: brightest pixel + `uniform` flag, read across every pixel | `led.py` — `def get_led_color()` |
 | Named status → colour/effect table (STATUS_LED_PRESETS) | `hal/presets.py:188` |
 
 Concrete calls, all copy-pasteable:

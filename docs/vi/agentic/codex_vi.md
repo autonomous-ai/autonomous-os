@@ -235,6 +235,53 @@ Bridge lưu attachment vào `/root/.codex/attachments` rồi truyền qua
 correlate bằng một `runID` in-flight duy nhất (pending run id được frame inbound
 đầu tiên của turn nhận lấy).
 
+## 2.1 Thời lượng một turn — timeout và busy TTL
+
+Một turn chat được kỳ vọng là chậm: người dùng mở chat đúng vào lúc việc cần nhiều
+thời gian, và cùng prompt đó chạy qua Telegram/OpenClaw mất 35 phút mới xong. Có
+hai con số chặn nó, và thứ tự giữa chúng là bắt buộc:
+
+| Knob | Ở đâu | Mặc định | Nghĩa |
+|---|---|---|---|
+| `CODEX_TURN_TIMEOUT_S` | `gatewayd/gatewayd.go` | `600` (10 phút) | Giết `codex exec` rồi gửi `bridge.error: timeout`. Gatewayd LUÔN kết thúc turn — xong, lỗi, hoặc timeout này. |
+| `busyTTL()` | `events.go` | timeout đó **+ 5 phút** | Gỡ kẹt pipeline sensing khi frame cuối của turn bị RỚT. Suy ra từ chính env var trên nên nâng timeout không bỏ sót nó. |
+
+**TTL hết hạn thì kết thúc turn cho ĐỦ, cả hai nửa.** Vừa bỏ runId, vừa bắn một
+lifecycle error mang chính runId đó (`failStuckTurn`, đi qua `wsDispatch` vì việc
+kiểm busy chạy trên đường sensing, nằm ngoài vòng đọc WS). Làm thiếu nửa nào cũng
+thành bug: để runId lại thì turn KẾ TIẾP bị mồ côi (`ensureTurnStarted` thoát sớm
+khi `currentRunID` khác rỗng, nên frame của turn mới bị gán vào run đã chết và
+chat mới treo); còn xoá im lặng thì trình duyệt ngồi chờ tới hết hạn của chính nó
+— đúng cái "no response" mà đường này sinh ra để chặn.
+
+**TTL phải dài hơn timeout.** Trước đây TTL cố định 5 phút trong khi timeout là 10
+phút, nên mọi turn chậm quá 5 phút đều rơi vào nhánh "frame bị rớt" — mà nhánh đó
+còn gọi `clearTurn()`, xoá luôn runId của turn đang chạy. Run mà trình duyệt đang
+chờ thành mồ côi: các frame lifecycle/error sau đó không thấy run hiện hành, cấp
+runId mới và gắn vào một turn xếp hàng không liên quan, nên khung chat treo ở
+trạng thái pending rồi báo "no response" trong khi backend vẫn chạy bình thường.
+
+Đo trên lamp-0c89 ngày 3/9/2026: run `device-chat-139` bắt đầu 15:40:41, mất runId
+lúc 15:45:41, và `timeout` lúc 15:50:41 bị báo dưới `device-chat-168`. `openclaw`
+và `hermes` không hề xoá runId khi TTL hết hạn — đó là lý do turn Telegram dài
+luôn chạy được ở hai runtime đó; đường codex giờ đã giống vậy.
+
+**Lượt resume bị timeout thì BỎ LUÔN thread.** Việc xoay thread
+(`ShouldRotateSession`) đọc kích thước context từ `turn.completed`, nên nó chỉ nổ
+sau khi một lượt THÀNH CÔNG — thread mà mọi lượt resume đều treo thì không bao giờ
+được xoay, và id thread nằm trong session file nên restart service lẫn reboot máy
+đều resume đúng cái thread chết đó. Đo trên lamp-0c89 ngày 3/9/2026: thread
+`01a06665` tạo lúc 15:31, mọi lượt sau 15:40 đều treo không có `turn end` suốt hơn
+một tiếng, qua hai lần restart service và một lần reboot; trong khi `curl` thẳng
+cùng endpoint trả lời đúng payload 75k token đó trong 57 giây, và `codex exec`
+thread mới trả lời trong vài giây — nên endpoint chưa bao giờ là vấn đề. Gatewayd
+giờ gọi `clearSession()` khi resume timeout, đây là đường thoát duy nhất không cần
+người can thiệp.
+
+Hạn bỏ cuộc của web chat (`REPLY_IDLE_TIMEOUT_MS`) cũng được đặt dài hơn
+mức chặn turn vì cùng lý do — và không rút ngắn được, vì `codex exec --json`
+không emit gì trong lúc chạy (run đo được không stream một delta nào suốt 10 phút).
+
 ## 3. Dịch event (`translator.go`)
 
 Bridge forward các event JSONL của `codex exec --json` **nguyên văn** (cộng các

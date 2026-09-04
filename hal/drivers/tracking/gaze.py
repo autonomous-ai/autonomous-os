@@ -1214,6 +1214,60 @@ def on_speech_start() -> bool:
     return _check_speech("speech-start", request_repoint=True)
 
 
+def release_reacquire_hold_if_pending() -> bool:
+    """Release a reacquire hold at the end of capture, transcript or not.
+
+    `on_speech_end` covers the utterance that produced words. The freeze does
+    not need words: the reacquire fires at speech START, and the entry VAD is
+    deliberately wide, so most sessions it opens end with an EMPTY transcript
+    (28 of 31 measured, see voice_service). Those sessions took the hold and
+    never reached the retry path that hands the body back, which is precisely
+    the case that left the lamp frozen.
+
+    Returns whether a pending hold was released, so the caller can log it.
+    """
+    global _speech_repoint_requested_t
+    if _speech_repoint_requested_t <= 0.0:
+        return False
+    _speech_repoint_requested_t = 0.0
+    _speech_repoint_requested.clear()
+    _release_reacquire_hold()
+    return True
+
+
+def _release_reacquire_hold() -> None:
+    """Hand the body back to idle after a speech-triggered reacquire.
+
+    The reacquire points the lamp at the remembered pose with `move_and_hold`,
+    which is right FOR THE UTTERANCE and wrong once it ends: the hold drops the
+    playing recording and sets `_idle_settled`, and nothing re-arms idle
+    afterwards — the lamp simply stopped moving and stayed that way (measured on
+    lamp-0c89 03/09/2026: `[preempt] dropped recording 'idle' for a direct move`
+    at 16:23:40, still motionless at 16:25:58 with no further log, and it
+    recovered only on a HAL restart).
+
+    Same handover the tracker performs when it ends (`tracker_service.py`):
+    dispatch play(idle), because playback belongs to the event thread. Skipped
+    when something else owns the body — tracking, hold/zero mode or a scene each
+    have their own owner and their own release, and stealing the body back from
+    them is the bug this function exists to avoid repeating.
+    """
+    import hal.app_state as state
+
+    svc = getattr(state, "animation_service", None)
+    if svc is None:
+        return
+    if getattr(svc, "_tracking_active", False):
+        return
+    if getattr(svc, "_hold_mode", False) or getattr(svc, "_zero_mode", False):
+        return
+    try:
+        svc.dispatch("play", svc.idle_recording)
+        logger.info("[gaze] reacquire hold released — idle resumed")
+    except Exception as e:
+        logger.warning("[gaze] could not resume idle after reacquire: %s", e)
+
+
 def on_speech_end() -> bool:
     """Retry one utterance after a voice-triggered pose reacquire.
 
@@ -1226,7 +1280,11 @@ def on_speech_end() -> bool:
         return False
     _speech_repoint_requested_t = 0.0
     _speech_repoint_requested.clear()
-    return _check_speech("speech-end", request_repoint=False)
+    result = _check_speech("speech-end", request_repoint=False)
+    # The utterance is over: whatever the check decided, the hold that pointed
+    # the lamp for it must not outlive it.
+    _release_reacquire_hold()
+    return result
 
 
 def _consume_speech_repoint(now: float) -> None:

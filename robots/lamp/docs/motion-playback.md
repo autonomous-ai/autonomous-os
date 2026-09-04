@@ -11,7 +11,7 @@ Recordings in `hal/recordings/` are teleop captures authored at **20 Hz** (`time
 Resampling does two things:
 
 - **Honors the authored `timestamp`**, so a recording lasts as long as it was recorded to last. Stepping 20 Hz frames at 30 Hz previously played every animation 1.5× too fast.
-- **Stretches segments that exceed `SERVO_MAX_DPS`** (250 deg/s, `HAL_SERVO_MAX_DPS`; set to 0 to disable). The STS3215 tops out around 270 deg/s, and several recordings were authored well past that.
+- **Stretches segments that exceed the speed ceiling** — the lower of `SERVO_MAX_DPS` (250 deg/s, `HAL_SERVO_MAX_DPS`; set to 0 to disable) and the body's declared `motion.max_speed`. The STS3215 tops out around 270 deg/s, and several recordings were authored well past that; on Lamp the declared 120 deg/s is the binding one, and it stretches `laugh` (+20%), `playful`, `headshake` and `acknowledge`. No `music_*` recording is affected, so grooves keep their timing.
 
 The cap is not cosmetic. Measured on lamp-0c89 by sampling `Present_Position` while playing `greeting`: commanding 554 deg/s left the servo **55° behind its goal** — it saturates, lags, then snaps, which is the audible grinding. Stretching is surgical, applied only to the segments that were impossible:
 

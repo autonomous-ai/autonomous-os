@@ -40,6 +40,53 @@ def _sentences(transcript: str) -> list[str]:
     return [p for p in parts if p]
 
 
+def _name_is_near(heard: str, expected: str) -> bool:
+    """Whether one heard word is the expected NAME with at most one typo.
+
+    Levenshtein distance 1 (one substitution, insertion or deletion), computed
+    on words short enough that the loop is free. Deliberately not a phonetic
+    matcher: the failure this exists for is STT swapping a single letter in a
+    name it half-heard, and a looser measure would start accepting real words.
+    """
+    if heard == expected:
+        return True
+    if abs(len(heard) - len(expected)) > 1:
+        return False
+    if len(heard) < 3 or len(expected) < 3:
+        # A one-letter slip in a two-letter name is a different word, not a typo.
+        return False
+    if len(heard) == len(expected):
+        return sum(a != b for a, b in zip(heard, expected)) == 1
+    # One insertion/deletion: the shorter must be the longer with one char cut.
+    short, long = sorted((heard, expected), key=len)
+    i = 0
+    for j, ch in enumerate(long):
+        if i < len(short) and short[i] == ch:
+            i += 1
+        elif j - i:  # a second mismatch
+            return False
+    return True
+
+
+def _phrase_matches_loosely(sentence_part: str, phrase: str) -> bool:
+    """Whether a wake phrase matches with one typo allowed in its LAST word.
+
+    The prefix ("hello", "hey", ...) must match exactly — it is a common word
+    STT gets right, and loosening it would start matching ordinary speech. Only
+    the name is allowed to be off by one, because that is the word STT has no
+    reason to expect. Device-observed 04/09/2026 on lamp-0c89: "hello lamp" was
+    transcribed correctly in the partial and re-transcribed as "hello lamb" in
+    the final.
+    """
+    heard = sentence_part.split()
+    expected = phrase.split()
+    if len(heard) != len(expected) or not expected:
+        return False
+    if heard[:-1] != expected[:-1]:
+        return False
+    return _name_is_near(heard[-1], expected[-1])
+
+
 def merge_wake_words(*word_lists: list[str]) -> list[str]:
     """Merge wake-word aliases case-insensitively while preserving order."""
     merged: list[str] = []
@@ -217,6 +264,39 @@ class SpeakerDecorator:
                     sentence == phrase
                     or sentence.startswith(phrase + " ")
                     or sentence.endswith(" " + phrase)
+                ):
+                    return True
+        return False
+
+    def matches_wake_word_loosely(self, transcript: str) -> bool:
+        """Same sentence-position rule as starts_with_wake_word, one typo allowed.
+
+        Used ONLY to confirm a gate that an exactly-matching partial already
+        opened — never to open one. That is what keeps it safe: to reach this
+        check at all, the speaker must already have said the name correctly
+        enough for STT to transcribe it exactly once, so an ambient sentence
+        containing a near-miss word can not wake anything.
+
+        It exists because the confirmation step compares against the FINAL
+        transcript, and STT rewrites its own hypothesis there. Device-observed
+        04/09/2026 on lamp-0c89: partial 'hello lamp' opened the gate, the final
+        came back 'Hello, lamb. Can you hear me?', exact confirmation failed and
+        the whole turn was dropped — no realtime turn, no thinking cue, and the
+        question fell through to the much slower main agent.
+        """
+        phrases = self._normalized_wake_phrases()
+        if not phrases:
+            return False
+        for sentence in _sentences(transcript):
+            words = sentence.split()
+            for phrase in phrases:
+                span = len(phrase.split())
+                if span > len(words):
+                    continue
+                head = " ".join(words[:span])
+                tail = " ".join(words[-span:])
+                if _phrase_matches_loosely(head, phrase) or _phrase_matches_loosely(
+                    tail, phrase
                 ):
                     return True
         return False

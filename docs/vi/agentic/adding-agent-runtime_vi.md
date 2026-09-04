@@ -206,7 +206,28 @@ prev ≠ current). Mỗi adapter mang gì:
   memory của backend. **Trước hết kiểm tra backend LOAD file nào THEO TÊN** —
   Hermes chỉ load `MEMORY.md` + `USER.md` (không glob `memories/*.md`), nên một
   `KNOWLEDGE.md` riêng sẽ bị bỏ qua; ta fold nó vào `MEMORY.md`.
-- **USER.md** → file user-profile của backend.
+- **USER.md** → file user-profile của backend, qua `writeUserProfile` (KHÔNG
+  phải `writeMemoryEntries`). USER.md vừa là bản ghi vừa là biểu mẫu: các field
+  ĐƠN NHẤT (`Name`, `What to call them`, `Pronouns`, `Timezone`) dùng
+  **replace-or-append** — mỗi field một bullet, bên đến thắng — còn lại giữ
+  dedupe-union cộng dồn. Chỉ entry-merge thì `**Name:** Leo` và `**Name:** Long`
+  là hai chuỗi khác nhau, nên profile chỉ thêm được tên chứ không bao giờ bỏ được
+  tên cũ, và mỗi lần switch lại nhân đôi cặp đó (quan sát trên máy 2026-09-03).
+  Hai bất biến được test khoá lại:
+  - Field đến rỗng hoặc không có **không bao giờ xoá trắng** field đã điền ở đích
+    — một nguồn chưa có profile không được phép xoá thứ thiết bị đã học được.
+  - Chỉ FIELD bị retire. Văn xuôi tự do có nhắc tên người dùng cũ vẫn là nội dung
+    đã học và được giữ; dọn phần đó là việc của prune theo enrollment, không phải
+    của migration.
+  Hãy coi USER.md là **biểu mẫu, không phải nhật ký**. Template của nó ship sẵn
+  các slot trống (`- **Name:**`) kèm hướng dẫn điền vào, nên `writeUserProfile`
+  điền **ngay tại chỗ slot đang đứng** rồi bỏ mọi bullet trùng field xuất hiện sau
+  đó — đúng cách `setIdentityField` làm với IDENTITY.md. Toàn bộ template được giữ
+  nguyên văn: câu hướng dẫn, các gợi ý Context, câu chốt "not building a dossier",
+  slot còn để trống, và cả link `## Related`. USER.md là bootstrap file nên tất cả
+  những thứ đó tới tay agent mỗi lượt, và nó chứa dòng duy nhất bảo agent phải duy
+  trì chính file này. Đừng "dọn dẹp" template — việc của migration là giá trị, không
+  phải cái khung.
 - Đặt **`Overwrite = true`** cho copy soul khi switch: switch nghĩa là "lấy persona
   vừa dùng sang". `copyPersona` backup trước (`.bak-<nano>`).
 - Chiều ngược phải **strip artifact riêng của backend** mà nó đã thêm (vd identity
@@ -318,6 +339,23 @@ parity. Chỉ làm khi xuất hiện nguồn turn như vậy.
   default PicoClaw về wipe OpenClaw — latent bug, refactor này xoá). Primitive dùng
   chung duy nhất `osreset.WipePath` nằm ở `lib/osreset` để backend dùng được mà
   không phải import `server/system`.
+- **Persona được wipe hộ bạn — nhưng chỉ khi `personaPaths` đúng.**
+  `ResetAgent()` chỉ với tới backend *đang chạy*, trong khi file persona là các
+  **bản sao**: mỗi lần switch runtime, SOUL/IDENTITY/MEMORY/USER/KNOWLEDGE được
+  migrate sang đích và bản của nguồn vẫn nằm nguyên đó — nên một thiết bị đã từng
+  đổi backend giữ cùng một profile ở nhiều cây thư mục. Chỉ dọn cây đang active
+  thì lần switch kế tiếp sẽ migrate ngược một bản cũ vào (quan sát trên máy
+  2026-09-03: tên một chủ cũ nằm trong bốn file `USER.md` giống hệt nhau từng
+  byte, cũ nhất từ 2026-07-08, và đèn vẫn gọi tên đó).
+  Vì vậy `factoryreset.go` còn gọi `migratepersona.PersonaPaths`, hàm này union
+  `personaPaths(opts)` của **mọi** adapter đã đăng ký. Method đó nằm trên
+  interface `runtimeAdapter` nên compiler bắt bạn phải viết — nhưng nó không kiểm
+  được bạn có liệt kê đúng file hay không. Hai quy tắc:
+  - Liệt kê **file**, cộng thư mục `memory/`. **Không bao giờ liệt kê workspace
+    hay home root** — ở đó còn `skills/`, `configs/`, và với Hermes là cả bản cài
+    đặt. `TestPersonaPathsNeverWipeARuntimeRoot` chặn việc này.
+  - Trả về `nil` vẫn compile được và âm thầm để profile sống sót qua reset;
+    `TestEveryAdapterContributesPersonaPaths` bắt lỗi đó.
 - **Wipe `/root/config/agent_state.json` khoá-bước với `config.json`** — chúng là
   một cặp (runtime hiện tại + lịch sử switch). Để lại `agent_state.json` trong khi
   `config.json` reset làm `prev` cũ lệch với `current` bị reset → kích **migration
@@ -457,6 +495,19 @@ là no-op idempotent.
 - [ ] `ResetAgent()` trong `runtimes/<name>/reset.go` (factory-reset gọi
       `gw.ResetAgent()` trên gateway active — không có switch ở `factoryreset.go`); **`agent_state.json` wipe cùng
       `config.json`**.
+- [ ] `personaPaths(opts)` trên persona adapter liệt kê **file** persona của
+      runtime này + thư mục `memory/` — không bao giờ workspace/home root — để
+      factory reset dọn profile ở *mọi* cây thư mục, không chỉ cây active (§7).
+- [ ] `userProfilePath(opts)` trỏ đúng `USER.md` thật của runtime (Hermes để ở
+      `memories/`) để reconcile theo enrollment lúc khởi động có thể retire
+      profile của người không còn enrollment khuôn mặt/giọng nói (§7).
+- [ ] **People sync** trong block hướng dẫn OS-managed của chính runtime này:
+      giữ mục `## Users` trong `USER.md` luôn mới, dạng `- **<label> (friend)**: …`
+      khoá theo enrollment label, chỉ thêm/cập nhật, không bao giờ gán chéo người,
+      không điền `**Name:**`. Vị trí đặt khác nhau tùy runtime — HEARTBEAT.md nếu
+      có heartbeat loop, CLAUDE.md cho claudecode (không có loop), block SOUL.md
+      cho hermes (không loop, không KNOWLEDGE.md).
+      `TestEveryRuntimeTeachesThePeopleSync` fail nếu một runtime thiếu nó.
 - [ ] Gate capability qua `skills.Supported` / `SupportedHooks`.
 - [ ] **Kênh (§9):** `SupportedChannels()` khai báo capability thật;
       `AddChannel`/`RefreshChannelConfig` trả `domain.ErrChannelNotSupported` cho

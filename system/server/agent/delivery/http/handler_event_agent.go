@@ -583,6 +583,7 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 			// during a long Bash/curl/Read.
 			sensinghttp.DefaultFillerManager.OnToolStart(flowRunID, toolArgs, toolName)
 			summary = fmt.Sprintf("Tool %s started", toolName)
+			h.rememberToolArgs(payload.Data.ToolCallID, toolArgs)
 			// DEFENSIVE (2026-07-23): the agent sometimes wraps an [HW:...]
 			// marker inside a shell tool call — e.g.
 			// `echo '[HW:/audio/play:{...}]'` — instead of emitting it as
@@ -673,7 +674,7 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 			}
 		}
 		toolFlowData := map[string]any{"tool": toolName, "phase": payload.Data.Phase, "run_id": flowRunID, "args": toolArgs}
-		if snapshotURL := cameraSnapshotURL(toolArgs, payload.ResultText()); snapshotURL != "" {
+		if snapshotURL := h.snapshotURLForToolCall(payload.Data.ToolCallID, toolArgs, payload.ResultText()); snapshotURL != "" {
 			toolFlowData["snapshot_url"] = snapshotURL
 		}
 		flow.Log("tool_call", toolFlowData, flowRunID)

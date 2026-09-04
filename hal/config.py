@@ -91,7 +91,7 @@ TRACKING_DETECT_LOCAL_ENABLED: bool = os.environ.get(
 ).strip().lower() in ("1", "true", "yes", "on")
 
 # Use the local YuNet face detector for target='face' (COCO has no face class,
-# YOLO falls back to remote YOLOWorld ~1.3s otherwise). Disable to force remote.
+# YOLO falls back to remote YOLOWorld, ~0.55s median, otherwise). Disable to force remote.
 TRACKING_FACE_DETECTOR_ENABLED: bool = os.environ.get(
     "HAL_TRACKING_FACE_DETECTOR", "true"
 ).strip().lower() in ("1", "true", "yes", "on")
@@ -106,6 +106,13 @@ TRACKING_MAX_DURATION_S: float = float(
 
 # --- Sensing: os-server integration ---
 OS_SENSING_URL = "http://127.0.0.1:5000/api/sensing/event"
+# Poked after an enrollment DIRECTORY under USERS_DIR appears or disappears
+# (/face/remove, /face/reset, /users/rename), so os-server can retire that
+# person from every runtime's USER.md straight away instead of leaving a stale
+# profile in the agent's system prompt until the next boot. Loopback-only on the
+# os-server side. NOT called by /speaker/remove: that drops only the voice/
+# subdir and leaves the person enrolled by face.
+OS_USER_RECONCILE_URL = "http://127.0.0.1:5000/api/agent/user-reconcile"
 # Named-pool filler (os-server owns phrases + language + WAV cache).
 OS_SENSING_FILLER_URL = "http://127.0.0.1:5000/api/sensing/filler"
 # Publish the captured `look` frame to the Flow Monitor.
@@ -404,6 +411,24 @@ EMOTION_SNAPSHOT_DIR = os.environ.get(
     os.path.join(tempfile.gettempdir(), "hal-emotion-snapshots"),
 )
 EMOTION_SNAPSHOT_MAX_COUNT = int(os.environ.get("HAL_EMOTION_SNAPSHOT_MAX_COUNT", "100"))
+# Per-trigger debug capture for face emotion: every recognizer trigger writes
+# its own timestamped folder (input crop + clean frame + annotated frame +
+# result.json) under EMOTION_LOG_DIR, named "<time>_<Emotion>_<conf>" (or
+# "<time>_FAIL-<reason>"), so a misclassification is spottable from the
+# directory listing alone. Debug aid — off-device analysis, not a runtime input.
+# Off by default: this writes four files per face per tick and is a debugging
+# aid, not a runtime input. Turn it on with HAL_EMOTION_DEBUG_LOG_ENABLED=true
+# when investigating misclassifications. With it off the capture path returns
+# before any frame is copied, so it costs nothing.
+EMOTION_DEBUG_LOG_ENABLED = (
+    os.environ.get("HAL_EMOTION_DEBUG_LOG_ENABLED", "false").lower() == "true"
+)
+EMOTION_LOG_DIR = os.environ.get(
+    "HAL_EMOTION_LOG_DIR",
+    "/opt/hal/drivers/sensing/perceptions/processors/emotion-logs",
+)
+# Cap on retained trigger folders (oldest pruned first); 0 = unbounded.
+EMOTION_LOG_MAX_TRIGGERS = int(os.environ.get("HAL_EMOTION_LOG_MAX_TRIGGERS", "500"))
 
 # --- Sensing: Fire hazard detection (object detection via perception-service) ---
 FIRE_HAZARD_ENABLED = os.environ.get("HAL_FIRE_HAZARD_ENABLED", "true").lower() == "true"
@@ -814,6 +839,29 @@ REALTIME_RECV_QUEUE_TIMEOUT_S: float = float(
 # watchdog gives up: keep REALTIME_GEMINI_VISION_HANDOFF_MAX_AGE_S comfortably
 # above it, or the frame expires before it can be handed off (that regression
 # ran from 2026-07-06 to 2026-08-24 — see that setting's comment).
+# Ceiling on how long ONE turn may stay silent while the server is still
+# talking to us. The gap watchdog above ends a turn that produces no output,
+# which is right for a model that chose not to answer and wrong for one that is
+# busy — a Google Search grounding emits nothing until the search returns, and
+# ending the turn there hands a question the model was about to answer to the
+# main agent instead (minutes, not seconds), while the abandoned search is
+# billed anyway and its chunks still land in the session context.
+#
+# receive() therefore keeps a turn alive past the gap window as long as inbound
+# messages keep arriving (see note_server_activity) — this is the hard stop on
+# that, so a server that chatters without ever producing output still cannot
+# hang the turn forever. Must stay above the slowest grounded turn worth
+# waiting for; measured on lamp-0c89 04/09/2026 a search landed 9.5s into the
+# turn. 0 disables the keep-alive entirely (back to the plain gap watchdog).
+REALTIME_TURN_MAX_SILENCE_S: float = float(
+    os.environ.get("HAL_REALTIME_TURN_MAX_SILENCE_S", "20.0")
+)
+# Dump every field of Gemini's grounding_metadata verbatim, once per grounded
+# turn. Diagnostic only, and verbose — it exists to settle whether a turn that
+# logs chunks=0 got an empty search or a stripped payload. Off by default.
+REALTIME_GROUNDING_DEBUG: bool = os.environ.get(
+    "HAL_REALTIME_GROUNDING_DEBUG", "false"
+).lower() in ("1", "true", "yes")
 REALTIME_LOOK_RECV_TIMEOUT_S: float = float(
     os.environ.get("HAL_REALTIME_LOOK_RECV_TIMEOUT_S", "20.0")
 )
@@ -847,6 +895,20 @@ REALTIME_SESSION_IDLE_RESET_S: float = float(
 # audio across the ~1s handshake (see `rebuilding`), so nothing is dropped.
 REALTIME_GEMINI_PRE_TURN_RECYCLE_S: float = float(
     os.environ.get("HAL_GEMINI_PRE_TURN_RECYCLE_S", "60")
+)
+# Close an idle Gemini session ourselves instead of letting the server close it.
+# An idle session is killed upstream with WS 1008 "The operation was aborted"
+# (measured idle lifetimes: 86s, 98s, 150s, 151s, 152s, 185s, 198s). That close is
+# harmless to turns -- the pre-turn recycle above already replaces the session
+# before any post-idle turn streams audio -- but the backend logs it as an error
+# and pages the dev channel, so the device must not provoke it. Parking closes the
+# transport after this many seconds without turn activity and leaves the
+# orchestrator `available`: the next turn's prepare_turn() connects a fresh session
+# synchronously (voice_service buffers audio across the ~1s handshake), which is
+# exactly what the pre-turn recycle would have done for that turn anyway. Must stay
+# BELOW the shortest observed idle death (86s); 45s keeps a wide margin. 0 disables.
+REALTIME_GEMINI_IDLE_PARK_S: float = float(
+    os.environ.get("HAL_GEMINI_IDLE_PARK_S", "45")
 )
 # Gemini 1011 recovery: how many times to reconnect a FRESH session and replay
 # the just-captured turn audio when a turn produced no output (the campaign-api
@@ -1471,6 +1533,21 @@ REALTIME_TTS_HISTORY_MAX_CHARS: int = int(os.environ.get("HAL_REALTIME_TTS_HISTO
 # seconds, and the body lowers this in its own .env. Tune it per device from
 # measured time-to-first-sentence, not from this default.
 REALTIME_FILLER_DELAY_S: float = float(os.environ.get("HAL_REALTIME_FILLER_DELAY_S", "1.5"))
+
+# Time-to-first-audio, text (non-native-audio) path only. Sentences are streamed
+# to TTS as they complete, so the first thing the user hears waits for a full
+# sentence terminator — and the model's opening sentence is often long. Below
+# this many characters the first utterance of a turn may instead be cut at a
+# CLAUSE boundary (comma / semicolon / colon) and spoken immediately, with the
+# remainder queued behind it; TTS is a queue, so the reply still comes out in
+# order and the split lands where a speaker would breathe anyway.
+#
+# Only ever applies to the FIRST chunk of a turn — that is the only one whose
+# latency the user is sitting in silence for. 0 disables (wait for the full
+# sentence, the pre-04/09/2026 behaviour).
+REALTIME_FIRST_CHUNK_MAX_CHARS: int = int(
+    os.environ.get("HAL_REALTIME_FIRST_CHUNK_MAX_CHARS", "90")
+)
 
 # --- Realtime: Summarizer (Anthropic Messages API) ---
 REALTIME_SUMMARIZER_ENABLED: bool = os.environ.get("HAL_REALTIME_SUMMARIZER_ENABLED", "true").lower() in ("1", "true", "yes")

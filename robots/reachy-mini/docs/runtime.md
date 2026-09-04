@@ -386,7 +386,7 @@ HAL emotion names (CSV stems on Lamp) are mapped to Pollen's HF moves in
 `_MOVE_MAP` (reachy\_service.py). The map uses preset constants from
 `hal/presets.py` and targets moves from
 [pollen-robotics/reachy-mini-emotions-library](https://huggingface.co/datasets/pollen-robotics/reachy-mini-emotions-library)
-(81 moves). Examples:
+(85 moves). Examples:
 
 | HAL emotion | HF move |
 |-------------|---------|
@@ -439,6 +439,38 @@ in the (slow) first HF library load never streams on top of a newer one.
 
 The feetech backend gets this for free: `aim` stops the animation event loop
 before moving, and that loop is the only writer.
+
+### Move Libraries
+
+Moves are looked up across several HF datasets, in order — the first dataset
+holding a name wins. Two are searched by default,
+`pollen-robotics/reachy-mini-emotions-library` and
+`pollen-robotics/reachy-mini-dances-library`; both are already pre-downloaded by
+the daemon at startup, so searching them costs no extra fetch.
+
+`HAL_REACHY_MOVES` prepends datasets to that order:
+
+```bash
+HAL_REACHY_MOVES="me/my-moves,someone/their-moves"
+```
+
+A move you recorded and pushed to the Hub then plays by name through
+`/servo/play`, and can back an emotion by adding it to `_MOVE_MAP`. Because
+custom datasets come first, naming a move that already exists officially
+shadows the official one — that is the mechanism for replacing a stock emotion
+with your own take on it.
+
+Two consequences worth knowing before adding one:
+
+- A dataset the daemon has not preloaded is downloaded on first use, inside the
+  play thread. The first play of a community move can therefore be slow; the
+  robot is not stuck, it is fetching.
+- A library that fails to load (renamed, pulled from the Hub, no network) is
+  skipped with a warning rather than taking the others down — losing a
+  community dataset must not cost the robot its official emotions.
+
+Every move goes through the speed gate regardless of where it came from; see
+**Safety Delta**.
 
 ### Play Ramp
 
@@ -498,11 +530,28 @@ Reachy's current `SAFETY.md` machine bounds:
 
 ```yaml
 motion:
-  max_speed: 60
+  max_speed: 800
   stop_always: true
 ```
 
-The shared HAL safety layer stretches movement duration to respect `max_speed`.
+The shared HAL safety layer stretches movement duration to respect `max_speed`
+for requested moves (aim/nudge/goto). A **recorded move** cannot be stretched:
+the daemon streams the whole trajectory with HAL outside the loop, so it is
+scanned before playback and refused when its peak head rotation exceeds the
+ceiling — `peak_head_dps()` / `_move_refused()` in the driver.
+
+`max_speed` was `60` while it was a placeholder; scanning all 85 moves of
+`pollen-robotics/reachy-mini-emotions-library` showed a median peak of 111 deg/s,
+a p90 of 293 and a maximum of 766, so 60 would have refused 63 of the vendor's
+own moves. 800 sits just above the vendor's own ceiling and still needs a real
+measurement on hardware — see `robots/reachy-mini/SAFETY.md`.
+
+Speed is the true rotation angle between head orientations over a window of at
+least 20 ms. Per-axis euler deltas spike at gimbal crossings, and raw frame
+pairs turn timestamp jitter into speeds the head never reaches (`wake-mini-up`
+reads 17226 deg/s from a single 1 ms gap, 766 measured properly). Head
+translation is not bounded: `max_speed` is deg/s, `head_x/y/z` are millimetres.
+
 `stop`, `zero`, `hold`, and `release` remain deterministic recovery actions.
 
 Do not add a `thermal` block until the real Wireless unit's Raspberry Pi thermal

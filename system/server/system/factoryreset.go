@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	migratepersona "go.autonomous.ai/os/system/agent/migrate_persona"
 	"go.autonomous.ai/os/system/domain"
 	"go.autonomous.ai/os/system/lib/osreset"
 	"go.autonomous.ai/os/system/server/serializers"
@@ -68,7 +69,11 @@ func runFactoryReset(gw domain.AgentGateway) (started bool, errStatus int, errMe
 	// to keep in sync (adding a backend = implement ResetAgent, nothing here). A
 	// runtime whose state is owned externally (e.g. PicoClaw) ships a no-op
 	// ResetAgent, so it is correctly left untouched.
-	log.Printf("[factory-reset] accepted — resetting active agent → wipe %d device paths → reboot",
+	//
+	// The INACTIVE backends still get their persona cleared — see
+	// wipeInactivePersonas. That list is also switch-free: it comes from the
+	// persona adapters, which the compiler makes every runtime provide.
+	log.Printf("[factory-reset] accepted — resetting active agent → wipe %d device paths + all runtime personas → reboot",
 		len(deviceWipePaths))
 
 	go func() {
@@ -99,6 +104,31 @@ func wipeDeviceState() {
 	log.Printf("[factory-reset] wiping %d device paths", len(deviceWipePaths))
 	for _, p := range deviceWipePaths {
 		osreset.WipePath("[factory-reset]", p)
+	}
+	wipeInactivePersonas()
+}
+
+// wipeInactivePersonas clears the persona + long-term memory of EVERY runtime,
+// not only the one gw.ResetAgent() just handled.
+//
+// gw.ResetAgent() reaches the active backend alone, but persona files are
+// copies: a runtime switch migrates SOUL/IDENTITY/MEMORY/USER/KNOWLEDGE into
+// the destination and leaves the source's copy behind. So a device that has
+// ever switched backends holds the same profile in several trees, and clearing
+// only the active one leaves the next switch free to migrate a stale copy back
+// in — a factory reset that does not survive contact with the switch (device
+// observed 2026-09-03: a retired owner's name in four byte-identical USER.md
+// files, oldest from 2026-07-08, still being spoken).
+//
+// Paths come from the persona adapters themselves (migratepersona.PersonaPaths)
+// so registering a new runtime cannot forget this — the compiler requires
+// personaPaths alongside read/write. Re-wiping the active runtime's files is
+// harmless: WipePath ignores what is already gone.
+func wipeInactivePersonas() {
+	paths := migratepersona.PersonaPaths(migratepersona.DefaultOptions("", ""))
+	log.Printf("[factory-reset] wiping %d persona paths across all runtimes", len(paths))
+	for _, p := range paths {
+		osreset.WipePath("[factory-reset/persona]", p)
 	}
 }
 

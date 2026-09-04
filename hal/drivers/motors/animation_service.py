@@ -82,13 +82,17 @@ def _motor_positions_from_bus(robot: LeLampFollower) -> Dict[str, float]:
 
 
 class AnimationService:
-    def __init__(self, port: str, lamp_id: str, fps: int = 30, duration: float = 5.0, idle_recording: str = SERVO_IDLE, hold_s: float = 0.0):
+    def __init__(self, port: str, lamp_id: str, fps: int = 30, duration: float = 5.0, idle_recording: str = SERVO_IDLE, hold_s: float = 0.0, safety_policy=None):
         self.port = port
         self.lamp_id = lamp_id
         self.fps = fps
         self.duration = duration
         self.idle_recording = idle_recording
         self.hold_s = hold_s
+        # SAFETY.md motion.max_speed, applied to recording playback at load
+        # time (see _load_recording). aim/nudge take theirs per call from the
+        # route; playback has no route to carry it, so the service holds it.
+        self._safety_policy = safety_policy
         self._hold_until: float = 0.0  # timestamp until which to hold pose before returning to idle
         self._no_idle_recordings = NO_IDLE_RECORDINGS
         # disable_torque_on_disconnect=False: dropping torque is what `release()`
@@ -631,6 +635,11 @@ class AnimationService:
         # tracking ends. This is stricter than hold_mode — /servo/hold
         # and focus scenes still let emotion animations play.
         if self._tracking_active:
+            if self._current_recording is not None:
+                logger.info(
+                    "[tracking] dropped recording %r mid-playback (flag=%s owners=%d)",
+                    self._current_recording, self._tracking_flag, self._body_owners,
+                )
             self._idle_settled = True
             self._current_recording = None
             self._current_actions = []
@@ -756,7 +765,8 @@ class AnimationService:
         """Load a recording from cache or file, resampled for playback.
 
         Frames are returned on the event loop's 1/fps grid with over-speed
-        segments stretched — see recording_timing.resample_recording. Playback stays a
+        segments stretched — over-speed against the servo's own limit and the
+        declared motion.max_speed, whichever is lower — see recording_timing.resample_recording. Playback stays a
         plain frame-per-tick walk.
         """
         # Check cache first
@@ -793,7 +803,11 @@ class AnimationService:
                 self._recording_cache[recording_name] = actions
                 return actions
 
-            actions = resample_recording(times, actions, recording_name, self.fps)
+            # Cached per name, which is safe: the policy is read once at boot
+            # and never changes for the life of the process.
+            actions = resample_recording(
+                times, actions, recording_name, self.fps, self._safety_policy
+            )
 
             # Cache the recording
             self._recording_cache[recording_name] = actions
@@ -946,6 +960,17 @@ class AnimationService:
         """
         # Preempt: drop any recording the event loop is playing so it stops
         # sending its frames. _continue_playback short-circuits on empty state.
+        #
+        # Logged because this leaves the body with NOTHING playing and
+        # `_idle_settled` set — idle does not come back on its own, so a lamp
+        # that goes still after a move has to be traceable to the move that
+        # did it. Both silent drop paths (this and the tracking branch above)
+        # were invisible while chasing a motionless lamp on 03/09/2026.
+        if self._current_recording is not None:
+            logger.info(
+                "[preempt] dropped recording %r for a direct move",
+                self._current_recording,
+            )
         self._current_recording = None
         self._current_actions = []
         self._current_frame_index = 0
