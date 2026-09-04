@@ -582,7 +582,10 @@ Tùy chọn thay thế cho `MotionPerception` — chạy nhận diện hành đ�
 
 Lamp nhận diện trạng thái cảm xúc **của người dùng** qua ba kênh:
 
-1. **Biểu cảm khuôn mặt** (chính) — event `emotion.detected` từ `hal/drivers/sensing/perceptions/emotion.py`. Dùng emotion classifier chuyên dụng chạy trên perception-service tự host qua WebSocket. Nhận diện 7 cảm xúc: Angry, Disgust, Fear, Happy, Sad, Surprise, Neutral. Ngưỡng confidence cấu hình được (`EMOTION_CONFIDENCE_THRESHOLD`).
+1. **Biểu cảm khuôn mặt** (chính) — event `emotion.detected` từ `hal/drivers/sensing/perceptions/processors/emotion.py`. Mỗi mặt phát hiện được sẽ crop và POST lên perception-service `/emotion-recognize` (HTTP, mỗi mặt 1 call mỗi sensing tick). Nhận diện 7 cảm xúc: Neutral, Happy, Sad, Surprise, Fear, Disgust, Anger. Một reading phải qua 3 cổng trước khi thành event:
+   1. **Gate theo label (phía service)** — argmax phải vượt ngưỡng riêng của nó trong `label_gating.py` (`anger 0.8`, `happy 0.5`, `surprise 0.6`, `sad/disgust 0.7`, `fear 0.5`), nếu không sẽ bị thay bằng Neutral mang **xác suất của chính Neutral** (thường rất thấp). Sau đó HAL áp `EMOTION_CONFIDENCE_THRESHOLD`; dưới ngưỡng thì response rỗng và HAL không ghi nhận reading nào.
+   2. **Occupancy (phía HAL)** — mỗi lần flush theo `EMOTION_FLUSH_S`, `Happy` fire chỉ với 1 frame, nhưng mọi label khác phải chiếm **≥ 2/3 số lần nhận diện của người đó trong 10s gần nhất**, tính cả những lần không trả về gì. Mặt quay về phía màn hình bị đọc thành Anger, nên trước đây 1 frame Anger đơn lẻ giữa cả chục response rỗng vẫn thắng vote.
+   3. **Dedup theo bucket** — `(user, positive|negative)` với TTL `EMOTION_DEDUP_WINDOW_S` (300s), nên mỗi cực chỉ báo tối đa 1 lần mỗi 5 phút.
 2. **Cảm xúc giọng nói** (phụ) — event `speech_emotion.detected` từ `hal/drivers/voice/speech_emotion/`. Chạy ở cuối mỗi phiên STT đã nhận diện được speaker, cùng WAV bytes đã dùng cho speaker recognition. Dùng `emotion2vec_plus_large` trên perception-service qua HTTP. Xem [Speech Emotion Recognition](../../../../docs/speech-emotion.md) cho pipeline đầy đủ.
 3. **Body action** (cấp 3) — emotional X3D actions từ action recognition **cố ý bị loại** khỏi `motion.activity` (giờ thuần vật lý: sedentary/drink/break/celebrate). Một event type `motion.emotional` riêng đang được lên kế hoạch.
 
