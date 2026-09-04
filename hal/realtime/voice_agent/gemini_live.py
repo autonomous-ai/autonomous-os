@@ -18,6 +18,7 @@ from google.genai import types
 from google.genai.live import AsyncSession
 from websockets.exceptions import ConnectionClosed
 
+from hal import config as app_config
 from hal.realtime.config import GeminiConfig, gemini_needs_idle_workaround
 from hal.realtime.enums import GeminiThinkingLevel
 from hal.realtime.models import (
@@ -560,6 +561,39 @@ class GeminiLiveAgent(VoiceAgentBase):
                         "[realtime][grounding] Google Search fired: queries=%s chunks=%d",
                         queries[:3], len(chunks),
                     )
+                    # chunks=0 on turns that clearly ran a search (measured on
+                    # lamp-0c89 04/09/2026: 2 of 3 grounded turns) has two very
+                    # different causes and the count alone cannot separate them:
+                    # the search really returned nothing, or the metadata reached
+                    # us stripped (the proxy forwards web_search_queries, so the
+                    # object itself survives — the question is what else does).
+                    # This dumps every field of the metadata verbatim, once per
+                    # turn, so the next grounded turn answers it from evidence.
+                    # Off by default: it is verbose and only useful while
+                    # investigating. HAL_REALTIME_GROUNDING_DEBUG=true to arm.
+                    if app_config.REALTIME_GROUNDING_DEBUG:
+                        try:
+                            fields = {
+                                name: getattr(gm, name, None)
+                                for name in (
+                                    "web_search_queries",
+                                    "grounding_chunks",
+                                    "grounding_supports",
+                                    "search_entry_point",
+                                    "retrieval_metadata",
+                                    "retrieval_queries",
+                                    "google_maps_widget_context_token",
+                                )
+                            }
+                            logger.info(
+                                "[realtime][grounding][debug] set=%s | %s",
+                                sorted(k for k, v in fields.items() if v),
+                                {k: repr(v)[:300] for k, v in fields.items()},
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                "[realtime][grounding][debug] dump failed: %s", e
+                            )
 
                 if content.model_turn and content.model_turn.parts:
                     for part in content.model_turn.parts:

@@ -744,6 +744,12 @@ REALTIME_RECV_QUEUE_TIMEOUT_S: float = float(
 REALTIME_TURN_MAX_SILENCE_S: float = float(
     os.environ.get("HAL_REALTIME_TURN_MAX_SILENCE_S", "20.0")
 )
+# Dump every field of Gemini's grounding_metadata verbatim, once per grounded
+# turn. Diagnostic only, and verbose — it exists to settle whether a turn that
+# logs chunks=0 got an empty search or a stripped payload. Off by default.
+REALTIME_GROUNDING_DEBUG: bool = os.environ.get(
+    "HAL_REALTIME_GROUNDING_DEBUG", "false"
+).lower() in ("1", "true", "yes")
 REALTIME_LOOK_RECV_TIMEOUT_S: float = float(
     os.environ.get("HAL_REALTIME_LOOK_RECV_TIMEOUT_S", "20.0")
 )
