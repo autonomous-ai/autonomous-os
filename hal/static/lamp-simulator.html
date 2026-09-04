@@ -436,7 +436,12 @@
       // step either way - you could not back off to see the lamp on its floor
       // nor push in on the shade. It now spans a factor of ~13, which needs the
       // far plane pushed out or the far end of it clips the grid away.
+      // Which way the lamp faces. The rig's rest pose aims the shade at az 2.46,
+      // so the old default sat behind its head; this is that heading swung 3/4
+      // round, the same off-axis framing animacy opens with. Dead-on (2.46) puts
+      // the arm edge-on and unlit, which reads flat.
       const CAM_FOV = 0.663,
+        CAM_AZ = 1.2,
         CAM_EL = 0.34,
         ORBIT_R = 780,
         ZOOM_MIN = 0.3,
@@ -482,7 +487,7 @@
         pose = { ...target },
         led = [0, 0, 0],
         ringPixels = [],
-        az = -0.68,
+        az = CAM_AZ,
         el = CAM_EL,
         zoom = 1,
         drag,
@@ -1847,7 +1852,7 @@
         { passive: false },
       );
       canvas.addEventListener("dblclick", () => {
-        az = -0.68;
+        az = CAM_AZ;
         el = CAM_EL;
         zoom = 1;
       });
