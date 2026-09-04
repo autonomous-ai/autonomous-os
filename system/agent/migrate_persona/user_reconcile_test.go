@@ -333,3 +333,28 @@ func TestReconcileNeverTreatsAFieldBulletAsAPerson(t *testing.T) {
 		t.Errorf("file was rewritten:\n%s", readFile(t, path))
 	}
 }
+
+// USER.md over the bootstrap cap is truncated from the END, and `## Users` is at
+// the end — so an oversized profile silently loses exactly the person data the
+// sync just wrote. The reconcile must say so while there is still headroom.
+func TestReconcileWarnsBeforeUserProfileWouldBeTruncated(t *testing.T) {
+	if userProfileWarnChars >= userProfileBootstrapCap {
+		t.Fatalf("warn threshold %d must leave headroom below the cap %d",
+			userProfileWarnChars, userProfileBootstrapCap)
+	}
+	big := "- **Name:** Long\n" + strings.Repeat("- Context: padding padding padding.\n", 400)
+	if len(big) <= userProfileWarnChars {
+		t.Fatalf("fixture too small to cross the threshold: %d", len(big))
+	}
+	opts, _ := seedDevice(t, big, "long")
+
+	// Nothing is stale, so this must still be a clean no-op pass — the warning
+	// is a signal, never a reason to rewrite the file.
+	actions, err := ReconcileUserProfiles(opts, true)
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if len(actions) != 0 {
+		t.Errorf("oversized file must not trigger retirements: %+v", actions)
+	}
+}

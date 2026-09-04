@@ -2,6 +2,7 @@ package migratepersona
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -10,6 +11,15 @@ import (
 	"time"
 
 	"go.autonomous.ai/os/system/lib/usercanon"
+)
+
+// userProfileBootstrapCap mirrors OpenClaw's agents.defaults.bootstrapMaxChars
+// (12000) — the per-file ceiling on a bootstrap file injected into the system
+// prompt. userProfileWarnChars is where we start warning, leaving room to react
+// before anything is actually cut.
+const (
+	userProfileBootstrapCap = 12000
+	userProfileWarnChars    = 9000
 )
 
 // ReconcileAction is one change a reconcile pass wants to make (dry-run) or has
@@ -200,6 +210,19 @@ func reconcileOneUserProfile(path string, enrolled map[string]bool, execute bool
 			}
 		}
 		out = append(out, e)
+	}
+
+	// USER.md is a bootstrap file: OpenClaw injects it into the system prompt on
+	// every turn, capped at bootstrapMaxChars (12000). Over that it is truncated
+	// with text.slice(0, cutPoint) — i.e. the HEAD is kept and the TAIL is cut,
+	// and the tail is exactly where `## Users` lives. So an oversized profile
+	// loses the person data first, silently, and the only visible symptom is the
+	// agent forgetting who someone is. The daily sync is told to keep entries
+	// short; this is the check that the instruction was actually followed.
+	if n := len(raw); n > userProfileWarnChars {
+		slog.Warn("USER.md is approaching the bootstrap cap; `## Users` is at the end of the file and is truncated first",
+			"component", "user-reconcile", "path", path, "chars", n,
+			"warn_at", userProfileWarnChars, "cap", userProfileBootstrapCap)
 	}
 
 	if len(actions) == 0 || !execute {
