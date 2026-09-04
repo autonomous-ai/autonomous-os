@@ -167,6 +167,7 @@ FACE_HEIGHT_RATIO_THRESHOLD = 0.10  # Skip faces shorter than 10% of frame heigh
 FACE_MAX_TRUNCATION = 0.05          # Skip faces with >5% of their bbox off-frame
 HAL_FACE_LANDMARK_CONF_THRESHOLD = 0.99  # Skip crops the face mesh isn't sure about
 FACE_EXTENDED_THRESHOLD = 0.45      # Bar for a match carried by the extended bank alone
+FACE_EXTEND_MIN_ENROLL_SIM = 0.40   # Bar the uploads must clear to auto-capture a view
 FACE_COOLDOWN_S = 10.0              # Min seconds between face presence events
 FACE_OWNER_FORGET_S = 3600.0        # Re-fire presence after N seconds without seeing owner
 FACE_STRANGER_FORGET_S = 1800.0     # Same for strangers
@@ -222,6 +223,32 @@ the shared threshold to 0.40 instead fixes that and costs the frontal path
 The four frames 0.40 would additionally recognise all have a confident
 recognition 2–6 s away, so they cost nothing visible; a false acceptance does.
 
+**What gets auto-captured.** A recognised frame may join a user's extended bank
+only when **both** hold: the enrolled uploads carried the match and scored above
+`FACE_EXTEND_MIN_ENROLL_SIM` (0.40), and the view is different enough from what
+is already stored to be worth keeping.
+
+Both are needed. Novelty alone was the only test before, and "far from
+everything we have" is equally the signature of a new pose and of a *different
+person* — so the rule selected for what it should have screened out. The
+farthest-point pruning that trims the bank is anchored on the uploads, so it
+then ranks strangers highest and evicts genuine views to keep them. On one lamp
+the bank had become 6/10 other people, matched at 1.000; fed nothing but genuine
+frames of the enrolled user, the old rule still built a bank that accepted a
+verified stranger at 0.362.
+
+Requiring the uploads to carry the match also stops second-generation copies: a
+frame recognised **by** the extended bank can no longer add to it, so one bad
+view cannot breed more.
+
+This does not make the bank pointless — the stored view is not there for its own
+sake. A view the uploads recognise at 0.40–0.59 becomes a **new anchor** one step
+further out in pose space. Replaying 990 logged frames: 879 frames were
+recognised by the uploads directly, and **11 more were rescued by the extended
+bank alone**, at enroll similarity 0.157–0.298 — below the 0.30 bar, so without
+the bank they would have been missed. One of them is a frame the live device
+labelled `stranger_4`.
+
 **Tuning:**
 
 | Symptom | Fix |
@@ -229,6 +256,8 @@ recognition 2–6 s away, so they cost nothing visible; a false acceptance does.
 | Distant people not recognized | Decrease `FACE_HEIGHT_RATIO_THRESHOLD` (0.10 → 0.07) |
 | Someone else is recognized as an enrolled user | Raise `FACE_EXTENDED_THRESHOLD` (0.45 → 0.50) and check `match_source` in the face debug log — `extended` means an auto-captured view carried it |
 | An enrolled user is missed at angles the frontal photo cannot cover | Lower `FACE_EXTENDED_THRESHOLD`, but not below 0.45 without re-measuring against known strangers |
+| Extended bank fills with other people | Should no longer happen; if it does, raise `FACE_EXTEND_MIN_ENROLL_SIM` and check each stored view's `match_source` in the face debug log |
+| Extended bank stays empty or stops growing | Lower `FACE_EXTEND_MIN_ENROLL_SIM` (0.40 → 0.35). Only frames the *uploads* recognise are eligible, so a user with a single frontal photo grows the bank slowly by design |
 | False detections from tiny face-like patches | Increase `FACE_HEIGHT_RATIO_THRESHOLD` (0.10 → 0.15) |
 | Recognition flickers / mints new `stranger_N` ids repeatedly | Crop is too small to embed reliably — increase `FACE_HEIGHT_RATIO_THRESHOLD`, or raise camera resolution to 1280×720 |
 | Wrong person matched when someone sits close to a frame edge | Face is clipped — decrease `FACE_MAX_TRUNCATION` (0.05 → 0.03), or re-aim the camera so heads stay fully in frame |

@@ -63,6 +63,7 @@ class FaceRecognizer:
         max_truncation: float = config.FACE_MAX_TRUNCATION,
         threshold: float = 0.3,
         extended_threshold: float = config.FACE_EXTENDED_THRESHOLD,
+        extend_min_enroll_sim: float = config.FACE_EXTEND_MIN_ENROLL_SIM,
         negative_threshold: float | None = 0.2,
         max_strangers: int = 50,
         scrfd_model_path: str = _SCRFD_MODEL_PATH,
@@ -77,6 +78,9 @@ class FaceRecognizer:
         # Bar for a match carried by the extended bank alone — deliberately
         # higher than ``threshold``; see FACE_EXTENDED_THRESHOLD in hal/config.py.
         self._extended_threshold: float = extended_threshold
+        # Bar the UPLOADS must clear before a live view may be auto-captured
+        # into the extended bank; see FACE_EXTEND_MIN_ENROLL_SIM.
+        self._extend_min_enroll_sim: float = extend_min_enroll_sim
         self._negative_threshold: float | None = negative_threshold
         self._max_strangers: int = max_strangers
         self._scrfd_model_path: str = scrfd_model_path
@@ -268,12 +272,22 @@ class FaceRecognizer:
     # Users typically upload frontal shots, but a ceiling/desk camera mostly
     # sees them side-on. Those side views miss the frontal bank, get flagged as
     # strangers, and spawn duplicate "stranger_N" identities. To fix this each
-    # user gets a second, dynamically-grown "extended" bank: every time a live
-    # frame matches them confidently we may keep that frame's embedding as an
-    # extra reference view — but only if it is DIFFERENT enough from what we
-    # already store (so the bank captures new poses instead of near-duplicates),
-    # and capped at ``max_extended_images`` most-diverse samples. The uploaded
-    # images are never touched; the extended bank only ever grows recall.
+    # user gets a second, dynamically-grown "extended" bank: a live frame may be
+    # kept as an extra reference view when TWO independent things hold —
+    #
+    #   identity: the enrolled UPLOADS carried the match, above
+    #             FACE_EXTEND_MIN_ENROLL_SIM (checked in detect(), before the
+    #             candidate is queued). Never a match the extended bank made:
+    #             that is evidence about a previous guess, not about the person.
+    #   novelty:  it is DIFFERENT enough from what is already stored, so the
+    #             bank fills with new poses instead of near-duplicates
+    #             (``diversity_threshold``, checked in _maybe_extend_user).
+    #
+    # Both are required. Novelty alone is what let this bank fill with strangers:
+    # "far from everything we have" is equally the signature of a new pose and of
+    # a different person, so a novelty-only rule selects for the thing it should
+    # be screening out. The set is capped at ``max_extended_images`` most-diverse
+    # samples. The uploaded images are never touched.
 
     @staticmethod
     def _user_embeddings(
@@ -994,10 +1008,19 @@ class FaceRecognizer:
                         person_id, match_source, up_s, ex_s,
                         self._threshold, self._extended_threshold,
                     )
-                # Confidently identified: this live view is a candidate to
-                # enrich the user's extended set (kept only if it adds a pose
-                # the current set lacks — see _maybe_extend_user).
-                if raw_id:
+                # Candidate to enrich the user's extended set — but only when
+                # the UPLOADS themselves carried this match, and by a clear
+                # margin. Being recognised is not enough to become a reference
+                # view: a match the extended bank carried is evidence about a
+                # previous guess, not about the person, so letting it add a
+                # view lets one mistake breed more. Anchoring on the uploads is
+                # what makes poisoning non-replicating. The pose still has to be
+                # new enough to keep — see _maybe_extend_user.
+                if (
+                    raw_id
+                    and match_source == "enroll"
+                    and up_s > self._extend_min_enroll_sim
+                ):
                     extend_candidates.append((raw_id, embeds[i], (x1, y1, x2, y2)))
             elif s_score > self._threshold:
                 raw_id = stranger_ids[i] or ""

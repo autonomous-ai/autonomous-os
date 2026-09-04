@@ -208,6 +208,26 @@ FACE_MAX_TRUNCATION = float(os.environ.get("HAL_FACE_MAX_TRUNCATION", "0.05"))
 # extra frames 0.40 would recognise all have a confident recognition 2-6s away,
 # so they cost nothing visible; a false acceptance does.
 FACE_EXTENDED_THRESHOLD = float(os.environ.get("HAL_FACE_EXTENDED_THRESHOLD", "0.45"))
+# Similarity to the ENROLLED UPLOADS a live view must reach before it may be
+# auto-captured into a user's extended bank. Deliberately above the 0.3 match
+# threshold: being recognised is not enough to become a reference view.
+#
+# Admission previously had no identity test at all — only a DIVERSITY gate that
+# keeps a view when it is dissimilar to everything stored. Novelty and impostor
+# are the same signal, so that rule selected for exactly what it should screen
+# out, and the farthest-point pruning that trims the bank is anchored on the
+# uploads, meaning it ranks impostors highest and evicts genuine views to keep
+# them. Fed nothing but genuine frames of the enrolled user, the old rule still
+# built a bank that accepted a verified stranger at 0.362; the live bank on
+# lamp-ac82 had ended up 6/10 other people, matched at 1.000.
+#
+# Requiring the uploads themselves to carry the match also stops second-
+# generation copies: a frame recognised BY the extended bank can no longer add
+# to it, so one bad view can never breed more. Replaying 990 logged frames under
+# this rule produced a bank that was 10/10 the enrolled user.
+FACE_EXTEND_MIN_ENROLL_SIM = float(
+    os.environ.get("HAL_FACE_EXTEND_MIN_ENROLL_SIM", "0.40")
+)
 # Per-detection debug capture for face recognition: every recognized face
 # writes its own timestamped folder (input crop + clean frame + annotated frame
 # + result.json) under FACEID_LOG_DIR, named "<time>_<face_id>_<similarity>"
