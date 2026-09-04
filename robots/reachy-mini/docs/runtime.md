@@ -386,7 +386,7 @@ HAL emotion names (CSV stems on Lamp) are mapped to Pollen's HF moves in
 `_MOVE_MAP` (reachy\_service.py). The map uses preset constants from
 `hal/presets.py` and targets moves from
 [pollen-robotics/reachy-mini-emotions-library](https://huggingface.co/datasets/pollen-robotics/reachy-mini-emotions-library)
-(81 moves). Examples:
+(85 moves). Examples:
 
 | HAL emotion | HF move |
 |-------------|---------|
@@ -439,6 +439,38 @@ in the (slow) first HF library load never streams on top of a newer one.
 
 The feetech backend gets this for free: `aim` stops the animation event loop
 before moving, and that loop is the only writer.
+
+### Move Libraries
+
+Moves are looked up across several HF datasets, in order — the first dataset
+holding a name wins. Two are searched by default,
+`pollen-robotics/reachy-mini-emotions-library` and
+`pollen-robotics/reachy-mini-dances-library`; both are already pre-downloaded by
+the daemon at startup, so searching them costs no extra fetch.
+
+`HAL_REACHY_MOVES` prepends datasets to that order:
+
+```bash
+HAL_REACHY_MOVES="me/my-moves,someone/their-moves"
+```
+
+A move you recorded and pushed to the Hub then plays by name through
+`/servo/play`, and can back an emotion by adding it to `_MOVE_MAP`. Because
+custom datasets come first, naming a move that already exists officially
+shadows the official one — that is the mechanism for replacing a stock emotion
+with your own take on it.
+
+Two consequences worth knowing before adding one:
+
+- A dataset the daemon has not preloaded is downloaded on first use, inside the
+  play thread. The first play of a community move can therefore be slow; the
+  robot is not stuck, it is fetching.
+- A library that fails to load (renamed, pulled from the Hub, no network) is
+  skipped with a warning rather than taking the others down — losing a
+  community dataset must not cost the robot its official emotions.
+
+Every move goes through the speed gate regardless of where it came from; see
+**Safety Delta**.
 
 ### Play Ramp
 

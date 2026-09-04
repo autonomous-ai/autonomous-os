@@ -142,7 +142,7 @@ class TestReachyPlaybackLoop(unittest.TestCase):
         self.svc = ReachyMotionService()
         self.mini = FakeMini()
         self.svc._mini = self.mini
-        self.svc._moves = FakeMoves()   # skip the lazy HF loader
+        self.svc._moves = [FakeMoves()]   # skip the lazy HF loader
 
     def tearDown(self):
         self.svc._music_playing = False
@@ -213,7 +213,7 @@ class TestReachyPlaybackLoop(unittest.TestCase):
             def get(self, name):
                 raise RuntimeError(f"Move {name} not found")
 
-        self.svc._moves = DeadMoves()
+        self.svc._moves = [DeadMoves()]
         self.svc.dispatch(P.SERVO_CMD_MUSIC_START, P.SERVO_MUSIC_GROOVE)
         self.svc._play_thread.join(timeout=2.0)
         self.assertFalse(self.svc._play_thread.is_alive(), "play thread spun on a failing move")
@@ -261,7 +261,7 @@ class TestPlayRamp(unittest.TestCase):
     def _svc(self, policy=None):
         svc = ReachyMotionService(safety_policy=policy)
         svc._mini = FakeMini()
-        svc._moves = FakeMoves()
+        svc._moves = [FakeMoves()]
         return svc
 
     def test_play_passes_a_nonzero_ramp(self):
@@ -276,7 +276,7 @@ class TestPlayRamp(unittest.TestCase):
 
         policy = SafetyPolicy(schema="autonomous.safety.v1", motion=MotionBounds(max_speed=60))
         svc = self._svc(policy)
-        svc._moves = self._RampMoves()
+        svc._moves = [self._RampMoves()]
         svc.dispatch(P.SERVO_CMD_PLAY, P.SERVO_CURIOUS)
         svc._play_thread.join(timeout=2.0)
         # 90° of yaw at 60 deg/s cannot be done in the 0.5s default ramp.
@@ -301,7 +301,7 @@ class TestServoOwnership(unittest.TestCase):
         self.svc = ReachyMotionService()
         self.mini = FakeMini()
         self.svc._mini = self.mini
-        self.svc._moves = FakeMoves()
+        self.svc._moves = [FakeMoves()]
 
     def tearDown(self):
         self.svc._music_playing = False
@@ -344,7 +344,7 @@ class TestServoOwnership(unittest.TestCase):
 
     def test_play_stalled_in_the_library_never_starts_late(self):
         """The cancel misses a thread still inside moves.get() — it must skip."""
-        self.svc._moves = SlowMoves()
+        self.svc._moves = [SlowMoves()]
         self.svc.dispatch(P.SERVO_CMD_PLAY, P.SERVO_CURIOUS)
         self.svc.dispatch(P.SERVO_CMD_PLAY, P.SERVO_HAPPY_WIGGLE)
         if self.svc._play_thread:
@@ -366,7 +366,7 @@ class TestServoOwnership(unittest.TestCase):
 
     def test_superseded_play_never_publishes_its_name(self):
         """GET /servo must name the winner, not a thread that lost the servo."""
-        self.svc._moves = SlowMoves(delay=0.1)
+        self.svc._moves = [SlowMoves(delay=0.1)]
         self.svc.dispatch(P.SERVO_CMD_PLAY, P.SERVO_SAD)
         self.svc.dispatch(P.SERVO_CMD_PLAY, P.SERVO_GREETING)
         winner = self.svc._play_thread
@@ -388,7 +388,7 @@ class TestFreezeAndHold(unittest.TestCase):
         self.svc = ReachyMotionService()
         self.mini = FakeMini()
         self.svc._mini = self.mini
-        self.svc._moves = FakeMoves()
+        self.svc._moves = [FakeMoves()]
 
     def tearDown(self):
         self.svc._music_playing = False
@@ -470,7 +470,7 @@ class TestAvailableRecordings(unittest.TestCase):
 
     def setUp(self):
         self.svc = ReachyMotionService()
-        self.svc._moves = FakeMoves()
+        self.svc._moves = [FakeMoves()]
 
     def test_mapped_moves_are_listed_under_their_hal_name(self):
         listed = self.svc.get_available_recordings()
