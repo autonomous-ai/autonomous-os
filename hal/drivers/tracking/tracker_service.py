@@ -144,8 +144,10 @@ class TrackerService:
             logger.error("tracker start: %s", self.last_error)
             return False
 
-        if isinstance(target_label, (list, tuple)):
-            target_label = next((t for t in target_label if t), "")
+        candidates = ([t for t in target_label if t]
+                      if isinstance(target_label, (list, tuple))
+                      else [target_label] if target_label else [])
+        target_label = candidates[0] if candidates else ""
 
         # Serialize concurrent /servo/track calls. detect_object can take 5-7s
         # (remote YOLOWorld or first-time local YOLO load). Without this lock,
@@ -157,7 +159,8 @@ class TrackerService:
             return False
         try:
             self.stop()
-            return self._start_locked(bbox, target_label, camera_capture, animation_service)
+            return self._start_locked(bbox, target_label, camera_capture,
+                                      animation_service, candidates)
         finally:
             self._start_lock.release()
 
@@ -167,6 +170,7 @@ class TrackerService:
         target_label: str,
         camera_capture,
         animation_service,
+        candidates: Optional[list] = None,
     ) -> bool:
         """Body of start() — runs while _start_lock is held."""
 
@@ -213,7 +217,29 @@ class TrackerService:
                     animation_service.unfreeze()
                     return False
                 t_yolo0 = time.perf_counter()
-                bbox = self.detect_object(frame, target_label)
+                # Try every candidate label the caller offered and keep the
+                # most confident hit. The API has always documented this
+                # ("pass a list when unsure of the exact word"); until now the
+                # list was truncated to its first entry, so a caller hedging
+                # between near-synonyms got one guess and a failure. It matters
+                # most for exactly the objects this path is weakest on: COCO
+                # splits hairs a speaker does not — bottle is not cup, and a
+                # user holding a water bottle says "cup". Seeding happens once
+                # per session and local detection is ~300ms, so a second or
+                # third look is affordable here in a way it would not be in the
+                # fast loop.
+                bbox = None
+                best_conf = -1.0
+                for label in (candidates or [target_label]):
+                    found = self.detect_object(frame, label)
+                    if found is None:
+                        continue
+                    conf = self._detector.last_confidence or 0.0
+                    if conf > best_conf:
+                        bbox, best_conf, target_label = found, conf, label
+                if bbox is not None and len(candidates or []) > 1:
+                    logger.info("[track-start] chose '%s' conf=%.3f from candidates %s",
+                                target_label, best_conf, candidates)
                 t_yolo_ms = (time.perf_counter() - t_yolo0) * 1000
                 if bbox is None:
                     self.last_error = f"'{target_label}' not found in frame"

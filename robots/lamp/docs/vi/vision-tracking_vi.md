@@ -51,7 +51,7 @@ Camera chạy **1280×720**. Mọi thành phần vision nặng — ViT tracker v
 | Path | Detector | Khi nào | Tốc độ (A523) |
 |------|----------|---------|---------------|
 | 0 | **YuNet** face detector (`face_detection_yunet_2023mar.onnx`) | target ∈ {`face`, `human face`, `khuôn mặt`, `mặt`} | ~30 ms |
-| 1 | **Local YOLOv8n** (COCO classes, `yolov8n.onnx`, fallback `yolov8n.pt`, imgsz=448) | target map tới một COCO class | đo lại trên thiết bị sau khi export |
+| 1 | **Local YOLOv8n** (COCO classes, `yolov8n.onnx`, fallback `yolov8n.pt`, imgsz=448) | target map tới một COCO class | ~240–495 ms (đo trên lamp-ac82, ONNX Runtime 1.27 CPU, input 1280x720) |
 | 2 | **Remote YOLOWorld** open-vocab (`{DL_BACKEND_URL}/detect/yoloworld`) | target không thuộc COCO, hoặc local miss (fallback) | ~1.3–2.8 s |
 
 - COCO không có class hand/face, nên `hand`/`face` cố ý rơi xuống YuNet/YOLOWorld thay vì map tới `person` (vốn khóa vào toàn thân).

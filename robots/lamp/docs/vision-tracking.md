@@ -51,7 +51,7 @@ The camera runs **1280×720**. Every heavy vision component — the ViT tracker 
 | Path | Detector | When | Speed (A523) |
 |------|----------|------|--------------|
 | 0 | **YuNet** face detector (`face_detection_yunet_2023mar.onnx`) | target ∈ {`face`, `human face`, `khuôn mặt`, `mặt`} | ~30 ms |
-| 1 | **Local YOLOv8n** (COCO classes, `yolov8n.onnx`, falling back to `yolov8n.pt`, imgsz=448) | target maps to a COCO class | measure on device after export |
+| 1 | **Local YOLOv8n** (COCO classes, `yolov8n.onnx`, falling back to `yolov8n.pt`, imgsz=448) | target maps to a COCO class | ~240–495 ms (measured on lamp-ac82, ONNX Runtime 1.27 CPU, 1280x720 input) |
 | 2 | **Remote YOLOWorld** open-vocab (`{DL_BACKEND_URL}/detect/yoloworld`) | non-COCO target, or local miss (fallback) | ~1.3–2.8 s |
 
 - COCO has no hand/face class, so `hand`/`face` intentionally fall through to YuNet/YOLOWorld instead of mapping to `person` (which locked onto the whole body).
