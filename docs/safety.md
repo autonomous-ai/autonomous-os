@@ -188,11 +188,21 @@ the physical and mock drivers so the simulator plays what the body plays). The
 ceiling is the lower of the servo's measured limit (`SERVO_MAX_DPS`, 250 deg/s)
 and the declared `motion.max_speed`.
 
-**Still not gated:** recorded moves on the Reachy SDK path. `ReachyMotionService`
-hands a trajectory to `mini.play_move()` and the Pollen daemon streams it, so HAL
-bounds only the ramp into frame 0 (`_ramp_for`, via `min_move_duration`) and not
-the body of the move. This is what a `HAL_REACHY_MOVES` list of community moves
-from the Hub (#207) would need answered first.
+Recorded moves on the Reachy SDK path are gated differently, because the driver
+does not own the playback loop: `ReachyMotionService` hands a trajectory to
+`mini.play_move()` and the Pollen daemon streams it. There is no frame to slow
+down, so the move is **scanned before playback and refused** if its peak head
+rotation exceeds the declared ceiling (`peak_head_dps`, `_move_refused`). Speed
+is measured as the true angle between head orientations over a ≥20 ms window —
+per-axis euler deltas spike at gimbal crossings, and raw frame pairs turn
+timestamp jitter into speeds the head never reaches. Head *translation* is not
+bounded: `max_speed` is deg/s and `head_x/y/z` are millimetres, and no body
+declares a translation limit — not enforced, so not claimed.
+
+Refusal applies to every source including Pollen's own library, deliberately: an
+official move tripping the gate is evidence the declared number is wrong, and
+excusing it by origin would hide that signal. `robots/reachy-mini/SAFETY.md`
+records how its ceiling was derived and what still needs a real robot.
 
 ### Learned-policy interface (dry run)
 
