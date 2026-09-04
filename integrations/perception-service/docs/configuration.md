@@ -107,7 +107,7 @@ checkpoint override and threshold(s).
 | `FER__ENABLED` | `true` | Enable facial emotion |
 | `FER__MODEL` | `posterv2` | `posterv2` \| `emonet_8` \| `emonet_5` \| `emoaffectnet` |
 | `FER__CONFIDENCE_THRESHOLD`, `FER__FRAME_INTERVAL`, `FER__CKPT_PATH` | per-model | |
-| `FER__LABEL_THRESHOLDS` | _(default map)_ | JSON per-label min confidence, e.g. `{"happy":0.5,"sad":0.7}`. Argmax label below its bar → `Neutral`. Default: `happy 0.5, surprise 0.6, sad/anger/disgust/fear 0.7`. `{}` disables gating. |
+| `FER__LABEL_THRESHOLDS` | _(default map)_ | JSON per-label min confidence, e.g. `{"happy":0.5,"sad":0.7}`. Argmax label below its bar → `Neutral`, carrying **Neutral's own** probability (usually low) — so a returned `Neutral` may mean "nothing cleared its bar", not "the face looked neutral". Default: `happy 0.5, surprise 0.6, anger 0.8, sad 0.7, disgust 0.7, fear 0.5`. Anger is higher than the rest: at 0.6 it was the argmax on 38% of triggers in a 500-trigger device session and never correct, because a face turned toward a monitor reads as Anger. Setting this replaces the whole map — any label you omit is then accepted at raw argmax with no gate. `{}` disables gating. |
 | `FER__BATCH_SIZE` | `1` | Max items per GPU batch |
 | `FER__BATCH_TIMEOUT` | `0.1` | Seconds to wait for batch to fill |
 | `SER__ENABLED` | `true` | Enable speech emotion |

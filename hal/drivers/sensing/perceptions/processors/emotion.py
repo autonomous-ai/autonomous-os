@@ -2,6 +2,7 @@ import base64
 import json
 import logging
 import os
+import shutil
 import threading
 import time
 from collections import Counter
@@ -65,6 +66,228 @@ EMOTION_BUCKETS = {
     "Contempt": "negative",
 }
 
+# Per-trigger debug capture. Every emotion-recognizer trigger writes its own
+# timestamped folder (input crop + annotated frame + result.json) under
+# config.EMOTION_LOG_DIR, so misclassifications can be eyeballed against ground
+# truth. Knobs live in hal/config.py with the rest of the HAL environment:
+# HAL_EMOTION_DEBUG_LOG_ENABLED / HAL_EMOTION_LOG_DIR / HAL_EMOTION_LOG_MAX_TRIGGERS.
+
+
+class EmotionDebugLogger:
+    """Persists every emotion-recognizer trigger to its OWN timestamped folder
+    under ``config.EMOTION_LOG_DIR``, so each prediction can be eyeballed against what
+    the person was actually feeling.
+
+    The folder name encodes the verdict up front so a wrong label is obvious
+    from the directory listing alone:
+
+      - prediction: ``<timestamp>_<Emotion>_<confidence>`` — e.g.
+        ``20260713-090001-123456_Sad_0.42``
+      - failure:    ``<timestamp>_FAIL-<reason>`` — e.g.
+        ``20260713-090002-004521_FAIL-no-detection``
+
+    Each folder contains:
+
+      - ``input.jpg``     the exact face crop sent to the model (the input)
+      - ``frame.jpg``     the clean, unannotated original frame (predictions only)
+      - ``annotated.jpg`` full frame with bbox + label drawn (predictions only)
+      - ``result.json``   label, confidence, threshold, bbox coords, context, reason
+
+    ``result.json`` records both the raw ``bbox`` and the clamped ``crop_box``
+    actually used, so the crop can be reproduced from ``frame.jpg`` (or re-cropped
+    with different padding) offline.
+
+    All writes are best-effort and lock-guarded — a logging failure never
+    breaks detection. When ``max_triggers > 0`` the oldest folders are pruned
+    so the log directory stays bounded.
+    """
+
+    def __init__(self, root_dir: str, enabled: bool = True, max_triggers: int = 0):
+        self._root: str = root_dir
+        self._enabled: bool = enabled
+        self._max_triggers: int = max_triggers
+        self._lock: threading.Lock = threading.Lock()
+
+    @staticmethod
+    def _slug(text: Any) -> str:
+        """Filesystem-safe token for a folder name."""
+        s = "".join(c if c.isalnum() else "-" for c in str(text)).strip("-")
+        return s or "unknown"
+
+    @staticmethod
+    def _json_default(o: Any) -> Any:
+        """Coerce non-JSON types (numpy scalars/arrays) to native values so
+        confidences serialize as numbers, not stringified reprs."""
+        if hasattr(o, "item"):  # numpy scalar → python int/float
+            return o.item()
+        if hasattr(o, "tolist"):  # numpy array → list
+            return o.tolist()
+        return str(o)
+
+    def _annotate(
+        self,
+        frame: cv2.typing.MatLike,
+        bbox: list[int],
+        emotion: str,
+        confidence: float,
+    ) -> cv2.typing.MatLike | None:
+        try:
+            vis = frame.copy()
+            x1, y1, x2, y2 = bbox
+            _ = cv2.rectangle(vis, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            _ = cv2.putText(
+                vis,
+                f"{emotion} {confidence:.2f}",
+                (x1, max(0, y1 - 10)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (0, 255, 0),
+                2,
+            )
+            return vis
+        except Exception:
+            return None
+
+    def _write_folder(
+        self,
+        name: str,
+        record: dict[str, Any],
+        images: dict[str, cv2.typing.MatLike | None],
+    ) -> str | None:
+        if not self._enabled:
+            return None
+        try:
+            with self._lock:
+                now = time.time()
+                stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(now)) + (
+                    "-%06d" % int((now % 1) * 1_000_000)
+                )
+                folder = os.path.join(self._root, f"{stamp}_{name}")
+                os.makedirs(folder, exist_ok=True)
+                for filename, image in images.items():
+                    if image is not None:
+                        _ = cv2.imwrite(os.path.join(folder, filename), image)
+                full: dict[str, Any] = {"timestamp": stamp, "ts": now}
+                full.update(record)
+                # Serialize FIRST — a serialization error (e.g. a circular ref)
+                # then raises before the file is opened, so result.json is never
+                # left half-written/truncated.
+                text = json.dumps(full, indent=2, default=self._json_default)
+                with open(
+                    os.path.join(folder, "result.json"), "w", encoding="utf-8"
+                ) as f:
+                    _ = f.write(text)
+                self._prune()
+            return folder
+        except Exception as e:  # never let debug logging break detection
+            logger.debug("[activity.emotion] debug save failed: %s", e)
+            return None
+
+    def _prune(self) -> None:
+        """Drop oldest trigger folders past the cap. Caller holds the lock."""
+        if self._max_triggers <= 0:
+            return
+        try:
+            entries = [
+                e
+                for e in os.listdir(self._root)
+                if os.path.isdir(os.path.join(self._root, e))
+            ]
+            # Names are timestamp-prefixed → lexical sort == chronological.
+            entries.sort()
+            for stale in entries[: max(0, len(entries) - self._max_triggers)]:
+                shutil.rmtree(os.path.join(self._root, stale), ignore_errors=True)
+        except Exception as e:
+            logger.debug("[activity.emotion] debug prune failed: %s", e)
+
+    def save_prediction(
+        self,
+        emotion: str,
+        confidence: float,
+        face_crop: cv2.typing.MatLike,
+        frame: cv2.typing.MatLike | None = None,
+        bbox: list[int] | None = None,
+        **meta: Any,
+    ) -> str | None:
+        """One trigger the model returned a label for → its own folder."""
+        # Bail before _annotate: it copies the whole frame and draws on it, so
+        # leaving the check to _write_folder cost a ~2.7MB memcpy per face per
+        # tick even with capture switched off.
+        if not self._enabled:
+            return None
+        annotated = (
+            self._annotate(frame, bbox, emotion, confidence)
+            if frame is not None and bbox is not None
+            else None
+        )
+        name = f"{self._slug(emotion)}_{confidence:.2f}"
+        record: dict[str, Any] = {
+            "status": "prediction",
+            "emotion": emotion,
+            "confidence": confidence,
+        }
+        if bbox is not None:
+            record["bbox"] = list(bbox)
+        record.update(meta)
+        # frame.jpg is the clean original → re-crop from it using bbox/crop_box.
+        return self._write_folder(
+            name,
+            record,
+            {"input.jpg": face_crop, "frame.jpg": frame, "annotated.jpg": annotated},
+        )
+
+    def save_failure(
+        self,
+        reason: str,
+        face_crop: cv2.typing.MatLike | None = None,
+        **meta: Any,
+    ) -> str | None:
+        """One trigger that produced no usable label → its own folder, with the
+        input image (when available) and the reason it failed."""
+        if not self._enabled:
+            return None
+        name = "FAIL-" + self._slug(reason)
+        record: dict[str, Any] = {"status": "failure", "reason": reason}
+        record.update(meta)
+        return self._write_folder(name, record, {"input.jpg": face_crop})
+
+
+# Sentinel recorded in the attempt history when a recognition attempt produced
+# no usable reading (empty response, HTTP error, exception). These frames are
+# invisible to _emotion_buffer — they never become an EmotionData — but they
+# still happened, and a negative emotion should have to hold its ground against
+# them rather than only against the frames that happened to return a label.
+_NO_READING = "__none__"
+
+
+# Trailing span the occupancy test looks back over, and the share of that span a
+# label must hold. Matches the flush interval: a real expression lasting less
+# than one window is exactly the noise this is meant to drop.
+#
+# The test is a STRICT majority (`>`), not `>=`. 2/3 was the first setting and
+# it was too tight — a genuine Surprise held 3 of 5 attempts and was dropped,
+# because ceil(2/3 * 5) = 4. Using `>=` at 0.5 instead would admit ties (2 of
+# 4), which costs a false negative-bucket event on the recorded session; a
+# strict majority admits the 3-of-5 and still drops every 1-of-5 and 1-of-10,
+# which is the noise this exists for.
+_OCCUPANCY_LOOKBACK_S: float = 10.0
+_OCCUPANCY_MIN_RATIO: float = 0.5
+
+# A majority alone is not enough when the span is tiny. Attempts are counted per
+# FACE DETECTION, not per sensing tick — _process_face only runs when a face was
+# found — so a face seen once in ten seconds gives a span of 1, and a single Sad
+# is then trivially a "majority" (observed on device, 12:42). Two readings is the
+# floor: it costs nothing on the recorded session, keeps a brief 2-of-3, and ends
+# the 1-of-1. Happy is exempt along with the rest of _INSTANT_LABELS.
+_OCCUPANCY_MIN_READINGS: int = 2
+
+# Labels that still fire on a single frame. A smile is frequently one frame at
+# this cadence (median ~2.2s between triggers), so requiring persistence would
+# drop most genuine ones. The noisy labels are all on the other side of this
+# line and must clear _OCCUPANCY_MIN_RATIO instead.
+_INSTANT_LABELS: frozenset[str] = frozenset({"Happy"})
+
+
 class RemoteEmotionRecognizer:
     """Calls the perception-service HTTP emotion-recognize endpoint for a single face crop."""
 
@@ -74,6 +297,7 @@ class RemoteEmotionRecognizer:
         api_key: str,
         threshold: float = config.EMOTION_CONFIDENCE_THRESHOLD,
         timeout: float = 10.0,
+        debug_logger: "EmotionDebugLogger | None" = None,
     ):
         self._url: str = (
             base_url.rstrip("/") + "/" + config.DL_EMOTION_RECOGNIZE_ENDPOINT.strip("/")
@@ -84,6 +308,7 @@ class RemoteEmotionRecognizer:
         self._threshold: float = threshold
         self._timeout: float = timeout
         self._crypto: CryptoSession | None = None
+        self._debug: EmotionDebugLogger | None = debug_logger
         # Rate-limit backoff — same shape as fire_hazard: a 429 means the
         # plan quota is exhausted, every further call (one per face per
         # sensing tick) is a guaranteed failure + a WARNING log. Pause.
@@ -145,11 +370,28 @@ class RemoteEmotionRecognizer:
                     "[activity.emotion] HTTP 429 (quota) — pausing recognition for %.0fs",
                     _RATE_LIMIT_BACKOFF_S,
                 )
+                if self._debug is not None:
+                    _ = self._debug.save_failure(
+                        "http-429",
+                        face_crop=face_crop,
+                        status=resp.status_code,
+                        body=resp.text[:500],
+                        threshold=self._threshold,
+                        detail=f"quota exhausted — recognition paused {_RATE_LIMIT_BACKOFF_S:.0f}s",
+                    )
                 return None
             if resp.status_code != 200:
                 logger.warning(
                     "[activity.emotion] HTTP %d: %s", resp.status_code, resp.text
                 )
+                if self._debug is not None:
+                    _ = self._debug.save_failure(
+                        f"http-{resp.status_code}",
+                        face_crop=face_crop,
+                        status=resp.status_code,
+                        body=resp.text[:500],
+                        threshold=self._threshold,
+                    )
                 return None
 
             if self._crypto is not None:
@@ -160,6 +402,13 @@ class RemoteEmotionRecognizer:
             if not detections:
                 # Endpoint applies the threshold server-side; empty here means
                 # no face detection cleared the confidence bar (a "fail").
+                if self._debug is not None:
+                    _ = self._debug.save_failure(
+                        "no-detection",
+                        face_crop=face_crop,
+                        threshold=self._threshold,
+                        detail="no detection above confidence threshold",
+                    )
                 return None
 
             # Return the top detection (highest confidence) as a shallow COPY
@@ -174,6 +423,10 @@ class RemoteEmotionRecognizer:
             return result
         except requests.RequestException as e:
             logger.warning("[activity.emotion] request failed: %s", e)
+            if self._debug is not None:
+                _ = self._debug.save_failure(
+                    "request-error", face_crop=face_crop, error=str(e)
+                )
             return None
 
 
@@ -183,6 +436,7 @@ class EmotionData:
     face: Face
     emotion: str
     confidence: float
+    ts: float
 
 
 class EmotionPerception(Perception[FaceDetectionData]):
@@ -207,10 +461,19 @@ class EmotionPerception(Perception[FaceDetectionData]):
         self._base_url: str = base_url
         self._api_key: str = api_key
 
+        self._debug: EmotionDebugLogger = EmotionDebugLogger(
+            root_dir=config.EMOTION_LOG_DIR,
+            enabled=config.EMOTION_DEBUG_LOG_ENABLED,
+            max_triggers=config.EMOTION_LOG_MAX_TRIGGERS,
+        )
+        if config.EMOTION_DEBUG_LOG_ENABLED:
+            logger.info("[activity.emotion] debug logging → %s", config.EMOTION_LOG_DIR)
+
         self._recognizer: RemoteEmotionRecognizer = RemoteEmotionRecognizer(
             base_url=base_url,
             api_key=api_key,
             threshold=config.EMOTION_CONFIDENCE_THRESHOLD,
+            debug_logger=self._debug,
         )
 
         self._last_detection_time: float | None = None
@@ -219,7 +482,9 @@ class EmotionPerception(Perception[FaceDetectionData]):
         # Lock protects all mutable state below
         self._state_lock: threading.RLock = threading.RLock()
 
-        # Buffer per person — flushed every EMOTION_FLUSH_S
+        # Retained: EMOTION_FLUSH_S no longer gates the decision (see
+        # _flush_buffer — readings are judged as they arrive), but the value is
+        # still the documented cadence knob and to_dict/consumers read it.
         self._flush_interval: float = config.EMOTION_FLUSH_S
         self._last_flush_ts: float = 0.0
         # {person_id: [emotion_str, ...]}
@@ -242,6 +507,23 @@ class EmotionPerception(Perception[FaceDetectionData]):
         self._last_sent_ts: float = 0.0  # debug/to_dict
         self._dedup_window_s: float = config.EMOTION_DEDUP_WINDOW_S
 
+        # Every recognition attempt, including the ones that produced nothing:
+        # (ts, person_id, label-or-_NO_READING). Pruned to the lookback on
+        # append rather than at flush — _flush_buffer returns early when the
+        # buffer is empty WITHOUT advancing _last_flush_ts, so pruning there
+        # would stall during a quiet spell and leave a stale denominator.
+        self._attempt_history: list[tuple[float, str, str]] = []
+
+    def _record_attempt(self, person_id: str, label: str) -> None:
+        """Log one recognition attempt and drop anything past the lookback."""
+        now = time.time()
+        with self._state_lock:
+            self._attempt_history.append((now, person_id, label))
+            cutoff = now - _OCCUPANCY_LOOKBACK_S
+            self._attempt_history = [
+                a for a in self._attempt_history if a[0] >= cutoff
+            ]
+
     def _process_face(
         self,
         frame: cv2.typing.MatLike,
@@ -256,6 +538,7 @@ class EmotionPerception(Perception[FaceDetectionData]):
         # model expects, with NO rotation applied. Fall back to the detector bbox
         # when no mesh box is available (e.g. the v1 recognizer). Both are
         # [x1, y1, x2, y2].
+        box_source = "emotion_box" if face.emotion_box is not None else "bbox"
         x1, y1, x2, y2 = face.emotion_box if face.emotion_box is not None else face.bbox
 
         # Clamp to frame bounds
@@ -270,15 +553,32 @@ class EmotionPerception(Perception[FaceDetectionData]):
 
         try:
             result = self._recognizer.recognize(face_crop)
-        except Exception:
+        except Exception as e:
             logger.exception("[activity.emotion] recognize error")
+            _ = self._debug.save_failure(
+                "recognize-exception",
+                face_crop=face_crop,
+                person_id=face.person_id,
+                error=str(e),
+            )
+            self._record_attempt(face.person_id, _NO_READING)
             return
 
         if result is None:
+            # A failure folder (http error / no-detection / request error) was
+            # already written inside recognize() with the precise reason.
+            # An empty response is NOT evidence of Neutral — the service gates
+            # the argmax per label and falls back to Neutral's own (low)
+            # probability, so this is "no confirmed reading", and it counts
+            # against any label trying to claim the window.
+            self._record_attempt(face.person_id, _NO_READING)
             return
 
         emotion = result["emotion"]
         confidence = result["confidence"]
+
+
+        self._record_attempt(face.person_id, emotion)
 
         if self._presence_service:
             self._presence_service.on_motion()
@@ -297,8 +597,36 @@ class EmotionPerception(Perception[FaceDetectionData]):
                     face=face,
                     emotion=emotion,
                     confidence=weighted_confidence,
+                    ts=self._last_detection_time,
                 )
             )
+
+        # Every trigger the model labelled → its own timestamped folder holding
+        # the exact input crop, an annotated frame, and result.json. Folder name
+        # is "<time>_<Emotion>_<conf>" so a wrong prediction is spottable at a
+        # glance against what the person was actually feeling.
+        _ = self._debug.save_prediction(
+            emotion=emotion,
+            confidence=confidence,
+            face_crop=face_crop,
+            frame=frame,
+            bbox=face.bbox,
+            # Clamped [x1, y1, x2, y2] actually used for the crop — apply this to
+            # frame.jpg to reproduce input.jpg (bbox above is the raw, unclamped
+            # detector box, which may extend past the frame edges).
+            crop_box=[x1, y1, x2, y2],
+            # Which box produced the crop: the face-mesh re-centered box (reused
+            # from recognition) or the raw detector bbox fallback.
+            box_source=box_source,
+            frame_size=[w, h],
+            person_id=face.person_id,
+            face_confidence=face.confidence,
+            weighted_confidence=weighted_confidence,
+            threshold=config.EMOTION_CONFIDENCE_THRESHOLD,
+            valence=result.get("valence"),
+            arousal=result.get("arousal"),
+            all_detections=result.get("all_detections"),
+        )
 
         logger.debug(
             "[activity.emotion] %s: %s (%.2f)", face.person_id, emotion, confidence
@@ -351,16 +679,45 @@ class EmotionPerception(Perception[FaceDetectionData]):
             return None
 
     def _flush_buffer(self) -> None:
+        """Decide on every tick, over the window the occupancy test measures.
+
+        This used to run at most once per EMOTION_FLUSH_S and clear the buffer
+        wholesale. Both parts were wrong. The callback that drives it only fires
+        when a face is DETECTED (faceid/perception.py returns early otherwise),
+        so when someone looks away mid-expression the remaining readings sat
+        unevaluated until the next face appeared — 91s in the case observed on
+        2026-09-04 12:55. By then their attempts had aged out of the trailing
+        window and the vote read "Surprise held 0/1". The failure selects for
+        SHORT expressions: a sustained Anger keeps the callback firing and lands
+        a flush while it is still fresh, a two-second Surprise does not.
+
+        So: evaluate whenever a reading arrives, and hold readings only for as
+        long as the occupancy window that judges them. Rate limiting is already
+        the job of the (user, bucket) dedup, not of this interval.
+        """
         with self._state_lock:
             if not self._emotion_buffer:
                 return
 
             cur_ts = time.time()
-            if (cur_ts - self._last_flush_ts) < self._flush_interval:
+
+            # Drop readings older than the window the vote is measured over —
+            # they can never be supported by it, and keeping them is what
+            # produced the "0/N" drops.
+            for pid in list(self._emotion_buffer):
+                fresh = [
+                    ed
+                    for ed in self._emotion_buffer[pid]
+                    if (cur_ts - ed.ts) <= _OCCUPANCY_LOOKBACK_S
+                ]
+                if fresh:
+                    self._emotion_buffer[pid] = fresh
+                else:
+                    del self._emotion_buffer[pid]
+            if not self._emotion_buffer:
                 return
 
             buffer = copy(self._emotion_buffer)
-            self._emotion_buffer.clear()
             self._last_flush_ts = cur_ts
 
         if (
@@ -410,19 +767,56 @@ class EmotionPerception(Perception[FaceDetectionData]):
                 continue
 
             counts = Counter(e for e, _ in non_neutral)
-            dominant_emotion, _ = counts.most_common(1)[0]
+
+            # A candidate has to earn the window. _INSTANT_LABELS fire on a
+            # single frame (unchanged behaviour); everything else must hold
+            # _OCCUPANCY_MIN_RATIO of this person's attempts over the trailing
+            # _OCCUPANCY_LOOKBACK_S — attempts that returned nothing included.
+            # Without that denominator a lone Anger frame among a dozen failures
+            # wins the vote outright, which is how a man working at his desk
+            # produced sustained "Anger" events.
+            with self._state_lock:
+                span = [
+                    label
+                    for ts, pid, label in self._attempt_history
+                    if pid == person_id and (cur_ts - ts) <= _OCCUPANCY_LOOKBACK_S
+                ]
+            need = _OCCUPANCY_MIN_RATIO * len(span)
+
+            qualified: list[tuple[int, str]] = []
+            for label, hits in counts.items():
+                if label in _INSTANT_LABELS:
+                    qualified.append((hits, label))
+                    continue
+                occupancy = sum(1 for x in span if x == label)
+                if occupancy > need and occupancy >= _OCCUPANCY_MIN_READINGS:
+                    qualified.append((occupancy, label))
+                else:
+                    why = (
+                        "not a majority"
+                        if occupancy <= need
+                        else "only %d reading(s), needs %d"
+                        % (occupancy, _OCCUPANCY_MIN_READINGS)
+                    )
+                    logger.info(
+                        "[activity.emotion] %s dropped: %s held %d/%d attempts "
+                        "in the last %.0fs — %s",
+                        person_id,
+                        label,
+                        occupancy,
+                        len(span),
+                        _OCCUPANCY_LOOKBACK_S,
+                        why,
+                    )
+            if not qualified:
+                continue
+
+            dominant_emotion = max(qualified, key=lambda q: q[0])[1]
 
             # Average confidence over instances of the dominant label only —
             # other labels' confidences would dilute it.
             dom_confidences = [c for e, c in non_neutral if e == dominant_emotion]
             avg_confidence = sum(dom_confidences) / len(dom_confidences)
-
-            snapshots = [
-                self._save_annotated(ed.frame, ed.face.bbox, ed.emotion, ed.confidence)
-                for ed in emotion_data_list
-                if ed.emotion == dominant_emotion
-            ]
-            snapshots = [s for s in snapshots if s is not None]
 
             # Phase 2: dedup by polarity bucket, not raw label. Fear↔Sad
             # ↔Anger noise within the same bucket collapses to one event
@@ -459,8 +853,26 @@ class EmotionPerception(Perception[FaceDetectionData]):
                 self._last_sent_ts = cur_ts
                 self._sidecar.save(self._last_sent_by_key)
 
+            # Annotating copies a frame per matching reading, so it happens
+            # only for an event that is actually going out. It used to run
+            # before the dedup check, which was cheap while the vote ran once
+            # per EMOTION_FLUSH_S and wasteful once it began running per tick —
+            # most of those evaluations are dedup drops.
+            snapshots = [
+                self._save_annotated(ed.frame, ed.face.bbox, ed.emotion, ed.confidence)
+                for ed in emotion_data_list
+                if ed.emotion == dominant_emotion
+            ]
+            snapshots = [s for s in snapshots if s is not None]
+
             logger.info("[activity.emotion] flushing: %s", message)
             self._send_event("emotion.detected", message, "emotion", snapshots, None)
+
+            # Only the person that fired is cleared. Everyone else keeps their
+            # readings so a label still building toward a majority is not reset
+            # by someone else's event.
+            with self._state_lock:
+                _ = self._emotion_buffer.pop(person_id, None)
 
     def reset_dedup(self, new_user: str = "") -> None:
         """Clear the outbound dedup state only if the visible user actually
@@ -488,6 +900,9 @@ class EmotionPerception(Perception[FaceDetectionData]):
             self._last_sent_by_key.clear()
             self._last_sent_key = None
             self._last_sent_ts = 0.0
+            # The outgoing user's attempts must not count toward the new one's
+            # occupancy test.
+            self._attempt_history.clear()
             # Sync the sidecar (unlinks it) so a restart can't resurrect the
             # state this user-change reset just cleared.
             self._sidecar.save(self._last_sent_by_key)
