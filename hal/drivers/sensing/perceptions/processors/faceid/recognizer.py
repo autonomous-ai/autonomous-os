@@ -72,6 +72,8 @@ class FaceRecognizer:
         height_ratio_threshold: float = config.FACE_HEIGHT_RATIO_THRESHOLD,
         max_truncation: float = config.FACE_MAX_TRUNCATION,
         min_sharpness: float = config.FACE_MIN_SHARPNESS,
+        stranger_min_ticks: int = config.FACE_STRANGER_MIN_TICKS,
+        stranger_corroboration_s: float = config.FACE_STRANGER_CORROBORATION_S,
         threshold: float = 0.3,
         extended_threshold: float = config.FACE_EXTENDED_THRESHOLD,
         extend_min_enroll_sim: float = config.FACE_EXTEND_MIN_ENROLL_SIM,
@@ -87,6 +89,17 @@ class FaceRecognizer:
         self._max_truncation: float = max_truncation
         # Blur floor on the aligned crop; see FACE_MIN_SHARPNESS in hal/config.py.
         self._min_sharpness: float = min_sharpness
+        # Consecutive ticks an unknown face must persist before it earns an
+        # identity; see FACE_STRANGER_MIN_TICKS in hal/config.py.
+        self._stranger_min_ticks: int = stranger_min_ticks
+        self._stranger_corroboration_s: float = stranger_corroboration_s
+        # Unknown faces seen but not yet corroborated, as
+        # [embedding, ticks_seen, last_seen_ts]. Deliberately a LIST, not one
+        # slot: with two unknown people in frame a single slot would be stolen
+        # back and forth every tick and neither would ever reach the threshold.
+        self._pending_strangers: list[
+            tuple[npt.NDArray[np.float32], int, float]
+        ] = []
         self._threshold: float = threshold
         # Bar for a match carried by the extended bank alone — deliberately
         # higher than ``threshold``; see FACE_EXTENDED_THRESHOLD in hal/config.py.
@@ -806,6 +819,32 @@ class FaceRecognizer:
             0 if new_ext_e is None else len(new_ext_e),
         )
 
+    def _corroborate_stranger(self, embedding: npt.NDArray[np.float32]) -> int:
+        """Count how many consecutive ticks this unknown face has now been seen
+        for, remembering it for next time. Caller must hold ``self._lock``.
+
+        Matching is by EMBEDDING, not by position: "in a row" has to mean the
+        same person, and a bbox moves. A candidate that goes unseen for longer
+        than ``stranger_corroboration_s`` is forgotten, so the count means
+        "still here", not "here at some point today".
+        """
+        now = time.time()
+        self._pending_strangers = [
+            p for p in self._pending_strangers
+            if now - p[2] <= self._stranger_corroboration_s
+        ]
+        best_i, best_sim = -1, self._threshold
+        for idx, (emb, _ticks, _ts) in enumerate(self._pending_strangers):
+            sim = float(emb @ embedding)
+            if sim > best_sim:
+                best_i, best_sim = idx, sim
+        if best_i < 0:
+            self._pending_strangers.append((embedding, 1, now))
+            return 1
+        ticks = self._pending_strangers[best_i][1] + 1
+        self._pending_strangers[best_i] = (embedding, ticks, now)
+        return ticks
+
     @staticmethod
     def _sharpness(aligned: npt.NDArray[np.uint8]) -> float:
         """Variance of the Laplacian of the aligned crop — the standard blur
@@ -1174,18 +1213,43 @@ class FaceRecognizer:
                 self._negative_threshold is None
                 or max(o_score, s_score) <= self._negative_threshold
             ):
+                # Below everything we know. That is what an unknown person looks
+                # like — and equally what a momentarily unusable frame looks
+                # like, since a degraded crop resembles nothing. The gates above
+                # drop the unusable frames they can MEASURE; the rest are caught
+                # by asking what no single frame can answer: is this face still
+                # here a tick later? Minting is the expensive verdict (a
+                # persistent identity, a stranger presence event, a row in the
+                # Unknown Faces card), so it waits for that answer.
                 with self._lock:
-                    self._stranger_counter += 1
-                    self._stranger_counter %= int(1e6)
+                    ticks = self._corroborate_stranger(embeds[i])
+                if ticks < self._stranger_min_ticks:
+                    logger.debug(
+                        "[face] unknown face seen %d/%d tick(s) — holding as "
+                        "unsure before minting an identity",
+                        ticks, self._stranger_min_ticks,
+                    )
+                    person_id = "?"
+                    face_kind = PersonKind.UNSURE
+                else:
+                    with self._lock:
+                        self._stranger_counter += 1
+                        self._stranger_counter %= int(1e6)
 
-                    raw_id = f"{self.STRANGER_PREFIX}stranger_{self._stranger_counter}"
-                person_id = raw_id.removeprefix(self.STRANGER_PREFIX)
-                face_kind = PersonKind.STRANGER
-                matched_label = raw_id
-                is_new_stranger = True
+                        raw_id = (
+                            f"{self.STRANGER_PREFIX}stranger_{self._stranger_counter}"
+                        )
+                    person_id = raw_id.removeprefix(self.STRANGER_PREFIX)
+                    face_kind = PersonKind.STRANGER
+                    matched_label = raw_id
+                    is_new_stranger = True
+                    logger.info(
+                        "[face] minted '%s' after %d consecutive tick(s)",
+                        person_id, ticks,
+                    )
 
-                new_stranger_embeds.append(embeds[i])
-                new_stranger_labels.append(raw_id)
+                    new_stranger_embeds.append(embeds[i])
+                    new_stranger_labels.append(raw_id)
             else:
                 # Score between negative_threshold and threshold on both banks — unsure
                 person_id = "?"

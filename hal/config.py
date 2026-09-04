@@ -222,6 +222,28 @@ FACE_MAX_TRUNCATION = float(os.environ.get("HAL_FACE_MAX_TRUNCATION", "0.05"))
 # optics change. And it MUST be measured on the aligned crop: the input crop
 # varies in size between frames, which makes its variance incomparable.
 FACE_MIN_SHARPNESS = float(os.environ.get("HAL_FACE_MIN_SHARPNESS", "100.0"))
+# Consecutive sensing ticks an unrecognised face must be seen for before a
+# `stranger_N` identity is actually minted for it. 1 restores the old behaviour
+# of minting from a single frame.
+#
+# Minting is the expensive verdict: it creates a persistent identity, fires a
+# stranger presence event and lands in the Unknown Faces card. It is reached by
+# scoring BELOW everything — which is what a real unknown person looks like, and
+# equally what a momentarily unusable frame looks like. The gates above remove
+# the unusable frames they can measure; this catches what is left by asking a
+# question no single frame can answer: is this person still there a tick later?
+#
+# 2 is cheap on both sides. Measured over 990 logged frames, 19 of the 28 runs
+# that reach this branch are a SINGLE isolated tick, so most spurious mints go
+# away; a real visitor is still there 2s later and mints then, delayed by one
+# tick and nothing else.
+FACE_STRANGER_MIN_TICKS = int(os.environ.get("HAL_FACE_STRANGER_MIN_TICKS", "2"))
+# How long a pending candidate stays corroboratable. Must span a few sensing
+# ticks (HAL_SENSING_INTERVAL, 2s) or "in a row" degrades into "at some point",
+# which a passer-by seen twice an hour apart would satisfy.
+FACE_STRANGER_CORROBORATION_S = float(
+    os.environ.get("HAL_FACE_STRANGER_CORROBORATION_S", "6.0")
+)
 # Similarity a match carried by the AUTO-CAPTURED extended bank must reach, as
 # opposed to the 0.3 an enrolled upload needs. An upload is ground truth; an
 # extended view is a guess the device made about itself, so it is weaker
