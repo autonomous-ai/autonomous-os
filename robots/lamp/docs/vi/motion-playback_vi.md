@@ -11,7 +11,7 @@ Recording trong `hal/recordings/` là bản ghi teleop ở **20 Hz** (cột `tim
 Resample làm hai việc:
 
 - **Tôn trọng `timestamp` gốc**, để recording dài đúng bằng lúc ghi. Trước đây bước frame 20 Hz ở nhịp 30 Hz làm mọi animation phát nhanh gấp 1.5×.
-- **Giãn những đoạn vượt `SERVO_MAX_DPS`** (250 deg/s, `HAL_SERVO_MAX_DPS`; đặt 0 để tắt). STS3215 chỉ đạt tối đa khoảng 270 deg/s, trong khi nhiều recording được ghi vượt xa mức đó.
+- **Giãn những đoạn vượt trần tốc độ** — lấy giá trị nhỏ hơn giữa `SERVO_MAX_DPS` (250 deg/s, `HAL_SERVO_MAX_DPS`; đặt 0 để tắt) và `motion.max_speed` mà body khai báo. STS3215 chỉ đạt tối đa khoảng 270 deg/s, trong khi nhiều recording được ghi vượt xa mức đó; trên Lamp thì mức khai báo 120 deg/s mới là mức có hiệu lực, và nó giãn `laugh` (+20%), `playful`, `headshake`, `acknowledge`. Không recording `music_*` nào bị ảnh hưởng nên các đoạn groove giữ nguyên nhịp.
 
 Ngưỡng này không phải để làm đẹp. Đo trên lamp-0c89 bằng cách đọc `Present_Position` trong lúc phát `greeting`: khi lệnh đòi 554 deg/s, servo bị bỏ lại **55° so với mục tiêu** — nó bão hòa, lết, rồi giật, và đó chính là tiếng ồn nghe được. Việc giãn rất chọn lọc, chỉ chạm vào những đoạn bất khả thi:
 

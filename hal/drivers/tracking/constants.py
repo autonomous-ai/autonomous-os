@@ -312,7 +312,8 @@ TRACKER_TRUST_CONF = 0.4
 # loop sizes the real window from the detector's measured latency
 # (YOLO_REDETECT_S + 2 x latency + TRUST_MARGIN_S), because the same loop is
 # served by detectors three orders of magnitude apart: YuNet at ~30ms, local
-# YOLO at ~0.5s, the remote open-vocab model at 1.3-3s. A single constant is
+# YOLO at ~0.4s, the remote open-vocab model at ~0.55s median (up to ~2s). A
+# single constant is
 # only ever correct for one of them, and 2.5 was correct for the fastest — so
 # every slower target sat in WAIT-YOLO with the object plainly in frame.
 # This floor still applies when the detector is fast, keeping face behaviour

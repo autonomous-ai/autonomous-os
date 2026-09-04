@@ -22,24 +22,33 @@ Only fall back to the snapshot endpoint below when there is no `[vision-image]` 
 
 ## Capture Protocol
 
-Just call the snapshot endpoint — the server handles servo freeze, frame wait, and auto-enable if camera was disabled.
+One call. It takes the photo, sizes it, and gives you back what is in it:
 
 ```bash
-curl -s "http://127.0.0.1:5001/camera/snapshot?save=true&width=768&quality=75"
+curl -sX POST http://127.0.0.1:5000/api/vision/look \
+  -H 'Content-Type: application/json' \
+  -d '{"question":"<what the user asked>"}'
 ```
 
-Returns JSON: `{"path": ".../media/hal-snapshots/snap_1712567890123.jpg"}`.
-**Never hardcode a filename** — always read `path` from the response.
+Returns `{"data":{"description":"...","path":"..."}}` — **answer from
+`description`**. It is the only thing in this turn that actually saw the frame.
 
-`width=768&quality=75` shrinks the JPEG (~50–80 KB instead of ~300–500 KB at full 1920×1080) so vision LLM uploads + tokenizes faster. 768 px wide is still enough to read text on a laptop screen and recognize people/objects. Do NOT remove these unless you specifically need a larger image.
+- No `description` field (the main model can read images itself) → open `path`
+  with your file/image tool.
+- Any error → tell the user you couldn't see it this time. **Do not guess.**
 
-No need to aim servo or sleep before snapshot — the server freezes servos automatically for a stable frame.
+The server handles servo freeze, frame wait, auto-enable if the camera was off,
+and image sizing. Do not aim or sleep before calling it.
+
+`GET http://127.0.0.1:5001/camera/snapshot` (HAL, port 5001) only writes a file
+and returns its path — you cannot see that file. Use it only when you need the
+raw frame for something other than looking at it.
 
 ## Never describe the view without an image
 
 If you are about to say what you see, this turn MUST contain either a
-`[vision-image]` line or a `/camera/snapshot` call whose image you actually
-looked at. Describing the room from memory, from an earlier turn's photo, or
+`[vision-image]` line or a `/api/vision/look` call whose answer you actually
+looked at, or a `/api/vision/look` description. Describing the room from memory, from an earlier turn's photo, or
 from a plausible guess ("same view — the desk, your screen…") is a fabrication,
 even when the guess happens to be close. No image → say you'll take a look and
 take one; never invent.
@@ -48,47 +57,41 @@ take one; never invent.
 
 When the request combines a movement and a visual question ("turn right, hold
 it there, and tell me what you see"), fire the servo calls **with curl during
-the turn** (`POST /servo/aim`, `POST /servo/hold`), *then* snapshot. `[HW:...]`
+the turn** (`POST /servo/aim`, `POST /servo/hold`), *then* look. `[HW:...]`
 markers are executed only after your reply is composed, so a marker-based aim
 would move the device *after* the photo — you would describe the old view.
 
 ## Workflow
-1. Call `GET /camera/snapshot?save=true&width=768&quality=75` — **always call directly, never check /camera first**. The endpoint auto-enables camera if disabled.
-2. Analyze the image and describe what you see.
-3. Respond helpfully and specifically to the user's question.
+1. `POST http://127.0.0.1:5000/api/vision/look` with the user's question — **call it directly, never check /camera first**. It auto-enables the camera if disabled.
+2. Respond helpfully and specifically to the user's question, from the `description` it returns.
 
 You also receive camera snapshots **automatically** as part of sensing events (`[sensing:*]` messages with images). You do not need the camera API for those — just look at the attached image.
 
 ## Examples
 
 **Input:** "What do you see right now?"
-**Output:** `GET /camera/snapshot?save=true&width=768&quality=75` → analyze image. Say: "I can see your desk with a laptop and a coffee mug. Looks like a productive setup!"
+**Output:** `POST /api/vision/look` → say: "I can see your desk with a laptop and a coffee mug. Looks like a productive setup!"
 
 **Input:** "Is anyone in the room?"
-**Output:** `GET /camera/snapshot?save=true&width=768&quality=75` → analyze image. Say: "I can see one person sitting at the desk."
+**Output:** `POST /api/vision/look` → say: "I can see one person sitting at the desk."
 
 **Input:** "Take a photo" or "Send me a photo"
-**Output:** `GET /camera/snapshot?save=true&width=768&quality=75` → read `path` from JSON → describe what you see.
+**Output:** `POST /api/vision/look` → say what `description` reports.
 
 **Input:** (sensing event with image already attached)
 **Output:** Do NOT call the camera API. Just look at the attached image and react.
 
 ## Tools
 
-**Bash** with `curl` for HTTP calls to `http://127.0.0.1:5001`.
+**Bash** with `curl` — `http://127.0.0.1:5000` for `/api/vision/look`, `http://127.0.0.1:5001` for HAL camera control.
 
-### Take a snapshot
+### Look at the scene
 
 ```bash
-curl -s "http://127.0.0.1:5001/camera/snapshot?save=true&width=768&quality=75"
+curl -sX POST http://127.0.0.1:5000/api/vision/look -H 'Content-Type: application/json' -d '{"question":"..."}'
 ```
 
-Returns JSON with the saved file path:
-```json
-{"path": ".../media/hal-snapshots/snap_1712567890123.jpg"}
-```
-
-Without `?save=true`, returns raw JPEG bytes (used by web UI).
+Returns `{"data":{"description":"...","path":"..."}}`. See *Capture Protocol*.
 
 ### Live stream
 
@@ -133,7 +136,7 @@ camera state* belong in the table above.
 | User says | Meaning | Route to |
 |-----------|---------|----------|
 | "look at me" / "camera on" / "you can look now" | turn the camera back on | `[HW:/camera/enable:{}]` |
-| **"look at this"** / "look at what I'm holding" / "what is this" | a visual question about an object | **snapshot + analyze** (Workflow above) |
+| **"look at this"** / "look at what I'm holding" / "what is this" | a visual question about an object | **`/api/vision/look`** (Workflow above) |
 | "look at the desk / table / wall" | a fixed location | `servo-control` `/servo/aim` |
 | "look at the cup and follow it" | a movable object to track | `servo-tracking` `/servo/track` |
 
@@ -143,7 +146,7 @@ up to be identified. Replying "Got it, camera on" answers a question they did no
 ### Examples
 
 **Input:** "Look at this" / "Look at what I'm holding"
-**Output:** `GET /camera/snapshot?save=true&width=768&quality=75` → analyze image. Say what the object is. Do NOT call `[HW:/camera/enable:{}]` — the snapshot endpoint auto-enables the camera.
+**Output:** `POST /api/vision/look` → say what the object is. Do NOT call `[HW:/camera/enable:{}]` — the look endpoint auto-enables the camera.
 
 **Input:** "Don't watch me"
 **Output:** `[HW:/camera/disable:{}]` Got it, camera off. Just say "look at me" when you want me to see again.

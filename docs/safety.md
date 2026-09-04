@@ -179,9 +179,20 @@ to the declared `motion.max_speed` at the single place the profile is chosen
 Lamp (`max_speed: 120`) nothing is clamped today; a body declaring a lower
 ceiling is what the gate is for.
 
-**Still not gated:** recorded animations. They replay stored frames at a fixed
-fps, so bounding their speed means changing how an animation looks, not
-stretching a number — an open question rather than a missing line of code.
+Recorded animations are gated at load time rather than per frame. A recording
+is resampled onto the playback loop's own fps grid, and any segment demanding
+more than the ceiling is *stretched in time* — the same degradation the route
+gate uses, applied per segment so a recording slows down exactly where it was
+impossible and nowhere else (`hal/drivers/motors/recording_timing.py`, shared by
+the physical and mock drivers so the simulator plays what the body plays). The
+ceiling is the lower of the servo's measured limit (`SERVO_MAX_DPS`, 250 deg/s)
+and the declared `motion.max_speed`.
+
+**Still not gated:** recorded moves on the Reachy SDK path. `ReachyMotionService`
+hands a trajectory to `mini.play_move()` and the Pollen daemon streams it, so HAL
+bounds only the ramp into frame 0 (`_ramp_for`, via `min_move_duration`) and not
+the body of the move. This is what a `HAL_REACHY_MOVES` list of community moves
+from the Hub (#207) would need answered first.
 
 ### Learned-policy interface (dry run)
 

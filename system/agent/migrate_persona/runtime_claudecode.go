@@ -63,7 +63,7 @@ func (claudecodeAdapter) write(m *baseMigrator, b *PersonaBundle, opts Options) 
 	}
 
 	// User profile → USER.md.
-	m.writeMemoryEntries("user-profile", rebrandEntries(b.User, rebrandToClaudeCode),
+	m.writeUserProfile("user-profile", rebrandEntries(b.User, rebrandToClaudeCode),
 		filepath.Join(ws, "USER.md"), opts.UserCharLimit, openclawFormat)
 	return nil
 }
@@ -86,4 +86,17 @@ func rebrandToClaudeCode(text string) string {
 	text = reMoltBot.ReplaceAllStringFunc(text, repl)
 	text = rePicoClaw.ReplaceAllStringFunc(text, repl)
 	return text
+}
+
+// personaPaths implements runtimeAdapter — Claude Code mirrors the OpenClaw layout.
+func (claudecodeAdapter) personaPaths(opts Options) []string {
+	return openclawLayoutPersonaPaths(opts.ClaudecodeWorkspace)
+}
+
+// userProfilePath implements runtimeAdapter — USER.md at the workspace root.
+func (claudecodeAdapter) userProfilePath(opts Options) string {
+	if opts.ClaudecodeWorkspace == "" {
+		return ""
+	}
+	return filepath.Join(opts.ClaudecodeWorkspace, "USER.md")
 }

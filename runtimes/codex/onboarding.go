@@ -139,8 +139,35 @@ Follow the instructions in whichever file you read.
 
 	// heartbeatMDBlock is the OS-managed knowledge-synthesis block injected at the top
 	// of workspace/HEARTBEAT.md. Backend-agnostic — verbatim from openclaw.
+	// heartbeatMDBlock is the OS-managed block in workspace/HEARTBEAT.md, run on the
+	// gateway's periodic heartbeat poll (~every 30 min while the device is on).
+	//
+	// It is deliberately CATCH-UP driven, not clock driven. The synthesis used to be
+	// gated on "current time >= 21:00", which silently never fired on a device that
+	// is switched off at the end of the working day — the common case for a desk
+	// lamp. Device-observed 2026-09-03 on lamp-ac82: three days of flow logs ended
+	// 18:39 / 17:57 / 17:34, and memory/2026-08-24.md was never distilled into
+	// KNOWLEDGE.md because 21:00 never arrived. Comparing "days with memory" against
+	// "days already distilled" instead means the first heartbeat after the device is
+	// switched on clears whatever backlog accumulated, on any schedule.
+	//
+	// Keep this block byte-identical across openclaw/codex/opencode/picoclaw: it is
+	// matched verbatim by ensureHeartbeatMDBlock, and a runtime switch must not
+	// silently drop the people sync.
 	heartbeatMDBlock = `<!-- OS DO NOT REMOVE -->
-**Knowledge synthesis (once daily at 21:00):** If current time is >= 21:00 AND you have NOT already done this today (check ` + "`KNOWLEDGE.md`" + ` for today's date header), read today's ` + "`memory/YYYY-MM-DD.md`" + `, extract important insights, and append them to ` + "`KNOWLEDGE.md`" + ` under a ` + "`## YYYY-MM-DD`" + ` header. Only write new learnings — do not repeat what is already there. If already done today or before 21:00, skip silently.
+**Knowledge synthesis (catch-up — do NOT wait for a fixed hour):** Compare the days that have a ` + "`memory/YYYY-MM-DD.md`" + ` against the ` + "`## YYYY-MM-DD`" + ` headers already in ` + "`KNOWLEDGE.md`" + `. For every day BEFORE today that has a memory file but no header, distil that day now — oldest first, each under its own ` + "`## YYYY-MM-DD`" + ` header. Also do today, but only once it is >= 21:00. Only write new learnings — never repeat what is already there. Nothing missing → skip silently. This device is often switched off in the evening, so a fixed hour may simply never arrive; clearing the backlog on whatever heartbeat comes next is what keeps a day from being lost.
+
+**Keep ` + "`KNOWLEDGE.md`" + ` from growing without bound (same pass).** A dated ` + "`## YYYY-MM-DD`" + ` block is raw material, not the archive — the distilled sections at the top are. Keep at most the **14 most recent** dated blocks. For anything older: fold what is still true into the matching top section (Hardware / Users / Skills & APIs / Mistakes Made), then DELETE the dated block. Nothing of value is lost — it was already distilled, and the raw day survives in ` + "`memory/YYYY-MM-DD.md`" + `. Without this the file grows by a section every active day and eventually costs more to read than it is worth.
+
+**People sync (same pass, right after the above):** ` + "`KNOWLEDGE.md`" + ` is yours alone — the OS never loads it. ` + "`USER.md`" + ` IS loaded, into your system prompt, on every single turn. So anything you learned about a PERSON has to reach ` + "`USER.md`" + ` or you will not have it tomorrow. Carry it across:
+
+- Write ONE bullet per person under a ` + "`## Users`" + ` heading in ` + "`USER.md`" + `, shaped ` + "`- **<label> (friend)** — call: …; notes: …`" + ` — where ` + "`<label>`" + ` is their ENROLLMENT LABEL exactly as it appears in ` + "`[context: current_user=…]`" + `, lowercase. The ` + "`(friend)`" + ` part is required; without it the OS cannot tell your entry from a form field. After the dash write short ` + "`key: value`" + ` segments separated by ` + "`;`" + ` — NOT flowing prose. Only segments that change how you help them.
+- ` + "`call:`" + ` comes FIRST and only when they have TOLD you what to be called. Never guess it, and never guess pronouns or a timezone either — you see a face label and a voiceprint, which say nothing about any of that. If they have not said, omit the segment entirely and just use their label.
+- **Only write what you observed about THAT person.** Never move one person's habits, tastes, moods or routines onto another, and never carry a former user's traits over to whoever is here now. Two people at one desk are two entries, never a merged one. If you cannot tell whose a behaviour was, leave it out.
+- **Never delete a PERSON's entry.** Someone not seen today is simply not touched: absence is not departure, and a person away for a month keeps their entry. Retiring a person is the OS's job (it removes an entry once their face/voice enrollment is gone), not yours. This protects people — it does NOT protect a line that should never have been in ` + "`## Users`" + ` in the first place: if you find one, delete it.
+- **Keep each entry under ~400 characters.** Segments are dense, so that is plenty. This file is loaded into your prompt on EVERY turn, so bloat is billed on all of them; and when it overflows the cap it is cut from the END, which is where ` + "`## Users`" + ` lives. Rewrite an entry to stay short rather than appending to it.
+- **Strangers get NO entry — and remove any you find.** ` + "`## Users`" + ` is for people the device knows by enrollment. A passing face has no label to key on and nothing durable to remember; note desk traffic in ` + "`KNOWLEDGE.md`" + ` instead. An entry like ` + "`**stranger_4**`" + ` or a lumped ` + "`**stranger_2/3/4/…**`" + ` is not a person: delete it. The OS cannot clean these up for you — its pruner only recognises a proper ` + "`**<label> (role)**`" + ` entry.
+- Do NOT fill ` + "`**Name:**`" + ` or the other single-value fields at the top. This device can have several people; who is present right now always comes from ` + "`[context: current_user=…]`" + ` on the turn, never from that field.
 
 ---`
 

@@ -68,7 +68,7 @@ func (codexAdapter) write(m *baseMigrator, b *PersonaBundle, opts Options) error
 	}
 
 	// User profile → USER.md.
-	m.writeMemoryEntries("user-profile", rebrandEntries(b.User, rebrandToCodex),
+	m.writeUserProfile("user-profile", rebrandEntries(b.User, rebrandToCodex),
 		filepath.Join(ws, "USER.md"), opts.UserCharLimit, openclawFormat)
 	return nil
 }
@@ -88,4 +88,17 @@ func rebrandToCodex(text string) string {
 	text = reClawdBot.ReplaceAllStringFunc(text, repl)
 	text = reMoltBot.ReplaceAllStringFunc(text, repl)
 	return text
+}
+
+// personaPaths implements runtimeAdapter — Codex mirrors the OpenClaw layout.
+func (codexAdapter) personaPaths(opts Options) []string {
+	return openclawLayoutPersonaPaths(opts.CodexWorkspace)
+}
+
+// userProfilePath implements runtimeAdapter — USER.md at the workspace root.
+func (codexAdapter) userProfilePath(opts Options) string {
+	if opts.CodexWorkspace == "" {
+		return ""
+	}
+	return filepath.Join(opts.CodexWorkspace, "USER.md")
 }

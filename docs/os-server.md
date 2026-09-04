@@ -153,7 +153,8 @@ Config field: `guard_mode` in `config/config.json` (bool, default `false`). The 
 2. Ambient turn floor: `motion.activity`, `emotion.detected`, `speech_emotion.detected`, `sound`, `presence.away`, `light.level` are dropped when the last agent turn created by this handler (any type) was less than `sensing_turn_floor_s` seconds ago (config key, default `120`, `0` disables; guard mode bypasses). One cross-type floor on top of HAL's independent per-type gates — a burst of different event types costs at most one agent turn per window. Dropped events surface as `sensing_drop` (reason `ambient_floor`) in the Flow Monitor.
 3. No match → forward to OpenClaw via WebSocket `chat.send`
 4. If event has `images` → call `SendChatMessageWithImages` → send every attached photo with the text for AI vision analysis. A LIST, not a single field: a chat client can attach several at once and every wire format behind the gateway already carries `attachments[]`; a camera event simply sends one entry. For chat types (`web_chat` / `mqtt_chat`), each image is saved to `/tmp/web-chat-<ms>-<i>.jpg` (indexed so photos attached to the SAME turn cannot collide) and tagged `[image: <path>]` so the agent can reference it (e.g. for face enrollment). When the main model is text-only, the describe-first gate runs once PER image, **concurrently** (`safego`), and the descriptions are numbered `(image N of M)`. Concurrency is not an optimisation here: the gate runs inside the HTTP handler, so the caller's POST does not return until every describe finishes — a single describe measured 8-38 s, so two photos in series left the web chat silent for ~53 s, long enough that reloading the page (which cancels the request and loses the turn) is the natural move. Fanning out makes the wait the slowest image instead of their sum.
-5. Chat runs (`web_chat` / `mqtt_chat`) are tagged via `MarkWebChatRun(runID)` so the SSE handler suppresses TTS at lifecycle end — reply is rendered in the chat UI only (web SSE, or MQTT `chat.event` stream).
+5. The describe-first gate above covers only images entering a turn from OUTSIDE (chat/Telegram attachment, HAL's realtime look-frame handoff). A frame the agent captures MID-TURN with `/camera/snapshot` never passes through it — the shell tool returns only `{"path": ...}`, which a text-only main model cannot see. For that path the `camera` skill calls `POST /api/vision/look` (loopback-only, `system/server/vision.go`) instead of HAL directly: os-server takes the snapshot itself (`hal.Snapshot`, 768px/q75 fixed server-side) and returns `{"path": ..., "description": ...}`. The vision-capability branch lives here, not in the skill — when `vision.ModelSupportsVision` says the main model reads images itself, describe is SKIPPED entirely (no vision-model call, no 8-38s wait) and only `path` comes back for the agent to open. Describe failure returns 502 so the agent admits it could not see instead of guessing
+6. Chat runs (`web_chat` / `mqtt_chat`) are tagged via `MarkWebChatRun(runID)` so the SSE handler suppresses TTS at lifecycle end — reply is rendered in the chat UI only (web SSE, or MQTT `chat.event` stream).
 
 ### OpenClaw
 
@@ -760,3 +761,87 @@ Keyword matching is whole-phrase with ASCII word boundaries — "unmute speaker"
 Chitchat is **off while the realtime voice agent is enabled** — the model receives every voice turn before os-server does and answers social talk itself, in character. Leaving both on meant a canned reply in a different voice barging in on the turns the model happened to stay silent for. Command rules above stay on either way; they genuinely beat a model round-trip. The gate follows `realtime.enabled` live, so toggling it in Settings needs no restart.
 
 No match → forward to OpenClaw.
+
+### USER.md enrollment reconcile
+
+On startup (after persona migration) os-server retires people from **every**
+runtime's `USER.md` once their face/voice enrollment is gone.
+
+`USER.md` is a bootstrap file — injected into the agent's system prompt on every
+turn — but nothing on the device ever wrote it: the agent records what it learns
+in `KNOWLEDGE.md` and `memory/*.md`, neither of which OpenClaw loads. The file
+that is always read was the one never written, so a device that changed hands
+kept greeting its previous owner by name (lamp-ac82, 2026-09-03).
+
+- **The rule:** a name is stale only when `usercanon.Resolve` maps it to no
+  directory under `/root/local/users/`. **Absence is never the trigger** — a
+  person away for a day or a year keeps their enrollment, and therefore their
+  profile. Only `/face/remove`, `/speaker/remove` or a factory reset removes one.
+- **Writes only on change.** `USER.md` sits in the ~28k-token cached prompt
+  prefix, so an unconditional rewrite would cost a prompt-cache miss on the next
+  turn of every boot. The normal pass reads and writes nothing.
+- **Observe-only by default.** `user_profile_reconcile` in `config.json` gates
+  writes; unset/false logs what it *would* retire and changes nothing.
+- Writes are atomic (temp + rename) because the gateway is live during the pass.
+- An empty enrollment store (fresh device) is a no-op; an unreadable one is an
+  error that changes nothing, rather than a guess.
+
+### Keeping the two memory files bounded
+
+They cost differently, so they are bounded differently.
+
+| | In the system prompt? | Billed | Cap |
+|---|---|---|---|
+| `USER.md` | **yes** — a bootstrap file | **every turn** | 12000 chars (`bootstrapMaxChars`), then truncated tail-first |
+| `KNOWLEDGE.md` | **no** — OpenClaw does not know the file | once per session, when the agent reads it | none by construction |
+
+`KNOWLEDGE.md` had no cap at all: the daily synthesis appends a `## YYYY-MM-DD`
+block per active day and nothing ever removed one. Measured on lamp-ac82 at
+~666 B/day, a year of use reaches ~166 KB (~42k tokens) re-read every session.
+
+The heartbeat instruction now caps it: **keep the 14 most recent dated blocks**,
+fold anything older into the distilled top sections (Hardware / Users / Skills &
+APIs / Mistakes Made), delete the block. That uses the structure already there —
+the top section is *"Distilled from daily memory logs"*, the dated blocks are raw
+material — and the raw day still exists in `memory/YYYY-MM-DD.md`.
+
+### Daily people sync (KNOWLEDGE.md → USER.md)
+
+The heartbeat pass has a second step after knowledge synthesis: carry what was
+learned about *people* into `USER.md`.
+
+Both steps are **catch-up driven, not clock driven**. The synthesis used to be
+gated on `current time >= 21:00`, which silently never fires on a device switched
+off at the end of the working day. Device-observed 2026-09-03 on lamp-ac82:
+three days of flow logs ended 18:39 / 17:57 / 17:34, and `memory/2026-08-24.md`
+was never distilled because 21:00 never arrived. The gate is now *"is there a day
+BEFORE today with a memory file but no `## YYYY-MM-DD` header?"*, so the first
+heartbeat after the device is switched on clears the backlog on any schedule.
+
+This exists because of an asymmetry that caused a real bug. `KNOWLEDGE.md` is
+the agent's own file — **OpenClaw does not load it**; it only reaches the model
+when the agent tool-reads it. `USER.md` is a bootstrap file and is injected into
+the system prompt on **every turn**. So the file the agent wrote daily was the
+one rarely read, and the file always read was never written: a device that
+changed hands kept greeting its previous owner for two months.
+
+The instruction lives in `heartbeatMDBlock` (`runtimes/<name>/onboarding.go`) and
+is byte-identical across openclaw / codex / opencode / picoclaw — a runtime
+switch must not silently drop it.
+
+Rules the agent is given, and why each one is load-bearing:
+
+| Rule | Why |
+|---|---|
+| One bullet per person under `## Users`, as `- **<label> (friend)** — call: …; notes: …` | `<label>` is the enrollment label from `[context: current_user=…]`, which is what the OS reconcile keys on. The `(friend)` parenthetical is what distinguishes a person from a form field — without it, `**Notes:** …` would parse as a person named "Notes:" and get deleted. |
+| Short `key: value` segments, not prose; `call:` first | The template's own fields are singular (one `**Name:**`, one `**Timezone:**`) and cannot describe two people, but nesting them per person does not survive the file: `parseEntries` → `serialize` flattens every bullet to `- …`, so indented sub-fields detach from their person. Segments keep the form's *idea* — separated, labelled facts — in one prunable entry. The first attempt was flowing prose and produced a ~600-char paragraph with the address form buried in sentence four. |
+| Never guess `call:`, pronouns or timezone | The agent sees a face label and a voiceprint. Neither says anything about how someone wants to be addressed. Record them only when the person has said so; otherwise omit the segment. |
+| Each entry under ~400 chars | `USER.md` is billed on every turn, and past `bootstrapMaxChars` (12000) OpenClaw truncates with `text.slice(0, cutPoint)` — head kept, **tail cut** — and `## Users` is the tail. An oversized profile silently loses exactly the person data. `ReconcileUserProfiles` warns at 9000. |
+| Strangers get no entry | `## Users` is keyed by enrollment label; a passing face has none. Desk traffic belongs in `KNOWLEDGE.md`. |
+| Only write what was observed about **that** person | The original failure was two people fused into one profile (`Long/Leo`). Never move one person's habits onto another. |
+| Update and add only — **never delete** | Absence is not departure. Retiring a person is the OS's job (`ReconcileUserProfiles`, keyed on enrollment), not the agent's. |
+| Do not fill `**Name:**` or the other single-value fields | They are singular and cannot represent a multi-user device — filling them from the day's observations would thrash between users. Who is present comes from the per-turn tag. |
+
+`TestHeartbeatPeopleSyncFormatMatchesTheReconciler` pins the written format
+against the reconciler's parser, so the two cannot drift apart into entries
+nobody can prune.

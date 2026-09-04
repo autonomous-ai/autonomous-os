@@ -159,7 +159,11 @@ Rendered by `FlowDiagram` in `system/web/src/pages/Monitor.tsx`. The diagram is 
   - **CAM** (`hw_camera`) — `GET /camera/snapshot`; its saved result is
     rendered as a clickable thumbnail so operators can debug the exact frame
     returned to the agent (including an agent workspace image such as
-    `cam_face3.jpg`, not a newly captured preview).
+    `cam_face3.jpg`, not a newly captured preview). The thumbnail needs the
+    tool's arguments AND its result, which arrive on different events on the CLI
+    runtimes (codex and friends send `arguments` only on `start`, `result` only
+    on `end`), so the args are carried across by `toolCallId` — see
+    `rememberToolArgs` in `system/server/agent/delivery/http/camera_snapshot.go`.
   - **TTS** (`tts_speak`) — `/voice/speak`, text-to-speech output
 - These represent direct hardware calls from OpenClaw tools that bypass the OS server.
 

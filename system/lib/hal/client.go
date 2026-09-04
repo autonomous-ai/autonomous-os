@@ -81,6 +81,38 @@ func doPost(path string, body io.Reader) (*http.Response, error) {
 	return httpClient.Do(req)
 }
 
+// ─── Camera ─────────────────────────────────────────────────────────────────
+
+// snapshotClient is separate from httpClient because /camera/snapshot freezes
+// the servos and waits for a stable frame, which overruns the shared 5s budget.
+var snapshotClient = &http.Client{Timeout: 20 * time.Second}
+
+// Snapshot captures a frame and returns the file path HAL saved it to.
+func Snapshot(width, quality int) (string, error) {
+	req, err := newRequest("GET", fmt.Sprintf("/camera/snapshot?save=true&width=%d&quality=%d", width, quality), nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := snapshotClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("GET /camera/snapshot returned %d", resp.StatusCode)
+	}
+	var result struct {
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("decode /camera/snapshot: %w", err)
+	}
+	if result.Path == "" {
+		return "", errors.New("/camera/snapshot returned no path")
+	}
+	return result.Path, nil
+}
+
 // ─── LED ────────────────────────────────────────────────────────────────────
 
 // SetEffect stops any running effect, then starts a new one.

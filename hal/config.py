@@ -91,7 +91,7 @@ TRACKING_DETECT_LOCAL_ENABLED: bool = os.environ.get(
 ).strip().lower() in ("1", "true", "yes", "on")
 
 # Use the local YuNet face detector for target='face' (COCO has no face class,
-# YOLO falls back to remote YOLOWorld ~1.3s otherwise). Disable to force remote.
+# YOLO falls back to remote YOLOWorld, ~0.55s median, otherwise). Disable to force remote.
 TRACKING_FACE_DETECTOR_ENABLED: bool = os.environ.get(
     "HAL_TRACKING_FACE_DETECTOR", "true"
 ).strip().lower() in ("1", "true", "yes", "on")
@@ -106,6 +106,13 @@ TRACKING_MAX_DURATION_S: float = float(
 
 # --- Sensing: os-server integration ---
 OS_SENSING_URL = "http://127.0.0.1:5000/api/sensing/event"
+# Poked after an enrollment DIRECTORY under USERS_DIR appears or disappears
+# (/face/remove, /face/reset, /users/rename), so os-server can retire that
+# person from every runtime's USER.md straight away instead of leaving a stale
+# profile in the agent's system prompt until the next boot. Loopback-only on the
+# os-server side. NOT called by /speaker/remove: that drops only the voice/
+# subdir and leaves the person enrolled by face.
+OS_USER_RECONCILE_URL = "http://127.0.0.1:5000/api/agent/user-reconcile"
 # Named-pool filler (os-server owns phrases + language + WAV cache).
 OS_SENSING_FILLER_URL = "http://127.0.0.1:5000/api/sensing/filler"
 # Publish the captured `look` frame to the Flow Monitor.

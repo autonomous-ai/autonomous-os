@@ -25,10 +25,10 @@ import (
 //     schedule.Schedule's on-disk/on-wire layout exactly, just with the
 //     bookkeeping timestamps flattened to pointers.
 type scheduleListItem struct {
-	ID            string        `json:"id"`
-	Name          string        `json:"name"`
-	Instructions  string        `json:"instructions"`
-	Enabled       bool          `json:"enabled"`
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Instructions string `json:"instructions"`
+	Enabled      bool   `json:"enabled"`
 
 	// Kind is "agent" or "speak" — WHAT firing this task does, and so how
 	// Instructions is read. It must be echoed here, not just accepted on the
@@ -39,7 +39,7 @@ type scheduleListItem struct {
 	// Written unconditionally rather than with omitempty: ResolveKind always
 	// yields a concrete "agent"/"speak", and an absent key would put the
 	// client back to inferring a default it cannot see.
-	Kind string `json:"kind"`
+	Kind          string        `json:"kind"`
 	Cadence       schedule.Spec `json:"schedule"`
 	EndAt         *time.Time    `json:"end_at,omitempty"`
 	NextRunAt     *time.Time    `json:"next_run_at,omitempty"`
@@ -65,10 +65,10 @@ type scheduleListItem struct {
 // scheduleListItem's doc comment for why NextRunAt/LastRunAt become pointers.
 func toScheduleListItem(sch schedule.Schedule) scheduleListItem {
 	item := scheduleListItem{
-		ID:            sch.ID,
-		Name:          sch.Name,
-		Instructions:  sch.Instructions,
-		Enabled:       sch.Enabled,
+		ID:           sch.ID,
+		Name:         sch.Name,
+		Instructions: sch.Instructions,
+		Enabled:      sch.Enabled,
 		// Normalised, not raw: a row stored before this field holds "", which
 		// the runner already treats as agent — so the UI must be told "agent"
 		// rather than left to guess from an empty string.
@@ -202,12 +202,12 @@ func overlayPendingIntents(items []scheduleListItem, intents []schedule.Intent) 
 				// speak task renders as an agent one until the backend
 				// confirms it, so the row the user just created misdescribes
 				// itself for as long as it is queued.
-				Kind:         schedule.ResolveKind(in.Payload.Kind),
-				Enabled:      in.Payload.Enabled,
-				Cadence:      in.Payload.Cadence,
-				EndAt:        in.Payload.EndAt,
-				Pending:      "create",
-				IntentID:     in.IntentID,
+				Kind:     schedule.ResolveKind(in.Payload.Kind),
+				Enabled:  in.Payload.Enabled,
+				Cadence:  in.Payload.Cadence,
+				EndAt:    in.Payload.EndAt,
+				Pending:  "create",
+				IntentID: in.IntentID,
 			})
 		case "update":
 			idx, ok := byID[in.ScheduleID]

@@ -35,6 +35,7 @@ import (
 	_networkHttpDeliver "go.autonomous.ai/os/system/server/network/delivery/http"
 	_pluginHttpDeliver "go.autonomous.ai/os/system/server/plugin/delivery/http"
 	_sensingHttpDeliver "go.autonomous.ai/os/system/server/sensing/delivery/http"
+	"go.autonomous.ai/os/system/server/serializers"
 	systemshell "go.autonomous.ai/os/system/server/system"
 	"go.autonomous.ai/os/system/statusled"
 )
@@ -59,6 +60,7 @@ type Server struct {
 	configMigration  *agent.ConfigMigration
 	channelReconcile *agent.ChannelReconcile
 	mcpReconcile     *agent.MCPReconcile
+	userReconcile    *agent.UserProfileReconcile
 	networkService   *network.Service
 	deviceService    *device.Service
 	ambientService   *ambient.Service
@@ -133,6 +135,7 @@ func ProvideServer(
 	cm *agent.ConfigMigration,
 	cr *agent.ChannelReconcile,
 	mr *agent.MCPReconcile,
+	upr *agent.UserProfileReconcile,
 	ns *network.Service,
 	mqttFactory *mqtt.Factory,
 	ambientSvc *ambient.Service,
@@ -159,6 +162,7 @@ func ProvideServer(
 		configMigration:   cm,
 		channelReconcile:  cr,
 		mcpReconcile:      mr,
+		userReconcile:     upr,
 		networkService:    ns,
 		deviceService:     ds,
 		mqttFactory:       mqttFactory,
@@ -484,6 +488,17 @@ func (s *Server) Serve(closeFn func()) error {
 	agent.DELETE("flow-logs", adminAuthMiddleware(s.config), s.agentHandler.ClearFlowLogs)
 	agent.GET("analytics", adminAuthMiddleware(s.config), s.agentHandler.Analytics)
 	agent.GET("config-json", localOnlyMiddleware(), s.agentHandler.ConfigJSON)
+	// user-reconcile: HAL calls this after an enrollment DIRECTORY disappears
+	// (/face/remove, /face/reset, /users/rename) so a retired person's profile
+	// leaves USER.md immediately instead of lingering until the next boot —
+	// otherwise removing someone from the UI is a half-delete. Loopback-only,
+	// like the other HAL-initiated endpoints: it must work before/without a
+	// login. Deliberately NOT wired to /speaker/remove, which only drops the
+	// voice/ subdir and leaves the person (and their face) enrolled.
+	agent.POST("user-reconcile", localOnlyMiddleware(), func(c *gin.Context) {
+		s.userReconcile.Reconcile()
+		c.JSON(http.StatusOK, serializers.ResponseSuccess(gin.H{"reconciled": true}))
+	})
 	// channel-turn: the Hermes gateway observer hook POSTs each turn here so
 	// channel (Telegram/Slack/…) turns surface in Flow Monitor. Loopback-only.
 	agent.POST("channel-turn", localOnlyMiddleware(), s.agentHandler.ChannelTurn)
@@ -523,6 +538,12 @@ func (s *Server) Serve(closeFn func()) error {
 	scheduleGroup.POST("", adminAuthMiddleware(s.config), s.deviceMQTTHandler.CreateSchedule)
 	scheduleGroup.PATCH(":id", adminAuthMiddleware(s.config), s.deviceMQTTHandler.UpdateSchedule)
 	scheduleGroup.DELETE(":id", adminAuthMiddleware(s.config), s.deviceMQTTHandler.DeleteSchedule)
+
+	// Look: snapshot + describe in one call, so the agent gets text it can read
+	// instead of a file path it cannot. Loopback-only — the caller is the
+	// agent's own shell tool, and it moves hardware and spends a vision-model
+	// call. See lookAndDescribe in vision.go.
+	api.POST("vision/look", localOnlyMiddleware(), s.lookAndDescribe)
 
 	logs := api.Group("logs")
 	logs.GET("tail", adminAuthMiddleware(s.config), s.logTail)

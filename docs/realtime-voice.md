@@ -203,9 +203,14 @@ crash restarts the count at 1 while HAL still holds the old high-water mark, so
 every turn of the new session looks like a late arrival and is dropped —
 measured 03/09/2026: `seq=1` against `latest_seq=40` silenced the wake greeting
 (its LED and servo still ran) and would have silenced the next 39 turns. The run
-id carries its creation time (`device-chat-<n>-<unix-ms>`), so when a LOWER
-sequence arrives from a run created LATER than the one holding the speaker, HAL
-treats the counter as restarted and adopts the new sequence. Ids without a stamp
+id carries its creation time (`device-chat-<n>-<unix-ms>`), so when a LOWER OR
+EQUAL sequence arrives from a run created LATER than the one holding the speaker,
+HAL treats the counter as restarted and adopts the new sequence. Equal counts
+because a restart resets to 1, so the new run only falls BELOW the old mark when
+that mark is high — with a low mark (two restarts in a row, or a restart early in
+a session) the sequences collide instead. Measured 04/09/2026: `seq=2` met an
+unrelated `seq=2` from before the restart and the wake greeting was dropped, the
+same silent-device symptom one comparison away. Ids without a stamp
 (`tg-<messageID>`) keep the plain sequence rule: with nothing to compare, a
 genuinely stale POST must not be able to take the speaker back.
 

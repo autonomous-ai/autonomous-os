@@ -89,13 +89,13 @@ Always triggers a full reaction — no exceptions. The agent **must** do all thr
 
 1. `/emotion greeting` (0.9) for friend — `/emotion curious` (0.8) for stranger
 2. For friend: `/servo/aim {"direction": "user"}` then `/servo/track {"target": ["person"]}` — aim orients the camera toward the user's region first (~2s), then the vision tracker locks onto the person and follows them around the room. Stranger: `/servo/play {"recording": "scanning"}` (no auto-follow — caution)
-3. Speak: warm greeting for friend (by name), cautious acknowledgment for stranger
+3. Speak: warm greeting for friend (by the name in `[context: current_user=X]`), cautious acknowledgment for stranger
 
 The system handles cooldowns on the HAL side. If the event reached the agent, enough time has passed — react fully.
 
 #### Return after long absence (friend only)
 
-On every friend `presence.enter` event, the sensing handler injects a `[presence_context: {"last_leave_age_min": N, "current_hour": H}]` block before forwarding to the agent. `last_leave_age_min` is computed from the most recent `leave` row in the user's wellbeing log, scanning up to 3 days back (`wellbeing.LastActionTS`); `-1` means no leave was found in that window.
+On every friend `presence.enter` event, the sensing handler injects a `[context: current_user=X]` tag (see [User attribution](#user-attribution--context-current_userx)) followed by a `[presence_context: {"last_leave_age_min": N, "current_hour": H}]` block before forwarding to the agent. The attribution tag is what the greeting is spoken from — the event text itself carries only a face *label* (`friend (long)`), which the agent reads as a detection tag rather than a name. `last_leave_age_min` is computed from the most recent `leave` row in the user's wellbeing log, scanning up to 3 days back (`wellbeing.LastActionTS`); `-1` means no leave was found in that window.
 
 `sensing/SKILL.md` reads this block and swaps to a **return-after-long-absence** greeting when ALL three conditions hold:
 
@@ -376,7 +376,7 @@ If the user drinks or takes a break before the next window, the regular `drink` 
 
 ### User attribution — `[context: current_user=X]`
 
-The sensing handler injects a `[context: current_user=X]` tag into every `motion.activity` message. `X` is the **friend with the newest session_start** among friends still in the forget window (see `FaceRecognizer.current_user()`), or `"unknown"` when face sees **only** strangers (no friend is still present). Crucially: if a friend is still within their forget window, `current_user()` returns that friend even if the most recent raw `presence.enter` was for a stranger — stranger flicker does not kick a friend out of the session.
+The sensing handler injects a `[context: current_user=X]` tag into every `presence.enter`, `motion.activity`, `emotion.detected` and `speech_emotion.detected` message. `X` is the **friend with the newest session_start** among friends still in the forget window (see `FaceRecognizer.current_user()`), or `"unknown"` when face sees **only** strangers (no friend is still present). Crucially: if a friend is still within their forget window, `current_user()` returns that friend even if the most recent raw `presence.enter` was for a stranger — stranger flicker does not kick a friend out of the session.
 
 Sorting by `session_start` (the timestamp of the re-enter after the last leave) rather than `last_seen` makes the answer deterministic when two friends are continuously present (Chloe 18:00, An 18:30 → An wins because her session started later), instead of depending on dict iteration order.
 
