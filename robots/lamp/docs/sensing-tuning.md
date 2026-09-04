@@ -297,6 +297,12 @@ Without it, a bank that turns out to hold the wrong views can only be wiped
 wholesale — which is what had to happen on one lamp when 6 of 10 views turned out
 to be other people.
 
+**Minting an identity needs corroboration.** An unrecognised face does not get a `stranger_N` from a single frame. It must be seen `FACE_STRANGER_MIN_TICKS` times (2) within `FACE_STRANGER_CORROBORATION_S` (6 s), matched **by embedding** rather than by position, so "again" means the same person and not merely another face in the same corner.
+
+Minting is the expensive verdict — a persistent identity, a stranger presence event, a row in the Unknown Faces card — and it is reached by scoring *below* everything, which is what an unknown person looks like and equally what a momentarily unusable frame looks like. The gates above drop the unusable frames they can measure; this catches the rest by asking what no single frame can answer: is this face still there a tick later? Measured over 990 logged frames, 19 of the 28 runs that reach this branch are a single isolated tick.
+
+A real visitor is unaffected beyond one tick of delay: they are still there 2 s later and mint then. The window is deliberately ~3 sensing ticks rather than strictly back-to-back, so one dropped or blurred frame in the middle does not reset a genuine visitor's count.
+
 **Tuning:**
 
 | Symptom | Fix |
@@ -310,14 +316,6 @@ to be other people.
 | Recognition flickers / mints new `stranger_N` ids repeatedly | Crop is too small to embed reliably — increase `FACE_HEIGHT_RATIO_THRESHOLD`, or raise camera resolution to 1280×720 |
 | Wrong person matched when someone sits close to a frame edge | Face is clipped — decrease `FACE_MAX_TRUNCATION` (0.05 → 0.03), or re-aim the camera so heads stay fully in frame |
 | People at the frame edge stop being recognized at all | Increase `FACE_MAX_TRUNCATION` (0.05 → 0.10); check for `FAIL-truncated` folders in the face debug log to see how much was actually cut |
-**Minting an identity needs corroboration.** An unrecognised face does not get a `stranger_N` from a single frame. It must be seen `FACE_STRANGER_MIN_TICKS` times (2) within `FACE_STRANGER_CORROBORATION_S` (6 s), matched **by embedding** rather than by position, so "again" means the same person and not merely another face in the same corner.
-
-Minting is the expensive verdict — a persistent identity, a stranger presence event, a row in the Unknown Faces card — and it is reached by scoring *below* everything, which is what an unknown person looks like and equally what a momentarily unusable frame looks like. The gates above drop the unusable frames they can measure; this catches the rest by asking what no single frame can answer: is this face still there a tick later? Measured over 990 logged frames, 19 of the 28 runs that reach this branch are a single isolated tick.
-
-A real visitor is unaffected beyond one tick of delay: they are still there 2 s later and mint then. The window is deliberately ~3 sensing ticks rather than strictly back-to-back, so one dropped or blurred frame in the middle does not reset a genuine visitor's count.
-
-| Symptom | Fix |
-|---------|-----|
 | Lamp mints a `stranger_N` for the enrolled user while it is panning | Motion blur — that is what `FACE_MIN_SHARPNESS` screens out; check `FAIL-blurred` folders for the sharpness actually seen |
 | Unknown visitors take too long to be noticed | Lower `FACE_STRANGER_MIN_TICKS` to 1 to mint from a single frame (the old behaviour) |
 | Spurious `stranger_N` identities still appear | Raise `FACE_STRANGER_MIN_TICKS` to 3; each step costs a visitor one more sensing tick |
