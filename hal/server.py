@@ -395,7 +395,7 @@ async def lifespan(app: FastAPI):
                 svc = AnimationService(
                     port=SERVO_PORT, lamp_id=DEVICE_ID, fps=SERVO_FPS,
                     duration=SERVO_PLAY_RAMP_S, hold_s=SERVO_HOLD_S,
-                    safety_policy=_safety,
+                    safety_policy=_safety, geometry=_geometry,
                 )
             else:
                 # SDK backends carry the safety policy themselves: their play
@@ -1177,7 +1177,15 @@ _route_available = {
 # Pass-through when absent (light fail-safe); a present-but-malformed schema
 # fail-louds inside load_safety, like ROBOT.md. Slice 1 = light.max_brightness.
 from hal.safety.policy import load_safety
-_safety = load_safety(os.path.join(_devices_dir(), _resolve_device_type()), _profile.safety_ref)
+_device_dir = os.path.join(_devices_dir(), _resolve_device_type())
+_safety = load_safety(_device_dir, _profile.safety_ref)
+
+# Geometry for the bounds that are shapes rather than scalars (today
+# motion.max_cog_offset_mm). Same resolution rules as safety_ref, same
+# fail-safe: unreadable or absent is a warning and pass-through, never a boot
+# failure — a body that cannot be scored still has to move.
+from hal.drivers.motors.recording_stability import load_geometry
+_geometry = load_geometry(_device_dir, _profile.urdf_ref)
 
 # The policy route is a contract-only, logging implementation at this stage.
 # Constructing it neither loads a policy model nor opens a motion driver.

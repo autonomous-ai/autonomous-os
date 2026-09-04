@@ -296,8 +296,9 @@ as HAL names them (`base_yaw`, `base_pitch`, `elbow_pitch`, `wrist_pitch`,
 `wrist_roll`) — driven by live joint values, plus recording playback and LED
 controls that call the same `/servo/*` and `/led/*` endpoints a skill calls.
 
-Drag to orbit, scroll to zoom, double-click to reset. The camera aims at the centre of
-whatever geometry loaded and backs off far enough to frame it, so the head does
+Drag to orbit, scroll to zoom, double-click to reset. The camera opens on the lamp's face,
+three quarters round from dead-on, aims at the centre of whatever geometry
+loaded and backs off far enough to frame it, so the head does
 not run off the canvas on a wide window. Zoom spans 0.3x-4x of that distance
 through a 38 deg lens, and elevation runs from level with the floor to just
 short of straight overhead. The body stands on a
@@ -364,7 +365,9 @@ mounted=['audio','bluetooth','camera','emotion','led','music','scene',
 ### Runs exactly as on a board
 
 - the whole route surface — still decided by `ROBOT.md`, not by the simulator
-- safety gates — joint clamps, `motion.max_speed`, the LED brightness ceiling
+- safety gates — `motion.max_speed`, the whole-body stability gate
+  (`motion.max_cog_offset_mm`), the LED brightness ceiling. `/servo/move` rejects
+  unknown joint names, but no bound clamps a joint angle to a range.
 - the declaration-driven mount plan
 - emotion presets, scene, music, bluetooth, system routes
 - `TrackerService`, volume, user/stranger stores
@@ -373,7 +376,7 @@ mounted=['audio','bluetooth','camera','emotion','led','music','scene',
 
 | Subsystem | Board | Simulator |
 |---|---|---|
-| Servo | `feetech` over a serial bus | `MockMotionService` — joints are floats in a dict; moves interpolate over their commanded `duration` and block until arrival; `aim`/`nudge` obey `SAFETY.md`'s `max_speed`; CSV recordings replay through the same 30 Hz stretch-and-resample timing, so an animation takes the same wall-clock time |
+| Servo | `feetech` over a serial bus | `MockMotionService` — joints are floats in a dict; moves interpolate over their commanded `duration` and block until arrival; `aim`/`nudge` obey `SAFETY.md`'s `max_speed`; CSV recordings replay through the same 30 Hz stretch-and-resample timing, so an animation takes the same wall-clock time — and through the same `resample_recording`, so the stability gate refuses in `make sim` exactly the clip a physical body refuses |
 | LED | WS2812 over SPI | `_MemoryStrip` — a real pixel buffer in RAM, effects run for real, still funnelled through the same brightness clamp |
 | Camera | `opencv`/V4L2 | `virtual` (synthetic scene) or `host` (the Mac's webcam) |
 | Sensing | `SensingService` + face recognition | `VirtualSensingService` — keeps presence state and the route contract; no perception-service calls, no face identity |

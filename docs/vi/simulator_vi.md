@@ -293,8 +293,9 @@ Một khung nhìn xoay được của mesh GLB có rig — năm joint node đặ
 điều khiển bởi giá trị khớp live, kèm replay recording và các nút LED gọi đúng
 `/servo/*`, `/led/*` mà một skill gọi.
 
-Kéo để xoay, lăn để zoom, double-click để reset. Camera ngắm vào tâm của hình học
-đang được nạp và lùi đủ xa để lọt hết khung, nên đầu đèn không bị cắt mất trên
+Kéo để xoay, lăn để zoom, double-click để reset. Camera mở ra ở mặt trước đèn, lệch 3/4
+so với chính diện, ngắm vào tâm của hình học đang được nạp và lùi đủ xa để lọt
+hết khung, nên đầu đèn không bị cắt mất trên
 màn hình rộng. Zoom chạy 0,3x-4x của khoảng cách đó qua ống kính 38 deg, độ cao
 camera từ ngang sàn tới gần thẳng đứng trên đỉnh. Thân đèn đứng trên lưới sàn bán kính 1,6 m (ô
 50 mm, sáng hơn mỗi 250 mm, mờ dần ra mép tròn) để thấy rõ hướng quay và độ
@@ -357,7 +358,9 @@ mounted=['audio','bluetooth','camera','emotion','led','music','scene',
 ### Chạy y hệt board
 
 - toàn bộ bề mặt route — vẫn do `ROBOT.md` quyết định, không phải simulator
-- safety gate — clamp góc, `motion.max_speed`, trần độ sáng LED
+- safety gate — `motion.max_speed`, gate ổn định toàn thân
+  (`motion.max_cog_offset_mm`), trần độ sáng LED. `/servo/move` từ chối tên khớp
+  lạ, nhưng không có bound nào clamp góc khớp về một khoảng.
 - mount plan theo declaration
 - emotion preset, scene, music, bluetooth, system
 - `TrackerService`, volume, kho user/stranger
@@ -366,7 +369,7 @@ mounted=['audio','bluetooth','camera','emotion','led','music','scene',
 
 | Hệ | Board | Simulator |
 |---|---|---|
-| Servo | `feetech` qua bus nối tiếp | `MockMotionService` — khớp là float trong dict; move nội suy theo đúng `duration` và block tới khi tới nơi; `aim`/`nudge` tuân `max_speed` của `SAFETY.md`; recording CSV replay qua đúng lưới stretch-and-resample 30 Hz, nên một animation tốn đúng bằng thời gian thực |
+| Servo | `feetech` qua bus nối tiếp | `MockMotionService` — khớp là float trong dict; move nội suy theo đúng `duration` và block tới khi tới nơi; `aim`/`nudge` tuân `max_speed` của `SAFETY.md`; recording CSV replay qua đúng lưới stretch-and-resample 30 Hz, nên một animation tốn đúng bằng thời gian thực — và qua đúng `resample_recording`, nên gate ổn định từ chối trong `make sim` đúng clip mà thân máy thật từ chối |
 | LED | WS2812 qua SPI | `_MemoryStrip` — buffer pixel thật trong RAM, effect chạy thật, vẫn qua đúng cổng clamp độ sáng |
 | Camera | `opencv`/V4L2 | `virtual` (scene tổng hợp) hoặc `host` (webcam của Mac) |
 | Sensing | `SensingService` + face recognition | `VirtualSensingService` — giữ presence state và contract của route; không gọi perception-service, không có face identity |

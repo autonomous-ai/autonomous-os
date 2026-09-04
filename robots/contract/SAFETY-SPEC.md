@@ -53,6 +53,7 @@ audio:
 motion:
   max_speed: 120             # deg/s; the servo route stretches a move's duration so no joint exceeds it
   stop_always: true          # motion.stop/release are deterministic and never gated
+  max_cog_offset_mm: 22      # mm the centre of gravity may sit off the base axis (needs ROBOT.md urdf_ref)
   # max_accel: <int>         # reserved
 ---
 ```
@@ -69,6 +70,7 @@ request, so the bound changes with the time of day without a restart.
 | `audio.max_volume` | no | **enforced (v1)** | Integer `0–100` (%). `POST /audio/volume` clamps any higher request, above the speaker/Bluetooth-sink split, so the ceiling binds every caller alike — agent, local intent, web slider, boot restore. All-day and independent of `audio.quiet_hours`. Both `GET` and `POST /audio/volume` report `max_volume`, and the `POST` reply carries the volume actually applied, so a UI can bound its own control instead of snapping back. (Slice 5.) |
 | `audio.quiet_hours` | no | **enforced (v1)** | `{ start, end }`. Inside the window loud discretionary output (music via `/audio/play`) is suppressed; spoken replies still play. (Slice 2.) |
 | `motion.max_speed` | no | **enforced (v1)** | deg/s ceiling. The servo route stretches a move's duration so no joint exceeds it (the move still reaches its target). (Slice 3.) |
+| `motion.max_cog_offset_mm` | no | **enforced (v1)** | Millimetres the whole-body centre of gravity may sit from the base axis. Recordings are scored frame by frame against the body's own geometry (`ROBOT.md` `urdf_ref`) and one that reaches further is refused rather than played — a tip-over is a combination of joint angles, so no per-joint bound can express it. Requires `urdf_ref`: declared without it, the gate logs that it cannot run and passes through. Derive the number per body from its own library (the widest shipped animation, plus headroom), never copy another robot's. (Slice 6.) |
 | `motion.max_accel` | no | reserved | Acceleration ceiling. (Reserved — no accel model yet.) |
 | `motion.stop_always` | no | declared (v1) | `motion.stop`/release/zero/hold are currently deterministic recovery actions because no route gates them. The field is parsed and reported, but no HAL route consumes it as an independent enforcement gate. |
 | **(motion declared, no bounds)** | — | **pass-through (v1)** | Presence-driven, like light/audio: a device that ships no `motion:` bounds moves unrestricted (that is the *off* state, not a refusal). A declared `max_speed` is enforced; an absent one is not. |

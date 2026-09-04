@@ -1,0 +1,96 @@
+<?xml version="1.0"?>
+<!--
+  Autonomous Lamp - kinematic + inertial description.
+
+  Geometry (link offsets, joint axes, limits) is derived from the vendor CAD.
+  This file was contributed as part of Hcoder10/animacy (Apache-2.0) and is
+  reused here under that licence; visual and collision meshes were removed
+  because this repository ships no mesh files.
+
+  Joint names and signs are the ones HAL already uses (ServoMoveRequest and the
+  recordings CSV), degrees converted to radians, no sign flip or offset.
+
+  Link masses are ESTIMATES, and every inertial origin is zero - a link's mass
+  sits at its own frame origin. Good enough to rank poses by how far they throw
+  the centre of gravity (hal/drivers/motors/recording_stability.py); NOT a
+  dynamics model. Re-measure before trusting it for torque or inertia.
+-->
+<robot name="autonomous_lamp">
+  <link name="base">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <mass value="0.9" />
+      <inertia ixx="9e-05" ixy="0" ixz="0" iyy="9e-05" iyz="0" izz="9e-05" />
+    </inertial>
+  </link>
+  <joint name="base_yaw" type="revolute">
+    <origin xyz="0 0 0.0495" rpy="0 0 0" />
+    <parent link="base" />
+    <child link="swivel" />
+    <axis xyz="0 0 -1" />
+    <limit lower="-1.570796" upper="1.570796" effort="3.0" velocity="4.36" />
+  </joint>
+  <link name="swivel">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <mass value="0.12" />
+      <inertia ixx="1.2e-05" ixy="0" ixz="0" iyy="1.2e-05" iyz="0" izz="1.2e-05" />
+    </inertial>
+  </link>
+  <joint name="base_pitch" type="revolute">
+    <origin xyz="0 0 0.0471" rpy="0 -0.520108 0" />
+    <parent link="swivel" />
+    <child link="lower_arm" />
+    <axis xyz="0 1 0" />
+    <limit lower="-1.570796" upper="1.570796" effort="3.0" velocity="4.36" />
+  </joint>
+  <link name="lower_arm">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <mass value="0.1" />
+      <inertia ixx="1e-05" ixy="0" ixz="0" iyy="1e-05" iyz="0" izz="1e-05" />
+    </inertial>
+  </link>
+  <joint name="elbow_pitch" type="revolute">
+    <origin xyz="-0.0948 0 0.0986" rpy="0 0.472984 0" />
+    <parent link="lower_arm" />
+    <child link="upper_arm" />
+    <axis xyz="0 -1 0" />
+    <limit lower="-1.570796" upper="1.570796" effort="3.0" velocity="4.36" />
+  </joint>
+  <link name="upper_arm">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <mass value="0.14" />
+      <inertia ixx="1.4e-05" ixy="0" ixz="0" iyy="1.4e-05" iyz="0" izz="1.4e-05" />
+    </inertial>
+  </link>
+  <joint name="wrist_pitch" type="revolute">
+    <origin xyz="0.0706 0 0.0684" rpy="0 0.459022 0" />
+    <parent link="upper_arm" />
+    <child link="neck" />
+    <axis xyz="0 1 0" />
+    <limit lower="-1.570796" upper="1.570796" effort="3.0" velocity="4.36" />
+  </joint>
+  <link name="neck">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <mass value="0.05" />
+      <inertia ixx="5e-06" ixy="0" ixz="0" iyy="5e-06" iyz="0" izz="5e-06" />
+    </inertial>
+  </link>
+  <joint name="wrist_roll" type="revolute">
+    <origin xyz="0.0377 0 0.0415" rpy="0.0960535 -0.00508842 0.10577" />
+    <parent link="neck" />
+    <child link="head" />
+    <axis xyz="-0.672406 0 -0.740182" />
+    <limit lower="-1.570796" upper="1.570796" effort="3.0" velocity="4.36" />
+  </joint>
+  <link name="head">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <mass value="0.18" />
+      <inertia ixx="1.8e-05" ixy="0" ixz="0" iyy="1.8e-05" iyz="0" izz="1.8e-05" />
+    </inertial>
+  </link>
+</robot>
