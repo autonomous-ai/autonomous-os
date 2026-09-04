@@ -1251,13 +1251,32 @@ class FaceRecognizer:
                 logger.error(f"Failed to save strangers' state due to {e}")
 
     def _load_strangers_state(self):
+        """Re-read the stranger bank from disk. SILENT when it does not exist.
+
+        The bank files are only ever written when a brand-new stranger is minted
+        (see ``_save_strangers_state``), so on a device where every face it ever
+        sees is enrolled they are never created at all — and this runs on the
+        per-frame path inside ``detect()``. Treating "not created yet" as an
+        error therefore logged a full traceback at ERROR every couple of
+        seconds, from first boot, forever: journald filled up and real errors
+        got buried, on precisely the devices that were working correctly.
+
+        Absent is not corrupt. An empty bank is the right state, the caller's
+        fields already hold it, and the assignment below was already skipped in
+        that case — so returning early changes nothing except the noise. A bank
+        that EXISTS but cannot be read is still loud, which is the case worth
+        shouting about. This mirrors
+        ``speaker_recognizer._load_strangers``, which has always guarded this way;
+        the face path was the odd one out.
+        """
+        embeds_path = STRANGER_STATE_DIR / "embeds.npy"
+        labels_path = STRANGER_STATE_DIR / "labels.npy"
+        if not (embeds_path.exists() and labels_path.exists()):
+            return
+
         try:
-            stranger_embeddings = np.load(
-                STRANGER_STATE_DIR / "embeds.npy", allow_pickle=True
-            )
-            stranger_labels = np.load(
-                STRANGER_STATE_DIR / "labels.npy", allow_pickle=True
-            )
+            stranger_embeddings = np.load(embeds_path, allow_pickle=True)
+            stranger_labels = np.load(labels_path, allow_pickle=True)
             stranger_counter = int(
                 np.load(STRANGER_STATE_DIR / "counter.npy", allow_pickle=True)
             )
