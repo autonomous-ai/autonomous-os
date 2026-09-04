@@ -20,6 +20,7 @@ audio:
 motion:
   max_speed: 120             # deg/s ceiling; the servo route stretches a move's duration so no joint exceeds it
   stop_always: true          # motion.stop/release are deterministic, never gated
+  max_cog_offset_mm: 22      # mm the centre of gravity may sit off the base axis; recordings reaching further are refused (needs urdf_ref)
   # max_accel: <int>         # (reserved) — no acceleration model yet
 
 thermal:

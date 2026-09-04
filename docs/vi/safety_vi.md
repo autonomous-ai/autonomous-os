@@ -77,6 +77,7 @@ mới là pass-through.
 | 3b | `motion.stop_always` | — | — | **được khai báo / đảm bảo theo cấu trúc** — chưa có route-level gate nào dùng field này (xem bên dưới) |
 | 4 | trạng thái fail-safe (mất mạng/gateway → dừng tracking; lỗi board → cô lập `503`; `thermal.max_temp_c` → health event quá nhiệt SoC + dừng tracking; setup + quá dòng servo dự trữ) | hook WS-disconnect + `503` theo từng capability + monitor nhiệt (`thermal_over`/`read_soc_temp_c`) | `services` khi gateway WS disconnect + route HAL/`/health` + `server.py` `_thermal_monitor` | **thực thi một phần (v1)** (setup + quá dòng dự trữ) |
 | 5 | trần `audio.max_volume` | `clamp_volume` | route `/audio/volume`, phía trên chỗ rẽ nhánh loa/sink BT | **thực thi (v1)** |
+| 6 | `motion.max_cog_offset_mm` (theo sự hiện diện) | chấm trọng tâm toàn thân theo từng frame (`recording_stability.py`) | lúc load recording (`resample_recording`), cả driver thật lẫn mock | **thực thi (v1)** |
 
 Mỗi slice thêm field vào `SafetyPolicy` và gate function rồi nối một/nhiều route;
 loader và contract front-matter **không** đổi hình dạng giữa các slice (chỉ thêm field
@@ -177,6 +178,24 @@ recording chỉ chậm lại đúng chỗ bất khả thi, không chỗ nào kh�
 (`hal/drivers/motors/recording_timing.py`, dùng chung cho driver thật và mock để
 simulator phát đúng thứ body phát). Trần là giá trị nhỏ hơn giữa giới hạn đo được
 của servo (`SERVO_MAX_DPS`, 250 deg/s) và `motion.max_speed` đã khai.
+
+Recorded animation còn được gate về **độ ổn định** chứ không chỉ tốc độ, tại đúng
+chokepoint lúc load. Mỗi joint có thể nằm trong dải của chính nó trong khi *tổ hợp*
+lại đẩy trọng tâm ra ngoài đế, và không bound theo từng joint nào diễn đạt được
+điều đó, nên `hal/drivers/motors/recording_stability.py` dựng lại trọng tâm toàn
+thân cho từng frame và **TỪ CHỐI** recording nào vươn xa trục đế hơn mức
+`motion.max_cog_offset_mm` cho phép. Khác với tốc độ, không có cách suy giảm nào
+làm một tư thế sắp lật trở nên an toàn — recording bị bỏ qua, nên chế độ hỏng là
+thiếu một animation, không phải crash. Hình học lấy từ chính URDF của thân qua khoá
+`urdf_ref` trong `ROBOT.md`; kiểm tra này theo sự hiện diện và bất hoạt nếu thiếu
+một trong hai khai báo, còn thân nào khai trần nhưng không có `urdf_ref` dùng được
+thì ghi log là không chấm được tư thế rồi pass-through chứ không fail-closed. Lamp
+khai 22 mm (đo được: clip bên thứ ba làm lật lamp-0c89 đạt đỉnh 31.6 mm, recording
+tệ nhất trong bộ ship là 17.7 mm, 28 cái còn lại ≤ 17.6 mm — xem
+`robots/lamp/docs/motion-playback.md`); chưa thân nào khác khai, nên không có gì
+khác đổi hành vi. Mỗi thân phải tự suy ra con số từ thư viện animation của chính
+nó — đó là milimet theo hình học và khối lượng của thân đó, không phải hằng số để
+chép lại.
 
 Recorded move trên đường SDK của Reachy được gate theo kiểu khác, vì driver
 KHÔNG sở hữu vòng phát: `ReachyMotionService` giao trajectory cho
@@ -292,7 +311,10 @@ output *tuỳ ý* (nhạc), còn trần giới hạn *mọi thứ to tới đâu
 ## Quan hệ với enforcement hardcode rời rạc hiện có
 
 Một số hành vi an toàn đã tồn tại, hardcode và rải rác: `motion.stop()` trong service
-motors/animation, clamp vị trí cơ học của lerobot, config scale độ sáng LED. Engine
+motors/animation, clamp vị trí cơ học của lerobot, config scale độ sáng LED. Clamp
+vị trí cơ học đó vẫn là giới hạn vị trí theo từng joint duy nhất: đường lệnh **không**
+có bound vị trí nào được khai báo (recording được gate theo tốc độ và, từ slice 6,
+theo độ ổn định toàn thân — cả hai đều không phải clamp theo từng joint). Engine
 **không** gỡ hết một lúc — nó *tập trung hóa* chúng vào policy khai báo từng slice một,
 để các bound trở thành **dữ liệu thiết bị khai** thay vì hằng số chôn trong driver.
 Slice 1 giới thiệu engine bằng một bound **chưa** từng được thực thi (trần độ sáng độc
