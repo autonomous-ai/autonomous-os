@@ -188,7 +188,13 @@ Một phiên mic kết thúc khi audio nằm dưới ngưỡng RMS suốt ngân 
 hiện hành. Có hai ngân sách: khi STT đã trả về một segment **final** cho lượt
 này, nhà cung cấp đã tự quyết định là người dùng nói xong (Flux phát EndOfTurn,
 nova bắn `is_final` sau cửa sổ endpointing của nó), nên vòng lặp đóng sau
-`ENDPOINT_SILENCE_S` (`HAL_ENDPOINT_SILENCE_S`, mặc định 0.8s). Ngồi chờ hết
+`ENDPOINT_SILENCE_S` (`HAL_ENDPOINT_SILENCE_S`, mặc định 0.8s) **tính từ lúc
+final đó về**, không phải từ lần nói cuối. Khác biệt này là điểm cốt lõi: Flux
+bắn EndOfTurn cho cả quãng lấy hơi *giữa* một câu nói, nên nếu đo từ lần nói
+cuối thì ngân sách ngắn bị áp ngược vào quãng im lặng đã trôi qua và phiên chết
+ngay frame kế tiếp trong khi người dùng còn đang nói (đo trên lamp-0c89
+04/09/2026: final `'Hello.'` lúc 09:22:50.766, phiên đóng sau đó 114ms, giữa
+câu). Chạy đồng hồ từ final cho người nói một cửa sổ thật để nói tiếp. Ngồi chờ hết
 đồng hồ dài sau bằng chứng đó là dead air nằm trước mọi lần commit realtime —
 đây là chi phí cố định lớn nhất giữa lúc người dùng ngừng nói và lúc model nghe
 được audio. Không có final thì không có bằng chứng đó, nên phiên rỗng hoặc chỉ

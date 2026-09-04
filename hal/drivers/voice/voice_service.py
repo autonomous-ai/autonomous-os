@@ -57,7 +57,7 @@ from hal.drivers.voice._internal.turn_dispatch import dispatch_turn
 from hal.drivers.voice._internal.vad_filters import (
     SileroVADFilter,
     WebRTCVADFilter,
-    silence_budget,
+    turn_should_close,
 )
 from hal.drivers.voice._internal.wakeword_focus import WakeWordFocus
 from hal.drivers.voice import aec
@@ -1395,6 +1395,8 @@ class VoiceService:
         last_partial = [""]
         final_segments = []
         final_sent = [False]
+        # time.time() of the most recent STT final segment, 0 = none yet.
+        final_ts = [0.0]
         # The listening cue fires on the FIRST STT PARTIAL — never at session
         # open. A partial is proof a human said words; the entry VAD is not.
         # That VAD is tuned wide open on purpose so quiet speech is never
@@ -1562,6 +1564,9 @@ class VoiceService:
                     final_segments.append(seg)
             last_partial[0] = ""
             final_sent[0] = True
+            # Arrival time, not just the fact of it: the short end-of-turn clock
+            # runs from HERE (see turn_should_close).
+            final_ts[0] = time.time()
 
         rt_audio_buffer: list = []
         # A noise-drop can be rebuilding a clean Gemini session in the
@@ -1892,7 +1897,7 @@ class VoiceService:
                                         "non-speech (%d frames each)",
                                         noise_windows, probe_frames,
                                     )
-                elif (time.time() - last_speech_time) > silence_budget(final_sent[0]):
+                elif turn_should_close(time.time(), last_speech_time, final_ts[0]):
                     if noise_windows:
                         logger.info(
                             "Silence detected, disconnecting STT "

@@ -202,7 +202,14 @@ A mic session ends when the audio stays below the RMS threshold for the current
 silence budget. There are two: once STT has delivered a **final** segment for
 this turn, the provider has already decided the user stopped (Flux emits
 EndOfTurn, nova fires `is_final` after its own endpointing window), so the loop
-closes after `ENDPOINT_SILENCE_S` (`HAL_ENDPOINT_SILENCE_S`, default 0.8s).
+closes `ENDPOINT_SILENCE_S` (`HAL_ENDPOINT_SILENCE_S`, default 0.8s) **after
+that final arrived** — not after the last speech. The distinction is the whole
+point: Flux emits an EndOfTurn for a breath pause *inside* one utterance, and
+measuring from the last speech applies the short budget retroactively to
+silence already spent, so such a final closes the session on the next frame
+while the user is still talking (device-observed 04/09/2026 on lamp-0c89:
+final `'Hello.'` at 09:22:50.766, session closed 114ms later, mid-sentence).
+Running the clock from the final gives the speaker a real window to carry on.
 Sitting on the long clock after that evidence is dead air in front of every
 realtime commit — it was the largest fixed cost between the user falling silent
 and the model hearing the audio. With no final in hand there is no such
@@ -1218,7 +1225,7 @@ is a top-level `config.json` flag:
 | `HAL_REALTIME_ENABLED` | `true` | Master gate for the realtime pipeline |
 | `wakeword` | ROBOT.md `voice.wakeword` on a fresh config, else `false` | Top-level config-file wake-word gate. When true, a matching interim transcript is provisional only: HAL commits buffered audio to realtime or forwards a command only after an STT **final** result confirms a configured wake phrase. The transcript is split into sentences (`.` `!` `?`) and the phrase is accepted at the start **or the end** of any sentence; mid-sentence occurrences are rejected. The confirmation re-checks the assembled, still-punctuated transcript so the `\w+`-only merge step cannot retract a gate a partial opened. The supported prefixes are `hello`, `hey`, `hi`, `alo`, `okay`, `ok`, and `wake up`, applied to the permanent common alias (`hey autonomous`), device type (`hey lamp`), and current agent name (`hey Luna`). A runtime rename updates only the agent-name aliases. Bare names and other prefixes do not arm the gate. A rejected utterance is discarded and its transient listening LED restores to the normal resting state; it never leaves the persistent idle effect active. A confirmed turn opens the follow-up focus window; turns in that window are forwarded as `voice_followup` without another phrase. Every authorized turn dispatches to os-server: a spoken realtime reply becomes a silent `voice_agent_handled` sync event; unavailable, silent, failed, or delegated realtime follows the normal path. If realtime is disabled, the confirmed final transcript follows the normal os-server path. Missing/false preserves the pre-gate always-listening flow unchanged. On a config.json os-server creates, the initial value comes from the body's `voice.wakeword` (see Wake-word gate above); a config loaded without the key stays `false`. HAL restarts after a local Settings save or MQTT `wakeword.gate`. |
 | `HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S` | `20` | Idle seconds for the short post-command focus window. Each accepted `voice_command` or `voice_followup` refreshes it. `0` disables follow-ups and requires a wake phrase for every mic session. Ignored when `wakeword` is false. |
-| `HAL_ENDPOINT_SILENCE_S` | `0.8` | Silence needed to close the turn once STT has emitted a final segment. `0` disables it, leaving only the long `HAL_SILENCE_TIMEOUT` clock. |
+| `HAL_ENDPOINT_SILENCE_S` | `0.8` | Silence needed to close the turn once STT has emitted a final segment, measured from that final's arrival (a mid-utterance EndOfTurn therefore cannot close the session retroactively). `0` disables it, leaving only the long `HAL_SILENCE_TIMEOUT` clock. |
 | `HAL_SILENCE_VAD_ENABLED` | `true` | Require Silero to confirm speech before the end-of-turn silence clock is refreshed. RMS remains the cheap pre-gate; set `false` to fall back to pure-RMS silence detection. |
 | `HAL_SILENCE_VAD_WINDOW_FRAMES` | `3` | Number of frames batched per Silero run for that check — Silero costs ~20 ms/frame on ARM and its LSTM needs more than one 64 ms frame to settle. |
 | `HAL_REALTIME_PROVIDER` | `gemini` | `none` \| `gemini` \| `openai` \| `qwen` |
