@@ -964,7 +964,14 @@ sớm ("hello") ngay sau khi restart sẽ rớt xuống main agent.
    nhìn như đứng hình.
 
    Cùng lúc commit cũng arm **dead-air filler** (`_WaitFiller`) — nửa phần tiếng
-   của chính cue đó. Sau `HAL_REALTIME_FILLER_DELAY_S` (mặc định 1.5s) mà vẫn
+   của chính cue đó. (Câu **đầu tiên** của một lượt không chờ dấu kết câu: khi
+   buffer đã có một mệnh đề dùng được, nó được cắt ở dấu phẩy / chấm phẩy / hai
+   chấm cuối cùng — hoặc ở khoảng trắng cuối nếu đã vượt
+   `HAL_REALTIME_FIRST_CHUNK_MAX_CHARS` — và nói ngay, phần còn lại xếp hàng
+   phía sau. Chỉ chunk đầu được cắt kiểu này vì đó là chunk duy nhất người dùng
+   phải ngồi im chờ; mệnh đề ngắn dưới 8 ký tự bị coi là cụt và tiếp tục chờ.
+   Đặt `=0` để quay lại chờ trọn câu. Native audio không bị ảnh hưởng.)
+   Sau `HAL_REALTIME_FILLER_DELAY_S` (mặc định 1.5s) mà vẫn
    chưa có output nào, HAL gọi `POST /api/sensing/filler` và os-server phát một
    câu filler mở đầu từ cache — pool phrase, ngôn ngữ và WAV cache đều nằm ở
    os-server, nên khoảng chờ realtime và khoảng chờ main agent nghe giống nhau.
