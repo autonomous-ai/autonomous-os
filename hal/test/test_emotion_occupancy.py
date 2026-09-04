@@ -104,7 +104,7 @@ def test_anger_holding_the_window_still_fires():
 def test_failed_attempts_count_against_a_negative():
     """The heart of the change: same three readings, different denominator.
 
-    Three Anger among three failures is 3/6 — under the 2/3 bar — where the old
+    Three Anger among three failures is 3 of 6 — not a majority — where the old
     vote saw only the three Anger frames and emitted.
     """
     p, sent = _perception(["Anger"] * 3, ["Anger"] * 3 + [_NO_READING] * 3)
@@ -138,3 +138,47 @@ def test_a_quiet_window_emits_nothing():
     p, sent = _perception([], [_NO_READING] * 5)
     p._flush_buffer()
     assert sent == []
+
+
+
+def test_three_of_five_is_a_majority_and_survives():
+    """Observed on the device: a real Surprise held 3 of 5 attempts. The first
+    setting (2/3, needing 4) dropped it — three agreeing frames is evidence, and
+    an expression only spans a few frames at ~2.2s between triggers.
+    """
+    p, sent = _perception(
+        ["Surprise"] * 3, ["Surprise"] * 3 + [_NO_READING] * 2
+    )
+    p._flush_buffer()
+    assert _labels(sent) == ["Surprise"]
+
+
+def test_an_exact_tie_is_not_a_majority():
+    """2 of 4 is half, not more than half. Admitting ties costs a false event."""
+    p, sent = _perception(["Anger"] * 2, ["Anger"] * 2 + [_NO_READING] * 2)
+    p._flush_buffer()
+    assert sent == []
+
+
+def test_a_lone_reading_in_a_sparse_window_is_not_enough():
+    """1 of 1 is a majority but not evidence. Observed on device 2026-09-04
+    12:42: a single Sad fired because the face was detected only once in the
+    window — attempts are counted per face detection, not per sensing tick.
+    """
+    p, sent = _perception(["Sad"], ["Sad"])
+    p._flush_buffer()
+    assert sent == []
+
+
+def test_two_of_three_still_survives():
+    """The floor must not swallow a brief but real expression."""
+    p, sent = _perception(["Sad"] * 2, ["Sad"] * 2 + [_NO_READING])
+    p._flush_buffer()
+    assert _labels(sent) == ["Sad"]
+
+
+def test_a_lone_happy_is_still_exempt():
+    """Happy never consults the span, so the floor cannot silence a smile."""
+    p, sent = _perception(["Happy"], ["Happy"])
+    p._flush_buffer()
+    assert _labels(sent) == ["Happy"]

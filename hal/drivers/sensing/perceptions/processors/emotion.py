@@ -1,7 +1,6 @@
 import base64
 import json
 import logging
-import math
 import os
 import shutil
 import threading
@@ -253,11 +252,27 @@ class EmotionDebugLogger:
 # them rather than only against the frames that happened to return a label.
 _NO_READING = "__none__"
 
+
 # Trailing span the occupancy test looks back over, and the share of that span a
 # label must hold. Matches the flush interval: a real expression lasting less
 # than one window is exactly the noise this is meant to drop.
+#
+# The test is a STRICT majority (`>`), not `>=`. 2/3 was the first setting and
+# it was too tight — a genuine Surprise held 3 of 5 attempts and was dropped,
+# because ceil(2/3 * 5) = 4. Using `>=` at 0.5 instead would admit ties (2 of
+# 4), which costs a false negative-bucket event on the recorded session; a
+# strict majority admits the 3-of-5 and still drops every 1-of-5 and 1-of-10,
+# which is the noise this exists for.
 _OCCUPANCY_LOOKBACK_S: float = 10.0
-_OCCUPANCY_MIN_RATIO: float = 2.0 / 3.0
+_OCCUPANCY_MIN_RATIO: float = 0.5
+
+# A majority alone is not enough when the span is tiny. Attempts are counted per
+# FACE DETECTION, not per sensing tick — _process_face only runs when a face was
+# found — so a face seen once in ten seconds gives a span of 1, and a single Sad
+# is then trivially a "majority" (observed on device, 12:42). Two readings is the
+# floor: it costs nothing on the recorded session, keeps a brief 2-of-3, and ends
+# the 1-of-1. Happy is exempt along with the rest of _INSTANT_LABELS.
+_OCCUPANCY_MIN_READINGS: int = 2
 
 # Labels that still fire on a single frame. A smile is frequently one frame at
 # this cadence (median ~2.2s between triggers), so requiring persistence would
@@ -552,6 +567,7 @@ class EmotionPerception(Perception[FaceDetectionData]):
         emotion = result["emotion"]
         confidence = result["confidence"]
 
+
         self._record_attempt(face.person_id, emotion)
 
         if self._presence_service:
@@ -725,7 +741,7 @@ class EmotionPerception(Perception[FaceDetectionData]):
                     for ts, pid, label in self._attempt_history
                     if pid == person_id and (cur_ts - ts) <= _OCCUPANCY_LOOKBACK_S
                 ]
-            need = max(1, math.ceil(_OCCUPANCY_MIN_RATIO * len(span)))
+            need = _OCCUPANCY_MIN_RATIO * len(span)
 
             qualified: list[tuple[int, str]] = []
             for label, hits in counts.items():
@@ -733,18 +749,24 @@ class EmotionPerception(Perception[FaceDetectionData]):
                     qualified.append((hits, label))
                     continue
                 occupancy = sum(1 for x in span if x == label)
-                if occupancy >= need:
+                if occupancy > need and occupancy >= _OCCUPANCY_MIN_READINGS:
                     qualified.append((occupancy, label))
                 else:
+                    why = (
+                        "not a majority"
+                        if occupancy <= need
+                        else "only %d reading(s), needs %d"
+                        % (occupancy, _OCCUPANCY_MIN_READINGS)
+                    )
                     logger.info(
                         "[activity.emotion] %s dropped: %s held %d/%d attempts "
-                        "in the last %.0fs (needs %d)",
+                        "in the last %.0fs — %s",
                         person_id,
                         label,
                         occupancy,
                         len(span),
                         _OCCUPANCY_LOOKBACK_S,
-                        need,
+                        why,
                     )
             if not qualified:
                 continue
