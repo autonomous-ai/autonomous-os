@@ -735,14 +735,24 @@ class TTSService:
         return int(m.group(1)) if m else None
 
     def _counter_restarted(self, turn_id: str, turn_seq: int) -> bool:
-        """True when a lower sequence belongs to a NEWER turn than the one
-        holding the speaker — i.e. os-server restarted and began counting again.
+        """True when a lower-or-equal sequence belongs to a NEWER turn than the
+        one holding the speaker — i.e. os-server restarted and began counting
+        again.
 
         Both ids must carry a creation stamp: without one there is nothing to
         compare, and guessing would let a genuinely stale POST take the speaker
         back from the turn that superseded it.
+
+        Equal sequences count. A restart resets the counter to 1, so the new
+        run COLLIDES with the old high-water mark instead of falling under it
+        whenever that mark is itself low — two restarts in a row, or a restart
+        early in a session. Device-observed 04/09/2026: seq=2 met an unrelated
+        seq=2 from before the restart and the wake greeting was dropped, the
+        same silent-device symptom this guard exists to prevent. Wall clock
+        settles it either way; only a same-millisecond tie falls through to the
+        conflict rule below.
         """
-        if turn_seq >= self._latest_queue_turn_seq:
+        if turn_seq > self._latest_queue_turn_seq:
             return False
         incoming = self._run_id_stamp(turn_id)
         holding = self._run_id_stamp(self._latest_queue_turn_id)
@@ -800,7 +810,7 @@ class TTSService:
                 # than the one holding the speaker is newer, whatever its seq.
                 if self._counter_restarted(turn_id, turn_seq):
                     logger.warning(
-                        "TTS turn counter restarted (turn_id=%s seq=%d < latest_id=%s "
+                        "TTS turn counter restarted (turn_id=%s seq=%d <= latest_id=%s "
                         "latest_seq=%d, but newer) -- adopting the new sequence",
                         turn_id, turn_seq, self._latest_queue_turn_id,
                         self._latest_queue_turn_seq,

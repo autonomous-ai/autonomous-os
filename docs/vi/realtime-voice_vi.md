@@ -191,8 +191,13 @@ HAL, và hai bên restart độc lập. Deploy, OTA hay crash làm bộ đếm b
 trong khi HAL vẫn giữ mốc cũ, nên mọi turn của phiên mới trông như đến muộn và bị
 vứt — đo ngày 03/09/2026: `seq=1` gặp `latest_seq=40` làm câm lời chào lúc thức
 (LED và servo vẫn chạy) và sẽ câm tiếp 39 turn sau đó. Run id có mang thời điểm
-tạo (`device-chat-<n>-<unix-ms>`), nên khi một sequence THẤP HƠN đến từ run được
-tạo MUỘN HƠN run đang giữ loa, HAL coi như bộ đếm đã restart và nhận sequence mới.
+tạo (`device-chat-<n>-<unix-ms>`), nên khi một sequence THẤP HƠN HOẶC BẰNG đến từ
+run được tạo MUỘN HƠN run đang giữ loa, HAL coi như bộ đếm đã restart và nhận
+sequence mới. Phải tính cả ca BẰNG NHAU vì restart đưa bộ đếm về 1, nên run mới chỉ
+rơi xuống DƯỚI mốc cũ khi mốc đó đang cao — mốc thấp (restart hai lần liên tiếp,
+hoặc restart sớm trong phiên) thì hai sequence đụng nhau chứ không thấp hơn. Đo ngày
+04/09/2026: `seq=2` gặp một `seq=2` không liên quan từ trước restart và lời chào lúc
+thức bị vứt — đúng triệu chứng câm tiếng đó, chỉ cách một phép so sánh.
 Id không có dấu thời gian (`tg-<messageID>`) vẫn theo luật sequence thuần: không có
 gì để so thì một POST cũ thật sự không được phép giành lại loa.
 ### Hai đồng hồ im lặng (kết thúc lượt)
