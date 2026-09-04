@@ -283,6 +283,14 @@ class FaceIdDebugLogger:
     ) -> str | None:
         """One face the recognizer reached an identity decision on → its own
         folder, named ``<timestamp>_<face_id>_<similarity>``."""
+        # Bail BEFORE _annotate / _draw_landmarks: each copies the whole frame
+        # (~2.8 MB at 1280x720) and draws on it, so leaving the check to
+        # _write_folder would cost two frame memcpys per face per tick even with
+        # capture switched off. detect() already gates every call site; this is
+        # the same guard one level down, so a future caller cannot pay that cost
+        # by forgetting. Mirrors the fix made to the emotion capture.
+        if not self._enabled:
+            return None
         annotated = (
             self._annotate(frame, bbox, face_id, similarity, color)
             if frame is not None and bbox is not None
@@ -330,6 +338,14 @@ class FaceIdDebugLogger:
     ) -> str | None:
         """One face that never reached an identity decision → its own folder,
         with the input image (when available) and the reason it was dropped."""
+        # Bail BEFORE _annotate / _draw_landmarks: each copies the whole frame
+        # (~2.8 MB at 1280x720) and draws on it, so leaving the check to
+        # _write_folder would cost two frame memcpys per face per tick even with
+        # capture switched off. detect() already gates every call site; this is
+        # the same guard one level down, so a future caller cannot pay that cost
+        # by forgetting. Mirrors the fix made to the emotion capture.
+        if not self._enabled:
+            return None
         mesh = (
             self._draw_landmarks(frame, bbox, landmarks, kps5)
             if frame is not None and bbox is not None

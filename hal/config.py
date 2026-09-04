@@ -229,13 +229,20 @@ FACE_EXTEND_MIN_ENROLL_SIM = float(
     os.environ.get("HAL_FACE_EXTEND_MIN_ENROLL_SIM", "0.40")
 )
 # Per-detection debug capture for face recognition: every recognized face
-# writes its own timestamped folder (input crop + clean frame + annotated frame
-# + result.json) under FACEID_LOG_DIR, named "<time>_<face_id>_<similarity>"
-# (or "<time>_FAIL-<reason>"), so a false acceptance / false rejection is
-# spottable from the directory listing alone. Same shape as the face-emotion
-# debug log. Debug aid — off-device analysis, not a runtime input.
+# writes its own timestamped folder (input crop + aligned model input + clean
+# frame + annotated frame + landmark plot + result.json) under FACEID_LOG_DIR,
+# named "<time>_<face_id>_<similarity>" (or "<time>_FAIL-<reason>"), so a false
+# acceptance / false rejection is spottable from the directory listing alone.
+#
+# OFF by default: it writes six files per face per tick and is an investigation
+# aid, not a runtime input. Turn it on with HAL_FACEID_DEBUG_LOG_ENABLED=true
+# when chasing a recognition bug. Measured on 40 real 1280x720 frames through
+# detect(): the capture costs ~43 ms per frame with it on, and nothing
+# measurable with it off — every call site is gated, and the capture entry
+# points bail before any frame is copied. Same shape, and the same default, as
+# the face-emotion debug log.
 FACEID_DEBUG_LOG_ENABLED = (
-    os.environ.get("HAL_FACEID_DEBUG_LOG_ENABLED", "true").lower() == "true"
+    os.environ.get("HAL_FACEID_DEBUG_LOG_ENABLED", "false").lower() == "true"
 )
 FACEID_LOG_DIR = os.environ.get(
     "HAL_FACEID_LOG_DIR",
