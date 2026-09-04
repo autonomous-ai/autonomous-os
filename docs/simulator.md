@@ -296,8 +296,9 @@ as HAL names them (`base_yaw`, `base_pitch`, `elbow_pitch`, `wrist_pitch`,
 `wrist_roll`) — driven by live joint values, plus recording playback and LED
 controls that call the same `/servo/*` and `/led/*` endpoints a skill calls.
 
-Drag to orbit, scroll to zoom, double-click to reset. The camera aims at the centre of
-whatever geometry loaded and backs off far enough to frame it, so the head does
+Drag to orbit, scroll to zoom, double-click to reset. The camera opens on the lamp's face,
+three quarters round from dead-on, aims at the centre of whatever geometry
+loaded and backs off far enough to frame it, so the head does
 not run off the canvas on a wide window. Zoom spans 0.3x-4x of that distance
 through a 38 deg lens, and elevation runs from level with the floor to just
 short of straight overhead. The body stands on a
