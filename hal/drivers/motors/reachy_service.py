@@ -144,6 +144,48 @@ def _is_disconnect(err: Exception) -> bool:
     return any(m in str(err).lower() for m in _RECONNECT_MARKERS)
 
 
+# Recordings are authored at ~50-60 Hz but their timestamps jitter: the shipped
+# library has duplicate timestamps (1.1% of frames) and gaps as short as 1 ms
+# against a 16 ms median. Differentiating raw frame pairs turns that jitter into
+# speeds the head never reaches — `wake-mini-up` reads 17226 deg/s from a single
+# 1 ms gap. Speed is therefore measured across a window of at least this long,
+# which is also the timescale the daemon's controller actually tracks.
+_SPEED_WINDOW_S = 0.02
+
+
+def peak_head_dps(timestamps: List[float], trajectory: List[Dict[str, Any]]) -> float:
+    """Highest head rotation speed a recorded move demands, in deg/s.
+
+    Measured as the true angle between two head orientations at least
+    `_SPEED_WINDOW_S` apart, NOT as per-axis euler deltas: xyz euler jumps at
+    gimbal crossings and reports travel the head never makes (measured on the
+    shipped library, euler read 2456 deg/s where the head turned at 2355).
+
+    Head translation is deliberately excluded. `motion.max_speed` is a deg/s
+    ceiling and `head_x/y/z` are millimetres — mixing them would compare
+    millimetres against degrees. Bounding translation needs its own declared
+    limit, which no SAFETY.md has today.
+
+    Takes the raw arrays rather than an SDK object so it is testable without the
+    reachy_mini package installed.
+    """
+    n = min(len(timestamps), len(trajectory))
+    peak = 0.0
+    lo = 0
+    for hi in range(1, n):
+        # Widen from the left until the window is long enough to be meaningful.
+        while lo + 1 < hi and timestamps[hi] - timestamps[lo + 1] >= _SPEED_WINDOW_S:
+            lo += 1
+        dt = timestamps[hi] - timestamps[lo]
+        if dt <= 0:
+            continue
+        prev = np.asarray(trajectory[lo]["head"], dtype=np.float64)[:3, :3]
+        cur = np.asarray(trajectory[hi]["head"], dtype=np.float64)[:3, :3]
+        angle = Rotation.from_matrix(cur @ prev.T).magnitude() * 180.0 / math.pi
+        peak = max(peak, angle / dt)
+    return peak
+
+
 def _joints_from_sdk(head_pose: Any, antennas: Any, body_yaw_rad: Any) -> Dict[str, float]:
     """SDK pose (4x4 meters/rad, antennas rad, body yaw rad) → HAL joints (deg/mm).
 
@@ -202,6 +244,8 @@ class ReachyMotionService:
         self._hold_explicit = False
         self._frozen = False
         self._moves = None          # lazy RecordedMoves loader (None=untried, False=failed)
+        # Peak head speed per HF move name, scanned once (see _move_refused).
+        self._move_peak_dps: Dict[str, float] = {}
         self._play_thread: Optional[threading.Thread] = None
         # Bumped on every play request; the play thread stops repeating once its
         # own generation is stale (a newer play owns the servo).
@@ -790,6 +834,46 @@ class ReachyMotionService:
             logger.debug("[reachy] ramp estimate failed (%s) — using %.2fs", e, _PLAY_RAMP_S)
             return _PLAY_RAMP_S
 
+    def _move_refused(self, move: Any, hf_name: str) -> bool:
+        """True when the move demands more head speed than SAFETY.md allows.
+
+        This is the only place the declared ceiling can be applied on this
+        backend. `play_move()` hands the whole trajectory to the Pollen daemon,
+        which streams it without HAL in the loop, so there is no frame to slow
+        down mid-move the way the feetech driver stretches a recording
+        (recording_timing.stretch_timeline). The choice is play or do not play,
+        and it has to be made before the trajectory is handed over (#286).
+
+        Refusing matters once a move can come from a stranger's Hub dataset
+        (#287); the shipped library is measured and passes at the declared
+        ceiling. Applied to every source, deliberately: an official move that
+        trips the gate is evidence the declared number is wrong, and excusing
+        it by origin would hide exactly that signal.
+        """
+        policy = self._safety_policy
+        if policy is None or policy.motion is None or policy.motion.max_speed is None:
+            return False
+        peak = self._move_peak_dps.get(hf_name)
+        if peak is None:
+            try:
+                peak = peak_head_dps(move.timestamps, move.trajectory)
+            except Exception as e:
+                # A move whose shape we cannot read is not evidence of danger;
+                # the same presence-driven rule as an undeclared bound.
+                logger.debug("[reachy] cannot scan '%s' (%s) — not gated", hf_name, e)
+                return False
+            self._move_peak_dps[hf_name] = peak
+        ceiling = float(policy.motion.max_speed)
+        if peak <= ceiling:
+            logger.debug("[reachy] move '%s' peak %.0f deg/s — within %.0f", hf_name, peak, ceiling)
+            return False
+        logger.warning(
+            "[reachy] move '%s' REFUSED — peak %.0f deg/s exceeds declared "
+            "motion.max_speed %.0f deg/s",
+            hf_name, peak, ceiling,
+        )
+        return True
+
     def _play_move_once(self, move: Any, name: str, gen: int) -> bool:
         """Play one pass of a recorded move (blocking). False if superseded.
 
@@ -872,6 +956,10 @@ class ReachyMotionService:
                     if move is None:
                         # No exception but nothing to play — treat as a failure
                         # so the loop can't spin without doing any work.
+                        failed = True
+                    elif self._move_refused(move, hf_name):
+                        # Same shape as an unavailable move: the groove logic
+                        # decides what happens next, nothing reaches the daemon.
                         failed = True
                     else:
                         try:

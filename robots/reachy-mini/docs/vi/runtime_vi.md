@@ -467,12 +467,28 @@ Machine bounds hiện tại trong `SAFETY.md`:
 
 ```yaml
 motion:
-  max_speed: 60
+  max_speed: 800
   stop_always: true
 ```
 
-Safety layer chung của HAL kéo dài duration để giữ `max_speed`. `stop`, `zero`,
-`hold`, và `release` vẫn là hành động recovery deterministic.
+Safety layer chung của HAL kéo dài duration để giữ `max_speed` cho move được
+yêu cầu (aim/nudge/goto). **Recorded move** thì không kéo dài được: daemon
+stream cả trajectory còn HAL đứng ngoài vòng, nên move bị quét trước khi phát và
+bị từ chối nếu tốc độ xoay đầu đỉnh vượt trần — `peak_head_dps()` /
+`_move_refused()` trong driver.
+
+`max_speed` từng là `60` khi nó mới chỉ là số tạm; quét cả 85 move của
+`pollen-robotics/reachy-mini-emotions-library` cho ra median 111 deg/s, p90 293
+và max 766 — tức 60 sẽ từ chối 63 move của chính hãng. 800 nằm ngay trên trần
+của chính hãng và VẪN cần đo trên phần cứng thật, xem `robots/reachy-mini/SAFETY.md`.
+
+Tốc độ đo bằng góc quay thật giữa hai hướng đầu trên cửa sổ tối thiểu 20 ms. Sai
+phân từng trục euler bị vọt ở điểm gimbal, còn lấy từng cặp frame thô thì biến
+nhiễu timestamp thành tốc độ đầu không bao giờ đạt (`wake-mini-up` đọc ra 17226
+deg/s từ một khoảng 1 ms, đo đúng thì là 766). Chuyển động tịnh tiến của đầu
+không bị bound: `max_speed` tính bằng deg/s còn `head_x/y/z` là milimet.
+
+`stop`, `zero`, `hold`, và `release` vẫn là hành động recovery deterministic.
 
 Chưa thêm block `thermal` cho tới khi đo được thermal profile của Raspberry Pi
 trên bản Wireless thật.

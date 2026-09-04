@@ -178,11 +178,21 @@ recording chỉ chậm lại đúng chỗ bất khả thi, không chỗ nào kh�
 simulator phát đúng thứ body phát). Trần là giá trị nhỏ hơn giữa giới hạn đo được
 của servo (`SERVO_MAX_DPS`, 250 deg/s) và `motion.max_speed` đã khai.
 
-**Vẫn CHƯA gate:** recorded move trên đường SDK của Reachy. `ReachyMotionService`
-giao trajectory cho `mini.play_move()` rồi daemon Pollen stream nó, nên HAL chỉ
-bound được đoạn ramp vào frame 0 (`_ramp_for`, qua `min_move_duration`), không
-bound được thân move. Đây là thứ phải trả lời trước nếu muốn có danh sách
-`HAL_REACHY_MOVES` nạp community move từ Hub (#207).
+Recorded move trên đường SDK của Reachy được gate theo kiểu khác, vì driver
+KHÔNG sở hữu vòng phát: `ReachyMotionService` giao trajectory cho
+`mini.play_move()` rồi daemon Pollen stream nó. Không có frame nào để làm chậm,
+nên move được **quét trước khi phát và bị TỪ CHỐI** nếu tốc độ xoay đầu đỉnh
+vượt trần đã khai (`peak_head_dps`, `_move_refused`). Tốc độ đo bằng góc quay
+thật giữa hai hướng đầu trên cửa sổ ≥20 ms — sai phân từng trục euler bị vọt ở
+điểm gimbal, còn lấy từng cặp frame thô thì biến nhiễu timestamp thành tốc độ
+mà đầu không bao giờ đạt. Chuyển động **tịnh tiến** của đầu không bị bound:
+`max_speed` tính bằng deg/s còn `head_x/y/z` là milimet, và chưa body nào khai
+giới hạn tịnh tiến — không enforce thì không tuyên bố là có.
+
+Từ chối áp cho MỌI nguồn, kể cả thư viện chính chủ của Pollen, và đó là chủ ý:
+một move chính chủ rớt gate là bằng chứng con số đã khai bị sai, đặc cách theo
+nguồn sẽ che mất tín hiệu đó. `robots/reachy-mini/SAFETY.md` ghi rõ trần đó suy
+ra từ đâu và thứ gì vẫn cần robot thật mới xác nhận được.
 
 ### Interface learned-policy (dry run)
 

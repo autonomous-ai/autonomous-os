@@ -498,11 +498,28 @@ Reachy's current `SAFETY.md` machine bounds:
 
 ```yaml
 motion:
-  max_speed: 60
+  max_speed: 800
   stop_always: true
 ```
 
-The shared HAL safety layer stretches movement duration to respect `max_speed`.
+The shared HAL safety layer stretches movement duration to respect `max_speed`
+for requested moves (aim/nudge/goto). A **recorded move** cannot be stretched:
+the daemon streams the whole trajectory with HAL outside the loop, so it is
+scanned before playback and refused when its peak head rotation exceeds the
+ceiling — `peak_head_dps()` / `_move_refused()` in the driver.
+
+`max_speed` was `60` while it was a placeholder; scanning all 85 moves of
+`pollen-robotics/reachy-mini-emotions-library` showed a median peak of 111 deg/s,
+a p90 of 293 and a maximum of 766, so 60 would have refused 63 of the vendor's
+own moves. 800 sits just above the vendor's own ceiling and still needs a real
+measurement on hardware — see `robots/reachy-mini/SAFETY.md`.
+
+Speed is the true rotation angle between head orientations over a window of at
+least 20 ms. Per-axis euler deltas spike at gimbal crossings, and raw frame
+pairs turn timestamp jitter into speeds the head never reaches (`wake-mini-up`
+reads 17226 deg/s from a single 1 ms gap, 766 measured properly). Head
+translation is not bounded: `max_speed` is deg/s, `head_x/y/z` are millimetres.
+
 `stop`, `zero`, `hold`, and `release` remain deterministic recovery actions.
 
 Do not add a `thermal` block until the real Wireless unit's Raspberry Pi thermal
