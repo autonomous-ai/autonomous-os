@@ -539,6 +539,12 @@ func (s *Server) Serve(closeFn func()) error {
 	scheduleGroup.PATCH(":id", adminAuthMiddleware(s.config), s.deviceMQTTHandler.UpdateSchedule)
 	scheduleGroup.DELETE(":id", adminAuthMiddleware(s.config), s.deviceMQTTHandler.DeleteSchedule)
 
+	// Look: snapshot + describe in one call, so the agent gets text it can read
+	// instead of a file path it cannot. Loopback-only — the caller is the
+	// agent's own shell tool, and it moves hardware and spends a vision-model
+	// call. See lookAndDescribe in vision.go.
+	api.POST("vision/look", localOnlyMiddleware(), s.lookAndDescribe)
+
 	logs := api.Group("logs")
 	logs.GET("tail", adminAuthMiddleware(s.config), s.logTail)
 	logs.GET("stream", adminAuthMiddleware(s.config), s.logStream)

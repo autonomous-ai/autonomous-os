@@ -119,6 +119,11 @@ type AgentHandler struct {
 	lastEmotionMu sync.Mutex
 	lastEmotion   string
 
+	// toolArgsByCall carries a tool call's arguments from its "start" event to
+	// its "end" event, keyed by toolCallId. See camera_snapshot.go.
+	toolArgsMu     sync.Mutex
+	toolArgsByCall map[string]string
+
 	// channelRuns tracks runs confirmed from a real channel user (Telegram/etc.)
 	// via senderLabel. Prevents TTS when a Telegram UUID gets mapped to a
 	// sensing trace (race: flowRunID becomes device-sensing-* → isChannelRun false).
