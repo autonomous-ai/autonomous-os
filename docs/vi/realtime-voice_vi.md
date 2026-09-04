@@ -100,7 +100,20 @@ dùng `keyterm`; các model nova cũ hơn dùng `keywords` kèm intensifier `:3`
 
 Mọi lượt wake-word đã được STT final xác nhận đều đi qua dispatch. Nó mở một
 cửa sổ focus follow-up 20 giây (reset sau mỗi lượt được phép), nên câu nói kế
-tiếp có thể bỏ wake phrase và được gửi với type `voice_followup`. Follow-up có
+tiếp có thể bỏ wake phrase và được gửi với type `voice_followup`.
+
+Cửa sổ đó được chốt một lần lúc mở phiên cho **dispatch**, để cửa sổ hết hạn
+giữa câu không cắt lời người đang nói. Còn những cue tự nhận mình là người được
+gọi — LED listening, backchannel — thì hỏi `is_addressed()`, và hàm này đọc lại
+cửa sổ **theo thời gian thực**. Lý do là gaze: nó có thể mở cửa sổ ngay giữa
+chính câu nói mà nó đang xác nhận. Đo trên lamp-0c89 04/09/2026 — lúc bắt đầu
+nói, camera chưa có bằng chứng khuôn mặt nào (`of 0` mẫu) nên cờ chốt là False,
+và watcher mãi 3.6 giây sau, ở cuối câu, mới xác nhận được người dùng. Cả lượt
+đó chạy trong trạng thái "không được gọi": không LED listening, không mở lượt
+realtime (`route=realtime_not_started`, nên cũng không có cue thinking), thiết
+bị tối om suốt câu nói và chỉ sáng lên ở câu kế tiếp. Đọc trực tiếp chỉ có thể
+THÊM lượt được coi là gọi mình, không bao giờ rút lại — cờ chốt vẫn được hỏi
+trước. Follow-up có
 cùng độ ưu tiên người dùng như `voice_command` nhưng vẫn quan sát được riêng.
 Nếu realtime đã nói, dispatch gửi event đồng bộ `voice_agent_handled` để agent
 chính ghi nhớ nhưng im lặng; realtime unavailable, lỗi, timeout hoặc delegate
@@ -1187,6 +1200,7 @@ trong `config.json`:
 | `HAL_REALTIME_PROVIDER` | `gemini` | `none` \| `gemini` \| `openai` \| `qwen` |
 | `HAL_REALTIME_TURN_DETECTION` | `off` | `server_vad` \| `semantic_vad` \| `off` (Gemini: off = activity detection thủ công) |
 | `HAL_REALTIME_RECV_QUEUE_TIMEOUT_S` | `8.0` | Số giây tối đa `receive()` chờ output event kế tiếp trước khi kết thúc lượt im lặng (fallback sang main agent) |
+| `HAL_REALTIME_GROUNDING_DEBUG` | `false` | In toàn bộ field của `grounding_metadata` từ Gemini, mỗi lượt có grounding một lần (`grounding_chunks`, `grounding_supports`, `search_entry_point`, …). Chỉ để chẩn đoán và rất dài dòng; nó sinh ra để phân biệt lượt mà search thật sự không trả về gì với lượt bị cắt payload trên đường truyền. Đo trên lamp-0c89 04/09/2026 qua bốn lượt có grounding, payload luôn về đủ — nên `chunks=0` nghĩa là model không dùng nguồn nào cho câu trả lời đó. |
 | `HAL_REALTIME_TURN_MAX_SILENCE_S` | `20.0` | Trần thời gian một lượt được im lặng khi server vẫn còn gửi message. `receive()` chỉ kéo dài quá `HAL_REALTIME_RECV_QUEUE_TIMEOUT_S` khi lưu lượng vào chứng minh model còn đang làm việc (search grounding không phát output tới khi xong); trần này chặn trường hợp server nói liên tục mà không bao giờ ra output. `0` tắt cơ chế giữ lượt, quay về watchdog gap thuần. |
 | `HAL_REALTIME_LOOK_RECV_TIMEOUT_S` | `20.0` | Watchdog im-lặng dùng thay mặc định cho turn có `look` (theo từng turn, qua `extend_recv_timeout()`). Gemini bị ép thinking trên frame dày chữ có thể im >8 s ngay trước khi trả lời — watchdog mặc định giết nhầm mấy turn đó. Nâng nó lên là hoãn luôn handoff frame `look`, nên phải giữ `HAL_GEMINI_VISION_HANDOFF_MAX_AGE_S` cao hơn |
 | `HAL_REALTIME_REQUIRE_TRANSCRIPT` | `true` | Không bao giờ commit turn empty-STT lên model. Final transcript chỉ có dấu câu/ký hiệu (ví dụ `.`) được chuẩn hoá thành empty trước gaze, speaker-ID, realtime, dispatch hay refresh follow-up; nó không thể tạo `voice_followup`. Giọng thật mà nova-3 miss (câu ngắn) vẫn là voiced nên qua hết guard VAD/Silero, commit audio thô khiến model bịa câu trả lời cho khoảng im lặng (lời chào chung chung, thường kèm tên không ai nói). Khi `true`, mọi turn empty-STT bị bỏ bất kể duration/voicing — im còn hơn trả lời sai. Đặt `false` để quay về đường audio-only gated bằng Silero bên dưới. |

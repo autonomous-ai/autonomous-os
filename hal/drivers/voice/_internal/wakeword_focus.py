@@ -42,3 +42,32 @@ class WakeWordFocus:
             # gaze-sized one.
             self._until = max(self._until, until)
         return True
+
+
+def is_addressed(
+    wakeword_enabled: bool,
+    wake_word_heard: bool,
+    focus_latched_at_session_start: bool,
+    focus_active_now: bool,
+) -> bool:
+    """Whether the sentence being spoken has been shown to be for this device.
+
+    Asked by everything that claims to be the addressee — the listening cue,
+    the backchannel — so the device does not acknowledge a conversation it was
+    never part of.
+
+    ``focus_active_now`` is read LIVE, and that is the point: gaze can open the
+    follow-up window in the MIDDLE of the sentence it is meant to acknowledge.
+    Device-observed 04/09/2026 on lamp-0c89 — at speech start the camera had no
+    face evidence ("of 0" samples) so the session-start latch was False, and the
+    watcher only confirmed the user 3.6s later at speech END. The whole turn ran
+    with no listening cue: the device sat dark through the sentence and lit up
+    only for the next one.
+
+    Live focus can only ADD an addressed turn, never remove one — the latch is
+    still passed in and still wins, so a window that EXPIRES mid-sentence cannot
+    retract a turn from someone already speaking.
+    """
+    if not wakeword_enabled:
+        return True
+    return wake_word_heard or focus_latched_at_session_start or focus_active_now
