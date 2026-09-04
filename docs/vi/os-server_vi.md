@@ -743,3 +743,87 @@ Keyword match theo nguyên cụm với word boundary ASCII — "unmute speaker" 
 Chitchat **tắt khi realtime voice agent đang bật** — model nhận mọi lượt voice trước os-server và tự trả lời phần xã giao, đúng nhân cách của nó. Bật cả hai nghĩa là một câu canned với giọng khác chen ngang đúng những lượt model tình cờ im. Các rule lệnh phía trên vẫn chạy trong mọi trường hợp vì chúng thật sự nhanh hơn một vòng model. Cổng này bám theo `realtime.enabled` ngay lúc chạy, đổi trong Settings không cần restart.
 
 Không match → forward OpenClaw.
+
+### Reconcile USER.md theo enrollment
+
+Lúc khởi động (sau persona migration) os-server retire người dùng khỏi `USER.md`
+của **mọi** runtime một khi enrollment khuôn mặt/giọng nói của họ không còn.
+
+`USER.md` là bootstrap file — được nhét vào system prompt của agent mỗi lượt —
+nhưng chưa từng có thứ gì trên thiết bị ghi vào nó: agent ghi thứ nó học được vào
+`KNOWLEDGE.md` và `memory/*.md`, mà OpenClaw không load file nào trong hai file
+đó. File luôn được đọc lại là file không bao giờ được ghi, nên một thiết bị đã đổi
+chủ vẫn gọi tên chủ cũ (lamp-ac82, 2026-09-03).
+
+- **Quy tắc:** một cái tên chỉ cũ khi `usercanon.Resolve` ánh xạ nó tới thư mục
+  không tồn tại trong `/root/local/users/`. **Vắng mặt không bao giờ là điều kiện
+  kích hoạt** — người vắng một ngày hay một năm vẫn giữ enrollment, nên vẫn giữ
+  profile. Chỉ `/face/remove`, `/speaker/remove` hoặc factory reset mới xoá.
+- **Chỉ ghi khi có thay đổi.** `USER.md` nằm trong prefix prompt được cache
+  (~28k token), nên ghi vô điều kiện sẽ tốn một lần miss cache ở lượt kế tiếp của
+  mỗi lần boot. Lượt chạy bình thường đọc xong và không ghi gì.
+- **Mặc định chỉ quan sát.** `user_profile_reconcile` trong `config.json` mở khoá
+  việc ghi; không đặt/false thì chỉ log thứ nó *định* retire và không đổi gì.
+- Ghi theo kiểu atomic (temp + rename) vì gateway đang chạy trong lúc pass chạy.
+- Enrollment store rỗng (máy mới) là no-op; store không đọc được là lỗi và không
+  đổi gì, thay vì đoán.
+
+### Giữ hai file bộ nhớ không phình vô hạn
+
+Chúng tốn token theo cách khác nhau, nên cũng bị chặn theo cách khác nhau.
+
+| | Nằm trong system prompt? | Bị tính token | Trần |
+|---|---|---|---|
+| `USER.md` | **có** — là bootstrap file | **mỗi lượt** | 12000 ký tự (`bootstrapMaxChars`), vượt thì cắt từ đuôi |
+| `KNOWLEDGE.md` | **không** — OpenClaw không biết file này | một lần mỗi session, khi agent đọc | không có |
+
+`KNOWLEDGE.md` vốn không có trần nào: synthesis hằng ngày append thêm một block
+`## YYYY-MM-DD` cho mỗi ngày hoạt động và không có gì xoá bớt. Đo trên lamp-ac82
+là ~666 B/ngày — một năm dùng sẽ tới ~166 KB (~42k token) và bị đọc lại mỗi
+session.
+
+Hướng dẫn heartbeat giờ chặn lại: **giữ 14 block ngày gần nhất**, những gì cũ hơn
+thì fold phần còn đúng vào các mục distilled ở đầu file (Hardware / Users /
+Skills & APIs / Mistakes Made) rồi xoá block đó. Cách này dùng đúng cấu trúc sẵn
+có — mục đầu file chính là *"Distilled from daily memory logs"*, còn các block
+ngày là nguyên liệu thô — và ngày thô vẫn còn trong `memory/YYYY-MM-DD.md`.
+
+### Đồng bộ người dùng hằng ngày (KNOWLEDGE.md → USER.md)
+
+Lượt heartbeat có bước thứ hai sau knowledge synthesis: mang những gì học được về
+*con người* sang `USER.md`.
+
+Cả hai bước đều chạy theo kiểu **bù (catch-up), không theo đồng hồ**. Trước đây
+synthesis bị gate bởi `current time >= 21:00`, và trên một thiết bị bị tắt cuối
+giờ làm thì mốc đó âm thầm không bao giờ tới. Quan sát trên lamp-ac82 ngày
+2026-09-03: ba ngày flow log kết thúc lúc 18:39 / 17:57 / 17:34, và
+`memory/2026-08-24.md` chưa bao giờ được distil vì 21:00 không tới. Điều kiện giờ
+là *"có ngày nào TRƯỚC hôm nay có memory file mà chưa có header `## YYYY-MM-DD`
+không?"*, nên heartbeat đầu tiên sau khi bật máy sẽ dọn hết backlog, bất kể lịch
+bật/tắt thế nào.
+
+Lý do là một sự bất đối xứng đã gây bug thật. `KNOWLEDGE.md` là file của riêng
+agent — **OpenClaw không load nó**; nó chỉ tới tay model khi agent chủ động đọc.
+`USER.md` là bootstrap file, được nhét vào system prompt **mỗi lượt**. Vậy nên
+file agent ghi hằng ngày lại là file hiếm khi được đọc, còn file luôn được đọc
+thì không bao giờ được ghi: một thiết bị đã đổi chủ vẫn chào chủ cũ suốt hai
+tháng.
+
+Hướng dẫn nằm trong `heartbeatMDBlock` (`runtimes/<name>/onboarding.go`) và
+giống hệt nhau từng byte ở openclaw / codex / opencode / picoclaw — đổi runtime
+không được phép âm thầm làm mất nó.
+
+| Quy tắc | Vì sao quan trọng |
+|---|---|
+| Mỗi người một bullet dưới `## Users`, dạng `- **<label> (friend)** — call: …; notes: …` | `<label>` là enrollment label lấy từ `[context: current_user=…]`, đúng khoá mà reconcile của OS dùng. Phần `(friend)` là thứ phân biệt một con người với một field biểu mẫu — thiếu nó, `**Notes:** …` sẽ bị đọc thành người tên "Notes:" và bị xoá. |
+| Các đoạn `key: value` ngắn, không phải văn xuôi; `call:` đứng đầu | Các field của template là đơn nhất (một `**Name:**`, một `**Timezone:**`) nên không mô tả nổi hai người, nhưng lồng chúng theo từng người thì không sống sót qua file: `parseEntries` → `serialize` làm phẳng mọi bullet thành `- …`, nên field con thụt lề bị tách khỏi người của nó. Các đoạn giữ được *ý* của biểu mẫu — dữ kiện tách bạch, có nhãn — trong một entry prune được. Lần đầu để văn xuôi tự do đã cho ra một đoạn ~600 ký tự với cách xưng hô nằm lẫn ở câu thứ tư. |
+| Không bao giờ đoán `call:`, đại từ nhân xưng hay múi giờ | Agent chỉ thấy một face label và một voiceprint. Không thứ nào nói lên người ta muốn được gọi thế nào. Chỉ ghi khi họ đã tự nói; nếu chưa, bỏ hẳn đoạn đó. |
+| Mỗi entry dưới ~400 ký tự | `USER.md` bị tính token mỗi lượt, và vượt `bootstrapMaxChars` (12000) thì OpenClaw cắt bằng `text.slice(0, cutPoint)` — giữ đầu, **cắt đuôi** — mà `## Users` chính là phần đuôi. Profile phình to sẽ âm thầm mất đúng phần dữ liệu về người. `ReconcileUserProfiles` cảnh báo từ mốc 9000. |
+| Người lạ không có entry | `## Users` khoá theo enrollment label; một khuôn mặt đi ngang không có label nào. Lưu lượng người qua bàn thì ghi ở `KNOWLEDGE.md`. |
+| Chỉ ghi điều quan sát được về **chính** người đó | Lỗi ban đầu là hai người bị gộp thành một profile (`Long/Leo`). Không bao giờ chuyển thói quen của người này sang người khác. |
+| Chỉ thêm và cập nhật — **không bao giờ xoá** | Vắng mặt không phải là rời đi. Retire một người là việc của OS (`ReconcileUserProfiles`, khoá theo enrollment), không phải của agent. |
+| Không điền `**Name:**` và các field đơn giá trị khác | Chúng là đơn nhất, không biểu diễn được thiết bị nhiều người — điền từ quan sát trong ngày sẽ giật qua giật lại giữa các user. Ai đang có mặt lấy từ tag mỗi lượt. |
+
+`TestHeartbeatPeopleSyncFormatMatchesTheReconciler` khoá định dạng được dạy với
+parser của reconciler, để hai bên không trôi ra khỏi nhau thành các entry không
+ai prune được.

@@ -106,6 +106,13 @@ TRACKING_MAX_DURATION_S: float = float(
 
 # --- Sensing: os-server integration ---
 OS_SENSING_URL = "http://127.0.0.1:5000/api/sensing/event"
+# Poked after an enrollment DIRECTORY under USERS_DIR appears or disappears
+# (/face/remove, /face/reset, /users/rename), so os-server can retire that
+# person from every runtime's USER.md straight away instead of leaving a stale
+# profile in the agent's system prompt until the next boot. Loopback-only on the
+# os-server side. NOT called by /speaker/remove: that drops only the voice/
+# subdir and leaves the person enrolled by face.
+OS_USER_RECONCILE_URL = "http://127.0.0.1:5000/api/agent/user-reconcile"
 # Named-pool filler (os-server owns phrases + language + WAV cache).
 OS_SENSING_FILLER_URL = "http://127.0.0.1:5000/api/sensing/filler"
 # Publish the captured `look` frame to the Flow Monitor.
