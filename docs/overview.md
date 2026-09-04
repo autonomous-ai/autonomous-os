@@ -45,7 +45,7 @@ hal/
 ├── safety/                       — Parsed safety policy and deterministic gates
 ├── realtime/                     — Realtime voice agent and context managers
 ├── server_support/               — Shared HTTP/security support
-└── pyproject.toml                — Python dependencies (opencv-python, insightface)
+└── pyproject.toml                — Python dependencies (opencv-python, onnxruntime)
 
 robots/                          — Per-device configs and overlays
   contract/                       — Shared API contracts (+ cts/ compliance suite)

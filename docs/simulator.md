@@ -31,7 +31,7 @@ what makes the tested binary the shipped binary.
 | `codex` CLI | `codex --version` | Install it yourself — nothing here installs it |
 | codex logged in | `ls ~/.codex/auth.json` | `codex login` |
 | `ffmpeg` | `ffmpeg -version` | Needed for music playback |
-| `uv` | `uv --version` | Builds HAL's `hal/.venv`. `make sim` creates it on first run and re-syncs it whenever `hal/uv.lock` or `hal/pyproject.toml` moves ahead of it. If that first sync fails compiling `insightface`, see *insightface fails to build* below |
+| `uv` | `uv --version` | Builds HAL's `hal/.venv`. `make sim` creates it on first run and re-syncs it whenever `hal/uv.lock` or `hal/pyproject.toml` moves ahead of it |
 | `node` + `npm` | `node --version` | Needed for `make web-dev` only |
 
 **Only `codex` works off-device.** Other runtimes have no `*-dev` target.
@@ -530,33 +530,7 @@ not carrying a live device's credentials.
 | Agent calls itself "Codex", no persona | `$CODEX_HOME/workspace` must hold `AGENTS.md`, `SOUL.md`, `KNOWLEDGE.md`, `HEARTBEAT.md`. These come from `os-dev`, not `codex-dev` |
 | Empty workspace, no `seeded file` log | `set_up_completed` is not true, so the startup sequence never ran |
 | `skill download skipped: no ota_metadata_url` | `config/bootstrap.json` missing |
-| `uv sync` fails building `insightface`, `ld: library 'c++' not found` | See below |
 
-### insightface fails to build
-
-`insightface` compiles C++, and the interpreter `uv` picked decides which SDK
-that compile targets. A Homebrew Python bakes the SDK path it was built against
-into its own `sysconfig`, so on a machine whose macOS has moved on, the build
-points `-isysroot` at an SDK that is no longer installed:
-
-```
-Compiling with an SDK that doesn't seem to exist:
-/Library/Developer/CommandLineTools/SDKs/MacOSX13.sdk
-ld: library 'c++' not found
-```
-
-Setting `SDKROOT` does not help — the stale flag comes from `sysconfig`, not the
-environment. Build the venv against a `uv`-managed interpreter instead, which
-carries no such baked-in path:
-
-```bash
-uv python install 3.12
-cd hal && uv sync --inexact --python-preference only-managed -p 3.12
-```
-
-`make sim` reuses the resulting `hal/.venv`, so this is a one-time fix.
-
----
 
 ## What does not work off-device
 
