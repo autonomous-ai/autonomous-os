@@ -167,6 +167,7 @@ INFO lelamp.service.sensing.sensing_service: [sensing] light.level: Ambient ligh
 ```python
 FACE_HEIGHT_RATIO_THRESHOLD = 0.10  # Skip faces shorter than 10% of frame height
 FACE_MAX_TRUNCATION = 0.05          # Skip faces with >5% of their bbox off-frame
+FACE_MIN_SHARPNESS = 100.0          # Skip faces too motion-blurred to identify
 HAL_FACE_LANDMARK_CONF_THRESHOLD = 0.99  # Skip crops the face mesh isn't sure about
 FACE_EXTENDED_THRESHOLD = 0.45      # Bar for a match carried by the extended bank alone
 FACE_EXTEND_MIN_ENROLL_SIM = 0.40   # Bar the uploads must clear to auto-capture a view
@@ -186,6 +187,22 @@ The landmark-in-bbox check inside the aligner does **not** catch this: it clamps
 **Why 0.05.** Replaying 496 logged frames from a lamp (2026-09-04): every well-recognised frame sat at 0% overflow (median similarity to the enrollment photo 0.66), the 0.1–3% band at 0.56, and the **5–10% band collapsed to 0.32**. One frame clipped by 6.1% minted a spurious `stranger_N` identity, and three later frames then matched *that* identity — so a single clipped frame produced four misidentifications. Dropping the threshold from 0.10 to 0.05 removes all four; the cost is three frames out of 492 that recognise correctly today and are instead skipped.
 
 **What it does not catch.** The gate only sees clipping the detector admits to by returning an off-frame box (e.g. `y1 = -34`). SCRFD sometimes clamps to the edge instead (`y1 = 0` exactly), which measures 0% overflow and passes even though the face is genuinely cut. Treating "bbox touches the frame edge" as clipped was measured and rejected: it would drop 25 frames to catch 2, because 23 edge-touching frames are recognised correctly.
+
+**Blur.** `FACE_MIN_SHARPNESS` is the third geometry-independent gate: the variance of the Laplacian of the **aligned 112×112 crop**, below which the detection is dropped before any decision. Motion blur — the lamp panning, or the person moving — destroys a face without making it smaller or clipping it, so neither gate above sees it.
+
+What comes out of a smeared crop is a near-random embedding that resembles nothing, and *"resembles nothing"* is the **new-stranger** branch: a blurred frame of the enrolled user mints a `stranger_N` identity for him. That is what happened on a lamp on 2026-09-04 — one frame captured mid-servo-sweep, similarity 0.10 to the user's own enrolment photo, sitting between two clean recognitions at 0.63 and 0.76.
+
+Measure it on the **aligned** crop, never the detector crop: the latter varies in size frame to frame, and Laplacian variance scales with resolution, so its values are not comparable between frames. Cost is ~0.06 ms on an array that already exists.
+
+| gate | frames dropped |
+|------|------|
+| lapvar < 70 | 1.6% |
+| **lapvar < 100** | **5.7%** |
+| lapvar < 130 | 11.0% |
+
+**Why 100, and not just enough to clear the offending frame.** The cost is asymmetric. Nearly every dropped frame would have been recognised correctly — and losing one is silent, because the camera re-samples every `HAL_SENSING_INTERVAL` (2 s) and `current_user()` holds the person for `FACE_OWNER_FORGET_S` (1 h). A false stranger event on the user's own face is not silent.
+
+Note what the gate does and does not do: it separates **usable from unusable frames**, not the enrolled user from a stranger. A blurred frame of a genuine stranger is dropped too, which costs that person a few seconds' delay before an identity is minted — they also produce a frame every 2 s and mint from the next sharp one. Laplacian variance scales with lighting and contrast, so this number is calibrated to this camera; re-check it against `FAIL-blurred` folders in the face debug log if the room or optics change.
 
 **Landmark confidence.** `HAL_FACE_LANDMARK_CONF_THRESHOLD` (in `model_store.py`) is the third gate, applied inside the aligner: a detection whose face-mesh confidence falls below it is dropped and never embedded. **Read this number in the scale the model emits** — the score saturates, with a median of exactly 1.000 and a minimum of 0.613 over 990 logged frames, so the useful range is the last hundredth. The old default of 0.60 did not mean "fairly strict"; it meant the gate never fired, not once.
 
@@ -291,6 +308,8 @@ to be other people.
 | Recognition flickers / mints new `stranger_N` ids repeatedly | Crop is too small to embed reliably — increase `FACE_HEIGHT_RATIO_THRESHOLD`, or raise camera resolution to 1280×720 |
 | Wrong person matched when someone sits close to a frame edge | Face is clipped — decrease `FACE_MAX_TRUNCATION` (0.05 → 0.03), or re-aim the camera so heads stay fully in frame |
 | People at the frame edge stop being recognized at all | Increase `FACE_MAX_TRUNCATION` (0.05 → 0.10); check for `FAIL-truncated` folders in the face debug log to see how much was actually cut |
+| Lamp mints a `stranger_N` for the enrolled user while it is panning | Motion blur — that is what `FACE_MIN_SHARPNESS` screens out; check `FAIL-blurred` folders for the sharpness actually seen |
+| Recognition drops out in a dim room after an update | Laplacian variance falls with light; lower `FACE_MIN_SHARPNESS` (100 → 70) and re-check `FAIL-blurred` |
 | Lamp mints `stranger_N` ids for the enrolled user at close range | The detector is firing on an ear or similar — that is what `HAL_FACE_LANDMARK_CONF_THRESHOLD` 0.99 screens out |
 | Faces that are plainly fine stop being recognized after an update | Lower `HAL_FACE_LANDMARK_CONF_THRESHOLD` (0.99 → 0.95); the default is tuned on one device |
 | Presence events fire too often | Increase `FACE_COOLDOWN_S` (10 → 30) |

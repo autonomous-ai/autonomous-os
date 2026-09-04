@@ -197,6 +197,31 @@ FACE_HEIGHT_RATIO_THRESHOLD = float(
 # as clipped was measured too: it would drop 25 frames to catch 2, since 23
 # edge-touching frames recognise correctly. Not worth it.
 FACE_MAX_TRUNCATION = float(os.environ.get("HAL_FACE_MAX_TRUNCATION", "0.05"))
+# Minimum sharpness, as the variance of the Laplacian of the ALIGNED 112x112
+# crop, below which a detection is dropped before ANY decision is taken. Motion
+# blur — the lamp panning, or the user moving — destroys a face without making
+# it smaller or clipping it, so neither of the gates above sees it.
+#
+# Measured on lamp-ac82 04/09/2026: a frame captured mid-servo-sweep scored 58
+# and minted a spurious stranger identity for the enrolled user. Its similarity
+# to his own enrollment photo was 0.10, which is not "a new person" — it is an
+# unusable image, and the decision path cannot tell those apart.
+#
+# 100 rather than the ~70 that would just clear that frame, because the cost is
+# ASYMMETRIC. Of the 63 frames of 910 this drops, 60 would have been recognised
+# correctly — and losing them is silent: the camera re-samples every
+# HAL_SENSING_INTERVAL (2s) and current_user() holds the person for
+# FACE_OWNER_FORGET_S (1h). A false stranger event on the user's own face is not
+# silent. Blocking a genuine stranger's frame costs seconds of delay, not a
+# missed person: they too produce a frame every 2s and mint from the next sharp
+# one.
+#
+# Two things to know before retuning. Laplacian variance scales with lighting,
+# contrast and crop resolution, so this number is calibrated to this camera —
+# re-check it against FAIL-blurred folders in the face debug log if the room or
+# optics change. And it MUST be measured on the aligned crop: the input crop
+# varies in size between frames, which makes its variance incomparable.
+FACE_MIN_SHARPNESS = float(os.environ.get("HAL_FACE_MIN_SHARPNESS", "100.0"))
 # Similarity a match carried by the AUTO-CAPTURED extended bank must reach, as
 # opposed to the 0.3 an enrolled upload needs. An upload is ground truth; an
 # extended view is a guess the device made about itself, so it is weaker

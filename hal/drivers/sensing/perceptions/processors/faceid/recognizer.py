@@ -71,6 +71,7 @@ class FaceRecognizer:
         self,
         height_ratio_threshold: float = config.FACE_HEIGHT_RATIO_THRESHOLD,
         max_truncation: float = config.FACE_MAX_TRUNCATION,
+        min_sharpness: float = config.FACE_MIN_SHARPNESS,
         threshold: float = 0.3,
         extended_threshold: float = config.FACE_EXTENDED_THRESHOLD,
         extend_min_enroll_sim: float = config.FACE_EXTEND_MIN_ENROLL_SIM,
@@ -84,6 +85,8 @@ class FaceRecognizer:
     ):
         self._height_ratio_threshold: float = height_ratio_threshold
         self._max_truncation: float = max_truncation
+        # Blur floor on the aligned crop; see FACE_MIN_SHARPNESS in hal/config.py.
+        self._min_sharpness: float = min_sharpness
         self._threshold: float = threshold
         # Bar for a match carried by the extended bank alone — deliberately
         # higher than ``threshold``; see FACE_EXTENDED_THRESHOLD in hal/config.py.
@@ -804,6 +807,19 @@ class FaceRecognizer:
         )
 
     @staticmethod
+    def _sharpness(aligned: npt.NDArray[np.uint8]) -> float:
+        """Variance of the Laplacian of the aligned crop — the standard blur
+        measure, high for detail, near zero for a smear.
+
+        Deliberately on the ALIGNED 112x112 rather than the detector crop: the
+        latter varies in size frame to frame, and the variance of the Laplacian
+        scales with resolution, so its values are not comparable between frames.
+        Costs ~0.06 ms on a crop that already exists (it is the embedder input).
+        """
+        gray = cv2.cvtColor(aligned, cv2.COLOR_BGR2GRAY)
+        return float(cv2.Laplacian(gray, cv2.CV_64F).var())
+
+    @staticmethod
     def _crop_face(
         frame: npt.NDArray[np.uint8],
         bbox: tuple[int, int, int, int],
@@ -909,7 +925,9 @@ class FaceRecognizer:
                 if debug_on and cx2 > cx1 and cy2 > cy1
                 else None
             )
-            aligned = raw_results[i].get("aligned") if debug_on else None
+            # Needed by the blur gate below, so it is fetched unconditionally
+            # now — it is a reference to an array the embedder already built.
+            aligned = raw_results[i].get("aligned")
             # Dense 468-point FaceMesh (full-frame pixels) and the 5 canonical
             # points the alignment warp was built from — both already computed
             # upstream, plotted into face_with_landmark.jpg.
@@ -995,6 +1013,46 @@ class FaceRecognizer:
                         extended_similarity=float(ext_scores[i]),
                         stranger_similarity=s_score,
                         detail="bbox clipped by the frame edge beyond FACE_MAX_TRUNCATION",
+                    )
+                continue
+
+            # Blur gate. Motion blur — the lamp panning, or the person moving —
+            # destroys a face without making it smaller or clipping it, so
+            # neither gate above sees it. What comes out is a near-random
+            # embedding that resembles nothing, and "resembles nothing" is the
+            # NEW-STRANGER branch: a smeared frame of the enrolled user mints an
+            # identity for him. Dropping it here protects all three downstream
+            # decisions at once — no verdict, no minted identity, and no smeared
+            # crop admitted to the extended set.
+            sharpness = (
+                self._sharpness(aligned) if aligned is not None else float("inf")
+            )
+            if sharpness < self._min_sharpness:
+                logger.info(
+                    "[face] dropped: too blurred (sharpness %.0f < %.0f)",
+                    sharpness, self._min_sharpness,
+                )
+                if debug_on:
+                    _ = self._debug.save_failure(
+                        "blurred",
+                        face_crop=face_crop,
+                        aligned=aligned,
+                        frame=frame,
+                        bbox=bbox,
+                        landmarks=landmarks,
+                        kps5=kps5,
+                        landmark_score=landmark_score,
+                        crop_box=[cx1, cy1, cx2, cy2],
+                        frame_size=[frame_w, frame_h],
+                        sharpness=sharpness,
+                        min_sharpness=self._min_sharpness,
+                        face_height_ratio=height_ratio,
+                        truncation=truncation,
+                        det_score=det_scores[i],
+                        enroll_similarity=float(upload_scores[i]),
+                        extended_similarity=float(ext_scores[i]),
+                        stranger_similarity=s_score,
+                        detail="aligned-crop sharpness below FACE_MIN_SHARPNESS",
                     )
                 continue
 
@@ -1189,6 +1247,7 @@ class FaceRecognizer:
                     negative_threshold=self._negative_threshold,
                     det_score=det_score,
                     landmark_score=landmark_score,
+                    sharpness=sharpness,
                     face_height_ratio=height_ratio,
                     height_ratio_threshold=self._height_ratio_threshold,
                     rescued_by_extended=rescued_by_extended,
