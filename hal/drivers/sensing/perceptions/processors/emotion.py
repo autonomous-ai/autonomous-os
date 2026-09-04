@@ -429,6 +429,7 @@ class EmotionData:
     face: Face
     emotion: str
     confidence: float
+    ts: float
 
 
 class EmotionPerception(Perception[FaceDetectionData]):
@@ -474,7 +475,9 @@ class EmotionPerception(Perception[FaceDetectionData]):
         # Lock protects all mutable state below
         self._state_lock: threading.RLock = threading.RLock()
 
-        # Buffer per person — flushed every EMOTION_FLUSH_S
+        # Retained: EMOTION_FLUSH_S no longer gates the decision (see
+        # _flush_buffer — readings are judged as they arrive), but the value is
+        # still the documented cadence knob and to_dict/consumers read it.
         self._flush_interval: float = config.EMOTION_FLUSH_S
         self._last_flush_ts: float = 0.0
         # {person_id: [emotion_str, ...]}
@@ -587,6 +590,7 @@ class EmotionPerception(Perception[FaceDetectionData]):
                     face=face,
                     emotion=emotion,
                     confidence=weighted_confidence,
+                    ts=self._last_detection_time,
                 )
             )
 
@@ -668,16 +672,45 @@ class EmotionPerception(Perception[FaceDetectionData]):
             return None
 
     def _flush_buffer(self) -> None:
+        """Decide on every tick, over the window the occupancy test measures.
+
+        This used to run at most once per EMOTION_FLUSH_S and clear the buffer
+        wholesale. Both parts were wrong. The callback that drives it only fires
+        when a face is DETECTED (faceid/perception.py returns early otherwise),
+        so when someone looks away mid-expression the remaining readings sat
+        unevaluated until the next face appeared — 91s in the case observed on
+        2026-09-04 12:55. By then their attempts had aged out of the trailing
+        window and the vote read "Surprise held 0/1". The failure selects for
+        SHORT expressions: a sustained Anger keeps the callback firing and lands
+        a flush while it is still fresh, a two-second Surprise does not.
+
+        So: evaluate whenever a reading arrives, and hold readings only for as
+        long as the occupancy window that judges them. Rate limiting is already
+        the job of the (user, bucket) dedup, not of this interval.
+        """
         with self._state_lock:
             if not self._emotion_buffer:
                 return
 
             cur_ts = time.time()
-            if (cur_ts - self._last_flush_ts) < self._flush_interval:
+
+            # Drop readings older than the window the vote is measured over —
+            # they can never be supported by it, and keeping them is what
+            # produced the "0/N" drops.
+            for pid in list(self._emotion_buffer):
+                fresh = [
+                    ed
+                    for ed in self._emotion_buffer[pid]
+                    if (cur_ts - ed.ts) <= _OCCUPANCY_LOOKBACK_S
+                ]
+                if fresh:
+                    self._emotion_buffer[pid] = fresh
+                else:
+                    del self._emotion_buffer[pid]
+            if not self._emotion_buffer:
                 return
 
             buffer = copy(self._emotion_buffer)
-            self._emotion_buffer.clear()
             self._last_flush_ts = cur_ts
 
         if (
@@ -822,6 +855,12 @@ class EmotionPerception(Perception[FaceDetectionData]):
 
             logger.info("[activity.emotion] flushing: %s", message)
             self._send_event("emotion.detected", message, "emotion", snapshots, None)
+
+            # Only the person that fired is cleared. Everyone else keeps their
+            # readings so a label still building toward a majority is not reset
+            # by someone else's event.
+            with self._state_lock:
+                _ = self._emotion_buffer.pop(person_id, None)
 
     def reset_dedup(self, new_user: str = "") -> None:
         """Clear the outbound dedup state only if the visible user actually

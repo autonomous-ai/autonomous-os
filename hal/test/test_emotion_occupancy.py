@@ -61,13 +61,16 @@ def _perception(readings, attempts, attempt_age_s=1.0):
 
     frame = np.zeros((20, 20, 3), dtype=np.uint8)
     face = types.SimpleNamespace(bbox=[0, 0, 10, 10], person_id=PERSON, confidence=0.9)
+    now = time.time()
     p._emotion_buffer = {
         PERSON: [
-            EmotionData(frame=frame, face=face, emotion=e, confidence=0.7)
+            EmotionData(
+                frame=frame, face=face, emotion=e, confidence=0.7,
+                ts=now - attempt_age_s,
+            )
             for e in readings
         ]
     }
-    now = time.time()
     p._attempt_history = [(now - attempt_age_s, PERSON, a) for a in attempts]
 
     sent = []
@@ -125,13 +128,19 @@ def test_a_stale_negative_does_not_carry_over():
     assert sent == []
 
 
-def test_a_stale_window_still_lets_happy_through():
-    """Happy never consults the span, so the lookback cannot silence it."""
+def test_even_happy_is_not_reported_from_a_stale_reading():
+    """Happy's exemption is from the OCCUPANCY test, not from freshness.
+
+    A smile from ninety seconds ago is not news now, and reporting it was the
+    other half of the stale-buffer defect. Under arrival evaluation this case
+    barely arises — a reading is judged in the tick it lands — but the window
+    is what guarantees it.
+    """
     p, sent = _perception(
         ["Happy"], ["Happy"], attempt_age_s=_OCCUPANCY_LOOKBACK_S + 5
     )
     p._flush_buffer()
-    assert _labels(sent) == ["Happy"]
+    assert sent == []
 
 
 def test_a_quiet_window_emits_nothing():
@@ -182,3 +191,33 @@ def test_a_lone_happy_is_still_exempt():
     p, sent = _perception(["Happy"], ["Happy"])
     p._flush_buffer()
     assert _labels(sent) == ["Happy"]
+
+
+def test_a_short_expression_is_judged_while_it_is_still_fresh():
+    """Observed 2026-09-04 12:55: four clean Surprise readings, then the face
+    left frame. The callback that drives the decision only fires on a DETECTED
+    face, so the tail sat unevaluated for 91s and was finally judged against a
+    window it no longer overlapped — "Surprise held 0/1". Two readings arriving
+    together must decide there and then.
+    """
+    p, sent = _perception(["Surprise"] * 2, ["Surprise"] * 2)
+    p._flush_buffer()
+    assert _labels(sent) == ["Surprise"]
+
+
+def test_readings_older_than_the_window_are_not_voted_on():
+    """The 0/N shape: readings kept past the span that judges them."""
+    p, sent = _perception(
+        ["Surprise"] * 3, [_NO_READING], attempt_age_s=_OCCUPANCY_LOOKBACK_S + 60
+    )
+    p._flush_buffer()
+    assert sent == []
+
+
+def test_only_the_person_that_fired_is_cleared():
+    p, sent = _perception(["Happy"], ["Happy"])
+    p._emotion_buffer["someone_else"] = list(p._emotion_buffer[PERSON])
+    p._flush_buffer()
+    assert _labels(sent) == ["Happy"]
+    assert PERSON not in p._emotion_buffer
+    assert "someone_else" in p._emotion_buffer
