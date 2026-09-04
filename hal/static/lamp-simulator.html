@@ -440,7 +440,43 @@
         CAM_EL = 0.34,
         ORBIT_R = 780,
         ZOOM_MIN = 0.3,
-        ZOOM_MAX = 4;
+        ZOOM_MAX = 4,
+        // How much room to leave around the body at zoom 1. The bounding box is
+        // measured at the rest pose; a raised head reaches past it, so the fit
+        // has to carry more margin than a static model would need.
+        CAM_MARGIN = 1.18;
+      // A bounding sphere for whatever geometry is on screen, in scene
+      // millimetres. The camera used to sit at a hard-coded distance aiming at a
+      // hard-coded height, which framed the body it was tuned against and
+      // clipped everything else - the head ran off the top of the canvas on a
+      // wide window.
+      function growBox(box, positions) {
+        for (let i = 0; i < positions.length; i += 3)
+          for (let k = 0; k < 3; k++) {
+            const c = positions[i + k];
+            if (c < box.lo[k]) box.lo[k] = c;
+            if (c > box.hi[k]) box.hi[k] = c;
+          }
+        return positions;
+      }
+      const emptyBox = () => ({
+        lo: [Infinity, Infinity, Infinity],
+        hi: [-Infinity, -Infinity, -Infinity],
+      });
+      function boundsOf(box, scale) {
+        if (!box.lo.every(isFinite) || !box.hi.every(isFinite)) return null;
+        const lo = box.lo.map((c) => c * scale),
+          hi = box.hi.map((c) => c * scale);
+        return {
+          center: lo.map((c, k) => (c + hi[k]) / 2),
+          radius: Math.hypot(...hi.map((c, k) => (c - lo[k]) / 2)),
+        };
+      }
+      // Distance at which a sphere of `radius` fills the frame vertically. The
+      // canvas is never taller than it is wide here, so the vertical field is
+      // always the tighter of the two.
+      const fitDistance = (radius) =>
+        (radius / Math.tan(CAM_FOV / 2)) * CAM_MARGIN;
 
       let target = Object.fromEntries(joints.map((j) => [j, 0])),
         pose = { ...target },
@@ -1122,6 +1158,9 @@
           ibm = readAccessor(skin.inverseBindMatrices),
           jointNodes = skin.joints;
         const parts = [];
+        // Every mesh in the file contributes to the frame, so the box is grown
+        // primitive by primitive rather than measured from one of them.
+        const rigBox = emptyBox();
         for (const node of gltf.nodes) {
           if (node.mesh === undefined) continue;
           const skinned = node.skin !== undefined;
@@ -1146,7 +1185,7 @@
                   : gl.UNSIGNED_SHORT,
               index: buffer(indices, gl.ELEMENT_ARRAY_BUFFER),
               position: buffer(
-                readAccessor(prim.attributes.POSITION),
+                growBox(rigBox, readAccessor(prim.attributes.POSITION)),
                 gl.ARRAY_BUFFER,
               ),
               normal: buffer(
@@ -1172,6 +1211,7 @@
           gl.getExtension("OES_element_index_uint");
 
         rig = {
+          bounds: boundsOf(rigBox, RIG_SCALE),
           nodes: gltf.nodes,
           jointNodes,
           ibm,
@@ -1389,7 +1429,10 @@
             }
           }
           const positions = source.subarray(0, out);
-          cadMesh = { count: out / 3 };
+          cadMesh = {
+            count: out / 3,
+            bounds: boundsOf(growBox(emptyBox(), positions), 1),
+          };
           for (const [k, data] of Object.entries({
             p: positions,
             n: n.subarray(0, out),
@@ -1449,10 +1492,14 @@
         // The camera stays where the user put it. In the jointed preview the
         // body itself carries the pose; the static CAD assembly has no joints
         // to carry it, so nothing moves there either.
+        const shown = rawCAD ? cadMesh : rig,
+          bounds = shown && shown.bounds;
         const previewAz = az,
           previewEl = el,
-          r = ORBIT_R * zoom,
-          t = [0, 205, 0],
+          // No bounds yet (still loading, or the box stand-in): fall back to the
+          // distance and aim this page shipped with.
+          r = (bounds ? fitDistance(bounds.radius) : ORBIT_R) * zoom,
+          t = bounds ? bounds.center : [0, 205, 0],
           eye = [
             r * Math.sin(previewAz) * Math.cos(previewEl),
             t[1] + r * Math.sin(previewEl),
