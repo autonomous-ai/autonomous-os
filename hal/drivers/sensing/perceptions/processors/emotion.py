@@ -1,6 +1,7 @@
 import base64
 import json
 import logging
+import math
 import os
 import shutil
 import threading
@@ -245,6 +246,26 @@ class EmotionDebugLogger:
         return self._write_folder(name, record, {"input.jpg": face_crop})
 
 
+# Sentinel recorded in the attempt history when a recognition attempt produced
+# no usable reading (empty response, HTTP error, exception). These frames are
+# invisible to _emotion_buffer — they never become an EmotionData — but they
+# still happened, and a negative emotion should have to hold its ground against
+# them rather than only against the frames that happened to return a label.
+_NO_READING = "__none__"
+
+# Trailing span the occupancy test looks back over, and the share of that span a
+# label must hold. Matches the flush interval: a real expression lasting less
+# than one window is exactly the noise this is meant to drop.
+_OCCUPANCY_LOOKBACK_S: float = 10.0
+_OCCUPANCY_MIN_RATIO: float = 2.0 / 3.0
+
+# Labels that still fire on a single frame. A smile is frequently one frame at
+# this cadence (median ~2.2s between triggers), so requiring persistence would
+# drop most genuine ones. The noisy labels are all on the other side of this
+# line and must clear _OCCUPANCY_MIN_RATIO instead.
+_INSTANT_LABELS: frozenset[str] = frozenset({"Happy"})
+
+
 class RemoteEmotionRecognizer:
     """Calls the perception-service HTTP emotion-recognize endpoint for a single face crop."""
 
@@ -461,6 +482,23 @@ class EmotionPerception(Perception[FaceDetectionData]):
         self._last_sent_ts: float = 0.0  # debug/to_dict
         self._dedup_window_s: float = config.EMOTION_DEDUP_WINDOW_S
 
+        # Every recognition attempt, including the ones that produced nothing:
+        # (ts, person_id, label-or-_NO_READING). Pruned to the lookback on
+        # append rather than at flush — _flush_buffer returns early when the
+        # buffer is empty WITHOUT advancing _last_flush_ts, so pruning there
+        # would stall during a quiet spell and leave a stale denominator.
+        self._attempt_history: list[tuple[float, str, str]] = []
+
+    def _record_attempt(self, person_id: str, label: str) -> None:
+        """Log one recognition attempt and drop anything past the lookback."""
+        now = time.time()
+        with self._state_lock:
+            self._attempt_history.append((now, person_id, label))
+            cutoff = now - _OCCUPANCY_LOOKBACK_S
+            self._attempt_history = [
+                a for a in self._attempt_history if a[0] >= cutoff
+            ]
+
     def _process_face(
         self,
         frame: cv2.typing.MatLike,
@@ -498,15 +536,23 @@ class EmotionPerception(Perception[FaceDetectionData]):
                 person_id=face.person_id,
                 error=str(e),
             )
+            self._record_attempt(face.person_id, _NO_READING)
             return
 
         if result is None:
             # A failure folder (http error / no-detection / request error) was
             # already written inside recognize() with the precise reason.
+            # An empty response is NOT evidence of Neutral — the service gates
+            # the argmax per label and falls back to Neutral's own (low)
+            # probability, so this is "no confirmed reading", and it counts
+            # against any label trying to claim the window.
+            self._record_attempt(face.person_id, _NO_READING)
             return
 
         emotion = result["emotion"]
         confidence = result["confidence"]
+
+        self._record_attempt(face.person_id, emotion)
 
         if self._presence_service:
             self._presence_service.on_motion()
@@ -665,7 +711,45 @@ class EmotionPerception(Perception[FaceDetectionData]):
                 continue
 
             counts = Counter(e for e, _ in non_neutral)
-            dominant_emotion, _ = counts.most_common(1)[0]
+
+            # A candidate has to earn the window. _INSTANT_LABELS fire on a
+            # single frame (unchanged behaviour); everything else must hold
+            # _OCCUPANCY_MIN_RATIO of this person's attempts over the trailing
+            # _OCCUPANCY_LOOKBACK_S — attempts that returned nothing included.
+            # Without that denominator a lone Anger frame among a dozen failures
+            # wins the vote outright, which is how a man working at his desk
+            # produced sustained "Anger" events.
+            with self._state_lock:
+                span = [
+                    label
+                    for ts, pid, label in self._attempt_history
+                    if pid == person_id and (cur_ts - ts) <= _OCCUPANCY_LOOKBACK_S
+                ]
+            need = max(1, math.ceil(_OCCUPANCY_MIN_RATIO * len(span)))
+
+            qualified: list[tuple[int, str]] = []
+            for label, hits in counts.items():
+                if label in _INSTANT_LABELS:
+                    qualified.append((hits, label))
+                    continue
+                occupancy = sum(1 for x in span if x == label)
+                if occupancy >= need:
+                    qualified.append((occupancy, label))
+                else:
+                    logger.info(
+                        "[activity.emotion] %s dropped: %s held %d/%d attempts "
+                        "in the last %.0fs (needs %d)",
+                        person_id,
+                        label,
+                        occupancy,
+                        len(span),
+                        _OCCUPANCY_LOOKBACK_S,
+                        need,
+                    )
+            if not qualified:
+                continue
+
+            dominant_emotion = max(qualified, key=lambda q: q[0])[1]
 
             # Average confidence over instances of the dominant label only —
             # other labels' confidences would dilute it.
@@ -743,6 +827,9 @@ class EmotionPerception(Perception[FaceDetectionData]):
             self._last_sent_by_key.clear()
             self._last_sent_key = None
             self._last_sent_ts = 0.0
+            # The outgoing user's attempts must not count toward the new one's
+            # occupancy test.
+            self._attempt_history.clear()
             # Sync the sidecar (unlinks it) so a restart can't resurrect the
             # state this user-change reset just cleared.
             self._sidecar.save(self._last_sent_by_key)
