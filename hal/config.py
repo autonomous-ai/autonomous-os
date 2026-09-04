@@ -175,9 +175,21 @@ FACE_HEIGHT_RATIO_THRESHOLD = float(
 # person's enrollment photo, and a FRIEND verdict off the auto-captured
 # extended bank. The existing landmark-in-bbox gate cannot catch this: it
 # clamps the bbox to the frame first, so points can never be "outside" on the
-# clipped edge. 0.10 rejects anything meaningfully cut (that case was 0.22)
-# while tolerating an ear grazing the border.
-FACE_MAX_TRUNCATION = float(os.environ.get("HAL_FACE_MAX_TRUNCATION", "0.10"))
+# clipped edge.
+#
+# 0.05, not 0.10: replaying 496 logged frames from lamp-ac82 (04/09/2026) put
+# every well-recognised frame at 0% overflow (median enroll similarity 0.66),
+# while the 5-10% band collapsed to 0.32 — and one 6.1% frame minted a spurious
+# stranger identity that three later frames then matched, so a single clipped
+# frame cost four misidentifications. 0.05 clears all four; the price is three
+# frames of 492 that recognise fine today and would instead be skipped.
+#
+# Note this only catches clipping the DETECTOR admits to, by returning a box
+# that runs off-frame. SCRFD sometimes clamps to the edge instead (y1 exactly
+# 0), which measures 0% overflow and passes. Treating "bbox touches the edge"
+# as clipped was measured too: it would drop 25 frames to catch 2, since 23
+# edge-touching frames recognise correctly. Not worth it.
+FACE_MAX_TRUNCATION = float(os.environ.get("HAL_FACE_MAX_TRUNCATION", "0.05"))
 # Per-detection debug capture for face recognition: every recognized face
 # writes its own timestamped folder (input crop + clean frame + annotated frame
 # + result.json) under FACEID_LOG_DIR, named "<time>_<face_id>_<similarity>"
