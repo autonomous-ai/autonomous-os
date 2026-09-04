@@ -59,7 +59,7 @@ from hal.drivers.voice._internal.vad_filters import (
     WebRTCVADFilter,
     turn_should_close,
 )
-from hal.drivers.voice._internal.wakeword_focus import WakeWordFocus
+from hal.drivers.voice._internal.wakeword_focus import WakeWordFocus, is_addressed
 from hal.drivers.voice import aec
 from hal.drivers.voice.backchannel import Backchannel
 from hal.drivers.voice.stt import STTProvider
@@ -1461,10 +1461,30 @@ class VoiceService:
             or a gaze opened. Everything that CLAIMS to be the addressee — the
             listening cue, the backchannel — has to ask this first, or the lamp
             answers conversations it was never part of.
+
+            The focus window is re-read LIVE here, not taken from the
+            session-start latch, because gaze can open it in the MIDDLE of the
+            very sentence it is meant to acknowledge. Device-observed
+            04/09/2026 on lamp-0c89: at speech start the camera had no face
+            evidence yet ("of 0" samples), so the latch was False; the watcher
+            confirmed the user 3.6s later, at speech END, and granted focus
+            then. The turn had therefore run with no listening cue at all — the
+            device sat dark through the whole sentence and only lit up for the
+            NEXT one. Asking live lights the strip the moment the evidence
+            arrives, which is exactly when the user starts wondering whether it
+            heard them.
+
+            This can only ADD turns that count as addressed, never remove one:
+            the latch stays authoritative for dispatch, so a window that
+            EXPIRES mid-sentence still cannot cut off someone already speaking
+            (that is what the latch exists for).
             """
-            if not hal_config.WAKEWORD_ENABLED:
-                return True
-            return wake_word_detected.is_set() or wakeword_followup_active
+            return is_addressed(
+                hal_config.WAKEWORD_ENABLED,
+                wake_word_detected.is_set(),
+                wakeword_followup_active,
+                self._wakeword_focus.is_active(),
+            )
 
         def fire_listening_cue() -> None:
             """Show the listening cue, once per session, only when this turn is

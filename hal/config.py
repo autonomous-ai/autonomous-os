@@ -727,6 +727,29 @@ REALTIME_RECV_QUEUE_TIMEOUT_S: float = float(
 # watchdog gives up: keep REALTIME_GEMINI_VISION_HANDOFF_MAX_AGE_S comfortably
 # above it, or the frame expires before it can be handed off (that regression
 # ran from 2026-07-06 to 2026-08-24 — see that setting's comment).
+# Ceiling on how long ONE turn may stay silent while the server is still
+# talking to us. The gap watchdog above ends a turn that produces no output,
+# which is right for a model that chose not to answer and wrong for one that is
+# busy — a Google Search grounding emits nothing until the search returns, and
+# ending the turn there hands a question the model was about to answer to the
+# main agent instead (minutes, not seconds), while the abandoned search is
+# billed anyway and its chunks still land in the session context.
+#
+# receive() therefore keeps a turn alive past the gap window as long as inbound
+# messages keep arriving (see note_server_activity) — this is the hard stop on
+# that, so a server that chatters without ever producing output still cannot
+# hang the turn forever. Must stay above the slowest grounded turn worth
+# waiting for; measured on lamp-0c89 04/09/2026 a search landed 9.5s into the
+# turn. 0 disables the keep-alive entirely (back to the plain gap watchdog).
+REALTIME_TURN_MAX_SILENCE_S: float = float(
+    os.environ.get("HAL_REALTIME_TURN_MAX_SILENCE_S", "20.0")
+)
+# Dump every field of Gemini's grounding_metadata verbatim, once per grounded
+# turn. Diagnostic only, and verbose — it exists to settle whether a turn that
+# logs chunks=0 got an empty search or a stripped payload. Off by default.
+REALTIME_GROUNDING_DEBUG: bool = os.environ.get(
+    "HAL_REALTIME_GROUNDING_DEBUG", "false"
+).lower() in ("1", "true", "yes")
 REALTIME_LOOK_RECV_TIMEOUT_S: float = float(
     os.environ.get("HAL_REALTIME_LOOK_RECV_TIMEOUT_S", "20.0")
 )
