@@ -58,7 +58,7 @@ def trust_window_s(detect_latency_s: float) -> float:
 
     Sized from the detector's MEASURED cost rather than fixed, because one loop
     is served by detectors three orders of magnitude apart: YuNet at ~30ms,
-    local YOLO at ~0.5s, the remote open-vocab model at 1.3-3s. One redetect
+    local YOLO at ~0.4s, the remote open-vocab model at ~0.55s median. One redetect
     interval plus two detections is the shortest gap a single missed confirm can
     produce, so anything tighter reads an ordinary miss as a lost lock — which
     is what parked the servo in WAIT-YOLO with the object plainly in frame on
@@ -92,8 +92,8 @@ class TrackerService:
         self._state = TrackingState()
         self._lock = threading.Lock()
         # Serializes start() so two near-simultaneous /servo/track requests don't
-        # both enter detect_object (5-7s) and end up spawning two tracking
-        # threads that fight over the same servo state.
+        # both enter seeding (seconds, worst case) and end up spawning two
+        # tracking threads that fight over the same servo state.
         self._start_lock = threading.Lock()
         self.last_error: str = ""
         self._yaw_pid = PID(C.PID_YAW_KP, C.PID_YAW_KI, C.PID_YAW_KD)
@@ -149,8 +149,9 @@ class TrackerService:
                       else [target_label] if target_label else [])
         target_label = candidates[0] if candidates else ""
 
-        # Serialize concurrent /servo/track calls. detect_object can take 5-7s
-        # (remote YOLOWorld or first-time local YOLO load). Without this lock,
+        # Serialize concurrent /servo/track calls. Seeding measured 2.4s for
+        # three candidate labels, and the first call of a session also pays the
+        # model load (~6s). Without this lock,
         # two near-simultaneous calls both pass self.stop() (nothing to stop yet)
         # and spawn two tracking threads that race over servo state.
         if not self._start_lock.acquire(blocking=False):
@@ -231,7 +232,7 @@ class TrackerService:
                 # Local sweep first, across ALL candidates, before any of them
                 # is allowed the remote detector. Interleaving them instead
                 # (local then remote, per candidate) makes a miss on the first
-                # word pay 1.3s of network before the second word is tried at
+                # word pay a network round-trip before the second word is tried at
                 # all — measured at 5.7s to seed three candidates, against a
                 # 10s session budget. Remote is the fallback for the QUESTION,
                 # not for each guess at how to word it.

@@ -40,7 +40,7 @@ def _frame():
 
 
 def test_coco_miss_does_not_reach_remote_mid_session(monkeypatch):
-    """A local miss on a routine redetect must not spend 1.3-3s on remote.
+    """A local miss on a routine redetect must not spend a network round-trip on remote.
 
     The detect thread is single-flight, so one such round-trip stretches the
     confirm cycle past the trust window and freezes the servo while the object

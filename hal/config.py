@@ -91,7 +91,7 @@ TRACKING_DETECT_LOCAL_ENABLED: bool = os.environ.get(
 ).strip().lower() in ("1", "true", "yes", "on")
 
 # Use the local YuNet face detector for target='face' (COCO has no face class,
-# YOLO falls back to remote YOLOWorld ~1.3s otherwise). Disable to force remote.
+# YOLO falls back to remote YOLOWorld, ~0.55s median, otherwise). Disable to force remote.
 TRACKING_FACE_DETECTOR_ENABLED: bool = os.environ.get(
     "HAL_TRACKING_FACE_DETECTOR", "true"
 ).strip().lower() in ("1", "true", "yes", "on")

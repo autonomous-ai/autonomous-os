@@ -51,7 +51,7 @@ _LOCAL_MODEL_PT = os.path.join(os.path.dirname(__file__), "models", "yolov8n.pt"
 # against the lamp's 1280-wide camera, everything reaches the model at 0.25x.
 # A face or a person survives that; a cup, a book or a phone on the desk arrive
 # ~30px wide and are simply not there to be found — which is what made every
-# small-object session miss locally, fall through to the ~1.3-3s remote, and
+# small-object session miss locally, fall through to the slower remote, and
 # freeze the servo on the trust gate.
 #
 # 448 puts the same cup at ~42px. It costs ~2x the pixels of 320, which is what
@@ -63,7 +63,7 @@ _LOCAL_IMGSZ = 448
 
 # YuNet face detector (OpenCV built-in). Lighter than InsightFace, ~30ms/frame on
 # Pi, no extra dependency. Used for target='face' so we don't fall back to the
-# remote YOLOWorld (~1.3s) for what's a very common tracking target.
+# remote YOLOWorld for what's a very common tracking target.
 _YUNET_MODEL_PATH = os.path.join(os.path.dirname(__file__), "models",
                                  "face_detection_yunet_2023mar.onnx")
 # Aliases that route to the face detector instead of YOLO.
@@ -122,7 +122,7 @@ _YOLO_TIMEOUT = 10.0
 
 # Remote-fallback throttle. Local YOLOv8n@320 misses small/far objects (e.g. a
 # cup across the room) that the remote open-vocab YOLOWorld can still find. On a
-# local miss we fall back to remote — but remote is ~1.3s + network, so a target
+# local miss we fall back to remote — but remote costs a network round-trip, so a target
 # local genuinely can't see would fire remote on every redetect. Rate-limit it
 # to at most one remote attempt per this interval (seconds). The very first
 # detect (e.g. session start) is never throttled (timestamp starts at 0).
@@ -424,8 +424,8 @@ class ObjectDetector:
         lock; cross-class disambiguation stays on in both modes.
 
         allow_remote_fallback=False keeps a target that HAS a local COCO path
-        on that path when local comes up empty, instead of spending 1.3-3s on
-        the remote detector. It does not affect an open-vocab target: with no
+        on that path when local comes up empty, instead of spending a network
+        round-trip on the remote detector. It does not affect an open-vocab target: with no
         local path there is nothing to fall back FROM, and remote stays the
         only detector. See the fallback block below for why the caller wants
         this mid-session.
@@ -450,7 +450,7 @@ class ObjectDetector:
         _up = 1.0 / _scale if _scale else 1.0
 
         # --- Path 0: YuNet face detector (target = face) ---
-        # COCO has no face class; this avoids the ~1.3s remote round-trip for what
+        # COCO has no face class; this avoids the remote round-trip for what
         # is a common tracking target.
         if _FACE_DETECTOR_ENABLED and target_key in _FACE_TARGET_ALIASES:
             face_bbox = _detect_face_yunet(frame)
