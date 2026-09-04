@@ -156,6 +156,18 @@ class _OnnxLandmarkAligner:
         score <  conf_thresh -> drop the face (no embedding)
     There is NO SCRFD keypoint fallback, so low-confidence / non-face detections
     are gated out instead of being force-aligned and embedded.
+
+    Read the threshold in the scale the model actually emits: this score
+    saturates near 1.0 on anything face-shaped (median exactly 1.000 over 990
+    logged frames), so the useful range is the last hundredth, and
+    ``_LANDMARK_CONF_THRESHOLD`` defaults to 0.99 accordingly. A value like 0.6
+    does not mean "fairly strict" here — it means the gate never fires.
+
+    What it screens out is a crop that is facial but not identifiable — SCRFD
+    firing on an ear at close range, say. It is NOT an occlusion detector: the
+    model is the landmark regressor alone, with no detector head, so it is
+    handed an ROI SCRFD has already called a face and returns points for
+    whatever is inside. A face behind a paper tissue scores 0.9978.
     """
 
     def __init__(self, landmarker: _MediaPipeLandmarkONNX) -> None:

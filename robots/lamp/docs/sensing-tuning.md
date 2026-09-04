@@ -165,6 +165,7 @@ INFO lelamp.service.sensing.sensing_service: [sensing] light.level: Ambient ligh
 ```python
 FACE_HEIGHT_RATIO_THRESHOLD = 0.10  # Skip faces shorter than 10% of frame height
 FACE_MAX_TRUNCATION = 0.05          # Skip faces with >5% of their bbox off-frame
+HAL_FACE_LANDMARK_CONF_THRESHOLD = 0.99  # Skip crops the face mesh isn't sure about
 FACE_COOLDOWN_S = 10.0              # Min seconds between face presence events
 FACE_OWNER_FORGET_S = 3600.0        # Re-fire presence after N seconds without seeing owner
 FACE_STRANGER_FORGET_S = 1800.0     # Same for strangers
@@ -182,6 +183,18 @@ The landmark-in-bbox check inside the aligner does **not** catch this: it clamps
 
 **What it does not catch.** The gate only sees clipping the detector admits to by returning an off-frame box (e.g. `y1 = -34`). SCRFD sometimes clamps to the edge instead (`y1 = 0` exactly), which measures 0% overflow and passes even though the face is genuinely cut. Treating "bbox touches the frame edge" as clipped was measured and rejected: it would drop 25 frames to catch 2, because 23 edge-touching frames are recognised correctly.
 
+**Landmark confidence.** `HAL_FACE_LANDMARK_CONF_THRESHOLD` (in `model_store.py`) is the third gate, applied inside the aligner: a detection whose face-mesh confidence falls below it is dropped and never embedded. **Read this number in the scale the model emits** — the score saturates, with a median of exactly 1.000 and a minimum of 0.613 over 990 logged frames, so the useful range is the last hundredth. The old default of 0.60 did not mean "fairly strict"; it meant the gate never fired, not once.
+
+It screens out a crop that is facial but carries no identity — SCRFD firing on an **ear** at close range is the case seen in the field. 26 such frames appeared in one 40-minute session at ~0.0 similarity to the user's own enrollment photo; one minted a `stranger_N` identity and the other 25 then matched it. `landmark_score` separates those from real faces at AUC 0.98:
+
+| gate | frames reaching recognition | recognised | spurious identities minted |
+|------|------|------|------|
+| 0.60 (old) | 980 | 94.6% | 1 |
+| 0.95 | 944 | 96.6% | 1 |
+| **0.99** | 910 | **97.8%** | **0** |
+
+Recognition *rises* as the gate tightens, because the unidentifiable crops leave the denominator. It is **not** an occlusion detector: the ONNX model is the landmark regressor alone, with no detector head, so it is handed an ROI SCRFD has already called a face and returns points for whatever is inside — a face behind a paper tissue scores 0.9978.
+
 **Reach.** At 640×480 with a ~65° horizontal FOV, 0.10 corresponds to a 48 px face box at roughly 2.2 m. Note the gate is scale-invariant: raising `HAL_CAMERA_WIDTH`/`HEIGHT` does not change which faces pass, but it does raise the pixel quality of the crop handed to the recognizer (EdgeFace warps to 112×112, and SCRFD returns bboxes in original-frame coordinates, so the crop comes from the full-resolution frame). At 1280×720 the same 0.10 yields a 72 px crop instead of 48 px.
 
 **Tuning:**
@@ -193,6 +206,8 @@ The landmark-in-bbox check inside the aligner does **not** catch this: it clamps
 | Recognition flickers / mints new `stranger_N` ids repeatedly | Crop is too small to embed reliably — increase `FACE_HEIGHT_RATIO_THRESHOLD`, or raise camera resolution to 1280×720 |
 | Wrong person matched when someone sits close to a frame edge | Face is clipped — decrease `FACE_MAX_TRUNCATION` (0.05 → 0.03), or re-aim the camera so heads stay fully in frame |
 | People at the frame edge stop being recognized at all | Increase `FACE_MAX_TRUNCATION` (0.05 → 0.10); check for `FAIL-truncated` folders in the face debug log to see how much was actually cut |
+| Lamp mints `stranger_N` ids for the enrolled user at close range | The detector is firing on an ear or similar — that is what `HAL_FACE_LANDMARK_CONF_THRESHOLD` 0.99 screens out |
+| Faces that are plainly fine stop being recognized after an update | Lower `HAL_FACE_LANDMARK_CONF_THRESHOLD` (0.99 → 0.95); the default is tuned on one device |
 | Presence events fire too often | Increase `FACE_COOLDOWN_S` (10 → 30) |
 | Lamp forgets owner too quickly after leaving | Increase `FACE_OWNER_FORGET_S` |
 
