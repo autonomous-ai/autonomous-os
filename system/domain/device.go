@@ -1016,12 +1016,13 @@ type InboundFile struct {
 // MQTTChatSendData is the Data payload for kind:"chat.send".
 type MQTTChatSendData struct {
 	Message string `json:"message"`
-	// File is an optional non-image attachment (PDF, CSV, …). Use Image for
+	// Files are optional non-image attachments (PDF, CSV, …). Use Images for
 	// photos — that path runs the vision gate, this one does not.
-	File *InboundFile `json:"file,omitempty"`
-	// Image is an optional base64 JPEG, exactly what the web chat puts in the
-	// sensing event's `image` field — so a phone can attach a photo the same way.
-	Image string `json:"image,omitempty"`
+	Files []InboundFile `json:"files,omitempty"`
+	// Images are optional base64 JPEGs, exactly what the web chat puts in the
+	// sensing event's `images` field — so a phone can attach photos the same
+	// way, several in one message.
+	Images []string `json:"images,omitempty"`
 	// SessionID is opaque to the device: it is echoed on the ack and on every
 	// chat.event of this run so the backend can fan the stream back out to the
 	// right client. The device does NOT partition conversation state by it —

@@ -103,7 +103,7 @@ bộ tiếp tục hoạt động.
 ```json
 {
   "message": "Phát hiện người lạ trong phòng khách",
-  "image": "<base64 JPEG, optional>"
+  "images": ["<base64 JPEG>", "…"]   // tùy chọn, mỗi ảnh đính kèm một phần tử
 }
 ```
 
@@ -126,7 +126,7 @@ Config field: `guard_mode` trong `config/config.json` (bool, mặc định `fals
 {
   "type": "voice_command|voice_followup|voice|web_chat|mqtt_chat|motion|sound|presence.enter|presence.leave|presence.away|light.level|motion.activity",
   "message": "...",
-  "image": "<base64 JPEG, optional>"
+  "images": ["<base64 JPEG>", "…"]   // tùy chọn, mỗi ảnh đính kèm một phần tử
 }
 ```
 
@@ -149,7 +149,7 @@ Config field: `guard_mode` trong `config/config.json` (bool, mặc định `fals
 1. `voice_command`, `voice_followup` hoặc `voice` + local intent enabled → match intent → thực thi trực tiếp (~50ms). `voice_followup` có cùng độ ưu tiên người dùng như `voice_command`; `web_chat` / `mqtt_chat` skip local intent (text gõ ≠ wake-word voice).
 2. Ambient turn floor: `motion.activity`, `emotion.detected`, `speech_emotion.detected`, `sound`, `presence.away`, `light.level` bị drop khi agent turn gần nhất mà handler này tạo (bất kể type) cách đây chưa tới `sensing_turn_floor_s` giây (key config, mặc định `120`, `0` = tắt; guard mode bypass). Một floor xuyên-type đè trên các gate per-type độc lập của HAL — một loạt event khác type chỉ tốn tối đa 1 agent turn mỗi window. Event bị drop hiện thành `sensing_drop` (reason `ambient_floor`) trong Flow Monitor.
 3. Không match → forward OpenClaw qua WebSocket `chat.send`
-4. Nếu event có `image` → gọi `SendChatMessageWithImage` → gửi ảnh kèm text cho AI vision phân tích. Với type chat (`web_chat` / `mqtt_chat`), ảnh attach được lưu vào `/tmp/web-chat-*.jpg` và gắn tag `[image: <path>]` để agent reference (vd: face enrollment).
+4. Nếu event có `images` → gọi `SendChatMessageWithImages` → gửi mọi ảnh đính kèm cùng text cho AI vision phân tích. Là một DANH SÁCH chứ không phải một trường đơn: client chat có thể đính nhiều ảnh cùng lúc và mọi wire format phía sau gateway vốn đã mang `attachments[]`; event camera thì chỉ gửi một phần tử. Với type chat (`web_chat` / `mqtt_chat`), mỗi ảnh được lưu vào `/tmp/web-chat-<ms>-<i>.jpg` (có index nên các ảnh trong CÙNG một lượt không đè tên nhau) và gắn tag `[image: <path>]` để agent reference (vd: face enrollment). Khi model chính không đọc được ảnh, describe-first gate chạy một lần CHO MỖI ảnh, **song song** (`safego`), và mô tả được đánh số `(image N of M)`. Song song ở đây không phải để tối ưu: gate chạy ngay trong HTTP handler nên POST của client không trả về cho tới khi describe xong hết — một lần describe đo được 8-38 giây, nên 2 ảnh chạy tuần tự làm web chat im lặng ~53 giây, đủ lâu để người dùng reload trang (mà reload thì huỷ request và mất luôn lượt đó). Chạy song song biến thời gian chờ thành ảnh CHẬM NHẤT thay vì tổng của chúng.
 5. Run chat (`web_chat` / `mqtt_chat`) được mark qua `MarkWebChatRun(runID)` để SSE handler suppress TTS lúc lifecycle end — reply chỉ hiện trong UI chat (web SSE, hoặc stream MQTT `chat.event`).
 
 ### OpenClaw

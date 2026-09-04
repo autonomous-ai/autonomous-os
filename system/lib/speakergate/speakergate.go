@@ -27,9 +27,11 @@ import (
 // pollInterval is how often the speaker is re-checked while a replay waits.
 var pollInterval = 500 * time.Millisecond
 
-// speakerBusy is the live speaker probe, indirected so the gate's own tests
-// do not need a HAL on the loopback.
-var speakerBusy = hal.SpeakerBusy
+// SpeakerBusy reports whether the device is still speaking. A variable, not a
+// function, so both this package's tests and the sensing handler's can swap the
+// probe without a HAL on the loopback — and so both paths that must respect the
+// speaker ask exactly the same question.
+var SpeakerBusy = hal.SpeakerBusy
 
 // maxWait caps the deferral. A stuck `speaking` flag on HAL must delay the
 // replay, never cancel it: past maxWait the events are replayed anyway, which
@@ -68,7 +70,7 @@ func WaitsForSpeaker(eventType string) bool {
 // that event has to go through immediately, and holding back the rest of the
 // batch would reorder the queue behind it.
 func DeferReplay(eventTypes []string, retry func()) bool {
-	if !speakerBusy() {
+	if !SpeakerBusy() {
 		return false
 	}
 	for _, t := range eventTypes {
@@ -91,7 +93,7 @@ func DeferReplay(eventTypes []string, retry func()) bool {
 		deadline := time.Now().Add(maxWait)
 		for time.Now().Before(deadline) {
 			time.Sleep(pollInterval)
-			if !speakerBusy() {
+			if !SpeakerBusy() {
 				slog.Info("sensing replay resumed -- speaker idle", "component", "sensing")
 				deferring.Store(false)
 				retry()

@@ -178,7 +178,7 @@ func (s *CodexService) injectSlackTurn(text string, origin slackRun) {
 	send := s.slackSendTurn
 	if send == nil {
 		send = func(text, reqID, runID string) error {
-			_, err := s.sendChat(text, "", reqID, runID, "slack")
+			_, err := s.sendChat(text, nil, reqID, runID, "slack")
 			return err
 		}
 	}

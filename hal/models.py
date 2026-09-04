@@ -103,10 +103,11 @@ class LEDStateResponse(BaseModel):
 
 class LEDColorResponse(BaseModel):
     led_count: int
-    on: bool  # True if any pixel is lit
-    color: list[int]  # [R, G, B] — actual pixel 0 from strip
+    on: bool  # True if ANY pixel is lit — the whole ring is read, not pixel 0
+    color: list[int]  # [R, G, B] — the ring's brightest pixel (pixel 0 when uniform)
     hex: str  # e.g. "#ff8800"
     brightness: float  # 0.0–1.0 derived from max channel
+    uniform: bool  # False when the pixels differ (dithered effects, partial paints)
     effect: Optional[str]  # running effect name, or null
     scene: Optional[str]  # active scene name, or null
 

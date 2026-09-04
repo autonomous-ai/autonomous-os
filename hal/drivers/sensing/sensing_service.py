@@ -13,7 +13,7 @@ Detectors:
 Also drives the PresenceService state machine for automatic light on/off.
 
 Events are POST-ed to http://localhost:5000/api/sensing/event as:
-  {"type": "motion", "message": "...", "image": "<base64 jpeg>"}
+  {"type": "motion", "message": "...", "images": ["<base64 jpeg>"]}
 """
 
 from __future__ import annotations

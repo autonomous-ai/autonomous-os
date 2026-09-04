@@ -8,6 +8,7 @@ orchestrator / TTS handles and the marker-stripper passed in.
 
 import logging
 import threading
+import time
 from typing import Callable, NamedTuple, Optional
 
 import requests
@@ -26,6 +27,44 @@ from hal.drivers.voice._internal.cot_leak_filter import CoTLeakFilter, clean_tra
 logger = logging.getLogger("hal.voice")
 
 SENTENCE_ENDS = (".", "!", "?", "。", "！", "？")
+
+# Clause boundaries the first chunk of a turn may be cut at — see
+# split_first_chunk. Sentence enders are handled by the normal flush above them.
+CLAUSE_ENDS = (",", ";", ":", "—", "，", "；", "：", "、")
+# Below this many characters a clause is a runt ("Ừ,", "Sure,", "Vâng,") —
+# speaking it alone sounds like a stutter, and the pause it buys is not worth
+# it. 8, because a natural opener in a non-English reply is short: "Chào bạn,"
+# is 9 characters and is exactly the greeting worth getting out early, while
+# every grunt this must reject is 5 or fewer.
+FIRST_CHUNK_MIN_CHARS = 8
+
+
+def split_first_chunk(buf: str) -> tuple[str, str]:
+    """Split the turn's FIRST utterance into (speak_now, keep_buffering).
+
+    The user is sitting in silence until the first audio, and the model's
+    opening sentence can run 20+ words. Cutting it at the last clause boundary
+    lets TTS start on the head while the tail is still streaming; the tail is
+    queued behind it, so the reply is still spoken in order.
+
+    Returns ("", buf) when there is nothing worth speaking yet — no boundary and
+    the buffer still under the cap, or a boundary too early to be a phrase.
+    """
+    cap: int = hal_config.REALTIME_FIRST_CHUNK_MAX_CHARS
+    if cap <= 0 or len(buf) < FIRST_CHUNK_MIN_CHARS:
+        return "", buf
+    cut: int = max(buf.rfind(c) for c in CLAUSE_ENDS)
+    if cut + 1 < FIRST_CHUNK_MIN_CHARS:
+        # No usable clause boundary. Past the cap, cut at the last word break
+        # instead: a long comma-less opener is exactly the case this exists for.
+        if len(buf) < cap:
+            return "", buf
+        cut = buf.rfind(" ", FIRST_CHUNK_MIN_CHARS, cap)
+        if cut < 0:
+            return "", buf
+    head: str = buf[: cut + 1].strip()
+    return (head, buf[cut + 1:]) if head else ("", buf)
+
 
 # How a turn resolved, for the single routing log line in dispatch_turn. Every
 # value except HANDLED or AI_REJECTED means the main agent answers this turn.
@@ -455,9 +494,23 @@ def run_realtime_turn(
                 realtime.flush_output()
                 realtime.commit_audio()
                 logger.info("[realtime] Audio committed — streaming output")
+                # Time-to-first-* for this turn. Without these two numbers the
+                # only measurable span was commit → first spoken sentence (3-6s
+                # on lamp-0c89), which mixes the model's own latency with how
+                # long its first sentence takes to stream. Tuning either one
+                # blind is guesswork.
+                t_commit: float = time.monotonic()
+                first_output_logged: bool = False
 
                 look_replay: bool = False
                 for output in realtime.stream_output():
+                    if not first_output_logged:
+                        first_output_logged = True
+                        logger.info(
+                            "[realtime] first output +%.2fs after commit (%s)",
+                            time.monotonic() - t_commit,
+                            type(output).__name__,
+                        )
                     if isinstance(output, LookReplaySignal):
                         # Model called look and a fresh frame was sent. The Live
                         # API queues mid-turn frames for the NEXT turn, so the
@@ -489,7 +542,11 @@ def run_realtime_turn(
                                 realtime.output_sample_rate
                             )
                             if native_started:
-                                logger.info("[realtime] Native audio → playing model voice")
+                                logger.info(
+                                    "[realtime] Native audio → playing model voice "
+                                    "(+%.2fs after commit)",
+                                    time.monotonic() - t_commit,
+                                )
                                 _thinking_cue_clear()
                                 wait_filler.cancel()
                         if native_started:
@@ -504,6 +561,25 @@ def run_realtime_turn(
                             # memory + the [HANDLED] hint; don't synthesize it.
                             continue
                         sentence_buf += output.text
+                        # Nothing spoken yet: cut the opening at a clause
+                        # boundary rather than making the user wait out a whole
+                        # sentence. Only ever once per turn (see split_first_chunk).
+                        if tts is not None and not first_sentence_sent:
+                            head, rest = split_first_chunk(sentence_buf)
+                            head = leak_filter.filter_text(strip_markers(head)) if head else ""
+                            if head:
+                                logger.info(
+                                    "[realtime] First clause → speak (+%.2fs after "
+                                    "commit): %r",
+                                    time.monotonic() - t_commit,
+                                    head[:80],
+                                )
+                                wait_filler.cancel()
+                                if not tts.speak(head):
+                                    tts.speak_queue(head)
+                                first_sentence_sent = True
+                                _thinking_cue_clear()
+                                sentence_buf = rest
                         # Flush complete sentences to TTS as they arrive
                         if tts is not None and sentence_buf.rstrip().endswith(SENTENCE_ENDS):
                             sentence: str = leak_filter.filter_text(
@@ -512,7 +588,9 @@ def run_realtime_turn(
                             if sentence:
                                 if not first_sentence_sent:
                                     logger.info(
-                                        "[realtime] First sentence → speak: %r",
+                                        "[realtime] First sentence → speak (+%.2fs "
+                                        "after commit): %r",
+                                        time.monotonic() - t_commit,
                                         sentence[:80],
                                     )
                                     # speak() returns False when another

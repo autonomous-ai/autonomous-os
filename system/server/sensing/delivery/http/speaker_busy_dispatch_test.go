@@ -1,0 +1,106 @@
+package http
+
+import (
+	"bytes"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/gin-gonic/gin"
+
+	"go.autonomous.ai/os/system/domain"
+	"go.autonomous.ai/os/system/lib/speakergate"
+	"go.autonomous.ai/os/system/monitor"
+	"go.autonomous.ai/os/system/server/config"
+)
+
+// idleGateway is the case this file is about: no turn in flight, so the old
+// code forwarded a passive event immediately — while the previous reply was
+// still coming out of the speaker.
+type idleGateway struct {
+	domain.AgentGateway
+	queued  atomic.Int32
+	drained atomic.Int32
+}
+
+func (g *idleGateway) IsBusy() bool { return false }
+func (g *idleGateway) Name() string { return "fake" }
+func (g *idleGateway) QueuePendingEvent(eventType, msg string, images []string, fixedRunID string) {
+	g.queued.Add(1)
+}
+func (g *idleGateway) DrainPendingEvents() { g.drained.Add(1) }
+
+// Not ready, so the forwarding path stops right after the branch under test
+// instead of walking into the rest of the gateway this fake does not implement.
+func (g *idleGateway) IsReady() bool { return false }
+
+func postPresenceEnter(t *testing.T, h *SensingHandler) *httptest.ResponseRecorder {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	body := `{"type":"presence.enter","message":"Person detected — 1 face(s) visible"}`
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/sensing/event", bytes.NewBufferString(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	h.PostEvent(c)
+	return rec
+}
+
+func withSpeaker(t *testing.T, busy func() bool) {
+	t.Helper()
+	orig := speakergate.SpeakerBusy
+	speakergate.SpeakerBusy = busy
+	t.Cleanup(func() { speakergate.SpeakerBusy = orig })
+}
+
+// The regression: a runtime reports idle the moment its reply text reaches the
+// TTS queue, but that reply keeps playing. Forwarding presence.enter then opens
+// a newer turn, and HAL hands the speaker to the newest turn — cutting off the
+// answer the user asked for.
+func TestPresenceEnterWaitsWhileTheDeviceIsStillSpeaking(t *testing.T) {
+	var busy atomic.Bool
+	busy.Store(true)
+	withSpeaker(t, busy.Load)
+
+	gw := &idleGateway{}
+	h := &SensingHandler{agentGateway: gw, monitorBus: monitor.ProvideBus(), config: &config.Config{}}
+
+	rec := postPresenceEnter(t, h)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if got := gw.queued.Load(); got != 1 {
+		t.Fatalf("event must be queued while the speaker is busy, queued=%d", got)
+	}
+	if got := gw.drained.Load(); got != 0 {
+		t.Fatalf("nothing may replay while the speaker is still busy, drained=%d", got)
+	}
+
+	// Nothing else would drain this one — there is no turn in flight whose end
+	// could trigger it.
+	busy.Store(false)
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) && gw.drained.Load() == 0 {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := gw.drained.Load(); got == 0 {
+		t.Fatal("the queued event was never replayed after the speaker went idle")
+	}
+}
+
+// An idle device must behave exactly as before: straight through, no queue.
+func TestPresenceEnterGoesStraightThroughWhenTheSpeakerIsIdle(t *testing.T) {
+	withSpeaker(t, func() bool { return false })
+
+	gw := &idleGateway{}
+	h := &SensingHandler{agentGateway: gw, monitorBus: monitor.ProvideBus(), config: &config.Config{}}
+
+	_ = postPresenceEnter(t, h)
+
+	if got := gw.queued.Load(); got != 0 {
+		t.Fatalf("an idle speaker must not queue anything, queued=%d", got)
+	}
+}

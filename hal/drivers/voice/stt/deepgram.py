@@ -119,7 +119,6 @@ class DeepgramSession(STTSession):
         if use_flux:
             params = _build_flux_listen_params(
                 model=self._model,
-                encoding=DEFAULT_ENCODING,
                 sample_rate=self._sample_rate,
             )
         else:

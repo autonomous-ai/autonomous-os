@@ -745,6 +745,29 @@ REALTIME_RECV_QUEUE_TIMEOUT_S: float = float(
 # watchdog gives up: keep REALTIME_GEMINI_VISION_HANDOFF_MAX_AGE_S comfortably
 # above it, or the frame expires before it can be handed off (that regression
 # ran from 2026-07-06 to 2026-08-24 — see that setting's comment).
+# Ceiling on how long ONE turn may stay silent while the server is still
+# talking to us. The gap watchdog above ends a turn that produces no output,
+# which is right for a model that chose not to answer and wrong for one that is
+# busy — a Google Search grounding emits nothing until the search returns, and
+# ending the turn there hands a question the model was about to answer to the
+# main agent instead (minutes, not seconds), while the abandoned search is
+# billed anyway and its chunks still land in the session context.
+#
+# receive() therefore keeps a turn alive past the gap window as long as inbound
+# messages keep arriving (see note_server_activity) — this is the hard stop on
+# that, so a server that chatters without ever producing output still cannot
+# hang the turn forever. Must stay above the slowest grounded turn worth
+# waiting for; measured on lamp-0c89 04/09/2026 a search landed 9.5s into the
+# turn. 0 disables the keep-alive entirely (back to the plain gap watchdog).
+REALTIME_TURN_MAX_SILENCE_S: float = float(
+    os.environ.get("HAL_REALTIME_TURN_MAX_SILENCE_S", "20.0")
+)
+# Dump every field of Gemini's grounding_metadata verbatim, once per grounded
+# turn. Diagnostic only, and verbose — it exists to settle whether a turn that
+# logs chunks=0 got an empty search or a stripped payload. Off by default.
+REALTIME_GROUNDING_DEBUG: bool = os.environ.get(
+    "HAL_REALTIME_GROUNDING_DEBUG", "false"
+).lower() in ("1", "true", "yes")
 REALTIME_LOOK_RECV_TIMEOUT_S: float = float(
     os.environ.get("HAL_REALTIME_LOOK_RECV_TIMEOUT_S", "20.0")
 )
@@ -778,6 +801,20 @@ REALTIME_SESSION_IDLE_RESET_S: float = float(
 # audio across the ~1s handshake (see `rebuilding`), so nothing is dropped.
 REALTIME_GEMINI_PRE_TURN_RECYCLE_S: float = float(
     os.environ.get("HAL_GEMINI_PRE_TURN_RECYCLE_S", "60")
+)
+# Close an idle Gemini session ourselves instead of letting the server close it.
+# An idle session is killed upstream with WS 1008 "The operation was aborted"
+# (measured idle lifetimes: 86s, 98s, 150s, 151s, 152s, 185s, 198s). That close is
+# harmless to turns -- the pre-turn recycle above already replaces the session
+# before any post-idle turn streams audio -- but the backend logs it as an error
+# and pages the dev channel, so the device must not provoke it. Parking closes the
+# transport after this many seconds without turn activity and leaves the
+# orchestrator `available`: the next turn's prepare_turn() connects a fresh session
+# synchronously (voice_service buffers audio across the ~1s handshake), which is
+# exactly what the pre-turn recycle would have done for that turn anyway. Must stay
+# BELOW the shortest observed idle death (86s); 45s keeps a wide margin. 0 disables.
+REALTIME_GEMINI_IDLE_PARK_S: float = float(
+    os.environ.get("HAL_GEMINI_IDLE_PARK_S", "45")
 )
 # Gemini 1011 recovery: how many times to reconnect a FRESH session and replay
 # the just-captured turn audio when a turn produced no output (the campaign-api
@@ -1403,6 +1440,21 @@ REALTIME_TTS_HISTORY_MAX_CHARS: int = int(os.environ.get("HAL_REALTIME_TTS_HISTO
 # measured time-to-first-sentence, not from this default.
 REALTIME_FILLER_DELAY_S: float = float(os.environ.get("HAL_REALTIME_FILLER_DELAY_S", "1.5"))
 
+# Time-to-first-audio, text (non-native-audio) path only. Sentences are streamed
+# to TTS as they complete, so the first thing the user hears waits for a full
+# sentence terminator — and the model's opening sentence is often long. Below
+# this many characters the first utterance of a turn may instead be cut at a
+# CLAUSE boundary (comma / semicolon / colon) and spoken immediately, with the
+# remainder queued behind it; TTS is a queue, so the reply still comes out in
+# order and the split lands where a speaker would breathe anyway.
+#
+# Only ever applies to the FIRST chunk of a turn — that is the only one whose
+# latency the user is sitting in silence for. 0 disables (wait for the full
+# sentence, the pre-04/09/2026 behaviour).
+REALTIME_FIRST_CHUNK_MAX_CHARS: int = int(
+    os.environ.get("HAL_REALTIME_FIRST_CHUNK_MAX_CHARS", "90")
+)
+
 # --- Realtime: Summarizer (Anthropic Messages API) ---
 REALTIME_SUMMARIZER_ENABLED: bool = os.environ.get("HAL_REALTIME_SUMMARIZER_ENABLED", "true").lower() in ("1", "true", "yes")
 REALTIME_SUMMARIZER_API_KEY: str = os.environ.get("HAL_REALTIME_SUMMARIZER_API_KEY", "") or _os_cfg_get("llm_api_key", "")
@@ -1410,6 +1462,19 @@ REALTIME_SUMMARIZER_API_KEY: str = os.environ.get("HAL_REALTIME_SUMMARIZER_API_K
 _summarizer_base: str = os.environ.get("HAL_REALTIME_SUMMARIZER_BASE_URL", "") or _os_cfg_get("llm_base_url", "")
 REALTIME_SUMMARIZER_BASE_URL: str = _summarizer_base.rstrip("/").removesuffix("/v1") if _summarizer_base else ""
 REALTIME_SUMMARIZER_MODEL: str = os.environ.get("HAL_REALTIME_SUMMARIZER_MODEL", "claude-haiku-4-5-20251001")
+# Extra attempts when a summarize call fails. The gateway drops requests
+# intermittently — measured on lamp-0c89 03/09/2026: the SAME payload returned
+# 404 once, then succeeded on four of the next five tries (the sixth timed out),
+# while the superset payload containing it succeeded outright. So a failure says
+# nothing about the input, and one dropped call costs the whole summary until
+# the next rebuild. 0 disables retrying.
+REALTIME_SUMMARIZER_RETRIES: int = int(
+    os.environ.get("HAL_REALTIME_SUMMARIZER_RETRIES", "2")
+)
+# Seconds before the first retry; doubled for each one after it.
+REALTIME_SUMMARIZER_RETRY_BACKOFF_S: float = float(
+    os.environ.get("HAL_REALTIME_SUMMARIZER_RETRY_BACKOFF_S", "1.5")
+)
 
 # Gaze re-point: turn back toward the remembered bearing when nobody has been
 # visible for a while.

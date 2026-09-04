@@ -256,3 +256,37 @@ class SileroVADFilter:
         except Exception as e:
             logger.warning("Silero speech_metrics error: %s", e)
             return (1.0, 1.0, 1.0, 1.0)
+
+
+def turn_should_close(
+    now: float, last_speech_time: float, final_ts: float
+) -> bool:
+    """Whether the capture loop should end the turn on this silent frame.
+
+    Two clocks. The fallback is the long one: silence since the last confirmed
+    speech beyond SILENCE_TIMEOUT_S. The short one only applies once STT has
+    emitted a final segment, because the provider has then made its own
+    end-of-turn call, and sitting on the long clock afterwards is dead air in
+    front of the realtime commit.
+
+    The short clock is measured from the FINAL'S ARRIVAL, not from the last
+    speech, and that is the whole subtlety. Flux emits an EndOfTurn for natural
+    pauses INSIDE one utterance ("Hello." while the speaker draws breath before
+    "Can you hear me?"). Measuring from the last speech applies the short budget
+    retroactively to silence that had already accumulated, so such a final
+    closes the session on the very next frame — device-observed 04/09/2026,
+    lamp-0c89: final 'Hello.' at 09:22:50.766, session closed at 09:22:50.880,
+    114ms later, while the user was still mid-sentence. Measuring from the
+    final instead gives the speaker a real ENDPOINT_SILENCE_S window to carry
+    on, and still closes that much after a final that genuinely ended the turn.
+    """
+    from hal.drivers.voice._internal.config import (
+        ENDPOINT_SILENCE_S,
+        SILENCE_TIMEOUT_S,
+    )
+
+    silence: float = now - last_speech_time
+    if final_ts > 0 and ENDPOINT_SILENCE_S > 0:
+        if now - final_ts >= ENDPOINT_SILENCE_S and silence >= ENDPOINT_SILENCE_S:
+            return True
+    return silence > SILENCE_TIMEOUT_S

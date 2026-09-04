@@ -64,6 +64,7 @@ def _ready_summarizer(stream_parts):
     s._system_prompt = "sys"
     s._model = "m"
     s._base_url = "https://example.invalid"
+    s._retries, s._retry_backoff_s = 0, 0.0
     client = mock.Mock()
     client.messages.stream.return_value = _FakeStream(stream_parts)
     s._get_client = lambda: client
@@ -88,8 +89,50 @@ def test_empty_entries_short_circuit_without_a_request():
 def test_a_stream_failure_returns_empty_instead_of_raising(caplog):
     s = RealtimeSummarizer.__new__(RealtimeSummarizer)
     s._system_prompt, s._model, s._base_url = "sys", "m", "u"
+    s._retries, s._retry_backoff_s = 0, 0.0
     client = mock.Mock()
     client.messages.stream.side_effect = RuntimeError("gateway down")
     s._get_client = lambda: client
     assert s.summarize(["user: hi"]) == ""
     assert "Summarization failed" in caplog.text
+
+
+# --- retries -----------------------------------------------------------------
+
+
+def _retrying_summarizer(side_effects, retries=2):
+    s = RealtimeSummarizer.__new__(RealtimeSummarizer)
+    s._system_prompt, s._model, s._base_url = "sys", "m", "u"
+    s._retries, s._retry_backoff_s = retries, 0.0
+    client = mock.Mock()
+    client.messages.stream.side_effect = side_effects
+    s._get_client = lambda: client
+    return s, client
+
+
+# A failure says nothing about the input — the same payload has 404'd once and
+# gone through on the next try.
+def test_a_dropped_call_is_retried():
+    s, client = _retrying_summarizer(
+        [RuntimeError("gateway dropped it"), _FakeStream(["recovered"])]
+    )
+    assert s.summarize(["user: hi"]) == "recovered"
+    assert client.messages.stream.call_count == 2
+
+
+def test_it_gives_up_after_the_configured_number_of_retries():
+    s, client = _retrying_summarizer([RuntimeError("down")] * 5, retries=2)
+    assert s.summarize(["user: hi"]) == ""
+    assert client.messages.stream.call_count == 3  # first try + 2 retries
+
+
+def test_retries_can_be_switched_off():
+    s, client = _retrying_summarizer([RuntimeError("down")] * 5, retries=0)
+    assert s.summarize(["user: hi"]) == ""
+    assert client.messages.stream.call_count == 1
+
+
+def test_a_first_attempt_that_works_is_not_repeated():
+    s, client = _retrying_summarizer([_FakeStream(["fine"])])
+    assert s.summarize(["user: hi"]) == "fine"
+    assert client.messages.stream.call_count == 1

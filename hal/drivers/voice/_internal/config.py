@@ -321,3 +321,22 @@ DEFAULT_WAKE_WORDS = [
 # Enroll-nudge cooldown
 # ---------------------------------------------------------------------------
 ENROLL_NUDGE_COOLDOWN_S = float(os.environ.get("HAL_ENROLL_NUDGE_COOLDOWN_S", str(30 * 60)))
+
+
+# ---------------------------------------------------------------------------
+# End-of-turn latency — close capture on the STT endpoint, not on the long clock
+# ---------------------------------------------------------------------------
+# SILENCE_TIMEOUT_S above is the fallback clock: it has to be long because an
+# empty/noisy session has no other evidence that the user is done. But once STT
+# has delivered a FINAL segment, the provider has already made that call for us
+# (Flux emits EndOfTurn; nova fires is_final after its own endpointing window),
+# so waiting the full 2.5s afterwards is dead air in front of every single
+# realtime turn — the largest fixed cost between the user falling silent and the
+# model hearing the commit.
+#
+# So: with a final in hand, close after this much local silence instead. Kept as
+# a separate (shorter) clock rather than lowering SILENCE_TIMEOUT_S, because a
+# turn with no final still needs the long one. Raise it if the device starts
+# cutting people off at natural mid-sentence pauses; 0 disables (back to the
+# single long clock).
+ENDPOINT_SILENCE_S = float(os.environ.get("HAL_ENDPOINT_SILENCE_S", "0.8"))

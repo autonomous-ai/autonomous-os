@@ -15,7 +15,7 @@ func TestStandaloneDrain(t *testing.T) {
 		{"voice command keeps own turn", pendingEvent{eventType: "voice_command"}, true},
 		{"ambient voice keeps own turn", pendingEvent{eventType: "voice"}, true},
 		{"realtime-handled is silent, standalone", pendingEvent{eventType: "voice_agent_handled"}, true},
-		{"image-bearing is standalone", pendingEvent{eventType: "presence.enter", image: "base64=="}, true},
+		{"image-bearing is standalone", pendingEvent{eventType: "presence.enter", images: []string{"base64=="}}, true},
 		{"presence is mergeable", pendingEvent{eventType: "presence.enter"}, false},
 		{"motion is mergeable", pendingEvent{eventType: "motion.activity"}, false},
 		{"emotion is mergeable", pendingEvent{eventType: "emotion.detected"}, false},

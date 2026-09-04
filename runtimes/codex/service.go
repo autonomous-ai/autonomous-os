@@ -37,6 +37,11 @@ import (
 	"go.autonomous.ai/os/system/statusled"
 )
 
+// dispatchFn is the event sink shape shared by the read loop and wsDispatch.
+// Named so atomic.Value always sees ONE concrete type (storing a bare nil func
+// literal would panic on the type switch).
+type dispatchFn func(domain.WSEvent)
+
 // Compile-time check: *CodexService implements domain.AgentGateway.
 var _ domain.AgentGateway = (*CodexService)(nil)
 
@@ -93,6 +98,11 @@ type CodexService struct {
 	pendingRunID atomic.Value // string
 	currentRunID atomic.Value // string
 	reqCounter   atomic.Int64
+	// wsDispatch is the live connection's event sink, published by runWSConn so
+	// paths OUTSIDE the read loop can still end a turn. Only the read loop has
+	// the dispatch closure otherwise, and the busy-TTL expiry — which decides a
+	// turn is dead — runs on the sensing path with no closure in hand.
+	wsDispatch atomic.Value // dispatchFn
 
 	// Session state. sessionUUID is the Claude-assigned session_id captured from
 	// any inbound frame.
