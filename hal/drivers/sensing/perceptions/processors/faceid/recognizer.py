@@ -6,10 +6,12 @@ pipeline on ``start()`` — which is also where the model weights are fetched on
 first use (see ``model_store.ensure_face_models``).
 """
 
+import json
 import logging
 import threading
 import time
 from pathlib import Path
+from typing import Any
 
 import cv2
 import numpy as np
@@ -43,6 +45,14 @@ logger = logging.getLogger(__name__)
 _EXTENDED_SUBDIR = ".extended"
 _EXTENDED_IMG_EXT = ".jpg"
 _EXTENDED_EMB_EXT = ".npy"
+# Provenance sidecar: why this view was admitted, and under which rules. Written
+# beside the crop and its embedding. Metadata only — nothing reads it back into
+# the bank (``_read_extended_for`` globs the JPEGs), so a missing or malformed
+# one costs nothing at runtime. It exists so a bank can be AUDITED after the
+# fact: without it the only remedy for a rule that turned out to admit the wrong
+# views is to wipe every view, which is exactly what had to be done on lamp-ac82
+# when 6 of 10 turned out to be other people.
+_EXTENDED_META_EXT = ".json"
 
 # Box colour per verdict in the debug log's annotated.jpg — same convention as
 # FacePerception._FACE_COLOR (BGR).
@@ -309,6 +319,7 @@ class FaceRecognizer:
         raw_label: str,
         embedding: npt.NDArray[np.float32],
         crop: npt.NDArray[np.uint8] | None,
+        meta: dict[str, Any] | None = None,
     ) -> None:
         """Consider folding one confidently-matched live view into a user's
         extended set AND persisting it to disk. Manages its own locking.
@@ -400,7 +411,12 @@ class FaceRecognizer:
 
         # (2) Persist WITHOUT the lock held. A view enters the in-memory bank
         # only once it has a backing file, so the two never drift apart.
-        path = self._save_extended_view(raw_label, embedding, crop)
+        # Fold in what only this method knows: how novel the view was against
+        # everything already stored, which is the other half of the admission
+        # decision (identity was decided in detect()).
+        provenance = dict(meta or {})
+        provenance["max_sim_to_existing"] = max_sim
+        path = self._save_extended_view(raw_label, embedding, crop, provenance)
         if path is None:
             return
 
@@ -551,13 +567,19 @@ class FaceRecognizer:
         raw_label: str,
         embedding: npt.NDArray[np.float32],
         crop: npt.NDArray[np.uint8],
+        meta: dict[str, Any] | None = None,
     ) -> str | None:
-        """Persist one extended view: a JPEG crop + a sidecar .npy embedding.
+        """Persist one extended view: a JPEG crop, a sidecar .npy embedding, and
+        a .json provenance record.
 
         Returns the JPEG path on success, or None if it could not be written (in
         which case the caller must NOT add the view to the in-memory bank). The
         sidecar embedding is what a later load trusts, so a restart reloads the
         exact vector and never has to re-detect the (possibly hard) pose.
+
+        The .json is documentation, not state: nothing loads it back, so failing
+        to write it does NOT fail the view. It records the scores and the
+        thresholds that admitted this view so the bank can be audited later.
         """
         try:
             dest = self._extended_dir_for(raw_label)
@@ -576,6 +598,22 @@ class FaceRecognizer:
                 logger.warning("[face-v2] cv2.imwrite failed for %s", img_path)
                 return None
             np.save(emb_path, embedding.astype(np.float32))
+            # Best-effort, and deliberately last: the view is already valid
+            # without it, so a failure here must not orphan the JPEG/.npy pair.
+            try:
+                record: dict[str, Any] = {
+                    "captured_at": time.strftime(
+                        "%Y-%m-%dT%H:%M:%S", time.localtime()
+                    ),
+                    "ts": time.time(),
+                    "label": raw_label,
+                }
+                record.update(meta or {})
+                _ = (dest / f"{stem}{_EXTENDED_META_EXT}").write_text(
+                    json.dumps(record, indent=2), encoding="utf-8"
+                )
+            except (OSError, TypeError, ValueError) as e:
+                logger.debug("[face-v2] provenance sidecar not written: %s", e)
             return str(img_path)
         except (OSError, cv2.error) as e:
             logger.warning("[face-v2] failed to save extended view: %s", e)
@@ -583,11 +621,14 @@ class FaceRecognizer:
 
     @staticmethod
     def _delete_extended_view(img_path: str) -> None:
-        """Delete an extended view's JPEG and its sidecar .npy (best-effort)."""
+        """Delete an extended view's JPEG, its sidecar .npy and its provenance
+        .json (best-effort). All three share a stem, so an eviction leaves
+        nothing behind."""
         try:
             p = Path(img_path)
             p.unlink(missing_ok=True)
             p.with_suffix(_EXTENDED_EMB_EXT).unlink(missing_ok=True)
+            p.with_suffix(_EXTENDED_META_EXT).unlink(missing_ok=True)
         except OSError as e:
             logger.warning(
                 "[face-v2] failed to delete extended view %s: %s", img_path, e
@@ -650,6 +691,10 @@ class FaceRecognizer:
         """Read one user's persisted extended views from disk. PURE reader: no
         lock, no in-memory mutation — it only touches the filesystem and returns
         ``(embeddings, paths)`` for the caller to install atomically.
+
+        Only ``*.jpg`` is enumerated, so the ``.json`` provenance sidecar is
+        ignored here by construction — it is for humans and audits, never an
+        input to the bank.
 
         Each view's sidecar embedding is trusted as-is (it was validated at
         capture); we deliberately do NOT re-gate against the uploads, since a
@@ -832,11 +877,16 @@ class FaceRecognizer:
 
         new_stranger_embeds = []
         new_stranger_labels = []
-        # (friend_raw_label, normalized_embedding, bbox) for confidently-matched
-        # faces that may extend their user's set (diversity-gated + cropped +
-        # persisted after the loop).
+        # (friend_raw_label, normalized_embedding, bbox, provenance) for
+        # confidently-matched faces that may extend their user's set
+        # (diversity-gated + cropped + persisted after the loop).
         extend_candidates: list[
-            tuple[str, npt.NDArray[np.float32], tuple[int, int, int, int]]
+            tuple[
+                str,
+                npt.NDArray[np.float32],
+                tuple[int, int, int, int],
+                dict[str, Any],
+            ]
         ] = []
         # per-face: (bbox_pixels, face_kind, label)  face_kind: "friend"|"stranger"|"unsure"
         faces: list[Face] = []
@@ -1021,7 +1071,40 @@ class FaceRecognizer:
                     and match_source == "enroll"
                     and up_s > self._extend_min_enroll_sim
                 ):
-                    extend_candidates.append((raw_id, embeds[i], (x1, y1, x2, y2)))
+                    extend_candidates.append(
+                        (
+                            raw_id,
+                            embeds[i],
+                            (x1, y1, x2, y2),
+                            # Why this view was admitted, and under which rules.
+                            # The thresholds ride along so a later audit can ask
+                            # "which views did the OLD rule let in" without
+                            # guessing what the config was at the time.
+                            {
+                                "enroll_similarity": up_s,
+                                "extended_similarity": ex_s,
+                                "match_source": match_source,
+                                "det_score": float(det_score),
+                                "landmark_score": (
+                                    None
+                                    if landmark_score is None
+                                    else float(landmark_score)
+                                ),
+                                "face_height_ratio": float(height_ratio),
+                                "truncation": float(truncation),
+                                "bbox": [int(v) for v in bbox],
+                                "frame_size": [int(frame_w), int(frame_h)],
+                                "thresholds": {
+                                    "threshold": self._threshold,
+                                    "extended_threshold": self._extended_threshold,
+                                    "extend_min_enroll_sim": (
+                                        self._extend_min_enroll_sim
+                                    ),
+                                    "diversity_threshold": self._diversity_threshold,
+                                },
+                            },
+                        )
+                    )
             elif s_score > self._threshold:
                 raw_id = stranger_ids[i] or ""
                 person_id = raw_id.removeprefix(self.STRANGER_PREFIX)
@@ -1137,9 +1220,9 @@ class FaceRecognizer:
         # this in `with self._lock` (that previously held the lock across every
         # frame's JPEG write and widened the reload race).
         if extend_candidates:
-            for raw_label, emb, bbox in extend_candidates:
+            for raw_label, emb, bbox, meta in extend_candidates:
                 crop = self._crop_face(frame, bbox)
-                self._maybe_extend_user(raw_label, emb, crop)
+                self._maybe_extend_user(raw_label, emb, crop, meta)
 
         return faces
 

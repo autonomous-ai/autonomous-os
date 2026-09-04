@@ -249,6 +249,33 @@ bank alone**, at enroll similarity 0.157–0.298 — below the 0.30 bar, so with
 the bank they would have been missed. One of them is a frame the live device
 labelled `stranger_4`.
 
+**What is stored per view.** Each auto-captured view lives in
+`<USERS_DIR>/<user>/.extended/` as three files sharing one stem:
+
+| file | role |
+|------|------|
+| `ext_<ms>_<seq>.jpg` | the face crop |
+| `ext_<ms>_<seq>.npy` | its embedding — what a restart reloads, so a hard pose never has to be re-detected |
+| `ext_<ms>_<seq>.json` | **provenance**: why this view was admitted |
+
+The provenance record holds the scores that admitted the view
+(`enroll_similarity`, `extended_similarity`, `match_source`,
+`max_sim_to_existing`), the frame's quality figures (`det_score`,
+`landmark_score`, `face_height_ratio`, `truncation`, `bbox`), and the
+`thresholds` in force at the time. That last field is the point: it lets you ask
+"which views did the *old* rule let in" after a threshold change, without
+guessing what the config was.
+
+It is documentation, not state. The loader enumerates only `*.jpg`, so a missing
+or malformed `.json` costs nothing at runtime, and writing it is best-effort —
+the view stays valid if the write fails. Eviction deletes all three files
+together. Views captured before this existed have no `.json`, which is itself a
+useful signal: they predate the current rules.
+
+Without it, a bank that turns out to hold the wrong views can only be wiped
+wholesale — which is what had to happen on one lamp when 6 of 10 views turned out
+to be other people.
+
 **Tuning:**
 
 | Symptom | Fix |
