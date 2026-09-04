@@ -54,7 +54,11 @@ from hal.drivers.voice._internal.speaker_decorate import (
     merge_wake_words,
 )
 from hal.drivers.voice._internal.turn_dispatch import dispatch_turn
-from hal.drivers.voice._internal.vad_filters import SileroVADFilter, WebRTCVADFilter
+from hal.drivers.voice._internal.vad_filters import (
+    SileroVADFilter,
+    WebRTCVADFilter,
+    silence_budget,
+)
 from hal.drivers.voice._internal.wakeword_focus import WakeWordFocus
 from hal.drivers.voice import aec
 from hal.drivers.voice.backchannel import Backchannel
@@ -1888,7 +1892,7 @@ class VoiceService:
                                         "non-speech (%d frames each)",
                                         noise_windows, probe_frames,
                                     )
-                elif (time.time() - last_speech_time) > voice_cfg.SILENCE_TIMEOUT_S:
+                elif (time.time() - last_speech_time) > silence_budget(final_sent[0]):
                     if noise_windows:
                         logger.info(
                             "Silence detected, disconnecting STT "

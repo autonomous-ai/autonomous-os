@@ -256,3 +256,21 @@ class SileroVADFilter:
         except Exception as e:
             logger.warning("Silero speech_metrics error: %s", e)
             return (1.0, 1.0, 1.0, 1.0)
+
+
+def silence_budget(final_seen: bool) -> float:
+    """How long silence must last before the capture loop closes the turn.
+
+    STT already decided the user stopped when it emitted a final segment (Flux
+    EndOfTurn, nova is_final), so sitting on the long fallback clock afterwards
+    is dead air in front of every realtime commit. Without a final there is no
+    such evidence — an empty or noise-only session keeps the long clock.
+    """
+    from hal.drivers.voice._internal.config import (
+        ENDPOINT_SILENCE_S,
+        SILENCE_TIMEOUT_S,
+    )
+
+    if final_seen and ENDPOINT_SILENCE_S > 0:
+        return ENDPOINT_SILENCE_S
+    return SILENCE_TIMEOUT_S

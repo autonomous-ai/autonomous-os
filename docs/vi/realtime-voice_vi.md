@@ -182,9 +182,21 @@ tạo (`device-chat-<n>-<unix-ms>`), nên khi một sequence THẤP HƠN đến 
 tạo MUỘN HƠN run đang giữ loa, HAL coi như bộ đếm đã restart và nhận sequence mới.
 Id không có dấu thời gian (`tg-<messageID>`) vẫn theo luật sequence thuần: không có
 gì để so thì một POST cũ thật sự không được phép giành lại loa.
-### Silero canh đồng hồ im lặng (kết thúc lượt)
+### Hai đồng hồ im lặng (kết thúc lượt)
 
-Một phiên mic kết thúc khi audio nằm dưới ngưỡng RMS suốt `SILENCE_TIMEOUT_S`.
+Một phiên mic kết thúc khi audio nằm dưới ngưỡng RMS suốt ngân sách im lặng
+hiện hành. Có hai ngân sách: khi STT đã trả về một segment **final** cho lượt
+này, nhà cung cấp đã tự quyết định là người dùng nói xong (Flux phát EndOfTurn,
+nova bắn `is_final` sau cửa sổ endpointing của nó), nên vòng lặp đóng sau
+`ENDPOINT_SILENCE_S` (`HAL_ENDPOINT_SILENCE_S`, mặc định 0.8s). Ngồi chờ hết
+đồng hồ dài sau bằng chứng đó là dead air nằm trước mọi lần commit realtime —
+đây là chi phí cố định lớn nhất giữa lúc người dùng ngừng nói và lúc model nghe
+được audio. Không có final thì không có bằng chứng đó, nên phiên rỗng hoặc chỉ
+có tiếng ồn vẫn giữ đồng hồ dự phòng dài `SILENCE_TIMEOUT_S` (2.5s). Đặt
+`HAL_ENDPOINT_SILENCE_S=0` để quay lại một đồng hồ dài duy nhất; tăng lên nếu
+thiết bị bắt đầu cắt lời ở những quãng nghỉ giữa câu.
+
+Phần còn lại của mục này nói về bản thân đồng hồ, và áp dụng cho cả hai.
 Chỉ dùng RMS là không đủ trong phòng ồn: tiếng ồn phòng nằm trên
 `RMS_THRESHOLD`, nên frame nào cũng refresh đồng hồ, lượt chạy tới hết
 `MAX_SESSION_DURATION_S`, và audio gần như toàn tiếng ồn vẫn được đẩy sang STT —
