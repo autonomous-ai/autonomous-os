@@ -768,6 +768,26 @@ chủ vẫn gọi tên chủ cũ (lamp-ac82, 2026-09-03).
 - Enrollment store rỗng (máy mới) là no-op; store không đọc được là lỗi và không
   đổi gì, thay vì đoán.
 
+### Giữ hai file bộ nhớ không phình vô hạn
+
+Chúng tốn token theo cách khác nhau, nên cũng bị chặn theo cách khác nhau.
+
+| | Nằm trong system prompt? | Bị tính token | Trần |
+|---|---|---|---|
+| `USER.md` | **có** — là bootstrap file | **mỗi lượt** | 12000 ký tự (`bootstrapMaxChars`), vượt thì cắt từ đuôi |
+| `KNOWLEDGE.md` | **không** — OpenClaw không biết file này | một lần mỗi session, khi agent đọc | không có |
+
+`KNOWLEDGE.md` vốn không có trần nào: synthesis hằng ngày append thêm một block
+`## YYYY-MM-DD` cho mỗi ngày hoạt động và không có gì xoá bớt. Đo trên lamp-ac82
+là ~666 B/ngày — một năm dùng sẽ tới ~166 KB (~42k token) và bị đọc lại mỗi
+session.
+
+Hướng dẫn heartbeat giờ chặn lại: **giữ 14 block ngày gần nhất**, những gì cũ hơn
+thì fold phần còn đúng vào các mục distilled ở đầu file (Hardware / Users /
+Skills & APIs / Mistakes Made) rồi xoá block đó. Cách này dùng đúng cấu trúc sẵn
+có — mục đầu file chính là *"Distilled from daily memory logs"*, còn các block
+ngày là nguyên liệu thô — và ngày thô vẫn còn trong `memory/YYYY-MM-DD.md`.
+
 ### Đồng bộ người dùng hằng ngày (KNOWLEDGE.md → USER.md)
 
 Lượt heartbeat có bước thứ hai sau knowledge synthesis: mang những gì học được về
@@ -795,7 +815,11 @@ không được phép âm thầm làm mất nó.
 
 | Quy tắc | Vì sao quan trọng |
 |---|---|
-| Mỗi người một bullet dưới `## Users`, dạng `- **<label> (friend)**: …` | `<label>` là enrollment label lấy từ `[context: current_user=…]`, đúng khoá mà reconcile của OS dùng. Phần `(friend)` là thứ phân biệt một con người với một field biểu mẫu — thiếu nó, `**Notes:** …` sẽ bị đọc thành người tên "Notes:" và bị xoá. |
+| Mỗi người một bullet dưới `## Users`, dạng `- **<label> (friend)** — call: …; notes: …` | `<label>` là enrollment label lấy từ `[context: current_user=…]`, đúng khoá mà reconcile của OS dùng. Phần `(friend)` là thứ phân biệt một con người với một field biểu mẫu — thiếu nó, `**Notes:** …` sẽ bị đọc thành người tên "Notes:" và bị xoá. |
+| Các đoạn `key: value` ngắn, không phải văn xuôi; `call:` đứng đầu | Các field của template là đơn nhất (một `**Name:**`, một `**Timezone:**`) nên không mô tả nổi hai người, nhưng lồng chúng theo từng người thì không sống sót qua file: `parseEntries` → `serialize` làm phẳng mọi bullet thành `- …`, nên field con thụt lề bị tách khỏi người của nó. Các đoạn giữ được *ý* của biểu mẫu — dữ kiện tách bạch, có nhãn — trong một entry prune được. Lần đầu để văn xuôi tự do đã cho ra một đoạn ~600 ký tự với cách xưng hô nằm lẫn ở câu thứ tư. |
+| Không bao giờ đoán `call:`, đại từ nhân xưng hay múi giờ | Agent chỉ thấy một face label và một voiceprint. Không thứ nào nói lên người ta muốn được gọi thế nào. Chỉ ghi khi họ đã tự nói; nếu chưa, bỏ hẳn đoạn đó. |
+| Mỗi entry dưới ~400 ký tự | `USER.md` bị tính token mỗi lượt, và vượt `bootstrapMaxChars` (12000) thì OpenClaw cắt bằng `text.slice(0, cutPoint)` — giữ đầu, **cắt đuôi** — mà `## Users` chính là phần đuôi. Profile phình to sẽ âm thầm mất đúng phần dữ liệu về người. `ReconcileUserProfiles` cảnh báo từ mốc 9000. |
+| Người lạ không có entry | `## Users` khoá theo enrollment label; một khuôn mặt đi ngang không có label nào. Lưu lượng người qua bàn thì ghi ở `KNOWLEDGE.md`. |
 | Chỉ ghi điều quan sát được về **chính** người đó | Lỗi ban đầu là hai người bị gộp thành một profile (`Long/Leo`). Không bao giờ chuyển thói quen của người này sang người khác. |
 | Chỉ thêm và cập nhật — **không bao giờ xoá** | Vắng mặt không phải là rời đi. Retire một người là việc của OS (`ReconcileUserProfiles`, khoá theo enrollment), không phải của agent. |
 | Không điền `**Name:**` và các field đơn giá trị khác | Chúng là đơn nhất, không biểu diễn được thiết bị nhiều người — điền từ quan sát trong ngày sẽ giật qua giật lại giữa các user. Ai đang có mặt lấy từ tag mỗi lượt. |

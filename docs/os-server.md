@@ -785,6 +785,25 @@ kept greeting its previous owner by name (lamp-ac82, 2026-09-03).
 - An empty enrollment store (fresh device) is a no-op; an unreadable one is an
   error that changes nothing, rather than a guess.
 
+### Keeping the two memory files bounded
+
+They cost differently, so they are bounded differently.
+
+| | In the system prompt? | Billed | Cap |
+|---|---|---|---|
+| `USER.md` | **yes** — a bootstrap file | **every turn** | 12000 chars (`bootstrapMaxChars`), then truncated tail-first |
+| `KNOWLEDGE.md` | **no** — OpenClaw does not know the file | once per session, when the agent reads it | none by construction |
+
+`KNOWLEDGE.md` had no cap at all: the daily synthesis appends a `## YYYY-MM-DD`
+block per active day and nothing ever removed one. Measured on lamp-ac82 at
+~666 B/day, a year of use reaches ~166 KB (~42k tokens) re-read every session.
+
+The heartbeat instruction now caps it: **keep the 14 most recent dated blocks**,
+fold anything older into the distilled top sections (Hardware / Users / Skills &
+APIs / Mistakes Made), delete the block. That uses the structure already there —
+the top section is *"Distilled from daily memory logs"*, the dated blocks are raw
+material — and the raw day still exists in `memory/YYYY-MM-DD.md`.
+
 ### Daily people sync (KNOWLEDGE.md → USER.md)
 
 The heartbeat pass has a second step after knowledge synthesis: carry what was
@@ -813,7 +832,11 @@ Rules the agent is given, and why each one is load-bearing:
 
 | Rule | Why |
 |---|---|
-| One bullet per person under `## Users`, as `- **<label> (friend)**: …` | `<label>` is the enrollment label from `[context: current_user=…]`, which is what the OS reconcile keys on. The `(friend)` parenthetical is what distinguishes a person from a form field — without it, `**Notes:** …` would parse as a person named "Notes:" and get deleted. |
+| One bullet per person under `## Users`, as `- **<label> (friend)** — call: …; notes: …` | `<label>` is the enrollment label from `[context: current_user=…]`, which is what the OS reconcile keys on. The `(friend)` parenthetical is what distinguishes a person from a form field — without it, `**Notes:** …` would parse as a person named "Notes:" and get deleted. |
+| Short `key: value` segments, not prose; `call:` first | The template's own fields are singular (one `**Name:**`, one `**Timezone:**`) and cannot describe two people, but nesting them per person does not survive the file: `parseEntries` → `serialize` flattens every bullet to `- …`, so indented sub-fields detach from their person. Segments keep the form's *idea* — separated, labelled facts — in one prunable entry. The first attempt was flowing prose and produced a ~600-char paragraph with the address form buried in sentence four. |
+| Never guess `call:`, pronouns or timezone | The agent sees a face label and a voiceprint. Neither says anything about how someone wants to be addressed. Record them only when the person has said so; otherwise omit the segment. |
+| Each entry under ~400 chars | `USER.md` is billed on every turn, and past `bootstrapMaxChars` (12000) OpenClaw truncates with `text.slice(0, cutPoint)` — head kept, **tail cut** — and `## Users` is the tail. An oversized profile silently loses exactly the person data. `ReconcileUserProfiles` warns at 9000. |
+| Strangers get no entry | `## Users` is keyed by enrollment label; a passing face has none. Desk traffic belongs in `KNOWLEDGE.md`. |
 | Only write what was observed about **that** person | The original failure was two people fused into one profile (`Long/Leo`). Never move one person's habits onto another. |
 | Update and add only — **never delete** | Absence is not departure. Retiring a person is the OS's job (`ReconcileUserProfiles`, keyed on enrollment), not the agent's. |
 | Do not fill `**Name:**` or the other single-value fields | They are singular and cannot represent a multi-user device — filling them from the day's observations would thrash between users. Who is present comes from the per-turn tag. |

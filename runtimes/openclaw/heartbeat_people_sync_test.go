@@ -16,13 +16,16 @@ func TestHeartbeatPeopleSyncFormatMatchesTheReconciler(t *testing.T) {
 	// the two packages must not import each other for a prompt string).
 	usersBlock := regexp.MustCompile(`(?i)^(?:Users:\s*)?\*\*([^*(]+?)\s*\([^)]*\)\*\*`)
 
-	if !strings.Contains(heartbeatMDBlock, "- **<label> (friend)**:") {
+	if !strings.Contains(heartbeatMDBlock, "- **<label> (friend)** — call: …; notes: …") {
 		t.Fatal("the instruction no longer specifies the person-entry format")
 	}
-	// What the agent is told to write, with the placeholder filled in.
+	// What the agent is told to write, with the placeholder filled in. The
+	// segment form must parse the same as the older prose form did — the
+	// reconciler only ever keys on the leading **label (role)**.
 	for _, entry := range []string{
-		"**long (friend)**: prefers Vietnamese",
-		"Users: **long (friend)**: prefers Vietnamese", // after heading flattening
+		"**long (friend)** — call: anh Long; notes: hunches at the screen",
+		"Users: **long (friend)** — call: anh Long; notes: hunches", // after heading flattening
+		"**long (friend)**: prefers Vietnamese",                     // legacy prose entries still prune
 	} {
 		m := usersBlock.FindStringSubmatch(entry)
 		if m == nil {
