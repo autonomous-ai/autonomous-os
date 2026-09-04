@@ -51,7 +51,7 @@ Camera chạy **1280×720**. Mọi thành phần vision nặng — ViT tracker v
 | Path | Detector | Khi nào | Tốc độ (A523) |
 |------|----------|---------|---------------|
 | 0 | **YuNet** face detector (`face_detection_yunet_2023mar.onnx`) | target ∈ {`face`, `human face`, `khuôn mặt`, `mặt`} | ~30 ms |
-| 1 | **Local YOLOv8n** (COCO classes, `yolov8n.onnx`, imgsz=448) | target map tới một COCO class | ~250–630 ms, trung vị ~380 ms (đo trên lamp-0c89, ONNX Runtime 1.27 CPU, input 1280x720) |
+| 1 | **Local YOLOv8n** (COCO classes, `yolov8n.pt`, imgsz=448) | target map tới một COCO class | ~310–530 ms, trung vị ~360 ms (đo trên lamp-0c89, input 1280x720) |
 | 2 | **Remote YOLOWorld** open-vocab (`{DL_BACKEND_URL}/detect/yoloworld`) | target không thuộc COCO, hoặc local miss (fallback) | **~0.55 s trung vị** (min 334 ms, p90 1.1 s, max 2.0 s; n=49 trên lamp-0c89) |
 
 - COCO không có class hand/face, nên `hand`/`face` cố ý rơi xuống YuNet/YOLOWorld thay vì map tới `person` (vốn khóa vào toàn thân).
@@ -305,8 +305,10 @@ Camera section hiển thị:
 ## Dependencies
 
 - `opencv-python>=4.8.0` (đã có trong `pyproject.toml`)
-- `ultralytics` — inference local YOLOv8n, nạp model ONNX qua `onnxruntime` (vốn đã là dependency của HAL; PyTorch là cách chậm nhất để chạy graph này trên Cortex-A55)
-- `vittrack.onnx`, `yolov8n.onnx`, `face_detection_yunet_2023mar.onnx` — đã check vào `hal/drivers/tracking/models/`, nên deploy vẫn là một lệnh rsync và thiết bị không cần internet lúc boot. Model YOLO chỉ lưu dạng ONNX; bản `.pt` của ultralytics không giữ kèm. Muốn đổi `_LOCAL_IMGSZ` (được nướng vào bản export) thì tải weights nguồn về rồi export lại bằng `hal/scripts/export_yolo_onnx.py`, sau đó commit kết quả.
+- `ultralytics` — inference local YOLOv8n
+- `vittrack.onnx`, `yolov8n.pt`, `face_detection_yunet_2023mar.onnx` — đã check vào `hal/drivers/tracking/models/`, nên deploy là một lệnh rsync và thiết bị không cần internet lúc boot.
+
+> **Đừng export YOLO sang ONNX để tăng tốc.** Đã thử và đã revert. Đo trên lamp-0c89 ở imgsz 448, xen kẽ: `.pt` qua torch 310/360/427/526 ms (min/p50/p90/max, n=25) so với `.onnx` qua onnxruntime 179/245/561/607 ms — ONNX thắng trung vị, thua phần đuôi, và lần đo tuần tự đầu tiên cho kết quả ngược lại. Tranh chấp CPU với camera/voice/servo loop của HAL trên 4 nhân át mất chênh lệch. Nó cũng không tiết kiệm dependency nào (`ultralytics` vẫn kéo torch và chính nó là thứ nạp `.onnx`), trong khi tốn 6 MB và nướng cứng `_LOCAL_IMGSZ` vào bản export.
 - `requests` (đã có trong project)
 - **YOLOWorld API** — DL backend tại `{DL_BACKEND_URL}/detect/yoloworld` (chỉ open-vocab fallback)
 

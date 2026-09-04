@@ -51,7 +51,7 @@ The camera runs **1280×720**. Every heavy vision component — the ViT tracker 
 | Path | Detector | When | Speed (A523) |
 |------|----------|------|--------------|
 | 0 | **YuNet** face detector (`face_detection_yunet_2023mar.onnx`) | target ∈ {`face`, `human face`, `khuôn mặt`, `mặt`} | ~30 ms |
-| 1 | **Local YOLOv8n** (COCO classes, `yolov8n.onnx`, imgsz=448) | target maps to a COCO class | ~250–630 ms, median ~380 ms (measured on lamp-0c89, ONNX Runtime 1.27 CPU, 1280x720 input) |
+| 1 | **Local YOLOv8n** (COCO classes, `yolov8n.pt`, imgsz=448) | target maps to a COCO class | ~310–530 ms, median ~360 ms (measured on lamp-0c89, 1280x720 input) |
 | 2 | **Remote YOLOWorld** open-vocab (`{DL_BACKEND_URL}/detect/yoloworld`) | non-COCO target, or local miss (fallback) | **~0.55 s median** (334 ms min, 1.1 s p90, 2.0 s max; n=49 on lamp-0c89) |
 
 - COCO has no hand/face class, so `hand`/`face` intentionally fall through to YuNet/YOLOWorld instead of mapping to `person` (which locked onto the whole body).
@@ -305,8 +305,10 @@ Camera section shows:
 ## Dependencies
 
 - `opencv-python>=4.8.0` (already in `pyproject.toml`)
-- `ultralytics` — local YOLOv8n inference, loading the ONNX model through `onnxruntime` (already a HAL dependency; PyTorch is the slowest way to execute this graph on a Cortex-A55)
-- `vittrack.onnx`, `yolov8n.onnx`, `face_detection_yunet_2023mar.onnx` — checked into `hal/drivers/tracking/models/`, so deploy stays one rsync and the device needs no internet at boot. The YOLO model is stored as ONNX only; the `.pt` ultralytics ships is not kept alongside it. To change `_LOCAL_IMGSZ` (baked into the export), fetch the source weights and re-export with `hal/scripts/export_yolo_onnx.py`, then commit the result.
+- `ultralytics` — local YOLOv8n inference
+- `vittrack.onnx`, `yolov8n.pt`, `face_detection_yunet_2023mar.onnx` — checked into `hal/drivers/tracking/models/`, so deploy is one rsync and the device needs no internet at boot.
+
+> **Don't export YOLO to ONNX to speed it up.** Tried and reverted. Benchmarked on lamp-0c89 at imgsz 448, interleaved: `.pt` via torch 310/360/427/526 ms (min/p50/p90/max, n=25) against `.onnx` via onnxruntime 179/245/561/607 ms — ONNX won the median, lost the tail, and a first sequential run had them the other way round. Contention with HAL's camera, voice and servo loops on four cores swamps the difference. It also saves no dependency (`ultralytics` pulls torch regardless and is what loads the `.onnx`), while costing 6 MB and baking `_LOCAL_IMGSZ` into the export.
 - `requests` (already in project)
 - **YOLOWorld API** — DL backend at `{DL_BACKEND_URL}/detect/yoloworld` (open-vocab fallback only)
 

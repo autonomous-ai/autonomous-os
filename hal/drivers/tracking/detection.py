@@ -36,20 +36,30 @@ logger = logging.getLogger(__name__)
 # this file so deploy is one rsync and the Pi never needs internet at boot to
 # start tracking.
 #
-# Stored as ONNX rather than the .pt ultralytics ships. Same weights and the
-# same ultralytics API — the export carries its class names, so `.names` and
-# every gate below are unchanged — but the .pt path runs PyTorch on the CPU,
-# which is the slowest way to execute this graph on a Cortex-A55. onnxruntime
-# is already a HAL dependency (YuNet and the ViT tracker are ONNX too); YOLO
-# was the last thing still on torch.
+# Source:
+# https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8n.pt
 #
-# The .pt is NOT kept alongside it. Carrying both would mean 19 MB to say one
-# thing, and a fallback path that only ever runs when a deploy is half-applied
-# — a state worth failing loudly on, not limping through. To change _LOCAL_IMGSZ
-# (which the export bakes in), fetch the source weights and re-export:
-#   curl -LO https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8n.pt
-#   uv run python hal/scripts/export_yolo_onnx.py yolov8n.pt
-_LOCAL_MODEL_PATH = os.path.join(os.path.dirname(__file__), "models", "yolov8n.onnx")
+# DON'T "speed this up" by exporting to ONNX. It was tried and reverted. The
+# reasoning was that torch is a training framework and the slowest way to run
+# this graph on a Cortex-A55, so ONNX would buy back the cost of raising
+# _LOCAL_IMGSZ. Benchmarked on lamp-0c89 at imgsz 448, interleaved so thermal
+# drift hit both:
+#
+#            n=25   min   p50   p90   max
+#   .pt      torch  310   360   427   526 ms
+#   .onnx    ort    179   245   561   607 ms
+#
+# ONNX won the median and lost the tail, and a first (sequential) run had them
+# the other way round — 297 vs 340. The device runs HAL's camera, voice and
+# servo loops on four cores, so contention swamps the difference: it is noise,
+# not a win. It also saves no dependency, which was the other half of the
+# argument — `ultralytics` pulls torch in regardless, and is itself what loads
+# the .onnx.
+#
+# What it does cost is real: +6MB in the repo, the input size baked into the
+# export so _LOCAL_IMGSZ can no longer be changed by editing one line, and a
+# re-export step in the way of doing it.
+_LOCAL_MODEL_PATH = os.path.join(os.path.dirname(__file__), "models", "yolov8n.pt")
 # Inference size for local YOLO. YOLO letterboxes whatever it is handed down to
 # imgsz, so this single number IS the detector's effective resolution: at 320
 # against the lamp's 1280-wide camera, everything reaches the model at 0.25x.
@@ -58,9 +68,10 @@ _LOCAL_MODEL_PATH = os.path.join(os.path.dirname(__file__), "models", "yolov8n.o
 # small-object session miss locally, fall through to the slower remote, and
 # freeze the servo on the trust gate.
 #
-# 448 puts the same cup at ~42px. It costs ~2x the pixels of 320, which is what
-# the ONNX runtime buys back; 640 stays out of reach (it measured 1.3-2.9s/call
-# on torch and pushed yolo_age past the trust window entirely).
+# 448 puts the same cup at ~42px and measured 310-526ms on device — no slower
+# than 320 was, because the cost is dominated by CPU contention with the rest of
+# HAL rather than by the pixel count. 640 stays out of reach (it measured
+# 1.3-2.9s/call and pushed yolo_age past the trust window entirely).
 #
 _LOCAL_IMGSZ = 448
 
@@ -160,10 +171,7 @@ def _get_local_yolo():
             from ultralytics import YOLO
             logger.info("Loading local YOLO model from %s (imgsz=%d)", path, _LOCAL_IMGSZ)
             t0 = time.perf_counter()
-            # task= is required for the ONNX path: the export carries class
-            # names but not the task, and without it ultralytics logs a guess
-            # warning on every boot.
-            _local_yolo = YOLO(path, task="detect")
+            _local_yolo = YOLO(path)
             # Warm-up inference to trigger model compile/cache.
             import numpy as _np
             _local_yolo(_np.zeros((480, 640, 3), dtype=_np.uint8),
