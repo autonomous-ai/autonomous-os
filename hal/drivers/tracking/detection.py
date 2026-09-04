@@ -32,20 +32,24 @@ from hal.drivers.tracking.frame_utils import downscale, scale_bbox
 logger = logging.getLogger(__name__)
 
 # Local YOLOv8n (COCO). Used by default when target maps to a COCO class;
-# falls back to the remote API for open-vocab. Weights are checked into the
-# repo next to this file so deploy is one rsync and the Pi never needs internet
-# at boot to start tracking. Source:
-# https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8n.pt
+# falls back to the remote API for open-vocab. Checked into the repo next to
+# this file so deploy is one rsync and the Pi never needs internet at boot to
+# start tracking.
 #
-# ONNX is preferred over the .pt. Same weights, same ultralytics API (the
-# exported model carries its class names, so `.names` and every gate below are
-# unchanged) — but the .pt path runs PyTorch on the CPU, which is the slowest
-# way to execute this graph on a Cortex-A55. onnxruntime is already a HAL
-# dependency (YuNet and the ViT tracker are ONNX too); YOLO was the last thing
-# still on torch. Export with `hal/scripts/export_yolo_onnx.py`; the .pt stays
-# as the fallback so a device that has not taken the new model yet still sees.
-_LOCAL_MODEL_ONNX = os.path.join(os.path.dirname(__file__), "models", "yolov8n.onnx")
-_LOCAL_MODEL_PT = os.path.join(os.path.dirname(__file__), "models", "yolov8n.pt")
+# Stored as ONNX rather than the .pt ultralytics ships. Same weights and the
+# same ultralytics API — the export carries its class names, so `.names` and
+# every gate below are unchanged — but the .pt path runs PyTorch on the CPU,
+# which is the slowest way to execute this graph on a Cortex-A55. onnxruntime
+# is already a HAL dependency (YuNet and the ViT tracker are ONNX too); YOLO
+# was the last thing still on torch.
+#
+# The .pt is NOT kept alongside it. Carrying both would mean 19 MB to say one
+# thing, and a fallback path that only ever runs when a deploy is half-applied
+# — a state worth failing loudly on, not limping through. To change _LOCAL_IMGSZ
+# (which the export bakes in), fetch the source weights and re-export:
+#   curl -LO https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8n.pt
+#   uv run python hal/scripts/export_yolo_onnx.py yolov8n.pt
+_LOCAL_MODEL_PATH = os.path.join(os.path.dirname(__file__), "models", "yolov8n.onnx")
 # Inference size for local YOLO. YOLO letterboxes whatever it is handed down to
 # imgsz, so this single number IS the detector's effective resolution: at 320
 # against the lamp's 1280-wide camera, everything reaches the model at 0.25x.
@@ -58,7 +62,6 @@ _LOCAL_MODEL_PT = os.path.join(os.path.dirname(__file__), "models", "yolov8n.pt"
 # the ONNX runtime buys back; 640 stays out of reach (it measured 1.3-2.9s/call
 # on torch and pushed yolo_age past the trust window entirely).
 #
-# Re-export the ONNX if you change this — the export bakes the input size in.
 _LOCAL_IMGSZ = 448
 
 # YuNet face detector (OpenCV built-in). Lighter than InsightFace, ~30ms/frame on
@@ -145,9 +148,7 @@ def _get_local_yolo():
     with _local_yolo_lock:
         if _local_yolo is not None:
             return _local_yolo
-        # Prefer the ONNX export; fall back to the .pt so a device that has
-        # not taken the new model yet keeps detecting (slower, not blind).
-        path = _LOCAL_MODEL_ONNX if os.path.exists(_LOCAL_MODEL_ONNX) else _LOCAL_MODEL_PT
+        path = _LOCAL_MODEL_PATH
         if not os.path.exists(path):
             logger.error(
                 "YOLO weights missing at %s — re-deploy from repo (file is checked in). "

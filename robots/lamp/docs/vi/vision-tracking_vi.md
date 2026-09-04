@@ -51,7 +51,7 @@ Camera chạy **1280×720**. Mọi thành phần vision nặng — ViT tracker v
 | Path | Detector | Khi nào | Tốc độ (A523) |
 |------|----------|---------|---------------|
 | 0 | **YuNet** face detector (`face_detection_yunet_2023mar.onnx`) | target ∈ {`face`, `human face`, `khuôn mặt`, `mặt`} | ~30 ms |
-| 1 | **Local YOLOv8n** (COCO classes, `yolov8n.onnx`, fallback `yolov8n.pt`, imgsz=448) | target map tới một COCO class | ~240–495 ms (đo trên lamp-ac82, ONNX Runtime 1.27 CPU, input 1280x720) |
+| 1 | **Local YOLOv8n** (COCO classes, `yolov8n.onnx`, imgsz=448) | target map tới một COCO class | ~250–630 ms, trung vị ~380 ms (đo trên lamp-0c89, ONNX Runtime 1.27 CPU, input 1280x720) |
 | 2 | **Remote YOLOWorld** open-vocab (`{DL_BACKEND_URL}/detect/yoloworld`) | target không thuộc COCO, hoặc local miss (fallback) | **~0.55 s trung vị** (min 334 ms, p90 1.1 s, max 2.0 s; n=49 trên lamp-0c89) |
 
 - COCO không có class hand/face, nên `hand`/`face` cố ý rơi xuống YuNet/YOLOWorld thay vì map tới `person` (vốn khóa vào toàn thân).
@@ -305,9 +305,8 @@ Camera section hiển thị:
 ## Dependencies
 
 - `opencv-python>=4.8.0` (đã có trong `pyproject.toml`)
-- `ultralytics` — inference local YOLOv8n (nạp bản export ONNX; `onnxruntime` vốn đã là dependency của HAL, còn đường `.pt` chạy PyTorch trên CPU, cách chậm nhất để chạy graph này trên Cortex-A55)
-- `vittrack.onnx`, `yolov8n.pt`, `face_detection_yunet_2023mar.onnx` — đã check vào `hal/drivers/tracking/models/`
-- `yolov8n.onnx` — sinh ra, không check vào repo: `uv run python hal/scripts/export_yolo_onnx.py`. Detector ưu tiên file này và fallback về `.pt` khi vắng, nên thiết bị chưa nhận model mới thì chậm hơn chứ không mù.
+- `ultralytics` — inference local YOLOv8n, nạp model ONNX qua `onnxruntime` (vốn đã là dependency của HAL; PyTorch là cách chậm nhất để chạy graph này trên Cortex-A55)
+- `vittrack.onnx`, `yolov8n.onnx`, `face_detection_yunet_2023mar.onnx` — đã check vào `hal/drivers/tracking/models/`, nên deploy vẫn là một lệnh rsync và thiết bị không cần internet lúc boot. Model YOLO chỉ lưu dạng ONNX; bản `.pt` của ultralytics không giữ kèm. Muốn đổi `_LOCAL_IMGSZ` (được nướng vào bản export) thì tải weights nguồn về rồi export lại bằng `hal/scripts/export_yolo_onnx.py`, sau đó commit kết quả.
 - `requests` (đã có trong project)
 - **YOLOWorld API** — DL backend tại `{DL_BACKEND_URL}/detect/yoloworld` (chỉ open-vocab fallback)
 
