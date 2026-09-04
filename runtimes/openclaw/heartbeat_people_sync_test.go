@@ -44,7 +44,7 @@ func TestHeartbeatPeopleSyncCarriesItsConstraints(t *testing.T) {
 	for _, want := range []string{
 		"Only write what you observed about THAT person", // no cross-attribution
 		"never carry a former user's traits",             // the lamp-ac82 failure
-		"Update and add only — never delete",             // absence is not departure
+		"Never delete a PERSON's entry",                  // absence is not departure
 		"Do NOT fill",                                    // Name stays the enrollment tag's job
 	} {
 		if !strings.Contains(heartbeatMDBlock, want) {

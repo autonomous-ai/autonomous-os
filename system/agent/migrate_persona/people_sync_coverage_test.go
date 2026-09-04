@@ -50,7 +50,6 @@ func TestEveryRuntimeTeachesThePeopleSync(t *testing.T) {
 		for _, want := range []string{
 			"Only write what you observed about THAT person",
 			"never carry a former user's traits",
-			"never delete",
 			// Pronouns and timezone are not observable from a face label and a
 			// voiceprint. Guessing them is guessing about a person, and being
 			// wrong there costs more than leaving the field empty.
@@ -64,7 +63,14 @@ func TestEveryRuntimeTeachesThePeopleSync(t *testing.T) {
 			// USER.md is billed on every turn.
 			"400 characters",
 			// A passing face has no enrollment label to key on.
-			"Strangers get NO entry",
+			// The rule must act on entries ALREADY in the file, not only on
+			// future writes — the OS pruner cannot reach a malformed
+			// "**stranger_2/3/4/…**" line (no `(role)` parenthetical), and the
+			// "never delete" rule would otherwise tell the agent to leave it.
+			"remove any you find",
+			// "never delete" is scoped to PEOPLE so it cannot be read as
+			// protecting a line that should never have been there.
+			"Never delete a PERSON's entry",
 		} {
 			if !strings.Contains(text, want) {
 				t.Errorf("%s: people sync is missing constraint %q", e.Name(), want)
