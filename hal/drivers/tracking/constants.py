@@ -308,9 +308,20 @@ SERVO_MIN_CONF = 0.25
 # (the tracker still has a solid lock — common when face moves fast and YuNet
 # misses a few frames). Below this → freeze servo, wait for detector.
 TRACKER_TRUST_CONF = 0.4
-# Detector-gated trust window (seconds). With redetect=1.5s this allows ~1
-# missed redetect before the tracker is treated as suspect.
+# Detector-gated trust window (seconds) — a FLOOR, not the value used. The
+# loop sizes the real window from the detector's measured latency
+# (YOLO_REDETECT_S + 2 x latency + TRUST_MARGIN_S), because the same loop is
+# served by detectors three orders of magnitude apart: YuNet at ~30ms, local
+# YOLO at ~0.5s, the remote open-vocab model at 1.3-3s. A single constant is
+# only ever correct for one of them, and 2.5 was correct for the fastest — so
+# every slower target sat in WAIT-YOLO with the object plainly in frame.
+# This floor still applies when the detector is fast, keeping face behaviour
+# exactly as it was.
 TRUST_TRACKER_S = 2.5
+# Slack on top of one redetect cycle, so ordinary scheduling jitter (a frame
+# that arrived late, a detect thread that started a beat behind) does not read
+# as a missed confirm.
+TRUST_MARGIN_S = 0.5
 # No detector confirm at all for this long → the lock is a ghost, stop.
 STOP_NO_YOLO_S = 20.0
 

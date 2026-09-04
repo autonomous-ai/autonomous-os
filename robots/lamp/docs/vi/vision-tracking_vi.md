@@ -51,11 +51,12 @@ Camera chạy **1280×720**. Mọi thành phần vision nặng — ViT tracker v
 | Path | Detector | Khi nào | Tốc độ (A523) |
 |------|----------|---------|---------------|
 | 0 | **YuNet** face detector (`face_detection_yunet_2023mar.onnx`) | target ∈ {`face`, `human face`, `khuôn mặt`, `mặt`} | ~30 ms |
-| 1 | **Local YOLOv8n** (COCO classes, `yolov8n.pt`, imgsz=320) | target map tới một COCO class | ~260–770 ms |
+| 1 | **Local YOLOv8n** (COCO classes, `yolov8n.onnx`, fallback `yolov8n.pt`, imgsz=448) | target map tới một COCO class | ~240–495 ms (đo trên lamp-ac82, ONNX Runtime 1.27 CPU, input 1280x720) |
 | 2 | **Remote YOLOWorld** open-vocab (`{DL_BACKEND_URL}/detect/yoloworld`) | target không thuộc COCO, hoặc local miss (fallback) | ~1.3–2.8 s |
 
 - COCO không có class hand/face, nên `hand`/`face` cố ý rơi xuống YuNet/YOLOWorld thay vì map tới `person` (vốn khóa vào toàn thân).
 - Khi local-YOLO miss, code fallback về remote YOLOWorld, **throttle** tối đa một lần mỗi `REMOTE_FALLBACK_MIN_INTERVAL` (2.0 s) để một target thật sự không thể thấy không gọi remote mỗi lần redetect.
+- **Fallback bị tắt cho redetect thường kỳ** (`allow_remote_fallback=False`, do background scan của loop truyền vào). Khi target COCO đã khoá được rồi thì một lần local miss là chuyện bình thường — vật xoay đi, một khung hình nhoè — mà thread detect chỉ chạy một luồng, nên một vòng gọi remote kéo chu kỳ confirm từ ~0.5 s lên ~3 s, vượt cổng trust và làm servo đứng im trong khi vật vẫn còn trong khung. Local là thẩm quyền cho class mà nó được huấn luyện; để lần redetect sau xác nhận. Lúc seed và lúc phục hồi sau khi mất lock (`_do_retry`) vẫn cho phép remote, còn target open-vocab thì không ảnh hưởng — không có đường local thì chẳng có gì để fallback.
 - Bộ lọc chất lượng detection: confidence ≥ `DETECT_MIN_CONFIDENCE` (0.15), diện tích nằm giữa `DETECT_MIN_AREA_RATIO` (0.3%) và `DETECT_MAX_AREA_RATIO` (80%) của frame.
 - **Chống nhầm vật giống nhau (đường local)** — YOLO local detect **mở** (không filter `classes=`) để các class cạnh tranh còn hiện diện, sau đó: (a) cụm dễ nhầm cell phone / mouse / remote cần conf ≥ 0.35 (`_CONFUSABLE_CONF_FLOOR`) thay vì 0.15 chung; (b) **cross-class disambiguation** — nếu một box class khác đè lên candidate (IoU ≥ 0.5) với confidence *cao hơn*, candidate bị từ chối ("đó chắc là con chuột, không phải cái điện thoại anh hỏi") và code rơi xuống remote fallback. Floor 0.35 chỉ áp cho detect lúc *bắt đầu* session (`strict=True`); redetect giữa session dùng floor chung 0.15 (phone đang phẩy nhanh thường chỉ reconfirm ở conf 0.2–0.3, và các gate reinit đã bảo vệ lock) — cross-class check giữ nguyên cả hai chế độ.
 
@@ -112,7 +113,7 @@ Chuyển động phần cứng khi tracking: ở mỗi lần bắt đầu sessio
   - `BBOX_FREEZE_RATIO` (1.0) — bbox ≥ diện tích cả frame ⇒ ViT đã tan.
   - `BLOAT_HOLD_MULT` (3.0) — bbox > 3× diện tích lock tin cậy gần nhất ⇒ hold và buộc re-detect.
 - **Sàn confidence cho servo** — confidence ViT < `SERVO_MIN_CONF` (0.25) thì giữ servo (`LOW-CONF-HOLD`) kể cả khi detector vẫn đang confirm target; trước đây vùng conf 0.15–0.4 kèm confirm mới là vùng mù khiến servo đuổi theo một lock yếu (thường là ma). Tracker vẫn update và PID chạy lại khi confidence hồi.
-- **Detector-gated trust** — nếu không detector nào xác nhận trong `TRUST_TRACKER_S` (2.5 s) và confidence ViT < `TRACKER_TRUST_CONF` (0.4), giữ servo (`WAIT-YOLO`) thay vì đuổi một bóng ma; confidence ViT cao vẫn tiếp tục fire ngay cả khi không có detector confirm mới.
+- **Detector-gated trust** — nếu không detector nào xác nhận trong cửa sổ trust và confidence ViT < `TRACKER_TRUST_CONF` (0.4), giữ servo (`WAIT-YOLO`) thay vì đuổi một bóng ma; confidence ViT cao vẫn tiếp tục fire ngay cả khi không có detector confirm mới. Cửa sổ này **được tính theo latency đo được của detector**, không cố định: `trust_window_s()` trả về `max(TRUST_TRACKER_S, YOLO_REDETECT_S + 2 x latency + TRUST_MARGIN_S)`, với latency là EMA do background scan duy trì. Cùng một loop được phục vụ bởi các detector chênh nhau ba bậc độ lớn (YuNet ~30 ms, YOLO local ~0.5 s, remote 1.3–3 s), nên một hằng số chỉ đúng cho cái nhanh nhất — và 2.5 s khiến mọi target chậm hơn nằm lì ở `WAIT-YOLO` dù vật hiện rõ trong khung. Cái sàn giữ hành vi với mặt người y như cũ.
 - **Hold là hold thật** — mọi trạng thái hold (`LOW-CONF-HOLD`, `WAIT-YOLO`, `BLOAT-HOLD`, frame bị skip do low-confidence) đều retarget follow worker về pose *hiện tại* (`ServoFollower.hold()`). Trước đây hold chỉ ngừng publish goal mới, worker vẫn glide tiếp về goal cũ — nên arm vẫn "đuổi ma" thêm một nhịp sau khi lock đã hỏng.
 
 ### Chuyển đổi Pixel-sang-Degree
@@ -162,10 +163,10 @@ pitch_correction = clamp(PID(soft_deadband(dy)) + VFF·vy·deg_per_px·dt,  ±5�
 | `CONFIDENCE_THRESHOLD` | 0.15 | Dưới mức này = frame low-confidence |
 | `LOW_CONF_WINDOW` / `LOW_CONF_STOP_COUNT` | 15 / 8 | Cửa sổ trượt: ≥8 frame low trong 15 frame gần nhất → dừng (đếm liên-tiếp cũ bị reset bởi mỗi frame nhấp nháy vượt ngưỡng, khiến ghost lock sống mãi) |
 | `SERVO_MIN_CONF` | 0.25 | Sàn confidence để fire servo PID |
-| `TRACKER_TRUST_CONF` / `TRUST_TRACKER_S` | 0.4 / 2.5 | Detector-gated trust (xem trên) |
+| `TRACKER_TRUST_CONF` / `TRUST_TRACKER_S` / `TRUST_MARGIN_S` | 0.4 / 2.5 / 0.5 | Detector-gated trust (xem trên). `TRUST_TRACKER_S` là **sàn**, không phải cửa sổ — cửa sổ được suy ra từng session theo latency đo được của detector |
 | `YOLO_MAX_MISS` | 30 | Số lần CSRT miss liên tiếp trước khi retry |
 | `MAX_TRACK_DURATION_S` | `HAL_TRACKING_MAX_DURATION_S` (10) | Timeout tự động dừng (mặc định 10 giây; cấu hình theo từng thiết bị) |
-| `_LOCAL_IMGSZ` | 320 | Kích thước inference local YOLO (640 → 1.3–2.9 s, quá chậm) |
+| `_LOCAL_IMGSZ` | 448 | Kích thước inference local YOLO. Đây CHÍNH LÀ độ phân giải hiệu dụng của detector — YOLO letterbox mọi input xuống giá trị này, nên với camera rộng 1280 thì 448 đưa vật tới model ở 0.35x còn 320 chỉ 0.25x. Vật nhỏ trên bàn (cup, book, phone) tới model ở ~30px với 320 nên bị bỏ sót. Đổi giá trị này thì phải export lại ONNX; kích thước được nướng vào file. (640 đo được 1.3–2.9 s trên torch — vẫn ngoài tầm.) |
 
 Mọi knob nằm trong `hal/drivers/tracking/constants.py`. (Đường proportional chết `GIMBAL_*` / `EMA_ALPHA` đã bị xoá khi tách package.)
 
@@ -304,8 +305,9 @@ Camera section hiển thị:
 ## Dependencies
 
 - `opencv-python>=4.8.0` (đã có trong `pyproject.toml`)
-- `ultralytics` — inference local YOLOv8n
+- `ultralytics` — inference local YOLOv8n (nạp bản export ONNX; `onnxruntime` vốn đã là dependency của HAL, còn đường `.pt` chạy PyTorch trên CPU, cách chậm nhất để chạy graph này trên Cortex-A55)
 - `vittrack.onnx`, `yolov8n.pt`, `face_detection_yunet_2023mar.onnx` — đã check vào `hal/drivers/tracking/models/`
+- `yolov8n.onnx` — sinh ra, không check vào repo: `uv run python hal/scripts/export_yolo_onnx.py`. Detector ưu tiên file này và fallback về `.pt` khi vắng, nên thiết bị chưa nhận model mới thì chậm hơn chứ không mù.
 - `requests` (đã có trong project)
 - **YOLOWorld API** — DL backend tại `{DL_BACKEND_URL}/detect/yoloworld` (chỉ open-vocab fallback)
 
@@ -323,7 +325,7 @@ Việc quay lại idle là một **dispatch tường minh**, không phải hệ 
 
 ## Ghi chú hiệu năng
 
-- Sàn CPU của fast-loop trên Allwinner A523 là chi phí ViT inference + detector; frame downscale (`VISION_MAX_WIDTH`) và local imgsz=320 là các đòn bẩy chính.
+- Sàn CPU của fast-loop trên Allwinner A523 là chi phí ViT inference + detector; frame downscale (`VISION_MAX_WIDTH`) và local imgsz là các đòn bẩy chính. Lưu ý `VISION_MAX_WIDTH` KHÔNG phải đòn bẩy cho *độ chính xác* detect: YOLO letterbox xuống `_LOCAL_IMGSZ` bất kể input to bao nhiêu, nên hạ scale frame trước chỉ đổi chi phí của tracker, không đổi tỉ lệ mà detector nhìn thấy.
 - Độ mượt chuyển động đến từ servo worker tách rời + SmoothDamp + velocity feedforward; alpha-beta filter + reinit gating giữ cho bản thân goal ổn định để follower không đuổi theo nhiễu.
 - Vật thể nhỏ/xa (ví dụ một cái ly ở đầu phòng) có thể vượt độ phân giải của cả detector local lẫn remote — đây là giới hạn perception, không phải bug điều khiển.
 </content>

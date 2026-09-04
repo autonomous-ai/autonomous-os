@@ -31,19 +31,35 @@ from hal.drivers.tracking.frame_utils import downscale, scale_bbox
 
 logger = logging.getLogger(__name__)
 
-# Local YOLOv8n (COCO) — ~300ms/frame on Allwinner A523 CPU. Used by default
-# when target maps to a COCO class. Falls back to remote API for open-vocab.
-# Weights are checked into the repo next to this file so deploy is one rsync
-# and the Pi never needs internet at boot to start tracking. Source:
+# Local YOLOv8n (COCO). Used by default when target maps to a COCO class;
+# falls back to the remote API for open-vocab. Weights are checked into the
+# repo next to this file so deploy is one rsync and the Pi never needs internet
+# at boot to start tracking. Source:
 # https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8n.pt
-_LOCAL_MODEL_PATH = os.path.join(os.path.dirname(__file__), "models", "yolov8n.pt")
-# Inference size for local YOLO. Kept at 320: on the Allwinner A523 CPU, 640
-# pushed inference to 1.3–2.9s/call, so YOLO could not confirm within the
-# trust window (yolo_age climbed past 20s) and the tracker sat in BLOAT-HOLD
-# pointing the wrong way. 320 keeps detection ~260ms — fast enough to correct
-# ViT drift every redetect. (Small/far objects that 320 misses are better
-# handled by the remote open-vocab detector than by a slower local imgsz.)
-_LOCAL_IMGSZ = 320
+#
+# ONNX is preferred over the .pt. Same weights, same ultralytics API (the
+# exported model carries its class names, so `.names` and every gate below are
+# unchanged) — but the .pt path runs PyTorch on the CPU, which is the slowest
+# way to execute this graph on a Cortex-A55. onnxruntime is already a HAL
+# dependency (YuNet and the ViT tracker are ONNX too); YOLO was the last thing
+# still on torch. Export with `hal/scripts/export_yolo_onnx.py`; the .pt stays
+# as the fallback so a device that has not taken the new model yet still sees.
+_LOCAL_MODEL_ONNX = os.path.join(os.path.dirname(__file__), "models", "yolov8n.onnx")
+_LOCAL_MODEL_PT = os.path.join(os.path.dirname(__file__), "models", "yolov8n.pt")
+# Inference size for local YOLO. YOLO letterboxes whatever it is handed down to
+# imgsz, so this single number IS the detector's effective resolution: at 320
+# against the lamp's 1280-wide camera, everything reaches the model at 0.25x.
+# A face or a person survives that; a cup, a book or a phone on the desk arrive
+# ~30px wide and are simply not there to be found — which is what made every
+# small-object session miss locally, fall through to the ~1.3-3s remote, and
+# freeze the servo on the trust gate.
+#
+# 448 puts the same cup at ~42px. It costs ~2x the pixels of 320, which is what
+# the ONNX runtime buys back; 640 stays out of reach (it measured 1.3-2.9s/call
+# on torch and pushed yolo_age past the trust window entirely).
+#
+# Re-export the ONNX if you change this — the export bakes the input size in.
+_LOCAL_IMGSZ = 448
 
 # YuNet face detector (OpenCV built-in). Lighter than InsightFace, ~30ms/frame on
 # Pi, no extra dependency. Used for target='face' so we don't fall back to the
@@ -129,18 +145,24 @@ def _get_local_yolo():
     with _local_yolo_lock:
         if _local_yolo is not None:
             return _local_yolo
-        if not os.path.exists(_LOCAL_MODEL_PATH):
+        # Prefer the ONNX export; fall back to the .pt so a device that has
+        # not taken the new model yet keeps detecting (slower, not blind).
+        path = _LOCAL_MODEL_ONNX if os.path.exists(_LOCAL_MODEL_ONNX) else _LOCAL_MODEL_PT
+        if not os.path.exists(path):
             logger.error(
                 "YOLO weights missing at %s — re-deploy from repo (file is checked in). "
                 "Falling back to remote YOLOWorld until present.",
-                _LOCAL_MODEL_PATH,
+                path,
             )
             return None
         try:
             from ultralytics import YOLO
-            logger.info("Loading local YOLO model from %s", _LOCAL_MODEL_PATH)
+            logger.info("Loading local YOLO model from %s (imgsz=%d)", path, _LOCAL_IMGSZ)
             t0 = time.perf_counter()
-            _local_yolo = YOLO(_LOCAL_MODEL_PATH)
+            # task= is required for the ONNX path: the export carries class
+            # names but not the task, and without it ultralytics logs a guess
+            # warning on every boot.
+            _local_yolo = YOLO(path, task="detect")
             # Warm-up inference to trigger model compile/cache.
             import numpy as _np
             _local_yolo(_np.zeros((480, 640, 3), dtype=_np.uint8),
@@ -389,7 +411,8 @@ class ObjectDetector:
 
     def detect(self, frame: npt.NDArray[np.uint8], target: str,
                strict: bool = True,
-               min_conf: Optional[float] = None) -> Optional[Tuple[int, int, int, int]]:
+               min_conf: Optional[float] = None,
+               allow_remote_fallback: bool = True) -> Optional[Tuple[int, int, int, int]]:
         """Detect an object by name. Tries local YOLOv8n first (fast, COCO classes),
         falls back to remote YOLOWorld API for open-vocab targets.
 
@@ -399,6 +422,13 @@ class ObjectDetector:
         floor — a fast-moving phone often reconfirms at conf 0.2–0.3, and the
         reinit gates (area median, IoU, center distance) already protect the
         lock; cross-class disambiguation stays on in both modes.
+
+        allow_remote_fallback=False keeps a target that HAS a local COCO path
+        on that path when local comes up empty, instead of spending 1.3-3s on
+        the remote detector. It does not affect an open-vocab target: with no
+        local path there is nothing to fall back FROM, and remote stays the
+        only detector. See the fallback block below for why the caller wants
+        this mid-session.
 
         min_conf raises the floor for THIS call only. The global
         DETECT_MIN_CONFIDENCE is 0.15, deliberately loose so the tracker keeps
@@ -484,6 +514,20 @@ class ObjectDetector:
                     # Local missed. Fall back to remote open-vocab YOLOWorld for
                     # small/far objects local can't see — but throttle it so a
                     # truly-unseeable target doesn't hit remote on every redetect.
+                    if not allow_remote_fallback:
+                        # Mid-session redetect on a COCO target. The tracker
+                        # already holds a lock; this call only has to confirm
+                        # it, and a single local miss (the object turned, motion
+                        # blur, one bad frame) is ordinary. Going to remote here
+                        # is actively harmful rather than merely wasteful: the
+                        # detect thread is single-flight, so one fallback
+                        # stretches a ~0.5s confirm cycle to ~3s, which pushes
+                        # yolo_age past the loop's trust window and freezes the
+                        # servo mid-follow. The object is still in frame and the
+                        # camera stops dead — the exact "it doesn't track
+                        # objects" symptom. Local is the authority for a class
+                        # it was trained on; let the next redetect confirm.
+                        return None
                     now_fb = time.perf_counter()
                     if now_fb - self._last_remote_attempt_t < REMOTE_FALLBACK_MIN_INTERVAL:
                         return None
