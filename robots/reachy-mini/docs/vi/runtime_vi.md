@@ -410,6 +410,35 @@ thread đang kẹt trong lần tải thư viện HF đầu tiên (chậm) không
 Backend Feetech có sẵn tính chất này: `aim` dừng event loop trước khi move, và
 loop đó là nguồn ghi duy nhất.
 
+### Thư viện move
+
+Move được tra trên nhiều dataset HF theo thứ tự — dataset ĐẦU TIÊN có tên đó
+thắng. Mặc định tìm trong hai thư viện, `pollen-robotics/reachy-mini-emotions-library`
+và `pollen-robotics/reachy-mini-dances-library`; cả hai đều được daemon tải sẵn
+lúc khởi động nên tra thêm không tốn lượt tải nào.
+
+`HAL_REACHY_MOVES` chèn dataset lên đầu thứ tự đó:
+
+```bash
+HAL_REACHY_MOVES="me/my-moves,someone/their-moves"
+```
+
+Move bạn tự ghi rồi đẩy lên Hub sẽ phát được bằng tên qua `/servo/play`, và gắn
+vào `_MOVE_MAP` thì đứng sau một emotion. Vì dataset tự chọn được xếp trước, đặt
+trùng tên với move chính chủ sẽ **che** move đó — đây chính là cách thay một
+emotion mặc định bằng bản của mình.
+
+Hai hệ quả cần biết trước khi thêm:
+
+- Dataset daemon chưa tải sẵn sẽ được tải lúc dùng lần đầu, ngay trong thread
+  phát. Nên lần phát đầu của một community move có thể chậm; robot không treo,
+  nó đang tải.
+- Thư viện nạp lỗi (đổi tên, bị gỡ khỏi Hub, mất mạng) chỉ bị bỏ qua kèm warning
+  chứ không kéo theo các thư viện khác — mất một dataset cộng đồng không được
+  phép làm robot mất luôn emotion chính chủ.
+
+Mọi move đều đi qua speed gate bất kể đến từ đâu, xem **Safety Delta**.
+
 ### Ramp khi vào animation
 
 Move của Pollen là quỹ đạo tuyệt đối bắt đầu ở frame 0 của chính nó, mà

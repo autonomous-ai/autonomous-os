@@ -58,8 +58,27 @@ JOINT_KEYS: Set[str] = {*_HEAD_KEYS, *_ANTENNA_KEYS, _BODY_KEY}
 # are documented here for reference): head pitch/roll ±40°, head yaw ±180°,
 # body yaw ±160°, head-vs-body yaw delta ≤ 65°.
 
-# Default HF move library preloaded by the daemon.
+# HF move libraries, searched in order — the first dataset holding a name wins.
+# Both defaults are pre-downloaded by the daemon at startup (its own
+# DEFAULT_DATASETS), so listing them here costs no extra fetch. Add community
+# datasets with HAL_REACHY_MOVES="owner/dataset,owner/other"; put a dataset
+# ahead of the defaults to shadow an official move with your own recording.
+# Every move, whatever its source, goes through the speed gate (_move_refused).
 _EMOTES_DATASET = "pollen-robotics/reachy-mini-emotions-library"
+_DANCES_DATASET = "pollen-robotics/reachy-mini-dances-library"
+
+
+def _move_datasets() -> List[str]:
+    """Dataset names to load, in search order. Duplicates removed, order kept."""
+    raw = os.environ.get("HAL_REACHY_MOVES", "")
+    names = [n.strip() for n in raw.split(",") if n.strip()]
+    names += [_EMOTES_DATASET, _DANCES_DATASET]
+    seen, out = set(), []
+    for n in names:
+        if n not in seen:
+            seen.add(n)
+            out.append(n)
+    return out
 
 # HAL recording name (CSV stem on lamp) → Pollen HF move name.
 # Keys use preset constants from hal.presets; unmatched names are tried verbatim
@@ -404,14 +423,15 @@ class ReachyMotionService:
         of the library is listed verbatim and stays playable — _play_recording
         passes unknown names straight through.
         """
-        moves = self._recorded_moves()
-        if moves is None:
+        libs = self._recorded_moves()
+        if libs is None:
             return []
-        try:
-            hf_moves = set(moves.list_moves())
-        except Exception as e:
-            logger.warning("[reachy] list_moves failed: %s", e)
-            return []
+        hf_moves = set()
+        for lib in libs:
+            try:
+                hf_moves.update(lib.list_moves())
+            except Exception as e:
+                logger.warning("[reachy] list_moves failed on %r: %s", lib, e)
         mapped = {hal for hal, hf in _MOVE_MAP.items() if hf in hf_moves}
         return sorted(mapped | (hf_moves - set(_MOVE_MAP.values())))
 
@@ -797,15 +817,42 @@ class ReachyMotionService:
                 logger.debug("[reachy] cancel_move: %s", e)
 
     def _recorded_moves(self):
-        """Lazy-load the HF emotes library. Returns the loader or None."""
+        """Lazy-load the HF move libraries. Returns the loaders, or None if none.
+
+        One failing dataset does not take the others down: a community dataset
+        that was renamed or pulled from the Hub must not cost the robot its
+        official emotions.
+        """
         if self._moves is None:
+            libs = []
             try:
                 from reachy_mini.motion.recorded_move import RecordedMoves
-                self._moves = RecordedMoves(_EMOTES_DATASET)
             except Exception as e:
                 logger.warning("[reachy] recorded moves unavailable: %s", e)
                 self._moves = False
+                return None
+            for dataset in _move_datasets():
+                try:
+                    libs.append(RecordedMoves(dataset))
+                except Exception as e:
+                    logger.warning("[reachy] move library %r unavailable: %s", dataset, e)
+            if not libs:
+                logger.warning("[reachy] no move library loaded")
+            self._moves = libs or False
         return self._moves or None
+
+    def _find_move(self, hf_name: str) -> Optional[Any]:
+        """First library holding `hf_name`, or None. Search order is load order."""
+        for lib in self._recorded_moves() or []:
+            try:
+                return lib.get(hf_name)
+            except Exception as e:
+                # A miss raises ValueError here, so this is the normal path for
+                # every library that simply does not hold the name. Logged at
+                # debug so a genuine fault (bad cache, unreadable JSON) is still
+                # findable instead of silently reading as "not found".
+                logger.debug("[reachy] '%s' not in %r: %s", hf_name, lib, e)
+        return None
 
     def _ramp_for(self, move: Any) -> float:
         """Seconds to interpolate into the move's first pose before playing it.
@@ -932,8 +979,7 @@ class ReachyMotionService:
             self._cancel_move()
 
         def _run():
-            moves = self._recorded_moves()
-            if moves is None:
+            if self._recorded_moves() is None:
                 logger.warning("[reachy] play '%s' skipped — no move library", name)
                 return
             current = name
@@ -945,15 +991,12 @@ class ReachyMotionService:
                             "[reachy] mapped recording '%s' → HF move '%s'", current, hf_name
                         )
                     failed = False
-                    move = None
-                    try:
-                        move = moves.get(hf_name)
-                    except Exception as e:
-                        logger.warning(
-                            "[reachy] move '%s' (HF: '%s') unavailable: %s", current, hf_name, e
-                        )
-                        failed = True
+                    move = self._find_move(hf_name)
                     if move is None:
+                        logger.warning(
+                            "[reachy] move '%s' (HF: '%s') not in any library",
+                            current, hf_name,
+                        )
                         # No exception but nothing to play — treat as a failure
                         # so the loop can't spin without doing any work.
                         failed = True
