@@ -429,12 +429,25 @@
       // Perceptual (gamma) curve instead — hue and relative ordering are kept,
       // only the low end is lifted into the range a monitor can show.
       const displayLevel = (peak) => Math.pow(Math.min(1, peak / 255), 0.4);
+      // Camera framing. A 38 deg lens instead of the 45 this shipped with: the
+      // wider one splayed the base and read as a fisheye once the head leaned.
+      // ORBIT_R is the matching distance, so the default view frames the same
+      // body it always did. The zoom range used to run 0.65-1.55, barely half a
+      // step either way - you could not back off to see the lamp on its floor
+      // nor push in on the shade. It now spans a factor of ~13, which needs the
+      // far plane pushed out or the far end of it clips the grid away.
+      const CAM_FOV = 0.663,
+        CAM_EL = 0.34,
+        ORBIT_R = 780,
+        ZOOM_MIN = 0.3,
+        ZOOM_MAX = 4;
+
       let target = Object.fromEntries(joints.map((j) => [j, 0])),
         pose = { ...target },
         led = [0, 0, 0],
         ringPixels = [],
         az = -0.68,
-        el = 0.27,
+        el = CAM_EL,
         zoom = 1,
         drag,
         rawCAD = new URLSearchParams(location.search).has("raw"),
@@ -1213,25 +1226,30 @@
       // the fog a full scene graph would give us. Millimetres, like the rest of
       // the scene: the base is ~120 mm across.
       const GRID_STEP = 50,
-        GRID_RADIUS = 700,
+        GRID_RADIUS = 1600,
         GRID_MAJOR = 250;
+      // Segments are bucketed by brightness and emitted in bucket order, so the
+      // whole floor is GRID_BUCKETS draw calls no matter how large the grid is.
+      // Sorting matters: laid out geometrically, the buckets interleave and the
+      // same floor cost 163 calls a frame.
+      const GRID_BUCKETS = 6;
       function gridBuffer() {
-        const v = [],
-          n = [],
-          shade = [];
+        const buckets = Array.from({ length: GRID_BUCKETS }, () => []);
         const push = (x0, z0, x1, z1, major) => {
-          for (const [x, z] of [
+          const ends = [
             [x0, z0],
             [x1, z1],
-          ]) {
-            v.push(x, 0, z);
-            n.push(0, 1, 0);
-            // One brightness per vertex would need an extra attribute; the fade
-            // is baked per segment instead, which is why the lines are split at
-            // every step rather than drawn edge to edge.
-            const f = 1 - Math.hypot(x, z) / GRID_RADIUS;
-            shade.push(Math.max(0, f) * (major ? 1 : 0.45));
-          }
+          ];
+          const shade =
+            ends.reduce(
+              (a, [x, z]) => a + Math.max(0, 1 - Math.hypot(x, z) / GRID_RADIUS),
+              0,
+            ) / 2;
+          const level = Math.min(
+            GRID_BUCKETS - 1,
+            Math.floor(shade * (major ? 1 : 0.45) * GRID_BUCKETS),
+          );
+          for (const [x, z] of ends) buckets[level].push(x, 0, z);
         };
         for (let a = -GRID_RADIUS; a <= GRID_RADIUS; a += GRID_STEP) {
           const major = Math.abs(a) % GRID_MAJOR === 0;
@@ -1243,7 +1261,16 @@
             push(b, a, b1, a, major);
           }
         }
-        return { v, n, shade, count: v.length / 3 };
+        const v = [],
+          ranges = [];
+        buckets.forEach((pts, level) => {
+          if (!pts.length) return;
+          ranges.push({ level, first: v.length / 3, count: pts.length / 3 });
+          v.push(...pts);
+        });
+        // The lines are flat on the floor, so every normal is straight up - the
+        // shader needs the attribute, not a real surface.
+        return { v, n: v.map((_, i) => (i % 3 === 1 ? 1 : 0)), ranges };
       }
       const gridData = gridBuffer(),
         gridPos = gl.createBuffer(),
@@ -1254,22 +1281,6 @@
       ]) {
         gl.bindBuffer(gl.ARRAY_BUFFER, buf);
         gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(data), gl.STATIC_DRAW);
-      }
-      // Segments sorted into brightness buckets so the whole floor is a handful
-      // of draw calls instead of one per line.
-      const GRID_BUCKETS = 6;
-      const gridRanges = [];
-      for (let s = 0; s < gridData.count; s += 2) {
-        const level = Math.min(
-          GRID_BUCKETS - 1,
-          Math.floor(
-            ((gridData.shade[s] + gridData.shade[s + 1]) / 2) * GRID_BUCKETS,
-          ),
-        );
-        const last = gridRanges[gridRanges.length - 1];
-        if (last && last.level === level && last.first + last.count === s)
-          last.count += 2;
-        else gridRanges.push({ level, first: s, count: 2 });
       }
       function drawGrid() {
         gl.uniform1f(L.skinned, 0);
@@ -1293,7 +1304,7 @@
           gl.disableVertexAttribArray(loc);
           gl.vertexAttrib4f(loc, 0, 0, 0, 0);
         }
-        for (const r of gridRanges) {
+        for (const r of gridData.ranges) {
           const f = ((r.level + 0.5) / GRID_BUCKETS) * 0.34;
           gl.uniform3fv(L.emit, [f * 0.72, f * 0.82, f]);
           gl.drawArrays(gl.LINES, r.first, r.count);
@@ -1440,7 +1451,7 @@
         // to carry it, so nothing moves there either.
         const previewAz = az,
           previewEl = el,
-          r = 660 * zoom,
+          r = ORBIT_R * zoom,
           t = [0, 205, 0],
           eye = [
             r * Math.sin(previewAz) * Math.cos(previewEl),
@@ -1451,7 +1462,7 @@
         gl.uniformMatrix4fv(
           L.proj,
           false,
-          M.pers(0.78, canvas.width / canvas.height, 10, 1800),
+          M.pers(CAM_FOV, canvas.width / canvas.height, 5, 9000),
         );
         drawGrid();
         // Rig first: it is the only view that is both the real geometry and
@@ -1765,9 +1776,13 @@
       canvas.addEventListener("pointermove", (e) => {
         if (!drag) return;
         az += (e.clientX - drag[0]) * 0.011;
+        // Elevation ran -24..43 deg, which could neither get level with the
+        // desk nor look down on the base. Stop just short of straight overhead:
+        // at exactly 90 the eye lands on the up vector and the view matrix goes
+        // singular.
         el = Math.max(
-          -0.42,
-          Math.min(0.75, el + (e.clientY - drag[1]) * 0.009),
+          -0.06,
+          Math.min(1.45, el + (e.clientY - drag[1]) * 0.009),
         );
         drag = [e.clientX, e.clientY];
       });
@@ -1778,15 +1793,15 @@
         (e) => {
           e.preventDefault();
           zoom = Math.max(
-            0.65,
-            Math.min(1.55, zoom * (e.deltaY > 0 ? 1.08 : 0.92)),
+            ZOOM_MIN,
+            Math.min(ZOOM_MAX, zoom * (e.deltaY > 0 ? 1.08 : 0.92)),
           );
         },
         { passive: false },
       );
       canvas.addEventListener("dblclick", () => {
         az = -0.68;
-        el = 0.27;
+        el = CAM_EL;
         zoom = 1;
       });
       // Ring pixels on the same fast timer as motion. /led/color reports an

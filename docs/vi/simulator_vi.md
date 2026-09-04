@@ -293,9 +293,11 @@ Một khung nhìn xoay được của mesh GLB có rig — năm joint node đặ
 điều khiển bởi giá trị khớp live, kèm replay recording và các nút LED gọi đúng
 `/servo/*`, `/led/*` mà một skill gọi.
 
-Kéo để xoay, lăn để zoom, double-click để reset. Thân đèn đứng trên lưới sàn
-bán kính 700 mm (ô 50 mm, sáng hơn mỗi 250 mm, mờ dần ra mép tròn) để thấy rõ
-hướng quay và độ nghiêng; canvas render theo pixel ratio của màn hình, chặn ở 2x. Vòng LED đọc
+Kéo để xoay, lăn để zoom, double-click để reset. Zoom chạy 0,3x-4x của quỹ đạo
+780 mm (khoảng 230 mm tới 3,1 m) qua ống kính 38 deg, độ cao camera từ ngang sàn
+tới gần thẳng đứng trên đỉnh. Thân đèn đứng trên lưới sàn bán kính 1,6 m (ô
+50 mm, sáng hơn mỗi 250 mm, mờ dần ra mép tròn) để thấy rõ hướng quay và độ
+nghiêng; canvas render theo pixel ratio của màn hình, chặn ở 2x. Vòng LED đọc
 `/simulator/pixels` (chính buffer của strip), không phải `/led/color`, vì endpoint đó trả màu base tĩnh
 của effect và sẽ render breathing, candle, rainbow thành một màu chết.
 

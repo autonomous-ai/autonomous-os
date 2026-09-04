@@ -296,8 +296,10 @@ as HAL names them (`base_yaw`, `base_pitch`, `elbow_pitch`, `wrist_pitch`,
 `wrist_roll`) — driven by live joint values, plus recording playback and LED
 controls that call the same `/servo/*` and `/led/*` endpoints a skill calls.
 
-Drag to orbit, scroll to zoom, double-click to reset. The body stands on a
-700 mm ground grid (50 mm cells, brighter every 250 mm, fading to a circular
+Drag to orbit, scroll to zoom, double-click to reset. Zoom spans 0.3x-4x of a 780 mm
+orbit (roughly 230 mm to 3.1 m) through a 38 deg lens, and elevation runs from
+level with the floor to just short of straight overhead. The body stands on a
+1.6 m ground grid (50 mm cells, brighter every 250 mm, fading to a circular
 edge) so pan and lean are readable against something; the canvas renders at the
 display's pixel ratio, capped at 2x. The LED ring reads
 `/simulator/pixels` (the strip buffer itself), not `/led/color`, because the
