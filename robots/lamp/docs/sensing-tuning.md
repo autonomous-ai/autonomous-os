@@ -166,6 +166,7 @@ INFO lelamp.service.sensing.sensing_service: [sensing] light.level: Ambient ligh
 FACE_HEIGHT_RATIO_THRESHOLD = 0.10  # Skip faces shorter than 10% of frame height
 FACE_MAX_TRUNCATION = 0.05          # Skip faces with >5% of their bbox off-frame
 HAL_FACE_LANDMARK_CONF_THRESHOLD = 0.99  # Skip crops the face mesh isn't sure about
+FACE_EXTENDED_THRESHOLD = 0.45      # Bar for a match carried by the extended bank alone
 FACE_COOLDOWN_S = 10.0              # Min seconds between face presence events
 FACE_OWNER_FORGET_S = 3600.0        # Re-fire presence after N seconds without seeing owner
 FACE_STRANGER_FORGET_S = 1800.0     # Same for strangers
@@ -197,11 +198,37 @@ Recognition *rises* as the gate tightens, because the unidentifiable crops leave
 
 **Reach.** At 640×480 with a ~65° horizontal FOV, 0.10 corresponds to a 48 px face box at roughly 2.2 m. Note the gate is scale-invariant: raising `HAL_CAMERA_WIDTH`/`HEIGHT` does not change which faces pass, but it does raise the pixel quality of the crop handed to the recognizer (EdgeFace warps to 112×112, and SCRFD returns bboxes in original-frame coordinates, so the crop comes from the full-resolution frame). At 1280×720 the same 0.10 yields a 72 px crop instead of 48 px.
 
+**Two thresholds, not one.** A face is a FRIEND when the enrolled **uploads**
+score above 0.30, **or** the auto-captured **extended** views score above
+`FACE_EXTENDED_THRESHOLD` (0.45). The uploads are ground truth; an extended view
+is a guess the device made about itself, so carrying a match alone costs it a
+higher bar. The identity comes from whichever bank *authorised* the match — an
+extended view below its own threshold supplies neither the decision nor the name.
+
+A single shared threshold has no safe value. Measured over 990 logged frames
+(2026-09-04): the enrollment photo alone keeps the best of six verified
+strangers at 0.201, but **any** extended bank lifts that to 0.32–0.40, because
+every stored view is another chance for a stranger to match something. Raising
+the shared threshold to 0.40 instead fixes that and costs the frontal path
+92.0% → 86.4% recall — the very complaint the extended bank exists to answer.
+
+| `FACE_EXTENDED_THRESHOLD` | recognised | margin over the worst stranger (0.404) |
+|------|------|------|
+| 0.40 | 98.2% | **−0.004 — accepts that stranger** |
+| **0.45** | **97.8%** | **+0.046** |
+| 0.50 | 97.5% | +0.096 |
+| 0.60 | 96.8% | +0.196 |
+
+The four frames 0.40 would additionally recognise all have a confident
+recognition 2–6 s away, so they cost nothing visible; a false acceptance does.
+
 **Tuning:**
 
 | Symptom | Fix |
 |---------|-----|
 | Distant people not recognized | Decrease `FACE_HEIGHT_RATIO_THRESHOLD` (0.10 → 0.07) |
+| Someone else is recognized as an enrolled user | Raise `FACE_EXTENDED_THRESHOLD` (0.45 → 0.50) and check `match_source` in the face debug log — `extended` means an auto-captured view carried it |
+| An enrolled user is missed at angles the frontal photo cannot cover | Lower `FACE_EXTENDED_THRESHOLD`, but not below 0.45 without re-measuring against known strangers |
 | False detections from tiny face-like patches | Increase `FACE_HEIGHT_RATIO_THRESHOLD` (0.10 → 0.15) |
 | Recognition flickers / mints new `stranger_N` ids repeatedly | Crop is too small to embed reliably — increase `FACE_HEIGHT_RATIO_THRESHOLD`, or raise camera resolution to 1280×720 |
 | Wrong person matched when someone sits close to a frame edge | Face is clipped — decrease `FACE_MAX_TRUNCATION` (0.05 → 0.03), or re-aim the camera so heads stay fully in frame |

@@ -190,6 +190,24 @@ FACE_HEIGHT_RATIO_THRESHOLD = float(
 # as clipped was measured too: it would drop 25 frames to catch 2, since 23
 # edge-touching frames recognise correctly. Not worth it.
 FACE_MAX_TRUNCATION = float(os.environ.get("HAL_FACE_MAX_TRUNCATION", "0.05"))
+# Similarity a match carried by the AUTO-CAPTURED extended bank must reach, as
+# opposed to the 0.3 an enrolled upload needs. An upload is ground truth; an
+# extended view is a guess the device made about itself, so it is weaker
+# evidence and has to clear a higher bar.
+#
+# Without the asymmetry there is no safe setting at all. Measured over 990
+# logged frames (lamp-ac82, 04/09/2026): the enrollment photo alone keeps the
+# best of six verified strangers at 0.201, but ANY extended bank lifts that to
+# 0.32-0.40, because every stored view is another chance for a stranger to
+# match something. Raising the single threshold to 0.40 instead would fix that
+# and cost the frontal path 92.0% -> 86.4% recall, which is the complaint the
+# extended bank exists to answer.
+#
+# 0.45 leaves 0.046 of headroom over the worst of those six (0.404). 0.40 does
+# NOT: it sits 0.004 BELOW it, i.e. that stranger would be accepted. The four
+# extra frames 0.40 would recognise all have a confident recognition 2-6s away,
+# so they cost nothing visible; a false acceptance does.
+FACE_EXTENDED_THRESHOLD = float(os.environ.get("HAL_FACE_EXTENDED_THRESHOLD", "0.45"))
 # Per-detection debug capture for face recognition: every recognized face
 # writes its own timestamped folder (input crop + clean frame + annotated frame
 # + result.json) under FACEID_LOG_DIR, named "<time>_<face_id>_<similarity>"

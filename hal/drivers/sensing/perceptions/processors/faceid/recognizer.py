@@ -62,6 +62,7 @@ class FaceRecognizer:
         height_ratio_threshold: float = config.FACE_HEIGHT_RATIO_THRESHOLD,
         max_truncation: float = config.FACE_MAX_TRUNCATION,
         threshold: float = 0.3,
+        extended_threshold: float = config.FACE_EXTENDED_THRESHOLD,
         negative_threshold: float | None = 0.2,
         max_strangers: int = 50,
         scrfd_model_path: str = _SCRFD_MODEL_PATH,
@@ -73,6 +74,9 @@ class FaceRecognizer:
         self._height_ratio_threshold: float = height_ratio_threshold
         self._max_truncation: float = max_truncation
         self._threshold: float = threshold
+        # Bar for a match carried by the extended bank alone — deliberately
+        # higher than ``threshold``; see FACE_EXTENDED_THRESHOLD in hal/config.py.
+        self._extended_threshold: float = extended_threshold
         self._negative_threshold: float | None = negative_threshold
         self._max_strangers: int = max_strangers
         self._scrfd_model_path: str = scrfd_model_path
@@ -805,18 +809,12 @@ class FaceRecognizer:
                 embeds, self._stranger_embeddings, self._stranger_labels
             )
 
-        # Combined owner score/id per face = whichever bank matched best, plus a
-        # tag of WHERE the winning match came from ("enroll" | "extended" | None).
+        # Best score across both owner banks. Used for the unsure / new-stranger
+        # split further down, which asks "is this face unknown to us at all" —
+        # a question both banks answer equally. The FRIEND decision does NOT use
+        # it: the two banks carry different weight and are compared against
+        # their own thresholds (see the asymmetric owner match below).
         owner_scores = np.maximum(upload_scores, ext_scores)
-        owner_ids: list[str | None] = []
-        owner_source: list[str | None] = []
-        for _i in range(n_faces):
-            ext_won = ext_scores[_i] > upload_scores[_i]
-            owner_ids.append(ext_ids[_i] if ext_won else upload_ids[_i])
-            if float(owner_scores[_i]) <= _NO_MATCH:
-                owner_source.append(None)  # neither bank held anything to match
-            else:
-                owner_source.append("extended" if ext_won else "enroll")
 
         new_stranger_embeds = []
         new_stranger_labels = []
@@ -946,8 +944,29 @@ class FaceRecognizer:
             rescued_by_extended: bool = False
             is_new_stranger: bool = False
 
-            if o_score > self._threshold:
-                raw_id = owner_ids[i] or ""
+            # Asymmetric owner match. The uploads are ground truth and keep the
+            # base threshold; the auto-captured extended views are a guess the
+            # device made about itself, so carrying a match ALONE costs them a
+            # higher bar. A single threshold has no safe value here: every
+            # extended bank lifts the best stranger score well above 0.3, while
+            # raising the bar for the uploads too would cost the frontal recall
+            # the extended bank exists to recover.
+            up_s = float(upload_scores[i])
+            ex_s = float(ext_scores[i])
+            enroll_match = up_s > self._threshold
+            extended_match = ex_s > self._extended_threshold
+
+            if enroll_match or extended_match:
+                # Identity comes from the bank that AUTHORISED the match, not
+                # from whichever merely scored higher. An extended view below
+                # its own threshold is not trusted to carry a decision, so it
+                # must not supply the name either — otherwise a rescue-shaped
+                # near-miss on one user could relabel a match the uploads won.
+                if enroll_match and extended_match:
+                    ext_won = ex_s > up_s
+                else:
+                    ext_won = extended_match
+                raw_id = (ext_ids[i] if ext_won else upload_ids[i]) or ""
                 person_id = raw_id.removeprefix(self.FRIEND_PREFIX)
                 face_kind = PersonKind.FRIEND
                 # Observability: log whether the uploads or the extended set
@@ -955,23 +974,25 @@ class FaceRecognizer:
                 # — the frontal uploads scored at/below threshold but a stored
                 # side/angled view pushed it over — which is exactly the benefit
                 # this feature exists to deliver.
-                up_s = float(upload_scores[i])
-                ex_s = float(ext_scores[i])
-                decision_score = o_score
+                decision_score = ex_s if ext_won else up_s
                 matched_label = raw_id or None
-                match_source = owner_source[i]
-                rescued_by_extended = up_s <= self._threshold < ex_s
+                match_source = "extended" if ext_won else "enroll"
+                rescued_by_extended = extended_match and not enroll_match
                 if rescued_by_extended:
                     logger.info(
                         "[face] '%s' RESCUED by extended set "
-                        "(enroll_sim=%.3f <= thr=%.2f < extended_sim=%.3f)",
-                        person_id, up_s, self._threshold, ex_s,
+                        "(enroll_sim=%.3f <= thr=%.2f, extended_sim=%.3f > "
+                        "ext_thr=%.2f)",
+                        person_id, up_s, self._threshold,
+                        ex_s, self._extended_threshold,
                     )
                 else:
                     logger.debug(
                         "[face] '%s' matched via %s "
-                        "(enroll_sim=%.3f, extended_sim=%.3f, thr=%.2f)",
-                        person_id, owner_source[i], up_s, ex_s, self._threshold,
+                        "(enroll_sim=%.3f, extended_sim=%.3f, thr=%.2f, "
+                        "ext_thr=%.2f)",
+                        person_id, match_source, up_s, ex_s,
+                        self._threshold, self._extended_threshold,
                     )
                 # Confidently identified: this live view is a candidate to
                 # enrich the user's extended set (kept only if it adds a pose
@@ -1058,6 +1079,7 @@ class FaceRecognizer:
                     extended_similarity=float(ext_scores[i]),
                     stranger_similarity=s_score,
                     threshold=self._threshold,
+                    extended_threshold=self._extended_threshold,
                     negative_threshold=self._negative_threshold,
                     det_score=det_score,
                     landmark_score=landmark_score,
