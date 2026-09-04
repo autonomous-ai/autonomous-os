@@ -1,11 +1,13 @@
 """Face recognition processor — v2 pipeline (SCRFD + ONNX landmark + EdgeFace).
 
-Drop-in, API-compatible replacement for ``facerecognizer.py``. The PUBLIC API is
-byte-for-byte identical: same ``FaceRecognizer`` / ``FacePerception`` class names,
-constructor signatures, method signatures and return types. Only the internal
-detection + recognition models change:
+This replaced the original ``facerecognizer.py``, which has since been DELETED
+along with its ``insightface`` dependency — don't go looking for it. The public
+API was kept byte-for-byte identical across that migration: same
+``FaceRecognizer`` / ``FacePerception`` class names, constructor signatures,
+method signatures and return types. Only the internal detection + recognition
+models changed:
 
-    old (facerecognizer.py):  insightface buffalo_sc  (SCRFD det + ArcFace rec)
+    old (deleted):            insightface buffalo_sc  (SCRFD det + ArcFace rec)
     new (this pipeline):      SCRFD  -> detection      (bbox + 5 kps + score)
                               MediaPipe landmark ONNX -> alignment (112x112 crop)
                               EdgeFace ONNX -> recognition (embedding)

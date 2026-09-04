@@ -65,7 +65,7 @@ Failure modes:
 | `HAL_FACE_EDGEFACE_MODEL_PATH` | `<dir>/edgeface_s_gamma_05_opt.onnx` | Full path to the EdgeFace model |
 | `HAL_FACE_LANDMARK_MODEL_PATH` | `<dir>/MediaPipeFaceLandmarkDetector.onnx` | Full path to the landmark model |
 | `HAL_FACE_MODEL_CDN_BASE` | `https://storage.googleapis.com/autonomous-models` | Weights bucket base URL |
-| `HAL_FACE_LANDMARK_CONF_THRESHOLD` | `0.6` | Face-presence gate for landmark alignment |
+| `HAL_FACE_LANDMARK_CONF_THRESHOLD` | `0.99` | Face-presence gate for landmark alignment. The score saturates (median exactly 1.000 over 990 logged frames), so the useful range is the last hundredth — 0.6 never fired. Screens out crops that are facial but carry no identity, e.g. an ear at close range |
 | `HAL_POSE_MODEL_PATH` | `/root/local/models/rtmpose-m.onnx` | 2D pose model path (see below) |
 
 ## Uploading / adding a model

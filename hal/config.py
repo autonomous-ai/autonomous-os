@@ -172,6 +172,140 @@ PRESENCE_WAKE_STRANGERS: bool = (
 FACE_HEIGHT_RATIO_THRESHOLD = float(
     os.environ.get("HAL_FACE_HEIGHT_RATIO_THRESHOLD", "0.10")
 )
+# Max fraction of a detection's bbox allowed to fall OUTSIDE the frame before
+# the face is rejected. A face clipped by a frame edge is not a smaller face —
+# it is a face missing features. SCRFD still returns a plausible box (its top
+# edge simply goes negative), and the landmark mesh will confidently invent the
+# missing half: measured on lamp-ac82 03/09/2026, a face cut off above the
+# eyebrows produced eye points hallucinated onto the cheeks with a landmark
+# confidence of 0.90, an embedding sharing 0.007 similarity with the same
+# person's enrollment photo, and a FRIEND verdict off the auto-captured
+# extended bank. The existing landmark-in-bbox gate cannot catch this: it
+# clamps the bbox to the frame first, so points can never be "outside" on the
+# clipped edge.
+#
+# 0.05, not 0.10: replaying 496 logged frames from lamp-ac82 (04/09/2026) put
+# every well-recognised frame at 0% overflow (median enroll similarity 0.66),
+# while the 5-10% band collapsed to 0.32 — and one 6.1% frame minted a spurious
+# stranger identity that three later frames then matched, so a single clipped
+# frame cost four misidentifications. 0.05 clears all four; the price is three
+# frames of 492 that recognise fine today and would instead be skipped.
+#
+# Note this only catches clipping the DETECTOR admits to, by returning a box
+# that runs off-frame. SCRFD sometimes clamps to the edge instead (y1 exactly
+# 0), which measures 0% overflow and passes. Treating "bbox touches the edge"
+# as clipped was measured too: it would drop 25 frames to catch 2, since 23
+# edge-touching frames recognise correctly. Not worth it.
+FACE_MAX_TRUNCATION = float(os.environ.get("HAL_FACE_MAX_TRUNCATION", "0.05"))
+# Minimum sharpness, as the variance of the Laplacian of the ALIGNED 112x112
+# crop, below which a detection is dropped before ANY decision is taken. Motion
+# blur — the lamp panning, or the user moving — destroys a face without making
+# it smaller or clipping it, so neither of the gates above sees it.
+#
+# Measured on lamp-ac82 04/09/2026: a frame captured mid-servo-sweep scored 58
+# and minted a spurious stranger identity for the enrolled user. Its similarity
+# to his own enrollment photo was 0.10, which is not "a new person" — it is an
+# unusable image, and the decision path cannot tell those apart.
+#
+# 100 rather than the ~70 that would just clear that frame, because the cost is
+# ASYMMETRIC. Of the 63 frames of 910 this drops, 60 would have been recognised
+# correctly — and losing them is silent: the camera re-samples every
+# HAL_SENSING_INTERVAL (2s) and current_user() holds the person for
+# FACE_OWNER_FORGET_S (1h). A false stranger event on the user's own face is not
+# silent. Blocking a genuine stranger's frame costs seconds of delay, not a
+# missed person: they too produce a frame every 2s and mint from the next sharp
+# one.
+#
+# Two things to know before retuning. Laplacian variance scales with lighting,
+# contrast and crop resolution, so this number is calibrated to this camera —
+# re-check it against FAIL-blurred folders in the face debug log if the room or
+# optics change. And it MUST be measured on the aligned crop: the input crop
+# varies in size between frames, which makes its variance incomparable.
+FACE_MIN_SHARPNESS = float(os.environ.get("HAL_FACE_MIN_SHARPNESS", "100.0"))
+# Consecutive sensing ticks an unrecognised face must be seen for before a
+# `stranger_N` identity is actually minted for it. 1 restores the old behaviour
+# of minting from a single frame.
+#
+# Minting is the expensive verdict: it creates a persistent identity, fires a
+# stranger presence event and lands in the Unknown Faces card. It is reached by
+# scoring BELOW everything — which is what a real unknown person looks like, and
+# equally what a momentarily unusable frame looks like. The gates above remove
+# the unusable frames they can measure; this catches what is left by asking a
+# question no single frame can answer: is this person still there a tick later?
+#
+# 2 is cheap on both sides. Measured over 990 logged frames, 19 of the 28 runs
+# that reach this branch are a SINGLE isolated tick, so most spurious mints go
+# away; a real visitor is still there 2s later and mints then, delayed by one
+# tick and nothing else.
+FACE_STRANGER_MIN_TICKS = int(os.environ.get("HAL_FACE_STRANGER_MIN_TICKS", "2"))
+# How long a pending candidate stays corroboratable. Must span a few sensing
+# ticks (HAL_SENSING_INTERVAL, 2s) or "in a row" degrades into "at some point",
+# which a passer-by seen twice an hour apart would satisfy.
+FACE_STRANGER_CORROBORATION_S = float(
+    os.environ.get("HAL_FACE_STRANGER_CORROBORATION_S", "6.0")
+)
+# Similarity a match carried by the AUTO-CAPTURED extended bank must reach, as
+# opposed to the 0.3 an enrolled upload needs. An upload is ground truth; an
+# extended view is a guess the device made about itself, so it is weaker
+# evidence and has to clear a higher bar.
+#
+# Without the asymmetry there is no safe setting at all. Measured over 990
+# logged frames (lamp-ac82, 04/09/2026): the enrollment photo alone keeps the
+# best of six verified strangers at 0.201, but ANY extended bank lifts that to
+# 0.32-0.40, because every stored view is another chance for a stranger to
+# match something. Raising the single threshold to 0.40 instead would fix that
+# and cost the frontal path 92.0% -> 86.4% recall, which is the complaint the
+# extended bank exists to answer.
+#
+# 0.45 leaves 0.046 of headroom over the worst of those six (0.404). 0.40 does
+# NOT: it sits 0.004 BELOW it, i.e. that stranger would be accepted. The four
+# extra frames 0.40 would recognise all have a confident recognition 2-6s away,
+# so they cost nothing visible; a false acceptance does.
+FACE_EXTENDED_THRESHOLD = float(os.environ.get("HAL_FACE_EXTENDED_THRESHOLD", "0.45"))
+# Similarity to the ENROLLED UPLOADS a live view must reach before it may be
+# auto-captured into a user's extended bank. Deliberately above the 0.3 match
+# threshold: being recognised is not enough to become a reference view.
+#
+# Admission previously had no identity test at all — only a DIVERSITY gate that
+# keeps a view when it is dissimilar to everything stored. Novelty and impostor
+# are the same signal, so that rule selected for exactly what it should screen
+# out, and the farthest-point pruning that trims the bank is anchored on the
+# uploads, meaning it ranks impostors highest and evicts genuine views to keep
+# them. Fed nothing but genuine frames of the enrolled user, the old rule still
+# built a bank that accepted a verified stranger at 0.362; the live bank on
+# lamp-ac82 had ended up 6/10 other people, matched at 1.000.
+#
+# Requiring the uploads themselves to carry the match also stops second-
+# generation copies: a frame recognised BY the extended bank can no longer add
+# to it, so one bad view can never breed more. Replaying 990 logged frames under
+# this rule produced a bank that was 10/10 the enrolled user.
+FACE_EXTEND_MIN_ENROLL_SIM = float(
+    os.environ.get("HAL_FACE_EXTEND_MIN_ENROLL_SIM", "0.40")
+)
+# Per-detection debug capture for face recognition: every recognized face
+# writes its own timestamped folder (input crop + aligned model input + clean
+# frame + annotated frame + landmark plot + result.json) under FACEID_LOG_DIR,
+# named "<time>_<face_id>_<similarity>" (or "<time>_FAIL-<reason>"), so a false
+# acceptance / false rejection is spottable from the directory listing alone.
+#
+# OFF by default: it writes six files per face per tick and is an investigation
+# aid, not a runtime input. Turn it on with HAL_FACEID_DEBUG_LOG_ENABLED=true
+# when chasing a recognition bug. Measured on 40 real 1280x720 frames through
+# detect(): the capture costs ~43 ms per frame with it on, and nothing
+# measurable with it off — every call site is gated, and the capture entry
+# points bail before any frame is copied. Same shape, and the same default, as
+# the face-emotion debug log.
+FACEID_DEBUG_LOG_ENABLED = (
+    os.environ.get("HAL_FACEID_DEBUG_LOG_ENABLED", "false").lower() == "true"
+)
+FACEID_LOG_DIR = os.environ.get(
+    "HAL_FACEID_LOG_DIR",
+    "/opt/hal/drivers/sensing/perceptions/processors/faceid-logs",
+)
+# Cap on retained detection folders (oldest pruned first); 0 = unbounded.
+# One folder per face per sensing tick (HAL_SENSING_INTERVAL, 2s) — 500 is
+# roughly the last 15 minutes of a single person in frame.
+FACEID_LOG_MAX_TRIGGERS = int(os.environ.get("HAL_FACEID_LOG_MAX_TRIGGERS", "500"))
 
 # --- Sensing: Voice identity (speaker-ID as a presence signal) ---
 # How long a confidently matched speaker stays the "current voice user" after

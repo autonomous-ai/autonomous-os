@@ -166,6 +166,13 @@ INFO lelamp.service.sensing.sensing_service: [sensing] light.level: Ambient ligh
 
 ```python
 FACE_HEIGHT_RATIO_THRESHOLD = 0.10  # Skip faces shorter than 10% of frame height
+FACE_MAX_TRUNCATION = 0.05          # Skip faces with >5% of their bbox off-frame
+FACE_MIN_SHARPNESS = 100.0          # Skip faces too motion-blurred to identify
+FACE_STRANGER_MIN_TICKS = 2         # Sightings before an unknown face earns an id
+FACE_STRANGER_CORROBORATION_S = 6.0 # How long a pending candidate stays countable
+HAL_FACE_LANDMARK_CONF_THRESHOLD = 0.99  # Skip crops the face mesh isn't sure about
+FACE_EXTENDED_THRESHOLD = 0.45      # Bar for a match carried by the extended bank alone
+FACE_EXTEND_MIN_ENROLL_SIM = 0.40   # Bar the uploads must clear to auto-capture a view
 FACE_COOLDOWN_S = 10.0              # Min seconds between face presence events
 FACE_OWNER_FORGET_S = 3600.0        # Re-fire presence after N seconds without seeing owner
 FACE_STRANGER_FORGET_S = 1800.0     # Same for strangers
@@ -175,15 +182,146 @@ The height ratio threshold filters out faces that are **too small** relative to 
 
 **Why height and not area.** Area falls off as 1/d² while a linear dimension falls off as 1/d, so an area gate is twice as sensitive for the same change in reach — extending range from 0.8 m to 1.5 m needs a 3.8× change in an area threshold but only a 1.95× change in a height threshold. More importantly, yaw (turning the head, the common case) compresses the bbox **width** while leaving height intact, so an area gate rejected angled faces harder than frontal ones at the same distance — working against the extended-set feature that exists to learn those angled views.
 
+**Truncation.** `FACE_MAX_TRUNCATION` is a separate gate for faces clipped by a frame edge, applied after the height gate and before classification. A clipped face is not a smaller face — it is a face missing features. SCRFD still returns a plausible box (the clipped edge simply runs off-frame, e.g. `[573, -34, 710, 121]`), and the landmark mesh confidently invents the part it cannot see. Measured on a lamp on 2026-09-03: a face cut off above the eyebrows produced eye landmarks hallucinated onto the cheeks at a landmark confidence of **0.90**, an embedding sharing **0.007** similarity with that person's own enrollment photo, and a FRIEND verdict carried entirely by the auto-captured extended bank.
+
+The landmark-in-bbox check inside the aligner does **not** catch this: it clamps the bbox to the frame before comparing, so a landmark can never be "outside" on the very edge that clipped the face. The gate measures the fraction of the bbox **area** falling outside the frame. Rejected faces also never reach `extend_candidates`, so a cut-off view can never be auto-added to a user's extended enrollment set.
+
+**Why 0.05.** Replaying 496 logged frames from a lamp (2026-09-04): every well-recognised frame sat at 0% overflow (median similarity to the enrollment photo 0.66), the 0.1–3% band at 0.56, and the **5–10% band collapsed to 0.32**. One frame clipped by 6.1% minted a spurious `stranger_N` identity, and three later frames then matched *that* identity — so a single clipped frame produced four misidentifications. Dropping the threshold from 0.10 to 0.05 removes all four; the cost is three frames out of 492 that recognise correctly today and are instead skipped.
+
+**What it does not catch.** The gate only sees clipping the detector admits to by returning an off-frame box (e.g. `y1 = -34`). SCRFD sometimes clamps to the edge instead (`y1 = 0` exactly), which measures 0% overflow and passes even though the face is genuinely cut. Treating "bbox touches the frame edge" as clipped was measured and rejected: it would drop 25 frames to catch 2, because 23 edge-touching frames are recognised correctly.
+
+**Blur.** `FACE_MIN_SHARPNESS` is the third geometry-independent gate: the variance of the Laplacian of the **aligned 112×112 crop**, below which the detection is dropped before any decision. Motion blur — the lamp panning, or the person moving — destroys a face without making it smaller or clipping it, so neither gate above sees it.
+
+What comes out of a smeared crop is a near-random embedding that resembles nothing, and *"resembles nothing"* is the **new-stranger** branch: a blurred frame of the enrolled user mints a `stranger_N` identity for him. That is what happened on a lamp on 2026-09-04 — one frame captured mid-servo-sweep, similarity 0.10 to the user's own enrolment photo, sitting between two clean recognitions at 0.63 and 0.76.
+
+Measure it on the **aligned** crop, never the detector crop: the latter varies in size frame to frame, and Laplacian variance scales with resolution, so its values are not comparable between frames. Cost is ~0.06 ms on an array that already exists.
+
+| gate | frames dropped |
+|------|------|
+| lapvar < 70 | 1.6% |
+| **lapvar < 100** | **5.7%** |
+| lapvar < 130 | 11.0% |
+
+**Why 100, and not just enough to clear the offending frame.** The cost is asymmetric. Nearly every dropped frame would have been recognised correctly — and losing one is silent, because the camera re-samples every `HAL_SENSING_INTERVAL` (2 s) and `current_user()` holds the person for `FACE_OWNER_FORGET_S` (1 h). A false stranger event on the user's own face is not silent.
+
+Note what the gate does and does not do: it separates **usable from unusable frames**, not the enrolled user from a stranger. A blurred frame of a genuine stranger is dropped too, which costs that person a few seconds' delay before an identity is minted — they also produce a frame every 2 s and mint from the next sharp one. Laplacian variance scales with lighting and contrast, so this number is calibrated to this camera; re-check it against `FAIL-blurred` folders in the face debug log if the room or optics change.
+
+**Landmark confidence.** `HAL_FACE_LANDMARK_CONF_THRESHOLD` (in `model_store.py`) is the third gate, applied inside the aligner: a detection whose face-mesh confidence falls below it is dropped and never embedded. **Read this number in the scale the model emits** — the score saturates, with a median of exactly 1.000 and a minimum of 0.613 over 990 logged frames, so the useful range is the last hundredth. The old default of 0.60 did not mean "fairly strict"; it meant the gate never fired, not once.
+
+It screens out a crop that is facial but carries no identity — SCRFD firing on an **ear** at close range is the case seen in the field. 26 such frames appeared in one 40-minute session at ~0.0 similarity to the user's own enrollment photo; one minted a `stranger_N` identity and the other 25 then matched it. `landmark_score` separates those from real faces at AUC 0.98:
+
+| gate | frames reaching recognition | recognised | spurious identities minted |
+|------|------|------|------|
+| 0.60 (old) | 980 | 94.6% | 1 |
+| 0.95 | 944 | 96.6% | 1 |
+| **0.99** | 910 | **97.8%** | **0** |
+
+Recognition *rises* as the gate tightens, because the unidentifiable crops leave the denominator. It is **not** an occlusion detector: the ONNX model is the landmark regressor alone, with no detector head, so it is handed an ROI SCRFD has already called a face and returns points for whatever is inside — a face behind a paper tissue scores 0.9978.
+
 **Reach.** At 640×480 with a ~65° horizontal FOV, 0.10 corresponds to a 48 px face box at roughly 2.2 m. Note the gate is scale-invariant: raising `HAL_CAMERA_WIDTH`/`HEIGHT` does not change which faces pass, but it does raise the pixel quality of the crop handed to the recognizer (EdgeFace warps to 112×112, and SCRFD returns bboxes in original-frame coordinates, so the crop comes from the full-resolution frame). At 1280×720 the same 0.10 yields a 72 px crop instead of 48 px.
+
+**Two thresholds, not one.** A face is a FRIEND when the enrolled **uploads**
+score above 0.30, **or** the auto-captured **extended** views score above
+`FACE_EXTENDED_THRESHOLD` (0.45). The uploads are ground truth; an extended view
+is a guess the device made about itself, so carrying a match alone costs it a
+higher bar. The identity comes from whichever bank *authorised* the match — an
+extended view below its own threshold supplies neither the decision nor the name.
+
+A single shared threshold has no safe value. Measured over 990 logged frames
+(2026-09-04): the enrollment photo alone keeps the best of six verified
+strangers at 0.201, but **any** extended bank lifts that to 0.32–0.40, because
+every stored view is another chance for a stranger to match something. Raising
+the shared threshold to 0.40 instead fixes that and costs the frontal path
+92.0% → 86.4% recall — the very complaint the extended bank exists to answer.
+
+| `FACE_EXTENDED_THRESHOLD` | recognised | margin over the worst stranger (0.404) |
+|------|------|------|
+| 0.40 | 98.2% | **−0.004 — accepts that stranger** |
+| **0.45** | **97.8%** | **+0.046** |
+| 0.50 | 97.5% | +0.096 |
+| 0.60 | 96.8% | +0.196 |
+
+The four frames 0.40 would additionally recognise all have a confident
+recognition 2–6 s away, so they cost nothing visible; a false acceptance does.
+
+**What gets auto-captured.** A recognised frame may join a user's extended bank
+only when **both** hold: the enrolled uploads carried the match and scored above
+`FACE_EXTEND_MIN_ENROLL_SIM` (0.40), and the view is different enough from what
+is already stored to be worth keeping.
+
+Both are needed. Novelty alone was the only test before, and "far from
+everything we have" is equally the signature of a new pose and of a *different
+person* — so the rule selected for what it should have screened out. The
+farthest-point pruning that trims the bank is anchored on the uploads, so it
+then ranks strangers highest and evicts genuine views to keep them. On one lamp
+the bank had become 6/10 other people, matched at 1.000; fed nothing but genuine
+frames of the enrolled user, the old rule still built a bank that accepted a
+verified stranger at 0.362.
+
+Requiring the uploads to carry the match also stops second-generation copies: a
+frame recognised **by** the extended bank can no longer add to it, so one bad
+view cannot breed more.
+
+This does not make the bank pointless — the stored view is not there for its own
+sake. A view the uploads recognise at 0.40–0.59 becomes a **new anchor** one step
+further out in pose space. Replaying 990 logged frames: 879 frames were
+recognised by the uploads directly, and **11 more were rescued by the extended
+bank alone**, at enroll similarity 0.157–0.298 — below the 0.30 bar, so without
+the bank they would have been missed. One of them is a frame the live device
+labelled `stranger_4`.
+
+**What is stored per view.** Each auto-captured view lives in
+`<USERS_DIR>/<user>/.extended/` as three files sharing one stem:
+
+| file | role |
+|------|------|
+| `ext_<ms>_<seq>.jpg` | the face crop |
+| `ext_<ms>_<seq>.npy` | its embedding — what a restart reloads, so a hard pose never has to be re-detected |
+| `ext_<ms>_<seq>.json` | **provenance**: why this view was admitted |
+
+The provenance record holds the scores that admitted the view
+(`enroll_similarity`, `extended_similarity`, `match_source`,
+`max_sim_to_existing`), the frame's quality figures (`det_score`,
+`landmark_score`, `face_height_ratio`, `truncation`, `bbox`), and the
+`thresholds` in force at the time. That last field is the point: it lets you ask
+"which views did the *old* rule let in" after a threshold change, without
+guessing what the config was.
+
+It is documentation, not state. The loader enumerates only `*.jpg`, so a missing
+or malformed `.json` costs nothing at runtime, and writing it is best-effort —
+the view stays valid if the write fails. Eviction deletes all three files
+together. Views captured before this existed have no `.json`, which is itself a
+useful signal: they predate the current rules.
+
+Without it, a bank that turns out to hold the wrong views can only be wiped
+wholesale — which is what had to happen on one lamp when 6 of 10 views turned out
+to be other people.
+
+**Minting an identity needs corroboration.** An unrecognised face does not get a `stranger_N` from a single frame. It must be seen `FACE_STRANGER_MIN_TICKS` times (2) within `FACE_STRANGER_CORROBORATION_S` (6 s), matched **by embedding** rather than by position, so "again" means the same person and not merely another face in the same corner.
+
+Minting is the expensive verdict — a persistent identity, a stranger presence event, a row in the Unknown Faces card — and it is reached by scoring *below* everything, which is what an unknown person looks like and equally what a momentarily unusable frame looks like. The gates above drop the unusable frames they can measure; this catches the rest by asking what no single frame can answer: is this face still there a tick later? Measured over 990 logged frames, 19 of the 28 runs that reach this branch are a single isolated tick.
+
+A real visitor is unaffected beyond one tick of delay: they are still there 2 s later and mint then. The window is deliberately ~3 sensing ticks rather than strictly back-to-back, so one dropped or blurred frame in the middle does not reset a genuine visitor's count.
 
 **Tuning:**
 
 | Symptom | Fix |
 |---------|-----|
 | Distant people not recognized | Decrease `FACE_HEIGHT_RATIO_THRESHOLD` (0.10 → 0.07) |
+| Someone else is recognized as an enrolled user | Raise `FACE_EXTENDED_THRESHOLD` (0.45 → 0.50) and check `match_source` in the face debug log — `extended` means an auto-captured view carried it |
+| An enrolled user is missed at angles the frontal photo cannot cover | Lower `FACE_EXTENDED_THRESHOLD`, but not below 0.45 without re-measuring against known strangers |
+| Extended bank fills with other people | Should no longer happen; if it does, raise `FACE_EXTEND_MIN_ENROLL_SIM` and check each stored view's `match_source` in the face debug log |
+| Extended bank stays empty or stops growing | Lower `FACE_EXTEND_MIN_ENROLL_SIM` (0.40 → 0.35). Only frames the *uploads* recognise are eligible, so a user with a single frontal photo grows the bank slowly by design |
 | False detections from tiny face-like patches | Increase `FACE_HEIGHT_RATIO_THRESHOLD` (0.10 → 0.15) |
 | Recognition flickers / mints new `stranger_N` ids repeatedly | Crop is too small to embed reliably — increase `FACE_HEIGHT_RATIO_THRESHOLD`, or raise camera resolution to 1280×720 |
+| Wrong person matched when someone sits close to a frame edge | Face is clipped — decrease `FACE_MAX_TRUNCATION` (0.05 → 0.03), or re-aim the camera so heads stay fully in frame |
+| People at the frame edge stop being recognized at all | Increase `FACE_MAX_TRUNCATION` (0.05 → 0.10); check for `FAIL-truncated` folders in the face debug log to see how much was actually cut |
+| Lamp mints a `stranger_N` for the enrolled user while it is panning | Motion blur — that is what `FACE_MIN_SHARPNESS` screens out; check `FAIL-blurred` folders for the sharpness actually seen |
+| Unknown visitors take too long to be noticed | Lower `FACE_STRANGER_MIN_TICKS` to 1 to mint from a single frame (the old behaviour) |
+| Spurious `stranger_N` identities still appear | Raise `FACE_STRANGER_MIN_TICKS` to 3; each step costs a visitor one more sensing tick |
+| Recognition drops out in a dim room after an update | Laplacian variance falls with light; lower `FACE_MIN_SHARPNESS` (100 → 70) and re-check `FAIL-blurred` |
+| Lamp mints `stranger_N` ids for the enrolled user at close range | The detector is firing on an ear or similar — that is what `HAL_FACE_LANDMARK_CONF_THRESHOLD` 0.99 screens out |
+| Faces that are plainly fine stop being recognized after an update | Lower `HAL_FACE_LANDMARK_CONF_THRESHOLD` (0.99 → 0.95); the default is tuned on one device |
 | Presence events fire too often | Increase `FACE_COOLDOWN_S` (10 → 30) |
 | Lamp forgets owner too quickly after leaving | Increase `FACE_OWNER_FORGET_S` |
 

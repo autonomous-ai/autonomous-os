@@ -64,7 +64,7 @@ Các trường hợp lỗi:
 | `HAL_FACE_EDGEFACE_MODEL_PATH` | `<dir>/edgeface_s_gamma_05_opt.onnx` | Đường dẫn đầy đủ tới model EdgeFace |
 | `HAL_FACE_LANDMARK_MODEL_PATH` | `<dir>/MediaPipeFaceLandmarkDetector.onnx` | Đường dẫn đầy đủ tới model landmark |
 | `HAL_FACE_MODEL_CDN_BASE` | `https://storage.googleapis.com/autonomous-models` | URL gốc của bucket weight |
-| `HAL_FACE_LANDMARK_CONF_THRESHOLD` | `0.6` | Ngưỡng face-presence cho việc align landmark |
+| `HAL_FACE_LANDMARK_CONF_THRESHOLD` | `0.99` | Ngưỡng face-presence cho việc align landmark. Điểm số bão hoà (median đúng bằng 1.000 trên 990 frame đã log) nên khoảng dùng được chỉ nằm ở phần trăm cuối — 0.6 chưa bao giờ chặn được gì. Lọc ra các crop tuy là mặt nhưng không mang danh tính, ví dụ vành tai ở cự ly gần |
 | `HAL_POSE_MODEL_PATH` | `/root/local/models/rtmpose-m.onnx` | Đường dẫn model pose 2D (xem bên dưới) |
 
 ## Upload / thêm model
