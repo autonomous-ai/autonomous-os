@@ -786,6 +786,18 @@ queue-based contract:
   `OutputBase` until a `TurnDoneEvent`, or until no event arrives within
   `HAL_REALTIME_RECV_QUEUE_TIMEOUT_S` — default 8 s — which ends the turn quietly
   so a silent/no-response turn falls back to the main agent without long dead-air).
+  That gap window alone cannot tell a model that chose not to answer from one
+  that is **working**: a turn grounded with Google Search emits no output at all
+  until the search returns, and ending it there throws away an answer the model
+  was about to give, hands the turn to the far slower main agent, and still pays
+  for the abandoned search (whose chunks land in the session context and are
+  re-billed on every later turn). The two are not alike on the wire, though — a
+  working turn keeps sending messages that never reach the queue (thought parts,
+  grounding metadata, usage-only frames), while an abandoned one goes completely
+  quiet. Providers call `note_server_activity()` on every inbound message, and
+  `receive()` keeps the turn alive past the gap window while those keep arriving,
+  up to `HAL_REALTIME_TURN_MAX_SILENCE_S` (default 20 s) for the whole turn.
+  A turn with no inbound traffic at all still ends on the first gap window.
 - `available` ⇔ the websocket/session is connected (`_connected`).
 
 ### OpenAI connection safety
@@ -1231,6 +1243,7 @@ is a top-level `config.json` flag:
 | `HAL_REALTIME_PROVIDER` | `gemini` | `none` \| `gemini` \| `openai` \| `qwen` |
 | `HAL_REALTIME_TURN_DETECTION` | `off` | `server_vad` \| `semantic_vad` \| `off` (Gemini: off = manual activity detection) |
 | `HAL_REALTIME_RECV_QUEUE_TIMEOUT_S` | `8.0` | Max seconds `receive()` waits for the next output event before ending a silent turn (fallback to main agent) |
+| `HAL_REALTIME_TURN_MAX_SILENCE_S` | `20.0` | Ceiling on how long one turn may stay silent while the server keeps sending messages. `receive()` extends a turn past `HAL_REALTIME_RECV_QUEUE_TIMEOUT_S` only while inbound traffic proves the model is still working (a grounded search emits nothing until it returns); this stops a server that chatters without ever producing output from hanging the turn. `0` disables the keep-alive and restores the plain gap watchdog. |
 | `HAL_REALTIME_LOOK_RECV_TIMEOUT_S` | `20.0` | Silent-turn watchdog used instead of the default for turns where a `look` fired (per-turn, via `extend_recv_timeout()`). Gemini's forced thinking over a text-dense frame can stay silent >8 s right before the answer — the default watchdog was killing those turns. Raising it delays the look-frame handoff, so keep `HAL_GEMINI_VISION_HANDOFF_MAX_AGE_S` above it |
 | `HAL_REALTIME_REQUIRE_TRANSCRIPT` | `true` | Never commit an empty-STT turn to the model. A final transcript containing only punctuation or symbols (for example `.`) is normalized to empty before gaze, speaker-ID, realtime, dispatch, or follow-up refresh; it cannot create a `voice_followup`. Real speech that nova-3 missed (short utterances) is voiced and passes the VAD/Silero guards, so committing its raw audio makes the model invent a reply to silence (a generic greeting, often with a name nobody said). When `true`, any empty-STT turn is dropped regardless of duration/voicing — silence beats a wrong reply. Set `false` to fall back to the Silero-gated audio-only path below. |
 | `HAL_REALTIME_AI_REJECT_FILTER` | `true` | Registers `reject_turn` and enables the isolated `should_drop_realtime_rejection()` policy gate. An explicit tool call drops a transcript before OS dispatch; a silent model completion, timeout, or error still falls back to the main agent. The separate deterministic noise guard is also terminal for audio it already classified as non-speech. Set `false` to disable this experimental AI filter without changing the rest of realtime routing. |

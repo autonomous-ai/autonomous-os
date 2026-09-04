@@ -492,6 +492,12 @@ class GeminiLiveAgent(VoiceAgentBase):
         self._first_audio_received = False
 
         async for message in self._session.receive():
+            # Liveness for the silent-turn watchdog: most of what arrives here
+            # never reaches _recv_queue (thought parts, grounding metadata,
+            # usage-only frames), and without this a turn that is busy grounding
+            # is indistinguishable from one the model abandoned. See
+            # RealtimeVoiceAgent.note_server_activity.
+            self.note_server_activity()
             if message.usage_metadata:
                 # Per-turn token bill. prompt_token_count is the input CONTEXT
                 # billed this turn — it grows as a long-lived session accumulates
