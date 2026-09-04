@@ -105,7 +105,20 @@ with the `:3` intensifier.
 
 Every STT-final-confirmed wake-word turn reaches dispatch. It opens a 20-second
 follow-up focus window (reset after every authorized turn), so the next spoken
-turn can omit the wake phrase and is sent as `voice_followup`. A follow-up has
+turn can omit the wake phrase and is sent as `voice_followup`.
+
+That window is latched once at session start for **dispatch**, so a window that
+expires mid-sentence cannot cut off someone already speaking. The cues that
+claim to be the addressee — the listening LED, the backchannel — ask
+`is_addressed()` instead, which re-reads the window **live**. Gaze is why: it
+can open the window in the middle of the very sentence it acknowledges.
+Device-observed 04/09/2026 on lamp-0c89 — at speech start the camera had no
+face evidence yet (`of 0` samples) so the latch was False, and the watcher only
+confirmed the user 3.6 s later at speech END. The whole turn ran unaddressed:
+no listening cue, no realtime turn (`route=realtime_not_started`, so no
+thinking cue either), and the device sat dark through the sentence and lit up
+only for the next one. Reading live can only ADD an addressed turn, never
+retract one — the latch is still consulted first. A follow-up has
 the same user priority as `voice_command`, but remains separately observable.
 When realtime already spoke, dispatch sends a `voice_agent_handled`
 synchronization event so the main agent records the exchange but stays silent;

@@ -100,7 +100,20 @@ dùng `keyterm`; các model nova cũ hơn dùng `keywords` kèm intensifier `:3`
 
 Mọi lượt wake-word đã được STT final xác nhận đều đi qua dispatch. Nó mở một
 cửa sổ focus follow-up 20 giây (reset sau mỗi lượt được phép), nên câu nói kế
-tiếp có thể bỏ wake phrase và được gửi với type `voice_followup`. Follow-up có
+tiếp có thể bỏ wake phrase và được gửi với type `voice_followup`.
+
+Cửa sổ đó được chốt một lần lúc mở phiên cho **dispatch**, để cửa sổ hết hạn
+giữa câu không cắt lời người đang nói. Còn những cue tự nhận mình là người được
+gọi — LED listening, backchannel — thì hỏi `is_addressed()`, và hàm này đọc lại
+cửa sổ **theo thời gian thực**. Lý do là gaze: nó có thể mở cửa sổ ngay giữa
+chính câu nói mà nó đang xác nhận. Đo trên lamp-0c89 04/09/2026 — lúc bắt đầu
+nói, camera chưa có bằng chứng khuôn mặt nào (`of 0` mẫu) nên cờ chốt là False,
+và watcher mãi 3.6 giây sau, ở cuối câu, mới xác nhận được người dùng. Cả lượt
+đó chạy trong trạng thái "không được gọi": không LED listening, không mở lượt
+realtime (`route=realtime_not_started`, nên cũng không có cue thinking), thiết
+bị tối om suốt câu nói và chỉ sáng lên ở câu kế tiếp. Đọc trực tiếp chỉ có thể
+THÊM lượt được coi là gọi mình, không bao giờ rút lại — cờ chốt vẫn được hỏi
+trước. Follow-up có
 cùng độ ưu tiên người dùng như `voice_command` nhưng vẫn quan sát được riêng.
 Nếu realtime đã nói, dispatch gửi event đồng bộ `voice_agent_handled` để agent
 chính ghi nhớ nhưng im lặng; realtime unavailable, lỗi, timeout hoặc delegate
