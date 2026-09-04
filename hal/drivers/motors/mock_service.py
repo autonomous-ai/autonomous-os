@@ -463,7 +463,9 @@ class MockMotionService:
         if len(frames) < 2 or len(times) != len(frames):
             # No usable time axis: play what was authored rather than invent timing.
             return [(index * step, positions) for index, positions in enumerate(frames)]
-        resampled = resample_recording(times, frames, name, PLAYBACK_FPS)
+        resampled = resample_recording(
+            times, frames, name, PLAYBACK_FPS, self._safety_policy
+        )
         return [(index * step, positions) for index, positions in enumerate(resampled)]
 
     def _record(self, name: str, *args: Any) -> None:

@@ -170,9 +170,19 @@ chính vòng lặp (55 / 100 deg/s, `hal/drivers/tracking/constants.py`) xuống
 trên Lamp (`max_speed: 120`) hôm nay không có gì bị kẹp; gate này dành cho thân nào
 khai trần thấp hơn.
 
-**Vẫn CHƯA gate:** recorded animation. Chúng phát lại frame đã lưu ở fps cố định,
-nên bound tốc độ nghĩa là đổi cách animation trông ra sao, không phải kéo dài một
-con số — đây là câu hỏi mở chứ không phải thiếu một dòng code.
+Recorded animation được gate lúc load chứ không phải từng frame. Recording được
+resample lên đúng lưới fps của vòng phát, và đoạn nào đòi hơn trần thì bị *giãn
+theo thời gian* — cùng kiểu suy giảm mà gate ở route dùng, áp theo từng đoạn nên
+recording chỉ chậm lại đúng chỗ bất khả thi, không chỗ nào khác
+(`hal/drivers/motors/recording_timing.py`, dùng chung cho driver thật và mock để
+simulator phát đúng thứ body phát). Trần là giá trị nhỏ hơn giữa giới hạn đo được
+của servo (`SERVO_MAX_DPS`, 250 deg/s) và `motion.max_speed` đã khai.
+
+**Vẫn CHƯA gate:** recorded move trên đường SDK của Reachy. `ReachyMotionService`
+giao trajectory cho `mini.play_move()` rồi daemon Pollen stream nó, nên HAL chỉ
+bound được đoạn ramp vào frame 0 (`_ramp_for`, qua `min_move_duration`), không
+bound được thân move. Đây là thứ phải trả lời trước nếu muốn có danh sách
+`HAL_REACHY_MOVES` nạp community move từ Hub (#207).
 
 ### Interface learned-policy (dry run)
 
