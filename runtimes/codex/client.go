@@ -154,6 +154,11 @@ func (s *CodexService) runWSConn(ctx context.Context, handler domain.AgentEventH
 			slog.Error("ws handler error", "component", "codex", "event", evt.Event, "error", err)
 		}
 	}
+	// Publish it for the paths that must end a turn from outside this loop (see
+	// failStuckTurn). Cleared on the way out so a dead connection's handler is
+	// never used to answer a later turn.
+	s.wsDispatch.Store(dispatchFn(dispatch))
+	defer s.wsDispatch.Store(dispatchFn(nil))
 
 	for {
 		select {

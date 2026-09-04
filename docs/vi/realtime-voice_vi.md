@@ -100,7 +100,20 @@ dùng `keyterm`; các model nova cũ hơn dùng `keywords` kèm intensifier `:3`
 
 Mọi lượt wake-word đã được STT final xác nhận đều đi qua dispatch. Nó mở một
 cửa sổ focus follow-up 20 giây (reset sau mỗi lượt được phép), nên câu nói kế
-tiếp có thể bỏ wake phrase và được gửi với type `voice_followup`. Follow-up có
+tiếp có thể bỏ wake phrase và được gửi với type `voice_followup`.
+
+Cửa sổ đó được chốt một lần lúc mở phiên cho **dispatch**, để cửa sổ hết hạn
+giữa câu không cắt lời người đang nói. Còn những cue tự nhận mình là người được
+gọi — LED listening, backchannel — thì hỏi `is_addressed()`, và hàm này đọc lại
+cửa sổ **theo thời gian thực**. Lý do là gaze: nó có thể mở cửa sổ ngay giữa
+chính câu nói mà nó đang xác nhận. Đo trên lamp-0c89 04/09/2026 — lúc bắt đầu
+nói, camera chưa có bằng chứng khuôn mặt nào (`of 0` mẫu) nên cờ chốt là False,
+và watcher mãi 3.6 giây sau, ở cuối câu, mới xác nhận được người dùng. Cả lượt
+đó chạy trong trạng thái "không được gọi": không LED listening, không mở lượt
+realtime (`route=realtime_not_started`, nên cũng không có cue thinking), thiết
+bị tối om suốt câu nói và chỉ sáng lên ở câu kế tiếp. Đọc trực tiếp chỉ có thể
+THÊM lượt được coi là gọi mình, không bao giờ rút lại — cờ chốt vẫn được hỏi
+trước. Follow-up có
 cùng độ ưu tiên người dùng như `voice_command` nhưng vẫn quan sát được riêng.
 Nếu realtime đã nói, dispatch gửi event đồng bộ `voice_agent_handled` để agent
 chính ghi nhớ nhưng im lặng; realtime unavailable, lỗi, timeout hoặc delegate
@@ -182,9 +195,27 @@ tạo (`device-chat-<n>-<unix-ms>`), nên khi một sequence THẤP HƠN đến 
 tạo MUỘN HƠN run đang giữ loa, HAL coi như bộ đếm đã restart và nhận sequence mới.
 Id không có dấu thời gian (`tg-<messageID>`) vẫn theo luật sequence thuần: không có
 gì để so thì một POST cũ thật sự không được phép giành lại loa.
-### Silero canh đồng hồ im lặng (kết thúc lượt)
+### Hai đồng hồ im lặng (kết thúc lượt)
 
-Một phiên mic kết thúc khi audio nằm dưới ngưỡng RMS suốt `SILENCE_TIMEOUT_S`.
+Một phiên mic kết thúc khi audio nằm dưới ngưỡng RMS suốt ngân sách im lặng
+hiện hành. Có hai ngân sách: khi STT đã trả về một segment **final** cho lượt
+này, nhà cung cấp đã tự quyết định là người dùng nói xong (Flux phát EndOfTurn,
+nova bắn `is_final` sau cửa sổ endpointing của nó), nên vòng lặp đóng sau
+`ENDPOINT_SILENCE_S` (`HAL_ENDPOINT_SILENCE_S`, mặc định 0.8s) **tính từ lúc
+final đó về**, không phải từ lần nói cuối. Khác biệt này là điểm cốt lõi: Flux
+bắn EndOfTurn cho cả quãng lấy hơi *giữa* một câu nói, nên nếu đo từ lần nói
+cuối thì ngân sách ngắn bị áp ngược vào quãng im lặng đã trôi qua và phiên chết
+ngay frame kế tiếp trong khi người dùng còn đang nói (đo trên lamp-0c89
+04/09/2026: final `'Hello.'` lúc 09:22:50.766, phiên đóng sau đó 114ms, giữa
+câu). Chạy đồng hồ từ final cho người nói một cửa sổ thật để nói tiếp. Ngồi chờ hết
+đồng hồ dài sau bằng chứng đó là dead air nằm trước mọi lần commit realtime —
+đây là chi phí cố định lớn nhất giữa lúc người dùng ngừng nói và lúc model nghe
+được audio. Không có final thì không có bằng chứng đó, nên phiên rỗng hoặc chỉ
+có tiếng ồn vẫn giữ đồng hồ dự phòng dài `SILENCE_TIMEOUT_S` (2.5s). Đặt
+`HAL_ENDPOINT_SILENCE_S=0` để quay lại một đồng hồ dài duy nhất; tăng lên nếu
+thiết bị bắt đầu cắt lời ở những quãng nghỉ giữa câu.
+
+Phần còn lại của mục này nói về bản thân đồng hồ, và áp dụng cho cả hai.
 Chỉ dùng RMS là không đủ trong phòng ồn: tiếng ồn phòng nằm trên
 `RMS_THRESHOLD`, nên frame nào cũng refresh đồng hồ, lượt chạy tới hết
 `MAX_SESSION_DURATION_S`, và audio gần như toàn tiếng ồn vẫn được đẩy sang STT —
@@ -734,6 +765,17 @@ trên queue:
   `OutputBase` đến khi gặp `TurnDoneEvent`, hoặc khi không có event nào trong
   `HAL_REALTIME_RECV_QUEUE_TIMEOUT_S` — mặc định 8 s — để kết thúc lượt im lặng
   và fallback sang main agent mà không bị dead-air dài).
+  Riêng cửa sổ đó không phân biệt được model *quyết định không trả lời* với model
+  *đang làm việc*: một lượt có Google Search grounding không phát ra output nào
+  cho tới khi search về, và cắt ở đó là vứt đi câu trả lời model sắp nói, đẩy
+  lượt xuống main agent chậm hơn nhiều, mà vẫn phải trả tiền cho cái search bị bỏ
+  (chunk của nó rơi vào context session và bị tính lại ở mọi lượt sau). Nhưng
+  trên đường truyền thì hai ca này khác nhau: lượt đang làm việc vẫn liên tục gửi
+  message không bao giờ vào queue (thought part, grounding metadata, frame chỉ có
+  usage), còn lượt bị bỏ thì im hoàn toàn. Provider gọi `note_server_activity()`
+  ở mọi message nhận được, và `receive()` giữ lượt sống quá cửa sổ gap chừng nào
+  còn message về, tối đa `HAL_REALTIME_TURN_MAX_SILENCE_S` (mặc định 20 s) cho cả
+  lượt. Lượt không có message nào về vẫn kết thúc ngay ở cửa sổ gap đầu tiên.
 - `available` ⇔ websocket/session đã connect (`_connected`).
 
 ### An toàn connection của OpenAI
@@ -952,7 +994,14 @@ sớm ("hello") ngay sau khi restart sẽ rớt xuống main agent.
    nhìn như đứng hình.
 
    Cùng lúc commit cũng arm **dead-air filler** (`_WaitFiller`) — nửa phần tiếng
-   của chính cue đó. Sau `HAL_REALTIME_FILLER_DELAY_S` (mặc định 1.5s) mà vẫn
+   của chính cue đó. (Câu **đầu tiên** của một lượt không chờ dấu kết câu: khi
+   buffer đã có một mệnh đề dùng được, nó được cắt ở dấu phẩy / chấm phẩy / hai
+   chấm cuối cùng — hoặc ở khoảng trắng cuối nếu đã vượt
+   `HAL_REALTIME_FIRST_CHUNK_MAX_CHARS` — và nói ngay, phần còn lại xếp hàng
+   phía sau. Chỉ chunk đầu được cắt kiểu này vì đó là chunk duy nhất người dùng
+   phải ngồi im chờ; mệnh đề ngắn dưới 8 ký tự bị coi là cụt và tiếp tục chờ.
+   Đặt `=0` để quay lại chờ trọn câu. Native audio không bị ảnh hưởng.)
+   Sau `HAL_REALTIME_FILLER_DELAY_S` (mặc định 1.5s) mà vẫn
    chưa có output nào, HAL gọi `POST /api/sensing/filler` và os-server phát một
    câu filler mở đầu từ cache — pool phrase, ngôn ngữ và WAV cache đều nằm ở
    os-server, nên khoảng chờ realtime và khoảng chờ main agent nghe giống nhau.
@@ -1151,6 +1200,8 @@ trong `config.json`:
 | `HAL_REALTIME_PROVIDER` | `gemini` | `none` \| `gemini` \| `openai` \| `qwen` |
 | `HAL_REALTIME_TURN_DETECTION` | `off` | `server_vad` \| `semantic_vad` \| `off` (Gemini: off = activity detection thủ công) |
 | `HAL_REALTIME_RECV_QUEUE_TIMEOUT_S` | `8.0` | Số giây tối đa `receive()` chờ output event kế tiếp trước khi kết thúc lượt im lặng (fallback sang main agent) |
+| `HAL_REALTIME_GROUNDING_DEBUG` | `false` | In toàn bộ field của `grounding_metadata` từ Gemini, mỗi lượt có grounding một lần (`grounding_chunks`, `grounding_supports`, `search_entry_point`, …). Chỉ để chẩn đoán và rất dài dòng; nó sinh ra để phân biệt lượt mà search thật sự không trả về gì với lượt bị cắt payload trên đường truyền. Đo trên lamp-0c89 04/09/2026 qua bốn lượt có grounding, payload luôn về đủ — nên `chunks=0` nghĩa là model không dùng nguồn nào cho câu trả lời đó. |
+| `HAL_REALTIME_TURN_MAX_SILENCE_S` | `20.0` | Trần thời gian một lượt được im lặng khi server vẫn còn gửi message. `receive()` chỉ kéo dài quá `HAL_REALTIME_RECV_QUEUE_TIMEOUT_S` khi lưu lượng vào chứng minh model còn đang làm việc (search grounding không phát output tới khi xong); trần này chặn trường hợp server nói liên tục mà không bao giờ ra output. `0` tắt cơ chế giữ lượt, quay về watchdog gap thuần. |
 | `HAL_REALTIME_LOOK_RECV_TIMEOUT_S` | `20.0` | Watchdog im-lặng dùng thay mặc định cho turn có `look` (theo từng turn, qua `extend_recv_timeout()`). Gemini bị ép thinking trên frame dày chữ có thể im >8 s ngay trước khi trả lời — watchdog mặc định giết nhầm mấy turn đó. Nâng nó lên là hoãn luôn handoff frame `look`, nên phải giữ `HAL_GEMINI_VISION_HANDOFF_MAX_AGE_S` cao hơn |
 | `HAL_REALTIME_REQUIRE_TRANSCRIPT` | `true` | Không bao giờ commit turn empty-STT lên model. Final transcript chỉ có dấu câu/ký hiệu (ví dụ `.`) được chuẩn hoá thành empty trước gaze, speaker-ID, realtime, dispatch hay refresh follow-up; nó không thể tạo `voice_followup`. Giọng thật mà nova-3 miss (câu ngắn) vẫn là voiced nên qua hết guard VAD/Silero, commit audio thô khiến model bịa câu trả lời cho khoảng im lặng (lời chào chung chung, thường kèm tên không ai nói). Khi `true`, mọi turn empty-STT bị bỏ bất kể duration/voicing — im còn hơn trả lời sai. Đặt `false` để quay về đường audio-only gated bằng Silero bên dưới. |
 | `HAL_REALTIME_AI_REJECT_FILTER` | `true` | Đăng ký `reject_turn` và bật policy gate tách riêng `should_drop_realtime_rejection()`. Tool call rõ ràng sẽ bỏ transcript trước OS dispatch; model im lặng, timeout hay lỗi vẫn fallback sang main agent. Noise guard deterministic riêng cũng terminal cho audio mà nó đã phân loại là không phải tiếng nói. Đặt `false` để tắt filter AI thử nghiệm này mà không đổi phần routing realtime còn lại. |

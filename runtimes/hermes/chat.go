@@ -16,18 +16,18 @@ import (
 // Returns the run ID (== idempotency key) the caller should use to correlate
 // flow/monitor events with the resulting SSE stream.
 func (s *HermesService) SendChatMessage(message string) (string, error) {
-	return s.sendChat(message, "", "", "", "user", nil)
+	return s.sendChat(message, nil, "", "", "user", nil)
 }
 
 // SendSystemChatMessage flags the flow event as a system-originated message
 // (skill watcher, wake greeting, /compact) so Flow Monitor renders it
 // separately from real user input. Wire payload is identical otherwise.
 func (s *HermesService) SendSystemChatMessage(message string) (string, error) {
-	return s.sendChat(message, "", "", "", "system", nil)
+	return s.sendChat(message, nil, "", "", "system", nil)
 }
 
-func (s *HermesService) SendChatMessageWithImage(message string, imageBase64 string) (string, error) {
-	return s.sendChat(message, imageBase64, "", "", "user", nil)
+func (s *HermesService) SendChatMessageWithImages(message string, imagesBase64 []string) (string, error) {
+	return s.sendChat(message, imagesBase64, "", "", "user", nil)
 }
 
 // NextChatRunID allocates the run / req id pair. Caller flow.SetTrace(runID)
@@ -41,11 +41,11 @@ func (s *HermesService) NextChatRunID() (reqID string, runID string) {
 }
 
 func (s *HermesService) SendChatMessageWithRun(message string, reqID string, runID string) (string, error) {
-	return s.sendChat(message, "", reqID, runID, "user", nil)
+	return s.sendChat(message, nil, reqID, runID, "user", nil)
 }
 
-func (s *HermesService) SendChatMessageWithImageAndRun(message string, imageBase64 string, reqID string, runID string) (string, error) {
-	return s.sendChat(message, imageBase64, reqID, runID, "user", nil)
+func (s *HermesService) SendChatMessageWithImagesAndRun(message string, imagesBase64 []string, reqID string, runID string) (string, error) {
+	return s.sendChat(message, imagesBase64, reqID, runID, "user", nil)
 }
 
 // SendSlashCommandWithRun — Hermes has no per-channel "deliver:false" flag,
@@ -53,11 +53,11 @@ func (s *HermesService) SendChatMessageWithImageAndRun(message string, imageBase
 // Marker: we still tag the flow source so logs distinguish "this came from
 // web monitor" vs voice.
 func (s *HermesService) SendSlashCommandWithRun(message string, reqID string, runID string) (string, error) {
-	return s.sendChat(message, "", reqID, runID, "user_slash", nil)
+	return s.sendChat(message, nil, reqID, runID, "user_slash", nil)
 }
 
-func (s *HermesService) SendSlashCommandWithImageAndRun(message string, imageBase64 string, reqID string, runID string) (string, error) {
-	return s.sendChat(message, imageBase64, reqID, runID, "user_slash", nil)
+func (s *HermesService) SendSlashCommandWithImagesAndRun(message string, imagesBase64 []string, reqID string, runID string) (string, error) {
+	return s.sendChat(message, imagesBase64, reqID, runID, "user_slash", nil)
 }
 
 // sendChat is the internal entry. It:
@@ -70,7 +70,7 @@ func (s *HermesService) SendSlashCommandWithImageAndRun(message string, imageBas
 //
 // Returns the device run ID (idempotency-style) once the POST has been
 // kicked off — not after response.completed. Caller correlates via SSE.
-func (s *HermesService) sendChat(message string, imageBase64 string, fixedReqID string, fixedRunID string, sourceType string, _ any) (string, error) {
+func (s *HermesService) sendChat(message string, imagesBase64 []string, fixedReqID string, fixedRunID string, sourceType string, _ any) (string, error) {
 	if !s.ready.Load() {
 		return "", fmt.Errorf("hermes not ready")
 	}
@@ -107,18 +107,23 @@ func (s *HermesService) sendChat(message string, imageBase64 string, fixedReqID 
 		Conversation: s.conversationName(),
 		Stream:       true,
 	}
-	hasImage := imageBase64 != ""
+	// One input_image block per attached photo, after the single text block —
+	// the content list is what lets a turn carry several images at once.
+	content := []inputContent{{Type: "input_text", Text: wsMessage}}
+	imgLen := 0
+	for _, img := range imagesBase64 {
+		if img == "" {
+			continue
+		}
+		imgLen += len(img)
+		content = append(content, inputContent{Type: "input_image", ImageURL: "data:image/jpeg;base64," + img})
+	}
+	hasImage := len(content) > 1
 	if hasImage {
-		body.Input = []inputMessage{{
-			Role: "user",
-			Content: []inputContent{
-				{Type: "input_text", Text: wsMessage},
-				{Type: "input_image", ImageURL: "data:image/jpeg;base64," + imageBase64},
-			},
-		}}
-		slog.Info("[hermes /v1/responses] attaching image", "component", "hermes",
-			"reqId", reqID, "runId", idempotencyKey,
-			"base64Len", len(imageBase64), "approxKB", len(imageBase64)*3/4/1024)
+		body.Input = []inputMessage{{Role: "user", Content: content}}
+		slog.Info("[hermes /v1/responses] attaching images", "component", "hermes",
+			"reqId", reqID, "runId", idempotencyKey, "count", len(content)-1,
+			"base64Len", imgLen, "approxKB", imgLen*3/4/1024)
 	} else {
 		body.Input = wsMessage
 	}
@@ -143,7 +148,8 @@ func (s *HermesService) sendChat(message string, imageBase64 string, fixedReqID 
 		"model", body.Model,
 		"source", sourceType,
 		"hasImage", hasImage,
-		"imageBytes", len(imageBase64),
+		"imageCount", len(content) - 1,
+		"imageBytes", imgLen,
 		"msgLen", len(message),
 		"message", truncRunes(message, 500))
 
@@ -152,7 +158,8 @@ func (s *HermesService) sendChat(message string, imageBase64 string, fixedReqID 
 		"type":        sourceType,
 		"has_session": s.GetSessionKey() != "",
 		"has_image":   hasImage,
-		"image_bytes": len(imageBase64),
+		"image_count": len(content) - 1,
+		"image_bytes": imgLen,
 		"message":     message,
 	}, idempotencyKey)
 

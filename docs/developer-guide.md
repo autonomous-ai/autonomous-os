@@ -207,7 +207,8 @@ Common knobs:
 | `HAL_AUDIO_INPUT_ALSA` | Mic ALSA device (`plug:device_micro2` on Intern v2 Pro) |
 | `HAL_AUDIO_OUTPUT_ALSA` | Speaker ALSA device |
 | `HAL_VAD_THRESHOLD` | Voice-activity RMS floor (lower = more sensitive) |
-| `HAL_SILENCE_TIMEOUT` | Seconds of silence before committing a turn |
+| `HAL_SILENCE_TIMEOUT` | Seconds of silence before committing a turn (fallback clock, no STT final) |
+| `HAL_ENDPOINT_SILENCE_S` | Seconds of silence before committing a turn once STT emitted a final |
 | `HAL_REALTIME_TURN_DETECTION` | `on` = server-side VAD (Gemini/OpenAI), `off` = client VAD |
 | `HAL_GEMINI_LIVE_MODEL` | Gemini realtime model id |
 | `HAL_OPENAI_REALTIME_MODEL` | OpenAI realtime model id |

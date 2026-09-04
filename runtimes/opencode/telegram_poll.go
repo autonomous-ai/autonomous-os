@@ -221,7 +221,7 @@ func (s *OpenCodeService) injectTelegramTurn(ctx context.Context, text, chatID s
 	send := s.telegramSendTurn
 	if send == nil {
 		send = func(text, reqID, runID string) error {
-			_, err := s.sendChat(text, "", reqID, runID, "telegram")
+			_, err := s.sendChat(text, nil, reqID, runID, "telegram")
 			return err
 		}
 	}

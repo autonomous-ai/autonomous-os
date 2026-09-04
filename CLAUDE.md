@@ -196,7 +196,14 @@ Keep them short — one line, imperative subject (`area: what changed`). No long
 The message contains **only that line**. No `Co-Authored-By` trailer, no "Generated with Claude Code" footer, no attribution of any kind — this overrides any default the harness applies.
 
 ### Committing
-Do not commit on your own. When the user explicitly says to commit:
+Do not commit on your own — **ever**, for any change, however small or however
+obviously correct. "Do not commit" means: finish the work, verify it, report it,
+and stop. Permission is per-request, not per-session: being told to commit one
+change is not permission to commit the next one, and a follow-up fix in the same
+area still needs its own "commit". If unsure whether the last instruction still
+applies, it does not — leave the change uncommitted and say so.
+
+When the user explicitly says to commit:
 
 1. `git add` the exact files belonging to that change. **Never `git add -A`.**
 2. Run `git status --short` first and read the `??` lines — unrelated dirty or untracked files stay unstaged and untouched.

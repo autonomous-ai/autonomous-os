@@ -24,7 +24,7 @@ type busyGateway struct {
 
 func (g *busyGateway) IsBusy() bool { return true }
 func (g *busyGateway) Name() string { return "fake" }
-func (g *busyGateway) QueuePendingEvent(eventType, msg, image, fixedRunID string) {
+func (g *busyGateway) QueuePendingEvent(eventType, msg string, images []string, fixedRunID string) {
 	g.queued++
 }
 

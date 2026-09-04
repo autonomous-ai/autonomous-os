@@ -1,5 +1,10 @@
 // chatImageStore — best-effort IndexedDB persistence for chat image
-// attachments, keyed by ChatMessage id.
+// attachments, keyed by "<ChatMessage id>#<index>".
+//
+// The index is why the key is composite: one message can carry SEVERAL photos
+// (the composer accepts a multi-select), and a plain message-id key could only
+// ever hold the last one. Everything that addresses a message — delete, prune —
+// therefore compares the BASE id, not the raw key.
 //
 // Why: chat history lives in localStorage (~5MB origin quota), so
 // saveConvos() strips `imageUrl` data-URLs before persisting — a few photos
@@ -59,21 +64,35 @@ async function withStore(mode: IDBTransactionMode, fn: (store: IDBObjectStore) =
   }
 }
 
-/** Persist a message's image data-URL. Fire-and-forget from the send path. */
-export async function putChatImage(messageId: string, dataUrl: string): Promise<void> {
+/** Strip the "#<index>" suffix so message-addressed calls still match. */
+function baseMessageId(key: string): string {
+  const hash = key.lastIndexOf("#");
+  return hash === -1 ? key : key.slice(0, hash);
+}
+
+/** Persist a message's image data-URLs, in order. Fire-and-forget from send. */
+export async function putChatImages(messageId: string, dataUrls: string[]): Promise<void> {
+  if (dataUrls.length === 0) return;
   try {
     await withStore("readwrite", (store) => {
-      const entry: StoredImage = { dataUrl, savedAt: Date.now() };
-      store.put(entry, messageId);
+      const savedAt = Date.now();
+      dataUrls.forEach((dataUrl, i) => {
+        const entry: StoredImage = { dataUrl, savedAt };
+        store.put(entry, `${messageId}#${i}`);
+      });
     });
   } catch {
     /* best-effort */
   }
 }
 
-/** All stored images as messageId → dataUrl. Used once at mount to rehydrate. */
-export async function getAllChatImages(): Promise<Map<string, string>> {
-  const out = new Map<string, string>();
+/**
+ * All stored images as messageId → dataUrls, in attachment order. Used once at
+ * mount to rehydrate. Grouped by base id so a message that carried several
+ * photos comes back with all of them, not just whichever key sorted last.
+ */
+export async function getAllChatImages(): Promise<Map<string, string[]>> {
+  const out = new Map<string, string[]>();
   try {
     const db = await openDB();
     try {
@@ -85,8 +104,15 @@ export async function getAllChatImages(): Promise<Map<string, string>> {
         tx.oncomplete = () => {
           const keys = keysReq.result as string[];
           const vals = valsReq.result as StoredImage[];
+          // getAllKeys is sorted, so "id#0" precedes "id#1" and pushing in
+          // iteration order preserves the order they were attached in.
           keys.forEach((k, i) => {
-            if (vals[i]?.dataUrl) out.set(k, vals[i].dataUrl);
+            const dataUrl = vals[i]?.dataUrl;
+            if (!dataUrl) return;
+            const id = baseMessageId(k);
+            const list = out.get(id);
+            if (list) list.push(dataUrl);
+            else out.set(id, [dataUrl]);
           });
           resolve();
         };
@@ -105,9 +131,28 @@ export async function getAllChatImages(): Promise<Map<string, string>> {
 export async function deleteChatImages(messageIds: string[]): Promise<void> {
   if (messageIds.length === 0) return;
   try {
-    await withStore("readwrite", (store) => {
-      for (const id of messageIds) store.delete(id);
-    });
+    const doomed = new Set(messageIds);
+    const db = await openDB();
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction(STORE, "readwrite");
+        const store = tx.objectStore(STORE);
+        // Cursor rather than delete-by-key: one message owns several keys now,
+        // and only the base id is known here.
+        const cursorReq = store.openCursor();
+        cursorReq.onsuccess = () => {
+          const cursor = cursorReq.result;
+          if (!cursor) return;
+          if (doomed.has(baseMessageId(cursor.key as string))) cursor.delete();
+          cursor.continue();
+        };
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error ?? new Error("indexedDB tx failed"));
+        tx.onabort = () => reject(tx.error ?? new Error("indexedDB tx aborted"));
+      });
+    } finally {
+      db.close();
+    }
   } catch {
     /* best-effort */
   }
@@ -132,7 +177,7 @@ export async function pruneChatImages(keepIds: Set<string>): Promise<void> {
           if (!cursor) return;
           const key = cursor.key as string;
           const val = cursor.value as StoredImage;
-          if (!keepIds.has(key) && (val?.savedAt ?? 0) < cutoff) {
+          if (!keepIds.has(baseMessageId(key)) && (val?.savedAt ?? 0) < cutoff) {
             cursor.delete();
           }
           cursor.continue();

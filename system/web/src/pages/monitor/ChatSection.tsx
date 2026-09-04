@@ -8,7 +8,7 @@ import {
 import { API } from "./types";
 import { getDeviceConfig } from "@/lib/api";
 import {
-  putChatImage, getAllChatImages, deleteChatImages, pruneChatImages, clearChatImages,
+  putChatImages, getAllChatImages, deleteChatImages, pruneChatImages, clearChatImages,
 } from "@/lib/chatImageStore";
 import { useT, setLanguage } from "@/lib/i18n";
 import type { DisplayEvent, MonitorEvent } from "./types";
@@ -474,11 +474,12 @@ interface ChatMessage {
   time: string;
   ts?: number;         // epoch ms — used to age-gate pending-run recovery after reload
   date?: string;       // YYYY-MM-DD for date separators
-  imageUrl?: string;   // data: URL for attached images — stripped from localStorage
+  imageUrls?: string[]; // data: URLs for attached images — stripped from localStorage
                        // (quota), persisted separately in IndexedDB (chatImageStore)
                        // and re-attached by the mount rehydrate effect
   fileName?: string;   // original filename for non-image files
   fileSize?: number;   // bytes
+  attachmentCount?: number; // set when the turn carried more than one attachment
   runId?: string;
   pending?: boolean;
   error?: boolean;
@@ -560,10 +561,10 @@ function saveConvos(convos: Conversation[]) {
   try {
     const trimmed = convos.slice(0, MAX_CONVOS).map((c) => ({
       ...c,
-      // Strip large data from localStorage (imageUrl data: URLs are too large).
+      // Strip large data from localStorage (imageUrls data: URLs are too large).
       // The images themselves live in IndexedDB (chatImageStore) keyed by
       // message id and are re-attached on mount.
-      messages: c.messages.slice(-MAX_MESSAGES).map(({ imageUrl: _, ...m }) => m),
+      messages: c.messages.slice(-MAX_MESSAGES).map(({ imageUrls: _, ...m }) => m),
       // fileName/fileSize are kept — they're small strings/numbers
     }));
     const envelope: ConvosEnvelope = { savedAt: Date.now(), convos: trimmed };
@@ -625,6 +626,24 @@ function copyToClipboard(text: string): Promise<void> {
 // Attachment size ceiling. Module-level constant so it keeps a stable identity
 // across renders (it is read inside a memoized callback).
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
+// Cap on attachments per turn. Each one is base64 in the POST body and every
+// image additionally costs one describe call when the main model is text-only,
+// so an accidental "select all" in a photo folder has to bounce off something.
+const MAX_ATTACHMENTS = 8;
+
+// Attachment is one file staged in the composer. The composer holds a LIST:
+// a turn can carry several photos and several documents, which is what the
+// sensing endpoint (`images[]` + `files[]`) and every wire format behind it
+// already accept.
+type Attachment = {
+  id: string;
+  name: string;
+  mime: string;
+  size: number;
+  isImage: boolean;
+  base64: string;
+  previewUrl: string | null; // data: URL, images only
+};
 
 interface Props {
   events: DisplayEvent[];
@@ -651,7 +670,7 @@ export function ChatSection({ events, isActive }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
 
   // Rehydrate image attachments from IndexedDB — saveConvos() strips
-  // `imageUrl` from localStorage (quota), so after a reload the thumbnails
+  // `imageUrls` from localStorage (quota), so after a reload the thumbnails
   // are gone until this re-attaches them by message id. Also prunes stored
   // images whose message no longer exists in any conversation (trimmed by
   // MAX_MESSAGES/MAX_CONVOS, deleted convos, or TTL-dropped history) —
@@ -669,7 +688,7 @@ export function ChatSection({ events, isActive }: Props) {
       setConvos((prev) => prev.map((c) => ({
         ...c,
         messages: c.messages.map((m) =>
-          !m.imageUrl && stored.has(m.id) ? { ...m, imageUrl: stored.get(m.id) } : m,
+          !m.imageUrls?.length && stored.has(m.id) ? { ...m, imageUrls: stored.get(m.id) } : m,
         ),
       })));
     });
@@ -729,12 +748,11 @@ export function ChatSection({ events, isActive }: Props) {
     display: "inline-flex", alignItems: "center", gap: 5,
     fontSize: 11, fontWeight: 600,
   };
-  const [filePreview, setFilePreview] = useState<string | null>(null);    // data: URL (images only)
-  const [fileBase64, setFileBase64] = useState<string | null>(null);      // raw base64 for API
-  const [fileName, setFileName] = useState<string | null>(null);
-  const [fileMime, setFileMime] = useState("");
-  const [fileSize, setFileSize] = useState<number>(0);
-  const [fileIsImage, setFileIsImage] = useState(false);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  // Full-size viewer for an attached photo. A chat thumbnail is 120-200px, which
+  // is too small to check what was actually sent — the same lightbox the Flow
+  // section uses for snapshots (FlowSection/PoseBucketModal).
+  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
   // Desktop (≥768px) always opens history by default; user can still collapse
   // for a session. Mobile (<768px) stays collapsed so the chat area gets the
   // full width. We don't persist the desktop preference — the request was that
@@ -769,6 +787,15 @@ export function ChatSection({ events, isActive }: Props) {
   // Persist
   useEffect(() => { saveConvos(convos); }, [convos]);
   useEffect(() => { saveActiveId(activeId); }, [activeId]);
+
+  // Esc closes the full-size viewer. Window-level because the lightbox is a
+  // plain div — nothing inside it holds focus to receive a key event.
+  useEffect(() => {
+    if (!lightboxUrl) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setLightboxUrl(null); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [lightboxUrl]);
 
   // Keyboard shortcut: Cmd/Ctrl+N for new chat
   useEffect(() => {
@@ -1264,6 +1291,28 @@ export function ChatSection({ events, isActive }: Props) {
     if (pendingRunIdRef.current) return; // a live send is already tracked
     const convo = convos.find((c) => c.id === activeId);
     if (!convo) return;
+    // A pending bubble with NO run id belongs to a send whose POST was still
+    // in flight when the page went away — the composer shows the waiting bubble
+    // immediately, and the run id only arrives when the request returns. Nothing
+    // will ever resolve it (the request died with the page), so finalize it
+    // instead of leaving three dots spinning forever. The device may well have
+    // run the turn; the retry button is the honest exit.
+    const strandedIds: string[] = [];
+    for (const m of convo.messages) {
+      if (m.pending && !m.runId && m.role === "agent") strandedIds.push(m.id);
+    }
+    if (strandedIds.length > 0) {
+      const stranded = new Set(strandedIds);
+      setConvos((prev) =>
+        prev.map((c) =>
+          c.id === convo.id
+            ? { ...c, messages: c.messages.map((m) => stranded.has(m.id)
+                ? { ...m, text: "⏹ interrupted — the page reloaded before the device answered", pending: false, error: true }
+                : m) }
+            : c,
+        ),
+      );
+    }
     let idx = -1;
     for (let i = convo.messages.length - 1; i >= 0; i--) {
       const m = convo.messages[i];
@@ -1378,30 +1427,38 @@ export function ChatSection({ events, isActive }: Props) {
     const reader = new FileReader();
     reader.onload = () => {
       const dataUrl = reader.result as string;
-      setFileBase64(dataUrl.split(",")[1] ?? null);
-      setFileName(file.name);
-      setFileMime(file.type);
-      setFileSize(file.size);
-      setFileIsImage(isImage);
-      setFilePreview(isImage ? dataUrl : null);
+      const base64 = dataUrl.split(",")[1] ?? "";
+      if (!base64) return;
+      // Cap checked HERE, not at the call site: files arrive one FileReader at
+      // a time, so a multi-select of 20 would each pass an up-front check and
+      // still land 20.
+      setAttachments((prev) => prev.length >= MAX_ATTACHMENTS ? prev : [...prev, {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        name: file.name,
+        mime: file.type,
+        size: file.size,
+        isImage,
+        base64,
+        previewUrl: isImage ? dataUrl : null,
+      }]);
     };
     reader.readAsDataURL(file);
   }, []);
 
+  const attachFiles = useCallback((files: FileList | File[]) => {
+    for (const file of Array.from(files)) attachFile(file);
+  }, [attachFile]);
+
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) attachFile(file);
+    if (e.target.files?.length) attachFiles(e.target.files);
     e.target.value = "";
   };
 
-  const clearFile = () => {
-    setFilePreview(null);
-    setFileBase64(null);
-    setFileName(null);
-    setFileMime("");
-    setFileSize(0);
-    setFileIsImage(false);
-  };
+  const removeAttachment = useCallback((id: string) => {
+    setAttachments((prev) => prev.filter((a) => a.id !== id));
+  }, []);
+
+  const clearFile = () => setAttachments([]);
 
   // Drag & drop
   const onDragOver = useCallback((e: React.DragEvent) => {
@@ -1416,24 +1473,22 @@ export function ChatSection({ events, isActive }: Props) {
   const onDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     setDragging(false);
-    const file = e.dataTransfer.files[0];
-    if (file) attachFile(file);
-  }, [attachFile]);
+    if (e.dataTransfer.files?.length) attachFiles(e.dataTransfer.files);
+  }, [attachFiles]);
 
   // Paste image from clipboard
   const onPaste = useCallback((e: React.ClipboardEvent) => {
     const items = e.clipboardData.items;
+    const images: File[] = [];
     for (let i = 0; i < items.length; i++) {
-      if (items[i].type.startsWith("image/")) {
-        const file = items[i].getAsFile();
-        if (file) {
-          e.preventDefault();
-          attachFile(file);
-          return;
-        }
-      }
+      if (!items[i].type.startsWith("image/")) continue;
+      const file = items[i].getAsFile();
+      if (file) images.push(file);
     }
-  }, [attachFile]);
+    if (images.length === 0) return;
+    e.preventDefault();
+    attachFiles(images);
+  }, [attachFiles]);
 
   const exportConversation = () => {
     if (!active || active.messages.length === 0) return;
@@ -1494,13 +1549,19 @@ export function ChatSection({ events, isActive }: Props) {
     const dateStr = nowDate.toISOString().slice(0, 10);
     const userMsg: ChatMessage = {
       id: `u-${Date.now()}`, role: "user", text, time: now, ts: nowDate.getTime(), date: dateStr,
-      imageUrl: filePreview ?? undefined,
-      fileName: (!fileIsImage && fileName) ? fileName : undefined,
-      fileSize: (!fileIsImage && fileSize) ? fileSize : undefined,
+      // EVERY attached photo, not just the first: the bubble is the user's only
+      // record of what they actually sent, and showing one thumbnail for a
+      // two-image turn reads as "the second one was dropped".
+      imageUrls: attachments.filter((a) => a.isImage).map((a) => a.previewUrl!).filter(Boolean),
+      fileName: attachments.find((a) => !a.isImage)?.name,
+      fileSize: attachments.find((a) => !a.isImage)?.size,
+      attachmentCount: attachments.filter((a) => !a.isImage).length > 1
+        ? attachments.filter((a) => !a.isImage).length
+        : undefined,
     };
-    // Persist the attachment out-of-band: localStorage strips imageUrl on
-    // save, IndexedDB keeps it so the thumbnail survives a reload.
-    if (filePreview) void putChatImage(userMsg.id, filePreview);
+    // Persist the attachments out-of-band: localStorage strips them on save,
+    // IndexedDB keeps them so the thumbnails survive a reload.
+    void putChatImages(userMsg.id, attachments.filter((a) => a.isImage).map((a) => a.previewUrl!).filter(Boolean));
 
     setConvos((prev) =>
       prev.map((c) => {
@@ -1513,21 +1574,43 @@ export function ChatSection({ events, isActive }: Props) {
     setInput("");
     clearFile();
     setSending(true);
+    // Show the waiting bubble NOW, before the POST — not after it returns with a
+    // run id. The request itself can take a minute: the sensing handler runs the
+    // describe-first vision gate inline, once per attached image, so a two-photo
+    // turn sat ~53 s with an empty thread (measured 2026-09-03). With no sign the
+    // message went anywhere, the natural move is to reload the page — which
+    // cancels the in-flight POST, so the reply had nowhere to land and the turn
+    // looked lost even though the device answered it fine.
+    const localReplyId = `l-pending-${Date.now()}`;
+    setConvos((prev) =>
+      prev.map((c) =>
+        c.id === targetId
+          ? { ...c, messages: [...c.messages, { id: localReplyId, role: "agent", text: "", time: now, ts: Date.now(), pending: true }] }
+          : c,
+      ),
+    );
     setTimeout(scrollToBottom, 50);
 
     // Images ride `image` (the device runs its describe-first vision gate on
     // that field); anything else rides `file`, which lands on disk with its real
     // extension. They used to share `image`, so a PDF was written as `.jpg` and
     // then failed the vision gate.
-    const sendImage = attachedImage ?? (fileIsImage ? fileBase64 : null);
-    const sendFile = !fileIsImage && fileBase64
-      ? { name: fileName ?? "attachment", mime: fileMime, content: fileBase64 }
-      : null;
+    // Photos and documents ride separate fields because os-server handles them
+    // oppositely: an image goes through the describe-first vision gate, a
+    // document must not (it would fail there) and is only saved + tagged.
+    const staged = attachments;
+    const sendImages = [
+      ...(attachedImage ? [attachedImage] : []),
+      ...staged.filter((a) => a.isImage).map((a) => a.base64),
+    ];
+    const sendFiles = staged.filter((a) => !a.isImage).map((a) => ({
+      name: a.name || "attachment", mime: a.mime, content: a.base64,
+    }));
 
     try {
       const body: Record<string, unknown> = { type: "web_chat", message: text };
-      if (sendImage) body.image = sendImage;
-      if (sendFile) body.file = sendFile;
+      if (sendImages.length > 0) body.images = sendImages;
+      if (sendFiles.length > 0) body.files = sendFiles;
       const res = await fetch(`${API}/sensing/event`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1540,10 +1623,16 @@ export function ChatSection({ events, isActive }: Props) {
         pendingRunIdRef.current = runId;
         pendingUserTextRef.current = text;
         const replyTime = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+        // Adopt the bubble that has been spinning since the click — attaching the
+        // run id to it rather than appending a second one, so the user never sees
+        // two agent bubbles for one message. The id changes with it: `l-<runId>`
+        // is what the reload-recovery path looks for.
         setConvos((prev) =>
           prev.map((c) =>
             c.id === targetId
-              ? { ...c, messages: [...c.messages, { id: `l-${runId}`, role: "agent", text: "", time: replyTime, ts: Date.now(), runId, pending: true }] }
+              ? { ...c, messages: c.messages.map((m) => m.id === localReplyId
+                  ? { ...m, id: `l-${runId}`, runId, time: replyTime, ts: Date.now() }
+                  : m) }
               : c,
           ),
         );
@@ -1554,7 +1643,9 @@ export function ChatSection({ events, isActive }: Props) {
         setConvos((prev) =>
           prev.map((c) =>
             c.id === targetId
-              ? { ...c, messages: [...c.messages, { id: `l-local-${Date.now()}`, role: "agent", text: localText, time: now }] }
+              ? { ...c, messages: c.messages.map((m) => m.id === localReplyId
+                  ? { ...m, text: localText, pending: false }
+                  : m) }
               : c,
           ),
         );
@@ -1563,7 +1654,9 @@ export function ChatSection({ events, isActive }: Props) {
         setConvos((prev) =>
           prev.map((c) =>
             c.id === targetId
-              ? { ...c, messages: [...c.messages, { id: `l-drop-${Date.now()}`, role: "agent", text: "⏸ busy — try again", time: now, error: true }] }
+              ? { ...c, messages: c.messages.map((m) => m.id === localReplyId
+                  ? { ...m, text: "⏸ busy — try again", pending: false, error: true }
+                  : m) }
               : c,
           ),
         );
@@ -1572,7 +1665,9 @@ export function ChatSection({ events, isActive }: Props) {
         setConvos((prev) =>
           prev.map((c) =>
             c.id === targetId
-              ? { ...c, messages: [...c.messages, { id: `l-err-${Date.now()}`, role: "agent", text: json.message ?? "error", time: now, error: true }] }
+              ? { ...c, messages: c.messages.map((m) => m.id === localReplyId
+                  ? { ...m, text: json.message ?? "error", pending: false, error: true }
+                  : m) }
               : c,
           ),
         );
@@ -1582,7 +1677,9 @@ export function ChatSection({ events, isActive }: Props) {
       setConvos((prev) =>
         prev.map((c) =>
           c.id === targetId
-            ? { ...c, messages: [...c.messages, { id: `l-err-${Date.now()}`, role: "agent", text: "connection error", time: now, error: true }] }
+            ? { ...c, messages: c.messages.map((m) => m.id === localReplyId
+                ? { ...m, text: "connection error", pending: false, error: true }
+                : m) }
             : c,
         ),
       );
@@ -1594,9 +1691,9 @@ export function ChatSection({ events, isActive }: Props) {
     // leaves the recreation frequency identical.
     // armReplyWatchdog is useCallback-stable, so listing it leaves sendText's
     // recreation frequency unchanged.
-  }, [activeId, sending, filePreview, fileBase64, fileIsImage, fileName, fileMime, fileSize, scrollToBottom, armReplyWatchdog]);
+  }, [activeId, sending, attachments, scrollToBottom, armReplyWatchdog]);
 
-  // sendText derives the outbound field from fileIsImage. Passing the raw
+  // sendText splits the staged attachments by kind itself. Passing the raw
   // base64 here would make every attachment look like an image.
   const send = () => { sendText(input.trim()); };
 
@@ -2096,15 +2193,27 @@ export function ChatSection({ events, isActive }: Props) {
                   fontSize: 13.5, lineHeight: 1.55, wordBreak: "break-word",
                   minWidth: 40, minHeight: 36, position: "relative",
                 }}>
-                  {msg.imageUrl && (
-                    <img
-                      src={msg.imageUrl}
-                      alt="attached"
-                      style={{
-                        maxWidth: 200, maxHeight: 150, borderRadius: 6,
-                        marginBottom: msg.text ? 6 : 0,
-                      }}
-                    />
+                  {msg.imageUrls && msg.imageUrls.length > 0 && (
+                    <div style={{
+                      display: "flex", flexWrap: "wrap", gap: 4,
+                      marginBottom: msg.text ? 6 : 0,
+                    }}>
+                      {msg.imageUrls.map((url, i) => (
+                        <img
+                          key={i}
+                          src={url}
+                          alt={`attached ${i + 1} of ${msg.imageUrls!.length}`}
+                          onClick={() => setLightboxUrl(url)}
+                          title="Click to view full size"
+                          style={{
+                            maxWidth: msg.imageUrls!.length > 1 ? 120 : 200,
+                            maxHeight: msg.imageUrls!.length > 1 ? 120 : 150,
+                            borderRadius: 6,
+                            cursor: "zoom-in",
+                          }}
+                        />
+                      ))}
+                    </div>
                   )}
                   {msg.fileName && (
                     <div style={{
@@ -2122,6 +2231,11 @@ export function ChatSection({ events, isActive }: Props) {
                           {msg.fileSize < 1024 ? `${msg.fileSize} B`
                             : msg.fileSize < 1024 * 1024 ? `${(msg.fileSize / 1024).toFixed(0)} KB`
                             : `${(msg.fileSize / 1024 / 1024).toFixed(1)} MB`}
+                        </span>
+                      )}
+                      {msg.attachmentCount != null && msg.attachmentCount > 1 && (
+                        <span style={{ color: "var(--lm-text-muted)", fontSize: 10, flexShrink: 0 }}>
+                          +{msg.attachmentCount - 1} more
                         </span>
                       )}
                     </div>
@@ -2220,7 +2334,7 @@ export function ChatSection({ events, isActive }: Props) {
           background: "var(--lm-sidebar)",
         }}>
           <div style={{ maxWidth: 760, margin: "0 auto", width: "100%" }}>
-            <input ref={fileInputRef} type="file" style={{ display: "none" }} onChange={handleFileSelect} />
+            <input ref={fileInputRef} type="file" multiple style={{ display: "none" }} onChange={handleFileSelect} />
             <div
               className="lm-chat-composer"
               style={{
@@ -2232,42 +2346,55 @@ export function ChatSection({ events, isActive }: Props) {
                 boxShadow: "0 1px 2px rgba(0,0,0,0.18), 0 8px 24px -16px rgba(0,0,0,0.5)",
                 transition: "border-color 0.15s, box-shadow 0.15s",
               }}>
-              {/* Attached file chip inside the pill — fixed slot above the input row. */}
-              {fileName && (
-                <div style={{
-                  display: "flex", alignItems: "center", gap: 8,
-                  padding: "6px 8px",
-                  margin: "0 2px",
-                  borderRadius: 12,
-                  background: "color-mix(in srgb, var(--lm-amber) 8%, transparent)",
-                  border: "1px solid color-mix(in srgb, var(--lm-amber) 25%, transparent)",
-                }}>
-                  {filePreview ? (
-                    <img src={filePreview} alt="preview" style={{ height: 36, borderRadius: 6, flexShrink: 0 }} />
-                  ) : (
-                    <div style={{
-                      width: 36, height: 36, borderRadius: 6,
-                      background: "color-mix(in srgb, var(--lm-amber) 15%, transparent)",
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                      color: "var(--lm-amber)", flexShrink: 0,
-                    }}><Paperclip size={16} /></div>
-                  )}
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 11.5, color: "var(--lm-text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{fileName}</div>
-                    <div style={{ fontSize: 10, color: "var(--lm-text-muted)" }}>
-                      {fileSize < 1024 ? `${fileSize} B` : fileSize < 1024 * 1024 ? `${(fileSize / 1024).toFixed(0)} KB` : `${(fileSize / 1024 / 1024).toFixed(1)} MB`}
+              {/* Staged attachments inside the pill — one chip per file, each
+                  removable on its own so a wrong pick in a multi-select does not
+                  force clearing the whole set. Wraps rather than scrolls: the
+                  count is capped at MAX_ATTACHMENTS, so it stays a few rows. */}
+              {attachments.length > 0 && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, margin: "0 2px 4px" }}>
+                  {attachments.map((att) => (
+                    <div key={att.id} style={{
+                      display: "flex", alignItems: "center", gap: 8,
+                      padding: "6px 8px",
+                      borderRadius: 12,
+                      maxWidth: 220,
+                      background: "color-mix(in srgb, var(--lm-amber) 8%, transparent)",
+                      border: "1px solid color-mix(in srgb, var(--lm-amber) 25%, transparent)",
+                    }}>
+                      {att.previewUrl ? (
+                        <img
+                          src={att.previewUrl}
+                          alt={att.name}
+                          onClick={() => setLightboxUrl(att.previewUrl)}
+                          title="Click to view full size"
+                          style={{ height: 36, width: 36, objectFit: "cover", borderRadius: 6, flexShrink: 0, cursor: "zoom-in" }}
+                        />
+                      ) : (
+                        <div style={{
+                          width: 36, height: 36, borderRadius: 6,
+                          background: "color-mix(in srgb, var(--lm-amber) 15%, transparent)",
+                          display: "flex", alignItems: "center", justifyContent: "center",
+                          color: "var(--lm-amber)", flexShrink: 0,
+                        }}><Paperclip size={16} /></div>
+                      )}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 11.5, color: "var(--lm-text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{att.name}</div>
+                        <div style={{ fontSize: 10, color: "var(--lm-text-muted)" }}>
+                          {att.size < 1024 ? `${att.size} B` : att.size < 1024 * 1024 ? `${(att.size / 1024).toFixed(0)} KB` : `${(att.size / 1024 / 1024).toFixed(1)} MB`}
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => removeAttachment(att.id)}
+                        style={{
+                          background: "transparent", border: "none", cursor: "pointer",
+                          color: "var(--lm-text-muted)", padding: 4, borderRadius: 4,
+                          display: "flex", alignItems: "center",
+                        }}
+                        title={`Remove ${att.name}`}
+                        aria-label={`Remove ${att.name}`}
+                      ><X size={14} /></button>
                     </div>
-                  </div>
-                  <button
-                    onClick={clearFile}
-                    style={{
-                      background: "transparent", border: "none", cursor: "pointer",
-                      color: "var(--lm-text-muted)", padding: 4, borderRadius: 4,
-                      display: "flex", alignItems: "center",
-                    }}
-                    title="Remove file"
-                    aria-label="Remove file"
-                  ><X size={14} /></button>
+                  ))}
                 </div>
               )}
 
@@ -2346,6 +2473,27 @@ export function ChatSection({ events, isActive }: Props) {
 
       {/* Skills surfaces opened from the composer's "+" menu. Portalled from
           inside each modal, so mounting them here doesn't affect chat layout. */}
+      {/* Full-size viewer — click anywhere (or Esc via the backdrop click) to
+          close. Same shape as FlowSection's snapshot lightbox so the two feel
+          like one control. */}
+      {lightboxUrl && (
+        <div
+          onClick={() => setLightboxUrl(null)}
+          style={{
+            position: "fixed", inset: 0, zIndex: 200,
+            background: "rgba(0,0,0,0.85)", backdropFilter: "blur(4px)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            cursor: "zoom-out",
+          }}
+        >
+          <img
+            src={lightboxUrl}
+            alt="attachment full size"
+            onClick={(e) => e.stopPropagation()}
+            style={{ maxWidth: "92vw", maxHeight: "92vh", objectFit: "contain", borderRadius: 8, cursor: "default" }}
+          />
+        </div>
+      )}
       {skillsView === "write" && <WriteSkillModal onClose={() => setSkillsView(null)} />}
       {skillsView === "upload" && <UploadSkillModal onClose={() => setSkillsView(null)} />}
       {skillsView === "browse" && <BrowseSkillsModal onClose={() => setSkillsView(null)} />}

@@ -251,6 +251,15 @@ minutes to completion. Two numbers bound it, and they must stay ordered:
 | `CODEX_TURN_TIMEOUT_S` | `gatewayd/gatewayd.go` | `600` (10 min) | Kills `codex exec` and sends `bridge.error: timeout`. The gatewayd ALWAYS ends a turn — completed, failed, or this timeout. |
 | `busyTTL()` | `events.go` | that timeout **+ 5 min** | Unwedges the sensing pipeline when a turn's terminal frame was DROPPED. Derived from the same env var so raising the timeout cannot leave it behind. |
 
+**An expired TTL ends the turn properly — both halves.** It drops the run id AND
+dispatches a lifecycle error carrying that id (`failStuckTurn`, wired through
+`wsDispatch` because the busy check runs on the sensing path, outside the WS read
+loop). Doing only one half is a bug either way: leaving the id set orphans the
+NEXT turn (`ensureTurnStarted` returns early while `currentRunID` is non-empty, so
+the new turn's frames are attributed to the dead run and the new chat hangs);
+clearing it silently leaves the browser on a pending bubble until its own
+deadline, which is the "no response" this path exists to prevent.
+
 **The TTL must outlast the timeout.** It was a fixed 5 minutes against a 10-minute
 timeout, so every turn slower than 5 minutes tripped the "frame was dropped" path
 — and that path also called `clearTurn()`, wiping the id of the turn still

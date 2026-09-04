@@ -246,6 +246,14 @@ hai con số chặn nó, và thứ tự giữa chúng là bắt buộc:
 | `CODEX_TURN_TIMEOUT_S` | `gatewayd/gatewayd.go` | `600` (10 phút) | Giết `codex exec` rồi gửi `bridge.error: timeout`. Gatewayd LUÔN kết thúc turn — xong, lỗi, hoặc timeout này. |
 | `busyTTL()` | `events.go` | timeout đó **+ 5 phút** | Gỡ kẹt pipeline sensing khi frame cuối của turn bị RỚT. Suy ra từ chính env var trên nên nâng timeout không bỏ sót nó. |
 
+**TTL hết hạn thì kết thúc turn cho ĐỦ, cả hai nửa.** Vừa bỏ runId, vừa bắn một
+lifecycle error mang chính runId đó (`failStuckTurn`, đi qua `wsDispatch` vì việc
+kiểm busy chạy trên đường sensing, nằm ngoài vòng đọc WS). Làm thiếu nửa nào cũng
+thành bug: để runId lại thì turn KẾ TIẾP bị mồ côi (`ensureTurnStarted` thoát sớm
+khi `currentRunID` khác rỗng, nên frame của turn mới bị gán vào run đã chết và
+chat mới treo); còn xoá im lặng thì trình duyệt ngồi chờ tới hết hạn của chính nó
+— đúng cái "no response" mà đường này sinh ra để chặn.
+
 **TTL phải dài hơn timeout.** Trước đây TTL cố định 5 phút trong khi timeout là 10
 phút, nên mọi turn chậm quá 5 phút đều rơi vào nhánh "frame bị rớt" — mà nhánh đó
 còn gọi `clearTurn()`, xoá luôn runId của turn đang chạy. Run mà trình duyệt đang

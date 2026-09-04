@@ -111,7 +111,8 @@ Watch the `level` value during normal ambient conditions vs. when you clap/speak
 
 ```python
 HAL_VAD_THRESHOLD = 3500        # RMS to trigger speech detection (default 3500)
-HAL_SILENCE_TIMEOUT = 2.5       # stop STT session after this much silence (s)
+HAL_SILENCE_TIMEOUT = 2.5       # fallback: stop STT session after this much silence (s)
+HAL_ENDPOINT_SILENCE_S = 0.8    # short clock used once STT emitted a final segment (s)
 HAL_SPEECH_HOLDOFF = 0.2        # min speech duration before opening STT — rejects short clicks (s)
 HAL_PRE_ROLL_FRAMES = 8         # rolling lookback frames kept BEFORE VAD trigger (8 × 64ms = 512ms)
 HAL_WEBRTCVAD_ENABLED = false   # secondary gate, recommended true for low-threshold setups
@@ -127,7 +128,8 @@ HAL_SILERO_ENABLED = false      # tertiary gate (ONNX); webrtcvad usually enough
 | First syllable clipped (STT hears "ật đèn" instead of "bật đèn") | Increase `HAL_PRE_ROLL_FRAMES` (8 → 12) or decrease `HAL_VAD_THRESHOLD` (3500 → 1500) |
 | Wake word not picked up reliably | Decrease `HAL_VAD_THRESHOLD` (3500 → 1500) + enable `HAL_WEBRTCVAD_ENABLED=true` as safety net |
 | Lamp starts listening from ambient noise | Increase `HAL_VAD_THRESHOLD` and/or enable `HAL_WEBRTCVAD_ENABLED=true` |
-| Lamp cuts off before you finish speaking | Increase `HAL_SILENCE_TIMEOUT` |
+| Lamp cuts off before you finish speaking | Increase `HAL_ENDPOINT_SILENCE_S` (the clock that normally ends a turn), then `HAL_SILENCE_TIMEOUT` |
+| Lamp answers ~2s after you stop speaking | Decrease `HAL_ENDPOINT_SILENCE_S` (0.8 → 0.5) |
 | Stale audio from previous turn bleeds into next session | Already mitigated: `lookback.clear()` fires after each session closes |
 | Lamp repeats its own TTS back to OpenClaw (echo loop) | Decrease `ECHO_SIMILARITY_THRESHOLD` (0.55 → 0.45) |
 

@@ -17,7 +17,7 @@ import (
 type pendingEvent struct {
 	eventType   string
 	msg         string
-	image       string
+	images      []string
 	queuedAt    time.Time
 	currentUser string
 	fixedRunID  string
@@ -48,6 +48,12 @@ func (s *ClaudeCodeService) IsBusy() bool {
 			slog.Warn("busy flag expired — auto-clearing (final frame likely missed)",
 				"component", "claudecode", "stuck_for_s", int(time.Since(time.UnixMilli(since)).Seconds()))
 			s.activeTurn.Store(false)
+			// Drop the dead run id: ensureTurnStarted returns early while it is
+			// set, so leaving it would attribute the NEXT turn's frames to the
+			// expired run. The codex runtime additionally tells the waiting
+			// client why (failStuckTurn); mirror that here when this backend is
+			// next exercised on a device.
+			s.clearTurn()
 			go s.drainPendingEvents()
 			return s.HasFreshPendingChatSend()
 		}
@@ -67,14 +73,14 @@ func (s *ClaudeCodeService) SetBusy(busy bool) {
 	}
 }
 
-func (s *ClaudeCodeService) QueuePendingEvent(eventType, msg, image, fixedRunID string) {
+func (s *ClaudeCodeService) QueuePendingEvent(eventType, msg string, images []string, fixedRunID string) {
 	now := time.Now()
 	curUser := mood.CurrentUser()
 	if curUser == "" {
 		curUser = "unknown"
 	}
 	s.pendingEventsMu.Lock()
-	s.pendingEvents = append(s.pendingEvents, pendingEvent{eventType: eventType, msg: msg, image: image, queuedAt: now, currentUser: curUser, fixedRunID: fixedRunID})
+	s.pendingEvents = append(s.pendingEvents, pendingEvent{eventType: eventType, msg: msg, images: images, queuedAt: now, currentUser: curUser, fixedRunID: fixedRunID})
 	s.pendingEventsMu.Unlock()
 	slog.Info("sensing event queued — agent busy", "component", "sensing", "type", eventType, "runId", fixedRunID)
 
@@ -218,8 +224,8 @@ func (s *ClaudeCodeService) drainPendingEvents() {
 		}
 
 		var err error
-		if ev.image != "" {
-			_, err = s.SendChatMessageWithImageAndRun(msg, ev.image, reqID, runID)
+		if len(ev.images) > 0 {
+			_, err = s.SendChatMessageWithImagesAndRun(msg, ev.images, reqID, runID)
 		} else {
 			_, err = s.SendChatMessageWithRun(msg, reqID, runID)
 		}

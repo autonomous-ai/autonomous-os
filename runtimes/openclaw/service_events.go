@@ -17,7 +17,7 @@ import (
 type pendingEvent struct {
 	eventType   string
 	msg         string
-	image       string
+	images      []string
 	queuedAt    time.Time
 	currentUser string // snapshot at queue time — may differ from replay time
 	fixedRunID  string // preallocated runID (web_chat); empty = allocate at drain
@@ -70,14 +70,14 @@ func (s *OpenclawService) SetBusy(busy bool) {
 
 // QueuePendingEvent buffers a sensing event to replay when the agent becomes idle.
 // All events are appended — motion/presence must not be missed.
-func (s *OpenclawService) QueuePendingEvent(eventType, msg, image, fixedRunID string) {
+func (s *OpenclawService) QueuePendingEvent(eventType, msg string, images []string, fixedRunID string) {
 	now := time.Now()
 	curUser := mood.CurrentUser()
 	if curUser == "" {
 		curUser = "unknown"
 	}
 	s.pendingEventsMu.Lock()
-	s.pendingEvents = append(s.pendingEvents, pendingEvent{eventType: eventType, msg: msg, image: image, queuedAt: now, currentUser: curUser, fixedRunID: fixedRunID})
+	s.pendingEvents = append(s.pendingEvents, pendingEvent{eventType: eventType, msg: msg, images: images, queuedAt: now, currentUser: curUser, fixedRunID: fixedRunID})
 	s.pendingEventsMu.Unlock()
 	slog.Info("sensing event queued — agent busy", "component", "sensing", "type", eventType, "runId", fixedRunID)
 
@@ -248,8 +248,8 @@ func (s *OpenclawService) drainPendingEvents() {
 		}
 
 		var err error
-		if ev.image != "" {
-			_, err = s.SendChatMessageWithImageAndRun(msg, ev.image, reqID, runID)
+		if len(ev.images) > 0 {
+			_, err = s.SendChatMessageWithImagesAndRun(msg, ev.images, reqID, runID)
 		} else {
 			_, err = s.SendChatMessageWithRun(msg, reqID, runID)
 		}

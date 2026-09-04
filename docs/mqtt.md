@@ -344,7 +344,7 @@ optional `error`, and an optional `data` payload.
 | `skills.save` | Write one authored skill into the active runtime's skills dir (synchronous) | `name`, `description`, `instructions` |
 | `skills.upload` | Install one `.md`, `.zip`, or `.skill` file on the active runtime (synchronous) | `filename`, `content_base64` |
 | `chat.file.get` | Fetch one device-local file a turn named (synchronous) | `path` (required), optional `session_id`/`run_id` |
-| `chat.send` | Start an agent turn from the backend and stream it back (acks a run id, then emits `chat.event`) | `message` (required), optional `image`/`file`/`session_id`/`speak` |
+| `chat.send` | Start an agent turn from the backend and stream it back (acks a run id, then emits `chat.event`) | `message` (required), optional `images[]`/`files[]`/`session_id`/`speak` |
 | `system.info` | Aggregate snapshot: versions + network + host | _(none)_ |
 | `system.version` | Component versions only (cheaper than `system.info`) | _(none)_ |
 | `system.network` | network facts of the default-route interface only | _(none)_ |
@@ -818,18 +818,18 @@ mobile ◀── SSE ── backend ◀── fd: chat.event × N ── device
 ```json
 {"cmd": "data", "kind": "chat.send", "data": {
   "message": "what do you see?",
-  "image": "<base64 jpeg, optional>",
+  "images": ["<base64 jpeg>", "…"],   // optional
   "file": {"name": "report.pdf", "mime": "application/pdf", "content": "<base64>"},
   "session_id": "abc123",
   "speak": false
 }}
 ```
 
-`message` is required. `image` is the same base64 the web chat puts in the
+`message` is required. `images` is the same base64 the web chat puts in the
 sensing event, so a phone attaches a photo the same way.
 
 `file` is for anything that is NOT a photo — a PDF, a CSV. Deliberately its own
-field rather than more traffic through `image`: an image goes through the
+field rather than more traffic through `images`: an image goes through the
 device's describe-first vision gate, and a document must not (it would fail
 there). It lands in `/tmp` with its **real** extension and the turn carries a
 `[file: <path> (<name>)]` tag so the agent can open it; `name` is used only for
