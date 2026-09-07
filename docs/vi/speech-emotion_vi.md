@@ -136,7 +136,7 @@ Lỗi mã hóa lại thì fail-open: WAV gốc được gửi đi.
 
 Mọi ngưỡng là hằng số biên dịch trong `constants.py:87-111` — **không** override được bằng env. Bảng đầy đủ ở [docs/vi/speech/speech-emotion-pipeline_vi.md](speech/speech-emotion-pipeline_vi.md#chặng-5-6--prefilter-mô-hình-cục-bộ-duy-nhất).
 
-> Đây là session Silero **thứ ba** trong tiến trình HAL (`voice_service._silero_vad` và `_rt_noise_vad` nạp cùng file). Xem [known-issues #5](speech/speech-emotion-known-issues_vi.md#5--một-session-silero-onnx-thứ-ba-thừa).
+> Đây là session Silero **thứ tư** trong tiến trình HAL (`voice_service._silero_vad`, `_rt_noise_vad` và `_silence_vad` đều nạp cùng file). Xem [known-issues #5](speech/speech-emotion-known-issues_vi.md#5--một-session-silero-onnx-thứ-tư-thừa).
 
 ---
 

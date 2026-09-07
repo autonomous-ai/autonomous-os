@@ -129,7 +129,7 @@ Re-encode failure is fail-open: the original WAV is sent.
 
 All thresholds are compile-time constants in `constants.py:87-111` — **not** env-overridable. Full tables in [docs/speech/speech-emotion-pipeline.md](speech/speech-emotion-pipeline.md#stage-5-6--the-prefilter-the-only-local-model).
 
-> This is the **third** Silero session in the HAL process (`voice_service._silero_vad` and `_rt_noise_vad` load the same file). See [known-issues #5](speech/speech-emotion-known-issues.md#5--a-third-redundant-silero-onnx-session).
+> This is the **fourth** Silero session in the HAL process (`voice_service._silero_vad`, `_rt_noise_vad` and `_silence_vad` all load the same file). See [known-issues #5](speech/speech-emotion-known-issues.md#5--a-fourth-redundant-silero-onnx-session).
 
 ---
 
