@@ -62,6 +62,14 @@ STALE_GRACE_MS = 2000
 # with suppressed turns still alive the event says so instead of passing.
 SUPPRESSION_OBSERVE_MS = 60000
 
+# How long a turn is assumed to still be ABLE to speak. Separate from the
+# acknowledgement window on purpose: reporting the KPI-1 verdict after 10s
+# does not mean the main agent finished — it can answer much later, and a
+# stop pressed at second 12 must still find the turn alive. The clock is
+# refreshed by any playback that turn produces, so a turn that keeps talking
+# keeps counting as active.
+TURN_ACTIVE_TTL_MS = 45000
+
 EVENT_INTERACTION = "voice_kpi_interaction"
 EVENT_SUPPRESSION = "voice_kpi_suppression"
 
@@ -94,7 +102,10 @@ EXCL_NO_TRANSCRIPT = "no_transcript"
 EXCL_NOT_ADDRESSED = "not_addressed"
 EXCL_SPEAKER_MUTED = "speaker_muted"
 EXCL_INTERRUPTED = "interrupted_by_user"
-EXCL_DISPATCH_FAILED = "dispatch_failed"   # POST to os-server never landed
+# NOT an exclusion: the request was valid, the device simply failed to serve
+# it. Recorded as a failure reason on an ELIGIBLE interaction — dropping it
+# would inflate the success rate with exactly the cases that hurt the user.
+FAIL_DISPATCH_FAILED = "dispatch_failed"
 
 BOUNDARY_EXPLICIT_STOP = "explicit_stop"
 BOUNDARY_AUTO_SUPERSEDE = "auto_supersede"
@@ -106,7 +117,8 @@ class _Interaction:
     __slots__ = (
         "id", "speech_end", "speech_end_method", "event_type", "route",
         "run_id", "ack_latency_ms", "ack_modality", "ack_kind",
-        "exclusion_reason", "reported", "report_event_id", "timer", "closed",
+        "exclusion_reason", "failure_reason", "reported", "report_event_id",
+        "timer", "life_timer", "closed", "last_activity",
     )
 
     def __init__(self, iid: str, speech_end: float, method: str):
@@ -120,13 +132,19 @@ class _Interaction:
         self.ack_modality = ""
         self.ack_kind = ""
         self.exclusion_reason = ""
+        # A failure that is NOT an exclusion: the request was valid and went
+        # unserved. Stays in the KPI denominator (see _interaction_params).
+        self.failure_reason = ""
         self.reported = False
         self.report_event_id = ""
-        self.timer = None
-        # An interaction stops being "active" once it has been answered AND
-        # its observation window closed, or it was excluded. Active turns are
-        # what a suppression boundary can actually be about.
+        self.timer = None       # KPI-1 verdict deadline
+        self.life_timer = None  # turn-lifetime deadline
+        # `closed` means "can no longer speak" — NOT "already reported".
+        # Reporting the acknowledgement verdict must not retire a turn the
+        # main agent is still working on, or a later stop finds nothing to
+        # suppress.
         self.closed = False
+        self.last_activity = speech_end
 
 
 _lock = threading.RLock()
@@ -171,8 +189,28 @@ def speech_end(method: str, at: float = 0.0) -> str:
         it.timer = threading.Timer(ACK_OBSERVE_WINDOW_MS / 1000.0, _close_interaction, args=(iid,))
         it.timer.daemon = True
         it.timer.start()
+        _arm_lifetime(it)
     logger.info("[voice-kpi] speech end (interaction=%s method=%s)", iid, method)
     return iid
+
+
+def _arm_lifetime(it: "_Interaction") -> None:
+    """(Re)start the turn-lifetime clock. Any playback the turn produces is
+    proof it is still alive, so the clock restarts from that moment."""
+    if it.life_timer is not None:
+        it.life_timer.cancel()
+    it.life_timer = threading.Timer(TURN_ACTIVE_TTL_MS / 1000.0, _retire_interaction, args=(it.id,))
+    it.life_timer.daemon = True
+    it.life_timer.start()
+
+
+def _retire_interaction(iid: str) -> None:
+    """The turn has been silent for TURN_ACTIVE_TTL_MS: assume it can no
+    longer speak. Only then does it leave the suppression denominator."""
+    with _lock:
+        it = _interactions.get(iid)
+        if it is not None:
+            it.closed = True
 
 
 def set_route(iid: str, route: str, event_type: str = "") -> None:
@@ -200,6 +238,26 @@ def bind_run(iid: str, run_id: str) -> None:
             return
         it.run_id = run_id
         _by_run[run_id] = iid
+
+
+def mark_failed(iid: str, reason: str) -> None:
+    """Record that this interaction could not be served (the POST to
+    os-server never landed, a backend error, a timeout).
+
+    Deliberately NOT an exclusion: the user asked a valid question and got
+    nothing. It stays eligible, so the KPI counts it as the failure it is.
+    """
+    with _lock:
+        it = _interactions.get(iid)
+        if it is None or it.failure_reason:
+            return
+        it.failure_reason = reason
+        # Nothing will answer it, so it can no longer produce stale speech.
+        it.closed = True
+        if it.reported:
+            _amend(it, "late_failure")
+            return
+    logger.warning("[voice-kpi] interaction unserved (interaction=%s reason=%s)", iid, reason)
 
 
 def exclude(iid: str, reason: str) -> None:
@@ -245,6 +303,12 @@ def playback_audio(owner: str, kind_hint: str, tts=None) -> None:
             )
         else:
             it = _interactions.get(iid)
+            if it is not None:
+                # Proof the turn is still alive: restart its lifetime clock so
+                # a stop pressed later still sees something to suppress.
+                it.last_activity = started
+                it.closed = False
+                _arm_lifetime(it)
             if it is not None and it.ack_latency_ms is None:
                 it.ack_latency_ms = _ms(started - it.speech_end)
                 it.ack_kind = kind
@@ -270,10 +334,18 @@ def playback_end() -> None:
 
 
 def _owner_interaction(owner: str) -> str:
+    """Resolve the owner tag to an interaction.
+
+    ``run:<id>`` normally carries an os-server run id, but the realtime paths
+    (its wait filler, and text replies spoken before the turn ever reaches
+    os-server) have no run id yet and tag themselves with the interaction id
+    directly. Both are accepted; anything unresolvable stays unknown.
+    """
     if not owner:
         return ""
     if owner.startswith("run:"):
-        return _by_run.get(owner[4:], "")
+        value = owner[4:]
+        return _by_run.get(value) or (value if value in _interactions else "")
     if owner.startswith("interaction:"):
         iid = owner[len("interaction:"):]
         return iid if iid in _interactions else ""
@@ -453,6 +525,8 @@ def _forget(iid: str) -> None:
             _by_run.pop(it.run_id, None)
         if it.timer is not None:
             it.timer.cancel()
+        if it.life_timer is not None:
+            it.life_timer.cancel()
 
 
 def _speaker_muted() -> bool:
@@ -477,7 +551,6 @@ def _close_interaction(iid: str) -> None:
             # not a missed response.
             it.exclusion_reason = EXCL_SPEAKER_MUTED
         it.reported = True
-        it.closed = True
         it.report_event_id = "int-" + iid
         params = _interaction_params(it)
     client.report(EVENT_INTERACTION, params, event_id="int-" + iid)
@@ -495,6 +568,9 @@ def _amend(it: "_Interaction", why: str) -> None:
 
 
 def _interaction_params(it: "_Interaction") -> dict:
+    # A failure reason does NOT remove eligibility: the command was valid and
+    # was not served. Only an exclusion (noise, not addressed, muted, …) means
+    # "this was never a KPI sample".
     eligible = not it.exclusion_reason
     if it.exclusion_reason:
         outcome = OUTCOME_EXCLUDED
@@ -505,6 +581,7 @@ def _interaction_params(it: "_Interaction") -> dict:
     return {
         "interaction_id": it.id,
         "run_id": it.run_id,
+        "failure_reason": it.failure_reason,
         "event_type": it.event_type,
         "route": it.route,
         "speech_end_method": it.speech_end_method,

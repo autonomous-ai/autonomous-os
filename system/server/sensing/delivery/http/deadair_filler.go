@@ -296,7 +296,7 @@ func PrewarmFillers() {
 // workaround is unnecessary, but the call site stays the same for now.
 //
 // No-op when the resolved Opening pool is empty.
-func PlayOpeningFillerNow() {
+func PlayOpeningFillerNow(owner string) {
 	lang := i18n.Lang()
 	opening, _ := poolsForLang(lang)
 	if len(opening) == 0 {
@@ -306,8 +306,8 @@ func PlayOpeningFillerNow() {
 	if filler == "" {
 		return
 	}
-	slog.Info("opening filler firing (immediate, cached)", "component", "sensing", "lang", lang, "filler", filler)
-	if err := hal.SpeakCachedInterruptible(filler); err != nil {
+	slog.Info("opening filler firing (immediate, cached)", "component", "sensing", "lang", lang, "filler", filler, "owner", owner)
+	if err := hal.SpeakCachedInterruptibleForTurn(filler, owner); err != nil {
 		slog.Warn("opening filler failed", "component", "sensing", "error", err)
 	}
 }
@@ -330,12 +330,16 @@ func (h *SensingHandler) PlayFiller(c *gin.Context) {
 	// behaviour (the realtime dead-air wait), so existing callers are unchanged.
 	var req struct {
 		Pool string `json:"pool"`
+		// Owner is an opaque tag HAL sends back to itself so a played filler
+		// can be attributed to the utterance it was armed for (voice KPI).
+		// Empty keeps the previous behaviour for callers that have none.
+		Owner string `json:"owner"`
 	}
 	_ = c.ShouldBindJSON(&req)
 	if req.Pool != "" {
-		go PlayPoolFillerNow(req.Pool)
+		go PlayPoolFillerNow(req.Pool, req.Owner)
 	} else {
-		go PlayOpeningFillerNow()
+		go PlayOpeningFillerNow(req.Owner)
 	}
 	c.JSON(http.StatusOK, serializers.ResponseSuccess(nil))
 }
@@ -347,7 +351,7 @@ func (h *SensingHandler) PlayFiller(c *gin.Context) {
 //
 // Silent when the pool is unknown or empty: a missing phrase must never block
 // the aim or the capture that follows it.
-func PlayPoolFillerNow(pool string) {
+func PlayPoolFillerNow(pool, owner string) {
 	lang := i18n.Lang()
 	phrases := toolPoolForLang(lang, pool)
 	if len(phrases) == 0 {
@@ -357,8 +361,8 @@ func PlayPoolFillerNow(pool string) {
 	if filler == "" {
 		return
 	}
-	slog.Info("pool filler firing", "component", "sensing", "lang", lang, "pool", pool, "filler", filler)
-	if err := hal.SpeakCachedInterruptible(filler); err != nil {
+	slog.Info("pool filler firing", "component", "sensing", "lang", lang, "pool", pool, "filler", filler, "owner", owner)
+	if err := hal.SpeakCachedInterruptibleForTurn(filler, owner); err != nil {
 		slog.Warn("pool filler failed", "component", "sensing", "pool", pool, "error", err)
 	}
 }

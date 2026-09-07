@@ -320,7 +320,6 @@ def test_speech_end_clock_starts_at_the_detected_endpoint(kpi):
     voice_kpi.EXCL_REJECTED_NON_USER,
     voice_kpi.EXCL_NO_TRANSCRIPT,
     voice_kpi.EXCL_NOT_ADDRESSED,
-    voice_kpi.EXCL_DISPATCH_FAILED,
 ])
 def test_excluded_inputs_are_reported_with_a_reason(kpi, reason):
     iid = voice_kpi.speech_end("silence_clock")
@@ -386,6 +385,120 @@ def test_duplicate_report_is_suppressed_by_event_id(kpi):
     voice_kpi._close_interaction(iid)
     voice_kpi._close_interaction(iid)
     assert len(kpi.of(voice_kpi.EVENT_INTERACTION)) == 1
+
+
+# --- Review finding: turn lifetime is not the acknowledgement deadline -------
+
+def test_stop_after_the_ack_window_still_finds_the_turn_to_suppress(kpi):
+    """Reproduction: stop at second 12, old reply plays at second 20.
+
+    The KPI-1 verdict is reported at 10s, but the main agent is still working
+    — retiring the turn there made the stop find nothing to suppress
+    (applicable_interactions=0, stale_observed=false)."""
+    old = voice_kpi.speech_end("silence_clock")
+    voice_kpi.bind_run(old, "run-old")
+
+    kpi.clock.advance(10000)
+    verdict_timer = kpi.timers[0]
+    verdict_timer.fire()                       # KPI-1 verdict at 10s
+    assert kpi.one(voice_kpi.EVENT_INTERACTION)["outcome"] == voice_kpi.OUTCOME_NO_ACK
+
+    kpi.clock.advance(2000)                    # second 12: user presses stop
+    voice_kpi.boundary(voice_kpi.BOUNDARY_EXPLICIT_STOP)
+    kpi.clock.advance(8000)                    # second 20: the old reply speaks
+    _reply(kpi, "run:run-old")
+    kpi.close_all()
+
+    p = kpi.of(voice_kpi.EVENT_SUPPRESSION)[0]["params"]
+    assert p["applicable_interactions"] == 1
+    assert p["stale_observed"] is True
+    assert p["stale_started_after_ms"] == 8000
+
+
+def test_a_turn_silent_past_its_lifetime_leaves_the_denominator(kpi):
+    """The other half: a turn that really is over must not inflate KPI-2."""
+    old = voice_kpi.speech_end("silence_clock")
+    voice_kpi.bind_run(old, "run-old")
+    kpi.clock.advance(voice_kpi.TURN_ACTIVE_TTL_MS)
+    for t in list(kpi.timers):
+        if t.function is voice_kpi._retire_interaction:
+            t.fire()
+
+    voice_kpi.boundary(voice_kpi.BOUNDARY_EXPLICIT_STOP)
+    kpi.close_all()
+    p = kpi.of(voice_kpi.EVENT_SUPPRESSION)[0]["params"]
+    assert p["applicable_interactions"] == 0
+
+
+def test_playback_keeps_a_turn_alive(kpi):
+    """A turn that is still talking is still alive, however long it has run."""
+    old = voice_kpi.speech_end("silence_clock")
+    voice_kpi.bind_run(old, "run-old")
+    kpi.clock.advance(30000)
+    _reply(kpi, "run:run-old")                 # still speaking at 30s
+    voice_kpi.playback_end()
+    kpi.clock.advance(5000)
+    voice_kpi.boundary(voice_kpi.BOUNDARY_EXPLICIT_STOP)
+
+    assert voice_kpi._watchers[0]["applicable"] == {old}
+
+
+# --- Review finding: an unserved command stays in the denominator ------------
+
+def test_failed_dispatch_stays_eligible_as_a_failure(kpi):
+    """A valid command the device never served must not be excluded — that
+    would inflate the success rate with the cases that hurt most."""
+    iid = voice_kpi.speech_end("silence_clock")
+    voice_kpi.mark_failed(iid, voice_kpi.FAIL_DISPATCH_FAILED)
+    kpi.close_all()
+
+    p = kpi.one(voice_kpi.EVENT_INTERACTION)
+    assert p["eligible"] is True
+    assert p["outcome"] == voice_kpi.OUTCOME_NO_ACK
+    assert p["failure_reason"] == voice_kpi.FAIL_DISPATCH_FAILED
+    assert p["exclusion_reason"] == ""
+
+
+def test_late_failure_amends_a_reported_verdict(kpi):
+    iid = voice_kpi.speech_end("silence_clock")
+    kpi.timers[0].fire()
+    voice_kpi.mark_failed(iid, voice_kpi.FAIL_DISPATCH_FAILED)
+
+    rows = kpi.of(voice_kpi.EVENT_INTERACTION)
+    assert len(rows) == 2
+    assert rows[1]["params"]["amendment_reason"] == "late_failure"
+    assert rows[1]["params"]["failure_reason"] == voice_kpi.FAIL_DISPATCH_FAILED
+
+
+# --- Review finding: realtime audio carries ownership ------------------------
+
+def test_realtime_wait_filler_is_attributed_to_its_interaction(kpi):
+    """The realtime dead-air filler tags itself with the interaction it is
+    waiting for; the user heard it, so the KPI must see it."""
+    iid = voice_kpi.speech_end("silence_clock")
+    kpi.clock.advance(1500)
+    # os-server plays it back with the owner HAL passed through the filler
+    # request, i.e. run:<interaction id> — no os-server run exists yet.
+    _filler(kpi, f"run:{iid}")
+    kpi.close_all()
+
+    p = kpi.one(voice_kpi.EVENT_INTERACTION)
+    assert p["outcome"] == voice_kpi.OUTCOME_ACKED
+    assert p["ack_modality"] == "waiting_audio"
+    assert p["ack_latency_ms"] == 1500
+
+
+def test_realtime_text_reply_is_attributed_to_its_interaction(kpi):
+    """The realtime branch that answers via TTS (not native audio) tags the
+    speech with the same interaction id."""
+    iid = voice_kpi.speech_end("silence_clock")
+    kpi.clock.advance(900)
+    _reply(kpi, f"run:{iid}")
+    kpi.close_all()
+
+    p = kpi.one(voice_kpi.EVENT_INTERACTION)
+    assert p["ack_modality"] == "spoken_answer"
+    assert p["ack_latency_ms"] == 900
 
 
 # --- Transport ---------------------------------------------------------------

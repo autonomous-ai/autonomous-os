@@ -697,7 +697,9 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 	// fire-at-lifecycle.start+FillerDelay path triggers.
 	if isVoice {
 		DefaultFillerManager.MarkVoiceRun(runID)
-		go PlayOpeningFillerNow()
+		// Owned by this run, so HAL can attribute the played filler to the
+		// utterance that triggered it (voice KPI).
+		go PlayOpeningFillerNow(runID)
 	}
 
 	var err error

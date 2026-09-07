@@ -40,8 +40,11 @@ do realtime xử lý chỉ sinh đúng một mẫu KPI-1.
 
 **Chủ sở hữu là tường minh, không đoán.** Mỗi lần phát mang theo owner đã giành
 loa: `run:<turn_id>` cho câu trả lời của agent hoặc filler được arm cho turn đó
-(os-server truyền run id xuống cùng filler), và `interaction:<id>` cho giọng
-native realtime. Audio không ai nhận là `unknown` và **không bao giờ được tính
+(os-server truyền run id xuống cùng filler, và truyền ngược qua field `owner`
+của `/api/sensing/filler` cho filler chờ của realtime), và `interaction:<id>`
+cho giọng native realtime. Nhánh realtime trả lời bằng TTS (không phải audio
+native) cũng gắn tag y hệt — lúc đó os-server chưa cấp run id nào, nên chính
+interaction id là tag. Audio không ai nhận là `unknown` và **không bao giờ được tính
 là đã phản hồi** — đoán "interaction mở mới nhất" chính là cách một filler cũ bị
 tính thành phản hồi cho câu lệnh mới. Số đếm đi kèm mọi dòng interaction ở
 `unknown_owner_playbacks`.
@@ -99,7 +102,8 @@ gian phản hồi của thiết bị.
 | `speech_end_method` | Cách phát hiện điểm kết thúc |
 | `eligible` | `false` khi có `exclusion_reason` |
 | `outcome` | `acknowledged` \| `no_ack` \| `excluded` |
-| `exclusion_reason` | `rejected_noise`, `rejected_non_user`, `no_transcript`, `not_addressed`, `speaker_muted`, `interrupted_by_user`, `dispatch_failed` |
+| `exclusion_reason` | `rejected_noise`, `rejected_non_user`, `no_transcript`, `not_addressed`, `speaker_muted`, `interrupted_by_user` |
+| `failure_reason` | `dispatch_failed` — lệnh hợp lệ nhưng **không được phục vụ**. Đây *không* phải exclusion: dòng vẫn eligible và bị tính vào KPI |
 | `ack_latency_ms` | Quan sát thô, giữ nguyên bất kể kết luận (`null` khi không có gì phát) |
 | `ack_modality`, `ack_kind` | Người dùng thực sự nghe thấy cái gì |
 | `ack_deadline_ms`, `observe_window_ms` | 3000 / 10000 — ngưỡng (tạm thời) đang áp dụng lúc ghi dòng đó |
@@ -109,6 +113,13 @@ gian phản hồi của thiết bị.
 Cửa sổ quan sát **10 giây**, rộng hơn mục tiêu 3 giây một cách có chủ đích: câu
 trả lời muộn được ghi kèm latency thật thay vì gộp thành "không trả lời", nên
 sau này đổi ngưỡng vẫn tính lại được từ dữ liệu đã lưu.
+
+**Ghi verdict KHÔNG có nghĩa turn đã kết thúc.** Dòng KPI-1 được ghi ở giây thứ
+10; agent chính có thể vẫn đang chạy, và lệnh dừng bấm ở giây 12 vẫn phải tìm
+thấy turn đó để suppress. Một turn còn *active* cho tới khi im lặng đủ
+`TURN_ACTIVE_TTL_MS` (45 giây) — đồng hồ này được reset mỗi lần turn đó phát ra
+tiếng — hoặc cho tới khi bị loại/bị lỗi. Chỉ khi đó nó mới rời mẫu số KPI-2.
+Verdict sai sau đó được sửa bằng dòng đính chính.
 
 ### `voice_kpi_suppression` — mỗi biên một event (KPI-2)
 
@@ -166,8 +177,11 @@ không thể phát ra câu trả lời cũ, nên không tính là thứ mà biê
 - Tử số: trong đó `outcome = 'acknowledged'` và `ack_latency_ms <= 3000`.
 - Loại trừ (vẫn báo cáo, không bao giờ vứt): turn bị noise guard loại, turn
   model từ chối vì không phải người dùng, transcript rỗng, câu không nói với
-  thiết bị (không wake word / ngoài cửa sổ follow-up), và loa đang mute. Lượt
-  chậm hoặc lỗi mà đủ điều kiện thì **vẫn nằm trong mẫu số**.
+  thiết bị (không wake word / ngoài cửa sổ follow-up), và loa đang mute.
+- **Lỗi thì GIỮ LẠI.** Lệnh hợp lệ mà thiết bị không phục vụ được (POST sang
+  os-server không tới — `failure_reason = 'dispatch_failed'`) vẫn *eligible* và
+  tính là `no_ack`. Loại nó ra là thổi phồng tỉ lệ thành công bằng đúng những
+  ca người dùng thấy tệ nhất. Lượt chậm cũng vẫn nằm trong mẫu số.
 
 **KPI-2 — câu trả lời cũ thực sự bị phát**
 

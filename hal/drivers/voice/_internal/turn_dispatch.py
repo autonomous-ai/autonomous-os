@@ -261,10 +261,11 @@ def dispatch_turn(
                 ))
                 voice_kpi.bind_run(interaction_id, result.run_id)
                 if not result.run_id:
-                    # The turn never reached os-server (or it answered without
-                    # a run). Nothing can reply, so this is not a missed
-                    # response — it is an excluded, reported outcome.
-                    voice_kpi.exclude(interaction_id, voice_kpi.EXCL_DISPATCH_FAILED)
+                    # The turn never reached os-server. A valid command that
+                    # went unserved: it STAYS in the KPI denominator as a
+                    # failure — excluding it would hide exactly the case the
+                    # user feels most.
+                    voice_kpi.mark_failed(interaction_id, voice_kpi.FAIL_DISPATCH_FAILED)
         else:
             # Realtime not active, OR it was active but produced no output
             # (e.g. receive() timed out) — send to the OS server normally so the
@@ -282,7 +283,7 @@ def dispatch_turn(
             ))
             voice_kpi.bind_run(interaction_id, result.run_id)
             if not result.run_id:
-                voice_kpi.exclude(interaction_id, voice_kpi.EXCL_DISPATCH_FAILED)
+                voice_kpi.mark_failed(interaction_id, voice_kpi.FAIL_DISPATCH_FAILED)
     elif combined:
         if rt.route == ROUTE_NOISE_DROPPED:
             logger.info(

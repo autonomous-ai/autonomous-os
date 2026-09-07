@@ -40,8 +40,11 @@ so a realtime-handled turn produces exactly one KPI-1 sample.
 
 **Ownership is explicit, never guessed.** Every playback carries the owner
 that claimed the speaker: `run:<turn_id>` for an agent reply or a filler armed
-for that turn (os-server passes the run id down with the filler), and
-`interaction:<id>` for realtime native voice. Audio that nobody claimed is
+for that turn (os-server passes the run id down with the filler, and back
+through `/api/sensing/filler`'s `owner` field for the realtime wait filler),
+and `interaction:<id>` for realtime native voice. The realtime branch that
+answers through TTS instead of native audio tags its speech the same way —
+before os-server has issued any run id, the interaction id itself is the tag. Audio that nobody claimed is
 recorded as `unknown` and **never counts as an acknowledgement** — guessing
 "the newest open interaction" is how an old filler gets credited to a new
 command. The count rides on every interaction row as
@@ -103,7 +106,8 @@ run in between and would otherwise be charged to the device's response time.
 | `speech_end_method` | How the endpoint was detected |
 | `eligible` | `false` when `exclusion_reason` is set |
 | `outcome` | `acknowledged` \| `no_ack` \| `excluded` |
-| `exclusion_reason` | `rejected_noise`, `rejected_non_user`, `no_transcript`, `not_addressed`, `speaker_muted`, `interrupted_by_user`, `dispatch_failed` |
+| `exclusion_reason` | `rejected_noise`, `rejected_non_user`, `no_transcript`, `not_addressed`, `speaker_muted`, `interrupted_by_user` |
+| `failure_reason` | `dispatch_failed` — the command was valid and went **unserved**. This is *not* an exclusion: the row stays eligible and counts against the KPI |
 | `ack_latency_ms` | Raw observation, kept whatever the verdict (`null` when nothing played) |
 | `ack_modality`, `ack_kind` | What the user actually heard |
 | `ack_deadline_ms`, `observe_window_ms` | 3000 / 10000 — the (provisional) thresholds in force when the row was written |
@@ -113,6 +117,14 @@ run in between and would otherwise be charged to the device's response time.
 The observation window is **10 s**, wider than the 3 s target on purpose: a
 late answer is reported with its real latency instead of collapsing into "no
 answer at all", so the threshold can be re-decided from stored data.
+
+**Reporting the verdict does not end the turn.** The KPI-1 row is written at
+10 s; the main agent may still be working, and a stop pressed at second 12
+must still find that turn to suppress. A turn stays *active* until it has been
+silent for `TURN_ACTIVE_TTL_MS` (45 s) — a clock any playback of that turn
+restarts — or until it is excluded or fails. Only then does it leave the
+KPI-2 denominator. A verdict that turns out wrong afterwards is corrected with
+an amendment row.
 
 ### `voice_kpi_suppression` — one per boundary (KPI-2)
 
@@ -176,8 +188,11 @@ something the boundary had to suppress.
 - Excluded (reported, never dropped): noise-rejected turns, turns the realtime
   model explicitly rejected as non-user, empty transcripts, utterances not
   addressed to the device (no wake word / outside the follow-up window), and a
-  muted speaker. Slow and failed eligible interactions **stay in the
-  denominator**.
+  muted speaker.
+- **Failures stay in.** A valid command the device never served (the POST to
+  os-server did not land — `failure_reason = 'dispatch_failed'`) is *eligible*
+  and counts as `no_ack`. Excluding it would inflate the success rate with
+  exactly the cases the user feels most. Slow interactions stay in too.
 
 **KPI-2 — outdated reply actually played**
 
