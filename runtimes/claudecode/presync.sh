@@ -170,7 +170,13 @@ unset _rt
 PROFILE
   chmod 0644 /etc/profile.d/agent-cli-env.sh
 }
-write_cli_login_env && log "wrote /etc/profile.d/agent-cli-env.sh (interactive CLI auto-login)"
+# Root-only: off-device this just printed "No such file or directory" to stderr
+# every run (never fatal — the `&&` exempts it from `set -e`).
+if [ "$(id -u)" -eq 0 ]; then
+  write_cli_login_env && log "wrote /etc/profile.d/agent-cli-env.sh (interactive CLI auto-login)"
+else
+  log "skip /etc/profile.d/agent-cli-env.sh (not root — off-device run)"
+fi
 
 # ── §5 UNIFIED SESSION PICKER (`claude-sessions`) ────────────────────────────
 # Claude's interactive /resume picker excludes headless (--print) sessions by
@@ -196,6 +202,13 @@ PICKER
     rm -f /usr/local/bin/cc
   fi
 }
-write_session_picker && log "wrote /usr/local/bin/claude-sessions (unified session picker)"
+# Root-only, and this guard matters: Homebrew leaves /usr/local/bin
+# group-writable, so off-device this SUCCEEDS and drops a sudo-reexec wrapper
+# into the dev's PATH pointing at an os-server that isn't there.
+if [ "$(id -u)" -eq 0 ]; then
+  write_session_picker && log "wrote /usr/local/bin/claude-sessions (unified session picker)"
+else
+  log "skip /usr/local/bin/claude-sessions (not root — off-device run)"
+fi
 
 log "done — claudecode env + channel config synced"

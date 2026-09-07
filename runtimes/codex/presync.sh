@@ -245,6 +245,12 @@ unset _rt
 PROFILE
   chmod 0644 /etc/profile.d/agent-cli-env.sh
 }
-write_cli_login_env && log "wrote /etc/profile.d/agent-cli-env.sh (interactive CLI auto-login)"
+# Root-only: off-device this just printed "No such file or directory" to stderr
+# every run (never fatal — the `&&` exempts it from `set -e`).
+if [ "$(id -u)" -eq 0 ]; then
+  write_cli_login_env && log "wrote /etc/profile.d/agent-cli-env.sh (interactive CLI auto-login)"
+else
+  log "skip /etc/profile.d/agent-cli-env.sh (not root — off-device run)"
+fi
 
 log "done — codex config.toml + env synced"
