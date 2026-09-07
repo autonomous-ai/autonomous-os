@@ -184,7 +184,7 @@ install and a port a real service may already hold.
 
 | Option | Default | Pass your own when |
 |---|---|---|
-| `CODEX_HOME` / `CLAUDECODE_HOME` | see below | Your CLI lives somewhere else, or you want the device's state kept apart from your own |
+| `CODEX_HOME` / `CLAUDECODE_HOME` | see below | Your CLI lives somewhere else, or you want the device's state kept apart from your own. **Give the same value to `os-dev` and `make sim`** — os-server is what writes this directory, so a mismatch is silent |
 | `CODEX_PORT` / `CLAUDECODE_PORT` | `18792` / `18791` | The default is taken. **Give the same value to `os-dev`** — it resolves the bridge URL from it, and a mismatch is `bad handshake (status 404)` |
 
 An `openclaw-gateway`, if one is installed, holds `18789`, `18791` **and**
@@ -213,7 +213,7 @@ make codex-dev CODEX_HOME=$OS_STATE_DIR/.codex CODEX_PORT=18892
 #### claudecode
 
 ```bash
-make claudecode-dev CLAUDECODE_PORT=18891
+make claudecode-dev CLAUDECODE_HOME=~/.autonomous-os/.claudecode CLAUDECODE_PORT=18891
 ```
 
 This backend has **two** directories, and they do different jobs:
@@ -240,23 +240,33 @@ restart this terminal after `os-dev` rewrites any of them.
 
 ### 3 — os-server
 
-```bash
-make os-dev CODEX_HOME=~/.codex CODEX_PORT=18892
-```
-
-Repeat whichever `*_HOME` and `*_PORT` you gave the gateway — os-server is the
-**client** of that socket and resolves its URL from the same variables. It also
-runs presync and all agent provisioning, so the paths must agree.
-
-**This is where the backend is chosen.** For claudecode:
+Same three variables for either backend — the runtime, its home, its port:
 
 ```bash
-make os-dev OS_AGENT_RUNTIME=claudecode CLAUDECODE_PORT=18891
+make os-dev OS_AGENT_RUNTIME=codex      CODEX_HOME=~/.codex      CODEX_PORT=18892
+make os-dev OS_AGENT_RUNTIME=claudecode CLAUDECODE_HOME=~/.autonomous-os/.claudecode CLAUDECODE_PORT=18891
 ```
 
-`OS_AGENT_RUNTIME` is only needed on the run that **changes** backend — it is
-persisted to `config.json` and every later `make os-dev`, `make sim` and
-`make web-dev` reads it back. Omitting it does **not** reset you to codex.
+None of the three is always required. Each has its own rule:
+
+| Variable | When you need it | Who else needs the same value |
+|---|---|---|
+| `OS_AGENT_RUNTIME` | Only on the run that **changes** backend | Nobody — it is written to `config.json`, and every later `make` reads it back. Omitting it does **not** reset you to codex |
+| `*_HOME` | Only when you **override** the default | §2's gateway **and** `make sim` |
+| `*_PORT` | Only when the default port is taken | §2's gateway |
+
+**`*_HOME` and `*_PORT` are all-or-nothing.** They are not remembered anywhere:
+each `make` invocation expands its own environment, so passing a value to one
+target and not the other leaves the two processes pointing at different places.
+
+| Mismatch | What you get |
+|---|---|
+| `*_PORT` differs | `bad handshake (status 404)` — os-server dials a port nothing is listening on |
+| `*_HOME` differs | **No error at all.** os-server provisions one directory (`config.toml`, `workspace/`, `skills/`) while the gateway runs the CLI in another — the agent starts with no provider and no persona |
+
+os-server is both the **writer** of that directory (it runs presync and all agent
+provisioning) and the **client** of the gateway's socket, which is why it needs
+the same two values the gateway got.
 
 Wait for `Codex connected` / `Claude Code connected` before using the stack.
 

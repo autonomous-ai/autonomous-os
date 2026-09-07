@@ -184,7 +184,7 @@ thật của developer, và vào port mà một service thật có thể đang g
 
 | Tuỳ chọn | Mặc định | Truyền giá trị riêng khi |
 |---|---|---|
-| `CODEX_HOME` / `CLAUDECODE_HOME` | xem bên dưới | CLI của bạn nằm chỗ khác, hoặc bạn muốn tách state của device khỏi state của mình |
+| `CODEX_HOME` / `CLAUDECODE_HOME` | xem bên dưới | CLI của bạn nằm chỗ khác, hoặc bạn muốn tách state của device khỏi state của mình. **Truyền cùng giá trị đó cho `os-dev` và `make sim`** — os-server mới là bên ghi thư mục này, nên lệch là hỏng im lặng |
 | `CODEX_PORT` / `CLAUDECODE_PORT` | `18792` / `18791` | Port mặc định đã bị chiếm. **Truyền cùng giá trị đó cho `os-dev`** — nó suy ra URL bridge từ đây, lệch là `bad handshake (status 404)` |
 
 Nếu máy có cài `openclaw-gateway`, nó giữ `18789`, `18791` **và** `18792` — tức
@@ -213,7 +213,7 @@ make codex-dev CODEX_HOME=$OS_STATE_DIR/.codex CODEX_PORT=18892
 #### claudecode
 
 ```bash
-make claudecode-dev CLAUDECODE_PORT=18891
+make claudecode-dev CLAUDECODE_HOME=~/.autonomous-os/.claudecode CLAUDECODE_PORT=18891
 ```
 
 Backend này có **hai** thư mục, làm hai việc khác nhau:
@@ -240,23 +240,34 @@ session — sau khi `os-dev` ghi lại chúng thì phải restart terminal này.
 
 ### 3 — os-server
 
-```bash
-make os-dev CODEX_HOME=~/.codex CODEX_PORT=18892
-```
-
-Lặp lại đúng `*_HOME` và `*_PORT` bạn đã đưa cho gateway — os-server là
-**client** của socket đó và suy ra URL từ chính các biến này. Nó cũng chạy
-presync và toàn bộ khâu provisioning agent, nên đường dẫn bắt buộc phải khớp.
-
-**Đây là chỗ chọn backend.** Với claudecode:
+Cùng ba biến cho cả hai backend — runtime, home của nó, port của nó:
 
 ```bash
-make os-dev OS_AGENT_RUNTIME=claudecode CLAUDECODE_PORT=18891
+make os-dev OS_AGENT_RUNTIME=codex      CODEX_HOME=~/.codex      CODEX_PORT=18892
+make os-dev OS_AGENT_RUNTIME=claudecode CLAUDECODE_HOME=~/.autonomous-os/.claudecode CLAUDECODE_PORT=18891
 ```
 
-`OS_AGENT_RUNTIME` chỉ cần ở lần chạy **đổi** backend — nó được ghi vào
-`config.json` và mọi `make os-dev`, `make sim`, `make web-dev` sau đó đọc lại từ
-đó. Bỏ qua nó **không** làm bạn quay về codex.
+Không biến nào là luôn bắt buộc. Mỗi cái một quy tắc:
+
+| Biến | Khi nào cần | Ai khác cần cùng giá trị |
+|---|---|---|
+| `OS_AGENT_RUNTIME` | Chỉ ở lần chạy **đổi** backend | Không ai — nó được ghi vào `config.json`, mọi lệnh `make` sau đó đọc lại. Bỏ qua **không** làm bạn quay về codex |
+| `*_HOME` | Chỉ khi bạn **override** mặc định | Gateway ở §2 **và** `make sim` |
+| `*_PORT` | Chỉ khi port mặc định đã bị chiếm | Gateway ở §2 |
+
+**`*_HOME` và `*_PORT` là cả-hai-hoặc-không-cái-nào.** Chúng không được nhớ ở
+đâu cả: mỗi lần gọi `make` tự expand environment của riêng nó, nên truyền cho
+target này mà không truyền cho target kia sẽ khiến hai tiến trình trỏ vào hai
+nơi khác nhau.
+
+| Lệch | Hậu quả |
+|---|---|
+| `*_PORT` lệch | `bad handshake (status 404)` — os-server gọi vào port không ai nghe |
+| `*_HOME` lệch | **Không báo lỗi gì cả.** os-server provision một thư mục (`config.toml`, `workspace/`, `skills/`) còn gateway chạy CLI ở thư mục khác — agent khởi động không có provider, không có persona |
+
+os-server vừa là bên **ghi** thư mục đó (nó chạy presync và toàn bộ khâu
+provisioning agent), vừa là **client** của socket mà gateway mở — đó là lý do nó
+cần đúng hai giá trị bạn đã đưa cho gateway.
 
 Đợi `Codex connected` / `Claude Code connected` rồi mới dùng stack.
 
