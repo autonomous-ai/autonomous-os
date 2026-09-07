@@ -60,8 +60,24 @@ _LANDMARK_MODEL_PATH: str = os.environ.get(
 # Face-presence probability above which the ONNX landmarks are trusted for
 # alignment; below it the detection is dropped (no SCRFD keypoint fallback), so
 # this doubles as a false-alarm gate. See _OnnxLandmarkAligner.
+#
+# 0.99, not 0.6: the model's score SATURATES. Measured over 990 logged frames on
+# lamp-ac82 (04/09/2026) the median is exactly 1.000 and the minimum is 0.613 —
+# so at 0.6 this gate had never once fired, and the "non-face detections are
+# gated out" property it exists for was not actually in effect.
+#
+# What it catches at 0.99 is a detection that is facial but carries NO identity:
+# SCRFD firing on an ear at close range. 26 such frames appeared in one 40-minute
+# session, all at ~0.0 similarity to the user's own enrollment photo; one minted
+# a stranger identity and the other 25 then matched it. landmark_score separates
+# them from real faces at AUC 0.98, and 0.99 removes all 26 — taking that
+# session's spurious identities from 1 to 0. It drops 70 of 990 frames, and
+# recognition RISES 94.6% -> 97.8% because those frames leave the denominator.
+#
+# Tuned on one device: lower it via the env var if a deployment starts logging
+# FAIL-* folders for faces that are plainly fine.
 _LANDMARK_CONF_THRESHOLD: float = float(
-    os.environ.get("HAL_FACE_LANDMARK_CONF_THRESHOLD", "0.6")
+    os.environ.get("HAL_FACE_LANDMARK_CONF_THRESHOLD", "0.99")
 )
 
 # Public weights bucket base URL (matches perception-service settings.cdn_base).

@@ -31,7 +31,7 @@ là thứ khiến binary được test *chính là* binary được ship.
 | `codex` CLI | `codex --version` | Tự cài — không có gì ở đây cài giúp |
 | codex đã đăng nhập | `ls ~/.codex/auth.json` | `codex login` |
 | `ffmpeg` | `ffmpeg -version` | Cần cho phát nhạc |
-| `uv` | `uv --version` | Dựng `hal/.venv` cho HAL. `make sim` tự tạo ở lần chạy đầu và sync lại mỗi khi `hal/uv.lock` hoặc `hal/pyproject.toml` mới hơn nó. Nếu lần sync đầu chết khi build `insightface`, xem *insightface build lỗi* bên dưới |
+| `uv` | `uv --version` | Dựng `hal/.venv` cho HAL. `make sim` tự tạo ở lần chạy đầu và sync lại mỗi khi `hal/uv.lock` hoặc `hal/pyproject.toml` mới hơn nó |
 | `node` + `npm` | `node --version` | Chỉ cần cho `make web-dev` |
 
 **Chỉ `codex` chạy được off-device.** Các runtime khác không có target `*-dev`.
@@ -532,33 +532,7 @@ cầm credential của một thiết bị đang sống.
 | Agent tự xưng "Codex", không persona | `$CODEX_HOME/workspace` phải có `AGENTS.md`, `SOUL.md`, `KNOWLEDGE.md`, `HEARTBEAT.md`. Chúng do **`os-dev`** tạo, không phải `codex-dev` |
 | Workspace rỗng, không thấy log `seeded file` | `set_up_completed` chưa true nên chuỗi khởi động không chạy |
 | `skill download skipped: no ota_metadata_url` | Thiếu `config/bootstrap.json` |
-| `uv sync` chết khi build `insightface`, `ld: library 'c++' not found` | Xem bên dưới |
 
-### insightface build lỗi
-
-`insightface` phải compile C++, và interpreter mà `uv` chọn quyết định lần
-compile đó nhắm vào SDK nào. Python cài từ Homebrew nướng sẵn đường dẫn SDK lúc
-nó được build vào `sysconfig` của chính nó, nên trên máy đã lên bản macOS mới
-hơn, lần build trỏ `-isysroot` vào một SDK không còn được cài:
-
-```
-Compiling with an SDK that doesn't seem to exist:
-/Library/Developer/CommandLineTools/SDKs/MacOSX13.sdk
-ld: library 'c++' not found
-```
-
-Đặt `SDKROOT` không có tác dụng — cờ cũ đến từ `sysconfig`, không phải từ môi
-trường. Thay vào đó dựng venv bằng interpreter do `uv` quản lý, thứ không mang
-theo đường dẫn nướng sẵn nào:
-
-```bash
-uv python install 3.12
-cd hal && uv sync --inexact --python-preference only-managed -p 3.12
-```
-
-`make sim` dùng lại `hal/.venv` sinh ra từ đây, nên chỉ phải chữa một lần.
-
----
 
 ## Cái gì KHÔNG chạy off-device
 

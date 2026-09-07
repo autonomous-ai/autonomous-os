@@ -123,6 +123,34 @@ HAL manages the light control; the agent only handles the verbal announcement. I
 
 This auto-control state machine is gated on the `presence` capability: its only motion source is the people-perception loop (face/motion/emotion processors), which HAL runs only when the device declares `presence`. A device without `presence` starts the state machine disabled, so it never falsely times out to AWAY. Lamp declares `presence: required` so the timeline above always applies.
 
+### Stranger bank on disk
+
+Unrecognised faces are minted as `stranger_N` and persisted under
+`HAL_STRANGERS_DIR` (`/root/local/strangers`) as `embeds.npy`, `labels.npy` and
+`counter.npy`. The files are written **only when a new stranger is minted**, so
+a device whose every visitor is enrolled never creates them at all — and that is
+the normal, healthy state, not a fault.
+
+`FaceRecognizer._load_strangers_state` re-reads the bank on every frame that
+contains a face. It now checks the paths exist and returns quietly when they do
+not; an absent bank is the correct empty state and the in-memory fields already
+hold it. A bank that exists but cannot be read still logs an ERROR, because a
+truncated or corrupt `.npy` is worth shouting about.
+
+Before this guard, "not created yet" raised `FileNotFoundError` and was logged
+with a full traceback at ERROR on the per-frame path — roughly every
+`HAL_SENSING_INTERVAL` (2 s) seconds, from first boot, forever, on exactly the
+devices that were working correctly. Recognition itself was never affected
+(owners match against the enrolled photos, which never touch these files); the
+cost was journald filling with tracebacks that buried real errors.
+
+**Clearing unknown faces:** to empty the Unknown Faces card in the monitor UI,
+delete `<HAL_USERS_DIR>/.stranger_stats.json` and leave the `.npy` bank alone.
+Note the stats file and the bank live in different directories, so "clear the
+strangers" is easy to do incompletely. There is no delete endpoint for face
+strangers today — unknown *voice* clusters do have one, the Unknown Faces card
+is read-only — so clearing them is a filesystem operation.
+
 ---
 
 ## Motion
