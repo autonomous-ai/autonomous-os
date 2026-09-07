@@ -39,15 +39,15 @@ là thứ khiến binary được test *chính là* binary được ship.
 ## Bước 2 — Chép file config mẫu
 
 ```bash
-mkdir -p /tmp/autonomous-os/config
-cp scripts/dev/config.example.json /tmp/autonomous-os/config/config.json
-chmod 600 /tmp/autonomous-os/config/config.json
+mkdir -p ~/.autonomous-os/config
+cp scripts/dev/config.example.json ~/.autonomous-os/config/config.json
+chmod 600 ~/.autonomous-os/config/config.json
 ```
 
 ## Bước 3 — Điền config
 
 ```bash
-$EDITOR /tmp/autonomous-os/config/config.json
+$EDITOR ~/.autonomous-os/config/config.json
 ```
 
 ### Bắt buộc
@@ -134,7 +134,7 @@ curl -s -X POST :5000/api/sensing/event -H 'Content-Type: application/json' \
   -d '{"type":"voice_command","message":"introduce yourself"}'
 
 # 5. Nói vào mic: "hey lamp, what time is it"
-grep '\[turn\] route=' /tmp/autonomous-sim/log/server.log | tail
+grep '\[turn\] route=' ~/.autonomous-sim/log/server.log | tail
 ```
 
 Mở:
@@ -191,7 +191,7 @@ khởi động server.
 | | Đường dẫn |
 |---|---|
 | File mẫu (trong repo) | `scripts/dev/config.example.json` |
-| Config đang dùng | `$OS_STATE_DIR/config/config.json` — mặc định `/tmp/autonomous-os/config/config.json` |
+| Config đang dùng | `$OS_STATE_DIR/config/config.json` — mặc định `~/.autonomous-os/config/config.json` |
 | Metadata OTA (tự seed) | `$OS_STATE_DIR/config/bootstrap.json` |
 | Workspace của agent | `$CODEX_HOME/workspace/` |
 
@@ -443,8 +443,8 @@ tắt.
 |---|---|
 | `DEVICE_TYPE` | `lamp` |
 | `SIM_MEDIA` | `virtual` |
-| `SIM_STATE_DIR` | `/tmp/autonomous-sim` |
-| `OS_STATE_DIR` | `/tmp/autonomous-os` |
+| `SIM_STATE_DIR` | `~/.autonomous-sim` |
+| `OS_STATE_DIR` | `~/.autonomous-os` |
 | `OS_AGENT_RUNTIME` | `codex` |
 | `CODEX_HOME` | `$HOME/.codex` |
 | `CODEX_PORT` | `18792` |

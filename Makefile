@@ -54,7 +54,7 @@ os-test:
 #   make os-dev     API on :5000
 # The runtime itself (codex CLI, its skills, AGENTS.md) is expected to be
 # installed already — nothing here provisions it.
-OS_STATE_DIR     ?= /tmp/autonomous-os
+OS_STATE_DIR     ?= $(HOME)/.autonomous-os
 OS_AGENT_RUNTIME ?= codex
 CODEX_HOME       ?= $(HOME)/.codex
 CODEX_PORT       ?= 18792
@@ -135,7 +135,7 @@ hal-dev: $(HAL_DIR)/.venv
 # Boot any declared body on a laptop without opening its physical peripherals.
 # DEVICE_TYPE remains the single body selector; Lamp is the default product body.
 DEVICE_TYPE ?= lamp
-SIM_STATE_DIR ?= /tmp/autonomous-sim
+SIM_STATE_DIR ?= $(HOME)/.autonomous-sim
 # virtual is deterministic and permission-free; host opts into the developer
 # machine's camera, microphone and speaker. host is also what turns the REAL
 # voice pipeline on (STT → realtime → dispatch) instead of the inert stub —

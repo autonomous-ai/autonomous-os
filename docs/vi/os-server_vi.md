@@ -630,7 +630,7 @@ journal để đọc. `bootstrap` (worker không chạy off-device) và `buddy` 
 không có log ở đây) để trống có chủ đích; env unset thì cả sáu vẫn resolve đúng
 như trên board.
 
-Các núm trong Makefile: `OS_STATE_DIR` (mặc định `/tmp/autonomous-os`),
+Các núm trong Makefile: `OS_STATE_DIR` (mặc định `~/.autonomous-os`),
 `OS_AGENT_RUNTIME` (mặc định `codex`), `CODEX_HOME` (mặc định `$HOME/.codex`),
 `CODEX_PORT`, `CODEX_BIN`. `scripts/dev/os-dev-seed.sh` ghi `device_type`,
 `agent_runtime` và `set_up_completed: true` vào config.json của state dir — cái

@@ -39,15 +39,15 @@ what makes the tested binary the shipped binary.
 ## Step 2 — Copy the config template
 
 ```bash
-mkdir -p /tmp/autonomous-os/config
-cp scripts/dev/config.example.json /tmp/autonomous-os/config/config.json
-chmod 600 /tmp/autonomous-os/config/config.json
+mkdir -p ~/.autonomous-os/config
+cp scripts/dev/config.example.json ~/.autonomous-os/config/config.json
+chmod 600 ~/.autonomous-os/config/config.json
 ```
 
 ## Step 3 — Fill in the config
 
 ```bash
-$EDITOR /tmp/autonomous-os/config/config.json
+$EDITOR ~/.autonomous-os/config/config.json
 ```
 
 ### Required
@@ -133,7 +133,7 @@ curl -s -X POST :5000/api/sensing/event -H 'Content-Type: application/json' \
   -d '{"type":"voice_command","message":"introduce yourself"}'
 
 # 5. Speak into the mic: say "hey lamp, what time is it"
-grep '\[turn\] route=' /tmp/autonomous-sim/log/server.log | tail
+grep '\[turn\] route=' ~/.autonomous-sim/log/server.log | tail
 ```
 
 Open:
@@ -190,7 +190,7 @@ booting the server.
 | | Path |
 |---|---|
 | Template (in the repo) | `scripts/dev/config.example.json` |
-| Live config | `$OS_STATE_DIR/config/config.json` — default `/tmp/autonomous-os/config/config.json` |
+| Live config | `$OS_STATE_DIR/config/config.json` — default `~/.autonomous-os/config/config.json` |
 | OTA metadata (auto-seeded) | `$OS_STATE_DIR/config/bootstrap.json` |
 | Agent workspace | `$CODEX_HOME/workspace/` |
 
@@ -449,8 +449,8 @@ needs them simply stays off.
 |---|---|
 | `DEVICE_TYPE` | `lamp` |
 | `SIM_MEDIA` | `virtual` |
-| `SIM_STATE_DIR` | `/tmp/autonomous-sim` |
-| `OS_STATE_DIR` | `/tmp/autonomous-os` |
+| `SIM_STATE_DIR` | `~/.autonomous-sim` |
+| `OS_STATE_DIR` | `~/.autonomous-os` |
 | `OS_AGENT_RUNTIME` | `codex` |
 | `CODEX_HOME` | `$HOME/.codex` |
 | `CODEX_PORT` | `18792` |

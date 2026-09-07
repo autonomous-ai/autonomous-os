@@ -641,7 +641,7 @@ laptop has no journal to read. `bootstrap` (the worker is not run off-device)
 and `buddy` (a Mac app with no log here) stay empty by design; unset env leaves
 all six exactly as they resolve on a board.
 
-Makefile knobs: `OS_STATE_DIR` (default `/tmp/autonomous-os`), `OS_AGENT_RUNTIME`
+Makefile knobs: `OS_STATE_DIR` (default `~/.autonomous-os`), `OS_AGENT_RUNTIME`
 (default `codex`), `CODEX_HOME` (default `$HOME/.codex`), `CODEX_PORT`,
 `CODEX_BIN`. `scripts/dev/os-dev-seed.sh` writes `device_type`, `agent_runtime`
 and `set_up_completed: true` into the state dir's config.json — the last one
