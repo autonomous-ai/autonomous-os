@@ -29,7 +29,7 @@ là thứ khiến binary được test *chính là* binary được ship.
 | Cần | Kiểm bằng | Nếu thiếu |
 |---|---|---|
 | `codex` CLI | `codex --version` | Tự cài — không có gì ở đây cài giúp |
-| codex đã đăng nhập | `ls ~/.codex/auth.json` | `codex login` |
+| codex auth — **một trong hai** chế độ | `ls ~/.codex/auth.json` | Không bắt buộc. Có `auth.json` = subscription mode (`codex login`), codex dùng provider built-in; không có = api-key mode, codex chạy bằng `llm_api_key` + `llm_base_url` trong config.json. `runtimes/codex/presync.sh` chọn lại mỗi lần boot nên xoá `auth.json` là đổi chế độ |
 | `ffmpeg` | `ffmpeg -version` | Cần cho phát nhạc |
 | `uv` | `uv --version` | Dựng `hal/.venv` cho HAL. `make sim` tự tạo ở lần chạy đầu và sync lại mỗi khi `hal/uv.lock` hoặc `hal/pyproject.toml` mới hơn nó |
 | `node` + `npm` | `node --version` | Chỉ cần cho `make web-dev` |
@@ -57,8 +57,19 @@ nano ~/.autonomous-os/config/config.json   # chỉ còn llm_api_key phải tự 
 
 | Key | Giá trị | Thiếu thì |
 |---|---|---|
-| `llm_api_key` | Key của provider | Không TTS, không STT, không Gemini Live, không mô tả ảnh. Agent vẫn trả lời text |
-| `llm_base_url` | Để trống — `os-dev-seed.sh` điền `https://campaign-api.autonomous.ai/api/v1/ai/v1` khi key này rỗng. Muốn base OpenAI-compatible khác thì tự đặt | Không sao — nó được điền sẵn |
+`os-dev-seed.sh` ghi sẵn cả ba, nên config mới tạo đã có:
+
+```json
+"llm_api_key": "autonomous_api_key",
+"llm_model": "Auto-AI",
+"llm_base_url": "https://campaign-api.autonomous.ai/api/v1/ai/v1"
+```
+
+| Key | Giá trị | Thiếu thì |
+|---|---|---|
+| `llm_api_key` | **Xin team key thật** — `autonomous_api_key` chỉ là placeholder để web UI vào được, không phải credential chạy được | Không TTS, không STT, không Gemini Live, không mô tả ảnh. Để *rỗng* còn tệ hơn: `adminAuthMiddleware` (`system/server/middleware.go`) fallback dùng chính key này làm bearer, thiếu nó thì trả 503, và `AuthGate` đọc 503 là "chưa từng setup" — web UI đá về `/setup`, mà wizard đó không chạy xong được ngoài thiết bị (không có `mac`, không có `iw`) |
+| `llm_base_url` | Điền sẵn gateway chung. Muốn base OpenAI-compatible khác thì tự đặt | Không sao — nó được điền sẵn |
+| `llm_model` | Điền sẵn `Auto-AI` | Không sao — nó được điền sẵn |
 
 ### Chỉ bắt buộc nếu dùng web UI (`make web-dev`)
 

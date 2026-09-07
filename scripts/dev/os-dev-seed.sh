@@ -35,6 +35,7 @@ fi
 python3 - "$CONFIG_JSON" "$DEVICE_TYPE" "$AGENT_RUNTIME" <<'PY'
 import json, os, sys
 path, device_type, runtime = sys.argv[1:4]
+PLACEHOLDER_KEY = "autonomous_api_key"
 cfg = {}
 if os.path.exists(path):
     with open(path) as f:
@@ -54,6 +55,13 @@ if not str(cfg.get("admin_password_hash", "")).strip():
 if not str(cfg.get("llm_base_url", "")).strip():
     cfg["llm_base_url"] = "https://campaign-api.autonomous.ai/api/v1/ai/v1"
     print("[os-dev-seed] llm_base_url was empty — defaulted to https://campaign-api.autonomous.ai/api/v1/ai/v1")
+# A placeholder rather than "": an empty key makes adminAuthMiddleware answer
+# 503 and the web UI bounce to /setup, which reads as a broken build instead of
+# a missing credential. The placeholder keeps the UI reachable and names what to
+# ask the team for; the NOTE below still fires until a real key replaces it.
+if not str(cfg.get("llm_api_key", "")).strip():
+    cfg["llm_api_key"] = PLACEHOLDER_KEY
+    print(f"[os-dev-seed] llm_api_key was empty — set to placeholder '{PLACEHOLDER_KEY}' (ask the team for a real key)")
 if not str(cfg.get("llm_model", "")).strip():
     cfg["llm_model"] = "Auto-AI"
     print("[os-dev-seed] llm_model was empty — defaulted to Auto-AI")
@@ -65,10 +73,10 @@ print(f"[os-dev-seed] {path}: device_type={device_type} agent_runtime={runtime} 
 # A silent empty key surfaces much later as "the device never speaks" or a turn
 # that answers blind, and neither points back here.
 missing = []
-if not str(cfg.get("llm_api_key", "")).strip():
-    missing.append("llm_api_key — no TTS (silent replies), no STT, no Gemini Live, "
-                   "no image description, and the web UI redirects to /setup "
-                   f"(adminAuthMiddleware answers 503 without it). Fill it in: nano {path}")
+if str(cfg.get("llm_api_key", "")).strip() in ("", PLACEHOLDER_KEY):
+    missing.append("llm_api_key is still the placeholder — ask the team for a real key. "
+                   "Until then: no TTS (silent replies), no STT, "
+                   f"no Gemini Live, no image description. Fill it in: nano {path}")
 for m in missing:
     print(f"[os-dev-seed] NOTE: {m}")
 PY

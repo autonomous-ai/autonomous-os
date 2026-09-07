@@ -29,7 +29,7 @@ what makes the tested binary the shipped binary.
 | Need | Check with | If missing |
 |---|---|---|
 | `codex` CLI | `codex --version` | Install it yourself — nothing here installs it |
-| codex logged in | `ls ~/.codex/auth.json` | `codex login` |
+| codex auth — **either** mode | `ls ~/.codex/auth.json` | Optional. `auth.json` present = subscription mode (`codex login`), and codex uses its built-in provider; absent = api-key mode, and codex runs on `llm_api_key` + `llm_base_url` from config.json. `runtimes/codex/presync.sh` picks the mode on every boot, so deleting `auth.json` flips it |
 | `ffmpeg` | `ffmpeg -version` | Needed for music playback |
 | `uv` | `uv --version` | Builds HAL's `hal/.venv`. `make sim` creates it on first run and re-syncs it whenever `hal/uv.lock` or `hal/pyproject.toml` moves ahead of it |
 | `node` + `npm` | `node --version` | Needed for `make web-dev` only |
@@ -57,8 +57,19 @@ nano ~/.autonomous-os/config/config.json   # only llm_api_key is left to you
 
 | Key | Value | Missing → |
 |---|---|---|
-| `llm_api_key` | Your provider key | No TTS, no STT, no Gemini Live, no image description — **and the web UI bounces to `/setup`**: `adminAuthMiddleware` (`system/server/middleware.go`) falls back to this key as the bearer, answers 503 without it, and `AuthGate` reads 503 as "never set up". The setup wizard cannot finish off-device either (no `mac`, no `iw`), so fill the key in |
-| `llm_base_url` | Leave empty — `os-dev-seed.sh` fills in `https://campaign-api.autonomous.ai/api/v1/ai/v1` when it is blank. Set another OpenAI-compatible base to override | Nothing — it is defaulted |
+`os-dev-seed.sh` writes all three, so a fresh config already reads:
+
+```json
+"llm_api_key": "autonomous_api_key",
+"llm_model": "Auto-AI",
+"llm_base_url": "https://campaign-api.autonomous.ai/api/v1/ai/v1"
+```
+
+| Key | Value | Missing → |
+|---|---|---|
+| `llm_api_key` | **Ask the team for a real key** — `autonomous_api_key` is a placeholder that keeps the UI reachable, not a working credential | No TTS, no STT, no Gemini Live, no image description. Left *empty* it is worse: `adminAuthMiddleware` (`system/server/middleware.go`) falls back to this key as the bearer, answers 503 without it, and `AuthGate` reads 503 as "never set up" — the web UI bounces to `/setup`, a wizard that cannot finish off-device (no `mac`, no `iw`) |
+| `llm_base_url` | Defaulted to the shared gateway. Set another OpenAI-compatible base to override | Nothing — it is defaulted |
+| `llm_model` | Defaulted to `Auto-AI` | Nothing — it is defaulted |
 
 ### Required only for the web UI (`make web-dev`)
 
