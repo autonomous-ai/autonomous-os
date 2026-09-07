@@ -22,14 +22,39 @@ from hal.drivers.voice._internal.config import (
 logger = logging.getLogger("hal.voice")
 
 
-def _run_id_of(resp) -> str:
-    """The runId os-server allocated for this turn, or "" if the response did
-    not carry one. Never raises: a correlation id is nice to have, not a
-    reason to fail a voice turn."""
+class SendResult:
+    """What os-server said about a forwarded turn.
+
+    ``run_id`` correlates this utterance with the os-server run it created.
+    ``speech_suppressed`` is os-server's ANSWER to "did you actually take the
+    speaker away from the older turn" — only meaningful for
+    voice_agent_handled, and False when the supersession policy is off. Both
+    are for measurement; nothing in the voice path branches on them.
+    """
+
+    __slots__ = ("run_id", "speech_suppressed", "delivered")
+
+    def __init__(self, run_id: str = "", speech_suppressed: bool = False, delivered: bool = False):
+        self.run_id = run_id
+        self.speech_suppressed = speech_suppressed
+        self.delivered = delivered
+
+    def __bool__(self) -> bool:
+        return self.delivered
+
+
+def _result_of(resp) -> "SendResult":
+    """Parse the os-server response. Never raises: a correlation id is nice to
+    have, not a reason to fail a voice turn."""
     try:
-        return (resp.json() or {}).get("data", {}).get("runId", "") or ""
+        data = (resp.json() or {}).get("data") or {}
+        return SendResult(
+            run_id=data.get("runId", "") or "",
+            speech_suppressed=bool(data.get("speechSuppressed", False)),
+            delivered=True,
+        )
     except Exception:
-        return ""
+        return SendResult(delivered=True)
 
 
 class SensingSender:
@@ -62,7 +87,7 @@ class SensingSender:
         event_type: str = "voice",
         skip_echo: bool = False,
         image_b64: str = "",
-    ) -> str:
+    ) -> "SendResult":
         """POST decorated message to os-server /api/sensing/event with retry.
 
         ``image_b64`` (raw base64 JPEG, no data-URI prefix) rides the payload's
@@ -76,7 +101,7 @@ class SensingSender:
         404s at the smart-agent-router when it picks a no-vision backend.
         """
         if not skip_echo and self.is_echo(message):
-            return ""
+            return SendResult()
 
         payload = {"type": event_type, "message": message}
         # Voice turns used to ship NO current_user at all, so the identity in
@@ -125,8 +150,8 @@ class SensingSender:
                     # Returned so a caller can correlate this turn with the
                     # os-server run it created (voice KPI does; nothing else
                     # has to care).
-                    return _run_id_of(resp)
-                return ""
+                    return _result_of(resp)
+                return SendResult()
             except requests.ConnectionError as e:
                 if attempt < max_retries:
                     logger.warning(
@@ -141,5 +166,5 @@ class SensingSender:
                     )
             except requests.RequestException as e:
                 logger.warning("Failed to send voice event to os-server: %s", e)
-                return ""
-        return ""
+                return SendResult()
+        return SendResult()

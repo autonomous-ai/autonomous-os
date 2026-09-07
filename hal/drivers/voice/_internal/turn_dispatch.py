@@ -85,6 +85,23 @@ def _take_vision_handoff() -> tuple[str, str]:
     return hint, image_b64
 
 
+class _NoResult:
+    """Stand-in for a sender that returns nothing.
+
+    SensingSender.send reports the run id and whether os-server suppressed the
+    older turn, but the parameter is a duck-typed collaborator (test doubles,
+    virtual voice service). Normalizing here keeps dispatch working with a
+    sender that returns None — attribution is simply unavailable then.
+    """
+
+    run_id = ""
+    speech_suppressed = False
+
+
+def _sent(result):
+    return result if result is not None else _NoResult
+
+
 def dispatch_turn(
     decorator,
     sensing_sender,
@@ -199,19 +216,25 @@ def dispatch_turn(
             handled_msg = f"[skills: input-branching]\n[HANDLED] {final_msg}\n[REPLY] {reply}"
             if look_snap:
                 handled_msg = f"{handled_msg}\n{look_snap}"
-            handled_run_id = sensing_sender.send(
+            handled_result = _sent(sensing_sender.send(
                 handled_msg,
                 event_type="voice_agent_handled",
                 skip_echo=True,
-            )
+            ))
             # This POST is a backend notification, not a second user
             # interaction: it binds to the SAME interaction the realtime agent
-            # just answered, so no extra KPI sample is created. It is also the
-            # automatic-supersession boundary — os-server stamps
-            # autoSpeechWatermarkMs off exactly this event (gated there by
-            # OS_REALTIME_SUPERSEDES_MAIN_REPLY).
-            voice_kpi.bind_run(interaction_id, handled_run_id)
-            voice_kpi.boundary(voice_kpi.BOUNDARY_AUTO_SUPERSEDE, interaction_id)
+            # just answered, so no extra KPI sample is created.
+            voice_kpi.bind_run(interaction_id, handled_result.run_id)
+            # It is ALSO the automatic-supersession boundary — but only when
+            # os-server says it actually took the speaker away from the older
+            # turn. Opt-in policy (OS_REALTIME_SUPERSEDES_MAIN_REPLY, default
+            # off) and a failed POST both mean nothing was suppressed, so
+            # there is no situation to measure.
+            voice_kpi.boundary(
+                voice_kpi.BOUNDARY_AUTO_SUPERSEDE,
+                interaction_id,
+                policy_applied=handled_result.speech_suppressed,
+            )
             _close_look_trace("OK_realtime_handled", answer=reply)
         elif rt.delegated:
             # Delegated — send voice agent's summary + STT transcript to the OS server
@@ -231,14 +254,17 @@ def dispatch_turn(
                 " (+vision-image)" if vision_hint else "",
             )
             if sensing_msg:
-                voice_kpi.bind_run(
-                    interaction_id,
-                    sensing_sender.send(
-                        sensing_msg,
-                        event_type=event_type,
-                        image_b64=vision_image if vision_hint else "",
-                    ),
-                )
+                result = _sent(sensing_sender.send(
+                    sensing_msg,
+                    event_type=event_type,
+                    image_b64=vision_image if vision_hint else "",
+                ))
+                voice_kpi.bind_run(interaction_id, result.run_id)
+                if not result.run_id:
+                    # The turn never reached os-server (or it answered without
+                    # a run). Nothing can reply, so this is not a missed
+                    # response — it is an excluded, reported outcome.
+                    voice_kpi.exclude(interaction_id, voice_kpi.EXCL_DISPATCH_FAILED)
         else:
             # Realtime not active, OR it was active but produced no output
             # (e.g. receive() timed out) — send to the OS server normally so the
@@ -249,14 +275,14 @@ def dispatch_turn(
             if look_snap:
                 fallback_msg = f"{fallback_msg}\n{look_snap}"
             _close_look_trace("OK_fallback")
-            voice_kpi.bind_run(
-                interaction_id,
-                sensing_sender.send(
-                    fallback_msg,
-                    event_type=event_type,
-                    image_b64=vision_image if vision_hint else "",
-                ),
-            )
+            result = _sent(sensing_sender.send(
+                fallback_msg,
+                event_type=event_type,
+                image_b64=vision_image if vision_hint else "",
+            ))
+            voice_kpi.bind_run(interaction_id, result.run_id)
+            if not result.run_id:
+                voice_kpi.exclude(interaction_id, voice_kpi.EXCL_DISPATCH_FAILED)
     elif combined:
         if rt.route == ROUTE_NOISE_DROPPED:
             logger.info(

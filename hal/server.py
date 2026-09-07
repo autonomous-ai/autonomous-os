@@ -69,6 +69,27 @@ logger = setup_logging()
 # availability.
 
 
+def _tracking_playback_audio(owner: str, kind_hint: str) -> None:
+    """First real audio frame of a playback reached the stream (voice KPI).
+
+    Measurement only — never raises into the audio path."""
+    try:
+        from hal.tracking import voice_kpi
+
+        voice_kpi.playback_audio(owner, kind_hint, state.tts_service)
+    except Exception:
+        logger.exception("[voice-kpi] playback audio hook failed")
+
+
+def _tracking_playback_done() -> None:
+    try:
+        from hal.tracking import voice_kpi
+
+        voice_kpi.playback_end()
+    except Exception:
+        logger.exception("[voice-kpi] playback done hook failed")
+
+
 def _resolve_device_type() -> str:
     dev = os.environ.get("DEVICE_TYPE")
     if dev:
@@ -639,6 +660,12 @@ async def lifespan(app: FastAPI):
                 on_speak_start=state._on_tts_speak_start,
                 on_speak_end=state._on_tts_speak_end,
                 provider=tts_provider,
+                # Voice KPI (measurement only): fired at the first frame that
+                # actually reaches the stream, with the owner that claimed the
+                # speaker. Separate from on_speak_start, which the cached path
+                # fires before it has written anything.
+                on_playback_audio=_tracking_playback_audio,
+                on_playback_done=_tracking_playback_done,
             )
             logger.info(
                 "TTSService auto-started (provider=%s, output_device=%s, available=%s)",

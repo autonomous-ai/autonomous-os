@@ -9,6 +9,9 @@ numbers can be computed from real devices:
 | **KPI-1** | Share of eligible voice interactions acknowledged within **3 s** of the detected end of the user's speech | ≥ 95 % |
 | **KPI-2** | Share of eligible suppression boundaries where an **outdated** reply was actually played | < 1 % |
 
+Both targets are **provisional**. Every raw duration is stored, so a threshold
+can be re-decided from the data instead of by re-instrumenting devices.
+
 ## Where the code lives
 
 | Layer | Path | Role |
@@ -35,21 +38,40 @@ os-server `runId` returned by `/api/sensing/event`), the main agent's reply
 was already answered**, not a new one: it binds to the same `interaction_id`,
 so a realtime-handled turn produces exactly one KPI-1 sample.
 
+**Ownership is explicit, never guessed.** Every playback carries the owner
+that claimed the speaker: `run:<turn_id>` for an agent reply or a filler armed
+for that turn (os-server passes the run id down with the filler), and
+`interaction:<id>` for realtime native voice. Audio that nobody claimed is
+recorded as `unknown` and **never counts as an acknowledgement** — guessing
+"the newest open interaction" is how an old filler gets credited to a new
+command. The count rides on every interaction row as
+`unknown_owner_playbacks`.
+
 ## What counts as an acknowledgement
 
-The first **audio frame** out of the speaker — `TTSService`'s `on_speak_start`
-hook, which fires on first frame, not on HTTP acceptance. `speak_queue()`
-deliberately returns `True` for requests it drops (superseded turn), and
-os-server's `deliverTTS` can be muted after accepting text, so neither
-acceptance, queued text, model output, nor `tts_send` proves the user heard
-anything.
+The first frame **actually written to the audio stream**
+(`TTSService._note_audio_written`, called from every real write path: streamed
+synth, the queued-sentence drain, cached WAV playback, and realtime native
+frames).
+
+`on_speak_start` is **not** that signal and is not used for the KPI: the
+cached path fires it before taking the stream lock and before writing
+anything, so speech that is stopped or fails in between would look played.
+Neither does HTTP acceptance — `speak_queue()` deliberately returns `True` for
+requests it drops (superseded turn), and os-server's `deliverTTS` can be muted
+after accepting text.
+
+Even the first write is **not the acoustic onset**: ALSA (and more so
+Bluetooth) buffering sits between the write and the speaker. The measurement
+is "audio was handed to the device", not "sound left the driver".
 
 | Playback kind | Modality recorded | How it is classified |
 |---------------|-------------------|----------------------|
-| `native_realtime` | `spoken_answer_realtime` | `TTSService.native_mode` — realtime model's own voice |
-| `agent_reply` | `spoken_answer` | `realtime_feedback` (only the agent's reply sets it), carries `latest_queue_turn_id` |
+| `native_realtime` | `spoken_answer_realtime` | written by the native-frame path — realtime model's own voice |
+| `agent_reply` | `spoken_answer` | `realtime_feedback` (only the agent's reply sets it) |
 | `waiting_audio` | `waiting_audio` | interruptible cached speech, i.e. a dead-air filler |
 | `system_audio` | `acknowledgement_audio` | any other cached/system phrase |
+| `unknown` | — (never an ack) | nobody claimed the speaker for this playback |
 
 **Visual feedback is not counted.** The listening LED is a real receipt
 signal, but its actual activation is not instrumented here; counting it
@@ -66,7 +88,10 @@ HAL process**. HAL and os-server monotonic clocks are never mixed. Wall-clock
 
 `speech_end_method` records how the endpoint was decided, because it is a
 **detection**, not the acoustic truth: `silence_clock`, `tts_started`,
-`music_started`, `max_duration`, `stt_error`.
+`music_started`, `max_duration`, `stt_error`. The clock starts at that
+detection (the moment the capture loop broke), **not** after
+`finalize_session` — transcript assembly, trailing-silence trim and speaker-ID
+run in between and would otherwise be charged to the device's response time.
 
 ## Events
 
@@ -78,10 +103,12 @@ HAL process**. HAL and os-server monotonic clocks are never mixed. Wall-clock
 | `speech_end_method` | How the endpoint was detected |
 | `eligible` | `false` when `exclusion_reason` is set |
 | `outcome` | `acknowledged` \| `no_ack` \| `excluded` |
-| `exclusion_reason` | `rejected_noise`, `rejected_non_user`, `no_transcript`, `not_addressed`, `speaker_muted`, `interrupted_by_user` |
+| `exclusion_reason` | `rejected_noise`, `rejected_non_user`, `no_transcript`, `not_addressed`, `speaker_muted`, `interrupted_by_user`, `dispatch_failed` |
 | `ack_latency_ms` | Raw observation, kept whatever the verdict (`null` when nothing played) |
 | `ack_modality`, `ack_kind` | What the user actually heard |
-| `ack_deadline_ms`, `observe_window_ms` | 3000 / 10000 — the thresholds in force when the row was written |
+| `ack_deadline_ms`, `observe_window_ms` | 3000 / 10000 — the (provisional) thresholds in force when the row was written |
+| `unknown_owner_playbacks` | Playbacks nobody claimed so far — audio excluded from ack decisions |
+| `amends_event_id`, `amendment_reason` | Set on a **correction** row: routing or an exclusion arrived after the verdict was sent |
 
 The observation window is **10 s**, wider than the 3 s target on purpose: a
 late answer is reported with its real latency instead of collapsing into "no
@@ -96,9 +123,23 @@ answer at all", so the threshold can be re-decided from stored data.
 | `applicable_interactions` | How many older in-flight interactions the boundary covers |
 | `old_audio_playing_at_boundary` | Whether old audio was already playing when the boundary was stamped |
 | `stale_observed` | **KPI-2 numerator** |
-| `stale_kind`, `stale_started_after_ms` | Which audio, and how long after the boundary it started |
+| `stale_kind`, `stale_started_after_ms` | Which audio, and how long after the boundary it started (negative-free: audio already playing counts too) |
+| `stale_audible_past_grace_ms` | How far past the grace old audio was still audible |
 | `stop_to_silence_ms` | How long old audio kept playing after the boundary — recorded raw, even inside the grace |
-| `grace_ms`, `observe_window_ms` | 2000 / 3000 |
+| `grace_ms`, `observe_window_ms` | 2000 / 60000 |
+| `observation_complete` | `false` when the window closed while suppressed turns could still speak — such a row is **not** evidence of a clean suppression |
+| `unobserved_interactions` | How many suppressed turns were still alive at that point |
+
+**Stale means audible past the grace, whether it started then or merely kept
+going.** Each playback interval is scored against every open boundary, so
+audio that began before the stop and ran past the grace counts — an earlier
+version only looked at playbacks that *started* after the boundary and passed
+a reply that was still talking three seconds after a stop.
+
+**The window is long, and an unfinished observation says so.** A main-agent
+reply can arrive tens of seconds after the boundary, so a suppression is
+watched for 60 s. If that expires while a suppressed turn can still speak, the
+row reports `observation_complete = false` instead of "no stale reply".
 
 **The grace period is documented, not invented to pass.** `TTSService.stop()`
 sets a stop event and wakes the drain queues; the worker still has to release
@@ -112,11 +153,25 @@ Both boundaries are stamped **in HAL**, where both originate: the cancel
 gesture is a HAL button action, and `voice_agent_handled` is emitted by HAL's
 turn dispatcher.
 
+**A boundary is recorded only when os-server actually applied it.** The
+`/api/sensing/event` response to a `voice_agent_handled` post carries
+`speechSuppressed` — os-server's own answer to "did I take the speaker away
+from the older turn". With `OS_REALTIME_SUPERSEDES_MAIN_REPLY` off (the
+default) nothing is suppressed, and a failed POST suppresses nothing either;
+neither case is recorded, because a denominator full of situations where
+nothing was ever suppressed makes KPI-2 look good for free.
+
+**The denominator counts active turns only.** An interaction that was already
+excluded or closed cannot produce a stale reply, so it is not counted as
+something the boundary had to suppress.
+
 ## KPI definitions
 
 **KPI-1 — acknowledged within 3 s**
 
-- Denominator: `voice_kpi_interaction` rows with `eligible = true`.
+- Denominator: `voice_kpi_interaction` rows with `eligible = true`, after
+  applying amendments (a row whose `interaction_id` also has a row with
+  `amends_event_id` set is superseded by that correction).
 - Numerator: those with `outcome = 'acknowledged'` and `ack_latency_ms <= 3000`.
 - Excluded (reported, never dropped): noise-rejected turns, turns the realtime
   model explicitly rejected as non-user, empty transcripts, utterances not
@@ -126,7 +181,9 @@ turn dispatcher.
 
 **KPI-2 — outdated reply actually played**
 
-- Denominator: `voice_kpi_suppression` rows.
+- Denominator: `voice_kpi_suppression` rows with `applicable_interactions > 0`
+  **and** `observation_complete = true`. Rows with an incomplete observation
+  are reported separately as coverage loss — never folded in as passes.
 - Numerator: those with `stale_observed = true`.
 - Report `explicit_stop` and `auto_supersede` separately: they are different
   policies. Automatic supersession only happens when os-server has
@@ -157,14 +214,28 @@ CREATE TEMP FUNCTION param(params ANY TYPE, k STRING) AS (
 
 ```sql
 -- KPI-1: acknowledged within 3s, with the eligible sample count.
-WITH i AS (
+WITH rows AS (
   SELECT
-    param(data.event_params, 'eligible')       AS eligible,
-    param(data.event_params, 'outcome')        AS outcome,
-    SAFE_CAST(param(data.event_params, 'ack_latency_ms') AS INT64) AS ack_ms
+    param(data.event_params, 'interaction_id')     AS interaction_id,
+    param(data.event_params, 'eligible')           AS eligible,
+    param(data.event_params, 'outcome')            AS outcome,
+    param(data.event_params, 'amends_event_id')    AS amends,
+    SAFE_CAST(param(data.event_params, 'ack_latency_ms') AS INT64) AS ack_ms,
+    event_timestamp
   FROM event_tracking
   WHERE event_name = 'voice_kpi_interaction'
     AND event_timestamp >= UNIX_SECONDS(TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY))
+),
+-- One row per interaction: the latest verdict wins, so a correction
+-- (amends_event_id set) supersedes the row it amends.
+i AS (
+  SELECT * EXCEPT(rn) FROM (
+    SELECT *, ROW_NUMBER() OVER (
+      PARTITION BY interaction_id
+      ORDER BY IF(amends != '', 1, 0) DESC, event_timestamp DESC
+    ) AS rn
+    FROM rows
+  ) WHERE rn = 1
 ),
 eligible AS (SELECT * FROM i WHERE eligible = 'true')
 SELECT
@@ -180,18 +251,24 @@ FROM eligible;
 -- KPI-2: stale playback per suppression policy.
 WITH s AS (
   SELECT
-    param(data.event_params, 'suppression_reason') AS reason,
-    param(data.event_params, 'stale_observed')     AS stale
+    param(data.event_params, 'suppression_reason')  AS reason,
+    param(data.event_params, 'stale_observed')      AS stale,
+    param(data.event_params, 'observation_complete') AS complete,
+    SAFE_CAST(param(data.event_params, 'applicable_interactions') AS INT64) AS applicable
   FROM event_tracking
   WHERE event_name = 'voice_kpi_suppression'
     AND event_timestamp >= UNIX_SECONDS(TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY))
 )
 SELECT
   reason,
-  COUNT(*) AS eligible_samples,
-  COUNTIF(stale = 'true') AS stale_played,
-  CASE WHEN COUNT(*) = 0 THEN NULL
-       ELSE ROUND(100 * COUNTIF(stale = 'true') / COUNT(*), 2)
+  -- A boundary with nothing to suppress is not a KPI situation; an
+  -- incomplete observation is coverage loss, not a pass.
+  COUNTIF(applicable > 0 AND complete = 'true')                    AS eligible_samples,
+  COUNTIF(applicable > 0 AND complete = 'true' AND stale = 'true') AS stale_played,
+  COUNTIF(applicable > 0 AND complete = 'false')                   AS incomplete_observations,
+  CASE WHEN COUNTIF(applicable > 0 AND complete = 'true') = 0 THEN NULL
+       ELSE ROUND(100 * COUNTIF(applicable > 0 AND complete = 'true' AND stale = 'true')
+                      / COUNTIF(applicable > 0 AND complete = 'true'), 2)
   END AS kpi2_pct
 FROM s
 GROUP BY reason;
@@ -204,7 +281,8 @@ SELECT
   MAX(SAFE_CAST(param(data.event_params, 'tracking_dropped_total') AS INT64)) AS os_dropped,
   MAX(SAFE_CAST(param(data.event_params, 'tracking_failed_total')  AS INT64)) AS os_failed,
   MAX(SAFE_CAST(param(data.event_params, 'hal_dropped_total')      AS INT64)) AS hal_dropped,
-  MAX(SAFE_CAST(param(data.event_params, 'hal_failed_total')       AS INT64)) AS hal_failed
+  MAX(SAFE_CAST(param(data.event_params, 'hal_failed_total')       AS INT64)) AS hal_failed,
+  MAX(SAFE_CAST(param(data.event_params, 'unknown_owner_playbacks') AS INT64)) AS unowned_playbacks
 FROM event_tracking
 WHERE event_name LIKE 'voice_kpi_%';
 ```
@@ -234,11 +312,15 @@ and `platform` is `device` (see `system/lib/analytics`).
 - **`auto_supersede` is empty on a default body** — `OS_REALTIME_SUPERSEDES_MAIN_REPLY`
   defaults to OFF and was not changed.
 - **Stale detection is playback-level, not sample-level.** It observes audio
-  starting or still running after a boundary; it cannot say how many
-  milliseconds of old audio were audible beyond `stop_to_silence_ms`.
-- **Attribution for fillers and realtime voice is by newest open interaction**,
-  not an explicit id — those paths carry no turn id. Agent replies are
-  attributed exactly, by run id.
+  intervals crossing the grace boundary; it cannot say how many milliseconds
+  of PCM were still in the hardware buffer.
+- **Audio handed to the driver, not sound in the room.** The ack point is the
+  first stream write; ALSA/Bluetooth buffering after it is not measured.
+- **Unclaimed playback is unattributed by design.** It is counted
+  (`unknown_owner_playbacks`) and excluded from ack decisions rather than
+  guessed at.
+- **A 60 s suppression window can still expire early.** Those rows carry
+  `observation_complete = false` and must be reported as coverage loss.
 - **In-memory state only.** A HAL restart loses interactions still in their
   observation window; those samples are missing rather than wrong.
 - **Delivery loss is reported, not hidden**: `tracking_dropped_total`,

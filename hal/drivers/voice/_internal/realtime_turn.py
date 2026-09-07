@@ -385,6 +385,7 @@ def run_realtime_turn(
     rt_audio_buffer: list,
     buf_duration: float,
     audio_is_speech: bool = True,
+    interaction_id: str = "",
 ) -> RealtimeTurnResult:
     """Commit the captured audio to the realtime agent and stream its reply.
 
@@ -539,7 +540,10 @@ def run_realtime_turn(
                     if native and isinstance(output, RTAudioOutput):
                         if not native_started:
                             native_started = tts.native_play_begin(
-                                realtime.output_sample_rate
+                                realtime.output_sample_rate,
+                                # Explicit ownership for voice KPI: this audio
+                                # answers THIS utterance, nothing else.
+                                owner=f"interaction:{interaction_id}" if interaction_id else "",
                             )
                             if native_started:
                                 logger.info(

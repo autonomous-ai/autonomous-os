@@ -2,6 +2,7 @@ package http
 
 import (
 	"bytes"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -49,7 +50,7 @@ func TestRealtimeHandledHookFiresEvenWhenTheAgentIsBusy(t *testing.T) {
 	gw := &busyGateway{}
 	h := &SensingHandler{agentGateway: gw, monitorBus: monitor.ProvideBus(), config: &config.Config{}}
 	fired := 0
-	h.SetOnRealtimeHandled(func() { fired++ })
+	h.SetOnRealtimeHandled(func() bool { fired++; return true })
 
 	rec := postRealtimeHandled(t, h)
 
@@ -70,5 +71,42 @@ func TestPostEventWithoutHookIsUnaffected(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("expected 200 with no hook installed, got %d", rec.Code)
+	}
+}
+
+// The response must tell HAL whether the older turn ACTUALLY lost the speaker.
+// HAL records a stale-reply KPI situation only for real suppressions: with the
+// policy off nothing was suppressed, and counting it would inflate the
+// denominator with situations that never existed.
+func TestRealtimeHandledResponseReportsWhetherSpeechWasSuppressed(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		applied   bool
+		wantValue bool
+	}{
+		{"policy on", true, true},
+		{"policy off", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gw := &busyGateway{}
+			h := &SensingHandler{agentGateway: gw, monitorBus: monitor.ProvideBus(), config: &config.Config{}}
+			h.SetOnRealtimeHandled(func() bool { return tc.applied })
+
+			rec := postRealtimeHandled(t, h)
+
+			var body struct {
+				Data map[string]any `json:"data"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode response: %v (%s)", err, rec.Body.String())
+			}
+			got, ok := body.Data["speechSuppressed"]
+			if !ok {
+				t.Fatalf("response must carry speechSuppressed: %s", rec.Body.String())
+			}
+			if got != tc.wantValue {
+				t.Errorf("speechSuppressed = %v, want %v", got, tc.wantValue)
+			}
+		})
 	}
 }

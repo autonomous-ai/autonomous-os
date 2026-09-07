@@ -647,7 +647,9 @@ func (fm *FillerManager) fire(runID string) {
 	// pool=continuation vs pool=opening at fire time.
 	pool := classifyFillerPool(filler, toolName, fired, i18n.Lang())
 	slog.Info("dead air filler firing", "component", "sensing", "run_id", runID, "filler", filler, "tool", toolName, "fired", fired, "pool", pool)
-	if err := hal.SpeakCachedInterruptible(filler); err != nil {
+	// Pass the run id so HAL can attribute the played filler to the turn it
+	// was armed for (voice KPI attribution; no behaviour change).
+	if err := hal.SpeakCachedInterruptibleForTurn(filler, runID); err != nil {
 		slog.Warn("dead air filler failed", "component", "sensing", "run_id", runID, "error", err)
 	}
 

@@ -368,6 +368,10 @@ def speak_text(req: SpeakRequest):
             interruptible=req.interruptible,
             prerender=req.prerender,
             realtime_feedback=req.realtime_feedback,
+            # Ownership for voice KPI only: which turn this phrase belongs to
+            # (os-server sets it for dead-air fillers). Playback behaviour is
+            # unchanged — turn_seq gating stays exclusive to /voice/speak-queue.
+            turn_id=req.turn_id,
         )
         if not started:
             # HTTPException's second positional arg is `detail`, not a status —
@@ -383,6 +387,7 @@ def speak_text(req: SpeakRequest):
         req.text,
         interruptible=req.interruptible,
         realtime_feedback=req.realtime_feedback,
+        turn_id=req.turn_id,
     )
     if not started:
         raise HTTPException(409, "TTS is busy speaking")

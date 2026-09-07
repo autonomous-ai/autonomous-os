@@ -92,13 +92,17 @@ type SensingHandler struct {
 	// the agent handler mutes the older turn still in flight. A callback rather
 	// than a direct dependency, following isSleeping above — this package must
 	// not import the agent delivery package it is a sibling of.
-	onRealtimeHandled func()
+	// Returns whether os-server ACTUALLY suppressed the older turn's speech.
+	// HAL needs the answer, not an assumption: automatic supersession is
+	// opt-in (OS_REALTIME_SUPERSEDES_MAIN_REPLY), so on a default body nothing
+	// is suppressed and the situation is not a KPI sample at all.
+	onRealtimeHandled func() bool
 }
 
 // SetOnRealtimeHandled installs the realtime-handled hook. Wired in
 // ProvideServer, where both handlers exist; left nil in tests and by any
 // caller that does not route voice through the realtime agent.
-func (h *SensingHandler) SetOnRealtimeHandled(fn func()) {
+func (h *SensingHandler) SetOnRealtimeHandled(fn func() bool) {
 	h.onRealtimeHandled = fn
 }
 
@@ -272,8 +276,9 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 	// thing a no-op precisely when it is needed. The mark is about wall-clock
 	// "the user has already been answered", which holds whether or not the
 	// sync event itself reaches the agent now.
+	speechSuppressed := false
 	if isRealtimeHandled && h.onRealtimeHandled != nil {
-		h.onRealtimeHandled()
+		speechSuppressed = h.onRealtimeHandled()
 	}
 	isPassive := !isVoiceCommand
 	if isPassive && !isVoice && !isRealtimeHandled && !isChat && req.Type != "presence.enter" && req.Type != "fire_hazard.detected" && h.isSleeping != nil && h.isSleeping() {
@@ -545,9 +550,12 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 			// A queued event consumes an agent turn on replay — counts
 			// against the ambient floor like a live forward.
 			h.lastAgentTurn.Store(time.Now().UnixMilli())
-			resp := map[string]string{"handler": "queued"}
+			resp := map[string]any{"handler": "queued"}
 			if queuedRunID != "" {
 				resp["runId"] = queuedRunID
+			}
+			if isRealtimeHandled {
+				resp["speechSuppressed"] = speechSuppressed
 			}
 			c.JSON(http.StatusOK, serializers.ResponseSuccess(resp))
 			return
@@ -760,9 +768,13 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 		"device_run_id", runID, "sensing_type", req.Type,
 		"note", "OpenClaw lifecycle UUID maps to device_run_id on lifecycle_start in SSE handler")
 	slog.Info("event forwarded", "component", "sensing", "type", req.Type, "imageCount", len(req.Images), "runId", runID)
-	c.JSON(http.StatusOK, serializers.ResponseSuccess(map[string]string{
-		"runId": runID,
-	}))
+	resp := map[string]any{"runId": runID}
+	if isRealtimeHandled {
+		// Whether the older turn really lost the speaker — the only thing that
+		// makes this a suppression situation worth measuring.
+		resp["speechSuppressed"] = speechSuppressed
+	}
+	c.JSON(http.StatusOK, serializers.ResponseSuccess(resp))
 }
 
 // MonitorEventRequest is the payload for pushing an event to the monitor bus.

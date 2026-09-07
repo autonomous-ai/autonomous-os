@@ -215,9 +215,12 @@ func RealtimeSupersedesMainReply() bool {
 // an answer is coming, and the answer has just lost the speaker. Leaving them
 // armed reproduces exactly what the click had to fix — the device answers the
 // new question, then says "one moment" about the old one and falls silent.
-func (h *AgentHandler) CancelSpeechForNewerTurn() {
+// Returns whether the mark was actually stamped: the caller reports that back
+// to HAL, which must not record a suppression situation the policy never
+// applied (it would inflate the stale-reply KPI denominator).
+func (h *AgentHandler) CancelSpeechForNewerTurn() bool {
 	if !RealtimeSupersedesMainReply() {
-		return
+		return false
 	}
 	now := time.Now().UnixMilli()
 	h.autoSpeechWatermarkMs.Store(now)
@@ -231,6 +234,7 @@ func (h *AgentHandler) CancelSpeechForNewerTurn() {
 			Detail:  map[string]any{"watermark_ms": now, "source": "realtime_handled"},
 		})
 	}
+	return true
 }
 
 // deliverTTS sends text to HAL in a background goroutine and logs the outcome:

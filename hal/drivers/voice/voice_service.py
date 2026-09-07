@@ -1423,6 +1423,11 @@ class VoiceService:
         # voice KPI so a latency number is always read together with what
         # "the user stopped speaking" actually meant (see hal/tracking).
         endpoint_method = "stt_error"
+        # Monotonic stamp of the endpoint DETECTION itself. The KPI clock has
+        # to start here, not after finalize_session: transcript assembly,
+        # trailing-silence trim and speaker-ID all run between the two and
+        # would otherwise be charged to the device's response time.
+        endpoint_ts = 0.0
         pre_frames_from_vad = len(speech_pre_buffer or [])
         logger.info(
             "Session START — pre_from_vad=%d frames, device_rate=%dHz",
@@ -1850,10 +1855,12 @@ class VoiceService:
                 if self._tts_is_speaking():
                     logger.info("TTS started mid-session, closing STT to avoid echo")
                     endpoint_method = "tts_started"
+                    endpoint_ts = time.monotonic()
                     break
                 if self._music_is_playing():
                     logger.info("Music started mid-session, closing STT")
                     endpoint_method = "music_started"
+                    endpoint_ts = time.monotonic()
                     break
 
                 # Guard against zombie sessions
@@ -1863,6 +1870,7 @@ class VoiceService:
                         voice_cfg.MAX_SESSION_DURATION_S,
                     )
                     endpoint_method = "max_duration"
+                    endpoint_ts = time.monotonic()
                     break
 
                 data, overflowed = mic.read(frame_size)
@@ -1875,6 +1883,7 @@ class VoiceService:
                 except Exception as e:
                     logger.warning("send_audio failed (connection dead?): %s", e)
                     endpoint_method = "stt_error"
+                    endpoint_ts = time.monotonic()
                     break
                 audio_buffer.append(resampled)
 
@@ -1935,6 +1944,7 @@ class VoiceService:
                     else:
                         logger.info("Silence detected, disconnecting STT")
                     endpoint_method = "silence_clock"
+                    endpoint_ts = time.monotonic()
                     break
         except Exception as e:
             if _is_normal_ws_close(e):
@@ -1968,7 +1978,7 @@ class VoiceService:
             # Voice KPI clock starts here: the endpoint has been detected and
             # the transcript is assembled. Everything downstream carries this
             # id (see hal/tracking/voice_kpi.py).
-            interaction_id = voice_kpi.speech_end(endpoint_method)
+            interaction_id = voice_kpi.speech_end(endpoint_method, at=endpoint_ts)
             if (
                 hal_config.WAKEWORD_ENABLED
                 and wake_word_detected.is_set()
@@ -2272,6 +2282,7 @@ class VoiceService:
                     rt_audio_buffer,
                     buf_duration,
                     rt_audio_is_speech,
+                    interaction_id=interaction_id,
                 )
             else:
                 # No realtime turn was opened this capture. Distinguish the two

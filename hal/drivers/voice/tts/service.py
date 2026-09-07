@@ -209,6 +209,8 @@ class TTSService:
         on_speak_start=None,
         on_speak_end=None,
         provider: str = "openai",
+        on_playback_audio=None,
+        on_playback_done=None,
     ):
         self._sd = sound_device_module
         self._np = numpy_module
@@ -251,11 +253,30 @@ class TTSService:
         self._latest_queue_turn_id = ""
         self._latest_queue_turn_seq = 0
 
+        # --- Playback tracking (measurement only; see hal/tracking) ----------
+        # _playback_owner identifies WHOSE speech is currently on the speaker,
+        # set by whichever entry point started it: "run:<turn_id>" for an agent
+        # reply or a filler armed for a turn, "interaction:<id>" for realtime
+        # native voice, "" when nobody claimed it. Unknown ownership must stay
+        # unknown — guessing is what let an old filler be credited as the
+        # acknowledgement of a new command.
+        self._playback_owner: str = ""
+        # Fired ONCE per playback, immediately after the first frame is
+        # actually written to the stream — not when playback was requested,
+        # accepted, or about to start. on_speak_start cannot serve this: the
+        # cached path fires it before taking the stream lock, so speech that is
+        # stopped or fails before its first write would still look played.
+        self._on_playback_audio = None   # (owner: str, kind_hint: str) -> None
+        self._on_playback_done = None    # () -> None
+        self._audio_written_fired = False
+
         # Optional callbacks for LED speaking effect.
         # on_speak_start(): called when TTS playback begins (before audio streams).
         # on_speak_end():   called when TTS playback finishes or is interrupted.
         self._on_speak_start = on_speak_start
         self._on_speak_end = on_speak_end
+        self._on_playback_audio = on_playback_audio
+        self._on_playback_done = on_playback_done
 
         # on_unspoken_reply(text): an agent reply this service accepted and then
         # dropped without playing it — today, a superseded turn arriving after a
@@ -633,6 +654,37 @@ class TTSService:
         except Exception:
             logger.exception("on_unspoken_reply callback failed")
 
+    def _begin_playback(self, owner: str) -> None:
+        """Claim the speaker for `owner` and arm the first-audio hook."""
+        self._playback_owner = owner or ""
+        self._audio_written_fired = False
+
+    def _note_audio_written(self, kind_hint: str = "") -> None:
+        """Called right after the FIRST frame of a playback reached the stream.
+
+        This is the closest observable point to "the user heard something".
+        It is still not the acoustic onset: ALSA/Bluetooth buffering sits
+        between this write and the speaker (tens of ms on the built-in card,
+        more over BT).
+        """
+        if self._audio_written_fired:
+            return
+        self._audio_written_fired = True
+        if self._on_playback_audio is None:
+            return
+        try:
+            self._on_playback_audio(self._playback_owner, kind_hint)
+        except Exception:
+            logger.exception("on_playback_audio callback failed")
+
+    def _note_playback_done(self) -> None:
+        if self._on_playback_done is None:
+            return
+        try:
+            self._on_playback_done()
+        except Exception:
+            logger.exception("on_playback_done callback failed")
+
     def _register_drain_queue(self, q) -> None:
         """Expose a queue the active playback is draining, so stop() can wake it."""
         with self._drain_queues_lock:
@@ -676,7 +728,8 @@ class TTSService:
         except Exception:
             return False
 
-    def speak(self, text: str, interruptible: bool = False, realtime_feedback: bool = False) -> bool:
+    def speak(self, text: str, interruptible: bool = False, realtime_feedback: bool = False,
+              turn_id: str = "") -> bool:
         """Synthesize and play text. Returns True if started, False if busy or unavailable.
         If interruptible=True, a subsequent speak() call can stop this one.
         realtime_feedback=True feeds this text to the realtime agent on completion
@@ -697,7 +750,8 @@ class TTSService:
         if self._tts_cache_path(text).exists():
             logger.info("TTS cache-first hit: %s", text[:50])
             return self.speak_cached(
-                text, interruptible=interruptible, realtime_feedback=realtime_feedback
+                text, interruptible=interruptible, realtime_feedback=realtime_feedback,
+                turn_id=turn_id,
             )
 
         if not self._lock.acquire(blocking=False):
@@ -722,6 +776,7 @@ class TTSService:
         self._interruptible = interruptible
         self._last_spoken_text = text
         self._realtime_feedback = realtime_feedback
+        self._begin_playback(f"run:{turn_id}" if turn_id else "")
 
         thread = threading.Thread(
             target=self._speak_sync,
@@ -861,7 +916,8 @@ class TTSService:
             if not self._speaking and self._tts_cache_path(text).exists():
                 logger.info("TTS cache-first hit (queue): %s", text[:50])
                 return self.speak_cached(
-                    text, interruptible=interruptible, realtime_feedback=realtime_feedback
+                    text, interruptible=interruptible, realtime_feedback=realtime_feedback,
+                    turn_id=turn_id,
                 )
 
             # A newer turn must take the lock itself after stopping the old
@@ -883,6 +939,7 @@ class TTSService:
                 self._interruptible = interruptible
                 self._last_spoken_text = text
                 self._realtime_feedback = realtime_feedback
+                self._begin_playback(f"run:{turn_id}" if turn_id else "")
                 thread = threading.Thread(
                     target=self._speak_sync,
                     args=(text,),
@@ -978,6 +1035,7 @@ class TTSService:
             self._last_spoken_text = item.text
             logger.info("Playing pre-synth'd queued speech (streaming): %s", item.text[:80])
             stream.write(first)
+            self._note_audio_written("agent_or_system")
             total += len(first)
             while not self._stop_event.is_set():
                 try:
@@ -993,7 +1051,7 @@ class TTSService:
 
     # ── Native realtime playback (model's own voice, no synthesis) ──────────────
 
-    def native_play_begin(self, src_rate: int) -> bool:
+    def native_play_begin(self, src_rate: int, owner: str = "") -> bool:
         """Begin streaming the realtime model's OWN float32 mono audio straight to
         the speaker, bypassing synthesis. Honors speaker mute and busy state.
         Pair with native_play_frame() then native_play_end(). Returns False if it
@@ -1016,6 +1074,7 @@ class TTSService:
         self._speaking = True          # pauses silence keepalive + gates mic->STT
         self._interruptible = True     # stop()/barge-in can interrupt
         self._speak_start_fired = False
+        self._begin_playback(owner)
         return True
 
     def native_play_frame(self, frame) -> bool:
@@ -1042,6 +1101,7 @@ class TTSService:
                 if self._stream is None or self._stop_event.is_set():
                     return False
                 stream.write(data)
+            self._note_audio_written("native_realtime")
         except Exception as e:
             logger.warning("native audio write failed: %s", e)
             self._invalidate_stream()
@@ -1062,6 +1122,7 @@ class TTSService:
             self._lock.release()
         except RuntimeError:
             pass
+        self._note_playback_done()
         if self._on_speak_end:
             try:
                 self._on_speak_end()
@@ -1209,6 +1270,7 @@ class TTSService:
                         except Exception:
                             logger.exception("on_speak_start callback failed")
                     stream.write(frame)
+                    self._note_audio_written("agent_or_system")
                     total_samples += len(frame)
                 return total_samples
             except Exception as e:
@@ -1413,6 +1475,7 @@ class TTSService:
                             except Exception:
                                 logger.exception("on_speak_start callback failed")
                         stream.write(item)
+                        self._note_audio_written("agent_or_system")
                         total_samples += len(item)
 
                     # Drain tail queue.
@@ -1469,6 +1532,7 @@ class TTSService:
         self._forget_drain_queues()
 
         # Notify LED speaking effect — stop wave and restore previous LED state
+        self._note_playback_done()
         if self._on_speak_end:
             try:
                 self._on_speak_end()
@@ -1587,7 +1651,8 @@ class TTSService:
         )
         return warmed
 
-    def speak_cached(self, text: str, interruptible: bool = False, prerender: bool = False, realtime_feedback: bool = False) -> bool:
+    def speak_cached(self, text: str, interruptible: bool = False, prerender: bool = False,
+                     realtime_feedback: bool = False, turn_id: str = "") -> bool:
         """Cache-aware speak. On hit -> ~50ms playback. On miss -> render+save
         then play. prerender=True skips playback (warmup-only).
         realtime_feedback=True feeds this text to the realtime agent on
@@ -1634,6 +1699,7 @@ class TTSService:
         self._interruptible = interruptible
         self._last_spoken_text = text
         self._realtime_feedback = realtime_feedback
+        self._begin_playback(f"run:{turn_id}" if turn_id else "")
 
         threading.Thread(
             target=self._cached_play_thread,
@@ -1658,6 +1724,7 @@ class TTSService:
         finally:
             self._speaking = False
             self._last_spoken_time = time.time()
+            self._note_playback_done()
             if self._on_speak_end:
                 try:
                     self._on_speak_end()
@@ -1700,6 +1767,7 @@ class TTSService:
                 if self._stop_event.is_set():
                     break
                 stream.write(samples[i : i + block])
+                self._note_audio_written("cached")
 
         logger.info(
             "TTS cached %s: %d samples @ %d Hz, took %.0fms (path=%s)",
