@@ -49,16 +49,41 @@ os-test:
 # Runs the SAME binary that ships to the board — no build tag, no second code
 # path. Only the device-absolute paths move, via the env vars system/lib/syspath
 # reads (unset = board defaults). Needs three terminals for a full stack:
-#   make sim        HAL on :5001
-#   make codex-dev  codex bridge on $(CODEX_PORT)
-#   make os-dev     API on :5000
-# The runtime itself (codex CLI, its skills, AGENTS.md) is expected to be
-# installed already — nothing here provisions it.
+#   make sim              HAL on :5001
+#   make codex-dev        codex bridge on $(CODEX_PORT)
+#   make claudecode-dev   Claude Code bridge on $(CLAUDECODE_PORT)
+#   make os-dev           API on :5000
+# The CLI itself (codex / claude) is expected to be installed already — nothing
+# here provisions it.
 OS_STATE_DIR     ?= /tmp/autonomous-os
-OS_AGENT_RUNTIME ?= codex
+
+# Which backend is live. ONE cascade, the same one os-server applies
+# (agent/factory.go resolveRuntime): an explicit OS_AGENT_RUNTIME wins, else
+# config.json agent_runtime, else codex. Reading the config back is what makes
+# the choice STICK — pass OS_AGENT_RUNTIME once to switch, and every later
+# `make os-dev` / `make sim` keeps it instead of silently resetting to codex.
+# Resolved once (:=, guarded by origin) so the sed runs a single time.
+ifeq ($(origin OS_AGENT_RUNTIME),undefined)
+OS_AGENT_RUNTIME := $(shell sed -n 's/.*"agent_runtime"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' $(OS_STATE_DIR)/config/config.json 2>/dev/null | head -1)
+endif
+OS_AGENT_RUNTIME := $(if $(strip $(OS_AGENT_RUNTIME)),$(strip $(OS_AGENT_RUNTIME)),codex)
 CODEX_HOME       ?= $(HOME)/.codex
 CODEX_PORT       ?= 18792
 CODEX_BIN        ?= $(shell command -v codex 2>/dev/null)
+
+# Claude Code. CODEX_HOME points at the developer's REAL ~/.codex because a dev
+# who runs codex already lives there; claudecode deliberately does NOT — its
+# state dir AND the ~/.claude the child writes (skills, credentials, projects,
+# .claude.json) both hang off OS_AGENT_HOME, i.e. inside OS_STATE_DIR. That is
+# what keeps the device's Claude Code fully separate from the one the developer
+# uses on this machine. The `claude` BINARY is shared; only state is split.
+# Point CLAUDECODE_BIN at another install to split that too.
+CLAUDECODE_HOME  ?= $(OS_AGENT_HOME)/.claudecode
+CLAUDECODE_PORT  ?= 18791
+CLAUDECODE_BIN   ?= $(shell command -v claude 2>/dev/null)
+
+# The active runtime's state dir — same rule as syspath.AgentRuntimeHome.
+AGENT_RUNTIME_HOME ?= $(if $(filter codex,$(OS_AGENT_RUNTIME)),$(CODEX_HOME),$(OS_AGENT_HOME)/.$(OS_AGENT_RUNTIME))
 # The backend identifies a device by its llm_api_key, not by device_id, so a
 # laptop running a copy of a device's config.json IS that device as far as the
 # backend can tell: the 15s ping overwrites the board's local_ip/mac/version and
@@ -72,8 +97,9 @@ OS_AGENT_HOME       ?= $(OS_STATE_DIR)
 OS_AGENT_STATE_PATH ?= $(OS_STATE_DIR)/config/agent_state.json
 OS_BOOTSTRAP_CONFIG ?= $(OS_STATE_DIR)/config/bootstrap.json
 OS_LOG_FILE         ?= $(OS_STATE_DIR)/os-server.log
-# `make codex-dev` tees the bridge here; os-server reads it for the Agent tab.
-OS_AGENT_BRIDGE_LOG ?= $(OS_STATE_DIR)/codex-gatewayd.log
+# The `*-dev` bridge target tees its output here; os-server reads it for the
+# Agent tab. Named per runtime so switching backends does not mix two logs.
+OS_AGENT_BRIDGE_LOG ?= $(OS_STATE_DIR)/$(OS_AGENT_RUNTIME)-gatewayd.log
 # HAL writes it (HAL_LOG_DIR, HAL section below); os-server reads it for the HAL tab.
 OS_HAL_LOG_FILE     ?= $(HAL_LOG_DIR)/server.log
 
@@ -84,6 +110,8 @@ OS_DEV_ENV = \
 	DEVICES_DIR=$(DEVICES_DIR) \
 	CODEX_HOME=$(CODEX_HOME) \
 	CODEX_PORT=$(CODEX_PORT) \
+	CLAUDECODE_HOME=$(CLAUDECODE_HOME) \
+	CLAUDECODE_PORT=$(CLAUDECODE_PORT) \
 	OS_AGENT_HOME=$(OS_AGENT_HOME) \
 	OS_AGENT_STATE_PATH=$(OS_AGENT_STATE_PATH) \
 	OS_BOOTSTRAP_CONFIG=$(OS_BOOTSTRAP_CONFIG) \
@@ -92,14 +120,14 @@ OS_DEV_ENV = \
 	OS_AGENT_BRIDGE_LOG=$(OS_AGENT_BRIDGE_LOG) \
 	OS_LOG_FILE=$(OS_LOG_FILE)
 
-.PHONY: os-dev os-dev-build os-dev-seed codex-dev
+.PHONY: os-dev os-dev-build os-dev-seed codex-dev claudecode-dev
 
 os-dev-build:
 	@mkdir -p $(OS_STATE_DIR)
 	go build -ldflags "$(LDFLAGS_OS)" -o $(OS_STATE_DIR)/os-server ./system/cmd/os-server
 
 os-dev-seed:
-	@bash scripts/dev/os-dev-seed.sh $(OS_STATE_DIR) $(DEVICE_TYPE) $(OS_AGENT_RUNTIME) $(CODEX_HOME)
+	@bash scripts/dev/os-dev-seed.sh $(OS_STATE_DIR) $(DEVICE_TYPE) $(OS_AGENT_RUNTIME) $(CODEX_HOME) $(CLAUDECODE_HOME)
 
 # cd into the state dir: config.json is resolved relative to the cwd, exactly as
 # systemd's WorkingDirectory=/root does it on the board.
@@ -107,11 +135,29 @@ os-dev: os-dev-build os-dev-seed
 	@echo "os-server: http://127.0.0.1:5000/api/health/live (runtime=$(OS_AGENT_RUNTIME))"
 	cd $(OS_STATE_DIR) && $(OS_DEV_ENV) ./os-server
 
+# Sources $CODEX_HOME/.env the way systemd's EnvironmentFile= does on a board.
+# codex resolves its key through config.toml's env_key (OPENAI_API_KEY), and the
+# gatewayd hands the child os.Environ() — without this the key presync just
+# wrote sits in a file nobody reads and every turn 401s. OS_DEV_ENV is applied
+# AFTER, so a CODEX_PORT passed on the command line still wins over the file's.
 codex-dev: os-dev-build
 	@test -n "$(CODEX_BIN)" || { echo "codex CLI not found on PATH — set CODEX_BIN=<path>"; exit 1; }
 	@echo "codex bridge: ws://127.0.0.1:$(CODEX_PORT)/codex/ws/ (CODEX_HOME=$(CODEX_HOME))"
 	@mkdir -p $(OS_STATE_DIR)
-	$(OS_DEV_ENV) CODEX_BIN=$(CODEX_BIN) $(OS_STATE_DIR)/os-server codex-gatewayd 2>&1 | tee $(OS_AGENT_BRIDGE_LOG)
+	set -a; [ -f $(CODEX_HOME)/.env ] && . $(CODEX_HOME)/.env; set +a; \
+	  $(OS_DEV_ENV) CODEX_BIN=$(CODEX_BIN) $(OS_STATE_DIR)/os-server codex-gatewayd 2>&1 | tee $(OS_STATE_DIR)/codex-gatewayd.log
+
+# A gateway target IS its runtime — it needs no selector. What must agree is
+# os-server's choice: `make os-dev OS_AGENT_RUNTIME=claudecode` once, and the
+# config remembers it. OS_AGENT_HOME moves ~/.claude off the developer's own install: the
+# bridge asserts it as the claude child's HOME (gatewayd.Config.Home), so skills,
+# credentials, projects and .claude.json all land under OS_STATE_DIR.
+claudecode-dev: os-dev-build
+	@test -n "$(CLAUDECODE_BIN)" || { echo "claude CLI not found on PATH — set CLAUDECODE_BIN=<path>"; exit 1; }
+	@echo "claudecode bridge: ws://127.0.0.1:$(CLAUDECODE_PORT)/claude/ws/ (CLAUDECODE_HOME=$(CLAUDECODE_HOME))"
+	@echo "claude state:      $(OS_AGENT_HOME)/.claude  (isolated from $(HOME)/.claude)"
+	@mkdir -p $(OS_STATE_DIR)
+	$(OS_DEV_ENV) CLAUDECODE_BIN=$(CLAUDECODE_BIN) $(OS_STATE_DIR)/os-server claudecode-gatewayd 2>&1 | tee $(OS_STATE_DIR)/claudecode-gatewayd.log
 
 # ============================================================================
 # HAL (Python) — dev | run | test
@@ -149,9 +195,11 @@ SIM_MEDIA ?= virtual
 #                    STT / TTS / realtime credentials AND agent_runtime, which is
 #                    what SNAPSHOT_DIR keys off — point it at the os-dev state dir
 #                    so both processes read one file, as /root/config does on a board.
-#   HAL_SNAPSHOT_DIR where ?save=true writes. MUST sit under the agent's own home
-#                    (device: /root/.codex/media/hal-snapshots) — os-server serves
-#                    it from there, and it is inside the agent's read allow-list.
+#   HAL_SNAPSHOT_DIR where ?save=true writes. MUST sit under the ACTIVE agent's own
+#                    home (device: /root/.<runtime>/media/hal-snapshots) — os-server
+#                    serves it from there, and it is inside that agent's read
+#                    allow-list. Follows OS_AGENT_RUNTIME, so pass the same value
+#                    to `make sim` as to `make os-dev`.
 #   HAL_SNAPSHOT_PERSIST_DIR  sensing's persistent copies; /var/lib is root-only.
 #
 # The rest are HAL's writable state, all rooted at /var/lib/hal or /root on a
@@ -159,7 +207,7 @@ SIM_MEDIA ?= virtual
 # surfaced as `POST /voice/speak 409` with the real PermissionError buried in a
 # thread traceback. Redirect them all rather than one at a time.
 OS_CONFIG_PATH           ?= $(OS_STATE_DIR)/config/config.json
-HAL_SNAPSHOT_DIR         ?= $(CODEX_HOME)/media/hal-snapshots
+HAL_SNAPSHOT_DIR         ?= $(AGENT_RUNTIME_HOME)/media/hal-snapshots
 HAL_SNAPSHOT_PERSIST_DIR ?= $(SIM_STATE_DIR)/snapshots
 HAL_TTS_CACHE_DIR        ?= $(SIM_STATE_DIR)/tts_cache
 HAL_CALIBRATION_DIR      ?= $(SIM_STATE_DIR)/calibration/robots/hal_follower
@@ -168,6 +216,7 @@ HAL_FACE_HEIGHT_PATH     ?= $(SIM_STATE_DIR)/face_height.json
 HAL_VOICE_STRANGERS_DIR  ?= $(SIM_STATE_DIR)/voice_strangers
 HAL_DL_STALL_LOG         ?= $(SIM_STATE_DIR)/dl_ws_stall.log
 HAL_CODEX_WORKSPACE_DIR  ?= $(CODEX_HOME)/workspace
+HAL_CLAUDECODE_WORKSPACE_DIR ?= $(CLAUDECODE_HOME)/workspace
 HAL_LOG_DIR              ?= $(SIM_STATE_DIR)/log
 HAL_USERS_DIR            ?= $(SIM_STATE_DIR)/users
 HAL_STRANGERS_DIR        ?= $(SIM_STATE_DIR)/strangers
@@ -185,6 +234,7 @@ SIM_HAL_ENV = \
 	HAL_VOICE_STRANGERS_DIR=$(HAL_VOICE_STRANGERS_DIR) \
 	HAL_DL_STALL_LOG=$(HAL_DL_STALL_LOG) \
 	HAL_CODEX_WORKSPACE_DIR=$(HAL_CODEX_WORKSPACE_DIR) \
+	HAL_CLAUDECODE_WORKSPACE_DIR=$(HAL_CLAUDECODE_WORKSPACE_DIR) \
 	HAL_LOG_DIR=$(HAL_LOG_DIR) \
 	HAL_USERS_DIR=$(HAL_USERS_DIR) \
 	HAL_STRANGERS_DIR=$(HAL_STRANGERS_DIR) \

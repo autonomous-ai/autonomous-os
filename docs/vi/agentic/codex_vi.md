@@ -116,11 +116,16 @@ restart gateway khi có thay đổi thật. Nó sở hữu mọi thứ stateful:
   sau; factory reset xoá `/root/.codex` sẽ xoá marker nên migrate chạy lại ở
   lần switch kế.
 - **§2 CONFIG** — regenerate phần đầu của `/root/.codex/config.toml` từ
-  config.json. **Cổng auth:** khi `/root/.codex/auth.json` tồn tại (login
-  subscription ChatGPT, §9) phần đầu được ghi KHÔNG có `model` /
+  config.json. **Cổng auth:** với login subscription ChatGPT (§9) — tức
+  `/root/.codex/auth.json` tồn tại và `auth_mode` **không phải** `"apikey"` —
+  phần đầu được ghi KHÔNG có `model` /
   `model_provider` / `[model_providers.autonomous]` — codex dùng provider +
   model mặc định built-in (chỉ giữ `approval_policy` + `sandbox_mode`, và vẫn
-  giữ nguyên phần đuôi `[mcp_servers`). Ngược lại (chế độ api-key):
+  giữ nguyên phần đuôi `[mcp_servers`). Chỉ "file tồn tại" thì chưa đủ:
+  `codex login --api-key` cũng ghi auth.json (`{"auth_mode":"apikey",…}`) và
+  vẫn ở chế độ api-key — xếp nó vào subscription sẽ âm thầm bỏ campaign-api và
+  tiêu key OpenAI cá nhân. File cũ chưa có field `auth_mode` vẫn được đọc là
+  subscription. Ngược lại (chế độ api-key):
   `model` từ `llm_model` (fallback `Auto-AI`),
   `model_provider = "autonomous"` → `[model_providers.autonomous]` với
   `base_url` từ `llm_base_url` chuẩn hoá kết thúc bằng `/v1` (Codex tự append
@@ -591,9 +596,13 @@ login-pairing với `ClaudeLoginPairer` của nhánh claudecode khi nhánh đó 
 
 Đã dùng được ngay hôm nay mà không cần flow pairing phase-2: chạy
 `codex login --device-auth` trên thiết bị, hoặc copy `~/.codex/auth.json` sẵn
-có từ máy khác sang `/root/.codex/auth.json` (`chmod 600`). Presync tự phát
-hiện `auth.json` ở mỗi lần chạy (tức mỗi lần boot): bỏ khối provider tuỳ chỉnh
-khỏi config.toml và bỏ `OPENAI_API_KEY` khỏi `.env`, nên codex nói chuyện
-thẳng với OpenAI bằng provider + model mặc định built-in — chế độ này **né
-hoàn toàn blocker 404 `/responses` của campaign-api**. Xoá `auth.json` để quay
-về chế độ api-key; việc chuyển đổi tự động ở lần presync kế.
+có từ máy khác sang `/root/.codex/auth.json` (`chmod 600`). Presync đọc lại nó
+ở mỗi lần chạy (tức mỗi lần boot): bỏ khối provider tuỳ chỉnh khỏi config.toml
+và bỏ `OPENAI_API_KEY` khỏi `.env`, nên codex nói chuyện thẳng với OpenAI bằng
+provider + model mặc định built-in — đúng thứ mà login đó xác thực tới. Xoá
+`auth.json` để quay về chế độ api-key; việc chuyển đổi tự động ở lần presync kế.
+
+Login bằng `--api-key` **không** đi đường này: auth.json của nó mang
+`"auth_mode":"apikey"` và presync giữ chế độ api-key, nên thiết bị vẫn ở
+campaign-api. Thiết bị được kỳ vọng chạy campaign-api; nhánh subscription chỉ
+dành cho login ChatGPT.

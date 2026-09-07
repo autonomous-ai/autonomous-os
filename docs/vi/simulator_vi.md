@@ -28,13 +28,15 @@ là thứ khiến binary được test *chính là* binary được ship.
 
 | Cần | Kiểm bằng | Nếu thiếu |
 |---|---|---|
-| `codex` CLI | `codex --version` | Tự cài — không có gì ở đây cài giúp |
-| codex đã đăng nhập | `ls ~/.codex/auth.json` | `codex login` |
+| CLI của agent bạn định chạy | `codex --version` / `claude --version` | Tự cài — không có gì ở đây cài giúp. Chỉ cần CLI của runtime bạn chọn. Nhớ chỗ bạn cài: *Bước 4 §2* nhận thư mục đó làm `CODEX_HOME` / `CLAUDECODE_HOME` |
 | `ffmpeg` | `ffmpeg -version` | Cần cho phát nhạc |
 | `uv` | `uv --version` | Dựng `hal/.venv` cho HAL. `make sim` tự tạo ở lần chạy đầu và sync lại mỗi khi `hal/uv.lock` hoặc `hal/pyproject.toml` mới hơn nó. Nếu lần sync đầu chết khi build `insightface`, xem *insightface build lỗi* bên dưới |
 | `node` + `npm` | `node --version` | Chỉ cần cho `make web-dev` |
 
-**Chỉ `codex` chạy được off-device.** Các runtime khác không có target `*-dev`.
+**`codex` và `claudecode` chạy được off-device.** Chọn bằng `OS_AGENT_RUNTIME`
+trên `make os-dev`; nó được ghi vào `config.json` rồi các lần sau đọc lại từ
+đó, nên chỉ cần truyền khi đổi backend. Các runtime khác không có target
+`*-dev`.
 
 ## Bước 2 — Chép file config mẫu
 
@@ -77,8 +79,30 @@ $EDITOR /tmp/autonomous-os/config/config.json
 
 ### Tự set — đừng sửa
 
-`device_type` · `agent_runtime` · `set_up_completed` — `os-dev-seed.sh` ghi đè
-mỗi lần chạy.
+`device_type` · `set_up_completed` — `os-dev-seed.sh` ghi mỗi lần chạy.
+
+`channels_applied_runtime` · `mcp_applied_runtime` ·
+`llm_config_applied_runtime` — sổ ghi chép của os-server: mỗi field ghi lại
+runtime mà một migration đã áp lần gần nhất. Khi một field lệch với
+`agent_runtime`, migration đó chạy lại ở lần boot kế tiếp rồi tự cập nhật
+marker của mình. **Chính sự lệch là tín hiệu**, nên sau khi đổi backend chúng
+được phép tụt lại phía sau — sửa tay chúng khiến os-server tưởng đã làm xong,
+và channels, MCP connectors, LLM config sẽ không bao giờ được chuyển sang.
+
+### Chọn agent runtime
+
+`agent_runtime` là của bạn. Hai cách đổi tương đương nhau, cùng đi theo một
+cascade — cờ truyền tay thắng, không có thì lấy field này, không có nữa mới
+`codex`:
+
+```bash
+make os-dev OS_AGENT_RUNTIME=claudecode   # ghi field giúp bạn
+$EDITOR $OS_STATE_DIR/config/config.json  # hoặc sửa thẳng "agent_runtime"
+```
+
+Cách nào cũng được giữ nguyên: các lần `make` sau đọc lại field chứ không reset
+nó. Nếu sửa file bằng tay thì làm khi os-server đang tắt, rồi khởi động bằng
+`make os-dev` (không kèm cờ) — cờ sẽ ghi đè thứ bạn vừa sửa.
 
 ### Để trống
 
@@ -91,30 +115,143 @@ Một bot token không thể có hai poller; laptop sẽ cướp tin nhắn củ
 
 ## Bước 4 — Chạy
 
-Bốn terminal, theo đúng thứ tự này.
+Bốn service, mỗi cái một terminal, theo đúng thứ tự này. Mỗi cái có mục riêng
+bên dưới.
+
+| # | Service | Lệnh | Port | Đợi dòng này rồi mới chạy cái tiếp |
+|---|---|---|---|---|
+| 1 | HAL | `make sim` | 5001 | `Simulation mode enabled for device 'lamp' (media=host)` |
+| 2 | Agent runtime gateway | `make <runtime>-dev` | tuỳ runtime | `[<runtime>-gatewayd] listening on ws://…` |
+| 3 | os-server | `make os-dev` | 5000 | `Codex connected` / `Claude Code connected` |
+| 4 | Web UI (tuỳ chọn) | `make web-dev` | 5173 | `VITE … ready` |
+
+`OS_AGENT_RUNTIME` chọn backend, và bạn chỉ truyền nó **một lần, cho `make os-dev`**
+(§3). Nó được ghi vào `config.json` rồi các lần sau đọc ngược lại từ đó, nên lựa
+chọn được giữ nguyên: `OS_AGENT_RUNTIME` truyền tay thắng, không có thì lấy
+`agent_runtime` trong `config.json`, không có nữa mới `codex` — đúng cascade mà
+chính os-server dùng (`agent/factory.go` `resolveRuntime`). Các target gateway ở
+§2 **không cần** biến chọn này; mỗi target *chính là* runtime của nó.
+
+---
+
+### 1 — HAL
 
 ```bash
-make sim SIM_MEDIA=host           # 1. HAL          :5001
-make codex-dev CODEX_PORT=18892   # 2. agent bridge :18892
-make os-dev    CODEX_PORT=18892   # 3. os-server    :5000
-make web-dev                      # 4. web UI       :5173   (tuỳ chọn)
+make sim SIM_MEDIA=host
 ```
 
-| # | Đợi thấy dòng này rồi mới chạy cái tiếp |
-|---|---|
-| 1 | `Simulation mode enabled for device 'lamp' (media=host)` |
-| 2 | `[codex-gatewayd] listening on ws://127.0.0.1:18892/codex/ws/` |
-| 3 | `Codex connected` |
-| 4 | `VITE … ready` |
+Chạy cái này trước: os-server chờ `/health` của HAL tối đa 120s.
 
-Quy tắc:
-
-- `make sim` phải chạy trước — os-server chờ `/health` của HAL tối đa 120s.
-- `codex-dev` và `os-dev` phải dùng **cùng** `CODEX_PORT`. Mặc định `18792` đụng
-  openclaw gateway nếu máy có cài.
-- Lần đầu chạy `SIM_MEDIA=host`, macOS sẽ hỏi quyền **Microphone** và **Camera**.
-  Cấp xong phải chạy lại `make sim`.
+- Lần đầu chạy `SIM_MEDIA=host`, macOS sẽ hỏi quyền **Microphone** và
+  **Camera**. Cấp xong phải chạy lại.
 - Không cần giọng nói thì bỏ `SIM_MEDIA=host` — stack vẫn chạy, chỉ im lặng.
+- **Đang đổi runtime?** HAL đọc `agent_runtime` từ `config.json`, mà chỉ có
+  `make os-dev` ghi file đó — và nó khởi động *sau* HAL. Nên ở lần chạy mà bạn
+  đổi backend, hãy seed config trước: `make os-dev-seed OS_AGENT_RUNTIME=<runtime>`.
+  Target đó chỉ đụng state dir, không khởi động gì. Các lần sau khỏi cần —
+  config đã ghi đúng rồi.
+
+---
+
+### 2 — Agent runtime gateway
+
+Một bridge WebSocket loopback giữa os-server và CLI của agent. Nó chạy chính
+CLI bạn đã cài ở *Bước 1* — nên phải nói cho nó biết **bản cài đó nằm ở đâu**
+và **nghe port nào**.
+
+Hai tuỳ chọn này tồn tại vì cùng một lý do: giá trị mặc định trỏ vào bản cài
+thật của developer, và vào port mà một service thật có thể đang giữ.
+
+| Tuỳ chọn | Mặc định | Truyền giá trị riêng khi |
+|---|---|---|
+| `CODEX_HOME` / `CLAUDECODE_HOME` | xem bên dưới | CLI của bạn nằm chỗ khác, hoặc bạn muốn tách state của device khỏi state của mình |
+| `CODEX_PORT` / `CLAUDECODE_PORT` | `18792` / `18791` | Port mặc định đã bị chiếm. **Truyền cùng giá trị đó cho `os-dev`** — nó suy ra URL bridge từ đây, lệch là `bad handshake (status 404)` |
+
+Nếu máy có cài `openclaw-gateway`, nó giữ `18789`, `18791` **và** `18792` — tức
+cả hai giá trị mặc định. Một session `claude` của chính bạn cũng giữ `18791`.
+Kiểm tra trước khi chọn: `lsof -nP -iTCP:<port> -sTCP:LISTEN`.
+
+#### codex
+
+```bash
+make codex-dev CODEX_HOME=~/.codex CODEX_PORT=18892
+```
+
+`CODEX_HOME` là bản cài codex mà bridge này điều khiển — `config.toml`,
+`auth.json`, `workspace/` và `.env` của nó. Mặc định là `$HOME/.codex`, tức bản
+bạn đang dùng, và off-device thường đó là thứ bạn muốn.
+
+⚠️ **`os-dev` ghi đè `$CODEX_HOME/config.toml` mỗi lần boot.** Nếu bạn có một
+file tự viết ở đó, `os-dev-seed` chép nó sang `config.toml.pre-os-dev` lần đầu
+tiên — nhưng những chỉnh sửa sau đó thì bị ghi đè. Trỏ `CODEX_HOME` vào thư mục
+tạm để giữ config của bạn nằm ngoài:
+
+```bash
+make codex-dev CODEX_HOME=$OS_STATE_DIR/.codex CODEX_PORT=18892
+```
+
+#### claudecode
+
+```bash
+make claudecode-dev CLAUDECODE_PORT=18891
+```
+
+Backend này có **hai** thư mục, làm hai việc khác nhau:
+
+| Tuỳ chọn | Mặc định | Chứa gì |
+|---|---|---|
+| `CLAUDECODE_HOME` | `$OS_AGENT_HOME/.claudecode` | State của backend: `.env`, `session.json`, `workspace/` |
+| `OS_AGENT_HOME` | `$OS_STATE_DIR` | `HOME` mà tiến trình `claude` con chạy với — nên nó quyết định `~/.claude` (skills, credentials, `projects/`, `.claude.json`) nằm ở đâu |
+| `CLAUDECODE_BIN` | `claude` đầu tiên trên `PATH` | Binary mà bridge spawn |
+
+**Binary** `claude` thì mặc định dùng chung. Muốn tách luôn (ví dụ để chạy
+version khác):
+
+```bash
+npm install -g --prefix $OS_STATE_DIR/npm @anthropic-ai/claude-code
+make claudecode-dev CLAUDECODE_PORT=18891 CLAUDECODE_BIN=$OS_STATE_DIR/npm/bin/claude
+```
+
+⚠️ Tiến trình `claude` con là **thường trú**, khác `codex exec` mỗi lượt của
+codex. `CLAUDE.md`, `SOUL.md`, `.env` và `.mcp.json` chỉ đọc lúc bắt đầu
+session — sau khi `os-dev` ghi lại chúng thì phải restart terminal này.
+
+---
+
+### 3 — os-server
+
+```bash
+make os-dev CODEX_HOME=~/.codex CODEX_PORT=18892
+```
+
+Lặp lại đúng `*_HOME` và `*_PORT` bạn đã đưa cho gateway — os-server là
+**client** của socket đó và suy ra URL từ chính các biến này. Nó cũng chạy
+presync và toàn bộ khâu provisioning agent, nên đường dẫn bắt buộc phải khớp.
+
+**Đây là chỗ chọn backend.** Với claudecode:
+
+```bash
+make os-dev OS_AGENT_RUNTIME=claudecode CLAUDECODE_PORT=18891
+```
+
+`OS_AGENT_RUNTIME` chỉ cần ở lần chạy **đổi** backend — nó được ghi vào
+`config.json` và mọi `make os-dev`, `make sim`, `make web-dev` sau đó đọc lại từ
+đó. Bỏ qua nó **không** làm bạn quay về codex.
+
+Đợi `Codex connected` / `Claude Code connected` rồi mới dùng stack.
+
+---
+
+### 4 — Web UI (tuỳ chọn)
+
+```bash
+make web-dev
+```
+
+Chỉ cần cho UI trên trình duyệt; API, Flow Monitor và pipeline giọng nói đều
+chạy được mà không có nó. Xem *Hai web UI* bên dưới để biết cách đăng nhập — và
+lưu ý Vite chỉ bind `[::1]`, nên dùng `localhost:5173`, không phải
+`127.0.0.1:5173`.
 
 ## Bước 5 — Kiểm tra
 
@@ -164,6 +301,7 @@ Nhận trong 5 giây, không cần restart. Giờ `hey lumi` dùng được, son
 | `make sim` | Boot HAL với thân lamp, ngoại vi ảo (hoặc thật) | — |
 | `make hal-install` | `uv sync` — đồng bộ **chính xác** `hal/.venv`, gỡ mọi thứ không có trong `uv.lock`. `make sim` tự sync bằng `--inexact` nên pytest cài tay vẫn còn | Không cài extra `dev` (pyflakes); muốn thì thêm `--extra dev` |
 | `make codex-dev` | **Chỉ** chạy `os-server codex-gatewayd`: một listener WebSocket loopback, spawn một `codex exec` mỗi lượt | Không onboarding, không presync, **không sync skill** |
+| `make claudecode-dev` | **Chỉ** chạy `os-server claudecode-gatewayd`: một listener WebSocket loopback giữ MỘT tiến trình `claude` thường trú | Không onboarding, không presync, **không sync skill**. Tiến trình con đọc `CLAUDE.md` / `.env` lúc khởi động, nên đổi hai file đó phải restart nó |
 | `make os-dev` | Ba việc theo thứ tự: `os-dev-build` (biên dịch), `os-dev-seed` (chuẩn bị state dir), rồi chạy API — chính nó cũng lo toàn bộ provisioning cho agent: `presync.sh`, seed `AGENTS.md`/`SOUL.md`/`KNOWLEDGE.md`/`HEARTBEAT.md`, `downloadSkills()`, skill watcher | — |
 | `make web-dev` | Chạy Vite thay vai nginx (os-server không serve HTML) | — |
 
@@ -397,7 +535,11 @@ không bao giờ bất đồng.
 | `CODEX_HOME` | `/root/.codex` | Gốc mọi path codex, ở **cả** client lẫn gatewayd |
 | `CODEX_PORT` | `18792` | Listener của bridge + `WSURL` |
 | `CODEX_WS_TOKEN` | `autonomous_codex_token` | Bearer token giữa os-server và bridge |
-| `OS_AGENT_HOME` | `/root` | Gốc để coding session resolve `~` |
+| `CLAUDECODE_HOME` | `$OS_AGENT_HOME/.claudecode` | State dir của Claude Code (`.env`, `session.json`, `workspace/`), ở **cả** client lẫn gatewayd |
+| `CLAUDECODE_PORT` | `18791` | Listener của bridge + `WSURL` |
+| `CLAUDECODE_WS_TOKEN` | `autonomous_claudecode_token` | Bearer token giữa os-server và bridge |
+| `CLAUDECODE_BIN` | `/usr/local/bin/claude` | Binary `claude` mà bridge spawn và probe version đọc |
+| `OS_AGENT_HOME` | `/root` | Gốc để coding session resolve `~` — **và** là `HOME` của tiến trình `claude` con, tức nó quyết định `~/.claude` và `~/.claude.json` nằm ở đâu |
 | `OS_AGENT_STATE_PATH` | `/root/config/agent_state.json` | Lịch sử chuyển runtime |
 | `OS_BOOTSTRAP_CONFIG` | `/root/config/bootstrap.json` | Nguồn `metadata_url` — base cho skill zip |
 | `OS_LOG_FILE` | `/var/log/os-server.log` | Log xoay vòng của os-server |
@@ -420,8 +562,9 @@ một thread nền — nên phải set thành một khối.
 | Env | Mặc định (board) | `make sim` |
 |---|---|---|
 | `OS_CONFIG_PATH` | `/root/config/config.json` | `$OS_STATE_DIR/config/config.json` — file dùng chung với os-server |
-| `HAL_SNAPSHOT_DIR` | `/root/.<runtime>/media/hal-snapshots` | `$CODEX_HOME/media/hal-snapshots` — bắt buộc nằm dưới home của agent, nếu không nó không đọc lại được frame và os-server không serve được thumbnail |
+| `HAL_SNAPSHOT_DIR` | `/root/.<runtime>/media/hal-snapshots` | `$AGENT_RUNTIME_HOME/media/hal-snapshots` — bám theo runtime đang chạy, thứ mà `make` tự resolve từ `config.json`. Bắt buộc nằm dưới home của agent ĐANG chạy, nếu không nó không đọc lại được frame và os-server không serve được thumbnail |
 | `HAL_CODEX_WORKSPACE_DIR` | `/root/.codex/workspace` | `$CODEX_HOME/workspace` — `memory.jsonl` của realtime agent suy ra từ đây |
+| `HAL_CLAUDECODE_WORKSPACE_DIR` | `/root/.claudecode/workspace` | `$CLAUDECODE_HOME/workspace` — cùng vai trò, cho backend claudecode |
 | `HAL_LOG_DIR` | `/var/log/hal` | `$SIM_STATE_DIR/log` |
 | `HAL_SNAPSHOT_PERSIST_DIR` | `/var/lib/hal/snapshots` | `$SIM_STATE_DIR/snapshots` |
 | `HAL_TTS_CACHE_DIR` | `/var/lib/hal/tts_cache` | `$SIM_STATE_DIR/tts_cache` |
@@ -445,10 +588,14 @@ tắt.
 | `SIM_MEDIA` | `virtual` |
 | `SIM_STATE_DIR` | `/tmp/autonomous-sim` |
 | `OS_STATE_DIR` | `/tmp/autonomous-os` |
-| `OS_AGENT_RUNTIME` | `codex` |
+| `OS_AGENT_RUNTIME` | `agent_runtime` trong `config.json`, không có thì `codex` |
 | `CODEX_HOME` | `$HOME/.codex` |
 | `CODEX_PORT` | `18792` |
 | `CODEX_BIN` | `codex` đầu tiên trên `PATH` |
+| `CLAUDECODE_HOME` | `$OS_AGENT_HOME/.claudecode` |
+| `CLAUDECODE_PORT` | `18791` |
+| `CLAUDECODE_BIN` | `claude` đầu tiên trên `PATH` |
+| `AGENT_RUNTIME_HOME` | `$CODEX_HOME` với codex, còn lại `$OS_AGENT_HOME/.<runtime>` |
 | `OS_BACKEND_UPLINK` | `off` |
 | `HAL_PORT` | `5001` |
 | `LAMP_PROXY` | `http://127.0.0.1:5000` |
@@ -506,7 +653,7 @@ cầm credential của một thiết bị đang sống.
 |---|---|
 | HAL | ✅ `$SIM_STATE_DIR/log/server.log` |
 | OS | ✅ `$OS_STATE_DIR/os-server.log` |
-| Agent / Agent Service | ✅ `$OS_STATE_DIR/codex-gatewayd.log` — `make codex-dev` tee bridge ra file (`2>&1`, vì Go `slog` ghi ra stderr) do laptop không có journal |
+| Agent / Agent Service | ✅ `$OS_STATE_DIR/<runtime>-gatewayd.log` — target bridge `*-dev` tee ra file (`2>&1`, vì Go `slog` ghi ra stderr) do laptop không có journal |
 | Bootstrap | ❌ OTA worker không có target off-device |
 | Claude Desktop Buddy | ❌ app Mac riêng, không ghi log ở đây |
 
@@ -518,8 +665,8 @@ cầm credential của một thiết bị đang sống.
 |---|---|
 | `codex CLI not found on PATH` | Chưa cài agent — xem *Bước 1* |
 | `curl :5000` trả binary plist hoặc 403 | os-server chưa chạy — AirPlay Receiver của macOS trả lời trên `*:5000`. Tắt nó (System Settings → General → AirDrop & Handoff) hoặc đổi `httpPort` |
-| `listen failed: address already in use` | `CODEX_PORT` để nguyên `18792`, đang bị openclaw gateway giữ |
-| `bad handshake (status 404)` | `codex-dev` và `os-dev` lệch `CODEX_PORT` |
+| `listen failed: address already in use` | `CODEX_PORT` để nguyên `18792`, đang bị openclaw gateway giữ — hoặc `CLAUDECODE_PORT` để nguyên `18791`, đang bị một session `claude` trên máy bạn giữ |
+| `bad handshake (status 404)` | `*-dev` và `os-dev` lệch `CODEX_PORT` / `CLAUDECODE_PORT` |
 | `dial 127.0.0.1:5001: connection refused` | HAL chưa lên |
 | `127.0.0.1:5173` không kết nối được | Vite bind `[::1]` — dùng `localhost:5173` |
 | Nói vào mic không phản ứng | Thiếu `SIM_MEDIA=host`, hoặc macOS chặn microphone. Kiểm `media_reasons` trong `/simulator/state` |
@@ -567,7 +714,7 @@ cd hal && uv sync --inexact --python-preference only-managed -p 3.12
 | Uplink backend | Tắt có chủ đích — xem *Uplink lên backend đang tắt* |
 | Bootstrap / OTA | `bootstrap-server` không có target off-device |
 | Log của Claude Desktop Buddy | App Mac riêng |
-| Mọi runtime khác codex | Không có target `*-dev`; chưa từng chạy trên laptop |
+| Mọi runtime khác codex / claudecode | Không có target `*-dev`; chưa từng chạy trên laptop |
 | `SensingService` thật (face, motion perception) | Module của nó import driver Feetech, kéo theo `lerobot`. `VirtualSensingService` đứng thay |
 | Face recognition, speech emotion, speaker ID | Cần perception service / endpoint embedding |
 | GPIO button, touchpad, mic button | Không có phần cứng; bỏ qua lúc boot |
@@ -603,6 +750,7 @@ hoặc sau một kiểm tra platform mà board không bao giờ thoả:
 - `system/lib/syspath/syspath.go` — mọi env override phía Go
 - `system/server/logs.go` — `resolveLogSource`
 - `runtimes/codex/gatewayd/gatewayd.go` — bridge mà `codex-dev` chạy
+- `runtimes/claudecode/gatewayd/gatewayd.go` — bridge mà `claudecode-dev` chạy; `Config.Home` là `HOME` cấp cho tiến trình `claude` con
 - `runtimes/codex/onboarding.go` — những gì `os-dev` seed
 - `hal/server.py` — các cổng simulation, mount plan, `_sim_audio_probe`
 - `hal/drivers/motors/mock_service.py` — thân máy mock

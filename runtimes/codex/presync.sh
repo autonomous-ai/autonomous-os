@@ -12,13 +12,14 @@
 #      wipes /root/.codex clears it so migrate re-runs on the next switch).
 #   §2 CONFIG  — ~/.codex/config.toml model-provider wiring from config.json
 #      llm_* (guarded merge: os-server-owned [mcp_servers] tail preserved).
-#      AUTH GATE: when $CODEX_DIR/auth.json exists (ChatGPT-subscription login
-#      via `codex login --device-auth`, or copied from another machine) the
-#      custom provider head is OMITTED (no model / model_provider /
-#      [model_providers.autonomous]) so codex uses its BUILT-IN default
-#      provider + model — the custom block would route to campaign-api, which
-#      404s /responses. Delete auth.json to fall back to api-key mode; presync
-#      re-runs every boot so the flip is automatic.
+#      AUTH GATE: on a ChatGPT-subscription login ($CODEX_DIR/auth.json whose
+#      auth_mode is NOT "apikey" — `codex login --device-auth`, or a file copied
+#      from another machine) the custom provider head is OMITTED (no model /
+#      model_provider / [model_providers.autonomous]) so codex uses its BUILT-IN
+#      default provider + model, which is what that login authenticates against.
+#      An `--api-key` auth.json is NOT a subscription and keeps api-key mode.
+#      Delete auth.json to force api-key mode; presync re-runs every boot so the
+#      flip is automatic.
 #   §3 ENV     — /root/.codex/.env (systemd EnvironmentFile): gatewayd
 #      token/port + OPENAI_API_KEY from llm_api_key (OMITTED in subscription
 #      mode — an API key outranks/conflicts with ChatGPT auth).
@@ -39,7 +40,7 @@ AUTH_JSON="$CODEX_DIR/auth.json"
 # Codex speaks the OpenAI Responses API only (the chat-completions wire was
 # removed upstream ~2/2026): it appends /responses to base_url, so the base
 # needs the OpenAI-style /v1 suffix (like picoclaw's base, unlike claudecode's).
-# ⚠️ VERIFY ON DEVICE: campaign-api must serve {base}/responses.
+# Verified 07/09/2026: campaign-api serves {base}/responses (HTTP 200).
 DEFAULT_BASE_URL="https://campaign-api.autonomous.ai/api/v1/ai/v1"
 DEFAULT_MODEL="Auto-AI"
 
@@ -104,14 +105,21 @@ if [ ! -f "$MIGRATE_MARKER" ] && [ -d "$OC_WS" ]; then
 fi
 
 # ── AUTH MODE (subscription vs api-key) ─────────────────────────────────────────
-# auth.json present = ChatGPT-subscription login (`codex login --device-auth`
-# on the device, or copied from another machine) → codex must use its BUILT-IN
-# default provider + model, and OPENAI_API_KEY must be omitted from .env (an
-# API key outranks/conflicts with ChatGPT auth). Delete auth.json to fall back
-# to api-key mode; presync re-runs every boot so the flip is automatic.
-if [ -f "$AUTH_JSON" ]; then
+# ChatGPT-subscription login (`codex login --device-auth` on the device, or an
+# auth.json copied from another machine) → codex must use its BUILT-IN default
+# provider + model, and OPENAI_API_KEY must be omitted from .env (an API key
+# outranks/conflicts with ChatGPT auth). Delete auth.json to fall back to
+# api-key mode; presync re-runs every boot so the flip is automatic.
+#
+# Existence alone is NOT the test: `codex login --api-key` writes an auth.json
+# too, as {"auth_mode":"apikey","OPENAI_API_KEY":".."}. Treating that as a
+# subscription dropped the campaign-api provider and silently spent a personal
+# OpenAI key instead — with a log line reading "subscription mode", so nothing
+# pointed at the cause. Read auth_mode and let only a non-apikey login through;
+# a pre-auth_mode file has no such field and stays subscription, unchanged.
+if [ -f "$AUTH_JSON" ] && [ "$(jq -r '.auth_mode // empty' "$AUTH_JSON" 2>/dev/null)" != "apikey" ]; then
   SUBSCRIPTION_MODE=1
-  log "subscription mode (auth.json present) — omitting custom provider + OPENAI_API_KEY"
+  log "subscription mode (auth.json, non-apikey login) — omitting custom provider + OPENAI_API_KEY"
 else
   SUBSCRIPTION_MODE=0
   log "api-key mode"
@@ -141,7 +149,7 @@ if [ "$SUBSCRIPTION_MODE" = 1 ]; then
   log "write $CODEX_CONFIG (subscription mode — built-in provider/model)"
   cat >"$CODEX_CONFIG.tmp" <<TOML
 # Managed by runtime-codex-presync — head regenerated from /root/config/config.json.
-# Subscription mode (auth.json present): no model / model_provider — codex uses
+# Subscription mode (ChatGPT auth.json): no model / model_provider — codex uses
 # its BUILT-IN default provider + model with ChatGPT auth.
 # All [mcp_servers.*] tables are preserved wherever they appear
 # (os-server runtimes/codex/mcp.go owns those entries).
@@ -162,8 +170,8 @@ sandbox_mode = "danger-full-access"
 [model_providers.autonomous]
 name = "Autonomous campaign-api"
 # Codex appends /responses to base_url (Responses API only — the chat wire was
-# removed upstream ~2/2026). ⚠️ VERIFY ON DEVICE: campaign-api must serve
-# {base}/responses.
+# removed upstream ~2/2026). Verified 07/09/2026: campaign-api serves
+# {base}/responses (HTTP 200).
 base_url = "$LLM_BASE_URL"
 env_key = "OPENAI_API_KEY"
 wire_api = "responses"

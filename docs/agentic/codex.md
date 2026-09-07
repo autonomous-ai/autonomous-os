@@ -117,11 +117,17 @@ restarts the gateway only on a real change. It owns everything stateful:
   migrate retries next run; a factory reset wiping `/root/.codex` clears it so
   migrate re-runs on the next switch.
 - **§2 CONFIG** — regenerates the head of `/root/.codex/config.toml` from
-  config.json. **Auth gate:** when `/root/.codex/auth.json` exists
-  (ChatGPT-subscription login, §9) the head is written WITHOUT `model` /
+  config.json. **Auth gate:** on a ChatGPT-subscription login (§9) —
+  `/root/.codex/auth.json` present whose `auth_mode` is **not** `"apikey"` —
+  the head is written WITHOUT `model` /
   `model_provider` / `[model_providers.autonomous]` — codex uses its built-in
   default provider + model (keeping only `approval_policy` + `sandbox_mode`,
-  and still preserving the `[mcp_servers` tail). Otherwise (api-key mode):
+  and still preserving the `[mcp_servers` tail). Existence alone is not the
+  test: `codex login --api-key` writes an auth.json too
+  (`{"auth_mode":"apikey",…}`) and stays in api-key mode — treating it as a
+  subscription silently dropped campaign-api and spent a personal OpenAI key.
+  A pre-`auth_mode` file has no such field and still reads as a subscription.
+  Otherwise (api-key mode):
   `model` from `llm_model` (fallback `Auto-AI`),
   `model_provider = "autonomous"` → `[model_providers.autonomous]` with
   `base_url` from `llm_base_url` normalized to end in `/v1` (Codex appends
@@ -606,9 +612,13 @@ claudecode branch's `ClaudeLoginPairer` once that branch merges.
 Available today without the phase-2 pairing flow: run
 `codex login --device-auth` on the device, or copy an existing
 `~/.codex/auth.json` from another machine to `/root/.codex/auth.json`
-(`chmod 600`). Presync auto-detects `auth.json` on every run (so on every
-boot): it omits the custom provider block from config.toml and drops
-`OPENAI_API_KEY` from `.env`, so codex talks to OpenAI directly with its
-built-in default provider + model — this **bypasses the campaign-api
-`/responses` 404 blocker** entirely. Delete `auth.json` to fall back to
-api-key mode; the flip is automatic on the next presync run.
+(`chmod 600`). Presync re-reads it on every run (so on every boot): it omits
+the custom provider block from config.toml and drops `OPENAI_API_KEY` from
+`.env`, so codex talks to OpenAI directly with its built-in default provider +
+model — which is what that login authenticates against. Delete `auth.json` to
+fall back to api-key mode; the flip is automatic on the next presync run.
+
+An `--api-key` login is **not** this path: its auth.json carries
+`"auth_mode":"apikey"` and presync keeps api-key mode, so the device stays on
+campaign-api. Devices are expected to run campaign-api; the subscription branch
+exists for a ChatGPT login only.

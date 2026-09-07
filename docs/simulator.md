@@ -28,13 +28,14 @@ what makes the tested binary the shipped binary.
 
 | Need | Check with | If missing |
 |---|---|---|
-| `codex` CLI | `codex --version` | Install it yourself — nothing here installs it |
-| codex logged in | `ls ~/.codex/auth.json` | `codex login` |
+| The agent CLI you plan to run | `codex --version` / `claude --version` | Install it yourself — nothing here installs it. Only the CLI for the runtime you pick is needed. Note where you installed it: *Step 4 §2* takes that directory as `CODEX_HOME` / `CLAUDECODE_HOME` |
 | `ffmpeg` | `ffmpeg -version` | Needed for music playback |
 | `uv` | `uv --version` | Builds HAL's `hal/.venv`. `make sim` creates it on first run and re-syncs it whenever `hal/uv.lock` or `hal/pyproject.toml` moves ahead of it. If that first sync fails compiling `insightface`, see *insightface fails to build* below |
 | `node` + `npm` | `node --version` | Needed for `make web-dev` only |
 
-**Only `codex` works off-device.** Other runtimes have no `*-dev` target.
+**`codex` and `claudecode` work off-device.** Pick one with `OS_AGENT_RUNTIME`
+on `make os-dev`; it is persisted to `config.json` and read back afterwards, so
+you pass it only when switching. Other runtimes have no `*-dev` target.
 
 ## Step 2 — Copy the config template
 
@@ -77,8 +78,30 @@ $EDITOR /tmp/autonomous-os/config/config.json
 
 ### Set automatically — do not edit
 
-`device_type` · `agent_runtime` · `set_up_completed` — rewritten by
-`os-dev-seed.sh` on every run.
+`device_type` · `set_up_completed` — `os-dev-seed.sh` writes these on every run.
+
+`channels_applied_runtime` · `mcp_applied_runtime` ·
+`llm_config_applied_runtime` — os-server's own bookkeeping: each records the
+runtime a migration was last applied for. When one differs from
+`agent_runtime`, that migration re-runs on the next boot and updates its own
+marker. **The mismatch is the trigger**, so after switching backends they are
+supposed to lag behind — setting them by hand makes os-server think the work is
+done and your channels, MCP connectors and LLM config never move across.
+
+### Choosing the agent runtime
+
+`agent_runtime` is yours. Two equivalent ways to switch, and they follow one
+cascade — explicit flag, else this field, else `codex`:
+
+```bash
+make os-dev OS_AGENT_RUNTIME=claudecode   # writes the field for you
+$EDITOR $OS_STATE_DIR/config/config.json  # or set "agent_runtime" directly
+```
+
+Either way it sticks: later `make` runs read the field back rather than
+resetting it. If you edit the file by hand, do it while os-server is stopped and
+start with `make os-dev` (no flag) — the flag would override what you just
+wrote.
 
 ### Leave empty
 
@@ -90,30 +113,143 @@ bot token cannot have two pollers; the laptop would steal the device's messages.
 
 ## Step 4 — Run
 
-Four terminals, in this order.
+Four services, one terminal each, started in this order. Each has its own
+section below.
+
+| # | Service | Command | Port | Wait for this before starting the next |
+|---|---|---|---|---|
+| 1 | HAL | `make sim` | 5001 | `Simulation mode enabled for device 'lamp' (media=host)` |
+| 2 | Agent runtime gateway | `make <runtime>-dev` | per runtime | `[<runtime>-gatewayd] listening on ws://…` |
+| 3 | os-server | `make os-dev` | 5000 | `Codex connected` / `Claude Code connected` |
+| 4 | Web UI (optional) | `make web-dev` | 5173 | `VITE … ready` |
+
+`OS_AGENT_RUNTIME` selects the backend, and you pass it **once, to `make os-dev`**
+(§3). It is written to `config.json` and read back from there afterwards, so the
+choice sticks: an explicit `OS_AGENT_RUNTIME` wins, else `config.json`
+`agent_runtime`, else `codex` — the same cascade os-server itself applies
+(`agent/factory.go` `resolveRuntime`). The gateway targets in §2 need no
+selector; each one *is* its runtime.
+
+---
+
+### 1 — HAL
 
 ```bash
-make sim SIM_MEDIA=host           # 1. HAL          :5001
-make codex-dev CODEX_PORT=18892   # 2. agent bridge :18892
-make os-dev    CODEX_PORT=18892   # 3. os-server    :5000
-make web-dev                      # 4. web UI       :5173   (optional)
+make sim SIM_MEDIA=host
 ```
 
-| # | Wait for this line before starting the next |
-|---|---|
-| 1 | `Simulation mode enabled for device 'lamp' (media=host)` |
-| 2 | `[codex-gatewayd] listening on ws://127.0.0.1:18892/codex/ws/` |
-| 3 | `Codex connected` |
-| 4 | `VITE … ready` |
+Start this first: os-server waits up to 120s on HAL's `/health`.
 
-Rules:
+- macOS asks for **Microphone** and **Camera** on the first `SIM_MEDIA=host`
+  run. Grant them, then re-run.
+- Drop `SIM_MEDIA=host` if you do not need voice — the stack still runs,
+  silently.
+- **Switching runtime?** HAL reads `agent_runtime` from `config.json`, and only
+  `make os-dev` writes it — which starts *after* HAL. So on the run where you
+  change backends, seed the config first: `make os-dev-seed
+  OS_AGENT_RUNTIME=<runtime>`. That target only touches the state dir, it starts
+  nothing. Later runs need none of this — the config already says the right thing.
 
-- Start `make sim` first — os-server waits up to 120s on HAL's `/health`.
-- `codex-dev` and `os-dev` must use the **same** `CODEX_PORT`. The default `18792`
-  collides with an openclaw gateway if one is installed.
-- macOS asks for **Microphone** and **Camera** on the first `SIM_MEDIA=host` run.
-  Grant them, then re-run `make sim`.
-- Drop `SIM_MEDIA=host` if you do not need voice — the stack still runs, silently.
+---
+
+### 2 — Agent runtime gateway
+
+A loopback WebSocket bridge between os-server and the agent CLI. It runs the
+CLI you installed in *Step 1* — so it has to be told **where that install
+lives** and **which port to listen on**.
+
+Both options exist for the same reason: the defaults point at a real developer
+install and a port a real service may already hold.
+
+| Option | Default | Pass your own when |
+|---|---|---|
+| `CODEX_HOME` / `CLAUDECODE_HOME` | see below | Your CLI lives somewhere else, or you want the device's state kept apart from your own |
+| `CODEX_PORT` / `CLAUDECODE_PORT` | `18792` / `18791` | The default is taken. **Give the same value to `os-dev`** — it resolves the bridge URL from it, and a mismatch is `bad handshake (status 404)` |
+
+An `openclaw-gateway`, if one is installed, holds `18789`, `18791` **and**
+`18792` — i.e. both defaults. A `claude` session of your own also holds `18791`.
+Check before you pick: `lsof -nP -iTCP:<port> -sTCP:LISTEN`.
+
+#### codex
+
+```bash
+make codex-dev CODEX_HOME=~/.codex CODEX_PORT=18892
+```
+
+`CODEX_HOME` is the codex install this bridge drives — its `config.toml`,
+`auth.json`, `workspace/` and `.env`. It defaults to `$HOME/.codex`, the install
+you already use, which is usually what you want off-device.
+
+⚠️ **`os-dev` regenerates `$CODEX_HOME/config.toml` on every boot.** If you keep
+a hand-written one there, `os-dev-seed` copies it to `config.toml.pre-os-dev`
+the first time — but edits made after that are overwritten. Point `CODEX_HOME`
+at a throwaway directory to keep your own config out of it:
+
+```bash
+make codex-dev CODEX_HOME=$OS_STATE_DIR/.codex CODEX_PORT=18892
+```
+
+#### claudecode
+
+```bash
+make claudecode-dev CLAUDECODE_PORT=18891
+```
+
+This backend has **two** directories, and they do different jobs:
+
+| Option | Default | What it holds |
+|---|---|---|
+| `CLAUDECODE_HOME` | `$OS_AGENT_HOME/.claudecode` | Backend state: `.env`, `session.json`, `workspace/` |
+| `OS_AGENT_HOME` | `$OS_STATE_DIR` | The `HOME` the `claude` child runs with — so this decides where `~/.claude` (skills, credentials, `projects/`, `.claude.json`) lands |
+| `CLAUDECODE_BIN` | first `claude` on `PATH` | The binary the bridge spawns |
+
+The `claude` **binary** is shared by default. Split that too if you want a
+different version:
+
+```bash
+npm install -g --prefix $OS_STATE_DIR/npm @anthropic-ai/claude-code
+make claudecode-dev CLAUDECODE_PORT=18891 CLAUDECODE_BIN=$OS_STATE_DIR/npm/bin/claude
+```
+
+⚠️ The `claude` child is **persistent**, unlike codex's per-turn `codex exec`.
+`CLAUDE.md`, `SOUL.md`, `.env` and `.mcp.json` are read at session start only —
+restart this terminal after `os-dev` rewrites any of them.
+
+---
+
+### 3 — os-server
+
+```bash
+make os-dev CODEX_HOME=~/.codex CODEX_PORT=18892
+```
+
+Repeat whichever `*_HOME` and `*_PORT` you gave the gateway — os-server is the
+**client** of that socket and resolves its URL from the same variables. It also
+runs presync and all agent provisioning, so the paths must agree.
+
+**This is where the backend is chosen.** For claudecode:
+
+```bash
+make os-dev OS_AGENT_RUNTIME=claudecode CLAUDECODE_PORT=18891
+```
+
+`OS_AGENT_RUNTIME` is only needed on the run that **changes** backend — it is
+persisted to `config.json` and every later `make os-dev`, `make sim` and
+`make web-dev` reads it back. Omitting it does **not** reset you to codex.
+
+Wait for `Codex connected` / `Claude Code connected` before using the stack.
+
+---
+
+### 4 — Web UI (optional)
+
+```bash
+make web-dev
+```
+
+Only needed for the browser UI; the API, Flow Monitor and voice pipeline all
+work without it. See *The two web UIs* below for how to log in — and note Vite
+binds `[::1]` only, so use `localhost:5173`, not `127.0.0.1:5173`.
 
 ## Step 5 — Verify
 
@@ -163,6 +299,7 @@ Picked up within 5 seconds, no restart. Now `hey lumi` works, alongside
 | `make sim` | Boots HAL on the lamp body with virtual (or host) peripherals | — |
 | `make hal-install` | `uv sync` — an **exact** reconcile of `hal/.venv`, dropping anything absent from `uv.lock`. `make sim` syncs by itself with `--inexact`, which keeps a hand-installed pytest | Does not install the `dev` extra (pyflakes); add `--extra dev` by hand |
 | `make codex-dev` | **Only** runs `os-server codex-gatewayd`: a loopback WebSocket listener that spawns one `codex exec` per turn | No onboarding, no presync, **no skill sync** |
+| `make claudecode-dev` | **Only** runs `os-server claudecode-gatewayd`: a loopback WebSocket listener holding ONE persistent `claude` child | No onboarding, no presync, **no skill sync**. The child reads `CLAUDE.md` / `.env` at start, so restart it after either changes |
 | `make os-dev` | Three things in sequence: `os-dev-build` (compile), `os-dev-seed` (prepare the state dir), then run the API — which also does all agent provisioning: `presync.sh`, seeding `AGENTS.md`/`SOUL.md`/`KNOWLEDGE.md`/`HEARTBEAT.md`, `downloadSkills()`, the skill watcher | — |
 | `make web-dev` | Runs Vite in nginx's place (os-server serves no HTML) | — |
 
@@ -404,7 +541,11 @@ client can never disagree.
 | `CODEX_HOME` | `/root/.codex` | Root of every codex path, in the client *and* the gatewayd |
 | `CODEX_PORT` | `18792` | Bridge listener + `WSURL` |
 | `CODEX_WS_TOKEN` | `autonomous_codex_token` | Bearer token between os-server and the bridge |
-| `OS_AGENT_HOME` | `/root` | Root a Telegram coding session resolves `~` against |
+| `CLAUDECODE_HOME` | `$OS_AGENT_HOME/.claudecode` | Claude Code's state dir (`.env`, `session.json`, `workspace/`), in the client *and* the gatewayd |
+| `CLAUDECODE_PORT` | `18791` | Bridge listener + `WSURL` |
+| `CLAUDECODE_WS_TOKEN` | `autonomous_claudecode_token` | Bearer token between os-server and the bridge |
+| `CLAUDECODE_BIN` | `/usr/local/bin/claude` | The `claude` binary the bridge spawns and the version probe reads |
+| `OS_AGENT_HOME` | `/root` | Root a Telegram coding session resolves `~` against — **and** the `HOME` the `claude` child runs with, so it decides where `~/.claude` and `~/.claude.json` live |
 | `OS_AGENT_STATE_PATH` | `/root/config/agent_state.json` | Runtime-switch history |
 | `OS_BOOTSTRAP_CONFIG` | `/root/config/bootstrap.json` | Source of `metadata_url` — the skill-zip base |
 | `OS_LOG_FILE` | `/var/log/os-server.log` | os-server's rotating log |
@@ -426,8 +567,9 @@ background thread's traceback — which is why they are set as a block.
 | Env | Board default | `make sim` |
 |---|---|---|
 | `OS_CONFIG_PATH` | `/root/config/config.json` | `$OS_STATE_DIR/config/config.json` — the file shared with os-server |
-| `HAL_SNAPSHOT_DIR` | `/root/.<runtime>/media/hal-snapshots` | `$CODEX_HOME/media/hal-snapshots` — must sit under the agent's own home, or it cannot read the frame back and os-server cannot serve its thumbnail |
+| `HAL_SNAPSHOT_DIR` | `/root/.<runtime>/media/hal-snapshots` | `$AGENT_RUNTIME_HOME/media/hal-snapshots` — follows the active runtime, which `make` resolves from `config.json`. It must sit under the ACTIVE agent's own home, or it cannot read the frame back and os-server cannot serve its thumbnail |
 | `HAL_CODEX_WORKSPACE_DIR` | `/root/.codex/workspace` | `$CODEX_HOME/workspace` — the realtime agent's `memory.jsonl` derives from it |
+| `HAL_CLAUDECODE_WORKSPACE_DIR` | `/root/.claudecode/workspace` | `$CLAUDECODE_HOME/workspace` — same role for the claudecode backend |
 | `HAL_LOG_DIR` | `/var/log/hal` | `$SIM_STATE_DIR/log` |
 | `HAL_SNAPSHOT_PERSIST_DIR` | `/var/lib/hal/snapshots` | `$SIM_STATE_DIR/snapshots` |
 | `HAL_TTS_CACHE_DIR` | `/var/lib/hal/tts_cache` | `$SIM_STATE_DIR/tts_cache` |
@@ -451,10 +593,14 @@ needs them simply stays off.
 | `SIM_MEDIA` | `virtual` |
 | `SIM_STATE_DIR` | `/tmp/autonomous-sim` |
 | `OS_STATE_DIR` | `/tmp/autonomous-os` |
-| `OS_AGENT_RUNTIME` | `codex` |
+| `OS_AGENT_RUNTIME` | `config.json` `agent_runtime`, else `codex` |
 | `CODEX_HOME` | `$HOME/.codex` |
 | `CODEX_PORT` | `18792` |
 | `CODEX_BIN` | first `codex` on `PATH` |
+| `CLAUDECODE_HOME` | `$OS_AGENT_HOME/.claudecode` |
+| `CLAUDECODE_PORT` | `18791` |
+| `CLAUDECODE_BIN` | first `claude` on `PATH` |
+| `AGENT_RUNTIME_HOME` | `$CODEX_HOME` for codex, else `$OS_AGENT_HOME/.<runtime>` |
 | `OS_BACKEND_UPLINK` | `off` |
 | `HAL_PORT` | `5001` |
 | `LAMP_PROXY` | `http://127.0.0.1:5000` |
@@ -470,7 +616,7 @@ make sim SIM_STATE_DIR=~/work/sim-a            # all of them
 An exported shell variable wins over the default for the same reason. Two pairs
 stay coupled through a variable rather than a repeated literal, so overriding one
 half moves the other: `OS_HAL_LOG_FILE` derives from `HAL_LOG_DIR` (HAL writes,
-os-server reads it for the web UI's HAL tab), and `codex-dev`'s `tee` target is
+os-server reads it for the web UI's HAL tab), and the bridge target's `tee` is
 `OS_AGENT_BRIDGE_LOG` itself (bridge writes, os-server reads it for the Agent tab).
 
 ---
@@ -514,7 +660,7 @@ not carrying a live device's credentials.
 |---|---|
 | HAL | ✅ `$SIM_STATE_DIR/log/server.log` |
 | OS | ✅ `$OS_STATE_DIR/os-server.log` |
-| Agent / Agent Service | ✅ `$OS_STATE_DIR/codex-gatewayd.log` — `make codex-dev` tees the bridge to a file (`2>&1`, because Go's `slog` writes to stderr) since a laptop has no journal |
+| Agent / Agent Service | ✅ `$OS_STATE_DIR/<runtime>-gatewayd.log` — the `*-dev` bridge target tees to a file (`2>&1`, because Go's `slog` writes to stderr) since a laptop has no journal |
 | Bootstrap | ❌ the OTA worker has no off-device target |
 | Claude Desktop Buddy | ❌ a separate Mac app that writes no log here |
 
@@ -526,8 +672,8 @@ not carrying a live device's credentials.
 |---|---|
 | `codex CLI not found on PATH` | The agent is not installed — see *Step 1* |
 | `curl :5000` returns a binary plist or 403 | os-server is not running — macOS AirPlay Receiver answers on `*:5000`. Turn it off (System Settings → General → AirDrop & Handoff) or change `httpPort` |
-| `listen failed: address already in use` | `CODEX_PORT` left at `18792`, which an openclaw gateway holds |
-| `bad handshake (status 404)` | `codex-dev` and `os-dev` disagree on `CODEX_PORT` |
+| `listen failed: address already in use` | `CODEX_PORT` left at `18792`, which an openclaw gateway holds — or `CLAUDECODE_PORT` left at `18791`, which a `claude` session on your own machine may hold |
+| `bad handshake (status 404)` | `*-dev` and `os-dev` disagree on `CODEX_PORT` / `CLAUDECODE_PORT` |
 | `dial 127.0.0.1:5001: connection refused` | HAL is not up yet |
 | `127.0.0.1:5173` refuses the connection | Vite binds `[::1]` — use `localhost:5173` |
 | Speaking does nothing | Missing `SIM_MEDIA=host`, or macOS denied the microphone. Check `media_reasons` in `/simulator/state` |
@@ -575,7 +721,7 @@ cd hal && uv sync --inexact --python-preference only-managed -p 3.12
 | Backend uplink | Off by design — see *The backend uplink is off* |
 | Bootstrap / OTA | `bootstrap-server` has no off-device target |
 | Claude Desktop Buddy logs | Separate Mac app |
-| Any runtime other than codex | No `*-dev` target; never exercised on a laptop |
+| Any runtime other than codex / claudecode | No `*-dev` target; never exercised on a laptop |
 | Real `SensingService` (face, motion perception) | Its module imports the Feetech driver, which pulls `lerobot`. `VirtualSensingService` stands in |
 | Face recognition, speech emotion, speaker ID | Need the perception service / embedding endpoint |
 | GPIO button, touchpad, mic button | No hardware; skipped at boot |
@@ -611,6 +757,7 @@ Guarded by tests that assert the *board* contract, not the laptop one:
 - `system/lib/syspath/syspath.go` — every Go-side env override
 - `system/server/logs.go` — `resolveLogSource`
 - `runtimes/codex/gatewayd/gatewayd.go` — the bridge `codex-dev` runs
+- `runtimes/claudecode/gatewayd/gatewayd.go` — the bridge `claudecode-dev` runs; `Config.Home` is the `HOME` its `claude` child gets
 - `runtimes/codex/onboarding.go` — what `os-dev` seeds
 - `hal/server.py` — simulation gates, mount plan, `_sim_audio_probe`
 - `hal/drivers/motors/mock_service.py` — the mock body
