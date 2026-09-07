@@ -22,6 +22,16 @@ from hal.drivers.voice._internal.config import (
 logger = logging.getLogger("hal.voice")
 
 
+def _run_id_of(resp) -> str:
+    """The runId os-server allocated for this turn, or "" if the response did
+    not carry one. Never raises: a correlation id is nice to have, not a
+    reason to fail a voice turn."""
+    try:
+        return (resp.json() or {}).get("data", {}).get("runId", "") or ""
+    except Exception:
+        return ""
+
+
 class SensingSender:
     """Send sensing events to os-server with retry + echo suppression."""
 
@@ -52,7 +62,7 @@ class SensingSender:
         event_type: str = "voice",
         skip_echo: bool = False,
         image_b64: str = "",
-    ) -> None:
+    ) -> str:
         """POST decorated message to os-server /api/sensing/event with retry.
 
         ``image_b64`` (raw base64 JPEG, no data-URI prefix) rides the payload's
@@ -66,7 +76,7 @@ class SensingSender:
         404s at the smart-agent-router when it picks a no-vision backend.
         """
         if not skip_echo and self.is_echo(message):
-            return
+            return ""
 
         payload = {"type": event_type, "message": message}
         # Voice turns used to ship NO current_user at all, so the identity in
@@ -112,7 +122,11 @@ class SensingSender:
                     logger.warning("os-server returned %d: %s", resp.status_code, resp.text)
                 else:
                     logger.info("Sent to os-server: %r", message)
-                return
+                    # Returned so a caller can correlate this turn with the
+                    # os-server run it created (voice KPI does; nothing else
+                    # has to care).
+                    return _run_id_of(resp)
+                return ""
             except requests.ConnectionError as e:
                 if attempt < max_retries:
                     logger.warning(
@@ -127,4 +141,5 @@ class SensingSender:
                     )
             except requests.RequestException as e:
                 logger.warning("Failed to send voice event to os-server: %s", e)
-                return
+                return ""
+        return ""

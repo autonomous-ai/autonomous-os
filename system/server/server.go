@@ -37,7 +37,9 @@ import (
 	_sensingHttpDeliver "go.autonomous.ai/os/system/server/sensing/delivery/http"
 	"go.autonomous.ai/os/system/server/serializers"
 	systemshell "go.autonomous.ai/os/system/server/system"
+	_trackingHttpDeliver "go.autonomous.ai/os/system/server/tracking/delivery/http"
 	"go.autonomous.ai/os/system/statusled"
+	"go.autonomous.ai/os/system/tracking"
 )
 
 type Server struct {
@@ -198,6 +200,16 @@ func (s *Server) Serve(closeFn func()) error {
 		logger.SetGELFHost(s.config.DeviceID)
 	}
 	logger.SetGELFDeviceType(deviceType)
+
+	// Common fields for every tracking event this device sends (see
+	// system/tracking). Set once here, where the resolved device class,
+	// runtime and version all exist.
+	tracking.SetCommon(map[string]any{
+		"os_version":                     config.OSVersion,
+		"device_type":                    deviceType,
+		"agent_runtime":                  string(device.CurrentAgentRuntimeFromConfig(s.config)),
+		"realtime_supersedes_main_reply": _agentHttpDeliver.RealtimeSupersedesMainReply(),
+	})
 	// i18n device name (wake-words + {name}/{Name} in strings) — device_type as the
 	// startup fallback; WatchIdentity overrides with the agent name once IDENTITY.md loads.
 	i18n.SetDeviceName(deviceType)
@@ -385,6 +397,12 @@ func (s *Server) Serve(closeFn func()) error {
 	network.GET("", s.networkHandler.GetNetworks)
 	network.GET("current", s.networkHandler.GetCurrentNetwork)
 	network.GET("check-internet", s.networkHandler.CheckInternet)
+
+	// Product analytics ingestion for on-device producers (HAL voice KPI
+	// today). Loopback/LAN only, same gate as sensing: the poster is another
+	// process on this device, never a browser session.
+	trackingGroup := api.Group("tracking")
+	trackingGroup.POST("event", sameOriginOrLAN(), _trackingHttpDeliver.ProvideTrackingHandler().PostEvent)
 
 	sensing := api.Group("sensing")
 	sensing.POST("event", sameOriginOrLAN(), s.sensingHandler.PostEvent)

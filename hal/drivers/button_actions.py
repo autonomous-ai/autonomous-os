@@ -106,6 +106,15 @@ def _cancel_agent_speech(source: str):
     server must not delay the local stop. The local stop_tts() runs anyway, so
     a lost call degrades to "quiet for one sentence" rather than to nothing."""
 
+    # Voice KPI: the explicit stop boundary (different semantics from the
+    # automatic supersession one — see hal/tracking/voice_kpi.py).
+    try:
+        from hal.tracking import voice_kpi
+
+        voice_kpi.boundary(voice_kpi.BOUNDARY_EXPLICIT_STOP)
+    except Exception:
+        logger.exception("[voice-kpi] stop boundary hook failed")
+
     def _post():
         try:
             requests.post(OS_SPEECH_CANCEL_URL, json={}, timeout=1.0)

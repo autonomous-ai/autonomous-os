@@ -576,6 +576,14 @@ class TTSService:
         return self._realtime_feedback
 
     @property
+    def latest_queue_turn_id(self) -> str:
+        """os-server run id of the newest turn that took the speak queue.
+
+        Read-only; exposed so tracking can attribute played audio to the turn
+        that produced it (see hal/tracking/voice_kpi.py)."""
+        return self._latest_queue_turn_id
+
+    @property
     def last_spoken_text(self) -> str:
         """Last text sent to TTS (for echo cancellation transcript filtering)."""
         return self._last_spoken_text

@@ -1216,6 +1216,15 @@ def _on_tts_speak_start():
     """Called by TTSService when TTS playback begins."""
     global _tts_speaking, _effect_thread, _effect_name, _effect_base_color
     global _restore_timer
+    # Voice KPI: first audio frame is the only proof the user heard anything.
+    # Before the LED early-returns below — a muted/sleeping strip changes
+    # nothing about what came out of the speaker.
+    try:
+        from hal.tracking import voice_kpi
+
+        voice_kpi.playback_start_from_tts(tts_service)
+    except Exception:
+        logger.exception("[voice-kpi] playback start hook failed")
     if not rgb_service:
         return
     if _sleeping:
@@ -1287,6 +1296,12 @@ def _clear_thinking_after_reply():
 def _on_tts_speak_end():
     """Called by TTSService when TTS playback finishes or is interrupted."""
     global _tts_speaking
+    try:
+        from hal.tracking import voice_kpi
+
+        voice_kpi.playback_end()
+    except Exception:
+        logger.exception("[voice-kpi] playback end hook failed")
     if not _tts_speaking:
         return
 

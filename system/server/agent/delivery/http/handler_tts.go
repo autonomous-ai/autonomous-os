@@ -182,7 +182,7 @@ func (h *AgentHandler) CancelSpeech() {
 	}
 }
 
-// realtimeSupersedesMainReply gates CancelSpeechForNewerTurn. An isolated policy
+// RealtimeSupersedesMainReply gates CancelSpeechForNewerTurn. An isolated policy
 // switch, mirroring HAL's HAL_REALTIME_AI_REJECT_FILTER: unlike the physical
 // click, this mark is stamped on the system's own judgement that the user has
 // moved on, so there has to be a way to change the behaviour on a running
@@ -193,7 +193,9 @@ func (h *AgentHandler) CancelSpeech() {
 // heard of this switch gets — lamp, but also intern-v2, reachy-mini, and any
 // body with no .env at all — and this behaviour has not run on real hardware
 // yet. Defaulting on would hand it to all of them without anyone choosing it.
-func realtimeSupersedesMainReply() bool {
+// Exported so tracking can stamp the policy state on every event (the KPI for
+// superseded replies is meaningless without knowing whether this is on).
+func RealtimeSupersedesMainReply() bool {
 	v := strings.ToLower(strings.TrimSpace(os.Getenv("OS_REALTIME_SUPERSEDES_MAIN_REPLY")))
 	return v == "1" || v == "true"
 }
@@ -214,7 +216,7 @@ func realtimeSupersedesMainReply() bool {
 // armed reproduces exactly what the click had to fix — the device answers the
 // new question, then says "one moment" about the old one and falls silent.
 func (h *AgentHandler) CancelSpeechForNewerTurn() {
-	if !realtimeSupersedesMainReply() {
+	if !RealtimeSupersedesMainReply() {
 		return
 	}
 	now := time.Now().UnixMilli()

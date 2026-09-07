@@ -13,6 +13,7 @@ from hal.drivers.voice._internal.realtime_turn import (
     should_drop_downstream_turn,
 )
 from hal.drivers.voice.speech_emotion.constants import UNKNOWN_USER_LABEL
+from hal.tracking import voice_kpi
 
 logger = logging.getLogger("hal.voice")
 
@@ -93,6 +94,7 @@ def dispatch_turn(
     rt,
     event_type_override: str | None = None,
     identity=None,
+    interaction_id: str = "",
 ):
     """Identify the speaker, send the turn to the OS server, and submit SER.
 
@@ -160,6 +162,18 @@ def dispatch_turn(
         combined[:80] if combined else "(empty)",
     )
 
+    # Voice KPI: record where this turn went, and exclude the ones that are
+    # not a missed-response question at all (noise, a turn the model rejected
+    # as not-for-us, nothing said). Excluded interactions are still reported,
+    # with the reason — see hal/tracking/voice_kpi.py.
+    voice_kpi.set_route(interaction_id, rt.route, event_type)
+    if rt.route == ROUTE_NOISE_DROPPED:
+        voice_kpi.exclude(interaction_id, voice_kpi.EXCL_REJECTED_NOISE)
+    elif dropped:
+        voice_kpi.exclude(interaction_id, voice_kpi.EXCL_REJECTED_NON_USER)
+    elif not combined:
+        voice_kpi.exclude(interaction_id, voice_kpi.EXCL_NO_TRANSCRIPT)
+
     if combined and not dropped:
         # Reuse the prepass result when the realtime path already identified the
         # speaker this turn; otherwise identify now. Never runs recognition twice.
@@ -185,11 +199,19 @@ def dispatch_turn(
             handled_msg = f"[skills: input-branching]\n[HANDLED] {final_msg}\n[REPLY] {reply}"
             if look_snap:
                 handled_msg = f"{handled_msg}\n{look_snap}"
-            sensing_sender.send(
+            handled_run_id = sensing_sender.send(
                 handled_msg,
                 event_type="voice_agent_handled",
                 skip_echo=True,
             )
+            # This POST is a backend notification, not a second user
+            # interaction: it binds to the SAME interaction the realtime agent
+            # just answered, so no extra KPI sample is created. It is also the
+            # automatic-supersession boundary — os-server stamps
+            # autoSpeechWatermarkMs off exactly this event (gated there by
+            # OS_REALTIME_SUPERSEDES_MAIN_REPLY).
+            voice_kpi.bind_run(interaction_id, handled_run_id)
+            voice_kpi.boundary(voice_kpi.BOUNDARY_AUTO_SUPERSEDE, interaction_id)
             _close_look_trace("OK_realtime_handled", answer=reply)
         elif rt.delegated:
             # Delegated — send voice agent's summary + STT transcript to the OS server
@@ -209,10 +231,13 @@ def dispatch_turn(
                 " (+vision-image)" if vision_hint else "",
             )
             if sensing_msg:
-                sensing_sender.send(
-                    sensing_msg,
-                    event_type=event_type,
-                    image_b64=vision_image if vision_hint else "",
+                voice_kpi.bind_run(
+                    interaction_id,
+                    sensing_sender.send(
+                        sensing_msg,
+                        event_type=event_type,
+                        image_b64=vision_image if vision_hint else "",
+                    ),
                 )
         else:
             # Realtime not active, OR it was active but produced no output
@@ -224,10 +249,13 @@ def dispatch_turn(
             if look_snap:
                 fallback_msg = f"{fallback_msg}\n{look_snap}"
             _close_look_trace("OK_fallback")
-            sensing_sender.send(
-                fallback_msg,
-                event_type=event_type,
-                image_b64=vision_image if vision_hint else "",
+            voice_kpi.bind_run(
+                interaction_id,
+                sensing_sender.send(
+                    fallback_msg,
+                    event_type=event_type,
+                    image_b64=vision_image if vision_hint else "",
+                ),
             )
     elif combined:
         if rt.route == ROUTE_NOISE_DROPPED:
