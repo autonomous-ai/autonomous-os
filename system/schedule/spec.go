@@ -70,7 +70,20 @@ type Spec struct {
 
 	// Time is the wall-clock fire time "HH:MM" (24h), evaluated in the tz
 	// passed to NextRun. Used by daily/weekly/monthly.
+	//
+	// The backend keeps this equal to Times[0]. Firmware predating Times reads
+	// only this, which is why a multi-time schedule degrades to a single daily
+	// fire on an old device rather than failing — and why nothing here may
+	// stop honouring it.
 	Time string `json:"time,omitempty"`
+
+	// Times is every wall-clock fire time in a day for daily/weekly/monthly.
+	// A weekly with two times and three days fires 6x a week: the cross
+	// product, as cron's hour/day fields compose.
+	//
+	// Empty on every schedule stored before this field, which is why readers
+	// go through effectiveTimes rather than touching it directly.
+	Times []string `json:"times,omitempty"`
 
 	// EveryMs is the gap for "interval" schedules, in MILLISECONDS — the
 	// backend sends milliseconds (canonical shape per controller ruling after
@@ -163,22 +176,61 @@ func parseTime(hhmm string) (hour, minute int, ok bool) {
 // (fall-back overlap) wall-clock time resolve to exactly ONE instant per
 // calendar day: the stdlib normalizes it, we never scan through both
 // candidate offsets ourselves.
-func (s Spec) nextDaily(after time.Time, tz *time.Location) (time.Time, bool) {
-	h, m, ok := parseTime(s.Time)
-	if !ok {
-		return time.Time{}, false
+// effectiveTimes is every "HH:MM" this schedule fires at. Times when the
+// backend sent a list, else the single Time — a schedule stored before Times
+// existed carries only the latter and must keep behaving identically.
+func (s Spec) effectiveTimes() []string {
+	if len(s.Times) > 0 {
+		return s.Times
 	}
-	local := after.In(tz)
-	// dayOffset=1 (tomorrow at HH:MM) is always strictly after `after`, so this
-	// loop always terminates by then; the explicit bound just avoids an
-	// unbounded loop rather than relying on that always being true.
-	for dayOffset := 0; dayOffset <= 1; dayOffset++ {
-		candidate := time.Date(local.Year(), local.Month(), local.Day()+dayOffset, h, m, 0, 0, tz)
-		if candidate.After(after) {
-			return candidate, true
+	if s.Time != "" {
+		return []string{s.Time}
+	}
+	return nil
+}
+
+// earliestAcross runs next for each effective time and returns the soonest
+// result. This is what turns each single-time cadence below into a multi-time
+// one WITHOUT touching its wall-clock arithmetic: the DST handling, the
+// weekday matching and the short-month clamping all stay exactly as they were,
+// and only the set of candidates widens.
+//
+// An unparseable entry is skipped rather than failing the whole schedule: one
+// bad time should cost that occurrence, not silence a task that has three
+// other valid ones. The BFF rejects malformed times long before here.
+func (s Spec) earliestAcross(next func(h, m int) (time.Time, bool)) (time.Time, bool) {
+	var best time.Time
+	found := false
+	for _, raw := range s.effectiveTimes() {
+		h, m, ok := parseTime(raw)
+		if !ok {
+			continue
+		}
+		candidate, ok := next(h, m)
+		if !ok {
+			continue
+		}
+		if !found || candidate.Before(best) {
+			best, found = candidate, true
 		}
 	}
-	return time.Time{}, false
+	return best, found
+}
+
+func (s Spec) nextDaily(after time.Time, tz *time.Location) (time.Time, bool) {
+	return s.earliestAcross(func(h, m int) (time.Time, bool) {
+		local := after.In(tz)
+		// dayOffset=1 (tomorrow at HH:MM) is always strictly after `after`, so this
+		// loop always terminates by then; the explicit bound just avoids an
+		// unbounded loop rather than relying on that always being true.
+		for dayOffset := 0; dayOffset <= 1; dayOffset++ {
+			candidate := time.Date(local.Year(), local.Month(), local.Day()+dayOffset, h, m, 0, 0, tz)
+			if candidate.After(after) {
+				return candidate, true
+			}
+		}
+		return time.Time{}, false
+	})
 }
 
 // normalizeWeekday maps a wire `days` value to time.Weekday. The canonical
@@ -199,25 +251,23 @@ func (s Spec) nextWeekly(after time.Time, tz *time.Location) (time.Time, bool) {
 	if len(s.Days) == 0 {
 		return time.Time{}, false
 	}
-	h, m, ok := parseTime(s.Time)
-	if !ok {
-		return time.Time{}, false
-	}
 	wanted := make(map[time.Weekday]bool, len(s.Days))
 	for _, d := range s.Days {
 		wanted[normalizeWeekday(d)] = true
 	}
-	local := after.In(tz)
-	for dayOffset := 0; dayOffset <= 7; dayOffset++ {
-		candidate := time.Date(local.Year(), local.Month(), local.Day()+dayOffset, h, m, 0, 0, tz)
-		if !wanted[candidate.Weekday()] {
-			continue
+	return s.earliestAcross(func(h, m int) (time.Time, bool) {
+		local := after.In(tz)
+		for dayOffset := 0; dayOffset <= 7; dayOffset++ {
+			candidate := time.Date(local.Year(), local.Month(), local.Day()+dayOffset, h, m, 0, 0, tz)
+			if !wanted[candidate.Weekday()] {
+				continue
+			}
+			if candidate.After(after) {
+				return candidate, true
+			}
 		}
-		if candidate.After(after) {
-			return candidate, true
-		}
-	}
-	return time.Time{}, false
+		return time.Time{}, false
+	})
 }
 
 // lastDayOfMonth returns how many days `month` has in `year`. Day 0 of the
@@ -234,26 +284,24 @@ func (s Spec) nextMonthly(after time.Time, tz *time.Location) (time.Time, bool) 
 	if s.DayOfMonth < 1 || s.DayOfMonth > 31 {
 		return time.Time{}, false
 	}
-	h, m, ok := parseTime(s.Time)
-	if !ok {
+	return s.earliestAcross(func(h, m int) (time.Time, bool) {
+		local := after.In(tz)
+		year, month := local.Year(), local.Month()
+		for i := 0; i < 13; i++ {
+			total := int(month) - 1 + i
+			y := year + total/12
+			mo := time.Month(total%12 + 1)
+			day := s.DayOfMonth
+			if last := lastDayOfMonth(y, mo); day > last {
+				day = last // clamp: day_of_month=31 in February -> the 28th/29th
+			}
+			candidate := time.Date(y, mo, day, h, m, 0, 0, tz)
+			if candidate.After(after) {
+				return candidate, true
+			}
+		}
 		return time.Time{}, false
-	}
-	local := after.In(tz)
-	year, month := local.Year(), local.Month()
-	for i := 0; i < 13; i++ {
-		total := int(month) - 1 + i
-		y := year + total/12
-		mo := time.Month(total%12 + 1)
-		day := s.DayOfMonth
-		if last := lastDayOfMonth(y, mo); day > last {
-			day = last // clamp: day_of_month=31 in February -> the 28th/29th
-		}
-		candidate := time.Date(y, mo, day, h, m, 0, 0, tz)
-		if candidate.After(after) {
-			return candidate, true
-		}
-	}
-	return time.Time{}, false
+	})
 }
 
 // minInterval floors "interval" schedules. The device is the LAST line of
@@ -301,6 +349,16 @@ func (s Spec) nextOnce(after time.Time) (time.Time, bool) {
 // function used to return a constant ~-5m for every input (CRITICAL finding
 // from the phase-5 review). Reducing the span to whole seconds (600) before
 // the modulo actually exercises the hash's range.
+// Deliberately keyed on device+schedule only, NOT on the individual time: a
+// multi-time schedule shifts all of its occurrences by the SAME offset.
+//
+// That is correct, not an oversight. Jitter exists to stop a fleet firing at
+// 09:00:00 together, and the offset already differs per device, so the herd is
+// spread either way. Within one device a shared offset preserves the spacing
+// the user asked for (09:00/13:00/17:00 stays four hours apart) and keeps
+// DejitterAnchor reversible — a per-time key could not be reversed, because
+// the stored NextRunAt does not record which time produced it, so the runner
+// would have to guess before it could compute the following occurrence.
 func JitterOffset(deviceID, scheduleID string) time.Duration {
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(deviceID + "\x00" + scheduleID))

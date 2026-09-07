@@ -2,7 +2,7 @@ import { useState } from "react";
 import { C } from "@/components/setup/shared";
 import { validateDraft } from "./scheduleDraft";
 import type { ScheduleDraft, ScheduleRepeat } from "./scheduleDraft";
-import { MAX_SPEAK_CHARS } from "@/lib/api";
+import { MAX_SPEAK_CHARS, MAX_TIMES_PER_SCHEDULE } from "@/lib/api";
 import type { ScheduleKind } from "@/lib/api";
 
 // The create/edit form for a scheduled task on the device itself.
@@ -35,6 +35,12 @@ const inputStyle: React.CSSProperties = {
   outline: "none", boxSizing: "border-box",
 };
 
+const smallBtnStyle: React.CSSProperties = {
+  padding: "6px 10px", borderRadius: 7, fontSize: 12,
+  background: "transparent", border: `1px solid ${C.border}`, color: C.textDim,
+  cursor: "pointer",
+};
+
 const labelStyle: React.CSSProperties = {
   fontSize: 11, fontWeight: 600, color: C.textDim, marginBottom: 4, display: "block",
 };
@@ -59,6 +65,25 @@ export function ScheduleEditor({
 
   const set = <K extends keyof ScheduleDraft>(key: K, value: ScheduleDraft[K]) =>
     setDraft((d) => ({ ...d, [key]: value }));
+
+  const setTimeAt = (i: number, value: string) =>
+    setDraft((d) => ({ ...d, times: d.times.map((t, idx) => (idx === i ? value : t)) }));
+
+  const removeTimeAt = (i: number) =>
+    setDraft((d) => ({ ...d, times: d.times.filter((_, idx) => idx !== i) }));
+
+  // Seeds an hour after the last row, so adding several does not pile up
+  // duplicates the user then has to correct one by one.
+  const addTime = () =>
+    setDraft((d) => {
+      const last = d.times[d.times.length - 1] ?? "08:00";
+      const [h, m] = last.split(":").map(Number);
+      const next = `${String((Number.isFinite(h) ? h + 1 : 9) % 24).padStart(2, "0")}:${String(
+        Number.isFinite(m) ? m : 0,
+      ).padStart(2, "0")}`;
+      if (d.times.includes(next)) return d;
+      return { ...d, times: [...d.times, next] };
+    });
 
   const toggleDay = (day: number) =>
     setDraft((d) => ({
@@ -133,14 +158,29 @@ export function ScheduleEditor({
         </div>
 
         {["daily", "weekly", "monthly"].includes(draft.repeat) && (
-          <div style={{ flex: "0 0 120px" }}>
-            <label style={labelStyle}>Time</label>
-            <input
-              type="time"
-              style={inputStyle}
-              value={draft.time}
-              onChange={(e) => set("time", e.target.value)}
-            />
+          <div style={{ flex: "1 1 200px" }}>
+            <label style={labelStyle}>{draft.times.length === 1 ? "Time" : "Times"}</label>
+            {draft.times.map((t, i) => (
+              <div key={i} style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+                <input
+                  type="time"
+                  style={{ ...inputStyle, flex: "0 0 120px" }}
+                  value={t}
+                  onChange={(e) => setTimeAt(i, e.target.value)}
+                />
+                {/* No remove on the last row: a cadence with no time cannot fire. */}
+                {draft.times.length > 1 && (
+                  <button type="button" style={smallBtnStyle} onClick={() => removeTimeAt(i)}>
+                    Remove
+                  </button>
+                )}
+              </div>
+            ))}
+            {draft.times.length < MAX_TIMES_PER_SCHEDULE && (
+              <button type="button" style={smallBtnStyle} onClick={addTime}>
+                + Add time
+              </button>
+            )}
           </div>
         )}
 
