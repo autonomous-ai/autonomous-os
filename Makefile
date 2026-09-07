@@ -52,6 +52,7 @@ os-test:
 #   make sim        HAL on :5001
 #   make codex-dev  codex bridge on $(CODEX_PORT)
 #   make os-dev     API on :5000
+# `make os-dev-all` runs the last two in one terminal (bridge in the background).
 # The runtime itself (codex CLI, its skills, AGENTS.md) is expected to be
 # installed already — nothing here provisions it.
 OS_STATE_DIR     ?= $(HOME)/.autonomous-os
@@ -92,7 +93,7 @@ OS_DEV_ENV = \
 	OS_AGENT_BRIDGE_LOG=$(OS_AGENT_BRIDGE_LOG) \
 	OS_LOG_FILE=$(OS_LOG_FILE)
 
-.PHONY: os-dev os-dev-build os-dev-seed codex-dev
+.PHONY: os-dev os-dev-all os-dev-build os-dev-seed os-dev-config codex-dev
 
 os-dev-build:
 	@mkdir -p $(OS_STATE_DIR)
@@ -101,11 +102,28 @@ os-dev-build:
 os-dev-seed:
 	@bash scripts/dev/os-dev-seed.sh $(OS_STATE_DIR) $(DEVICE_TYPE) $(OS_AGENT_RUNTIME) $(CODEX_HOME)
 
+# Config only, no build, no server: create the file (from the template on a
+# fresh machine) and hand the dev its path to edit. `make os-dev` runs the same
+# seed step anyway — this is for doing it first, before touching a terminal.
+os-dev-config: os-dev-seed
+	@echo "edit it: $${EDITOR:-nano} $(OS_STATE_DIR)/config/config.json"
+
 # cd into the state dir: config.json is resolved relative to the cwd, exactly as
 # systemd's WorkingDirectory=/root does it on the board.
 os-dev: os-dev-build os-dev-seed
 	@echo "os-server: http://127.0.0.1:5000/api/health/live (runtime=$(OS_AGENT_RUNTIME))"
 	cd $(OS_STATE_DIR) && $(OS_DEV_ENV) ./os-server
+
+# Bridge + API in one terminal. The bridge runs in the background — its output
+# goes only to $(OS_AGENT_BRIDGE_LOG) — and is killed when os-server exits. Use
+# the two separate targets when you want the bridge's output live.
+os-dev-all: os-dev-build os-dev-seed
+	@test -n "$(CODEX_BIN)" || { echo "codex CLI not found on PATH — set CODEX_BIN=<path>"; exit 1; }
+	@echo "codex bridge: ws://127.0.0.1:$(CODEX_PORT)/codex/ws/ (log: $(OS_AGENT_BRIDGE_LOG))"
+	@echo "os-server: http://127.0.0.1:5000/api/health/live (runtime=$(OS_AGENT_RUNTIME))"
+	@cd $(OS_STATE_DIR) && { $(OS_DEV_ENV) CODEX_BIN=$(CODEX_BIN) ./os-server codex-gatewayd > $(OS_AGENT_BRIDGE_LOG) 2>&1 & \
+	  bridge=$$!; trap 'kill $$bridge 2>/dev/null' EXIT INT TERM; \
+	  $(OS_DEV_ENV) ./os-server; }
 
 codex-dev: os-dev-build
 	@test -n "$(CODEX_BIN)" || { echo "codex CLI not found on PATH — set CODEX_BIN=<path>"; exit 1; }

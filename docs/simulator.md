@@ -36,32 +36,35 @@ what makes the tested binary the shipped binary.
 
 **Only `codex` works off-device.** Other runtimes have no `*-dev` target.
 
-## Step 2 — Copy the config template
+## Step 2 — Create the config
 
 ```bash
-mkdir -p ~/.autonomous-os/config
-cp scripts/dev/config.example.json ~/.autonomous-os/config/config.json
-chmod 600 ~/.autonomous-os/config/config.json
+make os-dev-config
 ```
+
+It copies the template on a fresh machine, fills in everything a laptop run can
+infer (`llm_base_url`, `llm_model`, `admin_password_hash`), leaves an existing
+file's values alone, and prints the path to edit. `make os-dev` runs the same
+seed step, so this is only for doing it up front.
 
 ## Step 3 — Fill in the config
 
 ```bash
-$EDITOR ~/.autonomous-os/config/config.json
+nano ~/.autonomous-os/config/config.json   # only llm_api_key is left to you
 ```
 
 ### Required
 
 | Key | Value | Missing → |
 |---|---|---|
-| `llm_api_key` | Your provider key | No TTS, no STT, no Gemini Live, no image description. The agent still answers text |
-| `llm_base_url` | OpenAI-compatible base, e.g. `https://…/api/v1/ai/v1` | Same as above |
+| `llm_api_key` | Your provider key | No TTS, no STT, no Gemini Live, no image description — **and the web UI bounces to `/setup`**: `adminAuthMiddleware` (`system/server/middleware.go`) falls back to this key as the bearer, answers 503 without it, and `AuthGate` reads 503 as "never set up". The setup wizard cannot finish off-device either (no `mac`, no `iw`), so fill the key in |
+| `llm_base_url` | Leave empty — `os-dev-seed.sh` fills in `https://campaign-api.autonomous.ai/api/v1/ai/v1` when it is blank. Set another OpenAI-compatible base to override | Nothing — it is defaulted |
 
 ### Required only for the web UI (`make web-dev`)
 
 | Key | Value |
 |---|---|
-| `admin_password_hash` | **bcrypt hash** (cost 10) of your login password — not the password |
+| `admin_password_hash` | Leave empty — `os-dev-seed.sh` fills in the bcrypt hash of `autonomous` when it is blank. Set your own hash to override (see *Setting your own password*) |
 | `session_secret` | Leave empty — os-server writes a random one on first login (`system/server/session/session.go`) |
 
 ### Optional
@@ -114,6 +117,10 @@ Rules:
 - macOS asks for **Microphone** and **Camera** on the first `SIM_MEDIA=host` run.
   Grant them, then re-run `make sim`.
 - Drop `SIM_MEDIA=host` if you do not need voice — the stack still runs, silently.
+- `make os-dev-all CODEX_PORT=18892` replaces terminals 2 and 3: it starts the
+  bridge in the background and os-server in the foreground, and kills the bridge
+  when os-server exits. The bridge's output then goes only to
+  `$OS_STATE_DIR/codex-gatewayd.log` — use the two separate targets to watch it live.
 
 ## Step 5 — Verify
 
@@ -176,9 +183,11 @@ normally run. It touches only the state dir, never starts a process:
 
 | It does | It does not |
 |---|---|
-| Refuses to continue if `config.json` is missing, printing the `cp` command | Create or overwrite `config.json` — that file is yours |
+| Creates `config.json` from `config.example.json` when it is missing | Overwrite an existing `config.json` — the values in it are yours |
 | Rewrites `device_type`, `agent_runtime`, `set_up_completed` in it | Touch any other key |
-| Warns about empty `llm_api_key` / `admin_password_hash` | — |
+| Fills a blank `admin_password_hash` with the hash of `autonomous` | Overwrite a hash that is already set |
+| Fills a blank `llm_base_url` with `https://campaign-api.autonomous.ai/api/v1/ai/v1` and a blank `llm_model` with `Auto-AI` | Overwrite a value that is already set |
+| Warns about an empty `llm_api_key` | — |
 | Seeds `config/bootstrap.json` (once) so skills can download | — |
 | Backs up an existing `config.toml` to `config.toml.pre-os-dev` (once) | — |
 
@@ -325,13 +334,16 @@ unchanged.
 > **Vite binds `[::1]` only** — `127.0.0.1:5173` is refused and looks like the
 > server never started. Use `localhost`.
 
-Log in with the password whose bcrypt hash is in `admin_password_hash`.
+Log in with the password whose bcrypt hash is in `admin_password_hash` — off
+device that is `autonomous` unless you set your own, since `os-dev-seed.sh`
+fills a blank hash in.
 Alternatively append `?llm_api_key=<the key in config.json>` — but note this
 misses on the *first* load of a fresh tab (`api.ts` initialises its token from
 `sessionStorage` at module load, and `AuthGate`'s effect runs before `App`'s
 `useBearerFromQuery`), so navigate to `/monitor` a second time in the same tab.
 
-There is no third way: an empty `admin_password_hash` is not an open door.
+There is no third way: an empty `admin_password_hash` is not an open door — it
+is why `os-dev-seed.sh` defaults one rather than leaving it blank.
 `VerifyAdminPassword` (`system/device/config_update.go`) refuses outright when
 no hash is set, and it refuses off-device exactly as it does on a board — the
 simulator runs the shipped binary, so it has no auth bypass to enable.

@@ -36,18 +36,21 @@ là thứ khiến binary được test *chính là* binary được ship.
 
 **Chỉ `codex` chạy được off-device.** Các runtime khác không có target `*-dev`.
 
-## Bước 2 — Chép file config mẫu
+## Bước 2 — Tạo config
 
 ```bash
-mkdir -p ~/.autonomous-os/config
-cp scripts/dev/config.example.json ~/.autonomous-os/config/config.json
-chmod 600 ~/.autonomous-os/config/config.json
+make os-dev-config
 ```
+
+Máy mới thì nó chép từ template, điền sẵn những gì suy ra được (`llm_base_url`,
+`llm_model`, `admin_password_hash`), không đụng giá trị đã có trong file cũ, rồi
+in ra đường dẫn cần sửa. `make os-dev` cũng chạy đúng bước seed này — target
+riêng chỉ để làm trước.
 
 ## Bước 3 — Điền config
 
 ```bash
-$EDITOR ~/.autonomous-os/config/config.json
+nano ~/.autonomous-os/config/config.json   # chỉ còn llm_api_key phải tự điền
 ```
 
 ### Bắt buộc
@@ -55,13 +58,13 @@ $EDITOR ~/.autonomous-os/config/config.json
 | Key | Giá trị | Thiếu thì |
 |---|---|---|
 | `llm_api_key` | Key của provider | Không TTS, không STT, không Gemini Live, không mô tả ảnh. Agent vẫn trả lời text |
-| `llm_base_url` | Base OpenAI-compatible, ví dụ `https://…/api/v1/ai/v1` | Như trên |
+| `llm_base_url` | Để trống — `os-dev-seed.sh` điền `https://campaign-api.autonomous.ai/api/v1/ai/v1` khi key này rỗng. Muốn base OpenAI-compatible khác thì tự đặt | Không sao — nó được điền sẵn |
 
 ### Chỉ bắt buộc nếu dùng web UI (`make web-dev`)
 
 | Key | Giá trị |
 |---|---|
-| `admin_password_hash` | **bcrypt hash** (cost 10) của mật khẩu đăng nhập — không phải mật khẩu thô |
+| `admin_password_hash` | Để trống — `os-dev-seed.sh` tự điền bcrypt hash của `autonomous` khi key này rỗng. Muốn khác thì đặt hash của mình (xem *Đặt mật khẩu của riêng mình*) |
 | `session_secret` | Để trống — os-server tự ghi chuỗi ngẫu nhiên ở lần đăng nhập đầu (`system/server/session/session.go`) |
 
 ### Tuỳ chọn
@@ -115,6 +118,10 @@ Quy tắc:
 - Lần đầu chạy `SIM_MEDIA=host`, macOS sẽ hỏi quyền **Microphone** và **Camera**.
   Cấp xong phải chạy lại `make sim`.
 - Không cần giọng nói thì bỏ `SIM_MEDIA=host` — stack vẫn chạy, chỉ im lặng.
+- `make os-dev-all CODEX_PORT=18892` thay cho terminal 2 và 3: chạy bridge ở nền
+  và os-server ở foreground, os-server thoát thì bridge bị kill theo. Khi đó log
+  của bridge chỉ nằm trong `$OS_STATE_DIR/codex-gatewayd.log` — muốn xem trực
+  tiếp thì dùng hai target riêng.
 
 ## Bước 5 — Kiểm tra
 
@@ -177,9 +184,11 @@ trong lúc bình thường. Nó chỉ đụng state dir, không khởi động p
 
 | Nó làm | Nó KHÔNG làm |
 |---|---|
-| Dừng lại nếu thiếu `config.json`, in ra lệnh `cp` cần chạy | Tạo hay ghi đè `config.json` — file đó là của anh |
+| Tạo `config.json` từ `config.example.json` khi chưa có | Ghi đè `config.json` đã tồn tại — giá trị trong đó là của anh |
 | Ghi lại `device_type`, `agent_runtime`, `set_up_completed` trong đó | Đụng bất kỳ key nào khác |
-| Cảnh báo khi `llm_api_key` / `admin_password_hash` còn trống | — |
+| Điền hash của `autonomous` khi `admin_password_hash` còn trống | Ghi đè hash đã có sẵn |
+| Điền `https://campaign-api.autonomous.ai/api/v1/ai/v1` cho `llm_base_url` và `Auto-AI` cho `llm_model` khi chúng còn trống | Ghi đè giá trị đã có sẵn |
+| Cảnh báo khi `llm_api_key` còn trống | — |
 | Seed `config/bootstrap.json` (một lần) để skill tải được | — |
 | Backup `config.toml` có sẵn thành `config.toml.pre-os-dev` (một lần) | — |
 
@@ -319,13 +328,16 @@ gì.
 > **Vite chỉ bind `[::1]`** — `127.0.0.1:5173` bị từ chối và trông như server chưa
 > chạy. Dùng `localhost`.
 
-Đăng nhập bằng mật khẩu có bcrypt hash nằm trong `admin_password_hash`. Hoặc thêm
+Đăng nhập bằng mật khẩu có bcrypt hash nằm trong `admin_password_hash` — ngoài
+thiết bị mặc định là `autonomous` (do `os-dev-seed.sh` điền vào hash rỗng), trừ
+khi anh tự đặt hash khác. Hoặc thêm
 `?llm_api_key=<key trong config.json>` — nhưng lưu ý cách này **hụt ở lần load ĐẦU
 trên tab mới** (`api.ts` khởi tạo token từ `sessionStorage` lúc load module, mà
 effect của `AuthGate` chạy trước `useBearerFromQuery` của `App`), nên vào lại
 `/monitor` lần hai trong cùng tab.
 
-Không có cách thứ ba: `admin_password_hash` rỗng **không** phải là cửa mở.
+Không có cách thứ ba: `admin_password_hash` rỗng **không** phải là cửa mở — đó
+là lý do `os-dev-seed.sh` điền sẵn một hash thay vì để trống.
 `VerifyAdminPassword` (`system/device/config_update.go`) từ chối thẳng khi chưa
 đặt hash, và nó từ chối ngoài thiết bị y như trên board — simulator chạy đúng
 binary được ship nên không có đường tắt auth nào để bật.
