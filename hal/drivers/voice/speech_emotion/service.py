@@ -65,6 +65,10 @@ from hal.drivers.voice.speech_emotion.constants import (
     SENSING_EVENT_TYPE,
     SpeechEmotionLabel
 )
+from hal.drivers.voice.speech_emotion.debug_tracer import (  # SER-DEBUG
+    audio_stats,
+    tracer,
+)
 from hal.drivers.voice.speech_emotion.emotion2vec import Emotion2VecRecognizer
 from hal.drivers.voice.speech_emotion.utils import (
     bucket_for,
@@ -222,19 +226,23 @@ class SpeechEmotionService:
         )
         if not self.available:
             logger.info("[speech_emotion] DROP submit — service unavailable")
+            self._debug_submit_drop("service-unavailable", user, wav_bytes, duration_s)
             return
         norm_user = normalize_label(user)
         if not norm_user:
             logger.info("[speech_emotion] DROP submit — user normalized to empty")
+            self._debug_submit_drop("empty-user", user, wav_bytes, duration_s)
             return
         if not wav_bytes:
             logger.info("[speech_emotion] DROP submit — wav_bytes empty")
+            self._debug_submit_drop("empty-wav", norm_user, wav_bytes, duration_s)
             return
         if duration_s < self._min_audio_s:
             logger.info(
                 "[speech_emotion] DROP submit — duration=%.2fs < min=%.2fs",
                 duration_s, self._min_audio_s,
             )
+            self._debug_submit_drop("too-short", norm_user, wav_bytes, duration_s)
             return
 
         job = _Job(user=norm_user, wav_bytes=wav_bytes, duration_s=duration_s)
@@ -249,6 +257,33 @@ class SpeechEmotionService:
                 "[speech_emotion] DROP submit — worker queue full (size=%d)",
                 self._jobs.qsize(),
             )
+            self._debug_submit_drop("queue-full", norm_user, wav_bytes, duration_s)
+
+    def _debug_submit_drop(  # SER-DEBUG (remove before deploy)
+        self, reason: str, user: str, wav_bytes: bytes, duration_s: float,
+    ) -> None:
+        """SER-DEBUG: trace an utterance rejected before it ever reached the
+        worker. Written one-shot (no stage profile) because nothing was run.
+
+        These drops happen on the CALLER's thread, before any trace call is
+        open, so they cannot ride the thread-local call the worker path uses.
+        """
+        if not tracer.enabled:
+            return
+        tracer.record(
+            "recognize",
+            reason=reason,
+            result={
+                "stage": "submit",
+                "user": user,
+                "submitted_duration_s": round(duration_s, 3),
+                "min_audio_s": self._min_audio_s,
+                "queue_size": self._jobs.qsize(),
+                "available": self.available,
+                "input_audio": audio_stats(wav_bytes),
+            },
+            wavs={"input.wav": wav_bytes} if wav_bytes else None,
+        )
 
     def stop(self) -> None:
         """Signal worker + flush threads to exit. Idempotent."""
@@ -295,8 +330,12 @@ class SpeechEmotionService:
                 break
             try:
                 self._process_job(job)
-            except Exception:
+            except Exception as e:
                 logger.exception("[speech_emotion] worker loop error")
+                # SER-DEBUG: close the open trace so a crash mid-pipeline is
+                # written out instead of being dropped by the next begin().
+                tracer.fail("worker-exception", exception=repr(e))
+                tracer.finish()
         logger.info("[speech_emotion] worker thread EXIT")
 
     def _process_job(self, job: _Job) -> None:
@@ -305,7 +344,24 @@ class SpeechEmotionService:
             "[speech_emotion] worker -> recognize: user=%r duration=%.2fs",
             job.user, job.duration_s,
         )
-        result = self._recognizer.recognize(job.wav_bytes)
+        # SER-DEBUG: open ONE trace for this utterance. The engine adds the
+        # prefilter metrics, the HTTP exchange and the stage timings into the
+        # same call, so a single dir holds the whole path from mic to verdict.
+        if tracer.enabled:
+            tracer.begin(
+                "recognize",
+                stage="worker",
+                user=job.user,
+                submitted_duration_s=round(job.duration_s, 3),
+                input_audio=audio_stats(job.wav_bytes),
+                confidence_thresholds={
+                    "by_label": dict(CONFIDENCE_THRESHOLD_BY_LABEL),
+                    "default": DEFAULT_CONFIDENCE_THRESHOLD,
+                },
+            )
+            tracer.attach("input.wav", job.wav_bytes)
+        with tracer.stage("recognize"):  # SER-DEBUG
+            result = self._recognizer.recognize(job.wav_bytes)
         elapsed = time.time() - t0
         if result is None:
             logger.warning(
@@ -313,6 +369,10 @@ class SpeechEmotionService:
                 "(took %.2fs; check DL backend reachability / response shape)",
                 job.user, elapsed,
             )
+            # SER-DEBUG: fallback reason only — the engine's own fail() call is
+            # more precise and wins (first reason set is kept).
+            tracer.fail("recognizer-returned-none")
+            tracer.finish(verdict="dropped", drop_reason="recognizer-returned-none")
             return
         logger.info(
             "[speech_emotion] recognize OK: user=%r label=%s confidence=%.3f (took %.2fs)",
@@ -320,15 +380,30 @@ class SpeechEmotionService:
         )
         label = SpeechEmotionLabel(normalize_label(result.label))
         label_threshold = threshold_for(label)
+        tracer.note(  # SER-DEBUG
+            label_raw=result.label,
+            label=label.value,
+            confidence=round(result.confidence, 4),
+            label_threshold=label_threshold,
+            bucket=bucket_for(label),
+            is_neutral=is_neutral(label),
+        )
         if result.confidence < label_threshold:
             logger.info(
                 "[speech_emotion] DROP — low confidence: %s %.3f < %.2f",
                 label, result.confidence, label_threshold,
             )
+            # Dir stays <ts>_<label>_<conf>: a low-confidence drop HAS a class,
+            # and the label is exactly what makes the trace worth reading.
+            tracer.finish(  # SER-DEBUG
+                cls=label.value, confidence=result.confidence,
+                verdict="dropped", drop_reason="low-confidence",
+            )
             return
 
         inf_ts = time.time()
-        audio_path = self._persist_wav(job.wav_bytes, job.user, label, inf_ts)
+        with tracer.stage("persist_wav"):  # SER-DEBUG
+            audio_path = self._persist_wav(job.wav_bytes, job.user, label, inf_ts)
         inf = _Inference(
             user=job.user,
             label=label,
@@ -343,6 +418,11 @@ class SpeechEmotionService:
         logger.info(
             "[speech_emotion] BUFFERED — user=%r label=%s conf=%.3f buf_len=%d audio=%s",
             job.user, inf.label, inf.confidence, buf_len, audio_path or "<none>",
+        )
+        tracer.finish(  # SER-DEBUG
+            cls=label.value, confidence=result.confidence,
+            verdict="buffered", buffer_len=buf_len,
+            persisted_audio_path=audio_path or None,
         )
 
     def _persist_wav(
@@ -368,6 +448,7 @@ class SpeechEmotionService:
             logger.warning(
                 "[speech_emotion] persist wav failed (%s): %s", path, e,
             )
+            tracer.note(persist_error=f"{path}: {e}")  # SER-DEBUG
             return ""
         return path
 
@@ -422,12 +503,37 @@ class SpeechEmotionService:
             user, len(inferences),
             ", ".join(inf.label for inf in inferences),
         )
+        # SER-DEBUG: one trace per (user, flush) decision — the recognize dirs
+        # say what each utterance scored, this says what the buffer as a whole
+        # turned into and whether the OS server ever heard about it.
+        if tracer.enabled:
+            tracer.begin(
+                "emit",
+                user=user,
+                flush_ts=cur_ts,
+                dedup_window_s=self._dedup_window_s,
+                flush_s=self._flush_s,
+                samples=[
+                    {
+                        "label": inf.label.value if hasattr(inf.label, "value")
+                        else inf.label,
+                        "confidence": round(inf.confidence, 4),
+                        "duration_s": round(inf.duration_s, 3),
+                        "ts": inf.ts,
+                        "age_s": round(cur_ts - inf.ts, 3),
+                        "audio_path": inf.audio_path or None,
+                    }
+                    for inf in inferences
+                ],
+            )
         non_neutral = [inf for inf in inferences if not is_neutral(inf.label)]
         if not non_neutral:
             logger.info(
                 "[speech_emotion] DROP — %s: all %d samples are neutral/<unk>/other",
                 user, len(inferences),
             )
+            tracer.fail("all-neutral")  # SER-DEBUG
+            tracer.finish(verdict="dropped", drop_reason="all-neutral")
             return
 
         counts = Counter(inf.label for inf in non_neutral)
@@ -443,6 +549,19 @@ class SpeechEmotionService:
             user, dominant_label, avg_confidence, bucket,
             latest_audio_path or "<none>",
         )
+        tracer.note(  # SER-DEBUG
+            label=dominant_label.value,
+            avg_confidence=round(avg_confidence, 4),
+            bucket=bucket,
+            sample_count=len(inferences),
+            non_neutral_count=len(non_neutral),
+            dominant_count=len(dom_inferences),
+            label_counts={
+                (lbl.value if hasattr(lbl, "value") else lbl): n
+                for lbl, n in counts.items()
+            },
+            latest_audio_path=latest_audio_path or None,
+        )
 
         key = (user, bucket)
         with self._lock:
@@ -453,6 +572,13 @@ class SpeechEmotionService:
                     "(last sent %.1fs ago, window=%.1fs)",
                     user, bucket, cur_ts - last_ts, self._dedup_window_s,
                 )
+                # Still named by the label it WOULD have emitted — a dedup drop
+                # is a decision about a real classification, not a failure.
+                tracer.finish(  # SER-DEBUG
+                    cls=dominant_label.value, confidence=avg_confidence,
+                    verdict="dropped", drop_reason="dedup",
+                    dedup_age_s=round(cur_ts - last_ts, 3),
+                )
                 return
             self._last_sent_by_key[key] = cur_ts
             self._sidecar.save(self._last_sent_by_key)
@@ -462,8 +588,13 @@ class SpeechEmotionService:
             "[speech_emotion] EMIT — user=%r message=%r audio=%s",
             user, message, latest_audio_path or "<none>",
         )
-        self._send_to_sensing(
-            message=message, user=user, audio_path=latest_audio_path,
+        with tracer.stage("send_to_sensing"):  # SER-DEBUG
+            self._send_to_sensing(
+                message=message, user=user, audio_path=latest_audio_path,
+            )
+        tracer.finish(  # SER-DEBUG — _send_to_sensing noted the POST outcome
+            cls=dominant_label.value, confidence=avg_confidence,
+            verdict="emitted", message=message,
         )
 
     # --- transport --------------------------------------------------------
@@ -483,6 +614,7 @@ class SpeechEmotionService:
             logger.warning(
                 "[speech_emotion] send_to_sensing skipped — empty sensing_url"
             )
+            tracer.note_section("sensing", {"sent": False, "skipped": "no-url"})  # SER-DEBUG
             return
         payload = {
             "type": SENSING_EVENT_TYPE,
@@ -494,6 +626,10 @@ class SpeechEmotionService:
             "[speech_emotion] POST -> %s payload.user=%r payload.type=%s audio=%s",
             self._sensing_url, user, SENSING_EVENT_TYPE, audio_path or "<none>",
         )
+        tracer.note_section("sensing", {  # SER-DEBUG
+            "url": self._sensing_url,
+            "payload": payload,
+        })
         max_retries = 3
         for attempt in range(1, max_retries + 1):
             try:
@@ -511,9 +647,17 @@ class SpeechEmotionService:
                     "[speech_emotion] OS server unreachable after %d attempts: %s",
                     max_retries, e,
                 )
+                tracer.note_section("sensing", {  # SER-DEBUG
+                    "sent": False, "attempts": attempt,
+                    "error": f"unreachable: {e}",
+                })
                 return
             except requests.RequestException as e:
                 logger.warning("[speech_emotion] OS server POST failed: %s", e)
+                tracer.note_section("sensing", {  # SER-DEBUG
+                    "sent": False, "attempts": attempt,
+                    "error": f"{type(e).__name__}: {e}",
+                })
                 return
 
             if resp.status_code == 503 and attempt < max_retries:
@@ -528,9 +672,16 @@ class SpeechEmotionService:
                     "[speech_emotion] OS server returned %d: %s",
                     resp.status_code, resp.text[:200],
                 )
+                tracer.note_section("sensing", {  # SER-DEBUG
+                    "sent": False, "attempts": attempt,
+                    "status_code": resp.status_code, "body": resp.text[:500],
+                })
                 return
             logger.info(
                 "[speech_emotion] SENT -> OS server 200 OK (attempt=%d): %s",
                 attempt, message,
             )
+            tracer.note_section("sensing", {  # SER-DEBUG
+                "sent": True, "attempts": attempt, "status_code": 200,
+            })
             return
