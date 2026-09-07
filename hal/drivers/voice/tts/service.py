@@ -179,11 +179,15 @@ class _PendingSpeech:
     first delay) and pre-synth time is hidden behind the previous speech's
     playback. Mirrors the tail_producer/tail_q pattern in _speak_sync."""
 
-    __slots__ = ("text", "interruptible", "frame_queue", "failed")
+    __slots__ = ("text", "interruptible", "frame_queue", "failed", "owner")
 
-    def __init__(self, text: str, interruptible: bool):
+    def __init__(self, text: str, interruptible: bool, owner: str = ""):
         self.text = text
         self.interruptible = interruptible
+        # Who queued this segment. The drain plays it on the stream another
+        # request opened, so without carrying it here the audio would be
+        # attributed to whoever happened to own the speaker first.
+        self.owner = owner
         # Producer (pre-synth thread) appends numpy frames as they arrive
         # from the backend; consumer (_drain_pending_queue) writes them to
         # the ALSA stream. None sentinel = producer is done.
@@ -952,7 +956,11 @@ class TTSService:
             # Busy — queue + kick off pre-synth so frames are ready when the
             # current speech ends. We don't try to interrupt segments of the
             # same turn; a newer turn was already handled above.
-            item = _PendingSpeech(text=text, interruptible=interruptible)
+            item = _PendingSpeech(
+                text=text,
+                interruptible=interruptible,
+                owner=f"run:{turn_id}" if turn_id else "",
+            )
             with self._pending_queue_lock:
                 self._pending_queue.append(item)
                 depth = len(self._pending_queue)
@@ -1034,6 +1042,10 @@ class TTSService:
                 continue
             self._last_spoken_text = item.text
             logger.info("Playing pre-synth'd queued speech (streaming): %s", item.text[:80])
+            # Each queued segment is its own playback for measurement: re-arm
+            # the hook under THIS item's owner so it is attributed to the turn
+            # that queued it, not to whoever opened the stream.
+            self._begin_playback(item.owner)
             stream.write(first)
             self._note_audio_written("agent_or_system")
             total += len(first)

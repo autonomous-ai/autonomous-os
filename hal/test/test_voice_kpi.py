@@ -518,3 +518,38 @@ def test_report_does_not_block_the_caller(monkeypatch):
         client.report("voice_kpi_interaction", {"x": 1})
     assert client.stats()["dropped"] >= 1
     assert threading.current_thread() is threading.main_thread()
+
+
+# --- Self-review findings ----------------------------------------------------
+
+def test_evicted_interaction_is_reported_before_being_forgotten(kpi):
+    """Capacity eviction must not make a sample disappear silently."""
+    first = voice_kpi.speech_end("silence_clock")
+    for _ in range(voice_kpi._MAX_TRACKED):
+        kpi.clock.advance(10)
+        voice_kpi.speech_end("silence_clock")
+
+    reported = [e["params"]["interaction_id"] for e in kpi.of(voice_kpi.EVENT_INTERACTION)]
+    assert first in reported
+    assert kpi.of(voice_kpi.EVENT_INTERACTION)[0]["params"]["eviction"] == "tracker_capacity"
+
+
+def test_queued_segment_is_attributed_to_the_turn_that_queued_it(kpi):
+    """A sentence queued behind another turn's speech plays on the stream that
+    turn opened; it must still be credited to its OWN turn."""
+    first = voice_kpi.speech_end("silence_clock")
+    voice_kpi.bind_run(first, "run-first")
+    kpi.clock.advance(500)
+    second = voice_kpi.speech_end("silence_clock")
+    voice_kpi.bind_run(second, "run-second")
+
+    _reply(kpi, "run:run-first")          # stream opened by the first turn
+    voice_kpi.playback_end()
+    kpi.clock.advance(400)
+    _reply(kpi, "run:run-second")         # drained queue segment, own owner
+    kpi.close_all()
+
+    rows = {e["params"]["interaction_id"]: e["params"] for e in kpi.of(voice_kpi.EVENT_INTERACTION)}
+    assert rows[first]["outcome"] == voice_kpi.OUTCOME_ACKED
+    assert rows[second]["outcome"] == voice_kpi.OUTCOME_ACKED
+    assert rows[second]["ack_latency_ms"] == 400

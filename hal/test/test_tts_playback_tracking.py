@@ -119,3 +119,53 @@ def test_begin_playback_rearms_the_hook_for_each_playback(tmp_path, owner):
 
     owners = [f[1] for f in fired if isinstance(f, tuple)]
     assert owners == ["run:first", owner]
+
+
+def _drain_service(writes, fired):
+    """TTSService shell for the queued-segment drain path."""
+    service = object.__new__(TTSService)
+    service._np = np
+    service._stop_event = threading.Event()
+    service._pending_queue_lock = threading.Lock()
+    service._pending_queue = []
+    service._on_playback_audio = lambda owner, kind: fired.append((owner, kind))
+    service._on_playback_done = lambda: None
+    service._audio_written_fired = False
+    service._playback_owner = ""
+    service._last_spoken_text = ""
+    return service
+
+
+def _pending(text, owner):
+    from hal.drivers.voice.tts.service import _PendingSpeech
+
+    item = _PendingSpeech(text=text, interruptible=False, owner=owner)
+    item.frame_queue.put(np.zeros(16, dtype=np.float32))
+    item.frame_queue.put(None)
+    return item
+
+
+def test_queued_segment_reports_its_own_owner_not_the_stream_opener():
+    """A sentence queued behind another turn plays on the stream that turn
+    opened. Without re-arming per item it would be credited to the wrong turn.
+    """
+    writes, fired = [], []
+    service = _drain_service(writes, fired)
+    service._begin_playback("run:first-turn")     # who opened the stream
+    service._audio_written_fired = True           # its own first frame already fired
+    service._pending_queue = [_pending("second turn reply", "run:second-turn")]
+
+    service._drain_pending_queue(_FakeStream(writes))
+
+    assert fired == [("run:second-turn", "agent_or_system")]
+
+
+def test_each_queued_segment_fires_once():
+    writes, fired = [], []
+    service = _drain_service(writes, fired)
+    service._begin_playback("run:a")
+    service._pending_queue = [_pending("one", "run:a"), _pending("two", "run:b")]
+
+    service._drain_pending_queue(_FakeStream(writes))
+
+    assert [owner for owner, _ in fired] == ["run:a", "run:b"]

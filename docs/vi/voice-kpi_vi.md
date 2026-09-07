@@ -38,6 +38,10 @@ queue), filler và playback.
 lời**, không phải interaction mới: nó gắn vào cùng `interaction_id`, nên lượt
 do realtime xử lý chỉ sinh đúng một mẫu KPI-1.
 
+Mỗi **đoạn xếp hàng** của câu trả lời stream là một lần phát được đo riêng: lúc
+drain, hook được arm lại theo owner của chính đoạn đó, vì nó phát trên stream do
+turn nói trước mở ra.
+
 **Chủ sở hữu là tường minh, không đoán.** Mỗi lần phát mang theo owner đã giành
 loa: `run:<turn_id>` cho câu trả lời của agent hoặc filler được arm cho turn đó
 (os-server truyền run id xuống cùng filler, và truyền ngược qua field `owner`
@@ -245,6 +249,9 @@ là hostname thiết bị, `platform` là `device` (xem `system/lib/analytics`).
   `observation_complete = false` và phải báo cáo như coverage loss.
 - **State chỉ nằm trong RAM.** HAL restart thì mất các interaction còn trong
   cửa sổ quan sát; những mẫu đó thiếu chứ không sai.
+- **Tracker giữ tối đa 32 interaction.** Cái cũ bị đẩy ra trước hạn ghi verdict
+  sẽ được báo cáo sớm, gắn cờ `eviction = 'tracker_capacity'`, chứ không bị bỏ
+  im — cửa sổ quan sát của nó bị cắt ngắn.
 - **Mất mát khi gửi được báo cáo, không giấu**: `tracking_dropped_total`,
   `tracking_failed_total`, `hal_dropped_total`, `hal_failed_total` đi kèm mọi event.
 

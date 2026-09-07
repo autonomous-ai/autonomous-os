@@ -184,12 +184,27 @@ def speech_end(method: str, at: float = 0.0) -> str:
         it = _Interaction(iid, at or _now(), method)
         _interactions[iid] = it
         _order.append(iid)
+        evicted = []
         while len(_order) > _MAX_TRACKED:
-            _forget(_order[0])
+            oldest = _order[0]
+            # Report before forgetting: an evicted interaction that never had
+            # its verdict sent would otherwise vanish from the KPI entirely,
+            # which is the one thing this module must never do.
+            if not _interactions[oldest].reported:
+                evicted.append(_interaction_params(_interactions[oldest]))
+                _interactions[oldest].reported = True
+            _forget(oldest)
         it.timer = threading.Timer(ACK_OBSERVE_WINDOW_MS / 1000.0, _close_interaction, args=(iid,))
         it.timer.daemon = True
         it.timer.start()
         _arm_lifetime(it)
+    for params in evicted:
+        params["eviction"] = "tracker_capacity"
+        logger.warning(
+            "[voice-kpi] reporting evicted interaction early (interaction=%s)",
+            params["interaction_id"],
+        )
+        client.report(EVENT_INTERACTION, params, event_id="int-" + params["interaction_id"])
     logger.info("[voice-kpi] speech end (interaction=%s method=%s)", iid, method)
     return iid
 
@@ -223,8 +238,9 @@ def set_route(iid: str, route: str, event_type: str = "") -> None:
         it.route = route
         if event_type:
             it.event_type = event_type
-        if it.reported:
-            _amend(it, "late_route")
+        amendment = _amend_params(it, "late_route") if it.reported else None
+    if amendment:
+        _report_amendment(amendment)
 
 
 def bind_run(iid: str, run_id: str) -> None:
@@ -254,9 +270,10 @@ def mark_failed(iid: str, reason: str) -> None:
         it.failure_reason = reason
         # Nothing will answer it, so it can no longer produce stale speech.
         it.closed = True
-        if it.reported:
-            _amend(it, "late_failure")
-            return
+        amendment = _amend_params(it, "late_failure") if it.reported else None
+    if amendment:
+        _report_amendment(amendment)
+        return
     logger.warning("[voice-kpi] interaction unserved (interaction=%s reason=%s)", iid, reason)
 
 
@@ -270,9 +287,10 @@ def exclude(iid: str, reason: str) -> None:
             return
         it.exclusion_reason = reason
         it.closed = True
-        if it.reported:
-            _amend(it, "late_exclusion")
-            return
+        amendment = _amend_params(it, "late_exclusion") if it.reported else None
+    if amendment:
+        _report_amendment(amendment)
+        return
     logger.info("[voice-kpi] excluded (interaction=%s reason=%s)", iid, reason)
 
 
@@ -556,14 +574,26 @@ def _close_interaction(iid: str) -> None:
     client.report(EVENT_INTERACTION, params, event_id="int-" + iid)
 
 
-def _amend(it: "_Interaction", why: str) -> None:
-    """Emit a corrected verdict for an interaction whose routing or exclusion
-    arrived after its row was already sent. The warehouse keeps both; the
-    amendment wins (see the docs' KPI queries)."""
+def _amend_params(it: "_Interaction", why: str) -> dict:
+    """Build a corrected verdict for an interaction whose routing, failure or
+    exclusion arrived after its row was already sent. The warehouse keeps
+    both; the amendment wins (see the docs' KPI queries).
+
+    Returns the row instead of sending it: the caller holds the tracker lock,
+    and that lock is also taken from the audio thread — reporting under it
+    would put telemetry work on the playback path.
+    """
     params = _interaction_params(it)
     params["amends_event_id"] = it.report_event_id
     params["amendment_reason"] = why
-    logger.info("[voice-kpi] amending reported verdict (interaction=%s why=%s)", it.id, why)
+    return params
+
+
+def _report_amendment(params: dict) -> None:
+    logger.info(
+        "[voice-kpi] amending reported verdict (interaction=%s why=%s)",
+        params["interaction_id"], params["amendment_reason"],
+    )
     client.report(EVENT_INTERACTION, params, event_id="amend-" + client.new_event_id()[:12])
 
 

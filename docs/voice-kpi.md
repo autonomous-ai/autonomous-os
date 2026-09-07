@@ -38,6 +38,10 @@ os-server `runId` returned by `/api/sensing/event`), the main agent's reply
 was already answered**, not a new one: it binds to the same `interaction_id`,
 so a realtime-handled turn produces exactly one KPI-1 sample.
 
+Each **queued segment** of a streamed reply is its own measured playback: the
+drain re-arms the hook under that segment's own owner, because it plays on the
+audio stream whichever turn spoke first had opened.
+
 **Ownership is explicit, never guessed.** Every playback carries the owner
 that claimed the speaker: `run:<turn_id>` for an agent reply or a filler armed
 for that turn (os-server passes the run id down with the filler, and back
@@ -338,6 +342,9 @@ and `platform` is `device` (see `system/lib/analytics`).
   `observation_complete = false` and must be reported as coverage loss.
 - **In-memory state only.** A HAL restart loses interactions still in their
   observation window; those samples are missing rather than wrong.
+- **Tracker capacity is 32 interactions.** An older one evicted before its
+  verdict was due is reported early, flagged `eviction = 'tracker_capacity'`,
+  rather than dropped — its observation window was cut short.
 - **Delivery loss is reported, not hidden**: `tracking_dropped_total`,
   `tracking_failed_total`, `hal_dropped_total`, `hal_failed_total` ride on
   every event.
