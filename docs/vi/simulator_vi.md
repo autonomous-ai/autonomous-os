@@ -534,7 +534,7 @@ cầm credential của một thiết bị đang sống.
 | `bad handshake (status 404)` | `codex-dev` và `os-dev` lệch `CODEX_PORT` |
 | `dial 127.0.0.1:5001: connection refused` | HAL chưa lên |
 | `127.0.0.1:5173` không kết nối được | Vite bind `[::1]` — dùng `localhost:5173` |
-| Nói vào mic không phản ứng | Thiếu `SIM_MEDIA=host`, hoặc macOS chặn microphone. Kiểm `media_reasons` trong `/simulator/state` |
+| Nói vào mic không phản ứng | Thiếu `SIM_MEDIA=host`, hoặc macOS chặn microphone. Kiểm `media_reasons` trong `/simulator/state`. Tên biến là `SIM_MEDIA` — `make sim MEDIA=host` chỉ đặt một biến không ai đọc và make không báo gì, nên phải xác nhận dòng khởi động ghi `media=host` |
 | Voice enroll trả 503 `needs a real microphone` | `SIM_MEDIA=virtual` — enroll từ chối mở mic thật ở chế độ đã hứa là không đụng tới |
 | Voice enroll trả 400 `vad_removed_all` | Clip không có tiếng nói. Đọc to các câu mẫu, gần mic hơn, suốt thời gian đếm ngược |
 | STT nghe sai tên | `flux-general-en` nghe nhầm danh từ riêng; "hi lamp" từng ra "hi lance", và nghe nhầm là **rớt cả lượt trong im lặng**. Các từ wake đã được đẩy làm STT boost term, nhưng vẫn nên nói rõ |

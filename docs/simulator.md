@@ -542,7 +542,7 @@ not carrying a live device's credentials.
 | `bad handshake (status 404)` | `codex-dev` and `os-dev` disagree on `CODEX_PORT` |
 | `dial 127.0.0.1:5001: connection refused` | HAL is not up yet |
 | `127.0.0.1:5173` refuses the connection | Vite binds `[::1]` — use `localhost:5173` |
-| Speaking does nothing | Missing `SIM_MEDIA=host`, or macOS denied the microphone. Check `media_reasons` in `/simulator/state` |
+| Speaking does nothing | Missing `SIM_MEDIA=host`, or macOS denied the microphone. Check `media_reasons` in `/simulator/state`. The variable is `SIM_MEDIA` — `make sim MEDIA=host` sets a variable nothing reads and make says nothing, so confirm the boot line says `media=host` |
 | Voice enroll returns 503 `needs a real microphone` | `SIM_MEDIA=virtual` — enroll refuses to open the host mic in a mode that promises not to |
 | Voice enroll returns 400 `vad_removed_all` | The clip held no speech. Read the phrases aloud, closer to the mic, for the full countdown |
 | STT hears the wrong name | `flux-general-en` mis-hears proper nouns; "hi lamp" has come back as "hi lance", and a miss drops the whole turn silently. Wake terms are sent as STT boost terms, but say the name clearly |
