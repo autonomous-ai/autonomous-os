@@ -29,8 +29,9 @@ là thứ khiến binary được test *chính là* binary được ship.
 | Cần | Kiểm bằng | Nếu thiếu |
 |---|---|---|
 | CLI của agent bạn định chạy | `codex --version` / `claude --version` | Tự cài — không có gì ở đây cài giúp. Chỉ cần CLI của runtime bạn chọn. Nhớ chỗ bạn cài: *Bước 4 §2* nhận thư mục đó làm `CODEX_HOME` / `CLAUDECODE_HOME` |
+| codex auth — **một trong hai** chế độ | `ls $CODEX_HOME/auth.json` | Không bắt buộc. Login ChatGPT (`codex login`) ghi ra `auth.json` có `auth_mode` khác `apikey`, khi đó codex dùng provider built-in. Không có file — hoặc file do `codex login --api-key` ghi — thì là api-key mode: codex chạy bằng `llm_api_key` + `llm_base_url` trong config.json. `runtimes/codex/presync.sh` chọn lại chế độ ở mỗi lần boot |
 | `ffmpeg` | `ffmpeg -version` | Cần cho phát nhạc |
-| `uv` | `uv --version` | Dựng `hal/.venv` cho HAL. `make sim` tự tạo ở lần chạy đầu và sync lại mỗi khi `hal/uv.lock` hoặc `hal/pyproject.toml` mới hơn nó. Nếu lần sync đầu chết khi build `insightface`, xem *insightface build lỗi* bên dưới |
+| `uv` | `uv --version` | Dựng `hal/.venv` cho HAL. `make sim` tự tạo ở lần chạy đầu và sync lại mỗi khi `hal/uv.lock` hoặc `hal/pyproject.toml` mới hơn nó |
 | `node` + `npm` | `node --version` | Chỉ cần cho `make web-dev` |
 
 **`codex` và `claudecode` chạy được off-device.** Chọn bằng `OS_AGENT_RUNTIME`
@@ -38,32 +39,46 @@ trên `make os-dev`; nó được ghi vào `config.json` rồi các lần sau đ
 đó, nên chỉ cần truyền khi đổi backend. Các runtime khác không có target
 `*-dev`.
 
-## Bước 2 — Chép file config mẫu
+## Bước 2 — Tạo config
 
 ```bash
-mkdir -p /tmp/autonomous-os/config
-cp scripts/dev/config.example.json /tmp/autonomous-os/config/config.json
-chmod 600 /tmp/autonomous-os/config/config.json
+make os-dev-config
 ```
+
+Máy mới thì nó chép từ template, điền sẵn những gì suy ra được (`llm_base_url`,
+`llm_model`, `admin_password_hash`), không đụng giá trị đã có trong file cũ, rồi
+in ra đường dẫn cần sửa. `make os-dev` cũng chạy đúng bước seed này — target
+riêng chỉ để làm trước.
 
 ## Bước 3 — Điền config
 
 ```bash
-$EDITOR /tmp/autonomous-os/config/config.json
+nano ~/.autonomous-os/config/config.json   # chỉ còn llm_api_key phải tự điền
 ```
 
 ### Bắt buộc
 
 | Key | Giá trị | Thiếu thì |
 |---|---|---|
-| `llm_api_key` | Key của provider | Không TTS, không STT, không Gemini Live, không mô tả ảnh. Agent vẫn trả lời text |
-| `llm_base_url` | Base OpenAI-compatible, ví dụ `https://…/api/v1/ai/v1` | Như trên |
+`os-dev-seed.sh` ghi sẵn cả ba, nên config mới tạo đã có:
+
+```json
+"llm_api_key": "autonomous_api_key",
+"llm_model": "Auto-AI",
+"llm_base_url": "https://campaign-api.autonomous.ai/api/v1/ai/v1"
+```
+
+| Key | Giá trị | Thiếu thì |
+|---|---|---|
+| `llm_api_key` | **Xin team key thật** — `autonomous_api_key` chỉ là placeholder để web UI vào được, không phải credential chạy được | Không TTS, không STT, không Gemini Live, không mô tả ảnh. Để *rỗng* còn tệ hơn: `adminAuthMiddleware` (`system/server/middleware.go`) fallback dùng chính key này làm bearer, thiếu nó thì trả 503, và `AuthGate` đọc 503 là "chưa từng setup" — web UI đá về `/setup`, mà wizard đó không chạy xong được ngoài thiết bị (không có `mac`, không có `iw`) |
+| `llm_base_url` | Điền sẵn gateway chung. Muốn base OpenAI-compatible khác thì tự đặt | Không sao — nó được điền sẵn |
+| `llm_model` | Điền sẵn `Auto-AI` | Không sao — nó được điền sẵn |
 
 ### Chỉ bắt buộc nếu dùng web UI (`make web-dev`)
 
 | Key | Giá trị |
 |---|---|
-| `admin_password_hash` | **bcrypt hash** (cost 10) của mật khẩu đăng nhập — không phải mật khẩu thô |
+| `admin_password_hash` | Để trống — `os-dev-seed.sh` tự điền bcrypt hash của `autonomous` khi key này rỗng. Muốn khác thì đặt hash của mình (xem *Đặt mật khẩu của riêng mình*) |
 | `session_secret` | Để trống — os-server tự ghi chuỗi ngẫu nhiên ở lần đăng nhập đầu (`system/server/session/session.go`) |
 
 ### Tuỳ chọn
@@ -124,6 +139,11 @@ bên dưới.
 | 2 | Agent runtime gateway | `make <runtime>-dev` | tuỳ runtime | `[<runtime>-gatewayd] listening on ws://…` |
 | 3 | os-server | `make os-dev` | 5000 | `Codex connected` / `Claude Code connected` |
 | 4 | Web UI (tuỳ chọn) | `make web-dev` | 5173 | `VITE … ready` |
+
+`make os-dev-all` gộp §2 và §3 vào một terminal: nó chạy bridge ở nền,
+os-server ở foreground, và kill bridge khi os-server thoát. Output của bridge
+khi đó chỉ đi vào `$OS_STATE_DIR/codex-gatewayd.log`, nên muốn xem trực tiếp
+thì dùng hai target riêng. Target này chỉ dành cho codex.
 
 `OS_AGENT_RUNTIME` chọn backend, và bạn chỉ truyền nó **một lần, cho `make os-dev`**
 (§3). Nó được ghi vào `config.json` rồi các lần sau đọc ngược lại từ đó, nên lựa
@@ -271,7 +291,7 @@ curl -s -X POST :5000/api/sensing/event -H 'Content-Type: application/json' \
   -d '{"type":"voice_command","message":"introduce yourself"}'
 
 # 5. Nói vào mic: "hey lamp, what time is it"
-grep '\[turn\] route=' /tmp/autonomous-sim/log/server.log | tail
+grep '\[turn\] route=' ~/.autonomous-sim/log/server.log | tail
 ```
 
 Mở:
@@ -303,6 +323,8 @@ Nhận trong 5 giây, không cần restart. Giờ `hey lumi` dùng được, son
 | `make codex-dev` | **Chỉ** chạy `os-server codex-gatewayd`: một listener WebSocket loopback, spawn một `codex exec` mỗi lượt | Không onboarding, không presync, **không sync skill** |
 | `make claudecode-dev` | **Chỉ** chạy `os-server claudecode-gatewayd`: một listener WebSocket loopback giữ MỘT tiến trình `claude` thường trú | Không onboarding, không presync, **không sync skill**. Tiến trình con đọc `CLAUDE.md` / `.env` lúc khởi động, nên đổi hai file đó phải restart nó |
 | `make os-dev` | Ba việc theo thứ tự: `os-dev-build` (biên dịch), `os-dev-seed` (chuẩn bị state dir), rồi chạy API — chính nó cũng lo toàn bộ provisioning cho agent: `presync.sh`, seed `AGENTS.md`/`SOUL.md`/`KNOWLEDGE.md`/`HEARTBEAT.md`, `downloadSkills()`, skill watcher | — |
+| `make os-dev-all` | `codex-dev` + `os-dev` trong một terminal: bridge chạy nền, os-server ở foreground, bridge bị kill khi thoát | Chỉ cho codex; output của bridge đi vào file log, không ra terminal |
+| `make os-dev-config` | Chỉ chạy `os-dev-seed` rồi in đường dẫn config để sửa — không build, không chạy server | — |
 | `make web-dev` | Chạy Vite thay vai nginx (os-server không serve HTML) | — |
 
 Workspace trống hoặc agent không có persona thì xem **`os-dev`**, không phải
@@ -315,9 +337,11 @@ trong lúc bình thường. Nó chỉ đụng state dir, không khởi động p
 
 | Nó làm | Nó KHÔNG làm |
 |---|---|
-| Dừng lại nếu thiếu `config.json`, in ra lệnh `cp` cần chạy | Tạo hay ghi đè `config.json` — file đó là của anh |
+| Tạo `config.json` từ `config.example.json` khi chưa có | Ghi đè `config.json` đã tồn tại — giá trị trong đó là của anh |
 | Ghi lại `device_type`, `agent_runtime`, `set_up_completed` trong đó | Đụng bất kỳ key nào khác |
-| Cảnh báo khi `llm_api_key` / `admin_password_hash` còn trống | — |
+| Điền hash của `autonomous` khi `admin_password_hash` còn trống | Ghi đè hash đã có sẵn |
+| Điền `https://campaign-api.autonomous.ai/api/v1/ai/v1` cho `llm_base_url` và `Auto-AI` cho `llm_model` khi chúng còn trống | Ghi đè giá trị đã có sẵn |
+| Cảnh báo khi `llm_api_key` còn trống | — |
 | Seed `config/bootstrap.json` (một lần) để skill tải được | — |
 | Backup `config.toml` có sẵn thành `config.toml.pre-os-dev` (một lần) | — |
 
@@ -329,7 +353,7 @@ khởi động server.
 | | Đường dẫn |
 |---|---|
 | File mẫu (trong repo) | `scripts/dev/config.example.json` |
-| Config đang dùng | `$OS_STATE_DIR/config/config.json` — mặc định `/tmp/autonomous-os/config/config.json` |
+| Config đang dùng | `$OS_STATE_DIR/config/config.json` — mặc định `~/.autonomous-os/config/config.json` |
 | Metadata OTA (tự seed) | `$OS_STATE_DIR/config/bootstrap.json` |
 | Workspace của agent | `$CODEX_HOME/workspace/` |
 
@@ -457,13 +481,16 @@ gì.
 > **Vite chỉ bind `[::1]`** — `127.0.0.1:5173` bị từ chối và trông như server chưa
 > chạy. Dùng `localhost`.
 
-Đăng nhập bằng mật khẩu có bcrypt hash nằm trong `admin_password_hash`. Hoặc thêm
+Đăng nhập bằng mật khẩu có bcrypt hash nằm trong `admin_password_hash` — ngoài
+thiết bị mặc định là `autonomous` (do `os-dev-seed.sh` điền vào hash rỗng), trừ
+khi anh tự đặt hash khác. Hoặc thêm
 `?llm_api_key=<key trong config.json>` — nhưng lưu ý cách này **hụt ở lần load ĐẦU
 trên tab mới** (`api.ts` khởi tạo token từ `sessionStorage` lúc load module, mà
 effect của `AuthGate` chạy trước `useBearerFromQuery` của `App`), nên vào lại
 `/monitor` lần hai trong cùng tab.
 
-Không có cách thứ ba: `admin_password_hash` rỗng **không** phải là cửa mở.
+Không có cách thứ ba: `admin_password_hash` rỗng **không** phải là cửa mở — đó
+là lý do `os-dev-seed.sh` điền sẵn một hash thay vì để trống.
 `VerifyAdminPassword` (`system/device/config_update.go`) từ chối thẳng khi chưa
 đặt hash, và nó từ chối ngoài thiết bị y như trên board — simulator chạy đúng
 binary được ship nên không có đường tắt auth nào để bật.
@@ -586,8 +613,8 @@ tắt.
 |---|---|
 | `DEVICE_TYPE` | `lamp` |
 | `SIM_MEDIA` | `virtual` |
-| `SIM_STATE_DIR` | `/tmp/autonomous-sim` |
-| `OS_STATE_DIR` | `/tmp/autonomous-os` |
+| `SIM_STATE_DIR` | `~/.autonomous-sim` |
+| `OS_STATE_DIR` | `~/.autonomous-os` |
 | `OS_AGENT_RUNTIME` | `agent_runtime` trong `config.json`, không có thì `codex` |
 | `CODEX_HOME` | `$HOME/.codex` |
 | `CODEX_PORT` | `18792` |
@@ -669,7 +696,7 @@ cầm credential của một thiết bị đang sống.
 | `bad handshake (status 404)` | `*-dev` và `os-dev` lệch `CODEX_PORT` / `CLAUDECODE_PORT` |
 | `dial 127.0.0.1:5001: connection refused` | HAL chưa lên |
 | `127.0.0.1:5173` không kết nối được | Vite bind `[::1]` — dùng `localhost:5173` |
-| Nói vào mic không phản ứng | Thiếu `SIM_MEDIA=host`, hoặc macOS chặn microphone. Kiểm `media_reasons` trong `/simulator/state` |
+| Nói vào mic không phản ứng | Thiếu `SIM_MEDIA=host`, hoặc macOS chặn microphone. Kiểm `media_reasons` trong `/simulator/state`. Tên biến là `SIM_MEDIA` — `make sim MEDIA=host` chỉ đặt một biến không ai đọc và make không báo gì, nên phải xác nhận dòng khởi động ghi `media=host` |
 | Voice enroll trả 503 `needs a real microphone` | `SIM_MEDIA=virtual` — enroll từ chối mở mic thật ở chế độ đã hứa là không đụng tới |
 | Voice enroll trả 400 `vad_removed_all` | Clip không có tiếng nói. Đọc to các câu mẫu, gần mic hơn, suốt thời gian đếm ngược |
 | STT nghe sai tên | `flux-general-en` nghe nhầm danh từ riêng; "hi lamp" từng ra "hi lance", và nghe nhầm là **rớt cả lượt trong im lặng**. Các từ wake đã được đẩy làm STT boost term, nhưng vẫn nên nói rõ |
@@ -679,33 +706,7 @@ cầm credential của một thiết bị đang sống.
 | Agent tự xưng "Codex", không persona | `$CODEX_HOME/workspace` phải có `AGENTS.md`, `SOUL.md`, `KNOWLEDGE.md`, `HEARTBEAT.md`. Chúng do **`os-dev`** tạo, không phải `codex-dev` |
 | Workspace rỗng, không thấy log `seeded file` | `set_up_completed` chưa true nên chuỗi khởi động không chạy |
 | `skill download skipped: no ota_metadata_url` | Thiếu `config/bootstrap.json` |
-| `uv sync` chết khi build `insightface`, `ld: library 'c++' not found` | Xem bên dưới |
 
-### insightface build lỗi
-
-`insightface` phải compile C++, và interpreter mà `uv` chọn quyết định lần
-compile đó nhắm vào SDK nào. Python cài từ Homebrew nướng sẵn đường dẫn SDK lúc
-nó được build vào `sysconfig` của chính nó, nên trên máy đã lên bản macOS mới
-hơn, lần build trỏ `-isysroot` vào một SDK không còn được cài:
-
-```
-Compiling with an SDK that doesn't seem to exist:
-/Library/Developer/CommandLineTools/SDKs/MacOSX13.sdk
-ld: library 'c++' not found
-```
-
-Đặt `SDKROOT` không có tác dụng — cờ cũ đến từ `sysconfig`, không phải từ môi
-trường. Thay vào đó dựng venv bằng interpreter do `uv` quản lý, thứ không mang
-theo đường dẫn nướng sẵn nào:
-
-```bash
-uv python install 3.12
-cd hal && uv sync --inexact --python-preference only-managed -p 3.12
-```
-
-`make sim` dùng lại `hal/.venv` sinh ra từ đây, nên chỉ phải chữa một lần.
-
----
 
 ## Cái gì KHÔNG chạy off-device
 

@@ -48,9 +48,7 @@ dependencies = [
     # ever existed because silero-vad pulled torchaudio in and the latest aarch64
     # wheel is CUDA-linked (needs libcudart.so.13), so it failed to import on the
     # GPU-less device Pi and took the on-device VAD down with it.
-    "insightface>=0.7.3; sys_platform != 'darwin' or platform_machine != 'x86_64'",
     "onnxruntime>=1.23.2",
-    "insightface>=0.7.3",
     "anthropic>=0.40.0",
     "cryptography>=44.0.0",
     "google-genai>=0.7.0",

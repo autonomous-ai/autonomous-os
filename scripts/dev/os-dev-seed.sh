@@ -22,15 +22,15 @@ mkdir -p "$STATE_DIR/config"
 CONFIG_JSON="$STATE_DIR/config/config.json"
 CONFIG_EXAMPLE="$(dirname "$0")/config.example.json"
 
-# The config is the developer's to write — this script never invents one. Silently
-# creating a near-empty file was worse than stopping: os-server booted, answered
-# nothing useful, and nothing pointed back at the missing credentials.
+# No config yet: copy the template and carry on. The defaults below fill in
+# everything a laptop run can infer (base URL, model, admin password hash), so
+# the only key left for the developer is llm_api_key — named in the NOTE at the
+# end of this run. Stopping here instead used to cost a round trip for a file
+# whose content this script already knows.
 if [ ! -f "$CONFIG_JSON" ]; then
-  log "ERROR: $CONFIG_JSON not found."
-  log "Copy the template and fill it in, then run again:"
-  log "    cp $CONFIG_EXAMPLE $CONFIG_JSON"
-  log "    \$EDITOR $CONFIG_JSON        # set llm_api_key + llm_base_url"
-  exit 1
+  cp "$CONFIG_EXAMPLE" "$CONFIG_JSON"
+  chmod 600 "$CONFIG_JSON"
+  log "created $CONFIG_JSON from $(basename "$CONFIG_EXAMPLE")"
 fi
 
 # set_up_completed gates the whole startup sequence (server/config_watch.go):
@@ -39,6 +39,7 @@ fi
 python3 - "$CONFIG_JSON" "$DEVICE_TYPE" "$AGENT_RUNTIME" <<'PY'
 import json, os, sys
 path, device_type, runtime = sys.argv[1:4]
+PLACEHOLDER_KEY = "autonomous_api_key"
 cfg = {}
 if os.path.exists(path):
     with open(path) as f:
@@ -53,6 +54,28 @@ elif not str(cfg.get("agent_runtime", "")).strip():
     cfg["agent_runtime"] = "codex"
 runtime = cfg["agent_runtime"]
 cfg["set_up_completed"] = True
+# Off-device only: log into the web UI without hand-generating a bcrypt hash.
+# The hash below is bcrypt(cost 10) of "autonomous" and is public by definition
+# — a real device gets its hash from setup, and this script never runs there.
+# An existing hash (a config copied from a provisioned device) is left alone.
+if not str(cfg.get("admin_password_hash", "")).strip():
+    cfg["admin_password_hash"] = "$2a$10$nfmV4leY9FjNIS44X8/97OobRW6VWOvyhKYxAvLPAWTVKmCMWeOH6"
+    print("[os-dev-seed] admin_password_hash was empty — defaulted to password 'autonomous'")
+# The shared backend every dev key is issued against. Only filled when blank —
+# a config pointing at another gateway keeps its own URL.
+if not str(cfg.get("llm_base_url", "")).strip():
+    cfg["llm_base_url"] = "https://campaign-api.autonomous.ai/api/v1/ai/v1"
+    print("[os-dev-seed] llm_base_url was empty — defaulted to https://campaign-api.autonomous.ai/api/v1/ai/v1")
+# A placeholder rather than "": an empty key makes adminAuthMiddleware answer
+# 503 and the web UI bounce to /setup, which reads as a broken build instead of
+# a missing credential. The placeholder keeps the UI reachable and names what to
+# ask the team for; the NOTE below still fires until a real key replaces it.
+if not str(cfg.get("llm_api_key", "")).strip():
+    cfg["llm_api_key"] = PLACEHOLDER_KEY
+    print(f"[os-dev-seed] llm_api_key was empty — set to placeholder '{PLACEHOLDER_KEY}' (ask the team for a real key)")
+if not str(cfg.get("llm_model", "")).strip():
+    cfg["llm_model"] = "Auto-AI"
+    print("[os-dev-seed] llm_model was empty — defaulted to Auto-AI")
 with open(path, "w") as f:
     json.dump(cfg, f, indent=2)
 print(f"[os-dev-seed] {path}: device_type={device_type} agent_runtime={runtime} set_up_completed=true")
@@ -61,12 +84,10 @@ print(f"[os-dev-seed] {path}: device_type={device_type} agent_runtime={runtime} 
 # A silent empty key surfaces much later as "the device never speaks" or a turn
 # that answers blind, and neither points back here.
 missing = []
-if not str(cfg.get("llm_api_key", "")).strip() or not str(cfg.get("llm_base_url", "")).strip():
-    missing.append("llm_api_key + llm_base_url — no TTS (silent replies), no STT, "
-                   "no Gemini Live, no image description. The agent still answers text.")
-if not str(cfg.get("admin_password_hash", "")).strip():
-    missing.append("admin_password_hash — cannot log into the web UI (make web-dev). "
-                   "Store a bcrypt hash, not the password.")
+if str(cfg.get("llm_api_key", "")).strip() in ("", PLACEHOLDER_KEY):
+    missing.append("llm_api_key is still the placeholder — ask the team for a real key. "
+                   "Until then: no TTS (silent replies), no STT, "
+                   f"no Gemini Live, no image description. Fill it in: nano {path}")
 for m in missing:
     print(f"[os-dev-seed] NOTE: {m}")
 PY

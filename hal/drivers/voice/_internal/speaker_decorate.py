@@ -367,12 +367,19 @@ class SpeakerDecorator:
                 f"if having speaker name in transcript, else ask user's name)"
             )
 
+        # No trailing "otherwise ask them to introduce themselves". This branch is
+        # the one a meaningless fragment lands in — too short to enrol IS the
+        # common case for a lone word STT scraped off someone talking nearby —
+        # and that clause is an imperative glued onto the turn text itself. The
+        # model then obeys the nearest, most specific instruction over the
+        # silence rule and greets a passer-by ("I don't think we've met, what's
+        # your name?") on the strength of one word. Surface the path and the tag
+        # so a LATER real turn can still enrol; never ask on this one.
         return (
             f"Unknown Speaker:{hash_tag} {transcript} "
             f"(audio saved at {audio_path}. Note: audio is too short for "
             f"single enrollment. If prior turns tagged the same {voiceprint_hash or 'voice cluster'}, "
-            f"combine their saved paths with this one when enrolling; "
-            f"otherwise ask the user to introduce themselves longer.)"
+            f"combine their saved paths with this one when enrolling.)"
         )
 
     # ------------------------------------------------------------------

@@ -6,10 +6,12 @@ pipeline on ``start()`` — which is also where the model weights are fetched on
 first use (see ``model_store.ensure_face_models``).
 """
 
+import json
 import logging
 import threading
 import time
 from pathlib import Path
+from typing import Any
 
 import cv2
 import numpy as np
@@ -20,6 +22,7 @@ import hal.config as config
 from hal.drivers.sensing.perceptions.models import Face, PersonKind
 
 from .constants import _NO_MATCH, STRANGER_STATE_DIR, USERS_DIR
+from .debug_log import FaceIdDebugLogger
 from .model_store import (
     _EDGEFACE_MODEL_PATH,
     _LANDMARK_MODEL_PATH,
@@ -42,6 +45,22 @@ logger = logging.getLogger(__name__)
 _EXTENDED_SUBDIR = ".extended"
 _EXTENDED_IMG_EXT = ".jpg"
 _EXTENDED_EMB_EXT = ".npy"
+# Provenance sidecar: why this view was admitted, and under which rules. Written
+# beside the crop and its embedding. Metadata only — nothing reads it back into
+# the bank (``_read_extended_for`` globs the JPEGs), so a missing or malformed
+# one costs nothing at runtime. It exists so a bank can be AUDITED after the
+# fact: without it the only remedy for a rule that turned out to admit the wrong
+# views is to wipe every view, which is exactly what had to be done on lamp-ac82
+# when 6 of 10 turned out to be other people.
+_EXTENDED_META_EXT = ".json"
+
+# Box colour per verdict in the debug log's annotated.jpg — same convention as
+# FacePerception._FACE_COLOR (BGR).
+_DEBUG_KIND_COLOR: dict[PersonKind, tuple[int, int, int]] = {
+    PersonKind.FRIEND: (0, 255, 0),  # green
+    PersonKind.STRANGER: (0, 0, 255),  # red
+    PersonKind.UNSURE: (0, 255, 255),  # yellow
+}
 
 
 class FaceRecognizer:
@@ -51,7 +70,13 @@ class FaceRecognizer:
     def __init__(
         self,
         height_ratio_threshold: float = config.FACE_HEIGHT_RATIO_THRESHOLD,
+        max_truncation: float = config.FACE_MAX_TRUNCATION,
+        min_sharpness: float = config.FACE_MIN_SHARPNESS,
+        stranger_min_ticks: int = config.FACE_STRANGER_MIN_TICKS,
+        stranger_corroboration_s: float = config.FACE_STRANGER_CORROBORATION_S,
         threshold: float = 0.3,
+        extended_threshold: float = config.FACE_EXTENDED_THRESHOLD,
+        extend_min_enroll_sim: float = config.FACE_EXTEND_MIN_ENROLL_SIM,
         negative_threshold: float | None = 0.2,
         max_strangers: int = 50,
         scrfd_model_path: str = _SCRFD_MODEL_PATH,
@@ -61,7 +86,27 @@ class FaceRecognizer:
         diversity_threshold: float = 0.7,
     ):
         self._height_ratio_threshold: float = height_ratio_threshold
+        self._max_truncation: float = max_truncation
+        # Blur floor on the aligned crop; see FACE_MIN_SHARPNESS in hal/config.py.
+        self._min_sharpness: float = min_sharpness
+        # Consecutive ticks an unknown face must persist before it earns an
+        # identity; see FACE_STRANGER_MIN_TICKS in hal/config.py.
+        self._stranger_min_ticks: int = stranger_min_ticks
+        self._stranger_corroboration_s: float = stranger_corroboration_s
+        # Unknown faces seen but not yet corroborated, as
+        # [embedding, ticks_seen, last_seen_ts]. Deliberately a LIST, not one
+        # slot: with two unknown people in frame a single slot would be stolen
+        # back and forth every tick and neither would ever reach the threshold.
+        self._pending_strangers: list[
+            tuple[npt.NDArray[np.float32], int, float]
+        ] = []
         self._threshold: float = threshold
+        # Bar for a match carried by the extended bank alone — deliberately
+        # higher than ``threshold``; see FACE_EXTENDED_THRESHOLD in hal/config.py.
+        self._extended_threshold: float = extended_threshold
+        # Bar the UPLOADS must clear before a live view may be auto-captured
+        # into the extended bank; see FACE_EXTEND_MIN_ENROLL_SIM.
+        self._extend_min_enroll_sim: float = extend_min_enroll_sim
         self._negative_threshold: float | None = negative_threshold
         self._max_strangers: int = max_strangers
         self._scrfd_model_path: str = scrfd_model_path
@@ -105,6 +150,16 @@ class FaceRecognizer:
         self._lock: threading.RLock = threading.RLock()
         self._running: bool = False
         self._logger: logging.Logger = logging.getLogger(self.__class__.__name__)
+
+        # Per-detection debug capture (input crop + aligned model input + clean
+        # frame + annotated frame + result.json, one folder per face).
+        self._debug: FaceIdDebugLogger = FaceIdDebugLogger(
+            root_dir=config.FACEID_LOG_DIR,
+            enabled=config.FACEID_DEBUG_LOG_ENABLED,
+            max_triggers=config.FACEID_LOG_MAX_TRIGGERS,
+        )
+        if config.FACEID_DEBUG_LOG_ENABLED:
+            self._logger.info("[face] debug logging → %s", config.FACEID_LOG_DIR)
 
     @property
     def owners(self) -> list[str]:
@@ -243,12 +298,22 @@ class FaceRecognizer:
     # Users typically upload frontal shots, but a ceiling/desk camera mostly
     # sees them side-on. Those side views miss the frontal bank, get flagged as
     # strangers, and spawn duplicate "stranger_N" identities. To fix this each
-    # user gets a second, dynamically-grown "extended" bank: every time a live
-    # frame matches them confidently we may keep that frame's embedding as an
-    # extra reference view — but only if it is DIFFERENT enough from what we
-    # already store (so the bank captures new poses instead of near-duplicates),
-    # and capped at ``max_extended_images`` most-diverse samples. The uploaded
-    # images are never touched; the extended bank only ever grows recall.
+    # user gets a second, dynamically-grown "extended" bank: a live frame may be
+    # kept as an extra reference view when TWO independent things hold —
+    #
+    #   identity: the enrolled UPLOADS carried the match, above
+    #             FACE_EXTEND_MIN_ENROLL_SIM (checked in detect(), before the
+    #             candidate is queued). Never a match the extended bank made:
+    #             that is evidence about a previous guess, not about the person.
+    #   novelty:  it is DIFFERENT enough from what is already stored, so the
+    #             bank fills with new poses instead of near-duplicates
+    #             (``diversity_threshold``, checked in _maybe_extend_user).
+    #
+    # Both are required. Novelty alone is what let this bank fill with strangers:
+    # "far from everything we have" is equally the signature of a new pose and of
+    # a different person, so a novelty-only rule selects for the thing it should
+    # be screening out. The set is capped at ``max_extended_images`` most-diverse
+    # samples. The uploaded images are never touched.
 
     @staticmethod
     def _user_embeddings(
@@ -270,6 +335,7 @@ class FaceRecognizer:
         raw_label: str,
         embedding: npt.NDArray[np.float32],
         crop: npt.NDArray[np.uint8] | None,
+        meta: dict[str, Any] | None = None,
     ) -> None:
         """Consider folding one confidently-matched live view into a user's
         extended set AND persisting it to disk. Manages its own locking.
@@ -361,7 +427,12 @@ class FaceRecognizer:
 
         # (2) Persist WITHOUT the lock held. A view enters the in-memory bank
         # only once it has a backing file, so the two never drift apart.
-        path = self._save_extended_view(raw_label, embedding, crop)
+        # Fold in what only this method knows: how novel the view was against
+        # everything already stored, which is the other half of the admission
+        # decision (identity was decided in detect()).
+        provenance = dict(meta or {})
+        provenance["max_sim_to_existing"] = max_sim
+        path = self._save_extended_view(raw_label, embedding, crop, provenance)
         if path is None:
             return
 
@@ -512,13 +583,19 @@ class FaceRecognizer:
         raw_label: str,
         embedding: npt.NDArray[np.float32],
         crop: npt.NDArray[np.uint8],
+        meta: dict[str, Any] | None = None,
     ) -> str | None:
-        """Persist one extended view: a JPEG crop + a sidecar .npy embedding.
+        """Persist one extended view: a JPEG crop, a sidecar .npy embedding, and
+        a .json provenance record.
 
         Returns the JPEG path on success, or None if it could not be written (in
         which case the caller must NOT add the view to the in-memory bank). The
         sidecar embedding is what a later load trusts, so a restart reloads the
         exact vector and never has to re-detect the (possibly hard) pose.
+
+        The .json is documentation, not state: nothing loads it back, so failing
+        to write it does NOT fail the view. It records the scores and the
+        thresholds that admitted this view so the bank can be audited later.
         """
         try:
             dest = self._extended_dir_for(raw_label)
@@ -537,6 +614,22 @@ class FaceRecognizer:
                 logger.warning("[face-v2] cv2.imwrite failed for %s", img_path)
                 return None
             np.save(emb_path, embedding.astype(np.float32))
+            # Best-effort, and deliberately last: the view is already valid
+            # without it, so a failure here must not orphan the JPEG/.npy pair.
+            try:
+                record: dict[str, Any] = {
+                    "captured_at": time.strftime(
+                        "%Y-%m-%dT%H:%M:%S", time.localtime()
+                    ),
+                    "ts": time.time(),
+                    "label": raw_label,
+                }
+                record.update(meta or {})
+                _ = (dest / f"{stem}{_EXTENDED_META_EXT}").write_text(
+                    json.dumps(record, indent=2), encoding="utf-8"
+                )
+            except (OSError, TypeError, ValueError) as e:
+                logger.debug("[face-v2] provenance sidecar not written: %s", e)
             return str(img_path)
         except (OSError, cv2.error) as e:
             logger.warning("[face-v2] failed to save extended view: %s", e)
@@ -544,11 +637,14 @@ class FaceRecognizer:
 
     @staticmethod
     def _delete_extended_view(img_path: str) -> None:
-        """Delete an extended view's JPEG and its sidecar .npy (best-effort)."""
+        """Delete an extended view's JPEG, its sidecar .npy and its provenance
+        .json (best-effort). All three share a stem, so an eviction leaves
+        nothing behind."""
         try:
             p = Path(img_path)
             p.unlink(missing_ok=True)
             p.with_suffix(_EXTENDED_EMB_EXT).unlink(missing_ok=True)
+            p.with_suffix(_EXTENDED_META_EXT).unlink(missing_ok=True)
         except OSError as e:
             logger.warning(
                 "[face-v2] failed to delete extended view %s: %s", img_path, e
@@ -611,6 +707,10 @@ class FaceRecognizer:
         """Read one user's persisted extended views from disk. PURE reader: no
         lock, no in-memory mutation — it only touches the filesystem and returns
         ``(embeddings, paths)`` for the caller to install atomically.
+
+        Only ``*.jpg`` is enumerated, so the ``.json`` provenance sidecar is
+        ignored here by construction — it is for humans and audits, never an
+        input to the bank.
 
         Each view's sidecar embedding is trusted as-is (it was validated at
         capture); we deliberately do NOT re-gate against the uploads, since a
@@ -719,6 +819,45 @@ class FaceRecognizer:
             0 if new_ext_e is None else len(new_ext_e),
         )
 
+    def _corroborate_stranger(self, embedding: npt.NDArray[np.float32]) -> int:
+        """Count how many consecutive ticks this unknown face has now been seen
+        for, remembering it for next time. Caller must hold ``self._lock``.
+
+        Matching is by EMBEDDING, not by position: "in a row" has to mean the
+        same person, and a bbox moves. A candidate that goes unseen for longer
+        than ``stranger_corroboration_s`` is forgotten, so the count means
+        "still here", not "here at some point today".
+        """
+        now = time.time()
+        self._pending_strangers = [
+            p for p in self._pending_strangers
+            if now - p[2] <= self._stranger_corroboration_s
+        ]
+        best_i, best_sim = -1, self._threshold
+        for idx, (emb, _ticks, _ts) in enumerate(self._pending_strangers):
+            sim = float(emb @ embedding)
+            if sim > best_sim:
+                best_i, best_sim = idx, sim
+        if best_i < 0:
+            self._pending_strangers.append((embedding, 1, now))
+            return 1
+        ticks = self._pending_strangers[best_i][1] + 1
+        self._pending_strangers[best_i] = (embedding, ticks, now)
+        return ticks
+
+    @staticmethod
+    def _sharpness(aligned: npt.NDArray[np.uint8]) -> float:
+        """Variance of the Laplacian of the aligned crop — the standard blur
+        measure, high for detail, near zero for a smear.
+
+        Deliberately on the ALIGNED 112x112 rather than the detector crop: the
+        latter varies in size frame to frame, and the variance of the Laplacian
+        scales with resolution, so its values are not comparable between frames.
+        Costs ~0.06 ms on a crop that already exists (it is the embedder input).
+        """
+        gray = cv2.cvtColor(aligned, cv2.COLOR_BGR2GRAY)
+        return float(cv2.Laplacian(gray, cv2.CV_64F).var())
+
     @staticmethod
     def _crop_face(
         frame: npt.NDArray[np.uint8],
@@ -748,12 +887,15 @@ class FaceRecognizer:
             msg = f"[{self.__class__.__name__}] service must be started first"
             raise RuntimeError(msg)
 
-        frame_h = frame.shape[0]
+        frame_h, frame_w = frame.shape[:2]
 
         raw_results = self._app.get(frame)
         n_faces = len(raw_results)
 
         if n_faces == 0:
+            # Deliberately NOT debug-logged: detection ticks on every frame
+            # whether or not anybody is in the room, so empty-room captures
+            # would evict every real detection from the capped log directory.
             return
 
         embeds: npt.NDArray[np.float32] = np.stack(
@@ -781,26 +923,25 @@ class FaceRecognizer:
                 embeds, self._stranger_embeddings, self._stranger_labels
             )
 
-        # Combined owner score/id per face = whichever bank matched best, plus a
-        # tag of WHERE the winning match came from ("enroll" | "extended" | None).
+        # Best score across both owner banks. Used for the unsure / new-stranger
+        # split further down, which asks "is this face unknown to us at all" —
+        # a question both banks answer equally. The FRIEND decision does NOT use
+        # it: the two banks carry different weight and are compared against
+        # their own thresholds (see the asymmetric owner match below).
         owner_scores = np.maximum(upload_scores, ext_scores)
-        owner_ids: list[str | None] = []
-        owner_source: list[str | None] = []
-        for _i in range(n_faces):
-            ext_won = ext_scores[_i] > upload_scores[_i]
-            owner_ids.append(ext_ids[_i] if ext_won else upload_ids[_i])
-            if float(owner_scores[_i]) <= _NO_MATCH:
-                owner_source.append(None)  # neither bank held anything to match
-            else:
-                owner_source.append("extended" if ext_won else "enroll")
 
         new_stranger_embeds = []
         new_stranger_labels = []
-        # (friend_raw_label, normalized_embedding, bbox) for confidently-matched
-        # faces that may extend their user's set (diversity-gated + cropped +
-        # persisted after the loop).
+        # (friend_raw_label, normalized_embedding, bbox, provenance) for
+        # confidently-matched faces that may extend their user's set
+        # (diversity-gated + cropped + persisted after the loop).
         extend_candidates: list[
-            tuple[str, npt.NDArray[np.float32], tuple[int, int, int, int]]
+            tuple[
+                str,
+                npt.NDArray[np.float32],
+                tuple[int, int, int, int],
+                dict[str, Any],
+            ]
         ] = []
         # per-face: (bbox_pixels, face_kind, label)  face_kind: "friend"|"stranger"|"unsure"
         faces: list[Face] = []
@@ -812,14 +953,181 @@ class FaceRecognizer:
             x1, y1, x2, y2 = bbox
             face_h = max(y2 - y1, 0)
 
+            # Debug capture inputs: the face cut straight out of the original
+            # frame (clamped to its bounds, so crop_box below reproduces it),
+            # and the 112x112 crop the embedder actually saw.
+            debug_on = self._debug.enabled
+            cx1, cy1 = max(0, x1), max(0, y1)
+            cx2, cy2 = min(frame_w, x2), min(frame_h, y2)
+            face_crop = (
+                frame[cy1:cy2, cx1:cx2].copy()
+                if debug_on and cx2 > cx1 and cy2 > cy1
+                else None
+            )
+            # Needed by the blur gate below, so it is fetched unconditionally
+            # now — it is a reference to an array the embedder already built.
+            aligned = raw_results[i].get("aligned")
+            # Dense 468-point FaceMesh (full-frame pixels) and the 5 canonical
+            # points the alignment warp was built from — both already computed
+            # upstream, plotted into face_with_landmark.jpg.
+            landmarks = raw_results[i].get("landmarks") if debug_on else None
+            kps5 = raw_results[i].get("kps") if debug_on else None
+            landmark_score = raw_results[i].get("landmark_score")
+            height_ratio = face_h / frame_h if frame_h else 0.0
+
             # Height, not area — see FACE_HEIGHT_RATIO_THRESHOLD in hal/config.py.
             if face_h / frame_h < self._height_ratio_threshold:
+                if debug_on:
+                    _ = self._debug.save_failure(
+                        "too-small",
+                        face_crop=face_crop,
+                        aligned=aligned,
+                        frame=frame,
+                        bbox=bbox,
+                        landmarks=landmarks,
+                        kps5=kps5,
+                        landmark_score=landmark_score,
+                        crop_box=[cx1, cy1, cx2, cy2],
+                        frame_size=[frame_w, frame_h],
+                        face_height_ratio=height_ratio,
+                        height_ratio_threshold=self._height_ratio_threshold,
+                        det_score=det_scores[i],
+                        enroll_similarity=float(upload_scores[i]),
+                        extended_similarity=float(ext_scores[i]),
+                        stranger_similarity=s_score,
+                        detail="bbox height below FACE_HEIGHT_RATIO_THRESHOLD",
+                    )
+                continue
+
+            # Truncation gate. A face clipped by a frame edge is missing
+            # features, not merely smaller: SCRFD still reports a plausible box
+            # (the clipped edge just runs off-frame), and the landmark mesh
+            # invents the part it cannot see, so the embedding describes a face
+            # that was never photographed. The landmark-in-bbox check upstream
+            # cannot catch this — it clamps the bbox to the frame first, so a
+            # point can never be "outside" on the very edge that clipped it.
+            # Rejecting here also keeps the view out of extend_candidates, so a
+            # cut-off face can never be auto-added to a user's extended set.
+            vis_w = max(0, min(frame_w, x2) - max(0, x1))
+            vis_h = max(0, min(frame_h, y2) - max(0, y1))
+            box_area = (x2 - x1) * face_h
+            truncation = (
+                1.0 - (vis_w * vis_h) / box_area if box_area > 0 else 1.0
+            )
+            if truncation > self._max_truncation:
+                logger.info(
+                    "[face] dropped: bbox %.0f%% off-frame (max %.0f%%) — "
+                    "bbox=%s frame=%dx%d",
+                    truncation * 100, self._max_truncation * 100,
+                    bbox, frame_w, frame_h,
+                )
+                if debug_on:
+                    _ = self._debug.save_failure(
+                        "truncated",
+                        face_crop=face_crop,
+                        aligned=aligned,
+                        frame=frame,
+                        bbox=bbox,
+                        landmarks=landmarks,
+                        kps5=kps5,
+                        landmark_score=landmark_score,
+                        crop_box=[cx1, cy1, cx2, cy2],
+                        frame_size=[frame_w, frame_h],
+                        truncation=truncation,
+                        max_truncation=self._max_truncation,
+                        # Per-edge overflow as a fraction of the box's own
+                        # width/height — which edge clipped it, and by how much.
+                        truncation_edges={
+                            "left": max(0, -x1) / (x2 - x1) if x2 > x1 else 0.0,
+                            "right": max(0, x2 - frame_w) / (x2 - x1)
+                            if x2 > x1
+                            else 0.0,
+                            "top": max(0, -y1) / face_h if face_h else 0.0,
+                            "bottom": max(0, y2 - frame_h) / face_h
+                            if face_h
+                            else 0.0,
+                        },
+                        det_score=det_scores[i],
+                        enroll_similarity=float(upload_scores[i]),
+                        extended_similarity=float(ext_scores[i]),
+                        stranger_similarity=s_score,
+                        detail="bbox clipped by the frame edge beyond FACE_MAX_TRUNCATION",
+                    )
+                continue
+
+            # Blur gate. Motion blur — the lamp panning, or the person moving —
+            # destroys a face without making it smaller or clipping it, so
+            # neither gate above sees it. What comes out is a near-random
+            # embedding that resembles nothing, and "resembles nothing" is the
+            # NEW-STRANGER branch: a smeared frame of the enrolled user mints an
+            # identity for him. Dropping it here protects all three downstream
+            # decisions at once — no verdict, no minted identity, and no smeared
+            # crop admitted to the extended set.
+            sharpness = (
+                self._sharpness(aligned) if aligned is not None else float("inf")
+            )
+            if sharpness < self._min_sharpness:
+                logger.info(
+                    "[face] dropped: too blurred (sharpness %.0f < %.0f)",
+                    sharpness, self._min_sharpness,
+                )
+                if debug_on:
+                    _ = self._debug.save_failure(
+                        "blurred",
+                        face_crop=face_crop,
+                        aligned=aligned,
+                        frame=frame,
+                        bbox=bbox,
+                        landmarks=landmarks,
+                        kps5=kps5,
+                        landmark_score=landmark_score,
+                        crop_box=[cx1, cy1, cx2, cy2],
+                        frame_size=[frame_w, frame_h],
+                        sharpness=sharpness,
+                        min_sharpness=self._min_sharpness,
+                        face_height_ratio=height_ratio,
+                        truncation=truncation,
+                        det_score=det_scores[i],
+                        enroll_similarity=float(upload_scores[i]),
+                        extended_similarity=float(ext_scores[i]),
+                        stranger_similarity=s_score,
+                        detail="aligned-crop sharpness below FACE_MIN_SHARPNESS",
+                    )
                 continue
 
             det_score = det_scores[i]
 
-            if o_score > self._threshold:
-                raw_id = owner_ids[i] or ""
+            # Debug-log fields describing HOW this face was decided; each
+            # branch below overrides what applies to it.
+            decision_score: float = max(o_score, s_score)
+            matched_label: str | None = None
+            match_source: str | None = None
+            rescued_by_extended: bool = False
+            is_new_stranger: bool = False
+
+            # Asymmetric owner match. The uploads are ground truth and keep the
+            # base threshold; the auto-captured extended views are a guess the
+            # device made about itself, so carrying a match ALONE costs them a
+            # higher bar. A single threshold has no safe value here: every
+            # extended bank lifts the best stranger score well above 0.3, while
+            # raising the bar for the uploads too would cost the frontal recall
+            # the extended bank exists to recover.
+            up_s = float(upload_scores[i])
+            ex_s = float(ext_scores[i])
+            enroll_match = up_s > self._threshold
+            extended_match = ex_s > self._extended_threshold
+
+            if enroll_match or extended_match:
+                # Identity comes from the bank that AUTHORISED the match, not
+                # from whichever merely scored higher. An extended view below
+                # its own threshold is not trusted to carry a decision, so it
+                # must not supply the name either — otherwise a rescue-shaped
+                # near-miss on one user could relabel a match the uploads won.
+                if enroll_match and extended_match:
+                    ext_won = ex_s > up_s
+                else:
+                    ext_won = extended_match
+                raw_id = (ext_ids[i] if ext_won else upload_ids[i]) or ""
                 person_id = raw_id.removeprefix(self.FRIEND_PREFIX)
                 face_kind = PersonKind.FRIEND
                 # Observability: log whether the uploads or the extended set
@@ -827,43 +1135,121 @@ class FaceRecognizer:
                 # — the frontal uploads scored at/below threshold but a stored
                 # side/angled view pushed it over — which is exactly the benefit
                 # this feature exists to deliver.
-                up_s = float(upload_scores[i])
-                ex_s = float(ext_scores[i])
-                if up_s <= self._threshold < ex_s:
+                decision_score = ex_s if ext_won else up_s
+                matched_label = raw_id or None
+                match_source = "extended" if ext_won else "enroll"
+                rescued_by_extended = extended_match and not enroll_match
+                if rescued_by_extended:
                     logger.info(
                         "[face] '%s' RESCUED by extended set "
-                        "(enroll_sim=%.3f <= thr=%.2f < extended_sim=%.3f)",
-                        person_id, up_s, self._threshold, ex_s,
+                        "(enroll_sim=%.3f <= thr=%.2f, extended_sim=%.3f > "
+                        "ext_thr=%.2f)",
+                        person_id, up_s, self._threshold,
+                        ex_s, self._extended_threshold,
                     )
                 else:
                     logger.debug(
                         "[face] '%s' matched via %s "
-                        "(enroll_sim=%.3f, extended_sim=%.3f, thr=%.2f)",
-                        person_id, owner_source[i], up_s, ex_s, self._threshold,
+                        "(enroll_sim=%.3f, extended_sim=%.3f, thr=%.2f, "
+                        "ext_thr=%.2f)",
+                        person_id, match_source, up_s, ex_s,
+                        self._threshold, self._extended_threshold,
                     )
-                # Confidently identified: this live view is a candidate to
-                # enrich the user's extended set (kept only if it adds a pose
-                # the current set lacks — see _maybe_extend_user).
-                if raw_id:
-                    extend_candidates.append((raw_id, embeds[i], (x1, y1, x2, y2)))
+                # Candidate to enrich the user's extended set — but only when
+                # the UPLOADS themselves carried this match, and by a clear
+                # margin. Being recognised is not enough to become a reference
+                # view: a match the extended bank carried is evidence about a
+                # previous guess, not about the person, so letting it add a
+                # view lets one mistake breed more. Anchoring on the uploads is
+                # what makes poisoning non-replicating. The pose still has to be
+                # new enough to keep — see _maybe_extend_user.
+                if (
+                    raw_id
+                    and match_source == "enroll"
+                    and up_s > self._extend_min_enroll_sim
+                ):
+                    extend_candidates.append(
+                        (
+                            raw_id,
+                            embeds[i],
+                            (x1, y1, x2, y2),
+                            # Why this view was admitted, and under which rules.
+                            # The thresholds ride along so a later audit can ask
+                            # "which views did the OLD rule let in" without
+                            # guessing what the config was at the time.
+                            {
+                                "enroll_similarity": up_s,
+                                "extended_similarity": ex_s,
+                                "match_source": match_source,
+                                "det_score": float(det_score),
+                                "landmark_score": (
+                                    None
+                                    if landmark_score is None
+                                    else float(landmark_score)
+                                ),
+                                "face_height_ratio": float(height_ratio),
+                                "truncation": float(truncation),
+                                "bbox": [int(v) for v in bbox],
+                                "frame_size": [int(frame_w), int(frame_h)],
+                                "thresholds": {
+                                    "threshold": self._threshold,
+                                    "extended_threshold": self._extended_threshold,
+                                    "extend_min_enroll_sim": (
+                                        self._extend_min_enroll_sim
+                                    ),
+                                    "diversity_threshold": self._diversity_threshold,
+                                },
+                            },
+                        )
+                    )
             elif s_score > self._threshold:
                 raw_id = stranger_ids[i] or ""
                 person_id = raw_id.removeprefix(self.STRANGER_PREFIX)
                 face_kind = PersonKind.STRANGER
+                decision_score = s_score
+                matched_label = raw_id or None
+                match_source = "stranger"
             elif (
                 self._negative_threshold is None
                 or max(o_score, s_score) <= self._negative_threshold
             ):
+                # Below everything we know. That is what an unknown person looks
+                # like — and equally what a momentarily unusable frame looks
+                # like, since a degraded crop resembles nothing. The gates above
+                # drop the unusable frames they can MEASURE; the rest are caught
+                # by asking what no single frame can answer: is this face still
+                # here a tick later? Minting is the expensive verdict (a
+                # persistent identity, a stranger presence event, a row in the
+                # Unknown Faces card), so it waits for that answer.
                 with self._lock:
-                    self._stranger_counter += 1
-                    self._stranger_counter %= int(1e6)
+                    ticks = self._corroborate_stranger(embeds[i])
+                if ticks < self._stranger_min_ticks:
+                    logger.debug(
+                        "[face] unknown face seen %d/%d tick(s) — holding as "
+                        "unsure before minting an identity",
+                        ticks, self._stranger_min_ticks,
+                    )
+                    person_id = "?"
+                    face_kind = PersonKind.UNSURE
+                else:
+                    with self._lock:
+                        self._stranger_counter += 1
+                        self._stranger_counter %= int(1e6)
 
-                    raw_id = f"{self.STRANGER_PREFIX}stranger_{self._stranger_counter}"
-                person_id = raw_id.removeprefix(self.STRANGER_PREFIX)
-                face_kind = PersonKind.STRANGER
+                        raw_id = (
+                            f"{self.STRANGER_PREFIX}stranger_{self._stranger_counter}"
+                        )
+                    person_id = raw_id.removeprefix(self.STRANGER_PREFIX)
+                    face_kind = PersonKind.STRANGER
+                    matched_label = raw_id
+                    is_new_stranger = True
+                    logger.info(
+                        "[face] minted '%s' after %d consecutive tick(s)",
+                        person_id, ticks,
+                    )
 
-                new_stranger_embeds.append(embeds[i])
-                new_stranger_labels.append(raw_id)
+                    new_stranger_embeds.append(embeds[i])
+                    new_stranger_labels.append(raw_id)
             else:
                 # Score between negative_threshold and threshold on both banks — unsure
                 person_id = "?"
@@ -881,6 +1267,58 @@ class FaceRecognizer:
                     emotion_box=raw_results[i].get("emotion_box"),
                 )
             )
+
+            # Every decided face → its own timestamped folder holding the frame
+            # crop, the aligned model input, the clean frame, an annotated frame
+            # and result.json. Folder name is "<time>_<face_id>_<similarity>" so
+            # a false acceptance is spottable at a glance from the listing.
+            if debug_on:
+                _ = self._debug.save_decision(
+                    # "UNSURE" rather than the raw "?" placeholder: it is what
+                    # ends up in the folder name, and "?" slugs to nothing.
+                    face_id=(
+                        person_id if face_kind != PersonKind.UNSURE else "UNSURE"
+                    ),
+                    similarity=decision_score,
+                    face_crop=face_crop,
+                    aligned=aligned,
+                    frame=frame,
+                    bbox=bbox,
+                    landmarks=landmarks,
+                    kps5=kps5,
+                    color=_DEBUG_KIND_COLOR.get(face_kind, (128, 128, 128)),
+                    # Clamped [x1, y1, x2, y2] actually cut for input.jpg — apply
+                    # it to frame.jpg to reproduce the crop (bbox above is the
+                    # raw detector box, which may extend past the frame edges).
+                    crop_box=[cx1, cy1, cx2, cy2],
+                    frame_size=[frame_w, frame_h],
+                    kind=str(face_kind),
+                    person_id=person_id,
+                    # Bank label behind the match, prefix included, and which
+                    # bank produced it: "enroll" (uploads), "extended"
+                    # (auto-captured views), "stranger", or None when nothing
+                    # cleared a threshold.
+                    matched_label=matched_label,
+                    match_source=match_source,
+                    # Per-bank similarities, so a wrong identity can be traced
+                    # to the exact set that carried it.
+                    owner_similarity=o_score,
+                    enroll_similarity=float(upload_scores[i]),
+                    extended_similarity=float(ext_scores[i]),
+                    stranger_similarity=s_score,
+                    threshold=self._threshold,
+                    extended_threshold=self._extended_threshold,
+                    negative_threshold=self._negative_threshold,
+                    det_score=det_score,
+                    landmark_score=landmark_score,
+                    sharpness=sharpness,
+                    face_height_ratio=height_ratio,
+                    height_ratio_threshold=self._height_ratio_threshold,
+                    rescued_by_extended=rescued_by_extended,
+                    new_stranger=is_new_stranger,
+                    face_index=i,
+                    n_faces=n_faces,
+                )
 
         if new_stranger_embeds:
             stacked_e = np.stack(new_stranger_embeds, axis=0)
@@ -905,9 +1343,9 @@ class FaceRecognizer:
         # this in `with self._lock` (that previously held the lock across every
         # frame's JPEG write and widened the reload race).
         if extend_candidates:
-            for raw_label, emb, bbox in extend_candidates:
+            for raw_label, emb, bbox, meta in extend_candidates:
                 crop = self._crop_face(frame, bbox)
-                self._maybe_extend_user(raw_label, emb, crop)
+                self._maybe_extend_user(raw_label, emb, crop, meta)
 
         return faces
 
@@ -936,13 +1374,32 @@ class FaceRecognizer:
                 logger.error(f"Failed to save strangers' state due to {e}")
 
     def _load_strangers_state(self):
+        """Re-read the stranger bank from disk. SILENT when it does not exist.
+
+        The bank files are only ever written when a brand-new stranger is minted
+        (see ``_save_strangers_state``), so on a device where every face it ever
+        sees is enrolled they are never created at all — and this runs on the
+        per-frame path inside ``detect()``. Treating "not created yet" as an
+        error therefore logged a full traceback at ERROR every couple of
+        seconds, from first boot, forever: journald filled up and real errors
+        got buried, on precisely the devices that were working correctly.
+
+        Absent is not corrupt. An empty bank is the right state, the caller's
+        fields already hold it, and the assignment below was already skipped in
+        that case — so returning early changes nothing except the noise. A bank
+        that EXISTS but cannot be read is still loud, which is the case worth
+        shouting about. This mirrors
+        ``speaker_recognizer._load_strangers``, which has always guarded this way;
+        the face path was the odd one out.
+        """
+        embeds_path = STRANGER_STATE_DIR / "embeds.npy"
+        labels_path = STRANGER_STATE_DIR / "labels.npy"
+        if not (embeds_path.exists() and labels_path.exists()):
+            return
+
         try:
-            stranger_embeddings = np.load(
-                STRANGER_STATE_DIR / "embeds.npy", allow_pickle=True
-            )
-            stranger_labels = np.load(
-                STRANGER_STATE_DIR / "labels.npy", allow_pickle=True
-            )
+            stranger_embeddings = np.load(embeds_path, allow_pickle=True)
+            stranger_labels = np.load(labels_path, allow_pickle=True)
             stranger_counter = int(
                 np.load(STRANGER_STATE_DIR / "counter.npy", allow_pickle=True)
             )

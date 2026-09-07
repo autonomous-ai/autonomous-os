@@ -53,9 +53,10 @@ os-test:
 #   make codex-dev        codex bridge on $(CODEX_PORT)
 #   make claudecode-dev   Claude Code bridge on $(CLAUDECODE_PORT)
 #   make os-dev           API on :5000
+# `make os-dev-all` runs the bridge + API in one terminal (bridge backgrounded).
 # The CLI itself (codex / claude) is expected to be installed already — nothing
 # here provisions it.
-OS_STATE_DIR     ?= /tmp/autonomous-os
+OS_STATE_DIR     ?= $(HOME)/.autonomous-os
 
 # Which backend is live. ONE cascade, the same one os-server applies
 # (agent/factory.go resolveRuntime): an explicit OS_AGENT_RUNTIME wins, else
@@ -120,7 +121,7 @@ OS_DEV_ENV = \
 	OS_AGENT_BRIDGE_LOG=$(OS_AGENT_BRIDGE_LOG) \
 	OS_LOG_FILE=$(OS_LOG_FILE)
 
-.PHONY: os-dev os-dev-build os-dev-seed codex-dev claudecode-dev
+.PHONY: os-dev os-dev-all os-dev-build os-dev-seed os-dev-config codex-dev claudecode-dev
 
 os-dev-build:
 	@mkdir -p $(OS_STATE_DIR)
@@ -129,11 +130,30 @@ os-dev-build:
 os-dev-seed:
 	@bash scripts/dev/os-dev-seed.sh $(OS_STATE_DIR) $(DEVICE_TYPE) $(OS_AGENT_RUNTIME) $(CODEX_HOME) $(CLAUDECODE_HOME)
 
+# Config only, no build, no server: create the file (from the template on a
+# fresh machine) and hand the dev its path to edit. `make os-dev` runs the same
+# seed step anyway — this is for doing it first, before touching a terminal.
+os-dev-config: os-dev-seed
+	@echo "edit it: $${EDITOR:-nano} $(OS_STATE_DIR)/config/config.json"
+
 # cd into the state dir: config.json is resolved relative to the cwd, exactly as
 # systemd's WorkingDirectory=/root does it on the board.
 os-dev: os-dev-build os-dev-seed
 	@echo "os-server: http://127.0.0.1:5000/api/health/live (runtime=$(OS_AGENT_RUNTIME))"
 	cd $(OS_STATE_DIR) && $(OS_DEV_ENV) ./os-server
+
+# Bridge + API in one terminal. The bridge runs in the background — its output
+# goes only to $(OS_AGENT_BRIDGE_LOG) — and is killed when os-server exits. Use
+# the two separate targets when you want the bridge's output live.
+# Sources $CODEX_HOME/.env for the same reason codex-dev does (see below).
+os-dev-all: os-dev-build os-dev-seed
+	@test -n "$(CODEX_BIN)" || { echo "codex CLI not found on PATH — set CODEX_BIN=<path>"; exit 1; }
+	@echo "codex bridge: ws://127.0.0.1:$(CODEX_PORT)/codex/ws/ (log: $(OS_AGENT_BRIDGE_LOG))"
+	@echo "os-server: http://127.0.0.1:5000/api/health/live (runtime=$(OS_AGENT_RUNTIME))"
+	@cd $(OS_STATE_DIR) && { set -a; [ -f $(CODEX_HOME)/.env ] && . $(CODEX_HOME)/.env; set +a; \
+	  $(OS_DEV_ENV) CODEX_BIN=$(CODEX_BIN) ./os-server codex-gatewayd > $(OS_AGENT_BRIDGE_LOG) 2>&1 & \
+	  bridge=$$!; trap 'kill $$bridge 2>/dev/null' EXIT INT TERM; \
+	  $(OS_DEV_ENV) ./os-server; }
 
 # Sources $CODEX_HOME/.env the way systemd's EnvironmentFile= does on a board.
 # codex resolves its key through config.toml's env_key (OPENAI_API_KEY), and the
@@ -181,7 +201,7 @@ hal-dev: $(HAL_DIR)/.venv
 # Boot any declared body on a laptop without opening its physical peripherals.
 # DEVICE_TYPE remains the single body selector; Lamp is the default product body.
 DEVICE_TYPE ?= lamp
-SIM_STATE_DIR ?= /tmp/autonomous-sim
+SIM_STATE_DIR ?= $(HOME)/.autonomous-sim
 # virtual is deterministic and permission-free; host opts into the developer
 # machine's camera, microphone and speaker. host is also what turns the REAL
 # voice pipeline on (STT → realtime → dispatch) instead of the inert stub —

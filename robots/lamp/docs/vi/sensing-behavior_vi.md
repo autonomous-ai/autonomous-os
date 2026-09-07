@@ -123,6 +123,33 @@ HAL quản lý việc điều khiển đèn; agent chỉ xử lý thông báo b�
 
 State machine tự điều khiển này được gate theo capability `presence`: nguồn `on_motion()` duy nhất của nó là vòng people-perception (processor face/motion/emotion), mà HAL chỉ chạy khi device khai báo `presence`. Device **không** có `presence` sẽ khởi tạo state machine ở trạng thái disabled, nên không bao giờ bị timeout sang AWAY một cách sai lệch. Lamp khai báo `presence: required` nên timeline ở trên luôn áp dụng.
 
+### Bank người lạ trên đĩa
+
+Khuôn mặt không nhận ra được cấp id `stranger_N` và lưu xuống
+`HAL_STRANGERS_DIR` (`/root/local/strangers`) thành `embeds.npy`, `labels.npy`
+và `counter.npy`. Các file này **chỉ được ghi khi có người lạ mới được cấp id**,
+nên một thiết bị mà mọi người xuất hiện đều đã được enroll sẽ không bao giờ tạo
+ra chúng — và đó là trạng thái bình thường, không phải lỗi.
+
+`FaceRecognizer._load_strangers_state` đọc lại bank ở MỖI frame có khuôn mặt. Nó
+nay kiểm tra file có tồn tại không và return im lặng nếu không; bank vắng mặt
+chính là trạng thái rỗng đúng, và các field trong bộ nhớ đã giữ sẵn trạng thái
+đó. Bank có tồn tại nhưng đọc không được thì vẫn log ERROR, vì `.npy` hỏng hoặc
+cụt là thứ đáng phải hét lên.
+
+Trước khi có guard này, trường hợp "chưa được tạo" ném `FileNotFoundError` và bị
+log kèm full traceback ở mức ERROR ngay trên đường đi per-frame — khoảng mỗi
+`HAL_SENSING_INTERVAL` (2 giây), từ lần boot đầu tiên, mãi mãi, đúng trên những
+thiết bị đang chạy tốt. Việc nhận diện không hề bị ảnh hưởng (owner match với
+ảnh đã enroll, không đụng tới các file này); cái giá phải trả là journald đầy
+traceback và chôn vùi các lỗi thật.
+
+**Xoá khuôn mặt lạ:** để làm rỗng card Unknown Faces trên monitor UI, xoá
+`<HAL_USERS_DIR>/.stranger_stats.json` và ĐỪNG đụng vào bank `.npy`. Lưu ý file
+stats và bank nằm ở hai thư mục khác nhau, nên "xoá người lạ" rất dễ làm thiếu.
+Hiện chưa có endpoint xoá cho face stranger — cụm *voice* lạ thì có, còn card
+Unknown Faces là read-only — nên xoá chúng là thao tác trên filesystem.
+
 ---
 
 ## Chuyển động (Motion)

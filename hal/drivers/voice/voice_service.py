@@ -554,7 +554,7 @@ class VoiceService:
                 logger.warning("Realtime noise-guard Silero load failed: %s", e)
                 return True
         try:
-            peak, mean, ratio, span_ratio = self._rt_noise_vad.speech_metrics(
+            peak, mean, ratio, span_ratio, span_seconds = self._rt_noise_vad.speech_metrics(
                 pcm_int16, voice_cfg.STT_RATE
             )
             self._rt_noise_vad.reset_state()
@@ -575,8 +575,8 @@ class VoiceService:
             is_speech = span_ratio >= hal_config.REALTIME_NOISE_SPEECH_RATIO
             logger.info(
                 "[realtime] noise-guard metrics: peak=%.3f mean=%.3f voiced_ratio=%.3f "
-                "span_ratio=%.3f (span >= %.2f? %s)",
-                peak, mean, ratio, span_ratio,
+                "span_ratio=%.3f span_seconds=%.2f (span >= %.2f? %s)",
+                peak, mean, ratio, span_ratio, span_seconds,
                 hal_config.REALTIME_NOISE_SPEECH_RATIO, is_speech,
             )
             return is_speech
@@ -606,7 +606,7 @@ class VoiceService:
             # Whole-window ratio, not the span: a live sliding window carries no
             # capture padding to discount, and a span measure would only make
             # the device easier to interrupt with a burst of noise.
-            peak, _mean, ratio, _span = self._rt_noise_vad.speech_metrics(
+            peak, _mean, ratio, _span, _span_s = self._rt_noise_vad.speech_metrics(
                 window, voice_cfg.STT_RATE
             )
             self._rt_noise_vad.reset_state()

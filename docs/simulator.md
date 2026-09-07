@@ -29,40 +29,55 @@ what makes the tested binary the shipped binary.
 | Need | Check with | If missing |
 |---|---|---|
 | The agent CLI you plan to run | `codex --version` / `claude --version` | Install it yourself — nothing here installs it. Only the CLI for the runtime you pick is needed. Note where you installed it: *Step 4 §2* takes that directory as `CODEX_HOME` / `CLAUDECODE_HOME` |
+| codex auth — **either** mode | `ls $CODEX_HOME/auth.json` | Optional. A ChatGPT login (`codex login`) writes an `auth.json` whose `auth_mode` is not `apikey`, and codex then uses its built-in provider. No such file — or one written by `codex login --api-key` — means api-key mode: codex runs on `llm_api_key` + `llm_base_url` from config.json. `runtimes/codex/presync.sh` re-picks the mode on every boot |
 | `ffmpeg` | `ffmpeg -version` | Needed for music playback |
-| `uv` | `uv --version` | Builds HAL's `hal/.venv`. `make sim` creates it on first run and re-syncs it whenever `hal/uv.lock` or `hal/pyproject.toml` moves ahead of it. If that first sync fails compiling `insightface`, see *insightface fails to build* below |
+| `uv` | `uv --version` | Builds HAL's `hal/.venv`. `make sim` creates it on first run and re-syncs it whenever `hal/uv.lock` or `hal/pyproject.toml` moves ahead of it |
 | `node` + `npm` | `node --version` | Needed for `make web-dev` only |
 
 **`codex` and `claudecode` work off-device.** Pick one with `OS_AGENT_RUNTIME`
 on `make os-dev`; it is persisted to `config.json` and read back afterwards, so
 you pass it only when switching. Other runtimes have no `*-dev` target.
 
-## Step 2 — Copy the config template
+## Step 2 — Create the config
 
 ```bash
-mkdir -p /tmp/autonomous-os/config
-cp scripts/dev/config.example.json /tmp/autonomous-os/config/config.json
-chmod 600 /tmp/autonomous-os/config/config.json
+make os-dev-config
 ```
+
+It copies the template on a fresh machine, fills in everything a laptop run can
+infer (`llm_base_url`, `llm_model`, `admin_password_hash`), leaves an existing
+file's values alone, and prints the path to edit. `make os-dev` runs the same
+seed step, so this is only for doing it up front.
 
 ## Step 3 — Fill in the config
 
 ```bash
-$EDITOR /tmp/autonomous-os/config/config.json
+nano ~/.autonomous-os/config/config.json   # only llm_api_key is left to you
 ```
 
 ### Required
 
 | Key | Value | Missing → |
 |---|---|---|
-| `llm_api_key` | Your provider key | No TTS, no STT, no Gemini Live, no image description. The agent still answers text |
-| `llm_base_url` | OpenAI-compatible base, e.g. `https://…/api/v1/ai/v1` | Same as above |
+`os-dev-seed.sh` writes all three, so a fresh config already reads:
+
+```json
+"llm_api_key": "autonomous_api_key",
+"llm_model": "Auto-AI",
+"llm_base_url": "https://campaign-api.autonomous.ai/api/v1/ai/v1"
+```
+
+| Key | Value | Missing → |
+|---|---|---|
+| `llm_api_key` | **Ask the team for a real key** — `autonomous_api_key` is a placeholder that keeps the UI reachable, not a working credential | No TTS, no STT, no Gemini Live, no image description. Left *empty* it is worse: `adminAuthMiddleware` (`system/server/middleware.go`) falls back to this key as the bearer, answers 503 without it, and `AuthGate` reads 503 as "never set up" — the web UI bounces to `/setup`, a wizard that cannot finish off-device (no `mac`, no `iw`) |
+| `llm_base_url` | Defaulted to the shared gateway. Set another OpenAI-compatible base to override | Nothing — it is defaulted |
+| `llm_model` | Defaulted to `Auto-AI` | Nothing — it is defaulted |
 
 ### Required only for the web UI (`make web-dev`)
 
 | Key | Value |
 |---|---|
-| `admin_password_hash` | **bcrypt hash** (cost 10) of your login password — not the password |
+| `admin_password_hash` | Leave empty — `os-dev-seed.sh` fills in the bcrypt hash of `autonomous` when it is blank. Set your own hash to override (see *Setting your own password*) |
 | `session_secret` | Leave empty — os-server writes a random one on first login (`system/server/session/session.go`) |
 
 ### Optional
@@ -122,6 +137,12 @@ section below.
 | 2 | Agent runtime gateway | `make <runtime>-dev` | per runtime | `[<runtime>-gatewayd] listening on ws://…` |
 | 3 | os-server | `make os-dev` | 5000 | `Codex connected` / `Claude Code connected` |
 | 4 | Web UI (optional) | `make web-dev` | 5173 | `VITE … ready` |
+
+`make os-dev-all` collapses §2 and §3 into one terminal: it starts the bridge in
+the background, os-server in the foreground, and kills the bridge when
+os-server exits. The bridge's output then goes only to
+`$OS_STATE_DIR/codex-gatewayd.log`, so use the two separate targets when you
+want to watch it live. It is codex-only.
 
 `OS_AGENT_RUNTIME` selects the backend, and you pass it **once, to `make os-dev`**
 (§3). It is written to `config.json` and read back from there afterwards, so the
@@ -269,7 +290,7 @@ curl -s -X POST :5000/api/sensing/event -H 'Content-Type: application/json' \
   -d '{"type":"voice_command","message":"introduce yourself"}'
 
 # 5. Speak into the mic: say "hey lamp, what time is it"
-grep '\[turn\] route=' /tmp/autonomous-sim/log/server.log | tail
+grep '\[turn\] route=' ~/.autonomous-sim/log/server.log | tail
 ```
 
 Open:
@@ -301,6 +322,8 @@ Picked up within 5 seconds, no restart. Now `hey lumi` works, alongside
 | `make codex-dev` | **Only** runs `os-server codex-gatewayd`: a loopback WebSocket listener that spawns one `codex exec` per turn | No onboarding, no presync, **no skill sync** |
 | `make claudecode-dev` | **Only** runs `os-server claudecode-gatewayd`: a loopback WebSocket listener holding ONE persistent `claude` child | No onboarding, no presync, **no skill sync**. The child reads `CLAUDE.md` / `.env` at start, so restart it after either changes |
 | `make os-dev` | Three things in sequence: `os-dev-build` (compile), `os-dev-seed` (prepare the state dir), then run the API — which also does all agent provisioning: `presync.sh`, seeding `AGENTS.md`/`SOUL.md`/`KNOWLEDGE.md`/`HEARTBEAT.md`, `downloadSkills()`, the skill watcher | — |
+| `make os-dev-all` | `codex-dev` + `os-dev` in one terminal: bridge backgrounded, os-server in front, bridge killed on exit | codex only; the bridge's output goes to the log file, not your terminal |
+| `make os-dev-config` | `os-dev-seed` only, then prints the config path to edit — no build, no server | — |
 | `make web-dev` | Runs Vite in nginx's place (os-server serves no HTML) | — |
 
 If the workspace is empty or the agent has no persona, look at **`os-dev`**, not
@@ -313,9 +336,11 @@ normally run. It touches only the state dir, never starts a process:
 
 | It does | It does not |
 |---|---|
-| Refuses to continue if `config.json` is missing, printing the `cp` command | Create or overwrite `config.json` — that file is yours |
+| Creates `config.json` from `config.example.json` when it is missing | Overwrite an existing `config.json` — the values in it are yours |
 | Rewrites `device_type`, `agent_runtime`, `set_up_completed` in it | Touch any other key |
-| Warns about empty `llm_api_key` / `admin_password_hash` | — |
+| Fills a blank `admin_password_hash` with the hash of `autonomous` | Overwrite a hash that is already set |
+| Fills a blank `llm_base_url` with `https://campaign-api.autonomous.ai/api/v1/ai/v1` and a blank `llm_model` with `Auto-AI` | Overwrite a value that is already set |
+| Warns about an empty `llm_api_key` | — |
 | Seeds `config/bootstrap.json` (once) so skills can download | — |
 | Backs up an existing `config.toml` to `config.toml.pre-os-dev` (once) | — |
 
@@ -327,7 +352,7 @@ booting the server.
 | | Path |
 |---|---|
 | Template (in the repo) | `scripts/dev/config.example.json` |
-| Live config | `$OS_STATE_DIR/config/config.json` — default `/tmp/autonomous-os/config/config.json` |
+| Live config | `$OS_STATE_DIR/config/config.json` — default `~/.autonomous-os/config/config.json` |
 | OTA metadata (auto-seeded) | `$OS_STATE_DIR/config/bootstrap.json` |
 | Agent workspace | `$CODEX_HOME/workspace/` |
 
@@ -462,13 +487,16 @@ unchanged.
 > **Vite binds `[::1]` only** — `127.0.0.1:5173` is refused and looks like the
 > server never started. Use `localhost`.
 
-Log in with the password whose bcrypt hash is in `admin_password_hash`.
+Log in with the password whose bcrypt hash is in `admin_password_hash` — off
+device that is `autonomous` unless you set your own, since `os-dev-seed.sh`
+fills a blank hash in.
 Alternatively append `?llm_api_key=<the key in config.json>` — but note this
 misses on the *first* load of a fresh tab (`api.ts` initialises its token from
 `sessionStorage` at module load, and `AuthGate`'s effect runs before `App`'s
 `useBearerFromQuery`), so navigate to `/monitor` a second time in the same tab.
 
-There is no third way: an empty `admin_password_hash` is not an open door.
+There is no third way: an empty `admin_password_hash` is not an open door — it
+is why `os-dev-seed.sh` defaults one rather than leaving it blank.
 `VerifyAdminPassword` (`system/device/config_update.go`) refuses outright when
 no hash is set, and it refuses off-device exactly as it does on a board — the
 simulator runs the shipped binary, so it has no auth bypass to enable.
@@ -591,8 +619,8 @@ needs them simply stays off.
 |---|---|
 | `DEVICE_TYPE` | `lamp` |
 | `SIM_MEDIA` | `virtual` |
-| `SIM_STATE_DIR` | `/tmp/autonomous-sim` |
-| `OS_STATE_DIR` | `/tmp/autonomous-os` |
+| `SIM_STATE_DIR` | `~/.autonomous-sim` |
+| `OS_STATE_DIR` | `~/.autonomous-os` |
 | `OS_AGENT_RUNTIME` | `config.json` `agent_runtime`, else `codex` |
 | `CODEX_HOME` | `$HOME/.codex` |
 | `CODEX_PORT` | `18792` |
@@ -676,7 +704,7 @@ not carrying a live device's credentials.
 | `bad handshake (status 404)` | `*-dev` and `os-dev` disagree on `CODEX_PORT` / `CLAUDECODE_PORT` |
 | `dial 127.0.0.1:5001: connection refused` | HAL is not up yet |
 | `127.0.0.1:5173` refuses the connection | Vite binds `[::1]` — use `localhost:5173` |
-| Speaking does nothing | Missing `SIM_MEDIA=host`, or macOS denied the microphone. Check `media_reasons` in `/simulator/state` |
+| Speaking does nothing | Missing `SIM_MEDIA=host`, or macOS denied the microphone. Check `media_reasons` in `/simulator/state`. The variable is `SIM_MEDIA` — `make sim MEDIA=host` sets a variable nothing reads and make says nothing, so confirm the boot line says `media=host` |
 | Voice enroll returns 503 `needs a real microphone` | `SIM_MEDIA=virtual` — enroll refuses to open the host mic in a mode that promises not to |
 | Voice enroll returns 400 `vad_removed_all` | The clip held no speech. Read the phrases aloud, closer to the mic, for the full countdown |
 | STT hears the wrong name | `flux-general-en` mis-hears proper nouns; "hi lamp" has come back as "hi lance", and a miss drops the whole turn silently. Wake terms are sent as STT boost terms, but say the name clearly |
@@ -686,33 +714,7 @@ not carrying a live device's credentials.
 | Agent calls itself "Codex", no persona | `$CODEX_HOME/workspace` must hold `AGENTS.md`, `SOUL.md`, `KNOWLEDGE.md`, `HEARTBEAT.md`. These come from `os-dev`, not `codex-dev` |
 | Empty workspace, no `seeded file` log | `set_up_completed` is not true, so the startup sequence never ran |
 | `skill download skipped: no ota_metadata_url` | `config/bootstrap.json` missing |
-| `uv sync` fails building `insightface`, `ld: library 'c++' not found` | See below |
 
-### insightface fails to build
-
-`insightface` compiles C++, and the interpreter `uv` picked decides which SDK
-that compile targets. A Homebrew Python bakes the SDK path it was built against
-into its own `sysconfig`, so on a machine whose macOS has moved on, the build
-points `-isysroot` at an SDK that is no longer installed:
-
-```
-Compiling with an SDK that doesn't seem to exist:
-/Library/Developer/CommandLineTools/SDKs/MacOSX13.sdk
-ld: library 'c++' not found
-```
-
-Setting `SDKROOT` does not help — the stale flag comes from `sysconfig`, not the
-environment. Build the venv against a `uv`-managed interpreter instead, which
-carries no such baked-in path:
-
-```bash
-uv python install 3.12
-cd hal && uv sync --inexact --python-preference only-managed -p 3.12
-```
-
-`make sim` reuses the resulting `hal/.venv`, so this is a one-time fix.
-
----
 
 ## What does not work off-device
 
