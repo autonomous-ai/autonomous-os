@@ -224,6 +224,31 @@ official move tripping the gate is evidence the declared number is wrong, and
 excusing it by origin would hide that signal. `robots/reachy-mini/SAFETY.md`
 records how its ceiling was derived and what still needs a real robot.
 
+The Stack-chan Wi-Fi path keeps the same duration gate across a process and
+network boundary. `StackChanMotionService` sends the already-stretched duration
+as `duration_ms`, renews a short controller lease while that timed interpolation
+runs, and releases the lease into a measured-position hold at the end. A torque
+release supersedes any active move, travels to the conservative head-down rest
+pose, confirms that pose from measured joint feedback, and only then disables
+torque. If the pose is not reached, it halt-holds with torque enabled. Its
+handshake requires `motion.timed_move`, measured position, halt-and-hold and
+torque-release capabilities. If HAL, its process or Wi-Fi disappears, the ESP32
+firmware expires the lease (or handles disconnect) and holds the measured pose;
+firmware that only exposes an uncalibrated spring-speed parameter is rejected as
+incompatible because it cannot honor the declared degree-per-second ceiling.
+This path is covered by host protocol tests; physical fault-injection over a
+real Wi-Fi link remains a device qualification step.
+
+Select it with `driver: stackchan` in the device profile's `motion` capability.
+Set `STACKCHAN_DEVICE_ID`, a distinct `STACKCHAN_BODY_TOKEN` of at least 32
+characters, and both `STACKCHAN_BODY_TLS_CERT` and `STACKCHAN_BODY_TLS_KEY`.
+`STACKCHAN_BODY_HOST` (default `0.0.0.0`) and `STACKCHAN_BODY_PORT` (default
+`8765`) configure the listener; `STACKCHAN_BODY_COMMAND_TIMEOUT` (default `3.0`
+seconds) and `STACKCHAN_BODY_LEASE_TTL_MS` (default `1500`, accepted `250..5000`)
+configure failure timing. TLS is mandatory unless
+`STACKCHAN_BODY_ALLOW_INSECURE_WS=1` explicitly enables plain WebSocket for an
+isolated development network. Never use that opt-in in production.
+
 ### Learned-policy interface (dry run)
 
 `POST /policy/run` is an interface-only endpoint for a learned controller such

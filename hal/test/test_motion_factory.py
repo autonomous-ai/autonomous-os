@@ -43,6 +43,11 @@ class TestResolveMotionClass(unittest.TestCase):
         for driver, entry in MOTION_DRIVERS.items():
             self.assertEqual(len(entry), 2, f"{driver}: expected (module, class)")
 
+    def test_stackchan_resolves_to_wifi_motion_service(self):
+        cls = resolve_motion_class("stackchan", required=True)
+        self.assertIsNotNone(cls)
+        self.assertEqual(cls.__name__, "StackChanMotionService")
+
 
 class TestReachyMiniDeclaration(unittest.TestCase):
     """Guard the committed reachy-mini ROBOT.md: motion declares reachy_sdk."""

@@ -213,6 +213,30 @@ một move chính chủ rớt gate là bằng chứng con số đã khai bị sa
 nguồn sẽ che mất tín hiệu đó. `robots/reachy-mini/SAFETY.md` ghi rõ trần đó suy
 ra từ đâu và thứ gì vẫn cần robot thật mới xác nhận được.
 
+Đường Wi-Fi của Stack-chan giữ nguyên gate theo `duration` xuyên qua ranh giới
+process và mạng. `StackChanMotionService` gửi duration đã được kéo dài dưới dạng
+`duration_ms`, gia hạn một controller lease ngắn trong lúc firmware nội suy theo
+thời gian, rồi kết thúc lease bằng cách giữ tại vị trí đo được. Lệnh nhả torque
+ưu tiên hơn move đang chạy, đưa đầu về tư thế nghỉ cúi xuống thận trọng, rồi mới
+xác nhận tư thế đó từ phản hồi vị trí đo được trước khi tắt torque. Nếu không tới
+được tư thế nghỉ, driver halt-hold và giữ torque bật. Handshake bắt buộc
+firmware khai `motion.timed_move`, đọc vị trí thật, halt-and-hold và torque
+release. Nếu HAL, process hoặc Wi-Fi biến mất, firmware ESP32 hết hạn lease (hoặc
+xử lý disconnect) rồi giữ tại vị trí đo được; firmware chỉ có tham số spring
+speed chưa hiệu chuẩn sẽ bị từ chối vì không thể giữ đúng trần độ/giây đã khai.
+Đường này đã có test protocol phía host; fault injection trên Wi-Fi và phần cứng
+thật vẫn là bước qualification trên thiết bị.
+
+Chọn driver bằng `driver: stackchan` trong capability `motion` của device
+profile. Đặt `STACKCHAN_DEVICE_ID`, một `STACKCHAN_BODY_TOKEN` riêng dài ít nhất
+32 ký tự, cùng `STACKCHAN_BODY_TLS_CERT` và `STACKCHAN_BODY_TLS_KEY`.
+`STACKCHAN_BODY_HOST` (mặc định `0.0.0.0`) và `STACKCHAN_BODY_PORT` (mặc định
+`8765`) cấu hình listener; `STACKCHAN_BODY_COMMAND_TIMEOUT` (mặc định `3.0` giây)
+và `STACKCHAN_BODY_LEASE_TTL_MS` (mặc định `1500`, chấp nhận `250..5000`) cấu
+hình thời gian phát hiện lỗi. TLS là bắt buộc, trừ khi
+`STACKCHAN_BODY_ALLOW_INSECURE_WS=1` bật WebSocket không mã hoá một cách tường
+minh cho mạng phát triển cô lập. Không dùng tuỳ chọn này trong production.
+
 ### Interface learned-policy (dry run)
 
 `POST /policy/run` hiện chỉ là interface cho learned controller như ACT hoặc
