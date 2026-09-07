@@ -46,7 +46,7 @@ def test_padded_short_utterance_survives_on_span():
     # the buffer, but unbroken speech once the padding is discounted.
     confs = [0.0] * 4 + [0.9] * 6 + [0.0] * 2
 
-    _peak, _mean, ratio, span_ratio = _metrics_for(confs)
+    _peak, _mean, ratio, span_ratio, _span_s = _metrics_for(confs)
 
     assert ratio == pytest.approx(0.5)
     assert span_ratio == pytest.approx(1.0)
@@ -57,7 +57,7 @@ def test_sustained_noise_still_fails_on_span():
     # cannot rescue it, because the gaps are INSIDE the span.
     confs = [0.0, 0.9, 0.0, 0.0, 0.0, 0.9, 0.0, 0.0, 0.0, 0.9, 0.0, 0.0]
 
-    _peak, _mean, ratio, span_ratio = _metrics_for(confs)
+    _peak, _mean, ratio, span_ratio, _span_s = _metrics_for(confs)
 
     assert ratio == pytest.approx(0.25)
     assert span_ratio == pytest.approx(3 / 9)
@@ -65,14 +65,14 @@ def test_sustained_noise_still_fails_on_span():
 
 
 def test_buffer_with_no_voiced_chunk_reports_zero_for_both():
-    _peak, _mean, ratio, span_ratio = _metrics_for([0.0] * 8)
+    _peak, _mean, ratio, span_ratio, _span_s = _metrics_for([0.0] * 8)
 
     assert ratio == 0.0
     assert span_ratio == 0.0
 
 
 def test_fully_voiced_buffer_scores_one_either_way():
-    _peak, mean, ratio, span_ratio = _metrics_for([0.9] * 8)
+    _peak, mean, ratio, span_ratio, _span_s = _metrics_for([0.9] * 8)
 
     assert mean == pytest.approx(0.9)
     assert ratio == pytest.approx(1.0)
@@ -85,4 +85,20 @@ def test_metrics_fail_open_when_the_model_is_missing():
     vad._lock = threading.Lock()
     vad._session = None
 
-    assert vad.speech_metrics(np.zeros(512, dtype=np.int16), 16000) == (1.0, 1.0, 1.0, 1.0)
+    assert vad.speech_metrics(np.zeros(512, dtype=np.int16), 16000) == (1.0, 1.0, 1.0, 1.0, 0.0)
+
+
+def test_span_seconds_measures_the_utterance_not_the_buffer():
+    # 6 voiced chunks inside a 12-chunk buffer. The span is the speech alone;
+    # the padding must not inflate it. 512 samples @ 16kHz = 32ms per chunk.
+    confs = [0.0] * 4 + [0.9] * 6 + [0.0] * 2
+
+    *_rest, span_seconds = _metrics_for(confs)
+
+    assert span_seconds == pytest.approx(6 * 512 / 16000)
+
+
+def test_span_seconds_is_zero_when_nothing_is_voiced():
+    *_rest, span_seconds = _metrics_for([0.0] * 8)
+
+    assert span_seconds == 0.0

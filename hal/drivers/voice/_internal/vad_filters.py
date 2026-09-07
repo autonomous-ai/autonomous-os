@@ -183,7 +183,7 @@ class SileroVADFilter:
             return True
 
     def speech_metrics(self, data, device_rate: int):
-        """Return (peak, mean, voiced_ratio, span_ratio) for `data`.
+        """Return (peak, mean, voiced_ratio, span_ratio, span_seconds) for `data`.
 
         Unlike is_speech (which is peak-only — one transient chunk crossing the
         threshold marks the whole buffer speech, fine for fast onset detection at
@@ -200,11 +200,21 @@ class SileroVADFilter:
         judging a live sliding window (barge-in) wants voiced_ratio, since there
         is no padding to discount and a span measure would only be more lenient.
 
-        Fails open: returns (1.0, 1.0, 1.0, 1.0) on error so callers treat it as
-        speech.
+        `span_seconds` is the WALL LENGTH of that same span — the actual
+        utterance, with the padding excluded. It is not the buffer duration the
+        caller already has: a capture is padded at both ends, so a single word
+        still yields a multi-second buffer (measured on lamp-0c89: no buffer
+        shorter than 1.73s in 14 days, `"the"` alone arriving as 3.46s). Any
+        gate meaning "too short to be addressed to us" has to read this, not the
+        buffer.
+
+        Fails open: returns (1.0, 1.0, 1.0, 1.0, 0.0) on error so callers treat
+        it as speech. The 0.0 span is deliberately NOT a plausible utterance
+        length — a fail-open path must not hand a duration gate a number it can
+        act on.
         """
         if self._session is None:
-            return (1.0, 1.0, 1.0, 1.0)
+            return (1.0, 1.0, 1.0, 1.0, 0.0)
         try:
             np = self._np
             if device_rate != STT_RATE:
@@ -237,7 +247,7 @@ class SileroVADFilter:
                     self._context = x[:, -64:]
 
             if not confs:
-                return (1.0, 1.0, 1.0, 1.0)
+                return (1.0, 1.0, 1.0, 1.0, 0.0)
             peak = max(confs)
             mean = sum(confs) / len(confs)
             voiced = [c >= SILERO_VAD_THRESHOLD for c in confs]
@@ -250,12 +260,14 @@ class SileroVADFilter:
                 last = len(voiced) - 1 - voiced[::-1].index(True)
                 span = voiced[first:last + 1]
                 span_ratio = sum(span) / len(span)
+                span_seconds = len(span) * SILERO_CHUNK_SIZE / STT_RATE
             else:
                 span_ratio = ratio
-            return (peak, mean, ratio, span_ratio)
+                span_seconds = 0.0
+            return (peak, mean, ratio, span_ratio, span_seconds)
         except Exception as e:
             logger.warning("Silero speech_metrics error: %s", e)
-            return (1.0, 1.0, 1.0, 1.0)
+            return (1.0, 1.0, 1.0, 1.0, 0.0)
 
 
 def turn_should_close(
