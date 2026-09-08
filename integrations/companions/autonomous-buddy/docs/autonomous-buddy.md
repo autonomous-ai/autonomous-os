@@ -24,7 +24,7 @@ The May design below is historical computer-use context, not the current packagi
 ### Goals
 - The device can drive a user's computer via voice commands ("open Chrome", "go to Gmail", "join Google Meet", "type X", "close Slack")
 - Works across any macOS app (not just browser)
-- LAN-only, pairing-based — no relay server, no cloud middleman
+- Commands and pairing confirmation stay on LAN; the backend can request a pairing code over MQTT.
 - Mac-first MVP; Windows/Linux deferred to v1.2+
 
 ### Non-goals (MVP)
@@ -238,15 +238,20 @@ Reserved for later (defined but not implemented MVP):
 
 ### Pairing (one-time)
 
-1. User opens buddy menu → "Pair with device" → buddy hits the device `POST /api/buddy/pair/start` (anonymous; rate-limited)
-2. The device generates a 6-digit code, displays it in web UI on `/devices` (or wherever); also returns the code in the start response so buddy can guide user
-3. The device keeps the code in memory for 60s
-4. User reads the code from the device web UI / display
+1. User requests a code from the device web UI via admin-authenticated `POST /api/buddy/pair/start`, or the authorized backend sends `{"cmd":"data","kind":"buddy.pair.start","data":{}}` on `fa_channel`.
+2. The device returns a 6-digit code. MQTT returns `{"type":"data","kind":"buddy.pair.start","status":"success","data":{"code":"123456","expires_in":60}}` on `fd_channel`, with the standard `MQTTDataResponse` metadata. Request `data` is optional and ignored.
+3. HTTP and MQTT use the same Buddy service: the single-use code stays in memory for 60s; issuing another code through either transport replaces the pending code.
+4. User reads the code from the requesting UI and opens "Pair with device" in Buddy.
 5. User types code into buddy
-6. Buddy calls `POST /api/buddy/pair/confirm {code, name, fingerprint, os_version}`
-7. The device validates code, generates long-lived bearer token, persists `{token, fingerprint, name, created_at}` in `buddies.json`
+6. Buddy calls `POST /api/buddy/pair/confirm {code, name, fingerprint, os_version}` over LAN.
+7. The device validates code, generates a long-lived bearer token, and persists `{buddy_id, token, fingerprint, name, os_version, paired_at}` in `config/buddies.json`.
 8. Buddy stores token in macOS Keychain (service `network.autonomous.ai.buddy`)
 9. Buddy opens WS with `Authorization: Bearer <token>`
+
+MQTT authorization relies on existing broker credentials and topic ACLs; the
+backend must authorize the device owner before sending `buddy.pair.start`.
+Confirmation, status and revocation have no new MQTT commands; their HTTP routes
+remain in place. See [MQTT contract](../../../../docs/mqtt.md#buddypairstart--issue-a-buddy-pairing-code).
 
 ### Reconnect
 
@@ -273,7 +278,7 @@ Reserved for later (defined but not implemented MVP):
 
 ### Threats considered
 
-1. **Malicious LAN attacker** → cannot pair without code from web UI. Cannot replay token without breaching Keychain.
+1. **Malicious LAN attacker** → cannot pair without a code from the authorized HTTP or MQTT flow. Cannot replay token without breaching Keychain.
 2. **Compromised lamp** → can run arbitrary commands on Mac (= blast radius). Mitigation: user can revoke at any time from menu bar without needing lamp access.
 3. **Compromised buddy** (malware on Mac that hijacks the WS) → could send fake responses to lamp. Mitigation: command IDs + signed responses (v1.1+).
 4. **Eavesdropping on LAN** → MVP doesn't encrypt WS. Acceptable for home LAN, must fix before any non-trusted-network deployment.
