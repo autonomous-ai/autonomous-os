@@ -204,7 +204,27 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 	// friend on their own timeline, stranger collapsed to "unknown"
 	// timeline) — the handler no longer writes them here. See
 	// faceid/perception.py _post_wellbeing.
-	if req.CurrentUser != "" {
+	// speech_emotion.detected is exempt: SER identifies nobody. Its
+	// current_user is a courier value computed by the voice turn, and five
+	// unrelated situations collapse into the literal string "unknown" —
+	// speaker-ID found no enrolled match, speaker-ID could not run, the turn
+	// had no transcript at all, the wake-word gate rejected it, or the noise
+	// guard dropped it. Letting that write here means one ambient sigh from an
+	// unrecognized voice erases a live face-derived identity.
+	//
+	// Nothing is lost by skipping it. SER inherits its user from speaker-ID
+	// only (never face), and a confident speaker-ID match is already promoted
+	// device-wide by voice_service.py set_voice_user() before the SER event is
+	// even queued — so every other producer (voice turns, sensing) is already
+	// shipping that identity via app_state.resolve_current_user(), where face
+	// outranks voice. SER's copy is at best a duplicate, and always the
+	// latest-arriving one (queue + cloud call + flush window).
+	//
+	// This does NOT change the event's own attribution: the message the agent
+	// sees still carries "[context: current_user=...]" built from
+	// req.CurrentUser below, so stranger mood still logs under "unknown" as
+	// skills/mood/SKILL.md requires.
+	if req.CurrentUser != "" && req.Type != "speech_emotion.detected" {
 		mood.SetCurrentUser(req.CurrentUser)
 	} else if req.Type == "presence.leave" || req.Type == "presence.away" {
 		mood.ClearCurrentUser()
