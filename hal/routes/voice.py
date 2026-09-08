@@ -15,7 +15,8 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 import hal.app_state as state
-from hal.config import AUDIO_INPUT_ALSA, TTS_SPEED, TTS_VOICE, TTS_INSTRUCTIONS
+from hal.telemetry import tts_hooks
+from hal.config import AUDIO_INPUT_ALSA, get_tts_speed, TTS_VOICE, TTS_INSTRUCTIONS
 from hal.models import (
     RealtimeHistoryRequest,
     SpeakRequest,
@@ -104,11 +105,17 @@ def start_voice(req: VoiceStartRequest):
                 numpy_module=np,
                 output_device=state.audio_output_device,
                 voice=voice,
-                speed=TTS_SPEED,
+                speed=get_tts_speed(),
                 instructions=instructions,
                 on_speak_start=state._on_tts_speak_start,
                 on_speak_end=state._on_tts_speak_end,
                 provider=req.tts_provider,
+                # Same tracking hooks the boot-time instance gets. Without
+                # them a provider/voice swap keeps speaking but stops
+                # reporting playback, and the metrics go blind until restart.
+                on_playback_audio=tts_hooks.on_playback_audio,
+                on_playback_done=tts_hooks.on_playback_done,
+                on_playback_muted=tts_hooks.on_playback_muted,
             )
             state.logger.info("TTSService started (provider=%s, voice=%s)", req.tts_provider, voice)
             if state.music_service:
@@ -368,6 +375,10 @@ def speak_text(req: SpeakRequest):
             interruptible=req.interruptible,
             prerender=req.prerender,
             realtime_feedback=req.realtime_feedback,
+            # Ownership for voice metrics only: which turn this phrase belongs to
+            # (os-server sets it for dead-air fillers). Playback behaviour is
+            # unchanged — turn_seq gating stays exclusive to /voice/speak-queue.
+            turn_id=req.turn_id,
         )
         if not started:
             # HTTPException's second positional arg is `detail`, not a status —
@@ -383,6 +394,7 @@ def speak_text(req: SpeakRequest):
         req.text,
         interruptible=req.interruptible,
         realtime_feedback=req.realtime_feedback,
+        turn_id=req.turn_id,
     )
     if not started:
         raise HTTPException(409, "TTS is busy speaking")

@@ -11,11 +11,13 @@ make dmg-signed
 
 The output `dist/AutonomousBuddy-<version>.dmg` is signed, notarized, and stapled — users mount it, drag the app to Applications, double-click, and macOS opens it without any Gatekeeper warning or right-click dance.
 
-The ad-hoc `make dmg` path still works for local builds and informal sharing; this doc only covers the production path.
+`DEV_ID_APP` is auto-detected from the keychain — the first `Developer ID Application:` identity `security find-identity -v -p codesigning` reports. Export it only to pin a specific identity. Because of that, **every** bundling target (`make app`, `make install`, `make dmg`) signs with Developer ID once the cert is installed; they fall back to ad-hoc signing only when no such cert exists (or when you force it with `make app DEV_ID_APP=`). `make app-signed` is `make app` plus a hard failure if no Developer ID identity is available.
+
+What `make dmg-signed` adds on top of `make dmg` is notarization + stapling, which needs `NOTARY_PROFILE`.
 
 ## What changes vs the ad-hoc build
 
-| | Ad-hoc (`make dmg`) | Production (`make dmg-signed`) |
+| | Ad-hoc (no cert installed) | Production (`make dmg-signed`) |
 |---|---|---|
 | Signing identity | None (`-` placeholder) | Developer ID Application cert from Apple |
 | Hardened runtime | Off | **On** (`--options runtime`, required by Apple) |

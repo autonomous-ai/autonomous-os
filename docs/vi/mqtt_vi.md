@@ -315,11 +315,18 @@ các field riêng theo từng kind. Mọi kind đều phản hồi trên fd_chan
 metadata device/version chuẩn cộng với `kind`, `status` (`success|failure`), `error`
 (tùy chọn) và payload `data` (tùy chọn).
 
+`tts.set` nhận `speed` tùy chọn trong `0.25–4.0`, ví dụ
+`{"cmd":"data","kind":"tts.set","data":{"speed":1.2}}`. Bỏ qua thì giữ
+giá trị đã lưu; nếu chưa lưu, dùng `HAL_TTS_SPEED` (mặc định `1.3`). Lệnh ack
+`starting` rồi `success` hoặc `failure`; lưu và áp dụng lại HAL kể cả khi
+setting không đổi. Uplink `info` có `tts_speed` hiệu lực. ElevenLabs giới hạn
+tốc độ gửi đi trong `0.7–1.2`.
+
 **Nhận:** `{"cmd": "data", "kind": "<kind>", "data": { ... }}`
 
 | Kind | Mục đích | Field trong `data` |
 |------|----------|--------------------|
-| `tts.set` | Lưu cấu hình TTS voice/provider/language | `provider`, `voice`, `language` |
+| `tts.set` | Lưu cấu hình TTS voice/provider/language/speed | `provider`, `voice`, `language`, `speed` (tùy chọn) |
 | `tts.preview` | Preview TTS một lần (không ghi config) | `text` (bắt buộc), tùy chọn `provider`/`voice`/`language` |
 | `wakeword.gate` | Bật/tắt wake-word gate top-level (bất đồng bộ; ack `starting`) | `enabled` (boolean bắt buộc) |
 | `timezone.set` | Áp dụng múi giờ IANA của device (bất đồng bộ; ack `starting`) | `timezone` (bắt buộc, ví dụ `Asia/Ho_Chi_Minh`) |

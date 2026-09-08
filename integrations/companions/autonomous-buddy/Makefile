@@ -37,7 +37,7 @@ help: ## Show this help
 	@echo "  make run            # dev — runs in foreground (Ctrl-C to stop)"
 	@echo "  make app && make open"
 	@echo ""
-	@echo "Right-click → Open is needed the first time (no code signing yet)."
+	@echo "Signing is automatic when a Developer ID cert is in the keychain."
 
 run: ## Run buddy in dev mode (foreground)
 	cd $(MACOS_DIR) && swift run
@@ -51,7 +51,7 @@ release: ## Build universal release binary (arm64 + x86_64) at macos/.build/appl
 check: ## Compile-only check (no link)
 	cd $(MACOS_DIR) && swift build --build-tests
 
-app: release $(ICNS_FILE) ## Bundle into dist/AutonomousBuddy.app (ad-hoc signed with bundle ID)
+app: release $(ICNS_FILE) ## Bundle into dist/AutonomousBuddy.app (Developer ID signed if a cert is installed, else ad-hoc)
 	@echo "==> Bundling $(APP_BUNDLE)"
 	@rm -rf "$(APP_BUNDLE)"
 	@mkdir -p "$(APP_BUNDLE)/Contents/MacOS"
@@ -60,10 +60,16 @@ app: release $(ICNS_FILE) ## Bundle into dist/AutonomousBuddy.app (ad-hoc signed
 	@cp "$(INFO_PLIST)" "$(APP_BUNDLE)/Contents/Info.plist"
 	@cp "$(ICNS_FILE)" "$(APP_BUNDLE)/Contents/Resources/AppIcon.icns"
 	@chmod +x "$(APP_BUNDLE)/Contents/MacOS/$(APP_NAME)"
-	@codesign --force --sign - --identifier "$(BUNDLE_ID)" \
-		"$(APP_BUNDLE)/Contents/MacOS/$(APP_NAME)" 2>&1 | sed 's/^/    /'
+	@echo "==> Signing with $(SIGN_ID)"
+	@codesign --force $(SIGN_FLAGS) --sign "$(SIGN_ID)" --identifier "$(BUNDLE_ID)" \
+		"$(APP_BUNDLE)" 2>&1 | sed 's/^/    /'
+	@codesign --verify --deep --strict "$(APP_BUNDLE)" 2>&1 | sed 's/^/    /'
 	@echo "==> Done: $(APP_BUNDLE)"
-	@echo "    First launch: right-click → Open (Gatekeeper blocks unsigned apps)."
+	@if [ -z "$(DEV_ID_APP)" ]; then \
+		echo "    Ad-hoc signed — first launch: right-click → Open."; \
+	else \
+		echo "    Developer ID signed. Not notarized: run 'make dmg-signed' for the ship-ready DMG."; \
+	fi
 
 icon: $(ICNS_FILE) ## Regenerate AppIcon.icns from the SF Symbol placeholder
 
@@ -95,7 +101,7 @@ install: app ## Copy bundled .app to /Applications (replaces existing)
 	@echo "==> Installing to /Applications/$(APP_NAME).app"
 	@rm -rf "/Applications/$(APP_NAME).app"
 	@cp -R "$(APP_BUNDLE)" "/Applications/"
-	@echo "==> Installed. Right-click → Open the first time."
+	@echo "==> Installed."
 
 dmg: app ## Package the .app into a distributable DMG (drag-to-Applications layout)
 	@echo "==> Packaging $(DMG_FILE)"
@@ -107,9 +113,18 @@ dmg: app ## Package the .app into a distributable DMG (drag-to-Applications layo
 	@hdiutil create -volname "$(DMG_VOL)" -srcfolder "$(DMG_STAGE)" \
 		-ov -format UDZO "$(DMG_FILE)" >/dev/null
 	@rm -rf "$(DMG_STAGE)"
+	@if [ -n "$(DEV_ID_APP)" ]; then \
+		echo "==> Signing DMG with $(DEV_ID_APP)"; \
+		codesign --force --sign "$(DEV_ID_APP)" --timestamp "$(DMG_FILE)"; \
+	fi
 	@echo "==> Done: $(DMG_FILE)"
 	@echo "    Send this DMG to users. They mount it and drag $(APP_NAME).app onto Applications."
-	@echo "    First launch on the user's Mac: right-click $(APP_NAME).app → Open (Gatekeeper warns once)."
+	@if [ -z "$(DEV_ID_APP)" ]; then \
+		echo "    Ad-hoc: first launch needs right-click → Open."; \
+	else \
+		echo "    Developer ID signed but NOT notarized — first launch still needs right-click → Open."; \
+		echo "    Run 'make dmg-signed' (needs NOTARY_PROFILE) for a DMG that opens with a double-click."; \
+	fi
 
 open: ## Launch the bundled .app from dist/
 	@if [ ! -d "$(APP_BUNDLE)" ]; then echo "No bundle yet — run 'make app' first."; exit 1; fi
@@ -149,49 +164,34 @@ mock-build: ## Compile-only check for mock-device
 #   autonomous-buddy/docs/release-signing.md
 # ----------------------------------------------------------------------------
 
-DEV_ID_APP     ?=
+# Auto-detected from the keychain so `make app` / `install` / `dmg` sign for
+# distribution without extra env. Override by exporting DEV_ID_APP, or force a
+# local ad-hoc build with `make app DEV_ID_APP=`.
+DEV_ID_APP     ?= $(shell security find-identity -v -p codesigning | sed -n 's/.*"\(Developer ID Application: [^"]*\)".*/\1/p' | head -1)
 NOTARY_PROFILE ?=
 
-app-signed: release $(ICNS_FILE) ## Bundle + sign .app with Developer ID + hardened runtime (requires DEV_ID_APP)
+# Ad-hoc ("-") when no Developer ID is available; hardened runtime + secure
+# timestamp only make sense with a real identity.
+SIGN_ID    = $(if $(DEV_ID_APP),$(DEV_ID_APP),-)
+SIGN_FLAGS = $(if $(DEV_ID_APP),--options runtime --timestamp,)
+
+app-signed: ## Same as `make app`, but fails if no Developer ID identity is available
 	@if [ -z "$(DEV_ID_APP)" ]; then \
-		echo "ERROR: DEV_ID_APP env var is required (e.g. 'Developer ID Application: Foo Inc (TEAMID)')."; \
+		echo "ERROR: no Developer ID Application identity found and DEV_ID_APP is unset."; \
 		echo "       See autonomous-buddy/docs/release-signing.md for setup."; \
 		exit 1; \
 	fi
-	@echo "==> Bundling $(APP_BUNDLE) for release signing"
-	@rm -rf "$(APP_BUNDLE)"
-	@mkdir -p "$(APP_BUNDLE)/Contents/MacOS"
-	@mkdir -p "$(APP_BUNDLE)/Contents/Resources"
-	@cp "$(RELEASE_BIN)" "$(APP_BUNDLE)/Contents/MacOS/$(APP_NAME)"
-	@cp "$(INFO_PLIST)" "$(APP_BUNDLE)/Contents/Info.plist"
-	@cp "$(ICNS_FILE)" "$(APP_BUNDLE)/Contents/Resources/AppIcon.icns"
-	@chmod +x "$(APP_BUNDLE)/Contents/MacOS/$(APP_NAME)"
-	@echo "==> Signing with $(DEV_ID_APP)"
-	@codesign --force --options runtime --timestamp \
-		--sign "$(DEV_ID_APP)" \
-		--identifier "$(BUNDLE_ID)" \
-		"$(APP_BUNDLE)"
-	@codesign --verify --deep --strict --verbose=2 "$(APP_BUNDLE)" 2>&1 | sed 's/^/    /'
+	@$(MAKE) app
 	@spctl --assess --type execute --verbose=4 "$(APP_BUNDLE)" 2>&1 | sed 's/^/    /' || true
-	@echo "==> Signed: $(APP_BUNDLE)"
 
-dmg-signed: app-signed ## Build signed .app → package DMG → sign DMG → notarize → staple (requires DEV_ID_APP + NOTARY_PROFILE)
+dmg-signed: ## Build signed .app → package DMG → sign DMG → notarize → staple (requires DEV_ID_APP + NOTARY_PROFILE)
 	@if [ -z "$(NOTARY_PROFILE)" ]; then \
 		echo "ERROR: NOTARY_PROFILE env var is required (keychain profile created via xcrun notarytool store-credentials)."; \
 		echo "       See autonomous-buddy/docs/release-signing.md for setup."; \
 		exit 1; \
 	fi
-	@echo "==> Packaging $(DMG_FILE)"
-	@rm -f "$(DMG_FILE)"
-	@rm -rf "$(DMG_STAGE)"
-	@mkdir -p "$(DMG_STAGE)"
-	@cp -R "$(APP_BUNDLE)" "$(DMG_STAGE)/"
-	@ln -s /Applications "$(DMG_STAGE)/Applications"
-	@hdiutil create -volname "$(DMG_VOL)" -srcfolder "$(DMG_STAGE)" \
-		-ov -format UDZO "$(DMG_FILE)" >/dev/null
-	@rm -rf "$(DMG_STAGE)"
-	@echo "==> Signing DMG"
-	@codesign --force --sign "$(DEV_ID_APP)" --timestamp "$(DMG_FILE)"
+	@$(MAKE) app-signed
+	@$(MAKE) dmg
 	@echo "==> Submitting to Apple notarization (this can take 1-5 min)"
 	@xcrun notarytool submit "$(DMG_FILE)" \
 		--keychain-profile "$(NOTARY_PROFILE)" \

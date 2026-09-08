@@ -17,10 +17,10 @@ import (
 )
 
 const (
-	eventTrackingURL = "https://autonomous-analytics-qffztaoryq-uc.a.run.app/api/v1/event_tracking"
-	envFile          = "/opt/hal/.env"
-	envKey           = "AUTONOMOUS_ANALYTICS_ID"
-	platform         = "device"
+	envFile   = "/opt/hal/.env"
+	envKey    = "AUTONOMOUS_ANALYTICS_ID"
+	envKeyURL = "AUTONOMOUS_ANALYTICS_URL"
+	platform  = "device"
 )
 
 var (
@@ -28,6 +28,7 @@ var (
 
 	once      sync.Once
 	apiKey    string
+	fileURL   string // AUTONOMOUS_ANALYTICS_URL as read from envFile
 	pseudoID  string
 	sessionID string
 )
@@ -37,10 +38,15 @@ func initOnce() {
 		// os-server already godotenv.Load()s /opt/hal/.env at startup; read
 		// the file directly as a fallback for callers that don't (tests, CLI).
 		apiKey = os.Getenv(envKey)
-		if apiKey == "" {
-			if kv, err := godotenv.Read(envFile); err == nil {
+		// fileURL holds ONLY what the file says. The process env is read live
+		// in Endpoint() instead of being cached here: caching it would keep a
+		// stale endpoint alive after the variable is cleared, which reads as
+		// "analytics is still on" when it is not.
+		if kv, err := godotenv.Read(envFile); err == nil {
+			if apiKey == "" {
 				apiKey = kv[envKey]
 			}
+			fileURL = kv[envKeyURL]
 		}
 		// Stable per-device identity: hostname is what the fleet is named by.
 		pseudoID, _ = os.Hostname()
@@ -54,6 +60,10 @@ func initOnce() {
 // feature that triggered it, so callers should not propagate it.
 func TrackEvent(ctx context.Context, name string, params map[string]any) error {
 	initOnce()
+	url := Endpoint()
+	if url == "" {
+		return fmt.Errorf("analytics: %s not set in %s", envKeyURL, envFile)
+	}
 	if apiKey == "" {
 		return fmt.Errorf("analytics: %s not set in %s", envKey, envFile)
 	}
@@ -83,7 +93,7 @@ func TrackEvent(ctx context.Context, name string, params map[string]any) error {
 		return fmt.Errorf("marshal event: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint(), bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("new request: %w", err)
 	}
@@ -101,10 +111,17 @@ func TrackEvent(ctx context.Context, name string, params map[string]any) error {
 	return nil
 }
 
-// endpoint allows tests (and an on-device override) to redirect the POST.
-func endpoint() string {
-	if u := os.Getenv("AUTONOMOUS_ANALYTICS_URL"); u != "" {
+// Endpoint is where events are posted: AUTONOMOUS_ANALYTICS_URL from the
+// process env first (what tests set), then the same key in the body's
+// /opt/hal/.env. Read per call so a test can point it at a local server.
+//
+// Empty means analytics is not configured on this body — that is the OFF
+// switch. There is deliberately no built-in default: a device sends events
+// only to an endpoint someone wrote down.
+func Endpoint() string {
+	initOnce()
+	if u := os.Getenv(envKeyURL); u != "" {
 		return u
 	}
-	return eventTrackingURL
+	return fileURL
 }

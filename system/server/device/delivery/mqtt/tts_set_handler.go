@@ -29,19 +29,22 @@ func (h *DeviceMQTTHandler) handleTTSSet(env domain.MQTTDataCommand) error {
 		return err
 	}
 
+	if err := domain.ValidateTTSSpeed(req.Speed); err != nil {
+		h.publishTTSSetAck("failure", err.Error(), &req)
+		return err
+	}
 	slog.Info("tts.set: received", "component", "mqtt", "provider", req.Provider, "voice", req.Voice, "language", req.Language)
 
 	// Ack immediately so BFF knows the device received the command.
 	h.publishTTSSetAck("starting", "", nil)
 
 	go func() {
-		if err := h.deviceService.UpdateVoiceConfig(req.Provider, req.Voice, req.Language); err != nil {
+		if err := h.deviceService.UpdateVoiceConfig(req.Provider, req.Voice, req.Language, req.Speed); err != nil {
 			slog.Error("tts.set: UpdateVoiceConfig failed", "component", "mqtt", "error", err)
 			h.publishTTSSetAck("failure", err.Error(), &req)
 			return
 		}
-		// UpdateVoiceConfig saves config + kicks systemctl restart hal async.
-		// ACK success immediately — BFF doesn't need to wait for hal to come back.
+		// UpdateVoiceConfig persists settings and schedules the HAL update.
 		slog.Info("tts.set: applied", "component", "mqtt", "provider", req.Provider, "voice", req.Voice, "language", req.Language)
 		h.publishTTSSetAck("success", "", &req)
 	}()

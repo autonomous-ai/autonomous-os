@@ -296,7 +296,7 @@ func PrewarmFillers() {
 // workaround is unnecessary, but the call site stays the same for now.
 //
 // No-op when the resolved Opening pool is empty.
-func PlayOpeningFillerNow() {
+func PlayOpeningFillerNow(owner string) {
 	lang := i18n.Lang()
 	opening, _ := poolsForLang(lang)
 	if len(opening) == 0 {
@@ -306,8 +306,8 @@ func PlayOpeningFillerNow() {
 	if filler == "" {
 		return
 	}
-	slog.Info("opening filler firing (immediate, cached)", "component", "sensing", "lang", lang, "filler", filler)
-	if err := hal.SpeakCachedInterruptible(filler); err != nil {
+	slog.Info("opening filler firing (immediate, cached)", "component", "sensing", "lang", lang, "filler", filler, "owner", owner)
+	if err := hal.SpeakCachedInterruptibleForTurn(filler, owner); err != nil {
 		slog.Warn("opening filler failed", "component", "sensing", "error", err)
 	}
 }
@@ -330,12 +330,16 @@ func (h *SensingHandler) PlayFiller(c *gin.Context) {
 	// behaviour (the realtime dead-air wait), so existing callers are unchanged.
 	var req struct {
 		Pool string `json:"pool"`
+		// Owner is an opaque tag HAL sends back to itself so a played filler
+		// can be attributed to the utterance it was armed for (voice metrics).
+		// Empty keeps the previous behaviour for callers that have none.
+		Owner string `json:"owner"`
 	}
 	_ = c.ShouldBindJSON(&req)
 	if req.Pool != "" {
-		go PlayPoolFillerNow(req.Pool)
+		go PlayPoolFillerNow(req.Pool, req.Owner)
 	} else {
-		go PlayOpeningFillerNow()
+		go PlayOpeningFillerNow(req.Owner)
 	}
 	c.JSON(http.StatusOK, serializers.ResponseSuccess(nil))
 }
@@ -347,7 +351,7 @@ func (h *SensingHandler) PlayFiller(c *gin.Context) {
 //
 // Silent when the pool is unknown or empty: a missing phrase must never block
 // the aim or the capture that follows it.
-func PlayPoolFillerNow(pool string) {
+func PlayPoolFillerNow(pool, owner string) {
 	lang := i18n.Lang()
 	phrases := toolPoolForLang(lang, pool)
 	if len(phrases) == 0 {
@@ -357,8 +361,8 @@ func PlayPoolFillerNow(pool string) {
 	if filler == "" {
 		return
 	}
-	slog.Info("pool filler firing", "component", "sensing", "lang", lang, "pool", pool, "filler", filler)
-	if err := hal.SpeakCachedInterruptible(filler); err != nil {
+	slog.Info("pool filler firing", "component", "sensing", "lang", lang, "pool", pool, "filler", filler, "owner", owner)
+	if err := hal.SpeakCachedInterruptibleForTurn(filler, owner); err != nil {
 		slog.Warn("pool filler failed", "component", "sensing", "pool", pool, "error", err)
 	}
 }
@@ -366,7 +370,7 @@ func PlayPoolFillerNow(pool string) {
 // FillerManager schedules and cancels dead-air fillers driven by OpenClaw
 // agent events. Wiring (per turn lifecycle):
 //
-//  1. Sensing handler calls MarkVoiceRun(runID) before forwarding a
+//  1. Sensing handler calls MarkVoiceRun(runID, interactionID) before forwarding a
 //     voice/voice_command turn — only marked runs are eligible.
 //  2. SSE handler calls OnTurnStart(runID) on lifecycle.start — arms the
 //     first FillerDelay timer.
@@ -388,14 +392,18 @@ type FillerManager struct {
 	mu        sync.Mutex
 	runs      map[string]*fillerRun
 	voiceRuns map[string]bool
+	// interactions maps a run to HAL's voice-metrics interaction id, so a filler
+	// fired later in the turn is attributed the same way the opening one is.
+	interactions map[string]string
 }
 
 // NewFillerManager constructs an empty FillerManager. Language is read at
 // fire time from lib/i18n, so no config wiring is needed here.
 func NewFillerManager() *FillerManager {
 	return &FillerManager{
-		runs:      make(map[string]*fillerRun),
-		voiceRuns: make(map[string]bool),
+		runs:         make(map[string]*fillerRun),
+		voiceRuns:    make(map[string]bool),
+		interactions: make(map[string]string),
 	}
 }
 
@@ -406,13 +414,26 @@ var DefaultFillerManager = NewFillerManager()
 
 // MarkVoiceRun marks runID as eligible for fillers. Other turn types
 // (Telegram, web chat, passive sensing, cron, guard) must NOT be marked.
-func (fm *FillerManager) MarkVoiceRun(runID string) {
+func (fm *FillerManager) MarkVoiceRun(runID, interactionID string) {
 	if runID == "" {
 		return
 	}
 	fm.mu.Lock()
 	fm.voiceRuns[runID] = true
+	if interactionID != "" {
+		fm.interactions[runID] = interactionID
+	}
 	fm.mu.Unlock()
+}
+
+// fillerOwner is the tag HAL attributes played filler audio to: the voice-metrics
+// interaction when HAL sent one, else the run id. Measurement only — an empty
+// result simply leaves the audio unattributed.
+func fillerOwner(interactionID, runID string) string {
+	if interactionID != "" {
+		return interactionID
+	}
+	return runID
 }
 
 // OnTurnStart records the run as active and arms a Continuation timer so
@@ -434,6 +455,7 @@ func (fm *FillerManager) OnTurnStart(runID string) {
 		return
 	}
 	delete(fm.voiceRuns, runID)
+	delete(fm.interactions, runID)
 	if _, exists := fm.runs[runID]; exists {
 		return
 	}
@@ -515,6 +537,7 @@ func (fm *FillerManager) Cancel(runID string) {
 	}
 	fm.mu.Lock()
 	delete(fm.voiceRuns, runID)
+	delete(fm.interactions, runID)
 	run, ok := fm.runs[runID]
 	if !ok {
 		fm.mu.Unlock()
@@ -645,9 +668,14 @@ func (fm *FillerManager) fire(runID string) {
 	// Continuation pool (tool name unmapped). Speeds up "I didn't hear a
 	// filler for web_search" debugging — grep run_id, see pool=tool vs
 	// pool=continuation vs pool=opening at fire time.
+	fm.mu.Lock()
+	owner := fillerOwner(fm.interactions[runID], runID)
+	fm.mu.Unlock()
 	pool := classifyFillerPool(filler, toolName, fired, i18n.Lang())
 	slog.Info("dead air filler firing", "component", "sensing", "run_id", runID, "filler", filler, "tool", toolName, "fired", fired, "pool", pool)
-	if err := hal.SpeakCachedInterruptible(filler); err != nil {
+	// Pass the run id so HAL can attribute the played filler to the turn it
+	// was armed for (voice metrics attribution; no behaviour change).
+	if err := hal.SpeakCachedInterruptibleForTurn(filler, owner); err != nil {
 		slog.Warn("dead air filler failed", "component", "sensing", "run_id", runID, "error", err)
 	}
 
