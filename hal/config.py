@@ -319,6 +319,20 @@ VOICE_USER_FORGET_S = float(os.environ.get("HAL_VOICE_USER_FORGET_S", "300.0"))
 # --- DL backend connection ---
 OS_CONFIG_PATH = os.environ.get("OS_CONFIG_PATH", "/root/config/config.json")
 
+
+def get_tts_speed() -> float:
+    """Read the saved rate whenever TTS is created; retain the legacy env fallback."""
+    import json
+
+    try:
+        with open(OS_CONFIG_PATH) as f:
+            speed = json.load(f).get("tts_speed")
+        if isinstance(speed, (int, float)) and not isinstance(speed, bool) and 0.25 <= speed <= 4.0:
+            return float(speed)
+    except (OSError, ValueError, AttributeError):
+        pass
+    return TTS_SPEED
+
 # Persisted speaker volume (0-100). set_volume writes it on every change so
 # os-server restores the user's last choice at next boot instead of resetting
 # to the ROBOT.md startup_volume. Sits next to config.json (the dir shared

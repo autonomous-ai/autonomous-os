@@ -588,8 +588,8 @@ def run_realtime_turn(
                                     head[:80],
                                 )
                                 wait_filler.cancel()
-                                if not tts.speak(head, turn_id=interaction_id):
-                                    tts.speak_queue(head, turn_id=interaction_id)
+                                if not tts.speak(head, turn_id=interaction_id, realtime_reply=True):
+                                    tts.speak_queue(head, turn_id=interaction_id, realtime_reply=True)
                                 first_sentence_sent = True
                                 _thinking_cue_clear()
                                 sentence_buf = rest
@@ -615,8 +615,8 @@ def run_realtime_turn(
                                     # interrupt the very sentence it exists to
                                     # cover (both are interruptible).
                                     wait_filler.cancel()
-                                    if not tts.speak(sentence, turn_id=interaction_id):
-                                        tts.speak_queue(sentence, turn_id=interaction_id)
+                                    if not tts.speak(sentence, turn_id=interaction_id, realtime_reply=True):
+                                        tts.speak_queue(sentence, turn_id=interaction_id, realtime_reply=True)
                                     first_sentence_sent = True
                                     _thinking_cue_clear()
                                 else:
@@ -624,7 +624,7 @@ def run_realtime_turn(
                                         "[realtime] Next sentence → speak_queue: %r",
                                         sentence[:80],
                                     )
-                                    tts.speak_queue(sentence, turn_id=interaction_id)
+                                    tts.speak_queue(sentence, turn_id=interaction_id, realtime_reply=True)
                             sentence_buf = ""
 
                 # Look-replay: re-append this turn's audio to the SAME session
@@ -704,15 +704,15 @@ def run_realtime_turn(
                         # Same cancel-then-busy-fallback as the first-sentence
                         # site above.
                         wait_filler.cancel()
-                        if not tts.speak(remaining, turn_id=interaction_id):
-                            tts.speak_queue(remaining, turn_id=interaction_id)
+                        if not tts.speak(remaining, turn_id=interaction_id, realtime_reply=True):
+                            tts.speak_queue(remaining, turn_id=interaction_id, realtime_reply=True)
                         first_sentence_sent = True
                         _thinking_cue_clear()
                     else:
                         logger.info(
                             "[realtime] Final fragment → speak_queue: %r", remaining[:80]
                         )
-                        tts.speak_queue(remaining, turn_id=interaction_id)
+                        tts.speak_queue(remaining, turn_id=interaction_id, realtime_reply=True)
                 # Only claim the turn as HANDLED if the model actually SPOKE.
                 # Native mode → audio actually played (native_played); ElevenLabs
                 # mode → a sentence was synthesized OR a transcript exists. An empty

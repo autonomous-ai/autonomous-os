@@ -13,6 +13,7 @@ Two things these pin down:
 import threading
 import wave
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -127,6 +128,54 @@ def test_unclaimed_playback_reports_an_empty_owner(tmp_path):
     service._play_wav_inline(_wav(tmp_path))
 
     assert [f for f in fired if isinstance(f, tuple)] == [("audio", "")]
+
+
+@pytest.mark.parametrize("cancelled", [False, True])
+def test_gesture_chime_does_not_acknowledge_pending_voice_reply(tmp_path, monkeypatch, cancelled):
+    """A tap's ping must not become the first frame of an unsynthesized reply,
+    even after that reply's completion hook has run during cancellation.
+    """
+    from hal.telemetry import voice_metrics
+
+    clock = [1000.0]
+    monkeypatch.setattr(voice_metrics, "_now", lambda: clock[0])
+    monkeypatch.setattr(threading.Timer, "start", lambda self: None)
+    voice_metrics.reset_for_test()
+    try:
+        writes, fired = [], []
+        service = _playback_service(tmp_path, writes, fired)
+        service._backend = SimpleNamespace(available=True, volume_boost=1.0)
+        service._speaker_muted = lambda: False
+        service._ack_chime_cache = None
+        service._native_mode = False
+        service._realtime_feedback = True
+        service._interruptible = False
+        service._on_playback_audio = lambda owner: voice_metrics.playback_audio(owner, service)
+        service._on_playback_done = voice_metrics.playback_end
+        iid = voice_metrics.speech_end("silence_clock")
+        voice_metrics.bind_run(iid, "pending-run")
+        service._begin_playback("run:pending-run")
+        if cancelled:
+            service._stop_event.set()
+            service._note_playback_done()
+
+        clock[0] += 1
+        assert service.play_ack_chime()
+        assert writes, "The ping must still reach the audio device"
+        assert not service._audio_written_fired
+        assert voice_metrics._playing is None
+        interaction = voice_metrics._interactions[iid]
+        assert interaction.ack_latency_ms is None
+        assert interaction.answer_latency_ms is None
+
+        if not cancelled:
+            clock[0] += 1
+            service._play_wav_inline(_wav(tmp_path))
+            assert interaction.ack_latency_ms == 2000
+            assert interaction.answer_latency_ms == 2000
+            assert interaction.ack_kind == voice_metrics.KIND_AGENT_REPLY
+    finally:
+        voice_metrics.reset_for_test()
 
 
 @pytest.mark.parametrize("owner", ["run:abc", "interaction:vi-1", ""])

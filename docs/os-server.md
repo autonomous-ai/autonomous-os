@@ -351,6 +351,16 @@ Requires sensing with camera (InsightFace). Enrolled person JPEGs persist under 
 | POST | `/voice/speak` | TTS — convert text to speech. Body fields: `text`, `voice?`, `interruptible?`, `provider?`, `tts_api_key?`, `tts_base_url?`, `cached?` (use WAV cache, render+save on miss), `prerender?` (render+save without playing — boot warmup) |
 | GET | `/voice/status` | voice_available, voice_listening, tts_available, tts_speaking |
 
+### TTS speed
+
+`GET /api/device/config` returns effective `tts_speed`; `PUT /api/device/config`
+accepts `{"tts_speed":1.2}`. This optional field accepts `0.25–4.0`; omitting
+it preserves the saved value. Saved config takes precedence over `HAL_TTS_SPEED`,
+retaining the existing environment fallback and `1.3` default. HAL reads config
+at boot and `/voice/start` through `get_tts_speed()`; speed changes are pushed
+live through `/voice/tts/config {speed}`. The ElevenLabs backend still clamps
+the outgoing value to `0.7–1.2`.
+
 ### Piper — on-device TTS
 
 A third TTS provider alongside `openai` and `elevenlabs`, selected as
@@ -420,13 +430,13 @@ request and the model path is resolved per utterance, so a voice is listable and
 speakable the moment its file lands — measured: downloaded at 18:32:29 on a HAL
 that started at 18:31:59, listed and spoken at 18:33:11 with no restart between.
 Applying a voice does not restart HAL either. `POST /voice/tts/config` sets
-provider, voice, key and base URL on the running TTS service, which reads all of
+provider, voice, speed, key and base URL on the running TTS service, which reads all of
 them per utterance, so the change takes effect on the next sentence.
 
 The phrases the device says about itself — restart, shutdown, reboot, sleep —
 are **rendered into the TTS cache ahead of time**, at boot and again whenever
-`/voice/tts/config` changes provider or voice (the cache key includes both, so a
-voice change invalidates every clip). They play at the worst possible moments:
+`/voice/tts/config` changes provider, voice or speed (all are part of the cache key, so
+a change invalidates the corresponding clips). They play at the worst possible moments:
 the restart notice is spoken while HAL is tearing down, the boot cue while every
 other service is still coming up. On Piper a cache miss there means loading a
 63 MB model on a saturated CPU — measured on an 8-core sun60iw2, the load alone
@@ -491,7 +501,7 @@ URL all along; nothing read it.
 
 `device/config_update.go` splits what used to be one `voiceSnapshot` in two:
 `bootSnapshot` (LLM and STT keys and URLs — genuinely read at import, still
-worth a restart) and `ttsSnapshot` (provider, voice, TTS key and URL — pushed
+worth a restart) and `ttsSnapshot` (provider, voice, speed, TTS key and URL — pushed
 live). A voice change is the most common save an operator makes, and restarting
 for it took the microphone, speaker and wake word down for ten to fifteen
 seconds; any admin click landing in that window was lost, because HAL was not

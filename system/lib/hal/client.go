@@ -187,8 +187,9 @@ func Speak(text string) error {
 // provider and voice per utterance, so this takes effect on the next sentence
 // — where the restart it replaces took the microphone, speaker and wake word
 // down with it for ten to fifteen seconds.
-func ApplyTTSConfig(provider, voice, apiKey, baseURL string) error {
-	body, _ := json.Marshal(map[string]string{
+func ApplyTTSConfig(provider, voice, apiKey, baseURL string, speed float64) error {
+	body, _ := json.Marshal(map[string]any{
+		"speed":    speed,
 		"provider": provider,
 		"voice":    voice,
 		"api_key":  apiKey,
