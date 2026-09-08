@@ -605,7 +605,10 @@ export interface ScheduleCadence {
   // tell the two conventions apart; Sunday is where they disagree.
   days?: number[];
   day_of_month?: number; // "monthly", 1-31 (clamped to the month's real last day)
-  time?: string; // "HH:MM" wall clock, in the response's `timezone`
+  time?: string; // "HH:MM" wall clock, in the response's `timezone`. Always times[0].
+  /** Every fire time in a day (daily/weekly/monthly). Absent on schedules
+   *  created before this field — read via resolveCadenceTimes, never directly. */
+  times?: string[];
   every_ms?: number; // "interval" gap — MILLISECONDS, not seconds
   at?: string; // "once" — absolute RFC3339 instant
 }
@@ -626,6 +629,16 @@ export const MAX_SPEAK_CHARS = 2000;
 /** Normalise a possibly-absent kind. Mirrors ResolveKind in system/schedule/store.go. */
 export function resolveScheduleKind(kind?: string | null): ScheduleKind {
   return kind?.trim().toLowerCase() === "speak" ? "speak" : "agent";
+}
+
+/** Most times one schedule may carry. Mirrors MaxTimesPerSchedule on the device. */
+export const MAX_TIMES_PER_SCHEDULE = 12;
+
+/** Effective fire times: `times` when set, else the single `time`. */
+export function resolveCadenceTimes(c: ScheduleCadence | undefined): string[] {
+  if (!c) return [];
+  if (c.times?.length) return c.times;
+  return c.time ? [c.time] : [];
 }
 
 export interface ScheduleItem {
