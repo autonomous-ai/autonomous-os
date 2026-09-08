@@ -56,3 +56,5 @@ Project headers can collapse/expand their worktrees and nested sessions by mouse
 The sidebar uses the Projects header + button to open/register a project; the duplicate bottom Open project button is removed. The empty-workspace onboarding action remains available.
 
 Create worktree now includes a Codex / Claude Code / Terminal selector; unavailable providers are disabled. Creation opens a session for the chosen provider in that new worktree and selects it. If session startup fails, the created worktree is retained and the error is reported; the dialog closes so retrying cannot accidentally recreate the branch.
+
+The worktree agent picker uses a themed menu with the same provider symbols as session tabs (Codex sparkle, Claude asterisk, Terminal prompt). The selected value and each option show their symbol; session creation cards share these symbols. Tab navigates options, Enter selects, and Escape dismisses the menu without closing the dialog.

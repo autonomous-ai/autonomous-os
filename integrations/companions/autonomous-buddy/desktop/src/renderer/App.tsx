@@ -27,7 +27,7 @@ import { SettingsPage } from './SettingsPage'
 import { useAppearance } from './useAppearance'
 
 export { providerName } from './SessionIdentity'
-import { providerName, SessionIdentity } from './SessionIdentity'
+import { providerName, ProviderIcon, SessionIdentity } from './SessionIdentity'
 export const statusName = (session: Session) =>
   session.provider === 'terminal' && session.status === 'running'
     ? 'Shell active'
@@ -898,7 +898,7 @@ function NewSession({
               disabled={!available}
               onClick={() => setProvider(id)}
             >
-              {id === 'terminal' ? <Terminal size={20} /> : <Bot size={20} />}
+              <ProviderIcon provider={id} size={20} />
               <strong>{providerName(id)}</strong>
               <small>
                 {available ? (id === 'terminal' ? 'Interactive shell' : 'Connected CLI') : 'Not installed'}
@@ -958,13 +958,44 @@ function NewWorktree({ busy, providers, onCreate }: {
         maxLength={150}
         required
       />
-      <label htmlFor="worktree-agent">Agent</label>
-      <select id="worktree-agent" value={provider} disabled={busy} onChange={(event) => setProvider(event.target.value as Provider)}>
-        {(['codex', 'claude', 'terminal'] as Provider[]).map((id) => {
-          const installed = providers.some((item) => item.id === id && item.available)
-          return <option key={id} value={id} disabled={!installed}>{providerName(id)}{installed ? '' : ' — Not installed'}</option>
-        })}
-      </select>
+      <span id="worktree-agent-label" className="agent-picker-label">Agent</span>
+      <details className="agent-picker" onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) event.currentTarget.open = false
+      }} onKeyDown={(event) => {
+        if (event.key === 'Escape' && event.currentTarget.open) {
+          event.preventDefault()
+          event.stopPropagation()
+          event.currentTarget.open = false
+          event.currentTarget.querySelector('summary')?.focus()
+        }
+      }}>
+        <summary aria-labelledby="worktree-agent-label worktree-agent-value" onClick={(event) => {
+          if (busy) event.preventDefault()
+        }} aria-disabled={busy}>
+          <ProviderIcon provider={provider} />
+          <span id="worktree-agent-value">{providerName(provider)}</span>
+          <ChevronRight size={14} className="agent-picker-chevron" />
+        </summary>
+        <div className="agent-picker-menu" role="group" aria-label="Choose agent">
+          {(['codex', 'claude', 'terminal'] as Provider[]).map((id) => {
+            const installed = providers.some((item) => item.id === id && item.available)
+            return <button key={id} type="button" disabled={busy || !installed}
+              aria-pressed={provider === id} onClick={(event) => {
+                setProvider(id)
+                const picker = event.currentTarget.closest('details')
+                if (picker) {
+                  picker.open = false
+                  picker.querySelector('summary')?.focus()
+                }
+              }}>
+              <Check size={14} style={{ visibility: provider === id ? 'visible' : 'hidden' }} />
+              <ProviderIcon provider={id} />
+              <span>{providerName(id)}</span>
+              {!installed && <small>Not installed</small>}
+            </button>
+          })}
+        </div>
+      </details>
       <small className="dialog-footnote">Opens the selected agent in the new worktree.</small>
       <button className="primary-button full-width" type="submit" disabled={busy || !branch.trim() || !available}>
         <GitBranch size={16} />

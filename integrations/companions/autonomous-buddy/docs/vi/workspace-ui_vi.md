@@ -56,3 +56,5 @@ Dòng tiêu đề project cho thu gọn/mở rộng worktree và session bằng 
 Sidebar dùng nút + ở tiêu đề Projects để mở/đăng ký project; đã bỏ nút Open project trùng ở đáy. Thao tác mở project trong màn hình workspace trống vẫn có.
 
 Create worktree bổ sung lựa chọn Codex / Claude Code / Terminal; provider chưa có bị vô hiệu. Tạo xong mở và chọn session của provider đó trong đúng worktree mới. Nếu khởi động session lỗi, giữ worktree đã tạo và báo lỗi; đóng dialog để thao tác thử lại không vô tình tạo lại branch.
+
+Bộ chọn agent khi tạo worktree dùng menu theo theme và cùng biểu tượng với tab session (Codex tia sáng, Claude dấu sao, Terminal dấu nhắc). Giá trị đang chọn và từng lựa chọn đều có biểu tượng; thẻ tạo session cũng dùng chung biểu tượng này. Tab chuyển lựa chọn, Enter chọn, Escape đóng menu mà không đóng hộp thoại.
