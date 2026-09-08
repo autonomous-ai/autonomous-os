@@ -396,6 +396,19 @@ class SpeechEmotionService:
             bucket=bucket_for(label),
             is_neutral=is_neutral(label),
         )
+        # Neutral can never become an event: _flush_user drops every sample in
+        # NEUTRAL_LABELS before the modal vote. Deciding that here, rather than
+        # nine stages later, saves the WAV write, the buffer append and the lock
+        # for the most common label emotion2vec returns on ordinary speech.
+        # Checked before the confidence gate on purpose — the structural reason
+        # outranks the numeric one, so the trace names the gate that really decided.
+        if is_neutral(label):
+            logger.info("[speech_emotion] DROP — neutral label: %s", label)
+            tracer.finish(  # SER-DEBUG
+                cls=label.value, confidence=result.confidence,
+                verdict="dropped", drop_reason="neutral",
+            )
+            return
         if result.confidence < label_threshold:
             logger.info(
                 "[speech_emotion] DROP — low confidence: %s %.3f < %.2f",
