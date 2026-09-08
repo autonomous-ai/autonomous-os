@@ -133,8 +133,9 @@ type CodexService struct {
 	mcpMu sync.Mutex
 
 	// Pending sensing events buffered while busy.
-	pendingEventsMu sync.Mutex
-	pendingEvents   []pendingEvent
+	pendingEventsMu      sync.Mutex
+	pendingEventsDrainMu sync.Mutex // serialize detach/defer/requeue across reconnect and speaker callbacks
+	pendingEvents        []pendingEvent
 
 	// Run trackers (guard / broadcast / web_chat / silent / pose bucket).
 	guardRunsMu sync.Mutex

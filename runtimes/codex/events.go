@@ -2,6 +2,7 @@ package codex
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"os"
 	"sort"
@@ -161,7 +162,17 @@ func (s *CodexService) DrainPendingEvents() {
 }
 
 func (s *CodexService) drainPendingEvents() {
+	// A new connection-ready callback must not overtake an older drain that
+	// is putting its definitely-unsent tail back after a disconnect.
+	s.pendingEventsDrainMu.Lock()
+	defer s.pendingEventsDrainMu.Unlock()
 	s.pendingEventsMu.Lock()
+	if !s.wsConnected.Load() {
+		// An idle/speaker callback can run while reconnecting. Leave unsent
+		// events in place for the next connection-ready drain.
+		s.pendingEventsMu.Unlock()
+		return
+	}
 	events := s.pendingEvents
 	s.pendingEvents = nil
 	s.pendingEventsMu.Unlock()
@@ -247,7 +258,15 @@ func (s *CodexService) drainPendingEvents() {
 	}
 
 	slog.Info("draining pending sensing events", "component", "sensing", "count", len(events))
-	for _, ev := range events {
+	for i, ev := range events {
+		if !s.wsConnected.Load() {
+			// Only this unattempted tail is safe to retry. A previous send may
+			// have reached the gateway even if its response was lost.
+			s.pendingEventsMu.Lock()
+			s.pendingEvents = append(events[i:], s.pendingEvents...)
+			s.pendingEventsMu.Unlock()
+			return
+		}
 		var reqID, runID string
 		if ev.fixedRunID != "" {
 			reqID = ev.fixedRunID
@@ -288,6 +307,16 @@ func (s *CodexService) drainPendingEvents() {
 			_, err = s.SendChatMessageWithRun(msg, reqID, runID)
 		}
 		if err != nil {
+			if errors.Is(err, errDisconnectedBeforeSend) {
+				// The connection vanished between the preflight and sendChat.
+				// No write occurred, so this event and its tail remain unsent.
+				s.RemovePendingChatTraceByRunID(runID)
+				s.pendingEventsMu.Lock()
+				s.pendingEvents = append(events[i:], s.pendingEvents...)
+				s.pendingEventsMu.Unlock()
+				flow.End("sensing_input", turnStart, map[string]any{"deferred": "disconnected before send"}, runID)
+				return
+			}
 			slog.Error("failed to replay pending event", "component", "sensing", "type", ev.eventType, "error", err)
 			flow.End("sensing_input", turnStart, map[string]any{"error": err.Error()}, runID)
 		} else {

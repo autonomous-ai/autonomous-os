@@ -61,7 +61,7 @@ func (s *CodexService) sendChat(message string, imagesBase64 []string, fixedReqI
 	s.sendChatMu.Lock()
 	defer s.sendChatMu.Unlock()
 	if !s.wsConnected.Load() {
-		return "", fmt.Errorf("codex not connected")
+		return "", errDisconnectedBeforeSend
 	}
 
 	var reqID, runID string

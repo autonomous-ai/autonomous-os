@@ -290,6 +290,23 @@ outlast the turn cap for the same reason — and it cannot be shortened, because
 `codex exec --json` emits nothing at all while it works (the measured run
 streamed zero deltas in ten minutes).
 
+### Reconnect drains locally buffered requests
+
+Once a WebSocket connection and its event dispatch callback are ready, the Codex
+client drains `pendingEvents` without waiting for another turn to finish. This
+prevents an unsent user message from remaining queued after a gateway restart
+until an unrelated sensing turn ends. Existing speaker deferral, event expiry,
+coalescing and priority rules still apply.
+
+Drain callbacks are serialized across reconnect, idle and speaker notifications;
+offline drains retain the queue. If no socket write was attempted, the current
+event and remaining batch stay queued. A failed socket write has an uncertain
+outcome and is **not** automatically replayed. Already transmitted `pendingRuns`
+are correlation records only and are never used as a replay source. If a gateway
+turn survived the connection drop, its FIFO places newly submitted unsent events
+after that turn. The queue remains in memory; this does not persist unsent events
+across an os-server process restart.
+
 ### Degenerate assistant output guard
 
 The gateway rejects the observed runaway syllable pattern before forwarding an

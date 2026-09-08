@@ -282,6 +282,21 @@ Hạn bỏ cuộc của web chat (`REPLY_IDLE_TIMEOUT_MS`) cũng được đặt
 mức chặn turn vì cùng lý do — và không rút ngắn được, vì `codex exec --json`
 không emit gì trong lúc chạy (run đo được không stream một delta nào suốt 10 phút).
 
+### Gửi tiếp request còn nằm trong queue khi kết nối lại
+
+Khi WebSocket và callback dispatch đã sẵn sàng, Codex client drain `pendingEvents`
+ngay, không cần chờ một turn khác kết thúc. Nhờ vậy tin nhắn người dùng chưa gửi
+không bị kẹt sau khi gateway restart cho tới lúc một lượt sensing không liên quan
+hoàn tất. Các quy tắc chờ loa, hết hạn event, gộp và ưu tiên vẫn giữ nguyên.
+
+Các callback drain từ reconnect, idle và loa được chạy tuần tự; khi offline,
+queue được giữ lại. Nếu chưa hề thử ghi vào socket, event hiện tại và phần còn
+lại tiếp tục nằm trong queue. Ghi socket thất bại có kết quả giao nhận chưa rõ,
+**không** tự gửi lại. `pendingRuns` đã truyền chỉ dùng tương quan phản hồi, không
+bao giờ làm nguồn replay. Nếu turn ở gateway vẫn chạy sau khi mất kết nối, FIFO
+đặt các event chưa gửi được bổ sung sau turn đó. Queue vẫn ở RAM; thay đổi này
+không lưu event chưa gửi qua một lần restart tiến trình os-server.
+
 ### Chặn assistant output lặp bất thường
 
 Gateway chặn mẫu lặp âm tiết đã quan sát trước khi chuyển assistant item sang
