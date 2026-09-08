@@ -202,8 +202,9 @@ handshake**, just a bearer token:
 
 ## 4. Sending a turn
 
-`chat.go` `sendChat` writes one frame and returns immediately (the reply arrives
-on the read loop):
+`chat.go` `sendChat` admits one turn at a time. It writes immediately when idle,
+or retains the request locally while busy and returns its run ID. Replies arrive
+on the read loop:
 
 ```json
 { "type": "message.send", "id": "<reqID>", "payload": { "content": "<text>" }, "session_id": "<if known>" }
@@ -215,6 +216,29 @@ on the read loop):
 PicoClaw processes **one turn at a time** and does not stream tokens, so turns
 are correlated by a single in-flight `runID` rather than a per-frame id: the
 pending run id is adopted by the first inbound frame of the turn.
+
+The adapter serializes both direct chat and buffered events locally; a second
+request cannot overwrite the first request's pending run ID. Queued direct chat
+preserves its text, images, request ID, run ID, and source. `chat.final` and
+`lifecycle.end` can both request idle, but admission stays reserved until the
+complete terminal sequence has been dispatched, then exactly one next request
+is sent. Errors release the same reservation after dispatch.
+
+Unsent queue entries survive offline idle/speaker callbacks and drain as soon as
+a connection is ready, still honoring speaker gating, voice priority, and passive
+event expiry/coalescing. If the socket disappears before any write, the request
+stays queued. A write failure closes the socket and is treated as uncertain:
+that request is never automatically replayed; only its untouched queue tail
+survives reconnect. The 45-minute busy expiry also retires the socket before any
+next request can start, so a late response cannot be attached to that request.
+
+This protocol has no response request IDs or replay acknowledgements. Local
+serialization cannot disambiguate unsolicited/interleaved external turns or a
+server that replays old responses on a new connection. Codex CLI repetition
+filtering and request-ID matching are not copied into this adapter. These paths
+are covered by local WebSocket tests; live PicoClaw/device behavior still needs
+runtime validation.
+
 
 ## 5. Inbound protocol → `domain.WSEvent` mapping
 

@@ -96,7 +96,8 @@ enum CommandSummary {
     }
 
     private static func stripTrailingZero(_ d: Double) -> String {
-        if d == d.rounded() { return "\(Int(d))" }
+        guard d.isFinite else { return "invalid" }
+        if let integer = Int(exactly: d) { return "\(integer)" }
         return String(format: "%.2f", d)
     }
 }

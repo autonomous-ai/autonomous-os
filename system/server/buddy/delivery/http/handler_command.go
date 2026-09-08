@@ -14,16 +14,17 @@ import (
 )
 
 type commandRequest struct {
-	ID        string         `json:"id"`
-	Action    string         `json:"action" binding:"required"`
+	ID        string         `json:"id" binding:"max=128"`
+	Action    string         `json:"action" binding:"required,max=64"`
 	Params    map[string]any `json:"params"`
-	TimeoutMs int            `json:"timeout_ms"`
+	TimeoutMs int            `json:"timeout_ms" binding:"omitempty,gte=500,lte=60000"`
 }
 
 // Command dispatches one command to the connected buddy and returns the buddy's
 // response. Localhost-only at the route layer (OpenClaw skill on the device is
 // the intended caller).
 func (h *BuddyHandler) Command(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 1<<20)
 	var req commandRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, serializers.ResponseError(err.Error()))
@@ -83,7 +84,11 @@ func (h *BuddyHandler) Exec(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, serializers.ResponseError("missing action"))
 		return
 	}
-	body, _ := io.ReadAll(c.Request.Body)
+	body, err := io.ReadAll(http.MaxBytesReader(c.Writer, c.Request.Body, 1<<20))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, serializers.ResponseError("read command body: "+err.Error()))
+		return
+	}
 	params := map[string]any{}
 	if len(body) > 0 {
 		if err := json.Unmarshal(body, &params); err != nil {

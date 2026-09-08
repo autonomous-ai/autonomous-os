@@ -1,6 +1,7 @@
 package openclaw
 
 import (
+	"errors"
 	"log/slog"
 	"sort"
 	"strings"
@@ -100,6 +101,11 @@ func (s *OpenclawService) DrainPendingEvents() {
 }
 
 func (s *OpenclawService) drainPendingEvents() {
+	s.pendingEventsDrainMu.Lock()
+	defer s.pendingEventsDrainMu.Unlock()
+	if !s.wsConnected.Load() {
+		return // Keep definitely-unsent events until the authenticated connection is ready.
+	}
 	s.pendingEventsMu.Lock()
 	events := s.pendingEvents
 	s.pendingEvents = nil
@@ -197,7 +203,11 @@ func (s *OpenclawService) drainPendingEvents() {
 	}
 
 	slog.Info("draining pending sensing events", "component", "sensing", "count", len(events))
-	for _, ev := range events {
+	for i, ev := range events {
+		if !s.wsConnected.Load() {
+			s.requeueUnsentEvents(events[i:])
+			return
+		}
 		// Allocate a dedicated run ID so each replayed event gets its own
 		// sensing_input flow entry — required for the UI to render the turn.
 		// web_chat preallocates the runID at queue time (already marked via
@@ -254,6 +264,11 @@ func (s *OpenclawService) drainPendingEvents() {
 			_, err = s.SendChatMessageWithRun(msg, reqID, runID)
 		}
 		if err != nil {
+			if errors.Is(err, errDisconnectedBeforeSend) {
+				s.requeueUnsentEvents(events[i:])
+				flow.End("sensing_input", turnStart, map[string]any{"deferred": "disconnected before send"}, runID)
+				return
+			}
 			slog.Error("failed to replay pending event", "component", "sensing", "type", ev.eventType, "error", err)
 			flow.End("sensing_input", turnStart, map[string]any{"error": err.Error()}, runID)
 		} else {
@@ -262,4 +277,11 @@ func (s *OpenclawService) drainPendingEvents() {
 			slog.Info("pending event replayed", "component", "sensing", "type", ev.eventType, "runId", runID)
 		}
 	}
+}
+
+// Only events for which no socket write was attempted may be retried.
+func (s *OpenclawService) requeueUnsentEvents(events []pendingEvent) {
+	s.pendingEventsMu.Lock()
+	s.pendingEvents = append(events, s.pendingEvents...)
+	s.pendingEventsMu.Unlock()
 }

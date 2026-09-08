@@ -3,6 +3,7 @@ package codex
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -17,6 +18,10 @@ import (
 	"go.autonomous.ai/os/system/lib/i18n"
 	"go.autonomous.ai/os/system/statusled"
 )
+
+// This sentinel means no socket write was attempted. Other transport failures
+// have an uncertain delivery outcome and must never be automatically replayed.
+var errDisconnectedBeforeSend = errors.New("codex websocket not connected")
 
 const (
 	// reconnectBackoff is the fixed wait between reconnect attempts. Codex is
@@ -160,6 +165,13 @@ func (s *CodexService) runWSConn(ctx context.Context, handler domain.AgentEventH
 	s.wsDispatch.Store(dispatchFn(dispatch))
 	defer s.wsDispatch.Store(dispatchFn(nil))
 
+	// A reconnect may be the only new idle edge: no earlier turn is guaranteed
+	// to finish after a gateway restart. Drain only locally buffered, unsent
+	// events once the connection and event sink are ready. Already transmitted
+	// pendingRuns remain correlation records, never a replay source; a surviving
+	// gateway turn keeps these new events behind it in the gateway's FIFO.
+	go s.drainPendingEvents()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -209,7 +221,7 @@ func (s *CodexService) sendFrame(v any) error {
 	conn := s.wsConn
 	if conn == nil {
 		s.wsMu.Unlock()
-		return fmt.Errorf("codex websocket not connected")
+		return errDisconnectedBeforeSend
 	}
 	err = conn.WriteMessage(websocket.TextMessage, body)
 	s.wsMu.Unlock()

@@ -72,7 +72,7 @@ func (s *Service) restartHAL(reason string) {
 // the device would keep speaking in the old voice with nothing to show for it.
 func (s *Service) applyTTSConfig(c *config.Config) {
 	go func() {
-		if err := hal.ApplyTTSConfig(c.TTSProvider, c.TTSVoice, c.TTSAPIKey, c.TTSBaseURL); err != nil {
+		if err := hal.ApplyTTSConfig(c.TTSProvider, c.TTSVoice, c.TTSAPIKey, c.TTSBaseURL, c.GetTTSSpeed()); err != nil {
 			slog.Warn("hal tts config apply failed, restarting instead",
 				"component", "device", "error", err)
 			s.restartHAL("voice config change")

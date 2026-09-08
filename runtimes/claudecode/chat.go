@@ -58,8 +58,10 @@ func (s *ClaudeCodeService) SendSlashCommandWithImagesAndRun(message string, ima
 // message.send frame to the persistent WebSocket. The reply arrives on the read
 // loop and is translated there — this returns as soon as the frame is sent.
 func (s *ClaudeCodeService) sendChat(message string, imagesBase64 []string, fixedReqID, fixedRunID, sourceType string) (string, error) {
+	s.sendChatMu.Lock()
+	defer s.sendChatMu.Unlock()
 	if !s.wsConnected.Load() {
-		return "", fmt.Errorf("claudecode not connected")
+		return "", errDisconnectedBeforeSend
 	}
 
 	var reqID, runID string
@@ -110,6 +112,7 @@ func (s *ClaudeCodeService) sendChat(message string, imagesBase64 []string, fixe
 	frame := map[string]any{
 		"type":    "message.send",
 		"id":      reqID,
+		"run_id":  runID,
 		"payload": payload,
 	}
 	if sk := s.GetSessionKey(); sk != "" {
@@ -121,7 +124,7 @@ func (s *ClaudeCodeService) sendChat(message string, imagesBase64 []string, fixe
 	// the in-flight turn. Cleared by emitFinal/handleError (or busyTTL).
 	s.busySince.Store(time.Now().UnixMilli())
 	s.activeTurn.Store(true)
-	s.setPendingRunID(runID)
+	s.addPendingRun(reqID, runID)
 
 	// Flash the "thinking" face for visible turns (OpenClaw emotion-acknowledge
 	// hook parity). Skips passive sensing + realtime-handled turns. See emotion_ack.go.
@@ -146,8 +149,10 @@ func (s *ClaudeCodeService) sendChat(message string, imagesBase64 []string, fixe
 
 	if err := s.sendFrame(frame); err != nil {
 		// Roll back busy so the next sensing/voice round can proceed.
-		s.activeTurn.Store(false)
-		s.clearTurn()
+		s.removePendingRun(reqID)
+		if s.getCurrentRunID() == "" && !s.hasPendingRuns() {
+			s.activeTurn.Store(false)
+		}
 		slog.Error("claudecode send failed", "component", "claudecode", "runID", runID, "error", err)
 		return "", fmt.Errorf("send message.send: %w", err)
 	}

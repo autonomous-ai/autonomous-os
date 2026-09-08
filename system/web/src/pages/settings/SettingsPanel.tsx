@@ -106,6 +106,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
   const [ttsProvider, setTtsProvider] = useState("elevenlabs");
   const [ttsProviders, setTtsProviders] = useState<string[]>([]);
   const [ttsVoice, setTtsVoice] = useState("Rachel");
+  const [ttsSpeed, setTtsSpeed] = useState(1.3);
   const [ttsVoices, setTtsVoices] = useState<string[]>([]);
   const [realtimeEnabled, setRealtimeEnabled] = useState(true);
   const [wakeWord, setWakeWord] = useState(false);
@@ -167,7 +168,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
     ssid: string; deviceId: string;
     llmUrl: string; llmModel: string; llmDisableThinking: boolean;
     sttBaseUrl: string; sttProvider: SttProvider; sttLanguage: string;
-    ttsBaseUrl: string; ttsProvider: string; ttsVoice: string;
+    ttsBaseUrl: string; ttsProvider: string; ttsVoice: string; ttsSpeed: number;
     wakeWord: boolean;
     channel: ChannelType;
     teleUserId: string; slackUserId: string;
@@ -233,6 +234,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
         setTtsBaseUrl((cfg.tts_base_url ?? "") || llmUrlInit);
         setTtsProvider(cfg.tts_provider || "elevenlabs");
         setTtsVoice(cfg.tts_voice || "Rachel");
+        setTtsSpeed(cfg.tts_speed ?? 1.3);
         setWakeWord(cfg.wakeword ?? false);
         setAgentName(cfg.agent_name ?? "");
         setWakePhrases(cfg.wake_phrases ?? []);
@@ -314,6 +316,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
           ttsBaseUrl: (cfg.tts_base_url ?? "") || llmUrlInit,
           ttsProvider: cfg.tts_provider || "elevenlabs",
           ttsVoice: cfg.tts_voice || "Rachel",
+          ttsSpeed: cfg.tts_speed ?? 1.3,
           wakeWord: cfg.wakeword ?? false,
           channel: (cfg.channel as ChannelType) || "telegram",
           teleUserId: cfg.telegram_user_id ?? "",
@@ -404,6 +407,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
     ttsBaseUrl !== baseline.ttsBaseUrl ||
     ttsProvider !== baseline.ttsProvider ||
     ttsVoice !== baseline.ttsVoice ||
+    ttsSpeed !== baseline.ttsSpeed ||
     wakeWord !== baseline.wakeWord ||
     channel !== baseline.channel ||
     teleUserId !== baseline.teleUserId ||
@@ -454,7 +458,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
         llm_base_url: llmUrl, llm_model: llmModel,
         llm_disable_thinking: llmDisableThinking,
         stt_base_url: sttBaseUrl, stt_language: sttLanguage,
-        tts_base_url: ttsBaseUrl, tts_provider: ttsProvider, tts_voice: ttsVoice,
+        tts_base_url: ttsBaseUrl, tts_provider: ttsProvider, tts_voice: ttsVoice, tts_speed: ttsSpeed,
         device_id: deviceId,
         mqtt_endpoint: mqttEndpoint, mqtt_username: mqttUsername,
         mqtt_port: mqttPort ? parseInt(mqttPort, 10) : 0,
@@ -503,7 +507,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
         ssid, deviceId,
         llmUrl, llmModel, llmDisableThinking,
         sttBaseUrl, sttProvider, sttLanguage,
-        ttsBaseUrl, ttsProvider, ttsVoice,
+        ttsBaseUrl, ttsProvider, ttsVoice, ttsSpeed,
         wakeWord,
         channel,
         teleUserId, slackUserId,
@@ -531,7 +535,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
     discordBotToken, discordGuildId, discordUserId, ssid, password, adminPassword, llmUrl,
     llmApiKey, llmModel, llmDisableThinking, deepgramApiKey, sttApiKey, sttBaseUrl,
     sttProvider, sttLanguage, sttLoaded,
-    ttsApiKey, ttsBaseUrl, ttsProvider, ttsVoice, deviceId,
+    ttsApiKey, ttsBaseUrl, ttsProvider, ttsVoice, ttsSpeed, deviceId,
     mqttEndpoint, mqttUsername, mqttPassword, mqttPort, faChannel, fdChannel,
     realtimeEnabled, wakeWord, realtimeProvider, realtimeVoice, realtimeReasoning, realtimeApiKey, realtimeBaseUrl,
   ]);
@@ -653,6 +657,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
               ttsProvider={ttsProvider} setTtsProvider={setTtsProvider}
               ttsProviders={ttsProviders}
               ttsVoice={ttsVoice} setTtsVoice={setTtsVoice}
+              ttsSpeed={ttsSpeed} setTtsSpeed={setTtsSpeed}
               ttsVoices={ttsVoices}
               sttLanguage={sttLanguage}
             />

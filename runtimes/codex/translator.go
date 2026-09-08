@@ -17,13 +17,15 @@ func nowUnixMs() int64 { return time.Now().UnixMilli() }
 // event forwarded verbatim (thread.started / turn.* / item.*) or a bridge
 // frame (bridge.status / bridge.error / pong).
 type codexFrame struct {
-	Type     string     `json:"type"`
-	ThreadID string     `json:"thread_id"` // thread.started, bridge.status
-	Item     codexItem  `json:"item"`      // item.started / item.completed
-	Usage    *codexUse  `json:"usage"`     // turn.completed
-	Error    codexError `json:"error"`     // turn.failed (object), bridge.error (string) — see UnmarshalJSON
-	Message  string     `json:"message"`   // error events
-	State    string     `json:"state"`     // bridge.status
+	Type      string     `json:"type"`
+	RequestID string     `json:"request_id"`
+	RunID     string     `json:"run_id"`
+	ThreadID  string     `json:"thread_id"` // thread.started, bridge.status
+	Item      codexItem  `json:"item"`      // item.started / item.completed
+	Usage     *codexUse  `json:"usage"`     // turn.completed
+	Error     codexError `json:"error"`     // turn.failed (object), bridge.error (string) — see UnmarshalJSON
+	Message   string     `json:"message"`   // error events
+	State     string     `json:"state"`     // bridge.status
 }
 
 // codexError tolerates both shapes seen on the wire: turn.failed carries an
@@ -131,7 +133,14 @@ func (s *CodexService) translateFrame(raw []byte, dispatch func(domain.WSEvent))
 		return
 	}
 
-	// Capture the thread id from any frame that carries one.
+	if f.Type == "bridge.rejected" {
+		s.rejectQueuedFrame(f, dispatch)
+		return
+	}
+	if isTurnFrame(f.Type) && !s.adoptFrameCorrelation(f, dispatch) {
+		return
+	}
+	// Ignored stale/interleaved frames must not change the active session.
 	if f.ThreadID != "" && f.ThreadID != s.GetSessionKey() {
 		s.SetSessionKey(f.ThreadID)
 	}
@@ -275,11 +284,13 @@ func (s *CodexService) ensureTurnStarted(dispatch func(domain.WSEvent)) {
 	if runID == "" {
 		_, runID = s.NextChatRunID()
 	}
+	s.startTurn(runID, dispatch)
+}
+
+func (s *CodexService) startTurn(runID string, dispatch func(domain.WSEvent)) {
 	s.setCurrentRunID(runID)
-	if !s.activeTurn.Load() {
-		s.busySince.Store(nowUnixMs())
-		s.activeTurn.Store(true)
-	}
+	s.busySince.Store(nowUnixMs())
+	s.activeTurn.Store(true)
 	s.turnMu.Lock()
 	s.assistantParts = nil
 	s.toolStartSeen = make(map[string]bool)
@@ -357,7 +368,7 @@ func (s *CodexService) emitToolEnd(id, result string, dispatch func(domain.WSEve
 //
 // The turn ids are reset BEFORE dispatch: the consumer calls SetBusy(false)
 // on chat.final / lifecycle.end, which synchronously drains queued sensing
-// events and starts the NEXT turn (fresh pendingRunID). Clearing here lets
+// events and starts the NEXT turn (fresh queued run ID). Clearing here lets
 // that turn's runID survive instead of being clobbered.
 func (s *CodexService) emitFinal(f codexFrame, dispatch func(domain.WSEvent)) {
 	s.ensureTurnStarted(dispatch)
@@ -385,11 +396,9 @@ func (s *CodexService) emitFinal(f codexFrame, dispatch func(domain.WSEvent)) {
 	}
 	slog.Info("codex <<< turn completed", logArgs...)
 
-	// Clear ONLY currentRunID: pendingRunID belongs to the NEXT turn (it was
-	// already consumed at ensureTurnStarted for this one) — a sendChat that
-	// queued while this turn streamed must keep its runID so silent/web-chat
-	// markers still match.
-	s.currentRunID.Store("")
+	// Preserve all queued request/run pairs so later silent/web-chat markers
+	// still match their own turn; only clear the currently streamed turn.
+	s.finishCurrentCorrelation()
 
 	// Telegram-originated turn (telegram_poll.go): DM the reply back to the
 	// originating chat. TTS was suppressed at injection (MarkSilentRun), so
@@ -469,11 +478,9 @@ func (s *CodexService) handleError(msg string, dispatch func(domain.WSEvent)) {
 
 	// Reset turn ids before dispatch (see emitFinal) — the consumer clears busy
 	// on lifecycle.error, draining the next turn synchronously.
-	// Clear ONLY currentRunID: pendingRunID belongs to the NEXT turn (it was
-	// already consumed at ensureTurnStarted for this one) — a sendChat that
-	// queued while this turn streamed must keep its runID so silent/web-chat
-	// markers still match.
-	s.currentRunID.Store("")
+	// Preserve all queued request/run pairs so later silent/web-chat markers
+	// still match their own turn; only clear the currently streamed turn.
+	s.finishCurrentCorrelation()
 	s.turnMu.Lock()
 	s.assistantParts = nil
 	s.toolStartSeen = nil
@@ -523,25 +530,130 @@ func (s *CodexService) getCurrentRunID() string {
 
 func (s *CodexService) setCurrentRunID(runID string) { s.currentRunID.Store(runID) }
 
-func (s *CodexService) setPendingRunID(runID string) { s.pendingRunID.Store(runID) }
-
-func (s *CodexService) consumePendingRunID() string {
-	v, _ := s.pendingRunID.Load().(string)
-	if v != "" {
-		s.pendingRunID.Store("")
-	}
-	return v
+func (s *CodexService) addPendingRun(reqID, runID string) {
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
+	s.pendingRuns = append(s.pendingRuns, pendingRun{reqID: reqID, runID: runID})
 }
 
-// clearTurn resets the in-flight turn ids without touching busy state. Used on
-// disconnect / busyTTL expiry / send failure. The normal end-of-turn path
-// clears the ids inline in emitFinal / handleError (before dispatch).
-func (s *CodexService) clearTurn() {
-	// Clear ONLY currentRunID: pendingRunID belongs to the NEXT turn (it was
-	// already consumed at ensureTurnStarted for this one) — a sendChat that
-	// queued while this turn streamed must keep its runID so silent/web-chat
-	// markers still match.
+func (s *CodexService) hasPendingRuns() bool {
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
+	return len(s.pendingRuns) > 0
+}
+
+func (s *CodexService) takePendingRun(reqID, runID string, fifo bool) pendingRun {
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
+	for i, pending := range s.pendingRuns {
+		if fifo || (reqID != "" && pending.reqID == reqID && (runID == "" || pending.runID == runID)) || (reqID == "" && runID != "" && pending.runID == runID) {
+			s.pendingRuns = append(s.pendingRuns[:i], s.pendingRuns[i+1:]...)
+			return pending
+		}
+	}
+	return pendingRun{}
+}
+
+func (s *CodexService) removePendingRun(reqID string) { s.takePendingRun(reqID, "", false) }
+
+func (s *CodexService) consumePendingRunID() string {
+	pending := s.takePendingRun("", "", true)
+	s.currentRequestID.Store(pending.reqID)
+	return pending.runID
+}
+
+func (s *CodexService) finishCurrentCorrelation() {
+	reqID, _ := s.currentRequestID.Load().(string)
+	if reqID != "" {
+		s.pendingMu.Lock()
+		s.completedRequests = append(s.completedRequests, pendingRun{reqID: reqID, runID: s.getCurrentRunID()})
+		if len(s.completedRequests) > 256 {
+			s.completedRequests = s.completedRequests[len(s.completedRequests)-256:]
+		}
+		s.pendingMu.Unlock()
+	}
+	s.currentRequestID.Store("")
 	s.currentRunID.Store("")
+}
+
+func isTurnFrame(kind string) bool {
+	switch kind {
+	case "thread.started", "turn.started", "item.started", "item.updated", "item.completed", "turn.completed", "turn.failed", "error", "bridge.error":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *CodexService) adoptFrameCorrelation(f codexFrame, dispatch func(domain.WSEvent)) bool {
+	if f.RequestID == "" && f.RunID == "" {
+		return true
+	} // old bridge: FIFO
+	if current := s.getCurrentRunID(); current != "" {
+		request, _ := s.currentRequestID.Load().(string)
+		if (f.RunID == "" || f.RunID == current) && (f.RequestID == "" || request == "" || f.RequestID == request) {
+			return true
+		}
+		slog.Warn("codex: ignoring interleaved turn frame", "request_id", f.RequestID, "run_id", f.RunID, "current_run", current)
+		return false
+	}
+	s.pendingMu.Lock()
+	completed := false
+	for _, request := range s.completedRequests {
+		if f.RequestID != "" && request.reqID == f.RequestID && (f.RunID == "" || request.runID == f.RunID) {
+			completed = true
+			break
+		}
+	}
+	s.pendingMu.Unlock()
+	if completed {
+		return false
+	}
+	pending := s.takePendingRun(f.RequestID, f.RunID, false)
+	runID := pending.runID
+	if runID == "" {
+		runID = f.RunID
+	}
+	if runID == "" {
+		slog.Warn("codex: unmatched request frame", "request_id", f.RequestID)
+		return false
+	}
+	requestID := f.RequestID
+	if requestID == "" {
+		requestID = pending.reqID
+	}
+	s.currentRequestID.Store(requestID)
+	if f.ThreadID != "" && f.ThreadID != s.GetSessionKey() {
+		s.SetSessionKey(f.ThreadID)
+	}
+	s.startTurn(runID, dispatch)
+	return true
+}
+
+// Queue rejection is not a failure of the currently streaming turn. Remove
+// only the rejected pending request and emit its own correlated terminal event.
+func (s *CodexService) rejectQueuedFrame(f codexFrame, dispatch func(domain.WSEvent)) {
+	pending := s.takePendingRun(f.RequestID, f.RunID, false)
+	if pending.runID == "" {
+		return
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"runId": pending.runID, "sessionKey": s.GetSessionKey(), "stream": "lifecycle",
+		"data": map[string]any{"phase": "error", "error": f.Error.Message, "endedAt": nowUnixMs()},
+	})
+	dispatch(domain.WSEvent{Type: "evt", Event: "agent", Payload: payload})
+}
+
+// clearTurn resets correlation on disconnect or busy-TTL expiry. Those paths
+// cannot assume queued requests are still live. Modern gateway frames carry
+// their originating run IDs if work later resumes; legacy untagged frames do
+// not have enough information to recover after a lost connection.
+func (s *CodexService) clearTurn() {
+	s.currentRequestID.Store("")
+	s.currentRunID.Store("")
+	s.pendingMu.Lock()
+	s.pendingRuns = nil
+	s.pendingMu.Unlock()
 	s.turnMu.Lock()
 	s.assistantParts = nil
 	s.toolStartSeen = nil

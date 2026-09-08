@@ -184,19 +184,28 @@ LED `StateAgentDown` khi rớt). `chat.go` `sendChat` ghi một frame rồi retu
 reply về trên read loop:
 
 ```json
-{ "type": "message.send", "id": "<reqID>", "payload": { "content": "<text>",
+{ "type": "message.send", "id": "<reqID>", "run_id": "<runID>", "payload": { "content": "<text>",
   "attachments": [{ "type": "image", "url": "data:image/jpeg;base64,…" }] } }
 ```
 
 Bridge lưu attachment vào `/root/.opencode/attachments` rồi truyền qua
 `opencode run --file <path>`. Frame `{"type":"session.new"}` làm bridge bỏ session
-id đã lưu (§4). opencode xử lý một turn mỗi lần, nên turn được correlate bằng một
-`runID` in-flight duy nhất (pending run id được frame inbound đầu tiên của turn
-nhận lấy).
+id đã lưu (§4). Bridge chạy turn tuần tự và thêm `request_id`/`run_id` vào
+frame của turn (kể cả retry resume và lỗi). Adapter giữ FIFO các cặp đang chờ,
+ưu tiên tag khi nhận frame; bridge cũ không có tag dùng FIFO. Frame đã kết thúc
+hoặc xen sai turn bị bỏ qua trước khi cập nhật session.
+
+Queue đầy trả `bridge.rejected` gắn đúng request/run; chỉ lượt bị từ chối kết
+thúc, không xóa busy/lượt hiện tại. Terminal không làm idle khi còn lượt đã gửi
+đang chờ. Reconnect tự drain queue cục bộ **chưa gửi**, giữ run ID và speaker
+gate. Callback offline giữ queue; socket mất trước write đưa phần chưa gửi
+lại queue. Write đã thử nhưng lỗi có kết quả không chắc chắn, không tự replay.
+Correlation đã gửi được xóa khi disconnect, không phải nguồn gửi lại.
+
 
 ## 3. Dịch event (`translator.go`)
 
-Bridge forward các event JSONL của `opencode run --format json` **nguyên văn**
+Bridge forward các event JSONL của `opencode run --format json`, thêm correlation vào frame của turn
 (cộng các frame riêng của nó `bridge.status` / `bridge.error` / `pong`); mỗi dòng
 opencode mang một `sessionID`. Translator Go map chúng sang đúng khuôn
 `domain.WSEvent` mà handler OpenClaw tiêu thụ:
@@ -211,6 +220,7 @@ opencode mang một `sessionID`. Translator Go map chúng sang đúng khuôn
 | `step_finish` / `message.updated` | bắt token usage theo turn (`part.tokens` / `info.tokens`) |
 | `session.idle` (do gatewayd synthesize khi exit sạch) | `agent` `stream:assistant` (nguyên câu trả lời trong **một** delta) **+** `chat` `state:final role:assistant` **+** lifecycle `phase:end` kèm usage — kết thúc turn |
 | `session.error` / `error` / `bridge.error` | `agent` lifecycle `phase:error` — kết thúc turn |
+| `bridge.rejected` | `lifecycle.error` chỉ cho request/run bị từ chối; giữ lượt hiện tại |
 | `bridge.status` / `pong` | *(log / bỏ qua)* |
 
 **Event kết thúc (đã verify trên thiết bị 1.18.4).** `opencode run --format json`

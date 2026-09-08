@@ -1,6 +1,7 @@
 package hermes
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -48,16 +49,19 @@ func standaloneDrain(ev pendingEvent) bool {
 		return true
 	}
 	switch ev.eventType {
-	case "voice", "voice_command", "voice_agent_handled":
+	case "voice", "voice_command", "voice_agent_handled", "web_chat":
 		return true
 	}
 	return false
 }
 
 // IsBusy mirrors openclaw.HermesService.IsBusy: true while a turn is in flight OR a
-// chat.send is still waiting for response.created. Auto-clears after busyTTL
-// if response.completed got dropped so the sensing pipeline cannot wedge.
+// chat.send is still waiting for response.created. The legacy busy flag may
+// expire after busyTTL, but a live HTTP stream stays busy until it terminates.
 func (s *HermesService) IsBusy() bool {
+	if s.inFlightStreams.Load() > 0 {
+		return true
+	}
 	if s.activeTurn.Load() {
 		since := s.busySince.Load()
 		if since > 0 && time.Since(time.UnixMilli(since)) > busyTTL {
@@ -74,6 +78,9 @@ func (s *HermesService) IsBusy() bool {
 
 // SetBusy flips active state. Drains pending events on idle.
 func (s *HermesService) SetBusy(busy bool) {
+	if !busy && s.inFlightStreams.Load() > 0 {
+		return
+	}
 	if busy {
 		s.busySince.Store(time.Now().UnixMilli())
 	}
@@ -113,6 +120,11 @@ func (s *HermesService) DrainPendingEvents() {
 }
 
 func (s *HermesService) drainPendingEvents() {
+	s.drainMu.Lock()
+	defer s.drainMu.Unlock()
+	if !s.ready.Load() || s.inFlightStreams.Load() > 0 {
+		return
+	}
 	s.pendingEventsMu.Lock()
 	events := s.pendingEvents
 	s.pendingEvents = nil
@@ -210,10 +222,14 @@ func (s *HermesService) drainPendingEvents() {
 	// Partition: standalone events (voice commands, silent replays, images) keep
 	// their own turn; the rest are pure-ambient sensing collapsed into one turn.
 	var mergeable []pendingEvent
-	for _, ev := range events {
+	for i, ev := range events {
 		if standaloneDrain(ev) {
+			// One user request per stream; retain the rest until it terminates.
+			remaining := append([]pendingEvent(nil), events[:i]...)
+			remaining = append(remaining, events[i+1:]...)
+			s.restoreUnsent(remaining)
 			s.sendOnePending(ev)
-			continue
+			return
 		}
 		mergeable = append(mergeable, ev)
 	}
@@ -271,6 +287,9 @@ func (s *HermesService) sendOnePending(ev pendingEvent) {
 		_, err = s.SendChatMessageWithRun(msg, reqID, runID)
 	}
 	if err != nil {
+		if errors.Is(err, errHermesNotReady) {
+			s.restoreUnsent([]pendingEvent{ev})
+		}
 		slog.Error("failed to replay pending event", "component", "sensing", "type", ev.eventType, "error", err)
 		flow.End("sensing_input", turnStart, map[string]any{"error": err.Error()}, runID)
 		return
@@ -320,6 +339,9 @@ func (s *HermesService) sendMergedPending(evs []pendingEvent) {
 	})
 
 	if _, err := s.SendChatMessageWithRun(merged, reqID, runID); err != nil {
+		if errors.Is(err, errHermesNotReady) {
+			s.restoreUnsent(evs)
+		}
 		slog.Error("failed to replay merged sensing events", "component", "sensing", "types", types, "error", err)
 		flow.End("sensing_input", turnStart, map[string]any{"error": err.Error()}, runID)
 		return
@@ -359,4 +381,11 @@ func buildMergedSensing(evs []pendingEvent) (merged string, types []string, olde
 	merged = strings.ReplaceAll(merged, "\n\n\n", "\n\n")
 	merged = strings.TrimSpace(merged)
 	return merged, types, oldest
+}
+
+// Only synchronous pre-send rejection is safe to retain; never retry an attempted POST.
+func (s *HermesService) restoreUnsent(events []pendingEvent) {
+	s.pendingEventsMu.Lock()
+	s.pendingEvents = append(events, s.pendingEvents...)
+	s.pendingEventsMu.Unlock()
 }

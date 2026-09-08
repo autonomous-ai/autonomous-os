@@ -99,8 +99,9 @@ type OpenclawService struct {
 
 	// pendingEvents buffers sensing events received while agent is busy.
 	// All events are kept (no dedup) — motion/presence must not be missed. Drained on SetBusy(false).
-	pendingEventsMu sync.Mutex
-	pendingEvents   []pendingEvent
+	pendingEventsDrainMu sync.Mutex // serialize offline requeue and reconnect drains
+	pendingEventsMu      sync.Mutex
+	pendingEvents        []pendingEvent
 
 	// guardRuns tracks runIDs that are guard-active sensing turns.
 	// When the agent responds, the SSE handler broadcasts the response via Telegram Bot API.

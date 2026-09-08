@@ -289,7 +289,7 @@ func (s *ClaudeCodeService) ensureTurnStarted(dispatch func(domain.WSEvent)) {
 //
 // The turn ids are reset BEFORE dispatch: the consumer calls SetBusy(false) on
 // chat.final / lifecycle.end, which synchronously drains queued sensing events
-// and starts the NEXT turn (fresh pendingRunID). Clearing here lets that turn's
+// and starts the NEXT turn (fresh pending run ID). Clearing here lets that turn's
 // runID survive instead of being clobbered. Busy itself is owned by the
 // consumer's SetBusy(false) — the translator never touches it (matches the
 // PicoClaw translator).
@@ -314,8 +314,8 @@ func (s *ClaudeCodeService) emitFinal(f claudeEvent, dispatch func(domain.WSEven
 	}
 	slog.Info("claudecode <<< final answer", logArgs...)
 
-	s.currentRunID.Store("")
-	s.pendingRunID.Store("")
+	s.finishCurrentCorrelation()
+
 	s.lastAssistantText.Store("")
 
 	// Slack-originated turn (slack.go): post the reply back to the originating
@@ -403,8 +403,8 @@ func (s *ClaudeCodeService) handleError(msg string, dispatch func(domain.WSEvent
 
 	// Reset turn ids before dispatch (see emitFinal) — the consumer clears busy
 	// on lifecycle.error, draining the next turn synchronously.
-	s.currentRunID.Store("")
-	s.pendingRunID.Store("")
+	s.finishCurrentCorrelation()
+
 	s.lastAssistantText.Store("")
 
 	// Telegram-originated turn: consume the tracker so the map doesn't leak
@@ -452,14 +452,41 @@ func (s *ClaudeCodeService) getCurrentRunID() string {
 
 func (s *ClaudeCodeService) setCurrentRunID(runID string) { s.currentRunID.Store(runID) }
 
-func (s *ClaudeCodeService) setPendingRunID(runID string) { s.pendingRunID.Store(runID) }
+func (s *ClaudeCodeService) addPendingRun(reqID, runID string) {
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
+	s.pendingRuns = append(s.pendingRuns, pendingRun{reqID: reqID, runID: runID})
+}
+
+func (s *ClaudeCodeService) hasPendingRuns() bool {
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
+	return len(s.pendingRuns) > 0
+}
+
+func (s *ClaudeCodeService) takePendingRun(reqID, runID string, fifo bool) pendingRun {
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
+	for i, pending := range s.pendingRuns {
+		if fifo || (reqID != "" && pending.reqID == reqID && (runID == "" || pending.runID == runID)) || (reqID == "" && runID != "" && pending.runID == runID) {
+			s.pendingRuns = append(s.pendingRuns[:i], s.pendingRuns[i+1:]...)
+			return pending
+		}
+	}
+	return pendingRun{}
+}
+
+func (s *ClaudeCodeService) removePendingRun(reqID string) { s.takePendingRun(reqID, "", false) }
 
 func (s *ClaudeCodeService) consumePendingRunID() string {
-	v, _ := s.pendingRunID.Load().(string)
-	if v != "" {
-		s.pendingRunID.Store("")
-	}
-	return v
+	pending := s.takePendingRun("", "", true)
+	s.currentRequestID.Store(pending.reqID)
+	return pending.runID
+}
+
+func (s *ClaudeCodeService) finishCurrentCorrelation() {
+	s.currentRequestID.Store("")
+	s.currentRunID.Store("")
 }
 
 // clearTurn resets the in-flight turn ids without touching busy state. Used on
@@ -467,7 +494,11 @@ func (s *ClaudeCodeService) consumePendingRunID() string {
 // the ids inline in emitFinal / handleError (before dispatch) so a drained
 // follow-up turn's ids survive — see emitFinal.
 func (s *ClaudeCodeService) clearTurn() {
+	s.pendingMu.Lock()
+	s.pendingRuns = nil
+	s.pendingMu.Unlock()
+	s.currentRequestID.Store("")
 	s.currentRunID.Store("")
-	s.pendingRunID.Store("")
+
 	s.lastAssistantText.Store("")
 }

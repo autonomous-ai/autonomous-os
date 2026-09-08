@@ -161,7 +161,7 @@ turn at the next model boundary. The Hermes backend (external NousResearch
 service, stateless `POST /v1/responses`) has no such mode, so os-server batches
 client-side instead: when `drainPendingEvents` runs, surviving events are
 partitioned by `standaloneDrain`. Standalone events keep their own turn — real
-voice commands (`voice` / `voice_command`, answered directly), `voice_agent_handled`
+voice commands (`voice` / `voice_command`, answered directly), web chat (`web_chat`), `voice_agent_handled`
 (silent reply), and image-bearing events. The remaining pure-ambient sensing
 (presence / motion / emotion / speech_emotion) is collapsed into a **single turn**
 via `sendMergedPending` (one `runID`, lines joined under `mergedSensingHeader`),
@@ -170,6 +170,21 @@ most of steer's cost saving but not its immediacy: the batch fires only after th
 current turn ends, never mid-turn. Gated by the `mergeDrainEnabled` const
 (set `false` to fall back to one-turn-per-event replay). See
 `runtimes/hermes/events.go`.
+
+Unsent events stay queued while Hermes is unreachable. A successful health
+transition resumes draining through the same speaker gate; each standalone
+request finishes before the next queued request starts. Only a synchronous
+not-ready rejection is retained. An attempted HTTP POST is never replayed,
+because its desktop actions may already have executed.
+
+Each live HTTP/SSE stream keeps the adapter busy independently. One stream ending
+or failing cannot clear another stream's busy state, including after the legacy
+busy TTL. SSE consumption stops at `response.completed` or `response.failed`;
+EOF before either terminal event emits a lifecycle error instead of success.
+Per-request device run IDs already isolate SSE replies, so no Codex WebSocket
+request-ID protocol or CLI-specific repetitive-output heuristic is copied here.
+These guarantees are covered by local transport tests; they do not establish
+live Hermes desktop or voice success.
 
 ## 8. Channels (Telegram/Slack/Discord) — inbound visibility + fan-out
 

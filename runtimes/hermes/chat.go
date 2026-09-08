@@ -3,6 +3,7 @@ package hermes
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -11,6 +12,8 @@ import (
 	"go.autonomous.ai/os/system/domain"
 	"go.autonomous.ai/os/system/lib/flow"
 )
+
+var errHermesNotReady = errors.New("hermes not ready")
 
 // SendChatMessage sends a user message to Hermes via POST /v1/responses.
 // Returns the run ID (== idempotency key) the caller should use to correlate
@@ -72,7 +75,7 @@ func (s *HermesService) SendSlashCommandWithImagesAndRun(message string, imagesB
 // kicked off — not after response.completed. Caller correlates via SSE.
 func (s *HermesService) sendChat(message string, imagesBase64 []string, fixedReqID string, fixedRunID string, sourceType string, _ any) (string, error) {
 	if !s.ready.Load() {
-		return "", fmt.Errorf("hermes not ready")
+		return "", errHermesNotReady
 	}
 
 	var reqID, idempotencyKey string
@@ -130,8 +133,9 @@ func (s *HermesService) sendChat(message string, imagesBase64 []string, fixedReq
 
 	// Mark busy before the network round-trip so sensing-while-busy gates
 	// catch the in-flight turn even before response.created arrives. Cleared
-	// by the lifecycle.end translator (or by SetBusy(false) on error).
+	// when this request stream terminates, after terminal event dispatch.
 	s.busySince.Store(time.Now().UnixMilli())
+	s.inFlightStreams.Add(1)
 	s.activeTurn.Store(true)
 
 	// Flash the "thinking" face for visible turns (OpenClaw emotion-acknowledge
@@ -179,6 +183,12 @@ func (s *HermesService) sendChat(message string, imagesBase64 []string, fixedReq
 // runStream issues the POST and pumps translated events into the registered
 // handler. Runs in its own goroutine — one per outbound chat.send.
 func (s *HermesService) runStream(runID string, body streamRequest) {
+	defer func() {
+		s.RemovePendingChatTraceByRunID(runID)
+		if s.inFlightStreams.Add(-1) == 0 {
+			s.SetBusy(false)
+		}
+	}()
 	handler := s.currentHandler()
 	dispatch := func(evt domain.WSEvent) {
 		if handler == nil {
@@ -198,8 +208,7 @@ func (s *HermesService) runStream(runID string, body streamRequest) {
 	res, err := s.postStream(ctx, runID, body, dispatch)
 	if err != nil {
 		slog.Error("hermes stream error", "component", "hermes", "runID", runID, "error", err)
-		// Make sure busy clears so the next sensing/voice round can proceed.
-		s.activeTurn.Store(false)
+		// The deferred stream release updates busy after dispatching this error.
 		// Synthesize a lifecycle.error so flow/monitor consumers see the turn fail.
 		payload, _ := json.Marshal(map[string]any{
 			"runId":      runID,

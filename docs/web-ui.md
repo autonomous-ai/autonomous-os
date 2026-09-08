@@ -119,6 +119,13 @@ Defined at `.lm-root` in `index.css`:
 
 ### 3.4 Settings (`/setting`) — shared shell
 
+**Speech speed** in Voice (`/setting#tts`) loads effective `tts_speed` and
+shows the provider range (`0.7–1.2×` for ElevenLabs, `0.25–4.0×` otherwise)
+in `0.05` steps. **Save Changes** persists speed through
+`PUT /api/device/config`; save before using **Test Voice**. Saved speed takes
+precedence over `HAL_TTS_SPEED` (default `1.3`); ElevenLabs clamps the outgoing
+speed to `0.7–1.2`.
+
 **AI Brain key/URL mirroring.** The panel fills a blank TTS or STT field from the
 AI Brain's key and base URL, so a first-time setup only asks for one credential.
 The key half is additionally gated on the device having no key on file

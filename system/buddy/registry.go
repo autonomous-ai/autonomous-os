@@ -1,82 +1,134 @@
 package buddy
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
 
-// Registry tracks the (single) connected buddy WebSocket and the table of in-flight
-// requests waiting for their matching response. MVP is 1↔1; future multi-buddy
-// will key by buddy ID.
+type pendingCommand struct {
+	conn     *websocket.Conn
+	response chan json.RawMessage
+}
+
+// Registry owns one paired connection. Pending responses belong to the exact
+// connection that received the command, so a reconnect cannot complete old work.
 type Registry struct {
 	mu      sync.Mutex
 	conn    *websocket.Conn
-	pending map[string]chan json.RawMessage
+	pending map[string]pendingCommand
+	writer  chan struct{}
 }
 
 func NewRegistry() *Registry {
-	return &Registry{pending: make(map[string]chan json.RawMessage)}
+	return &Registry{pending: make(map[string]pendingCommand), writer: make(chan struct{}, 1)}
 }
 
-// Set replaces the active connection. Closes the previous one if present.
 func (r *Registry) Set(c *websocket.Conn) {
 	r.mu.Lock()
 	old := r.conn
 	r.conn = c
+	if old != c {
+		r.cancelConnectionLocked(old)
+	}
 	r.mu.Unlock()
-	if old != nil {
+	if old != nil && old != c {
 		_ = old.Close()
 	}
 }
 
-// Clear drops the active connection without closing it (caller closes on exit).
-func (r *Registry) Clear() {
-	r.mu.Lock()
-	r.conn = nil
-	r.mu.Unlock()
+func (r *Registry) cancelConnectionLocked(conn *websocket.Conn) {
+	for id, pending := range r.pending {
+		if pending.conn == conn {
+			pending.response <- nil
+			delete(r.pending, id)
+		}
+	}
 }
 
-// Conn returns the current connection or nil.
+// Clear removes all current state (used when unpairing).
+func (r *Registry) Clear() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.cancelConnectionLocked(r.conn)
+	r.conn = nil
+}
+
+// ClearConnection ignores a stale reader exiting after a replacement connected.
+func (r *Registry) ClearConnection(conn *websocket.Conn) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.cancelConnectionLocked(conn)
+	if r.conn == conn {
+		r.conn = nil
+	}
+}
+
 func (r *Registry) Conn() *websocket.Conn {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.conn
 }
 
-// RegisterPending creates a one-shot channel that will receive the response
-// keyed by `id`. Caller must defer CancelPending to clean up.
-func (r *Registry) RegisterPending(id string) chan json.RawMessage {
-	ch := make(chan json.RawMessage, 1)
+func (r *Registry) RegisterPending(conn *websocket.Conn, id string) (chan json.RawMessage, error) {
 	r.mu.Lock()
-	r.pending[id] = ch
-	r.mu.Unlock()
-	return ch
+	defer r.mu.Unlock()
+	if conn == nil || r.conn != conn {
+		return nil, ErrNoBuddyConnected
+	}
+	if _, exists := r.pending[id]; exists {
+		return nil, errors.New("duplicate in-flight command id")
+	}
+	ch := make(chan json.RawMessage, 1)
+	r.pending[id] = pendingCommand{conn: conn, response: ch}
+	return ch, nil
 }
 
-// DeliverResponse routes a response from the WS reader loop to the waiting
-// Dispatch caller. Returns false if there is no pending registration for `id`.
-func (r *Registry) DeliverResponse(id string, body json.RawMessage) bool {
+func (r *Registry) DeliverResponse(conn *websocket.Conn, id string, body json.RawMessage) bool {
 	r.mu.Lock()
-	ch, ok := r.pending[id]
-	if ok {
-		delete(r.pending, id)
-	}
-	r.mu.Unlock()
-	if !ok {
+	defer r.mu.Unlock()
+	pending, ok := r.pending[id]
+	if !ok || pending.conn != conn {
 		return false
 	}
-	select {
-	case ch <- body:
-	default:
-	}
+	delete(r.pending, id)
+	pending.response <- body
 	return true
 }
 
-// CancelPending removes a pending registration (e.g. on Dispatch timeout).
-func (r *Registry) CancelPending(id string) {
+func (r *Registry) CancelPending(id string, response chan json.RawMessage) {
 	r.mu.Lock()
-	delete(r.pending, id)
+	if pending, ok := r.pending[id]; ok && pending.response == response {
+		delete(r.pending, id)
+	}
 	r.mu.Unlock()
+}
+
+// Write serializes data frames and bounds socket backpressure. Control frames
+// (including Gorilla's ping replies) are safe concurrently with this writer.
+func (r *Registry) Write(ctx context.Context, conn *websocket.Conn, data []byte) error {
+	select {
+	case r.writer <- struct{}{}:
+		defer func() { <-r.writer }()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if conn == nil || r.Conn() != conn {
+		return ErrNoBuddyConnected
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	if err := conn.SetWriteDeadline(deadline); err != nil {
+		return err
+	}
+	return conn.WriteMessage(websocket.TextMessage, data)
 }

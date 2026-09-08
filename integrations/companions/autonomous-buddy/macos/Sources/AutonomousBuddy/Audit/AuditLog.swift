@@ -13,8 +13,8 @@ actor AuditLog {
         return dir.appendingPathComponent("audit.log")
     }
 
-    init() {
-        self.url = Self.fileURL
+    init(url: URL? = nil) {
+        self.url = url ?? Self.fileURL
     }
 
     func append(action: String, summary: String, ok: Bool, error: String?) {

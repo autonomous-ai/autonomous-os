@@ -143,9 +143,14 @@ class _WaitFiller:
     idempotent and safe to call from any exit path, including exceptions.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, owner: str = "") -> None:
         self._timer: Optional[threading.Timer] = None
         self._fired = False
+        # Voice metrics ownership: which utterance this "one moment" is for. The
+        # tag rides the filler request and comes back on the /voice/speak
+        # call os-server makes, so the played phrase is attributed instead of
+        # landing as unclaimed audio (which never counts as a response).
+        self._owner = owner
 
     def arm(self) -> None:
         delay = hal_config.REALTIME_FILLER_DELAY_S
@@ -158,7 +163,11 @@ class _WaitFiller:
     def _fire(self) -> None:
         self._fired = True
         try:
-            requests.post(voice_cfg.OS_FILLER_URL, timeout=2)
+            requests.post(
+                voice_cfg.OS_FILLER_URL,
+                json={"owner": self._owner} if self._owner else None,
+                timeout=2,
+            )
             logger.info(
                 "[realtime] dead-air filler requested after %.1fs of no output",
                 hal_config.REALTIME_FILLER_DELAY_S,
@@ -385,6 +394,7 @@ def run_realtime_turn(
     rt_audio_buffer: list,
     buf_duration: float,
     audio_is_speech: bool = True,
+    interaction_id: str = "",
 ) -> RealtimeTurnResult:
     """Commit the captured audio to the realtime agent and stream its reply.
 
@@ -434,7 +444,7 @@ def run_realtime_turn(
         # Audible half of the same wait (see _WaitFiller). Armed here rather
         # than per attempt so a 1011 retry does not restart the clock — from the
         # user's side it is one uninterrupted silence.
-        wait_filler = _WaitFiller()
+        wait_filler = _WaitFiller(owner=interaction_id)
         if should_arm_realtime_wait_filler(combined):
             wait_filler.arm()
         else:
@@ -539,7 +549,10 @@ def run_realtime_turn(
                     if native and isinstance(output, RTAudioOutput):
                         if not native_started:
                             native_started = tts.native_play_begin(
-                                realtime.output_sample_rate
+                                realtime.output_sample_rate,
+                                # Explicit ownership for voice metrics: this audio
+                                # answers THIS utterance, nothing else.
+                                owner=f"interaction:{interaction_id}" if interaction_id else "",
                             )
                             if native_started:
                                 logger.info(
@@ -575,8 +588,8 @@ def run_realtime_turn(
                                     head[:80],
                                 )
                                 wait_filler.cancel()
-                                if not tts.speak(head):
-                                    tts.speak_queue(head)
+                                if not tts.speak(head, turn_id=interaction_id, realtime_reply=True):
+                                    tts.speak_queue(head, turn_id=interaction_id, realtime_reply=True)
                                 first_sentence_sent = True
                                 _thinking_cue_clear()
                                 sentence_buf = rest
@@ -602,8 +615,8 @@ def run_realtime_turn(
                                     # interrupt the very sentence it exists to
                                     # cover (both are interruptible).
                                     wait_filler.cancel()
-                                    if not tts.speak(sentence):
-                                        tts.speak_queue(sentence)
+                                    if not tts.speak(sentence, turn_id=interaction_id, realtime_reply=True):
+                                        tts.speak_queue(sentence, turn_id=interaction_id, realtime_reply=True)
                                     first_sentence_sent = True
                                     _thinking_cue_clear()
                                 else:
@@ -611,7 +624,7 @@ def run_realtime_turn(
                                         "[realtime] Next sentence → speak_queue: %r",
                                         sentence[:80],
                                     )
-                                    tts.speak_queue(sentence)
+                                    tts.speak_queue(sentence, turn_id=interaction_id, realtime_reply=True)
                             sentence_buf = ""
 
                 # Look-replay: re-append this turn's audio to the SAME session
@@ -691,15 +704,15 @@ def run_realtime_turn(
                         # Same cancel-then-busy-fallback as the first-sentence
                         # site above.
                         wait_filler.cancel()
-                        if not tts.speak(remaining):
-                            tts.speak_queue(remaining)
+                        if not tts.speak(remaining, turn_id=interaction_id, realtime_reply=True):
+                            tts.speak_queue(remaining, turn_id=interaction_id, realtime_reply=True)
                         first_sentence_sent = True
                         _thinking_cue_clear()
                     else:
                         logger.info(
                             "[realtime] Final fragment → speak_queue: %r", remaining[:80]
                         )
-                        tts.speak_queue(remaining)
+                        tts.speak_queue(remaining, turn_id=interaction_id, realtime_reply=True)
                 # Only claim the turn as HANDLED if the model actually SPOKE.
                 # Native mode → audio actually played (native_played); ElevenLabs
                 # mode → a sentence was synthesized OR a transcript exists. An empty

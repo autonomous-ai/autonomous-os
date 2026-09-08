@@ -95,6 +95,7 @@ func (s *HermesService) transitionReady(now bool) {
 		return
 	}
 	if now {
+		defer s.drainPendingEvents()
 		s.connectedAt.Store(time.Now().Unix())
 		flow.Log("ws_ready", map[string]any{"backend": "hermes"})
 		slog.Info("Hermes ready",

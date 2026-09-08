@@ -49,14 +49,14 @@ func InitializeServer() (*Server, error) {
 		return nil, err
 	}
 	chatStream := mqtthandler.ProvideChatStream(configConfig, factory, bus)
-	deviceMQTTHandler := mqtthandler.ProvideDeviceMQTTHandler(configConfig, factory, deviceService, service, agentGateway, chatStream)
-	agentHandler := http4.ProvideAgentHandler(agentGateway, bus, statusledService, configConfig)
-	v := provideAgentIsSleeping(agentHandler)
-	sensingHandler := http5.ProvideSensingHandler(agentGateway, bus, configConfig, statusledService, v)
 	buddyService, err := buddy.ProvideService()
 	if err != nil {
 		return nil, err
 	}
+	deviceMQTTHandler := mqtthandler.ProvideDeviceMQTTHandler(configConfig, factory, deviceService, service, agentGateway, chatStream, buddyService)
+	agentHandler := http4.ProvideAgentHandler(agentGateway, bus, statusledService, configConfig)
+	v := provideAgentIsSleeping(agentHandler)
+	sensingHandler := http5.ProvideSensingHandler(agentGateway, bus, configConfig, statusledService, v)
 	buddyHandler := http6.ProvideBuddyHandler(configConfig, buddyService)
 	pluginService := plugin.ProvideService()
 	pluginHandler := http7.ProvidePluginHandler(pluginService)

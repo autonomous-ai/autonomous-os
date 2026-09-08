@@ -81,6 +81,7 @@ func writeFakeCodexResumeHangs(t *testing.T, dir, argvFile string) string {
 echo "ARGV:$*" >> %q
 case "$*" in
   *resume*)
+    echo '{"type":"turn.started"}'
     sleep 30
     ;;
 esac
@@ -463,7 +464,6 @@ func TestResumedFailureFramesHeldBack(t *testing.T) {
 	}
 }
 
-
 // A thread whose resume hangs used to wedge the device forever: rotation rides
 // on a COMPLETED turn, so a thread that never completes one is never rotated,
 // and the thread id lives on disk — restarting the service or rebooting the
@@ -471,17 +471,44 @@ func TestResumedFailureFramesHeldBack(t *testing.T) {
 func TestResumeTimeoutDropsTheThread(t *testing.T) {
 	dir := t.TempDir()
 	argvFile := filepath.Join(dir, "argv.txt")
-	url, cfg := startServerTimeout(t, writeFakeCodexResumeHangs(t, dir, argvFile), dir, 500*time.Millisecond)
+	// Start from a persisted thread: creating it in a preliminary timed turn
+	// made this test depend on the fresh shell process exiting within 500ms.
+	// Under race instrumentation it could emit turn.completed and then time
+	// out, leaving its bridge.error for the next turn's reader to consume.
+	if err := os.WriteFile(filepath.Join(dir, "session.json"), []byte(`{"thread_id":"t123"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Invoke the existing interpreter directly. Executing a freshly written
+	// shebang file can trigger slow platform executable checks on macOS.
+	// buildArgv's first argument "exec" names this script in the workspace.
+	fake := writeFakeCodexResumeHangs(t, dir, argvFile)
+	script, err := os.ReadFile(fake)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := filepath.Join(dir, "workspace")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, "exec"), script, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	url, cfg := startServerTimeout(t, "/bin/bash", dir, 2*time.Second)
 	conn := dial(t, url, testToken)
 	readFrame(t, conn) // ready status
 
-	// First turn is fresh and succeeds, persisting thread t123.
-	sendMessage(t, conn, "first")
-	readTurnFrames(t, conn)
-
-	// Second turn resumes t123 and hangs until the turn timeout.
+	// The first invocation resumes the persisted thread and must hang.
 	sendMessage(t, conn, "second")
 	frames := readTurnFrames(t, conn)
+	started := false
+	for _, frame := range frames {
+		if frame["type"] == "turn.started" {
+			started = true
+		}
+	}
+	if !started {
+		t.Fatal("fake resume never reached its intentional hang before timeout")
+	}
 	last := frames[len(frames)-1]
 	if last["type"] != "bridge.error" {
 		t.Fatalf("a timed-out turn must end with bridge.error, got %v", last)
@@ -491,14 +518,17 @@ func TestResumeTimeoutDropsTheThread(t *testing.T) {
 		t.Fatalf("the timed-out thread must be dropped, but %s still exists (err=%v)", cfg.SessionFile, err)
 	}
 
-	// Third turn must start FRESH — this is the escape the device never had.
+	// The next invocation must start FRESH — the escape the device never had.
 	sendMessage(t, conn, "third")
 	readTurnFrames(t, conn)
 	lines := argvLines(t, argvFile)
-	if len(lines) < 3 {
-		t.Fatalf("expected at least 3 codex invocations, got %d: %v", len(lines), lines)
+	if len(lines) != 2 {
+		t.Fatalf("expected exactly 2 codex invocations, got %d: %v", len(lines), lines)
 	}
-	if strings.Contains(lines[2], "resume") {
-		t.Fatalf("after a resume timeout the next turn must be fresh, got argv: %s", lines[2])
+	if !strings.Contains(lines[0], "resume t123") {
+		t.Fatalf("first invocation did not resume test thread: %s", lines[0])
+	}
+	if strings.Contains(lines[1], "resume") {
+		t.Fatalf("after a resume timeout the next turn must be fresh, got argv: %s", lines[1])
 	}
 }

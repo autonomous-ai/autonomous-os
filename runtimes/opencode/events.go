@@ -1,6 +1,7 @@
 package opencode
 
 import (
+	"errors"
 	"log/slog"
 	"os"
 	"sort"
@@ -85,6 +86,9 @@ func (s *OpenCodeService) IsBusy() bool {
 
 // SetBusy flips active state. Drains pending events on idle.
 func (s *OpenCodeService) SetBusy(busy bool) {
+	if !busy && (s.getCurrentRunID() != "" || s.hasPendingRuns()) {
+		return
+	}
 	if busy {
 		s.busySince.Store(time.Now().UnixMilli())
 	}
@@ -124,6 +128,11 @@ func (s *OpenCodeService) DrainPendingEvents() {
 }
 
 func (s *OpenCodeService) drainPendingEvents() {
+	s.pendingEventsDrainMu.Lock()
+	defer s.pendingEventsDrainMu.Unlock()
+	if !s.wsConnected.Load() {
+		return
+	}
 	s.pendingEventsMu.Lock()
 	events := s.pendingEvents
 	s.pendingEvents = nil
@@ -210,7 +219,13 @@ func (s *OpenCodeService) drainPendingEvents() {
 	}
 
 	slog.Info("draining pending sensing events", "component", "sensing", "count", len(events))
-	for _, ev := range events {
+	for i, ev := range events {
+		if !s.wsConnected.Load() {
+			s.pendingEventsMu.Lock()
+			s.pendingEvents = append(events[i:], s.pendingEvents...)
+			s.pendingEventsMu.Unlock()
+			return
+		}
 		var reqID, runID string
 		if ev.fixedRunID != "" {
 			reqID = ev.fixedRunID
@@ -251,6 +266,14 @@ func (s *OpenCodeService) drainPendingEvents() {
 			_, err = s.SendChatMessageWithRun(msg, reqID, runID)
 		}
 		if err != nil {
+			if errors.Is(err, errDisconnectedBeforeSend) {
+				s.RemovePendingChatTraceByRunID(runID)
+				s.pendingEventsMu.Lock()
+				s.pendingEvents = append(events[i:], s.pendingEvents...)
+				s.pendingEventsMu.Unlock()
+				flow.End("sensing_input", turnStart, map[string]any{"deferred": "disconnected before send"}, runID)
+				return
+			}
 			slog.Error("failed to replay pending event", "component", "sensing", "type", ev.eventType, "error", err)
 			flow.End("sensing_input", turnStart, map[string]any{"error": err.Error()}, runID)
 		} else {

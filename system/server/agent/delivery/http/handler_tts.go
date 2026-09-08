@@ -182,7 +182,7 @@ func (h *AgentHandler) CancelSpeech() {
 	}
 }
 
-// realtimeSupersedesMainReply gates CancelSpeechForNewerTurn. An isolated policy
+// RealtimeSupersedesMainReply gates CancelSpeechForNewerTurn. An isolated policy
 // switch, mirroring HAL's HAL_REALTIME_AI_REJECT_FILTER: unlike the physical
 // click, this mark is stamped on the system's own judgement that the user has
 // moved on, so there has to be a way to change the behaviour on a running
@@ -193,7 +193,9 @@ func (h *AgentHandler) CancelSpeech() {
 // heard of this switch gets — lamp, but also intern-v2, reachy-mini, and any
 // body with no .env at all — and this behaviour has not run on real hardware
 // yet. Defaulting on would hand it to all of them without anyone choosing it.
-func realtimeSupersedesMainReply() bool {
+// Exported so tracking can stamp the policy state on every event (the metrics for
+// superseded replies is meaningless without knowing whether this is on).
+func RealtimeSupersedesMainReply() bool {
 	v := strings.ToLower(strings.TrimSpace(os.Getenv("OS_REALTIME_SUPERSEDES_MAIN_REPLY")))
 	return v == "1" || v == "true"
 }
@@ -213,9 +215,12 @@ func realtimeSupersedesMainReply() bool {
 // an answer is coming, and the answer has just lost the speaker. Leaving them
 // armed reproduces exactly what the click had to fix — the device answers the
 // new question, then says "one moment" about the old one and falls silent.
-func (h *AgentHandler) CancelSpeechForNewerTurn() {
-	if !realtimeSupersedesMainReply() {
-		return
+// Returns whether the mark was actually stamped: the caller reports that back
+// to HAL, which must not record a suppression situation the policy never
+// applied (it would inflate the stale-reply denominator).
+func (h *AgentHandler) CancelSpeechForNewerTurn() bool {
+	if !RealtimeSupersedesMainReply() {
+		return false
 	}
 	now := time.Now().UnixMilli()
 	h.autoSpeechWatermarkMs.Store(now)
@@ -229,6 +234,7 @@ func (h *AgentHandler) CancelSpeechForNewerTurn() {
 			Detail:  map[string]any{"watermark_ms": now, "source": "realtime_handled"},
 		})
 	}
+	return true
 }
 
 // deliverTTS sends text to HAL in a background goroutine and logs the outcome:

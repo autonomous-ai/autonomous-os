@@ -387,6 +387,8 @@ const (
 
 // Data kinds carried inside CommandData envelope.
 const (
+	KindBuddyPairStart = "buddy.pair.start" // issue the shared 6-digit Buddy pairing code (60s)
+
 	KindTTSSet       = "tts.set"       // persist TTS voice/provider/language config
 	KindTTSPreview   = "tts.preview"   // one-shot TTS preview, no config write
 	KindDeviceRename = "device.rename" // rewrite IDENTITY.md Name (WatchIdentity picks up wake-words)
@@ -708,15 +710,16 @@ type MQTTRemoveChannelResponse struct {
 // DeviceMessage is the base response published to fd_channel.
 // All messages MUST include these required fields per spec.
 type MQTTInfoResponse struct {
-	Device      string `json:"device"`
-	Type        string `json:"type"`
-	Version     string `json:"version"`
-	ID          string `json:"id"`
-	Mac         string `json:"mac"`
-	Time        string `json:"time"`
-	TTSProvider string `json:"tts_provider,omitempty"`
-	TTSVoice    string `json:"tts_voice,omitempty"`
-	STTLanguage string `json:"stt_language,omitempty"`
+	Device      string  `json:"device"`
+	Type        string  `json:"type"`
+	Version     string  `json:"version"`
+	ID          string  `json:"id"`
+	Mac         string  `json:"mac"`
+	Time        string  `json:"time"`
+	TTSProvider string  `json:"tts_provider,omitempty"`
+	TTSVoice    string  `json:"tts_voice,omitempty"`
+	TTSSpeed    float64 `json:"tts_speed"`
+	STTLanguage string  `json:"stt_language,omitempty"`
 	// WakeWordEnabled is the effective top-level wake-word gate from config. It is
 	// intentionally not omitted so MQTT consumers can distinguish disabled
 	// from an older device that does not report the setting.
@@ -769,6 +772,7 @@ func NewMQTTInfoResponse(cfg *config.Config, msgType string, mac string) MQTTInf
 		Time:            time.Now().UTC().Format(time.RFC3339Nano),
 		TTSProvider:     cfg.TTSProvider,
 		TTSVoice:        cfg.TTSVoice,
+		TTSSpeed:        cfg.GetTTSSpeed(),
 		STTLanguage:     cfg.STTLanguage,
 		WakeWordEnabled: cfg.WakeWordEnabled(),
 		Timezone:        cfg.Timezone,
@@ -1100,9 +1104,10 @@ type MQTTSkillsInstallStoreData struct {
 // MQTTTTSSetData is the nested data payload for cmd:"data", kind:"tts.set" downlinks.
 // BFF sends: {"cmd":"data","kind":"tts.set","data":{"provider":"elevenlabs","voice":"Linh","language":"vi"}}
 type MQTTTTSSetData struct {
-	Provider string `json:"provider"`
-	Voice    string `json:"voice"`
-	Language string `json:"language"`
+	Speed    *float64 `json:"speed,omitempty"`
+	Provider string   `json:"provider"`
+	Voice    string   `json:"voice"`
+	Language string   `json:"language"`
 }
 
 // MQTTTTSSetCommand wraps the full tts.set downlink envelope for unmarshalling.
@@ -1373,6 +1378,7 @@ type ConfigPublicResponse struct {
 	STTModel           string   `json:"stt_model"`
 	TTSProvider        string   `json:"tts_provider"`
 	TTSVoice           string   `json:"tts_voice"`
+	TTSSpeed           float64  `json:"tts_speed"`
 	WakeWord           bool     `json:"wakeword"`
 	AgentName          string   `json:"agent_name"`
 	WakePhrases        []string `json:"wake_phrases"`
@@ -1458,9 +1464,10 @@ type UpdateConfigRequest struct {
 	FAChannel    string `json:"fa_channel"`
 	FDChannel    string `json:"fd_channel"`
 
-	TTSProvider string `json:"tts_provider"`
-	TTSVoice    string `json:"tts_voice"`
-	WakeWord    *bool  `json:"wakeword,omitempty"`
+	TTSProvider string   `json:"tts_provider"`
+	TTSVoice    string   `json:"tts_voice"`
+	TTSSpeed    *float64 `json:"tts_speed,omitempty" binding:"omitempty,gte=0.25,lte=4"`
+	WakeWord    *bool    `json:"wakeword,omitempty"`
 
 	// Realtime voice-agent config (Gemini Live / OpenAI Realtime). Same payload
 	// as the MQTT realtime.set downlink; omit to leave the realtime block alone.

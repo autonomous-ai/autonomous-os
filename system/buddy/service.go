@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -20,6 +21,8 @@ type Service struct {
 	pairing    *PairingCodeStore
 	registry   *Registry
 	dispatcher *Dispatcher
+	agentMu    sync.Mutex
+	agentSeq   map[string]uint64
 }
 
 // ProvideService wires the buddy subsystem. It loads any existing pairing from

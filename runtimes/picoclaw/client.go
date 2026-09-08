@@ -3,6 +3,7 @@ package picoclaw
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -17,6 +18,8 @@ import (
 	"go.autonomous.ai/os/system/lib/i18n"
 	"go.autonomous.ai/os/system/statusled"
 )
+
+var errDisconnectedBeforeSend = errors.New("picoclaw websocket disconnected before send")
 
 const (
 	// reconnectBackoff is the fixed wait between reconnect attempts. PicoClaw is
@@ -74,29 +77,37 @@ func (s *PicoclawService) StartWS(ctx context.Context, handler domain.AgentEvent
 // runWSConn dials, marks the socket ready, then pumps inbound frames through the
 // translator until the socket errors or ctx is cancelled.
 func (s *PicoclawService) runWSConn(ctx context.Context, handler domain.AgentEventHandler) error {
+	return s.runWSConnURL(ctx, handler, WSURL)
+}
+
+func (s *PicoclawService) runWSConnURL(ctx context.Context, handler domain.AgentEventHandler, url string) error {
 	s.wsConnected.Store(false)
 	s.wsConnectedAt.Store(0)
 	defer func() {
+		s.sendMu.Lock()
 		s.wsConnected.Store(false)
 		s.wsConnectedAt.Store(0)
+		// Transmitted work is uncertain; never put it back in the unsent queue.
+		s.RemovePendingChatTraceByRunID(s.getCurrentRunID())
+		s.RemovePendingChatTraceByRunID(s.peekPendingRunID())
+		s.clearTurn()
+		s.activeTurn.Store(false)
+		s.sendMu.Unlock()
 	}()
-	// Clear busy on disconnect — the final frame may never arrive.
-	defer s.activeTurn.Store(false)
-	defer s.clearTurn()
 
-	connStart := flow.Start("ws_connect", map[string]any{"url": WSURL})
+	connStart := flow.Start("ws_connect", map[string]any{"url": url})
 
 	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second}
 	header := http.Header{}
 	header.Set("Authorization", "Bearer "+Token)
-	conn, resp, err := dialer.DialContext(ctx, WSURL, header)
+	conn, resp, err := dialer.DialContext(ctx, url, header)
 	if err != nil {
 		if resp != nil {
 			flow.End("ws_connect", connStart, map[string]any{"error": err.Error(), "status": resp.Status})
-			return fmt.Errorf("dial %s: %w (status %s)", WSURL, err, resp.Status)
+			return fmt.Errorf("dial %s: %w (status %s)", url, err, resp.Status)
 		}
 		flow.End("ws_connect", connStart, map[string]any{"error": err.Error()})
-		return fmt.Errorf("dial %s: %w", WSURL, err)
+		return fmt.Errorf("dial %s: %w", url, err)
 	}
 	defer func() {
 		s.wsMu.Lock()
@@ -115,7 +126,7 @@ func (s *PicoclawService) runWSConn(ctx context.Context, handler domain.AgentEve
 	}
 	flow.End("ws_connect", connStart, map[string]any{"connected": true})
 	flow.Log("ws_ready", map[string]any{"backend": "picoclaw"})
-	slog.Info("PicoClaw connected", "component", "picoclaw", "url", WSURL)
+	slog.Info("PicoClaw connected", "component", "picoclaw", "url", url)
 
 	// On reconnect (not first boot), announce via TTS so the user knows the agent
 	// is back. SpeakCached (not SendToHALTTS): hardcoded system filler, must NOT
@@ -145,6 +156,10 @@ func (s *PicoclawService) runWSConn(ctx context.Context, handler domain.AgentEve
 		}
 	}
 
+	// Only locally unsent requests survive a disconnect. Start them without
+	// waiting for an unrelated turn to finish on the new connection.
+	s.drainPendingEvents()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -155,6 +170,9 @@ func (s *PicoclawService) runWSConn(ctx context.Context, handler domain.AgentEve
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
 			return err
+		}
+		if !s.wsConnected.Load() {
+			return fmt.Errorf("connection retired before dispatch")
 		}
 		s.translateFrame(msg, dispatch)
 	}
@@ -194,11 +212,13 @@ func (s *PicoclawService) sendFrame(v any) error {
 	conn := s.wsConn
 	if conn == nil {
 		s.wsMu.Unlock()
-		return fmt.Errorf("picoclaw websocket not connected")
+		return errDisconnectedBeforeSend
 	}
 	err = conn.WriteMessage(websocket.TextMessage, body)
 	s.wsMu.Unlock()
 	if err != nil {
+		s.wsConnected.Store(false)
+		_ = conn.Close() // Wake the read loop so uncertain writes trigger reconnect.
 		return fmt.Errorf("write frame: %w", err)
 	}
 	return nil

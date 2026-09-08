@@ -253,7 +253,7 @@ func (s *Server) sendUserMessage(payload turnPayload) {
 }
 
 // writeStdin writes one JSONL line to the child stdin; while the child is
-// down (or on a write error) the line goes to the pending queue instead,
+// down the line goes to the pending queue instead,
 // flushed on the next spawn. The blocking pipe write happens under stdinMu
 // only — never under mu (see the lock-order note on Server).
 func (s *Server) writeStdin(line []byte) {
@@ -269,14 +269,13 @@ func (s *Server) writeStdin(line []byte) {
 	s.writePipe(w, line)
 }
 
-// writePipe performs the actual pipe write (caller holds stdinMu); a failed
-// write re-queues the line for the next spawn.
+// writePipe performs the actual pipe write (caller holds stdinMu). Once a write
+// is attempted, delivery is uncertain on error: never replay a desktop action.
 func (s *Server) writePipe(w io.Writer, line []byte) {
 	buf := make([]byte, 0, len(line)+1)
 	buf = append(append(buf, line...), '\n')
-	if _, err := w.Write(buf); err != nil {
-		log.Printf("%s stdin write failed: %v", logPrefix, err)
-		s.queuePending(line)
+	if n, err := w.Write(buf); err != nil || n != len(buf) {
+		log.Printf("%s stdin write failed (delivery uncertain, not replayed): wrote=%d/%d error=%v", logPrefix, n, len(buf), err)
 	}
 }
 

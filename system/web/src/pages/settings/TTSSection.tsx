@@ -193,6 +193,7 @@ export function TTSSection({
   // server-driven provider list is a drop-in swap.
   ttsProvider, setTtsProvider, ttsProviders: _ttsProviders,
   ttsVoice, setTtsVoice, ttsVoices,
+  ttsSpeed, setTtsSpeed,
   sttLanguage,
 }: {
   active: boolean;
@@ -204,6 +205,7 @@ export function TTSSection({
   ttsProviders: string[];
   ttsVoice: string; setTtsVoice: (v: string) => void;
   ttsVoices: string[];
+  ttsSpeed: number; setTtsSpeed: (v: number) => void;
   sttLanguage: string;
 }) {
   // Choice is stored as state (not derived) so the operator can pick
@@ -231,6 +233,12 @@ export function TTSSection({
     ?? (ttsProvider === "openai" || ttsProvider === "elevenlabs"
       ? (ttsProvider as Vendor)
       : "elevenlabs");
+
+  const speedMin = ttsProvider === "elevenlabs" ? 0.7 : 0.25;
+  const speedMax = ttsProvider === "elevenlabs" ? 1.2 : 4.0;
+  // Show the backend's effective rate without changing a saved legacy value
+  // when the user edits another setting. Only a slider action changes it.
+  const effectiveSpeed = Math.max(speedMin, Math.min(speedMax, ttsSpeed));
 
   // Language picker — local state (not persisted server-side). Voice list
   // filters by this; empty means "follow the device's STT language".
@@ -486,6 +494,24 @@ export function TTSSection({
             <option key={v} value={v}>{displayVoice(v)}</option>
           ))}
         </select>
+      </div>
+
+      <div style={{ marginBottom: 12 }}>
+        <label htmlFor="tts_speed" style={labelStyle}>Speech speed: {effectiveSpeed.toFixed(2)}×</label>
+        <input
+          id="tts_speed"
+          type="range"
+          min={speedMin}
+          max={speedMax}
+          step={0.05}
+          value={effectiveSpeed}
+          onChange={(e) => setTtsSpeed(Number(e.target.value))}
+          aria-valuetext={`${effectiveSpeed.toFixed(2)} times normal speed`}
+          style={{ width: "100%", accentColor: C.green }}
+        />
+        <div style={{ fontSize: 10.5, color: C.textMuted, marginTop: 4 }}>
+          {speedMin}×–{speedMax}× · 1.0× normal. Save changes before testing speed.
+        </div>
         <TestVoiceButton
           voice={ttsVoice}
           lang={piperLang || lang || sttLanguage}

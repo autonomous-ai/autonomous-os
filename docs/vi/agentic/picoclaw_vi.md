@@ -195,7 +195,8 @@ pairing**, chỉ là bearer token:
 
 ## 4. Gửi một lượt
 
-`chat.go` `sendChat` ghi một frame và trả về ngay (câu trả lời đến qua vòng đọc):
+`chat.go` `sendChat` chỉ nhận một lượt đang chạy. Khi rảnh, gửi frame ngay; khi
+bận, giữ yêu cầu trong hàng đợi cục bộ và trả về run ID. Câu trả lời đến qua vòng đọc:
 
 ```json
 { "type": "message.send", "id": "<reqID>", "payload": { "content": "<text>" }, "session_id": "<nếu biết>" }
@@ -207,6 +208,27 @@ pairing**, chỉ là bearer token:
 PicoClaw xử lý **mỗi lần một lượt** và không stream token, nên các lượt được liên
 kết bằng một `runID` đang chạy duy nhất thay vì id theo từng frame: pending run id
 được frame đến đầu tiên của lượt nhận lấy.
+
+Adapter tuần tự hóa cả chat trực tiếp lẫn sự kiện đã đệm: yêu cầu thứ hai không
+ghi đè pending run ID của yêu cầu đầu. Chat trực tiếp trong hàng đợi giữ nguyên
+text, ảnh, request ID, run ID và source. Cả `chat.final` và `lifecycle.end` đều có
+thể báo rảnh, nhưng adapter chỉ nhả lượt sau khi dispatch toàn bộ chuỗi terminal,
+rồi gửi đúng một yêu cầu tiếp theo. Lỗi cũng nhả lượt sau dispatch.
+
+Yêu cầu chưa gửi được giữ lại khi callback idle/speaker chạy lúc mất kết nối và
+được gửi khi kết nối sẵn sàng, vẫn áp dụng speaker gate, ưu tiên voice và hết hạn/
+gộp sự kiện thụ động. Nếu socket biến mất trước thao tác ghi, giữ yêu cầu trong
+hàng đợi. Lỗi ghi đóng socket và được coi là chưa rõ đã đến server hay chưa:
+không tự gửi lại yêu cầu đó; chỉ phần đuôi chưa thử gửi được giữ qua reconnect.
+Khi busy hết hạn sau 45 phút, adapter cũng đóng socket trước khi nhận lượt mới,
+tránh gắn phản hồi đến muộn vào yêu cầu tiếp theo.
+
+Protocol không có request ID trong phản hồi hoặc xác nhận replay. Tuần tự hóa
+cục bộ không phân biệt được lượt ngoài tự phát/xen kẽ hay server phát lại phản
+hồi cũ trên kết nối mới. Không sao chép bộ lọc lặp output CLI và ghép request ID
+riêng của Codex sang adapter này. Các nhánh trên đã được kiểm tra bằng WebSocket
+cục bộ; vẫn cần xác minh với PicoClaw/device thực tế.
+
 
 ## 5. Ánh xạ protocol đến → `domain.WSEvent`
 

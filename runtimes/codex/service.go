@@ -14,10 +14,8 @@
 // [HW:/...] markers, monitor SSE, sensing drain, Telegram fan-out) stays
 // untouched.
 //
-// Like PicoClaw, there is no per-frame runId on the wire: the final answer
-// arrives whole on `item.completed` (agent_message) + `turn.completed`, and
-// turns are correlated by a single in-flight runID (the bridge serializes
-// turns; codex exec handles one turn per process).
+// Gateway events carry request_id/run_id through queued turns. Older bridges
+// without correlation fields use the adapter's ordered pending-run queue.
 package codex
 
 import (
@@ -90,14 +88,18 @@ type CodexService struct {
 	wsHasConnected atomic.Bool  // skip "reconnect" TTS on first successful connect
 
 	// Turn lifecycle. activeTurn flips true on SendChat (write) and false on the
-	// final / error frame (read). pendingRunID is the runID allocated by an
-	// outbound SendChat, adopted by the first inbound frame of that turn;
-	// currentRunID is the runID of the turn currently being streamed back.
-	activeTurn   atomic.Bool
-	busySince    atomic.Int64
-	pendingRunID atomic.Value // string
-	currentRunID atomic.Value // string
-	reqCounter   atomic.Int64
+	// final / error frame (read). pendingRuns retains every queued outbound
+	// request/run pair; tagged gateway frames select their originating pair,
+	// while older bridges consume FIFO. currentRunID identifies streamed output.
+	activeTurn        atomic.Bool
+	busySince         atomic.Int64
+	pendingMu         sync.Mutex
+	pendingRuns       []pendingRun
+	completedRequests []pendingRun
+	sendChatMu        sync.Mutex
+	currentRequestID  atomic.Value // string
+	currentRunID      atomic.Value // string
+	reqCounter        atomic.Int64
 	// wsDispatch is the live connection's event sink, published by runWSConn so
 	// paths OUTSIDE the read loop can still end a turn. Only the read loop has
 	// the dispatch closure otherwise, and the busy-TTL expiry — which decides a
@@ -131,8 +133,9 @@ type CodexService struct {
 	mcpMu sync.Mutex
 
 	// Pending sensing events buffered while busy.
-	pendingEventsMu sync.Mutex
-	pendingEvents   []pendingEvent
+	pendingEventsMu      sync.Mutex
+	pendingEventsDrainMu sync.Mutex // serialize detach/defer/requeue across reconnect and speaker callbacks
+	pendingEvents        []pendingEvent
 
 	// Run trackers (guard / broadcast / web_chat / silent / pose bucket).
 	guardRunsMu sync.Mutex
@@ -228,6 +231,11 @@ type CodexService struct {
 	// Recent outbound texts (echo-suppression for session.message handler).
 	recentOutboundMu    sync.Mutex
 	recentOutboundTexts []recentOutbound
+}
+
+type pendingRun struct {
+	reqID string
+	runID string
 }
 
 type recentOutbound struct {

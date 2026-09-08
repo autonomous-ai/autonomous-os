@@ -461,11 +461,21 @@ def _say(pool: str) -> None:
     os-server owns the phrases, the language and the WAV cache; HAL only decides
     WHEN. Fire-and-forget: the aim must never wait on speech, and a muted speaker
     is handled downstream by the speak path.
+
+    ``owner`` tags the phrase with the utterance the aim is serving, so the
+    audio the user hears while the lamp turns is attributed to that turn
+    instead of arriving unclaimed (see hal/telemetry/voice_metrics.py).
     """
     try:
         import requests
 
-        requests.post(config.OS_SENSING_FILLER_URL, json={"pool": pool}, timeout=1.0)
+        from hal.telemetry import voice_metrics
+
+        payload = {"pool": pool}
+        owner = voice_metrics.current_interaction()
+        if owner:
+            payload["owner"] = owner
+        requests.post(config.OS_SENSING_FILLER_URL, json=payload, timeout=1.0)
     except Exception as e:
         logger.debug("[look-aim] filler '%s' skipped: %s", pool, e)
 

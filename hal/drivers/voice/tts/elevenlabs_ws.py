@@ -91,8 +91,8 @@ class ElevenLabsWSTTSBackend(TTSBackend):
         url = self._url_tmpl.format(voice_id=voice_id, model=el_model)
 
         bos: dict = {"text": " ", "xi_api_key": self._api_key}
-        if speed != 1.0:
-            bos["voice_settings"] = {"speed": max(0.7, min(1.2, speed))}
+        # Override stored voice settings even when normal speed is selected.
+        bos["voice_settings"] = {"speed": max(0.7, min(1.2, speed))}
 
         try:
             ws = self._connect(

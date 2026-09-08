@@ -45,7 +45,7 @@ func TestRealtimeHandledDropsPendingFillers(t *testing.T) {
 	h := newCancelTestHandler()
 	fm := sensinghttp.DefaultFillerManager
 	runID := "device-chat-54-1787885628360"
-	fm.MarkVoiceRun(runID)
+	fm.MarkVoiceRun(runID, "")
 	fm.OnTurnStart(runID)
 	t.Cleanup(func() { fm.Cancel(runID) })
 
@@ -62,7 +62,7 @@ func TestSupersedeOffLeavesFillersAlone(t *testing.T) {
 	h := newCancelTestHandler()
 	fm := sensinghttp.DefaultFillerManager
 	runID := "device-chat-55-1787885629999"
-	fm.MarkVoiceRun(runID)
+	fm.MarkVoiceRun(runID, "")
 	fm.OnTurnStart(runID)
 	t.Cleanup(func() { fm.Cancel(runID) })
 

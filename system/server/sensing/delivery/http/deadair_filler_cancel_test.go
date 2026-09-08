@@ -11,9 +11,9 @@ import (
 // answer the question the user had just dropped.
 func TestCancelAllActiveEndsEveryInFlightRun(t *testing.T) {
 	fm := NewFillerManager()
-	fm.MarkVoiceRun("device-chat-54-1787885628360")
+	fm.MarkVoiceRun("device-chat-54-1787885628360", "")
 	fm.OnTurnStart("device-chat-54-1787885628360")
-	fm.MarkVoiceRun("device-chat-55-1787885629999")
+	fm.MarkVoiceRun("device-chat-55-1787885629999", "")
 	fm.OnTurnStart("device-chat-55-1787885629999")
 
 	if n := fm.CancelAllActive(); n != 2 {
@@ -33,7 +33,7 @@ func TestCancelAllActiveEndsEveryInFlightRun(t *testing.T) {
 func TestToolEndAfterCancelAllDoesNotRearm(t *testing.T) {
 	fm := NewFillerManager()
 	runID := "device-chat-54-1787885628360"
-	fm.MarkVoiceRun(runID)
+	fm.MarkVoiceRun(runID, "")
 	fm.OnTurnStart(runID)
 	fm.CancelAllActive()
 
@@ -52,12 +52,12 @@ func TestToolEndAfterCancelAllDoesNotRearm(t *testing.T) {
 // "click, then ask something else" still sound normal.
 func TestRunStartedAfterCancelAllStillArms(t *testing.T) {
 	fm := NewFillerManager()
-	fm.MarkVoiceRun("device-chat-54-1787885628360")
+	fm.MarkVoiceRun("device-chat-54-1787885628360", "")
 	fm.OnTurnStart("device-chat-54-1787885628360")
 	fm.CancelAllActive()
 
 	fresh := "device-chat-55-1787885629999"
-	fm.MarkVoiceRun(fresh)
+	fm.MarkVoiceRun(fresh, "")
 	fm.OnTurnStart(fresh)
 
 	fm.mu.Lock()
@@ -84,7 +84,7 @@ func TestCancelAllActiveOnIdleManagerIsANoop(t *testing.T) {
 func TestCancelAllActiveIsSafeAlongsideConcurrentToolEnds(t *testing.T) {
 	fm := NewFillerManager()
 	for _, runID := range []string{"run-a", "run-b", "run-c"} {
-		fm.MarkVoiceRun(runID)
+		fm.MarkVoiceRun(runID, "")
 		fm.OnTurnStart(runID)
 	}
 
@@ -100,5 +100,50 @@ func TestCancelAllActiveIsSafeAlongsideConcurrentToolEnds(t *testing.T) {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("concurrent OnToolEnd deadlocked with CancelAllActive")
+	}
+}
+
+// The opening filler fires while HAL is still waiting for this request's
+// response, so it cannot be tagged with the run id HAL does not have yet. HAL
+// sends its own interaction id up for exactly this reason; a filler tagged
+// with an unresolvable owner is dropped from the metrics as unattributed audio.
+func TestFillerOwnerPrefersTheInteractionID(t *testing.T) {
+	if got := fillerOwner("vi-abc123", "device-chat-7-1788422075499"); got != "vi-abc123" {
+		t.Errorf("fillerOwner = %q, want the interaction id", got)
+	}
+	if got := fillerOwner("", "device-chat-7-1788422075499"); got != "device-chat-7-1788422075499" {
+		t.Errorf("fillerOwner = %q, want the run id fallback", got)
+	}
+	if got := fillerOwner("", ""); got != "" {
+		t.Errorf("fillerOwner = %q, want empty (unattributed)", got)
+	}
+}
+
+// A filler fired later in the same turn must carry the same owner as the
+// opening one, or half a turn's audio lands unattributed.
+func TestLaterFillersReuseTheTurnsInteractionID(t *testing.T) {
+	fm := NewFillerManager()
+	fm.MarkVoiceRun("device-chat-7-1788422075499", "vi-abc123")
+
+	fm.mu.Lock()
+	got := fillerOwner(fm.interactions["device-chat-7-1788422075499"], "device-chat-7-1788422075499")
+	fm.mu.Unlock()
+
+	if got != "vi-abc123" {
+		t.Errorf("owner = %q, want the interaction id recorded at MarkVoiceRun", got)
+	}
+}
+
+// Forgetting a run must forget its interaction mapping too.
+func TestCancelClearsTheInteractionMapping(t *testing.T) {
+	fm := NewFillerManager()
+	fm.MarkVoiceRun("device-chat-7-1788422075499", "vi-abc123")
+	fm.Cancel("device-chat-7-1788422075499")
+
+	fm.mu.Lock()
+	_, ok := fm.interactions["device-chat-7-1788422075499"]
+	fm.mu.Unlock()
+	if ok {
+		t.Error("interaction mapping leaked after Cancel")
 	}
 }
