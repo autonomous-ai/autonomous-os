@@ -18,6 +18,7 @@ describe('session-local interactive hooks', () => {
     expect(normalizeInteractiveHook({ hook_event_name: 'Stop', session_id: 'bad\nidentity', last_assistant_message: 'a'.repeat(5000) })).toEqual({ type: 'completed', summary: 'a'.repeat(4000) })
   })
   it('reports the current question without exposing tool arguments or stale completion text', () => {
+    expect(normalizeInteractiveHook({ hook_event_name: 'PreToolUse', tool_name: 'request_user_input', tool_input: { questions: [{ question: 'Which branch?' }] } })).toMatchObject({ type: 'needs_input', summary: 'The agent needs an answer in the Buddy terminal. Which branch?' })
     expect(normalizeInteractiveHook({ hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion', tool_input: { questions: [{ question: 'Which branch?' }], secret: 'private' }, last_assistant_message: 'Old result' })?.summary)
       .toBe('The agent needs an answer in the Buddy terminal. Which branch?')
     expect(normalizeInteractiveHook({ hook_event_name: 'PermissionRequest', tool_input: { command: 'sensitive' }, last_assistant_message: 'Old result' })?.summary)
