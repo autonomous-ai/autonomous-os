@@ -1,4 +1,4 @@
-package tracking
+package telemetry
 
 import (
 	"context"
@@ -52,8 +52,9 @@ func withPipe(t *testing.T, m *mockSender) {
 	origGlobal := global
 	global = newReporter(m.send)
 	t.Cleanup(func() { global = origGlobal })
-	// The master switch defaults OFF; these tests exercise the sending path.
-	t.Setenv(envEnabled, "1")
+	// No endpoint configured = nothing is sent; these tests exercise the
+	// sending path, so give it one.
+	t.Setenv("AUTONOMOUS_ANALYTICS_URL", "http://127.0.0.1:1/test")
 }
 
 func TestReportSendsWithCommonFields(t *testing.T) {
@@ -124,8 +125,8 @@ func TestDeliveryFailureIsCounted(t *testing.T) {
 
 	Report(Event{Name: "voice_metrics_interaction", ID: "f2"})
 	m.wait(t, 1)
-	if got := m.events[1].params["tracking_failed_total"]; got != int64(1) {
-		t.Errorf("tracking_failed_total = %v, want 1", got)
+	if got := m.events[1].params["telemetry_failed_total"]; got != int64(1) {
+		t.Errorf("telemetry_failed_total = %v, want 1", got)
 	}
 }
 
@@ -171,11 +172,11 @@ func TestUnnamedEventIsIgnored(t *testing.T) {
 	}
 }
 
-// Default OFF: a body that never set the flag must keep its events on-device.
-func TestSendingIsOffByDefault(t *testing.T) {
+// No endpoint configured: a body nobody set up must keep its events on-device.
+func TestSendingIsOffWithoutAnEndpoint(t *testing.T) {
 	m := newMock(nil, 0)
 	withPipe(t, m)
-	t.Setenv(envEnabled, "")
+	t.Setenv("AUTONOMOUS_ANALYTICS_URL", "")
 
 	Report(Event{Name: "voice_metrics_interaction", ID: "off-1"})
 	time.Sleep(50 * time.Millisecond)
@@ -183,21 +184,17 @@ func TestSendingIsOffByDefault(t *testing.T) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if len(m.events) != 0 {
-		t.Fatalf("sent %d events with the flag off", len(m.events))
+		t.Fatalf("sent %d events with no endpoint configured", len(m.events))
 	}
 }
 
-func TestEnabledAcceptsTheUsualTruthyValues(t *testing.T) {
-	for _, v := range []string{"1", "true", "TRUE", "yes", "on"} {
-		t.Setenv(envEnabled, v)
-		if !Enabled() {
-			t.Errorf("Enabled() = false for %q", v)
-		}
+func TestEnabledFollowsTheConfiguredEndpoint(t *testing.T) {
+	t.Setenv("AUTONOMOUS_ANALYTICS_URL", "https://example.test/api")
+	if !Enabled() {
+		t.Error("Enabled() = false with an endpoint configured")
 	}
-	for _, v := range []string{"", "0", "false", "no", "off", "maybe"} {
-		t.Setenv(envEnabled, v)
-		if Enabled() {
-			t.Errorf("Enabled() = true for %q", v)
-		}
+	t.Setenv("AUTONOMOUS_ANALYTICS_URL", "")
+	if Enabled() {
+		t.Error("Enabled() = true with no endpoint configured")
 	}
 }

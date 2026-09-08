@@ -14,9 +14,9 @@ func post(t *testing.T, body string) *httptest.ResponseRecorder {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodPost, "/api/tracking/event", bytes.NewBufferString(body))
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/telemetry/event", bytes.NewBufferString(body))
 	c.Request.Header.Set("Content-Type", "application/json")
-	ProvideTrackingHandler().PostEvent(c)
+	ProvideTelemetryHandler().PostEvent(c)
 	return w
 }
 

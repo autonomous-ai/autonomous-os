@@ -1,11 +1,11 @@
-"""Voice KPI measurement — observations only, no behaviour change.
+"""Voice metrics measurement — observations only, no behaviour change.
 
 Two questions, measured on the device because HAL is the only process that
 knows when audio actually reached the speaker:
 
-  KPI-1  Was the user's voice command acknowledged within
+  the response metric  Was the user's voice command acknowledged within
          ``ACK_DEADLINE_MS`` of the detected end of their speech?
-  KPI-2  Did an outdated reply actually get played after a suppression
+  the stale-reply metric  Did an outdated reply actually get played after a suppression
          boundary (an explicit stop, or the realtime agent answering a newer
          question)?
 
@@ -40,11 +40,11 @@ import logging
 import threading
 import time
 
-from hal.tracking import client
+from hal.telemetry import client
 
-logger = logging.getLogger("hal.tracking")
+logger = logging.getLogger("hal.telemetry")
 
-# --- KPI thresholds (provisional) -------------------------------------------
+# --- metrics thresholds (provisional) -------------------------------------------
 ACK_DEADLINE_MS = 3000
 # Keep watching past the target so a LATE ack is reported with its real
 # latency instead of collapsing into "no ack at all".
@@ -63,7 +63,7 @@ STALE_GRACE_MS = 2000
 SUPPRESSION_OBSERVE_MS = 60000
 
 # How long a turn is assumed to still be ABLE to speak. Separate from the
-# acknowledgement window on purpose: reporting the KPI-1 verdict after 10s
+# acknowledgement window on purpose: reporting the the response metric verdict after 10s
 # does not mean the main agent finished — it can answer much later, and a
 # stop pressed at second 12 must still find the turn alive. The clock is
 # refreshed by any playback that turn produces, so a turn that keeps talking
@@ -83,7 +83,7 @@ KIND_UNKNOWN = "unknown"                  # nobody claimed this playback
 # Acknowledgement modality per kind — the user-perceivable receipt signal.
 # All AUDIO. Visual feedback (the listening LED) is NOT counted: its real
 # activation is not instrumented, and counting it unmeasured would overstate
-# KPI-1.
+# the response metric.
 _ACK_MODALITY = {
     KIND_AGENT_REPLY: "spoken_answer",
     KIND_NATIVE_REALTIME: "spoken_answer_realtime",
@@ -133,11 +133,11 @@ class _Interaction:
         self.ack_kind = ""
         self.exclusion_reason = ""
         # A failure that is NOT an exclusion: the request was valid and went
-        # unserved. Stays in the KPI denominator (see _interaction_params).
+        # unserved. Stays in the denominator (see _interaction_params).
         self.failure_reason = ""
         self.reported = False
         self.report_event_id = ""
-        self.timer = None       # KPI-1 verdict deadline
+        self.timer = None       # the response metric verdict deadline
         self.life_timer = None  # turn-lifetime deadline
         # `closed` means "can no longer speak" — NOT "already reported".
         # Reporting the acknowledgement verdict must not retire a turn the
@@ -188,7 +188,7 @@ def speech_end(method: str, at: float = 0.0) -> str:
         while len(_order) > _MAX_TRACKED:
             oldest = _order[0]
             # Report before forgetting: an evicted interaction that never had
-            # its verdict sent would otherwise vanish from the KPI entirely,
+            # its verdict sent would otherwise vanish from the metrics entirely,
             # which is the one thing this module must never do.
             if not _interactions[oldest].reported:
                 evicted.append(_interaction_params(_interactions[oldest]))
@@ -221,11 +221,26 @@ def _arm_lifetime(it: "_Interaction") -> None:
 
 def _retire_interaction(iid: str) -> None:
     """The turn has been silent for TURN_ACTIVE_TTL_MS: assume it can no
-    longer speak. Only then does it leave the suppression denominator."""
+    longer speak. Only then does it leave the suppression denominator.
+
+    A turn whose audio is STILL PLAYING is not silent, however long it has
+    been running — the TTL restarts on the first frame of a playback, so a
+    single long answer would otherwise time out mid-sentence and a stop
+    pressed at second 46 would find nothing to suppress.
+    """
     with _lock:
         it = _interactions.get(iid)
-        if it is not None:
-            it.closed = True
+        if it is None:
+            return
+        if _playing and _playing.get("interaction_id") == iid:
+            logger.info(
+                "[voice-metrics] turn still speaking at its TTL -- keeping it active "
+                "(interaction=%s)", iid,
+            )
+            it.last_activity = _now()
+            _arm_lifetime(it)
+            return
+        it.closed = True
 
 
 def set_route(iid: str, route: str, event_type: str = "") -> None:
@@ -261,7 +276,7 @@ def mark_failed(iid: str, reason: str) -> None:
     os-server never landed, a backend error, a timeout).
 
     Deliberately NOT an exclusion: the user asked a valid question and got
-    nothing. It stays eligible, so the KPI counts it as the failure it is.
+    nothing. It stays eligible, so the metric counts it as the failure it is.
     """
     with _lock:
         it = _interactions.get(iid)
@@ -278,7 +293,7 @@ def mark_failed(iid: str, reason: str) -> None:
 
 
 def exclude(iid: str, reason: str) -> None:
-    """Mark an interaction as not a KPI sample, with a reason. Reported, never
+    """Mark an interaction as not a metric sample, with a reason. Reported, never
     silently discarded. An exclusion that arrives after the verdict was sent
     emits an amendment."""
     with _lock:
@@ -387,7 +402,7 @@ def _classify(owner: str, kind_hint: str, tts) -> str:
     return KIND_AGENT_REPLY if kind_hint == "agent_or_system" else KIND_SYSTEM_AUDIO
 
 
-# --- Suppression boundary (KPI-2) ------------------------------------------
+# --- Suppression boundary (the stale-reply metric) ------------------------------------------
 
 def boundary(reason: str, triggering_interaction_id: str = "", policy_applied: bool = True) -> None:
     """Stamp a suppression boundary and watch for stale audio.
@@ -395,7 +410,7 @@ def boundary(reason: str, triggering_interaction_id: str = "", policy_applied: b
     ``policy_applied`` must be the OS's ANSWER, not an assumption: automatic
     supersession only happens when os-server has
     ``OS_REALTIME_SUPERSEDES_MAIN_REPLY`` enabled and actually stamped its
-    watermark. A boundary that was never applied is not a KPI-2 situation and
+    watermark. A boundary that was never applied is not a the stale-reply metric situation and
     is not recorded — counting it would inflate the denominator with
     situations where nothing was ever suppressed.
     """
@@ -441,7 +456,7 @@ def _active_interactions_before(at: float, trigger_id: str) -> "set[str]":
 
     Only turns that can still speak count: an interaction that was excluded or
     already closed cannot produce a stale reply, so keeping it in the
-    denominator would dilute KPI-2 with situations that never existed.
+    denominator would dilute the stale-reply metric with situations that never existed.
     Explicit stop covers everything in flight; automatic supersession covers
     only what is older than the utterance that triggered it.
     """
@@ -492,7 +507,7 @@ def _observe_playback(kind: str, iid: str, started: float, ended) -> None:
 
 
 def _close_boundary(state: dict) -> None:
-    """Close one boundary observation and report it (KPI-2 denominator)."""
+    """Close one boundary observation and report it (the stale-reply metric denominator)."""
     with _lock:
         playing = dict(_playing) if _playing else None
         if playing and playing["interaction_id"] in state["applicable"]:
@@ -559,7 +574,7 @@ def _speaker_muted() -> bool:
 
 
 def _close_interaction(iid: str) -> None:
-    """Report one interaction (KPI-1 sample) once its observation window is up."""
+    """Report one interaction (the response metric sample) once its observation window is up."""
     with _lock:
         it = _interactions.get(iid)
         if it is None or it.reported:
@@ -577,7 +592,7 @@ def _close_interaction(iid: str) -> None:
 def _amend_params(it: "_Interaction", why: str) -> dict:
     """Build a corrected verdict for an interaction whose routing, failure or
     exclusion arrived after its row was already sent. The warehouse keeps
-    both; the amendment wins (see the docs' KPI queries).
+    both; the amendment wins (see the docs' metrics queries).
 
     Returns the row instead of sending it: the caller holds the tracker lock,
     and that lock is also taken from the audio thread — reporting under it
@@ -600,7 +615,7 @@ def _report_amendment(params: dict) -> None:
 def _interaction_params(it: "_Interaction") -> dict:
     # A failure reason does NOT remove eligibility: the command was valid and
     # was not served. Only an exclusion (noise, not addressed, muted, …) means
-    # "this was never a KPI sample".
+    # "this was never a metric sample".
     eligible = not it.exclusion_reason
     if it.exclusion_reason:
         outcome = OUTCOME_EXCLUDED

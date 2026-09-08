@@ -4,21 +4,21 @@ Lives here, not at a construction site, because TTSService is built in more
 than one place: at boot (hal/server.py) and again on every /voice/start, which
 hot-swaps the service when the provider or voice changes. A hook wired at only
 one of those silently stops measuring after the first swap — audio keeps
-playing, the KPI just goes blind.
+playing, the metrics just go blind.
 
 Measurement only; never raises into the audio path.
 """
 
 import logging
 
-logger = logging.getLogger("hal.tracking")
+logger = logging.getLogger("hal.telemetry")
 
 
 def on_playback_audio(owner: str, kind_hint: str) -> None:
     """First real audio frame of a playback reached the stream."""
     try:
         from hal import app_state as state
-        from hal.tracking import voice_metrics
+        from hal.telemetry import voice_metrics
 
         voice_metrics.playback_audio(owner, kind_hint, state.tts_service)
     except Exception:
@@ -28,7 +28,7 @@ def on_playback_audio(owner: str, kind_hint: str) -> None:
 def on_playback_done() -> None:
     """Playback finished or was interrupted."""
     try:
-        from hal.tracking import voice_metrics
+        from hal.telemetry import voice_metrics
 
         voice_metrics.playback_end()
     except Exception:

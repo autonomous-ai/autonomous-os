@@ -1,17 +1,17 @@
 """Device-side pipe for product-analytics events produced by HAL.
 
-Generic on purpose: voice KPI is the first tracker, more will follow. A
+Generic on purpose: voice metrics is the first tracker, more will follow. A
 tracker builds a dict of fields and calls :func:`report`; this module owns
 everything after that — the local log line, a bounded queue, one background
 sender thread, and the POST to os-server (which forwards to the warehouse,
-see system/tracking).
+see system/telemetry).
 
 Two rules:
 
 * :func:`report` never blocks its caller. It is called from the voice and
   audio paths, where a slow or dead uplink must cost nothing.
 * Every event is logged locally BEFORE it is sent, and delivery failures are
-  logged and counted too. ``journalctl -u hal | grep '\\[tracking\\]'`` is the
+  logged and counted too. ``journalctl -u hal | grep '\\[telemetry\\]'`` is the
   device-local record; the warehouse is the copy that can be missing.
 """
 
@@ -24,25 +24,26 @@ import uuid
 
 import requests
 
-logger = logging.getLogger("hal.tracking")
+logger = logging.getLogger("hal.telemetry")
 
 # os-server ingestion endpoint (loopback; same host as every other HAL→OS call).
-OS_TRACKING_URL = "http://127.0.0.1:5000/api/tracking/event"
+OS_TELEMETRY_URL = "http://127.0.0.1:5000/api/telemetry/event"
 
-# Master switch, read from the body's /opt/hal/.env (systemd hands it to HAL
-# as EnvironmentFile; os-server godotenv.Load()s the same file). Default OFF:
-# a body that has never heard of this flag sends nothing off-device.
+# The analytics endpoint doubles as the switch, read from the body's
+# /opt/hal/.env (systemd hands it to HAL as EnvironmentFile; os-server
+# godotenv.Load()s the same file). No endpoint configured = nothing leaves the
+# device, which is the default for a body nobody has configured.
 #
 # OFF does NOT mean blind. Every event is still written to the local log, so
-# `journalctl -u hal | grep '[tracking]'` shows exactly what WOULD have been
+# `journalctl -u hal | grep '[telemetry]'` shows exactly what WOULD have been
 # sent — only the network hop is skipped.
-ENV_ENABLED = "AUTONOMOUS_TRACKING_ENABLED"
+ENV_ANALYTICS_URL = "AUTONOMOUS_ANALYTICS_URL"
 
 
 def enabled() -> bool:
-    """Whether events may leave the device. Read per call so flipping the flag
+    """Whether events may leave the device. Read per call so filling the key in
     plus a service restart is all it takes — no rebuild."""
-    return os.environ.get(ENV_ENABLED, "").strip().lower() in ("1", "true", "yes", "on")
+    return bool(os.environ.get(ENV_ANALYTICS_URL, "").strip())
 
 # Bounded so a dead uplink cannot grow memory without limit. Sized for a burst
 # of turns, not for offline buffering: dropping and SAYING SO beats pretending.
@@ -66,7 +67,7 @@ def new_event_id() -> str:
 
 
 def report(event_name: str, params: dict, event_id: str = "") -> None:
-    """Queue one tracking event. Non-blocking; never raises."""
+    """Queue one telemetry event. Non-blocking; never raises."""
     if not event_name:
         return
     try:
@@ -78,9 +79,9 @@ def report(event_name: str, params: dict, event_id: str = "") -> None:
         }
         # The device-local record. Must exist whether or not the POST works —
         # and whether or not sending is enabled at all.
-        logger.info("[tracking] %s %s", event_name, json.dumps(payload["params"], default=str))
+        logger.info("[telemetry] %s %s", event_name, json.dumps(payload["params"], default=str))
         if not enabled():
-            logger.debug("[tracking] not sent -- %s is off", ENV_ENABLED)
+            logger.debug("[telemetry] not sent -- no %s configured", ENV_ANALYTICS_URL)
             return
         _ensure_worker()
         try:
@@ -91,12 +92,12 @@ def report(event_name: str, params: dict, event_id: str = "") -> None:
                 _dropped += 1
                 dropped = _dropped
             logger.warning(
-                "[tracking] event dropped -- queue full (event=%s id=%s dropped_total=%d)",
+                "[telemetry] event dropped -- queue full (event=%s id=%s dropped_total=%d)",
                 event_name, event_id, dropped,
             )
     except Exception:
         # A tracker must never take the voice path down with it.
-        logger.exception("[tracking] report failed (event=%s)", event_name)
+        logger.exception("[telemetry] report failed (event=%s)", event_name)
 
 
 def stats() -> dict:
@@ -115,7 +116,7 @@ def _ensure_worker() -> None:
     with _worker_lock:
         if _worker is not None and _worker.is_alive():
             return
-        _worker = threading.Thread(target=_run, name="tracking-sender", daemon=True)
+        _worker = threading.Thread(target=_run, name="telemetry-sender", daemon=True)
         _worker.start()
 
 
@@ -123,7 +124,7 @@ def _run() -> None:
     while True:
         payload = _queue.get()
         try:
-            resp = requests.post(OS_TRACKING_URL, json=payload, timeout=POST_TIMEOUT_S)
+            resp = requests.post(OS_TELEMETRY_URL, json=payload, timeout=POST_TIMEOUT_S)
             if resp.status_code != 200:
                 _note_failure(payload, f"os-server returned {resp.status_code}")
         except Exception as e:  # noqa: BLE001 - transport errors are expected offline
@@ -138,6 +139,6 @@ def _note_failure(payload: dict, reason: str) -> None:
     # The event is already in the log above; this line says it never left the
     # device — the part a warehouse query cannot tell you.
     logger.warning(
-        "[tracking] delivery failed (event=%s id=%s failed_total=%d): %s",
+        "[telemetry] delivery failed (event=%s id=%s failed_total=%d): %s",
         payload.get("event_name"), payload.get("event_id"), failed, reason,
     )

@@ -513,7 +513,7 @@ def test_report_never_raises_into_the_voice_path(monkeypatch):
 
 def test_report_does_not_block_the_caller(monkeypatch):
     """Telemetry stays off the audio critical path: a full queue drops."""
-    monkeypatch.setenv(client.ENV_ENABLED, "1")   # sending is off by default
+    monkeypatch.setenv(client.ENV_ANALYTICS_URL, "https://example.test/api")
     monkeypatch.setattr(client, "_ensure_worker", lambda: None)
     for _ in range(client.QUEUE_SIZE + 5):
         client.report("voice_metrics_interaction", {"x": 1})

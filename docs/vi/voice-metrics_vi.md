@@ -235,16 +235,16 @@ Cả hai giá trị nằm trong `/opt/hal/.env` của body, os-server load lúc 
 
 | Key | Ý nghĩa |
 |-----|---------|
-| `AUTONOMOUS_TELEMETRY_ENABLED` | **Công tắc tổng. Mặc định TẮT** (rỗng/không đặt). Khi tắt event vẫn ghi log local — chỉ bỏ chặng gửi mạng. Đặt `1` để gửi. |
+| `AUTONOMOUS_ANALYTICS_URL` | Nơi bắn event — **đồng thời là công tắc bật/tắt**. Rỗng (mặc định) = không có gì rời khỏi thiết bị. Không có endpoint mặc định trong code. |
 | `AUTONOMOUS_ANALYTICS_ID` | Key authorization của AA. Thiếu ⇒ báo lỗi gửi rõ ràng (`[telemetry] delivery failed`). |
-| `AUTONOMOUS_ANALYTICS_URL` | Nơi bắn event. Tuỳ chọn; không có thì dùng endpoint production mặc định. |
 
-Công tắc được cả hai tiến trình (HAL và os-server) đọc từ cùng một key, đọc
-mỗi lần gọi — bật/tắt rồi restart service là đủ, không cần build lại.
+Cả hai tiến trình (HAL và os-server) đọc cùng một key, đọc mỗi lần gọi — điền
+vào rồi restart service là đủ, không cần build lại. Event vẫn ghi log local
+trong mọi trường hợp; URL rỗng chỉ bỏ chặng gửi mạng.
 
-Thứ tự phân giải URL: env của process → `/opt/hal/.env` → mặc định built-in.
-Chặng HAL→os-server (`http://127.0.0.1:5000/api/telemetry/event`) vẫn là hằng
-loopback như mọi lời gọi HAL→OS khác.
+Thứ tự phân giải: env của process → `/opt/hal/.env`. Chặng HAL→os-server
+(`http://127.0.0.1:5000/api/telemetry/event`) vẫn là hằng loopback như mọi lời
+gọi HAL→OS khác.
 
 ## Riêng tư
 

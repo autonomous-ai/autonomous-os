@@ -328,16 +328,16 @@ startup — a device can be pointed at a different warehouse without a rebuild:
 
 | Key | Meaning |
 |-----|---------|
-| `AUTONOMOUS_TELEMETRY_ENABLED` | **Master switch. Default OFF** (empty/unset). Events are still written to the local log when off — only the network hop is skipped. Set to `1` to send. |
+| `AUTONOMOUS_ANALYTICS_URL` | Where events are posted — **and the on/off switch**. Empty (the default) = nothing leaves the device. There is no built-in fallback endpoint. |
 | `AUTONOMOUS_ANALYTICS_ID` | AA authorization key. Missing ⇒ delivery fails loudly (`[telemetry] delivery failed`). |
-| `AUTONOMOUS_ANALYTICS_URL` | Where events are posted. Optional; falls back to the built-in production endpoint. |
 
-The switch is read by both processes (HAL and os-server) from the same
-key, per call — flipping it plus a service restart is enough, no rebuild.
+Both processes (HAL and os-server) read the same key, per call — filling it
+in plus a service restart is enough, no rebuild. Events are written to the
+local log either way; an empty URL only skips the network hop.
 
-Resolution order for the URL: process env → `/opt/hal/.env` → built-in
-default. The HAL→os-server hop (`http://127.0.0.1:5000/api/telemetry/event`)
-stays a loopback constant like every other HAL→OS call.
+Resolution order: process env → `/opt/hal/.env`. The HAL→os-server hop
+(`http://127.0.0.1:5000/api/telemetry/event`) stays a loopback constant like
+every other HAL→OS call.
 
 ## Privacy
 

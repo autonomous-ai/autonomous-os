@@ -68,21 +68,34 @@ func TestEndpointFromEnvFile(t *testing.T) {
 	apiKey, fileURL = kv["AUTONOMOUS_ANALYTICS_ID"], kv["AUTONOMOUS_ANALYTICS_URL"]
 	t.Cleanup(func() { apiKey, fileURL = origKey, origURL })
 
-	if got := endpoint(); got != "https://staging.example/api" {
-		t.Errorf("endpoint() = %q, want the .env value", got)
+	if got := Endpoint(); got != "https://staging.example/api" {
+		t.Errorf("Endpoint() = %q, want the .env value", got)
 	}
 	// The process env still wins — that is how tests redirect the POST.
 	t.Setenv("AUTONOMOUS_ANALYTICS_URL", "http://127.0.0.1:1/override")
-	if got := endpoint(); got != "http://127.0.0.1:1/override" {
-		t.Errorf("endpoint() = %q, want the process env to win", got)
+	if got := Endpoint(); got != "http://127.0.0.1:1/override" {
+		t.Errorf("Endpoint() = %q, want the process env to win", got)
 	}
 }
 
-func TestEndpointFallsBackToTheBuiltInDefault(t *testing.T) {
+// No endpoint anywhere = analytics is off. There is deliberately no built-in
+// default: a device posts only where someone wrote down.
+func TestEndpointIsEmptyWhenNothingIsConfigured(t *testing.T) {
 	origURL := fileURL
 	fileURL = ""
+	t.Setenv("AUTONOMOUS_ANALYTICS_URL", "")
 	t.Cleanup(func() { fileURL = origURL })
-	if got := endpoint(); got != defaultEventTrackingURL {
-		t.Errorf("endpoint() = %q, want the built-in default", got)
+	if got := Endpoint(); got != "" {
+		t.Errorf("Endpoint() = %q, want empty", got)
+	}
+}
+
+func TestTrackEventRefusesWithoutAnEndpoint(t *testing.T) {
+	origURL, origKey := fileURL, apiKey
+	fileURL, apiKey = "", "k"
+	t.Setenv("AUTONOMOUS_ANALYTICS_URL", "")
+	t.Cleanup(func() { fileURL, apiKey = origURL, origKey })
+	if err := TrackEvent(context.Background(), "x", nil); err == nil {
+		t.Error("TrackEvent must fail loudly when no endpoint is configured")
 	}
 }

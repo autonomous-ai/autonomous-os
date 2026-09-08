@@ -1,39 +1,38 @@
-"""The tracking master switch and the hot-swap-safe playback hooks."""
+"""The telemetry on/off switch and the hot-swap-safe playback hooks."""
 
 import re
 from pathlib import Path
 
-from hal.tracking import client, tts_hooks
+from hal.telemetry import client, tts_hooks
 
 HAL_ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_sending_is_off_by_default(monkeypatch, caplog):
-    """Default OFF: nothing leaves the device — but the local log still has it,
-    which is the whole point of keeping the log write ahead of the send."""
-    monkeypatch.delenv(client.ENV_ENABLED, raising=False)
+def test_sending_is_off_without_an_endpoint(monkeypatch, caplog):
+    """No endpoint configured: nothing leaves the device — but the local log
+    still has it, which is the whole point of logging before sending."""
+    monkeypatch.delenv(client.ENV_ANALYTICS_URL, raising=False)
     sent = []
     monkeypatch.setattr(client, "_ensure_worker", lambda: sent.append("worker"))
 
-    with caplog.at_level("INFO", logger="hal.tracking"):
+    with caplog.at_level("INFO", logger="hal.telemetry"):
         client.report("voice_metrics_interaction", {"outcome": "acknowledged"})
 
     assert sent == [], "no worker may start while sending is disabled"
-    assert "[tracking] voice_metrics_interaction" in caplog.text
+    assert "[telemetry] voice_metrics_interaction" in caplog.text
     assert "acknowledged" in caplog.text
 
 
-def test_flag_accepts_the_usual_truthy_values(monkeypatch):
-    for value in ("1", "true", "TRUE", "yes", "on"):
-        monkeypatch.setenv(client.ENV_ENABLED, value)
-        assert client.enabled() is True, value
-    for value in ("", "0", "false", "no", "off", "maybe"):
-        monkeypatch.setenv(client.ENV_ENABLED, value)
-        assert client.enabled() is False, value
+def test_the_endpoint_is_the_switch(monkeypatch):
+    monkeypatch.setenv(client.ENV_ANALYTICS_URL, "https://example.test/api")
+    assert client.enabled() is True
+    for value in ("", "   "):
+        monkeypatch.setenv(client.ENV_ANALYTICS_URL, value)
+        assert client.enabled() is False, repr(value)
 
 
-def test_enabled_flag_lets_the_event_through(monkeypatch):
-    monkeypatch.setenv(client.ENV_ENABLED, "1")
+def test_a_configured_endpoint_lets_the_event_through(monkeypatch):
+    monkeypatch.setenv(client.ENV_ANALYTICS_URL, "https://example.test/api")
     started = []
     monkeypatch.setattr(client, "_ensure_worker", lambda: started.append(1))
     monkeypatch.setattr(client._queue, "put_nowait", lambda payload: None)
@@ -46,7 +45,7 @@ def test_enabled_flag_lets_the_event_through(monkeypatch):
 
 def test_every_tts_construction_site_wires_the_playback_hooks():
     """/voice/start hot-swaps TTSService when the provider or voice changes.
-    A site that forgets these keeps speaking while the KPI goes blind, so every
+    A site that forgets these keeps speaking while the metrics go blind, so every
     construction site must pass the shared hooks.
 
     Read as text rather than imported: importing hal.server initialises the
@@ -65,7 +64,7 @@ def test_every_tts_construction_site_wires_the_playback_hooks():
 
 
 def test_hooks_never_raise_into_the_audio_path(monkeypatch):
-    import hal.tracking.voice_metrics as voice_metrics
+    import hal.telemetry.voice_metrics as voice_metrics
 
     def boom(*_a, **_k):
         raise RuntimeError("tracker exploded")
