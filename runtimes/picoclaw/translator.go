@@ -236,12 +236,9 @@ func (s *PicoclawService) emitToolCalls(f picoFrame, dispatch func(domain.WSEven
 // nodes) at lifecycle.end exactly as it does for the streaming backends —
 // without it the reply renders in web chat but never reaches the speaker or HW.
 //
-// The turn ids are reset BEFORE dispatch: the consumer (handler_event_chat.go /
-// handler_event_agent.go) calls SetBusy(false) on chat.final and lifecycle.end,
-// which synchronously drains queued sensing events and starts the NEXT turn
-// (fresh pendingRunID). Clearing here lets that turn's runID survive instead of
-// being clobbered. Busy itself is owned by the consumer's SetBusy(false) — the
-// translator never touches it (matches the Hermes translator).
+// Turn IDs stay reserved until all terminal callbacks complete. Both chat.final
+// and lifecycle.end can request idle; neither may release the next queued turn
+// while the previous terminal event is still being delivered.
 func (s *PicoclawService) emitFinal(f picoFrame, dispatch func(domain.WSEvent)) {
 	runID := s.getCurrentRunID()
 	finalText := f.Payload.Content
@@ -262,8 +259,7 @@ func (s *PicoclawService) emitFinal(f picoFrame, dispatch func(domain.WSEvent)) 
 	}
 	slog.Info("picoclaw <<< final answer", logArgs...)
 
-	s.currentRunID.Store("")
-	s.pendingRunID.Store("")
+	defer s.finishTurn()
 
 	// Surface the full reply as a single assistant delta BEFORE chat.final /
 	// lifecycle.end so the consumer's assistant buffer (accumulateAssistantDelta)
@@ -313,10 +309,8 @@ func (s *PicoclawService) handleError(f picoFrame, dispatch func(domain.WSEvent)
 	}
 	slog.Warn("picoclaw <<< error", "component", "picoclaw", "runID", runID, "code", f.Payload.Code, "error", msg)
 
-	// Reset turn ids before dispatch (see emitFinal) — the consumer clears busy
-	// on lifecycle.error, draining the next turn synchronously.
-	s.currentRunID.Store("")
-	s.pendingRunID.Store("")
+	// Release the turn after dispatch, including callbacks that request idle.
+	defer s.finishTurn()
 
 	payload, _ := json.Marshal(map[string]any{
 		"runId":      runID,
@@ -329,6 +323,21 @@ func (s *PicoclawService) handleError(f picoFrame, dispatch func(domain.WSEvent)
 		},
 	})
 	dispatch(domain.WSEvent{Type: "evt", Event: "agent", Payload: payload})
+}
+
+// finishTurn releases admission only after all terminal callbacks have run.
+func (s *PicoclawService) finishTurn() {
+	s.sendMu.Lock()
+	s.RemovePendingChatTraceByRunID(s.getCurrentRunID())
+	s.clearTurn()
+	s.activeTurn.Store(false)
+	s.sendMu.Unlock()
+	s.drainPendingEvents()
+}
+
+func (s *PicoclawService) peekPendingRunID() string {
+	v, _ := s.pendingRunID.Load().(string)
+	return v
 }
 
 // --- turn-correlation helpers ---
@@ -352,8 +361,7 @@ func (s *PicoclawService) consumePendingRunID() string {
 
 // clearTurn resets the in-flight turn ids without touching busy state. Used on
 // disconnect / busyTTL expiry / send failure. The normal end-of-turn path clears
-// the ids inline in emitFinal / handleError (before dispatch) so a drained
-// follow-up turn's ids survive — see emitFinal.
+// the ids in finishTurn after all terminal callbacks have completed.
 func (s *PicoclawService) clearTurn() {
 	s.currentRunID.Store("")
 	s.pendingRunID.Store("")
