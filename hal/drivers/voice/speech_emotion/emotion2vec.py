@@ -401,6 +401,12 @@ class Emotion2VecRecognizer(BaseSpeechEmotionRecognizer):
     ) -> Optional[float]:
         """Sum the duration of Silero-positive chunks across ``samples``.
 
+        Stops as soon as the total reaches ``PREFILTER_VAD_MIN_VOICED_S``, so
+        on a PASS the returned figure is **"at least the threshold"**, not the
+        full voiced duration — the only consumer is the comparison against
+        that same threshold, and scanning further cannot change the verdict.
+        A DROP still scans the whole buffer, so a drop reports exactly.
+
         Silero is stateful; the LSTM ``state`` and the 64-sample ``context``
         are local to this call and rebuilt from zeros each time, so
         independent prefilter invocations never bleed into each other.
@@ -417,6 +423,9 @@ class Emotion2VecRecognizer(BaseSpeechEmotionRecognizer):
             context = np.zeros((1, ctx_len), dtype=np.float32)
             voiced_chunks = 0
             total_chunks = 0
+            chunk_s = chunk / float(sample_rate)
+            total_available = -(-audio_norm.size // chunk)  # ceil, for the log
+            early_exit = False
             sr_arr = np.array(sample_rate, dtype=np.int64)
             for i in range(0, audio_norm.size, chunk):
                 seg = audio_norm[i:i + chunk]
@@ -433,14 +442,30 @@ class Emotion2VecRecognizer(BaseSpeechEmotionRecognizer):
                 total_chunks += 1
                 if prob >= PREFILTER_SILERO_THRESHOLD:
                     voiced_chunks += 1
-            voiced_s = voiced_chunks * (chunk / float(sample_rate))
+                    # Verdict is settled — the caller only asks whether this
+                    # total clears PREFILTER_VAD_MIN_VOICED_S, so every further
+                    # chunk is wasted ONNX work on the common PASS (~312
+                    # invocations for a 10s clip, of which ~31 decide it).
+                    if voiced_chunks * chunk_s >= PREFILTER_VAD_MIN_VOICED_S:
+                        early_exit = True
+                        break
+            voiced_s = voiced_chunks * chunk_s
             logger.debug(
-                "[prefilter] Silero stats: voiced_chunks=%d/%d voiced=%.2fs",
+                "[prefilter] Silero stats: voiced_chunks=%d/%d voiced=%.2fs%s",
                 voiced_chunks, total_chunks, voiced_s,
+                (
+                    f" (early exit at {total_chunks}/{total_available} chunks — "
+                    f"voiced is a floor, not a total)" if early_exit else ""
+                ),
             )
             tracer.note_section("prefilter", {  # SER-DEBUG
                 "silero_voiced_chunks": voiced_chunks,
                 "silero_total_chunks": total_chunks,
+                # Distinguishes "scanned everything" from "stopped once the
+                # threshold was met" — without it silero_voiced_s reads like an
+                # exact measurement on every PASS.
+                "silero_early_exit": early_exit,
+                "silero_chunks_available": total_available,
             })
             return voiced_s
         except Exception as e:
