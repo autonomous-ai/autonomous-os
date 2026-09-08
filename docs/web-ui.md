@@ -384,7 +384,7 @@ the shorter Presence card from being stretched by the taller Audio card.
 > **Layout & pill clouds.** The device cluster (row 2) splits into two equal
 > columns: the right column holds the expressive cards (Emotion, Servo Pose,
 > Versions) and the left column holds the compact status cards (Hardware, Scene,
-> Buddy); they collapse to one column under ~860px. Versions sits in the right
+> Harness); they collapse to one column under ~860px. Versions sits in the right
 > column so the two columns balance in height rather than the right ending short
 > under Servo Pose. The Emotion preset list and the Servo recording list each
 > render as a **pill cloud** — the active pill is hoisted to the front so the
@@ -398,6 +398,23 @@ the shorter Presence card from being stretched by the taller Audio card.
 > `sleepy` readable in dark mode. The summary reserves room for the emoji and
 > long names such as `acknowledge`; when a card is narrow, the pill cloud wraps
 > below it rather than overlapping the current state.
+
+**Harness pairing**
+- Overview uses `HarnessCard.tsx`; the retained Buddy component is not mounted here.
+- **Generate pairing code** calls admin-authenticated `POST /api/harness/pair` with no
+  computer selection. The OS generates a six-character code valid for 60 seconds.
+- On the same local network, open Harness Desktop → Settings → Devices, select this
+  automatically discovered Autonomous device and enter its code. CLI users run
+  `harness autonomous-device discover --json`, then
+  `harness autonomous-device pair --device <discoveryId> --code-stdin`.
+  The CLI connects directly to the device's `/api/harness/ws`; discovery reuses the
+  existing `_autonomous._tcp` service. No manual IP or backend account is required.
+- Admin-only `GET /api/harness/pair/status` returns the active code, `expires_at`, `state`
+  and `pairing` with `Cache-Control: no-store`. OS Monitor polls it and `/status` every
+  two seconds. Codes disappear on expiry, cancellation or completion and are not persisted.
+  `POST /api/harness/pair/cancel` cancels the pending attempt.
+- Unpair requires confirmation and calls admin-authenticated `DELETE /api/harness`.
+  Harness uses its original E2EE pairing/session protocol and retains separate keys from Buddy.
 
 **Display Eyes**
 - Currently displayed expression (mode)

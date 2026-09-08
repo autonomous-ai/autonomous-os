@@ -19,6 +19,7 @@ import (
 	"go.autonomous.ai/os/system/ambient"
 	"go.autonomous.ai/os/system/device"
 	"go.autonomous.ai/os/system/domain"
+	"go.autonomous.ai/os/system/harness"
 	"go.autonomous.ai/os/system/healthwatch"
 	"go.autonomous.ai/os/system/lib/hal"
 	"go.autonomous.ai/os/system/lib/i18n"
@@ -43,8 +44,9 @@ import (
 )
 
 type Server struct {
-	engine *gin.Engine
-	config *config.Config
+	harnessService *harness.Service
+	engine         *gin.Engine
+	config         *config.Config
 
 	// handlers
 	healthHandler     _healthHttpDeliver.HealthHandler
@@ -302,6 +304,13 @@ func (s *Server) Serve(closeFn func()) error {
 
 	eventCtx, cancelEvents := context.WithCancel(context.Background())
 	defer cancelEvents()
+	harnessService, harnessErr := harness.NewService("config", harness.Callbacks{OnEvent: func(frame harness.Frame) { s.forwardHarnessEvent(eventCtx, frame) }})
+	if harnessErr != nil {
+		slog.Error("harness service initialization failed", "component", "harness", "error", harnessErr)
+	} else {
+		s.harnessService = harnessService
+		harnessService.Start(eventCtx)
+	}
 	go s.agentGateway.StartWS(eventCtx, s.agentHandler.HandleEvent)
 	go s.agentGateway.WatchIdentity(eventCtx)
 	go s.agentGateway.StartSkillWatcher(eventCtx)
@@ -321,6 +330,7 @@ func (s *Server) Serve(closeFn func()) error {
 	r.Use(gin.Recovery())
 
 	api := r.Group("api")
+	s.registerHarnessRoutes(api, eventCtx)
 
 	health := api.Group("health")
 	health.GET("/live", s.healthHandler.Live)

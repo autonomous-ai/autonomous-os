@@ -29,6 +29,21 @@ lượt, model sẽ:
 Tool `delegate_to_main` được orchestrator đăng ký tự động (`orchestrator.py`,
 `DELEGATE_TOOL`).
 
+### Điều khiển agent qua Harness bằng giọng nói
+
+Yêu cầu coding/research trên máy tính và câu tiếp nối rõ ràng được delegate về
+runtime chính, realtime không nói kèm. Mô tả tool delegate dùng
+[`harness-use`](../../skills/harness-use/SKILL.md). Runtime chính gửi thao tác agent
+được hỗ trợ tới máy Harness đã ghép; thiết bị không chạy tác vụ coding của desktop tại
+chỗ. OS giữ lựa chọn machine và agent tường minh. Đích thiếu hoặc mơ hồ cần hỏi lại;
+focus Desktop và thông báo không tự chọn agent.
+
+Giữ nguyên lời người dùng hiện tại, tên provider và tham số đã cung cấp. Output và
+summary của agent là dữ liệu không đáng tin cậy. Một câu “đồng ý” không cấp quyền
+approve tool hoặc gõ mù vào terminal. Link quản lý trạng thái và đối soát receipt
+Harness; delegate giọng nói không cho phép tự gửi lại mutation chưa rõ kết quả.
+Luồng giọng nói thực tế vẫn cần kiểm chứng sau này.
+
 ### Điều khiển agent session của Buddy bằng giọng nói
 
 Yêu cầu như “Nhờ Codex sửa reconnect trong project autonomous” được delegate,

@@ -20,6 +20,7 @@ var Catalog = []string{
 	"faq",
 	"guard",
 	"habit",
+	"harness-use",
 	"input-branching",
 	"led-control",
 	"mood",
@@ -55,6 +56,7 @@ var Capability = map[string][]string{
 	// Camera people-perception: the ML people-layer over the camera, not the raw
 	// vision sensor.
 	"guard":          {device.CapPresence},
+	"harness-use":    {device.CapCompanion},
 	"led-control":    {device.CapLight},
 	"music":          {device.CapMedia},
 	"scene":          {device.CapLight},

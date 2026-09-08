@@ -1462,7 +1462,7 @@ var ambientFloorTypes = map[string]bool{
 // (not dropped) when the agent is busy.
 func shouldQueueEvent(eventType, message string, inVoiceWindow bool) bool {
 	// Distinct session keys preserve parallel Buddy completions in the pending queue.
-	if strings.HasPrefix(eventType, "buddy.agent.") {
+	if strings.HasPrefix(eventType, "buddy.agent.") || strings.HasPrefix(eventType, "harness.agent.") {
 		return true
 	}
 

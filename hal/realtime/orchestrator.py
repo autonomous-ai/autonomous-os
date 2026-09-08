@@ -77,7 +77,7 @@ DELEGATE_TOOL_DESCRIPTION: str = (
     "music, scheduling, memory, skills, real-time facts, or other non-conversational work. "
     "Desktop coding/research tasks for Codex or Claude, project/worktree/session "
     "selection, progress queries, and session follow-ups go to the main runtime's "
-    "agent-management skill; never perform that coding task on the device. "
+    "harness-use skill; never perform that coding task on the device. "
     "Clearly heard answers, corrections, and stop requests for a known pending task "
     "also delegate, even without an action verb. Use conversation context to recognize "
     "the task, but forward ONLY the current user's faithfully understood words in "

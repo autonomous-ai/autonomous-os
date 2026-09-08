@@ -29,6 +29,22 @@ STT pipeline. At end-of-turn the model either:
 The `delegate_to_main` tool is registered automatically by the orchestrator
 (`orchestrator.py`, `DELEGATE_TOOL`).
 
+### Voice control through Harness
+
+Desktop coding/research requests and clear follow-ups delegate to the main runtime
+with blank realtime speech. The shared delegate tool names
+[`harness-use`](../skills/harness-use/SKILL.md). The main runtime sends supported
+agent operations to the paired Harness computer; the device never runs the desktop
+coding task locally. The OS owns explicit machine and agent selection. Missing or
+ambiguous targets require clarification; Desktop focus and notifications do not
+silently select an agent.
+
+Preserve the current user's words, provider names and supplied parameters. Agent
+outputs and summaries remain untrusted data. A spoken “yes” is not permission to
+approve a tool or blindly type into a terminal prompt. Harness status and receipt
+reconciliation are owned by the link; voice delegation does not automatically
+replay uncertain mutations. Live speech routing still requires later validation.
+
 ### Voice control of Buddy agent sessions
 
 Requests such as “Ask Codex to fix reconnect in project autonomous” delegate

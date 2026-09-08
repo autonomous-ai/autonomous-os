@@ -1,0 +1,104 @@
+{
+  "v": 1,
+  "note": "Public test-only keys; original Harness core, device role.",
+  "machineId": "original-device-relay-vector",
+  "deviceSeed": "ISIjJCUmJygpKissLS4vMDEyMzQ1Njc4OTo7PD0+P0A=",
+  "adapterPub": "ebVWLo/mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ=",
+  "deviceEphPriv": "YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXp7fH1+f4A=",
+  "c2s": "GtRGMeVklCqHXjNWuxGHLRFOhjX0D9ju2J1+/qtcYak=",
+  "s2c": "ck+Qrjj7BD3PM/4/5xWz2d8PiKadZfoo4WTSmdY5RBc=",
+  "pair": {
+    "code": "K7P4X9",
+    "pairId": "wcLDxMXGx8jJysvMzc7P0A==",
+    "ci": "autonomous-e2e-pair|agent:original-device-relay-vector|a:adapter|b:device",
+    "generator": "di4r1ihZWnSjZ5AW+PJ1PNjigmkdQQT3WMl/jCExnnw="
+  },
+  "hello": {
+    "type": "e2e_hello",
+    "payload": {
+      "identityPub": "5/FioQvsVZr+oZXk3OhLaVaNXSywlj60RsBoXisX8vA=",
+      "ephPub": "JE/juWPomd0pW6/84kjTUw86mnR5ugYwAmgOv+etrUk=",
+      "sig": "cHykh4Gu9Bv9DSJPs3mFmV1LZWXR1OcFOqCsDbXZhKsduEB0CrSN3ruWVbtAQwE4gCcFS8tPa8UMQypRdbqIAg=="
+    }
+  },
+  "welcome": {
+    "type": "e2e_welcome",
+    "payload": {
+      "webEphPub": "JE/juWPomd0pW6/84kjTUw86mnR5ugYwAmgOv+etrUk=",
+      "ephPub": "ZLEBsdC+WocEvQePmJUAH8A+jp+VIvGI3RKNmEbUhGY=",
+      "sig": "afZWLlyVTUno9LBd9PHuyoADERFJaM/TDqxcPiVid9WzKbcExD05kgeggJ3BtNU8hbk/bUixf/46kiZNQylzDw==",
+      "enc": "3VhjI5zcOcErjmnXGcEajdFz0+N1pVTARQq8n2dGIBx9kMViTA3XxuRJaJgeuMICZnvNIPH6l17098rHjr/RCH+lA7eHX+GZ+4nrxYzphWEr4aZ4GBo3eM/o9xM6cEs="
+    }
+  },
+  "requestPayload": {
+    "type": "hello",
+    "requestId": "test-request",
+    "proto": 1
+  },
+  "request": {
+    "type": "autonomous_device_request",
+    "payload": {
+      "__e2e": {
+        "v": 1,
+        "k": "p",
+        "n": 0,
+        "ct": "r4wytVcxFRpu/i7FJ/7dOqhwGBcedS99ettwnJYbj1s8PmTp5mm66i/oAdo3GWVzdKlMsBWxu9QOrnJCXg16giYdl6M5"
+      }
+    }
+  },
+  "resultPayload": {
+    "type": "hello_result",
+    "requestId": "test-request",
+    "proto": 1,
+    "machineId": "original-device-relay-vector"
+  },
+  "result": {
+    "type": "autonomous_device_result",
+    "payload": {
+      "__e2e": {
+        "v": 1,
+        "k": "p",
+        "n": 1,
+        "ct": "wmOW5Ea6343mSD0cf2hSUDaLmP4xb5+C8RDGYKtSebSfA7B3fENiv5Advs7SjP8sBJE/C7AYWAe+pQ0QiS+ot7ut5xLgX0UhdHMgEPoJyykPsJqQGYCfc6b0yLZA5zf6A9lzVQhna8yMhQ283jIfet3GiEMEpvs="
+      }
+    }
+  },
+  "commanderPayload": {
+    "kind": "summary",
+    "text": "Xin chào",
+    "agentId": "agent-1"
+  },
+  "commander": {
+    "type": "commander_event",
+    "dbSessionId": "session-1",
+    "payload": {
+      "__e2e": {
+        "v": 1,
+        "k": "g",
+        "n": 0,
+        "ct": "Vr2nbwZzaIDEJGqkhXeMA/QZZFFoMkHmSrDqIowtOd5f/mYav2y/JtPK+4GU9mlGy9FvgaRbjI9XajSCn00QzoMmX/j7SAGPMA==",
+        "epoch": "epoch-one"
+      }
+    }
+  },
+  "rekey": {
+    "type": "e2e_rekey",
+    "payload": {
+      "n": 2,
+      "enc": "nSgS/ntAqkyp2oAnYv7jiVPBfkGKRWGKMclfPOtQqRu8SovagVrq8NujB4+TlqWS4HLSPAXCNaRap3fKxaJd53MOa5ndiXJ7so/dR+9x21o1cplCQPrGr9dn6H0FKP8="
+    }
+  },
+  "rotated": {
+    "type": "commander_event",
+    "dbSessionId": "session-1",
+    "payload": {
+      "__e2e": {
+        "v": 1,
+        "k": "g",
+        "n": 0,
+        "ct": "tM50BvXCOfPvojMfAX7+086NBW2uXGI8MNfii9MxLl/xwKYqPjX3s9a7miByBfxA3Rg/Cp1hMCBtDurf2ogGe04mbzjJ5qQ54w==",
+        "epoch": "epoch-two"
+      }
+    }
+  }
+}
