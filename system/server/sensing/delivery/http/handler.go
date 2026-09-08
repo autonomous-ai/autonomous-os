@@ -54,6 +54,12 @@ type SensingEventRequest struct {
 	// downstream already carries `attachments[]`, so nothing here has to choose
 	// which photo survives.
 	Images []string `json:"images,omitempty"`
+	// InteractionID is HAL's voice-metrics id for the utterance behind this event
+	// (measurement only, empty for non-voice sources). It is echoed back as
+	// the owner of any audio os-server starts for this turn — the opening
+	// filler fires before this request's response reaches HAL, so HAL's own
+	// run-id binding cannot cover it.
+	InteractionID string `json:"interaction_id,omitempty"`
 	// CurrentUser is HAL's view of who is effectively in front of the device
 	// right now (from FaceRecognizer.current_user()). Empty when nobody is
 	// visible. This is the source of truth — do NOT re-derive by parsing
@@ -92,13 +98,17 @@ type SensingHandler struct {
 	// the agent handler mutes the older turn still in flight. A callback rather
 	// than a direct dependency, following isSleeping above — this package must
 	// not import the agent delivery package it is a sibling of.
-	onRealtimeHandled func()
+	// Returns whether os-server ACTUALLY suppressed the older turn's speech.
+	// HAL needs the answer, not an assumption: automatic supersession is
+	// opt-in (OS_REALTIME_SUPERSEDES_MAIN_REPLY), so on a default body nothing
+	// is suppressed and the situation is not a metric sample at all.
+	onRealtimeHandled func() bool
 }
 
 // SetOnRealtimeHandled installs the realtime-handled hook. Wired in
 // ProvideServer, where both handlers exist; left nil in tests and by any
 // caller that does not route voice through the realtime agent.
-func (h *SensingHandler) SetOnRealtimeHandled(fn func()) {
+func (h *SensingHandler) SetOnRealtimeHandled(fn func() bool) {
 	h.onRealtimeHandled = fn
 }
 
@@ -209,11 +219,16 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 			turnStart := flow.Start("sensing_input", startPayload, localRunID)
 			flow.Log("intent_match", map[string]any{"message": req.Message, "tts": result.TTSText, "rule": result.Rule, "actions": result.Actions}, localRunID)
 			if result.TTSText != "" {
+				owner := req.InteractionID
 				go func() {
 					// Cached path: fixed phrases like "Volume up!" hit the
 					// WAV cache (~50ms) instead of going through ElevenLabs
 					// (~1.5s). Dynamic texts (time, color) miss + render once.
-					if err := hal.SpeakCached(result.TTSText); err != nil {
+					//
+					// owner: a locally-handled command is answered here and
+					// never gets a run id, so without it the reply the user
+					// actually hears would be unattributed audio.
+					if err := hal.SpeakCachedForTurn(result.TTSText, owner); err != nil {
 						slog.Warn("intent TTS failed", "component", "sensing", "error", err)
 					}
 				}()
@@ -235,6 +250,10 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 			c.JSON(http.StatusOK, serializers.ResponseSuccess(map[string]string{
 				"handler":  "local",
 				"response": result.TTSText,
+				// No runId exists for a locally-handled command — say so
+				// explicitly, so HAL records "served here" instead of
+				// mistaking a missing run id for a failed dispatch.
+				"handledLocally": "true",
 			}))
 			return
 		}
@@ -272,8 +291,9 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 	// thing a no-op precisely when it is needed. The mark is about wall-clock
 	// "the user has already been answered", which holds whether or not the
 	// sync event itself reaches the agent now.
+	speechSuppressed := false
 	if isRealtimeHandled && h.onRealtimeHandled != nil {
-		h.onRealtimeHandled()
+		speechSuppressed = h.onRealtimeHandled()
 	}
 	isPassive := !isVoiceCommand
 	if isPassive && !isVoice && !isRealtimeHandled && !isChat && req.Type != "presence.enter" && req.Type != "fire_hazard.detected" && h.isSleeping != nil && h.isSleeping() {
@@ -545,9 +565,12 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 			// A queued event consumes an agent turn on replay — counts
 			// against the ambient floor like a live forward.
 			h.lastAgentTurn.Store(time.Now().UnixMilli())
-			resp := map[string]string{"handler": "queued"}
+			resp := map[string]any{"handler": "queued"}
 			if queuedRunID != "" {
 				resp["runId"] = queuedRunID
+			}
+			if isRealtimeHandled {
+				resp["speechSuppressed"] = speechSuppressed
 			}
 			c.JSON(http.StatusOK, serializers.ResponseSuccess(resp))
 			return
@@ -688,8 +711,11 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 	// the hal-side speak() lock-timeout=2s race that the timer-based
 	// fire-at-lifecycle.start+FillerDelay path triggers.
 	if isVoice {
-		DefaultFillerManager.MarkVoiceRun(runID)
-		go PlayOpeningFillerNow()
+		DefaultFillerManager.MarkVoiceRun(runID, req.InteractionID)
+		// Owned by the utterance HAL is tracking, not by the run id: this
+		// fires now, while HAL is still waiting for the response that would
+		// tell it which run this turn became.
+		go PlayOpeningFillerNow(fillerOwner(req.InteractionID, runID))
 	}
 
 	var err error
@@ -760,9 +786,13 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 		"device_run_id", runID, "sensing_type", req.Type,
 		"note", "OpenClaw lifecycle UUID maps to device_run_id on lifecycle_start in SSE handler")
 	slog.Info("event forwarded", "component", "sensing", "type", req.Type, "imageCount", len(req.Images), "runId", runID)
-	c.JSON(http.StatusOK, serializers.ResponseSuccess(map[string]string{
-		"runId": runID,
-	}))
+	resp := map[string]any{"runId": runID}
+	if isRealtimeHandled {
+		// Whether the older turn really lost the speaker — the only thing that
+		// makes this a suppression situation worth measuring.
+		resp["speechSuppressed"] = speechSuppressed
+	}
+	c.JSON(http.StatusOK, serializers.ResponseSuccess(resp))
 }
 
 // MonitorEventRequest is the payload for pushing an event to the monitor bus.
@@ -1431,6 +1461,11 @@ var ambientFloorTypes = map[string]bool{
 // shouldQueueEvent returns true if this sensing event type should be queued
 // (not dropped) when the agent is busy.
 func shouldQueueEvent(eventType, message string, inVoiceWindow bool) bool {
+	// Distinct session keys preserve parallel Buddy completions in the pending queue.
+	if strings.HasPrefix(eventType, "buddy.agent.") {
+		return true
+	}
+
 	switch eventType {
 	case "presence.enter", "presence.leave", "voice",
 		// voice_agent_handled carries the [HANDLED]/[REPLY] sync for a

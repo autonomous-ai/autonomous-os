@@ -1,21 +1,48 @@
 # Autonomous Buddy — release signing & notarization
 
+> **Unified product (September 2026):** Run build/signing commands from `integrations/companions/autonomous-buddy/`. `make build`, `app` and `install` package one Electron application containing the Swift helper, defaulting to the current Node architecture; use `make build BUDDY_ARCH=x64` for Intel. `make dmg`, `dmg-signed` and `notarize` default to `BUDDY_ARCHS="arm64 x64"`, producing or processing separate Apple Silicon and Intel DMGs sequentially. These are not universal binaries. App output: `desktop/artifacts/package/Autonomous Buddy-darwin-<arch>/Autonomous Buddy.app`; DMG: `dist/Autonomous-Buddy-<version>-<arch>.dmg`. Original Swift-only universal release recipes remain under explicit `native-*` targets and retain `AutonomousBuddy-<version>.dmg`. `make build`, `make install` and `make dmg` do not submit to Apple; `make dmg` is the local packaging flow, while the upload target defaults to notarized release artifacts. Cross-compilation does not establish Intel runtime compatibility; launch, terminal/native helper and permission behavior still need verification on target Macs.
+
+## Architecture-specific uploads and OTA metadata
+
+From the repo root, `make upload-autonomous-buddy` bumps the shared patch version in `VERSION_AUTONOMOUS_BUDDY` once, builds, signs, notarizes and staples both DMGs, verifies their tickets and Gatekeeper acceptance, then uploads each to `${BUCKET_PREFIX}/ota/autonomous-buddy/<arch>/<version>.dmg` (normally `os/ota/autonomous-buddy/...`). Each selected metadata entry, `autonomous-buddy.arm64` or `autonomous-buddy.x64`, has its own `version`, `url`, `sha256` and `updated_at`. A release for one architecture preserves the other architecture's version and all unrelated component entries. When migrating the old flat metadata, the publisher preserves it as `arm64` if that entry is absent, because the previous published DMG was Apple Silicon only. A new Intel-only release therefore retains that older Apple Silicon download, including its checksum when present. Selected architectures are then updated and the old ambiguous top-level Buddy version/URL fields are removed. Download consumers must select the matching architecture; Buddy currently has no in-app updater, so these entries provide download discovery rather than automatic installation.
+
+```bash
+# Use an existing notarytool Keychain profile (see one-time setup below).
+export NOTARY_PROFILE=autonomous-notary
+# Both Apple Silicon and Intel; one version bump, signed and notarized.
+make upload-autonomous-buddy
+# Release only Intel, preserving the Apple Silicon metadata entry.
+BUDDY_ARCHS=x64 make upload-autonomous-buddy
+# Retry with both existing notarized DMGs; no bump, rebuild or profile required.
+BUDDY_SKIP_BUILD=1 make upload-autonomous-buddy
+# Retry an Intel-only release.
+BUDDY_SKIP_BUILD=1 BUDDY_ARCHS=x64 make upload-autonomous-buddy
+```
+
+Keep the selected architectures and `BUDDY_DMG_TARGET` consistent when retrying. The upload target defaults to `BUDDY_DMG_TARGET=dmg-signed`. Before bumping the version or building, it requires `NOTARY_PROFILE` and checks its credentials with `notarytool history`. `BUDDY_SKIP_BUILD=1` needs no profile when DMGs are already notarized, but still runs `stapler validate` and Gatekeeper assessment on every selected DMG before any upload. `BUDDY_DMG_TARGET=dmg` is an explicit override for local/test distribution without notarization; these are the only two accepted targets, and standalone `native-*` artifacts are excluded. Custom `GCS_PATH` or `BUDDY_URL` overrides require a single `BUDDY_ARCHS` value to avoid assigning two DMGs the same destination. Every requested DMG must exist before any artifact upload. Failure to read existing metadata aborts metadata publication instead of replacing the shared feed; updating a signed feed, whether using a nested signed payload or a bare signature, requires `OTA_SIGNING_PRIVATE_KEY`. Artifact uploads may already have completed when metadata publication fails.
+
 This is the handover doc for whoever owns the Apple Developer enrolment. Once the one-time setup is done, every release boils down to:
 
 ```bash
-cd autonomous-buddy
+cd integrations/companions/autonomous-buddy
 export DEV_ID_APP="Developer ID Application: <Your Org> (<TEAMID>)"
 export NOTARY_PROFILE=autonomous-notary
 make dmg-signed
 ```
 
-The output `dist/AutonomousBuddy-<version>.dmg` is signed, notarized, and stapled — users mount it, drag the app to Applications, double-click, and macOS opens it without any Gatekeeper warning or right-click dance.
+Each output `dist/Autonomous-Buddy-<version>-<arch>.dmg` is signed, notarized, and stapled — users mount it, drag the app to Applications, double-click, and macOS opens it without any Gatekeeper warning or right-click dance.
 
-The ad-hoc `make dmg` path still works for local builds and informal sharing; this doc only covers the production path.
+The unified Electron packager selects signing identity before building. A nonempty `DEV_ID_APP` takes precedence (certificate name or SHA-1 fingerprint). Otherwise it reads usable identities with `security find-identity -v -p codesigning`, accepts only complete `Developer ID Application:` entries, and excludes Apple Development and revoked/expired entries. A single candidate is selected automatically. With multiple candidates it prefers the team of `/Applications/Autonomous Buddy.app`; ambiguous matches or a known installed team with no matching candidate fail with an actionable `DEV_ID_APP` override instead of silently switching teams. No certificate or person is hardcoded.
+
+With no usable Developer ID identity, packaging retains ad-hoc fallback and explicitly warns that Accessibility/Screen Recording may need to be granted again after installation. A failed identity lookup aborts instead of silently downgrading. An empty variable enables auto-detection; `DEV_ID_APP=-` deliberately selects ad-hoc for the unified packager. Both the embedded helper and outer app use the selected identity. Routine builds therefore no longer silently replace a Developer ID build with an ad-hoc build merely because the shell did not export `DEV_ID_APP`. This stabilizes signing identity; it does not promise automatic restoration of TCC grants already invalidated by an earlier install.
+
+The legacy `native-*` Makefile recipes retain their existing identity detection and override rules. For a multi-certificate release, explicitly export the intended identity so every packaging/signing entry point uses the same certificate.
+
+What `make dmg-signed` adds on top of `make dmg` is notarization, stapling and Gatekeeper assessment, which needs `NOTARY_PROFILE`. Apple instructs developers to notarize the outermost distribution container: submitting each final DMG covers its nested app and binaries, so this flow does not require a separate app ZIP submission. See [Apple: Packaging Mac software for distribution](https://developer.apple.com/documentation/xcode/packaging-mac-software-for-distribution).
 
 ## What changes vs the ad-hoc build
 
-| | Ad-hoc (`make dmg`) | Production (`make dmg-signed`) |
+| | Ad-hoc (no cert installed) | Production (`make dmg-signed`) |
 |---|---|---|
 | Signing identity | None (`-` placeholder) | Developer ID Application cert from Apple |
 | Hardened runtime | Off | **On** (`--options runtime`, required by Apple) |
@@ -86,51 +113,52 @@ Empty history is fine — it means auth works.
 ## Per-release flow
 
 ```bash
-cd autonomous-buddy
+cd integrations/companions/autonomous-buddy
 
 # Persist these in your shell rc once, or export per session.
 export DEV_ID_APP="Developer ID Application: Autonomous Inc (ABCDE12345)"
 export NOTARY_PROFILE=autonomous-notary
 
-# Optional: bump VERSION in the Makefile if this is a new release.
+# VERSION is read from VERSION_AUTONOMOUS_BUDDY; the upload target bumps it once.
 
 make dmg-signed
+# For Intel only: make dmg-signed BUDDY_ARCHS=x64
 ```
 
-The make target does, in order:
+For each selected architecture, the make target does, in order:
 
-1. `swift build -c release` — production binary.
-2. Generate the app icon if missing (`make icon` chain — SF Symbol placeholder unless you replace it with a designed PNG).
-3. Bundle `dist/AutonomousBuddy.app` with the icon + Info.plist.
-4. `codesign` the app with Developer ID, hardened runtime, secure timestamp.
+1. Compile the Electron main/renderer. Rebuild node-pty for the selected Electron architecture in a staged dependency copy, preserving the development dependencies.
+2. Cross-compile the Swift helper in release mode for the selected architecture (`x64` maps to Swift `x86_64`; Apple Silicon uses `arm64`).
+3. Package `desktop/artifacts/package/Autonomous Buddy-darwin-<arch>/Autonomous Buddy.app`, embedding the helper and SwiftPM resources under `Contents/Resources/native/`.
+4. `codesign` the app with Developer ID, hardened runtime, secure timestamp. Packaging verifies the signature and uses `lipo` to check the target architecture of Electron, the Swift helper, node-pty and its spawn helper.
 5. `hdiutil create` the DMG (drag-to-Applications layout).
 6. `codesign` the DMG with Developer ID.
 7. `xcrun notarytool submit … --wait` — uploads to Apple, blocks 1-5 minutes until verdict.
 8. `xcrun stapler staple` — embeds the notarization ticket so Gatekeeper can verify offline.
-9. `spctl --assess` — local Gatekeeper dry-run, prints `accepted` on success.
+9. `xcrun stapler validate` — verify the embedded DMG ticket, then `spctl --assess --type open --context context:primary-signature` checks Gatekeeper acceptance. Run the remaining app checks below separately before distribution.
 
-End result is `dist/AutonomousBuddy-<version>.dmg`. Ship that file.
+The default outputs are `dist/Autonomous-Buddy-<version>-arm64.dmg` and `dist/Autonomous-Buddy-<version>-x64.dmg`. Distribute the file matching the user’s Mac. `make dmg BUDDY_ARCHS=x64` builds only Intel; `make notarize BUDDY_ARCHS=x64` notarizes only its existing DMG.
 
 ## Verifying a build before shipping
 
 ```bash
 # 1. App signature is well-formed.
-codesign --verify --deep --strict --verbose=2 dist/AutonomousBuddy.app
+codesign --verify --deep --strict --verbose=2 "desktop/artifacts/package/Autonomous Buddy-darwin-<arch>/Autonomous Buddy.app"
 
 # 2. Gatekeeper accepts the app.
-spctl --assess --type execute --verbose=4 dist/AutonomousBuddy.app
+spctl --assess --type execute --verbose=4 "desktop/artifacts/package/Autonomous Buddy-darwin-<arch>/Autonomous Buddy.app"
 #   expected: "accepted source=Developer ID notarized"
 
 # 3. DMG itself has a stapled ticket.
-xcrun stapler validate dist/AutonomousBuddy-<version>.dmg
+xcrun stapler validate "dist/Autonomous-Buddy-<version>-<arch>.dmg"
 #   expected: "The validate action worked!"
 
 # 4. Real Gatekeeper dry-run on the DMG.
-spctl --assess --type open --context context:primary-signature --verbose=4 dist/AutonomousBuddy-<version>.dmg
+spctl --assess --type open --context context:primary-signature --verbose=4 "dist/Autonomous-Buddy-<version>-<arch>.dmg"
 #   expected: "accepted source=Notarized Developer ID"
 ```
 
-All four should pass before you upload anywhere.
+Run all four checks for each architecture before distribution. Also test launch and native features on an Intel Mac and an Apple Silicon Mac; cross-compilation and signature checks do not replace those runtime checks.
 
 ## Common failure modes
 
@@ -161,5 +189,5 @@ Stapling is offline-capable, so users who first install when offline still get t
 ## Things this doc deliberately does NOT cover
 
 - **Mac App Store distribution.** Different cert (`Apple Distribution`), App Sandbox required, separate submission flow via App Store Connect. Out of scope for now.
-- **Sparkle / auto-update.** Buddy currently has no built-in update channel; releases are manual DMG drops to users. Add Sparkle later if release cadence picks up.
+- **Sparkle / auto-update.** Buddy currently has no in-app updater; architecture-specific OTA metadata exposes DMG downloads for manual installation. Add Sparkle later if release cadence picks up.
 - **CI signing.** Doable (GitHub Actions with cert + notarytool keychain profile encrypted as secrets), but the current handoff assumes one dev signs locally. Set up CI when build cadence justifies it.

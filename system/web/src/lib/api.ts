@@ -354,6 +354,7 @@ export interface DeviceConfig {
   stt_model: string;
   tts_provider: string;
   tts_voice: string;
+  tts_speed?: number;
   wakeword: boolean;
   agent_name: string;
   wake_phrases: string[];

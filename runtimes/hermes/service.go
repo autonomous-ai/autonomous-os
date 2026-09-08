@@ -82,7 +82,10 @@ type HermesService struct {
 	// Turn lifecycle, mirrors openclaw.Service. activeTurn flips true on
 	// SendChat (write) and false on response.completed (read).
 	activeTurn atomic.Bool
-	busySince  atomic.Int64
+	// Each HTTP stream owns its lifecycle; another stream ending must not clear it.
+	inFlightStreams atomic.Int64
+	drainMu         sync.Mutex
+	busySince       atomic.Int64
 
 	// Session/conversation state. sessionUUID is the X-Hermes-Session-Id header
 	// captured from any response; conversation is the named channel everything

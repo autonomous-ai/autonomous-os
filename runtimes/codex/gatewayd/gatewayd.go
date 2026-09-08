@@ -96,9 +96,11 @@ type Server struct {
 	cfg Config
 	ln  net.Listener
 
-	mu       sync.Mutex // guards client, threadID and session-file writes
-	client   *wsClient  // single client; a new connection replaces the old
-	threadID string     // current codex thread id ("" = fresh next turn)
+	mu              sync.Mutex // guards client, threadID and session-file writes
+	client          *wsClient  // single client; a new connection replaces the old
+	threadID        string     // current codex thread id ("" = fresh next turn)
+	activeRequestID string     // guarded by mu; worker-owned turn correlation
+	activeRunID     string     // originating device run, carried through queued turns
 
 	ops chan op // turns + session.new, strictly serialized by the single worker
 }

@@ -351,6 +351,16 @@ Requires sensing with camera (InsightFace). Enrolled person JPEGs persist under 
 | POST | `/voice/speak` | TTS — convert text to speech. Body fields: `text`, `voice?`, `interruptible?`, `provider?`, `tts_api_key?`, `tts_base_url?`, `cached?` (use WAV cache, render+save on miss), `prerender?` (render+save without playing — boot warmup) |
 | GET | `/voice/status` | voice_available, voice_listening, tts_available, tts_speaking |
 
+### TTS speed
+
+`GET /api/device/config` returns effective `tts_speed`; `PUT /api/device/config`
+accepts `{"tts_speed":1.2}`. This optional field accepts `0.25–4.0`; omitting
+it preserves the saved value. Saved config takes precedence over `HAL_TTS_SPEED`,
+retaining the existing environment fallback and `1.3` default. HAL reads config
+at boot and `/voice/start` through `get_tts_speed()`; speed changes are pushed
+live through `/voice/tts/config {speed}`. The ElevenLabs backend still clamps
+the outgoing value to `0.7–1.2`.
+
 ### Piper — on-device TTS
 
 A third TTS provider alongside `openai` and `elevenlabs`, selected as
@@ -420,13 +430,13 @@ request and the model path is resolved per utterance, so a voice is listable and
 speakable the moment its file lands — measured: downloaded at 18:32:29 on a HAL
 that started at 18:31:59, listed and spoken at 18:33:11 with no restart between.
 Applying a voice does not restart HAL either. `POST /voice/tts/config` sets
-provider, voice, key and base URL on the running TTS service, which reads all of
+provider, voice, speed, key and base URL on the running TTS service, which reads all of
 them per utterance, so the change takes effect on the next sentence.
 
 The phrases the device says about itself — restart, shutdown, reboot, sleep —
 are **rendered into the TTS cache ahead of time**, at boot and again whenever
-`/voice/tts/config` changes provider or voice (the cache key includes both, so a
-voice change invalidates every clip). They play at the worst possible moments:
+`/voice/tts/config` changes provider, voice or speed (all are part of the cache key, so
+a change invalidates the corresponding clips). They play at the worst possible moments:
 the restart notice is spoken while HAL is tearing down, the boot cue while every
 other service is still coming up. On Piper a cache miss there means loading a
 63 MB model on a saturated CPU — measured on an 8-core sun60iw2, the load alone
@@ -491,7 +501,7 @@ URL all along; nothing read it.
 
 `device/config_update.go` splits what used to be one `voiceSnapshot` in two:
 `bootSnapshot` (LLM and STT keys and URLs — genuinely read at import, still
-worth a restart) and `ttsSnapshot` (provider, voice, TTS key and URL — pushed
+worth a restart) and `ttsSnapshot` (provider, voice, speed, TTS key and URL — pushed
 live). A voice change is the most common save an operator makes, and restarting
 for it took the microphone, speaker and wake word down for ten to fifteen
 seconds; any admin click landing in that window was lost, because HAL was not
@@ -845,3 +855,64 @@ Rules the agent is given, and why each one is load-bearing:
 `TestHeartbeatPeopleSyncFormatMatchesTheReconciler` pins the written format
 against the reconciler's parser, so the two cannot drift apart into entries
 nobody can prune.
+
+## Buddy pairing state over MQTT
+
+Server startup runs `StartBuddyStatusLoop` under the server event context; shutdown
+cancels pending status delivery. A bounded single-consumer wakeup queue coalesces
+Buddy changes without blocking HTTP pairing or the WebSocket reader on MQTT.
+`buddy.status` queries and unsolicited FD snapshots share a public state with
+`paired`, `connected`, `instance_id`, and `revision`; no credentials are included.
+See the [MQTT contract](mqtt.md#buddystatus--query-and-observe-buddy-state).
+
+Pairing writes replace the store atomically. Failed pair/revoke writes keep the
+previous in-memory pairing and emit no success transition. A successful replacement
+pairing closes the old socket; WebSocket registration rechecks its token under the
+state lock so a concurrent revoke cannot reconnect a stale pairing.
+
+## Buddy computer-use feedback
+
+The device agent owns desktop tasks; the Mac companion executes commands. Agent
+management in the separate Buddy desktop workspace is independent of this flow.
+
+- `POST /api/buddy/command` stays loopback-only and returns the native command
+  result. Request bodies are limited to 1 MiB; optional `timeout_ms` is `0` for
+  default or an integer from `500` to `60000`. Native UI observation uses
+  `get_ui_tree`; snapshot-scoped mutations use `perform_ui_action`.
+- `POST /api/buddy/observe` is loopback-only. It captures the paired Mac's desktop
+  and asks the configured auxiliary vision model a desktop-specific question,
+  returning text plus screenshot coordinate metadata. This supports a text-only
+  main agent; it does not capture the device camera. Native image-capable agents
+  can instead load the device-local JPEG decoded by the computer-use skill helper.
+- WebSocket writes are serialized. Pending replies belong to their original
+  connection; disconnect releases those callers, and an old reader cannot clear
+  a replacement connection. Cancellation/timeout attempts a targeted
+  `cancel_command` on the original socket; input already sent cannot be undone.
+- Native Buddy rejects overlapping commands with a busy error, supports
+  cooperative cancellation and Pause, and invalidates UI references after
+  mutations. A successful command is evidence of dispatch, not task completion.
+
+See [Computer use](../integrations/companions/autonomous-buddy/docs/computer-use.md)
+for parameter contracts, image capability requirements and desktop acceptance
+checks. The skill maintains the full user goal and observes the result after each
+dependent action; opening an app is insufficient for a search or cross-app task.
+
+### Buddy managed-agent voice routing
+
+The device-local `POST /api/buddy/command` also transports `agent.list`, `agent.create`, `agent.send`, `agent.session`, and `agent.stop` through the paired WebSocket. The desktop manager owns project/session/provider context; lamp skill `skills/agent-management/` preserves explicit IDs and does not launch coding CLIs on the device. Create/send use caller request IDs; uncertain delivery must be inspected, not automatically replayed.
+
+The Buddy read loop accepts typed `agent_event` status envelopes up to 16 KiB from the current paired socket only, with project/session IDs, positive sequence, terminal status (`completed`, `needs_input`, `error`), title up to 512 bytes and summary up to 8192 bytes. A process-local cursor deduplicates per buddy/project/session (up to 10,000 tracked sessions); it is not durable across server restart. A bounded 64-event queue forwards notifications to the normal local sensing pipeline as `buddy.agent.<session_id>`. Queue overflow/forwarding failure releases that event cursor for a future replay; delivery is best effort and no background retry is invented. Reconnect can resubmit final session snapshots; use `agent.session` for authoritative retained history. Desktop result text is untrusted data. No raw transcript or direct hardcoded speech bypasses the normal event, sleep, mute and speaker policy.
+
+### OpenClaw reconnect and unsent requests
+
+After a successful authenticated WebSocket handshake and event-worker setup,
+OpenClaw drains locally buffered requests without waiting for an unrelated turn
+to end. Offline callbacks keep the queue; concurrent drains are serialized.
+Speaker deferral, sensor expiry/coalescing and user run IDs remain intact. Only
+a disconnect before any socket write is retried. A failed write has an uncertain
+delivery outcome and is not automatically replayed; existing pending chat traces
+are used for correlation, never as a replay source. Authentication rejection does
+not mark the connection ready. The queue is in memory and does not survive an
+os-server process restart. OpenClaw retains its native idempotency-key/history
+correlation; the Codex CLI output guard and session quarantine are not part of
+this transport.

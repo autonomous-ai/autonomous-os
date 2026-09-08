@@ -5,7 +5,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
+
+	"github.com/joho/godotenv"
 )
 
 func TestTrackEvent(t *testing.T) {
@@ -44,5 +48,54 @@ func TestTrackEvent(t *testing.T) {
 	p := params[0].(map[string]any)
 	if p["key"] != "device_type" || p["value"] != "lamp" {
 		t.Errorf("event_params[0] = %v", p)
+	}
+}
+
+// Both the key and the endpoint come from the body's .env, so a device can be
+// pointed at a staging warehouse without a rebuild.
+func TestEndpointFromEnvFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".env")
+	if err := os.WriteFile(path, []byte("AUTONOMOUS_ANALYTICS_ID=k\nAUTONOMOUS_ANALYTICS_URL=https://staging.example/api\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	kv, err := godotenv.Read(path)
+	if err != nil {
+		t.Fatalf("read env file: %v", err)
+	}
+	origKey, origURL := apiKey, fileURL
+	apiKey, fileURL = kv["AUTONOMOUS_ANALYTICS_ID"], kv["AUTONOMOUS_ANALYTICS_URL"]
+	t.Cleanup(func() { apiKey, fileURL = origKey, origURL })
+
+	if got := Endpoint(); got != "https://staging.example/api" {
+		t.Errorf("Endpoint() = %q, want the .env value", got)
+	}
+	// The process env still wins — that is how tests redirect the POST.
+	t.Setenv("AUTONOMOUS_ANALYTICS_URL", "http://127.0.0.1:1/override")
+	if got := Endpoint(); got != "http://127.0.0.1:1/override" {
+		t.Errorf("Endpoint() = %q, want the process env to win", got)
+	}
+}
+
+// No endpoint anywhere = analytics is off. There is deliberately no built-in
+// default: a device posts only where someone wrote down.
+func TestEndpointIsEmptyWhenNothingIsConfigured(t *testing.T) {
+	origURL := fileURL
+	fileURL = ""
+	t.Setenv("AUTONOMOUS_ANALYTICS_URL", "")
+	t.Cleanup(func() { fileURL = origURL })
+	if got := Endpoint(); got != "" {
+		t.Errorf("Endpoint() = %q, want empty", got)
+	}
+}
+
+func TestTrackEventRefusesWithoutAnEndpoint(t *testing.T) {
+	origURL, origKey := fileURL, apiKey
+	fileURL, apiKey = "", "k"
+	t.Setenv("AUTONOMOUS_ANALYTICS_URL", "")
+	t.Cleanup(func() { fileURL, apiKey = origURL, origKey })
+	if err := TrackEvent(context.Background(), "x", nil); err == nil {
+		t.Error("TrackEvent must fail loudly when no endpoint is configured")
 	}
 }

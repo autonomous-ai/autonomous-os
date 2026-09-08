@@ -47,6 +47,7 @@ func (s *Service) GetPublicConfig() domain.ConfigPublicResponse {
 		STTModel:           s.config.STTModel,
 		TTSProvider:        s.config.TTSProvider,
 		TTSVoice:           s.config.TTSVoice,
+		TTSSpeed:           s.config.GetTTSSpeed(),
 		WakeWord:           s.config.WakeWordEnabled(),
 		AgentName:          agentName,
 		WakePhrases:        i18n.BuildSupportedVoiceWakeWords(agentName, deviceType),
@@ -152,6 +153,7 @@ func bootFields(c *config.Config) bootSnapshot {
 // any admin click landing in the window is lost.
 type ttsSnapshot struct {
 	ttsProvider string
+	ttsSpeed    float64
 	ttsVoice    string
 	ttsAPIKey   string
 	ttsBaseURL  string
@@ -161,6 +163,7 @@ func ttsFields(c *config.Config) ttsSnapshot {
 	return ttsSnapshot{
 		ttsProvider: c.TTSProvider,
 		ttsVoice:    c.TTSVoice,
+		ttsSpeed:    c.GetTTSSpeed(),
 		ttsAPIKey:   c.TTSAPIKey,
 		ttsBaseURL:  c.TTSBaseURL,
 	}
@@ -362,6 +365,10 @@ func applyVoicePipelineFields(c *config.Config, data domain.UpdateConfigRequest,
 	if data.TTSVoice != "" {
 		c.TTSVoice = data.TTSVoice
 	}
+	if data.TTSSpeed != nil {
+		speed := *data.TTSSpeed
+		c.TTSSpeed = &speed
+	}
 	// Realtime block (validated by the caller before the lock).
 	if data.Realtime != nil {
 		before := realtimeFingerprint(c)
@@ -452,6 +459,9 @@ func applyMQTTFields(c *config.Config, data domain.UpdateConfigRequest) {
 // llm_model/thinking → openclaw, stt_language → openclaw NewSession + hal,
 // voice-pipeline fields → hal. Other fields persist only; restart os-server for full effect.
 func (s *Service) UpdateConfig(data domain.UpdateConfigRequest) error {
+	if err := domain.ValidateTTSSpeed(data.TTSSpeed); err != nil {
+		return err
+	}
 	// bcrypt is CPU-intensive; compute before acquiring the config lock.
 	var adminHash string
 	if data.AdminPassword != "" {
@@ -596,9 +606,12 @@ func (s *Service) syncLLMToGateway(ch updateChanges) {
 	}
 }
 
-// UpdateVoiceConfig updates only TTS provider/voice and STT language — safe to call from MQTT
+// UpdateVoiceConfig updates only TTS provider/voice/speed and STT language — safe to call from MQTT
 // handlers since it does not touch API keys, MQTT credentials, or WiFi config.
-func (s *Service) UpdateVoiceConfig(provider, voice, language string) error {
+func (s *Service) UpdateVoiceConfig(provider, voice, language string, speed *float64) error {
+	if err := domain.ValidateTTSSpeed(speed); err != nil {
+		return err
+	}
 	prevLang := s.config.STTLanguage
 	if provider != "" {
 		s.config.TTSProvider = provider
@@ -609,6 +622,10 @@ func (s *Service) UpdateVoiceConfig(provider, voice, language string) error {
 	if language != "" {
 		s.config.STTLanguage = language
 		s.config.STTModel = sttModelForLanguage(language)
+	}
+	if speed != nil {
+		value := *speed
+		s.config.TTSSpeed = &value
 	}
 	if err := s.config.Save(); err != nil {
 		return fmt.Errorf("save config: %w", err)

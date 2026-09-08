@@ -37,7 +37,9 @@ import (
 	_sensingHttpDeliver "go.autonomous.ai/os/system/server/sensing/delivery/http"
 	"go.autonomous.ai/os/system/server/serializers"
 	systemshell "go.autonomous.ai/os/system/server/system"
+	_telemetryHttpDeliver "go.autonomous.ai/os/system/server/telemetry/delivery/http"
 	"go.autonomous.ai/os/system/statusled"
+	"go.autonomous.ai/os/system/telemetry"
 )
 
 type Server struct {
@@ -198,6 +200,16 @@ func (s *Server) Serve(closeFn func()) error {
 		logger.SetGELFHost(s.config.DeviceID)
 	}
 	logger.SetGELFDeviceType(deviceType)
+
+	// Common fields for every tracking event this device sends (see
+	// system/telemetry). Set once here, where the resolved device class,
+	// runtime and version all exist.
+	telemetry.SetCommon(map[string]any{
+		"os_version":                     config.OSVersion,
+		"device_type":                    deviceType,
+		"agent_runtime":                  string(device.CurrentAgentRuntimeFromConfig(s.config)),
+		"realtime_supersedes_main_reply": _agentHttpDeliver.RealtimeSupersedesMainReply(),
+	})
 	// i18n device name (wake-words + {name}/{Name} in strings) — device_type as the
 	// startup fallback; WatchIdentity overrides with the agent name once IDENTITY.md loads.
 	i18n.SetDeviceName(deviceType)
@@ -297,6 +309,7 @@ func (s *Server) Serve(closeFn func()) error {
 	// sees the same turn the web monitor's SSE stream shows. Costs nothing until
 	// a chat.send arrives — no run is tracked, so every bus event is dropped.
 	s.chatStream.Start(eventCtx)
+	go s.deviceMQTTHandler.StartBuddyStatusLoop(eventCtx)
 	// StartModelSync is launched from the startup-sequence goroutine AFTER
 	// EnsureOnboarding completes, so the two writers to openclaw.json don't
 	// race on first boot (sync's atomic write vs ensureAgentDefaults' plain
@@ -386,6 +399,12 @@ func (s *Server) Serve(closeFn func()) error {
 	network.GET("current", s.networkHandler.GetCurrentNetwork)
 	network.GET("check-internet", s.networkHandler.CheckInternet)
 
+	// Product analytics ingestion for on-device producers (HAL voice metrics
+	// today). Loopback/LAN only, same gate as sensing: the poster is another
+	// process on this device, never a browser session.
+	telemetryGroup := api.Group("telemetry")
+	telemetryGroup.POST("event", sameOriginOrLAN(), _telemetryHttpDeliver.ProvideTelemetryHandler().PostEvent)
+
 	sensing := api.Group("sensing")
 	sensing.POST("event", sameOriginOrLAN(), s.sensingHandler.PostEvent)
 	sensing.GET("snapshot/:category/:name", s.sensingHandler.GetSnapshot)
@@ -454,6 +473,7 @@ func (s *Server) Serve(closeFn func()) error {
 	buddy.DELETE("self", s.buddyHandler.RevokeSelf)
 	buddy.GET("ws", s.buddyHandler.WS)
 	buddy.POST("command", localOnlyMiddleware(), s.buddyHandler.Command)
+	buddy.POST("observe", localOnlyMiddleware(), s.buddyHandler.Observe)
 	// /exec/:action is the marker-friendly variant used by OpenClaw skills via
 	// [HW:/buddy/exec/<action>:{...}]. Localhost-only (loopback from agent handler's hwMarker dispatcher).
 	buddy.POST("exec/:action", localOnlyMiddleware(), s.buddyHandler.Exec)

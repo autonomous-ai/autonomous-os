@@ -184,19 +184,29 @@ token, no pairing handshake, 25s ping keepalive → `pong`, reconnect with backo
 the reply arrives on the read loop:
 
 ```json
-{ "type": "message.send", "id": "<reqID>", "payload": { "content": "<text>",
+{ "type": "message.send", "id": "<reqID>", "run_id": "<runID>", "payload": { "content": "<text>",
   "attachments": [{ "type": "image", "url": "data:image/jpeg;base64,…" }] } }
 ```
 
 The bridge saves attachments to `/root/.opencode/attachments` and passes them via
 `opencode run --file <path>`. A `{"type":"session.new"}` frame makes the bridge
-drop the persisted session id (§4). opencode processes one turn at a time, so turns
-are correlated by a single in-flight `runID` (the pending run id is adopted by the
-first inbound frame of the turn).
+drop the persisted session id (§4). The bridge serializes turns and adds
+`request_id`/`run_id` to turn frames, including resume retries and errors. The
+adapter retains a FIFO of pending pairs and prefers explicit tags; older untagged
+bridges use FIFO. Completed or interleaved frames are ignored before session updates.
+
+A full queue returns `bridge.rejected` for that request/run only, preserving the
+current turn and busy state. Terminal callbacks do not idle while transmitted
+turns remain. Reconnect drains only **unsent** local events, preserving run IDs
+and speaker gating. Offline callbacks retain the queue; disappearance before
+any write restores its unsent tail. A failed attempted write has uncertain
+delivery and is never replayed. Disconnect clears transmitted correlation,
+which is never used as a replay source.
+
 
 ## 3. Event translation (`translator.go`)
 
-The bridge forwards the `opencode run --format json` JSONL events **verbatim**
+The bridge forwards the `opencode run --format json` JSONL event content, adding correlation fields to turn frames
 (plus its own `bridge.status` / `bridge.error` / `pong` frames); every opencode
 line carries a `sessionID`. The Go translator maps them onto the same
 `domain.WSEvent` shape the OpenClaw handler consumes:
@@ -211,6 +221,7 @@ line carries a `sessionID`. The Go translator maps them onto the same
 | `step_finish` / `message.updated` | capture per-turn token usage (`part.tokens` / `info.tokens`) |
 | `session.idle` (synthesized by the gatewayd on clean exit) | `agent` `stream:assistant` (whole reply as **one** delta) **+** `chat` `state:final role:assistant` **+** lifecycle `phase:end` with usage — ends the turn |
 | `session.error` / `error` / `bridge.error` | `agent` lifecycle `phase:error` — ends the turn |
+| `bridge.rejected` | `lifecycle.error` for the rejected request/run only; current turn preserved |
 | `bridge.status` / `pong` | *(logged / ignored)* |
 
 **Terminal event (device-verified 1.18.4).** `opencode run --format json` does
