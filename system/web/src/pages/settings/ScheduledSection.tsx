@@ -3,7 +3,7 @@ import { CalendarClock, Pencil, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { C, SectionCard } from "@/components/setup/shared";
 import {
-  createSchedule, deleteSchedule, listSchedules, resolveScheduleKind, runScheduleNow, updateSchedule,
+  createSchedule, deleteSchedule, listSchedules, resolveCadenceTimes, resolveScheduleKind, runScheduleNow, updateSchedule,
 } from "@/lib/api";
 import type { ScheduleCadence, ScheduleItem } from "@/lib/api";
 import { ScheduleEditor } from "./ScheduleEditor";
@@ -89,18 +89,28 @@ function formatDeviceTime(iso: string | undefined, tz: string): string | null {
 // cadenceSummary renders one schedule's cadence as a single short line. Kept
 // deliberately simple — this renders on a small device screen, not a full
 // calendar editor (there is no editor at all: see the file doc comment).
+/** "09:00" / "09:00, 13:00 and 17:00" — empty when the cadence has no time. */
+function timesLabel(cadence: ScheduleCadence): string {
+  const times = resolveCadenceTimes(cadence);
+  if (times.length === 0) return "";
+  if (times.length === 1) return times[0];
+  return `${times.slice(0, -1).join(", ")} and ${times[times.length - 1]}`;
+}
+
 function cadenceSummary(cadence: ScheduleCadence, tz: string): string {
+  const at = timesLabel(cadence);
   switch (cadence.repeat) {
     case "daily":
-      return cadence.time ? `Daily at ${cadence.time}` : "Daily";
+      return at ? `Daily at ${at}` : "Daily";
     case "weekly": {
       const days = (cadence.days ?? []).map(weekdayLabel).join(", ");
-      const at = cadence.time ? ` at ${cadence.time}` : "";
-      return days ? `Weekly on ${days}${at}` : `Weekly${at}`;
+      const suffix = at ? ` at ${at}` : "";
+      return days ? `Weekly on ${days}${suffix}` : `Weekly${suffix}`;
     }
     case "monthly": {
-      const at = cadence.time ? ` at ${cadence.time}` : "";
-      return cadence.day_of_month ? `Monthly on the ${ordinal(cadence.day_of_month)}${at}` : `Monthly${at}`;
+      return cadence.day_of_month
+        ? `Monthly on the ${ordinal(cadence.day_of_month)}${at ? ` at ${at}` : ""}`
+        : `Monthly${at ? ` at ${at}` : ""}`;
     }
     case "interval":
       return cadence.every_ms ? `Every ${formatMs(cadence.every_ms)}` : "Interval";
