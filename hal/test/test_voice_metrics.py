@@ -593,3 +593,25 @@ def test_a_silent_turn_still_retires_at_its_ttl(kpi):
 
     voice_metrics.boundary(voice_metrics.BOUNDARY_EXPLICIT_STOP)
     assert voice_metrics._watchers[0]["applicable"] == set()
+
+
+def test_current_interaction_serves_audio_os_server_starts(kpi):
+    """The look-aim's filler is played BY os-server, so it has no turn id of
+    its own — it asks for the open interaction and tags the request with it."""
+    iid = voice_metrics.speech_end("silence_clock")
+    assert voice_metrics.current_interaction() == iid
+
+    kpi.clock.advance(1200)
+    _filler(kpi, f"run:{voice_metrics.current_interaction()}")
+    kpi.close_all()
+
+    p = kpi.one(voice_metrics.EVENT_INTERACTION)
+    assert p["ack_modality"] == "waiting_audio"
+    assert p["ack_latency_ms"] == 1200
+
+
+def test_current_interaction_is_empty_once_the_turn_is_done(kpi):
+    """A finished turn must not lend its id to unrelated later audio."""
+    iid = voice_metrics.speech_end("silence_clock")
+    voice_metrics.exclude(iid, voice_metrics.EXCL_REJECTED_NOISE)
+    assert voice_metrics.current_interaction() == ""

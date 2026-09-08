@@ -243,6 +243,22 @@ def _retire_interaction(iid: str) -> None:
         it.closed = True
 
 
+def current_interaction() -> str:
+    """The utterance currently being served, or "" if none is open.
+
+    For audio that os-server starts on HAL's behalf (the look-aim's filler)
+    and therefore has no turn id of its own to carry. Only an interaction that
+    is still active counts: a stale id would credit new audio to a finished
+    turn, which is the guessing this module exists to avoid.
+    """
+    with _lock:
+        for iid in reversed(_order):
+            it = _interactions.get(iid)
+            if it is not None and not it.closed:
+                return iid
+    return ""
+
+
 def set_route(iid: str, route: str, event_type: str = "") -> None:
     """Record how the turn was routed. Late arrivals amend an already-reported
     verdict rather than being silently lost (see _amend)."""
