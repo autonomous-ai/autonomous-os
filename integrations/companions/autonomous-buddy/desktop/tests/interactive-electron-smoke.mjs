@@ -99,7 +99,7 @@ try {
   await application.evaluate(({ dialog }, selected) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selected] })
   }, projectPath)
-  await page.locator('.open-project').click()
+  await page.getByRole('button', { name: 'Add project', exact: true }).click()
   await expect(page.locator('.project-heading')).toContainText('interactive-project')
   await page.locator('.new-tab').click()
   await page.locator('.provider-option').filter({ has: page.locator('strong', { hasText: 'Codex' }) }).click()

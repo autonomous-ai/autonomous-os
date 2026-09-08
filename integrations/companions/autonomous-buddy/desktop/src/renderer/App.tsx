@@ -541,9 +541,6 @@ export function App() {
                   </p>
                 )}
               </div>
-              <button className="open-project" disabled={busy} onClick={() => void addProject()}>
-                <Plus size={15} /> Open project <kbd>local</kbd>
-              </button>
               <footer className="sidebar-footer">
                 <span className="buddy-monogram">a</span>
                 <span>
@@ -830,14 +827,23 @@ export function App() {
             ) : modal === 'worktree' ? (
               <NewWorktree
                 busy={busy}
-                onCreate={async (branch) => {
+                providers={snapshot.providers}
+                onCreate={async (branch, provider) => {
                   if (!project) return
                   setBusy(true)
                   try {
                     const created = await window.buddy.createWorktree(project.id, branch)
-                    await refreshTrees(project)
-                    chooseTree(project.id, created)
                     setModal(null)
+                    chooseTree(project.id, created)
+                    await refreshTrees(project)
+                    try {
+                      const session = await window.buddy.createSession({
+                        projectId: project.id, worktreePath: created.path, provider,
+                      })
+                      chooseSession(session)
+                    } catch (error) {
+                      throw new Error(`Worktree created, but the session could not start: ${error instanceof Error ? error.message : String(error)}`)
+                    }
                   } catch (error) {
                     fail(error)
                   } finally {
@@ -920,13 +926,21 @@ function NewSession({
     </form>
   )
 }
-function NewWorktree({ busy, onCreate }: { busy: boolean; onCreate: (branch: string) => Promise<void> }) {
+function NewWorktree({ busy, providers, onCreate }: {
+  busy: boolean
+  providers: Snapshot['providers']
+  onCreate: (branch: string, provider: Provider) => Promise<void>
+}) {
   const [branch, setBranch] = useState('')
+  const [provider, setProvider] = useState<Provider>(
+    providers.find((item) => item.available && item.id !== 'terminal')?.id ?? 'terminal',
+  )
+  const available = providers.some((item) => item.id === provider && item.available)
   return (
     <form
       onSubmit={(event) => {
         event.preventDefault()
-        void onCreate(branch.trim())
+        void onCreate(branch.trim(), provider)
       }}
     >
       <div className="dialog-icon">
@@ -944,7 +958,15 @@ function NewWorktree({ busy, onCreate }: { busy: boolean; onCreate: (branch: str
         maxLength={150}
         required
       />
-      <button className="primary-button full-width" type="submit" disabled={busy || !branch.trim()}>
+      <label htmlFor="worktree-agent">Agent</label>
+      <select id="worktree-agent" value={provider} disabled={busy} onChange={(event) => setProvider(event.target.value as Provider)}>
+        {(['codex', 'claude', 'terminal'] as Provider[]).map((id) => {
+          const installed = providers.some((item) => item.id === id && item.available)
+          return <option key={id} value={id} disabled={!installed}>{providerName(id)}{installed ? '' : ' — Not installed'}</option>
+        })}
+      </select>
+      <small className="dialog-footnote">Opens the selected agent in the new worktree.</small>
+      <button className="primary-button full-width" type="submit" disabled={busy || !branch.trim() || !available}>
         <GitBranch size={16} />
         {busy ? 'Creating…' : 'Create worktree'}
       </button>

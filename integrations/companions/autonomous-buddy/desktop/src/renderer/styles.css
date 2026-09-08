@@ -332,13 +332,13 @@ h2 {
   padding: 0 6px;
   color: var(--text-primary);
 }
-.project-heading > strong {
+.project-collapse > strong {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
   flex: 1;
 }
-.project-heading > svg {
+.project-collapse > svg {
   color: var(--text-secondary);
 }
 .project-add {
@@ -460,22 +460,6 @@ h2 {
   font-size: 11px;
   line-height: 1.8;
   padding: 15px 12px;
-}
-.open-project {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 8px 12px;
-  padding: 9px 8px;
-  border: 1px solid var(--border-color);
-  border-radius: 5px;
-  color: var(--text-secondary);
-  font-size: 11px;
-  text-align: left;
-}
-.open-project kbd {
-  margin-left: auto;
-  font-size: 9px;
 }
 .sidebar-footer {
   border-top: 1px solid var(--border-color);
@@ -2034,3 +2018,19 @@ code, pre, .file-preview, .transcript-block pre { font-family: var(--font-mono);
 .agent-task-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .session-tab .agent-provider-name, .session-row > .agent-provider-name { overflow: visible; flex: 0 0 auto; }
 .session-pane-identity { display: flex; align-items: center; gap: 7px; min-width: 0; }
+
+.project-collapse {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  color: inherit;
+  padding: 4px 0;
+}
+.project-collapse > svg { flex-shrink: 0; }
+.project-collapse > strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-collapse > .project-worktree-count { margin-left: auto; }
+.project-collapse:focus-visible { outline: 2px solid var(--accent-color); outline-offset: 2px; }
+.project-collapse:disabled { cursor: default; opacity: 1; }

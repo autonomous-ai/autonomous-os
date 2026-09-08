@@ -50,3 +50,9 @@ The layout is saved per original session tab in local UI preferences, including 
 Legacy structured-agent prompt drafts are saved per session as `buddy.draft.<sessionId>` in local UI preferences, so changing tabs or splitting a pane keeps unsent text. A successful send, session close, or explicit session deletion clears that draft. Interactive CLI input belongs to the CLI and does not use this draft store. Terminal hydration respects the focused pane and changing focus does not rebuild its terminal view. Unread updates are cleared automatically only for the focused pane while the app window has focus; returning to the window marks that pane read. Clicking a desktop session notification selects its exact session, including when the window is still loading.
 
 On the first workspace load after upgrading, saved tab-close intents from the old hide-only UI are archived through the same close API. Already archived sessions keep their stored history.
+
+Project headers can collapse/expand their worktrees and nested sessions by mouse or keyboard. The choice is saved locally per project and survives restart; it does not close sessions or change the selected voice target. Search temporarily reveals matching worktrees, then restores the saved collapse state when cleared. The separate + button still creates a worktree.
+
+The sidebar uses the Projects header + button to open/register a project; the duplicate bottom Open project button is removed. The empty-workspace onboarding action remains available.
+
+Create worktree now includes a Codex / Claude Code / Terminal selector; unavailable providers are disabled. Creation opens a session for the chosen provider in that new worktree and selects it. If session startup fails, the created worktree is retained and the error is reported; the dialog closes so retrying cannot accidentally recreate the branch.

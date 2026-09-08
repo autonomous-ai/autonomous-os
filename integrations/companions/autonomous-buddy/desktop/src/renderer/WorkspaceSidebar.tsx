@@ -68,6 +68,15 @@ export function WorkspaceSidebar({
   onRefresh: (project: Project) => Promise<unknown>
   onError: (error: unknown) => void
 }) {
+  const [collapsedProjects, setCollapsedProjects] = useState<Set<string>>(() => {
+    try {
+      const value: unknown = JSON.parse(localStorage.getItem('buddy.collapsedProjects') ?? '[]')
+      return new Set(Array.isArray(value) ? value.filter((id): id is string => typeof id === 'string') : [])
+    } catch { return new Set() }
+  })
+  useEffect(() => {
+    localStorage.setItem('buddy.collapsedProjects', JSON.stringify([...collapsedProjects]))
+  }, [collapsedProjects])
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [menu, setMenu] = useState<Menu | null>(null)
   const [dialog, setDialog] = useState<Dialog | null>(null)
@@ -221,9 +230,25 @@ export function WorkspaceSidebar({
                 </div>
               )}
               <div className="project-heading">
-                <FolderGit2 size={15} />
-                <strong title={project.path}>{project.name}</strong>
-                <span className="project-worktree-count">{found.length}</span>
+                <button
+                  className="project-collapse"
+                  aria-label={`Toggle project ${project.name}`}
+                  aria-expanded={!collapsedProjects.has(project.id) || !!needle}
+                  aria-controls={`project-worktrees-${project.id}`}
+                  disabled={!!needle}
+                  title={needle ? 'Search reveals matching worktrees' : project.path}
+                  onClick={() => setCollapsedProjects((current) => {
+                    const next = new Set(current)
+                    if (next.has(project.id)) next.delete(project.id)
+                    else next.add(project.id)
+                    return next
+                  })}
+                >
+                  {collapsedProjects.has(project.id) && !needle ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
+                  <FolderGit2 size={15} />
+                  <strong>{project.name}</strong>
+                  <span className="project-worktree-count">{found.length}</span>
+                </button>
                 <button
                   className="icon-button project-add"
                   aria-label={`New worktree in ${project.name}`}
@@ -232,6 +257,7 @@ export function WorkspaceSidebar({
                   <Plus size={14} />
                 </button>
               </div>
+              <div id={`project-worktrees-${project.id}`} hidden={collapsedProjects.has(project.id) && !needle}>
               {ordered.map((tree) => {
                 const key = `${project.id}:${tree.path}`
                 const state = meta(project.id, tree.path)
@@ -360,6 +386,7 @@ export function WorkspaceSidebar({
                   </div>
                 )
               })}
+              </div>
             </section>
           )
         })}

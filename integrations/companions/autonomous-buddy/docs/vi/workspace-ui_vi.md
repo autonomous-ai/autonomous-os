@@ -50,3 +50,9 @@ Layout được lưu theo tab session ban đầu trong tùy chọn UI cục bộ
 Bản nháp prompt của agent structured cũ được lưu theo session bằng khóa `buddy.draft.<sessionId>` trong tùy chọn UI cục bộ, nên chuyển tab hoặc chia pane không làm mất nội dung chưa gửi. Gửi thành công, đóng session hoặc xóa session rõ ràng sẽ xóa bản nháp đó. Nội dung nhập trong CLI interactive do CLI quản lý, không dùng kho bản nháp này. Terminal khi nạp lịch sử tôn trọng pane đang focus; đổi focus không tạo lại terminal view. Chỉ tự đánh dấu cập nhật là đã đọc cho pane đang focus khi cửa sổ app có focus; quay lại cửa sổ sẽ đánh dấu pane đó đã đọc. Nhấp thông báo desktop của session chọn đúng session, kể cả khi cửa sổ còn đang nạp.
 
 Khi mở workspace lần đầu sau nâng cấp, các tab đã đóng được lưu từ UI cũ (chỉ ẩn tab) sẽ được lưu trữ qua cùng API đóng session. Lịch sử session vẫn được giữ.
+
+Dòng tiêu đề project cho thu gọn/mở rộng worktree và session bằng chuột hoặc bàn phím. Lựa chọn lưu local theo project, giữ sau khi mở lại app; không đóng session hoặc đổi đích voice đang chọn. Tìm kiếm tạm hiện worktree khớp, xóa tìm kiếm sẽ khôi phục trạng thái thu gọn đã lưu. Nút + riêng vẫn tạo worktree.
+
+Sidebar dùng nút + ở tiêu đề Projects để mở/đăng ký project; đã bỏ nút Open project trùng ở đáy. Thao tác mở project trong màn hình workspace trống vẫn có.
+
+Create worktree bổ sung lựa chọn Codex / Claude Code / Terminal; provider chưa có bị vô hiệu. Tạo xong mở và chọn session của provider đó trong đúng worktree mới. Nếu khởi động session lỗi, giữ worktree đã tạo và báo lỗi; đóng dialog để thao tác thử lại không vô tình tạo lại branch.
