@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -197,10 +198,11 @@ type Config struct {
 	// TTSAPIKey is the API key for the TTS provider (OpenAI, ElevenLabs, …).
 	// Empty falls back to LLMAPIKey so existing one-key configs keep working;
 	// fill this when the TTS account is separate from the LLM account.
-	TTSAPIKey       string `json:"tts_api_key" yaml:"ttsAPIKey"`
-	TTSProvider     string `json:"tts_provider" yaml:"ttsProvider"`
-	TTSVoice        string `json:"tts_voice" yaml:"ttsVoice"`
-	TTSInstructions string `json:"tts_instructions" yaml:"ttsInstructions"`
+	TTSAPIKey       string   `json:"tts_api_key" yaml:"ttsAPIKey"`
+	TTSProvider     string   `json:"tts_provider" yaml:"ttsProvider"`
+	TTSVoice        string   `json:"tts_voice" yaml:"ttsVoice"`
+	TTSSpeed        *float64 `json:"tts_speed,omitempty" yaml:"ttsSpeed"`
+	TTSInstructions string   `json:"tts_instructions" yaml:"ttsInstructions"`
 
 	// AgentRuntime selects which agentic backend to use: "openclaw" (default), "hermes", "picoclaw", "claudecode", etc.
 	AgentRuntime string `json:"agent_runtime" yaml:"agentRuntime"`
@@ -698,4 +700,18 @@ type AutonomousDefaults struct {
 	BaseURL string `json:"base_url,omitempty" yaml:"baseURL"`
 	APIKey  string `json:"api_key,omitempty" yaml:"apiKey"`
 	Model   string `json:"model,omitempty" yaml:"model"`
+}
+
+// GetTTSSpeed prefers the saved rate, retaining legacy HAL_TTS_SPEED on upgrades.
+// os-server loads /opt/hal/.env before constructing services. Legacy rates are
+// clamped to the supported settings range; absent or invalid values use 1.0.
+func (c *Config) GetTTSSpeed() float64 {
+	if c.TTSSpeed != nil {
+		return *c.TTSSpeed
+	}
+	speed, err := strconv.ParseFloat(strings.TrimSpace(os.Getenv("HAL_TTS_SPEED")), 64)
+	if err != nil || math.IsNaN(speed) || math.IsInf(speed, 0) {
+		return 1.0
+	}
+	return math.Max(0.7, math.Min(1.2, speed))
 }

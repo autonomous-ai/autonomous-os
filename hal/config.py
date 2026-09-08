@@ -4,6 +4,7 @@ HAL runtime configuration — all values read from environment variables.
 Import: from hal.config import DEVICE_ID, SERVO_PORT, ...
 """
 
+import math
 import os
 import tempfile
 from pathlib import Path
@@ -71,8 +72,14 @@ if _sensing_device_env:
         AUDIO_SENSING_DEVICE = int(_sensing_device_env)
     except ValueError:
         AUDIO_SENSING_DEVICE = _sensing_device_env
-# TTS speed multiplier — 1.0=normal, 1.3=faster, max 4.0
-TTS_SPEED: float = float(os.environ.get("HAL_TTS_SPEED", "1.3"))
+# Standalone TTS speed fallback. Saved os-server tts_speed takes precedence.
+# Web/MQTT settings use 0.7–1.2; standalone OpenAI supports 0.25–4.0.
+try:
+    TTS_SPEED: float = float(os.environ.get("HAL_TTS_SPEED", "1.0"))
+except ValueError:
+    TTS_SPEED = 1.0
+if not math.isfinite(TTS_SPEED):
+    TTS_SPEED = 1.0
 # TTS voice — one of: alloy, ash, coral, echo, fable, onyx, nova, sage, shimmer
 TTS_VOICE: str = os.environ.get("TTS_VOICE", "nova")
 # TTS instructions — style/vibe prompt for voice (e.g. "Speak warmly like a caring friend")

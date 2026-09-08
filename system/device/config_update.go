@@ -47,6 +47,7 @@ func (s *Service) GetPublicConfig() domain.ConfigPublicResponse {
 		STTModel:           s.config.STTModel,
 		TTSProvider:        s.config.TTSProvider,
 		TTSVoice:           s.config.TTSVoice,
+		TTSSpeed:           s.config.GetTTSSpeed(),
 		WakeWord:           s.config.WakeWordEnabled(),
 		AgentName:          agentName,
 		WakePhrases:        i18n.BuildSupportedVoiceWakeWords(agentName, deviceType),
@@ -152,6 +153,7 @@ func bootFields(c *config.Config) bootSnapshot {
 // any admin click landing in the window is lost.
 type ttsSnapshot struct {
 	ttsProvider string
+	ttsSpeed    float64
 	ttsVoice    string
 	ttsAPIKey   string
 	ttsBaseURL  string
@@ -161,6 +163,7 @@ func ttsFields(c *config.Config) ttsSnapshot {
 	return ttsSnapshot{
 		ttsProvider: c.TTSProvider,
 		ttsVoice:    c.TTSVoice,
+		ttsSpeed:    c.GetTTSSpeed(),
 		ttsAPIKey:   c.TTSAPIKey,
 		ttsBaseURL:  c.TTSBaseURL,
 	}
@@ -362,6 +365,10 @@ func applyVoicePipelineFields(c *config.Config, data domain.UpdateConfigRequest,
 	if data.TTSVoice != "" {
 		c.TTSVoice = data.TTSVoice
 	}
+	if data.TTSSpeed != nil {
+		speed := *data.TTSSpeed
+		c.TTSSpeed = &speed
+	}
 	// Realtime block (validated by the caller before the lock).
 	if data.Realtime != nil {
 		before := realtimeFingerprint(c)
@@ -452,6 +459,9 @@ func applyMQTTFields(c *config.Config, data domain.UpdateConfigRequest) {
 // llm_model/thinking → openclaw, stt_language → openclaw NewSession + hal,
 // voice-pipeline fields → hal. Other fields persist only; restart os-server for full effect.
 func (s *Service) UpdateConfig(data domain.UpdateConfigRequest) error {
+	if err := domain.ValidateTTSSpeed(data.TTSSpeed); err != nil {
+		return err
+	}
 	// bcrypt is CPU-intensive; compute before acquiring the config lock.
 	var adminHash string
 	if data.AdminPassword != "" {
@@ -596,40 +606,11 @@ func (s *Service) syncLLMToGateway(ch updateChanges) {
 	}
 }
 
-// UpdateVoiceConfig updates only TTS provider/voice and STT language — safe to call from MQTT
-// handlers since it does not touch API keys, MQTT credentials, or WiFi config.
-func (s *Service) UpdateVoiceConfig(provider, voice, language string) error {
-	prevLang := s.config.STTLanguage
-	if provider != "" {
-		s.config.TTSProvider = provider
-	}
-	if voice != "" {
-		s.config.TTSVoice = voice
-	}
-	if language != "" {
-		s.config.STTLanguage = language
-		s.config.STTModel = sttModelForLanguage(language)
-	}
-	if err := s.config.Save(); err != nil {
-		return fmt.Errorf("save config: %w", err)
-	}
-	slog.Info("voice config updated", "component", "device", "provider", s.config.TTSProvider, "voice", s.config.TTSVoice, "language", s.config.STTLanguage)
-	if language != "" && prevLang != s.config.STTLanguage && s.agentGateway != nil {
-		if key := s.agentGateway.GetSessionKey(); key != "" {
-			go func() {
-				if err := s.agentGateway.NewSession(key); err != nil {
-					slog.Warn("NewSession on language change failed", "component", "device", "error", err)
-				}
-			}()
-		}
-	}
-	if language != "" && prevLang != s.config.STTLanguage {
-		// stt_language is read at boot; nothing can be pushed for it.
-		s.restartHAL("stt language change")
-	} else {
-		s.applyTTSConfig(s.config)
-	}
-	return nil
+// UpdateVoiceConfig applies MQTT voice settings using the HTTP update path.
+func (s *Service) UpdateVoiceConfig(provider, voice, language string, speed *float64) error {
+	return s.UpdateConfig(domain.UpdateConfigRequest{
+		TTSProvider: provider, TTSVoice: voice, STTLanguage: language, TTSSpeed: speed,
+	})
 }
 
 // sttModelForLanguage maps a BCP-47 language code to the Deepgram SKU exposed

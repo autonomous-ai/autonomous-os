@@ -354,6 +354,7 @@ export interface DeviceConfig {
   stt_model: string;
   tts_provider: string;
   tts_voice: string;
+  tts_speed?: number;
   wakeword: boolean;
   agent_name: string;
   wake_phrases: string[];
@@ -464,6 +465,7 @@ export async function setTimezone(timezone: string): Promise<boolean> {
 }
 
 export interface TestTTSOptions {
+  speed?: number;
   text?: string;
   /** BCP-47 stt_language code; picks a friendly demo phrase in that language. */
   lang?: string;
@@ -499,6 +501,7 @@ export async function testTTSVoice(voice: string, opts: TestTTSOptions = {}): Pr
     body: JSON.stringify({
       text: opts.text || demoPhraseFor(opts.lang),
       voice,
+      speed: opts.speed,
       provider: opts.provider || undefined,
       base_url: opts.baseUrl || undefined,
       api_key: opts.apiKey || undefined,

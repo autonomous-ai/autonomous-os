@@ -187,8 +187,9 @@ func Speak(text string) error {
 // provider and voice per utterance, so this takes effect on the next sentence
 // — where the restart it replaces took the microphone, speaker and wake word
 // down with it for ten to fifteen seconds.
-func ApplyTTSConfig(provider, voice, apiKey, baseURL string) error {
-	body, _ := json.Marshal(map[string]string{
+func ApplyTTSConfig(provider, voice, apiKey, baseURL string, speed float64) error {
+	body, _ := json.Marshal(map[string]any{
+		"speed":    speed,
 		"provider": provider,
 		"voice":    voice,
 		"api_key":  apiKey,
@@ -309,8 +310,11 @@ func SpeakCachedInterruptibleForTurn(text, turnID string) error {
 // the os-server reads the key server-side from config and passes it here. Each arg
 // can be empty: HAL falls back to its own config-loaded defaults when a
 // field is missing, so partial overrides (e.g. just voice) work.
-func SpeakPreview(text, voice, provider, apiKey, baseURL string) error {
+func SpeakPreview(text, voice, provider, apiKey, baseURL string, speed *float64) error {
 	payload := map[string]any{"text": text}
+	if speed != nil {
+		payload["speed"] = *speed
+	}
 	if voice != "" {
 		payload["voice"] = voice
 	}
@@ -393,6 +397,7 @@ func MaxVolume() (int, bool) {
 // the TTS provider. Empty STTKey/TTSKey means HAL falls back to
 // LLMKey — keep them empty when one credential covers everything.
 type VoiceStartConfig struct {
+	TTSSpeed        float64
 	DeepgramKey     string
 	LLMKey          string
 	STTKey          string
@@ -407,10 +412,13 @@ type VoiceStartConfig struct {
 
 // StartVoice starts the voice pipeline with the given config.
 func StartVoice(cfg VoiceStartConfig) error {
-	payload := map[string]string{
+	payload := map[string]any{
 		"deepgram_api_key": cfg.DeepgramKey,
 		"llm_api_key":      cfg.LLMKey,
 		"llm_base_url":     cfg.LLMBaseURL,
+	}
+	if cfg.TTSSpeed != 0 {
+		payload["tts_speed"] = cfg.TTSSpeed
 	}
 	if cfg.STTKey != "" {
 		payload["stt_api_key"] = cfg.STTKey

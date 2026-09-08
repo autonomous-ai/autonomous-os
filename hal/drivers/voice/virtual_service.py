@@ -11,8 +11,9 @@ class VirtualTTSService:
     available = True
     speaking = False
 
-    def __init__(self, voice: str = "nova", instructions: str | None = None, **_):
+    def __init__(self, voice: str = "nova", instructions: str | None = None, speed: float = 1.0, **_):
         self._voice = voice
+        self._speed = speed
         self._instructions = instructions
         self._provider = "virtual"
         self._backend = _VirtualBackend()

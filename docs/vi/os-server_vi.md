@@ -341,10 +341,38 @@ Cần sensing có camera (InsightFace). Mặc định ảnh người đã đăng
 
 | Method | Endpoint | Mô tả |
 |--------|----------|-------|
-| POST | `/voice/start` | Start voice pipeline (Deepgram STT + TTS) |
+| POST | `/voice/start` | Start voice pipeline (Deepgram STT + TTS), nhận `tts_speed?` |
 | POST | `/voice/stop` | Stop voice pipeline |
-| POST | `/voice/speak` | TTS — chuyển text thành giọng nói. Body fields: `text`, `voice?`, `interruptible?`, `provider?`, `tts_api_key?`, `tts_base_url?`, `cached?` (dùng WAV cache, render+save khi miss), `prerender?` (render+save không play — warmup lúc boot) |
+| POST | `/voice/speak` | TTS — chuyển text thành giọng nói. Body fields: `text`, `voice?`, `speed?`, `interruptible?`, `provider?`, `tts_api_key?`, `tts_base_url?`, `cached?` (dùng WAV cache, render+save khi miss), `prerender?` (render+save không play — warmup lúc boot) |
 | GET | `/voice/status` | voice_available, voice_listening, tts_available, tts_speaking |
+
+### Tốc độ TTS
+
+`GET /api/device/config` trả `tts_speed` hiệu lực; `PUT /api/device/config`
+nhận `{"tts_speed":1.2}`. Giá trị tùy chọn được lưu trong config, hợp lệ
+từ `0.7` đến `1.2`; bỏ qua field thì giữ nguyên giá trị đã lưu.
+Giá trị ngoài khoảng bị từ chối. `POST /api/voice/preview` nhận `speed` tùy
+chọn trong cùng khoảng để nghe thử mà không ghi config.
+
+Thay đổi riêng tốc độ được đẩy live qua HAL `POST /voice/tts/config {speed}`.
+Các runtime và healthwatch gửi tốc độ hiệu lực qua `/voice/start {tts_speed}`;
+HAL cũng đọc tốc độ từ config khi boot. Giá trị đã lưu được ưu tiên; khi
+chưa có field, Go và HAL lấy `HAL_TTS_SPEED` hữu hạn, giới hạn về `0.7–1.2`,
+rồi dùng `1.0` nếu biến môi trường vắng hoặc không hợp lệ. Nhờ vậy, thiết bị
+cũ có `HAL_TTS_SPEED=1.1` nhưng chưa lưu speed vẫn giữ tốc độ `1.1`. HAL chạy
+độc lập đổi mặc định biến môi trường từ `1.3` thành `1.0`. Restore defaults của Voice chỉ
+khôi phục credentials, giữ tốc độ đã chọn. Cả HTTP và WebSocket ElevenLabs
+luôn gửi `voice_settings.speed`, kể cả `1.0`, để ép tốc độ bình thường.
+Cache TTS chứa speed trong khóa; cập nhật live làm ấm lại các câu lifecycle.
+
+Model hiện tại `eleven_v3` không hỗ trợ điều chỉnh speed, theo
+[tài liệu ElevenLabs](https://elevenlabs.io/docs/eleven-creative/playground/text-to-speech#speed).
+Lưu setting không thay đổi tốc độ nói của model này; model vẫn được giữ nguyên.
+Kiểm tra proxy từ thiết bị (2026-09-08): qua `campaign-api`, `eleven_v3` trả
+âm thanh dài 10.08 giây ở cả `0.7`, `1.0` và `1.2` với cùng text và seed.
+Thử riêng `eleven_flash_v2_5` cho thời lượng lần lượt 16.068, 11.285 và
+8.916 giây, xác nhận speed có tác dụng với model đó. Tỷ lệ thời lượng không
+nhất thiết khớp chính xác với tốc độ đã chọn.
 
 ### Piper — TTS chạy trên thiết bị
 
@@ -415,12 +443,12 @@ từng request, đường dẫn model phân giải theo từng câu nói, nên g
 là liệt kê và nói được ngay — đã đo: tải xong lúc 18:32:29 trên một HAL khởi
 động lúc 18:31:59, tới 18:33:11 liệt kê và nói được mà không restart lần nào.
 Việc apply một giọng cũng **không** còn restart HAL. `POST /voice/tts/config`
-đặt provider, voice, key và base URL thẳng vào TTS service đang chạy, mà service
-đọc cả bốn thứ đó theo từng câu nói, nên thay đổi ăn ngay từ câu kế tiếp.
+đặt provider, voice, speed, key và base URL thẳng vào TTS service đang chạy, mà service
+đọc các giá trị đó theo từng câu nói, nên thay đổi ăn ngay từ câu kế tiếp.
 
 Những câu máy nói về chính nó — restart, shutdown, reboot, sleep — được
-**dựng sẵn vào cache TTS**, lúc boot và mỗi khi `/voice/tts/config` đổi provider
-hoặc giọng (cache key gồm cả hai, nên đổi giọng là mất sạch clip cũ). Chúng phát
+**dựng sẵn vào cache TTS**, lúc boot và mỗi khi `/voice/tts/config` đổi provider,
+giọng hoặc speed (đều nằm trong cache key, nên thay đổi làm mất hiệu lực clip tương ứng). Chúng phát
 đúng vào những lúc tệ nhất: câu báo restart nói trong lúc HAL đang tắt, câu chào
 boot nói lúc mọi service khác còn đang lên. Với Piper, cache miss ở đó nghĩa là
 nạp model 63 MB trên một CPU đang nghẹt — đo trên sun60iw2 8 nhân, riêng phần
@@ -480,7 +508,7 @@ backend ElevenLabs nối thêm `/elevenlabs` vào bất kỳ base nào được 
 
 `device/config_update.go` tách cái `voiceSnapshot` cũ làm hai: `bootSnapshot`
 (key và URL của LLM, STT — HAL đọc thật lúc import, vẫn đáng restart) và
-`ttsSnapshot` (provider, voice, key và URL của TTS — đẩy thẳng vào lúc chạy).
+`ttsSnapshot` (provider, voice, speed, key và URL của TTS — đẩy thẳng vào lúc chạy).
 Đổi giọng là thao tác lưu thường gặp nhất, mà restart vì nó thì micro, loa và
 wake word chết theo mười tới mười lăm giây; mọi cú bấm rơi vào cửa sổ đó đều
 mất, vì HAL không nghe. Nếu đẩy live thất bại, os-server quay về restart — một

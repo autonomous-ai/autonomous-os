@@ -7,6 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"go.autonomous.ai/os/system/domain"
 	"go.autonomous.ai/os/system/lib/hal"
 	"go.autonomous.ai/os/system/server/serializers"
 )
@@ -18,9 +19,10 @@ import (
 // shipped tts_api_key in the request body straight to /hw/voice/speak.
 func (s *Server) voicePreview(c *gin.Context) {
 	var body struct {
-		Text     string `json:"text"`
-		Voice    string `json:"voice"`
-		Provider string `json:"provider"`
+		Text     string   `json:"text"`
+		Speed    *float64 `json:"speed,omitempty"`
+		Voice    string   `json:"voice"`
+		Provider string   `json:"provider"`
 		// Optional overrides — populated by the admin's Test Voice button
 		// so the operator can validate pending BaseURL / APIKey edits
 		// BEFORE hitting Save Changes. Empty = fall back to saved config
@@ -36,6 +38,10 @@ func (s *Server) voicePreview(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, serializers.ResponseError("text required"))
 		return
 	}
+	if err := domain.ValidateTTSSpeed(body.Speed); err != nil {
+		c.JSON(http.StatusBadRequest, serializers.ResponseError(err.Error()))
+		return
+	}
 	// Prefer the pending overrides so Test Voice actually tests the fields
 	// the operator can see on-screen. Falls back to saved config for any
 	// override the caller omitted (e.g. old Test buttons that only send
@@ -48,7 +54,7 @@ func (s *Server) voicePreview(c *gin.Context) {
 	if apiKey == "" {
 		apiKey = s.config.GetTTSAPIKey()
 	}
-	if err := hal.SpeakPreview(body.Text, body.Voice, body.Provider, apiKey, baseURL); err != nil {
+	if err := hal.SpeakPreview(body.Text, body.Voice, body.Provider, apiKey, baseURL, body.Speed); err != nil {
 		slog.Warn("voice preview failed", "component", "voice", "error", err)
 		c.JSON(http.StatusBadGateway, serializers.ResponseError("preview failed: "+err.Error()))
 		return

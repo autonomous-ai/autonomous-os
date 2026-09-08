@@ -241,6 +241,7 @@ func (s *Service) restartVoice() {
 
 	// Always attempt restart — HAL falls back to AutonomousSTT if no Deepgram key.
 	if err := hal.StartVoice(hal.VoiceStartConfig{
+		TTSSpeed:    s.cfg.GetTTSSpeed(),
 		DeepgramKey: s.cfg.DeepgramAPIKey,
 		LLMKey:      s.cfg.LLMAPIKey,
 		LLMBaseURL:  s.cfg.LLMBaseURL,

@@ -34,6 +34,7 @@ func (s *OpenclawService) StartHALVoice(deepgramKey, llmKey, sttKey, ttsKey, llm
 		return nil
 	}
 	if err := hal.StartVoice(hal.VoiceStartConfig{
+		TTSSpeed:        s.config.GetTTSSpeed(),
 		DeepgramKey:     deepgramKey,
 		LLMKey:          llmKey,
 		STTKey:          sttKey,

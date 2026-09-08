@@ -119,6 +119,15 @@ Góc dưới sidebar hiển thị trạng thái OpenClaw (online/offline) và th
 
 ### 3.4 Settings (`/setting`) — shell dùng chung
 
+**Speech speed** trong Voice (`/setting#tts`) có thanh trượt `0.7–1.2×`,
+bước `0.05`, tải tốc độ hiệu lực từ config (giá trị đã lưu, sau đó
+`HAL_TTS_SPEED` giới hạn trong khoảng, rồi `1.0×`). Thay đổi được tính vào trạng thái chưa lưu và
+**Save Changes** ghi `tts_speed` qua `PUT /api/device/config`. **Test Voice**
+gửi tốc độ đang chọn, kể cả chưa lưu, dưới field `speed` tới
+`POST /api/voice/preview`; nghe thử không thay đổi config đã lưu. Model ElevenLabs `eleven_v3` hiện tại
+không hỗ trợ điều chỉnh speed; lưu speed vẫn giữ nguyên model. Xem
+[tài liệu ElevenLabs](https://elevenlabs.io/docs/eleven-creative/playground/text-to-speech#speed).
+
 **Mirror key/URL từ AI Brain.** Panel tự điền ô TTS hoặc STT còn trống bằng key
 và base URL của AI Brain, để lần setup đầu chỉ phải nhập một bộ. Riêng phần key
 còn phải thoả điều kiện máy **chưa có key nào** (`has_tts_api_key` /

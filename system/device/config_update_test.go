@@ -371,3 +371,45 @@ func TestCaptureSkipsADeviceWithNoCredentials(t *testing.T) {
 		t.Fatalf("captured an empty set: %+v", c.AutonomousDefaults)
 	}
 }
+
+func TestApplyUpdateTTSSpeed(t *testing.T) {
+	t.Setenv("HAL_TTS_SPEED", "")
+	c := baseConfig()
+	speed := 1.2
+	ch := applyUpdate(c, domain.UpdateConfigRequest{TTSSpeed: &speed}, "")
+	if c.GetTTSSpeed() != 1.2 || !ch.tts || ch.halBoot || ch.lang {
+		t.Fatalf("speed update: %v %+v", c.GetTTSSpeed(), ch)
+	}
+	ch = applyUpdate(c, domain.UpdateConfigRequest{}, "")
+	if c.GetTTSSpeed() != 1.2 || ch.tts {
+		t.Fatal("omitted speed changed state")
+	}
+	ch = applyUpdate(c, domain.UpdateConfigRequest{TTSSpeed: &speed}, "")
+	if ch.tts {
+		t.Fatal("same speed triggered live apply")
+	}
+	speed = 1
+	ch = applyUpdate(c, domain.UpdateConfigRequest{TTSSpeed: &speed}, "")
+	if c.GetTTSSpeed() != 1 || !ch.tts {
+		t.Fatal("normal speed not restored")
+	}
+}
+
+func TestTTSSpeedRejectsBeforeMutation(t *testing.T) {
+	t.Setenv("HAL_TTS_SPEED", "")
+	c := baseConfig()
+	s := &Service{config: c}
+	speed := 0.0
+	if err := s.UpdateConfig(domain.UpdateConfigRequest{TTSSpeed: &speed, TTSVoice: "changed"}); err == nil {
+		t.Fatal("HTTP service accepted zero")
+	}
+	if err := s.UpdateVoiceConfig("elevenlabs", "changed", "vi", &speed); err == nil {
+		t.Fatal("MQTT service accepted zero")
+	}
+	if c.TTSVoice != "alloy" || c.TTSProvider != "openai" || c.STTLanguage != "en" || c.TTSSpeed != nil {
+		t.Fatal("invalid speed partially mutated config")
+	}
+	if got := s.GetPublicConfig().TTSSpeed; got != 1 {
+		t.Fatalf("public default %v", got)
+	}
+}

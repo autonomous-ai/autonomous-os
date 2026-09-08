@@ -29,6 +29,7 @@ func (s *HermesService) StartHALVoice(deepgramKey, llmKey, sttKey, ttsKey, llmBa
 		return nil
 	}
 	if err := hal.StartVoice(hal.VoiceStartConfig{
+		TTSSpeed:        s.config.GetTTSSpeed(),
 		DeepgramKey:     deepgramKey,
 		LLMKey:          llmKey,
 		STTKey:          sttKey,

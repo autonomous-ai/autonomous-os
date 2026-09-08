@@ -65,12 +65,18 @@ def start_voice(req: VoiceStartRequest):
         if not state.tts_service:
             state.tts_service = VirtualTTSService(
                 voice=req.tts_voice or TTS_VOICE,
+                speed=req.tts_speed if req.tts_speed is not None else TTS_SPEED,
                 instructions=req.tts_instructions or TTS_INSTRUCTIONS or None,
             )
+        if req.tts_speed is not None:
+            state.tts_service._speed = req.tts_speed
         if not state.voice_service:
             state.voice_service = VirtualVoiceService(tts_service=state.tts_service)
         return {"status": "already_running" if state.voice_service.listening else "ok"}
     voice = req.tts_voice or TTS_VOICE
+    # Older callers omit speed. Preserve the live/saved value when they
+    # rebuild TTS for another setting instead of resetting it to the env.
+    speed = req.tts_speed if req.tts_speed is not None else getattr(state.tts_service, "_speed", TTS_SPEED)
     instructions = req.tts_instructions or TTS_INSTRUCTIONS or None
     # Resolve per-role credentials with fallback to the LLM defaults so
     # households with one shared credential keep working.
@@ -105,7 +111,7 @@ def start_voice(req: VoiceStartRequest):
                 numpy_module=np,
                 output_device=state.audio_output_device,
                 voice=voice,
-                speed=TTS_SPEED,
+                speed=speed,
                 instructions=instructions,
                 on_speak_start=state._on_tts_speak_start,
                 on_speak_end=state._on_tts_speak_end,
@@ -122,6 +128,9 @@ def start_voice(req: VoiceStartRequest):
                 state.music_service._tts_service = state.tts_service
         except Exception as e:
             state.logger.warning(f"TTSService failed: {e}")
+
+    if state.tts_service and req.tts_speed is not None:
+        state.tts_service._speed = req.tts_speed
 
     if state.voice_service and state.voice_service.available:
         if need_tts and state.tts_service:
@@ -241,7 +250,7 @@ def update_tts_config(req: TTSConfigRequest):
     if req.voice:
         svc._voice = req.voice
     if req.speed is not None:
-        svc._speed = max(0.25, min(4.0, float(req.speed)))
+        svc._speed = req.speed
     state.logger.info(
         "TTS config applied live (provider=%s, voice=%s, speed=%s)",
         svc._provider, svc._voice, svc._speed,
@@ -359,6 +368,9 @@ def speak_text(req: SpeakRequest):
         )
     if req.voice:
         state.tts_service._voice = req.voice
+    # Preview speed belongs to this utterance. Changing the service default
+    # here would affect later replies even when preview is rejected as busy.
+    speed_override = {"speed": req.speed} if req.speed is not None else {}
     # Don't dump req.model_dump_json() — it contains tts_api_key. Log shape only.
     state.logger.info(
         "POST /voice/speak: provider=%s voice=%s len=%d interruptible=%s cached=%s prerender=%s",
@@ -379,6 +391,7 @@ def speak_text(req: SpeakRequest):
             # (os-server sets it for dead-air fillers). Playback behaviour is
             # unchanged — turn_seq gating stays exclusive to /voice/speak-queue.
             turn_id=req.turn_id,
+            **speed_override,
         )
         if not started:
             # HTTPException's second positional arg is `detail`, not a status —
@@ -395,6 +408,7 @@ def speak_text(req: SpeakRequest):
         interruptible=req.interruptible,
         realtime_feedback=req.realtime_feedback,
         turn_id=req.turn_id,
+        **speed_override,
     )
     if not started:
         raise HTTPException(409, "TTS is busy speaking")

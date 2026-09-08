@@ -322,6 +322,7 @@ class SpeakRequest(BaseModel):
     provider: Optional[str] = Field(None, description="Override TTS provider: 'openai' or 'elevenlabs'")
     tts_api_key: Optional[str] = Field(None, description="API key for provider override")
     tts_base_url: Optional[str] = Field(None, description="Base URL for provider override")
+    speed: Optional[float] = Field(None, ge=0.7, le=1.2, allow_inf_nan=False, description="TTS preview speed; 1.0 is normal")
     # Cache controls — see tts_service.speak_cached(). Cache key includes
     # provider/voice/model/speed/text so config changes invalidate naturally.
     cached: bool = Field(False, description="Look up WAV cache; render+save on miss")
@@ -709,6 +710,7 @@ class VoiceStartRequest(BaseModel):
     tts_voice: str = Field(
         "", description="TTS voice name (optional, defaults to config TTS_VOICE)"
     )
+    tts_speed: Optional[float] = Field(None, ge=0.7, le=1.2, allow_inf_nan=False)
     tts_instructions: str = Field(
         "", description="TTS style/vibe instructions (optional, e.g. 'Speak warmly')"
     )
@@ -725,7 +727,7 @@ class TTSConfigRequest(BaseModel):
     voice: Optional[str] = None
     api_key: Optional[str] = None
     base_url: Optional[str] = None
-    speed: Optional[float] = None
+    speed: Optional[float] = Field(None, ge=0.7, le=1.2, allow_inf_nan=False)
 
 
 class VoiceConfigRequest(BaseModel):

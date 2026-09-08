@@ -325,12 +325,23 @@ carries kind-specific fields. Every kind replies on fd_channel with the same sha
 the standard device/version metadata plus `kind`, `status` (`success|failure`),
 optional `error`, and an optional `data` payload.
 
+`tts.set` accepts optional `speed` from `0.7` through `1.2`; for example,
+`{"cmd":"data","kind":"tts.set","data":{"speed":1.2}}`. Omitting speed
+preserves the saved value; without one, effective speed uses `HAL_TTS_SPEED`
+(clamped to `0.7–1.2`; absent/invalid → `1.0`). The handler uses
+the HTTP config update path, acknowledging `starting` then `success` or
+`failure`; success means settings were saved and the HAL update scheduled.
+A speed-only change applies live. `tts.preview` accepts `speed` in the same
+range without writing config. Both commands reject out-of-range values.
+The `info` uplink always includes effective `tts_speed`, including the
+environment fallback when no speed is saved.
+
 **Receive:** `{"cmd": "data", "kind": "<kind>", "data": { ... }}`
 
 | Kind | Purpose | `data` fields |
 |------|---------|---------------|
-| `tts.set` | Persist TTS voice/provider/language config | `provider`, `voice`, `language` |
-| `tts.preview` | One-shot TTS preview (no config write) | `text` (required), optional `provider`/`voice`/`language` |
+| `tts.set` | Persist TTS voice/provider/language/speed config | `provider`, `voice`, `language`, optional `speed` |
+| `tts.preview` | One-shot TTS preview (no config write) | `text` (required), optional `provider`/`voice`/`language`/`speed` |
 | `wakeword.gate` | Set the top-level wake-word gate (async; acks `starting`) | `enabled` (required boolean) |
 | `timezone.set` | Apply the device's IANA timezone (async; acks `starting`) | `timezone` (required, e.g. `Asia/Ho_Chi_Minh`) |
 | `oauth.set` | Store/replace an OAuth token for a provider | `provider`, `access_token`, optional `refresh_token`/`token_type`/`expires_at`/`scopes`/`user_email`/`client_id` |

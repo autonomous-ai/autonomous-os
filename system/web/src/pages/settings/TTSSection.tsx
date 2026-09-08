@@ -193,6 +193,7 @@ export function TTSSection({
   // server-driven provider list is a drop-in swap.
   ttsProvider, setTtsProvider, ttsProviders: _ttsProviders,
   ttsVoice, setTtsVoice, ttsVoices,
+  ttsSpeed, setTtsSpeed,
   sttLanguage,
 }: {
   active: boolean;
@@ -204,6 +205,7 @@ export function TTSSection({
   ttsProviders: string[];
   ttsVoice: string; setTtsVoice: (v: string) => void;
   ttsVoices: string[];
+  ttsSpeed: number; setTtsSpeed: (v: number) => void;
   sttLanguage: string;
 }) {
   // Choice is stored as state (not derived) so the operator can pick
@@ -486,8 +488,27 @@ export function TTSSection({
             <option key={v} value={v}>{displayVoice(v)}</option>
           ))}
         </select>
+      </div>
+
+      <div style={{ marginBottom: 12 }}>
+        <label htmlFor="tts_speed" style={labelStyle}>Speech speed: {ttsSpeed.toFixed(2)}×</label>
+        <input
+          id="tts_speed"
+          type="range"
+          min={0.7}
+          max={1.2}
+          step={0.05}
+          value={ttsSpeed}
+          onChange={(e) => setTtsSpeed(Number(e.target.value))}
+          aria-valuetext={`${ttsSpeed.toFixed(2)} times normal speed`}
+          style={{ width: "100%", accentColor: C.green }}
+        />
+        <div style={{ fontSize: 10.5, color: C.textMuted, marginTop: 4 }}>
+          0.7× slower · 1.0× normal · 1.2× faster. Test before saving.
+        </div>
         <TestVoiceButton
           voice={ttsVoice}
+          speed={ttsSpeed}
           lang={piperLang || lang || sttLanguage}
           provider={ttsProvider}
           baseUrl={ttsBaseUrl}
@@ -514,8 +535,9 @@ export function TTSSection({
 // ("Playing on device") for ~2.5s → back to idle. Errors flip to a red
 // "Failed" state for the same window. Prior version fired-and-forgot with no
 // visual change — the operator saw nothing happen and clicked again.
-function TestVoiceButton({ voice, lang, provider, baseUrl, apiKey, blockedReason = "" }: {
+function TestVoiceButton({ voice, speed, lang, provider, baseUrl, apiKey, blockedReason = "" }: {
   voice: string;
+  speed: number;
   lang: string;
   provider: string;
   // Non-empty when the device cannot possibly speak yet — a Piper voice whose
@@ -539,7 +561,7 @@ function TestVoiceButton({ voice, lang, provider, baseUrl, apiKey, blockedReason
     setPhase("loading");
     setErrorMsg("");
     try {
-      await testTTSVoice(voice, { lang, provider, baseUrl, apiKey });
+      await testTTSVoice(voice, { speed, lang, provider, baseUrl, apiKey });
       setPhase("ok");
       window.setTimeout(() => setPhase("idle"), 2500);
     } catch (err) {
