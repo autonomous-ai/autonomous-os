@@ -10,7 +10,6 @@ from __future__ import annotations
 import base64
 import json
 import logging
-from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -23,6 +22,10 @@ from hal.drivers.voice.speech_emotion.base import (
     BaseSpeechEmotionRecognizer,
     SpeechEmotionResult,
 )
+from hal.drivers.voice._internal.config import (
+    SILERO_MODEL_PATH as _SILERO_MODEL_PATH,
+)
+from hal.drivers.voice._internal.vad_filters import shared_silero_session
 from hal.drivers.voice.speech_emotion.constants import (
     DEFAULT_API_TIMEOUT_S,
     PREFILTER_FRAME_MS,
@@ -51,13 +54,10 @@ from hal.drivers.voice.speech_emotion.utils import (
 
 logger = logging.getLogger("hal.voice.speech_emotion.engine")
 
-# Silero VAD ONNX model — voice_service.py loads its own InferenceSession
-# from the same file for the per-frame VAD trigger. Path kept in sync with
-# voice_service.py:_SILERO_MODEL_PATH; if either side moves the model file
-# the other one will silently fall back to its RMS-only path.
-_SILERO_MODEL_PATH: Path = (
-    Path(__file__).resolve().parent.parent / "resources" / "silero_vad.onnx"
-)
+# Silero VAD ONNX model. The path and the session both come from the voice
+# internals now, so there is exactly one definition of each and nothing to keep
+# in sync by hand — the previous copy here duplicated the path and pointed at a
+# `voice_service.py:_SILERO_MODEL_PATH` that no longer exists.
 
 
 class Emotion2VecRecognizer(BaseSpeechEmotionRecognizer):
@@ -364,37 +364,25 @@ class Emotion2VecRecognizer(BaseSpeechEmotionRecognizer):
         return out_wav
 
     def _load_silero(self) -> Optional[object]:
-        """Lazy-load Silero ONNX. Returns None on any failure (model file
-        missing, onnxruntime broken, ABI mismatch) — caller treats None as
-        "Silero unavailable" and falls back to a stricter RMS bar.
+        """Get the process-wide Silero ONNX session, shared with the voice
+        capture path. Returns None on any failure (model file missing,
+        onnxruntime broken, ABI mismatch) — caller treats None as "Silero
+        unavailable" and falls back to a stricter RMS bar.
+
+        Concurrency: this session is used from the SER worker thread while the
+        capture thread drives the same object. That is safe — see
+        `vad_filters.shared_silero_session`. The `state`/`context` this class
+        builds per call stay local to the call, which is what makes it so.
         """
-        if not _SILERO_MODEL_PATH.exists():
-            logger.info(
-                "[prefilter] Silero model not found at %s — RMS-only prefilter",
-                _SILERO_MODEL_PATH,
-            )
+        session = shared_silero_session(_SILERO_MODEL_PATH)
+        if session is None:
+            logger.info("[prefilter] Silero unavailable — RMS-only prefilter")
             return None
-        try:
-            import onnxruntime as ort
-            sess_opts = ort.SessionOptions()
-            sess_opts.intra_op_num_threads = 1
-            sess_opts.inter_op_num_threads = 1
-            sess_opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
-            session = ort.InferenceSession(
-                str(_SILERO_MODEL_PATH),
-                sess_options=sess_opts,
-                providers=["CPUExecutionProvider"],
-            )
-            logger.info(
-                "[prefilter] Silero VAD loaded (threshold=%.2f, min_voiced=%.1fs)",
-                PREFILTER_SILERO_THRESHOLD, PREFILTER_VAD_MIN_VOICED_S,
-            )
-            return session
-        except Exception as e:
-            logger.warning(
-                "[prefilter] Silero load failed (%s) — RMS-only prefilter", e,
-            )
-            return None
+        logger.info(
+            "[prefilter] Silero VAD ready (threshold=%.2f, min_voiced=%.1fs)",
+            PREFILTER_SILERO_THRESHOLD, PREFILTER_VAD_MIN_VOICED_S,
+        )
+        return session
 
     def _silero_voiced_seconds(
         self, samples: npt.NDArray[np.int16], sample_rate: int,
