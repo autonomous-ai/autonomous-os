@@ -109,3 +109,15 @@ Người dùng có thể nói “Mở Airbnb tìm chỗ ở Đà Nẵng giúp m�
 Trước khi đọc app đích bằng hình ảnh, agent liệt kê màn hình. `is_main` đánh dấu màn hình chính, không xác định cửa sổ của app đang hoạt động nằm ở đâu. Nếu có, `bounds_global_points` của cửa sổ từ Accessibility được đối chiếu với hình chữ nhật của từng màn hình. Nếu không, agent kiểm tra mỗi màn hình có khả năng chứa app một lần bằng `display_id` cụ thể cho đến khi tìm được mục tiêu. Agent giữ ID màn hình đó và phép chuyển tọa độ của ảnh mới nhất, rồi tìm lại nếu mục tiêu biến mất hoặc bố trí màn hình thay đổi. App khác xuất hiện trên màn hình chính không chứng minh app được yêu cầu mở thất bại. Agent không di chuyển cửa sổ chỉ để dễ quan sát.
 
 Các ca đánh giá lời nói tự nhiên trong `skills/computer-use/evals/natural-voice.json` bao gồm câu tiếp nối tìm chỗ ở, sửa yêu cầu, Notes, Finder, tóm tắt xuyên app, hủy tác vụ và tình huống ba màn hình: Buddy ở màn hình chính 1, kết quả Chrome ở màn hình 4, app khác ở màn hình 5. Các ID này thuộc tình huống kiểm thử, không phải bố trí cố định. Việc định nghĩa ca đánh giá và kiểm tra cú pháp không chứng minh đã đạt kiểm thử trên device thật.
+
+Yêu cầu ngắn mở hoặc thao tác website/app nhắm tới Mac đã pair ngay cả khi người dùng không nói “Mac” hay “máy tính”. Mô tả kích hoạt skill bao gồm các câu nói này. Browser cài trên device không có desktop không thay thế máy tính của người dùng; việc chỉ tra cứu thông tin vẫn là luồng riêng.
+
+Skill hướng dẫn agent đối chiếu tham số tìm kiếm hoặc nhập chữ với lời người dùng đã giữ lại trước khi gửi, gồm địa danh và nội dung đọc để ghi; lệnh thành công với địa điểm bị thay thế vẫn là tác vụ thất bại.
+
+## Mở file và thư mục trên Mac
+
+`open_path` giải quyết `path` filesystem trên Mac. Dùng `{"path":"~/Downloads"}` để mở Downloads mà không cần biết username Mac. Chấp nhận đường dẫn tuyệt đối, `~` hoặc bắt đầu bằng `~/`; từ chối đường dẫn tương đối, `~otheruser`, chuỗi URL, ký tự NUL, đích không tồn tại và đường dẫn quá 16384 byte UTF-8. Mở rộng home dùng thư mục home của process Mac, không dùng home trên device. Hỗ trợ file/thư mục đã tồn tại; executor không tạo hoặc sửa nội dung filesystem.
+
+`mode` tùy chọn là `open` (mặc định) hoặc `reveal`. Mở dùng app đã đăng ký; `app` tùy chọn chọn app đã cài theo tên hoặc bundle ID, ví dụ `{"path":"~/Documents/draft.txt","app":"TextEdit"}`. App chỉ định không có sẽ báo lỗi, không fallback. `{"path":"~/Downloads/report.pdf","mode":"reveal"}` yêu cầu Finder chọn item; không kết hợp `app` với `reveal`. Các thao tác dùng NSWorkspace, không cần Accessibility hoặc AppleScript.
+
+Kết quả có `path` đã giải quyết, `is_directory`, `mode`, `opened` hoặc `reveal_requested` cùng metadata activation/observation. Reveal là yêu cầu vì API Finder không trả xác nhận theo mục tiêu. Mở file có thể khởi chạy app liên kết; kiểm chứng cửa sổ/nội dung đích trước khi báo hoàn thành hoặc gõ. `desktop_info.capabilities` công bố `open_path` trên build Buddy hỗ trợ.

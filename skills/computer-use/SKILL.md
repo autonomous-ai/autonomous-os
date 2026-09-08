@@ -1,6 +1,6 @@
 ---
 name: computer-use
-description: Complete tasks on the user's paired Mac through Autonomous Buddy, including native apps, browser workflows, screenshots, forms, file organization, and work across apps. Use for natural requests to operate or inspect the computer and short follow-ups to an unfinished desktop task. The agent runs on the device; Buddy executes on the Mac. Hardware actions on the device use their own skills.
+description: Open websites and apps and complete tasks on the user's paired Mac through Autonomous Buddy. Use for short spoken requests such as "open Airbnb", "mở Chrome", "ghi vào Notes", desktop searches, forms, screenshots, file organization, and follow-ups, even when the user does not say "Mac" or "computer". The agent runs on the headless device; visible website/app interaction targets the paired Mac, not a browser installed on the device. Pure information research and physical device hardware use their own skills.
 ---
 
 # Computer use on the paired Mac
@@ -8,6 +8,8 @@ description: Complete tasks on the user's paired Mac through Autonomous Buddy, i
 Use this skill to achieve the user's **whole requested outcome** on their actual Mac. Opening an app or website is only completion when that is all the user requested. Agent management (projects and local CLI sessions) is a separate Buddy feature.
 
 The agent on the device owns the task. Its local OS API forwards commands over WebSocket to Buddy on the Mac. Never run these localhost calls on a developer laptop assuming they target the device. The Mac's files and processes are not the device's files and processes.
+
+For a request to **open or interact with a website or app**, use the paired computer by default; the user need not name the Mac, Buddy, or this skill. Check Buddy availability before choosing an execution tool. Finding Chromium or Playwright on the headless device does not make it the user's desktop. If Buddy is unavailable, report that concrete blocker instead of silently doing the task in a device-local browser. A request only to research information, without opening or manipulating the user's UI, can use the research tools.
 
 ## Choose the execution path
 
@@ -29,6 +31,7 @@ Questions and progress updates should name the user-facing missing information o
 ## Carry the task through
 
 1. Retain the user's intended outcome, target app(s), constraints, and what will prove completion. For long tasks keep a compact checkpoint in runtime context: objective, known parameters, latest observed state, completed work, next step, and any pending question. Do not store sensitive screen contents unnecessarily.
+   Preserve supplied place names, app names, and dictated text. Search with the user's words rather than substituting another city or guessing a localized URL slug. Before dispatching a search or text entry, compare its parameters with the retained request; a different destination or omitted phrase is an error even if the command would succeed.
 2. Ask only for missing information that materially determines the outcome; continue independent work meanwhile. For “open Chrome with Airbnb and check hotel rooms,” opening Airbnb is preparation. Ask for destination/dates/guests if absent; after the reply, resume the search, inspect actual listings, and report matches and links. Never invent booking details.
 3. Begin with synchronous `desktop_info` to check connected Buddy capabilities, paused state, permissions, and active app without triggering permission prompts. Then locate and observe the target window: on multiple monitors, `is_main` does not identify the active app's display. Follow the reference's bounded display discovery, retain the confirmed `display_id`, and leave the user's window arrangement intact. Perform an appropriate action, wait for its response, and inspect the resulting UI before the next dependent action. An `ok` click confirms input dispatch, not that a search, save, or application change succeeded.
 4. Continue while meaningful progress is being made. Do not impose a six- or eight-action limit on the whole workflow. If the same state/failure persists after two attempts, obtain a fresh observation and change approach; if another distinct approach also fails, explain the concrete blocker and retain the checkpoint. Do not repeat consequential actions with an uncertain outcome.
@@ -44,6 +47,7 @@ Syntax: `[HW:/buddy/exec/<action>:<flat-params-json>]` at the start of the reply
 |---|---|
 | `open_app`, `close_app` | `{"app":"Notes"}` (display name or bundle identifier) |
 | `open_url` | `{"url":"https://example.com","browser":"chrome"}`; browser optional |
+| `open_path` | `{"path":"~/Downloads"}`; Mac-local existing path, optional `app` or `mode:"reveal"` (not both) |
 | `type_text` | `{"text":"hello","delay_ms":15}`; delay optional |
 | `key_combo` | `{"keys":["cmd","space"]}` |
 | `notification` | `{"title":"Title","body":"Body"}`; immediate notification, not a scheduled reminder |
@@ -53,6 +57,8 @@ Syntax: `[HW:/buddy/exec/<action>:<flat-params-json>]` at the start of the reply
 Example: “Open Chrome” → `[HW:/buddy/exec/open_app:{"app":"Google Chrome"}] Opening Chrome on your Mac.`
 
 Example: “Open Chrome and compare hotel rooms” → synchronous task, **not** the previous marker-only response.
+
+For Mac folders such as Downloads, use `open_path` with `~/Downloads` when advertised in `desktop_info.capabilities`. Buddy expands `~` on the Mac; do not ask for the Mac username or resolve the path on the device. Opening a folder does not create or rename its contents; continue with observed UI actions when those are requested.
 
 ## Availability and reporting
 

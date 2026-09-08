@@ -25,7 +25,8 @@
         "Ends after an open_url marker",
         "Answers the follow-up as unrelated small talk",
         "Makes up dates or hotel inventory",
-        "Asks the user to formulate a technical prompt"
+        "Asks the user to formulate a technical prompt",
+        "Uses Chromium, Playwright, or another browser on the device instead of the paired Mac when asked to open Airbnb"
       ]
     },
     {

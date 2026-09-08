@@ -28,6 +28,14 @@ Do not issue further input after the user stops the task. Cancellation is best e
 
 ## Read native UI and act on observed elements
 
+To open an existing Mac file or folder, use `open_path` when advertised by `desktop_info`:
+
+```bash
+python3 <skill-directory>/scripts/buddy.py open_path --params '{"path":"~/Downloads"}'
+```
+
+Paths must be absolute or begin with `~/`; home expansion happens on the Mac, so no Mac username is needed. Optional `app` opens a file with that application; optional `mode:"reveal"` selects it in Finder and cannot be combined with `app`. This command does not create files or folders. Its result confirms dispatch; observe the destination before dependent UI input.
+
 `get_ui_tree` accepts optional `app` (name or bundle identifier), `max_nodes` (1–500, default 150), and `max_depth` (1–30, default 12). It returns:
 
 - `snapshot_id`, `pid`, `app`, `bundle_id`, `frontmost`, `truncated`;

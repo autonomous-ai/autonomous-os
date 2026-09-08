@@ -21,7 +21,7 @@ struct DesktopInfoExecutor: Executor {
                 "screen_recording": ScreenRecordingCheck.isTrusted(),
                 "apps": Array(apps.prefix(100)).map(info),
                 "apps_truncated": apps.count > 100,
-                "capabilities": ["get_ui_tree", "perform_ui_action", "screenshot", "cancel_command"],
+                "capabilities": ["get_ui_tree", "perform_ui_action", "screenshot", "cancel_command", "open_path"],
             ]
             if let frontmost = workspace.frontmostApplication { result["frontmost_app"] = info(frontmost) }
             return result

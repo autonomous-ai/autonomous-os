@@ -107,3 +107,15 @@ A user can say “Open Airbnb and find a stay in Da Nang” without naming Buddy
 Before reading a target app visually, the agent enumerates displays. `is_main` marks the primary display and does not establish where the active app's window is visible. When available, Accessibility window `bounds_global_points` are matched to display rectangles. Otherwise the agent inspects plausible displays once each using explicit `display_id` values until it locates the target. It retains that display ID and the latest screenshot transform, and refreshes discovery if the target disappears or the arrangement changes. An unrelated app on the primary display is not evidence that the requested app failed to open. The agent does not move windows merely to simplify observation.
 
 The natural-voice evaluation cases in `skills/computer-use/evals/natural-voice.json` cover lodging follow-ups, corrections, Notes, Finder, cross-app summaries, cancellation, and a three-display case where Buddy is on primary display 1, Chrome results on display 4, and another app on display 5. Those IDs belong to the test scenario, not a fixed layout. Scenario definitions and syntax checks do not establish a live device pass.
+
+A short request to open or interact with a website/app targets the paired Mac even when the user omits “Mac” or “computer”. Skill discovery includes these spoken requests. A browser installed on the headless device is not a substitute; pure information research remains separate.
+
+The skill instructs the agent to compare search and text-entry parameters against retained user wording before dispatch, including place names and dictated content; a successful command for a substituted destination is a failed task.
+
+## Opening Mac files and folders
+
+`open_path` resolves a filesystem `path` on the Mac. Use `{"path":"~/Downloads"}` to open Downloads without knowing the Mac username. Accepted paths are absolute, `~`, or prefixed with `~/`; relative paths, `~otheruser`, URL strings, NUL characters, nonexistent targets, and paths over 16384 UTF-8 bytes are rejected. Home expansion uses the Mac process's home directory, never the device's home. Existing files and folders are supported; the executor does not create or modify filesystem contents.
+
+Optional `mode` is `open` (default) or `reveal`. Opening uses the registered app; optional `app` selects an installed app by name or bundle ID, for example `{"path":"~/Documents/draft.txt","app":"TextEdit"}`. An explicit missing app fails instead of falling back. `{"path":"~/Downloads/report.pdf","mode":"reveal"}` asks Finder to select the item; `app` cannot be combined with `reveal`. These operations use NSWorkspace and do not require Accessibility or AppleScript.
+
+Results contain resolved `path`, `is_directory`, `mode`, `opened` or `reveal_requested`, and activation/observation metadata. Reveal is a request because the Finder API does not return semantic confirmation. Opening a file may launch its associated application; verify the intended window and contents before reporting completion or typing. `desktop_info.capabilities` advertises `open_path` on supporting Buddy builds.

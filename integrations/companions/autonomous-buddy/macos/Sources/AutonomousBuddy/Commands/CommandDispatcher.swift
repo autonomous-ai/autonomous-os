@@ -11,6 +11,7 @@ actor CommandDispatcher {
         self.auditLog = auditLog
         let defaults: [Executor] = [
             OpenAppExecutor(),
+            OpenPathExecutor(),
             CloseAppExecutor(),
             OpenURLExecutor(),
             TypeTextExecutor(),
