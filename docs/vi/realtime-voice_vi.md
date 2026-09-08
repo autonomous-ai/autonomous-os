@@ -287,8 +287,12 @@ audio** của realtime. Lấy ở đó thay vì tại lúc tổng hợp là có 
 một câu nhanh hơn thời gian thực rất nhiều, còn output stream ghi đúng tốc độ
 phát — đúng nhịp mà mic nghe thấy.
 
-**Mặc định tắt** (`HAL_AEC_ENABLED=false`); image lamp bật lên qua `.env` của
-thiết bị. Nó cần binding
+**Mặc định bật** (`HAL_AEC_ENABLED=true`). Nếu thiếu binding bên dưới thì mọi
+điểm vào AEC đều thành no-op, nên bật mặc định không thể làm hỏng thiết bị không
+có nó — nhưng lưu ý nó cũng làm `HAL_BARGE_IN_ENABLED` mặc định bật, và cái đó
+**không** phải no-op; đặt `HAL_BARGE_IN_ENABLED=false` để dùng bộ khử vọng mà
+không dùng bộ phát hiện cắt lời cục bộ. Chế độ live không bị ảnh hưởng: bên
+trong một phiên live, bộ phát hiện cục bộ không bao giờ chạy. Nó cần binding
 `aec-audio-processing`, vốn **không** phải dependency gốc của hal — PyPI không
 có wheel Linux nào, nên thiết bị phải build từ source. Nó nằm sau extra `aec`
 (`uv sync --extra aec`), cố ý để ngoài `dependencies` và ngoài `hardware`: bước
@@ -301,7 +305,7 @@ no-op.
 
 | Env | Mặc định | Ý nghĩa |
 |-----|----------|---------|
-| `HAL_AEC_ENABLED` | `false` | Công tắc chính. Cũng là mặc định của `HAL_BARGE_IN_ENABLED` |
+| `HAL_AEC_ENABLED` | `true` | Công tắc chính. Cũng là mặc định của `HAL_BARGE_IN_ENABLED` |
 | `HAL_AEC_DELAY_MS` | `205` | Gợi ý độ trễ loa→mic. **Theo từng thiết bị** — phải đo, đừng chép lại |
 | `HAL_AEC_NS` | `true` | Bật thêm khử nhiễu của APM. Trên phần cứng này nó gánh phần lớn việc khử |
 | `HAL_AEC_TAIL_S` | `2.0` | Tiếp tục khử trong khoảng này sau lần ghi loa cuối, rồi bypass APM |
@@ -888,6 +892,198 @@ catch-up ở `start()` chạy trong **thread nền** (sau `connect()`), nên l�
 Anthropic không chặn session trở thành `available` — nếu chặn thì một lượt nói
 sớm ("hello") ngay sau khi restart sẽ rớt xuống main agent.
 
+## Chế độ live (song công hoàn toàn)
+
+**Nó thay đổi gì.** VAD cục bộ thôi không còn làm nhiệm vụ chốt lượt mà trở
+thành **chuông cửa**: nó quyết định khi nào MỞ một phiên, và khi phiên đã mở thì
+nó hoàn toàn không chạy nữa. Mic stream liên tục và **nhà cung cấp** sở hữu việc
+chuyển lượt, kết thúc lượt và ngắt lời. Bật bằng `HAL_LIVE_MODE=true`.
+
+Đo trên `intern-v2-6286` (07/09/2026, Gemini 3.1 Flash Live): **97 ms** từ lúc
+gửi audio cuối tới lúc nhận audio đầu tiên, so với 3-6 s commit→câu nói đầu tiên
+trên đường lượt.
+
+**Loại trừ nhau theo thiết kế.** Đường lượt và phiên live cần chế độ nhận biết
+lượt *ngược nhau*, và thiết lập đó được nướng vào phiên nhà cung cấp ngay lúc
+kết nối. Hỗ trợ cả hai cùng lúc sẽ cần một override runtime cộng với việc dựng
+lại phiên mỗi lần vào và ra; biến chế độ live thành lựa chọn cho toàn tiến trình
+loại bỏ hẳn bộ máy đó, đổi lại phải khởi động lại để chuyển. Vì vậy
+`HAL_LIVE_MODE=true` **ép** `HAL_REALTIME_TURN_DETECTION` từ `off` sang
+`server_vad` (`hal/config.py`) — giá trị đó được đọc lúc import bởi
+`GeminiConfig.vad_enabled`, nên phải chốt trước khi các model đó được định nghĩa.
+Một giá trị khác `off` do người dùng đặt thì được giữ nguyên. Sai chỗ này sẽ tạo
+ra thiết bị stream audio mãi mãi mà không bao giờ trả lời.
+
+### Cổng vào: hai cửa, ba kết cục
+
+`_vad_loop` xác nhận tiếng nói như thường lệ, rồi `_live_decision()` trả về một
+trong:
+
+| kết cục | khi nào | chi phí |
+|---|---|---|
+| `live` | trigger là tiếng nói và realtime khả dụng | một phiên live |
+| `turn` | realtime tắt hoặc không khả dụng | đường lượt bình thường, thiết bị vẫn trả lời qua STT + main agent |
+| `skip` | đang phát nhạc, hoặc trigger **không phải tiếng nói** | không tốn gì cả |
+
+Cửa thứ hai không phải tùy chọn trên thiết bị có VAD vào rộng. Một phiên live
+tính tiền audio lên suốt thời gian nó mở, nên nó không được kích hoạt vì một
+tiếng "cạch" — và không thể tin cửa vào tự quyết việc đó: `webrtcvad` chấp nhận
+7/7 mẫu không phải tiếng nói trong khi Silero từ chối cả 7, và
+`HAL_SILERO_ENABLED` là `false` trên một số thiết bị. Do đó
+`_rt_noise_is_speech()` mang theo instance Silero **của riêng nó**. Quan sát trên
+`intern-v2-6286`: một transient codec bị clip đã mở một phiên mỗi ~25 s suốt cả
+buổi tối. `skip` (chứ không phải `turn`) cũng là lý do một trigger bị từ chối
+không tốn cả phiên STT.
+
+### Cổng đường lên
+
+Mọi khung mic đều tới model. Quyết định duy nhất mỗi khung là bộ khử vọng có bảo
+đảm được cho nó không, và khung nào nó không bảo đảm được thì bị **thay bằng im
+lặng cùng độ dài, không bao giờ bị bỏ** — đường lên là một đồng hồ, và một mối
+nối chính là thứ mà VAD phía server đọc thành điểm bắt đầu nói. Việc thay thế
+diễn ra *trước* khi resample, nên số khung ra == số khung vào theo cấu trúc.
+
+`HAL_LIVE_UPLINK_DURING_PLAYBACK`:
+
+- **`mute` (mặc định)** — thay im lặng cho toàn bộ cửa sổ phát. Dùng được ngay.
+  Đánh đổi hoàn toàn khả năng cắt lời: người dùng không thể ngắt cho tới khi
+  thiết bị nói xong.
+- **`cancelled`** — gửi khung đã khử vọng; chỉ thay thế những khung mà
+  `aec.uncancelled()` đánh dấu. Song công thật sự.
+
+`cancelled` là đích đến và **không** phải mặc định, vì bộ khử vọng chưa xứng
+đáng. Đo 04/09/2026 (`barge-in-captures/`): ERLE trung bình 14-19 dB nhưng **ERLE
+đỉnh ~5 dB** — đỉnh mic 29264 rời APM còn 25269, so với sàn ngắt lời thật là
+6956. VAD của nhà cung cấp nhìn thấy đỉnh và không có phòng vệ nào của bộ phát
+hiện cục bộ (không cờ `uncancelled()`, không so khớp bao hình, không sàn thời
+lượng), nên nó đọc chính điểm bắt đầu tiếng của thiết bị thành người dùng ngắt
+lời. Chuyển sang `cancelled` khi phát lại `full40-bargein-off` đưa residual đỉnh
+xuống dưới sàn đó với biên an toàn.
+
+Hai tín hiệu độc lập "loa có đang phát không" nuôi cổng này, vì không cái nào tự
+đủ: `tts.speaking` là nguồn thẩm quyền và hoạt động **kể cả khi không có bộ khử
+vọng nào** (khi không có, `aec.reference_idle_for()` trả `inf` và cổng sẽ không
+bao giờ kích hoạt), còn phần đuôi reference bổ sung độ suy giảm âm học sau khi cờ
+tắt. `HAL_LIVE_PLAYBACK_TAIL_S` là đuôi *âm học*, cố ý không phải `AEC_TAIL_S`
+(2.0 s): nếu khóa theo cái dài hơn, `mute` sẽ nuốt hai giây đầu của mọi câu trả
+lời người dùng nói.
+
+**Nhạc được loại trừ bằng cách hỏi `music_service`, không bao giờ bằng cách hỏi
+cổng này.** `aplay`/`paplay` ghi thẳng ra ALSA và không bao giờ chạm điểm trích
+vọng, nên trong lúc phát nhạc `reference_idle_for()` đọc ra một căn phòng hoàn
+toàn yên tĩnh.
+
+### Bơm đầu ra
+
+`_live_out_pump` lặp `orchestrator.stream_output()` thay vì đọc thẳng hàng đợi
+của agent. Việc đó tái dùng toàn bộ bề mặt tool đang có — `look` + replay,
+`express_emotion`, `reject_turn`, `delegate_to_main` — thay vì cài lại, và nó đọc
+lại `self._agent` ở mỗi vòng ngoài, nên việc dựng lại phiên không thể để bơm đọc
+một hàng đợi chết. `stream_output()` trả về một lần cho mỗi câu trả lời của model
+(`turn_complete`) và cũng trả về khi im lặng lâu, lúc `receive()` hết giờ mà chưa
+yield gì; cả hai đều chỉ có nghĩa là "quay lại vòng nữa".
+
+`InterruptedOutput` (mới) được `gemini_live` phát ra khi `content.interrupted` và
+là **cách cắt lời duy nhất mà một phiên live có** — bộ phát hiện cục bộ không
+chạy. Nó dừng phát ngay lập tức. Đường lượt không bao giờ thấy nó: manual VAD
+không cho server cơ hội phát ra.
+
+**Đầu ra được flush một lần lúc bắt đầu phiên.** Không có nó, phiên sẽ mở trên
+một đầu ra cũ của lượt trước — quan sát trên thiết bị 07/09/2026: một
+`reject_turn` do lượt nhiễu trước đó xếp hàng đã bị đọc ngay trong cùng giây với
+session START, và phiên ngồi im suốt toàn bộ thời gian chờ. `run_realtime_turn`
+flush trước mỗi commit vì đúng lý do này; phiên live không commit gì, nên nó
+flush lúc vào. Chỉ một lần — flush mỗi câu trả lời sẽ vứt mất đầu ra mà model
+đang stream dở.
+
+### Việc tái tạo phiên bị chặn
+
+`set_live_active(True)` chặn mọi lần tái tạo phiên sau lượt trong
+`stream_output()` suốt thời gian phiên, vì cả ba lý do đều sai bên trong một
+phiên:
+
+- **zombie** — một quãng im lặng không sinh đầu ra, nên
+  `REALTIME_ZOMBIE_RECONNECT_AFTER` lần như vậy (~24 s người dùng chỉ đơn giản là
+  không nói) sẽ ép kết nối lại giữa cuộc trò chuyện.
+- **turn-cap** — đổi phiên sau mỗi `REALTIME_SESSION_MAX_TURNS` câu trả lời.
+- **idle** — cùng việc đổi phiên, cùng một đường lên đang mở.
+
+Việc dựng lại ở đây cũng không sống sót được như giữa các lượt: bơm mic vẫn tiếp
+tục append xuyên qua lúc đổi. Hoãn lại chứ không hủy — `set_live_active(False)`
+reset các bộ đếm khi cúp máy.
+
+### Chế độ live không làm gì
+
+Mọi thứ dưới đây gắn với ranh giới lượt và không có nguồn cung trong một phiên
+live. Đây là đánh đổi sản phẩm, không phải lỗi:
+
+| mất | hệ quả |
+|---|---|
+| transcript STT | không có `[TURN CONTEXT]`, không có bộ lọc dựa trên transcript |
+| wake word | được xác nhận từ text STT, nên `HAL_WAKEWORD_ENABLED` không có tác dụng ở chế độ live — vào phiên chỉ bằng VAD |
+| speaker ID, cảm xúc giọng nói | một phiên không tạo ra cả hai |
+| fallback về main agent | `delegate_to_main` vẫn tới, nhưng không có transcript để chuyển tiếp và không có chỗ đặt câu trả lời giữa phiên |
+
+Cũng không chạy bên trong một phiên: cổng RMS vào, `SPEECH_HOLDOFF_S`, đồng hồ im
+lặng, `MAX_SESSION_DURATION_S`, socket STT mỗi lượt và keepalive của nó (thậm chí
+không được kết nối trước — `stt_keepalive_on` là false ở chế độ live), noise
+guard, cắt lời cục bộ, warm-mic drain và echo-skip, và `commit_audio`. Không cái
+nào bị xóa: đường lượt vẫn dùng tất cả, và lấy lại chúng ngay khi một phiên kết
+thúc.
+
+### Cấu hình
+
+| Env | Mặc định | Ý nghĩa |
+|-----|----------|---------|
+| `HAL_LIVE_MODE` | `false` | Chế độ live cho toàn tiến trình. Ép `HAL_REALTIME_TURN_DETECTION=server_vad` khi giá trị đó là `off` |
+| `HAL_LIVE_UPLINK_DURING_PLAYBACK` | `mute` | `mute` (không cắt lời, dùng được ngay) hoặc `cancelled` (song công thật, cần sửa AEC) |
+| `HAL_LIVE_PLAYBACK_TAIL_S` | `0.35` | Đuôi âm học sau lần ghi reference cuối, trong đó phòng vẫn được tính là đang phát |
+| `HAL_LIVE_IDLE_HANGUP_S` | `15` | Cúp máy sau khoảng này khi **người dùng** không có hành động nào, rồi trả mic lại cho VAD |
+| `HAL_LIVE_NO_USER_MAX_S` | `3 × K` (45) | Trần cứng cho *hoàn toàn không có tiếng người dùng*, bất kể ai đang nói — cắt vòng lặp tự nói |
+| `HAL_LIVE_MAX_S` | `600` | Trần tuyệt đối cho một phiên |
+
+### Hạn chế đã biết: `mute` có thể tự kích hoạt
+
+Với `mute`, đường lên mang **im lặng số** trong toàn bộ cửa sổ phát và mang âm
+thanh phòng thật sau đó. Chuyển tiếp đó là một điểm bắt đầu về biên độ, và VAD
+phía server đọc một điểm bắt đầu thành có người bắt đầu nói — nên thiết bị có
+thể tự trả lời *chính nó*. Quan sát trên thiết bị 07/09/2026 tại
+`intern-v2-6286` ở mức âm lượng 70 %: bốn câu trả lời không ai hỏi trong 35 s
+khi không có ai trong phòng ("What's up?", "I'm here. What can I do for you?"),
+mỗi câu lại làm mới thời gian giữ K, và một dòng log
+`barge-in: model interrupted by the user` trong khi không có người dùng nào.
+
+`HAL_LIVE_NO_USER_MAX_S` giới hạn thiệt hại — nó kết thúc phiên mà *người dùng*
+không đóng góp gì, bất kể model đang làm gì — nhưng đó là chốt chặn, không phải
+cách chữa. Cách chữa là chế độ `cancelled` trên một bộ khử vọng đủ tốt, để model
+luôn nghe căn phòng thật mà không có chuyển tiếp nhân tạo. Giảm âm lượng loa làm
+giảm rõ rệt khả năng xảy ra trong lúc chờ.
+
+### Kết thúc một phiên
+
+Một phiên kết thúc sau `HAL_LIVE_IDLE_HANGUP_S` (K, mặc định 15 s) mà **người
+dùng không có hành động nào**, và mic được trả thẳng lại cho VAD, vốn sẽ mở phiên
+mới khi có tiếng nói thật tiếp theo. Hai chi tiết khiến việc này chạy đúng:
+
+- **Câu trả lời của model không phải hành động của người dùng**, nhưng đồng hồ
+  được *giữ* trong lúc thiết bị đang nói, nên một câu trả lời dài không bao giờ
+  bị cắt giữa chừng. Cửa sổ đếm từ mốc muộn hơn trong hai mốc: lời cuối của người
+  dùng, hoặc thời điểm thiết bị ngừng nói — đúng lúc lượt thuộc về người dùng.
+- **Chỉ RMS thì không gánh nổi đồng hồ này.** Trong phòng ồn, sàn nhiễu nằm trên
+  `HAL_VAD_THRESHOLD`, nên mọi khung đều đọc thành "người dùng đang nói" và phiên
+  không bao giờ cúp. Quan sát trên thiết bị 07/09/2026 tại `intern-v2-6286`: sàn
+  nhiễu ~10500 so với ngưỡng 500 đã giữ một phiên mở vô hạn, và vì phiên live sở
+  hữu mic, VAD không bao giờ chạy lại — thiết bị điếc cho tới khi khởi động lại.
+  Vì vậy RMS là cửa đầu tiên rẻ tiền và **Silero xác nhận** trước khi đồng hồ
+  được làm mới, gom theo `HAL_SILENCE_VAD_WINDOW_FRAMES`, đúng như đồng hồ im
+  lặng của đường lượt.
+
+`HAL_LIVE_MAX_S` là chốt chặn cuối cho căn phòng ồn tới mức ngay cả Silero cũng
+liên tục đồng ý.
+
+Đọc các bộ đếm ở dòng log session-END: `substituted` ở mức ~100 % của
+`during_playback` là `mute` đang hoạt động đúng thiết kế.
+
 ## Luồng một lượt (trong `voice_service.py`)
 
 1. **Dựng + start.** `RealtimeOrchestrator(gateway=AGENT_GATEWAY)` được tạo;
@@ -1257,5 +1453,5 @@ trong `config.json`:
 | `config.py` | Model config provider (`GeminiConfig`, `OpenAIConfig`) |
 | `models/`, `enums/` | Kiểu input/output/event, enum provider + gateway |
 | `resources/` | System prompt (chung + theo provider) |
-| `../voice/voice_service.py` | Tích hợp: stream audio mic, tiêu thụ output, route delegate/handled |
+| `../voice/voice_service.py` | Tích hợp: stream audio mic, tiêu thụ output, route delegate/handled. Chế độ live: `_live_decision` / `_live_session` / `_live_out_pump` / `_live_uplink_frame` |
 | `../voice/aec.py` | WebRTC AEC3 trên đường mic; tham chiếu lấy tại TTS output stream (mọi provider) |

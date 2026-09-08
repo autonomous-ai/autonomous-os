@@ -15,6 +15,16 @@ class RejectSignal(BaseModel):
     """
 
 
+class EndCallSignal(BaseModel):
+    """Yielded when the model calls end_conversation to hang up a live session.
+
+    Deliberately NOT an immediate stop: the caller waits LIVE_HANGUP_GRACE_S so
+    the farewell the model is already speaking actually reaches the room. Ending
+    the instant the tool call arrives cuts the goodbye off mid-word, which is
+    the one thing a deliberate hangup must not do.
+    """
+
+
 class LookReplaySignal(BaseModel):
     """Yielded by stream_output() when the model called `look` and a FRESH
     camera frame was sent. The Live API queues a frame sent mid-turn for the

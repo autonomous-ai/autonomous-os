@@ -31,6 +31,7 @@ from hal.realtime.models import (
     ImageInput,
     InputBase,
     InputEvent,
+    InterruptedOutput,
     OutputEvent,
     TextInput,
     TextOutput,
@@ -356,10 +357,20 @@ class GeminiLiveAgent(VoiceAgentBase):
     async def _async_send_input(self, input: InputBase | None) -> None:
         if self._session is None or input is None:
             return
-        # Gemini rejects every normal client input while it is waiting for a
-        # function response, including user text, images, audio, and manual-VAD
-        # activity signals. Do not let one of those policy violations close the
-        # WebSocket with 1008. FunctionCallResultInput is the sole allowed input.
+
+        # if isinstance(input, AudioInput):
+        #     detail = f"{len(input.audio)} samples"
+        # elif isinstance(input, ImageInput):
+        #     detail = f"{input.image.shape}"
+        # elif isinstance(input, TextInput):
+        #     detail = f"{len(input.text)} chars"
+        # elif isinstance(input, FunctionCallResultInput):
+        #     detail = f"call_id={input.call_id}"
+        # else:
+        #     detail = "unknown input type"
+
+        # logger.info("Sending %s to Gemini Live: %s", type(input).__name__, detail)
+
         if not isinstance(input, FunctionCallResultInput) and self._tool_call_pending():
             if isinstance(input, AudioInput):
                 self._gated_audio_frames += 1
@@ -657,9 +668,34 @@ class GeminiLiveAgent(VoiceAgentBase):
                     )
 
                 if content.interrupted:
-                    logger.debug("[realtime] Response interrupted")
+                    # Server VAD heard the user talk over the reply.
+                    #
+                    # DROP WHAT IS ALREADY QUEUED FIRST. The model generates
+                    # audio far faster than it plays, so at this moment the
+                    # recv queue can hold many seconds of speech the user has
+                    # just cancelled — and the consumer reads strictly FIFO, so
+                    # it would play every one of those before ever seeing the
+                    # interrupt. Device-observed 2026-09-08 on lamp-ee17: the
+                    # interruption was acted on only AFTER the whole buffered
+                    # reply had finished, putting "[live] barge-in" and "[live]
+                    # model said" in the SAME second, so the user heard no
+                    # reaction at all. Draining here is what makes barge-in
+                    # feel immediate; the consumer then only has to finish the
+                    # one frame it is mid-write on.
+                    dropped = 0
+                    while True:
+                        try:
+                            self._recv_queue.get_nowait()
+                        except queue.Empty:
+                            break
+                        dropped += 1
+                    logger.info(
+                        "[realtime] Response interrupted — dropped %d queued output(s)",
+                        dropped,
+                    )
                     self._first_audio_received = False
                     self._turn_done.set()
+                    self._recv_queue.put(OutputEvent(output=InterruptedOutput()))
 
                 if content.turn_complete:
                     logger.debug("[realtime] Turn complete")
