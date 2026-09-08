@@ -9,6 +9,10 @@ This document captures the full design discussion behind the **Autonomous Buddy*
 
 The MVP-only implementation plan lives in [`autonomous-buddy-mvp.md`](./autonomous-buddy-mvp.md). This doc is the long-form reference for *why* the architecture is what it is.
 
+### Desktop agent manager (September 2026)
+
+The optional [Electron/React agent manager](./agent-manager.md) in `desktop/` adds local projects, worktrees, agent sessions, terminals and Git review. The Swift `macos/` computer-use app remains unchanged. The earlier Swift-only/Electron-rejected decision below applies to the resident menu-bar executor, not this separate interactive management app. The two apps do not yet have IPC or lamp session routing between them.
+
 ---
 
 ## 1. Goals & non-goals
@@ -382,7 +386,7 @@ Reserved for later (defined but not implemented MVP):
 
 ### Decision: language
 
-Mac-only MVP → **Swift native**. Tauri/Rust deferred until Windows/Linux phase. Flutter ruled out (weak native API bridges for input/screen). Electron ruled out (RAM overhead unacceptable for a menu-bar resident).
+Mac-only computer-use MVP → **Swift native**. Tauri/Rust deferred until Windows/Linux phase. Flutter ruled out (weak native API bridges for input/screen). Electron ruled out for the menu-bar resident (RAM overhead); the separate optional [agent manager](./agent-manager.md) uses Electron/React.
 
 ### Decision: connection direction
 

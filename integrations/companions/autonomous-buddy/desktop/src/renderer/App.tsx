@@ -1,0 +1,778 @@
+import { useCallback, useEffect, useRef, useState } from 'react'
+import {
+  Bell,
+  ChevronRight,
+  Command,
+  FolderGit2,
+  GitBranch,
+  Layers,
+  PanelLeft,
+  Plus,
+  Search,
+  Settings2,
+  Terminal,
+  X,
+  Check,
+  Bot,
+  FolderOpen,
+  FileDiff,
+} from 'lucide-react'
+import type { Project, Provider, Session, Snapshot, Worktree } from '../shared/types'
+import { SessionView } from './SessionView'
+import { GitPanel } from './GitPanel'
+
+export const providerName = (provider: Provider) =>
+  ({ codex: 'Codex', claude: 'Claude Code', terminal: 'Terminal' })[provider]
+export const statusName = (session: Session) =>
+  session.provider === 'terminal' && session.status === 'running'
+    ? 'Shell active'
+    : {
+        idle: 'Ready',
+        running: 'Working',
+        needs_input: 'Needs attention',
+        completed: 'Completed',
+        error: 'Error',
+        stopped: 'Stopped',
+      }[session.status]
+export function StatusDot({ session }: { session: Session }) {
+  return <span className={`status-dot ${session.status}`} title={statusName(session)} />
+}
+
+type Selection = { projectId: string; path: string }
+type Modal = 'session' | 'worktree' | 'settings' | null
+const emptySnapshot: Snapshot = { projects: [], sessions: [], providers: [] }
+
+export function App() {
+  const [snapshot, setSnapshot] = useState<Snapshot>(emptySnapshot)
+  const [loaded, setLoaded] = useState(false)
+  const [selection, setSelection] = useState<Selection | null>(null)
+  const [trees, setTrees] = useState<Record<string, Worktree[]>>({})
+  const [sessionId, setSessionId] = useState<string | null>(null)
+  const [query, setQuery] = useState('')
+  const [modal, setModal] = useState<Modal>(null)
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [attentionOnly, setAttentionOnly] = useState(false)
+  const [preview, setPreview] = useState<{ name: string; text: string; diff: boolean } | null>(null)
+  const [sidebarWidth, setSidebarWidth] = useState(246)
+  const [gitWidth, setGitWidth] = useState(330)
+  const searchRef = useRef<HTMLInputElement>(null)
+  const selectionRef = useRef(selection)
+  useEffect(() => {
+    selectionRef.current = selection
+  }, [selection])
+  const fail = useCallback(
+    (error: unknown) => setError(error instanceof Error ? error.message : String(error)),
+    [],
+  )
+  const refreshTrees = useCallback(async (project: Project) => {
+    const found = await window.buddy.worktrees(project.id)
+    setTrees((current) => ({ ...current, [project.id]: found }))
+    return found
+  }, [])
+
+  useEffect(() => {
+    let alive = true
+    let received = false
+    const unsubscribe = window.buddy.onUpdate((update) => {
+      if (update.type === 'snapshot') {
+        received = true
+        setSnapshot(update.snapshot)
+      }
+    })
+    void window.buddy
+      .snapshot()
+      .then((value) => {
+        if (!alive) return
+        if (!received) setSnapshot(value)
+        setLoaded(true)
+        const first = value.sessions.at(-1)
+        if (first) {
+          setSelection({ projectId: first.projectId, path: first.worktreePath })
+          setSessionId(first.id)
+        } else if (value.projects[0])
+          setSelection({ projectId: value.projects[0].id, path: value.projects[0].path })
+      })
+      .catch(fail)
+    return () => {
+      alive = false
+      unsubscribe()
+    }
+  }, [fail])
+
+  const projectIds = snapshot.projects.map((project) => project.id).join(',')
+  useEffect(() => {
+    const refresh = () => {
+      void window.buddy
+        .snapshot()
+        .then((value) => Promise.all(value.projects.map(refreshTrees)))
+        .catch(fail)
+    }
+    refresh()
+    window.addEventListener('focus', refresh)
+    return () => window.removeEventListener('focus', refresh)
+  }, [projectIds, refreshTrees, fail])
+
+  useEffect(() => {
+    const key = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key === 'k') {
+        event.preventDefault()
+        searchRef.current?.focus()
+      }
+      if ((event.metaKey || event.ctrlKey) && event.key === 'n') {
+        event.preventDefault()
+        if (selectionRef.current) setModal('session')
+      }
+      if (event.key === 'Escape') {
+        setModal(null)
+        setPreview(null)
+      }
+    }
+    window.addEventListener('keydown', key)
+    return () => window.removeEventListener('keydown', key)
+  }, [])
+
+  const project = snapshot.projects.find((item) => item.id === selection?.projectId)
+  const worktree = project && trees[project.id]?.find((tree) => tree.path === selection?.path)
+  const sessions = snapshot.sessions.filter(
+    (item) => item.projectId === selection?.projectId && item.worktreePath === selection?.path,
+  )
+  const active = sessions.find((item) => item.id === sessionId)
+  const attention = snapshot.sessions.filter(
+    (item) => item.unread || item.status === 'needs_input' || item.status === 'error',
+  )
+
+  const chooseSession = (session: Session) => {
+    setSelection({ projectId: session.projectId, path: session.worktreePath })
+    setSessionId(session.id)
+    setPreview(null)
+    void window.buddy.markRead(session.id).catch(fail)
+  }
+  const chooseTree = (projectId: string, tree: Worktree) => {
+    setSelection({ projectId, path: tree.path })
+    setPreview(null)
+    const first = snapshot.sessions.find(
+      (item) => item.projectId === projectId && item.worktreePath === tree.path,
+    )
+    setSessionId(first?.id ?? null)
+    if (first) void window.buddy.markRead(first.id).catch(fail)
+  }
+  const addProject = async () => {
+    setBusy(true)
+    try {
+      const added = await window.buddy.addProject()
+      if (added) {
+        await refreshTrees(added)
+        setSelection({ projectId: added.id, path: added.path })
+        setSessionId(null)
+        setPreview(null)
+      }
+    } catch (error) {
+      fail(error)
+    } finally {
+      setBusy(false)
+    }
+  }
+  const createSession = async (provider: Provider, title: string) => {
+    if (!selection) return
+    setBusy(true)
+    try {
+      const session = await window.buddy.createSession({
+        projectId: selection.projectId,
+        worktreePath: selection.path,
+        provider,
+        title,
+      })
+      chooseSession(session)
+      setModal(null)
+    } catch (error) {
+      fail(error)
+    } finally {
+      setBusy(false)
+    }
+  }
+  const resize = (event: React.PointerEvent, side: 'left' | 'right') => {
+    const start = event.clientX,
+      width = side === 'left' ? sidebarWidth : gitWidth
+    event.currentTarget.setPointerCapture(event.pointerId)
+    const move = (moveEvent: PointerEvent) => {
+      const delta = (moveEvent.clientX - start) * (side === 'left' ? 1 : -1)
+      if (side === 'left') setSidebarWidth(Math.max(190, Math.min(390, width + delta)))
+      else setGitWidth(Math.max(260, Math.min(550, width + delta)))
+    }
+    const end = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', end)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', end, { once: true })
+  }
+
+  return (
+    <div
+      className="app-shell"
+      style={
+        {
+          '--sidebar-width': `${sidebarOpen ? sidebarWidth : 0}px`,
+          '--git-width': `${gitWidth}px`,
+        } as React.CSSProperties
+      }
+    >
+      <header className="titlebar">
+        <div className="brand">
+          <span className="brand-name">
+            Autonomous <strong>Buddy</strong>
+          </span>
+          <button
+            className="icon-button"
+            aria-label="Toggle sidebar"
+            onClick={() => setSidebarOpen(!sidebarOpen)}
+          >
+            <PanelLeft size={15} />
+          </button>
+        </div>
+        <div className="title-path">
+          <GitBranch size={13} />
+          <span>{project?.name ?? 'Agent workspace'}</span>
+          {worktree && (
+            <>
+              <ChevronRight size={12} />
+              <span>{worktree.branch || 'Detached HEAD'}</span>
+            </>
+          )}
+        </div>
+        <button className="command-button" onClick={() => searchRef.current?.focus()}>
+          <Search size={13} /> Search <kbd>⌘ K</kbd>
+        </button>
+      </header>
+      <div className="workspace">
+        {sidebarOpen && (
+          <>
+            <aside className="sidebar">
+              <div className="search-field">
+                <Search size={14} />
+                <input
+                  ref={searchRef}
+                  aria-label="Search projects and sessions"
+                  placeholder="Search projects, sessions…"
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                />
+                <kbd>⌘K</kbd>
+              </div>
+              <nav className="navigation">
+                <button
+                  className={!attentionOnly ? 'nav-item selected' : 'nav-item'}
+                  onClick={() => setAttentionOnly(false)}
+                >
+                  <Layers size={15} /> Workspace <span>{snapshot.sessions.length}</span>
+                </button>
+                <button
+                  className={attentionOnly ? 'nav-item selected' : 'nav-item'}
+                  onClick={() => setAttentionOnly(true)}
+                >
+                  <Bell size={15} /> Needs attention{' '}
+                  {attention.length > 0 && <span className="count">{attention.length}</span>}
+                </button>
+              </nav>
+              <div className="section-label">
+                <span>{attentionOnly ? 'ATTENTION' : 'PROJECTS'}</span>
+                <div>
+                  <button
+                    className="icon-button"
+                    aria-label="Refresh projects"
+                    onClick={() => snapshot.projects.forEach((item) => void refreshTrees(item).catch(fail))}
+                  >
+                    <Settings2 size={13} />
+                  </button>
+                  <button
+                    className="icon-button"
+                    aria-label="Add project"
+                    disabled={busy}
+                    onClick={() => void addProject()}
+                  >
+                    <Plus size={16} />
+                  </button>
+                </div>
+              </div>
+              <div className="project-list">
+                {attentionOnly ? (
+                  <>
+                    {attention.map((session) => (
+                      <button
+                        key={session.id}
+                        className="attention-row"
+                        onClick={() => chooseSession(session)}
+                      >
+                        <StatusDot session={session} />
+                        <span>
+                          <strong>{session.title}</strong>
+                          <small>
+                            {statusName(session)} · {providerName(session.provider)}
+                          </small>
+                        </span>
+                      </button>
+                    ))}
+                    {!attention.length && (
+                      <p className="sidebar-hint">
+                        All caught up.
+                        <br />
+                        Agent updates will appear here.
+                      </p>
+                    )}
+                  </>
+                ) : (
+                  snapshot.projects.map((item) => {
+                    const projectMatch = item.name.toLowerCase().includes(query.toLowerCase())
+                    const projectSessions = snapshot.sessions.filter(
+                      (session) => session.projectId === item.id,
+                    )
+                    if (
+                      !projectMatch &&
+                      !projectSessions.some((session) =>
+                        session.title.toLowerCase().includes(query.toLowerCase()),
+                      )
+                    )
+                      return null
+                    return (
+                      <section className="project-group" key={item.id}>
+                        <div className="project-heading">
+                          <FolderGit2 size={15} />
+                          <strong title={item.path}>{item.name}</strong>
+                          <button
+                            className="icon-button project-add"
+                            aria-label={`New worktree in ${item.name}`}
+                            onClick={() => {
+                              setSelection({ projectId: item.id, path: item.path })
+                              setSessionId(null)
+                              setPreview(null)
+                              setModal('worktree')
+                            }}
+                          >
+                            <Plus size={14} />
+                          </button>
+                        </div>
+                        {(
+                          trees[item.id] ?? [
+                            { path: item.path, branch: 'Project folder', primary: true, head: '' },
+                          ]
+                        ).map((tree) => {
+                          const treeSessions = projectSessions.filter(
+                            (session) => session.worktreePath === tree.path,
+                          )
+                          const selected = selection?.projectId === item.id && selection.path === tree.path
+                          return (
+                            <div className={`tree-card ${selected ? 'active' : ''}`} key={tree.path}>
+                              <button className="tree-select" onClick={() => chooseTree(item.id, tree)}>
+                                <GitBranch size={13} />
+                                <span>{tree.branch || tree.path.split('/').at(-1)}</span>
+                                {tree.primary && <em>primary</em>}
+                              </button>
+                              <div className="tree-path" title={tree.path}>
+                                {tree.path.split('/').slice(-2).join('/')}
+                              </div>
+                              {treeSessions
+                                .filter(
+                                  (session) =>
+                                    projectMatch || session.title.toLowerCase().includes(query.toLowerCase()),
+                                )
+                                .map((session) => (
+                                  <button
+                                    key={session.id}
+                                    className={`session-row ${active?.id === session.id ? 'current' : ''}`}
+                                    onClick={() => chooseSession(session)}
+                                  >
+                                    <StatusDot session={session} />
+                                    {session.provider === 'terminal' ? (
+                                      <Terminal size={12} />
+                                    ) : (
+                                      <Bot size={12} />
+                                    )}
+                                    <span>{session.title}</span>
+                                    {session.unread && <i className="unread" />}
+                                  </button>
+                                ))}
+                              {selected && (
+                                <button className="inline-add" onClick={() => setModal('session')}>
+                                  <Plus size={12} /> New session
+                                </button>
+                              )}
+                            </div>
+                          )
+                        })}
+                      </section>
+                    )
+                  })
+                )}
+                {!snapshot.projects.length && (
+                  <p className="sidebar-hint">
+                    Your projects, worktrees
+                    <br />
+                    and agents. In one place.
+                  </p>
+                )}
+              </div>
+              <button className="open-project" disabled={busy} onClick={() => void addProject()}>
+                <Plus size={15} /> Open project <kbd>local</kbd>
+              </button>
+              <footer className="sidebar-footer">
+                <span className="buddy-monogram">a</span>
+                <span>
+                  Autonomous Buddy<small>Agent workspace</small>
+                </span>
+                <button
+                  className="icon-button"
+                  aria-label="Workspace settings"
+                  onClick={() => setModal('settings')}
+                >
+                  <Settings2 size={16} />
+                </button>
+              </footer>
+            </aside>
+            <div className="resize-handle" onPointerDown={(event) => resize(event, 'left')} />
+          </>
+        )}
+        <main className="main-pane">
+          <div className="tabbar">
+            {sessions.map((session) => (
+              <button
+                className={`session-tab ${session.id === active?.id && !preview ? 'active' : ''}`}
+                key={session.id}
+                onClick={() => chooseSession(session)}
+              >
+                <StatusDot session={session} />
+                {session.provider === 'terminal' ? <Terminal size={13} /> : <Bot size={13} />}
+                <span>{session.title}</span>
+              </button>
+            ))}
+            {preview && (
+              <button className="session-tab active preview-tab" onClick={() => setPreview(null)}>
+                <FileDiff size={13} />
+                <span>{preview.name.split('/').at(-1)}</span>
+                <X size={13} />
+              </button>
+            )}
+            <button
+              className="icon-button new-tab"
+              aria-label="New session"
+              disabled={!selection}
+              onClick={() => setModal('session')}
+            >
+              <Plus size={16} />
+            </button>
+            <span className="tabbar-space" />
+            <span className="local-label">
+              <span /> Local
+            </span>
+          </div>
+          {preview ? (
+            <div className="file-preview">
+              <div className="pane-heading">
+                <span>
+                  {preview.diff ? 'Changes' : 'File'} / {preview.name}
+                </span>
+                <button
+                  className="icon-button"
+                  aria-label="Close file preview"
+                  onClick={() => setPreview(null)}
+                >
+                  <X size={15} />
+                </button>
+              </div>
+              <pre>
+                {preview.text.split('\n').map((line, i) => (
+                  <div
+                    key={i}
+                    className={
+                      preview.diff
+                        ? line.startsWith('+')
+                          ? 'diff-add'
+                          : line.startsWith('-')
+                            ? 'diff-remove'
+                            : line.startsWith('@@')
+                              ? 'diff-hunk'
+                              : ''
+                        : ''
+                    }
+                  >
+                    <span className="line-number">{i + 1}</span>
+                    {line || ' '}
+                  </div>
+                ))}
+              </pre>
+            </div>
+          ) : active ? (
+            <SessionView key={active.id} session={active} onError={fail} />
+          ) : (
+            <div className="welcome">
+              <div className="welcome-logo">
+                <Command size={30} strokeWidth={1.4} />
+              </div>
+              <div className="eyebrow">YOUR WORK. YOUR AGENTS.</div>
+              <h1>{project ? 'Make room for your next idea.' : 'A workspace for getting things done.'}</h1>
+              <p>
+                {project
+                  ? 'Start an agent session or open a terminal in this worktree.'
+                  : 'Open a local project to bring your agents, terminals and changes together.'}
+              </p>
+              <div className="welcome-actions">
+                <button
+                  className="primary-button"
+                  disabled={busy || !loaded}
+                  onClick={() => (project ? setModal('session') : void addProject())}
+                >
+                  {project ? <Plus size={16} /> : <FolderOpen size={16} />}
+                  {project ? 'New session' : 'Open project'}
+                </button>
+                {project && (
+                  <button
+                    className="secondary-button"
+                    disabled={busy}
+                    onClick={() => void createSession('terminal', '')}
+                  >
+                    <Terminal size={15} /> Open terminal
+                  </button>
+                )}
+              </div>
+              <div className="welcome-details">
+                <span>
+                  <GitBranch size={14} /> Isolated worktrees
+                </span>
+                <span>
+                  <Bot size={14} /> Your agent subscriptions
+                </span>
+                <span>
+                  <Check size={14} /> Local-first
+                </span>
+              </div>
+            </div>
+          )}
+        </main>
+        <div className="resize-handle" onPointerDown={(event) => resize(event, 'right')} />
+        <GitPanel
+          key={`${selection?.projectId}:${selection?.path}`}
+          project={project}
+          path={selection?.path}
+          onPreview={setPreview}
+          onError={fail}
+        />
+      </div>
+      <footer className="statusbar">
+        <span className="statusbar-left">
+          <span className="connection-dot" /> Local workspace{' '}
+          {worktree && (
+            <>
+              <GitBranch size={12} />
+              {worktree.branch || 'Detached HEAD'}
+            </>
+          )}
+        </span>
+        <span>
+          {active ? (
+            <>
+              <StatusDot session={active} />
+              {providerName(active.provider)}
+              <span className="status-separator">/</span>
+              {statusName(active)}
+            </>
+          ) : (
+            'Ready when you are'
+          )}
+          <span className="status-separator">·</span>
+          {snapshot.sessions.filter((session) => session.status === 'running').length} active
+        </span>
+      </footer>
+      {error && (
+        <div className="error-toast" role="alert">
+          <span>{error}</span>
+          <button className="icon-button" aria-label="Dismiss error" onClick={() => setError('')}>
+            <X size={16} />
+          </button>
+        </div>
+      )}
+      {modal && (
+        <div
+          className="modal-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setModal(null)
+          }}
+        >
+          <section
+            className="modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label={
+              modal === 'session'
+                ? 'New session'
+                : modal === 'worktree'
+                  ? 'New worktree'
+                  : 'Workspace settings'
+            }
+          >
+            <button
+              className="icon-button modal-close"
+              aria-label="Close dialog"
+              onClick={() => setModal(null)}
+            >
+              <X size={18} />
+            </button>
+            {modal === 'session' ? (
+              <NewSession providers={snapshot.providers} busy={busy} onCreate={createSession} />
+            ) : modal === 'worktree' ? (
+              <NewWorktree
+                busy={busy}
+                onCreate={async (branch) => {
+                  if (!project) return
+                  setBusy(true)
+                  try {
+                    const created = await window.buddy.createWorktree(project.id, branch)
+                    await refreshTrees(project)
+                    chooseTree(project.id, created)
+                    setModal(null)
+                  } catch (error) {
+                    fail(error)
+                  } finally {
+                    setBusy(false)
+                  }
+                }}
+              />
+            ) : (
+              <>
+                <h2>Workspace settings</h2>
+                <p>Agents use the CLI installations and accounts on this computer.</p>
+                <div className="provider-settings">
+                  {snapshot.providers.map((provider) => (
+                    <div key={provider.id}>
+                      <span>{providerName(provider.id)}</span>
+                      <span className={provider.available ? 'available' : 'muted'}>
+                        {provider.available ? 'Available' : 'Not installed'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                <p className="muted">Computer control continues to live in the native Buddy companion.</p>
+                {project && (
+                  <button
+                    className="secondary-button"
+                    onClick={async () => {
+                      try {
+                        await window.buddy.removeProject(project.id)
+                        setSelection(null)
+                        setSessionId(null)
+                        setPreview(null)
+                        setModal(null)
+                      } catch (error) {
+                        fail(error)
+                      }
+                    }}
+                  >
+                    Remove {project.name} from workspace
+                  </button>
+                )}
+                <small className="muted">Removing a project does not delete its files.</small>
+              </>
+            )}
+          </section>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function NewSession({
+  providers,
+  busy,
+  onCreate,
+}: {
+  providers: Snapshot['providers']
+  busy: boolean
+  onCreate: (provider: Provider, title: string) => Promise<void>
+}) {
+  const [provider, setProvider] = useState<Provider>(
+    providers.find((item) => item.available && item.id !== 'terminal')?.id ?? 'terminal',
+  )
+  const [title, setTitle] = useState('')
+  return (
+    <form
+      onSubmit={(event) => {
+        event.preventDefault()
+        void onCreate(provider, title)
+      }}
+    >
+      <div className="dialog-icon">
+        <Bot size={24} />
+      </div>
+      <h2>Start a new session</h2>
+      <p>Choose an agent. Keep the whole conversation in one place.</p>
+      <label>Agent</label>
+      <div className="provider-options">
+        {(['codex', 'claude', 'terminal'] as Provider[]).map((id) => {
+          const available = providers.some((item) => item.id === id && item.available)
+          return (
+            <button
+              key={id}
+              type="button"
+              className={provider === id ? 'provider-option chosen' : 'provider-option'}
+              disabled={!available}
+              onClick={() => setProvider(id)}
+            >
+              {id === 'terminal' ? <Terminal size={20} /> : <Bot size={20} />}
+              <strong>{providerName(id)}</strong>
+              <small>
+                {available ? (id === 'terminal' ? 'Interactive shell' : 'Connected CLI') : 'Not installed'}
+              </small>
+            </button>
+          )
+        })}
+      </div>
+      <label htmlFor="session-title">
+        Session name <span className="muted">optional</span>
+      </label>
+      <input
+        autoFocus
+        id="session-title"
+        placeholder="What are you working on?"
+        value={title}
+        onChange={(event) => setTitle(event.target.value)}
+        maxLength={120}
+      />
+      <button className="primary-button full-width" disabled={busy} type="submit">
+        <Plus size={16} />
+        {busy ? 'Starting…' : 'Create session'}
+      </button>
+      <small className="dialog-footnote">⌘ N to start a session · Escape to close</small>
+    </form>
+  )
+}
+function NewWorktree({ busy, onCreate }: { busy: boolean; onCreate: (branch: string) => Promise<void> }) {
+  const [branch, setBranch] = useState('')
+  return (
+    <form
+      onSubmit={(event) => {
+        event.preventDefault()
+        void onCreate(branch.trim())
+      }}
+    >
+      <div className="dialog-icon">
+        <GitBranch size={24} />
+      </div>
+      <h2>Create a worktree</h2>
+      <p>A separate branch and folder for your next task. Existing work stays in place.</p>
+      <label htmlFor="branch-name">New branch name</label>
+      <input
+        autoFocus
+        id="branch-name"
+        value={branch}
+        onChange={(event) => setBranch(event.target.value)}
+        placeholder="feat/my-next-idea"
+        maxLength={150}
+        required
+      />
+      <button className="primary-button full-width" type="submit" disabled={busy || !branch.trim()}>
+        <GitBranch size={16} />
+        {busy ? 'Creating…' : 'Create worktree'}
+      </button>
+    </form>
+  )
+}

@@ -9,6 +9,10 @@ Tài liệu này lưu lại toàn bộ thảo luận thiết kế tính năng **
 
 Kế hoạch implement MVP nằm ở [`autonomous-buddy-mvp_vi.md`](./autonomous-buddy-mvp_vi.md). Doc này là tham chiếu dài về *lý do tại sao* kiến trúc lại như vậy.
 
+### Desktop agent manager (tháng 9/2026)
+
+[Agent manager Electron/React](./agent-manager_vi.md) tùy chọn trong `desktop/` bổ sung project, worktree, agent session, terminal và Git review local. App computer-use Swift `macos/` giữ nguyên. Quyết định trước đây chỉ dùng Swift/loại Electron bên dưới áp dụng cho executor menu-bar thường trú, không áp dụng cho app quản lý tương tác riêng này. Hai app chưa có IPC hay routing session từ lamp nối với nhau.
+
 ---
 
 ## 1. Mục tiêu & không phải mục tiêu
@@ -382,7 +386,7 @@ Page mới `Paired Computers`:
 
 ### Quyết định: ngôn ngữ
 
-Mac-only MVP → **Swift native**. Tauri/Rust để phase Windows/Linux. Flutter bỏ (bridge native cho input/screen yếu). Electron bỏ (overhead RAM không chấp nhận với app menu-bar thường trú).
+MVP computer-use Mac-only → **Swift native**. Tauri/Rust để phase Windows/Linux. Flutter bỏ (bridge native cho input/screen yếu). Electron bỏ với app menu-bar thường trú (overhead RAM); [agent manager](./agent-manager_vi.md) tùy chọn riêng dùng Electron/React.
 
 ### Quyết định: hướng kết nối
 
