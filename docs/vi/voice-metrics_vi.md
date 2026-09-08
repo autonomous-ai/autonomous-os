@@ -1,4 +1,8 @@
-# Đo KPI giọng nói (Voice KPI)
+# Đo phản hồi giọng nói (voice metrics)
+
+Đây là một tracker chạy trên ống telemetry của thiết bị — xem
+[`docs/vi/telemetry_vi.md`](telemetry_vi.md) để biết về chính cái ống đó, công
+tắc bật/tắt, và các luật mà mọi tracker phải theo.
 
 Chỉ **đo**, không đổi hành vi. Không có gì ở đây thay đổi việc thiết bị nói
 gì, nói lúc nào hay im lúc nào — nó ghi lại những gì đã xảy ra để tính được

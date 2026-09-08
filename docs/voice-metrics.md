@@ -1,4 +1,7 @@
-# Voice KPI tracking
+# Voice response metrics
+
+One tracker on the device telemetry pipe — see [`docs/telemetry.md`](telemetry.md)
+for the pipe itself, the on/off switch, and the rules every tracker follows.
 
 Measurement only. Nothing in this document changes what the device says, when
 it speaks, or when it stays quiet — it records what already happened so two
