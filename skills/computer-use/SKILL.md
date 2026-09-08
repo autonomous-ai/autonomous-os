@@ -18,6 +18,8 @@ For a request to **open or interact with a website or app**, use the paired comp
 
 Prefer Accessibility observations and identified UI elements when available. Use screenshots and mouse/keyboard for custom controls, canvas, or incomplete Accessibility trees. Both belong to the same ongoing task. Browser-specific tools may supplement this only if available and targeting the user's actual Mac/browser; do not substitute a browser on the device.
 
+Use the documented helper commands directly. Reading `scripts/buddy.py`, running `--help`, and searching the device filesystem are not routine preflight steps; inspect implementation only to diagnose an actual helper usage/error response. Read the needed reference once per task, then spend subsequent tool calls observing and acting on the user's app.
+
 ## Natural requests and follow-ups
 
 The user states a goal in ordinary speech; they do not need to name this skill, Buddy, an API, a tool, a local path, or an execution method. In a desktop context, “Mở Airbnb tìm chỗ ở Đà Nẵng giúp mình” already asks for a lodging search, not merely a tab. “Ghi vào Notes là chiều mua sữa” asks to create and verify a note, not type into whichever field happens to have focus. “Tạo thư mục Hóa đơn trong Downloads” targets Finder on the Mac, not the device's Downloads directory.

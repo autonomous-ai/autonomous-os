@@ -112,6 +112,8 @@ Các ca đánh giá lời nói tự nhiên trong `skills/computer-use/evals/natu
 
 Yêu cầu ngắn mở hoặc thao tác website/app nhắm tới Mac đã pair ngay cả khi người dùng không nói “Mac” hay “máy tính”. Mô tả kích hoạt skill bao gồm các câu nói này. Browser cài trên device không có desktop không thay thế máy tính của người dùng; việc chỉ tra cứu thông tin vẫn là luồng riêng.
 
+Skill hướng dẫn agent chạy lệnh helper đã được tài liệu hóa mà không đọc source hoặc gọi `--help` như bước chuẩn bị thường lệ. Chỉ đọc để chẩn đoán lỗi helper thực tế; trace của yêu cầu ngắn cho thấy agent đọc implementation nhiều lần trước khi thao tác desktop. Hướng dẫn này giảm chuẩn bị thừa nhưng không chứng minh một mức độ trễ bảo đảm.
+
 Skill hướng dẫn agent đối chiếu tham số tìm kiếm hoặc nhập chữ với lời người dùng đã giữ lại trước khi gửi, gồm địa danh và nội dung đọc để ghi; lệnh thành công với địa điểm bị thay thế vẫn là tác vụ thất bại.
 
 ## Mở file và thư mục trên Mac

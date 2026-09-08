@@ -110,6 +110,8 @@ The natural-voice evaluation cases in `skills/computer-use/evals/natural-voice.j
 
 A short request to open or interact with a website/app targets the paired Mac even when the user omits “Mac” or “computer”. Skill discovery includes these spoken requests. A browser installed on the headless device is not a substitute; pure information research remains separate.
 
+The skill directs agents to execute documented helper commands without routine source-code inspection or `--help` calls. Those reads are reserved for actual helper errors; a live short-command trace showed repeated implementation reads before any desktop action. This instruction reduces unnecessary preparation but does not establish a latency guarantee.
+
 The skill instructs the agent to compare search and text-entry parameters against retained user wording before dispatch, including place names and dictated content; a successful command for a substituted destination is a failed task.
 
 ## Opening Mac files and folders
