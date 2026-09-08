@@ -95,3 +95,17 @@ Timeout, mất kết nối hoặc cancellation có thể để lại tác độn
 - **Hoàn thành toàn tác vụ:** đưa vào câu hỏi làm rõ, tải chậm và dialog bất ngờ. Kiểm tra agent giữ mục tiêu, đổi cách sau lỗi lặp và báo hoàn thành có bằng chứng hoặc blocker còn lại cụ thể.
 
 Helper trên device tạo thư mục task riêng và trả `capture_dir`; dùng lại qua `--output-dir` khi chụp tiếp. Mỗi thư mục giữ tối đa 50 cặp ảnh/metadata thuộc helper, khác với giới hạn 20 ảnh trên Mac. Thư mục task bị bỏ dở cần được dọn chủ động.
+
+## Mở ứng dụng và focus
+
+`open_app` yêu cầu activate một lần và trả `pid`, `bundle_id`, `app`, `activation_requested`, `frontmost`, `requires_observation`. `open_url` trả `opened`, `browser`, các cờ activation/observation và metadata app/focus khi xác định được handler đang chạy. `frontmost` mô tả process foreground lúc trả lời, không đảm bảo cửa sổ đích đang hiện trên màn hình được chụp. App có thể còn tải, có dialog hoặc người dùng đã chuyển app. Quan sát cửa sổ/màn hình đích trước khi gõ.
+
+Chọn trình duyệt tường minh hỗ trợ alias Chrome, Safari, Firefox, Arc, Edge và Brave. Trình duyệt được yêu cầu không được hỗ trợ hoặc chưa cài sẽ báo lỗi; Buddy không âm thầm thay bằng trình duyệt mặc định. Khi không có `browser` hoặc dùng `browser: "default"`, Buddy dùng handler URL đã đăng ký và kiểm tra macOS có chấp nhận yêu cầu mở hay không. Bị từ chối là lỗi. `opened: true` xác nhận yêu cầu được chấp nhận, không xác nhận trang đã sẵn sàng hoặc workflow đã hoàn thành. Mở app không liên tục giành lại focus từ người dùng.
+
+### Lời nói tự nhiên, câu tiếp nối và nhiều màn hình
+
+Người dùng có thể nói “Mở Airbnb tìm chỗ ở Đà Nẵng giúp mình” mà không cần nhắc Buddy hay công cụ. Skill computer-use giữ toàn bộ mục tiêu tìm kiếm và thông tin còn thiếu qua câu trả lời ngắn như “cuối tuần này, hai người”. Skill giữ địa điểm và số khách đã biết, xác định ngày tương đối từ ngày hiện tại/múi giờ đáng tin cậy, đồng thời hỏi ngày nhận và trả phòng cụ thể nếu “cuối tuần” còn mơ hồ. Câu sửa đổi cập nhật tác vụ đang chờ; yêu cầu dừng hủy tác vụ. Cách xử lý này cũng áp dụng cho app native: “ghi vào Notes” tạo và kiểm tra ghi chú, còn “đổi tên nó” chỉ trỏ đến đối tượng đã xác định trước đó khi tham chiếu rõ ràng. Thao tác Finder tác động lên Mac, không phải hệ thống file của device.
+
+Trước khi đọc app đích bằng hình ảnh, agent liệt kê màn hình. `is_main` đánh dấu màn hình chính, không xác định cửa sổ của app đang hoạt động nằm ở đâu. Nếu có, `bounds_global_points` của cửa sổ từ Accessibility được đối chiếu với hình chữ nhật của từng màn hình. Nếu không, agent kiểm tra mỗi màn hình có khả năng chứa app một lần bằng `display_id` cụ thể cho đến khi tìm được mục tiêu. Agent giữ ID màn hình đó và phép chuyển tọa độ của ảnh mới nhất, rồi tìm lại nếu mục tiêu biến mất hoặc bố trí màn hình thay đổi. App khác xuất hiện trên màn hình chính không chứng minh app được yêu cầu mở thất bại. Agent không di chuyển cửa sổ chỉ để dễ quan sát.
+
+Các ca đánh giá lời nói tự nhiên trong `skills/computer-use/evals/natural-voice.json` bao gồm câu tiếp nối tìm chỗ ở, sửa yêu cầu, Notes, Finder, tóm tắt xuyên app, hủy tác vụ và tình huống ba màn hình: Buddy ở màn hình chính 1, kết quả Chrome ở màn hình 4, app khác ở màn hình 5. Các ID này thuộc tình huống kiểm thử, không phải bố trí cố định. Việc định nghĩa ca đánh giá và kiểm tra cú pháp không chứng minh đã đạt kiểm thử trên device thật.

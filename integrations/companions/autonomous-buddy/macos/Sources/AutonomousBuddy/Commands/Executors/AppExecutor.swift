@@ -8,16 +8,36 @@ struct OpenAppExecutor: Executor {
         guard let appName = params["app"] as? String, !appName.isEmpty else {
             throw ExecutorError.missingParam("app")
         }
+        try Task.checkCancellation()
+        return try await openApplication(named: appName)
+    }
+
+    @MainActor
+    private func openApplication(named appName: String) async throws -> [String: Any] {
+        try Task.checkCancellation()
         guard let url = Self.resolveAppURL(named: appName) else {
             throw ExecutorError.actionFailed("app not found: \(appName)")
         }
         let config = NSWorkspace.OpenConfiguration()
         config.activates = true
+        try Task.checkCancellation()
         let runningApp = try await NSWorkspace.shared.openApplication(at: url, configuration: config)
-        return [
-            "pid": Int(runningApp.processIdentifier),
-            "bundle_id": runningApp.bundleIdentifier ?? "",
-        ]
+        try Task.checkCancellation()
+        return Self.activationResult(runningApp)
+    }
+
+    // Activation is requested once. Report current focus without stealing it
+    // back if the user switches applications while a launch is completing.
+    @MainActor
+    static func activationResult(_ app: NSRunningApplication?) -> [String: Any] {
+        var result: [String: Any] = ["activation_requested": true, "requires_observation": true]
+        if let app {
+            result["pid"] = Int(app.processIdentifier)
+            result["bundle_id"] = app.bundleIdentifier ?? ""
+            result["app"] = app.localizedName ?? ""
+            result["frontmost"] = NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier
+        }
+        return result
     }
 
     static func resolveAppURL(named name: String) -> URL? {

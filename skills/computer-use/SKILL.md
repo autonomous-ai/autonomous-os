@@ -1,6 +1,6 @@
 ---
 name: computer-use
-description: Complete tasks on the user's paired Mac through Autonomous Buddy, including native apps, browser workflows, screenshots, forms, file organization, and work across apps. Use when the user asks the device to operate or inspect their computer. The agent runs on the device; Buddy executes on the Mac. Hardware actions on the device use their own skills.
+description: Complete tasks on the user's paired Mac through Autonomous Buddy, including native apps, browser workflows, screenshots, forms, file organization, and work across apps. Use for natural requests to operate or inspect the computer and short follow-ups to an unfinished desktop task. The agent runs on the device; Buddy executes on the Mac. Hardware actions on the device use their own skills.
 ---
 
 # Computer use on the paired Mac
@@ -16,11 +16,21 @@ The agent on the device owns the task. Its local OS API forwards commands over W
 
 Prefer Accessibility observations and identified UI elements when available. Use screenshots and mouse/keyboard for custom controls, canvas, or incomplete Accessibility trees. Both belong to the same ongoing task. Browser-specific tools may supplement this only if available and targeting the user's actual Mac/browser; do not substitute a browser on the device.
 
+## Natural requests and follow-ups
+
+The user states a goal in ordinary speech; they do not need to name this skill, Buddy, an API, a tool, a local path, or an execution method. In a desktop context, “Mở Airbnb tìm chỗ ở Đà Nẵng giúp mình” already asks for a lodging search, not merely a tab. “Ghi vào Notes là chiều mua sữa” asks to create and verify a note, not type into whichever field happens to have focus. “Tạo thư mục Hóa đơn trong Downloads” targets Finder on the Mac, not the device's Downloads directory.
+
+When asking a question, retain the pending desktop task and the precise missing fields. Interpret a short reply against that checkpoint even if it does not repeat the app or task. For example, after the Airbnb request, “cuối tuần này, hai người” fills the guest count with two and supplies a relative date preference; it does not start an unrelated conversation or mean two rooms. Resolve dates from a trustworthy current date and the user's relevant timezone. “Weekend” alone may leave the check-in/check-out nights ambiguous: ask one concise question for the exact stay dates rather than inventing them. Preserve the destination and guest count so the user does not have to repeat them.
+
+Merge corrections such as “à ba người”, “đổi sang Hội An”, or “đặt tên là Chi tiêu” into the pending task. Refresh the current UI and update the affected fields; do not repeat completed writes or restart the whole task without a reason. Treat “thôi, dừng lại” as cancellation, not another missing parameter. If there is no pending task or a pronoun has multiple plausible targets, ask what it refers to before acting.
+
+Questions and progress updates should name the user-facing missing information or result: “Bạn muốn nhận và trả phòng ngày nào?” or “Mình đang tìm phòng cho hai người.” Keep tool names and implementation details out of these prompts. Do not require a longer, technical user command to unlock a complete workflow.
+
 ## Carry the task through
 
 1. Retain the user's intended outcome, target app(s), constraints, and what will prove completion. For long tasks keep a compact checkpoint in runtime context: objective, known parameters, latest observed state, completed work, next step, and any pending question. Do not store sensitive screen contents unnecessarily.
 2. Ask only for missing information that materially determines the outcome; continue independent work meanwhile. For “open Chrome with Airbnb and check hotel rooms,” opening Airbnb is preparation. Ask for destination/dates/guests if absent; after the reply, resume the search, inspect actual listings, and report matches and links. Never invent booking details.
-3. Begin with synchronous `desktop_info` to check connected Buddy capabilities, paused state, permissions, and active app without triggering permission prompts. Then observe the current app/window. Perform an appropriate action, wait for its response, and inspect the resulting UI before the next dependent action. An `ok` click confirms input dispatch, not that a search, save, or application change succeeded.
+3. Begin with synchronous `desktop_info` to check connected Buddy capabilities, paused state, permissions, and active app without triggering permission prompts. Then locate and observe the target window: on multiple monitors, `is_main` does not identify the active app's display. Follow the reference's bounded display discovery, retain the confirmed `display_id`, and leave the user's window arrangement intact. Perform an appropriate action, wait for its response, and inspect the resulting UI before the next dependent action. An `ok` click confirms input dispatch, not that a search, save, or application change succeeded.
 4. Continue while meaningful progress is being made. Do not impose a six- or eight-action limit on the whole workflow. If the same state/failure persists after two attempts, obtain a fresh observation and change approach; if another distinct approach also fails, explain the concrete blocker and retain the checkpoint. Do not repeat consequential actions with an uncertain outcome.
 5. Finish only when evidence establishes the requested result, or explain exactly what remains blocked. For a task spanning apps, verify the destination as well as the source. Example: reading Excel values is preparation for writing a Notes summary; verify the note contents before reporting completion.
 
