@@ -121,3 +121,9 @@ Skill hướng dẫn agent đối chiếu tham số tìm kiếm hoặc nhập ch
 `mode` tùy chọn là `open` (mặc định) hoặc `reveal`. Mở dùng app đã đăng ký; `app` tùy chọn chọn app đã cài theo tên hoặc bundle ID, ví dụ `{"path":"~/Documents/draft.txt","app":"TextEdit"}`. App chỉ định không có sẽ báo lỗi, không fallback. `{"path":"~/Downloads/report.pdf","mode":"reveal"}` yêu cầu Finder chọn item; không kết hợp `app` với `reveal`. Các thao tác dùng NSWorkspace, không cần Accessibility hoặc AppleScript.
 
 Kết quả có `path` đã giải quyết, `is_directory`, `mode`, `opened` hoặc `reveal_requested` cùng metadata activation/observation. Reveal là yêu cầu vì API Finder không trả xác nhận theo mục tiêu. Mở file có thể khởi chạy app liên kết; kiểm chứng cửa sổ/nội dung đích trước khi báo hoàn thành hoặc gõ. `desktop_info.capabilities` công bố `open_path` trên build Buddy hỗ trợ.
+
+## Giới hạn input bàn phím theo ứng dụng
+
+Trên build công bố `target_app_input` trong `desktop_info.capabilities`, `type_text` và `key_combo` nhận `app` tùy chọn (tên hoặc bundle ID). Với workflow nhắm app cụ thể, cần dùng trường này: `{"keys":["cmd","n"],"app":"Notes"}` hoặc `{"text":"Draft summary","app":"com.apple.Notes"}`. Buddy từ chối trước khi gửi input nếu app đó không ở foreground. Buddy giữ process ID foreground và kiểm tra lại ngay trước từng cặp key-down/key-up hoàn chỉnh; đang gõ sẽ dừng nếu focus đổi giữa các ký tự. Không tự activate hoặc chuyển cửa sổ để giành lại focus.
+
+Cặp phím được gửi không có suspension ở giữa, nên cancellation không chủ động để phím bị giữ. Input đã gửi không thể hoàn tác; kiểm tra foreground không khóa focus OS nguyên tử hoặc xác định đúng ô nhập trong cùng app. Kiểm chứng cửa sổ/ô nhập trước và quan sát tác động một phần sau lỗi focus; không retry mù toàn bộ văn bản. Bỏ `app` giữ tương thích cho yêu cầu tường minh gõ vào ô đang focus. Build cũ có thể bỏ qua tham số lạ, nên kiểm tra capability trước khi dựa vào cơ chế này.

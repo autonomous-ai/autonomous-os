@@ -48,8 +48,8 @@ Syntax: `[HW:/buddy/exec/<action>:<flat-params-json>]` at the start of the reply
 | `open_app`, `close_app` | `{"app":"Notes"}` (display name or bundle identifier) |
 | `open_url` | `{"url":"https://example.com","browser":"chrome"}`; browser optional |
 | `open_path` | `{"path":"~/Downloads"}`; Mac-local existing path, optional `app` or `mode:"reveal"` (not both) |
-| `type_text` | `{"text":"hello","delay_ms":15}`; delay optional |
-| `key_combo` | `{"keys":["cmd","space"]}` |
+| `type_text` | `{"text":"hello","delay_ms":15,"app":"Notes"}`; delay/app optional, app checks foreground target on supporting builds |
+| `key_combo` | `{"keys":["cmd","n"],"app":"Notes"}`; app optional, same foreground check |
 | `notification` | `{"title":"Title","body":"Body"}`; immediate notification, not a scheduled reminder |
 | `write_clipboard` | `{"text":"hello"}` |
 | `click_button` | `{"label":"Cancel","app":"Notes"}`; app optional, requires unambiguous label |
@@ -59,6 +59,8 @@ Example: “Open Chrome” → `[HW:/buddy/exec/open_app:{"app":"Google Chrome"}
 Example: “Open Chrome and compare hotel rooms” → synchronous task, **not** the previous marker-only response.
 
 For Mac folders such as Downloads, use `open_path` with `~/Downloads` when advertised in `desktop_info.capabilities`. Buddy expands `~` on the Mac; do not ask for the Mac username or resolve the path on the device. Opening a folder does not create or rename its contents; continue with observed UI actions when those are requested.
+
+For a named-app task, always supply that app to `type_text` and `key_combo` when Buddy advertises `target_app_input`. It rejects input if another app has focus and stops typing if focus changes. Do not remove the target to bypass this error. On older builds, check foreground focus immediately before keyboard input; if focus cannot be established, stop and explain the blocker. Unscoped input is for an explicit request to type into the currently focused field or invoke a system shortcut.
 
 ## Availability and reporting
 
