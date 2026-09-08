@@ -162,6 +162,16 @@ Paths, port and token are overridable via `CLAUDECODE_*` env vars
 `CLAUDECODE_BIN`, `CLAUDECODE_RESTART_BACKOFF_S`); the defaults match the
 device layout above, so existing `/root/.claudecode` deployments run unchanged.
 
+**`OS_AGENT_HOME` is the one that moves `~/.claude`.** The gatewayd asserts it as
+the `claude` child's `HOME` (`Config.Home`), so it decides where the CLI writes
+its user dir, skills, credentials, `projects/` and `.claude.json` — and the
+os-server side resolves the same paths through `syspath.ClaudeCodeUserDir()`.
+The absolute paths inside the OS-managed `CLAUDE.md` block follow it too
+(`rewriteDevicePaths`), so a relocated run has no dangling `@import`. Unset, all
+of it is `/root`, byte for byte. This is what lets `make claudecode-dev` run on a
+laptop without touching the developer's own Claude Code install — see
+`docs/simulator.md`.
+
 ## 4. Sending a turn (`chat.go`)
 
 Identical shape to picoclaw: `sendChat` marks busy + stashes the pending runID

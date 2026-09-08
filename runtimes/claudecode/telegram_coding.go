@@ -31,11 +31,11 @@ import (
 // persistent gatewayd child): a chat with NO coding selection still talks to
 // device-main as before.
 
-const (
-	// codingSelFileDefault persists chat→session selections so a restart keeps
-	// each chat in its session. Overridable via the codingSelPath test seam.
-	codingSelFileDefault = "/root/.claudecode/telegram_coding.json"
+// codingSelFileDefault persists chat→session selections so a restart keeps
+// each chat in its session. Overridable via the codingSelPath test seam.
+var codingSelFileDefault = claudecodeHome + "/telegram_coding.json"
 
+const (
 	// codingTurnTimeout caps one remote-coding turn (tool use can be slow).
 	codingTurnTimeout = 15 * time.Minute
 

@@ -76,9 +76,14 @@ func configFromEnv() Config {
 	if f, err := strconv.ParseFloat(envOr("CLAUDECODE_RESTART_BACKOFF_S", "5"), 64); err == nil && f > 0 {
 		backoff = time.Duration(f * float64(time.Second))
 	}
+	// OS_AGENT_HOME is the agent user's home — it decides where the claude
+	// child writes ~/.claude (skills, credentials, projects) and ~/.claude.json.
+	// Unset it is /root, so a board is unchanged; off-device it moves the whole
+	// CLI state into the throwaway dir instead of the developer's own ~/.claude.
+	agentHome := envOr("OS_AGENT_HOME", "/root")
 	// CLAUDECODE_HOME is the backend state dir (/root/.claudecode) — the
 	// defaults below keep existing .env-based deployments working unchanged.
-	home := envOr("CLAUDECODE_HOME", "/root/.claudecode")
+	home := envOr("CLAUDECODE_HOME", agentHome+"/.claudecode")
 	return Config{
 		// Token defaults to runtimes/claudecode/constants.go Token — the two
 		// sides of the socket MUST agree.
@@ -89,7 +94,7 @@ func configFromEnv() Config {
 		SessionFile:    envOr("CLAUDECODE_SESSION_FILE", home+"/session.json"),
 		ClaudeBin:      envOr("CLAUDECODE_BIN", "claude"),
 		RestartBackoff: backoff,
-		Home:           "/root",
+		Home:           agentHome,
 	}
 }
 

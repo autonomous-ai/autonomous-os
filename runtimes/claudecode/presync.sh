@@ -26,11 +26,14 @@
 # materialized to /usr/local/bin/runtime-claudecode-presync on every switch.
 set -euo pipefail
 
-CONFIG_JSON="/root/config/config.json"          # device/project config (source of truth)
-CC_DIR="/root/.claudecode"
+# Env-overridable (with production defaults) so an off-device run and the tests
+# can point at a temp dir. os-server passes all three explicitly (onboarding.go
+# runPresync) — unset env is the board, byte for byte.
+CONFIG_JSON="${CONFIG_JSON:-/root/config/config.json}"   # device/project config (source of truth)
+CC_DIR="${CLAUDECODE_HOME:-/root/.claudecode}"
 WS_DIR="$CC_DIR/workspace"
 ENV_FILE="$CC_DIR/.env"
-CLAUDE_HOME="/root/.claude"
+CLAUDE_HOME="${CLAUDE_HOME:-/root/.claude}"
 
 # Claude Code calls {ANTHROPIC_BASE_URL}/v1/messages — same anthropic-messages
 # endpoint hermes uses, so the base has NO trailing /v1 (unlike picoclaw's
@@ -56,7 +59,7 @@ jq_edit() { local f="$1"; shift; local tmp; tmp="$(mktemp)"; jq "$@" "$f" >"$tmp
 # ~/.claude.json: skip the interactive first-run onboarding + accept the
 # bypass-permissions warning — a headless device has no TTY to answer either.
 log "seed headless flags in ~/.claude.json"
-CLAUDE_JSON="/root/.claude.json"
+CLAUDE_JSON="$CLAUDE_HOME.json"   # ~/.claude.json — sibling of ~/.claude
 [ -f "$CLAUDE_JSON" ] || echo '{}' >"$CLAUDE_JSON"
 jq_edit "$CLAUDE_JSON" '
     .hasCompletedOnboarding          = true
@@ -96,7 +99,7 @@ umask 077
 if [ -n "$OAUTH_TOKEN" ] || [ -s "$CLAUDE_HOME/.credentials.json" ]; then
   log "write $ENV_FILE (auth=claude.ai subscription, token=$( [ -n "$OAUTH_TOKEN" ] && echo config || echo credentials.json ))"
   {
-    echo "# Managed by runtime-claudecode-presync — do not edit (synced from /root/config/config.json)."
+    echo "# Managed by runtime-claudecode-presync — do not edit (synced from $CONFIG_JSON)."
     echo "# Subscription auth: ANTHROPIC_* omitted on purpose (they outrank the OAuth login)."
     if [ -n "$OAUTH_TOKEN" ]; then
       echo "CLAUDE_CODE_OAUTH_TOKEN=$OAUTH_TOKEN"
@@ -114,7 +117,7 @@ else
   LLM_MODEL="$(dev llm_model)"; [ -n "$LLM_MODEL" ] || LLM_MODEL="$DEFAULT_MODEL"
   log "write $ENV_FILE (auth=api-key, base_url=$LLM_BASE_URL model=$LLM_MODEL key=$( [ -n "$LLM_API_KEY" ] && echo set || echo EMPTY ))"
   cat >"$ENV_FILE.tmp" <<ENV
-# Managed by runtime-claudecode-presync — do not edit (synced from /root/config/config.json).
+# Managed by runtime-claudecode-presync — do not edit (synced from $CONFIG_JSON).
 ANTHROPIC_BASE_URL=$LLM_BASE_URL
 # x-api-key ONLY: campaign-api 401s the Authorization: Bearer form, and claude
 # prefers ANTHROPIC_AUTH_TOKEN (bearer) over ANTHROPIC_API_KEY when both are

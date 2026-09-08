@@ -159,6 +159,15 @@ Path, port và token override được qua các biến môi trường `CLAUDECOD
 `CLAUDECODE_BIN`, `CLAUDECODE_RESTART_BACKOFF_S`); giá trị mặc định khớp layout
 thiết bị ở trên, nên các deployment `/root/.claudecode` hiện có chạy y nguyên.
 
+**`OS_AGENT_HOME` mới là biến dời `~/.claude`.** gatewayd đặt nó làm `HOME` của
+tiến trình `claude` con (`Config.Home`), nên nó quyết định CLI ghi user dir,
+skills, credentials, `projects/` và `.claude.json` ở đâu — phía os-server resolve
+cùng bộ path đó qua `syspath.ClaudeCodeUserDir()`. Các đường dẫn tuyệt đối trong
+block `CLAUDE.md` do OS quản lý cũng bám theo (`rewriteDevicePaths`), nên bản
+chạy đã dời không còn `@import` trỏ hụt. Không set thì tất cả vẫn là `/root`,
+đúng từng byte. Đây là thứ cho phép `make claudecode-dev` chạy trên laptop mà
+không đụng tới bản Claude Code của chính developer — xem `docs/simulator.md`.
+
 ## 4. Gửi một lượt (`chat.go`)
 
 Shape giống hệt picoclaw: `sendChat` đánh dấu busy + cất pending runID **trước

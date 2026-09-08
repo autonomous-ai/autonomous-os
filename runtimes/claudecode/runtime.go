@@ -3,6 +3,7 @@ package claudecode
 import (
 	"context"
 	"log/slog"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -13,8 +14,18 @@ import (
 
 // claudecodeBinary is the stable installer-owned symlink. Avoid relying on
 // PATH because os-server can start before the interactive shell profile is
-// loaded on the device.
-const claudecodeBinary = "/usr/local/bin/claude"
+// loaded on the device. CLAUDECODE_BIN is the same var the gatewayd reads, so
+// an off-device run probes the CLI it actually spawns; unset it is the device
+// symlink, unchanged.
+var claudecodeBinary = envOr("CLAUDECODE_BIN", "/usr/local/bin/claude")
+
+// envOr returns the env value for key, or def when unset/empty.
+func envOr(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
 
 // claudecodeVersionProbeTimeout caps a single `claude --version` probe. The
 // Claude Code CLI is a Node program whose cold-start can exceed a few seconds on

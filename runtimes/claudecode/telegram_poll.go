@@ -34,12 +34,12 @@ import (
 // emitFinal via the telegramRuns tracker (translator.go); TTS is suppressed
 // for these turns (MarkSilentRun).
 
-const (
-	// telegramOffsetFile persists the next getUpdates offset across restarts so
-	// already-processed updates are not re-injected. Lives under the runtime's
-	// own data dir (wiped by factory reset, like session.json).
-	telegramOffsetFile = "/root/.claudecode/telegram_offset.json"
+// telegramOffsetFile persists the next getUpdates offset across restarts so
+// already-processed updates are not re-injected. Lives under the runtime's
+// own data dir (wiped by factory reset, like session.json).
+var telegramOffsetFile = claudecodeHome + "/telegram_offset.json"
 
+const (
 	// telegramAPIBaseDefault is the production Bot API host. Tests override the
 	// service field telegramAPIBase with an httptest URL.
 	telegramAPIBaseDefault = "https://api.telegram.org"

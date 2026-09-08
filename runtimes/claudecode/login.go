@@ -40,12 +40,12 @@ const (
 	// claudeLoginTimeout caps the whole flow — the user has to open the URL on
 	// another device and paste the code back, so this is generous.
 	claudeLoginTimeout = 10 * time.Minute
-
-	// claudeCredentialsPath is where the CLI stores OAuth credentials on Linux
-	// (no keychain). Its presence after the CLI exits is the success fallback
-	// when the token line was not captured from the pty stream.
-	claudeCredentialsPath = "/root/.claude/.credentials.json"
 )
+
+// claudeCredentialsPath is where the CLI stores OAuth credentials on Linux
+// (no keychain). Its presence after the CLI exits is the success fallback
+// when the token line was not captured from the pty stream.
+var claudeCredentialsPath = claudeUserDir + "/.credentials.json"
 
 // loginURLRe matches the claude.ai / console authorization URL the CLI prints.
 // Broad on host (claude.ai today, console.anthropic.com historically) but

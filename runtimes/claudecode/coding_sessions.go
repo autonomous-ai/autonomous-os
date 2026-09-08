@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"go.autonomous.ai/os/system/lib/syspath"
 )
 
 // Coding-session discovery for the Telegram remote-coding feature.
@@ -23,11 +25,15 @@ import (
 // session carries its real cwd, recovered from the transcript (NOT decoded from
 // the directory name, whose /→- encoding is lossy for folders containing '-').
 
-const (
-	// claudeProjectsDirDefault is the on-device session store. Overridable via
-	// the claudeProjectsDirPath test seam.
-	claudeProjectsDirDefault = "/root/.claude/projects"
+// claudeProjectsDirDefault is the on-device session store. Overridable via
+// the claudeProjectsDirPath test seam.
+var claudeProjectsDirDefault = claudeUserDir + "/projects"
 
+// deviceMainWorkspace is the persona (device-main) session's own cwd — it is
+// not a user coding session, so it is excluded from the /sessions listing.
+var deviceMainWorkspace = claudecodeWorkspaceDir
+
+const (
 	// transcriptScanLimit bounds how many bytes of a transcript are read while
 	// recovering its cwd + recent prompts. Generous so the tail (recent prompts)
 	// is reached for normal-sized transcripts.
@@ -36,10 +42,6 @@ const (
 	// recentPromptsMax is how many recent user prompts a listing shows per
 	// session (most-recent first).
 	recentPromptsMax = 3
-
-	// deviceMainWorkspace is the persona (device-main) session's own cwd — it is
-	// not a user coding session, so it is excluded from the /sessions listing.
-	deviceMainWorkspace = "/root/.claudecode/workspace"
 )
 
 // codingSession is one resumable claude session discovered on disk.
@@ -259,21 +261,23 @@ func userRecordText(raw json.RawMessage) string {
 }
 
 // normalizeFolder cleans a user-supplied path: trims quotes/space, expands a
-// leading ~ to /root, makes it absolute (relative paths resolve under /root)
-// and drops any trailing slash.
+// leading ~ to the agent home, makes it absolute (relative paths resolve under
+// that home) and drops any trailing slash. The home is the same OS_AGENT_HOME
+// the gatewayd asserts as the child's HOME — /root on a board.
 func normalizeFolder(p string) string {
 	p = strings.TrimSpace(p)
 	p = strings.Trim(p, `"'`)
 	if p == "" {
 		return ""
 	}
+	home := syspath.AgentHome()
 	switch {
 	case p == "~":
-		p = "/root"
+		p = home
 	case strings.HasPrefix(p, "~/"):
-		p = filepath.Join("/root", p[2:])
+		p = filepath.Join(home, p[2:])
 	case !filepath.IsAbs(p):
-		p = filepath.Join("/root", p)
+		p = filepath.Join(home, p)
 	}
 	return filepath.Clean(p)
 }

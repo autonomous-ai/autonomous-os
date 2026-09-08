@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"go.autonomous.ai/os/system/domain"
+	"go.autonomous.ai/os/system/lib/syspath"
 )
 
 // telegramTargetsFile is the Device-owned store of known Telegram chats,
@@ -20,7 +21,7 @@ import (
 // Broadcast/SendToUser reach the owner from boot.
 //
 // Schema: {"targets":[{"chat_id":"...","type":"private|group"}, ...]}
-const telegramTargetsFile = "/root/.lumi/telegram_targets.json"
+var telegramTargetsFile = syspath.AgentHome() + "/.lumi/telegram_targets.json"
 
 type telegramTargetEntry struct {
 	ChatID string `json:"chat_id"`

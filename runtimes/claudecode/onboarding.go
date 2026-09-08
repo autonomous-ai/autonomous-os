@@ -16,7 +16,29 @@ import (
 
 	"go.autonomous.ai/os/system/device"
 	"go.autonomous.ai/os/system/domain"
+	"go.autonomous.ai/os/system/lib/syspath"
+	"go.autonomous.ai/os/system/server/config"
 )
+
+// rewriteDevicePaths swaps the board paths baked into the OS-managed markdown
+// for the ones this process resolved, so a relocated run's @import lines still
+// point at real files. Order is longest-first: NewReplacer takes the first
+// pattern that matches, so /root/.claudecode must precede /root/.claude, and
+// both the bare /root. No-op on a board.
+func rewriteDevicePaths(s string) string {
+	agentHome := syspath.AgentHome()
+	if agentHome == osDefaultAgentHome && claudecodeHome == osDefaultClaudecodeHome {
+		return s
+	}
+	return strings.NewReplacer(
+		osDefaultClaudecodeHome, claudecodeHome,
+		osDefaultAgentHome+"/.claude", claudeUserDir,
+		osDefaultAgentHome+"/.openclaw", syspath.AgentRuntimeHome("openclaw"),
+		osDefaultAgentHome+"/local", agentHome+"/local",
+		osDefaultAgentHome+"/myapp", agentHome+"/myapp",
+		"`"+osDefaultAgentHome+"`", "`"+agentHome+"`",
+	).Replace(s)
+}
 
 // knowledgeFS holds the KNOWLEDGE.md skeleton, embedded so a fresh
 // claudecode-only device still gets the living-learnings doc the CLAUDE.md block
@@ -52,14 +74,21 @@ const (
 	// re-injected cleanly on update. MUST match the marker used in the blocks below.
 	osMandatoryMarker = "<!-- OS DO NOT REMOVE -->"
 
+	// The board paths the claudeMDBlock template below is written against —
+	// rewriteDevicePaths swaps them for whatever this process resolved.
+	osDefaultAgentHome      = "/root"
+	osDefaultClaudecodeHome = "/root/.claudecode"
+)
+
+var (
 	// claudecodeWorkspaceDir is the cwd the bridge runs Claude Code in. Claude
 	// auto-loads <cwd>/CLAUDE.md, <cwd>/.mcp.json and <cwd>/.claude/settings.json
 	// from here. Skills are NOT installed here — see claudecodeSkillsDir.
 	claudecodeWorkspaceDir = claudecodeHome + "/workspace"
 
-	// claudeUserDir is Claude Code's user-level config dir. The gatewayd runs the
-	// claude child with HOME=/root (gatewayd.Config.Home), so this is $HOME/.claude.
-	claudeUserDir = "/root/.claude"
+	// claudeUserDir is Claude Code's user-level config dir — $HOME/.claude of the
+	// child, whose HOME the gatewayd sets to OS_AGENT_HOME (/root on a board).
+	claudeUserDir = syspath.ClaudeCodeUserDir()
 
 	// claudeUserMDPath is the user-level memory file. Claude Code loads it in EVERY
 	// session regardless of cwd — unlike the workspace CLAUDE.md, which only the
@@ -78,7 +107,13 @@ const (
 	// get them.
 	claudecodeSkillsDir = claudeUserDir + "/skills"
 
-	// claudeMDBlock is the OS-managed block injected at the top of the USER-level
+	// claudeMDBlock is the template with the board paths rewritten. On a device
+	// the two are byte-identical.
+	claudeMDBlock = rewriteDevicePaths(claudeMDBlockTemplate)
+)
+
+const (
+	// claudeMDBlockTemplate is the OS-managed block injected at the top of the USER-level
 	// memory file (~/.claude/CLAUDE.md — claudeUserMDPath), NOT the workspace one.
 	// Claude Code loads the user file in every session regardless of cwd, so the
 	// device's persona + rules follow the agent into the coding sessions it spawns
@@ -95,7 +130,7 @@ const (
 	// is an arbitrary folder, so a relative `@SOUL.md` would resolve against that
 	// folder (persona silently missing) and a relative `memory/…` would scatter
 	// memory files into whatever project the user is coding in.
-	claudeMDBlock = `<!-- OS DO NOT REMOVE -->
+	claudeMDBlockTemplate = `<!-- OS DO NOT REMOVE -->
 **Persona & memory (OS-managed imports):** the following files hold who you are and what you remember — they are part of your context on every session:
 
 @/root/.claudecode/workspace/SOUL.md
@@ -155,10 +190,10 @@ func (s *ClaudeCodeService) SetupAgent(_ domain.SetupRequest) error {
 // (the bridge itself ships inside the os-server binary — nothing to hash).
 var presyncStateFiles = []string{
 	claudecodeHome + "/.env",
-	"/root/.claude/channels/telegram/.env",
-	"/root/.claude/channels/telegram/access.json",
-	"/root/.claude/channels/discord/.env",
-	"/root/.claude/channels/discord/access.json",
+	claudeUserDir + "/channels/telegram/.env",
+	claudeUserDir + "/channels/telegram/access.json",
+	claudeUserDir + "/channels/discord/.env",
+	claudeUserDir + "/channels/discord/access.json",
 }
 
 // EnsureOnboarding reconciles the device-side Claude Code state on every
@@ -247,8 +282,8 @@ func (s *ClaudeCodeService) EnsureOnboarding() error {
 }
 
 // runPresync materializes the embedded presync script to a temp file and runs
-// it. The script is self-contained (hardcodes /root/.claudecode +
-// /root/config/config.json) and idempotent, so it is safe to run on every boot.
+// it. Idempotent, so safe on every boot. The env below hands the script the
+// paths THIS process resolved, so the two cannot disagree.
 func (s *ClaudeCodeService) runPresync() error {
 	f, err := os.CreateTemp("", "claudecode-presync-*.sh")
 	if err != nil {
@@ -267,7 +302,13 @@ func (s *ClaudeCodeService) runPresync() error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "bash", path).CombinedOutput()
+	cmd := exec.CommandContext(ctx, "bash", path)
+	cmd.Env = append(os.Environ(),
+		"CONFIG_JSON="+config.Path(),
+		"CLAUDECODE_HOME="+claudecodeHome,
+		"CLAUDE_HOME="+claudeUserDir,
+	)
+	out, err := cmd.CombinedOutput()
 	if len(out) > 0 {
 		slog.Info("claudecode presync output", "component", "claudecode", "output", strings.TrimSpace(string(out)))
 	}

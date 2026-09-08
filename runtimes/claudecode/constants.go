@@ -1,5 +1,7 @@
 package claudecode
 
+import "go.autonomous.ai/os/system/lib/syspath"
+
 // Wire constants for the Claude Code backend. Claude Code (the Anthropic CLI
 // agent) has no server mode of its own, so the device runs a thin local bridge:
 // the Go gatewayd (runtimes/claudecode/gatewayd) compiled into the os-server
@@ -21,24 +23,26 @@ package claudecode
 //
 // The stream-json events are translated in translator.go into the same
 // domain.WSEvent shape the OpenClaw handler consumes.
-const (
+// Conversation is a label only — Claude Code owns its session ids; the real
+// session UUID is captured from the stream-json `system:init` event.
+const Conversation = "device-main"
+
+// Resolved once at process start from the same env vars the gatewayd and
+// presync.sh read (syspath). Unset env keeps the device defaults byte for byte.
+var (
 	// WSURL is the local bridge WebSocket endpoint (served by the gatewayd —
-	// runtimes/claudecode/gatewayd, default port 18791).
-	WSURL = "ws://127.0.0.1:18791/claude/ws/"
+	// runtimes/claudecode/gatewayd, CLAUDECODE_PORT, default 18791).
+	WSURL = "ws://127.0.0.1:" + syspath.ClaudeCodePort() + "/claude/ws/"
 
 	// Token is the bearer token sent in the Authorization header on connect.
-	// The gatewayd defaults to the same value (it references this constant) —
-	// a fixed device-local token, mirroring the picoclaw contract.
-	Token = "autonomous_claudecode_token"
-
-	// Conversation is a label only — Claude Code owns its session ids; the real
-	// session UUID is captured from the stream-json `system:init` event.
-	Conversation = "device-main"
+	// The gatewayd defaults to the same value — a fixed device-local token,
+	// mirroring the picoclaw contract.
+	Token = syspath.ClaudeCodeWSToken()
 
 	// claudecodeHome is the backend's device-local state dir: .env
 	// (ANTHROPIC_* + channel launch flags, presync-owned), session.json, and the
-	// workspace/ Claude Code runs in.
-	claudecodeHome = "/root/.claudecode"
+	// workspace/ Claude Code runs in. CLAUDECODE_HOME, default /root/.claudecode.
+	claudecodeHome = syspath.ClaudeCodeHome()
 
 	// EnvFile is the presync-owned launch env (ANTHROPIC_* creds + channel
 	// flags). systemd injects it into the gatewayd only; the web CLI sources it

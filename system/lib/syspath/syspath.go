@@ -1,13 +1,10 @@
-// Package syspath resolves the device-absolute paths os-server owns.
+// Package syspath resolves the absolute paths os-server owns.
 //
-// Every accessor keeps its production default and is overridden by a single
-// env var, so the SAME binary that ships to the board also runs off-device
-// (`make os-dev`) — no build tag, no second code path. HAL already reads
-// OS_CONFIG_PATH / HAL_USERS_DIR this way; runtimes/codex/gatewayd and
-// presync.sh already read CODEX_HOME / CODEX_PORT. This package closes the
-// gap on the os-server side, which had them as Go consts.
+// Each accessor has the board's path as its default and one env var to
+// override it, so the same binary runs on a device and on a laptop
+// (`make os-dev`) — no build tag, no second code path.
 //
-// Unset env = today's device behaviour, byte for byte.
+// Unset env = device behaviour, byte for byte.
 package syspath
 
 import "os"
@@ -21,30 +18,51 @@ func envOr(key, def string) string {
 }
 
 // CodexHome is Codex's state dir: config.toml, auth.json, .env, skills/,
-// sessions/ and the workspace/ codex runs in. Same var the gatewayd reads.
+// sessions/, workspace/. Same var the gatewayd and presync.sh read.
 func CodexHome() string { return envOr("CODEX_HOME", "/root/.codex") }
 
 // CodexPort is the loopback port codex-gatewayd listens on.
 func CodexPort() string { return envOr("CODEX_PORT", "18792") }
 
 // CodexWSToken is the bearer token os-server sends to the bridge. The bridge
-// reads the same value from $CODEX_HOME/.env (presync-owned).
+// reads the same value from $CODEX_HOME/.env.
 func CodexWSToken() string { return envOr("CODEX_WS_TOKEN", "autonomous_codex_token") }
 
-// AgentHome is the agent user's home dir — the root a Telegram coding session
-// resolves "~" and relative folders against.
+// ClaudeCodeHome is Claude Code's state dir: .env, session.json, workspace/.
+// Unlike CodexHome it defaults under AgentHome() — it is device state, not a
+// developer install, so off-device it follows OS_AGENT_HOME.
+func ClaudeCodeHome() string { return envOr("CLAUDECODE_HOME", AgentHome()+"/.claudecode") }
+
+// ClaudeCodeUserDir is the claude CLI's user dir: skills, credentials,
+// projects. It is $HOME/.claude of the child process, so it must track the HOME
+// the gatewayd asserts (gatewayd.Config.Home = OS_AGENT_HOME).
+func ClaudeCodeUserDir() string { return AgentHome() + "/.claude" }
+
+// ClaudeCodePort is the loopback port claudecode-gatewayd listens on.
+func ClaudeCodePort() string { return envOr("CLAUDECODE_PORT", "18791") }
+
+// ClaudeCodeWSToken is the bearer token os-server sends to the bridge. The
+// bridge defaults to the same value (runtimes/claudecode.Token).
+func ClaudeCodeWSToken() string {
+	return envOr("CLAUDECODE_WS_TOKEN", "autonomous_claudecode_token")
+}
+
+// AgentHome is the agent user's home — what a Telegram coding session resolves
+// "~" and relative folders against.
 func AgentHome() string { return envOr("OS_AGENT_HOME", "/root") }
 
-// AgentRuntimeHome is one runtime's state dir — where its workspace/ and
-// media/hal-snapshots/ live. On a board every runtime sits under the agent
-// user's home as /root/.<runtime>, and unset env keeps exactly that. Codex is
-// resolved through CodexHome() instead of composed from AgentHome(): it owns a
-// dedicated var that the gatewayd, presync.sh and HAL all read, and off-device
-// that var points at the developer's real install while OS_AGENT_HOME points at
-// throwaway state — composing the two would name a directory nobody writes to.
+// AgentRuntimeHome is one runtime's state dir, holding its workspace/ and
+// media/hal-snapshots/. On a board every runtime sits at /root/.<runtime> —
+// what the last line returns. Codex and claudecode go through their own
+// accessors because each owns an env var the gatewayd, presync.sh and HAL read
+// too, and off-device CODEX_HOME points at the developer's real install rather
+// than under OS_AGENT_HOME.
 func AgentRuntimeHome(runtime string) string {
-	if runtime == "codex" {
+	switch runtime {
+	case "codex":
 		return CodexHome()
+	case "claudecode":
+		return ClaudeCodeHome()
 	}
 	return AgentHome() + "/." + runtime
 }
@@ -54,22 +72,17 @@ func AgentStatePath() string {
 	return envOr("OS_AGENT_STATE_PATH", "/root/config/agent_state.json")
 }
 
-// BackendUplink reports whether this process may talk to the Autonomous
-// backend — the 15s status ping and the MQTT command channel.
+// BackendUplink reports whether this process may talk to the Autonomous backend
+// — the 15s status ping and the MQTT command channel.
 //
-// A board is the device it reports as, so this is on and stays on. An
-// off-device run is NOT: the backend identifies a device by its llm_api_key,
-// not by device_id, so a laptop holding a copy of a device's config.json is
-// indistinguishable from that device. Measured 27/08/2026 with both running:
-// the ping overwrote the real lamp's local_ip / mac / version / skills every
-// 15s, and — because the client ID is derived from the device_id the backend
-// hands back — the two MQTT clients kicked each other off the broker about
-// once a second, indefinitely.
+// The backend identifies a device by its llm_api_key, not its device_id, so a
+// laptop holding a copy of a device's config.json is indistinguishable from
+// that device. Measured 27/08/2026 with both running: the ping overwrote the
+// real lamp's local_ip / mac / version / skills every 15s, and the two MQTT
+// clients kicked each other off the broker about once a second.
 //
-// Nothing a developer needs goes through here: the web UI, Flow Monitor, voice
-// pipeline, agent and skills are all local. So `make os-dev` sets it off and a
-// deliberate OS_BACKEND_UPLINK=on is the only way to aim a laptop at a real
-// device's backend record.
+// Nothing a developer needs goes through here, so `make os-dev` turns it off.
+// OS_BACKEND_UPLINK=on is the only way back.
 func BackendUplink() bool {
 	return envOr("OS_BACKEND_UPLINK", "on") != "off"
 }
@@ -77,17 +90,14 @@ func BackendUplink() bool {
 // LogFile is os-server's rotating log file.
 func LogFile() string { return envOr("OS_LOG_FILE", "/var/log/os-server.log") }
 
-// HALLogFile is the file HAL's rotating handler writes (hal/server_support/
-// log_setup.py, $HAL_LOG_DIR/server.log). os-server only reads it, for the
-// web UI's HAL log tab.
+// HALLogFile is the file HAL's rotating handler writes. os-server only reads
+// it, for the web UI's HAL log tab.
 func HALLogFile() string { return envOr("OS_HAL_LOG_FILE", "/var/log/hal/server.log") }
 
 // AgentBridgeLog is a file to read the agent bridge's output from instead of
-// its systemd journal. Empty — the default — keeps the journal, which is what
-// a board has and what every runtime's `journal:<unit>.service` mapping means.
-// Off-device there is no systemd at all, so `make codex-dev` tees the bridge to
-// a file and names it here; without this the web UI's Agent tabs are the only
-// ones that stay blank on a laptop.
+// its systemd journal. Empty — the default — keeps the journal, which is what a
+// board has. Off-device there is no systemd, so `make codex-dev` tees the
+// bridge to a file and names it here.
 func AgentBridgeLog() string { return envOr("OS_AGENT_BRIDGE_LOG", "") }
 
 // BootstrapConfig is the OTA worker's config file. os-server reads only
