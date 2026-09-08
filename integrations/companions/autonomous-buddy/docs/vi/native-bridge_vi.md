@@ -123,3 +123,18 @@ mock server bằng buddy ID `test-buddy` và Bearer token `test-token`, không �
 credential pairing thật. Có thể bỏ path. Chỉ chấp nhận IPv4 loopback rõ ràng,
 `ws`, port hợp lệ, không credential, query hay fragment. Override không có tác
 dụng ngoài test mode.
+
+## Các mục quyền macOS sau khi chuyển sang app hợp nhất
+
+Bundle hợp nhất là `Autonomous Buddy.app`, bundle ID
+`network.autonomous.ai.buddy.manager`. Helper Swift bên trong là executable thường
+ở `Contents/Resources/native/AutonomousBuddy`, ký bằng identifier
+`network.autonomous.ai.buddy`; đây không phải app thứ hai cần cài. macOS có thể giữ
+mục Accessibility của app Swift standalone cũ sau khi bundle đó đã được chuyển
+sang backup. Vì vậy, nhiều dòng quyền không chứng minh có hai app Buddy đang chạy.
+
+Kiểm tra Accessibility và Screen Recording thực thi trong helper Swift hiện tại.
+Trạng thái helper báo mới là bằng chứng về quyền hiệu lực. Quan hệ đóng gói và
+signing identifier không tự chứng minh TCC kế thừa quyền parent hoặc việc xóa mục
+quyền cũ sẽ không ảnh hưởng. Build ad-hoc local có designated requirement dựa trên
+code hash; build lại có thể cần cấp quyền lại.

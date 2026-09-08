@@ -131,3 +131,19 @@ connects to a mock server using synthetic buddy ID `test-buddy` and Bearer token
 `test-token`, without loading or saving real pairing credentials. The path may be
 omitted. Only explicit IPv4 loopback, `ws`, a valid port, no credentials, no query
 and no fragment are accepted. The override has no effect outside test mode.
+
+## macOS permission entries after migration
+
+The unified bundle is `Autonomous Buddy.app` with bundle ID
+`network.autonomous.ai.buddy.manager`. Its embedded Swift helper is a plain
+executable at `Contents/Resources/native/AutonomousBuddy`, signed with identifier
+`network.autonomous.ai.buddy`; it is not a second installed app. macOS can retain
+an Accessibility entry from the older standalone Swift app after that bundle has
+been archived, so multiple visible permission rows do not establish that two
+Buddy apps are running.
+
+Accessibility and Screen Recording checks run inside the current Swift helper.
+Its reported status is the evidence of effective access. The packaging relationship
+and signing identifiers alone do not prove automatic TCC trust inheritance or
+that removing an older permission entry is harmless. Local ad-hoc builds have
+code-hash-based designated requirements; rebuilding can require a fresh grant.
