@@ -409,7 +409,7 @@ func TestTTSSpeedRejectsBeforeMutation(t *testing.T) {
 	if c.TTSVoice != "alloy" || c.TTSProvider != "openai" || c.STTLanguage != "en" || c.TTSSpeed != nil {
 		t.Fatal("invalid speed partially mutated config")
 	}
-	if got := s.GetPublicConfig().TTSSpeed; got != 1 {
+	if got := s.GetPublicConfig().TTSSpeed; got != 1.3 {
 		t.Fatalf("public default %v", got)
 	}
 }

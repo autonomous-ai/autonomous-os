@@ -29,7 +29,6 @@ func (s *CodexService) StartHALVoice(deepgramKey, llmKey, sttKey, ttsKey, llmBas
 		return nil
 	}
 	if err := hal.StartVoice(hal.VoiceStartConfig{
-		TTSSpeed:        s.config.GetTTSSpeed(),
 		DeepgramKey:     deepgramKey,
 		LLMKey:          llmKey,
 		STTKey:          sttKey,

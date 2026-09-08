@@ -1322,11 +1322,10 @@ type AgentRuntimeSetAck struct {
 // Text is required; Provider/Voice/Language are optional overrides — empty
 // fields make HAL fall back to the device's current TTS config.
 type MQTTTTSPreviewData struct {
-	Speed    *float64 `json:"speed,omitempty"`
-	Text     string   `json:"text"`
-	Provider string   `json:"provider,omitempty"`
-	Voice    string   `json:"voice,omitempty"`
-	Language string   `json:"language,omitempty"`
+	Text     string `json:"text"`
+	Provider string `json:"provider,omitempty"`
+	Voice    string `json:"voice,omitempty"`
+	Language string `json:"language,omitempty"`
 }
 
 // MQTTTTSPreviewCommand wraps the full tts.preview downlink envelope for unmarshalling.
@@ -1465,7 +1464,7 @@ type UpdateConfigRequest struct {
 
 	TTSProvider string   `json:"tts_provider"`
 	TTSVoice    string   `json:"tts_voice"`
-	TTSSpeed    *float64 `json:"tts_speed,omitempty" binding:"omitempty,gte=0.7,lte=1.2"`
+	TTSSpeed    *float64 `json:"tts_speed,omitempty" binding:"omitempty,gte=0.25,lte=4"`
 	WakeWord    *bool    `json:"wakeword,omitempty"`
 
 	// Realtime voice-agent config (Gemini Live / OpenAI Realtime). Same payload

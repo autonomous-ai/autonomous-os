@@ -315,22 +315,19 @@ các field riêng theo từng kind. Mọi kind đều phản hồi trên fd_chan
 metadata device/version chuẩn cộng với `kind`, `status` (`success|failure`), `error`
 (tùy chọn) và payload `data` (tùy chọn).
 
-`tts.set` nhận `speed` tùy chọn từ `0.7` đến `1.2`; ví dụ
-`{"cmd":"data","kind":"tts.set","data":{"speed":1.2}}`. Bỏ qua speed
-thì giữ giá trị đã lưu; nếu chưa lưu, tốc độ hiệu lực lấy từ `HAL_TTS_SPEED`
-(giới hạn `0.7–1.2`; vắng/không hợp lệ → `1.0`). Handler dùng chung luồng
-cập nhật HTTP, ack `starting` rồi `success` hoặc `failure`; thành công nghĩa
-là đã lưu và lên lịch áp dụng HAL. Thay đổi riêng speed áp dụng live.
-`tts.preview` nhận `speed` trong cùng khoảng mà không ghi config. Giá trị
-ngoài khoảng bị từ chối ở cả hai lệnh. Uplink `info` luôn có `tts_speed`
-hiệu lực, kể cả giá trị fallback từ môi trường khi chưa lưu speed.
+`tts.set` nhận `speed` tùy chọn trong `0.25–4.0`, ví dụ
+`{"cmd":"data","kind":"tts.set","data":{"speed":1.2}}`. Bỏ qua thì giữ
+giá trị đã lưu; nếu chưa lưu, dùng `HAL_TTS_SPEED` (mặc định `1.3`). Lệnh ack
+`starting` rồi `success` hoặc `failure`; lưu và áp dụng lại HAL kể cả khi
+setting không đổi. Uplink `info` có `tts_speed` hiệu lực. ElevenLabs giới hạn
+tốc độ gửi đi trong `0.7–1.2`.
 
 **Nhận:** `{"cmd": "data", "kind": "<kind>", "data": { ... }}`
 
 | Kind | Mục đích | Field trong `data` |
 |------|----------|--------------------|
 | `tts.set` | Lưu cấu hình TTS voice/provider/language/speed | `provider`, `voice`, `language`, `speed` (tùy chọn) |
-| `tts.preview` | Preview TTS một lần (không ghi config) | `text` (bắt buộc), tùy chọn `provider`/`voice`/`language`/`speed` |
+| `tts.preview` | Preview TTS một lần (không ghi config) | `text` (bắt buộc), tùy chọn `provider`/`voice`/`language` |
 | `wakeword.gate` | Bật/tắt wake-word gate top-level (bất đồng bộ; ack `starting`) | `enabled` (boolean bắt buộc) |
 | `timezone.set` | Áp dụng múi giờ IANA của device (bất đồng bộ; ack `starting`) | `timezone` (bắt buộc, ví dụ `Asia/Ho_Chi_Minh`) |
 | `oauth.set` | Lưu/thay token OAuth cho một provider | `provider`, `access_token`, tùy chọn `refresh_token`/`token_type`/`expires_at`/`scopes`/`user_email`/`client_id` |

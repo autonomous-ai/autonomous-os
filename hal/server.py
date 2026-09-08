@@ -46,8 +46,8 @@ from hal.config import (
     SERVO_PORT,
     SIMULATE,
     SIM_MEDIA,
+    get_tts_speed,
     TTS_VOICE,
-    TTS_SPEED,
     TTS_INSTRUCTIONS,
     OS_CONFIG_PATH,
 )
@@ -627,11 +627,6 @@ async def lifespan(app: FastAPI):
         stt_url = os_cfg.get("stt_base_url", "") or llm_url
         voice = os_cfg.get("tts_voice", "") or TTS_VOICE
         tts_provider = os_cfg.get("tts_provider", PROVIDER_OPENAI)
-        # Persisted settings win over the legacy HAL_TTS_SPEED environment
-        # value, which existing devices keep until the user saves a speed.
-        tts_speed = os_cfg.get("tts_speed")
-        if tts_speed is None:
-            tts_speed = max(0.7, min(1.2, TTS_SPEED))
         if tts_key and tts_url and TTSService and not state.tts_service:
             state.tts_service = TTSService(
                 api_key=tts_key,
@@ -640,7 +635,7 @@ async def lifespan(app: FastAPI):
                 numpy_module=np,
                 output_device=state.audio_output_device,
                 voice=voice,
-                speed=tts_speed,
+                speed=get_tts_speed(),
                 instructions=os_cfg.get("tts_instructions", "") or TTS_INSTRUCTIONS or None,
                 on_speak_start=state._on_tts_speak_start,
                 on_speak_end=state._on_tts_speak_end,

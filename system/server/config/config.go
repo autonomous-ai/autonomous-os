@@ -704,14 +704,14 @@ type AutonomousDefaults struct {
 
 // GetTTSSpeed prefers the saved rate, retaining legacy HAL_TTS_SPEED on upgrades.
 // os-server loads /opt/hal/.env before constructing services. Legacy rates are
-// clamped to the supported settings range; absent or invalid values use 1.0.
+// clamped to the existing HAL range; absent or invalid values use 1.3.
 func (c *Config) GetTTSSpeed() float64 {
 	if c.TTSSpeed != nil {
 		return *c.TTSSpeed
 	}
 	speed, err := strconv.ParseFloat(strings.TrimSpace(os.Getenv("HAL_TTS_SPEED")), 64)
 	if err != nil || math.IsNaN(speed) || math.IsInf(speed, 0) {
-		return 1.0
+		return 1.3
 	}
-	return math.Max(0.7, math.Min(1.2, speed))
+	return math.Max(0.25, math.Min(4.0, speed))
 }

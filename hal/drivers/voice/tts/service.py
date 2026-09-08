@@ -761,7 +761,7 @@ class TTSService:
             return False
 
     def speak(self, text: str, interruptible: bool = False, realtime_feedback: bool = False,
-              turn_id: str = "", speed: Optional[float] = None) -> bool:
+              turn_id: str = "") -> bool:
         """Synthesize and play text. Returns True if started, False if busy or unavailable.
         If interruptible=True, a subsequent speak() call can stop this one.
         realtime_feedback=True feeds this text to the realtime agent on completion
@@ -780,14 +780,11 @@ class TTSService:
         # audible while the TTS provider itself is rate-limited. Dynamic
         # agent replies never match — the cache only ever holds warm-listed
         # fixed phrases. speak_cached mirrors this method's lock semantics.
-        # Explicit preview speed is passed into workers without changing the
-        # live default used by ordinary speech and queued replies.
-        speed_options = {"speed": speed} if speed is not None else {}
-        if self._tts_cache_path(text, **speed_options).exists():
+        if self._tts_cache_path(text).exists():
             logger.info("TTS cache-first hit: %s", text[:50])
             return self.speak_cached(
                 text, interruptible=interruptible, realtime_feedback=realtime_feedback,
-                turn_id=turn_id, **speed_options,
+                turn_id=turn_id,
             )
 
         if not self._lock.acquire(blocking=False):
@@ -817,7 +814,6 @@ class TTSService:
         thread = threading.Thread(
             target=self._speak_sync,
             args=(text,),
-            kwargs=speed_options,
             daemon=True,
             name="tts-speak",
         )
@@ -1240,8 +1236,7 @@ class TTSService:
                 chunks[-1] = f"{chunks[-1]} {remainder}".strip()
         return [c for c in chunks if c]
 
-    def _iter_tts_samples(self, text: str, dst_rate: int, ttfb_tag: Optional[str] = None,
-                          speed: Optional[float] = None):
+    def _iter_tts_samples(self, text: str, dst_rate: int, ttfb_tag: Optional[str] = None):
         """Yield float32 sample frames from the TTS backend's PCM stream."""
         np = self._np
         src_rate = self._backend.sample_rate
@@ -1253,7 +1248,7 @@ class TTSService:
             text=text,
             voice=self._voice,
             model=self._model,
-            speed=self._speed if speed is None else speed,
+            speed=self._speed,
             instructions=self._instructions,
         ):
             if self._stop_event.is_set():
@@ -1349,21 +1344,19 @@ class TTSService:
         dst_rate: int,
         out_q: "queue.Queue[Optional[np.ndarray]]",
         idx_total: tuple[int, int],
-        speed: Optional[float] = None,
     ) -> None:
         """Produce head chunk frames into a queue. Runs in parallel with the
         ALSA OutputStream open call so HTTP TTFB overlaps codec warmup."""
         idx, total = idx_total
-        speed_options = {"speed": speed} if speed is not None else {}
         attempt = 0
         try:
             while attempt <= self._max_retries:
                 try:
                     logger.info(
                         "TTS chunk %d/%d: len=%d (attempt=%d, speed=%.2f)",
-                        idx, total, len(text), attempt + 1, self._speed if speed is None else speed,
+                        idx, total, len(text), attempt + 1, self._speed,
                     )
-                    for frame in self._iter_tts_samples(text, dst_rate, ttfb_tag="c0", **speed_options):
+                    for frame in self._iter_tts_samples(text, dst_rate, ttfb_tag="c0"):
                         if self._stop_event.is_set():
                             return
                         out_q.put(frame)
@@ -1392,11 +1385,9 @@ class TTSService:
         tail_chunks: list[str],
         dst_rate: int,
         out_q: "queue.Queue[Optional[np.ndarray]]",
-        speed: Optional[float] = None,
     ) -> None:
         """Produce tail frames sequentially into one shared queue."""
         total = len(tail_chunks) + 1
-        speed_options = {"speed": speed} if speed is not None else {}
         try:
             for i, chunk_text in enumerate(tail_chunks, start=2):
                 if self._stop_event.is_set():
@@ -1404,9 +1395,8 @@ class TTSService:
                 attempt = 0
                 while attempt <= self._max_retries:
                     try:
-                        logger.info("Tail producer start c%d/%d len=%d speed=%.2f",
-                                    i, total, len(chunk_text), self._speed if speed is None else speed)
-                        for frame in self._iter_tts_samples(chunk_text, dst_rate, **speed_options):
+                        logger.info("Tail producer start c%d/%d len=%d", i, total, len(chunk_text))
+                        for frame in self._iter_tts_samples(chunk_text, dst_rate):
                             if self._stop_event.is_set():
                                 return
                             out_q.put(frame)
@@ -1439,7 +1429,7 @@ class TTSService:
             except Exception:
                 pass
 
-    def _speak_sync(self, text: str, speed: Optional[float] = None):
+    def _speak_sync(self, text: str):
         """Head chunk direct playback + parallel tail producer queue."""
         sd = self._sd
         dst_rate = self._device_rate or TTS_SAMPLE_RATE
@@ -1481,7 +1471,6 @@ class TTSService:
         head_thread = threading.Thread(
             target=self._head_producer,
             args=(head_text, dst_rate, head_q, (1, head_total)),
-            kwargs={"speed": speed} if speed is not None else {},
             daemon=True,
             name="tts-head-producer",
         )
@@ -1503,7 +1492,6 @@ class TTSService:
                         tail_thread = threading.Thread(
                             target=self._tail_producer,
                             args=(tail_chunks, dst_rate, tail_q),
-                            kwargs={"speed": speed} if speed is not None else {},
                             daemon=True,
                             name="tts-tail-producer",
                         )
@@ -1564,7 +1552,6 @@ class TTSService:
                     head_thread = threading.Thread(
                         target=self._head_producer,
                         args=(head_text, dst_rate, head_q, (1, head_total)),
-                        kwargs={"speed": speed} if speed is not None else {},
                         daemon=True,
                         name="tts-head-producer-retry",
                     )
@@ -1646,7 +1633,7 @@ class TTSService:
     # Cache miss -> render full WAV, save, then play. Subsequent calls hit.
     # ──────────────────────────────────────────────────────────────────────
 
-    def _tts_cache_key(self, text: str, speed: Optional[float] = None) -> str:
+    def _tts_cache_key(self, text: str) -> str:
         h = hashlib.sha1()
         h.update(self._provider.encode("utf-8"))
         h.update(b"\x00")
@@ -1654,13 +1641,13 @@ class TTSService:
         h.update(b"\x00")
         h.update((self._model or "").encode("utf-8"))
         h.update(b"\x00")
-        h.update(f"{self._speed if speed is None else speed:.2f}".encode("ascii"))
+        h.update(f"{self._speed:.2f}".encode("ascii"))
         h.update(b"\x00")
         h.update(text.encode("utf-8"))
         return h.hexdigest()
 
-    def _tts_cache_path(self, text: str, speed: Optional[float] = None) -> Path:
-        return _TTS_CACHE_DIR / f"{self._tts_cache_key(text, speed=speed)}.wav"
+    def _tts_cache_path(self, text: str) -> Path:
+        return _TTS_CACHE_DIR / f"{self._tts_cache_key(text)}.wav"
 
     def warm_lifecycle_phrases(self) -> int:
         """Render the phrases the device says on its own initiative into the cache.
@@ -1704,8 +1691,7 @@ class TTSService:
         return warmed
 
     def speak_cached(self, text: str, interruptible: bool = False, prerender: bool = False,
-                     realtime_feedback: bool = False, turn_id: str = "",
-                     speed: Optional[float] = None) -> bool:
+                     realtime_feedback: bool = False, turn_id: str = "") -> bool:
         """Cache-aware speak. On hit -> ~50ms playback. On miss -> render+save
         then play. prerender=True skips playback (warmup-only).
         realtime_feedback=True feeds this text to the realtime agent on
@@ -1720,8 +1706,7 @@ class TTSService:
             self._note_speech_muted(f"run:{turn_id}" if turn_id else "")
             return False
 
-        speed_options = {"speed": speed} if speed is not None else {}
-        cache_path = self._tts_cache_path(text, **speed_options)
+        cache_path = self._tts_cache_path(text)
         key = cache_path.name
 
         # Prerender: synchronous render+save, no playback. Caller (boot script)
@@ -1731,7 +1716,7 @@ class TTSService:
                 if cache_path.exists():
                     return True
                 try:
-                    self._render_and_save_wav(text, cache_path, **speed_options)
+                    self._render_and_save_wav(text, cache_path)
                     return True
                 except Exception:
                     logger.exception("Prerender failed for %r", text[:50])
@@ -1759,22 +1744,20 @@ class TTSService:
         threading.Thread(
             target=self._cached_play_thread,
             args=(text, cache_path),
-            kwargs=speed_options,
             daemon=True,
             name="tts-cached-speak",
         ).start()
         return True
 
-    def _cached_play_thread(self, text: str, cache_path: Path, speed: Optional[float] = None) -> None:
+    def _cached_play_thread(self, text: str, cache_path: Path) -> None:
         """Render-on-miss + play. Runs with self._lock + self._speaking already
         set by speak_cached(). Releases them in the finally block."""
-        speed_options = {"speed": speed} if speed is not None else {}
         cache_hit = cache_path.exists()
         try:
             if not cache_hit:
                 with _render_lock_for(cache_path.name):
                     if not cache_path.exists():
-                        self._render_and_save_wav(text, cache_path, **speed_options)
+                        self._render_and_save_wav(text, cache_path)
             self._play_wav_inline(cache_path, hit=cache_hit)
         except Exception:
             logger.exception("Cached speak thread failed")
@@ -1886,7 +1869,7 @@ class TTSService:
             logger.debug("Ack chime failed: %s", e)
             return False
 
-    def _render_and_save_wav(self, text: str, cache_path: Path, speed: Optional[float] = None) -> None:
+    def _render_and_save_wav(self, text: str, cache_path: Path) -> None:
         """Pull all PCM from backend and write WAV atomically. Synchronous."""
         if self._backend is None:
             raise RuntimeError("TTS backend not initialized")
@@ -1897,7 +1880,7 @@ class TTSService:
             text=text,
             voice=self._voice,
             model=self._model,
-            speed=self._speed if speed is None else speed,
+            speed=self._speed,
             instructions=self._instructions,
         ):
             pcm.extend(chunk)
@@ -1911,7 +1894,7 @@ class TTSService:
             wav.writeframes(bytes(pcm))
         tmp_path.replace(cache_path)
         logger.info(
-            "TTS rendered to cache: %s (%d bytes, rate=%d, speed=%.2f, took %.0fms)",
-            cache_path.name, len(pcm), src_rate, self._speed if speed is None else speed,
+            "TTS rendered to cache: %s (%d bytes, rate=%d, took %.0fms)",
+            cache_path.name, len(pcm), src_rate,
             (time.perf_counter() - t0) * 1000.0,
         )

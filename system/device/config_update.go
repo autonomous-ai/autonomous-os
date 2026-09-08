@@ -606,11 +606,47 @@ func (s *Service) syncLLMToGateway(ch updateChanges) {
 	}
 }
 
-// UpdateVoiceConfig applies MQTT voice settings using the HTTP update path.
+// UpdateVoiceConfig updates only TTS provider/voice/speed and STT language — safe to call from MQTT
+// handlers since it does not touch API keys, MQTT credentials, or WiFi config.
 func (s *Service) UpdateVoiceConfig(provider, voice, language string, speed *float64) error {
-	return s.UpdateConfig(domain.UpdateConfigRequest{
-		TTSProvider: provider, TTSVoice: voice, STTLanguage: language, TTSSpeed: speed,
-	})
+	if err := domain.ValidateTTSSpeed(speed); err != nil {
+		return err
+	}
+	prevLang := s.config.STTLanguage
+	if provider != "" {
+		s.config.TTSProvider = provider
+	}
+	if voice != "" {
+		s.config.TTSVoice = voice
+	}
+	if language != "" {
+		s.config.STTLanguage = language
+		s.config.STTModel = sttModelForLanguage(language)
+	}
+	if speed != nil {
+		value := *speed
+		s.config.TTSSpeed = &value
+	}
+	if err := s.config.Save(); err != nil {
+		return fmt.Errorf("save config: %w", err)
+	}
+	slog.Info("voice config updated", "component", "device", "provider", s.config.TTSProvider, "voice", s.config.TTSVoice, "language", s.config.STTLanguage)
+	if language != "" && prevLang != s.config.STTLanguage && s.agentGateway != nil {
+		if key := s.agentGateway.GetSessionKey(); key != "" {
+			go func() {
+				if err := s.agentGateway.NewSession(key); err != nil {
+					slog.Warn("NewSession on language change failed", "component", "device", "error", err)
+				}
+			}()
+		}
+	}
+	if language != "" && prevLang != s.config.STTLanguage {
+		// stt_language is read at boot; nothing can be pushed for it.
+		s.restartHAL("stt language change")
+	} else {
+		s.applyTTSConfig(s.config)
+	}
+	return nil
 }
 
 // sttModelForLanguage maps a BCP-47 language code to the Deepgram SKU exposed

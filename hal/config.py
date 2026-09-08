@@ -4,7 +4,6 @@ HAL runtime configuration — all values read from environment variables.
 Import: from hal.config import DEVICE_ID, SERVO_PORT, ...
 """
 
-import math
 import os
 import tempfile
 from pathlib import Path
@@ -72,14 +71,8 @@ if _sensing_device_env:
         AUDIO_SENSING_DEVICE = int(_sensing_device_env)
     except ValueError:
         AUDIO_SENSING_DEVICE = _sensing_device_env
-# Standalone TTS speed fallback. Saved os-server tts_speed takes precedence.
-# Web/MQTT settings use 0.7–1.2; standalone OpenAI supports 0.25–4.0.
-try:
-    TTS_SPEED: float = float(os.environ.get("HAL_TTS_SPEED", "1.0"))
-except ValueError:
-    TTS_SPEED = 1.0
-if not math.isfinite(TTS_SPEED):
-    TTS_SPEED = 1.0
+# TTS speed multiplier — 1.0=normal, 1.3=faster, max 4.0
+TTS_SPEED: float = float(os.environ.get("HAL_TTS_SPEED", "1.3"))
 # TTS voice — one of: alloy, ash, coral, echo, fable, onyx, nova, sage, shimmer
 TTS_VOICE: str = os.environ.get("TTS_VOICE", "nova")
 # TTS instructions — style/vibe prompt for voice (e.g. "Speak warmly like a caring friend")
@@ -325,6 +318,20 @@ VOICE_USER_FORGET_S = float(os.environ.get("HAL_VOICE_USER_FORGET_S", "300.0"))
 
 # --- DL backend connection ---
 OS_CONFIG_PATH = os.environ.get("OS_CONFIG_PATH", "/root/config/config.json")
+
+
+def get_tts_speed() -> float:
+    """Read the saved rate whenever TTS is created; retain the legacy env fallback."""
+    import json
+
+    try:
+        with open(OS_CONFIG_PATH) as f:
+            speed = json.load(f).get("tts_speed")
+        if isinstance(speed, (int, float)) and not isinstance(speed, bool) and 0.25 <= speed <= 4.0:
+            return float(speed)
+    except (OSError, ValueError, AttributeError):
+        pass
+    return TTS_SPEED
 
 # Persisted speaker volume (0-100). set_volume writes it on every change so
 # os-server restores the user's last choice at next boot instead of resetting

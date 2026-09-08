@@ -234,6 +234,12 @@ export function TTSSection({
       ? (ttsProvider as Vendor)
       : "elevenlabs");
 
+  const speedMin = ttsProvider === "elevenlabs" ? 0.7 : 0.25;
+  const speedMax = ttsProvider === "elevenlabs" ? 1.2 : 4.0;
+  // Show the backend's effective rate without changing a saved legacy value
+  // when the user edits another setting. Only a slider action changes it.
+  const effectiveSpeed = Math.max(speedMin, Math.min(speedMax, ttsSpeed));
+
   // Language picker — local state (not persisted server-side). Voice list
   // filters by this; empty means "follow the device's STT language".
   // ElevenLabs voice pools differ per language (Rachel is English, Ngan is
@@ -491,24 +497,23 @@ export function TTSSection({
       </div>
 
       <div style={{ marginBottom: 12 }}>
-        <label htmlFor="tts_speed" style={labelStyle}>Speech speed: {ttsSpeed.toFixed(2)}×</label>
+        <label htmlFor="tts_speed" style={labelStyle}>Speech speed: {effectiveSpeed.toFixed(2)}×</label>
         <input
           id="tts_speed"
           type="range"
-          min={0.7}
-          max={1.2}
+          min={speedMin}
+          max={speedMax}
           step={0.05}
-          value={ttsSpeed}
+          value={effectiveSpeed}
           onChange={(e) => setTtsSpeed(Number(e.target.value))}
-          aria-valuetext={`${ttsSpeed.toFixed(2)} times normal speed`}
+          aria-valuetext={`${effectiveSpeed.toFixed(2)} times normal speed`}
           style={{ width: "100%", accentColor: C.green }}
         />
         <div style={{ fontSize: 10.5, color: C.textMuted, marginTop: 4 }}>
-          0.7× slower · 1.0× normal · 1.2× faster. Test before saving.
+          {speedMin}×–{speedMax}× · 1.0× normal. Save changes before testing speed.
         </div>
         <TestVoiceButton
           voice={ttsVoice}
-          speed={ttsSpeed}
           lang={piperLang || lang || sttLanguage}
           provider={ttsProvider}
           baseUrl={ttsBaseUrl}
@@ -535,9 +540,8 @@ export function TTSSection({
 // ("Playing on device") for ~2.5s → back to idle. Errors flip to a red
 // "Failed" state for the same window. Prior version fired-and-forgot with no
 // visual change — the operator saw nothing happen and clicked again.
-function TestVoiceButton({ voice, speed, lang, provider, baseUrl, apiKey, blockedReason = "" }: {
+function TestVoiceButton({ voice, lang, provider, baseUrl, apiKey, blockedReason = "" }: {
   voice: string;
-  speed: number;
   lang: string;
   provider: string;
   // Non-empty when the device cannot possibly speak yet — a Piper voice whose
@@ -561,7 +565,7 @@ function TestVoiceButton({ voice, speed, lang, provider, baseUrl, apiKey, blocke
     setPhase("loading");
     setErrorMsg("");
     try {
-      await testTTSVoice(voice, { speed, lang, provider, baseUrl, apiKey });
+      await testTTSVoice(voice, { lang, provider, baseUrl, apiKey });
       setPhase("ok");
       window.setTimeout(() => setPhase("idle"), 2500);
     } catch (err) {

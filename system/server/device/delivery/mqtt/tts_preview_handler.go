@@ -21,9 +21,6 @@ func (h *DeviceMQTTHandler) handleTTSPreview(env domain.MQTTDataCommand) error {
 		return h.publishDataResult(domain.KindTTSPreview, "failure", "invalid JSON payload", nil)
 	}
 
-	if err := domain.ValidateTTSSpeed(req.Speed); err != nil {
-		return h.publishDataResult(domain.KindTTSPreview, "failure", err.Error(), nil)
-	}
 	if strings.TrimSpace(req.Text) == "" {
 		slog.Warn("tts.preview: missing text", "component", "mqtt")
 		return h.publishDataResult(domain.KindTTSPreview, "failure", "text is required", nil)
@@ -39,7 +36,7 @@ func (h *DeviceMQTTHandler) handleTTSPreview(env domain.MQTTDataCommand) error {
 	go func() {
 		apiKey := h.config.GetTTSAPIKey()
 		baseURL := h.config.GetTTSBaseURL()
-		if err := hal.SpeakPreview(req.Text, req.Voice, req.Provider, apiKey, baseURL, req.Speed); err != nil {
+		if err := hal.SpeakPreview(req.Text, req.Voice, req.Provider, apiKey, baseURL); err != nil {
 			slog.Error("tts.preview: SpeakPreview failed", "component", "mqtt", "error", err)
 			if pubErr := h.publishDataResult(domain.KindTTSPreview, "failure", err.Error(), nil); pubErr != nil {
 				slog.Warn("tts.preview: publish failure ack failed", "component", "mqtt", "error", pubErr)

@@ -27,7 +27,7 @@ func TestTTSSpeedPersistsAndAppliesAcrossHTTPAndMQTT(t *testing.T) {
 		body map[string]any
 		err  error
 	}
-	applied := make(chan appliedConfig, 4)
+	applied := make(chan appliedConfig, 5)
 	http.DefaultTransport = ttsPersistenceTransport(func(r *http.Request) (*http.Response, error) {
 		var body map[string]any
 		err := json.NewDecoder(r.Body).Decode(&body)
@@ -51,12 +51,18 @@ func TestTTSSpeedPersistsAndAppliesAcrossHTTPAndMQTT(t *testing.T) {
 		{name: "HTTP voice change preserves rate", voice: "voice-http", want: 1.2},
 		{name: "HTTP restores normal rate despite legacy env", speed: speedPointer(1.0), want: 1.0},
 		{name: "MQTT voice change preserves normal rate", mqtt: true, voice: "voice-mqtt", want: 1.0},
+		{name: "MQTT replay reapplies unchanged rate", mqtt: true, voice: "voice-mqtt", speed: speedPointer(1.0), want: 1.0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// Reload between operations to prove disk persistence and keep each async
 			// HAL apply isolated from the next operation's in-memory mutations.
 			loaded, err := config.Load()
 			if err != nil {
+				t.Fatal(err)
+			}
+			// Clear the completion marker so an unchanged MQTT replay also waits
+			// for its own asynchronous HAL apply to finish.
+			if err := os.Remove("config/.hal_config_hash"); err != nil && !os.IsNotExist(err) {
 				t.Fatal(err)
 			}
 			service := &Service{config: loaded}

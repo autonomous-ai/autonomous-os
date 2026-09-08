@@ -10,7 +10,7 @@ import (
 )
 
 func TestUpdateConfigRejectsInvalidTTSSpeed(t *testing.T) {
-	for _, value := range []string{"0", "0.69", "1.21", `"1.2"`, "1e999"} {
+	for _, value := range []string{"0", "0.24", "4.01", `"1.2"`, "1e999"} {
 		t.Run(value, func(t *testing.T) {
 			w := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(w)

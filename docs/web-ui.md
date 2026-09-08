@@ -119,14 +119,12 @@ Defined at `.lm-root` in `index.css`:
 
 ### 3.4 Settings (`/setting`) — shared shell
 
-**Speech speed** in Voice (`/setting#tts`) uses a `0.7–1.2×` slider with
-`0.05` steps and loads the effective speed returned by config (saved value,
-else `HAL_TTS_SPEED` clamped to range, else `1.0×`). Changes participate in the unsaved form
-state; **Save Changes** persists `tts_speed` via `PUT /api/device/config`.
-**Test Voice** sends the selected speed, including unsaved edits, as `speed`
-to `POST /api/voice/preview`; auditioning does not change saved config. The current ElevenLabs `eleven_v3`
-model does not support speed control; saving speed keeps the model unchanged.
-See [ElevenLabs speed support](https://elevenlabs.io/docs/eleven-creative/playground/text-to-speech#speed).
+**Speech speed** in Voice (`/setting#tts`) loads effective `tts_speed` and
+shows the provider range (`0.7–1.2×` for ElevenLabs, `0.25–4.0×` otherwise)
+in `0.05` steps. **Save Changes** persists speed through
+`PUT /api/device/config`; save before using **Test Voice**. Saved speed takes
+precedence over `HAL_TTS_SPEED` (default `1.3`); ElevenLabs clamps the outgoing
+speed to `0.7–1.2`.
 
 **AI Brain key/URL mirroring.** The panel fills a blank TTS or STT field from the
 AI Brain's key and base URL, so a first-time setup only asks for one credential.
