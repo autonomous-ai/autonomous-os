@@ -111,6 +111,7 @@ export function SessionView({ session, onError }: { session: Session; onError: (
         </div>
         <div className="session-status">
           <StatusDot session={session} />
+          {!isTerminal && <span title="Agent tools run with full access, without approval prompts">Full access · no approvals</span>}
           {statusName(session)}
           {running && (
             <button

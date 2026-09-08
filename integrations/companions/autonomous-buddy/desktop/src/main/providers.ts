@@ -38,8 +38,7 @@ export function invocation(
       command: 'codex',
       args: [
         'exec',
-        '-c',
-        'sandbox_mode="workspace-write"',
+        '--dangerously-bypass-approvals-and-sandbox',
         ...(sessionId
           ? ['resume', '--skip-git-repo-check', '--json', sessionId, '-']
           : ['--skip-git-repo-check', '--json', '-']),
@@ -49,6 +48,7 @@ export function invocation(
     command: 'claude',
     args: [
       '--print',
+      '--dangerously-skip-permissions',
       '--verbose',
       '--output-format',
       'stream-json',

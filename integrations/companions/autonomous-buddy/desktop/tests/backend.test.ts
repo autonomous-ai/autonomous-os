@@ -239,19 +239,20 @@ describe('workspace and Git boundaries', () => {
     expect((await f.manager.addProject(f.projectPath)).id).toBe(f.project.id)
   })
 })
-it('uses exact CLI resume flags without bypassing permissions', () => {
+it('uses no-approval CLI mode for new turns and exact-session resumes', () => {
   expect(invocation('codex', 'thread-one').args).toEqual([
     'exec',
-    '-c',
-    'sandbox_mode="workspace-write"',
+    '--dangerously-bypass-approvals-and-sandbox',
     'resume',
     '--skip-git-repo-check',
     '--json',
     'thread-one',
     '-',
   ])
+  expect(invocation('codex').args).toContain('--dangerously-bypass-approvals-and-sandbox')
+  expect(invocation('claude').args).toContain('--dangerously-skip-permissions')
   expect(invocation('claude', 'claude-one').args).toContain('--resume')
-  expect(invocation('claude', 'claude-one').args).not.toContain('--dangerously-skip-permissions')
+  expect(invocation('claude', 'claude-one').args).toContain('--dangerously-skip-permissions')
   expect(
     parseEvent('{"type":"stream_event","event":{"delta":{"type":"text_delta","text":"hello"}}}', 'claude')
       .text,
