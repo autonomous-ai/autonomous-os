@@ -87,8 +87,10 @@ func configFromEnv() Config {
 
 // Server bridges a single WebSocket client to per-turn opencode subprocesses.
 type Server struct {
-	cfg Config
-	ln  net.Listener
+	activeRequestID string // guarded by mu
+	activeRunID     string // guarded by mu
+	cfg             Config
+	ln              net.Listener
 
 	mu       sync.Mutex // guards client, threadID and session-file writes
 	client   *wsClient  // single client; a new connection replaces the old

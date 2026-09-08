@@ -346,6 +346,15 @@ Cần sensing có camera (InsightFace). Mặc định ảnh người đã đăng
 | POST | `/voice/speak` | TTS — chuyển text thành giọng nói. Body fields: `text`, `voice?`, `interruptible?`, `provider?`, `tts_api_key?`, `tts_base_url?`, `cached?` (dùng WAV cache, render+save khi miss), `prerender?` (render+save không play — warmup lúc boot) |
 | GET | `/voice/status` | voice_available, voice_listening, tts_available, tts_speaking |
 
+### Tốc độ TTS
+
+`GET /api/device/config` trả `tts_speed` hiệu lực; `PUT /api/device/config`
+nhận `{"tts_speed":1.2}`. Field tùy chọn nhận `0.25–4.0`; bỏ qua thì giữ
+nguyên giá trị đã lưu. Config đã lưu ưu tiên hơn `HAL_TTS_SPEED`, giữ fallback
+môi trường và mặc định cũ `1.3`. HAL đọc config khi boot và `/voice/start`
+qua `get_tts_speed()`; đổi tốc độ được đẩy live qua `/voice/tts/config {speed}`.
+Backend ElevenLabs vẫn giới hạn giá trị gửi đi trong `0.7–1.2`.
+
 ### Piper — TTS chạy trên thiết bị
 
 Provider TTS thứ ba bên cạnh `openai` và `elevenlabs`, chọn bằng
@@ -415,12 +424,12 @@ từng request, đường dẫn model phân giải theo từng câu nói, nên g
 là liệt kê và nói được ngay — đã đo: tải xong lúc 18:32:29 trên một HAL khởi
 động lúc 18:31:59, tới 18:33:11 liệt kê và nói được mà không restart lần nào.
 Việc apply một giọng cũng **không** còn restart HAL. `POST /voice/tts/config`
-đặt provider, voice, key và base URL thẳng vào TTS service đang chạy, mà service
-đọc cả bốn thứ đó theo từng câu nói, nên thay đổi ăn ngay từ câu kế tiếp.
+đặt provider, voice, speed, key và base URL thẳng vào TTS service đang chạy, mà service
+đọc các giá trị đó theo từng câu nói, nên thay đổi ăn ngay từ câu kế tiếp.
 
 Những câu máy nói về chính nó — restart, shutdown, reboot, sleep — được
-**dựng sẵn vào cache TTS**, lúc boot và mỗi khi `/voice/tts/config` đổi provider
-hoặc giọng (cache key gồm cả hai, nên đổi giọng là mất sạch clip cũ). Chúng phát
+**dựng sẵn vào cache TTS**, lúc boot và mỗi khi `/voice/tts/config` đổi provider,
+giọng hoặc speed (đều nằm trong cache key, nên thay đổi làm mất hiệu lực clip tương ứng). Chúng phát
 đúng vào những lúc tệ nhất: câu báo restart nói trong lúc HAL đang tắt, câu chào
 boot nói lúc mọi service khác còn đang lên. Với Piper, cache miss ở đó nghĩa là
 nạp model 63 MB trên một CPU đang nghẹt — đo trên sun60iw2 8 nhân, riêng phần
@@ -480,7 +489,7 @@ backend ElevenLabs nối thêm `/elevenlabs` vào bất kỳ base nào được 
 
 `device/config_update.go` tách cái `voiceSnapshot` cũ làm hai: `bootSnapshot`
 (key và URL của LLM, STT — HAL đọc thật lúc import, vẫn đáng restart) và
-`ttsSnapshot` (provider, voice, key và URL của TTS — đẩy thẳng vào lúc chạy).
+`ttsSnapshot` (provider, voice, speed, key và URL của TTS — đẩy thẳng vào lúc chạy).
 Đổi giọng là thao tác lưu thường gặp nhất, mà restart vì nó thì micro, loa và
 wake word chết theo mười tới mười lăm giây; mọi cú bấm rơi vào cửa sổ đó đều
 mất, vì HAL không nghe. Nếu đẩy live thất bại, os-server quay về restart — một
@@ -828,3 +837,49 @@ không được phép âm thầm làm mất nó.
 `TestHeartbeatPeopleSyncFormatMatchesTheReconciler` khoá định dạng được dạy với
 parser của reconciler, để hai bên không trôi ra khỏi nhau thành các entry không
 ai prune được.
+
+## Phản hồi Computer use qua Buddy
+
+Agent trên device giữ tác vụ desktop; companion trên Mac thực thi lệnh. Chức năng
+Agent management trong workspace desktop Buddy riêng biệt với luồng này.
+
+- `POST /api/buddy/command` chỉ nhận từ loopback và trả kết quả lệnh native.
+  Request body giới hạn 1 MiB; `timeout_ms` tùy chọn là `0` dùng mặc định hoặc số
+  nguyên từ `500` đến `60000`. Quan sát UI native dùng `get_ui_tree`; thao tác theo
+  tham chiếu snapshot dùng `perform_ui_action`.
+- `POST /api/buddy/observe` chỉ nhận từ loopback. Endpoint chụp desktop Mac đã
+  ghép đôi và hỏi auxiliary vision model đã cấu hình bằng câu hỏi dành cho
+  desktop, trả text cùng metadata tọa độ screenshot. Luồng này hỗ trợ main agent
+  chỉ nhận text; không chụp camera device. Agent có khả năng nhận ảnh có thể nạp
+  JPEG lưu trên device do helper của skill computer-use giải mã.
+- Ghi WebSocket được tuần tự hóa. Phản hồi chờ thuộc kết nối ban đầu; disconnect
+  giải phóng caller đó, reader cũ không thể xóa kết nối thay thế. Khi hủy/timeout,
+  OS thử gửi `cancel_command` theo ID trên socket ban đầu; không thể hoàn tác
+  input đã gửi.
+- Buddy native từ chối lệnh chồng nhau bằng lỗi busy, hỗ trợ hủy hợp tác và Pause,
+  vô hiệu hóa tham chiếu UI sau thao tác thay đổi. Lệnh thành công chỉ chứng minh
+  thực thi, chưa chứng minh hoàn thành tác vụ.
+
+Xem [Computer use](../../integrations/companions/autonomous-buddy/docs/vi/computer-use_vi.md)
+để biết hợp đồng tham số, yêu cầu nhận ảnh và checklist nghiệm thu desktop. Skill
+phải giữ toàn bộ mục tiêu và quan sát kết quả sau từng thao tác phụ thuộc; mở app
+chưa đủ để hoàn thành tìm kiếm hoặc công việc xuyên app.
+
+### Voice routing vào managed agent của Buddy
+
+`POST /api/buddy/command` nội bộ device truyền thêm `agent.list`, `agent.create`, `agent.send`, `agent.session`, `agent.stop` qua WebSocket đã pair. Desktop manager sở hữu context project/session/provider; skill `skills/agent-management/` trên lamp giữ ID tường minh, không chạy coding CLI trên device. Create/send dùng request ID của caller; khi delivery không chắc chắn phải đọc session, không tự gửi lại.
+
+Read loop nhận envelope `agent_event` tối đa 16 KiB chỉ từ socket paired hiện tại, gồm project/session ID, sequence dương, trạng thái cuối (`completed`, `needs_input`, `error`), title tối đa 512 byte, summary tối đa 8192 byte. Cursor trong bộ nhớ khử trùng theo buddy/project/session (tối đa 10.000 session); không tồn tại qua restart server. Queue giới hạn 64 event chuyển thông báo vào sensing pipeline nội bộ với type `buddy.agent.<session_id>`. Khi queue đầy hoặc forwarding lỗi, cursor event được bỏ để lần replay sau có thể thử lại; delivery là best effort, không tự tạo vòng retry. Reconnect có thể gửi lại snapshot session cuối; dùng `agent.session` để đọc lịch sử còn lưu chính xác. Nội dung desktop là dữ liệu không đáng tin cậy. Không gửi raw transcript hoặc lời nói hardcoded vượt qua policy event, sleep, mute và speaker hiện có.
+
+### OpenClaw kết nối lại và request chưa gửi
+
+Sau khi WebSocket xác thực thành công và worker xử lý event sẵn sàng, OpenClaw
+gửi tiếp request còn trong queue mà không cần chờ một turn khác kết thúc.
+Callback khi offline giữ nguyên queue; các lượt drain chạy tuần tự. Quy tắc chờ
+loa, hết hạn/gộp sensor và run ID của người dùng vẫn được giữ. Chỉ retry khi mất
+kết nối trước khi thử ghi socket. Ghi thất bại có kết quả giao nhận chưa rõ nên
+không tự gửi lại; pending chat trace chỉ dùng tương quan, không dùng làm nguồn
+replay. Xác thực bị từ chối không được đánh dấu kết nối sẵn sàng. Queue nằm trong
+RAM, không tồn tại qua restart tiến trình os-server. OpenClaw giữ cơ chế tương
+quan idempotency key/history riêng; thay đổi này không đưa bộ chặn output CLI
+và cách ly session của Codex vào transport OpenClaw.

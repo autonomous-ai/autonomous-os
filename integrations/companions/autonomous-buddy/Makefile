@@ -24,7 +24,7 @@ AUDIT_LOG  := $(HOME)/Library/Application Support/AutonomousBuddy/audit.log
 
 MOCK_DIR := mock-device
 
-.PHONY: help run build release app install open clean audit kill all check mock mock-build dmg icon app-signed dmg-signed notarize
+.PHONY: help native-run native-build native-release native-app native-open native-clean audit native-kill native-all native-check mock mock-build native-dmg icon native-app-signed native-dmg-signed native-notarize
 
 .DEFAULT_GOAL := help
 
@@ -34,24 +34,24 @@ help: ## Show this help
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z_-]+:.*##/ {printf "  \033[1m%-12s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 	@echo ""
 	@echo "Typical flow:"
-	@echo "  make run            # dev — runs in foreground (Ctrl-C to stop)"
-	@echo "  make app && make open"
+	@echo "  make build && make install  # one app with agent manager + native helper"
+	@echo "  make open"
 	@echo ""
 	@echo "Signing is automatic when a Developer ID cert is in the keychain."
 
-run: ## Run buddy in dev mode (foreground)
+native-run: ## Run buddy in dev mode (foreground)
 	cd $(MACOS_DIR) && swift run
 
-build: ## Build debug binary
+native-build: ## Build debug binary
 	cd $(MACOS_DIR) && swift build
 
-release: ## Build universal release binary (arm64 + x86_64) at macos/.build/apple/Products/Release/AutonomousBuddy
+native-release: ## Build universal release binary (arm64 + x86_64) at macos/.build/apple/Products/Release/AutonomousBuddy
 	cd $(MACOS_DIR) && swift build -c release --arch arm64 --arch x86_64
 
-check: ## Compile-only check (no link)
+native-check: ## Compile-only check (no link)
 	cd $(MACOS_DIR) && swift build --build-tests
 
-app: release $(ICNS_FILE) ## Bundle into dist/AutonomousBuddy.app (Developer ID signed if a cert is installed, else ad-hoc)
+native-app: native-release $(ICNS_FILE) ## Bundle into dist/AutonomousBuddy.app (Developer ID signed if a cert is installed, else ad-hoc)
 	@echo "==> Bundling $(APP_BUNDLE)"
 	@rm -rf "$(APP_BUNDLE)"
 	@mkdir -p "$(APP_BUNDLE)/Contents/MacOS"
@@ -68,7 +68,7 @@ app: release $(ICNS_FILE) ## Bundle into dist/AutonomousBuddy.app (Developer ID 
 	@if [ -z "$(DEV_ID_APP)" ]; then \
 		echo "    Ad-hoc signed — first launch: right-click → Open."; \
 	else \
-		echo "    Developer ID signed. Not notarized: run 'make dmg-signed' for the ship-ready DMG."; \
+		echo "    Developer ID signed. Not notarized: run 'make native-dmg-signed' for the ship-ready DMG."; \
 	fi
 
 icon: $(ICNS_FILE) ## Regenerate AppIcon.icns from the SF Symbol placeholder
@@ -97,13 +97,7 @@ $(ICNS_FILE): $(ICON_SCRIPT)
 	@rm -rf "$(ICONSET_DIR)"
 	@echo "==> Done: $(ICNS_FILE)"
 
-install: app ## Copy bundled .app to /Applications (replaces existing)
-	@echo "==> Installing to /Applications/$(APP_NAME).app"
-	@rm -rf "/Applications/$(APP_NAME).app"
-	@cp -R "$(APP_BUNDLE)" "/Applications/"
-	@echo "==> Installed."
-
-dmg: app ## Package the .app into a distributable DMG (drag-to-Applications layout)
+native-dmg: native-app ## Package the .app into a distributable DMG (drag-to-Applications layout)
 	@echo "==> Packaging $(DMG_FILE)"
 	@rm -f "$(DMG_FILE)"
 	@rm -rf "$(DMG_STAGE)"
@@ -123,26 +117,26 @@ dmg: app ## Package the .app into a distributable DMG (drag-to-Applications layo
 		echo "    Ad-hoc: first launch needs right-click → Open."; \
 	else \
 		echo "    Developer ID signed but NOT notarized — first launch still needs right-click → Open."; \
-		echo "    Run 'make dmg-signed' (needs NOTARY_PROFILE) for a DMG that opens with a double-click."; \
+		echo "    Run 'make native-dmg-signed' (needs NOTARY_PROFILE) for a DMG that opens with a double-click."; \
 	fi
 
-open: ## Launch the bundled .app from dist/
-	@if [ ! -d "$(APP_BUNDLE)" ]; then echo "No bundle yet — run 'make app' first."; exit 1; fi
+native-open: ## Launch the bundled .app from dist/
+	@if [ ! -d "$(APP_BUNDLE)" ]; then echo "No bundle yet — run 'make native-app' first."; exit 1; fi
 	open "$(APP_BUNDLE)"
 
-kill: ## Stop any running AutonomousBuddy process
+native-kill: ## Stop any running AutonomousBuddy process
 	-@pkill -x $(APP_NAME) 2>/dev/null && echo "Stopped $(APP_NAME)" || echo "$(APP_NAME) not running"
 
 audit: ## Tail the audit log
 	@if [ ! -f "$(AUDIT_LOG)" ]; then echo "No audit log yet at $(AUDIT_LOG)"; exit 0; fi
 	@tail -f "$(AUDIT_LOG)"
 
-clean: ## Remove all build artifacts
+native-clean: ## Remove all build artifacts
 	@echo "==> Cleaning"
 	cd $(MACOS_DIR) && swift package clean 2>/dev/null || true
 	rm -rf $(BUILD_DIR) $(MACOS_DIR)/.swiftpm $(DIST_DIR)
 
-all: app ## Alias for `make app`
+native-all: native-app ## Alias for `make native-app`
 
 mock: ## Run the mock device server (Go) — test buddy without a real device
 	cd $(MOCK_DIR) && go run .
@@ -164,9 +158,9 @@ mock-build: ## Compile-only check for mock-device
 #   autonomous-buddy/docs/release-signing.md
 # ----------------------------------------------------------------------------
 
-# Auto-detected from the keychain so `make app` / `install` / `dmg` sign for
+# Auto-detected from the keychain so `make native-app` / `install` / `dmg` sign for
 # distribution without extra env. Override by exporting DEV_ID_APP, or force a
-# local ad-hoc build with `make app DEV_ID_APP=`.
+# local ad-hoc build with `make native-app DEV_ID_APP=`.
 DEV_ID_APP     ?= $(shell security find-identity -v -p codesigning | sed -n 's/.*"\(Developer ID Application: [^"]*\)".*/\1/p' | head -1)
 NOTARY_PROFILE ?=
 
@@ -175,23 +169,23 @@ NOTARY_PROFILE ?=
 SIGN_ID    = $(if $(DEV_ID_APP),$(DEV_ID_APP),-)
 SIGN_FLAGS = $(if $(DEV_ID_APP),--options runtime --timestamp,)
 
-app-signed: ## Same as `make app`, but fails if no Developer ID identity is available
+native-app-signed: ## Same as `make native-app`, but fails if no Developer ID identity is available
 	@if [ -z "$(DEV_ID_APP)" ]; then \
 		echo "ERROR: no Developer ID Application identity found and DEV_ID_APP is unset."; \
 		echo "       See autonomous-buddy/docs/release-signing.md for setup."; \
 		exit 1; \
 	fi
-	@$(MAKE) app
+	@$(MAKE) native-app
 	@spctl --assess --type execute --verbose=4 "$(APP_BUNDLE)" 2>&1 | sed 's/^/    /' || true
 
-dmg-signed: ## Build signed .app → package DMG → sign DMG → notarize → staple (requires DEV_ID_APP + NOTARY_PROFILE)
+native-dmg-signed: ## Build signed .app → package DMG → sign DMG → notarize → staple (requires DEV_ID_APP + NOTARY_PROFILE)
 	@if [ -z "$(NOTARY_PROFILE)" ]; then \
 		echo "ERROR: NOTARY_PROFILE env var is required (keychain profile created via xcrun notarytool store-credentials)."; \
 		echo "       See autonomous-buddy/docs/release-signing.md for setup."; \
 		exit 1; \
 	fi
-	@$(MAKE) app-signed
-	@$(MAKE) dmg
+	@$(MAKE) native-app-signed
+	@$(MAKE) native-dmg
 	@echo "==> Submitting to Apple notarization (this can take 1-5 min)"
 	@xcrun notarytool submit "$(DMG_FILE)" \
 		--keychain-profile "$(NOTARY_PROFILE)" \
@@ -203,9 +197,61 @@ dmg-signed: ## Build signed .app → package DMG → sign DMG → notarize → s
 	@echo "==> Done: $(DMG_FILE) (signed + notarized + stapled)"
 	@echo "    Send this DMG to users — Gatekeeper accepts without right-click → Open."
 
-notarize: ## Re-submit an existing DMG for notarization (skips build + sign; use if a previous notarize failed)
+native-notarize: ## Re-submit an existing DMG for notarization (skips build + sign; use if a previous notarize failed)
 	@if [ -z "$(NOTARY_PROFILE)" ]; then echo "ERROR: NOTARY_PROFILE required"; exit 1; fi
-	@if [ ! -f "$(DMG_FILE)" ]; then echo "ERROR: $(DMG_FILE) not found — run 'make dmg-signed' first"; exit 1; fi
+	@if [ ! -f "$(DMG_FILE)" ]; then echo "ERROR: $(DMG_FILE) not found — run 'make native-dmg-signed' first"; exit 1; fi
 	@xcrun notarytool submit "$(DMG_FILE)" --keychain-profile "$(NOTARY_PROFILE)" --wait
 	@xcrun stapler staple "$(DMG_FILE)"
 	@xcrun stapler validate "$(DMG_FILE)"
+
+# Unified product: Electron owns the visible app and embeds the Swift helper.
+DESKTOP_DIR := desktop
+UNIFIED_APP := $(DESKTOP_DIR)/artifacts/package/Autonomous Buddy-darwin-$(shell node -p process.arch)/Autonomous Buddy.app
+UNIFIED_DMG := $(DIST_DIR)/Autonomous-Buddy-$(VERSION)-$(shell node -p process.arch).dmg
+.PHONY: build install app open run check all dmg app-signed dmg-signed notarize
+
+build: ## Build Electron + Swift and package one Autonomous Buddy.app (current Mac architecture)
+	$(MAKE) -C $(DESKTOP_DIR) build DEV_ID_APP="$(DEV_ID_APP)"
+
+app: build ## Alias for the unified build
+
+install: ## Build and install one application, preserving data and archiving the legacy app
+	$(MAKE) -C $(DESKTOP_DIR) install DEV_ID_APP="$(DEV_ID_APP)"
+
+open: ## Open the installed unified Autonomous Buddy
+	$(MAKE) -C $(DESKTOP_DIR) open
+
+run: build ## Build and open the unified local bundle
+	open "$(UNIFIED_APP)"
+
+check: ## Validate Swift and desktop components
+	$(MAKE) native-check
+	$(MAKE) -C $(DESKTOP_DIR) check
+
+all: build ## Alias for the unified build
+
+dmg: build ## Package the unified application into a local DMG (no notarization)
+	@mkdir -p "$(DIST_DIR)"
+	@rm -rf "$(DMG_STAGE)"
+	@mkdir -p "$(DMG_STAGE)"
+	@ditto "$(UNIFIED_APP)" "$(DMG_STAGE)/Autonomous Buddy.app"
+	@ln -s /Applications "$(DMG_STAGE)/Applications"
+	@hdiutil create -volname "Autonomous Buddy $(VERSION)" -srcfolder "$(DMG_STAGE)" -ov -format UDZO "$(UNIFIED_DMG)"
+	@rm -rf "$(DMG_STAGE)"
+	@if [ -n "$(DEV_ID_APP)" ]; then codesign --force --sign "$(DEV_ID_APP)" --timestamp "$(UNIFIED_DMG)"; fi
+
+app-signed: ## Build the unified app with an explicit Developer ID requirement
+	@if [ -z "$(DEV_ID_APP)" ]; then echo "ERROR: DEV_ID_APP is required"; exit 1; fi
+	$(MAKE) build DEV_ID_APP="$(DEV_ID_APP)"
+
+dmg-signed: ## Explicit distribution workflow: signed unified DMG, notarization, stapling
+	@if [ -z "$(DEV_ID_APP)" ] || [ -z "$(NOTARY_PROFILE)" ]; then echo "ERROR: DEV_ID_APP and NOTARY_PROFILE required"; exit 1; fi
+	$(MAKE) dmg DEV_ID_APP="$(DEV_ID_APP)"
+	$(MAKE) notarize
+
+notarize: ## Explicitly notarize an existing unified DMG
+	@if [ -z "$(NOTARY_PROFILE)" ]; then echo "ERROR: NOTARY_PROFILE required"; exit 1; fi
+	@test -f "$(UNIFIED_DMG)"
+	xcrun notarytool submit "$(UNIFIED_DMG)" --keychain-profile "$(NOTARY_PROFILE)" --wait
+	xcrun stapler staple "$(UNIFIED_DMG)"
+	xcrun stapler validate "$(UNIFIED_DMG)"

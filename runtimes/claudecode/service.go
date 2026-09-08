@@ -86,14 +86,18 @@ type ClaudeCodeService struct {
 	wsHasConnected atomic.Bool  // skip "reconnect" TTS on first successful connect
 
 	// Turn lifecycle. activeTurn flips true on SendChat (write) and false on the
-	// final / error frame (read). pendingRunID is the runID allocated by an
-	// outbound SendChat, adopted by the first inbound frame of that turn;
+	// final / error frame (read). pendingRuns preserves every outbound request
+	// in socket-write order, adopted as each serialized turn begins;
 	// currentRunID is the runID of the turn currently being streamed back.
-	activeTurn   atomic.Bool
-	busySince    atomic.Int64
-	pendingRunID atomic.Value // string
-	currentRunID atomic.Value // string
-	reqCounter   atomic.Int64
+	activeTurn           atomic.Bool
+	busySince            atomic.Int64
+	pendingMu            sync.Mutex
+	pendingRuns          []pendingRun
+	currentRequestID     atomic.Value // string
+	sendChatMu           sync.Mutex
+	pendingEventsDrainMu sync.Mutex
+	currentRunID         atomic.Value // string
+	reqCounter           atomic.Int64
 
 	// Session state. sessionUUID is the Claude-assigned session_id captured from
 	// any inbound frame.
@@ -297,4 +301,9 @@ func (s *ClaudeCodeService) IsRecentOutboundChat(text string) bool {
 		}
 	}
 	return false
+}
+
+type pendingRun struct {
+	reqID string
+	runID string
 }

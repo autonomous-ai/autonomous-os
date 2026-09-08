@@ -272,6 +272,7 @@ func (s *HermesService) handleOutputTextDelta(probe map[string]json.RawMessage, 
 // lifecycle.end with usage. Order matches OpenClaw so handler_events.go sees
 // the chat.final before lifecycle.end → idle.
 func (s *HermesService) handleResponseCompleted(probe map[string]json.RawMessage, dispatch func(domain.WSEvent), result *streamResult) {
+	result.Terminal = true
 	var inner struct {
 		Response struct {
 			ID     string `json:"id"`
@@ -376,6 +377,7 @@ func (s *HermesService) handleResponseFailed(probe map[string]json.RawMessage, d
 	if msg == "" {
 		msg = "hermes response failed"
 	}
+	result.Terminal = true
 	result.Errored = true
 	result.ErrorText = msg
 

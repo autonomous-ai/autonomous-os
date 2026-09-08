@@ -164,18 +164,32 @@ device layout above, so existing `/root/.claudecode` deployments run unchanged.
 
 ## 4. Sending a turn (`chat.go`)
 
-Identical shape to picoclaw: `sendChat` marks busy + stashes the pending runID
+`sendChat` serializes socket writes, marks busy, and appends a request/run pair to a FIFO
 **before** writing the frame, emits `chat_input`/`chat_send` flow events, and
 returns as soon as the frame is written — the reply arrives on the read loop.
 Outbound frame:
 
 ```json
-{"type":"message.send","id":"chat-42","payload":{
+{"type":"message.send","id":"chat-42","run_id":"device-chat-42-…","payload":{
   "content":"...","attachments":[{"type":"image","url":"data:image/jpeg;base64,..."}]}}
 ```
 
-Claude serializes queued inputs itself, so one turn is in flight at a time and
-the single pending/current runID correlation holds.
+Claude serializes queued inputs. The adapter retains every pending request/run
+pair instead of overwriting a single slot: success/error ends only the current
+turn, and idle callbacks preserve busy while active or transmitted turns remain.
+
+On WebSocket readiness the adapter drains only **unsent** local events, preserving
+run IDs and speaker gating. Offline idle callbacks retain that queue; a socket
+that disappears before any write restores the unsent tail. An attempted write
+has uncertain delivery on failure and is never automatically replayed. The
+bridge likewise does not retry failed/short stdin writes; it buffers only when
+no child stdin exists. Disconnect drops transmitted correlation, without replay.
+
+Limitation: Claude stdout currently lacks request/run tags, so correlation uses
+FIFO. Native channel turns interleaved with pending sends or frames missed across
+reconnect cannot be attributed reliably; this is not tagged Codex bridge parity.
+A native turn with no pending outbound request receives a new run ID.
+
 
 `sendChat` also reproduces OpenClaw's `emotion-acknowledge` hook **natively in
 Go** (`emotion_ack.go`, mirroring codex/hermes/picoclaw): each user-visible turn

@@ -53,7 +53,7 @@ func (s *Server) turnWorker(ctx context.Context) {
 		case o := <-s.ops:
 			switch o.kind {
 			case opTurn:
-				s.runTurn(ctx, o.payload)
+				s.runCorrelatedTurn(ctx, o.payload)
 			case opSessionNew:
 				log.Printf("%s session.new — clearing thread id, next turn starts fresh", logPrefix)
 				s.clearSession()

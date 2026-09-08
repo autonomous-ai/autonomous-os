@@ -9,6 +9,14 @@ Tài liệu này lưu lại toàn bộ thảo luận thiết kế tính năng **
 
 Kế hoạch implement MVP nằm ở [`autonomous-buddy-mvp_vi.md`](./autonomous-buddy-mvp_vi.md). Doc này là tham chiếu dài về *lý do tại sao* kiến trúc lại như vậy.
 
+### Một app: agent management và computer use (tháng 9/2026)
+
+[Autonomous Buddy](./agent-manager_vi.md) hiện đóng gói workspace Electron/React và helper Swift native trong một `Autonomous Buddy.app`. Electron quản lý project, worktree, session, terminal và Git review; Swift giữ pairing, device WebSocket và executor computer-use. Khi chạy embedded, helper giữ icon menu bar native, không thêm Dock icon, dùng pipe JSONL riêng của process con và thoát khi Electron đóng pipe đầu vào. Đóng workspace vẫn giữ Buddy chạy; menu bar có thể mở lại Agent Manager hoặc thoát toàn bộ app. **Computer & device** trong app chính cung cấp pairing, trạng thái, pause, quản lý quyền và Activity. `make build` / `make install` build và cài cả hai thành phần cùng nhau; người dùng chỉ cài một app. Command `agent.*` từ device đã pair route vào managed session bằng project/session ID tường minh, receipt request và event history có giới hạn; notice hoàn tất/cần chú ý trả qua cùng WebSocket. Xem [contract native bridge](./native-bridge_vi.md). Kiểm chứng lamp thật vẫn tách biệt với test transport giả.
+
+[Hướng dẫn cài đặt desktop](./settings_vi.md) mô tả mục Settings / ⌘, trong menu macOS, tìm kiếm Appearance, lưu theme/font/zoom, giao diện terminal và bật tắt footer.
+
+Thiết kế tháng 5 bên dưới là bối cảnh computer-use lịch sử, không phải contract đóng gói/UI hiện tại. Quyết định Swift-only/menu-bar được thay bằng kiến trúc một app này. Xem [contract agent manager](./agent-manager_vi.md) để biết IPC và vòng đời hiện tại.
+
 ---
 
 ## 1. Mục tiêu & không phải mục tiêu
@@ -16,7 +24,7 @@ Kế hoạch implement MVP nằm ở [`autonomous-buddy-mvp_vi.md`](./autonomous
 ### Mục tiêu
 - Thiết bị điều khiển được máy tính qua voice ("mở Chrome", "vào Gmail", "join Google Meet", "gõ X", "đóng Slack")
 - Hoạt động với mọi app macOS (không chỉ browser)
-- LAN-only, dựa trên pairing — không qua relay server, không qua cloud
+- Command và xác nhận pairing chạy qua LAN; backend có thể yêu cầu mã pair qua MQTT.
 - Mac-first cho MVP; Windows/Linux để v1.2+
 
 ### Không phải mục tiêu (MVP)
@@ -230,15 +238,20 @@ Page mới `Paired Computers`:
 
 ### Pairing (1 lần)
 
-1. User mở menu buddy → "Pair with device" → buddy gọi thiết bị `POST /api/buddy/pair/start` (anonymous; rate-limited)
-2. Thiết bị sinh code 6-digit, hiện trong web UI `/devices` (hoặc nơi nào đó); cũng trả code trong response để buddy có thể hướng dẫn
-3. Thiết bị giữ code trong RAM 60s
-4. User đọc code từ web UI thiết bị / display
+1. User yêu cầu mã từ web UI thiết bị qua `POST /api/buddy/pair/start` có admin auth, hoặc backend đã kiểm tra quyền gửi `{"cmd":"data","kind":"buddy.pair.start","data":{}}` trên `fa_channel`.
+2. Thiết bị trả mã 6 số. MQTT trả `{"type":"data","kind":"buddy.pair.start","status":"success","data":{"code":"123456","expires_in":60}}` trên `fd_channel`, kèm metadata chuẩn của `MQTTDataResponse`. `data` trong yêu cầu là tùy chọn và được bỏ qua.
+3. HTTP và MQTT dùng chung Buddy service: mã dùng một lần được giữ trong RAM 60s; cấp mã mới qua một trong hai transport sẽ thay thế mã đang chờ.
+4. User đọc mã từ UI đã yêu cầu rồi mở "Pair with device" trong Buddy.
 5. User nhập code vào buddy
-6. Buddy gọi `POST /api/buddy/pair/confirm {code, name, fingerprint, os_version}`
-7. Thiết bị validate code, sinh bearer token long-lived, lưu `{token, fingerprint, name, created_at}` vào `buddies.json`
+6. Buddy gọi `POST /api/buddy/pair/confirm {code, name, fingerprint, os_version}` qua LAN.
+7. Thiết bị validate code, sinh bearer token long-lived, lưu `{buddy_id, token, fingerprint, name, os_version, paired_at}` vào `config/buddies.json`.
 8. Buddy lưu token vào macOS Keychain (service `network.autonomous.ai.buddy`)
 9. Buddy mở WS với `Authorization: Bearer <token>`
+
+Phân quyền MQTT dựa trên credentials của broker và ACL của topic hiện có;
+backend phải kiểm tra quyền chủ sở hữu thiết bị trước khi gửi `buddy.pair.start`.
+Không có lệnh MQTT mới để xác nhận, xem trạng thái hoặc thu hồi pairing; các route
+HTTP tương ứng vẫn giữ nguyên. Xem [contract MQTT](../../../../../docs/vi/mqtt_vi.md#buddypairstart--cấp-mã-pair-buddy).
 
 ### Reconnect
 
@@ -265,7 +278,7 @@ Page mới `Paired Computers`:
 
 ### Threat đã cân nhắc
 
-1. **Attacker trên LAN** → không pair được nếu không có code từ web UI. Không replay token được nếu không phá Keychain.
+1. **Attacker trên LAN** → không pair được nếu không có mã từ luồng HTTP hoặc MQTT đã kiểm tra quyền. Không replay token được nếu không phá Keychain.
 2. **Lamp bị compromise** → chạy được command tùy ý trên Mac (= blast radius). Mitigation: user revoke bất cứ lúc nào từ menu bar, không cần truy cập lamp.
 3. **Buddy bị compromise** (malware Mac hijack WS) → có thể gửi response giả về lamp. Mitigation: command ID + signed response (v1.1+).
 4. **Eavesdrop trên LAN** → MVP không mã hóa WS. Chấp nhận với LAN nhà, phải fix trước khi deploy network không tin cậy.
@@ -382,7 +395,7 @@ Page mới `Paired Computers`:
 
 ### Quyết định: ngôn ngữ
 
-Mac-only MVP → **Swift native**. Tauri/Rust để phase Windows/Linux. Flutter bỏ (bridge native cho input/screen yếu). Electron bỏ (overhead RAM không chấp nhận với app menu-bar thường trú).
+MVP computer-use ban đầu chọn **Swift native**. Kiến trúc tháng 9 giữ Swift cho thực thi native và nhúng vào [agent manager](./agent-manager_vi.md) Electron/React, tạo một app cài đặt duy nhất. Quyết định cũ loại Electron khỏi toàn sản phẩm không còn áp dụng. Helper native Windows/Linux vẫn là bước sau.
 
 ### Quyết định: hướng kết nối
 

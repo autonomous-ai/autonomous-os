@@ -212,8 +212,9 @@ class ElevenLabsTTSBackend(TTSBackend):
             "text": text,
             "model_id": el_model,
         }
-        if speed != 1.0:
-            body["voice_settings"] = {"speed": max(0.7, min(1.2, speed))}
+        # Send normal speed explicitly too: omission inherits the voice's
+        # stored settings, which may use a different speaking speed.
+        body["voice_settings"] = {"speed": max(0.7, min(1.2, speed))}
 
         with self._client.stream(
             "POST", url, headers=headers, json=body

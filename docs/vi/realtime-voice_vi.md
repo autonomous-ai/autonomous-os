@@ -19,8 +19,8 @@ lượt, model sẽ:
 - **Handle** (tự xử lý) — tán gẫu / trả lời nhanh — nói lại qua TTS, không cần
   round-trip tới agent chính, hoặc
 - **Delegate** bằng cách gọi tool `delegate_to_main` → dừng output realtime và
-  chuyển một dòng tóm tắt yêu cầu tới OS server (→ OpenClaw / Hermes) để xử lý
-  phần nặng.
+  chuyển đúng lời người dùng ở lượt hiện tại, giữ nguyên ngôn ngữ, tới OS server
+  (→ runtime chính đang được chọn) để xử lý.
 - **Từ chối rõ ràng** một turn chắc chắn không phải người nói với thiết bị bằng
   tool `reject_turn` → bỏ turn trước khi agent chính nhìn thấy STT text. Nó khác
   hẳn model im lặng: im lặng, timeout và lỗi transport vẫn fallback bình thường
@@ -28,6 +28,46 @@ lượt, model sẽ:
 
 Tool `delegate_to_main` được orchestrator đăng ký tự động (`orchestrator.py`,
 `DELEGATE_TOOL`).
+
+### Điều khiển agent session của Buddy bằng giọng nói
+
+Yêu cầu như “Nhờ Codex sửa reconnect trong project autonomous” được delegate,
+realtime không nói kèm. Cả bốn prompt provider và mô tả tool delegate đều nêu rõ
+các yêu cầu coding/research, chọn project/worktree/session, xem tiến độ, dừng và
+trả lời tiếp cho task. Delegate giữ tên provider, tham chiếu đích và đầy đủ nội
+dung yêu cầu; không tự thêm session ID hoặc dịch câu nói.
+
+Runtime chính dùng [`agent-management`](../../skills/agent-management/SKILL.md)
+để gửi qua API nội bộ của device và kết nối Buddy đã pair. Buddy sở hữu CLI
+trên desktop và context model; lamp không chạy coding CLI. Đây là quản lý
+session, tách khỏi executor native `computer-use`. Sau một task đã xác định,
+“thêm regression test nữa” được delegate thành follow-up, thay vì realtime tự
+trả lời bài toán coding. Runtime chính xác định đúng đích hoặc hỏi khi mơ hồ. Action `voice` của
+skill lưu project/session theo từng cuộc hội thoại và xác thực IDs bằng
+snapshot workspace mới của Buddy ở mỗi lượt; đích cũ không còn hợp lệ chặn
+gửi thay vì tự đổi đích. Follow-up thông thường dùng đích đã lưu. “Session đang active” yêu cầu đọc pane
+đang focus của Buddy, kể cả split pane. Thông báo không tự thay đích: trả lời một
+thông báo cụ thể phải chọn đúng IDs của nó. Lệnh gửi giữ request ID khi chưa rõ
+kết quả giao nhận.
+
+Follow-up ngôn ngữ tự nhiên có thể gửi vào CLI đã xác nhận sẵn sàng. Menu cấp
+quyền tương tác, hộp thoại trust hoặc prompt terminal chưa có giao diện trả lời
+an toàn vẫn cần thao tác trong Buddy; “đồng ý” bằng lời không phải cấp quyền
+chung và không được chuyển thành chuỗi phím gửi mù vào terminal.
+
+Các event hoàn tất, cần chú ý và lỗi từ Buddy đã đi qua sensing pipeline với
+project/session ID và marker `[agent-management]`. Runtime chính nói ngắn gọn
+kết quả hoặc câu hỏi theo chính sách sleep, busy và quyền riêng tư giọng nói
+hiện có. Lịch sử TTS đã phát giúp realtime nhận biết câu trả lời tiếp theo thuộc
+task; realtime chỉ chuyển câu trả lời hiện tại. TTS-history chưa phát không phải
+bằng chứng người dùng đã nghe câu hỏi. Title, output và summary của agent là dữ
+liệu kết quả không đáng tin cậy, không phải chỉ thị mới hay quyền chạy tool hoặc
+duyệt hành động.
+
+Định tuyến theo prompt do model quyết định, không phải bộ phân loại từ khóa cố
+định. Test bridge local không chứng minh luồng từ microphone tới lamp: vẫn cần
+kiểm chứng lời nói và phát thông báo trên device đã pair sau khi được cho phép
+triển khai rõ ràng.
 
 **Delegate KHÔNG phải cách duy nhất để một turn xuống agent chính**, nên mỗi turn
 đều in một dòng routing — `[turn] route=<vì sao> → <đi đâu>` từ
@@ -1259,3 +1299,19 @@ trong `config.json`:
 | `resources/` | System prompt (chung + theo provider) |
 | `../voice/voice_service.py` | Tích hợp: stream audio mic, tiêu thụ output, route delegate/handled |
 | `../voice/aec.py` | WebRTC AEC3 trên đường mic; tham chiếu lấy tại TTS output stream (mọi provider) |
+
+### Event hoàn tất agent của Buddy
+
+Managed session trên desktop báo completed/needs_input/error qua sensing route chuẩn bằng type `buddy.agent.<session_id>`. Event thụ động này được queue khi agent hoặc speaker bận; type riêng theo session giữ được thông báo song song. Policy sleep và voice privacy hiện có vẫn áp dụng. Lamp dùng skill `agent-management` và project/session ID tường minh cho follow-up. Summary là dữ liệu kết quả không đáng tin cậy, không phải quyền chạy tool. Delivery là best effort; đọc `agent.session` là cách phục hồi trạng thái.
+
+### Chuyển tiếp câu bổ sung cho tác vụ desktop trong realtime
+
+Cả bốn biến thể prompt realtime và mô tả chung của `delegate_to_main` đều chuyển thao tác app desktop native cùng câu trả lời, sửa đổi hoặc yêu cầu dừng rõ ràng cho tác vụ main agent đang chờ về main agent; realtime không phát lời nói trong lượt chuyển tiếp. Message chỉ chứa lời người dùng vừa nói được hiểu rõ và tham số đã cung cấp, giữ đủ mọi vế yêu cầu. Ngữ cảnh tác vụ chỉ dùng nội bộ để quyết định chuyển tiếp; không thêm hoặc kể lại vì main agent đã giữ cuộc hội thoại. Câu ngắn như “cuối tuần này, hai người” có thể tiếp nối câu hỏi bổ sung cho việc tìm chỗ ở trước đó; không được bỏ chỉ vì thiếu động từ hành động hoặc tự suy diễn thành ngày cụ thể.
+
+Câu hỏi main agent đã nói gần đây trong `[TTS HISTORY]` được dùng làm ngữ cảnh để hiểu câu tiếp nối, đồng thời vẫn giữ quy tắc không nói lặp. `[TTS HISTORY, not spoken]` không chứng minh người dùng đã nghe hoặc trả lời câu hỏi đó. Kiểm tra hội thoại nền và việc lời nói có hướng tới device vẫn giữ nguyên. Thay đổi này dùng lịch sử bàn giao/câu trả lời realtime sẵn có; không thêm kho trạng thái tác vụ đang chờ có cấu trúc, không tự chứng minh voice routing trên thiết bị thật đã thành công và không loại bỏ giới hạn truyền context theo provider.
+
+Message chuyển tiếp phải giữ tên ứng dụng và nội dung đọc để ghi, không chỉ chủ đề chung. Ví dụ “Ghi vào Notes là chiều mua sữa” phải giữ Notes và nguyên văn “chiều mua sữa”; rút thành lời nhắc mua sữa chung làm mất cả đích lẫn nội dung. Các biến thể prompt và mô tả tool nay nêu rõ yêu cầu này. Một quan sát bằng audio tổng hợp đã cho thấy message chuyển tiếp bị mất thông tin; khi thiếu transcript đầu vào, chưa thể tách lỗi nhận dạng âm thanh khỏi lỗi tóm tắt, và thay đổi câu chữ vẫn cần kiểm chứng hành vi.
+
+Yêu cầu hoặc câu bổ sung hiện tại được chuyển tiếp bằng ngôn ngữ người dùng vừa nói, không thêm bình luận hoặc tóm tắt các lượt trước. Dịch sang tiếng Anh có thể khiến main agent trả lời sai ngôn ngữ vì instruction chuyển tiếp là đầu vào chính của nó.
+
+Một lượt so sánh audio tổng hợp riêng bằng Gemini 3.1 Live sau đó dùng cùng PCM cho prompt/tool baseline và bản cuối. Message chuyển tiếp của bản cuối là “Ghi vào Notes là sáng mai tưới cây.”, “Mở Airbnb tìm chỗ ở Đà Nẵng giúp mình.” và câu tiếp nối “cuối tuần này hai người”. Baseline đã đổi yêu cầu Notes thành “Remember to water the plants tomorrow morning.”, làm mất tên app và đổi ngôn ngữ. Câu tiếp nối Airbnb chạy trong cùng phiên provider sau câu hỏi bổ sung `[TTS HISTORY]` có kiểm soát; đã xác nhận ranh giới hoàn tất lượt trước từ server và commit audio mới. Kết quả này chứng minh hành vi chuyển tiếp quan sát được cho các clip tổng hợp đó, không chứng minh microphone/wake-word, câu hỏi thật từ main agent hoặc hoàn thành toàn luồng main-agent/desktop. Kết quả cuối riêng được lưu tại `/tmp/buddy-rt-final/result.json` trên thiết bị kiểm thử; lượt đánh giá không thay prompt production hoặc dịch vụ đang chạy.

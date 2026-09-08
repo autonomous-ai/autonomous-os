@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"go.autonomous.ai/os/runtimes/openclaw"
+	"go.autonomous.ai/os/system/buddy"
 	"go.autonomous.ai/os/system/device"
 	"go.autonomous.ai/os/system/domain"
 	"go.autonomous.ai/os/system/lib/mqtt"
@@ -30,6 +31,7 @@ type DeviceMQTTHandler struct {
 	deviceService  *device.Service
 	networkService *network.Service
 	agentGateway   domain.AgentGateway
+	buddyService   *buddy.Service
 	// connectorWriter is the data-driven writer for the connector.set.<code> /
 	// connector.remove.<code> flow and the refresh loop. Routing (is it an MCP
 	// connector? which auth header?) is decided per-message from the payload's
@@ -174,7 +176,7 @@ func (h *DeviceMQTTHandler) refreshableConnectorWriters() []ConnectorWriter {
 }
 
 // ProvideDeviceMQTTHandler creates DeviceMQTTHandler with all command handlers.
-func ProvideDeviceMQTTHandler(cfg *config.Config, mqttFactory *mqtt.Factory, ds *device.Service, ns *network.Service, gw domain.AgentGateway, chatStream *ChatStream) DeviceMQTTHandler {
+func ProvideDeviceMQTTHandler(cfg *config.Config, mqttFactory *mqtt.Factory, ds *device.Service, ns *network.Service, gw domain.AgentGateway, chatStream *ChatStream, buddyService *buddy.Service) DeviceMQTTHandler {
 	configsDir := filepath.Join(cfg.OpenclawConfigDir, "workspace", "configs")
 	// schedules.json is a SIBLING of config.json, never inside it — see
 	// schedule.Store's doc comment and config.Dir().
@@ -187,6 +189,7 @@ func ProvideDeviceMQTTHandler(cfg *config.Config, mqttFactory *mqtt.Factory, ds 
 		deviceService:  ds,
 		networkService: ns,
 		agentGateway:   gw,
+		buddyService:   buddyService,
 		// `reserved` excludes codes owned by a special writer so the generic
 		// refresh loop never clobbers their (non-http) openclaw entry.
 		connectorWriter:         newConnectorWriter(configsDir, gw, specialConnectorCodes),
@@ -268,6 +271,8 @@ func (h *DeviceMQTTHandler) dispatchData(env domain.MQTTDataCommand) error {
 		return h.handleConnectorRemove(env)
 	}
 	switch env.Kind {
+	case domain.KindBuddyPairStart:
+		return h.handleBuddyPairStart(env)
 	case domain.KindTTSSet:
 		return h.handleTTSSet(env)
 	case domain.KindRealtimeSet:

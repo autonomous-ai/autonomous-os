@@ -315,11 +315,19 @@ các field riêng theo từng kind. Mọi kind đều phản hồi trên fd_chan
 metadata device/version chuẩn cộng với `kind`, `status` (`success|failure`), `error`
 (tùy chọn) và payload `data` (tùy chọn).
 
+`tts.set` nhận `speed` tùy chọn trong `0.25–4.0`, ví dụ
+`{"cmd":"data","kind":"tts.set","data":{"speed":1.2}}`. Bỏ qua thì giữ
+giá trị đã lưu; nếu chưa lưu, dùng `HAL_TTS_SPEED` (mặc định `1.3`). Lệnh ack
+`starting` rồi `success` hoặc `failure`; lưu và áp dụng lại HAL kể cả khi
+setting không đổi. Uplink `info` có `tts_speed` hiệu lực. ElevenLabs giới hạn
+tốc độ gửi đi trong `0.7–1.2`.
+
 **Nhận:** `{"cmd": "data", "kind": "<kind>", "data": { ... }}`
 
 | Kind | Mục đích | Field trong `data` |
 |------|----------|--------------------|
-| `tts.set` | Lưu cấu hình TTS voice/provider/language | `provider`, `voice`, `language` |
+| `buddy.pair.start` | Cấp mã pair Buddy 6 số, dùng một lần, hết hạn sau 60s | _(không; bỏ qua `data` tùy chọn)_ |
+| `tts.set` | Lưu cấu hình TTS voice/provider/language/speed | `provider`, `voice`, `language`, `speed` (tùy chọn) |
 | `tts.preview` | Preview TTS một lần (không ghi config) | `text` (bắt buộc), tùy chọn `provider`/`voice`/`language` |
 | `wakeword.gate` | Bật/tắt wake-word gate top-level (bất đồng bộ; ack `starting`) | `enabled` (boolean bắt buộc) |
 | `timezone.set` | Áp dụng múi giờ IANA của device (bất đồng bộ; ack `starting`) | `timezone` (bắt buộc, ví dụ `Asia/Ho_Chi_Minh`) |
@@ -945,6 +953,29 @@ Thay thế: `integrations/chat-bridges/autonomous-chat-hook/` forward chat từ
 backend một chiều dưới dạng `type:"voice"`, nên device đọc to câu trả lời và
 không có gì quay về. Nó không thể làm nền cho một UI chat; cặp kind này thay nó ở
 mục đích đó.
+
+### `buddy.pair.start` — Cấp mã pair Buddy
+
+**Nhận trên `fa_channel`:**
+```json
+{"cmd":"data","kind":"buddy.pair.start","data":{}}
+```
+
+`data` là tùy chọn và được bỏ qua. Phản hồi đồng bộ trên `fd_channel` dùng
+`MQTTDataResponse`, gồm metadata device/version/id/mac/time chuẩn cộng với:
+```json
+{"type":"data","kind":"buddy.pair.start","status":"success","data":{"code":"123456","expires_in":60}}
+```
+
+Lệnh gọi cùng Buddy service với `POST /api/buddy/pair/start` có admin auth.
+Mã là chuỗi sáu chữ số, có hiệu lực 60 giây và chỉ dùng một lần.
+Cấp mã mới qua HTTP hoặc MQTT sẽ thay thế mã đang chờ từ cả hai transport.
+Khi lỗi, phản hồi dùng các field chuẩn `status:"failure"` và `error`.
+
+Phân quyền MQTT dựa trên credentials của broker và ACL của topic hiện có;
+backend phải kiểm tra quyền chủ sở hữu thiết bị trước khi publish yêu cầu.
+Xác nhận vẫn dùng `POST /api/buddy/pair/confirm` qua LAN. Không bổ sung lệnh
+MQTT để xác nhận, xem trạng thái hoặc thu hồi pairing.
 
 ### `ota` — Trigger OTA update
 
