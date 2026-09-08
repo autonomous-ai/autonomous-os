@@ -257,7 +257,7 @@ class TTSService:
         self._latest_queue_turn_id = ""
         self._latest_queue_turn_seq = 0
 
-        # --- Playback tracking (measurement only; see hal/tracking) ----------
+        # --- Playback tracking (measurement only; see hal/telemetry) ----------
         # _playback_owner identifies WHOSE speech is currently on the speaker,
         # set by whichever entry point started it: "run:<turn_id>" for an agent
         # reply or a filler armed for a turn, "interaction:<id>" for realtime
@@ -605,7 +605,7 @@ class TTSService:
         """os-server run id of the newest turn that took the speak queue.
 
         Read-only; exposed so tracking can attribute played audio to the turn
-        that produced it (see hal/tracking/voice_metrics.py)."""
+        that produced it (see hal/telemetry/voice_metrics.py)."""
         return self._latest_queue_turn_id
 
     @property

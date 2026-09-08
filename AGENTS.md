@@ -32,7 +32,7 @@ rules apply to all code changes:
    | PicoClaw agent backend (`agent_runtime`, runtimes/picoclaw, WebSocket) | `docs/agentic/picoclaw.md` | `docs/vi/agentic/picoclaw_vi.md` |
    | Adding/changing an agentic backend (AgentGateway contract, switch, install/presync, migration, skills, hooks, reset) | `docs/agentic/adding-agent-runtime.md` | `docs/vi/agentic/adding-agent-runtime_vi.md` |
    | Safety engine (SAFETY.md bounds, deterministic enforcement gate) | `docs/safety.md` | `docs/vi/safety_vi.md` |
-   | Voice response metrics (`hal/tracking`, `system/tracking`, `/api/tracking/event`) | `docs/voice-metrics.md` | `docs/vi/voice-metrics_vi.md` |
+   | Voice response metrics (`hal/telemetry`, `system/telemetry`, `/api/telemetry/event`) | `docs/voice-metrics.md` | `docs/vi/voice-metrics_vi.md` |
 
    **Lamp-specific docs** (`robots/lamp/docs/` + `robots/lamp/docs/vi/`):
 

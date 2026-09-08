@@ -146,7 +146,7 @@ class _WaitFiller:
     def __init__(self, owner: str = "") -> None:
         self._timer: Optional[threading.Timer] = None
         self._fired = False
-        # Voice KPI ownership: which utterance this "one moment" is for. The
+        # Voice metrics ownership: which utterance this "one moment" is for. The
         # tag rides the filler request and comes back on the /voice/speak
         # call os-server makes, so the played phrase is attributed instead of
         # landing as unclaimed audio (which never counts as a response).
@@ -550,7 +550,7 @@ def run_realtime_turn(
                         if not native_started:
                             native_started = tts.native_play_begin(
                                 realtime.output_sample_rate,
-                                # Explicit ownership for voice KPI: this audio
+                                # Explicit ownership for voice metrics: this audio
                                 # answers THIS utterance, nothing else.
                                 owner=f"interaction:{interaction_id}" if interaction_id else "",
                             )

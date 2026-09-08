@@ -30,7 +30,7 @@ This repo is developed in both **Cursor** and **Claude Code**. The following rul
    | OpenCode agent backend (`agent_runtime`, runtimes/opencode, bridge WebSocket, `opencode run --format json` per turn) | `docs/agentic/opencode.md` | `docs/vi/agentic/opencode_vi.md` |
    | Adding/changing an agentic backend (AgentGateway contract, switch, install/presync, migration, skills, hooks, reset) | `docs/agentic/adding-agent-runtime.md` | `docs/vi/agentic/adding-agent-runtime_vi.md` |
    | Safety engine (SAFETY.md bounds, deterministic enforcement gate) | `docs/safety.md` | `docs/vi/safety_vi.md` |
-   | Voice response metrics (`hal/tracking`, `system/tracking`, `/api/tracking/event`) | `docs/voice-metrics.md` | `docs/vi/voice-metrics_vi.md` |
+   | Voice response metrics (`hal/telemetry`, `system/telemetry`, `/api/telemetry/event`) | `docs/voice-metrics.md` | `docs/vi/voice-metrics_vi.md` |
 
    **Lamp-specific docs** (`robots/lamp/docs/` + `robots/lamp/docs/vi/`):
 

@@ -1,4 +1,4 @@
-"""Voice KPI measurement tests.
+"""Voice metrics measurement tests.
 
 Every test uses a mock transport and a fake clock — no event leaves the
 process, no test contacts the production analytics endpoint, and no test
@@ -9,7 +9,7 @@ import threading
 
 import pytest
 
-from hal.tracking import client, voice_metrics
+from hal.telemetry import client, voice_metrics
 
 
 class FakeClock:
@@ -255,7 +255,7 @@ def test_stale_filler_counts_too(kpi):
 
 def test_boundary_is_not_recorded_when_the_policy_did_not_apply(kpi):
     """OS_REALTIME_SUPERSEDES_MAIN_REPLY off (or a failed POST) means nothing
-    was suppressed — not a KPI-2 situation at all."""
+    was suppressed — not a the stale-reply metric situation at all."""
     old = voice_metrics.speech_end("silence_clock")
     kpi.clock.advance(1000)
     new = voice_metrics.speech_end("silence_clock")
@@ -267,7 +267,7 @@ def test_boundary_is_not_recorded_when_the_policy_did_not_apply(kpi):
 
 def test_denominator_counts_only_active_turns(kpi):
     """A turn already excluded cannot produce a stale reply; keeping it in the
-    denominator would dilute KPI-2 with situations that never existed."""
+    denominator would dilute the stale-reply metric with situations that never existed."""
     done = voice_metrics.speech_end("silence_clock")
     voice_metrics.exclude(done, voice_metrics.EXCL_REJECTED_NOISE)
     kpi.clock.advance(500)
@@ -392,7 +392,7 @@ def test_duplicate_report_is_suppressed_by_event_id(kpi):
 def test_stop_after_the_ack_window_still_finds_the_turn_to_suppress(kpi):
     """Reproduction: stop at second 12, old reply plays at second 20.
 
-    The KPI-1 verdict is reported at 10s, but the main agent is still working
+    The the response metric verdict is reported at 10s, but the main agent is still working
     — retiring the turn there made the stop find nothing to suppress
     (applicable_interactions=0, stale_observed=false)."""
     old = voice_metrics.speech_end("silence_clock")
@@ -400,7 +400,7 @@ def test_stop_after_the_ack_window_still_finds_the_turn_to_suppress(kpi):
 
     kpi.clock.advance(10000)
     verdict_timer = kpi.timers[0]
-    verdict_timer.fire()                       # KPI-1 verdict at 10s
+    verdict_timer.fire()                       # the response metric verdict at 10s
     assert kpi.one(voice_metrics.EVENT_INTERACTION)["outcome"] == voice_metrics.OUTCOME_NO_ACK
 
     kpi.clock.advance(2000)                    # second 12: user presses stop
@@ -416,7 +416,7 @@ def test_stop_after_the_ack_window_still_finds_the_turn_to_suppress(kpi):
 
 
 def test_a_turn_silent_past_its_lifetime_leaves_the_denominator(kpi):
-    """The other half: a turn that really is over must not inflate KPI-2."""
+    """The other half: a turn that really is over must not inflate the stale-reply metric."""
     old = voice_metrics.speech_end("silence_clock")
     voice_metrics.bind_run(old, "run-old")
     kpi.clock.advance(voice_metrics.TURN_ACTIVE_TTL_MS)
@@ -474,7 +474,7 @@ def test_late_failure_amends_a_reported_verdict(kpi):
 
 def test_realtime_wait_filler_is_attributed_to_its_interaction(kpi):
     """The realtime dead-air filler tags itself with the interaction it is
-    waiting for; the user heard it, so the KPI must see it."""
+    waiting for; the user heard it, so the metrics must see it."""
     iid = voice_metrics.speech_end("silence_clock")
     kpi.clock.advance(1500)
     # os-server plays it back with the owner HAL passed through the filler
@@ -554,3 +554,42 @@ def test_queued_segment_is_attributed_to_the_turn_that_queued_it(kpi):
     assert rows[first]["outcome"] == voice_metrics.OUTCOME_ACKED
     assert rows[second]["outcome"] == voice_metrics.OUTCOME_ACKED
     assert rows[second]["ack_latency_ms"] == 400
+
+
+# --- Review findings: local commands and long playbacks ----------------------
+
+def test_a_turn_still_speaking_at_its_ttl_stays_active(kpi):
+    """Reproduction: a long answer is still playing at second 46; a stop then
+    must still find the turn to suppress."""
+    old = voice_metrics.speech_end("silence_clock")
+    voice_metrics.bind_run(old, "run-old")
+    _reply(kpi, "run:run-old")                        # playback starts, never ends
+    kpi.clock.advance(voice_metrics.TURN_ACTIVE_TTL_MS + 1000)
+    for t in list(kpi.timers):
+        if t.function is voice_metrics._retire_interaction:
+            t.fire()
+
+    voice_metrics.boundary(voice_metrics.BOUNDARY_EXPLICIT_STOP)
+    kpi.clock.advance(3000)                           # still talking 3s after the stop
+    voice_metrics.playback_end()
+    kpi.close_all()
+
+    p = kpi.of(voice_metrics.EVENT_SUPPRESSION)[0]["params"]
+    assert p["applicable_interactions"] == 1
+    assert p["stale_observed"] is True
+    assert p["stop_to_silence_ms"] == 3000
+
+
+def test_a_silent_turn_still_retires_at_its_ttl(kpi):
+    """The keep-alive must not make every turn immortal."""
+    old = voice_metrics.speech_end("silence_clock")
+    voice_metrics.bind_run(old, "run-old")
+    _reply(kpi, "run:run-old")
+    voice_metrics.playback_end()                      # went quiet
+    kpi.clock.advance(voice_metrics.TURN_ACTIVE_TTL_MS + 1000)
+    for t in list(kpi.timers):
+        if t.function is voice_metrics._retire_interaction:
+            t.fire()
+
+    voice_metrics.boundary(voice_metrics.BOUNDARY_EXPLICIT_STOP)
+    assert voice_metrics._watchers[0]["applicable"] == set()

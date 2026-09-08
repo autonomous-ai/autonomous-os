@@ -37,9 +37,9 @@ import (
 	_sensingHttpDeliver "go.autonomous.ai/os/system/server/sensing/delivery/http"
 	"go.autonomous.ai/os/system/server/serializers"
 	systemshell "go.autonomous.ai/os/system/server/system"
-	_trackingHttpDeliver "go.autonomous.ai/os/system/server/tracking/delivery/http"
+	_telemetryHttpDeliver "go.autonomous.ai/os/system/server/telemetry/delivery/http"
 	"go.autonomous.ai/os/system/statusled"
-	"go.autonomous.ai/os/system/tracking"
+	"go.autonomous.ai/os/system/telemetry"
 )
 
 type Server struct {
@@ -202,9 +202,9 @@ func (s *Server) Serve(closeFn func()) error {
 	logger.SetGELFDeviceType(deviceType)
 
 	// Common fields for every tracking event this device sends (see
-	// system/tracking). Set once here, where the resolved device class,
+	// system/telemetry). Set once here, where the resolved device class,
 	// runtime and version all exist.
-	tracking.SetCommon(map[string]any{
+	telemetry.SetCommon(map[string]any{
 		"os_version":                     config.OSVersion,
 		"device_type":                    deviceType,
 		"agent_runtime":                  string(device.CurrentAgentRuntimeFromConfig(s.config)),
@@ -398,11 +398,11 @@ func (s *Server) Serve(closeFn func()) error {
 	network.GET("current", s.networkHandler.GetCurrentNetwork)
 	network.GET("check-internet", s.networkHandler.CheckInternet)
 
-	// Product analytics ingestion for on-device producers (HAL voice KPI
+	// Product analytics ingestion for on-device producers (HAL voice metrics
 	// today). Loopback/LAN only, same gate as sensing: the poster is another
 	// process on this device, never a browser session.
-	trackingGroup := api.Group("tracking")
-	trackingGroup.POST("event", sameOriginOrLAN(), _trackingHttpDeliver.ProvideTrackingHandler().PostEvent)
+	telemetryGroup := api.Group("telemetry")
+	telemetryGroup.POST("event", sameOriginOrLAN(), _telemetryHttpDeliver.ProvideTelemetryHandler().PostEvent)
 
 	sensing := api.Group("sensing")
 	sensing.POST("event", sameOriginOrLAN(), s.sensingHandler.PostEvent)

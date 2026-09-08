@@ -22,7 +22,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 import hal.app_state as state
-from hal.tracking import tts_hooks
+from hal.telemetry import tts_hooks
 from hal.config import (
     AUDIO_INPUT_ALSA,
     AUDIO_OUTPUT_ALSA,
@@ -640,7 +640,7 @@ async def lifespan(app: FastAPI):
                 on_speak_start=state._on_tts_speak_start,
                 on_speak_end=state._on_tts_speak_end,
                 provider=tts_provider,
-                # Voice KPI (measurement only): fired at the first frame that
+                # Voice metrics (measurement only): fired at the first frame that
                 # actually reaches the stream, with the owner that claimed the
                 # speaker. Separate from on_speak_start, which the cached path
                 # fires before it has written anything.

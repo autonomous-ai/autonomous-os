@@ -16,10 +16,10 @@ can be re-decided from the data instead of by re-instrumenting devices.
 
 | Layer | Path | Role |
 |-------|------|------|
-| HAL tracker | `hal/tracking/voice_metrics.py` | All measurement. Owns interaction ids, ack detection, stale-playback detection. |
-| HAL pipe | `hal/tracking/client.py` | Generic: local log line, bounded queue, background POST. Reusable by future trackers. |
-| OS ingestion | `system/server/tracking/delivery/http/handler.go` | `POST /api/tracking/event` (loopback/LAN, same gate as `/api/sensing/event`). |
-| OS pipe | `system/tracking/tracking.go` | Common fields, de-duplication, bounded queue, one sender, local log line. |
+| HAL tracker | `hal/telemetry/voice_metrics.py` | All measurement. Owns interaction ids, ack detection, stale-playback detection. |
+| HAL pipe | `hal/telemetry/client.py` | Generic: local log line, bounded queue, background POST. Reusable by future trackers. |
+| OS ingestion | `system/server/telemetry/delivery/http/handler.go` | `POST /api/telemetry/event` (loopback/LAN, same gate as `/api/sensing/event`). |
+| OS pipe | `system/telemetry/telemetry.go` | Common fields, de-duplication, bounded queue, one sender, local log line. |
 | Transport | `system/lib/analytics` | Autonomous Analytics `event_tracking` client (shared with web/mobile). |
 
 Voice code is touched only at the boundaries it already owns: speech endpoint,
@@ -111,7 +111,7 @@ run in between and would otherwise be charged to the device's response time.
 | `eligible` | `false` when `exclusion_reason` is set |
 | `outcome` | `acknowledged` \| `no_ack` \| `excluded` |
 | `exclusion_reason` | `rejected_noise`, `rejected_non_user`, `no_transcript`, `not_addressed`, `speaker_muted`, `interrupted_by_user` |
-| `failure_reason` | `dispatch_failed` — the command was valid and went **unserved**. This is *not* an exclusion: the row stays eligible and counts against the KPI |
+| `failure_reason` | `dispatch_failed` — the command was valid and went **unserved** (the POST never landed). This is *not* an exclusion: the row stays eligible and counts against the KPI. A command os-server answered itself (local intent: volume, LED, time) is **not** a failure — its reply carries the interaction id as owner and counts as answered. |
 | `ack_latency_ms` | Raw observation, kept whatever the verdict (`null` when nothing played) |
 | `ack_modality`, `ack_kind` | What the user actually heard |
 | `ack_deadline_ms`, `observe_window_ms` | 3000 / 10000 — the (provisional) thresholds in force when the row was written |
@@ -126,7 +126,8 @@ answer at all", so the threshold can be re-decided from stored data.
 10 s; the main agent may still be working, and a stop pressed at second 12
 must still find that turn to suppress. A turn stays *active* until it has been
 silent for `TURN_ACTIVE_TTL_MS` (45 s) — a clock any playback of that turn
-restarts — or until it is excluded or fails. Only then does it leave the
+restarts, and which never expires while that turn's audio is still playing —
+or until it is excluded or fails. Only then does it leave the
 KPI-2 denominator. A verdict that turns out wrong afterwards is corrected with
 an amendment row.
 
@@ -206,9 +207,12 @@ something the boundary had to suppress.
 - Numerator: those with `stale_observed = true`.
 - Report `explicit_stop` and `auto_supersede` separately: they are different
   policies. Automatic supersession only happens when os-server has
-  `OS_REALTIME_SUPERSEDES_MAIN_REPLY=1`; **the default is OFF and this change
-  does not alter it**, so on a default body the `auto_supersede` denominator
-  will be empty and that KPI slice is **N/A**, not 100 %.
+  `OS_REALTIME_SUPERSEDES_MAIN_REPLY=1`. **The code default is OFF and this
+  change does not alter it** — but read the body's own `.env` before drawing
+  conclusions: lamp ships with it **enabled**
+  (`robots/lamp/rootfs/opt/hal/.env`), so lamp does produce `auto_supersede`
+  samples. On a body where it is off the denominator is empty and that slice
+  is **N/A**, not 100 %.
 - Correct suppression (`stale_observed = false`) is a **pass**, not a missing
   response. Hardware actions of an auto-superseded turn remain valid by
   design; only speech and fillers are dropped.
@@ -297,8 +301,8 @@ GROUP BY reason;
 -- Telemetry coverage: a climbing loss counter means the rates above are
 -- computed on partial data.
 SELECT
-  MAX(SAFE_CAST(param(data.event_params, 'tracking_dropped_total') AS INT64)) AS os_dropped,
-  MAX(SAFE_CAST(param(data.event_params, 'tracking_failed_total')  AS INT64)) AS os_failed,
+  MAX(SAFE_CAST(param(data.event_params, 'telemetry_dropped_total') AS INT64)) AS os_dropped,
+  MAX(SAFE_CAST(param(data.event_params, 'telemetry_failed_total')  AS INT64)) AS os_failed,
   MAX(SAFE_CAST(param(data.event_params, 'hal_dropped_total')      AS INT64)) AS hal_dropped,
   MAX(SAFE_CAST(param(data.event_params, 'hal_failed_total')       AS INT64)) AS hal_failed,
   MAX(SAFE_CAST(param(data.event_params, 'unknown_owner_playbacks') AS INT64)) AS unowned_playbacks
@@ -324,15 +328,15 @@ startup — a device can be pointed at a different warehouse without a rebuild:
 
 | Key | Meaning |
 |-----|---------|
-| `AUTONOMOUS_TRACKING_ENABLED` | **Master switch. Default OFF** (empty/unset). Events are still written to the local log when off — only the network hop is skipped. Set to `1` to send. |
-| `AUTONOMOUS_ANALYTICS_ID` | AA authorization key. Missing ⇒ delivery fails loudly (`[tracking] delivery failed`). |
+| `AUTONOMOUS_TELEMETRY_ENABLED` | **Master switch. Default OFF** (empty/unset). Events are still written to the local log when off — only the network hop is skipped. Set to `1` to send. |
+| `AUTONOMOUS_ANALYTICS_ID` | AA authorization key. Missing ⇒ delivery fails loudly (`[telemetry] delivery failed`). |
 | `AUTONOMOUS_ANALYTICS_URL` | Where events are posted. Optional; falls back to the built-in production endpoint. |
 
 The switch is read by both processes (HAL and os-server) from the same
 key, per call — flipping it plus a service restart is enough, no rebuild.
 
 Resolution order for the URL: process env → `/opt/hal/.env` → built-in
-default. The HAL→os-server hop (`http://127.0.0.1:5000/api/tracking/event`)
+default. The HAL→os-server hop (`http://127.0.0.1:5000/api/telemetry/event`)
 stays a loopback constant like every other HAL→OS call.
 
 ## Privacy
@@ -346,8 +350,9 @@ and `platform` is `device` (see `system/lib/analytics`).
 - **Detected endpoint, not acoustic end.** Latency is measured from the
   silence clock / STT final, not from the physical end of speech.
 - **Visual acknowledgement is not measured** (see above).
-- **`auto_supersede` is empty on a default body** — `OS_REALTIME_SUPERSEDES_MAIN_REPLY`
-  defaults to OFF and was not changed.
+- **`auto_supersede` depends on the body.** The code default for
+  `OS_REALTIME_SUPERSEDES_MAIN_REPLY` is OFF (unchanged here), but lamp enables
+  it in its own `.env`; a body with it off produces no samples for that slice.
 - **Stale detection is playback-level, not sample-level.** It observes audio
   intervals crossing the grace boundary; it cannot say how many milliseconds
   of PCM were still in the hardware buffer.
@@ -363,15 +368,15 @@ and `platform` is `device` (see `system/lib/analytics`).
 - **Tracker capacity is 32 interactions.** An older one evicted before its
   verdict was due is reported early, flagged `eviction = 'tracker_capacity'`,
   rather than dropped — its observation window was cut short.
-- **Delivery loss is reported, not hidden**: `tracking_dropped_total`,
-  `tracking_failed_total`, `hal_dropped_total`, `hal_failed_total` ride on
+- **Delivery loss is reported, not hidden**: `telemetry_dropped_total`,
+  `telemetry_failed_total`, `hal_dropped_total`, `hal_failed_total` ride on
   every event.
 
 ## Validation
 
 ```bash
 go build ./...                                   # os-server + tracking package
-go test ./system/tracking/ ./system/server/tracking/...
+go test ./system/telemetry/ ./system/server/telemetry/...
 make hal-lint
 cd hal && .venv/bin/python -m pytest test/test_voice_metrics.py -q
 ```

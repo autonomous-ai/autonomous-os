@@ -193,7 +193,7 @@ func (h *AgentHandler) CancelSpeech() {
 // heard of this switch gets — lamp, but also intern-v2, reachy-mini, and any
 // body with no .env at all — and this behaviour has not run on real hardware
 // yet. Defaulting on would hand it to all of them without anyone choosing it.
-// Exported so tracking can stamp the policy state on every event (the KPI for
+// Exported so tracking can stamp the policy state on every event (the metrics for
 // superseded replies is meaningless without knowing whether this is on).
 func RealtimeSupersedesMainReply() bool {
 	v := strings.ToLower(strings.TrimSpace(os.Getenv("OS_REALTIME_SUPERSEDES_MAIN_REPLY")))
@@ -217,7 +217,7 @@ func RealtimeSupersedesMainReply() bool {
 // new question, then says "one moment" about the old one and falls silent.
 // Returns whether the mark was actually stamped: the caller reports that back
 // to HAL, which must not record a suppression situation the policy never
-// applied (it would inflate the stale-reply KPI denominator).
+// applied (it would inflate the stale-reply denominator).
 func (h *AgentHandler) CancelSpeechForNewerTurn() bool {
 	if !RealtimeSupersedesMainReply() {
 		return false

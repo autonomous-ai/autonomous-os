@@ -106,7 +106,7 @@ func TestCancelAllActiveIsSafeAlongsideConcurrentToolEnds(t *testing.T) {
 // The opening filler fires while HAL is still waiting for this request's
 // response, so it cannot be tagged with the run id HAL does not have yet. HAL
 // sends its own interaction id up for exactly this reason; a filler tagged
-// with an unresolvable owner is dropped from the KPI as unattributed audio.
+// with an unresolvable owner is dropped from the metrics as unattributed audio.
 func TestFillerOwnerPrefersTheInteractionID(t *testing.T) {
 	if got := fillerOwner("vi-abc123", "device-chat-7-1788422075499"); got != "vi-abc123" {
 		t.Errorf("fillerOwner = %q, want the interaction id", got)

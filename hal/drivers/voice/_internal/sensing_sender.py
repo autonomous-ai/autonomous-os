@@ -32,12 +32,17 @@ class SendResult:
     are for measurement; nothing in the voice path branches on them.
     """
 
-    __slots__ = ("run_id", "speech_suppressed", "delivered")
+    __slots__ = ("run_id", "speech_suppressed", "delivered", "handled_locally")
 
-    def __init__(self, run_id: str = "", speech_suppressed: bool = False, delivered: bool = False):
+    def __init__(self, run_id: str = "", speech_suppressed: bool = False,
+                 delivered: bool = False, handled_locally: bool = False):
         self.run_id = run_id
         self.speech_suppressed = speech_suppressed
         self.delivered = delivered
+        # os-server answered the command itself (local intent match: volume,
+        # LED, time). Served, just without an agent run — so a missing run id
+        # here is success, not a failed dispatch.
+        self.handled_locally = handled_locally
 
     def __bool__(self) -> bool:
         return self.delivered
@@ -52,6 +57,8 @@ def _result_of(resp) -> "SendResult":
             run_id=data.get("runId", "") or "",
             speech_suppressed=bool(data.get("speechSuppressed", False)),
             delivered=True,
+            handled_locally=str(data.get("handledLocally", "")).lower() == "true"
+            or data.get("handler") == "local",
         )
     except Exception:
         return SendResult(delivered=True)
@@ -106,7 +113,7 @@ class SensingSender:
 
         payload = {"type": event_type, "message": message}
         if interaction_id:
-            # Voice KPI ownership, sent UP so os-server can tag the audio it
+            # Voice metrics ownership, sent UP so os-server can tag the audio it
             # starts on its own. The opening filler fires the moment this POST
             # arrives — before the response carrying runId gets back here — so
             # binding on the response would leave a cache-hit filler unowned
@@ -156,7 +163,7 @@ class SensingSender:
                 else:
                     logger.info("Sent to os-server: %r", message)
                     # Returned so a caller can correlate this turn with the
-                    # os-server run it created (voice KPI does; nothing else
+                    # os-server run it created (voice metrics does; nothing else
                     # has to care).
                     return _result_of(resp)
                 return SendResult()

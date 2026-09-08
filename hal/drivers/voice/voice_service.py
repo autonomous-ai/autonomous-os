@@ -54,7 +54,7 @@ from hal.drivers.voice._internal.speaker_decorate import (
     merge_wake_words,
 )
 from hal.drivers.voice._internal.turn_dispatch import dispatch_turn
-from hal.tracking import voice_metrics
+from hal.telemetry import voice_metrics
 from hal.drivers.voice._internal.vad_filters import (
     SileroVADFilter,
     WebRTCVADFilter,
@@ -1420,10 +1420,10 @@ class VoiceService:
         # -1 = no speech seen → finalize_session skips the trailing-silence trim.
         last_speech_idx: int = -1
         # How this session's speech endpoint was decided — carried to the
-        # voice KPI so a latency number is always read together with what
-        # "the user stopped speaking" actually meant (see hal/tracking).
+        # voice metrics so a latency number is always read together with what
+        # "the user stopped speaking" actually meant (see hal/telemetry).
         endpoint_method = "stt_error"
-        # Monotonic stamp of the endpoint DETECTION itself. The KPI clock has
+        # Monotonic stamp of the endpoint DETECTION itself. The metrics clock has
         # to start here, not after finalize_session: transcript assembly,
         # trailing-silence trim and speaker-ID all run between the two and
         # would otherwise be charged to the device's response time.
@@ -1975,9 +1975,9 @@ class VoiceService:
                 getattr(self._tts, "last_spoken_text", "") if self._tts else "",
             )
             capture_complete.set()
-            # Voice KPI clock starts here: the endpoint has been detected and
+            # Voice metrics clock starts here: the endpoint has been detected and
             # the transcript is assembled. Everything downstream carries this
-            # id (see hal/tracking/voice_metrics.py).
+            # id (see hal/telemetry/voice_metrics.py).
             interaction_id = voice_metrics.speech_end(endpoint_method, at=endpoint_ts)
             if (
                 hal_config.WAKEWORD_ENABLED

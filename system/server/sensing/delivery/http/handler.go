@@ -54,7 +54,7 @@ type SensingEventRequest struct {
 	// downstream already carries `attachments[]`, so nothing here has to choose
 	// which photo survives.
 	Images []string `json:"images,omitempty"`
-	// InteractionID is HAL's voice-KPI id for the utterance behind this event
+	// InteractionID is HAL's voice-metrics id for the utterance behind this event
 	// (measurement only, empty for non-voice sources). It is echoed back as
 	// the owner of any audio os-server starts for this turn — the opening
 	// filler fires before this request's response reaches HAL, so HAL's own
@@ -101,7 +101,7 @@ type SensingHandler struct {
 	// Returns whether os-server ACTUALLY suppressed the older turn's speech.
 	// HAL needs the answer, not an assumption: automatic supersession is
 	// opt-in (OS_REALTIME_SUPERSEDES_MAIN_REPLY), so on a default body nothing
-	// is suppressed and the situation is not a KPI sample at all.
+	// is suppressed and the situation is not a metric sample at all.
 	onRealtimeHandled func() bool
 }
 
@@ -219,11 +219,16 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 			turnStart := flow.Start("sensing_input", startPayload, localRunID)
 			flow.Log("intent_match", map[string]any{"message": req.Message, "tts": result.TTSText, "rule": result.Rule, "actions": result.Actions}, localRunID)
 			if result.TTSText != "" {
+				owner := req.InteractionID
 				go func() {
 					// Cached path: fixed phrases like "Volume up!" hit the
 					// WAV cache (~50ms) instead of going through ElevenLabs
 					// (~1.5s). Dynamic texts (time, color) miss + render once.
-					if err := hal.SpeakCached(result.TTSText); err != nil {
+					//
+					// owner: a locally-handled command is answered here and
+					// never gets a run id, so without it the reply the user
+					// actually hears would be unattributed audio.
+					if err := hal.SpeakCachedForTurn(result.TTSText, owner); err != nil {
 						slog.Warn("intent TTS failed", "component", "sensing", "error", err)
 					}
 				}()
@@ -245,6 +250,10 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 			c.JSON(http.StatusOK, serializers.ResponseSuccess(map[string]string{
 				"handler":  "local",
 				"response": result.TTSText,
+				// No runId exists for a locally-handled command — say so
+				// explicitly, so HAL records "served here" instead of
+				// mistaking a missing run id for a failed dispatch.
+				"handledLocally": "true",
 			}))
 			return
 		}

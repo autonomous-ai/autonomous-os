@@ -16,10 +16,10 @@ Cả hai mục tiêu đều **tạm thời**. Mọi khoảng thời gian thô đ
 
 | Lớp | Đường dẫn | Vai trò |
 |-----|-----------|---------|
-| Tracker ở HAL | `hal/tracking/voice_metrics.py` | Toàn bộ phần đo: interaction id, phát hiện ack, phát hiện audio cũ |
-| Ống dẫn ở HAL | `hal/tracking/client.py` | Dùng chung: log local, hàng đợi có giới hạn, POST nền |
-| Nhận ở OS | `system/server/tracking/delivery/http/handler.go` | `POST /api/tracking/event` (loopback/LAN, cùng cổng chặn với `/api/sensing/event`) |
-| Ống dẫn ở OS | `system/tracking/tracking.go` | Field chung, chống trùng, hàng đợi giới hạn, một sender, log local |
+| Tracker ở HAL | `hal/telemetry/voice_metrics.py` | Toàn bộ phần đo: interaction id, phát hiện ack, phát hiện audio cũ |
+| Ống dẫn ở HAL | `hal/telemetry/client.py` | Dùng chung: log local, hàng đợi có giới hạn, POST nền |
+| Nhận ở OS | `system/server/telemetry/delivery/http/handler.go` | `POST /api/telemetry/event` (loopback/LAN, cùng cổng chặn với `/api/sensing/event`) |
+| Ống dẫn ở OS | `system/telemetry/telemetry.go` | Field chung, chống trùng, hàng đợi giới hạn, một sender, log local |
 | Transport | `system/lib/analytics` | Client Autonomous Analytics `event_tracking` (chung với web/mobile) |
 
 Code voice chỉ bị đụng đúng ở các biên nó vốn sở hữu: điểm kết thúc câu nói,
@@ -107,7 +107,7 @@ gian phản hồi của thiết bị.
 | `eligible` | `false` khi có `exclusion_reason` |
 | `outcome` | `acknowledged` \| `no_ack` \| `excluded` |
 | `exclusion_reason` | `rejected_noise`, `rejected_non_user`, `no_transcript`, `not_addressed`, `speaker_muted`, `interrupted_by_user` |
-| `failure_reason` | `dispatch_failed` — lệnh hợp lệ nhưng **không được phục vụ**. Đây *không* phải exclusion: dòng vẫn eligible và bị tính vào KPI |
+| `failure_reason` | `dispatch_failed` — lệnh hợp lệ nhưng **không được phục vụ** (POST không tới nơi). Đây *không* phải exclusion: dòng vẫn eligible và bị tính vào KPI. Lệnh os-server tự trả lời (local intent: âm lượng, LED, giờ) **không** phải lỗi — câu trả lời mang interaction id làm owner và được tính là đã phản hồi. |
 | `ack_latency_ms` | Quan sát thô, giữ nguyên bất kể kết luận (`null` khi không có gì phát) |
 | `ack_modality`, `ack_kind` | Người dùng thực sự nghe thấy cái gì |
 | `ack_deadline_ms`, `observe_window_ms` | 3000 / 10000 — ngưỡng (tạm thời) đang áp dụng lúc ghi dòng đó |
@@ -122,7 +122,8 @@ sau này đổi ngưỡng vẫn tính lại được từ dữ liệu đã lưu.
 10; agent chính có thể vẫn đang chạy, và lệnh dừng bấm ở giây 12 vẫn phải tìm
 thấy turn đó để suppress. Một turn còn *active* cho tới khi im lặng đủ
 `TURN_ACTIVE_TTL_MS` (45 giây) — đồng hồ này được reset mỗi lần turn đó phát ra
-tiếng — hoặc cho tới khi bị loại/bị lỗi. Chỉ khi đó nó mới rời mẫu số KPI-2.
+tiếng, và không bao giờ hết hạn khi audio của turn đó vẫn đang phát — hoặc cho
+tới khi bị loại/bị lỗi. Chỉ khi đó nó mới rời mẫu số KPI-2.
 Verdict sai sau đó được sửa bằng dòng đính chính.
 
 ### `voice_metrics_suppression` — mỗi biên một event (KPI-2)
@@ -195,9 +196,11 @@ không thể phát ra câu trả lời cũ, nên không tính là thứ mà biê
 - Tử số: trong đó `stale_observed = true`.
 - Báo cáo `explicit_stop` và `auto_supersede` **riêng**: hai chính sách khác
   nhau. Supersede tự động chỉ xảy ra khi os-server bật
-  `OS_REALTIME_SUPERSEDES_MAIN_REPLY=1`; **mặc định TẮT và thay đổi này không
-  đụng tới default**, nên trên body mặc định mẫu số `auto_supersede` sẽ rỗng và
-  lát cắt KPI đó là **N/A**, không phải 100 %.
+  `OS_REALTIME_SUPERSEDES_MAIN_REPLY=1`. **Mặc định trong code là TẮT và thay
+  đổi này không đụng tới default** — nhưng phải đọc `.env` của chính body trước
+  khi kết luận: lamp xuất xưởng đã **BẬT** sẵn
+  (`robots/lamp/rootfs/opt/hal/.env`), nên lamp có sinh mẫu `auto_supersede`.
+  Body nào tắt thì mẫu số rỗng và lát cắt đó là **N/A**, không phải 100 %.
 - Suppression đúng (`stale_observed = false`) là **đạt**, không phải "mất câu
   trả lời". Hành động phần cứng của turn bị auto-supersede vẫn hợp lệ theo
   thiết kế; chỉ speech và filler bị bỏ.
@@ -232,15 +235,15 @@ Cả hai giá trị nằm trong `/opt/hal/.env` của body, os-server load lúc 
 
 | Key | Ý nghĩa |
 |-----|---------|
-| `AUTONOMOUS_TRACKING_ENABLED` | **Công tắc tổng. Mặc định TẮT** (rỗng/không đặt). Khi tắt event vẫn ghi log local — chỉ bỏ chặng gửi mạng. Đặt `1` để gửi. |
-| `AUTONOMOUS_ANALYTICS_ID` | Key authorization của AA. Thiếu ⇒ báo lỗi gửi rõ ràng (`[tracking] delivery failed`). |
+| `AUTONOMOUS_TELEMETRY_ENABLED` | **Công tắc tổng. Mặc định TẮT** (rỗng/không đặt). Khi tắt event vẫn ghi log local — chỉ bỏ chặng gửi mạng. Đặt `1` để gửi. |
+| `AUTONOMOUS_ANALYTICS_ID` | Key authorization của AA. Thiếu ⇒ báo lỗi gửi rõ ràng (`[telemetry] delivery failed`). |
 | `AUTONOMOUS_ANALYTICS_URL` | Nơi bắn event. Tuỳ chọn; không có thì dùng endpoint production mặc định. |
 
 Công tắc được cả hai tiến trình (HAL và os-server) đọc từ cùng một key, đọc
 mỗi lần gọi — bật/tắt rồi restart service là đủ, không cần build lại.
 
 Thứ tự phân giải URL: env của process → `/opt/hal/.env` → mặc định built-in.
-Chặng HAL→os-server (`http://127.0.0.1:5000/api/tracking/event`) vẫn là hằng
+Chặng HAL→os-server (`http://127.0.0.1:5000/api/telemetry/event`) vẫn là hằng
 loopback như mọi lời gọi HAL→OS khác.
 
 ## Riêng tư
@@ -254,8 +257,9 @@ là hostname thiết bị, `platform` là `device` (xem `system/lib/analytics`).
 - **Điểm kết thúc là phát hiện, không phải âm học.** Latency tính từ silence
   clock / STT final, không phải từ lúc sóng âm thật sự dứt.
 - **Chưa đo phản hồi bằng hình ảnh** (xem trên).
-- **`auto_supersede` rỗng trên body mặc định** — `OS_REALTIME_SUPERSEDES_MAIN_REPLY`
-  mặc định TẮT và không bị thay đổi.
+- **`auto_supersede` tuỳ theo body.** Mặc định trong code của
+  `OS_REALTIME_SUPERSEDES_MAIN_REPLY` là TẮT (không đổi ở đây), nhưng lamp tự
+  bật trong `.env` của nó; body nào tắt thì lát cắt đó không có mẫu nào.
 - **Phát hiện stale ở mức playback, không ở mức mẫu audio.** Nó chấm các khoảng
   phát vượt mốc grace; không nói được còn bao nhiêu mili-giây PCM nằm trong đệm
   phần cứng.
@@ -270,14 +274,14 @@ là hostname thiết bị, `platform` là `device` (xem `system/lib/analytics`).
 - **Tracker giữ tối đa 32 interaction.** Cái cũ bị đẩy ra trước hạn ghi verdict
   sẽ được báo cáo sớm, gắn cờ `eviction = 'tracker_capacity'`, chứ không bị bỏ
   im — cửa sổ quan sát của nó bị cắt ngắn.
-- **Mất mát khi gửi được báo cáo, không giấu**: `tracking_dropped_total`,
-  `tracking_failed_total`, `hal_dropped_total`, `hal_failed_total` đi kèm mọi event.
+- **Mất mát khi gửi được báo cáo, không giấu**: `telemetry_dropped_total`,
+  `telemetry_failed_total`, `hal_dropped_total`, `hal_failed_total` đi kèm mọi event.
 
 ## Lệnh kiểm chứng
 
 ```bash
 go build ./...                                   # os-server + package tracking
-go test ./system/tracking/ ./system/server/tracking/...
+go test ./system/telemetry/ ./system/server/telemetry/...
 make hal-lint
 cd hal && .venv/bin/python -m pytest test/test_voice_metrics.py -q
 ```

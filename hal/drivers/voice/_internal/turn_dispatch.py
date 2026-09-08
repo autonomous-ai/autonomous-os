@@ -13,7 +13,7 @@ from hal.drivers.voice._internal.realtime_turn import (
     should_drop_downstream_turn,
 )
 from hal.drivers.voice.speech_emotion.constants import UNKNOWN_USER_LABEL
-from hal.tracking import voice_metrics
+from hal.telemetry import voice_metrics
 
 logger = logging.getLogger("hal.voice")
 
@@ -96,10 +96,27 @@ class _NoResult:
 
     run_id = ""
     speech_suppressed = False
+    handled_locally = False
 
 
 def _sent(result):
     return result if result is not None else _NoResult
+
+
+def _note_dispatch_outcome(interaction_id: str, result) -> None:
+    """Record whether the command actually got somewhere.
+
+    Three outcomes, and only the last is a failure:
+      run id       → an agent turn owns it; the reply will bind to it.
+      handled here → os-server matched a local intent and answered itself
+                     (volume, LED, time). Served — its spoken reply carries the
+                     interaction id as owner, so it still counts as answered.
+      neither      → the POST never landed. A valid command went unserved and
+                     stays in the denominator as a failure.
+    """
+    if result.run_id or getattr(result, "handled_locally", False):
+        return
+    voice_metrics.mark_failed(interaction_id, voice_metrics.FAIL_DISPATCH_FAILED)
 
 
 def dispatch_turn(
@@ -179,10 +196,10 @@ def dispatch_turn(
         combined[:80] if combined else "(empty)",
     )
 
-    # Voice KPI: record where this turn went, and exclude the ones that are
+    # Voice metrics: record where this turn went, and exclude the ones that are
     # not a missed-response question at all (noise, a turn the model rejected
     # as not-for-us, nothing said). Excluded interactions are still reported,
-    # with the reason — see hal/tracking/voice_metrics.py.
+    # with the reason — see hal/telemetry/voice_metrics.py.
     voice_metrics.set_route(interaction_id, rt.route, event_type)
     if rt.route == ROUTE_NOISE_DROPPED:
         voice_metrics.exclude(interaction_id, voice_metrics.EXCL_REJECTED_NOISE)
@@ -224,7 +241,7 @@ def dispatch_turn(
             ))
             # This POST is a backend notification, not a second user
             # interaction: it binds to the SAME interaction the realtime agent
-            # just answered, so no extra KPI sample is created.
+            # just answered, so no extra metric sample is created.
             voice_metrics.bind_run(interaction_id, handled_result.run_id)
             # It is ALSO the automatic-supersession boundary — but only when
             # os-server says it actually took the speaker away from the older
@@ -262,12 +279,7 @@ def dispatch_turn(
                     interaction_id=interaction_id,
                 ))
                 voice_metrics.bind_run(interaction_id, result.run_id)
-                if not result.run_id:
-                    # The turn never reached os-server. A valid command that
-                    # went unserved: it STAYS in the KPI denominator as a
-                    # failure — excluding it would hide exactly the case the
-                    # user feels most.
-                    voice_metrics.mark_failed(interaction_id, voice_metrics.FAIL_DISPATCH_FAILED)
+                _note_dispatch_outcome(interaction_id, result)
         else:
             # Realtime not active, OR it was active but produced no output
             # (e.g. receive() timed out) — send to the OS server normally so the
@@ -285,8 +297,7 @@ def dispatch_turn(
                 interaction_id=interaction_id,
             ))
             voice_metrics.bind_run(interaction_id, result.run_id)
-            if not result.run_id:
-                voice_metrics.mark_failed(interaction_id, voice_metrics.FAIL_DISPATCH_FAILED)
+            _note_dispatch_outcome(interaction_id, result)
     elif combined:
         if rt.route == ROUTE_NOISE_DROPPED:
             logger.info(

@@ -106,10 +106,10 @@ def _cancel_agent_speech(source: str):
     server must not delay the local stop. The local stop_tts() runs anyway, so
     a lost call degrades to "quiet for one sentence" rather than to nothing."""
 
-    # Voice KPI: the explicit stop boundary (different semantics from the
-    # automatic supersession one — see hal/tracking/voice_metrics.py).
+    # Voice metrics: the explicit stop boundary (different semantics from the
+    # automatic supersession one — see hal/telemetry/voice_metrics.py).
     try:
-        from hal.tracking import voice_metrics
+        from hal.telemetry import voice_metrics
 
         voice_metrics.boundary(voice_metrics.BOUNDARY_EXPLICIT_STOP)
     except Exception:

@@ -75,7 +75,7 @@ func TestPostEventWithoutHookIsUnaffected(t *testing.T) {
 }
 
 // The response must tell HAL whether the older turn ACTUALLY lost the speaker.
-// HAL records a stale-reply KPI situation only for real suppressions: with the
+// HAL records a stale-reply metrics situation only for real suppressions: with the
 // policy off nothing was suppressed, and counting it would inflate the
 // denominator with situations that never existed.
 func TestRealtimeHandledResponseReportsWhetherSpeechWasSuppressed(t *testing.T) {

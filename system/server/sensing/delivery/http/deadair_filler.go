@@ -331,7 +331,7 @@ func (h *SensingHandler) PlayFiller(c *gin.Context) {
 	var req struct {
 		Pool string `json:"pool"`
 		// Owner is an opaque tag HAL sends back to itself so a played filler
-		// can be attributed to the utterance it was armed for (voice KPI).
+		// can be attributed to the utterance it was armed for (voice metrics).
 		// Empty keeps the previous behaviour for callers that have none.
 		Owner string `json:"owner"`
 	}
@@ -392,7 +392,7 @@ type FillerManager struct {
 	mu        sync.Mutex
 	runs      map[string]*fillerRun
 	voiceRuns map[string]bool
-	// interactions maps a run to HAL's voice-KPI interaction id, so a filler
+	// interactions maps a run to HAL's voice-metrics interaction id, so a filler
 	// fired later in the turn is attributed the same way the opening one is.
 	interactions map[string]string
 }
@@ -426,7 +426,7 @@ func (fm *FillerManager) MarkVoiceRun(runID, interactionID string) {
 	fm.mu.Unlock()
 }
 
-// fillerOwner is the tag HAL attributes played filler audio to: the voice-KPI
+// fillerOwner is the tag HAL attributes played filler audio to: the voice-metrics
 // interaction when HAL sent one, else the run id. Measurement only — an empty
 // result simply leaves the audio unattributed.
 func fillerOwner(interactionID, runID string) string {
@@ -674,7 +674,7 @@ func (fm *FillerManager) fire(runID string) {
 	pool := classifyFillerPool(filler, toolName, fired, i18n.Lang())
 	slog.Info("dead air filler firing", "component", "sensing", "run_id", runID, "filler", filler, "tool", toolName, "fired", fired, "pool", pool)
 	// Pass the run id so HAL can attribute the played filler to the turn it
-	// was armed for (voice KPI attribution; no behaviour change).
+	// was armed for (voice metrics attribution; no behaviour change).
 	if err := hal.SpeakCachedInterruptibleForTurn(filler, owner); err != nil {
 		slog.Warn("dead air filler failed", "component", "sensing", "run_id", runID, "error", err)
 	}
