@@ -189,11 +189,12 @@ def dispatch_turn(
     else:
         destination = "main agent"
     logger.info(
-        "[turn] route=%s → %s (event=%s, stt=%r)",
+        "[turn] route=%s → %s (event=%s, stt=%r, interaction_id=%s)",
         rt.route,
         destination,
         event_type,
         combined[:80] if combined else "(empty)",
+        interaction_id,
     )
 
     # Voice metrics: record where this turn went, and exclude the ones that are

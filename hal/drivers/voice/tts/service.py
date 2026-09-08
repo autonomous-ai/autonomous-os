@@ -186,10 +186,10 @@ class _PendingSpeech:
     first delay) and pre-synth time is hidden behind the previous speech's
     playback. Mirrors the tail_producer/tail_q pattern in _speak_sync."""
 
-    __slots__ = ("text", "interruptible", "frame_queue", "failed", "owner", "realtime_reply")
+    __slots__ = ("text", "interruptible", "frame_queue", "failed", "owner", "realtime_reply", "realtime_feedback")
 
     def __init__(self, text: str, interruptible: bool, owner: str = "",
-                 realtime_reply: bool = False):
+                 realtime_reply: bool = False, realtime_feedback: bool = False):
         self.text = text
         self.interruptible = interruptible
         # Who queued this segment. The drain plays it on the stream another
@@ -197,6 +197,7 @@ class _PendingSpeech:
         # attributed to whoever happened to own the speaker first.
         self.owner = owner
         self.realtime_reply = realtime_reply
+        self.realtime_feedback = realtime_feedback
         # Producer (pre-synth thread) appends numpy frames as they arrive
         # from the backend; consumer (_drain_pending_queue) writes them to
         # the ALSA stream. None sentinel = producer is done.
@@ -276,6 +277,8 @@ class TTSService:
         # acknowledgement of a new command.
         self._playback_owner: str = ""
         self._realtime_reply = False
+        self._playback_realtime_feedback = False
+        self._playback_interruptible = False
         # Fired ONCE per playback, immediately after the first frame is
         # actually written to the stream — not when playback was requested,
         # accepted, or about to start. on_speak_start cannot serve this: the
@@ -623,6 +626,16 @@ class TTSService:
         return self._realtime_reply
 
     @property
+    def playback_realtime_feedback(self) -> bool:
+        """Measurement snapshot for the segment actually reaching the stream."""
+        return self._playback_realtime_feedback
+
+    @property
+    def playback_interruptible(self) -> bool:
+        """Measurement snapshot; does not change interruption behavior."""
+        return self._playback_interruptible
+
+    @property
     def latest_queue_turn_id(self) -> str:
         """os-server run id of the newest turn that took the speak queue.
 
@@ -680,10 +693,21 @@ class TTSService:
         except Exception:
             logger.exception("on_unspoken_reply callback failed")
 
-    def _begin_playback(self, owner: str, realtime_reply: bool = False) -> None:
+    def _begin_playback(self, owner: str, realtime_reply: bool = False,
+                        realtime_feedback=None, interruptible=None) -> None:
         """Claim the speaker for `owner` and arm the first-audio hook."""
         self._playback_owner = owner or ""
         self._realtime_reply = realtime_reply
+        # Queued segments can differ from the request that opened the stream.
+        # Snapshot classification without changing feedback or stop behavior.
+        self._playback_realtime_feedback = (
+            getattr(self, "_realtime_feedback", False)
+            if realtime_feedback is None else realtime_feedback
+        )
+        self._playback_interruptible = (
+            getattr(self, "_interruptible", False)
+            if interruptible is None else interruptible
+        )
         self._audio_written_fired = False
 
     def _note_audio_written(self) -> None:
@@ -1006,6 +1030,7 @@ class TTSService:
                 interruptible=interruptible,
                 owner=f"run:{turn_id}" if turn_id else "",
                 realtime_reply=realtime_reply,
+                realtime_feedback=realtime_feedback,
             )
             with self._pending_queue_lock:
                 self._pending_queue.append(item)
@@ -1091,7 +1116,11 @@ class TTSService:
             # Each queued segment is its own playback for measurement: re-arm
             # the hook under THIS item's owner so it is attributed to the turn
             # that queued it, not to whoever opened the stream.
-            self._begin_playback(item.owner, item.realtime_reply)
+            self._begin_playback(
+                item.owner, item.realtime_reply,
+                realtime_feedback=item.realtime_feedback,
+                interruptible=item.interruptible,
+            )
             stream.write(first)
             total += len(first)
             while not self._stop_event.is_set():

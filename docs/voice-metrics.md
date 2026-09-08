@@ -57,6 +57,13 @@ recorded as `unknown` and **never counts as an acknowledgement** — guessing
 command. The count rides on every interaction row as
 `unknown_owner_playbacks`.
 
+A muted playback also needs a resolvable owner to exclude an interaction as
+`speaker_muted`. An unrelated or unowned muted notice cannot exclude the
+newest voice command. Queued segments carry their own classification metadata
+(answer/filler/system), so they do not inherit the kind of the speech that
+opened their shared stream. These snapshots do not change feedback or
+interruption behavior.
+
 ## What counts as an acknowledgement
 
 The first frame **actually written to the audio stream**
@@ -358,10 +365,27 @@ Every event is logged **before** it is sent, and delivery failures are logged
 too — the warehouse copy is the one that can be missing.
 
 ```bash
-journalctl -u hal -f | grep '\[tracking\]'        # HAL: every event + POST failures
+journalctl -u hal -f | grep '\[telemetry\]'        # HAL: every event + POST failures
 journalctl -u hal -f | grep '\[voice-metrics\]'       # ack / boundary / stale decisions
-journalctl -u os-server -f | grep '\[tracking\]'  # os-server: forwarded, dropped, failed
+journalctl -u os-server -f | grep '\[telemetry\]'  # os-server: forwarded, dropped, failed
 ```
+
+Match rows by `interaction_id`, never by adjacency. `Session END` and the
+`[turn] route=` line include that id; the interaction verdict appears after
+the 10-second observation timer and may sit between logs of a later session.
+HAL's telemetry JSON also includes `event_id` locally, so amendments can be
+matched to their original event even when analytics sending is disabled.
+
+```bash
+journalctl -u hal -o cat --no-pager | grep -F 'vi-<interaction-id>'
+```
+
+`eligible=false` with `ack_latency_ms=null` is an excluded sample; check
+`exclusion_reason`. `eligible=true` with a null ack is a missed acknowledgement
+inside the observation window. A nonempty transcript alone does not establish
+eligibility: the wake-word gate or realtime non-user rejection can still
+exclude it. Transcript text stays in the existing local voice logs and is
+never added to telemetry payloads.
 
 ## Configuration
 

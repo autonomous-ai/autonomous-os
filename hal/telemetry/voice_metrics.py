@@ -396,9 +396,11 @@ def playback_muted(owner: str) -> None:
     Recorded when it happens. Sampling the mute flag at scoring time instead
     (what this did until 08/09/2026) mislabelled a muted turn as an unanswered
     one whenever someone unmuted in between — device-observed on lamp-0c89.
+    An unresolved owner stays unknown; unrelated muted audio must not exclude
+    the newest command from the denominator.
     """
     with _lock:
-        iid = _owner_interaction(owner) or _newest_open_interaction()
+        iid = _owner_interaction(owner)
         it = _interactions.get(iid) if iid else None
         if it is None or it.exclusion_reason or it.ack_latency_ms is not None:
             return
@@ -424,15 +426,6 @@ def playback_end() -> None:
         _observe_playback(was["kind"], was["interaction_id"], was["started"], ended)
 
 
-def _newest_open_interaction() -> str:
-    """The most recent interaction that can still be answered."""
-    for iid in reversed(_order):
-        it = _interactions.get(iid)
-        if it is not None and not it.closed:
-            return iid
-    return ""
-
-
 def _owner_interaction(owner: str) -> str:
     """Resolve the owner tag to an interaction.
 
@@ -453,7 +446,7 @@ def _owner_interaction(owner: str) -> str:
 
 
 def _classify(owner: str, tts) -> str:
-    """What the user heard, read from the speaking service's own public state.
+    """What the user heard, read from the speaking service's segment snapshots.
 
     The audio code reports only WHO owns the playback; the vocabulary below is
     this module's business:
@@ -472,9 +465,11 @@ def _classify(owner: str, tts) -> str:
             return KIND_UNKNOWN
         if tts is not None and getattr(tts, "realtime_reply", False):
             return KIND_REALTIME_TTS
-        if tts is not None and getattr(tts, "realtime_feedback", False):
+        if tts is not None and getattr(
+                tts, "playback_realtime_feedback", getattr(tts, "realtime_feedback", False)):
             return KIND_AGENT_REPLY
-        if tts is not None and getattr(tts, "interruptible", False):
+        if tts is not None and getattr(
+                tts, "playback_interruptible", getattr(tts, "interruptible", False)):
             return KIND_WAITING_AUDIO
     except Exception:
         logger.exception("[voice-metrics] playback classification failed")

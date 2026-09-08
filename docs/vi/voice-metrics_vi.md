@@ -57,6 +57,12 @@ là đã phản hồi** — đoán "interaction mở mới nhất" chính là c�
 tính thành phản hồi cho câu lệnh mới. Số đếm đi kèm mọi dòng interaction ở
 `unknown_owner_playbacks`.
 
+Lần phát bị mute cũng phải có owner resolve được thì mới loại interaction với
+`speaker_muted`. Thông báo bị mute không có owner hoặc thuộc lượt khác không
+được loại lệnh thoại mới nhất. Mỗi đoạn trong hàng đợi mang metadata phân loại
+riêng (câu trả lời/filler/hệ thống), không kế thừa loại của speech mở stream.
+Snapshot này không thay đổi hành vi feedback hay ngắt phát.
+
 ## Thế nào là "đã phản hồi"
 
 Là frame đầu tiên **thực sự được ghi vào audio stream**
@@ -251,10 +257,27 @@ Mọi event được ghi log **trước khi** gửi, và lỗi gửi cũng đư�
 kho mới là bản có thể thiếu.
 
 ```bash
-journalctl -u hal -f | grep '\[tracking\]'        # HAL: mọi event + lỗi POST
+journalctl -u hal -f | grep '\[telemetry\]'        # HAL: mọi event + lỗi POST
 journalctl -u hal -f | grep '\[voice-metrics\]'       # quyết định ack / biên / stale
-journalctl -u os-server -f | grep '\[tracking\]'  # os-server: đã gửi, đã drop, đã lỗi
+journalctl -u os-server -f | grep '\[telemetry\]'  # os-server: đã gửi, đã drop, đã lỗi
 ```
+
+Ghép các dòng bằng `interaction_id`, không dựa vào vị trí gần nhau.
+`Session END` và dòng `[turn] route=` đều có id này; verdict xuất hiện sau
+timer quan sát 10 giây nên có thể xen giữa log của session tiếp theo.
+JSON telemetry local của HAL cũng có `event_id` để ghép amendment với event
+gốc ngay cả khi chưa bật gửi analytics.
+
+```bash
+journalctl -u hal -o cat --no-pager | grep -F 'vi-<interaction-id>'
+```
+
+`eligible=false` và `ack_latency_ms=null` là mẫu bị loại; xem
+`exclusion_reason`. `eligible=true` và ack null là chưa ghi nhận acknowledge
+trong cửa sổ quan sát. Có transcript không đồng nghĩa với đủ điều kiện: cổng
+wake-word hoặc model realtime vẫn có thể loại lượt không hướng tới thiết bị.
+Transcript chỉ nằm trong log voice local sẵn có, không được thêm vào payload
+telemetry.
 
 ## Cấu hình
 
