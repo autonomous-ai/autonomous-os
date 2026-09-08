@@ -11,11 +11,13 @@ make dmg-signed
 
 Output `dist/AutonomousBuddy-<version>.dmg` được sign + notarize + staple — user mount, drag app vào Applications, double-click, macOS mở luôn không có cảnh báo Gatekeeper hay phải right-click → Open.
 
-Đường ad-hoc `make dmg` cũ vẫn dùng được cho local build và share nội bộ; doc này chỉ cover đường production.
+`DEV_ID_APP` được tự dò từ keychain — lấy identity `Developer ID Application:` đầu tiên mà `security find-identity -v -p codesigning` trả về. Chỉ cần export khi muốn ghim một identity cụ thể. Nhờ vậy **mọi** target đóng gói (`make app`, `make install`, `make dmg`) đều ký Developer ID ngay khi cert đã cài; chỉ rơi về ad-hoc khi máy không có cert đó (hoặc khi ép bằng `make app DEV_ID_APP=`). `make app-signed` = `make app` cộng thêm việc báo lỗi nếu không có identity Developer ID.
+
+Thứ `make dmg-signed` thêm so với `make dmg` là notarize + staple, và nó cần `NOTARY_PROFILE`.
 
 ## Khác biệt vs build ad-hoc
 
-| | Ad-hoc (`make dmg`) | Production (`make dmg-signed`) |
+| | Ad-hoc (máy chưa cài cert) | Production (`make dmg-signed`) |
 |---|---|---|
 | Signing identity | Không (`-` placeholder) | Developer ID Application cert từ Apple |
 | Hardened runtime | Off | **On** (`--options runtime`, Apple bắt buộc) |
