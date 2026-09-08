@@ -282,6 +282,31 @@ Hạn bỏ cuộc của web chat (`REPLY_IDLE_TIMEOUT_MS`) cũng được đặt
 mức chặn turn vì cùng lý do — và không rút ngắn được, vì `codex exec --json`
 không emit gì trong lúc chạy (run đo được không stream một delta nào suốt 10 phút).
 
+### Chặn assistant output lặp bất thường
+
+Gateway chặn mẫu lặp âm tiết đã quan sát trước khi chuyển assistant item sang
+translator, log câu trả lời hoặc TTS. Điều kiện bảo thủ yêu cầu ít nhất
+**64 KiB** assistant text và **4096 từ tách bằng khoảng trắng**: ít nhất **95%**
+được bao phủ bởi tối đa **tám token chỉ gồm chữ cái**, mỗi token dài tối đa
+**tám ký tự Unicode** và xuất hiện ít nhất **128 lần**. Tập token ứng viên giới
+hạn **1024**; văn bản đa dạng vẫn được chấp nhận. Đây là heuristic nhận diện lặp,
+không phải giới hạn độ dài câu trả lời: code dài, fixture số và giải thích thông
+thường vẫn có thể qua. Không phân loại output của tool.
+
+Khi chặn, gateway giết process group của CLI hiện tại, không chuyển item bị chặn
+hay frame báo thành công phía sau, xóa thread lưu trước lượt kế tiếp trong queue,
+và gửi `bridge.error` có tiền tố `degenerate_output:`. Áp dụng cho cả thread mới
+và resume, **không tự chạy lại task**. Tool trước đó có thể đã tác động hệ thống;
+cần quan sát trạng thái thật trước khi tiếp tục. Cách ly chỉ bỏ con trỏ resume,
+không xóa rollout của CLI hoặc hoàn tác tác động.
+
+CLI đang pin chỉ phát assistant text khi item hoàn tất, nên guard chưa thể ngắt
+quá trình sinh lặp trước khi nhận item. Timeout của turn giữ nguyên. Batch này
+cũng chưa bổ sung ngắt bằng giọng nói, tương quan request ID trong queue hay giới
+hạn output token ở provider. Tests bao phủ các biến thể âm tiết có dấu đã gặp,
+output dài hợp lệ, dừng tiến trình con, cách ly thread mới/resume và lượt tiếp
+theo trong queue bắt đầu mới mà không chạy lại task lỗi.
+
 ## 3. Dịch event (`translator.go`)
 
 Bridge forward các event JSONL của `codex exec --json` **nguyên văn** (cộng các
@@ -597,3 +622,11 @@ khỏi config.toml và bỏ `OPENAI_API_KEY` khỏi `.env`, nên codex nói chuy
 thẳng với OpenAI bằng provider + model mặc định built-in — chế độ này **né
 hoàn toàn blocker 404 `/responses` của campaign-api**. Xoá `auth.json` để quay
 về chế độ api-key; việc chuyển đổi tự động ở lần presync kế.
+
+### Đối chiếu lượt trong hàng đợi
+
+`message.send` mang request `id` và `run_id` gốc trên device. Gatewayd giữ cả hai qua worker FIFO và thêm `request_id`/`run_id` vào mọi sự kiện của lượt, gồm lỗi bridge kết thúc và lần thử resume. Control frame (`pong`, `bridge.status`) độc lập. Hàng đợi đầy trả `bridge.rejected` với ID của request bị từ chối thay vì làm lỗi lượt đang stream.
+
+Adapter tuần tự hóa ghi chat đi và lưu mọi cặp request/run đang chờ, không ghi đè một pending run duy nhất. Sự kiện có ID chọn đúng cặp gốc; bridge cũ thiếu trường này dùng đối chiếu FIFO. Lịch sử giới hạn 256 request ID đã hoàn thành giúp bỏ qua terminal frame trùng đến muộn. Gửi thất bại chỉ xóa request đó, giữ lượt đang chạy và công việc khác trong hàng đợi. Từ chối hàng đợi báo lifecycle error của run bị từ chối mà không xóa output tích lũy của lượt đang chạy. Nhờ đó, chế độ im lặng của web-chat, trả lời voice và định tuyến channel vẫn gắn với request gốc khi có nhiều followup chờ. Thay đổi này không thêm cancellation hoặc đổi chính sách thực thi tuần tự của gateway.
+
+Busy gating tiếp tục khi còn lượt đã đối chiếu hoặc request được chấp nhận trong hàng đợi, ngay cả khi lifecycle consumer chung báo lỗi của run khác đang chờ. Disconnect và dọn dẹp theo busy-TTL bỏ đối chiếu pending không còn chắc chắn để request bị mất không giữ device busy vô thời hạn. Gateway mới vẫn có thể khôi phục run gốc từ sự kiện có ID sau reconnect; bridge cũ không gắn ID không đảm bảo đối chiếu sau khi mất kết nối. Sự kiện có ID cũ hoặc xen kẽ không được thay đổi session ID đã lưu.

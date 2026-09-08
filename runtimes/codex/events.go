@@ -116,6 +116,12 @@ func (s *CodexService) failStuckTurn() {
 
 // SetBusy flips active state. Drains pending events on idle.
 func (s *CodexService) SetBusy(busy bool) {
+	// A queued rejection also emits lifecycle.error. The generic consumer has
+	// no run-aware busy API, so it must not idle another active/queued turn.
+	if !busy && (s.getCurrentRunID() != "" || s.hasPendingRuns()) {
+		s.activeTurn.Store(true)
+		return
+	}
 	if busy {
 		s.busySince.Store(time.Now().UnixMilli())
 	}

@@ -290,6 +290,32 @@ outlast the turn cap for the same reason — and it cannot be shortened, because
 `codex exec --json` emits nothing at all while it works (the measured run
 streamed zero deltas in ten minutes).
 
+### Degenerate assistant output guard
+
+The gateway rejects the observed runaway syllable pattern before forwarding an
+assistant item to the translator, response logs, or TTS. The conservative check
+requires at least **64 KiB** of assistant text and **4096 whitespace-delimited
+words**: at least **95%** must be covered by at most **eight alphabetic tokens**
+of at most **eight Unicode characters**, each occurring at least **128 times**.
+Candidate vocabulary is bounded at **1024** tokens; diverse text is accepted.
+This is a repetition heuristic, not a maximum answer length: long code, numeric
+fixtures, and ordinary explanations remain eligible. Tool output is not classified.
+
+On rejection the gateway kills the current CLI process group, suppresses the
+rejected item and later success frames, clears the persisted thread before the
+next queued turn, and sends `bridge.error` with the `degenerate_output:` prefix.
+It does this for fresh and resumed threads and **does not replay the task**.
+Earlier tool actions may already have happened; inspect the actual task state
+before continuing. Quarantine forgets the resume pointer; it does not delete the
+CLI rollout or undo side effects.
+
+The pinned CLI emits assistant text as completed items, so this guard cannot
+stop repetitive generation before such an item arrives. The existing turn
+timeout remains unchanged. It also does not add voice interruption, request-ID
+queue correlation, or provider-side output-token limits. Tests cover the observed
+accented syllable variants, long valid output, child termination, fresh/resumed
+quarantine, and a queued next turn starting fresh without replay.
+
 ## 3. Event translation (`translator.go`)
 
 The bridge forwards the `codex exec --json` JSONL events **verbatim** (plus its
@@ -612,3 +638,11 @@ boot): it omits the custom provider block from config.toml and drops
 built-in default provider + model — this **bypasses the campaign-api
 `/responses` 404 blocker** entirely. Delete `auth.json` to fall back to
 api-key mode; the flip is automatic on the next presync run.
+
+### Queued turn correlation
+
+`message.send` carries the request `id` and originating device `run_id`. Gatewayd retains both through its FIFO worker and adds `request_id`/`run_id` to every turn event, including terminal bridge errors and resumed attempts. Control frames (`pong`, `bridge.status`) remain independent. A full queue returns `bridge.rejected` with the rejected request's IDs instead of failing the currently streaming turn.
+
+The adapter serializes outgoing chat writes and stores all pending request/run pairs, rather than overwriting one pending run. Tagged events select their originating pair; older bridges without these fields use FIFO correlation. Completed request IDs are retained in a bounded 256-entry history to ignore duplicate late terminal frames. A failed send removes only that request, preserving active and other queued work. Queue rejection reports the rejected run's lifecycle error without clearing the active turn's accumulated output. This keeps web-chat silence, voice replies, and channel routing associated with their original requests when multiple followups are queued. It does not add cancellation or change the gateway's sequential execution policy.
+
+Busy gating stays active while a correlated turn or accepted queued request remains, even when the generic lifecycle consumer reports a different queued run's error. Disconnect and busy-TTL cleanup discard uncertain pending correlation so lost requests cannot hold the device busy indefinitely. A modern gateway can still restore the originating run from tagged events after reconnect; an older untagged bridge cannot guarantee correlation after a lost connection. Stale or interleaved tagged events cannot change the stored session ID.
