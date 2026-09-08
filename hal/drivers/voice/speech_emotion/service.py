@@ -56,6 +56,7 @@ from hal.drivers.voice.speech_emotion.base import (
 )
 from hal.drivers.voice.speech_emotion.constants import (
     CONFIDENCE_THRESHOLD_BY_LABEL,
+    DEFAULT_API_TIMEOUT_S,
     DEFAULT_CONFIDENCE_THRESHOLD,
     DEFAULT_DEDUP_WINDOW_S,
     DEFAULT_DL_SER_ENDPOINT,
@@ -91,6 +92,9 @@ _MIN_AUDIO_S: float = float(
 )
 _API_URL: str = getattr(config, "SPEECH_EMOTION_API_URL", "") or ""
 _API_KEY: str = getattr(config, "SPEECH_EMOTION_API_KEY", "") or ""
+_API_TIMEOUT_S: float = float(
+    getattr(config, "SPEECH_EMOTION_API_TIMEOUT_S", DEFAULT_API_TIMEOUT_S)
+)
 _SENSING_URL: str = config.OS_SENSING_URL
 
 # Boot-scoped dedup sidecar — survives HAL service restarts, cleared on a
@@ -127,7 +131,11 @@ def _build_default_recognizer() -> BaseSpeechEmotionRecognizer:
             + "/"
             + endpoint.strip("/")
         )
-    return Emotion2VecRecognizer(url=url, api_key=_API_KEY or config.DL_API_KEY)
+    return Emotion2VecRecognizer(
+        url=url,
+        api_key=_API_KEY or config.DL_API_KEY,
+        timeout_s=_API_TIMEOUT_S,
+    )
 
 
 class SpeechEmotionService:
