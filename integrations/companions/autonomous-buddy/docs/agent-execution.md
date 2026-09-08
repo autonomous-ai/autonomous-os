@@ -19,3 +19,9 @@ still stop a turn; the flags do not guarantee every operation succeeds.
 The invocation regression test checks both providers with and without resume IDs.
 Installed CLI help was checked for the supported flags. This validation does not
 claim a paid live-model task has been executed.
+
+## Authenticated validation
+
+From `desktop/`, explicitly run `BUDDY_LIVE_PROVIDER_TEST=1 node tests/provider-live.mjs` to validate installed Codex and Claude against their real accounts. This opt-in check creates a temporary empty project and two no-tool turns per provider, verifies completion and recalled context using the exact saved provider session ID, then removes its temporary Buddy state. Provider-side conversation records may remain. It uses real model calls and is not part of unit or mocked Electron tests.
+
+On 2026-09-08 both providers passed initial completion and exact-session follow-up on this Mac with the no-approval flags above.
