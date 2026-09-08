@@ -34,6 +34,7 @@ export interface SessionEvent {
   text: string
 }
 export interface GitFile {
+  originalPath?: string
   path: string
   status: string
 }
@@ -103,6 +104,7 @@ export interface NativeCommandResult {
 export type { ProviderUsage } from './provider-usage'
 import type { ProviderUsage } from './provider-usage'
 export interface BuddyAPI {
+  onFocusSession(listener: (id: string) => void): () => void
   providerUsage(refresh?: boolean): Promise<ProviderUsage[]>
   onCloseActiveTab(listener: () => void): () => void
   setProjectGroup(projectId: string, groupName: string | null): Promise<void>
@@ -122,6 +124,11 @@ export interface BuddyAPI {
   worktrees(projectId: string): Promise<Worktree[]>
   createWorktree(projectId: string, branch: string): Promise<Worktree>
   git(projectId: string, worktreePath: string): Promise<GitSnapshot>
+  stageFiles(projectId: string, path: string, files: string[]): Promise<void>
+  unstageFiles(projectId: string, path: string, files: string[]): Promise<void>
+  commitStaged(projectId: string, path: string, message: string): Promise<string>
+  commitFiles(projectId: string, path: string, hash: string): Promise<GitFile[]>
+  commitDiff(projectId: string, path: string, hash: string, file: string): Promise<string>
   diff(projectId: string, worktreePath: string, file: string): Promise<string>
   files(projectId: string, worktreePath: string, relativePath: string): Promise<FileEntry[]>
   readFile(projectId: string, worktreePath: string, relativePath: string): Promise<string>

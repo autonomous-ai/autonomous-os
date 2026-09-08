@@ -15,7 +15,7 @@ import type {
   WorkspaceMeta,
   WorkspacePatch,
 } from '../shared/types.js'
-import { fileDiff, fileEntries, fileText, gitCommand, gitSnapshot, listWorktrees } from './git.js'
+import { stageFiles, unstageFiles, commitStaged, commitFiles, commitDiff, fileDiff, fileEntries, fileText, gitCommand, gitSnapshot, listWorktrees } from './git.js'
 import { available, launch, parseEvent, type Launcher, type ProcessHandle } from './providers.js'
 interface DeviceReceipt {
   fingerprint: string
@@ -311,6 +311,21 @@ export class Manager {
   async git(projectId: string, workspace: string) {
     return gitSnapshot(await this.workspace(projectId, workspace))
   }
+  async stageFiles(projectId: string, selected: string, files: string[]) {
+    return stageFiles(await this.workspace(projectId, selected), files)
+  }
+  async unstageFiles(projectId: string, selected: string, files: string[]) {
+    return unstageFiles(await this.workspace(projectId, selected), files)
+  }
+  async commitStaged(projectId: string, selected: string, message: string) {
+    return commitStaged(await this.workspace(projectId, selected), message)
+  }
+  async commitFiles(projectId: string, selected: string, hash: string) {
+    return commitFiles(await this.workspace(projectId, selected), hash)
+  }
+  async commitDiff(projectId: string, selected: string, hash: string, file: string) {
+    return commitDiff(await this.workspace(projectId, selected), hash, file)
+  }
   async diff(projectId: string, workspace: string, file: string) {
     return fileDiff(await this.workspace(projectId, workspace), file)
   }
@@ -325,6 +340,7 @@ export class Manager {
     if (!this.providerAvailable(input.provider))
       throw new Error(`${input.provider} is not installed or is not on PATH`)
     const workspace = await this.workspace(input.projectId, input.worktreePath)
+    this.findProject(input.projectId)
     if (this.removingWorkspaces.has(workspace)) throw new Error('Workspace is being removed')
     const now = Date.now()
     const session: Session = {

@@ -32,7 +32,18 @@ function publish(update: BuddyUpdate) {
     notified.set(session.id, session.status)
     if (prior === undefined || prior === session.status || window?.isFocused()) continue
     if (['completed', 'needs_input', 'error'].includes(session.status) && Notification.isSupported()) {
-      new Notification({ title: session.title, body: `Agent ${session.status.replace('_', ' ')}` }).show()
+      const notice = new Notification({ title: session.title, body: `Agent ${session.status.replace('_', ' ')}` })
+      notice.on('click', () => {
+        showManager()
+        const target = window
+        if (!target) return
+        const navigate = () => {
+          if (!target.isDestroyed()) target.webContents.send('buddy:focusSession', session.id)
+        }
+        if (target.webContents.isLoadingMainFrame()) target.webContents.once('did-finish-load', navigate)
+        else navigate()
+      })
+      notice.show()
     }
   }
 }
@@ -183,6 +194,7 @@ else {
         'createWorktree',
         'git',
         'diff',
+        'stageFiles', 'unstageFiles', 'commitStaged', 'commitFiles', 'commitDiff',
         'files',
         'readFile',
         'createSession',

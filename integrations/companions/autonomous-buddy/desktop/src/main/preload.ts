@@ -1,7 +1,23 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { BuddyAPI, BuddyUpdate, NativeState } from '../shared/types'
 
+const focusListeners = new Set<(id: string) => void>()
+let pendingFocus: string | undefined
+ipcRenderer.on('buddy:focusSession', (_event, id: unknown) => {
+  if (typeof id !== 'string') return
+  if (!focusListeners.size) pendingFocus = id
+  else for (const listener of focusListeners) listener(id)
+})
 const api: BuddyAPI = {
+  onFocusSession: (listener) => {
+    focusListeners.add(listener)
+    if (pendingFocus) {
+      const id = pendingFocus
+      pendingFocus = undefined
+      queueMicrotask(() => { if (focusListeners.has(listener)) listener(id) })
+    }
+    return () => { focusListeners.delete(listener) }
+  },
   providerUsage: (refresh) => ipcRenderer.invoke('buddy:providerUsage', refresh),
   onCloseActiveTab: (listener) => {
     const handler = () => listener()
@@ -29,6 +45,11 @@ const api: BuddyAPI = {
   worktrees: (id) => ipcRenderer.invoke('buddy:worktrees', id),
   createWorktree: (id, branch) => ipcRenderer.invoke('buddy:createWorktree', id, branch),
   git: (id, path) => ipcRenderer.invoke('buddy:git', id, path),
+  stageFiles: (id, path, files) => ipcRenderer.invoke('buddy:stageFiles', id, path, files),
+  unstageFiles: (id, path, files) => ipcRenderer.invoke('buddy:unstageFiles', id, path, files),
+  commitStaged: (id, path, message) => ipcRenderer.invoke('buddy:commitStaged', id, path, message),
+  commitFiles: (id, path, hash) => ipcRenderer.invoke('buddy:commitFiles', id, path, hash),
+  commitDiff: (id, path, hash, file) => ipcRenderer.invoke('buddy:commitDiff', id, path, hash, file),
   diff: (id, path, file) => ipcRenderer.invoke('buddy:diff', id, path, file),
   files: (id, path, relative) => ipcRenderer.invoke('buddy:files', id, path, relative),
   readFile: (id, path, relative) => ipcRenderer.invoke('buddy:readFile', id, path, relative),

@@ -2,10 +2,10 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { realpath, stat, readFile, readdir } from 'node:fs/promises'
 import path from 'node:path'
-import type { FileEntry, GitSnapshot, Worktree } from '../shared/types.js'
+import type { FileEntry, GitFile, GitSnapshot, Worktree } from '../shared/types.js'
 const exec = promisify(execFile)
 export async function gitCommand(cwd: string, args: string[]): Promise<string> {
-  const { stdout } = await exec('git', ['--no-pager', '-c', 'core.quotepath=false', ...args], {
+  const { stdout } = await exec('git', ['--literal-pathspecs', '--no-pager', '-c', 'core.quotepath=false', ...args], {
     cwd,
     maxBuffer: 4 * 1024 * 1024,
     timeout: 15000,
@@ -67,16 +67,17 @@ export async function fileEntries(root: string, relative: string): Promise<FileE
     .map((v) => ({ name: v.name, path: path.posix.join(relative, v.name), directory: v.isDirectory() }))
 }
 export async function gitSnapshot(root: string): Promise<GitSnapshot> {
-  const worktrees = await listWorktrees(root)
-  if (!worktrees[0]?.head) return { branch: '', files: [], commits: [] }
+  const repository = await gitCommand(root, ['rev-parse', '--is-inside-work-tree']).catch(() => '')
+  if (repository.trim() !== 'true') return { branch: '', files: [], commits: [] }
   const raw = await gitCommand(root, ['status', '--porcelain=v1', '-z', '--untracked-files=all'])
   const parts = raw.split('\0')
   const files = []
   for (let i = 0; i < parts.length; i++) {
     const record = parts[i]
     if (!record) continue
-    files.push({ path: record.slice(3), status: record.slice(0, 2) })
-    if (/[RC]/.test(record.slice(0, 2))) i++
+    const file: GitFile = { path: record.slice(3), status: record.slice(0, 2) }
+    if (/[RC]/.test(file.status)) file.originalPath = parts[++i]
+    files.push(file)
   }
   const branch = (
     await gitCommand(root, ['symbolic-ref', '--quiet', '--short', 'HEAD']).catch(() => 'HEAD')
@@ -92,18 +93,80 @@ export async function gitSnapshot(root: string): Promise<GitSnapshot> {
     })
   return { branch, files, commits }
 }
+function validFile(value: string): void {
+  if (typeof value !== 'string' || !value || value.includes('\0') || path.isAbsolute(value) || value.split(/[\\/]/).some((part) => part === '..' || part === '.git'))
+    throw new Error('Expected an explicit workspace file path')
+}
+export const isStaged = (file: GitFile) => file.status[0] !== ' ' && file.status[0] !== '?'
+export const isUnstaged = (file: GitFile) => file.status[1] !== ' '
+
+async function selectedChanges(root: string, files: string[]): Promise<string[]> {
+  if (!Array.isArray(files) || files.length === 0 || files.length > 1000) throw new Error('Select 1–1000 changed files')
+  const snapshot = await gitSnapshot(root)
+  const paths = new Set<string>()
+  for (const value of files) {
+    validFile(value)
+    const file = snapshot.files.find((item) => item.path === value)
+    if (!file) throw new Error('Selected file is no longer changed; refresh Git status')
+    paths.add(file.path)
+    if (file.originalPath) { validFile(file.originalPath); paths.add(file.originalPath) }
+  }
+  return [...paths]
+}
+
+export async function stageFiles(root: string, files: string[]): Promise<void> {
+  const paths = await selectedChanges(root, files)
+  await gitCommand(root, ['add', '--all', '--', ...paths])
+}
+export async function unstageFiles(root: string, files: string[]): Promise<void> {
+  const paths = await selectedChanges(root, files)
+  const head = await gitCommand(root, ['rev-parse', '--verify', 'HEAD']).catch(() => '')
+  if (head) await gitCommand(root, ['reset', '--quiet', 'HEAD', '--', ...paths])
+  else await gitCommand(root, ['rm', '--cached', '--force', '--ignore-unmatch', '--', ...paths])
+}
+export async function commitStaged(root: string, message: string): Promise<string> {
+  if (typeof message !== 'string' || !message.trim() || message.length > 10000 || message.includes('\0'))
+    throw new Error('Commit message must contain 1–10000 characters')
+  const staged = await gitCommand(root, ['diff', '--cached', '--name-only', '-z'])
+  if (!staged) throw new Error('No staged changes to commit')
+  await gitCommand(root, ['commit', '-m', message.trim()])
+  return (await gitCommand(root, ['rev-parse', 'HEAD'])).trim()
+}
+
 export async function fileDiff(root: string, relative: string): Promise<string> {
-  if (!relative || path.isAbsolute(relative) || relative.split(/[\\/]/).includes('..'))
-    throw new Error('Invalid diff path')
-  const tracked = await gitCommand(root, ['ls-files', '-z', '--', relative])
-  if (!tracked) return `Untracked file: ${relative}\n\n${await fileText(root, relative)}`
-  // HEAD includes both staged and unstaged changes; unborn repositories need the index diff too.
-  const args = ['diff', '--no-ext-diff', '--no-textconv', 'HEAD', '--', relative]
-  return (
-    (await gitCommand(root, args).catch(
-      async () =>
-        (await gitCommand(root, ['diff', '--cached', '--no-ext-diff', '--no-textconv', '--', relative])) +
-        (await gitCommand(root, ['diff', '--no-ext-diff', '--no-textconv', '--', relative])),
-    )) || 'No changes for this file.'
-  )
+  validFile(relative)
+  const file = (await gitSnapshot(root)).files.find((item) => item.path === relative)
+  if (!file) return 'No changes for this file.'
+  if (file.status === '??') return `Untracked file: ${relative}\n\n${await fileText(root, relative)}`
+  const paths = [relative, ...(file.originalPath ? [file.originalPath] : [])]
+  const head = await gitCommand(root, ['rev-parse', '--verify', 'HEAD']).catch(() => '')
+  const flags = ['--no-ext-diff', '--no-textconv', '--no-color']
+  return (head ? await gitCommand(root, ['diff', ...flags, 'HEAD', '--', ...paths]) :
+    (await gitCommand(root, ['diff', '--cached', ...flags, '--', ...paths])) +
+    (await gitCommand(root, ['diff', ...flags, '--', ...paths]))) || 'No changes for this file.'
+}
+
+async function commitRange(root: string, hash: string): Promise<string[]> {
+  if (typeof hash !== 'string' || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(hash)) throw new Error('Expected a full commit hash')
+  const line = (await gitCommand(root, ['rev-list', '--parents', '-n', '1', hash])).trim().split(' ')
+  if (line[0] !== hash) throw new Error('Unknown commit')
+  return line[1] ? [line[1], hash] : ['--root', hash]
+}
+export async function commitFiles(root: string, hash: string): Promise<GitFile[]> {
+  const raw = await gitCommand(root, ['diff-tree', '--no-commit-id', '-r', '-M', '--name-status', '-z', ...await commitRange(root, hash)])
+  const parts = raw.split('\0')
+  const files: GitFile[] = []
+  for (let i = 0; i < parts.length && parts[i];) {
+    const status = parts[i++]
+    const first = parts[i++]
+    if (/^[RC]/.test(status)) files.push({ status, originalPath: first, path: parts[i++] })
+    else files.push({ status, path: first })
+  }
+  return files
+}
+export async function commitDiff(root: string, hash: string, file: string): Promise<string> {
+  validFile(file)
+  const entry = (await commitFiles(root, hash)).find((item) => item.path === file)
+  if (!entry) throw new Error('File is not part of this commit')
+  return gitCommand(root, ['diff-tree', '--no-commit-id', '-r', '-p', '-M', '--no-ext-diff', '--no-textconv', '--no-color', ...await commitRange(root, hash), '--', file, ...(entry.originalPath ? [entry.originalPath] : [])])
 }

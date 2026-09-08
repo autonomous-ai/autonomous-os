@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
   ChevronDown,
   ChevronRight,
@@ -11,7 +11,8 @@ import {
   RefreshCw,
   Search,
 } from 'lucide-react'
-import type { FileEntry, GitSnapshot, Project } from '../shared/types'
+import './GitReviewPanel.css'
+import type { FileEntry, GitFile, GitSnapshot, Project } from '../shared/types'
 
 type Preview = { name: string; text: string; diff: boolean }
 type Props = {
@@ -21,12 +22,31 @@ type Props = {
   onError: (error: unknown) => void
 }
 export function GitPanel({ project, path, onPreview, onError }: Props) {
+  const workspaceKey = JSON.stringify([project?.id ?? '', path ?? ''])
+  const activeWorkspace = useRef<string | null>(workspaceKey)
+  const previewRequest = useRef(0)
+  const historyRequest = useRef(0)
+  useLayoutEffect(() => {
+    activeWorkspace.current = workspaceKey
+    return () => {
+      activeWorkspace.current = null
+      previewRequest.current += 1
+      historyRequest.current += 1
+    }
+  }, [workspaceKey])
   const [tab, setTab] = useState<'git' | 'files'>('git')
-  const [git, setGit] = useState<GitSnapshot | null>(null)
+  const [gitState, setGitState] = useState<{ path: string; value: GitSnapshot } | null>(null)
+  const git = gitState && gitState.path === path ? gitState.value : null
   const [error, setError] = useState('')
   const [refreshing, setRefreshing] = useState(false)
   const [revision, setRevision] = useState(0)
   const [filter, setFilter] = useState('')
+  const [drafts, setDrafts] = useState<Record<string, string>>({})
+  const message = drafts[workspaceKey] ?? ''
+  const setMessage = (value: string) => setDrafts((current) => ({ ...current, [workspaceKey]: value }))
+  const [acting, setActing] = useState(false)
+  const [review, setReview] = useState<{ key: string; path: string; hash: string; files: GitFile[] } | null>(null)
+  const [historyLoading, setHistoryLoading] = useState('')
   const [historyOpen, setHistoryOpen] = useState(true)
   const request = useRef(0)
   const invalidate = useCallback(() => {
@@ -39,7 +59,7 @@ export function GitPanel({ project, path, onPreview, onError }: Props) {
     try {
       const value = await window.buddy.git(project.id, path)
       if (request.current === id) {
-        setGit(value)
+        setGitState({ path, value })
         setError('')
       }
     } catch (error) {
@@ -67,13 +87,52 @@ export function GitPanel({ project, path, onPreview, onError }: Props) {
   }, [refresh, invalidate])
   const open = async (file: string, diff: boolean) => {
     if (!project || !path) return
+    const id = ++previewRequest.current
     try {
       const text = diff
         ? await window.buddy.diff(project.id, path, file)
         : await window.buddy.readFile(project.id, path, file)
-      onPreview({ name: file, text, diff })
+      if (activeWorkspace.current === workspaceKey && previewRequest.current === id)
+        onPreview({ name: file, text, diff })
     } catch (error) {
-      onError(error)
+      if (activeWorkspace.current === workspaceKey && previewRequest.current === id) onError(error)
+    }
+  }
+  const stagedCount = git?.files.filter((file) => file.status[0] !== ' ' && file.status[0] !== '?').length ?? 0
+  const unstagedCount = git?.files.filter((file) => file.status[1] !== ' ').length ?? 0
+  const mutate = async (action: () => Promise<unknown>, committed = false) => {
+    if (acting) return
+    setActing(true)
+    try {
+      await action()
+      if (committed) setMessage('')
+      if (activeWorkspace.current === workspaceKey) await refresh()
+    } catch (error) { onError(error) }
+    finally { setActing(false) }
+  }
+  const inspectCommit = async (hash: string) => {
+    if (!project || !path) return
+    const id = ++historyRequest.current
+    if (review?.hash === hash && review.key === workspaceKey) { setReview(null); setHistoryLoading(''); return }
+    setHistoryLoading(workspaceKey + hash)
+    try {
+      const files = await window.buddy.commitFiles(project.id, path, hash)
+      if (activeWorkspace.current === workspaceKey && historyRequest.current === id) setReview({ key: workspaceKey, path, hash, files })
+    } catch (error) {
+      if (activeWorkspace.current === workspaceKey && historyRequest.current === id) onError(error)
+    } finally {
+      if (activeWorkspace.current === workspaceKey && historyRequest.current === id) setHistoryLoading('')
+    }
+  }
+  const openCommitFile = async (hash: string, file: string) => {
+    if (!project || !path) return
+    const id = ++previewRequest.current
+    try {
+      const text = await window.buddy.commitDiff(project.id, path, hash, file)
+      if (activeWorkspace.current === workspaceKey && previewRequest.current === id)
+        onPreview({ name: `${hash.slice(0, 7)} · ${file}`, text, diff: true })
+    } catch (error) {
+      if (activeWorkspace.current === workspaceKey && previewRequest.current === id) onError(error)
     }
   }
   return (
@@ -127,18 +186,19 @@ export function GitPanel({ project, path, onPreview, onError }: Props) {
                   <div className="pane-section-heading">
                     <ChevronDown size={12} /> WORKING CHANGES <span>{git?.files.length ?? 0}</span>
                   </div>
+                  <div className="git-stage-counts"><span>Staged {stagedCount}</span><span>Unstaged {unstagedCount}</span></div>
                   {git?.files.length ? (
                     <div className="changed-files">
                       {git.files.map((file) => (
+                        <div className="git-change-row" key={file.path}>
                         <button
-                          key={file.path}
                           className="changed-file"
                           onClick={() => void open(file.path, true)}
                           title={file.path}
                         >
                           <File size={13} />
                           <span>
-                            {file.path.split('/').at(-1)}
+                            {file.originalPath ? `${file.originalPath} → ${file.path}` : file.path.split('/').at(-1)}
                             <small>
                               {file.path.includes('/') ? file.path.slice(0, file.path.lastIndexOf('/')) : ''}
                             </small>
@@ -149,6 +209,11 @@ export function GitPanel({ project, path, onPreview, onError }: Props) {
                             {file.status.trim() || 'M'}
                           </em>
                         </button>
+                        <div className="git-stage-actions">
+                          {file.status[1] !== ' ' && <button disabled={acting} aria-label={`Stage ${file.path}`} title="Stage this file" onClick={() => void mutate(() => window.buddy.stageFiles(project.id, path, [file.path]))}>+</button>}
+                          {file.status[0] !== ' ' && file.status[0] !== '?' && <button disabled={acting} aria-label={`Unstage ${file.path}`} title="Unstage this file; keep working files" onClick={() => void mutate(() => window.buddy.unstageFiles(project.id, path, [file.path]))}>−</button>}
+                        </div>
+                        </div>
                       ))}
                     </div>
                   ) : (
@@ -164,6 +229,11 @@ export function GitPanel({ project, path, onPreview, onError }: Props) {
                   )}
                 </div>
               )}
+              <form className="git-commit-composer" onSubmit={(event) => { event.preventDefault(); void mutate(() => window.buddy.commitStaged(project.id, path, message), true) }}>
+                <textarea aria-label="Commit message" placeholder="Describe the staged changes…" maxLength={10000} value={message} onChange={(event) => setMessage(event.target.value)} disabled={acting} />
+                <small>Commits all staged changes in this worktree's index. Unstaged changes stay on disk.</small>
+                <button type="submit" disabled={acting || !message.trim() || stagedCount === 0}>Commit staged changes ({stagedCount})</button>
+              </form>
               <div className="commit-section">
                 <button className="pane-section-heading" onClick={() => setHistoryOpen(!historyOpen)}>
                   {historyOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />} RECENT COMMITS{' '}
@@ -172,7 +242,8 @@ export function GitPanel({ project, path, onPreview, onError }: Props) {
                 {historyOpen && (
                   <div className="commit-list">
                     {git?.commits.map((commit) => (
-                      <div key={commit.hash} className="commit-row">
+                      <div key={commit.hash}>
+                      <button type="button" className="commit-row git-commit-select" aria-label={`Review commit ${commit.hash.slice(0, 7)}`} aria-expanded={review?.hash === commit.hash && review.key === workspaceKey} onClick={() => void inspectCommit(commit.hash)}>
                         <div className="commit-graph">
                           <GitCommitHorizontal size={17} />
                         </div>
@@ -187,6 +258,13 @@ export function GitPanel({ project, path, onPreview, onError }: Props) {
                           </small>
                         </div>
                         <code>{commit.hash.slice(0, 7)}</code>
+                      </button>
+                      {historyLoading === workspaceKey + commit.hash && <small>Reading commit…</small>}
+                      {review?.hash === commit.hash && review.key === workspaceKey && <div className="git-commit-files">
+                        <small>Compared with first parent; root commits compare with an empty tree.</small>
+                        {review.files.map((file) => <button key={file.path} onClick={() => void openCommitFile(commit.hash, file.path)}><em>{file.status}</em><span>{file.originalPath ? `${file.originalPath} → ${file.path}` : file.path}</span></button>)}
+                        {!review.files.length && <small>No file changes.</small>}
+                      </div>}
                       </div>
                     ))}
                     {git && !git.commits.length && <p className="sidebar-hint">No commits yet.</p>}
