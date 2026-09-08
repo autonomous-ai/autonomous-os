@@ -14,7 +14,11 @@ make dmg-signed
 
 Output `dist/Autonomous-Buddy-<version>-<arch>.dmg` được sign + notarize + staple — user mount, drag app vào Applications, double-click, macOS mở luôn không có cảnh báo Gatekeeper hay phải right-click → Open.
 
-`DEV_ID_APP` được tự dò từ keychain — lấy identity `Developer ID Application:` đầu tiên mà `security find-identity -v -p codesigning` trả về. Chỉ cần export khi muốn ghim một identity cụ thể. Nhờ vậy **mọi** target đóng gói (`make app`, `make install`, `make dmg`) đều ký Developer ID ngay khi cert đã cài; chỉ rơi về ad-hoc khi máy không có cert đó (hoặc khi ép bằng `make app DEV_ID_APP=`). `make app-signed` = `make app` cộng thêm việc báo lỗi nếu không có identity Developer ID.
+Packager Electron hợp nhất chọn signing identity trước khi build. `DEV_ID_APP` khác rỗng được ưu tiên (tên certificate hoặc fingerprint SHA-1). Nếu không có, packager đọc identity dùng được bằng `security find-identity -v -p codesigning`, chỉ nhận dòng `Developer ID Application:` hoàn chỉnh, bỏ Apple Development và dòng bị revoked/expired. Một ứng viên duy nhất được chọn tự động. Khi có nhiều ứng viên, ưu tiên team của `/Applications/Autonomous Buddy.app`; nhiều kết quả vẫn mơ hồ hoặc đã biết team đang cài nhưng không có ứng viên khớp sẽ báo lỗi kèm cách đặt `DEV_ID_APP`, không âm thầm đổi team. Không hardcode certificate hoặc cá nhân.
+
+Khi không có identity Developer ID dùng được, packaging giữ fallback ad-hoc và cảnh báo rõ Accessibility/Screen Recording có thể cần cấp lại sau khi cài. Tra cứu identity thất bại sẽ dừng, không âm thầm hạ xuống ad-hoc. Biến rỗng bật tự dò; `DEV_ID_APP=-` chủ động chọn ad-hoc cho packager hợp nhất. Helper nhúng và app ngoài cùng dùng identity đã chọn. Vì vậy build thông thường không còn âm thầm thay bản Developer ID bằng ad-hoc chỉ do shell chưa export `DEV_ID_APP`. Điều này ổn định signing identity, không hứa tự khôi phục quyền TCC đã mất hiệu lực từ lần cài trước.
+
+Recipe Makefile `native-*` cũ giữ quy tắc dò identity và override hiện có. Với release có nhiều certificate, cần export tường minh identity mong muốn để mọi đường packaging/signing dùng cùng certificate.
 
 Thứ `make dmg-signed` thêm so với `make dmg` là notarize + staple, và nó cần `NOTARY_PROFILE`.
 

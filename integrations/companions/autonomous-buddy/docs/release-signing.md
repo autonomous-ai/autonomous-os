@@ -14,7 +14,11 @@ make dmg-signed
 
 The output `dist/Autonomous-Buddy-<version>-<arch>.dmg` is signed, notarized, and stapled — users mount it, drag the app to Applications, double-click, and macOS opens it without any Gatekeeper warning or right-click dance.
 
-`DEV_ID_APP` is auto-detected from the keychain — the first `Developer ID Application:` identity `security find-identity -v -p codesigning` reports. Export it only to pin a specific identity. Because of that, **every** bundling target (`make app`, `make install`, `make dmg`) signs with Developer ID once the cert is installed; they fall back to ad-hoc signing only when no such cert exists (or when you force it with `make app DEV_ID_APP=`). `make app-signed` is `make app` plus a hard failure if no Developer ID identity is available.
+The unified Electron packager selects signing identity before building. A nonempty `DEV_ID_APP` takes precedence (certificate name or SHA-1 fingerprint). Otherwise it reads usable identities with `security find-identity -v -p codesigning`, accepts only complete `Developer ID Application:` entries, and excludes Apple Development and revoked/expired entries. A single candidate is selected automatically. With multiple candidates it prefers the team of `/Applications/Autonomous Buddy.app`; ambiguous matches or a known installed team with no matching candidate fail with an actionable `DEV_ID_APP` override instead of silently switching teams. No certificate or person is hardcoded.
+
+With no usable Developer ID identity, packaging retains ad-hoc fallback and explicitly warns that Accessibility/Screen Recording may need to be granted again after installation. A failed identity lookup aborts instead of silently downgrading. An empty variable enables auto-detection; `DEV_ID_APP=-` deliberately selects ad-hoc for the unified packager. Both the embedded helper and outer app use the selected identity. Routine builds therefore no longer silently replace a Developer ID build with an ad-hoc build merely because the shell did not export `DEV_ID_APP`. This stabilizes signing identity; it does not promise automatic restoration of TCC grants already invalidated by an earlier install.
+
+The legacy `native-*` Makefile recipes retain their existing identity detection and override rules. For a multi-certificate release, explicitly export the intended identity so every packaging/signing entry point uses the same certificate.
 
 What `make dmg-signed` adds on top of `make dmg` is notarization + stapling, which needs `NOTARY_PROFILE`.
 

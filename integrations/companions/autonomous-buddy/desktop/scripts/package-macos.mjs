@@ -2,8 +2,10 @@ import { packager } from '@electron/packager'
 import { execFileSync } from 'node:child_process'
 import { accessSync, constants, cpSync, mkdirSync, readdirSync } from 'node:fs'
 import { resolve, join } from 'node:path'
+import { discoverSigningIdentity } from './signing-identity.mjs'
 
 if (process.platform !== 'darwin') throw new Error('This packaging target requires macOS')
+const identity = discoverSigningIdentity()
 const iconDirectory = resolve('artifacts/icon')
 execFileSync('swift', ['scripts/generate-icon.swift', iconDirectory], { stdio: 'inherit' })
 const icon = join(iconDirectory, 'AutonomousBuddy.icns')
@@ -19,7 +21,6 @@ const swiftOutput = execFileSync('swift', [...swiftArgs, '--show-bin-path'], {
 }).trim()
 const helper = join(swiftOutput, 'AutonomousBuddy')
 accessSync(helper, constants.X_OK)
-const identity = process.env.DEV_ID_APP?.trim()
 const paths = await packager({
   dir: '.',
   name: 'Autonomous Buddy',
