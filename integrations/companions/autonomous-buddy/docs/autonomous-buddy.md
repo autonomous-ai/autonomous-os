@@ -9,9 +9,11 @@ This document captures the full design discussion behind the **Autonomous Buddy*
 
 The MVP-only implementation plan lives in [`autonomous-buddy-mvp.md`](./autonomous-buddy-mvp.md). This doc is the long-form reference for *why* the architecture is what it is.
 
-### Desktop agent manager (September 2026)
+### One app: agent management and computer use (September 2026)
 
-The optional [Electron/React agent manager](./agent-manager.md) in `desktop/` adds local projects, worktrees, agent sessions, terminals and Git review. The Swift `macos/` computer-use app remains unchanged. The earlier Swift-only/Electron-rejected decision below applies to the resident menu-bar executor, not this separate interactive management app. The two apps do not yet have IPC or lamp session routing between them.
+[Autonomous Buddy](./agent-manager.md) now packages the Electron/React workspace and Swift native helper in one `Autonomous Buddy.app`. Electron owns projects, worktrees, sessions, terminals and Git review; Swift owns pairing, the device WebSocket and computer-use executors. The embedded helper retains the native menu-bar icon without a second Dock icon, uses private JSONL child-process pipes, and exits when Electron closes its input pipe. Closing the workspace keeps Buddy running; the menu bar can reopen Agent Manager or quit the entire app. **Computer & device** in the main app exposes pairing, status, pause, permission management and Activity. `make build` / `make install` build and install both components together; users install one app. Paired-device `agent.*` commands route into managed sessions with explicit project/session IDs, request receipts and bounded event history; completion/attention notices return over the same WebSocket. See the [native bridge contract](./native-bridge.md). Live lamp verification remains separate from mock transport tests.
+
+The May design below is historical computer-use context, not the current packaging or UI contract. Its Swift-only/menu-bar decision is superseded by this single-app architecture. See the [agent-manager contract](./agent-manager.md) for current IPC and lifecycle behavior.
 
 ---
 
@@ -386,7 +388,7 @@ Reserved for later (defined but not implemented MVP):
 
 ### Decision: language
 
-Mac-only computer-use MVP → **Swift native**. Tauri/Rust deferred until Windows/Linux phase. Flutter ruled out (weak native API bridges for input/screen). Electron ruled out for the menu-bar resident (RAM overhead); the separate optional [agent manager](./agent-manager.md) uses Electron/React.
+The original computer-use MVP chose **Swift native**. The September architecture retains Swift for native execution and embeds it inside the Electron/React [agent manager](./agent-manager.md), forming one installed app. The earlier rejection of Electron as the whole product no longer applies. Windows/Linux native helpers remain future work.
 
 ### Decision: connection direction
 

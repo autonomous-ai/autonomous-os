@@ -1510,3 +1510,340 @@ h2 {
     scroll-behavior: auto !important;
   }
 }
+
+.native-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 17px;
+}
+.native-state strong {
+  font-size: 11px;
+}
+.modal:has(.native-state) {
+  max-height: calc(100dvh - 50px);
+  overflow-y: auto;
+}
+
+/* Workspace cards keep agent status and supported actions together. */
+.project-worktree-count {
+  color: #858b88;
+  font-size: 10px;
+}
+.project-add {
+  opacity: 1;
+}
+.workspace-card {
+  padding: 6px 7px;
+}
+.workspace-card.has-unread .tree-select {
+  color: #eff4ef;
+}
+.workspace-card-heading {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.workspace-card-heading .tree-select {
+  min-width: 0;
+  flex: 1;
+}
+.workspace-card-heading .tree-select > svg {
+  flex-shrink: 0;
+}
+.workspace-collapse {
+  width: 16px;
+  flex-shrink: 0;
+}
+.workspace-more {
+  flex-shrink: 0;
+  opacity: 0.55;
+}
+.workspace-card:hover .workspace-more,
+.workspace-more:focus-visible {
+  opacity: 1;
+}
+.workspace-card .tree-path {
+  padding-left: 20px;
+  margin-bottom: 5px;
+}
+.workspace-summary {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding-left: 20px;
+  font-size: 9px;
+  color: #929995;
+  margin: 7px 0;
+  flex-wrap: wrap;
+}
+.workspace-stage {
+  color: #aab9af;
+}
+.workspace-stage.review {
+  color: #d0ba83;
+}
+.workspace-stage.done {
+  color: #a1a7b2;
+}
+.primary-tag {
+  margin-left: auto;
+  color: #8b958f;
+  border: 1px solid #555c56;
+  border-radius: 3px;
+  padding: 0 3px;
+}
+.workspace-sessions {
+  margin-left: 12px;
+  padding-left: 6px;
+  border-left: 1px solid #ffffff10;
+}
+.workspace-session {
+  display: flex;
+  align-items: center;
+  border-radius: 4px;
+}
+.workspace-session.current {
+  background: #ffffff08;
+  color: #e2e9e3;
+}
+.workspace-session .session-row {
+  flex: 1;
+  min-width: 0;
+}
+.workspace-session.current .session-row {
+  color: #e2e9e3;
+}
+.session-more {
+  opacity: 0;
+  flex-shrink: 0;
+  width: 20px;
+}
+.workspace-session:hover .session-more,
+.workspace-session:focus-within .session-more {
+  opacity: 1;
+}
+.workspace-context-menu {
+  position: fixed;
+  z-index: 100;
+  width: 242px;
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
+  padding: 6px;
+  background: #242625;
+  color: #e0e5e1;
+  border: 1px solid #484d49;
+  border-radius: 9px;
+  box-shadow: 0 14px 42px #0008;
+  font-size: 11px;
+}
+.workspace-context-menu button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  text-align: left;
+  min-height: 27px;
+  padding: 5px 8px;
+  border-radius: 4px;
+}
+.workspace-context-menu button:hover,
+.workspace-context-menu button:focus-visible {
+  background: #3b403c;
+  outline: none;
+}
+.workspace-context-menu button:disabled {
+  opacity: 0.35;
+  background: transparent;
+  cursor: default;
+}
+.context-heading {
+  padding: 5px 8px 7px;
+  color: #9aa39c;
+  font-size: 10px;
+}
+.context-heading small {
+  display: block;
+  margin-top: 4px;
+  max-width: 205px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #dce1dd;
+}
+.context-section {
+  font-size: 9px;
+  color: #8d9890;
+  padding: 7px 8px 3px;
+  border-top: 1px solid #ffffff0b;
+  margin-top: 4px;
+}
+.context-divider {
+  border-top: 1px solid #ffffff12;
+  margin: 4px 2px;
+}
+.context-note {
+  display: block;
+  font-size: 9px;
+  padding: 4px 8px;
+  color: #929b94;
+}
+.workspace-stage-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #90b19a;
+  margin: 0 3px;
+}
+.workspace-stage-dot.review {
+  background: #d0ba83;
+}
+.workspace-stage-dot.done {
+  background: #a1a7b2;
+}
+.menu-check {
+  margin-left: auto;
+}
+.workspace-context-menu .danger-action {
+  color: #ed9393;
+}
+.workspace-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 9px;
+  margin-top: 20px;
+}
+.session-tab-wrap {
+  display: flex;
+  align-items: center;
+  border-right: 1px solid #ffffff0a;
+  flex-shrink: 0;
+  padding-right: 5px;
+}
+.session-tab-wrap.active {
+  background: #303331;
+}
+.session-tab-wrap .session-tab {
+  border-right: 0;
+  padding-right: 6px;
+}
+.tab-close {
+  opacity: 0.5;
+  width: 20px;
+  height: 22px;
+}
+.session-tab-wrap:hover .tab-close,
+.tab-close:focus-visible {
+  opacity: 1;
+}
+.workspace-child {
+  margin-left: 10px;
+  border-left-color: #56695a;
+}
+.workspace-parent {
+  padding-left: 20px;
+  font-size: 9px;
+  color: #96ad9c;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.modal select {
+  width: 100%;
+  border: 1px solid #4a524c;
+  background: #282d29;
+  color: #e2e8e3;
+  padding: 9px;
+  border-radius: 5px;
+}
+.project-group-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 6px 7px;
+  color: #a2b8a9;
+  font-size: 10px;
+  font-weight: 600;
+  border-top: 1px solid #ffffff10;
+  margin-top: 7px;
+}
+.provider-usage-bar {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  flex-shrink: 0;
+  min-height: 31px;
+  padding: 4px 12px;
+  border-top: 1px solid #373c37;
+  background: #242824;
+  font-size: 10px;
+  overflow-x: auto;
+}
+.usage-heading {
+  color: #77877b;
+  font-size: 9px;
+}
+.provider-usage {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-shrink: 0;
+  color: #c0c9c2;
+}
+.provider-usage.claude > svg {
+  color: #d5a487;
+}
+.provider-usage.codex > svg {
+  color: #9ec8b2;
+}
+.usage-window {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding-left: 7px;
+  border-left: 1px solid #ffffff13;
+}
+.usage-window-label {
+  color: #94a397;
+  font-size: 9px;
+}
+.usage-meter {
+  height: 4px;
+  width: 38px;
+  border-radius: 3px;
+  background: #4b554d;
+  overflow: hidden;
+}
+.usage-meter > i {
+  display: block;
+  height: 100%;
+  background: #a5beab;
+  border-radius: inherit;
+}
+.claude .usage-meter > i {
+  background: #ccaa90;
+}
+.usage-percent {
+  min-width: 26px;
+  font-variant-numeric: tabular-nums;
+}
+.usage-window small,
+.usage-unavailable {
+  color: #909b93;
+  font-size: 9px;
+  white-space: nowrap;
+}
+.usage-refresh {
+  margin-left: auto;
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+}
+.usage-loading {
+  animation: usage-spin 1.5s linear infinite;
+}
+@keyframes usage-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

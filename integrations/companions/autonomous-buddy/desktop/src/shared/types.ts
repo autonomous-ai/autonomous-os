@@ -1,6 +1,7 @@
 export type Provider = 'codex' | 'claude' | 'terminal'
 export type SessionStatus = 'idle' | 'running' | 'needs_input' | 'completed' | 'error' | 'stopped'
 export interface Project {
+  group?: string
   id: string
   name: string
   path: string
@@ -52,7 +53,18 @@ export interface FileEntry {
   path: string
   directory: boolean
 }
+export interface WorkspaceMeta {
+  projectId: string
+  worktreePath: string
+  displayName?: string
+  parentWorktreePath?: string | null
+  pinned: boolean
+  status: 'active' | 'review' | 'done'
+  unread: boolean
+}
+export type WorkspacePatch = Partial<Pick<WorkspaceMeta, 'pinned' | 'status' | 'unread' | 'displayName' | 'parentWorktreePath'>>
 export interface Snapshot {
+  workspaces: WorkspaceMeta[]
   projects: Project[]
   sessions: Session[]
   providers: { id: Provider; available: boolean }[]
@@ -68,10 +80,45 @@ export interface CreateSession {
   title?: string
 }
 export type BuddyUpdate = { type: 'snapshot'; snapshot: Snapshot } | { type: 'event'; event: SessionEvent }
+export interface NativeState {
+  available: boolean
+  paired: boolean
+  deviceHost?: string
+  connection: string
+  connectionError?: string
+  paused: boolean
+  accessibility: boolean
+  screenRecording: boolean
+  devices: { name: string; host: string }[]
+  error?: string
+}
+export type NativeAction = 'pair' | 'unpair' | 'pause' | 'permissions' | 'activity' | 'restart'
+export interface NativeCommandResult {
+  id: string
+  ok: boolean
+  result?: Record<string, unknown>
+  error?: string
+  duration_ms?: number
+}
+export type { ProviderUsage } from './provider-usage'
+import type { ProviderUsage } from './provider-usage'
 export interface BuddyAPI {
+  providerUsage(refresh?: boolean): Promise<ProviderUsage[]>
+  onCloseActiveTab(listener: () => void): () => void
+  setProjectGroup(projectId: string, groupName: string | null): Promise<void>
+  nativeStatus(): Promise<NativeState>
+  nativeAction(action: NativeAction, params?: Record<string, unknown>): Promise<unknown>
+  computerCommand(action: string, params?: Record<string, unknown>): Promise<NativeCommandResult>
+  onNativeState(listener: (state: NativeState) => void): () => void
   snapshot(): Promise<Snapshot>
   addProject(): Promise<Project | null>
   removeProject(projectId: string): Promise<void>
+  updateWorkspace(projectId: string, path: string, patch: WorkspacePatch): Promise<void>
+  sleepWorkspace(projectId: string, path: string): Promise<void>
+  removeWorktree(projectId: string, path: string): Promise<void>
+  openWorkspace(projectId: string, path: string, target: 'finder' | 'terminal' | 'vscode'): Promise<void>
+  copyWorkspacePath(projectId: string, path: string): Promise<void>
+  removeSession(id: string): Promise<void>
   worktrees(projectId: string): Promise<Worktree[]>
   createWorktree(projectId: string, branch: string): Promise<Worktree>
   git(projectId: string, worktreePath: string): Promise<GitSnapshot>

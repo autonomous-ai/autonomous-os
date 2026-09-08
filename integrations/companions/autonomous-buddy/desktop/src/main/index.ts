@@ -1,9 +1,12 @@
-import { app, BrowserWindow, dialog, ipcMain, Notification, Menu } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Notification, Menu, shell, clipboard } from 'electron'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { execFileSync } from 'node:child_process'
 import { homedir } from 'node:os'
 import { Manager } from './manager'
+import { AgentDeviceBridge } from './agent-device-bridge'
+import { ProviderUsageService } from './provider-usage'
+import { NativeHelper } from './native-helper'
 import type { BuddyUpdate } from '../shared/types'
 
 app.setName('Autonomous Buddy')
@@ -11,9 +14,17 @@ if (process.env.BUDDY_DATA_DIR) app.setPath('userData', process.env.BUDDY_DATA_D
 const rendererPath = join(__dirname, '../renderer/index.html')
 let window: BrowserWindow | null = null
 let manager: Manager
+let native: NativeHelper
+let agentBridge: AgentDeviceBridge
+let deviceConnected = false
+const providerUsage = new ProviderUsageService()
+let quitting = false
+let shutdownComplete = false
 const notified = new Map<string, string>()
 
 function publish(update: BuddyUpdate) {
+  void agentBridge?.update(update).catch(() => {})
+
   if (window && !window.isDestroyed()) window.webContents.send('buddy:update', update)
   if (update.type !== 'snapshot') return
   for (const session of update.snapshot.sessions) {
@@ -43,6 +54,12 @@ function createWindow() {
       sandbox: true,
     },
   })
+  window.webContents.on('before-input-event', (event, input) => {
+    if (input.type === 'keyDown' && input.meta && !input.alt && !input.shift && input.key.toLowerCase() === 'w') {
+      event.preventDefault()
+      window?.webContents.send('buddy:closeActiveTab')
+    }
+  })
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   window.webContents.on('will-navigate', (event) => event.preventDefault())
   window.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) =>
@@ -54,12 +71,17 @@ function createWindow() {
   })
 }
 
+function showManager() {
+  if (quitting) return
+  if (!window) createWindow()
+  if (window?.isMinimized()) window.restore()
+  window?.show()
+  window?.focus()
+}
+
 if (!app.requestSingleInstanceLock()) app.quit()
 else {
-  app.on('second-instance', () => {
-    window?.show()
-    window?.focus()
-  })
+  app.on('second-instance', showManager)
   void app
     .whenReady()
     .then(() => {
@@ -91,6 +113,20 @@ else {
           .join(':')
       }
       manager = new Manager(app.getPath('userData'), publish)
+      const nativeExecutable = app.isPackaged
+        ? join(process.resourcesPath, 'native/AutonomousBuddy')
+        : join(__dirname, '../../../macos/.build/release/AutonomousBuddy')
+      agentBridge = new AgentDeviceBridge(manager, (event) => native.agentEvent(event))
+      native = new NativeHelper(nativeExecutable, (state) => {
+        if (window && !window.isDestroyed()) window.webContents.send('buddy:nativeState', state)
+        const connected = state.available && state.connection === 'connected'
+        if (connected && !deviceConnected) void agentBridge.reconnect().catch(() => {})
+        deviceConnected = connected
+      }, undefined, (action) => {
+        if (action === 'quit') app.quit()
+        else showManager()
+      }, (command) => agentBridge.dispatch(command))
+      native.start()
       // Only this window's main frame can invoke the finite preload surface.
       const handle = (name: string, callback: (...args: unknown[]) => unknown) => {
         ipcMain.handle(`buddy:${name}`, (event, ...args: unknown[]) => {
@@ -113,9 +149,36 @@ else {
         })
         return choice.canceled || !choice.filePaths[0] ? null : manager.addProject(choice.filePaths[0])
       })
+      handle('providerUsage', async (force) => {
+        if (force !== undefined && typeof force !== 'boolean') throw new Error('Invalid refresh flag')
+        if (process.env.BUDDY_NATIVE_TEST_MODE === '1') return ['claude', 'codex'].map((provider) => ({
+          provider, state: 'unavailable', message: 'Account usage is disabled in tests', windows: [], updatedAt: Date.now(),
+        }))
+        return providerUsage.read(force as boolean | undefined)
+      })
+      handle('copyWorkspacePath', async (id, selected) => {
+        clipboard.writeText(await manager.workspacePath(id as string, selected as string))
+      })
+      handle('openWorkspace', async (id, selected, target) => {
+        const full = await manager.workspacePath(id as string, selected as string)
+        if (target === 'finder') {
+          const error = await shell.openPath(full)
+          if (error) throw new Error(error)
+        } else if (target === 'terminal' || target === 'vscode') {
+          execFileSync('/usr/bin/open', ['-a', target === 'terminal' ? 'Terminal' : 'Visual Studio Code', full], { timeout: 5000 })
+        } else throw new Error('Unsupported workspace application')
+      })
+      handle('nativeStatus', native.status.bind(native))
+      handle('nativeAction', native.action.bind(native) as (...args: unknown[]) => unknown)
+      handle('computerCommand', native.command.bind(native) as (...args: unknown[]) => unknown)
       for (const method of [
         'snapshot',
         'removeProject',
+        'updateWorkspace',
+        'setProjectGroup',
+        'sleepWorkspace',
+        'removeWorktree',
+        'removeSession',
         'worktrees',
         'createWorktree',
         'git',
@@ -144,14 +207,28 @@ else {
         ]),
       )
       createWindow()
-      app.on('activate', () => {
-        if (!window) createWindow()
-      })
+      app.on('activate', showManager)
     })
     .catch((error: unknown) => {
       console.error(error)
       app.quit()
     })
-  app.on('window-all-closed', () => app.quit())
-  app.on('before-quit', () => manager?.dispose())
+  app.on('window-all-closed', () => {
+    // On macOS the menu bar keeps device control and agent sessions available.
+    if (process.platform !== 'darwin') app.quit()
+  })
+  process.on('SIGTERM', () => app.quit())
+  process.on('SIGINT', () => app.quit())
+  app.on('before-quit', (event) => {
+    if (shutdownComplete) return
+    event.preventDefault()
+    if (quitting) return
+    quitting = true
+    providerUsage.dispose()
+    manager?.dispose()
+    void (native?.stop() ?? Promise.resolve()).finally(() => {
+      shutdownComplete = true
+      app.quit()
+    })
+  })
 }

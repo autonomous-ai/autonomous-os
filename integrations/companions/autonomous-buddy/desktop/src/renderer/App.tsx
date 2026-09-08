@@ -3,7 +3,6 @@ import {
   Bell,
   ChevronRight,
   Command,
-  FolderGit2,
   GitBranch,
   Layers,
   PanelLeft,
@@ -16,10 +15,14 @@ import {
   Bot,
   FolderOpen,
   FileDiff,
+  Monitor,
 } from 'lucide-react'
 import type { Project, Provider, Session, Snapshot, Worktree } from '../shared/types'
 import { SessionView } from './SessionView'
 import { GitPanel } from './GitPanel'
+import { ComputerPanel } from './ComputerPanel'
+import { WorkspaceSidebar } from './WorkspaceSidebar'
+import { ProviderUsageBar } from './ProviderUsageBar'
 
 export const providerName = (provider: Provider) =>
   ({ codex: 'Codex', claude: 'Claude Code', terminal: 'Terminal' })[provider]
@@ -39,8 +42,8 @@ export function StatusDot({ session }: { session: Session }) {
 }
 
 type Selection = { projectId: string; path: string }
-type Modal = 'session' | 'worktree' | 'settings' | null
-const emptySnapshot: Snapshot = { projects: [], sessions: [], providers: [] }
+type Modal = 'session' | 'worktree' | 'settings' | 'computer' | null
+const emptySnapshot: Snapshot = { projects: [], sessions: [], providers: [], workspaces: [] }
 
 export function App() {
   const [snapshot, setSnapshot] = useState<Snapshot>(emptySnapshot)
@@ -48,6 +51,21 @@ export function App() {
   const [selection, setSelection] = useState<Selection | null>(null)
   const [trees, setTrees] = useState<Record<string, Worktree[]>>({})
   const [sessionId, setSessionId] = useState<string | null>(null)
+  const [closedTabs, setClosedTabs] = useState<string[]>(() => {
+    try {
+      const value: unknown = JSON.parse(localStorage.getItem('buddy.closedTabs') ?? '[]')
+      return Array.isArray(value) ? value.filter((id): id is string => typeof id === 'string') : []
+    } catch {
+      return []
+    }
+  })
+  const closedTabsRef = useRef(closedTabs)
+  useEffect(() => {
+    closedTabsRef.current = closedTabs
+    localStorage.setItem('buddy.closedTabs', JSON.stringify(closedTabs))
+  }, [closedTabs])
+  const [renameTab, setRenameTab] = useState<Session | null>(null)
+  const [renameTitle, setRenameTitle] = useState('')
   const [query, setQuery] = useState('')
   const [modal, setModal] = useState<Modal>(null)
   const [error, setError] = useState('')
@@ -55,8 +73,12 @@ export function App() {
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [attentionOnly, setAttentionOnly] = useState(false)
   const [preview, setPreview] = useState<{ name: string; text: string; diff: boolean } | null>(null)
-  const [sidebarWidth, setSidebarWidth] = useState(246)
+  const [sidebarWidth, setSidebarWidth] = useState(280)
   const [gitWidth, setGitWidth] = useState(330)
+  useEffect(() => {
+    if (!loaded) return
+    localStorage.setItem('buddy.selection', JSON.stringify({ selection, sessionId }))
+  }, [loaded, selection, sessionId])
   const searchRef = useRef<HTMLInputElement>(null)
   const selectionRef = useRef(selection)
   useEffect(() => {
@@ -87,10 +109,24 @@ export function App() {
         if (!alive) return
         if (!received) setSnapshot(value)
         setLoaded(true)
-        const first = value.sessions.at(-1)
+        let remembered: { sessionId?: string; selection?: Selection } = {}
+        try {
+          remembered = JSON.parse(localStorage.getItem('buddy.selection') ?? '{}') ?? {}
+        } catch {
+          /* Ignore invalid local UI preferences. */
+        }
+        const openSessions = value.sessions.filter((session) => !closedTabsRef.current.includes(session.id))
+        const rememberedProject = value.projects.find(
+          (project) => project.id === remembered.selection?.projectId,
+        )
+        const first =
+          openSessions.find((session) => session.id === remembered.sessionId) ??
+          (rememberedProject ? undefined : openSessions.at(-1))
         if (first) {
           setSelection({ projectId: first.projectId, path: first.worktreePath })
           setSessionId(first.id)
+        } else if (rememberedProject && remembered.selection) {
+          setSelection(remembered.selection)
         } else if (value.projects[0])
           setSelection({ projectId: value.projects[0].id, path: value.projects[0].path })
       })
@@ -126,6 +162,7 @@ export function App() {
       }
       if (event.key === 'Escape') {
         setModal(null)
+        setRenameTab(null)
         setPreview(null)
       }
     }
@@ -138,12 +175,14 @@ export function App() {
   const sessions = snapshot.sessions.filter(
     (item) => item.projectId === selection?.projectId && item.worktreePath === selection?.path,
   )
-  const active = sessions.find((item) => item.id === sessionId)
+  const visibleSessions = sessions.filter((session) => !closedTabs.includes(session.id))
+  const active = visibleSessions.find((item) => item.id === sessionId)
   const attention = snapshot.sessions.filter(
     (item) => item.unread || item.status === 'needs_input' || item.status === 'error',
   )
 
   const chooseSession = (session: Session) => {
+    setClosedTabs((current) => current.filter((id) => id !== session.id))
     setSelection({ projectId: session.projectId, path: session.worktreePath })
     setSessionId(session.id)
     setPreview(null)
@@ -153,11 +192,44 @@ export function App() {
     setSelection({ projectId, path: tree.path })
     setPreview(null)
     const first = snapshot.sessions.find(
-      (item) => item.projectId === projectId && item.worktreePath === tree.path,
+      (item) =>
+        item.projectId === projectId && item.worktreePath === tree.path && !closedTabs.includes(item.id),
     )
     setSessionId(first?.id ?? null)
     if (first) void window.buddy.markRead(first.id).catch(fail)
   }
+  const closeTab = useCallback(
+    (id: string) => {
+      setClosedTabs((current) => [...new Set([...current, id])])
+      if (sessionId === id) {
+        const index = visibleSessions.findIndex((session) => session.id === id)
+        const next = visibleSessions[index + 1] ?? visibleSessions[index - 1]
+        setSessionId(next?.id ?? null)
+      }
+    },
+    [sessionId, visibleSessions],
+  )
+  const closeActiveTab = useCallback(() => {
+    if (document.querySelector('[role="dialog"], [role="menu"]')) return
+    if (preview) setPreview(null)
+    else if (active) closeTab(active.id)
+  }, [preview, active, closeTab])
+  useEffect(() => {
+    const close = (event: KeyboardEvent) => {
+      if (
+        (event.metaKey || event.ctrlKey) &&
+        !event.shiftKey &&
+        !event.altKey &&
+        event.key.toLowerCase() === 'w'
+      ) {
+        event.preventDefault()
+        closeActiveTab()
+      }
+    }
+    window.addEventListener('keydown', close)
+    return () => window.removeEventListener('keydown', close)
+  }, [closeActiveTab])
+  useEffect(() => window.buddy.onCloseActiveTab(closeActiveTab), [closeActiveTab])
   const addProject = async () => {
     setBusy(true)
     try {
@@ -275,6 +347,9 @@ export function App() {
                   <Bell size={15} /> Needs attention{' '}
                   {attention.length > 0 && <span className="count">{attention.length}</span>}
                 </button>
+                <button className="nav-item" onClick={() => setModal('computer')}>
+                  <Monitor size={15} /> Computer & device
+                </button>
               </nav>
               <div className="section-label">
                 <span>{attentionOnly ? 'ATTENTION' : 'PROJECTS'}</span>
@@ -323,87 +398,27 @@ export function App() {
                     )}
                   </>
                 ) : (
-                  snapshot.projects.map((item) => {
-                    const projectMatch = item.name.toLowerCase().includes(query.toLowerCase())
-                    const projectSessions = snapshot.sessions.filter(
-                      (session) => session.projectId === item.id,
-                    )
-                    if (
-                      !projectMatch &&
-                      !projectSessions.some((session) =>
-                        session.title.toLowerCase().includes(query.toLowerCase()),
-                      )
-                    )
-                      return null
-                    return (
-                      <section className="project-group" key={item.id}>
-                        <div className="project-heading">
-                          <FolderGit2 size={15} />
-                          <strong title={item.path}>{item.name}</strong>
-                          <button
-                            className="icon-button project-add"
-                            aria-label={`New worktree in ${item.name}`}
-                            onClick={() => {
-                              setSelection({ projectId: item.id, path: item.path })
-                              setSessionId(null)
-                              setPreview(null)
-                              setModal('worktree')
-                            }}
-                          >
-                            <Plus size={14} />
-                          </button>
-                        </div>
-                        {(
-                          trees[item.id] ?? [
-                            { path: item.path, branch: 'Project folder', primary: true, head: '' },
-                          ]
-                        ).map((tree) => {
-                          const treeSessions = projectSessions.filter(
-                            (session) => session.worktreePath === tree.path,
-                          )
-                          const selected = selection?.projectId === item.id && selection.path === tree.path
-                          return (
-                            <div className={`tree-card ${selected ? 'active' : ''}`} key={tree.path}>
-                              <button className="tree-select" onClick={() => chooseTree(item.id, tree)}>
-                                <GitBranch size={13} />
-                                <span>{tree.branch || tree.path.split('/').at(-1)}</span>
-                                {tree.primary && <em>primary</em>}
-                              </button>
-                              <div className="tree-path" title={tree.path}>
-                                {tree.path.split('/').slice(-2).join('/')}
-                              </div>
-                              {treeSessions
-                                .filter(
-                                  (session) =>
-                                    projectMatch || session.title.toLowerCase().includes(query.toLowerCase()),
-                                )
-                                .map((session) => (
-                                  <button
-                                    key={session.id}
-                                    className={`session-row ${active?.id === session.id ? 'current' : ''}`}
-                                    onClick={() => chooseSession(session)}
-                                  >
-                                    <StatusDot session={session} />
-                                    {session.provider === 'terminal' ? (
-                                      <Terminal size={12} />
-                                    ) : (
-                                      <Bot size={12} />
-                                    )}
-                                    <span>{session.title}</span>
-                                    {session.unread && <i className="unread" />}
-                                  </button>
-                                ))}
-                              {selected && (
-                                <button className="inline-add" onClick={() => setModal('session')}>
-                                  <Plus size={12} /> New session
-                                </button>
-                              )}
-                            </div>
-                          )
-                        })}
-                      </section>
-                    )
-                  })
+                  <WorkspaceSidebar
+                    snapshot={snapshot}
+                    trees={trees}
+                    query={query}
+                    selection={selection}
+                    activeId={active?.id}
+                    onChooseTree={chooseTree}
+                    onChooseSession={chooseSession}
+                    onNewSession={(projectId, tree) => {
+                      chooseTree(projectId, tree)
+                      setModal('session')
+                    }}
+                    onNewWorktree={(item) => {
+                      setSelection({ projectId: item.id, path: item.path })
+                      setSessionId(null)
+                      setPreview(null)
+                      setModal('worktree')
+                    }}
+                    onRefresh={refreshTrees}
+                    onError={fail}
+                  />
                 )}
                 {!snapshot.projects.length && (
                   <p className="sidebar-hint">
@@ -435,16 +450,33 @@ export function App() {
         )}
         <main className="main-pane">
           <div className="tabbar">
-            {sessions.map((session) => (
-              <button
-                className={`session-tab ${session.id === active?.id && !preview ? 'active' : ''}`}
+            {visibleSessions.map((session) => (
+              <div
+                className={`session-tab-wrap ${session.id === active?.id && !preview ? 'active' : ''}`}
                 key={session.id}
-                onClick={() => chooseSession(session)}
               >
-                <StatusDot session={session} />
-                {session.provider === 'terminal' ? <Terminal size={13} /> : <Bot size={13} />}
-                <span>{session.title}</span>
-              </button>
+                <button
+                  className={`session-tab ${session.id === active?.id && !preview ? 'active' : ''}`}
+                  onClick={() => chooseSession(session)}
+                  onDoubleClick={() => {
+                    setRenameTab(session)
+                    setRenameTitle(session.title)
+                  }}
+                  title={`${session.title} · Double-click to rename`}
+                >
+                  <StatusDot session={session} />
+                  {session.provider === 'terminal' ? <Terminal size={13} /> : <Bot size={13} />}
+                  <span>{session.title}</span>
+                </button>
+                <button
+                  className="icon-button tab-close"
+                  aria-label={`Close tab ${session.title}`}
+                  title="Close tab (⌘W). The session keeps running; reopen from the sidebar."
+                  onClick={() => closeTab(session.id)}
+                >
+                  <X size={12} />
+                </button>
+              </div>
             ))}
             {preview && (
               <button className="session-tab active preview-tab" onClick={() => setPreview(null)}>
@@ -558,6 +590,7 @@ export function App() {
           onError={fail}
         />
       </div>
+      <ProviderUsageBar />
       <footer className="statusbar">
         <span className="statusbar-left">
           <span className="connection-dot" /> Local workspace{' '}
@@ -583,6 +616,41 @@ export function App() {
           {snapshot.sessions.filter((session) => session.status === 'running').length} active
         </span>
       </footer>
+      {renameTab && (
+        <div className="modal-backdrop">
+          <section className="modal" role="dialog" aria-modal="true" aria-label="Rename session">
+            <button
+              className="icon-button modal-close"
+              aria-label="Close dialog"
+              onClick={() => setRenameTab(null)}
+            >
+              <X size={16} />
+            </button>
+            <h2>Rename session</h2>
+            <form
+              onSubmit={(event) => {
+                event.preventDefault()
+                void window.buddy
+                  .renameSession(renameTab.id, renameTitle.trim())
+                  .then(() => setRenameTab(null))
+                  .catch(fail)
+              }}
+            >
+              <label htmlFor="tab-session-title">Session name</label>
+              <input
+                id="tab-session-title"
+                autoFocus
+                value={renameTitle}
+                maxLength={120}
+                onChange={(event) => setRenameTitle(event.target.value)}
+              />
+              <button className="primary-button full-width" type="submit" disabled={!renameTitle.trim()}>
+                Rename session
+              </button>
+            </form>
+          </section>
+        </div>
+      )}
       {error && (
         <div className="error-toast" role="alert">
           <span>{error}</span>
@@ -607,7 +675,9 @@ export function App() {
                 ? 'New session'
                 : modal === 'worktree'
                   ? 'New worktree'
-                  : 'Workspace settings'
+                  : modal === 'computer'
+                    ? 'Computer & device'
+                    : 'Workspace settings'
             }
           >
             <button
@@ -637,6 +707,8 @@ export function App() {
                   }
                 }}
               />
+            ) : modal === 'computer' ? (
+              <ComputerPanel onError={fail} />
             ) : (
               <>
                 <h2>Workspace settings</h2>
@@ -651,7 +723,11 @@ export function App() {
                     </div>
                   ))}
                 </div>
-                <p className="muted">Computer control continues to live in the native Buddy companion.</p>
+                <p>
+                  <button className="secondary-button" onClick={() => setModal('computer')}>
+                    <Monitor size={14} /> Computer & device settings
+                  </button>
+                </p>
                 {project && (
                   <button
                     className="secondary-button"

@@ -1,6 +1,6 @@
 # Autonomous Buddy — Desktop agent manager
 
-App tùy chọn `desktop/` quản lý project, worktree và agent session trên máy. Electron main process sở hữu agent process, truy cập Git/file và persistence; React hiển thị workspace. App Swift trong `macos/` tiếp tục giữ pairing, device WebSocket và các executor computer-use native. Đợt này chưa nối hai app với nhau.
+Autonomous Buddy là một ứng dụng desktop có hai thành phần nội bộ. Electron main process quản lý agent process, Git/file, persistence và workspace React. Helper Swift trong `macos/` giữ pairing, device WebSocket và executor computer-use native. Người dùng chỉ cài và mở một `Autonomous Buddy.app`; helper chạy như process con, không phải app thứ hai cần cài.
 
 Bố cục tham khảo workspace cơ bản của Orca. Implementation được viết mới tại repo này, không sao chép source hay asset Orca. Nếu tái sử dụng trực tiếp về sau phải audit license source/dependency riêng.
 
@@ -26,21 +26,31 @@ Contract nguồn: [`desktop/src/shared/types.ts`](../../desktop/src/shared/types
 
 Provider gồm `codex`, `claude`, `terminal`. Event gồm `prompt`, `output`, `status`, `error`, `result`, `terminal`. Trạng thái gồm `idle`, `running`, `needs_input`, `completed`, `error`, `stopped`. Terminal đang chạy hiển thị **Shell active**, không suy diễn thành coding agent.
 
-Renderer sandbox dùng API preload hữu hạn `window.buddy`. Request/reply qua `ipcRenderer.invoke('buddy:<method>')`; `buddy:update` đẩy snapshot project/session/provider hoặc một session event. `session(id)` lấy lịch sử còn giữ, ghép với live event theo sequence. Đợt này chưa có HTTP/WebSocket listener, API cursor remote, turn ID hay chống gửi trùng theo request ID. Một session không nhận hai lượt gửi đồng thời; các session khác nhau có thể chạy song song.
+Renderer sandbox dùng API preload hữu hạn `window.buddy`. Request/reply qua `ipcRenderer.invoke('buddy:<method>')`; `buddy:update` đẩy snapshot project/session/provider hoặc một session event. `session(id)` lấy lịch sử còn giữ, ghép với live event theo sequence. App không mở HTTP/WebSocket listener local. Command `agent.*` của device đã pair đi qua WebSocket Swift và pipe riêng: create/send có receipt request ID lưu bền, còn `agent.session` hỗ trợ cursor sequence có giới hạn. Xem contract [native bridge](./native-bridge_vi.md). Một session không nhận hai lượt gửi đồng thời; các session khác nhau có thể chạy song song.
 
 IPC kiểm tra cửa sổ/main frame gửi và URL renderer local. Renderer không có Node integration. Workspace session phải thuộc các worktree của project đã đăng ký; duyệt file chặn path traversal và symlink ra ngoài workspace. Boundary này giới hạn API UI, không giới hạn năng lực lệnh người dùng chạy trong shell hoặc agent CLI.
 
+## Tích hợp computer-use native
+
+Panel **Computer & device** trong workspace chính hiển thị helper sẵn sàng hay không, device đã pair/kết nối và quyền Accessibility/Screen Recording. Panel có Pair (host tùy chọn và gợi ý device tìm được), Unpair, Pause/Resume khi đã pair, Manage permissions, Activity và Restart computer control khi helper không sẵn sàng. Pair và Activity mở các cửa sổ native hiện có; helper Swift giữ icon menu bar native (không thêm Dock icon), với pairing, pause, Activity, Open Agent Manager và Quit Autonomous Buddy.
+
+Electron main process sở hữu `NativeHelper`. JSONL qua stdin/stdout kế thừa truyền request `{id, method, params}`, reply `{id, result}` hoặc `{id, error}` và snapshot đẩy `{event: "state", state}`. Stderr được đọc để thoát diagnostic. Không có socket/HTTP listener công khai và không trả pairing token cho renderer. Method native gồm `status` (alias `ping`), `pair`, `unpair`, `pause`, `permissions`, `activity`, `command`, `agent_response`, `agent_event`, `shutdown`. `command` chuyển payload `{action, params, timeout_ms}` qua dispatcher/audit Swift hiện có; chưa biến agent session thành vòng suy luận computer-use. `restart` là action vòng đời phía manager, không phải method protocol native. Renderer đi qua boundary IPC preload đã validate.
+
+State gồm pairing, kết nối/lỗi, pause, quyền native, device tìm được và command gần đây. Quyền được kiểm tra thực tế, không suy diễn từ việc đóng gói. Pause hủy công việc native đang chạy; Unpair dùng luồng revoke rồi xóa pairing hiện có. Khi thoát, Electron đóng stdin; helper Swift thoát khi EOF kể cả parent crash, và `shutdown` cũng kết thúc helper. Manager tăng mức dừng sau hai giây nếu helper chưa thoát. Trên macOS, đóng cửa sổ workspace vẫn giữ computer use và agent session chạy. Open Agent Manager trên menu bar mở lại workspace; Quit Autonomous Buddy gửi event menu qua pipe riêng tới Electron để thoát toàn bộ app và helper.
+
+Smoke test native đặt `BUDDY_NATIVE_TEST_MODE=1`: bỏ discovery và reconnect pairing đã lưu, ghi audit vào `/dev/null`, chặn pair/unpair, UI native và prompt quyền. Cờ này không vô hiệu hóa mọi executor command, nên test chỉ được gửi command kiểm tra có kiểm soát. Test không chứng minh kết nối device thật hay agent điều phối computer-use thật.
+
 ## Vòng đời agent
 
-Codex dùng `codex exec` với JSON event, `sandbox_mode="workspace-write"` và `--skip-git-repo-check` để hỗ trợ thư mục project không có Git do người dùng chọn; follow-up dùng `exec resume` cùng thread ID đã lưu. Claude Code dùng print mode, stream JSON và partial message; follow-up truyền `--resume` cùng session ID đã lưu. Prompt đi qua stdin, không qua command shell. CLI dùng cấu hình và tài khoản đã cài riêng trên máy.
+Codex dùng `codex exec` với JSON event, `--dangerously-bypass-approvals-and-sandbox` và `--skip-git-repo-check` để hỗ trợ thư mục project không có Git do người dùng chọn; follow-up dùng `exec resume` cùng thread ID đã lưu. Claude Code dùng print mode với `--dangerously-skip-permissions`, stream JSON và partial message; follow-up truyền `--resume` cùng session ID đã lưu. Prompt đi qua stdin, không qua command shell. CLI dùng tài khoản đã cài trên máy. Cả lượt mới và resume chạy full access, không hỏi quyền CLI theo yêu cầu tường minh của người dùng; không đổi cấu hình CLI toàn cục hay quyền macOS. Xem [agent execution](./agent-execution_vi.md).
 
 Mỗi lượt gửi tạo một CLI process mới, giữ provider conversation ID qua các lượt. Output tới bất đồng bộ sau khi request gửi khởi động process. Hoàn tất cần completion event được nhận diện và exit thành công. Plain text không nhận diện và stderr diagnostic vẫn hiển thị nhưng không chứng minh hoàn tất. Nếu provider trả ID khác thì từ chối đổi conversation; nếu lượt trước chưa từng trả ID thì từ chối follow-up thay vì âm thầm mở conversation mới.
 
 `needs_input` hiện biểu thị Claude trả permission denial trong result, chưa phát hiện mọi câu hỏi và chưa có bridge phê duyệt quyền trực tiếp. Người dùng đọc result rồi gửi follow-up hoặc dùng terminal riêng cho CLI tương tác; terminal đó không tự nối vào conversation đang quản lý. Codex chạy noninteractive cũng chưa có hộp phê duyệt do Buddy cung cấp.
 
-Chuyển sang completed, needs-input hoặc error đánh dấu session chưa đọc; mở session sẽ đánh dấu đã đọc. App gửi desktop notification khi chuyển sang các trạng thái này lúc cửa sổ không focus, tùy hỗ trợ/quyền của OS. Chưa gửi thông báo về lamp.
+Chuyển sang completed, needs-input hoặc error đánh dấu session chưa đọc; mở session sẽ đánh dấu đã đọc. App gửi desktop notification khi chuyển sang các trạng thái này lúc cửa sổ không focus, tùy hỗ trợ/quyền của OS. Notice hoàn tất/cần chú ý cũng đi qua WebSocket Swift đã pair về device. Reconnect phát lại trạng thái kết thúc chưa đọc; delivery là best effort và notice có thể lặp.
 
-Stop gửi signal tới process group trên POSIX và tăng mức dừng nếu process còn sống. Đóng cửa sổ cuối cùng sẽ thoát app và dừng mọi session đang quản lý. Chưa hỗ trợ tiếp tục chạy nền sau khi đóng app.
+Stop gửi signal tới process group trên POSIX và tăng mức dừng nếu process còn sống. Trên macOS, đóng cửa sổ cuối cùng vẫn giữ app và các session chạy qua menu bar. Quit tường minh dừng mọi session và helper native; trên nền tảng khác, đóng cửa sổ cuối cùng cũng thoát app.
 
 ## Lưu trạng thái và mở lại
 
@@ -58,10 +68,22 @@ Cài và đăng nhập agent CLI riêng. Buddy tìm `codex`/`claude` trong `PATH
 
 Backend test dùng repository tạm và launcher mô phỏng. Smoke test Electron dùng state tạm và response CLI agent mô phỏng, không cần gọi model trả phí. Build/test pass không thay thế kiểm chứng phiên bản CLI đã đăng nhập với provider thật.
 
-Đợt này chưa có adapter OpenCode/provider tùy chỉnh, Swift IPC, voice routing từ lamp, remote companion, đồ thị Git commit đầy đủ, UI stage/commit/push, renderer research artifact chuyên biệt hoặc bản release ký số. Electron/React mở đường cho đa nền tảng; validation macOS chưa chứng minh chạy/đóng gói Windows/Linux.
+Đợt này chưa có adapter OpenCode/provider tùy chỉnh, remote companion, đồ thị Git commit đầy đủ, UI stage/commit/push, renderer research artifact chuyên biệt hoặc bản release ký số. Electron/React mở đường cho đa nền tảng; validation macOS chưa chứng minh chạy/đóng gói Windows/Linux.
 
-Bước tích hợp tiếp theo nên truyền project/session ID tường minh từ voice routing của lamp qua boundary local có xác thực giữa Swift và manager, rồi trả status/event về. Quản lý session tiếp tục độc lập với executor screenshot/click/type.
+Skill agent-management trên lamp có thể list/create/send/read/stop managed session bằng command của device đã pair. Request ID ổn định bảo vệ retry create/send; receipt chưa hoàn tất sau crash từ chối tự replay. Test WebSocket giả xác minh relay mà không truy cập device thật; luồng lamp/CLI thật vẫn cần kiểm chứng end-to-end. Session management độc lập với executor screenshot/click/type. Xem [native bridge](./native-bridge_vi.md) và [review gap từ source Orca](./orca-gap-review_vi.md).
 
 ## Build và cài local trên macOS
 
-Trong `desktop/`, chạy `make build` để compile, rebuild node-pty, đóng gói theo kiến trúc Mac hiện tại và kiểm tra chữ ký ad-hoc. `make install` cài bundle đã kiểm tra vào `/Applications/Autonomous Buddy.app` qua thư mục staging, giữ riêng companion Swift `AutonomousBuddy.app`. `make open` mở app. Bản này chưa notarize để phân phối. Khi mở từ Finder, app bổ sung PATH của login shell (timeout 5 giây) và thư mục CLI thông dụng vào PATH hiện có để tìm agent đã cài. Đặt `BUDDY_APP_EXECUTABLE` tới executable trong bundle để chạy cùng bộ smoke test Electron trên app đóng gói.
+Trong `autonomous-buddy/` hoặc `desktop/`, `make build` compile Electron, rebuild node-pty, build Swift release theo kiến trúc Mac hiện tại rồi đóng gói một app có chữ ký được kiểm tra. Executable native nằm ở `Contents/Resources/native/AutonomousBuddy`, resource bundle của SwiftPM nằm cạnh nó. `make install` build lại cả hai thành phần rồi cài `/Applications/Autonomous Buddy.app` qua staging. Trước khi thay thế, installer kiểm tra bundle ID, chữ ký và executable helper; thoát đúng các app cũ theo đường dẫn; lưu bundle cũ vào `~/Library/Application Support/AutonomousBuddy/LegacyBackups/` bằng tên duy nhất có hậu tố `.disabled`. App Swift riêng `/Applications/AutonomousBuddy.app` cũng được lưu ở đó, nên Applications chỉ còn một sản phẩm. Nếu thay thế lỗi thì phục hồi bundle cũ. Dữ liệu pairing và manager được giữ nguyên. `make open` mở app đã cài.
+
+Bundle giữ ID `network.autonomous.ai.buddy.manager` để tiếp tục state manager; pairing store native không thay đổi. Electron chạy helper với `--embedded-helper`, giao tiếp qua pipe riêng của process con, không mở listener mạng local. Helper dừng cùng parent; khi helper không khởi động được, chức năng native báo không sẵn sàng. Quyền Accessibility/Screen Recording vẫn do macOS quản lý và có thể cần cấp lại sau khi đóng gói. Command computer-use từ device tiếp tục do Swift xử lý; `agent.*` chuyển tiếp vào manager bằng project/session ID tường minh.
+
+Mặc định ký ad-hoc nếu không truyền `DEV_ID_APP`; Makefile cha tự tìm Developer ID có sẵn. Build/install không tự notarize. Các target `app-signed`, `dmg`, `dmg-signed`, `notarize` dùng app hợp nhất; recipe phát triển/release Swift cũ được giữ với tiền tố `native-*`. Phân phối Developer ID/notarization cần validation release riêng. Khi mở từ Finder, app bổ sung PATH login shell (timeout 5 giây) và thư mục CLI thông dụng. Đặt `BUDDY_APP_EXECUTABLE` tới executable trong bundle để chạy smoke test Electron trên app đóng gói.
+
+### Biểu tượng app macOS
+
+Biểu tượng Dock/Finder của app đóng gói dùng cùng SF Symbol `lightbulb.fill` với
+biểu tượng menu bar khi Buddy đã kết nối: bóng đèn vàng trên nền vuông tối bo góc.
+`desktop/scripts/generate-icon.swift` dùng AppKit tạo iconset lúc đóng gói;
+`iconutil` tạo `.icns` để truyền vào Electron Packager. Các file icon được tạo nằm
+trong `desktop/artifacts/icon/` đã được ignore; không đưa binary icon vào Git.

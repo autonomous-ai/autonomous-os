@@ -9,9 +9,11 @@ Tài liệu này lưu lại toàn bộ thảo luận thiết kế tính năng **
 
 Kế hoạch implement MVP nằm ở [`autonomous-buddy-mvp_vi.md`](./autonomous-buddy-mvp_vi.md). Doc này là tham chiếu dài về *lý do tại sao* kiến trúc lại như vậy.
 
-### Desktop agent manager (tháng 9/2026)
+### Một app: agent management và computer use (tháng 9/2026)
 
-[Agent manager Electron/React](./agent-manager_vi.md) tùy chọn trong `desktop/` bổ sung project, worktree, agent session, terminal và Git review local. App computer-use Swift `macos/` giữ nguyên. Quyết định trước đây chỉ dùng Swift/loại Electron bên dưới áp dụng cho executor menu-bar thường trú, không áp dụng cho app quản lý tương tác riêng này. Hai app chưa có IPC hay routing session từ lamp nối với nhau.
+[Autonomous Buddy](./agent-manager_vi.md) hiện đóng gói workspace Electron/React và helper Swift native trong một `Autonomous Buddy.app`. Electron quản lý project, worktree, session, terminal và Git review; Swift giữ pairing, device WebSocket và executor computer-use. Khi chạy embedded, helper giữ icon menu bar native, không thêm Dock icon, dùng pipe JSONL riêng của process con và thoát khi Electron đóng pipe đầu vào. Đóng workspace vẫn giữ Buddy chạy; menu bar có thể mở lại Agent Manager hoặc thoát toàn bộ app. **Computer & device** trong app chính cung cấp pairing, trạng thái, pause, quản lý quyền và Activity. `make build` / `make install` build và cài cả hai thành phần cùng nhau; người dùng chỉ cài một app. Command `agent.*` từ device đã pair route vào managed session bằng project/session ID tường minh, receipt request và event history có giới hạn; notice hoàn tất/cần chú ý trả qua cùng WebSocket. Xem [contract native bridge](./native-bridge_vi.md). Kiểm chứng lamp thật vẫn tách biệt với test transport giả.
+
+Thiết kế tháng 5 bên dưới là bối cảnh computer-use lịch sử, không phải contract đóng gói/UI hiện tại. Quyết định Swift-only/menu-bar được thay bằng kiến trúc một app này. Xem [contract agent manager](./agent-manager_vi.md) để biết IPC và vòng đời hiện tại.
 
 ---
 
@@ -386,7 +388,7 @@ Page mới `Paired Computers`:
 
 ### Quyết định: ngôn ngữ
 
-MVP computer-use Mac-only → **Swift native**. Tauri/Rust để phase Windows/Linux. Flutter bỏ (bridge native cho input/screen yếu). Electron bỏ với app menu-bar thường trú (overhead RAM); [agent manager](./agent-manager_vi.md) tùy chọn riêng dùng Electron/React.
+MVP computer-use ban đầu chọn **Swift native**. Kiến trúc tháng 9 giữ Swift cho thực thi native và nhúng vào [agent manager](./agent-manager_vi.md) Electron/React, tạo một app cài đặt duy nhất. Quyết định cũ loại Electron khỏi toàn sản phẩm không còn áp dụng. Helper native Windows/Linux vẫn là bước sau.
 
 ### Quyết định: hướng kết nối
 
