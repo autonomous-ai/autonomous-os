@@ -338,6 +338,7 @@ reapplying HAL settings even when unchanged. The `info` uplink includes effectiv
 |------|---------|---------------|
 | `buddy.pair.start` | Issue a single-use 6-digit Buddy pairing code, valid 60s | _(none; optional `data` ignored)_ |
 | `buddy.pair.revoke` | Revoke the current Buddy pairing and disconnect its WebSocket | _(none; optional `data` ignored)_ |
+| `buddy.status` | Query the current Buddy pairing and connection snapshot; also emitted on changes | _(none; optional `data` ignored)_ |
 | `tts.set` | Persist TTS voice/provider/language/speed config | `provider`, `voice`, `language`, optional `speed` |
 | `tts.preview` | One-shot TTS preview (no config write) | `text` (required), optional `provider`/`voice`/`language` |
 | `wakeword.gate` | Set the top-level wake-word gate (async; acks `starting`) | `enabled` (required boolean) |
@@ -1006,8 +1007,8 @@ standard `status:"failure"` and `error` fields.
 
 MQTT authorization relies on the existing broker credentials and topic ACLs;
 the backend must authorize the device owner before publishing the request.
-Confirmation still uses `POST /api/buddy/pair/confirm` over LAN. There are no
-MQTT confirmation or status commands.
+Confirmation still uses `POST /api/buddy/pair/confirm` over LAN; MQTT does not
+confirm pairing. Query and change notifications use `buddy.status` below.
 
 ### `buddy.pair.revoke` — Revoke Buddy pairing
 
@@ -1031,6 +1032,51 @@ Failures, including an unavailable Buddy service or failure to persist the
 removal, use the standard `status:"failure"` and `error` fields.
 MQTT authorization relies on the existing broker credentials and topic ACLs;
 the backend must authorize the device owner before publishing the request.
+
+### `buddy.status` — Query and observe Buddy state
+
+**Receive on `fa_channel`:**
+```json
+{"cmd":"data","kind":"buddy.status","data":{}}
+```
+
+`data` is optional and ignored. The response and unsolicited state notifications
+share the standard `MQTTDataResponse` envelope on `fd_channel` (normal device
+metadata omitted here):
+```json
+{"type":"data","kind":"buddy.status","status":"success","data":{"paired":true,"connected":false,"instance_id":"service-instance-id","revision":1,"buddy_id":"buddy-id","name":"Leo’s Mac","os_version":"15.0","paired_at":"2026-09-08T10:00:00Z"}}
+```
+
+An unpaired snapshot contains only `paired:false`, `connected:false`,
+`instance_id`, and `revision`. `buddy_id`, `name`, `os_version`, and RFC3339
+`paired_at` describe the paired Mac and are omitted when unpaired (empty optional
+strings are omitted). No token, pairing code, or fingerprint is included.
+`paired` means a saved pairing exists; `connected` means its WebSocket is active.
+A disconnected or paused Mac remains paired.
+
+`instance_id` changes on each Buddy service restart. `revision` is an unsigned
+64-bit integer, starts at 0, and increases after successful pairing, revocation,
+WebSocket connection, or disconnection of the current connection. Compare
+revisions only within the same instance: ignore duplicates and lower revisions;
+accept a new instance as a fresh state sequence. Queries do not increment it.
+
+The service emits a startup snapshot and asynchronous change snapshots, including
+HTTP pair confirmation, HTTP/MQTT revocation, and Buddy self-revocation. The bounded
+queue coalesces pending changes to the latest state; this is state synchronization,
+not a guaranteed history of every transition. FD publishes use QoS 1 without
+retain. Publish failures are logged and dropped without undoing pairing; clients
+must query after subscribing, reconnecting, or resuming. Status can arrive before
+the pair/revoke command response. An unavailable service returns
+`status:"failure"` with `error` for a query.
+
+**Direct mobile MQTT:** use the device's existing broker settings and topic ACLs,
+with an app-specific unique client ID (never the device's client ID). Subscribe to
+that device's `fd_channel`, wait for SUBACK, then publish `buddy.status` or the
+existing `buddy.pair.start` / `buddy.pair.revoke` commands on `fa_channel`. No BFF
+code change is required. ACL permissions and broker reachability from mobile
+networks must be verified against the real deployment. This supports a connected
+foreground app; it does not deliver mobile push notifications when the app is
+closed. See the [mobile handoff prompt](buddy-mobile-handoff_vi.md).
 
 ### `ota` — Trigger OTA update
 

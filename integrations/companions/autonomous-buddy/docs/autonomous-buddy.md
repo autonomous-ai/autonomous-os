@@ -26,7 +26,7 @@ The May design below is historical computer-use context, not the current packagi
 ### Goals
 - The device can drive a user's computer via voice commands ("open Chrome", "go to Gmail", "join Google Meet", "type X", "close Slack")
 - Works across any macOS app (not just browser)
-- Commands and pairing confirmation stay on LAN; the backend can request a pairing code or revoke pairing over MQTT.
+- Computer-use commands and pairing confirmation stay on LAN; authorized MQTT clients can request a pairing code, revoke pairing, and query or observe Buddy status.
 - Mac-first MVP; Windows/Linux deferred to v1.2+
 
 ### Non-goals (MVP)
@@ -252,7 +252,8 @@ Reserved for later (defined but not implemented MVP):
 
 MQTT authorization relies on existing broker credentials and topic ACLs; the
 backend must authorize the device owner before sending `buddy.pair.start` or
-`buddy.pair.revoke`. Confirmation and status use the existing HTTP routes.
+`buddy.pair.revoke`. Confirmation remains HTTP; status is also available through
+MQTT `buddy.status`. Authorized mobile clients can use the broker directly.
 See [MQTT pairing contract](../../../../docs/mqtt.md#buddypairstart--issue-a-buddy-pairing-code).
 
 To revoke the current pairing, the authorized backend sends
@@ -265,6 +266,35 @@ unpaired succeeds; a pending pairing code is not cancelled. The response on
 with standard `MQTTDataResponse` metadata. Failures, including an unavailable
 service or persistence failure, use `status:"failure"` and `error`.
 See [MQTT revocation contract](../../../../docs/mqtt.md#buddypairrevoke--revoke-buddy-pairing).
+
+### Mobile status over MQTT
+
+Send `{"cmd":"data","kind":"buddy.status","data":{}}` on `fa_channel`.
+The response and unsolicited change events use `type:"data"`,
+`kind:"buddy.status"`, `status:"success"`, with `data` containing `paired`,
+`connected`, `instance_id`, `revision`, and optional `buddy_id`, `name`,
+`os_version`, `paired_at` (RFC3339). Unpaired state omits the paired Mac fields;
+empty optional strings are omitted. Secrets, pairing codes, and fingerprints are
+never included. `paired` and `connected` are independent: a paused/offline Mac
+can remain paired.
+
+Notifications include startup state, successful HTTP confirmation, HTTP/MQTT
+revocation (including Buddy self-revocation), and current WebSocket connection
+changes. Revision starts at 0 and increases for successful pair/revoke/connect/
+current-disconnect operations. Compare revisions only within the same
+`instance_id`, which changes on service restart; ignore duplicate/older revisions.
+Delivery is asynchronous, bounded, coalesces to latest state, and uses QoS 1
+without retain. Failed publishes are logged/dropped, so subscribe to FD and wait
+for SUBACK before querying on entry, reconnect, and resume. Query failure uses
+`status:"failure"` and `error`. Status can arrive before a command response.
+
+Mobile can connect directly using existing per-device broker configuration and
+a unique app client ID, with no BFF code changes. Broker reachability and topic
+ACLs still need deployment verification. This covers foreground updates, not
+push notifications after the app closes. See the
+[full MQTT status contract](../../../../docs/mqtt.md#buddystatus--query-and-observe-buddy-state)
+and [mobile handoff prompt](../../../../docs/buddy-mobile-handoff_vi.md).
+
 
 ### Reconnect
 

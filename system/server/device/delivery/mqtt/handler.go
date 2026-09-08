@@ -271,6 +271,8 @@ func (h *DeviceMQTTHandler) dispatchData(env domain.MQTTDataCommand) error {
 		return h.handleConnectorRemove(env)
 	}
 	switch env.Kind {
+	case domain.KindBuddyStatus:
+		return h.handleBuddyStatus(env)
 	case domain.KindBuddyPairStart:
 		return h.handleBuddyPairStart(env)
 	case domain.KindBuddyPairRevoke:

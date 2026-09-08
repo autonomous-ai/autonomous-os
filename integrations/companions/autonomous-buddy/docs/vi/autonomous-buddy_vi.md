@@ -26,7 +26,7 @@ Thiết kế tháng 5 bên dưới là bối cảnh computer-use lịch sử, kh
 ### Mục tiêu
 - Thiết bị điều khiển được máy tính qua voice ("mở Chrome", "vào Gmail", "join Google Meet", "gõ X", "đóng Slack")
 - Hoạt động với mọi app macOS (không chỉ browser)
-- Command và xác nhận pairing chạy qua LAN; backend có thể yêu cầu mã pair hoặc thu hồi pairing qua MQTT.
+- Command computer-use và xác nhận pairing chạy qua LAN; client MQTT có quyền có thể yêu cầu mã pair, thu hồi pairing, query hoặc theo dõi trạng thái Buddy.
 - Mac-first cho MVP; Windows/Linux để v1.2+
 
 ### Không phải mục tiêu (MVP)
@@ -252,7 +252,8 @@ Page mới `Paired Computers`:
 
 Phân quyền MQTT dựa trên credentials của broker và ACL của topic hiện có;
 backend phải kiểm tra quyền chủ sở hữu thiết bị trước khi gửi `buddy.pair.start`
-hoặc `buddy.pair.revoke`. Xác nhận và xem trạng thái dùng các route HTTP hiện có.
+hoặc `buddy.pair.revoke`. Xác nhận vẫn qua HTTP; trạng thái còn có qua
+MQTT `buddy.status`. Mobile có quyền có thể kết nối broker trực tiếp.
 Xem [contract MQTT pairing](../../../../../docs/vi/mqtt_vi.md#buddypairstart--cấp-mã-pair-buddy).
 
 Để thu hồi pairing hiện tại, backend đã kiểm tra quyền gửi
@@ -265,6 +266,33 @@ cũng thành công; mã pairing đang chờ không bị hủy. Phản hồi trê
 kèm metadata chuẩn của `MQTTDataResponse`. Khi lỗi, gồm service không khả dụng
 hoặc lỗi lưu dữ liệu, phản hồi dùng `status:"failure"` và `error`.
 Xem [contract MQTT thu hồi pairing](../../../../../docs/vi/mqtt_vi.md#buddypairrevoke--thu-hồi-pairing-buddy).
+
+### Trạng thái mobile qua MQTT
+
+Gửi `{"cmd":"data","kind":"buddy.status","data":{}}` lên `fa_channel`.
+Phản hồi và event thay đổi tự phát dùng `type:"data"`, `kind:"buddy.status"`,
+`status:"success"`, với `data` gồm `paired`, `connected`, `instance_id`,
+`revision`, và các field tùy chọn `buddy_id`, `name`, `os_version`, `paired_at`
+(RFC3339). Chưa pair thì bỏ các field của Mac; chuỗi tùy chọn rỗng cũng bị bỏ.
+Không có secret, mã pairing hoặc fingerprint. `paired` khác `connected`:
+Mac pause/offline vẫn có thể còn paired.
+
+Thông báo gồm trạng thái khởi động, HTTP confirm thành công, revoke qua HTTP/MQTT
+(kể cả Buddy tự revoke), và thay đổi kết nối WebSocket hiện tại. Revision bắt đầu
+0, tăng sau mỗi thao tác pair/revoke/connect/current-disconnect thành công.
+Chỉ so revision trong cùng `instance_id`, đổi khi service khởi động lại; bỏ bản
+trùng/cũ. Gửi bất đồng bộ qua queue có giới hạn, gộp thành trạng thái mới nhất,
+QoS 1 không retain. Publish lỗi chỉ log/bỏ nên phải subscribe FD và chờ SUBACK
+trước khi query lúc mở màn hình, reconnect, resume. Query lỗi dùng
+`status:"failure"` và `error`. Status có thể đến trước phản hồi lệnh.
+
+Mobile có thể kết nối trực tiếp bằng cấu hình broker theo device và client ID
+riêng duy nhất cho app, không cần sửa BFF. Vẫn cần kiểm chứng broker reachability
+và ACL topic trên triển khai thật. Luồng cập nhật foreground, không phải push
+notification khi đóng app. Xem
+[contract MQTT status đầy đủ](../../../../../docs/vi/mqtt_vi.md#buddystatus--đọc-và-theo-dõi-trạng-thái-buddy)
+và [prompt bàn giao mobile](../../../../../docs/buddy-mobile-handoff_vi.md).
+
 
 ### Reconnect
 
