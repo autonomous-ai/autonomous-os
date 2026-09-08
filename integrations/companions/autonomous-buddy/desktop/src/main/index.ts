@@ -1,6 +1,8 @@
 import { app, BrowserWindow, dialog, ipcMain, Notification, Menu } from 'electron'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { execFileSync } from 'node:child_process'
+import { homedir } from 'node:os'
 import { Manager } from './manager'
 import type { BuddyUpdate } from '../shared/types'
 
@@ -61,6 +63,33 @@ else {
   void app
     .whenReady()
     .then(() => {
+      if (app.isPackaged && process.platform === 'darwin') {
+        // Finder does not inherit the terminal's nvm/Homebrew/CLI PATH.
+        let loginPath = ''
+        try {
+          const output = execFileSync(
+            process.env.SHELL || '/bin/zsh',
+            ['-ilc', 'printf "\\n__BUDDY_PATH__%s\\n" "$PATH"'],
+            { encoding: 'utf8', timeout: 5000, maxBuffer: 65536, stdio: ['ignore', 'pipe', 'ignore'] },
+          )
+          loginPath =
+            output
+              .split('\n')
+              .find((line) => line.startsWith('__BUDDY_PATH__'))
+              ?.slice(14) ?? ''
+        } catch {
+          /* Use the inherited PATH and standard install locations when shell setup fails. */
+        }
+        process.env.PATH = [
+          process.env.PATH,
+          loginPath,
+          join(homedir(), '.local/bin'),
+          '/opt/homebrew/bin',
+          '/usr/local/bin',
+        ]
+          .filter(Boolean)
+          .join(':')
+      }
       manager = new Manager(app.getPath('userData'), publish)
       // Only this window's main frame can invoke the finite preload surface.
       const handle = (name: string, callback: (...args: unknown[]) => unknown) => {

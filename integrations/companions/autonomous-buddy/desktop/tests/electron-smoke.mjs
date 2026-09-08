@@ -41,8 +41,8 @@ emit({ type: 'turn.completed', usage: { input_tokens: 10, output_tokens: 20 } })
 `
 async function launchApp() {
   application = await _electron.launch({
-    executablePath: electronPath,
-    args: ['.'],
+    executablePath: process.env.BUDDY_APP_EXECUTABLE || electronPath,
+    args: process.env.BUDDY_APP_EXECUTABLE ? [] : ['.'],
     cwd: desktop,
     env: {
       ...process.env,

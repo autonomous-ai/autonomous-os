@@ -61,3 +61,7 @@ Backend test dùng repository tạm và launcher mô phỏng. Smoke test Electro
 Đợt này chưa có adapter OpenCode/provider tùy chỉnh, Swift IPC, voice routing từ lamp, remote companion, đồ thị Git commit đầy đủ, UI stage/commit/push, renderer research artifact chuyên biệt hoặc bản release ký số. Electron/React mở đường cho đa nền tảng; validation macOS chưa chứng minh chạy/đóng gói Windows/Linux.
 
 Bước tích hợp tiếp theo nên truyền project/session ID tường minh từ voice routing của lamp qua boundary local có xác thực giữa Swift và manager, rồi trả status/event về. Quản lý session tiếp tục độc lập với executor screenshot/click/type.
+
+## Build và cài local trên macOS
+
+Trong `desktop/`, chạy `make build` để compile, rebuild node-pty, đóng gói theo kiến trúc Mac hiện tại và kiểm tra chữ ký ad-hoc. `make install` cài bundle đã kiểm tra vào `/Applications/Autonomous Buddy.app` qua thư mục staging, giữ riêng companion Swift `AutonomousBuddy.app`. `make open` mở app. Bản này chưa notarize để phân phối. Khi mở từ Finder, app bổ sung PATH của login shell (timeout 5 giây) và thư mục CLI thông dụng vào PATH hiện có để tìm agent đã cài. Đặt `BUDDY_APP_EXECUTABLE` tới executable trong bundle để chạy cùng bộ smoke test Electron trên app đóng gói.
