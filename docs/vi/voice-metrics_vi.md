@@ -7,7 +7,7 @@ hai con số từ thiết bị thật:
 | KPI | Câu hỏi | Mục tiêu |
 |-----|---------|----------|
 | **KPI-1** | Tỉ lệ lượt thoại đủ điều kiện được phản hồi trong **3 giây** kể từ lúc phát hiện người dùng nói xong | ≥ 95 % |
-| **KPI-2** | Tỉ lệ tình huống suppression mà một câu trả lời **cũ** thực sự bị phát ra | < 1 % |
+| **KPI-2** | Tỉ lệ tình huống suppression mà một câu trả lời **cũ** thực sự bị phát ra | < 5 % |
 
 Cả hai mục tiêu đều **tạm thời**. Mọi khoảng thời gian thô đều được lưu, nên
 đổi ngưỡng là việc tính lại từ dữ liệu, không phải đo lại thiết bị.

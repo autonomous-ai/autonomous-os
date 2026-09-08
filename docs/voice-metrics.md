@@ -7,7 +7,7 @@ numbers can be computed from real devices:
 | KPI | Question | Target |
 |-----|----------|--------|
 | **KPI-1** | Share of eligible voice interactions acknowledged within **3 s** of the detected end of the user's speech | ≥ 95 % |
-| **KPI-2** | Share of eligible suppression boundaries where an **outdated** reply was actually played | < 1 % |
+| **KPI-2** | Share of eligible suppression boundaries where an **outdated** reply was actually played | < 5 % |
 
 Both targets are **provisional**. Every raw duration is stored, so a threshold
 can be re-decided from the data instead of by re-instrumenting devices.
