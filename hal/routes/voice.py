@@ -115,6 +115,7 @@ def start_voice(req: VoiceStartRequest):
                 # reporting playback, and the metrics go blind until restart.
                 on_playback_audio=tts_hooks.on_playback_audio,
                 on_playback_done=tts_hooks.on_playback_done,
+                on_playback_muted=tts_hooks.on_playback_muted,
             )
             state.logger.info("TTSService started (provider=%s, voice=%s)", req.tts_provider, voice)
             if state.music_service:

@@ -221,6 +221,7 @@ class TTSService:
         provider: str = "openai",
         on_playback_audio=None,
         on_playback_done=None,
+        on_playback_muted=None,
     ):
         self._sd = sound_device_module
         self._np = numpy_module
@@ -278,6 +279,7 @@ class TTSService:
         # stopped or fails before its first write would still look played.
         self._on_playback_audio = None   # (owner: str) -> None
         self._on_playback_done = None    # () -> None
+        self._on_playback_muted = None   # (owner: str) -> None
         self._audio_written_fired = False
 
         # Optional callbacks for LED speaking effect.
@@ -287,6 +289,7 @@ class TTSService:
         self._on_speak_end = on_speak_end
         self._on_playback_audio = on_playback_audio
         self._on_playback_done = on_playback_done
+        self._on_playback_muted = on_playback_muted
 
         # on_unspoken_reply(text): an agent reply this service accepted and then
         # dropped without playing it — today, a superseded turn arriving after a
@@ -692,6 +695,20 @@ class TTSService:
         except Exception:
             logger.exception("on_playback_audio callback failed")
 
+    def _note_speech_muted(self, owner: str) -> None:
+        """Speech was refused because the speaker is muted.
+
+        Reported at the moment of refusal, not inferred later from the mute
+        flag: a device unmuted before the turn is scored would otherwise look
+        like it simply failed to answer.
+        """
+        if self._on_playback_muted is None:
+            return
+        try:
+            self._on_playback_muted(owner)
+        except Exception:
+            logger.exception("on_playback_muted callback failed")
+
     def _note_playback_done(self) -> None:
         if self._on_playback_done is None:
             return
@@ -755,6 +772,7 @@ class TTSService:
 
         if self._speaker_muted():
             logger.info("TTS suppressed -- speaker muted: %s", text[:50])
+            self._note_speech_muted(f"run:{turn_id}" if turn_id else "")
             return False
 
         # Cache-first: an exact-text WAV in the prerender cache plays with NO
@@ -866,6 +884,7 @@ class TTSService:
 
         if self._speaker_muted():
             logger.info("TTS suppressed (queue) -- speaker muted: %s", text[:50])
+            self._note_speech_muted(f"run:{turn_id}" if turn_id else "")
             return False
 
         # Serialize the complete arrival path. A newer turn owns the speaker:
@@ -1082,6 +1101,7 @@ class TTSService:
             return False
         if self._speaker_muted():
             logger.info("native audio suppressed -- speaker muted")
+            self._note_speech_muted(owner)
             return False
         if not self._lock.acquire(blocking=False):
             logger.info("native audio: speaker busy, skipping")
@@ -1683,6 +1703,7 @@ class TTSService:
         # Prerender only warms the cache (no playback), so it is NOT muted.
         if not prerender and self._speaker_muted():
             logger.info("TTS suppressed (cached) -- speaker muted: %s", text[:50])
+            self._note_speech_muted(f"run:{turn_id}" if turn_id else "")
             return False
 
         cache_path = self._tts_cache_path(text)

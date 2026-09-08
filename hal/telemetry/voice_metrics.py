@@ -388,6 +388,27 @@ def playback_audio(owner: str, tts=None) -> None:
         _observe_playback(kind, iid, started, None)
 
 
+def playback_muted(owner: str) -> None:
+    """The speaker refused this speech because the device is muted.
+
+    Recorded when it happens. Sampling the mute flag at scoring time instead
+    (what this did until 08/09/2026) mislabelled a muted turn as an unanswered
+    one whenever someone unmuted in between — device-observed on lamp-0c89.
+    """
+    with _lock:
+        iid = _owner_interaction(owner) or _newest_open_interaction()
+        it = _interactions.get(iid) if iid else None
+        if it is None or it.exclusion_reason or it.ack_latency_ms is not None:
+            return
+        it.exclusion_reason = EXCL_SPEAKER_MUTED
+        it.closed = True
+        amendment = _amend_params(it, "late_mute") if it.reported else None
+    if amendment:
+        _report_amendment(amendment)
+        return
+    logger.info("[voice-metrics] speech muted (interaction=%s)", iid)
+
+
 def playback_end() -> None:
     """Playback finished or was interrupted."""
     ended = _now()
@@ -399,6 +420,15 @@ def playback_end() -> None:
             return
         was["ended"] = ended
         _observe_playback(was["kind"], was["interaction_id"], was["started"], ended)
+
+
+def _newest_open_interaction() -> str:
+    """The most recent interaction that can still be answered."""
+    for iid in reversed(_order):
+        it = _interactions.get(iid)
+        if it is not None and not it.closed:
+            return iid
+    return ""
 
 
 def _owner_interaction(owner: str) -> str:
@@ -606,27 +636,12 @@ def _forget(iid: str) -> None:
             it.life_timer.cancel()
 
 
-def _speaker_muted() -> bool:
-    """Whether the device speaker is muted right now (single mute gate lives
-    in app_state; lazy import keeps this module importable on its own)."""
-    try:
-        from hal import app_state
-
-        return bool(app_state._speaker_muted)
-    except Exception:
-        return False
-
-
 def _close_interaction(iid: str) -> None:
     """Report one interaction (the response metric sample) once its observation window is up."""
     with _lock:
         it = _interactions.get(iid)
         if it is None or it.reported:
             return
-        if it.ack_latency_ms is None and not it.exclusion_reason and _speaker_muted():
-            # Nothing was heard because the speaker is off. A muted device,
-            # not a missed response.
-            it.exclusion_reason = EXCL_SPEAKER_MUTED
         it.reported = True
         it.report_event_id = "int-" + iid
         params = _interaction_params(it)

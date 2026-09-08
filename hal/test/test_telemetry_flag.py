@@ -60,6 +60,7 @@ def test_every_tts_construction_site_wires_the_playback_hooks():
             sites += 1
             assert "on_playback_audio=tts_hooks.on_playback_audio" in body, path
             assert "on_playback_done=tts_hooks.on_playback_done" in body, path
+            assert "on_playback_muted=tts_hooks.on_playback_muted" in body, path
     assert sites == 2, f"expected both construction sites, found {sites}"
 
 

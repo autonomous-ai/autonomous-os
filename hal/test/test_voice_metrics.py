@@ -61,7 +61,6 @@ def kpi(monkeypatch):
     monkeypatch.setattr(client, "report", fake_report)
     monkeypatch.setattr(voice_metrics, "_now", clock)
     monkeypatch.setattr(voice_metrics.threading, "Timer", FakeTimer)
-    monkeypatch.setattr(voice_metrics, "_speaker_muted", lambda: False)
     voice_metrics.reset_for_test()
 
     class Harness:
@@ -333,13 +332,58 @@ def test_excluded_inputs_are_reported_with_a_reason(kpi, reason):
     assert p["exclusion_reason"] == reason
 
 
-def test_muted_speaker_is_excluded_not_counted_as_missing(kpi, monkeypatch):
-    monkeypatch.setattr(voice_metrics, "_speaker_muted", lambda: True)
-    voice_metrics.speech_end("silence_clock")
+def test_muted_speech_is_excluded_when_it_is_refused(kpi):
+    """The speaker refuses the reply: that is a muted device, not a missed
+    response."""
+    iid = voice_metrics.speech_end("silence_clock")
+    voice_metrics.bind_run(iid, "run-m")
+    kpi.clock.advance(700)
+    voice_metrics.playback_muted("run:run-m")
     kpi.close_all()
 
     p = kpi.one(voice_metrics.EVENT_INTERACTION)
     assert p["exclusion_reason"] == voice_metrics.EXCL_SPEAKER_MUTED
+    assert p["eligible"] is False
+
+
+def test_unmuting_before_scoring_does_not_resurrect_the_turn(kpi):
+    """Regression (device-observed 08/09/2026): the mute flag was sampled when
+    the verdict was written, 10s later. Someone unmuting in between made a
+    muted turn look like one the device simply never answered."""
+    iid = voice_metrics.speech_end("silence_clock")
+    voice_metrics.bind_run(iid, "run-m")
+    kpi.clock.advance(700)
+    voice_metrics.playback_muted("run:run-m")   # refused while muted
+    kpi.clock.advance(9000)                     # user unmutes somewhere here
+    kpi.close_all()
+
+    p = kpi.one(voice_metrics.EVENT_INTERACTION)
+    assert p["outcome"] == voice_metrics.OUTCOME_EXCLUDED
+    assert p["exclusion_reason"] == voice_metrics.EXCL_SPEAKER_MUTED
+
+
+def test_a_late_mute_amends_a_reported_verdict(kpi):
+    iid = voice_metrics.speech_end("silence_clock")
+    kpi.timers[0].fire()                        # verdict written: no_ack
+    voice_metrics.playback_muted(f"run:{iid}")
+
+    rows = kpi.of(voice_metrics.EVENT_INTERACTION)
+    assert len(rows) == 2
+    assert rows[1]["params"]["amendment_reason"] == "late_mute"
+    assert rows[1]["params"]["exclusion_reason"] == voice_metrics.EXCL_SPEAKER_MUTED
+
+
+def test_mute_after_the_user_already_heard_something_changes_nothing(kpi):
+    """A later mute must not retract an acknowledgement that really happened."""
+    iid = voice_metrics.speech_end("silence_clock")
+    kpi.clock.advance(600)
+    _filler(kpi, f"run:{iid}")
+    voice_metrics.playback_muted(f"run:{iid}")
+    kpi.close_all()
+
+    p = kpi.one(voice_metrics.EVENT_INTERACTION)
+    assert p["outcome"] == voice_metrics.OUTCOME_ACKED
+    assert p["exclusion_reason"] == ""
 
 
 def test_slow_reply_keeps_its_real_latency(kpi):

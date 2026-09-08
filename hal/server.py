@@ -646,6 +646,7 @@ async def lifespan(app: FastAPI):
                 # fires before it has written anything.
                 on_playback_audio=tts_hooks.on_playback_audio,
                 on_playback_done=tts_hooks.on_playback_done,
+                on_playback_muted=tts_hooks.on_playback_muted,
             )
             logger.info(
                 "TTSService auto-started (provider=%s, output_device=%s, available=%s)",
