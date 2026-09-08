@@ -62,6 +62,7 @@ from hal.drivers.voice.speech_emotion.constants import (
     DEFAULT_DEDUP_WINDOW_S,
     DEFAULT_DL_SER_ENDPOINT,
     DEFAULT_FLUSH_S,
+    DEFAULT_JOB_MAX_AGE_S,
     DEFAULT_MIN_AUDIO_S,
     DEFAULT_QUEUE_MAXSIZE,
     SENSING_EVENT_TYPE,
@@ -110,6 +111,9 @@ class _Job:
     user: str
     wav_bytes: bytes
     duration_s: float
+    # Set at submit(); the worker uses it to discard audio that waited so long
+    # in the queue that it no longer describes the user's current mood.
+    ts: float
 
 
 @dataclass(slots=True)
@@ -159,6 +163,7 @@ class SpeechEmotionService:
         audio_dir: str = _AUDIO_DIR,
         audio_max_files: int = DEFAULT_AUDIO_MAX_FILES,
         queue_maxsize: int = DEFAULT_QUEUE_MAXSIZE,
+        job_max_age_s: float = DEFAULT_JOB_MAX_AGE_S,
     ):
         self._recognizer: BaseSpeechEmotionRecognizer = (
             recognizer if recognizer is not None else _build_default_recognizer()
@@ -169,6 +174,7 @@ class SpeechEmotionService:
         self._sensing_url: str = sensing_url
         self._audio_dir: str = audio_dir
         self._audio_max_files: int = audio_max_files
+        self._job_max_age_s: float = job_max_age_s
 
         # mutable state — guarded by _lock
         self._lock: threading.RLock = threading.RLock()
@@ -256,7 +262,10 @@ class SpeechEmotionService:
             self._debug_submit_drop("too-short", norm_user, wav_bytes, duration_s)
             return
 
-        job = _Job(user=norm_user, wav_bytes=wav_bytes, duration_s=duration_s)
+        job = _Job(
+            user=norm_user, wav_bytes=wav_bytes,
+            duration_s=duration_s, ts=time.time(),
+        )
         try:
             self._jobs.put_nowait(job)
             logger.info(
@@ -264,11 +273,39 @@ class SpeechEmotionService:
                 norm_user, self._jobs.qsize(),
             )
         except queue.Full:
-            logger.warning(
-                "[speech_emotion] DROP submit — worker queue full (size=%d)",
-                self._jobs.qsize(),
-            )
-            self._debug_submit_drop("queue-full", norm_user, wav_bytes, duration_s)
+            # Evict the OLDEST, keep the newest. For a real-time affect signal
+            # the utterance that just happened is the valuable one; a backlog
+            # only describes a mood the user has already moved on from.
+            try:
+                evicted = self._jobs.get_nowait()
+            except queue.Empty:
+                evicted = None
+            if evicted is not None:
+                logger.warning(
+                    "[speech_emotion] EVICT — queue full, dropped oldest job "
+                    "(user=%r age=%.1fs) to make room",
+                    evicted.user, time.time() - evicted.ts,
+                )
+                self._debug_submit_drop(
+                    "queue-evicted-oldest", evicted.user,
+                    evicted.wav_bytes, evicted.duration_s,
+                )
+            try:
+                self._jobs.put_nowait(job)
+                logger.info(
+                    "[speech_emotion] ENQUEUED — user=%r queue_size=%d",
+                    norm_user, self._jobs.qsize(),
+                )
+            except queue.Full:
+                # Another producer refilled the slot between the get and the
+                # put. Rare, and not worth a retry loop — drop this one.
+                logger.warning(
+                    "[speech_emotion] DROP submit — worker queue full (size=%d)",
+                    self._jobs.qsize(),
+                )
+                self._debug_submit_drop(
+                    "queue-full", norm_user, wav_bytes, duration_s,
+                )
 
     def _debug_submit_drop(  # SER-DEBUG (remove before deploy)
         self, reason: str, user: str, wav_bytes: bytes, duration_s: float,
@@ -339,6 +376,33 @@ class SpeechEmotionService:
             if job is None:
                 logger.info("[speech_emotion] worker thread received stop sentinel")
                 break
+            # Audio that sat in the queue this long no longer describes how the
+            # user feels now. Recognizing it would emit a stale mood and then
+            # let the (user, bucket) dedup suppress the genuinely current one.
+            age_s = time.time() - job.ts
+            if self._job_max_age_s > 0 and age_s > self._job_max_age_s:
+                logger.info(
+                    "[speech_emotion] DROP — stale job: user=%r waited %.1fs > %.1fs",
+                    job.user, age_s, self._job_max_age_s,
+                )
+                if tracer.enabled:  # SER-DEBUG
+                    # One-shot like _debug_submit_drop: nothing ran, so there is
+                    # no open thread-local call to finish — but this drop happens
+                    # on the WORKER thread, hence stage="worker".
+                    tracer.record(
+                        "recognize",
+                        reason="stale-job",
+                        result={
+                            "stage": "worker",
+                            "user": job.user,
+                            "queued_age_s": round(age_s, 3),
+                            "job_max_age_s": self._job_max_age_s,
+                            "queue_size": self._jobs.qsize(),
+                            "input_audio": audio_stats(job.wav_bytes),
+                        },
+                        wavs={"input.wav": job.wav_bytes} if job.wav_bytes else None,
+                    )
+                continue
             try:
                 self._process_job(job)
             except Exception as e:
