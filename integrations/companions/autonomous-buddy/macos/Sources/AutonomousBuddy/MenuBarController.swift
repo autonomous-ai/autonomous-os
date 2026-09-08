@@ -10,6 +10,7 @@ final class MenuBarController: NSObject {
     private let onShowActivity: () -> Void
     private let onAbout: () -> Void
     private let onQuit: () -> Void
+    private let onOpenManager: (() -> Void)?
 
     init(
         onPair: @escaping (String?) -> Void,
@@ -17,7 +18,8 @@ final class MenuBarController: NSObject {
         onTogglePause: @escaping (Bool) -> Void,
         onShowActivity: @escaping () -> Void,
         onAbout: @escaping () -> Void,
-        onQuit: @escaping () -> Void
+        onQuit: @escaping () -> Void,
+        onOpenManager: (() -> Void)? = nil
     ) {
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         self.onPair = onPair
@@ -26,6 +28,7 @@ final class MenuBarController: NSObject {
         self.onShowActivity = onShowActivity
         self.onAbout = onAbout
         self.onQuit = onQuit
+        self.onOpenManager = onOpenManager
         super.init()
 
         statusItem.menu = menu
@@ -48,6 +51,13 @@ final class MenuBarController: NSObject {
         header.isEnabled = false
         menu.addItem(header)
         menu.addItem(.separator())
+
+        if onOpenManager != nil {
+            let open = NSMenuItem(title: "Open Agent Manager…", action: #selector(openManagerAction), keyEquivalent: "")
+            open.target = self
+            menu.addItem(open)
+            menu.addItem(.separator())
+        }
 
         switch state.pairing {
         case .notPaired:
@@ -210,6 +220,10 @@ final class MenuBarController: NSObject {
 
     @objc private func showActivityAction() {
         onShowActivity()
+    }
+
+    @objc private func openManagerAction() {
+        onOpenManager?()
     }
 
     @objc private func quitAction() {

@@ -1,17 +1,24 @@
 # Autonomous Buddy — release signing & notarization
 
+> **Unified product (September 2026):** Run these commands from `integrations/companions/autonomous-buddy/`. Default `build`, `app`, `install`, `dmg` and signing targets now package one Electron application containing the Swift helper, for the current Mac architecture (`arm64` or `x64`), not a universal binary. App output: `desktop/artifacts/package/Autonomous Buddy-darwin-<arch>/Autonomous Buddy.app`; DMG: `dist/Autonomous-Buddy-<version>-<arch>.dmg`. Original Swift-only universal release recipes are preserved under explicit `native-*` targets, including `native-release`, `native-app-signed`, `native-dmg-signed`, `native-notarize`. Normal build/install never submits to Apple. The unified Developer ID/notarization flow still requires release validation; the local build check establishes only ad-hoc signing. Native permission continuity after migrating the helper into this bundle must also be checked on target macOS versions.
+
+
 This is the handover doc for whoever owns the Apple Developer enrolment. Once the one-time setup is done, every release boils down to:
 
 ```bash
-cd autonomous-buddy
+cd integrations/companions/autonomous-buddy
 export DEV_ID_APP="Developer ID Application: <Your Org> (<TEAMID>)"
 export NOTARY_PROFILE=autonomous-notary
 make dmg-signed
 ```
 
-The output `dist/AutonomousBuddy-<version>.dmg` is signed, notarized, and stapled — users mount it, drag the app to Applications, double-click, and macOS opens it without any Gatekeeper warning or right-click dance.
+The output `dist/Autonomous-Buddy-<version>-<arch>.dmg` is signed, notarized, and stapled — users mount it, drag the app to Applications, double-click, and macOS opens it without any Gatekeeper warning or right-click dance.
 
-`DEV_ID_APP` is auto-detected from the keychain — the first `Developer ID Application:` identity `security find-identity -v -p codesigning` reports. Export it only to pin a specific identity. Because of that, **every** bundling target (`make app`, `make install`, `make dmg`) signs with Developer ID once the cert is installed; they fall back to ad-hoc signing only when no such cert exists (or when you force it with `make app DEV_ID_APP=`). `make app-signed` is `make app` plus a hard failure if no Developer ID identity is available.
+The unified Electron packager selects signing identity before building. A nonempty `DEV_ID_APP` takes precedence (certificate name or SHA-1 fingerprint). Otherwise it reads usable identities with `security find-identity -v -p codesigning`, accepts only complete `Developer ID Application:` entries, and excludes Apple Development and revoked/expired entries. A single candidate is selected automatically. With multiple candidates it prefers the team of `/Applications/Autonomous Buddy.app`; ambiguous matches or a known installed team with no matching candidate fail with an actionable `DEV_ID_APP` override instead of silently switching teams. No certificate or person is hardcoded.
+
+With no usable Developer ID identity, packaging retains ad-hoc fallback and explicitly warns that Accessibility/Screen Recording may need to be granted again after installation. A failed identity lookup aborts instead of silently downgrading. An empty variable enables auto-detection; `DEV_ID_APP=-` deliberately selects ad-hoc for the unified packager. Both the embedded helper and outer app use the selected identity. Routine builds therefore no longer silently replace a Developer ID build with an ad-hoc build merely because the shell did not export `DEV_ID_APP`. This stabilizes signing identity; it does not promise automatic restoration of TCC grants already invalidated by an earlier install.
+
+The legacy `native-*` Makefile recipes retain their existing identity detection and override rules. For a multi-certificate release, explicitly export the intended identity so every packaging/signing entry point uses the same certificate.
 
 What `make dmg-signed` adds on top of `make dmg` is notarization + stapling, which needs `NOTARY_PROFILE`.
 
@@ -88,7 +95,7 @@ Empty history is fine — it means auth works.
 ## Per-release flow
 
 ```bash
-cd autonomous-buddy
+cd integrations/companions/autonomous-buddy
 
 # Persist these in your shell rc once, or export per session.
 export DEV_ID_APP="Developer ID Application: Autonomous Inc (ABCDE12345)"
@@ -101,34 +108,34 @@ make dmg-signed
 
 The make target does, in order:
 
-1. `swift build -c release` — production binary.
-2. Generate the app icon if missing (`make icon` chain — SF Symbol placeholder unless you replace it with a designed PNG).
-3. Bundle `dist/AutonomousBuddy.app` with the icon + Info.plist.
+1. Compile the Electron main/renderer and rebuild node-pty for Electron.
+2. Build the Swift helper in release mode for the current Mac architecture.
+3. Package `desktop/artifacts/package/Autonomous Buddy-darwin-<arch>/Autonomous Buddy.app`, embedding the helper and SwiftPM resources under `Contents/Resources/native/`.
 4. `codesign` the app with Developer ID, hardened runtime, secure timestamp.
 5. `hdiutil create` the DMG (drag-to-Applications layout).
 6. `codesign` the DMG with Developer ID.
 7. `xcrun notarytool submit … --wait` — uploads to Apple, blocks 1-5 minutes until verdict.
 8. `xcrun stapler staple` — embeds the notarization ticket so Gatekeeper can verify offline.
-9. `spctl --assess` — local Gatekeeper dry-run, prints `accepted` on success.
+9. `xcrun stapler validate` — verify the embedded DMG ticket. Run the Gatekeeper checks below separately before distribution.
 
-End result is `dist/AutonomousBuddy-<version>.dmg`. Ship that file.
+End result is `dist/Autonomous-Buddy-<version>-<arch>.dmg`. Ship that file.
 
 ## Verifying a build before shipping
 
 ```bash
 # 1. App signature is well-formed.
-codesign --verify --deep --strict --verbose=2 dist/AutonomousBuddy.app
+codesign --verify --deep --strict --verbose=2 "desktop/artifacts/package/Autonomous Buddy-darwin-<arch>/Autonomous Buddy.app"
 
 # 2. Gatekeeper accepts the app.
-spctl --assess --type execute --verbose=4 dist/AutonomousBuddy.app
+spctl --assess --type execute --verbose=4 "desktop/artifacts/package/Autonomous Buddy-darwin-<arch>/Autonomous Buddy.app"
 #   expected: "accepted source=Developer ID notarized"
 
 # 3. DMG itself has a stapled ticket.
-xcrun stapler validate dist/AutonomousBuddy-<version>.dmg
+xcrun stapler validate "dist/Autonomous-Buddy-<version>-<arch>.dmg"
 #   expected: "The validate action worked!"
 
 # 4. Real Gatekeeper dry-run on the DMG.
-spctl --assess --type open --context context:primary-signature --verbose=4 dist/AutonomousBuddy-<version>.dmg
+spctl --assess --type open --context context:primary-signature --verbose=4 "dist/Autonomous-Buddy-<version>-<arch>.dmg"
 #   expected: "accepted source=Notarized Developer ID"
 ```
 

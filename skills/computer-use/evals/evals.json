@@ -1,0 +1,29 @@
+{
+  "skill_name": "computer-use",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Open Chrome on my desktop with Airbnb and check hotel rooms.",
+      "expected_output": "Preserves room-search goal, asks for missing destination/dates/guests without inventing them, uses synchronous commands, resumes after answer and reads listings before reporting results. Opening a tab alone is not completion.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "Use the quarterly revenue table already open in Excel on my Mac to write a short summary in a new Notes note called Quarterly review.",
+      "expected_output": "Reads actual source values using Accessibility or a loaded screenshot; navigates both native apps, verifies focus and destination note contents, reports only observed results. Does not end after opening Notes or rely on browser tools.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "Move the window on my left monitor to the middle of that monitor. The screenshot has actual width 1200 and height 800, and image_to_global_points is {origin_x:-1920,origin_y:100,scale_x:1.6,scale_y:1.6}. Your runtime has no local image-input tool and the Accessibility tree has no window position controls.",
+      "expected_output": "Does not pretend to see raw base64 or guess a drag. Calls observe with a targeted question through /api/buddy/observe to obtain the configured auxiliary vision model description and current screenshot geometry. Converts explicitly identified screenshot pixel targets using origin and scale, then verifies after dragging. If observation fails or is uncertain, explains the concrete blocker and retains the task instead of inventing coordinates.",
+      "files": []
+    },
+    {
+      "id": 4,
+      "prompt": "Continue entering the report in Notes. The last type_text request timed out; its command ID is write-report-17. I now say stop.",
+      "expected_output": "Stops new input, attempts cancel_command for write-report-17 if tools remain available, does not automatically retry typing, distinguishes best-effort cancellation from rollback and does not claim the report was saved.",
+      "files": []
+    }
+  ]
+}

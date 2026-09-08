@@ -855,3 +855,50 @@ Rules the agent is given, and why each one is load-bearing:
 `TestHeartbeatPeopleSyncFormatMatchesTheReconciler` pins the written format
 against the reconciler's parser, so the two cannot drift apart into entries
 nobody can prune.
+
+## Buddy computer-use feedback
+
+The device agent owns desktop tasks; the Mac companion executes commands. Agent
+management in the separate Buddy desktop workspace is independent of this flow.
+
+- `POST /api/buddy/command` stays loopback-only and returns the native command
+  result. Request bodies are limited to 1 MiB; optional `timeout_ms` is `0` for
+  default or an integer from `500` to `60000`. Native UI observation uses
+  `get_ui_tree`; snapshot-scoped mutations use `perform_ui_action`.
+- `POST /api/buddy/observe` is loopback-only. It captures the paired Mac's desktop
+  and asks the configured auxiliary vision model a desktop-specific question,
+  returning text plus screenshot coordinate metadata. This supports a text-only
+  main agent; it does not capture the device camera. Native image-capable agents
+  can instead load the device-local JPEG decoded by the computer-use skill helper.
+- WebSocket writes are serialized. Pending replies belong to their original
+  connection; disconnect releases those callers, and an old reader cannot clear
+  a replacement connection. Cancellation/timeout attempts a targeted
+  `cancel_command` on the original socket; input already sent cannot be undone.
+- Native Buddy rejects overlapping commands with a busy error, supports
+  cooperative cancellation and Pause, and invalidates UI references after
+  mutations. A successful command is evidence of dispatch, not task completion.
+
+See [Computer use](../integrations/companions/autonomous-buddy/docs/computer-use.md)
+for parameter contracts, image capability requirements and desktop acceptance
+checks. The skill maintains the full user goal and observes the result after each
+dependent action; opening an app is insufficient for a search or cross-app task.
+
+### Buddy managed-agent voice routing
+
+The device-local `POST /api/buddy/command` also transports `agent.list`, `agent.create`, `agent.send`, `agent.session`, and `agent.stop` through the paired WebSocket. The desktop manager owns project/session/provider context; lamp skill `skills/agent-management/` preserves explicit IDs and does not launch coding CLIs on the device. Create/send use caller request IDs; uncertain delivery must be inspected, not automatically replayed.
+
+The Buddy read loop accepts typed `agent_event` status envelopes up to 16 KiB from the current paired socket only, with project/session IDs, positive sequence, terminal status (`completed`, `needs_input`, `error`), title up to 512 bytes and summary up to 8192 bytes. A process-local cursor deduplicates per buddy/project/session (up to 10,000 tracked sessions); it is not durable across server restart. A bounded 64-event queue forwards notifications to the normal local sensing pipeline as `buddy.agent.<session_id>`. Queue overflow/forwarding failure releases that event cursor for a future replay; delivery is best effort and no background retry is invented. Reconnect can resubmit final session snapshots; use `agent.session` for authoritative retained history. Desktop result text is untrusted data. No raw transcript or direct hardcoded speech bypasses the normal event, sleep, mute and speaker policy.
+
+### OpenClaw reconnect and unsent requests
+
+After a successful authenticated WebSocket handshake and event-worker setup,
+OpenClaw drains locally buffered requests without waiting for an unrelated turn
+to end. Offline callbacks keep the queue; concurrent drains are serialized.
+Speaker deferral, sensor expiry/coalescing and user run IDs remain intact. Only
+a disconnect before any socket write is retried. A failed write has an uncertain
+delivery outcome and is not automatically replayed; existing pending chat traces
+are used for correlation, never as a replay source. Authentication rejection does
+not mark the connection ready. The queue is in memory and does not survive an
+os-server process restart. OpenClaw retains its native idempotency-key/history
+correlation; the Codex CLI output guard and session quarantine are not part of
+this transport.

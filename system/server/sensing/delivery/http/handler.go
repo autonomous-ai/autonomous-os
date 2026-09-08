@@ -1461,6 +1461,11 @@ var ambientFloorTypes = map[string]bool{
 // shouldQueueEvent returns true if this sensing event type should be queued
 // (not dropped) when the agent is busy.
 func shouldQueueEvent(eventType, message string, inVoiceWindow bool) bool {
+	// Distinct session keys preserve parallel Buddy completions in the pending queue.
+	if strings.HasPrefix(eventType, "buddy.agent.") {
+		return true
+	}
+
 	switch eventType {
 	case "presence.enter", "presence.leave", "voice",
 		// voice_agent_handled carries the [HANDLED]/[REPLY] sync for a

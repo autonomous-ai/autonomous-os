@@ -68,16 +68,22 @@ TURN_IN_FLIGHT_MAX_S: float = 120.0
 
 DELEGATE_TOOL_NAME: str = "delegate_to_main"
 DELEGATE_TOOL_DESCRIPTION: str = (
-    "Call this when the user's request requires the main system — "
-    "device control, music, scheduling, memory, skills, real-time facts, "
-    "or anything beyond casual conversation. "
-    "Pass a message summarizing what the user wants so the main system "
-    "can act without re-listening to the audio. "
-    "ONLY call this when you clearly understood an actual request. NEVER "
-    "invent, guess, or infer a request from unclear, minimal, or noise-like "
-    "audio (e.g. 'oh', 'uh', a cough, a single unclear syllable) — if you are "
-    "not sure what the user wants, do NOT delegate; stay silent instead. "
-    "The message must reflect what the user actually said, never a fabrication."
+    "Call this for requests requiring the main system: device or desktop actions, "
+    "music, scheduling, memory, skills, real-time facts, or other non-conversational work. "
+    "Desktop coding/research tasks for Codex or Claude, project/worktree/session "
+    "selection, progress queries, and session follow-ups go to the main runtime's "
+    "agent-management skill; never perform that coding task on the device. "
+    "Clearly heard answers, corrections, and stop requests for a known pending task "
+    "also delegate, even without an action verb. Use conversation context to recognize "
+    "the task, but forward ONLY the current user's faithfully understood words in "
+    "their spoken language. Preserve named apps, agent providers, projects, worktrees, "
+    "session references, dictated text verbatim, all clauses, "
+    "timing, quantities, and supplied parameters. Do not summarize away details, "
+    "translate into English, append commentary, or retell prior tasks; the main agent "
+    "already has that conversation. Never invent missing details. "
+    "ONLY call when you clearly understood a request or task follow-up addressed to "
+    "the device. Do not invent requests from unclear or noise-like audio such as "
+    "a cough or an unclear syllable; remain silent for background speech."
 )
 
 DELEGATE_TOOL: dict[str, Any] = {
@@ -89,7 +95,7 @@ DELEGATE_TOOL: dict[str, Any] = {
         "properties": {
             "message": {
                 "type": "string",
-                "description": "A short summary of what the user ACTUALLY asked for, to pass to the main system. Must not be empty and must not be invented — if you didn't clearly understand a request, don't call this tool at all.",
+                "description": "Only the current user's faithfully understood request or task follow-up, in their spoken language. Preserve named apps, dictated text verbatim, all clauses and supplied parameters. No translation, commentary, summary of earlier turns, or invented details. Must not be empty.",
             },
         },
         "required": ["message"],

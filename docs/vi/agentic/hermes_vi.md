@@ -158,7 +158,7 @@ model boundary kế tiếp. Backend Hermes (service NousResearch bên ngoài,
 `POST /v1/responses` stateless) không có mode này, nên os-server gộp ở phía
 client: khi `drainPendingEvents` chạy, các event sống sót được phân nhóm bởi
 `standaloneDrain`. Event standalone giữ lượt riêng — lệnh voice thật
-(`voice` / `voice_command`, trả lời trực tiếp), `voice_agent_handled` (reply câm),
+(`voice` / `voice_command`, trả lời trực tiếp), web chat (`web_chat`), `voice_agent_handled` (reply câm),
 và event có ảnh. Phần sensing ambient thuần còn lại (presence / motion / emotion /
 speech_emotion) được gộp thành **một lượt** qua `sendMergedPending` (một `runID`,
 các dòng nối dưới `mergedSensingHeader`), nên prompt floor mỗi lượt chỉ trả một
@@ -166,6 +166,19 @@ lần thay vì mỗi event một lần. Cách này lấy lại phần lớn lợ
 nhưng không lấy được tính tức thì: batch chỉ bắn sau khi lượt hiện tại kết thúc,
 không bao giờ giữa lượt. Bật/tắt bằng const `mergeDrainEnabled` (đặt `false` để
 quay về replay mỗi event một lượt). Xem `runtimes/hermes/events.go`.
+
+Event chưa gửi vẫn nằm trong hàng đợi khi Hermes mất kết nối. Khi health chuyển
+sang sẵn sàng, drain tiếp qua cùng speaker gate; mỗi yêu cầu standalone kết thúc
+rồi mới gửi yêu cầu tiếp theo. Chỉ giữ lại lỗi not-ready đồng bộ trước khi gửi.
+Không replay HTTP POST đã thử gửi, vì thao tác desktop có thể đã thực hiện.
+
+Mỗi HTTP/SSE stream đang chạy giữ trạng thái busy riêng. Một stream kết thúc
+hoặc lỗi không được xóa busy của stream khác, kể cả khi quá busy TTL cũ.
+Đọc SSE dừng tại `response.completed` hoặc `response.failed`; EOF trước terminal
+phát lifecycle error thay vì báo thành công. Device run ID theo từng request đã
+tách các phản hồi SSE, nên không sao chép giao thức request-ID WebSocket hay
+heuristic output lặp dành riêng cho CLI Codex. Các bảo đảm này đã được kiểm tra
+bằng test transport local; chưa chứng minh Hermes chạy desktop hoặc voice thực tế.
 
 ## 8. Channel (Telegram/Slack/Discord) — hiển thị inbound + fan-out
 

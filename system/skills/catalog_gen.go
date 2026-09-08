@@ -8,6 +8,7 @@ import "go.autonomous.ai/os/system/device"
 
 // Catalog is every skill folder in skills/, in folder order.
 var Catalog = []string{
+	"agent-management",
 	"audio",
 	"camera",
 	"claude-buddy",

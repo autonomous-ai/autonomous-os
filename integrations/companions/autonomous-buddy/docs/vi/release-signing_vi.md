@@ -1,17 +1,24 @@
 # Autonomous Buddy — sign + notarize cho production
 
+> **Sản phẩm hợp nhất (tháng 9/2026):** Chạy các lệnh từ `integrations/companions/autonomous-buddy/`. Target mặc định `build`, `app`, `install`, `dmg` và ký số hiện đóng gói một app Electron chứa helper Swift theo kiến trúc Mac đang dùng (`arm64` hoặc `x64`), không phải universal binary. App output: `desktop/artifacts/package/Autonomous Buddy-darwin-<arch>/Autonomous Buddy.app`; DMG: `dist/Autonomous-Buddy-<version>-<arch>.dmg`. Recipe release universal chỉ Swift cũ giữ với tiền tố `native-*`, gồm `native-release`, `native-app-signed`, `native-dmg-signed`, `native-notarize`. Build/install thông thường không gửi lên Apple. Luồng Developer ID/notarization của app hợp nhất vẫn cần kiểm chứng release; kiểm tra build local mới chứng minh chữ ký ad-hoc. Cần kiểm tra lại việc giữ quyền native khi di chuyển helper vào bundle mới trên các phiên bản macOS đích.
+
+
 Doc handover cho dev sẽ làm Apple Developer enrolment. Sau khi setup 1 lần xong, mỗi release chỉ cần:
 
 ```bash
-cd autonomous-buddy
+cd integrations/companions/autonomous-buddy
 export DEV_ID_APP="Developer ID Application: <Your Org> (<TEAMID>)"
 export NOTARY_PROFILE=autonomous-notary
 make dmg-signed
 ```
 
-Output `dist/AutonomousBuddy-<version>.dmg` được sign + notarize + staple — user mount, drag app vào Applications, double-click, macOS mở luôn không có cảnh báo Gatekeeper hay phải right-click → Open.
+Output `dist/Autonomous-Buddy-<version>-<arch>.dmg` được sign + notarize + staple — user mount, drag app vào Applications, double-click, macOS mở luôn không có cảnh báo Gatekeeper hay phải right-click → Open.
 
-`DEV_ID_APP` được tự dò từ keychain — lấy identity `Developer ID Application:` đầu tiên mà `security find-identity -v -p codesigning` trả về. Chỉ cần export khi muốn ghim một identity cụ thể. Nhờ vậy **mọi** target đóng gói (`make app`, `make install`, `make dmg`) đều ký Developer ID ngay khi cert đã cài; chỉ rơi về ad-hoc khi máy không có cert đó (hoặc khi ép bằng `make app DEV_ID_APP=`). `make app-signed` = `make app` cộng thêm việc báo lỗi nếu không có identity Developer ID.
+Packager Electron hợp nhất chọn signing identity trước khi build. `DEV_ID_APP` khác rỗng được ưu tiên (tên certificate hoặc fingerprint SHA-1). Nếu không có, packager đọc identity dùng được bằng `security find-identity -v -p codesigning`, chỉ nhận dòng `Developer ID Application:` hoàn chỉnh, bỏ Apple Development và dòng bị revoked/expired. Một ứng viên duy nhất được chọn tự động. Khi có nhiều ứng viên, ưu tiên team của `/Applications/Autonomous Buddy.app`; nhiều kết quả vẫn mơ hồ hoặc đã biết team đang cài nhưng không có ứng viên khớp sẽ báo lỗi kèm cách đặt `DEV_ID_APP`, không âm thầm đổi team. Không hardcode certificate hoặc cá nhân.
+
+Khi không có identity Developer ID dùng được, packaging giữ fallback ad-hoc và cảnh báo rõ Accessibility/Screen Recording có thể cần cấp lại sau khi cài. Tra cứu identity thất bại sẽ dừng, không âm thầm hạ xuống ad-hoc. Biến rỗng bật tự dò; `DEV_ID_APP=-` chủ động chọn ad-hoc cho packager hợp nhất. Helper nhúng và app ngoài cùng dùng identity đã chọn. Vì vậy build thông thường không còn âm thầm thay bản Developer ID bằng ad-hoc chỉ do shell chưa export `DEV_ID_APP`. Điều này ổn định signing identity, không hứa tự khôi phục quyền TCC đã mất hiệu lực từ lần cài trước.
+
+Recipe Makefile `native-*` cũ giữ quy tắc dò identity và override hiện có. Với release có nhiều certificate, cần export tường minh identity mong muốn để mọi đường packaging/signing dùng cùng certificate.
 
 Thứ `make dmg-signed` thêm so với `make dmg` là notarize + staple, và nó cần `NOTARY_PROFILE`.
 
@@ -88,7 +95,7 @@ History rỗng OK — nghĩa là auth chạy đúng.
 ## Flow mỗi release
 
 ```bash
-cd autonomous-buddy
+cd integrations/companions/autonomous-buddy
 
 # Lưu vào shell rc 1 lần, hoặc export mỗi session.
 export DEV_ID_APP="Developer ID Application: Autonomous Inc (ABCDE12345)"
@@ -101,34 +108,34 @@ make dmg-signed
 
 Make target chạy theo thứ tự:
 
-1. `swift build -c release` — binary production.
-2. Gen app icon nếu chưa có (`make icon` chain — SF Symbol placeholder trừ khi thay bằng PNG design thật).
-3. Bundle `dist/AutonomousBuddy.app` với icon + Info.plist.
+1. Compile Electron main/renderer và rebuild node-pty cho Electron.
+2. Build helper Swift release theo kiến trúc Mac hiện tại.
+3. Đóng gói `desktop/artifacts/package/Autonomous Buddy-darwin-<arch>/Autonomous Buddy.app`, nhúng helper và resource SwiftPM trong `Contents/Resources/native/`.
 4. `codesign` app với Developer ID, hardened runtime, secure timestamp.
 5. `hdiutil create` DMG (layout drag-to-Applications).
 6. `codesign` DMG với Developer ID.
 7. `xcrun notarytool submit … --wait` — upload lên Apple, block 1-5 phút chờ verdict.
 8. `xcrun stapler staple` — embed ticket notarize vào DMG để Gatekeeper verify offline.
-9. `spctl --assess` — Gatekeeper dry-run local, in `accepted` nếu pass.
+9. `xcrun stapler validate` — kiểm tra ticket đã nhúng trong DMG. Chạy riêng các kiểm tra Gatekeeper bên dưới trước khi phân phối.
 
-Kết quả là `dist/AutonomousBuddy-<version>.dmg`. Gửi file này.
+Kết quả là `dist/Autonomous-Buddy-<version>-<arch>.dmg`. Gửi file này.
 
 ## Verify build trước khi ship
 
 ```bash
 # 1. Chữ ký app hợp lệ.
-codesign --verify --deep --strict --verbose=2 dist/AutonomousBuddy.app
+codesign --verify --deep --strict --verbose=2 "desktop/artifacts/package/Autonomous Buddy-darwin-<arch>/Autonomous Buddy.app"
 
 # 2. Gatekeeper accept app.
-spctl --assess --type execute --verbose=4 dist/AutonomousBuddy.app
+spctl --assess --type execute --verbose=4 "desktop/artifacts/package/Autonomous Buddy-darwin-<arch>/Autonomous Buddy.app"
 #   expected: "accepted source=Developer ID notarized"
 
 # 3. DMG có ticket được staple.
-xcrun stapler validate dist/AutonomousBuddy-<version>.dmg
+xcrun stapler validate "dist/Autonomous-Buddy-<version>-<arch>.dmg"
 #   expected: "The validate action worked!"
 
 # 4. Gatekeeper dry-run thật trên DMG.
-spctl --assess --type open --context context:primary-signature --verbose=4 dist/AutonomousBuddy-<version>.dmg
+spctl --assess --type open --context context:primary-signature --verbose=4 "dist/Autonomous-Buddy-<version>-<arch>.dmg"
 #   expected: "accepted source=Notarized Developer ID"
 ```
 

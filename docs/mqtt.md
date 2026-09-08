@@ -336,6 +336,7 @@ reapplying HAL settings even when unchanged. The `info` uplink includes effectiv
 
 | Kind | Purpose | `data` fields |
 |------|---------|---------------|
+| `buddy.pair.start` | Issue a single-use 6-digit Buddy pairing code, valid 60s | _(none; optional `data` ignored)_ |
 | `tts.set` | Persist TTS voice/provider/language/speed config | `provider`, `voice`, `language`, optional `speed` |
 | `tts.preview` | One-shot TTS preview (no config write) | `text` (required), optional `provider`/`voice`/`language` |
 | `wakeword.gate` | Set the top-level wake-word gate (async; acks `starting`) | `enabled` (required boolean) |
@@ -982,6 +983,30 @@ are optional, since a file can be requested long after its run ended.
 Superseded: `integrations/chat-bridges/autonomous-chat-hook/` forwards backend
 chat one-way as `type:"voice"`, so the device speaks the reply and nothing comes
 back. It cannot back a chat UI; this pair replaces it for that purpose.
+
+### `buddy.pair.start` — Issue a Buddy pairing code
+
+**Receive on `fa_channel`:**
+```json
+{"cmd":"data","kind":"buddy.pair.start","data":{}}
+```
+
+`data` is optional and ignored. The synchronous response on `fd_channel` uses
+`MQTTDataResponse`, with the standard device/version/id/mac/time metadata plus:
+```json
+{"type":"data","kind":"buddy.pair.start","status":"success","data":{"code":"123456","expires_in":60}}
+```
+
+This calls the same Buddy service as admin-authenticated
+`POST /api/buddy/pair/start`. The code is a six-digit string,
+valid for 60 seconds and usable once. Issuing a new code through either
+HTTP or MQTT replaces any pending code from either transport. Failures use the
+standard `status:"failure"` and `error` fields.
+
+MQTT authorization relies on the existing broker credentials and topic ACLs;
+the backend must authorize the device owner before publishing the request.
+Confirmation still uses `POST /api/buddy/pair/confirm` over LAN. This adds no
+MQTT confirmation, status, or revocation commands.
 
 ### `ota` — Trigger OTA update
 

@@ -1,6 +1,7 @@
 package picoclaw
 
 import (
+	"errors"
 	"log/slog"
 	"sort"
 	"strings"
@@ -21,6 +22,9 @@ type pendingEvent struct {
 	queuedAt    time.Time
 	currentUser string
 	fixedRunID  string
+	fixedReqID  string
+	sourceType  string
+	rawChat     bool
 }
 
 // busyTTL bounds how long the busy flag survives without a terminal frame. It
@@ -47,15 +51,25 @@ func (s *PicoclawService) IsBusy() bool {
 		if since > 0 && time.Since(time.UnixMilli(since)) > busyTTL {
 			slog.Warn("busy flag expired — auto-clearing (final frame likely missed)",
 				"component", "picoclaw", "stuck_for_s", int(time.Since(time.UnixMilli(since)).Seconds()))
+			s.sendMu.Lock()
+			// A newer turn may have started while this caller waited for admission.
+			if !s.activeTurn.Load() || s.busySince.Load() != since {
+				s.sendMu.Unlock()
+				return s.activeTurn.Load() || s.HasFreshPendingChatSend()
+			}
+			// Responses have no request IDs. Retire the transport before releasing
+			// an expired turn, otherwise its late final could complete the next one.
+			s.wsConnected.Store(false)
+			s.wsMu.Lock()
+			if s.wsConn != nil {
+				_ = s.wsConn.Close()
+			}
+			s.wsMu.Unlock()
+			// Keep IDs until the read loop exits: an already-read frame still
+			// belongs to this expired turn, never to a new queued request.
 			s.activeTurn.Store(false)
-			// Drop the dead run id: ensureTurnStarted returns early while it is
-			// set, so leaving it would attribute the NEXT turn's frames to the
-			// expired run. The codex runtime additionally tells the waiting
-			// client why (failStuckTurn); mirror that here when this backend is
-			// next exercised on a device.
-			s.clearTurn()
-			go s.drainPendingEvents()
-			return s.HasFreshPendingChatSend()
+			s.sendMu.Unlock()
+			return false
 		}
 		return true
 	}
@@ -64,10 +78,18 @@ func (s *PicoclawService) IsBusy() bool {
 
 // SetBusy flips active state. Drains pending events on idle.
 func (s *PicoclawService) SetBusy(busy bool) {
+	s.sendMu.Lock()
+	// Both chat.final and lifecycle.end may signal idle. Keep the current turn
+	// reserved until the translator finishes dispatching the complete terminal.
+	if !busy && (s.getCurrentRunID() != "" || s.peekPendingRunID() != "") {
+		s.sendMu.Unlock()
+		return
+	}
 	if busy {
 		s.busySince.Store(time.Now().UnixMilli())
 	}
 	s.activeTurn.Store(busy)
+	s.sendMu.Unlock()
 	if !busy {
 		s.drainPendingEvents()
 	}
@@ -103,6 +125,13 @@ func (s *PicoclawService) DrainPendingEvents() {
 }
 
 func (s *PicoclawService) drainPendingEvents() {
+	s.pendingEventsDrainMu.Lock()
+	defer s.pendingEventsDrainMu.Unlock()
+	s.sendMu.Lock()
+	defer s.sendMu.Unlock()
+	if !s.wsConnected.Load() || s.activeTurn.Load() {
+		return
+	}
 	s.pendingEventsMu.Lock()
 	events := s.pendingEvents
 	s.pendingEvents = nil
@@ -189,13 +218,16 @@ func (s *PicoclawService) drainPendingEvents() {
 	}
 
 	slog.Info("draining pending sensing events", "component", "sensing", "count", len(events))
-	for _, ev := range events {
+	for i, ev := range events {
 		var reqID, runID string
 		if ev.fixedRunID != "" {
 			reqID = ev.fixedRunID
 			runID = ev.fixedRunID
 		} else {
 			reqID, runID = s.NextChatRunID()
+		}
+		if ev.fixedReqID != "" {
+			reqID = ev.fixedReqID
 		}
 		flow.SetTrace(runID)
 		startPayload := map[string]any{"type": ev.eventType, "message": ev.msg}
@@ -223,12 +255,23 @@ func (s *PicoclawService) drainPendingEvents() {
 			s.MarkSilentRun(runID)
 		}
 
-		var err error
-		if len(ev.images) > 0 {
-			_, err = s.SendChatMessageWithImagesAndRun(msg, ev.images, reqID, runID)
-		} else {
-			_, err = s.SendChatMessageWithRun(msg, reqID, runID)
+		if ev.rawChat {
+			msg = ev.msg
 		}
+		sourceType := ev.sourceType
+		if sourceType == "" {
+			sourceType = "user"
+		}
+		_, err := s.sendChatNow(msg, ev.images, reqID, runID, sourceType)
+		// A missing socket is definitely unsent; a failed write is uncertain
+		// and must not be replayed. Keep the rest locally until this turn ends.
+		tail := events[i+1:]
+		if errors.Is(err, errDisconnectedBeforeSend) {
+			tail = events[i:]
+		}
+		s.pendingEventsMu.Lock()
+		s.pendingEvents = append(tail, s.pendingEvents...)
+		s.pendingEventsMu.Unlock()
 		if err != nil {
 			slog.Error("failed to replay pending event", "component", "sensing", "type", ev.eventType, "error", err)
 			flow.End("sensing_input", turnStart, map[string]any{"error": err.Error()}, runID)
@@ -237,5 +280,6 @@ func (s *PicoclawService) drainPendingEvents() {
 			flow.Log("agent_call", map[string]any{"type": ev.eventType, "run_id": runID}, runID)
 			slog.Info("pending event replayed", "component", "sensing", "type", ev.eventType, "runId", runID)
 		}
+		return
 	}
 }

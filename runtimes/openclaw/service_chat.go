@@ -2,6 +2,7 @@ package openclaw
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -14,6 +15,10 @@ import (
 	"go.autonomous.ai/os/system/domain"
 	"go.autonomous.ai/os/system/lib/flow"
 )
+
+// A failed WriteMessage has an uncertain outcome; only pre-write disconnects
+// carry this sentinel and are eligible for automatic queue replay.
+var errDisconnectedBeforeSend = errors.New("websocket disconnected before send")
 
 // GetConfigJSON reads and returns the raw bytes of openclaw.json.
 func (s *OpenclawService) GetConfigJSON() (json.RawMessage, error) {
@@ -131,7 +136,7 @@ func (s *OpenclawService) sendChat(message string, imagesBase64 []string, fixedR
 	conn := s.wsConn
 	s.wsMu.Unlock()
 	if conn == nil {
-		return "", fmt.Errorf("websocket not connected")
+		return "", errDisconnectedBeforeSend
 	}
 
 	// reqID labels outbound chat.send from the os server (sensing POST, wake greeting, etc.) — not "audio only".
@@ -237,7 +242,7 @@ func (s *OpenclawService) sendChat(message string, imagesBase64 []string, fixedR
 	conn = s.wsConn
 	if conn == nil {
 		s.wsMu.Unlock()
-		return "", fmt.Errorf("websocket disconnected before send")
+		return "", errDisconnectedBeforeSend
 	}
 	// Set busy before write — closes the timing gap where sensing IsBusy()=false
 	// because lifecycle_start SSE hasn't arrived yet. SSE lifecycle_end still clears it.
