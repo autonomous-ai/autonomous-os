@@ -327,6 +327,7 @@ tốc độ gửi đi trong `0.7–1.2`.
 | Kind | Mục đích | Field trong `data` |
 |------|----------|--------------------|
 | `buddy.pair.start` | Cấp mã pair Buddy 6 số, dùng một lần, hết hạn sau 60s | _(không; bỏ qua `data` tùy chọn)_ |
+| `buddy.pair.revoke` | Thu hồi pairing Buddy hiện tại và ngắt WebSocket | _(không; bỏ qua `data` tùy chọn)_ |
 | `tts.set` | Lưu cấu hình TTS voice/provider/language/speed | `provider`, `voice`, `language`, `speed` (tùy chọn) |
 | `tts.preview` | Preview TTS một lần (không ghi config) | `text` (bắt buộc), tùy chọn `provider`/`voice`/`language` |
 | `wakeword.gate` | Bật/tắt wake-word gate top-level (bất đồng bộ; ack `starting`) | `enabled` (boolean bắt buộc) |
@@ -974,8 +975,31 @@ Khi lỗi, phản hồi dùng các field chuẩn `status:"failure"` và `error`.
 
 Phân quyền MQTT dựa trên credentials của broker và ACL của topic hiện có;
 backend phải kiểm tra quyền chủ sở hữu thiết bị trước khi publish yêu cầu.
-Xác nhận vẫn dùng `POST /api/buddy/pair/confirm` qua LAN. Không bổ sung lệnh
-MQTT để xác nhận, xem trạng thái hoặc thu hồi pairing.
+Xác nhận vẫn dùng `POST /api/buddy/pair/confirm` qua LAN. Không có lệnh
+MQTT để xác nhận hoặc xem trạng thái.
+
+### `buddy.pair.revoke` — Thu hồi pairing Buddy
+
+**Nhận trên `fa_channel`:**
+```json
+{"cmd":"data","kind":"buddy.pair.revoke","data":{}}
+```
+
+`data` là tùy chọn và được bỏ qua. Phản hồi đồng bộ trên `fd_channel` dùng
+`MQTTDataResponse`, gồm metadata device/version/id/mac/time chuẩn cộng với:
+```json
+{"type":"data","kind":"buddy.pair.revoke","status":"success","data":{"revoked":true}}
+```
+
+Lệnh gọi `buddy.Service.Unpair`, cùng thao tác với `DELETE /api/buddy`:
+đóng WebSocket đang hoạt động, xóa pairing hiện tại và dữ liệu pairing đã lưu,
+đồng thời vô hiệu hóa token đã pair. Gọi lại khi chưa có pairing cũng thành công.
+Mã pairing đang chờ không bị hủy.
+
+Khi lỗi, gồm Buddy service không khả dụng hoặc không lưu được việc xóa pairing,
+phản hồi dùng các field chuẩn `status:"failure"` và `error`.
+Phân quyền MQTT dựa trên credentials của broker và ACL của topic hiện có;
+backend phải kiểm tra quyền chủ sở hữu thiết bị trước khi publish yêu cầu.
 
 ### `ota` — Trigger OTA update
 

@@ -24,7 +24,7 @@ Thiết kế tháng 5 bên dưới là bối cảnh computer-use lịch sử, kh
 ### Mục tiêu
 - Thiết bị điều khiển được máy tính qua voice ("mở Chrome", "vào Gmail", "join Google Meet", "gõ X", "đóng Slack")
 - Hoạt động với mọi app macOS (không chỉ browser)
-- Command và xác nhận pairing chạy qua LAN; backend có thể yêu cầu mã pair qua MQTT.
+- Command và xác nhận pairing chạy qua LAN; backend có thể yêu cầu mã pair hoặc thu hồi pairing qua MQTT.
 - Mac-first cho MVP; Windows/Linux để v1.2+
 
 ### Không phải mục tiêu (MVP)
@@ -249,9 +249,20 @@ Page mới `Paired Computers`:
 9. Buddy mở WS với `Authorization: Bearer <token>`
 
 Phân quyền MQTT dựa trên credentials của broker và ACL của topic hiện có;
-backend phải kiểm tra quyền chủ sở hữu thiết bị trước khi gửi `buddy.pair.start`.
-Không có lệnh MQTT mới để xác nhận, xem trạng thái hoặc thu hồi pairing; các route
-HTTP tương ứng vẫn giữ nguyên. Xem [contract MQTT](../../../../../docs/vi/mqtt_vi.md#buddypairstart--cấp-mã-pair-buddy).
+backend phải kiểm tra quyền chủ sở hữu thiết bị trước khi gửi `buddy.pair.start`
+hoặc `buddy.pair.revoke`. Xác nhận và xem trạng thái dùng các route HTTP hiện có.
+Xem [contract MQTT pairing](../../../../../docs/vi/mqtt_vi.md#buddypairstart--cấp-mã-pair-buddy).
+
+Để thu hồi pairing hiện tại, backend đã kiểm tra quyền gửi
+`{"cmd":"data","kind":"buddy.pair.revoke","data":{}}` trên `fa_channel` (`data`
+là tùy chọn và được bỏ qua). Lệnh gọi `buddy.Service.Unpair`, cũng được dùng bởi
+`DELETE /api/buddy`: đóng WebSocket đang hoạt động, xóa pairing hiện tại và dữ liệu
+pairing đã lưu, đồng thời vô hiệu hóa token đã pair. Gọi lại khi chưa có pairing
+cũng thành công; mã pairing đang chờ không bị hủy. Phản hồi trên `fd_channel` là
+`{"type":"data","kind":"buddy.pair.revoke","status":"success","data":{"revoked":true}}`
+kèm metadata chuẩn của `MQTTDataResponse`. Khi lỗi, gồm service không khả dụng
+hoặc lỗi lưu dữ liệu, phản hồi dùng `status:"failure"` và `error`.
+Xem [contract MQTT thu hồi pairing](../../../../../docs/vi/mqtt_vi.md#buddypairrevoke--thu-hồi-pairing-buddy).
 
 ### Reconnect
 

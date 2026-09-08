@@ -24,7 +24,7 @@ The May design below is historical computer-use context, not the current packagi
 ### Goals
 - The device can drive a user's computer via voice commands ("open Chrome", "go to Gmail", "join Google Meet", "type X", "close Slack")
 - Works across any macOS app (not just browser)
-- Commands and pairing confirmation stay on LAN; the backend can request a pairing code over MQTT.
+- Commands and pairing confirmation stay on LAN; the backend can request a pairing code or revoke pairing over MQTT.
 - Mac-first MVP; Windows/Linux deferred to v1.2+
 
 ### Non-goals (MVP)
@@ -249,9 +249,20 @@ Reserved for later (defined but not implemented MVP):
 9. Buddy opens WS with `Authorization: Bearer <token>`
 
 MQTT authorization relies on existing broker credentials and topic ACLs; the
-backend must authorize the device owner before sending `buddy.pair.start`.
-Confirmation, status and revocation have no new MQTT commands; their HTTP routes
-remain in place. See [MQTT contract](../../../../docs/mqtt.md#buddypairstart--issue-a-buddy-pairing-code).
+backend must authorize the device owner before sending `buddy.pair.start` or
+`buddy.pair.revoke`. Confirmation and status use the existing HTTP routes.
+See [MQTT pairing contract](../../../../docs/mqtt.md#buddypairstart--issue-a-buddy-pairing-code).
+
+To revoke the current pairing, the authorized backend sends
+`{"cmd":"data","kind":"buddy.pair.revoke","data":{}}` on `fa_channel` (`data` is
+optional and ignored). This calls `buddy.Service.Unpair`, also used by
+`DELETE /api/buddy`: it closes the active WebSocket, clears the current pairing
+and persisted store, and invalidates the paired token. Repeating it when already
+unpaired succeeds; a pending pairing code is not cancelled. The response on
+`fd_channel` is `{"type":"data","kind":"buddy.pair.revoke","status":"success","data":{"revoked":true}}`
+with standard `MQTTDataResponse` metadata. Failures, including an unavailable
+service or persistence failure, use `status:"failure"` and `error`.
+See [MQTT revocation contract](../../../../docs/mqtt.md#buddypairrevoke--revoke-buddy-pairing).
 
 ### Reconnect
 

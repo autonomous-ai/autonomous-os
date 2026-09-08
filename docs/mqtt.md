@@ -337,6 +337,7 @@ reapplying HAL settings even when unchanged. The `info` uplink includes effectiv
 | Kind | Purpose | `data` fields |
 |------|---------|---------------|
 | `buddy.pair.start` | Issue a single-use 6-digit Buddy pairing code, valid 60s | _(none; optional `data` ignored)_ |
+| `buddy.pair.revoke` | Revoke the current Buddy pairing and disconnect its WebSocket | _(none; optional `data` ignored)_ |
 | `tts.set` | Persist TTS voice/provider/language/speed config | `provider`, `voice`, `language`, optional `speed` |
 | `tts.preview` | One-shot TTS preview (no config write) | `text` (required), optional `provider`/`voice`/`language` |
 | `wakeword.gate` | Set the top-level wake-word gate (async; acks `starting`) | `enabled` (required boolean) |
@@ -1005,8 +1006,31 @@ standard `status:"failure"` and `error` fields.
 
 MQTT authorization relies on the existing broker credentials and topic ACLs;
 the backend must authorize the device owner before publishing the request.
-Confirmation still uses `POST /api/buddy/pair/confirm` over LAN. This adds no
-MQTT confirmation, status, or revocation commands.
+Confirmation still uses `POST /api/buddy/pair/confirm` over LAN. There are no
+MQTT confirmation or status commands.
+
+### `buddy.pair.revoke` — Revoke Buddy pairing
+
+**Receive on `fa_channel`:**
+```json
+{"cmd":"data","kind":"buddy.pair.revoke","data":{}}
+```
+
+`data` is optional and ignored. The synchronous response on `fd_channel` uses
+`MQTTDataResponse`, with the standard device/version/id/mac/time metadata plus:
+```json
+{"type":"data","kind":"buddy.pair.revoke","status":"success","data":{"revoked":true}}
+```
+
+This calls `buddy.Service.Unpair`, the same operation as `DELETE /api/buddy`:
+it closes the active WebSocket, clears the current pairing and persisted store,
+and invalidates the paired token. Repeating the command when already unpaired
+also succeeds. A pending pairing code is not cancelled.
+
+Failures, including an unavailable Buddy service or failure to persist the
+removal, use the standard `status:"failure"` and `error` fields.
+MQTT authorization relies on the existing broker credentials and topic ACLs;
+the backend must authorize the device owner before publishing the request.
 
 ### `ota` — Trigger OTA update
 
