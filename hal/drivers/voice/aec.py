@@ -470,11 +470,22 @@ def uncancelled() -> bool:
     is deciding on echo. Measured on lamp-ee17 25/08/2026: the reference
     underran on 86% of processed frames during a reply, and the lamp interrupted
     itself and transcribed its own sentence as the user's.
-
-    A genuinely SILENT reference is not uncancelled — a pause in the reply is
-    exactly when a real interruption arrives cleanly.
     """
     return _canceller is None or _canceller._uncancelled
+
+
+def reference_idle_for() -> float:
+    """Seconds since anything was last handed to the speaker (inf if never).
+
+    The only signal that separates "the APM was bypassed because nothing is
+    playing, so the frame is clean" from "the APM was starved while the speaker
+    was live, so the frame is dirty" — `uncancelled()` is True in BOTH, and is
+    the ordinary state of a quiet conversation.
+    """
+    ref = _reference
+    if ref is None or _canceller is None:
+        return float("inf")
+    return ref.idle_for()
 
 
 def _dump_candidate(mic_pcm, ref_bytes, corr, lag, skew_db, offset_db,
@@ -523,24 +534,6 @@ def echo_envelope_match(window_ms: int, np) -> Optional[float]:
     Reads the mic from the canceller's own pre-APM history rather than taking it
     from the caller, because the caller only ever holds CANCELLED audio and
     cancellation destroys what this measures (see EchoCanceller._mic_history).
-
-    Cancelling echo needs the reference aligned to within a fraction of a
-    wavelength, which the drifting clocks of a separate USB mic and speaker make
-    impossible to hold — measured 26/08/2026, the delay read 230/170/55ms on
-    three passes and ERLE never rose above 5.8 dB. RECOGNISING echo needs no
-    such alignment: the loudness contour survives the room, the speaker and a
-    half-failed cancellation, so it can simply be searched for across the whole
-    plausible lag range.
-
-    Compares log-energy envelopes at 8ms resolution, zero-meaned and normalised,
-    so it answers "does this rise and fall WITH the reply" rather than "is this
-    loud" — which is the distinction the level gate provably cannot make: at
-    speaker 40% the echo ceiling measured 9969 while real interruptions measured
-    6956-8027, so the populations overlap at every volume tested (25/40/65%).
-
-    None when there is nothing to compare against — no canceller, or too little
-    reference retained to search. None is NOT "clean": it means unknown, and the
-    caller must not read it as permission to fire.
     """
     if _canceller is None or _reference is None:
         return None

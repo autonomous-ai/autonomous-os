@@ -318,6 +318,18 @@ class TTSService:
         # output rate, resampled to the device stream rate per frame.
         self._native_mode: bool = False
         self._native_src_rate: int = 0
+        # Whether the output stream is open AT the model's rate (no resampling)
+        # and, when it is not, the streaming resampler's carry + read position.
+        self._native_direct: bool = False
+        self._native_rs_carry = None
+        self._native_rs_pos: float = 0.0
+        # Whether this device accepts a given model rate, keyed (device, rate).
+        # Asking costs a close + reopen of the PERSISTENT stream, which exists
+        # precisely to avoid a multi-second codec warmup — so ask once, not once
+        # per reply. Device-observed 2026-09-07 on intern-v2-6286: the ES8389
+        # refuses 24 kHz with PaErrorCode -9999, and retrying it every reply
+        # churned the stream each time.
+        self._native_direct_cache: dict = {}
 
         # Whether the CURRENT speech should be fed back to the realtime voice
         # agent as [TTS HISTORY] (via the on_speak_end hook in VoiceService).
@@ -932,18 +944,13 @@ class TTSService:
         # dropped, so it cannot append itself after the replacement turn.
         with self._queue_request_lock:
             preempted = False
+
+            logger.info(
+                "speak_queue: turn_id=%r turn_seq=%r text=%r",
+                turn_id, turn_seq, text[:60],
+            )
+
             if turn_id and turn_seq:
-                # The counter lives in os-server; this threshold lives here.
-                # They restart independently, so a deploy/OTA/crash restarts the
-                # count at 1 while this process still holds the old high-water
-                # mark — and every turn of the new session looks like a late
-                # arrival from the past. Device-observed 03/09/2026: seq=1 against
-                # latest_seq=40 silenced the wake greeting (LED and servo ran, no
-                # sound), and would have stayed silent for the next 39 turns.
-                #
-                # The run id carries its creation time, so wall-clock decides
-                # when the counter itself is untrustworthy: a turn created LATER
-                # than the one holding the speaker is newer, whatever its seq.
                 if self._counter_restarted(turn_id, turn_seq):
                     logger.warning(
                         "TTS turn counter restarted (turn_id=%s seq=%d <= latest_id=%s "
@@ -1153,6 +1160,30 @@ class TTSService:
             return False
         self._stop_event.clear()
         self._native_src_rate = src_rate
+        self._native_rs_carry = None
+        self._native_rs_pos = 0.0
+        # Prefer opening the device AT the model's rate. The alternative is
+        # resampling every chunk that arrives, and a realtime model streams many
+        # small ones — ALSA's converter runs continuously across writes, a
+        # per-chunk one in Python cannot. Falls back to the device rate plus the
+        # streaming resampler below when the device refuses the rate.
+        self._native_direct = False
+        cache_key = (self._device_key(), src_rate)
+        if self._native_direct_cache.get(cache_key) is False:
+            pass  # known to refuse this rate — go straight to the resampler
+        else:
+            try:
+                with self._stream_lock:
+                    self._ensure_stream(src_rate)
+                self._native_direct = True
+                self._native_direct_cache[cache_key] = True
+            except Exception as e:
+                self._native_direct_cache[cache_key] = False
+                logger.info(
+                    "native audio: device would not open at %d Hz (%s) — "
+                    "resampling to %s Hz for the rest of this run",
+                    src_rate, e, self._device_rate,
+                )
         self._native_mode = True
         # Native playback is the realtime model's OWN voice — never feed it back
         # (the native_mode check in the hook already skips it; clear the flag too
@@ -1179,10 +1210,16 @@ class TTSService:
         try:
             data = np.asarray(frame, dtype=np.float32)
             with self._stream_lock:
-                stream = self._ensure_stream(self._device_rate)
+                stream = self._ensure_stream(
+                    self._native_src_rate if self._native_direct else self._device_rate
+                )
                 dst = self._stream_rate
                 if self._native_src_rate and dst and self._native_src_rate != dst:
-                    data = self._resample(data, self._native_src_rate, dst)
+                    data = self._resample_stream(data, self._native_src_rate, dst)
+                if len(data) == 0:
+                    # Not enough input to land a sample yet — the remainder is
+                    # held in the carry and goes out with the next chunk.
+                    return True
                 if data.ndim == 1:
                     data = data.reshape(-1, 1)
                 if self._stream is None or self._stop_event.is_set():
@@ -1215,6 +1252,51 @@ class TTSService:
             except Exception:
                 pass
         self._native_mode = False
+        self._native_rs_carry = None
+        self._native_rs_pos = 0.0
+        self._native_direct = False
+
+    def _resample_stream(self, chunk, src_rate: int, dst_rate: int):
+        """Linear resample that stays continuous ACROSS streamed chunks.
+
+        `_resample` below maps each chunk onto [0, 1] of its own, which is fine
+        for a whole synthesized sentence and wrong for a stream: consecutive
+        chunks then overlap in phase, leaving a discontinuity at every boundary.
+        A realtime model sends many small chunks, so that is a click every few
+        tens of milliseconds — heard as a buzz over the entire reply
+        (device-observed 2026-09-07 on intern-v2-6286: 24 kHz model audio into a
+        44.1 kHz device). Carrying the read position and the unconsumed tail
+        across calls removes the seam.
+        """
+        np = self._np
+        if src_rate == dst_rate:
+            return chunk
+        buf = (
+            chunk
+            if self._native_rs_carry is None or len(self._native_rs_carry) == 0
+            else np.concatenate((self._native_rs_carry, chunk))
+        )
+        step = src_rate / dst_rate
+        pos = self._native_rs_pos
+        last = len(buf) - 1
+        if last < 1 or pos > last:
+            # Too little to interpolate over yet — hold it for the next chunk.
+            self._native_rs_carry = buf
+            self._native_rs_pos = pos
+            return np.zeros(0, dtype=np.float32)
+        n = int(math.floor((last - pos) / step)) + 1
+        idx = pos + step * np.arange(n, dtype=np.float64)
+        out = np.interp(
+            idx, np.arange(len(buf), dtype=np.float64), buf
+        ).astype(np.float32)
+        next_pos = pos + step * n
+        # Keep everything from the last whole sample index on, so the next call
+        # can interpolate across the seam, and re-express the position in the
+        # retained buffer's coordinates.
+        keep = min(int(math.floor(next_pos)), len(buf))
+        self._native_rs_carry = buf[keep:]
+        self._native_rs_pos = next_pos - keep
+        return out
 
     def _resample(self, audio, src_rate: int, dst_rate: int):
         """Linear interpolation resample (no scipy needed)."""
