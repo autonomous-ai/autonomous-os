@@ -102,6 +102,21 @@ class VoiceRouterTests(unittest.TestCase):
         self.assertEqual(self.sent()[1]["prompt"], "Thêm test cho reconnect")
         self.assertEqual(sum(c["action"] == "agent.list" for c in self.calls), 2)
 
+    def test_current_means_focused_session_not_previous_voice_target(self):
+        self.send()
+        self.focus_main()
+        self.send("r2", target="current", prompt="Print hello")
+        self.send("r3", target="previous")
+        self.assertEqual([s["session_id"] for s in self.sent()], ["s2", "s1", "s1"])
+        self.assertEqual(self.sent()[1]["prompt"], "Print hello")
+
+    def test_current_without_desktop_selection_does_not_fall_back_to_saved(self):
+        self.send()
+        self.snapshot["activeContext"] = None
+        with self.assertRaises(router.RoutingError):
+            self.send("r2", target="current")
+        self.assertEqual(len(self.sent()), 1)
+
     def test_explicit_active_switch_and_conversation_isolation(self):
         self.send()
         self.focus_main()
