@@ -11,9 +11,9 @@ import (
 // response (matched by `id`) to the corresponding Dispatch caller. Returns
 // when the connection closes for any reason. Caller is expected to invoke this
 // in a goroutine after RegisterConnection.
-func (s *Service) RunReadLoop(conn *websocket.Conn, buddyID string) {
+func (s *Service) RunReadLoop(conn *websocket.Conn, buddyID string, agentHandlers ...func(AgentEvent)) {
 	defer func() {
-		s.registry.Clear()
+		s.clearConnection(conn)
 		_ = conn.Close()
 		slog.Info("buddy disconnected", "component", "buddy", "id", buddyID)
 	}()
@@ -29,6 +29,16 @@ func (s *Service) RunReadLoop(conn *websocket.Conn, buddyID string) {
 			}
 			return
 		}
+		var kind struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal(data, &kind) == nil && kind.Type == "agent_event" {
+			event, accepted := s.acceptAgentEvent(conn, buddyID, data)
+			if accepted && len(agentHandlers) > 0 && agentHandlers[0] != nil {
+				agentHandlers[0](event)
+			}
+			continue
+		}
 		var env struct {
 			ID       string `json:"id"`
 			OK       *bool  `json:"ok"`
@@ -41,7 +51,7 @@ func (s *Service) RunReadLoop(conn *websocket.Conn, buddyID string) {
 		}
 		ok := env.OK != nil && *env.OK
 		slog.Info("buddy WS ← response", "component", "buddy", "id", env.ID, "ok", ok, "error", env.Error, "duration_ms", env.Duration, "bytes", len(data))
-		if !s.registry.DeliverResponse(env.ID, data) {
+		if !s.registry.DeliverResponse(conn, env.ID, data) {
 			slog.Warn("orphan response (no pending caller)", "component", "buddy", "id", env.ID)
 		}
 	}

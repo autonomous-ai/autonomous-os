@@ -53,13 +53,33 @@ func (s *PicoclawService) SendSlashCommandWithImagesAndRun(message string, image
 	return s.sendChat(message, imagesBase64, reqID, runID, "user_slash")
 }
 
-// sendChat allocates ids, marks busy, records the pending trace + runID, emits
-// chat_input / chat_send flow events for parity with openclaw, and writes the
-// message.send frame to the persistent WebSocket. The reply arrives on the read
-// loop and is translated there — this returns as soon as the frame is sent.
+// sendChat allocates IDs and admits one request at a time. Busy requests retain
+// their original payload locally; idle requests record their trace and write a
+// message.send frame. The reply arrives asynchronously on the read loop.
 func (s *PicoclawService) sendChat(message string, imagesBase64 []string, fixedReqID, fixedRunID, sourceType string) (string, error) {
+	s.sendMu.Lock()
+	defer s.sendMu.Unlock()
+	if s.activeTurn.Load() {
+		if fixedReqID == "" || fixedRunID == "" {
+			fixedReqID, fixedRunID = s.NextChatRunID()
+		}
+		s.pendingEventsMu.Lock()
+		s.pendingEvents = append(s.pendingEvents, pendingEvent{
+			msg: message, images: append([]string(nil), imagesBase64...), queuedAt: time.Now(),
+			fixedRunID: fixedRunID, fixedReqID: fixedReqID, sourceType: sourceType,
+			rawChat: true, eventType: "web_chat",
+		})
+		s.pendingEventsMu.Unlock()
+		return fixedRunID, nil
+	}
+	return s.sendChatNow(message, imagesBase64, fixedReqID, fixedRunID, sourceType)
+}
+
+// sendChatNow requires sendMu and an idle turn. Never retry a failed socket write:
+// PicoClaw has no idempotency or request correlation on its response protocol.
+func (s *PicoclawService) sendChatNow(message string, imagesBase64 []string, fixedReqID, fixedRunID, sourceType string) (string, error) {
 	if !s.wsConnected.Load() {
-		return "", fmt.Errorf("picoclaw not connected")
+		return "", errDisconnectedBeforeSend
 	}
 
 	var reqID, runID string
@@ -143,6 +163,7 @@ func (s *PicoclawService) sendChat(message string, imagesBase64 []string, fixedR
 		// Roll back busy so the next sensing/voice round can proceed.
 		s.activeTurn.Store(false)
 		s.clearTurn()
+		s.RemovePendingChatTraceByRunID(runID)
 		slog.Error("picoclaw send failed", "component", "picoclaw", "runID", runID, "error", err)
 		return "", fmt.Errorf("send message.send: %w", err)
 	}

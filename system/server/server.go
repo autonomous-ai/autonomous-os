@@ -309,6 +309,7 @@ func (s *Server) Serve(closeFn func()) error {
 	// sees the same turn the web monitor's SSE stream shows. Costs nothing until
 	// a chat.send arrives — no run is tracked, so every bus event is dropped.
 	s.chatStream.Start(eventCtx)
+	go s.deviceMQTTHandler.StartBuddyStatusLoop(eventCtx)
 	// StartModelSync is launched from the startup-sequence goroutine AFTER
 	// EnsureOnboarding completes, so the two writers to openclaw.json don't
 	// race on first boot (sync's atomic write vs ensureAgentDefaults' plain
@@ -472,6 +473,7 @@ func (s *Server) Serve(closeFn func()) error {
 	buddy.DELETE("self", s.buddyHandler.RevokeSelf)
 	buddy.GET("ws", s.buddyHandler.WS)
 	buddy.POST("command", localOnlyMiddleware(), s.buddyHandler.Command)
+	buddy.POST("observe", localOnlyMiddleware(), s.buddyHandler.Observe)
 	// /exec/:action is the marker-friendly variant used by OpenClaw skills via
 	// [HW:/buddy/exec/<action>:{...}]. Localhost-only (loopback from agent handler's hwMarker dispatcher).
 	buddy.POST("exec/:action", localOnlyMiddleware(), s.buddyHandler.Exec)

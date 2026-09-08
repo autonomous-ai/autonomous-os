@@ -1,6 +1,7 @@
 package gatewayd
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log"
@@ -52,6 +53,7 @@ func (c *wsClient) close(code int, reason string) {
 
 // inboundFrame is the common envelope of client -> gatewayd frames.
 type inboundFrame struct {
+	RunID   string          `json:"run_id"`
 	Type    string          `json:"type"`
 	ID      json.RawMessage `json:"id"`
 	Payload json.RawMessage `json:"payload"`
@@ -59,6 +61,8 @@ type inboundFrame struct {
 
 // turnPayload is the payload of a message.send frame.
 type turnPayload struct {
+	RequestID   string `json:"-"`
+	RunID       string `json:"-"`
 	Content     string `json:"content"`
 	Attachments []struct {
 		Type string `json:"type"`
@@ -157,6 +161,8 @@ func (s *Server) handleFrame(data []byte) {
 				return
 			}
 		}
+		_ = json.Unmarshal(frame.ID, &payload.RequestID)
+		payload.RunID = frame.RunID
 		s.enqueue(op{kind: opTurn, payload: payload})
 	case "session.new":
 		// Queued behind in-flight/queued turns (see op) — session_cleared is
@@ -181,7 +187,11 @@ func (s *Server) enqueue(o op) {
 		threadID := s.threadID
 		s.mu.Unlock()
 		log.Printf("%s worker queue full — dropping %s frame", logPrefix, o.kind)
-		s.sendStatus("queue_full", threadID)
+		if o.kind == opTurn && (o.payload.RequestID != "" || o.payload.RunID != "") {
+			s.sendJSON(map[string]any{"type": "bridge.rejected", "error": "worker queue full", "request_id": o.payload.RequestID, "run_id": o.payload.RunID})
+		} else {
+			s.sendStatus("queue_full", threadID)
+		}
 	}
 }
 
@@ -191,7 +201,9 @@ func (s *Server) enqueue(o op) {
 func (s *Server) send(data []byte) {
 	s.mu.Lock()
 	client := s.client
+	requestID, runID := s.activeRequestID, s.activeRunID
 	s.mu.Unlock()
+	data = correlateTurnFrame(data, requestID, runID)
 	if client == nil {
 		return
 	}
@@ -223,4 +235,42 @@ func (s *Server) sendStatus(state, sessionID string) {
 
 func (s *Server) sendError(msg string) {
 	s.sendJSON(map[string]any{"type": "bridge.error", "error": msg})
+}
+
+// runCorrelatedTurn scopes metadata to the worker's whole turn, including
+// resume fallback and terminal bridge errors. Control/status frames stay untagged.
+func (s *Server) runCorrelatedTurn(ctx context.Context, payload turnPayload) {
+	s.mu.Lock()
+	s.activeRequestID, s.activeRunID = payload.RequestID, payload.RunID
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		s.activeRequestID, s.activeRunID = "", ""
+		s.mu.Unlock()
+	}()
+	s.runTurn(ctx, payload)
+}
+
+func correlateTurnFrame(data []byte, requestID, runID string) []byte {
+	if requestID == "" && runID == "" {
+		return data
+	}
+	var frame map[string]json.RawMessage
+	if json.Unmarshal(data, &frame) != nil {
+		return data
+	}
+	var kind string
+	_ = json.Unmarshal(frame["type"], &kind)
+	switch kind {
+	case "step_start", "text", "reasoning", "tool_use", "step_finish", "message.updated", "session.idle", "session.status", "session.error", "error", "bridge.error":
+	default:
+		return data
+	}
+	frame["request_id"], _ = json.Marshal(requestID)
+	frame["run_id"], _ = json.Marshal(runID)
+	encoded, err := json.Marshal(frame)
+	if err != nil {
+		return data
+	}
+	return encoded
 }

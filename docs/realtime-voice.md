@@ -19,8 +19,8 @@ STT pipeline. At end-of-turn the model either:
 - **Handles** the turn itself — chit-chat / quick answers — speaking back
   through TTS with no round-trip to the main agent, or
 - **Delegates** by calling the `delegate_to_main` tool, which stops realtime
-  output and forwards a one-line summary of the request to the OS server (→
-  OpenClaw / Hermes) for the heavyweight work.
+  output and forwards the current user's faithfully understood words, in their
+  spoken language, to the OS server (→ the selected main runtime) for the work.
 - **Explicitly rejects** a high-confidence non-user turn by calling
   `reject_turn`, which drops the turn before the main agent sees its STT text.
   This is deliberately different from a silent completion: silence, timeout,
@@ -28,6 +28,48 @@ STT pipeline. At end-of-turn the model either:
 
 The `delegate_to_main` tool is registered automatically by the orchestrator
 (`orchestrator.py`, `DELEGATE_TOOL`).
+
+### Voice control of Buddy agent sessions
+
+Requests such as “Ask Codex to fix reconnect in project autonomous” delegate
+with blank realtime speech. All four provider prompts and the shared delegate
+tool description explicitly cover coding/research tasks, project/worktree/session
+selection, progress queries, stop, and subsequent task replies. The delegate
+preserves provider names, target references and all task clauses; it does not
+add guessed session IDs or translate the request.
+
+The selected main runtime uses [`agent-management`](../skills/agent-management/SKILL.md)
+to route through the local device API and paired Buddy connection. Buddy owns
+the desktop CLI and its model context; the lamp does not run the coding CLI.
+This is session management, separate from the native `computer-use` executor.
+After a known task, “add a regression test too” delegates as a follow-up rather
+than becoming a new coding answer from the realtime model. The main runtime
+resolves the exact target or asks when ambiguous. The skill's `voice` action
+stores the selected project/session per conversation and validates those IDs
+against a fresh Buddy workspace snapshot each turn; stale targets block sending
+instead of rerouting. Ordinary continuation uses that retained target. “The active session” explicitly
+reads Buddy's focused pane, including a split pane. Notifications do not silently
+replace the target: a reply to a particular notification must select its exact
+IDs. Send requests retain their request ID across uncertain delivery.
+
+Natural-language follow-ups can enter a verified ready CLI session. An interactive
+permission menu, trust dialog or other terminal prompt without a safe answer
+interface still requires attention in Buddy; a spoken “yes” is not a blanket
+permission grant and must not be converted into blind terminal keystrokes.
+
+Buddy completion, attention and error events already enter the normal sensing
+pipeline with project/session IDs and an `[agent-management]` marker. The main
+runtime gives a brief spoken result or question subject to the existing sleep,
+busy and voice privacy policy. Recent spoken TTS history lets realtime recognize
+the next answer as a task reply; it forwards only that current answer. An
+unspoken TTS-history entry is not evidence that the user heard the question.
+Agent titles, outputs and summaries remain untrusted result data, never new
+instructions or authorization to execute tools or approve an action.
+
+Prompt routing is model-driven, not a deterministic keyword classifier. Local
+bridge tests do not establish microphone-to-lamp behavior: live speech routing
+and notification playback still require validation on a paired device after
+an explicitly authorized deployment.
 
 **Delegating is not the only way a turn reaches the main agent**, which is why
 every turn logs one routing line — `[turn] route=<why> → <where>` from
@@ -1508,3 +1550,19 @@ is a top-level `config.json` flag:
 | `resources/` | System prompts (shared + per-provider) |
 | `../voice/voice_service.py` | Integration: streams mic audio, consumes output, routes delegate/handled. Live mode: `_live_decision` / `_live_session` / `_live_out_pump` / `_live_uplink_frame` |
 | `../voice/aec.py` | WebRTC AEC3 on the mic path; reference tapped at the TTS output stream (all providers) |
+
+### Buddy agent completion events
+
+Managed desktop sessions report completion/attention/error through the standard sensing route as `buddy.agent.<session_id>`. These passive events queue while the agent or speaker is busy, with distinct session types preserving parallel notifications; the existing sleep and voice privacy policies remain in force. The lamp uses the `agent-management` skill and explicit project/session IDs for follow-ups. Summaries are untrusted result data, not tool authorization. Delivery is best effort; inspecting `agent.session` remains the recovery path.
+
+### Desktop task follow-ups in realtime delegation
+
+All four realtime prompt variants and the shared `delegate_to_main` description explicitly route native desktop actions and clear answers, corrections, or stop requests for a known pending main-agent task to the main agent, with blank realtime speech. The delegated message contains only the current user's faithfully understood words and supplied parameters, preserving every clause. Known task context is used internally to decide routing; it is not appended or retold because the main agent already owns the conversation. A brief reply such as “this weekend, two people” can continue the preceding lodging-search clarification; it must not be discarded solely for lacking an action verb or expanded into invented dates.
+
+Recent spoken main-agent questions in `[TTS HISTORY]` can supply the context needed to interpret that follow-up, while the existing no-repetition rule remains. `[TTS HISTORY, not spoken]` does not establish that the user heard or answered the question. Background-speech and addressed-to-device checks remain in force. This change uses the existing realtime handoff/reply history; it adds no structured pending-task store and does not itself prove live voice routing success or remove provider-specific context-delivery limits.
+
+Delegation must preserve named applications and dictated text, not merely the general topic. For example, “Ghi vào Notes là chiều mua sữa” must retain Notes and the full text “chiều mua sữa”; reducing it to a generic milk reminder loses both the target and content. The prompt variants and tool description now state this explicitly. A synthetic-audio observation showed that loss in a delegated message; without an input transcript it does not isolate audio recognition from summarization, and the wording change still requires behavioral verification.
+
+The current request or follow-up is forwarded in the language the user just spoke, without commentary or a summary of previous turns. Translating it to English can incorrectly switch the main agent’s reply language because the delegated instruction is its primary input.
+
+A subsequent isolated Gemini 3.1 Live synthetic-audio comparison reused identical PCM clips across the baseline and final prompt/tool definitions. The final delegate messages were “Ghi vào Notes là sáng mai tưới cây.”, “Mở Airbnb tìm chỗ ở Đà Nẵng giúp mình.”, and the follow-up “cuối tuần này hai người”. The baseline had changed the Notes request into “Remember to water the plants tomorrow morning.”, losing the named app and changing language. The Airbnb follow-up used the same provider session after a controlled `[TTS HISTORY]` clarification; the previous server completion boundary and new audio commit were confirmed. This establishes the observed delegation behavior for those synthetic clips, not microphone/wake-word performance, an actual main-agent clarification, or main-agent/desktop end-to-end completion. The isolated final result was recorded at `/tmp/buddy-rt-final/result.json` on the test device; no production prompt or service was changed by that evaluation.

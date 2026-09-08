@@ -2,7 +2,9 @@
 
 Native companion apps that let an Autonomous device control your computer via voice (open apps, navigate browser, type, etc.) — TeamViewer-style remote control, but driven by AI through the device.
 
-**Status:** Phase 1A — Mac-only scaffold. Menu bar shell that runs but does no networking yet.
+**Status:** macOS companion with pairing, WebSocket command execution, Accessibility observations, and screenshot feedback. Computer-use checks and remaining live acceptance scenarios are documented below.
+
+**Computer use:** [Device-driven desktop workflows](docs/computer-use.md) · [VI](docs/vi/computer-use_vi.md). Covers native UI observation, screenshot feedback, cancellation, and verification across apps.
 
 **Design doc:** [`docs/autonomous-buddy.md`](docs/autonomous-buddy.md) · [VI](docs/vi/autonomous-buddy_vi.md)
 **MVP plan:** [`docs/autonomous-buddy-mvp.md`](docs/autonomous-buddy-mvp.md) · [VI](docs/vi/autonomous-buddy-mvp_vi.md)
@@ -13,7 +15,7 @@ Native companion apps that let an Autonomous device control your computer via vo
 
 | Platform | Status | Folder |
 |----------|--------|--------|
-| **macOS 13+** | Phase 1A scaffold | [`macos/`](macos/) |
+| **macOS 13+** | Native companion | [`macos/`](macos/) |
 | Windows | Planned v1.2 (likely Tauri/Rust) | — |
 | Linux (X11) | Planned v1.3 | — |
 
@@ -93,20 +95,18 @@ autonomous-buddy/
 
 ---
 
-## What works (Phase 1A)
+## Computer-use implementation
 
-- Status bar icon (💡)
-- Menu with "Pair with device…", "About", "Quit"
-- Accessory activation policy (no Dock icon)
+- Menu bar, pairing, persistent device WebSocket, activity history, and Pause.
+- App/URL actions, keyboard/mouse input, clipboard, screenshots, and display geometry.
+- Bounded Accessibility trees and snapshot-scoped element actions for native apps.
+- Device-side synchronous workflow helper, actual image loading, and auxiliary vision fallback for text-only agents.
+- Cooperative cancellation, concurrent-input rejection, and connection-scoped responses.
 
-## What does NOT work yet
-
-- Device discovery (Phase 1B)
-- Pairing flow (Phase 1C)
-- WebSocket to device (Phase 1D)
-- Command execution (Phase 1E)
-
-Each phase ships as a separate PR. See [`docs/autonomous-buddy-mvp.md`](docs/autonomous-buddy-mvp.md) for the full breakdown.
+Unit and transport tests cover these components. Live multi-app workflows, current
+macOS permission behavior, and cancellation during real input still require the
+[acceptance checklist](docs/computer-use.md#manual-acceptance-checklist). A command
+returning success does not prove the user's whole task is complete.
 
 ---
 

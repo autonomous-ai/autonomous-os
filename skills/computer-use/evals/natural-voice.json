@@ -1,0 +1,169 @@
+{
+  "skill_name": "computer-use",
+  "purpose": "Natural spoken goals and short follow-ups. Run with mocked observations or an explicitly authorized desktop; these cases are not evidence of a live pass.",
+  "cases": [
+    {
+      "id": "lodging_followup",
+      "context": "A Mac is paired. Current trusted device date is 2026-09-08 in Asia/Ho_Chi_Minh. Browser starts on an unrelated tab. No stay dates are known.",
+      "turns": [
+        "Mở Airbnb tìm chỗ ở Đà Nẵng giúp mình",
+        "Cuối tuần này, hai người",
+        "Nhận thứ sáu ngày 11, trả chủ nhật ngày 13"
+      ],
+      "mock_observations": [
+        "Buddy desktop_info: connected, active Chrome, permissions available",
+        "Airbnb search form with destination, date and guest controls",
+        "After valid search: destination Da Nang, check-in 2026-09-11, check-out 2026-09-13, 2 adults; two listings with observed prices and links"
+      ],
+      "pass": [
+        "Routes initial short request to the complete desktop search workflow without requiring API/tool instructions",
+        "Asks for missing date and guest information, retaining destination and task across the reply",
+        "Does not invent weekend nights or interpret two people as two rooms",
+        "After exact dates arrive, resumes the same search, checks fields and reports observed listings rather than announcing only an opened tab"
+      ],
+      "fail": [
+        "Ends after an open_url marker",
+        "Answers the follow-up as unrelated small talk",
+        "Makes up dates or hotel inventory",
+        "Asks the user to formulate a technical prompt",
+        "Uses Chromium, Playwright, or another browser on the device instead of the paired Mac when asked to open Airbnb"
+      ]
+    },
+    {
+      "id": "lodging_correction",
+      "context": "Pending lodging task has Da Nang, September 11–13 2026, 2 guests. Search results are visible; no booking has been authorized.",
+      "turns": [
+        "À ba người, đổi sang Hội An nhé"
+      ],
+      "mock_observations": [
+        "Current form and results show the old destination and two guests",
+        "After update, form summary shows Hoi An and three guests with the original dates"
+      ],
+      "pass": [
+        "Updates destination and guest count while preserving dates",
+        "Refreshes observations and reads new results",
+        "Does not book or ask for already known stay dates"
+      ],
+      "fail": [
+        "Restarts by asking for all parameters",
+        "Reports stale Da Nang results",
+        "Treats three people as three rooms"
+      ]
+    },
+    {
+      "id": "notes_dictation",
+      "context": "A Mac is paired. Finder, not Notes, is currently focused. No note is selected.",
+      "turns": [
+        "Ghi vào Notes là chiều mua sữa"
+      ],
+      "mock_observations": [
+        "desktop_info shows Finder active",
+        "After opening Notes, sidebar and existing notes are visible",
+        "New note editor is focused",
+        "Saved note content reads chiều mua sữa"
+      ],
+      "pass": [
+        "Creates a new note in Notes without requiring the user to specify shortcuts or a title",
+        "Verifies focus before writing and verifies the resulting note text",
+        "Reports the created note in ordinary language"
+      ],
+      "fail": [
+        "Types into Finder",
+        "Overwrites an unrelated existing note",
+        "Stops after opening Notes",
+        "Asks for unnecessary permission to create the requested note"
+      ]
+    },
+    {
+      "id": "finder_create_rename",
+      "context": "A Mac is paired. Finder Downloads contains no folder named Hóa đơn or Chi tiêu. Device filesystem contents are irrelevant.",
+      "turns": [
+        "Tạo thư mục Hóa đơn trong Downloads giúp mình",
+        "Đổi tên nó thành Chi tiêu"
+      ],
+      "mock_observations": [
+        "Finder Downloads listing",
+        "After create, selected folder Hóa đơn in Downloads",
+        "After rename, same folder appears as Chi tiêu"
+      ],
+      "pass": [
+        "Creates the folder on the Mac and verifies its location/name",
+        "Resolves nó to the folder just created, refreshes the UI and renames that folder",
+        "Does not execute mkdir on the device or rename another selected item without verification"
+      ],
+      "fail": [
+        "Creates a device-local folder",
+        "Loses the preceding folder reference",
+        "Creates a second folder instead of renaming",
+        "Claims completion without destination evidence"
+      ]
+    },
+    {
+      "id": "cross_app_summary",
+      "context": "TextEdit on the Mac shows a synthetic document with Q1 120000 USD, Q2 150000 USD, Q3 135000 USD. Notes is installed.",
+      "turns": [
+        "Tóm tắt mấy số doanh thu đang mở rồi lưu vào Notes giúp mình"
+      ],
+      "mock_observations": [
+        "TextEdit document exposes the three revenue values",
+        "New Notes editor",
+        "Saved note includes total 405000 USD, Q2 highest, Q2 versus Q1 +25%, Q3 versus Q2 -10%"
+      ],
+      "pass": [
+        "Inspects the actual current app/document to resolve mấy số",
+        "Reads source values before summarizing",
+        "Creates and verifies the destination note without requiring a file path from the user"
+      ],
+      "fail": [
+        "Invents source data",
+        "Only opens Notes",
+        "Replaces the Mac workflow with a device file"
+      ]
+    },
+    {
+      "id": "stop_and_ambiguous_followup",
+      "context": "A lodging task is waiting for dates. An earlier task created a Notes note but no item is currently selected.",
+      "turns": [
+        "Thôi, dừng lại",
+        "Đổi tên nó đi"
+      ],
+      "mock_observations": [
+        "No active command after cancellation; browser remains visible"
+      ],
+      "pass": [
+        "Cancels the pending task and sends no further desktop input for it",
+        "Does not reinterpret stop as a date answer",
+        "Asks which item and new name are intended when the subsequent reference is ambiguous"
+      ],
+      "fail": [
+        "Continues the lodging search",
+        "Renames an arbitrary note, file or tab"
+      ]
+    },
+    {
+      "id": "target_on_secondary_display",
+      "context": "Mac has three displays: ID 1 is_main true shows Buddy, ID 4 shows Chrome Airbnb results, ID 5 shows Orca. Accessibility is unavailable. No windows need to be moved.",
+      "turns": [
+        "Đọc giúp mình mấy chỗ ở vừa tìm trên Airbnb"
+      ],
+      "mock_observations": [
+        "desktop_info reports Google Chrome active",
+        "list_displays enumerates IDs 1, 4, 5",
+        "screenshot or observe display_id 1 shows Buddy, not Chrome",
+        "screenshot or observe display_id 4 shows actual Airbnb listings plus display 4 image_to_global_points"
+      ],
+      "pass": [
+        "Enumerates displays and performs bounded explicit-display observations until Chrome is found",
+        "Does not infer Chrome failed or results are absent from the unrelated main-display image",
+        "Reads observed Airbnb results on display 4 and retains ID 4 and its transform for subsequent actions",
+        "Leaves all windows in place"
+      ],
+      "fail": [
+        "Repeatedly observes only is_main display 1",
+        "Claims Airbnb is unavailable from the Buddy screenshot",
+        "Uses display 1 geometry for targets on display 4",
+        "Moves the Chrome window to the main display without being asked"
+      ]
+    }
+  ]
+}

@@ -161,17 +161,31 @@ thiết bị ở trên, nên các deployment `/root/.claudecode` hiện có ch�
 
 ## 4. Gửi một lượt (`chat.go`)
 
-Shape giống hệt picoclaw: `sendChat` đánh dấu busy + cất pending runID **trước
+`sendChat` tuần tự hóa socket write, đánh dấu busy và thêm cặp request/run vào FIFO **trước
 khi** ghi frame, phát flow event `chat_input`/`chat_send`, và return ngay khi
 frame được ghi — reply về trên read loop. Frame outbound:
 
 ```json
-{"type":"message.send","id":"chat-42","payload":{
+{"type":"message.send","id":"chat-42","run_id":"device-chat-42-…","payload":{
   "content":"...","attachments":[{"type":"image","url":"data:image/jpeg;base64,..."}]}}
 ```
 
-Claude tự serialize các input đang queue, nên mỗi lúc chỉ một turn in-flight và
-tương quan pending/current runID đơn lẻ vẫn đúng.
+Claude tự xử lý tuần tự các input. Adapter giữ mọi cặp request/run đang chờ
+thay vì một biến bị ghi đè: success/error chỉ kết thúc lượt hiện tại; callback
+idle không xóa busy khi còn lượt đang chạy hoặc đã gửi đang chờ.
+
+Khi WebSocket kết nối lại, adapter gửi tiếp queue cục bộ **chưa gửi**, giữ
+nguyên run ID và quy tắc speaker gate. Callback idle lúc offline giữ queue;
+nếu socket biến mất trước write, phần chưa gửi được đưa lại vào queue. Lỗi
+sau khi đã thử ghi có kết quả giao nhận không chắc chắn nên không tự gửi lại.
+Bridge cũng không thử lại stdin write lỗi/thiếu byte; chỉ buffer khi child
+chưa có stdin. Disconnect xóa correlation của lượt đã gửi, không replay nó.
+
+Giới hạn: stdout Claude hiện không có request/run tag và adapter dùng FIFO.
+Native channel xen vào một lượt đã gửi hoặc mất frame qua reconnect chưa thể
+được đối chiếu chắc chắn; không suy diễn rằng đây là parity với bridge Codex
+có tag. Khi không có lượt đã gửi đang chờ, lượt native nhận run ID mới.
+
 
 `sendChat` cũng tái hiện hook `emotion-acknowledge` của OpenClaw **native bằng
 Go** (`emotion_ack.go`, mirror codex/hermes/picoclaw): mỗi turn user-visible

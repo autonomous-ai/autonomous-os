@@ -19,14 +19,15 @@ import (
 
 // turnResult mirrors bridge.py's per-run result dict.
 type turnResult struct {
-	rc            int
-	threadStarted bool
-	turnEnded     bool // saw turn.completed or turn.failed
-	timedOut      bool
-	spawnFailed   bool
-	stderrTail    string   // bounded tail of stderr
-	stdoutTail    string   // bounded tail of non-JSON stdout (resume heuristics)
-	heldFrames    [][]byte // terminal failure frames held back during a resumed attempt
+	rc             int
+	threadStarted  bool
+	turnEnded      bool // saw turn.completed or turn.failed
+	timedOut       bool
+	outputRejected bool
+	spawnFailed    bool
+	stderrTail     string   // bounded tail of stderr
+	stdoutTail     string   // bounded tail of non-JSON stdout (resume heuristics)
+	heldFrames     [][]byte // terminal failure frames held back during a resumed attempt
 }
 
 // turnWorker drains the op queue one entry at a time (strict serialization).
@@ -39,7 +40,7 @@ func (s *Server) turnWorker(ctx context.Context) {
 		case o := <-s.ops:
 			switch o.kind {
 			case opTurn:
-				s.runTurn(ctx, o.payload)
+				s.runCorrelatedTurn(ctx, o.payload)
 			case opSessionNew:
 				log.Printf("%s session.new — clearing thread id, next turn starts fresh", logPrefix)
 				s.clearSession()
@@ -76,7 +77,7 @@ func (s *Server) runTurn(ctx context.Context, payload turnPayload) {
 				logPrefix, resumeID, res.rc, len(res.heldFrames))
 			s.clearSession()
 			res = s.execTurn(ctx, payload.Content, images, "")
-		} else {
+		} else if !res.outputRejected {
 			// Resumed attempt is terminal (no fresh retry) — release what was held.
 			for _, frame := range res.heldFrames {
 				s.send(frame)
@@ -85,6 +86,11 @@ func (s *Server) runTurn(ctx context.Context, payload turnPayload) {
 	}
 
 	switch {
+	case res.outputRejected:
+		// Clear even a newly created thread. Its on-disk rollout contains the
+		// rejected output; never resume it or replay the task's earlier mutations.
+		s.clearSession()
+		s.sendError(degenerateOutputError)
 	case res.timedOut:
 		// A resumed turn that ran out of time takes the thread down with it.
 		// Rotation normally rides on a COMPLETED turn (the client's
@@ -126,7 +132,7 @@ func (s *Server) runTurn(ctx context.Context, payload turnPayload) {
 // path below), was not a timeout/spawn failure, and either never started a
 // thread or the output mentions the session/thread cannot be found.
 func resumeFailed(res turnResult) bool {
-	if res.timedOut || res.spawnFailed {
+	if res.timedOut || res.spawnFailed || res.outputRejected {
 		return false
 	}
 	if res.rc == 0 && res.turnEnded {
@@ -226,7 +232,7 @@ func (s *Server) execTurn(ctx context.Context, prompt string, images []string, r
 
 	var wg sync.WaitGroup
 	wg.Add(2)
-	go func() { defer wg.Done(); s.pumpStdout(stdout, &res, resumeID != "") }()
+	go func() { defer wg.Done(); s.pumpStdout(stdout, &res, resumeID != "", cancel) }()
 	go func() { defer wg.Done(); pumpStderr(stderr, &res) }()
 	wg.Wait()
 	err = cmd.Wait()
@@ -252,7 +258,7 @@ func (s *Server) execTurn(ctx context.Context, prompt string, images []string, r
 // instead of forwarded: the caller drops them when it retries fresh, or
 // forwards them when the resumed attempt is terminal. thread.started/item.*
 // frames still flow normally.
-func (s *Server) pumpStdout(r io.Reader, res *turnResult, holdFailures bool) {
+func (s *Server) pumpStdout(r io.Reader, res *turnResult, holdFailures bool, cancel context.CancelFunc) {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, scanBufSize), streamLimit)
 	for scanner.Scan() {
@@ -268,9 +274,24 @@ func (s *Server) pumpStdout(r io.Reader, res *turnResult, holdFailures bool) {
 		var evt struct {
 			Type     string `json:"type"`
 			ThreadID string `json:"thread_id"`
+			Item     struct {
+				Type     string `json:"type"`
+				ItemType string `json:"item_type"`
+				Text     string `json:"text"`
+			} `json:"item"`
 		}
 		hold := false
 		if json.Unmarshal([]byte(line), &evt) == nil {
+			kind := evt.Item.ItemType
+			if kind == "" {
+				kind = evt.Item.Type
+			}
+			if kind == "agent_message" && degenerateAssistantOutput(evt.Item.Text) {
+				res.outputRejected = true
+				log.Printf("%s rejected degenerate assistant output (bytes=%d); killing process group", logPrefix, len(evt.Item.Text))
+				cancel()
+				return // Do not forward this item, terminal success, or later output.
+			}
 			switch evt.Type {
 			case "thread.started":
 				res.threadStarted = true

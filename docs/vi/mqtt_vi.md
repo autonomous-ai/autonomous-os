@@ -326,6 +326,9 @@ tốc độ gửi đi trong `0.7–1.2`.
 
 | Kind | Mục đích | Field trong `data` |
 |------|----------|--------------------|
+| `buddy.pair.start` | Cấp mã pair Buddy 6 số, dùng một lần, hết hạn sau 60s | _(không; bỏ qua `data` tùy chọn)_ |
+| `buddy.pair.revoke` | Thu hồi pairing Buddy hiện tại và ngắt WebSocket | _(không; bỏ qua `data` tùy chọn)_ |
+| `buddy.status` | Đọc snapshot pairing/kết nối Buddy; cũng tự phát khi thay đổi | _(không có; `data` tùy chọn được bỏ qua)_ |
 | `tts.set` | Lưu cấu hình TTS voice/provider/language/speed | `provider`, `voice`, `language`, `speed` (tùy chọn) |
 | `tts.preview` | Preview TTS một lần (không ghi config) | `text` (bắt buộc), tùy chọn `provider`/`voice`/`language` |
 | `wakeword.gate` | Bật/tắt wake-word gate top-level (bất đồng bộ; ack `starting`) | `enabled` (boolean bắt buộc) |
@@ -952,6 +955,95 @@ Thay thế: `integrations/chat-bridges/autonomous-chat-hook/` forward chat từ
 backend một chiều dưới dạng `type:"voice"`, nên device đọc to câu trả lời và
 không có gì quay về. Nó không thể làm nền cho một UI chat; cặp kind này thay nó ở
 mục đích đó.
+
+### `buddy.pair.start` — Cấp mã pair Buddy
+
+**Nhận trên `fa_channel`:**
+```json
+{"cmd":"data","kind":"buddy.pair.start","data":{}}
+```
+
+`data` là tùy chọn và được bỏ qua. Phản hồi đồng bộ trên `fd_channel` dùng
+`MQTTDataResponse`, gồm metadata device/version/id/mac/time chuẩn cộng với:
+```json
+{"type":"data","kind":"buddy.pair.start","status":"success","data":{"code":"123456","expires_in":60}}
+```
+
+Lệnh gọi cùng Buddy service với `POST /api/buddy/pair/start` có admin auth.
+Mã là chuỗi sáu chữ số, có hiệu lực 60 giây và chỉ dùng một lần.
+Cấp mã mới qua HTTP hoặc MQTT sẽ thay thế mã đang chờ từ cả hai transport.
+Khi lỗi, phản hồi dùng các field chuẩn `status:"failure"` và `error`.
+
+Phân quyền MQTT dựa trên credentials của broker và ACL của topic hiện có;
+backend phải kiểm tra quyền chủ sở hữu thiết bị trước khi publish yêu cầu.
+Xác nhận vẫn dùng `POST /api/buddy/pair/confirm` qua LAN; MQTT không xác nhận
+pairing. Query và thông báo thay đổi dùng `buddy.status` bên dưới.
+
+### `buddy.pair.revoke` — Thu hồi pairing Buddy
+
+**Nhận trên `fa_channel`:**
+```json
+{"cmd":"data","kind":"buddy.pair.revoke","data":{}}
+```
+
+`data` là tùy chọn và được bỏ qua. Phản hồi đồng bộ trên `fd_channel` dùng
+`MQTTDataResponse`, gồm metadata device/version/id/mac/time chuẩn cộng với:
+```json
+{"type":"data","kind":"buddy.pair.revoke","status":"success","data":{"revoked":true}}
+```
+
+Lệnh gọi `buddy.Service.Unpair`, cùng thao tác với `DELETE /api/buddy`:
+đóng WebSocket đang hoạt động, xóa pairing hiện tại và dữ liệu pairing đã lưu,
+đồng thời vô hiệu hóa token đã pair. Gọi lại khi chưa có pairing cũng thành công.
+Mã pairing đang chờ không bị hủy.
+
+Khi lỗi, gồm Buddy service không khả dụng hoặc không lưu được việc xóa pairing,
+phản hồi dùng các field chuẩn `status:"failure"` và `error`.
+Phân quyền MQTT dựa trên credentials của broker và ACL của topic hiện có;
+backend phải kiểm tra quyền chủ sở hữu thiết bị trước khi publish yêu cầu.
+
+### `buddy.status` — Đọc và theo dõi trạng thái Buddy
+
+**Nhận trên `fa_channel`:**
+```json
+{"cmd":"data","kind":"buddy.status","data":{}}
+```
+
+`data` là tùy chọn và được bỏ qua. Phản hồi query và thông báo trạng thái tự phát
+cùng dùng envelope `MQTTDataResponse` chuẩn trên `fd_channel` (lược bỏ metadata
+thiết bị trong ví dụ):
+```json
+{"type":"data","kind":"buddy.status","status":"success","data":{"paired":true,"connected":false,"instance_id":"service-instance-id","revision":1,"buddy_id":"buddy-id","name":"Leo’s Mac","os_version":"15.0","paired_at":"2026-09-08T10:00:00Z"}}
+```
+
+Snapshot chưa pair chỉ có `paired:false`, `connected:false`, `instance_id` và
+`revision`. `buddy_id`, `name`, `os_version`, `paired_at` dạng RFC3339 mô tả Mac
+đã pair và bị bỏ khi chưa pair (chuỗi tùy chọn rỗng cũng bị bỏ). Không có token,
+mã pairing hoặc fingerprint. `paired` nghĩa là có pairing đã lưu; `connected`
+nghĩa là WebSocket của Mac đó đang hoạt động. Mac ngắt kết nối hoặc pause vẫn
+còn paired.
+
+`instance_id` đổi mỗi lần Buddy service khởi động lại. `revision` là số nguyên
+không dấu 64 bit, bắt đầu từ 0 và tăng sau khi pair, revoke, kết nối WebSocket
+hoặc ngắt kết nối hiện tại thành công. Chỉ so revision trong cùng instance:
+bỏ bản trùng và revision thấp hơn; instance mới bắt đầu chuỗi trạng thái mới.
+Query không tăng revision.
+
+Service phát snapshot lúc khởi động và phát bất đồng bộ khi trạng thái đổi,
+gồm HTTP confirm, revoke qua HTTP/MQTT và Buddy tự revoke. Queue có giới hạn,
+gộp thay đổi đang chờ thành trạng thái mới nhất; đây là đồng bộ trạng thái,
+không bảo đảm lịch sử mọi bước chuyển. Publish FD dùng QoS 1, không retain.
+Lỗi publish chỉ log rồi bỏ, không hoàn tác pairing; client phải query sau khi
+subscribe, reconnect hoặc resume. Status có thể đến trước phản hồi lệnh
+pair/revoke. Query khi service không khả dụng trả `status:"failure"` cùng `error`.
+
+**Mobile MQTT trực tiếp:** dùng cấu hình broker và ACL topic sẵn có của thiết bị,
+client ID riêng duy nhất cho app (không dùng client ID của device). Subscribe
+`fd_channel` của thiết bị, chờ SUBACK rồi publish `buddy.status` hoặc các lệnh
+`buddy.pair.start` / `buddy.pair.revoke` hiện có lên `fa_channel`. Không cần sửa
+BFF. Cần kiểm chứng ACL và khả năng truy cập broker từ mạng mobile trên triển
+khai thật. Luồng phục vụ app foreground đang kết nối, không phải push notification
+khi app đã đóng. Xem [prompt bàn giao mobile](../buddy-mobile-handoff_vi.md).
 
 ### `ota` — Trigger OTA update
 

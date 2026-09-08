@@ -387,6 +387,10 @@ const (
 
 // Data kinds carried inside CommandData envelope.
 const (
+	KindBuddyPairStart  = "buddy.pair.start"  // issue the shared 6-digit Buddy pairing code (60s)
+	KindBuddyStatus     = "buddy.status"      // query or report the current public Buddy state
+	KindBuddyPairRevoke = "buddy.pair.revoke" // revoke the current Buddy pairing
+
 	KindTTSSet       = "tts.set"       // persist TTS voice/provider/language config
 	KindTTSPreview   = "tts.preview"   // one-shot TTS preview, no config write
 	KindDeviceRename = "device.rename" // rewrite IDENTITY.md Name (WatchIdentity picks up wake-words)
