@@ -13,6 +13,8 @@ The MVP-only implementation plan lives in [`autonomous-buddy-mvp.md`](./autonomo
 
 [Autonomous Buddy](./agent-manager.md) now packages the Electron/React workspace and Swift native helper in one `Autonomous Buddy.app`. Electron owns projects, worktrees, sessions, terminals and Git review; Swift owns pairing, the device WebSocket and computer-use executors. The embedded helper retains the native menu-bar icon without a second Dock icon, uses private JSONL child-process pipes, and exits when Electron closes its input pipe. Closing the workspace keeps Buddy running; the menu bar can reopen Agent Manager or quit the entire app. **Computer & device** in the main app exposes pairing, status, pause, permission management and Activity. `make build` / `make install` build and install both components together; users install one app. Paired-device `agent.*` commands route into managed sessions with explicit project/session IDs, request receipts and bounded event history; completion/attention notices return over the same WebSocket. See the [native bridge contract](./native-bridge.md). Live lamp verification remains separate from mock transport tests.
 
+The [desktop Settings guide](./settings.md) covers the macOS Settings / ⌘, entry, searchable Appearance controls, persistent theme/font/zoom preferences, terminal styling and footer visibility.
+
 The May design below is historical computer-use context, not the current packaging or UI contract. Its Swift-only/menu-bar decision is superseded by this single-app architecture. See the [agent-manager contract](./agent-manager.md) for current IPC and lifecycle behavior.
 
 ---

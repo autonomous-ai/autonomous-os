@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { BuddyAPI, BuddyUpdate, NativeState } from '../shared/types'
+import type { BuddyAPI, BuddyUpdate, NativeState, AppSettings } from '../shared/types'
 
 const focusListeners = new Set<(id: string) => void>()
 let pendingFocus: string | undefined
@@ -8,7 +8,28 @@ ipcRenderer.on('buddy:focusSession', (_event, id: unknown) => {
   if (!focusListeners.size) pendingFocus = id
   else for (const listener of focusListeners) listener(id)
 })
+const settingsListeners = new Set<() => void>()
+let pendingSettings = false
+ipcRenderer.on('buddy:openSettings', () => {
+  if (!settingsListeners.size) pendingSettings = true
+  else for (const listener of settingsListeners) listener()
+})
 const api: BuddyAPI = {
+  settings: () => ipcRenderer.invoke('buddy:settings'),
+  updateAppearance: (patch) => ipcRenderer.invoke('buddy:updateAppearance', patch),
+  onSettings: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, settings: AppSettings) => listener(settings)
+    ipcRenderer.on('buddy:settingsChanged', handler)
+    return () => ipcRenderer.removeListener('buddy:settingsChanged', handler)
+  },
+  onOpenSettings: (listener) => {
+    settingsListeners.add(listener)
+    if (pendingSettings) {
+      pendingSettings = false
+      queueMicrotask(() => { if (settingsListeners.has(listener)) listener() })
+    }
+    return () => { settingsListeners.delete(listener) }
+  },
   onFocusSession: (listener) => {
     focusListeners.add(listener)
     if (pendingFocus) {

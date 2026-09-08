@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
+import { useAppearance } from './useAppearance'
 import type { SessionEvent } from '../shared/types'
 function mergeEvents(a: SessionEvent[], b: SessionEvent[]) {
   return [...new Map([...a, ...b].map((event) => [event.seq, event])).values()]
@@ -18,6 +19,8 @@ export default function TerminalView({
   focused?: boolean
   onError: (error: unknown) => void
 }) {
+  const { appearance, resolvedTheme } = useAppearance()
+  const fitAddon = useRef<FitAddon | null>(null)
   const host = useRef<HTMLDivElement>(null)
   const terminal = useRef<Terminal | null>(null)
   const focusedRef = useRef(focused)
@@ -31,29 +34,10 @@ export default function TerminalView({
       hydrated = false,
       lastSeq = 0
     const queued: SessionEvent[] = []
-    const term = new Terminal({
-      cursorBlink: true,
-      fontSize: 13,
-      fontFamily: '"SFMono-Regular", Menlo, Consolas, monospace',
-      lineHeight: 1.4,
-      scrollback: 5000,
-      theme: {
-        background: '#23262c',
-        foreground: '#d7dae0',
-        cursor: '#a6c7ad',
-        selectionBackground: '#465451',
-        black: '#282c34',
-        red: '#e79a99',
-        green: '#a4c795',
-        yellow: '#dfc58f',
-        blue: '#91b9db',
-        magenta: '#c4a6d8',
-        cyan: '#8bc5c3',
-        white: '#d7dae0',
-      },
-    })
+    const term = new Terminal({ scrollback: 5000 })
     terminal.current = term
     const fit = new FitAddon()
+    fitAddon.current = fit
     term.loadAddon(fit)
     term.open(host.current)
     const write = (event: SessionEvent) => {
@@ -92,9 +76,34 @@ export default function TerminalView({
       unsubscribe()
       data.dispose()
       resize.dispose()
-      if (terminal.current === term) terminal.current = null
+      if (terminal.current === term) { terminal.current = null; fitAddon.current = null }
       term.dispose()
     }
   }, [sessionId, onError])
+  useEffect(() => {
+    const term = terminal.current
+    if (!term) return
+    term.options.fontFamily = `"${appearance.terminalFontFamily}", Menlo, Monaco, monospace`
+    term.options.fontSize = appearance.terminalFontSize
+    term.options.lineHeight = appearance.terminalLineHeight
+    term.options.cursorBlink = appearance.cursorBlink
+    term.options.cursorStyle = appearance.cursorStyle
+    term.options.theme = resolvedTheme === 'light' ? {
+      background: '#ffffff', foreground: '#243042', cursor: '#24643e', selectionBackground: '#cee0f5',
+      black: '#283342', red: '#aa2438', green: '#21663b', yellow: '#865c09', blue: '#225db2',
+      magenta: '#7f369e', cyan: '#146977', white: '#687486',
+      brightBlack: '#596579', brightRed: '#c52a45', brightGreen: '#207847', brightYellow: '#946700',
+      brightBlue: '#2a66c0', brightMagenta: '#9746af', brightCyan: '#1c7e8b', brightWhite: '#42536b',
+    } : {
+      background: '#23262c', foreground: '#d7dae0', cursor: '#a6c7ad', selectionBackground: '#465451',
+      black: '#282c34', red: '#e79a99', green: '#a4c795', yellow: '#dfc58f', blue: '#91b9db',
+      magenta: '#c4a6d8', cyan: '#8bc5c3', white: '#d7dae0',
+    }
+    const frame = requestAnimationFrame(() => {
+      if (terminal.current === term && host.current?.clientWidth) fitAddon.current?.fit()
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [sessionId, onError, appearance.terminalFontFamily, appearance.terminalFontSize,
+    appearance.terminalLineHeight, appearance.cursorBlink, appearance.cursorStyle, resolvedTheme])
   return <div className="terminal-host" ref={host} aria-label="Interactive terminal" />
 }

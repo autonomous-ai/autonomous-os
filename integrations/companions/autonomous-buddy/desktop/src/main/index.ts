@@ -1,19 +1,21 @@
-import { app, BrowserWindow, dialog, ipcMain, Notification, Menu, shell, clipboard } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Notification, Menu, shell, clipboard, nativeTheme } from 'electron'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { execFileSync } from 'node:child_process'
 import { homedir } from 'node:os'
+import { SettingsStore } from './settings'
 import { Manager } from './manager'
 import { AgentDeviceBridge } from './agent-device-bridge'
 import { ProviderUsageService } from './provider-usage'
 import { NativeHelper } from './native-helper'
-import type { BuddyUpdate } from '../shared/types'
+import type { BuddyUpdate, AppearanceSettings } from '../shared/types'
 
 app.setName('Autonomous Buddy')
 if (process.env.BUDDY_DATA_DIR) app.setPath('userData', process.env.BUDDY_DATA_DIR)
 const rendererPath = join(__dirname, '../renderer/index.html')
 let window: BrowserWindow | null = null
 let manager: Manager
+let settings: SettingsStore
 let native: NativeHelper
 let agentBridge: AgentDeviceBridge
 let deviceConnected = false
@@ -48,6 +50,20 @@ function publish(update: BuddyUpdate) {
   }
 }
 
+function applyAppearance(patch: Partial<AppearanceSettings>) {
+  const value = settings.update(patch)
+  nativeTheme.themeSource = value.appearance.theme
+  if (window && !window.isDestroyed()) {
+    window.webContents.setZoomFactor(value.appearance.zoom)
+    window.setBackgroundColor(nativeTheme.shouldUseDarkColors ? '#202124' : '#f5f6f8')
+    window.webContents.send('buddy:settingsChanged', value)
+  }
+  return value
+}
+function zoomBy(delta: number) {
+  const current = settings.read().appearance.zoom
+  applyAppearance({ zoom: Math.min(1.5, Math.max(0.75, Math.round((current + delta) * 100) / 100)) })
+}
 function createWindow() {
   window = new BrowserWindow({
     width: 1460,
@@ -55,7 +71,7 @@ function createWindow() {
     minWidth: 960,
     minHeight: 620,
     title: 'Autonomous Buddy',
-    backgroundColor: '#202124',
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#202124' : '#f5f6f8',
     titleBarStyle: 'hiddenInset',
     trafficLightPosition: { x: 16, y: 17 },
     webPreferences: {
@@ -76,6 +92,7 @@ function createWindow() {
   window.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) =>
     callback(false),
   )
+  window.webContents.setZoomFactor(settings.read().appearance.zoom)
   void window.loadFile(rendererPath)
   window.on('closed', () => {
     window = null
@@ -123,6 +140,8 @@ else {
           .filter(Boolean)
           .join(':')
       }
+      settings = new SettingsStore(app.getPath('userData'))
+      nativeTheme.themeSource = settings.read().appearance.theme
       manager = new Manager(app.getPath('userData'), publish)
       const nativeExecutable = app.isPackaged
         ? join(process.resourcesPath, 'native/AutonomousBuddy')
@@ -160,6 +179,8 @@ else {
         })
         return choice.canceled || !choice.filePaths[0] ? null : manager.addProject(choice.filePaths[0])
       })
+      handle('settings', () => settings.read())
+      handle('updateAppearance', (patch) => applyAppearance(patch as Partial<AppearanceSettings>))
       handle('providerUsage', async (force) => {
         if (force !== undefined && typeof force !== 'boolean') throw new Error('Invalid refresh flag')
         if (process.env.BUDDY_NATIVE_TEST_MODE === '1') return ['claude', 'codex'].map((provider) => ({
@@ -211,10 +232,31 @@ else {
         Menu.buildFromTemplate([
           {
             label: 'Autonomous Buddy',
-            submenu: [{ role: 'about' }, { type: 'separator' }, { role: 'quit' }],
+            submenu: [
+              { role: 'about' },
+              { label: 'Settings…', accelerator: 'CmdOrCtrl+,', click: () => {
+                showManager()
+                const target = window
+                if (!target) return
+                const open = () => { if (!target.isDestroyed()) target.webContents.send('buddy:openSettings') }
+                if (target.webContents.isLoadingMainFrame()) target.webContents.once('did-finish-load', open)
+                else open()
+              } },
+              { type: 'separator' },
+              { role: 'services' },
+              { type: 'separator' },
+              { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' },
+              { type: 'separator' }, { role: 'quit' },
+            ],
           },
           { role: 'editMenu' },
-          { role: 'viewMenu' },
+          { label: 'View', submenu: [
+            { role: 'reload' }, { role: 'toggleDevTools' }, { type: 'separator' },
+            { label: 'Zoom In', accelerator: 'CmdOrCtrl+=', click: () => zoomBy(0.05) },
+            { label: 'Zoom Out', accelerator: 'CmdOrCtrl+-', click: () => zoomBy(-0.05) },
+            { label: 'Reset Zoom', accelerator: 'CmdOrCtrl+0', click: () => applyAppearance({ zoom: 1 }) },
+            { type: 'separator' }, { role: 'togglefullscreen' },
+          ] },
           { role: 'windowMenu' },
         ]),
       )
@@ -223,6 +265,8 @@ else {
     })
     .catch((error: unknown) => {
       console.error(error)
+      dialog.showErrorBox('Autonomous Buddy could not start',
+        `${error instanceof Error ? error.message : 'Unexpected startup error'}.\n\nIf settings could not load, back up and rename settings.json in ${app.getPath('userData')}, then reopen Buddy. Your existing files are preserved.`)
       app.quit()
     })
   app.on('window-all-closed', () => {

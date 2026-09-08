@@ -103,7 +103,13 @@ export interface NativeCommandResult {
 }
 export type { ProviderUsage } from './provider-usage'
 import type { ProviderUsage } from './provider-usage'
+export type { AppSettings, AppearanceSettings } from './settings'
+import type { AppSettings, AppearanceSettings } from './settings'
 export interface BuddyAPI {
+  settings(): Promise<AppSettings>
+  updateAppearance(patch: Partial<AppearanceSettings>): Promise<AppSettings>
+  onSettings(listener: (settings: AppSettings) => void): () => void
+  onOpenSettings(listener: () => void): () => void
   onFocusSession(listener: (id: string) => void): () => void
   providerUsage(refresh?: boolean): Promise<ProviderUsage[]>
   onCloseActiveTab(listener: () => void): () => void

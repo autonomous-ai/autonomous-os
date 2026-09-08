@@ -23,6 +23,8 @@ import { GitPanel } from './GitPanel'
 import { ComputerPanel } from './ComputerPanel'
 import { WorkspaceSidebar } from './WorkspaceSidebar'
 import { ProviderUsageBar } from './ProviderUsageBar'
+import { SettingsPage } from './SettingsPage'
+import { useAppearance } from './useAppearance'
 
 export const providerName = (provider: Provider) =>
   ({ codex: 'Codex', claude: 'Claude Code', terminal: 'Terminal' })[provider]
@@ -42,10 +44,48 @@ export function StatusDot({ session }: { session: Session }) {
 }
 
 type Selection = { projectId: string; path: string }
-type Modal = 'session' | 'worktree' | 'settings' | 'computer' | null
+type Modal = 'session' | 'worktree' | 'computer' | null
 const emptySnapshot: Snapshot = { projects: [], sessions: [], providers: [], workspaces: [] }
 
 export function App() {
+  const { appearance } = useAppearance()
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const settingsOpenRef = useRef(false)
+  const settingsReturnFocus = useRef<HTMLElement | null>(null)
+  const restoreSettingsFocus = useRef(false)
+  const openSettings = useCallback(() => {
+    if (!settingsOpenRef.current) {
+      settingsReturnFocus.current = document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null
+    }
+    settingsOpenRef.current = true
+    restoreSettingsFocus.current = false
+    setSettingsOpen(true)
+  }, [])
+  const closeSettings = useCallback((restoreFocus = true) => {
+    settingsOpenRef.current = false
+    restoreSettingsFocus.current = restoreFocus
+    setSettingsOpen(false)
+  }, [])
+  useEffect(() => {
+    if (settingsOpen || !restoreSettingsFocus.current) return
+    // Wait for the overlay to unmount and the workspace's inert attribute to clear.
+    const frame = requestAnimationFrame(() => {
+      restoreSettingsFocus.current = false
+      const previous = settingsReturnFocus.current
+      settingsReturnFocus.current = null
+      if (!document.hasFocus() || document.querySelector('[role="dialog"]')) return
+      const target = previous?.isConnected && previous !== document.body &&
+        !previous.closest('[inert]') && !previous.matches(':disabled')
+        ? previous
+        : document.querySelector<HTMLElement>(
+          '.session-pane.focused textarea, button[aria-label="Workspace settings"]',
+        )
+      target?.focus({ preventScroll: true })
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [settingsOpen])
   const [snapshot, setSnapshot] = useState<Snapshot>(emptySnapshot)
   const [loaded, setLoaded] = useState(false)
   const [selection, setSelection] = useState<Selection | null>(null)
@@ -75,6 +115,15 @@ export function App() {
   const [preview, setPreview] = useState<{ name: string; text: string; diff: boolean } | null>(null)
   const [sidebarWidth, setSidebarWidth] = useState(280)
   const [gitWidth, setGitWidth] = useState(330)
+  useEffect(
+    () =>
+      window.buddy.onOpenSettings(() => {
+        setModal(null)
+        setRenameTab(null)
+        openSettings()
+      }),
+    [openSettings],
+  )
   useEffect(() => {
     if (!loaded) return
     localStorage.setItem('buddy.selection', JSON.stringify({ selection, sessionId }))
@@ -166,6 +215,10 @@ export function App() {
 
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
+      if (settingsOpenRef.current) {
+        if (event.key === 'Escape') closeSettings()
+        return
+      }
       if ((event.metaKey || event.ctrlKey) && event.key === 'k') {
         event.preventDefault()
         searchRef.current?.focus()
@@ -182,7 +235,7 @@ export function App() {
     }
     window.addEventListener('keydown', key)
     return () => window.removeEventListener('keydown', key)
-  }, [])
+  }, [closeSettings])
 
   const project = snapshot.projects.find((item) => item.id === selection?.projectId)
   const worktree = project && trees[project.id]?.find((tree) => tree.path === selection?.path)
@@ -348,7 +401,7 @@ export function App() {
           <Search size={13} /> Search <kbd>⌘ K</kbd>
         </button>
       </header>
-      <div className="workspace">
+      <div className="workspace" inert={settingsOpen}>
         {sidebarOpen && (
           <>
             <aside className="sidebar">
@@ -469,7 +522,7 @@ export function App() {
                 <button
                   className="icon-button"
                   aria-label="Workspace settings"
-                  onClick={() => setModal('settings')}
+                  onClick={openSettings}
                 >
                   <Settings2 size={16} />
                 </button>
@@ -627,32 +680,52 @@ export function App() {
           onError={fail}
         />
       </div>
-      <ProviderUsageBar />
-      <footer className="statusbar">
-        <span className="statusbar-left">
-          <span className="connection-dot" /> Local workspace{' '}
-          {worktree && (
-            <>
-              <GitBranch size={12} />
-              {worktree.branch || 'Detached HEAD'}
-            </>
-          )}
-        </span>
-        <span>
-          {active ? (
-            <>
-              <StatusDot session={active} />
-              {providerName(active.provider)}
-              <span className="status-separator">/</span>
-              {statusName(active)}
-            </>
-          ) : (
-            'Ready when you are'
-          )}
-          <span className="status-separator">·</span>
-          {snapshot.sessions.filter((session) => session.status === 'running').length} active
-        </span>
-      </footer>
+      {appearance.showUsage && <ProviderUsageBar />}
+      {appearance.showStatusBar && (
+        <footer className="statusbar">
+          <span className="statusbar-left">
+            <span className="connection-dot" /> Local workspace{' '}
+            {worktree && (
+              <>
+                <GitBranch size={12} />
+                {worktree.branch || 'Detached HEAD'}
+              </>
+            )}
+          </span>
+          <span>
+            {active ? (
+              <>
+                <StatusDot session={active} />
+                {providerName(active.provider)}
+                <span className="status-separator">/</span>
+                {statusName(active)}
+              </>
+            ) : (
+              'Ready when you are'
+            )}
+            <span className="status-separator">·</span>
+            {snapshot.sessions.filter((session) => session.status === 'running').length} active
+          </span>
+        </footer>
+      )}
+      {settingsOpen && (
+        <SettingsPage
+          providers={snapshot.providers}
+          project={project}
+          onClose={() => closeSettings()}
+          onComputer={() => {
+            closeSettings(false)
+            setModal('computer')
+          }}
+          onRemoveProject={async () => {
+            if (!project) return
+            await window.buddy.removeProject(project.id)
+            setSelection(null)
+            setSessionId(null)
+            setPreview(null)
+          }}
+        />
+      )}
       {renameTab && (
         <div className="modal-backdrop">
           <section className="modal" role="dialog" aria-modal="true" aria-label="Rename session">
@@ -712,9 +785,7 @@ export function App() {
                 ? 'New session'
                 : modal === 'worktree'
                   ? 'New worktree'
-                  : modal === 'computer'
-                    ? 'Computer & device'
-                    : 'Workspace settings'
+                  : 'Computer & device'
             }
           >
             <button
@@ -744,47 +815,8 @@ export function App() {
                   }
                 }}
               />
-            ) : modal === 'computer' ? (
-              <ComputerPanel onError={fail} />
             ) : (
-              <>
-                <h2>Workspace settings</h2>
-                <p>Agents use the CLI installations and accounts on this computer.</p>
-                <div className="provider-settings">
-                  {snapshot.providers.map((provider) => (
-                    <div key={provider.id}>
-                      <span>{providerName(provider.id)}</span>
-                      <span className={provider.available ? 'available' : 'muted'}>
-                        {provider.available ? 'Available' : 'Not installed'}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-                <p>
-                  <button className="secondary-button" onClick={() => setModal('computer')}>
-                    <Monitor size={14} /> Computer & device settings
-                  </button>
-                </p>
-                {project && (
-                  <button
-                    className="secondary-button"
-                    onClick={async () => {
-                      try {
-                        await window.buddy.removeProject(project.id)
-                        setSelection(null)
-                        setSessionId(null)
-                        setPreview(null)
-                        setModal(null)
-                      } catch (error) {
-                        fail(error)
-                      }
-                    }}
-                  >
-                    Remove {project.name} from workspace
-                  </button>
-                )}
-                <small className="muted">Removing a project does not delete its files.</small>
-              </>
+              <ComputerPanel onError={fail} />
             )}
           </section>
         </div>
