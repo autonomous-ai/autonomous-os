@@ -136,16 +136,8 @@ def finalize_session(
                 len(ser_audio_buffer),
             )
 
-    # Final snapshot of the buffer for traceability before it goes out of scope.
-    # 1 session = 1 speaking turn = this many frames.
-    buf_frames = len(audio_buffer)
+    # The caller logs the finalized buffer together with its interaction id,
+    # so a delayed metric cannot be mistaken for the next captured utterance.
     buf_bytes = sum(len(b) for b in audio_buffer)
     buf_duration = buf_bytes / (voice_cfg.STT_RATE * 2)
-    logger.info(
-        "Session END — buffer frames=%d bytes=%d duration=%.2fs transcript=%r",
-        buf_frames,
-        buf_bytes,
-        buf_duration,
-        combined or "(empty)",
-    )
     return combined, ser_audio_buffer, buf_duration

@@ -83,6 +83,7 @@ type PicoclawService struct {
 	// final / error frame (read). pendingRunID is the runID allocated by an
 	// outbound SendChat, adopted by the first inbound frame of that turn;
 	// currentRunID is the runID of the turn currently being streamed back.
+	sendMu       sync.Mutex // Serializes admission: this protocol has no response request IDs.
 	activeTurn   atomic.Bool
 	busySince    atomic.Int64
 	pendingRunID atomic.Value // string
@@ -97,8 +98,9 @@ type PicoclawService struct {
 	lastCompressAt atomic.Int64
 
 	// Pending sensing events buffered while busy.
-	pendingEventsMu sync.Mutex
-	pendingEvents   []pendingEvent
+	pendingEventsDrainMu sync.Mutex
+	pendingEventsMu      sync.Mutex
+	pendingEvents        []pendingEvent
 
 	// Run trackers (guard / broadcast / web_chat / silent / pose bucket).
 	guardRunsMu sync.Mutex

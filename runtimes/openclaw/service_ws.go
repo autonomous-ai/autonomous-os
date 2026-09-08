@@ -70,6 +70,10 @@ func (s *OpenclawService) StartWS(ctx context.Context, handler domain.AgentEvent
 }
 
 func (s *OpenclawService) runWSConn(ctx context.Context, handler domain.AgentEventHandler) error {
+	return s.runWSConnAt(ctx, handler, defaultGatewayWSURL)
+}
+
+func (s *OpenclawService) runWSConnAt(ctx context.Context, handler domain.AgentEventHandler, gatewayURL string) error {
 	s.wsConnected.Store(false)
 	s.wsConnectedAt.Store(0)
 	defer func() {
@@ -78,17 +82,17 @@ func (s *OpenclawService) runWSConn(ctx context.Context, handler domain.AgentEve
 	}()
 	defer s.activeTurn.Store(false) // clear busy on disconnect — lifecycle_end may never arrive
 
-	connStart := flow.Start("ws_connect", map[string]any{"url": defaultGatewayWSURL})
+	connStart := flow.Start("ws_connect", map[string]any{"url": gatewayURL})
 
 	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second}
-	conn, resp, err := dialer.DialContext(ctx, defaultGatewayWSURL, http.Header{})
+	conn, resp, err := dialer.DialContext(ctx, gatewayURL, http.Header{})
 	if err != nil {
 		if resp != nil {
 			flow.End("ws_connect", connStart, map[string]any{"error": err.Error(), "status": resp.Status})
-			return fmt.Errorf("dial %s: %w (status %s)", defaultGatewayWSURL, err, resp.Status)
+			return fmt.Errorf("dial %s: %w (status %s)", gatewayURL, err, resp.Status)
 		}
 		flow.End("ws_connect", connStart, map[string]any{"error": err.Error()})
-		return fmt.Errorf("dial %s: %w", defaultGatewayWSURL, err)
+		return fmt.Errorf("dial %s: %w", gatewayURL, err)
 	}
 	defer func() {
 		s.wsMu.Lock()
@@ -193,6 +197,10 @@ func (s *OpenclawService) runWSConn(ctx context.Context, handler domain.AgentEve
 			return fmt.Errorf("pairing rejected (%s): identity reset, will re-pair on next connect", reason)
 		}
 		return fmt.Errorf("pairing rejected: %s", connectErr.Error.Code)
+	}
+
+	if !connectErr.OK {
+		return fmt.Errorf("gateway connect rejected: %s", connectErr.Error.Code)
 	}
 
 	var connectResult struct {
@@ -343,6 +351,10 @@ func (s *OpenclawService) runWSConn(ctx context.Context, handler domain.AgentEve
 		close(eventCh)
 		<-handlerDone
 	}()
+
+	// The authenticated socket and event worker are ready. Only locally unsent
+	// events are drained; pending chat traces never become a replay source.
+	go s.drainPendingEvents()
 
 	for {
 		select {

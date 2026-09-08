@@ -1,5 +1,6 @@
 """The telemetry on/off switch and the hot-swap-safe playback hooks."""
 
+import json
 import re
 from pathlib import Path
 
@@ -29,6 +30,22 @@ def test_the_endpoint_is_the_switch(monkeypatch):
     for value in ("", "   "):
         monkeypatch.setenv(client.ENV_ANALYTICS_URL, value)
         assert client.enabled() is False, repr(value)
+
+
+def test_offline_log_preserves_ids_for_amendment_correlation(monkeypatch, caplog):
+    monkeypatch.delenv(client.ENV_ANALYTICS_URL, raising=False)
+    with caplog.at_level("INFO", logger="hal.telemetry"):
+        client.report("voice_metrics_interaction", {
+            "interaction_id": "vi-original", "amends_event_id": "",
+        }, event_id="int-vi-original")
+        client.report("voice_metrics_interaction", {
+            "interaction_id": "vi-original", "amends_event_id": "int-vi-original",
+        }, event_id="amend-correction")
+    marker = "[telemetry] voice_metrics_interaction "
+    rows = [json.loads(r.getMessage().split(marker, 1)[1])
+            for r in caplog.records if marker in r.getMessage()]
+    assert rows[1]["amends_event_id"] == rows[0]["event_id"]
+    assert rows[1]["event_id"] == "amend-correction"
 
 
 def test_a_configured_endpoint_lets_the_event_through(monkeypatch):

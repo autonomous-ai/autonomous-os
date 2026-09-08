@@ -79,7 +79,10 @@ def report(event_name: str, params: dict, event_id: str = "") -> None:
         }
         # The device-local record. Must exist whether or not the POST works —
         # and whether or not sending is enabled at all.
-        logger.info("[telemetry] %s %s", event_name, json.dumps(payload["params"], default=str))
+        logger.info(
+            "[telemetry] %s %s", event_name,
+            json.dumps({**payload["params"], "event_id": event_id}, default=str),
+        )
         if not enabled():
             logger.debug("[telemetry] not sent -- no %s configured", ENV_ANALYTICS_URL)
             return

@@ -18,33 +18,39 @@ struct ClickButtonExecutor: Executor {
         }
         let appName = params["app"] as? String
         let role = (params["role"] as? String) ?? (kAXButtonRole as String)
-        let maxDepth = (params["max_depth"] as? Int) ?? 50
+        let maxDepth = try ExecutorParameters.integer(params, "max_depth", default: 12, range: 1...30)
+        let maxNodes = try ExecutorParameters.integer(params, "max_nodes", default: 500, range: 1...500)
+        try Task.checkCancellation()
 
         guard AccessibilityCheck.isTrusted() else {
             AccessibilityCheck.requestPrompt()
             throw ExecutorError.permissionDenied("Accessibility access required for click_button")
         }
 
-        let workspace = NSWorkspace.shared
-        let apps: [NSRunningApplication]
-        if let appName {
-            apps = workspace.runningApplications.filter { app in
-                app.localizedName == appName
-                    || app.bundleIdentifier == appName
-                    || (app.bundleURL?.lastPathComponent == "\(appName).app")
+        let apps = await MainActor.run { () -> [NSRunningApplication] in
+            let workspace = NSWorkspace.shared
+            if let appName {
+                return workspace.runningApplications.filter { app in
+                    app.localizedName == appName
+                        || app.bundleIdentifier == appName
+                        || (app.bundleURL?.lastPathComponent == "\(appName).app")
+                }
             }
-            if apps.isEmpty {
-                throw ExecutorError.actionFailed("app not running: \(appName)")
-            }
-        } else if let frontmost = workspace.frontmostApplication {
-            apps = [frontmost]
-        } else {
-            throw ExecutorError.actionFailed("no frontmost app — specify `app`")
+            return workspace.frontmostApplication.map { [$0] } ?? []
         }
+        guard !apps.isEmpty else {
+            throw ExecutorError.actionFailed(appName.map { "app not running: \($0)" } ?? "no frontmost app — specify `app`")
+        }
+        let deadline = Date().addingTimeInterval(3)
+        var remainingNodes = maxNodes
 
         for app in apps {
+            try Task.checkCancellation()
             let axApp = AXUIElementCreateApplication(app.processIdentifier)
-            if let element = findElement(in: axApp, label: label, role: role, maxDepth: maxDepth) {
+            if let element = try findElement(in: axApp, label: label, role: role, maxDepth: maxDepth,
+                                             remainingNodes: &remainingNodes, deadline: deadline) {
+                try Task.checkCancellation()
+                guard Date() < deadline else { throw ExecutorError.actionFailed("UI search budget exhausted; observe again") }
                 let result = AXUIElementPerformAction(element, kAXPressAction as CFString)
                 if result == .success {
                     return [
@@ -60,32 +66,44 @@ struct ClickButtonExecutor: Executor {
         throw ExecutorError.actionFailed("element not found: label=\(label) role=\(role)")
     }
 
-    private func findElement(in element: AXUIElement, label: String, role: String, maxDepth: Int, depth: Int = 0) -> AXUIElement? {
-        if depth > maxDepth { return nil }
-
-        if depth > 0 {  // skip the app root
-            var roleRef: AnyObject?
-            AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleRef)
-            if let elementRole = roleRef as? String, elementRole == role {
-                if matchLabel(element: element, target: label) {
+    private func findElement(in root: AXUIElement, label: String, role: String, maxDepth: Int,
+                             remainingNodes: inout Int, deadline: Date) throws -> AXUIElement? {
+        var stack: [(AXUIElement, Int)] = [(root, 0)]
+        var visited: [AXUIElement] = []
+        while let (element, depth) = stack.popLast() {
+            try Task.checkCancellation()
+            guard remainingNodes > 0, Date() < deadline else {
+                throw ExecutorError.actionFailed("UI search budget exhausted; use get_ui_tree or screenshot")
+            }
+            guard !visited.contains(where: { CFEqual($0, element) }) else { continue }
+            visited.append(element)
+            remainingNodes -= 1
+            AXUIElementSetMessagingTimeout(element, 0.2)
+            if depth > 0 {
+                var roleRef: AnyObject?
+                AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleRef)
+                if let elementRole = roleRef as? String, elementRole == role,
+                   try matchLabel(element: element, target: label, deadline: deadline) {
                     return element
                 }
             }
-        }
-
-        var childrenRef: AnyObject?
-        AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &childrenRef)
-        if let children = childrenRef as? [AXUIElement] {
-            for child in children {
-                if let found = findElement(in: child, label: label, role: role, maxDepth: maxDepth, depth: depth + 1) {
-                    return found
-                }
-            }
+            guard depth < maxDepth else { continue }
+            try Task.checkCancellation()
+            guard Date() < deadline else { throw ExecutorError.actionFailed("UI search budget exhausted") }
+            var count: CFIndex = 0
+            guard AXUIElementGetAttributeValueCount(element, kAXChildrenAttribute as CFString, &count) == .success,
+                  count > 0 else { continue }
+            let allowed = min(count, max(0, remainingNodes - stack.count))
+            guard allowed > 0 else { continue }
+            var childrenRef: CFArray?
+            guard AXUIElementCopyAttributeValues(element, kAXChildrenAttribute as CFString, 0, allowed, &childrenRef) == .success,
+                  let children = childrenRef as? [AXUIElement] else { continue }
+            stack.append(contentsOf: children.reversed().map { ($0, depth + 1) })
         }
         return nil
     }
 
-    private func matchLabel(element: AXUIElement, target: String) -> Bool {
+    private func matchLabel(element: AXUIElement, target: String, deadline: Date) throws -> Bool {
         let attrs: [CFString] = [
             kAXTitleAttribute as CFString,
             kAXDescriptionAttribute as CFString,
@@ -93,6 +111,8 @@ struct ClickButtonExecutor: Executor {
             "AXLabel" as CFString,
         ]
         for attr in attrs {
+            try Task.checkCancellation()
+            guard Date() < deadline else { throw ExecutorError.actionFailed("UI search budget exhausted") }
             var ref: AnyObject?
             AXUIElementCopyAttributeValue(element, attr, &ref)
             if let str = ref as? String,

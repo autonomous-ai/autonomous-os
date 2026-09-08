@@ -325,11 +325,19 @@ carries kind-specific fields. Every kind replies on fd_channel with the same sha
 the standard device/version metadata plus `kind`, `status` (`success|failure`),
 optional `error`, and an optional `data` payload.
 
+`tts.set` accepts optional `speed` in `0.25–4.0`, for example,
+`{"cmd":"data","kind":"tts.set","data":{"speed":1.2}}`. Omitting it
+preserves saved speed; without one, `HAL_TTS_SPEED` applies (default `1.3`).
+The command acknowledges `starting` then `success` or `failure`, saving and
+reapplying HAL settings even when unchanged. The `info` uplink includes effective
+`tts_speed`. ElevenLabs clamps the outgoing speed to `0.7–1.2`.
+
 **Receive:** `{"cmd": "data", "kind": "<kind>", "data": { ... }}`
 
 | Kind | Purpose | `data` fields |
 |------|---------|---------------|
-| `tts.set` | Persist TTS voice/provider/language config | `provider`, `voice`, `language` |
+| `buddy.pair.start` | Issue a single-use 6-digit Buddy pairing code, valid 60s | _(none; optional `data` ignored)_ |
+| `tts.set` | Persist TTS voice/provider/language/speed config | `provider`, `voice`, `language`, optional `speed` |
 | `tts.preview` | One-shot TTS preview (no config write) | `text` (required), optional `provider`/`voice`/`language` |
 | `wakeword.gate` | Set the top-level wake-word gate (async; acks `starting`) | `enabled` (required boolean) |
 | `timezone.set` | Apply the device's IANA timezone (async; acks `starting`) | `timezone` (required, e.g. `Asia/Ho_Chi_Minh`) |
@@ -975,6 +983,30 @@ are optional, since a file can be requested long after its run ended.
 Superseded: `integrations/chat-bridges/autonomous-chat-hook/` forwards backend
 chat one-way as `type:"voice"`, so the device speaks the reply and nothing comes
 back. It cannot back a chat UI; this pair replaces it for that purpose.
+
+### `buddy.pair.start` — Issue a Buddy pairing code
+
+**Receive on `fa_channel`:**
+```json
+{"cmd":"data","kind":"buddy.pair.start","data":{}}
+```
+
+`data` is optional and ignored. The synchronous response on `fd_channel` uses
+`MQTTDataResponse`, with the standard device/version/id/mac/time metadata plus:
+```json
+{"type":"data","kind":"buddy.pair.start","status":"success","data":{"code":"123456","expires_in":60}}
+```
+
+This calls the same Buddy service as admin-authenticated
+`POST /api/buddy/pair/start`. The code is a six-digit string,
+valid for 60 seconds and usable once. Issuing a new code through either
+HTTP or MQTT replaces any pending code from either transport. Failures use the
+standard `status:"failure"` and `error` fields.
+
+MQTT authorization relies on the existing broker credentials and topic ACLs;
+the backend must authorize the device owner before publishing the request.
+Confirmation still uses `POST /api/buddy/pair/confirm` over LAN. This adds no
+MQTT confirmation, status, or revocation commands.
 
 ### `ota` — Trigger OTA update
 

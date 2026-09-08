@@ -24,6 +24,8 @@ func nowUnixMs() int64 { return time.Now().UnixMilli() }
 // `part.reason == "stop"` carrying `part.tokens` (there is NO session.idle from
 // the CLI — the gatewayd synthesizes one on the process's clean exit, §gatewayd).
 type opencodeFrame struct {
+	RequestID string `json:"request_id"`
+	RunID     string `json:"run_id"`
 	Type      string `json:"type"`
 	SessionID string `json:"sessionID"`
 	Status    string `json:"status"` // session.status
@@ -182,7 +184,14 @@ func (s *OpenCodeService) translateFrame(raw []byte, dispatch func(domain.WSEven
 		return
 	}
 
-	// Capture the session id from any frame that carries one.
+	if f.Type == "bridge.rejected" {
+		s.rejectQueuedFrame(f, dispatch)
+		return
+	}
+	if isTurnFrame(f.Type) && !s.adoptFrameCorrelation(f, dispatch) {
+		return
+	}
+	// Capture the session only after correlation accepts the frame.
 	if f.SessionID != "" && f.SessionID != s.GetSessionKey() {
 		s.SetSessionKey(f.SessionID)
 	}
@@ -254,6 +263,10 @@ func (s *OpenCodeService) ensureTurnStarted(dispatch func(domain.WSEvent)) {
 	if runID == "" {
 		_, runID = s.NextChatRunID()
 	}
+	s.startTurn(runID, dispatch)
+}
+
+func (s *OpenCodeService) startTurn(runID string, dispatch func(domain.WSEvent)) {
 	s.setCurrentRunID(runID)
 	if !s.activeTurn.Load() {
 		s.busySince.Store(nowUnixMs())
@@ -365,7 +378,7 @@ func (s *OpenCodeService) emitToolEnd(id, result string, dispatch func(domain.WS
 //
 // The turn ids are reset BEFORE dispatch: the consumer calls SetBusy(false)
 // on chat.final / lifecycle.end, which synchronously drains queued sensing
-// events and starts the NEXT turn (fresh pendingRunID). Clearing here lets
+// events and starts the NEXT turn (fresh pending run ID). Clearing here lets
 // that turn's runID survive instead of being clobbered.
 func (s *OpenCodeService) emitFinal(dispatch func(domain.WSEvent)) {
 	s.ensureTurnStarted(dispatch)
@@ -392,11 +405,8 @@ func (s *OpenCodeService) emitFinal(dispatch func(domain.WSEvent)) {
 	}
 	slog.Info("opencode <<< turn completed", logArgs...)
 
-	// Clear ONLY currentRunID: pendingRunID belongs to the NEXT turn (it was
-	// already consumed at ensureTurnStarted for this one) — a sendChat that
-	// queued while this turn streamed must keep its runID so silent/web-chat
-	// markers still match.
-	s.currentRunID.Store("")
+	// Preserve later queued requests when the current turn finishes.
+	s.finishCurrentCorrelation()
 
 	// Telegram-originated turn (telegram_poll.go): DM the reply back to the
 	// originating chat. TTS was suppressed at injection (MarkSilentRun), so
@@ -476,11 +486,8 @@ func (s *OpenCodeService) handleError(msg string, dispatch func(domain.WSEvent))
 
 	// Reset turn ids before dispatch (see emitFinal) — the consumer clears busy
 	// on lifecycle.error, draining the next turn synchronously.
-	// Clear ONLY currentRunID: pendingRunID belongs to the NEXT turn (it was
-	// already consumed at ensureTurnStarted for this one) — a sendChat that
-	// queued while this turn streamed must keep its runID so silent/web-chat
-	// markers still match.
-	s.currentRunID.Store("")
+	// Preserve later queued requests when the current turn finishes.
+	s.finishCurrentCorrelation()
 	s.turnMu.Lock()
 	s.assistantParts = nil
 	s.toolStartSeen = nil
@@ -530,27 +537,132 @@ func (s *OpenCodeService) getCurrentRunID() string {
 
 func (s *OpenCodeService) setCurrentRunID(runID string) { s.currentRunID.Store(runID) }
 
-func (s *OpenCodeService) setPendingRunID(runID string) { s.pendingRunID.Store(runID) }
+func (s *OpenCodeService) addPendingRun(reqID, runID string) {
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
+	s.pendingRuns = append(s.pendingRuns, pendingRun{reqID: reqID, runID: runID})
+}
+
+func (s *OpenCodeService) hasPendingRuns() bool {
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
+	return len(s.pendingRuns) > 0
+}
+
+func (s *OpenCodeService) takePendingRun(reqID, runID string, fifo bool) pendingRun {
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
+	for i, pending := range s.pendingRuns {
+		if fifo || (reqID != "" && pending.reqID == reqID && (runID == "" || pending.runID == runID)) || (reqID == "" && runID != "" && pending.runID == runID) {
+			s.pendingRuns = append(s.pendingRuns[:i], s.pendingRuns[i+1:]...)
+			return pending
+		}
+	}
+	return pendingRun{}
+}
+
+func (s *OpenCodeService) removePendingRun(reqID string) { s.takePendingRun(reqID, "", false) }
 
 func (s *OpenCodeService) consumePendingRunID() string {
-	v, _ := s.pendingRunID.Load().(string)
-	if v != "" {
-		s.pendingRunID.Store("")
+	pending := s.takePendingRun("", "", true)
+	s.currentRequestID.Store(pending.reqID)
+	return pending.runID
+}
+
+func (s *OpenCodeService) finishCurrentCorrelation() {
+	reqID, _ := s.currentRequestID.Load().(string)
+	if reqID != "" {
+		s.pendingMu.Lock()
+		s.completedRequests = append(s.completedRequests, pendingRun{reqID: reqID, runID: s.getCurrentRunID()})
+		if len(s.completedRequests) > 256 {
+			s.completedRequests = s.completedRequests[len(s.completedRequests)-256:]
+		}
+		s.pendingMu.Unlock()
 	}
-	return v
+	s.currentRequestID.Store("")
+	s.currentRunID.Store("")
 }
 
 // clearTurn resets the in-flight turn ids without touching busy state. Used on
 // disconnect / busyTTL expiry / send failure. The normal end-of-turn path
 // clears the ids inline in emitFinal / handleError (before dispatch).
 func (s *OpenCodeService) clearTurn() {
-	// Clear ONLY currentRunID: pendingRunID belongs to the NEXT turn (it was
-	// already consumed at ensureTurnStarted for this one) — a sendChat that
-	// queued while this turn streamed must keep its runID so silent/web-chat
-	// markers still match.
+	s.pendingMu.Lock()
+	s.pendingRuns = nil
+	s.pendingMu.Unlock()
+	// Sent requests are uncertain after disconnect and are never replayed.
+	s.currentRequestID.Store("")
 	s.currentRunID.Store("")
 	s.turnMu.Lock()
 	s.assistantParts = nil
 	s.toolStartSeen = nil
 	s.turnMu.Unlock()
+}
+
+func isTurnFrame(kind string) bool {
+	switch kind {
+	case "step_start", "text", "reasoning", "tool_use", "step_finish", "message.updated", "session.idle", "session.status", "session.error", "error", "bridge.error":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *OpenCodeService) adoptFrameCorrelation(f opencodeFrame, dispatch func(domain.WSEvent)) bool {
+	if f.RequestID == "" && f.RunID == "" {
+		return true
+	} // old bridge: FIFO
+	if current := s.getCurrentRunID(); current != "" {
+		request, _ := s.currentRequestID.Load().(string)
+		if (f.RunID == "" || f.RunID == current) && (f.RequestID == "" || request == "" || f.RequestID == request) {
+			return true
+		}
+		slog.Warn("opencode: ignoring interleaved turn frame", "request_id", f.RequestID, "run_id", f.RunID, "current_run", current)
+		return false
+	}
+	s.pendingMu.Lock()
+	completed := false
+	for _, request := range s.completedRequests {
+		if f.RequestID != "" && request.reqID == f.RequestID && (f.RunID == "" || request.runID == f.RunID) {
+			completed = true
+			break
+		}
+	}
+	s.pendingMu.Unlock()
+	if completed {
+		return false
+	}
+	pending := s.takePendingRun(f.RequestID, f.RunID, false)
+	runID := pending.runID
+	if runID == "" {
+		runID = f.RunID
+	}
+	if runID == "" {
+		slog.Warn("opencode: unmatched request frame", "request_id", f.RequestID)
+		return false
+	}
+	requestID := f.RequestID
+	if requestID == "" {
+		requestID = pending.reqID
+	}
+	s.currentRequestID.Store(requestID)
+	if f.SessionID != "" && f.SessionID != s.GetSessionKey() {
+		s.SetSessionKey(f.SessionID)
+	}
+	s.startTurn(runID, dispatch)
+	return true
+}
+
+// Queue rejection is not a failure of the currently streaming turn. Remove
+// only the rejected pending request and emit its own correlated terminal event.
+func (s *OpenCodeService) rejectQueuedFrame(f opencodeFrame, dispatch func(domain.WSEvent)) {
+	pending := s.takePendingRun(f.RequestID, f.RunID, false)
+	if pending.runID == "" {
+		return
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"runId": pending.runID, "sessionKey": s.GetSessionKey(), "stream": "lifecycle",
+		"data": map[string]any{"phase": "error", "error": f.Error.Message, "endedAt": nowUnixMs()},
+	})
+	dispatch(domain.WSEvent{Type: "evt", Event: "agent", Payload: payload})
 }

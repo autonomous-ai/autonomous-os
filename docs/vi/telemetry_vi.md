@@ -63,6 +63,10 @@ deploy là `/opt/hal/.env`):
 
 Tắt không có nghĩa là mù: mọi thứ vẫn nằm trong log.
 
+JSON local của HAL chứa `event_id` của envelope gửi đi bên cạnh các tham số,
+để ghép event gốc với amendment khi đọc offline. Không thêm transcript hay
+nội dung giọng nói vào telemetry.
+
 ```bash
 journalctl -u hal -f | grep '\[telemetry\]'        # HAL: mọi dòng + lỗi POST
 journalctl -u os-server -f | grep '\[telemetry\]'  # os-server: đã gửi / drop / lỗi

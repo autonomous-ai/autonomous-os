@@ -19,6 +19,11 @@ let package = Package(
             name: "AutonomousBuddy",
             dependencies: ["Starscream"],
             path: "Sources/AutonomousBuddy"
+        ),
+        .testTarget(
+            name: "AutonomousBuddyTests",
+            dependencies: ["AutonomousBuddy"],
+            path: "Tests/AutonomousBuddyTests"
         )
     ]
 )

@@ -1,4 +1,5 @@
 import Foundation
+import CoreFoundation
 
 struct IncomingCommand {
     let id: String
@@ -10,10 +11,23 @@ struct IncomingCommand {
         guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw CommandError.malformed("not a JSON object")
         }
-        guard let id = obj["id"] as? String else { throw CommandError.malformed("missing id") }
-        guard let action = obj["action"] as? String else { throw CommandError.malformed("missing action") }
+        guard let id = obj["id"] as? String, !id.isEmpty, id.utf8.count <= 128 else { throw CommandError.malformed("invalid id") }
+        guard let action = obj["action"] as? String, !action.isEmpty, action.utf8.count <= 64 else { throw CommandError.malformed("invalid action") }
+        if let params = obj["params"], !(params is [String: Any]) {
+            throw CommandError.malformed("params must be an object")
+        }
         let params = (obj["params"] as? [String: Any]) ?? [:]
-        let timeoutMs = obj["timeout_ms"] as? Int
+        var timeoutMs: Int?
+        if let value = obj["timeout_ms"] {
+            guard let number = value as? NSNumber,
+                  CFGetTypeID(number) != CFBooleanGetTypeID(),
+                  number.doubleValue.isFinite,
+                  number.doubleValue.rounded() == number.doubleValue,
+                  number.doubleValue == 0 || (500...60000).contains(number.doubleValue) else {
+                throw CommandError.malformed("timeout_ms must be 0 (default) or an integer from 500 to 60000")
+            }
+            timeoutMs = number.intValue == 0 ? nil : number.intValue
+        }
         return IncomingCommand(id: id, action: action, params: params, timeoutMs: timeoutMs)
     }
 }

@@ -35,7 +35,7 @@ class _Sender:
         self.sent.append((msg, event_type))
 
 
-def _dispatch(rt, combined, caplog, event_type_override=None):
+def _dispatch(rt, combined, caplog, event_type_override=None, interaction_id=""):
     with caplog.at_level(logging.INFO, logger="hal.voice"):
         dispatch_turn(
             _Decorator(),
@@ -45,6 +45,7 @@ def _dispatch(rt, combined, caplog, event_type_override=None):
             [],
             rt,
             event_type_override=event_type_override,
+            interaction_id=interaction_id,
         )
     return [r.getMessage() for r in caplog.records if "[turn] route=" in r.getMessage()]
 
@@ -58,6 +59,14 @@ def test_a_turn_the_main_agent_answers_names_its_route(caplog):
     assert len(lines) == 1
     assert ROUTE_NO_OUTPUT in lines[0]
     assert "main agent" in lines[0]
+
+
+def test_route_log_identifies_the_utterance_for_delayed_telemetry(caplog):
+    lines = _dispatch(
+        RealtimeTurnResult(route=ROUTE_NO_OUTPUT), "hello lamp", caplog,
+        interaction_id="vi-current-utterance",
+    )
+    assert "interaction_id=vi-current-utterance" in lines[0]
 
 
 def test_delegated_turn_is_labelled_as_such(caplog):

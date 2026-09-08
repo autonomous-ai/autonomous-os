@@ -64,6 +64,10 @@ deployed to `/opt/hal/.env`):
 
 Off does not mean blind: everything is still in the log.
 
+HAL's local JSON includes the `event_id` from the outgoing envelope alongside
+the parameters, so original events and amendments can be joined offline.
+This adds no transcript or other voice content to telemetry.
+
 ```bash
 journalctl -u hal -f | grep '\[telemetry\]'        # HAL: every row + POST failures
 journalctl -u os-server -f | grep '\[telemetry\]'  # os-server: forwarded / dropped / failed
