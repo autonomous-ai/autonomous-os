@@ -13,6 +13,8 @@ The MVP-only implementation plan lives in [`autonomous-buddy-mvp.md`](./autonomo
 
 [Autonomous Buddy](./agent-manager.md) now packages the Electron/React workspace and Swift native helper in one `Autonomous Buddy.app`. Electron owns projects, worktrees, sessions, terminals and Git review; Swift owns pairing, the device WebSocket and computer-use executors. The embedded helper retains the native menu-bar icon without a second Dock icon, uses private JSONL child-process pipes, and exits when Electron closes its input pipe. Closing the workspace keeps Buddy running; the menu bar can reopen Agent Manager or quit the entire app. **Computer & device** in the main app exposes pairing, status, pause, permission management and Activity. `make build` / `make install` build and install both components together; users install one app. Paired-device `agent.*` commands route into managed sessions with explicit project/session IDs, request receipts and bounded event history; completion/attention notices return over the same WebSocket. See the [native bridge contract](./native-bridge.md). Live lamp verification remains separate from mock transport tests.
 
+`make dmg` builds separate Apple Silicon (`arm64`) and Intel (`x64`) installers by default. OTA metadata stores a version and download URL per architecture; Buddy has no in-app updater yet. The upload target signs and notarizes both installers by default; local `make dmg` does not notarize. See [release signing and uploads](./release-signing.md) for architecture selection, signing and publication.
+
 The [desktop Settings guide](./settings.md) covers the macOS Settings / ⌘, entry, searchable Appearance controls, persistent theme/font/zoom preferences, terminal styling and footer visibility.
 
 The May design below is historical computer-use context, not the current packaging or UI contract. Its Swift-only/menu-bar decision is superseded by this single-app architecture. See the [agent-manager contract](./agent-manager.md) for current IPC and lifecycle behavior.
@@ -24,7 +26,7 @@ The May design below is historical computer-use context, not the current packagi
 ### Goals
 - The device can drive a user's computer via voice commands ("open Chrome", "go to Gmail", "join Google Meet", "type X", "close Slack")
 - Works across any macOS app (not just browser)
-- Commands and pairing confirmation stay on LAN; the backend can request a pairing code over MQTT.
+- Computer-use commands and pairing confirmation stay on LAN; authorized MQTT clients can request a pairing code, revoke pairing, and query or observe Buddy status.
 - Mac-first MVP; Windows/Linux deferred to v1.2+
 
 ### Non-goals (MVP)
@@ -249,9 +251,50 @@ Reserved for later (defined but not implemented MVP):
 9. Buddy opens WS with `Authorization: Bearer <token>`
 
 MQTT authorization relies on existing broker credentials and topic ACLs; the
-backend must authorize the device owner before sending `buddy.pair.start`.
-Confirmation, status and revocation have no new MQTT commands; their HTTP routes
-remain in place. See [MQTT contract](../../../../docs/mqtt.md#buddypairstart--issue-a-buddy-pairing-code).
+backend must authorize the device owner before sending `buddy.pair.start` or
+`buddy.pair.revoke`. Confirmation remains HTTP; status is also available through
+MQTT `buddy.status`. Authorized mobile clients can use the broker directly.
+See [MQTT pairing contract](../../../../docs/mqtt.md#buddypairstart--issue-a-buddy-pairing-code).
+
+To revoke the current pairing, the authorized backend sends
+`{"cmd":"data","kind":"buddy.pair.revoke","data":{}}` on `fa_channel` (`data` is
+optional and ignored). This calls `buddy.Service.Unpair`, also used by
+`DELETE /api/buddy`: it closes the active WebSocket, clears the current pairing
+and persisted store, and invalidates the paired token. Repeating it when already
+unpaired succeeds; a pending pairing code is not cancelled. The response on
+`fd_channel` is `{"type":"data","kind":"buddy.pair.revoke","status":"success","data":{"revoked":true}}`
+with standard `MQTTDataResponse` metadata. Failures, including an unavailable
+service or persistence failure, use `status:"failure"` and `error`.
+See [MQTT revocation contract](../../../../docs/mqtt.md#buddypairrevoke--revoke-buddy-pairing).
+
+### Mobile status over MQTT
+
+Send `{"cmd":"data","kind":"buddy.status","data":{}}` on `fa_channel`.
+The response and unsolicited change events use `type:"data"`,
+`kind:"buddy.status"`, `status:"success"`, with `data` containing `paired`,
+`connected`, `instance_id`, `revision`, and optional `buddy_id`, `name`,
+`os_version`, `paired_at` (RFC3339). Unpaired state omits the paired Mac fields;
+empty optional strings are omitted. Secrets, pairing codes, and fingerprints are
+never included. `paired` and `connected` are independent: a paused/offline Mac
+can remain paired.
+
+Notifications include startup state, successful HTTP confirmation, HTTP/MQTT
+revocation (including Buddy self-revocation), and current WebSocket connection
+changes. Revision starts at 0 and increases for successful pair/revoke/connect/
+current-disconnect operations. Compare revisions only within the same
+`instance_id`, which changes on service restart; ignore duplicate/older revisions.
+Delivery is asynchronous, bounded, coalesces to latest state, and uses QoS 1
+without retain. Failed publishes are logged/dropped, so subscribe to FD and wait
+for SUBACK before querying on entry, reconnect, and resume. Query failure uses
+`status:"failure"` and `error`. Status can arrive before a command response.
+
+Mobile can connect directly using existing per-device broker configuration and
+a unique app client ID, with no BFF code changes. Broker reachability and topic
+ACLs still need deployment verification. This covers foreground updates, not
+push notifications after the app closes. See the
+[full MQTT status contract](../../../../docs/mqtt.md#buddystatus--query-and-observe-buddy-state)
+and [mobile handoff prompt](../../../../docs/buddy-mobile-handoff_vi.md).
+
 
 ### Reconnect
 

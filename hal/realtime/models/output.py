@@ -26,6 +26,10 @@ class AudioOutput(OutputBase):
     transcript: str | None = None
 
 
+class InterruptedOutput(OutputBase):
+    type: OutputTypeEnum = OutputTypeEnum.INTERRUPTED
+
+
 class FunctionCallOutput(OutputBase):
     type: OutputTypeEnum = OutputTypeEnum.FUNCTION_CALL
     name: str

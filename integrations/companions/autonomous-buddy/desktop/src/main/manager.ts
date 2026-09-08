@@ -42,6 +42,7 @@ interface Run {
   ready: boolean
   manualInputDirty: boolean
   inputRevision: number
+  initialPromptEligible: boolean
 }
 export interface ManagerOptions {
   launch?: Launcher
@@ -53,6 +54,7 @@ export class Manager {
   private state: Stored
   private runs = new Map<string, Run>()
   private pending = new Set<string>()
+  private initialPromptHandoffs = new Map<string, { cancelled: boolean }>()
   private closing = new Set<string>()
   private removingWorkspaces = new Set<string>()
   private deviceRequests = new Map<string, Promise<unknown>>()
@@ -450,8 +452,41 @@ export class Manager {
           return
         } finally { this.pending.delete(id) }
       }
-      if (!run?.process || !run.ready || run.manualInputDirty || run.stopped || this.pending.has(id))
-        throw new Error('Interactive prompt readiness is not established; finish input in the terminal first')
+      // Fresh Codex does not emit SessionStart until its first task. Relaunch only
+      // an untouched, conversation-less CLI with argv; never paste into onboarding.
+      if (run?.process && !run.stopped && !run.ready && run.initialPromptEligible &&
+          !session.providerSessionId && !this.pending.has(id)) {
+        const handoff = { cancelled: false }
+        this.initialPromptHandoffs.set(id, handoff)
+        this.pending.add(id)
+        run.initialPromptEligible = false
+        run.stopped = true
+        try {
+          run.process.kill()
+          const deadline = Date.now() + 5000
+          while (this.runs.get(id) === run) {
+            if (Date.now() >= deadline) throw new Error('Fresh agent is still stopping; prompt was not sent')
+            await new Promise((resolve) => setTimeout(resolve, 25))
+          }
+          if (handoff.cancelled || this.closed || session.closed || this.closing.has(id))
+            throw new Error('Initial prompt cancelled; prompt was not sent')
+          await this.workspace(session.projectId, session.worktreePath)
+          if (handoff.cancelled || this.closed || session.closed || this.closing.has(id))
+            throw new Error('Initial prompt cancelled; prompt was not sent')
+          this.append(session, 'prompt', normalized)
+          if (session.title === 'New session') session.title = normalized.trim().slice(0, 70)
+          await this.start(session, normalized)
+          if (!session.processActive) throw new Error('Interactive provider could not start; inspect the session error')
+          return
+        } finally {
+          this.pending.delete(id)
+          this.initialPromptHandoffs.delete(id)
+        }
+      }
+      if (!run?.process || run.stopped) throw new Error('agent_not_running: Resume the agent terminal before sending a prompt')
+      if (run.manualInputDirty) throw new Error('draft_input: Interactive prompt readiness is blocked by unfinished terminal input; submit or clear that draft first')
+      if (!run.ready || this.pending.has(id))
+        throw new Error('agent_not_ready: Interactive prompt readiness is not established; the agent may be starting or working, or its status hooks may be unavailable. This does not indicate a question or permission menu')
       run.ready = false
       this.pending.add(id)
       this.append(session, 'prompt', normalized)
@@ -513,7 +548,7 @@ export class Manager {
     const interactive = session.provider === 'terminal' || session.mode === 'interactive'
     if (interactive) session.interactiveStarted = true
     if (this.closed) throw new Error('Buddy is shutting down')
-    const run: Run = { buffer: '', failed: false, completed: false, needsInput: false, stopped: false, ready: false, manualInputDirty: false, inputRevision: 0 }
+    const run: Run = { buffer: '', failed: false, completed: false, needsInput: false, stopped: false, ready: false, manualInputDirty: false, inputRevision: 0, initialPromptEligible: session.provider === 'codex' && interactive && !resume && !prompt && !session.providerSessionId }
     this.runs.set(session.id, run)
     session.unread = false
     session.processActive = true
@@ -577,6 +612,7 @@ export class Manager {
         hooksDirectory: path.join(path.dirname(this.stateFile), 'interactive-hooks'),
         onHook: (event) => {
           if (!interactive || this.closed || run.stopped || this.closing.has(session.id) || this.runs.get(session.id) !== run) return
+          run.initialPromptEligible = false
           if (event.sessionId) {
             if (session.providerSessionId && session.providerSessionId !== event.sessionId) {
               run.failed = true
@@ -641,11 +677,13 @@ export class Manager {
   }
   async stop(id: string) {
     const session = this.findSession(id)
+    const handoff = this.initialPromptHandoffs.get(id)
+    if (handoff) handoff.cancelled = true
     const run = this.runs.get(id)
     if (run) {
       run.stopped = true
       run.process?.kill()
-    } else if (this.pending.has(id)) throw new Error('Session is starting; try Stop again')
+    } else if (this.pending.has(id) && !handoff) throw new Error('Session is starting; try Stop again')
     else if (session.status !== 'stopped') {
       this.status(session, 'stopped')
       this.persist()
@@ -674,7 +712,7 @@ export class Manager {
       throw new Error('Invalid terminal input')
     const run = this.runs.get(id)
     const process = run?.process
-    if (!process) throw new Error('Terminal has exited. Create a new terminal session.')
+    if (!process || run?.stopped) throw new Error('Terminal has exited or is restarting.')
     if (run && session.provider !== 'terminal') {
       // Only known terminal reports are exempt; editing/navigation stays conservative.
       const escape = String.fromCharCode(27)
@@ -682,6 +720,7 @@ export class Manager {
       const input = data.replace(new RegExp(`${escape}\\[(?:\\??[0-9;]*[cnR]|[IO])`, 'g'), '')
         .replace(new RegExp(`${escape}\\][0-9]+;[^${bell}${escape}]*(?:${bell}|${escape}\\\\)`, 'g'), '')
       if (input) {
+        run.initialPromptEligible = false
         run.inputRevision++
         const lastEnter = Math.max(input.lastIndexOf('\r'), input.lastIndexOf('\n'))
         run.manualInputDirty = lastEnter < 0 || lastEnter < input.length - 1

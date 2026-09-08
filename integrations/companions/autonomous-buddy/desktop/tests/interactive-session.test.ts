@@ -10,7 +10,7 @@ afterEach(async () => {
   for (const manager of managers.splice(0)) manager.dispose()
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })))
 })
-async function fixture() {
+async function fixture(exitOnKill = true) {
   const root = await mkdtemp(path.join(tmpdir(), 'buddy-interactive-')); roots.push(root)
   const directory = path.join(root, 'project'); await mkdir(directory)
   const storage = path.join(root, 'data')
@@ -19,7 +19,7 @@ async function fixture() {
   const sizes: number[][] = []
   const launcher = async (options: LaunchOptions) => {
     calls.push(options)
-    return { write: (value: string) => writes.push(value), resize: (cols: number, rows: number) => sizes.push([cols, rows]), kill: () => options.exit(0) }
+    return { write: (value: string) => writes.push(value), resize: (cols: number, rows: number) => sizes.push([cols, rows]), kill: () => { if (exitOnKill) options.exit(0) } }
   }
   const options = { launch: launcher, available: () => true }
   const manager = new Manager(storage, () => {}, options); managers.push(manager)
@@ -89,6 +89,7 @@ it('accepts verified hooks, safely pastes follow-ups, and gates manual or busy i
   const f = await fixture()
   const session = await f.manager.createSession({ projectId: f.project.id, worktreePath: f.project.path, provider: 'codex' })
   const hook = f.calls[0].onHook!
+  hook({ type: 'working' })
   await expect(f.manager.send(session.id, 'first')).rejects.toThrow('readiness')
   hook({ type: 'ready', sessionId: 'exact-thread' })
   expect((await f.manager.session(session.id)).session).toMatchObject({ status: 'idle', processActive: true, providerSessionId: 'exact-thread' })
@@ -174,4 +175,39 @@ it('names interactive tasks from the first prompt hook while preserving renamed 
   expect((await f.manager.session(session.id)).session.title).toBe('My custom task')
   const restored = new Manager(f.storage, () => {}, f.options); managers.push(restored)
   expect((await restored.session(session.id)).session.title).toBe('My custom task')
+})
+
+it('launches the first voice task as argv for an untouched Codex without initial hooks', async () => {
+  const f = await fixture()
+  const session = await f.manager.createSession({ projectId: f.project.id, worktreePath: f.project.path, provider: 'codex' })
+  await f.manager.terminalWrite(session.id, '\u001b[1;1R')
+  await f.manager.send(session.id, 'check git diff')
+  expect(f.calls).toHaveLength(2)
+  expect(f.calls[1]).toMatchObject({ prompt: 'check git diff', cwd: f.project.path, resume: false })
+  expect(f.writes).toEqual(['\u001b[1;1R'])
+  f.calls[1].onHook!({ type: 'completed', sessionId: 'voice-thread' })
+  await f.manager.send(session.id, 'explain the diff')
+  expect(f.calls).toHaveLength(2)
+  expect(f.writes.slice(-2)).toEqual(['\u001b[200~explain the diff\u001b[201~', '\r'])
+})
+it('never relaunches a fresh CLI after manual input or a question hook', async () => {
+  const f = await fixture()
+  const session = await f.manager.createSession({ projectId: f.project.id, worktreePath: f.project.path, provider: 'codex' })
+  await f.manager.terminalWrite(session.id, 'draft')
+  await expect(f.manager.send(session.id, 'check diff')).rejects.toThrow('draft_input')
+  f.calls[0].onHook!({ type: 'needs_input' })
+  await expect(f.manager.send(session.id, 'check diff')).rejects.toThrow('needs_manual_input')
+  expect(f.calls).toHaveLength(1)
+})
+
+it('Stop cancels a first-prompt handoff before the replacement CLI starts', async () => {
+  const f = await fixture(false)
+  const session = await f.manager.createSession({ projectId: f.project.id, worktreePath: f.project.path, provider: 'codex' })
+  const send = f.manager.send(session.id, 'check diff')
+  const rejected = expect(send).rejects.toThrow('cancelled')
+  await f.manager.stop(session.id)
+  f.calls[0].exit(0)
+  await rejected
+  expect(f.calls).toHaveLength(1)
+  expect((await f.manager.session(session.id)).events.filter(event => event.type === 'prompt')).toHaveLength(0)
 })

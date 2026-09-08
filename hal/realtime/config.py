@@ -121,6 +121,16 @@ class GeminiConfig(BaseModel):
         "none",
         "",
     )
+
+    vad_start_sensitivity: str = app_config.LIVE_VAD_START_SENSITIVITY
+    vad_end_sensitivity: str = app_config.LIVE_VAD_END_SENSITIVITY
+    vad_prefix_padding_ms: int = app_config.LIVE_VAD_PREFIX_PADDING_MS
+    vad_silence_ms: int = app_config.LIVE_VAD_SILENCE_MS
+    # NO text_only / TEXT-modality field. Opening a TEXT-only Live session to
+    # avoid paying for audio we discard was tried on device 2026-09-08 and the
+    # model refuses it outright: WS 1007 "The requested combination of response
+    # modalities (TEXT) is not supported by the model". Live is audio-out only,
+    # so with REALTIME_NATIVE_AUDIO=false the audio is received and dropped.
     max_retries: int = 1
     reconnect_delay_s: float = 2.0
     send_timeout_s: float = 10.0
