@@ -714,6 +714,7 @@ cầm credential của một thiết bị đang sống.
 | `POST /voice/speak 409` + `PermissionError: /var/lib/hal` | Chưa set `HAL_TTS_CACHE_DIR` — target `sim` bản cũ |
 | "Sorry, I can't play that right now" | Nhạc: macOS không có `aplay`/`paplay`. Cần `ffmpeg` trên `PATH` cho đường AudioToolbox |
 | `POST /audio/volume` trả 503 | Bình thường — macOS không có ALSA mixer |
+| Claude Code trả lời `Not logged in · Please run /login`, `system:init` báo `model=claude-opus-5[1m]` thay vì `llm_model` của bạn | Tiến trình `claude` thường trực khởi động trước khi `os-dev` kịp ghi `$CLAUDECODE_HOME/.env` nên không thấy `ANTHROPIC_*`. os-server log `no systemctl restart available` và không tự sửa được khi chạy off-device — restart `claudecode-dev` một lần |
 | Agent tự xưng "Codex", không persona | `$CODEX_HOME/workspace` phải có `AGENTS.md`, `SOUL.md`, `KNOWLEDGE.md`, `HEARTBEAT.md`. Chúng do **`os-dev`** tạo, không phải `codex-dev` |
 | Workspace rỗng, không thấy log `seeded file` | `set_up_completed` chưa true nên chuỗi khởi động không chạy |
 | `skill download skipped: no ota_metadata_url` | Thiếu `config/bootstrap.json` |

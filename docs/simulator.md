@@ -721,6 +721,7 @@ not carrying a live device's credentials.
 | `POST /voice/speak 409` + `PermissionError: /var/lib/hal` | `HAL_TTS_CACHE_DIR` not set — an old `sim` target |
 | "Sorry, I can't play that right now" | Music: macOS has no `aplay`/`paplay`. Needs `ffmpeg` on `PATH` for the AudioToolbox route |
 | `POST /audio/volume` returns 503 | Expected — macOS has no ALSA mixer |
+| Claude Code answers `Not logged in · Please run /login`, `system:init` shows `model=claude-opus-5[1m]` instead of your `llm_model` | The persistent `claude` child started before `os-dev` wrote `$CLAUDECODE_HOME/.env`, so it never saw `ANTHROPIC_*`. os-server logs `no systemctl restart available` and cannot fix it off-device — restart `claudecode-dev` once |
 | Agent calls itself "Codex", no persona | `$CODEX_HOME/workspace` must hold `AGENTS.md`, `SOUL.md`, `KNOWLEDGE.md`, `HEARTBEAT.md`. These come from `os-dev`, not `codex-dev` |
 | Empty workspace, no `seeded file` log | `set_up_completed` is not true, so the startup sequence never ran |
 | `skill download skipped: no ota_metadata_url` | `config/bootstrap.json` missing |
