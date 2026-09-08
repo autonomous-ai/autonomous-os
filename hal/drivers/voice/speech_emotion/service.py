@@ -637,19 +637,25 @@ class SpeechEmotionService:
     def _flush_once(self) -> None:
         cur_ts = time.time()
         with self._lock:
-            if not self._buffer:
-                logger.debug("[speech_emotion] flush tick: buffer empty")
-                return
-            buf = copy(self._buffer)
-            self._buffer.clear()
-            self._last_flush_ts = cur_ts
-            # Prune expired dedup entries (oldest TTL window).
+            # Prune expired dedup entries (oldest TTL window) BEFORE the
+            # empty-buffer return. Expiry is driven by the clock, not by
+            # traffic, so pruning only on ticks that happen to have work left
+            # `to_dict()["dedup_keys"]` over-reporting for as long as the room
+            # stayed quiet — and quiet is exactly when it was read.
             cutoff = cur_ts - self._dedup_window_s
             before = len(self._last_sent_by_key)
             self._last_sent_by_key = {
                 k: ts for k, ts in self._last_sent_by_key.items() if ts >= cutoff
             }
             pruned = before - len(self._last_sent_by_key)
+            if not self._buffer:
+                logger.debug(
+                    "[speech_emotion] flush tick: buffer empty (pruned=%d)", pruned,
+                )
+                return
+            buf = copy(self._buffer)
+            self._buffer.clear()
+            self._last_flush_ts = cur_ts
 
         logger.info(
             "[speech_emotion] flush tick: users=%d dedup_keys=%d (pruned=%d)",
@@ -746,7 +752,11 @@ class SpeechEmotionService:
                 )
                 return
             self._last_sent_by_key[key] = cur_ts
-            self._sidecar.save(self._last_sent_by_key)
+            # Snapshot under the lock, write outside it. save() is a filesystem
+            # write; holding _lock across it blocked submit(), to_dict() and the
+            # worker's buffer append for the duration of a disk I/O on tmpfs.
+            dedup_snapshot = dict(self._last_sent_by_key)
+        self._sidecar.save(dedup_snapshot)
 
         message = format_message(dominant_label, avg_confidence, bucket)
         logger.info(
