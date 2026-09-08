@@ -60,6 +60,7 @@ type streamResult struct {
 	ResponseID  string
 	SessionID   string
 	FinalText   string
+	Terminal    bool
 	Errored     bool
 	ErrorText   string
 }
@@ -146,6 +147,9 @@ func (s *HermesService) readSSE(ctx context.Context, deviceRunID string, body io
 		// Blank line terminates an event block per SSE spec.
 		if line == "" {
 			flush()
+			if result.Terminal {
+				return result, nil
+			}
 			continue
 		}
 		// Comment lines per SSE spec (used by some servers for keepalive).
@@ -174,6 +178,9 @@ func (s *HermesService) readSSE(ctx context.Context, deviceRunID string, body io
 		// Network drop mid-stream. Treat as turn drop per hermes.md §18 #5.
 		slog.Warn("SSE read error mid-stream", "component", "hermes", "error", err)
 		return result, fmt.Errorf("sse read: %w", err)
+	}
+	if !result.Terminal {
+		return result, fmt.Errorf("sse stream ended before response.completed or response.failed")
 	}
 	return result, nil
 }
