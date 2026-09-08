@@ -15,7 +15,7 @@ import type {
   WorkspaceMeta,
   WorkspacePatch,
 } from '../shared/types.js'
-import { stageFiles, unstageFiles, commitStaged, commitFiles, commitDiff, fileDiff, fileEntries, fileText, gitCommand, gitSnapshot, listWorktrees } from './git.js'
+import { branchDiff, stageFiles, unstageFiles, commitStaged, commitFiles, commitDiff, fileDiff, fileEntries, fileText, gitCommand, gitSnapshot, listWorktrees } from './git.js'
 import { available, launch, parseEvent, type Launcher, type ProcessHandle } from './providers.js'
 interface DeviceReceipt {
   fingerprint: string
@@ -333,6 +333,9 @@ export class Manager {
   }
   async commitFiles(projectId: string, selected: string, hash: string) {
     return commitFiles(await this.workspace(projectId, selected), hash)
+  }
+  async branchDiff(projectId: string, selected: string, baseHash: string, headHash: string, file: string) {
+    return branchDiff(await this.workspace(projectId, selected), baseHash, headHash, file)
   }
   async commitDiff(projectId: string, selected: string, hash: string, file: string) {
     return commitDiff(await this.workspace(projectId, selected), hash, file)

@@ -52,7 +52,8 @@ export function GitPanel({ project, path, onPreview, onError }: Props) {
     null,
   )
   const [historyLoading, setHistoryLoading] = useState('')
-  const [historyOpen, setHistoryOpen] = useState(true)
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [branchOpen, setBranchOpen] = useState(true)
   const [changesOpen, setChangesOpen] = useState(true)
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
   const request = useRef(0)
@@ -157,6 +158,22 @@ export function GitPanel({ project, path, onPreview, onError }: Props) {
       if (activeWorkspace.current === workspaceKey && previewRequest.current === id) onError(error)
     }
   }
+  const openBranchFile = async (file: string) => {
+    const comparison = git?.branchChanges
+    if (!project || !path || !comparison) return
+    const id = ++previewRequest.current
+    try {
+      const text = await window.buddy.branchDiff(
+        project.id, path, comparison.baseHash, comparison.headHash, file,
+      )
+      if (activeWorkspace.current === workspaceKey && previewRequest.current === id) {
+        setSelectedFile(JSON.stringify([workspaceKey, 'branch', file]))
+        onPreview({ name: `${comparison.base} → ${comparison.headHash.slice(0, 7)} · ${file}`, text, diff: true })
+      }
+    } catch (error) {
+      if (activeWorkspace.current === workspaceKey && previewRequest.current === id) onError(error)
+    }
+  }
   return (
     <aside className="git-panel">
       <div className="right-tabs">
@@ -198,6 +215,7 @@ export function GitPanel({ project, path, onPreview, onError }: Props) {
                   <strong>{git?.branch || 'Working directory'}</strong>
                 </div>
                 <small title={path}>{path}</small>
+                {git?.branchChanges && <small title="Committed changes since the common ancestor with this base">→ {git.branchChanges.base}</small>}
               </div>
               <form
                 className="git-commit-composer"
@@ -374,6 +392,52 @@ export function GitPanel({ project, path, onPreview, onError }: Props) {
                     ))}
                 </div>
               )}
+              <div className="changes-section git-branch-changes">
+                <button
+                  className="pane-section-heading git-changes-toggle"
+                  aria-label="Committed on branch"
+                  aria-expanded={branchOpen}
+                  onClick={() => setBranchOpen(!branchOpen)}
+                >
+                  {branchOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                  COMMITTED ON BRANCH <span>{git?.branchChanges?.files.length ?? 0}</span>
+                </button>
+                {branchOpen && (
+                  git?.branchChanges ? (
+                    <div className="changed-files">
+                      {git.branchChanges.files.map((file) => (
+                        <div
+                          className={`git-change-row ${selectedFile === JSON.stringify([workspaceKey, 'branch', file.path]) ? 'selected' : ''}`}
+                          key={file.path}
+                        >
+                          <button
+                            className="changed-file"
+                            aria-label={`Review branch file ${file.path}`}
+                            title={file.originalPath ? `${file.originalPath} → ${file.path}` : file.path}
+                            onClick={() => void openBranchFile(file.path)}
+                          >
+                            <File size={13} />
+                            <span className="git-file-name">
+                              <strong>{file.path.split('/').at(-1)}</strong>
+                              <small>{file.originalPath ? `← ${file.originalPath}` : file.path.includes('/') ? file.path.slice(0, file.path.lastIndexOf('/')) : ''}</small>
+                            </span>
+                            {file.lineStats && (
+                              <span className="git-file-stat" title="Committed added / removed lines since the common ancestor">
+                                <span className="git-lines-added">+{file.lineStats.added}</span>
+                                <span className="git-lines-removed">−{file.lineStats.removed}</span>
+                              </span>
+                            )}
+                            <em className={`file-status ${file.status.startsWith('A') ? 'added' : file.status.startsWith('D') ? 'deleted' : ''}`}>
+                              {file.status}
+                            </em>
+                          </button>
+                        </div>
+                      ))}
+                      {!git.branchChanges.files.length && <p className="sidebar-hint">No committed changes against {git.branchChanges.base}.</p>}
+                    </div>
+                  ) : <p className="sidebar-hint">{git ? 'No comparison base available for this branch.' : 'Reading branch changes…'}</p>
+                )}
+              </div>
               <div className="commit-section">
                 <button className="pane-section-heading" onClick={() => setHistoryOpen(!historyOpen)}>
                   {historyOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />} RECENT COMMITS{' '}

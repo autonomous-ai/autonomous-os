@@ -215,7 +215,7 @@ else {
         'createWorktree',
         'git',
         'diff',
-        'stageFiles', 'unstageFiles', 'commitStaged', 'commitFiles', 'commitDiff',
+        'stageFiles', 'unstageFiles', 'commitStaged', 'commitFiles', 'commitDiff', 'branchDiff',
         'files',
         'readFile',
         'createSession',

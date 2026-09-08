@@ -50,7 +50,14 @@ export interface GitCommit {
   author: string
   date: string
 }
+export interface GitBranchChanges {
+  base: string
+  baseHash: string
+  headHash: string
+  files: GitFile[]
+}
 export interface GitSnapshot {
+  branchChanges?: GitBranchChanges
   branch: string
   files: GitFile[]
   commits: GitCommit[]
@@ -142,6 +149,7 @@ export interface BuddyAPI {
   unstageFiles(projectId: string, path: string, files: string[]): Promise<void>
   commitStaged(projectId: string, path: string, message: string): Promise<string>
   commitFiles(projectId: string, path: string, hash: string): Promise<GitFile[]>
+  branchDiff(projectId: string, path: string, baseHash: string, headHash: string, file: string): Promise<string>
   commitDiff(projectId: string, path: string, hash: string, file: string): Promise<string>
   diff(projectId: string, worktreePath: string, file: string): Promise<string>
   files(projectId: string, worktreePath: string, relativePath: string): Promise<FileEntry[]>

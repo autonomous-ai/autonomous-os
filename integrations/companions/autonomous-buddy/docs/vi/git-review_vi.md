@@ -1,6 +1,6 @@
 # Sidebar Git review
 
-Panel Changes được sắp xếp theo thứ tự đọc: branch và worktree, commit message, thao tác stage, file thay đổi rồi commit gần đây. Một vùng cuộn chung giúp truy cập file và lịch sử trên cửa sổ nhỏ. Giao diện sáng/tối dùng palette chung.
+Panel Changes được sắp xếp theo thứ tự đọc: branch và worktree, commit message, thao tác stage, file đang thay đổi, file đã commit trên nhánh rồi commit gần đây. Một vùng cuộn chung giúp truy cập file và lịch sử trên cửa sổ nhỏ. Giao diện sáng/tối dùng palette chung.
 
 **Stage all** stage các đường dẫn unstaged và untracked đang liệt kê của worktree được chọn. **Unstage all** bỏ các đường dẫn staged đang liệt kê khỏi index của worktree đó, giữ file làm việc. Cả hai gọi API hiện có với đường dẫn tường minh, có xử lý rename; không chạy lệnh stage toàn repository. Backend nhận 1–1000 file đã thay đổi mỗi thao tác và từ chối lựa chọn đã cũ. Nút cộng/trừ từng file vẫn nằm bên phải mỗi dòng.
 
@@ -39,3 +39,9 @@ Validation gồm lint/build desktop, test backend thống kê dòng và smoke wo
 
 
 Implementation được viết mới sau khi tham khảo Orca tại `ba5f708290b72012132fb23a6f016b8fd5601718`: [commit diff](https://github.com/stablyai/orca/blob/ba5f708290b72012132fb23a6f016b8fd5601718/src/main/git/source-control/commit-diff.ts), [staged commit context](https://github.com/stablyai/orca/blob/ba5f708290b72012132fb23a6f016b8fd5601718/src/main/git/source-control/staged-commit-context.ts), [commit changes](https://github.com/stablyai/orca/blob/ba5f708290b72012132fb23a6f016b8fd5601718/src/main/git/source-control/commit-changes.ts). Full graph, hunk staging, merge tooling, remote operation và AI commit-message generation chưa thuộc slice này.
+
+## File đã commit trên nhánh
+
+**COMMITTED ON BRANCH** mặc định mở, nằm giữa thay đổi chưa commit và lịch sử commit gần đây mặc định thu gọn. Danh sách tổng hợp file thay đổi từ tổ tiên chung với nhánh so sánh đến HEAD hiện tại, gồm tên file, thư mục/nguồn đổi tên, trạng thái Git và số dòng thêm/xóa khi có. Không trộn thay đổi working tree hoặc staged, kể cả khi cùng file xuất hiện trong CHANGES. Chọn file mở diff đã commit theo hai hash base/HEAD tại lúc đọc; các dòng này không có nút stage. Tên nhánh so sánh hiện dưới nhánh hiện tại. Trường hợp không có thay đổi hoặc không xác định được nhánh so sánh đều có thông báo. Dữ liệu cập nhật theo chu kỳ năm giây, khi focus hoặc bấm refresh.
+
+Preload bổ sung API chỉ đọc `branchDiff(projectId, worktreePath, baseHash, headHash, file)`, giữ kiểm tra worktree đã đăng ký và hash commit đầy đủ. Thứ tự chọn base là `origin/HEAD`, `origin/main`, `main`, `origin/master`, rồi `master`, bỏ qua chính nhánh local hiện tại. Dùng ref có sẵn tại máy, không fetch remote hoặc suy đoán base từ upstream của nhánh feature. Cách so sánh merge-base đến HEAD được đối chiếu với Orca (`src/main/git/source-control/branch-change-entries.ts`), code Git của Buddy vẫn độc lập.

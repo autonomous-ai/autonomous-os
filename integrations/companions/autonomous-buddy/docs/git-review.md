@@ -1,6 +1,6 @@
 # Git review sidebar
 
-The Changes panel is organized in reading order: branch and worktree, commit message, staging actions, changed files, then recent commits. A single scrolling area keeps the file list and history reachable on smaller windows. Dark and light appearances use the shared palette.
+The Changes panel is organized in reading order: branch and worktree, commit message, staging actions, changed files, committed branch files, then recent commits. A single scrolling area keeps the file list and history reachable on smaller windows. Dark and light appearances use the shared palette.
 
 **Stage all** stages the currently listed unstaged and untracked paths in the selected worktree. **Unstage all** removes the currently listed staged paths from that worktree's index while retaining working files. Both call the existing explicit-path APIs, including rename handling; they do not issue a repository-wide stage command. The backend accepts 1–1000 selected changed files per action and rejects stale selections. Per-file plus/minus actions remain available on the right of each row.
 
@@ -39,3 +39,9 @@ Validation includes desktop lint/build, focused backend line-stat tests, and the
 
 
 The implementation was written locally after reviewing Orca at `ba5f708290b72012132fb23a6f016b8fd5601718`: [commit diff](https://github.com/stablyai/orca/blob/ba5f708290b72012132fb23a6f016b8fd5601718/src/main/git/source-control/commit-diff.ts), [staged commit context](https://github.com/stablyai/orca/blob/ba5f708290b72012132fb23a6f016b8fd5601718/src/main/git/source-control/staged-commit-context.ts), and [commit changes](https://github.com/stablyai/orca/blob/ba5f708290b72012132fb23a6f016b8fd5601718/src/main/git/source-control/commit-changes.ts). Full graph, hunk staging, merge tooling, remote operations and AI commit-message generation remain outside this slice.
+
+## Committed on branch
+
+**COMMITTED ON BRANCH** appears expanded between working changes and the collapsed-by-default recent commit history. It lists the net files changed from the comparison base's common ancestor to the current HEAD, with filenames, directories/rename origins, Git status and available added/removed line counts. Working-tree and staged edits are excluded, including when the same file also appears in CHANGES. Selecting a row opens the committed diff against the captured base/HEAD hashes; branch rows have no staging actions. The base name appears under the current branch. Empty comparisons and unavailable bases are stated explicitly. Refresh follows the existing five-second/focus/manual cycle.
+
+The read-only `branchDiff(projectId, worktreePath, baseHash, headHash, file)` preload method uses the registered worktree boundary and full commit hashes. Base selection checks `origin/HEAD`, `origin/main`, `main`, `origin/master`, then `master`, skipping the current local branch. It uses locally available refs and does not fetch remotes or infer a review base from a feature tracking branch. The implementation follows Orca's merge-base-to-HEAD comparison (`src/main/git/source-control/branch-change-entries.ts`), retaining the independent Buddy Git implementation.

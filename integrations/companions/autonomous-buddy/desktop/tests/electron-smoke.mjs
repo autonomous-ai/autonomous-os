@@ -176,6 +176,7 @@ try {
   await git(['config', 'user.email', 'buddy-test@example.invalid'])
   await git(['add', 'README.md', 'src/session-store.ts', 'package.json'])
   await git(['commit', '-m', 'Add the agent workspace foundation'])
+  await git(['update-ref', 'refs/remotes/origin/main', 'HEAD'])
   await writeFile(
     path.join(projectPath, 'README.md'),
     '# Buddy agent workspace\n\nA local home for your projects and agents.\n\nSessions preserve context across follow-up messages.\n',
@@ -508,6 +509,7 @@ try {
     .locator('.right-tabs')
     .getByRole('button', { name: /^Changes/ })
     .click()
+  await page.getByRole('button', { name: /RECENT COMMITS/ }).click()
   await expect(page.locator('.commit-list')).toContainText('Add the agent workspace foundation')
   // Bulk controls operate only on the displayed worktree changes.
   await page.getByRole('button', { name: 'Stage all changes', exact: true }).click()
@@ -529,7 +531,19 @@ try {
   await page.getByRole('textbox', { name: 'Commit message', exact: true }).fill('Document session continuity')
   await page.getByRole('button', { name: /^Commit staged changes/ }).click()
   await expect(page.locator('.commit-list')).toContainText('Document session continuity')
-  await expect(page.locator('.changed-file')).toHaveCount(2)
+  await expect(page.locator('.changes-section:not(.git-branch-changes) .changed-file')).toHaveCount(2)
+  await expect(page.locator('.git-branch-changes .changed-file')).toHaveCount(1)
+  await expect(page.locator('.git-branch-changes')).toContainText('README.md')
+  await expect(page.locator('.git-branch-changes .git-stage-actions')).toHaveCount(0)
+  await page.getByRole('button', { name: 'Committed on branch', exact: true }).click()
+  await expect(page.locator('.git-branch-changes .changed-file')).toHaveCount(0)
+  await page.getByRole('button', { name: 'Committed on branch', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Review branch file README.md', exact: true })).toBeVisible()
+  await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))))
+  await nativeScreenshot('git-committed-on-branch.png')
+  await page.getByRole('button', { name: 'Review branch file README.md', exact: true }).click()
+  await expect(page.locator('.file-preview')).toContainText('+Sessions preserve context')
+  await page.getByRole('button', { name: 'Close file preview', exact: true }).click()
   const committedHash = (await git(['rev-parse', 'HEAD'])).stdout.trim()
   expect((await git(['show', '--pretty=format:', '--name-only', committedHash])).stdout.trim()).toBe(
     'README.md',
@@ -546,7 +560,7 @@ try {
   await Promise.all(Array.from({ length: 35 }, (_, index) =>
     writeFile(path.join(projectPath, 'src', `review-file-${String(index).padStart(2, '0')}.ts`), 'export const changed = true\n')))
   await page.getByRole('button', { name: 'Refresh files and Git', exact: true }).click()
-  await expect(page.locator('.changed-file')).toHaveCount(37)
+  await expect(page.locator('.changes-section:not(.git-branch-changes) .changed-file')).toHaveCount(37)
   await expect.poll(() => page.locator('.git-review-scroll').evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true)
   await page.locator('.changed-file').last().scrollIntoViewIfNeeded()
   await expect(page.locator('.changed-file').last()).toBeVisible()

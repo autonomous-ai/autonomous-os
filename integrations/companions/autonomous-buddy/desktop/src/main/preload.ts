@@ -70,6 +70,7 @@ const api: BuddyAPI = {
   unstageFiles: (id, path, files) => ipcRenderer.invoke('buddy:unstageFiles', id, path, files),
   commitStaged: (id, path, message) => ipcRenderer.invoke('buddy:commitStaged', id, path, message),
   commitFiles: (id, path, hash) => ipcRenderer.invoke('buddy:commitFiles', id, path, hash),
+  branchDiff: (id, path, baseHash, headHash, file) => ipcRenderer.invoke('buddy:branchDiff', id, path, baseHash, headHash, file),
   commitDiff: (id, path, hash, file) => ipcRenderer.invoke('buddy:commitDiff', id, path, hash, file),
   diff: (id, path, file) => ipcRenderer.invoke('buddy:diff', id, path, file),
   files: (id, path, relative) => ipcRenderer.invoke('buddy:files', id, path, relative),

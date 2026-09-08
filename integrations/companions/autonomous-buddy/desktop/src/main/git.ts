@@ -1,9 +1,9 @@
 import { execFile } from 'node:child_process'
-import { attachWorkingLineStats } from './git-line-stats'
+import { attachWorkingLineStats, parseLineStats } from './git-line-stats'
 import { promisify } from 'node:util'
 import { realpath, stat, readFile, readdir } from 'node:fs/promises'
 import path from 'node:path'
-import type { FileEntry, GitFile, GitSnapshot, Worktree } from '../shared/types.js'
+import type { FileEntry, GitFile, GitSnapshot, GitBranchChanges, Worktree } from '../shared/types.js'
 const exec = promisify(execFile)
 export async function gitCommand(cwd: string, args: string[]): Promise<string> {
   const { stdout } = await exec('git', ['--literal-pathspecs', '--no-pager', '-c', 'core.quotepath=false', ...args], {
@@ -93,7 +93,8 @@ export async function gitSnapshot(root: string, includeLineStats = true): Promis
       return { hash, subject, author, date }
     })
   if (includeLineStats) await attachWorkingLineStats(root, files, gitCommand)
-  return { branch, files, commits }
+  const branchChanges = includeLineStats ? await committedOnBranch(root) : undefined
+  return { branch, files, commits, branchChanges }
 }
 function validFile(value: string): void {
   if (typeof value !== 'string' || !value || value.includes('\0') || path.isAbsolute(value) || value.split(/[\\/]/).some((part) => part === '..' || part === '.git'))
@@ -171,4 +172,55 @@ export async function commitDiff(root: string, hash: string, file: string): Prom
   const entry = (await commitFiles(root, hash)).find((item) => item.path === file)
   if (!entry) throw new Error('File is not part of this commit')
   return gitCommand(root, ['diff-tree', '--no-commit-id', '-r', '-p', '-M', '--no-ext-diff', '--no-textconv', '--no-color', ...await commitRange(root, hash), '--', file, ...(entry.originalPath ? [entry.originalPath] : [])])
+}
+
+function parseChangedFiles(raw: string): GitFile[] {
+  const parts = raw.split('\0')
+  const files: GitFile[] = []
+  for (let i = 0; i < parts.length && parts[i];) {
+    const status = parts[i++]
+    const first = parts[i++]
+    if (/^[RC]/.test(status)) files.push({ status, originalPath: first, path: parts[i++] })
+    else files.push({ status, path: first })
+  }
+  return files
+}
+
+const committedDiffFlags = ['--no-ext-diff', '--no-textconv', '--no-color', '-M']
+async function branchFiles(root: string, baseHash: string, headHash: string): Promise<GitFile[]> {
+  const files = parseChangedFiles(await gitCommand(root, ['diff', ...committedDiffFlags, '--name-status', '-z', baseHash, headHash, '--']))
+  const stats = parseLineStats(await gitCommand(root, ['diff', ...committedDiffFlags, '--numstat', '-z', baseHash, headHash, '--']))
+  for (const file of files) file.lineStats = stats.get(file.path)
+  return files
+}
+
+export async function committedOnBranch(root: string): Promise<GitBranchChanges | undefined> {
+  const headHash = (await gitCommand(root, ['rev-parse', '--verify', 'HEAD^{commit}']).catch(() => '')).trim()
+  if (!headHash) return
+  const current = (await gitCommand(root, ['symbolic-ref', '--quiet', 'HEAD']).catch(() => '')).trim()
+  const originHead = (await gitCommand(root, ['symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD']).catch(() => '')).trim()
+  // A tracking branch for this feature is not its review base. Only default
+  // branch refs are inferred; without one, leave the review unavailable.
+  const candidates = [...new Set([originHead, 'refs/remotes/origin/main', 'refs/heads/main', 'refs/remotes/origin/master', 'refs/heads/master'])]
+  for (const ref of candidates) {
+    if (!ref || ref === current) continue
+    const tip = (await gitCommand(root, ['rev-parse', '--verify', `${ref}^{commit}`]).catch(() => '')).trim()
+    if (!tip) continue
+    const baseHash = (await gitCommand(root, ['merge-base', tip, headHash]).catch(() => '')).trim()
+    if (!baseHash) return
+    return { base: ref.replace(/^refs\/(remotes|heads)\//, ''), baseHash, headHash, files: await branchFiles(root, baseHash, headHash) }
+  }
+}
+
+export async function branchDiff(root: string, baseHash: string, headHash: string, file: string): Promise<string> {
+  validFile(file)
+  // Pin both ends to full immutable commit IDs from the displayed snapshot.
+  // Never interpolate renderer-controlled revisions into an option or range.
+  for (const hash of [baseHash, headHash]) {
+    if (typeof hash !== 'string' || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(hash)) throw new Error('Expected a full commit hash')
+    if ((await gitCommand(root, ['rev-parse', '--verify', `${hash}^{commit}`])).trim() !== hash) throw new Error('Unknown commit')
+  }
+  const entry = (await branchFiles(root, baseHash, headHash)).find((item) => item.path === file)
+  if (!entry) throw new Error('File is not part of this branch comparison')
+  return gitCommand(root, ['diff', ...committedDiffFlags, baseHash, headHash, '--', file, ...(entry.originalPath ? [entry.originalPath] : [])])
 }
