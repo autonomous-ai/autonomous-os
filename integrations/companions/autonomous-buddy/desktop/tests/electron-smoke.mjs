@@ -357,6 +357,9 @@ try {
   await page.locator('.session-row').filter({ hasText: 'Build session orchestration' }).click()
   await expect(page.locator('.transcript-block.prompt')).toHaveCount(2)
   await expect(page.locator('.changed-file')).toHaveCount(3)
+  await expect(page.locator('.git-tracked-changes .changed-file')).toHaveCount(2)
+  await expect(page.locator('.git-untracked-changes .changed-file')).toHaveCount(1)
+  await expect(page.getByRole('button', { name: 'Untracked files', exact: true })).toBeVisible()
   // Splits own real PTYs in the selected worktree; drafts survive remounts.
   const pane = (id) => page.locator(`.session-pane[data-session-id="${id}"]`)
   const draft = 'Keep this unsent research prompt while arranging the workspace.'

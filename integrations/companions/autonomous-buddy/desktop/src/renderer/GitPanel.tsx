@@ -54,7 +54,11 @@ export function GitPanel({ project, path, onPreview, onError }: Props) {
   const [historyLoading, setHistoryLoading] = useState('')
   const [historyOpen, setHistoryOpen] = useState(false)
   const [branchOpen, setBranchOpen] = useState(true)
-  const [changesOpen, setChangesOpen] = useState(true)
+  const [collapsedChanges, setCollapsedChanges] = useState<Record<string, boolean>>({})
+  const changeGroups = [
+    { id: 'tracked', label: 'CHANGES', aria: 'Changes', files: (git?.files ?? []).filter((file) => file.status !== '??') },
+    { id: 'untracked', label: 'UNTRACKED FILES', aria: 'Untracked files', files: (git?.files ?? []).filter((file) => file.status === '??') },
+  ].filter((group) => group.files.length > 0)
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
   const request = useRef(0)
   const invalidate = useCallback(() => {
@@ -293,20 +297,21 @@ export function GitPanel({ project, path, onPreview, onError }: Props) {
                   {error}
                 </div>
               ) : (
-                <div className="changes-section">
+                <>
+                {changeGroups.map((group) => (
+                <div className={`changes-section git-${group.id}-changes`} key={group.id}>
                   <button
                     className="pane-section-heading git-changes-toggle"
-                    aria-label="Changes"
-                    aria-expanded={changesOpen}
-                    onClick={() => setChangesOpen(!changesOpen)}
+                    aria-label={group.aria}
+                    aria-expanded={!collapsedChanges[group.id]}
+                    onClick={() => setCollapsedChanges((current) => ({ ...current, [group.id]: !current[group.id] }))}
                   >
-                    {changesOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />} CHANGES{' '}
-                    <span>{git?.files.length ?? 0}</span>
+                    {!collapsedChanges[group.id] ? <ChevronDown size={12} /> : <ChevronRight size={12} />} {group.label}{' '}
+                    <span>{group.files.length}</span>
                   </button>
-                  {changesOpen &&
-                    (git?.files.length ? (
+                  {!collapsedChanges[group.id] && (
                       <div className="changed-files">
-                        {git.files.map((file) => (
+                        {group.files.map((file) => (
                           <div
                             className={`git-change-row ${selectedFile === JSON.stringify([workspaceKey, file.path]) ? 'selected' : ''}`}
                             key={file.path}
@@ -333,7 +338,7 @@ export function GitPanel({ project, path, onPreview, onError }: Props) {
                                 <span
                                   className="git-file-stat"
                                   title={
-                                    git.commits.length
+                                    git?.commits.length
                                       ? 'Added / removed lines, HEAD to working tree; untracked files count local text'
                                       : 'Added / removed lines from the initial index or local untracked text'
                                   }
@@ -379,18 +384,11 @@ export function GitPanel({ project, path, onPreview, onError }: Props) {
                           </div>
                         ))}
                       </div>
-                    ) : (
-                      <div className="clean-state">
-                        <div className="clean-icon">
-                          <Check size={19} />
-                        </div>
-                        <h3>{git ? 'No uncommitted changes' : 'Reading your worktree…'}</h3>
-                        <p>
-                          {git ? 'Changes in this worktree will appear here.' : 'Fetching local Git status.'}
-                        </p>
-                      </div>
-                    ))}
+                    )}
                 </div>
+                ))}
+                {!changeGroups.length && <p className="git-clean-summary">{git ? 'No uncommitted changes' : 'Reading your worktree…'}</p>}
+                </>
               )}
               <div className="changes-section git-branch-changes">
                 <button
