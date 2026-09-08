@@ -6,6 +6,8 @@ final class DeviceConnection: WebSocketDelegate {
     private let token: String
     private let dispatcher: CommandDispatcher
     private let reconnect = Reconnect()
+    var agentHandler: (@MainActor ([String: Any]) async -> Data)?
+    private var connected = false
 
     private var socket: WebSocket?
     private var keepAliveTask: Task<Void, Never>?
@@ -27,6 +29,7 @@ final class DeviceConnection: WebSocketDelegate {
 
     func disconnect() {
         stopped = true
+        connected = false
         cancelCommands()
         keepAliveTask?.cancel()
         keepAliveTask = nil
@@ -72,6 +75,7 @@ final class DeviceConnection: WebSocketDelegate {
         guard let source = client as? WebSocket, source === socket else { return }
         switch event {
         case .connected:
+            connected = true
             AppState.shared.setConnection(.connected)
             Task { @MainActor [weak self] in await self?.reconnect.reset() }
             startKeepAlive()
@@ -131,6 +135,7 @@ final class DeviceConnection: WebSocketDelegate {
     }
 
     private func stopKeepAlive() {
+        connected = false
         keepAliveTask?.cancel()
         keepAliveTask = nil
     }
@@ -140,13 +145,38 @@ final class DeviceConnection: WebSocketDelegate {
         commandTasks.removeAll()
     }
 
+    @MainActor
+    func routeCommand(_ data: Data) async -> Data {
+        if let command = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let action = command["action"] as? String, action.hasPrefix("agent.") {
+            let id = command["id"] as? String ?? ""
+            guard !AppState.shared.paused else {
+                return AgentRequestRelay.failure(id: id, message: "Buddy is paused")
+            }
+            guard let agentHandler else {
+                return AgentRequestRelay.failure(id: id, message: "Agent manager is unavailable")
+            }
+            return await agentHandler(command)
+        }
+        return await dispatcher.dispatch(data)
+    }
+
+    func sendAgentEvent(_ event: [String: Any]) -> Bool {
+        guard connected, !stopped, let socket,
+              event["type"] as? String == "agent_event",
+              let data = try? JSONSerialization.data(withJSONObject: event),
+              let text = String(data: data, encoding: .utf8) else { return false }
+        socket.write(string: text)
+        return true
+    }
+
     private func enqueue(data: Data, source: WebSocket) {
         let taskID = UUID()
         commandTasks[taskID] = Task { @MainActor [weak self, weak source] in
             guard let self, let source else { return }
             defer { self.commandTasks.removeValue(forKey: taskID) }
             guard !Task.isCancelled, !self.stopped, self.socket === source else { return }
-            let response = await self.dispatcher.dispatch(data)
+            let response = await self.routeCommand(data)
             guard !Task.isCancelled, !self.stopped, self.socket === source,
                   let text = String(data: response, encoding: .utf8) else { return }
             source.write(string: text)

@@ -1,6 +1,10 @@
 import Cocoa
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    private let embedded = CommandLine.arguments.contains("--embedded-helper")
+    private let nativeTestMode = ProcessInfo.processInfo.environment["BUDDY_NATIVE_TEST_MODE"] == "1"
+    private let agentRelay = AgentRequestRelay()
+    private var helperBridge: EmbeddedHelperBridge?
     private var menuBarController: MenuBarController?
     private var discovery: DeviceDiscovery?
     private var pairingManager: PairingManager?
@@ -12,7 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let store = PairingStore()
-        let audit = AuditLog()
+        let audit = AuditLog(url: nativeTestMode ? URL(fileURLWithPath: "/dev/null") : nil)
         let dispatcher = CommandDispatcher(auditLog: audit)
         let pairingManager = PairingManager(store: store)
 
@@ -26,26 +30,61 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         discovery.onDevicesChanged = { devices in
             AppState.shared.setDiscoveredDevices(devices)
         }
-        discovery.start()
+        if !nativeTestMode { discovery.start() }
         self.discovery = discovery
 
-        menuBarController = MenuBarController(
-            onPair: { [weak self] host in self?.showPairing(host: host) },
-            onUnpair: { [weak self] in self?.unpair() },
-            onTogglePause: { paused in
-                AppState.shared.setPaused(paused)
-                if paused { Task { await dispatcher.cancelActive() } }
-            },
-            onShowActivity: { [weak self] in self?.showActivity() },
-            onAbout: { [weak self] in self?.showAbout() },
-            onQuit: { NSApp.terminate(nil) }
-        )
+        if !nativeTestMode {
+            menuBarController = MenuBarController(
+                onPair: { [weak self] host in self?.showPairing(host: host) },
+                onUnpair: { [weak self] in self?.unpair() },
+                onTogglePause: { paused in
+                    AppState.shared.setPaused(paused)
+                    if paused { Task { await dispatcher.cancelActive() } }
+                },
+                onShowActivity: { [weak self] in self?.showActivity() },
+                onAbout: { [weak self] in self?.showAbout() },
+                onQuit: { [weak self] in
+                    if self?.embedded == true { self?.helperBridge?.publishMenuAction("quit") }
+                    else { NSApp.terminate(nil) }
+                },
+                onOpenManager: embedded ? { [weak self] in
+                    self?.helperBridge?.publishMenuAction("open-manager")
+                } : nil
+            )
+
+        }
+
+        if embedded {
+            let bridge = EmbeddedHelperBridge { [weak self] id, method, params in
+                await self?.handleHelperRequest(id: id, method: method, params: params)
+            }
+            helperBridge = bridge
+            agentRelay.publish = { [weak bridge] id, command in
+                bridge?.publishAgentRequest(id: id, command: command)
+            }
+            bridge.start()
+        }
+
+        if nativeTestMode,
+           let host = Self.testDeviceHost(ProcessInfo.processInfo.environment["BUDDY_TEST_DEVICE_URL"]) {
+            let record = PairingRecord(buddyID: "test-buddy", deviceHost: host, token: "test-token", pairedAt: Date())
+            AppState.shared.setPairing(.paired(buddyID: record.buddyID, deviceHost: host))
+            startConnection(record: record)
+        }
 
         // Auto-reconnect if a record already exists from a previous run.
-        if let record = pairingManager.current() {
+        if !nativeTestMode, let record = pairingManager.current() {
             AppState.shared.setPairing(.paired(buddyID: record.buddyID, deviceHost: record.deviceHost))
             startConnection(record: record)
         }
+    }
+
+    static func testDeviceHost(_ value: String?) -> String? {
+        guard let value, let url = URLComponents(string: value), url.scheme == "ws",
+              url.host == "127.0.0.1", let port = url.port, (1...65535).contains(port),
+              url.user == nil, url.password == nil, url.query == nil, url.fragment == nil,
+              url.path.isEmpty || url.path == "/api/buddy/ws" else { return nil }
+        return "127.0.0.1:\(port)"
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -73,7 +112,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         controller.window?.makeKeyAndOrderFront(nil)
     }
 
-    private func unpair() {
+    private func unpair(completion: (() -> Void)? = nil) {
         // Tell the device first so it drops its pairing record before we forget
         // our token. Fire-and-forget with a 5s timeout inside notifyRevokeSelf;
         // local state always clears on completion regardless of device reachability.
@@ -88,6 +127,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.connection = nil
                 try? self?.pairingManager?.unpair()
                 AppState.shared.setPairing(.notPaired)
+                completion?()
             }
         }
     }
@@ -96,6 +136,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         connection?.disconnect()
         guard let dispatcher else { return }
         let c = DeviceConnection(host: record.deviceHost, token: record.token, dispatcher: dispatcher)
+        if embedded {
+            c.agentHandler = { [weak self] command in
+                guard let self else {
+                    return AgentRequestRelay.failure(id: command["id"] as? String ?? "", message: "Agent manager is unavailable")
+                }
+                return await self.agentRelay.request(command)
+            }
+        }
         c.connect()
         connection = c
     }
@@ -105,6 +153,71 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             activityWindow = ActivityWindowController()
         }
         activityWindow?.show()
+    }
+
+    @MainActor
+    private func handleHelperRequest(id: String, method: String, params: [String: Any]) async {
+        guard let bridge = helperBridge else { return }
+        if nativeTestMode && ["pair", "unpair", "permissions", "activity"].contains(method) {
+            bridge.fail(id: id, error: "Native UI and pairing are disabled in test mode")
+            return
+        }
+        switch method {
+        case "status", "ping":
+            bridge.respond(id: id, result: EmbeddedHelperBridge.snapshot())
+        case "pair":
+            showPairing(host: params["host"] as? String)
+            bridge.respond(id: id, result: EmbeddedHelperBridge.snapshot())
+        case "unpair":
+            await withCheckedContinuation { continuation in
+                unpair { continuation.resume() }
+            }
+            bridge.respond(id: id, result: EmbeddedHelperBridge.snapshot())
+        case "pause":
+            guard let paused = params["paused"] as? Bool else {
+                bridge.fail(id: id, error: "paused must be a boolean")
+                return
+            }
+            AppState.shared.setPaused(paused)
+            if paused { await dispatcher?.cancelActive() }
+            bridge.respond(id: id, result: EmbeddedHelperBridge.snapshot())
+        case "permissions":
+            AccessibilityCheck.requestPrompt()
+            ScreenRecordingCheck.requestPrompt()
+            bridge.publishState()
+            bridge.respond(id: id, result: EmbeddedHelperBridge.snapshot())
+        case "activity":
+            showActivity()
+            bridge.respond(id: id, result: EmbeddedHelperBridge.snapshot())
+        case "command":
+            guard let dispatcher else {
+                bridge.fail(id: id, error: "Dispatcher is unavailable")
+                return
+            }
+            var command = params
+            command["id"] = id
+            do {
+                let data = try JSONSerialization.data(withJSONObject: command)
+                let response = await dispatcher.dispatch(data)
+                bridge.respond(id: id, result: try JSONSerialization.jsonObject(with: response))
+            } catch {
+                bridge.fail(id: id, error: error.localizedDescription)
+            }
+        case "agent_response":
+            guard let relayID = params["id"] as? String,
+                  let response = params["response"] as? [String: Any] else {
+                bridge.fail(id: id, error: "Invalid agent response")
+                return
+            }
+            bridge.respond(id: id, result: ["accepted": agentRelay.respond(id: relayID, response: response)])
+        case "agent_event":
+            bridge.respond(id: id, result: ["sent": connection?.sendAgentEvent(params) ?? false])
+        case "shutdown":
+            bridge.respond(id: id, result: ["ok": true])
+            NSApp.terminate(nil)
+        default:
+            bridge.fail(id: id, error: "Unknown native helper method: \(method)")
+        }
     }
 
     private func showAbout() {
