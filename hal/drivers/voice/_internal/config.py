@@ -422,6 +422,7 @@ LIVE_NO_USER_MAX_S = float(
 # as the tool call, so hanging up on the call itself would cut it off mid-word.
 # Long enough for a short sign-off, short enough not to feel like a hang.
 LIVE_HANGUP_GRACE_S = float(os.environ.get("HAL_LIVE_HANGUP_GRACE_S", "3"))
+LIVE_UPLINK_DUMP_DIR = os.environ.get("HAL_LIVE_UPLINK_DUMP_DIR", "")
 
 # Absolute ceiling on one session, whatever is happening. Backstop against a
 # session that never goes idle because the room is noisy.

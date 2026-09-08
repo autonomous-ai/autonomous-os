@@ -15,6 +15,7 @@ speaker decoration, and OS server event sender.
 """
 
 import logging
+import os
 import re
 import subprocess
 import threading
@@ -1608,6 +1609,25 @@ class VoiceService:
         self._live_frames_substituted = 0
         self._live_hangup_at = 0.0
         started = time.time()
+        # Exactly what the provider receives — see LIVE_UPLINK_DUMP_DIR.
+        uplink_dump = None
+        if voice_cfg.LIVE_UPLINK_DUMP_DIR:
+            try:
+                import wave as _wave
+
+                os.makedirs(voice_cfg.LIVE_UPLINK_DUMP_DIR, exist_ok=True)
+                _p = os.path.join(
+                    voice_cfg.LIVE_UPLINK_DUMP_DIR,
+                    "uplink-%s.wav" % time.strftime("%Y%m%d-%H%M%S"),
+                )
+                uplink_dump = _wave.open(_p, "wb")
+                uplink_dump.setnchannels(1)
+                uplink_dump.setsampwidth(2)
+                uplink_dump.setframerate(voice_cfg.STT_RATE)
+                logger.info("[live] uplink dump -> %s", _p)
+            except Exception as e:
+                logger.warning("[live] uplink dump could not be opened: %s", e)
+                uplink_dump = None
         last_user_speech = started
         # When the device last had the floor. The model talking is NOT action
         # from the user, but hanging up mid-reply would be wrong, so the K
@@ -1649,6 +1669,8 @@ class VoiceService:
         pump.start()
         try:
             for frame in pre_roll:
+                if uplink_dump is not None:
+                    uplink_dump.writeframes(frame)
                 self._realtime.append_audio(self._to_realtime(frame))
             self._listening = True
             while self._running and self._live_running:
@@ -1724,14 +1746,20 @@ class VoiceService:
                         if self._silence_window_is_speech(window, device_rate):
                             last_user_speech = now
 
-                self._realtime.append_audio(
-                    self._to_realtime(
-                        resample_to_stt(data, device_rate, voice_cfg.STT_RATE, self._np)
-                    )
+                uplink_frame = resample_to_stt(
+                    data, device_rate, voice_cfg.STT_RATE, self._np
                 )
+                if uplink_dump is not None:
+                    uplink_dump.writeframes(uplink_frame)
+                self._realtime.append_audio(self._to_realtime(uplink_frame))
         except Exception as e:
             logger.warning("[live] session error: %s", e)
         finally:
+            if uplink_dump is not None:
+                try:
+                    uplink_dump.close()
+                except Exception:
+                    pass
             self._live_running = False
             self._listening = False
             self._realtime.set_live_active(False)

@@ -1073,6 +1073,20 @@ LIVE_MODE: bool = os.environ.get("HAL_LIVE_MODE", "false").lower() in (
     "yes",
 )
 
+LIVE_VAD_START_SENSITIVITY: str = os.environ.get(
+    "HAL_LIVE_VAD_START_SENSITIVITY", "low"
+).strip().lower()
+LIVE_VAD_END_SENSITIVITY: str = os.environ.get(
+    "HAL_LIVE_VAD_END_SENSITIVITY", ""
+).strip().lower()
+# 0 = leave to the provider. Speech must persist this long before it counts as
+# an onset — the single most direct defence against a transient echo burst.
+LIVE_VAD_PREFIX_PADDING_MS: int = int(
+    os.environ.get("HAL_LIVE_VAD_PREFIX_PADDING_MS", "300")
+)
+# 0 = leave to the provider. How long silence must last before the turn ends.
+LIVE_VAD_SILENCE_MS: int = int(os.environ.get("HAL_LIVE_VAD_SILENCE_MS", "0"))
+
 # Turn detection / VAD: "server_vad" | "semantic_vad" | "off"
 # For Gemini: "off" disables automatic activity detection; any other value enables it.
 # For OpenAI: maps to turn_detection type in session config.

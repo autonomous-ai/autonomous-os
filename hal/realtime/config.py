@@ -122,6 +122,10 @@ class GeminiConfig(BaseModel):
         "",
     )
 
+    vad_start_sensitivity: str = app_config.LIVE_VAD_START_SENSITIVITY
+    vad_end_sensitivity: str = app_config.LIVE_VAD_END_SENSITIVITY
+    vad_prefix_padding_ms: int = app_config.LIVE_VAD_PREFIX_PADDING_MS
+    vad_silence_ms: int = app_config.LIVE_VAD_SILENCE_MS
     # NO text_only / TEXT-modality field. Opening a TEXT-only Live session to
     # avoid paying for audio we discard was tried on device 2026-09-08 and the
     # model refuses it outright: WS 1007 "The requested combination of response
