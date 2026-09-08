@@ -16,7 +16,7 @@ can be re-decided from the data instead of by re-instrumenting devices.
 
 | Layer | Path | Role |
 |-------|------|------|
-| HAL tracker | `hal/tracking/voice_kpi.py` | All measurement. Owns interaction ids, ack detection, stale-playback detection. |
+| HAL tracker | `hal/tracking/voice_metrics.py` | All measurement. Owns interaction ids, ack detection, stale-playback detection. |
 | HAL pipe | `hal/tracking/client.py` | Generic: local log line, bounded queue, background POST. Reusable by future trackers. |
 | OS ingestion | `system/server/tracking/delivery/http/handler.go` | `POST /api/tracking/event` (loopback/LAN, same gate as `/api/sensing/event`). |
 | OS pipe | `system/tracking/tracking.go` | Common fields, de-duplication, bounded queue, one sender, local log line. |
@@ -28,7 +28,7 @@ thresholds and event shapes all live in the two tracking packages.
 
 ## Interaction id
 
-An interaction is **one user utterance**. `voice_kpi.speech_end()` creates
+An interaction is **one user utterance**. `voice_metrics.speech_end()` creates
 `interaction_id` (`vi-<16 hex>`) at the moment HAL decides the user stopped
 speaking, and it is carried through realtime, the sensing POST (bound to the
 os-server `runId` returned by `/api/sensing/event`), the main agent's reply
@@ -102,7 +102,7 @@ run in between and would otherwise be charged to the device's response time.
 
 ## Events
 
-### `voice_kpi_interaction` — one per utterance (KPI-1)
+### `voice_metrics_interaction` — one per utterance (KPI-1)
 
 | Field | Meaning |
 |-------|---------|
@@ -130,7 +130,7 @@ restarts — or until it is excluded or fails. Only then does it leave the
 KPI-2 denominator. A verdict that turns out wrong afterwards is corrected with
 an amendment row.
 
-### `voice_kpi_suppression` — one per boundary (KPI-2)
+### `voice_metrics_suppression` — one per boundary (KPI-2)
 
 | Field | Meaning |
 |-------|---------|
@@ -185,7 +185,7 @@ something the boundary had to suppress.
 
 **KPI-1 — acknowledged within 3 s**
 
-- Denominator: `voice_kpi_interaction` rows with `eligible = true`, after
+- Denominator: `voice_metrics_interaction` rows with `eligible = true`, after
   applying amendments (a row whose `interaction_id` also has a row with
   `amends_event_id` set is superseded by that correction).
 - Numerator: those with `outcome = 'acknowledged'` and `ack_latency_ms <= 3000`.
@@ -200,7 +200,7 @@ something the boundary had to suppress.
 
 **KPI-2 — outdated reply actually played**
 
-- Denominator: `voice_kpi_suppression` rows with `applicable_interactions > 0`
+- Denominator: `voice_metrics_suppression` rows with `applicable_interactions > 0`
   **and** `observation_complete = true`. Rows with an incomplete observation
   are reported separately as coverage loss — never folded in as passes.
 - Numerator: those with `stale_observed = true`.
@@ -242,7 +242,7 @@ WITH rows AS (
     SAFE_CAST(param(data.event_params, 'ack_latency_ms') AS INT64) AS ack_ms,
     event_timestamp
   FROM event_tracking
-  WHERE event_name = 'voice_kpi_interaction'
+  WHERE event_name = 'voice_metrics_interaction'
     AND event_timestamp >= UNIX_SECONDS(TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY))
 ),
 -- One row per interaction: the latest verdict wins, so a correction
@@ -275,7 +275,7 @@ WITH s AS (
     param(data.event_params, 'observation_complete') AS complete,
     SAFE_CAST(param(data.event_params, 'applicable_interactions') AS INT64) AS applicable
   FROM event_tracking
-  WHERE event_name = 'voice_kpi_suppression'
+  WHERE event_name = 'voice_metrics_suppression'
     AND event_timestamp >= UNIX_SECONDS(TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY))
 )
 SELECT
@@ -303,7 +303,7 @@ SELECT
   MAX(SAFE_CAST(param(data.event_params, 'hal_failed_total')       AS INT64)) AS hal_failed,
   MAX(SAFE_CAST(param(data.event_params, 'unknown_owner_playbacks') AS INT64)) AS unowned_playbacks
 FROM event_tracking
-WHERE event_name LIKE 'voice_kpi_%';
+WHERE event_name LIKE 'voice_metrics_%';
 ```
 
 ## Local logs on the device
@@ -313,9 +313,27 @@ too — the warehouse copy is the one that can be missing.
 
 ```bash
 journalctl -u hal -f | grep '\[tracking\]'        # HAL: every event + POST failures
-journalctl -u hal -f | grep '\[voice-kpi\]'       # ack / boundary / stale decisions
+journalctl -u hal -f | grep '\[voice-metrics\]'       # ack / boundary / stale decisions
 journalctl -u os-server -f | grep '\[tracking\]'  # os-server: forwarded, dropped, failed
 ```
+
+## Configuration
+
+Both values live in the body's `/opt/hal/.env`, which os-server loads at
+startup — a device can be pointed at a different warehouse without a rebuild:
+
+| Key | Meaning |
+|-----|---------|
+| `AUTONOMOUS_TRACKING_ENABLED` | **Master switch. Default OFF** (empty/unset). Events are still written to the local log when off — only the network hop is skipped. Set to `1` to send. |
+| `AUTONOMOUS_ANALYTICS_ID` | AA authorization key. Missing ⇒ delivery fails loudly (`[tracking] delivery failed`). |
+| `AUTONOMOUS_ANALYTICS_URL` | Where events are posted. Optional; falls back to the built-in production endpoint. |
+
+The switch is read by both processes (HAL and os-server) from the same
+key, per call — flipping it plus a service restart is enough, no rebuild.
+
+Resolution order for the URL: process env → `/opt/hal/.env` → built-in
+default. The HAL→os-server hop (`http://127.0.0.1:5000/api/tracking/event`)
+stays a loopback constant like every other HAL→OS call.
 
 ## Privacy
 
@@ -355,5 +373,5 @@ and `platform` is `device` (see `system/lib/analytics`).
 go build ./...                                   # os-server + tracking package
 go test ./system/tracking/ ./system/server/tracking/...
 make hal-lint
-cd hal && .venv/bin/python -m pytest test/test_voice_kpi.py -q
+cd hal && .venv/bin/python -m pytest test/test_voice_metrics.py -q
 ```

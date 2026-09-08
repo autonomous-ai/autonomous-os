@@ -16,7 +16,7 @@ Cả hai mục tiêu đều **tạm thời**. Mọi khoảng thời gian thô đ
 
 | Lớp | Đường dẫn | Vai trò |
 |-----|-----------|---------|
-| Tracker ở HAL | `hal/tracking/voice_kpi.py` | Toàn bộ phần đo: interaction id, phát hiện ack, phát hiện audio cũ |
+| Tracker ở HAL | `hal/tracking/voice_metrics.py` | Toàn bộ phần đo: interaction id, phát hiện ack, phát hiện audio cũ |
 | Ống dẫn ở HAL | `hal/tracking/client.py` | Dùng chung: log local, hàng đợi có giới hạn, POST nền |
 | Nhận ở OS | `system/server/tracking/delivery/http/handler.go` | `POST /api/tracking/event` (loopback/LAN, cùng cổng chặn với `/api/sensing/event`) |
 | Ống dẫn ở OS | `system/tracking/tracking.go` | Field chung, chống trùng, hàng đợi giới hạn, một sender, log local |
@@ -28,7 +28,7 @@ dạng event đều nằm trong hai package tracking.
 
 ## Interaction id
 
-Một interaction = **một lượt người dùng nói**. `voice_kpi.speech_end()` tạo
+Một interaction = **một lượt người dùng nói**. `voice_metrics.speech_end()` tạo
 `interaction_id` (`vi-<16 hex>`) đúng lúc HAL kết luận người dùng đã nói xong,
 rồi id đó đi xuyên realtime, POST sensing (gắn với `runId` os-server trả về từ
 `/api/sensing/event`), câu trả lời của agent chính (qua `turn_id` của TTS
@@ -98,7 +98,7 @@ gian phản hồi của thiết bị.
 
 ## Event
 
-### `voice_kpi_interaction` — mỗi lượt nói một event (KPI-1)
+### `voice_metrics_interaction` — mỗi lượt nói một event (KPI-1)
 
 | Field | Ý nghĩa |
 |-------|---------|
@@ -125,7 +125,7 @@ thấy turn đó để suppress. Một turn còn *active* cho tới khi im lặn
 tiếng — hoặc cho tới khi bị loại/bị lỗi. Chỉ khi đó nó mới rời mẫu số KPI-2.
 Verdict sai sau đó được sửa bằng dòng đính chính.
 
-### `voice_kpi_suppression` — mỗi biên một event (KPI-2)
+### `voice_metrics_suppression` — mỗi biên một event (KPI-2)
 
 | Field | Ý nghĩa |
 |-------|---------|
@@ -175,7 +175,7 @@ không thể phát ra câu trả lời cũ, nên không tính là thứ mà biê
 
 **KPI-1 — phản hồi trong 3 giây**
 
-- Mẫu số: các dòng `voice_kpi_interaction` có `eligible = true`, sau khi áp
+- Mẫu số: các dòng `voice_metrics_interaction` có `eligible = true`, sau khi áp
   dụng đính chính (dòng nào có bản `amends_event_id` cho cùng `interaction_id`
   thì bị bản đính chính thay thế).
 - Tử số: trong đó `outcome = 'acknowledged'` và `ack_latency_ms <= 3000`.
@@ -189,7 +189,7 @@ không thể phát ra câu trả lời cũ, nên không tính là thứ mà biê
 
 **KPI-2 — câu trả lời cũ thực sự bị phát**
 
-- Mẫu số: các dòng `voice_kpi_suppression` có `applicable_interactions > 0`
+- Mẫu số: các dòng `voice_metrics_suppression` có `applicable_interactions > 0`
   **và** `observation_complete = true`. Dòng quan sát dở dang báo riêng như
   coverage loss — không được gộp vào phần "đạt".
 - Tử số: trong đó `stale_observed = true`.
@@ -212,7 +212,7 @@ gửi lên và web/mobile đang gửi. Nếu kho của bạn trải params thàn
 lại hàm trích xuất.
 
 Xem các truy vấn SQL đầy đủ (KPI-1, KPI-2, coverage) trong bản tiếng Anh:
-[`docs/voice-kpi.md`](../voice-kpi.md#warehouse-queries).
+[`docs/voice-metrics.md`](../voice-metrics.md#warehouse-queries).
 
 ## Log local trên thiết bị
 
@@ -221,9 +221,27 @@ kho mới là bản có thể thiếu.
 
 ```bash
 journalctl -u hal -f | grep '\[tracking\]'        # HAL: mọi event + lỗi POST
-journalctl -u hal -f | grep '\[voice-kpi\]'       # quyết định ack / biên / stale
+journalctl -u hal -f | grep '\[voice-metrics\]'       # quyết định ack / biên / stale
 journalctl -u os-server -f | grep '\[tracking\]'  # os-server: đã gửi, đã drop, đã lỗi
 ```
+
+## Cấu hình
+
+Cả hai giá trị nằm trong `/opt/hal/.env` của body, os-server load lúc khởi
+động — đổi kho dữ liệu cho một thiết bị không cần build lại:
+
+| Key | Ý nghĩa |
+|-----|---------|
+| `AUTONOMOUS_TRACKING_ENABLED` | **Công tắc tổng. Mặc định TẮT** (rỗng/không đặt). Khi tắt event vẫn ghi log local — chỉ bỏ chặng gửi mạng. Đặt `1` để gửi. |
+| `AUTONOMOUS_ANALYTICS_ID` | Key authorization của AA. Thiếu ⇒ báo lỗi gửi rõ ràng (`[tracking] delivery failed`). |
+| `AUTONOMOUS_ANALYTICS_URL` | Nơi bắn event. Tuỳ chọn; không có thì dùng endpoint production mặc định. |
+
+Công tắc được cả hai tiến trình (HAL và os-server) đọc từ cùng một key, đọc
+mỗi lần gọi — bật/tắt rồi restart service là đủ, không cần build lại.
+
+Thứ tự phân giải URL: env của process → `/opt/hal/.env` → mặc định built-in.
+Chặng HAL→os-server (`http://127.0.0.1:5000/api/tracking/event`) vẫn là hằng
+loopback như mọi lời gọi HAL→OS khác.
 
 ## Riêng tư
 
@@ -261,5 +279,5 @@ là hostname thiết bị, `platform` là `device` (xem `system/lib/analytics`).
 go build ./...                                   # os-server + package tracking
 go test ./system/tracking/ ./system/server/tracking/...
 make hal-lint
-cd hal && .venv/bin/python -m pytest test/test_voice_kpi.py -q
+cd hal && .venv/bin/python -m pytest test/test_voice_metrics.py -q
 ```

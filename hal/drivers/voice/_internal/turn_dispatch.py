@@ -13,7 +13,7 @@ from hal.drivers.voice._internal.realtime_turn import (
     should_drop_downstream_turn,
 )
 from hal.drivers.voice.speech_emotion.constants import UNKNOWN_USER_LABEL
-from hal.tracking import voice_kpi
+from hal.tracking import voice_metrics
 
 logger = logging.getLogger("hal.voice")
 
@@ -182,14 +182,14 @@ def dispatch_turn(
     # Voice KPI: record where this turn went, and exclude the ones that are
     # not a missed-response question at all (noise, a turn the model rejected
     # as not-for-us, nothing said). Excluded interactions are still reported,
-    # with the reason — see hal/tracking/voice_kpi.py.
-    voice_kpi.set_route(interaction_id, rt.route, event_type)
+    # with the reason — see hal/tracking/voice_metrics.py.
+    voice_metrics.set_route(interaction_id, rt.route, event_type)
     if rt.route == ROUTE_NOISE_DROPPED:
-        voice_kpi.exclude(interaction_id, voice_kpi.EXCL_REJECTED_NOISE)
+        voice_metrics.exclude(interaction_id, voice_metrics.EXCL_REJECTED_NOISE)
     elif dropped:
-        voice_kpi.exclude(interaction_id, voice_kpi.EXCL_REJECTED_NON_USER)
+        voice_metrics.exclude(interaction_id, voice_metrics.EXCL_REJECTED_NON_USER)
     elif not combined:
-        voice_kpi.exclude(interaction_id, voice_kpi.EXCL_NO_TRANSCRIPT)
+        voice_metrics.exclude(interaction_id, voice_metrics.EXCL_NO_TRANSCRIPT)
 
     if combined and not dropped:
         # Reuse the prepass result when the realtime path already identified the
@@ -220,18 +220,19 @@ def dispatch_turn(
                 handled_msg,
                 event_type="voice_agent_handled",
                 skip_echo=True,
+                interaction_id=interaction_id,
             ))
             # This POST is a backend notification, not a second user
             # interaction: it binds to the SAME interaction the realtime agent
             # just answered, so no extra KPI sample is created.
-            voice_kpi.bind_run(interaction_id, handled_result.run_id)
+            voice_metrics.bind_run(interaction_id, handled_result.run_id)
             # It is ALSO the automatic-supersession boundary — but only when
             # os-server says it actually took the speaker away from the older
             # turn. Opt-in policy (OS_REALTIME_SUPERSEDES_MAIN_REPLY, default
             # off) and a failed POST both mean nothing was suppressed, so
             # there is no situation to measure.
-            voice_kpi.boundary(
-                voice_kpi.BOUNDARY_AUTO_SUPERSEDE,
+            voice_metrics.boundary(
+                voice_metrics.BOUNDARY_AUTO_SUPERSEDE,
                 interaction_id,
                 policy_applied=handled_result.speech_suppressed,
             )
@@ -258,14 +259,15 @@ def dispatch_turn(
                     sensing_msg,
                     event_type=event_type,
                     image_b64=vision_image if vision_hint else "",
+                    interaction_id=interaction_id,
                 ))
-                voice_kpi.bind_run(interaction_id, result.run_id)
+                voice_metrics.bind_run(interaction_id, result.run_id)
                 if not result.run_id:
                     # The turn never reached os-server. A valid command that
                     # went unserved: it STAYS in the KPI denominator as a
                     # failure — excluding it would hide exactly the case the
                     # user feels most.
-                    voice_kpi.mark_failed(interaction_id, voice_kpi.FAIL_DISPATCH_FAILED)
+                    voice_metrics.mark_failed(interaction_id, voice_metrics.FAIL_DISPATCH_FAILED)
         else:
             # Realtime not active, OR it was active but produced no output
             # (e.g. receive() timed out) — send to the OS server normally so the
@@ -280,10 +282,11 @@ def dispatch_turn(
                 fallback_msg,
                 event_type=event_type,
                 image_b64=vision_image if vision_hint else "",
+                interaction_id=interaction_id,
             ))
-            voice_kpi.bind_run(interaction_id, result.run_id)
+            voice_metrics.bind_run(interaction_id, result.run_id)
             if not result.run_id:
-                voice_kpi.mark_failed(interaction_id, voice_kpi.FAIL_DISPATCH_FAILED)
+                voice_metrics.mark_failed(interaction_id, voice_metrics.FAIL_DISPATCH_FAILED)
     elif combined:
         if rt.route == ROUTE_NOISE_DROPPED:
             logger.info(

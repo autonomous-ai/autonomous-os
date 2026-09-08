@@ -54,6 +54,12 @@ type SensingEventRequest struct {
 	// downstream already carries `attachments[]`, so nothing here has to choose
 	// which photo survives.
 	Images []string `json:"images,omitempty"`
+	// InteractionID is HAL's voice-KPI id for the utterance behind this event
+	// (measurement only, empty for non-voice sources). It is echoed back as
+	// the owner of any audio os-server starts for this turn — the opening
+	// filler fires before this request's response reaches HAL, so HAL's own
+	// run-id binding cannot cover it.
+	InteractionID string `json:"interaction_id,omitempty"`
 	// CurrentUser is HAL's view of who is effectively in front of the device
 	// right now (from FaceRecognizer.current_user()). Empty when nobody is
 	// visible. This is the source of truth — do NOT re-derive by parsing
@@ -696,10 +702,11 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 	// the hal-side speak() lock-timeout=2s race that the timer-based
 	// fire-at-lifecycle.start+FillerDelay path triggers.
 	if isVoice {
-		DefaultFillerManager.MarkVoiceRun(runID)
-		// Owned by this run, so HAL can attribute the played filler to the
-		// utterance that triggered it (voice KPI).
-		go PlayOpeningFillerNow(runID)
+		DefaultFillerManager.MarkVoiceRun(runID, req.InteractionID)
+		// Owned by the utterance HAL is tracking, not by the run id: this
+		// fires now, while HAL is still waiting for the response that would
+		// tell it which run this turn became.
+		go PlayOpeningFillerNow(fillerOwner(req.InteractionID, runID))
 	}
 
 	var err error

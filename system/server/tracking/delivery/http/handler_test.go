@@ -21,7 +21,7 @@ func post(t *testing.T, body string) *httptest.ResponseRecorder {
 }
 
 func TestPostEventAccepted(t *testing.T) {
-	if w := post(t, `{"event_name":"voice_kpi_interaction","event_id":"e1","params":{"outcome":"acknowledged"}}`); w.Code != http.StatusOK {
+	if w := post(t, `{"event_name":"voice_metrics_interaction","event_id":"e1","params":{"outcome":"acknowledged"}}`); w.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
 	}
 }

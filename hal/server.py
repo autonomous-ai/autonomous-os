@@ -22,6 +22,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 import hal.app_state as state
+from hal.tracking import tts_hooks
 from hal.config import (
     AUDIO_INPUT_ALSA,
     AUDIO_OUTPUT_ALSA,
@@ -67,27 +68,6 @@ logger = setup_logging()
 # never pays the import cost. plan_mounts semantics are unchanged: undeclared
 # routes were skipped anyway; declared routes still use import success ==
 # availability.
-
-
-def _tracking_playback_audio(owner: str, kind_hint: str) -> None:
-    """First real audio frame of a playback reached the stream (voice KPI).
-
-    Measurement only — never raises into the audio path."""
-    try:
-        from hal.tracking import voice_kpi
-
-        voice_kpi.playback_audio(owner, kind_hint, state.tts_service)
-    except Exception:
-        logger.exception("[voice-kpi] playback audio hook failed")
-
-
-def _tracking_playback_done() -> None:
-    try:
-        from hal.tracking import voice_kpi
-
-        voice_kpi.playback_end()
-    except Exception:
-        logger.exception("[voice-kpi] playback done hook failed")
 
 
 def _resolve_device_type() -> str:
@@ -664,8 +644,8 @@ async def lifespan(app: FastAPI):
                 # actually reaches the stream, with the owner that claimed the
                 # speaker. Separate from on_speak_start, which the cached path
                 # fires before it has written anything.
-                on_playback_audio=_tracking_playback_audio,
-                on_playback_done=_tracking_playback_done,
+                on_playback_audio=tts_hooks.on_playback_audio,
+                on_playback_done=tts_hooks.on_playback_done,
             )
             logger.info(
                 "TTSService auto-started (provider=%s, output_device=%s, available=%s)",

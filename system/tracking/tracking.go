@@ -21,6 +21,8 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -31,7 +33,7 @@ import (
 // Event is one tracking observation. Params carry the tracker's own fields;
 // common fields (version, runtime, counters) are added by this package.
 type Event struct {
-	// Name is the AA event_name, e.g. "voice_kpi_interaction".
+	// Name is the AA event_name, e.g. "voice_metrics_interaction".
 	Name string
 	// ID de-duplicates retries: the same ID is sent at most once. Producers
 	// that can retry (HAL re-posting after a failed HTTP call) must set it.
@@ -49,6 +51,25 @@ const (
 	dedupeTTL = 30 * time.Minute
 	logPrefix = "[tracking]"
 )
+
+// envEnabled is the master switch, read from the body's /opt/hal/.env (loaded
+// at startup). Default OFF: a body that has never heard of this flag sends
+// nothing off-device.
+//
+// OFF does not mean blind — every event is still written to the local log, so
+// `journalctl -u os-server | grep '[tracking]'` shows what WOULD have been
+// sent. Only the network hop is skipped.
+const envEnabled = "AUTONOMOUS_TRACKING_ENABLED"
+
+// Enabled reports whether events may leave the device. Read per call so the
+// flag plus a restart is all it takes — no rebuild.
+func Enabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(envEnabled))) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
+}
 
 // sendFunc is the transport signature (analytics.TrackEvent in production).
 type sendFunc func(ctx context.Context, name string, params map[string]any) error
@@ -110,9 +131,16 @@ func Report(ev Event) {
 	}
 
 	// Log before queueing: this line is the device-local record of the event
-	// and must exist whether or not it ever reaches the warehouse.
+	// and must exist whether or not it ever reaches the warehouse — or whether
+	// sending is enabled at all.
 	slog.Info(logPrefix+" event", "component", "tracking",
 		"event_name", ev.Name, "event_id", ev.ID, "params", compactJSON(ev.Params))
+
+	if !Enabled() {
+		slog.Debug(logPrefix+" not sent -- "+envEnabled+" is off", "component", "tracking",
+			"event_name", ev.Name, "event_id", ev.ID)
+		return
+	}
 
 	select {
 	case global.queue <- ev:

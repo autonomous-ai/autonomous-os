@@ -70,8 +70,8 @@ SUPPRESSION_OBSERVE_MS = 60000
 # keeps counting as active.
 TURN_ACTIVE_TTL_MS = 45000
 
-EVENT_INTERACTION = "voice_kpi_interaction"
-EVENT_SUPPRESSION = "voice_kpi_suppression"
+EVENT_INTERACTION = "voice_metrics_interaction"
+EVENT_SUPPRESSION = "voice_metrics_suppression"
 
 # --- Playback kinds (what was heard) ---------------------------------------
 KIND_AGENT_REPLY = "agent_reply"          # main agent's answer, via the TTS queue
@@ -201,11 +201,11 @@ def speech_end(method: str, at: float = 0.0) -> str:
     for params in evicted:
         params["eviction"] = "tracker_capacity"
         logger.warning(
-            "[voice-kpi] reporting evicted interaction early (interaction=%s)",
+            "[voice-metrics] reporting evicted interaction early (interaction=%s)",
             params["interaction_id"],
         )
         client.report(EVENT_INTERACTION, params, event_id="int-" + params["interaction_id"])
-    logger.info("[voice-kpi] speech end (interaction=%s method=%s)", iid, method)
+    logger.info("[voice-metrics] speech end (interaction=%s method=%s)", iid, method)
     return iid
 
 
@@ -274,7 +274,7 @@ def mark_failed(iid: str, reason: str) -> None:
     if amendment:
         _report_amendment(amendment)
         return
-    logger.warning("[voice-kpi] interaction unserved (interaction=%s reason=%s)", iid, reason)
+    logger.warning("[voice-metrics] interaction unserved (interaction=%s reason=%s)", iid, reason)
 
 
 def exclude(iid: str, reason: str) -> None:
@@ -291,7 +291,7 @@ def exclude(iid: str, reason: str) -> None:
     if amendment:
         _report_amendment(amendment)
         return
-    logger.info("[voice-kpi] excluded (interaction=%s reason=%s)", iid, reason)
+    logger.info("[voice-metrics] excluded (interaction=%s reason=%s)", iid, reason)
 
 
 # --- Playback boundary ------------------------------------------------------
@@ -316,7 +316,7 @@ def playback_audio(owner: str, kind_hint: str, tts=None) -> None:
         if not iid:
             _unknown_owner_playbacks += 1
             logger.info(
-                "[voice-kpi] playback with unknown owner (kind=%s) -- not counted as ack",
+                "[voice-metrics] playback with unknown owner (kind=%s) -- not counted as ack",
                 kind,
             )
         else:
@@ -332,7 +332,7 @@ def playback_audio(owner: str, kind_hint: str, tts=None) -> None:
                 it.ack_kind = kind
                 it.ack_modality = _ACK_MODALITY.get(kind, kind)
                 logger.info(
-                    "[voice-kpi] ack (interaction=%s kind=%s latency_ms=%d)",
+                    "[voice-metrics] ack (interaction=%s kind=%s latency_ms=%d)",
                     iid, kind, it.ack_latency_ms,
                 )
         _observe_playback(kind, iid, started, None)
@@ -400,7 +400,7 @@ def boundary(reason: str, triggering_interaction_id: str = "", policy_applied: b
     situations where nothing was ever suppressed.
     """
     if not policy_applied:
-        logger.info("[voice-kpi] boundary skipped -- policy not applied (reason=%s)", reason)
+        logger.info("[voice-metrics] boundary skipped -- policy not applied (reason=%s)", reason)
         return
     at = _now()
     with _lock:
@@ -428,7 +428,7 @@ def boundary(reason: str, triggering_interaction_id: str = "", policy_applied: b
             _observe_playback(playing["kind"], playing["interaction_id"],
                               playing["started"], None)
     logger.info(
-        "[voice-kpi] suppression boundary (reason=%s applicable=%d playing_old=%s)",
+        "[voice-metrics] suppression boundary (reason=%s applicable=%d playing_old=%s)",
         reason, len(applicable), state["old_audio_playing_at_boundary"],
     )
     t = threading.Timer(SUPPRESSION_OBSERVE_MS / 1000.0, _close_boundary, args=(state,))
@@ -485,7 +485,7 @@ def _observe_playback(kind: str, iid: str, started: float, ended) -> None:
         state["stale_started_after_ms"] = _ms(started - state["at"])
         state["stale_audible_past_grace_ms"] = audible_past
         logger.warning(
-            "[voice-kpi] STALE playback past %s boundary "
+            "[voice-metrics] STALE playback past %s boundary "
             "(kind=%s interaction=%s started_after_ms=%d audible_past_grace_ms=%d)",
             state["reason"], kind, iid, state["stale_started_after_ms"], audible_past,
         )
@@ -591,7 +591,7 @@ def _amend_params(it: "_Interaction", why: str) -> dict:
 
 def _report_amendment(params: dict) -> None:
     logger.info(
-        "[voice-kpi] amending reported verdict (interaction=%s why=%s)",
+        "[voice-metrics] amending reported verdict (interaction=%s why=%s)",
         params["interaction_id"], params["amendment_reason"],
     )
     client.report(EVENT_INTERACTION, params, event_id="amend-" + client.new_event_id()[:12])

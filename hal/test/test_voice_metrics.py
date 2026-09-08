@@ -9,7 +9,7 @@ import threading
 
 import pytest
 
-from hal.tracking import client, voice_kpi
+from hal.tracking import client, voice_metrics
 
 
 class FakeClock:
@@ -27,7 +27,7 @@ class FakeClock:
 
 @pytest.fixture
 def kpi(monkeypatch):
-    """voice_kpi with a mock transport, a fake clock, and no real timers.
+    """voice_metrics with a mock transport, a fake clock, and no real timers.
 
     Timers are captured instead of started so a test closes an observation
     window explicitly — that is what makes "the window expired while the turn
@@ -57,12 +57,12 @@ def kpi(monkeypatch):
             self.function(*self.args)
 
     clock = FakeClock()
-    monkeypatch.setattr(voice_kpi.client, "report", fake_report)
+    monkeypatch.setattr(voice_metrics.client, "report", fake_report)
     monkeypatch.setattr(client, "report", fake_report)
-    monkeypatch.setattr(voice_kpi, "_now", clock)
-    monkeypatch.setattr(voice_kpi.threading, "Timer", FakeTimer)
-    monkeypatch.setattr(voice_kpi, "_speaker_muted", lambda: False)
-    voice_kpi.reset_for_test()
+    monkeypatch.setattr(voice_metrics, "_now", clock)
+    monkeypatch.setattr(voice_metrics.threading, "Timer", FakeTimer)
+    monkeypatch.setattr(voice_metrics, "_speaker_muted", lambda: False)
+    voice_metrics.reset_for_test()
 
     class Harness:
         def __init__(self):
@@ -81,7 +81,7 @@ def kpi(monkeypatch):
             return rows[0]["params"]
 
     yield Harness()
-    voice_kpi.reset_for_test()
+    voice_metrics.reset_for_test()
 
 
 class FakeTTS:
@@ -91,15 +91,15 @@ class FakeTTS:
 
 
 def _reply(kpi, owner):
-    voice_kpi.playback_audio(owner, "agent_or_system", FakeTTS(realtime_feedback=True))
+    voice_metrics.playback_audio(owner, "agent_or_system", FakeTTS(realtime_feedback=True))
 
 
 def _filler(kpi, owner):
-    voice_kpi.playback_audio(owner, "cached", FakeTTS(interruptible=True))
+    voice_metrics.playback_audio(owner, "cached", FakeTTS(interruptible=True))
 
 
 def _native(kpi, owner):
-    voice_kpi.playback_audio(owner, "native_realtime", FakeTTS())
+    voice_metrics.playback_audio(owner, "native_realtime", FakeTTS())
 
 
 # --- Finding 1: ownership, no guessing --------------------------------------
@@ -107,39 +107,39 @@ def _native(kpi, owner):
 def test_unowned_audio_is_never_an_acknowledgement(kpi):
     """Regression: audio nobody claimed used to be credited to the newest open
     interaction, so an old filler could 'acknowledge' a new command."""
-    voice_kpi.speech_end("silence_clock")
+    voice_metrics.speech_end("silence_clock")
     kpi.clock.advance(500)
-    voice_kpi.playback_audio("", "cached", FakeTTS(interruptible=True))
+    voice_metrics.playback_audio("", "cached", FakeTTS(interruptible=True))
     kpi.close_all()
 
-    p = kpi.one(voice_kpi.EVENT_INTERACTION)
-    assert p["outcome"] == voice_kpi.OUTCOME_NO_ACK
+    p = kpi.one(voice_metrics.EVENT_INTERACTION)
+    assert p["outcome"] == voice_metrics.OUTCOME_NO_ACK
     assert p["ack_latency_ms"] is None
     assert p["unknown_owner_playbacks"] == 1
 
 
 def test_old_turn_audio_does_not_acknowledge_a_new_command(kpi):
     """Explicit ownership sends the filler to the turn it belongs to."""
-    old = voice_kpi.speech_end("silence_clock")
-    voice_kpi.bind_run(old, "run-old")
+    old = voice_metrics.speech_end("silence_clock")
+    voice_metrics.bind_run(old, "run-old")
     kpi.clock.advance(1000)
-    new = voice_kpi.speech_end("silence_clock")
+    new = voice_metrics.speech_end("silence_clock")
     kpi.clock.advance(500)
     _filler(kpi, "run:run-old")
     kpi.close_all()
 
-    rows = {e["params"]["interaction_id"]: e["params"] for e in kpi.of(voice_kpi.EVENT_INTERACTION)}
-    assert rows[old]["outcome"] == voice_kpi.OUTCOME_ACKED
-    assert rows[new]["outcome"] == voice_kpi.OUTCOME_NO_ACK
+    rows = {e["params"]["interaction_id"]: e["params"] for e in kpi.of(voice_metrics.EVENT_INTERACTION)}
+    assert rows[old]["outcome"] == voice_metrics.OUTCOME_ACKED
+    assert rows[new]["outcome"] == voice_metrics.OUTCOME_NO_ACK
 
 
 def test_realtime_native_audio_is_owned_by_its_interaction(kpi):
-    iid = voice_kpi.speech_end("silence_clock")
+    iid = voice_metrics.speech_end("silence_clock")
     kpi.clock.advance(800)
     _native(kpi, f"interaction:{iid}")
     kpi.close_all()
 
-    p = kpi.one(voice_kpi.EVENT_INTERACTION)
+    p = kpi.one(voice_metrics.EVENT_INTERACTION)
     assert p["ack_modality"] == "spoken_answer_realtime"
     assert p["ack_latency_ms"] == 800
 
@@ -149,49 +149,49 @@ def test_realtime_native_audio_is_owned_by_its_interaction(kpi):
 def test_stale_reply_after_five_seconds_is_still_detected(kpi):
     """Regression: the watcher used to close after grace+3s, so a main-agent
     reply arriving later was scored as a clean suppression."""
-    old = voice_kpi.speech_end("silence_clock")
-    voice_kpi.bind_run(old, "run-old")
+    old = voice_metrics.speech_end("silence_clock")
+    voice_metrics.bind_run(old, "run-old")
     kpi.clock.advance(1000)
-    new = voice_kpi.speech_end("silence_clock")
-    voice_kpi.boundary(voice_kpi.BOUNDARY_AUTO_SUPERSEDE, new)
+    new = voice_metrics.speech_end("silence_clock")
+    voice_metrics.boundary(voice_metrics.BOUNDARY_AUTO_SUPERSEDE, new)
 
     kpi.clock.advance(20000)          # far past the old 5s window
     _reply(kpi, "run:run-old")
     kpi.close_all()
 
-    p = kpi.of(voice_kpi.EVENT_SUPPRESSION)[0]["params"]
+    p = kpi.of(voice_metrics.EVENT_SUPPRESSION)[0]["params"]
     assert p["stale_observed"] is True
-    assert p["stale_kind"] == voice_kpi.KIND_AGENT_REPLY
+    assert p["stale_kind"] == voice_metrics.KIND_AGENT_REPLY
     assert p["stale_started_after_ms"] == 20000
 
 
 def test_window_closing_on_a_live_turn_reports_incomplete_not_clean(kpi):
     """An unfinished observation must not read as 'no stale reply'."""
-    old = voice_kpi.speech_end("silence_clock")
-    voice_kpi.bind_run(old, "run-old")
+    old = voice_metrics.speech_end("silence_clock")
+    voice_metrics.bind_run(old, "run-old")
     kpi.clock.advance(1000)
-    new = voice_kpi.speech_end("silence_clock")
-    voice_kpi.boundary(voice_kpi.BOUNDARY_AUTO_SUPERSEDE, new)
+    new = voice_metrics.speech_end("silence_clock")
+    voice_metrics.boundary(voice_metrics.BOUNDARY_AUTO_SUPERSEDE, new)
 
     # Close ONLY the suppression watcher; the old turn is still alive.
     boundary_timer = kpi.timers[-1]
     boundary_timer.fire()
 
-    p = kpi.of(voice_kpi.EVENT_SUPPRESSION)[0]["params"]
+    p = kpi.of(voice_metrics.EVENT_SUPPRESSION)[0]["params"]
     assert p["stale_observed"] is False
     assert p["observation_complete"] is False
     assert p["unobserved_interactions"] == 1
 
 
 def test_completed_turns_make_the_observation_complete(kpi):
-    old = voice_kpi.speech_end("silence_clock")
-    voice_kpi.bind_run(old, "run-old")
+    old = voice_metrics.speech_end("silence_clock")
+    voice_metrics.bind_run(old, "run-old")
     kpi.clock.advance(1000)
-    new = voice_kpi.speech_end("silence_clock")
-    voice_kpi.boundary(voice_kpi.BOUNDARY_AUTO_SUPERSEDE, new)
+    new = voice_metrics.speech_end("silence_clock")
+    voice_metrics.boundary(voice_metrics.BOUNDARY_AUTO_SUPERSEDE, new)
     kpi.close_all()
 
-    p = kpi.of(voice_kpi.EVENT_SUPPRESSION)[0]["params"]
+    p = kpi.of(voice_metrics.EVENT_SUPPRESSION)[0]["params"]
     assert p["stale_observed"] is False
     assert p["observation_complete"] is True
 
@@ -201,54 +201,54 @@ def test_completed_turns_make_the_observation_complete(kpi):
 def test_audio_continuing_past_the_grace_is_stale(kpi):
     """Regression: old audio playing at the stop and ending 3s later (grace 2s)
     reported stop_to_silence_ms=3000 but stale_observed=false."""
-    old = voice_kpi.speech_end("silence_clock")
-    voice_kpi.bind_run(old, "run-old")
+    old = voice_metrics.speech_end("silence_clock")
+    voice_metrics.bind_run(old, "run-old")
     _reply(kpi, "run:run-old")
     kpi.clock.advance(500)
-    voice_kpi.boundary(voice_kpi.BOUNDARY_EXPLICIT_STOP)
+    voice_metrics.boundary(voice_metrics.BOUNDARY_EXPLICIT_STOP)
 
     kpi.clock.advance(3000)           # still talking 3s after the stop
-    voice_kpi.playback_end()
+    voice_metrics.playback_end()
     kpi.close_all()
 
-    p = kpi.of(voice_kpi.EVENT_SUPPRESSION)[0]["params"]
+    p = kpi.of(voice_metrics.EVENT_SUPPRESSION)[0]["params"]
     assert p["old_audio_playing_at_boundary"] is True
     assert p["stop_to_silence_ms"] == 3000
     assert p["stale_observed"] is True
-    assert p["stale_audible_past_grace_ms"] == 3000 - voice_kpi.STALE_GRACE_MS
+    assert p["stale_audible_past_grace_ms"] == 3000 - voice_metrics.STALE_GRACE_MS
 
 
 def test_audio_stopping_inside_the_grace_is_not_stale(kpi):
     """The documented grace stays a pass — and the raw timing is still kept."""
-    old = voice_kpi.speech_end("silence_clock")
-    voice_kpi.bind_run(old, "run-old")
+    old = voice_metrics.speech_end("silence_clock")
+    voice_metrics.bind_run(old, "run-old")
     _reply(kpi, "run:run-old")
     kpi.clock.advance(500)
-    voice_kpi.boundary(voice_kpi.BOUNDARY_EXPLICIT_STOP)
+    voice_metrics.boundary(voice_metrics.BOUNDARY_EXPLICIT_STOP)
 
     kpi.clock.advance(800)            # quiet well inside STALE_GRACE_MS
-    voice_kpi.playback_end()
+    voice_metrics.playback_end()
     kpi.close_all()
 
-    p = kpi.of(voice_kpi.EVENT_SUPPRESSION)[0]["params"]
+    p = kpi.of(voice_metrics.EVENT_SUPPRESSION)[0]["params"]
     assert p["stale_observed"] is False
     assert p["stop_to_silence_ms"] == 800
-    assert p["grace_ms"] == voice_kpi.STALE_GRACE_MS
+    assert p["grace_ms"] == voice_metrics.STALE_GRACE_MS
 
 
 def test_stale_filler_counts_too(kpi):
-    old = voice_kpi.speech_end("silence_clock")
-    voice_kpi.bind_run(old, "run-old")
+    old = voice_metrics.speech_end("silence_clock")
+    voice_metrics.bind_run(old, "run-old")
     kpi.clock.advance(1000)
-    new = voice_kpi.speech_end("silence_clock")
-    voice_kpi.boundary(voice_kpi.BOUNDARY_AUTO_SUPERSEDE, new)
-    kpi.clock.advance(voice_kpi.STALE_GRACE_MS + 500)
+    new = voice_metrics.speech_end("silence_clock")
+    voice_metrics.boundary(voice_metrics.BOUNDARY_AUTO_SUPERSEDE, new)
+    kpi.clock.advance(voice_metrics.STALE_GRACE_MS + 500)
     _filler(kpi, "run:run-old")
     kpi.close_all()
 
-    p = kpi.of(voice_kpi.EVENT_SUPPRESSION)[0]["params"]
+    p = kpi.of(voice_metrics.EVENT_SUPPRESSION)[0]["params"]
     assert p["stale_observed"] is True
-    assert p["stale_kind"] == voice_kpi.KIND_WAITING_AUDIO
+    assert p["stale_kind"] == voice_metrics.KIND_WAITING_AUDIO
 
 
 # --- Finding 4: only real boundaries, only active turns ----------------------
@@ -256,40 +256,40 @@ def test_stale_filler_counts_too(kpi):
 def test_boundary_is_not_recorded_when_the_policy_did_not_apply(kpi):
     """OS_REALTIME_SUPERSEDES_MAIN_REPLY off (or a failed POST) means nothing
     was suppressed — not a KPI-2 situation at all."""
-    old = voice_kpi.speech_end("silence_clock")
+    old = voice_metrics.speech_end("silence_clock")
     kpi.clock.advance(1000)
-    new = voice_kpi.speech_end("silence_clock")
-    voice_kpi.boundary(voice_kpi.BOUNDARY_AUTO_SUPERSEDE, new, policy_applied=False)
+    new = voice_metrics.speech_end("silence_clock")
+    voice_metrics.boundary(voice_metrics.BOUNDARY_AUTO_SUPERSEDE, new, policy_applied=False)
     kpi.close_all()
-    assert kpi.of(voice_kpi.EVENT_SUPPRESSION) == []
+    assert kpi.of(voice_metrics.EVENT_SUPPRESSION) == []
     assert old != new
 
 
 def test_denominator_counts_only_active_turns(kpi):
     """A turn already excluded cannot produce a stale reply; keeping it in the
     denominator would dilute KPI-2 with situations that never existed."""
-    done = voice_kpi.speech_end("silence_clock")
-    voice_kpi.exclude(done, voice_kpi.EXCL_REJECTED_NOISE)
+    done = voice_metrics.speech_end("silence_clock")
+    voice_metrics.exclude(done, voice_metrics.EXCL_REJECTED_NOISE)
     kpi.clock.advance(500)
-    live = voice_kpi.speech_end("silence_clock")
-    voice_kpi.bind_run(live, "run-live")
+    live = voice_metrics.speech_end("silence_clock")
+    voice_metrics.bind_run(live, "run-live")
     kpi.clock.advance(500)
-    new = voice_kpi.speech_end("silence_clock")
+    new = voice_metrics.speech_end("silence_clock")
 
-    voice_kpi.boundary(voice_kpi.BOUNDARY_AUTO_SUPERSEDE, new)
-    p_state = voice_kpi._watchers[0]
+    voice_metrics.boundary(voice_metrics.BOUNDARY_AUTO_SUPERSEDE, new)
+    p_state = voice_metrics._watchers[0]
     assert p_state["applicable"] == {live}
 
 
 def test_explicit_stop_covers_every_turn_in_flight(kpi):
-    a = voice_kpi.speech_end("silence_clock")
+    a = voice_metrics.speech_end("silence_clock")
     kpi.clock.advance(100)
-    b = voice_kpi.speech_end("silence_clock")
-    voice_kpi.boundary(voice_kpi.BOUNDARY_EXPLICIT_STOP)
+    b = voice_metrics.speech_end("silence_clock")
+    voice_metrics.boundary(voice_metrics.BOUNDARY_EXPLICIT_STOP)
     kpi.close_all()
 
-    p = kpi.of(voice_kpi.EVENT_SUPPRESSION)[0]["params"]
-    assert p["suppression_reason"] == voice_kpi.BOUNDARY_EXPLICIT_STOP
+    p = kpi.of(voice_metrics.EVENT_SUPPRESSION)[0]["params"]
+    assert p["suppression_reason"] == voice_metrics.BOUNDARY_EXPLICIT_STOP
     assert p["applicable_interactions"] == 2
     assert a != b
 
@@ -301,90 +301,90 @@ def test_speech_end_clock_starts_at_the_detected_endpoint(kpi):
     the tracker was told about it (transcript assembly runs in between)."""
     detected_at = kpi.clock.t
     kpi.clock.advance(400)                       # finalize_session work
-    voice_kpi.speech_end("silence_clock", at=detected_at)
+    voice_metrics.speech_end("silence_clock", at=detected_at)
     kpi.clock.advance(600)
     _native(kpi, "")                             # unowned: no ack
-    iid = voice_kpi._order[-1]
-    voice_kpi.bind_run(iid, "run-x")
+    iid = voice_metrics._order[-1]
+    voice_metrics.bind_run(iid, "run-x")
     _reply(kpi, "run:run-x")
     kpi.close_all()
 
-    p = kpi.one(voice_kpi.EVENT_INTERACTION)
+    p = kpi.one(voice_metrics.EVENT_INTERACTION)
     assert p["ack_latency_ms"] == 1000           # 400 + 600, not 600
 
 
 # --- Outcomes and exclusions -------------------------------------------------
 
 @pytest.mark.parametrize("reason", [
-    voice_kpi.EXCL_REJECTED_NOISE,
-    voice_kpi.EXCL_REJECTED_NON_USER,
-    voice_kpi.EXCL_NO_TRANSCRIPT,
-    voice_kpi.EXCL_NOT_ADDRESSED,
+    voice_metrics.EXCL_REJECTED_NOISE,
+    voice_metrics.EXCL_REJECTED_NON_USER,
+    voice_metrics.EXCL_NO_TRANSCRIPT,
+    voice_metrics.EXCL_NOT_ADDRESSED,
 ])
 def test_excluded_inputs_are_reported_with_a_reason(kpi, reason):
-    iid = voice_kpi.speech_end("silence_clock")
-    voice_kpi.exclude(iid, reason)
+    iid = voice_metrics.speech_end("silence_clock")
+    voice_metrics.exclude(iid, reason)
     kpi.close_all()
 
-    p = kpi.one(voice_kpi.EVENT_INTERACTION)
-    assert p["outcome"] == voice_kpi.OUTCOME_EXCLUDED
+    p = kpi.one(voice_metrics.EVENT_INTERACTION)
+    assert p["outcome"] == voice_metrics.OUTCOME_EXCLUDED
     assert p["eligible"] is False
     assert p["exclusion_reason"] == reason
 
 
 def test_muted_speaker_is_excluded_not_counted_as_missing(kpi, monkeypatch):
-    monkeypatch.setattr(voice_kpi, "_speaker_muted", lambda: True)
-    voice_kpi.speech_end("silence_clock")
+    monkeypatch.setattr(voice_metrics, "_speaker_muted", lambda: True)
+    voice_metrics.speech_end("silence_clock")
     kpi.close_all()
 
-    p = kpi.one(voice_kpi.EVENT_INTERACTION)
-    assert p["exclusion_reason"] == voice_kpi.EXCL_SPEAKER_MUTED
+    p = kpi.one(voice_metrics.EVENT_INTERACTION)
+    assert p["exclusion_reason"] == voice_metrics.EXCL_SPEAKER_MUTED
 
 
 def test_slow_reply_keeps_its_real_latency(kpi):
-    iid = voice_kpi.speech_end("silence_clock")
-    voice_kpi.bind_run(iid, "run-slow")
+    iid = voice_metrics.speech_end("silence_clock")
+    voice_metrics.bind_run(iid, "run-slow")
     kpi.clock.advance(7200)
     _reply(kpi, "run:run-slow")
     kpi.close_all()
 
-    p = kpi.one(voice_kpi.EVENT_INTERACTION)
-    assert p["outcome"] == voice_kpi.OUTCOME_ACKED
+    p = kpi.one(voice_metrics.EVENT_INTERACTION)
+    assert p["outcome"] == voice_metrics.OUTCOME_ACKED
     assert p["ack_latency_ms"] == 7200            # eligible, just over target
-    assert p["ack_deadline_ms"] == voice_kpi.ACK_DEADLINE_MS
+    assert p["ack_deadline_ms"] == voice_metrics.ACK_DEADLINE_MS
 
 
 def test_realtime_handled_is_counted_once(kpi):
-    iid = voice_kpi.speech_end("silence_clock")
+    iid = voice_metrics.speech_end("silence_clock")
     kpi.clock.advance(600)
     _native(kpi, f"interaction:{iid}")
-    voice_kpi.bind_run(iid, "run-handled")        # the voice_agent_handled POST
-    voice_kpi.boundary(voice_kpi.BOUNDARY_AUTO_SUPERSEDE, iid)
+    voice_metrics.bind_run(iid, "run-handled")        # the voice_agent_handled POST
+    voice_metrics.boundary(voice_metrics.BOUNDARY_AUTO_SUPERSEDE, iid)
     kpi.close_all()
 
-    assert len(kpi.of(voice_kpi.EVENT_INTERACTION)) == 1
+    assert len(kpi.of(voice_metrics.EVENT_INTERACTION)) == 1
 
 
 def test_late_exclusion_amends_an_already_reported_verdict(kpi):
     """A verdict that turns out wrong must be corrected in the warehouse, not
     left standing."""
-    iid = voice_kpi.speech_end("silence_clock")
+    iid = voice_metrics.speech_end("silence_clock")
     kpi.close_all()                                # verdict reported: no_ack
-    voice_kpi.exclude(iid, voice_kpi.EXCL_NOT_ADDRESSED)
+    voice_metrics.exclude(iid, voice_metrics.EXCL_NOT_ADDRESSED)
 
-    rows = kpi.of(voice_kpi.EVENT_INTERACTION)
+    rows = kpi.of(voice_metrics.EVENT_INTERACTION)
     assert len(rows) == 2
     amendment = rows[1]["params"]
     assert amendment["amends_event_id"] == "int-" + iid
     assert amendment["amendment_reason"] == "late_exclusion"
-    assert amendment["exclusion_reason"] == voice_kpi.EXCL_NOT_ADDRESSED
+    assert amendment["exclusion_reason"] == voice_metrics.EXCL_NOT_ADDRESSED
 
 
 def test_duplicate_report_is_suppressed_by_event_id(kpi):
-    iid = voice_kpi.speech_end("silence_clock")
-    voice_kpi._close_interaction(iid)
-    voice_kpi._close_interaction(iid)
-    assert len(kpi.of(voice_kpi.EVENT_INTERACTION)) == 1
+    iid = voice_metrics.speech_end("silence_clock")
+    voice_metrics._close_interaction(iid)
+    voice_metrics._close_interaction(iid)
+    assert len(kpi.of(voice_metrics.EVENT_INTERACTION)) == 1
 
 
 # --- Review finding: turn lifetime is not the acknowledgement deadline -------
@@ -395,21 +395,21 @@ def test_stop_after_the_ack_window_still_finds_the_turn_to_suppress(kpi):
     The KPI-1 verdict is reported at 10s, but the main agent is still working
     — retiring the turn there made the stop find nothing to suppress
     (applicable_interactions=0, stale_observed=false)."""
-    old = voice_kpi.speech_end("silence_clock")
-    voice_kpi.bind_run(old, "run-old")
+    old = voice_metrics.speech_end("silence_clock")
+    voice_metrics.bind_run(old, "run-old")
 
     kpi.clock.advance(10000)
     verdict_timer = kpi.timers[0]
     verdict_timer.fire()                       # KPI-1 verdict at 10s
-    assert kpi.one(voice_kpi.EVENT_INTERACTION)["outcome"] == voice_kpi.OUTCOME_NO_ACK
+    assert kpi.one(voice_metrics.EVENT_INTERACTION)["outcome"] == voice_metrics.OUTCOME_NO_ACK
 
     kpi.clock.advance(2000)                    # second 12: user presses stop
-    voice_kpi.boundary(voice_kpi.BOUNDARY_EXPLICIT_STOP)
+    voice_metrics.boundary(voice_metrics.BOUNDARY_EXPLICIT_STOP)
     kpi.clock.advance(8000)                    # second 20: the old reply speaks
     _reply(kpi, "run:run-old")
     kpi.close_all()
 
-    p = kpi.of(voice_kpi.EVENT_SUPPRESSION)[0]["params"]
+    p = kpi.of(voice_metrics.EVENT_SUPPRESSION)[0]["params"]
     assert p["applicable_interactions"] == 1
     assert p["stale_observed"] is True
     assert p["stale_started_after_ms"] == 8000
@@ -417,30 +417,30 @@ def test_stop_after_the_ack_window_still_finds_the_turn_to_suppress(kpi):
 
 def test_a_turn_silent_past_its_lifetime_leaves_the_denominator(kpi):
     """The other half: a turn that really is over must not inflate KPI-2."""
-    old = voice_kpi.speech_end("silence_clock")
-    voice_kpi.bind_run(old, "run-old")
-    kpi.clock.advance(voice_kpi.TURN_ACTIVE_TTL_MS)
+    old = voice_metrics.speech_end("silence_clock")
+    voice_metrics.bind_run(old, "run-old")
+    kpi.clock.advance(voice_metrics.TURN_ACTIVE_TTL_MS)
     for t in list(kpi.timers):
-        if t.function is voice_kpi._retire_interaction:
+        if t.function is voice_metrics._retire_interaction:
             t.fire()
 
-    voice_kpi.boundary(voice_kpi.BOUNDARY_EXPLICIT_STOP)
+    voice_metrics.boundary(voice_metrics.BOUNDARY_EXPLICIT_STOP)
     kpi.close_all()
-    p = kpi.of(voice_kpi.EVENT_SUPPRESSION)[0]["params"]
+    p = kpi.of(voice_metrics.EVENT_SUPPRESSION)[0]["params"]
     assert p["applicable_interactions"] == 0
 
 
 def test_playback_keeps_a_turn_alive(kpi):
     """A turn that is still talking is still alive, however long it has run."""
-    old = voice_kpi.speech_end("silence_clock")
-    voice_kpi.bind_run(old, "run-old")
+    old = voice_metrics.speech_end("silence_clock")
+    voice_metrics.bind_run(old, "run-old")
     kpi.clock.advance(30000)
     _reply(kpi, "run:run-old")                 # still speaking at 30s
-    voice_kpi.playback_end()
+    voice_metrics.playback_end()
     kpi.clock.advance(5000)
-    voice_kpi.boundary(voice_kpi.BOUNDARY_EXPLICIT_STOP)
+    voice_metrics.boundary(voice_metrics.BOUNDARY_EXPLICIT_STOP)
 
-    assert voice_kpi._watchers[0]["applicable"] == {old}
+    assert voice_metrics._watchers[0]["applicable"] == {old}
 
 
 # --- Review finding: an unserved command stays in the denominator ------------
@@ -448,26 +448,26 @@ def test_playback_keeps_a_turn_alive(kpi):
 def test_failed_dispatch_stays_eligible_as_a_failure(kpi):
     """A valid command the device never served must not be excluded — that
     would inflate the success rate with the cases that hurt most."""
-    iid = voice_kpi.speech_end("silence_clock")
-    voice_kpi.mark_failed(iid, voice_kpi.FAIL_DISPATCH_FAILED)
+    iid = voice_metrics.speech_end("silence_clock")
+    voice_metrics.mark_failed(iid, voice_metrics.FAIL_DISPATCH_FAILED)
     kpi.close_all()
 
-    p = kpi.one(voice_kpi.EVENT_INTERACTION)
+    p = kpi.one(voice_metrics.EVENT_INTERACTION)
     assert p["eligible"] is True
-    assert p["outcome"] == voice_kpi.OUTCOME_NO_ACK
-    assert p["failure_reason"] == voice_kpi.FAIL_DISPATCH_FAILED
+    assert p["outcome"] == voice_metrics.OUTCOME_NO_ACK
+    assert p["failure_reason"] == voice_metrics.FAIL_DISPATCH_FAILED
     assert p["exclusion_reason"] == ""
 
 
 def test_late_failure_amends_a_reported_verdict(kpi):
-    iid = voice_kpi.speech_end("silence_clock")
+    iid = voice_metrics.speech_end("silence_clock")
     kpi.timers[0].fire()
-    voice_kpi.mark_failed(iid, voice_kpi.FAIL_DISPATCH_FAILED)
+    voice_metrics.mark_failed(iid, voice_metrics.FAIL_DISPATCH_FAILED)
 
-    rows = kpi.of(voice_kpi.EVENT_INTERACTION)
+    rows = kpi.of(voice_metrics.EVENT_INTERACTION)
     assert len(rows) == 2
     assert rows[1]["params"]["amendment_reason"] == "late_failure"
-    assert rows[1]["params"]["failure_reason"] == voice_kpi.FAIL_DISPATCH_FAILED
+    assert rows[1]["params"]["failure_reason"] == voice_metrics.FAIL_DISPATCH_FAILED
 
 
 # --- Review finding: realtime audio carries ownership ------------------------
@@ -475,15 +475,15 @@ def test_late_failure_amends_a_reported_verdict(kpi):
 def test_realtime_wait_filler_is_attributed_to_its_interaction(kpi):
     """The realtime dead-air filler tags itself with the interaction it is
     waiting for; the user heard it, so the KPI must see it."""
-    iid = voice_kpi.speech_end("silence_clock")
+    iid = voice_metrics.speech_end("silence_clock")
     kpi.clock.advance(1500)
     # os-server plays it back with the owner HAL passed through the filler
     # request, i.e. run:<interaction id> — no os-server run exists yet.
     _filler(kpi, f"run:{iid}")
     kpi.close_all()
 
-    p = kpi.one(voice_kpi.EVENT_INTERACTION)
-    assert p["outcome"] == voice_kpi.OUTCOME_ACKED
+    p = kpi.one(voice_metrics.EVENT_INTERACTION)
+    assert p["outcome"] == voice_metrics.OUTCOME_ACKED
     assert p["ack_modality"] == "waiting_audio"
     assert p["ack_latency_ms"] == 1500
 
@@ -491,12 +491,12 @@ def test_realtime_wait_filler_is_attributed_to_its_interaction(kpi):
 def test_realtime_text_reply_is_attributed_to_its_interaction(kpi):
     """The realtime branch that answers via TTS (not native audio) tags the
     speech with the same interaction id."""
-    iid = voice_kpi.speech_end("silence_clock")
+    iid = voice_metrics.speech_end("silence_clock")
     kpi.clock.advance(900)
     _reply(kpi, f"run:{iid}")
     kpi.close_all()
 
-    p = kpi.one(voice_kpi.EVENT_INTERACTION)
+    p = kpi.one(voice_metrics.EVENT_INTERACTION)
     assert p["ack_modality"] == "spoken_answer"
     assert p["ack_latency_ms"] == 900
 
@@ -508,14 +508,15 @@ def test_report_never_raises_into_the_voice_path(monkeypatch):
         raise RuntimeError("queue exploded")
 
     monkeypatch.setattr(client, "_ensure_worker", boom)
-    client.report("voice_kpi_interaction", {"x": 1})    # must not raise
+    client.report("voice_metrics_interaction", {"x": 1})    # must not raise
 
 
 def test_report_does_not_block_the_caller(monkeypatch):
     """Telemetry stays off the audio critical path: a full queue drops."""
+    monkeypatch.setenv(client.ENV_ENABLED, "1")   # sending is off by default
     monkeypatch.setattr(client, "_ensure_worker", lambda: None)
     for _ in range(client.QUEUE_SIZE + 5):
-        client.report("voice_kpi_interaction", {"x": 1})
+        client.report("voice_metrics_interaction", {"x": 1})
     assert client.stats()["dropped"] >= 1
     assert threading.current_thread() is threading.main_thread()
 
@@ -524,32 +525,32 @@ def test_report_does_not_block_the_caller(monkeypatch):
 
 def test_evicted_interaction_is_reported_before_being_forgotten(kpi):
     """Capacity eviction must not make a sample disappear silently."""
-    first = voice_kpi.speech_end("silence_clock")
-    for _ in range(voice_kpi._MAX_TRACKED):
+    first = voice_metrics.speech_end("silence_clock")
+    for _ in range(voice_metrics._MAX_TRACKED):
         kpi.clock.advance(10)
-        voice_kpi.speech_end("silence_clock")
+        voice_metrics.speech_end("silence_clock")
 
-    reported = [e["params"]["interaction_id"] for e in kpi.of(voice_kpi.EVENT_INTERACTION)]
+    reported = [e["params"]["interaction_id"] for e in kpi.of(voice_metrics.EVENT_INTERACTION)]
     assert first in reported
-    assert kpi.of(voice_kpi.EVENT_INTERACTION)[0]["params"]["eviction"] == "tracker_capacity"
+    assert kpi.of(voice_metrics.EVENT_INTERACTION)[0]["params"]["eviction"] == "tracker_capacity"
 
 
 def test_queued_segment_is_attributed_to_the_turn_that_queued_it(kpi):
     """A sentence queued behind another turn's speech plays on the stream that
     turn opened; it must still be credited to its OWN turn."""
-    first = voice_kpi.speech_end("silence_clock")
-    voice_kpi.bind_run(first, "run-first")
+    first = voice_metrics.speech_end("silence_clock")
+    voice_metrics.bind_run(first, "run-first")
     kpi.clock.advance(500)
-    second = voice_kpi.speech_end("silence_clock")
-    voice_kpi.bind_run(second, "run-second")
+    second = voice_metrics.speech_end("silence_clock")
+    voice_metrics.bind_run(second, "run-second")
 
     _reply(kpi, "run:run-first")          # stream opened by the first turn
-    voice_kpi.playback_end()
+    voice_metrics.playback_end()
     kpi.clock.advance(400)
     _reply(kpi, "run:run-second")         # drained queue segment, own owner
     kpi.close_all()
 
-    rows = {e["params"]["interaction_id"]: e["params"] for e in kpi.of(voice_kpi.EVENT_INTERACTION)}
-    assert rows[first]["outcome"] == voice_kpi.OUTCOME_ACKED
-    assert rows[second]["outcome"] == voice_kpi.OUTCOME_ACKED
+    rows = {e["params"]["interaction_id"]: e["params"] for e in kpi.of(voice_metrics.EVENT_INTERACTION)}
+    assert rows[first]["outcome"] == voice_metrics.OUTCOME_ACKED
+    assert rows[second]["outcome"] == voice_metrics.OUTCOME_ACKED
     assert rows[second]["ack_latency_ms"] == 400

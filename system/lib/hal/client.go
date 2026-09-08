@@ -276,7 +276,7 @@ func SpeakCachedInterruptible(text string) error {
 
 // SpeakCachedInterruptibleForTurn is SpeakCachedInterruptible plus the run the
 // phrase belongs to. HAL uses turnID for measurement attribution only (which
-// turn a played filler was for — see hal/tracking/voice_kpi.py); playback
+// turn a played filler was for — see hal/tracking/voice_metrics.py); playback
 // behaviour is identical, and the turn_seq gating stays exclusive to the
 // speak-queue path.
 func SpeakCachedInterruptibleForTurn(text, turnID string) error {

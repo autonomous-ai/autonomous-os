@@ -52,6 +52,8 @@ func withPipe(t *testing.T, m *mockSender) {
 	origGlobal := global
 	global = newReporter(m.send)
 	t.Cleanup(func() { global = origGlobal })
+	// The master switch defaults OFF; these tests exercise the sending path.
+	t.Setenv(envEnabled, "1")
 }
 
 func TestReportSendsWithCommonFields(t *testing.T) {
@@ -59,11 +61,11 @@ func TestReportSendsWithCommonFields(t *testing.T) {
 	withPipe(t, m)
 	SetCommon(map[string]any{"os_version": "v1.2.3", "agent_runtime": "codex"})
 
-	Report(Event{Name: "voice_kpi_interaction", ID: "e1", Params: map[string]any{"latency_ms": 1200}})
+	Report(Event{Name: "voice_metrics_interaction", ID: "e1", Params: map[string]any{"latency_ms": 1200}})
 	m.wait(t, 1)
 
 	got := m.events[0]
-	if got.name != "voice_kpi_interaction" {
+	if got.name != "voice_metrics_interaction" {
 		t.Errorf("event name = %q", got.name)
 	}
 	for k, want := range map[string]any{
@@ -83,8 +85,8 @@ func TestDuplicateEventIDSentOnce(t *testing.T) {
 	m := newMock(nil, 1)
 	withPipe(t, m)
 
-	Report(Event{Name: "voice_kpi_interaction", ID: "same"})
-	Report(Event{Name: "voice_kpi_interaction", ID: "same"})
+	Report(Event{Name: "voice_metrics_interaction", ID: "same"})
+	Report(Event{Name: "voice_metrics_interaction", ID: "same"})
 	m.wait(t, 1)
 
 	time.Sleep(50 * time.Millisecond)
@@ -103,8 +105,8 @@ func TestEmptyIDIsNotDeduped(t *testing.T) {
 	m := newMock(nil, 2)
 	withPipe(t, m)
 
-	Report(Event{Name: "voice_kpi_interaction"})
-	Report(Event{Name: "voice_kpi_interaction"})
+	Report(Event{Name: "voice_metrics_interaction"})
+	Report(Event{Name: "voice_metrics_interaction"})
 	m.wait(t, 2)
 }
 
@@ -114,13 +116,13 @@ func TestDeliveryFailureIsCounted(t *testing.T) {
 	m := newMock(errors.New("network down"), 2)
 	withPipe(t, m)
 
-	Report(Event{Name: "voice_kpi_interaction", ID: "f1"})
+	Report(Event{Name: "voice_metrics_interaction", ID: "f1"})
 	m.wait(t, 1)
 	if _, failed, _ := Stats(); failed != 1 {
 		t.Fatalf("failed = %d, want 1", failed)
 	}
 
-	Report(Event{Name: "voice_kpi_interaction", ID: "f2"})
+	Report(Event{Name: "voice_metrics_interaction", ID: "f2"})
 	m.wait(t, 1)
 	if got := m.events[1].params["tracking_failed_total"]; got != int64(1) {
 		t.Errorf("tracking_failed_total = %v, want 1", got)
@@ -143,7 +145,7 @@ func TestFullQueueDropsInsteadOfBlocking(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		for i := 0; i < queueSize+5; i++ {
-			Report(Event{Name: "voice_kpi_interaction"})
+			Report(Event{Name: "voice_metrics_interaction"})
 		}
 		close(done)
 	}()
@@ -166,5 +168,36 @@ func TestUnnamedEventIsIgnored(t *testing.T) {
 	defer m.mu.Unlock()
 	if len(m.events) != 0 {
 		t.Errorf("sent %d events for a nameless report", len(m.events))
+	}
+}
+
+// Default OFF: a body that never set the flag must keep its events on-device.
+func TestSendingIsOffByDefault(t *testing.T) {
+	m := newMock(nil, 0)
+	withPipe(t, m)
+	t.Setenv(envEnabled, "")
+
+	Report(Event{Name: "voice_metrics_interaction", ID: "off-1"})
+	time.Sleep(50 * time.Millisecond)
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.events) != 0 {
+		t.Fatalf("sent %d events with the flag off", len(m.events))
+	}
+}
+
+func TestEnabledAcceptsTheUsualTruthyValues(t *testing.T) {
+	for _, v := range []string{"1", "true", "TRUE", "yes", "on"} {
+		t.Setenv(envEnabled, v)
+		if !Enabled() {
+			t.Errorf("Enabled() = false for %q", v)
+		}
+	}
+	for _, v := range []string{"", "0", "false", "no", "off", "maybe"} {
+		t.Setenv(envEnabled, v)
+		if Enabled() {
+			t.Errorf("Enabled() = true for %q", v)
+		}
 	}
 }

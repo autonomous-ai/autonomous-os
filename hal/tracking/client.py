@@ -17,6 +17,7 @@ Two rules:
 
 import json
 import logging
+import os
 import queue
 import threading
 import uuid
@@ -27,6 +28,21 @@ logger = logging.getLogger("hal.tracking")
 
 # os-server ingestion endpoint (loopback; same host as every other HAL→OS call).
 OS_TRACKING_URL = "http://127.0.0.1:5000/api/tracking/event"
+
+# Master switch, read from the body's /opt/hal/.env (systemd hands it to HAL
+# as EnvironmentFile; os-server godotenv.Load()s the same file). Default OFF:
+# a body that has never heard of this flag sends nothing off-device.
+#
+# OFF does NOT mean blind. Every event is still written to the local log, so
+# `journalctl -u hal | grep '[tracking]'` shows exactly what WOULD have been
+# sent — only the network hop is skipped.
+ENV_ENABLED = "AUTONOMOUS_TRACKING_ENABLED"
+
+
+def enabled() -> bool:
+    """Whether events may leave the device. Read per call so flipping the flag
+    plus a service restart is all it takes — no rebuild."""
+    return os.environ.get(ENV_ENABLED, "").strip().lower() in ("1", "true", "yes", "on")
 
 # Bounded so a dead uplink cannot grow memory without limit. Sized for a burst
 # of turns, not for offline buffering: dropping and SAYING SO beats pretending.
@@ -60,8 +76,12 @@ def report(event_name: str, params: dict, event_id: str = "") -> None:
             "event_id": event_id,
             "params": _with_counters(params or {}),
         }
-        # The device-local record. Must exist whether or not the POST works.
+        # The device-local record. Must exist whether or not the POST works —
+        # and whether or not sending is enabled at all.
         logger.info("[tracking] %s %s", event_name, json.dumps(payload["params"], default=str))
+        if not enabled():
+            logger.debug("[tracking] not sent -- %s is off", ENV_ENABLED)
+            return
         _ensure_worker()
         try:
             _queue.put_nowait(payload)

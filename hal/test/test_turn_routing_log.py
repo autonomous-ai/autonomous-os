@@ -29,7 +29,9 @@ class _Sender:
     def __init__(self):
         self.sent = []
 
-    def send(self, msg, event_type="", skip_echo=False, image_b64=""):
+    def send(self, msg, event_type="", skip_echo=False, image_b64="", **_kwargs):
+        # **_kwargs: dispatch also passes measurement-only fields (the voice
+        # KPI interaction id). This double asserts on routing, not on those.
         self.sent.append((msg, event_type))
 
 

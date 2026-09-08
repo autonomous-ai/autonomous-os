@@ -107,13 +107,13 @@ def _cancel_agent_speech(source: str):
     a lost call degrades to "quiet for one sentence" rather than to nothing."""
 
     # Voice KPI: the explicit stop boundary (different semantics from the
-    # automatic supersession one — see hal/tracking/voice_kpi.py).
+    # automatic supersession one — see hal/tracking/voice_metrics.py).
     try:
-        from hal.tracking import voice_kpi
+        from hal.tracking import voice_metrics
 
-        voice_kpi.boundary(voice_kpi.BOUNDARY_EXPLICIT_STOP)
+        voice_metrics.boundary(voice_metrics.BOUNDARY_EXPLICIT_STOP)
     except Exception:
-        logger.exception("[voice-kpi] stop boundary hook failed")
+        logger.exception("[voice-metrics] stop boundary hook failed")
 
     def _post():
         try:

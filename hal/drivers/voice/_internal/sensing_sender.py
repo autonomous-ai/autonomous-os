@@ -87,6 +87,7 @@ class SensingSender:
         event_type: str = "voice",
         skip_echo: bool = False,
         image_b64: str = "",
+        interaction_id: str = "",
     ) -> "SendResult":
         """POST decorated message to os-server /api/sensing/event with retry.
 
@@ -104,6 +105,13 @@ class SensingSender:
             return SendResult()
 
         payload = {"type": event_type, "message": message}
+        if interaction_id:
+            # Voice KPI ownership, sent UP so os-server can tag the audio it
+            # starts on its own. The opening filler fires the moment this POST
+            # arrives — before the response carrying runId gets back here — so
+            # binding on the response would leave a cache-hit filler unowned
+            # and its turn counted as unacknowledged.
+            payload["interaction_id"] = interaction_id
         # Voice turns used to ship NO current_user at all, so the identity in
         # them reached os-server only as the `Speaker - <Name>:` text prefix and
         # the backend fell back to its last cached value. Send the resolved

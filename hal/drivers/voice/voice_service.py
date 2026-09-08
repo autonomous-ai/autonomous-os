@@ -54,7 +54,7 @@ from hal.drivers.voice._internal.speaker_decorate import (
     merge_wake_words,
 )
 from hal.drivers.voice._internal.turn_dispatch import dispatch_turn
-from hal.tracking import voice_kpi
+from hal.tracking import voice_metrics
 from hal.drivers.voice._internal.vad_filters import (
     SileroVADFilter,
     WebRTCVADFilter,
@@ -1977,8 +1977,8 @@ class VoiceService:
             capture_complete.set()
             # Voice KPI clock starts here: the endpoint has been detected and
             # the transcript is assembled. Everything downstream carries this
-            # id (see hal/tracking/voice_kpi.py).
-            interaction_id = voice_kpi.speech_end(endpoint_method, at=endpoint_ts)
+            # id (see hal/tracking/voice_metrics.py).
+            interaction_id = voice_metrics.speech_end(endpoint_method, at=endpoint_ts)
             if (
                 hal_config.WAKEWORD_ENABLED
                 and wake_word_detected.is_set()
@@ -2317,7 +2317,7 @@ class VoiceService:
             if not dispatch_to_main:
                 # Heard, but not addressed to us (no wake word, outside the
                 # follow-up window). Not a missed response — an excluded one.
-                voice_kpi.exclude(interaction_id, voice_kpi.EXCL_NOT_ADDRESSED)
+                voice_metrics.exclude(interaction_id, voice_metrics.EXCL_NOT_ADDRESSED)
             if defer_speaker_prepass and dispatch_to_main and not downstream_dropped:
                 resolve_turn_speaker_identity(after_realtime_decision=True)
 

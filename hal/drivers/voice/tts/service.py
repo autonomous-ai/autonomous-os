@@ -605,7 +605,7 @@ class TTSService:
         """os-server run id of the newest turn that took the speak queue.
 
         Read-only; exposed so tracking can attribute played audio to the turn
-        that produced it (see hal/tracking/voice_kpi.py)."""
+        that produced it (see hal/tracking/voice_metrics.py)."""
         return self._latest_queue_turn_id
 
     @property

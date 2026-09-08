@@ -15,6 +15,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 import hal.app_state as state
+from hal.tracking import tts_hooks
 from hal.config import AUDIO_INPUT_ALSA, TTS_SPEED, TTS_VOICE, TTS_INSTRUCTIONS
 from hal.models import (
     RealtimeHistoryRequest,
@@ -109,6 +110,11 @@ def start_voice(req: VoiceStartRequest):
                 on_speak_start=state._on_tts_speak_start,
                 on_speak_end=state._on_tts_speak_end,
                 provider=req.tts_provider,
+                # Same tracking hooks the boot-time instance gets. Without
+                # them a provider/voice swap keeps speaking but stops
+                # reporting playback, and the KPI goes blind until restart.
+                on_playback_audio=tts_hooks.on_playback_audio,
+                on_playback_done=tts_hooks.on_playback_done,
             )
             state.logger.info("TTSService started (provider=%s, voice=%s)", req.tts_provider, voice)
             if state.music_service:
