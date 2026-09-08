@@ -1,32 +1,39 @@
 import Foundation
 
-final class CommandDispatcher {
+actor CommandDispatcher {
     private var executors: [String: Executor] = [:]
     private let auditLog: AuditLog
+    private var activeCancelled = false
+    private var activeID: String?
+    private var activeTask: Task<[String: Any], Error>?
 
-    init(auditLog: AuditLog) {
+    init(auditLog: AuditLog, additionalExecutors: [Executor] = []) {
         self.auditLog = auditLog
-        register(OpenAppExecutor())
-        register(CloseAppExecutor())
-        register(OpenURLExecutor())
-        register(TypeTextExecutor())
-        register(KeyComboExecutor())
-        register(NotificationExecutor())
-        register(PingExecutor())
-        register(ScreenshotExecutor())
-        register(ClickAtExecutor())
-        register(ScrollExecutor())
-        register(MouseMoveExecutor())
-        register(DragExecutor())
-        register(ReadClipboardExecutor())
-        register(WriteClipboardExecutor())
-        register(ClickButtonExecutor())
-        register(CursorPosExecutor())
-        register(ListDisplaysExecutor())
-    }
-
-    private func register(_ executor: Executor) {
-        executors[executor.action] = executor
+        let defaults: [Executor] = [
+            OpenAppExecutor(),
+            CloseAppExecutor(),
+            OpenURLExecutor(),
+            TypeTextExecutor(),
+            KeyComboExecutor(),
+            NotificationExecutor(),
+            PingExecutor(),
+            DesktopInfoExecutor(),
+            ScreenshotExecutor(),
+            ClickAtExecutor(),
+            ScrollExecutor(),
+            MouseMoveExecutor(),
+            DragExecutor(),
+            ReadClipboardExecutor(),
+            WriteClipboardExecutor(),
+            ClickButtonExecutor(),
+            CursorPosExecutor(),
+            ListDisplaysExecutor(),
+            GetUITreeExecutor(),
+            PerformUIActionExecutor()
+        ]
+        for executor in defaults + additionalExecutors {
+            executors[executor.action] = executor
+        }
     }
 
     func dispatch(_ data: Data) async -> Data {
@@ -35,8 +42,10 @@ final class CommandDispatcher {
         do {
             cmd = try IncomingCommand.decode(from: data)
         } catch {
+            // Preserve correlation even when another field is malformed.
+            let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
             let resp = CommandResponse(
-                id: "unknown",
+                id: object?["id"] as? String ?? "unknown",
                 ok: false,
                 result: nil,
                 error: (error as? LocalizedError)?.errorDescription ?? error.localizedDescription,
@@ -47,11 +56,26 @@ final class CommandDispatcher {
 
         let summary = CommandSummary.describe(action: cmd.action, params: cmd.params)
 
+        if cmd.action == "cancel_command" {
+            guard let targetID = cmd.params["id"] as? String, !targetID.isEmpty else {
+                return await finish(cmd, summary: summary, start: start, error: "missing param: id")
+            }
+            let cancelled = activeID == targetID
+            if cancelled { cancelActive() }
+            return await finish(cmd, summary: summary, start: start, result: ["cancel_requested": cancelled, "id": targetID])
+        }
+
+        // Reserve before the first suspension: actor reentrancy must not allow two
+        // input sequences to interleave while permission checks or events await.
+        guard activeID == nil else {
+            return await finish(cmd, summary: summary, start: start, error: "buddy busy: another command is running; observe again before retrying")
+        }
+        activeCancelled = false
+        activeID = cmd.id
+        defer { activeID = nil; activeTask = nil }
         let paused = await readPaused()
-        if paused {
-            let resp = CommandResponse(id: cmd.id, ok: false, result: nil, error: "buddy paused by user", durationMs: 0)
-            await auditLog.append(action: cmd.action, summary: summary, ok: false, error: resp.error)
-            return (try? resp.encode()) ?? Data()
+        if paused && cmd.action != "desktop_info" {
+            return await finish(cmd, summary: summary, start: start, error: "buddy paused by user")
         }
 
         guard let executor = executors[cmd.action] else {
@@ -62,7 +86,15 @@ final class CommandDispatcher {
         }
 
         do {
-            let result = try await runWithTimeout(executor: executor, params: cmd.params, timeoutMs: cmd.timeoutMs)
+            let observations: Set<String> = ["get_ui_tree", "screenshot", "list_displays", "cursor_pos", "read_clipboard", "ping", "desktop_info", "perform_ui_action"]
+            if !observations.contains(cmd.action) { await UIObservationStore.shared.invalidate() }
+            try Task.checkCancellation()
+            if activeCancelled { throw CancellationError() }
+            let task = Task { try await self.runWithTimeout(executor: executor, params: cmd.params, timeoutMs: cmd.timeoutMs) }
+            activeTask = task
+            let result = try await withTaskCancellationHandler(operation: { try await task.value }, onCancel: { task.cancel() })
+            try Task.checkCancellation()
+            if task.isCancelled { throw CancellationError() }
             let duration = Int(Date().timeIntervalSince(start) * 1000)
             let resp = CommandResponse(id: cmd.id, ok: true, result: result, error: nil, durationMs: duration)
             await auditLog.append(action: cmd.action, summary: summary, ok: true, error: nil)
@@ -70,7 +102,7 @@ final class CommandDispatcher {
             return (try? resp.encode()) ?? Data()
         } catch {
             let duration = Int(Date().timeIntervalSince(start) * 1000)
-            let msg = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            let msg = error is CancellationError ? "command cancelled" : ((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
             let resp = CommandResponse(id: cmd.id, ok: false, result: nil, error: msg, durationMs: duration)
             await auditLog.append(action: cmd.action, summary: summary, ok: false, error: msg)
             await recordOnMain(id: cmd.id, action: cmd.action, summary: summary, ok: false, error: msg)
@@ -80,9 +112,12 @@ final class CommandDispatcher {
 
     private func runWithTimeout(executor: Executor, params: [String: Any], timeoutMs: Int?) async throws -> [String: Any] {
         let timeout = max(500, timeoutMs ?? 5000)
+        try Task.checkCancellation()
         return try await withThrowingTaskGroup(of: [String: Any].self) { group in
+            defer { group.cancelAll() }
             group.addTask {
-                try await executor.execute(params: params)
+                try Task.checkCancellation()
+                return try await executor.execute(params: params)
             }
             group.addTask {
                 try await Task.sleep(nanoseconds: UInt64(timeout) * 1_000_000)
@@ -92,6 +127,18 @@ final class CommandDispatcher {
             group.cancelAll()
             return value
         }
+    }
+
+    func cancelActive() {
+        activeCancelled = true
+        activeTask?.cancel()
+    }
+
+    private func finish(_ cmd: IncomingCommand, summary: String, start: Date, result: [String: Any]? = nil, error: String? = nil) async -> Data {
+        let response = CommandResponse(id: cmd.id, ok: error == nil, result: result, error: error, durationMs: Int(Date().timeIntervalSince(start) * 1000))
+        await auditLog.append(action: cmd.action, summary: summary, ok: response.ok, error: error)
+        await recordOnMain(id: cmd.id, action: cmd.action, summary: summary, ok: response.ok, error: error)
+        return (try? response.encode()) ?? Data()
     }
 
     @MainActor

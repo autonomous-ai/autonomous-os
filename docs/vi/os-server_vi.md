@@ -828,3 +828,30 @@ không được phép âm thầm làm mất nó.
 `TestHeartbeatPeopleSyncFormatMatchesTheReconciler` khoá định dạng được dạy với
 parser của reconciler, để hai bên không trôi ra khỏi nhau thành các entry không
 ai prune được.
+
+## Phản hồi Computer use qua Buddy
+
+Agent trên device giữ tác vụ desktop; companion trên Mac thực thi lệnh. Chức năng
+Agent management trong workspace desktop Buddy riêng biệt với luồng này.
+
+- `POST /api/buddy/command` chỉ nhận từ loopback và trả kết quả lệnh native.
+  Request body giới hạn 1 MiB; `timeout_ms` tùy chọn là `0` dùng mặc định hoặc số
+  nguyên từ `500` đến `60000`. Quan sát UI native dùng `get_ui_tree`; thao tác theo
+  tham chiếu snapshot dùng `perform_ui_action`.
+- `POST /api/buddy/observe` chỉ nhận từ loopback. Endpoint chụp desktop Mac đã
+  ghép đôi và hỏi auxiliary vision model đã cấu hình bằng câu hỏi dành cho
+  desktop, trả text cùng metadata tọa độ screenshot. Luồng này hỗ trợ main agent
+  chỉ nhận text; không chụp camera device. Agent có khả năng nhận ảnh có thể nạp
+  JPEG lưu trên device do helper của skill computer-use giải mã.
+- Ghi WebSocket được tuần tự hóa. Phản hồi chờ thuộc kết nối ban đầu; disconnect
+  giải phóng caller đó, reader cũ không thể xóa kết nối thay thế. Khi hủy/timeout,
+  OS thử gửi `cancel_command` theo ID trên socket ban đầu; không thể hoàn tác
+  input đã gửi.
+- Buddy native từ chối lệnh chồng nhau bằng lỗi busy, hỗ trợ hủy hợp tác và Pause,
+  vô hiệu hóa tham chiếu UI sau thao tác thay đổi. Lệnh thành công chỉ chứng minh
+  thực thi, chưa chứng minh hoàn thành tác vụ.
+
+Xem [Computer use](../../integrations/companions/autonomous-buddy/docs/vi/computer-use_vi.md)
+để biết hợp đồng tham số, yêu cầu nhận ảnh và checklist nghiệm thu desktop. Skill
+phải giữ toàn bộ mục tiêu và quan sát kết quả sau từng thao tác phụ thuộc; mở app
+chưa đủ để hoàn thành tìm kiếm hoặc công việc xuyên app.

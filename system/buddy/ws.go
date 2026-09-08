@@ -13,7 +13,7 @@ import (
 // in a goroutine after RegisterConnection.
 func (s *Service) RunReadLoop(conn *websocket.Conn, buddyID string) {
 	defer func() {
-		s.registry.Clear()
+		s.registry.ClearConnection(conn)
 		_ = conn.Close()
 		slog.Info("buddy disconnected", "component", "buddy", "id", buddyID)
 	}()
@@ -41,7 +41,7 @@ func (s *Service) RunReadLoop(conn *websocket.Conn, buddyID string) {
 		}
 		ok := env.OK != nil && *env.OK
 		slog.Info("buddy WS ← response", "component", "buddy", "id", env.ID, "ok", ok, "error", env.Error, "duration_ms", env.Duration, "bytes", len(data))
-		if !s.registry.DeliverResponse(env.ID, data) {
+		if !s.registry.DeliverResponse(conn, env.ID, data) {
 			slog.Warn("orphan response (no pending caller)", "component", "buddy", "id", env.ID)
 		}
 	}

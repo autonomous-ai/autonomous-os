@@ -55,14 +55,23 @@ struct ScreenshotExecutor: Executor {
     let action = "screenshot"
 
     func execute(params: [String: Any]) async throws -> [String: Any] {
-        let displayID: CGDirectDisplayID
-        if let id = params["display_id"] as? Int {
-            displayID = CGDirectDisplayID(id)
-        } else {
-            displayID = CGMainDisplayID()
+        try Task.checkCancellation()
+        let displayID = CGDirectDisplayID(try ExecutorParameters.integer(
+            params, "display_id", default: Int(CGMainDisplayID()), range: 1...Int(UInt32.max)))
+        let scale = try ExecutorParameters.number(params, "scale", default: 1, range: 0.01...1)
+        let returnFormat = (params["return_format"] as? String) ?? "path"
+        guard ["path", "base64", "both"].contains(returnFormat),
+              params["return_format"] == nil || params["return_format"] is String else {
+            throw ExecutorError.invalidParam("return_format")
         }
-        let scale = (params["scale"] as? Double) ?? 1.0
-        let returnFormat = (params["return_format"] as? String) ?? "path"  // "path", "base64", or "both"
+        let displayResult = try await ListDisplaysExecutor().execute(params: [:])
+        guard let displays = displayResult["displays"] as? [[String: Any]],
+              let display = displays.first(where: { ($0["id"] as? Int) == Int(displayID) }),
+              let originX = display["x"] as? Int, let originY = display["y"] as? Int,
+              let pointWidth = display["width"] as? Int, let pointHeight = display["height"] as? Int,
+              pointWidth > 0, pointHeight > 0 else {
+            throw ExecutorError.invalidParam("display_id is not an active display")
+        }
 
         if !ScreenRecordingCheck.isTrusted() {
             ScreenRecordingCheck.requestPrompt()
@@ -76,19 +85,22 @@ struct ScreenshotExecutor: Executor {
             throw ExecutorError.actionFailed("could not capture display \(displayID) — permission granted but capture failed")
         }
 
+        try Task.checkCancellation()
+        let (w, h) = try Self.outputSize(width: rawImage.width, height: rawImage.height, scale: scale)
         let image: CGImage
-        if scale != 1.0 && scale > 0 {
-            let w = Int(Double(rawImage.width) * scale)
-            let h = Int(Double(rawImage.height) * scale)
+        if w != rawImage.width || h != rawImage.height {
             let colorSpace = rawImage.colorSpace ?? CGColorSpaceCreateDeviceRGB()
             let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue
-            if let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0, space: colorSpace, bitmapInfo: bitmapInfo) {
-                ctx.interpolationQuality = .high
-                ctx.draw(rawImage, in: CGRect(x: 0, y: 0, width: w, height: h))
-                image = ctx.makeImage() ?? rawImage
-            } else {
-                image = rawImage
+            guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8,
+                                      bytesPerRow: 0, space: colorSpace, bitmapInfo: bitmapInfo) else {
+                throw ExecutorError.actionFailed("could not allocate scaled screenshot")
             }
+            ctx.interpolationQuality = .high
+            ctx.draw(rawImage, in: CGRect(x: 0, y: 0, width: w, height: h))
+            guard let scaled = ctx.makeImage() else {
+                throw ExecutorError.actionFailed("could not scale screenshot")
+            }
+            image = scaled
         } else {
             image = rawImage
         }
@@ -105,13 +117,10 @@ struct ScreenshotExecutor: Executor {
             throw ExecutorError.actionFailed("could not encode JPEG")
         }
 
-        let saveURL = try saveDefaultPath(data: jpegData as Data)
+        try Task.checkCancellation()
+        let saveURL = try await ScreenshotStore.shared.save(data: jpegData as Data)
 
-        // Retina point↔pixel scale of the source display.
-        let mode = CGDisplayCopyDisplayMode(displayID)
-        let pixelW = mode?.pixelWidth ?? image.width
-        let pointW = mode?.width ?? image.width
-        let displayScale = pointW > 0 ? Double(pixelW) / Double(pointW) : 1.0
+        let displayScale = Double(rawImage.width) / Double(pointWidth)
 
         var result: [String: Any] = [
             "path": saveURL.path,
@@ -119,6 +128,15 @@ struct ScreenshotExecutor: Executor {
             "height": image.height,
             "display_id": Int(displayID),
             "display_scale": displayScale,
+            "display_origin_x": originX,
+            "display_origin_y": originY,
+            "point_width": pointWidth,
+            "point_height": pointHeight,
+            "capture_scale": Double(image.width) / Double(rawImage.width),
+            "image_to_global_points": Self.imageTransform(
+                originX: Double(originX), originY: Double(originY),
+                pointWidth: Double(pointWidth), pointHeight: Double(pointHeight),
+                imageWidth: image.width, imageHeight: image.height),
             "bytes": jpegData.length,
             "mime": "image/jpeg",
         ]
@@ -128,14 +146,57 @@ struct ScreenshotExecutor: Executor {
         return result
     }
 
-    private func saveDefaultPath(data: Data) throws -> URL {
+    static func outputSize(width: Int, height: Int, scale: Double) throws -> (Int, Int) {
+        guard width > 0, height > 0, scale.isFinite, (0.01...1).contains(scale) else {
+            throw ExecutorError.invalidParam("screenshot dimensions or scale")
+        }
+        let w = (Double(width) * scale).rounded(.down)
+        let h = (Double(height) * scale).rounded(.down)
+        guard w >= 1, h >= 1, w <= 16_384, h <= 16_384, w * h <= 40_000_000 else {
+            throw ExecutorError.invalidParam("scaled screenshot must be 1...16384 per axis and at most 40 million pixels")
+        }
+        return (Int(w), Int(h))
+    }
+
+    // Use the actual encoded dimensions, including rounding, and the display's global origin.
+    static func imageTransform(originX: Double, originY: Double, pointWidth: Double,
+                               pointHeight: Double, imageWidth: Int, imageHeight: Int) -> [String: Double] {
+        ["origin_x": originX, "origin_y": originY,
+         "scale_x": pointWidth / Double(imageWidth), "scale_y": pointHeight / Double(imageHeight)]
+    }
+}
+
+// Serialize persistence so concurrent captures cannot overwrite or race retention pruning.
+actor ScreenshotStore {
+    static let shared = ScreenshotStore()
+    private let directory: URL?
+
+    init(directory: URL? = nil) {
+        self.directory = directory
+    }
+
+    func save(data: Data) throws -> URL {
         let fm = FileManager.default
-        let dir = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-            .appendingPathComponent("AutonomousBuddy", isDirectory: true)
-            .appendingPathComponent("screenshots", isDirectory: true)
-        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
-        let url = dir.appendingPathComponent("latest.jpg")
+        guard let support = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            throw ExecutorError.actionFailed("application support directory unavailable")
+        }
+        let dir = (directory ?? support.appendingPathComponent("AutonomousBuddy", isDirectory: true)
+            .appendingPathComponent("screenshots", isDirectory: true)).standardizedFileURL
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("capture-\(UUID().uuidString).jpg")
         try data.write(to: url, options: .atomic)
+        let captures = try fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey])
+            .filter { $0.lastPathComponent.hasPrefix("capture-") && $0.pathExtension == "jpg" }
+            .sorted {
+                let left = (try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                let right = (try? $1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                return left > right
+            }
+        // Directory enumeration can resolve /var to /private/var while the caller's
+        // URL retains the alias. The unique basename identifies this capture under either URL.
+        for old in captures.filter({ $0.lastPathComponent != url.lastPathComponent }).dropFirst(19) {
+            try fm.removeItem(at: old)
+        }
         return url
     }
 }

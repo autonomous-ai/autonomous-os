@@ -32,7 +32,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menuBarController = MenuBarController(
             onPair: { [weak self] host in self?.showPairing(host: host) },
             onUnpair: { [weak self] in self?.unpair() },
-            onTogglePause: { paused in AppState.shared.setPaused(paused) },
+            onTogglePause: { paused in
+                AppState.shared.setPaused(paused)
+                if paused { Task { await dispatcher.cancelActive() } }
+            },
             onShowActivity: { [weak self] in self?.showActivity() },
             onAbout: { [weak self] in self?.showAbout() },
             onQuit: { NSApp.terminate(nil) }

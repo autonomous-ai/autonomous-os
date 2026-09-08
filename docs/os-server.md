@@ -845,3 +845,30 @@ Rules the agent is given, and why each one is load-bearing:
 `TestHeartbeatPeopleSyncFormatMatchesTheReconciler` pins the written format
 against the reconciler's parser, so the two cannot drift apart into entries
 nobody can prune.
+
+## Buddy computer-use feedback
+
+The device agent owns desktop tasks; the Mac companion executes commands. Agent
+management in the separate Buddy desktop workspace is independent of this flow.
+
+- `POST /api/buddy/command` stays loopback-only and returns the native command
+  result. Request bodies are limited to 1 MiB; optional `timeout_ms` is `0` for
+  default or an integer from `500` to `60000`. Native UI observation uses
+  `get_ui_tree`; snapshot-scoped mutations use `perform_ui_action`.
+- `POST /api/buddy/observe` is loopback-only. It captures the paired Mac's desktop
+  and asks the configured auxiliary vision model a desktop-specific question,
+  returning text plus screenshot coordinate metadata. This supports a text-only
+  main agent; it does not capture the device camera. Native image-capable agents
+  can instead load the device-local JPEG decoded by the computer-use skill helper.
+- WebSocket writes are serialized. Pending replies belong to their original
+  connection; disconnect releases those callers, and an old reader cannot clear
+  a replacement connection. Cancellation/timeout attempts a targeted
+  `cancel_command` on the original socket; input already sent cannot be undone.
+- Native Buddy rejects overlapping commands with a busy error, supports
+  cooperative cancellation and Pause, and invalidates UI references after
+  mutations. A successful command is evidence of dispatch, not task completion.
+
+See [Computer use](../integrations/companions/autonomous-buddy/docs/computer-use.md)
+for parameter contracts, image capability requirements and desktop acceptance
+checks. The skill maintains the full user goal and observes the result after each
+dependent action; opening an app is insufficient for a search or cross-app task.

@@ -7,7 +7,9 @@ struct TypeTextExecutor: Executor {
 
     func execute(params: [String: Any]) async throws -> [String: Any] {
         guard let text = params["text"] as? String else { throw ExecutorError.missingParam("text") }
-        let delayMs = (params["delay_ms"] as? Int) ?? 15
+        let delayMs = try ExecutorParameters.integer(params, "delay_ms", default: 15, range: 0...1000)
+        guard text.utf16.count <= 100_000 else { throw ExecutorError.invalidParam("text too long") }
+        try Task.checkCancellation()
 
         guard AccessibilityCheck.isTrusted() else {
             AccessibilityCheck.requestPrompt()
@@ -18,10 +20,11 @@ struct TypeTextExecutor: Executor {
         }
 
         for scalar in text.unicodeScalars {
+            try Task.checkCancellation()
             let utf16 = Array(String(scalar).utf16)
             guard let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true),
                   let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false) else {
-                continue
+                throw ExecutorError.actionFailed("could not create keyboard event")
             }
             keyDown.flags = []
             keyUp.flags = []
@@ -34,7 +37,7 @@ struct TypeTextExecutor: Executor {
             keyDown.post(tap: .cghidEventTap)
             keyUp.post(tap: .cghidEventTap)
             if delayMs > 0 {
-                try? await Task.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
+                try await Task.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
             }
         }
         return ["typed_chars": text.count]
@@ -48,11 +51,26 @@ struct KeyComboExecutor: Executor {
         guard let keys = params["keys"] as? [String], !keys.isEmpty else {
             throw ExecutorError.invalidParam("keys")
         }
+        let (flags, code) = try Self.parse(keys: keys)
+        try Task.checkCancellation()
         guard AccessibilityCheck.isTrusted() else {
             AccessibilityCheck.requestPrompt()
             throw ExecutorError.permissionDenied("Accessibility access required for key combos")
         }
+        guard let source = CGEventSource(stateID: .hidSystemState),
+              let keyDown = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: true),
+              let keyUp = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: false) else {
+            throw ExecutorError.actionFailed("could not create event")
+        }
+        keyDown.flags = flags
+        keyUp.flags = flags
+        keyDown.post(tap: .cghidEventTap)
+        keyUp.post(tap: .cghidEventTap)
+        return ["dispatched": true]
+    }
 
+    static func parse(keys: [String]) throws -> (CGEventFlags, CGKeyCode) {
+        guard keys.count <= 6 else { throw ExecutorError.invalidParam("keys") }
         var flags: CGEventFlags = []
         var keyCode: CGKeyCode?
         for raw in keys {
@@ -67,22 +85,16 @@ struct KeyComboExecutor: Executor {
                 guard let code = KeyMap.code(for: k) else {
                     throw ExecutorError.invalidParam("unknown key: \(raw)")
                 }
+                guard keyCode == nil else {
+                    throw ExecutorError.invalidParam("exactly one non-modifier key required")
+                }
                 keyCode = code
             }
         }
         guard let code = keyCode else {
             throw ExecutorError.invalidParam("no non-modifier key in combo")
         }
-        guard let source = CGEventSource(stateID: .hidSystemState),
-              let keyDown = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: true),
-              let keyUp = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: false) else {
-            throw ExecutorError.actionFailed("could not create event")
-        }
-        keyDown.flags = flags
-        keyUp.flags = flags
-        keyDown.post(tap: .cghidEventTap)
-        keyUp.post(tap: .cghidEventTap)
-        return ["dispatched": true]
+        return (flags, code)
     }
 }
 
