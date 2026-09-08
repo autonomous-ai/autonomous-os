@@ -54,6 +54,7 @@ from hal.drivers.voice._internal.speaker_decorate import (
     merge_wake_words,
 )
 from hal.drivers.voice._internal.turn_dispatch import dispatch_turn
+from hal.telemetry import voice_metrics
 from hal.drivers.voice._internal.vad_filters import (
     SileroVADFilter,
     WebRTCVADFilter,
@@ -1418,6 +1419,15 @@ class VoiceService:
         # the streaming loop runs (e.g. a stale keepalive WS raising on send).
         # -1 = no speech seen → finalize_session skips the trailing-silence trim.
         last_speech_idx: int = -1
+        # How this session's speech endpoint was decided — carried to the
+        # voice metrics so a latency number is always read together with what
+        # "the user stopped speaking" actually meant (see hal/telemetry).
+        endpoint_method = "stt_error"
+        # Monotonic stamp of the endpoint DETECTION itself. The metrics clock has
+        # to start here, not after finalize_session: transcript assembly,
+        # trailing-silence trim and speaker-ID all run between the two and
+        # would otherwise be charged to the device's response time.
+        endpoint_ts = 0.0
         pre_frames_from_vad = len(speech_pre_buffer or [])
         logger.info(
             "Session START — pre_from_vad=%d frames, device_rate=%dHz",
@@ -1844,9 +1854,13 @@ class VoiceService:
                 # If TTS or music starts mid-session, stop streaming immediately
                 if self._tts_is_speaking():
                     logger.info("TTS started mid-session, closing STT to avoid echo")
+                    endpoint_method = "tts_started"
+                    endpoint_ts = time.monotonic()
                     break
                 if self._music_is_playing():
                     logger.info("Music started mid-session, closing STT")
+                    endpoint_method = "music_started"
+                    endpoint_ts = time.monotonic()
                     break
 
                 # Guard against zombie sessions
@@ -1855,6 +1869,8 @@ class VoiceService:
                         "STT session exceeded %ds, force-closing",
                         voice_cfg.MAX_SESSION_DURATION_S,
                     )
+                    endpoint_method = "max_duration"
+                    endpoint_ts = time.monotonic()
                     break
 
                 data, overflowed = mic.read(frame_size)
@@ -1866,6 +1882,8 @@ class VoiceService:
                     stt_session.send_audio(resampled)
                 except Exception as e:
                     logger.warning("send_audio failed (connection dead?): %s", e)
+                    endpoint_method = "stt_error"
+                    endpoint_ts = time.monotonic()
                     break
                 audio_buffer.append(resampled)
 
@@ -1925,6 +1943,8 @@ class VoiceService:
                         )
                     else:
                         logger.info("Silence detected, disconnecting STT")
+                    endpoint_method = "silence_clock"
+                    endpoint_ts = time.monotonic()
                     break
         except Exception as e:
             if _is_normal_ws_close(e):
@@ -1955,6 +1975,10 @@ class VoiceService:
                 getattr(self._tts, "last_spoken_text", "") if self._tts else "",
             )
             capture_complete.set()
+            # Voice metrics clock starts here: the endpoint has been detected and
+            # the transcript is assembled. Everything downstream carries this
+            # id (see hal/telemetry/voice_metrics.py).
+            interaction_id = voice_metrics.speech_end(endpoint_method, at=endpoint_ts)
             if (
                 hal_config.WAKEWORD_ENABLED
                 and wake_word_detected.is_set()
@@ -2258,6 +2282,7 @@ class VoiceService:
                     rt_audio_buffer,
                     buf_duration,
                     rt_audio_is_speech,
+                    interaction_id=interaction_id,
                 )
             else:
                 # No realtime turn was opened this capture. Distinguish the two
@@ -2289,6 +2314,10 @@ class VoiceService:
                 wakeword_authorized,
             )
             downstream_dropped = should_drop_downstream_turn(rt)
+            if not dispatch_to_main:
+                # Heard, but not addressed to us (no wake word, outside the
+                # follow-up window). Not a missed response — an excluded one.
+                voice_metrics.exclude(interaction_id, voice_metrics.EXCL_NOT_ADDRESSED)
             if defer_speaker_prepass and dispatch_to_main and not downstream_dropped:
                 resolve_turn_speaker_identity(after_realtime_decision=True)
 
@@ -2310,6 +2339,7 @@ class VoiceService:
                     audio_buffer,
                     ser_audio_buffer,
                     rt,
+                    interaction_id=interaction_id,
                     event_type_override=(
                         "voice_followup"
                         if wakeword_followup_active and not wake_word_confirmed.is_set()

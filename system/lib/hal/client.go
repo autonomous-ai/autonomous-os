@@ -260,10 +260,21 @@ func SpeakInterruptible(text string) error {
 // confirms ("Volume up!", "Light on!") where the reply is short and should
 // play to completion. On hit ~50ms playback; on miss render+save+play.
 func SpeakCached(text string) error {
-	body, _ := json.Marshal(map[string]any{
+	return SpeakCachedForTurn(text, "")
+}
+
+// SpeakCachedForTurn is SpeakCached plus the turn (or voice-metrics
+// interaction) the phrase answers. HAL uses turnID for measurement
+// attribution only; playback behaviour is identical.
+func SpeakCachedForTurn(text, turnID string) error {
+	payload := map[string]any{
 		"text":   text,
 		"cached": true,
-	})
+	}
+	if turnID != "" {
+		payload["turn_id"] = turnID
+	}
+	body, _ := json.Marshal(payload)
 	return post("/voice/speak", body)
 }
 
@@ -271,11 +282,24 @@ func SpeakCached(text string) error {
 // On miss, hal renders + saves WAV then plays. Use for fixed phrases
 // like dead-air fillers where a real reply may need to cut it short.
 func SpeakCachedInterruptible(text string) error {
-	body, _ := json.Marshal(map[string]any{
+	return SpeakCachedInterruptibleForTurn(text, "")
+}
+
+// SpeakCachedInterruptibleForTurn is SpeakCachedInterruptible plus the run the
+// phrase belongs to. HAL uses turnID for measurement attribution only (which
+// turn a played filler was for — see hal/telemetry/voice_metrics.py); playback
+// behaviour is identical, and the turn_seq gating stays exclusive to the
+// speak-queue path.
+func SpeakCachedInterruptibleForTurn(text, turnID string) error {
+	payload := map[string]any{
 		"text":          text,
 		"interruptible": true,
 		"cached":        true,
-	})
+	}
+	if turnID != "" {
+		payload["turn_id"] = turnID
+	}
+	body, _ := json.Marshal(payload)
 	return post("/voice/speak", body)
 }
 

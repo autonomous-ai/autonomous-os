@@ -29,7 +29,9 @@ class _Sender:
     def __init__(self):
         self.sent = []
 
-    def send(self, msg, event_type="", skip_echo=False, image_b64=""):
+    def send(self, msg, event_type="", skip_echo=False, image_b64="", **_kwargs):
+        # **_kwargs: dispatch also passes measurement-only fields (the voice
+        # metrics interaction id). This double asserts on routing, not on those.
         self.sent.append((msg, event_type))
 
 
@@ -96,3 +98,40 @@ def test_event_type_travels_with_the_route(caplog, override):
         event_type_override=override,
     )
     assert f"event={override or 'voice'}" in lines[0]
+
+
+# --- Locally-handled commands are served, not failed ------------------------
+
+class _LocalResult:
+    """What os-server returns for a local intent match: 200, a spoken reply,
+    and no run id — it answered the command itself."""
+
+    run_id = ""
+    speech_suppressed = False
+    delivered = True
+    handled_locally = True
+
+
+def test_locally_handled_command_is_not_marked_as_failed(monkeypatch):
+    """Regression: "volume up" is executed by os-server and answered out loud,
+    but carries no run id. Treating that as a failed dispatch counted a served
+    command as unanswered."""
+    from hal.drivers.voice._internal import turn_dispatch
+
+    failed = []
+    monkeypatch.setattr(turn_dispatch.voice_metrics, "mark_failed",
+                        lambda iid, reason: failed.append((iid, reason)))
+
+    turn_dispatch._note_dispatch_outcome("vi-1", _LocalResult())
+    assert failed == []
+
+
+def test_undelivered_command_is_still_marked_as_failed(monkeypatch):
+    from hal.drivers.voice._internal import turn_dispatch
+
+    failed = []
+    monkeypatch.setattr(turn_dispatch.voice_metrics, "mark_failed",
+                        lambda iid, reason: failed.append((iid, reason)))
+
+    turn_dispatch._note_dispatch_outcome("vi-2", turn_dispatch._NoResult)
+    assert failed == [("vi-2", turn_dispatch.voice_metrics.FAIL_DISPATCH_FAILED)]
