@@ -57,6 +57,7 @@ from hal.drivers.voice.speech_emotion.base import (
 from hal.drivers.voice.speech_emotion.constants import (
     CONFIDENCE_THRESHOLD_BY_LABEL,
     DEFAULT_API_TIMEOUT_S,
+    DEFAULT_AUDIO_MAX_FILES,
     DEFAULT_CONFIDENCE_THRESHOLD,
     DEFAULT_DEDUP_WINDOW_S,
     DEFAULT_DL_SER_ENDPOINT,
@@ -156,6 +157,7 @@ class SpeechEmotionService:
         min_audio_s: float = _MIN_AUDIO_S,
         sensing_url: str = _SENSING_URL,
         audio_dir: str = _AUDIO_DIR,
+        audio_max_files: int = DEFAULT_AUDIO_MAX_FILES,
         queue_maxsize: int = DEFAULT_QUEUE_MAXSIZE,
     ):
         self._recognizer: BaseSpeechEmotionRecognizer = (
@@ -166,6 +168,7 @@ class SpeechEmotionService:
         self._min_audio_s: float = min_audio_s
         self._sensing_url: str = sensing_url
         self._audio_dir: str = audio_dir
+        self._audio_max_files: int = audio_max_files
 
         # mutable state — guarded by _lock
         self._lock: threading.RLock = threading.RLock()
@@ -471,7 +474,29 @@ class SpeechEmotionService:
             )
             tracer.note(persist_error=f"{path}: {e}")  # SER-DEBUG
             return ""
+        self._prune_audio_dir()
         return path
+
+    def _prune_audio_dir(self) -> None:
+        """Keep only the newest `_audio_max_files` clips in the audio dir.
+
+        Best-effort by design: a prune failure must never fail the write that
+        already succeeded, so every OSError is swallowed. Same shape as
+        `debug_tracer.SerDebugTracer._prune`.
+        """
+        if self._audio_max_files <= 0:
+            return
+        try:
+            # Filenames start with `int(ts * 1000)`, a fixed-width value for
+            # any date this code will see, so lexicographic order is
+            # chronological order and no stat() per file is needed.
+            names = sorted(
+                n for n in os.listdir(self._audio_dir) if n.endswith(".wav")
+            )
+            for old in names[: max(0, len(names) - self._audio_max_files)]:
+                os.remove(os.path.join(self._audio_dir, old))
+        except OSError:
+            pass
 
     # --- flush thread -----------------------------------------------------
 
