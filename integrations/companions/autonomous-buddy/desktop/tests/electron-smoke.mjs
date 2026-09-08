@@ -195,15 +195,20 @@ try {
   await page.getByRole('button', { name: 'Create worktree', exact: true }).click()
   await expect(page.locator('.tree-select')).toHaveCount(2)
   await page.locator('.tree-select').filter({ hasText: 'main' }).click()
-  const workspaceMenu = () => page.getByRole('button', { name: 'Workspace actions for main', exact: true }).click()
+  const workspaceMenu = () =>
+    page.getByRole('button', { name: 'Workspace actions for main', exact: true }).click()
   await workspaceMenu()
   await expect(page.getByRole('menu', { name: 'Workspace actions' })).toBeVisible()
   await expect(page.getByRole('menuitem', { name: 'Delete worktree', exact: true })).toBeDisabled()
   await page.getByRole('menuitem', { name: 'Pin', exact: true }).click()
-  await expect.poll(async () => (await snapshot()).workspaces.find((item) => item.worktreePath === projectPath)?.pinned).toBe(true)
+  await expect
+    .poll(async () => (await snapshot()).workspaces.find((item) => item.worktreePath === projectPath)?.pinned)
+    .toBe(true)
   await workspaceMenu()
   await page.getByRole('menuitemradio', { name: 'In review', exact: true }).click()
-  await expect.poll(async () => (await snapshot()).workspaces.find((item) => item.worktreePath === projectPath)?.status).toBe('review')
+  await expect
+    .poll(async () => (await snapshot()).workspaces.find((item) => item.worktreePath === projectPath)?.status)
+    .toBe('review')
   await workspaceMenu()
   await page.screenshot({ path: path.join(artifacts, 'workspace-context-menu.png') })
   await page.keyboard.press('Escape')
@@ -249,33 +254,80 @@ try {
   const listed = await lampCommand('list')
   expect(listed.ok).toBe(true)
   expect(listed.result.projects).toContainEqual(project)
-  const createParams = { project_id: project.id, provider: 'codex', title: 'Lamp voice session', request_id: 'smoke-create-voice-001' }
+  const createParams = {
+    project_id: project.id,
+    provider: 'codex',
+    title: 'Lamp voice session',
+    request_id: 'smoke-create-voice-001',
+  }
   const created = await lampCommand('create', createParams)
   expect(created.ok).toBe(true)
   const voice = created.result
   expect((await lampCommand('create', createParams)).result.id).toBe(voice.id)
-  const firstVoice = { project_id: project.id, session_id: voice.id, request_id: 'smoke-send-voice-001', prompt: 'Review this project from the lamp voice command.' }
-  expect(await lampCommand('send', firstVoice)).toMatchObject({ ok: true, result: { accepted: true, session_id: voice.id } })
-  expect(await lampCommand('send', firstVoice)).toMatchObject({ ok: true, result: { accepted: true, session_id: voice.id } })
-  await expect.poll(() => notices.some((event) => event.session_id === voice.id && event.status === 'completed')).toBe(true)
+  const firstVoice = {
+    project_id: project.id,
+    session_id: voice.id,
+    request_id: 'smoke-send-voice-001',
+    prompt: 'Review this project from the lamp voice command.',
+  }
+  expect(await lampCommand('send', firstVoice)).toMatchObject({
+    ok: true,
+    result: { accepted: true, session_id: voice.id },
+  })
+  expect(await lampCommand('send', firstVoice)).toMatchObject({
+    ok: true,
+    result: { accepted: true, session_id: voice.id },
+  })
+  await expect
+    .poll(() => notices.some((event) => event.session_id === voice.id && event.status === 'completed'))
+    .toBe(true)
   const firstNotice = notices.find((event) => event.session_id === voice.id && event.status === 'completed')
   expect(firstNotice.project_id).toBe(project.id)
   expect(firstNotice.seq).toBeGreaterThan(0)
   const firstDetail = await lampCommand('session', { project_id: project.id, session_id: voice.id })
   expect(firstDetail.ok).toBe(true)
   expect(firstDetail.result.events.filter((event) => event.type === 'prompt')).toHaveLength(1)
-  expect((await lampCommand('session', { project_id: project.id, session_id: voice.id, after_seq: firstDetail.result.next_seq })).result.events).toEqual([])
+  expect(
+    (
+      await lampCommand('session', {
+        project_id: project.id,
+        session_id: voice.id,
+        after_seq: firstDetail.result.next_seq,
+      })
+    ).result.events,
+  ).toEqual([])
   const beforeReconnect = connectionCount
   lampSocket.close(1000, 'smoke reconnect')
   await expect.poll(() => connectionCount, { timeout: 15000 }).toBeGreaterThan(beforeReconnect)
-  expect((await lampCommand('session', { project_id: project.id, session_id: voice.id })).result.session.providerSessionId).toBe(firstDetail.result.session.providerSessionId)
-  const secondVoice = { ...firstVoice, request_id: 'smoke-send-voice-002', prompt: 'Continue the same lamp session and explain persistence.' }
+  expect(
+    (await lampCommand('session', { project_id: project.id, session_id: voice.id })).result.session
+      .providerSessionId,
+  ).toBe(firstDetail.result.session.providerSessionId)
+  const secondVoice = {
+    ...firstVoice,
+    request_id: 'smoke-send-voice-002',
+    prompt: 'Continue the same lamp session and explain persistence.',
+  }
   expect((await lampCommand('send', secondVoice)).ok).toBe(true)
-  await expect.poll(() => notices.some((event) => event.session_id === voice.id && event.status === 'completed' && event.seq > firstNotice.seq)).toBe(true)
-  const secondDetail = await lampCommand('session', { project_id: project.id, session_id: voice.id, after_seq: firstDetail.result.next_seq })
+  await expect
+    .poll(() =>
+      notices.some(
+        (event) =>
+          event.session_id === voice.id && event.status === 'completed' && event.seq > firstNotice.seq,
+      ),
+    )
+    .toBe(true)
+  const secondDetail = await lampCommand('session', {
+    project_id: project.id,
+    session_id: voice.id,
+    after_seq: firstDetail.result.next_seq,
+  })
   expect(secondDetail.result.session.providerSessionId).toBe(firstDetail.result.session.providerSessionId)
   expect(secondDetail.result.events.filter((event) => event.type === 'prompt')).toHaveLength(1)
-  const voiceCalls = (await readFile(log, 'utf8')).trim().split('\n').map((line) => JSON.parse(line))
+  const voiceCalls = (await readFile(log, 'utf8'))
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line))
   expect(voiceCalls).toHaveLength(4)
   expect(voiceCalls.slice(2).map((call) => call.prompt)).toEqual([firstVoice.prompt, secondVoice.prompt])
   expect(voiceCalls[3].args).toContain('resume')
@@ -286,6 +338,95 @@ try {
   await page.locator('.session-row').filter({ hasText: 'Build session orchestration' }).click()
   await expect(page.locator('.transcript-block.prompt')).toHaveCount(2)
   await expect(page.locator('.changed-file')).toHaveCount(3)
+  // Splits own real PTYs in the selected worktree; drafts survive remounts.
+  const pane = (id) => page.locator(`.session-pane[data-session-id="${id}"]`)
+  const draft = 'Keep this unsent research prompt while arranging the workspace.'
+  await pane(agent.id).getByRole('textbox', { name: 'Message agent' }).fill(draft)
+  const beforeSplit = new Set((await snapshot()).sessions.map((session) => session.id))
+  await pane(agent.id)
+    .getByRole('button', { name: `Split right ${agent.title}`, exact: true })
+    .click()
+  await expect(page.locator('.session-pane')).toHaveCount(2)
+  const splitOne = (await snapshot()).sessions.find((session) => !beforeSplit.has(session.id))
+  expect(splitOne).toMatchObject({
+    projectId: project.id,
+    worktreePath: projectPath,
+    provider: 'terminal',
+    status: 'running',
+  })
+  await expect(pane(agent.id).getByRole('textbox', { name: 'Message agent' })).toHaveValue(draft)
+  const beforeNested = new Set((await snapshot()).sessions.map((session) => session.id))
+  await pane(splitOne.id)
+    .getByRole('button', { name: `Split down ${splitOne.title}`, exact: true })
+    .click()
+  await expect(page.locator('.session-pane')).toHaveCount(3)
+  const splitTwo = (await snapshot()).sessions.find((session) => !beforeNested.has(session.id))
+  expect(splitTwo).toMatchObject({
+    projectId: project.id,
+    worktreePath: projectPath,
+    provider: 'terminal',
+    status: 'running',
+  })
+  const terminalText = async (id) =>
+    (await detail(id)).events
+      .filter((event) => event.type === 'terminal')
+      .map((event) => event.text)
+      .join('')
+  const typeInPane = async (id, word) => {
+    await pane(id).locator('.xterm-helper-textarea').focus()
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          document.activeElement?.closest('.session-pane')?.getAttribute('data-session-id'),
+        ),
+      )
+      .toBe(id)
+    await page.keyboard.type(`printf 'SPLIT_%s\\n' '${word}'`)
+    await page.keyboard.press('Enter')
+    await expect.poll(() => terminalText(id)).toContain(`SPLIT_${word}`)
+  }
+  await typeInPane(splitOne.id, 'ONE_ONLY')
+  await typeInPane(splitTwo.id, 'TWO_ONLY')
+  expect(await terminalText(splitOne.id)).not.toContain('SPLIT_TWO_ONLY')
+  expect(await terminalText(splitTwo.id)).not.toContain('SPLIT_ONE_ONLY')
+  expect(await terminalText(terminal.id)).not.toContain('SPLIT_ONE_ONLY')
+  const divider = page.getByRole('separator', { name: 'Resize columns', exact: true })
+  await divider.focus()
+  await page.keyboard.press('ArrowRight')
+  await expect(divider).toHaveAttribute('aria-valuenow', '55')
+  await page.screenshot({ path: path.join(artifacts, 'split-session-workspace.png') })
+  await pane(splitTwo.id)
+    .getByRole('button', { name: `Close pane ${splitTwo.title}`, exact: true })
+    .click()
+  await expect(page.locator('.session-pane')).toHaveCount(2)
+  expect((await detail(splitTwo.id)).session.status).toBe('running')
+  const savedLayout = await page.evaluate(
+    (id) => JSON.parse(localStorage.getItem(`buddy.panes.${id}`)),
+    agent.id,
+  )
+  expect(savedLayout).toMatchObject({
+    kind: 'split',
+    direction: 'horizontal',
+    ratio: 0.55,
+    first: { sessionId: agent.id },
+    second: { sessionId: splitOne.id },
+  })
+  await page.locator('.session-row').filter({ hasText: splitTwo.title }).click()
+  await expect(pane(splitTwo.id)).toBeVisible()
+  expect((await detail(splitTwo.id)).session.status).toBe('running')
+  await page.locator('.session-row').filter({ hasText: agent.title }).click()
+  await expect(page.locator('.session-pane')).toHaveCount(2)
+  await expect(pane(agent.id).getByRole('textbox', { name: 'Message agent' })).toHaveValue(draft)
+  await expect(page.getByRole('separator', { name: 'Resize columns', exact: true })).toHaveAttribute(
+    'aria-valuenow',
+    '55',
+  )
+  await page.getByRole('button', { name: `Close tab ${agent.title}`, exact: true }).click()
+  await page.locator('.session-row').filter({ hasText: agent.title }).click()
+  await expect(page.locator('.session-pane')).toHaveCount(2)
+  expect(
+    await page.evaluate((id) => JSON.parse(localStorage.getItem(`buddy.panes.${id}`)), agent.id),
+  ).toEqual(savedLayout)
   await page.locator('.changed-file').filter({ hasText: 'README.md' }).click()
   await expect(page.locator('.file-preview')).toContainText('+Sessions preserve context')
   await page.getByRole('button', { name: 'Close file preview', exact: true }).click()
@@ -299,6 +440,31 @@ try {
     .getByRole('button', { name: /^Changes/ })
     .click()
   await expect(page.locator('.commit-list')).toContainText('Add the agent workspace foundation')
+  // Stage and commit only README through the product UI in the temporary repo.
+  await page.getByRole('button', { name: 'Stage README.md', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Unstage README.md', exact: true })).toBeVisible()
+  expect((await git(['diff', '--cached', '--name-only'])).stdout.trim()).toBe('README.md')
+  await page.getByRole('button', { name: 'Unstage README.md', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Stage README.md', exact: true })).toBeVisible()
+  expect((await git(['diff', '--cached', '--name-only'])).stdout.trim()).toBe('')
+  await page.getByRole('button', { name: 'Stage README.md', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Unstage README.md', exact: true })).toBeVisible()
+  await page.getByRole('textbox', { name: 'Commit message', exact: true }).fill('Document session continuity')
+  await page.getByRole('button', { name: /^Commit staged changes/ }).click()
+  await expect(page.locator('.commit-list')).toContainText('Document session continuity')
+  await expect(page.locator('.changed-file')).toHaveCount(2)
+  const committedHash = (await git(['rev-parse', 'HEAD'])).stdout.trim()
+  expect((await git(['show', '--pretty=format:', '--name-only', committedHash])).stdout.trim()).toBe(
+    'README.md',
+  )
+  expect((await git(['diff', '--cached', '--name-only'])).stdout.trim()).toBe('')
+  expect((await git(['status', '--porcelain'])).stdout).toContain(' M src/session-store.ts')
+  expect((await git(['status', '--porcelain'])).stdout).toContain('?? notes.md')
+  await page.getByRole('button', { name: `Review commit ${committedHash.slice(0, 7)}`, exact: true }).click()
+  await expect(page.locator('.git-commit-files')).toContainText('README.md')
+  await page.locator('.git-commit-files').getByRole('button').filter({ hasText: 'README.md' }).click()
+  await expect(page.locator('.file-preview')).toContainText('+Sessions preserve context')
+  await page.getByRole('button', { name: 'Close file preview', exact: true }).click()
   await page.screenshot({ path: path.join(artifacts, 'manager-workspace.png') })
   await page.getByRole('button', { name: 'Computer & device', exact: true }).click()
   await expect(page.getByRole('dialog', { name: 'Computer & device' })).toContainText('Ready')
@@ -332,23 +498,34 @@ try {
   await expect.poll(() => nativePids.some(alive)).toBe(false)
   await launchApp()
   expect(await helperPids()).toHaveLength(1)
-  await expect(page.locator('.session-identity')).toContainText('Build session orchestration')
+  await expect(pane(agent.id).locator('.session-identity')).toContainText('Build session orchestration')
+  await expect(page.locator('.session-pane')).toHaveCount(2)
+  await expect(pane(agent.id).getByRole('textbox', { name: 'Message agent' })).toHaveValue(draft)
+  expect(
+    await page.evaluate((id) => JSON.parse(localStorage.getItem(`buddy.panes.${id}`)), agent.id),
+  ).toEqual(savedLayout)
   await expect(page.locator('.transcript-block.prompt')).toHaveCount(2)
   expect((await detail(agent.id)).session.providerSessionId).toBe(saved.session.providerSessionId)
   expect((await detail(agent.id)).events.filter((event) => event.type === 'prompt')).toEqual(
     saved.events.filter((event) => event.type === 'prompt'),
   )
   expect((await detail(terminal.id)).session.status).toBe('stopped')
+  expect((await detail(splitOne.id)).session.status).toBe('stopped')
+  expect((await detail(splitTwo.id)).session.status).toBe('stopped')
   const afterRestart = (await readFile(log, 'utf8')).trim().split('\n')
   expect(afterRestart).toHaveLength(4)
   // Persistent receipts remain effective across both helper reconnect and app restart.
   expect((await lampCommand('send', secondVoice)).ok).toBe(true)
-  expect((await lampCommand('session', { project_id: project.id, session_id: voice.id })).result.events.filter((event) => event.type === 'prompt')).toHaveLength(2)
+  expect(
+    (await lampCommand('session', { project_id: project.id, session_id: voice.id })).result.events.filter(
+      (event) => event.type === 'prompt',
+    ),
+  ).toHaveLength(2)
   expect((await readFile(log, 'utf8')).trim().split('\n')).toHaveLength(4)
   expect(lampErrors).toEqual([])
   expect(pageErrors).toEqual([])
   console.log(
-    'PASS: unified app, real Swift helper IPC/ping/pause/exit, production UI, Git/worktrees/diff, PTY, agent streaming, exact-ID follow-up, real Swift WebSocket lamp routing, reconnect and durable request dedup.',
+    'PASS: unified app, real Swift helper IPC/ping/pause/exit, production UI, scoped Git stage/unstage/commit/history review, recursive split PTYs/input isolation, persisted draft/layout, agent streaming, exact-ID follow-up, real Swift WebSocket lamp routing, reconnect and durable request dedup.',
   )
   console.log(`Screenshot: ${path.join(artifacts, 'manager-workspace.png')}`)
 } catch (error) {

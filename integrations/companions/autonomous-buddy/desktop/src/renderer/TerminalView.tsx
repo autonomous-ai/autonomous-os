@@ -12,11 +12,19 @@ function mergeEvents(a: SessionEvent[], b: SessionEvent[]) {
 export default function TerminalView({
   sessionId,
   onError,
+  focused = true,
 }: {
   sessionId: string
+  focused?: boolean
   onError: (error: unknown) => void
 }) {
   const host = useRef<HTMLDivElement>(null)
+  const terminal = useRef<Terminal | null>(null)
+  const focusedRef = useRef(focused)
+  useEffect(() => {
+    focusedRef.current = focused
+    if (focused) terminal.current?.focus()
+  }, [focused])
   useEffect(() => {
     if (!host.current) return
     let alive = true,
@@ -44,6 +52,7 @@ export default function TerminalView({
         white: '#d7dae0',
       },
     })
+    terminal.current = term
     const fit = new FitAddon()
     term.loadAddon(fit)
     term.open(host.current)
@@ -64,7 +73,7 @@ export default function TerminalView({
         mergeEvents(detail.events, queued).forEach(write)
         hydrated = true
         fit.fit()
-        term.focus()
+        if (focusedRef.current) term.focus()
       })
       .catch(onError)
     const data = term.onData((text) => {
@@ -83,6 +92,7 @@ export default function TerminalView({
       unsubscribe()
       data.dispose()
       resize.dispose()
+      if (terminal.current === term) terminal.current = null
       term.dispose()
     }
   }, [sessionId, onError])

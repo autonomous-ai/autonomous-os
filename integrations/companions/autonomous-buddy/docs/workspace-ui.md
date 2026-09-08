@@ -30,10 +30,21 @@ Each session tab has a visible **×**. Closing a tab hides that tab; it does not
 
 The implementation is original code informed by the upstream [WorktreeContextMenuView](https://github.com/stablyai/orca/blob/1a8640adb6e86abb342a8025892300b2835f3e8e/src/renderer/src/components/sidebar/WorktreeContextMenuView.tsx), [context-menu commands](https://github.com/stablyai/orca/blob/1a8640adb6e86abb342a8025892300b2835f3e8e/src/renderer/src/components/sidebar/use-worktree-context-menu-commands.ts), and [TabBar](https://github.com/stablyai/orca/blob/1a8640adb6e86abb342a8025892300b2835f3e8e/src/renderer/src/components/tab-bar/TabBar.tsx). In that audited revision, Orca's Update menu invokes rename, and New group from project creates a project group before assigning the project; neither means pulling Git changes or creating a worktree.
 
-This is not full Orca parity. Buddy currently uses a fixed set of organizational statuses and a single scrollable context menu instead of flyout submenus. Multi-select operations, drag reorder, split panes, browser/editor tabs, project-group administration independent of its projects, remote/mobile access, and automatic process resume after Sleep are not implemented here.
+This is not full Orca parity. Buddy currently uses a fixed set of organizational statuses and a single scrollable context menu instead of flyout submenus. Multi-select operations, drag reorder, browser/editor tabs, project-group administration independent of its projects, remote/mobile access, and automatic process resume after Sleep are not implemented here.
 
 Validation: desktop `npm run lint` and `npm run build`; packaged Electron smoke coverage is maintained in `desktop/tests/electron-smoke.mjs`. See [agent-manager.md](agent-manager.md) for the native boundary and provider/session lifecycle.
 
 ## Provider usage footer
 
 The bottom usage bar shows Claude and Codex quota windows returned by `providerUsage(refresh?)`: the window label, percentage used, a small meter, and time until reset when supplied. Hover or keyboard-focus a provider to inspect exact reset timestamps and availability details. Missing or failed quota data displays Sign in or Not available; the UI never replaces unknown quota with zero percent. It requests data on mount and every 60 seconds without overlapping requests, with a manual Refresh agent usage button. Provider authentication and quota retrieval stay in the main process; credential values never enter this renderer API.
+
+
+## Split session panes
+
+Use **Split right** or **Split down** in a pane header to create a real terminal session in the same project and worktree. Splits can nest in both directions; this is a recursive layout, not a fixed two-pane view. Each leaf renders its own session output and controls. Click or focus a pane to select it; only the focused pane automatically marks its session updates read.
+
+Drag a divider to resize its two children, or focus the divider and use its direction's arrow keys (Home/End select the bounds). Ratios stay between 15% and 85% so both sides remain reachable. Closing a pane only hides that leaf and collapses an empty split; its session and process remain in the sidebar. Closing the last pane closes the tab. A tab retains its original session name while containing other split sessions. Selecting that original session again reveals its pane if previously closed; any other closed session can be opened as its own tab from the sidebar.
+
+The layout is saved per original session tab in local UI preferences, including directions, split ratios, and session IDs. Restore removes unknown, deleted, duplicate, or foreign-worktree sessions. Restoring layout does not restart stopped terminal processes. `split-layout.test.ts` covers nested layouts, closing and collapsing, identity validation, and resize persistence; the Electron smoke test verifies real PTY behavior separately.
+
+Agent prompt drafts are saved per session as `buddy.draft.<sessionId>` in local UI preferences, so changing tabs or splitting a pane keeps unsent text. A successful send or explicit session deletion clears that draft. Terminal hydration respects the focused pane and changing focus does not rebuild its terminal view. Unread updates are cleared automatically only for the focused pane while the app window has focus; returning to the window marks that pane read. Clicking a desktop session notification selects its exact session, including when the window is still loading.

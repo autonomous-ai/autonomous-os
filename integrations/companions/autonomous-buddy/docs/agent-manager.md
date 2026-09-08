@@ -48,7 +48,7 @@ Sending starts a new CLI process for that turn, preserving the provider conversa
 
 `needs_input` currently means Claude reported permission denials in its result. It is not a general detector for questions, and there is no live permission-approval bridge. Review the result and send a follow-up, or use a separate terminal for interactive CLI workflows; that terminal does not automatically attach to the managed agent conversation. Codex's noninteractive execution also has no approval dialog supplied by Buddy.
 
-Completed, needs-input and error transitions mark a session unread. Opening it marks it read. Desktop notifications are requested on those transitions while the window is unfocused, subject to OS support/permissions. Completion/attention notices also travel through the paired Swift WebSocket to the device. Reconnect republishes unread terminal states; delivery is best effort and notices may repeat.
+Completed, needs-input and error transitions mark a session unread. It is marked read only while its pane and document are focused. Clicking a desktop notification opens/focuses that session. Desktop notifications are requested on those transitions while the window is unfocused, subject to OS support/permissions. Completion/attention notices also travel through the paired Swift WebSocket to the device. Reconnect republishes unread terminal states; delivery is best effort and notices may repeat.
 
 Stop signals the process group on POSIX and escalates while still live. On macOS, closing the last window keeps the app and managed sessions running in the menu bar. Explicit Quit stops all managed sessions and the native helper; on other platforms, closing the last window also quits.
 
@@ -70,9 +70,27 @@ The bundle keeps `network.autonomous.ai.buddy.manager` for manager continuity, w
 
 Packaging uses ad-hoc signing unless `DEV_ID_APP` is supplied; the parent Makefile auto-detects a Developer ID when available. Build/install never notarizes. `app-signed`, `dmg`, `dmg-signed` and `notarize` operate on the unified product; the original native-only development/release recipes remain explicitly prefixed `native-*`. Developer ID distribution and notarization require separate release validation. Packaged startup supplements inherited PATH with login-shell PATH (5-second timeout) and common CLI directories. Set `BUDDY_APP_EXECUTABLE` to the packaged executable to run the Electron smoke suite against the bundle.
 
-This slice has no OpenCode/custom provider adapter, remote companion, full Git commit graph, staging/commit/push UI, rich research-artifact renderer or packaged signed release. Electron/React enables later platform work; Windows/Linux execution and packaging are not established by macOS validation.
+This slice has no OpenCode/custom provider adapter, remote companion, full Git commit graph, combined diffs/hunk review/edit-save/push UI, rich research-artifact renderer or packaged signed release. Electron/React enables later platform work; Windows/Linux execution and packaging are not established by macOS validation.
 
 The lamp agent-management skill can list/create/send/read/stop managed sessions through paired-device commands. Stable request IDs protect create/send retries, while unfinished receipts after a crash refuse automatic replay. The mock WebSocket suite validates the relay without accessing a real device; live lamp/CLI behavior still needs end-to-end verification. Session management remains independent of screenshot/click/type executors. See [native bridge](./native-bridge.md) and the [Orca source gap review](./orca-gap-review.md).
+
+### Current split panes and Git review
+
+Each tab has a recursive split tree persisted in localStorage. Split right/down
+creates a real Terminal N at the worktree root, with independent focus/input,
+resize and pane close that preserves the process and history. It does not yet
+inherit the source shell’s live cwd or move existing agents between panes/tabs.
+Prompt drafts persist by session across remount/reopen.
+
+The Git panel stages/unstages individual files and commits **the entire current
+index** with the entered message, including changes staged outside Buddy;
+unstaged working files stay on disk. Selecting a commit reveals its changed
+files and their first-parent diffs; root commits compare with an empty tree.
+Combined/hunk review, edit/save and push remain absent.
+
+Real Codex and Claude initial/follow-up turns with no-approval flags have passed;
+actual quota reads include Codex and Claude 5h/7d/Fable windows. Baseline bundled
+E2E passed; the new split/Git integration E2E is pending at this documentation update.
 
 ### macOS app icon
 

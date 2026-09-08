@@ -11,9 +11,22 @@ function mergeEvents(current: SessionEvent[], incoming: SessionEvent[]) {
     .slice(-2000)
 }
 
-export function SessionView({ session, onError }: { session: Session; onError: (error: unknown) => void }) {
+export function SessionView({
+  session,
+  onError,
+  focused = true,
+}: {
+  session: Session
+  onError: (error: unknown) => void
+  focused?: boolean
+}) {
   const [events, setEvents] = useState<SessionEvent[]>([])
-  const [prompt, setPrompt] = useState('')
+  const [prompt, setPrompt] = useState(() => localStorage.getItem(`buddy.draft.${session.id}`) ?? '')
+  const updatePrompt = (value: string) => {
+    setPrompt(value)
+    if (value) localStorage.setItem(`buddy.draft.${session.id}`, value)
+    else localStorage.removeItem(`buddy.draft.${session.id}`)
+  }
   const [sending, setSending] = useState(false)
   const [renaming, setRenaming] = useState(false)
   const [title, setTitle] = useState(session.title)
@@ -44,15 +57,21 @@ export function SessionView({ session, onError }: { session: Session; onError: (
     if (atBottom && scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight
   }, [events, atBottom])
   useEffect(() => {
-    if (session.unread) void window.buddy.markRead(session.id).catch(onError)
-  }, [session.id, session.unread, onError])
+    const markFocusedRead = () => {
+      if (focused && session.unread && document.hasFocus())
+        void window.buddy.markRead(session.id).catch(onError)
+    }
+    markFocusedRead()
+    window.addEventListener('focus', markFocusedRead)
+    return () => window.removeEventListener('focus', markFocusedRead)
+  }, [session.id, session.unread, focused, onError])
 
   const send = async () => {
     if (!prompt.trim() || running || sending) return
     setSending(true)
     try {
       await window.buddy.send(session.id, prompt.trim())
-      setPrompt('')
+      updatePrompt('')
       setAtBottom(true)
       inputRef.current?.focus()
     } catch (error) {
@@ -111,7 +130,11 @@ export function SessionView({ session, onError }: { session: Session; onError: (
         </div>
         <div className="session-status">
           <StatusDot session={session} />
-          {!isTerminal && <span title="Agent tools run with full access, without approval prompts">Full access · no approvals</span>}
+          {!isTerminal && (
+            <span title="Agent tools run with full access, without approval prompts">
+              Full access · no approvals
+            </span>
+          )}
           {statusName(session)}
           {running && (
             <button
@@ -126,7 +149,7 @@ export function SessionView({ session, onError }: { session: Session; onError: (
       </div>
       {isTerminal ? (
         <Suspense fallback={<div className="sidebar-hint">Opening terminal…</div>}>
-          <TerminalView sessionId={session.id} onError={onError} />
+          <TerminalView sessionId={session.id} onError={onError} focused={focused} />
         </Suspense>
       ) : (
         <>
@@ -156,7 +179,7 @@ export function SessionView({ session, onError }: { session: Session; onError: (
                     <button
                       key={text}
                       onClick={() => {
-                        setPrompt(text)
+                        updatePrompt(text)
                         inputRef.current?.focus()
                       }}
                     >
@@ -215,7 +238,7 @@ export function SessionView({ session, onError }: { session: Session; onError: (
                 aria-label="Message agent"
                 placeholder={`Message ${providerName(session.provider)}…`}
                 value={prompt}
-                onChange={(event) => setPrompt(event.target.value)}
+                onChange={(event) => updatePrompt(event.target.value)}
                 onKeyDown={(event) => {
                   if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
                     event.preventDefault()

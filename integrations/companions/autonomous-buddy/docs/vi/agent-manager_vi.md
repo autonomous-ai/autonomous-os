@@ -48,7 +48,7 @@ Mỗi lượt gửi tạo một CLI process mới, giữ provider conversation I
 
 `needs_input` hiện biểu thị Claude trả permission denial trong result, chưa phát hiện mọi câu hỏi và chưa có bridge phê duyệt quyền trực tiếp. Người dùng đọc result rồi gửi follow-up hoặc dùng terminal riêng cho CLI tương tác; terminal đó không tự nối vào conversation đang quản lý. Codex chạy noninteractive cũng chưa có hộp phê duyệt do Buddy cung cấp.
 
-Chuyển sang completed, needs-input hoặc error đánh dấu session chưa đọc; mở session sẽ đánh dấu đã đọc. App gửi desktop notification khi chuyển sang các trạng thái này lúc cửa sổ không focus, tùy hỗ trợ/quyền của OS. Notice hoàn tất/cần chú ý cũng đi qua WebSocket Swift đã pair về device. Reconnect phát lại trạng thái kết thúc chưa đọc; delivery là best effort và notice có thể lặp.
+Chuyển sang completed, needs-input hoặc error đánh dấu session chưa đọc; session chỉ đánh dấu đã đọc khi pane đó và cửa sổ đều focus. Nhấn desktop notification mở/focus đúng session. App gửi desktop notification khi chuyển sang các trạng thái này lúc cửa sổ không focus, tùy hỗ trợ/quyền của OS. Notice hoàn tất/cần chú ý cũng đi qua WebSocket Swift đã pair về device. Reconnect phát lại trạng thái kết thúc chưa đọc; delivery là best effort và notice có thể lặp.
 
 Stop gửi signal tới process group trên POSIX và tăng mức dừng nếu process còn sống. Trên macOS, đóng cửa sổ cuối cùng vẫn giữ app và các session chạy qua menu bar. Quit tường minh dừng mọi session và helper native; trên nền tảng khác, đóng cửa sổ cuối cùng cũng thoát app.
 
@@ -68,7 +68,7 @@ Cài và đăng nhập agent CLI riêng. Buddy tìm `codex`/`claude` trong `PATH
 
 Backend test dùng repository tạm và launcher mô phỏng. Smoke test Electron dùng state tạm và response CLI agent mô phỏng, không cần gọi model trả phí. Build/test pass không thay thế kiểm chứng phiên bản CLI đã đăng nhập với provider thật.
 
-Đợt này chưa có adapter OpenCode/provider tùy chỉnh, remote companion, đồ thị Git commit đầy đủ, UI stage/commit/push, renderer research artifact chuyên biệt hoặc bản release ký số. Electron/React mở đường cho đa nền tảng; validation macOS chưa chứng minh chạy/đóng gói Windows/Linux.
+Đợt này chưa có adapter OpenCode/provider tùy chỉnh, remote companion, đồ thị Git commit đầy đủ, combined diff/hunk review/edit-save/push, renderer research artifact chuyên biệt hoặc bản release ký số. Electron/React mở đường cho đa nền tảng; validation macOS chưa chứng minh chạy/đóng gói Windows/Linux.
 
 Skill agent-management trên lamp có thể list/create/send/read/stop managed session bằng command của device đã pair. Request ID ổn định bảo vệ retry create/send; receipt chưa hoàn tất sau crash từ chối tự replay. Test WebSocket giả xác minh relay mà không truy cập device thật; luồng lamp/CLI thật vẫn cần kiểm chứng end-to-end. Session management độc lập với executor screenshot/click/type. Xem [native bridge](./native-bridge_vi.md) và [review gap từ source Orca](./orca-gap-review_vi.md).
 
@@ -79,6 +79,22 @@ Trong `autonomous-buddy/` hoặc `desktop/`, `make build` compile Electron, rebu
 Bundle giữ ID `network.autonomous.ai.buddy.manager` để tiếp tục state manager; pairing store native không thay đổi. Electron chạy helper với `--embedded-helper`, giao tiếp qua pipe riêng của process con, không mở listener mạng local. Helper dừng cùng parent; khi helper không khởi động được, chức năng native báo không sẵn sàng. Quyền Accessibility/Screen Recording vẫn do macOS quản lý và có thể cần cấp lại sau khi đóng gói. Command computer-use từ device tiếp tục do Swift xử lý; `agent.*` chuyển tiếp vào manager bằng project/session ID tường minh.
 
 Mặc định ký ad-hoc nếu không truyền `DEV_ID_APP`; Makefile cha tự tìm Developer ID có sẵn. Build/install không tự notarize. Các target `app-signed`, `dmg`, `dmg-signed`, `notarize` dùng app hợp nhất; recipe phát triển/release Swift cũ được giữ với tiền tố `native-*`. Phân phối Developer ID/notarization cần validation release riêng. Khi mở từ Finder, app bổ sung PATH login shell (timeout 5 giây) và thư mục CLI thông dụng. Đặt `BUDDY_APP_EXECUTABLE` tới executable trong bundle để chạy smoke test Electron trên app đóng gói.
+
+### Split pane và Git review hiện tại
+
+Mỗi tab có cây split đệ quy lưu trong localStorage. Split phải/dưới tạo Terminal N
+thật ở root worktree, có focus/input riêng, resize và close pane không dừng
+process hay xóa history. Chưa kế thừa cwd live của shell nguồn hoặc kéo agent
+có sẵn giữa pane/tab. Draft prompt lưu theo session, giữ qua remount/reopen.
+
+Git panel stage/unstage từng file và commit **toàn bộ index hiện tại** bằng message
+đã nhập, gồm cả thay đổi đã staged ngoài Buddy; file unstaged giữ trên đĩa. Chọn
+commit mở danh sách file rồi diff từng file so với parent đầu tiên; root commit
+so với empty tree. Chưa combined/hunk review, edit/save hay push.
+
+Đã kiểm chứng Codex và Claude thật ở lượt đầu/follow-up với no-approval flags;
+quota thật có Codex và cửa sổ Claude 5h/7d/Fable. E2E bundle cơ bản đã pass; E2E
+tích hợp split/Git mới còn pending tại lúc cập nhật tài liệu này.
 
 ### Biểu tượng app macOS
 

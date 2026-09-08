@@ -150,7 +150,10 @@ export function WorkspaceSidebar({
       if (dialog.kind === 'parent')
         await window.buddy.updateWorkspace(project.id, tree.path, { parentWorktreePath: title || null })
       if (dialog.kind === 'rename' && session) await window.buddy.renameSession(session.id, title.trim())
-      if (dialog.kind === 'delete-session' && session) await window.buddy.removeSession(session.id)
+      if (dialog.kind === 'delete-session' && session) {
+        await window.buddy.removeSession(session.id)
+        localStorage.removeItem(`buddy.draft.${session.id}`)
+      }
       if (dialog.kind === 'delete-worktree') {
         await window.buddy.removeWorktree(project.id, tree.path)
         await onRefresh(project)

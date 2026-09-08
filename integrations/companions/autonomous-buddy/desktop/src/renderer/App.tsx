@@ -18,7 +18,7 @@ import {
   Monitor,
 } from 'lucide-react'
 import type { Project, Provider, Session, Snapshot, Worktree } from '../shared/types'
-import { SessionView } from './SessionView'
+import { SessionWorkspace, type SessionWorkspaceHandle } from './SessionWorkspace'
 import { GitPanel } from './GitPanel'
 import { ComputerPanel } from './ComputerPanel'
 import { WorkspaceSidebar } from './WorkspaceSidebar'
@@ -80,7 +80,18 @@ export function App() {
     localStorage.setItem('buddy.selection', JSON.stringify({ selection, sessionId }))
   }, [loaded, selection, sessionId])
   const searchRef = useRef<HTMLInputElement>(null)
+  const workspaceRef = useRef<SessionWorkspaceHandle>(null)
   const selectionRef = useRef(selection)
+  const pendingFocusRef = useRef<string | null>(null)
+  const initialFocusRef = useRef<string | null>(null)
+  const sessionChooserRef = useRef<(session: Session) => void>(() => {})
+  const resolveFocus = useCallback((value: Snapshot) => {
+    const target = value.sessions.find((item) => item.id === pendingFocusRef.current)
+    if (target) {
+      pendingFocusRef.current = null
+      sessionChooserRef.current(target)
+    }
+  }, [])
   useEffect(() => {
     selectionRef.current = selection
   }, [selection])
@@ -101,6 +112,7 @@ export function App() {
       if (update.type === 'snapshot') {
         received = true
         setSnapshot(update.snapshot)
+        resolveFocus(update.snapshot)
       }
     })
     void window.buddy
@@ -120,6 +132,7 @@ export function App() {
           (project) => project.id === remembered.selection?.projectId,
         )
         const first =
+          value.sessions.find((session) => session.id === initialFocusRef.current) ??
           openSessions.find((session) => session.id === remembered.sessionId) ??
           (rememberedProject ? undefined : openSessions.at(-1))
         if (first) {
@@ -129,13 +142,14 @@ export function App() {
           setSelection(remembered.selection)
         } else if (value.projects[0])
           setSelection({ projectId: value.projects[0].id, path: value.projects[0].path })
+        resolveFocus(value)
       })
       .catch(fail)
     return () => {
       alive = false
       unsubscribe()
     }
-  }, [fail])
+  }, [fail, resolveFocus])
 
   const projectIds = snapshot.projects.map((project) => project.id).join(',')
   useEffect(() => {
@@ -181,13 +195,29 @@ export function App() {
     (item) => item.unread || item.status === 'needs_input' || item.status === 'error',
   )
 
-  const chooseSession = (session: Session) => {
-    setClosedTabs((current) => current.filter((id) => id !== session.id))
-    setSelection({ projectId: session.projectId, path: session.worktreePath })
-    setSessionId(session.id)
-    setPreview(null)
-    void window.buddy.markRead(session.id).catch(fail)
-  }
+  const chooseSession = useCallback(
+    (session: Session) => {
+      if (session.id === active?.id) workspaceRef.current?.revealPrimary()
+      setClosedTabs((current) => current.filter((id) => id !== session.id))
+      setSelection({ projectId: session.projectId, path: session.worktreePath })
+      setSessionId(session.id)
+      setPreview(null)
+      void window.buddy.markRead(session.id).catch(fail)
+    },
+    [active?.id, fail],
+  )
+  useEffect(() => {
+    sessionChooserRef.current = chooseSession
+  }, [chooseSession])
+  useEffect(
+    () =>
+      window.buddy.onFocusSession((id) => {
+        pendingFocusRef.current = id
+        initialFocusRef.current = id
+        resolveFocus(snapshot)
+      }),
+    [snapshot, resolveFocus],
+  )
   const chooseTree = (projectId: string, tree: Worktree) => {
     setSelection({ projectId, path: tree.path })
     setPreview(null)
@@ -535,7 +565,14 @@ export function App() {
               </pre>
             </div>
           ) : active ? (
-            <SessionView key={active.id} session={active} onError={fail} />
+            <SessionWorkspace
+              ref={workspaceRef}
+              key={active.id}
+              session={active}
+              sessions={sessions}
+              onError={fail}
+              onCloseTab={() => closeTab(active.id)}
+            />
           ) : (
             <div className="welcome">
               <div className="welcome-logo">
