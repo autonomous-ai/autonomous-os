@@ -134,6 +134,16 @@ function alive(pid) {
 const detail = (id) => page.evaluate((id) => window.buddy.session(id), id)
 const snapshot = () => page.evaluate(() => window.buddy.snapshot())
 async function createUISession(provider, name) {
+  // Keep the original structured/voice compatibility checks separate from the
+  // new interactive CLI UI smoke, which creates agents through the actual dialog.
+  if (provider === 'Codex') {
+    const registered = (await snapshot()).projects[0]
+    const session = await page.evaluate(({project, name}) => window.buddy.createSession({
+      projectId: project.id, worktreePath: project.path, provider: 'codex', mode: 'structured', title: name,
+    }), {project: registered, name})
+    await page.locator('.session-row').filter({hasText: name}).click()
+    return session
+  }
   await page.locator('.new-tab').click()
   await page
     .locator('.provider-option')
@@ -142,7 +152,7 @@ async function createUISession(provider, name) {
   await page.locator('#session-title').fill(name)
   await page.getByRole('button', { name: 'Create session', exact: true }).click()
   await expect(page.locator('.modal')).toHaveCount(0)
-  await expect(page.locator('.session-identity')).toContainText(name)
+  await expect(page.locator('.session-pane-heading')).toContainText(name)
   return (await snapshot()).sessions.find((session) => session.title === name)
 }
 async function sendUI(prompt) {
@@ -231,7 +241,9 @@ try {
   await expect(page.locator('.xterm')).toBeVisible()
   await page.getByRole('button', { name: 'Close tab Workspace terminal', exact: true }).click()
   await expect(page.getByRole('button', { name: 'Close tab Workspace terminal', exact: true })).toHaveCount(0)
-  expect((await detail(terminal.id)).session.status).toBe('running')
+  expect((await detail(terminal.id)).session).toMatchObject({ status: 'stopped', closed: true })
+  await expect(page.locator('.session-row').filter({ hasText: 'Workspace terminal' })).toHaveCount(0)
+  await page.evaluate((id) => window.buddy.restartInteractive(id), terminal.id)
   await page.locator('.session-row').filter({ hasText: 'Workspace terminal' }).click()
   await expect(page.locator('.xterm')).toBeVisible()
   await expect(page.getByRole('button', { name: 'Close tab Workspace terminal', exact: true })).toBeVisible()
@@ -262,6 +274,7 @@ try {
   const createParams = {
     project_id: project.id,
     provider: 'codex',
+    mode: 'structured',
     title: 'Lamp voice session',
     request_id: 'smoke-create-voice-001',
   }
@@ -454,7 +467,8 @@ try {
     .getByRole('button', { name: `Close pane ${splitTwo.title}`, exact: true })
     .click()
   await expect(page.locator('.session-pane')).toHaveCount(2)
-  expect((await detail(splitTwo.id)).session.status).toBe('running')
+  expect((await detail(splitTwo.id)).session).toMatchObject({ status: 'stopped', closed: true })
+  await expect(page.locator('.session-row').filter({ hasText: splitTwo.title })).toHaveCount(0)
   const savedLayout = await page.evaluate(
     (id) => JSON.parse(localStorage.getItem(`buddy.panes.${id}`)),
     agent.id,
@@ -466,9 +480,9 @@ try {
     first: { sessionId: agent.id },
     second: { sessionId: splitOne.id },
   })
-  await page.locator('.session-row').filter({ hasText: splitTwo.title }).click()
-  await expect(pane(splitTwo.id)).toBeVisible()
-  expect((await detail(splitTwo.id)).session.status).toBe('running')
+  await page.locator('.session-row').filter({ hasText: terminal.title }).click()
+  await expect(pane(terminal.id)).toBeVisible()
+  expect((await detail(terminal.id)).session.status).toBe('running')
   await page.locator('.session-row').filter({ hasText: agent.title }).click()
   await expect(page.locator('.session-pane')).toHaveCount(2)
   await expect(pane(agent.id).getByRole('textbox', { name: 'Message agent' })).toHaveValue(draft)
@@ -476,7 +490,7 @@ try {
     'aria-valuenow',
     '55',
   )
-  await page.getByRole('button', { name: `Close tab ${agent.title}`, exact: true }).click()
+  await page.locator('.session-row').filter({ hasText: terminal.title }).click()
   await page.locator('.session-row').filter({ hasText: agent.title }).click()
   await expect(page.locator('.session-pane')).toHaveCount(2)
   expect(

@@ -7,7 +7,7 @@ Bố cục tham khảo workspace cơ bản của Orca. Implementation được v
 ## Workspace
 
 - Trái: project, Git worktree và session tương ứng; tìm kiếm, dấu chưa đọc và màn hình Needs attention. Open project dùng hộp chọn thư mục native. Tạo worktree sẽ tạo branch mới và thư mục ngang cấp có tên ghép từ project, branch và hậu tố ngẫu nhiên; không di chuyển công việc hiện tại.
-- Giữa: tab session, đổi tên, trạng thái, transcript streaming, ô prompt/follow-up và Stop. Terminal dùng xterm với shell `node-pty` thật, thay đổi kích thước theo panel. Preview file và diff cũng mở tại đây.
+- Giữa: tab session, đổi tên, trạng thái và CLI Codex/Claude/Terminal interactive thật qua xterm cùng `node-pty`. Session structured cũ giữ transcript và ô prompt/follow-up. Preview file và diff cũng mở tại đây. Xem [session interactive](interactive-sessions_vi.md).
 - Phải: working changes, nhấn file để xem unified diff, cây file mở rộng và tối đa 30 commit gần nhất. Git status cập nhật mỗi 5 giây khi cửa sổ hiển thị, khi focus hoặc refresh thủ công. Danh sách commit chưa phải đồ thị branch/merge đầy đủ. Preview chỉ đọc, giới hạn file không phải binary tới 1 MiB. Bộ lọc file ở thư mục gốc không tìm toàn project.
 - Kéo để đổi độ rộng panel hoặc ẩn sidebar. Cmd/Ctrl+K focus tìm kiếm, Cmd/Ctrl+N mở tạo session, Enter gửi và Shift+Enter xuống dòng.
 
@@ -21,7 +21,7 @@ Contract nguồn: [`desktop/src/shared/types.ts`](../../desktop/src/shared/types
 | --- | --- |
 | `Project` | `id`, `name`, `path` local đã canonicalize |
 | `Worktree` | `path`, `branch`, `head`, `primary`, `locked` tùy chọn; đọc từ Git |
-| `Session` | `id`, `projectId`, `worktreePath`, `title`, `provider`, `providerSessionId` tùy chọn, `status`, `createdAt`, `updatedAt`, `unread` |
+| `Session` | `id`, `projectId`, `worktreePath`, `title`, `provider`, `providerSessionId` tùy chọn, `status`, `mode`, `closed`, `interactiveStarted`, `processActive`, `createdAt`, `updatedAt`, `unread` |
 | `SessionEvent` | `id`, `sessionId`, `seq` tăng dần trong session, `at`, `type`, `text` |
 
 Provider gồm `codex`, `claude`, `terminal`. Event gồm `prompt`, `output`, `status`, `error`, `result`, `terminal`. Trạng thái gồm `idle`, `running`, `needs_input`, `completed`, `error`, `stopped`. Terminal đang chạy hiển thị **Shell active**, không suy diễn thành coding agent.
@@ -42,6 +42,8 @@ Smoke test native đặt `BUDDY_NATIVE_TEST_MODE=1`: bỏ discovery và reconnec
 
 ## Vòng đời agent
 
+Session mới dùng [vòng đời CLI interactive](interactive-sessions_vi.md). Luồng theo từng lượt bên dưới áp dụng cho session **structured** được giữ lại hoặc tạo rõ ràng.
+
 Codex dùng `codex exec` với JSON event, `--dangerously-bypass-approvals-and-sandbox` và `--skip-git-repo-check` để hỗ trợ thư mục project không có Git do người dùng chọn; follow-up dùng `exec resume` cùng thread ID đã lưu. Claude Code dùng print mode với `--dangerously-skip-permissions`, stream JSON và partial message; follow-up truyền `--resume` cùng session ID đã lưu. Prompt đi qua stdin, không qua command shell. CLI dùng tài khoản đã cài trên máy. Cả lượt mới và resume chạy full access, không hỏi quyền CLI theo yêu cầu tường minh của người dùng; không đổi cấu hình CLI toàn cục hay quyền macOS. Xem [agent execution](./agent-execution_vi.md).
 
 Mỗi lượt gửi tạo một CLI process mới, giữ provider conversation ID qua các lượt. Output tới bất đồng bộ sau khi request gửi khởi động process. Hoàn tất cần completion event được nhận diện và exit thành công. Plain text không nhận diện và stderr diagnostic vẫn hiển thị nhưng không chứng minh hoàn tất. Nếu provider trả ID khác thì từ chối đổi conversation; nếu lượt trước chưa từng trả ID thì từ chối follow-up thay vì âm thầm mở conversation mới.
@@ -58,7 +60,7 @@ Stop gửi signal tới process group trên POSIX và tăng mức dừng nếu p
 
 Mỗi session giữ tối đa 2.000 event và 2 MiB text (đo bằng độ dài JavaScript string); mỗi event giới hạn 65.536 ký tự. Sequence tiếp tục tăng khi bỏ event cũ. Đây là lịch sử gần đây, không phải bản lưu transcript đầy đủ lâu dài.
 
-Khi mở lại, session đã lưu ở `running`/`needs_input` chuyển thành `stopped`. Không tự khởi động lại process. Follow-up agent có thể resume khi đã lưu provider ID và provider vẫn còn conversation đó. Lịch sử terminal được replay để xem; muốn shell mới cần tạo terminal session mới. State hỏng hoặc version không hỗ trợ sẽ báo lỗi thay vì âm thầm bỏ dữ liệu.
+Khi mở lại, session đã lưu ở `running`/`needs_input` chuyển thành `stopped`. Không tự khởi động lại process. Follow-up agent có thể resume khi đã lưu provider ID và provider vẫn còn conversation đó. Lịch sử terminal được replay để xem; Restart terminal chạy shell mới trong cùng session/worktree. State hỏng hoặc version không hỗ trợ sẽ báo lỗi thay vì âm thầm bỏ dữ liệu.
 
 ## Phát triển và giới hạn
 
@@ -70,7 +72,7 @@ Backend test dùng repository tạm và launcher mô phỏng. Smoke test Electro
 
 Đợt này chưa có adapter OpenCode/provider tùy chỉnh, remote companion, đồ thị Git commit đầy đủ, combined diff/hunk review/edit-save/push, renderer research artifact chuyên biệt hoặc bản release ký số. Electron/React mở đường cho đa nền tảng; validation macOS chưa chứng minh chạy/đóng gói Windows/Linux.
 
-Skill agent-management trên lamp có thể list/create/send/read/stop managed session bằng command của device đã pair. Request ID ổn định bảo vệ retry create/send; receipt chưa hoàn tất sau crash từ chối tự replay. Test WebSocket giả xác minh relay mà không truy cập device thật; luồng lamp/CLI thật vẫn cần kiểm chứng end-to-end. Session management độc lập với executor screenshot/click/type. Xem [native bridge](./native-bridge_vi.md) và [review gap từ source Orca](./orca-gap-review_vi.md).
+Skill agent-management trên lamp có thể list/create/send/read/stop managed session bằng command của device đã pair. Send/follow-up hỗ trợ session structured và session coding interactive được hook xác minh sẵn sàng; session tạo qua voice mặc định interactive trì hoãn khởi chạy, prompt đầu truyền bằng argv; mode structured rõ ràng vẫn hỗ trợ để tương thích. Xem [session interactive](interactive-sessions_vi.md). Request ID ổn định bảo vệ retry create/send; receipt chưa hoàn tất sau crash từ chối tự replay. Test WebSocket giả xác minh relay mà không truy cập device thật; luồng lamp/CLI thật vẫn cần kiểm chứng end-to-end. Session management độc lập với executor screenshot/click/type. Xem [native bridge](./native-bridge_vi.md) và [review gap từ source Orca](./orca-gap-review_vi.md).
 
 ## Build và cài local trên macOS
 
@@ -83,9 +85,9 @@ Mặc định ký ad-hoc nếu không truyền `DEV_ID_APP`; Makefile cha tự t
 ### Split pane và Git review hiện tại
 
 Mỗi tab có cây split đệ quy lưu trong localStorage. Split phải/dưới tạo Terminal N
-thật ở root worktree, có focus/input riêng, resize và close pane không dừng
-process hay xóa history. Chưa kế thừa cwd live của shell nguồn hoặc kéo agent
-có sẵn giữa pane/tab. Draft prompt lưu theo session, giữ qua remount/reopen.
+thật ở root worktree, có focus/input riêng, resize và close pane dừng/lưu trữ
+session đích nhưng giữ history. Chưa kế thừa cwd live của shell nguồn hoặc kéo agent
+có sẵn giữa pane/tab. Draft prompt structured cũ lưu theo session, giữ qua remount/reopen.
 
 Git panel stage/unstage từng file và commit **toàn bộ index hiện tại** bằng message
 đã nhập, gồm cả thay đổi đã staged ngoài Buddy; file unstaged giữ trên đĩa. Chọn

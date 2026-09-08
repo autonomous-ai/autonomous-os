@@ -1,7 +1,7 @@
 import { useEffect, useImperativeHandle, useRef, useState, type Ref } from 'react'
 import { Columns2, Rows2, X } from 'lucide-react'
 import type { Session } from '../shared/types'
-import { SessionView } from './SessionView'
+import { InteractiveSessionControls, SessionView } from './SessionView'
 import {
   closePane,
   paneSessions,
@@ -31,7 +31,8 @@ export function SessionWorkspace({
 }) {
   const storageKey = `buddy.panes.${session.id}`
   const allowed = sessions.filter(
-    (item) => item.projectId === session.projectId && item.worktreePath === session.worktreePath,
+    (item) =>
+      !item.closed && item.projectId === session.projectId && item.worktreePath === session.worktreePath,
   )
   const [layout, setLayout] = useState<PaneLayout>(() => {
     try {
@@ -47,7 +48,13 @@ export function SessionWorkspace({
       return { kind: 'leaf', sessionId: session.id }
     }
   })
+  const effectiveLayout = restoreLayout(layout, new Set(allowed.map((item) => item.id))) ??
+    (allowed.some((item) => item.id === session.id) ? { kind: 'leaf' as const, sessionId: session.id } : null)
+  const serializedLayout = JSON.stringify(effectiveLayout)
   const [focused, setFocused] = useState(session.id)
+  const effectiveFocused = paneSessions(effectiveLayout).includes(focused)
+    ? focused : paneSessions(effectiveLayout)[0]
+
   const [pending, setPending] = useState(false)
   useImperativeHandle(
     ref,
@@ -72,8 +79,9 @@ export function SessionWorkspace({
     }
   }, [])
   useEffect(() => {
-    localStorage.setItem(storageKey, JSON.stringify(layout))
-  }, [layout, storageKey])
+    if (serializedLayout === 'null') localStorage.removeItem(storageKey)
+    else localStorage.setItem(storageKey, serializedLayout)
+  }, [serializedLayout, storageKey])
   const split = async (target: string, direction: SplitDirection) => {
     if (actionPending.current) return
     actionPending.current = true
@@ -96,15 +104,30 @@ export function SessionWorkspace({
       if (mounted.current) setPending(false)
     }
   }
-  const close = (id: string) => {
-    const next = closePane(layout, id)
-    if (!next) {
-      localStorage.removeItem(storageKey)
-      onCloseTab()
-      return
+  const close = async (id: string) => {
+    if (actionPending.current) return
+    actionPending.current = true
+    setPending(true)
+    try {
+      await window.buddy.closeSession(id)
+      localStorage.removeItem(`buddy.draft.${id}`)
+      const next = effectiveLayout ? closePane(effectiveLayout, id) : null
+      if (next) localStorage.setItem(storageKey, JSON.stringify(next))
+      else localStorage.removeItem(storageKey)
+      if (!next || id === session.id) {
+        onCloseTab()
+        return
+      }
+      if (mounted.current) {
+        setLayout(next)
+        if (effectiveFocused === id) setFocused(paneSessions(next)[0])
+      }
+    } catch (error) {
+      onError(error)
+    } finally {
+      actionPending.current = false
+      if (mounted.current) setPending(false)
     }
-    setLayout(next)
-    if (focused === id) setFocused(paneSessions(next)[0])
   }
   const render = (node: PaneLayout): React.ReactNode => {
     if (node.kind === 'split')
@@ -122,7 +145,7 @@ export function SessionWorkspace({
       <section
         key={node.sessionId}
         data-session-id={node.sessionId}
-        className={`session-pane ${focused === node.sessionId ? 'focused' : ''}`}
+        className={`session-pane ${effectiveFocused === node.sessionId ? 'focused' : ''}`}
         aria-label={`Session pane ${leafSession?.title ?? 'Starting session'}`}
         onFocusCapture={() => setFocused(node.sessionId)}
         onPointerDown={() => setFocused(node.sessionId)}
@@ -130,6 +153,9 @@ export function SessionWorkspace({
         <div className="session-pane-heading">
           <span>{leafSession?.title ?? 'Session unavailable'}</span>
           <div>
+            {leafSession && (leafSession.provider === 'terminal' || leafSession.mode === 'interactive') && (
+              <InteractiveSessionControls session={leafSession} onError={onError} />
+            )}
             <button
               className="icon-button"
               aria-label={`Split right ${leafSession?.title ?? 'pane'}`}
@@ -151,16 +177,16 @@ export function SessionWorkspace({
             <button
               className="icon-button"
               aria-label={`Close pane ${leafSession?.title ?? 'session'}`}
-              title="Close pane; the session keeps running"
+              title="Close session, stop its process, and remove it from the workspace"
               disabled={pending}
-              onClick={() => close(node.sessionId)}
+              onClick={() => void close(node.sessionId)}
             >
               <X size={13} />
             </button>
           </div>
         </div>
         {leafSession ? (
-          <SessionView session={leafSession} onError={onError} focused={focused === node.sessionId} />
+          <SessionView session={leafSession} onError={onError} focused={effectiveFocused === node.sessionId} />
         ) : (
           <div className="pane-unavailable">
             This session is no longer available. Close this pane to continue.
@@ -171,7 +197,7 @@ export function SessionWorkspace({
   }
   return (
     <div className="session-workspace" aria-label="Split session workspace">
-      {render(layout)}
+      {effectiveLayout ? render(effectiveLayout) : null}
     </div>
   )
 }

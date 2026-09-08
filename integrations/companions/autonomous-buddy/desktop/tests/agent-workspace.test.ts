@@ -33,7 +33,7 @@ async function fixture() {
   const manager = new Manager(storage, () => {}, options)
   managers.push(manager)
   const project = await manager.addProject(directory)
-  const session = await manager.createSession({ projectId: project.id, worktreePath: directory, provider: 'codex' })
+  const session = await manager.createSession({ projectId: project.id, worktreePath: directory, provider: 'codex', mode: 'structured' })
   return { root, storage, options, manager, project, session, calls }
 }
 it('persists workspace metadata and rejects paths outside the project', async () => {
@@ -47,7 +47,7 @@ it('persists workspace metadata and rejects paths outside the project', async ()
 it('sleeps only the selected workspace and refuses unsafe worktree/session removal', async () => {
   const f = await fixture()
   const tree = await f.manager.createWorktree(f.project.id, 'feat/sidebar')
-  const secondary = await f.manager.createSession({ projectId: f.project.id, worktreePath: tree.path, provider: 'codex' })
+  const secondary = await f.manager.createSession({ projectId: f.project.id, worktreePath: tree.path, provider: 'codex', mode: 'structured' })
   await f.manager.send(f.session.id, 'primary')
   await f.manager.send(secondary.id, 'secondary')
   await expect(f.manager.removeWorktree(f.project.id, tree.path)).rejects.toThrow('Stop')

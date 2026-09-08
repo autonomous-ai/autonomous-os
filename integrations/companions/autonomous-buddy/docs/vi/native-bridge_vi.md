@@ -68,14 +68,16 @@ session worktree tạo từ desktop cũng có thể được gọi bằng ID.
 | Action | Tham số | Kết quả |
 | --- | --- | --- |
 | `agent.list` | không có | Project, session, workspace và trạng thái khả dụng của provider |
-| `agent.create` | `project_id`, `provider` (`codex` hoặc `claude`), `request_id`, `title` tùy chọn | Session vừa tạo |
+| `agent.create` | `project_id`, `provider` (`codex` hoặc `claude`), `request_id`, `title`, `mode` tùy chọn (`interactive` mặc định hoặc `structured`) | Session vừa tạo |
 | `agent.send` | `project_id`, `session_id`, `request_id`, `prompt` | Xác nhận nhận task kèm project/session ID; output đọc riêng |
 | `agent.session` | `project_id`, `session_id`, `after_seq` tùy chọn | Session và event giới hạn, `next_seq`, `truncated`, `has_more` |
 | `agent.stop` | `project_id`, `session_id` | Session hiện tại sau yêu cầu stop; process có thể thoát bất đồng bộ |
 
 Action không hỗ trợ, project không tồn tại hoặc session khác project đều lỗi.
 Prompt phải có nội dung và không quá 100000 đơn vị chuỗi JavaScript. `after_seq`
-phải là số nguyên an toàn không âm. `agent.send` không cung cấp terminal input.
+phải là số nguyên an toàn không âm. `agent.send` không cung cấp phím shell/terminal thô. Prompt coding interactive được hỗ trợ qua kiểm tra readiness bên dưới.
+
+Voice `agent.create` mặc định interactive trì hoãn khởi chạy: session idle chưa có tiến trình. `agent.send` đầu tiên chạy CLI với prompt là đối số argv vị trí. Lượt sau paste vào cùng PTY chỉ khi hook provider xác minh ready/completed và không có input thủ công dang dở; working, needs-input, đã dừng hoặc chưa xác minh đều từ chối chèn prompt. `mode: structured` rõ ràng giữ luồng tương thích theo lượt. `agent.list` loại session đã lưu trữ; đóng session desktop ghi bền trạng thái này để session không xuất hiện lại sau restart. Xem [session interactive](interactive-sessions_vi.md).
 
 Create/send cần `request_id` ổn định gồm 8–128 chữ cái, chữ số, gạch dưới hoặc gạch
 ngang. Manager fingerprint tham số action đã chuẩn hóa và lưu receipt trong

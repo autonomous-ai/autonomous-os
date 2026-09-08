@@ -38,6 +38,9 @@ interface Run {
   completed: boolean
   needsInput: boolean
   stopped: boolean
+  ready: boolean
+  manualInputDirty: boolean
+  inputRevision: number
 }
 export interface ManagerOptions {
   launch?: Launcher
@@ -47,6 +50,7 @@ export class Manager {
   private state: Stored
   private runs = new Map<string, Run>()
   private pending = new Set<string>()
+  private closing = new Set<string>()
   private removingWorkspaces = new Set<string>()
   private deviceRequests = new Map<string, Promise<unknown>>()
   private saveTimer?: ReturnType<typeof setTimeout>
@@ -78,12 +82,19 @@ export class Manager {
         throw new Error(`Could not load Buddy sessions: ${(error as Error).message}`)
       this.state = { version: 1, projects: [], sessions: [], events: {} }
     }
-    for (const session of this.state.sessions)
-      if (session.status === 'running' || session.status === 'needs_input') {
+    for (const session of this.state.sessions) {
+      const emptyLegacy = session.mode === undefined && session.provider !== 'terminal' && !session.providerSessionId && !(this.state.events[session.id]?.length)
+      session.mode ??= session.provider === 'terminal' || emptyLegacy ? 'interactive' : 'structured'
+      if (emptyLegacy) { session.status = 'stopped'; session.interactiveStarted = false }
+      session.processActive = false
+      if (session.status === 'running' || session.status === 'needs_input' || (session.mode === 'interactive' && ['idle', 'completed'].includes(session.status))) {
         session.status = 'stopped'
         session.updatedAt = Date.now()
-        this.append(session, 'status', 'Stopped: Buddy restarted; send a follow-up to resume this session.')
+        this.append(session, 'status', session.mode === 'interactive'
+          ? 'Stopped: Buddy restarted; explicitly resume this CLI session.'
+          : 'Stopped: Buddy restarted; send a follow-up to resume this session.')
       }
+    }
     this.persist()
   }
   private persist() {
@@ -336,6 +347,8 @@ export class Manager {
     return fileText(await this.workspace(projectId, workspace), relative)
   }
   async createSession(input: CreateSession): Promise<Session> {
+    if (input.deferLaunch !== undefined && (typeof input.deferLaunch !== 'boolean' || input.mode === 'structured' || input.provider === 'terminal')) throw new Error('Deferred launch requires an interactive coding session')
+    if (input.mode !== undefined && input.mode !== 'interactive' && input.mode !== 'structured') throw new Error('Unsupported session mode')
     if (!['codex', 'claude', 'terminal'].includes(input.provider)) throw new Error('Unsupported provider')
     if (!this.providerAvailable(input.provider))
       throw new Error(`${input.provider} is not installed or is not on PATH`)
@@ -350,16 +363,20 @@ export class Manager {
       title:
         input.title?.trim().slice(0, 120) || (input.provider === 'terminal' ? 'Terminal' : 'New session'),
       provider: input.provider,
+      mode: input.provider === 'terminal' ? 'interactive' : input.mode ?? 'interactive',
       status: 'idle',
+      processActive: false,
+      interactiveStarted: false,
       createdAt: now,
       updatedAt: now,
       unread: false,
     }
+    if (session.mode === 'interactive' && session.provider === 'claude') session.providerSessionId = randomUUID()
     this.state.sessions.push(session)
     this.state.events[session.id] = []
     this.persist()
     this.broadcast()
-    if (session.provider === 'terminal') await this.start(session, '')
+    if (session.mode === 'interactive' && !input.deferLaunch) await this.start(session, '')
     return structuredClone(session)
   }
   async session(id: string): Promise<SessionDetail> {
@@ -380,9 +397,58 @@ export class Manager {
   }
   async send(id: string, prompt: string) {
     const session = this.findSession(id)
-    if (session.provider === 'terminal') throw new Error('Use the terminal to interact with this session')
+    if (session.closed || this.closing.has(id)) throw new Error('Session is closed or closing')
+    if (session.provider === 'terminal') throw new Error('Use the interactive terminal for shell sessions')
     if (typeof prompt !== 'string' || !prompt.trim() || prompt.length > 100000)
       throw new Error('Prompt must contain 1–100000 characters')
+    if (session.mode === 'interactive') {
+      const normalized = prompt.replace(/\r\n?/g, '\n')
+      if ([...normalized].some((character) => {
+        const code = character.charCodeAt(0)
+        return (code < 32 && code !== 9 && code !== 10) || (code >= 127 && code <= 159)
+      })) throw new Error('Prompt contains terminal control characters')
+      const run = this.runs.get(id)
+      if (!run && !session.interactiveStarted && !(this.state.events[id] ?? []).some((event) => event.type !== 'status')) {
+        if (this.pending.has(id)) throw new Error('Session is already starting')
+        this.pending.add(id)
+        try {
+          await this.workspace(session.projectId, session.worktreePath)
+          this.findProject(session.projectId)
+          if (session.closed || this.closing.has(id)) throw new Error('Session is closed or closing')
+          if (this.removingWorkspaces.has(session.worktreePath)) throw new Error('Workspace is being removed')
+          this.append(session, 'prompt', normalized)
+          if (session.title === 'New session') session.title = normalized.trim().slice(0, 70)
+          await this.start(session, normalized)
+          if (!session.processActive) throw new Error('Interactive provider could not start; inspect the session error')
+          return
+        } finally { this.pending.delete(id) }
+      }
+      if (!run?.process || !run.ready || run.manualInputDirty || run.stopped || this.pending.has(id))
+        throw new Error('Interactive prompt readiness is not established; finish input in the terminal first')
+      run.ready = false
+      this.pending.add(id)
+      this.append(session, 'prompt', normalized)
+      if (session.title === 'New session') session.title = normalized.trim().slice(0, 70)
+      this.status(session, 'running')
+      this.persist()
+      const inputRevision = run.inputRevision
+      try {
+        const paste = `\u001b[200~${normalized}\u001b[201~`
+        run.process.write(paste)
+        // Orca's agent-prompt-injection uses a 500 ms settle window plus host ingest time.
+        // Keep Enter separate: some CLIs treat it as draft text in the paste-end write.
+        const delay = 500 + Math.ceil(Buffer.byteLength(paste) / (process.platform === 'win32' ? 64 : 4096))
+        await new Promise((resolve) => setTimeout(resolve, delay))
+        if (this.closed || session.closed || this.closing.has(id) || run.stopped ||
+          this.runs.get(id) !== run || !session.processActive || run.inputRevision !== inputRevision ||
+          session.status === 'needs_input' || session.status === 'error') {
+          run.ready = false
+          throw new Error('Prompt may be pasted but was not submitted; inspect the terminal before retrying')
+        }
+        run.process.write('\r')
+      } finally { this.pending.delete(id) }
+      return
+    }
     if (this.runs.has(id) || this.pending.has(id)) throw new Error('Session is already running')
     if (this.removingWorkspaces.has(session.worktreePath)) throw new Error('Workspace is being removed')
     this.pending.add(id)
@@ -398,11 +464,32 @@ export class Manager {
       this.pending.delete(id)
     }
   }
-  private async start(session: Session, prompt: string) {
+  async restartInteractive(id: string): Promise<Session> {
+    const session = this.findSession(id)
+    if (this.closing.has(id)) throw new Error('Session is still closing')
+    if (session.mode !== 'interactive' && session.provider !== 'terminal') throw new Error('This is not an interactive session')
+    if (this.runs.has(id) || this.pending.has(id)) throw new Error('Session is already active')
+    const initial = !session.interactiveStarted && !(this.state.events[id] ?? []).some((event) => event.type !== 'status')
+    if (session.provider !== 'terminal' && !session.providerSessionId && !initial) throw new Error('Provider session ID is unknown; refusing to start a different conversation')
+    this.pending.add(id)
+    try {
+      await this.workspace(session.projectId, session.worktreePath)
+      this.findProject(session.projectId)
+      if (this.removingWorkspaces.has(session.worktreePath)) throw new Error('Workspace is being removed')
+      if (initial && session.provider === 'claude' && !session.providerSessionId) session.providerSessionId = randomUUID()
+      session.closed = false
+      await this.start(session, '', !initial)
+      return structuredClone(session)
+    } finally { this.pending.delete(id) }
+  }
+  private async start(session: Session, prompt: string, resume = false) {
+    const interactive = session.provider === 'terminal' || session.mode === 'interactive'
+    if (interactive) session.interactiveStarted = true
     if (this.closed) throw new Error('Buddy is shutting down')
-    const run: Run = { buffer: '', failed: false, completed: false, needsInput: false, stopped: false }
+    const run: Run = { buffer: '', failed: false, completed: false, needsInput: false, stopped: false, ready: false, manualInputDirty: false, inputRevision: 0 }
     this.runs.set(session.id, run)
     session.unread = false
+    session.processActive = true
     this.status(session, 'running')
     this.persist()
     const consume = (line: string) => {
@@ -434,10 +521,11 @@ export class Manager {
         run.buffer = ''
       }
       this.runs.delete(session.id)
+      session.processActive = false
       const status: SessionStatus = run.stopped
         ? 'stopped'
-        : session.provider === 'terminal'
-          ? code === 0
+        : interactive
+          ? code === 0 && !run.failed
             ? 'stopped'
             : 'error'
           : run.needsInput
@@ -449,7 +537,7 @@ export class Manager {
         this.append(
           session,
           'error',
-          `Process exited (${code})${!run.completed && session.provider !== 'terminal' ? ' without a completion event' : ''}.`,
+          `Process exited (${code})${!run.completed && !interactive ? ' without a completion event' : ''}.`,
         )
       this.status(session, status)
       this.persist()
@@ -457,6 +545,30 @@ export class Manager {
     try {
       run.process = await this.launcher({
         provider: session.provider,
+        mode: session.mode,
+        resume,
+        hooksDirectory: path.join(path.dirname(this.stateFile), 'interactive-hooks'),
+        onHook: (event) => {
+          if (!interactive || this.closed || run.stopped || this.closing.has(session.id) || this.runs.get(session.id) !== run) return
+          if (event.sessionId) {
+            if (session.providerSessionId && session.providerSessionId !== event.sessionId) {
+              run.failed = true
+              run.ready = false
+              this.append(session, 'error', 'Provider returned a different session ID; refusing to change conversation.')
+              this.status(session, 'error')
+              this.persist()
+              run.process?.kill()
+              return
+            }
+            session.providerSessionId = event.sessionId
+          }
+          if (run.failed) return
+          run.ready = event.type === 'ready' || event.type === 'completed'
+          if (event.type === 'working') run.manualInputDirty = false
+          if (event.summary) this.append(session, event.type === 'error' ? 'error' : 'result', event.summary)
+          this.status(session, event.type === 'ready' ? 'idle' : event.type === 'working' ? 'running' : event.type)
+          this.persist()
+        },
         cwd: session.worktreePath,
         sessionId: session.providerSessionId,
         prompt,
@@ -465,7 +577,7 @@ export class Manager {
         },
         data: (text) => {
           if (this.runs.get(session.id) !== run) return
-          if (session.provider === 'terminal') {
+          if (interactive) {
             this.append(session, 'terminal', text)
             return
           }
@@ -492,7 +604,7 @@ export class Manager {
         },
         exit,
       })
-      if (run.stopped || this.closed) run.process.kill()
+      if (run.stopped || run.failed || this.closed || this.runs.get(session.id) !== run) run.process.kill()
     } catch (error) {
       run.failed = true
       this.append(session, 'error', (error as Error).message)
@@ -511,17 +623,48 @@ export class Manager {
       this.persist()
     }
   }
+  async closeSession(id: string): Promise<void> {
+    const session = this.findSession(id)
+    if (this.closing.has(id)) throw new Error('Session is already closing')
+    this.closing.add(id)
+    try {
+      await this.stop(id)
+      const deadline = Date.now() + 5000
+      while (this.runs.has(id) || this.pending.has(id)) {
+        if (Date.now() >= deadline) throw new Error('Session is still stopping; try closing again')
+        await new Promise((resolve) => setTimeout(resolve, 25))
+      }
+      session.closed = true
+      session.unread = false
+      this.persist()
+      this.broadcast()
+    } finally { this.closing.delete(id) }
+  }
   async terminalWrite(id: string, data: string) {
     const session = this.findSession(id)
-    if (session.provider !== 'terminal' || typeof data !== 'string' || data.length > 65536)
+    if ((session.provider !== 'terminal' && session.mode !== 'interactive') || typeof data !== 'string' || data.length > 65536)
       throw new Error('Invalid terminal input')
-    const process = this.runs.get(id)?.process
+    const run = this.runs.get(id)
+    const process = run?.process
     if (!process) throw new Error('Terminal has exited. Create a new terminal session.')
+    if (run && session.provider !== 'terminal') {
+      // Only known terminal reports are exempt; editing/navigation stays conservative.
+      const escape = String.fromCharCode(27)
+      const bell = String.fromCharCode(7)
+      const input = data.replace(new RegExp(`${escape}\\[(?:\\??[0-9;]*[cnR]|[IO])`, 'g'), '')
+        .replace(new RegExp(`${escape}\\][0-9]+;[^${bell}${escape}]*(?:${bell}|${escape}\\\\)`, 'g'), '')
+      if (input) {
+        run.inputRevision++
+        const lastEnter = Math.max(input.lastIndexOf('\r'), input.lastIndexOf('\n'))
+        run.manualInputDirty = lastEnter < 0 || lastEnter < input.length - 1
+        if (lastEnter >= 0) run.ready = false
+      }
+    }
     process.write(data)
   }
   async terminalResize(id: string, cols: number, rows: number) {
     if (
-      this.findSession(id).provider !== 'terminal' ||
+      (this.findSession(id).provider !== 'terminal' && this.findSession(id).mode !== 'interactive') ||
       !Number.isInteger(cols) ||
       !Number.isInteger(rows) ||
       cols < 2 ||
@@ -538,6 +681,7 @@ export class Manager {
       run.stopped = true
       run.process?.kill()
       this.findSession(id).status = 'stopped'
+      this.findSession(id).processActive = false
     }
     this.runs.clear()
     this.persist()

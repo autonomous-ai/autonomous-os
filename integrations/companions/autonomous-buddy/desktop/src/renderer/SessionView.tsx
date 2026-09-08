@@ -1,5 +1,14 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
-import { ArrowUp, Bot, Check, ChevronDown, Pencil, Square, Terminal as TerminalIcon } from 'lucide-react'
+import {
+  ArrowUp,
+  Bot,
+  Check,
+  ChevronDown,
+  Pencil,
+  Play,
+  Square,
+  Terminal as TerminalIcon,
+} from 'lucide-react'
 import type { Session, SessionEvent } from '../shared/types'
 import { providerName, statusName, StatusDot } from './App'
 
@@ -11,7 +20,73 @@ function mergeEvents(current: SessionEvent[], incoming: SessionEvent[]) {
     .slice(-2000)
 }
 
-export function SessionView({
+type SessionViewProps = { session: Session; onError: (error: unknown) => void; focused?: boolean }
+
+export function SessionView(props: SessionViewProps) {
+  return props.session.provider === 'terminal' || props.session.mode === 'interactive' ? (
+    <InteractiveSessionView {...props} />
+  ) : (
+    <StructuredSessionView {...props} />
+  )
+}
+
+function InteractiveSessionView({ session, onError, focused = true }: SessionViewProps) {
+  useEffect(() => {
+    const markRead = () => {
+      if (focused && session.unread && document.hasFocus())
+        void window.buddy.markRead(session.id).catch(onError)
+    }
+    markRead()
+    window.addEventListener('focus', markRead)
+    return () => window.removeEventListener('focus', markRead)
+  }, [focused, session.id, session.unread, onError])
+  return (
+    <div className="session-view interactive-session">
+      <Suspense fallback={<div className="terminal-loading">Opening terminal…</div>}>
+        <TerminalView sessionId={session.id} onError={onError} focused={focused} />
+      </Suspense>
+    </div>
+  )
+}
+
+export function InteractiveSessionControls({ session, onError }: SessionViewProps) {
+  const [busy, setBusy] = useState(false)
+  const live = !session.closed && (session.processActive ?? session.status === 'running')
+  const label = live ? 'Stop' : session.provider === 'terminal' ? 'Restart terminal' : 'Resume CLI'
+  return (
+    <>
+      <span
+        title={`${providerName(session.provider)} · ${statusName(session)}`}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 5,
+          fontSize: 9,
+          marginRight: 5,
+          whiteSpace: 'nowrap',
+        }}
+      >
+        <StatusDot session={session} />
+        {statusName(session)}
+      </span>
+      <button
+        className="icon-button"
+        aria-label={`${label} ${session.title}`}
+        title={label}
+        disabled={busy || !!session.closed}
+        onClick={() => {
+          setBusy(true)
+          const action = live ? window.buddy.stop(session.id) : window.buddy.restartInteractive(session.id)
+          void action.catch(onError).finally(() => setBusy(false))
+        }}
+      >
+        {live ? <Square size={12} /> : <Play size={12} />}
+      </button>
+    </>
+  )
+}
+
+function StructuredSessionView({
   session,
   onError,
   focused = true,

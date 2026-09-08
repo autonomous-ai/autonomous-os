@@ -401,14 +401,14 @@ export function WorkspaceSidebar({
                 <button
                   role="menuitem"
                   onClick={() => run(() => window.buddy.stop(menu.session!.id))}
-                  disabled={!['running', 'needs_input'].includes(menu.session.status)}
+                  disabled={!(menu.session.processActive ?? ['running', 'needs_input'].includes(menu.session.status))}
                 >
                   <Moon size={14} /> Stop session
                 </button>
                 <button
                   role="menuitem"
                   className="danger-action"
-                  disabled={['running', 'needs_input'].includes(menu.session.status)}
+                  disabled={menu.session.processActive ?? ['running', 'needs_input'].includes(menu.session.status)}
                   onClick={() => confirm('delete-session', menu)}
                 >
                   <Trash2 size={14} /> Delete session

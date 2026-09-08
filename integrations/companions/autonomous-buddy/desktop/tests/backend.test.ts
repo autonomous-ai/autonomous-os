@@ -46,7 +46,7 @@ async function setup(git = true) {
   const session = await manager.createSession({
     projectId: project.id,
     worktreePath: project.path,
-    provider: 'codex',
+    provider: 'codex', mode: 'structured',
   })
   return { root, projectPath, storage, manager, project, session, calls, killed, writes, sizes, launch }
 }
@@ -85,7 +85,7 @@ describe('persistent agent sessions', () => {
     const other = await f.manager.createSession({
       projectId: f.project.id,
       worktreePath: f.project.path,
-      provider: 'codex',
+      provider: 'codex', mode: 'structured',
     })
     await Promise.all([f.manager.send(f.session.id, 'one'), f.manager.send(other.id, 'two')])
     await expect(f.manager.send(f.session.id, 'overlap')).rejects.toThrow('already running')
@@ -139,7 +139,7 @@ describe('persistent agent sessions', () => {
     const session = await f.manager.createSession({
       projectId: f.project.id,
       worktreePath: f.project.path,
-      provider: 'claude',
+      provider: 'claude', mode: 'structured',
     })
     await f.manager.send(session.id, 'hello')
     f.calls[0].data(

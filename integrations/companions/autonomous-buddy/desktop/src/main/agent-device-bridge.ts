@@ -31,7 +31,10 @@ export class AgentDeviceBridge {
     return value
   }
   private async execute(action: string, params: Record<string, unknown>): Promise<unknown> {
-    if (action === 'agent.list') return this.manager.snapshot()
+    if (action === 'agent.list') {
+      const snapshot = await this.manager.snapshot()
+      return { ...snapshot, sessions: snapshot.sessions.filter((session) => !session.closed) }
+    }
     const projectId = this.text(params, 'project_id')
     const snapshot = await this.manager.snapshot()
     const project = snapshot.projects.find((item) => item.id === projectId)
@@ -40,8 +43,10 @@ export class AgentDeviceBridge {
       const provider = this.text(params, 'provider')
       if (provider !== 'codex' && provider !== 'claude') throw new Error('Voice sessions require Codex or Claude')
       const title = typeof params.title === 'string' ? params.title.slice(0, 120) : undefined
-      return this.once(action, params, { projectId, provider, title }, () =>
-        this.manager.createSession({ projectId, provider, title, worktreePath: project.path }))
+      const mode = params.mode ?? 'interactive'
+      if (mode !== 'interactive' && mode !== 'structured') throw new Error('Unsupported session mode')
+      return this.once(action, params, { projectId, provider, title, mode }, () =>
+        this.manager.createSession({ projectId, provider, title, worktreePath: project.path, mode, ...(mode === 'interactive' ? { deferLaunch: true } : {}) }))
     }
     if (!['agent.send', 'agent.session', 'agent.stop'].includes(action)) throw new Error('Unsupported agent action')
     const sessionId = this.text(params, 'session_id')

@@ -100,6 +100,7 @@ export function App() {
     }
   })
   const closedTabsRef = useRef(closedTabs)
+  const migratedClosedTabs = useRef(false)
   useEffect(() => {
     closedTabsRef.current = closedTabs
     localStorage.setItem('buddy.closedTabs', JSON.stringify(closedTabs))
@@ -135,7 +136,7 @@ export function App() {
   const initialFocusRef = useRef<string | null>(null)
   const sessionChooserRef = useRef<(session: Session) => void>(() => {})
   const resolveFocus = useCallback((value: Snapshot) => {
-    const target = value.sessions.find((item) => item.id === pendingFocusRef.current)
+    const target = value.sessions.find((item) => !item.closed && item.id === pendingFocusRef.current)
     if (target) {
       pendingFocusRef.current = null
       sessionChooserRef.current(target)
@@ -160,7 +161,7 @@ export function App() {
     const unsubscribe = window.buddy.onUpdate((update) => {
       if (update.type === 'snapshot') {
         received = true
-        setSnapshot(update.snapshot)
+        setSnapshot({ ...update.snapshot, sessions: update.snapshot.sessions.filter((session) => !session.closed) })
         resolveFocus(update.snapshot)
       }
     })
@@ -168,7 +169,7 @@ export function App() {
       .snapshot()
       .then((value) => {
         if (!alive) return
-        if (!received) setSnapshot(value)
+        if (!received) setSnapshot({ ...value, sessions: value.sessions.filter((session) => !session.closed) })
         setLoaded(true)
         let remembered: { sessionId?: string; selection?: Selection } = {}
         try {
@@ -176,12 +177,12 @@ export function App() {
         } catch {
           /* Ignore invalid local UI preferences. */
         }
-        const openSessions = value.sessions.filter((session) => !closedTabsRef.current.includes(session.id))
+        const openSessions = value.sessions.filter((session) => !session.closed && !closedTabsRef.current.includes(session.id))
         const rememberedProject = value.projects.find(
           (project) => project.id === remembered.selection?.projectId,
         )
         const first =
-          value.sessions.find((session) => session.id === initialFocusRef.current) ??
+          value.sessions.find((session) => !session.closed && session.id === initialFocusRef.current) ??
           openSessions.find((session) => session.id === remembered.sessionId) ??
           (rememberedProject ? undefined : openSessions.at(-1))
         if (first) {
@@ -281,16 +282,28 @@ export function App() {
     setSessionId(first?.id ?? null)
     if (first) void window.buddy.markRead(first.id).catch(fail)
   }
+  useEffect(() => {
+    if (!loaded || migratedClosedTabs.current) return
+    migratedClosedTabs.current = true
+    // Older versions only hid tabs. Honor those saved close intents on migration.
+    const hidden = snapshot.sessions.filter((session) => closedTabs.includes(session.id))
+    for (const session of hidden) {
+      void window.buddy.closeSession(session.id).catch(fail)
+    }
+  }, [loaded, snapshot.sessions, closedTabs, fail])
   const closeTab = useCallback(
     (id: string) => {
-      setClosedTabs((current) => [...new Set([...current, id])])
-      if (sessionId === id) {
-        const index = visibleSessions.findIndex((session) => session.id === id)
-        const next = visibleSessions[index + 1] ?? visibleSessions[index - 1]
-        setSessionId(next?.id ?? null)
-      }
+      void window.buddy.closeSession(id).then(() => {
+        localStorage.removeItem(`buddy.draft.${id}`)
+        setClosedTabs((current) => [...new Set([...current, id])])
+        if (sessionId === id) {
+          const index = visibleSessions.findIndex((session) => session.id === id)
+          const next = visibleSessions[index + 1] ?? visibleSessions[index - 1]
+          setSessionId(next?.id ?? null)
+        }
+      }).catch(fail)
     },
-    [sessionId, visibleSessions],
+    [sessionId, visibleSessions, fail],
   )
   const closeActiveTab = useCallback(() => {
     if (document.querySelector('[role="dialog"], [role="menu"]')) return
@@ -704,7 +717,7 @@ export function App() {
               'Ready when you are'
             )}
             <span className="status-separator">·</span>
-            {snapshot.sessions.filter((session) => session.status === 'running').length} active
+            {snapshot.sessions.filter((session) => session.processActive ?? session.status === 'running').length} active
           </span>
         </footer>
       )}

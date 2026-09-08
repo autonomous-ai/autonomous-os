@@ -222,6 +222,8 @@ else {
         'session',
         'send',
         'stop',
+        'closeSession',
+        'restartInteractive',
         'renameSession',
         'markRead',
         'terminalWrite',

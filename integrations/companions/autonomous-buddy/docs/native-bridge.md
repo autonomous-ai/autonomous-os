@@ -73,14 +73,16 @@ project root; desktop-created worktree sessions can also be addressed by ID.
 | Action | Parameters | Result |
 | --- | --- | --- |
 | `agent.list` | none | Current projects, sessions, workspaces and provider availability |
-| `agent.create` | `project_id`, `provider` (`codex` or `claude`), `request_id`, optional `title` | Created session |
+| `agent.create` | `project_id`, `provider` (`codex` or `claude`), `request_id`, optional `title`, `mode` (`interactive` default or `structured`) | Created session |
 | `agent.send` | `project_id`, `session_id`, `request_id`, `prompt` | Acceptance with project/session IDs; output arrives separately |
 | `agent.session` | `project_id`, `session_id`, optional `after_seq` | Session plus bounded events, `next_seq`, `truncated`, `has_more` |
 | `agent.stop` | `project_id`, `session_id` | Current session after stop request; process exit may finish asynchronously |
 
 Unknown actions, unknown projects and cross-project session IDs fail. A prompt
 must be nonblank and at most 100000 JavaScript string units. `after_seq` must be a
-nonnegative safe integer. Terminal input is not exposed through `agent.send`.
+nonnegative safe integer. Raw shell/terminal keystrokes are not exposed through `agent.send`. Interactive coding prompts are supported through the readiness gate below.
+
+Voice `agent.create` defaults to interactive mode with deferred launch: the session starts idle without a process. The first `agent.send` launches the CLI with its prompt as a positional argv argument. Later sends paste into the same PTY only after a provider hook verifies ready/completed state and no manual draft is pending; working, needs-input, stopped, or unverified sessions reject injection. Explicit `mode: structured` retains the turn-based compatibility flow. `agent.list` excludes archived sessions; closing a desktop session persists its archive state, so it does not reappear after restart. See [interactive sessions](interactive-sessions.md).
 
 Create/send require a stable `request_id` of 8–128 letters, digits, underscores or
 dashes. The manager fingerprints normalized action parameters and reserves a

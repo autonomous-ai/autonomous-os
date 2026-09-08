@@ -1,3 +1,4 @@
+export type SessionMode = 'interactive' | 'structured'
 export type Provider = 'codex' | 'claude' | 'terminal'
 export type SessionStatus = 'idle' | 'running' | 'needs_input' | 'completed' | 'error' | 'stopped'
 export interface Project {
@@ -14,6 +15,10 @@ export interface Worktree {
   locked?: boolean
 }
 export interface Session {
+  processActive?: boolean
+  closed?: boolean
+  interactiveStarted?: boolean
+  mode?: SessionMode
   id: string
   projectId: string
   worktreePath: string
@@ -76,6 +81,8 @@ export interface SessionDetail {
   events: SessionEvent[]
 }
 export interface CreateSession {
+  deferLaunch?: boolean
+  mode?: SessionMode
   projectId: string
   worktreePath: string
   provider: Provider
@@ -143,6 +150,8 @@ export interface BuddyAPI {
   session(id: string): Promise<SessionDetail>
   send(id: string, prompt: string): Promise<void>
   stop(id: string): Promise<void>
+  closeSession(id: string): Promise<void>
+  restartInteractive(id: string): Promise<void>
   renameSession(id: string, title: string): Promise<void>
   markRead(id: string): Promise<void>
   terminalWrite(id: string, data: string): Promise<void>

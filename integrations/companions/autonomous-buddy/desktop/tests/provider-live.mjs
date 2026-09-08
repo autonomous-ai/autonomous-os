@@ -27,7 +27,7 @@ try {
   await mkdir(directory)
   const project = await manager.addProject(directory)
   for (const provider of ['codex', 'claude']) {
-    const session = await manager.createSession({ projectId: project.id, worktreePath: project.path, provider, title: 'Buddy transport validation' })
+    const session = await manager.createSession({ projectId: project.id, worktreePath: project.path, provider, mode: 'structured', title: 'Buddy transport validation' })
     const marker = 'BUDDY_' + provider.toUpperCase() + '_ACK'
     await manager.send(session.id, 'This is a transport test. Do not use tools, read files or change anything. Respond with exactly ' + marker)
     const first = await waitForTurn(session.id)

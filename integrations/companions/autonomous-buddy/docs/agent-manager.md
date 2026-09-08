@@ -7,7 +7,7 @@ The layout is inspired by Orca's basic workspace. This implementation is written
 ## Workspace
 
 - Left: project folders, Git worktrees and their sessions, search, unread markers and a Needs attention view. Open project uses the native directory picker. A new worktree creates a new branch and a sibling directory named from the project, branch and a random suffix; it does not move existing work.
-- Center: session tabs, rename, status, streamed transcript, prompt/follow-up composer and Stop. Terminal sessions use xterm with a real `node-pty` shell and resize with the pane. File and diff previews open here too.
+- Center: session tabs, rename, status, and real interactive Codex/Claude/Terminal CLIs through xterm and `node-pty`. Existing structured sessions retain their transcript and prompt/follow-up composer. File and diff previews open here too. See [interactive sessions](interactive-sessions.md).
 - Right: working changes, unified diff on click, expandable local file tree and up to 30 recent commits. Git status refreshes every five seconds while visible and on focus/manual refresh. The recent-commit list is not a full branch/merge graph. File preview is read-only, limited to nonbinary files up to 1 MiB. Root-file filtering is not full-project search.
 - Pane widths can be dragged; the sidebar can be hidden. Cmd/Ctrl+K focuses search, Cmd/Ctrl+N opens a new session, Enter sends and Shift+Enter adds a newline.
 
@@ -21,7 +21,7 @@ The source contract is [`desktop/src/shared/types.ts`](../desktop/src/shared/typ
 | --- | --- |
 | `Project` | `id`, `name`, canonical local `path` |
 | `Worktree` | `path`, `branch`, `head`, `primary`, optional `locked`; read from Git |
-| `Session` | `id`, `projectId`, `worktreePath`, `title`, `provider`, optional `providerSessionId`, `status`, `createdAt`, `updatedAt`, `unread` |
+| `Session` | `id`, `projectId`, `worktreePath`, `title`, `provider`, optional `providerSessionId`, `status`, `mode`, `closed`, `interactiveStarted`, `processActive`, `createdAt`, `updatedAt`, `unread` |
 | `SessionEvent` | `id`, `sessionId`, monotonically increasing session-local `seq`, `at`, `type`, `text` |
 
 Providers are `codex`, `claude`, `terminal`. Event types are `prompt`, `output`, `status`, `error`, `result`, `terminal`. Status values are `idle`, `running`, `needs_input`, `completed`, `error`, `stopped`. A running terminal displays **Shell active**; it is not inferred to be a coding agent.
@@ -42,6 +42,8 @@ Native smoke tests set `BUDDY_NATIVE_TEST_MODE=1`: discovery and saved-pair reco
 
 ## Agent lifecycle
 
+New sessions use the [interactive CLI lifecycle](interactive-sessions.md). The following turn-based lifecycle applies to retained or explicitly created **structured** sessions.
+
 Codex uses `codex exec` JSON events with `--dangerously-bypass-approvals-and-sandbox` and `--skip-git-repo-check` for explicitly selected non-Git project folders; follow-ups use `exec resume` with the saved thread ID. Claude Code uses print mode with `--dangerously-skip-permissions`, stream JSON and partial messages; follow-ups pass `--resume` with its saved session ID. Prompts go through stdin, without a command shell. The CLIs use their own installed accounts. Both new turns and resumed turns run with full access and no CLI approval prompts, as explicitly requested; no global CLI settings or macOS permissions are changed. See [agent execution](./agent-execution.md).
 
 Sending starts a new CLI process for that turn, preserving the provider conversation ID across turns. Output arrives asynchronously after the send request starts the process. Completion requires a recognized completion event and successful exit. Unknown plain text and stderr diagnostics are visible but do not imply completion. A provider that returns a different ID is rejected; if an earlier turn never yielded an ID, follow-up is refused rather than silently starting a different conversation.
@@ -58,7 +60,7 @@ Electron `app.getPath('userData')/manager.json` stores schema version 1, project
 
 Each session retains at most 2,000 events and 2 MiB of text (measured as JavaScript string length); each event is capped at 65,536 characters. Sequence numbers continue even when older events are removed. This is recent history, not an archival transcript.
 
-On startup, saved `running`/`needs_input` sessions become `stopped`. Nothing restarts automatically. Agent follow-up can resume when a provider ID was saved and the provider still has that conversation. Terminal history is replayed for display; a new terminal session is required for a new shell. Corrupt or unsupported stored state produces an error rather than silently discarding saved work.
+On startup, saved `running`/`needs_input` sessions become `stopped`. Nothing restarts automatically. Agent follow-up can resume when a provider ID was saved and the provider still has that conversation. Terminal history is replayed for display; Restart terminal starts a new shell in the same session/worktree. Corrupt or unsupported stored state produces an error rather than silently discarding saved work.
 
 ## Development and limits
 
@@ -72,15 +74,15 @@ Packaging uses ad-hoc signing unless `DEV_ID_APP` is supplied; the parent Makefi
 
 This slice has no OpenCode/custom provider adapter, remote companion, full Git commit graph, combined diffs/hunk review/edit-save/push UI, rich research-artifact renderer or packaged signed release. Electron/React enables later platform work; Windows/Linux execution and packaging are not established by macOS validation.
 
-The lamp agent-management skill can list/create/send/read/stop managed sessions through paired-device commands. Stable request IDs protect create/send retries, while unfinished receipts after a crash refuse automatic replay. The mock WebSocket suite validates the relay without accessing a real device; live lamp/CLI behavior still needs end-to-end verification. Session management remains independent of screenshot/click/type executors. See [native bridge](./native-bridge.md) and the [Orca source gap review](./orca-gap-review.md).
+The lamp agent-management skill can list/create/read/stop managed sessions through paired-device commands; send/follow-up supports structured sessions and hook-verified ready interactive coding sessions (see [interactive sessions](interactive-sessions.md)). Voice-created sessions default to deferred interactive launch with the first prompt supplied in argv; explicit structured mode remains available for compatibility. Stable request IDs protect create/send retries, while unfinished receipts after a crash refuse automatic replay. The mock WebSocket suite validates the relay without accessing a real device; live lamp/CLI behavior still needs end-to-end verification. Session management remains independent of screenshot/click/type executors. See [native bridge](./native-bridge.md) and the [Orca source gap review](./orca-gap-review.md).
 
 ### Current split panes and Git review
 
 Each tab has a recursive split tree persisted in localStorage. Split right/down
 creates a real Terminal N at the worktree root, with independent focus/input,
-resize and pane close that preserves the process and history. It does not yet
+resize and pane close that stops/archives the targeted session while preserving history. It does not yet
 inherit the source shell’s live cwd or move existing agents between panes/tabs.
-Prompt drafts persist by session across remount/reopen.
+Legacy structured prompt drafts persist by session across remount/reopen.
 
 The Git panel stages/unstages individual files and commits **the entire current
 index** with the entered message, including changes staged outside Buddy;

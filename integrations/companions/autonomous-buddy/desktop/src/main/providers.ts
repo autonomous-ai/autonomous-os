@@ -1,13 +1,18 @@
 import { spawn } from 'node:child_process'
 import { accessSync, constants } from 'node:fs'
 import path from 'node:path'
-import type { Provider } from '../shared/types.js'
+import { createInteractiveHooks, codexHookTrustArgs, type InteractiveHookEvent } from './interactive-hooks.js'
+import type { Provider, SessionMode } from '../shared/types.js'
 export interface ProcessHandle {
   write(data: string): void
   resize?(cols: number, rows: number): void
   kill(): void
 }
 export interface LaunchOptions {
+  mode?: SessionMode
+  resume?: boolean
+  hooksDirectory?: string
+  onHook?(event: InteractiveHookEvent): void
   provider: Provider
   cwd: string
   sessionId?: string
@@ -57,6 +62,18 @@ export function invocation(
     ],
   }
 }
+export function interactiveInvocation(provider: Exclude<Provider, 'terminal'>, sessionId?: string, resume = false) {
+  if (provider === 'codex') {
+    if (resume && !sessionId) throw new Error('Codex session ID is required for exact resume')
+    return { command: 'codex', args: [
+      ...(resume ? ['resume', sessionId!] : []),
+      '--dangerously-bypass-approvals-and-sandbox', '--no-alt-screen',
+    ] }
+  }
+  if (!sessionId) throw new Error('Claude interactive session requires a UUID')
+  return { command: 'claude', args: ['--dangerously-skip-permissions', resume ? '--resume' : '--session-id', sessionId] }
+}
+
 function groupStop(pid: number | undefined, fallback: () => void, live: () => boolean): void {
   const signal = (value: NodeJS.Signals) => {
     try {
@@ -78,20 +95,43 @@ function groupStop(pid: number | undefined, fallback: () => void, live: () => bo
   }, 1500)
   timer.unref()
 }
+export function interactiveEnvironment(): NodeJS.ProcessEnv {
+  const environment = { ...process.env }
+  delete environment.CLAUDECODE
+  delete environment.CLAUDE_CODE_ENTRYPOINT
+  delete environment.CODEX_THREAD_ID
+  return environment
+}
 export const launch: Launcher = async (options) => {
-  if (options.provider === 'terminal') {
+  if (options.provider === 'terminal' || options.mode === 'interactive') {
+    const command = options.provider === 'terminal'
+      ? { command: process.env.SHELL || '/bin/sh', args: [] as string[] }
+      : interactiveInvocation(options.provider, options.sessionId, options.resume)
+    const hooks = options.provider !== 'terminal' && options.hooksDirectory && options.onHook
+      ? createInteractiveHooks({ provider: options.provider, directory: options.hooksDirectory, onEvent: options.onHook })
+      : undefined
+    try {
+    if (hooks) {
+      command.args.push(...hooks.args)
+      if (options.provider === 'codex') {
+        const projectTrust = ['-c', `projects={${JSON.stringify(options.cwd)}={trust_level="trusted"}}`]
+        command.args.push(...projectTrust, ...await codexHookTrustArgs([...hooks.args, ...projectTrust], hooks.command, options.cwd, command.command))
+      }
+    }
+    if (options.provider !== 'terminal' && options.prompt) command.args.push('--', options.prompt)
     const pty = await import('node-pty')
-    const child = pty.spawn(process.env.SHELL || '/bin/sh', [], {
+    const child = pty.spawn(command.command, command.args, {
       name: 'xterm-256color',
       cwd: options.cwd,
       cols: 100,
       rows: 30,
-      env: process.env as Record<string, string>,
+      env: { ...interactiveEnvironment(), ...hooks?.env } as Record<string, string>,
     })
     let live = true
     child.onData(options.data)
     child.onExit(({ exitCode }) => {
       live = false
+      hooks?.dispose()
       options.exit(exitCode)
     })
     return {
@@ -103,6 +143,10 @@ export const launch: Launcher = async (options) => {
           () => child.kill(),
           () => live,
         ),
+    }
+    } catch (error) {
+      hooks?.dispose()
+      throw error
     }
   }
   const command = invocation(options.provider, options.sessionId)

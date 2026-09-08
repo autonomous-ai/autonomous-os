@@ -22,9 +22,9 @@ Manager lưu metadata workspace gồm `projectId`, `worktreePath`, `pinned`, `st
 
 ## Tab
 
-Mỗi tab session có nút **×** hiển thị. Đóng tab chỉ ẩn tab đó; không dừng agent, không kết thúc terminal và không xóa lịch sử. Đóng tab đang chọn sẽ chuyển sang tab mở liền kề hoặc để worktree trống. Chọn lại session ở sidebar để mở tab. Nhấp đúp tab để đổi tên session.
+Mỗi tab session có nút **×** hiển thị. Đóng tab dừng tiến trình session và lưu trữ session khỏi sidebar đang hoạt động; không xóa lịch sử đã lưu. Đóng tab đang chọn sẽ chuyển sang tab mở liền kề hoặc để worktree trống. Nhấp đúp tab để đổi tên session. Dùng **Stop** nếu muốn giữ session interactive trên sidebar và tiếp tục sau.
 
-**⌘W** đóng preview file đang mở trước, nếu không có thì đóng tab session đang chọn. Phím này không đóng session phía sau khi đang mở hộp thoại hoặc menu. Danh sách tab đã đóng và lựa chọn hiện tại được lưu trong tùy chọn UI cục bộ qua lần mở app sau. Việc giữ tiến trình qua lần khởi động app là vấn đề riêng: thoát toàn bộ app vẫn dừng các tiến trình agent do app sở hữu.
+**⌘W** đóng preview file đang mở trước, nếu không có thì đóng tab session với cùng hành vi dừng/lưu trữ. Phím này không đóng session phía sau khi đang mở hộp thoại hoặc menu. Đóng cửa sổ workspace macOS vẫn giữ app, helper native và các session khác chạy; Quit mới dừng toàn bộ. Xem [session interactive](interactive-sessions_vi.md).
 
 ## Audit Orca và khác biệt còn lại
 
@@ -43,8 +43,10 @@ Thanh usage phía dưới hiển thị các cửa sổ quota Claude và Codex do
 
 Dùng **Split right** hoặc **Split down** trên thanh đầu pane để tạo terminal session thật trong cùng project và worktree. Có thể chia lồng nhau theo cả hai hướng; layout dùng cây đệ quy, không giới hạn ở hai pane cố định. Mỗi pane hiển thị output và điều khiển của session riêng. Nhấp hoặc focus pane để chọn; chỉ pane đang focus tự đánh dấu các cập nhật session là đã đọc.
 
-Kéo đường phân chia để đổi kích thước hai nhánh, hoặc focus đường phân chia và dùng phím mũi tên theo hướng tương ứng (Home/End chọn giới hạn). Tỷ lệ nằm trong khoảng 15%–85% để vẫn truy cập được cả hai bên. Đóng pane chỉ ẩn pane đó và gộp nhánh rỗng; session và tiến trình vẫn còn ở sidebar. Đóng pane cuối cùng đóng tab. Tab giữ tên session ban đầu khi chứa các session chia pane khác. Chọn lại session ban đầu sẽ hiện lại pane nếu đã đóng; session khác đã đóng pane có thể mở thành tab riêng từ sidebar.
+Kéo đường phân chia để đổi kích thước hai nhánh, hoặc focus đường phân chia và dùng phím mũi tên theo hướng tương ứng (Home/End chọn giới hạn). Tỷ lệ nằm trong khoảng 15%–85% để vẫn truy cập được cả hai bên. Đóng pane dừng và lưu trữ session của pane đó, rồi gộp nhánh rỗng. Các session khác vẫn chạy. Đóng session gốc hoặc pane cuối cùng đóng tab; các session còn lại có thể mở thành tab riêng từ sidebar.
 
-Layout được lưu theo tab session ban đầu trong tùy chọn UI cục bộ, gồm hướng chia, tỷ lệ và ID session. Khi khôi phục, loại bỏ session không còn tồn tại, đã xóa, bị trùng hoặc thuộc worktree khác. Khôi phục layout không tự chạy lại terminal đã dừng. `split-layout.test.ts` kiểm tra chia lồng nhau, đóng/gộp, kiểm tra ID và lưu tỷ lệ; smoke test Electron kiểm tra hành vi PTY thật riêng.
+Layout được lưu theo tab session ban đầu trong tùy chọn UI cục bộ, gồm hướng chia, tỷ lệ và ID session. Khi khôi phục và nhận snapshot mới, loại bỏ session không còn tồn tại, đã lưu trữ, đã xóa, bị trùng hoặc thuộc worktree khác; focus chuyển sang pane còn lại đầu tiên khi cần. Khôi phục layout không tự chạy lại terminal đã dừng. `split-layout.test.ts` kiểm tra chia lồng nhau, đóng/gộp, kiểm tra ID và lưu tỷ lệ; smoke test Electron kiểm tra hành vi PTY thật riêng.
 
-Bản nháp prompt được lưu theo session bằng khóa `buddy.draft.<sessionId>` trong tùy chọn UI cục bộ, nên chuyển tab hoặc chia pane không làm mất nội dung chưa gửi. Gửi thành công hoặc xóa session rõ ràng sẽ xóa bản nháp đó. Terminal khi nạp lịch sử tôn trọng pane đang focus; đổi focus không tạo lại terminal view. Chỉ tự đánh dấu cập nhật là đã đọc cho pane đang focus khi cửa sổ app có focus; quay lại cửa sổ sẽ đánh dấu pane đó đã đọc. Nhấp thông báo desktop của session chọn đúng session, kể cả khi cửa sổ còn đang nạp.
+Bản nháp prompt của agent structured cũ được lưu theo session bằng khóa `buddy.draft.<sessionId>` trong tùy chọn UI cục bộ, nên chuyển tab hoặc chia pane không làm mất nội dung chưa gửi. Gửi thành công, đóng session hoặc xóa session rõ ràng sẽ xóa bản nháp đó. Nội dung nhập trong CLI interactive do CLI quản lý, không dùng kho bản nháp này. Terminal khi nạp lịch sử tôn trọng pane đang focus; đổi focus không tạo lại terminal view. Chỉ tự đánh dấu cập nhật là đã đọc cho pane đang focus khi cửa sổ app có focus; quay lại cửa sổ sẽ đánh dấu pane đó đã đọc. Nhấp thông báo desktop của session chọn đúng session, kể cả khi cửa sổ còn đang nạp.
+
+Khi mở workspace lần đầu sau nâng cấp, các tab đã đóng được lưu từ UI cũ (chỉ ẩn tab) sẽ được lưu trữ qua cùng API đóng session. Lịch sử session vẫn được giữ.
