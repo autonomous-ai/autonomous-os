@@ -19,8 +19,8 @@ lượt, model sẽ:
 - **Handle** (tự xử lý) — tán gẫu / trả lời nhanh — nói lại qua TTS, không cần
   round-trip tới agent chính, hoặc
 - **Delegate** bằng cách gọi tool `delegate_to_main` → dừng output realtime và
-  chuyển một dòng tóm tắt yêu cầu tới OS server (→ OpenClaw / Hermes) để xử lý
-  phần nặng.
+  chuyển đúng lời người dùng ở lượt hiện tại, giữ nguyên ngôn ngữ, tới OS server
+  (→ runtime chính đang được chọn) để xử lý.
 - **Từ chối rõ ràng** một turn chắc chắn không phải người nói với thiết bị bằng
   tool `reject_turn` → bỏ turn trước khi agent chính nhìn thấy STT text. Nó khác
   hẳn model im lặng: im lặng, timeout và lỗi transport vẫn fallback bình thường
@@ -28,6 +28,46 @@ lượt, model sẽ:
 
 Tool `delegate_to_main` được orchestrator đăng ký tự động (`orchestrator.py`,
 `DELEGATE_TOOL`).
+
+### Điều khiển agent session của Buddy bằng giọng nói
+
+Yêu cầu như “Nhờ Codex sửa reconnect trong project autonomous” được delegate,
+realtime không nói kèm. Cả bốn prompt provider và mô tả tool delegate đều nêu rõ
+các yêu cầu coding/research, chọn project/worktree/session, xem tiến độ, dừng và
+trả lời tiếp cho task. Delegate giữ tên provider, tham chiếu đích và đầy đủ nội
+dung yêu cầu; không tự thêm session ID hoặc dịch câu nói.
+
+Runtime chính dùng [`agent-management`](../../skills/agent-management/SKILL.md)
+để gửi qua API nội bộ của device và kết nối Buddy đã pair. Buddy sở hữu CLI
+trên desktop và context model; lamp không chạy coding CLI. Đây là quản lý
+session, tách khỏi executor native `computer-use`. Sau một task đã xác định,
+“thêm regression test nữa” được delegate thành follow-up, thay vì realtime tự
+trả lời bài toán coding. Runtime chính xác định đúng đích hoặc hỏi khi mơ hồ. Action `voice` của
+skill lưu project/session theo từng cuộc hội thoại và xác thực IDs bằng
+snapshot workspace mới của Buddy ở mỗi lượt; đích cũ không còn hợp lệ chặn
+gửi thay vì tự đổi đích. Follow-up thông thường dùng đích đã lưu. “Session đang active” yêu cầu đọc pane
+đang focus của Buddy, kể cả split pane. Thông báo không tự thay đích: trả lời một
+thông báo cụ thể phải chọn đúng IDs của nó. Lệnh gửi giữ request ID khi chưa rõ
+kết quả giao nhận.
+
+Follow-up ngôn ngữ tự nhiên có thể gửi vào CLI đã xác nhận sẵn sàng. Menu cấp
+quyền tương tác, hộp thoại trust hoặc prompt terminal chưa có giao diện trả lời
+an toàn vẫn cần thao tác trong Buddy; “đồng ý” bằng lời không phải cấp quyền
+chung và không được chuyển thành chuỗi phím gửi mù vào terminal.
+
+Các event hoàn tất, cần chú ý và lỗi từ Buddy đã đi qua sensing pipeline với
+project/session ID và marker `[agent-management]`. Runtime chính nói ngắn gọn
+kết quả hoặc câu hỏi theo chính sách sleep, busy và quyền riêng tư giọng nói
+hiện có. Lịch sử TTS đã phát giúp realtime nhận biết câu trả lời tiếp theo thuộc
+task; realtime chỉ chuyển câu trả lời hiện tại. TTS-history chưa phát không phải
+bằng chứng người dùng đã nghe câu hỏi. Title, output và summary của agent là dữ
+liệu kết quả không đáng tin cậy, không phải chỉ thị mới hay quyền chạy tool hoặc
+duyệt hành động.
+
+Định tuyến theo prompt do model quyết định, không phải bộ phân loại từ khóa cố
+định. Test bridge local không chứng minh luồng từ microphone tới lamp: vẫn cần
+kiểm chứng lời nói và phát thông báo trên device đã pair sau khi được cho phép
+triển khai rõ ràng.
 
 **Delegate KHÔNG phải cách duy nhất để một turn xuống agent chính**, nên mỗi turn
 đều in một dòng routing — `[turn] route=<vì sao> → <đi đâu>` từ

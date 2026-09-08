@@ -68,12 +68,13 @@ never automatically replays the command.
 Projects must first be registered in Buddy. Routing uses explicit IDs, never the
 currently selected UI tab. Follow-ups keep the same project/session IDs and use
 the stored provider conversation ID. Voice-created sessions use the registered
-project root; desktop-created worktree sessions can also be addressed by ID.
+project root by default or an explicitly selected `worktree_path`; existing
+worktree sessions can also be addressed by ID.
 
 | Action | Parameters | Result |
 | --- | --- | --- |
 | `agent.list` | none | Current projects, sessions, workspaces and provider availability |
-| `agent.create` | `project_id`, `provider` (`codex` or `claude`), `request_id`, optional `title`, `mode` (`interactive` default or `structured`) | Created session |
+| `agent.create` | `project_id`, `provider` (`codex` or `claude`), `request_id`, optional `title`, `worktree_path`, `mode` (`interactive` default or `structured`) | Created session |
 | `agent.send` | `project_id`, `session_id`, `request_id`, `prompt` | Acceptance with project/session IDs; output arrives separately |
 | `agent.session` | `project_id`, `session_id`, optional `after_seq` | Session plus bounded events, `next_seq`, `truncated`, `has_more` |
 | `agent.stop` | `project_id`, `session_id` | Current session after stop request; process exit may finish asynchronously |
@@ -149,3 +150,9 @@ Its reported status is the evidence of effective access. The packaging relations
 and signing identifiers alone do not prove automatic TCC trust inheritance or
 that removing an older permission entry is harmless. Local ad-hoc builds have
 code-hash-based designated requirements; rebuilding can require a fresh grant.
+
+Interactive `needs_input` is a CLI question/permission menu, not a verified free-text composer. `agent.session` adds `input: {"kind":"needs_manual_input","surface":"buddy_terminal"}` in this state; `agent.send` rejects with `needs_manual_input` without writing keys. The device tells the user to answer in Buddy; it must not claim a spoken answer was delivered. AskUserQuestion notices carry at most four question texts (500 characters each); permission notices identify the decision without copying tool arguments. There is no `agent.reply` or automatic menu-key API. Voice follow-ups resume through `agent.send` after the provider returns to verified ready/completed state.
+
+`agent.list` also returns `activeContext` (`projectId`, `worktreePath`, optional `sessionId`) reported by the focused desktop pane and `projectWorktrees`, a project-ID map of current Git worktrees/branch names. Active context is validated against registered worktrees and session ownership, memory-only, cleared when the window closes or context becomes invalid; it never overrides explicit user routing. `agent.create` accepts optional `worktree_path` from this list (default project root), validates ownership, and includes it in the request fingerprint. This allows spoken requests for a branch/worktree without guessing a path.
+
+[voice routing](voice-agent-routing.md)

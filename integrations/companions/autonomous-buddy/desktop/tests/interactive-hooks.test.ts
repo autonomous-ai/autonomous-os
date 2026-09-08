@@ -17,6 +17,12 @@ describe('session-local interactive hooks', () => {
     expect(normalizeInteractiveHook({ hook_event_name: 'PostCompact', trigger: 'auto' })).toBeUndefined()
     expect(normalizeInteractiveHook({ hook_event_name: 'Stop', session_id: 'bad\nidentity', last_assistant_message: 'a'.repeat(5000) })).toEqual({ type: 'completed', summary: 'a'.repeat(4000) })
   })
+  it('reports the current question without exposing tool arguments or stale completion text', () => {
+    expect(normalizeInteractiveHook({ hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion', tool_input: { questions: [{ question: 'Which branch?' }], secret: 'private' }, last_assistant_message: 'Old result' })?.summary)
+      .toBe('The agent needs an answer in the Buddy terminal. Which branch?')
+    expect(normalizeInteractiveHook({ hook_event_name: 'PermissionRequest', tool_input: { command: 'sensitive' }, last_assistant_message: 'Old result' })?.summary)
+      .toBe('The agent needs a permission decision in the Buddy terminal.')
+  })
   it('captures hook stdin through the real isolated script and stops after disposal', async () => {
     const root = mkdtempSync(join(tmpdir(), 'buddy-hooks-test-'))
     const events: InteractiveHookEvent[] = []

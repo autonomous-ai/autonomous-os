@@ -20,6 +20,7 @@ export interface SessionWorkspaceHandle {
 export function SessionWorkspace({
   session,
   sessions,
+  onActiveSessionChange,
   onError,
   onCloseTab,
   ref,
@@ -27,6 +28,7 @@ export function SessionWorkspace({
   ref?: Ref<SessionWorkspaceHandle>
   session: Session
   sessions: Session[]
+  onActiveSessionChange: (tabId: string, sessionId: string) => void
   onError: (error: unknown) => void
   onCloseTab: () => void
 }) {
@@ -55,6 +57,10 @@ export function SessionWorkspace({
   const [focused, setFocused] = useState(session.id)
   const effectiveFocused = paneSessions(effectiveLayout).includes(focused)
     ? focused : paneSessions(effectiveLayout)[0]
+
+  useEffect(() => {
+    if (effectiveFocused) onActiveSessionChange(session.id, effectiveFocused)
+  }, [session.id, effectiveFocused, onActiveSessionChange])
 
   const [pending, setPending] = useState(false)
   useImperativeHandle(

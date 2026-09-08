@@ -77,7 +77,14 @@ export interface WorkspaceMeta {
   unread: boolean
 }
 export type WorkspacePatch = Partial<Pick<WorkspaceMeta, 'pinned' | 'status' | 'unread' | 'displayName' | 'parentWorktreePath'>>
+export interface ActiveContext {
+  projectId: string
+  worktreePath: string
+  sessionId?: string
+}
 export interface Snapshot {
+  activeContext?: ActiveContext | null
+  projectWorktrees?: Record<string, Worktree[]>
   workspaces: WorkspaceMeta[]
   projects: Project[]
   sessions: Session[]
@@ -133,6 +140,7 @@ export interface BuddyAPI {
   nativeAction(action: NativeAction, params?: Record<string, unknown>): Promise<unknown>
   computerCommand(action: string, params?: Record<string, unknown>): Promise<NativeCommandResult>
   onNativeState(listener: (state: NativeState) => void): () => void
+  setActiveContext(context: ActiveContext | null): Promise<void>
   snapshot(): Promise<Snapshot>
   addProject(): Promise<Project | null>
   removeProject(projectId: string): Promise<void>

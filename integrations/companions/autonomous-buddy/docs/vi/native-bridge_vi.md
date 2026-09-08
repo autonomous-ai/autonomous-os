@@ -62,13 +62,14 @@ chắn, không chứng minh session/task chưa được tạo. Swift không tự
 
 Project phải được đăng ký trước trong Buddy. Routing dùng ID rõ ràng, không phụ
 thuộc tab UI đang chọn. Follow-up giữ nguyên project/session ID và dùng conversation
-ID đã lưu của provider. Session tạo bằng voice dùng root của project đã đăng ký;
-session worktree tạo từ desktop cũng có thể được gọi bằng ID.
+ID đã lưu của provider. Session tạo bằng voice mặc định dùng root của project đã
+đăng ký hoặc `worktree_path` được chọn rõ ràng; session worktree hiện có cũng có
+thể được gọi bằng ID.
 
 | Action | Tham số | Kết quả |
 | --- | --- | --- |
 | `agent.list` | không có | Project, session, workspace và trạng thái khả dụng của provider |
-| `agent.create` | `project_id`, `provider` (`codex` hoặc `claude`), `request_id`, `title`, `mode` tùy chọn (`interactive` mặc định hoặc `structured`) | Session vừa tạo |
+| `agent.create` | `project_id`, `provider` (`codex` hoặc `claude`), `request_id`, `title`, `worktree_path`, `mode` tùy chọn (`interactive` mặc định hoặc `structured`) | Session vừa tạo |
 | `agent.send` | `project_id`, `session_id`, `request_id`, `prompt` | Xác nhận nhận task kèm project/session ID; output đọc riêng |
 | `agent.session` | `project_id`, `session_id`, `after_seq` tùy chọn | Session và event giới hạn, `next_seq`, `truncated`, `has_more` |
 | `agent.stop` | `project_id`, `session_id` | Session hiện tại sau yêu cầu stop; process có thể thoát bất đồng bộ |
@@ -140,3 +141,9 @@ Trạng thái helper báo mới là bằng chứng về quyền hiệu lực. Qu
 signing identifier không tự chứng minh TCC kế thừa quyền parent hoặc việc xóa mục
 quyền cũ sẽ không ảnh hưởng. Build ad-hoc local có designated requirement dựa trên
 code hash; build lại có thể cần cấp quyền lại.
+
+Trạng thái interactive `needs_input` là menu câu hỏi/quyền của CLI, chưa phải ô nhập văn bản đã xác minh. `agent.session` bổ sung `input: {"kind":"needs_manual_input","surface":"buddy_terminal"}`; `agent.send` trả lỗi `needs_manual_input` và không ghi phím. Device hướng dẫn user trả lời trong Buddy, không báo sai rằng đã gửi câu trả lời bằng giọng nói. Thông báo AskUserQuestion chứa tối đa bốn câu hỏi (500 ký tự mỗi câu); thông báo quyền không sao chép tham số công cụ. Chưa có `agent.reply` hoặc API tự nhấn phím menu. Follow-up bằng giọng nói tiếp tục qua `agent.send` sau khi provider xác nhận ready/completed.
+
+`agent.list` còn trả `activeContext` (`projectId`, `worktreePath`, `sessionId` tùy chọn) từ pane desktop đang chọn và `projectWorktrees`, map project ID tới worktree/tên nhánh Git hiện có. Context được kiểm tra quyền sở hữu project/worktree/session, chỉ lưu trong RAM, xóa khi đóng cửa sổ hoặc context không còn hợp lệ; không ghi đè lựa chọn rõ ràng của user. `agent.create` nhận `worktree_path` tùy chọn từ danh sách này (mặc định thư mục project), kiểm tra quyền sở hữu và đưa đường dẫn vào fingerprint chống trùng. Device có thể chọn nhánh/worktree bằng lời nói mà không đoán đường dẫn.
+
+[định tuyến voice](voice-agent-routing_vi.md)

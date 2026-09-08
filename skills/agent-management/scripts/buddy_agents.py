@@ -14,6 +14,11 @@ class BuddyError(Exception):
     """Rejected command or uncertain delivery; callers must not replay automatically."""
 
 
+class BuddyRejected(BuddyError):
+    """The desktop returned an explicit rejection, rather than losing the response."""
+    rejected = True
+
+
 def command(action, params, endpoint=ENDPOINT):
     if action not in {"list", "create", "send", "session", "stop"}:
         raise BuddyError("unknown agent action")
@@ -52,19 +57,29 @@ def command(action, params, endpoint=ENDPOINT):
     if not isinstance(envelope, dict) or type(envelope.get("status")) is not int or envelope["status"] != 1:
         raise BuddyError("Buddy API rejected the request")
     result = envelope.get("data")
-    if not isinstance(result, dict) or result.get("ok") is not True:
-        raise BuddyError(str(result.get("error", "Buddy action failed")) if isinstance(result, dict) else "Invalid Buddy response")
+    if isinstance(result, dict) and result.get("ok") is False:
+        raise BuddyRejected(str(result.get("error", "Buddy action failed")))
+    if not isinstance(result, dict) or result.get("ok") is not True or "result" not in result:
+        raise BuddyError("Malformed Buddy response; delivery uncertain")
     return result.get("result")
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=["list", "create", "send", "session", "stop"])
+    parser.add_argument("action", choices=["list", "create", "send", "session", "stop", "voice"])
     parser.add_argument("params", nargs="?", default="{}", help="JSON object, or - to read stdin")
     args = parser.parse_args()
     try:
         params = json.loads(sys.stdin.read() if args.params == "-" else args.params)
-        print(json.dumps(command(args.action, params), ensure_ascii=False))
+        if args.action == "voice":
+            from voice_router import VoiceRouter, RoutingError
+            try:
+                result = VoiceRouter(command).run(params)
+            except RoutingError as exc:
+                raise BuddyError(str(exc)) from exc
+        else:
+            result = command(args.action, params)
+        print(json.dumps(result, ensure_ascii=False))
     except (BuddyError, ValueError) as exc:
         print(json.dumps({"error": str(exc)}, ensure_ascii=False), file=sys.stderr)
         return 1

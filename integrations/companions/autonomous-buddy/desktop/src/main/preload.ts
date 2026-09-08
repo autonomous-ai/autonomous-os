@@ -15,6 +15,7 @@ ipcRenderer.on('buddy:openSettings', () => {
   else for (const listener of settingsListeners) listener()
 })
 const api: BuddyAPI = {
+  setActiveContext: (value) => ipcRenderer.invoke('buddy:setActiveContext', value),
   settings: () => ipcRenderer.invoke('buddy:settings'),
   updateAppearance: (patch) => ipcRenderer.invoke('buddy:updateAppearance', patch),
   onSettings: (listener) => {

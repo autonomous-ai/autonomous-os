@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import type { BuddyUpdate, SessionStatus, SessionEvent } from '../shared/types'
+import type { BuddyUpdate, SessionStatus, SessionEvent, Worktree } from '../shared/types'
 import type { Manager } from './manager'
 
 export interface AgentNotice {
@@ -33,7 +33,11 @@ export class AgentDeviceBridge {
   private async execute(action: string, params: Record<string, unknown>): Promise<unknown> {
     if (action === 'agent.list') {
       const snapshot = await this.manager.snapshot()
-      return { ...snapshot, sessions: snapshot.sessions.filter((session) => !session.closed) }
+      const projectWorktrees: Record<string, Worktree[]> = Object.fromEntries(await Promise.all(snapshot.projects.map(async (project) =>
+        [project.id, await this.manager.worktrees(project.id).catch(() => [])])))
+      const current = await this.manager.snapshot()
+      const activeContext = current.activeContext && projectWorktrees[current.activeContext.projectId]?.some((tree) => tree.path === current.activeContext!.worktreePath) ? current.activeContext : null
+      return { ...current, activeContext, projectWorktrees, sessions: current.sessions.filter((session) => !session.closed) }
     }
     const projectId = this.text(params, 'project_id')
     const snapshot = await this.manager.snapshot()
@@ -43,10 +47,11 @@ export class AgentDeviceBridge {
       const provider = this.text(params, 'provider')
       if (provider !== 'codex' && provider !== 'claude') throw new Error('Voice sessions require Codex or Claude')
       const title = typeof params.title === 'string' ? params.title.slice(0, 120) : undefined
+      const worktreePath = params.worktree_path === undefined ? project.path : this.text(params, 'worktree_path')
       const mode = params.mode ?? 'interactive'
       if (mode !== 'interactive' && mode !== 'structured') throw new Error('Unsupported session mode')
-      return this.once(action, params, { projectId, provider, title, mode }, () =>
-        this.manager.createSession({ projectId, provider, title, worktreePath: project.path, mode, ...(mode === 'interactive' ? { deferLaunch: true } : {}) }))
+      return this.once(action, params, { projectId, provider, title, mode, worktreePath }, () =>
+        this.manager.createSession({ projectId, provider, title, worktreePath, mode, ...(mode === 'interactive' ? { deferLaunch: true } : {}) }))
     }
     if (!['agent.send', 'agent.session', 'agent.stop'].includes(action)) throw new Error('Unsupported agent action')
     const sessionId = this.text(params, 'session_id')
@@ -67,7 +72,7 @@ export class AgentDeviceBridge {
         bytes += size
       }
       const first = detail.events[0]?.seq ?? 0
-      return { session: detail.session, events, next_seq: events.at(-1)?.seq ?? after,
+      return { session: detail.session, ...(detail.session.mode === 'interactive' && detail.session.status === 'needs_input' ? { input: { kind: 'needs_manual_input', surface: 'buddy_terminal' } } : {}), events, next_seq: events.at(-1)?.seq ?? after,
         truncated: first > (after as number) + 1, has_more: (events.at(-1)?.seq ?? after) < (detail.events.at(-1)?.seq ?? 0) }
     }
     if (action === 'agent.stop') {

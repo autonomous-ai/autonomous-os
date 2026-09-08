@@ -95,6 +95,7 @@ function createWindow() {
   window.webContents.setZoomFactor(settings.read().appearance.zoom)
   void window.loadFile(rendererPath)
   window.on('closed', () => {
+    void manager.setActiveContext(null)
     window = null
   })
 }
@@ -171,6 +172,7 @@ else {
           return callback(...args)
         })
       }
+      handle('setActiveContext', (value) => manager.setActiveContext(value as Parameters<Manager['setActiveContext']>[0]))
       handle('addProject', async () => {
         if (!window) return null
         const choice = await dialog.showOpenDialog(window, {

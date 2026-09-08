@@ -3,6 +3,7 @@ import { mkdirSync, readFileSync, writeFileSync, renameSync } from 'node:fs'
 import { realpath, stat } from 'node:fs/promises'
 import path from 'node:path'
 import type {
+  ActiveContext,
   BuddyUpdate,
   CreateSession,
   Project,
@@ -47,6 +48,8 @@ export interface ManagerOptions {
   available?: (provider: Provider) => boolean
 }
 export class Manager {
+  private activeContext: ActiveContext | null = null
+  private activeContextGeneration = 0
   private state: Stored
   private runs = new Map<string, Run>()
   private pending = new Set<string>()
@@ -109,7 +112,9 @@ export class Manager {
     this.saveTimer ??= setTimeout(() => this.persist(), 150)
   }
   private snapshotValue(): Snapshot {
+    if (this.activeContext && (!this.state.projects.some((project) => project.id === this.activeContext!.projectId) || (this.activeContext.sessionId && !this.state.sessions.some((session) => session.id === this.activeContext!.sessionId && !session.closed)))) this.activeContext = null
     return structuredClone({
+      activeContext: this.activeContext,
       workspaces: this.state.workspaces ?? [],
       projects: this.state.projects,
       sessions: this.state.sessions,
@@ -274,6 +279,24 @@ export class Manager {
       this.broadcast()
     } finally { this.removingWorkspaces.delete(full) }
   }
+  async setActiveContext(context: ActiveContext | null): Promise<void> {
+    const generation = ++this.activeContextGeneration
+    this.activeContext = null
+    if (context === null) return
+    if (!context || typeof context.projectId !== 'string' || typeof context.worktreePath !== 'string' ||
+      (context.sessionId !== undefined && typeof context.sessionId !== 'string')) throw new Error('Invalid active context')
+    const workspace = await this.workspace(context.projectId, context.worktreePath)
+    if (generation !== this.activeContextGeneration) return
+    if (context.sessionId !== undefined) {
+      const session = this.findSession(context.sessionId)
+      if (session.projectId !== context.projectId || session.worktreePath !== workspace)
+        throw new Error('Active session does not belong to this workspace')
+      // A pane can close while its renderer focus report is awaiting validation.
+      // Keep context cleared; closing is a normal lifecycle transition.
+      if (session.closed || this.closing.has(session.id)) return
+    }
+    this.activeContext = { projectId: context.projectId, worktreePath: workspace, ...(context.sessionId !== undefined ? { sessionId: context.sessionId } : {}) }
+  }
   async snapshot() {
     return this.snapshotValue()
   }
@@ -405,6 +428,7 @@ export class Manager {
     if (typeof prompt !== 'string' || !prompt.trim() || prompt.length > 100000)
       throw new Error('Prompt must contain 1–100000 characters')
     if (session.mode === 'interactive') {
+      if (session.status === 'needs_input') throw new Error('needs_manual_input: Interactive prompt readiness requires answering the current question or permission menu in the Buddy terminal')
       const normalized = prompt.replace(/\r\n?/g, '\n')
       if ([...normalized].some((character) => {
         const code = character.charCodeAt(0)
@@ -444,7 +468,7 @@ export class Manager {
         await new Promise((resolve) => setTimeout(resolve, delay))
         if (this.closed || session.closed || this.closing.has(id) || run.stopped ||
           this.runs.get(id) !== run || !session.processActive || run.inputRevision !== inputRevision ||
-          session.status === 'needs_input' || session.status === 'error') {
+          this.findSession(id).status === 'needs_input' || session.status === 'error') {
           run.ready = false
           throw new Error('Prompt may be pasted but was not submitted; inspect the terminal before retrying')
         }

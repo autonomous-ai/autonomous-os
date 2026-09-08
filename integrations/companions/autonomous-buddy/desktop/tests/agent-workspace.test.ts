@@ -126,3 +126,41 @@ it('stores project groups and display names while refusing cyclic workspace pare
   expect((await restored.snapshot()).projects[0].group).toBe('Research')
   expect((await restored.snapshot()).workspaces[0]).toMatchObject({ displayName: 'Child', parentWorktreePath: f.project.path })
 })
+
+it('reports terminal-only attention and refuses a voice answer without sending keys', async () => {
+  const f = await fixture()
+  const session = await f.manager.createSession({ projectId: f.project.id, worktreePath: f.project.path, provider: 'codex' })
+  f.calls[0].onHook!({ type: 'needs_input', sessionId: 'attention-thread', summary: 'Choose a branch in the Buddy terminal.' })
+  const notices: unknown[] = []
+  const bridge = new AgentDeviceBridge(f.manager, async (notice) => { notices.push(notice) })
+  const params = { project_id: f.project.id, session_id: session.id }
+  expect(await bridge.dispatch({ id: 'read', action: 'agent.session', params })).toMatchObject({ ok: true, result: { input: { kind: 'needs_manual_input', surface: 'buddy_terminal' }, session: { status: 'needs_input' } } })
+  expect(await bridge.dispatch({ id: 'answer', action: 'agent.send', params: { ...params, request_id: 'voice-answer', prompt: 'yes' } })).toMatchObject({ ok: false, error: expect.stringContaining('needs_manual_input') })
+  expect((await f.manager.session(session.id)).events.filter((event) => event.type === 'prompt')).toHaveLength(0)
+  await bridge.reconnect()
+  expect(notices).toMatchObject([{ summary: 'Choose a branch in the Buddy terminal.', status: 'needs_input' }])
+})
+
+it('routes voice-created sessions to explicit worktrees and exposes only validated active context', async () => {
+  const f = await fixture()
+  const tree = await f.manager.createWorktree(f.project.id, 'feat/voice')
+  const bridge = new AgentDeviceBridge(f.manager, async () => {})
+  const context = { projectId: f.project.id, worktreePath: f.project.path, sessionId: f.session.id }
+  await f.manager.setActiveContext(context)
+  expect((await f.manager.snapshot()).activeContext).toEqual(context)
+  const result = await bridge.dispatch({ id: 'list', action: 'agent.list' })
+  expect(result).toMatchObject({ ok: true, result: { activeContext: context, projectWorktrees: { [f.project.id]: expect.arrayContaining([expect.objectContaining({ path: tree.path, branch: 'feat/voice' })]) } } })
+  const params = { project_id: f.project.id, provider: 'codex', request_id: 'worktree-create', worktree_path: tree.path }
+  expect(await bridge.dispatch({ id: 'create', action: 'agent.create', params })).toMatchObject({ ok: true, result: { worktreePath: tree.path, processActive: false } })
+  expect(await bridge.dispatch({ id: 'collision', action: 'agent.create', params: { ...params, worktree_path: f.project.path } })).toMatchObject({ ok: false })
+  await expect(f.manager.setActiveContext({ ...context, worktreePath: tree.path })).rejects.toThrow('does not belong')
+  expect((await f.manager.snapshot()).activeContext).toBeNull()
+  const pending = f.manager.setActiveContext(context)
+  await f.manager.setActiveContext(null)
+  await pending
+  expect((await f.manager.snapshot()).activeContext).toBeNull()
+  await f.manager.setActiveContext(context)
+  await f.manager.closeSession(f.session.id)
+  await expect(f.manager.setActiveContext(context)).resolves.toBeUndefined()
+  expect((await f.manager.snapshot()).activeContext).toBeNull()
+})

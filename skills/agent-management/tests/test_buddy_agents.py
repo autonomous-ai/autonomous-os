@@ -34,6 +34,16 @@ class ClientTests(unittest.TestCase):
                         client.command("list", {})
                 self.assertEqual(build.return_value.open.call_count, 1)
 
+    def test_malformed_reply_is_uncertain_not_definite_rejection(self):
+        for data in ({}, {"ok": "false"}, {"ok": True}, None):
+            with self.subTest(data=data), patch.object(client.urllib.request, "build_opener") as build:
+                response = MagicMock()
+                response.read.return_value = json.dumps({"status": 1, "data": data}).encode()
+                build.return_value.open.return_value.__enter__.return_value = response
+                with self.assertRaises(client.BuddyError) as raised:
+                    client.command("list", {})
+                self.assertFalse(getattr(raised.exception, "rejected", False))
+
     def test_timeout_is_not_retried(self):
         with patch.object(client.urllib.request, "build_opener") as build:
             build.return_value.open.side_effect = TimeoutError()

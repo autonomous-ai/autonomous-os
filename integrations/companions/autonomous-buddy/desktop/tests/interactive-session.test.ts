@@ -105,7 +105,7 @@ it('accepts verified hooks, safely pastes follow-ups, and gates manual or busy i
   await f.manager.terminalWrite(session.id, '\r')
   hook({ type: 'working', sessionId: 'exact-thread' })
   hook({ type: 'needs_input', sessionId: 'exact-thread' })
-  await expect(f.manager.send(session.id, 'ambiguous answer')).rejects.toThrow('readiness')
+  await expect(f.manager.send(session.id, 'ambiguous answer')).rejects.toThrow('needs_manual_input')
   hook({ type: 'completed', sessionId: 'exact-thread' })
   await f.manager.send(session.id, 'followup')
   expect(f.calls).toHaveLength(1)

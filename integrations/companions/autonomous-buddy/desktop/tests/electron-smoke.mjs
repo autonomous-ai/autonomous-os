@@ -2,6 +2,7 @@ import { _electron, expect } from '@playwright/test'
 import electronPath from 'electron'
 import { WebSocketServer, WebSocket } from 'ws'
 import { once } from 'node:events'
+import { createServer } from 'node:http'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { mkdtemp, mkdir, writeFile, readFile, rm, chmod, realpath } from 'node:fs/promises'
@@ -22,6 +23,7 @@ const artifacts = path.join(desktop, 'artifacts')
 let application
 let page
 let lamp
+let voiceApi
 let lampSocket
 let connectionCount = 0
 let commandSequence = 0
@@ -409,6 +411,7 @@ try {
   }
   await typeInPane(splitOne.id, 'ONE_ONLY')
   await typeInPane(splitTwo.id, 'TWO_ONLY')
+  await expect.poll(async () => (await lampCommand('list')).result.activeContext?.sessionId).toBe(splitTwo.id)
   expect(await terminalText(splitOne.id)).not.toContain('SPLIT_TWO_ONLY')
   expect(await terminalText(splitTwo.id)).not.toContain('SPLIT_ONE_ONLY')
   expect(await terminalText(terminal.id)).not.toContain('SPLIT_ONE_ONLY')
@@ -543,6 +546,7 @@ try {
   await page.getByRole('button', { name: 'Committed on branch', exact: true }).click()
   await expect(page.getByRole('button', { name: 'Review branch file README.md', exact: true })).toBeVisible()
   await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))))
+  await expect(page.locator('.error-toast')).toHaveCount(0)
   await nativeScreenshot('git-committed-on-branch.png')
   await page.getByRole('button', { name: 'Review branch file README.md', exact: true }).click()
   await expect(page.locator('.file-preview')).toContainText('+Sessions preserve context')
@@ -634,10 +638,50 @@ try {
     ),
   ).toHaveLength(2)
   expect((await readFile(log, 'utf8')).trim().split('\n')).toHaveLength(4)
+  // The real device Python router crosses HTTP, paired WS and Swift IPC to the
+  // desktop. Speech recognition/model interpretation are represented by JSON.
+  voiceApi = createServer(async (request, response) => {
+    try {
+      let body = ''
+      for await (const chunk of request) body += chunk
+      const command = JSON.parse(body)
+      const result = await lampCommand(command.action.replace(/^agent\./, ''), command.params)
+      response.setHeader('Content-Type', 'application/json')
+      response.end(JSON.stringify({ status: 1, data: result }))
+    } catch (error) {
+      response.statusCode = 500
+      response.end(JSON.stringify({ status: 0, message: String(error) }))
+    }
+  })
+  voiceApi.listen(0, '127.0.0.1')
+  await once(voiceApi, 'listening')
+  const voiceEndpoint = `http://127.0.0.1:${voiceApi.address().port}/api/buddy/command`
+  const routeVoice = async (params) => {
+    const program = "import sys,json;sys.path.insert(0,sys.argv[1]);from buddy_agents import command;from voice_router import VoiceRouter;print(json.dumps(VoiceRouter(lambda a,p:command(a,p,endpoint=sys.argv[2]),sys.argv[3]).run(json.loads(sys.argv[4]))))"
+    const { stdout } = await exec('python3', ['-c', program,
+      path.resolve(desktop, '../../../../skills/agent-management/scripts'), voiceEndpoint,
+      path.join(temporary, 'voice-context.json'), JSON.stringify(params)])
+    return JSON.parse(stdout)
+  }
+  await page.locator('.session-row').filter({ hasText: 'Lamp voice session' }).click()
+  await expect.poll(async () => (await lampCommand('list')).result.activeContext?.sessionId).toBe(voice.id)
+  const routed = { target: 'active', request_id: 'routed-voice-1', prompt: 'Explain the current result from spoken intent.' }
+  expect(await routeVoice(routed)).toMatchObject({ target: { sessionId: voice.id, worktreePath: projectPath }, result: { accepted: true } })
+  expect(await routeVoice(routed)).toMatchObject({ result: { accepted: true } })
+  await expect.poll(async () => (await detail(voice.id)).session.status).toBe('completed')
+  await page.locator('.session-row').filter({ hasText: 'Workspace terminal' }).click()
+  await expect.poll(async () => (await lampCommand('list')).result.activeContext?.sessionId).toBe(terminal.id)
+  expect(await routeVoice({ request_id: 'routed-voice-2', prompt: 'Continue the same voice conversation.' })).toMatchObject({ target: { sessionId: voice.id }, result: { accepted: true } })
+  await expect.poll(async () => (await detail(voice.id)).session.status).toBe('completed')
+  const routedDetail = await detail(voice.id)
+  expect(routedDetail.events.filter((event) => event.type === 'prompt')).toHaveLength(4)
+  expect(routedDetail.session.providerSessionId).toBe(firstDetail.result.session.providerSessionId)
+  await expect(routeVoice({ target: 'active', request_id: 'shell-must-reject', prompt: 'Never type this into the shell.' })).rejects.toThrow()
+  expect((await readFile(log, 'utf8')).trim().split('\n')).toHaveLength(6)
   expect(lampErrors).toEqual([])
   expect(pageErrors).toEqual([])
   console.log(
-    'PASS: native Settings menu, persisted Appearance and live PTY continuity, unified app, real Swift helper IPC/ping/pause/exit, production UI, scoped Git stage/unstage/commit/history review, recursive split PTYs/input isolation, persisted draft/layout, agent streaming, exact-ID follow-up, real Swift WebSocket lamp routing, reconnect and durable request dedup.',
+    'PASS: native Settings menu, persisted Appearance and live PTY continuity, unified app, real Swift helper IPC/ping/pause/exit, production UI, separate untracked/committed Git groups, Python voice routing through HTTP/Swift/WS with sticky follow-up and focused-pane context, scoped Git stage/unstage/commit/history review, recursive split PTYs/input isolation, persisted draft/layout, agent streaming, exact-ID follow-up, real Swift WebSocket lamp routing, reconnect and durable request dedup.',
   )
   console.log(`Screenshot: ${path.join(artifacts, 'manager-workspace.png')}`)
 } catch (error) {
@@ -650,5 +694,6 @@ try {
   for (const pending of pendingCommands.values()) clearTimeout(pending.timer)
   for (const socket of lamp?.clients ?? []) socket.terminate()
   if (lamp) await new Promise((resolve) => lamp.close(resolve))
+  if (voiceApi) await new Promise((resolve) => voiceApi.close(resolve))
   await rm(temporary, { recursive: true, force: true })
 }

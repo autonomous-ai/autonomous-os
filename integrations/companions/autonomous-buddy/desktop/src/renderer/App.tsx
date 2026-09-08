@@ -91,6 +91,10 @@ export function App() {
   const [selection, setSelection] = useState<Selection | null>(null)
   const [trees, setTrees] = useState<Record<string, Worktree[]>>({})
   const [sessionId, setSessionId] = useState<string | null>(null)
+  const [focusedPane, setFocusedPane] = useState<{ tabId: string; sessionId: string } | null>(null)
+  const reportFocusedPane = useCallback((tabId: string, sessionId: string) => {
+    setFocusedPane((previous) => previous?.tabId === tabId && previous.sessionId === sessionId ? previous : { tabId, sessionId })
+  }, [])
   const [closedTabs, setClosedTabs] = useState<string[]>(() => {
     try {
       const value: unknown = JSON.parse(localStorage.getItem('buddy.closedTabs') ?? '[]')
@@ -245,6 +249,19 @@ export function App() {
   )
   const visibleSessions = sessions.filter((session) => !closedTabs.includes(session.id))
   const active = visibleSessions.find((item) => item.id === sessionId)
+  const voiceSession = focusedPane?.tabId === active?.id
+    ? sessions.find((item) => item.id === focusedPane?.sessionId && !item.closed) ?? active
+    : active
+  const voiceSessionId = voiceSession?.id
+  useEffect(() => {
+    if (!loaded) return
+    void window.buddy.setActiveContext(selection ? {
+      projectId: selection.projectId,
+      worktreePath: selection.path,
+      ...(voiceSessionId ? { sessionId: voiceSessionId } : {}),
+    } : null).catch(fail)
+  }, [loaded, selection, voiceSessionId, fail])
+
   const attention = snapshot.sessions.filter(
     (item) => item.unread || item.status === 'needs_input' || item.status === 'error',
   )
@@ -631,6 +648,7 @@ export function App() {
             </div>
           ) : active ? (
             <SessionWorkspace
+              onActiveSessionChange={reportFocusedPane}
               ref={workspaceRef}
               key={active.id}
               session={active}
