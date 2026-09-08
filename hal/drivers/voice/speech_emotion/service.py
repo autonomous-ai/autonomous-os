@@ -105,6 +105,16 @@ _SER_STATE_PATH = "/tmp/hal-ser-state.json"
 _AUDIO_DIR: str = getattr(config, "SPEECH_EMOTION_AUDIO_DIR", "") or ""
 _SAFE_NAME_RE = re.compile(r"[^a-zA-Z0-9_-]+")
 
+# The buckets an event can actually be emitted under. Derived from the same two
+# predicates the flush path uses rather than from LABEL_BUCKETS.values(), so a
+# label added later without a bucket entry (which buckets to "other") is still
+# counted as reachable instead of being silently gated away.
+# Today this is {"positive", "negative"} — every neutral/other/<unk> label is
+# dropped in _process_job before it can reach a bucket.
+_REACHABLE_BUCKETS: frozenset = frozenset(
+    bucket_for(label) for label in SpeechEmotionLabel if not is_neutral(label)
+)
+
 
 @dataclass(slots=True)
 class _Job:
@@ -261,6 +271,16 @@ class SpeechEmotionService:
             )
             self._debug_submit_drop("too-short", norm_user, wav_bytes, duration_s)
             return
+        if self._buckets_saturated(norm_user, time.time()):
+            logger.info(
+                "[speech_emotion] DROP submit — every bucket for %r is still "
+                "inside the dedup window; no label could emit",
+                norm_user,
+            )
+            self._debug_submit_drop(
+                "buckets-saturated", norm_user, wav_bytes, duration_s,
+            )
+            return
 
         job = _Job(
             user=norm_user, wav_bytes=wav_bytes,
@@ -306,6 +326,41 @@ class SpeechEmotionService:
                 self._debug_submit_drop(
                     "queue-full", norm_user, wav_bytes, duration_s,
                 )
+
+    def _buckets_saturated(self, user: str, cur_ts: float) -> bool:
+        """True when no label this sample could produce is able to emit.
+
+        Output is capped at one event per (user, bucket) per DEDUP_WINDOW_S, and
+        only `_REACHABLE_BUCKETS` are emittable. When every one of them is still
+        inside its window, `_flush_user` will suppress whatever comes back — so
+        the Silero pass, the base64 expansion, the cloud round trip and the disk
+        write are all spent on a result that cannot become an event.
+
+        Deliberately conservative: a bucket counts as closed only if it will
+        STILL be closed by the time this sample could reach a flush — queue wait
+        + the cloud call + one flush tick. Without that margin a window expiring
+        mid-flight would make this gate drop a sample that would have emitted,
+        which would turn a pure optimisation into a behaviour change.
+        """
+        if not _REACHABLE_BUCKETS:
+            return False
+        # Worst-case submit → flush latency. job_max_age_s caps the queue wait;
+        # when it is disabled (0) fall back to the full queue draining at one
+        # timeout per job.
+        queue_wait = (
+            self._job_max_age_s if self._job_max_age_s > 0
+            else self._jobs.maxsize * _API_TIMEOUT_S
+        )
+        horizon = queue_wait + _API_TIMEOUT_S + self._flush_s
+        with self._lock:
+            for bucket in _REACHABLE_BUCKETS:
+                last_ts = self._last_sent_by_key.get((user, bucket))
+                if last_ts is None:
+                    return False
+                if (cur_ts - last_ts) + horizon >= self._dedup_window_s:
+                    # Window will have expired before this sample could flush.
+                    return False
+        return True
 
     def _debug_submit_drop(  # SER-DEBUG (remove before deploy)
         self, reason: str, user: str, wav_bytes: bytes, duration_s: float,
