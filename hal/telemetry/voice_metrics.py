@@ -76,6 +76,7 @@ EVENT_SUPPRESSION = "voice_metrics_suppression"
 # --- Playback kinds (what was heard) ---------------------------------------
 KIND_AGENT_REPLY = "agent_reply"          # main agent's answer, via the TTS queue
 KIND_NATIVE_REALTIME = "native_realtime"  # realtime model's own voice
+KIND_REALTIME_TTS = "realtime_tts"        # realtime text answer synthesized through TTS
 KIND_WAITING_AUDIO = "waiting_audio"      # filler / "one moment"
 KIND_SYSTEM_AUDIO = "system_audio"        # OS notice, cached phrase, greeting
 KIND_UNKNOWN = "unknown"                  # nobody claimed this playback
@@ -87,14 +88,15 @@ KIND_UNKNOWN = "unknown"                  # nobody claimed this playback
 _ACK_MODALITY = {
     KIND_AGENT_REPLY: "spoken_answer",
     KIND_NATIVE_REALTIME: "spoken_answer_realtime",
+    KIND_REALTIME_TTS: "spoken_answer_realtime",
     KIND_WAITING_AUDIO: "waiting_audio",
     KIND_SYSTEM_AUDIO: "acknowledgement_audio",
 }
 
 # Which playback kinds are the ANSWER rather than a receipt. Waiting audio and
-# system phrases tell the user they were heard; only these two tell them what
+# system phrases tell the user they were heard; these kinds tell them what
 # the device actually has to say.
-_ANSWER_KINDS = (KIND_AGENT_REPLY, KIND_NATIVE_REALTIME)
+_ANSWER_KINDS = (KIND_AGENT_REPLY, KIND_NATIVE_REALTIME, KIND_REALTIME_TTS)
 
 # --- Outcomes ---------------------------------------------------------------
 OUTCOME_ACKED = "acknowledged"
@@ -457,6 +459,7 @@ def _classify(owner: str, tts) -> str:
     this module's business:
 
       native voice      → the realtime model answering in its own voice
+      realtime_reply    → the realtime model's text answer spoken through TTS
       realtime_feedback → the agent's reply (the only speech fed back to the
                           realtime session)
       interruptible     → a filler, i.e. waiting audio
@@ -467,6 +470,8 @@ def _classify(owner: str, tts) -> str:
             return KIND_NATIVE_REALTIME
         if not owner:
             return KIND_UNKNOWN
+        if tts is not None and getattr(tts, "realtime_reply", False):
+            return KIND_REALTIME_TTS
         if tts is not None and getattr(tts, "realtime_feedback", False):
             return KIND_AGENT_REPLY
         if tts is not None and getattr(tts, "interruptible", False):

@@ -76,10 +76,15 @@ không phải "âm đã rời driver".
 | Loại playback | Modality ghi lại | Cách phân loại |
 |---------------|------------------|----------------|
 | `native_realtime` | `spoken_answer_realtime` | ghi từ đường native frame — giọng của chính model realtime |
+| `realtime_tts` | `spoken_answer_realtime` | câu trả lời dạng text của realtime được tổng hợp qua TTS, nhận diện bằng metadata playback độc lập với `realtime_feedback` |
 | `agent_reply` | `spoken_answer` | `realtime_feedback` (chỉ câu trả lời của agent bật cờ này) |
 | `waiting_audio` | `waiting_audio` | speech cached interruptible, tức dead-air filler |
 | `system_audio` | `acknowledgement_audio` | các câu cached/hệ thống khác |
 | `unknown` | — (không bao giờ là ack) | không ai nhận sở hữu lần phát này |
+
+Tiếng chime xác nhận cử chỉ vật lý không phải phản hồi cho lệnh thoại.
+Các lần ghi chime bỏ qua hook đo speech: không kế thừa owner của câu trả lời
+đang chờ và không dùng mất hook ghi frame đầu tiên của câu trả lời đó.
 
 **Waiting audio ĐƯỢC tính là phản hồi — đây là quyết định, không phải tình cờ.**
 Chỉ số này trả lời câu *"thiết bị có cho người dùng biết là đã nghe thấy
@@ -127,7 +132,7 @@ gian phản hồi của thiết bị.
 | `failure_reason` | `dispatch_failed` — lệnh hợp lệ nhưng **không được phục vụ** (POST không tới nơi). Đây *không* phải exclusion: dòng vẫn eligible và bị tính vào KPI. Lệnh os-server tự trả lời (local intent: âm lượng, LED, giờ) **không** phải lỗi — câu trả lời mang interaction id làm owner và được tính là đã phản hồi. |
 | `ack_latency_ms` | Quan sát thô, giữ nguyên bất kể kết luận (`null` khi không có gì phát) |
 | `ack_modality`, `ack_kind` | Người dùng thực sự nghe thấy cái gì |
-| `answer_latency_ms`, `answer_kind` | Lúc nghe được **câu trả lời** (`agent_reply` / `native_realtime`), khác với biên nhận. `null` = đã báo nghe nhưng chưa từng trả lời trong cửa sổ — đó là phát hiện, không phải thiếu dữ liệu |
+| `answer_latency_ms`, `answer_kind` | Lúc nghe được **câu trả lời** (`agent_reply` / `native_realtime` / `realtime_tts`), khác với biên nhận. `null` = đã báo nghe nhưng chưa từng trả lời trong cửa sổ — đó là phát hiện, không phải thiếu dữ liệu |
 | `ack_deadline_ms`, `observe_window_ms` | 3000 / 10000 — ngưỡng (tạm thời) đang áp dụng lúc ghi dòng đó |
 | `unknown_owner_playbacks` | Số lần phát không ai nhận — audio bị loại khỏi quyết định ack |
 | `amends_event_id`, `amendment_reason` | Có ở dòng **đính chính**: route hoặc exclusion tới sau khi verdict đã gửi |
@@ -169,6 +174,8 @@ cho qua một câu trả lời vẫn còn nói 3 giây sau lệnh dừng.
 có thể tới hàng chục giây sau biên, nên mỗi suppression được theo dõi 60 giây.
 Nếu hết cửa sổ mà turn bị suppress vẫn nói được, dòng đó ghi
 `observation_complete = false` thay vì "không có stale".
+Nếu đã quan sát thấy audio stale thì vẫn là lỗi đã xác nhận, dù quan sát chưa
+hoàn tất; quan sát thêm không thể xoá lần phát đó.
 
 **Grace được ghi rõ nguồn, không bịa cho KPI đẹp.** `TTSService.stop()` set stop
 event và đánh thức drain queue; worker vẫn phải nhả lock. Comment trong
@@ -209,8 +216,11 @@ không thể phát ra câu trả lời cũ, nên không tính là thứ mà biê
 **KPI-2 — câu trả lời cũ thực sự bị phát**
 
 - Mẫu số: các dòng `voice_metrics_suppression` có `applicable_interactions > 0`
-  **và** `observation_complete = true`. Dòng quan sát dở dang báo riêng như
-  coverage loss — không được gộp vào phần "đạt".
+  **và** (`observation_complete = true` **hoặc** `stale_observed = true`). Lần
+  phát stale đã xác nhận vẫn nằm trong cả tử số và mẫu số, kể cả khi turn bị
+  suppress còn active lúc cửa sổ quan sát đóng. Chỉ dòng quan sát dở dang có
+  `stale_observed = false` mới báo riêng như coverage loss — không được gộp
+  vào phần "đạt".
 - Tử số: trong đó `stale_observed = true`.
 - Báo cáo `explicit_stop` và `auto_supersede` **riêng**: hai chính sách khác
   nhau. Supersede tự động chỉ xảy ra khi os-server bật
@@ -219,7 +229,7 @@ không thể phát ra câu trả lời cũ, nên không tính là thứ mà biê
   khi kết luận: lamp xuất xưởng đã **BẬT** sẵn
   (`robots/lamp/rootfs/opt/hal/.env`), nên lamp có sinh mẫu `auto_supersede`.
   Body nào tắt thì mẫu số rỗng và lát cắt đó là **N/A**, không phải 100 %.
-- Suppression đúng (`stale_observed = false`) là **đạt**, không phải "mất câu
+- Suppression đúng (`observation_complete = true`, `stale_observed = false`) là **đạt**, không phải "mất câu
   trả lời". Hành động phần cứng của turn bị auto-supersede vẫn hợp lệ theo
   thiết kế; chỉ speech và filler bị bỏ.
 - Không có mẫu đủ điều kiện ⇒ **N/A**. Không bao giờ báo 0 % hay 100 % từ tập rỗng.
@@ -286,7 +296,8 @@ là hostname thiết bị, `platform` là `device` (xem `system/lib/analytics`).
 - **Playback không ai nhận thì để không quy chủ, có chủ đích.** Nó được đếm
   (`unknown_owner_playbacks`) và loại khỏi quyết định ack, thay vì đoán.
 - **Cửa sổ 60 giây vẫn có thể hết sớm.** Những dòng đó mang
-  `observation_complete = false` và phải báo cáo như coverage loss.
+  `observation_complete = false`. Lần phát stale đã xác nhận vẫn tính là lỗi;
+  chỉ dòng chưa quan sát thấy stale mới là coverage loss.
 - **State chỉ nằm trong RAM.** HAL restart thì mất các interaction còn trong
   cửa sổ quan sát; những mẫu đó thiếu chứ không sai.
 - **Tracker giữ tối đa 32 interaction.** Cái cũ bị đẩy ra trước hạn ghi verdict

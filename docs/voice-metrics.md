@@ -78,10 +78,15 @@ is "audio was handed to the device", not "sound left the driver".
 | Playback kind | Modality recorded | How it is classified |
 |---------------|-------------------|----------------------|
 | `native_realtime` | `spoken_answer_realtime` | written by the native-frame path — realtime model's own voice |
+| `realtime_tts` | `spoken_answer_realtime` | realtime text answer synthesized through TTS, identified by playback metadata independently of `realtime_feedback` |
 | `agent_reply` | `spoken_answer` | `realtime_feedback` (only the agent's reply sets it) |
 | `waiting_audio` | `waiting_audio` | interruptible cached speech, i.e. a dead-air filler |
 | `system_audio` | `acknowledgement_audio` | any other cached/system phrase |
 | `unknown` | — (never an ack) | nobody claimed the speaker for this playback |
+
+The physical-gesture acknowledgement chime is not a voice-command receipt.
+Its writes bypass the speech measurement hook: they neither inherit a pending
+reply's owner nor consume its first-frame hook.
 
 **Waiting audio counts as an acknowledgement — decided, not accidental.**
 The question this metric answers is *"did the device let the user know it
@@ -131,7 +136,7 @@ run in between and would otherwise be charged to the device's response time.
 | `failure_reason` | `dispatch_failed` — the command was valid and went **unserved** (the POST never landed). This is *not* an exclusion: the row stays eligible and counts against the KPI. A command os-server answered itself (local intent: volume, LED, time) is **not** a failure — its reply carries the interaction id as owner and counts as answered. |
 | `ack_latency_ms` | Raw observation, kept whatever the verdict (`null` when nothing played) |
 | `ack_modality`, `ack_kind` | What the user actually heard |
-| `answer_latency_ms`, `answer_kind` | When the **answer** was heard (`agent_reply` / `native_realtime`), as opposed to the receipt. `null` = acknowledged but never answered inside the window — a finding, not missing data |
+| `answer_latency_ms`, `answer_kind` | When the **answer** was heard (`agent_reply` / `native_realtime` / `realtime_tts`), as opposed to the receipt. `null` = acknowledged but never answered inside the window — a finding, not missing data |
 | `ack_deadline_ms`, `observe_window_ms` | 3000 / 10000 — the (provisional) thresholds in force when the row was written |
 | `unknown_owner_playbacks` | Playbacks nobody claimed so far — audio excluded from ack decisions |
 | `amends_event_id`, `amendment_reason` | Set on a **correction** row: routing or an exclusion arrived after the verdict was sent |
@@ -175,6 +180,8 @@ a reply that was still talking three seconds after a stop.
 reply can arrive tens of seconds after the boundary, so a suppression is
 watched for 60 s. If that expires while a suppressed turn can still speak, the
 row reports `observation_complete = false` instead of "no stale reply".
+If stale audio was already observed, it remains a confirmed failure even when
+the observation is incomplete; more observation cannot undo that playback.
 
 **The grace period is documented, not invented to pass.** `TTSService.stop()`
 sets a stop event and wakes the drain queues; the worker still has to release
@@ -220,8 +227,11 @@ something the boundary had to suppress.
 **KPI-2 — outdated reply actually played**
 
 - Denominator: `voice_metrics_suppression` rows with `applicable_interactions > 0`
-  **and** `observation_complete = true`. Rows with an incomplete observation
-  are reported separately as coverage loss — never folded in as passes.
+  **and** (`observation_complete = true` **or** `stale_observed = true`). A
+  confirmed stale playback stays in both numerator and denominator even if
+  suppressed turns are still active when the observation window closes.
+  Only incomplete observations with `stale_observed = false` are reported
+  separately as coverage loss — never folded in as passes.
 - Numerator: those with `stale_observed = true`.
 - Report `explicit_stop` and `auto_supersede` separately: they are different
   policies. Automatic supersession only happens when os-server has
@@ -231,7 +241,7 @@ something the boundary had to suppress.
   (`robots/lamp/rootfs/opt/hal/.env`), so lamp does produce `auto_supersede`
   samples. On a body where it is off the denominator is empty and that slice
   is **N/A**, not 100 %.
-- Correct suppression (`stale_observed = false`) is a **pass**, not a missing
+- Correct suppression (`observation_complete = true`, `stale_observed = false`) is a **pass**, not a missing
   response. Hardware actions of an auto-superseded turn remain valid by
   design; only speech and fillers are dropped.
 - No eligible samples ⇒ **N/A**. Never report 0 % or 100 % from an empty set.
@@ -316,14 +326,14 @@ WITH s AS (
 )
 SELECT
   reason,
-  -- A boundary with nothing to suppress is not a KPI situation; an
-  -- incomplete observation is coverage loss, not a pass.
-  COUNTIF(applicable > 0 AND complete = 'true')                    AS eligible_samples,
-  COUNTIF(applicable > 0 AND complete = 'true' AND stale = 'true') AS stale_played,
-  COUNTIF(applicable > 0 AND complete = 'false')                   AS incomplete_observations,
-  CASE WHEN COUNTIF(applicable > 0 AND complete = 'true') = 0 THEN NULL
-       ELSE ROUND(100 * COUNTIF(applicable > 0 AND complete = 'true' AND stale = 'true')
-                      / COUNTIF(applicable > 0 AND complete = 'true'), 2)
+  -- Confirmed stale playback counts even before observation is complete.
+  -- Only incomplete observations without stale playback are coverage loss.
+  COUNTIF(applicable > 0 AND (complete = 'true' OR stale = 'true')) AS eligible_samples,
+  COUNTIF(applicable > 0 AND stale = 'true') AS stale_played,
+  COUNTIF(applicable > 0 AND complete = 'false' AND stale = 'false') AS incomplete_observations,
+  CASE WHEN COUNTIF(applicable > 0 AND (complete = 'true' OR stale = 'true')) = 0 THEN NULL
+       ELSE ROUND(100 * COUNTIF(applicable > 0 AND stale = 'true')
+                      / COUNTIF(applicable > 0 AND (complete = 'true' OR stale = 'true')), 2)
   END AS kpi2_pct
 FROM s
 GROUP BY reason;
@@ -394,7 +404,8 @@ and `platform` is `device` (see `system/lib/analytics`).
   (`unknown_owner_playbacks`) and excluded from ack decisions rather than
   guessed at.
 - **A 60 s suppression window can still expire early.** Those rows carry
-  `observation_complete = false` and must be reported as coverage loss.
+  `observation_complete = false`. Confirmed stale playback still counts as a
+  failure; only rows without observed stale playback are coverage loss.
 - **In-memory state only.** A HAL restart loses interactions still in their
   observation window; those samples are missing rather than wrong.
 - **Tracker capacity is 32 interactions.** An older one evicted before its

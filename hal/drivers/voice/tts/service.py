@@ -86,7 +86,7 @@ class _WatchedStream:
         self._stream = stream
         self._owner = owner
 
-    def write(self, data):
+    def write(self, data, *, track_playback: bool = True):
         self._owner._write_started_ts = time.monotonic()
         # Echo reference, paced to PLAYBACK, not to synthesis.
         #
@@ -151,7 +151,8 @@ class _WatchedStream:
                 # native audio all pass through here. Measuring at the write
                 # (not at the five call sites that lead to it) is why adding a
                 # playback path cannot silently escape the metrics.
-                self._owner._note_audio_written()
+                if track_playback:
+                    self._owner._note_audio_written()
                 # Re-stamp per slice: the stall watchdog times ONE blocking
                 # write, and a long block is now many short ones.
                 self._owner._write_started_ts = time.monotonic()
@@ -185,15 +186,17 @@ class _PendingSpeech:
     first delay) and pre-synth time is hidden behind the previous speech's
     playback. Mirrors the tail_producer/tail_q pattern in _speak_sync."""
 
-    __slots__ = ("text", "interruptible", "frame_queue", "failed", "owner")
+    __slots__ = ("text", "interruptible", "frame_queue", "failed", "owner", "realtime_reply")
 
-    def __init__(self, text: str, interruptible: bool, owner: str = ""):
+    def __init__(self, text: str, interruptible: bool, owner: str = "",
+                 realtime_reply: bool = False):
         self.text = text
         self.interruptible = interruptible
         # Who queued this segment. The drain plays it on the stream another
         # request opened, so without carrying it here the audio would be
         # attributed to whoever happened to own the speaker first.
         self.owner = owner
+        self.realtime_reply = realtime_reply
         # Producer (pre-synth thread) appends numpy frames as they arrive
         # from the backend; consumer (_drain_pending_queue) writes them to
         # the ALSA stream. None sentinel = producer is done.
@@ -272,6 +275,7 @@ class TTSService:
         # unknown — guessing is what let an old filler be credited as the
         # acknowledgement of a new command.
         self._playback_owner: str = ""
+        self._realtime_reply = False
         # Fired ONCE per playback, immediately after the first frame is
         # actually written to the stream — not when playback was requested,
         # accepted, or about to start. on_speak_start cannot serve this: the
@@ -610,6 +614,15 @@ class TTSService:
         return self._realtime_feedback
 
     @property
+    def realtime_reply(self) -> bool:
+        """This playback is a realtime text answer synthesized through TTS.
+
+        Measurement metadata only: unlike realtime_feedback, this must never
+        feed the realtime model its own words back as main-agent history.
+        """
+        return self._realtime_reply
+
+    @property
     def latest_queue_turn_id(self) -> str:
         """os-server run id of the newest turn that took the speak queue.
 
@@ -667,9 +680,10 @@ class TTSService:
         except Exception:
             logger.exception("on_unspoken_reply callback failed")
 
-    def _begin_playback(self, owner: str) -> None:
+    def _begin_playback(self, owner: str, realtime_reply: bool = False) -> None:
         """Claim the speaker for `owner` and arm the first-audio hook."""
         self._playback_owner = owner or ""
+        self._realtime_reply = realtime_reply
         self._audio_written_fired = False
 
     def _note_audio_written(self) -> None:
@@ -761,7 +775,7 @@ class TTSService:
             return False
 
     def speak(self, text: str, interruptible: bool = False, realtime_feedback: bool = False,
-              turn_id: str = "") -> bool:
+              turn_id: str = "", realtime_reply: bool = False) -> bool:
         """Synthesize and play text. Returns True if started, False if busy or unavailable.
         If interruptible=True, a subsequent speak() call can stop this one.
         realtime_feedback=True feeds this text to the realtime agent on completion
@@ -784,7 +798,7 @@ class TTSService:
             logger.info("TTS cache-first hit: %s", text[:50])
             return self.speak_cached(
                 text, interruptible=interruptible, realtime_feedback=realtime_feedback,
-                turn_id=turn_id,
+                turn_id=turn_id, realtime_reply=realtime_reply,
             )
 
         if not self._lock.acquire(blocking=False):
@@ -809,7 +823,7 @@ class TTSService:
         self._interruptible = interruptible
         self._last_spoken_text = text
         self._realtime_feedback = realtime_feedback
-        self._begin_playback(f"run:{turn_id}" if turn_id else "")
+        self._begin_playback(f"run:{turn_id}" if turn_id else "", realtime_reply)
 
         thread = threading.Thread(
             target=self._speak_sync,
@@ -863,6 +877,7 @@ class TTSService:
         realtime_feedback: bool = False,
         turn_id: str = "",
         turn_seq: int = 0,
+        realtime_reply: bool = False,
     ) -> bool:
         """Speak `text`. If TTS is idle, plays immediately (same as speak()).
         If TTS is currently speaking, the text is appended to a pending queue
@@ -951,7 +966,7 @@ class TTSService:
                 logger.info("TTS cache-first hit (queue): %s", text[:50])
                 return self.speak_cached(
                     text, interruptible=interruptible, realtime_feedback=realtime_feedback,
-                    turn_id=turn_id,
+                    turn_id=turn_id, realtime_reply=realtime_reply,
                 )
 
             # A newer turn must take the lock itself after stopping the old
@@ -973,7 +988,7 @@ class TTSService:
                 self._interruptible = interruptible
                 self._last_spoken_text = text
                 self._realtime_feedback = realtime_feedback
-                self._begin_playback(f"run:{turn_id}" if turn_id else "")
+                self._begin_playback(f"run:{turn_id}" if turn_id else "", realtime_reply)
                 thread = threading.Thread(
                     target=self._speak_sync,
                     args=(text,),
@@ -990,6 +1005,7 @@ class TTSService:
                 text=text,
                 interruptible=interruptible,
                 owner=f"run:{turn_id}" if turn_id else "",
+                realtime_reply=realtime_reply,
             )
             with self._pending_queue_lock:
                 self._pending_queue.append(item)
@@ -1075,7 +1091,7 @@ class TTSService:
             # Each queued segment is its own playback for measurement: re-arm
             # the hook under THIS item's owner so it is attributed to the turn
             # that queued it, not to whoever opened the stream.
-            self._begin_playback(item.owner)
+            self._begin_playback(item.owner, item.realtime_reply)
             stream.write(first)
             total += len(first)
             while not self._stop_event.is_set():
@@ -1691,7 +1707,8 @@ class TTSService:
         return warmed
 
     def speak_cached(self, text: str, interruptible: bool = False, prerender: bool = False,
-                     realtime_feedback: bool = False, turn_id: str = "") -> bool:
+                     realtime_feedback: bool = False, turn_id: str = "",
+                     realtime_reply: bool = False) -> bool:
         """Cache-aware speak. On hit -> ~50ms playback. On miss -> render+save
         then play. prerender=True skips playback (warmup-only).
         realtime_feedback=True feeds this text to the realtime agent on
@@ -1739,7 +1756,7 @@ class TTSService:
         self._interruptible = interruptible
         self._last_spoken_text = text
         self._realtime_feedback = realtime_feedback
-        self._begin_playback(f"run:{turn_id}" if turn_id else "")
+        self._begin_playback(f"run:{turn_id}" if turn_id else "", realtime_reply)
 
         threading.Thread(
             target=self._cached_play_thread,
@@ -1863,7 +1880,11 @@ class TTSService:
                 )
             with self._stream_lock:
                 stream = self._ensure_stream(rate)
-                stream.write(samples)
+                # This ping acknowledges the physical gesture, not the voice
+                # turn whose synthesis may have just been cancelled. Preserve
+                # that turn's pending hook without crediting it for this audio.
+                # Keep normal pacing and AEC reference writes for the chime.
+                stream.write(samples, track_playback=False)
             return True
         except Exception as e:
             logger.debug("Ack chime failed: %s", e)
