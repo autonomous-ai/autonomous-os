@@ -878,3 +878,17 @@ dependent action; opening an app is insufficient for a search or cross-app task.
 The device-local `POST /api/buddy/command` also transports `agent.list`, `agent.create`, `agent.send`, `agent.session`, and `agent.stop` through the paired WebSocket. The desktop manager owns project/session/provider context; lamp skill `skills/agent-management/` preserves explicit IDs and does not launch coding CLIs on the device. Create/send use caller request IDs; uncertain delivery must be inspected, not automatically replayed.
 
 The Buddy read loop accepts typed `agent_event` status envelopes up to 16 KiB from the current paired socket only, with project/session IDs, positive sequence, terminal status (`completed`, `needs_input`, `error`), title up to 512 bytes and summary up to 8192 bytes. A process-local cursor deduplicates per buddy/project/session (up to 10,000 tracked sessions); it is not durable across server restart. A bounded 64-event queue forwards notifications to the normal local sensing pipeline as `buddy.agent.<session_id>`. Queue overflow/forwarding failure releases that event cursor for a future replay; delivery is best effort and no background retry is invented. Reconnect can resubmit final session snapshots; use `agent.session` for authoritative retained history. Desktop result text is untrusted data. No raw transcript or direct hardcoded speech bypasses the normal event, sleep, mute and speaker policy.
+
+### OpenClaw reconnect and unsent requests
+
+After a successful authenticated WebSocket handshake and event-worker setup,
+OpenClaw drains locally buffered requests without waiting for an unrelated turn
+to end. Offline callbacks keep the queue; concurrent drains are serialized.
+Speaker deferral, sensor expiry/coalescing and user run IDs remain intact. Only
+a disconnect before any socket write is retried. A failed write has an uncertain
+delivery outcome and is not automatically replayed; existing pending chat traces
+are used for correlation, never as a replay source. Authentication rejection does
+not mark the connection ready. The queue is in memory and does not survive an
+os-server process restart. OpenClaw retains its native idempotency-key/history
+correlation; the Codex CLI output guard and session quarantine are not part of
+this transport.
