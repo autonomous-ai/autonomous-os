@@ -95,7 +95,7 @@ func DefaultOptions(openclawConfigDir, hermesRoot string) Options {
 		HermesRoot:        hermesRoot,
 		PicoclawConfigDir: "/root/.picoclaw",
 		CodexHome:         syspath.CodexHome(),
-		ClaudecodeDir:     "/root/.claudecode",
+		ClaudecodeDir:     syspath.ClaudeCodeHome(),
 		OpenCodeHome:      "/root/.opencode",
 		OpenCodeConfig:    "/root/.config/opencode/opencode.json",
 	}

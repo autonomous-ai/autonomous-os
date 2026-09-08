@@ -148,7 +148,7 @@ func DefaultOptions(openclawConfigDir, hermesRoot string) Options {
 		HermesRoot:          hermesRoot,
 		PicoclawWorkspace:   "/root/.picoclaw/workspace",
 		CodexWorkspace:      filepath.Join(syspath.CodexHome(), "workspace"),
-		ClaudecodeWorkspace: "/root/.claudecode/workspace",
+		ClaudecodeWorkspace: filepath.Join(syspath.ClaudeCodeHome(), "workspace"),
 		OpenCodeWorkspace:   "/root/.opencode/workspace",
 		IncludeDailyMemory:  true,
 		MemoryCharLimit:     DefaultMemoryCharLimit,
