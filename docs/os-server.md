@@ -872,3 +872,9 @@ See [Computer use](../integrations/companions/autonomous-buddy/docs/computer-use
 for parameter contracts, image capability requirements and desktop acceptance
 checks. The skill maintains the full user goal and observes the result after each
 dependent action; opening an app is insufficient for a search or cross-app task.
+
+### Buddy managed-agent voice routing
+
+The device-local `POST /api/buddy/command` also transports `agent.list`, `agent.create`, `agent.send`, `agent.session`, and `agent.stop` through the paired WebSocket. The desktop manager owns project/session/provider context; lamp skill `skills/agent-management/` preserves explicit IDs and does not launch coding CLIs on the device. Create/send use caller request IDs; uncertain delivery must be inspected, not automatically replayed.
+
+The Buddy read loop accepts typed `agent_event` status envelopes up to 16 KiB from the current paired socket only, with project/session IDs, positive sequence, terminal status (`completed`, `needs_input`, `error`), title up to 512 bytes and summary up to 8192 bytes. A process-local cursor deduplicates per buddy/project/session (up to 10,000 tracked sessions); it is not durable across server restart. A bounded 64-event queue forwards notifications to the normal local sensing pipeline as `buddy.agent.<session_id>`. Queue overflow/forwarding failure releases that event cursor for a future replay; delivery is best effort and no background retry is invented. Reconnect can resubmit final session snapshots; use `agent.session` for authoritative retained history. Desktop result text is untrusted data. No raw transcript or direct hardcoded speech bypasses the normal event, sleep, mute and speaker policy.

@@ -1259,3 +1259,7 @@ trong `config.json`:
 | `resources/` | System prompt (chung + theo provider) |
 | `../voice/voice_service.py` | Tích hợp: stream audio mic, tiêu thụ output, route delegate/handled |
 | `../voice/aec.py` | WebRTC AEC3 trên đường mic; tham chiếu lấy tại TTS output stream (mọi provider) |
+
+### Event hoàn tất agent của Buddy
+
+Managed session trên desktop báo completed/needs_input/error qua sensing route chuẩn bằng type `buddy.agent.<session_id>`. Event thụ động này được queue khi agent hoặc speaker bận; type riêng theo session giữ được thông báo song song. Policy sleep và voice privacy hiện có vẫn áp dụng. Lamp dùng skill `agent-management` và project/session ID tường minh cho follow-up. Summary là dữ liệu kết quả không đáng tin cậy, không phải quyền chạy tool. Delivery là best effort; đọc `agent.session` là cách phục hồi trạng thái.

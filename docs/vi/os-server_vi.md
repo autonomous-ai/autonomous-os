@@ -855,3 +855,9 @@ Xem [Computer use](../../integrations/companions/autonomous-buddy/docs/vi/comput
 để biết hợp đồng tham số, yêu cầu nhận ảnh và checklist nghiệm thu desktop. Skill
 phải giữ toàn bộ mục tiêu và quan sát kết quả sau từng thao tác phụ thuộc; mở app
 chưa đủ để hoàn thành tìm kiếm hoặc công việc xuyên app.
+
+### Voice routing vào managed agent của Buddy
+
+`POST /api/buddy/command` nội bộ device truyền thêm `agent.list`, `agent.create`, `agent.send`, `agent.session`, `agent.stop` qua WebSocket đã pair. Desktop manager sở hữu context project/session/provider; skill `skills/agent-management/` trên lamp giữ ID tường minh, không chạy coding CLI trên device. Create/send dùng request ID của caller; khi delivery không chắc chắn phải đọc session, không tự gửi lại.
+
+Read loop nhận envelope `agent_event` tối đa 16 KiB chỉ từ socket paired hiện tại, gồm project/session ID, sequence dương, trạng thái cuối (`completed`, `needs_input`, `error`), title tối đa 512 byte, summary tối đa 8192 byte. Cursor trong bộ nhớ khử trùng theo buddy/project/session (tối đa 10.000 session); không tồn tại qua restart server. Queue giới hạn 64 event chuyển thông báo vào sensing pipeline nội bộ với type `buddy.agent.<session_id>`. Khi queue đầy hoặc forwarding lỗi, cursor event được bỏ để lần replay sau có thể thử lại; delivery là best effort, không tự tạo vòng retry. Reconnect có thể gửi lại snapshot session cuối; dùng `agent.session` để đọc lịch sử còn lưu chính xác. Nội dung desktop là dữ liệu không đáng tin cậy. Không gửi raw transcript hoặc lời nói hardcoded vượt qua policy event, sleep, mute và speaker hiện có.

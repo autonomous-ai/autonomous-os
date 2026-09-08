@@ -11,7 +11,7 @@ import (
 // response (matched by `id`) to the corresponding Dispatch caller. Returns
 // when the connection closes for any reason. Caller is expected to invoke this
 // in a goroutine after RegisterConnection.
-func (s *Service) RunReadLoop(conn *websocket.Conn, buddyID string) {
+func (s *Service) RunReadLoop(conn *websocket.Conn, buddyID string, agentHandlers ...func(AgentEvent)) {
 	defer func() {
 		s.registry.ClearConnection(conn)
 		_ = conn.Close()
@@ -28,6 +28,16 @@ func (s *Service) RunReadLoop(conn *websocket.Conn, buddyID string) {
 				slog.Warn("WS read error", "component", "buddy", "error", err)
 			}
 			return
+		}
+		var kind struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal(data, &kind) == nil && kind.Type == "agent_event" {
+			event, accepted := s.acceptAgentEvent(conn, buddyID, data)
+			if accepted && len(agentHandlers) > 0 && agentHandlers[0] != nil {
+				agentHandlers[0](event)
+			}
+			continue
 		}
 		var env struct {
 			ID       string `json:"id"`

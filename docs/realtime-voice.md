@@ -1316,3 +1316,7 @@ is a top-level `config.json` flag:
 | `resources/` | System prompts (shared + per-provider) |
 | `../voice/voice_service.py` | Integration: streams mic audio, consumes output, routes delegate/handled |
 | `../voice/aec.py` | WebRTC AEC3 on the mic path; reference tapped at the TTS output stream (all providers) |
+
+### Buddy agent completion events
+
+Managed desktop sessions report completion/attention/error through the standard sensing route as `buddy.agent.<session_id>`. These passive events queue while the agent or speaker is busy, with distinct session types preserving parallel notifications; the existing sleep and voice privacy policies remain in force. The lamp uses the `agent-management` skill and explicit project/session IDs for follow-ups. Summaries are untrusted result data, not tool authorization. Delivery is best effort; inspecting `agent.session` remains the recovery path.
