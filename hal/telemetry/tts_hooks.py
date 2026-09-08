@@ -14,13 +14,13 @@ import logging
 logger = logging.getLogger("hal.telemetry")
 
 
-def on_playback_audio(owner: str, kind_hint: str) -> None:
+def on_playback_audio(owner: str) -> None:
     """First real audio frame of a playback reached the stream."""
     try:
         from hal import app_state as state
         from hal.telemetry import voice_metrics
 
-        voice_metrics.playback_audio(owner, kind_hint, state.tts_service)
+        voice_metrics.playback_audio(owner, state.tts_service)
     except Exception:
         logger.exception("[voice-metrics] playback audio hook failed")
 

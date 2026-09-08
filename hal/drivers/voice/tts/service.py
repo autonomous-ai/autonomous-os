@@ -146,6 +146,12 @@ class _WatchedStream:
                         off, total,
                     )
                     return result
+                # This is the one place every playback reaches the device —
+                # synthesized speech, the queue drain, cached WAVs and realtime
+                # native audio all pass through here. Measuring at the write
+                # (not at the five call sites that lead to it) is why adding a
+                # playback path cannot silently escape the metrics.
+                self._owner._note_audio_written()
                 # Re-stamp per slice: the stall watchdog times ONE blocking
                 # write, and a long block is now many short ones.
                 self._owner._write_started_ts = time.monotonic()
@@ -270,7 +276,7 @@ class TTSService:
         # accepted, or about to start. on_speak_start cannot serve this: the
         # cached path fires it before taking the stream lock, so speech that is
         # stopped or fails before its first write would still look played.
-        self._on_playback_audio = None   # (owner: str, kind_hint: str) -> None
+        self._on_playback_audio = None   # (owner: str) -> None
         self._on_playback_done = None    # () -> None
         self._audio_written_fired = False
 
@@ -663,13 +669,18 @@ class TTSService:
         self._playback_owner = owner or ""
         self._audio_written_fired = False
 
-    def _note_audio_written(self, kind_hint: str = "") -> None:
+    def _note_audio_written(self) -> None:
         """Called right after the FIRST frame of a playback reached the stream.
 
         This is the closest observable point to "the user heard something".
         It is still not the acoustic onset: ALSA/Bluetooth buffering sits
         between this write and the speaker (tens of ms on the built-in card,
         more over BT).
+
+        Reports WHO owns the playback and nothing else; what kind of speech it
+        was is read from this service's own public state by whoever is
+        listening (see hal/telemetry/voice_metrics.py). Audio code should not
+        have to know the tracker's vocabulary.
         """
         if self._audio_written_fired:
             return
@@ -677,7 +688,7 @@ class TTSService:
         if self._on_playback_audio is None:
             return
         try:
-            self._on_playback_audio(self._playback_owner, kind_hint)
+            self._on_playback_audio(self._playback_owner)
         except Exception:
             logger.exception("on_playback_audio callback failed")
 
@@ -1047,7 +1058,6 @@ class TTSService:
             # that queued it, not to whoever opened the stream.
             self._begin_playback(item.owner)
             stream.write(first)
-            self._note_audio_written("agent_or_system")
             total += len(first)
             while not self._stop_event.is_set():
                 try:
@@ -1113,7 +1123,6 @@ class TTSService:
                 if self._stream is None or self._stop_event.is_set():
                     return False
                 stream.write(data)
-            self._note_audio_written("native_realtime")
         except Exception as e:
             logger.warning("native audio write failed: %s", e)
             self._invalidate_stream()
@@ -1282,7 +1291,6 @@ class TTSService:
                         except Exception:
                             logger.exception("on_speak_start callback failed")
                     stream.write(frame)
-                    self._note_audio_written("agent_or_system")
                     total_samples += len(frame)
                 return total_samples
             except Exception as e:
@@ -1487,7 +1495,6 @@ class TTSService:
                             except Exception:
                                 logger.exception("on_speak_start callback failed")
                         stream.write(item)
-                        self._note_audio_written("agent_or_system")
                         total_samples += len(item)
 
                     # Drain tail queue.
@@ -1779,7 +1786,6 @@ class TTSService:
                 if self._stop_event.is_set():
                     break
                 stream.write(samples[i : i + block])
-                self._note_audio_written("cached")
 
         logger.info(
             "TTS cached %s: %d samples @ %d Hz, took %.0fms (path=%s)",

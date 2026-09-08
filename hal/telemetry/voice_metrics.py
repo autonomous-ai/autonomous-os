@@ -327,7 +327,7 @@ def exclude(iid: str, reason: str) -> None:
 
 # --- Playback boundary ------------------------------------------------------
 
-def playback_audio(owner: str, kind_hint: str, tts=None) -> None:
+def playback_audio(owner: str, tts=None) -> None:
     """The first frame of a playback actually reached the audio stream.
 
     ``owner`` is what claimed the speaker: ``run:<turn_id>`` (agent reply or a
@@ -338,7 +338,7 @@ def playback_audio(owner: str, kind_hint: str, tts=None) -> None:
     started = _now()
     with _lock:
         iid = _owner_interaction(owner)
-        kind = _classify(owner, kind_hint, tts)
+        kind = _classify(owner, tts)
         global _playing, _unknown_owner_playbacks
         _playing = {
             "kind": kind, "owner": owner, "interaction_id": iid,
@@ -401,21 +401,30 @@ def _owner_interaction(owner: str) -> str:
     return ""
 
 
-def _classify(owner: str, kind_hint: str, tts) -> str:
-    """What the user heard. The hint comes from the write site; TTS state
-    separates an agent reply from a filler on the shared cached path."""
-    if kind_hint == "native_realtime":
-        return KIND_NATIVE_REALTIME
-    if not owner:
-        return KIND_UNKNOWN
+def _classify(owner: str, tts) -> str:
+    """What the user heard, read from the speaking service's own public state.
+
+    The audio code reports only WHO owns the playback; the vocabulary below is
+    this module's business:
+
+      native voice      → the realtime model answering in its own voice
+      realtime_feedback → the agent's reply (the only speech fed back to the
+                          realtime session)
+      interruptible     → a filler, i.e. waiting audio
+      anything else     → system audio (notices, greetings, cached phrases)
+    """
     try:
+        if tts is not None and getattr(tts, "native_mode", False):
+            return KIND_NATIVE_REALTIME
+        if not owner:
+            return KIND_UNKNOWN
         if tts is not None and getattr(tts, "realtime_feedback", False):
             return KIND_AGENT_REPLY
-        if kind_hint == "cached" and tts is not None and getattr(tts, "interruptible", False):
+        if tts is not None and getattr(tts, "interruptible", False):
             return KIND_WAITING_AUDIO
     except Exception:
-        pass
-    return KIND_AGENT_REPLY if kind_hint == "agent_or_system" else KIND_SYSTEM_AUDIO
+        logger.exception("[voice-metrics] playback classification failed")
+    return KIND_SYSTEM_AUDIO if owner else KIND_UNKNOWN
 
 
 # --- Suppression boundary (the stale-reply metric) ------------------------------------------

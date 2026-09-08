@@ -85,21 +85,22 @@ def kpi(monkeypatch):
 
 
 class FakeTTS:
-    def __init__(self, realtime_feedback=False, interruptible=False):
+    def __init__(self, realtime_feedback=False, interruptible=False, native_mode=False):
         self.realtime_feedback = realtime_feedback
         self.interruptible = interruptible
+        self.native_mode = native_mode
 
 
 def _reply(kpi, owner):
-    voice_metrics.playback_audio(owner, "agent_or_system", FakeTTS(realtime_feedback=True))
+    voice_metrics.playback_audio(owner, FakeTTS(realtime_feedback=True))
 
 
 def _filler(kpi, owner):
-    voice_metrics.playback_audio(owner, "cached", FakeTTS(interruptible=True))
+    voice_metrics.playback_audio(owner, FakeTTS(interruptible=True))
 
 
 def _native(kpi, owner):
-    voice_metrics.playback_audio(owner, "native_realtime", FakeTTS())
+    voice_metrics.playback_audio(owner, FakeTTS(native_mode=True))
 
 
 # --- Finding 1: ownership, no guessing --------------------------------------
@@ -109,7 +110,7 @@ def test_unowned_audio_is_never_an_acknowledgement(kpi):
     interaction, so an old filler could 'acknowledge' a new command."""
     voice_metrics.speech_end("silence_clock")
     kpi.clock.advance(500)
-    voice_metrics.playback_audio("", "cached", FakeTTS(interruptible=True))
+    voice_metrics.playback_audio("", FakeTTS(interruptible=True))
     kpi.close_all()
 
     p = kpi.one(voice_metrics.EVENT_INTERACTION)

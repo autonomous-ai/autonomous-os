@@ -72,5 +72,5 @@ def test_hooks_never_raise_into_the_audio_path(monkeypatch):
     monkeypatch.setattr(voice_metrics, "playback_audio", boom)
     monkeypatch.setattr(voice_metrics, "playback_end", boom)
 
-    tts_hooks.on_playback_audio("run:x", "cached")   # must not raise
+    tts_hooks.on_playback_audio("run:x")   # must not raise
     tts_hooks.on_playback_done()
