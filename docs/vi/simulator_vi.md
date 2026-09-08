@@ -539,7 +539,7 @@ mounted=['audio','bluetooth','camera','emotion','led','music','scene',
   lạ, nhưng không có bound nào clamp góc khớp về một khoảng.
 - mount plan theo declaration
 - emotion preset, scene, music, bluetooth, system
-- `TrackerService`, volume, kho user/stranger
+- `TrackerService`, kho user/stranger
 
 ### Bị thay thế
 
@@ -551,6 +551,7 @@ mounted=['audio','bluetooth','camera','emotion','led','music','scene',
 | Sensing | `SensingService` + face recognition | `VirtualSensingService` — giữ presence state và contract của route; không gọi perception-service, không có face identity |
 | Board profile | đọc device tree | profile `sim` inert |
 | Đầu ra nhạc | `aplay` (ALSA) hoặc `paplay` (PulseAudio) | output device AudioToolbox của ffmpeg trên macOS |
+| Âm lượng loa | `amixer` (ALSA), hoặc sink PulseAudio khi đang định tuyến qua tai nghe BT | `virtual` — một giá trị phần trăm trong bộ nhớ; `host` — `osascript`, nên slider trên web và "volume up" đổi **âm lượng hệ thống của chính máy Mac** |
 | Thu âm cho voice enroll | `arecord` qua alias ALSA | PortAudio (`sounddevice`) trên đúng input device mà pipeline giọng nói đang thu; WAV mang theo sample rate của chính nó và recognizer tự resample |
 | GELF logging | bắn về log server | tắt |
 | GPIO button / touchpad | thật | bỏ qua (gate `_board_id != "sim"`) |

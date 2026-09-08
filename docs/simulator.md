@@ -545,7 +545,7 @@ mounted=['audio','bluetooth','camera','emotion','led','music','scene',
   unknown joint names, but no bound clamps a joint angle to a range.
 - the declaration-driven mount plan
 - emotion presets, scene, music, bluetooth, system routes
-- `TrackerService`, volume, user/stranger stores
+- `TrackerService`, user/stranger stores
 
 ### Substituted
 
@@ -557,6 +557,7 @@ mounted=['audio','bluetooth','camera','emotion','led','music','scene',
 | Sensing | `SensingService` + face recognition | `VirtualSensingService` — keeps presence state and the route contract; no perception-service calls, no face identity |
 | Board profile | reads the device tree | the inert `sim` profile |
 | Music output | `aplay` (ALSA) or `paplay` (PulseAudio) | ffmpeg's AudioToolbox output device on macOS |
+| Speaker volume | `amixer` (ALSA), or the PulseAudio sink while a BT headset is routed | `virtual` — an in-memory percent; `host` — `osascript`, so the web slider and "volume up" move the **Mac's own system volume** |
 | Voice enroll capture | `arecord` over the ALSA alias | PortAudio (`sounddevice`) on the same input device the voice pipeline records with; the WAV carries its own rate and the recognizer resamples |
 | GELF logging | ships to the log server | off |
 | GPIO button / touchpad | real | skipped (`_board_id != "sim"` gate) |

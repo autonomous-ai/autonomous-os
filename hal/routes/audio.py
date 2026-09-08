@@ -4,6 +4,7 @@ import io
 import os
 import re
 import subprocess
+import sys
 import wave
 from typing import Optional
 
@@ -145,6 +146,40 @@ def _bt_sink() -> Optional[str]:
         return None
 
 
+def _macos_volume() -> Optional[int]:
+    """Current CoreAudio output volume in percent, or None if it can't be read.
+
+    `output volume` answers `missing value` on a device that exposes no software
+    volume, and int() then raises -- caught here so the caller reports 503 rather
+    than 500."""
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", "output volume of (get volume settings)"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode != 0:
+            return None
+        return max(0, min(100, int(result.stdout.strip())))
+    except Exception:
+        return None
+
+
+def _macos_set_volume(pct: int) -> bool:
+    """Set the CoreAudio output volume. True when osascript accepted it."""
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", f"set volume output volume {pct}"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
 def _persist_volume(pct: int) -> None:
     """Persist the last-set volume so os-server restores it at next boot
     instead of resetting to the ROBOT.md startup_volume. Best-effort — a
@@ -179,6 +214,12 @@ def set_volume(req: VolumeRequest):
         from hal.drivers.bluetooth_manager import BluetoothManager
         if not BluetoothManager().set_pa_sink_volume(sink, pct):
             raise HTTPException(503, "Bluetooth sink volume change failed")
+        _persist_volume(pct)
+        return _vol_set_response(pct)
+    # On macOS, use CoreAudio for volume since ALSA/amixer is unavailable.
+    if sys.platform == "darwin":
+        if not _macos_set_volume(pct):
+            raise HTTPException(503, "macOS volume change failed (osascript)")
         _persist_volume(pct)
         return _vol_set_response(pct)
     controls, dev = _detect_playback_controls()
@@ -242,6 +283,11 @@ def get_volume():
         vol = BluetoothManager().pa_sink_volume(sink)
         if vol is not None:
             return _vol_response("bluetooth", vol)
+    if sys.platform == "darwin":
+        vol = _macos_volume()
+        if vol is None:
+            raise HTTPException(503, "macOS volume read failed (osascript)")
+        return _vol_response("coreaudio", vol)
     controls, dev = _detect_playback_controls()
     cmd_prefix = ["amixer", "-D", dev] if dev else ["amixer"]
     sorted_controls = sorted(
