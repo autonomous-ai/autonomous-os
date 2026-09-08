@@ -120,7 +120,7 @@ export function ScheduleEditor({
           onChange={(e) => set("kind", e.target.value as ScheduleKind)}
         >
           <option value="agent">Ask the agent</option>
-          <option value="speak">Speak this text</option>
+          <option value="speak">Speak this text (less cost)</option>
         </select>
       </div>
 
@@ -136,7 +136,7 @@ export function ScheduleEditor({
         />
         <div style={{ fontSize: 11, color: overSpeakLimit ? C.red : C.textDim, marginTop: 4 }}>
           {speaking
-            ? <>Spoken out loud word for word. No agent, no thinking time. <span style={{ fontVariantNumeric: "tabular-nums" }}>{spokenLength}/{MAX_SPEAK_CHARS}</span></>
+            ? <>Spoken out loud word for word. No agent turn, so it costs less than an agent task. <span style={{ fontVariantNumeric: "tabular-nums" }}>{spokenLength}/{MAX_SPEAK_CHARS}</span></>
             : "The agent reads this as a prompt and decides what to say or do."}
         </div>
       </div>
