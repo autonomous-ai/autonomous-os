@@ -77,6 +77,19 @@ không phải "âm đã rời driver".
 | `system_audio` | `acknowledgement_audio` | các câu cached/hệ thống khác |
 | `unknown` | — (không bao giờ là ack) | không ai nhận sở hữu lần phát này |
 
+**Waiting audio ĐƯỢC tính là phản hồi — đây là quyết định, không phải tình cờ.**
+Chỉ số này trả lời câu *"thiết bị có cho người dùng biết là đã nghe thấy
+không?"*, chứ không phải *"nó có trả lời không?"*. Câu filler ("một giây nhé")
+là một biên nhận thật: người dùng hết phải phân vân không biết đèn có nghe
+mình. Nên lượt nào có tiếng đầu tiên là filler thì tính là đã phản hồi, dù câu
+trả lời thật tới muộn hơn nhiều.
+
+Phải đọc kèm hệ quả: trên lamp hiện tại **mọi** lần phản hồi đo được đều là
+`waiting_audio`, nên chỉ số này đang cho biết đèn nói "tôi nghe rồi" nhanh cỡ
+nào, KHÔNG phải nó trả lời nhanh cỡ nào. `ack_modality` được lưu ở mọi dòng
+chính là để tách hai thứ đó — tách theo nó trước khi trích một con số, và coi
+tỉ lệ `waiting_audio` 100 % là một phát hiện về sản phẩm, không phải điểm tốt.
+
 **Phản hồi bằng hình ảnh KHÔNG được tính.** LED listening đúng là một tín hiệu
 người dùng cảm nhận được, nhưng thời điểm nó thật sự bật chưa được đo ở đây;
 tính vào mà không đo là thổi phồng KPI-1. Muốn thêm thì phải đo thật
@@ -110,6 +123,7 @@ gian phản hồi của thiết bị.
 | `failure_reason` | `dispatch_failed` — lệnh hợp lệ nhưng **không được phục vụ** (POST không tới nơi). Đây *không* phải exclusion: dòng vẫn eligible và bị tính vào KPI. Lệnh os-server tự trả lời (local intent: âm lượng, LED, giờ) **không** phải lỗi — câu trả lời mang interaction id làm owner và được tính là đã phản hồi. |
 | `ack_latency_ms` | Quan sát thô, giữ nguyên bất kể kết luận (`null` khi không có gì phát) |
 | `ack_modality`, `ack_kind` | Người dùng thực sự nghe thấy cái gì |
+| `answer_latency_ms`, `answer_kind` | Lúc nghe được **câu trả lời** (`agent_reply` / `native_realtime`), khác với biên nhận. `null` = đã báo nghe nhưng chưa từng trả lời trong cửa sổ — đó là phát hiện, không phải thiếu dữ liệu |
 | `ack_deadline_ms`, `observe_window_ms` | 3000 / 10000 — ngưỡng (tạm thời) đang áp dụng lúc ghi dòng đó |
 | `unknown_owner_playbacks` | Số lần phát không ai nhận — audio bị loại khỏi quyết định ack |
 | `amends_event_id`, `amendment_reason` | Có ở dòng **đính chính**: route hoặc exclusion tới sau khi verdict đã gửi |

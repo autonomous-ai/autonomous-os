@@ -80,6 +80,20 @@ is "audio was handed to the device", not "sound left the driver".
 | `system_audio` | `acknowledgement_audio` | any other cached/system phrase |
 | `unknown` | — (never an ack) | nobody claimed the speaker for this playback |
 
+**Waiting audio counts as an acknowledgement — decided, not accidental.**
+The question this metric answers is *"did the device let the user know it
+heard them?"*, not *"did it answer?"*. A filler ("one moment") is a real
+receipt: the user stops wondering whether they were heard. So a turn whose
+first sound is a filler is acknowledged, even if the answer itself arrives
+much later.
+
+The consequence has to be read with it: on lamp today **every** measured
+acknowledgement is `waiting_audio`, so this metric currently reports how fast
+the device says "I heard you", NOT how fast it answers. `ack_modality` is
+stored on every row precisely so the two can be told apart — split by it
+before quoting a number, and treat a 100 % `waiting_audio` split as a finding
+about the product, not as a good score.
+
 **Visual feedback is not counted.** The listening LED is a real receipt
 signal, but its actual activation is not instrumented here; counting it
 without measuring it would overstate KPI-1. Adding it means instrumenting
@@ -114,6 +128,7 @@ run in between and would otherwise be charged to the device's response time.
 | `failure_reason` | `dispatch_failed` — the command was valid and went **unserved** (the POST never landed). This is *not* an exclusion: the row stays eligible and counts against the KPI. A command os-server answered itself (local intent: volume, LED, time) is **not** a failure — its reply carries the interaction id as owner and counts as answered. |
 | `ack_latency_ms` | Raw observation, kept whatever the verdict (`null` when nothing played) |
 | `ack_modality`, `ack_kind` | What the user actually heard |
+| `answer_latency_ms`, `answer_kind` | When the **answer** was heard (`agent_reply` / `native_realtime`), as opposed to the receipt. `null` = acknowledged but never answered inside the window — a finding, not missing data |
 | `ack_deadline_ms`, `observe_window_ms` | 3000 / 10000 — the (provisional) thresholds in force when the row was written |
 | `unknown_owner_playbacks` | Playbacks nobody claimed so far — audio excluded from ack decisions |
 | `amends_event_id`, `amendment_reason` | Set on a **correction** row: routing or an exclusion arrived after the verdict was sent |
@@ -268,6 +283,20 @@ SELECT
        ELSE ROUND(100 * COUNTIF(outcome = 'acknowledged' AND ack_ms <= 3000) / COUNT(*), 2)
   END AS kpi1_pct
 FROM eligible;
+```
+
+```sql
+-- How long users actually wait for the ANSWER, not for the "one moment".
+-- Read next to KPI-1: a fast ack with a null answer means the device was
+-- polite, not useful.
+SELECT
+  COUNT(*)                                                   AS eligible,
+  COUNTIF(param(data.event_params, 'answer_latency_ms') IS NULL) AS acked_but_never_answered,
+  APPROX_QUANTILES(SAFE_CAST(param(data.event_params, 'answer_latency_ms') AS INT64), 100)[OFFSET(50)] AS median_answer_ms,
+  APPROX_QUANTILES(SAFE_CAST(param(data.event_params, 'answer_latency_ms') AS INT64), 100)[OFFSET(90)] AS p90_answer_ms
+FROM event_tracking
+WHERE event_name = 'voice_metrics_interaction'
+  AND param(data.event_params, 'eligible') = 'true';
 ```
 
 ```sql

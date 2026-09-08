@@ -616,3 +616,63 @@ def test_current_interaction_is_empty_once_the_turn_is_done(kpi):
     iid = voice_metrics.speech_end("silence_clock")
     voice_metrics.exclude(iid, voice_metrics.EXCL_REJECTED_NOISE)
     assert voice_metrics.current_interaction() == ""
+
+
+# --- Answer latency: the wait for the reply, not for the receipt -------------
+
+def test_answer_latency_is_measured_past_the_filler(kpi):
+    """A filler acknowledges the user, but it is not the answer. Both waits are
+    recorded so "we replied in 2s" cannot be claimed on the strength of a
+    'one moment'."""
+    iid = voice_metrics.speech_end("silence_clock")
+    voice_metrics.bind_run(iid, "run-x")
+    kpi.clock.advance(800)
+    _filler(kpi, f"run:{iid}")            # receipt
+    voice_metrics.playback_end()
+    kpi.clock.advance(4200)
+    _reply(kpi, "run:run-x")              # the actual answer
+    kpi.close_all()
+
+    p = kpi.one(voice_metrics.EVENT_INTERACTION)
+    assert p["ack_latency_ms"] == 800
+    assert p["ack_modality"] == "waiting_audio"
+    assert p["answer_latency_ms"] == 5000
+    assert p["answer_kind"] == voice_metrics.KIND_AGENT_REPLY
+
+
+def test_a_direct_answer_fills_both_numbers(kpi):
+    """No filler: the answer IS the receipt, so both are the same instant."""
+    iid = voice_metrics.speech_end("silence_clock")
+    kpi.clock.advance(1500)
+    _native(kpi, f"interaction:{iid}")
+    kpi.close_all()
+
+    p = kpi.one(voice_metrics.EVENT_INTERACTION)
+    assert p["ack_latency_ms"] == 1500
+    assert p["answer_latency_ms"] == 1500
+    assert p["answer_kind"] == voice_metrics.KIND_NATIVE_REALTIME
+
+
+def test_answer_latency_is_null_when_only_a_filler_was_heard(kpi):
+    """Acknowledged but never answered — null is the finding, not a gap."""
+    iid = voice_metrics.speech_end("silence_clock")
+    kpi.clock.advance(900)
+    _filler(kpi, f"run:{iid}")
+    kpi.close_all()
+
+    p = kpi.one(voice_metrics.EVENT_INTERACTION)
+    assert p["outcome"] == voice_metrics.OUTCOME_ACKED
+    assert p["answer_latency_ms"] is None
+    assert p["answer_kind"] == ""
+
+
+def test_system_audio_is_not_an_answer(kpi):
+    """A cached notice is a receipt, never the reply."""
+    iid = voice_metrics.speech_end("silence_clock")
+    kpi.clock.advance(500)
+    voice_metrics.playback_audio(f"run:{iid}", FakeTTS())   # system audio
+    kpi.close_all()
+
+    p = kpi.one(voice_metrics.EVENT_INTERACTION)
+    assert p["ack_modality"] == "acknowledgement_audio"
+    assert p["answer_latency_ms"] is None

@@ -91,6 +91,11 @@ _ACK_MODALITY = {
     KIND_SYSTEM_AUDIO: "acknowledgement_audio",
 }
 
+# Which playback kinds are the ANSWER rather than a receipt. Waiting audio and
+# system phrases tell the user they were heard; only these two tell them what
+# the device actually has to say.
+_ANSWER_KINDS = (KIND_AGENT_REPLY, KIND_NATIVE_REALTIME)
+
 # --- Outcomes ---------------------------------------------------------------
 OUTCOME_ACKED = "acknowledged"
 OUTCOME_NO_ACK = "no_ack"
@@ -119,6 +124,7 @@ class _Interaction:
         "run_id", "ack_latency_ms", "ack_modality", "ack_kind",
         "exclusion_reason", "failure_reason", "reported", "report_event_id",
         "timer", "life_timer", "closed", "last_activity",
+        "answer_latency_ms", "answer_kind",
     )
 
     def __init__(self, iid: str, speech_end: float, method: str):
@@ -131,6 +137,12 @@ class _Interaction:
         self.ack_latency_ms = None
         self.ack_modality = ""
         self.ack_kind = ""
+        # When the ANSWER itself was heard, as opposed to the receipt. A
+        # filler counts as an acknowledgement (a deliberate decision, see
+        # docs/voice-metrics.md), so ack_latency_ms alone cannot say how long
+        # the user waited for the actual reply — this can.
+        self.answer_latency_ms = None
+        self.answer_kind = ""
         self.exclusion_reason = ""
         # A failure that is NOT an exclusion: the request was valid and went
         # unserved. Stays in the denominator (see _interaction_params).
@@ -365,6 +377,13 @@ def playback_audio(owner: str, tts=None) -> None:
                 logger.info(
                     "[voice-metrics] ack (interaction=%s kind=%s latency_ms=%d)",
                     iid, kind, it.ack_latency_ms,
+                )
+            if it is not None and it.answer_latency_ms is None and kind in _ANSWER_KINDS:
+                it.answer_latency_ms = _ms(started - it.speech_end)
+                it.answer_kind = kind
+                logger.info(
+                    "[voice-metrics] answer (interaction=%s kind=%s latency_ms=%d)",
+                    iid, kind, it.answer_latency_ms,
                 )
         _observe_playback(kind, iid, started, None)
 
@@ -663,6 +682,11 @@ def _interaction_params(it: "_Interaction") -> dict:
         "ack_latency_ms": it.ack_latency_ms,
         "ack_modality": it.ack_modality,
         "ack_kind": it.ack_kind,
+        # The wait for the real reply, independent of the receipt above. null
+        # when the answer had not been heard by the end of the window — which
+        # is itself the finding, not missing data.
+        "answer_latency_ms": it.answer_latency_ms,
+        "answer_kind": it.answer_kind,
         "ack_deadline_ms": ACK_DEADLINE_MS,
         "observe_window_ms": ACK_OBSERVE_WINDOW_MS,
         # Coverage: playbacks nobody claimed. A climbing count means some
