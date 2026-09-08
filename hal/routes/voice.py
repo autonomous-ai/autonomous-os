@@ -16,7 +16,7 @@ from fastapi.responses import StreamingResponse
 
 import hal.app_state as state
 from hal.telemetry import tts_hooks
-from hal.config import AUDIO_INPUT_ALSA, TTS_SPEED, TTS_VOICE, TTS_INSTRUCTIONS
+from hal.config import AUDIO_INPUT_ALSA, get_tts_speed, TTS_VOICE, TTS_INSTRUCTIONS
 from hal.models import (
     RealtimeHistoryRequest,
     SpeakRequest,
@@ -105,7 +105,7 @@ def start_voice(req: VoiceStartRequest):
                 numpy_module=np,
                 output_device=state.audio_output_device,
                 voice=voice,
-                speed=TTS_SPEED,
+                speed=get_tts_speed(),
                 instructions=instructions,
                 on_speak_start=state._on_tts_speak_start,
                 on_speak_end=state._on_tts_speak_end,

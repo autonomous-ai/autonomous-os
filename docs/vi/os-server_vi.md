@@ -346,6 +346,15 @@ Cần sensing có camera (InsightFace). Mặc định ảnh người đã đăng
 | POST | `/voice/speak` | TTS — chuyển text thành giọng nói. Body fields: `text`, `voice?`, `interruptible?`, `provider?`, `tts_api_key?`, `tts_base_url?`, `cached?` (dùng WAV cache, render+save khi miss), `prerender?` (render+save không play — warmup lúc boot) |
 | GET | `/voice/status` | voice_available, voice_listening, tts_available, tts_speaking |
 
+### Tốc độ TTS
+
+`GET /api/device/config` trả `tts_speed` hiệu lực; `PUT /api/device/config`
+nhận `{"tts_speed":1.2}`. Field tùy chọn nhận `0.25–4.0`; bỏ qua thì giữ
+nguyên giá trị đã lưu. Config đã lưu ưu tiên hơn `HAL_TTS_SPEED`, giữ fallback
+môi trường và mặc định cũ `1.3`. HAL đọc config khi boot và `/voice/start`
+qua `get_tts_speed()`; đổi tốc độ được đẩy live qua `/voice/tts/config {speed}`.
+Backend ElevenLabs vẫn giới hạn giá trị gửi đi trong `0.7–1.2`.
+
 ### Piper — TTS chạy trên thiết bị
 
 Provider TTS thứ ba bên cạnh `openai` và `elevenlabs`, chọn bằng
@@ -415,12 +424,12 @@ từng request, đường dẫn model phân giải theo từng câu nói, nên g
 là liệt kê và nói được ngay — đã đo: tải xong lúc 18:32:29 trên một HAL khởi
 động lúc 18:31:59, tới 18:33:11 liệt kê và nói được mà không restart lần nào.
 Việc apply một giọng cũng **không** còn restart HAL. `POST /voice/tts/config`
-đặt provider, voice, key và base URL thẳng vào TTS service đang chạy, mà service
-đọc cả bốn thứ đó theo từng câu nói, nên thay đổi ăn ngay từ câu kế tiếp.
+đặt provider, voice, speed, key và base URL thẳng vào TTS service đang chạy, mà service
+đọc các giá trị đó theo từng câu nói, nên thay đổi ăn ngay từ câu kế tiếp.
 
 Những câu máy nói về chính nó — restart, shutdown, reboot, sleep — được
-**dựng sẵn vào cache TTS**, lúc boot và mỗi khi `/voice/tts/config` đổi provider
-hoặc giọng (cache key gồm cả hai, nên đổi giọng là mất sạch clip cũ). Chúng phát
+**dựng sẵn vào cache TTS**, lúc boot và mỗi khi `/voice/tts/config` đổi provider,
+giọng hoặc speed (đều nằm trong cache key, nên thay đổi làm mất hiệu lực clip tương ứng). Chúng phát
 đúng vào những lúc tệ nhất: câu báo restart nói trong lúc HAL đang tắt, câu chào
 boot nói lúc mọi service khác còn đang lên. Với Piper, cache miss ở đó nghĩa là
 nạp model 63 MB trên một CPU đang nghẹt — đo trên sun60iw2 8 nhân, riêng phần
@@ -480,7 +489,7 @@ backend ElevenLabs nối thêm `/elevenlabs` vào bất kỳ base nào được 
 
 `device/config_update.go` tách cái `voiceSnapshot` cũ làm hai: `bootSnapshot`
 (key và URL của LLM, STT — HAL đọc thật lúc import, vẫn đáng restart) và
-`ttsSnapshot` (provider, voice, key và URL của TTS — đẩy thẳng vào lúc chạy).
+`ttsSnapshot` (provider, voice, speed, key và URL của TTS — đẩy thẳng vào lúc chạy).
 Đổi giọng là thao tác lưu thường gặp nhất, mà restart vì nó thì micro, loa và
 wake word chết theo mười tới mười lăm giây; mọi cú bấm rơi vào cửa sổ đó đều
 mất, vì HAL không nghe. Nếu đẩy live thất bại, os-server quay về restart — một

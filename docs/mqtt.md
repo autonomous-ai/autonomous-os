@@ -325,11 +325,18 @@ carries kind-specific fields. Every kind replies on fd_channel with the same sha
 the standard device/version metadata plus `kind`, `status` (`success|failure`),
 optional `error`, and an optional `data` payload.
 
+`tts.set` accepts optional `speed` in `0.25–4.0`, for example,
+`{"cmd":"data","kind":"tts.set","data":{"speed":1.2}}`. Omitting it
+preserves saved speed; without one, `HAL_TTS_SPEED` applies (default `1.3`).
+The command acknowledges `starting` then `success` or `failure`, saving and
+reapplying HAL settings even when unchanged. The `info` uplink includes effective
+`tts_speed`. ElevenLabs clamps the outgoing speed to `0.7–1.2`.
+
 **Receive:** `{"cmd": "data", "kind": "<kind>", "data": { ... }}`
 
 | Kind | Purpose | `data` fields |
 |------|---------|---------------|
-| `tts.set` | Persist TTS voice/provider/language config | `provider`, `voice`, `language` |
+| `tts.set` | Persist TTS voice/provider/language/speed config | `provider`, `voice`, `language`, optional `speed` |
 | `tts.preview` | One-shot TTS preview (no config write) | `text` (required), optional `provider`/`voice`/`language` |
 | `wakeword.gate` | Set the top-level wake-word gate (async; acks `starting`) | `enabled` (required boolean) |
 | `timezone.set` | Apply the device's IANA timezone (async; acks `starting`) | `timezone` (required, e.g. `Asia/Ho_Chi_Minh`) |
