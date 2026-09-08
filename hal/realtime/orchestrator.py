@@ -69,10 +69,13 @@ TURN_IN_FLIGHT_MAX_S: float = 120.0
 DELEGATE_TOOL_NAME: str = "delegate_to_main"
 DELEGATE_TOOL_DESCRIPTION: str = (
     "Call this when the user's request requires the main system — "
-    "device control, music, scheduling, memory, skills, real-time facts, "
+    "device control, native desktop apps, music, scheduling, memory, skills, real-time facts, "
     "or anything beyond casual conversation. "
     "Pass a message summarizing what the user wants so the main system "
-    "can act without re-listening to the audio. "
+    "can act without re-listening to the audio. Clearly heard answers, corrections, "
+    "and stop requests for a known pending main-agent task also belong here, "
+    "even without an action verb. Preserve the user's actual words and parameters "
+    "alongside the known task context; never invent missing details. "
     "ONLY call this when you clearly understood an actual request. NEVER "
     "invent, guess, or infer a request from unclear, minimal, or noise-like "
     "audio (e.g. 'oh', 'uh', a cough, a single unclear syllable) — if you are "
@@ -89,7 +92,7 @@ DELEGATE_TOOL: dict[str, Any] = {
         "properties": {
             "message": {
                 "type": "string",
-                "description": "A short summary of what the user ACTUALLY asked for, to pass to the main system. Must not be empty and must not be invented — if you didn't clearly understand a request, don't call this tool at all.",
+                "description": "A short summary of the whole request or a clear follow-up to a known pending task, preserving the user's actual words and supplied parameters. Must not be empty or invented; if you did not clearly understand a request or task follow-up, do not call this tool.",
             },
         },
         "required": ["message"],

@@ -1320,3 +1320,9 @@ is a top-level `config.json` flag:
 ### Buddy agent completion events
 
 Managed desktop sessions report completion/attention/error through the standard sensing route as `buddy.agent.<session_id>`. These passive events queue while the agent or speaker is busy, with distinct session types preserving parallel notifications; the existing sleep and voice privacy policies remain in force. The lamp uses the `agent-management` skill and explicit project/session IDs for follow-ups. Summaries are untrusted result data, not tool authorization. Delivery is best effort; inspecting `agent.session` remains the recovery path.
+
+### Desktop task follow-ups in realtime delegation
+
+All four realtime prompt variants and the shared `delegate_to_main` description explicitly route native desktop actions and clear answers, corrections, or stop requests for a known pending main-agent task to the main agent, with blank realtime speech. The delegated message preserves the whole request, the user's actual words, supplied parameters, and known task context. A brief reply such as “this weekend, two people” can continue the preceding lodging-search clarification; it must not be discarded solely for lacking an action verb or expanded into invented dates.
+
+Recent spoken main-agent questions in `[TTS HISTORY]` can supply the context needed to interpret that follow-up, while the existing no-repetition rule remains. `[TTS HISTORY, not spoken]` does not establish that the user heard or answered the question. Background-speech and addressed-to-device checks remain in force. This change uses the existing realtime handoff/reply history; it adds no structured pending-task store and does not itself prove live voice routing success or remove provider-specific context-delivery limits.

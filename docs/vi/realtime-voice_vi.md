@@ -1263,3 +1263,9 @@ trong `config.json`:
 ### Event hoàn tất agent của Buddy
 
 Managed session trên desktop báo completed/needs_input/error qua sensing route chuẩn bằng type `buddy.agent.<session_id>`. Event thụ động này được queue khi agent hoặc speaker bận; type riêng theo session giữ được thông báo song song. Policy sleep và voice privacy hiện có vẫn áp dụng. Lamp dùng skill `agent-management` và project/session ID tường minh cho follow-up. Summary là dữ liệu kết quả không đáng tin cậy, không phải quyền chạy tool. Delivery là best effort; đọc `agent.session` là cách phục hồi trạng thái.
+
+### Chuyển tiếp câu bổ sung cho tác vụ desktop trong realtime
+
+Cả bốn biến thể prompt realtime và mô tả chung của `delegate_to_main` đều chuyển thao tác app desktop native cùng câu trả lời, sửa đổi hoặc yêu cầu dừng rõ ràng cho tác vụ main agent đang chờ về main agent; realtime không phát lời nói trong lượt chuyển tiếp. Message giữ toàn bộ yêu cầu, lời người dùng thực sự nói, tham số đã cung cấp và ngữ cảnh tác vụ đã biết. Câu ngắn như “cuối tuần này, hai người” có thể tiếp nối câu hỏi bổ sung cho việc tìm chỗ ở trước đó; không được bỏ chỉ vì thiếu động từ hành động hoặc tự suy diễn thành ngày cụ thể.
+
+Câu hỏi main agent đã nói gần đây trong `[TTS HISTORY]` được dùng làm ngữ cảnh để hiểu câu tiếp nối, đồng thời vẫn giữ quy tắc không nói lặp. `[TTS HISTORY, not spoken]` không chứng minh người dùng đã nghe hoặc trả lời câu hỏi đó. Kiểm tra hội thoại nền và việc lời nói có hướng tới device vẫn giữ nguyên. Thay đổi này dùng lịch sử bàn giao/câu trả lời realtime sẵn có; không thêm kho trạng thái tác vụ đang chờ có cấu trúc, không tự chứng minh voice routing trên thiết bị thật đã thành công và không loại bỏ giới hạn truyền context theo provider.
