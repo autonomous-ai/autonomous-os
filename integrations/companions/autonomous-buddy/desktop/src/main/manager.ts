@@ -566,6 +566,7 @@ export class Manager {
             session.providerSessionId = event.sessionId
           }
           if (run.failed) return
+          if (event.prompt && session.title === 'New session') session.title = event.prompt
           run.ready = event.type === 'ready' || event.type === 'completed'
           if (event.type === 'working') run.manualInputDirty = false
           if (event.summary) this.append(session, event.type === 'error' ? 'error' : 'result', event.summary)

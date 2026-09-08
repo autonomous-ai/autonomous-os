@@ -160,3 +160,18 @@ it('reserves paste delivery and withholds Enter when manual input or exit races 
   await expect(interrupted).rejects.toThrow('not submitted')
   expect(f.writes).not.toContain('\r')
 })
+
+it('names interactive tasks from the first prompt hook while preserving renamed titles', async () => {
+  const f = await fixture()
+  const session = await f.manager.createSession({ projectId: f.project.id, worktreePath: f.project.path, provider: 'codex' })
+  const hook = f.calls[0].onHook!
+  hook({ type: 'working', sessionId: 'title-thread', prompt: 'Review terminal tabs' })
+  expect((await f.manager.session(session.id)).session.title).toBe('Review terminal tabs')
+  hook({ type: 'working', sessionId: 'title-thread', prompt: 'Follow-up' })
+  expect((await f.manager.session(session.id)).session.title).toBe('Review terminal tabs')
+  await f.manager.renameSession(session.id, 'My custom task')
+  hook({ type: 'working', sessionId: 'title-thread', prompt: 'Another follow-up' })
+  expect((await f.manager.session(session.id)).session.title).toBe('My custom task')
+  const restored = new Manager(f.storage, () => {}, f.options); managers.push(restored)
+  expect((await restored.session(session.id)).session.title).toBe('My custom task')
+})

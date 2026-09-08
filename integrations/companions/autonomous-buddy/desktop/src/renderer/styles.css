@@ -2025,3 +2025,12 @@ select { color: var(--text-primary); background: var(--surface-panel); border: 1
 option { color: var(--text-primary); background: var(--surface-panel); }
 code, pre, .file-preview, .transcript-block pre { font-family: var(--font-mono); }
 :root[data-theme='light'] .terminal-host { background: #ffffff; }
+
+/* Provider labels remain readable when only the task title is ellipsized. */
+.session-tab { max-width: 300px; }
+.agent-provider-icon { flex-shrink: 0; }
+.agent-provider-icon.claude { color: var(--text-warning, #c88a64); }
+.agent-provider-name { flex-shrink: 0; font-size: 10px; font-weight: 600; }
+.agent-task-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-tab .agent-provider-name, .session-row > .agent-provider-name { overflow: visible; flex: 0 0 auto; }
+.session-pane-identity { display: flex; align-items: center; gap: 7px; min-width: 0; }

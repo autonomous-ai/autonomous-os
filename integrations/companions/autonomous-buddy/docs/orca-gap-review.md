@@ -127,3 +127,17 @@ Orca dependencies were not installed and Orca was not built or executed.
 [license]: https://github.com/stablyai/orca/blob/ba5f708290b72012132fb23a6f016b8fd5601718/LICENSE#L1
 [notices]: https://github.com/stablyai/orca/blob/ba5f708290b72012132fb23a6f016b8fd5601718/docs/site/THIRD_PARTY_NOTICES.md#L3
 [package]: https://github.com/stablyai/orca/blob/ba5f708290b72012132fb23a6f016b8fd5601718/package.json#L1
+
+## Follow-up source audit: branch review and provider identity
+
+Reviewed the actual Orca checkout at `ba5f708290b72012132fb23a6f016b8fd5601718`, beyond screenshot styling. This update adds merge-base-to-HEAD committed file review and explicit provider identity beside each task title. Initial prompt hooks name otherwise unnamed sessions. These are targeted corrections, not full Orca parity.
+
+Remaining workflow gaps, in priority order:
+
+- Per-worktree/project base selection and upstream comparison: `src/renderer/src/components/right-sidebar/source-control/sync/base-ref-resolution.ts`. Buddy currently infers a locally available default base.
+- Multi-file “View all”, staged/unstaged/untracked groups and list/tree review: `source-control/listing/branch-section.tsx` and `uncommitted-sections.tsx`. Buddy opens one committed file at a time.
+- Aggregate tab activity across split panes and stale-hook handling: `tab-bar/terminal-tab-activity-status.ts`. Buddy shows the tab session's state.
+- Tab drag reorder, pin and bulk close: `tab-bar/SortableTab.tsx`, `terminal/terminal-tab-bulk-actions.ts`.
+- Broader Appearance/font/language/Ghostty import and provider launch configuration: `settings/AppearanceInterfaceSection.tsx`, `TerminalAppearanceSection.tsx`. Buddy currently supports Codex, Claude Code and shell sessions.
+
+Current validation adds temporary-repository divergent-base/dirty-index/rename/binary cases, UI committed-file preview and visible provider labels in the real packaged terminal fixture.

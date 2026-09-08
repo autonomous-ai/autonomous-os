@@ -6,6 +6,7 @@ export interface InteractiveHookEvent {
   type: 'ready' | 'working' | 'completed' | 'needs_input' | 'error'
   sessionId?: string
   summary?: string
+  prompt?: string
 }
 export function normalizeInteractiveHook(value: unknown): InteractiveHookEvent | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return
@@ -23,7 +24,9 @@ export function normalizeInteractiveHook(value: unknown): InteractiveHookEvent |
   else return
   const sessionId = typeof data.session_id === 'string' && /^[a-zA-Z0-9_-]{1,512}$/.test(data.session_id) ? data.session_id : undefined
   const summary = typeof data.last_assistant_message === 'string' ? data.last_assistant_message.slice(0, 4000) : undefined
-  return { type, ...(sessionId ? { sessionId } : {}), ...(summary ? { summary } : {}) }
+  const prompt = name === 'UserPromptSubmit' && typeof data.prompt === 'string'
+    ? [...data.prompt].map((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127 ? ' ' : character).join('').replace(/\s+/g, ' ').trim().slice(0, 70) : undefined
+  return { type, ...(prompt ? { prompt } : {}), ...(sessionId ? { sessionId } : {}), ...(summary ? { summary } : {}) }
 }
 const shellQuote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'"
 
@@ -39,7 +42,7 @@ export function createInteractiveHooks(options: {
   const eventsPath = join(directory, 'events.jsonl')
   writeFileSync(eventsPath, '', { mode: 0o600 })
   // Bounded hook input and normalized output only; provider stdout remains its real TUI.
-  writeFileSync(script, `const fs=require('node:fs');let input='',bytes=0;process.stdin.setEncoding('utf8');process.stdin.on('data',chunk=>{bytes+=Buffer.byteLength(chunk);if(bytes>1048576)process.exit(0);input+=chunk});process.stdin.on('end',()=>{try{const v=JSON.parse(input);const out={};for(const k of ['hook_event_name','session_id','agent_id','tool_name','trigger','last_assistant_message'])if(typeof v[k]==='string')out[k]=v[k].slice(0,4000);fs.appendFileSync(process.argv[2],JSON.stringify(out)+'\\n',{mode:0o600})}catch{}});`, { mode: 0o600 })
+  writeFileSync(script, `const fs=require('node:fs');let input='',bytes=0;process.stdin.setEncoding('utf8');process.stdin.on('data',chunk=>{bytes+=Buffer.byteLength(chunk);if(bytes>1048576)process.exit(0);input+=chunk});process.stdin.on('end',()=>{try{const v=JSON.parse(input);const out={};for(const k of ['hook_event_name','session_id','agent_id','tool_name','trigger','last_assistant_message','prompt'])if(typeof v[k]==='string')out[k]=v[k].slice(0,4000);fs.appendFileSync(process.argv[2],JSON.stringify(out)+'\\n',{mode:0o600})}catch{}});`, { mode: 0o600 })
   const command = `ELECTRON_RUN_AS_NODE=1 ${shellQuote(process.execPath)} ${shellQuote(script)} ${shellQuote(eventsPath)}`
   const names = ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'PostToolUse', 'PermissionRequest', 'Stop', ...(options.provider === 'claude' ? ['StopFailure', 'PostCompact'] : [])]
   const hooks = Object.fromEntries(names.map((name) => [name, [{ hooks: [{ type: 'command', command, timeout: 3 }] }]]))

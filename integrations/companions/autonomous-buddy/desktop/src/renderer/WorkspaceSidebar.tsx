@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  Bot,
   Check,
   ChevronDown,
   ChevronRight,
@@ -17,6 +16,7 @@ import {
   X,
 } from 'lucide-react'
 import { createPortal } from 'react-dom'
+import { providerName, SessionIdentity } from './SessionIdentity'
 import type { Project, Session, Snapshot, Worktree, WorkspaceMeta } from '../shared/types'
 
 type Target = { project: Project; tree: Worktree; session?: Session }
@@ -34,7 +34,6 @@ type Dialog = {
   target: Target
 }
 const statusLabels = { active: 'Active', review: 'In review', done: 'Done' }
-const providerLabels = { codex: 'Codex', claude: 'Claude Code', terminal: 'Terminal' }
 const sessionLabels = {
   idle: 'Ready',
   running: 'Working',
@@ -337,11 +336,10 @@ export function WorkspaceSidebar({
                               <button
                                 className="session-row"
                                 onClick={() => onChooseSession(session)}
-                                title={`${providerLabels[session.provider]} · ${sessionLabels[session.status]}`}
+                                title={`${providerName(session.provider)} · ${sessionLabels[session.status]}`}
                               >
                                 <span className={`status-dot ${session.status}`} />
-                                {session.provider === 'terminal' ? <Terminal size={12} /> : <Bot size={12} />}
-                                <span>{session.title}</span>
+                                <SessionIdentity provider={session.provider} title={session.title} />
                                 {session.unread && <i className="unread" />}
                               </button>
                               <button

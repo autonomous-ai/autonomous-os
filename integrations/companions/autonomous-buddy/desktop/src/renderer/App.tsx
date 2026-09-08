@@ -26,8 +26,8 @@ import { ProviderUsageBar } from './ProviderUsageBar'
 import { SettingsPage } from './SettingsPage'
 import { useAppearance } from './useAppearance'
 
-export const providerName = (provider: Provider) =>
-  ({ codex: 'Codex', claude: 'Claude Code', terminal: 'Terminal' })[provider]
+export { providerName } from './SessionIdentity'
+import { providerName, SessionIdentity } from './SessionIdentity'
 export const statusName = (session: Session) =>
   session.provider === 'terminal' && session.status === 'running'
     ? 'Shell active'
@@ -558,16 +558,15 @@ export function App() {
                     setRenameTab(session)
                     setRenameTitle(session.title)
                   }}
-                  title={`${session.title} · Double-click to rename`}
+                  title={`${providerName(session.provider)} · ${session.title} · ${statusName(session)} · Double-click to rename`}
                 >
                   <StatusDot session={session} />
-                  {session.provider === 'terminal' ? <Terminal size={13} /> : <Bot size={13} />}
-                  <span>{session.title}</span>
+                  <SessionIdentity provider={session.provider} title={session.title} />
                 </button>
                 <button
                   className="icon-button tab-close"
                   aria-label={`Close tab ${session.title}`}
-                  title="Close tab (⌘W). The session keeps running; reopen from the sidebar."
+                  title="Close session (⌘W), stop its process, and remove it from the workspace."
                   onClick={() => closeTab(session.id)}
                 >
                   <X size={12} />

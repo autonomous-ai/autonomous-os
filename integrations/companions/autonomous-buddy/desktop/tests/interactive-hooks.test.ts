@@ -9,6 +9,8 @@ describe('session-local interactive hooks', () => {
   it('normalizes lifecycle without treating children or unknown events as completion', () => {
     expect(normalizeInteractiveHook({ hook_event_name: 'SessionStart', session_id: 'uuid-1' })).toEqual({ type: 'ready', sessionId: 'uuid-1' })
     expect(normalizeInteractiveHook({ hook_event_name: 'UserPromptSubmit' })?.type).toBe('working')
+    expect(normalizeInteractiveHook({ hook_event_name: 'UserPromptSubmit', prompt: ' Fix\n  tab identity\u001b ' })?.prompt).toBe('Fix tab identity')
+    expect(normalizeInteractiveHook({ hook_event_name: 'PreToolUse', prompt: 'ignore tool text' })?.prompt).toBeUndefined()
     expect(normalizeInteractiveHook({ hook_event_name: 'PreToolUse', tool_name: 'AskUserQuestion' })?.type).toBe('needs_input')
     expect(normalizeInteractiveHook({ hook_event_name: 'StopFailure' })?.type).toBe('error')
     expect(normalizeInteractiveHook({ hook_event_name: 'Stop', agent_id: 'child' })).toBeUndefined()

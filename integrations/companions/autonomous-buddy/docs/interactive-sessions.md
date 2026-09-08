@@ -1,5 +1,7 @@
 # Interactive agent sessions
 
+Tabs, sidebar session rows, and split pane headings show a distinct icon plus an always-visible provider label (Codex, Claude Code, or Terminal) before the task title. Only the task title truncates; the tab tooltip includes provider, full title, and turn status. For an unnamed interactive agent, the first lead `UserPromptSubmit` hook supplies the task title (normalized to 70 characters); follow-ups never replace an existing or user-renamed title. If the provider omits prompt text, the title remains New session while its provider stays visible. This uses provider events, not guesses from terminal keystrokes.
+
 New Codex, Claude Code, and Terminal sessions created in the desktop UI start an interactive process immediately in the selected project/worktree. Buddy displays the real CLI through xterm and `node-pty`: keyboard input, terminal output, resizing, and focus belong to that exact session. Interactive sessions have no Buddy chat welcome screen or prompt composer. A single pane header contains the session title, current status, Stop/Resume control, split controls, and close button.
 
 ## Lifecycle and history

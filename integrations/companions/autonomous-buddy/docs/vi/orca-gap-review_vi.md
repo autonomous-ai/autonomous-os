@@ -118,3 +118,17 @@ Buddy; không cài dependency, build hay chạy Orca.
 [license]: https://github.com/stablyai/orca/blob/ba5f708290b72012132fb23a6f016b8fd5601718/LICENSE#L1
 [notices]: https://github.com/stablyai/orca/blob/ba5f708290b72012132fb23a6f016b8fd5601718/docs/site/THIRD_PARTY_NOTICES.md#L3
 [package]: https://github.com/stablyai/orca/blob/ba5f708290b72012132fb23a6f016b8fd5601718/package.json#L1
+
+## Rà soát source bổ sung: review nhánh và nhận diện provider
+
+Đối chiếu checkout Orca thật tại `ba5f708290b72012132fb23a6f016b8fd5601718`, không chỉ hình thức trong screenshot. Đợt này thêm review file đã commit từ merge-base đến HEAD và tên provider bên cạnh tên task. Hook prompt đầu đặt tên cho session chưa có tên. Đây là các sửa đổi cụ thể, chưa tương đương toàn bộ Orca.
+
+Khoảng thiếu còn lại, theo ưu tiên:
+
+- Chọn base theo worktree/project và so sánh upstream: `src/renderer/src/components/right-sidebar/source-control/sync/base-ref-resolution.ts`. Buddy hiện suy ra nhánh gốc từ ref local có sẵn.
+- “View all” nhiều file, nhóm staged/unstaged/untracked và chế độ list/tree: `source-control/listing/branch-section.tsx`, `uncommitted-sections.tsx`. Buddy mở từng file đã commit.
+- Tổng hợp trạng thái tab từ các split pane và loại hook cũ: `tab-bar/terminal-tab-activity-status.ts`. Buddy hiển thị trạng thái session của tab.
+- Kéo sắp xếp tab, pin và đóng nhiều tab: `tab-bar/SortableTab.tsx`, `terminal/terminal-tab-bulk-actions.ts`.
+- Appearance/font/ngôn ngữ/import Ghostty và cấu hình provider đầy đủ hơn: `settings/AppearanceInterfaceSection.tsx`, `TerminalAppearanceSection.tsx`. Buddy hiện hỗ trợ Codex, Claude Code và shell.
+
+Validation bổ sung repository tạm với nhánh gốc phân kỳ, index/working tree đang sửa, rename/binary; mở diff file đã commit từ UI và nhận diện provider trên terminal fixture của app đóng gói thật.

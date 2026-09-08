@@ -1,6 +1,7 @@
 import { useEffect, useImperativeHandle, useRef, useState, type Ref } from 'react'
 import { Columns2, Rows2, X } from 'lucide-react'
 import type { Session } from '../shared/types'
+import { SessionIdentity } from './SessionIdentity'
 import { InteractiveSessionControls, SessionView } from './SessionView'
 import {
   closePane,
@@ -151,7 +152,7 @@ export function SessionWorkspace({
         onPointerDown={() => setFocused(node.sessionId)}
       >
         <div className="session-pane-heading">
-          <span>{leafSession?.title ?? 'Session unavailable'}</span>
+          <span className="session-pane-identity">{leafSession ? <SessionIdentity provider={leafSession.provider} title={leafSession.title} /> : 'Session unavailable'}</span>
           <div>
             {leafSession && (leafSession.provider === 'terminal' || leafSession.mode === 'interactive') && (
               <InteractiveSessionControls session={leafSession} onError={onError} />

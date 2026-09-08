@@ -1,5 +1,7 @@
 # Session agent interactive
 
+Tab, dòng session ở sidebar và tiêu đề pane chia đôi hiển thị icon riêng kèm tên provider luôn thấy được (Codex, Claude Code hoặc Terminal) trước tên task. Chỉ tên task bị rút gọn; tooltip của tab có provider, tên đầy đủ và trạng thái lượt chạy. Với agent tương tác chưa đặt tên, hook `UserPromptSubmit` đầu tiên của agent chính cung cấp tên task (chuẩn hóa tối đa 70 ký tự); follow-up không thay tên đã có hoặc tên user tự đặt. Nếu provider không gửi nội dung prompt, tên vẫn là New session nhưng luôn hiển thị provider. Cơ chế dùng sự kiện provider, không đoán từ phím gõ terminal.
+
 Session Codex, Claude Code và Terminal mới tạo từ UI desktop khởi chạy tiến trình interactive ngay trong project/worktree đã chọn. Buddy hiển thị CLI thật qua xterm và `node-pty`: phím nhập, output terminal, resize và focus thuộc đúng session đó. Session interactive không có màn chào chat hay ô prompt riêng của Buddy. Một thanh đầu pane duy nhất chứa tên session, trạng thái hiện tại, Stop/Resume, nút chia pane và nút đóng.
 
 ## Vòng đời và lịch sử
