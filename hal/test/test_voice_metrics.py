@@ -84,10 +84,12 @@ def kpi(monkeypatch):
 
 
 class FakeTTS:
-    def __init__(self, realtime_feedback=False, interruptible=False, native_mode=False):
+    def __init__(self, realtime_feedback=False, interruptible=False, native_mode=False,
+                 realtime_reply=False):
         self.realtime_feedback = realtime_feedback
         self.interruptible = interruptible
         self.native_mode = native_mode
+        self.realtime_reply = realtime_reply
 
 
 def _reply(kpi, owner):
@@ -538,12 +540,14 @@ def test_realtime_text_reply_is_attributed_to_its_interaction(kpi):
     speech with the same interaction id."""
     iid = voice_metrics.speech_end("silence_clock")
     kpi.clock.advance(900)
-    _reply(kpi, f"run:{iid}")
+    voice_metrics.playback_audio(f"run:{iid}", FakeTTS(realtime_reply=True))
     kpi.close_all()
 
     p = kpi.one(voice_metrics.EVENT_INTERACTION)
-    assert p["ack_modality"] == "spoken_answer"
+    assert p["ack_modality"] == "spoken_answer_realtime"
     assert p["ack_latency_ms"] == 900
+    assert p["answer_latency_ms"] == 900
+    assert p["answer_kind"] == voice_metrics.KIND_REALTIME_TTS
 
 
 # --- Transport ---------------------------------------------------------------

@@ -1979,6 +1979,12 @@ class VoiceService:
             # the transcript is assembled. Everything downstream carries this
             # id (see hal/telemetry/voice_metrics.py).
             interaction_id = voice_metrics.speech_end(endpoint_method, at=endpoint_ts)
+            logger.info(
+                "Session END — buffer frames=%d bytes=%d duration=%.2fs "
+                "transcript=%r interaction_id=%s",
+                len(audio_buffer), sum(len(b) for b in audio_buffer), buf_duration,
+                combined or "(empty)", interaction_id,
+            )
             if (
                 hal_config.WAKEWORD_ENABLED
                 and wake_word_detected.is_set()
