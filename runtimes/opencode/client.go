@@ -3,6 +3,7 @@ package opencode
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -17,6 +18,8 @@ import (
 	"go.autonomous.ai/os/system/lib/i18n"
 	"go.autonomous.ai/os/system/statusled"
 )
+
+var errDisconnectedBeforeSend = errors.New("opencode websocket not connected")
 
 const (
 	// reconnectBackoff is the fixed wait between reconnect attempts. OpenCode is
@@ -84,6 +87,10 @@ func (s *OpenCodeService) StartWS(ctx context.Context, handler domain.AgentEvent
 // runWSConn dials, marks the socket ready, then pumps inbound frames through the
 // translator until the socket errors or ctx is cancelled.
 func (s *OpenCodeService) runWSConn(ctx context.Context, handler domain.AgentEventHandler) error {
+	return s.runWSConnAt(ctx, handler, WSURL)
+}
+
+func (s *OpenCodeService) runWSConnAt(ctx context.Context, handler domain.AgentEventHandler, url string) error {
 	s.wsConnected.Store(false)
 	s.wsConnectedAt.Store(0)
 	defer func() {
@@ -99,7 +106,7 @@ func (s *OpenCodeService) runWSConn(ctx context.Context, handler domain.AgentEve
 	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second}
 	header := http.Header{}
 	header.Set("Authorization", "Bearer "+Token)
-	conn, resp, err := dialer.DialContext(ctx, WSURL, header)
+	conn, resp, err := dialer.DialContext(ctx, url, header)
 	if err != nil {
 		if resp != nil {
 			flow.End("ws_connect", connStart, map[string]any{"error": err.Error(), "status": resp.Status})
@@ -155,6 +162,9 @@ func (s *OpenCodeService) runWSConn(ctx context.Context, handler domain.AgentEve
 		}
 	}
 
+	// Replay only locally buffered, definitely unsent events on connection readiness.
+	go s.drainPendingEvents()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -204,7 +214,7 @@ func (s *OpenCodeService) sendFrame(v any) error {
 	conn := s.wsConn
 	if conn == nil {
 		s.wsMu.Unlock()
-		return fmt.Errorf("opencode websocket not connected")
+		return errDisconnectedBeforeSend
 	}
 	err = conn.WriteMessage(websocket.TextMessage, body)
 	s.wsMu.Unlock()
