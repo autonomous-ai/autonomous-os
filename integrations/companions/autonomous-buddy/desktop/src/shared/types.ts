@@ -34,6 +34,7 @@ export interface SessionEvent {
   text: string
 }
 export interface GitFile {
+  lineStats?: { added: number; removed: number }
   originalPath?: string
   path: string
   status: string

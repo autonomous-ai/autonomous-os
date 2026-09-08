@@ -7,7 +7,9 @@ import {
   Folder,
   GitBranch,
   GitCommitHorizontal,
-  GitPullRequest,
+  Check,
+  Plus,
+  Minus,
   RefreshCw,
   Search,
 } from 'lucide-react'
@@ -35,8 +37,8 @@ export function GitPanel({ project, path, onPreview, onError }: Props) {
     }
   }, [workspaceKey])
   const [tab, setTab] = useState<'git' | 'files'>('git')
-  const [gitState, setGitState] = useState<{ path: string; value: GitSnapshot } | null>(null)
-  const git = gitState && gitState.path === path ? gitState.value : null
+  const [gitState, setGitState] = useState<{ key: string; value: GitSnapshot } | null>(null)
+  const git = gitState && gitState.key === workspaceKey ? gitState.value : null
   const [error, setError] = useState('')
   const [refreshing, setRefreshing] = useState(false)
   const [revision, setRevision] = useState(0)
@@ -45,9 +47,14 @@ export function GitPanel({ project, path, onPreview, onError }: Props) {
   const message = drafts[workspaceKey] ?? ''
   const setMessage = (value: string) => setDrafts((current) => ({ ...current, [workspaceKey]: value }))
   const [acting, setActing] = useState(false)
-  const [review, setReview] = useState<{ key: string; path: string; hash: string; files: GitFile[] } | null>(null)
+  const actionPending = useRef(false)
+  const [review, setReview] = useState<{ key: string; path: string; hash: string; files: GitFile[] } | null>(
+    null,
+  )
   const [historyLoading, setHistoryLoading] = useState('')
   const [historyOpen, setHistoryOpen] = useState(true)
+  const [changesOpen, setChangesOpen] = useState(true)
+  const [selectedFile, setSelectedFile] = useState<string | null>(null)
   const request = useRef(0)
   const invalidate = useCallback(() => {
     request.current += 1
@@ -59,7 +66,7 @@ export function GitPanel({ project, path, onPreview, onError }: Props) {
     try {
       const value = await window.buddy.git(project.id, path)
       if (request.current === id) {
-        setGitState({ path, value })
+        setGitState({ key: workspaceKey, value })
         setError('')
       }
     } catch (error) {
@@ -67,7 +74,7 @@ export function GitPanel({ project, path, onPreview, onError }: Props) {
     } finally {
       if (request.current === id) setRefreshing(false)
     }
-  }, [project, path])
+  }, [project, path, workspaceKey])
   useEffect(() => {
     const timer = setTimeout(() => void refresh(), 0)
     const interval = setInterval(() => {
@@ -92,32 +99,45 @@ export function GitPanel({ project, path, onPreview, onError }: Props) {
       const text = diff
         ? await window.buddy.diff(project.id, path, file)
         : await window.buddy.readFile(project.id, path, file)
-      if (activeWorkspace.current === workspaceKey && previewRequest.current === id)
+      if (activeWorkspace.current === workspaceKey && previewRequest.current === id) {
+        setSelectedFile(diff ? JSON.stringify([workspaceKey, file]) : null)
         onPreview({ name: file, text, diff })
+      }
     } catch (error) {
       if (activeWorkspace.current === workspaceKey && previewRequest.current === id) onError(error)
     }
   }
-  const stagedCount = git?.files.filter((file) => file.status[0] !== ' ' && file.status[0] !== '?').length ?? 0
+  const stagedCount =
+    git?.files.filter((file) => file.status[0] !== ' ' && file.status[0] !== '?').length ?? 0
   const unstagedCount = git?.files.filter((file) => file.status[1] !== ' ').length ?? 0
   const mutate = async (action: () => Promise<unknown>, committed = false) => {
-    if (acting) return
+    if (actionPending.current) return
+    actionPending.current = true
     setActing(true)
     try {
       await action()
       if (committed) setMessage('')
       if (activeWorkspace.current === workspaceKey) await refresh()
-    } catch (error) { onError(error) }
-    finally { setActing(false) }
+    } catch (error) {
+      if (activeWorkspace.current === workspaceKey) onError(error)
+    } finally {
+      actionPending.current = false
+      if (activeWorkspace.current !== null) setActing(false)
+    }
   }
   const inspectCommit = async (hash: string) => {
     if (!project || !path) return
     const id = ++historyRequest.current
-    if (review?.hash === hash && review.key === workspaceKey) { setReview(null); setHistoryLoading(''); return }
+    if (review?.hash === hash && review.key === workspaceKey) {
+      setReview(null)
+      setHistoryLoading('')
+      return
+    }
     setHistoryLoading(workspaceKey + hash)
     try {
       const files = await window.buddy.commitFiles(project.id, path, hash)
-      if (activeWorkspace.current === workspaceKey && historyRequest.current === id) setReview({ key: workspaceKey, path, hash, files })
+      if (activeWorkspace.current === workspaceKey && historyRequest.current === id)
+        setReview({ key: workspaceKey, path, hash, files })
     } catch (error) {
       if (activeWorkspace.current === workspaceKey && historyRequest.current === id) onError(error)
     } finally {
@@ -129,8 +149,10 @@ export function GitPanel({ project, path, onPreview, onError }: Props) {
     const id = ++previewRequest.current
     try {
       const text = await window.buddy.commitDiff(project.id, path, hash, file)
-      if (activeWorkspace.current === workspaceKey && previewRequest.current === id)
+      if (activeWorkspace.current === workspaceKey && previewRequest.current === id) {
+        setSelectedFile(null)
         onPreview({ name: `${hash.slice(0, 7)} · ${file}`, text, diff: true })
+      }
     } catch (error) {
       if (activeWorkspace.current === workspaceKey && previewRequest.current === id) onError(error)
     }
@@ -169,7 +191,7 @@ export function GitPanel({ project, path, onPreview, onError }: Props) {
       ) : (
         <>
           {tab === 'git' ? (
-            <>
+            <div className="git-review-scroll">
               <div className="branch-summary">
                 <div>
                   <GitBranch size={14} />
@@ -177,63 +199,181 @@ export function GitPanel({ project, path, onPreview, onError }: Props) {
                 </div>
                 <small title={path}>{path}</small>
               </div>
+              <form
+                className="git-commit-composer"
+                onSubmit={(event) => {
+                  event.preventDefault()
+                  void mutate(() => window.buddy.commitStaged(project.id, path, message), true)
+                }}
+              >
+                <label htmlFor="git-commit-message">Commit message</label>
+                <textarea
+                  id="git-commit-message"
+                  aria-label="Commit message"
+                  placeholder="Describe your changes…"
+                  maxLength={10000}
+                  rows={3}
+                  value={message}
+                  onChange={(event) => setMessage(event.target.value)}
+                  disabled={acting}
+                />
+                <div className="git-commit-buttons">
+                  <button
+                    type="button"
+                    className="git-stage-all"
+                    aria-label="Stage all changes"
+                    disabled={acting || !unstagedCount}
+                    onClick={() =>
+                      void mutate(() =>
+                        window.buddy.stageFiles(
+                          project.id,
+                          path,
+                          git!.files.filter((file) => file.status[1] !== ' ').map((file) => file.path),
+                        ),
+                      )
+                    }
+                    title="Stage all currently listed unstaged and untracked files in this worktree"
+                  >
+                    <Plus size={13} /> Stage all
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={acting || !message.trim() || stagedCount === 0}
+                    title="Commit this worktree’s staged changes; unstaged files remain on disk"
+                  >
+                    <Check size={13} /> Commit staged changes ({stagedCount})
+                  </button>
+                </div>
+                <div className="git-stage-summary">
+                  <span>
+                    {stagedCount} staged · {unstagedCount} unstaged
+                  </span>
+                  {stagedCount > 0 && (
+                    <button
+                      type="button"
+                      disabled={acting}
+                      onClick={() =>
+                        void mutate(() =>
+                          window.buddy.unstageFiles(
+                            project.id,
+                            path,
+                            git!.files
+                              .filter((file) => file.status[0] !== ' ' && file.status[0] !== '?')
+                              .map((file) => file.path),
+                          ),
+                        )
+                      }
+                      aria-label="Unstage all changes"
+                    >
+                      Unstage all
+                    </button>
+                  )}
+                </div>
+              </form>
               {error ? (
                 <div className="panel-error" role="status">
                   {error}
                 </div>
               ) : (
                 <div className="changes-section">
-                  <div className="pane-section-heading">
-                    <ChevronDown size={12} /> WORKING CHANGES <span>{git?.files.length ?? 0}</span>
-                  </div>
-                  <div className="git-stage-counts"><span>Staged {stagedCount}</span><span>Unstaged {unstagedCount}</span></div>
-                  {git?.files.length ? (
-                    <div className="changed-files">
-                      {git.files.map((file) => (
-                        <div className="git-change-row" key={file.path}>
-                        <button
-                          className="changed-file"
-                          onClick={() => void open(file.path, true)}
-                          title={file.path}
-                        >
-                          <File size={13} />
-                          <span>
-                            {file.originalPath ? `${file.originalPath} → ${file.path}` : file.path.split('/').at(-1)}
-                            <small>
-                              {file.path.includes('/') ? file.path.slice(0, file.path.lastIndexOf('/')) : ''}
-                            </small>
-                          </span>
-                          <em
-                            className={`file-status ${file.status.includes('?') || file.status.includes('A') ? 'added' : file.status.includes('D') ? 'deleted' : ''}`}
+                  <button
+                    className="pane-section-heading git-changes-toggle"
+                    aria-label="Changes"
+                    aria-expanded={changesOpen}
+                    onClick={() => setChangesOpen(!changesOpen)}
+                  >
+                    {changesOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />} CHANGES{' '}
+                    <span>{git?.files.length ?? 0}</span>
+                  </button>
+                  {changesOpen &&
+                    (git?.files.length ? (
+                      <div className="changed-files">
+                        {git.files.map((file) => (
+                          <div
+                            className={`git-change-row ${selectedFile === JSON.stringify([workspaceKey, file.path]) ? 'selected' : ''}`}
+                            key={file.path}
                           >
-                            {file.status.trim() || 'M'}
-                          </em>
-                        </button>
-                        <div className="git-stage-actions">
-                          {file.status[1] !== ' ' && <button disabled={acting} aria-label={`Stage ${file.path}`} title="Stage this file" onClick={() => void mutate(() => window.buddy.stageFiles(project.id, path, [file.path]))}>+</button>}
-                          {file.status[0] !== ' ' && file.status[0] !== '?' && <button disabled={acting} aria-label={`Unstage ${file.path}`} title="Unstage this file; keep working files" onClick={() => void mutate(() => window.buddy.unstageFiles(project.id, path, [file.path]))}>−</button>}
-                        </div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="clean-state">
-                      <div className="clean-icon">
-                        <GitPullRequest size={19} />
+                            <button
+                              className="changed-file"
+                              onClick={() => void open(file.path, true)}
+                              title={file.path}
+                            >
+                              <File size={13} />
+                              <span className="git-file-name">
+                                <strong>{file.path.split('/').at(-1)}</strong>
+                                <small
+                                  title={file.originalPath ? `Renamed from ${file.originalPath}` : file.path}
+                                >
+                                  {file.originalPath
+                                    ? `← ${file.originalPath}`
+                                    : file.path.includes('/')
+                                      ? file.path.slice(0, file.path.lastIndexOf('/'))
+                                      : ''}
+                                </small>
+                              </span>
+                              {file.lineStats && (
+                                <span
+                                  className="git-file-stat"
+                                  title={
+                                    git.commits.length
+                                      ? 'Added / removed lines, HEAD to working tree; untracked files count local text'
+                                      : 'Added / removed lines from the initial index or local untracked text'
+                                  }
+                                >
+                                  <span className="git-lines-added">+{file.lineStats.added}</span>
+                                  <span className="git-lines-removed">−{file.lineStats.removed}</span>
+                                </span>
+                              )}
+                              <em
+                                className={`file-status ${file.status.includes('?') || file.status.includes('A') ? 'added' : file.status.includes('D') ? 'deleted' : ''}`}
+                              >
+                                {file.status.trim() || 'M'}
+                              </em>
+                            </button>
+                            <div className="git-stage-actions">
+                              {file.status[1] !== ' ' && (
+                                <button
+                                  disabled={acting}
+                                  aria-label={`Stage ${file.path}`}
+                                  title="Stage this file"
+                                  onClick={() =>
+                                    void mutate(() => window.buddy.stageFiles(project.id, path, [file.path]))
+                                  }
+                                >
+                                  <Plus size={12} />
+                                </button>
+                              )}
+                              {file.status[0] !== ' ' && file.status[0] !== '?' && (
+                                <button
+                                  disabled={acting}
+                                  aria-label={`Unstage ${file.path}`}
+                                  title="Unstage this file; keep working files"
+                                  onClick={() =>
+                                    void mutate(() =>
+                                      window.buddy.unstageFiles(project.id, path, [file.path]),
+                                    )
+                                  }
+                                >
+                                  <Minus size={12} />
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        ))}
                       </div>
-                      <h3>{git ? 'No uncommitted changes' : 'Reading your worktree…'}</h3>
-                      <p>
-                        {git ? 'Changes in this worktree will appear here.' : 'Fetching local Git status.'}
-                      </p>
-                    </div>
-                  )}
+                    ) : (
+                      <div className="clean-state">
+                        <div className="clean-icon">
+                          <Check size={19} />
+                        </div>
+                        <h3>{git ? 'No uncommitted changes' : 'Reading your worktree…'}</h3>
+                        <p>
+                          {git ? 'Changes in this worktree will appear here.' : 'Fetching local Git status.'}
+                        </p>
+                      </div>
+                    ))}
                 </div>
               )}
-              <form className="git-commit-composer" onSubmit={(event) => { event.preventDefault(); void mutate(() => window.buddy.commitStaged(project.id, path, message), true) }}>
-                <textarea aria-label="Commit message" placeholder="Describe the staged changes…" maxLength={10000} value={message} onChange={(event) => setMessage(event.target.value)} disabled={acting} />
-                <small>Commits all staged changes in this worktree's index. Unstaged changes stay on disk.</small>
-                <button type="submit" disabled={acting || !message.trim() || stagedCount === 0}>Commit staged changes ({stagedCount})</button>
-              </form>
               <div className="commit-section">
                 <button className="pane-section-heading" onClick={() => setHistoryOpen(!historyOpen)}>
                   {historyOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />} RECENT COMMITS{' '}
@@ -243,35 +383,55 @@ export function GitPanel({ project, path, onPreview, onError }: Props) {
                   <div className="commit-list">
                     {git?.commits.map((commit) => (
                       <div key={commit.hash}>
-                      <button type="button" className="commit-row git-commit-select" aria-label={`Review commit ${commit.hash.slice(0, 7)}`} aria-expanded={review?.hash === commit.hash && review.key === workspaceKey} onClick={() => void inspectCommit(commit.hash)}>
-                        <div className="commit-graph">
-                          <GitCommitHorizontal size={17} />
-                        </div>
-                        <div>
-                          <strong title={commit.subject}>{commit.subject}</strong>
-                          <small>
-                            {commit.author} ·{' '}
-                            {new Date(commit.date).toLocaleDateString(undefined, {
-                              month: 'short',
-                              day: 'numeric',
-                            })}
-                          </small>
-                        </div>
-                        <code>{commit.hash.slice(0, 7)}</code>
-                      </button>
-                      {historyLoading === workspaceKey + commit.hash && <small>Reading commit…</small>}
-                      {review?.hash === commit.hash && review.key === workspaceKey && <div className="git-commit-files">
-                        <small>Compared with first parent; root commits compare with an empty tree.</small>
-                        {review.files.map((file) => <button key={file.path} onClick={() => void openCommitFile(commit.hash, file.path)}><em>{file.status}</em><span>{file.originalPath ? `${file.originalPath} → ${file.path}` : file.path}</span></button>)}
-                        {!review.files.length && <small>No file changes.</small>}
-                      </div>}
+                        <button
+                          type="button"
+                          className="commit-row git-commit-select"
+                          aria-label={`Review commit ${commit.hash.slice(0, 7)}`}
+                          aria-expanded={review?.hash === commit.hash && review.key === workspaceKey}
+                          onClick={() => void inspectCommit(commit.hash)}
+                        >
+                          <div className="commit-graph">
+                            <GitCommitHorizontal size={17} />
+                          </div>
+                          <div>
+                            <strong title={commit.subject}>{commit.subject}</strong>
+                            <small>
+                              {commit.author} ·{' '}
+                              {new Date(commit.date).toLocaleDateString(undefined, {
+                                month: 'short',
+                                day: 'numeric',
+                              })}
+                            </small>
+                          </div>
+                          <code>{commit.hash.slice(0, 7)}</code>
+                        </button>
+                        {historyLoading === workspaceKey + commit.hash && <small>Reading commit…</small>}
+                        {review?.hash === commit.hash && review.key === workspaceKey && (
+                          <div className="git-commit-files">
+                            <small>
+                              Compared with first parent; root commits compare with an empty tree.
+                            </small>
+                            {review.files.map((file) => (
+                              <button
+                                key={file.path}
+                                onClick={() => void openCommitFile(commit.hash, file.path)}
+                              >
+                                <em>{file.status}</em>
+                                <span>
+                                  {file.originalPath ? `${file.originalPath} → ${file.path}` : file.path}
+                                </span>
+                              </button>
+                            ))}
+                            {!review.files.length && <small>No file changes.</small>}
+                          </div>
+                        )}
                       </div>
                     ))}
                     {git && !git.commits.length && <p className="sidebar-hint">No commits yet.</p>}
                   </div>
                 )}
               </div>
-            </>
+            </div>
           ) : (
             <>
               <div className="file-search">

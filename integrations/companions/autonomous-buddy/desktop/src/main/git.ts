@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process'
+import { attachWorkingLineStats } from './git-line-stats'
 import { promisify } from 'node:util'
 import { realpath, stat, readFile, readdir } from 'node:fs/promises'
 import path from 'node:path'
@@ -66,7 +67,7 @@ export async function fileEntries(root: string, relative: string): Promise<FileE
     .sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name))
     .map((v) => ({ name: v.name, path: path.posix.join(relative, v.name), directory: v.isDirectory() }))
 }
-export async function gitSnapshot(root: string): Promise<GitSnapshot> {
+export async function gitSnapshot(root: string, includeLineStats = true): Promise<GitSnapshot> {
   const repository = await gitCommand(root, ['rev-parse', '--is-inside-work-tree']).catch(() => '')
   if (repository.trim() !== 'true') return { branch: '', files: [], commits: [] }
   const raw = await gitCommand(root, ['status', '--porcelain=v1', '-z', '--untracked-files=all'])
@@ -91,6 +92,7 @@ export async function gitSnapshot(root: string): Promise<GitSnapshot> {
       const [hash, subject, author, date] = line.split('\0')
       return { hash, subject, author, date }
     })
+  if (includeLineStats) await attachWorkingLineStats(root, files, gitCommand)
   return { branch, files, commits }
 }
 function validFile(value: string): void {
@@ -102,7 +104,7 @@ export const isUnstaged = (file: GitFile) => file.status[1] !== ' '
 
 async function selectedChanges(root: string, files: string[]): Promise<string[]> {
   if (!Array.isArray(files) || files.length === 0 || files.length > 1000) throw new Error('Select 1–1000 changed files')
-  const snapshot = await gitSnapshot(root)
+  const snapshot = await gitSnapshot(root, false)
   const paths = new Set<string>()
   for (const value of files) {
     validFile(value)
@@ -135,7 +137,7 @@ export async function commitStaged(root: string, message: string): Promise<strin
 
 export async function fileDiff(root: string, relative: string): Promise<string> {
   validFile(relative)
-  const file = (await gitSnapshot(root)).files.find((item) => item.path === relative)
+  const file = (await gitSnapshot(root, false)).files.find((item) => item.path === relative)
   if (!file) return 'No changes for this file.'
   if (file.status === '??') return `Untracked file: ${relative}\n\n${await fileText(root, relative)}`
   const paths = [relative, ...(file.originalPath ? [file.originalPath] : [])]

@@ -108,6 +108,11 @@ async function launchApp() {
   await expect(page.locator('.app-shell')).toBeVisible()
   await expect.poll(async () => (await page.evaluate(() => window.buddy.nativeStatus())).available).toBe(true)
 }
+async function nativeScreenshot(filename) {
+  const data = await application.evaluate(async ({ BrowserWindow }) =>
+    (await BrowserWindow.getAllWindows()[0].capturePage()).toPNG().toString('base64'))
+  await writeFile(path.join(artifacts, filename), Buffer.from(data, 'base64'))
+}
 async function helperPids() {
   const { stdout } = await exec('/bin/ps', ['-axo', 'pid=,ppid=,comm='])
   const parent = application.process().pid
@@ -490,6 +495,14 @@ try {
     .getByRole('button', { name: /^Changes/ })
     .click()
   await expect(page.locator('.commit-list')).toContainText('Add the agent workspace foundation')
+  // Bulk controls operate only on the displayed worktree changes.
+  await page.getByRole('button', { name: 'Stage all changes', exact: true }).click()
+  await expect.poll(async () => (await git(['diff', '--cached', '--name-only'])).stdout.trim().split('\n').sort()).toEqual(['README.md', 'notes.md', 'src/session-store.ts'])
+  await page.getByRole('button', { name: 'Unstage all changes', exact: true }).click()
+  await expect.poll(async () => (await git(['diff', '--cached', '--name-only'])).stdout.trim()).toBe('')
+  const bounds = await page.locator('.git-panel').evaluate((element) => ({right: element.getBoundingClientRect().right, viewport: window.innerWidth}))
+  expect(bounds.right, JSON.stringify(bounds)).toBeLessThanOrEqual(bounds.viewport + 1)
+  await nativeScreenshot('git-sidebar-dark.png')
   // Stage and commit only README through the product UI in the temporary repo.
   await page.getByRole('button', { name: 'Stage README.md', exact: true }).click()
   await expect(page.getByRole('button', { name: 'Unstage README.md', exact: true })).toBeVisible()
@@ -515,6 +528,21 @@ try {
   await page.locator('.git-commit-files').getByRole('button').filter({ hasText: 'README.md' }).click()
   await expect(page.locator('.file-preview')).toContainText('+Sessions preserve context')
   await page.getByRole('button', { name: 'Close file preview', exact: true }).click()
+  // A long change list stays compact and scrolls as one panel, like a real workspace.
+  await Promise.all(Array.from({ length: 35 }, (_, index) =>
+    writeFile(path.join(projectPath, 'src', `review-file-${String(index).padStart(2, '0')}.ts`), 'export const changed = true\n')))
+  await page.getByRole('button', { name: 'Refresh files and Git', exact: true }).click()
+  await expect(page.locator('.changed-file')).toHaveCount(37)
+  await expect.poll(() => page.locator('.git-review-scroll').evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true)
+  await page.locator('.changed-file').last().scrollIntoViewIfNeeded()
+  await expect(page.locator('.changed-file').last()).toBeVisible()
+  await page.locator('.git-review-scroll').evaluate((element) => { element.scrollTop = 0 })
+  await page.evaluate(() => window.buddy.updateAppearance({ uiFont: 'system', theme: 'dark' }))
+  await nativeScreenshot('git-sidebar-dark.png')
+  await page.evaluate(() => window.buddy.updateAppearance({ theme: 'light' }))
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'light')
+  await nativeScreenshot('git-sidebar-light.png')
+  await page.evaluate((appearance) => window.buddy.updateAppearance(appearance), savedAppearance)
   await page.screenshot({ path: path.join(artifacts, 'manager-workspace.png') })
   await page.getByRole('button', { name: 'Computer & device', exact: true }).click()
   await expect(page.getByRole('dialog', { name: 'Computer & device' })).toContainText('Ready')

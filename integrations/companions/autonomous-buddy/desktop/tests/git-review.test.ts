@@ -27,7 +27,7 @@ it('stages exact literal files, handles unborn unstage and commits only existing
   const hash = await commitStaged(root, 'Initial selected file')
   expect(await commitFiles(root, hash)).toEqual([{ path: ':(glob)*', status: 'A' }])
   expect(await commitDiff(root, hash, ':(glob)*')).toContain('+literal')
-  expect((await gitSnapshot(root)).files).toEqual([{ path: 'unrelated', status: '??' }])
+  expect((await gitSnapshot(root)).files).toEqual([{ path: 'unrelated', status: '??', lineStats: { added: 1, removed: 0 } }])
   await expect(stageFiles(root, ['.'])).rejects.toThrow()
   await expect(stageFiles(root, ['../escape'])).rejects.toThrow()
   await expect(commitStaged(root, '')).rejects.toThrow()
