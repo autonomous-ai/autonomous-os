@@ -121,7 +121,7 @@ class Emotion2VecRecognizer(BaseSpeechEmotionRecognizer):
         wav_bytes = filtered
         with tracer.stage("encode_b64"):  # SER-DEBUG
             b64 = base64.b64encode(wav_bytes).decode("ascii")
-        logger.info(
+        logger.debug(
             "[speech_emotion.engine] POST %s (wav=%d bytes, b64=%d chars, timeout=%.1fs)",
             self._url, len(wav_bytes), len(b64), self._timeout,
         )
@@ -195,7 +195,7 @@ class Emotion2VecRecognizer(BaseSpeechEmotionRecognizer):
             tracer.fail("missing-label")  # SER-DEBUG
             return None
         confidence = float(data.get("confidence", 0.0))
-        logger.info(
+        logger.debug(
             "[speech_emotion.engine] response OK: label=%s confidence=%.3f",
             label, confidence,
         )

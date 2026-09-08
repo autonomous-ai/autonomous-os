@@ -247,7 +247,7 @@ class SpeechEmotionService:
         The caller passes the SAME wav_bytes used for speaker recognition;
         no defensive copy is needed because bytes are immutable in Python.
         """
-        logger.info(
+        logger.debug(
             "[speech_emotion] submit() called: user=%r duration=%.2fs wav=%d bytes",
             user, duration_s, len(wav_bytes) if wav_bytes else 0,
         )
@@ -470,7 +470,7 @@ class SpeechEmotionService:
 
     def _process_job(self, job: _Job) -> None:
         t0 = time.time()
-        logger.info(
+        logger.debug(
             "[speech_emotion] worker -> recognize: user=%r duration=%.2fs",
             job.user, job.duration_s,
         )
@@ -663,7 +663,7 @@ class SpeechEmotionService:
     def _flush_user(
         self, user: str, inferences: list[_Inference], cur_ts: float,
     ) -> None:
-        logger.info(
+        logger.debug(
             "[speech_emotion] flushing user=%r samples=%d labels=[%s]",
             user, len(inferences),
             ", ".join(inf.label for inf in inferences),
@@ -709,7 +709,7 @@ class SpeechEmotionService:
         )
         bucket = bucket_for(dominant_label)
         latest_audio_path = max(dom_inferences, key=lambda i: i.ts).audio_path
-        logger.info(
+        logger.debug(
             "[speech_emotion] mode for user=%r: label=%s avg_conf=%.3f bucket=%s audio=%s",
             user, dominant_label, avg_confidence, bucket,
             latest_audio_path or "<none>",
