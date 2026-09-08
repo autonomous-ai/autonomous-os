@@ -39,6 +39,7 @@ from hal.drivers.voice._internal.audio_dsp import resample_to_stt, rms
 from hal.drivers.voice._internal.audio_recorder import ArecordStream
 from hal.drivers.voice._internal.realtime_turn import (
     ROUTE_NOISE_DROPPED,
+    split_first_chunk,
     ROUTE_NOT_STARTED,
     RealtimeTurnResult,
     build_speaker_correction,
@@ -391,6 +392,19 @@ class VoiceService:
     @property
     def available(self) -> bool:
         return self._sd is not None and self._np is not None and self._stt.available
+
+    @property
+    def live_active(self) -> bool:
+        """Whether a live (full-duplex) session currently owns the conversation.
+
+        Read by /voice/speak-queue: while this is True the live session IS the
+        conversation, and an agent reply pushed in from os-server would be a
+        SECOND agent talking over it — device-observed 2026-09-08 on lamp-ee17,
+        Gemini (Puck) and the main agent (ElevenLabs) held separate overlapping
+        conversations through the same speaker for 484s, each feeding the other
+        through the mic.
+        """
+        return self._live_running
 
     @property
     def listening(self) -> bool:
@@ -1482,6 +1496,10 @@ class VoiceService:
         while self._live_running and generation == self._live_generation:
             native_started = False
             transcript = ""
+            # False => Gemini was opened TEXT-only and OUR TTS speaks the reply.
+            native = hal_config.REALTIME_NATIVE_AUDIO
+            sentence_buf = ""
+            first_sent = False
             try:
                 for out in self._realtime.stream_output():
                     if not (self._live_running and generation == self._live_generation):
@@ -1514,6 +1532,8 @@ class VoiceService:
                         continue
                     if isinstance(out, RTAudioOutput):
                         self._live_last_model_output = time.time()
+                        if not native:
+                            continue
                         if not native_started:
                             native_started = self._tts is not None and (
                                 self._tts.native_play_begin(
@@ -1526,12 +1546,25 @@ class VoiceService:
                             transcript += out.transcript
                         continue
                     if isinstance(out, RTTextOutput):
-                        # In AUDIO modality this is output_audio_transcription —
-                        # what the model is saying. Kept for native_play_end
-                        # (echo filtering + memory), never synthesized: the
-                        # audio branch above already carries the reply.
                         self._live_last_model_output = time.time()
                         transcript += out.text
+                        if native:
+                            continue
+                        
+                        sentence_buf += out.text
+                        if not first_sent:
+                            head, rest = split_first_chunk(sentence_buf)
+                            head = self.strip_rt_markers(head) if head else ""
+                            if head:
+                                if not self._tts.speak(head):
+                                    self._tts.speak_queue(head)
+                                first_sent = True
+                                sentence_buf = rest
+                        if sentence_buf.rstrip().endswith((".", "!", "?", "…")):
+                            sentence = self.strip_rt_markers(sentence_buf)
+                            if sentence:
+                                self._tts.speak_queue(sentence)
+                            sentence_buf = ""
                         continue
             except Exception as e:
                 logger.warning("[live] output pump error: %s", e)
@@ -1539,9 +1572,13 @@ class VoiceService:
             finally:
                 if native_started:
                     self._tts.native_play_end(transcript)
+
+                if not native and sentence_buf.strip():
+                    tail = self.strip_rt_markers(sentence_buf)
+                    if tail:
+                        self._tts.speak_queue(tail)
             if transcript:
                 logger.info("[live] model said: %r", transcript[:120])
-                self.feed_realtime_history(transcript, spoken=True)
 
     def _live_session(
         self, mic, frame_size: int, device_rate: int, pre_roll: list

@@ -194,6 +194,13 @@ class GeminiLiveAgent(VoiceAgentBase):
             )
 
         live_config: types.LiveConnectConfig = types.LiveConnectConfig(
+            # AUDIO always. TEXT-only was tried on device 2026-09-08 and the
+            # model REFUSES it: WS 1007 "The requested combination of response
+            # modalities (TEXT) is not supported by the model.
+            # models/gemini-3.1-flash-live-preview". So when our own TTS speaks
+            # the reply (REALTIME_NATIVE_AUDIO=false) the generated audio is
+            # received and DISCARDED by the consumer — billed but unused. There
+            # is no cheaper wire shape available on this model.
             response_modalities=[types.Modality.AUDIO],
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(
@@ -213,6 +220,9 @@ class GeminiLiveAgent(VoiceAgentBase):
             ),
             system_instruction=self._config.instructions,
             input_audio_transcription=None,
+            # Always on: with AUDIO the only modality, this transcript is the
+            # ONLY way to get the reply as text, which is what our TTS speaks
+            # when native audio is off.
             output_audio_transcription=types.AudioTranscriptionConfig(
                 language_codes=lang_codes,
             ),
