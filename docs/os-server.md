@@ -768,6 +768,36 @@ When receiving a `voice_command`, `voice_followup`, or `voice` event, the OS ser
 
 Keyword matching is whole-phrase with ASCII word boundaries — "unmute speaker" does not trigger the "mute speaker" rule. The chitchat rules (greeting / farewell / thanks, matched per language) use the same boundary test: a plain substring match let the two-letter phrase "hi" fire inside "this", "his" and "machine", so ordinary sentences like "What is this?" were answered locally with "Hi there!" and never reached the agent.
 
+### Tracking target selection
+
+`"follow the cup"` maps a spoken noun to the label sent to `POST /servo/track`. Choosing that label is
+not a first-match scan — three rules apply in order:
+
+1. **Whole-word only.** `"me"` must not fire inside *camera* or *mentioned*, `"us"` not inside *mouse*.
+2. **A concrete object noun beats a bare pronoun.** Only `me` / `myself` / `user` / `us` are pronouns;
+   `person` / `people` / `human` are ordinary nouns. So "watch me type on my keyboard" tracks the
+   keyboard, and "follow me" still tracks the person.
+3. **Within a tier, the first noun *after* the verb wins**, falling back to the last one before it.
+
+Before this, the table was scanned in declaration order with a plain substring test, so the pronoun
+entry (table position 3) answered every tracking command before `keyboard` (position 14) was tested —
+on green-lamp 2026-09-08 three consecutive turns asking the lamp to watch a keyboard all replied
+"Tracking person." and aimed the camera at the speaker's face.
+
+Command rules match the message's **envelope fields separately, the agent's summary first**. A delegated
+voice turn arrives as `[voice-instruction] <summary>` + `[transcript] <raw STT>`; a turn on any other
+route (`realtime_not_started`, `realtime_unavailable`, …) arrives as the bare decorated transcript, so
+the summary appears and disappears between consecutive turns of one conversation. The summary is tried
+first — STT is locked to one language while the user may speak another, and the command rules are
+English-only, so it is often the only field that can match. The two are never concatenated: one blob let
+a rule take its verb from the summary and its target from the transcript. Pronouns are blanked in the
+summary only, because there they are narration — `me` in a summary means the lamp, not the speaker.
+`[snapshot: …]` and `[vision-image] …` are stripped before matching so a file path cannot supply a
+target (`/…/sensing_face/…` contains the whole word `face`). Chitchat does its own stripping and is
+unchanged.
+
+No match → forward to the agent, which can name less common objects via YOLOWorld open-vocab.
+
 Chitchat is **off while the realtime voice agent is enabled** — the model receives every voice turn before os-server does and answers social talk itself, in character. Leaving both on meant a canned reply in a different voice barging in on the turns the model happened to stay silent for. Command rules above stay on either way; they genuinely beat a model round-trip. The gate follows `realtime.enabled` live, so toggling it in Settings needs no restart.
 
 No match → forward to OpenClaw.

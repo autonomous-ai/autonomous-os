@@ -305,3 +305,44 @@ func TestFieldSeparationDefects(t *testing.T) {
 		}
 	}
 }
+
+// End-to-end guard for the three turns captured on green-lamp 2026-09-08, taken
+// verbatim from /root/local/flow_events_2026-09-08.jsonl. All three answered
+// "Tracking person." and fired POST /servo/track {"target":["person"]}.
+// See https://github.com/autonomous-ai/autonomous-os/issues/308
+func TestCapturedKeyboardTurns(t *testing.T) {
+	// 10:42:37 — local-intent-1788838957072
+	// "keyboard" sits 20 chars EARLIER than "me" and still lost, on table
+	// position alone.
+	r := MatchCommands("unknown speaker: [voice:voice_100] so now i am going to type the word angry on my keyboard. you watch me and tell me if i am tapping in the right way. (audio saved at /tmp/hal-unknown-voice/voice_100/incoming_1788838954624_577940c2.wav)")
+	if r == nil || r.Rule != "servo_track" {
+		t.Fatalf("10:42:37 turn = %v, want servo_track", r)
+	}
+	if want := `POST /servo/track {"target":["keyboard"]}`; len(r.Actions) != 1 || r.Actions[0] != want {
+		t.Errorf("10:42:37 actions = %v, want [%s]", r.Actions, want)
+	}
+
+	// 10:46:53 — local-intent-1788839213186. "let me know" is filler, not a
+	// request to be tracked.
+	r = MatchCommands("[voice-instruction] user is asking if the lamp is ready to track their fingers typing the word 'angry'. this follows previous turns about the lamp looking down at the keyboard.\n[transcript] let me know when you are ready to track my fingers on my keyboard to type for the word. angry.")
+	if r == nil || r.TTSText != "Tracking keyboard." {
+		t.Errorf("10:46:53 turn = %v, want TTS \"Tracking keyboard.\"", r)
+	}
+
+	// 10:46:19 — local-intent-1788839179672. The transcript alone is
+	// conversational ("you are tracking me"), with no imperative verb, so it
+	// matches nothing. The SUMMARY names both the verb and the keyboard, and
+	// the summary is the primary field — so the turn resolves to the keyboard
+	// rather than to the person, which is the whole point of the fix.
+	//
+	// Note what this does NOT do: the agent never sees the turn, so nothing
+	// checks whether the user typed "angry" correctly. Aiming at the keyboard
+	// is the right hardware action; verifying the spelling is a separate
+	// request that the local rule still swallows. Making conversational turns
+	// fall through to the agent means requiring an imperative in
+	// trackVerbEnd — deliberately out of scope here.
+	r = MatchCommands("[voice-instruction] user wants lamp to track their typing and confirm if they type 'angry' correctly. lamp previously mentioned not seeing the keyboard, but user is re-requesting based on lamp's 'peeking down' comment.\n[transcript] yes, i have a keyboard there. so now you are tracking me and see if i type the word angry right.")
+	if r == nil || r.TTSText != "Tracking keyboard." {
+		t.Errorf("10:46:19 turn = %v, want TTS \"Tracking keyboard.\"", r)
+	}
+}
