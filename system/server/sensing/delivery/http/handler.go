@@ -42,6 +42,8 @@ import (
 	"go.autonomous.ai/os/system/vision"
 )
 
+var harnessAgentRequest = regexp.MustCompile(`(?i)\b(ask|tell|have|message|check(?:ing)?(?:\s+with)?|hỏi|bảo|nhờ)\s+(?:the\s+)?(?:harness\s+)?(?:agent\s+)?[[:alnum:]_-]+`)
+
 // SensingEventRequest is the payload from HAL sensing detectors.
 type SensingEventRequest struct {
 	// Type is the event category: motion, sound, presence.enter, presence.leave, light.level, etc.
@@ -706,6 +708,12 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 			channel = "web"
 		}
 		msg += fmt.Sprintf("\n[harness-reply run_id=%s channel=%s]", runID, channel)
+		if harnessAgentRequest.MatchString(req.Message) {
+			// A named computer agent is a Harness target. This routing context
+			// prevents a stale Buddy skill in an existing model session from
+			// taking the request merely because it also recognises “agent”.
+			msg += "\n[system-routing: The user is addressing a Harness computer agent. Use harness-use only. Do not call agent-management, computer-use, Autonomous Buddy, or /api/buddy. List Harness agents, select the exact requested agent, send the task with the harness-reply routing object, then reply NO_REPLY.]"
+		}
 	}
 
 	// Mark voice turns so the SSE handler can re-arm a Continuation filler
