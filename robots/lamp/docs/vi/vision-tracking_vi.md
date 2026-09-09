@@ -500,10 +500,18 @@ trường hợp đèn tự quyết định. Pha quét được vào khi:
   repoint đã quay về bearing mà không thấy ai ở đó. Đường này không ai yêu cầu, nên nó là đường duy
   nhất có cooldown — xem *Tự quay quanh tìm*.
 
-`POST /servo/search` — quét và dừng ngay ở đối tượng đầu tiên nhìn thấy. Hãy tính khoảng **2 giây mỗi
-điểm dừng** (đo trên máy thật): ~0,65 s để di chuyển và ổn định, phần còn lại là lấy khung hình và nhận
-diện. Một pha quét 3×3 đầy đủ mà không thấy ai vì thế tốn khoảng 20 giây — đó là lý do chỉ vào đây khi
-còn dư thời gian.
+`POST /servo/search` — quét tìm một đối tượng. Body (tất cả đều tuỳ chọn): `{"target": "cup", "exhaustive": true}`.
+
+- `target` mặc định là `"person"`. `person`/`face` dùng chính sách chọn người gần nhất kèm dự phòng
+  khuôn mặt; mọi danh từ khác đi qua đúng chuỗi YOLOv8n/YOLOWorld mà `/servo/track` đang dùng. Trước
+  đây tham số target được hàm nhận rồi bỏ đi — mọi lần quét đều tìm người, nên "look around for my
+  keyboard" kết thúc ngay ở người đầu tiên đi ngang qua.
+- `exhaustive` mặc định `false`, tức trả về ngay ở lần nhìn thấy đầu tiên — đúng cho câu "where are
+  you?". Đặt `true` sẽ đi hết mọi điểm dừng và mọi tầng pitch rồi báo số lần nhìn thấy.
+- Độ phủ là `số điểm dừng yaw x số lần nhìn roll x số tầng pitch`: 3 x 3 x 2 = **18 lần nhìn** ở chế độ
+  thường, **27** ở chế độ exhaustive. Hãy tính khoảng **2 giây mỗi lần nhìn**. Tầng pitch chính là thứ
+  làm cho phép quét trở thành ba chiều — `wrist_roll` chỉ lia ngang và giữ đường chân trời nằm ngang,
+  nên trước đó phép quét chỉ phủ một dải ngang và không bao giờ nhìn thấy mặt bàn.
 
 **Ba điểm dừng: bearing đã ghi nhớ trước, rồi sang phải, rồi sang trái** — `seed`, `seed+90°`,
 `seed−90°`, bị kẹp vào giới hạn cơ khí chứ không bị loại bỏ. Seed đi trước vì pha quét dừng ngay ở đối

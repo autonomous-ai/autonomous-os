@@ -502,10 +502,18 @@ lamp decides for itself. A sweep is entered when:
   a repoint that turned to the bearing and found nobody there. Nobody asked for this one, which is
   why it is the only entry with a cooldown — see *Looking around on its own*.
 
-`POST /servo/search` — sweeps and stops on the first subject seen. Budget roughly **2 seconds per
-stop** (measured on device): ~0.65 s of movement and settling, the rest frame grab and detection. A
-full 3×3 sweep that finds nobody therefore costs about 20 seconds, which is why this is entered only
-when the time is affordable.
+`POST /servo/search` — sweeps for a subject. Body (all optional): `{"target": "cup", "exhaustive": true}`.
+
+- `target` defaults to `"person"`. `person`/`face` use the closest-subject policy with a face
+  fallback; any other noun goes to the same YOLOv8n/YOLOWorld chain `/servo/track` uses. Before this
+  the target was accepted by the function and dropped on the floor — every sweep looked for a person,
+  so "look around for my keyboard" ended at the first bystander.
+- `exhaustive` defaults to `false`, which returns at the first sighting — right for "where are you?".
+  `true` visits every stop and every pitch tier and reports the number of sightings.
+- Coverage is `yaw stops x roll looks x pitch tiers`: 3 x 3 x 2 = **18 looks** normally, **27**
+  exhaustive. Budget roughly **2 seconds per look**. The pitch tier is what makes the sweep
+  three-dimensional — `wrist_roll` pans the view and leaves the horizon level, so before it the sweep
+  covered one horizontal band and never saw the desk.
 
 **Three stops: the remembered bearing first, then right, then left** — `seed`, `seed+90°`, `seed−90°`,
 clamped to the mechanical range rather than dropped. The seed goes first because the sweep stops on
