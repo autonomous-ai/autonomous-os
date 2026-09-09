@@ -32,6 +32,11 @@ const (
 // one that can report the problem while the user is still looking at the form.
 const MaxSpeakChars = 2000
 
+// MaxTimesPerSchedule mirrors the BFF's cap of the same name. The device is
+// the last line of defence for a device-AUTHORED schedule, which never passes
+// through the BFF's validation before being stored locally.
+const MaxTimesPerSchedule = 12
+
 // ResolveKind maps a raw wire value onto the kind the runner should actually
 // use. Empty resolves to KindAgent because every schedule stored before the
 // field existed carries "", and each of them must keep behaving exactly as it

@@ -856,6 +856,20 @@ Rules the agent is given, and why each one is load-bearing:
 against the reconciler's parser, so the two cannot drift apart into entries
 nobody can prune.
 
+## Buddy pairing state over MQTT
+
+Server startup runs `StartBuddyStatusLoop` under the server event context; shutdown
+cancels pending status delivery. A bounded single-consumer wakeup queue coalesces
+Buddy changes without blocking HTTP pairing or the WebSocket reader on MQTT.
+`buddy.status` queries and unsolicited FD snapshots share a public state with
+`paired`, `connected`, `instance_id`, and `revision`; no credentials are included.
+See the [MQTT contract](mqtt.md#buddystatus--query-and-observe-buddy-state).
+
+Pairing writes replace the store atomically. Failed pair/revoke writes keep the
+previous in-memory pairing and emit no success transition. A successful replacement
+pairing closes the old socket; WebSocket registration rechecks its token under the
+state lock so a concurrent revoke cannot reconnect a stale pairing.
+
 ## Buddy computer-use feedback
 
 The device agent owns desktop tasks; the Mac companion executes commands. Agent

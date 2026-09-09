@@ -441,6 +441,14 @@ def speak_queue_text(req: SpeakRequest):
     if state._speaker_muted:
         state.logger.info("POST /voice/speak-queue: suppressed -- speaker muted")
         return {"status": "suppressed"}
+
+    if getattr(state.voice_service, "live_active", False):
+        state.logger.info(
+            "POST /voice/speak-queue: suppressed -- a live session owns the "
+            "conversation (len=%d)", len(req.text or ""),
+        )
+        return {"status": "suppressed"}
+
     if state.music_service and state.music_service.streaming:
         state.logger.info("POST /voice/speak-queue: rejected -- music is playing")
         raise HTTPException(409, "Speaker busy -- music is playing")

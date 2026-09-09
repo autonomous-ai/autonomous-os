@@ -1,11 +1,11 @@
 .PHONY: build install open check
 
-APP := artifacts/package/Autonomous Buddy-darwin-$(shell node -p process.arch)/Autonomous Buddy.app
+BUDDY_ARCH ?= $(shell node -p process.arch)
+APP := artifacts/package/Autonomous Buddy-darwin-$(BUDDY_ARCH)/Autonomous Buddy.app
 
 build: ## Compile Electron and Swift, package one local macOS application
 	npm run build
-	npm run postinstall
-	node scripts/package-macos.mjs
+	BUDDY_ARCH=$(BUDDY_ARCH) node scripts/package-macos.mjs
 
 install: build ## Build both components and install the unified application
 	node scripts/install-macos.mjs

@@ -14,3 +14,17 @@ func (h *DeviceMQTTHandler) handleBuddyPairStart(env domain.MQTTDataCommand) err
 		"expires_in": int(ttl.Seconds()),
 	})
 }
+
+// handleBuddyPairRevoke shares the HTTP revocation path, including closing the
+// active WebSocket and clearing the persisted pairing.
+func (h *DeviceMQTTHandler) handleBuddyPairRevoke(env domain.MQTTDataCommand) error {
+	if h.buddyService == nil {
+		return h.publishDataResult(env.Kind, "failure", "buddy service unavailable", nil)
+	}
+	if err := h.buddyService.Unpair(); err != nil {
+		return h.publishDataResult(env.Kind, "failure", err.Error(), nil)
+	}
+	return h.publishDataResult(env.Kind, "success", "", map[string]interface{}{
+		"revoked": true,
+	})
+}

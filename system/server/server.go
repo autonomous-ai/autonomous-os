@@ -309,6 +309,7 @@ func (s *Server) Serve(closeFn func()) error {
 	// sees the same turn the web monitor's SSE stream shows. Costs nothing until
 	// a chat.send arrives — no run is tracked, so every bus event is dropped.
 	s.chatStream.Start(eventCtx)
+	go s.deviceMQTTHandler.StartBuddyStatusLoop(eventCtx)
 	// StartModelSync is launched from the startup-sequence goroutine AFTER
 	// EnsureOnboarding completes, so the two writers to openclaw.json don't
 	// race on first boot (sync's atomic write vs ensureAgentDefaults' plain

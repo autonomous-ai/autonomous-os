@@ -838,6 +838,20 @@ không được phép âm thầm làm mất nó.
 parser của reconciler, để hai bên không trôi ra khỏi nhau thành các entry không
 ai prune được.
 
+## Trạng thái pairing Buddy qua MQTT
+
+Khi khởi động, server chạy `StartBuddyStatusLoop` với event context của server;
+shutdown hủy việc gửi trạng thái đang chờ. Queue đánh thức một consumer có giới hạn
+gộp các thay đổi Buddy, không để MQTT chặn HTTP pairing hoặc WebSocket reader.
+Query `buddy.status` và snapshot tự phát trên FD dùng chung trạng thái công khai
+`paired`, `connected`, `instance_id`, `revision`; không chứa credentials.
+Xem [contract MQTT](mqtt_vi.md#buddystatus--đọc-và-theo-dõi-trạng-thái-buddy).
+
+Ghi pairing thay thế file store theo cách atomic. Lỗi ghi pair/revoke giữ pairing
+cũ trong bộ nhớ và không phát transition thành công. Pair thay thế thành công đóng
+socket cũ; đăng ký WebSocket kiểm tra lại token dưới khóa trạng thái để revoke
+đồng thời không cho pairing cũ kết nối trở lại.
+
 ## Phản hồi Computer use qua Buddy
 
 Agent trên device giữ tác vụ desktop; companion trên Mac thực thi lệnh. Chức năng

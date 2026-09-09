@@ -18,6 +18,7 @@ from hal.realtime.models.input import (
 from hal.realtime.models.output import (
     AudioOutput,
     FunctionCallOutput,
+    InterruptedOutput,
     OutputBase,
     TextOutput,
 )
@@ -38,4 +39,5 @@ __all__ = [
     "TextOutput",
     "AudioOutput",
     "FunctionCallOutput",
+    "InterruptedOutput",
 ]

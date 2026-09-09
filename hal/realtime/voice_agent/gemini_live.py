@@ -31,6 +31,7 @@ from hal.realtime.models import (
     ImageInput,
     InputBase,
     InputEvent,
+    InterruptedOutput,
     OutputEvent,
     TextInput,
     TextOutput,
@@ -118,6 +119,7 @@ class GeminiLiveAgent(VoiceAgentBase):
         self._activity_end_sent_at: float | None = None
         self._first_audio_received: bool = False
         self._vad_disabled: bool = not config.vad_enabled
+        self._turn_gen: int = 0
         self._activity_started: bool = False
         # Gemini rejects send_realtime_input while a tool call it emitted is still
         # unanswered, and closes the session with 1008 ("The operation was
@@ -166,6 +168,53 @@ class GeminiLiveAgent(VoiceAgentBase):
             self._pending_tool_calls
         )
 
+    def _activity_detection(self) -> types.AutomaticActivityDetection:
+        """Provider-side VAD settings for this session.
+
+        Only the `disabled` flag matters on the turn-based path, which brackets
+        turns itself. In live mode the rest decide whether OUR OWN ECHO opens a
+        turn: at the 4-10 dB ERLE this hardware achieves, the residual reaching
+        the uplink is quieter but still speech-shaped, and a VAD keys on speech
+        presence rather than level. Left at the API defaults the model
+        interrupted itself on almost every reply (device-observed 2026-09-08 on
+        lamp-ee17). A LOW start sensitivity plus a prefix-padding floor makes an
+        onset need more evidence than a short echo burst carries.
+
+        Every field is omitted when unset, so the provider's own default stands
+        rather than us guessing a value for it.
+        """
+        kwargs: dict[str, Any] = {"disabled": self._vad_disabled}
+        if self._vad_disabled:
+            return types.AutomaticActivityDetection(**kwargs)
+        starts = {
+            "high": types.StartSensitivity.START_SENSITIVITY_HIGH,
+            "low": types.StartSensitivity.START_SENSITIVITY_LOW,
+        }
+        ends = {
+            "high": types.EndSensitivity.END_SENSITIVITY_HIGH,
+            "low": types.EndSensitivity.END_SENSITIVITY_LOW,
+        }
+        if self._config.vad_start_sensitivity in starts:
+            kwargs["start_of_speech_sensitivity"] = starts[
+                self._config.vad_start_sensitivity
+            ]
+        if self._config.vad_end_sensitivity in ends:
+            kwargs["end_of_speech_sensitivity"] = ends[
+                self._config.vad_end_sensitivity
+            ]
+        if self._config.vad_prefix_padding_ms > 0:
+            kwargs["prefix_padding_ms"] = self._config.vad_prefix_padding_ms
+        if self._config.vad_silence_ms > 0:
+            kwargs["silence_duration_ms"] = self._config.vad_silence_ms
+        logger.info(
+            "[realtime] server VAD: start=%s end=%s prefix_padding=%sms silence=%sms",
+            self._config.vad_start_sensitivity or "(provider default)",
+            self._config.vad_end_sensitivity or "(provider default)",
+            self._config.vad_prefix_padding_ms or "(provider default)",
+            self._config.vad_silence_ms or "(provider default)",
+        )
+        return types.AutomaticActivityDetection(**kwargs)
+
     def _build_config(self) -> types.LiveConnectConfig:
         lang: str | None = self._config.language
         lang_codes: list[str] | None = (
@@ -193,6 +242,13 @@ class GeminiLiveAgent(VoiceAgentBase):
             )
 
         live_config: types.LiveConnectConfig = types.LiveConnectConfig(
+            # AUDIO always. TEXT-only was tried on device 2026-09-08 and the
+            # model REFUSES it: WS 1007 "The requested combination of response
+            # modalities (TEXT) is not supported by the model.
+            # models/gemini-3.1-flash-live-preview". So when our own TTS speaks
+            # the reply (REALTIME_NATIVE_AUDIO=false) the generated audio is
+            # received and DISCARDED by the consumer — billed but unused. There
+            # is no cheaper wire shape available on this model.
             response_modalities=[types.Modality.AUDIO],
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(
@@ -212,13 +268,14 @@ class GeminiLiveAgent(VoiceAgentBase):
             ),
             system_instruction=self._config.instructions,
             input_audio_transcription=None,
+            # Always on: with AUDIO the only modality, this transcript is the
+            # ONLY way to get the reply as text, which is what our TTS speaks
+            # when native audio is off.
             output_audio_transcription=types.AudioTranscriptionConfig(
                 language_codes=lang_codes,
             ),
             realtime_input_config=types.RealtimeInputConfig(
-                automatic_activity_detection=types.AutomaticActivityDetection(
-                    disabled=self._vad_disabled,
-                ),
+                automatic_activity_detection=self._activity_detection(),
             ),
             thinking_config=thinking_config,
             # NO context_window_compression. DO NOT re-add it while running behind the
@@ -356,10 +413,20 @@ class GeminiLiveAgent(VoiceAgentBase):
     async def _async_send_input(self, input: InputBase | None) -> None:
         if self._session is None or input is None:
             return
-        # Gemini rejects every normal client input while it is waiting for a
-        # function response, including user text, images, audio, and manual-VAD
-        # activity signals. Do not let one of those policy violations close the
-        # WebSocket with 1008. FunctionCallResultInput is the sole allowed input.
+
+        # if isinstance(input, AudioInput):
+        #     detail = f"{len(input.audio)} samples"
+        # elif isinstance(input, ImageInput):
+        #     detail = f"{input.image.shape}"
+        # elif isinstance(input, TextInput):
+        #     detail = f"{len(input.text)} chars"
+        # elif isinstance(input, FunctionCallResultInput):
+        #     detail = f"call_id={input.call_id}"
+        # else:
+        #     detail = "unknown input type"
+
+        # logger.info("Sending %s to Gemini Live: %s", type(input).__name__, detail)
+
         if not isinstance(input, FunctionCallResultInput) and self._tool_call_pending():
             if isinstance(input, AudioInput):
                 self._gated_audio_frames += 1
@@ -491,6 +558,16 @@ class GeminiLiveAgent(VoiceAgentBase):
         if self._session is None:
             return
         self._first_audio_received = False
+        # A new receive turn is a new generation. NOT sufficient on its own:
+        # `interrupted` does NOT end this loop (only turn_complete and
+        # generation_complete return), so a barge-in has to bump it too or the
+        # audio before and after the interruption would share a generation.
+        #
+        # getattr: tests drive this loop on agents built without __init__, the
+        # same way _idle_parked / _requires_fresh_session are read elsewhere.
+        self._turn_gen = getattr(self, "_turn_gen", 0) + 1
+        logger.info("[realtime] Gemini turn %d receive loop start", self._turn_gen)
+        valid_transcription_chunk_cnt = 0
 
         async for message in self._session.receive():
             # Liveness for the silent-turn watchdog: most of what arrives here
@@ -629,6 +706,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                                 self._activity_end_sent_at = None
                             self._recv_queue.put(
                                 OutputEvent(
+                                    gen=getattr(self, "_turn_gen", 0),
                                     output=AudioOutput(
                                         audio=pcm16_bytes_to_float32(
                                             part.inline_data.data
@@ -650,16 +728,80 @@ class GeminiLiveAgent(VoiceAgentBase):
                             continue
 
                 if content.output_transcription and content.output_transcription.text:
+                    if not valid_transcription_chunk_cnt:
+                        self._recv_queue.put(OutputEvent(gen=getattr(self, "_turn_gen", 0), output=InterruptedOutput()))
+
+                    valid_transcription_chunk_cnt += 1
+
                     self._recv_queue.put(
                         OutputEvent(
+                            gen=getattr(self, "_turn_gen", 0),
                             output=TextOutput(text=content.output_transcription.text),
                         )
                     )
 
                 if content.interrupted:
-                    logger.debug("[realtime] Response interrupted")
+                    logger.info(content)
+                    try:
+                        _mt = content.model_turn
+                        _parts = list(_mt.parts) if (_mt and _mt.parts) else []
+                        logger.info(
+                            "[realtime][interrupt] model_turn_parts=%d text=%r audio_bytes=%d "
+                            "output_transcription=%r turn_complete=%s generation_complete=%s "
+                            "usage=%s",
+                            len(_parts),
+                            "".join((p.text or "") for p in _parts)[:200],
+                            sum(
+                                len(p.inline_data.data)
+                                for p in _parts
+                                if p.inline_data and p.inline_data.data
+                            ),
+                            (
+                                content.output_transcription.text
+                                if content.output_transcription
+                                else None
+                            ),
+                            content.turn_complete,
+                            getattr(content, "generation_complete", None),
+                            bool(message.usage_metadata),
+                        )
+                    except Exception as _e:
+                        logger.info("[realtime][interrupt] dump failed: %s", _e)
+                    # A barge-in starts a NEW generation. This bump is the whole
+                    # reason the counter is not simply per-receive-turn:
+                    # `interrupted` does not end this loop (only turn_complete
+                    # and generation_complete return), so without it the audio
+                    # queued before the interruption would share a generation
+                    # with whatever follows and could never be told apart.
+                    # self._turn_gen = getattr(self, "_turn_gen", 0) + 1
+                    # Server VAD heard the user talk over the reply.
+                    #
+                    # DROP WHAT IS ALREADY QUEUED FIRST. The model generates
+                    # audio far faster than it plays, so at this moment the
+                    # recv queue can hold many seconds of speech the user has
+                    # just cancelled — and the consumer reads strictly FIFO, so
+                    # it would play every one of those before ever seeing the
+                    # interrupt. Device-observed 2026-09-08 on lamp-ee17: the
+                    # interruption was acted on only AFTER the whole buffered
+                    # reply had finished, putting "[live] barge-in" and "[live]
+                    # model said" in the SAME second, so the user heard no
+                    # reaction at all. Draining here is what makes barge-in
+                    # feel immediate; the consumer then only has to finish the
+                    # one frame it is mid-write on.
+                    dropped = 0
+                    while True:
+                        try:
+                            self._recv_queue.get_nowait()
+                        except queue.Empty:
+                            break
+                        dropped += 1
+                    logger.info(
+                        "[realtime] Response interrupted — dropped %d queued output(s)",
+                        dropped,
+                    )
                     self._first_audio_received = False
                     self._turn_done.set()
+                    # self._recv_queue.put(OutputEvent(gen=getattr(self, "_turn_gen", 0), output=InterruptedOutput()))
 
                 if content.turn_complete:
                     logger.debug("[realtime] Turn complete")
@@ -696,6 +838,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                     logger.debug("[realtime] Function call: %s (call_id=%s)", fc.name, fc.id)
                     self._recv_queue.put(
                         OutputEvent(
+                            gen=getattr(self, "_turn_gen", 0),
                             output=FunctionCallOutput(
                                 name=fc.name or "",
                                 arguments=json.dumps(fc.args) if fc.args else "{}",
