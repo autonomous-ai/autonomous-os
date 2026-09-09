@@ -23,6 +23,9 @@ browser while it works. Do not fall back to `computer-use` or
 `agent-management` / Autonomous Buddy is only for an explicit request to use
 Buddy or a legacy Buddy session.
 
+An explicit request for “Autonomous Buddy” or “Buddy” belongs to the Buddy
+skill and overrides Harness routing. Do not use this skill for that request.
+
 Use `list` to discover real agents. `select` accepts an exact returned `agentId`, or an unambiguous exact agent name. Selection is retained per `conversation_id` (default `voice`). Supply a stable channel conversation ID outside voice. Never invent machine IDs, agent IDs or desktop paths. A selected agent stays selected across follow-ups; an unavailable target is an error, not permission to choose another agent.
 
 When a user says “Ask David to find events” or “Ask David if anything is happening,” **David is the selected execution target**. Send David the underlying task directly, such as `Find upcoming events` — never send `Ask David ...`, ask David whom to contact, or treat David as a contact lookup. Preserve the user's substantive request, only removing the delegation wording.

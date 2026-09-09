@@ -15,10 +15,24 @@ func TestHarnessAgentRequest(t *testing.T) {
 		{"Nhờ agent David kiểm tra lại giúp tôi.", true},
 		{"What is the weather tomorrow?", false},
 		{"Open Chrome on my Mac.", false},
+		{"Ask Autonomous Buddy to open Chrome.", false},
+		{"Tell Buddy to check my calendar.", false},
 	}
 	for _, test := range tests {
 		if got := harnessAgentRequest.MatchString(test.message); got != test.want {
 			t.Errorf("MatchString(%q) = %v, want %v", test.message, got, test.want)
+		}
+	}
+}
+
+func TestExplicitBuddyRequestIsExcludedFromHarnessRouting(t *testing.T) {
+	for _, message := range []string{
+		"Ask Autonomous Buddy to open Chrome.",
+		"Tell Buddy to check my calendar.",
+		"Use the Buddy app on my Mac.",
+	} {
+		if harnessAgentRequest.MatchString(message) && !buddyAgentRequest.MatchString(message) {
+			t.Fatalf("explicit Buddy request would route to Harness: %q", message)
 		}
 	}
 }
