@@ -108,6 +108,15 @@ def run(action, params, path=None):
             if not isinstance(text, str) or not text.strip() or len(text.encode()) > 16384:
                 raise ValueError('text must contain 1 to 16384 UTF-8 bytes')
             kind, payload = 'turn.send', {'text': text}
+            response = params.get('response')
+            if response is not None:
+                if not isinstance(response, dict) or set(response) != {'run_id', 'channel'}:
+                    raise ValueError('response must contain only run_id and channel')
+                if not isinstance(response['run_id'], str) or not response['run_id'] or len(response['run_id']) > 128:
+                    raise ValueError('response run_id is invalid')
+                if response['channel'] not in ('voice', 'web'):
+                    raise ValueError('response channel must be voice or web')
+                payload['response'] = response
         elif action == 'stop':
             kind, payload = 'turn.stop', {}
         elif action == 'answer':

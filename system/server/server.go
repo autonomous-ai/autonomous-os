@@ -44,9 +44,11 @@ import (
 )
 
 type Server struct {
-	harnessService *harness.Service
-	engine         *gin.Engine
-	config         *config.Config
+	harnessService   *harness.Service
+	harnessRepliesMu sync.Mutex
+	harnessReplies   map[string]harnessReply
+	engine           *gin.Engine
+	config           *config.Config
 
 	// handlers
 	healthHandler     _healthHttpDeliver.HealthHandler
@@ -304,7 +306,7 @@ func (s *Server) Serve(closeFn func()) error {
 
 	eventCtx, cancelEvents := context.WithCancel(context.Background())
 	defer cancelEvents()
-	harnessService, harnessErr := harness.NewService("config", harness.Callbacks{})
+	harnessService, harnessErr := harness.NewService("config", harness.Callbacks{OnEvent: s.forwardHarnessEvent})
 	if harnessErr != nil {
 		slog.Error("harness service initialization failed", "component", "harness", "error", harnessErr)
 	} else {

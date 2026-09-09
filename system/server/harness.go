@@ -3,13 +3,26 @@ package server
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"go.autonomous.ai/os/system/harness"
 	"go.autonomous.ai/os/system/server/serializers"
 )
+
+type harnessReply struct {
+	runID   string
+	webChat bool
+	created time.Time
+}
+
+type harnessReplyRequest struct {
+	RunID   string `json:"run_id"`
+	Channel string `json:"channel"`
+}
 
 // registerHarnessRoutes exposes management to the owner and commands only to the device runtime.
 func (s *Server) registerHarnessRoutes(api *gin.RouterGroup, ctx context.Context) {
@@ -60,6 +73,13 @@ func (s *Server) registerHarnessRoutes(api *gin.RouterGroup, ctx context.Context
 			c.JSON(http.StatusBadRequest, serializers.ResponseError("Invalid Harness request"))
 			return
 		}
+		reply, err := extractHarnessReply(frame)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, serializers.ResponseError(err.Error()))
+			return
+		}
+		kind, _ := frame["type"].(string)
+		agentID, _ := frame["agentId"].(string)
 		requestCtx, cancel := context.WithTimeout(c.Request.Context(), 35*time.Second)
 		defer cancel()
 		result, err := s.harnessService.Request(requestCtx, frame)
@@ -72,6 +92,112 @@ func (s *Server) registerHarnessRoutes(api *gin.RouterGroup, ctx context.Context
 			c.JSON(http.StatusBadGateway, serializers.ResponseError(err.Error()))
 			return
 		}
+		if kind == "turn.send" && reply != nil {
+			s.registerHarnessReply(agentID, reply.RunID, reply.Channel == "web")
+		}
 		c.JSON(http.StatusOK, serializers.ResponseSuccess(result))
 	})
+}
+
+func extractHarnessReply(frame harness.Frame) (*harnessReplyRequest, error) {
+	raw, present := frame["response"]
+	delete(frame, "response") // local routing metadata is never sent to Harness.
+	if !present {
+		return nil, nil
+	}
+	encoded, ok := raw.(map[string]any)
+	if !ok {
+		return nil, errors.New("Invalid Harness response routing")
+	}
+	reply := &harnessReplyRequest{}
+	if value, ok := encoded["run_id"].(string); ok {
+		reply.RunID = strings.TrimSpace(value)
+	}
+	if value, ok := encoded["channel"].(string); ok {
+		reply.Channel = strings.TrimSpace(value)
+	}
+	if reply.RunID == "" || len(reply.RunID) > 128 || (reply.Channel != "voice" && reply.Channel != "web") {
+		return nil, errors.New("Invalid Harness response routing")
+	}
+	return reply, nil
+}
+
+func (s *Server) registerHarnessReply(agentID, runID string, webChat bool) {
+	if agentID == "" || runID == "" || s.agentHandler == nil {
+		return
+	}
+	s.harnessRepliesMu.Lock()
+	if s.harnessReplies == nil {
+		s.harnessReplies = make(map[string]harnessReply)
+	}
+	s.harnessReplies[agentID] = harnessReply{runID: runID, webChat: webChat, created: time.Now()}
+	s.harnessRepliesMu.Unlock()
+	s.agentHandler.MarkHarnessResponseRun(runID, webChat)
+}
+
+// forwardHarnessEvent relays real Harness lifecycle events to the original
+// device interaction. The terminal recap is not passed through the device
+// agent, which would otherwise add a slower, altered second answer.
+func (s *Server) forwardHarnessEvent(frame harness.Frame) {
+	agentID, _ := frame["agentId"].(string)
+	if agentID == "" {
+		return
+	}
+	kind, _ := frame["kind"].(string)
+	text := harnessEventText(kind, frame)
+	if text == "" {
+		return
+	}
+	s.harnessRepliesMu.Lock()
+	reply, ok := s.harnessReplies[agentID]
+	terminal := kind == "turn.summary" || kind == "turn.error" || kind == "agent.error"
+	if ok && terminal {
+		delete(s.harnessReplies, agentID)
+	}
+	s.harnessRepliesMu.Unlock()
+	if !ok || time.Since(reply.created) > 15*time.Minute {
+		return
+	}
+	if !terminal {
+		s.agentHandler.DeliverHarnessProgress(reply.runID, text)
+		return
+	}
+	if !s.agentHandler.DeliverHarnessResponse(reply.runID, text) {
+		slog.Warn("Harness result had no pending device turn", "component", "harness", "run_id", reply.runID)
+	}
+}
+
+func harnessEventText(kind string, frame harness.Frame) string {
+	payload, _ := frame["payload"].(map[string]any)
+	if payload == nil {
+		return ""
+	}
+	if kind == "receipt.updated" {
+		receipt, _ := payload["receipt"].(map[string]any)
+		state, _ := receipt["state"].(string)
+		switch state {
+		case "queued", "delivered":
+			return "Harness accepted the request."
+		case "started":
+			return "Harness agent is working."
+		}
+		return ""
+	}
+	if kind == "turn.started" {
+		return "Harness agent is working."
+	}
+	if kind == "turn.done" {
+		return "Harness agent finished; receiving its result."
+	}
+	if kind == "turn.error" {
+		return "Harness stopped before it returned a result."
+	}
+	text, _ := payload["text"].(string)
+	if kind == "turn.summary" && strings.TrimSpace(text) == "" {
+		text, _ = payload["recap"].(string)
+	}
+	if kind != "turn.summary" && kind != "turn.error" && kind != "agent.error" {
+		return ""
+	}
+	return strings.TrimSpace(text)
 }

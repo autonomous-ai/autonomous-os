@@ -77,3 +77,36 @@ func TestHarnessRoutesProtectCodeAndLocalCommands(t *testing.T) {
 		t.Fatalf("cancel did not clear code: %d", out.Code)
 	}
 }
+
+func TestExtractHarnessReplyIsLocalRoutingOnly(t *testing.T) {
+	frame := harness.Frame{
+		"type":     "turn.send",
+		"response": map[string]any{"run_id": "device-chat-42", "channel": "web"},
+	}
+	reply, err := extractHarnessReply(frame)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reply == nil || reply.RunID != "device-chat-42" || reply.Channel != "web" {
+		t.Fatalf("reply = %#v", reply)
+	}
+	if _, sentToHarness := frame["response"]; sentToHarness {
+		t.Fatal("local response routing reached Harness frame")
+	}
+}
+
+func TestHarnessEventTextUsesDirectLifecycleAndSummary(t *testing.T) {
+	if got := harnessEventText("receipt.updated", harness.Frame{
+		"payload": map[string]any{"receipt": map[string]any{"state": "queued"}},
+	}); got != "Harness accepted the request." {
+		t.Fatalf("queued text = %q", got)
+	}
+	if got := harnessEventText("turn.started", harness.Frame{"payload": map[string]any{}}); got != "Harness agent is working." {
+		t.Fatalf("started text = %q", got)
+	}
+	if got := harnessEventText("turn.summary", harness.Frame{
+		"payload": map[string]any{"text": "Exact Harness answer", "recap": "short recap"},
+	}); got != "Exact Harness answer" {
+		t.Fatalf("summary text = %q", got)
+	}
+}

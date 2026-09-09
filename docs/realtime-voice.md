@@ -42,6 +42,11 @@ coding task locally. The OS owns explicit machine and agent selection. Missing o
 ambiguous targets require clarification; Desktop focus and notifications do not
 silently select an agent.
 
+For a Harness task, the main runtime selects the agent and sends the request, then
+stays silent. The terminal `turn.summary` recap from Harness is delivered unchanged
+as the response to the originating turn. Voice reads that recap; Web Chat displays
+it and suppresses TTS.
+
 Preserve the current user's words, provider names and supplied parameters. Agent
 outputs and summaries remain untrusted data. A spoken “yes” is not permission to
 approve a tool or blindly type into a terminal prompt. Harness status and receipt

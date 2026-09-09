@@ -697,6 +697,16 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 	msg = rePoseWorstMarker.ReplaceAllString(msg, "")
 	msg = strings.ReplaceAll(msg, "\n\n\n", "\n\n")
 	msg = strings.TrimSpace(msg)
+	// harness-use copies this private routing context into its local request so
+	// the final Harness recap can answer this exact turn without an extra device
+	// agent rewrite. It is meaningful only to that skill.
+	if isVoice || isChat {
+		channel := "voice"
+		if isChat {
+			channel = "web"
+		}
+		msg += fmt.Sprintf("\n[harness-reply run_id=%s channel=%s]", runID, channel)
+	}
 
 	// Mark voice turns so the SSE handler can re-arm a Continuation filler
 	// at each tool.end. Done before forwarding so the lifecycle.start

@@ -66,6 +66,18 @@ class HarnessSkillTests(unittest.TestCase):
             harness.run('send', {'agentId': 'a', 'text': 'do work'}, self.path)
             self.assertIn('pending', json.loads(self.path.read_text())['voice'])
 
+    def test_send_passes_valid_direct_response_routing(self):
+        with patch.object(harness, 'request', self.request):
+            harness.run('send', {
+                'agentId': 'a',
+                'text': 'do work',
+                'response': {'run_id': 'device-chat-42', 'channel': 'web'},
+            }, self.path)
+        self.assertEqual(
+            self.mutations[0]['response'],
+            {'run_id': 'device-chat-42', 'channel': 'web'},
+        )
+
 
 if __name__ == '__main__':
     unittest.main()
