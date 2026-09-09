@@ -47,7 +47,12 @@ from hal.realtime.models import (
     OutputBase,
     TextInput,
 )
-from hal.realtime.models.signal import DelegateSignal, LookReplaySignal, RejectSignal
+from hal.realtime.models.signal import (
+    DelegateSignal,
+    EndCallSignal,
+    LookReplaySignal,
+    RejectSignal,
+)
 from hal.realtime.summarizer import RealtimeSummarizer
 from hal.realtime.voice_agent.base import VoiceAgentBase
 
@@ -70,9 +75,11 @@ DELEGATE_TOOL_NAME: str = "delegate_to_main"
 DELEGATE_TOOL_DESCRIPTION: str = (
     "Call this for requests requiring the main system: device or desktop actions, "
     "music, scheduling, memory, skills, real-time facts, or other non-conversational work. "
-    "Desktop coding/research tasks for Codex or Claude, project/worktree/session "
-    "selection, progress queries, and session follow-ups go to the main runtime's "
-    "agent-management skill; never perform that coding task on the device. "
+    "Any request naming Harness, a Mac agent, Codex, Claude, a project/worktree/session, "
+    "or asking an agent to use a browser must go to the main runtime's harness-use "
+    "skill. This includes general web research such as asking agent temp to find "
+    "restaurants; do not answer, search, or claim results yourself. Never perform "
+    "that agent task on the device. "
     "Clearly heard answers, corrections, and stop requests for a known pending task "
     "also delegate, even without an action verb. Use conversation context to recognize "
     "the task, but forward ONLY the current user's faithfully understood words in "
@@ -119,6 +126,23 @@ REJECT_TURN_TOOL: dict[str, Any] = {
         "type": "object",
         "properties": {},
     },
+}
+
+END_CALL_TOOL_NAME: str = "end_conversation"
+END_CALL_TOOL_DESCRIPTION: str = (
+    "End the live voice session and return the device to standby. Call this "
+    "when the user says goodbye, says they are done, or the conversation has "
+    "clearly finished. Say your short farewell in the SAME turn as this call — "
+    "the device stays open a few seconds afterwards so it is heard, then hangs "
+    "up. Do not call it merely because the user paused, and never call it to "
+    "avoid answering something."
+)
+
+END_CALL_TOOL: dict[str, Any] = {
+    "type": "function",
+    "name": END_CALL_TOOL_NAME,
+    "description": END_CALL_TOOL_DESCRIPTION,
+    "parameters": {"type": "object", "properties": {}},
 }
 
 DEFAULT_EMOTION_INTENSITY: float = 0.8
@@ -273,6 +297,11 @@ class RealtimeOrchestrator:
         # disabled, a silent model turn follows the existing main-agent fallback.
         if config.REALTIME_AI_REJECT_FILTER:
             tools.append(REJECT_TURN_TOOL)
+        # Live mode only: on the turn-based path there is no open session to
+        # hang up, so offering it there would just be a tool the model can
+        # call to no effect.
+        if config.LIVE_MODE:
+            tools.append(END_CALL_TOOL)
         if enable_expression:
             tools.append(EMOTION_TOOL)
         # `look` (in-session vision) is registered only when ALL hold: a camera is
@@ -328,6 +357,9 @@ class RealtimeOrchestrator:
         # after stop must never publish a live agent back into the stopped HAL.
         self._lifecycle_lock: threading.Lock = threading.Lock()
         self._consecutive_silent: int = 0  # zombie-session guard (see stream_output)
+        # True while a live (full-duplex) session owns the mic. Suppresses every
+        # post-turn session recycle — see stream_output.
+        self._live_active: bool = False
         # Idle session recycle (cost): when a turn arrives after a long silence,
         # rebuild the session AFTER that turn so the next turn drops the context
         # the provider re-bills on a long-lived session. See _maybe_idle_reset.
@@ -627,6 +659,24 @@ class RealtimeOrchestrator:
         Returns True if a fresh session is ready.
         """
         return self._rebuild_now(reason)
+
+    def set_live_active(self, active: bool) -> None:
+        """Mark that a live (full-duplex) session is streaming into this agent.
+
+        The post-turn recycles in stream_output all assume a turn is a discrete
+        unit with a gap after it. Inside a live session none of that holds: the
+        mic keeps appending across every model reply, so a rebuild swaps the
+        agent out from under an open uplink. Recycling resumes when it clears.
+        """
+        self._live_active = active
+        if not active:
+            # The session that just ended may well have earned a recycle while
+            # it ran. Start the next one from a clean count rather than firing
+            # a rebuild on the first turn after it for reasons that belong to
+            # the live session.
+            self._consecutive_silent = 0
+            self._turns_since_recycle = 0
+            self._idle_reset_pending = False
 
     def prepare_turn(self) -> None:
         """Prepare the realtime session before the caller streams turn audio."""
@@ -1033,6 +1083,29 @@ class RealtimeOrchestrator:
                 continue
             if (
                 isinstance(output, FunctionCallOutput)
+                and output.name == END_CALL_TOOL_NAME
+            ):
+                logger.info("[realtime] Model asked to end the conversation")
+                # Acknowledge with trigger_response=True, unlike the
+                # fire-and-forget expression tool: the model must be free to
+                # finish speaking its farewell, and an UNacknowledged call
+                # makes Gemini reject every later client input (including
+                # audio) for the rest of the session. The session is ending
+                # anyway, so the usual "continues the turn" cost does not
+                # apply here.
+                self._agent.send(
+                    [
+                        FunctionCallResultInput(
+                            call_id=output.call_id,
+                            output='{"result": "ending after farewell"}',
+                        )
+                    ]
+                )
+                produced = True
+                yield EndCallSignal()
+                continue
+            if (
+                isinstance(output, FunctionCallOutput)
                 and output.name == REJECT_TURN_TOOL_NAME
             ):
                 # A rejection is only safe before any user-visible output. The
@@ -1172,6 +1245,21 @@ class RealtimeOrchestrator:
         # recycle already bounds accumulation. The race itself (rebuild swapping the
         # agent under a dispatching turn) is now also blocked by the available-gate
         # checking _rebuild_lock — see the `available` property.
+        # Every reason below is wrong inside a live session:
+        #   - zombie:   a quiet stretch produces no output and ends stream_output
+        #               on the receive() timeout, so ZOMBIE_RECONNECT_AFTER of
+        #               those (~24s of the user simply not talking) would force
+        #               a reconnect mid-conversation.
+        #   - turn-cap: swaps the session every SESSION_MAX_TURNS replies.
+        #   - idle:     same swap, same open uplink.
+        # A rebuild is also not survivable here the way it is between turns —
+        # the mic pump keeps appending straight through the swap. Deferred, not
+        # cancelled: set_live_active(False) resets the counters at hangup.
+        # getattr: stream_output is exercised by tests that build partial
+        # orchestrator state via object.__new__, same as _idle_parked above.
+        if getattr(self, "_live_active", False):
+            return
+
         zombie: bool = (
             not produced
             and self._consecutive_silent >= config.REALTIME_ZOMBIE_RECONNECT_AFTER

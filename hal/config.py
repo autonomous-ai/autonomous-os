@@ -1054,10 +1054,45 @@ REALTIME_AI_REJECT_FILTER: bool = os.environ.get(
 REALTIME_NOISE_GUARD_MAX_WORDS: int = int(
     os.environ.get("HAL_REALTIME_NOISE_GUARD_MAX_WORDS", "3")
 )
+# Live (full-duplex) mode. The local VAD stops being an endpointer and becomes a
+# doorbell: it decides when to OPEN a session, and once one is open it does not
+# run at all — the mic streams continuously and the provider owns turn taking,
+# interruption and end-of-turn. See voice_service._live_session.
+#
+# EXCLUSIVE BY DESIGN. The turn-based path and a live session need opposite turn
+# detection, and that setting is baked into the provider session at connect
+# time. Supporting both at once would mean a runtime override plus a session
+# rebuild on every entry and exit; making live mode a whole-process choice
+# removes that machinery entirely, at the cost of a restart to switch. This is
+# why REALTIME_TURN_DETECTION is FORCED below rather than merely defaulted:
+# leaving it "off" while live mode is on produces a device that streams audio
+# forever and never gets an answer, which is the confusing half of the failure.
+LIVE_MODE: bool = os.environ.get("HAL_LIVE_MODE", "false").lower() in (
+    "1",
+    "true",
+    "yes",
+)
+
+LIVE_VAD_START_SENSITIVITY: str = os.environ.get(
+    "HAL_LIVE_VAD_START_SENSITIVITY", "low"
+).strip().lower()
+LIVE_VAD_END_SENSITIVITY: str = os.environ.get(
+    "HAL_LIVE_VAD_END_SENSITIVITY", ""
+).strip().lower()
+# 0 = leave to the provider. Speech must persist this long before it counts as
+# an onset — the single most direct defence against a transient echo burst.
+LIVE_VAD_PREFIX_PADDING_MS: int = int(
+    os.environ.get("HAL_LIVE_VAD_PREFIX_PADDING_MS", "300")
+)
+# 0 = leave to the provider. How long silence must last before the turn ends.
+LIVE_VAD_SILENCE_MS: int = int(os.environ.get("HAL_LIVE_VAD_SILENCE_MS", "0"))
+
 # Turn detection / VAD: "server_vad" | "semantic_vad" | "off"
 # For Gemini: "off" disables automatic activity detection; any other value enables it.
 # For OpenAI: maps to turn_detection type in session config.
 REALTIME_TURN_DETECTION: str = os.environ.get("HAL_REALTIME_TURN_DETECTION", "off")
+if LIVE_MODE and REALTIME_TURN_DETECTION.strip().lower() in ("off", "none", ""):
+    REALTIME_TURN_DETECTION = "server_vad"
 
 # Native voice: for chit-chat handled by the realtime model, play the model's OWN
 # audio output (Gemini Live / OpenAI Realtime voice) straight to the speaker

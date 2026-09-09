@@ -67,16 +67,26 @@ func (s *Store) Load() error {
 func (s *Store) Set(r *PairingRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	previous := s.record
 	s.record = r
-	return s.writeLocked()
+	if err := s.writeLocked(); err != nil {
+		s.record = previous
+		return err
+	}
+	return nil
 }
 
 // Clear removes the pairing and persists an empty store.
 func (s *Store) Clear() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	previous := s.record
 	s.record = nil
-	return s.writeLocked()
+	if err := s.writeLocked(); err != nil {
+		s.record = previous
+		return err
+	}
+	return nil
 }
 
 // Get returns a snapshot of the paired record, or nil if none.
@@ -113,8 +123,21 @@ func (s *Store) writeLocked() error {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
 		return fmt.Errorf("create store dir: %w", err)
 	}
-	if err := os.WriteFile(s.path, data, 0o600); err != nil {
-		return fmt.Errorf("write %s: %w", s.path, err)
+	// Replace atomically so a failed write cannot corrupt the prior pairing.
+	file, err := os.CreateTemp(filepath.Dir(s.path), ".buddies-*")
+	if err != nil {
+		return fmt.Errorf("create pairing temp file: %w", err)
+	}
+	defer os.Remove(file.Name())
+	if _, err := file.Write(data); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("write pairing temp file: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close pairing temp file: %w", err)
+	}
+	if err := os.Rename(file.Name(), s.path); err != nil {
+		return fmt.Errorf("replace %s: %w", s.path, err)
 	}
 	return nil
 }

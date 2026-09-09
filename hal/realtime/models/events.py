@@ -53,6 +53,7 @@ class OutputEvent(AgentOutputEvent):
 
     type: OutputEventTypeEnum = OutputEventTypeEnum.OUTPUT
     output: OutputBase
+    gen: int = 0
 
 
 class TurnDoneEvent(AgentOutputEvent):

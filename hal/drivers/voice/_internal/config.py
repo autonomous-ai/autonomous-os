@@ -14,6 +14,7 @@ from hal import config as _hal_config
 # OS server endpoint
 # ---------------------------------------------------------------------------
 OS_SENSING_URL = "http://127.0.0.1:5000/api/sensing/event"
+OS_HARNESS_FOLLOWUP_URL = "http://127.0.0.1:5000/api/harness/voice-followup"
 # Dead-air filler for the realtime wait. os-server owns the phrase pools, the
 # language resolution, and the WAV cache; HAL only decides WHEN the wait has run
 # long enough to deserve one. See PlayFiller in
@@ -106,9 +107,12 @@ WARM_MIC_ECHO_SKIP_MAX_S = float(os.environ.get("HAL_WARM_MIC_ECHO_SKIP_MAX_S", 
 # not a hal dependency — absent, every AEC entry point degrades to a no-op and
 # the voice path behaves exactly as it did before, so defaulting this on cannot
 # break a device that lacks the binding. Note that it also turns BARGE_IN on
-# (see BARGE_IN_ENABLED below), which is NOT a no-op.
+# (see BARGE_IN_ENABLED below), which is NOT a no-op: set
+# HAL_BARGE_IN_ENABLED=false to take the canceller without the local barge-in
+# detector. Live mode is unaffected either way — inside a live session the
+# local detector never runs, the provider's VAD owns interruption.
 # ---------------------------------------------------------------------------
-AEC_ENABLED = os.environ.get("HAL_AEC_ENABLED", "false").lower() == "true"
+AEC_ENABLED = os.environ.get("HAL_AEC_ENABLED", "true").lower() == "true"
 # Speaker→mic delay hint. AEC3 estimates the real delay itself, but the hint
 # decides how fast it converges. Measured from HAL's own aec_mic/aec_ref dump
 # (24/08/2026, lamp-ee17): the lag between the frames the APM is actually
@@ -340,3 +344,87 @@ ENROLL_NUDGE_COOLDOWN_S = float(os.environ.get("HAL_ENROLL_NUDGE_COOLDOWN_S", st
 # cutting people off at natural mid-sentence pauses; 0 disables (back to the
 # single long clock).
 ENDPOINT_SILENCE_S = float(os.environ.get("HAL_ENDPOINT_SILENCE_S", "0.8"))
+
+
+# ---------------------------------------------------------------------------
+# Live (full-duplex) mode — see hal.config.LIVE_MODE and
+# voice_service._live_session. Enabled process-wide by HAL_LIVE_MODE=true; the
+# knobs below only shape a session once one is open.
+# ---------------------------------------------------------------------------
+LIVE_MODE = _hal_config.LIVE_MODE
+
+# What goes on the uplink while our own speaker is playing.
+#
+#   "mute"      — substitute silence for the whole playback window. Ships today.
+#                 Costs barge-in entirely: the user cannot interrupt until the
+#                 device stops talking, because the provider's VAD receives
+#                 digital silence for the whole reply and has nothing to detect.
+#   "cancelled" — send the cancelled frame, and substitute silence only for
+#                 frames the canceller could not vouch for. TRUE full duplex —
+#                 but only as good as the reference: every frame where the
+#                 reference FIFO underran is still substituted, and on a device
+#                 where that is most of them the provider still hears mostly
+#                 silence. Measured on lamp-ee17 2026-09-08: 50-99% of playback
+#                 frames underran ("reference UNDERRAN on 170 frames" against
+#                 27 cancelled), so `cancelled` alone does NOT restore barge-in
+#                 there. Check the ERLE log before assuming it will.
+#   "always"    — never substitute during playback; hand the provider every
+#                 frame and let ITS VAD separate the user from our own echo.
+#                 The only mode in which provider-native barge-in can work on a
+#                 device with a starving reference, and the least safe: with
+#                 low ERLE the model hears its own onsets as the user and cuts
+#                 itself off (see LIVE_NO_USER_MAX_S for the observed loop).
+#                 Lower the speaker volume before using it.
+#
+# "cancelled" is the intended end state and is NOT the default, because the
+# canceller does not yet earn it. Measured 2026-09-04 (barge-in-captures/):
+# mean ERLE 14-19 dB but PEAK ERLE ~5 dB — mic peaks of 29264 leave the APM at
+# 25269, against a real-interruption floor of 6956. The provider's VAD sees
+# peaks and has none of the defences the local barge-in detector has (no
+# uncancelled() flag, no envelope match, no duration floor), so it reads the
+# device's own onsets as the user interrupting and the reply cuts itself off.
+# Flip this to "cancelled" once a replay of full40-bargein-off through the
+# canceller puts peak residual under that floor with margin.
+LIVE_UPLINK_DURING_PLAYBACK = os.environ.get(
+    "HAL_LIVE_UPLINK_DURING_PLAYBACK", "mute"
+).strip().lower()
+
+# How long after the last reference write the room still counts as "playing".
+# The ACOUSTIC tail, deliberately not AEC_TAIL_S (2.0s): keyed on the longer
+# one, "mute" swallows the first two seconds of every reply the user gives.
+LIVE_PLAYBACK_TAIL_S = float(os.environ.get("HAL_LIVE_PLAYBACK_TAIL_S", "0.35"))
+
+# Hang up after this long with no action from the USER, then hand the mic back
+# to the VAD, which opens a new session on the next real speech. A live session
+# bills upstream audio for every second it is open, against only speech segments
+# on the turn-based path, so a session nobody ended must end itself.
+#
+# The model's own reply does not count as user action, but the clock is held
+# while the device is speaking so a long answer is never cut off mid-sentence:
+# the window runs from whichever came later, the user's last words or the moment
+# the device stopped talking.
+LIVE_IDLE_HANGUP_S = float(os.environ.get("HAL_LIVE_IDLE_HANGUP_S", "15"))
+
+# Hard ceiling on "the user has said nothing at all", independent of who is
+# talking. LIVE_IDLE_HANGUP_S above is HELD while the device speaks, which is
+# right for one long answer and wrong for a model that has started answering
+# ITSELF — and with `mute` that is a real failure mode, not a hypothetical: the
+# transition from substituted digital silence back to room audio is an
+# amplitude onset, and a server-side VAD reads an onset as somebody starting to
+# talk. Device-observed 2026-09-07 on intern-v2-6286: four unprompted replies
+# in 35 s with nobody in the room, each one re-arming the hold, and the session
+# would have run to LIVE_MAX_S. This ends it regardless of who is speaking.
+LIVE_NO_USER_MAX_S = float(
+    os.environ.get("HAL_LIVE_NO_USER_MAX_S", str(LIVE_IDLE_HANGUP_S * 3))
+)
+
+# Grace period after the model calls end_conversation, before the session is
+# actually torn down. The model normally speaks its farewell in the SAME turn
+# as the tool call, so hanging up on the call itself would cut it off mid-word.
+# Long enough for a short sign-off, short enough not to feel like a hang.
+LIVE_HANGUP_GRACE_S = float(os.environ.get("HAL_LIVE_HANGUP_GRACE_S", "3"))
+LIVE_UPLINK_DUMP_DIR = os.environ.get("HAL_LIVE_UPLINK_DUMP_DIR", "")
+
+# Absolute ceiling on one session, whatever is happening. Backstop against a
+# session that never goes idle because the room is noisy.
+LIVE_MAX_S = float(os.environ.get("HAL_LIVE_MAX_S", "600"))

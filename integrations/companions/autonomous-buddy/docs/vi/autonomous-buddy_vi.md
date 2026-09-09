@@ -13,6 +13,8 @@ Kế hoạch implement MVP nằm ở [`autonomous-buddy-mvp_vi.md`](./autonomous
 
 [Autonomous Buddy](./agent-manager_vi.md) hiện đóng gói workspace Electron/React và helper Swift native trong một `Autonomous Buddy.app`. Electron quản lý project, worktree, session, terminal và Git review; Swift giữ pairing, device WebSocket và executor computer-use. Khi chạy embedded, helper giữ icon menu bar native, không thêm Dock icon, dùng pipe JSONL riêng của process con và thoát khi Electron đóng pipe đầu vào. Đóng workspace vẫn giữ Buddy chạy; menu bar có thể mở lại Agent Manager hoặc thoát toàn bộ app. **Computer & device** trong app chính cung cấp pairing, trạng thái, pause, quản lý quyền và Activity. `make build` / `make install` build và cài cả hai thành phần cùng nhau; người dùng chỉ cài một app. Command `agent.*` từ device đã pair route vào managed session bằng project/session ID tường minh, receipt request và event history có giới hạn; notice hoàn tất/cần chú ý trả qua cùng WebSocket. Xem [contract native bridge](./native-bridge_vi.md). Kiểm chứng lamp thật vẫn tách biệt với test transport giả.
 
+`make dmg` mặc định build bộ cài riêng cho Apple Silicon (`arm64`) và Intel (`x64`). Metadata OTA lưu version và URL tải riêng theo kiến trúc; Buddy hiện chưa có updater trong app. Target upload mặc định ký số và notarize cả hai bộ cài; `make dmg` local không notarize. Xem [ký số và upload release](./release-signing_vi.md) để chọn kiến trúc, ký số và xuất bản.
+
 [Hướng dẫn cài đặt desktop](./settings_vi.md) mô tả mục Settings / ⌘, trong menu macOS, tìm kiếm Appearance, lưu theme/font/zoom, giao diện terminal và bật tắt footer.
 
 Thiết kế tháng 5 bên dưới là bối cảnh computer-use lịch sử, không phải contract đóng gói/UI hiện tại. Quyết định Swift-only/menu-bar được thay bằng kiến trúc một app này. Xem [contract agent manager](./agent-manager_vi.md) để biết IPC và vòng đời hiện tại.
@@ -24,7 +26,7 @@ Thiết kế tháng 5 bên dưới là bối cảnh computer-use lịch sử, kh
 ### Mục tiêu
 - Thiết bị điều khiển được máy tính qua voice ("mở Chrome", "vào Gmail", "join Google Meet", "gõ X", "đóng Slack")
 - Hoạt động với mọi app macOS (không chỉ browser)
-- Command và xác nhận pairing chạy qua LAN; backend có thể yêu cầu mã pair qua MQTT.
+- Command computer-use và xác nhận pairing chạy qua LAN; client MQTT có quyền có thể yêu cầu mã pair, thu hồi pairing, query hoặc theo dõi trạng thái Buddy.
 - Mac-first cho MVP; Windows/Linux để v1.2+
 
 ### Không phải mục tiêu (MVP)
@@ -249,9 +251,48 @@ Page mới `Paired Computers`:
 9. Buddy mở WS với `Authorization: Bearer <token>`
 
 Phân quyền MQTT dựa trên credentials của broker và ACL của topic hiện có;
-backend phải kiểm tra quyền chủ sở hữu thiết bị trước khi gửi `buddy.pair.start`.
-Không có lệnh MQTT mới để xác nhận, xem trạng thái hoặc thu hồi pairing; các route
-HTTP tương ứng vẫn giữ nguyên. Xem [contract MQTT](../../../../../docs/vi/mqtt_vi.md#buddypairstart--cấp-mã-pair-buddy).
+backend phải kiểm tra quyền chủ sở hữu thiết bị trước khi gửi `buddy.pair.start`
+hoặc `buddy.pair.revoke`. Xác nhận vẫn qua HTTP; trạng thái còn có qua
+MQTT `buddy.status`. Mobile có quyền có thể kết nối broker trực tiếp.
+Xem [contract MQTT pairing](../../../../../docs/vi/mqtt_vi.md#buddypairstart--cấp-mã-pair-buddy).
+
+Để thu hồi pairing hiện tại, backend đã kiểm tra quyền gửi
+`{"cmd":"data","kind":"buddy.pair.revoke","data":{}}` trên `fa_channel` (`data`
+là tùy chọn và được bỏ qua). Lệnh gọi `buddy.Service.Unpair`, cũng được dùng bởi
+`DELETE /api/buddy`: đóng WebSocket đang hoạt động, xóa pairing hiện tại và dữ liệu
+pairing đã lưu, đồng thời vô hiệu hóa token đã pair. Gọi lại khi chưa có pairing
+cũng thành công; mã pairing đang chờ không bị hủy. Phản hồi trên `fd_channel` là
+`{"type":"data","kind":"buddy.pair.revoke","status":"success","data":{"revoked":true}}`
+kèm metadata chuẩn của `MQTTDataResponse`. Khi lỗi, gồm service không khả dụng
+hoặc lỗi lưu dữ liệu, phản hồi dùng `status:"failure"` và `error`.
+Xem [contract MQTT thu hồi pairing](../../../../../docs/vi/mqtt_vi.md#buddypairrevoke--thu-hồi-pairing-buddy).
+
+### Trạng thái mobile qua MQTT
+
+Gửi `{"cmd":"data","kind":"buddy.status","data":{}}` lên `fa_channel`.
+Phản hồi và event thay đổi tự phát dùng `type:"data"`, `kind:"buddy.status"`,
+`status:"success"`, với `data` gồm `paired`, `connected`, `instance_id`,
+`revision`, và các field tùy chọn `buddy_id`, `name`, `os_version`, `paired_at`
+(RFC3339). Chưa pair thì bỏ các field của Mac; chuỗi tùy chọn rỗng cũng bị bỏ.
+Không có secret, mã pairing hoặc fingerprint. `paired` khác `connected`:
+Mac pause/offline vẫn có thể còn paired.
+
+Thông báo gồm trạng thái khởi động, HTTP confirm thành công, revoke qua HTTP/MQTT
+(kể cả Buddy tự revoke), và thay đổi kết nối WebSocket hiện tại. Revision bắt đầu
+0, tăng sau mỗi thao tác pair/revoke/connect/current-disconnect thành công.
+Chỉ so revision trong cùng `instance_id`, đổi khi service khởi động lại; bỏ bản
+trùng/cũ. Gửi bất đồng bộ qua queue có giới hạn, gộp thành trạng thái mới nhất,
+QoS 1 không retain. Publish lỗi chỉ log/bỏ nên phải subscribe FD và chờ SUBACK
+trước khi query lúc mở màn hình, reconnect, resume. Query lỗi dùng
+`status:"failure"` và `error`. Status có thể đến trước phản hồi lệnh.
+
+Mobile có thể kết nối trực tiếp bằng cấu hình broker theo device và client ID
+riêng duy nhất cho app, không cần sửa BFF. Vẫn cần kiểm chứng broker reachability
+và ACL topic trên triển khai thật. Luồng cập nhật foreground, không phải push
+notification khi đóng app. Xem
+[contract MQTT status đầy đủ](../../../../../docs/vi/mqtt_vi.md#buddystatus--đọc-và-theo-dõi-trạng-thái-buddy)
+và [prompt bàn giao mobile](../../../../../docs/buddy-mobile-handoff_vi.md).
+
 
 ### Reconnect
 

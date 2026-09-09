@@ -1,9 +1,14 @@
 ---
 name: agent-management
-description: Send spoken tasks and follow-ups to coding or research agents in the user's paired Autonomous Buddy desktop. Select the open project/worktree or focused Codex/Claude session, retain that session across voice turns, inspect progress/results, stop work, and handle agent-management notifications. This manages desktop CLI sessions; clicking apps and screenshots use computer-use.
+description: Legacy Autonomous Buddy control for explicitly requested Buddy coding sessions. When the user asks a coding or research agent on their paired Harness computer to work, use harness-use instead. This manages explicit Buddy desktop CLI sessions; clicking apps and screenshots use computer-use.
 ---
 
 # Agent management
+
+Use this only when the user explicitly asks to use Autonomous Buddy, a Buddy
+session, or its selected desktop pane. For ordinary requests to ask an agent on
+the paired Mac to perform work, including research, use `harness-use`; do not
+require a Buddy pairing as a fallback.
 
 Run `python3 scripts/buddy_agents.py` from this skill directory **on the Autonomous device**. The localhost API is the device API, not the Mac. Never start the coding CLI or edit the desktop project's files on the lamp. Buddy owns the terminal PTY, worktree and provider conversation; Swift relays the paired WebSocket.
 
@@ -17,8 +22,8 @@ python3 scripts/buddy_agents.py voice - <<'JSON'
 JSON
 ```
 
-- `target:"active"` explicitly addresses the worktree and focused pane **selected inside Buddy**. It does not guess from OS window focus, most recently updated session or terminal title. Use it for “agent/tab đang mở”, “this selected agent”, or a request to switch to the currently selected tab. A plain shell pane cannot receive agent prompts.
-- Omit `target` for follow-ups such as “thêm test nữa”: the helper retains the last voice session even if desktop tab focus changes. On the first voice request with no retained context it uses Buddy's selected pane. A missing/closed/stale target is an error, never permission to choose another agent.
+- `target:"active"` (or its alias `target:"current"`) explicitly addresses the worktree and focused pane **selected inside Buddy**. It does not guess from OS window focus, most recently updated session or terminal title. Use it for “current session”, “type to current session”, “agent/tab đang mở”, “session hiện tại”, “this selected agent”, or a request to switch to the currently selected tab. These explicit current-selection references override the retained voice target, even if the rest of the sentence says “it”. Fetch the live selection; do not substitute session IDs from conversation history. A plain shell pane cannot receive agent prompts.
+- Omit `target` (or use `target:"previous"`) only for follow-ups such as “thêm test nữa” or “ask the same agent to continue”, without a current/selected-tab reference: the helper retains the last voice session even if desktop tab focus changes. On the first voice request with no retained context it uses Buddy's selected pane. A missing/closed/stale target is an error, never permission to choose another agent.
 - For an explicit project/session, call `list` and use the returned `project_id` and `session_id`. Named selectors `project` and `worktree` match exact returned names, IDs, branch names or paths; ambiguous matches return an error. Ask only which target is meant, then use those exact selectors. Do not invent Mac paths or IDs.
 - To **create** a session, use `new_session:true` plus `provider:"codex"` or `"claude"`, and the requested target worktree. Example: `{"operation":"send","target":"active","new_session":true,"provider":"codex","request_id":"UUID","prompt":"Fix reconnect"}` creates in the selected worktree, including a feature worktree. Only create when the user asks to start a task/session; never create merely because a follow-up target is unavailable. If the provider is unspecified, ask which available agent to use.
 - `operation:"select"` retains an explicitly chosen session without sending a prompt. `operation:"status"` returns the target's session/events. `operation:"stop"` stops that target; it does not roll back edits.

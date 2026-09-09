@@ -372,7 +372,7 @@ không kéo giãn card Presence ngắn theo card Audio cao hơn.
 
 > **Bố cục & pill cloud.** Cụm thiết bị (hàng 2) chia thành hai cột bằng nhau:
 > cột phải cho các card biểu cảm (Emotion, Servo Pose, Versions) và cột trái cho
-> các card trạng thái gọn (Hardware, Scene, Buddy); dưới ~860px hai cột gộp về
+> các card trạng thái gọn (Hardware, Scene, Harness); dưới ~860px hai cột gộp về
 > một. Versions nằm ở cột phải để hai cột cân chiều cao, tránh cột phải bị cụt
 > dưới Servo Pose. Danh sách preset Emotion và danh sách recording Servo render
 > dưới dạng **pill cloud** — pill đang active được đẩy lên đầu để trạng thái hiện
@@ -385,6 +385,23 @@ không kéo giãn card Presence ngắn theo card Audio cao hơn.
 > rõ ở dark mode. Phần tóm tắt chừa đủ chỗ cho emoji và tên dài như
 > `acknowledge`; khi card hẹp, pill cloud sẽ xuống hàng dưới thay vì đè lên
 > trạng thái hiện tại.
+
+**Ghép đôi Harness**
+- Overview dùng `HarnessCard.tsx`; component Buddy được giữ lại nhưng không mount ở đây.
+- **Generate pairing code** gọi `POST /api/harness/pair` có xác thực admin, không cần
+  chọn máy tính. OS tạo mã sáu ký tự có hiệu lực 60 giây.
+- Trên cùng mạng nội bộ, mở Harness Desktop → Settings → Devices, chọn thiết bị
+  Autonomous được tự tìm thấy rồi nhập mã của thiết bị. Với CLI, chạy
+  `harness autonomous-device discover --json`, sau đó
+  `harness autonomous-device pair --device <discoveryId> --code-stdin`.
+  CLI kết nối trực tiếp đến `/api/harness/ws` của thiết bị; việc tìm thiết bị dùng
+  dịch vụ `_autonomous._tcp` đã có. Không nhập IP hoặc cần tài khoản backend.
+- `GET /api/harness/pair/status` chỉ dành cho admin, trả mã đang hoạt động, `expires_at`,
+  `state`, `pairing` với `Cache-Control: no-store`. OS Monitor đọc route này và `/status`
+  mỗi hai giây. Mã bị xoá khi hết hạn, huỷ hoặc hoàn tất; không lưu lâu dài.
+  `POST /api/harness/pair/cancel` huỷ lần ghép đang chờ.
+- Unpair cần xác nhận, gọi `DELETE /api/harness` có xác thực admin. Harness dùng giao thức
+  pairing/phiên E2EE gốc và giữ khóa riêng, độc lập với Buddy.
 
 **Display Eyes**
 - Expression đang hiển thị (mode)
