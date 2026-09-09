@@ -554,6 +554,7 @@ func (s *Server) Serve(closeFn func()) error {
 	// backends that haven't implemented it answer 501 and store nothing.
 	agent.GET("skills", adminAuthMiddleware(s.config), s.agentHandler.ListSkills)
 	agent.GET("skills/files", adminAuthMiddleware(s.config), s.agentHandler.ReadSkillFiles)
+	agent.POST("skills/publish", adminAuthMiddleware(s.config), s.agentHandler.PublishSkill)
 	agent.POST("skills", adminAuthMiddleware(s.config), s.agentHandler.SaveSkill)
 	agent.POST("skills/install", adminAuthMiddleware(s.config), s.agentHandler.InstallSkill)
 	agent.POST("skills/upload", adminAuthMiddleware(s.config), s.agentHandler.UploadSkill)

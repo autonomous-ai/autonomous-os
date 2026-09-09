@@ -2,6 +2,7 @@ package http
 
 import (
 	"archive/zip"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -187,6 +188,76 @@ func (h *AgentHandler) ReadSkillFiles(c *gin.Context) {
 		files = []domain.SkillBundleFile{}
 	}
 	c.JSON(http.StatusOK, serializers.ResponseSuccess(domain.SkillBundle{ID: name, Files: files}))
+}
+
+// PublishSkill packages a device-only skill and submits it to the campaign API.
+// The browser never receives the device API key or accesses the skill directory.
+func (h *AgentHandler) PublishSkill(c *gin.Context) {
+	name := strings.TrimSpace(c.Query("name"))
+	if err := skills.ValidateSkillName(name); err != nil {
+		c.JSON(http.StatusBadRequest, serializers.ResponseError(err.Error()))
+		return
+	}
+	if h.config == nil || strings.TrimSpace(h.config.LLMBaseURL) == "" || strings.TrimSpace(h.config.LLMAPIKey) == "" {
+		c.JSON(http.StatusServiceUnavailable, serializers.ResponseError("device LLM URL or API key is not configured"))
+		return
+	}
+	base, err := url.Parse(h.config.LLMBaseURL)
+	if err != nil || base.Scheme == "" || base.Host == "" {
+		c.JSON(http.StatusServiceUnavailable, serializers.ResponseError("invalid device LLM URL"))
+		return
+	}
+	tmp, err := os.MkdirTemp("", "skill-publish-*")
+	if err != nil {
+		c.JSON(500, serializers.ResponseError("cannot create temp dir"))
+		return
+	}
+	defer os.RemoveAll(tmp)
+	archive, err := h.agentGateway.ExportSkillArchive(name, tmp)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, serializers.ResponseError(err.Error()))
+		return
+	}
+	f, err := os.Open(archive)
+	if err != nil {
+		c.JSON(500, serializers.ResponseError("cannot read skill archive"))
+		return
+	}
+	defer f.Close()
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", filepath.Base(archive))
+	if err == nil {
+		_, err = io.Copy(part, f)
+	}
+	if err == nil {
+		err = writer.Close()
+	}
+	if err != nil {
+		c.JSON(500, serializers.ResponseError("cannot prepare skill publish"))
+		return
+	}
+	base.Path = "/api/v1/skills/publish"
+	base.RawQuery = ""
+	req, err := http.NewRequestWithContext(c.Request.Context(), http.MethodPost, base.String(), &body)
+	if err != nil {
+		c.JSON(500, serializers.ResponseError("cannot create publish request"))
+		return
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("x-api-key", h.config.LLMAPIKey)
+	resp, err := (&http.Client{Timeout: skillDownloadTimeout}).Do(req)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, serializers.ResponseError("failed to reach skill publishing service"))
+		return
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, maxBundleBytes))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		c.JSON(resp.StatusCode, serializers.ResponseError(string(data)))
+		return
+	}
+	c.Data(http.StatusOK, "application/json", data)
 }
 
 // UploadSkill handles POST /api/agent/skills/upload — a skill supplied from the
