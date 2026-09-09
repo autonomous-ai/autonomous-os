@@ -845,6 +845,9 @@ export interface InstalledSkill {
 export async function listInstalledSkills(): Promise<InstalledSkill[]> {
   return apiRequest<InstalledSkill[]>(`${API_BASE}/api/agent/skills`);
 }
+export async function publishSkill(name: string): Promise<void> {
+  await apiRequest(`${API_BASE}/api/agent/skills/publish?name=${encodeURIComponent(name)}`, { method: "POST" });
+}
 
 /** GET /api/agent/skills/files — one installed skill's files with text inlined.
  *  Same `SkillBundle` shape the store preview returns, so both detail views
