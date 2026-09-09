@@ -540,6 +540,9 @@ func (f *fakeGateway) ReadSkillFiles(name string) ([]domain.SkillBundleFile, err
 	f.gotReadName = name
 	return f.readFiles, f.readErr
 }
+func (f *fakeGateway) ExportSkillArchive(name, destDir string) (string, error) {
+	return "", domain.ErrNotSupportedByRuntime
+}
 
 func getReq(t *testing.T, path string) (*httptest.ResponseRecorder, *gin.Context) {
 	t.Helper()

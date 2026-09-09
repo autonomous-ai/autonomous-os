@@ -48,6 +48,9 @@ func (s *CodexService) ListSkills() ([]domain.InstalledSkill, error) {
 func (s *CodexService) ReadSkillFiles(name string) ([]domain.SkillBundleFile, error) {
 	return skills.ReadSkillFiles(codexSkillsDir, name)
 }
+func (s *CodexService) ExportSkillArchive(name, destDir string) (string, error) {
+	return skills.ExportSkillArchive(codexSkillsDir, name, destDir)
+}
 
 func (s *CodexService) ReadSkillFile(name, filePath string) (domain.SkillBundleFile, error) {
 	return skills.ReadSkillFile(codexSkillsDir, name, filePath)

@@ -4,7 +4,7 @@ import {
   FolderTree, Folder, FileText, Loader2, RefreshCw, AlertCircle, ChevronDown,
   Search, Trash2, Plus, PenLine, Sparkles, Upload,
 } from "lucide-react";
-import { listInstalledSkills, readSkillFiles, deleteSkill } from "@/lib/api";
+import { listInstalledSkills, readSkillFiles, deleteSkill, publishSkill } from "@/lib/api";
 import type { InstalledSkill, SkillBundleFile } from "@/lib/api";
 import { ModalShell } from "./ModalShell";
 import { SkillFilesView } from "./SkillFilesView";
@@ -352,6 +352,10 @@ function SkillDetail({
   const [confirming, setConfirming] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [removeError, setRemoveError] = useState("");
+  const [publishing, setPublishing] = useState(false);
+  const [publishError, setPublishError] = useState("");
+
+  const publish = async () => { setPublishing(true); setPublishError(""); try { await publishSkill(skill.name); } catch (e) { setPublishError(e instanceof Error ? e.message : "Failed to publish"); } finally { setPublishing(false); } };
 
   const uninstall = async () => {
     setRemoving(true);
@@ -427,6 +431,8 @@ function SkillDetail({
                 ? <><Trash2 size={14} /> Confirm uninstall</>
                 : <><Trash2 size={14} /> Uninstall</>}
           </button>
+          {skill.store_availability === "device_only" && <button type="button" className="lm-u-btn" style={btnStyle} disabled={publishing} onClick={() => void publish()}>{publishing ? "Publishing…" : "Publish to store"}</button>}
+          {publishError && <span style={{ color: "var(--lm-red)", fontSize: 11 }}>{publishError}</span>}
         </div>
       }
     >
