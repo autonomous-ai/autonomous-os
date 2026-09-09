@@ -831,6 +831,9 @@ export interface InstalledSkill {
   name: string;
   description?: string;
   files: SkillNode[];
+  /** Whether this directory name is currently present in the skill catalog.
+   * `unknown` means the device could not read the complete catalog. */
+  store_availability?: "in_store" | "device_only" | "unknown";
   /** Newest mtime anywhere in the skill's tree, Unix SECONDS. Omitted when
    *  nothing in the tree could be stat'd. */
   updated_at?: number;
