@@ -31,8 +31,11 @@ Tool `delegate_to_main` được orchestrator đăng ký tự động (`orchestr
 
 ### Điều khiển agent qua Harness bằng giọng nói
 
-Yêu cầu coding/research trên máy tính và câu tiếp nối rõ ràng được delegate về
-runtime chính, realtime không nói kèm. Mô tả tool delegate dùng
+Yêu cầu nêu Harness, một agent trên Mac, Codex, Claude, project, worktree, session,
+hoặc yêu cầu agent dùng browser được delegate về runtime chính, realtime không nói
+kèm. Kể cả research phổ thông bằng browser, ví dụ nhờ agent tìm nhà hàng, cũng đi
+theo luồng này. Realtime không tự trả lời, tự search, hoặc tự nhận kết quả cho các
+yêu cầu đó. Mô tả tool delegate dùng
 [`harness-use`](../../skills/harness-use/SKILL.md). Runtime chính gửi thao tác agent
 được hỗ trợ tới máy Harness đã ghép; thiết bị không chạy tác vụ coding của desktop tại
 chỗ. OS giữ lựa chọn machine và agent tường minh. Đích thiếu hoặc mơ hồ cần hỏi lại;
@@ -44,7 +47,7 @@ approve tool hoặc gõ mù vào terminal. Link quản lý trạng thái và đ�
 Harness; delegate giọng nói không cho phép tự gửi lại mutation chưa rõ kết quả.
 Luồng giọng nói thực tế vẫn cần kiểm chứng sau này.
 
-### Điều khiển agent session của Buddy bằng giọng nói
+### Điều khiển legacy Buddy agent session bằng giọng nói
 
 Yêu cầu như “Nhờ Codex sửa reconnect trong project autonomous” được delegate,
 realtime không nói kèm. Cả bốn prompt provider và mô tả tool delegate đều nêu rõ
@@ -52,10 +55,12 @@ các yêu cầu coding/research, chọn project/worktree/session, xem tiến đ�
 trả lời tiếp cho task. Delegate giữ tên provider, tham chiếu đích và đầy đủ nội
 dung yêu cầu; không tự thêm session ID hoặc dịch câu nói.
 
-Runtime chính dùng [`agent-management`](../../skills/agent-management/SKILL.md)
-để gửi qua API nội bộ của device và kết nối Buddy đã pair. Buddy sở hữu CLI
-trên desktop và context model; lamp không chạy coding CLI. Đây là quản lý
-session, tách khỏi executor native `computer-use`. Sau một task đã xác định,
+Chỉ yêu cầu tường minh tới legacy Buddy session mới dùng
+[`agent-management`](../../skills/agent-management/SKILL.md) để gửi qua API nội bộ
+của device và kết nối Buddy đã pair. Tác vụ agent bình thường trên Mac dùng
+`harness-use`. Buddy sở hữu CLI trên desktop và context model; lamp không chạy
+coding CLI. Đây là quản lý session, tách khỏi executor native `computer-use`.
+Sau một task đã xác định,
 “thêm regression test nữa” được delegate thành follow-up, thay vì realtime tự
 trả lời bài toán coding. Runtime chính xác định đúng đích hoặc hỏi khi mơ hồ. Action `voice` của
 skill lưu project/session theo từng cuộc hội thoại và xác thực IDs bằng

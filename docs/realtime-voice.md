@@ -31,8 +31,11 @@ The `delegate_to_main` tool is registered automatically by the orchestrator
 
 ### Voice control through Harness
 
-Desktop coding/research requests and clear follow-ups delegate to the main runtime
-with blank realtime speech. The shared delegate tool names
+Requests that name Harness, a Mac agent, Codex, Claude, a project, worktree, or
+session, or ask an agent to use a browser delegate to the main runtime with blank
+realtime speech. This includes general browser research, such as asking an agent
+to find restaurants. Realtime does not answer, search, or claim results for those
+requests. The shared delegate tool names
 [`harness-use`](../skills/harness-use/SKILL.md). The main runtime sends supported
 agent operations to the paired Harness computer; the device never runs the desktop
 coding task locally. The OS owns explicit machine and agent selection. Missing or
@@ -45,7 +48,7 @@ approve a tool or blindly type into a terminal prompt. Harness status and receip
 reconciliation are owned by the link; voice delegation does not automatically
 replay uncertain mutations. Live speech routing still requires later validation.
 
-### Voice control of Buddy agent sessions
+### Voice control of legacy Buddy agent sessions
 
 Requests such as “Ask Codex to fix reconnect in project autonomous” delegate
 with blank realtime speech. All four provider prompts and the shared delegate
@@ -54,10 +57,12 @@ selection, progress queries, stop, and subsequent task replies. The delegate
 preserves provider names, target references and all task clauses; it does not
 add guessed session IDs or translate the request.
 
-The selected main runtime uses [`agent-management`](../skills/agent-management/SKILL.md)
-to route through the local device API and paired Buddy connection. Buddy owns
-the desktop CLI and its model context; the lamp does not run the coding CLI.
-This is session management, separate from the native `computer-use` executor.
+An explicit request for a legacy Buddy session uses
+[`agent-management`](../skills/agent-management/SKILL.md) to route through the
+local device API and paired Buddy connection. Normal Mac agent work uses
+`harness-use`. Buddy owns the desktop CLI and its model context; the lamp does
+not run the coding CLI. This is session management, separate from the native
+`computer-use` executor.
 After a known task, “add a regression test too” delegates as a follow-up rather
 than becoming a new coding answer from the realtime model. The main runtime
 resolves the exact target or asks when ambiguous. The skill's `voice` action
