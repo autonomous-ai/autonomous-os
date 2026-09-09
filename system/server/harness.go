@@ -213,10 +213,59 @@ func (s *Server) forwardHarnessEvent(frame harness.Frame) {
 		s.agentHandler.DeliverHarnessProgress(reply.runID, text)
 		return
 	}
+	if kind == "turn.summary" {
+		// The event's text is the compact device-card preview. Fetch the
+		// corresponding recap before delivering so Web Chat and TTS receive the
+		// complete user-facing result retained by Harness.
+		text = s.harnessRecapText(agentID, text)
+	}
 	s.rememberHarnessResult(text)
 	if !s.agentHandler.DeliverHarnessResponse(reply.runID, text) {
 		slog.Warn("Harness result had no pending device turn", "component", "harness", "run_id", reply.runID)
 	}
+}
+
+// harnessRecapText reads the complete final text stored by Harness. Summary
+// events deliberately carry a compact preview for device tiles, so that
+// preview is used only if the read-only recap request cannot be completed.
+func (s *Server) harnessRecapText(agentID, fallback string) string {
+	if s.harnessService == nil || agentID == "" {
+		return fallback
+	}
+	machineID := s.harnessService.Status().MachineID
+	if machineID == "" {
+		return fallback
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	frame, err := s.harnessService.Request(ctx, harness.Frame{
+		"type":      "recap",
+		"machineId": machineID,
+		"agentId":   agentID,
+		"n":         1,
+	})
+	if err != nil {
+		slog.Debug("Harness recap unavailable; using summary preview", "component", "harness", "agent_id", agentID, "error", err)
+		return fallback
+	}
+	if text := harnessRecapResultText(frame); text != "" {
+		return text
+	}
+	return fallback
+}
+
+// harnessRecapResultText extracts the latest complete user-facing message
+// from the read-only recap result. It deliberately ignores recap, which is a
+// short label, and falls back at the caller when an older CLI lacks turns.
+func harnessRecapResultText(frame harness.Frame) string {
+	turns, _ := frame["turns"].([]any)
+	for _, raw := range turns {
+		turn, _ := raw.(map[string]any)
+		if text, _ := turn["text"].(string); strings.TrimSpace(text) != "" {
+			return strings.TrimSpace(text)
+		}
+	}
+	return ""
 }
 
 func harnessEventText(kind string, frame harness.Frame) string {

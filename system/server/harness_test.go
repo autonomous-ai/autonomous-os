@@ -110,6 +110,16 @@ func TestHarnessEventTextUsesDirectLifecycleAndSummary(t *testing.T) {
 	}); got != "Exact Harness answer" {
 		t.Fatalf("summary text = %q", got)
 	}
+	if got := harnessRecapResultText(harness.Frame{
+		"turns": []any{map[string]any{"text": "The complete Harness answer, including every recommendation."}},
+	}); got != "The complete Harness answer, including every recommendation." {
+		t.Fatalf("recap result text = %q", got)
+	}
+	if got := harnessRecapResultText(harness.Frame{
+		"turns": []any{map[string]any{"recap": "short label"}},
+	}); got != "" {
+		t.Fatalf("missing recap text = %q", got)
+	}
 	if got := harnessEventText("question.open", harness.Frame{
 		"payload": map[string]any{"questions": []any{map[string]any{"question": "Which city should I use?"}}},
 	}); got != "Which city should I use?" {
