@@ -140,8 +140,17 @@ func (h *AgentHandler) DeliverHarnessResponse(runID, text string) bool {
 		h.harnessReplies[runID] = state
 	}
 	h.harnessRepliesMu.Unlock()
-	if !ok || wasDelivered || text == "" {
+	if wasDelivered || text == "" {
 		return false
+	}
+	// A lifecycle cleanup can race the delayed Harness callback. The terminal
+	// recap is still valid and must reach Web/MQTT, whose stream is keyed by the
+	// original run ID. Without this fallback the result is silently discarded.
+	if !ok {
+		if h.monitorBus != nil {
+			h.monitorBus.Push(domain.MonitorEvent{Type: "chat_response", Summary: text, RunID: runID, State: "final", Detail: map[string]string{"role": "assistant", "message": text, "source": "harness"}})
+		}
+		return true
 	}
 	// A final remote answer replaces any generic progress filler immediately.
 	sensinghttp.DefaultFillerManager.Cancel(runID)
