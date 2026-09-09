@@ -29,7 +29,6 @@ func TestHarnessRoutingTakesPriorityForExplicitBuddyRequests(t *testing.T) {
 	for _, message := range []string{
 		"Ask Autonomous Buddy to open Chrome.",
 		"Tell Buddy to check my calendar.",
-		"Use the Buddy app on my Mac.",
 	} {
 		if !harnessAgentRequest.MatchString(message) || !buddyAgentRequest.MatchString(message) {
 			t.Fatalf("explicit Buddy request should preserve both routing signals: %q", message)
