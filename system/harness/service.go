@@ -613,10 +613,9 @@ func (s *Service) Unpair() error {
 	s.generation++
 	previous := s.disk.Peer
 	c := s.conn
-	// Notify the paired CLI over the authenticated encrypted channel before
-	// removing local trust, so it can discard its credentials immediately.
+	var revoke Frame
 	if c != nil && previous != nil {
-		_ = c.channel.SendEncrypted(Frame{"type": "pair.revoke", "machineId": previous.MachineID})
+		revoke = Frame{"type": "pair.revoke", "machineId": previous.MachineID}
 	}
 	s.disk.Peer = nil
 	err := s.saveLocked()
@@ -639,6 +638,12 @@ func (s *Service) Unpair() error {
 		sockets = append(sockets, socket)
 	}
 	s.mu.Unlock()
+	// Never let a stalled/offline CLI delay local trust removal or the MQTT
+	// acknowledgement. The socket is closed below; this best-effort notice is
+	// only for promptly clearing the CLI's credentials when it is reachable.
+	if revoke != nil {
+		go func() { _ = c.channel.SendEncrypted(revoke) }()
+	}
 	for _, socket := range sockets {
 		socket.Close()
 	}
