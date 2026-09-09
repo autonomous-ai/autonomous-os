@@ -83,10 +83,19 @@ func (s *Server) registerHarnessRoutes(api *gin.RouterGroup, ctx context.Context
 		}
 		kind, _ := frame["type"].(string)
 		agentID, _ := frame["agentId"].(string)
+		tracksReply := (kind == "turn.send" || kind == "question.answer") && reply != nil
+		// A local Harness agent can complete before Request returns its receipt.
+		// Install the local route first so an immediate terminal event is not lost.
+		if tracksReply {
+			s.registerHarnessReply(agentID, reply.RunID, reply.Channel == "web")
+		}
 		requestCtx, cancel := context.WithTimeout(c.Request.Context(), 35*time.Second)
 		defer cancel()
 		result, err := s.harnessService.Request(requestCtx, frame)
 		if err != nil {
+			if tracksReply {
+				s.forgetHarnessReply(agentID, reply.RunID)
+			}
 			var uncertain *harness.DeliveryUnknownError
 			if errors.As(err, &uncertain) {
 				c.JSON(http.StatusBadGateway, serializers.ResponseError("Harness delivery is unknown; inspect receipt before sending again"))
@@ -94,9 +103,6 @@ func (s *Server) registerHarnessRoutes(api *gin.RouterGroup, ctx context.Context
 			}
 			c.JSON(http.StatusBadGateway, serializers.ResponseError(err.Error()))
 			return
-		}
-		if (kind == "turn.send" || kind == "question.answer") && reply != nil {
-			s.registerHarnessReply(agentID, reply.RunID, reply.Channel == "web")
 		}
 		c.JSON(http.StatusOK, serializers.ResponseSuccess(result))
 	})
@@ -137,6 +143,14 @@ func (s *Server) registerHarnessReply(agentID, runID string, webChat bool) {
 	s.harnessRepliesMu.Unlock()
 	s.harnessFollowup.Store(time.Now().Add(2 * time.Minute).UnixMilli())
 	s.agentHandler.MarkHarnessResponseRun(runID, webChat)
+}
+
+func (s *Server) forgetHarnessReply(agentID, runID string) {
+	s.harnessRepliesMu.Lock()
+	if current, ok := s.harnessReplies[agentID]; ok && current.runID == runID {
+		delete(s.harnessReplies, agentID)
+	}
+	s.harnessRepliesMu.Unlock()
 }
 
 // HarnessVoiceFollowup keeps short spoken clarifications with the paired agent.

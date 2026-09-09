@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"go.autonomous.ai/os/system/harness"
@@ -113,5 +114,19 @@ func TestHarnessEventTextUsesDirectLifecycleAndSummary(t *testing.T) {
 		"payload": map[string]any{"questions": []any{map[string]any{"question": "Which city should I use?"}}},
 	}); got != "Which city should I use?" {
 		t.Fatalf("question text = %q", got)
+	}
+}
+
+func TestForgetHarnessReplyOnlyRemovesMatchingRun(t *testing.T) {
+	s := &Server{harnessReplies: map[string]harnessReply{
+		"agent-1": {runID: "current", created: time.Now()},
+	}}
+	s.forgetHarnessReply("agent-1", "older")
+	if _, ok := s.harnessReplies["agent-1"]; !ok {
+		t.Fatal("an older failed request removed the current reply route")
+	}
+	s.forgetHarnessReply("agent-1", "current")
+	if _, ok := s.harnessReplies["agent-1"]; ok {
+		t.Fatal("matching failed request left its reply route behind")
 	}
 }
