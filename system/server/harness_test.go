@@ -106,12 +106,12 @@ func TestHarnessEventTextUsesDirectLifecycleAndSummary(t *testing.T) {
 		t.Fatalf("started text = %q", got)
 	}
 	if got := harnessEventText("turn.summary", harness.Frame{
-		"payload": map[string]any{"text": "Exact Harness answer", "recap": "short recap"},
-	}); got != "Exact Harness answer" {
+		"payload": map[string]any{"fullText": "Complete Harness answer\n\n- one\n- two", "text": "Exact Harness answer", "recap": "short recap"},
+	}); got != "Complete Harness answer\n\n- one\n- two" {
 		t.Fatalf("summary text = %q", got)
 	}
 	if got := harnessRecapResultText(harness.Frame{
-		"turns": []any{map[string]any{"text": "The complete Harness answer, including every recommendation."}},
+		"turns": []any{map[string]any{"fullText": "The complete Harness answer, including every recommendation.", "text": "Short preview"}},
 	}); got != "The complete Harness answer, including every recommendation." {
 		t.Fatalf("recap result text = %q", got)
 	}

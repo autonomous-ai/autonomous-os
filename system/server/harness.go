@@ -255,12 +255,15 @@ func (s *Server) harnessRecapText(agentID, fallback string) string {
 }
 
 // harnessRecapResultText extracts the latest complete user-facing message
-// from the read-only recap result. It deliberately ignores recap, which is a
-// short label, and falls back at the caller when an older CLI lacks turns.
+// from the read-only recap result. fullText is supplied by current Harness
+// CLIs for readers such as voice; text is the compact legacy preview.
 func harnessRecapResultText(frame harness.Frame) string {
 	turns, _ := frame["turns"].([]any)
 	for _, raw := range turns {
 		turn, _ := raw.(map[string]any)
+		if fullText, _ := turn["fullText"].(string); strings.TrimSpace(fullText) != "" {
+			return strings.TrimSpace(fullText)
+		}
 		if text, _ := turn["text"].(string); strings.TrimSpace(text) != "" {
 			return strings.TrimSpace(text)
 		}
@@ -304,6 +307,11 @@ func harnessEventText(kind string, frame harness.Frame) string {
 	}
 	if kind == "turn.error" {
 		return "Harness stopped before it returned a result."
+	}
+	if kind == "turn.summary" {
+		if fullText, _ := payload["fullText"].(string); strings.TrimSpace(fullText) != "" {
+			return strings.TrimSpace(fullText)
+		}
 	}
 	text, _ := payload["text"].(string)
 	if kind == "turn.summary" && strings.TrimSpace(text) == "" {
