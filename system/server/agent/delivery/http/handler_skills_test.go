@@ -445,8 +445,25 @@ func (f *fakeGateway) ListSkills() ([]domain.InstalledSkill, error) {
 
 func TestListSkills(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	store := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("limit"); got != "100" {
+			t.Errorf("limit = %q, want 100", got)
+		}
+		switch r.URL.Query().Get("page") {
+		case "1":
+			_, _ = w.Write([]byte(`{"status":1,"data":{"data":[{"name":"Music","slug":"music"}],"total":101}}`))
+		case "2":
+			_, _ = w.Write([]byte(`{"status":1,"data":{"data":[{"name":"Local Tool","slug":"local-tool"}],"total":101}}`))
+		default:
+			t.Errorf("unexpected catalog page %q", r.URL.Query().Get("page"))
+		}
+	}))
+	defer store.Close()
+	t.Setenv("SKILL_STORE_BASE_URL", store.URL)
 	gw := &fakeGateway{name: "OpenClaw", list: []domain.InstalledSkill{
 		{Name: "music", Description: "Play music.", Files: []domain.SkillNode{{Name: "SKILL.md", Path: "music/SKILL.md"}}},
+		{Name: "local-tool", Files: []domain.SkillNode{{Name: "SKILL.md", Path: "local-tool/SKILL.md"}}},
+		{Name: "device-only", Files: []domain.SkillNode{{Name: "SKILL.md", Path: "device-only/SKILL.md"}}},
 	}}
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -459,6 +476,30 @@ func TestListSkills(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"music/SKILL.md"`) {
 		t.Errorf("tree not serialized: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"store_availability":"in_store"`) ||
+		!strings.Contains(rec.Body.String(), `"store_availability":"device_only"`) {
+		t.Errorf("store availability not serialized: %s", rec.Body.String())
+	}
+}
+
+func TestListSkillsStoreUnavailableIsUnknown(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer store.Close()
+	t.Setenv("SKILL_STORE_BASE_URL", store.URL)
+	gw := &fakeGateway{name: "OpenClaw", list: []domain.InstalledSkill{{Name: "music"}}}
+	rec, c := getReq(t, "/api/agent/skills")
+
+	(&AgentHandler{agentGateway: gw}).ListSkills(c)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"store_availability":"unknown"`) {
+		t.Errorf("unavailable store must be unknown: %s", rec.Body.String())
 	}
 }
 
@@ -498,6 +539,9 @@ func TestListSkillsEmptyIsArray(t *testing.T) {
 func (f *fakeGateway) ReadSkillFiles(name string) ([]domain.SkillBundleFile, error) {
 	f.gotReadName = name
 	return f.readFiles, f.readErr
+}
+func (f *fakeGateway) ExportSkillArchive(name, destDir string) (string, error) {
+	return "", domain.ErrNotSupportedByRuntime
 }
 
 func getReq(t *testing.T, path string) (*httptest.ResponseRecorder, *gin.Context) {

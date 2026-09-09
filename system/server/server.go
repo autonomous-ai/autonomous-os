@@ -320,6 +320,7 @@ func (s *Server) Serve(closeFn func()) error {
 	} else {
 		s.harnessService = harnessService
 		harnessService.Start(eventCtx)
+		s.deviceMQTTHandler.SetHarnessService(harnessService)
 	}
 	go s.agentGateway.StartWS(eventCtx, s.agentHandler.HandleEvent)
 	go s.agentGateway.WatchIdentity(eventCtx)
@@ -329,6 +330,7 @@ func (s *Server) Serve(closeFn func()) error {
 	// a chat.send arrives — no run is tracked, so every bus event is dropped.
 	s.chatStream.Start(eventCtx)
 	go s.deviceMQTTHandler.StartBuddyStatusLoop(eventCtx)
+	go s.deviceMQTTHandler.StartHarnessStatusLoop(eventCtx)
 	// StartModelSync is launched from the startup-sequence goroutine AFTER
 	// EnsureOnboarding completes, so the two writers to openclaw.json don't
 	// race on first boot (sync's atomic write vs ensureAgentDefaults' plain
@@ -552,6 +554,7 @@ func (s *Server) Serve(closeFn func()) error {
 	// backends that haven't implemented it answer 501 and store nothing.
 	agent.GET("skills", adminAuthMiddleware(s.config), s.agentHandler.ListSkills)
 	agent.GET("skills/files", adminAuthMiddleware(s.config), s.agentHandler.ReadSkillFiles)
+	agent.POST("skills/publish", adminAuthMiddleware(s.config), s.agentHandler.PublishSkill)
 	agent.POST("skills", adminAuthMiddleware(s.config), s.agentHandler.SaveSkill)
 	agent.POST("skills/install", adminAuthMiddleware(s.config), s.agentHandler.InstallSkill)
 	agent.POST("skills/upload", adminAuthMiddleware(s.config), s.agentHandler.UploadSkill)

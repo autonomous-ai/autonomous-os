@@ -36,6 +36,14 @@ func (h *AgentHandler) suppressHarnessAgentReply(runID string) bool {
 	h.harnessRepliesMu.Lock()
 	defer h.harnessRepliesMu.Unlock()
 	state, ok := h.harnessReplies[runID]
+	if !ok {
+		for _, candidate := range h.harnessReplies {
+			if candidate.webChat && !candidate.delivered {
+				ok, state = true, candidate
+				break
+			}
+		}
+	}
 	if state.delivered {
 		delete(h.harnessReplies, runID)
 	}
@@ -44,6 +52,12 @@ func (h *AgentHandler) suppressHarnessAgentReply(runID string) bool {
 
 func (h *AgentHandler) clearHarnessResponseRun(runID string) {
 	h.harnessRepliesMu.Lock()
+	if state, ok := h.harnessReplies[runID]; ok && state.webChat && !state.delivered {
+		// Web/MQTT turns may receive the Harness terminal event after the local
+		// lifecycle ends; retain the route for delayed delivery.
+		h.harnessRepliesMu.Unlock()
+		return
+	}
 	delete(h.harnessReplies, runID)
 	h.harnessRepliesMu.Unlock()
 }
@@ -124,14 +138,33 @@ func (h *AgentHandler) ResumeHarnessVoiceFillers(runID string) {
 func (h *AgentHandler) DeliverHarnessResponse(runID, text string) bool {
 	h.harnessRepliesMu.Lock()
 	state, ok := h.harnessReplies[runID]
+	if !ok {
+		// Older Web/MQTT routing objects used the remote Harness run id instead
+		// of the local device run id. A pending web turn is unambiguous here.
+		for candidateID, candidate := range h.harnessReplies {
+			if candidate.webChat && !candidate.delivered {
+				runID, state, ok = candidateID, candidate, true
+				break
+			}
+		}
+	}
 	wasDelivered := state.delivered
 	if ok && !wasDelivered {
 		state.delivered = true
 		h.harnessReplies[runID] = state
 	}
 	h.harnessRepliesMu.Unlock()
-	if !ok || wasDelivered || text == "" {
+	if wasDelivered || text == "" {
 		return false
+	}
+	// A lifecycle cleanup can race the delayed Harness callback. The terminal
+	// recap is still valid and must reach Web/MQTT, whose stream is keyed by the
+	// original run ID. Without this fallback the result is silently discarded.
+	if !ok {
+		if h.monitorBus != nil {
+			h.monitorBus.Push(domain.MonitorEvent{Type: "chat_response", Summary: text, RunID: runID, State: "final", Detail: map[string]string{"role": "assistant", "message": text, "source": "harness"}})
+		}
+		return true
 	}
 	// A final remote answer replaces any generic progress filler immediately.
 	sensinghttp.DefaultFillerManager.Cancel(runID)

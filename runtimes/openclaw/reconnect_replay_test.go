@@ -97,7 +97,7 @@ func TestReconnectDrainsUnsentAfterAuthenticatedHandshake(t *testing.T) {
 	select {
 	case frame := <-got:
 		params, _ := frame["params"].(map[string]any)
-		if frame["method"] != "chat.send" || params["idempotencyKey"] != "queued-user" || params["message"] != "[user] Open Notes" {
+		if frame["method"] != "chat.send" || params["idempotencyKey"] != "queued-user" || params["message"] != "[user] Open Notes\n[harness-reply run_id=queued-user channel=web]" {
 			t.Errorf("wrong replay: %v", frame)
 		}
 		var wg sync.WaitGroup

@@ -854,6 +854,9 @@ export interface InstalledSkill {
   name: string;
   description?: string;
   files: SkillNode[];
+  /** Whether this directory name is currently present in the skill catalog.
+   * `unknown` means the device could not read the complete catalog. */
+  store_availability?: "in_store" | "device_only" | "unknown";
   /** Newest mtime anywhere in the skill's tree, Unix SECONDS. Omitted when
    *  nothing in the tree could be stat'd. */
   updated_at?: number;
@@ -864,6 +867,9 @@ export interface InstalledSkill {
  *  (HTTP 501). An un-provisioned runtime returns an empty list, not an error. */
 export async function listInstalledSkills(): Promise<InstalledSkill[]> {
   return apiRequest<InstalledSkill[]>(`${API_BASE}/api/agent/skills`);
+}
+export async function publishSkill(name: string): Promise<void> {
+  await apiRequest(`${API_BASE}/api/agent/skills/publish?name=${encodeURIComponent(name)}`, { method: "POST" });
 }
 
 /** GET /api/agent/skills/files — one installed skill's files with text inlined.

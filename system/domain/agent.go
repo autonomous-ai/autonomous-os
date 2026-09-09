@@ -215,6 +215,7 @@ type AgentGateway interface {
 	// same two-pane browser as the store preview. Same per-backend split as
 	// ListSkills (skills.ReadSkillFiles does the walk).
 	ReadSkillFiles(name string) ([]SkillBundleFile, error)
+	ExportSkillArchive(name, destDir string) (string, error)
 
 	// ReadSkillFile returns one installed skill file addressed by the exact path
 	// emitted by ReadSkillFiles (for example "music/SKILL.md"). Callers that

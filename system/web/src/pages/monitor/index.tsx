@@ -790,7 +790,15 @@ export default function Monitor() {
           ...S.content,
           ...(section === "chat" ? { padding: 0, overflow: "hidden" } : {}),
           ...(EMBED_SECTIONS.has(section) ? { padding: 0, overflow: "hidden" } : {}),
-          ...(section.startsWith("settings:") ? { padding: 0, overflow: "hidden" } : {}),
+          // display:flex + column is load-bearing, not cosmetic: SettingsPanel
+          // scrolls itself via flex:1/minHeight:0/overflowY:auto, and those do
+          // nothing unless this wrapper is a flex container. Without it the
+          // panel's height stays `auto`, grows past this overflow:hidden box,
+          // and a long list (many schedules) is simply clipped with no
+          // scrollbar anywhere to reach it.
+          ...(section.startsWith("settings:")
+            ? { padding: 0, overflow: "hidden", display: "flex", flexDirection: "column" as const }
+            : {}),
         }} className="lm-content">
           {/* Non-chat sections share a keyed wrapper so switching between them
               re-triggers the fade-in. Chat stays OUTSIDE this wrapper (always

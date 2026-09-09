@@ -211,3 +211,16 @@ func TestDeltaText(t *testing.T) {
 		}
 	}
 }
+
+func TestSilentFinalTerminatesMobileRequest(t *testing.T) {
+	s, sent := newTestStream()
+	s.Track("run1", "sess1")
+	s.handle(domain.MonitorEvent{Type: "chat_response", RunID: "run1", State: "final", Summary: "NO_REPLY"})
+	got := sent()
+	if len(got) != 1 || got[0].Event.State != "final" || got[0].Event.Summary != "" {
+		t.Fatalf("missing clean terminal event: %+v", got)
+	}
+	if _, exists := s.runs["run1"]; exists {
+		t.Fatal("silent run still tracked")
+	}
+}

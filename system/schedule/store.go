@@ -294,6 +294,29 @@ func (s *Store) ReplaceWithTimezone(schedules []Schedule, timezone string) error
 	})
 }
 
+// SetTimezone updates ONLY the device-wide timezone, leaving the schedule list
+// untouched.
+//
+// Exists because a timezone change arrives on its own downlink (timezone.set),
+// not as part of a schedule.sync — and the runner resolves every wall-clock
+// cadence against Store.Timezone(). Without this the store keeps whatever
+// timezone the last sync happened to carry, so a device moved from UTC to
+// Asia/Saigon goes on firing on the old zone until some unrelated edit
+// triggers a sync. Observed live: a task set for 11:00 fired at 18:02 local.
+//
+// Returns whether the value actually changed, so callers can skip the
+// next-run recompute when a timezone.set is a no-op repeat.
+func (s *Store) SetTimezone(timezone string) (changed bool, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f := s.loadFileLocked()
+	if f.Timezone == timezone {
+		return false, nil
+	}
+	f.Timezone = timezone
+	return true, s.saveFileLocked(f)
+}
+
 // Get returns one schedule by id.
 func (s *Store) Get(id string) (Schedule, bool) {
 	s.mu.Lock()
