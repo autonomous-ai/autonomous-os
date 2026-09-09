@@ -5,11 +5,14 @@ import (
 
 	"go.autonomous.ai/os/system/domain"
 	"go.autonomous.ai/os/system/lib/hal"
+	sensinghttp "go.autonomous.ai/os/system/server/sensing/delivery/http"
 )
 
 type harnessReplyState struct {
 	webChat   bool
 	delivered bool
+	toolName  string
+	toolArgs  string
 }
 
 // MarkHarnessResponseRun holds a user turn open for the final recap from its
@@ -68,6 +71,54 @@ func (h *AgentHandler) DeliverHarnessProgress(runID, text string) bool {
 	return true
 }
 
+// DeliverHarnessTool retains a remote tool start for the voice filler that
+// stays alive after the device agent has handed work to Harness. Tool events
+// can beat the device agent's NO_REPLY lifecycle by a few milliseconds, so
+// the tool is stored as well as forwarded to an already-active filler.
+func (h *AgentHandler) DeliverHarnessTool(runID, toolName, toolArgs string) bool {
+	if runID == "" || toolName == "" {
+		return false
+	}
+	h.harnessRepliesMu.Lock()
+	state, pending := h.harnessReplies[runID]
+	if pending && !state.delivered {
+		state.toolName = toolName
+		state.toolArgs = toolArgs
+		h.harnessReplies[runID] = state
+	}
+	h.harnessRepliesMu.Unlock()
+	if !pending || state.delivered {
+		return false
+	}
+	if !state.webChat {
+		sensinghttp.DefaultFillerManager.OnToolStart(runID, toolArgs, toolName)
+	}
+	if h.monitorBus != nil {
+		h.monitorBus.Push(domain.MonitorEvent{
+			Type: "assistant_delta", Summary: "Harness is " + toolName + ".", RunID: runID,
+			Detail: map[string]string{"role": "assistant", "source": "harness"},
+		})
+	}
+	return true
+}
+
+// ResumeHarnessVoiceFillers recreates a voice-only filler after the device
+// agent returns NO_REPLY. Its normal lifecycle cancellation must not silence a
+// long-running Harness task that it has just delegated.
+func (h *AgentHandler) ResumeHarnessVoiceFillers(runID string) {
+	h.harnessRepliesMu.Lock()
+	state, pending := h.harnessReplies[runID]
+	h.harnessRepliesMu.Unlock()
+	if !pending || state.delivered || state.webChat {
+		return
+	}
+	sensinghttp.DefaultFillerManager.MarkVoiceRun(runID, "")
+	sensinghttp.DefaultFillerManager.OnTurnStart(runID)
+	if state.toolName != "" {
+		sensinghttp.DefaultFillerManager.OnToolStart(runID, state.toolArgs, state.toolName)
+	}
+}
+
 // DeliverHarnessResponse emits the paired agent's final recap as the response
 // to the original device turn. Web chat is display-only; voice uses normal TTS.
 func (h *AgentHandler) DeliverHarnessResponse(runID, text string) bool {
@@ -82,6 +133,8 @@ func (h *AgentHandler) DeliverHarnessResponse(runID, text string) bool {
 	if !ok || wasDelivered || text == "" {
 		return false
 	}
+	// A final remote answer replaces any generic progress filler immediately.
+	sensinghttp.DefaultFillerManager.Cancel(runID)
 	if h.monitorBus != nil {
 		h.monitorBus.Push(domain.MonitorEvent{
 			Type: "chat_response", Summary: text, RunID: runID, State: "final",

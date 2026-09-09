@@ -38,3 +38,18 @@ func TestHarnessProgressKeepsTheResponsePending(t *testing.T) {
 		t.Fatalf("event = %#v", event)
 	}
 }
+
+func TestHarnessToolIsShownWhileResponseIsPending(t *testing.T) {
+	bus := monitor.ProvideBus()
+	events, unsubscribe := bus.Subscribe()
+	defer unsubscribe()
+	h := &AgentHandler{monitorBus: bus}
+	h.MarkHarnessResponseRun("device-chat-42", true)
+	if !h.DeliverHarnessTool("device-chat-42", "web_search", "restaurants in Hanoi") {
+		t.Fatal("Harness tool was not delivered")
+	}
+	event := <-events
+	if event.Type != "assistant_delta" || event.RunID != "device-chat-42" || event.Summary != "Harness is web_search." {
+		t.Fatalf("event = %#v", event)
+	}
+}

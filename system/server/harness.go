@@ -195,6 +195,19 @@ func (s *Server) forwardHarnessEvent(frame harness.Frame) {
 		return
 	}
 	kind, _ := frame["kind"].(string)
+	if kind == "turn.tool" {
+		toolName, toolArgs := harnessToolEvent(frame)
+		if toolName == "" {
+			return
+		}
+		s.harnessRepliesMu.Lock()
+		reply, ok := s.harnessReplies[agentID]
+		s.harnessRepliesMu.Unlock()
+		if ok && time.Since(reply.created) <= 15*time.Minute {
+			s.agentHandler.DeliverHarnessTool(reply.runID, toolName, toolArgs)
+		}
+		return
+	}
 	text := harnessEventText(kind, frame)
 	if text == "" {
 		return
@@ -223,6 +236,20 @@ func (s *Server) forwardHarnessEvent(frame harness.Frame) {
 	if !s.agentHandler.DeliverHarnessResponse(reply.runID, text) {
 		slog.Warn("Harness result had no pending device turn", "component", "harness", "run_id", reply.runID)
 	}
+}
+
+func harnessToolEvent(frame harness.Frame) (name, args string) {
+	payload, _ := frame["payload"].(map[string]any)
+	if payload == nil {
+		return "", ""
+	}
+	name, _ = payload["text"].(string)
+	if detail, _ := payload["detail"].(string); detail != "" {
+		args = detail
+	} else {
+		args, _ = payload["recap"].(string)
+	}
+	return strings.TrimSpace(name), strings.TrimSpace(args)
 }
 
 // harnessRecapText reads the complete final text stored by Harness. Summary

@@ -120,6 +120,12 @@ func TestHarnessEventTextUsesDirectLifecycleAndSummary(t *testing.T) {
 	}); got != "" {
 		t.Fatalf("missing recap text = %q", got)
 	}
+	name, args := harnessToolEvent(harness.Frame{
+		"payload": map[string]any{"text": "web_search", "detail": "US events September"},
+	})
+	if name != "web_search" || args != "US events September" {
+		t.Fatalf("tool event = %q, %q", name, args)
+	}
 	if got := harnessEventText("question.open", harness.Frame{
 		"payload": map[string]any{"questions": []any{map[string]any{"question": "Which city should I use?"}}},
 	}); got != "Which city should I use?" {

@@ -994,6 +994,7 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 			if h.suppressHarnessAgentReply(flowRunID) {
 				slog.Info("agent deferred reply to Harness", "component", "agent", "run_id", flowRunID)
 				flow.Log("harness_reply_pending", map[string]any{"run_id": flowRunID}, flowRunID)
+				h.ResumeHarnessVoiceFillers(flowRunID)
 				return nil
 			}
 			if isAgentNoReply(text) || isMetaNonReply(text) {
