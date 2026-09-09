@@ -146,3 +146,27 @@ func TestChitchatDisabled(t *testing.T) {
 		t.Errorf("Match(\"turn on the light\") = %v, want led_on", r)
 	}
 }
+
+// indexPhrase underpins tracking target selection, which needs to know WHERE a
+// keyword sits, not just whether it is present.
+func TestIndexPhrase(t *testing.T) {
+	cases := []struct {
+		text, kw string
+		want     int
+	}{
+		{"track my keyboard", "keyboard", 9},
+		{"let me know", "me", 4},
+		{"watch the camera", "me", -1}, // inside "camera"
+		{"track the mouse", "us", -1},  // inside "mouse"
+		{"lamp previously mentioned", "me", -1},
+		{"me first", "me", 0},  // start boundary
+		{"follow me", "me", 7}, // end boundary
+		{"unmute speaker", "mute speaker", -1},
+		{"mute speaker", "mute speaker", 0},
+	}
+	for _, c := range cases {
+		if got := indexPhrase(c.text, c.kw); got != c.want {
+			t.Errorf("indexPhrase(%q, %q) = %d, want %d", c.text, c.kw, got, c.want)
+		}
+	}
+}

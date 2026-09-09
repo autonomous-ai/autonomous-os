@@ -188,17 +188,23 @@ func anyOf(keywords ...string) func(string) bool {
 // NOT match keyword "mute speaker". Boundaries are non-alphanumeric ASCII;
 // multibyte (Vietnamese/Chinese) neighbors count as boundaries, which is
 // correct since keywords are English-only.
-func containsPhrase(t, kw string) bool {
+func containsPhrase(t, kw string) bool { return indexPhrase(t, kw) >= 0 }
+
+// indexPhrase is containsPhrase with the position: it returns the index of the
+// first whole-phrase occurrence of kw in t, or -1. Tracking target selection
+// needs the position to tell an object named after the verb ("track my
+// keyboard") from a pronoun that merely appears somewhere in the sentence.
+func indexPhrase(t, kw string) int {
 	for i := 0; ; {
 		j := strings.Index(t[i:], kw)
 		if j < 0 {
-			return false
+			return -1
 		}
 		start := i + j
 		end := start + len(kw)
 		if (start == 0 || !isASCIIWordChar(t[start-1])) &&
 			(end == len(t) || !isASCIIWordChar(t[end])) {
-			return true
+			return start
 		}
 		i = start + 1
 	}
