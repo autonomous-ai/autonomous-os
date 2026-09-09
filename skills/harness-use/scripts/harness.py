@@ -103,19 +103,20 @@ def run(action, params, path=None):
             return request(action, **target, **({'n': params.get('n', 3)} if action == 'recap' else {}))
         if context.get('pending'):
             raise ValueError('A previous delivery is unresolved. Inspect receipt/status; do not resend automatically')
+        response = params.get('response')
+        if response is not None:
+            if not isinstance(response, dict) or set(response) != {'run_id', 'channel'}:
+                raise ValueError('response must contain only run_id and channel')
+            if not isinstance(response['run_id'], str) or not response['run_id'] or len(response['run_id']) > 128:
+                raise ValueError('response run_id is invalid')
+            if response['channel'] not in ('voice', 'web'):
+                raise ValueError('response channel must be voice or web')
         if action == 'send':
             text = params.get('text')
             if not isinstance(text, str) or not text.strip() or len(text.encode()) > 16384:
                 raise ValueError('text must contain 1 to 16384 UTF-8 bytes')
             kind, payload = 'turn.send', {'text': text}
-            response = params.get('response')
             if response is not None:
-                if not isinstance(response, dict) or set(response) != {'run_id', 'channel'}:
-                    raise ValueError('response must contain only run_id and channel')
-                if not isinstance(response['run_id'], str) or not response['run_id'] or len(response['run_id']) > 128:
-                    raise ValueError('response run_id is invalid')
-                if response['channel'] not in ('voice', 'web'):
-                    raise ValueError('response channel must be voice or web')
                 payload['response'] = response
         elif action == 'stop':
             kind, payload = 'turn.stop', {}
@@ -123,6 +124,8 @@ def run(action, params, path=None):
             if not isinstance(params.get('questionRequestId'), str) or not isinstance(params.get('answers'), dict):
                 raise ValueError('questionRequestId and answers required')
             kind, payload = 'question.answer', {'questionRequestId': params['questionRequestId'], 'answers': params['answers']}
+            if response is not None:
+                payload['response'] = response
         else:
             raise ValueError('Unknown action')
         key = str(uuid.uuid4())

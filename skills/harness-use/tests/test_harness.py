@@ -22,7 +22,7 @@ class HarnessSkillTests(unittest.TestCase):
     def request(self, kind, **fields):
         if kind == 'agents.list':
             return {'machineId': 'machine', 'agents': [{'agentId': 'a', 'name': 'Project'}, {'agentId': 'b', 'name': 'Other'}]}
-        if kind == 'turn.send':
+        if kind in ('turn.send', 'question.answer'):
             self.mutations.append(fields)
             if self.uncertain:
                 raise OSError('response lost')
@@ -76,6 +76,19 @@ class HarnessSkillTests(unittest.TestCase):
         self.assertEqual(
             self.mutations[0]['response'],
             {'run_id': 'device-chat-42', 'channel': 'web'},
+        )
+
+    def test_answer_passes_valid_direct_response_routing(self):
+        with patch.object(harness, 'request', self.request):
+            harness.run('answer', {
+                'agentId': 'a',
+                'questionRequestId': 'question-42',
+                'answers': {'location': 'Hanoi'},
+                'response': {'run_id': 'device-chat-43', 'channel': 'voice'},
+            }, self.path)
+        self.assertEqual(
+            self.mutations[0]['response'],
+            {'run_id': 'device-chat-43', 'channel': 'voice'},
         )
 
 

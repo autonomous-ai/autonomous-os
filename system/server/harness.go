@@ -95,7 +95,7 @@ func (s *Server) registerHarnessRoutes(api *gin.RouterGroup, ctx context.Context
 			c.JSON(http.StatusBadGateway, serializers.ResponseError(err.Error()))
 			return
 		}
-		if kind == "turn.send" && reply != nil {
+		if (kind == "turn.send" || kind == "question.answer") && reply != nil {
 			s.registerHarnessReply(agentID, reply.RunID, reply.Channel == "web")
 		}
 		c.JSON(http.StatusOK, serializers.ResponseSuccess(result))
@@ -159,7 +159,7 @@ func (s *Server) forwardHarnessEvent(frame harness.Frame) {
 	}
 	s.harnessRepliesMu.Lock()
 	reply, ok := s.harnessReplies[agentID]
-	terminal := kind == "turn.summary" || kind == "turn.error" || kind == "agent.error"
+	terminal := kind == "turn.summary" || kind == "turn.error" || kind == "agent.error" || kind == "question.open"
 	if ok && terminal {
 		delete(s.harnessReplies, agentID)
 	}
@@ -197,6 +197,18 @@ func harnessEventText(kind string, frame harness.Frame) string {
 	}
 	if kind == "turn.done" {
 		return "Harness agent finished; receiving its result."
+	}
+	if kind == "question.open" {
+		questions, _ := payload["questions"].([]any)
+		for _, raw := range questions {
+			question, _ := raw.(map[string]any)
+			for _, key := range []string{"question", "prompt", "text"} {
+				if text, _ := question[key].(string); strings.TrimSpace(text) != "" {
+					return strings.TrimSpace(text)
+				}
+			}
+		}
+		return "Harness needs an answer before it can continue."
 	}
 	if kind == "turn.error" {
 		return "Harness stopped before it returned a result."
