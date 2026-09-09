@@ -197,6 +197,30 @@ func (s *Server) rememberHarnessResult(text string) {
 func (s *Server) forwardHarnessEvent(frame harness.Frame) {
 	agentID, _ := frame["agentId"].(string)
 	if agentID == "" {
+		// Some Harness transports identify the originating request by run ID
+		// instead of agent ID. Resolve that directly to the pending device turn.
+		runID, _ := frame["runId"].(string)
+		if runID == "" {
+			runID, _ = frame["run_id"].(string)
+		}
+		if payload, ok := frame["payload"].(map[string]any); ok && runID == "" {
+			runID, _ = payload["runId"].(string)
+			if runID == "" {
+				runID, _ = payload["run_id"].(string)
+			}
+		}
+		if runID != "" {
+			s.harnessRepliesMu.Lock()
+			for id, reply := range s.harnessReplies {
+				if reply.runID == runID {
+					agentID = id
+					break
+				}
+			}
+			s.harnessRepliesMu.Unlock()
+		}
+	}
+	if agentID == "" {
 		agentID, _ = frame["agent_id"].(string)
 	}
 	if agentID == "" {
