@@ -124,6 +124,16 @@ func (h *AgentHandler) ResumeHarnessVoiceFillers(runID string) {
 func (h *AgentHandler) DeliverHarnessResponse(runID, text string) bool {
 	h.harnessRepliesMu.Lock()
 	state, ok := h.harnessReplies[runID]
+	if !ok {
+		// Older Web/MQTT routing objects used the remote Harness run id instead
+		// of the local device run id. A pending web turn is unambiguous here.
+		for candidateID, candidate := range h.harnessReplies {
+			if candidate.webChat && !candidate.delivered {
+				runID, state, ok = candidateID, candidate, true
+				break
+			}
+		}
+	}
 	wasDelivered := state.delivered
 	if ok && !wasDelivered {
 		state.delivered = true
