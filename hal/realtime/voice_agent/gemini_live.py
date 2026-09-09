@@ -242,13 +242,6 @@ class GeminiLiveAgent(VoiceAgentBase):
             )
 
         live_config: types.LiveConnectConfig = types.LiveConnectConfig(
-            # AUDIO always. TEXT-only was tried on device 2026-09-08 and the
-            # model REFUSES it: WS 1007 "The requested combination of response
-            # modalities (TEXT) is not supported by the model.
-            # models/gemini-3.1-flash-live-preview". So when our own TTS speaks
-            # the reply (REALTIME_NATIVE_AUDIO=false) the generated audio is
-            # received and DISCARDED by the consumer — billed but unused. There
-            # is no cheaper wire shape available on this model.
             response_modalities=[types.Modality.AUDIO],
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(
@@ -256,21 +249,14 @@ class GeminiLiveAgent(VoiceAgentBase):
                         voice_name=self._config.voice.value,
                     )
                 ),
-                # Native-audio models (e.g. gemini-2.5-flash-native-audio) REJECT an
-                # explicit language_code (server closes setup with WS 1000) — they
-                # auto-detect the language. Only half-cascade / 3.x Live accept it.
-                # The system prompt already enforces the spoken language either way.
-                # Verified via on-device bisect: removing speech_config.language_code
-                # is the only change that lets 2.5 connect.
                 language_code=(
                     None if "native-audio" in self._config.model else lang
                 ),
             ),
             system_instruction=self._config.instructions,
-            input_audio_transcription=None,
-            # Always on: with AUDIO the only modality, this transcript is the
-            # ONLY way to get the reply as text, which is what our TTS speaks
-            # when native audio is off.
+            input_audio_transcription=types.AudioTranscriptionConfig(
+                language_codes=lang_codes,
+            ),
             output_audio_transcription=types.AudioTranscriptionConfig(
                 language_codes=lang_codes,
             ),
@@ -278,13 +264,6 @@ class GeminiLiveAgent(VoiceAgentBase):
                 automatic_activity_detection=self._activity_detection(),
             ),
             thinking_config=thinking_config,
-            # NO context_window_compression. DO NOT re-add it while running behind the
-            # campaign-api proxy: when compression fires the Gemini server performs it
-            # via a session-resumption handoff (sessionResumptionUpdate + CLOSE 1000),
-            # and the proxy does not support resumption, so the in-flight turn dies
-            # mid-answer. Cost is controlled by shrinking the per-turn floor (memory
-            # caps + skills-catalog trim) + session recycle instead. Only reconsider
-            # against a resumption-capable endpoint (direct Google base_url).
         )
 
         live_tools: list[types.Tool] = []
@@ -726,6 +705,10 @@ class GeminiLiveAgent(VoiceAgentBase):
                             # it). Skip it; output_transcription is the source of
                             # truth for the spoken text + [HANDLED] transcript.
                             continue
+
+                _in_tx = getattr(content, "input_transcription", None)
+                if _in_tx is not None and _in_tx.text:
+                    logger.info("[realtime] <<< user said: %r", _in_tx.text)
 
                 if content.output_transcription and content.output_transcription.text:
                     if not valid_transcription_chunk_cnt:
