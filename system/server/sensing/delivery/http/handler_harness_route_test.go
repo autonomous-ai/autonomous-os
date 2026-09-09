@@ -41,6 +41,8 @@ func TestHarnessNamedAgentRoutingTreatsNameAsTarget(t *testing.T) {
 		"execution target, not a person to contact",
 		"Ask David if there are events in the US",
 		"Find upcoming events in the US",
+		"make no more Harness or shell calls",
+		"DeliveryUnknown/no usable receipt",
 	} {
 		if !strings.Contains(harnessNamedAgentRouting, required) {
 			t.Fatalf("named-agent routing is missing %q", required)
