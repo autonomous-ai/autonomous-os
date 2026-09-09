@@ -110,7 +110,30 @@ func (s *Server) registerHarnessRoutes(api *gin.RouterGroup, ctx context.Context
 			return
 		}
 		c.JSON(http.StatusOK, serializers.ResponseSuccess(result))
+		if tracksReply && kind == "turn.send" {
+			// Web/MQTT clients do not have the voice filler/callback path. Keep a
+			// watchdog that retrieves the completed recap when a Harness event is
+			// delayed or omitted; DeliverHarnessResponse remains idempotent.
+			go s.watchHarnessRecap(agentID, reply.RunID)
+		}
 	})
+}
+
+func (s *Server) watchHarnessRecap(agentID, runID string) {
+	deadline := time.Now().Add(2 * time.Minute)
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+	for time.Now().Before(deadline) {
+		<-ticker.C
+		if s.agentHandler == nil || s.harnessService == nil {
+			return
+		}
+		text := s.harnessRecapText(agentID, "")
+		if strings.TrimSpace(text) != "" && s.agentHandler.DeliverHarnessResponse(runID, text) {
+			s.rememberHarnessResult(text)
+			return
+		}
+	}
 }
 
 func extractHarnessReply(frame harness.Frame) (*harnessReplyRequest, error) {
