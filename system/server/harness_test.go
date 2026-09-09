@@ -77,22 +77,3 @@ func TestHarnessRoutesProtectCodeAndLocalCommands(t *testing.T) {
 		t.Fatalf("cancel did not clear code: %d", out.Code)
 	}
 }
-
-func TestHarnessSummaryTextUsesFinalTextWithoutForwardingJSON(t *testing.T) {
-	frame := harness.Frame{
-		"kind": "turn.summary",
-		"payload": map[string]any{
-			"recap": "Short recap",
-			"text":  "The final result from the paired computer.",
-		},
-	}
-	if got, want := harnessSummaryText(frame), "The final result from the paired computer."; got != want {
-		t.Fatalf("summary text = %q, want %q", got, want)
-	}
-	if got := harnessSummaryText(harness.Frame{"kind": "turn.error", "payload": map[string]any{"text": "do not speak"}}); got != "" {
-		t.Fatalf("non-summary event produced %q", got)
-	}
-	if got, want := harnessSummaryText(harness.Frame{"kind": "turn.summary", "payload": map[string]any{"recap": "Fallback recap"}}), "Fallback recap"; got != want {
-		t.Fatalf("fallback recap = %q, want %q", got, want)
-	}
-}
