@@ -167,6 +167,12 @@ func (s *Server) registerHarnessReply(agentID, runID string, webChat bool) {
 	if s.harnessReplies == nil {
 		s.harnessReplies = make(map[string]harnessReply)
 	}
+	// The remote Harness run id may be returned in the routing object by older
+	// skills. Preserve the local device turn mapping when that happens; replacing
+	// it would deliver the terminal event to a nonexistent device-chat run.
+	if current, exists := s.harnessReplies[agentID]; exists && !strings.HasPrefix(runID, "device-chat-") {
+		runID, webChat = current.runID, current.webChat
+	}
 	s.harnessReplies[agentID] = harnessReply{runID: runID, webChat: webChat, created: time.Now()}
 	s.harnessRepliesMu.Unlock()
 	s.harnessFollowup.Store(time.Now().Add(2 * time.Minute).UnixMilli())
