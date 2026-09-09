@@ -738,7 +738,7 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 		}
 		followupActive := h.harnessFollowup != nil && h.harnessFollowup()
 		if isVoice && followupActive {
-			msg += "\n[system-routing: A Harness task or question may be awaiting a voice follow-up. Use harness-use only when the user's words clearly continue the retained Harness task or answer its currently open question. Do not route vague fragments, acknowledgements, filler, unrelated new requests, or uncertain speech to Harness; let the main agent handle those normally. When routing, use the retained target and send only the user's current words. Do not use Buddy and do not answer a clear Harness follow-up yourself.]"
+			msg += "\n[system-routing: A Harness task or question may be awaiting a voice follow-up. Use harness-use only when the user's words clearly continue the retained Harness task or answer its currently open question. Do not route vague fragments, acknowledgements, filler, unrelated new requests, or uncertain speech to Harness; let the main agent handle those normally. When routing, use the retained target and send only the user's current words. Do not use Buddy and do not answer a clear Harness follow-up yourself. Do not run harness.py --help or poll receipt/status/recap after a successful send or answer; the send/answer tool call is the final tool call, then reply NO_REPLY.]"
 		}
 		if followupActive && h.harnessFollowupContext != nil {
 			if result := truncateHarnessFollowupContext(h.harnessFollowupContext()); result != "" {
