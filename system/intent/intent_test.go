@@ -234,3 +234,74 @@ func TestTrackVerbEnd(t *testing.T) {
 		}
 	}
 }
+
+const envSentence = "so now i am going to type the word angry on my keyboard. you watch me and tell me if i am tapping in the right way."
+
+// The preamble appears and disappears BETWEEN turns of one conversation — it
+// depends on the turn's route, not the conversation — so the same sentence must
+// resolve identically in every envelope HAL can emit.
+func TestEnvelopeInvariance(t *testing.T) {
+	envelopes := map[string]string{
+		"delegated with message": "[voice-instruction] user wants the lamp to watch them type\n[transcript] " + envSentence,
+		"delegated no message":   envSentence,
+		"realtime_not_started":   "unknown speaker: [voice:voice_100] " + envSentence + " (audio saved at /tmp/x.wav)",
+		"vision hint prepended":  "[vision-image] /var/lib/hal/snapshots/sensing_look/1.jpg (a photo was just captured for this request)\n[voice-instruction] user wants the lamp to watch them type\n[transcript] " + envSentence,
+		"snapshot appended":      "[voice-instruction] user wants the lamp to watch them type\n[transcript] " + envSentence + "\n[snapshot: /var/lib/hal/snapshots/sensing_look/1788839050669.jpg]",
+	}
+	for name, msg := range envelopes {
+		r := MatchCommands(msg)
+		if r == nil || r.TTSText != "Tracking keyboard." {
+			t.Errorf("%s -> %v, want \"Tracking keyboard.\"", name, r)
+		}
+	}
+}
+
+// A file path must never supply the target: "sensing_face" holds the whole word
+// "face" between two non-word characters, and os-server does not strip these
+// markers until handler.go:689 — long after the intent match at handler.go:215.
+func TestSnapshotPathIsNotATarget(t *testing.T) {
+	for _, msg := range []string{
+		"[voice-instruction] user asked the lamp to track the cup\n[transcript] track the cup\n[snapshot: /var/lib/hal/snapshots/sensing_face/1.jpg]",
+		"[vision-image] /var/lib/hal/snapshots/sensing_face/1.jpg (a photo was just captured)\n[voice-instruction] track the cup\n[transcript] track the cup",
+	} {
+		if r := MatchCommands(msg); r == nil || r.TTSText != "Tracking cup." {
+			t.Errorf("got %v, want \"Tracking cup.\" — a path set the target", r)
+		}
+	}
+}
+
+// The summary is primary: STT is locked to one language while the user may
+// speak another, and the command rules are English-only. Matching the
+// transcript alone would silently disable local intent for those users.
+func TestSummaryWinsOverGarbledTranscript(t *testing.T) {
+	r := MatchCommands("[voice-instruction] turn off the light and play some relaxing music\n[transcript] ton of delay and play some relate music")
+	if r == nil || r.Rule != "led_off" {
+		t.Fatalf("got %v, want led_off from the summary", r)
+	}
+}
+
+// No cross-field match: a verb in one field must not combine with a target in
+// the other. Neither field alone is a tracking command here.
+func TestNoCrossFieldMatch(t *testing.T) {
+	if r := MatchCommands("[voice-instruction] the user asked about tracking in general\n[transcript] i have a keyboard here"); r != nil {
+		t.Errorf("cross-field match fired %s / %q", r.Rule, r.TTSText)
+	}
+}
+
+// The three defects that SURVIVE Task 2 and are exactly what matching the
+// envelope fields separately fixes: a verb and a target taken from DIFFERENT
+// fields, a target taken from a file path, and "me" in a summary — where it
+// means the lamp, not the speaker (green-lamp 10:47:58 emitted "User wants to
+// connect me with their clock"). None of these is a command, so none may fire.
+func TestFieldSeparationDefects(t *testing.T) {
+	cases := map[string]string{
+		"verb in summary, noun in transcript": "[voice-instruction] the user asked me to track something\n[transcript] there is a keyboard on the desk",
+		"only noun is inside a snapshot path": "[voice-instruction] user asked the lamp to track it\n[transcript] track it\n[snapshot: /var/lib/hal/snapshots/sensing_face/1.jpg]",
+		"me in a summary means the lamp":      "[voice-instruction] user wants the lamp to follow me into the kitchen\n[transcript] okay",
+	}
+	for name, msg := range cases {
+		if r := MatchCommands(msg); r != nil {
+			t.Errorf("%s -> %s / %q, want nil", name, r.Rule, r.TTSText)
+		}
+	}
+}
