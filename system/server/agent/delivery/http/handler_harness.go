@@ -36,6 +36,14 @@ func (h *AgentHandler) suppressHarnessAgentReply(runID string) bool {
 	h.harnessRepliesMu.Lock()
 	defer h.harnessRepliesMu.Unlock()
 	state, ok := h.harnessReplies[runID]
+	if !ok {
+		for _, candidate := range h.harnessReplies {
+			if candidate.webChat && !candidate.delivered {
+				ok, state = true, candidate
+				break
+			}
+		}
+	}
 	if state.delivered {
 		delete(h.harnessReplies, runID)
 	}
