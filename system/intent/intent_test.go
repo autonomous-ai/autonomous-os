@@ -170,3 +170,67 @@ func TestIndexPhrase(t *testing.T) {
 		}
 	}
 }
+
+// Regression: extractTrackTarget walked its keyword table in declaration order
+// with a bare strings.Contains, so the pronoun entry ("me"/"us"/"user", table
+// position 3) swallowed every request before "keyboard" (position 14) was ever
+// tested — and matched inside unrelated words. Captured on green-lamp
+// 2026-09-08: three turns asking the lamp to watch a keyboard all fired
+// POST /servo/track {"target":["person"]}.
+func TestExtractTrackTarget(t *testing.T) {
+	cases := map[string]string{
+		// The two real device transcripts that carry a tracking verb.
+		"so now i am going to type the word angry on my keyboard. you watch me and tell me if i am tapping in the right way.": "keyboard",
+		"let me know when you are ready to track my fingers on my keyboard to type for the word. angry.":                      "keyboard",
+
+		// Object noun beats a pronoun regardless of position.
+		"watch me type on my keyboard": "keyboard",
+		"track my keyboard":            "keyboard",
+		"follow the cup":               "cup",
+
+		// Substring collateral that used to resolve to person.
+		"track the mouse":  "mouse",
+		"watch the camera": "",
+
+		// Pronouns still work when nothing concrete is named.
+		"follow me":        "person",
+		"track me":         "person",
+		"watch the person": "person",
+		"follow that guy":  "person",
+	}
+	for text, want := range cases {
+		if got := extractTrackTarget(text); got != want {
+			t.Errorf("extractTrackTarget(%q) = %q, want %q", text, got, want)
+		}
+	}
+}
+
+// extractTrackTarget does NOT gate on the verb — hasTrackVerb does, inside the
+// rule's match func. So a bare mention of a noun must not fire the rule even
+// though the extractor would happily find a target in it.
+func TestTrackRuleNeedsAVerb(t *testing.T) {
+	for _, text := range []string{
+		"yes, i have a keyboard there. so now you are tracking me and see if i type the word angry right.",
+		"i have a keyboard here",
+	} {
+		if r := MatchCommands(text); r != nil {
+			t.Errorf("MatchCommands(%q) = %s, want nil", text, r.Rule)
+		}
+	}
+}
+
+func TestTrackVerbEnd(t *testing.T) {
+	cases := map[string]bool{
+		"track my keyboard":     true,
+		"follow me":             true,
+		"you watch me type":     true,
+		"you are tracking me":   false, // "tracking" is not "track "
+		"i can't watch a movie": true,  // verb present; target extraction decides
+		"i have a keyboard":     false,
+	}
+	for text, want := range cases {
+		if got := trackVerbEnd(text) >= 0; got != want {
+			t.Errorf("trackVerbEnd(%q) >= 0 = %v, want %v", text, got, want)
+		}
+	}
+}
