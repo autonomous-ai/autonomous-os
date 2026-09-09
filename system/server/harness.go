@@ -33,7 +33,12 @@ func (s *Server) registerHarnessRoutes(api *gin.RouterGroup, ctx context.Context
 		}
 	})
 	group.GET("status", adminOrLoopbackAuth(s.config), func(c *gin.Context) {
-		c.JSON(http.StatusOK, serializers.ResponseSuccess(s.harnessService.Status()))
+		status := s.harnessService.Status()
+		// Pairing codes are secrets for the pairing flow; only the authenticated
+		// MQTT pairing channel may carry the live code to the mobile owner.
+		status.Code = ""
+		status.ExpiresAt = 0
+		c.JSON(http.StatusOK, serializers.ResponseSuccess(status))
 	})
 	group.GET("voice-followup", localOnlyMiddleware(), func(c *gin.Context) {
 		c.JSON(http.StatusOK, serializers.ResponseSuccess(gin.H{"active": s.HarnessVoiceFollowup()}))
