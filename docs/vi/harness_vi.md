@@ -2,6 +2,34 @@
 
 `system/harness` nối trực tiếp một thiết bị Autonomous với một máy tính Harness đã ghép đôi rõ ràng. Harness Desktop/CLI tìm thiết bị qua dịch vụ mDNS `_autonomous._tcp` đã có, cũng được Autonomous Buddy sử dụng. Harness giữ khóa riêng và dùng giao thức pairing/phiên gốc của `E2eeManager`. Code và khóa Buddy độc lập.
 
+## Ngữ cảnh sản phẩm và trách nhiệm giữa các team
+
+App Harness và phần tích hợp thiết bị của Harness do team Harness phát triển độc lập. Repo này cung cấp phía Autonomous OS và skill `harness-use`; không sở hữu sản phẩm Desktop, runtime agent hay giao thức pairing của Harness. Mục tiêu là để thiết bị chuyển yêu cầu coding/research tới các agent mà Harness đang quản lý trên máy tính của người dùng.
+
+| Bên phụ trách | Repo / code | Trách nhiệm |
+|---------------|-------------|-------------|
+| Team Autonomous OS | Repo này: `skills/harness-use`, `system/harness`, `system/server/harness.go`, `system/web/src/pages/monitor/HarnessCard.tsx` | Định tuyến voice/skill, giữ agent theo cuộc hội thoại và trạng thái delivery chưa rõ, tạo mã trên thiết bị, trust/phiên phía thiết bị, API nội bộ, OS Monitor và chuyển sự kiện về thiết bị. |
+| Team Harness | [autonomous-harness](https://github.com/autonomous-ai/autonomous-harness): `cli/src/lib/autonomous-device`, `cli/src/lib/e2ee`, `cli/src/backendSocket.ts` | Discovery/reconnect phía máy tính, pairing/E2EE gốc, thao tác agent, thương lượng capability, receipt/event và API quản lý CLI. |
+| Team Harness | [autonomous-harness-desktop](https://github.com/autonomous-ai/autonomous-harness-desktop): `lib/autonomous_device`, `lib/settings/sections/devices_section.dart` | UI ghép đôi/quản lý qua Harness CLI nội bộ. Desktop không giữ trust của thiết bị hay thực thi skill. |
+
+Đường thực thi: người dùng/voice → `harness-use` → API loopback OS → kết nối trực tiếp đã xác thực → Harness CLI → agent được chọn trên máy tính. Kết quả quay lại qua pipeline event/voice của OS. Skill là client của contract này, không phải agent manager thay thế hoặc phần tự động thao tác Desktop.
+
+Autonomous Buddy được giữ riêng. Tính năng này không gọi Buddy, không dùng chung khóa pairing hay yêu cầu kết nối Buddy. Tái sử dụng quảng bá mDNS đã có trên thiết bị không đồng nghĩa gộp hai trust store. Giữ tích hợp dùng chung cho thiết bị Autonomous: namespace CLI là `autonomous-device`, không phải `lamp`.
+
+## Nguồn contract và cách phối hợp
+
+Contract CLI của team Harness nằm ở `docs/autonomous-device-integration.md` và `docs/vi/autonomous-device-integration_vi.md` trong repo của họ. Cần đối chiếu với code CLI cùng phiên bản, đặc biệt `command.ts`, `localApi.ts`, handler kết nối trực tiếp/ứng dụng và core/manager `e2ee` gốc. Tài liệu OS này mô tả triển khai trong repo này; không cố định hoặc ghi đè API đang phát triển của team kia. Vector giao thức và bài test liên repo bên dưới là bằng chứng tương thích, không phải đặc tả độc lập để tự nghĩ ra hành vi.
+
+Tích hợp ban đầu được theo dõi tại [OS PR #316](https://github.com/autonomous-ai/autonomous-os/pull/316), [CLI PR #24](https://github.com/autonomous-ai/autonomous-harness/pull/24) và [Desktop PR #8](https://github.com/autonomous-ai/autonomous-harness-desktop/pull/8). Đây là các thay đổi phối hợp, không khẳng định bản phát hành nào đã triển khai. Kiểm tra revision CLI thực sự dùng trong mỗi lần kiểm thử liên thông; mô tả PR và các bản thử nghiệm trước có thể đã cũ.
+
+Khi tiếp tục làm phía OS:
+
+1. Chỉ sửa repo OS này. Agent của team Harness phụ trách hai repo kia; chuyển sai khác contract cụ thể để phối hợp, không âm thầm sửa triển khai của họ.
+2. Trước khi đổi lệnh, cấu trúc frame, chiều pairing, ý nghĩa receipt hoặc capability, đối chiếu contract và code hiện tại của bên sở hữu. Ghi revision Harness liên quan và thống nhất thay đổi tương thích với team đó. Thiếu API hoặc lệch phiên bản không phải lý do tự tạo flow, credential backend hay transport mới.
+3. Giữ luồng đã thống nhất: thiết bị sinh mã, máy tính tự tìm thiết bị và nhận mã, rồi kết nối trực tiếp. Mật mã pairing/phiên theo Harness; OS không đặt thêm cơ chế riêng. Capability thiếu phải được báo rõ, không lách qua terminal hoặc Buddy.
+4. Khi contract được thống nhất thay đổi, cập nhật tài liệu OS cả hai ngôn ngữ và fixture liên quan, rồi chạy test liên repo với revision CLI đó. Test local thành công không chứng minh tương thích với một bản CLI đã cài khác.
+5. Sửa repo và kiểm thử local tách biệt với triển khai thiết bị. Chủ thiết bị thực hiện manual test phần cứng/voice; deploy, SSH và restart cần được cho phép rõ ràng. Khi bàn giao triển khai phải bao gồm cập nhật nginx mô tả bên dưới.
+
 ## Ghép đôi
 
 1. Trong OS Monitor của thiết bị, bấm **Generate pairing code**. Thiết bị tạo mã ngẫu nhiên mật mã sáu ký tự, có hiệu lực 60 giây.

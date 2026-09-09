@@ -2,6 +2,34 @@
 
 `system/harness` connects one Autonomous device directly to one explicitly paired Harness computer. Harness Desktop/CLI discovers devices through the existing `_autonomous._tcp` mDNS service, also used by Autonomous Buddy. Harness uses its own identity pins and the original Harness `E2eeManager` pairing/session protocol. Buddy's implementation and keys remain independent.
 
+## Product context and team ownership
+
+The Harness app and its device integration are developed independently by the Harness team. This repository supplies the Autonomous OS side of that integration and the `harness-use` skill; it does not own Harness's desktop product, agent runtime or pairing protocol. The purpose is to let the device delegate coding/research tasks to agents already managed by Harness on the user's computer.
+
+| Owner | Repository / code | Responsibility |
+|-------|-------------------|----------------|
+| Autonomous OS team | This repo: `skills/harness-use`, `system/harness`, `system/server/harness.go`, `system/web/src/pages/monitor/HarnessCard.tsx` | Voice/skill routing, conversation target and unresolved-delivery state, device-generated code, device-side trust/session, local API, OS Monitor and device event delivery. |
+| Harness team | [autonomous-harness](https://github.com/autonomous-ai/autonomous-harness): `cli/src/lib/autonomous-device`, `cli/src/lib/e2ee`, `cli/src/backendSocket.ts` | Computer-side discovery/reconnect, original pairing/E2EE, agent operations, capability negotiation, receipts/events and the CLI management API. |
+| Harness team | [autonomous-harness-desktop](https://github.com/autonomous-ai/autonomous-harness-desktop): `lib/autonomous_device`, `lib/settings/sections/devices_section.dart` | Desktop pairing/management UI over its local Harness CLI. The Desktop UI does not own device trust or execute the skill. |
+
+The execution path is: user/voice → `harness-use` → OS loopback API → authenticated direct connection → Harness CLI → selected computer agent. Results return through the OS event/voice pipeline. The skill is a client of that contract, not a replacement agent manager or a desktop automation implementation.
+
+Autonomous Buddy is retained separately. This feature does not invoke Buddy, share its pairing keys or require its connection. Reusing the device's existing mDNS advertisement does not combine the two trust stores. Keep the integration device-neutral: `autonomous-device` is the CLI namespace, not `lamp`.
+
+## Contract references and coordination
+
+The Harness team's CLI contract is documented in `docs/autonomous-device-integration.md` and `docs/vi/autonomous-device-integration_vi.md` in its repository. Verify it against the matching CLI implementation, especially `command.ts`, `localApi.ts`, the direct connection/application handlers and the original `e2ee` core/manager. This OS document describes the implementation in this repository; it does not freeze or override the other team's evolving API. The protocol vectors and cross-repository test below are compatibility evidence, not an independent specification to invent behavior from.
+
+The initial integration is tracked by [OS PR #316](https://github.com/autonomous-ai/autonomous-os/pull/316), [CLI PR #24](https://github.com/autonomous-ai/autonomous-harness/pull/24) and [Desktop PR #8](https://github.com/autonomous-ai/autonomous-harness-desktop/pull/8). These identify the collaborating changes, not a claim that any particular release has deployed them. Check the actual CLI revision used for each interoperability run; PR descriptions and earlier implementation experiments can be stale.
+
+For future OS work:
+
+1. Keep edits in this OS repository. The Harness team's agents maintain the other repositories; send concrete contract discrepancies for coordination instead of silently changing their implementation.
+2. Before changing commands, frame shapes, pairing direction, receipt meaning or capabilities, compare the current owner contract and code. Record the relevant Harness revision and agree the compatible change with that team. A missing API or mismatched version is not a reason to invent a new flow, backend credential or transport.
+3. Preserve the agreed flow: device generates the code, computer discovers the device and accepts the code, then connects directly. Pairing/session cryptography follows Harness; OS does not define another scheme. Missing capabilities must be reported, never bypassed with terminal input or Buddy.
+4. Update both OS language documents and applicable fixtures when the agreed contract changes, then run the cross-repository check against that CLI revision. Local test success does not establish compatibility with a different installed CLI build.
+5. Repository work and local verification are separate from device rollout. The owner performs physical-device/manual voice testing; deployment, SSH and restarts require explicit authorization. Include the nginx update described below in deployment handoff.
+
 ## Pairing
 
 1. In the device's OS Monitor, choose **Generate pairing code**. The device creates a cryptographically random six-character code valid for 60 seconds.
