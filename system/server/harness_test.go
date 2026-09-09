@@ -10,6 +10,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"go.autonomous.ai/os/system/harness"
+	"go.autonomous.ai/os/system/lib/flow"
+	agenthttp "go.autonomous.ai/os/system/server/agent/delivery/http"
 	"go.autonomous.ai/os/system/server/config"
 )
 
@@ -156,5 +158,54 @@ func TestHarnessFollowupContextExpiresWithFollowupWindow(t *testing.T) {
 	s.harnessFollowup.Store(time.Now().Add(-time.Second).UnixMilli())
 	if got := s.HarnessFollowupContext(); got != "" {
 		t.Fatalf("expired follow-up context = %q", got)
+	}
+}
+
+func TestHarnessSummaryPersistsCompleteChatResult(t *testing.T) {
+	const runID = "device-chat-summary-recovery"
+	const fullText = "Kết quả đầy đủ\n\n- Mục một\n- Mục hai"
+	s := &Server{agentHandler: &agenthttp.AgentHandler{}}
+	s.registerHarnessReply("mike", runID, true)
+	s.forwardHarnessEvent(harness.Frame{"agentId": "mike", "kind": "turn.done", "payload": map[string]any{}})
+	if _, pending := s.harnessReplies["mike"]; !pending {
+		t.Fatal("turn.done consumed final route")
+	}
+	s.forwardHarnessEvent(harness.Frame{"agentId": "mike", "kind": "turn.summary", "payload": map[string]any{"text": "preview", "fullText": fullText}})
+	count := 0
+	for _, event := range flow.Recent(100) {
+		if event.Node == "harness_response" && event.TraceID == runID {
+			count++
+			if event.Data["text"] != fullText {
+				t.Fatalf("recovery lost full text: %#v", event.Data)
+			}
+		}
+	}
+	if count != 1 {
+		t.Fatalf("want one recoverable final, got %d", count)
+	}
+	if _, pending := s.harnessReplies["mike"]; pending {
+		t.Fatal("summary did not finish route")
+	}
+}
+
+func TestHarnessEventFromAnotherAgentCannotFinishPendingChat(t *testing.T) {
+	s := &Server{agentHandler: &agenthttp.AgentHandler{}}
+	s.registerHarnessReply("mike", "device-chat-mike", true)
+	s.forwardHarnessEvent(harness.Frame{"agentId": "other-agent", "kind": "turn.summary", "payload": map[string]any{"text": "unrelated answer"}})
+	if _, pending := s.harnessReplies["mike"]; !pending {
+		t.Fatal("unrelated agent consumed Mike's pending chat")
+	}
+}
+
+func TestEmptyHarnessSummaryRetainsPendingChat(t *testing.T) {
+	s := &Server{agentHandler: &agenthttp.AgentHandler{}}
+	s.registerHarnessReply("mike", "device-chat-empty-summary", true)
+	s.forwardHarnessEvent(harness.Frame{"agentId": "mike", "kind": "turn.summary", "payload": map[string]any{}})
+	if _, pending := s.harnessReplies["mike"]; !pending {
+		t.Fatal("empty summary consumed pending chat")
+	}
+	s.forwardHarnessEvent(harness.Frame{"agentId": "mike", "kind": "turn.summary", "payload": map[string]any{"text": "complete answer"}})
+	if _, pending := s.harnessReplies["mike"]; pending {
+		t.Fatal("nonempty summary did not complete pending chat")
 	}
 }

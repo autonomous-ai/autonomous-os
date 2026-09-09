@@ -2,13 +2,16 @@ package http
 
 import (
 	"log/slog"
+	"time"
 
 	"go.autonomous.ai/os/system/domain"
+	"go.autonomous.ai/os/system/lib/flow"
 	"go.autonomous.ai/os/system/lib/hal"
 	sensinghttp "go.autonomous.ai/os/system/server/sensing/delivery/http"
 )
 
 type harnessReplyState struct {
+	created   time.Time
 	webChat   bool
 	delivered bool
 	toolName  string
@@ -25,41 +28,33 @@ func (h *AgentHandler) MarkHarnessResponseRun(runID string, webChat bool) {
 	if h.harnessReplies == nil {
 		h.harnessReplies = make(map[string]harnessReplyState)
 	}
-	h.harnessReplies[runID] = harnessReplyState{webChat: webChat}
+	for id, state := range h.harnessReplies {
+		if time.Since(state.created) > 15*time.Minute {
+			delete(h.harnessReplies, id)
+		}
+	}
+	if _, exists := h.harnessReplies[runID]; !exists {
+		h.harnessReplies[runID] = harnessReplyState{webChat: webChat, created: time.Now()}
+	}
 	h.harnessRepliesMu.Unlock()
 }
 
-// suppressHarnessAgentReply prevents the device agent from announcing a send
-// receipt or rewriting a Harness result. A delivered state is cleared here,
-// after both the recap and the device agent's lifecycle have completed.
+// suppressHarnessAgentReply retains ownership after either lifecycle ordering.
+// OpenClaw may emit a generic final after lifecycle:end; keep the tombstone
+// until expiry so that final cannot overwrite the Harness response.
 func (h *AgentHandler) suppressHarnessAgentReply(runID string) bool {
 	h.harnessRepliesMu.Lock()
 	defer h.harnessRepliesMu.Unlock()
-	state, ok := h.harnessReplies[runID]
-	if !ok {
-		for _, candidate := range h.harnessReplies {
-			if candidate.webChat && !candidate.delivered {
-				ok, state = true, candidate
-				break
-			}
-		}
-	}
-	if state.delivered {
-		delete(h.harnessReplies, runID)
-	}
+	_, ok := h.harnessReplies[runID]
 	return ok
 }
 
 func (h *AgentHandler) clearHarnessResponseRun(runID string) {
 	h.harnessRepliesMu.Lock()
-	if state, ok := h.harnessReplies[runID]; ok && state.webChat && !state.delivered {
-		// Web/MQTT turns may receive the Harness terminal event after the local
-		// lifecycle ends; retain the route for delayed delivery.
-		h.harnessRepliesMu.Unlock()
-		return
+	defer h.harnessRepliesMu.Unlock()
+	if state, ok := h.harnessReplies[runID]; ok && time.Since(state.created) > 15*time.Minute {
+		delete(h.harnessReplies, runID)
 	}
-	delete(h.harnessReplies, runID)
-	h.harnessRepliesMu.Unlock()
 }
 
 // DeliverHarnessProgress shows a lifecycle update emitted by Harness while the
@@ -71,9 +66,9 @@ func (h *AgentHandler) DeliverHarnessProgress(runID, text string) bool {
 		return false
 	}
 	h.harnessRepliesMu.Lock()
-	_, pending := h.harnessReplies[runID]
+	state, pending := h.harnessReplies[runID]
 	h.harnessRepliesMu.Unlock()
-	if !pending {
+	if !pending || state.delivered {
 		return false
 	}
 	if h.monitorBus != nil {
@@ -136,36 +131,20 @@ func (h *AgentHandler) ResumeHarnessVoiceFillers(runID string) {
 // DeliverHarnessResponse emits the paired agent's final recap as the response
 // to the original device turn. Web chat is display-only; voice uses normal TTS.
 func (h *AgentHandler) DeliverHarnessResponse(runID, text string) bool {
-	h.harnessRepliesMu.Lock()
-	state, ok := h.harnessReplies[runID]
-	if !ok {
-		// Older Web/MQTT routing objects used the remote Harness run id instead
-		// of the local device run id. A pending web turn is unambiguous here.
-		for candidateID, candidate := range h.harnessReplies {
-			if candidate.webChat && !candidate.delivered {
-				runID, state, ok = candidateID, candidate, true
-				break
-			}
-		}
-	}
-	wasDelivered := state.delivered
-	if ok && !wasDelivered {
-		state.delivered = true
-		h.harnessReplies[runID] = state
-	}
-	h.harnessRepliesMu.Unlock()
-	if wasDelivered || text == "" {
+	if runID == "" || text == "" {
 		return false
 	}
-	// A lifecycle cleanup can race the delayed Harness callback. The terminal
-	// recap is still valid and must reach Web/MQTT, whose stream is keyed by the
-	// original run ID. Without this fallback the result is silently discarded.
-	if !ok {
-		if h.monitorBus != nil {
-			h.monitorBus.Push(domain.MonitorEvent{Type: "chat_response", Summary: text, RunID: runID, State: "final", Detail: map[string]string{"role": "assistant", "message": text, "source": "harness"}})
-		}
-		return true
+	h.harnessRepliesMu.Lock()
+	state, ok := h.harnessReplies[runID]
+	if !ok || state.delivered {
+		h.harnessRepliesMu.Unlock()
+		return false
 	}
+	state.delivered = true
+	h.harnessReplies[runID] = state
+	h.harnessRepliesMu.Unlock()
+	// Persist the same final text for web recovery when its live SSE is closed.
+	flow.Log("harness_response", map[string]any{"run_id": runID, "text": text}, runID)
 	// A final remote answer replaces any generic progress filler immediately.
 	sensinghttp.DefaultFillerManager.Cancel(runID)
 	if h.monitorBus != nil {

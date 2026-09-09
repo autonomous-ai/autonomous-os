@@ -91,3 +91,11 @@ Do not poll the latest recap immediately after sending: it can still describe th
 While Harness owns a run’s response, generic assistant chat events for that exact run are suppressed so a handoff or `NO_REPLY` cannot close Web/MQTT chat before the Harness result arrives. User messages and error events still pass through.
 
 All six runtimes (Codex, OpenClaw, Hermes, PicoClaw, Claude Code and OpenCode) restore the Harness reply address when replaying queued chat. Hermes keeps MQTT chat and voice follow-ups as separate turns rather than merging them with ambient sensing. Unaccented Vietnamese requests such as “hoi mike agent” receive named-agent routing. If a chat ends silently without a Harness request, MQTT publishes an empty final event so mobile stops waiting; the internal `NO_REPLY` sentinel is not displayed.
+
+Harness delivery matches only the registered device run ID. An unknown result cannot consume another pending chat, and a pending Harness task cannot suppress an unrelated runtime reply. Empty results do not mark a route delivered; a later nonempty result can still complete it.
+
+Completed Harness runs retain a delivery tombstone until cleanup after 15 minutes (pruned when another route is registered). This suppresses runtime finals arriving after lifecycle end and rejects late progress or duplicate route registration after the Harness final.
+
+Harness final delivery records `harness_response` in flow JSONL with the original device run ID and complete `text`. Web Chat uses this event to recover pending results after SSE disconnects or page reloads. Live delivery still emits `chat_response` with state `final`.
+
+Summary callbacks trigger recap lookup even without preview text. Empty results retain the pending route. Recap completion removes only the same run route it started with; a callback from an unrelated agent never consumes another pending chat.

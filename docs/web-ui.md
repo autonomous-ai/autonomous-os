@@ -733,3 +733,5 @@ swap runs without `--delete`, so device-local paths outside the repo survive.
 These are for a single device on your LAN. To ship to the fleet, use the OTA
 path instead — `make upload-hal` then `make promote-hal`, which versions the
 artifact and rolls it out.
+
+Harness final delivery records `harness_response` in flow JSONL with the original device run ID and complete `text`. Web Chat uses this event to recover pending results after SSE disconnects or page reloads. Live delivery still emits `chat_response` with state `final`.

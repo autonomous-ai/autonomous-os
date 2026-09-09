@@ -238,19 +238,9 @@ func (s *Server) forwardHarnessEvent(frame harness.Frame) {
 		}
 	}
 	if agentID == "" {
-		// A single pending Harness turn is unambiguous; older CLI event frames
-		// omitted agentId, so preserve delivery for that compatibility case.
-		s.harnessRepliesMu.Lock()
-		if len(s.harnessReplies) == 1 {
-			for id := range s.harnessReplies {
-				agentID = id
-			}
-		}
-		s.harnessRepliesMu.Unlock()
-		if agentID == "" {
-			return
-		}
+		return
 	}
+
 	kind, _ := frame["kind"].(string)
 	if kind == "turn.tool" {
 		toolName, toolArgs := harnessToolEvent(frame)
@@ -266,7 +256,7 @@ func (s *Server) forwardHarnessEvent(frame harness.Frame) {
 		return
 	}
 	text := harnessEventText(kind, frame)
-	if text == "" {
+	if text == "" && kind != "turn.summary" {
 		return
 	}
 	s.harnessRepliesMu.Lock()
@@ -284,26 +274,9 @@ func (s *Server) forwardHarnessEvent(frame harness.Frame) {
 				}
 			}
 		}
-		// Legacy CLI frames may carry an unrelated agentId. When there is only
-		// one pending device turn, the route is still unambiguous.
-		if !ok {
-			var onlyID string
-			for id := range s.harnessReplies {
-				if onlyID != "" {
-					onlyID = ""
-					break
-				}
-				onlyID = id
-			}
-			if onlyID != "" {
-				agentID, reply, ok = onlyID, s.harnessReplies[onlyID], true
-			}
-		}
+
 	}
 	terminal := kind == "turn.summary" || kind == "turn.error" || kind == "agent.error" || kind == "question.open"
-	if ok && terminal {
-		delete(s.harnessReplies, agentID)
-	}
 	s.harnessRepliesMu.Unlock()
 	if !ok || time.Since(reply.created) > 15*time.Minute {
 		return
@@ -318,6 +291,13 @@ func (s *Server) forwardHarnessEvent(frame harness.Frame) {
 		// complete user-facing result retained by Harness.
 		text = s.harnessRecapText(agentID, text)
 	}
+	if strings.TrimSpace(text) == "" {
+		slog.Warn("Harness summary has no result yet", "component", "harness", "run_id", reply.runID, "agent_id", agentID)
+		return
+	}
+	// Recap is fetched outside the lock. Do not delete a newer response route
+	// registered while that request was in flight.
+	s.forgetHarnessReply(agentID, reply.runID)
 	s.rememberHarnessResult(text)
 	if !s.agentHandler.DeliverHarnessResponse(reply.runID, text) {
 		slog.Warn("Harness result had no pending device turn", "component", "harness", "run_id", reply.runID)

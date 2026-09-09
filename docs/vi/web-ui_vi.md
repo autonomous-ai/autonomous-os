@@ -720,3 +720,5 @@ vẫn còn nguyên.
 Các target trên dành cho một thiết bị trong LAN. Để phát hành cho cả fleet, dùng
 đường OTA — `make upload-hal` rồi `make promote-hal`, vốn đánh version cho
 artifact và roll out.
+
+Kết quả cuối Harness được ghi vào flow JSONL bằng `harness_response`, giữ run ID thiết bị gốc và `text` đầy đủ. Web Chat dùng sự kiện này khôi phục kết quả đang chờ sau khi SSE ngắt hoặc tải lại trang. Luồng trực tiếp vẫn phát `chat_response` với state `final`.

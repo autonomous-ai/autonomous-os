@@ -15,14 +15,6 @@ import (
 	"go.autonomous.ai/os/system/server/config"
 )
 
-func isHarnessHandoff(evt domain.MonitorEvent) bool {
-	if evt.Type != "chat_response" {
-		return false
-	}
-	s := strings.ToLower(evt.Summary)
-	return strings.Contains(s, "sent to") && (strings.Contains(s, "agent") || strings.Contains(s, "harness"))
-}
-
 func isSilentReply(evt domain.MonitorEvent) bool {
 	if evt.Type != "chat_response" {
 		return false
@@ -224,7 +216,7 @@ func (s *ChatStream) handle(evt domain.MonitorEvent) {
 	flushed := s.takePending(run)
 	sessionID := run.sessionID
 	terminal := isTerminalChatEvent(evt)
-	if terminal && !isHarnessHandoff(evt) {
+	if terminal {
 		delete(s.runs, evt.RunID)
 	}
 	s.mu.Unlock()

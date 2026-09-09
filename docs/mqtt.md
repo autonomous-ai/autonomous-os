@@ -1124,3 +1124,5 @@ Handled by bootstrap worker, not through MQTT handler directly.
 | `system/domain/pairing.go` | PairingEvent + status enum |
 
 A silent terminal `NO_REPLY` without a pending Harness handoff is sent as a `chat_response` with `state: final`, empty summary and empty assistant message. The mobile client can terminate its pending indicator without displaying the internal sentinel.
+
+MQTT treats every final Harness response as terminal regardless of wording; handoff suppression is handled by the shared agent handler using the exact run ID.

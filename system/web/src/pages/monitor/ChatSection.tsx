@@ -1225,7 +1225,7 @@ export function ChatSection({ events, isActive }: Props) {
       if (!evRunId || !acceptedRunIds.has(evRunId)) continue;
 
       const d = ev.detail as JsonObject | undefined;
-      if (ev.type === "flow_event" && (d?.node === "tts_send" || d?.node === "tts_suppressed")) {
+      if (ev.type === "flow_event" && (d?.node === "tts_send" || d?.node === "tts_suppressed" || d?.node === "harness_response")) {
         // Prefer full_text: tts_send.text is only the remainder when sentence 1
         // streamed mid-turn (logged as tts_stream_send, never read here). full_text
         // is the complete reply. Fall back to text for older JSONL / tts_suppressed.
