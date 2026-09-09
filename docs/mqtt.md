@@ -811,6 +811,8 @@ best-effort follow-up is logged, but does not change the successful upload resul
 
 #### `chat.send` + `chat.event`
 
+Internal `NO_REPLY` handoff sentinels are suppressed from `chat.event`; clients receive Harness progress and the final Harness response instead.
+
 Lets the backend (and through it a phone app) hold the **same conversation the
 web monitor's chat holds**. The web chat is two halves — `POST
 /api/sensing/event` with `type:"web_chat"` to start a turn (this path forwards

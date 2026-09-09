@@ -991,6 +991,12 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 				}, flowRunID)
 				text = filteredFull
 			}
+			if h.suppressHarnessAgentReply(flowRunID) {
+				slog.Info("agent deferred reply to Harness", "component", "agent", "run_id", flowRunID)
+				flow.Log("harness_reply_pending", map[string]any{"run_id": flowRunID}, flowRunID)
+				h.ResumeHarnessVoiceFillers(flowRunID)
+				return nil
+			}
 			if isAgentNoReply(text) || isMetaNonReply(text) {
 				// NO_REPLY in remainder. If streamed > 0 the agent
 				// already spoke sentence 1; can't unspeak it. Log a
@@ -1011,6 +1017,7 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 					Detail:  map[string]string{"role": "assistant", "message": "[no reply]"},
 				})
 			} else if remainderText == "" {
+				h.clearHarnessResponseRun(flowRunID)
 				if streamed {
 					// Reply was a single sentence already streamed
 					// mid-turn — nothing left to TTS at end. Log so
@@ -1024,9 +1031,11 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 					flow.Log("hw_only_reply", map[string]any{"run_id": flowRunID}, flowRunID)
 				}
 			} else if suppressReason != "" {
+				h.clearHarnessResponseRun(flowRunID)
 				slog.Info("assistant turn done, TTS suppressed", "component", "agent", "reason", suppressReason, "text", text[:min(len(text), 100)])
 				flow.Log("tts_suppressed", map[string]any{"run_id": flowRunID, "reason": suppressReason, "text": text}, flowRunID)
 			} else {
+				h.clearHarnessResponseRun(flowRunID)
 				// Channel detection: positive-evidence only. tg- runIDs are
 				// synthesised by the device from session.message events (real Telegram
 				// users); anything else (device-chat-*, UUID from steer/cron/

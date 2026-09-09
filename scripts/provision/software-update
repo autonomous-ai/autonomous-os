@@ -127,6 +127,69 @@ wait_for_url() {
   return 1
 }
 
+# Older images have the generic /api/ proxy but no WebSocket Upgrade route for
+# Harness. Bootstrap refreshes this script between OTA runs, so migrate nginx
+# before a Harness-capable OS or web component is installed.
+ensure_harness_nginx_location() {
+  command -v nginx >/dev/null 2>&1 || {
+    echo "[software-update] nginx is not installed; cannot install Harness route" >&2
+    return 1
+  }
+  local conf candidate changed
+  conf=""
+  for candidate in /etc/nginx/conf.d/*.conf /etc/nginx/sites-enabled/default; do
+    [ -f "$candidate" ] || continue
+    if grep -q 'location /api/ {' "$candidate" || grep -q 'location = /api/harness/ws' "$candidate"; then
+      conf="$candidate"
+      break
+    fi
+  done
+  [ -n "$conf" ] || {
+    echo "[software-update] nginx API proxy configuration was not found" >&2
+    return 1
+  }
+  changed=$(python3 - "$conf" <<'PY'
+import os
+import sys
+
+path = sys.argv[1]
+with open(path) as source:
+    content = source.read()
+if "location = /api/harness/ws" in content:
+    print("0")
+    raise SystemExit(0)
+anchor = "  location /api/ {"
+if content.count(anchor) != 1:
+    raise SystemExit("nginx /api/ proxy anchor differs; refusing to edit")
+route = '''  # Direct Harness pairing/session; authenticated by PAKE and pinned E2EE.
+  location = /api/harness/ws {
+    proxy_pass http://backend;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_read_timeout 86400s;
+    proxy_send_timeout 86400s;
+  }
+
+'''
+temporary = path + ".harness-new"
+with open(temporary, "w") as target:
+    target.write(content.replace(anchor, route + anchor, 1))
+os.chmod(temporary, os.stat(path).st_mode & 0o777)
+os.replace(temporary, path)
+print("1")
+PY
+  ) || return 1
+  nginx -t >/dev/null || return 1
+  if [ "$changed" = "1" ]; then
+    systemctl reload nginx
+    echo "[software-update] nginx Harness WebSocket route installed"
+  fi
+}
+
 check_device_profile() {
   [ -f "$DEVICE_DEST/ROBOT.md" ] || return 1
   ! device_was_active hal || { systemctl is-active --quiet hal && wait_for_url http://127.0.0.1:5001/health 120; }
@@ -500,6 +563,13 @@ if [ -z "$OTA_METADATA_URL" ]; then
   exit 1
 fi
 echo "[software-update] OTA metadata: $OTA_METADATA_URL"
+
+if [ "$APP" = "os-server" ] || [ "$APP" = "web" ] || [ "$APP" = "device" ]; then
+  ensure_harness_nginx_location || {
+    echo "[software-update] Harness nginx migration failed; refusing $APP update" >&2
+    exit 1
+  }
+fi
 
 METADATA_TMP=$(mktemp)
 METADATA_PAYLOAD=$(mktemp)

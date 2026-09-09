@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"go.autonomous.ai/os/system/ambient"
 	"go.autonomous.ai/os/system/device"
 	"go.autonomous.ai/os/system/domain"
+	"go.autonomous.ai/os/system/harness"
 	"go.autonomous.ai/os/system/healthwatch"
 	"go.autonomous.ai/os/system/lib/hal"
 	"go.autonomous.ai/os/system/lib/i18n"
@@ -43,8 +45,15 @@ import (
 )
 
 type Server struct {
-	engine *gin.Engine
-	config *config.Config
+	harnessService   *harness.Service
+	harnessRepliesMu sync.Mutex
+	harnessReplies   map[string]harnessReply
+	harnessFollowup  atomic.Int64
+	harnessResultMu  sync.RWMutex
+	harnessResult    string
+	harnessResultAt  time.Time
+	engine           *gin.Engine
+	config           *config.Config
 
 	// handlers
 	healthHandler     _healthHttpDeliver.HealthHandler
@@ -149,7 +158,7 @@ func ProvideServer(
 	// loud about something newer than whatever the main agent is still working
 	// on — that older turn keeps running but loses the speaker.
 	sensingH.SetOnRealtimeHandled(agentH.CancelSpeechForNewerTurn)
-	return &Server{
+	s := &Server{
 		config:            cfg,
 		healthHandler:     hh,
 		networkHandler:    nh,
@@ -173,6 +182,9 @@ func ProvideServer(
 		statusLED:         sled,
 		chatStream:        chatStream,
 	}
+	sensingH.SetHarnessFollowup(s.HarnessVoiceFollowup)
+	sensingH.SetHarnessFollowupContext(s.HarnessFollowupContext)
+	return s
 }
 
 func (s *Server) Serve(closeFn func()) error {
@@ -302,6 +314,14 @@ func (s *Server) Serve(closeFn func()) error {
 
 	eventCtx, cancelEvents := context.WithCancel(context.Background())
 	defer cancelEvents()
+	harnessService, harnessErr := harness.NewService("config", harness.Callbacks{OnEvent: s.forwardHarnessEvent})
+	if harnessErr != nil {
+		slog.Error("harness service initialization failed", "component", "harness", "error", harnessErr)
+	} else {
+		s.harnessService = harnessService
+		harnessService.Start(eventCtx)
+		s.deviceMQTTHandler.SetHarnessService(harnessService)
+	}
 	go s.agentGateway.StartWS(eventCtx, s.agentHandler.HandleEvent)
 	go s.agentGateway.WatchIdentity(eventCtx)
 	go s.agentGateway.StartSkillWatcher(eventCtx)
@@ -310,6 +330,7 @@ func (s *Server) Serve(closeFn func()) error {
 	// a chat.send arrives — no run is tracked, so every bus event is dropped.
 	s.chatStream.Start(eventCtx)
 	go s.deviceMQTTHandler.StartBuddyStatusLoop(eventCtx)
+	go s.deviceMQTTHandler.StartHarnessStatusLoop(eventCtx)
 	// StartModelSync is launched from the startup-sequence goroutine AFTER
 	// EnsureOnboarding completes, so the two writers to openclaw.json don't
 	// race on first boot (sync's atomic write vs ensureAgentDefaults' plain
@@ -321,6 +342,7 @@ func (s *Server) Serve(closeFn func()) error {
 	r.Use(gin.Recovery())
 
 	api := r.Group("api")
+	s.registerHarnessRoutes(api, eventCtx)
 
 	health := api.Group("health")
 	health.GET("/live", s.healthHandler.Live)
@@ -532,6 +554,7 @@ func (s *Server) Serve(closeFn func()) error {
 	// backends that haven't implemented it answer 501 and store nothing.
 	agent.GET("skills", adminAuthMiddleware(s.config), s.agentHandler.ListSkills)
 	agent.GET("skills/files", adminAuthMiddleware(s.config), s.agentHandler.ReadSkillFiles)
+	agent.POST("skills/publish", adminAuthMiddleware(s.config), s.agentHandler.PublishSkill)
 	agent.POST("skills", adminAuthMiddleware(s.config), s.agentHandler.SaveSkill)
 	agent.POST("skills/install", adminAuthMiddleware(s.config), s.agentHandler.InstallSkill)
 	agent.POST("skills/upload", adminAuthMiddleware(s.config), s.agentHandler.UploadSkill)
