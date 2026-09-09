@@ -44,6 +44,12 @@ func (h *AgentHandler) suppressHarnessAgentReply(runID string) bool {
 
 func (h *AgentHandler) clearHarnessResponseRun(runID string) {
 	h.harnessRepliesMu.Lock()
+	if state, ok := h.harnessReplies[runID]; ok && state.webChat && !state.delivered {
+		// Web/MQTT turns may receive the Harness terminal event after the local
+		// lifecycle ends; retain the route for delayed delivery.
+		h.harnessRepliesMu.Unlock()
+		return
+	}
 	delete(h.harnessReplies, runID)
 	h.harnessRepliesMu.Unlock()
 }
