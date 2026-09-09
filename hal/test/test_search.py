@@ -729,3 +729,24 @@ def test_the_sweep_tilts_as_well_as_pans():
                       for j in h)]
     assert pitched, "the sweep never commanded a pitch joint"
     assert len(search.PITCH_STOPS) > 1, "only one pitch tier"
+
+
+def test_a_full_scan_does_not_stop_at_the_first_hit():
+    """Reported: asked outright for a maximum-capability scan, it still ended
+    on the first person it saw."""
+    quick, _svc, _det = _run_target(target="person", person_everywhere=True)
+    full, _svc2, _det2 = _run_target(target="person", person_everywhere=True,
+                                     exhaustive=True)
+    assert quick.stops_visited == 1, "the quick sweep should stop at the first hit"
+    assert full.stops_visited == 3 * len(search.ROLL_STOPS) * len(
+        search.PITCH_STOPS_EXHAUSTIVE), "the full sweep stopped early"
+    assert full.found is True
+    assert "x" in full.reason, f"expected a sighting count, got {full.reason!r}"
+
+
+def test_a_full_scan_adds_the_upward_tier():
+    """The up tier is what makes 'maximum' mean more than 'slower'."""
+    assert 0.0 in search.PITCH_STOPS_EXHAUSTIVE
+    assert search.PITCH_LOOK_DEG in search.PITCH_STOPS_EXHAUSTIVE
+    assert -search.PITCH_LOOK_DEG in search.PITCH_STOPS_EXHAUSTIVE
+    assert -search.PITCH_LOOK_DEG not in search.PITCH_STOPS

@@ -632,8 +632,18 @@ def _sweep(svc: Any, cap: Any, detector: Any, target: str,
                         "[search] found %s at yaw %+.0f roll %+.0f after %d stop(s)",
                         kind, yaw, roll, visited,
                     )
-                    _straighten_head_onto(svc, yaw, roll)
-                    return SearchResult(True, f"found {kind}", visited, yaw)
+                    hit = SearchResult(True, f"found {kind}", visited, yaw)
+                    if not exhaustive:
+                        _straighten_head_onto(svc, yaw, roll)
+                        return hit
+                    found.append(hit)
+
+    if exhaustive and found:
+        _restore(svc, seed_pose)
+        logger.info("[search] full sweep: %d sighting(s) of '%s' across %d looks",
+                    len(found), target, visited)
+        return SearchResult(True, f"found {target} x{len(found)}", visited,
+                            found[0].found_at_yaw)
 
     # Nothing found, so nothing to look at — go back to where the sweep began
     # rather than freezing wherever the last look left the head.
