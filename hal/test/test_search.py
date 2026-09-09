@@ -362,7 +362,11 @@ def test_the_view_carries_on_from_stop_to_stop():
 
     jumps = [abs(b - a) for a, b in zip(views, views[1:])
              if abs(b - a) > search.STEP_DEG + 1e-6]
-    assert len(jumps) <= 1, f"more than one discontinuity in {[round(v) for v in views]}"
+    # One per pitch tier: each tier restarts the yaw sweep at the seed, so the
+    # far-right-to-far-left trip that no ordering can remove happens once per
+    # tier rather than once per sweep.
+    assert len(jumps) <= len(search.PITCH_STOPS), (
+        f"more than one discontinuity per tier in {[round(v) for v in views]}")
 
 
 def test_the_handover_between_the_seed_and_the_next_stop_is_seamless():
@@ -394,7 +398,8 @@ def test_looking_around_multiplies_the_stops_not_the_yaw_positions():
     from turning the body more often."""
     res, svc = _run(bearing=None)
     yaw_stops = len(search._stop_list(_FakeSvc.IDLE_BASELINE["base_yaw.pos"]))
-    assert res.stops_visited == yaw_stops * len(search.ROLL_STOPS), (
+    assert res.stops_visited == (
+        yaw_stops * len(search.ROLL_STOPS) * len(search.PITCH_STOPS)), (
         f"{res.stops_visited} stops from {yaw_stops} yaw positions"
     )
     assert yaw_stops == 3, "three yaw positions is the whole point of the wider step"
@@ -557,8 +562,9 @@ def test_the_midpoint_of_a_full_sweep_is_the_middle_look():
 
     total = seen[-1][1]
     halfway = [v for v, t in seen if v * 2 >= t][0]
-    assert total == 9, f"expected 9 looks, got {total}"
-    assert halfway == 5, f"midpoint should be look 5, got {halfway}"
+    expected = 3 * len(search.ROLL_STOPS) * len(search.PITCH_STOPS)
+    assert total == expected, f"expected {expected} looks, got {total}"
+    assert halfway == expected // 2, f"midpoint should be look {expected // 2}, got {halfway}"
 
 
 def test_a_talkative_caller_cannot_sink_the_sweep():
@@ -566,7 +572,8 @@ def test_a_talkative_caller_cannot_sink_the_sweep():
         raise RuntimeError("tts exploded")
 
     res, _svc = _run(bearing=None, on_progress=boom)
-    assert res.stops_visited == 9, "the sweep stopped when the callback threw"
+    expected = 3 * len(search.ROLL_STOPS) * len(search.PITCH_STOPS)
+    assert res.stops_visited == expected, "the sweep stopped when the callback threw"
 
 
 def test_every_sweep_narrates_its_own_midpoint():
@@ -710,3 +717,15 @@ def test_a_person_search_keeps_the_closest_person_policy():
     assert res.found is True
     assert "person" in res.reason
     assert any(c.args[1] == "person" for c in det.detect.call_args_list)
+
+
+def test_the_sweep_tilts_as_well_as_pans():
+    """Reported: the sweep only went left-right. wrist_roll PANS the view (it
+    aims the camera and leaves the horizon level), so a sweep of yaw and roll
+    alone covers one horizontal band and never sees the desk below it."""
+    _res, svc, _det = _run_target(target="person")
+    pitched = [h for h in svc.holds
+               if any(j.startswith(("base_pitch", "elbow_pitch", "wrist_pitch"))
+                      for j in h)]
+    assert pitched, "the sweep never commanded a pitch joint"
+    assert len(search.PITCH_STOPS) > 1, "only one pitch tier"

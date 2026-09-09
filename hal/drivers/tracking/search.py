@@ -110,6 +110,22 @@ MAX_STOPS: int = 3
 ROLL_LOOK_DEG: float = 45.0
 ROLL_STOPS = (-ROLL_LOOK_DEG, 0.0, ROLL_LOOK_DEG)
 
+# How far the camera tilts from the seed pitch at each tier, in degrees of
+# CAMERA pitch. Positive is DOWN, negative is UP (gaze._maybe_pitch's
+# convention, which distribute_pitch shares).
+#
+# The sweep used to vary base_yaw and wrist_roll only, and wrist_roll PANS —
+# it aims the camera and leaves the horizon level. So a "look around" swept one
+# horizontal band at whatever pitch the seed posture happened to leave, and an
+# object on the desk below was never in frame however many stops it visited.
+#
+# Level first, because that is where a person asking usually is. Down second,
+# because that is where the things people ask about sit. Up is exhaustive-only:
+# it doubles again, and a ceiling is rarely the answer.
+PITCH_LOOK_DEG: float = 25.0
+PITCH_STOPS = (0.0, PITCH_LOOK_DEG)
+PITCH_STOPS_EXHAUSTIVE = (0.0, PITCH_LOOK_DEG, -PITCH_LOOK_DEG)
+
 _abort_evt = threading.Event()
 
 
@@ -266,7 +282,8 @@ def _wait_until_still(svc: Any, target: dict) -> None:
     logger.info("[search] still moving after %.1fs — shooting anyway", ARRIVE_TIMEOUT_S)
 
 
-def _look_at(svc: Any, roll: float, yaw: Optional[float] = None) -> bool:
+def _look_at(svc: Any, roll: float, yaw: Optional[float] = None,
+             extra: Optional[dict] = None) -> bool:
     """Point the camera at one look. False if the move could not be made.
 
     When `yaw` is given the base and the head move TOGETHER, in one command, and
@@ -284,6 +301,8 @@ def _look_at(svc: Any, roll: float, yaw: Optional[float] = None) -> bool:
         target = {"wrist_roll.pos": float(roll)}
         if yaw is not None:
             target["base_yaw.pos"] = float(yaw)
+        if extra:
+            target.update({j: float(v) for j, v in extra.items()})
         if all(abs(v - float(current.get(j, 0.0))) <= 0.5 for j, v in target.items()):
             return True
         duration = aim.min_move_duration(
@@ -499,6 +518,38 @@ def search_for_subject(target: str = "person", detector: Any = None,
                 )
 
 
+def _pitch_tier_targets(svc: Any, seed_pose: Optional[dict], tiers) -> list:
+    """Absolute joint targets per pitch tier, measured from the seed pose.
+
+    Absolute, not a relative nudge per tier: the sweep re-enters every tier
+    many times over, and accumulating an offset would walk the head into a
+    stop. The seed pose is the reference for all of them — the same discipline
+    the yaw stop list already follows ("Absolute, not relative to the seed").
+
+    A tier the allocator cannot serve is dropped rather than fatal: sweeping
+    the tiers that do work still beats not sweeping.
+    """
+    from hal.drivers.tracking import servo_follow
+
+    base = seed_pose
+    if not base:
+        try:
+            base = {j: float(v) for j, v in svc.get_positions().items()
+                    if j.endswith(".pos")}
+        except Exception:
+            return [(0.0, {})]
+    out = []
+    for deg in tiers:
+        if abs(deg) < 1e-9:
+            out.append((0.0, {}))
+            continue
+        try:
+            out.append((deg, servo_follow.distribute_pitch(base, deg)))
+        except Exception as e:
+            logger.warning("[search] pitch tier %+.0f skipped: %s", deg, e)
+    return out or [(0.0, {})]
+
+
 def _sweep(svc: Any, cap: Any, detector: Any, target: str,
            on_progress: Optional[Callable[[int, int], None]] = None,
            exhaustive: bool = False) -> SearchResult:
@@ -518,65 +569,71 @@ def _sweep(svc: Any, cap: Any, detector: Any, target: str,
                      if j.endswith('.pos')}
     except Exception:
         seed_pose = None
-    total_looks = len(stops) * len(ROLL_STOPS)
-    logger.info("[search] sweeping %d stops (%d looks) for '%s': %s",
-                len(stops), total_looks, target, [round(s) for s in stops])
+    tiers = PITCH_STOPS_EXHAUSTIVE if exhaustive else PITCH_STOPS
+    pitch_targets = _pitch_tier_targets(svc, seed_pose, tiers)
+    total_looks = len(stops) * len(ROLL_STOPS) * len(pitch_targets)
+    logger.info("[search] sweeping %d stops x %d pitch tier(s) (%d looks) for '%s': %s",
+                len(stops), len(pitch_targets), total_looks, target,
+                [round(s) for s in stops])
 
     visited = 0
-    for yaw in stops:
-        if _abort_evt.is_set():
-            return _abandon(svc, seed_pose, visited)
-
-        # Look around from here before turning the body again. Each angle is a
-        # STOP, not a pan-through — a head still moving gives a blurred frame
-        # and a detector that misses what is plainly in view.
-        #
-        # Always left to right, and the stop ORDER is what makes that smooth.
-        # A stop ends at roll +45, looking at yaw+45; the next stop to the right
-        # is yaw+90, whose first look at roll -45 is also yaw+45 — the same
-        # direction. The base turns +90 while the head turns -90 and the camera
-        # never leaves the spot.
-        #
-        # Alternating the roll direction instead was tried and is worse: it
-        # destroys precisely that handover, because the next stop then opens
-        # where the last one already was and the head has nowhere to carry on to.
-        for n, roll in enumerate(ROLL_STOPS):
+    found: List[SearchResult] = []
+    for _tier_deg, tier_joints in pitch_targets:
+        for yaw in stops:
             if _abort_evt.is_set():
                 return _abandon(svc, seed_pose, visited)
-            # The first look of a stop carries the base turn with it, so the
-            # handover from the previous stop is one continuous movement.
-            if not _look_at(svc, roll, yaw=yaw if n == 0 else None):
-                continue
 
-            # Settle before reading: a head still ringing gives a blurred frame
-            # and a detector that misses what is actually in view.
-            time.sleep(SETTLE_S)
-            visited += 1
-            if on_progress is not None:
-                try:
-                    on_progress(visited, total_looks)
-                except Exception as e:
-                    # A talkative caller must never be able to sink the search.
-                    logger.debug("[search] progress callback failed: %s", e)
+            # Look around from here before turning the body again. Each angle is a
+            # STOP, not a pan-through — a head still moving gives a blurred frame
+            # and a detector that misses what is plainly in view.
+            #
+            # Always left to right, and the stop ORDER is what makes that smooth.
+            # A stop ends at roll +45, looking at yaw+45; the next stop to the right
+            # is yaw+90, whose first look at roll -45 is also yaw+45 — the same
+            # direction. The base turns +90 while the head turns -90 and the camera
+            # never leaves the spot.
+            #
+            # Alternating the roll direction instead was tried and is worse: it
+            # destroys precisely that handover, because the next stop then opens
+            # where the last one already was and the head has nowhere to carry on to.
+            for n, roll in enumerate(ROLL_STOPS):
+                if _abort_evt.is_set():
+                    return _abandon(svc, seed_pose, visited)
+                # The first look of a stop carries the base turn with it, so the
+                # handover from the previous stop is one continuous movement.
+                if not _look_at(svc, roll, yaw=yaw if n == 0 else None,
+                                extra=tier_joints if n == 0 else None):
+                    continue
 
-            _t_grab = time.monotonic()
-            frame = _grab_frame(cap)
-            _grab_ms = (time.monotonic() - _t_grab) * 1000
-            if frame is None:
-                continue
-            _t_det = time.monotonic()
-            box, kind = _detect_target(detector, frame, target)
-            logger.info("[search] look %d/%d: grab %.0fms detect %.0fms -> %s",
-                        visited, total_looks, _grab_ms,
-                        (time.monotonic() - _t_det) * 1000,
-                        kind or "nothing")
-            if box is not None:
-                logger.info(
-                    "[search] found %s at yaw %+.0f roll %+.0f after %d stop(s)",
-                    kind, yaw, roll, visited,
-                )
-                _straighten_head_onto(svc, yaw, roll)
-                return SearchResult(True, f"found {kind}", visited, yaw)
+                # Settle before reading: a head still ringing gives a blurred frame
+                # and a detector that misses what is actually in view.
+                time.sleep(SETTLE_S)
+                visited += 1
+                if on_progress is not None:
+                    try:
+                        on_progress(visited, total_looks)
+                    except Exception as e:
+                        # A talkative caller must never be able to sink the search.
+                        logger.debug("[search] progress callback failed: %s", e)
+
+                _t_grab = time.monotonic()
+                frame = _grab_frame(cap)
+                _grab_ms = (time.monotonic() - _t_grab) * 1000
+                if frame is None:
+                    continue
+                _t_det = time.monotonic()
+                box, kind = _detect_target(detector, frame, target)
+                logger.info("[search] look %d/%d: grab %.0fms detect %.0fms -> %s",
+                            visited, total_looks, _grab_ms,
+                            (time.monotonic() - _t_det) * 1000,
+                            kind or "nothing")
+                if box is not None:
+                    logger.info(
+                        "[search] found %s at yaw %+.0f roll %+.0f after %d stop(s)",
+                        kind, yaw, roll, visited,
+                    )
+                    _straighten_head_onto(svc, yaw, roll)
+                    return SearchResult(True, f"found {kind}", visited, yaw)
 
     # Nothing found, so nothing to look at — go back to where the sweep began
     # rather than freezing wherever the last look left the head.
