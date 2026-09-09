@@ -43,6 +43,10 @@ const (
 	maxBundleBytes = 16 << 20 // downloaded archive
 	maxFileBytes   = 2 << 20  // one extracted file
 	maxBundleFiles = 500
+	// Store listing pagination is bounded so a malformed upstream `total` cannot
+	// turn opening Manage skills into an unbounded series of device requests.
+	storeMatchPageSize = 100
+	maxStoreMatchPages = 50
 )
 
 // storeEnvelope is the catalog's JSON wrapper. Business failures come back with
@@ -79,7 +83,77 @@ func (h *AgentHandler) ListSkills(c *gin.Context) {
 	if list == nil {
 		list = []domain.InstalledSkill{}
 	}
+	if len(list) > 0 {
+		if err := h.annotateStoreAvailability(list); err != nil {
+			// Listing local skills remains useful when the catalog is offline. Do
+			// not call a skill device-only unless the whole catalog was read.
+			slog.Warn("[skills] store availability unknown", "component", "agent-http", "error", err)
+			for i := range list {
+				list[i].StoreAvailability = "unknown"
+			}
+		}
+	}
 	c.JSON(http.StatusOK, serializers.ResponseSuccess(list))
+}
+
+// annotateStoreAvailability marks installed skills that can also be found in
+// the current catalog. Runtime skill directories do not retain a catalog ID,
+// so this deliberately compares normalized directory names with catalog slugs
+// and names. It must either read the complete catalog or return an error: a
+// partial catalog could incorrectly label a store skill as device-only.
+func (h *AgentHandler) annotateStoreAvailability(installed []domain.InstalledSkill) error {
+	storeNames := make(map[string]struct{})
+	for page := 1; page <= maxStoreMatchPages; page++ {
+		q := url.Values{}
+		q.Set("page", fmt.Sprint(page))
+		q.Set("limit", fmt.Sprint(storeMatchPageSize))
+		body, err := storeGet("/api/v1/agent-skills", q, skillStoreTimeout, maxBundleBytes)
+		if err != nil {
+			return fmt.Errorf("fetch catalog page %d: %w", page, err)
+		}
+		var env storeEnvelope
+		if err := json.Unmarshal(body, &env); err != nil {
+			return fmt.Errorf("decode catalog page %d envelope: %w", page, err)
+		}
+		if env.Status != 1 {
+			return fmt.Errorf("catalog page %d returned status %d", page, env.Status)
+		}
+		var catalog domain.StoreSkillList
+		if err := json.Unmarshal(env.Data, &catalog); err != nil {
+			return fmt.Errorf("decode catalog page %d: %w", page, err)
+		}
+		for _, skill := range catalog.Data {
+			storeNames[normalizeSkillName(skill.Slug)] = struct{}{}
+			storeNames[normalizeSkillName(skill.Name)] = struct{}{}
+		}
+		if int64(page*storeMatchPageSize) >= catalog.Total {
+			for i := range installed {
+				if _, ok := storeNames[normalizeSkillName(installed[i].Name)]; ok {
+					installed[i].StoreAvailability = "in_store"
+				} else {
+					installed[i].StoreAvailability = "device_only"
+				}
+			}
+			return nil
+		}
+		if len(catalog.Data) == 0 {
+			return fmt.Errorf("catalog page %d is empty before total %d", page, catalog.Total)
+		}
+	}
+	return fmt.Errorf("catalog exceeds %d pages", maxStoreMatchPages)
+}
+
+// normalizeSkillName makes a runtime directory such as "computer-use" match
+// a catalog name such as "Computer Use" without treating punctuation as part
+// of the identity. Catalog IDs are not preserved by runtime skill directories.
+func normalizeSkillName(value string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(strings.TrimSpace(value)) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // ReadSkillFiles handles GET /api/agent/skills/files?name=<skill>. Returns one
