@@ -13,6 +13,7 @@ import pytest
 import hal.config as config
 import hal.app_state as state
 from hal.drivers.tracking import aim
+from test.body_ownership import BodyOwnership
 
 
 class _FakeCap:
@@ -325,7 +326,7 @@ def test_speech_can_be_disabled():
 
 # --- servo ownership: nothing else may move the head mid-look --------------
 
-class _FakeAnim:
+class _FakeAnim(BodyOwnership):
     def __init__(self, tracking=False):
         self._tracking_active = tracking
 
