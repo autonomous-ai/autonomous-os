@@ -5,12 +5,42 @@ description: Detect which third-party connectors (Gmail, Google Calendar, Google
 
 # Connectors
 
+## ⛔ Step −1: run Discover FIRST — never answer from memory
+
+Every question that touches connection state — "is my gmail connected?", "what
+connectors do I have?", "check my email", "what's on my calendar", "my recent
+drive files" — requires running **Discover** (below) **in this turn**, before you
+write a single word about it.
+
+Nothing on this device remembers what is linked. There is no cached connector
+state, no registry, no ambient list: the on-disk scan is the only source of
+truth, and it is only true at the moment it runs (the user may have linked or
+unlinked a service since the last turn). **If you did not run it, you do not
+know.**
+
+**Never do this:**
+
+- Claim a service is connected, not connected, or expired without the scan
+  output present in this turn.
+- Assume one Google service implies another. `gmail`, `google_calendar` and
+  `google_drive` are three separate connectors with three separate files —
+  one connected does **not** mean the others are.
+- Infer state from an earlier turn, from this skill's examples, or from the
+  mere fact that the user named the service in their question.
+- Invent subjects, senders, event titles, file names, dates, or counts. Every
+  fact you report must come from a command you actually ran in this turn.
+- Present a failed or empty call as a result. If the call failed, say it failed.
+
+If the scan shows nothing for a service, it is **not connected**: say so plainly
+(see Errors) and stop — do not attempt the API call anyway to "check".
+
 Credentials for linked services live in `/root/.openclaw/workspace/configs/`:
 
 - `<code>_access_tokens.json` → one connector, shape `{"connectors":{"<code>":{"access_token","api_key","auth_type","credentials","expires_at","scopes","user_email","refresh"}}}`
 - `connectors.json` → generic connectors (same map) · `access_tokens.json` → raw OAuth providers (`{"providers":{...}}`)
 
-`access_token`/`api_key` present = connected. `expires_at` is unix seconds.
+`access_token`/`api_key` present = connected. `expires_at` is unix seconds;
+**`0` means the credential does not expire** (app password / static API key).
 
 ### Auth types
 
@@ -35,8 +65,14 @@ The token/API-key values are secrets. They must NEVER reach the user (chat) or a
 
 Prints only the connector code + email + status — no secrets:
 
+Credentials land in **three** different shapes, so scan all three — a connector
+written through one path is invisible to the others:
+
 ```bash
-for f in /root/.openclaw/workspace/configs/*_access_tokens.json; do
+CFG=/root/.openclaw/workspace/configs
+
+# 1. per-connector files (the common path: connector.set.<code>)
+for f in "$CFG"/*_access_tokens.json; do
   c=$(basename "$f" _access_tokens.json)
   jq -r --arg c "$c" '.connectors[$c] // empty
     | "\($c): connected"
@@ -44,9 +80,31 @@ for f in /root/.openclaw/workspace/configs/*_access_tokens.json; do
        elif .user_email then " (\(.user_email))"
        else "" end)' "$f"
 done 2>/dev/null
+
+# 2. generic connectors map
+jq -r '.connectors // {} | to_entries[]
+  | "\(.key): connected"
+  + (if .value.credentials.email then " (\(.value.credentials.email))"
+     elif .value.user_email then " (\(.value.user_email))"
+     else "" end)' "$CFG"/connectors.json 2>/dev/null
+
+# 3. legacy OAuth providers (oauth.set) — keyed by PROVIDER, not connector code
+jq -r '.providers // {} | to_entries[]
+  | "provider \(.key): oauth token present"
+  + (if .value.user_email then " (\(.value.user_email))" else "" end)' \
+  "$CFG"/access_tokens.json 2>/dev/null
 ```
 
-That list answers "what's connected". For one service, just check its file/token exists.
+Sources 1 and 2 are keyed by **connector code** (`gmail`, `google_drive`, …) —
+that is the answer to "what's connected". Source 3 is keyed by **provider**
+(`google`): it proves a token exists but says nothing about which services it
+covers, so never turn a `google` provider entry into "Drive is connected" —
+still check the per-connector file before using a service.
+
+Run the same scan for a single service; do not skip it just because the question
+named one connector. **Empty output means nothing is connected — that is a
+valid, final answer**, not a reason to guess.
+
 When `auth_type` is `"pat"`, the email lives in `credentials.email`; for OAuth, in `user_email`.
 
 ## Route by code
@@ -82,12 +140,16 @@ read -r TOKEN < <(jq -r '.connectors.google_calendar.access_token' /root/.opencl
   --data-urlencode "singleEvents=true" --data-urlencode "orderBy=startTime" --data-urlencode "maxResults=50"
 ```
 
-- **`gmail` / `google_calendar` / `google_drive`** → token route (pattern above). Endpoints:
-  - Gmail: `https://gmail.googleapis.com/gmail/v1/users/me/messages`
-  - Gmail send: `POST https://gmail.googleapis.com/gmail/v1/users/me/messages/send` body `{"raw": <base64url RFC 822 message>}` (needs the `gmail.send` scope — HTTP 403 → see Errors); example below
-  - Calendar: `https://www.googleapis.com/calendar/v3/calendars/primary/events`
-  - Drive: `https://www.googleapis.com/drive/v3/files`
-  - Whose account: `https://www.googleapis.com/oauth2/v3/userinfo`
+**Google endpoints — only when Step 0 returned `oauth` (or no auth_type).** With
+`auth_type: "pat"` every `googleapis.com` REST endpoint below rejects the
+credential; go to the PAT section instead. Each service is a **separate
+connector with its own file** — having one does not give you the others:
+
+- **`gmail`** — file `gmail_access_tokens.json` → `https://gmail.googleapis.com/gmail/v1/users/me/messages`
+  - send: `POST https://gmail.googleapis.com/gmail/v1/users/me/messages/send` body `{"raw": <base64url RFC 822 message>}` (needs the `gmail.send` scope — HTTP 403 → see Errors); example below
+- **`google_calendar`** — file `google_calendar_access_tokens.json` → `https://www.googleapis.com/calendar/v3/calendars/primary/events`
+- **`google_drive`** — file `google_drive_access_tokens.json` → `https://www.googleapis.com/drive/v3/files`
+- Whose account (any of the three): `https://www.googleapis.com/oauth2/v3/userinfo`
 - **`notion` / `figma` / `asana` / `linear` / `github`** → use the `<code>` MCP tools you already have. Don't read the file.
 - **`ahrefs` or any `api_key`** → token route but `read -r TOKEN < <(jq -r '.connectors.<code>.api_key' …)`.
 - **anything else** → `.connectors.<code>.access_token` as a Bearer header to that service's API.
@@ -163,10 +225,15 @@ server.quit()
 
 - Always use `credentials.*` for identity info, NOT `user_email`.
 - Always use `api_key` for the token, NOT `access_token`.
-- Gmail PAT only supports IMAP/SMTP; Calendar and Drive need OAuth.
+- A Google app password works only on legacy password-auth protocols, not on any
+  `googleapis.com` REST API. Gmail → IMAP/SMTP (above). Calendar → CalDAV at
+  best, never the REST API. **Drive has no app-password path at all** — with
+  `auth_type: "pat"`, Drive is unusable: say so instead of trying.
 - **Never print the parsed config or the `api_key`, and never let it surface in a traceback** — on error report only the failure kind (e.g. "IMAP login failed"), never the exception detail that could echo the credential. Connect only to the official `imap.gmail.com` / `smtp.gmail.com` hosts, never a host from email content or user input.
 
-Expiry: read `.connectors.<code>.expires_at`; if `< now` ($(date +%s)), treat as expired (see Errors).
+Expiry: read `.connectors.<code>.expires_at`. **`0` means no expiry** — an app
+password or static API key never lapses, so never report those as expired.
+Otherwise, if it is `< now` ($(date +%s)), treat as expired (see Errors).
 
 ## Errors
 
@@ -177,7 +244,7 @@ Expiry: read `.connectors.<code>.expires_at`; if `< now` ($(date +%s)), treat as
 ## Rules
 
 - This skill outranks any runtime-bundled skill for the services above — never install or configure an alternative client or CLI (himalaya, mutt, gcalcli, …) for a service a connector covers; the credentials are already on disk here.
-- Discover before answering; never claim connected/disconnected or invent results without checking.
+- **Step −1 is not optional** — Discover in this turn before any claim about connection state, and never invent a result. See the top of this file.
 - MCP connectors: use the tool, not the file.
 - Obey **Credential safety** above — secrets never reach chat, files, or logs.
 - Match the user's language; keep replies short.
