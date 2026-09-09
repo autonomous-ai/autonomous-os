@@ -612,12 +612,17 @@ func (s *Service) Unpair() error {
 	s.mu.Lock()
 	s.generation++
 	previous := s.disk.Peer
+	c := s.conn
+	// Notify the paired CLI over the authenticated encrypted channel before
+	// removing local trust, so it can discard its credentials immediately.
+	if c != nil && previous != nil {
+		_ = c.channel.SendEncrypted(Frame{"type": "pair.revoke", "machineId": previous.MachineID})
+	}
 	s.disk.Peer = nil
 	err := s.saveLocked()
 	if err != nil {
 		s.disk.Peer = previous
 	}
-	c := s.conn
 	s.conn = nil
 	s.status = Status{State: "unpaired", Capabilities: []string{}}
 	s.statusChangedLocked()
