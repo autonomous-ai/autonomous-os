@@ -278,6 +278,21 @@ func (s *Server) forwardHarnessEvent(frame harness.Frame) {
 				}
 			}
 		}
+		// Legacy CLI frames may carry an unrelated agentId. When there is only
+		// one pending device turn, the route is still unambiguous.
+		if !ok {
+			var onlyID string
+			for id := range s.harnessReplies {
+				if onlyID != "" {
+					onlyID = ""
+					break
+				}
+				onlyID = id
+			}
+			if onlyID != "" {
+				agentID, reply, ok = onlyID, s.harnessReplies[onlyID], true
+			}
+		}
 	}
 	terminal := kind == "turn.summary" || kind == "turn.error" || kind == "agent.error" || kind == "question.open"
 	if ok && terminal {
