@@ -89,3 +89,5 @@ Khi phát lại hàng đợi Codex, Web/MQTT chat và voice follow-up được b
 Không poll recap mới nhất ngay sau khi gửi: dữ liệu có thể vẫn thuộc lượt trước và đánh dấu đã giao trước khi kết quả mới tới. Chuyển recap cuối khi nhận `turn.summary`.
 
 Khi Harness phụ trách phản hồi của một run, các sự kiện chat assistant thông thường của đúng run đó được chặn để lời báo đã giao việc hoặc `NO_REPLY` không đóng Web/MQTT chat trước khi kết quả Harness tới. Tin nhắn người dùng và sự kiện lỗi vẫn được chuyển tiếp.
+
+Cả sáu runtime (Codex, OpenClaw, Hermes, PicoClaw, Claude Code và OpenCode) khôi phục địa chỉ trả lời Harness khi phát lại chat trong hàng đợi. Hermes giữ MQTT chat và voice follow-up thành lượt riêng, không gộp với cảm biến nền.

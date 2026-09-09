@@ -293,7 +293,7 @@ func (s *CodexService) drainPendingEvents() {
 		msg = rePoseWorstMarker.ReplaceAllString(msg, "")
 		msg = strings.ReplaceAll(msg, "\n\n\n", "\n\n")
 		msg = strings.TrimSpace(msg)
-		msg = appendReplayHarnessRoute(msg, ev.eventType, runID)
+		msg = sensingmsg.AppendHarnessReplyRoute(msg, ev.eventType, runID)
 
 		// Replayed voice_agent_handled: realtime agent already spoke, suppress TTS
 		// on the reply (same as the live PostEvent path).
@@ -326,20 +326,4 @@ func (s *CodexService) drainPendingEvents() {
 			slog.Info("pending event replayed", "component", "sensing", "type", ev.eventType, "runId", runID)
 		}
 	}
-}
-
-// appendReplayHarnessRoute preserves the device response address after queue replay.
-// The model must copy this address, never invent a descriptive device-chat ID.
-func appendReplayHarnessRoute(msg, eventType, runID string) string {
-	channel := ""
-	switch eventType {
-	case "web_chat", "mqtt_chat":
-		channel = "web"
-	case "voice_followup":
-		channel = "voice"
-	}
-	if channel == "" || runID == "" {
-		return msg
-	}
-	return msg + "\n[harness-reply run_id=" + runID + " channel=" + channel + "]"
 }

@@ -89,3 +89,5 @@ Codex queue replay restores the original `harness-reply` address for Web/MQTT ch
 Do not poll the latest recap immediately after sending: it can still describe the preceding turn and consume delivery before the new result arrives. Final recap delivery is triggered by `turn.summary`.
 
 While Harness owns a run’s response, generic assistant chat events for that exact run are suppressed so a handoff or `NO_REPLY` cannot close Web/MQTT chat before the Harness result arrives. User messages and error events still pass through.
+
+All six runtimes (Codex, OpenClaw, Hermes, PicoClaw, Claude Code and OpenCode) restore the Harness reply address when replaying queued chat. Hermes keeps MQTT chat and voice follow-ups as separate turns rather than merging them with ambient sensing.
