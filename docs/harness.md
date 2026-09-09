@@ -83,3 +83,5 @@ It temporarily advertises a local mDNS device, uses a local OS WebSocket server 
 ### MQTT pairing control
 
 Authenticated device MQTT data commands expose `harness.pair.start`, `harness.status`, `harness.pair.cancel`, and `harness.pair.revoke`. Replies are published on the device fd channel. The direct WebSocket remains the data channel for paired Harness computers.
+
+Codex queue replay restores the original `harness-reply` address for Web/MQTT chat and voice follow-ups. A queued request uses the same local run ID and channel as an immediately dispatched request.

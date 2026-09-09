@@ -83,3 +83,5 @@ Bài kiểm tra quảng bá mDNS tạm trên máy, dùng server WebSocket OS c�
 ### Điều khiển ghép đôi qua MQTT
 
 Các lệnh MQTT data đã xác thực của thiết bị gồm `harness.pair.start`, `harness.status`, `harness.pair.cancel` và `harness.pair.revoke`; phản hồi được publish trên fd channel của thiết bị. WebSocket trực tiếp vẫn là kênh dữ liệu cho máy tính Harness đã ghép đôi.
+
+Khi phát lại hàng đợi Codex, Web/MQTT chat và voice follow-up được bổ sung lại địa chỉ `harness-reply` gốc. Yêu cầu qua hàng đợi giữ cùng run ID cục bộ và channel như khi gửi ngay.
