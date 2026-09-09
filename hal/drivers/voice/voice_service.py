@@ -972,7 +972,7 @@ class VoiceService:
         keepalive_session = None
         last_keepalive_ping = time.time()  # throttles send_keepalive in the wait loop
 
-        if stt_keepalive_on := voice_cfg.STT_KEEPALIVE: # and not voice_cfg.LIVE_MODE
+        if stt_keepalive_on := voice_cfg.STT_KEEPALIVE: # and not getattr(voice_cfg, "LIVE_MODE", False)
             keepalive_session = self._stt.create_session()
             if not keepalive_session.start(lambda text, is_final: None):
                 keepalive_session = None
@@ -1351,7 +1351,7 @@ class VoiceService:
                     # start, so a device with realtime down still answers.
                     decision = (
                         self._live_decision(speech_pre_buffer)
-                        if voice_cfg.LIVE_MODE
+                        if getattr(voice_cfg, "LIVE_MODE", False)
                         else "turn"
                     )
                     if decision == "live":

@@ -12,6 +12,7 @@ require (
 	github.com/goccy/go-yaml v1.18.0
 	github.com/google/wire v0.7.0
 	github.com/gorilla/websocket v1.5.3
+	github.com/gtank/ristretto255 v0.1.2
 	github.com/joho/godotenv v1.5.1
 	github.com/pelletier/go-toml/v2 v2.2.4
 	golang.org/x/crypto v0.47.0

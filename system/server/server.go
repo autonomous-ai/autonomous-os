@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"go.autonomous.ai/os/system/ambient"
 	"go.autonomous.ai/os/system/device"
 	"go.autonomous.ai/os/system/domain"
+	"go.autonomous.ai/os/system/harness"
 	"go.autonomous.ai/os/system/healthwatch"
 	"go.autonomous.ai/os/system/lib/hal"
 	"go.autonomous.ai/os/system/lib/i18n"
@@ -43,8 +45,15 @@ import (
 )
 
 type Server struct {
-	engine *gin.Engine
-	config *config.Config
+	harnessService   *harness.Service
+	harnessRepliesMu sync.Mutex
+	harnessReplies   map[string]harnessReply
+	harnessFollowup  atomic.Int64
+	harnessResultMu  sync.RWMutex
+	harnessResult    string
+	harnessResultAt  time.Time
+	engine           *gin.Engine
+	config           *config.Config
 
 	// handlers
 	healthHandler     _healthHttpDeliver.HealthHandler
@@ -149,7 +158,7 @@ func ProvideServer(
 	// loud about something newer than whatever the main agent is still working
 	// on — that older turn keeps running but loses the speaker.
 	sensingH.SetOnRealtimeHandled(agentH.CancelSpeechForNewerTurn)
-	return &Server{
+	s := &Server{
 		config:            cfg,
 		healthHandler:     hh,
 		networkHandler:    nh,
@@ -173,6 +182,9 @@ func ProvideServer(
 		statusLED:         sled,
 		chatStream:        chatStream,
 	}
+	sensingH.SetHarnessFollowup(s.HarnessVoiceFollowup)
+	sensingH.SetHarnessFollowupContext(s.HarnessFollowupContext)
+	return s
 }
 
 func (s *Server) Serve(closeFn func()) error {
@@ -302,6 +314,13 @@ func (s *Server) Serve(closeFn func()) error {
 
 	eventCtx, cancelEvents := context.WithCancel(context.Background())
 	defer cancelEvents()
+	harnessService, harnessErr := harness.NewService("config", harness.Callbacks{OnEvent: s.forwardHarnessEvent})
+	if harnessErr != nil {
+		slog.Error("harness service initialization failed", "component", "harness", "error", harnessErr)
+	} else {
+		s.harnessService = harnessService
+		harnessService.Start(eventCtx)
+	}
 	go s.agentGateway.StartWS(eventCtx, s.agentHandler.HandleEvent)
 	go s.agentGateway.WatchIdentity(eventCtx)
 	go s.agentGateway.StartSkillWatcher(eventCtx)
@@ -321,6 +340,7 @@ func (s *Server) Serve(closeFn func()) error {
 	r.Use(gin.Recovery())
 
 	api := r.Group("api")
+	s.registerHarnessRoutes(api, eventCtx)
 
 	health := api.Group("health")
 	health.GET("/live", s.healthHandler.Live)
