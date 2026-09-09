@@ -401,6 +401,20 @@ class ServoStatusResponse(BaseModel):
     servos: dict[str, ServoDetail]
 
 
+class ServoSearchRequest(BaseModel):
+    target: str = Field(
+        "person",
+        description="What to sweep for. 'person'/'face' use the closest-subject "
+                    "policy; any other noun goes to the object detector "
+                    "(COCO locally, YOLOWorld open-vocab remotely).",
+    )
+    exhaustive: bool = Field(
+        False,
+        description="Visit every stop and pitch tier instead of returning at the "
+                    "first sighting. Slower; for 'scan everything' requests.",
+    )
+
+
 class ServoAimRequest(BaseModel):
     direction: str = Field(
         ...,

@@ -502,10 +502,35 @@ lamp decides for itself. A sweep is entered when:
   a repoint that turned to the bearing and found nobody there. Nobody asked for this one, which is
   why it is the only entry with a cooldown — see *Looking around on its own*.
 
-`POST /servo/search` — sweeps and stops on the first subject seen. Budget roughly **2 seconds per
-stop** (measured on device): ~0.65 s of movement and settling, the rest frame grab and detection. A
-full 3×3 sweep that finds nobody therefore costs about 20 seconds, which is why this is entered only
-when the time is affordable.
+`POST /servo/search` — sweeps for a subject. Body (all optional): `{"target": "cup", "exhaustive": true}`.
+
+- `target` defaults to `"person"`. `person`/`face` use the closest-subject policy with a face
+  fallback; any other noun goes to the same YOLOv8n/YOLOWorld chain `/servo/track` uses. Before this
+  the target was accepted by the function and dropped on the floor — every sweep looked for a person,
+  so "look around for my keyboard" ended at the first bystander.
+- `exhaustive` defaults to `false`, which returns at the first sighting — right for "where are you?".
+  `true` walks the whole ring at every bearing and reports the number of sightings.
+- Coverage is `bearings x looks per bearing`: 3 x 6 = **18 looks** normally, 3 x 9 = **27**
+  exhaustive. Budget roughly **2 seconds per look**.
+
+At each bearing the base holds still and the head walks a ring of looks — centre, left, round the
+bottom, out to the right, and (exhaustive only) over the top. The corners go to **full** roll and
+**full** pitch rather than cos(45) of each, so a rounded square rather than a circle: that way each
+corner sees as far to the side as the left/right looks and as far down as the bottom look, adding new
+ground instead of re-covering the middle.
+
+**Only `wrist_roll` and `wrist_pitch` move during a look.** The base turns once per bearing and the
+arm never reshapes itself. An earlier design spread the tilt across `base_pitch`, `elbow_pitch` and
+`wrist_pitch` via `servo_follow.distribute_pitch` — right for a tracking correction, wrong for a
+sweep: device-observed 2026-09-09 the upward tier put `elbow_pitch` at +35.8 and `base_pitch` at
++10.6, extending the arm up and back far enough to look unstable, and it stepped the base through
+every bearing again for each tier. `distribute_pitch` allocates against per-joint travel; nothing in
+it knows about the arm's balance.
+
+The upward half is clamped against `WRIST_PITCH_MIN`: resting near −73 there are only ~16 degrees of
+headroom, less than the ring's 25. Measured on lamp-ac82 2026-09-09, `wrist_pitch` reaches −89.6 up
+and −16.6 down without stalling, so `PITCH_TRAVEL_MIN/MAX` in `constants.py` (−33..+32) does not
+describe this arm.
 
 **Three stops: the remembered bearing first, then right, then left** — `seed`, `seed+90°`, `seed−90°`,
 clamped to the mechanical range rather than dropped. The seed goes first because the sweep stops on
