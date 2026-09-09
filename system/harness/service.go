@@ -320,6 +320,7 @@ func (s *Service) CancelPair() error {
 	} else if !s.status.Connected {
 		s.status.State = "disconnected"
 	}
+	s.statusChangedLocked()
 	s.mu.Unlock()
 	attempt.cancel()
 	return err
@@ -819,6 +820,7 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if s.attempt != nil && s.attempt.provisional && s.attempt.info.MachineID == machineID {
 		s.attempt.info.State = "paired"
 	}
+	s.statusChangedLocked()
 	if s.server != stringField(welcome, "serverInstanceId") || welcome["resumed"] != true {
 		s.cursor = number(welcome, "cursor")
 	}
@@ -837,6 +839,7 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.conn = nil
 		s.status.Connected = false
 		s.status.State = "disconnected"
+		s.statusChangedLocked()
 	}
 	s.mu.Unlock()
 }
