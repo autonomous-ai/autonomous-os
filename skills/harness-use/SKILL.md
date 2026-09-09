@@ -23,6 +23,8 @@ Buddy or a legacy Buddy session.
 
 Use `list` to discover real agents. `select` accepts an exact returned `agentId`, or an unambiguous exact agent name. Selection is retained per `conversation_id` (default `voice`). Supply a stable channel conversation ID outside voice. Never invent machine IDs, agent IDs or desktop paths. A selected agent stays selected across follow-ups; an unavailable target is an error, not permission to choose another agent.
 
+When a user says “Ask David to find events” or “Ask David if anything is happening,” **David is the selected execution target**. Send David the underlying task directly, such as `Find upcoming events` — never send `Ask David ...`, ask David whom to contact, or treat David as a contact lookup. Preserve the user's substantive request, only removing the delegation wording.
+
 ```sh
 python3 scripts/harness.py send - <<'JSON'
 {"agentId":"RETURNED_AGENT_ID","text":"Add reconnect handling and describe the change","response":{"run_id":"device-chat-42","channel":"voice"}}

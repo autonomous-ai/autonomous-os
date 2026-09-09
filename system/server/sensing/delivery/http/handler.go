@@ -44,6 +44,8 @@ import (
 
 var harnessAgentRequest = regexp.MustCompile(`(?i)\b(ask|tell|have|message|check(?:ing)?(?:\s+with)?|hỏi|bảo|nhờ)\s+(?:the\s+)?(?:harness\s+)?(?:agent\s+)?[[:alnum:]_-]+`)
 
+const harnessNamedAgentRouting = "[system-routing: The named Harness agent is the execution target, not a person to contact. Use harness-use only. Do not call agent-management, computer-use, Autonomous Buddy, or /api/buddy. List Harness agents, select the exact requested agent, then send that agent the underlying task directly with the harness-reply routing object. Remove the leading delegation wording from the task: for example, \"Ask David if there are events in the US\" must be sent to David as \"Find upcoming events in the US\", never as a request to ask or contact David. Then reply NO_REPLY.]"
+
 const maxHarnessFollowupContextRunes = 6000
 
 func truncateHarnessFollowupContext(text string) string {
@@ -732,7 +734,7 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 			// A named computer agent is a Harness target. This routing context
 			// prevents a stale Buddy skill in an existing model session from
 			// taking the request merely because it also recognises “agent”.
-			msg += "\n[system-routing: The user is addressing a Harness computer agent. Use harness-use only. Do not call agent-management, computer-use, Autonomous Buddy, or /api/buddy. List Harness agents, select the exact requested agent, send the task with the harness-reply routing object, then reply NO_REPLY.]"
+			msg += "\n" + harnessNamedAgentRouting
 		}
 		followupActive := h.harnessFollowup != nil && h.harnessFollowup()
 		if isVoice && followupActive {
