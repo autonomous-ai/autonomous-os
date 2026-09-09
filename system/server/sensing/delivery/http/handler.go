@@ -43,6 +43,7 @@ import (
 )
 
 var harnessAgentRequest = regexp.MustCompile(`(?i)\b(ask|tell|have|message|check(?:ing)?(?:\s+with)?|hỏi|bảo|nhờ)\s+(?:the\s+)?(?:harness\s+)?(?:agent\s+)?[[:alnum:]_-]+`)
+var buddyAgentRequest = regexp.MustCompile(`(?i)\b(?:autonomous\s+buddy|(?:ask|tell|use|with|via)\s+(?:the\s+)?buddy)\b`)
 
 const harnessNamedAgentRouting = "[system-routing: The named Harness agent is the execution target, not a person to contact. Use harness-use only. Do not call agent-management, computer-use, Autonomous Buddy, or /api/buddy. List Harness agents, select the exact requested agent, then send that agent the underlying task directly with the harness-reply routing object. Remove the leading delegation wording from the task: for example, \"Ask David if there are events in the US\" must be sent to David as \"Find upcoming events in the US\", never as a request to ask or contact David. Then reply NO_REPLY.]"
 

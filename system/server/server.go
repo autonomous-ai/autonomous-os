@@ -320,6 +320,7 @@ func (s *Server) Serve(closeFn func()) error {
 	} else {
 		s.harnessService = harnessService
 		harnessService.Start(eventCtx)
+		s.deviceMQTTHandler.SetHarnessService(harnessService)
 	}
 	go s.agentGateway.StartWS(eventCtx, s.agentHandler.HandleEvent)
 	go s.agentGateway.WatchIdentity(eventCtx)
