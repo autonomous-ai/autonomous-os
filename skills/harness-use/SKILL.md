@@ -7,6 +7,8 @@ description: Interact with coding and research agents on the computer paired thr
 
 Run `python3 scripts/harness.py ACTION -` from this skill directory on the device, with one JSON object on stdin. The helper calls the OS API on localhost; agent work runs on the paired computer, never on the device.
 
+Do not run `harness.py --help` during a user task; the commands and JSON shapes below are the contract. After a successful `send` or `answer` with a response target, stop calling Harness tools and reply exactly `NO_REPLY`. Do not poll `receipt`, `status`, or `recap` to confirm a successful mutation; the OS receives the terminal event and delivers the result to the original turn. Only inspect a receipt when the mutation result is explicitly unknown or the user asks for its delivery state.
+
 When the current input includes `[harness-reply run_id=... channel=voice|web]`, copy those values unchanged into the `response` object of a `send` or `answer` call. After a successful mutation, reply exactly `NO_REPLY`; do not poll receipt/recap or rewrite the result. The OS delivers Harness's terminal recap directly to that run. `channel=web` displays it in Web Chat and suppresses TTS; `channel=voice` speaks the same recap.
 
 ## Routing
