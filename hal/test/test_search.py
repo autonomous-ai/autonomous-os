@@ -49,6 +49,11 @@ class _FakeSvc:
     def __init__(self, idle_baseline=None):
         self.yaw = 0.0
         self.roll = 0.0
+        # Tracked because the look ring moves it: two consecutive looks can share
+        # a roll and differ only in pitch (bottom-right -> right). A fake that
+        # pinned wrist_pitch at 0 made those look like no-ops, and _look_at
+        # skips a move whose target it is already on.
+        self.wrist_pitch = 0.0
         self.holds = []            # absolute poses restored before the sweep
         # (yaw, roll) after every commanded move, in order. The base turns via
         # nudge() and the head via move_and_hold(), so neither call log alone
@@ -69,7 +74,7 @@ class _FakeSvc:
             "base_yaw.pos": self.yaw,
             "base_pitch.pos": 0.0,
             "elbow_pitch.pos": 0.0,
-            "wrist_pitch.pos": 0.0,
+            "wrist_pitch.pos": self.wrist_pitch,
             "wrist_roll.pos": self.roll,
         })
 
@@ -89,6 +94,8 @@ class _FakeSvc:
             self.yaw = float(target["base_yaw.pos"])
         if "wrist_roll.pos" in target:
             self.roll = float(target["wrist_roll.pos"])
+        if "wrist_pitch.pos" in target:
+            self.wrist_pitch = float(target["wrist_pitch.pos"])
         self.trail.append((self.yaw, self.roll))
 
     def _nudge(self, y, p, d, cur, pol):
@@ -294,7 +301,19 @@ def test_a_failed_posture_restore_still_sweeps():
     """Sweeping from the wrong pitch beats not sweeping at all."""
     frame = np.zeros((480, 640, 3), dtype=np.uint8)
     svc = _FakeSvc()
-    svc.move_and_hold = mock.Mock(side_effect=RuntimeError("servo busy"))
+    # Fail only the FIRST move — the posture restore. Breaking every move
+    # instead tests something else entirely (a dead arm), and used to pass only
+    # because one look happened to need no movement at all.
+    _real_move = svc.move_and_hold
+    _calls = {"n": 0}
+
+    def _restore_fails(target, duration=None):
+        _calls["n"] += 1
+        if _calls["n"] == 1:
+            raise RuntimeError("servo busy")
+        return _real_move(target, duration=duration)
+
+    svc.move_and_hold = mock.Mock(side_effect=_restore_fails)
     det = mock.Mock()
     det.detect = mock.Mock(return_value=None)
     est = mock.Mock(bearing_deg=40.0, confidence=0.9)
@@ -327,18 +346,46 @@ def _sweep_rolls(svc):
     return _rolls(svc)[1:-1]
 
 
-def test_each_stop_looks_left_centre_and_right():
+def test_each_bearing_walks_the_look_ring():
     """Turning the whole lamp reads as a camera on a turntable; turning the head
     at a fixed body reads as something looking around. Both cover ground, only
-    one of them looks alive."""
+    one of them looks alive.
+
+    The default sweep walks the lower half of the ring — centre, left, round the
+    bottom, out to the right — because the things people ask the lamp to find sit
+    on desks, and because ending on the right is the direction the next bearing
+    lies in.
+    """
     _res, svc = _run(bearing=None)
     rolls = _rolls(svc)
+    want = [r for r, _ in search.LOOK_CIRCLE[:search.HALF_LOOKS]]
 
-    assert -45.0 in rolls and 0.0 in rolls and 45.0 in rolls
-    first = rolls.index(-45.0)
-    assert rolls[first:first + 3] == [-45.0, 0.0, 45.0], (
-        f"expected left -> centre -> right, got {rolls[:6]}"
+    first = rolls.index(want[0])
+    assert rolls[first:first + len(want)] == want, (
+        f"expected the half ring {want}, got {rolls[first:first + len(want)]}"
     )
+    assert want[-1] == search.ROLL_LOOK_DEG, "the half ring must end on the right"
+
+
+def test_the_ring_only_ever_moves_the_wrist():
+    """The pitch tiers used to go through distribute_pitch, which reshapes the
+    whole arm: device-observed 2026-09-09 the upward tier put elbow_pitch at
+    +35.8 and base_pitch at +10.6, extending the arm up and back far enough to
+    look like it might tip. A sweep must leave the body where it is."""
+    _res, svc = _run(bearing=None)
+    # Only the LOOK moves — a look always commands wrist_roll. The posture
+    # restore before the sweep legitimately moves the whole arm; that is how a
+    # head left pointing at the floor stops sweeping the floor in a circle.
+    # holds[0] is the pose restored before the sweep and holds[-1] the move
+    # home; both legitimately command the whole arm. Everything between them is
+    # a look. (Same slice the roll helpers use.)
+    looks = svc.holds[1:-1]
+    assert looks, "no looks were commanded"
+    for h in looks:
+        for forbidden in ("base_pitch.pos", "elbow_pitch.pos"):
+            assert forbidden not in h, (
+                f"{forbidden} moved during a look — only the wrist may look around"
+            )
 
 
 def _view_directions(svc):
@@ -362,26 +409,33 @@ def test_the_view_carries_on_from_stop_to_stop():
 
     jumps = [abs(b - a) for a, b in zip(views, views[1:])
              if abs(b - a) > search.STEP_DEG + 1e-6]
-    # One per pitch tier: each tier restarts the yaw sweep at the seed, so the
-    # far-right-to-far-left trip that no ordering can remove happens once per
-    # tier rather than once per sweep.
-    assert len(jumps) <= len(search.PITCH_STOPS), (
-        f"more than one discontinuity per tier in {[round(v) for v in views]}")
+    # The base visits each bearing ONCE now, so the far-right-to-far-left trip
+    # that no ordering can remove happens once per sweep again. The ring adds a
+    # step at each handover (it ends on the right, the next bearing is +90 away),
+    # which is a 45 deg move, well under STEP_DEG.
+    assert len(jumps) <= 1, (
+        f"more than one discontinuity in {[round(v) for v in views]}")
 
 
-def test_the_handover_between_the_seed_and_the_next_stop_is_seamless():
-    """The base turns +90 while the head turns -90 and the camera does not move.
-    That cancellation is the whole reason the right stop comes second."""
+def test_the_handover_onto_the_next_bearing_is_a_short_step():
+    """The ring ends on the right (+45) and the next bearing is +90 further
+    right, entered at the centre of its own ring — so the view steps 45 deg in
+    the direction it was already travelling.
+
+    The old raster cancelled the turn exactly (base +90, head -90) and jumped
+    zero. That cancellation only worked because every stop ended at the same
+    roll; a ring cannot both close and end where the next one opens. 45 deg
+    forward is the price, and it is under half a STEP_DEG.
+    """
     _res, svc = _run(bearing=None)
     views = _view_directions(svc)[1:]
 
-    # The seed's three looks, then the base turn onto the next stop. The turn
-    # lands on the same view the last look ended on, which is the point.
-    end_of_seed = views[2]
-    after_the_turn = views[3]
-    assert after_the_turn == pytest.approx(end_of_seed), (
-        f"handover jumped {end_of_seed:+.0f} -> {after_the_turn:+.0f} in "
-        f"{[round(v) for v in views[:6]]}"
+    end_of_seed = views[search.HALF_LOOKS - 1]
+    after_the_turn = views[search.HALF_LOOKS]
+    step = after_the_turn - end_of_seed
+    assert 0 < step <= search.STEP_DEG / 2 + 1e-6, (
+        f"handover stepped {step:+.0f} deg ({end_of_seed:+.0f} -> "
+        f"{after_the_turn:+.0f}) in {[round(v) for v in views[:8]]}"
     )
 
 
@@ -398,8 +452,7 @@ def test_looking_around_multiplies_the_stops_not_the_yaw_positions():
     from turning the body more often."""
     res, svc = _run(bearing=None)
     yaw_stops = len(search._stop_list(_FakeSvc.IDLE_BASELINE["base_yaw.pos"]))
-    assert res.stops_visited == (
-        yaw_stops * len(search.ROLL_STOPS) * len(search.PITCH_STOPS)), (
+    assert res.stops_visited == yaw_stops * search.HALF_LOOKS, (
         f"{res.stops_visited} stops from {yaw_stops} yaw positions"
     )
     assert yaw_stops == 3, "three yaw positions is the whole point of the wider step"
@@ -424,13 +477,15 @@ def test_a_successful_sweep_keeps_looking_at_the_subject():
     The head is straightened by turning the BASE as far as the head was turned,
     so the camera ends up pointing at exactly the same place with the head level.
     """
-    res, svc = _run(detect_at_stop=1, bearing=None)
+    # Find on the SECOND look — the ring opens at centre (roll 0), where
+    # straightening would have nothing to absorb and prove nothing.
+    res, svc = _run(detect_at_stop=2, bearing=None)
     assert res.found
     last = svc.holds[-1]
     assert last.get("wrist_roll.pos") == pytest.approx(0.0), "head left cocked"
-    # roll -45 is the first look, so the base must absorb that -45.
+    # Look 2 of the ring is "left", so the base must absorb that roll.
     assert last["base_yaw.pos"] == pytest.approx(
-        _FakeSvc.IDLE_BASELINE["base_yaw.pos"] + search.ROLL_STOPS[0]
+        _FakeSvc.IDLE_BASELINE["base_yaw.pos"] + search.LOOK_CIRCLE[1][0]
     )
 
 
@@ -562,7 +617,7 @@ def test_the_midpoint_of_a_full_sweep_is_the_middle_look():
 
     total = seen[-1][1]
     halfway = [v for v, t in seen if v * 2 >= t][0]
-    expected = 3 * len(search.ROLL_STOPS) * len(search.PITCH_STOPS)
+    expected = 3 * search.HALF_LOOKS
     assert total == expected, f"expected {expected} looks, got {total}"
     assert halfway == expected // 2, f"midpoint should be look {expected // 2}, got {halfway}"
 
@@ -572,7 +627,7 @@ def test_a_talkative_caller_cannot_sink_the_sweep():
         raise RuntimeError("tts exploded")
 
     res, _svc = _run(bearing=None, on_progress=boom)
-    expected = 3 * len(search.ROLL_STOPS) * len(search.PITCH_STOPS)
+    expected = 3 * search.HALF_LOOKS
     assert res.stops_visited == expected, "the sweep stopped when the callback threw"
 
 
@@ -724,11 +779,10 @@ def test_the_sweep_tilts_as_well_as_pans():
     aims the camera and leaves the horizon level), so a sweep of yaw and roll
     alone covers one horizontal band and never sees the desk below it."""
     _res, svc, _det = _run_target(target="person")
-    pitched = [h for h in svc.holds
-               if any(j.startswith(("base_pitch", "elbow_pitch", "wrist_pitch"))
-                      for j in h)]
-    assert pitched, "the sweep never commanded a pitch joint"
-    assert len(search.PITCH_STOPS) > 1, "only one pitch tier"
+    pitched = [h["wrist_pitch.pos"] for h in svc.holds if "wrist_pitch.pos" in h]
+    assert pitched, "the sweep never commanded wrist_pitch"
+    assert max(pitched) - min(pitched) >= search.PITCH_LOOK_DEG - 1e-6, (
+        f"the ring spanned only {max(pitched) - min(pitched):.1f} deg of pitch")
 
 
 def test_a_full_scan_does_not_stop_at_the_first_hit():
@@ -738,15 +792,16 @@ def test_a_full_scan_does_not_stop_at_the_first_hit():
     full, _svc2, _det2 = _run_target(target="person", person_everywhere=True,
                                      exhaustive=True)
     assert quick.stops_visited == 1, "the quick sweep should stop at the first hit"
-    assert full.stops_visited == 3 * len(search.ROLL_STOPS) * len(
-        search.PITCH_STOPS_EXHAUSTIVE), "the full sweep stopped early"
+    assert full.stops_visited == 3 * len(search.LOOK_CIRCLE), (
+        "the full sweep stopped early")
     assert full.found is True
     assert "x" in full.reason, f"expected a sighting count, got {full.reason!r}"
 
 
-def test_a_full_scan_adds_the_upward_tier():
-    """The up tier is what makes 'maximum' mean more than 'slower'."""
-    assert 0.0 in search.PITCH_STOPS_EXHAUSTIVE
-    assert search.PITCH_LOOK_DEG in search.PITCH_STOPS_EXHAUSTIVE
-    assert -search.PITCH_LOOK_DEG in search.PITCH_STOPS_EXHAUSTIVE
-    assert -search.PITCH_LOOK_DEG not in search.PITCH_STOPS
+def test_a_full_scan_adds_the_upper_half_of_the_ring():
+    """The top half is what makes 'maximum' mean more than 'slower'. The default
+    sweep is the half-moon below the horizon; only exhaustive looks up."""
+    half = search.LOOK_CIRCLE[:search.HALF_LOOKS]
+    assert all(dp >= 0 for _r, dp in half), "the default sweep must not look up"
+    assert any(dp < 0 for _r, dp in search.LOOK_CIRCLE), "nothing looks up at all"
+    assert len(search.LOOK_CIRCLE) > search.HALF_LOOKS
