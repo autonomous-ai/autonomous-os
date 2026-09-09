@@ -21,6 +21,7 @@ from typing import Optional
 import numpy as np
 
 from hal.drivers.voice import aec
+from hal.drivers.voice.tts.resampler import PCMResampler
 from hal.drivers.voice.tts.backend import (
     TTSBackend,
     TTS_SAMPLE_RATE,
@@ -1367,6 +1368,9 @@ class TTSService:
         """Yield float32 sample frames from the TTS backend's PCM stream."""
         np = self._np
         src_rate = self._backend.sample_rate
+        # Head, tail and queued pre-synthesis run concurrently. Each iterator
+        # owns its sample clock; never share the realtime resampler's state.
+        resampler = PCMResampler(src_rate, dst_rate)
         remainder = b""
         first_audio_logged = False
         t0 = time.perf_counter()
@@ -1389,10 +1393,11 @@ class TTSService:
                 np.frombuffer(raw[:usable], dtype=np.int16).astype(np.float32)
                 / 32768.0
             )
-            # Boost TTS volume (provider-specific: OpenAI 2.5x, ElevenLabs 1.5x)
+            # Apply the provider's gain before resampling, including the EOF tail.
             samples = np.clip(samples * self._backend.volume_boost, -1.0, 1.0)
-            if dst_rate != src_rate:
-                samples = self._resample(samples, src_rate, dst_rate)
+            samples = resampler.process(samples)
+            if not len(samples):
+                continue
             if ttfb_tag and not first_audio_logged:
                 first_audio_logged = True
                 logger.info(
@@ -1402,15 +1407,10 @@ class TTSService:
                 )
             yield samples.reshape(-1, 1)
 
-        if not self._stop_event.is_set() and len(remainder) >= 2:
-            usable = len(remainder) - (len(remainder) % 2)
-            samples = (
-                np.frombuffer(remainder[:usable], dtype=np.int16).astype(np.float32)
-                / 32768.0
-            )
-            if dst_rate != src_rate:
-                samples = self._resample(samples, src_rate, dst_rate)
-            yield samples.reshape(-1, 1)
+        if not self._stop_event.is_set():
+            samples = resampler.process([], final=True)
+            if len(samples):
+                yield samples.reshape(-1, 1)
 
     def _stream_chunk_with_retry(self, stream, text: str, dst_rate: int, idx: int, total: int, ttfb_tag: Optional[str] = None) -> int:
         """Stream one text chunk with retry; return written sample count."""
