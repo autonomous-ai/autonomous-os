@@ -1929,8 +1929,10 @@ class TTSService:
 
         with self._stream_lock:
             stream = self._ensure_stream(dst_rate)
-            # Write in 10ms blocks so stop() can cut in promptly.
-            block = max(1, dst_rate // 100)
+            # Match the paced stream's 40ms slices. An outer 10ms loop defeats
+            # its batching and brings back the GIL/AEC overhead on cached cues.
+            # Check stop between slices, just as for streamed speech.
+            block = max(1, int(dst_rate * TTS_REF_SLICE_S))
             for i in range(0, len(samples), block):
                 if self._stop_event.is_set():
                     break
