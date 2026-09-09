@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 # How far the base turns between stops.
 #
 # 90, not 45, because the head now looks around at each stop and covers the gap.
-# With ROLL_STOPS at +/-45 and a ~100 deg lens (LOOK_AIM_FOV_DEG), one yaw stop
+# With the ring reaching +/-45 of roll and a ~100 deg lens (LOOK_AIM_FOV_DEG), one bearing
 # sees a continuous span of yaw+/-95:
 #
 #   roll -45  ->  yaw-95 .. yaw+5
@@ -155,8 +155,6 @@ LOOK_CIRCLE = (
     (-ROLL_DIAG_DEG, -PITCH_DIAG_DEG),      # top-left
 )
 HALF_LOOKS: int = 6
-# Kept for the seam arithmetic: the widest the head reaches either side.
-ROLL_STOPS = (-ROLL_LOOK_DEG, 0.0, ROLL_LOOK_DEG)
 
 # Margin held off the wrist_pitch soft stop. Device-measured 2026-09-09 on
 # lamp-ac82: wrist_pitch reached -89.55 going up (stopped by WRIST_PITCH_MIN,

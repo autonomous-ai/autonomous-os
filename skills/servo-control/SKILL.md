@@ -74,7 +74,7 @@ curl -s "http://127.0.0.1:5001/camera/snapshot?save=true&width=768&quality=75"
 
 **Input:** "Scan the whole room" / "Show me your maximum capability in scanning" / "Do a full scan"
 **Output:** `[HW:/servo/search:{"exhaustive":true}]` Doing a full sweep — this takes a moment...
-→ Visits every stop and every pitch tier instead of returning at the first sighting.
+→ Walks the whole look ring at every bearing instead of returning at the first sighting.
    Combine with `target` when they ask for a thorough search for a specific thing.
 
 **Input:** "I moved you" / "You're in a new place" / "I put you somewhere else" / "Forget where I sit"

@@ -152,7 +152,7 @@ def test_stops_overlap_so_nobody_falls_between_them():
     wide. What has to hold is that one yaw stop's TOTAL reach (widest roll plus
     half the field of view) still overlaps the next stop's.
     """
-    reach = max(search.ROLL_STOPS) + config.LOOK_AIM_FOV_DEG / 2.0
+    reach = max(abs(r) for r, _ in search.LOOK_CIRCLE) + config.LOOK_AIM_FOV_DEG / 2.0
     assert search.STEP_DEG < 2 * reach, (
         f"step {search.STEP_DEG} leaves a seam between stops reaching +/-{reach}"
     )
