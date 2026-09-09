@@ -203,7 +203,7 @@ def test_stops_on_first_sighting_rather_than_completing_the_sweep():
 def test_reports_failure_after_exhausting_the_sweep():
     res, svc = _run(detect_at_stop=None)
     assert res.found is False
-    assert res.reason == "nobody found"
+    assert res.reason == "no person found"
     assert res.stops_visited > 1
 
 
@@ -649,3 +649,64 @@ def test_the_resting_speed_the_sweep_restores_is_the_one_startup_writes():
     from hal.drivers.motors.animation_service import AnimationService
 
     assert AnimationService._SERVO_REST_SPEED.get(1) == _FakeSvc.UNWRITTEN_SPEED_EQUIVALENT
+
+
+def _run_target(target="person", exhaustive=False, hits=(), person_everywhere=False):
+    """A sweep whose detector answers per-target.
+
+    `hits` is the 1-based indices of the OBJECT probes that should succeed;
+    `person_everywhere` makes every person probe succeed, which is the condition
+    that used to end an object search at the first bystander.
+    """
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    svc = _FakeSvc()
+    n = {"person": 0, "obj": 0}
+
+    def _detect(f, t, strict=True, **kw):
+        if t == "person":
+            n["person"] += 1
+            return (300, 100, 40, 200) if person_everywhere else None
+        if t == "face":
+            return None
+        n["obj"] += 1
+        return (10, 10, 20, 20) if n["obj"] in hits else None
+
+    det = mock.Mock()
+    det.detect = mock.Mock(side_effect=_detect)
+    with (
+        mock.patch.object(state, "camera_capture", _FakeCap(frame)),
+        mock.patch.object(state, "animation_service", svc),
+        mock.patch.object(state, "safety_policy", None),
+        mock.patch.object(state, "_camera_disabled", False, create=True),
+        mock.patch.object(search.time, "sleep"),
+        mock.patch("hal.drivers.tracking.user_bearing.read_estimate", return_value=None),
+    ):
+        res = search.search_for_subject(target=target, detector=det,
+                                        on_progress=lambda *_: None,
+                                        exhaustive=exhaustive)
+    return res, svc, det
+
+
+def test_an_object_search_is_not_ended_by_a_person():
+    """The reported bug: "look around for my keyboard" stopped at the first
+    person in frame, because the target never reached the detector."""
+    res, _svc, det = _run_target(target="keyboard", hits=(), person_everywhere=True)
+    assert res.found is False, "a person ended a keyboard search"
+    assert res.reason == "no keyboard found"
+    asked = {c.args[1] for c in det.detect.call_args_list}
+    assert asked == {"keyboard"}, f"probed for {asked}, not just the keyboard"
+
+
+def test_an_object_search_finds_the_object():
+    res, _svc, _det = _run_target(target="keyboard", hits=(4,))
+    assert res.found is True
+    assert res.reason == "found keyboard"
+
+
+def test_a_person_search_keeps_the_closest_person_policy():
+    """person/face still route through _detect_subject, which picks the CLOSEST
+    person and falls back to a face. An object target must not inherit that."""
+    res, _svc, det = _run_target(target="person", person_everywhere=True)
+    assert res.found is True
+    assert "person" in res.reason
+    assert any(c.args[1] == "person" for c in det.detect.call_args_list)

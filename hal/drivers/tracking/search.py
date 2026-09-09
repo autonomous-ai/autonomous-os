@@ -297,6 +297,24 @@ def _look_at(svc: Any, roll: float, yaw: Optional[float] = None) -> bool:
         return False
 
 
+def _detect_target(detector: Any, frame: Any, target: str):
+    """Find `target` in the frame. Returns (box, kind), or (None, None).
+
+    person/face keep `_detect_subject`, whose closest-person choice and face
+    fallback exist for "where are YOU" and would be wrong for an object. Any
+    other noun goes to the detector's own by-name path — the same YOLOv8n/
+    YOLOWorld chain `/servo/track` uses, so a search can name anything a track
+    can.
+    """
+    from hal.drivers.tracking.aim import _detect_subject
+
+    if target in ("person", "face"):
+        box, kind, _conf = _detect_subject(detector, frame)
+        return box, kind
+    box = detector.detect(frame, target)
+    return box, (target if box is not None else None)
+
+
 def _abandon(svc: Any, seed_pose: Optional[dict], visited: int) -> "SearchResult":
     """End an aborted sweep on the pose it started from.
 
@@ -425,8 +443,8 @@ def _say_at_the_midpoint() -> Callable[[int, int], None]:
 
 
 def search_for_subject(target: str = "person", detector: Any = None,
-                       on_progress: Optional[Callable[[int, int], None]] = None
-                       ) -> SearchResult:
+                       on_progress: Optional[Callable[[int, int], None]] = None,
+                       exhaustive: bool = False) -> SearchResult:
     """Sweep for a subject, stopping at the first one seen.
 
     Returns rather than raising: a failed search still has to give the caller
@@ -468,7 +486,7 @@ def search_for_subject(target: str = "person", detector: Any = None,
     with aim.servo_ownership():
         capped = svc.set_joint_speed("base_yaw", SWEEP_YAW_SPEED)
         try:
-            return _sweep(svc, cap, detector, target, on_progress)
+            return _sweep(svc, cap, detector, target, on_progress, exhaustive)
         finally:
             if capped:
                 # Back to the resting value the driver writes at startup — 0, no
@@ -482,7 +500,8 @@ def search_for_subject(target: str = "person", detector: Any = None,
 
 
 def _sweep(svc: Any, cap: Any, detector: Any, target: str,
-           on_progress: Optional[Callable[[int, int], None]] = None) -> SearchResult:
+           on_progress: Optional[Callable[[int, int], None]] = None,
+           exhaustive: bool = False) -> SearchResult:
     """The sweep itself, with the body already owned.
 
     `on_progress(visited, total)` is called after every look. It exists so a
@@ -546,7 +565,7 @@ def _sweep(svc: Any, cap: Any, detector: Any, target: str,
             if frame is None:
                 continue
             _t_det = time.monotonic()
-            box, kind, _conf = _detect_subject(detector, frame)
+            box, kind = _detect_target(detector, frame, target)
             logger.info("[search] look %d/%d: grab %.0fms detect %.0fms -> %s",
                         visited, total_looks, _grab_ms,
                         (time.monotonic() - _t_det) * 1000,
@@ -562,6 +581,6 @@ def _sweep(svc: Any, cap: Any, detector: Any, target: str,
     # Nothing found, so nothing to look at — go back to where the sweep began
     # rather than freezing wherever the last look left the head.
     _restore(svc, seed_pose)
-    logger.info("[search] nobody found after %d stop(s) — back to the starting pose",
-                visited)
-    return SearchResult(False, "nobody found", visited)
+    logger.info("[search] no %s found after %d look(s) — back to the starting pose",
+                target, visited)
+    return SearchResult(False, f"no {target} found", visited)
