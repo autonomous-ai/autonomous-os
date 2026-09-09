@@ -294,6 +294,9 @@ def turn_should_close(
     114ms later, while the user was still mid-sentence. Measuring from the
     final instead gives the speaker a real ENDPOINT_SILENCE_S window to carry
     on, and still closes that much after a final that genuinely ended the turn.
+
+    Confirmed speech after that final supersedes its endpoint. Until a new
+    final arrives, a pause in the resumed speech uses the long fallback clock.
     """
     from hal.drivers.voice._internal.config import (
         ENDPOINT_SILENCE_S,
@@ -301,7 +304,7 @@ def turn_should_close(
     )
 
     silence: float = now - last_speech_time
-    if final_ts > 0 and ENDPOINT_SILENCE_S > 0:
+    if final_ts > 0 and final_ts >= last_speech_time and ENDPOINT_SILENCE_S > 0:
         if now - final_ts >= ENDPOINT_SILENCE_S and silence >= ENDPOINT_SILENCE_S:
             return True
     return silence > SILENCE_TIMEOUT_S
