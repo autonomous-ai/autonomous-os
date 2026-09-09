@@ -130,3 +130,15 @@ func TestForgetHarnessReplyOnlyRemovesMatchingRun(t *testing.T) {
 		t.Fatal("matching failed request left its reply route behind")
 	}
 }
+
+func TestHarnessFollowupContextExpiresWithFollowupWindow(t *testing.T) {
+	s := &Server{}
+	s.rememberHarnessResult("Harness found two restaurants.")
+	if got := s.HarnessFollowupContext(); got != "Harness found two restaurants." {
+		t.Fatalf("follow-up context = %q", got)
+	}
+	s.harnessFollowup.Store(time.Now().Add(-time.Second).UnixMilli())
+	if got := s.HarnessFollowupContext(); got != "" {
+		t.Fatalf("expired follow-up context = %q", got)
+	}
+}

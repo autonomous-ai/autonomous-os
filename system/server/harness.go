@@ -158,6 +158,34 @@ func (s *Server) HarnessVoiceFollowup() bool {
 	return time.Now().UnixMilli() < s.harnessFollowup.Load()
 }
 
+// HarnessFollowupContext returns the latest direct Harness result while its
+// follow-up window is open. It is injected as untrusted context into the next
+// user turn so the device agent can answer a clarification without pretending
+// it generated or observed the remote result itself.
+func (s *Server) HarnessFollowupContext() string {
+	if !s.HarnessVoiceFollowup() {
+		return ""
+	}
+	s.harnessResultMu.RLock()
+	defer s.harnessResultMu.RUnlock()
+	if time.Since(s.harnessResultAt) > 15*time.Minute {
+		return ""
+	}
+	return s.harnessResult
+}
+
+func (s *Server) rememberHarnessResult(text string) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return
+	}
+	s.harnessResultMu.Lock()
+	s.harnessResult = text
+	s.harnessResultAt = time.Now()
+	s.harnessResultMu.Unlock()
+	s.harnessFollowup.Store(time.Now().Add(2 * time.Minute).UnixMilli())
+}
+
 // forwardHarnessEvent relays real Harness lifecycle events to the original
 // device interaction. The terminal recap is not passed through the device
 // agent, which would otherwise add a slower, altered second answer.
@@ -185,6 +213,7 @@ func (s *Server) forwardHarnessEvent(frame harness.Frame) {
 		s.agentHandler.DeliverHarnessProgress(reply.runID, text)
 		return
 	}
+	s.rememberHarnessResult(text)
 	if !s.agentHandler.DeliverHarnessResponse(reply.runID, text) {
 		slog.Warn("Harness result had no pending device turn", "component", "harness", "run_id", reply.runID)
 	}

@@ -49,6 +49,9 @@ type Server struct {
 	harnessRepliesMu sync.Mutex
 	harnessReplies   map[string]harnessReply
 	harnessFollowup  atomic.Int64
+	harnessResultMu  sync.RWMutex
+	harnessResult    string
+	harnessResultAt  time.Time
 	engine           *gin.Engine
 	config           *config.Config
 
@@ -180,6 +183,7 @@ func ProvideServer(
 		chatStream:        chatStream,
 	}
 	sensingH.SetHarnessFollowup(s.HarnessVoiceFollowup)
+	sensingH.SetHarnessFollowupContext(s.HarnessFollowupContext)
 	return s
 }
 
