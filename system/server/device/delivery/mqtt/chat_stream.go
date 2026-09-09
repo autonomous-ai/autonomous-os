@@ -15,6 +15,14 @@ import (
 	"go.autonomous.ai/os/system/server/config"
 )
 
+func isHarnessHandoff(evt domain.MonitorEvent) bool {
+	if evt.Type != "chat_response" {
+		return false
+	}
+	s := strings.ToLower(evt.Summary)
+	return strings.Contains(s, "sent to") && (strings.Contains(s, "agent") || strings.Contains(s, "harness"))
+}
+
 // Streaming an agent turn back to the backend over MQTT.
 //
 // The web chat renders a turn from the monitor bus (GET /api/agent/events):
@@ -208,7 +216,7 @@ func (s *ChatStream) handle(evt domain.MonitorEvent) {
 	flushed := s.takePending(run)
 	sessionID := run.sessionID
 	terminal := isTerminalChatEvent(evt)
-	if terminal {
+	if terminal && !isHarnessHandoff(evt) {
 		delete(s.runs, evt.RunID)
 	}
 	s.mu.Unlock()

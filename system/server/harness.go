@@ -197,7 +197,29 @@ func (s *Server) rememberHarnessResult(text string) {
 func (s *Server) forwardHarnessEvent(frame harness.Frame) {
 	agentID, _ := frame["agentId"].(string)
 	if agentID == "" {
-		return
+		agentID, _ = frame["agent_id"].(string)
+	}
+	if agentID == "" {
+		if payload, ok := frame["payload"].(map[string]any); ok {
+			agentID, _ = payload["agentId"].(string)
+			if agentID == "" {
+				agentID, _ = payload["agent_id"].(string)
+			}
+		}
+	}
+	if agentID == "" {
+		// A single pending Harness turn is unambiguous; older CLI event frames
+		// omitted agentId, so preserve delivery for that compatibility case.
+		s.harnessRepliesMu.Lock()
+		if len(s.harnessReplies) == 1 {
+			for id := range s.harnessReplies {
+				agentID = id
+			}
+		}
+		s.harnessRepliesMu.Unlock()
+		if agentID == "" {
+			return
+		}
 	}
 	kind, _ := frame["kind"].(string)
 	if kind == "turn.tool" {
