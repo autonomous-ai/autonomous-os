@@ -29,6 +29,7 @@ This repo is developed in both **Cursor** and **Claude Code**. The following rul
    | Claude Code agent backend (`agent_runtime`, runtimes/claudecode, bridge WebSocket, native Telegram channel plugin) | `docs/agentic/claudecode.md` | `docs/vi/agentic/claudecode_vi.md` |
    | OpenCode agent backend (`agent_runtime`, runtimes/opencode, bridge WebSocket, `opencode run --format json` per turn) | `docs/agentic/opencode.md` | `docs/vi/agentic/opencode_vi.md` |
    | Adding/changing an agentic backend (AgentGateway contract, switch, install/presync, migration, skills, hooks, reset) | `docs/agentic/adding-agent-runtime.md` | `docs/vi/agentic/adding-agent-runtime_vi.md` |
+   | Remote Hermes over LAN (Intern 2 as voice frontend for a Hermes server on the user's Mac, setup script, URL/token, verify) | `docs/agentic/remote-hermes.md` | `docs/vi/agentic/remote-hermes_vi.md` |
    | Safety engine (SAFETY.md bounds, deterministic enforcement gate) | `docs/safety.md` | `docs/vi/safety_vi.md` |
    | Device telemetry (adding a tracker, `hal/telemetry`, `system/telemetry`, `/api/telemetry/event`) | `docs/telemetry.md` | `docs/vi/telemetry_vi.md` |
    | Voice response metrics (`hal/telemetry`, `system/telemetry`, `/api/telemetry/event`) | `docs/voice-metrics.md` | `docs/vi/voice-metrics_vi.md` |
