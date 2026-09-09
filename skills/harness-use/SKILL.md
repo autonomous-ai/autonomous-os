@@ -1,11 +1,23 @@
 ---
 name: harness-use
-description: Interact with coding and research agents on the computer paired through Harness. List or select agents, send spoken tasks and follow-ups, inspect progress and recaps, stop work, and handle Harness agent notifications. Desktop clicks and arbitrary shell execution are outside this skill.
+description: Interact with coding and research agents on the computer paired through Harness. Use this before computer-use, agent-management, or Autonomous Buddy whenever the user asks an agent on their Mac to do work, including browser research. List or select agents, send spoken tasks and follow-ups, inspect progress and recaps, stop work, and handle Harness agent notifications. Desktop clicks and arbitrary shell execution are outside this skill.
 ---
 
 # Harness use
 
 Run `python3 scripts/harness.py ACTION -` from this skill directory on the device, with one JSON object on stdin. The helper calls the OS API on localhost; agent work runs on the paired computer, never on the device.
+
+## Routing
+
+Use Harness when the user asks a named, selected, current, coding, or research
+agent on the Mac to perform work. This includes requests such as “ask Claude
+Code to search for sushi restaurants” even when the requested agent may use a
+browser while it works. Do not fall back to `computer-use` or
+`agent-management` because an Autonomous Buddy pairing is absent.
+
+`computer-use` is only for directly operating a visible Mac app or browser.
+`agent-management` / Autonomous Buddy is only for an explicit request to use
+Buddy or a legacy Buddy session.
 
 Use `list` to discover real agents. `select` accepts an exact returned `agentId`, or an unambiguous exact agent name. Selection is retained per `conversation_id` (default `voice`). Supply a stable channel conversation ID outside voice. Never invent machine IDs, agent IDs or desktop paths. A selected agent stays selected across follow-ups; an unavailable target is an error, not permission to choose another agent.
 

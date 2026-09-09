@@ -12,7 +12,7 @@ App Harness và phần tích hợp thiết bị của Harness do team Harness ph
 | Team Harness | [autonomous-harness](https://github.com/autonomous-ai/autonomous-harness): `cli/src/lib/autonomous-device`, `cli/src/lib/e2ee`, `cli/src/backendSocket.ts` | Discovery/reconnect phía máy tính, pairing/E2EE gốc, thao tác agent, thương lượng capability, receipt/event và API quản lý CLI. |
 | Team Harness | [autonomous-harness-desktop](https://github.com/autonomous-ai/autonomous-harness-desktop): `lib/autonomous_device`, `lib/settings/sections/devices_section.dart` | UI ghép đôi/quản lý qua Harness CLI nội bộ. Desktop không giữ trust của thiết bị hay thực thi skill. |
 
-Đường thực thi: người dùng/voice → `harness-use` → API loopback OS → kết nối trực tiếp đã xác thực → Harness CLI → agent được chọn trên máy tính. Kết quả quay lại qua pipeline event/voice của OS. Skill là client của contract này, không phải agent manager thay thế hoặc phần tự động thao tác Desktop.
+Đường thực thi: người dùng/voice → `harness-use` → API loopback OS → kết nối trực tiếp đã xác thực → Harness CLI → agent được chọn trên máy tính. Khi hoàn tất, `turn.summary` trả `text` cuối (hoặc `recap` nếu text rỗng) thẳng vào TTS của thiết bị. Không đưa JSON này trở lại device agent qua sensing event, nên không tạo turn agent thứ hai độc lập hoặc bị ẩn sau phản hồi Web Chat “Sent”. Khi người dùng yêu cầu một agent làm việc, kể cả research bằng browser, `harness-use` được ưu tiên; `computer-use` dành cho thao tác UI Mac trực tiếp và Buddy chỉ dùng khi người dùng gọi rõ.
 
 Autonomous Buddy được giữ riêng. Tính năng này không gọi Buddy, không dùng chung khóa pairing hay yêu cầu kết nối Buddy. Tái sử dụng quảng bá mDNS đã có trên thiết bị không đồng nghĩa gộp hai trust store. Giữ tích hợp dùng chung cho thiết bị Autonomous: namespace CLI là `autonomous-device`, không phải `lamp`.
 
@@ -68,7 +68,7 @@ Mutation cần idempotency key ổn định. OS gửi một lần và chờ tố
 
 ## Nginx và kiểm chứng
 
-Quảng bá mDNS hiện có trỏ cổng 80. Mẫu nginx trong `scripts/provision/setup.sh`, `scripts/imager/build.sh` và `scripts/imager/build-orangepi.sh` có location chính xác `/api/harness/ws`, chuyển tiếp HTTP/1.1 Upgrade với timeout dài. Thiết bị đã cài cần được cập nhật cấu hình nginx này khi triển khai tính năng; chỉ upload binary Go không cập nhật nginx. Kiểm chứng trong repo không deploy hoặc restart thiết bị.
+Quảng bá mDNS hiện có trỏ cổng 80. Mẫu nginx trong `scripts/provision/setup.sh`, `scripts/imager/build.sh` và `scripts/imager/build-orangepi.sh` có location chính xác `/api/harness/ws`, chuyển tiếp HTTP/1.1 Upgrade với timeout dài. Thiết bị đã cài cần được cập nhật cấu hình nginx này khi triển khai tính năng; chỉ upload binary Go không cập nhật nginx. Updater chuẩn `software-update` phải áp dụng migration nginx idempotent trước rollout Harness cho OS/web, vì image cũ không nhận template provisioner qua component OTA. Kiểm chứng trong repo không deploy hoặc restart thiết bị.
 
 `system/harness/testdata/original-e2ee-protocol.json` được sinh từ E2EE core gốc của Harness. Test bao phủ CPace, chữ ký/khóa phiên gốc, bản ghi mã hóa, rekey, chống replay và vòng đời pairing. `system/server/harness_test.go` kiểm tra tạo mã không cần chọn máy, đọc mã cần xác thực chủ thiết bị, và lệnh agent từ xa/qua proxy bị từ chối. Kiểm tra tương thích liên repo cục bộ dùng manager CLI thật và service Go; không thay thế kiểm tra giọng nói và mạng LAN trên thiết bị vật lý.
 

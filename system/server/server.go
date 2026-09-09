@@ -304,7 +304,7 @@ func (s *Server) Serve(closeFn func()) error {
 
 	eventCtx, cancelEvents := context.WithCancel(context.Background())
 	defer cancelEvents()
-	harnessService, harnessErr := harness.NewService("config", harness.Callbacks{OnEvent: func(frame harness.Frame) { s.forwardHarnessEvent(eventCtx, frame) }})
+	harnessService, harnessErr := harness.NewService("config", harness.Callbacks{OnEvent: s.forwardHarnessEvent})
 	if harnessErr != nil {
 		slog.Error("harness service initialization failed", "component", "harness", "error", harnessErr)
 	} else {
