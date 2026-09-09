@@ -23,6 +23,10 @@ import (
 type Frame map[string]any
 type Callbacks struct{ OnEvent func(Frame) }
 type Status struct {
+	Code             string   `json:"code,omitempty"`
+	ExpiresAt        int64    `json:"expires_at,omitempty"`
+	InstanceID       string   `json:"instance_id"`
+	Revision         uint64   `json:"revision"`
 	Pairing          bool     `json:"pairing"`
 	Paired           bool     `json:"paired"`
 	Connected        bool     `json:"connected"`
@@ -86,28 +90,33 @@ type pairAttempt struct {
 }
 
 type Service struct {
-	mu         sync.Mutex
-	attempt    *pairAttempt
-	path       string
-	disk       diskState
-	identity   ed25519.PrivateKey
-	status     Status
-	conn       *connection
-	callbacks  Callbacks
-	ctx        context.Context
-	sockets    map[*DirectChannel]bool
-	incoming   int
-	events     chan Frame
-	started    bool
-	generation uint64
-	server     string
-	cursor     uint64
+	mu            sync.Mutex
+	attempt       *pairAttempt
+	path          string
+	disk          diskState
+	identity      ed25519.PrivateKey
+	status        Status
+	conn          *connection
+	callbacks     Callbacks
+	ctx           context.Context
+	sockets       map[*DirectChannel]bool
+	incoming      int
+	events        chan Frame
+	started       bool
+	generation    uint64
+	server        string
+	cursor        uint64
+	instanceID    string
+	revision      uint64
+	statusChanges chan struct{}
 }
 
 var capabilities = []string{"agents.list", "turn.send", "turn.stop", "status", "recap", "question.answer", "receipt.get"}
 
 func NewService(dataDir string, callbacks Callbacks) (*Service, error) {
-	s := &Service{path: filepath.Join(dataDir, "harness", "trust.json"), callbacks: callbacks, ctx: context.Background(), sockets: make(map[*DirectChannel]bool), events: make(chan Frame, 128), status: Status{State: "unpaired", Capabilities: []string{}}}
+	s := &Service{path: filepath.Join(dataDir, "harness", "trust.json"), callbacks: callbacks, ctx: context.Background(), sockets: make(map[*DirectChannel]bool), events: make(chan Frame, 128), statusChanges: make(chan struct{}, 1), status: Status{State: "unpaired", Capabilities: []string{}}}
+	id, _ := randomBytes(8)
+	s.instanceID = hex.EncodeToString(id)
 	if err := safeTrustPath(s.path); err != nil {
 		return nil, err
 	}
@@ -239,7 +248,17 @@ func (s *Service) Status() Status {
 	defer s.mu.Unlock()
 	_ = s.expireProvisionalLocked() // Failure is retained in status.Error.
 	v := s.status
-	v.Pairing = v.Pairing || v.State == "pairing"
+	v.InstanceID = s.instanceID
+	v.Revision = s.revision
+	if s.attempt != nil && s.attempt.info.Pairing {
+		v.Pairing = true
+		v.Code = s.attempt.info.Code
+		v.ExpiresAt = s.attempt.info.ExpiresAt
+	} else {
+		v.Pairing = false
+		v.Code = ""
+		v.ExpiresAt = 0
+	}
 	v.Capabilities = append([]string{}, v.Capabilities...)
 	if p := s.disk.Peer; p != nil {
 		v.Paired = p.ProvisionalUntil == 0
@@ -252,6 +271,14 @@ func (s *Service) Status() Status {
 		v.Fingerprint = x[:4] + "·" + x[4:8] + "·" + x[8:12] + "·" + x[12:]
 	}
 	return v
+}
+func (s *Service) StatusChanges() <-chan struct{} { return s.statusChanges }
+func (s *Service) statusChangedLocked() {
+	s.revision++
+	select {
+	case s.statusChanges <- struct{}{}:
+	default:
+	}
 }
 func stringField(f Frame, k string) string { v, _ := f[k].(string); return v }
 func number(f Frame, k string) uint64      { n, _ := sessionCounter(f[k]); return n }
@@ -293,6 +320,7 @@ func (s *Service) CancelPair() error {
 	} else if !s.status.Connected {
 		s.status.State = "disconnected"
 	}
+	s.statusChangedLocked()
 	s.mu.Unlock()
 	attempt.cancel()
 	return err
@@ -544,6 +572,7 @@ func (s *Service) StartPair(ctx context.Context) (PairInfo, error) {
 		code[i] = 0
 	}
 	s.attempt = attempt
+	s.statusChangedLocked()
 	s.status.Pairing = true
 	s.status.State = "pairing"
 	s.status.Error = ""
@@ -574,6 +603,7 @@ func (s *Service) finishPair(attempt *pairAttempt, err error) {
 	} else if !s.status.Connected {
 		s.status.State = "disconnected"
 	}
+	s.statusChangedLocked()
 	s.mu.Unlock()
 	attempt.cancel()
 }
@@ -582,14 +612,19 @@ func (s *Service) Unpair() error {
 	s.mu.Lock()
 	s.generation++
 	previous := s.disk.Peer
+	c := s.conn
+	var revoke Frame
+	if c != nil && previous != nil {
+		revoke = Frame{"type": "pair.revoke", "machineId": previous.MachineID}
+	}
 	s.disk.Peer = nil
 	err := s.saveLocked()
 	if err != nil {
 		s.disk.Peer = previous
 	}
-	c := s.conn
 	s.conn = nil
 	s.status = Status{State: "unpaired", Capabilities: []string{}}
+	s.statusChangedLocked()
 	if err != nil {
 		s.status.Error = "Remove Harness trust: " + err.Error()
 		if s.disk.Peer != nil {
@@ -603,6 +638,12 @@ func (s *Service) Unpair() error {
 		sockets = append(sockets, socket)
 	}
 	s.mu.Unlock()
+	// Never let a stalled/offline CLI delay local trust removal or the MQTT
+	// acknowledgement. The socket is closed below; this best-effort notice is
+	// only for promptly clearing the CLI's credentials when it is reachable.
+	if revoke != nil {
+		go func() { _ = c.channel.SendEncrypted(revoke) }()
+	}
 	for _, socket := range sockets {
 		socket.Close()
 	}
@@ -789,6 +830,7 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if s.attempt != nil && s.attempt.provisional && s.attempt.info.MachineID == machineID {
 		s.attempt.info.State = "paired"
 	}
+	s.statusChangedLocked()
 	if s.server != stringField(welcome, "serverInstanceId") || welcome["resumed"] != true {
 		s.cursor = number(welcome, "cursor")
 	}
@@ -807,6 +849,7 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.conn = nil
 		s.status.Connected = false
 		s.status.State = "disconnected"
+		s.statusChangedLocked()
 	}
 	s.mu.Unlock()
 }

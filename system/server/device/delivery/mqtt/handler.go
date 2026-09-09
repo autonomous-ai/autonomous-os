@@ -13,6 +13,7 @@ import (
 	"go.autonomous.ai/os/system/buddy"
 	"go.autonomous.ai/os/system/device"
 	"go.autonomous.ai/os/system/domain"
+	"go.autonomous.ai/os/system/harness"
 	"go.autonomous.ai/os/system/lib/mqtt"
 	"go.autonomous.ai/os/system/network"
 	"go.autonomous.ai/os/system/schedule"
@@ -32,6 +33,7 @@ type DeviceMQTTHandler struct {
 	networkService *network.Service
 	agentGateway   domain.AgentGateway
 	buddyService   *buddy.Service
+	harnessService *harness.Service
 	// connectorWriter is the data-driven writer for the connector.set.<code> /
 	// connector.remove.<code> flow and the refresh loop. Routing (is it an MCP
 	// connector? which auth header?) is decided per-message from the payload's
@@ -71,6 +73,9 @@ type DeviceMQTTHandler struct {
 	// file the runner reads. See system/schedule/intent.go.
 	scheduleIntents *schedule.IntentStore
 }
+
+// SetHarnessService attaches the server-owned Harness service after Wire construction.
+func (h *DeviceMQTTHandler) SetHarnessService(s *harness.Service) { h.harnessService = s }
 
 // mcpConnectorSpec lists the remote-MCP connectors that the generic writer
 // recognises via its compiled-in fallback table. apiKey:true selects the
@@ -277,6 +282,8 @@ func (h *DeviceMQTTHandler) dispatchData(env domain.MQTTDataCommand) error {
 		return h.handleBuddyPairStart(env)
 	case domain.KindBuddyPairRevoke:
 		return h.handleBuddyPairRevoke(env)
+	case domain.KindHarnessPairStart, domain.KindHarnessStatus, domain.KindHarnessPairCancel, domain.KindHarnessPairRevoke:
+		return h.handleHarnessPair(env)
 	case domain.KindTTSSet:
 		return h.handleTTSSet(env)
 	case domain.KindRealtimeSet:
