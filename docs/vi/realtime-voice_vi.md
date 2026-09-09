@@ -468,6 +468,15 @@ xuống PortAudio cộng một lần ghi tham chiếu, đều trong Python; ở 
 ~1600 vòng mỗi câu trả lời nghe thành **giật tiếng** trên board mà thread chính
 đã bị vision chiếm gần hết. Thread capture riêng vẫn chưa làm.
 
+TTS thông thường qua provider (gồm ElevenLabs PCM 24 kHz phát ở 44.1 kHz)
+dùng nội suy tuyến tính liên tục qua các chunk PCM từ mạng trong từng yêu cầu
+tổng hợp. Bộ resample giữ mẫu tại biên và clock mẫu thay vì bắt đầu lại nội suy
+ở mỗi chunk. Khi EOF bình thường, mẫu cuối được giữ lại sẽ được xuất để bảo đảm
+`ceil(N * output_rate / input_rate)` mẫu đầu ra với `N` mẫu đầu vào; khi hủy thì
+không xuất phần đuôi này. Các yêu cầu tổng hợp phần đầu, phần đuôi và trong hàng
+đợi có trạng thái resample riêng. Luồng native realtime và phát WAV đã cache
+không đổi; buffering và độ trễ ALSA cũng không đổi.
+
 `aec.uncancelled()` cho biết khung vừa đọc có đi qua mà **không** được khử thật
 hay không — tham chiếu underrun, stream bị bypass, hoặc mic overrun. Barge-in
 gate theo cờ này để không quyết định dựa trên vọng âm thô. Lưu ý điều nó **không**

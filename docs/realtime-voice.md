@@ -491,6 +491,15 @@ and at 10 ms the ~1600 round trips per reply were audible as playback stutter
 on a board whose main thread is already saturated by vision. The dedicated
 capture thread is still not implemented.
 
+Regular provider TTS (including ElevenLabs PCM at 24 kHz played at 44.1 kHz)
+uses continuous linear resampling across network PCM chunks within each
+synthesis request. It retains the boundary sample and sample clock instead of
+restarting interpolation at every chunk. Normal EOF flushes the held final
+sample to preserve `ceil(N * output_rate / input_rate)` output samples for `N`
+input samples; cancellation does not flush a tail. Head, tail, and queued
+synthesis requests each have independent resampling state. Native realtime and
+cached WAV playback paths are unchanged, as are buffering and ALSA latency.
+
 `aec.uncancelled()` reports whether the frame just read went through *without*
 real cancellation — reference underrun, bypassed stream, or mic overrun. Barge-in
 gates on it so it cannot decide on raw echo. Note what it does **not** say:
