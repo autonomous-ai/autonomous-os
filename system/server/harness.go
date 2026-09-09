@@ -35,6 +35,9 @@ func (s *Server) registerHarnessRoutes(api *gin.RouterGroup, ctx context.Context
 	group.GET("status", adminOrLoopbackAuth(s.config), func(c *gin.Context) {
 		c.JSON(http.StatusOK, serializers.ResponseSuccess(s.harnessService.Status()))
 	})
+	group.GET("voice-followup", localOnlyMiddleware(), func(c *gin.Context) {
+		c.JSON(http.StatusOK, serializers.ResponseSuccess(gin.H{"active": s.HarnessVoiceFollowup()}))
+	})
 	// Pairing codes and pinned E2EE identities authenticate the direct socket.
 	group.GET("ws", func(c *gin.Context) {
 		s.harnessService.ServeHTTP(c.Writer, c.Request)
@@ -132,7 +135,13 @@ func (s *Server) registerHarnessReply(agentID, runID string, webChat bool) {
 	}
 	s.harnessReplies[agentID] = harnessReply{runID: runID, webChat: webChat, created: time.Now()}
 	s.harnessRepliesMu.Unlock()
+	s.harnessFollowup.Store(time.Now().Add(2 * time.Minute).UnixMilli())
 	s.agentHandler.MarkHarnessResponseRun(runID, webChat)
+}
+
+// HarnessVoiceFollowup keeps short spoken clarifications with the paired agent.
+func (s *Server) HarnessVoiceFollowup() bool {
+	return time.Now().UnixMilli() < s.harnessFollowup.Load()
 }
 
 // forwardHarnessEvent relays real Harness lifecycle events to the original

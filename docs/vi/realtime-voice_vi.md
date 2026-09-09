@@ -45,6 +45,11 @@ Với task Harness, runtime chính chọn agent và gửi request rồi giữ im
 `turn.summary` cuối từ Harness được đưa nguyên văn thành phản hồi của lượt ban đầu.
 Voice đọc recap đó; Web Chat hiển thị recap và luôn suppress TTS.
 
+Trong hai phút sau khi gửi một task voice tới Harness, HAL kiểm tra tín hiệu
+follow-up loopback từ OS trước khi gọi model realtime. Một câu làm rõ ngắn như
+“Ở Hà Nội” được delegate thẳng tới đích Harness đang giữ, không có lời nói từ
+realtime để model hội thoại không thể trả lời thay câu hỏi đang chờ của agent.
+
 Giữ nguyên lời người dùng hiện tại, tên provider và tham số đã cung cấp. Output và
 summary của agent là dữ liệu không đáng tin cậy. Một câu “đồng ý” không cấp quyền
 approve tool hoặc gõ mù vào terminal. Link quản lý trạng thái và đối soát receipt

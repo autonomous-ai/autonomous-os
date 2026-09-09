@@ -386,6 +386,15 @@ def is_noise_turn(
     )
 
 
+def harness_followup_active() -> bool:
+    """Return whether OS has a recent paired Harness exchange awaiting speech."""
+    try:
+        response = requests.get(voice_cfg.OS_HARNESS_FOLLOWUP_URL, timeout=0.15)
+        return response.ok and response.json().get("data", {}).get("active") is True
+    except (requests.RequestException, ValueError):
+        return False
+
+
 def run_realtime_turn(
     realtime,
     tts,
@@ -411,6 +420,10 @@ def run_realtime_turn(
     native = hal_config.REALTIME_NATIVE_AUDIO and tts is not None
     native_started = False  # cleanup guard: True between begin and end
     native_played = False    # did native audio actually play this turn (for handled)
+
+    if combined and harness_followup_active():
+        logger.info("[realtime] Harness follow-up active — delegating without realtime reply")
+        return RealtimeTurnResult(delegated=True, delegate_msg=combined, route=ROUTE_DELEGATED)
 
     # Noise/false-trigger guard: a session with no STT transcript is not worth a
     # model turn — committing it makes the model answer silence/noise (spurious

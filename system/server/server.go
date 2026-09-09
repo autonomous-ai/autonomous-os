@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -47,6 +48,7 @@ type Server struct {
 	harnessService   *harness.Service
 	harnessRepliesMu sync.Mutex
 	harnessReplies   map[string]harnessReply
+	harnessFollowup  atomic.Int64
 	engine           *gin.Engine
 	config           *config.Config
 
@@ -153,7 +155,7 @@ func ProvideServer(
 	// loud about something newer than whatever the main agent is still working
 	// on — that older turn keeps running but loses the speaker.
 	sensingH.SetOnRealtimeHandled(agentH.CancelSpeechForNewerTurn)
-	return &Server{
+	s := &Server{
 		config:            cfg,
 		healthHandler:     hh,
 		networkHandler:    nh,
@@ -177,6 +179,8 @@ func ProvideServer(
 		statusLED:         sled,
 		chatStream:        chatStream,
 	}
+	sensingH.SetHarnessFollowup(s.HarnessVoiceFollowup)
+	return s
 }
 
 func (s *Server) Serve(closeFn func()) error {

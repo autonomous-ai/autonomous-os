@@ -105,6 +105,7 @@ type SensingHandler struct {
 	// opt-in (OS_REALTIME_SUPERSEDES_MAIN_REPLY), so on a default body nothing
 	// is suppressed and the situation is not a metric sample at all.
 	onRealtimeHandled func() bool
+	harnessFollowup   func() bool
 }
 
 // SetOnRealtimeHandled installs the realtime-handled hook. Wired in
@@ -113,6 +114,8 @@ type SensingHandler struct {
 func (h *SensingHandler) SetOnRealtimeHandled(fn func() bool) {
 	h.onRealtimeHandled = fn
 }
+
+func (h *SensingHandler) SetHarnessFollowup(fn func() bool) { h.harnessFollowup = fn }
 
 // ProvideSensingHandler constructs a SensingHandler.
 func ProvideSensingHandler(gw domain.AgentGateway, bus *monitor.Bus, cfg *config.Config, sled *statusled.Service, isSleeping func() bool) *SensingHandler {
@@ -713,6 +716,9 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 			// prevents a stale Buddy skill in an existing model session from
 			// taking the request merely because it also recognises “agent”.
 			msg += "\n[system-routing: The user is addressing a Harness computer agent. Use harness-use only. Do not call agent-management, computer-use, Autonomous Buddy, or /api/buddy. List Harness agents, select the exact requested agent, send the task with the harness-reply routing object, then reply NO_REPLY.]"
+		}
+		if isVoice && h.harnessFollowup != nil && h.harnessFollowup() {
+			msg += "\n[system-routing: A Harness task or question awaits a voice follow-up. Treat this short answer as a Harness follow-up: use harness-use with the retained target and send only the user's current words. Do not use Buddy and do not answer it yourself.]"
 		}
 	}
 

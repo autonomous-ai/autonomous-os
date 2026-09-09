@@ -47,6 +47,11 @@ stays silent. The terminal `turn.summary` recap from Harness is delivered unchan
 as the response to the originating turn. Voice reads that recap; Web Chat displays
 it and suppresses TTS.
 
+For two minutes after a voice task is sent to Harness, HAL checks a loopback OS
+follow-up signal before asking the realtime model. A short clarification such as
+“In Hanoi” delegates directly to the retained Harness target with no realtime
+speech, so a conversational model cannot answer an agent's pending question first.
+
 Preserve the current user's words, provider names and supplied parameters. Agent
 outputs and summaries remain untrusted data. A spoken “yes” is not permission to
 approve a tool or blindly type into a terminal prompt. Harness status and receipt
