@@ -197,6 +197,30 @@ func (s *Server) rememberHarnessResult(text string) {
 func (s *Server) forwardHarnessEvent(frame harness.Frame) {
 	agentID, _ := frame["agentId"].(string)
 	if agentID == "" {
+		// Some Harness transports identify the originating request by run ID
+		// instead of agent ID. Resolve that directly to the pending device turn.
+		runID, _ := frame["runId"].(string)
+		if runID == "" {
+			runID, _ = frame["run_id"].(string)
+		}
+		if payload, ok := frame["payload"].(map[string]any); ok && runID == "" {
+			runID, _ = payload["runId"].(string)
+			if runID == "" {
+				runID, _ = payload["run_id"].(string)
+			}
+		}
+		if runID != "" {
+			s.harnessRepliesMu.Lock()
+			for id, reply := range s.harnessReplies {
+				if reply.runID == runID {
+					agentID = id
+					break
+				}
+			}
+			s.harnessRepliesMu.Unlock()
+		}
+	}
+	if agentID == "" {
 		agentID, _ = frame["agent_id"].(string)
 	}
 	if agentID == "" {
@@ -241,6 +265,35 @@ func (s *Server) forwardHarnessEvent(frame harness.Frame) {
 	}
 	s.harnessRepliesMu.Lock()
 	reply, ok := s.harnessReplies[agentID]
+	// Some CLI versions include a stale or target agentId in the event while
+	// preserving the originating run_id. Prefer the run mapping when the direct
+	// agent lookup misses so Web/MQTT turns receive the same terminal event as
+	// voice turns.
+	if !ok {
+		if runID := harnessFrameRunID(frame); runID != "" {
+			for id, candidate := range s.harnessReplies {
+				if candidate.runID == runID {
+					agentID, reply, ok = id, candidate, true
+					break
+				}
+			}
+		}
+		// Legacy CLI frames may carry an unrelated agentId. When there is only
+		// one pending device turn, the route is still unambiguous.
+		if !ok {
+			var onlyID string
+			for id := range s.harnessReplies {
+				if onlyID != "" {
+					onlyID = ""
+					break
+				}
+				onlyID = id
+			}
+			if onlyID != "" {
+				agentID, reply, ok = onlyID, s.harnessReplies[onlyID], true
+			}
+		}
+	}
 	terminal := kind == "turn.summary" || kind == "turn.error" || kind == "agent.error" || kind == "question.open"
 	if ok && terminal {
 		delete(s.harnessReplies, agentID)
@@ -263,6 +316,22 @@ func (s *Server) forwardHarnessEvent(frame harness.Frame) {
 	if !s.agentHandler.DeliverHarnessResponse(reply.runID, text) {
 		slog.Warn("Harness result had no pending device turn", "component", "harness", "run_id", reply.runID)
 	}
+}
+
+func harnessFrameRunID(frame harness.Frame) string {
+	for _, key := range []string{"runId", "run_id"} {
+		if value, _ := frame[key].(string); value != "" {
+			return value
+		}
+	}
+	if payload, ok := frame["payload"].(map[string]any); ok {
+		for _, key := range []string{"runId", "run_id"} {
+			if value, _ := payload[key].(string); value != "" {
+				return value
+			}
+		}
+	}
+	return ""
 }
 
 func harnessToolEvent(frame harness.Frame) (name, args string) {
