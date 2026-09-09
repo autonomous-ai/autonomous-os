@@ -17,7 +17,7 @@ func (h *DeviceMQTTHandler) handleHarnessPair(env domain.MQTTDataCommand) error 
 		}
 		return h.publishDataResult(env.Kind, "success", "", info)
 	case domain.KindHarnessStatus:
-		return h.publishDataResult(env.Kind, "success", "", h.harnessService.PairStatus())
+		return h.publishDataResult(env.Kind, "success", "", h.harnessService.Status())
 	case domain.KindHarnessPairCancel:
 		if err := h.harnessService.CancelPair(); err != nil {
 			return h.publishDataResult(env.Kind, "failure", err.Error(), nil)
