@@ -823,6 +823,15 @@ AGENT_GATEWAY: str = (
     or _os_cfg_get("agent_runtime")
     or "openclaw"
 ).strip().lower()
+# "remote" is Hermes-over-LAN — the device runs the Hermes client against a
+# server on another machine (typically the user's Mac). HAL's voice pipeline
+# needs a concrete gateway impl to instantiate, so it treats "remote" as
+# "hermes": same protocol, same context manager, just a different BaseURL
+# (resolved server-side in runtimes/hermes.ApplyExternalEndpoint). Without
+# this alias HAL rejects /voice/start with "'remote' is not a valid AgentGateway"
+# and the whole voice pipeline stays down.
+if AGENT_GATEWAY == "remote":
+    AGENT_GATEWAY = "hermes"
 
 # --- Realtime voice agent ---
 # Operator overrides for the realtime voice agent come from the nested "realtime"

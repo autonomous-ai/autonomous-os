@@ -358,7 +358,7 @@ autonomous-build-chat:
 OTA_SIGNING_KEY_DIR ?= $(HOME)/.config/autonomous/ota
 OTA_SIGNING_KEY_ID ?= ota-$(shell date +%Y%m%d)
 
-.PHONY: hal-deploy os-deploy device-deploy hal-log os-log ota-keygen upload-aec-wheel upload-os-server upload-bootstrap upload-hal upload-claude-desktop-buddy upload-autonomous-buddy upload-web upload-skills upload-hooks upload-setup upload-setup-ap upload-openclaw upload-codex upload-claudecode upload-opencode upload-hermes upload-picoclaw upload-device upload-twitch-irc upload-autonomous-chat upload-all promote-os-server promote-bootstrap promote-web promote-hal promote-claude-desktop-buddy promote-openclaw promote-codex promote-claudecode promote-opencode promote-hermes promote-picoclaw promote-device
+.PHONY: hal-deploy os-deploy device-deploy hal-log os-log ota-keygen upload-aec-wheel upload-os-server upload-bootstrap upload-hal upload-claude-desktop-buddy upload-autonomous-buddy upload-web upload-skills upload-hooks upload-setup upload-setup-ap upload-openclaw upload-codex upload-claudecode upload-opencode upload-hermes upload-picoclaw upload-device upload-twitch-irc upload-autonomous-chat upload-setup-remote-hermes upload-all promote-os-server promote-bootstrap promote-web promote-hal promote-claude-desktop-buddy promote-openclaw promote-codex promote-claudecode promote-opencode promote-hermes promote-picoclaw promote-device
 
 # Generate a deployment-owned Ed25519 keypair outside the repository. The
 # private PEM is for release writers only; the printed public key is provisioned
@@ -454,6 +454,9 @@ upload-twitch-irc:
 
 upload-autonomous-chat:
 	bash scripts/release/upload-autonomous-chat.sh
+
+upload-setup-remote-hermes:
+	bash scripts/release/upload-setup-remote-hermes.sh
 
 # Allow positional version: `make upload-openclaw 2026.5.2`. The eval
 # stub below creates a no-op rule for the version arg so make doesn't
