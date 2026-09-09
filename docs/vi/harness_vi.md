@@ -85,3 +85,7 @@ Bài kiểm tra quảng bá mDNS tạm trên máy, dùng server WebSocket OS c�
 Các lệnh MQTT data đã xác thực của thiết bị gồm `harness.pair.start`, `harness.status`, `harness.pair.cancel` và `harness.pair.revoke`; phản hồi được publish trên fd channel của thiết bị. WebSocket trực tiếp vẫn là kênh dữ liệu cho máy tính Harness đã ghép đôi.
 
 Khi phát lại hàng đợi Codex, Web/MQTT chat và voice follow-up được bổ sung lại địa chỉ `harness-reply` gốc. Yêu cầu qua hàng đợi giữ cùng run ID cục bộ và channel như khi gửi ngay.
+
+Không poll recap mới nhất ngay sau khi gửi: dữ liệu có thể vẫn thuộc lượt trước và đánh dấu đã giao trước khi kết quả mới tới. Chuyển recap cuối khi nhận `turn.summary`.
+
+Khi Harness phụ trách phản hồi của một run, các sự kiện chat assistant thông thường của đúng run đó được chặn để lời báo đã giao việc hoặc `NO_REPLY` không đóng Web/MQTT chat trước khi kết quả Harness tới. Tin nhắn người dùng và sự kiện lỗi vẫn được chuyển tiếp.
