@@ -258,6 +258,7 @@ func (s *PicoclawService) drainPendingEvents() {
 		if ev.rawChat {
 			msg = ev.msg
 		}
+		msg = sensingmsg.AppendHarnessReplyRoute(msg, ev.eventType, runID)
 		sourceType := ev.sourceType
 		if sourceType == "" {
 			sourceType = "user"

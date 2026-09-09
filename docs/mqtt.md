@@ -1122,3 +1122,5 @@ Handled by bootstrap worker, not through MQTT handler directly.
 | `runtimes/openclaw/pairing.go` | WhatsApp Baileys QR pairing subprocess driver |
 | `system/domain/device.go` | MQTTMessage, command constants |
 | `system/domain/pairing.go` | PairingEvent + status enum |
+
+A silent terminal `NO_REPLY` without a pending Harness handoff is sent as a `chat_response` with `state: final`, empty summary and empty assistant message. The mobile client can terminate its pending indicator without displaying the internal sentinel.

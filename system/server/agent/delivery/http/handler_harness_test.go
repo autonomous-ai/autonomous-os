@@ -1,7 +1,10 @@
 package http
 
 import (
+	"encoding/json"
 	"testing"
+
+	"go.autonomous.ai/os/system/domain"
 
 	"go.autonomous.ai/os/system/monitor"
 )
@@ -51,5 +54,29 @@ func TestHarnessToolIsShownWhileResponseIsPending(t *testing.T) {
 	event := <-events
 	if event.Type != "assistant_delta" || event.RunID != "device-chat-42" || event.Summary != "Harness is web_search." {
 		t.Fatalf("event = %#v", event)
+	}
+}
+
+func TestHarnessHandoffDoesNotCloseChatBeforeResult(t *testing.T) {
+	bus := monitor.ProvideBus()
+	events, unsubscribe := bus.Subscribe()
+	defer unsubscribe()
+	h := &AgentHandler{monitorBus: bus}
+	h.MarkHarnessResponseRun("test-run", true)
+	payload, _ := json.Marshal(map[string]string{"runId": "test-run", "role": "assistant", "state": "final", "message": "Task sent. NO_REPLY"})
+	if err := h.handleChatEvent(domain.WSEvent{Payload: payload}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case event := <-events:
+		t.Fatalf("handoff closed chat: %#v", event)
+	default:
+	}
+	if !h.DeliverHarnessResponse("test-run", "Full Harness result") {
+		t.Fatal("missing result")
+	}
+	event := <-events
+	if event.Summary != "Full Harness result" || event.RunID != "test-run" {
+		t.Fatalf("wrong result: %#v", event)
 	}
 }

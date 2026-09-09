@@ -252,6 +252,7 @@ func (s *OpenCodeService) drainPendingEvents() {
 		msg = rePoseWorstMarker.ReplaceAllString(msg, "")
 		msg = strings.ReplaceAll(msg, "\n\n\n", "\n\n")
 		msg = strings.TrimSpace(msg)
+		msg = sensingmsg.AppendHarnessReplyRoute(msg, ev.eventType, runID)
 
 		// Replayed voice_agent_handled: realtime agent already spoke, suppress TTS
 		// on the reply (same as the live PostEvent path).
