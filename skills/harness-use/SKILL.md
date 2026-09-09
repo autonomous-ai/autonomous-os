@@ -25,6 +25,8 @@ Use `list` to discover real agents. `select` accepts an exact returned `agentId`
 
 When a user says “Ask David to find events” or “Ask David if anything is happening,” **David is the selected execution target**. Send David the underlying task directly, such as `Find upcoming events` — never send `Ask David ...`, ask David whom to contact, or treat David as a contact lookup. Preserve the user's substantive request, only removing the delegation wording.
 
+An active follow-up window is only a hint, not an instruction to call Harness. Route a new utterance to the retained agent only when it clearly continues the prior Harness task or answers an open Harness question. Treat vague fragments, acknowledgements, filler, unrelated requests, and uncertain speech as ordinary input for the main agent.
+
 ```sh
 python3 scripts/harness.py send - <<'JSON'
 {"agentId":"RETURNED_AGENT_ID","text":"Add reconnect handling and describe the change","response":{"run_id":"device-chat-42","channel":"voice"}}
