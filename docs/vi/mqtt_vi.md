@@ -1089,3 +1089,5 @@ Xử lý bởi bootstrap worker, không qua MQTT handler trực tiếp.
 | `runtimes/openclaw/pairing.go` | WhatsApp Baileys QR pairing subprocess driver |
 | `system/domain/device.go` | MQTTMessage, command constants |
 | `system/domain/pairing.go` | PairingEvent + status enum |
+
+Khi không có lượt chuyển tiếp Harness đang chờ, `NO_REPLY` kết thúc được gửi thành `chat_response` với `state: final`, summary và message assistant rỗng. Mobile kết thúc trạng thái chờ mà không hiển thị sentinel nội bộ.

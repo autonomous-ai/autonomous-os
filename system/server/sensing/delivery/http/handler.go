@@ -42,7 +42,7 @@ import (
 	"go.autonomous.ai/os/system/vision"
 )
 
-var harnessAgentRequest = regexp.MustCompile(`(?i)\b(ask|tell|have|message|check(?:ing)?(?:\s+with)?|hỏi|bảo|nhờ)\s+(?:the\s+)?(?:harness\s+)?(?:agent\s+)?[[:alnum:]_-]+`)
+var harnessAgentRequest = regexp.MustCompile(`(?i)\b(ask|tell|have|message|check(?:ing)?(?:\s+with)?|hỏi|bảo|nhờ)\s+(?:the\s+)?(?:harness\s+)?(?:agent\s+)?[[:alnum:]_-]+|\b(?:hoi|bao|nho|keu)\s+(?:agent\s+[[:alnum:]_-]+|[[:alnum:]_-]+\s+agent)\b`)
 var buddyAgentRequest = regexp.MustCompile(`(?i)\b(?:autonomous\s+buddy|(?:ask|tell|use|with|via)\s+(?:the\s+)?buddy)\b`)
 
 const harnessNamedAgentRouting = "[system-routing: The named Harness agent is the execution target, not a person to contact. Use harness-use only. Do not call agent-management, computer-use, Autonomous Buddy, or /api/buddy. List Harness agents and select the exact requested agent only if no retained target exists; then send that agent the underlying task directly with the harness-reply routing object. Remove the leading delegation wording from the task: for example, \"Ask David if there are events in the US\" must be sent to David as \"Find upcoming events in the US\", never as a request to ask or contact David. If send/answer returns queued, delivered, started, completed, or rejected, it has a known outcome: make no more Harness or shell calls (including receipt, status, recap, list, or another send), and immediately reply NO_REPLY. Inspect receipt only for DeliveryUnknown/no usable receipt or an explicit user delivery-state request; never resend automatically.]"

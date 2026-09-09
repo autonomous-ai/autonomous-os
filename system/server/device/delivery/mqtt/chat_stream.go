@@ -28,7 +28,7 @@ func isSilentReply(evt domain.MonitorEvent) bool {
 		return false
 	}
 	s := strings.TrimSpace(strings.ToLower(evt.Summary))
-	return s == "no_reply" || s == "[no reply]" || strings.Contains(s, "no_reply")
+	return s == "no_reply" || s == "[no reply]"
 }
 
 // Streaming an agent turn back to the backend over MQTT.
@@ -228,11 +228,13 @@ func (s *ChatStream) handle(evt domain.MonitorEvent) {
 		delete(s.runs, evt.RunID)
 	}
 	s.mu.Unlock()
-	// NO_REPLY is an internal handoff sentinel. It must never become a visible
-	// assistant message in web or mobile chat. Keep normal terminal bookkeeping.
+	// A silent final still terminates the mobile request. Suppress the sentinel,
+	// not the terminal event, so the client can stop its pending indicator.
 	if isSilentReply(evt) {
 		if terminal {
-			slog.Info("chat stream suppressed silent reply", "component", "mqtt-chat", "run_id", evt.RunID)
+			evt.Summary = ""
+			evt.Detail = map[string]string{"role": "assistant", "message": ""}
+			s.send(evt.RunID, sessionID, evt)
 		}
 		return
 	}
