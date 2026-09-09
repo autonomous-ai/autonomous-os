@@ -14,7 +14,11 @@
 
 TARGET ?= opi
 RPI_MODEL ?= 5
-BUILD_SCRIPT_rpi := build.sh
+# RPI_MODEL=5 routes to build-pi5.sh (Pi 5 / Trixie fixes: libgpiod3, resolv.conf
+# rebuild after STA switch, claude installer multi-path probe, heredoc backtick
+# + $OPENCLAW_VERSION escapes). Delete build-pi5.sh and this ternary once the
+# fixes are folded back into build.sh.
+BUILD_SCRIPT_rpi := $(if $(filter 5,$(RPI_MODEL)),build-pi5.sh,build.sh)
 BUILD_SCRIPT_opi := build-orangepi.sh
 BUILD_SCRIPT := $(BUILD_SCRIPT_$(TARGET))
 
@@ -42,6 +46,12 @@ DEVICE_TYPE ?=
 # purely cosmetic packaging, DEFAULT_AGENT alone drives both the seeded
 # runtime and the SSH policy so the two can't disagree.
 DEFAULT_AGENT ?=
+
+# Pi 5 V1 hardware (case đầu) không có loa/mic. Set PI5_NO_AUDIO=1 để build-pi5.sh
+# strip audio capability khỏi ROBOT.md — healthwatch skip audio check (LED không
+# vàng), HAL skip PortAudio init (không crash log). Chỉ có effect khi
+# TARGET=rpi + RPI_MODEL=5. Empty (default) → giữ audio capability như bình thường.
+PI5_NO_AUDIO ?=
 
 # CASE_COLOR was removed (see DEFAULT_AGENT above) — fail fast at the Makefile
 # level too, so a stale `make build CASE_COLOR=blue` (old muscle memory / an
@@ -132,6 +142,7 @@ build: build-preflight
 	-e OTA_METADATA_URL=$(OTA_METADATA_URL) \
 	-e DEVICE_TYPE=$(DEVICE_TYPE) \
 	-e DEFAULT_AGENT=$(DEFAULT_AGENT) \
+	-e PI5_NO_AUDIO=$(PI5_NO_AUDIO) \
 	-e BUILD_GIT_SHA=$(shell git -C .. rev-parse HEAD 2>/dev/null || echo unknown) \
 	pi-builder /work/$(BUILD_SCRIPT)
 	@# Name the output per device type so lamp/intern/dog images don't clobber.

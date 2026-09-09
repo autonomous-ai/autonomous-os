@@ -9,6 +9,7 @@ from the repo root — the Makefile targets are thin wrappers around these scrip
 | [`release/`](release/) | Runs **on a developer machine**: builds/zips each component, uploads to GCS, patches OTA `metadata.json`, promotes fleet rollouts |
 | [`maintenance/`](maintenance/) | Runs **on an existing device**: one-off idempotent patches for fleets provisioned before a fix landed in `setup.sh` |
 | [`imager/`](imager/) | Runs **on a build machine**: builds the flashable SBC golden image (OrangePi/RPi) — own Dockerfile + Makefile, uploads to GCS `os/imager/` |
+| [`tools/`](tools/) | Runs **on the operator's own Mac** (not the device): companion helpers the device's web UI hands the operator via `curl \| bash`. Uploaded to `os/tools/` on the CDN by the matching `release/upload-*.sh` script — see [`docs/agentic/remote-hermes.md`](../docs/agentic/remote-hermes.md) for the flow. |
 
 ## provision/
 
@@ -44,6 +45,7 @@ All scripts source **`ota-config.sh`** (single edit point: `GCS_BUCKET=s3-autono
 | `upload-openclaw.sh <ver>` | metadata-only: bumps `openclaw.version` (device installs from npm) | `os/ota/metadata.json` only |
 | `upload-setup.sh` / `upload-setup-ap.sh` | the provision scripts themselves | `os/setup.sh`, `os/setup-ap.sh` |
 | `upload-cad.sh` | CAD file → Mega.nz share link (no make target, no metadata) | — |
+| `upload-setup-remote-hermes.sh` | `scripts/tools/setup-remote-hermes.sh` — the Mac-side helper the device's Runtime page hands operators. Unversioned, 5 min cache | `os/tools/setup-remote-hermes.sh` |
 | `promote-ota.sh` | bumps a component's `min_version` rollout floor | `os/ota/metadata.json` |
 | `tag-release.sh <tag>` | annotated git tag embedding the current metadata snapshot (GPL v3 §6 traceability) | — |
 

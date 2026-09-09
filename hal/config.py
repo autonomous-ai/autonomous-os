@@ -823,6 +823,15 @@ AGENT_GATEWAY: str = (
     or _os_cfg_get("agent_runtime")
     or "openclaw"
 ).strip().lower()
+# "remote" is Hermes-over-LAN — the device runs the Hermes client against a
+# server on another machine (typically the user's Mac). HAL's voice pipeline
+# needs a concrete gateway impl to instantiate, so it treats "remote" as
+# "hermes": same protocol, same context manager, just a different BaseURL
+# (resolved server-side in runtimes/hermes.ApplyExternalEndpoint). Without
+# this alias HAL rejects /voice/start with "'remote' is not a valid AgentGateway"
+# and the whole voice pipeline stays down.
+if AGENT_GATEWAY == "remote":
+    AGENT_GATEWAY = "hermes"
 
 # --- Realtime voice agent ---
 # Operator overrides for the realtime voice agent come from the nested "realtime"
@@ -1630,19 +1639,14 @@ REALTIME_TTS_HISTORY_MAX_CHARS: int = int(os.environ.get("HAL_REALTIME_TTS_HISTO
 # measured time-to-first-sentence, not from this default.
 REALTIME_FILLER_DELAY_S: float = float(os.environ.get("HAL_REALTIME_FILLER_DELAY_S", "1.5"))
 
-# Time-to-first-audio, text (non-native-audio) path only. Sentences are streamed
-# to TTS as they complete, so the first thing the user hears waits for a full
-# sentence terminator — and the model's opening sentence is often long. Below
-# this many characters the first utterance of a turn may instead be cut at a
-# CLAUSE boundary (comma / semicolon / colon) and spoken immediately, with the
-# remainder queued behind it; TTS is a queue, so the reply still comes out in
-# order and the split lands where a speaker would breathe anyway.
-#
-# Only ever applies to the FIRST chunk of a turn — that is the only one whose
-# latency the user is sitting in silence for. 0 disables (wait for the full
-# sentence, the pre-04/09/2026 behaviour).
+# Optional early first-clause playback on the text (non-native-audio) path.
+# Default 0 keeps the first sentence intact: play it as soon as it completes,
+# then pre-synthesize subsequent sentences in the queue. Splitting one sentence
+# into separate provider requests can break prosody and expose synthesis gaps.
+# A positive cap opts in to clause splitting, with a word-break fallback past
+# the cap. Complete sentences, numeric punctuation and voice tags stay intact.
 REALTIME_FIRST_CHUNK_MAX_CHARS: int = int(
-    os.environ.get("HAL_REALTIME_FIRST_CHUNK_MAX_CHARS", "90")
+    os.environ.get("HAL_REALTIME_FIRST_CHUNK_MAX_CHARS", "0")
 )
 
 # --- Realtime: Summarizer (Anthropic Messages API) ---
