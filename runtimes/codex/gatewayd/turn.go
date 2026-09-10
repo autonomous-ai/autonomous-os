@@ -30,8 +30,8 @@ type turnResult struct {
 	heldFrames     [][]byte // terminal failure frames held back during a resumed attempt
 }
 
-// turnWorker drains the op queue one entry at a time (strict serialization).
-// session.new rides the same queue so it executes AFTER earlier turns.
+// turnWorker only starts a fresh App Server turn. Once started, later input is
+// sent directly with turn/steer and does not wait for this worker.
 func (s *Server) turnWorker(ctx context.Context) {
 	for {
 		select {
@@ -40,11 +40,24 @@ func (s *Server) turnWorker(ctx context.Context) {
 		case o := <-s.ops:
 			switch o.kind {
 			case opTurn:
-				s.runCorrelatedTurn(ctx, o.payload)
+				if s.cfg.UseAppServer {
+					s.runCorrelatedAppTurn(o.payload)
+				} else {
+					s.runCorrelatedTurn(ctx, o.payload)
+				}
 			case opSessionNew:
-				log.Printf("%s session.new — clearing thread id, next turn starts fresh", logPrefix)
-				s.clearSession()
-				s.sendStatus("session_cleared", "")
+				s.mu.Lock()
+				active := s.activeTurnID != "" || s.activeStarting
+				if active {
+					s.resetPending = true
+				}
+				s.mu.Unlock()
+				if active {
+					log.Printf("%s session.new waits for active App Server turn", logPrefix)
+				} else {
+					s.clearSession()
+					s.sendStatus("session_cleared", "")
+				}
 			}
 		}
 	}

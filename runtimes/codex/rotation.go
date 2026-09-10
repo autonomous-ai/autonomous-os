@@ -18,15 +18,12 @@ func (s *CodexService) CompactSession(sessionKey string) error {
 // input stays bounded and this rarely fires. It exists so a runaway thread
 // (compaction bug, oversized tool outputs) still gets rotated.
 //
-// Was 150_000, which made the net fire on ordinary turns instead of runaway
-// ones — device-observed 2026-08-24 on lamp-0c89: 3 of 8 consecutive sensing
-// turns crossed it (context 153k / 170k), each rotation dropped the thread, and
-// the fresh thread then re-read every SKILL.md by shell (6 calls, ~60s) which
-// pushed the context straight back over the line. A net has to sit ABOVE where
-// codex's own compaction settles, not inside it; the largest healthy turn seen
-// was 170_872. 250_000 is a judgement call on that evidence — revisit if a
-// runaway thread ever gets past it.
-const codexFallbackTokenThreshold = 250_000
+// The prior 250_000 cap was too late for the per-turn `codex exec` transport:
+// lamp-0c89 reached 134k context and already spent 100 seconds on a sensing
+// turn; subsequent turns grew to 376k and 473k. Rotate before that latency
+// cliff. 116k was observed on a healthy sensing turn, so leave a small margin
+// above it rather than rotating ordinary short interactions.
+const codexFallbackTokenThreshold = 120_000
 
 // ShouldRotateSession rotates on the live CONTEXT size — input + cached as
 // reported by the last turn.completed (s.lastContextTokens, stashed in

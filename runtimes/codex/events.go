@@ -80,6 +80,11 @@ func (s *CodexService) IsBusy() bool {
 	return s.HasFreshPendingChatSend()
 }
 
+// SupportsActiveTurnSteering declares that gatewayd keeps one Codex App Server
+// turn alive and sends follow-up user input with turn/steer instead of waiting
+// for a FIFO worker slot.
+func (s *CodexService) SupportsActiveTurnSteering() bool { return true }
+
 // failStuckTurn ends the in-flight turn when the busy TTL decides its terminal
 // frame is never coming: it drops the run id AND tells the waiting client why.
 //
@@ -293,6 +298,7 @@ func (s *CodexService) drainPendingEvents() {
 		msg = rePoseWorstMarker.ReplaceAllString(msg, "")
 		msg = strings.ReplaceAll(msg, "\n\n\n", "\n\n")
 		msg = strings.TrimSpace(msg)
+		msg = sensingmsg.AppendHarnessReplyRoute(msg, ev.eventType, runID)
 
 		// Replayed voice_agent_handled: realtime agent already spoke, suppress TTS
 		// on the reply (same as the live PostEvent path).

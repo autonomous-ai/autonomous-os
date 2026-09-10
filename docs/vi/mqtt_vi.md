@@ -788,6 +788,8 @@ không biến kết quả upload thành thất bại.
 
 #### `chat.send` + `chat.event`
 
+Sentinel nội bộ `NO_REPLY` dùng khi chuyển tiếp sẽ được loại khỏi `chat.event`; client sẽ nhận tiến trình Harness và phản hồi cuối cùng.
+
 Cho phép backend (và qua đó là app mobile) giữ **đúng cuộc hội thoại mà chat trên
 web monitor đang giữ**. Chat web gồm 2 nửa — `POST /api/sensing/event` với
 `type:"web_chat"` để mở turn (đường này forward y như `type:"mqtt_chat"`), và
@@ -1087,3 +1089,7 @@ Xử lý bởi bootstrap worker, không qua MQTT handler trực tiếp.
 | `runtimes/openclaw/pairing.go` | WhatsApp Baileys QR pairing subprocess driver |
 | `system/domain/device.go` | MQTTMessage, command constants |
 | `system/domain/pairing.go` | PairingEvent + status enum |
+
+Khi không có lượt chuyển tiếp Harness đang chờ, `NO_REPLY` kết thúc được gửi thành `chat_response` với `state: final`, summary và message assistant rỗng. Mobile kết thúc trạng thái chờ mà không hiển thị sentinel nội bộ.
+
+MQTT coi mọi phản hồi final của Harness là kết thúc bất kể câu chữ; handler agent dùng chung chặn lời chuyển giao dựa trên đúng run ID.

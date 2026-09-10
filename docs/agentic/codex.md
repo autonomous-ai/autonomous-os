@@ -28,22 +28,26 @@ which brain is active.
 
 ## 1. Overview & how it is selected
 
-The Codex CLI has no server mode of its own, so the device runs a thin local
-**WS bridge**: the `codex.service` systemd unit runs **`os-server
-codex-gatewayd`** — the bridge is **compiled into the os-server binary**
-(`runtimes/codex/gatewayd`, a Go port of the reference `bridge.py`; **no Python
-on the device**). The bridge exposes `ws://127.0.0.1:18792/codex/ws/` (bearer
-token `autonomous_codex_token`) and spawns **one subprocess per turn**:
+The device runs a thin local **WS bridge**: the `codex.service` systemd unit
+runs **`os-server codex-gatewayd`** — the bridge is **compiled into the
+os-server binary** (`runtimes/codex/gatewayd`; **no Python on the device**).
+Gatewayd owns a persistent Codex App Server JSON-RPC process. It starts a turn
+with `turn/start` and sends compatible additional input to an active turn with
+`turn/steer`, rather than serializing direct user input through a per-turn
+`codex exec` worker.
 
-```
-codex exec --json --dangerously-bypass-approvals-and-sandbox --cd /root/.codex/workspace
-```
+The bridge exposes `ws://127.0.0.1:18792/codex/ws/` (bearer token
+`autonomous_codex_token`) to os-server. The permissive configuration is
+deliberate: an appliance running as root must never block on an approval prompt
+(`approval_policy = "never"` + `sandbox_mode = "danger-full-access"` in
+config.toml, §1.2).
 
-resuming the thread id persisted in `/root/.codex/session.json` (`codex exec
-resume <id>`). Turns are strictly serialized (buffered queue + single worker).
-The permissive flags are deliberate: an appliance running as root must never
-block on an approval prompt (paired with `approval_policy = "never"` +
-`sandbox_mode = "danger-full-access"` in config.toml, §1.2).
+**Steering scope.** `turn/steer` is valid only for the currently active Codex
+thread. Once that turn is terminal, the next input follows the normal start or
+resume path. This removes runtime FIFO delay for an active conversation, but it
+does not override OS safety policy: passive sensing, speaker/TTS safety gates,
+offline delivery, and inputs that cannot safely join the active thread may
+still be queued by os-server.
 
 `agent_runtime` in `config.json` picks the backend; resolution lives in
 `system/agent/factory.go` `ProvideGateway()` — `"codex"` →
@@ -144,9 +148,8 @@ workspace reconcile the other backends get: seeds `KNOWLEDGE.md` **and
 `<!-- OS DO NOT REMOVE -->` blocks into `SOUL.md` / `AGENTS.md` /
 `HEARTBEAT.md` (OpenClaw-derived, stripped of OpenClaw-only bits), refreshes
 the **global** user AGENTS.md block (`ensureUserAgentsMDBlock`, see below), and
-capability-gates skills. Markdown-only changes never restart the gateway —
-each `codex exec` re-reads the workspace; only a presync config change or a
-unit self-heal restarts it.
+capability-gates skills. Markdown-only changes never restart the gateway; only
+a presync config change or a unit self-heal restarts it.
 
 **Why `AGENTS.md` is seeded.** Codex has no `setup` command to regenerate a base
 `AGENTS.md` the way openclaw does, and a **codex-only device** — one that never
@@ -234,11 +237,11 @@ frame and returns; the reply arrives on the read loop:
   "attachments": [{ "type": "image", "url": "data:image/jpeg;base64,…" }] } }
 ```
 
-The bridge saves attachments to `/root/.codex/attachments` and passes them via
-`codex exec -i <path>`. A `{"type":"session.new"}` frame makes the bridge drop
-the persisted thread id (§4). Codex processes one turn at a time and does not
-stream tokens, so turns are correlated by a single in-flight `runID` (the
-pending run id is adopted by the first inbound frame of the turn).
+The bridge saves attachments to `/root/.codex/attachments` and includes them in
+the App Server turn input. A `{"type":"session.new"}` frame clears the current
+thread (§4). A compatible new message for an active thread uses `turn/steer`;
+otherwise gatewayd starts a normal turn. Events remain correlated to the
+initiating device `runID`; steering never silently reassigns a turn.
 
 ## 2.1 Turn duration — timeout and the busy TTL
 
@@ -248,7 +251,7 @@ minutes to completion. Two numbers bound it, and they must stay ordered:
 
 | Knob | Where | Default | Meaning |
 |---|---|---|---|
-| `CODEX_TURN_TIMEOUT_S` | `gatewayd/gatewayd.go` | `600` (10 min) | Kills `codex exec` and sends `bridge.error: timeout`. The gatewayd ALWAYS ends a turn — completed, failed, or this timeout. |
+| `CODEX_TURN_TIMEOUT_S` | `gatewayd/gatewayd.go` | `600` (10 min) | Ends the active App Server turn and sends `bridge.error: timeout`. Gatewayd ALWAYS ends a turn — completed, failed, or this timeout. |
 | `busyTTL()` | `events.go` | that timeout **+ 5 min** | Unwedges the sensing pipeline when a turn's terminal frame was DROPPED. Derived from the same env var so raising the timeout cannot leave it behind. |
 
 **An expired TTL ends the turn properly — both halves.** It drops the run id AND
@@ -285,10 +288,9 @@ same endpoint answered the same 75k-token payload in 57 s, and a FRESH
 gatewayd now calls `clearSession()` on a resume timeout, which is the only escape
 that does not need a human.
 
-The web chat's own give-up window (`REPLY_IDLE_TIMEOUT_MS`) is sized to
-outlast the turn cap for the same reason — and it cannot be shortened, because
-`codex exec --json` emits nothing at all while it works (the measured run
-streamed zero deltas in ten minutes).
+The web chat's own give-up window (`REPLY_IDLE_TIMEOUT_MS`) is sized to outlast
+the turn cap. App Server events can report live progress, but a steer remains
+part of the same active turn rather than an independent completion promise.
 
 ### Reconnect drains locally buffered requests
 
@@ -318,7 +320,7 @@ Candidate vocabulary is bounded at **1024** tokens; diverse text is accepted.
 This is a repetition heuristic, not a maximum answer length: long code, numeric
 fixtures, and ordinary explanations remain eligible. Tool output is not classified.
 
-On rejection the gateway kills the current CLI process group, suppresses the
+On rejection the gateway ends the active App Server turn, suppresses the
 rejected item and later success frames, clears the persisted thread before the
 next queued turn, and sends `bridge.error` with the `degenerate_output:` prefix.
 It does this for fresh and resumed threads and **does not replay the task**.
@@ -335,9 +337,9 @@ quarantine, and a queued next turn starting fresh without replay.
 
 ## 3. Event translation (`translator.go`)
 
-The bridge forwards the `codex exec --json` JSONL events **verbatim** (plus its
-own `bridge.status` / `bridge.error` / `pong` frames); the Go translator maps
-them onto the same `domain.WSEvent` shape the OpenClaw handler consumes:
+The bridge maps persistent Codex App Server JSON-RPC notifications (plus its
+own `bridge.status` / `bridge.error` / `pong` frames) onto the same
+`domain.WSEvent` shape the OpenClaw handler consumes:
 
 | Inbound event | Emitted `domain.WSEvent` |
 |---|---|
@@ -346,7 +348,7 @@ them onto the same `domain.WSEvent` shape the OpenClaw handler consumes:
 | `item.started` `command_execution` / `mcp_tool_call` | `agent` tool `phase:start` (`shell` / `server.tool`) |
 | `item.completed` `command_execution` / `mcp_tool_call` | tool `phase:end` (start emitted first when unseen) |
 | `item.completed` `web_search` / `file_change` | tool `phase:start` + `phase:end` pair |
-| `item.completed` `agent_message` | **buffered as the reply** — no delta stream in exec mode. A newer one demotes the previous to `stream:thinking` (see *Preambles* below) |
+| `item.completed` `agent_message` | buffered as the reply; a newer one demotes the previous to `stream:thinking` (see *Preambles* below) |
 | `item.*` `reasoning` / `todo_list` | *(ignored — status, not content)* |
 | `turn.completed` | `agent` `stream:assistant` (whole reply as **one** delta) **+** `chat` `state:final role:assistant` **+** lifecycle `phase:end` with usage — ends the turn |
 | `turn.failed` / `error` / `bridge.error` | `agent` lifecycle `phase:error` — ends the turn |
@@ -357,7 +359,7 @@ Like PicoClaw, the accumulated `agent_message` text is surfaced at
 `lifecycle.end` — the N=1 case of the streaming contract, which is what lets
 the shared consumer flush TTS + `[HW:/…]` hardware markers at `lifecycle.end`.
 
-**Preambles.** Codex exec narrates before it calls a tool, as its own
+**Preambles.** Codex can narrate before it calls a tool, as its own
 `agent_message` item ("Using the sensing skill for this presence event.",
 "Posture summary is present, so this is the posture-nudge route."). Joining
 every `agent_message` would speak that whole trail — the leak seen on
@@ -375,29 +377,22 @@ approximation of the live context size), `output → OutputTokens`,
 
 ## 4. Session
 
-Codex owns the session: the thread id is captured from the `thread.started`
-event and persisted by the bridge in `/root/.codex/session.json`, then replayed
-via `codex exec resume <id>` (history lives on disk under
-`$CODEX_HOME/sessions/` — process exit ≠ session loss). `NewSession` sends a
-`session.new` frame → the bridge drops the thread id → the next turn is fresh
-(best-effort when the socket is down: a stale id fails resume and the bridge
-retries fresh on its own).
+Codex owns the session: the bridge captures the App Server thread id as its
+session key. `NewSession` sends a `session.new` frame → the bridge clears the
+current thread → the next `turn/start` is fresh. `turn/steer` appends only to
+that thread's live turn, never to a completed or different thread.
 
-Codex **auto-compacts its own context** (`model_auto_compact_token_limit`), so
-`ShouldRotateSession` is only a **250k-token safety net** for runaway threads —
-it rarely fires. It keys on the live **context** size — `input_tokens +
+Codex **auto-compacts its own context** (`model_auto_compact_token_limit`), but
+the device has a **120k-token safety net**: at 134k a per-turn `codex exec`
+already took 100 seconds, and later resumed turns grew to 376k and 473k.
+It keys on the live **context** size — `input_tokens +
 cached_input_tokens` from the last `turn.completed`, stashed by the translator
 into `lastContextTokens` — and not on the `totalTokens` the shared handler
 passes, which folds in this turn's output (turn volume, not context). Reading
 its own usage frame keeps this codex-local: the other backends are untouched.
 
-The net was 150k keyed on the handler's `totalTokens` until
-2026-08-24, when the device showed it firing on ordinary turns instead of
-runaway ones — 3 of 8 consecutive sensing turns on lamp-0c89 crossed it
-(context 153k / 170k). Each rotation dropped the thread, and the fresh thread
-re-read every `SKILL.md` by shell (6 calls, ~60s), which pushed the context
-straight back over the line: a rotation treadmill. A net has to sit **above**
-where codex's own compaction settles, not inside it. Per [`adding-agent-runtime.md`](adding-agent-runtime.md) §4
+The cap intentionally leaves a small margin above the largest healthy sensing
+turn observed (116k), while preventing the measured latency cliff. Per [`adding-agent-runtime.md`](adding-agent-runtime.md) §4
 "No fake success", `CompactSession`, `GetConfigJSON` (Codex config is TOML +
 `.env` secrets — no JSON file to expose), `UpdatePrimaryModel`, and
 `RefreshModelsConfig` all return `domain.ErrNotSupportedByRuntime` — never
@@ -656,10 +651,23 @@ built-in default provider + model — this **bypasses the campaign-api
 `/responses` 404 blocker** entirely. Delete `auth.json` to fall back to
 api-key mode; the flip is automatic on the next presync run.
 
-### Queued turn correlation
+### Active-turn correlation and steering
 
-`message.send` carries the request `id` and originating device `run_id`. Gatewayd retains both through its FIFO worker and adds `request_id`/`run_id` to every turn event, including terminal bridge errors and resumed attempts. Control frames (`pong`, `bridge.status`) remain independent. A full queue returns `bridge.rejected` with the rejected request's IDs instead of failing the currently streaming turn.
+`message.send` carries the request `id` and originating device `run_id`.
+Gatewayd preserves those IDs on turn events. A compatible message targeting the
+active thread uses `turn/steer` instead of waiting behind it. Its independent
+device trace receives a `bridge.steered` acknowledgement. A merged web-chat
+turn waits for the active turn's final reply, which is safely fanned out without
+replaying hardware markers; internal follow-ups can end immediately. This
+prevents a merged follow-up from retaining a phantom pending run and wedging
+busy state. Control frames (`pong`, `bridge.status`) remain independent.
+If a gateway restart leaves a persisted thread ID that the new App Server no
+longer has, gatewayd clears that stale session and retries the same turn once on
+a fresh thread.
 
-The adapter serializes outgoing chat writes and stores all pending request/run pairs, rather than overwriting one pending run. Tagged events select their originating pair; older bridges without these fields use FIFO correlation. Completed request IDs are retained in a bounded 256-entry history to ignore duplicate late terminal frames. A failed send removes only that request, preserving active and other queued work. Queue rejection reports the rejected run's lifecycle error without clearing the active turn's accumulated output. This keeps web-chat silence, voice replies, and channel routing associated with their original requests when multiple followups are queued. It does not add cancellation or change the gateway's sequential execution policy.
-
-Busy gating stays active while a correlated turn or accepted queued request remains, even when the generic lifecycle consumer reports a different queued run's error. Disconnect and busy-TTL cleanup discard uncertain pending correlation so lost requests cannot hold the device busy indefinitely. A modern gateway can still restore the originating run from tagged events after reconnect; an older untagged bridge cannot guarantee correlation after a lost connection. Stale or interleaved tagged events cannot change the stored session ID.
+The adapter retains request/run correlation for terminal events and rejects a
+steer that cannot be applied to the active thread rather than silently attaching
+it elsewhere. A completed turn cannot be steered: its next message follows the
+normal start/resume path. OS-level queues remain for safety and delivery
+reasons, including passive sensing and speaker-busy handling, so steering is
+not a general cancellation or interruption mechanism.

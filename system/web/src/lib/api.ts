@@ -426,20 +426,43 @@ export interface AgentRuntimeStatus {
    *  `current` flips as soon as the switch lands; the gateway behind it can
    *  still be booting for tens of seconds after that. */
   ready: boolean;
+  /** Stored remote-gateway config. Blank on every runtime other than
+   *  "remote"; used by the settings page to pre-fill the URL/token inputs when
+   *  the operator re-opens it. Backend returns the token as-is (the endpoint
+   *  is behind adminAuthMiddleware). */
+  remote_url?: string;
+  remote_token?: string;
 }
 
 export async function getAgentRuntime(): Promise<AgentRuntimeStatus> {
   return apiRequest<AgentRuntimeStatus>(`${API_BASE}/api/device/agent-runtime`);
 }
 
-/** POST /api/device/agent-runtime — swap the agentic backend (openclaw ⇄ hermes).
- *  The device restarts os-server right after, so the connection drops; callers
- *  should treat success as "accepted, reconnecting" and re-poll once it's back. */
-export async function setAgentRuntime(runtime: string): Promise<boolean> {
+/** Options for `setAgentRuntime`. Only meaningful when `runtime === "remote"`:
+ *  `url` is required (http:// or https://) and points to the Hermes server on
+ *  another machine (the device uses its existing Hermes client, just against
+ *  that URL); `token` is the optional Bearer token that server requires. */
+export interface SetAgentRuntimeOptions {
+  url?: string;
+  token?: string;
+}
+
+/** POST /api/device/agent-runtime — swap the agentic backend (openclaw ⇄ hermes ⇄ remote).
+ *  The device restarts os-server right after a successful switch, so the
+ *  connection drops; callers should treat success as "accepted, reconnecting"
+ *  and re-poll once it's back. The response body is always `true` on
+ *  acceptance — a rejected switch returns an HTTP error, not `false`. */
+export async function setAgentRuntime(
+  runtime: string,
+  opts?: SetAgentRuntimeOptions,
+): Promise<boolean> {
+  const body: Record<string, string> = { runtime };
+  if (opts?.url) body.url = opts.url;
+  if (opts?.token) body.token = opts.token;
   return apiRequest<boolean>(`${API_BASE}/api/device/agent-runtime`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ runtime }),
+    body: JSON.stringify(body),
   });
 }
 
@@ -831,6 +854,9 @@ export interface InstalledSkill {
   name: string;
   description?: string;
   files: SkillNode[];
+  /** Whether this directory name is currently present in the skill catalog.
+   * `unknown` means the device could not read the complete catalog. */
+  store_availability?: "in_store" | "device_only" | "unknown";
   /** Newest mtime anywhere in the skill's tree, Unix SECONDS. Omitted when
    *  nothing in the tree could be stat'd. */
   updated_at?: number;
@@ -841,6 +867,9 @@ export interface InstalledSkill {
  *  (HTTP 501). An un-provisioned runtime returns an empty list, not an error. */
 export async function listInstalledSkills(): Promise<InstalledSkill[]> {
   return apiRequest<InstalledSkill[]>(`${API_BASE}/api/agent/skills`);
+}
+export async function publishSkill(name: string): Promise<void> {
+  await apiRequest(`${API_BASE}/api/agent/skills/publish?name=${encodeURIComponent(name)}`, { method: "POST" });
 }
 
 /** GET /api/agent/skills/files — one installed skill's files with text inlined.

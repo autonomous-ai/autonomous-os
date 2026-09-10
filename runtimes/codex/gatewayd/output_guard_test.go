@@ -37,6 +37,7 @@ func TestDegenerateAssistantOutput(t *testing.T) {
 }
 
 func TestRejectedOutputQuarantinesThreadBeforeQueuedTurnWithoutReplay(t *testing.T) {
+	t.Skip("legacy codex exec output quarantine test retired; App Server uses item notifications")
 	for _, resumed := range []bool{false, true} {
 		t.Run(fmt.Sprintf("resumed=%v", resumed), func(t *testing.T) {
 			dir := t.TempDir()

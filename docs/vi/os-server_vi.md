@@ -750,6 +750,37 @@ Khi nhận event `voice_command`, `voice_followup` hoặc `voice`, OS server che
 
 Keyword match theo nguyên cụm với word boundary ASCII — "unmute speaker" không kích rule "mute speaker". Các rule chitchat (chào / tạm biệt / cảm ơn, match theo từng ngôn ngữ) dùng chung phép kiểm tra boundary đó: trước đây match chuỗi con thô khiến phrase 2 ký tự "hi" khớp nằm trong "this", "his", "machine", nên câu bình thường như "What is this?" bị trả lời tại chỗ bằng "Hi there!" và không bao giờ tới agent.
 
+### Chọn mục tiêu tracking
+
+`"follow the cup"` ánh xạ danh từ người dùng nói sang label gửi cho `POST /servo/track`. Việc chọn label
+này không phải là quét lấy kết quả khớp đầu tiên — có ba quy tắc áp dụng theo thứ tự:
+
+1. **Chỉ khớp trọn từ.** `"me"` không được nổ bên trong *camera* hay *mentioned*, `"us"` không được nổ
+   bên trong *mouse*.
+2. **Danh từ chỉ vật cụ thể luôn thắng đại từ trần.** Chỉ `me` / `myself` / `user` / `us` là đại từ;
+   `person` / `people` / `human` vẫn là danh từ thường. Nên "watch me type on my keyboard" sẽ track bàn
+   phím, còn "follow me" vẫn track người.
+3. **Trong cùng một tầng, danh từ đầu tiên đứng *sau* động từ thắng**, nếu không có thì lùi về danh từ
+   cuối cùng đứng trước nó.
+
+Trước đây bảng được quét theo thứ tự khai báo bằng phép so khớp chuỗi con thô, nên mục đại từ (vị trí 3
+trong bảng) trả lời mọi lệnh tracking trước khi `keyboard` (vị trí 14) kịp được kiểm tra — trên green-lamp
+ngày 2026-09-08, ba turn liên tiếp nhờ đèn nhìn bàn phím đều đáp "Tracking person." và chĩa camera vào mặt
+người nói.
+
+Các rule lệnh khớp **từng trường của envelope một cách riêng biệt, bản tóm tắt của agent trước**. Một turn
+voice được delegate sẽ tới dưới dạng `[voice-instruction] <bản tóm tắt>` + `[transcript] <STT thô>`; một
+turn đi theo route khác (`realtime_not_started`, `realtime_unavailable`, …) tới dưới dạng transcript trần
+đã trang trí, nên bản tóm tắt xuất hiện rồi biến mất giữa các turn liên tiếp của cùng một cuộc hội thoại.
+Bản tóm tắt được thử trước — STT bị khoá vào một ngôn ngữ trong khi người dùng có thể nói ngôn ngữ khác, và
+các rule lệnh chỉ có tiếng Anh, nên nó thường là trường duy nhất có thể khớp. Hai trường không bao giờ được
+nối lại: gộp thành một khối khiến một rule lấy động từ từ bản tóm tắt và lấy mục tiêu từ transcript. Đại từ
+chỉ bị xoá trắng trong bản tóm tắt, vì ở đó chúng là lời thuyết minh — `me` trong bản tóm tắt nghĩa là cái
+đèn, không phải người nói. `[snapshot: …]` và `[vision-image] …` bị strip trước khi khớp để một đường dẫn
+file không thể cấp mục tiêu (`/…/sensing_face/…` chứa trọn từ `face`). Chitchat tự strip riêng và không đổi.
+
+Không khớp → chuyển tiếp cho agent, nơi có thể gọi tên các vật ít gặp qua YOLOWorld open-vocab.
+
 Chitchat **tắt khi realtime voice agent đang bật** — model nhận mọi lượt voice trước os-server và tự trả lời phần xã giao, đúng nhân cách của nó. Bật cả hai nghĩa là một câu canned với giọng khác chen ngang đúng những lượt model tình cờ im. Các rule lệnh phía trên vẫn chạy trong mọi trường hợp vì chúng thật sự nhanh hơn một vòng model. Cổng này bám theo `realtime.enabled` ngay lúc chạy, đổi trong Settings không cần restart.
 
 Không match → forward OpenClaw.
