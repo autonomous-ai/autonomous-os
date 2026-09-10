@@ -1355,9 +1355,10 @@ Read the counters in the session-END log line: `substituted` at ~100 % of
    The same commit arms the **dead-air filler** (`_WaitFiller`), the audible
    half of that cue. After `HAL_REALTIME_FILLER_DELAY_S` (default 1.5 s) with
    still no output, HAL calls `POST /api/sensing/filler` and os-server speaks
-   one opening filler from its cache — os-server owns the phrase pools, the
-   language, and the WAV cache, so the realtime wait and the main-agent wait
-   sound alike. Whether this fires on every turn or only on slow ones is a
+   one dedicated realtime filler from its cache — a quiet non-lexical thought
+   such as "Mm...", distinct from the main-agent's opening acknowledgement.
+   Os-server owns the phrase pools, language, and WAV cache. Whether this fires
+   on every turn or only on slow ones is a
    property of the model, and the default assumes a fast one: a chit-chat reply
    arriving in ~1 s never reaches the timer, while a turn grounded with Google
    Search does. Measure before trusting that on a given body — on `lamp-0c89`

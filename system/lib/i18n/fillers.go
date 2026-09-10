@@ -7,6 +7,7 @@ package i18n
 //
 // Looked up via:
 //   - FillerOpening(lang)        — short acknowledgement at turn start
+//   - FillerRealtime(lang)       — non-lexical cue while the realtime model waits
 //   - FillerContinuation(lang)   — neutral "still working" between tools
 //   - FillerForTool(lang, tool)  — tool-aware override; nil when no entry,
 //                                  caller falls back to FillerContinuation.
@@ -28,6 +29,16 @@ var fillerOpening = map[string][]string{
 		"嗯，讓我想想", "好的", "稍等一下", "好", "明白了",
 		"嗯", "等一下", "稍等", "好的好的",
 	},
+}
+
+// fillerRealtime is intentionally separate from fillerOpening. The user has
+// already yielded the conversational floor when this plays, so it must sound
+// like a quiet thinking sound rather than an acknowledgement or a promise.
+var fillerRealtime = map[string][]string{
+	LangEN:   {"Hmm...", "Mm..."},
+	LangVI:   {"Ừm...", "Hừm..."},
+	LangZhCN: {"嗯...", "呃..."},
+	LangZhTW: {"嗯...", "呃..."},
 }
 
 var fillerContinuation = map[string][]string{
@@ -171,6 +182,15 @@ func FillerOpening(lang string) []string {
 		return applyNameAll(p)
 	}
 	return applyNameAll(fillerOpening[fallbackLang])
+}
+
+// FillerRealtime returns the dedicated pool for the realtime model wait.
+// Falls back to English on unknown / empty lang.
+func FillerRealtime(lang string) []string {
+	if p, ok := fillerRealtime[lang]; ok && len(p) > 0 {
+		return applyNameAll(p)
+	}
+	return applyNameAll(fillerRealtime[fallbackLang])
 }
 
 // FillerContinuation returns the continuation (between-tools) filler pool

@@ -1323,9 +1323,10 @@ liên tục đồng ý.
    nên chỉ bật khi chấp nhận đánh đổi này. Native audio vẫn stream từng frame.
    Sau `HAL_REALTIME_FILLER_DELAY_S` (mặc định 1.5s) mà vẫn
    chưa có output nào, HAL gọi `POST /api/sensing/filler` và os-server phát một
-   câu filler mở đầu từ cache — pool phrase, ngôn ngữ và WAV cache đều nằm ở
-   os-server, nên khoảng chờ realtime và khoảng chờ main agent nghe giống nhau.
-   Filler bắn ở mọi lượt hay chỉ ở lượt chậm là **tính chất của model**, và giá
+   filler realtime riêng từ cache — tiếng đệm suy nghĩ không lời như "Ừm...",
+   khác với lời xác nhận mở đầu của main agent. Pool phrase, ngôn ngữ và WAV
+   cache đều nằm ở os-server. Filler bắn ở mọi lượt hay chỉ ở lượt chậm là
+   **tính chất của model**, và giá
    trị mặc định giả định model nhanh: câu chit-chat về trong ~1s thì không chạm
    timer, còn lượt dùng Google Search thì có. Phải ĐO trước khi tin điều đó trên
    một body cụ thể — trên `lamp-0c89` (26/08/2026, `gemini-3.1-flash-live-preview`
