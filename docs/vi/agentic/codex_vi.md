@@ -644,6 +644,9 @@ ID đó trên event của turn. Message tương thích nhắm thread active dùn
 fan-out an toàn, không phát lại marker phần cứng. Follow-up nội bộ có thể kết
 thúc ngay. Việc này ngăn follow-up đã gộp giữ lại pending run ma và làm kẹt busy
 state. Control frame (`pong`, `bridge.status`) độc lập.
+History sync `voice_agent_handled` từ realtime cũng steer khi Codex đang active:
+tầng voice đã nói rồi nên trace im lặng kết thúc ngay theo xác nhận, thay vì xếp
+hàng sau task đang chạy.
 Nếu restart gateway để lại thread ID đã lưu nhưng App Server mới không còn biết,
 gatewayd sẽ xoá session cũ đó và thử lại chính turn ấy một lần trên thread mới.
 

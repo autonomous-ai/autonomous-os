@@ -661,6 +661,9 @@ turn waits for the active turn's final reply, which is safely fanned out without
 replaying hardware markers; internal follow-ups can end immediately. This
 prevents a merged follow-up from retaining a phantom pending run and wedging
 busy state. Control frames (`pong`, `bridge.status`) remain independent.
+The realtime `voice_agent_handled` history sync also steers when Codex is
+active: the voice layer already spoke, so its silent trace closes on the
+acknowledgement instead of queueing behind the active task.
 If a gateway restart leaves a persisted thread ID that the new App Server no
 longer has, gatewayd clears that stale session and retries the same turn once on
 a fresh thread.
