@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import {
   Paperclip, X, Copy, Check, RotateCcw, Download, ArrowDown, ArrowUp,
   Pin, ChevronRight, Sparkles, Plus, Trash2, History,
-  Wrench, Lightbulb, Cog, Music, Palette, Search, Smile, ChevronDown,
+  Wrench, Lightbulb, Cog, Music, Palette, Search, Smile, ChevronDown, Square,
 } from "lucide-react";
 import { API } from "./types";
 import { getDeviceConfig } from "@/lib/api";
@@ -774,6 +774,12 @@ export function ChatSection({ events, isActive }: Props) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pendingRunIdRef = useRef<string | null>(null);
+  // The POST can still be awaiting its run id when the user presses Stop.
+  // Keep the provisional bubble id and sequence so that a late HTTP response
+  // cannot revive a reply the user explicitly dismissed.
+  const pendingLocalReplyIdRef = useRef<string | null>(null);
+  const sendSequenceRef = useRef(0);
+  const sendAbortRef = useRef<AbortController | null>(null);
   // Snapshot of the user's outgoing text for the pending run. Used to pair a
   // steered/merged turn (OpenClaw re-fires the same input under a fresh UUID
   // run) — see steered-pair branch in the events useEffect below.
@@ -1620,6 +1626,8 @@ export function ChatSection({ events, isActive }: Props) {
     // cancels the in-flight POST, so the reply had nowhere to land and the turn
     // looked lost even though the device answered it fine.
     const localReplyId = `l-pending-${Date.now()}`;
+    const sendSequence = ++sendSequenceRef.current;
+    pendingLocalReplyIdRef.current = localReplyId;
     setConvos((prev) =>
       prev.map((c) =>
         c.id === targetId
@@ -1649,16 +1657,29 @@ export function ChatSection({ events, isActive }: Props) {
       const body: Record<string, unknown> = { type: "web_chat", message: text };
       if (sendImages.length > 0) body.images = sendImages;
       if (sendFiles.length > 0) body.files = sendFiles;
+      const abort = new AbortController();
+      sendAbortRef.current = abort;
       const res = await fetch(`${API}/sensing/event`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
+        signal: abort.signal,
       });
       const json = await res.json();
+
+      // Stop was pressed while this request was being accepted. The agent may
+      // still finish its already-accepted work, but this chat must never show
+      // that late reply.
+      if (sendSequenceRef.current !== sendSequence) {
+        if (json.status === 1 && json.data?.runId) resolvedIds.current.add(json.data.runId);
+        return;
+      }
+      sendAbortRef.current = null;
 
       if (json.status === 1 && json.data?.runId) {
         const runId: string = json.data.runId;
         pendingRunIdRef.current = runId;
+        pendingLocalReplyIdRef.current = null;
         pendingUserTextRef.current = text;
         const replyTime = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
         // Adopt the bubble that has been spinning since the click — attaching the
@@ -1711,6 +1732,8 @@ export function ChatSection({ events, isActive }: Props) {
         );
       }
     } catch {
+      if (sendSequenceRef.current !== sendSequence) return;
+      sendAbortRef.current = null;
       setSending(false);
       setConvos((prev) =>
         prev.map((c) =>
@@ -1734,6 +1757,39 @@ export function ChatSection({ events, isActive }: Props) {
   // sendText splits the staged attachments by kind itself. Passing the raw
   // base64 here would make every attachment look like an image.
   const send = () => { sendText(input.trim()); };
+
+  // Stop is intentionally scoped to this browser's pending reply. It aborts a
+  // still-unaccepted HTTP send and permanently ignores a late result once a
+  // run id exists; it does not cancel the agent's underlying task or alter its
+  // session/memory.
+  const stopPendingReply = () => {
+    const runId = pendingRunIdRef.current;
+    const localReplyId = pendingLocalReplyIdRef.current;
+    ++sendSequenceRef.current;
+    sendAbortRef.current?.abort();
+    sendAbortRef.current = null;
+    clearReplyWatchdog();
+    if (runId) {
+      resolvedIds.current.add(runId);
+      deltaBufRef.current.delete(runId);
+      thinkingBufRef.current.delete(runId);
+    }
+    pendingRunIdRef.current = null;
+    pendingUserTextRef.current = null;
+    pendingLocalReplyIdRef.current = null;
+    toolChipsRef.current.clear();
+    setToolChips([]);
+    setThinkingText(null);
+    setSending(false);
+    setConvos((prev) => prev.map((c) => ({
+      ...c,
+      messages: c.messages.map((m) =>
+        m.pending && (m.runId === runId || m.id === localReplyId)
+          ? { ...m, text: "Stopped", pending: false }
+          : m,
+      ),
+    })));
+  };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
@@ -2477,26 +2533,24 @@ export function ChatSection({ events, isActive }: Props) {
                 }}
               />
               <button
-                onClick={send}
-                disabled={!input.trim() || sending}
+                onClick={sending ? stopPendingReply : send}
+                disabled={!sending && !input.trim()}
                 className={input.trim() && !sending ? "lm-send-ready" : undefined}
                 style={{
                   width: 34, height: 34, borderRadius: "50%", flexShrink: 0,
-                  background: input.trim() && !sending
+                  background: sending || input.trim()
                     ? "var(--lm-amber)"
                     : "color-mix(in srgb, var(--lm-text) 15%, transparent)",
                   border: "none",
-                  color: input.trim() && !sending ? "var(--lm-on-amber)" : "var(--lm-text-muted)",
-                  cursor: input.trim() && !sending ? "pointer" : "default",
-                  boxShadow: input.trim() && !sending ? "0 2px 10px -2px var(--lm-amber-glow)" : "none",
+                  color: sending || input.trim() ? "var(--lm-on-amber)" : "var(--lm-text-muted)",
+                  cursor: sending || input.trim() ? "pointer" : "default",
+                  boxShadow: sending || input.trim() ? "0 2px 10px -2px var(--lm-amber-glow)" : "none",
                   transition: "background 0.15s, color 0.15s, box-shadow 0.15s, transform 0.12s",
                   display: "inline-flex", alignItems: "center", justifyContent: "center",
                 }}
-                title="Send (Enter)"
-                aria-label="Send message"
-              >{sending
-                ? <span className="lm-spin-ico" style={{ width: 14, height: 14, border: "2px solid currentColor", borderTopColor: "transparent", borderRadius: "50%", display: "inline-block" }} />
-                : <ArrowUp size={17} strokeWidth={2.6} />}</button>
+                title={sending ? "Stop receiving this reply" : "Send (Enter)"}
+                aria-label={sending ? "Stop receiving reply" : "Send message"}
+              >{sending ? <Square size={14} fill="currentColor" /> : <ArrowUp size={17} strokeWidth={2.6} />}</button>
               </div>
             </div>
             <div style={{

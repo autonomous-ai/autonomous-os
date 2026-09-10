@@ -157,14 +157,15 @@ func startServer(t *testing.T, codexBin string, dir string) (string, Config) {
 func startServerTimeout(t *testing.T, codexBin string, dir string, turnTimeout time.Duration) (string, Config) {
 	t.Helper()
 	cfg := Config{
-		Token:       testToken,
-		Workspace:   filepath.Join(dir, "workspace"),
-		CodexBin:    codexBin,
-		CodexHome:   dir,
-		SessionFile: filepath.Join(dir, "session.json"),
-		AttachDir:   filepath.Join(dir, "attachments"),
-		TurnTimeout: turnTimeout,
-		Home:        dir,
+		Token:        testToken,
+		Workspace:    filepath.Join(dir, "workspace"),
+		CodexBin:     codexBin,
+		CodexHome:    dir,
+		SessionFile:  filepath.Join(dir, "session.json"),
+		AttachDir:    filepath.Join(dir, "attachments"),
+		TurnTimeout:  turnTimeout,
+		Home:         dir,
+		UseAppServer: true,
 	}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

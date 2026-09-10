@@ -31,10 +31,10 @@ which brain is active.
 The device runs a thin local **WS bridge**: the `codex.service` systemd unit
 runs **`os-server codex-gatewayd`** — the bridge is **compiled into the
 os-server binary** (`runtimes/codex/gatewayd`; **no Python on the device**).
-Gatewayd owns one persistent Codex App Server process and speaks its JSON-RPC
-protocol. It starts a turn with `turn/start` and sends compatible additional
-input to an active turn with `turn/steer`; it does not spawn `codex exec` for
-each message or drain them through a strict FIFO worker.
+Gatewayd owns a persistent Codex App Server JSON-RPC process. It starts a turn
+with `turn/start` and sends compatible additional input to an active turn with
+`turn/steer`, rather than serializing direct user input through a per-turn
+`codex exec` worker.
 
 The bridge exposes `ws://127.0.0.1:18792/codex/ws/` (bearer token
 `autonomous_codex_token`) to os-server. The permissive configuration is
@@ -382,21 +382,17 @@ session key. `NewSession` sends a `session.new` frame → the bridge clears the
 current thread → the next `turn/start` is fresh. `turn/steer` appends only to
 that thread's live turn, never to a completed or different thread.
 
-Codex **auto-compacts its own context** (`model_auto_compact_token_limit`), so
-`ShouldRotateSession` is only a **250k-token safety net** for runaway threads —
-it rarely fires. It keys on the live **context** size — `input_tokens +
+Codex **auto-compacts its own context** (`model_auto_compact_token_limit`), but
+the device has a **120k-token safety net**: at 134k a per-turn `codex exec`
+already took 100 seconds, and later resumed turns grew to 376k and 473k.
+It keys on the live **context** size — `input_tokens +
 cached_input_tokens` from the last `turn.completed`, stashed by the translator
 into `lastContextTokens` — and not on the `totalTokens` the shared handler
 passes, which folds in this turn's output (turn volume, not context). Reading
 its own usage frame keeps this codex-local: the other backends are untouched.
 
-The net was 150k keyed on the handler's `totalTokens` until
-2026-08-24, when the device showed it firing on ordinary turns instead of
-runaway ones — 3 of 8 consecutive sensing turns on lamp-0c89 crossed it
-(context 153k / 170k). Each rotation dropped the thread, and the fresh thread
-re-read every `SKILL.md` by shell (6 calls, ~60s), which pushed the context
-straight back over the line: a rotation treadmill. A net has to sit **above**
-where codex's own compaction settles, not inside it. Per [`adding-agent-runtime.md`](adding-agent-runtime.md) §4
+The cap intentionally leaves a small margin above the largest healthy sensing
+turn observed (116k), while preventing the measured latency cliff. Per [`adding-agent-runtime.md`](adding-agent-runtime.md) §4
 "No fake success", `CompactSession`, `GetConfigJSON` (Codex config is TOML +
 `.env` secrets — no JSON file to expose), `UpdatePrimaryModel`, and
 `RefreshModelsConfig` all return `domain.ErrNotSupportedByRuntime` — never
@@ -660,10 +656,11 @@ api-key mode; the flip is automatic on the next presync run.
 `message.send` carries the request `id` and originating device `run_id`.
 Gatewayd preserves those IDs on turn events. A compatible message targeting the
 active thread uses `turn/steer` instead of waiting behind it. Its independent
-device trace receives a `bridge.steered` acknowledgement and immediately ends:
-the active turn alone owns the eventual model reply and terminal turn event.
-This prevents a merged follow-up from retaining a phantom pending run and
-wedging busy state. Control frames (`pong`, `bridge.status`) remain independent.
+device trace receives a `bridge.steered` acknowledgement. A merged web-chat
+turn waits for the active turn's final reply, which is safely fanned out without
+replaying hardware markers; internal follow-ups can end immediately. This
+prevents a merged follow-up from retaining a phantom pending run and wedging
+busy state. Control frames (`pong`, `bridge.status`) remain independent.
 If a gateway restart leaves a persisted thread ID that the new App Server no
 longer has, gatewayd clears that stale session and retries the same turn once on
 a fresh thread.

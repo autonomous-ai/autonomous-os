@@ -115,6 +115,50 @@ func TestSteeredFollowupRetiresItsPendingRunWithoutEndingActiveTurn(t *testing.T
 	}
 }
 
+func TestSteeredWebFollowupReceivesTheSharedFinalReply(t *testing.T) {
+	s := &CodexService{webChatRuns: make(map[string]bool)}
+	s.addPendingRun("first", "run-first")
+	s.addPendingRun("web", "run-web")
+	s.MarkWebChatRun("run-web")
+	var events []domain.WSEvent
+	dispatch := func(e domain.WSEvent) { events = append(events, e) }
+	s.translateFrame([]byte(`{"type":"turn.started","request_id":"first","run_id":"run-first"}`), dispatch)
+	s.translateFrame([]byte(`{"type":"bridge.steered","request_id":"web","run_id":"run-web"}`), dispatch)
+	if s.hasPendingRuns() || len(s.steeredWebRuns) != 1 {
+		t.Fatalf("web follow-up was not moved out of pending: pending=%v steered=%v", s.pendingRuns, s.steeredWebRuns)
+	}
+	if len(events) != 1 {
+		t.Fatalf("web follow-up ended before the shared reply: %v", events)
+	}
+	s.translateFrame([]byte(`{"type":"item.completed","request_id":"first","run_id":"run-first","item":{"type":"agent_message","text":"[HW:/audio/play:{}] shared reply"}}`), dispatch)
+	s.translateFrame([]byte(`{"type":"turn.completed","request_id":"first","run_id":"run-first"}`), dispatch)
+
+	var gotReply, gotEnd bool
+	for _, event := range events {
+		var payload struct {
+			RunID  string `json:"runId"`
+			Stream string `json:"stream"`
+			Data   struct {
+				Delta string `json:"delta"`
+				Phase string `json:"phase"`
+			} `json:"data"`
+		}
+		_ = json.Unmarshal(event.Payload, &payload)
+		if payload.RunID != "run-web" {
+			continue
+		}
+		if payload.Stream == "assistant" {
+			gotReply = payload.Data.Delta == "shared reply"
+		}
+		if payload.Stream == "lifecycle" && payload.Data.Phase == "end" {
+			gotEnd = true
+		}
+	}
+	if !gotReply || !gotEnd {
+		t.Fatalf("web follow-up did not receive a safe shared final reply: %v", events)
+	}
+}
+
 func TestTaggedLateTerminalCannotStartAnotherTurn(t *testing.T) {
 	s := &CodexService{}
 	s.addPendingRun("first", "run-first")
