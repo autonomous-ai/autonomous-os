@@ -11,7 +11,8 @@ Controls the device's display. Two modes: animated eyes (default) and info text.
 ## Workflow
 1. Determine the mode needed:
    - **Eyes**: `[HW:/display/eyes:{"expression":"happy","pupil_x":0.0,"pupil_y":0.0}]`
-   - **Info**: `[HW:/display/info:{"text":"14:30","subtitle":"Good afternoon"}]` then `[HW:/display/eyes-mode:{}]`
+   - **Info**: `[HW:/display/info:{"text":"14:30","subtitle":"Good afternoon"}]`
+   - **Return to eyes**: `[HW:/display/eyes-mode:{}]` when the info display is no longer needed, not immediately after the info marker.
 2. Place markers at start of reply — the device fires them before TTS. Skip silently if display unavailable.
 
 **Important**: The Emotion skill auto-syncs eyes during conversation. Do not call both Emotion and Display for the same reaction.
@@ -29,7 +30,7 @@ Controls the device's display. Two modes: animated eyes (default) and info text.
 
 ## How to Control Display
 
-**No exec/curl needed.** Inline markers at start of reply:
+**No exec/curl needed for the display action.** Choose the relevant inline marker below; these are separate actions, not a sequence:
 
 ```
 [HW:/display/eyes:{"expression":"happy","pupil_x":0.0,"pupil_y":0.0}]
@@ -64,14 +65,14 @@ Controls the device's display. Two modes: animated eyes (default) and info text.
 
 ## Rules
 - **Emotion skill auto-syncs eyes** — when you call `POST /emotion`, the display updates automatically. Do not call both.
-- **Info mode is temporary** — show info briefly, then switch back to eyes.
+- **Info mode has no automatic timeout.** Do not chain `eyes-mode` immediately after `info`; it would erase the text before it can be read. Return to eyes when the user dismisses the info or a subsequent eye/emotion action takes over.
 - The display is plugin hardware — it may not be available. Always check first, and skip silently if absent.
 - Do not use this skill for normal conversation reactions — use the Emotion skill instead.
 
 ## Output Template
 
 ```
-[Display] Mode: {eyes|info}
-Expression: {expression} | Text: {text}
-Status: {success|skipped|unavailable}
+[HW:/display/eyes:{"expression":"happy"}] Here's a happy face!
 ```
+
+For info, use the `display/info` marker with the actual requested text instead. If the display is unavailable, skip the marker silently.

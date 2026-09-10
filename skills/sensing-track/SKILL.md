@@ -1,6 +1,6 @@
 ---
 name: sensing-track
-description: Query flow event logs to answer questions about past sensing events — "Have you seen anybody between 10pm and 12pm?", "Is there any motion in the last hour?", "What happened while I was away?".
+description: Query flow event logs to answer questions about past sensing events — "Have you seen anybody between 10pm and midnight?", "Is there any motion in the last hour?", "What happened while I was away?".
 ---
 
 # Sensing Event History
@@ -68,23 +68,35 @@ jq -c 'select(.node=="sensing_input" and .kind=="enter" and .ts >= '"$FROM_TS"' 
 
 Use `"motion"` for raw motion, `"motion.activity"` for activity analysis (HAL-categorised — bucket names `drink`/`break`/`celebrate` and raw Kinetics sedentary labels like `using computer`, `writing`, `reading`). Most queries want both:
 
+For any relative range, select every local calendar day's file intersecting that range, including yesterday when crossing midnight. Run this range setup and the chosen query in the same Bash call; do not assume variables survive between tool calls. GNU `date -d` is available on the device.
+
 ```bash
 export TZ=$(cat /etc/timezone)
 SINCE=$(date -d "1 hour ago" +%s)
-TODAY=$(date +%Y-%m-%d)
-jq -c 'select(.node=="sensing_input" and .kind=="enter" and .ts >= '"$SINCE"' and (.data.type=="motion" or .data.type=="motion.activity"))' \
-  "/root/local/flow_events_${TODAY}.jsonl"
+UNTIL=$(date +%s)
+first_day=$(date -d "@$SINCE" +%F)
+last_day=$(date -d "@$UNTIL" +%F)
+range_files=()
+range_day=$first_day
+while [[ "$range_day" < "$last_day" || "$range_day" == "$last_day" ]]; do
+  range_file="/root/local/flow_events_${range_day}.jsonl"
+  if [ -r "$range_file" ]; then
+    range_files+=("$range_file")
+  else
+    printf 'History unavailable for %s\n' "$range_day" >&2
+  fi
+  range_day=$(date -d "$range_day +1 day" +%F)
+done
+if [ "${#range_files[@]}" -gt 0 ]; then
+  jq -c --argjson since "$SINCE" --argjson until "$UNTIL" \
+    'select(.node=="sensing_input" and .kind=="enter" and .ts >= $since and .ts <= $until and (.data.type=="motion" or .data.type=="motion.activity"))' \
+    "${range_files[@]}"
+fi
 ```
 
 ### Any activity in the last N minutes
 
-```bash
-export TZ=$(cat /etc/timezone)
-SINCE=$(date -d "30 minutes ago" +%s)
-TODAY=$(date +%Y-%m-%d)
-jq -c 'select(.node=="sensing_input" and .kind=="enter" and .ts >= '"$SINCE"')' \
-  "/root/local/flow_events_${TODAY}.jsonl"
-```
+Use the same range setup above with `SINCE=$(date -d "30 minutes ago" +%s)` and remove the type predicate from the `jq` filter. Keep both time bounds and all `range_files`; even 30 minutes can span two local dates.
 
 ### Presence events only (who came by)
 
@@ -210,7 +222,7 @@ Storage: `/root/local/users/{name}/mood/YYYY-MM-DD.jsonl` (30-day retention).
 
 - **Never write to any log file** — they are owned by the system.
 - **Answer conversationally** — translate results into natural language. Never dump raw JSON to the user.
-- **Handle empty results** — if no matching events, say "I didn't detect any [type] events in that window."
+- **Handle empty results** — only when the required files were readable and parsing succeeded, say "I didn't detect any [type] events in that window." Missing, unreadable, expired or malformed history means incomplete evidence; report the gap instead of claiming no activity.
 - **Mention dropped events when relevant** — check `exit` records with `data.error` for events the agent missed. Mention it: "There was motion at 10:45 PM but I was mid-conversation and missed it."
 - **Resolve relative times** — translate "last hour", "this morning", "while I was away" into concrete Unix timestamps using `date -d` before filtering.
 - **Span multiple days** — for questions covering more than today, `cat` multiple JSONL files together.
@@ -222,8 +234,8 @@ Storage: `/root/local/users/{name}/mood/YYYY-MM-DD.jsonl` (30-day retention).
 
 ## Examples
 
-**Input:** "Have you seen anybody between 10pm and 12pm?"
-**Action:** Query `data.type` in `["presence.enter"]` between 22:00 and 00:00 from today's JSONL.
+**Input:** "Have you seen anybody between 10pm and midnight?"
+**Action:** Resolve which evening the user means, then query `presence.enter` from 22:00 on that date up to (but not including) 00:00 on the following date, selecting the files for the resolved interval. `12pm` means noon, not midnight; clarify an ambiguous request rather than silently changing it.
 **Response:** "Yes — I detected a stranger at 10:03 PM and again at 10:07 PM." or "No one came by between 10 PM and midnight."
 
 ---
