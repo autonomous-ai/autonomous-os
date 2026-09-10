@@ -12,9 +12,23 @@ import (
 // call, so os-server only ever observes ~20-60k tokens regardless of the real
 // chain size — which grows to millions of tokens / tens of MB per device-main
 // response blob and makes every turn reconstruct + recompress it (~1min/turn).
+//
+// The token net was 50_000 until 2026-09-09, when it turned out to sit INSIDE
+// the normal operating range instead of above it. Observed on lamp-a0ae: a
+// fresh conversation already reports ~12.3k (system prompt + SOUL + USER.md +
+// skills), and an ordinary turn that reads a SKILL.md and runs a tool adds
+// ~25k — 12.3k → 41.3k → 64.5k → 73.5k. The net fired every 2-3 turns, and
+// because the wired path is maybeAutoNewSession (compact is disabled) each
+// firing DROPPED the history with no summary: the device answered "that isn't
+// in our current chat" about a draft it had written two turns earlier.
+//
+// 250_000 keeps roughly 10 turns at the observed +25k/turn while still catching
+// a runaway chain. Same reasoning and same value as codex's safety net (see
+// runtimes/codex/rotation.go): a net has to sit ABOVE where the backend's own
+// compression settles, not inside it.
 const (
 	rotateMaxTurns       = 40
-	rotateTokenThreshold = 50_000
+	rotateTokenThreshold = 250_000
 )
 
 // initConversation seeds the active conversation name once per process with a
