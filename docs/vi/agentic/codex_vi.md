@@ -362,12 +362,23 @@ không phải cuối mà mang marker `[HW:/…]` là hành động phần cứng
 giữ trong reply. Chỉnh prompt không chặn preamble một cách đáng tin — đây mới là
 chỗ cưỡng chế.
 
-**Usage:** `turn.completed` mang `{input_tokens, cached_input_tokens,
-cache_write_input_tokens, output_tokens}`. App Server báo khối này trên
-notification `turn/completed` (ở top level, hoặc lồng trong `turn` — `usageOf`
-của gatewayd nhận cả hai) và forward nguyên vẹn trên frame `turn.completed`;
-trước đây nó gửi frame rỗng nên thẻ turn trong Flow Monitor **không hiện token
-nào cả**.
+**Usage:** App Server KHÔNG đặt usage trên `turn/completed`. codex-rs 0.150.1
+đẩy nó trên một notification riêng, dạng camelCase, trước sự kiện kết thúc turn:
+
+```
+thread/tokenUsage/updated  {"threadId":…,"turnId":…,"tokenUsage":{
+   "total":{…tích luỹ cả thread…},
+   "last":{"totalTokens":…,"inputTokens":…,"cachedInputTokens":…,
+           "cacheWriteInputTokens":…,"outputTokens":…,"reasoningOutputTokens":…}}}
+```
+
+gatewayd giữ lại khối `last` (`storeAppUsage`), đổi camelCase về tên snake_case
+mà đường exec JSONL dùng, rồi gắn vào frame `turn.completed` — đúng chỗ
+translator đọc usage (`usageOf` vẫn nhận thêm khối `usage` nằm trên chính
+notification hoặc lồng trong `turn`, cho các bản codex khác). Trước khi có phần
+này, frame gửi ra là frame rỗng nên thẻ turn trong Flow Monitor **không hiện
+token nào cả**. `takeAppUsage` xoá chỗ giữ tạm, nên một turn không báo gì sẽ
+không thừa hưởng số của turn trước.
 
 Codex nói OpenAI Responses API, mà ở đó `input_tokens` **đã bao gồm**
 `cached_input_tokens`. Nên translator phải TRỪ: `input - cached → InputTokens`,
