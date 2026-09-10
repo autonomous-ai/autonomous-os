@@ -88,7 +88,7 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 		// Clear on end/error so a subsequent channel turn on the same
 		// session within 30s isn't wrongly skipped — the previous turn
 		// is finished, agent path is no longer handling anything.
-		if payload.SessionKey != "" {
+		if payload.SessionKey != "" && !payload.Data.MergedIntoActiveTurn {
 			h.agentLifecycleMu.Lock()
 			switch payload.Data.Phase {
 			case "start":
@@ -97,8 +97,11 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 					h.activeRunIDBySession[payload.SessionKey] = payload.RunID
 				}
 			case "end", "error":
-				delete(h.agentLifecycleAt, payload.SessionKey)
-				delete(h.activeRunIDBySession, payload.SessionKey)
+				// A delayed terminal event must not clear a newer host turn.
+				if h.activeRunIDBySession[payload.SessionKey] == payload.RunID {
+					delete(h.agentLifecycleAt, payload.SessionKey)
+					delete(h.activeRunIDBySession, payload.SessionKey)
+				}
 			}
 			h.agentLifecycleMu.Unlock()
 		}

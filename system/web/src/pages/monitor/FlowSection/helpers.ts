@@ -738,6 +738,12 @@ export function groupIntoTurns(events: DisplayEvent[]): Turn[] {
   }
   for (const turn of merged) {
     turn.events.sort((a, b) => a._seq - b._seq);
+    const mergeEvent = turn.events.find((event) => event.type === "flow_event" && event.detail?.node === "turn_merged");
+    const mergeDetail = mergeEvent?.detail as FlowEventDetail | undefined;
+    const parentRunId = mergeDetail?.data?.parent_run_id ?? mergeDetail?.parent_run_id;
+    if (typeof parentRunId === "string" && parentRunId && parentRunId !== turn.runId) {
+      turn.mergedIntoRunId = parentRunId;
+    }
   }
 
   // Merge adjacent Telegram fallback + agent output fragments
@@ -745,6 +751,11 @@ export function groupIntoTurns(events: DisplayEvent[]): Turn[] {
   for (const turn of merged) {
     const prev = stitched[stitched.length - 1];
     if (!prev) {
+      stitched.push(turn);
+      continue;
+    }
+    // Explicitly linked follow-ups remain separate inputs in the timeline.
+    if (turn.mergedIntoRunId || prev.mergedIntoRunId) {
       stitched.push(turn);
       continue;
     }
@@ -799,6 +810,35 @@ export function groupIntoTurns(events: DisplayEvent[]): Turn[] {
     }
   }
 
+  // A steer acknowledgement is not completion. Follow the shared run until
+  // this input receives its own terminal event. Missing parents remain active.
+  const turnsByRunId = new Map(stitched.filter((turn) => turn.runId).map((turn) => [turn.runId, turn]));
+  for (const turn of stitched) {
+    if (!turn.mergedIntoRunId) continue;
+    // A terminal event can be the first event of an interleaved fragment,
+    // bypassing the status update in the sequential grouping pass above.
+    const ownTerminal = [...turn.events].reverse().find((event) =>
+      (event.type === "lifecycle" && (event.phase === "end" || event.phase === "error")) ||
+      (event.type === "flow_event" && (event.detail?.node === "lifecycle_end" || event.detail?.node === "lifecycle_error")));
+    if (ownTerminal) {
+      turn.status = ownTerminal.phase === "error" || ownTerminal.error || ownTerminal.detail?.node === "lifecycle_error" ? "error" : "done";
+      turn.endTime = ownTerminal.time;
+      continue;
+    }
+    if (turn.status !== "active") continue;
+    const seen = new Set([turn.runId]);
+    let parent = turnsByRunId.get(turn.mergedIntoRunId);
+    while (parent && !seen.has(parent.runId)) {
+      seen.add(parent.runId);
+      if (parent.status !== "active") {
+        turn.status = parent.status;
+        turn.endTime = parent.endTime;
+        break;
+      }
+      parent = parent.mergedIntoRunId ? turnsByRunId.get(parent.mergedIntoRunId) : undefined;
+    }
+  }
+
   // Detect session breaks
   for (let i = 1; i < stitched.length; i++) {
     const prev = stitched[i - 1];
@@ -811,6 +851,30 @@ export function groupIntoTurns(events: DisplayEvent[]): Turn[] {
   }
 
   return stitched.reverse();
+}
+
+// Child runs own delivery after steering. Keep those events beside the shared
+// execution without replaying the child's input or synthetic lifecycle.
+export function sharedTurnEvents(parent: Turn, child: Turn): DisplayEvent[] {
+  if (parent === child) return child.events;
+  const downstream = child.events.filter((event) => {
+    const node = event.detail?.node ?? event.type;
+    return node.startsWith("harness_") || node.startsWith("tts") || node.startsWith("hw_") ||
+      ["assistant", "assistant_delta", "agent_response", "agent_first_token", "chat_response", "telegram_alert_broadcast", "error", "lifecycle_error"].includes(node);
+  });
+  // Identical assistant chunks already present on the host represent the same
+  // shared final. Compare contents, not run IDs or timestamps.
+  const responseKey = (event: DisplayEvent) => JSON.stringify([
+    event.detail?.node ?? event.type, event.summary,
+    (event.detail as FlowEventDetail | undefined)?.data,
+    (event.detail as FlowEventDetail | undefined)?.text,
+    (event.detail as FlowEventDetail | undefined)?.delta,
+  ]);
+  const parentResponses = new Set(parent.events.map(responseKey));
+  const uniqueDownstream = downstream.filter((event) =>
+    !["assistant", "assistant_delta", "agent_response", "agent_first_token"].includes(event.detail?.node ?? event.type) ||
+    !parentResponses.has(responseKey(event)));
+  return [...parent.events, ...uniqueDownstream].sort((a, b) => a._seq - b._seq);
 }
 
 // Extract runtime info for each node from turn events

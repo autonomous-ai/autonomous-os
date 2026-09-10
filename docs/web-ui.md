@@ -1,5 +1,10 @@
 # Web UI — Monitor Dashboard
 
+Flow Monitor links Codex steered follow-ups to the original execution with
+`turn_merged` / `parent_run_id`. Selecting the follow-up shows the shared
+pipeline while retaining its separate input card and terminal state. The UI
+labels merged runs explicitly instead of presenting an empty silent result.
+
 ## Last updated: 2026-08-25
 
 ---

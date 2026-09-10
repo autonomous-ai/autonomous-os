@@ -102,6 +102,7 @@ func (s *CodexService) failStuckTurn() {
 	}
 	slog.Warn("ending the in-flight turn — busy TTL expired with no terminal frame",
 		"component", "codex", "runID", runID)
+	steeredRuns := s.takeSteeredRuns()
 	s.clearTurn()
 	dispatch, _ := s.wsDispatch.Load().(dispatchFn)
 	if dispatch == nil {
@@ -118,6 +119,7 @@ func (s *CodexService) failStuckTurn() {
 		},
 	})
 	dispatch(domain.WSEvent{Type: "evt", Event: "agent", Payload: payload})
+	s.emitMergedErrors(steeredRuns, "agent stopped responding (no terminal frame)", dispatch)
 }
 
 // failDisconnectedTurn gives a live client a terminal event when only the

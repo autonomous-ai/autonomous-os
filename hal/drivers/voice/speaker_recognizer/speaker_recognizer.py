@@ -161,6 +161,9 @@ _MAX_CLUSTER_SAMPLES = config.SPEAKER_MAX_CLUSTER_SAMPLES
 _MAX_CLUSTER_FILES = config.SPEAKER_MAX_CLUSTER_FILES
 _EXTEND_MIN_DURATION_S = config.SPEAKER_EXTEND_MIN_DURATION_SEC
 _EXTEND_MIN_MARGIN_COS = config.SPEAKER_EXTEND_MIN_MARGIN_COS
+_EXTEND_REQUIRE_UNANIMOUS = config.SPEAKER_EXTEND_REQUIRE_UNANIMOUS_CHUNKS
+_EXTEND_MIN_CHUNK_COS = config.SPEAKER_EXTEND_MIN_CHUNK_COS
+_EXTEND_MIN_ANCHOR_COS = config.SPEAKER_EXTEND_MIN_ANCHOR_COS
 
 # Target sample rate for stored/enrolled audio (matches STT pipeline).
 _TARGET_SR = 16000
@@ -289,6 +292,33 @@ def _l2(vec: np.ndarray) -> np.ndarray:
     if n < 1e-12:
         return arr
     return (arr / n).astype(np.float32)
+
+
+def _runner_up_mean(
+    confs: np.ndarray, names: list[str], best_name: str
+) -> float:
+    """Mean score of the strongest speaker who did NOT win, or ``-inf``.
+
+    ``confs`` is [M chunks, K speakers] of raw cosine; column k is every
+    chunk's score against speaker ``names[k]``'s closest row.
+
+    The margin gate used to derive its runner-up from the per-speaker vote
+    tally, which only ever contains speakers that WON at least one chunk. A
+    unanimous vote therefore produced a single entry and a margin of ``inf``,
+    so the gate passed everything -- and a unanimous vote is most turns. Three
+    users whose chunks sit 0.01 apart were waved straight through, which is
+    precisely the near-tie the gate exists to block.
+
+    Returning ``-inf`` when nobody else is enrolled is deliberate, not a
+    fallback: with one enrolled user there is genuinely no relative signal, so
+    the caller's ``best_conf - (-inf) == inf`` correctly reports "no runner-up
+    to be close to". An absolute floor is the only gate that helps there --
+    see _EXTEND_MIN_ANCHOR_COS.
+    """
+    others = [k for k, n in enumerate(names) if n != best_name]
+    if not others:
+        return float("-inf")
+    return float(max(confs[:, k].mean() for k in others))
 
 
 def _select_diverse(
@@ -1429,8 +1459,18 @@ class SpeakerRecognizer:
                     raise EmbeddingAPIUnavailableError("embedding has zero norm")
                 return vec / norm
 
-    def _prepare_wav_for_embedding(self, wav_bytes: bytes) -> list[str]:
+    def _prepare_wav_for_embedding(
+        self, wav_bytes: bytes
+    ) -> tuple[list[str], float]:
         """Run the on-device preprocessing pipeline and wrap the cleaned WAV.
+
+        Returns ``(payload, cleaned_duration_s)``. The duration is measured on
+        the CLEANED waveform, after VAD has removed silence: the raw turn's
+        length is not a measure of how much speech it holds, and the caller
+        joins an ENTIRE mic session (up to MAX_SESSION_DURATION_S = 30s) into
+        one WAV, so on a quiet turn the difference is most of the file. The
+        extend duration floor exists to reject clips carrying too little
+        speaker information, which is a statement about speech, not bytes.
 
         HAL now runs the full filter/VAD/normalize chain locally (Mono →
         Resample → [HighPass] → [NoiseReduce] → VAD → [STOI] → RMS) — the
@@ -1499,11 +1539,12 @@ class SpeakerRecognizer:
             with self._debug_stage("encode_wav"):
                 cleaned_wav = _float32_waveform_to_wav_bytes(out)
                 payload = [base64.b64encode(cleaned_wav).decode("ascii")]
+                cleaned_duration_s = float(out.shape[0]) / _TARGET_SR
             if self._debug.enabled:  # SPEAKER-DEBUG
                 self._debug_preproc = self._debug_preproc_snapshot(
                     out, cleaned_wav, processor
                 )
-        return payload
+        return payload, cleaned_duration_s
 
     def _debug_preproc_snapshot(  # SPEAKER-DEBUG (remove before deploy)
         self, cleaned: np.ndarray, cleaned_wav: bytes, processor: Any
@@ -1925,21 +1966,35 @@ class SpeakerRecognizer:
 
     @staticmethod
     def _delete_sample(wav_path: Path) -> None:
-        """Delete a sample WAV and its sidecar (best-effort, never raises)."""
+        """Delete a sample WAV and its sidecars (best-effort, never raises).
+
+        The provenance ``.json`` goes with them: it only ever describes THIS
+        sample, so leaving it behind would attribute an evicted sample's
+        admission record to whatever later reuses the name.
+        """
         try:
             wav_path.unlink(missing_ok=True)
             _sidecar_path(wav_path).unlink(missing_ok=True)
+            wav_path.with_suffix(".json").unlink(missing_ok=True)
         except OSError as e:
             logger.warning("failed to delete sample %s: %s", wav_path, e)
 
     def _write_extended_sample(
-        self, norm: str, wav_bytes: bytes, embedding: np.ndarray
+        self, norm: str, wav_bytes: bytes, embedding: np.ndarray,
+        provenance: Optional[dict[str, Any]] = None,
     ) -> Optional[Path]:
         """Persist one extended sample (WAV + sidecar). Returns its path or None.
 
         The sidecar is written after the WAV, and a sample only counts as
         present once both exist — a half-written pair is simply invisible to
         the bank loader rather than corrupting it.
+
+        ``provenance`` (when given) records WHY this sample was admitted and
+        under which thresholds, as a ``.json`` beside the pair. Nothing reads
+        it at runtime — it exists so a later threshold change can ask which
+        samples the previous rule let in, which is impossible for everything
+        written before it. The enroll path passes none: those samples are
+        committed on the user's own say-so, not by these gates.
         """
         try:
             dest = self._extended_dir(norm)
@@ -1951,6 +2006,18 @@ class SpeakerRecognizer:
             wav_path = dest / f"{stem}.wav"
             wav_path.write_bytes(wav_bytes)
             np.save(_sidecar_path(wav_path), _l2(embedding))
+            if provenance:
+                # Written last and best-effort: the WAV + .npy pair is what
+                # the bank loads, so a missing or unwritable .json must never
+                # make a valid sample invisible.
+                try:
+                    wav_path.with_suffix(".json").write_text(
+                        json.dumps(provenance, sort_keys=True)
+                    )
+                except OSError as e:
+                    logger.warning(
+                        "failed to write provenance for %s: %s", wav_path.name, e
+                    )
             return wav_path
         except OSError as e:
             logger.warning("failed to write extended sample for %s: %s", norm, e)
@@ -2000,12 +2067,16 @@ class SpeakerRecognizer:
     def _maybe_extend_user(
         self,
         norm: str,
-        embedding: np.ndarray,
+        payload: list[str],
         wav_bytes: bytes,
         *,
         existing_rows: Optional[np.ndarray],
         duration_s: float,
         margin: float,
+        chunk_votes: int = 1,
+        num_chunks: int = 1,
+        min_chunk_cos: float = 1.0,
+        anchor_cos: float = 1.0,
     ) -> None:
         """Consider folding one confidently-recognized turn into a user's set.
 
@@ -2020,10 +2091,25 @@ class SpeakerRecognizer:
         * ``margin`` (winner's confidence minus runner-up's) must clear
           _EXTEND_MIN_MARGIN_COS, so a near-tie between two enrolled users
           never writes audio into either one's bank.
+        * the turn must be acoustically PURE: every chunk voted for this
+          speaker (``chunk_votes == num_chunks``) and even the weakest winning
+          chunk cleared _EXTEND_MIN_CHUNK_COS. The stored sample is the mean of
+          all chunks, so one chunk of somebody else is one chunk of somebody
+          else in this user's permanent bank.
+        * the ANCHOR rows must have carried the match (``anchor_cos`` clears
+          _EXTEND_MIN_ANCHOR_COS). A match the extended tier carried is
+          evidence about a previous guess, not about the person, so letting
+          it admit a row would let the tier vouch for its own growth.
 
         Then the diversity gate: keep the sample only if its max cosine to what
         we already hold is BELOW _DIVERSITY_COS — above that it duplicates a
         sample we have.
+
+        ``payload`` is the CLEANED WAV, base64-wrapped, exactly as recognize()
+        already built it for its own /embed call. This method embeds it a
+        second time in SINGLE-SHOT mode once the cheap gates pass — see the
+        comment at that call for why the stored vector is not recognize()'s
+        per-chunk mean.
 
         ``existing_rows`` is this speaker's slice of the bank recognize() just
         matched against — anchor and extended concatenated, legacy fallback
@@ -2034,6 +2120,37 @@ class SpeakerRecognizer:
 
         Like the face version, this NEVER holds ``_bank_lock`` across disk I/O.
         """
+        # Purity gates. A long turn is identified by majority vote but the
+        # sample we are about to store is the mean of EVERY chunk, so a turn
+        # that was not wholly this speaker would fold somebody else into their
+        # bank permanently. Reject the whole turn -- do not salvage, do not
+        # slice, do not partially admit. Both gates are no-ops below ~10s of
+        # post-VAD speech, where the server returns a single chunk.
+        #
+        # Logged at INFO, not DEBUG: a contaminated turn is the interesting
+        # event here and it is rare enough not to be noisy.
+        if _EXTEND_REQUIRE_UNANIMOUS and chunk_votes < num_chunks:
+            logger.info(
+                "[speaker] extend '%s': skip — %d/%d chunks voted %s "
+                "(multi-speaker audio)",
+                norm, chunk_votes, num_chunks, norm,
+            )
+            return
+        if min_chunk_cos < _EXTEND_MIN_CHUNK_COS:
+            logger.info(
+                "[speaker] extend '%s': skip — weakest chunk %.3f < %.2f "
+                "(unsure audio)",
+                norm, min_chunk_cos, _EXTEND_MIN_CHUNK_COS,
+            )
+            return
+        if anchor_cos < _EXTEND_MIN_ANCHOR_COS:
+            logger.info(
+                "[speaker] extend '%s': skip — anchor_cos %.3f < %.2f "
+                "(match was carried by the extended tier, not enrollment)",
+                norm, anchor_cos, _EXTEND_MIN_ANCHOR_COS,
+            )
+            return
+
         if duration_s < _EXTEND_MIN_DURATION_S:
             logger.debug(
                 "[speaker] extend '%s': skip — %.1fs < %.1fs",
@@ -2047,8 +2164,33 @@ class SpeakerRecognizer:
             )
             return
 
+        # Embed the CLEANED WAV as a single shot -- the same call enroll,
+        # sidecar backfill and migration all make. Auto-extend used to store
+        # the mean of recognize()'s sliding-window chunks, which made it the
+        # only writer in the system producing a different kind of vector: the
+        # extended tier held means while the anchor tier held single-shot
+        # vectors, and _reembed_user silently converted the means on the next
+        # model change (so re-embedding a stored ext_*.wav did not reproduce
+        # its own sidecar). One row per WAV, embedded one way, everywhere.
+        #
+        # Deliberately placed AFTER the five cheap gates and BEFORE the
+        # diversity gate: a turn that was never going to be stored pays no
+        # network call, and the redundancy check measures the vector actually
+        # being stored rather than a differently-computed stand-in.
+        try:
+            embedding = _l2(self._call_embedding_api(payload))
+        except SpeakerRecognizerError as e:
+            # Never let bank maintenance break a turn. Unlike the enroll and
+            # migration batches this does NOT re-raise on an outage: there is
+            # no batch here to misattribute a server failure to, so the right
+            # answer is simply not to extend this turn.
+            logger.warning(
+                "[speaker] extend '%s': skip — embedding failed: %s", norm, e,
+            )
+            return
+
         if existing_rows is not None and len(existing_rows):
-            max_sim = float(np.max(existing_rows @ _l2(embedding)))
+            max_sim = float(np.max(existing_rows @ embedding))
             if max_sim > _DIVERSITY_COS:
                 logger.debug(
                     "[speaker] extend '%s': skip redundant (max_cos=%.3f > %.2f)",
@@ -2058,7 +2200,30 @@ class SpeakerRecognizer:
         else:
             max_sim = float("nan")
 
-        path = self._write_extended_sample(norm, wav_bytes, embedding)
+        path = self._write_extended_sample(
+            norm, wav_bytes, embedding,
+            provenance={
+                "duration_s": duration_s,
+                "margin": margin,
+                "chunk_votes": chunk_votes,
+                "num_chunks": num_chunks,
+                "min_chunk_cos": min_chunk_cos,
+                "anchor_cos": anchor_cos,
+                # How this vector was computed. Samples written before this
+                # existed hold the mean of recognize()'s chunks and carry no
+                # mode key at all, which is what tells the two apart on disk.
+                "embedding_mode": "single_shot",
+                "max_sim_to_existing": None if max_sim != max_sim else max_sim,
+                "thresholds": {
+                    "match_cos": self._match_threshold,
+                    "diversity_cos": _DIVERSITY_COS,
+                    "min_chunk_cos": _EXTEND_MIN_CHUNK_COS,
+                    "min_anchor_cos": _EXTEND_MIN_ANCHOR_COS,
+                    "min_duration_s": _EXTEND_MIN_DURATION_S,
+                    "min_margin_cos": _EXTEND_MIN_MARGIN_COS,
+                },
+            },
+        )
         if path is None:
             return
         dropped = self._prune_extended(norm)
@@ -2310,7 +2475,9 @@ class SpeakerRecognizer:
                     continue
                 wb = _ensure_wav_16k_mono(raw)
                 try:
-                    emb = self._call_embedding_api(self._prepare_wav_for_embedding(wb))
+                    emb = self._call_embedding_api(
+                        self._prepare_wav_for_embedding(wb)[0]
+                    )
                 except EmbeddingAPIUnavailableError:
                     raise  # outage → bubble up so migration halts, not a bad sample
                 except SpeakerRecognizerError as e:
@@ -2490,7 +2657,7 @@ class SpeakerRecognizer:
         per_sample_debug: list[tuple[int, dict[str, Any], bytes, dict[str, bytes]]] = []
         for idx, wb in enumerate(new_wavs):
             try:
-                payload = self._prepare_wav_for_embedding(wb)
+                payload, _ = self._prepare_wav_for_embedding(wb)
                 emb = self._call_embedding_api(payload)
                 new_embeddings.append((wb, emb))
             except EmbeddingAPIUnavailableError:
@@ -2663,7 +2830,7 @@ class SpeakerRecognizer:
                         continue
                     try:
                         wb = _ensure_wav_16k_mono(raw)
-                        payload = self._prepare_wav_for_embedding(wb)
+                        payload, _ = self._prepare_wav_for_embedding(wb)
                         emb = self._call_embedding_api(payload)
                     except EmbeddingAPIUnavailableError:
                         raise
@@ -2696,7 +2863,7 @@ class SpeakerRecognizer:
                 continue
             try:
                 emb = self._call_embedding_api(
-                    self._prepare_wav_for_embedding(p.read_bytes())
+                    self._prepare_wav_for_embedding(p.read_bytes())[0]
                 )
                 np.save(_sidecar_path(p), _l2(emb))
                 backfilled += 1
@@ -3131,7 +3298,7 @@ class SpeakerRecognizer:
             }
 
         try:
-            payload = self._prepare_wav_for_embedding(wav_bytes)
+            payload, cleaned_duration_s = self._prepare_wav_for_embedding(wav_bytes)
             # Per-chunk query embeddings — same per-chunk granularity that
             # perception-service's /recognize uses internally, so per-chunk voting
             # below produces apples-to-apples confidence.
@@ -3365,20 +3532,42 @@ class SpeakerRecognizer:
         # turns are rejected as too short, too close a tie, or redundant.
         if is_match:
             with self._debug_stage("auto_extend"):
-                margin = (
-                    best_conf - scores[1][1] if len(scores) > 1 else float("inf")
-                )
+                # Runner-up is the best NON-winning speaker across ALL of
+                # `confs`, not just speakers that happened to win a chunk.
+                # Deriving it from `scores` (vote winners only) meant a
+                # unanimous vote produced `inf` and this gate did nothing.
+                margin = best_conf - _runner_up_mean(confs, names, best_name)
                 try:
                     # This speaker's slice of the bank we already matched
                     # against — no reason to read their sidecars back off disk.
                     own_rows = bank_rows[label_arr == best_name]
+                    # Per-chunk purity evidence. The winner's column in `confs`
+                    # is every chunk's score against this speaker's best row,
+                    # so its min is the weakest chunk we are about to average
+                    # into a permanent sample.
+                    win_col = names.index(best_name)
+                    # Did ENROLLMENT audio carry this match, or did the
+                    # extended tier vouch for it? bank_tiers is already loaded
+                    # and already filtered in lockstep with bank_rows; this is
+                    # the first thing that reads it.
+                    tier_arr = np.asarray(bank_tiers)
+                    anchor_mask = (label_arr == best_name) & (tier_arr == "anchor")
+                    anchor_cos = (
+                        float((query_chunks @ bank_rows[anchor_mask].T).max())
+                        if anchor_mask.any()
+                        else float("-inf")
+                    )
                     self._maybe_extend_user(
                         best_name,
-                        _l2(query_chunks.mean(axis=0)),
+                        payload,
                         wav_bytes,
                         existing_rows=own_rows,
-                        duration_s=_wav_duration_s(wav_bytes),
+                        duration_s=cleaned_duration_s,
                         margin=float(margin),
+                        chunk_votes=int(vote_count[best_name]),
+                        num_chunks=int(query_chunks.shape[0]),
+                        min_chunk_cos=float(confs[:, win_col].min()),
+                        anchor_cos=anchor_cos,
                     )
                 except Exception as e:
                     # Never let bank maintenance break a turn — the identity
