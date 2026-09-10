@@ -43,22 +43,18 @@ var fillerRealtime = map[string][]string{
 
 var fillerContinuation = map[string][]string{
 	LangEN: {
-		"Still on it", "Still thinking", "Let me check", "Hmm, processing",
-		"Hang on", "Bear with me", "Still here", "One moment",
-		"Working on it", "Just a sec", "Hmm, working", "Still digging",
+		"Hmm, let's see.", "Yeah, one sec.", "Let me try.",
+		"Hang on a bit.", "Alright, let's look.",
 	},
 	LangVI: {
-		"Vẫn đang nghĩ", "Để mình xem", "Đang xử lý nhé", "Đợi chút nhé",
-		"Hmm, để xem", "Vẫn đây mà", "Mình đang làm tiếp", "Còn đang nghĩ",
-		"Đang làm đây", "Chờ chút nha", "Để xem tí nữa", "Còn xử lý nhé",
+		"Ừm, để coi.", "Ờ, chờ tí.", "Hừm, để thử xem.",
+		"À, để mình ngó.", "Ừ, để xem nào.",
 	},
 	LangZhCN: {
-		"还在想", "让我看看", "我在处理", "稍等一下", "嗯，再想想",
-		"我还在", "再等等", "还在弄", "我在搜", "再稍候", "继续找", "搜索中",
+		"嗯，看看。", "等一下。", "让我试试。", "我看看。",
 	},
 	LangZhTW: {
-		"還在想", "讓我看看", "我在處理", "稍等一下", "嗯，再想想",
-		"我還在", "再等等", "還在弄", "我在搜", "再稍候", "繼續找", "搜尋中",
+		"嗯，看看。", "等一下。", "讓我試試。", "我看看。",
 	},
 }
 
