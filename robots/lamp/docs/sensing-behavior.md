@@ -809,4 +809,4 @@ When a user or the agent explicitly sets an LED color/scene, breathing must not 
 
 ### Not to be confused with dead-air fillers
 
-The mumble loop speaks when the device is **idle**. A different mechanism — dead-air fillers (`system/lib/i18n/fillers.go`, driven by `server/sensing/delivery/http/deadair_filler.go`) — may speak one brief conversational acknowledgement such as "Mm" when a voice turn begins. It never re-arms after tool boundaries: repeated grunts sound like self-talk. Only physical look states retain short factual outcomes such as "Found you". Different trigger, different phrase pools.
+The mumble loop speaks when the device is **idle**. A different mechanism — dead-air fillers (`system/lib/i18n/fillers.go`, driven by `server/sensing/delivery/http/deadair_filler.go`) — speaks brief conversational acknowledgements such as "Mm" **mid-turn** while the agent is busy. Ordinary tool waits use the same neutral pool rather than narrating internal work; only physical look states retain short factual outcomes such as "Found you". Different trigger, different phrase pools.

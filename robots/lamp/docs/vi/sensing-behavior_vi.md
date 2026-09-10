@@ -765,4 +765,4 @@ Khi user hoặc agent chủ động set màu/scene cho LED, breathing không đ�
 
 ### Đừng nhầm với dead-air filler
 
-Mumble loop nói khi thiết bị **idle**. Một cơ chế khác — dead-air filler (`system/lib/i18n/fillers.go`, điều khiển bởi `server/sensing/delivery/http/deadair_filler.go`) — có thể nói đúng một tiếng đệm ngắn, tự nhiên như "Ừm" khi bắt đầu voice turn. Nó không re-arm sau từng tool: tiếng đệm lặp lại nghe như tự lẩm nhẩm. Chỉ trạng thái look vật lý giữ thông báo kết quả ngắn như "Thấy rồi". Khác trigger, khác pool câu.
+Mumble loop nói khi thiết bị **idle**. Một cơ chế khác — dead-air filler (`system/lib/i18n/fillers.go`, điều khiển bởi `server/sensing/delivery/http/deadair_filler.go`) — nói các tiếng đệm rất ngắn, tự nhiên như "Ừm" **giữa turn** khi agent đang bận. Các tool thông thường dùng chung pool trung tính, không tường thuật công việc nội bộ; chỉ trạng thái look vật lý giữ thông báo kết quả ngắn như "Thấy rồi". Khác trigger, khác pool câu.

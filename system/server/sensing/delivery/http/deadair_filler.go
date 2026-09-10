@@ -60,9 +60,13 @@ const (
 	FillerCooldown = 2500 * time.Millisecond
 
 	// MaxFillersPerTurn caps actual spoken fillers in a single turn.
-	// The opening cue counts as that one filler. Repeating a conversational
-	// grunt after every tool boundary sounds like self-talk, not active listening.
-	MaxFillersPerTurn = 1
+	// Hardware reactions don't count against this — only TTS plays.
+	// Bumped 2026-05-12 from 3 → 6 to cover multi-tool turns (4+ tool
+	// boundaries observed on web_search + web_fetch chains) where every
+	// gap should get a filler for best perceived progress UX. With pool
+	// sizes ≥ 12 (post-2026-05-12), 5 Continuations + 1 synthetic Opening
+	// stays varied enough to avoid feeling robotic.
+	MaxFillersPerTurn = 6
 )
 
 // fillerCancelToolMarkers are URL fragments for tool calls that themselves
