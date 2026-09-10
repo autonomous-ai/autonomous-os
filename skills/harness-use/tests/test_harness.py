@@ -50,9 +50,12 @@ class HarnessSkillTests(unittest.TestCase):
             self.assertEqual(len(self.mutations), 1)
 
     def test_receipt_resolves_pending_without_a_second_send(self):
+        self.uncertain = True
         with patch.object(harness, 'request', self.request), patch.object(harness, 'api', return_value={'machine_id': 'machine'}):
-            harness.run('send', {'agentId': 'a', 'text': 'do work'}, self.path)
+            with self.assertRaises(OSError):
+                harness.run('send', {'agentId': 'a', 'text': 'do work'}, self.path)
             self.assertIn('pending', json.loads(self.path.read_text())['voice'])
+            self.uncertain = False
             harness.run('receipt', {}, self.path)
             self.assertNotIn('pending', json.loads(self.path.read_text())['voice'])
             harness.run('send', {'text': 'follow up'}, self.path)
@@ -77,6 +80,29 @@ class HarnessSkillTests(unittest.TestCase):
             self.mutations[0]['response'],
             {'run_id': 'device-chat-42', 'channel': 'web'},
         )
+
+    def test_confirmed_response_route_cannot_send_the_same_turn_twice(self):
+        response = {'run_id': 'device-chat-42', 'channel': 'web'}
+        with patch.object(harness, 'request', self.request):
+            harness.run('send', {'agentId': 'a', 'text': 'do work', 'response': response}, self.path)
+            with self.assertRaisesRegex(ValueError, 'already has a confirmed delivery'):
+                harness.run('send', {'text': 'do work again', 'response': response}, self.path)
+            harness.run('send', {
+                'text': 'new user turn',
+                'response': {'run_id': 'device-chat-43', 'channel': 'web'},
+            }, self.path)
+        self.assertEqual(len(self.mutations), 2)
+
+    def test_receipt_marks_an_uncertain_response_route_as_complete(self):
+        self.uncertain = True
+        response = {'run_id': 'device-chat-42', 'channel': 'web'}
+        with patch.object(harness, 'request', self.request), patch.object(harness, 'api', return_value={'machine_id': 'machine'}):
+            with self.assertRaises(OSError):
+                harness.run('send', {'agentId': 'a', 'text': 'do work', 'response': response}, self.path)
+            self.uncertain = False
+            harness.run('receipt', {}, self.path)
+            with self.assertRaisesRegex(ValueError, 'already has a confirmed delivery'):
+                harness.run('send', {'text': 'do work again', 'response': response}, self.path)
 
     def test_answer_passes_valid_direct_response_routing(self):
         with patch.object(harness, 'request', self.request):
