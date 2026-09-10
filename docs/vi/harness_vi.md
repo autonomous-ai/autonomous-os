@@ -99,3 +99,5 @@ Lượt Harness đã hoàn tất giữ trạng thái chống lặp để dọn s
 Kết quả cuối Harness được ghi vào flow JSONL bằng `harness_response`, giữ run ID thiết bị gốc và `text` đầy đủ. Web Chat dùng sự kiện này khôi phục kết quả đang chờ sau khi SSE ngắt hoặc tải lại trang. Luồng trực tiếp vẫn phát `chat_response` với state `final`.
 
 Callback summary vẫn tra recap khi không có preview. Kết quả rỗng giữ route đang chờ. Sau khi tra recap, chỉ xóa route của đúng run ban đầu; callback từ agent không liên quan không được chiếm chat khác.
+
+Route được khóa bằng run ID cục bộ của thiết bị, không phải agent ID. Một Harness agent có thể có nhiều task người dùng đang chờ; khi sự kiện cũ không có local run ID, OS đưa nó vào route đang chờ lâu nhất của agent đó và giữ nguyên các route mới hơn. Nếu task mới hoặc task đính chính bị chặn bởi delivery trước, runtime được kiểm receipt đó một lần; khi receipt có trạng thái delivery đã biết, runtime phải gửi task hiện tại trước khi trả `NO_REPLY`.

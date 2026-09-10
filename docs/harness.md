@@ -99,3 +99,5 @@ Completed Harness runs retain a delivery tombstone until cleanup after 15 minute
 Harness final delivery records `harness_response` in flow JSONL with the original device run ID and complete `text`. Web Chat uses this event to recover pending results after SSE disconnects or page reloads. Live delivery still emits `chat_response` with state `final`.
 
 Summary callbacks trigger recap lookup even without preview text. Empty results retain the pending route. Recap completion removes only the same run route it started with; a callback from an unrelated agent never consumes another pending chat.
+
+Routes are keyed by the local device run ID, not by agent ID. One Harness agent may have several outstanding user tasks; when an older event lacks a local run ID, OS delivers it to that agent's oldest outstanding route and leaves newer routes intact. If a corrected or new user task is blocked by an earlier delivery, the runtime may inspect that receipt once; once it has a known terminal delivery state, it must send the current task before returning `NO_REPLY`.

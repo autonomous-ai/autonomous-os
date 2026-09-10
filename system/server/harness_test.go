@@ -137,14 +137,14 @@ func TestHarnessEventTextUsesDirectLifecycleAndSummary(t *testing.T) {
 
 func TestForgetHarnessReplyOnlyRemovesMatchingRun(t *testing.T) {
 	s := &Server{harnessReplies: map[string]harnessReply{
-		"agent-1": {runID: "current", created: time.Now()},
+		"current": {agentID: "agent-1", runID: "current", created: time.Now()},
 	}}
 	s.forgetHarnessReply("agent-1", "older")
-	if _, ok := s.harnessReplies["agent-1"]; !ok {
+	if _, ok := s.harnessReplies["current"]; !ok {
 		t.Fatal("an older failed request removed the current reply route")
 	}
 	s.forgetHarnessReply("agent-1", "current")
-	if _, ok := s.harnessReplies["agent-1"]; ok {
+	if _, ok := s.harnessReplies["current"]; ok {
 		t.Fatal("matching failed request left its reply route behind")
 	}
 }
@@ -167,7 +167,7 @@ func TestHarnessSummaryPersistsCompleteChatResult(t *testing.T) {
 	s := &Server{agentHandler: &agenthttp.AgentHandler{}}
 	s.registerHarnessReply("mike", runID, true)
 	s.forwardHarnessEvent(harness.Frame{"agentId": "mike", "kind": "turn.done", "payload": map[string]any{}})
-	if _, pending := s.harnessReplies["mike"]; !pending {
+	if _, pending := s.harnessReplies[runID]; !pending {
 		t.Fatal("turn.done consumed final route")
 	}
 	s.forwardHarnessEvent(harness.Frame{"agentId": "mike", "kind": "turn.summary", "payload": map[string]any{"text": "preview", "fullText": fullText}})
@@ -183,7 +183,7 @@ func TestHarnessSummaryPersistsCompleteChatResult(t *testing.T) {
 	if count != 1 {
 		t.Fatalf("want one recoverable final, got %d", count)
 	}
-	if _, pending := s.harnessReplies["mike"]; pending {
+	if _, pending := s.harnessReplies[runID]; pending {
 		t.Fatal("summary did not finish route")
 	}
 }
@@ -192,7 +192,7 @@ func TestHarnessEventFromAnotherAgentCannotFinishPendingChat(t *testing.T) {
 	s := &Server{agentHandler: &agenthttp.AgentHandler{}}
 	s.registerHarnessReply("mike", "device-chat-mike", true)
 	s.forwardHarnessEvent(harness.Frame{"agentId": "other-agent", "kind": "turn.summary", "payload": map[string]any{"text": "unrelated answer"}})
-	if _, pending := s.harnessReplies["mike"]; !pending {
+	if _, pending := s.harnessReplies["device-chat-mike"]; !pending {
 		t.Fatal("unrelated agent consumed Mike's pending chat")
 	}
 }
@@ -201,11 +201,28 @@ func TestEmptyHarnessSummaryRetainsPendingChat(t *testing.T) {
 	s := &Server{agentHandler: &agenthttp.AgentHandler{}}
 	s.registerHarnessReply("mike", "device-chat-empty-summary", true)
 	s.forwardHarnessEvent(harness.Frame{"agentId": "mike", "kind": "turn.summary", "payload": map[string]any{}})
-	if _, pending := s.harnessReplies["mike"]; !pending {
+	if _, pending := s.harnessReplies["device-chat-empty-summary"]; !pending {
 		t.Fatal("empty summary consumed pending chat")
 	}
 	s.forwardHarnessEvent(harness.Frame{"agentId": "mike", "kind": "turn.summary", "payload": map[string]any{"text": "complete answer"}})
-	if _, pending := s.harnessReplies["mike"]; pending {
+	if _, pending := s.harnessReplies["device-chat-empty-summary"]; pending {
 		t.Fatal("nonempty summary did not complete pending chat")
+	}
+}
+
+func TestHarnessSameAgentKeepsEachChatRouteUntilItsOwnSummary(t *testing.T) {
+	s := &Server{agentHandler: &agenthttp.AgentHandler{}}
+	s.registerHarnessReply("mike", "device-chat-first", true)
+	s.registerHarnessReply("mike", "device-chat-second", true)
+	s.forwardHarnessEvent(harness.Frame{"agentId": "mike", "kind": "turn.summary", "payload": map[string]any{"text": "first result"}})
+	if _, pending := s.harnessReplies["device-chat-first"]; pending {
+		t.Fatal("first result did not consume the first route")
+	}
+	if _, pending := s.harnessReplies["device-chat-second"]; !pending {
+		t.Fatal("first result consumed the newer route")
+	}
+	s.forwardHarnessEvent(harness.Frame{"agentId": "mike", "kind": "turn.summary", "payload": map[string]any{"text": "second result"}})
+	if _, pending := s.harnessReplies["device-chat-second"]; pending {
+		t.Fatal("second result did not consume the second route")
 	}
 }

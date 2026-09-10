@@ -14,6 +14,7 @@ import (
 )
 
 type harnessReply struct {
+	agentID string
 	runID   string
 	webChat bool
 	created time.Time
@@ -144,13 +145,7 @@ func (s *Server) registerHarnessReply(agentID, runID string, webChat bool) {
 	if s.harnessReplies == nil {
 		s.harnessReplies = make(map[string]harnessReply)
 	}
-	// The remote Harness run id may be returned in the routing object by older
-	// skills. Preserve the local device turn mapping when that happens; replacing
-	// it would deliver the terminal event to a nonexistent device-chat run.
-	if current, exists := s.harnessReplies[agentID]; exists && !strings.HasPrefix(runID, "device-chat-") {
-		runID, webChat = current.runID, current.webChat
-	}
-	s.harnessReplies[agentID] = harnessReply{runID: runID, webChat: webChat, created: time.Now()}
+	s.harnessReplies[runID] = harnessReply{agentID: agentID, runID: runID, webChat: webChat, created: time.Now()}
 	s.harnessRepliesMu.Unlock()
 	s.harnessFollowup.Store(time.Now().Add(2 * time.Minute).UnixMilli())
 	s.agentHandler.MarkHarnessResponseRun(runID, webChat)
@@ -158,8 +153,8 @@ func (s *Server) registerHarnessReply(agentID, runID string, webChat bool) {
 
 func (s *Server) forgetHarnessReply(agentID, runID string) {
 	s.harnessRepliesMu.Lock()
-	if current, ok := s.harnessReplies[agentID]; ok && current.runID == runID {
-		delete(s.harnessReplies, agentID)
+	if current, ok := s.harnessReplies[runID]; ok && current.agentID == agentID {
+		delete(s.harnessReplies, runID)
 	}
 	s.harnessRepliesMu.Unlock()
 }
@@ -217,11 +212,8 @@ func (s *Server) forwardHarnessEvent(frame harness.Frame) {
 		}
 		if runID != "" {
 			s.harnessRepliesMu.Lock()
-			for id, reply := range s.harnessReplies {
-				if reply.runID == runID {
-					agentID = id
-					break
-				}
+			if reply, ok := s.harnessReplies[runID]; ok {
+				agentID = reply.agentID
 			}
 			s.harnessRepliesMu.Unlock()
 		}
@@ -248,7 +240,7 @@ func (s *Server) forwardHarnessEvent(frame harness.Frame) {
 			return
 		}
 		s.harnessRepliesMu.Lock()
-		reply, ok := s.harnessReplies[agentID]
+		reply, ok := s.harnessReplyForEventLocked(agentID, harnessFrameRunID(frame))
 		s.harnessRepliesMu.Unlock()
 		if ok && time.Since(reply.created) <= 15*time.Minute {
 			s.agentHandler.DeliverHarnessTool(reply.runID, toolName, toolArgs)
@@ -260,22 +252,7 @@ func (s *Server) forwardHarnessEvent(frame harness.Frame) {
 		return
 	}
 	s.harnessRepliesMu.Lock()
-	reply, ok := s.harnessReplies[agentID]
-	// Some CLI versions include a stale or target agentId in the event while
-	// preserving the originating run_id. Prefer the run mapping when the direct
-	// agent lookup misses so Web/MQTT turns receive the same terminal event as
-	// voice turns.
-	if !ok {
-		if runID := harnessFrameRunID(frame); runID != "" {
-			for id, candidate := range s.harnessReplies {
-				if candidate.runID == runID {
-					agentID, reply, ok = id, candidate, true
-					break
-				}
-			}
-		}
-
-	}
+	reply, ok := s.harnessReplyForEventLocked(agentID, harnessFrameRunID(frame))
 	terminal := kind == "turn.summary" || kind == "turn.error" || kind == "agent.error" || kind == "question.open"
 	s.harnessRepliesMu.Unlock()
 	if !ok || time.Since(reply.created) > 15*time.Minute {
@@ -302,6 +279,30 @@ func (s *Server) forwardHarnessEvent(frame harness.Frame) {
 	if !s.agentHandler.DeliverHarnessResponse(reply.runID, text) {
 		slog.Warn("Harness result had no pending device turn", "component", "harness", "run_id", reply.runID)
 	}
+}
+
+// harnessReplyForEventLocked resolves an event to its local response route.
+// Callers hold harnessRepliesMu. Current Harness events identify their agent,
+// but older events do not always carry the local device run ID. In that case
+// events for one agent are ordered, so the oldest outstanding route is the
+// only safe compatibility fallback. It prevents a newer request from replacing
+// an earlier request merely because both target the same Harness agent.
+func (s *Server) harnessReplyForEventLocked(agentID, eventRunID string) (harnessReply, bool) {
+	if eventRunID != "" {
+		if reply, ok := s.harnessReplies[eventRunID]; ok && (agentID == "" || reply.agentID == agentID) {
+			return reply, true
+		}
+	}
+	var selected harnessReply
+	for _, candidate := range s.harnessReplies {
+		if candidate.agentID != agentID {
+			continue
+		}
+		if selected.created.IsZero() || candidate.created.Before(selected.created) {
+			selected = candidate
+		}
+	}
+	return selected, !selected.created.IsZero()
 }
 
 func harnessFrameRunID(frame harness.Frame) string {
