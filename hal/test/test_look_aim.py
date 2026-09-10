@@ -1009,3 +1009,65 @@ def test_a_sweep_that_cannot_run_does_not_sink_the_aim():
     with mock.patch.object(search, "search_for_subject",
                            side_effect=RuntimeError("no camera")):
         assert aim._sweep_for_subject() is False
+
+
+# --- centre_on_box: the correction the search sweep borrows ------------------
+
+
+def test_centre_on_box_walks_the_subject_to_the_middle():
+    """A box parked right of centre must produce a POSITIVE yaw nudge, and the
+    loop must stop as soon as the box is inside the deadband — the convention
+    the tracker verified on device: dx>0 -> base_yaw increases."""
+    svc = _FakeSvc()
+    # Right of centre on the first probe, dead centre on the second.
+    boxes = [(500, 200, 40, 40), (310, 200, 40, 40)]
+
+    res = aim.centre_on_box(
+        svc,
+        _FakeCap(_frame()),
+        probe=lambda _f: boxes.pop(0) if boxes else (310, 200, 40, 40),
+    )
+
+    assert res.centred is True, res.reason
+    moved = [c.args[0] for c in svc.nudge.call_args_list]
+    assert moved and moved[0] > 0, (
+        f"a subject right of centre must turn the base right, got {moved}")
+    assert res.box == (310, 200, 40, 40), "the result must carry the CENTRED box"
+    assert res.frame is not None, "the result must carry the frame it centred on"
+
+
+def test_centre_on_box_gives_up_rather_than_hunting_forever():
+    """A detection that never moves must not spin forever — it exits with the
+    reason, not an exception."""
+    res = aim.centre_on_box(_FakeSvc(), _FakeCap(_frame()),
+                            probe=lambda _f: (600, 200, 20, 20))
+
+    assert res.centred is False
+    assert res.iterations == aim.MAX_ITERATIONS
+    assert res.reason == "max iterations"
+
+
+def test_centre_on_box_reports_the_last_good_box_when_it_loses_the_subject():
+    """Losing the detection mid-correction still leaves something true to show:
+    the frame and box from before the subject went missing."""
+    seen = [(500, 200, 40, 40), None]
+
+    res = aim.centre_on_box(_FakeSvc(), _FakeCap(_frame()),
+                            probe=lambda _f: seen.pop(0) if seen else None)
+
+    assert res.centred is False
+    assert res.reason == "lost the subject"
+    assert res.box == (500, 200, 40, 40)
+
+
+def test_centre_on_box_does_not_score_the_remembered_bearing():
+    """A sweep hit is as often an OBJECT as a person. Teaching the bearing
+    estimator that a keyboard is where the user sits is the quiet corruption
+    this loop exists to stay out of — aim_for_look scores, this must not."""
+    with mock.patch.object(aim, "_score_prediction") as scored, \
+         mock.patch.object(aim, "_record_bearing_if_centred") as recorded:
+        aim.centre_on_box(_FakeSvc(), _FakeCap(_frame()),
+                          probe=lambda _f: (310, 200, 40, 40))
+
+    scored.assert_not_called()
+    recorded.assert_not_called()

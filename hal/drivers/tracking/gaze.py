@@ -1796,8 +1796,8 @@ def _maybe_sweep(now: float, *, confirmed_miss: bool = False) -> None:
     except Exception as e:
         logger.warning("[gaze] look-around unavailable: %s", e)
         return
-    logger.info("[gaze] looked around: %s after %d stop(s)",
-                res.reason, res.stops_visited)
+    logger.info("[gaze] looked around: %s after %d look(s)",
+                res.reason, res.looks_visited)
     if res.found:
         # The sweep owned the body and moved the head; every offset measured
         # before it describes a pose the camera has since left.

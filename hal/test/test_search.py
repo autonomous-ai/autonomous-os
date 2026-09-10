@@ -204,14 +204,14 @@ def test_a_stop_past_the_limit_is_clamped_not_dropped():
 def test_stops_on_first_sighting_rather_than_completing_the_sweep():
     res, svc = _run(detect_at_stop=2)
     assert res.found is True
-    assert res.stops_visited == 2, "should stop as soon as it sees someone"
+    assert res.looks_visited == 2, "should stop as soon as it sees someone"
 
 
 def test_reports_failure_after_exhausting_the_sweep():
     res, svc = _run(detect_at_stop=None)
     assert res.found is False
     assert res.reason == "no person found"
-    assert res.stops_visited > 1
+    assert res.looks_visited > 1
 
 
 def test_camera_disabled_never_sweeps():
@@ -228,7 +228,7 @@ def test_abort_stops_the_sweep_mid_flight():
     # so a stale abort cannot prevent the next search from ever running.
     res, svc = _run(detect_at_stop=None, abort_at_stop=2)
     assert res.reason == "aborted"
-    assert res.stops_visited < search.MAX_STOPS
+    assert res.looks_visited < search.MAX_STOPS
 
 
 def test_a_stale_abort_does_not_block_the_next_search():
@@ -264,7 +264,7 @@ def test_a_low_confidence_bearing_is_not_used_to_seed_the_sweep():
     res, svc = _run(bearing=120.0, confidence=aim.MIN_BEARING_CONFIDENCE - 0.05)
     seeded_from_bearing = [h for h in svc.holds if h.get("base_yaw.pos") == 120.0]
     assert seeded_from_bearing == [], "a bearing below the floor must not aim the head"
-    assert res.stops_visited >= 1
+    assert res.looks_visited >= 1
 
 
 def test_no_bearing_rests_on_the_idle_pose_before_sweeping():
@@ -329,7 +329,7 @@ def test_a_failed_posture_restore_still_sweeps():
     ):
         res = search.search_for_subject(detector=det)
 
-    assert res.stops_visited >= 1, "a failed restore must not abort the search"
+    assert res.looks_visited >= 1, "a failed restore must not abort the search"
 
 
 # --- the head looks around at each stop ----------------------------------------
@@ -444,7 +444,7 @@ def test_a_subject_found_mid_look_stops_the_sweep_there():
     and adding a second axis must not make it keep looking past them."""
     res, svc = _run(detect_at_stop=2, bearing=None)
     assert res.found
-    assert res.stops_visited == 2, "it kept looking after finding someone"
+    assert res.looks_visited == 2, "it kept looking after finding someone"
 
 
 def test_looking_around_multiplies_the_stops_not_the_yaw_positions():
@@ -452,8 +452,8 @@ def test_looking_around_multiplies_the_stops_not_the_yaw_positions():
     from turning the body more often."""
     res, svc = _run(bearing=None)
     yaw_stops = len(search._stop_list(_FakeSvc.IDLE_BASELINE["base_yaw.pos"]))
-    assert res.stops_visited == yaw_stops * search.HALF_LOOKS, (
-        f"{res.stops_visited} stops from {yaw_stops} yaw positions"
+    assert res.looks_visited == yaw_stops * search.HALF_LOOKS, (
+        f"{res.looks_visited} stops from {yaw_stops} yaw positions"
     )
     assert yaw_stops == 3, "three yaw positions is the whole point of the wider step"
 
@@ -628,7 +628,7 @@ def test_a_talkative_caller_cannot_sink_the_sweep():
 
     res, _svc = _run(bearing=None, on_progress=boom)
     expected = 3 * search.HALF_LOOKS
-    assert res.stops_visited == expected, "the sweep stopped when the callback threw"
+    assert res.looks_visited == expected, "the sweep stopped when the callback threw"
 
 
 def test_every_sweep_narrates_its_own_midpoint():
@@ -791,8 +791,8 @@ def test_a_full_scan_does_not_stop_at_the_first_hit():
     quick, _svc, _det = _run_target(target="person", person_everywhere=True)
     full, _svc2, _det2 = _run_target(target="person", person_everywhere=True,
                                      exhaustive=True)
-    assert quick.stops_visited == 1, "the quick sweep should stop at the first hit"
-    assert full.stops_visited == 3 * len(search.LOOK_CIRCLE), (
+    assert quick.looks_visited == 1, "the quick sweep should stop at the first hit"
+    assert full.looks_visited == 3 * len(search.LOOK_CIRCLE), (
         "the full sweep stopped early")
     assert full.found is True
     assert "x" in full.reason, f"expected a sighting count, got {full.reason!r}"
@@ -805,3 +805,70 @@ def test_a_full_scan_adds_the_upper_half_of_the_ring():
     assert all(dp >= 0 for _r, dp in half), "the default sweep must not look up"
     assert any(dp < 0 for _r, dp in search.LOOK_CIRCLE), "nothing looks up at all"
     assert len(search.LOOK_CIRCLE) > search.HALF_LOOKS
+
+
+def test_a_hit_is_centred_before_the_sweep_returns():
+    """Reported (#342 defect N): the sweep aimed at the LOOK DIRECTION of the
+    stop, not at the object — up to ~50 deg off at the frame edge — and called
+    that a find."""
+    calls = []
+
+    def _fake_centre(svc, cap, probe, deadline_s=None):
+        from hal.drivers.tracking.aim import CentreResult
+        calls.append(True)
+        return CentreResult(True, "centred", 1, 12.0, 0.01,
+                            (300, 200, 40, 40), object())
+
+    with mock.patch("hal.drivers.tracking.aim.centre_on_box", _fake_centre):
+        res, _svc, _det = _run_target(target="keyboard", hits=(1,))
+
+    assert calls, "a hit must run the centring correction"
+    assert res.found is True
+    assert res.centred is True
+    assert res.box == (300, 200, 40, 40), "the result must carry the centred box"
+
+
+def test_a_failed_centring_still_reports_the_find():
+    """Losing the box during the correction means the aim is imperfect, not
+    that the object was never there. Silence would be a worse answer."""
+    def _fake_centre(svc, cap, probe, deadline_s=None):
+        from hal.drivers.tracking.aim import CentreResult
+        return CentreResult(False, "lost the subject", 2, 8.0, 0.4, None, None)
+
+    with mock.patch("hal.drivers.tracking.aim.centre_on_box", _fake_centre):
+        res, _svc, _det = _run_target(target="keyboard", hits=(1,))
+
+    assert res.found is True, "a wobbly correction must not erase the find"
+    assert res.centred is False
+
+
+def test_the_probe_handed_to_the_centring_loop_looks_for_the_TARGET():
+    """The correction must chase the thing the sweep was asked for. Handing it
+    the closest-subject policy would centre on whoever is standing nearby and
+    report it as the keyboard."""
+    probes = []
+
+    def _fake_centre(svc, cap, probe, deadline_s=None):
+        from hal.drivers.tracking.aim import CentreResult
+        import numpy as np
+        probes.append(probe(np.zeros((480, 640, 3), dtype=np.uint8)))
+        return CentreResult(True, "centred", 1, 1.0, 0.0, (1, 2, 3, 4), None)
+
+    with mock.patch("hal.drivers.tracking.aim.centre_on_box", _fake_centre):
+        _res, _svc, det = _run_target(target="keyboard", hits=(1, 2))
+
+    assert probes, "the centring loop was given no probe"
+    asked = {c.args[1] for c in det.detect.call_args_list}
+    assert asked == {"keyboard"}, f"the probe went looking for {asked}"
+
+
+def test_an_exhaustive_sweep_counts_bearings_and_looks_apart():
+    """#342 defect C: `visited` counts LOOKS and was rendered "after N stop(s)"
+    against MAX_STOPS = 3, so a full sweep truthfully reported 27 of 3."""
+    res, _svc, _det = _run_target(target="person", person_everywhere=True,
+                                  exhaustive=True)
+
+    assert res.looks_visited == 3 * len(search.LOOK_CIRCLE)
+    assert res.bearings_visited == 3
+    assert res.looks_visited != res.bearings_visited, (
+        "looks and bearings are different quantities")

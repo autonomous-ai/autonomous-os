@@ -28,7 +28,7 @@ import logging
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Any, Optional, Tuple
+from typing import Any, Callable, Optional, Tuple
 
 import hal.config as config
 from hal.safety.policy import min_move_duration
@@ -339,8 +339,8 @@ def _sweep_for_subject() -> bool:
         from hal.drivers.tracking.search import search_for_subject
 
         res = search_for_subject()
-        logger.info("[look-aim] looked around: %s after %d stop(s)",
-                    res.reason, res.stops_visited)
+        logger.info("[look-aim] looked around: %s after %d look(s)",
+                    res.reason, res.looks_visited)
         return bool(res.found)
     except Exception as e:
         # A sweep that cannot run must not sink the aim — the caller still needs
@@ -592,6 +592,132 @@ CALIB_MIN_SHIFT_FRAC: float = 0.02
 CALIB_ALPHA: float = 0.6
 # Hard cap on one correction, whatever the measured scale says.
 MAX_STEP_DEG: float = 45.0
+
+
+# How long a centring correction may run. A search hit is already seconds into
+# a sweep, so this is a top-up rather than the aim's own deadline: six
+# iterations of nudge + settle + detect fit comfortably, and a subject that
+# needs longer is one the loop is not converging on anyway.
+CENTRE_DEADLINE_S: float = 4.0
+
+
+@dataclass
+class CentreResult:
+    centred: bool
+    reason: str
+    iterations: int = 0
+    yaw_total: float = 0.0
+    dx_frac: Optional[float] = None
+    # The box and the frame AS LAST SEEN, so a caller that wants to SHOW what it
+    # centred on does not have to grab and detect all over again — a second
+    # capture would be a different frame from a body that has since settled, and
+    # drawing this box on that frame puts the rectangle beside the subject.
+    box: Optional[tuple] = None
+    frame: Any = None
+
+
+def centre_on_box(svc: Any, cap: Any, probe: Callable[[Any], Optional[tuple]],
+                  deadline_s: float = CENTRE_DEADLINE_S) -> CentreResult:
+    """Turn the base until `probe`'s box sits in the middle of the frame.
+
+    The same measure-and-nudge loop `aim_for_look` runs, with everything that is
+    specific to answering "where are you" left out: no bearing steps, no filler
+    announcements, no occlusion hold, no bearing scoring. A search hit must not
+    score the remembered bearing — the sweep finds an OBJECT as often as a
+    person, and teaching the user-bearing estimator that a keyboard is where the
+    user sits is exactly the kind of quiet corruption #226 was about.
+
+    Deliberately duplicated rather than factored out of `aim_for_look`: that
+    loop is entangled with the five exit doors it scores through, and pulling it
+    apart is a larger change than either caller needs today.
+
+    `probe` takes a frame and returns an (x, y, w, h) box or None, so the caller
+    keeps ownership of WHAT is being centred — the search passes its own target
+    detector, where the aim would pass the closest-subject policy.
+    """
+    import hal.app_state as state
+
+    t_end = time.monotonic() + deadline_s
+    iterations = 0
+    yaw_total = 0.0
+    last_dx_frac: Optional[float] = None
+    scale_deg: Optional[float] = None
+    pending_calib: Optional[Tuple[float, float]] = None
+    last_box: Optional[tuple] = None
+    last_frame: Any = None
+
+    def _result(centred: bool, reason: str) -> CentreResult:
+        return CentreResult(centred, reason, iterations, yaw_total,
+                            last_dx_frac, last_box, last_frame)
+
+    def _within_deadband() -> bool:
+        return abs(last_dx_frac if last_dx_frac is not None else 1.0) <= CENTRE_DEADBAND_FRAC
+
+    with _camera_consumer(cap):
+        while iterations < MAX_ITERATIONS:
+            if _abort_evt.is_set():
+                return _result(False, "aborted")
+            if time.monotonic() >= t_end:
+                return _result(False, "deadline")
+
+            frame = _grab_frame(cap, svc, require_fresh=iterations > 0)
+            if frame is None:
+                return _result(_within_deadband(), "no fresh frame")
+
+            box = probe(frame)
+            if box is None:
+                # Lost it mid-correction. Report the last good box rather than
+                # nothing: the caller still has something true to show.
+                return _result(False, "lost the subject")
+
+            last_box, last_frame = box, frame
+            x, _y, w, _h = box
+            fw = frame.shape[1]
+            dx = (x + w / 2.0) - (fw / 2.0)
+            last_dx_frac = dx / fw
+
+            # Learn the local degrees-per-dx_frac from what the previous step
+            # actually achieved. The lens is fisheye — device-measured 91 deg per
+            # frac at the centre against 229 at the edge — so a fixed FOV is only
+            # ever the first guess.
+            if pending_calib is not None:
+                prev_yaw, prev_dx = pending_calib
+                measured = _measure_scale(_yaw_of(svc) - prev_yaw,
+                                          prev_dx - last_dx_frac)
+                if measured is not None:
+                    scale_deg = (
+                        measured if scale_deg is None
+                        else (1.0 - CALIB_ALPHA) * scale_deg + CALIB_ALPHA * measured
+                    )
+                pending_calib = None
+
+            if _within_deadband():
+                return _result(True, "centred")
+
+            # Yaw sign per the tracker's verified convention: dx>0 (subject right
+            # of centre) -> base_yaw INCREASES. Do not flip this without device
+            # evidence.
+            scale = (scale_deg * SCALE_SAFETY if scale_deg is not None
+                     else config.LOOK_AIM_FOV_DEG)
+            yaw_deg = AIM_GAIN * last_dx_frac * scale
+            yaw_deg = max(-MAX_STEP_DEG, min(MAX_STEP_DEG, yaw_deg))
+            pending_calib = (_yaw_of(svc), last_dx_frac)
+
+            try:
+                current = svc.get_positions()
+                svc.nudge(yaw_deg, 0.0, MOVE_DURATION_S, current,
+                          state.safety_policy)
+            except Exception as e:
+                logger.warning("[centre] nudge failed: %s", e)
+                return _result(False, f"nudge failed: {e}")
+
+            yaw_total += yaw_deg
+            iterations += 1
+            logger.info("[centre] iter=%d dx=%.1f%% -> yaw %+.1f deg (scale=%.0f%s)",
+                        iterations, last_dx_frac * 100.0, yaw_deg, scale,
+                        "" if scale_deg is not None else " guess")
+
+    return _result(_within_deadband(), "max iterations")
 
 
 def _measure_scale(moved_deg: float, shift_frac: float) -> Optional[float]:

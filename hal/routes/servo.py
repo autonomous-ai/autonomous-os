@@ -419,9 +419,11 @@ def search_for_user(req: Optional[ServoSearchRequest] = None):
     return {
         "status": "ok",
         "message": (
-            f"{res.reason} at yaw {res.found_at_yaw:+.0f} after {res.stops_visited} stop(s)"
+            f"{res.reason} at yaw {res.found_at_yaw:+.0f} after "
+            f"{res.looks_visited} look(s) across {res.bearings_visited} bearing(s)"
             if res.found and res.found_at_yaw is not None
-            else f"{res.reason} after {res.stops_visited} stop(s)"
+            else f"{res.reason} after {res.looks_visited} look(s) "
+                 f"across {res.bearings_visited} bearing(s)"
         ),
     }
 

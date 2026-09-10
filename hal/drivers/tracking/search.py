@@ -180,8 +180,19 @@ def request_abort() -> None:
 class SearchResult:
     found: bool
     reason: str
-    stops_visited: int = 0
+    # Renamed from `stops_visited`: this counts LOOKS, and the API rendered it
+    # as "after N stop(s)" against MAX_STOPS = 3, so an exhaustive sweep
+    # truthfully reported "after 27 stop(s)" out of a possible 3.
+    looks_visited: int = 0
     found_at_yaw: Optional[float] = None
+    found_at_roll: Optional[float] = None
+    # How many BEARINGS the base actually turned through. Reported separately
+    # because "3 bearings, 27 looks" is the sentence the caller needs, and
+    # neither number on its own can be turned into it.
+    bearings_visited: int = 0
+    kind: Optional[str] = None
+    box: Optional[tuple] = None
+    centred: bool = False
 
 
 def _stop_list(seed: float) -> List[float]:
@@ -388,7 +399,7 @@ def _abandon(svc: Any, seed_pose: Optional[dict], visited: int) -> "SearchResult
     interrupted search leaves the arm.
     """
     _restore(svc, seed_pose)
-    logger.info("[search] aborted after %d stop(s) — back to the starting pose", visited)
+    logger.info("[search] aborted after %d look(s) — back to the starting pose", visited)
     return SearchResult(False, "aborted", visited)
 
 
@@ -595,6 +606,10 @@ def _sweep(svc: Any, cap: Any, detector: Any, target: str,
     without saying anything — while leaving the decision of WHAT to say, and
     whether to say anything at all, outside this file.
     """
+    # Deferred, like every other reach into `aim` here: that module imports from
+    # this one, so a top-level import either way is a cycle.
+    from hal.drivers.tracking import aim
+
     stops = _stop_list(_seed_yaw(svc))
     # Captured AFTER seeding, so it is the pose the sweep started from
     # rather than whatever the arm was doing before — that is where a
@@ -611,8 +626,10 @@ def _sweep(svc: Any, cap: Any, detector: Any, target: str,
                 [round(s) for s in stops])
 
     visited = 0
+    bearings = 0
     found: List[SearchResult] = []
     for yaw in stops:
+        bearings += 1
         if _abort_evt.is_set():
             return _abandon(svc, seed_pose, visited)
 
@@ -662,12 +679,30 @@ def _sweep(svc: Any, cap: Any, detector: Any, target: str,
                         kind or "nothing")
             if box is not None:
                 logger.info(
-                    "[search] found %s at yaw %+.0f roll %+.0f after %d stop(s)",
+                    "[search] found %s at yaw %+.0f roll %+.0f after %d look(s)",
                     kind, yaw, roll, visited,
                 )
-                hit = SearchResult(True, f"found {kind}", visited, yaw)
+                hit = SearchResult(True, f"found {kind}", visited, yaw, roll,
+                                   bearings, kind, box)
                 if not exhaustive:
                     _straighten_head_onto(svc, yaw, roll)
+                    # Coarse aim first, THEN the fine correction: straightening
+                    # puts the subject roughly in front, which is where the
+                    # centring loop's first-step FOV guess is least wrong.
+                    #
+                    # Without this the sweep pointed at `yaw + roll` — the look
+                    # DIRECTION of the stop, not the subject — so an object seen
+                    # at the frame edge left the lamp aimed ~50 deg away from it
+                    # while reporting a find.
+                    centred = aim.centre_on_box(
+                        svc, cap,
+                        probe=lambda f: _detect_target(detector, f, target)[0],
+                    )
+                    hit.centred = centred.centred
+                    if centred.box is not None:
+                        hit.box = centred.box
+                    logger.info("[search] centring: %s after %d iteration(s)",
+                                centred.reason, centred.iterations)
                     return hit
                 found.append(hit)
 
@@ -676,11 +711,13 @@ def _sweep(svc: Any, cap: Any, detector: Any, target: str,
         logger.info("[search] full sweep: %d sighting(s) of '%s' across %d looks",
                     len(found), target, visited)
         return SearchResult(True, f"found {target} x{len(found)}", visited,
-                            found[0].found_at_yaw)
+                            found[0].found_at_yaw, found[0].found_at_roll,
+                            bearings, found[0].kind, found[0].box)
 
     # Nothing found, so nothing to look at — go back to where the sweep began
     # rather than freezing wherever the last look left the head.
     _restore(svc, seed_pose)
     logger.info("[search] no %s found after %d look(s) — back to the starting pose",
                 target, visited)
-    return SearchResult(False, f"no {target} found", visited)
+    return SearchResult(False, f"no {target} found", visited,
+                        bearings_visited=bearings)
