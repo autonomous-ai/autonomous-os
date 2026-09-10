@@ -365,9 +365,18 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
   // Mirror AI Brain values in the event that changes a source or re-enables a
   // blank destination. The mirror remains sticky, without scheduling state
   // updates from an effect after React has already committed a render.
+  // Only the inheriting choices may be auto-filled from the AI Brain key.
+  // OpenAI/ElevenLabs direct reject that credential with a 401 that hal turns
+  // into silence, so mirroring into one recreates issue #309 through the back
+  // door — and a non-empty (but wrong) key would sail past the save guard.
+  // Mirrors the `sttProvider === "autonomous"` guard the STT side already has.
+  const ttsInheritsLlmKey = () => {
+    const c = detectChoice(ttsBaseUrl, ttsProvider);
+    return c === "autonomous" || c === "custom";
+  };
   const setMirroredLlmApiKey = (value: string) => {
     setLlmApiKey(value);
-    if (!ttsApiKey && value && !ttsLoaded.apiKey) setTtsApiKey(value);
+    if (ttsInheritsLlmKey() && !ttsApiKey && value && !ttsLoaded.apiKey) setTtsApiKey(value);
     if (sttProvider === "autonomous" && !sttApiKey && value && !sttLoaded.apiKey) setSttApiKey(value);
   };
   const setMirroredLlmUrl = (value: string) => {
@@ -376,7 +385,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
     if (sttProvider === "autonomous" && !sttBaseUrl && value) setSttBaseUrl(value);
   };
   const setMirroredTtsApiKey = (value: string) => {
-    setTtsApiKey(!value && llmApiKey && !ttsLoaded.apiKey ? llmApiKey : value);
+    setTtsApiKey(!value && llmApiKey && !ttsLoaded.apiKey && ttsInheritsLlmKey() ? llmApiKey : value);
   };
   const setMirroredTtsBaseUrl = (value: string) => {
     setTtsBaseUrl(!value && llmUrl ? llmUrl : value);
@@ -673,6 +682,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
               ttsLoaded={ttsLoaded}
               llmLoaded={llmLoaded}
               ttsApiKey={ttsApiKey} setTtsApiKey={setMirroredTtsApiKey}
+              setTtsApiKeyRaw={setTtsApiKey}
               ttsBaseUrl={ttsBaseUrl} setTtsBaseUrl={setMirroredTtsBaseUrl}
               ttsProvider={ttsProvider} setTtsProvider={setTtsProvider}
               ttsProviders={ttsProviders}

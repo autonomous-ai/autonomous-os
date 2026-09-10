@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getPiperStatus, installPiperEngine, installPiperVoice, removePiperVoice, type PiperJobStart, type PiperStatus } from "@/lib/api";
 import { Loader2, Volume2, Check, AlertCircle } from "lucide-react";
 import { C, LockedField, LockedPasswordField, SectionCard } from "@/components/setup/shared";
@@ -160,7 +160,7 @@ function displayVoice(v: string): string {
 export function TTSSection({
   active,
   ttsLoaded, llmLoaded,
-  ttsApiKey, setTtsApiKey,
+  ttsApiKey, setTtsApiKey, setTtsApiKeyRaw,
   ttsBaseUrl, setTtsBaseUrl,
   // ttsProviders is kept in the props signature so a future switch back to a
   // server-driven provider list is a drop-in swap.
@@ -173,6 +173,11 @@ export function TTSSection({
   ttsLoaded: TtsLoadedState;
   llmLoaded: LlmLoadedState;
   ttsApiKey: string; setTtsApiKey: (v: string) => void;
+  // Unmirrored setter. onChoice must bypass the AI-Brain mirror: it runs before
+  // this switch's setTtsBaseUrl has landed, so the mirror would evaluate the
+  // OUTGOING provider and could refill a direct vendor's box with the AI brain
+  // key. The visible input keeps the mirrored setter.
+  setTtsApiKeyRaw: (v: string) => void;
   ttsBaseUrl: string; setTtsBaseUrl: (v: string) => void;
   ttsProvider: string; setTtsProvider: (v: string) => void;
   ttsProviders: string[];
@@ -192,6 +197,13 @@ export function TTSSection({
   // last synced against: setting state in an effect would cascade an extra
   // render pass on every URL change.
   const [choice, setChoice] = useState<ProviderChoice>(() => detectChoice(ttsBaseUrl, ttsProvider));
+  // Session-only cache of keys the operator TYPED but has not saved. Never
+  // persisted: it dies on reload and on Save, and the device stores exactly one
+  // key — the one belonging to the selected provider. Its only job is that
+  // flipping ElevenLabs → Autonomous → ElevenLabs before saving doesn't force a
+  // retype. Keyed by choice, not vendor: "autonomous" and "elevenlabs" can
+  // share a vendor while needing entirely different credentials.
+  const keyDrafts = useRef<Partial<Record<ProviderChoice, string>>>({});
   const [syncedUrl, setSyncedUrl] = useState(ttsBaseUrl);
   if (syncedUrl !== ttsBaseUrl) {
     setSyncedUrl(ttsBaseUrl);
@@ -240,6 +252,17 @@ export function TTSSection({
     : voicesFor(vendor, lang, sttLanguage);
 
   const onChoice = (next: ProviderChoice) => {
+    // Re-picking the current choice must not disturb the draft cache: it would
+    // stash the live value over itself and then restore it, which is a no-op
+    // today but becomes a footgun the moment a branch below stops being pure.
+    if (next === choice) return;
+    keyDrafts.current[choice] = ttsApiKey;
+    // Restore whatever was last typed for the incoming choice. Autonomous and
+    // Piper never carry their own key: autonomous inherits the AI-brain key via
+    // the backend's GetTTSAPIKey fallback, and piper synthesises on-device with
+    // no account to authenticate to. Direct vendors and Custom get their draft
+    // back, or a blank box if they have none.
+    setTtsApiKeyRaw(next === "autonomous" || next === "piper" ? "" : (keyDrafts.current[next] ?? ""));
     setChoice(next);   // always commit the pick — even Custom, so the picker doesn't snap back
     const nextMeta = CHOICES[next];
     // Custom: leave URL as-is if there was one — clearing would wipe a
@@ -273,12 +296,9 @@ export function TTSSection({
         setTtsProvider("elevenlabs");
         setTtsVoice(voicesFor("elevenlabs", lang, sttLanguage)[0]);
       }
-      // Clear any stale vendor-scoped key (e.g. an ElevenLabs `sk_...`
-      // left over from a previous ElevenLabs-direct config) so the
-      // backend's GetTTSAPIKey fallback picks up llm_api_key (the JWT the
-      // proxy authenticates against). Without this, a stale key silently
-      // 401s the proxy call and Test Voice comes out as ~6ms of silence.
-      setTtsApiKey("");
+      // The key is cleared at the top of onChoice, together with every other
+      // choice's key handling — a stale vendor key left here would be sent to
+      // the proxy and 401 into silence.
       return;
     }
     // Direct presets pin a vendor via nextMeta.vendor. Sync provider + reset
