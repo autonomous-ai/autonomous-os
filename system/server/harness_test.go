@@ -98,6 +98,17 @@ func TestExtractHarnessReplyIsLocalRoutingOnly(t *testing.T) {
 	}
 }
 
+func TestCanonicalHarnessReplyRunIDRepairsStaleSequence(t *testing.T) {
+	const current = "device-chat-68-1789005100949"
+	flow.Log("sensing_input", map[string]any{"type": "web_chat"}, current)
+	if got := canonicalHarnessReplyRunID("device-chat-60-1789005100949"); got != current {
+		t.Fatalf("canonical route = %q, want %q", got, current)
+	}
+	if got := canonicalHarnessReplyRunID("device-chat-60-1789005100999"); got != "device-chat-60-1789005100999" {
+		t.Fatalf("different timestamp was rewritten: %q", got)
+	}
+}
+
 func TestHarnessEventTextUsesDirectLifecycleAndSummary(t *testing.T) {
 	if got := harnessEventText("receipt.updated", harness.Frame{
 		"payload": map[string]any{"receipt": map[string]any{"state": "queued"}},
