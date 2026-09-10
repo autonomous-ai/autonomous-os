@@ -6,9 +6,13 @@ description: TTS speech + mic/speaker mute for privacy. MUST trigger on meetings
 # Voice — Speak Through Speaker
 
 ## Quick Start
-Your chat replies are automatically spoken aloud through TTS. Use this skill only when you need to speak additional or separate text outside your normal reply (e.g., parallel speech during tool calls, or text different from your chat reply).
+Choose the relevant path first:
 
-## Workflow
+- **Mic/speaker mute, unmute, or privacy request:** apply **Ambient Audio Guard**, then the applicable mute/unmute or Meeting Mode section below. Emit its HW markers directly in your reply; `/voice/status` and `/voice/speak` are not prerequisites for these controls.
+- **Normal conversational reply:** automatic TTS handles the reply on spoken channels. No explicit speech call is needed.
+- **Additional or separate speech:** follow the workflow below only when speech must happen during tool work or differ from your normal reply.
+
+## Workflow — explicit additional or separate speech
 1. Determine if you need explicit speech beyond your normal reply:
    - Normal conversational reply -> do NOT call this skill, TTS is automatic
    - Need to speak while also performing tool calls -> use `POST /voice/speak`
@@ -70,6 +74,7 @@ Response:
   - You want to speak a different text than your chat reply
   - You are reacting to a sensing event and want to speak before your reply is finalized
 - **Keep spoken text plain and short** — 1-3 sentences. No markdown, no emoji, no formatting. Plain natural speech only.
+  - **Exception: reading a draft back for approval.** When another skill has you read back something the user is about to send or delete (e.g. `connectors` before sending, sharing, or deleting), speak it in full. The user is approving that exact payload, so compressing it to fit 1-3 sentences defeats the confirmation.
 - **Match the user's language** — if they speak Vietnamese, speak Vietnamese.
 - Text max 2000 characters.
 - For volume control, use the **Audio** skill, not this skill.

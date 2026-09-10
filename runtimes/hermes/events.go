@@ -49,7 +49,7 @@ func standaloneDrain(ev pendingEvent) bool {
 		return true
 	}
 	switch ev.eventType {
-	case "voice", "voice_command", "voice_agent_handled", "web_chat":
+	case "voice", "voice_command", "voice_agent_handled", "voice_followup", "web_chat", "mqtt_chat":
 		return true
 	}
 	return false
@@ -273,6 +273,7 @@ func (s *HermesService) sendOnePending(ev pendingEvent) {
 	msg = rePoseWorstMarker.ReplaceAllString(msg, "")
 	msg = strings.ReplaceAll(msg, "\n\n\n", "\n\n")
 	msg = strings.TrimSpace(msg)
+	msg = sensingmsg.AppendHarnessReplyRoute(msg, ev.eventType, runID)
 
 	// Replayed voice_agent_handled: realtime agent already spoke, suppress TTS
 	// on the reply (same as the live PostEvent path).

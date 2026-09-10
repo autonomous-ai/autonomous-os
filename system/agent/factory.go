@@ -35,6 +35,9 @@ var gatewayTransport = map[string]string{
 	"codex":      "websocket",
 	"claudecode": "websocket",
 	"opencode":   "websocket",
+	// "remote" is Hermes-over-LAN — the device runs the Hermes client against
+	// a server on another machine, so the transport is the same as "hermes".
+	"remote": "sse",
 }
 
 func ProvideGateway(cfg *config.Config, bus *monitor.Bus, sled *statusled.Service) domain.AgentGateway {
@@ -57,6 +60,19 @@ func ProvideGateway(cfg *config.Config, bus *monitor.Bus, sled *statusled.Servic
 	switch eff {
 	case "hermes":
 		logBackendBanner("HERMES", map[string]string{
+			"base_url":     hermes.BaseURL,
+			"conversation": hermes.Conversation,
+			"model":        hermes.Model,
+			"api_key_set":  boolStr(hermes.APIKey != ""),
+			"source":       source,
+		})
+		return hermes.ProvideService(cfg, bus, sled)
+	case "remote":
+		// "remote" is Hermes-over-LAN: same client, different BaseURL/APIKey.
+		// Applies the override BEFORE ProvideService so client.go + health.go
+		// (which read the package vars at request time) hit the external server.
+		hermes.ApplyExternalEndpoint(cfg.AgentRemoteURL, cfg.AgentRemoteToken)
+		logBackendBanner("HERMES-REMOTE", map[string]string{
 			"base_url":     hermes.BaseURL,
 			"conversation": hermes.Conversation,
 			"model":        hermes.Model,
@@ -133,6 +149,8 @@ func resolveRuntime(cfg *config.Config) (effective, raw, source string) {
 		return "claudecode", raw, source
 	case "opencode":
 		return "opencode", raw, source
+	case "remote":
+		return "remote", raw, source
 	default:
 		return "openclaw", raw, source
 	}

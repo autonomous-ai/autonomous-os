@@ -247,8 +247,12 @@ reliably — this is the enforcement point.
 **Usage:** token counts ride `step_finish` under `part.tokens.{input,output,cache.read}`
 (also read from `message.updated` `info.tokens` when present). The translator
 stashes the latest (`captureUsage` → `lastUsage`) and reads it at the synthesized
-`session.idle`, mapping `input + cache.read → InputTokens`, `output → OutputTokens`,
-`TotalTokens = in + out`.
+`session.idle`. opencode reports Anthropic-style — `input` EXCLUDES the cached
+prefix — so the fields stay separate: `input → InputTokens`, `cache.read →
+CacheReadTokens`, `cache.write → CacheWriteTokens`, `output → OutputTokens`,
+`TotalTokens = input + cache.read + output`. Folding cache read into
+`InputTokens` (the previous mapping) made a cache-hit turn read as if it had
+re-sent the whole context and hid the `R` figure on the turn card.
 
 ## 4. Session
 

@@ -37,6 +37,8 @@ HAL fires a sound event on every audio sample that crosses `SOUND_RMS_THRESHOLD`
 
 ### Escalation behavior
 
+For standalone sound events outside guard mode, `skills/sensing/SKILL.md` specifies a direct response and end of turn: after reading the skill, no further tools, workspace/config/memory searches, or time/location/weather lookups. The event's occurrence count selects the reaction; RMS level does not escalate it. Missing/invalid count defaults to the first reaction. Silent output keeps the HW marker followed by `NO_REPLY`. A supplied second occurrence still gets `scan` (0.7) + `NO_REPLY`, although the normal tracker suppresses that event. Explicit user requests in the same input and guard events retain their own routing. This is a skill instruction, not a backend tool-execution gate.
+
 | Stage | What the agent sees | Agent reaction |
 |---|---|---|
 | Occurrence 1 | `... — occurrence 1` | `/emotion curious` (0.6), NO_REPLY |
@@ -809,4 +811,4 @@ When a user or the agent explicitly sets an LED color/scene, breathing must not 
 
 ### Not to be confused with dead-air fillers
 
-The mumble loop speaks when the device is **idle**. A different mechanism — dead-air fillers (`system/lib/i18n/fillers.go`, driven by `server/sensing/delivery/http/deadair_filler.go`) — speaks short cues like "Still thinking" **mid-turn** while the agent is busy processing, with tool-aware overrides (e.g. "Let me look that up" during `web_search`). Different trigger, different phrase pools.
+The mumble loop speaks when the device is **idle**. A different mechanism — dead-air fillers (`system/lib/i18n/fillers.go`, driven by `server/sensing/delivery/http/deadair_filler.go`) — uses brief conversational asides such as "Hmm, let's see." **mid-turn** while the agent is busy. Tool-aware overrides remain separate for recognised tools. Raw tool names are normalised first (`bash` / `shell` → `exec`, `file_changes` → `apply_patch`, and recognised MCP suffixes), so the same pool works across runtimes; unknown names use the generic continuation pool. Different trigger, different phrase pools.

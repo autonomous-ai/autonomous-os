@@ -246,9 +246,13 @@ không chặn preamble một cách đáng tin — đây mới là chỗ cưỡng
 **Usage:** số token đi theo `step_finish` dưới
 `part.tokens.{input,output,cache.read}` (cũng đọc từ `message.updated`
 `info.tokens` khi có). Translator giữ lại số mới nhất (`captureUsage` →
-`lastUsage`) và đọc chúng tại `session.idle` được synthesize, map
-`input + cache.read → InputTokens`, `output → OutputTokens`,
-`TotalTokens = in + out`.
+`lastUsage`) và đọc chúng tại `session.idle` được synthesize. opencode báo theo
+kiểu Anthropic — `input` KHÔNG gồm phần cached — nên các trường giữ tách riêng:
+`input → InputTokens`, `cache.read → CacheReadTokens`,
+`cache.write → CacheWriteTokens`, `output → OutputTokens`,
+`TotalTokens = input + cache.read + output`. Gộp cache read vào `InputTokens`
+(cách map cũ) làm một turn trúng cache đọc như thể đã gửi lại toàn bộ context,
+và giấu mất số `R` trên thẻ turn.
 
 ## 4. Session
 

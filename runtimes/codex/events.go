@@ -80,6 +80,11 @@ func (s *CodexService) IsBusy() bool {
 	return s.HasFreshPendingChatSend()
 }
 
+// SupportsActiveTurnSteering declares that gatewayd keeps one Codex App Server
+// turn alive and sends follow-up user input with turn/steer instead of waiting
+// for a FIFO worker slot.
+func (s *CodexService) SupportsActiveTurnSteering() bool { return true }
+
 // failStuckTurn ends the in-flight turn when the busy TTL decides its terminal
 // frame is never coming: it drops the run id AND tells the waiting client why.
 //
@@ -113,6 +118,17 @@ func (s *CodexService) failStuckTurn() {
 		},
 	})
 	dispatch(domain.WSEvent{Type: "evt", Event: "agent", Payload: payload})
+}
+
+// failDisconnectedTurn gives a live client a terminal event when only the
+// local Codex gateway restarted. It must run before runWSConn's clearTurn
+// defer, while the original run correlation still exists.
+func (s *CodexService) failDisconnectedTurn(dispatch func(domain.WSEvent)) {
+	if s.getCurrentRunID() == "" {
+		return
+	}
+	slog.Warn("codex gateway disconnected during active turn", "component", "codex", "runID", s.getCurrentRunID())
+	s.handleError("codex gateway restarted; turn cancelled", dispatch)
 }
 
 // SetBusy flips active state. Drains pending events on idle.
@@ -293,6 +309,7 @@ func (s *CodexService) drainPendingEvents() {
 		msg = rePoseWorstMarker.ReplaceAllString(msg, "")
 		msg = strings.ReplaceAll(msg, "\n\n\n", "\n\n")
 		msg = strings.TrimSpace(msg)
+		msg = sensingmsg.AppendHarnessReplyRoute(msg, ev.eventType, runID)
 
 		// Replayed voice_agent_handled: realtime agent already spoke, suppress TTS
 		// on the reply (same as the live PostEvent path).

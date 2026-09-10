@@ -108,7 +108,7 @@ Pre-fetched fields (use directly):
 Single combined plan, not three sequential workflows:
 
 - **Decide locally** — apply mood decision rules from `mood/SKILL.md`; pick a route from the routing table below; if the route is `music`, evaluate genre from `music-suggestion/SKILL.md`.
-- **Writes (batch in one bash with `&` + `wait`)** — POST mood signal (this skill), POST mood decision (mood), and on `music` or `checkin` route, POST the music-suggestion log (the shared cooldown channel).
+- **Writes (inline markers in the same reply)** — emit the mood signal marker (this skill), the mood decision marker when required by the mood rules, and on `music` or `checkin` route, the music-suggestion log marker (the shared cooldown channel). Use the marker shapes in the respective skills; do not also POST these logs through a shell. Preserve the selected route's speech or `NO_REPLY` after the markers.
 
 ### Fallback (only if `[emotion_context: ...]` is missing)
 

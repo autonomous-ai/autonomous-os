@@ -24,7 +24,7 @@ The browser tab title (`document.title`) reflects the focused page/tab so multip
 | Route / state | Title |
 |---------------|-------|
 | `/setup` (and `/` when not provisioned) | `Lamp · Setup` |
-| `/monitor#<section>` (active section) | `Lamp · <section label>` — e.g. `Lamp · Chat`, `Lamp · Overview`, `Lamp · Info`, `Lamp · Flow`, `Lamp · Users`, `Lamp · Camera`, `Lamp · Sensing`, `Lamp · Analytics`, `Lamp · Servo`, `Lamp · Logs`, `Lamp · CLI` |
+| `/monitor#<section>` (active section) | `Lamp · <section label>` — e.g. `Lamp · Chat`, `Lamp · Overview`, `Lamp · Pairing`, `Lamp · Info`, `Lamp · Flow`, `Lamp · Users`, `Lamp · Camera`, `Lamp · Sensing`, `Lamp · Analytics`, `Lamp · Servo`, `Lamp · Logs`, `Lamp · CLI` |
 | `/setting#<section>` (Settings, active section) | `Lamp · Settings · <section label>` — e.g. `Lamp · Settings · General`, `Lamp · Settings · Wi-Fi`, `Lamp · Settings · AI Brain`, `Lamp · Settings · Language`, `Lamp · Settings · Voice`, `Lamp · Settings · My Voice`, `Lamp · Settings · Face`, `Lamp · Settings · Channels`, `Lamp · Settings · MQTT`, `Lamp · Settings · Timezone` |
 | `/gw-config` | `Lamp · GW Config` |
 
@@ -80,11 +80,14 @@ Layout: **Fixed 216px sidebar + flexible main area**, 100vh height.
 
 ### 3.2 Sidebar Navigation
 
-4 sections toggled via local state (`section: Section`):
+The **Device** sidebar group contains the primary Monitor leaves, including
+**Pairing directly below Servo**. Bluetooth remains implemented but is currently
+hidden from the navigation:
 
 | Icon | Section | Content |
 |------|---------|---------|
 | ◈ | Overview | Full system overview |
+| ⟷ | Pairing | Autonomous Buddy and Harness connections/pairing |
 | ⬡ | System | CPU/RAM/Temp details + history |
 | ◎ | Workflow | OpenClaw event feed real-time |
 | ⬟ | Camera | MJPEG stream + Display LCD |
@@ -160,7 +163,7 @@ The Settings collapsible group lives in the shared sidebar `NAV` (`system/web/sr
 | Plugins | `/setting#plugins` |
 | Timezone | `/setting#timezone` |
 
-Monitor leaves serialize as the plain id, e.g. `/monitor#overview`, `/monitor#system`, `/monitor#flow`. Defaults: `/monitor` with no/invalid hash → `overview`; `/setting` with no/invalid hash → `general` (URL normalized to `/setting#general`). Deep-links (e.g. `/setting#wifi`) and browser back/forward are honored via a `useLocation`-driven effect. Non-debug users only see the leaves in `PUBLIC_SECTIONS` (which includes Chat, Overview, Info, Flow, Camera, Users, Bluetooth, **Logs**, **CLI**, and the public Settings leaves General/Wi-Fi/My Voice/Face/MCP Tools/Plugins/Timezone); `?debug=true` reveals the rest (Sensing, Analytics, Servo, API Docs, Agent gateway, and the deeper Settings leaves AI Brain/Runtime/Language/Voice/Realtime/Channels/MQTT). Pressing `update` swaps the button for `updating…` immediately — the button never says "OK", which would read as "done" for a request that has only STARTED the install (and, for a component that finishes in seconds, arrived before the row could even show progress). Failures show the server's own reason (`rate-limited, retry in 8s`, `bootstrap unreachable`) rather than a bare "Failed". While an install runs, that row shows `updating…` in place of the button (an install takes tens of seconds — the component stops, is rebuilt and restarts — and a row that just sits there invites a second click, which is how a device once lost its HAL runtime). The `update` buttons in the Overview **Versions** card (Web / OS / HAL / Agent rows, plus Bootstrap and Device in debug) are gated the same way — regular viewers get no one-click OTA trigger. The top-bar **Debug** toggle beside the Dark/Light button toggles that query parameter while preserving the active route hash and any other query parameters; its amber state indicates that debug mode is enabled.
+Monitor leaves serialize as the plain id, e.g. `/monitor#overview`, `/monitor#pairing`, `/monitor#system`, `/monitor#flow`. Defaults: `/monitor` with no/invalid hash → `overview`; `/setting` with no/invalid hash → `general` (URL normalized to `/setting#general`). Deep-links (e.g. `/setting#wifi`) and browser back/forward are honored via a `useLocation`-driven effect. Non-debug users only see the leaves in `PUBLIC_SECTIONS` (which includes Chat, Overview, **Pairing**, Info, Flow, Camera, Users, **Logs**, **CLI**, and the public Settings leaves General/Wi-Fi/My Voice/Face/MCP Tools/Plugins/Timezone); Bluetooth remains available by direct URL but is hidden from navigation. `?debug=true` reveals the rest (Sensing, Analytics, Servo, API Docs, Agent gateway, and the deeper Settings leaves AI Brain/Runtime/Language/Voice/Realtime/Channels/MQTT). Pressing `update` swaps the button for `updating…` immediately — the button never says "OK", which would read as "done" for a request that has only STARTED the install (and, for a component that finishes in seconds, arrived before the row could even show progress). Failures show the server's own reason (`rate-limited, retry in 8s`, `bootstrap unreachable`) rather than a bare "Failed". While an install runs, that row shows `updating…` in place of the button (an install takes tens of seconds — the component stops, is rebuilt and restarts — and a row that just sits there invites a second click, which is how a device once lost its HAL runtime). The `update` buttons in the Overview **Versions** card (Web / OS / HAL / Agent rows, plus Bootstrap and Device in debug) are gated the same way — regular viewers get no one-click OTA trigger. The top-bar **Debug** toggle beside the Dark/Light button toggles that query parameter while preserving the active route hash and any other query parameters; its amber state indicates that debug mode is enabled.
 
 **Speech attention gate** lives in the public **General** settings card, not the debug-only Realtime section. Its checkbox writes the top-level `wakeword` flag; saving restarts HAL so the change applies. When enabled, speech must follow an attention trigger: a spoken phrase, single click, turning toward the lamp while speaking, or an enrolled person entering view (`presence.enter`). A stranger-only enter does not open the voice gate unless the deployment sets `HAL_PRESENCE_WAKE_STRANGERS=true`. The card lists the currently accepted **spoken** phrases, including the active agent's exact current name and the permanent `autonomous` and device-type aliases; the system manages that list. Reload Settings after an agent rename to see the new name. When disabled, every utterance is handled without a trigger.
 
@@ -384,7 +387,7 @@ the shorter Presence card from being stretched by the taller Audio card.
 > **Layout & pill clouds.** The device cluster (row 2) splits into two equal
 > columns: the right column holds the expressive cards (Emotion, Servo Pose,
 > Versions) and the left column holds the compact status cards (Hardware, Scene,
-> Buddy); they collapse to one column under ~860px. Versions sits in the right
+> Power); they collapse to one column under ~860px. Versions sits in the right
 > column so the two columns balance in height rather than the right ending short
 > under Servo Pose. The Emotion preset list and the Servo recording list each
 > render as a **pill cloud** — the active pill is hoisted to the front so the
@@ -398,6 +401,36 @@ the shorter Presence card from being stretched by the taller Audio card.
 > `sleepy` readable in dark mode. The summary reserves room for the emoji and
 > long names such as `acknowledge`; when a card is narrow, the pill cloud wraps
 > below it rather than overlapping the current state.
+
+### 5.2 Pairing Section
+
+`/monitor#pairing` is the dedicated connection and pairing area. It renders both
+`BuddyCard.tsx` (Autonomous Buddy for Mac) and `HarnessCard.tsx`, keeping these
+computer integrations separate from the device-status cards on Overview. The
+page has a compact connection header and a two-column card layout that becomes
+one column below 760px.
+
+**Autonomous Buddy (Mac)**
+- Shows the paired Mac and its connection state. When no Mac is paired, **Pair new Mac** generates a code for Autonomous Buddy → *Pair with device…*.
+- Revoking a pairing requires confirmation and calls `DELETE /api/buddy`.
+
+**Harness pairing**
+- **Generate pairing code** calls admin-authenticated `POST /api/harness/pair` with no
+  computer selection. The OS generates a six-character code valid for 60 seconds.
+- On the same local network, open Harness Desktop → Settings → Devices, select this
+  automatically discovered Autonomous device and enter its code. CLI users run
+  `harness autonomous-device discover --json`, then
+  `harness autonomous-device pair --device <discoveryId> --code-stdin`.
+  The CLI connects directly to the device's `/api/harness/ws`; discovery reuses the
+  existing `_autonomous._tcp` service. No manual IP or backend account is required.
+- Admin-only `GET /api/harness/pair/status` returns the active code, `expires_at`, `state`
+  and `pairing` with `Cache-Control: no-store`. OS Monitor polls it and `/status` every
+  two seconds. Codes disappear on expiry, cancellation or completion and are not persisted.
+  `POST /api/harness/pair/cancel` cancels the pending attempt.
+- Unpair requires confirmation and calls admin-authenticated `DELETE /api/harness`.
+  Harness uses its original E2EE pairing/session protocol and retains separate keys from Buddy.
+
+The Pairing section is available to non-debug users.
 
 **Display Eyes**
 - Currently displayed expression (mode)
@@ -420,7 +453,7 @@ Below the nav items and OpenClaw status, the sidebar shows versions for all thre
 - **HAL** (blue): from `GET /api/system/info` → `halVersion` field. The OS server calls HAL `:5001/version` on the loopback once per minute (cached) and re-exposes it through the OS server API, so the browser doesn't need direct access to `/hw/*` (nginx gates `/hw/` to loopback only).
 - **Force Update** button: triggers `POST /api/system/force-update` → bootstrap OTA check. Shows "Checking…" while busy, then "Triggered"/"Failed" feedback for 3 seconds.
 
-### 5.2 System Section
+### 5.3 System Section
 
 **Performance** — 3 GaugeRing SVGs:
 - CPU: amber color, shows `%`
@@ -434,7 +467,7 @@ Below the nav items and OpenClaw status, the sidebar shows versions for all thre
 **Process**: goroutines, uptime, version, deviceId
 **Network Detail**: SSID, IP, signal, internet
 
-### 5.3 Workflow Section
+### 5.4 Workflow Section
 
 File-backed hybrid feed:
 
@@ -482,13 +515,13 @@ Turn Pipeline grouping behavior:
 - Flow event memory is capped at 10 000 events.
 - Telegram stitching heuristic: if a Telegram fallback input turn (without real input text) is immediately followed by an agent-output turn within 30s, Monitor stitches them into one turn so the reply stays with the original Telegram input.
 
-### 5.4 Camera Section
+### 5.5 Camera Section
 
 - **Camera Stream**: MJPEG live stream from `GET /hw/camera/stream` (downscaled + throttled; default ~10fps, ~320px width). The `<img>` remounts with a fresh connection (bumped `streamEpoch` cache-buster) whenever the camera transitions to enabled — via the Enable button or an auto-enable picked up by polling — so live video returns immediately without a page refresh. A stream error that lands right after enable (HAL's capture loop needs ~1-2s to deliver the first frame) is not latched: it auto-retries on a short delay until a frame loads.
 - **Display Eyes (GC9A01)**: Round 1.28" screen snapshot from `GET /hw/display/snapshot`, displayed as circle with amber glow. Has Refresh button.
 - **Camera Snapshot**: Static image from `GET /hw/camera/snapshot`, with Capture button to take new shot.
 
-### 5.5 Logs Section
+### 5.6 Logs Section
 
 - Dedicated runtime log panels: HAL, OS (os-server), Buddy, **Bootstrap** (source id `bootstrap`), plus **Agent** and **Agent Service** (source ids `openclaw` / `openclaw-service`).
 - **Bootstrap** reads the OTA bootstrap worker's systemd journal (`bootstrap.service`). Its initial load and manual refresh use `GET /api/logs/tail?source=bootstrap&lines=N`; live updates use `GET /api/logs/stream?source=bootstrap` (SSE). Both endpoints require the normal authenticated session.
@@ -502,7 +535,7 @@ Turn Pipeline grouping behavior:
 
 > **Note**: Camera serves a dual role — (1) live stream display for user viewing, (2) automatic sensing data source. Sensing service reads a frame from camera every 2s to detect motion, faces (Haar cascade), and light level. When significant events are detected (person appears, large motion), a full-resolution JPEG auto-snapshot is sent with the event to OpenClaw AI for vision analysis.
 
-### 5.6 Chat Section
+### 5.7 Chat Section
 
 Interactive chat interface for communicating with the agent. Layout: sidebar (conversation list) + main chat area.
 
@@ -515,8 +548,8 @@ Interactive chat interface for communicating with the agent. Layout: sidebar (co
   Deleting a conversation (or Clear/history-TTL) also deletes its stored
   images.
 - Sidebar with search, pin, rename (double-click), delete (double-click confirm), export as TXT
-- Grouped by date: Today / Yesterday / This week / Older, pinned at top. Each group header shows a hairline divider and an item count.
-- Each row shows a deterministic on-palette avatar dot (hashed from the conversation id), the title, a localized relative timestamp (`now` / `5m` / `2h` / `yesterday` / `3d`, hidden on hover), and a last-message preview. The active conversation is marked with an amber left rail.
+- Grouped and sorted by **most recent message activity**: Today / Yesterday / This week / Older, pinned at top. Each group header shows a hairline divider and an item count. The same ordering is used when retaining the 50 local conversations, so an active older thread is not evicted before an idle newer one.
+- Each row shows a deterministic on-palette avatar dot (hashed from the conversation id), the title, a localized relative timestamp for its latest activity (`now` / `5m` / `2h` / `yesterday` / `3d`, hidden on hover), and a last-message preview. The active conversation is marked with an amber left rail. Search displays its result count, and Escape or the clear button resets it.
 - Keyboard shortcut: Cmd/Ctrl+N for new chat
 - Collapsible sidebar
 
@@ -527,6 +560,7 @@ Interactive chat interface for communicating with the agent. Layout: sidebar (co
   - **Skills** ▸ — fly-out sub-menu with the four surfaces below, a rule separating the two that add a skill of your own (Write / Upload) from the two that work with skills that already exist (Browse / Manage). Each opens a portalled modal (`chat/ModalShell.tsx`, shared shell + `chat/styles.ts` field styles); the rows themselves are `chat/MenuPanel.tsx`, shared with the Manage skills header menu.
 - File/image attachment (max 10 MB): "+" → Attach file, drag-drop, clipboard paste
 - Messages sent via `POST /api/sensing/event` with `type: "web_chat"`. The handler tags the run via `MarkWebChatRun(runID)` so the agent reply is suppressed at TTS (rendered in this UI only) and skips the physical wake greeting / opening filler. **Image** attachments ride the payload's `images` array (raw base64, one entry per photo — the composer accepts several); for each one the handler (1) saves it to `/tmp/web-chat-<ms>-<i>.jpg` (indexed so photos from the SAME turn cannot collide) and appends an `[image: <path>]` tag so tools can read the file directly (e.g. face enrollment), and (2) runs the describe-first gate in `system/vision` (see `docs/realtime-voice.md`, "Frame handoff"): a text-only main model gets an `[image description]` line produced by the catalog's vision model, a vision-capable one gets the raw attachment. Both steps run BEFORE the agent-busy queue fork, so a queued turn replays with the description already inlined.
+- While a reply is pending, the Send arrow becomes **Stop**. Stop aborts a still-unaccepted HTTP send; once the server has accepted it, it dismisses that reply in this browser and ignores all later events for its run. It does not interrupt the underlying agent task or erase its session/memory.
 - **Non-image attachments** ride only the separate `files` array — each `{name, mime, content}`, base64 — never the `images` field; `agentfile.SaveInbound` handles them. They land in `/tmp` with their **real** extension and the turn carries `[file: <path> (<name>)]`. Two fields rather than one because the handling is opposite: an image must go through the describe-first vision gate, a document must not. Until this split, everything the composer accepted was sent in the single `image` field and written as `/tmp/web-chat-*.jpg`, so attaching a PDF produced a file mislabelled as a photo that then failed the vision gate — the composer accepted any file type, but only images actually worked. The client's `name` is used only for its extension (validated to a short alphanumeric suffix, else `.bin`) and the display label; the written filename is generated, so a name like `../../etc/passwd` cannot steer the write. Capped at 10 MB decoded, matching the composer's own check. The MQTT `chat.send` path carries the identical fields and re-enters this same handler over loopback, so a phone and a browser attach files through one implementation (`docs/mqtt.md`).
 - **Files coming back OUT of a turn** (`chat/AgentFiles.tsx`). A turn can only *name* a file it produced — "take a photo" ends with an absolute device path like `/root/.openclaw/media/hal-snapshots/snap_*.jpg`, which a browser cannot read. Each finished agent message is scanned for such paths and every hit is rendered beneath the bubble: an inline image, or a download chip for anything else, both pointing at `GET /api/agent/file?path=…`.
   - **Three places are scanned, not just the reply text.** Asked to send a photo, an agent typically calls its channel tool — `message {"action":"send","media":"/root/.openclaw/media/…jpg"}` — and its spoken reply names no path at all, so text-only detection finds nothing. Tool **args** carry it (the server logs them untruncated in the flow event's `detail.args`; only the chip's display is shortened), and a `curl /camera/snapshot` puts it in the tool **result** instead.
@@ -541,7 +575,7 @@ Interactive chat interface for communicating with the agent. Layout: sidebar (co
 | **Write skill** | `chat/WriteSkillModal.tsx` | Three-field form — Skill name / Description / Instructions — matching a `SKILL.md` (name + description → front-matter, instructions → body). Saves via `POST /api/agent/skills`; on success the modal shows the path it wrote. See "Writing + installing skills" below. |
 | **Upload a skill** | `chat/UploadSkillModal.tsx` | Installs a `.skill`/`.zip` the operator picked from their own machine — drop zone or file picker, 16 MB client-side cap matching the device's. Same destination and the same replace-on-name-clash semantics as the store Install button; only the source of the bytes differs. |
 | **Browse skills** | `chat/BrowseSkillsModal.tsx` | Live against the Autonomous Agent Skills catalog — see "Skill catalog" below. |
-| **Manage skills** | `chat/ManageSkillsModal.tsx` | Skills present in the active agentic runtime's skills dir (`GET /api/agent/skills`), two views: a search box plus a **three-column list** — skill (`/music` with its description beneath), file count, last updated — then a detail view rendering the same two-pane file browser Browse skills uses. A list rather than Browse's card grid, because for something already installed the useful question is what's here and when it last changed, which reads better as aligned columns. "Last updated" is a fixed `MM/DD/YYYY` date — the column exists to spot which skills are stale, and a fixed-width absolute date compares down a column at a glance where relative units ("3d ago" over "12m ago") don't; the order is hardcoded rather than locale-derived so the column always lines up and the same screenshot can't read as a different day. The exact timestamp is on the row's tooltip. Search filters **client-side** over name + description — unlike Browse, whose keyword goes to the catalog, `ListSkills` already returned the whole set, so there is nothing to ask the device for. Everything the runtime has appears regardless of origin — authored, store-installed, role-bundled and OTA-pushed skills share one tree. Reload button; an empty list reads "no skills installed yet", distinct from the 501 a runtime that can't list returns. The detail view's footer carries **Uninstall**, which is two-click: the first arms it and states what will be deleted, the second commits. On success the list refetches so the removed skill can't linger. The list header carries a **New** dropdown immediately left of the close button, repeating the composer menu's Write skill / Upload a skill — both open *on top of* this modal rather than replacing it, and closing either refetches the list, so an operator adds a skill and lands back on the (refreshed) list. Escape closes only the front-most shell. |
+| **Manage skills** | `chat/ManageSkillsModal.tsx` | Skills present in the active agentic runtime's skills dir (`GET /api/agent/skills`), two views: a search box plus a **four-column list** — skill (`/music` with its description beneath), Store, file count, last updated — then a detail view rendering the same two-pane file browser Browse skills uses. Store says **In store** when a matching catalog slug/name exists, **Device only** when no match exists, or **Unknown** when the device could not read the complete catalog; it indicates current catalog availability, not installation provenance. A list rather than Browse's card grid, because for something already installed the useful question is what's here and when it last changed, which reads better as aligned columns. "Last updated" is a fixed `MM/DD/YYYY` date — the column exists to spot which skills are stale, and a fixed-width absolute date compares down a column at a glance where relative units ("3d ago" over "12m ago") don't; the order is hardcoded rather than locale-derived so the column always lines up and the same screenshot can't read as a different day. The exact timestamp is on the row's tooltip. Search filters **client-side** over name + description — unlike Browse, whose keyword goes to the catalog, `ListSkills` already returned the whole set, so there is nothing to ask the device for. Everything the runtime has appears regardless of origin — authored, store-installed, role-bundled and OTA-pushed skills share one tree. Reload button; an empty list reads "no skills installed yet", distinct from the 501 a runtime that can't list returns. The detail view's footer carries **Uninstall**, which is two-click: the first arms it and states what will be deleted, the second commits. On success the list refetches so the removed skill can't linger. The list header carries a **New** dropdown immediately left of the close button, repeating the composer menu's Write skill / Upload a skill — both open *on top of* this modal rather than replacing it, and closing either refetches the list, so an operator adds a skill and lands back on the (refreshed) list. Escape closes only the front-most shell. |
 
 The **New** dropdown also includes **Create with Agent**. It closes Manage skills, focuses the chat composer, and pre-fills `Let's create a skill together using your skill-creator skill. First ask me what the skill should do.` It does not send the message, so the owner can review or edit it first.
 
@@ -575,8 +609,9 @@ All three paths go through the agent abstraction — the device layer never hard
 
 | Device endpoint | Gateway method | Behaviour |
 |-----------------|----------------|-----------|
-| `GET /api/agent/skills` | `ListSkills() ([]InstalledSkill, error)` | Walks the runtime's skills dir: one entry per skill directory with its file tree, sorted by name, dirs before files. Description is read from the SKILL.md front-matter. `updated_at` (Unix seconds) is the **newest mtime anywhere in that skill's tree**, not the skill directory's own — a directory's mtime only moves when files are added or removed, so it would report an edited SKILL.md as unchanged; it rides along with the same walk rather than taking a second pass, and falls back to the directory's mtime for an empty skill. A **missing** skills dir (un-provisioned runtime) is an empty list, not an error. |
+| `GET /api/agent/skills` | `ListSkills() ([]InstalledSkill, error)` | Walks the runtime's skills dir: one entry per skill directory with its file tree, sorted by name, dirs before files. Description is read from the SKILL.md front-matter. `updated_at` (Unix seconds) is the **newest mtime anywhere in that skill's tree**, not the skill directory's own — a directory's mtime only moves when files are added or removed, so it would report an edited SKILL.md as unchanged; it rides along with the same walk rather than taking a second pass, and falls back to the directory's mtime for an empty skill. `store_availability` is `in_store`, `device_only`, or `unknown`: the device reads every catalog page and compares normalized runtime names with catalog slugs/names; an unavailable or incomplete catalog is always `unknown`, never `device_only`. A **missing** skills dir (un-provisioned runtime) is an empty list, not an error. |
 | `GET /api/agent/skills/files?name=<skill>` | `ReadSkillFiles(name) ([]SkillBundleFile, error)` | One installed skill's files, flat, with UTF-8 text inlined. Returns the **same `domain.SkillBundle` envelope** as the store preview so both detail views render through one component. A skill that's gone (stale listing) is a 404. |
+| `POST /api/agent/skills/publish?name=<skill>` | — | Available from Manage skills only for `device_only` entries. The device packages the complete skill directory into a `.skill` archive and proxies multipart upload to `/api/v1/skills/publish` on the host derived from `llm_base_url`; `llm_api_key` remains server-side as `x-api-key`. A successful upload enters Store review as pending. |
 | `POST /api/agent/skills` | `SaveSkill(domain.SkillDraft) (path, error)` | Writes an authored `<name>/SKILL.md`. **Refuses to overwrite** an existing skill (`skills.ErrSkillExists` → 400) so a store- or OTA-installed skill can't be destroyed by an authoring mistake. |
 | `DELETE /api/agent/skills?name=<skill>` | `DeleteSkill(name) (path, error)` | Removes the skill directory and everything under it. **Not idempotent**: a skill that isn't installed is a `404` (`skills.ErrSkillNotFound`), not a silent success, so a stale caller learns its list was out of date. Also refuses when something at that path isn't a skill directory. |
 | `POST /api/agent/skills/upload` | `InstallSkillArchive(...)` / `InstallSkillMarkdown(content)` | A skill from the operator's machine, **multipart** field `file` (not the base64-in-JSON used for face enrollment: that carries a small JPEG, a skill archive runs to megabytes and base64 would inflate it a third). Capped at 16 MB. Accepts `.zip`/`.skill` **or** a bare `.md`, and enforces the upstream format's requirements — see below. |
@@ -615,7 +650,7 @@ Neither path restarts the runtime: backends with a skills dir pick new files up 
 - Tracks response by `runId` correlation across SSE events
 - Inline HW control markers (`[HW:/emotion:...]`) stripped from displayed text; the markdown-link form some LLMs emit (`[label](HW:/led/off:{})`) is also stripped, keeping the label. Both strip patterns mirror the os-server executor grammar exactly — a malformed variant the executor won't fire stays visible as raw text
 - 50-minute **idle** timeout: the deadline is refreshed by every SSE event that belongs to the pending run (`assistant_delta`, `thinking`, tool calls), so a turn that legitimately runs for minutes stays pending while the agent keeps working; only 50 minutes of true silence gives up. Sized to outlast the backend's own per-turn cap (`CODEX_TURN_TIMEOUT_S`, 45 min) rather than to guess how long an answer should take: the gatewayd always ends a turn and that terminal frame carries the pending run id, so this is a last-resort net. It cannot be shortened — `codex exec --json` emits nothing at all while it works, so any window shorter than the turn itself finalizes a healthy turn as "no response" (see `docs/agentic/codex.md` §2.1). On give-up: streamed text so far is kept as the reply, otherwise an error with a retry button. It is deliberately NOT an absolute cap — an absolute one used to finalize a long build turn as "no response" while the run was still going, a symptom MQTT chat and Telegram never had because neither has a client-side deadline.
-- **Pending-turn recovery across reload**: messages persist an epoch `ts`; a pending reply bubble younger than 10 minutes survives a page reload instead of being finalized as an error. On the first render with the Chat tab active, the UI re-attaches to the stored `runId` and the reply is backfilled from the flow JSONL replay (`/api/agent/flow-stream` re-sends the last 500 events of the day on every connect — `tts_send` / `tts_suppressed` / `no_reply`). If nothing resolves the run within 30 s of silence, it is finalized as "no response" with retry — the same idle timer as above, just a shorter window, since a run that already finished backfills within ~2 s. Live events refresh it too, so reloading in the MIDDLE of a long turn keeps waiting like any other pending run.
+- **Pending-turn recovery and live fallback**: messages persist an epoch `ts`; a pending reply bubble younger than 10 minutes survives a page reload instead of being finalized as an error. On the first render with the Chat tab active, the UI re-attaches to the stored `runId` and the reply is backfilled from the flow JSONL replay (`/api/agent/flow-stream` re-sends the last 500 events of the day on every connect — `tts_send` / `tts_suppressed` / `no_reply` / `harness_response`). While a reply is pending, the same recent flow window is also fetched every three seconds as a fallback for a lost live SSE connection, so a final result appears without a reload. Recovery uses the same 12-minute idle budget as a live turn: reloading while a Harness or Codex turn is still running must not finalize it before its terminal event is written. Live events refresh this deadline.
 - Local intent fast path: sub-50ms responses bypassing agent
 - Busy/dropped handling: shows "busy — try again"
 - Markdown rendering: bold, italic, inline code (amber-tinted), code blocks (monospace), `[label](url)` links, bare URLs (mangled http/https schemes like `hthtps://` from upstream limit banners are repaired before linkifying; unknown schemes stay plain text), ordered/unordered lists, and tables (styled header + zebra rows). Agent bubbles get full markdown; user bubbles stay verbatim except URLs, which are linkified with the same scheme repair
@@ -715,3 +750,5 @@ swap runs without `--delete`, so device-local paths outside the repo survive.
 These are for a single device on your LAN. To ship to the fleet, use the OTA
 path instead — `make upload-hal` then `make promote-hal`, which versions the
 artifact and rolls it out.
+
+Harness final delivery records `harness_response` in flow JSONL with the original device run ID and complete `text`. Web Chat uses this event to recover pending results after SSE disconnects or page reloads. Live delivery still emits `chat_response` with state `final`.

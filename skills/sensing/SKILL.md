@@ -1,11 +1,23 @@
 ---
 name: sensing
-description: React to passive sensing events from the device — presence, sound, light, fire hazard. Events arrive as [sensing:<type>] messages and each gets an emotion marker + optional short line. Does NOT handle motion.activity (→ wellbeing) or emotion.detected / speech_emotion.detected (→ user-emotion-detection).
+description: React to passive device events tagged [sensing:...] — presence, sound, light, fire hazard — with inline emotion markers and optional short speech. Does NOT handle motion.activity (→ wellbeing) or emotion.detected / speech_emotion.detected (→ user-emotion-detection).
 ---
 
 # Sensing
 
 `[sensing:<type>]` messages arrive automatically from the device's detectors (camera, mic, light). React naturally — emotion marker + optional short line. Reply is spoken verbatim via TTS; keep it to ONE short sentence or `NO_REPLY`. Reasoning, thresholds, log dumps stay in `thinking`.
+
+## Sound: react and finish
+
+For a standalone `[sensing:sound]` event outside guard mode, the current event contains everything needed. After reading this skill, emit the matching reply below and end the turn. Do not call tools, re-read this skill, inspect config/workspace/memory, look up time/location/weather, or resume an unrelated task from history. A sound detector reports noise, not a request to investigate its source.
+
+| Current event | Reply |
+|---|---|
+| `occurrence 1`, or no valid occurrence count | `[HW:/emotion:{"emotion":"curious","intensity":0.6}] NO_REPLY` |
+| `occurrence 2` | `[HW:/emotion:{"emotion":"scan","intensity":0.7}] NO_REPLY` |
+| `occurrence 3` or greater | `[HW:/emotion:{"emotion":"shock","intensity":0.9}][HW:/servo/play:{"recording":"shock"}]` followed by one brief acknowledgment of the repeated noise, in the injected `current_language`. |
+
+Use the count supplied by the event, not the noise level or previous turns. An RMS level of `8858` with `occurrence 1` still takes the first row. Do not infer a cause, emergency, location, or time of day. Missing optional context does not require discovery. If the current input also contains an explicit user request, handle that request through its appropriate skill; this sound-only stopping rule does not cancel it. Guard-tagged events route to `guard/SKILL.md` instead.
 
 ## ⛔ Out of scope — route elsewhere
 
@@ -54,9 +66,9 @@ Every event emits at least one `[HW:/emotion:...]` marker, even on `NO_REPLY`. N
 - **HW markers first**, then text or `NO_REPLY`. Text = ONE short sentence max, spoken verbatim.
 - **Tool-call scope** — only `motion.activity` (→ wellbeing) and `emotion.detected` / `speech_emotion.detected` (→ user-emotion-detection + music-suggestion combined batch) may fire POSTs. On `presence.*`, `sound`, `light.level`, NEVER POST to mood/wellbeing logs — even if prior turn content suggests it. Hallucinated side-effects on selfreplay turns violate this; see `docs/debug/openclaw-selfreplay.md`.
 - **Never dump reasoning into the reply.** No log deltas, no "Looking at context…", no "No nudge needed". Scratch stays in `thinking`. This includes announcing which skill you are using — device-observed leak, 2026-08-24: *"Using the sensing skill for this presence event. Oh — hi. I don't think we've met yet."* The lamp read both sentences. Start the reply at the first word the user should hear.
-- **Silent = the literal token `NO_REPLY`, nothing else.** Never narrate the decision to stay quiet ("Sound event, no user message. Nothing to say", "No response needed"). That prose is not a sentinel — the backend treats it as speech and the device reads it out loud.
+- **Silent = HW markers followed by the literal token `NO_REPLY`, no spoken prose.** Never narrate the decision to stay quiet ("Sound event, no user message. Nothing to say", "No response needed"). That prose is not a sentinel — the backend treats it as speech and the device reads it out loud.
 - **Use the image when attached** — real visual context beats generic phrasing.
-- **Night-aware** — lower intensity emotions and shorter speech after ~22:00.
+- **Night-aware** — lower intensity emotions and shorter speech after ~22:00. For sound, use only an hour already supplied in the current context; if absent, use the sound table defaults without a lookup.
 - **Don't narrate the tech** — "I see someone at the door" not "face detection matched".
 - **Trust cooldowns** — system throttles already (60s sound, 10s presence, 30s light).
 - **Never call any API to receive events** — they arrive automatically.

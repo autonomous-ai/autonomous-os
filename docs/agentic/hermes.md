@@ -99,9 +99,19 @@ this, os-server rotates the conversation name:
 - **Trigger:** the generic lifecycle handler calls `ShouldRotateSession(totalTokens,
   turnsSinceRotation)` once per turn (a `domain.AgentGateway` method). OpenClaw /
   PicoClaw rotate on a real-token threshold (150k); **Hermes rotates on turn count**
-  (`rotateMaxTurns = 40`, or a `rotateTokenThreshold = 50_000` spike) because its
+  (`rotateMaxTurns = 40`, or a `rotateTokenThreshold = 250_000` spike) because its
   reported tokens are post-compression (~20–60 k) and never reflect the real chain
-  size — the token threshold would never fire. `NewSession()` performs the rotation.
+  size — the token threshold is a safety net, not the primary gate. `NewSession()`
+  performs the rotation.
+- **The token net was 50_000 until 2026-09-09.** It sat inside the normal
+  operating range: on lamp-a0ae a fresh conversation already reports ~12.3 k, and
+  an ordinary turn that reads a `SKILL.md` and runs a tool adds ~25 k
+  (12.3 k → 41.3 k → 64.5 k → 73.5 k), so the net fired every 2–3 turns. Because
+  the wired path is `maybeAutoNewSession` (compact is disabled), each firing
+  dropped the history with no summary and the device lost what it had just said.
+  250 k holds ~10 turns at that rate — a net has to sit **above** where the
+  gateway's own compression settles, not inside it (same value and reasoning as
+  [`codex`](codex.md)).
 
 ## 4. Request protocol — `POST /v1/responses`
 

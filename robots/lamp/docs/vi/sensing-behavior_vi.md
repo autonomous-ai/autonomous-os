@@ -37,6 +37,8 @@ HAL bắn một sound event cho mỗi audio sample vượt ngưỡng `SOUND_RMS_
 
 ### Hành vi leo thang (Escalation)
 
+Với event sound độc lập ngoài guard mode, `skills/sensing/SKILL.md` yêu cầu phản ứng trực tiếp rồi kết thúc turn: sau khi đọc skill không gọi thêm tool, tìm workspace/config/memory, hay tra giờ/vị trí/thời tiết. Số occurrence trong event quyết định phản ứng; mức RMS không làm tăng cấp. Count thiếu/không hợp lệ dùng phản ứng lần đầu. Output im lặng giữ HW marker rồi tới `NO_REPLY`. Nếu nhận occurrence 2 trực tiếp, agent vẫn trả `scan` (0.7) + `NO_REPLY`, dù tracker thông thường chặn event này. Yêu cầu rõ ràng của user trong cùng input và event guard vẫn đi theo nhánh riêng. Đây là hướng dẫn skill, không phải cơ chế backend chặn thực thi tool.
+
 | Giai đoạn | Agent nhận | Phản ứng của agent |
 |---|---|---|
 | Lần 1 | `... — occurrence 1` | `/emotion curious` (0.6), im lặng |
@@ -765,4 +767,4 @@ Khi user hoặc agent chủ động set màu/scene cho LED, breathing không đ�
 
 ### Đừng nhầm với dead-air filler
 
-Mumble loop nói khi thiết bị **idle**. Một cơ chế khác — dead-air filler (`system/lib/i18n/fillers.go`, điều khiển bởi `server/sensing/delivery/http/deadair_filler.go`) — nói các câu đệm ngắn kiểu "Vẫn đang nghĩ" **giữa turn** khi agent đang bận xử lý, có override theo tool (ví dụ "Để mình tìm chút" khi đang `web_search`). Khác trigger, khác pool câu.
+Mumble loop nói khi thiết bị **idle**. Một cơ chế khác — dead-air filler (`system/lib/i18n/fillers.go`, điều khiển bởi `server/sensing/delivery/http/deadair_filler.go`) — nói các aside ngắn, tự nhiên như "Ừm, để coi." **giữa turn** khi agent đang bận. Pool theo tool vẫn tách riêng cho các tool đã nhận diện. Tên tool thô được chuẩn hoá trước (`bash` / `shell` → `exec`, `file_changes` → `apply_patch`, cùng hậu tố MCP nhận diện được), nên cùng một pool dùng được qua các runtime; tên lạ rơi về continuation chung. Khác trigger, khác pool câu.

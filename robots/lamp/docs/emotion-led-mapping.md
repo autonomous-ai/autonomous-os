@@ -175,7 +175,7 @@ Measured on the lamp afterwards: `happy` 29.2 Hz refresh at 9.1% modulation, `ex
 
 ## LED Restore Behavior
 
-- **User has set a color/effect/scene** → after the emotion, restore the user's color/scene (with a re-aim if it is a scene)
+- **User has set a color/effect/scene** → after the emotion, restore the user's color/scene (LED only — a restore never moves the servo)
 - **Light is off or never set** → the emotion LED stays after the animation ends
 - **`shock`** → restore after 2.0s (notification_flash self-clears after ~1.5s)
 - **`idle`** → no restore scheduled (it is the ambient resting state)

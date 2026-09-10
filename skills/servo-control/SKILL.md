@@ -1,6 +1,6 @@
 ---
 name: servo-control
-description: Use to aim/point/look the device in a DIRECTION, toggle servo state (hold/resume/release), or play a named servo animation (nod/shake/etc). Directions are fixed named locations or axes — supported: desk, wall, left, right, up, down, center, user. Furniture and surfaces ("desk", "table", "floor", "ceiling", "wall", "door", "workspace") are ALWAYS directions, never tracking targets — map them to the closest of the supported names (table/workspace → desk). MUST use /servo/aim (not /servo/track) for: "look at the desk"→desk, "point at my table"→desk, "look at the wall"→wall, "look left"→left, "point up"→up, "look at me"→user. For following a movable OBJECT by vision (cup, phone, hand, person, pet) use servo-tracking instead. Compound: if user names a direction AND an object ("look at desk and follow cup"), fire THIS aim skill first, then tracking.
+description: "Use to aim/point/look the device in a DIRECTION, toggle servo state (hold/resume/release), or play a named servo animation (nod/shake/etc). Directions are fixed named locations or axes — supported: desk, wall, left, right, up, down, center, user. Furniture and surfaces (\"desk\", \"table\", \"floor\", \"ceiling\", \"wall\", \"door\", \"workspace\") are ALWAYS directions, never tracking targets — map them to the closest of the supported names (table/workspace → desk). MUST use /servo/aim (not /servo/track) for: \"look at the desk\"→desk, \"point at my table\"→desk, \"look at the wall\"→wall, \"look left\"→left, \"point up\"→up, \"look at me\"→user. For following a movable OBJECT by vision (cup, phone, hand, person, pet) use servo-tracking instead. Compound: if user names a direction AND an object (\"look at desk and follow cup\"), fire THIS aim skill first, then tracking."
 ---
 
 # Servo Control
@@ -59,12 +59,23 @@ Controls the device's servo motors for directional aiming and physical animation
 ```bash
 curl -sX POST http://127.0.0.1:5001/servo/aim -H 'Content-Type: application/json' -d '{"direction":"right"}'
 curl -sX POST http://127.0.0.1:5001/servo/hold -d '{}'
-curl -s "http://127.0.0.1:5001/camera/snapshot?save=true&width=768&quality=75"
+curl -sX POST http://127.0.0.1:5000/api/vision/look -H 'Content-Type: application/json' -d '{"question":"What do you see to the right?"}'
 ```
-→ Then describe the image. Do **not** use `[HW:...]` markers here — markers fire only *after* your reply is written, so a snapshot taken during the turn would show the OLD position. See the Camera skill.
+→ Answer from the returned `description`, or inspect the returned `path` with an image tool when only a path is returned. On error, do not guess. Do **not** use `[HW:...]` markers for these movements — markers fire only *after* your reply is written, so a snapshot taken during the turn would show the OLD position. See the Camera skill.
 
 **Input:** "Where are you?" / "Can you find me?" / "Look around for me" / "Where did I go?"
 **Output:** `[HW:/servo/search:{}]` Looking around for you...
+
+**Input:** "Find my cup" / "Look around for my keyboard" / "Where did I leave my phone?"
+**Output:** `[HW:/servo/search:{"target":"cup"}]` Let me look around for it...
+→ `target` is any noun — COCO classes are found locally, anything else via open-vocab.
+   Without it the sweep looks for a PERSON and will end on the first one it sees,
+   which is why an object search must always name its target.
+
+**Input:** "Scan the whole room" / "Show me your maximum capability in scanning" / "Do a full scan"
+**Output:** `[HW:/servo/search:{"exhaustive":true}]` Doing a full sweep — this takes a moment...
+→ Walks the whole look ring at every bearing instead of returning at the first sighting.
+   Combine with `target` when they ask for a thorough search for a specific thing.
 
 **Input:** "I moved you" / "You're in a new place" / "I put you somewhere else" / "Forget where I sit"
 **Output:** `[HW:/servo/bearing/reset:{}]` Got it — I'll forget where you usually are and learn it again.
@@ -191,6 +202,7 @@ Disables all servo motors so they can be moved freely by hand.
 ## Output Template
 
 ```
-[Servo] {action} — {direction_or_animation}
-Status: {success|failed}
+[HW:/servo/aim:{"direction":"desk"}] Aiming at your desk.
 ```
+
+Use the marker matching the requested action; for movement followed by a visual question, use the curl workflow above instead of repeating the movement in a marker.

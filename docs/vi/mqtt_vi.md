@@ -480,6 +480,14 @@ với script Node wrapper được ghi ra đĩa trước khi ghi entry. Code c�
 bị loại (`reserved`) khỏi vòng quét refresh của writer chung để nó không ghi đè chúng
 ở dạng sai (HTTP).
 
+**Hết hạn:** `expires_in` (số giây kể từ bây giờ) được lưu thành `expires_at` tuyệt
+đối. Credential không bao giờ hết hạn — app password hoặc API key tĩnh
+(`auth_type:"pat"`, hoặc payload có `api_key` mà không có `access_token`) — được lưu
+`expires_at: 0` khi backend không gửi thông tin hết hạn, thay vì mặc định 1 giờ của
+OAuth. Không có gì xoay vòng loại credential này (loop refresh bỏ qua
+`expires_at == 0`), nên một hạn dùng bịa ra sẽ khiến nó bị coi là hết hạn vĩnh viễn
+sau một tiếng kể từ lúc lưu.
+
 **Refresh:** loop refresh quét writer chung (glob `*_access_tokens.json`) cùng từng
 writer đặc biệt, và chủ động xoay vòng entry nào có CẢ `refresh_token` LẪN
 `refresh:true` (backend sở hữu quyền quyết định refresh qua cờ `refresh`) khi còn dưới
@@ -788,6 +796,8 @@ không biến kết quả upload thành thất bại.
 
 #### `chat.send` + `chat.event`
 
+Sentinel nội bộ `NO_REPLY` dùng khi chuyển tiếp sẽ được loại khỏi `chat.event`; client sẽ nhận tiến trình Harness và phản hồi cuối cùng.
+
 Cho phép backend (và qua đó là app mobile) giữ **đúng cuộc hội thoại mà chat trên
 web monitor đang giữ**. Chat web gồm 2 nửa — `POST /api/sensing/event` với
 `type:"web_chat"` để mở turn (đường này forward y như `type:"mqtt_chat"`), và
@@ -1087,3 +1097,7 @@ Xử lý bởi bootstrap worker, không qua MQTT handler trực tiếp.
 | `runtimes/openclaw/pairing.go` | WhatsApp Baileys QR pairing subprocess driver |
 | `system/domain/device.go` | MQTTMessage, command constants |
 | `system/domain/pairing.go` | PairingEvent + status enum |
+
+Khi không có lượt chuyển tiếp Harness đang chờ, `NO_REPLY` kết thúc được gửi thành `chat_response` với `state: final`, summary và message assistant rỗng. Mobile kết thúc trạng thái chờ mà không hiển thị sentinel nội bộ.
+
+MQTT coi mọi phản hồi final của Harness là kết thúc bất kể câu chữ; handler agent dùng chung chặn lời chuyển giao dựa trên đúng run ID.

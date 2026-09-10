@@ -56,6 +56,9 @@ func (s *OpenclawService) skillsDir() string {
 func (s *OpenclawService) ReadSkillFiles(name string) ([]domain.SkillBundleFile, error) {
 	return skills.ReadSkillFiles(s.skillsDir(), name)
 }
+func (s *OpenclawService) ExportSkillArchive(name, destDir string) (string, error) {
+	return skills.ExportSkillArchive(s.skillsDir(), name, destDir)
+}
 
 func (s *OpenclawService) ReadSkillFile(name, filePath string) (domain.SkillBundleFile, error) {
 	return skills.ReadSkillFile(s.skillsDir(), name, filePath)

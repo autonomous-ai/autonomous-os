@@ -184,7 +184,7 @@ def dispatch_turn(
         destination = "nowhere (model explicitly rejected non-user turn)"
     elif rt.handled:
         destination = "realtime (main agent notified, stays silent)"
-    elif not combined:
+    elif not combined and not (rt.delegated and rt.delegate_msg):
         destination = "nowhere (no transcript — nothing to send)"
     else:
         destination = "main agent"
@@ -206,20 +206,28 @@ def dispatch_turn(
         voice_metrics.exclude(interaction_id, voice_metrics.EXCL_REJECTED_NOISE)
     elif dropped:
         voice_metrics.exclude(interaction_id, voice_metrics.EXCL_REJECTED_NON_USER)
-    elif not combined:
+    elif not combined and not (rt.delegated and rt.delegate_msg):
         voice_metrics.exclude(interaction_id, voice_metrics.EXCL_NO_TRANSCRIPT)
 
-    if combined and not dropped:
+    # A valid realtime tool call is an authoritative transcript of the user's
+    # request. Some providers yield it before local STT has finalized, so do
+    # not lose the handoff merely because ``combined`` is empty.
+    forward_delegation = rt.delegated and bool(rt.delegate_msg)
+    if (combined or forward_delegation) and not dropped:
         # Reuse the prepass result when the realtime path already identified the
         # speaker this turn; otherwise identify now. Never runs recognition twice.
-        if identity is not None:
+        # There is no local transcript to identify for a tool-call-only turn.
+        if not combined:
+            final_msg, se_user = "", ""
+        elif identity is not None:
             final_msg, se_user, _ = identity
         else:
             final_msg, se_user, _ = decorator.identify_and_decorate(
                 final_text, audio_buffer
             )
         user = se_user if se_user else UNKNOWN_USER_LABEL
-        logger.info("Final message → OS server (%s): %r", event_type, final_msg)
+        if final_msg:
+            logger.info("Final message → OS server (%s): %r", event_type, final_msg)
 
         if rt.handled:
             # Realtime already spoke — send as "voice_handled" to skip dead-air filler.
@@ -258,7 +266,9 @@ def dispatch_turn(
         elif rt.delegated:
             # Delegated — send voice agent's summary + STT transcript to the OS server
             if rt.delegate_msg:
-                sensing_msg: str = f"[voice-instruction] {rt.delegate_msg}\n[transcript] {final_msg}"
+                sensing_msg: str = f"[voice-instruction] {rt.delegate_msg}"
+                if final_msg:
+                    sensing_msg = f"{sensing_msg}\n[transcript] {final_msg}"
             else:
                 sensing_msg = final_msg
             # Hand off the just-captured frame (if any) so the agent reuses it.

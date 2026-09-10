@@ -16,6 +16,7 @@ import logging
 import os
 import threading
 import time
+from functools import lru_cache
 from math import gcd
 from typing import Optional
 
@@ -749,6 +750,47 @@ def wrap_mic(mic_ctx, rate: int, np):
     return AecStream(mic_ctx, _canceller, voice_cfg.AEC_TAIL_S, np)
 
 
+@lru_cache(maxsize=32)
+def _reference_resample_filter(up: int, down: int, dtype: str):
+    """Cache SciPy's default polyphase FIR for a reduced ratio and dtype.
+
+    Speaker writes may be only a few milliseconds long. Rebuilding the same
+    Kaiser filter for every write puts avoidable work on the playback thread.
+    Keep the unscaled coefficients: resample_poly applies the upsampling gain
+    and padding itself, exactly as it does for its default window.
+    """
+    import numpy as np
+    import scipy.signal
+
+    max_rate = max(up, down)
+    half_len = 10 * max_rate
+    coefficients = scipy.signal.firwin(
+        2 * half_len + 1, 1.0 / max_rate, window=("kaiser", 5.0)
+    ).astype(np.dtype(dtype))
+    coefficients.setflags(write=False)
+    return coefficients
+
+
+def prepare_reference(rate: int) -> None:
+    """Prime optional resampling before playback, without publishing audio.
+
+    Importing SciPy and designing the first filter after a speaker write can
+    starve the next write. Call before the first audio is handed to the device;
+    reference_write still handles an unprepared or subsequently changed route.
+    """
+    canceller = _canceller
+    if _reference is None or canceller is None or rate == canceller._rate:
+        return
+    try:
+        import numpy as np
+
+        dst = canceller._rate
+        g = gcd(dst, rate)
+        _reference_resample_filter(dst // g, rate // g, np.dtype(np.float32).str)
+    except Exception as e:
+        logger.debug("AEC reference preparation skipped: %s", e)
+
+
 def reference_write(samples, rate: int) -> None:
     """Record float32 audio on its way to the speaker. Never raises.
 
@@ -768,7 +810,9 @@ def reference_write(samples, rate: int) -> None:
             import scipy.signal
 
             g = gcd(dst, rate)
-            mono = scipy.signal.resample_poly(mono, dst // g, rate // g)
+            up, down = dst // g, rate // g
+            coefficients = _reference_resample_filter(up, down, mono.dtype.str)
+            mono = scipy.signal.resample_poly(mono, up, down, window=coefficients)
         pcm16 = (np.clip(mono, -1.0, 1.0) * 32767).astype(np.int16)
         ref.write(pcm16.tobytes())
     except Exception as e:

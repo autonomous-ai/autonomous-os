@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import {
   Paperclip, X, Copy, Check, RotateCcw, Download, ArrowDown, ArrowUp,
   Pin, ChevronRight, Sparkles, Plus, Trash2, History,
-  Wrench, Lightbulb, Cog, Music, Palette, Search, Smile, ChevronDown,
+  Wrench, Lightbulb, Cog, Music, Palette, Search, Smile, ChevronDown, Square,
 } from "lucide-react";
 import { API } from "./types";
 import { getDeviceConfig } from "@/lib/api";
@@ -453,11 +453,16 @@ const HISTORY_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 // zero deltas in ten minutes, so ANY idle window shorter than the turn itself
 // finalizes a healthy turn as "no response".
 const REPLY_IDLE_TIMEOUT_MS = 12 * 60 * 1000;
-// Shorter window for the post-reload recovery path: there the run is normally
-// already finished and only needs to be backfilled (~2s), so silence past this
-// means the reply is genuinely not coming. Refreshed by live events too, so a
-// reload in the MIDDLE of a long turn keeps waiting like any other pending run.
-const RECOVERY_IDLE_TIMEOUT_MS = 30_000;
+// A reload must preserve the same idle budget as a live turn. Harness and
+// Codex can legitimately take longer than a short replay window to finish, and
+// a reload while they are still working must not turn a later final event into
+// a discarded "no response".
+const RECOVERY_IDLE_TIMEOUT_MS = REPLY_IDLE_TIMEOUT_MS;
+// A fallback for a lost live EventSource connection. This is deliberately only
+// active while a reply is pending: Flow SSE remains the normal path, while a
+// short replay poll ensures a terminal result written during a transient proxy
+// or browser SSE disconnect is rendered without requiring a page reload.
+const PENDING_FLOW_REPLAY_MS = 3_000;
 
 // Storage envelope so the TTL check has a timestamp to look at. Legacy
 // devices have a bare Conversation[] under CONVOS_KEY; loadConvos() handles
@@ -557,9 +562,21 @@ function titleFromMessages(msgs: ChatMessage[]): string {
   return userMsg.text.length > 36 ? userMsg.text.slice(0, 36) + "…" : userMsg.text;
 }
 
+// A conversation should follow the last message, not the moment it was first
+// created. Besides matching what people expect from a chat inbox, this keeps
+// active threads at the front when the local cache reaches its size limit.
+function conversationActivityAt(convo: Conversation): number {
+  const lastMessage = convo.messages[convo.messages.length - 1];
+  return lastMessage?.ts ?? convo.createdAt;
+}
+
+function newestFirst(convos: Conversation[]): Conversation[] {
+  return [...convos].sort((a, b) => conversationActivityAt(b) - conversationActivityAt(a));
+}
+
 function saveConvos(convos: Conversation[]) {
   try {
-    const trimmed = convos.slice(0, MAX_CONVOS).map((c) => ({
+    const trimmed = newestFirst(convos).slice(0, MAX_CONVOS).map((c) => ({
       ...c,
       // Strip large data from localStorage (imageUrls data: URLs are too large).
       // The images themselves live in IndexedDB (chatImageStore) keyed by
@@ -769,6 +786,12 @@ export function ChatSection({ events, isActive }: Props) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pendingRunIdRef = useRef<string | null>(null);
+  // The POST can still be awaiting its run id when the user presses Stop.
+  // Keep the provisional bubble id and sequence so that a late HTTP response
+  // cannot revive a reply the user explicitly dismissed.
+  const pendingLocalReplyIdRef = useRef<string | null>(null);
+  const sendSequenceRef = useRef(0);
+  const sendAbortRef = useRef<AbortController | null>(null);
   // Snapshot of the user's outgoing text for the pending run. Used to pair a
   // steered/merged turn (OpenClaw re-fires the same input under a fresh UUID
   // run) — see steered-pair branch in the events useEffect below.
@@ -780,6 +803,7 @@ export function ChatSection({ events, isActive }: Props) {
   const dirtyRef = useRef(false); // whether there are pending delta/thinking updates to flush
   const [thinkingText, setThinkingText] = useState<string | null>(null); // current thinking display
   const [toolChips, setToolChips] = useState<ToolChip[]>([]); // tool calls for current pending response
+  const [replayedFlowEvents, setReplayedFlowEvents] = useState<MonitorEvent[]>([]);
 
   const active = convos.find((c) => c.id === activeId) ?? null;
   const messages = active?.messages ?? EMPTY_MESSAGES;
@@ -851,6 +875,32 @@ export function ChatSection({ events, isActive }: Props) {
     if (w) window.clearTimeout(w.timer);
     replyWatchdogRef.current = null;
   }, []);
+
+  // EventSource delivers live monitor events with minimal latency. It can still
+  // be interrupted by a proxy reconnect or a browser connection-slot change.
+  // While a chat reply is pending, replay the persisted flow periodically so a
+  // final `tts_send` or `harness_response` cannot leave the bubble on `…`
+  // until the user reloads the page.
+  useEffect(() => {
+    if (!sending || !pendingRunIdRef.current) return;
+    let cancelled = false;
+    const replay = async () => {
+      try {
+        const response = await fetch(`${API}/agent/flow-events?last=500`);
+        const payload = await response.json();
+        const next = payload?.data?.events;
+        if (!cancelled && Array.isArray(next)) setReplayedFlowEvents(next as MonitorEvent[]);
+      } catch {
+        // Live SSE and the next poll remain available; keep the pending turn.
+      }
+    };
+    void replay();
+    const timer = window.setInterval(() => void replay(), PENDING_FLOW_REPLAY_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [sending]);
 
   const armReplyWatchdog = useCallback(
     (runId: string, convoId: string, ms: number) => {
@@ -1183,12 +1233,18 @@ export function ChatSection({ events, isActive }: Props) {
     // substring containment with a 32-char guard, but we have the user's
     // full original text in pendingUserTextRef so exact match works for
     // short inputs like "hello" too.
+    // `events` is the live Flow SSE snapshot. `replayedFlowEvents` is a
+    // pending-only HTTP fallback for when that EventSource silently drops; map
+    // by stable event id so the same JSONL event is considered once.
+    const observedEvents = Array.from(
+      new Map([...replayedFlowEvents, ...events].map((event) => [event.id, event])).values(),
+    );
     const acceptedRunIds = new Set<string>([pending]);
     const userText = pendingUserTextRef.current;
     if (userText) {
       let emptyIdx = -1;
-      for (let i = 0; i < events.length; i++) {
-        const ev = events[i];
+      for (let i = 0; i < observedEvents.length; i++) {
+        const ev = observedEvents[i];
         if (ev.type !== "flow_event") continue;
         const d = ev.detail as JsonObject | undefined;
         if (d?.node !== "chat_final_empty") continue;
@@ -1197,8 +1253,8 @@ export function ChatSection({ events, isActive }: Props) {
       }
       if (emptyIdx >= 0) {
         const expected = userText.trim().toLowerCase();
-        for (let i = emptyIdx + 1; i < events.length; i++) {
-          const ev = events[i];
+        for (let i = emptyIdx + 1; i < observedEvents.length; i++) {
+          const ev = observedEvents[i];
           if (ev.type !== "flow_event") continue;
           const d = ev.detail as JsonObject | undefined;
           if (d?.node !== "chat_input") continue;
@@ -1216,7 +1272,7 @@ export function ChatSection({ events, isActive }: Props) {
       }
     }
 
-    for (const ev of [...events].reverse()) {
+    for (const ev of [...observedEvents].reverse()) {
       const evRunId: string | undefined =
         ev.runId ??
         (ev.detail as JsonObject | undefined)?.run_id ??
@@ -1225,7 +1281,7 @@ export function ChatSection({ events, isActive }: Props) {
       if (!evRunId || !acceptedRunIds.has(evRunId)) continue;
 
       const d = ev.detail as JsonObject | undefined;
-      if (ev.type === "flow_event" && (d?.node === "tts_send" || d?.node === "tts_suppressed")) {
+      if (ev.type === "flow_event" && (d?.node === "tts_send" || d?.node === "tts_suppressed" || d?.node === "harness_response")) {
         // Prefer full_text: tts_send.text is only the remainder when sentence 1
         // streamed mid-turn (logged as tts_stream_send, never read here). full_text
         // is the complete reply. Fall back to text for older JSONL / tts_suppressed.
@@ -1273,7 +1329,7 @@ export function ChatSection({ events, isActive }: Props) {
     // `sending` is here so the reload-recovery effect below (which attaches
     // pendingRunIdRef and flips sending on) forces a re-scan of the already
     // replayed events even when no new flow event arrives afterwards.
-  }, [events, updateMessages, sending]);
+  }, [events, replayedFlowEvents, updateMessages, sending]);
 
   // Recover an in-flight turn after a page reload. The run-tracking refs
   // (pendingRunIdRef & co.) live only in memory, so a reload while waiting
@@ -1582,6 +1638,8 @@ export function ChatSection({ events, isActive }: Props) {
     // cancels the in-flight POST, so the reply had nowhere to land and the turn
     // looked lost even though the device answered it fine.
     const localReplyId = `l-pending-${Date.now()}`;
+    const sendSequence = ++sendSequenceRef.current;
+    pendingLocalReplyIdRef.current = localReplyId;
     setConvos((prev) =>
       prev.map((c) =>
         c.id === targetId
@@ -1611,16 +1669,29 @@ export function ChatSection({ events, isActive }: Props) {
       const body: Record<string, unknown> = { type: "web_chat", message: text };
       if (sendImages.length > 0) body.images = sendImages;
       if (sendFiles.length > 0) body.files = sendFiles;
+      const abort = new AbortController();
+      sendAbortRef.current = abort;
       const res = await fetch(`${API}/sensing/event`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
+        signal: abort.signal,
       });
       const json = await res.json();
+
+      // Stop was pressed while this request was being accepted. The agent may
+      // still finish its already-accepted work, but this chat must never show
+      // that late reply.
+      if (sendSequenceRef.current !== sendSequence) {
+        if (json.status === 1 && json.data?.runId) resolvedIds.current.add(json.data.runId);
+        return;
+      }
+      sendAbortRef.current = null;
 
       if (json.status === 1 && json.data?.runId) {
         const runId: string = json.data.runId;
         pendingRunIdRef.current = runId;
+        pendingLocalReplyIdRef.current = null;
         pendingUserTextRef.current = text;
         const replyTime = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
         // Adopt the bubble that has been spinning since the click — attaching the
@@ -1673,6 +1744,8 @@ export function ChatSection({ events, isActive }: Props) {
         );
       }
     } catch {
+      if (sendSequenceRef.current !== sendSequence) return;
+      sendAbortRef.current = null;
       setSending(false);
       setConvos((prev) =>
         prev.map((c) =>
@@ -1696,6 +1769,39 @@ export function ChatSection({ events, isActive }: Props) {
   // sendText splits the staged attachments by kind itself. Passing the raw
   // base64 here would make every attachment look like an image.
   const send = () => { sendText(input.trim()); };
+
+  // Stop is intentionally scoped to this browser's pending reply. It aborts a
+  // still-unaccepted HTTP send and permanently ignores a late result once a
+  // run id exists; it does not cancel the agent's underlying task or alter its
+  // session/memory.
+  const stopPendingReply = () => {
+    const runId = pendingRunIdRef.current;
+    const localReplyId = pendingLocalReplyIdRef.current;
+    ++sendSequenceRef.current;
+    sendAbortRef.current?.abort();
+    sendAbortRef.current = null;
+    clearReplyWatchdog();
+    if (runId) {
+      resolvedIds.current.add(runId);
+      deltaBufRef.current.delete(runId);
+      thinkingBufRef.current.delete(runId);
+    }
+    pendingRunIdRef.current = null;
+    pendingUserTextRef.current = null;
+    pendingLocalReplyIdRef.current = null;
+    toolChipsRef.current.clear();
+    setToolChips([]);
+    setThinkingText(null);
+    setSending(false);
+    setConvos((prev) => prev.map((c) => ({
+      ...c,
+      messages: c.messages.map((m) =>
+        m.pending && (m.runId === runId || m.id === localReplyId)
+          ? { ...m, text: "Stopped", pending: false }
+          : m,
+      ),
+    })));
+  };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
@@ -1768,22 +1874,45 @@ export function ChatSection({ events, isActive }: Props) {
           >
             <Plus size={14} /> New chat
           </button>
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search chats…"
-            style={{
-              width: "100%", padding: "7px 10px", borderRadius: 6,
-              background: "var(--lm-surface)", border: "1px solid var(--lm-border)",
-              color: "var(--lm-text)", fontSize: 11.5, outline: "none",
-              boxSizing: "border-box",
-            }}
-          />
+          <div style={{ position: "relative" }}>
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Escape") setSearch(""); }}
+              placeholder="Search chats…"
+              aria-label="Search chat history"
+              style={{
+                width: "100%", padding: search ? "7px 30px 7px 10px" : "7px 10px", borderRadius: 6,
+                background: "var(--lm-surface)", border: "1px solid var(--lm-border)",
+                color: "var(--lm-text)", fontSize: 11.5, outline: "none",
+                boxSizing: "border-box",
+              }}
+            />
+            {search && (
+              <button
+                type="button"
+                onClick={() => setSearch("")}
+                title="Clear search"
+                aria-label="Clear chat history search"
+                style={{
+                  position: "absolute", right: 5, top: "50%", transform: "translateY(-50%)",
+                  width: 21, height: 21, padding: 0, border: "none", borderRadius: 4,
+                  background: "transparent", color: "var(--lm-text-muted)", cursor: "pointer",
+                  display: "inline-flex", alignItems: "center", justifyContent: "center",
+                }}
+              ><X size={12} /></button>
+            )}
+          </div>
         </div>
         <div style={{ flex: 1, overflowY: "auto", padding: "6px 10px 12px" }}>
           {filtered.length === 0 && (
             <div style={{ padding: 16, textAlign: "center", color: "var(--lm-text-muted)", fontSize: 11 }}>
               {search ? "No matches" : "No conversations yet"}
+            </div>
+          )}
+          {search && filtered.length > 0 && (
+            <div style={{ padding: "7px 6px 3px", color: "var(--lm-text-muted)", fontSize: 10.5 }}>
+              {filtered.length} {filtered.length === 1 ? "conversation" : "conversations"}
             </div>
           )}
           {grouped.map(({ label, items }) => (
@@ -1895,7 +2024,7 @@ export function ChatSection({ events, isActive }: Props) {
                               flexShrink: 0, fontSize: 9.5, fontWeight: 500,
                               color: "var(--lm-text-muted)",
                               paddingRight: c.pinned ? 12 : 0,
-                            }}>{relativeTime(c.createdAt, nowTs, t)}</span>
+                            }}>{relativeTime(conversationActivityAt(c), nowTs, t)}</span>
                           )}
                         </div>
                       )}
@@ -2439,26 +2568,24 @@ export function ChatSection({ events, isActive }: Props) {
                 }}
               />
               <button
-                onClick={send}
-                disabled={!input.trim() || sending}
+                onClick={sending ? stopPendingReply : send}
+                disabled={!sending && !input.trim()}
                 className={input.trim() && !sending ? "lm-send-ready" : undefined}
                 style={{
                   width: 34, height: 34, borderRadius: "50%", flexShrink: 0,
-                  background: input.trim() && !sending
+                  background: sending || input.trim()
                     ? "var(--lm-amber)"
                     : "color-mix(in srgb, var(--lm-text) 15%, transparent)",
                   border: "none",
-                  color: input.trim() && !sending ? "var(--lm-on-amber)" : "var(--lm-text-muted)",
-                  cursor: input.trim() && !sending ? "pointer" : "default",
-                  boxShadow: input.trim() && !sending ? "0 2px 10px -2px var(--lm-amber-glow)" : "none",
+                  color: sending || input.trim() ? "var(--lm-on-amber)" : "var(--lm-text-muted)",
+                  cursor: sending || input.trim() ? "pointer" : "default",
+                  boxShadow: sending || input.trim() ? "0 2px 10px -2px var(--lm-amber-glow)" : "none",
                   transition: "background 0.15s, color 0.15s, box-shadow 0.15s, transform 0.12s",
                   display: "inline-flex", alignItems: "center", justifyContent: "center",
                 }}
-                title="Send (Enter)"
-                aria-label="Send message"
-              >{sending
-                ? <span className="lm-spin-ico" style={{ width: 14, height: 14, border: "2px solid currentColor", borderTopColor: "transparent", borderRadius: "50%", display: "inline-block" }} />
-                : <ArrowUp size={17} strokeWidth={2.6} />}</button>
+                title={sending ? "Stop receiving this reply" : "Send (Enter)"}
+                aria-label={sending ? "Stop receiving reply" : "Send message"}
+              >{sending ? <Square size={14} fill="currentColor" /> : <ArrowUp size={17} strokeWidth={2.6} />}</button>
               </div>
             </div>
             <div style={{
@@ -2831,8 +2958,8 @@ function groupConvosByDate(convos: Conversation[]): { label: string; items: Conv
   const weekAgo = today - 7 * 86400_000;
 
   // Pinned first
-  const pinned = convos.filter((c) => c.pinned);
-  const unpinned = convos.filter((c) => !c.pinned);
+  const pinned = newestFirst(convos.filter((c) => c.pinned));
+  const unpinned = newestFirst(convos.filter((c) => !c.pinned));
 
   const groups: Record<string, Conversation[]> = {};
   const order: string[] = [];
@@ -2844,9 +2971,10 @@ function groupConvosByDate(convos: Conversation[]): { label: string; items: Conv
 
   for (const c of unpinned) {
     let label: string;
-    if (c.createdAt >= today) label = "Today";
-    else if (c.createdAt >= yesterday) label = "Yesterday";
-    else if (c.createdAt >= weekAgo) label = "This week";
+    const activityAt = conversationActivityAt(c);
+    if (activityAt >= today) label = "Today";
+    else if (activityAt >= yesterday) label = "Yesterday";
+    else if (activityAt >= weekAgo) label = "This week";
     else label = "Older";
 
     if (!groups[label]) { groups[label] = []; order.push(label); }

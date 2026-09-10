@@ -52,6 +52,9 @@ func picoclawSkillsDir() string {
 func (s *PicoclawService) ReadSkillFiles(name string) ([]domain.SkillBundleFile, error) {
 	return skills.ReadSkillFiles(picoclawSkillsDir(), name)
 }
+func (s *PicoclawService) ExportSkillArchive(name, destDir string) (string, error) {
+	return skills.ExportSkillArchive(picoclawSkillsDir(), name, destDir)
+}
 
 func (s *PicoclawService) ReadSkillFile(name, filePath string) (domain.SkillBundleFile, error) {
 	return skills.ReadSkillFile(picoclawSkillsDir(), name, filePath)

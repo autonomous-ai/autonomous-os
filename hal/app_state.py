@@ -1110,28 +1110,22 @@ def _restore_user_led():
                 "LED restore: effect=%s color=%s speed=%s", effect, color, speed
             )
         elif stype == LST_SCENE:
-            from hal.models import ServoAimRequest
-            from hal.routes.servo import aim_servo
-
+            # LED only. This used to re-aim the head to the scene direction as
+            # well, on every one of the six paths that restore the LED — after
+            # almost every emotion, at each TTS end, on mic unmute, 3s after an
+            # STT session opens. `aim_servo` honours nothing but the sleep lock,
+            # so each one killed the running recording mid-frame and parked the
+            # arm as `__aim_hold__` for 5s, at a pose blended from wherever the
+            # animation happened to be (#314). Scene ACTIVATION still aims —
+            # that is a deliberate user action, and it is the only one that is.
             preset = SCENE_PRESETS.get(state["scene"])
             if preset:
                 _stop_current_effect()
                 scaled = tuple(int(c * preset["brightness"]) for c in preset["color"])
                 rgb_service.dispatch(RGB_CMD_SOLID, scaled)
-                aim_dir = preset.get("aim")
                 logger.info(
-                    "LED restore: scene=%s color=%s aim=%s",
-                    state["scene"],
-                    scaled,
-                    aim_dir,
+                    "LED restore: scene=%s color=%s", state["scene"], scaled
                 )
-                if aim_dir and animation_service:
-                    threading.Thread(
-                        target=aim_servo,
-                        args=(ServoAimRequest(direction=aim_dir),),
-                        daemon=True,
-                        name=f"restore-aim-{aim_dir}",
-                    ).start()
             else:
                 logger.warning(
                     "LED restore: scene=%s not found in SCENE_PRESETS", state["scene"]

@@ -1,6 +1,6 @@
 ---
 name: wellbeing
-description: Proactive coaching across hydration, breaks, meals AND posture. Use when an [activity] event fires (message starts with `[activity] Activity detected: <labels>.` — labels include drink, break, celebrate, the fatigue label "yawning", or sedentary raw labels like "using computer"; sedentary events may also carry a [posture_summary: {...}] block when the user has been at the computer long enough for posture to drift), or when the user asks if they should drink water / take a break / fix their posture. Thresholds are computed from per-user logs, never guessed.
+description: "Proactive coaching across hydration, breaks, meals AND posture. Use when an [activity] event fires (message starts with `[activity] Activity detected: activity labels.` — labels include drink, break, celebrate, the fatigue label \"yawning\", or sedentary raw labels like \"using computer\"; sedentary events may also carry a [posture_summary: {...}] block when the user has been at the computer long enough for posture to drift), or when the user asks if they should drink water / take a break / fix their posture. Thresholds are computed from per-user logs, never guessed."
 ---
 
 # Wellbeing
@@ -318,7 +318,7 @@ Same shape for break (`action="nudge_break"`) and toilet (`action="nudge_toilet"
 `action=praise_posture`. Full marker shape + curl fallback in
 `reference/posture.md`.
 
-Skip the marker entirely when you took the **Reaction** path or stayed silent (`NO_REPLY`). The wellbeing marker is for `nudge_hydration` / `nudge_break` / `nudge_toilet` only — drink/break rows are already logged by the backend upstream. The posture marker is for `nudge_posture` / `praise_posture` only. The `notes` field is the same sentence you're about to speak — it's what the timeline will display.
+Do not duplicate backend-logged drink/break/eat/celebrate rows for ordinary **Reaction** replies. The **yawn reaction** is an exception: keep its `noted_yawn` marker to start the existing cooldown. Keep the logs explicitly required by the chosen morning-greeting, sleep-winddown, meal-reminder, or nudge route as well. A silent no-action route needs no nudge marker. Posture uses `/posture/log` for `nudge_posture` / `praise_posture`, not `/wellbeing/log`. The `notes` field is the same sentence you're about to speak — it's what the timeline will display.
 
 **Do NOT use `curl` exec for this log.** That would consume a tool turn (~5-7s LLM-think on the result) for a side-effect that has nothing to wait for. The HW marker path is single-trip.
 
