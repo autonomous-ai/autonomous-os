@@ -331,7 +331,7 @@ device never cuts anyone off.
 
 ### The mic ignores our own backchannel cue
 
-Backchannel listening cues ("Ok", "Mm", "Oh") are played on purpose **without**
+Backchannel listening cues ("Mm", "Hmm", "Uh-huh") are played on purpose **without**
 setting the TTS `speaking` flag, because that flag ends the running STT session —
 the one the cue exists to keep alive. But `speaking` is also the only thing that
 normally keeps the mic off while the device talks, so the cue reached the mic
