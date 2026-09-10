@@ -299,15 +299,26 @@ func (s *Server) handleAppNotification(method string, params json.RawMessage) {
 			Error  any             `json:"error"`
 			Usage  json.RawMessage `json:"usage"`
 		} `json:"turn"`
-		// TurnCompletedEvent carries the token usage block. codex-rs 0.150.1
-		// has emitted it both at the notification top level and nested under
-		// `turn`; accept either (usageOf picks whichever is present) so the
-		// device turn card keeps showing tokens across codex upgrades.
-		Usage json.RawMessage `json:"usage"`
-		Item  json.RawMessage `json:"item"`
+		// Some codex builds put usage on the turn-completed notification (top
+		// level or under `turn`); 0.150.1 sends it on thread/tokenUsage/updated
+		// instead. Accept every shape — usageOf picks the first populated one —
+		// so the device turn card keeps showing tokens across codex upgrades.
+		Usage      json.RawMessage `json:"usage"`
+		TokenUsage struct {
+			Last  json.RawMessage `json:"last"`
+			Total json.RawMessage `json:"total"`
+		} `json:"tokenUsage"`
+		Item json.RawMessage `json:"item"`
 	}
 	_ = json.Unmarshal(params, &p)
 	switch method {
+	case "thread/tokenUsage/updated":
+		// Token usage does NOT ride turn/completed — codex-rs 0.150.1 pushes it
+		// on its own notification, in camelCase, ahead of the turn's terminal
+		// event. `last` is this turn; `total` is the whole thread. Stash the
+		// per-turn block and attach it to turn.completed below, which is the
+		// frame the translator reads usage from.
+		s.storeAppUsage(p.TokenUsage.Last, p.TokenUsage.Total)
 	case "turn/started":
 		s.mu.Lock()
 		if p.Turn.ID != "" {
@@ -358,7 +369,7 @@ func (s *Server) handleAppNotification(method string, params json.RawMessage) {
 			// shows no in/out/cache tokens at all (the `codex exec` JSONL path
 			// never lost it — it forwards stdout untouched).
 			frame := map[string]any{"type": "turn.completed"}
-			if u := usageOf(p.Usage, p.Turn.Usage); u != nil {
+			if u := usageOf(p.Usage, p.Turn.Usage, s.takeAppUsage()); u != nil {
 				frame["usage"] = u
 			}
 			s.sendJSON(frame)
@@ -464,18 +475,60 @@ func snakeItemType(v string) string {
 	return strings.ToLower(b.String())
 }
 
-// usageOf returns the first non-empty usage block, as a decoded object so it
-// re-marshals into the frame as JSON rather than a base64 string. Empty/`null`
-// candidates are skipped; nil means the notification carried no usage.
+// usageOf returns the first non-empty usage block, normalized to the snake_case
+// field names the exec JSONL path uses (the App Server speaks camelCase), so
+// the translator has one shape to decode. Empty/`null` candidates are skipped;
+// nil means no usage was reported.
 func usageOf(candidates ...json.RawMessage) map[string]any {
 	for _, raw := range candidates {
 		if len(raw) == 0 {
 			continue
 		}
 		var m map[string]any
-		if json.Unmarshal(raw, &m) == nil && len(m) > 0 {
-			return m
+		if json.Unmarshal(raw, &m) != nil || len(m) == 0 {
+			continue
 		}
+		for camel, snake := range map[string]string{
+			"inputTokens":           "input_tokens",
+			"cachedInputTokens":     "cached_input_tokens",
+			"cacheWriteInputTokens": "cache_write_input_tokens",
+			"outputTokens":          "output_tokens",
+			"totalTokens":           "total_tokens",
+		} {
+			if v, ok := m[camel]; ok {
+				if _, taken := m[snake]; !taken {
+					m[snake] = v
+				}
+				delete(m, camel)
+			}
+		}
+		return m
 	}
 	return nil
+}
+
+// storeAppUsage keeps the newest per-turn usage block (falling back to the
+// thread total when a build omits `last`) until the turn's terminal event
+// collects it.
+func (s *Server) storeAppUsage(last, total json.RawMessage) {
+	raw := last
+	if len(raw) == 0 {
+		raw = total
+	}
+	if len(raw) == 0 {
+		return
+	}
+	s.mu.Lock()
+	s.appUsage = append(raw[:0:0], raw...)
+	s.mu.Unlock()
+}
+
+// takeAppUsage returns and clears the stashed usage, so a turn that reported
+// none never inherits the previous turn's numbers.
+func (s *Server) takeAppUsage() json.RawMessage {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	raw := s.appUsage
+	s.appUsage = nil
+	return raw
 }

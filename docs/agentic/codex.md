@@ -370,12 +370,24 @@ newer one proves it was not the reply. Exception: a non-final message carrying a
 `[HW:/…]` marker is a real hardware action and stays in the reply. Prompt
 wording cannot suppress preambles reliably — this is the enforcement point.
 
-**Usage:** `turn.completed` carries `{input_tokens, cached_input_tokens,
-cache_write_input_tokens, output_tokens}`. The App Server reports it on the
-`turn/completed` notification (top level, or nested under `turn` — gatewayd's
-`usageOf` accepts either) and forwards it verbatim on the `turn.completed`
-frame; before that it emitted a bare frame and the Flow Monitor turn card
-showed **no tokens at all**.
+**Usage:** the App Server does NOT put usage on `turn/completed`. codex-rs
+0.150.1 pushes it on its own notification, in camelCase, before the turn's
+terminal event:
+
+```
+thread/tokenUsage/updated  {"threadId":…,"turnId":…,"tokenUsage":{
+   "total":{…thread cumulative…},
+   "last":{"totalTokens":…,"inputTokens":…,"cachedInputTokens":…,
+           "cacheWriteInputTokens":…,"outputTokens":…,"reasoningOutputTokens":…}}}
+```
+
+gatewayd stashes the `last` block (`storeAppUsage`), normalizes camelCase to
+the snake_case names the exec JSONL path uses, and attaches it to the
+`turn.completed` frame the translator reads (`usageOf` also still accepts a
+`usage` block on the notification itself or under `turn`, for other builds).
+Until this landed the frame was bare and the Flow Monitor turn card showed **no
+tokens at all**. `takeAppUsage` clears the stash, so a turn that reports nothing
+never inherits the previous turn's numbers.
 
 Codex speaks the OpenAI Responses API, whose `input_tokens` **already includes**
 `cached_input_tokens`. The translator therefore SUBTRACTS — `input - cached →
