@@ -314,7 +314,7 @@ giờ cắt lời ai.
 
 ### Mic bỏ qua chính cue backchannel của mình
 
-Cue lắng nghe của backchannel ("Ừm", "Ừ", "Ờ") được phát mà **không** set cờ
+Cue lắng nghe của backchannel ("Ok", "Mm", "Oh") được phát mà **không** set cờ
 `speaking` của TTS — cố ý, vì cờ đó sẽ kết thúc session STT đang chạy, đúng cái
 session mà cue sinh ra để giữ. Nhưng `speaking` cũng là thứ duy nhất bình thường
 giữ mic tắt khi thiết bị đang nói, nên cue lọt thẳng vào mic và VAD đầu vào mở một

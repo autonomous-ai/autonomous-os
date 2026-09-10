@@ -96,7 +96,7 @@ type fillerRun struct {
 	ended          bool      // turn finalized (assistant delta or lifecycle.end) — no more arms
 	lastSpoken     string    // text of the most recent filler — used to dedup back-to-back picks
 	rearmPending   bool      // tool.end arrived while playing=true; fire() re-arms after speak (otherwise the event would be silently dropped by armLocked's playing guard)
-	lastToolName   string    // name of the most recently started tool — selects an override only when one exists. Empty when no tool has started yet (e.g. first filler before any tool call)
+	lastToolName   string    // name of the most recently started tool — drives tool-aware filler pool ("Đang tra mạng" for web_search, "Đang đọc tài liệu" for read, etc.). Empty when no tool has started yet (e.g. first filler before any tool call)
 }
 
 // fillersDisabled reports whether both English pools are empty — the kill
@@ -111,12 +111,12 @@ func fillersDisabled() bool {
 // an alternative exists.
 //
 // Lookup chain (first non-empty wins):
-//  1. Tool-specific pool keyed by lastToolName
+//  1. Tool-specific pool keyed by lastToolName ("web_search" → "Đang tra mạng")
 //  2. Opening pool when fired==0, else Continuation pool
 //  3. The opposite (Continuation/Opening) pool as fallback
 //
 // fired==0 prefers Opening so the very first filler stays an
-// acknowledgement; a tool override takes precedence only when one exists.
+// acknowledgement; once a tool has fired the tool pool drives accuracy.
 func pickFiller(fired int, lastSpoken, lastToolName string) string {
 	lang := i18n.Lang()
 	if pool := toolPoolForLang(lang, lastToolName); len(pool) > 0 {
@@ -236,7 +236,8 @@ func PrewarmFillers() {
 	all := append([]string{}, opening...)
 	all = append(all, continuation...)
 	// Also prerender tool-specific filler phrases. Without this, the first
-	// fire after a tool starts hits ElevenLabs live (~1-2s render) and the resulting late
+	// fire of a tool-aware filler (e.g. "Đang tra mạng" when web_search
+	// runs) hits ElevenLabs live (~1-2s render) and the resulting late
 	// audio races against the assistant TTS that follows — user perceives
 	// it as the filler getting cut off / TTS being suppressed.
 	// Flatten every tool override across all langs so prerender covers the
@@ -464,7 +465,7 @@ func (fm *FillerManager) OnTurnStart(runID string) {
 }
 
 // OnToolStart records the most recently started tool name so the next
-// filler can select a corresponding override, and soft-cancels
+// filler picks a tool-aware phrase (see ToolFillers*), and soft-cancels
 // the pending filler when the tool is a hardware reaction (the user
 // already perceives the device reacting — no filler needed at that moment).
 // Non-hardware tools leave the filler timer ticking so it can still fire
@@ -662,9 +663,10 @@ func (fm *FillerManager) fire(runID string) {
 	fired := run.fired
 	fm.mu.Unlock()
 
-	// Show whether the picked filler came from a tool-specific pool or fell back
-	// to the generic Continuation pool (tool name unmapped). Speeds up
-	// "I didn't hear a filler for web_search" debugging — grep run_id, see pool=tool vs
+	// Show whether the picked filler came from a tool-specific pool (matches
+	// what the agent is doing right now) or fell back to the generic
+	// Continuation pool (tool name unmapped). Speeds up "I didn't hear a
+	// filler for web_search" debugging — grep run_id, see pool=tool vs
 	// pool=continuation vs pool=opening at fire time.
 	fm.mu.Lock()
 	owner := fillerOwner(fm.interactions[runID], runID)
