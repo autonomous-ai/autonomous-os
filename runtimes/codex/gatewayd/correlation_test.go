@@ -3,11 +3,14 @@ package gatewayd
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
-func TestGatewayCorrelatesThreeQueuedTurns(t *testing.T) {
+func TestGatewaySteersConcurrentMessagesIntoActiveTurn(t *testing.T) {
 	dir := t.TempDir()
 	binary := writeFakeCodex(t, dir, filepath.Join(dir, "argv.log"))
 	url, _ := startServer(t, binary, dir)
@@ -18,16 +21,42 @@ func TestGatewayCorrelatesThreeQueuedTurns(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	for i := 1; i <= 3; i++ {
-		frames := readTurnFrames(t, conn)
-		if len(frames) < 3 {
-			t.Fatalf("turn %d missing events", i)
+	frames := readTurnFrames(t, conn)
+	if len(frames) < 3 {
+		t.Fatalf("active turn missing events: %v", frames)
+	}
+	for _, frame := range frames {
+		if frame["request_id"] != "req-1" || frame["run_id"] != "run-1" {
+			t.Fatalf("steered turn must retain first correlation: %v", frame)
 		}
-		for _, frame := range frames {
-			if frame["request_id"] != fmt.Sprintf("req-%d", i) || frame["run_id"] != fmt.Sprintf("run-%d", i) {
-				t.Fatalf("turn %d misattributed: %v", i, frame)
-			}
-		}
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "argv.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(data), "METHOD:turn/steer") != 2 {
+		t.Fatalf("want two turn/steer requests, log: %s", data)
+	}
+}
+
+func TestGatewayInterruptsTimedOutAppServerTurn(t *testing.T) {
+	dir := t.TempDir()
+	binary := writeFakeCodex(t, dir, filepath.Join(dir, "argv.log"))
+	url, _ := startServerTimeout(t, binary, dir, 25*time.Millisecond)
+	conn := dial(t, url, testToken)
+	_ = readFrame(t, conn) // ready
+	sendMessage(t, conn, "slow turn")
+	frames := readTurnFrames(t, conn)
+	last := frames[len(frames)-1]
+	if last["type"] != "bridge.error" || last["error"] != "timeout" {
+		t.Fatalf("want timeout bridge error, got %v", last)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "argv.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "METHOD:turn/interrupt") {
+		t.Fatalf("timeout did not interrupt active App Server turn: %s", data)
 	}
 }
 

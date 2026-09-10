@@ -463,3 +463,11 @@ type AgentGateway interface {
 type TurnAwareTTSQueue interface {
 	SendToHALTTSQueueForTurn(text, turnID string, turnSeq uint64) error
 }
+
+// ActiveTurnSteerer is implemented by runtimes that can append a new user
+// input to a currently running model turn. The sensing handler uses it only
+// for direct user input; passive device events still wait for idle so they do
+// not displace the user's active request.
+type ActiveTurnSteerer interface {
+	SupportsActiveTurnSteering() bool
+}
