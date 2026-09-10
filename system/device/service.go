@@ -72,7 +72,14 @@ func (s *Service) restartHAL(reason string) {
 // the device would keep speaking in the old voice with nothing to show for it.
 func (s *Service) applyTTSConfig(c *config.Config) {
 	go func() {
-		if err := hal.ApplyTTSConfig(c.TTSProvider, c.TTSVoice, c.TTSAPIKey, c.TTSBaseURL, c.GetTTSSpeed()); err != nil {
+		// Send the RESOLVED key, matching what the boot path already sends
+		// (config_watch.go StartHALVoice). hal's /voice/tts/config does
+		// `req.tts_api_key or current_api_key`, so an empty key is read as
+		// "keep what you have" and would leave the previous vendor's key live
+		// in the running process — making a cleared key invisible until a
+		// restart. GetTTSAPIKey falls back to the AI-brain key, which is
+		// exactly the credential the Autonomous proxy expects.
+		if err := hal.ApplyTTSConfig(c.TTSProvider, c.TTSVoice, c.GetTTSAPIKey(), c.TTSBaseURL, c.GetTTSSpeed()); err != nil {
 			slog.Warn("hal tts config apply failed, restarting instead",
 				"component", "device", "error", err)
 			s.restartHAL("voice config change")
