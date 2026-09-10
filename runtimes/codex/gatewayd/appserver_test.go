@@ -1,6 +1,9 @@
 package gatewayd
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+)
 
 func TestAppInputIncludesTextAndImageDataURLs(t *testing.T) {
 	p := turnPayload{Content: "look at this"}
@@ -53,5 +56,47 @@ func TestMissingAppThread(t *testing.T) {
 	}
 	if missingAppThread([]byte(`{"message":"rate limit exceeded"}`)) {
 		t.Fatal("a non-session error must not retry on a fresh thread")
+	}
+}
+
+// The App Server reports token usage on turn/completed. gatewayd used to drop
+// it (it emitted a bare {"type":"turn.completed"}), so every device turn card
+// showed no tokens at all — the numbers only existed on the retired
+// `codex exec` JSONL path, which forwards stdout verbatim.
+func TestAppTurnCompletedForwardsUsage(t *testing.T) {
+	dir := t.TempDir()
+	url, _ := startServer(t, writeFakeCodex(t, dir, filepath.Join(dir, "argv.txt")), dir)
+	conn := dial(t, url, testToken)
+	readFrame(t, conn) // ready status
+
+	sendMessage(t, conn, "hi codex")
+	var completed map[string]any
+	for i := 0; i < 8 && completed == nil; i++ {
+		if f := readFrame(t, conn); f["type"] == "turn.completed" {
+			completed = f
+		}
+	}
+	if completed == nil {
+		t.Fatal("no turn.completed frame")
+	}
+	usage, ok := completed["usage"].(map[string]any)
+	if !ok {
+		t.Fatalf("turn.completed carries no usage: %v", completed)
+	}
+	for field, want := range map[string]float64{
+		"input_tokens": 723, "cached_input_tokens": 30720, "output_tokens": 31,
+	} {
+		if got, _ := usage[field].(float64); got != want {
+			t.Fatalf("usage[%s] = %v, want %v", field, usage[field], want)
+		}
+	}
+}
+
+func TestUsageOfPrefersTheFirstNonEmptyBlock(t *testing.T) {
+	if u := usageOf(nil, []byte(`null`), []byte(`{}`), []byte(`{"input_tokens":7}`)); u == nil || u["input_tokens"] != float64(7) {
+		t.Fatalf("usageOf skipped past the populated block: %#v", u)
+	}
+	if u := usageOf(nil, []byte(`null`)); u != nil {
+		t.Fatalf("usageOf with no real block = %#v, want nil", u)
 	}
 }

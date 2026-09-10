@@ -262,6 +262,13 @@ class ReachyMotionService:
         self._hold_mode = False
         self._hold_explicit = False
         self._frozen = False
+        # Body ownership — see MotionService in base.py. Split the same way the
+        # feetech backend splits it: a flag for an owner whose span is a
+        # tracking session, a counter for owners that overlap (a look aim, a
+        # sweep) and must each release exactly once.
+        self._tracking_flag = False
+        self._body_owners = 0
+        self._body_owner_lock = threading.Lock()
         self._moves = None          # lazy RecordedMoves loader (None=untried, False=failed)
         # Peak head speed per HF move name, scanned once (see _move_refused).
         self._move_peak_dps: Dict[str, float] = {}
@@ -450,6 +457,25 @@ class ReachyMotionService:
         """True when /servo/play must be refused — same rule as the feetech
         backend (zero or hold), plus a released (limp) robot."""
         return self._zero_mode or self._hold_mode or self._released
+
+    @property
+    def _tracking_active(self) -> bool:
+        """True while anything owns the body — a flag holder or a live writer."""
+        return self._tracking_flag or self._body_owners > 0
+
+    @_tracking_active.setter
+    def _tracking_active(self, value: bool) -> None:
+        # Assignment sets the FLAG only. It cannot release a writer that is
+        # still running, which is what the tracker clearing it used to do.
+        self._tracking_flag = bool(value)
+
+    def acquire_body(self) -> None:
+        with self._body_owner_lock:
+            self._body_owners += 1
+
+    def release_body(self) -> None:
+        with self._body_owner_lock:
+            self._body_owners = max(0, self._body_owners - 1)
 
     @property
     def motion_mode(self) -> Optional[str]:

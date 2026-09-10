@@ -72,10 +72,11 @@ func TestRejectedFollowupDoesNotEndCurrentTurnOrConsumeNext(t *testing.T) {
 	}
 }
 
-func TestSteeredFollowupRetiresItsPendingRunWithoutEndingActiveTurn(t *testing.T) {
+func TestSteeredSilentHistoryRetiresItsPendingRunWithoutEndingActiveTurn(t *testing.T) {
 	s := &CodexService{}
 	s.addPendingRun("first", "run-first")
 	s.addPendingRun("steered", "run-steered")
+	s.MarkSilentRun("run-steered")
 	var events []domain.WSEvent
 	dispatch := func(e domain.WSEvent) {
 		events = append(events, e)
@@ -124,11 +125,11 @@ func TestSteeredWebFollowupReceivesTheSharedFinalReply(t *testing.T) {
 	dispatch := func(e domain.WSEvent) { events = append(events, e) }
 	s.translateFrame([]byte(`{"type":"turn.started","request_id":"first","run_id":"run-first"}`), dispatch)
 	s.translateFrame([]byte(`{"type":"bridge.steered","request_id":"web","run_id":"run-web"}`), dispatch)
-	if s.hasPendingRuns() || len(s.steeredWebRuns) != 1 {
-		t.Fatalf("web follow-up was not moved out of pending: pending=%v steered=%v", s.pendingRuns, s.steeredWebRuns)
+	if s.hasPendingRuns() || len(s.steeredRuns) != 1 {
+		t.Fatalf("web follow-up was not moved out of pending: pending=%v steered=%v", s.pendingRuns, s.steeredRuns)
 	}
-	if len(events) != 1 {
-		t.Fatalf("web follow-up ended before the shared reply: %v", events)
+	if len(events) != 2 {
+		t.Fatalf("web follow-up should start and await the shared reply: %v", events)
 	}
 	s.translateFrame([]byte(`{"type":"item.completed","request_id":"first","run_id":"run-first","item":{"type":"agent_message","text":"[HW:/audio/play:{}] shared reply"}}`), dispatch)
 	s.translateFrame([]byte(`{"type":"turn.completed","request_id":"first","run_id":"run-first"}`), dispatch)
@@ -278,5 +279,118 @@ func TestReusedRequestIDWithDifferentRunSurvivesRestartOverlap(t *testing.T) {
 	})
 	if got != "new-run" || s.hasPendingRuns() {
 		t.Fatalf("new request suppressed by old ID: run=%q", got)
+	}
+}
+
+func TestSteeredVoiceWaitsAndLatestFollowupOwnsSpeech(t *testing.T) {
+	s := &CodexService{}
+	var events []domain.WSEvent
+	dispatch := func(e domain.WSEvent) { events = append(events, e) }
+	s.addPendingRun("host", "host")
+	s.translateFrame([]byte(`{"type":"turn.started","request_id":"host","run_id":"host"}`), dispatch)
+	for _, id := range []string{"voice-1", "voice-2"} {
+		s.addPendingRun(id, id)
+		s.translateFrame([]byte(fmt.Sprintf(`{"type":"bridge.steered","request_id":%q,"run_id":%q}`, id, id)), dispatch)
+	}
+	if len(s.steeredRuns) != 2 || s.getCurrentRunID() != "host" {
+		t.Fatal("steered voices must await the host result")
+	}
+	for _, e := range events {
+		var p struct{ Data struct{ Phase string } }
+		_ = json.Unmarshal(e.Payload, &p)
+		if p.Data.Phase != "start" {
+			t.Fatalf("early completion: %s", e.Payload)
+		}
+	}
+	s.translateFrame([]byte(`{"type":"item.completed","request_id":"host","run_id":"host","item":{"type":"agent_message","text":"[HW:/servo/move:{}] Done."}}`), dispatch)
+	s.translateFrame([]byte(`{"type":"turn.completed","request_id":"host","run_id":"host"}`), dispatch)
+	if !s.IsSilentRun("host") || !s.IsSilentRun("voice-1") || s.IsSilentRun("voice-2") {
+		t.Fatal("latest voice must own speech, suppressing host and earlier follow-up")
+	}
+	replies := map[string]string{}
+	ends := map[string]int{}
+	for _, e := range events {
+		var p struct {
+			RunID  string `json:"runId"`
+			Stream string
+			Data   struct {
+				Delta  string
+				Phase  string
+				Merged bool `json:"mergedIntoActiveTurn"`
+			}
+		}
+		_ = json.Unmarshal(e.Payload, &p)
+		if p.Stream == "assistant" {
+			replies[p.RunID] = p.Data.Delta
+		}
+		if p.Data.Phase == "end" {
+			ends[p.RunID]++
+			if p.RunID != "host" && !p.Data.Merged {
+				t.Fatal("missing merged lifecycle marker")
+			}
+		}
+	}
+	if replies["host"] != "[HW:/servo/move:{}] Done." || replies["voice-1"] != "Done." || replies["voice-2"] != "Done." {
+		t.Fatalf("shared reply must preserve host hardware once and strip child hardware: %v", replies)
+	}
+	for _, id := range []string{"host", "voice-1", "voice-2"} {
+		if ends[id] != 1 {
+			t.Fatalf("terminal count for %s: %d", id, ends[id])
+		}
+	}
+	if len(s.steeredRuns) != 0 {
+		t.Fatal("merged requests leaked")
+	}
+}
+
+func TestSteeredFollowupsEndOnFailureDisconnectAndTimeout(t *testing.T) {
+	for _, terminal := range []string{"failure", "disconnect", "timeout"} {
+		t.Run(terminal, func(t *testing.T) {
+			s := &CodexService{}
+			ends := map[string]int{}
+			dispatch := func(e domain.WSEvent) {
+				var p struct {
+					RunID string `json:"runId"`
+					Data  struct {
+						Phase string
+						Error string
+					}
+				}
+				_ = json.Unmarshal(e.Payload, &p)
+				if p.Data.Phase == "error" && p.Data.Error != "" {
+					ends[p.RunID]++
+				}
+			}
+			s.addPendingRun("host", "host")
+			s.translateFrame([]byte(`{"type":"turn.started","request_id":"host","run_id":"host"}`), dispatch)
+			s.addPendingRun("voice", "voice")
+			s.translateFrame([]byte(`{"type":"bridge.steered","request_id":"voice","run_id":"voice"}`), dispatch)
+			switch terminal {
+			case "failure":
+				s.translateFrame([]byte(`{"type":"turn.failed","request_id":"host","run_id":"host","error":{"message":"failed"}}`), dispatch)
+			case "disconnect":
+				s.failDisconnectedTurn(dispatch)
+			case "timeout":
+				s.wsDispatch.Store(dispatchFn(dispatch))
+				s.failStuckTurn()
+			}
+			if ends["host"] != 1 || ends["voice"] != 1 || len(s.steeredRuns) != 0 {
+				t.Fatalf("terminal cleanup failed: %v, retained=%v", ends, s.steeredRuns)
+			}
+		})
+	}
+}
+
+func TestSteeredVoiceAfterWebHostKeepsVoiceAndWebRoutes(t *testing.T) {
+	s := &CodexService{webChatRuns: make(map[string]bool)}
+	s.MarkWebChatRun("host")
+	s.addPendingRun("host", "host")
+	dispatch := func(domain.WSEvent) {}
+	s.translateFrame([]byte(`{"type":"turn.started","request_id":"host","run_id":"host"}`), dispatch)
+	s.addPendingRun("voice", "voice")
+	s.translateFrame([]byte(`{"type":"bridge.steered","request_id":"voice","run_id":"voice"}`), dispatch)
+	s.translateFrame([]byte(`{"type":"turn.completed","request_id":"host","run_id":"host"}`), dispatch)
+	if !s.IsWebChatRun("host") || s.IsSilentRun("host") || s.IsSilentRun("voice") {
+		t.Fatal("web host must retain its web marker, voice must remain audible")
 	}
 }

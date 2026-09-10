@@ -7,9 +7,9 @@ import (
 )
 
 const (
-	// enrollNudgeCooldown prevents spamming "who are you?" for the same unknown speaker.
+	// enrollNudgeCooldown avoids repeating the conditional enrollment guidance.
 	enrollNudgeCooldown = 5 * time.Minute
-	enrollInstruction   = "\n[REQUIRED: Follow speaker-recognizer/SKILL.md — check if user is introducing themselves. If yes, enroll voice immediately.]"
+	enrollInstruction   = "\n[Speaker context: Unknown identity does not block the user's request. Use speaker-recognizer/SKILL.md only for a clear self-introduction, an explicit voice enrollment/management request, or a reply continuing that enrollment. Otherwise handle the request without asking for a name or running speaker tools.]"
 )
 
 var (

@@ -8,6 +8,7 @@ import pytest
 from hal.drivers.tracking import constants as C
 from hal.drivers.tracking import servo_follow
 from hal.drivers.tracking.servo_follow import JOINTS, ServoFollower
+from test.body_ownership import BodyOwnership
 
 
 def _pose(value: float) -> dict[str, float]:
@@ -192,31 +193,12 @@ def test_zero_asks_for_nothing():
 # --- body ownership spans the writer's whole lifetime ---------------------------
 
 
-class _OwnableService(_FakeAnimationService):
+class _OwnableService(_FakeAnimationService, BodyOwnership):
     """Animation service stand-in with the real ownership semantics."""
 
     def __init__(self):
         super().__init__()
-        self._tracking_flag = False
-        self._body_owners = 0
-        self._body_owner_lock = threading.Lock()
         self.seen_while_writing = []
-
-    @property
-    def _tracking_active(self):
-        return self._tracking_flag or self._body_owners > 0
-
-    @_tracking_active.setter
-    def _tracking_active(self, value):
-        self._tracking_flag = bool(value)
-
-    def acquire_body(self):
-        with self._body_owner_lock:
-            self._body_owners += 1
-
-    def release_body(self):
-        with self._body_owner_lock:
-            self._body_owners = max(0, self._body_owners - 1)
 
 
 def _run_worker_briefly(follower, service, running, seconds=0.3):

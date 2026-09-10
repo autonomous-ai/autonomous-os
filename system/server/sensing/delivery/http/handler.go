@@ -550,12 +550,15 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 	// path costs no extra HAL call.
 	speakerBusy := isPassive && !h.agentGateway.IsBusy() &&
 		speakergate.WaitsForSpeaker(req.Type) && speakergate.SpeakerBusy()
-	// Typed chat and spoken user input may steer a runtime that explicitly
-	// supports it. Keep the speaker gate intact: beginning another voice turn
-	// while HAL is playing would still cut off the answer the user is hearing.
+	// Typed chat, spoken input, and the silent realtime history sync may steer a
+	// runtime that explicitly supports it. voice_agent_handled is deliberately
+	// not isVoice: the realtime agent already answered aloud. When it arrives
+	// during an active Codex turn, steering lets its own trace close on
+	// bridge.steered instead of leaving a passive sync event queued behind work
+	// that may take minutes. Keep the speaker gate intact for actual speech.
 	steerer, supportsSteering := h.agentGateway.(domain.ActiveTurnSteerer)
-	steerableUserInput := supportsSteering && steerer.SupportsActiveTurnSteering() && (isChat || isVoice)
-	if isPassive && ((!steerableUserInput && h.agentGateway.IsBusy()) || speakerBusy) {
+	steerableInput := supportsSteering && steerer.SupportsActiveTurnSteering() && (isChat || isVoice || isRealtimeHandled)
+	if isPassive && ((!steerableInput && h.agentGateway.IsBusy()) || speakerBusy) {
 		// motion.activity and emotion.detected get queued (not dropped) because
 		// HAL deduplicates both with a 5-min window at the source — if one
 		// reaches the os-server it's genuinely new. Dropping it here would make HAL's

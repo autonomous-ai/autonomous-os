@@ -24,6 +24,7 @@ The `[HW:/path:{json}]` marker is the grammar: `{json}` is optional (`[HW:/led/o
 
 ```bash
 make push-skill SKILL=./my-skill TARGET=pi@lamp-xxxx.local   # live on the next conversation, no reboot
+make push-skill SKILL=./my-skill TARGET=pi@10.0.0.5 J=proxy-host   # via an SSH jump host
 ```
 
 Or type what you want in the app, or tap one in the Skill Store. On the robot, skills live in `/root/.openclaw/workspace/skills/<name>/` — the same folder the agent engine already reads. No PR, no reboot, no Go.

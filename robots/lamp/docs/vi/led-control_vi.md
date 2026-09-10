@@ -117,6 +117,14 @@ Khi kích hoạt scene, `POST /scene` thực hiện theo thứ tự:
 5. **Mic** — mute dừng voice pipeline (STT), unmute khởi động lại
 6. **Speaker** — mute dừng TTS + nhạc đang phát, unmute bật lại output
 
+**Chỉ có kích hoạt scene mới aim.** Một lần restore LED — sau emotion, khi TTS kết thúc, khi nhạc
+dừng, khi bỏ mute mic, khi tắt cue lắng nghe — chỉ vẽ lại strip chứ không làm gì khác, và một
+chuyển trạng thái presence `IDLE/AWAY → PRESENT` chỉ khôi phục ánh sáng. Trước đây cả hai đều re-aim
+khi trạng thái LED đã lưu là một scene, làm chết animation đang chạy và ghim đầu ở `__aim_hold__`
+trong 5s (#314). Hệ quả: khi một scene `hold` đang bật, đầu không còn tự trôi về tư thế của scene sau
+khi animation kết thúc — nó nội suy về idle. Muốn khôi phục tư thế đó thì việc ấy thuộc về
+`servo: hold` của scene, không thuộc về một lần vẽ lại LED.
+
 ### Chặn emotion khi hold mode
 
 Khi servo đang hold (reading/focus), **animation cảm xúc bị chặn** để tránh phân tâm:

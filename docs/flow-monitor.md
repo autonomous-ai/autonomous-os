@@ -1,5 +1,15 @@
 # Flow Monitor
 
+Codex steering records `turn_merged` under the follow-up run ID with
+`data.parent_run_id` pointing to the active host. The follow-up keeps its own
+input card and displays the shared host pipeline when selected. Its status
+follows the host until its own terminal event arrives; an unavailable parent is
+identified as outside loaded history. Voice/web requests wait for actual
+completion, while silent realtime history sync may finish at acknowledgement.
+The link is available for new recorded events; older traces without the marker
+are not retroactively inferred.
+The shared view also includes the selected follow-up's Harness result, TTS and hardware delivery events, without duplicating its input or lifecycle.
+
 The Flow Monitor is an observability layer for tracking agent turns end-to-end. It records events to daily JSONL files (`local/flow_events_YYYY-MM-DD.jsonl`) and streams them to the web UI via SSE.
 
 **Important**: The flow monitor is purely observational. It does NOT affect device behavior, agent communication, TTS, LED, or any business logic.

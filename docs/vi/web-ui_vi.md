@@ -1,5 +1,10 @@
 # Web UI — Monitor Dashboard
 
+Flow Monitor liên kết follow-up Codex được steer với lượt thực thi gốc qua
+`turn_merged` / `parent_run_id`. Chọn follow-up mở pipeline chung nhưng vẫn giữ
+card input và trạng thái kết thúc riêng. UI ghi rõ turn đã gộp thay vì hiện
+kết quả im lặng rỗng.
+
 ## Ngày cập nhật: 2026-08-25
 
 ---
@@ -532,8 +537,8 @@ Giao diện chat tương tác với agent. Layout: sidebar (danh sách hội tho
   entry mà message không còn tồn tại. Xóa hội thoại (hoặc Clear/history-TTL)
   cũng xóa luôn ảnh đã lưu.
 - Sidebar: tìm kiếm, ghim, đổi tên (double-click), xóa (xác nhận 2 lần), xuất TXT
-- Nhóm theo ngày: Today / Yesterday / This week / Older, ghim lên đầu. Mỗi header nhóm có đường kẻ mảnh và số lượng item.
-- Mỗi dòng hiển thị một chấm avatar màu (hash từ id hội thoại, theo palette), tiêu đề, nhãn thời gian tương đối đã bản địa hóa (`vừa xong` / `5 phút` / `2 giờ` / `hôm qua` / `3 ngày`, ẩn khi hover), và preview tin nhắn cuối. Hội thoại đang mở được đánh dấu bằng thanh dọc amber bên trái.
+- Nhóm và sắp xếp theo **hoạt động tin nhắn gần nhất**: Today / Yesterday / This week / Older, ghim lên đầu. Mỗi header nhóm có đường kẻ mảnh và số lượng item. Chính thứ tự này cũng dùng khi giữ 50 hội thoại local, nên một thread cũ nhưng đang hoạt động không bị đẩy ra trước một thread mới nhưng không dùng.
+- Mỗi dòng hiển thị một chấm avatar màu (hash từ id hội thoại, theo palette), tiêu đề, nhãn thời gian tương đối đã bản địa hóa cho hoạt động mới nhất (`vừa xong` / `5 phút` / `2 giờ` / `hôm qua` / `3 ngày`, ẩn khi hover), và preview tin nhắn cuối. Hội thoại đang mở được đánh dấu bằng thanh dọc amber bên trái. Tìm kiếm hiện số kết quả; Escape hoặc nút xóa sẽ đưa ô tìm kiếm về trống.
 - Phím tắt: Cmd/Ctrl+N tạo chat mới
 - Sidebar thu gọn được
 
@@ -717,11 +722,25 @@ make web-build        # tsc + vite build → system/web/dist/
 IP=172.168.20.255 make device-deploy   # hal + os-server
 IP=172.168.20.255 make hal-deploy      # chỉ hal, không cần build
 IP=172.168.20.255 make os-deploy       # cross-compile + thay binary
+
+# Vẫn các target đó nhưng đi qua SSH jump host, cho thiết bị không route tới được
+IP=10.0.0.5 J=proxy-host make hal-deploy
+IP=10.0.0.5 J=proxy-host make hal-log
 ```
 
 Chạy bằng `scripts/deploy-device.sh`. `PI_USER` mặc định `orangepi` và `PI_PASS`
 mặc định `orangepi` (cần `sshpass`); đặt `PI_PASS=""` để dùng SSH key của bạn và
 sudo tương tác. Có thể dùng `PI_HOST` thay cho `IP`.
+
+`J=<host>` (hoặc `PI_JUMP`, hoặc `--jump <host>` khi gọi thẳng script) đặt một
+`ProxyJump` trước mọi hop — `ssh`, `scp` và `rsync` đều nhận — nên
+`hal-deploy`, `os-deploy`, `device-deploy`, `hal-log` và `os-log` tới được
+thiết bị không route trực tiếp từ máy bạn. Hop đó xác thực bằng SSH key/agent
+và `~/.ssh/config` của bạn; `PI_PASS` chỉ là mật khẩu **thiết bị**, nên bastion
+đòi mật khẩu riêng sẽ không chạy tự động được. `make push-skill` dùng cùng knob
+`J=`. Cả hai thứ tự đều được: `J=... make hal-deploy` và
+`make hal-deploy J=...` — riêng `PI_PASS` phải là biến môi trường
+(`PI_PASS="" IP=... make hal-deploy`).
 
 `.env`, `.venv` và `calibration/` trên thiết bị không bao giờ bị ghi đè, và bước
 swap chạy không có `--delete`, nên các đường dẫn riêng của thiết bị (ngoài repo)

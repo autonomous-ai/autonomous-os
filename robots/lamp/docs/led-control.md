@@ -117,6 +117,14 @@ When a scene activates, `POST /scene` applies in order:
 5. **Mic** — mute stops voice pipeline (STT), unmute restarts it
 6. **Speaker** — mute stops TTS + music playback, unmute re-enables output
 
+**Scene activation is the only path that aims.** An LED restore — after an emotion, at TTS end, at
+music end, on mic unmute, on a listening cue clearing — repaints the strip and nothing else, and a
+presence `IDLE/AWAY → PRESENT` restores the light only. Both used to re-aim while a scene was the
+saved LED state, which killed the running animation and parked the head as `__aim_hold__` for 5s
+(#314). Consequence: with a `hold` scene active the head no longer drifts back to the scene pose
+after an animation ends — it interpolates to idle. Restoring that pose belongs in the scene's
+`servo: hold`, not in an LED repaint.
+
 ### Emotion suppression during hold mode
 
 When servo is in hold mode (reading/focus), **emotion animations are suppressed** to avoid distraction:

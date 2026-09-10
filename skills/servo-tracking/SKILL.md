@@ -14,7 +14,7 @@ Tracks and follows any object by name. YOLOWorld detects the object in the camer
 3. Prefix reply with `[HW:/servo/track:{"target":["<label1>","<label2>"]}]` — the device detects and follows.
    - `target` accepts a list of candidate labels. Pass 2-4 synonyms/variants to maximise the chance YOLOWorld finds the object on the first try.
    - A single string also works (`{"target":"cup"}`) for backward compatibility, but the list form is preferred when the object could reasonably have multiple names.
-4. To stop, prefix with `[HW:/servo/track/stop:{}] (POST)`.
+4. To stop, prefix with `[HW:/servo/track/stop:{}]`.
 
 ## Examples
 
@@ -40,7 +40,7 @@ Tracks and follows any object by name. YOLOWorld detects the object in the camer
 **Output:** `[HW:/servo/track:{"target":["teddy bear","stuffed animal","plush toy"]}]` Tracking the teddy bear!
 
 **Input:** "Stop following" / "Stop tracking"
-**Output:** `[HW:/servo/track/stop:{}] (POST)` Stopped tracking.
+**Output:** `[HW:/servo/track/stop:{}]` Stopped tracking.
 
 **Input:** "What can you track?"
 **Output:** I can track most common objects — cups, bottles, phones, laptops, books, people, bags, and more. Just tell me what to follow!
@@ -52,7 +52,7 @@ Tracks and follows any object by name. YOLOWorld detects the object in the camer
 ```
 [HW:/servo/track:{"target":["cup","mug","coffee cup"]}] Following the cup.
 [HW:/servo/track:{"target":["person"]}] Tracking you now.
-[HW:/servo/track/stop:{}] (POST) Stopped tracking.
+[HW:/servo/track/stop:{}] Stopped tracking.
 ```
 
 ### Target names

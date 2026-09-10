@@ -1,5 +1,10 @@
 # Web UI — Monitor Dashboard
 
+Flow Monitor links Codex steered follow-ups to the original execution with
+`turn_merged` / `parent_run_id`. Selecting the follow-up shows the shared
+pipeline while retaining its separate input card and terminal state. The UI
+labels merged runs explicitly instead of presenting an empty silent result.
+
 ## Last updated: 2026-08-25
 
 ---
@@ -548,8 +553,8 @@ Interactive chat interface for communicating with the agent. Layout: sidebar (co
   Deleting a conversation (or Clear/history-TTL) also deletes its stored
   images.
 - Sidebar with search, pin, rename (double-click), delete (double-click confirm), export as TXT
-- Grouped by date: Today / Yesterday / This week / Older, pinned at top. Each group header shows a hairline divider and an item count.
-- Each row shows a deterministic on-palette avatar dot (hashed from the conversation id), the title, a localized relative timestamp (`now` / `5m` / `2h` / `yesterday` / `3d`, hidden on hover), and a last-message preview. The active conversation is marked with an amber left rail.
+- Grouped and sorted by **most recent message activity**: Today / Yesterday / This week / Older, pinned at top. Each group header shows a hairline divider and an item count. The same ordering is used when retaining the 50 local conversations, so an active older thread is not evicted before an idle newer one.
+- Each row shows a deterministic on-palette avatar dot (hashed from the conversation id), the title, a localized relative timestamp for its latest activity (`now` / `5m` / `2h` / `yesterday` / `3d`, hidden on hover), and a last-message preview. The active conversation is marked with an amber left rail. Search displays its result count, and Escape or the clear button resets it.
 - Keyboard shortcut: Cmd/Ctrl+N for new chat
 - Collapsible sidebar
 
@@ -733,11 +738,25 @@ make web-build        # tsc + vite build → system/web/dist/
 IP=172.168.20.255 make device-deploy   # hal + os-server
 IP=172.168.20.255 make hal-deploy      # hal only, no build step
 IP=172.168.20.255 make os-deploy       # cross-compile + swap the binary
+
+# Same targets through an SSH jump host, for a device you cannot route to
+IP=10.0.0.5 J=proxy-host make hal-deploy
+IP=10.0.0.5 J=proxy-host make hal-log
 ```
 
 Backed by `scripts/deploy-device.sh`. `PI_USER` defaults to `orangepi` and
 `PI_PASS` to `orangepi` (needs `sshpass`); set `PI_PASS=""` to use your SSH key
 and interactive sudo instead. `PI_HOST` works in place of `IP`.
+
+`J=<host>` (or `PI_JUMP`, or `--jump <host>` on the script) puts one
+`ProxyJump` in front of every hop — `ssh`, `scp` and `rsync` all get it — so
+`hal-deploy`, `os-deploy`, `device-deploy`, `hal-log` and `os-log` reach a
+device that is not routable from here. The hop authenticates from your SSH
+key/agent and `~/.ssh/config`; `PI_PASS` is the **device** password only, so a
+bastion that wants its own password will not work unattended. `make push-skill`
+takes the same `J=` knob. Both orders work: `J=... make hal-deploy` and
+`make hal-deploy J=...` — except `PI_PASS`, which must be an environment
+variable (`PI_PASS="" IP=... make hal-deploy`).
 
 `.env`, `.venv` and `calibration/` on the device are never overwritten, and the
 swap runs without `--delete`, so device-local paths outside the repo survive.

@@ -15,6 +15,7 @@ import pytest
 
 import hal.config as config
 from hal.drivers.tracking import detection, gaze
+from test.body_ownership import BodyOwnership
 
 
 def _landmarks(right_eye, left_eye, nose, mouth_r=(0.0, 0.0), mouth_l=(0.0, 0.0)):
@@ -486,7 +487,7 @@ def test_the_watcher_does_not_start_when_there_is_no_gate_to_open(monkeypatch, c
 # --- turning back toward the remembered bearing -----------------------------
 
 
-class _Svc:
+class _Svc(BodyOwnership):
     """Animation service stand-in that records what it was asked to move to."""
 
     def __init__(self):
@@ -638,7 +639,7 @@ def test_faces_too_small_to_measure_are_left_out_of_the_denominator(monkeypatch)
 # --- sampling while the body is busy -----------------------------------------
 
 
-class _MovingSvc:
+class _MovingSvc(BodyOwnership):
     """Animation service whose head last moved `ago` seconds ago."""
 
     def __init__(self, ago, tracking=False):

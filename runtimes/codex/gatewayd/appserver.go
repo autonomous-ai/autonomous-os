@@ -250,7 +250,7 @@ func (s *Server) steerAppTurn(p turnPayload) {
 		s.enqueue(op{kind: opTurn, payload: p})
 		return
 	}
-	app.request("turn/steer", map[string]any{"threadId": thread, "expectedTurnId": turn, "input": appInput(p)}, func(_ json.RawMessage, rpcErr json.RawMessage) {
+	app.request("turn/steer", map[string]any{"threadId": thread, "expectedTurnId": turn, "input": appSteerInput(p)}, func(_ json.RawMessage, rpcErr json.RawMessage) {
 		if len(rpcErr) > 0 {
 			log.Printf("%s steer rejected: %s", logPrefix, rpcErr)
 			// A steered input has no independent terminal turn event. Tell the
@@ -265,6 +265,16 @@ func (s *Server) steerAppTurn(p turnPayload) {
 		// turn.completed frame.
 		s.sendJSON(map[string]any{"type": "bridge.steered", "request_id": p.RequestID, "run_id": p.RunID})
 	})
+}
+
+// User requests can arrive while the model is handling a passive sensor event.
+// Keep their response address intact and explicitly distinguish them from the
+// silent realtime history synchronization that also uses turn/steer.
+func appSteerInput(p turnPayload) []map[string]any {
+	if strings.Contains(p.Content, "[harness-reply run_id=") {
+		p.Content = "[system-routing: New direct user request during the active turn. Prioritize this request over unfinished passive sensing or wellbeing work. Use this request's harness-reply address if delegating. When the user requests work from a computer agent, use harness-use; do not search the device filesystem for that computer's project. A steer acknowledgement is not task completion: handle the request before ending the turn.]\n" + p.Content
+	}
+	return appInput(p)
 }
 
 func (s *Server) endAppTurnError(raw json.RawMessage) {
@@ -294,14 +304,31 @@ func (s *Server) handleAppNotification(method string, params json.RawMessage) {
 		ThreadID string `json:"threadId"`
 		TurnID   string `json:"turnId"`
 		Turn     struct {
-			ID     string `json:"id"`
-			Status string `json:"status"`
-			Error  any    `json:"error"`
+			ID     string          `json:"id"`
+			Status string          `json:"status"`
+			Error  any             `json:"error"`
+			Usage  json.RawMessage `json:"usage"`
 		} `json:"turn"`
+		// Some codex builds put usage on the turn-completed notification (top
+		// level or under `turn`); 0.150.1 sends it on thread/tokenUsage/updated
+		// instead. Accept every shape — usageOf picks the first populated one —
+		// so the device turn card keeps showing tokens across codex upgrades.
+		Usage      json.RawMessage `json:"usage"`
+		TokenUsage struct {
+			Last  json.RawMessage `json:"last"`
+			Total json.RawMessage `json:"total"`
+		} `json:"tokenUsage"`
 		Item json.RawMessage `json:"item"`
 	}
 	_ = json.Unmarshal(params, &p)
 	switch method {
+	case "thread/tokenUsage/updated":
+		// Token usage does NOT ride turn/completed — codex-rs 0.150.1 pushes it
+		// on its own notification, in camelCase, ahead of the turn's terminal
+		// event. `last` is this turn; `total` is the whole thread. Stash the
+		// per-turn block and attach it to turn.completed below, which is the
+		// frame the translator reads usage from.
+		s.storeAppUsage(p.TokenUsage.Last, p.TokenUsage.Total)
 	case "turn/started":
 		s.mu.Lock()
 		if p.Turn.ID != "" {
@@ -347,7 +374,15 @@ func (s *Server) handleAppNotification(method string, params json.RawMessage) {
 		} else if p.Turn.Status != "completed" {
 			s.sendJSON(map[string]any{"type": "turn.failed", "error": p.Turn.Error})
 		} else {
-			s.sendJSON(map[string]any{"type": "turn.completed"})
+			// Forward the usage block verbatim: without it the translator's
+			// lifecycle.end carries no usage and the Flow Monitor turn card
+			// shows no in/out/cache tokens at all (the `codex exec` JSONL path
+			// never lost it — it forwards stdout untouched).
+			frame := map[string]any{"type": "turn.completed"}
+			if u := usageOf(p.Usage, p.Turn.Usage, s.takeAppUsage()); u != nil {
+				frame["usage"] = u
+			}
+			s.sendJSON(frame)
 		}
 		s.mu.Lock()
 		s.activeRequestID, s.activeRunID = "", ""
@@ -448,4 +483,62 @@ func snakeItemType(v string) string {
 		b.WriteRune(r)
 	}
 	return strings.ToLower(b.String())
+}
+
+// usageOf returns the first non-empty usage block, normalized to the snake_case
+// field names the exec JSONL path uses (the App Server speaks camelCase), so
+// the translator has one shape to decode. Empty/`null` candidates are skipped;
+// nil means no usage was reported.
+func usageOf(candidates ...json.RawMessage) map[string]any {
+	for _, raw := range candidates {
+		if len(raw) == 0 {
+			continue
+		}
+		var m map[string]any
+		if json.Unmarshal(raw, &m) != nil || len(m) == 0 {
+			continue
+		}
+		for camel, snake := range map[string]string{
+			"inputTokens":           "input_tokens",
+			"cachedInputTokens":     "cached_input_tokens",
+			"cacheWriteInputTokens": "cache_write_input_tokens",
+			"outputTokens":          "output_tokens",
+			"totalTokens":           "total_tokens",
+		} {
+			if v, ok := m[camel]; ok {
+				if _, taken := m[snake]; !taken {
+					m[snake] = v
+				}
+				delete(m, camel)
+			}
+		}
+		return m
+	}
+	return nil
+}
+
+// storeAppUsage keeps the newest per-turn usage block (falling back to the
+// thread total when a build omits `last`) until the turn's terminal event
+// collects it.
+func (s *Server) storeAppUsage(last, total json.RawMessage) {
+	raw := last
+	if len(raw) == 0 {
+		raw = total
+	}
+	if len(raw) == 0 {
+		return
+	}
+	s.mu.Lock()
+	s.appUsage = append(raw[:0:0], raw...)
+	s.mu.Unlock()
+}
+
+// takeAppUsage returns and clears the stashed usage, so a turn that reported
+// none never inherits the previous turn's numbers.
+func (s *Server) takeAppUsage() json.RawMessage {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	raw := s.appUsage
+	s.appUsage = nil
+	return raw
 }

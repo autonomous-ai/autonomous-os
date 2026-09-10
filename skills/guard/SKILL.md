@@ -48,7 +48,8 @@ Response: `{"status": 1, "data": {"guard_mode": true}}`
 |-----------|--------|
 | "guard mode" / "watch mode" / "security mode" | Enable guard mode |
 | "I'm going out" / "I'm leaving" / "bye, watch the house" | Enable guard mode |
-| "stop guarding" / "I'm back" / "guard off" | Disable guard mode |
+| "stop guarding" / "guard off" | Disable guard mode |
+| "I'm back" | If guard mode is active, greet, summarize, and ask whether to disable; keep guarding until explicit confirmation |
 | "are you guarding?" / "guard status" | Check and report status |
 
 ## Rules

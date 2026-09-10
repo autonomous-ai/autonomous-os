@@ -1,5 +1,14 @@
 # Flow Monitor (tiếng Việt)
 
+Codex steering ghi `turn_merged` theo run ID của follow-up, với
+`data.parent_run_id` trỏ đến host đang active. Follow-up giữ card input riêng
+và mở pipeline chung của host khi được chọn. Trạng thái theo host đến khi có
+terminal riêng; nếu thiếu host, UI báo pipeline nằm ngoài lịch sử đã tải.
+Yêu cầu voice/web chờ hoàn tất thực sự, còn đồng bộ lịch sử realtime im lặng
+có thể kết thúc ngay khi nhận xác nhận. Liên kết áp dụng cho event mới được ghi;
+không tự suy đoán quan hệ của các trace cũ thiếu marker.
+Pipeline chung cũng hiển thị kết quả Harness, TTS và sự kiện phần cứng của follow-up đang chọn, không lặp input hay lifecycle của nó.
+
 Tài liệu đầy đủ bằng tiếng Anh: [`docs/flow-monitor.md`](../flow-monitor.md).
 
 ## Tóm tắt

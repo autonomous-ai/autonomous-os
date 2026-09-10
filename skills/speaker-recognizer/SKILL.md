@@ -1,6 +1,6 @@
 ---
 name: speaker-recognizer
-description: Self-enroll a voice for speaker recognition. Activate ONLY when (a) a mic `Unknown Speaker:` turn carries a clear self-introduction ("I'm X", "my name is X", "tôi là X"...), (b) prior same-tag `[voice:voice_N]` turns can be combined with a now-named turn, (c) a Telegram voice-note carries an intro, OR (d) the user asks to list / forget / identify voices. Do NOT activate on bare `Unknown Speaker:` turns with no name and no prior same-tag history — those need only a short ack. Self-enrollment only.
+description: Self-enroll voices after a clear self-introduction or explicit enrollment request; continue that enrollment, or list, forget, link, and identify voices when requested. Unknown Speaker labels, saved audio, and same-tag history alone do not activate this skill. Handle ordinary requests without identity lookup or a name question.
 ---
 
 # Speaker Recognizer
@@ -9,15 +9,21 @@ Each mic transcript is prefixed `Speaker - Name:` when recognized, or `Unknown S
 
 **Self-enrollment only** — never enroll one person's voice under another person's name.
 
-## Decision matrix — pick ONE action per turn
+## Entry gate
+
+Unknown identity is metadata, not an enrollment request. Without a clear self-introduction, an explicit voice enrollment/management request, or a reply continuing a user-initiated enrollment, handle the actual request directly: no speaker API calls, no enrollment reference reads, no name question, and no replacement acknowledgment. Meaningless fragments follow the device's normal silence rules. Same-tag history alone does not start or resume enrollment; a new unrelated request takes priority.
+
+A name counts only when the speaker identifies themselves, not when addressing the agent ("Mike, open Chrome"), mentioning another person, or appearing in metadata. Preserve any substantive request accompanying a self-introduction; enrollment must not replace it.
+
+## Decision matrix — after the entry gate
 
 | Signals in current turn | Prior same-tag turns? | Action |
 |---|---|---|
 | `Unknown Speaker:` + path + name + ≥25 words | — | **Enroll now** with current path only. |
 | `Unknown Speaker:` + path + name + <25 words | ≥1 prior path same `[voice:N]` | **Enroll now** with all same-tag paths (oldest→newest). |
 | `Unknown Speaker:` + path + name + <25 words | none | Ask one follow-up: "say your name + ~25–30 words". |
-| `Unknown Speaker:` + path + NO name + <25 words | none | Ask one follow-up. |
-| `Unknown Speaker:` + path + NO name | ≥1 prior path same `[voice:N]` (still no name) | Reply with a SHORT ack ("Mm, nghe rồi" / "Got it"). NEVER NO_REPLY. Don't re-ask. |
+| Explicit enrollment request + path + NO name | any | Ask for the speaker's own name; request more audio only if needed. |
+| Reply continuing enrollment, still no name or insufficient audio | same enrollment | Explain what is missing once; do not loop or enroll under a guessed name. |
 | `Speaker - <Name>:` | — | Already identified — skill not needed. |
 | "who do you know?" / "list voices" | — | `GET /speaker/list`. |
 | "forget my voice" / "remove Alex" | — | `POST /speaker/remove`. |
@@ -45,8 +51,7 @@ Confirm AFTER the API returns ok: "Nice to meet you, <Name>!".
 - **Two-turn path mapping** — `<pathA>` = turn BEFORE follow-up, `<pathB>` = turn AFTER. Never swap.
 - **Telegram audio must be 16 kHz mono WAV** before enroll — convert with `ffmpeg -ar 16000 -ac 1`; same folder as source. Skip if already `.wav`.
 - **`/speaker/identity` (not re-enroll)** when only linking Telegram info to an existing mic profile.
-- **Don't spam "who are you?"** — at most once per cluster, and include the "25–30 words" guidance in the same message.
-- **Never go silent on Unknown Speaker fragments** — when no name and you've already asked, emit a short ack. NO_REPLY is forbidden.
+- **No unsolicited identity questions** — ask only within user-initiated enrollment; combine missing-name and missing-audio guidance in one question. Do not repeatedly interrupt other requests to finish enrollment.
 - **Confirm every enroll** AFTER the API returns ok.
 - **Don't narrate technical details** — no "base64", "ffmpeg", "POST /speaker/enroll".
 - **Never write files directly** — always use the HTTP API.

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"go.autonomous.ai/os/system/domain"
+	"go.autonomous.ai/os/system/lib/flow"
 )
 
 // nowUnixMs returns the current time in milliseconds (matches the OpenClaw frame
@@ -86,26 +87,45 @@ func (it codexItem) kind() string {
 
 // codexUse is the turn.completed usage block.
 type codexUse struct {
-	InputTokens       int `json:"input_tokens"`
-	CachedInputTokens int `json:"cached_input_tokens"`
-	OutputTokens      int `json:"output_tokens"`
+	InputTokens          int `json:"input_tokens"`
+	CachedInputTokens    int `json:"cached_input_tokens"`
+	CacheWriteInputToken int `json:"cache_write_input_tokens"`
+	OutputTokens         int `json:"output_tokens"`
 }
 
-// toDomain maps Codex usage onto domain.TokenUsage. input+cached approximates
-// the live context size (what ShouldRotateSession keys on); TotalTokens is the
-// full turn volume.
+// toDomain maps Codex usage onto domain.TokenUsage. Codex speaks the OpenAI
+// Responses API, whose `input_tokens` ALREADY INCLUDES `cached_input_tokens`,
+// while domain.TokenUsage follows Anthropic semantics (InputTokens = uncached
+// only, cache read separate — the Flow monitor renders ↓in R<cache> from
+// those). Subtract, exactly like runtimes/hermes/translator.go does for the
+// chat/completions shape; adding them instead double-counts the context.
+// Measured on lamp-0c89 2026-09-10 once campaign-api enabled prompt caching:
+// a fresh turn reported input 17,623 / cached 17,408 — 215 genuinely new
+// tokens, not 35k.
+//
+// The live context size for rotation is NOT read from here — translateFrame
+// stashes the raw input_tokens into s.lastContextTokens (see rotation.go).
 func (u *codexUse) toDomain() *domain.TokenUsage {
 	if u == nil {
 		return nil
 	}
-	in := u.InputTokens + u.CachedInputTokens
-	if in == 0 && u.OutputTokens == 0 {
+	if u.InputTokens == 0 && u.CachedInputTokens == 0 && u.OutputTokens == 0 {
 		return nil
 	}
+	in, cached := u.InputTokens, u.CachedInputTokens
+	if cached > 0 && cached <= in {
+		in -= cached
+	} else if cached > in {
+		// Shape we have never seen: trust the total, drop the cache split
+		// rather than report a negative fresh-input figure.
+		cached = 0
+	}
 	return &domain.TokenUsage{
-		InputTokens:  in,
-		OutputTokens: u.OutputTokens,
-		TotalTokens:  in + u.OutputTokens,
+		InputTokens:      in,
+		OutputTokens:     u.OutputTokens,
+		CacheReadTokens:  cached,
+		CacheWriteTokens: u.CacheWriteInputToken,
+		TotalTokens:      in + cached + u.OutputTokens,
 	}
 }
 
@@ -177,20 +197,25 @@ func (s *CodexService) translateFrame(raw []byte, dispatch func(domain.WSEvent))
 	}
 }
 
-// completeSteeredFrame retires the separate device trace for input that the
-// App Server accepted into the already-active turn. The active turn keeps the
-// model's response and its lifecycle. Web chat follows the same model turn but
-// waits for its final reply; other internal follow-ups complete immediately.
+// completeSteeredFrame links an accepted follow-up to its active model turn.
+// Only silent history synchronization completes on acknowledgement; actual
+// requests await the shared result and terminal lifecycle.
 func (s *CodexService) completeSteeredFrame(f codexFrame, dispatch func(domain.WSEvent)) {
 	pending := s.takePendingRun(f.RequestID, f.RunID, false)
 	if pending.runID == "" {
 		return // stale acknowledgement or an older client that did not track it
 	}
-	if s.IsWebChatRun(pending.runID) {
+	flow.Log("turn_merged", map[string]any{"parent_run_id": s.getCurrentRunID()}, pending.runID)
+	if s.IsWebChatRun(pending.runID) || !s.IsSilentRun(pending.runID) {
 		s.pendingMu.Lock()
-		s.steeredWebRuns = append(s.steeredWebRuns, pending)
+		s.steeredRuns = append(s.steeredRuns, pending)
 		s.pendingMu.Unlock()
-		slog.Info("codex: web follow-up merged into active turn; awaiting shared reply",
+		payload, _ := json.Marshal(map[string]any{
+			"runId": pending.runID, "sessionKey": s.GetSessionKey(), "stream": "lifecycle",
+			"data": map[string]any{"phase": "start", "startedAt": nowUnixMs(), "mergedIntoActiveTurn": true},
+		})
+		dispatch(domain.WSEvent{Type: "evt", Event: "agent", Payload: payload})
+		slog.Info("codex: follow-up merged into active turn; awaiting shared reply",
 			"component", "codex", "request_id", pending.reqID, "runID", pending.runID)
 		return
 	}
@@ -203,15 +228,15 @@ func (s *CodexService) completeSteeredFrame(f codexFrame, dispatch func(domain.W
 	dispatch(domain.WSEvent{Type: "evt", Event: "agent", Payload: payload})
 }
 
-func (s *CodexService) takeSteeredWebRuns() []pendingRun {
+func (s *CodexService) takeSteeredRuns() []pendingRun {
 	s.pendingMu.Lock()
 	defer s.pendingMu.Unlock()
-	runs := s.steeredWebRuns
-	s.steeredWebRuns = nil
+	runs := s.steeredRuns
+	s.steeredRuns = nil
 	return runs
 }
 
-func (s *CodexService) emitMergedWebFinal(runID, finalText string, dispatch func(domain.WSEvent)) {
+func (s *CodexService) emitMergedFinal(runID, finalText string, dispatch func(domain.WSEvent)) {
 	// A shared result must not replay hardware markers for every merged request.
 	text := stripForChannel(finalText)
 	if text != "" {
@@ -450,15 +475,37 @@ func (s *CodexService) emitFinal(f codexFrame, dispatch func(domain.WSEvent)) {
 			"inputTokens", f.Usage.InputTokens,
 			"cachedInputTokens", f.Usage.CachedInputTokens,
 			"outputTokens", f.Usage.OutputTokens)
-		// Live context size for the rotation net (see rotation.go).
-		s.lastContextTokens.Store(int64(f.Usage.InputTokens + f.Usage.CachedInputTokens))
+		// Live context size for the rotation net (see rotation.go). Responses
+		// API `input_tokens` is ALREADY the whole prompt including the cached
+		// prefix, so it IS the context size — adding cached on top double-counts
+		// it and rotates the session at half the intended threshold.
+		s.lastContextTokens.Store(int64(f.Usage.InputTokens))
 	}
 	slog.Info("codex <<< turn completed", logArgs...)
 
 	// Preserve all queued request/run pairs so later silent/web-chat markers
 	// still match their own turn; only clear the currently streamed turn.
 	s.finishCurrentCorrelation()
-	steeredWebRuns := s.takeSteeredWebRuns()
+	steeredRuns := s.takeSteeredRuns()
+	// The latest audible follow-up owns the voice response and its Harness
+	// route. Suppress duplicate speech before any assistant delta is dispatched;
+	// the host still executes hardware markers once, and child text strips them.
+	speechRunID := runID
+	for _, merged := range steeredRuns {
+		if !s.IsWebChatRun(merged.runID) && !s.IsSilentRun(merged.runID) {
+			speechRunID = merged.runID
+		}
+	}
+	if speechRunID != runID {
+		if !s.IsWebChatRun(runID) {
+			s.MarkSilentRun(runID)
+		}
+		for _, merged := range steeredRuns {
+			if merged.runID != speechRunID && !s.IsWebChatRun(merged.runID) {
+				s.MarkSilentRun(merged.runID)
+			}
+		}
+	}
 
 	// Telegram-originated turn (telegram_poll.go): DM the reply back to the
 	// originating chat. TTS was suppressed at injection (MarkSilentRun), so
@@ -526,8 +573,8 @@ func (s *CodexService) emitFinal(f codexFrame, dispatch func(domain.WSEvent)) {
 		},
 	})
 	dispatch(domain.WSEvent{Type: "evt", Event: "agent", Payload: endPayload})
-	for _, merged := range steeredWebRuns {
-		s.emitMergedWebFinal(merged.runID, finalText, dispatch)
+	for _, merged := range steeredRuns {
+		s.emitMergedFinal(merged.runID, finalText, dispatch)
 	}
 }
 
@@ -544,6 +591,7 @@ func (s *CodexService) handleError(msg string, dispatch func(domain.WSEvent)) {
 	// Preserve all queued request/run pairs so later silent/web-chat markers
 	// still match their own turn; only clear the currently streamed turn.
 	s.finishCurrentCorrelation()
+	steeredRuns := s.takeSteeredRuns()
 	s.turnMu.Lock()
 	s.assistantParts = nil
 	s.toolStartSeen = nil
@@ -582,6 +630,17 @@ func (s *CodexService) handleError(msg string, dispatch func(domain.WSEvent)) {
 		},
 	})
 	dispatch(domain.WSEvent{Type: "evt", Event: "agent", Payload: payload})
+	s.emitMergedErrors(steeredRuns, msg, dispatch)
+}
+
+func (s *CodexService) emitMergedErrors(runs []pendingRun, msg string, dispatch func(domain.WSEvent)) {
+	for _, run := range runs {
+		payload, _ := json.Marshal(map[string]any{
+			"runId": run.runID, "sessionKey": s.GetSessionKey(), "stream": "lifecycle",
+			"data": map[string]any{"phase": "error", "error": msg, "endedAt": nowUnixMs(), "mergedIntoActiveTurn": true},
+		})
+		dispatch(domain.WSEvent{Type: "evt", Event: "agent", Payload: payload})
+	}
 }
 
 // --- turn-correlation helpers ---
@@ -716,7 +775,7 @@ func (s *CodexService) clearTurn() {
 	s.currentRunID.Store("")
 	s.pendingMu.Lock()
 	s.pendingRuns = nil
-	s.steeredWebRuns = nil
+	s.steeredRuns = nil
 	s.pendingMu.Unlock()
 	s.turnMu.Lock()
 	s.assistantParts = nil

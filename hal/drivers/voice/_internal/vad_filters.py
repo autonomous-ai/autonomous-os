@@ -139,8 +139,6 @@ class SileroVADFilter:
         Fails open (returns True) on infrastructure errors — don't drop speech.
         """
 
-        print(len(data), device_rate)
-    
         if self._session is None:
             return True
         try:

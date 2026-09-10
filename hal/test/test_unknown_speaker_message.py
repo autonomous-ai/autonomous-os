@@ -29,16 +29,19 @@ def test_a_short_fragment_carries_no_instruction_to_speak():
     assert "voice_460" in msg
 
 
-def test_a_full_utterance_still_gets_the_enroll_nudge():
-    # Ten words and over two seconds — the gate for the strong nudge, unchanged.
+def test_an_ordinary_request_does_not_trigger_a_name_question():
     msg = _decorator()._format_unknown_speaker_message(
-        "hello there I am a brand new person in this house",
+        "Let's discuss the review of the Codex agent code for autonomous OS.",
         "/tmp/v.wav",
         duration_s=4.0,
         voiceprint_hash="voice_461",
     )
 
-    assert "ask user's name" in msg
+    assert "else ask" not in msg
+    assert "auto enroll" not in msg
+    assert "Otherwise handle the user's request" in msg
+    assert "audio save at /tmp/v.wav" in msg
+    assert "[voice:voice_461]" in msg
 
 
 def test_a_speaker_asked_recently_is_not_asked_again():
@@ -52,5 +55,17 @@ def test_a_speaker_asked_recently_is_not_asked_again():
         long_turn, "/tmp/b.wav", duration_s=4.0, voiceprint_hash="voice_462"
     )
 
-    assert "ask user's name" in first
+    assert "clear self-introduction" in first
     assert "ask" not in second.lower()
+    assert "audio saved at /tmp/b.wav" in second
+
+
+def test_self_introduction_keeps_audio_and_conditional_enrollment_guidance():
+    transcript = "My name is Alex and I would like you to remember my voice."
+    msg = _decorator()._format_unknown_speaker_message(
+        transcript, "/tmp/alex.wav", duration_s=6.0, voiceprint_hash="voice_463"
+    )
+    assert transcript in msg
+    assert "audio save at /tmp/alex.wav" in msg
+    assert "[voice:voice_463]" in msg
+    assert "clear self-introduction" in msg

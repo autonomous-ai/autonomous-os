@@ -329,7 +329,7 @@ class SpeakerDecorator:
         min_words: int = 10,
         min_duration_s: float = 2.0,
     ) -> bool:
-        """Whether unknown-speaker message should include a strong enroll nudge."""
+        """Whether audio is sufficient to include conditional enrollment guidance."""
         return len(transcript.split()) >= min_words and duration_s >= min_duration_s
 
     def _format_unknown_speaker_message(
@@ -363,8 +363,10 @@ class SpeakerDecorator:
                 self._last_nudge_time[voiceprint_hash] = now
             return (
                 f"Unknown Speaker:{hash_tag} {transcript} "
-                f"(audio save at {audio_path}, auto enroll this speaker "
-                f"if having speaker name in transcript, else ask user's name)"
+                f"(audio save at {audio_path}; enrollment is relevant only for "
+                f"a clear self-introduction, an explicit voice enrollment request, "
+                f"or a reply continuing that enrollment. Otherwise handle the "
+                f"user's request without asking their name.)"
             )
 
         # No trailing "otherwise ask them to introduce themselves". This branch is
