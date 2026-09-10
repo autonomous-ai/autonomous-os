@@ -15,6 +15,7 @@ import hal.app_state as state
 import hal.config as config
 from hal.drivers.tracking import constants as C
 from hal.drivers.tracking import search
+from test.body_ownership import BodyOwnership
 
 
 @pytest.fixture(autouse=True)
@@ -38,7 +39,7 @@ class _FakeCap:
         return self._frame
 
 
-class _FakeSvc:
+class _FakeSvc(BodyOwnership):
     # The idle recording's first frame, which the animation service holds. The
     # sweep rests on it when there is no bearing to seed from.
     IDLE_BASELINE = {
