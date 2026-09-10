@@ -47,13 +47,16 @@ import (
 type Server struct {
 	harnessService   *harness.Service
 	harnessRepliesMu sync.Mutex
-	harnessReplies   map[string]harnessReply
-	harnessFollowup  atomic.Int64
-	harnessResultMu  sync.RWMutex
-	harnessResult    string
-	harnessResultAt  time.Time
-	engine           *gin.Engine
-	config           *config.Config
+	// harnessReplies is keyed by the local device run ID. A single Harness
+	// agent can work on more than one user request at once, so it cannot be
+	// keyed by agent ID.
+	harnessReplies  map[string]harnessReply
+	harnessFollowup atomic.Int64
+	harnessResultMu sync.RWMutex
+	harnessResult   string
+	harnessResultAt time.Time
+	engine          *gin.Engine
+	config          *config.Config
 
 	// handlers
 	healthHandler     _healthHttpDeliver.HealthHandler

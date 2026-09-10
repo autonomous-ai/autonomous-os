@@ -7,9 +7,9 @@ description: Interact with coding and research agents on the computer paired thr
 
 Run `python3 scripts/harness.py ACTION -` from this skill directory on the device, with one JSON object on stdin. The helper calls the OS API on localhost; agent work runs on the paired computer, never on the device.
 
-Do not run `harness.py --help` during a user task; the commands and JSON shapes below are the contract. After a successful `send` or `answer` with a response target, stop calling Harness tools and reply exactly `NO_REPLY`. Do not poll `receipt`, `status`, or `recap` to confirm a successful mutation; the OS receives the terminal event and delivers the result to the original turn. Only inspect a receipt when the mutation result is explicitly unknown or the user asks for its delivery state.
+Do not run `harness.py --help`, read this file again, or inspect the skill directory during a user task; the commands and JSON shapes below are the complete contract. A `send` or `answer` that returns a receipt in `queued`, `delivered`, `started`, `completed`, or `rejected` has a known outcome. With a response target, it is the **last Harness command of this turn**: immediately reply exactly `NO_REPLY`. Do not call `receipt`, `status`, `recap`, `list`, or a second `send`/`answer` after it. The OS receives lifecycle events and delivers the result to the original turn. Only inspect a receipt when the mutation result is explicitly unknown (`DeliveryUnknown` / no usable receipt), or when the user asks for its delivery state; never resend automatically after inspecting it.
 
-When the current input includes `[harness-reply run_id=... channel=voice|web]`, copy those values unchanged into the `response` object of a `send` or `answer` call. After a successful mutation, reply exactly `NO_REPLY`; do not poll receipt/recap or rewrite the result. The OS delivers Harness's terminal recap directly to that run. `channel=web` displays it in Web Chat and suppresses TTS; `channel=voice` speaks the same recap.
+When the current input includes `[harness-reply run_id=... channel=voice|web]`, copy those values unchanged into the `response` object of a `send` or `answer` call. After a successful mutation, reply exactly `NO_REPLY`; do not poll receipt/recap or rewrite the result. The helper rejects a second mutation carrying the same response route after a known receipt, so never attempt a duplicate send. The OS delivers Harness's terminal recap directly to that run. `channel=web` displays it in Web Chat and suppresses TTS; `channel=voice` speaks the same recap.
 
 ## Routing
 
@@ -41,6 +41,8 @@ JSON
 Omit `agentId` for a follow-up to the retained target. `status`, `recap` (`n` from 1 to 5), and `stop` use the same target. For “the current desktop tab”, explain that v1 requires selecting a Harness agent; desktop focus is not available. Do not create a new agent or switch projects to work around a missing target.
 
 The helper reserves a unique idempotency key before each mutation and blocks another mutation while delivery is unresolved. `receipt` reconciles the outstanding request; read-only status/list/recap remain available. Never auto-resend an uncertain request or clear its state to force a retry. Only after the user explicitly abandons the uncertain delivery may `resolve` with `{"resolution":"do_not_retry"}` clear it. This does not undo or cancel work already delivered.
+
+If the current user turn gives a **new task or corrects a prior task** and a prior delivery blocks `send`, inspect that receipt once. When it is `delivered`, `started`, `completed`, or `rejected`, immediately send the user's current task in the same turn with the current `response` object. Do not return `NO_REPLY` after merely confirming the old receipt: it is allowed only after the current turn's `send` or `answer` has a known receipt.
 
 Describe receipts accurately: `queued` means waiting, `delivered` means sent, `started` means running, `completed` means completed for that operation. Completion of `stop` or `question.answer` is not completion of the agent's task. `unknown` or a missing receipt means delivery cannot be confirmed; it does not mean failure.
 

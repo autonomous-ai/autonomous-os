@@ -444,3 +444,5 @@ Turns now show every turn derivable from the fetched events. Comparing server to
 | `system/web/src/pages/Monitor.tsx` | `groupIntoTurns`, `turnIO`, `extractNodeInfo`, `FlowDiagram` |
 
 Vietnamese summary: `docs/vi/flow-monitor_vi.md`.
+
+Harness final delivery records `harness_response` in flow JSONL with the original device run ID and complete `text`. Web Chat uses this event to recover pending results after SSE disconnects or page reloads. Live delivery still emits `chat_response` with state `final`.

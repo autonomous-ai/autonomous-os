@@ -29,7 +29,7 @@ logger = logging.getLogger("hal.voice")
 SENTENCE_ENDS = (".", "!", "?", "。", "！", "？")
 
 # Clause boundaries the first chunk of a turn may be cut at — see
-# split_first_chunk. Sentence enders are handled by the normal flush above them.
+# split_first_chunk. Complete sentences bypass the early cut.
 CLAUSE_ENDS = (",", ";", ":", "—", "，", "；", "：", "、")
 # Below this many characters a clause is a runt ("Ừ,", "Sure,", "Vâng,") —
 # speaking it alone sounds like a stutter, and the pause it buys is not worth
@@ -51,17 +51,34 @@ def split_first_chunk(buf: str) -> tuple[str, str]:
     the buffer still under the cap, or a boundary too early to be a phrase.
     """
     cap: int = hal_config.REALTIME_FIRST_CHUNK_MAX_CHARS
-    if cap <= 0 or len(buf) < FIRST_CHUNK_MIN_CHARS:
+    if cap <= 0 or len(buf) < FIRST_CHUNK_MIN_CHARS or buf.rstrip().endswith(SENTENCE_ENDS):
         return "", buf
-    cut: int = max(buf.rfind(c) for c in CLAUSE_ENDS)
-    if cut + 1 < FIRST_CHUNK_MIN_CHARS:
-        # No usable clause boundary. Past the cap, cut at the last word break
-        # instead: a long comma-less opener is exactly the case this exists for.
-        if len(buf) < cap:
+    # Network text can end inside a voice tag or a number. Only consider
+    # boundaries outside square brackets, and never cut after a digit.
+    clauses = []
+    spaces = []
+    depth = 0
+    visible = 0
+    for i, char in enumerate(buf):
+        if char == "[":
+            depth += 1
+        elif char == "]" and depth:
+            depth -= 1
+        elif not depth:
+            visible += 1
+            if visible < FIRST_CHUNK_MIN_CHARS:
+                continue
+            if char in CLAUSE_ENDS and not (i and buf[i - 1].isdigit()):
+                # A colon followed by '/' belongs to a URL, not a clause.
+                if char not in (":", "：") or (i + 1 < len(buf) and buf[i + 1].isspace()):
+                    clauses.append(i)
+            if char.isspace() and i < cap:
+                spaces.append(i)
+    cut = clauses[-1] if clauses else -1
+    if cut < 0:
+        if len(buf) < cap or not spaces:
             return "", buf
-        cut = buf.rfind(" ", FIRST_CHUNK_MIN_CHARS, cap)
-        if cut < 0:
-            return "", buf
+        cut = spaces[-1]
     head: str = buf[: cut + 1].strip()
     return (head, buf[cut + 1:]) if head else ("", buf)
 

@@ -25,7 +25,7 @@ import {
   Workflow, Users, Camera, Radar, ChartColumn, Move3d, Bluetooth, ScrollText,
   Terminal, FileCode, Hexagon, ExternalLink, SlidersHorizontal, ChevronRight,
   Server, Zap, LogOut, Clock, Search, X, CornerDownLeft, Plug, Blocks,
-  CalendarClock,
+  CalendarClock, Handshake,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -33,6 +33,7 @@ import { S } from "./styles";
 import { API, HW, HISTORY_LEN, FLOW_EVENTS_MAX, NAV, isNavGroup, isNavLink, Cap, areaPath, sectionArea, sectionToHash, hashToSection } from "./types";
 import type { Section, Area, SystemInfo, NetworkInfo, HWHealth, OCStatus, PresenceInfo, VoiceStatus, ServoState, DisplayState, AudioVolume, LEDColor, SceneInfo, MonitorEvent, DisplayEvent, NavEntry } from "./types";
 import { OverviewSection } from "./OverviewSection";
+import { PairingSection } from "./PairingSection";
 import { SystemSection } from "./SystemSection";
 import { FlowSection } from "./FlowSection";
 import { SensingSection } from "./SensingSection";
@@ -55,7 +56,7 @@ const EMBED_SECTIONS = new Set<Section>(["api-docs", "agent-config"]);
 
 // Sections shown to non-debug users. Append `?debug=true` to the URL to reveal
 // the rest of the menu (Sensing, Analytics, Servo, API Docs, Agent gateway).
-const PUBLIC_SECTIONS = new Set<Section>(["chat", "overview", "system", "flow", "camera", "face-owners", "bluetooth", "logs", "cli", "settings:device", "settings:wifi", "settings:voice", "settings:face", "settings:mcp", "settings:plugins", "settings:timezone", "settings:scheduled"]);
+const PUBLIC_SECTIONS = new Set<Section>(["chat", "pairing", "overview", "system", "flow", "camera", "face-owners", "bluetooth", "logs", "cli", "settings:device", "settings:wifi", "settings:voice", "settings:face", "settings:mcp", "settings:plugins", "settings:timezone", "settings:scheduled"]);
 
 // The capability a section requires, read from its NAV leaf (single source: the
 // nav definition itself declares `cap`). undefined → no hardware dependency, the
@@ -85,6 +86,7 @@ const iframeStyle: React.CSSProperties = {
 const NAV_ICONS: Record<string, LucideIcon> = {
   // top-level leaf
   chat: MessageCircle,
+  pairing: Handshake,
   // group headers
   settings: Settings,
   device: MonitorSmartphone,
@@ -648,7 +650,7 @@ export default function Monitor() {
         {/* When a search query is active the grouped nav is replaced by the flat
             result list rendered inside SidebarSearch, so skip the normal tree. */}
         <nav style={{ padding: "10px 0", flex: 1, display: navQuery.trim() ? "none" : undefined }}>
-          {/* Order: Chat → Device → Settings → Agent Gateway → (other groups) */}
+          {/* Chat is the only top-level leaf; Pairing is grouped under Device. */}
           {NAV.filter((e) => !isNavGroup(e) && e.id === "chat").map((entry) => {
             const leaf = entry as Extract<NavEntry, { id: Section }>;
             return (
@@ -888,6 +890,7 @@ export default function Monitor() {
               }}
             />
           )}
+          {section === "pairing" && <PairingSection />}
           {section === "system" && (
             <SystemSection
               sys={sys}

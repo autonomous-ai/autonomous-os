@@ -495,6 +495,14 @@ whose Node wrapper is dropped on disk before the entry is written. Special-write
 codes are excluded (`reserved`) from the generic writer's refresh scan so it never
 re-writes them in the wrong (HTTP) shape.
 
+**Expiry:** `expires_in` (seconds from now) is persisted as an absolute
+`expires_at`. A credential that never expires — an app password or static API key
+(`auth_type:"pat"`, or a payload carrying `api_key` and no `access_token`) — is
+stored with `expires_at: 0` when the backend sends no expiry info, instead of the
+1-hour OAuth default. Nothing rotates such a credential (the refresh loop skips
+`expires_at == 0`), so a synthetic expiry would leave it reading as permanently
+expired an hour after it was stored.
+
 **Refresh:** the refresh loop scans the generic writer (globbing
 `*_access_tokens.json`) plus each special writer, and proactively rotates any entry
 carrying BOTH a `refresh_token` AND `refresh:true` (the backend owns refresh
@@ -1122,3 +1130,7 @@ Handled by bootstrap worker, not through MQTT handler directly.
 | `runtimes/openclaw/pairing.go` | WhatsApp Baileys QR pairing subprocess driver |
 | `system/domain/device.go` | MQTTMessage, command constants |
 | `system/domain/pairing.go` | PairingEvent + status enum |
+
+A silent terminal `NO_REPLY` without a pending Harness handoff is sent as a `chat_response` with `state: final`, empty summary and empty assistant message. The mobile client can terminate its pending indicator without displaying the internal sentinel.
+
+MQTT treats every final Harness response as terminal regardless of wording; handoff suppression is handled by the shared agent handler using the exact run ID.

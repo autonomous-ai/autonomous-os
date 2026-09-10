@@ -28,22 +28,26 @@ não nào đang chạy.
 
 ## 1. Tổng quan & chọn ra sao
 
-Codex CLI không có chế độ server riêng, nên thiết bị chạy một **WS bridge**
-mỏng cục bộ: unit systemd `codex.service` chạy **`os-server codex-gatewayd`** —
-bridge được **compile thẳng vào binary os-server** (`runtimes/codex/gatewayd`,
-bản Go port của `bridge.py` tham chiếu; **không có Python trên thiết bị**).
+Thiết bị chạy một **WS bridge** mỏng cục bộ: unit systemd `codex.service` chạy
+**`os-server codex-gatewayd`** — bridge được **compile thẳng vào binary
+os-server** (`runtimes/codex/gatewayd`; **không có Python trên thiết bị**).
+Gatewayd sở hữu một tiến trình Codex App Server JSON-RPC thường trú. Nó bắt đầu
+turn bằng `turn/start` và gửi input bổ sung tương thích vào turn active bằng
+`turn/steer`, thay vì tuần tự hoá input trực tiếp của user qua worker `codex
+exec` theo từng turn.
+
 Bridge mở `ws://127.0.0.1:18792/codex/ws/` (bearer token
-`autonomous_codex_token`) và spawn **một subprocess mỗi turn**:
+`autonomous_codex_token`) cho os-server. Cấu hình permissive là có chủ ý:
+appliance chạy root không bao giờ được block ở prompt approval
+(`approval_policy = "never"` + `sandbox_mode = "danger-full-access"` trong
+config.toml, §1.2).
 
-```
-codex exec --json --dangerously-bypass-approvals-and-sandbox --cd /root/.codex/workspace
-```
-
-resume theo thread id lưu trong `/root/.codex/session.json` (`codex exec
-resume <id>`). Turn được serialize nghiêm ngặt (queue có buffer + một worker).
-Các cờ "nguy hiểm" là cố ý: appliance chạy root không bao giờ được block ở
-prompt approval (đi cặp với `approval_policy = "never"` +
-`sandbox_mode = "danger-full-access"` trong config.toml, §1.2).
+**Phạm vi steering.** `turn/steer` chỉ hợp lệ cho thread Codex hiện đang có
+turn active. Khi turn đã terminal, input kế tiếp đi theo đường start hoặc
+resume bình thường. Điều này bỏ độ trễ FIFO do runtime tạo ra cho hội thoại
+đang chạy, nhưng không vượt qua chính sách an toàn OS: sensing thụ động, cổng
+an toàn speaker/TTS, giao nhận offline và input không thể ghép an toàn vào
+thread active vẫn có thể bị os-server queue.
 
 `agent_runtime` trong `config.json` chọn backend; việc phân giải nằm ở
 `system/agent/factory.go` `ProvideGateway()` — `"codex"` →
@@ -143,8 +147,8 @@ từ template nhúng chỉ khi chưa có, inject các khối OS-managed `<!-- OS
 `SOUL.md` / `AGENTS.md` / `HEARTBEAT.md` (gốc OpenClaw, lược phần
 chỉ-OpenClaw), refresh khối AGENTS.md **toàn cục** ở tầng user
 (`ensureUserAgentsMDBlock`, xem bên dưới), và capability-gate skills. Thay đổi
-chỉ-markdown không bao giờ restart gateway — mỗi `codex exec` đọc lại
-workspace; chỉ presync đổi config hoặc self-heal unit mới restart.
+chỉ-markdown không bao giờ restart gateway; chỉ presync đổi config hoặc
+self-heal unit mới restart.
 
 **Vì sao phải seed `AGENTS.md`.** Codex không có lệnh `setup` để sinh lại
 `AGENTS.md` nền như openclaw, nên một **thiết bị chỉ chạy codex** — chưa từng
@@ -229,11 +233,11 @@ reply về trên read loop:
   "attachments": [{ "type": "image", "url": "data:image/jpeg;base64,…" }] } }
 ```
 
-Bridge lưu attachment vào `/root/.codex/attachments` rồi truyền qua
-`codex exec -i <path>`. Frame `{"type":"session.new"}` làm bridge bỏ thread id
-đã lưu (§4). Codex xử lý một turn mỗi lần và không stream token, nên turn được
-correlate bằng một `runID` in-flight duy nhất (pending run id được frame inbound
-đầu tiên của turn nhận lấy).
+Bridge lưu attachment vào `/root/.codex/attachments` rồi đưa chúng vào input
+của App Server. Frame `{"type":"session.new"}` xóa thread hiện hành (§4).
+Message mới tương thích với thread active dùng `turn/steer`; trường hợp khác
+gatewayd bắt đầu turn bình thường. Event vẫn correlate với `runID` khởi tạo;
+steering không bao giờ âm thầm gán lại turn.
 
 ## 2.1 Thời lượng một turn — timeout và busy TTL
 
@@ -243,7 +247,7 @@ hai con số chặn nó, và thứ tự giữa chúng là bắt buộc:
 
 | Knob | Ở đâu | Mặc định | Nghĩa |
 |---|---|---|---|
-| `CODEX_TURN_TIMEOUT_S` | `gatewayd/gatewayd.go` | `600` (10 phút) | Giết `codex exec` rồi gửi `bridge.error: timeout`. Gatewayd LUÔN kết thúc turn — xong, lỗi, hoặc timeout này. |
+| `CODEX_TURN_TIMEOUT_S` | `gatewayd/gatewayd.go` | `600` (10 phút) | Kết thúc turn App Server đang active rồi gửi `bridge.error: timeout`. Gatewayd LUÔN kết thúc turn — xong, lỗi, hoặc timeout này. |
 | `busyTTL()` | `events.go` | timeout đó **+ 5 phút** | Gỡ kẹt pipeline sensing khi frame cuối của turn bị RỚT. Suy ra từ chính env var trên nên nâng timeout không bỏ sót nó. |
 
 **TTL hết hạn thì kết thúc turn cho ĐỦ, cả hai nửa.** Vừa bỏ runId, vừa bắn một
@@ -278,9 +282,9 @@ thread mới trả lời trong vài giây — nên endpoint chưa bao giờ là 
 giờ gọi `clearSession()` khi resume timeout, đây là đường thoát duy nhất không cần
 người can thiệp.
 
-Hạn bỏ cuộc của web chat (`REPLY_IDLE_TIMEOUT_MS`) cũng được đặt dài hơn
-mức chặn turn vì cùng lý do — và không rút ngắn được, vì `codex exec --json`
-không emit gì trong lúc chạy (run đo được không stream một delta nào suốt 10 phút).
+Hạn bỏ cuộc của web chat (`REPLY_IDLE_TIMEOUT_MS`) được đặt dài hơn mức chặn
+turn. Event App Server có thể báo tiến độ sống, nhưng một steer vẫn là một phần
+của chính turn active, không phải một lời hứa hoàn tất độc lập.
 
 ### Gửi tiếp request còn nằm trong queue khi kết nối lại
 
@@ -308,7 +312,7 @@ hạn **1024**; văn bản đa dạng vẫn được chấp nhận. Đây là he
 không phải giới hạn độ dài câu trả lời: code dài, fixture số và giải thích thông
 thường vẫn có thể qua. Không phân loại output của tool.
 
-Khi chặn, gateway giết process group của CLI hiện tại, không chuyển item bị chặn
+Khi chặn, gateway kết thúc turn App Server hiện đang active, không chuyển item bị chặn
 hay frame báo thành công phía sau, xóa thread lưu trước lượt kế tiếp trong queue,
 và gửi `bridge.error` có tiền tố `degenerate_output:`. Áp dụng cho cả thread mới
 và resume, **không tự chạy lại task**. Tool trước đó có thể đã tác động hệ thống;
@@ -324,9 +328,9 @@ theo trong queue bắt đầu mới mà không chạy lại task lỗi.
 
 ## 3. Dịch event (`translator.go`)
 
-Bridge forward các event JSONL của `codex exec --json` **nguyên văn** (cộng các
-frame riêng của nó `bridge.status` / `bridge.error` / `pong`); translator Go
-map chúng sang đúng khuôn `domain.WSEvent` mà handler OpenClaw tiêu thụ:
+Bridge map các notification JSON-RPC của Codex App Server bền (cộng các frame
+riêng `bridge.status` / `bridge.error` / `pong`) sang đúng khuôn
+`domain.WSEvent` mà handler OpenClaw tiêu thụ:
 
 | Event inbound | `domain.WSEvent` phát ra |
 |---|---|
@@ -335,7 +339,7 @@ map chúng sang đúng khuôn `domain.WSEvent` mà handler OpenClaw tiêu thụ:
 | `item.started` `command_execution` / `mcp_tool_call` | `agent` tool `phase:start` (`shell` / `server.tool`) |
 | `item.completed` `command_execution` / `mcp_tool_call` | tool `phase:end` (phát start trước nếu chưa thấy) |
 | `item.completed` `web_search` / `file_change` | cặp tool `phase:start` + `phase:end` |
-| `item.completed` `agent_message` | **giữ làm câu trả lời** — exec mode không có delta stream. Cái mới đẩy cái trước xuống `stream:thinking` (xem *Preamble* bên dưới) |
+| `item.completed` `agent_message` | giữ làm câu trả lời; cái mới đẩy cái trước xuống `stream:thinking` (xem *Preamble* bên dưới) |
 | `item.*` `reasoning` / `todo_list` | *(bỏ qua — status, không phải nội dung)* |
 | `turn.completed` | `agent` `stream:assistant` (nguyên câu trả lời trong **một** delta) **+** `chat` `state:final role:assistant` **+** lifecycle `phase:end` kèm usage — kết thúc turn |
 | `turn.failed` / `error` / `bridge.error` | `agent` lifecycle `phase:error` — kết thúc turn |
@@ -346,7 +350,7 @@ dưới dạng một assistant delta duy nhất **trước** `chat.final` /
 `lifecycle.end` — trường hợp N=1 của hợp đồng streaming, chính nó cho consumer
 chung flush TTS + marker phần cứng `[HW:/…]` tại `lifecycle.end`.
 
-**Preamble.** Codex exec tự thuật trước khi gọi tool, thành một item
+**Preamble.** Codex có thể tự thuật trước khi gọi tool, thành một item
 `agent_message` riêng ("Using the sensing skill for this presence event.",
 "Posture summary is present, so this is the posture-nudge route."). Gộp hết
 `agent_message` lại là đọc cả chuỗi tự thuật đó ra loa — đúng lỗi leak thấy ở
@@ -364,29 +368,22 @@ thước context sống), `output → OutputTokens`, `TotalTokens = in + out`.
 
 ## 4. Session
 
-Codex sở hữu session: thread id được bắt từ event `thread.started` và bridge
-lưu trong `/root/.codex/session.json`, rồi replay bằng `codex exec resume <id>`
-(lịch sử nằm trên đĩa ở `$CODEX_HOME/sessions/` — process thoát ≠ mất session).
-`NewSession` gửi frame `session.new` → bridge bỏ thread id → turn kế tiếp là
-fresh (best-effort khi socket đang rớt: id cũ resume lỗi thì bridge tự retry
-fresh).
+Codex sở hữu session: bridge bắt thread id của App Server làm session key.
+`NewSession` gửi frame `session.new` → bridge xóa thread hiện hành →
+`turn/start` kế tiếp là fresh. `turn/steer` chỉ append vào turn còn active của
+chính thread đó, không bao giờ vào thread khác hoặc turn đã hoàn tất.
 
 Codex **tự auto-compact context của nó** (`model_auto_compact_token_limit`),
-nên `ShouldRotateSession` chỉ là **lưới an toàn 250k token** cho thread chạy
-hoang — hiếm khi kích hoạt. Nó tính trên kích thước **context** đang sống —
+nhưng thiết bị có lưới an toàn **120k token**: tại 134k, một lượt `codex exec`
+đã mất 100 giây; các lượt resume sau đó phình lên 376k rồi 473k. Nó tính trên kích thước **context** đang sống —
 `input_tokens + cached_input_tokens` của `turn.completed` gần nhất, được
 translator lưu vào `lastContextTokens` — chứ không phải `totalTokens` mà handler
 chung truyền vào (số đó cộng cả output của lượt này, là khối lượng turn chứ
 không phải context). Tự đọc usage frame của mình giúp thay đổi này nằm gọn
 trong codex: các backend khác không bị đụng tới.
 
-Lưới này từng là 150k và tính trên `totalTokens` của handler cho tới
-24/8/2026, khi thiết bị cho thấy nó kích hoạt trên turn bình thường chứ không
-phải turn chạy hoang — 3 trong 8 turn sensing liên tiếp trên lamp-0c89 vượt
-ngưỡng (context 153k / 170k). Mỗi lần rotate là mất thread, thread mới lại
-shell-đọc lại toàn bộ `SKILL.md` (6 lần gọi, ~60s), đẩy context vượt ngưỡng
-ngay lập tức: một vòng lặp rotate. Lưới an toàn phải nằm **trên** mức mà
-compaction của codex ổn định lại, không phải nằm trong đó. Theo
+Ngưỡng vẫn chừa một khoảng nhỏ trên sensing turn khỏe mạnh lớn nhất đã quan sát
+(116k), nhưng chặn được vách độ trễ đã đo. Theo
 [`adding-agent-runtime_vi.md`](adding-agent-runtime_vi.md) §4 "No fake
 success", `CompactSession`, `GetConfigJSON` (config của Codex là TOML + secrets
 trong `.env` — không có file JSON để lộ ra), `UpdatePrimaryModel`, và
@@ -638,10 +635,25 @@ thẳng với OpenAI bằng provider + model mặc định built-in — chế đ
 hoàn toàn blocker 404 `/responses` của campaign-api**. Xoá `auth.json` để quay
 về chế độ api-key; việc chuyển đổi tự động ở lần presync kế.
 
-### Đối chiếu lượt trong hàng đợi
+### Đối chiếu turn active và steering
 
-`message.send` mang request `id` và `run_id` gốc trên device. Gatewayd giữ cả hai qua worker FIFO và thêm `request_id`/`run_id` vào mọi sự kiện của lượt, gồm lỗi bridge kết thúc và lần thử resume. Control frame (`pong`, `bridge.status`) độc lập. Hàng đợi đầy trả `bridge.rejected` với ID của request bị từ chối thay vì làm lỗi lượt đang stream.
+`message.send` mang request `id` và `run_id` gốc trên device. Gatewayd giữ các
+ID đó trên event của turn. Message tương thích nhắm thread active dùng
+`turn/steer` thay vì chờ phía sau. Trace device riêng nhận xác nhận
+`bridge.steered`. Web chat đã gộp chờ reply cuối của turn active; reply được
+fan-out an toàn, không phát lại marker phần cứng. Follow-up nội bộ có thể kết
+thúc ngay. Việc này ngăn follow-up đã gộp giữ lại pending run ma và làm kẹt busy
+state. Control frame (`pong`, `bridge.status`) độc lập.
+Nếu restart gateway để lại thread ID đã lưu nhưng App Server mới không còn biết,
+gatewayd sẽ xoá session cũ đó và thử lại chính turn ấy một lần trên thread mới.
 
-Adapter tuần tự hóa ghi chat đi và lưu mọi cặp request/run đang chờ, không ghi đè một pending run duy nhất. Sự kiện có ID chọn đúng cặp gốc; bridge cũ thiếu trường này dùng đối chiếu FIFO. Lịch sử giới hạn 256 request ID đã hoàn thành giúp bỏ qua terminal frame trùng đến muộn. Gửi thất bại chỉ xóa request đó, giữ lượt đang chạy và công việc khác trong hàng đợi. Từ chối hàng đợi báo lifecycle error của run bị từ chối mà không xóa output tích lũy của lượt đang chạy. Nhờ đó, chế độ im lặng của web-chat, trả lời voice và định tuyến channel vẫn gắn với request gốc khi có nhiều followup chờ. Thay đổi này không thêm cancellation hoặc đổi chính sách thực thi tuần tự của gateway.
+Adapter giữ đối chiếu request/run cho event terminal và từ chối steer không thể
+áp dụng cho thread active, thay vì âm thầm ghép sang nơi khác. Turn đã hoàn tất
+không thể steer: message kế tiếp đi theo đường start/resume bình thường. Queue
+ở tầng OS vẫn tồn tại vì an toàn và giao nhận, gồm sensing thụ động và lúc loa
+đang bận; steering không phải cơ chế cancellation hay interruption tổng quát.
 
-Busy gating tiếp tục khi còn lượt đã đối chiếu hoặc request được chấp nhận trong hàng đợi, ngay cả khi lifecycle consumer chung báo lỗi của run khác đang chờ. Disconnect và dọn dẹp theo busy-TTL bỏ đối chiếu pending không còn chắc chắn để request bị mất không giữ device busy vô thời hạn. Gateway mới vẫn có thể khôi phục run gốc từ sự kiện có ID sau reconnect; bridge cũ không gắn ID không đảm bảo đối chiếu sau khi mất kết nối. Sự kiện có ID cũ hoặc xen kẽ không được thay đổi session ID đã lưu.
+Nếu bridge đang kết nối bị rớt khi turn còn active, client phát lifecycle error
+có tương quan (`codex gateway restarted; turn cancelled`) trước khi xoá tương
+quan cục bộ. Nhờ vậy Monitor và web chat không hiện turn active vĩnh viễn; task
+không tự gửi lại vì có thể đã tạo side effect.

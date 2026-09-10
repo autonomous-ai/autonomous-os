@@ -188,6 +188,14 @@ func (s *Service) updateAgentRuntime(d domain.AgentRuntimeSetData, waitReady boo
 	if !domain.IsValidAgentRuntime(runtime) {
 		return false, fmt.Errorf("invalid runtime %q (want %s)", d.Runtime, strings.Join(domain.AgentRuntimes, "|"))
 	}
+	// "remote" is not activated through switch-runtime — the HTTP handler
+	// persists agent_runtime + AgentRemoteURL/Token directly and restarts
+	// os-server. If we reach here with "remote" it means an MQTT
+	// hermes.setup / picoclaw.setup style command tried to switch to it,
+	// which is not supported: MQTT lacks a way to carry the endpoint URL.
+	if runtime == domain.AgentRuntimeRemote {
+		return false, fmt.Errorf("runtime %q is only settable via the HTTP settings API (it needs the gateway URL)", runtime)
+	}
 
 	// Resolve the currently-active runtime BEFORE the save so switch-runtime
 	// knows which backend to stop. Default to openclaw (matches factory.go).

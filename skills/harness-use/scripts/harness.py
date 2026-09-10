@@ -13,6 +13,7 @@ import uuid
 
 BASE = 'http://127.0.0.1:5000/api/harness'
 MAX_BYTES = 3 * 1024 * 1024
+KNOWN_RECEIPT_STATES = ('queued', 'delivered', 'started', 'completed', 'rejected')
 
 
 def api(path, payload=None):
@@ -76,7 +77,9 @@ def run(action, params, path=None):
                 raise ValueError('Pairing changed; unresolved request belongs to the previous computer')
             result = request('receipt.get', idempotencyKey=pending['idempotencyKey'])
             receipt = result.get('receipt')
-            if receipt and receipt.get('state') in ('delivered', 'started', 'completed', 'rejected'):
+            if receipt and receipt.get('state') in KNOWN_RECEIPT_STATES:
+                if pending.get('responseRunID'):
+                    context['completedResponseRunID'] = pending['responseRunID']
                 context.pop('pending', None)
                 save(path, state)
             return result
@@ -111,6 +114,8 @@ def run(action, params, path=None):
                 raise ValueError('response run_id is invalid')
             if response['channel'] not in ('voice', 'web'):
                 raise ValueError('response channel must be voice or web')
+            if context.get('completedResponseRunID') == response['run_id']:
+                raise ValueError('This response route already has a confirmed delivery; return NO_REPLY')
         if action == 'send':
             text = params.get('text')
             if not isinstance(text, str) or not text.strip() or len(text.encode()) > 16384:
@@ -130,11 +135,18 @@ def run(action, params, path=None):
             raise ValueError('Unknown action')
         key = str(uuid.uuid4())
         context.update(target)
-        context['pending'] = {**target, 'idempotencyKey': key, 'operation': kind}
+        context['pending'] = {
+            **target,
+            'idempotencyKey': key,
+            'operation': kind,
+            **({'responseRunID': response['run_id']} if response is not None else {}),
+        }
         save(path, state)
         result = request(kind, **target, idempotencyKey=key, **payload)
         receipt = result.get('receipt')
-        if receipt and receipt.get('state') in ('delivered', 'started', 'completed', 'rejected'):
+        if receipt and receipt.get('state') in KNOWN_RECEIPT_STATES:
+            if response is not None:
+                context['completedResponseRunID'] = response['run_id']
             context.pop('pending', None)
         elif result.get('error', {}).get('code') in {
             'INVALID_REQUEST', 'UNSUPPORTED_CAPABILITY', 'MISSING_TARGET', 'MACHINE_MISMATCH',

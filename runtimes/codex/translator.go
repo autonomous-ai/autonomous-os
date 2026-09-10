@@ -137,6 +137,10 @@ func (s *CodexService) translateFrame(raw []byte, dispatch func(domain.WSEvent))
 		s.rejectQueuedFrame(f, dispatch)
 		return
 	}
+	if f.Type == "bridge.steered" {
+		s.completeSteeredFrame(f, dispatch)
+		return
+	}
 	if isTurnFrame(f.Type) && !s.adoptFrameCorrelation(f, dispatch) {
 		return
 	}
@@ -171,6 +175,61 @@ func (s *CodexService) translateFrame(raw []byte, dispatch func(domain.WSEvent))
 	default:
 		slog.Debug("codex: unhandled frame type", "component", "codex", "type", f.Type)
 	}
+}
+
+// completeSteeredFrame retires the separate device trace for input that the
+// App Server accepted into the already-active turn. The active turn keeps the
+// model's response and its lifecycle. Web chat follows the same model turn but
+// waits for its final reply; other internal follow-ups complete immediately.
+func (s *CodexService) completeSteeredFrame(f codexFrame, dispatch func(domain.WSEvent)) {
+	pending := s.takePendingRun(f.RequestID, f.RunID, false)
+	if pending.runID == "" {
+		return // stale acknowledgement or an older client that did not track it
+	}
+	if s.IsWebChatRun(pending.runID) {
+		s.pendingMu.Lock()
+		s.steeredWebRuns = append(s.steeredWebRuns, pending)
+		s.pendingMu.Unlock()
+		slog.Info("codex: web follow-up merged into active turn; awaiting shared reply",
+			"component", "codex", "request_id", pending.reqID, "runID", pending.runID)
+		return
+	}
+	slog.Info("codex: follow-up merged into active turn", "component", "codex",
+		"request_id", pending.reqID, "runID", pending.runID)
+	payload, _ := json.Marshal(map[string]any{
+		"runId": pending.runID, "sessionKey": s.GetSessionKey(), "stream": "lifecycle",
+		"data": map[string]any{"phase": "end", "endedAt": nowUnixMs(), "mergedIntoActiveTurn": true},
+	})
+	dispatch(domain.WSEvent{Type: "evt", Event: "agent", Payload: payload})
+}
+
+func (s *CodexService) takeSteeredWebRuns() []pendingRun {
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
+	runs := s.steeredWebRuns
+	s.steeredWebRuns = nil
+	return runs
+}
+
+func (s *CodexService) emitMergedWebFinal(runID, finalText string, dispatch func(domain.WSEvent)) {
+	// A shared result must not replay hardware markers for every merged request.
+	text := stripForChannel(finalText)
+	if text != "" {
+		payload, _ := json.Marshal(map[string]any{
+			"runId": runID, "sessionKey": s.GetSessionKey(), "stream": "assistant",
+			"data": map[string]any{"delta": text, "mergedIntoActiveTurn": true},
+		})
+		dispatch(domain.WSEvent{Type: "evt", Event: "agent", Payload: payload})
+	}
+	chat, _ := json.Marshal(map[string]any{
+		"runId": runID, "sessionKey": s.GetSessionKey(), "state": "final", "role": "assistant", "message": text,
+	})
+	dispatch(domain.WSEvent{Type: "evt", Event: "chat", Payload: chat})
+	end, _ := json.Marshal(map[string]any{
+		"runId": runID, "sessionKey": s.GetSessionKey(), "stream": "lifecycle",
+		"data": map[string]any{"phase": "end", "endedAt": nowUnixMs(), "mergedIntoActiveTurn": true},
+	})
+	dispatch(domain.WSEvent{Type: "evt", Event: "agent", Payload: end})
 }
 
 // handleItemStarted opens the turn and surfaces tool.start for the item kinds
@@ -399,6 +458,7 @@ func (s *CodexService) emitFinal(f codexFrame, dispatch func(domain.WSEvent)) {
 	// Preserve all queued request/run pairs so later silent/web-chat markers
 	// still match their own turn; only clear the currently streamed turn.
 	s.finishCurrentCorrelation()
+	steeredWebRuns := s.takeSteeredWebRuns()
 
 	// Telegram-originated turn (telegram_poll.go): DM the reply back to the
 	// originating chat. TTS was suppressed at injection (MarkSilentRun), so
@@ -466,6 +526,9 @@ func (s *CodexService) emitFinal(f codexFrame, dispatch func(domain.WSEvent)) {
 		},
 	})
 	dispatch(domain.WSEvent{Type: "evt", Event: "agent", Payload: endPayload})
+	for _, merged := range steeredWebRuns {
+		s.emitMergedWebFinal(merged.runID, finalText, dispatch)
+	}
 }
 
 func (s *CodexService) handleError(msg string, dispatch func(domain.WSEvent)) {
@@ -653,6 +716,7 @@ func (s *CodexService) clearTurn() {
 	s.currentRunID.Store("")
 	s.pendingMu.Lock()
 	s.pendingRuns = nil
+	s.steeredWebRuns = nil
 	s.pendingMu.Unlock()
 	s.turnMu.Lock()
 	s.assistantParts = nil
