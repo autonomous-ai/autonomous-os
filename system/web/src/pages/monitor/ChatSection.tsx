@@ -453,11 +453,11 @@ const HISTORY_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 // zero deltas in ten minutes, so ANY idle window shorter than the turn itself
 // finalizes a healthy turn as "no response".
 const REPLY_IDLE_TIMEOUT_MS = 12 * 60 * 1000;
-// Shorter window for the post-reload recovery path: there the run is normally
-// already finished and only needs to be backfilled (~2s), so silence past this
-// means the reply is genuinely not coming. Refreshed by live events too, so a
-// reload in the MIDDLE of a long turn keeps waiting like any other pending run.
-const RECOVERY_IDLE_TIMEOUT_MS = 30_000;
+// A reload must preserve the same idle budget as a live turn. Harness and
+// Codex can legitimately take longer than a short replay window to finish, and
+// a reload while they are still working must not turn a later final event into
+// a discarded "no response".
+const RECOVERY_IDLE_TIMEOUT_MS = REPLY_IDLE_TIMEOUT_MS;
 
 // Storage envelope so the TTL check has a timestamp to look at. Legacy
 // devices have a bare Conversation[] under CONVOS_KEY; loadConvos() handles
