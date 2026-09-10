@@ -161,6 +161,8 @@ _MAX_CLUSTER_SAMPLES = config.SPEAKER_MAX_CLUSTER_SAMPLES
 _MAX_CLUSTER_FILES = config.SPEAKER_MAX_CLUSTER_FILES
 _EXTEND_MIN_DURATION_S = config.SPEAKER_EXTEND_MIN_DURATION_SEC
 _EXTEND_MIN_MARGIN_COS = config.SPEAKER_EXTEND_MIN_MARGIN_COS
+_EXTEND_REQUIRE_UNANIMOUS = config.SPEAKER_EXTEND_REQUIRE_UNANIMOUS_CHUNKS
+_EXTEND_MIN_CHUNK_COS = config.SPEAKER_EXTEND_MIN_CHUNK_COS
 
 # Target sample rate for stored/enrolled audio (matches STT pipeline).
 _TARGET_SR = 16000
@@ -2006,6 +2008,9 @@ class SpeakerRecognizer:
         existing_rows: Optional[np.ndarray],
         duration_s: float,
         margin: float,
+        chunk_votes: int = 1,
+        num_chunks: int = 1,
+        min_chunk_cos: float = 1.0,
     ) -> None:
         """Consider folding one confidently-recognized turn into a user's set.
 
@@ -2020,6 +2025,11 @@ class SpeakerRecognizer:
         * ``margin`` (winner's confidence minus runner-up's) must clear
           _EXTEND_MIN_MARGIN_COS, so a near-tie between two enrolled users
           never writes audio into either one's bank.
+        * the turn must be acoustically PURE: every chunk voted for this
+          speaker (``chunk_votes == num_chunks``) and even the weakest winning
+          chunk cleared _EXTEND_MIN_CHUNK_COS. The stored sample is the mean of
+          all chunks, so one chunk of somebody else is one chunk of somebody
+          else in this user's permanent bank.
 
         Then the diversity gate: keep the sample only if its max cosine to what
         we already hold is BELOW _DIVERSITY_COS — above that it duplicates a
@@ -2034,6 +2044,30 @@ class SpeakerRecognizer:
 
         Like the face version, this NEVER holds ``_bank_lock`` across disk I/O.
         """
+        # Purity gates. A long turn is identified by majority vote but the
+        # sample we are about to store is the mean of EVERY chunk, so a turn
+        # that was not wholly this speaker would fold somebody else into their
+        # bank permanently. Reject the whole turn -- do not salvage, do not
+        # slice, do not partially admit. Both gates are no-ops below ~10s of
+        # post-VAD speech, where the server returns a single chunk.
+        #
+        # Logged at INFO, not DEBUG: a contaminated turn is the interesting
+        # event here and it is rare enough not to be noisy.
+        if _EXTEND_REQUIRE_UNANIMOUS and chunk_votes < num_chunks:
+            logger.info(
+                "[speaker] extend '%s': skip — %d/%d chunks voted %s "
+                "(multi-speaker audio)",
+                norm, chunk_votes, num_chunks, norm,
+            )
+            return
+        if min_chunk_cos < _EXTEND_MIN_CHUNK_COS:
+            logger.info(
+                "[speaker] extend '%s': skip — weakest chunk %.3f < %.2f "
+                "(unsure audio)",
+                norm, min_chunk_cos, _EXTEND_MIN_CHUNK_COS,
+            )
+            return
+
         if duration_s < _EXTEND_MIN_DURATION_S:
             logger.debug(
                 "[speaker] extend '%s': skip — %.1fs < %.1fs",
@@ -3372,6 +3406,11 @@ class SpeakerRecognizer:
                     # This speaker's slice of the bank we already matched
                     # against — no reason to read their sidecars back off disk.
                     own_rows = bank_rows[label_arr == best_name]
+                    # Per-chunk purity evidence. The winner's column in `confs`
+                    # is every chunk's score against this speaker's best row,
+                    # so its min is the weakest chunk we are about to average
+                    # into a permanent sample.
+                    win_col = names.index(best_name)
                     self._maybe_extend_user(
                         best_name,
                         _l2(query_chunks.mean(axis=0)),
@@ -3379,6 +3418,9 @@ class SpeakerRecognizer:
                         existing_rows=own_rows,
                         duration_s=_wav_duration_s(wav_bytes),
                         margin=float(margin),
+                        chunk_votes=int(vote_count[best_name]),
+                        num_chunks=int(query_chunks.shape[0]),
+                        min_chunk_cos=float(confs[:, win_col].min()),
                     )
                 except Exception as e:
                     # Never let bank maintenance break a turn — the identity

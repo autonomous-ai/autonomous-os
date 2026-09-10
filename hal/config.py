@@ -660,6 +660,33 @@ SPEAKER_EXTEND_MIN_DURATION_SEC: float = float(
 SPEAKER_EXTEND_MIN_MARGIN_COS: float = float(
     os.environ.get("SPEAKER_EXTEND_MIN_MARGIN_COS", "0.05")
 )
+# Auto-extend purity gates. A turn longer than ~10s of post-VAD speech is split
+# into 6s chunks by the embedding server and identified by MAJORITY vote, but
+# the sample we store is the MEAN of every chunk -- including chunks that voted
+# for somebody else. That mean is a blend of two speakers and becomes a
+# permanent retrieval row. These two gates reject the whole turn instead.
+#
+# Reachable in normal use: the production caller joins the ENTIRE mic session
+# into one WAV (speaker_decorate.py) and a session runs to
+# MAX_SESSION_DURATION_S = 30s, so multi-speaker turns are ordinary input.
+#
+# UNANIMOUS is the cheap gate: "mixed with another speaker" is definitionally a
+# chunk that preferred someone else. It is NOT sufficient on its own -- with a
+# single enrolled speaker there is only one column, so every chunk votes for
+# them by default even at cos 0.2. MIN_CHUNK_COS is what makes "not guessing or
+# unsure audio" real, and it is the gate that catches the common case where the
+# second person in the room is not enrolled.
+SPEAKER_EXTEND_REQUIRE_UNANIMOUS_CHUNKS: bool = (
+    os.environ.get("HAL_SPEAKER_EXTEND_REQUIRE_UNANIMOUS_CHUNKS", "true").lower()
+    == "true"
+)
+# Floor for the WEAKEST winning chunk. Defaults to SPEAKER_MATCH_COS: already
+# strictly tighter than the turn-level gate (which only checks the AVERAGE of
+# the winning chunks) without inventing a number, since the thresholds have
+# never been validated against real speech. Raise it once they have been.
+SPEAKER_EXTEND_MIN_CHUNK_COS: float = float(
+    os.environ.get("HAL_SPEAKER_EXTEND_MIN_CHUNK_COS", str(SPEAKER_MATCH_COS))
+)
 SPEAKER_EMBEDDING_API_TIMEOUT_S: float = float(
     os.environ.get("SPEAKER_EMBEDDING_API_TIMEOUT_S", "15")
 )
