@@ -1523,6 +1523,69 @@
   box-shadow: inset 0 0 0 1px var(--lm-amber-glow);
 }
 
+/* ── Pairing ──────────────────────────────────────────────────────────────── */
+.lm-root .lm-pairing {
+  width: 100%;
+}
+
+.lm-root .lm-pairing-hero {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  margin-bottom: 16px;
+  padding: 18px 20px;
+  border: 1px solid color-mix(in srgb, var(--lm-amber) 24%, var(--lm-border));
+  border-radius: 12px;
+  background: linear-gradient(105deg, var(--lm-amber-dim), transparent 52%);
+}
+
+.lm-root .lm-pairing-hero-icon {
+  display: grid;
+  flex: 0 0 auto;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--lm-amber) 45%, transparent);
+  border-radius: 10px;
+  background: var(--lm-amber-dim);
+  color: var(--lm-amber);
+}
+
+.lm-root .lm-pairing-eyebrow {
+  margin-bottom: 4px;
+  color: var(--lm-amber);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+.lm-root .lm-pairing-title {
+  margin: 0;
+  color: var(--lm-text);
+  font-size: 21px;
+  line-height: 1.2;
+}
+
+.lm-root .lm-pairing-description {
+  max-width: 620px;
+  margin: 5px 0 0;
+  color: var(--lm-text-dim);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.lm-root .lm-pairing-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 760px) {
+  .lm-root .lm-pairing-hero { padding: 16px; }
+  .lm-root .lm-pairing-grid { grid-template-columns: 1fr; gap: 12px; }
+}
+
 /* ── Status-badge pulse ──────────────────────────────────────────────────────
    A gentle breathing ring on "live" badges (ONLINE, LIVE) to signal real-time
    activity. Applied alongside the existing badge styles. */

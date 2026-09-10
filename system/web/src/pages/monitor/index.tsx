@@ -650,8 +650,8 @@ export default function Monitor() {
         {/* When a search query is active the grouped nav is replaced by the flat
             result list rendered inside SidebarSearch, so skip the normal tree. */}
         <nav style={{ padding: "10px 0", flex: 1, display: navQuery.trim() ? "none" : undefined }}>
-          {/* Order: Chat → Pairing → Device → Settings → Agent Gateway → (other groups) */}
-          {NAV.filter((e) => !isNavGroup(e) && (e.id === "chat" || e.id === "pairing")).map((entry) => {
+          {/* Chat is the only top-level leaf; Pairing is grouped under Device. */}
+          {NAV.filter((e) => !isNavGroup(e) && e.id === "chat").map((entry) => {
             const leaf = entry as Extract<NavEntry, { id: Section }>;
             return (
               <a
@@ -692,7 +692,7 @@ export default function Monitor() {
             })}
           {isDebug && <AgentGWMenu section={section} setSection={setSection} closeSidebar={closeSidebar} />}
           {NAV
-            .filter((e) => (isNavGroup(e) ? (e.group !== "settings" && e.group !== "device") : (e.id !== "chat" && e.id !== "pairing")))
+            .filter((e) => (isNavGroup(e) ? (e.group !== "settings" && e.group !== "device") : e.id !== "chat"))
             .map((entry) => {
               if (isNavGroup(entry)) {
                 const filtered = {

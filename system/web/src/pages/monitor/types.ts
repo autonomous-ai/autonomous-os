@@ -256,7 +256,6 @@ export function isNavLink(c: NavChild): c is NavLink {
 
 export const NAV: NavEntry[] = [
   { id: "chat",     label: "Chat",     icon: "▤" },
-  { id: "pairing",  label: "Pairing",  icon: "⌘" },
   {
     group: "settings",
     label: "Settings",
@@ -303,7 +302,7 @@ export const NAV: NavEntry[] = [
       // by uncommenting).
       // { id: "analytics",   label: "Analytics", icon: "⊟" },
       { id: "servo",       label: "Servo",     icon: "⎈", cap: Cap.Motion },
-      { id: "bluetooth",   label: "Bluetooth", icon: "✦", cap: Cap.Connectivity },
+      { id: "pairing",     label: "Pairing",   icon: "⌘" },
       { id: "logs",        label: "Logs",      icon: "☰" },
       { id: "cli",         label: "CLI",       icon: "▸" },
       { id: "api-docs",    label: "API Docs",  icon: "⎗" },
