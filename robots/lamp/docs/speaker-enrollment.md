@@ -91,9 +91,46 @@ Four layers prevent the agent from repeatedly asking "who are you?":
 3. Cosine similarity against all enrolled speaker embeddings
 4. Per-chunk voting: each chunk votes for its closest match
 5. Winner = most votes (tiebreak by average confidence)
-6. `confidence ≥ 0.7` → match; else unknown
+6. `confidence ≥ SPEAKER_MATCH_COS` (0.5 raw cosine) → match; else unknown
 
 > **Enroll differs:** enrollment calls the same endpoint with **`use_sliding_window=false`**, so the server embeds the **whole** reference utterance in a single shot (one `[256]` vector, no windowing/mean) — stored as one row per WAV in the speaker bank. Recognition then votes its windowed query chunks against those single-shot enrollment vectors (both live in the same L2-normalized space).
+
+### Auto-extend admission (extended tier)
+
+A recognized turn may earn a slot in the speaker's **extended** tier, so the bank
+picks up the acoustics the room actually produces rather than only the enrollment
+recording. Being recognized is **not** enough. Six gates run in this order, and
+the first one that fails rejects the **whole turn** — nothing is salvaged,
+sliced, or partially admitted.
+
+| # | Gate | Rejects when | Why |
+|---|------|--------------|-----|
+| 1 | **Unanimity** | any chunk voted for a different speaker | The stored sample is the **mean of every chunk**. A turn identified by *majority* vote can hold another speaker in the losing chunks, and that blend would become a permanent retrieval row |
+| 2 | **Weakest chunk** | the worst winning chunk is below `HAL_SPEAKER_EXTEND_MIN_CHUNK_COS` | Unanimity alone proves nothing: with a **single enrolled speaker** there is one column, so every chunk votes for them by default even at cos 0.2. This is the gate that catches the common case — a guest in the room who is not enrolled |
+| 3 | **Anchor-carried** | the enrollment rows did not themselves carry the match (`HAL_SPEAKER_EXTEND_MIN_ANCHOR_COS`) | A match the **extended** tier carried is evidence about a previous guess, not about the person. Admitting on it would let the tier vouch for its own growth, so one bad sample could breed more. Anchoring on enrollment is what makes contamination non-replicating |
+| 4 | **Duration** | post-VAD speech is under `SPEAKER_EXTEND_MIN_DURATION_SEC` | Too little speaker information to be worth a permanent slot. Measured on the **cleaned** waveform, not the raw turn — the caller joins an entire mic session (up to 30 s) into one WAV, so on a quiet turn most of the file is silence |
+| 5 | **Margin** | the winner beats the best **non-winning** speaker by less than `SPEAKER_EXTEND_MIN_MARGIN_COS` | A near-tie between two enrolled users must never write audio into either one's bank |
+| 6 | **Diversity** | max cosine to what is already stored exceeds `SPEAKER_DIVERSITY_COS` | The sample duplicates one we already hold |
+
+Gates 1 and 2 are **no-ops below ~10 s of post-VAD speech**, where the server
+returns a single chunk: unanimity is 1-of-1, and the weakest chunk *is* the
+turn's own confidence, which the match threshold already cleared. They only ever
+fire on long turns — precisely the ones that can hold two people.
+
+**Expect the extend rate on long turns to drop.** That is the intended effect. If
+it drops to zero, check gate 2 against real recordings before loosening anything:
+a zero rate more likely means `SPEAKER_MATCH_COS` is wrong than that the gate is.
+
+Every admitted sample writes a `.json` beside its WAV recording which gates it
+passed and under which thresholds. Nothing reads it at runtime — it exists so a
+later threshold change can ask which samples the previous rule admitted. Samples
+written before this existed carry no such record, and there is no way to
+reconstruct one: the per-chunk votes were never persisted. They age out through
+the `SPEAKER_MAX_EXTENDED_SAMPLES` cap.
+
+> The enroll path is deliberately **exempt**: audio claimed from a voice cluster
+> during enrollment is committed on the user's own say-so, so it bypasses these
+> gates entirely.
 
 ### Audio preprocessing (on-device)
 
@@ -151,8 +188,11 @@ Every unknown voice is locally clustered so the server can say "this is the same
 | Diversity | 0.7 | `SPEAKER_DIVERSITY_COS` | Above this a turn duplicates a stored sample → not kept. Redundancy, not identity — must stay above the match threshold |
 | Max extended samples | 3 | `SPEAKER_MAX_EXTENDED_SAMPLES` | Auto-collected samples per user. Safety cap: retrieval is max-over-rows, so extra rows lift every speaker's score |
 | Max cluster samples | 3 | `SPEAKER_MAX_CLUSTER_SAMPLES` | Rows kept per unknown-voice cluster |
-| Extend min duration | 2.0s | `SPEAKER_EXTEND_MIN_DURATION_SEC` | A turn must be this long to earn an extended slot |
-| Extend min margin | 0.05 | `SPEAKER_EXTEND_MIN_MARGIN_COS` | ...and must beat the runner-up speaker by this much |
+| Extend min duration | 2.0s | `SPEAKER_EXTEND_MIN_DURATION_SEC` | A turn needs this much **post-VAD speech** to earn an extended slot. Measured on the cleaned waveform, so silence in a long mic session does not count |
+| Extend min margin | 0.05 | `SPEAKER_EXTEND_MIN_MARGIN_COS` | ...and must beat the best **non-winning** speaker by this much. `inf` when nobody else is enrolled — there is genuinely no runner-up, which is why gate 3 exists |
+| Extend unanimity | on | `HAL_SPEAKER_EXTEND_REQUIRE_UNANIMOUS_CHUNKS` | Every chunk must have voted for the winner. Off below ~10 s of speech (one chunk) |
+| Extend min chunk cosine | _(= match)_ | `HAL_SPEAKER_EXTEND_MIN_CHUNK_COS` | The **weakest** winning chunk must clear this. Defaults to `SPEAKER_MATCH_COS`, already tighter than the turn-level gate, which only checks the average |
+| Extend min anchor cosine | _(= match)_ | `HAL_SPEAKER_EXTEND_MIN_ANCHOR_COS` | The enrollment rows must have carried the match. Defaults to `SPEAKER_MATCH_COS`, i.e. exactly "the anchors alone would have recognized this speaker" |
 | API timeout | 15s | `SPEAKER_EMBEDDING_API_TIMEOUT_S` | HTTP timeout for embedding API |
 | Min audio for recognition | 0.8s | `HAL_SPEAKER_MIN_AUDIO_S` | Skip recognition below this |
 | Min words for enroll nudge | 10 | Hardcoded in `_should_request_speaker_enroll()` | Transcript word count gate |

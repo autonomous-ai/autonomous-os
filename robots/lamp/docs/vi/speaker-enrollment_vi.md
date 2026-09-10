@@ -92,9 +92,47 @@ Bốn lớp ngăn agent hỏi "bạn là ai?" liên tục:
 3. Cosine similarity với tất cả embedding người nói đã đăng ký
 4. Bình chọn theo chunk: mỗi chunk vote cho người khớp nhất
 5. Người thắng = nhiều vote nhất (hoà thì so trung bình confidence)
-6. `confidence ≥ 0.7` → khớp; ngược lại → không xác định
+6. `confidence ≥ SPEAKER_MATCH_COS` (0.5 cosine gốc) → khớp; ngược lại → không xác định
 
 > **Enroll khác biệt:** bước đăng ký gọi cùng endpoint nhưng với **`use_sliding_window=false`**, nên server nhồi **nguyên** câu tham chiếu vào model một lần (một vector `[256]`, không chia cửa sổ/mean) — lưu thành một dòng mỗi WAV trong bank giọng nói. Khi recognize, các chunk truy vấn (đã chia cửa sổ) bỏ phiếu so với các vector enroll single-shot này (cả hai cùng không gian chuẩn hoá L2).
+
+### Điều kiện nạp vào tầng mở rộng (extended tier)
+
+Một lượt nói đã được nhận diện **có thể** giành một suất trong tầng **extended**
+của người nói, để bank học được đặc tính âm thanh mà căn phòng thực sự tạo ra
+thay vì chỉ có bản ghi lúc đăng ký. Được nhận diện là **chưa đủ**. Sáu cổng chặn
+chạy theo đúng thứ tự dưới đây, và cổng nào trượt trước thì loại **cả lượt nói** —
+không cứu vớt, không cắt lát, không nạp một phần.
+
+| # | Cổng chặn | Từ chối khi | Vì sao |
+|---|-----------|-------------|--------|
+| 1 | **Đồng thuận tuyệt đối** | có bất kỳ chunk nào bầu cho người khác | Mẫu được lưu là **trung bình của MỌI chunk**. Một lượt nói xác định bằng bỏ phiếu *đa số* có thể chứa người nói khác trong các chunk thua, và bản trộn đó sẽ thành một dòng truy hồi vĩnh viễn |
+| 2 | **Chunk yếu nhất** | chunk thắng yếu nhất thấp hơn `HAL_SPEAKER_EXTEND_MIN_CHUNK_COS` | Chỉ đồng thuận thôi không chứng minh được gì: khi chỉ có **một người đã đăng ký**, ma trận chỉ có một cột, nên mọi chunk mặc nhiên bầu cho họ kể cả ở mức cos 0.2. Đây mới là cổng bắt được trường hợp phổ biến — một người khách trong phòng chưa đăng ký |
+| 3 | **Anchor tự mang kết quả** | các dòng ghi danh không tự mang lại kết quả khớp (`HAL_SPEAKER_EXTEND_MIN_ANCHOR_COS`) | Kết quả khớp do tầng **extended** mang lại là bằng chứng về một lần đoán trước đó, không phải về con người. Nạp dựa trên nó sẽ để tầng extended tự bảo lãnh cho chính sự phình to của mình, khiến một mẫu xấu đẻ ra nhiều mẫu xấu. Neo vào mẫu ghi danh là thứ khiến nhiễm bẩn không nhân bản được |
+| 4 | **Thời lượng** | giọng nói sau VAD ngắn hơn `SPEAKER_EXTEND_MIN_DURATION_SEC` | Quá ít thông tin người nói để đáng một suất vĩnh viễn. Đo trên waveform **đã làm sạch**, không phải lượt nói thô — caller nối nguyên một phiên mic (tới 30 giây) thành một WAV, nên ở lượt yên tĩnh thì phần lớn file là im lặng |
+| 5 | **Biên (margin)** | người thắng dẫn trước người **không thắng** mạnh nhất ít hơn `SPEAKER_EXTEND_MIN_MARGIN_COS` | Một thế gần hoà giữa hai người đã đăng ký tuyệt đối không được ghi audio vào bank của bên nào |
+| 6 | **Độ đa dạng** | cosine lớn nhất tới mẫu đã lưu vượt `SPEAKER_DIVERSITY_COS` | Mẫu này trùng lặp với mẫu đã có |
+
+Cổng 1 và 2 là **no-op khi giọng nói sau VAD dưới ~10 giây**, lúc đó server chỉ
+trả về một chunk: đồng thuận là 1/1, và chunk yếu nhất *chính là* confidence của
+lượt nói, vốn đã vượt ngưỡng khớp rồi. Chúng chỉ kích hoạt ở các lượt dài — đúng
+những lượt có thể chứa hai người.
+
+**Hãy chuẩn bị tinh thần tỉ lệ extend ở các lượt dài sẽ giảm.** Đó là hiệu quả
+mong muốn. Nếu nó giảm về 0, hãy kiểm tra cổng 2 với bản ghi thật trước khi nới
+lỏng bất cứ thứ gì: tỉ lệ 0 nhiều khả năng nghĩa là `SPEAKER_MATCH_COS` sai, chứ
+không phải cổng chặn sai.
+
+Mỗi mẫu được nạp sẽ ghi kèm một file `.json` bên cạnh WAV, ghi lại nó đã qua
+những cổng nào và dưới ngưỡng nào. Không có gì đọc file này lúc chạy — nó tồn tại
+để lần đổi ngưỡng *sau này* có thể hỏi luật cũ đã nạp những mẫu nào. Các mẫu ghi
+trước khi có cơ chế này không có bản ghi đó, và không thể dựng lại: phiếu bầu
+từng chunk chưa bao giờ được lưu. Chúng sẽ tự đào thải qua giới hạn
+`SPEAKER_MAX_EXTENDED_SAMPLES`.
+
+> Đường ghi danh được **miễn trừ** một cách có chủ đích: audio lấy từ một cụm
+> giọng trong lúc đăng ký là do chính người dùng xác nhận, nên nó bỏ qua toàn bộ
+> các cổng chặn này.
 
 ### Tiền xử lý audio (tại thiết bị)
 
@@ -152,8 +190,11 @@ Mọi giọng lạ được gom cụm local để server biết "đây là cùng
 | Độ đa dạng | 0.7 | `SPEAKER_DIVERSITY_COS` | Trên mức này lượt nói trùng với mẫu đã lưu → không giữ. Đo độ dư thừa, không phải danh tính — phải nằm trên ngưỡng khớp |
 | Số mẫu extended tối đa | 3 | `SPEAKER_MAX_EXTENDED_SAMPLES` | Mẫu tự thu cho mỗi user. Cap an toàn: truy hồi là max-over-rows nên thêm hàng sẽ nâng điểm của mọi speaker |
 | Số mẫu cụm tối đa | 3 | `SPEAKER_MAX_CLUSTER_SAMPLES` | Số hàng giữ cho mỗi cụm giọng lạ |
-| Thời lượng tối thiểu để mở rộng | 2.0s | `SPEAKER_EXTEND_MIN_DURATION_SEC` | Lượt nói phải dài tối thiểu bằng này mới được một suất extended |
-| Biên tối thiểu để mở rộng | 0.05 | `SPEAKER_EXTEND_MIN_MARGIN_COS` | ...và phải dẫn trước người á quân ít nhất bằng này |
+| Thời lượng tối thiểu để mở rộng | 2.0s | `SPEAKER_EXTEND_MIN_DURATION_SEC` | Lượt nói cần chừng này **giọng nói sau VAD** mới được một suất extended. Đo trên waveform đã làm sạch, nên im lặng trong một phiên mic dài không được tính |
+| Biên tối thiểu để mở rộng | 0.05 | `SPEAKER_EXTEND_MIN_MARGIN_COS` | ...và phải dẫn trước người **không thắng** mạnh nhất ít nhất bằng này. Là `inf` khi không có ai khác đã đăng ký — lúc đó thật sự không có á quân, và đó là lý do cổng 3 tồn tại |
+| Bắt buộc đồng thuận khi mở rộng | bật | `HAL_SPEAKER_EXTEND_REQUIRE_UNANIMOUS_CHUNKS` | Mọi chunk phải bầu cho người thắng. Không tác dụng khi dưới ~10 giây giọng nói (chỉ một chunk) |
+| Cosine chunk tối thiểu để mở rộng | _(= ngưỡng khớp)_ | `HAL_SPEAKER_EXTEND_MIN_CHUNK_COS` | Chunk thắng **yếu nhất** phải vượt mức này. Mặc định bằng `SPEAKER_MATCH_COS`, vốn đã chặt hơn cổng ở mức lượt nói — cổng đó chỉ xét trung bình |
+| Cosine anchor tối thiểu để mở rộng | _(= ngưỡng khớp)_ | `HAL_SPEAKER_EXTEND_MIN_ANCHOR_COS` | Các dòng ghi danh phải tự mang lại kết quả khớp. Mặc định bằng `SPEAKER_MATCH_COS`, tức đúng nghĩa "chỉ riêng anchor cũng đã nhận ra người này" |
 | Timeout API | 15s | `SPEAKER_EMBEDDING_API_TIMEOUT_S` | Timeout HTTP cho embedding API |
 | Audio tối thiểu cho nhận diện | 0.8s | `HAL_SPEAKER_MIN_AUDIO_S` | Bỏ qua nhận diện dưới ngưỡng này |
 | Số từ tối thiểu cho nudge đăng ký | 10 | Hardcoded trong `_should_request_speaker_enroll()` | Cổng số từ transcript |
