@@ -8,7 +8,10 @@ by stubbing the one method that touches disk.
 import numpy as np
 import pytest
 
-from hal.drivers.voice.speaker_recognizer.speaker_recognizer import SpeakerRecognizer
+from hal.drivers.voice.speaker_recognizer.speaker_recognizer import (
+    SpeakerRecognizer,
+    _runner_up_mean,
+)
 
 
 @pytest.fixture
@@ -81,3 +84,41 @@ def test_a_short_single_chunk_turn_is_unchanged(recognizer, spy):
     # be bit-identical to pre-fix.
     _extend(recognizer, chunk_votes=1, num_chunks=1, min_chunk_cos=0.55)
     assert spy == ["leo"], "short turns must be unaffected by the chunk gates"
+
+
+def test_a_unanimous_near_tie_has_a_real_runner_up():
+    # Three enrolled users whose per-chunk scores sit 0.01 apart. Every chunk
+    # votes leo, so the OLD margin -- built from vote winners only -- was `inf`
+    # and the gate did nothing. That is exactly the near-tie its docstring
+    # promises to block.
+    names = ["leo", "mia", "sam"]
+    confs = np.array([[0.55, 0.54, 0.53],
+                      [0.56, 0.55, 0.54],
+                      [0.57, 0.56, 0.55]])
+    best_conf = float(confs[:, 0].mean())
+    margin = best_conf - _runner_up_mean(confs, names, "leo")
+    assert margin == pytest.approx(0.01, abs=1e-6), (
+        f"a 0.01 near-tie must surface as a 0.01 margin, got {margin}"
+    )
+    assert margin < 0.05, "and must therefore fail the 0.05 margin bar"
+
+
+def test_a_single_enrolled_user_has_no_runner_up():
+    # Nobody to compare against, so `inf` is the CORRECT margin -- there is
+    # genuinely no relative signal available. This must keep working, and is
+    # why an absolute anchor floor (Task 4) is the only gate that helps a
+    # single-user device.
+    confs = np.array([[0.80], [0.82], [0.79]])
+    assert _runner_up_mean(confs, ["leo"], "leo") == float("-inf")
+
+
+def test_the_runner_up_ignores_the_winners_own_column():
+    confs = np.array([[0.90, 0.10], [0.90, 0.10]])
+    assert _runner_up_mean(confs, ["leo", "mia"], "leo") == pytest.approx(0.10)
+
+
+def test_the_runner_up_is_the_strongest_loser():
+    # Three columns: the runner-up is the best of the two non-winners, not the
+    # average of them and not the last one.
+    confs = np.array([[0.90, 0.20, 0.60], [0.90, 0.20, 0.60]])
+    assert _runner_up_mean(confs, ["leo", "mia", "sam"], "leo") == pytest.approx(0.60)

@@ -293,6 +293,33 @@ def _l2(vec: np.ndarray) -> np.ndarray:
     return (arr / n).astype(np.float32)
 
 
+def _runner_up_mean(
+    confs: np.ndarray, names: list[str], best_name: str
+) -> float:
+    """Mean score of the strongest speaker who did NOT win, or ``-inf``.
+
+    ``confs`` is [M chunks, K speakers] of raw cosine; column k is every
+    chunk's score against speaker ``names[k]``'s closest row.
+
+    The margin gate used to derive its runner-up from the per-speaker vote
+    tally, which only ever contains speakers that WON at least one chunk. A
+    unanimous vote therefore produced a single entry and a margin of ``inf``,
+    so the gate passed everything -- and a unanimous vote is most turns. Three
+    users whose chunks sit 0.01 apart were waved straight through, which is
+    precisely the near-tie the gate exists to block.
+
+    Returning ``-inf`` when nobody else is enrolled is deliberate, not a
+    fallback: with one enrolled user there is genuinely no relative signal, so
+    the caller's ``best_conf - (-inf) == inf`` correctly reports "no runner-up
+    to be close to". An absolute floor is the only gate that helps there --
+    see _EXTEND_MIN_ANCHOR_COS.
+    """
+    others = [k for k, n in enumerate(names) if n != best_name]
+    if not others:
+        return float("-inf")
+    return float(max(confs[:, k].mean() for k in others))
+
+
 def _select_diverse(
     candidates: np.ndarray, anchor: Optional[np.ndarray], k: int
 ) -> list[int]:
@@ -3399,9 +3426,11 @@ class SpeakerRecognizer:
         # turns are rejected as too short, too close a tie, or redundant.
         if is_match:
             with self._debug_stage("auto_extend"):
-                margin = (
-                    best_conf - scores[1][1] if len(scores) > 1 else float("inf")
-                )
+                # Runner-up is the best NON-winning speaker across ALL of
+                # `confs`, not just speakers that happened to win a chunk.
+                # Deriving it from `scores` (vote winners only) meant a
+                # unanimous vote produced `inf` and this gate did nothing.
+                margin = best_conf - _runner_up_mean(confs, names, best_name)
                 try:
                     # This speaker's slice of the bank we already matched
                     # against — no reason to read their sidecars back off disk.
