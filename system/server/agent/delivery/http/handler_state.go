@@ -52,6 +52,8 @@ func tailPreview(s string, n int) string {
 //   - a partial `[HW:` or link-form `](HW:` marker (extractHWCalls only
 //     matches complete markers)
 //   - any `<say>` wrapper (extractSayTag at end shifts content)
+//   - an unclosed `<think>` block (hasOpenThinkTag — the reasoning is still
+//     arriving and none of it may be spoken)
 //   - `NO_REPLY` / `HEARTBEAT_OK` sentinels (sanitizeAgentText strips
 //     these at end-flush; streamed text can't be unspoken)
 func (h *AgentHandler) tryFirstSentenceFlush(runID string) string {
@@ -74,6 +76,9 @@ func (h *AgentHandler) tryFirstSentenceFlush(runID string) string {
 	if strings.Contains(raw, "<say>") {
 		return ""
 	}
+	if hasOpenThinkTag(raw) {
+		return ""
+	}
 	upper := strings.ToUpper(raw)
 	if strings.Contains(upper, "NO_REPLY") || strings.Contains(upper, "HEARTBEAT_OK") {
 		return ""
@@ -81,6 +86,10 @@ func (h *AgentHandler) tryFirstSentenceFlush(runID string) string {
 
 	_, cleaned := extractHWCalls(raw)
 	cleaned = prunedImageMarkerRe.ReplaceAllString(cleaned, "")
+	// Closed reasoning blocks come off here too, so the offset recorded in
+	// streamedCleanLen indexes the same text lifecycle:end will slice — it
+	// strips them as well, right before extractSayTag.
+	cleaned = stripThinkTag(cleaned)
 	cleaned = strings.TrimSpace(cleaned)
 	if cleaned == "" {
 		return ""
@@ -150,12 +159,16 @@ func (h *AgentHandler) cleanedSlackStreamText(runID string) (string, bool) {
 	if hasPartialHWMarker(raw) || hasPartialHWLinkMarker(raw) || strings.Contains(raw, "<say>") {
 		return "", false
 	}
+	if hasOpenThinkTag(raw) {
+		return "", false
+	}
 	upper := strings.ToUpper(raw)
 	if strings.Contains(upper, "NO_REPLY") || strings.Contains(upper, "HEARTBEAT_OK") {
 		return "", false
 	}
 	_, cleaned := extractHWCalls(raw)
 	cleaned = prunedImageMarkerRe.ReplaceAllString(cleaned, "")
+	cleaned = stripThinkTag(cleaned)
 	cleaned = strings.TrimSpace(cleaned)
 	if cleaned == "" {
 		return "", false
@@ -258,6 +271,40 @@ func hasPartialHWLinkMarker(text string) bool {
 	// canonical marker ends with `]` and deferring there would kill the
 	// first-sentence latency win for marker-final replies.
 	for _, suf := range []string{"](", "](h", "](hw"} {
+		if strings.HasSuffix(lower, suf) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasOpenThinkTag reports whether text holds a `<think>` opener with no
+// matching `</think>` yet — the reasoning block is still streaming in and
+// nothing after it can be spoken. Mirrors the `<say>` guard in
+// tryFirstSentenceFlush: a sentence sent to the speaker cannot be unspoken, so
+// while the block is open the flush defers. Once `</think>` arrives the answer
+// streams normally and keeps its first-audio latency win.
+//
+// Also defers when the buffer ends part-way through the opener itself — one
+// more delta would reveal `<think>`, and the sentence boundary the flush would
+// otherwise pick sits inside the reasoning.
+func hasOpenThinkTag(text string) bool {
+	lower := strings.ToLower(text)
+	idx := strings.Index(lower, "<think>")
+	for idx >= 0 {
+		rest := lower[idx+len("<think>"):]
+		end := strings.Index(rest, "</think>")
+		if end < 0 {
+			return true
+		}
+		after := rest[end+len("</think>"):]
+		next := strings.Index(after, "<think>")
+		if next < 0 {
+			break
+		}
+		idx = len(lower) - len(after) + next
+	}
+	for _, suf := range []string{"<t", "<th", "<thi", "<thin", "<think"} {
 		if strings.HasSuffix(lower, suf) {
 			return true
 		}

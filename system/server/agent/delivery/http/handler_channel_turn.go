@@ -175,6 +175,7 @@ func (h *AgentHandler) ChannelTurn(c *gin.Context) {
 		// end-of-reply markers — raise the gateway truncation if that happens.
 		raw := prunedImageMarkerRe.ReplaceAllString(ctx.Response, "")
 		hwCalls, cleanText := extractHWCalls(raw)
+		cleanText = stripThinkTag(cleanText)
 		cleanText = extractSayTag(cleanText)
 		cleanText = sanitizeAgentText(cleanText)
 		h.fireHWCalls(hwCalls, runID)

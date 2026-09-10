@@ -286,6 +286,19 @@ Node info extracted from turn events:
 - `token_usage` → Response node (token counts).
 - `cot_leak_filtered` → emitted at lifecycle:end when the CoT-leak filter dropped sentences from the reply. `data.dropped` is the sentence count, `data.preview` a bounded preview of what was removed. See "CoT-leak filter" below.
 
+### `<think>` — where the reasoning goes
+
+On this fleet the model has no thinking channel of its own: os-server received **zero** `stream: "thinking"` events across a full day of turns while assistant text flowed normally (device-observed 2026-09-10 on `lamp-a0ae`, openclaw + `Auto-AI`). So the model works things out in the only place it has — the reply — and the device speaks all of it. One recorded turn whose answer was two sentences sent **2036 characters** to the speaker, opening with *"This is a fresh `[voice-instruction]` — the realtime agent delegated it to me… Per the connector skill I must read the payload back…"*.
+
+`<think>…</think>` gives that reasoning somewhere to go. It is the counterpart of `<say>`: **`<say>` picks the one part TO speak, `<think>` marks the part NOT to.** They are independent — a reply may use either, both, or neither.
+
+- **Stripped** by `stripThinkTag` (`handler_text.go`), applied immediately before `extractSayTag` at all four reply paths: `lifecycle:end`, error recovery, channel-turn finalize, and the `session.message` path. So the block reaches neither TTS nor the web chat / channel fan-out. Raw deltas in `agent_last_token` stay unfiltered for debugging.
+- **Defers first-sentence streaming** while the block is still open (`hasOpenThinkTag`, `handler_state.go`) — mirroring the existing `<say>` guard. A sentence sent to the speaker cannot be unspoken, so nothing streams until `</think>` lands; after that the answer's first sentence streams as usual and keeps its first-audio latency win. The same guard gates the mid-turn Slack stream, whose append-only diffing cannot retract text either.
+- **Offsets stay aligned**: `tryFirstSentenceFlush` strips closed blocks before measuring `streamedCleanLen`, so the offset indexes the same text `lifecycle:end` slices.
+- **Fails open.** An unclosed `<think>`, or a reply that is *only* a think block, passes through untouched and is spoken. A device that says nothing is worse than one that says too much — and saying too much is merely the behaviour we already had. Both cases log a `WARN`.
+
+The model is told about the block in the OS-managed prompt block each runtime injects at boot (`agentsMDBlock` / `claudeMDBlock` / `soulSkillPriorityBlock`), inside the *Say the answer, not the reasoning* rule.
+
 ### CoT-leak filter (agent path)
 
 Some models behind openclaw/hermes (notably DeepSeek) emit their English planning monologue as plain assistant text ahead of the real reply ("The `[emotion_context]` shows … Route = **music**. I need to log the signal … [nhẹ nhàng] Có vẻ hơi trầm …"). `server/agent/delivery/http/cot_leak_filter.go` — a Go port of HAL's `drivers/voice/_internal/cot_leak_filter.py` (which only guards the Gemini Live transcript path) — drops those sentences before the text reaches TTS, the web chat (`full_text`), and channel fan-out (Telegram DM/broadcast, Slack final reply). Same three tiers as the Python filter (TRIGGER markers → CoT mode on + drop; SECONDARY markers drop only in CoT mode; CoT-mode continuation drops English-looking sentences on non-English devices, quoted drafts, bare plan runts, fuzzy near-duplicates), plus a Go-side TRIGGER addition: snake_case identifiers (`emotion_context`, `telegram_id`, …), which the DeepSeek corpus opens with. Reply language comes from `config.json` `stt_language`; unset → English mode (marker tiers only). Applied at three points:

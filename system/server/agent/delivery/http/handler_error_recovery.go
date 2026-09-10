@@ -80,6 +80,7 @@ func (h *AgentHandler) tryRecoverIncompleteTurn(runID, flowRunID, sessionKey str
 	if strings.Contains(strings.ToUpper(text), "HEARTBEAT_OK") {
 		return false
 	}
+	text = stripThinkTag(text)
 	text = extractSayTag(text)
 	text = sanitizeAgentText(text)
 	if strings.TrimSpace(text) == "" || isAgentNoReply(text) {

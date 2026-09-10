@@ -955,6 +955,7 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 			}
 			// Extract <say>...</say> wrapper if the skill uses it (wellbeing).
 			// Non-tagged replies pass through unchanged.
+			text = stripThinkTag(text)
 			text = extractSayTag(text)
 			text = sanitizeAgentText(text)
 			// Slice off the prefix already streamed mid-turn so the

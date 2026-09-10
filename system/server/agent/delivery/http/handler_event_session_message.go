@@ -267,6 +267,7 @@ func (h *AgentHandler) handleSessionMessageEvent(evt domain.WSEvent) error {
 
 	fullText = prunedImageMarkerRe.ReplaceAllString(fullText, "")
 	hwCalls, cleanText := extractHWCalls(fullText)
+	cleanText = stripThinkTag(cleanText)
 	cleanText = extractSayTag(cleanText)
 	cleanText = sanitizeAgentText(cleanText)
 	// CoT-leak filter (see cot_leak_filter.go): channel turns never TTS, but

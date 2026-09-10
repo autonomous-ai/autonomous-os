@@ -95,6 +95,50 @@ func sanitizeAgentText(text string) string {
 // The (?s) flag lets `.` match newlines so multi-line content is supported.
 var sayTagRe = regexp.MustCompile(`(?s)<say>(.*?)</say>`)
 
+// thinkTagRe matches a closed <think>...</think> block, plus the whitespace
+// after it so stripping one does not leave a gap mid-reply.
+var thinkTagRe = regexp.MustCompile(`(?is)<think>.*?</think>[ \t]*\n*`)
+
+// stripThinkTag removes <think>...</think> blocks from a reply.
+//
+// WHY: the device speaks whatever the model writes as reply text, and on this
+// fleet the model has no thinking channel of its own — os-server received zero
+// `stream: "thinking"` events across a full day of turns while assistant text
+// flowed normally. So the model works things out in the only place it has: the
+// reply. Device-observed 2026-09-10 on lamp-a0ae, a turn whose answer was two
+// sentences: 2036 characters reached the speaker, opening with "This is a fresh
+// [voice-instruction] — the realtime agent delegated it to me… Per the connector
+// skill I must read the payload back…". The user hears the working and waits out
+// the answer, with no screen to skip ahead on.
+//
+// <think> gives that reasoning somewhere to go. It is the counterpart of <say>
+// (extractSayTag below): <say> picks the one part TO speak, <think> marks the
+// part NOT to. They are independent — a reply may use either, both, or neither.
+//
+// FAILS OPEN. An unclosed <think> does not match, so the text passes through
+// untouched; a reply that is nothing but a think block is also left alone. A
+// device that says nothing is worse than one that says too much, and saying too
+// much is merely the behaviour we already have.
+func stripThinkTag(text string) string {
+	if !strings.Contains(strings.ToLower(text), "<think>") {
+		return text
+	}
+	stripped := strings.TrimSpace(thinkTagRe.ReplaceAllString(text, ""))
+	if stripped == "" {
+		slog.Warn("reply was only a <think> block — speaking it rather than going silent",
+			"component", "agent", "len", len(text))
+		return text
+	}
+	if strings.Contains(strings.ToLower(stripped), "<think>") {
+		slog.Warn("unclosed <think> in reply — left unstripped",
+			"component", "agent", "len", len(text))
+		return text
+	}
+	slog.Info("stripped <think> block from reply",
+		"component", "agent", "before_len", len(text), "after_len", len(stripped))
+	return stripped
+}
+
 // extractSayTag pulls the spoken sentence out of a <say>...</say> wrapper.
 // Skills (currently wellbeing) instruct the model to wrap the one caring sentence
 // in <say> tags so its free-form reasoning in the text block doesn't leak to TTS.
