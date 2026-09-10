@@ -373,7 +373,7 @@ LIVE_MODE = _hal_config.LIVE_MODE
 #                 The only mode in which provider-native barge-in can work on a
 #                 device with a starving reference, and the least safe: with
 #                 low ERLE the model hears its own onsets as the user and cuts
-#                 itself off (see LIVE_NO_USER_MAX_S for the observed loop).
+#                 itself off (see LIVE_MAX_UNPROMPTED_REPLIES for the loop).
 #                 Lower the speaker volume before using it.
 #
 # "cancelled" is the intended end state and is NOT the default, because the
@@ -405,17 +405,9 @@ LIVE_PLAYBACK_TAIL_S = float(os.environ.get("HAL_LIVE_PLAYBACK_TAIL_S", "0.35"))
 # the device stopped talking.
 LIVE_IDLE_HANGUP_S = float(os.environ.get("HAL_LIVE_IDLE_HANGUP_S", "15"))
 
-# Hard ceiling on "the user has said nothing at all", independent of who is
-# talking. LIVE_IDLE_HANGUP_S above is HELD while the device speaks, which is
-# right for one long answer and wrong for a model that has started answering
-# ITSELF — and with `mute` that is a real failure mode, not a hypothetical: the
-# transition from substituted digital silence back to room audio is an
-# amplitude onset, and a server-side VAD reads an onset as somebody starting to
-# talk. Device-observed 2026-09-07 on intern-v2-6286: four unprompted replies
-# in 35 s with nobody in the room, each one re-arming the hold, and the session
-# would have run to LIVE_MAX_S. This ends it regardless of who is speaking.
-LIVE_NO_USER_MAX_S = float(
-    os.environ.get("HAL_LIVE_NO_USER_MAX_S", str(LIVE_IDLE_HANGUP_S * 3))
+# Hard ceiling on a model that has started answering ITSELF, counted in REPLIES rather than seconds.
+LIVE_MAX_UNPROMPTED_REPLIES = int(
+    os.environ.get("HAL_LIVE_MAX_UNPROMPTED_REPLIES", "3")
 )
 
 # Grace period after the model calls end_conversation, before the session is

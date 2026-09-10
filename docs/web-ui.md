@@ -738,11 +738,25 @@ make web-build        # tsc + vite build → system/web/dist/
 IP=172.168.20.255 make device-deploy   # hal + os-server
 IP=172.168.20.255 make hal-deploy      # hal only, no build step
 IP=172.168.20.255 make os-deploy       # cross-compile + swap the binary
+
+# Same targets through an SSH jump host, for a device you cannot route to
+IP=10.0.0.5 J=proxy-host make hal-deploy
+IP=10.0.0.5 J=proxy-host make hal-log
 ```
 
 Backed by `scripts/deploy-device.sh`. `PI_USER` defaults to `orangepi` and
 `PI_PASS` to `orangepi` (needs `sshpass`); set `PI_PASS=""` to use your SSH key
 and interactive sudo instead. `PI_HOST` works in place of `IP`.
+
+`J=<host>` (or `PI_JUMP`, or `--jump <host>` on the script) puts one
+`ProxyJump` in front of every hop — `ssh`, `scp` and `rsync` all get it — so
+`hal-deploy`, `os-deploy`, `device-deploy`, `hal-log` and `os-log` reach a
+device that is not routable from here. The hop authenticates from your SSH
+key/agent and `~/.ssh/config`; `PI_PASS` is the **device** password only, so a
+bastion that wants its own password will not work unattended. `make push-skill`
+takes the same `J=` knob. Both orders work: `J=... make hal-deploy` and
+`make hal-deploy J=...` — except `PI_PASS`, which must be an environment
+variable (`PI_PASS="" IP=... make hal-deploy`).
 
 `.env`, `.venv` and `calibration/` on the device are never overwritten, and the
 swap runs without `--delete`, so device-local paths outside the repo survive.

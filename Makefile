@@ -258,6 +258,10 @@ skills-catalog:
 skills-catalog-check:
 	python3 scripts/skills/gen_catalog.py --check
 
+# Expands to a ProxyJump option when J=<host> is set, and to nothing otherwise.
+# -o rather than -J so scp of any vintage accepts it.
+SSH_JUMP_OPT = $(if $(J),-o ProxyJump=$(J),)
+
 # Measure what a turn costs on a running robot: reads its flow log and prints
 # p50/p95 per stage. PASSWORD is the 4 characters in the robot's Wi-Fi name.
 #   make latency TARGET=lamp-ac82.local PASSWORD=ac82 [DATE=2026-08-16]
@@ -267,10 +271,12 @@ latency:
 
 # Copy a skill folder onto a running body. Live on the next conversation, no
 # reboot. Root SSH is off, so it lands in /tmp and moves with sudo.
+# J=<host> routes both hops through an SSH jump host, as in the deploy targets:
+#   make push-skill SKILL=./my-skill TARGET=pi@10.0.0.5 J=proxy-host
 push-skill:
-	@test -n "$(SKILL)" -a -n "$(TARGET)" || { echo "usage: make push-skill SKILL=./my-skill TARGET=pi@lamp-xxxx.local" >&2; exit 2; }
-	@scp -r $(SKILL) $(TARGET):/tmp/
-	@ssh $(TARGET) 'sudo mv /tmp/$(notdir $(SKILL)) /root/.openclaw/workspace/skills/'
+	@test -n "$(SKILL)" -a -n "$(TARGET)" || { echo "usage: make push-skill SKILL=./my-skill TARGET=pi@lamp-xxxx.local [J=jump-host]" >&2; exit 2; }
+	@scp $(SSH_JUMP_OPT) -r $(SKILL) $(TARGET):/tmp/
+	@ssh $(SSH_JUMP_OPT) $(TARGET) 'sudo mv /tmp/$(notdir $(SKILL)) /root/.openclaw/workspace/skills/'
 	@echo "$(notdir $(SKILL)) → $(TARGET) — live on the next conversation"
 
 # Static half: validates every robots/<id>/ROBOT.md against COMPATIBILITY.md.
@@ -390,6 +396,14 @@ ota-keygen:
 #   IP=172.168.20.255 make hal-log         # tail the device's hal journal
 #   IP=172.168.20.255 make os-log          # tail the device's os-server journal
 #
+# J=<host> puts an SSH jump host in front of every hop (ssh, scp and rsync all
+# get the same ProxyJump), for a device that is not routable from here:
+#   IP=10.0.0.5 J=proxy-host make hal-deploy
+#   IP=10.0.0.5 J=proxy-host make hal-log
+# The hop authenticates from your SSH key/agent + ~/.ssh/config; PI_PASS is the
+# DEVICE password only. Both orders work: `J=... make hal-deploy` and
+# `make hal-deploy J=...`.
+#
 # hal-log/os-log deploy NOTHING — safe to run against a device mid-session.
 # Knobs: LOG_LINES (default 200), FOLLOW=0 to dump instead of follow, GREP=<re>
 # to filter on the device rather than over the link. Ctrl-C stops the follower
@@ -400,6 +414,16 @@ ota-keygen:
 # Auth: PI_USER (default orangepi), PI_PASS (default orangepi; set PI_PASS=""
 # to use your SSH key). Never overwrites .env, .venv or calibration/.
 # ============================================================================
+
+# Reach the script whether these came from the environment (`IP=... make x`) or
+# from make's own command line (`make x IP=...`); only the first form is
+# inherited automatically. PI_PASS is deliberately NOT in this list: make
+# exports a listed-but-undefined variable as an EMPTY string, and an empty
+# PI_PASS is the script's opt-in to key auth — it would turn off the default
+# device password for everyone. Pass it as an environment variable:
+#   PI_PASS="" IP=... make hal-deploy
+export IP J PI_HOST PI_JUMP PI_USER LOG_LINES FOLLOW GREP
+
 hal-deploy:
 	bash scripts/deploy-device.sh --hal
 
