@@ -556,7 +556,15 @@ the one prompt file it reads every session** — so the rule rides there instead
   with an overlapping purpose; anything on a connected third-party service
   (Gmail/Calendar/Drive/Notion/Figma/Asana/Linear/GitHub, …) goes through the
   `connectors` skill; never install an alternative client/CLI (himalaya, mutt,
-  gcalcli, …) for a service a connector covers.
+  gcalcli, …) for a service a connector covers. It also carries the two
+  reply-discipline rules shared with the other runtimes' AGENTS.md block —
+  *Silence = the literal token NO_REPLY* and *Say the answer, not the reasoning*
+  (no "let me check…", no explaining the auth type or transport, no reciting a
+  skill back, no lead-up before the answer, one question per turn, failures in a
+  sentence or two). Keep the wording in step with `agentsMDBlock` in the
+  openclaw / codex / picoclaw / opencode onboarding files and `claudeMDBlock` in
+  claudecode: reply text is read aloud on this device, so the rule has to hold
+  whichever brain is selected.
 - Atomic tmp+rename (same as `UpdateIdentityName`), owner/persona content and the
   inlined identity card are untouched, and **no gateway restart is needed** —
   Hermes re-reads SOUL.md at the next session.

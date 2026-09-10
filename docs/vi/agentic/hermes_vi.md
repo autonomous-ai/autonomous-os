@@ -537,7 +537,15 @@ nó đọc mỗi session** — nên quy tắc đi theo đó:
   trùng lặp; mọi việc trên dịch vụ bên-thứ-ba đã kết nối
   (Gmail/Calendar/Drive/Notion/Figma/Asana/Linear/GitHub, …) đi qua skill
   `connectors`; không bao giờ cài client/CLI thay thế (himalaya, mutt, gcalcli,
-  …) cho dịch vụ mà connector đã cover.
+  …) cho dịch vụ mà connector đã cover. Block này cũng mang 2 quy tắc kỷ luật
+  câu trả lời dùng chung với block AGENTS.md của các runtime khác — *Silence =
+  the literal token NO_REPLY* và *Say the answer, not the reasoning* (không "let
+  me check…", không giải thích auth type hay transport, không đọc lại skill cho
+  user nghe, không dạo đầu trước câu trả lời, mỗi lượt hỏi một lần, lỗi thì gói
+  trong 1–2 câu). Giữ nội dung đồng bộ với `agentsMDBlock` trong onboarding của
+  openclaw / codex / picoclaw / opencode và `claudeMDBlock` của claudecode: trên
+  máy này text reply bị đọc thành tiếng, nên quy tắc phải đúng với mọi brain
+  được chọn.
 - Ghi atomic tmp+rename (giống `UpdateIdentityName`), nội dung persona của chủ
   máy và identity card inline không bị đụng, và **không cần restart gateway** —
   Hermes đọc lại SOUL.md ở session kế tiếp.

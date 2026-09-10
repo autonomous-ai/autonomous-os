@@ -34,98 +34,57 @@ know.**
 If the scan shows nothing for a service, it is **not connected**: say so plainly
 (see Errors) and stop — do not attempt the API call anyway to "check".
 
-## ⛔ Confirm every write before you make it
+## ⛔ Never write without reading the draft back
 
-Reads are free; writes are not. Anything in this skill that **reaches another
-person** (a sent mail, a message in a channel, a shared file, a page or issue
-someone will read) or **destroys something** (a deleted event, file, message or
-record) cannot be taken back — and on a voice-only device the user has no screen
-to check it afterwards. So every write gets the same gate, whichever connector it
-belongs to — Gmail, Slack, Notion, Asana, Linear, monday.com, GitHub, HubSpot,
-Figma, or one linked tomorrow:
+Reads are free; writes are not. Sending mail, creating or deleting a calendar
+event, uploading or deleting a Drive file is **irreversible and outward-facing**
+— it reaches other people, and on a voice-only device the user has no screen to
+check what you did after the fact. So every mutating call in this skill gets the
+same gate:
 
-**say what will happen → wait for an explicit yes → only then call.**
+**draft → read the whole thing back → wait for an explicit yes → only then call.**
 
-### Which writes need this — and which do not
+This covers every write, including ones not listed here:
 
-**No confirmation.** These change nothing anyone else can see, and asking every
-time makes the device exhausting to use:
+| Action | Call it gates |
+|---|---|
+| Send or reply to an email | `POST .../messages/send`, SMTP `sendmail` |
+| Create / change / delete a calendar event | `POST` `PATCH` `DELETE` on `calendar/v3/...` |
+| Upload / rename / delete / share a Drive file | `POST` `PATCH` `DELETE` on `drive/v3/files...` |
+| Any MCP write (Notion page, Linear issue, GitHub comment, …) | that tool's create/update/delete |
 
-- Any **read or search**, on any connector — listing mail, reading a page,
-  searching issues, opening a Figma file.
-- **Analytics and reporting queries** (Amplitude and anything like it). A query
-  is a read however it is spelled.
-- Changes **only the user can see** — marking a message read, a private label,
-  your own view or filter.
-- **Saving a draft that is not sent or published** — a Gmail draft, an
-  unpublished page. Nothing has reached anyone yet; the gate belongs on the
-  send/publish step instead.
+**Read-back format** — one line, in the user's language:
 
-**Confirmation required** for everything else: anything another person can see,
-and anything that overwrites or destroys. A connector not named below still
-falls into one of these classes.
+`To: <recipient> · Subject: <subject> · Body: <full text>`
 
-### What you read back, by write class
+- Body ≲60 words → read it **in full, word for word**.
+- Longer → read To + Subject + the first two sentences, then offer: "want me to
+  read the whole thing?" — and read all of it if they say yes.
+- Calendar: `Title · <day> <start>–<end> · <attendees>`.
+- Drive: the file name, and for a share, exactly who gains access.
 
-Not a description of the action — the **payload**. "Should I send the email?",
-"want me to update the page?" are not confirmations: the user has to hear the
-thing itself before approving it.
+**The read-back is exempt from `keep replies short`** (Rules, bottom of this
+file) and from the voice skill's "1-3 sentences". Never summarize, shorten,
+paraphrase, or tidy up a draft the user is being asked to approve: they are
+approving the exact text you are about to send, so they have to hear the exact
+text. This is the one place in this skill where a long reply is the correct one.
 
-| Write class | Examples across connectors | Read back before acting |
-|---|---|---|
-| **Message to people** | send or reply to an email · post a Slack message, DM or thread reply · comment on a Notion page, a Linear/GitHub issue, a Figma file | **who will see it** — every recipient, or the exact channel, saying plainly when it is a **public** one — and the **full text** |
-| **Document content** | create or edit a Notion page or block · any doc or wiki entry | **where it lands** (page / space / parent) · whether you **create or replace** · **what it will say** |
-| **Work item** | create a Linear, Asana, monday.com or GitHub issue or task · a HubSpot record | **target** (project / board / repo) · title · **assignee** · the body. An assignee gets notified, so this is a message too |
-| **Status / field change** | move a ticket, change a stage or owner, set a due date, edit a CRM field | the item · which field · **old value → new value** |
-| **Delete or overwrite** | delete a message, page, file, event or record · overwrite existing content | **exactly what disappears**, named — and that it is permanent |
-| **Permission / share** | share a file or page · add someone to a channel, project or board | what · **who gains access** · read or write |
-| anything not listed | — | same principle: **who it reaches, and what they will see** |
+**Then wait for the yes.**
 
-### How much of it
+- A yes is a yes: "send it", "yes", "gửi đi", "ok gửi".
+- Anything else is an edit, not approval ("change the last sentence to…",
+  "make it shorter") — apply it, then read the new draft back and wait again.
+- Silence, an ambiguous answer, or a change of subject → **do not send.** Ask
+  once, plainly: "send it?"
+- "Just send it, no need to read it back" skips the read-back **for that one
+  message**, never for the next.
+- **"…and send it" in the original request is not the confirmation.** The user
+  had not heard the draft when they said it — that phrase is what put you in
+  this section, not a way out of it.
 
-Read the **whole payload** when it is short enough to speak in one go (~3
-sentences). When it is longer:
-
-- **Never abbreviate the identifying fields, at any length.** Recipients,
-  channel, page, project, repo, the thing being deleted. A message in the wrong
-  channel or a delete on the wrong page is the failure that actually hurts; a
-  trimmed body is not.
-- **Summarize the body — and say that you are summarizing.** "About 400 words —
-  it says <one or two sentences>. Want me to read the whole thing?" Never present
-  a summary as if it were the text: the user has to know they approved a gist,
-  and be able to ask for the full version.
-- **When you edit existing content, say what it replaces.** "Replaces the current
-  Overview section, about 200 words." The user cannot see the page — a read-back
-  covering only the new text hides that something is being overwritten.
-- **For several targets at once, give the count and name them.** "To 5 people:
-  an, binh, chi, dung, em" — never "to the team". If the list is too long to say,
-  that is itself the thing to approve: "to all 34 people in #general — go ahead?"
-
-### The read-back outranks brevity
-
-It is exempt from `keep replies short` (Rules, bottom of this file), from the
-voice skill's "1-3 sentences", and from any persona rule about keeping replies
-short. Never shorten, paraphrase or tidy up something the user is being asked to
-approve — beyond the explicit summarize-and-say-so case above. They are approving
-what you are about to send, so they have to hear what you are about to send. This
-is the one place in this skill where a long reply is the correct one.
-
-### Then wait for the yes
-
-- A yes is a yes: "send it", "do it", "yes", "gửi đi", "ok".
-- Anything else is an edit, not approval ("change the last sentence to…", "put it
-  in the other channel") — apply it, read the new payload back, wait again.
-- Silence, an ambiguous answer, or a change of subject → **do not act.** Ask
-  once, plainly: "send it?" / "delete it?"
-- "Just do it, no need to read it back" skips the read-back for **that one
-  action**, never for the next.
-- **"…and send it" / "…and post it" / "…and delete it" in the original request is
-  not approval.** The user had not heard the payload when they said it — that
-  phrase is what put you in this section, not a way out of it.
-
-**After the call returns**, say what actually happened, naming the target: "Sent
-to <recipient>", "Posted in #<channel>", "Deleted <page>". If it failed, say it
-failed (see Errors) — never report a write you did not read out of the response.
+**After the call returns**, say what actually happened: "Sent to <recipient>,
+subject '<subject>'". If it failed, say it failed (see Errors) — never report a
+send you did not read out of the response.
 
 Credentials for linked services live in `/root/.openclaw/workspace/configs/`:
 
@@ -247,9 +206,9 @@ connector with its own file** — having one does not give you the others:
 - **`ahrefs` or any `api_key`** → token route but `read -r TOKEN < <(jq -r '.connectors.<code>.api_key' …)`.
 - **anything else** → `.connectors.<code>.access_token` as a Bearer header to that service's API.
 
-**Send email (OAuth Gmail)** — ⛔ message class: first read `To · Subject · Body`
-back in full and wait for an explicit yes (see *Confirm every write before you
-make it*, top of this file). Then build the RFC 822 message, base64url-encode it, POST as `raw`:
+**Send email (OAuth Gmail)** — first read the draft back in full (or summary if it is too long) and wait for
+an explicit yes (see *Never write without reading the draft back*, top of this
+file). Then build the RFC 822 message, base64url-encode it, POST as `raw`:
 
 ```bash
 read -r TOKEN < <(jq -r '.connectors.gmail.access_token' /root/.openclaw/workspace/configs/gmail_access_tokens.json)
@@ -301,8 +260,8 @@ for mid in reversed(latest):
 mail.logout()
 ```
 
-**Send email (SMTP):** — ⛔ same gate: read `To · Subject · Body` back in full
-and wait for an explicit yes before running this.
+**Send email (SMTP):** — same gate: read the draft back in full and wait for
+an explicit yes before running this.
 
 ```python
 import smtplib, json
@@ -344,5 +303,5 @@ Otherwise, if it is `< now` ($(date +%s)), treat as expired (see Errors).
 - **Step −1 is not optional** — Discover in this turn before any claim about connection state, and never invent a result. See the top of this file.
 - MCP connectors: use the tool, not the file.
 - Obey **Credential safety** above — secrets never reach chat, files, or logs.
-- **No write without a read-back** — read the payload back, wait for an explicit yes, then send/post/create/change/delete. Every connector, not just mail; reads and analytics queries need no confirmation. See the top of this file.
+- **No write without a read-back** — draft, read it back in full, wait for an explicit yes, then send/create/delete. See the top of this file.
 - Match the user's language; keep replies short — **except a write read-back**, which is always read in full.
