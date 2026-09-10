@@ -91,3 +91,13 @@ Không poll recap mới nhất ngay sau khi gửi: dữ liệu có thể vẫn t
 Khi Harness phụ trách phản hồi của một run, các sự kiện chat assistant thông thường của đúng run đó được chặn để lời báo đã giao việc hoặc `NO_REPLY` không đóng Web/MQTT chat trước khi kết quả Harness tới. Tin nhắn người dùng và sự kiện lỗi vẫn được chuyển tiếp.
 
 Cả sáu runtime (Codex, OpenClaw, Hermes, PicoClaw, Claude Code và OpenCode) khôi phục địa chỉ trả lời Harness khi phát lại chat trong hàng đợi. Hermes giữ MQTT chat và voice follow-up thành lượt riêng, không gộp với cảm biến nền. Câu tiếng Việt không dấu như “hoi mike agent” được thêm định tuyến agent có tên. Nếu chat kết thúc im lặng mà không gửi yêu cầu Harness, MQTT phát sự kiện final rỗng để mobile ngừng chờ; không hiển thị chuỗi nội bộ `NO_REPLY`.
+
+Kết quả Harness chỉ khớp với run ID thiết bị đã đăng ký. Kết quả không rõ run không được chiếm chat khác đang chờ; task Harness đang chờ không được chặn phản hồi runtime của lượt khác. Kết quả rỗng không đánh dấu đã giao, nên kết quả có nội dung đến sau vẫn hoàn tất được lượt đó.
+
+Lượt Harness đã hoàn tất giữ trạng thái chống lặp để dọn sau 15 phút (dọn khi đăng ký route tiếp theo), chặn final runtime đến sau lifecycle end, progress muộn và việc đăng ký lại route sau kết quả cuối.
+
+Kết quả cuối Harness được ghi vào flow JSONL bằng `harness_response`, giữ run ID thiết bị gốc và `text` đầy đủ. Web Chat dùng sự kiện này khôi phục kết quả đang chờ sau khi SSE ngắt hoặc tải lại trang. Luồng trực tiếp vẫn phát `chat_response` với state `final`.
+
+Callback summary vẫn tra recap khi không có preview. Kết quả rỗng giữ route đang chờ. Sau khi tra recap, chỉ xóa route của đúng run ban đầu; callback từ agent không liên quan không được chiếm chat khác.
+
+Route được khóa bằng run ID cục bộ của thiết bị, không phải agent ID. Một Harness agent có thể có nhiều task người dùng đang chờ; khi sự kiện cũ không có local run ID, OS đưa nó vào route đang chờ lâu nhất của agent đó và giữ nguyên các route mới hơn. Nếu runtime copy cũ riêng phần sequence của response route dạng `device-…-<timestamp>`, OS khôi phục run đúng cùng channel từ flow record trong bộ nhớ có timestamp đó; timestamp khác tuyệt đối không bị đổi. Nếu task mới hoặc task đính chính bị chặn bởi delivery trước, runtime được kiểm receipt đó một lần; khi receipt có trạng thái delivery đã biết, runtime phải gửi task hiện tại trước khi trả `NO_REPLY`.

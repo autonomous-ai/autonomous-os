@@ -80,3 +80,61 @@ func TestHarnessHandoffDoesNotCloseChatBeforeResult(t *testing.T) {
 		t.Fatalf("wrong result: %#v", event)
 	}
 }
+
+func TestHarnessReplyCannotConsumeAnotherChat(t *testing.T) {
+	h := &AgentHandler{monitorBus: monitor.ProvideBus()}
+	h.MarkHarnessResponseRun("web-a", true)
+	h.MarkHarnessResponseRun("web-b", true)
+	if h.suppressHarnessAgentReply("unrelated") {
+		t.Fatal("unrelated chat suppressed by pending Harness task")
+	}
+	if h.DeliverHarnessResponse("unknown", "wrong result") {
+		t.Fatal("unknown result consumed another chat")
+	}
+	if h.DeliverHarnessResponse("web-a", "") {
+		t.Fatal("empty result accepted")
+	}
+	if !h.DeliverHarnessResponse("web-a", "answer A") {
+		t.Fatal("empty result consumed route A")
+	}
+	if !h.DeliverHarnessResponse("web-b", "answer B") {
+		t.Fatal("route B was consumed by another result")
+	}
+}
+
+func TestHarnessFinalSurvivesRuntimeLifecycleOrdering(t *testing.T) {
+	for _, resultFirst := range []bool{false, true} {
+		t.Run(map[bool]string{false: "runtime-first", true: "result-first"}[resultFirst], func(t *testing.T) {
+			bus := monitor.ProvideBus()
+			events, unsubscribe := bus.Subscribe()
+			defer unsubscribe()
+			h := &AgentHandler{monitorBus: bus}
+			h.MarkHarnessResponseRun("test-run", true)
+			if resultFirst {
+				h.DeliverHarnessResponse("test-run", "Harness final")
+			}
+			if !h.suppressHarnessAgentReply("test-run") {
+				t.Fatal("runtime handoff not suppressed")
+			}
+			h.clearHarnessResponseRun("test-run")
+			if !resultFirst && !h.DeliverHarnessResponse("test-run", "Harness final") {
+				t.Fatal("late Harness final lost")
+			}
+			if h.DeliverHarnessProgress("test-run", "late progress") {
+				t.Fatal("progress emitted after final")
+			}
+			// OpenClaw can emit its generic chat final after lifecycle:end.
+			payload, _ := json.Marshal(map[string]string{"runId": "test-run", "role": "assistant", "state": "final", "message": "NO_REPLY"})
+			h.handleChatEvent(domain.WSEvent{Payload: payload})
+			event := <-events
+			if event.Summary != "Harness final" {
+				t.Fatalf("wrong final: %+v", event)
+			}
+			select {
+			case extra := <-events:
+				t.Fatalf("extra response after Harness final: %+v", extra)
+			default:
+			}
+		})
+	}
+}

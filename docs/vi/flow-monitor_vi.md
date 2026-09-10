@@ -232,3 +232,5 @@ Marker `[HW:...]` chỉ tới HAL khi agent xuất nó ra **text trả lời** (
 - **Ảnh hưởng**: "node sáng mà câm loa" — hay gặp nhất với nhạc (Music skill).
 - **Fix**: `fireEchoedHWMarkers` (`handler_hw.go`, gọi từ cả nhánh `tool` device-chat trong `handler_event_agent.go` lẫn nhánh `session.tool`) phát hiện marker `[HW:...]` trong tool args rồi fire thật sang HAL, kèm log WARN. Nó chỉ khớp đúng ngữ pháp `[HW:/path:{json}]`, nên `curl .../audio/play` hợp lệ (không có marker) không bị đụng và vẫn phát qua request riêng. Khi rescue chạy thì bỏ qua phần emit node cosmetic để không nhân đôi node.
 - **Chống tận gốc**: `skills/music/SKILL.md` đã cấm rõ echo/exec/bash bọc marker — marker phải là text trả lời, không "chạy" nó.
+
+Kết quả cuối Harness được ghi vào flow JSONL bằng `harness_response`, giữ run ID thiết bị gốc và `text` đầy đủ. Web Chat dùng sự kiện này khôi phục kết quả đang chờ sau khi SSE ngắt hoặc tải lại trang. Luồng trực tiếp vẫn phát `chat_response` với state `final`.

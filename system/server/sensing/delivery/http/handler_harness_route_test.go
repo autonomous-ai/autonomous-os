@@ -45,6 +45,7 @@ func TestHarnessNamedAgentRoutingTreatsNameAsTarget(t *testing.T) {
 		"Ask David if there are events in the US",
 		"Find upcoming events in the US",
 		"make no more Harness or shell calls",
+		"never return NO_REPLY until that new send/answer has a known receipt",
 		"DeliveryUnknown/no usable receipt",
 	} {
 		if !strings.Contains(harnessNamedAgentRouting, required) {

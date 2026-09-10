@@ -1091,3 +1091,5 @@ Xử lý bởi bootstrap worker, không qua MQTT handler trực tiếp.
 | `system/domain/pairing.go` | PairingEvent + status enum |
 
 Khi không có lượt chuyển tiếp Harness đang chờ, `NO_REPLY` kết thúc được gửi thành `chat_response` với `state: final`, summary và message assistant rỗng. Mobile kết thúc trạng thái chờ mà không hiển thị sentinel nội bộ.
+
+MQTT coi mọi phản hồi final của Harness là kết thúc bất kể câu chữ; handler agent dùng chung chặn lời chuyển giao dựa trên đúng run ID.
