@@ -37,6 +37,24 @@ def spy(recognizer, monkeypatch):
     return written
 
 
+@pytest.fixture
+def embed(recognizer, monkeypatch):
+    """Stub the embedding API and record how it was called.
+
+    Returns the list of (payload, use_sliding_window) calls, so a test can
+    assert BOTH that the stored vector came from a single-shot call and that a
+    rejected turn made no call at all.
+    """
+    calls = []
+
+    def _fake(audios_b64, *, use_sliding_window=False):
+        calls.append((audios_b64, use_sliding_window))
+        return np.ones(8, dtype=np.float32) / np.sqrt(8.0)
+
+    monkeypatch.setattr(recognizer, "_call_embedding_api", _fake)
+    return calls
+
+
 def _extend(recognizer, **over):
     """Call _maybe_extend_user with all gates wide open unless overridden."""
     kwargs = dict(
@@ -49,28 +67,28 @@ def _extend(recognizer, **over):
     )
     kwargs.update(over)
     recognizer._maybe_extend_user(
-        "leo", np.ones(8, dtype=np.float32), b"RIFFfake", **kwargs,
+        "leo", ["Y2xlYW5lZC13YXY="], b"RIFFfake", **kwargs,
     )
 
 
-def test_a_clean_unanimous_turn_is_admitted(recognizer, spy):
+def test_a_clean_unanimous_turn_is_admitted(recognizer, spy, embed):
     _extend(recognizer)
     assert spy == ["leo"], "a clean turn must still extend"
 
 
-def test_a_split_vote_is_rejected(recognizer, spy):
+def test_a_split_vote_is_rejected(recognizer, spy, embed):
     # 4 of 7 chunks voted for somebody else -> multi-speaker audio (A1).
     _extend(recognizer, chunk_votes=4, num_chunks=7)
     assert spy == [], "a split vote must never reach the bank"
 
 
-def test_a_weak_chunk_is_rejected(recognizer, spy):
+def test_a_weak_chunk_is_rejected(recognizer, spy, embed):
     # Unanimous, average passes, but one chunk is barely above noise (A2).
     _extend(recognizer, min_chunk_cos=0.2)
     assert spy == [], "an unsure chunk must reject the whole turn"
 
 
-def test_the_single_enrolled_speaker_hole_is_closed(recognizer, spy):
+def test_the_single_enrolled_speaker_hole_is_closed(recognizer, spy, embed):
     # One enrolled speaker means one column, so every chunk votes for them by
     # default even at cos 0.2. Unanimous and meaningless -- A2 is what catches
     # this, and it is the common real case (the other person is a guest).
@@ -78,7 +96,7 @@ def test_the_single_enrolled_speaker_hole_is_closed(recognizer, spy):
     assert spy == [], "unanimity alone must not admit a weak turn"
 
 
-def test_a_short_single_chunk_turn_is_unchanged(recognizer, spy):
+def test_a_short_single_chunk_turn_is_unchanged(recognizer, spy, embed):
     # <=10s of post-VAD speech is ONE chunk: A1 is 1-of-1 and A2 reduces to
     # the match threshold that is_match already enforced. Behaviour here must
     # be bit-identical to pre-fix.
@@ -169,7 +187,7 @@ def test_the_reported_duration_is_the_cleaned_length_not_the_raw_length(
     )
 
 
-def test_a_match_carried_only_by_the_extended_tier_cannot_extend(recognizer, spy):
+def test_a_match_carried_only_by_the_extended_tier_cannot_extend(recognizer, spy, embed):
     # The whole point: a match the extended bank carried is evidence about a
     # previous guess, not about the person. Letting it add a row lets one
     # mistake breed more.
@@ -177,12 +195,12 @@ def test_a_match_carried_only_by_the_extended_tier_cannot_extend(recognizer, spy
     assert spy == [], "an extended-carried match must not grow the bank"
 
 
-def test_a_match_carried_by_the_anchors_still_extends(recognizer, spy):
+def test_a_match_carried_by_the_anchors_still_extends(recognizer, spy, embed):
     _extend(recognizer, anchor_cos=0.72)
     assert spy == ["leo"], "an anchor-carried match must still extend"
 
 
-def test_a_user_with_no_anchor_rows_does_not_extend(recognizer, spy):
+def test_a_user_with_no_anchor_rows_does_not_extend(recognizer, spy, embed):
     # Legacy profile with no readable anchor tier: -inf, so it cannot vouch
     # for itself. Better to stop growing than to grow unanchored.
     _extend(recognizer, anchor_cos=float("-inf"))
@@ -210,3 +228,66 @@ def test_deleting_a_sample_removes_its_provenance_too(recognizer):
     recognizer._delete_sample(path)
     assert not path.is_file(), "the wav must go"
     assert not path.with_suffix(".json").is_file(), "and so must its provenance"
+
+
+def test_the_stored_vector_comes_from_a_single_shot_call(recognizer, spy, embed):
+    # The whole point: an extended sample must be embedded the way enroll,
+    # backfill and migration embed -- whole utterance, no windowing, no mean.
+    _extend(recognizer)
+    assert spy == ["leo"], "the turn should have been admitted"
+    assert len(embed) == 1, f"expected exactly one embed call, got {len(embed)}"
+    payload, sliding = embed[0]
+    assert payload == ["Y2xlYW5lZC13YXY="], "must embed the cleaned WAV payload"
+    assert sliding is False, (
+        "use_sliding_window must be False -- a True call returns per-chunk "
+        "vectors, which is the mean-of-chunks behaviour this replaces"
+    )
+
+
+def test_a_rejected_turn_costs_no_embed_call(recognizer, spy, embed):
+    # The extra network call must sit AFTER the five cheap gates, so a turn
+    # that was never going to be stored does not pay for one.
+    _extend(recognizer, chunk_votes=4, num_chunks=7)   # fails gate 1
+    assert spy == [], "gate 1 should have rejected"
+    assert embed == [], "a rejected turn must not call the embedding API"
+
+
+def test_the_diversity_gate_tests_the_vector_being_stored(recognizer, spy, embed):
+    # The stub returns the unit vector ones/sqrt(8); an identical existing row
+    # gives cosine 1.0, well above the 0.7 diversity bar -> redundant.
+    existing = (np.ones((1, 8), dtype=np.float32) / np.sqrt(8.0))
+    _extend(recognizer, existing_rows=existing)
+    assert spy == [], "an identical stored row must read as redundant"
+    assert len(embed) == 1, "but only after paying for the embedding"
+
+
+def test_an_embedding_failure_skips_the_extend_without_raising(
+    recognizer, spy, monkeypatch,
+):
+    # Bank maintenance must never break a turn: the identity decision is
+    # already made and the reply depends on it.
+    from hal.drivers.voice.speaker_recognizer.speaker_recognizer import (
+        EmbeddingAPIUnavailableError,
+    )
+
+    def _boom(audios_b64, *, use_sliding_window=False):
+        raise EmbeddingAPIUnavailableError("embedding server down")
+
+    monkeypatch.setattr(recognizer, "_call_embedding_api", _boom)
+    _extend(recognizer)          # must not raise
+    assert spy == [], "a failed embed must not write a sample"
+
+
+def test_the_provenance_records_the_embedding_mode(recognizer, embed, tmp_path):
+    # Old samples hold a mean and carry no mode; new ones say so explicitly, so
+    # a later audit can tell the two populations apart on disk.
+    written = {}
+    real = recognizer._write_extended_sample
+
+    def _capture(norm, wav, emb, provenance=None):
+        written.update(provenance or {})
+        return real(norm, wav, emb, provenance=provenance)
+
+    recognizer._write_extended_sample = _capture
+    _extend(recognizer)
+    assert written.get("embedding_mode") == "single_shot"

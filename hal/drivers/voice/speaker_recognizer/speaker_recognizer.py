@@ -2067,7 +2067,7 @@ class SpeakerRecognizer:
     def _maybe_extend_user(
         self,
         norm: str,
-        embedding: np.ndarray,
+        payload: list[str],
         wav_bytes: bytes,
         *,
         existing_rows: Optional[np.ndarray],
@@ -2104,6 +2104,12 @@ class SpeakerRecognizer:
         Then the diversity gate: keep the sample only if its max cosine to what
         we already hold is BELOW _DIVERSITY_COS — above that it duplicates a
         sample we have.
+
+        ``payload`` is the CLEANED WAV, base64-wrapped, exactly as recognize()
+        already built it for its own /embed call. This method embeds it a
+        second time in SINGLE-SHOT mode once the cheap gates pass — see the
+        comment at that call for why the stored vector is not recognize()'s
+        per-chunk mean.
 
         ``existing_rows`` is this speaker's slice of the bank recognize() just
         matched against — anchor and extended concatenated, legacy fallback
@@ -2158,8 +2164,33 @@ class SpeakerRecognizer:
             )
             return
 
+        # Embed the CLEANED WAV as a single shot -- the same call enroll,
+        # sidecar backfill and migration all make. Auto-extend used to store
+        # the mean of recognize()'s sliding-window chunks, which made it the
+        # only writer in the system producing a different kind of vector: the
+        # extended tier held means while the anchor tier held single-shot
+        # vectors, and _reembed_user silently converted the means on the next
+        # model change (so re-embedding a stored ext_*.wav did not reproduce
+        # its own sidecar). One row per WAV, embedded one way, everywhere.
+        #
+        # Deliberately placed AFTER the five cheap gates and BEFORE the
+        # diversity gate: a turn that was never going to be stored pays no
+        # network call, and the redundancy check measures the vector actually
+        # being stored rather than a differently-computed stand-in.
+        try:
+            embedding = _l2(self._call_embedding_api(payload))
+        except SpeakerRecognizerError as e:
+            # Never let bank maintenance break a turn. Unlike the enroll and
+            # migration batches this does NOT re-raise on an outage: there is
+            # no batch here to misattribute a server failure to, so the right
+            # answer is simply not to extend this turn.
+            logger.warning(
+                "[speaker] extend '%s': skip — embedding failed: %s", norm, e,
+            )
+            return
+
         if existing_rows is not None and len(existing_rows):
-            max_sim = float(np.max(existing_rows @ _l2(embedding)))
+            max_sim = float(np.max(existing_rows @ embedding))
             if max_sim > _DIVERSITY_COS:
                 logger.debug(
                     "[speaker] extend '%s': skip redundant (max_cos=%.3f > %.2f)",
@@ -2178,6 +2209,10 @@ class SpeakerRecognizer:
                 "num_chunks": num_chunks,
                 "min_chunk_cos": min_chunk_cos,
                 "anchor_cos": anchor_cos,
+                # How this vector was computed. Samples written before this
+                # existed hold the mean of recognize()'s chunks and carry no
+                # mode key at all, which is what tells the two apart on disk.
+                "embedding_mode": "single_shot",
                 "max_sim_to_existing": None if max_sim != max_sim else max_sim,
                 "thresholds": {
                     "match_cos": self._match_threshold,
@@ -3524,7 +3559,7 @@ class SpeakerRecognizer:
                     )
                     self._maybe_extend_user(
                         best_name,
-                        _l2(query_chunks.mean(axis=0)),
+                        payload,
                         wav_bytes,
                         existing_rows=own_rows,
                         duration_s=cleaned_duration_s,
