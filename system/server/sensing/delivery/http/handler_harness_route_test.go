@@ -53,3 +53,10 @@ func TestHarnessNamedAgentRoutingTreatsNameAsTarget(t *testing.T) {
 		}
 	}
 }
+
+func TestHarnessFollowupRoutingSupportsChatCompletionChecks(t *testing.T) {
+	const instruction = "ask whether it has finished or for its result"
+	if !strings.Contains(harnessFollowupRouting, instruction) {
+		t.Fatalf("Harness follow-up routing is missing completion checks")
+	}
+}
