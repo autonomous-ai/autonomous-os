@@ -215,6 +215,7 @@ type AgentGateway interface {
 	// same two-pane browser as the store preview. Same per-backend split as
 	// ListSkills (skills.ReadSkillFiles does the walk).
 	ReadSkillFiles(name string) ([]SkillBundleFile, error)
+	ExportSkillArchive(name, destDir string) (string, error)
 
 	// ReadSkillFile returns one installed skill file addressed by the exact path
 	// emitted by ReadSkillFiles (for example "music/SKILL.md"). Callers that
@@ -461,4 +462,12 @@ type AgentGateway interface {
 // all implement it.
 type TurnAwareTTSQueue interface {
 	SendToHALTTSQueueForTurn(text, turnID string, turnSeq uint64) error
+}
+
+// ActiveTurnSteerer is implemented by runtimes that can append a new user
+// input to a currently running model turn. The sensing handler uses it only
+// for direct user input; passive device events still wait for idle so they do
+// not displace the user's active request.
+type ActiveTurnSteerer interface {
+	SupportsActiveTurnSteering() bool
 }

@@ -1,7 +1,4 @@
-// Package gatewayd bridges a local WebSocket to per-turn `codex exec`
-// subprocesses. It is a Go port of runtimes/codex/bridge.py (the reference
-// semantics) and runs as `os-server codex-gatewayd` under the codex.service
-// systemd unit (EnvironmentFile=/root/.codex/.env).
+// Package gatewayd bridges a local WebSocket to a persistent Codex App Server.
 //
 // Protocol (client = os-server runtimes/codex):
 //
@@ -15,10 +12,10 @@
 //	                    plus {"type":"pong"}, {"type":"bridge.status",..} and
 //	                    {"type":"bridge.error","error":".."}.
 //
-// Turns are strictly serialized (buffered channel + single worker goroutine).
-// The thread id from the thread.started event is persisted to the session
-// file and replayed via `codex exec resume <thread_id>` on subsequent turns.
-// Model/provider come from config.toml (presync-owned) — never --model here.
+// A message received while a turn is active is submitted with turn/steer. This
+// is intentionally different from the old per-turn codex exec worker: it lets
+// direct voice and web-chat input join the current model turn instead of
+// waiting behind it. Passive sensing stays subject to the OS safety queue.
 package gatewayd
 
 import (
@@ -96,11 +93,18 @@ type Server struct {
 	cfg Config
 	ln  net.Listener
 
-	mu              sync.Mutex // guards client, threadID and session-file writes
-	client          *wsClient  // single client; a new connection replaces the old
-	threadID        string     // current codex thread id ("" = fresh next turn)
-	activeRequestID string     // guarded by mu; worker-owned turn correlation
-	activeRunID     string     // originating device run, carried through queued turns
+	mu                sync.Mutex  // guards client, threadID and session-file writes
+	client            *wsClient   // single client; a new connection replaces the old
+	threadID          string      // current codex thread id ("" = fresh next turn)
+	activeRequestID   string      // guarded by mu; worker-owned turn correlation
+	activeRunID       string      // originating device run, carried through queued turns
+	activeTurnID      string      // current App Server turn; non-empty means steer
+	activeStarting    bool        // thread/turn start RPC is in flight
+	resetPending      bool        // session.new received during an active turn
+	appTurnTimer      *time.Timer // bounded by CODEX_TURN_TIMEOUT_S
+	appTurnTimedOut   bool
+	appOutputRejected bool
+	app               *appServer
 
 	ops chan op // turns + session.new, strictly serialized by the single worker
 }
@@ -129,6 +133,14 @@ func (s *Server) Serve(ctx context.Context) error {
 	}
 	s.threadID = s.loadSession()
 
+	app, err := startAppServer(ctx, s)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.app = app
+	s.mu.Unlock()
+	defer app.close()
 	go s.turnWorker(ctx)
 
 	mux := http.NewServeMux()

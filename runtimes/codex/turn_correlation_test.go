@@ -72,6 +72,49 @@ func TestRejectedFollowupDoesNotEndCurrentTurnOrConsumeNext(t *testing.T) {
 	}
 }
 
+func TestSteeredFollowupRetiresItsPendingRunWithoutEndingActiveTurn(t *testing.T) {
+	s := &CodexService{}
+	s.addPendingRun("first", "run-first")
+	s.addPendingRun("steered", "run-steered")
+	var events []domain.WSEvent
+	dispatch := func(e domain.WSEvent) {
+		events = append(events, e)
+		var payload struct {
+			Data struct {
+				Phase string `json:"phase"`
+			} `json:"data"`
+		}
+		_ = json.Unmarshal(e.Payload, &payload)
+		if payload.Data.Phase == "end" || payload.Data.Phase == "error" {
+			s.SetBusy(false)
+		}
+	}
+	s.translateFrame([]byte(`{"type":"turn.started","request_id":"first","run_id":"run-first"}`), dispatch)
+	s.translateFrame([]byte(`{"type":"bridge.steered","request_id":"steered","run_id":"run-steered"}`), dispatch)
+	if s.getCurrentRunID() != "run-first" {
+		t.Fatalf("steered acknowledgement ended active run: %q", s.getCurrentRunID())
+	}
+	if s.hasPendingRuns() {
+		t.Fatal("steered request leaked in pending runs")
+	}
+	var terminal struct {
+		RunID string `json:"runId"`
+		Data  struct {
+			Phase string `json:"phase"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(events[len(events)-1].Payload, &terminal); err != nil {
+		t.Fatal(err)
+	}
+	if terminal.RunID != "run-steered" || terminal.Data.Phase != "end" {
+		t.Fatalf("steered trace did not terminate cleanly: %s", events[len(events)-1].Payload)
+	}
+	s.translateFrame([]byte(`{"type":"turn.completed","request_id":"first","run_id":"run-first"}`), dispatch)
+	if s.activeTurn.Load() {
+		t.Fatal("completed active turn remained busy after steered follow-up")
+	}
+}
+
 func TestTaggedLateTerminalCannotStartAnotherTurn(t *testing.T) {
 	s := &CodexService{}
 	s.addPendingRun("first", "run-first")

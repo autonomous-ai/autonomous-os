@@ -116,25 +116,44 @@ def test_busy_queue_keeps_each_segments_realtime_answer_metadata(kpi, playback):
 
 
 @pytest.mark.parametrize("busy", [False, True])
-@pytest.mark.parametrize("chunks,spoken", [
-    (["Hello there,", " I am here.", "More to say"],
+@pytest.mark.parametrize("cap,chunks,spoken", [
+    (100, ["Hello there,", " I am here.", "More to say"],
      ["Hello there,", "I am here.", "More to say"]),
-    (["Hello there.", "Welcome back."], ["Hello there.", "Welcome back."]),
-    (["Hello there"], ["Hello there"]),
+    (100, ["Hello there.", "Welcome back."], ["Hello there.", "Welcome back."]),
+    (100, ["Hello there"], ["Hello there"]),
+    (0, ["Hello there,", " I am here.", "Welcome back."],
+     ["Hello there, I am here.", "Welcome back."]),
+    (100, ["Hello there, I am here.", "Welcome back."],
+     ["Hello there, I am here.", "Welcome back."]),
 ])
-def test_realtime_turn_marks_every_reply_segment(monkeypatch, chunks, spoken, busy):
+def test_realtime_turn_marks_every_reply_segment(monkeypatch, cap, chunks, spoken, busy):
     monkeypatch.setattr(realtime_turn.hal_config, "REALTIME_ENABLED", True)
     monkeypatch.setattr(realtime_turn.hal_config, "REALTIME_NATIVE_AUDIO", False)
     monkeypatch.setattr(realtime_turn.hal_config, "REALTIME_PROVIDER", "openai")
-    monkeypatch.setattr(realtime_turn.hal_config, "REALTIME_FIRST_CHUNK_MAX_CHARS", 100)
+    monkeypatch.setattr(realtime_turn.hal_config, "REALTIME_FIRST_CHUNK_MAX_CHARS", cap)
     monkeypatch.setattr(realtime_turn, "_thinking_cue_start", lambda: None)
     monkeypatch.setattr(realtime_turn, "_thinking_cue_clear", lambda: None)
     monkeypatch.setattr(realtime_turn, "_reply_language_name", lambda: "English")
     monkeypatch.setattr(realtime_turn, "_WaitFiller", Mock())
     realtime = Mock(available=True)
-    realtime.stream_output.return_value = iter(TextOutput(text=text) for text in chunks)
     tts = Mock()
     tts.speak.return_value = not busy
+
+    def outputs():
+        for index, text in enumerate(chunks):
+            yield TextOutput(text=text)
+            if cap == 0 and index == 0:
+                # A comma alone must not start a separate provider request.
+                tts.speak.assert_not_called()
+                tts.speak_queue.assert_not_called()
+            if cap == 0 and index == 1:
+                # The first sentence starts before the model sends sentence 2.
+                tts.speak.assert_called_once_with(
+                    spoken[0], turn_id="vi-test", realtime_reply=True,
+                )
+                assert tts.speak_queue.call_count == int(busy)
+
+    realtime.stream_output.return_value = outputs()
 
     result = realtime_turn.run_realtime_turn(
         realtime, tts, lambda text: text, "Hello", [object()], 1.0,

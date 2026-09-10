@@ -137,6 +137,10 @@ func (s *CodexService) translateFrame(raw []byte, dispatch func(domain.WSEvent))
 		s.rejectQueuedFrame(f, dispatch)
 		return
 	}
+	if f.Type == "bridge.steered" {
+		s.completeSteeredFrame(f, dispatch)
+		return
+	}
 	if isTurnFrame(f.Type) && !s.adoptFrameCorrelation(f, dispatch) {
 		return
 	}
@@ -171,6 +175,24 @@ func (s *CodexService) translateFrame(raw []byte, dispatch func(domain.WSEvent))
 	default:
 		slog.Debug("codex: unhandled frame type", "component", "codex", "type", f.Type)
 	}
+}
+
+// completeSteeredFrame retires the separate device trace for input that the
+// App Server accepted into the already-active turn. The active turn keeps the
+// model's response and its lifecycle; this trace receives an immediate terminal
+// event so it cannot retain busy state or an ACTIVE Flow Monitor card forever.
+func (s *CodexService) completeSteeredFrame(f codexFrame, dispatch func(domain.WSEvent)) {
+	pending := s.takePendingRun(f.RequestID, f.RunID, false)
+	if pending.runID == "" {
+		return // stale acknowledgement or an older client that did not track it
+	}
+	slog.Info("codex: follow-up merged into active turn", "component", "codex",
+		"request_id", pending.reqID, "runID", pending.runID)
+	payload, _ := json.Marshal(map[string]any{
+		"runId": pending.runID, "sessionKey": s.GetSessionKey(), "stream": "lifecycle",
+		"data": map[string]any{"phase": "end", "endedAt": nowUnixMs(), "mergedIntoActiveTurn": true},
+	})
+	dispatch(domain.WSEvent{Type: "evt", Event: "agent", Payload: payload})
 }
 
 // handleItemStarted opens the turn and surfaces tool.start for the item kinds

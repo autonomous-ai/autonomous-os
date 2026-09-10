@@ -1,11 +1,16 @@
 ---
 name: computer-use
-description: Open websites and apps and complete tasks on the user's paired Mac through Autonomous Buddy. Use for short spoken requests such as "open Airbnb", "mở Chrome", "ghi vào Notes", desktop searches, forms, screenshots, file organization, and follow-ups, even when the user does not say "Mac" or "computer". The agent runs on the headless device; visible website/app interaction targets the paired Mac, not a browser installed on the device. Pure information research and physical device hardware use their own skills.
+description: Open websites and apps and complete tasks on the user's paired Mac through Autonomous Buddy. Use for direct visible UI tasks such as "open Airbnb", "mở Chrome", "ghi vào Notes", forms, screenshots, and file organization. Do not use when the user asks a coding or research agent on the Mac to do the work; use harness-use instead, even if that agent will use a browser. The agent runs on the headless device; visible website/app interaction targets the paired Mac, not a browser installed on the device. Pure information research and physical device hardware use their own skills.
 ---
 
 # Computer use on the paired Mac
 
 Use this skill to achieve the user's **whole requested outcome** on their actual Mac. Opening an app or website is only completion when that is all the user requested. Agent management (projects and local CLI sessions) is a separate Buddy feature.
+
+If the user asks a named/current/coding/research agent to do a task, use
+`harness-use` first. The fact that the remote agent may search the web or open
+a browser does not make this a direct Buddy desktop task. Use this skill only
+when the device itself must manipulate the visible Mac UI.
 
 The agent on the device owns the task. Its local OS API forwards commands over WebSocket to Buddy on the Mac. Never run these localhost calls on a developer laptop assuming they target the device. The Mac's files and processes are not the device's files and processes.
 

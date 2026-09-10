@@ -41,6 +41,35 @@ func (h *DeviceMQTTHandler) StartBuddyStatusLoop(ctx context.Context) {
 	}
 }
 
+func (h *DeviceMQTTHandler) StartHarnessStatusLoop(ctx context.Context) {
+	if h.harnessService == nil {
+		return
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-h.harnessService.StatusChanges():
+			_ = h.publishHarnessStatus(ctx)
+		}
+	}
+}
+func (h *DeviceMQTTHandler) publishHarnessStatus(parent context.Context) error {
+	ctx, cancel := context.WithTimeout(parent, publishTimeout)
+	defer cancel()
+	client := h.mqttFactory.GetClient("harness-status-" + buddy.NewCommandID())
+	if err := client.Connect(ctx); err != nil {
+		return err
+	}
+	defer client.Close()
+	response := domain.MQTTDataResponse{MQTTInfoResponse: domain.NewMQTTInfoResponse(h.config, "data", device.GetDeviceMac()), Kind: domain.KindHarnessStatus, Status: "success", Data: h.harnessService.Status()}
+	payload, err := json.Marshal(response)
+	if err != nil {
+		return err
+	}
+	return client.Publish(ctx, h.config.FDChannel, 1, payload)
+}
+
 func (h *DeviceMQTTHandler) publishBuddyStatus(parent context.Context) error {
 	ctx, cancel := context.WithTimeout(parent, publishTimeout)
 	defer cancel()

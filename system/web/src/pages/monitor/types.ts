@@ -161,7 +161,7 @@ export interface DisplayEvent extends MonitorEvent {
   _seq: number;
 }
 
-export type Section = "overview" | "system" | "flow" | "camera" | "servo" | "face-owners" | "analytics" | "logs" | "chat" | "cli" | "sensing" | "bluetooth" | "api-docs" | "agent-config" | "settings:device" | "settings:wifi" | "settings:llm" | "settings:runtime" | "settings:voice" | "settings:face" | "settings:tts" | "settings:realtime" | "settings:stt" | "settings:channel" | "settings:mqtt" | "settings:mcp" | "settings:plugins" | "settings:timezone" | "settings:scheduled";
+export type Section = "overview" | "system" | "flow" | "camera" | "servo" | "face-owners" | "analytics" | "logs" | "chat" | "pairing" | "cli" | "sensing" | "bluetooth" | "api-docs" | "agent-config" | "settings:device" | "settings:wifi" | "settings:llm" | "settings:runtime" | "settings:voice" | "settings:face" | "settings:tts" | "settings:realtime" | "settings:stt" | "settings:channel" | "settings:mqtt" | "settings:mcp" | "settings:plugins" | "settings:timezone" | "settings:scheduled";
 
 // ─── Area + URL serialization ────────────────────────────────────────────────
 //
@@ -302,7 +302,7 @@ export const NAV: NavEntry[] = [
       // by uncommenting).
       // { id: "analytics",   label: "Analytics", icon: "⊟" },
       { id: "servo",       label: "Servo",     icon: "⎈", cap: Cap.Motion },
-      { id: "bluetooth",   label: "Bluetooth", icon: "✦", cap: Cap.Connectivity },
+      { id: "pairing",     label: "Pairing",   icon: "⌘" },
       { id: "logs",        label: "Logs",      icon: "☰" },
       { id: "cli",         label: "CLI",       icon: "▸" },
       { id: "api-docs",    label: "API Docs",  icon: "⎗" },

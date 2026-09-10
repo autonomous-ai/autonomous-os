@@ -819,6 +819,8 @@ best-effort follow-up is logged, but does not change the successful upload resul
 
 #### `chat.send` + `chat.event`
 
+Internal `NO_REPLY` handoff sentinels are suppressed from `chat.event`; clients receive Harness progress and the final Harness response instead.
+
 Lets the backend (and through it a phone app) hold the **same conversation the
 web monitor's chat holds**. The web chat is two halves — `POST
 /api/sensing/event` with `type:"web_chat"` to start a turn (this path forwards
@@ -1128,3 +1130,7 @@ Handled by bootstrap worker, not through MQTT handler directly.
 | `runtimes/openclaw/pairing.go` | WhatsApp Baileys QR pairing subprocess driver |
 | `system/domain/device.go` | MQTTMessage, command constants |
 | `system/domain/pairing.go` | PairingEvent + status enum |
+
+A silent terminal `NO_REPLY` without a pending Harness handoff is sent as a `chat_response` with `state: final`, empty summary and empty assistant message. The mobile client can terminate its pending indicator without displaying the internal sentinel.
+
+MQTT treats every final Harness response as terminal regardless of wording; handoff suppression is handled by the shared agent handler using the exact run ID.

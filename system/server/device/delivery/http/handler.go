@@ -395,9 +395,11 @@ func (h *DeviceHandler) GetRealtimeOptions(c *gin.Context) {
 //	@Router	/device/agent-runtime [get]
 func (h *DeviceHandler) GetAgentRuntime(c *gin.Context) {
 	c.JSON(http.StatusOK, serializers.ResponseSuccess(domain.AgentRuntimeStatus{
-		Current: h.service.CurrentAgentRuntime(),
-		Options: domain.AgentRuntimes,
-		Ready:   h.service.AgentReady(),
+		Current:     h.service.CurrentAgentRuntime(),
+		Options:     domain.AgentRuntimes,
+		Ready:       h.service.AgentReady(),
+		RemoteURL:   h.config.AgentRemoteURL,
+		RemoteToken: h.config.AgentRemoteToken,
 	}))
 }
 
@@ -422,6 +424,43 @@ func (h *DeviceHandler) SetAgentRuntime(c *gin.Context) {
 	if !domain.IsValidAgentRuntime(req.Runtime) {
 		c.JSON(http.StatusBadRequest, serializers.ResponseError(
 			fmt.Sprintf("invalid runtime %q (want %s)", req.Runtime, strings.Join(domain.AgentRuntimes, "|"))))
+		return
+	}
+	// Phase B: "remote" is Hermes-over-LAN. It reuses the Hermes runtime with an
+	// external BaseURL/APIKey, so there is no separate install.sh and no
+	// systemd unit to swap — persist the target + endpoint, restart os-server
+	// in the background, and let factory.go re-resolve to the retargeted
+	// Hermes client. The previously-active backend's systemd unit stays
+	// running (idle) until the next full switch — a small overhead the demo
+	// tolerates; wiring switch-runtime to stop it cleanly can wait.
+	if strings.ToLower(strings.TrimSpace(req.Runtime)) == domain.AgentRuntimeRemote {
+		url := strings.TrimSpace(req.URL)
+		if url == "" {
+			c.JSON(http.StatusBadRequest, serializers.ResponseError("remote gateway URL is required"))
+			return
+		}
+		if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+			c.JSON(http.StatusBadRequest, serializers.ResponseError("remote gateway URL must start with http:// or https://"))
+			return
+		}
+		token := strings.TrimSpace(req.Token)
+		if err := h.config.WithLockSave(func(cfg *config.Config) {
+			cfg.AgentRemoteURL = url
+			cfg.AgentRemoteToken = token
+			cfg.AgentRuntime = domain.AgentRuntimeRemote
+		}); err != nil {
+			c.JSON(http.StatusInternalServerError, serializers.ResponseError(err.Error()))
+			return
+		}
+		// Restart os-server in the background so this HTTP response reaches the
+		// client before the process exits. Same pattern the regular runtime
+		// switch uses after switch-runtime lands.
+		go func() {
+			if rerr := h.service.RestartForAgentRuntime(); rerr != nil {
+				slog.Error("agent-runtime os-server restart failed (remote)", "component", "device-http", "error", rerr)
+			}
+		}()
+		c.JSON(http.StatusOK, serializers.ResponseSuccess(true))
 		return
 	}
 	run, err := h.service.ReserveAgentRuntimeSwitchReady(req)

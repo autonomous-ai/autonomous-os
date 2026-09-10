@@ -207,6 +207,16 @@ type Config struct {
 	// AgentRuntime selects which agentic backend to use: "openclaw" (default), "hermes", "picoclaw", "claudecode", etc.
 	AgentRuntime string `json:"agent_runtime" yaml:"agentRuntime"`
 
+	// AgentRemoteURL + AgentRemoteToken configure the "remote" runtime — the
+	// device becomes a voice/chat frontend for a gateway on another machine
+	// (typically the user's Mac). They are only meaningful when AgentRuntime
+	// == "remote". Phase A: the fields are persisted through the settings UI
+	// but no gateway consumes them yet — factory.go still resolves to the
+	// installed runtime, so setting these two by themselves does not change
+	// runtime behavior.
+	AgentRemoteURL   string `json:"agent_remote_url,omitempty" yaml:"agentRemoteURL"`
+	AgentRemoteToken string `json:"agent_remote_token,omitempty" yaml:"agentRemoteToken"`
+
 	// Realtime configures the realtime voice agent (audio-native brain — Gemini
 	// Live / OpenAI Realtime). Sibling selector to AgentRuntime: AgentRuntime picks
 	// the turn-based text brain, Realtime picks the live-audio brain. Grouped under

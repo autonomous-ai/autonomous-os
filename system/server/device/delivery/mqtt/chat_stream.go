@@ -15,6 +15,14 @@ import (
 	"go.autonomous.ai/os/system/server/config"
 )
 
+func isSilentReply(evt domain.MonitorEvent) bool {
+	if evt.Type != "chat_response" {
+		return false
+	}
+	s := strings.TrimSpace(strings.ToLower(evt.Summary))
+	return s == "no_reply" || s == "[no reply]"
+}
+
 // Streaming an agent turn back to the backend over MQTT.
 //
 // The web chat renders a turn from the monitor bus (GET /api/agent/events):
@@ -212,6 +220,16 @@ func (s *ChatStream) handle(evt domain.MonitorEvent) {
 		delete(s.runs, evt.RunID)
 	}
 	s.mu.Unlock()
+	// A silent final still terminates the mobile request. Suppress the sentinel,
+	// not the terminal event, so the client can stop its pending indicator.
+	if isSilentReply(evt) {
+		if terminal {
+			evt.Summary = ""
+			evt.Detail = map[string]string{"role": "assistant", "message": ""}
+			s.send(evt.RunID, sessionID, evt)
+		}
+		return
+	}
 
 	// Pending text goes out first: a tool chip that overtook the sentence it
 	// followed would render out of order on the phone.

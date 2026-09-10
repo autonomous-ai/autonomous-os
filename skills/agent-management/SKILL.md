@@ -1,9 +1,14 @@
 ---
 name: agent-management
-description: Send spoken tasks and follow-ups to coding or research agents in the user's paired Autonomous Buddy desktop. Select the open project/worktree or focused Codex/Claude session, retain that session across voice turns, inspect progress/results, stop work, and handle agent-management notifications. This manages desktop CLI sessions; clicking apps and screenshots use computer-use.
+description: Legacy Autonomous Buddy control for explicitly requested Buddy coding sessions. When the user asks a coding or research agent on their paired Harness computer to work, use harness-use instead. This manages explicit Buddy desktop CLI sessions; clicking apps and screenshots use computer-use.
 ---
 
 # Agent management
+
+Use this only when the user explicitly asks to use Autonomous Buddy, a Buddy
+session, or its selected desktop pane. For ordinary requests to ask an agent on
+the paired Mac to perform work, including research, use `harness-use`; do not
+require a Buddy pairing as a fallback.
 
 Run `python3 scripts/buddy_agents.py` from this skill directory **on the Autonomous device**. The localhost API is the device API, not the Mac. Never start the coding CLI or edit the desktop project's files on the lamp. Buddy owns the terminal PTY, worktree and provider conversation; Swift relays the paired WebSocket.
 
