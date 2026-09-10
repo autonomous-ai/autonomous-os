@@ -353,9 +353,9 @@ Ordinary chat is untouched: the body stays still through listening and thinking 
 something.
 
 **The body is owned for the whole look.** From the moment the aim starts until the shutter closes,
-`servo_ownership()` sets the same `_tracking_active` lock the vision tracker uses, which suppresses
-**all** emotion servo animation (`routes/emotion.py`) and makes the animation loop drop any recording
-in progress.
+`servo_ownership()` takes a refcounted slot in the same `_tracking_active` lock the vision tracker
+uses, which suppresses **all** emotion servo animation (`routes/emotion.py`) and makes the animation
+loop drop any recording in progress.
 
 This is not optional polish. Emotion presets play **recorded** poses that are absolute on every
 joint — including `wrist_roll` — so one arriving between the aim and the capture re-poses the head
@@ -363,8 +363,19 @@ entirely, and the frame shows wherever the animation parked it rather than the u
 reaction landing mid-question is enough to capture the ceiling. `nudge()` preempts an animation that
 is already playing, but not one dispatched afterwards, which is exactly the window the capture sits in.
 
-The previous lock value is restored rather than cleared, so a look never ends a genuine
-object-tracking session that was already running.
+**Ownership is refcounted, not saved and restored.** `servo_ownership()` calls
+`acquire_body()` on entry and `release_body()` on exit, so it releases only its own hold and a look
+never ends a genuine object-tracking session that was already running. It used to save the previous
+value and write it back, which lost the update whenever two of the six call sites overlapped — and
+they run on three different threads (the gaze watcher, the realtime `look` tool, the sweep). The
+owner that exited last re-asserted a stale `True`, wedging the lock with nobody holding it and
+silently suppressing every emotion animation and all of gaze until a face-track session happened to
+clear it (#312). `acquire_body`/`release_body` are part of the `MotionService` contract
+(`hal/drivers/motors/base.py`), so every body answers for ownership the same way.
+
+A wedge can no longer outlive its cause either: the flag set with no writer is an impossible state,
+so `AnimationService` times it and self-clears after 30 s with an `ERROR` line
+(`hal/drivers/motors/tracking_wedge.py`).
 
 **Why the centring loop is yaw only.** The yaw sign is copied from the tracker's empirically
 verified convention (`dx>0` → `base_yaw` increases). `AnimationService.nudge()` drives `base_pitch`,
