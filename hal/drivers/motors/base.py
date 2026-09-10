@@ -68,6 +68,34 @@ class MotionService(Protocol):
     @property
     def is_frozen(self) -> bool: ...
 
+    # --- Body ownership ---
+    #
+    # The lock that says "somebody else is driving the joints, keep off": the
+    # vision tracker, a look aim + capture, a search sweep. routes/emotion.py
+    # refuses ALL emotion servo while it is held and gaze declines to correct,
+    # because those play RECORDED poses that are absolute on every joint and
+    # would re-pose the head out from under whoever is aiming.
+    #
+    # Refcounted, because owners overlap: `aim.servo_ownership()` is entered
+    # from three different threads and a tracking session's follower holds it
+    # for as long as that thread writes the bus. Each acquire needs exactly one
+    # release, and the body is owned until the last one lets go. It used to be a
+    # save-and-restore of a shared bool, which lost the update whenever two
+    # owners overlapped and wedged the lock with nobody holding it (#312).
+    #
+    # Part of the contract rather than a feetech detail: every driver is subject
+    # to the same routes. This surface used to exist only on AnimationService,
+    # and callers reached it by assigning `_tracking_active` — which silently
+    # created the attribute on drivers that had never heard of it.
+
+    def acquire_body(self) -> None:
+        """Claim the body. Re-entrant by count; pair with release_body()."""
+        ...
+
+    def release_body(self) -> None:
+        """Give up one claim. Never drops below zero."""
+        ...
+
     # --- Motion primitives ---
 
     def move_to(self, target_positions: Dict[str, float], duration: float = 2.0) -> None: ...

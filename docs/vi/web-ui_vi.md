@@ -532,8 +532,8 @@ Giao diện chat tương tác với agent. Layout: sidebar (danh sách hội tho
   entry mà message không còn tồn tại. Xóa hội thoại (hoặc Clear/history-TTL)
   cũng xóa luôn ảnh đã lưu.
 - Sidebar: tìm kiếm, ghim, đổi tên (double-click), xóa (xác nhận 2 lần), xuất TXT
-- Nhóm theo ngày: Today / Yesterday / This week / Older, ghim lên đầu. Mỗi header nhóm có đường kẻ mảnh và số lượng item.
-- Mỗi dòng hiển thị một chấm avatar màu (hash từ id hội thoại, theo palette), tiêu đề, nhãn thời gian tương đối đã bản địa hóa (`vừa xong` / `5 phút` / `2 giờ` / `hôm qua` / `3 ngày`, ẩn khi hover), và preview tin nhắn cuối. Hội thoại đang mở được đánh dấu bằng thanh dọc amber bên trái.
+- Nhóm và sắp xếp theo **hoạt động tin nhắn gần nhất**: Today / Yesterday / This week / Older, ghim lên đầu. Mỗi header nhóm có đường kẻ mảnh và số lượng item. Chính thứ tự này cũng dùng khi giữ 50 hội thoại local, nên một thread cũ nhưng đang hoạt động không bị đẩy ra trước một thread mới nhưng không dùng.
+- Mỗi dòng hiển thị một chấm avatar màu (hash từ id hội thoại, theo palette), tiêu đề, nhãn thời gian tương đối đã bản địa hóa cho hoạt động mới nhất (`vừa xong` / `5 phút` / `2 giờ` / `hôm qua` / `3 ngày`, ẩn khi hover), và preview tin nhắn cuối. Hội thoại đang mở được đánh dấu bằng thanh dọc amber bên trái. Tìm kiếm hiện số kết quả; Escape hoặc nút xóa sẽ đưa ô tìm kiếm về trống.
 - Phím tắt: Cmd/Ctrl+N tạo chat mới
 - Sidebar thu gọn được
 

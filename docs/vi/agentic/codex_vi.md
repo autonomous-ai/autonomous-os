@@ -644,6 +644,9 @@ ID đó trên event của turn. Message tương thích nhắm thread active dùn
 fan-out an toàn, không phát lại marker phần cứng. Follow-up nội bộ có thể kết
 thúc ngay. Việc này ngăn follow-up đã gộp giữ lại pending run ma và làm kẹt busy
 state. Control frame (`pong`, `bridge.status`) độc lập.
+History sync `voice_agent_handled` từ realtime cũng steer khi Codex đang active:
+tầng voice đã nói rồi nên trace im lặng kết thúc ngay theo xác nhận, thay vì xếp
+hàng sau task đang chạy.
 Nếu restart gateway để lại thread ID đã lưu nhưng App Server mới không còn biết,
 gatewayd sẽ xoá session cũ đó và thử lại chính turn ấy một lần trên thread mới.
 
@@ -652,3 +655,8 @@ Adapter giữ đối chiếu request/run cho event terminal và từ chối stee
 không thể steer: message kế tiếp đi theo đường start/resume bình thường. Queue
 ở tầng OS vẫn tồn tại vì an toàn và giao nhận, gồm sensing thụ động và lúc loa
 đang bận; steering không phải cơ chế cancellation hay interruption tổng quát.
+
+Nếu bridge đang kết nối bị rớt khi turn còn active, client phát lifecycle error
+có tương quan (`codex gateway restarted; turn cancelled`) trước khi xoá tương
+quan cục bộ. Nhờ vậy Monitor và web chat không hiện turn active vĩnh viễn; task
+không tự gửi lại vì có thể đã tạo side effect.

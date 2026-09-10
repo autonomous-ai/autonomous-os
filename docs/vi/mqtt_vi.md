@@ -480,6 +480,14 @@ với script Node wrapper được ghi ra đĩa trước khi ghi entry. Code c�
 bị loại (`reserved`) khỏi vòng quét refresh của writer chung để nó không ghi đè chúng
 ở dạng sai (HTTP).
 
+**Hết hạn:** `expires_in` (số giây kể từ bây giờ) được lưu thành `expires_at` tuyệt
+đối. Credential không bao giờ hết hạn — app password hoặc API key tĩnh
+(`auth_type:"pat"`, hoặc payload có `api_key` mà không có `access_token`) — được lưu
+`expires_at: 0` khi backend không gửi thông tin hết hạn, thay vì mặc định 1 giờ của
+OAuth. Không có gì xoay vòng loại credential này (loop refresh bỏ qua
+`expires_at == 0`), nên một hạn dùng bịa ra sẽ khiến nó bị coi là hết hạn vĩnh viễn
+sau một tiếng kể từ lúc lưu.
+
 **Refresh:** loop refresh quét writer chung (glob `*_access_tokens.json`) cùng từng
 writer đặc biệt, và chủ động xoay vòng entry nào có CẢ `refresh_token` LẪN
 `refresh:true` (backend sở hữu quyền quyết định refresh qua cờ `refresh`) khi còn dưới

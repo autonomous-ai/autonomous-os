@@ -548,8 +548,8 @@ Interactive chat interface for communicating with the agent. Layout: sidebar (co
   Deleting a conversation (or Clear/history-TTL) also deletes its stored
   images.
 - Sidebar with search, pin, rename (double-click), delete (double-click confirm), export as TXT
-- Grouped by date: Today / Yesterday / This week / Older, pinned at top. Each group header shows a hairline divider and an item count.
-- Each row shows a deterministic on-palette avatar dot (hashed from the conversation id), the title, a localized relative timestamp (`now` / `5m` / `2h` / `yesterday` / `3d`, hidden on hover), and a last-message preview. The active conversation is marked with an amber left rail.
+- Grouped and sorted by **most recent message activity**: Today / Yesterday / This week / Older, pinned at top. Each group header shows a hairline divider and an item count. The same ordering is used when retaining the 50 local conversations, so an active older thread is not evicted before an idle newer one.
+- Each row shows a deterministic on-palette avatar dot (hashed from the conversation id), the title, a localized relative timestamp for its latest activity (`now` / `5m` / `2h` / `yesterday` / `3d`, hidden on hover), and a last-message preview. The active conversation is marked with an amber left rail. Search displays its result count, and Escape or the clear button resets it.
 - Keyboard shortcut: Cmd/Ctrl+N for new chat
 - Collapsible sidebar
 

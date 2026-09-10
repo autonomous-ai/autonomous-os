@@ -29,6 +29,21 @@ func (g *busyGateway) QueuePendingEvent(eventType, msg string, images []string, 
 	g.queued++
 }
 
+type steeringBusyGateway struct {
+	busyGateway
+	sent       int
+	silentRuns int
+}
+
+func (g *steeringBusyGateway) SupportsActiveTurnSteering() bool { return true }
+func (g *steeringBusyGateway) IsReady() bool                    { return true }
+func (g *steeringBusyGateway) NextChatRunID() (string, string)  { return "req-handled", "run-handled" }
+func (g *steeringBusyGateway) MarkSilentRun(string)             { g.silentRuns++ }
+func (g *steeringBusyGateway) SendChatMessageWithRun(string, string, string) (string, error) {
+	g.sent++
+	return "run-handled", nil
+}
+
 func postRealtimeHandled(t *testing.T, h *SensingHandler) *httptest.ResponseRecorder {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
@@ -59,6 +74,23 @@ func TestRealtimeHandledHookFiresEvenWhenTheAgentIsBusy(t *testing.T) {
 	}
 	if gw.queued != 1 {
 		t.Errorf("the sync event itself must still be queued for replay, queued=%d", gw.queued)
+	}
+}
+
+func TestRealtimeHandledSteersInsteadOfQueuingBehindCodex(t *testing.T) {
+	gw := &steeringBusyGateway{}
+	h := &SensingHandler{agentGateway: gw, monitorBus: monitor.ProvideBus(), config: &config.Config{}}
+
+	rec := postRealtimeHandled(t, h)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if gw.queued != 0 {
+		t.Fatalf("realtime history sync must steer, not queue; queued=%d", gw.queued)
+	}
+	if gw.sent != 1 || gw.silentRuns != 1 {
+		t.Fatalf("expected one silent steered sync, sent=%d silent=%d", gw.sent, gw.silentRuns)
 	}
 }
 

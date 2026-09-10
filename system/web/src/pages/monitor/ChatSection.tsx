@@ -562,9 +562,21 @@ function titleFromMessages(msgs: ChatMessage[]): string {
   return userMsg.text.length > 36 ? userMsg.text.slice(0, 36) + "…" : userMsg.text;
 }
 
+// A conversation should follow the last message, not the moment it was first
+// created. Besides matching what people expect from a chat inbox, this keeps
+// active threads at the front when the local cache reaches its size limit.
+function conversationActivityAt(convo: Conversation): number {
+  const lastMessage = convo.messages[convo.messages.length - 1];
+  return lastMessage?.ts ?? convo.createdAt;
+}
+
+function newestFirst(convos: Conversation[]): Conversation[] {
+  return [...convos].sort((a, b) => conversationActivityAt(b) - conversationActivityAt(a));
+}
+
 function saveConvos(convos: Conversation[]) {
   try {
-    const trimmed = convos.slice(0, MAX_CONVOS).map((c) => ({
+    const trimmed = newestFirst(convos).slice(0, MAX_CONVOS).map((c) => ({
       ...c,
       // Strip large data from localStorage (imageUrls data: URLs are too large).
       // The images themselves live in IndexedDB (chatImageStore) keyed by
@@ -1862,22 +1874,45 @@ export function ChatSection({ events, isActive }: Props) {
           >
             <Plus size={14} /> New chat
           </button>
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search chats…"
-            style={{
-              width: "100%", padding: "7px 10px", borderRadius: 6,
-              background: "var(--lm-surface)", border: "1px solid var(--lm-border)",
-              color: "var(--lm-text)", fontSize: 11.5, outline: "none",
-              boxSizing: "border-box",
-            }}
-          />
+          <div style={{ position: "relative" }}>
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Escape") setSearch(""); }}
+              placeholder="Search chats…"
+              aria-label="Search chat history"
+              style={{
+                width: "100%", padding: search ? "7px 30px 7px 10px" : "7px 10px", borderRadius: 6,
+                background: "var(--lm-surface)", border: "1px solid var(--lm-border)",
+                color: "var(--lm-text)", fontSize: 11.5, outline: "none",
+                boxSizing: "border-box",
+              }}
+            />
+            {search && (
+              <button
+                type="button"
+                onClick={() => setSearch("")}
+                title="Clear search"
+                aria-label="Clear chat history search"
+                style={{
+                  position: "absolute", right: 5, top: "50%", transform: "translateY(-50%)",
+                  width: 21, height: 21, padding: 0, border: "none", borderRadius: 4,
+                  background: "transparent", color: "var(--lm-text-muted)", cursor: "pointer",
+                  display: "inline-flex", alignItems: "center", justifyContent: "center",
+                }}
+              ><X size={12} /></button>
+            )}
+          </div>
         </div>
         <div style={{ flex: 1, overflowY: "auto", padding: "6px 10px 12px" }}>
           {filtered.length === 0 && (
             <div style={{ padding: 16, textAlign: "center", color: "var(--lm-text-muted)", fontSize: 11 }}>
               {search ? "No matches" : "No conversations yet"}
+            </div>
+          )}
+          {search && filtered.length > 0 && (
+            <div style={{ padding: "7px 6px 3px", color: "var(--lm-text-muted)", fontSize: 10.5 }}>
+              {filtered.length} {filtered.length === 1 ? "conversation" : "conversations"}
             </div>
           )}
           {grouped.map(({ label, items }) => (
@@ -1989,7 +2024,7 @@ export function ChatSection({ events, isActive }: Props) {
                               flexShrink: 0, fontSize: 9.5, fontWeight: 500,
                               color: "var(--lm-text-muted)",
                               paddingRight: c.pinned ? 12 : 0,
-                            }}>{relativeTime(c.createdAt, nowTs, t)}</span>
+                            }}>{relativeTime(conversationActivityAt(c), nowTs, t)}</span>
                           )}
                         </div>
                       )}
@@ -2923,8 +2958,8 @@ function groupConvosByDate(convos: Conversation[]): { label: string; items: Conv
   const weekAgo = today - 7 * 86400_000;
 
   // Pinned first
-  const pinned = convos.filter((c) => c.pinned);
-  const unpinned = convos.filter((c) => !c.pinned);
+  const pinned = newestFirst(convos.filter((c) => c.pinned));
+  const unpinned = newestFirst(convos.filter((c) => !c.pinned));
 
   const groups: Record<string, Conversation[]> = {};
   const order: string[] = [];
@@ -2936,9 +2971,10 @@ function groupConvosByDate(convos: Conversation[]): { label: string; items: Conv
 
   for (const c of unpinned) {
     let label: string;
-    if (c.createdAt >= today) label = "Today";
-    else if (c.createdAt >= yesterday) label = "Yesterday";
-    else if (c.createdAt >= weekAgo) label = "This week";
+    const activityAt = conversationActivityAt(c);
+    if (activityAt >= today) label = "Today";
+    else if (activityAt >= yesterday) label = "Yesterday";
+    else if (activityAt >= weekAgo) label = "This week";
     else label = "Older";
 
     if (!groups[label]) { groups[label] = []; order.push(label); }
