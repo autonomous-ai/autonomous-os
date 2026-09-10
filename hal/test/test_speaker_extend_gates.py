@@ -32,7 +32,7 @@ def spy(recognizer, monkeypatch):
     written = []
     monkeypatch.setattr(
         recognizer, "_write_extended_sample",
-        lambda norm, wav, emb: written.append(norm) or None,
+        lambda norm, wav, emb, **kw: written.append(norm) or None,
     )
     return written
 
@@ -187,3 +187,26 @@ def test_a_user_with_no_anchor_rows_does_not_extend(recognizer, spy):
     # for itself. Better to stop growing than to grow unanchored.
     _extend(recognizer, anchor_cos=float("-inf"))
     assert spy == [], "no anchor evidence means no extend"
+
+
+def test_an_admitted_sample_records_why_it_was_admitted(recognizer, tmp_path):
+    path = recognizer._write_extended_sample(
+        "leo", b"RIFFfake", np.ones(8, dtype=np.float32),
+        provenance={"min_chunk_cos": 0.61, "anchor_cos": 0.72},
+    )
+    assert path is not None
+    import json
+    meta = json.loads(path.with_suffix(".json").read_text())
+    assert meta["min_chunk_cos"] == 0.61
+    assert meta["anchor_cos"] == 0.72
+
+
+def test_deleting_a_sample_removes_its_provenance_too(recognizer):
+    path = recognizer._write_extended_sample(
+        "leo", b"RIFFfake", np.ones(8, dtype=np.float32),
+        provenance={"anchor_cos": 0.72},
+    )
+    assert path is not None and path.with_suffix(".json").is_file()
+    recognizer._delete_sample(path)
+    assert not path.is_file(), "the wav must go"
+    assert not path.with_suffix(".json").is_file(), "and so must its provenance"

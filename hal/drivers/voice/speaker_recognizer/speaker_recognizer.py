@@ -1966,21 +1966,35 @@ class SpeakerRecognizer:
 
     @staticmethod
     def _delete_sample(wav_path: Path) -> None:
-        """Delete a sample WAV and its sidecar (best-effort, never raises)."""
+        """Delete a sample WAV and its sidecars (best-effort, never raises).
+
+        The provenance ``.json`` goes with them: it only ever describes THIS
+        sample, so leaving it behind would attribute an evicted sample's
+        admission record to whatever later reuses the name.
+        """
         try:
             wav_path.unlink(missing_ok=True)
             _sidecar_path(wav_path).unlink(missing_ok=True)
+            wav_path.with_suffix(".json").unlink(missing_ok=True)
         except OSError as e:
             logger.warning("failed to delete sample %s: %s", wav_path, e)
 
     def _write_extended_sample(
-        self, norm: str, wav_bytes: bytes, embedding: np.ndarray
+        self, norm: str, wav_bytes: bytes, embedding: np.ndarray,
+        provenance: Optional[dict[str, Any]] = None,
     ) -> Optional[Path]:
         """Persist one extended sample (WAV + sidecar). Returns its path or None.
 
         The sidecar is written after the WAV, and a sample only counts as
         present once both exist — a half-written pair is simply invisible to
         the bank loader rather than corrupting it.
+
+        ``provenance`` (when given) records WHY this sample was admitted and
+        under which thresholds, as a ``.json`` beside the pair. Nothing reads
+        it at runtime — it exists so a later threshold change can ask which
+        samples the previous rule let in, which is impossible for everything
+        written before it. The enroll path passes none: those samples are
+        committed on the user's own say-so, not by these gates.
         """
         try:
             dest = self._extended_dir(norm)
@@ -1992,6 +2006,18 @@ class SpeakerRecognizer:
             wav_path = dest / f"{stem}.wav"
             wav_path.write_bytes(wav_bytes)
             np.save(_sidecar_path(wav_path), _l2(embedding))
+            if provenance:
+                # Written last and best-effort: the WAV + .npy pair is what
+                # the bank loads, so a missing or unwritable .json must never
+                # make a valid sample invisible.
+                try:
+                    wav_path.with_suffix(".json").write_text(
+                        json.dumps(provenance, sort_keys=True)
+                    )
+                except OSError as e:
+                    logger.warning(
+                        "failed to write provenance for %s: %s", wav_path.name, e
+                    )
             return wav_path
         except OSError as e:
             logger.warning("failed to write extended sample for %s: %s", norm, e)
@@ -2143,7 +2169,26 @@ class SpeakerRecognizer:
         else:
             max_sim = float("nan")
 
-        path = self._write_extended_sample(norm, wav_bytes, embedding)
+        path = self._write_extended_sample(
+            norm, wav_bytes, embedding,
+            provenance={
+                "duration_s": duration_s,
+                "margin": margin,
+                "chunk_votes": chunk_votes,
+                "num_chunks": num_chunks,
+                "min_chunk_cos": min_chunk_cos,
+                "anchor_cos": anchor_cos,
+                "max_sim_to_existing": None if max_sim != max_sim else max_sim,
+                "thresholds": {
+                    "match_cos": self._match_threshold,
+                    "diversity_cos": _DIVERSITY_COS,
+                    "min_chunk_cos": _EXTEND_MIN_CHUNK_COS,
+                    "min_anchor_cos": _EXTEND_MIN_ANCHOR_COS,
+                    "min_duration_s": _EXTEND_MIN_DURATION_S,
+                    "min_margin_cos": _EXTEND_MIN_MARGIN_COS,
+                },
+            },
+        )
         if path is None:
             return
         dropped = self._prune_extended(norm)
