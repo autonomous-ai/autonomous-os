@@ -200,11 +200,20 @@ func (s *Server) registerHarnessReply(agentID, runID string, webChat bool) {
 }
 
 func (s *Server) forgetHarnessReply(agentID, runID string) {
+	s.takeHarnessReply(agentID, runID)
+}
+
+// takeHarnessReply removes one exact route and reports whether this caller won
+// the route. A turn.summary and the turn.done recap fallback may race; only one
+// of them may publish a final result for the original device turn.
+func (s *Server) takeHarnessReply(agentID, runID string) bool {
 	s.harnessRepliesMu.Lock()
+	defer s.harnessRepliesMu.Unlock()
 	if current, ok := s.harnessReplies[runID]; ok && current.agentID == agentID {
 		delete(s.harnessReplies, runID)
+		return true
 	}
-	s.harnessRepliesMu.Unlock()
+	return false
 }
 
 // HarnessVoiceFollowup keeps short spoken clarifications with the paired agent.
@@ -308,6 +317,15 @@ func (s *Server) forwardHarnessEvent(frame harness.Frame) {
 	}
 	if !terminal {
 		s.agentHandler.DeliverHarnessProgress(reply.runID, text)
+		if kind == "turn.done" {
+			// Current Harness clients normally send turn.summary immediately after
+			// turn.done. Some long-running Codex turns persist the recap but omit
+			// that callback. Give the normal callback a short head start, then read
+			// the completed turn's recap only while this exact device route remains
+			// pending. This is never a poll after send: turn.done is the terminal
+			// lifecycle signal from Harness.
+			s.recoverHarnessDoneRecap(agentID, reply)
+		}
 		return
 	}
 	if kind == "turn.summary" {
@@ -322,10 +340,53 @@ func (s *Server) forwardHarnessEvent(frame harness.Frame) {
 	}
 	// Recap is fetched outside the lock. Do not delete a newer response route
 	// registered while that request was in flight.
-	s.forgetHarnessReply(agentID, reply.runID)
+	s.deliverHarnessFinal(agentID, reply.runID, text)
+}
+
+const (
+	harnessDoneRecapDelay = 1500 * time.Millisecond
+	harnessDoneRecapTries = 2
+)
+
+// recoverHarnessDoneRecap closes the compatibility gap for Harness clients
+// which have committed a finished turn but do not emit its turn.summary event.
+func (s *Server) recoverHarnessDoneRecap(agentID string, reply harnessReply) {
+	if s.harnessService == nil || agentID == "" || reply.runID == "" {
+		return
+	}
+	go func() {
+		for attempt := 0; attempt < harnessDoneRecapTries; attempt++ {
+			time.Sleep(harnessDoneRecapDelay)
+			if !s.hasHarnessReply(agentID, reply.runID) {
+				return
+			}
+			if text := s.harnessRecapText(agentID, ""); text != "" {
+				s.deliverHarnessFinal(agentID, reply.runID, text)
+				return
+			}
+		}
+		slog.Warn("Harness done without summary or recap", "component", "harness", "run_id", reply.runID, "agent_id", agentID)
+	}()
+}
+
+func (s *Server) hasHarnessReply(agentID, runID string) bool {
+	s.harnessRepliesMu.Lock()
+	defer s.harnessRepliesMu.Unlock()
+	reply, ok := s.harnessReplies[runID]
+	return ok && reply.agentID == agentID
+}
+
+func (s *Server) deliverHarnessFinal(agentID, runID, text string) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return
+	}
+	if !s.takeHarnessReply(agentID, runID) {
+		return
+	}
 	s.rememberHarnessResult(text)
-	if !s.agentHandler.DeliverHarnessResponse(reply.runID, text) {
-		slog.Warn("Harness result had no pending device turn", "component", "harness", "run_id", reply.runID)
+	if !s.agentHandler.DeliverHarnessResponse(runID, text) {
+		slog.Warn("Harness result had no pending device turn", "component", "harness", "run_id", runID)
 	}
 }
 
