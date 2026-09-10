@@ -499,7 +499,8 @@ blocks to this wrapper. Their previous outer 10 ms loop defeated the wrapper's
 batching and kept 100 device/AEC calls per second under vision load. Cached
 playback now uses 25 calls per second, plus a final partial block, and checks
 cancellation between blocks. This can add up to 30 ms to the interval between
-stop checks compared with the old loop; ALSA buffering itself is unchanged.
+stop checks compared with the old loop. This is not an acoustic stop bound:
+audio already queued in the output device can remain audible after a stop.
 
 Regular provider TTS (including ElevenLabs PCM at 24 kHz played at 44.1 kHz)
 uses continuous linear resampling across network PCM chunks within each
@@ -508,8 +509,33 @@ restarting interpolation at every chunk. Normal EOF flushes the held final
 sample to preserve `ceil(N * output_rate / input_rate)` output samples for `N`
 input samples; cancellation does not flush a tail. Head, tail, and queued
 synthesis requests each have independent resampling state. Native realtime
-resampling and whole-file cached WAV resampling are unchanged, as are ALSA
-buffering and latency.
+resampling and whole-file cached WAV resampling are unchanged.
+
+AEC reference resampling caches SciPy's default Kaiser FIR coefficients by
+reduced sample-rate ratio and dtype (up to 32 entries), avoiding filter design
+on every speaker write. `resample_poly` still performs its usual gain and
+padding; the reference waveform and FIFO pacing remain unchanged. Before the
+first speaker write of a playback, HAL prepares the reference filter so a cold
+SciPy import/filter design cannot stall playback after its first 40 ms. This
+preparation is skipped when AEC is inactive or sample rates match. Cancellation
+is checked between slices, including after preparation; a stop acknowledgement
+chime can still play while the speech stop flag is set.
+
+Playback stream creation requests `max(0.120s, default_high_output_latency)`
+and logs the actual negotiated latency. The previously observed device default
+of 43.5 ms barely covered one 40 ms write slice. The 120 ms request provides
+three slices of scheduling headroom while preserving larger defaults such as
+Bluetooth outputs; it is neither a guaranteed buffer size nor a fix for network
+jitter. More queued audio can extend the audible tail after cancellation.
+
+`_WatchedStream.write` combines PortAudio's underflow results across all slices.
+Mid-playback underflows are logged at most once every 5 seconds with a cumulative
+count, `writer_gap_ms`, and `previous_aec_ms`; playback boundaries (which may
+follow idle) are debug-only and
+keepalive writes are excluded. These output underflows report playback starvation,
+whereas an AEC reference underrun only reports missing cancellation-reference
+samples and does not establish a speaker underrun. These local playback changes
+still require listening verification on hardware.
 
 `aec.uncancelled()` reports whether the frame just read went through *without*
 real cancellation — reference underrun, bypassed stream, or mic overrun. Barge-in

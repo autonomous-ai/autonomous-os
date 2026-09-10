@@ -477,8 +477,9 @@ WAV cache (gồm lời xác nhận khi single-click) cũng ghi qua wrapper theo 
 40 ms. Vòng ngoài 10 ms trước đây làm mất tác dụng gom block của wrapper và
 vẫn chạy 100 lượt ghi loa/AEC mỗi giây khi vision đang tải. Nay phát cache dùng
 25 lượt mỗi giây, cộng block cuối nếu còn dư, và kiểm tra hủy giữa các block.
-Khoảng cách giữa hai lần kiểm tra stop có thể tăng tối đa 30 ms so với vòng cũ;
-buffering ALSA không đổi.
+Khoảng cách giữa hai lần kiểm tra stop có thể tăng tối đa 30 ms so với vòng cũ.
+Đây không phải giới hạn thời gian loa ngừng tiếng: audio đã xếp trong buffer
+thiết bị vẫn có thể còn phát sau khi stop.
 
 TTS thông thường qua provider (gồm ElevenLabs PCM 24 kHz phát ở 44.1 kHz)
 dùng nội suy tuyến tính liên tục qua các chunk PCM từ mạng trong từng yêu cầu
@@ -487,7 +488,32 @@ tổng hợp. Bộ resample giữ mẫu tại biên và clock mẫu thay vì b�
 `ceil(N * output_rate / input_rate)` mẫu đầu ra với `N` mẫu đầu vào; khi hủy thì
 không xuất phần đuôi này. Các yêu cầu tổng hợp phần đầu, phần đuôi và trong hàng
 đợi có trạng thái resample riêng. Resample native realtime và resample toàn
-file WAV cache không đổi; buffering và độ trễ ALSA cũng không đổi.
+file WAV cache không đổi.
+
+Resample tham chiếu AEC cache hệ số FIR Kaiser mặc định của SciPy theo tỉ lệ
+tần số lấy mẫu đã rút gọn và dtype (tối đa 32 mục), tránh thiết kế lại bộ lọc
+ở mỗi lần ghi loa. `resample_poly` vẫn xử lý gain và padding như trước; dạng
+sóng tham chiếu và nhịp ghi FIFO không đổi. Trước lần ghi loa đầu của mỗi lượt
+phát, HAL chuẩn bị bộ lọc tham chiếu để lần import SciPy/thiết kế bộ lọc đầu
+tiên không làm khựng sau 40 ms audio đầu. Bỏ qua chuẩn bị khi AEC chưa hoạt
+động hoặc sample rate bằng nhau. Kiểm tra hủy giữa các lát, kể cả sau chuẩn bị;
+chime xác nhận stop vẫn được phát khi cờ dừng lời nói đang bật.
+
+Khi mở stream phát, hệ thống yêu cầu `max(0.120s, default_high_output_latency)`
+và log độ trễ thực tế đã thương lượng. Mặc định 43.5 ms từng quan sát trên thiết
+bị chỉ nhỉnh hơn một lát ghi 40 ms. Yêu cầu 120 ms tạo khoảng dự phòng lập lịch
+bằng ba lát, đồng thời giữ mặc định lớn hơn của các đầu ra như Bluetooth; đây
+không phải bảo đảm kích thước buffer hay cách sửa jitter mạng. Audio xếp hàng
+nhiều hơn có thể kéo dài phần tiếng còn nghe sau khi hủy.
+
+`_WatchedStream.write` gộp các cờ underflow của PortAudio qua mọi lát ghi.
+Underflow giữa lúc phát được log tối đa một lần mỗi 5 giây với số lần tích lũy,
+`writer_gap_ms` và `previous_aec_ms`; ranh giới lượt phát (có thể sau idle) chỉ
+log debug, còn
+các lần ghi keepalive bị loại khỏi thống kê. Underflow đầu ra báo thiếu audio
+để phát; AEC reference underrun chỉ báo thiếu mẫu tham chiếu khử vọng và không
+chứng minh loa bị underrun. Các thay đổi phát audio cục bộ này vẫn cần được
+xác minh bằng nghe thử trên phần cứng.
 
 `aec.uncancelled()` cho biết khung vừa đọc có đi qua mà **không** được khử thật
 hay không — tham chiếu underrun, stream bị bypass, hoặc mic overrun. Barge-in
