@@ -153,6 +153,10 @@ Config field: `guard_mode` trong `config/config.json` (bool, mặc định `fals
 5. Describe-first gate ở trên CHỈ phủ ảnh đi vào lượt từ BÊN NGOÀI (đính kèm chat/Telegram, look-frame do realtime voice bàn giao). Ảnh agent tự chụp GIỮA LƯỢT bằng `/camera/snapshot` không đi qua gate đó — tool shell chỉ trả về `{"path": ...}`, model chính text-only không nhìn thấy gì. Cho đường này, skill `camera` gọi `POST /api/vision/look` (loopback-only, `system/server/vision.go`) thay vì gọi thẳng HAL: os-server tự chụp (`hal.Snapshot`, 768px/q75 chốt ở server) rồi trả `{"path": ..., "description": ...}`. Nhánh quyết định model có nhìn được ảnh hay không nằm Ở ĐÂY chứ không nằm trong skill — khi `vision.ModelSupportsVision` báo model chính tự đọc được ảnh thì BỎ QUA describe hoàn toàn (không gọi vision model, không mất 8-38 giây), chỉ trả `path` để agent tự mở. Describe lỗi thì trả 502 để agent nói thẳng là không nhìn được thay vì đoán bừa
 6. Run chat (`web_chat` / `mqtt_chat`) được mark qua `MarkWebChatRun(runID)` để SSE handler suppress TTS lúc lifecycle end — reply chỉ hiện trong UI chat (web SSE, hoặc stream MQTT `chat.event`).
 
+### Điều hướng đăng ký giọng chưa nhận diện
+
+Nhãn `Unknown Speaker:` là metadata định danh, không phải điều kiện để trả lời yêu cầu voice. HAL giữ transcript, đường dẫn WAV và cluster tag; hint enrollment của HAL và hướng dẫn `AppendEnrollNudge` chung ở OS đều có điều kiện. Chỉ dùng speaker skill khi tự giới thiệu rõ ràng, yêu cầu đăng ký/quản lý giọng hoặc trả lời tiếp luồng đăng ký đó. Yêu cầu thông thường không gọi speaker tool hay hỏi tên; fragment vô nghĩa vẫn theo quy tắc im lặng của thiết bị. Lịch sử cùng tag hỗ trợ enrollment có chủ đích, không tự khởi tạo enrollment. Không đổi ngưỡng nhận diện, yêu cầu audio hay API. Hướng dẫn này dùng chung xuyên runtime, không chỉ sửa riêng Codex.
+
 ### OpenClaw
 
 | Method | Endpoint | Mô tả |

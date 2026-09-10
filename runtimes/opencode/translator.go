@@ -152,13 +152,24 @@ func (s *OpenCodeService) captureUsage(f opencodeFrame) {
 	default:
 		return
 	}
-	in := tk.Input + tk.Cache.Read
+	// opencode reports Anthropic-style: `input` excludes the cached prefix, so
+	// the two add up to the context. Keep them in SEPARATE domain fields —
+	// folding cache read into InputTokens made a cache-hit turn read as if it
+	// had re-sent the whole context, and hid the R figure the Flow monitor
+	// turn card renders (TurnBadge.tsx).
+	in, cacheRead, cacheWrite := tk.Input, tk.Cache.Read, tk.Cache.Write
 	out := tk.Output
-	if in == 0 && out == 0 {
+	if in == 0 && cacheRead == 0 && out == 0 {
 		return
 	}
 	s.turnMu.Lock()
-	s.lastUsage = &domain.TokenUsage{InputTokens: in, OutputTokens: out, TotalTokens: in + out}
+	s.lastUsage = &domain.TokenUsage{
+		InputTokens:      in,
+		OutputTokens:     out,
+		CacheReadTokens:  cacheRead,
+		CacheWriteTokens: cacheWrite,
+		TotalTokens:      in + cacheRead + out,
+	}
 	s.turnMu.Unlock()
 }
 

@@ -102,7 +102,11 @@ func TestTranslateHappyTurn(t *testing.T) {
 	if chatFinal != "world" {
 		t.Fatalf("final chat text = %q, want %q", chatFinal, "world")
 	}
-	if lifecycleEndUsage == nil || lifecycleEndUsage.InputTokens != 12 || lifecycleEndUsage.OutputTokens != 5 {
+	// Cache read stays in its own field (Anthropic semantics) so the Flow
+	// monitor can render ↓fresh R<cache>; TotalTokens is the whole turn.
+	if lifecycleEndUsage == nil || lifecycleEndUsage.InputTokens != 10 ||
+		lifecycleEndUsage.CacheReadTokens != 2 || lifecycleEndUsage.OutputTokens != 5 ||
+		lifecycleEndUsage.TotalTokens != 17 {
 		t.Fatalf("usage not carried to lifecycle.end: %+v", lifecycleEndUsage)
 	}
 }
@@ -142,7 +146,8 @@ func TestTranslateDeviceShape(t *testing.T) {
 	if chatFinal != "OPENCODE_OK" {
 		t.Fatalf("reply not delivered from part.text: %q", chatFinal)
 	}
-	if usage == nil || usage.InputTokens != 14100 || usage.OutputTokens != 5 {
+	if usage == nil || usage.InputTokens != 14000 || usage.CacheReadTokens != 100 ||
+		usage.OutputTokens != 5 || usage.TotalTokens != 14105 {
 		t.Fatalf("usage not captured from step_finish.part.tokens: %+v", usage)
 	}
 }

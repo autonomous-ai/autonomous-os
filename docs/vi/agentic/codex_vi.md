@@ -362,9 +362,37 @@ không phải cuối mà mang marker `[HW:/…]` là hành động phần cứng
 giữ trong reply. Chỉnh prompt không chặn preamble một cách đáng tin — đây mới là
 chỗ cưỡng chế.
 
-**Usage:** `turn.completed` mang `{input_tokens, cached_input_tokens,
-output_tokens}`; translator map `input + cached → InputTokens` (xấp xỉ kích
-thước context sống), `output → OutputTokens`, `TotalTokens = in + out`.
+**Usage:** App Server KHÔNG đặt usage trên `turn/completed`. codex-rs 0.150.1
+đẩy nó trên một notification riêng, dạng camelCase, trước sự kiện kết thúc turn:
+
+```
+thread/tokenUsage/updated  {"threadId":…,"turnId":…,"tokenUsage":{
+   "total":{…tích luỹ cả thread…},
+   "last":{"totalTokens":…,"inputTokens":…,"cachedInputTokens":…,
+           "cacheWriteInputTokens":…,"outputTokens":…,"reasoningOutputTokens":…}}}
+```
+
+gatewayd giữ lại khối `last` (`storeAppUsage`), đổi camelCase về tên snake_case
+mà đường exec JSONL dùng, rồi gắn vào frame `turn.completed` — đúng chỗ
+translator đọc usage (`usageOf` vẫn nhận thêm khối `usage` nằm trên chính
+notification hoặc lồng trong `turn`, cho các bản codex khác). Trước khi có phần
+này, frame gửi ra là frame rỗng nên thẻ turn trong Flow Monitor **không hiện
+token nào cả**. `takeAppUsage` xoá chỗ giữ tạm, nên một turn không báo gì sẽ
+không thừa hưởng số của turn trước.
+
+Codex nói OpenAI Responses API, mà ở đó `input_tokens` **đã bao gồm**
+`cached_input_tokens`. Nên translator phải TRỪ: `input - cached → InputTokens`,
+`cached → CacheReadTokens`, `cache_write → CacheWriteTokens`,
+`output → OutputTokens`, `TotalTokens = fresh + cached + out` — đúng phép quy
+đổi mà `runtimes/hermes/translator.go` làm cho dạng chat/completions, để monitor
+hiển thị `↓fresh R<cache> Σtotal`. Rotation dùng `input_tokens` THÔ
+(`lastContextTokens`) vì đó chính là toàn bộ prompt, tức kích thước context
+sống; cộng thêm cached vào sẽ làm ngưỡng rotate giảm còn một nửa.
+
+> Ba wire khác nhau: `/responses` (codex) và `chat/completions` (hermes) gộp
+> phần cached VÀO `input_tokens`; `/messages` (claudecode, openclaw) và opencode
+> báo tách riêng. `domain.TokenUsage` theo cách tách của Anthropic, nên chỉ hai
+> loại đầu mới phải trừ.
 
 ## 4. Session
 
@@ -640,13 +668,20 @@ về chế độ api-key; việc chuyển đổi tự động ở lần presync 
 `message.send` mang request `id` và `run_id` gốc trên device. Gatewayd giữ các
 ID đó trên event của turn. Message tương thích nhắm thread active dùng
 `turn/steer` thay vì chờ phía sau. Trace device riêng nhận xác nhận
-`bridge.steered`. Web chat đã gộp chờ reply cuối của turn active; reply được
-fan-out an toàn, không phát lại marker phần cứng. Follow-up nội bộ có thể kết
-thúc ngay. Việc này ngăn follow-up đã gộp giữ lại pending run ma và làm kẹt busy
+`bridge.steered` và flow event `turn_merged` chứa `parent_run_id`. Yêu cầu voice
+và web chat đã gộp giữ active đến reply cuối hoặc lỗi chung, kể cả mất kết nối
+và timeout. Follow-up có tiếng mới nhất phát câu trả lời theo run ID và route
+Harness gốc; host và các voice input trước chặn TTS lặp. Marker phần cứng chạy
+một lần trên host và được bỏ khỏi reply con. Lifecycle đã gộp không thay hoặc
+xóa tracking phiên của host. Việc này ngăn follow-up đã gộp giữ pending run ma và làm kẹt busy
 state. Control frame (`pong`, `bridge.status`) độc lập.
 History sync `voice_agent_handled` từ realtime cũng steer khi Codex đang active:
 tầng voice đã nói rồi nên trace im lặng kết thúc ngay theo xác nhận, thay vì xếp
 hàng sau task đang chạy.
+Yêu cầu người dùng được steer giữ nguyên nội dung và địa chỉ phản hồi, thêm
+routing context ưu tiên chúng hơn sensing thụ động và hướng task cho agent trên
+máy tính qua `harness-use`. Không thêm context này vào đồng bộ lịch sử im lặng;
+đây là chỉ dẫn, không phải bằng chứng Harness đã nhận task.
 Nếu restart gateway để lại thread ID đã lưu nhưng App Server mới không còn biết,
 gatewayd sẽ xoá session cũ đó và thử lại chính turn ấy một lần trên thread mới.
 

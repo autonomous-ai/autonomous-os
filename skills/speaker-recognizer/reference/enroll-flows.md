@@ -6,7 +6,7 @@ Load this only when you actually need to enroll, recognize, or manage voices. Th
 
 Each mic turn has one of these prefixes:
 - `Speaker - <Name>:` → already identified, no action.
-- `Unknown Speaker: [voice:voice_N] <transcript> (audio save at <path> ...)` — Branch B, long enough, primed for enroll.
+- `Unknown Speaker: [voice:voice_N] <transcript> (audio save at <path> ...)` — Branch B, conditional enrollment guidance; not evidence of enrollment intent or sufficient audio for enrollment.
 - `Unknown Speaker: [voice:voice_N] <transcript> (audio saved at <path>. Note: audio is too short ...)` — Branch C, multi-turn hint.
 - `Unknown Speaker: [voice:voice_N] <transcript> (audio saved at <path>)` — cooldown variant, server still surfaces data.
 
@@ -29,17 +29,17 @@ Path + name + ≥25 words → `POST /speaker/enroll` with `wav_paths=[<that path
 
 ## Flow B — mic, multi-turn combine (same `[voice:voice_N]` tag)
 
-Primary path for real users who answer in short sentences. Works across cooldown variants.
+Use only after a clear self-introduction or while the user is replying to an active enrollment prompt. Same-tag history without this intent does not activate enrollment. Works across cooldown variants.
 
 1. Scan recent turns for `Unknown Speaker: [voice:voice_N] ... (audio save[d] at <pathX>...)` lines and collect every path whose `voice_N` matches the current turn's tag.
-2. Extract **name** — prefer current turn, else fall back to an earlier same-tag turn.
+2. Extract **name** from a clear self-introduction — prefer current turn, else an earlier self-introduction in this same-tag enrollment. A mentioned third-party or agent name is not the speaker's name.
 3. ≥2 paths + name → enroll once with `wav_paths=[<oldest>, ..., <newest>]` (oldest first).
 4. Only 1 path so far → ask one follow-up "tell me your name and a bit about yourself, ~25–30 words" and wait.
 5. After enroll, greet by name. Do NOT re-ask — subsequent turns return as `Speaker - Name:` once the embedding is built.
 
 ## Flow C — mic, two-turn
 
-1. Turn A was `Unknown Speaker: ... (audio save at <pathA>)` with no name OR <25 words.
+1. The user explicitly requested voice enrollment but omitted their name, or clearly introduced themselves with insufficient audio. An ordinary unknown-speaker request does not enter this flow.
 2. Ask one follow-up that requests name AND guides longer speech:
    - EN: "I didn't quite catch that — could you tell me your name and then say a bit more about yourself? About 25–30 words is perfect."
    - VI: "Mình chưa nghe rõ — bạn nói lại tên giúp mình nhé, rồi nói thêm vài câu giới thiệu bản thân hoặc đọc một đoạn văn bất kỳ, khoảng 25–30 từ là đủ."
@@ -48,7 +48,7 @@ Primary path for real users who answer in short sentences. Works across cooldown
 5. Call `POST /speaker/enroll` exactly once:
    - Turn A only missing name (audio long enough) → `wav_paths=[<pathA>, <pathB>]`.
    - Turn A too short → `wav_paths=[<pathB>]` only.
-6. Turn B still <25 words → apologise + ask once more; do NOT enroll on short audio.
+6. If combined same-tag audio is still insufficient, explain what is missing once; do NOT enroll on insufficient audio or keep prompting. If Turn B is an unrelated request, handle it instead of continuing enrollment.
 
 ## Flow D — Telegram voice note + intro
 

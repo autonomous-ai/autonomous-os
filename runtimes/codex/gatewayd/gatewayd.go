@@ -20,6 +20,7 @@ package gatewayd
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"net"
 	"net/http"
@@ -107,6 +108,10 @@ type Server struct {
 	appTurnTimedOut   bool
 	appOutputRejected bool
 	app               *appServer
+	// appUsage holds the newest thread/tokenUsage/updated block until the
+	// turn's terminal event attaches it (App Server reports usage on its own
+	// notification, never on turn/completed).
+	appUsage json.RawMessage
 
 	ops chan op // turns + session.new, strictly serialized by the single worker
 }

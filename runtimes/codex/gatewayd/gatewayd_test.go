@@ -62,6 +62,13 @@ func TestCodexAppServerFake(t *testing.T) {
 				time.Sleep(120 * time.Millisecond)
 				write(map[string]any{"method": "turn/started", "params": map[string]any{"threadId": "t123", "turn": map[string]any{"id": "turn-1"}}})
 				write(map[string]any{"method": "item/completed", "params": map[string]any{"threadId": "t123", "turnId": "turn-1", "item": map[string]any{"id": "m1", "type": "agentMessage", "text": "hello"}}})
+				// codex-rs 0.150.1 shape: usage arrives on its own camelCase
+				// notification BEFORE the terminal event, never inside it.
+				write(map[string]any{"method": "thread/tokenUsage/updated", "params": map[string]any{"threadId": "t123", "turnId": "turn-1",
+					"tokenUsage": map[string]any{
+						"total": map[string]any{"inputTokens": 99999, "cachedInputTokens": 88888, "outputTokens": 999},
+						"last":  map[string]any{"inputTokens": 723, "cachedInputTokens": 30720, "cacheWriteInputTokens": 0, "outputTokens": 31},
+					}}})
 				write(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": "t123", "turn": map[string]any{"id": "turn-1", "status": "completed"}}})
 			}()
 		case "turn/steer":
