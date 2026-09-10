@@ -320,10 +320,10 @@ HEAD_PAT_PHRASES_BY_LANG = {
 # HAL_BACKCHANNEL_FILLERS env override is also CSV — keeps both inputs
 # in the same shape.
 DEFAULT_FILLERS_BY_LANG = {
-    LANG_EN:    "Mm,Hmm,Uh-huh",
-    LANG_VI:    "Ừm,Ừ,Ờ",
-    LANG_ZH_CN: "嗯,呃,哦",
-    LANG_ZH_TW: "嗯,呃,哦",
+    LANG_EN:    "Uhm,Ok,Hmm,Yeah,Uh huh,Right,Sure,Mm,Ah,Oh",
+    LANG_VI:    "Ờ,Ừm,Dạ,Vâng,À,Hmm,Uhm,Ơ",
+    LANG_ZH_CN: "嗯,好,啊,是,嗯嗯,对,哦,呃",
+    LANG_ZH_TW: "嗯,好,啊,是,嗯嗯,對,哦,呃",
 }
 
 # --- Music pre-play backchannel pools ---
@@ -341,40 +341,131 @@ DEFAULT_FILLERS_BY_LANG = {
 #     which the OpenAI provider would speak aloud, hence two separate pools.
 
 MUSIC_BACKCHANNEL_PHRASES = [
-    "Mm.", "Hmm.", "Uh-huh.",
+    "On it!",
+    "Coming right up.",
+    "Got it.",
+    "Sure thing.",
+    "One sec.",
+    "Let me find it.",
+    "Looking it up.",
+    "Tuning in.",
+    "Spinning that up.",
+    "Music coming.",
+    "Nice pick.",
+    "Hmm, let me see.",
 ]
 
-# The provider-specific pool remains separate so ElevenLabs-only audio tags can
-# be introduced without exposing them to providers that would speak them aloud.
+# ElevenLabs eleven_v3 audio tags — index-aligned with the plain pool so the
+# no-repeat tracker works the same regardless of provider. Tags are inline
+# directives that v3 interprets as audio direction (not spoken). OpenAI
+# provider must NOT see these — its strip regex only whitelists a subset
+# (`tts_openai.py:_strip_audio_tags`), so unknown tags would be read aloud.
 MUSIC_BACKCHANNEL_PHRASES_ELEVENLABS = [
-    "Mm.", "Hmm.", "Uh-huh.",
+    "[excited] On it!",
+    "[excited] Coming right up.",
+    "Got it.",
+    "Sure thing.",
+    "One sec.",
+    "[curious] Let me find it.",
+    "[curious] Looking it up.",
+    "[excited] Tuning in.",
+    "[excited] Spinning that up.",
+    "[excited] Music coming.",
+    "Nice pick.",
+    "[curious] Hmm, let me see.",
 ]
 
 # Vietnamese (stt_language=LANG_VI).
 MUSIC_BACKCHANNEL_PHRASES_VI = [
-    "Ừm.", "Ừ.", "Ờ.",
+    "Đang tìm!",
+    "Một chút nhé.",
+    "Ok rồi.",
+    "Để mình tìm.",
+    "Đợi tí.",
+    "Đang mở đây.",
+    "Hay đấy.",
+    "Hmm, để xem.",
+    "Đang tải.",
+    "Sắp có ngay.",
+    "Pick xịn đó.",
+    "Một giây thôi.",
 ]
 
 MUSIC_BACKCHANNEL_PHRASES_VI_ELEVENLABS = [
-    "Ừm.", "Ừ.", "Ờ.",
+    "[excited] Đang tìm!",
+    "Một chút nhé.",
+    "Ok rồi.",
+    "[curious] Để mình tìm.",
+    "Đợi tí.",
+    "[excited] Đang mở đây.",
+    "[excited] Hay đấy.",
+    "[curious] Hmm, để xem.",
+    "Đang tải.",
+    "[excited] Sắp có ngay.",
+    "Pick xịn đó.",
+    "Một giây thôi.",
 ]
 
 # Chinese Simplified (stt_language=LANG_ZH_CN).
 MUSIC_BACKCHANNEL_PHRASES_ZH_CN = [
-    "嗯。", "呃。", "哦。",
+    "好，马上！",
+    "稍等一下。",
+    "明白！",
+    "让我找找。",
+    "等一下。",
+    "正在播放。",
+    "选得好！",
+    "嗯，让我看看。",
+    "正在加载。",
+    "马上就来。",
+    "不错的选择。",
+    "稍等。",
 ]
 
 MUSIC_BACKCHANNEL_PHRASES_ZH_CN_ELEVENLABS = [
-    "嗯。", "呃。", "哦。",
+    "[excited] 好，马上！",
+    "稍等一下。",
+    "明白！",
+    "[curious] 让我找找。",
+    "等一下。",
+    "[excited] 正在播放。",
+    "[excited] 选得好！",
+    "[curious] 嗯，让我看看。",
+    "正在加载。",
+    "[excited] 马上就来。",
+    "不错的选择。",
+    "稍等。",
 ]
 
 # Chinese Traditional (stt_language=LANG_ZH_TW).
 MUSIC_BACKCHANNEL_PHRASES_ZH_TW = [
-    "嗯。", "呃。", "哦。",
+    "好，馬上！",
+    "稍等一下。",
+    "明白！",
+    "讓我找找。",
+    "等一下。",
+    "正在播放。",
+    "選得好！",
+    "嗯，讓我看看。",
+    "正在載入。",
+    "馬上就來。",
+    "不錯的選擇。",
+    "稍等。",
 ]
 
 MUSIC_BACKCHANNEL_PHRASES_ZH_TW_ELEVENLABS = [
-    "嗯。", "呃。", "哦。",
+    "[excited] 好,馬上!",
+    "稍等一下。",
+    "明白!",
+    "[curious] 讓我找找。",
+    "等一下。",
+    "[excited] 正在播放。",
+    "[excited] 選得好!",
+    "[curious] 嗯，讓我看看。",
+    "正在載入。",
+    "[excited] 馬上就來。",
+    "不錯的選擇。",
+    "稍等。",
 ]
 
 # (lang, provider_is_elevenlabs) → pool. Lookup falls back to DEFAULT_LANG
