@@ -106,7 +106,7 @@ không cứu vớt, không cắt lát, không nạp một phần.
 
 | # | Cổng chặn | Từ chối khi | Vì sao |
 |---|-----------|-------------|--------|
-| 1 | **Đồng thuận tuyệt đối** | có bất kỳ chunk nào bầu cho người khác | Mẫu được lưu là **trung bình của MỌI chunk**. Một lượt nói xác định bằng bỏ phiếu *đa số* có thể chứa người nói khác trong các chunk thua, và bản trộn đó sẽ thành một dòng truy hồi vĩnh viễn |
+| 1 | **Đồng thuận tuyệt đối** | có bất kỳ chunk nào bầu cho người khác | Lượt nói được lưu thành MỘT vector cho toàn bộ câu nói, nên một lượt xác định bằng bỏ phiếu *đa số* có thể chứa người nói khác trong các chunk thua, và bản trộn đó thành một dòng truy hồi vĩnh viễn — mà trong vector đã lưu không còn dấu vết nào để phát hiện ra |
 | 2 | **Chunk yếu nhất** | chunk thắng yếu nhất thấp hơn `HAL_SPEAKER_EXTEND_MIN_CHUNK_COS` | Chỉ đồng thuận thôi không chứng minh được gì: khi chỉ có **một người đã đăng ký**, ma trận chỉ có một cột, nên mọi chunk mặc nhiên bầu cho họ kể cả ở mức cos 0.2. Đây mới là cổng bắt được trường hợp phổ biến — một người khách trong phòng chưa đăng ký |
 | 3 | **Anchor tự mang kết quả** | các dòng ghi danh không tự mang lại kết quả khớp (`HAL_SPEAKER_EXTEND_MIN_ANCHOR_COS`) | Kết quả khớp do tầng **extended** mang lại là bằng chứng về một lần đoán trước đó, không phải về con người. Nạp dựa trên nó sẽ để tầng extended tự bảo lãnh cho chính sự phình to của mình, khiến một mẫu xấu đẻ ra nhiều mẫu xấu. Neo vào mẫu ghi danh là thứ khiến nhiễm bẩn không nhân bản được |
 | 4 | **Thời lượng** | giọng nói sau VAD ngắn hơn `SPEAKER_EXTEND_MIN_DURATION_SEC` | Quá ít thông tin người nói để đáng một suất vĩnh viễn. Đo trên waveform **đã làm sạch**, không phải lượt nói thô — caller nối nguyên một phiên mic (tới 30 giây) thành một WAV, nên ở lượt yên tĩnh thì phần lớn file là im lặng |
@@ -129,6 +129,14 @@ những cổng nào và dưới ngưỡng nào. Không có gì đọc file này 
 trước khi có cơ chế này không có bản ghi đó, và không thể dựng lại: phiếu bầu
 từng chunk chưa bao giờ được lưu. Chúng sẽ tự đào thải qua giới hạn
 `SPEAKER_MAX_EXTENDED_SAMPLES`.
+
+Embedding của mẫu được tạo bằng **đúng lời gọi single-shot mà enroll dùng**
+(`use_sliding_window=false`, nguyên câu nói, không chia cửa sổ, không lấy trung
+bình), nên các dòng anchor và extended cùng một loại vector, và việc embed lại
+một `ext_*.wav` trong lúc migration sẽ tái tạo đúng sidecar của chính nó. Các
+mẫu ghi trước thay đổi này chứa trung bình các chunk cửa sổ trượt của bước nhận
+diện và không có khoá `embedding_mode`; lần migration kế tiếp sẽ ghi lại chúng
+theo kiểu single-shot.
 
 > Đường ghi danh được **miễn trừ** một cách có chủ đích: audio lấy từ một cụm
 > giọng trong lúc đăng ký là do chính người dùng xác nhận, nên nó bỏ qua toàn bộ

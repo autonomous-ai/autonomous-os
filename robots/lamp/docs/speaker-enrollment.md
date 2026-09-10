@@ -105,7 +105,7 @@ sliced, or partially admitted.
 
 | # | Gate | Rejects when | Why |
 |---|------|--------------|-----|
-| 1 | **Unanimity** | any chunk voted for a different speaker | The stored sample is the **mean of every chunk**. A turn identified by *majority* vote can hold another speaker in the losing chunks, and that blend would become a permanent retrieval row |
+| 1 | **Unanimity** | any chunk voted for a different speaker | The turn is stored as ONE vector over the whole utterance, so a turn identified by *majority* vote can hold another speaker in the losing chunks and that blend becomes a permanent retrieval row — with nothing in the stored vector to reveal it |
 | 2 | **Weakest chunk** | the worst winning chunk is below `HAL_SPEAKER_EXTEND_MIN_CHUNK_COS` | Unanimity alone proves nothing: with a **single enrolled speaker** there is one column, so every chunk votes for them by default even at cos 0.2. This is the gate that catches the common case — a guest in the room who is not enrolled |
 | 3 | **Anchor-carried** | the enrollment rows did not themselves carry the match (`HAL_SPEAKER_EXTEND_MIN_ANCHOR_COS`) | A match the **extended** tier carried is evidence about a previous guess, not about the person. Admitting on it would let the tier vouch for its own growth, so one bad sample could breed more. Anchoring on enrollment is what makes contamination non-replicating |
 | 4 | **Duration** | post-VAD speech is under `SPEAKER_EXTEND_MIN_DURATION_SEC` | Too little speaker information to be worth a permanent slot. Measured on the **cleaned** waveform, not the raw turn — the caller joins an entire mic session (up to 30 s) into one WAV, so on a quiet turn most of the file is silence |
@@ -127,6 +127,13 @@ later threshold change can ask which samples the previous rule admitted. Samples
 written before this existed carry no such record, and there is no way to
 reconstruct one: the per-chunk votes were never persisted. They age out through
 the `SPEAKER_MAX_EXTENDED_SAMPLES` cap.
+
+The sample's embedding is produced by the **same single-shot call enroll uses**
+(`use_sliding_window=false`, whole utterance, no windowing or mean), so anchor
+and extended rows are the same kind of vector and re-embedding a stored
+`ext_*.wav` during a model migration reproduces its own sidecar. Samples written
+before this carry the mean of recognition's sliding-window chunks and no
+`embedding_mode` key; the next migration rewrites them single-shot.
 
 > The enroll path is deliberately **exempt**: audio claimed from a voice cluster
 > during enrollment is committed on the user's own say-so, so it bypasses these
