@@ -98,9 +98,17 @@ phải dựng lại + nén lại nó mỗi turn — biến một turn đáng l�
 - **Trigger:** handler lifecycle generic gọi `ShouldRotateSession(totalTokens,
   turnsSinceRotation)` mỗi turn (method của `domain.AgentGateway`). OpenClaw /
   PicoClaw xoay theo ngưỡng token thật (150k); **Hermes xoay theo số turn**
-  (`rotateMaxTurns = 40`, hoặc spike `rotateTokenThreshold = 50_000`) vì token nó
-  báo là sau-nén (~20–60 k), không phản ánh kích thước chuỗi thật — ngưỡng token sẽ
-  không bao giờ nổ. `NewSession()` thực hiện việc xoay.
+  (`rotateMaxTurns = 40`, hoặc spike `rotateTokenThreshold = 250_000`) vì token nó
+  báo là sau-nén (~20–60 k), không phản ánh kích thước chuỗi thật — ngưỡng token là
+  lưới an toàn, không phải cổng chính. `NewSession()` thực hiện việc xoay.
+- **Lưới token là 50_000 cho tới 2026-09-09.** Nó nằm *trong* vùng vận hành bình
+  thường: trên lamp-a0ae một hội thoại mới đã báo ~12,3 k, và một turn bình thường
+  có đọc `SKILL.md` rồi chạy tool cộng thêm ~25 k (12,3 k → 41,3 k → 64,5 k →
+  73,5 k), nên lưới nổ mỗi 2–3 turn. Vì đường đang nối là `maybeAutoNewSession`
+  (compact bị tắt), mỗi lần nổ là **bỏ luôn lịch sử, không tóm tắt** — thiết bị
+  quên mất thứ nó vừa nói. 250 k giữ được ~10 turn ở nhịp đó; lưới phải nằm **trên**
+  mức mà cơ chế nén của gateway ổn định lại, không nằm trong đó (cùng giá trị và
+  cùng lập luận với [`codex`](codex_vi.md)).
 
 ## 4. Giao thức request — `POST /v1/responses`
 
