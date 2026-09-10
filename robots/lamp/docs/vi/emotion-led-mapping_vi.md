@@ -172,7 +172,7 @@ Hai thay đổi kéo nó về trong khuyến nghị mà không đổi bản ch�
 
 ## LED Restore Behavior
 
-- **User đã set color/effect/scene** → sau emotion, restore về màu/scene của user (kèm re-aim nếu là scene)
+- **User đã set color/effect/scene** → sau emotion, restore về màu/scene của user (chỉ LED — restore không bao giờ chạm vào servo)
 - **Đèn tắt hoặc chưa set** → emotion LED ở lại sau khi animation xong
 - **`shock`** → restore sau 2.0s (notification_flash tự tắt sau ~1.5s)
 - **`idle`** → không schedule restore (là ambient resting state)
