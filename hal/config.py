@@ -687,6 +687,26 @@ SPEAKER_EXTEND_REQUIRE_UNANIMOUS_CHUNKS: bool = (
 SPEAKER_EXTEND_MIN_CHUNK_COS: float = float(
     os.environ.get("HAL_SPEAKER_EXTEND_MIN_CHUNK_COS", str(SPEAKER_MATCH_COS))
 )
+# The ANCHOR rows (enrollment audio) must themselves carry the match before a
+# turn may join the extended tier. A match the extended tier carried is
+# evidence about a previous guess, not about the person, so admitting on it
+# lets one bad sample breed more -- the extended tier can vouch for its own
+# growth. Anchoring on enrollment is what makes contamination non-replicating.
+#
+# This is the audio port of FACE_EXTEND_MIN_ENROLL_SIM. The face side needed it
+# after a live bank on lamp-ac82 ended up 6/10 other people; replaying 990
+# frames under the anchored rule produced a bank that was 10/10 correct.
+#
+# Defaults to SPEAKER_MATCH_COS, which makes this EXACTLY "the anchors alone
+# would have recognized this speaker" -- no extra policy and no invented
+# number. The face side uses a floor ABOVE its match bar (0.40 vs 0.30), but
+# that number was picked against measured data and audio has none:
+# SPEAKER_MATCH_COS is itself an unvalidated conversion of a threshold tuned
+# for the previous single-vector model. Raise this once the thresholds have
+# been validated against real speech, not before.
+SPEAKER_EXTEND_MIN_ANCHOR_COS: float = float(
+    os.environ.get("HAL_SPEAKER_EXTEND_MIN_ANCHOR_COS", str(SPEAKER_MATCH_COS))
+)
 SPEAKER_EMBEDDING_API_TIMEOUT_S: float = float(
     os.environ.get("SPEAKER_EMBEDDING_API_TIMEOUT_S", "15")
 )

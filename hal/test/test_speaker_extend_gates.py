@@ -167,3 +167,23 @@ def test_the_reported_duration_is_the_cleaned_length_not_the_raw_length(
     assert cleaned_duration_s < 2.0, (
         "and must therefore fail the 2.0s extend floor that 28s cleared"
     )
+
+
+def test_a_match_carried_only_by_the_extended_tier_cannot_extend(recognizer, spy):
+    # The whole point: a match the extended bank carried is evidence about a
+    # previous guess, not about the person. Letting it add a row lets one
+    # mistake breed more.
+    _extend(recognizer, anchor_cos=0.31)
+    assert spy == [], "an extended-carried match must not grow the bank"
+
+
+def test_a_match_carried_by_the_anchors_still_extends(recognizer, spy):
+    _extend(recognizer, anchor_cos=0.72)
+    assert spy == ["leo"], "an anchor-carried match must still extend"
+
+
+def test_a_user_with_no_anchor_rows_does_not_extend(recognizer, spy):
+    # Legacy profile with no readable anchor tier: -inf, so it cannot vouch
+    # for itself. Better to stop growing than to grow unanchored.
+    _extend(recognizer, anchor_cos=float("-inf"))
+    assert spy == [], "no anchor evidence means no extend"
