@@ -31,14 +31,10 @@ não nào đang chạy.
 Thiết bị chạy một **WS bridge** mỏng cục bộ: unit systemd `codex.service` chạy
 **`os-server codex-gatewayd`** — bridge được **compile thẳng vào binary
 os-server** (`runtimes/codex/gatewayd`; **không có Python trên thiết bị**).
-Thông thường gatewayd chạy một tiến trình `codex exec --json` cho mỗi turn, bề
-mặt automation ổn định của Codex. `CODEX_APP_SERVER=1` mới opt-in vào đường
-Codex App Server JSON-RPC thường trú, mang tính experimental và phụ thuộc phiên
-bản.
-
-Đường App Server tuỳ chọn bắt đầu turn bằng `turn/start` và gửi input bổ sung
-tương thích vào turn active bằng `turn/steer`. Đường mặc định `codex exec`
-tuần tự hoá turn qua worker của bridge.
+Gatewayd sở hữu một tiến trình Codex App Server JSON-RPC thường trú. Nó bắt đầu
+turn bằng `turn/start` và gửi input bổ sung tương thích vào turn active bằng
+`turn/steer`, thay vì tuần tự hoá input trực tiếp của user qua worker `codex
+exec` theo từng turn.
 
 Bridge mở `ws://127.0.0.1:18792/codex/ws/` (bearer token
 `autonomous_codex_token`) cho os-server. Cấu hình permissive là có chủ ý:

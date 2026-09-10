@@ -31,13 +31,10 @@ which brain is active.
 The device runs a thin local **WS bridge**: the `codex.service` systemd unit
 runs **`os-server codex-gatewayd`** — the bridge is **compiled into the
 os-server binary** (`runtimes/codex/gatewayd`; **no Python on the device**).
-Gatewayd normally launches one `codex exec --json` process per turn, the stable
-Codex automation surface. `CODEX_APP_SERVER=1` opts into the experimental,
-version-coupled persistent App Server JSON-RPC path.
-
-The optional App Server path starts a turn with `turn/start` and sends
-compatible additional input to an active turn with `turn/steer`. The default
-`codex exec` path serializes turns through the bridge worker instead.
+Gatewayd owns a persistent Codex App Server JSON-RPC process. It starts a turn
+with `turn/start` and sends compatible additional input to an active turn with
+`turn/steer`, rather than serializing direct user input through a per-turn
+`codex exec` worker.
 
 The bridge exposes `ws://127.0.0.1:18792/codex/ws/` (bearer token
 `autonomous_codex_token`) to os-server. The permissive configuration is
