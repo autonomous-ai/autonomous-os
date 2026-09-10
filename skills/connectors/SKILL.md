@@ -34,57 +34,73 @@ know.**
 If the scan shows nothing for a service, it is **not connected**: say so plainly
 (see Errors) and stop — do not attempt the API call anyway to "check".
 
+**Discover is silent.** Run it, then answer. Never announce that you are about to
+run it, never say that this step is required, never report which files you
+scanned, and never explain *how* the service turned out to be connected — OAuth
+vs app password, REST vs SMTP, which field the sender came from. That is your
+working, and on this device working gets read aloud. The only connection state
+the user ever needs to hear is that something is **not usable** (see Errors).
+
 ## ⛔ Never write without reading the draft back
 
-Reads are free; writes are not. Sending mail, creating or deleting a calendar
-event, uploading or deleting a Drive file is **irreversible and outward-facing**
-— it reaches other people, and on a voice-only device the user has no screen to
-check what you did after the fact. So every mutating call in this skill gets the
-same gate:
+Reads are free; writes are not. Anything that **reaches another person** or
+**destroys something** cannot be taken back, and on a voice-only device the user
+has no screen to check it afterwards. So every mutating call gets the same gate:
 
-**draft → read the whole thing back → wait for an explicit yes → only then call.**
+**draft → read it back → wait for an explicit yes → only then call.**
 
-This covers every write, including ones not listed here:
-
-| Action | Call it gates |
+| Write | What the draft must contain |
 |---|---|
-| Send or reply to an email | `POST .../messages/send`, SMTP `sendmail` |
-| Create / change / delete a calendar event | `POST` `PATCH` `DELETE` on `calendar/v3/...` |
-| Upload / rename / delete / share a Drive file | `POST` `PATCH` `DELETE` on `drive/v3/files...` |
-| Any MCP write (Notion page, Linear issue, GitHub comment, …) | that tool's create/update/delete |
+| Email — send or reply | every recipient · subject · body |
+| Message or comment — Slack, a Notion / Linear / GitHub / Figma comment | who sees it, saying plainly when a channel is **public** · the full text |
+| Document content — create or edit a Notion page or block, any doc | where it lands · whether you create or **replace** · what it will say |
+| Work item — Linear / Asana / monday.com / GitHub issue, HubSpot record | project · title · **assignee** · body |
+| Field change — stage, owner, due date, CRM field | the item · which field · **old → new** |
+| Calendar event | `Title · <day> <start>–<end> · <attendees>` |
+| File — upload, rename, share | the file name · for a share, exactly **who gains access** |
+| Delete or overwrite — anything | **exactly what disappears**, named, and that it is permanent |
 
-**Read-back format** — one line, in the user's language:
+A write not listed follows the same principle: **who it reaches, and what they
+will see.**
 
-`To: <recipient> · Subject: <subject> · Body: <full text>`
+**Reads never get the gate.** Listing mail, reading a page, searching issues, an
+analytics query, marking something read, saving a draft you do not send — none of
+these need confirmation. Asking anyway makes the device exhausting to use.
 
-- Body ≲60 words → read it **in full, word for word**.
-- Longer → read To + Subject + the first two sentences, then offer: "want me to
-  read the whole thing?" — and read all of it if they say yes.
-- Calendar: `Title · <day> <start>–<end> · <attendees>`.
-- Drive: the file name, and for a share, exactly who gains access.
+### How to say the draft
 
-**The read-back is exempt from `keep replies short`** (Rules, bottom of this
-file) and from the voice skill's "1-3 sentences". Never summarize, shorten,
-paraphrase, or tidy up a draft the user is being asked to approve: they are
-approving the exact text you are about to send, so they have to hear the exact
-text. This is the one place in this skill where a long reply is the correct one.
+A short draft (≲60 words) is read word for word. A longer one: recipients and
+subject in full, never trimmed, then **summarize the body and say that you are
+summarizing** — "about 400 words; it says <one sentence>. Want the whole thing?"
+Never pass a summary off as the text. Several recipients → give the count and
+name them. Editing existing content → say what it replaces.
 
-**Then wait for the yes.**
+**The exemption covers the draft lines and nothing else.** Those lines are exempt
+from `keep replies short` and from the voice skill's "1-3 sentences", because the
+user is approving that exact text. Everything around them stays at normal length:
+one short lead-in, the draft, one short question. That is the entire reply —
 
-- A yes is a yes: "send it", "yes", "gửi đi", "ok gửi".
-- Anything else is an edit, not approval ("change the last sentence to…",
-  "make it shorter") — apply it, then read the new draft back and wait again.
-- Silence, an ambiguous answer, or a change of subject → **do not send.** Ask
-  once, plainly: "send it?"
-- "Just send it, no need to read it back" skips the read-back **for that one
-  message**, never for the next.
-- **"…and send it" in the original request is not the confirmation.** The user
-  had not heard the draft when they said it — that phrase is what put you in
-  this section, not a way out of it.
+> To Darren, darren@autonomous.ai. Subject: Reminder — weekend meeting. Body:
+> "Hi Darren, just a friendly reminder about our weekend meeting. — Sai Da."
+> Send it?
 
-**After the call returns**, say what actually happened: "Sent to <recipient>,
-subject '<subject>'". If it failed, say it failed (see Errors) — never report a
-send you did not read out of the response.
+**Never explain the gate while you apply it.** Do not name the rule you are
+following, do not reason out loud about whether something counts as approval, do
+not announce what you still need or what you are about to check. Apply it
+silently — the draft is the only part of it the user should ever hear.
+
+### The yes
+
+Send only on a clear yes ("send it", "yes", "gửi đi", "ok gửi"). Anything else is
+an edit: apply it, read the new draft back, wait again. On silence, an ambiguous
+answer or a change of subject, ask once — "send it?" — then stop. A request that
+already said "…and send it" is not the yes, because the user had not heard the
+draft when they said it. "Just send it, no need to read it back" skips the
+read-back for that one message only.
+
+**After the call returns**, say what happened: "Sent to <recipient>." If it
+failed, say it failed (see Errors) — never report a write you did not read out of
+the response.
 
 Credentials for linked services live in `/root/.openclaw/workspace/configs/`:
 
@@ -293,6 +309,12 @@ Otherwise, if it is `< now` ($(date +%s)), treat as expired (see Errors).
 
 ## Errors
 
+Report a failure in **one or two sentences: what failed, and what the user can do
+about it.** "Couldn't send — that address was rejected." / "Gmail isn't
+connected; link it in the app." Never narrate the route you took to find out,
+never explain the protocol you tried, and never announce what you will attempt
+next instead: if another attempt is worth making, make it before you speak.
+
 - No file/token → not connected; tell the user to link it in the app.
 - Expired / HTTP 401 → `refresh:true` connectors auto-refresh on-device in a few min (retry); otherwise tell the user to reconnect. You can't refresh tokens yourself.
 - HTTP 403 / scope error → connection lacks the needed scope (read `.scopes` — names only); user must reconnect granting more access.
@@ -304,4 +326,5 @@ Otherwise, if it is `< now` ($(date +%s)), treat as expired (see Errors).
 - MCP connectors: use the tool, not the file.
 - Obey **Credential safety** above — secrets never reach chat, files, or logs.
 - **No write without a read-back** — draft, read it back in full, wait for an explicit yes, then send/create/delete. See the top of this file.
-- Match the user's language; keep replies short — **except a write read-back**, which is always read in full.
+- **Say the answer, not the reasoning** — never name the rule you are applying ("per the connector skill…", "Step −1 requires…"), never reason out loud about whether something counts as approval, never announce what you are about to check. On a write the reply is: one short lead-in, the draft, one short question — nothing else.
+- Match the user's language; keep replies short — **except the draft lines of a read-back**, which are read in full.
