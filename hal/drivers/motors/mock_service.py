@@ -111,6 +111,13 @@ class MockMotionService:
         # `_suppressed` has three setters and cannot say which. Write both together.
         self._mode: Optional[str] = None
         self._frozen = False
+        # Body ownership — see MotionService in base.py. The simulator carries
+        # it for the same reason it carries every other suppression flag: the
+        # routes read it, so a laptop body has to answer the same questions a
+        # physical one does.
+        self._tracking_flag = False
+        self._body_owners = 0
+        self._body_owner_lock = threading.Lock()
         self._torque = True
         # Set by halt(), cleared by the next commanded move — mirrors the real
         # driver's _halt event, so a test can assert the sequence without one.
@@ -179,6 +186,24 @@ class MockMotionService:
     def motion_mode(self) -> Optional[str]:
         """Never "released": release() here cuts torque without suppressing."""
         return self._mode
+
+    @property
+    def _tracking_active(self) -> bool:
+        """True while anything owns the body — a flag holder or a live writer."""
+        return self._tracking_flag or self._body_owners > 0
+
+    @_tracking_active.setter
+    def _tracking_active(self, value: bool) -> None:
+        # Assignment sets the FLAG only, never a counter held by a live writer.
+        self._tracking_flag = bool(value)
+
+    def acquire_body(self) -> None:
+        with self._body_owner_lock:
+            self._body_owners += 1
+
+    def release_body(self) -> None:
+        with self._body_owner_lock:
+            self._body_owners = max(0, self._body_owners - 1)
 
     # --- Motion primitives ---
 

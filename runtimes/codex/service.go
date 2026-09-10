@@ -122,7 +122,8 @@ type CodexService struct {
 	// item.completed without a prior item.started still yields a start+end pair.
 	toolStartSeen map[string]bool
 
-	// lastContextTokens is the live context size (input + cached) reported by
+	// lastContextTokens is the live context size (Responses-API input_tokens,
+	// which already includes the cached prefix) reported by
 	// the most recent turn.completed. ShouldRotateSession keys on it rather
 	// than on the totalTokens the shared handler passes, which folds in this
 	// turn's OUTPUT — turn volume, not context. Codex-local on purpose: the

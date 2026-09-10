@@ -6,6 +6,7 @@ import threading
 from typing import Any, Callable, Dict, List, Optional, Set
 from hal.follower import LeLampFollowerConfig, LeLampFollower
 from hal.presets import EMO_SLEEPY, SERVO_CMD_PLAY, SERVO_CMD_MUSIC_START, SERVO_CMD_MUSIC_STOP, SERVO_IDLE, SERVO_MUSIC_GROOVE
+from hal.drivers.motors.tracking_wedge import TrackingWedgeWatchdog
 
 logger = logging.getLogger(__name__)
 
@@ -187,6 +188,12 @@ class AnimationService:
         self._tracking_flag = False
         self._body_owners = 0
         self._body_owner_lock = threading.Lock()
+
+        # Backstop: the flag half of the lock has exactly one legitimate holder
+        # (a live tracking session, whose follower also holds a counter slot),
+        # so flag-set-with-no-writer is an impossible state. See #312 for the
+        # twelve minutes it lasted the one time it happened.
+        self._tracking_wedge = TrackingWedgeWatchdog()
 
         # When True, idle recording finished and pose is held — loop sleeps longer to save CPU
         self._idle_settled = False
@@ -451,6 +458,15 @@ class AnimationService:
                     self.handle_event(event_type, payload)
                 except Exception as e:
                     print(f"Error handling event {event_type}: {e}")
+
+            held = self._tracking_wedge.check(self._tracking_flag, self._body_owners)
+            if held is not None:
+                logger.error(
+                    "[tracking] flag held %.0fs with no owner — clearing wedged lock "
+                    "(emotion servo and gaze were suppressed for the whole of it)",
+                    held,
+                )
+                self._tracking_flag = False
 
             # Continue current playback
             self._continue_playback()

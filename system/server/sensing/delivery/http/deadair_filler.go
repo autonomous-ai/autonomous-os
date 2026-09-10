@@ -34,6 +34,13 @@ func poolsForLang(lang string) (opening, continuation []string) {
 	return i18n.FillerOpening(lang), i18n.FillerContinuation(lang)
 }
 
+// realtimePoolForLang is deliberately separate from the main-agent Opening
+// pool: when the realtime model is thinking, the user has already finished
+// speaking, so a quiet non-lexical thought is more natural than "got it".
+func realtimePoolForLang(lang string) []string {
+	return i18n.FillerRealtime(lang)
+}
+
 // toolPoolForLang returns the tool-specific filler pool for (lang, toolName).
 // Returns nil when there's no pool for that combination — caller falls back
 // to the regular Continuation pool. Unknown lang → English pool.
@@ -235,6 +242,7 @@ func PrewarmFillers() {
 	opening, continuation := poolsForLang(lang)
 	all := append([]string{}, opening...)
 	all = append(all, continuation...)
+	all = append(all, realtimePoolForLang(lang)...)
 	// Also prerender tool-specific filler phrases. Without this, the first
 	// fire of a tool-aware filler (e.g. "Đang tra mạng" when web_search
 	// runs) hits ElevenLabs live (~1-2s render) and the resulting late
@@ -312,7 +320,7 @@ func PlayOpeningFillerNow(owner string) {
 	}
 }
 
-// PlayFiller speaks one opening filler on demand. It exists for the realtime
+// PlayFiller speaks one realtime filler on demand. It exists for the realtime
 // voice path, which owns a dead-air pocket os-server cannot see: HAL commits
 // the captured audio to the realtime model and only forwards the turn here
 // AFTER that model is done, so the seconds spent waiting for Gemini have no
@@ -326,8 +334,8 @@ func PlayOpeningFillerNow(owner string) {
 // Fire-and-forget: returns 200 as soon as the filler is queued. The caller is
 // racing the model's first sentence, so waiting on TTS would be pointless.
 func (h *SensingHandler) PlayFiller(c *gin.Context) {
-	// Optional body selects a specific pool. Bodyless calls keep the original
-	// behaviour (the realtime dead-air wait), so existing callers are unchanged.
+	// Optional body selects a specific pool. Bodyless calls use the dedicated
+	// realtime-wait pool, so the main-agent opening pool remains unchanged.
 	var req struct {
 		Pool string `json:"pool"`
 		// Owner is an opaque tag HAL sends back to itself so a played filler
@@ -339,9 +347,24 @@ func (h *SensingHandler) PlayFiller(c *gin.Context) {
 	if req.Pool != "" {
 		go PlayPoolFillerNow(req.Pool, req.Owner)
 	} else {
-		go PlayOpeningFillerNow(req.Owner)
+		go PlayRealtimeFillerNow(req.Owner)
 	}
 	c.JSON(http.StatusOK, serializers.ResponseSuccess(nil))
+}
+
+// PlayRealtimeFillerNow speaks one quiet, non-lexical cue while the realtime
+// model has not produced its first audio frame. Unlike PlayOpeningFillerNow,
+// it does not acknowledge or narrate work the model has not completed.
+func PlayRealtimeFillerNow(owner string) {
+	lang := i18n.Lang()
+	filler := pickFrom(realtimePoolForLang(lang), "")
+	if filler == "" {
+		return
+	}
+	slog.Info("realtime filler firing (cached)", "component", "sensing", "lang", lang, "filler", filler, "owner", owner)
+	if err := hal.SpeakCachedInterruptibleForTurn(filler, owner); err != nil {
+		slog.Warn("realtime filler failed", "component", "sensing", "error", err)
+	}
 }
 
 // PlayPoolFillerNow speaks one phrase from a named tool pool. Used by the

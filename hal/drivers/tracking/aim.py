@@ -428,20 +428,29 @@ def servo_ownership():
     `_tracking_active` is the existing lock for this: routes/emotion.py
     suppresses ALL emotion servo while it is set, and the animation loop drops
     any in-progress recording rather than fighting for the joints. The vision
-    tracker uses the same flag.
+    tracker uses the same lock.
 
-    The previous value is restored rather than cleared, so this never releases a
-    genuine tracking session that was already running.
+    Ownership is REFCOUNTED — acquire_body/release_body, which are already
+    mutex-guarded — and never saved and restored. Six call sites enter this from
+    three threads (the gaze watcher, the realtime `look` tool, the sweep), so
+    two owners overlap routinely. Save/restore lost that update: the owner that
+    exited LAST re-asserted a stale True, wedging the lock with no holder and
+    silently suppressing every emotion animation until a face-track session
+    happened to clear it (#312). A refcount also fixes the narrower half of the
+    same bug — `prev` read the composite property but the setter wrote the flag,
+    so an aim overlapping a live ServoFollower turned a counter hold into a
+    permanent one.
+
+    A refcount keeps the original guarantee for free: a genuine tracking session
+    already running is a separate hold, and this releases only its own.
     """
     svc = None
-    prev = False
     try:
         import hal.app_state as state
 
         svc = getattr(state, "animation_service", None)
         if svc is not None:
-            prev = getattr(svc, "_tracking_active", False)
-            svc._tracking_active = True
+            svc.acquire_body()
     except Exception as e:  # never block a capture over the lock
         logger.debug("[look-aim] servo ownership unavailable: %s", e)
         svc = None
@@ -450,7 +459,7 @@ def servo_ownership():
     finally:
         if svc is not None:
             try:
-                svc._tracking_active = prev
+                svc.release_body()
             except Exception as e:
                 logger.warning("[look-aim] failed to release servo ownership: %s", e)
 

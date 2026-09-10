@@ -25,8 +25,9 @@ func (s *CodexService) CompactSession(sessionKey string) error {
 // above it rather than rotating ordinary short interactions.
 const codexFallbackTokenThreshold = 120_000
 
-// ShouldRotateSession rotates on the live CONTEXT size — input + cached as
-// reported by the last turn.completed (s.lastContextTokens, stashed in
+// ShouldRotateSession rotates on the live CONTEXT size — the raw
+// `input_tokens` of the last turn.completed, which on the Responses API is the
+// whole prompt including its cached prefix (s.lastContextTokens, stashed in
 // translator.go). The totalTokens the shared handler passes folds in this
 // turn's output, which is turn volume rather than context, so it is used only
 // as a fallback before the first usage frame of the process arrives.

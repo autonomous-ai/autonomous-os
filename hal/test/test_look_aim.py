@@ -13,6 +13,7 @@ import pytest
 import hal.config as config
 import hal.app_state as state
 from hal.drivers.tracking import aim
+from test.body_ownership import BodyOwnership
 
 
 class _FakeCap:
@@ -325,7 +326,7 @@ def test_speech_can_be_disabled():
 
 # --- servo ownership: nothing else may move the head mid-look --------------
 
-class _FakeAnim:
+class _FakeAnim(BodyOwnership):
     def __init__(self, tracking=False):
         self._tracking_active = tracking
 
@@ -367,6 +368,45 @@ def test_ownership_is_harmless_with_no_animation_service():
     with mock.patch.object(state, "animation_service", None):
         with aim.servo_ownership():
             pass  # must not raise
+
+
+def test_overlapping_owners_release_in_any_order():
+    # The #312 race, replayed deterministically. Six call sites enter this from
+    # three threads (gaze watcher, realtime `look`, sweep), so two owners
+    # overlap routinely. With save/restore the second owner captured `prev=True`
+    # and re-asserted it on exit, wedging the lock with nobody holding it — and
+    # a wedged lock suppresses every emotion animation until a face-track
+    # session happens to clear it.
+    anim = _FakeAnim()
+    with mock.patch.object(state, "animation_service", anim):
+        gaze_watcher = aim.servo_ownership()
+        look_tool = aim.servo_ownership()
+        gaze_watcher.__enter__()
+        look_tool.__enter__()
+        assert anim._tracking_active is True, "both owners hold the body"
+
+        gaze_watcher.__exit__(None, None, None)
+        assert anim._tracking_active is True, "the look still owns the body"
+
+        look_tool.__exit__(None, None, None)
+    assert anim._tracking_active is False, "the last owner out must free the body"
+
+
+def test_an_aim_over_a_live_writer_does_not_become_a_permanent_flag():
+    # The narrower hazard in the same code: `prev` read the COMPOSITE property
+    # but the setter wrote the FLAG, so an aim overlapping a running
+    # ServoFollower converted a counter hold — which ends when the worker
+    # thread ends — into a flag hold that nothing releases.
+    anim = _FakeAnim()
+    anim.acquire_body()  # a ServoFollower is writing the bus
+    with mock.patch.object(state, "animation_service", anim):
+        with aim.servo_ownership():
+            assert anim._tracking_active is True
+    assert anim._tracking_active is True, "the follower still owns the body"
+
+    anim.release_body()
+    assert anim._tracking_active is False, "and the body is free once it stops"
+    assert anim._tracking_flag is False, "a counter hold must never become a flag"
 
 
 def test_trace_shows_whether_the_head_actually_moved():
