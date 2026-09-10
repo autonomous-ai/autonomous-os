@@ -568,6 +568,8 @@ class StackChanMotionService:
         self._server: Optional[Server] = None
         self._server_thread: Optional[threading.Thread] = None
         self._state_lock = threading.RLock()
+        self._tracking_flag = False
+        self._body_owners = 0
         self._zero_mode = False
         self._hold_mode = False
         self._released = False
@@ -677,6 +679,27 @@ class StackChanMotionService:
     def is_frozen(self) -> bool:
         with self._state_lock:
             return self._frozen
+
+    # --- Body ownership ---
+
+    @property
+    def _tracking_active(self) -> bool:
+        with self._state_lock:
+            return self._tracking_flag or self._body_owners > 0
+
+    @_tracking_active.setter
+    def _tracking_active(self, value: bool) -> None:
+        # A tracking session cannot release an overlapping aim/capture owner.
+        with self._state_lock:
+            self._tracking_flag = bool(value)
+
+    def acquire_body(self) -> None:
+        with self._state_lock:
+            self._body_owners += 1
+
+    def release_body(self) -> None:
+        with self._state_lock:
+            self._body_owners = max(0, self._body_owners - 1)
 
     # --- Motion primitives ---
 

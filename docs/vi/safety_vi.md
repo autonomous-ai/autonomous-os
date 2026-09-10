@@ -227,6 +227,28 @@ speed chưa hiệu chuẩn sẽ bị từ chối vì không thể giữ đúng t
 Đường này đã có test protocol phía host; fault injection trên Wi-Fi và phần cứng
 thật vẫn là bước qualification trên thiết bị.
 
+Driver cũng triển khai contract đếm số owner `MotionService.acquire_body()` /
+`release_body()` dùng cho look, capture và tracking. Khi các owner chồng lấn,
+`_tracking_active` giữ giá trị true cho tới khi owner cuối cùng thoát; xoá cờ
+tracking-session riêng không thể nhả quyền của owner khác. Ownership chỉ điều
+phối gaze và emotion trong HAL, tách biệt với controller lease của firmware.
+Nó không ngăn owner điều khiển chuyển động và không chặn đường halt luôn sẵn có.
+
+Driver Stack-chan vẫn ở giai đoạn thử nghiệm. Trước khi qualification thiết bị:
+
+- Xác định và pin bản firmware tương thích có các motion capability bắt buộc;
+  driver HAL này không bổ sung các capability đó vào firmware stock.
+- Kiểm tra WSS có xác thực và xác minh certificate trên ESP32 thật.
+- Xác nhận chuyển động có giới hạn hoàn tất, vị trí đo được và giới hạn duration
+  trên cụm pan/tilt thật.
+- Thử halt, mất Wi-Fi, mất process HAL và hết hạn lease khi đang chuyển động,
+  xác minh hành vi giữ vị trí và phục hồi trên phần cứng.
+- Hiệu chỉnh tư thế gravity-rest và xác nhận thực tế rằng torque chỉ được nhả
+  sau khi đã đo được tư thế đó.
+
+Test host và loopback, cũng như test face, LED hoặc speaker riêng, không hoàn tất
+các bước qualification chuyển động này.
+
 Chọn driver bằng `driver: stackchan` trong capability `motion` của device
 profile. Đặt `STACKCHAN_DEVICE_ID`, một `STACKCHAN_BODY_TOKEN` riêng dài ít nhất
 32 ký tự, cùng `STACKCHAN_BODY_TLS_CERT` và `STACKCHAN_BODY_TLS_KEY`.

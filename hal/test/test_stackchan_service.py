@@ -5,7 +5,9 @@ import threading
 import time
 import unittest
 import json
+from contextlib import ExitStack
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from websockets.sync.client import connect
 
@@ -147,7 +149,8 @@ class TestStackChanMotionService(unittest.TestCase):
         required = {
             "start", "stop", "is_connected", "dispatch", "get_available_recordings",
             "add_recording", "ensure_running", "is_suppressed", "motion_mode",
-            "freeze", "unfreeze", "is_frozen", "move_to", "move_and_hold",
+            "freeze", "unfreeze", "is_frozen", "acquire_body", "release_body",
+            "move_to", "move_and_hold",
             "get_joint_names", "get_positions", "send_positions", "zero_pose",
             "release", "halt", "resume", "hold", "joint_status", "aim", "nudge",
         }
@@ -155,6 +158,66 @@ class TestStackChanMotionService(unittest.TestCase):
         self.assertTrue(all(hasattr(self.service, member) for member in required))
         self.assertIsInstance(self.service, MotionService)
         self.assertIsNone(self.service._current_recording)
+
+    def test_tracking_flag_and_capture_ownership_are_independent(self):
+        self.service.acquire_body()
+        self.service.acquire_body()
+        self.service._tracking_active = True
+        self.service._tracking_active = False
+        self.service.release_body()
+        self.assertTrue(self.service._tracking_active)
+        self.service.release_body()
+        self.assertFalse(self.service._tracking_active)
+
+        self.service._tracking_active = True
+        self.service.acquire_body()
+        self.service.release_body()
+        self.assertTrue(self.service._tracking_active)
+        self.service._tracking_active = False
+        self.assertFalse(self.service._tracking_active)
+
+        # An unmatched release must not consume the next owner's claim.
+        self.service.release_body()
+        self.service.acquire_body()
+        self.assertTrue(self.service._tracking_active)
+        self.service.release_body()
+        self.assertFalse(self.service._tracking_active)
+
+    def test_overlapping_look_scopes_keep_body_until_last_owner_exits(self):
+        import hal.app_state as state
+        from hal.drivers.tracking.aim import servo_ownership
+
+        with patch.object(state, "animation_service", self.service):
+            with ExitStack() as first_look, ExitStack() as second_look:
+                first_look.enter_context(servo_ownership())
+                second_look.enter_context(servo_ownership())
+                self.assertTrue(self.service._tracking_active)
+                first_look.close()
+                self.assertTrue(self.service._tracking_active)
+            self.assertFalse(self.service._tracking_active)
+
+    def test_failed_look_releases_body_ownership(self):
+        import hal.app_state as state
+        from hal.drivers.tracking.aim import servo_ownership
+
+        with patch.object(state, "animation_service", self.service):
+            with self.assertRaisesRegex(RuntimeError, "capture failed"):
+                with servo_ownership():
+                    self.assertTrue(self.service._tracking_active)
+                    raise RuntimeError("capture failed")
+        self.assertFalse(self.service._tracking_active)
+
+    def test_body_owner_can_move_and_halt_without_losing_its_claim(self):
+        self.service.acquire_body()
+        try:
+            self.service.move_to({"base_yaw.pos": 5.0}, duration=0.5)
+            self.service.halt()
+            self.assertEqual(len(self.transport.moves), 1)
+            self.assertEqual(self.transport.halts, 1)
+            self.assertTrue(self.service._tracking_active)
+        finally:
+            self.service.release_body()
+        self.assertFalse(self.service._tracking_active)
 
     def test_generic_servo_state_route_accepts_stackchan_service(self):
         import hal.app_state as state

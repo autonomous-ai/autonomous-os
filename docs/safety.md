@@ -239,6 +239,29 @@ incompatible because it cannot honor the declared degree-per-second ceiling.
 This path is covered by host protocol tests; physical fault-injection over a
 real Wi-Fi link remains a device qualification step.
 
+The driver also implements the refcounted `MotionService.acquire_body()` /
+`release_body()` contract used by look, capture and tracking. Overlapping owners
+keep `_tracking_active` true until the last owner exits; clearing the separate
+tracking-session flag cannot release another owner's claim. Ownership is local
+coordination for gaze and emotion routes, distinct from the firmware controller
+lease. It does not prevent the owner from moving or bypass the always-available
+halt path.
+
+The Stack-chan driver remains experimental. Before device qualification:
+
+- Identify and pin a matching firmware build with the required motion
+  capabilities; this HAL driver does not add those capabilities to stock firmware.
+- Verify authenticated WSS and certificate validation on the real ESP32.
+- Confirm completed bounded moves, measured position and duration limits on
+  the actual pan/tilt assembly.
+- Exercise halt, Wi-Fi loss, HAL process loss and lease expiry during motion,
+  verifying the physical hold and recovery behavior.
+- Calibrate the gravity-rest pose and physically confirm torque release only
+  after that pose has been measured.
+
+Host and loopback tests, and separate face, LED or speaker tests, do not complete
+these motion qualification steps.
+
 Select it with `driver: stackchan` in the device profile's `motion` capability.
 Set `STACKCHAN_DEVICE_ID`, a distinct `STACKCHAN_BODY_TOKEN` of at least 32
 characters, and both `STACKCHAN_BODY_TLS_CERT` and `STACKCHAN_BODY_TLS_KEY`.
