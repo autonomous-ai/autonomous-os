@@ -36,10 +36,9 @@ class PresenceState(str, Enum):
 class PresenseService:
     """Tracks presence state based on motion events. Controls LED via rgb_service."""
 
-    def __init__(self, rgb_service=None, send_event=None, on_restore_aim=None, auto_enabled: bool = True):
+    def __init__(self, rgb_service=None, send_event=None, auto_enabled: bool = True):
         self._rgb_service = rgb_service
         self._send_event = send_event
-        self._on_restore_aim = on_restore_aim
         # The idle→away→sleep state machine is driven ONLY by on_motion(), which
         # is fed exclusively by the people-perception processors (face / motion /
         # emotion) gated on the `presence` capability. A device that doesn't
@@ -148,7 +147,13 @@ class PresenseService:
             return False
 
     def _restore_light(self):
-        """Restore last known color at full brightness, and re-aim the device to active scene direction."""
+        """Restore last known color at full brightness.
+
+        Light only. This used to re-aim the head to the active scene direction
+        on every IDLE/AWAY -> PRESENT, which killed whatever recording was
+        playing and parked the arm as `__aim_hold__` for 5s (#314). Scene
+        activation still aims; a presence transition is not one.
+        """
         if not self._rgb_service:
             logger.warning("Presence: cannot restore light — rgb_service not available")
             return
@@ -160,14 +165,6 @@ class PresenseService:
                 self._rgb_service.dispatch(RGB_CMD_SOLID, self._last_color)
             except Exception as e:
                 logger.warning("Presence: failed to restore light: %s", e)
-        if self._on_restore_aim:
-            logger.info("Presence: triggering scene aim restore")
-            try:
-                self._on_restore_aim()
-            except Exception as e:
-                logger.warning("Presence: failed to restore aim: %s", e)
-        else:
-            logger.debug("Presence: no aim restore callback — skipping aim")
 
     def _dim_light(self):
         """Dim to config.IDLE_BRIGHTNESS of last color."""

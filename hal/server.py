@@ -52,7 +52,7 @@ from hal.config import (
     OS_CONFIG_PATH,
 )
 from hal.models import HealthResponse, StatusResponse
-from hal.presets import SCENE_PRESETS, SERVO_CMD_PLAY
+from hal.presets import SERVO_CMD_PLAY
 from hal.server_support.openapi_meta import API_DESCRIPTION, OPENAPI_TAGS
 
 # --- Logging: colored stdout + rotating file (+ GELF) ---
@@ -801,32 +801,6 @@ async def lifespan(app: FastAPI):
     # gracefully while state.sensing_service is still None.
     def _start_sensing():
         try:
-            def _presence_restore_aim():
-                """Re-aim the device to active scene direction when presence restores light."""
-                if not state._active_scene:
-                    logger.info("Presence aim restore: no active scene -- skipping aim")
-                    return
-                if not state.animation_service:
-                    logger.warning("Presence aim restore: animation_service not available")
-                    return
-                # Imported here, not at _start_sensing top: on sensing devices
-                # without a servo this pulls the whole motors stack (and an
-                # import failure there must not kill SensingService).
-                from hal.routes.servo import aim_servo
-                from hal.models import ServoAimRequest
-                preset = SCENE_PRESETS.get(state._active_scene)
-                aim_dir = preset.get("aim") if preset else None
-                if aim_dir:
-                    logger.info("Presence aim restore: scene=%s aim=%s", state._active_scene, aim_dir)
-                    threading.Thread(
-                        target=aim_servo,
-                        args=(ServoAimRequest(direction=aim_dir),),
-                        daemon=True,
-                        name=f"presence-aim-{aim_dir}",
-                    ).start()
-                else:
-                    logger.debug("Presence aim restore: scene=%s has no aim -- skipping", state._active_scene)
-
             # `presence` capability gates the people-perception loop: face
             # identity + facial emotion (ML over the camera via perception-service). A
             # device with a camera but no `presence` (it only streams / does
@@ -854,7 +828,6 @@ async def lifespan(app: FastAPI):
                 rgb_service=state.rgb_service,
                 tts_service=state.tts_service,
                 animation_service=state.animation_service,
-                on_restore_aim=_presence_restore_aim,
                 is_sleeping=lambda: state._sleeping,
                 enable_people_perception=_has_presence,
             )
