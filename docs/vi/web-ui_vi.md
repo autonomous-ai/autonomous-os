@@ -722,11 +722,25 @@ make web-build        # tsc + vite build → system/web/dist/
 IP=172.168.20.255 make device-deploy   # hal + os-server
 IP=172.168.20.255 make hal-deploy      # chỉ hal, không cần build
 IP=172.168.20.255 make os-deploy       # cross-compile + thay binary
+
+# Vẫn các target đó nhưng đi qua SSH jump host, cho thiết bị không route tới được
+IP=10.0.0.5 J=proxy-host make hal-deploy
+IP=10.0.0.5 J=proxy-host make hal-log
 ```
 
 Chạy bằng `scripts/deploy-device.sh`. `PI_USER` mặc định `orangepi` và `PI_PASS`
 mặc định `orangepi` (cần `sshpass`); đặt `PI_PASS=""` để dùng SSH key của bạn và
 sudo tương tác. Có thể dùng `PI_HOST` thay cho `IP`.
+
+`J=<host>` (hoặc `PI_JUMP`, hoặc `--jump <host>` khi gọi thẳng script) đặt một
+`ProxyJump` trước mọi hop — `ssh`, `scp` và `rsync` đều nhận — nên
+`hal-deploy`, `os-deploy`, `device-deploy`, `hal-log` và `os-log` tới được
+thiết bị không route trực tiếp từ máy bạn. Hop đó xác thực bằng SSH key/agent
+và `~/.ssh/config` của bạn; `PI_PASS` chỉ là mật khẩu **thiết bị**, nên bastion
+đòi mật khẩu riêng sẽ không chạy tự động được. `make push-skill` dùng cùng knob
+`J=`. Cả hai thứ tự đều được: `J=... make hal-deploy` và
+`make hal-deploy J=...` — riêng `PI_PASS` phải là biến môi trường
+(`PI_PASS="" IP=... make hal-deploy`).
 
 `.env`, `.venv` và `calibration/` trên thiết bị không bao giờ bị ghi đè, và bước
 swap chạy không có `--delete`, nên các đường dẫn riêng của thiết bị (ngoài repo)

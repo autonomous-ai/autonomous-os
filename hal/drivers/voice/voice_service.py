@@ -167,6 +167,9 @@ class VoiceService:
         self._live_frames = 0
         self._live_frames_during_playback = 0
         self._live_frames_substituted = 0
+        # Completed model replies with no confirmed user speech since. Bumped
+        # by the output pump, cleared by the mic loop, which owns user speech.
+        self._live_unprompted_replies = 0
         # Deadline armed when the model calls end_conversation; the session
         # keeps running until then so the farewell is actually heard.
         # 0.0 = no hangup requested.
@@ -972,7 +975,7 @@ class VoiceService:
         keepalive_session = None
         last_keepalive_ping = time.time()  # throttles send_keepalive in the wait loop
 
-        if stt_keepalive_on := voice_cfg.STT_KEEPALIVE: # and not getattr(voice_cfg, "LIVE_MODE", False)
+        if stt_keepalive_on := voice_cfg.STT_KEEPALIVE: # and not voice_cfg.LIVE_MODE
             keepalive_session = self._stt.create_session()
             if not keepalive_session.start(lambda text, is_final: None):
                 keepalive_session = None
@@ -1351,7 +1354,7 @@ class VoiceService:
                     # start, so a device with realtime down still answers.
                     decision = (
                         self._live_decision(speech_pre_buffer)
-                        if getattr(voice_cfg, "LIVE_MODE", False)
+                        if voice_cfg.LIVE_MODE
                         else "turn"
                     )
                     if decision == "live":
@@ -1580,6 +1583,7 @@ class VoiceService:
                     if tail:
                         self._tts.speak_queue(tail)
             if transcript:
+                self._live_unprompted_replies += 1
                 logger.info("[live] model said: %r", transcript[:120])
 
     def _live_session(
@@ -1607,6 +1611,7 @@ class VoiceService:
         self._live_frames = 0
         self._live_frames_during_playback = 0
         self._live_frames_substituted = 0
+        self._live_unprompted_replies = 0
         self._live_hangup_at = 0.0
         started = time.time()
         # Exactly what the provider receives — see LIVE_UPLINK_DUMP_DIR.
@@ -1646,10 +1651,12 @@ class VoiceService:
         self._realtime.set_live_active(True)
         logger.info(
             "[live] session START — uplink_during_playback=%s, aec=%s, "
-            "idle_hangup=%.0fs, max=%.0fs, pre_roll=%d frames",
+            "idle_hangup=%.0fs, max_unprompted_replies=%d, max=%.0fs, "
+            "pre_roll=%d frames",
             voice_cfg.LIVE_UPLINK_DURING_PLAYBACK,
             "on" if aec.active() else "OFF (mic carries full bleed)",
             voice_cfg.LIVE_IDLE_HANGUP_S,
+            voice_cfg.LIVE_MAX_UNPROMPTED_REPLIES,
             voice_cfg.LIVE_MAX_S,
             len(pre_roll),
         )
@@ -1682,16 +1689,13 @@ class VoiceService:
                 # VAD watch for the next one. A live session bills upstream
                 # audio for every second it is open, against only speech
                 # segments on the turn path, so it must end itself.
-                # Hard ceiling on "the user has said nothing at all". The
-                # clock below is held while the device speaks; a model that has
-                # started answering ITSELF would hold it forever. See
-                # LIVE_NO_USER_MAX_S for the device-observed loop.
-                no_user_for = now - last_user_speech
-                if no_user_for > voice_cfg.LIVE_NO_USER_MAX_S:
+
+                unprompted = self._live_unprompted_replies
+                if unprompted > voice_cfg.LIVE_MAX_UNPROMPTED_REPLIES:
                     logger.info(
-                        "[live] no user speech at all for %.0fs (device spoke "
+                        "[live] %d replies with no user speech (device spoke "
                         "%d frame(s) meanwhile) — hanging up, VAD resumes",
-                        no_user_for,
+                        unprompted,
                         self._live_frames_during_playback,
                     )
                     break
@@ -1745,6 +1749,7 @@ class VoiceService:
                         silence_probe = []
                         if self._silence_window_is_speech(window, device_rate):
                             last_user_speech = now
+                            self._live_unprompted_replies = 0
 
                 uplink_frame = resample_to_stt(
                     data, device_rate, voice_cfg.STT_RATE, self._np
