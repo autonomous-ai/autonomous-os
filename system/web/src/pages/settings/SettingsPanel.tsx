@@ -11,7 +11,8 @@ import { RestoreDefaultsButton } from "@/components/setup/shared";
 import { WifiSection } from "@/pages/settings/WifiSection";
 import { VoiceSection as EditVoiceSection } from "@/pages/settings/VoiceSection";
 import { FaceSection as EditFaceSection } from "@/pages/settings/FaceSection";
-import { TTSSection } from "@/pages/settings/TTSSection";
+import { TTSSection, type TtsLoadedState } from "@/pages/settings/TTSSection";
+import { detectChoice } from "@/pages/settings/ttsProvider";
 import { RealtimeSection } from "@/pages/settings/RealtimeSection";
 import { AgentRuntimeSection } from "@/pages/settings/AgentRuntimeSection";
 import { TimezoneSection } from "@/pages/settings/TimezoneSection";
@@ -147,7 +148,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
   });
   const [wifiLoaded, setWifiLoaded] = useState({ ssid: false, password: false });
   const [llmLoaded, setLlmLoaded] = useState({ apiKey: false, baseUrl: false, model: false });
-  const [ttsLoaded, setTtsLoaded] = useState({ apiKey: false, baseUrl: false });
+  const [ttsLoaded, setTtsLoaded] = useState<TtsLoadedState>({ apiKey: false, baseUrl: false, choice: "autonomous" });
   // True once the device has preserved its shipped credentials — i.e. the
   // operator has replaced one at least once. Nothing to offer before that.
   const [hasDefaults, setHasDefaults] = useState(false);
@@ -294,6 +295,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
         setTtsLoaded({
           apiKey: cfg.has_tts_api_key,
           baseUrl: !!cfg.tts_base_url,
+          choice: detectChoice(cfg.tts_base_url, cfg.tts_provider),
         });
         setSttLoaded({
           deepgram: cfg.has_deepgram_api_key,
@@ -474,7 +476,18 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
       body.realtime = realtime;
       body.wakeword = wakeWord;
       if (llmApiKey) body.llm_api_key = llmApiKey;
-      if (ttsApiKey) body.tts_api_key = ttsApiKey;
+      // The stored TTS key belongs to whichever provider was selected when it
+      // was saved. Switching provider makes it a different vendor's credential,
+      // and GetTTSAPIKey would hand it straight to the new one — an ElevenLabs
+      // sk_... sent to the Autonomous proxy, or a proxy JWT sent to ElevenLabs.
+      // Both 401, and hal turns a 401 into silence, so delete it explicitly.
+      // See issue #309.
+      const ttsChoiceToSave = detectChoice(ttsBaseUrl, ttsProvider);
+      if (ttsApiKey) {
+        body.tts_api_key = ttsApiKey;
+      } else if (ttsLoaded.apiKey && ttsLoaded.choice !== ttsChoiceToSave) {
+        body.clear_tts_api_key = true;
+      }
       if (mqttPassword) body.mqtt_password = mqttPassword;
       // STT provider switch: clear the opposing key explicitly so the
       // operator's mode toggle takes effect. When staying on the same provider
@@ -500,6 +513,13 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
         if (discordBotToken) body.discord_bot_token = discordBotToken;
       }
       await updateDeviceConfig(body);
+      // Re-baseline the key's presence and owner without a refetch, so the
+      // "✓ configured" badge reflects what this save actually left on disk.
+      setTtsLoaded({
+        apiKey: body.clear_tts_api_key ? false : (ttsLoaded.apiKey || !!ttsApiKey),
+        baseUrl: !!ttsBaseUrl,
+        choice: ttsChoiceToSave,
+      });
       toast.success("Config saved — restart your device for changes to take effect.");
       // Reset baseline so Save button goes back to disabled until next edit.
       // Non-secret fields adopt their current values as the new baseline.
@@ -535,7 +555,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
     discordBotToken, discordGuildId, discordUserId, ssid, password, adminPassword, llmUrl,
     llmApiKey, llmModel, llmDisableThinking, deepgramApiKey, sttApiKey, sttBaseUrl,
     sttProvider, sttLanguage, sttLoaded,
-    ttsApiKey, ttsBaseUrl, ttsProvider, ttsVoice, ttsSpeed, deviceId,
+    ttsApiKey, ttsBaseUrl, ttsLoaded, ttsProvider, ttsVoice, ttsSpeed, deviceId,
     mqttEndpoint, mqttUsername, mqttPassword, mqttPort, faChannel, fdChannel,
     realtimeEnabled, wakeWord, realtimeProvider, realtimeVoice, realtimeReasoning, realtimeApiKey, realtimeBaseUrl,
   ]);

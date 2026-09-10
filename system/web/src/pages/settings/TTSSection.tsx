@@ -4,10 +4,16 @@ import { Loader2, Volume2, Check, AlertCircle } from "lucide-react";
 import { C, LockedField, LockedPasswordField, SectionCard } from "@/components/setup/shared";
 import { testTTSVoice } from "@/lib/api";
 import type { LlmLoadedState } from "@/hooks/setup/types";
+import { detectChoice, type ProviderChoice } from "@/pages/settings/ttsProvider";
 
 export interface TtsLoadedState {
   apiKey: boolean;
   baseUrl: boolean;
+  // The choice the STORED key belongs to. A key is always saved alongside the
+  // provider selected at the time, so the loaded (base_url, provider) pair
+  // identifies its owner. Once the operator picks a different choice, that key
+  // is a different vendor's and must not be advertised as configured.
+  choice: ProviderChoice;
 }
 
 // Provider "choice" is a UI-only construct — it groups the two on-disk fields
@@ -20,18 +26,6 @@ export interface TtsLoadedState {
 // Autonomous is special: it's a routing hub whose proxy path decides which
 // vendor the request is billed to. So picking "Autonomous" also asks for a
 // vendor (OpenAI or ElevenLabs) — that vendor becomes `tts_provider` while
-// `tts_base_url` stays the autonomous.ai campaign-api endpoint. Backend
-// implementations (see hal/drivers/voice/tts/elevenlabs.py) detect the
-// autonomous.ai host and append the `/elevenlabs` proxy path; direct-API
-// hosts skip that prefix.
-// Deepgram is intentionally NOT in this list: HAL's TTS registry
-// (hal/drivers/voice/tts/backend.py) only implements the `openai` and
-// `elevenlabs` backends — picking "deepgram" silently falls back to the
-// OpenAI backend, which produces a burst of silent audio (no error). Leave
-// Deepgram out until a real Deepgram TTS backend lands, so the operator
-// can't paint themselves into a dead-end. STT works with Deepgram on a
-// different code path (this is TTS-only).
-type ProviderChoice = "autonomous" | "openai" | "elevenlabs" | "piper" | "custom";
 
 // Vendor covers only the choices that have a distinct audio backend on disk.
 // Autonomous supports two vendors; every other choice has exactly one vendor
@@ -81,27 +75,6 @@ const CHOICES: Record<ProviderChoice, ChoiceMeta> = {
   },
 };
 
-// Detect the current choice from persisted (provider, baseUrl). Anchor on the
-// URL host — the raw provider is preserved as the vendor sub-select when the
-// choice is Autonomous. If nothing matches a preset we call it Custom rather
-// than mis-labelling as Autonomous — an operator with a self-hosted URL
-// should see "Custom", not "Autonomous", so switching provider doesn't
-// silently overwrite their URL with the campaign-api endpoint.
-function detectChoice(baseUrl: string, provider?: string): ProviderChoice {
-  // Piper is URL-less, so the URL heuristic below cannot see it. The saved
-  // provider is the only evidence it is selected.
-  if (provider === "piper") return "piper";
-  let host = "";
-  try { host = new URL(baseUrl).hostname.toLowerCase(); } catch { /* invalid — fall through */ }
-  if (!host) return "autonomous";  // empty URL = default to the proxy (matches "leave blank → reuse AI brain")
-  if (host.endsWith("autonomous.ai") || host.endsWith("autonomousdev.xyz")) return "autonomous";
-  if (host === "api.openai.com") return "openai";
-  if (host === "api.elevenlabs.io" || host.endsWith(".elevenlabs.io")) return "elevenlabs";
-  // api.deepgram.com hits this branch too — HAL has no Deepgram TTS backend
-  // so an existing config that somehow ended up on this host lands in Custom
-  // and the operator can pick a real vendor to swap to.
-  return "custom";
-}
 
 // Voices are provider-scoped: OpenAI's "alloy" doesn't exist on ElevenLabs.
 // The full catalog comes from `ttsVoices` (server-derived), but that list is
