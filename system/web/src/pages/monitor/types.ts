@@ -161,7 +161,7 @@ export interface DisplayEvent extends MonitorEvent {
   _seq: number;
 }
 
-export type Section = "overview" | "system" | "flow" | "camera" | "servo" | "face-owners" | "analytics" | "logs" | "chat" | "cli" | "sensing" | "bluetooth" | "api-docs" | "agent-config" | "settings:device" | "settings:wifi" | "settings:llm" | "settings:runtime" | "settings:voice" | "settings:face" | "settings:tts" | "settings:realtime" | "settings:stt" | "settings:channel" | "settings:mqtt" | "settings:mcp" | "settings:plugins" | "settings:timezone" | "settings:scheduled";
+export type Section = "overview" | "system" | "flow" | "camera" | "servo" | "face-owners" | "analytics" | "logs" | "chat" | "pairing" | "cli" | "sensing" | "bluetooth" | "api-docs" | "agent-config" | "settings:device" | "settings:wifi" | "settings:llm" | "settings:runtime" | "settings:voice" | "settings:face" | "settings:tts" | "settings:realtime" | "settings:stt" | "settings:channel" | "settings:mqtt" | "settings:mcp" | "settings:plugins" | "settings:timezone" | "settings:scheduled";
 
 // ─── Area + URL serialization ────────────────────────────────────────────────
 //
@@ -256,6 +256,7 @@ export function isNavLink(c: NavChild): c is NavLink {
 
 export const NAV: NavEntry[] = [
   { id: "chat",     label: "Chat",     icon: "▤" },
+  { id: "pairing",  label: "Pairing",  icon: "⌘" },
   {
     group: "settings",
     label: "Settings",
