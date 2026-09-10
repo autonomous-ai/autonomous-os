@@ -34,6 +34,99 @@ know.**
 If the scan shows nothing for a service, it is **not connected**: say so plainly
 (see Errors) and stop — do not attempt the API call anyway to "check".
 
+## ⛔ Confirm every write before you make it
+
+Reads are free; writes are not. Anything in this skill that **reaches another
+person** (a sent mail, a message in a channel, a shared file, a page or issue
+someone will read) or **destroys something** (a deleted event, file, message or
+record) cannot be taken back — and on a voice-only device the user has no screen
+to check it afterwards. So every write gets the same gate, whichever connector it
+belongs to — Gmail, Slack, Notion, Asana, Linear, monday.com, GitHub, HubSpot,
+Figma, or one linked tomorrow:
+
+**say what will happen → wait for an explicit yes → only then call.**
+
+### Which writes need this — and which do not
+
+**No confirmation.** These change nothing anyone else can see, and asking every
+time makes the device exhausting to use:
+
+- Any **read or search**, on any connector — listing mail, reading a page,
+  searching issues, opening a Figma file.
+- **Analytics and reporting queries** (Amplitude and anything like it). A query
+  is a read however it is spelled.
+- Changes **only the user can see** — marking a message read, a private label,
+  your own view or filter.
+- **Saving a draft that is not sent or published** — a Gmail draft, an
+  unpublished page. Nothing has reached anyone yet; the gate belongs on the
+  send/publish step instead.
+
+**Confirmation required** for everything else: anything another person can see,
+and anything that overwrites or destroys. A connector not named below still
+falls into one of these classes.
+
+### What you read back, by write class
+
+Not a description of the action — the **payload**. "Should I send the email?",
+"want me to update the page?" are not confirmations: the user has to hear the
+thing itself before approving it.
+
+| Write class | Examples across connectors | Read back before acting |
+|---|---|---|
+| **Message to people** | send or reply to an email · post a Slack message, DM or thread reply · comment on a Notion page, a Linear/GitHub issue, a Figma file | **who will see it** — every recipient, or the exact channel, saying plainly when it is a **public** one — and the **full text** |
+| **Document content** | create or edit a Notion page or block · any doc or wiki entry | **where it lands** (page / space / parent) · whether you **create or replace** · **what it will say** |
+| **Work item** | create a Linear, Asana, monday.com or GitHub issue or task · a HubSpot record | **target** (project / board / repo) · title · **assignee** · the body. An assignee gets notified, so this is a message too |
+| **Status / field change** | move a ticket, change a stage or owner, set a due date, edit a CRM field | the item · which field · **old value → new value** |
+| **Delete or overwrite** | delete a message, page, file, event or record · overwrite existing content | **exactly what disappears**, named — and that it is permanent |
+| **Permission / share** | share a file or page · add someone to a channel, project or board | what · **who gains access** · read or write |
+| anything not listed | — | same principle: **who it reaches, and what they will see** |
+
+### How much of it
+
+Read the **whole payload** when it is short enough to speak in one go (~3
+sentences). When it is longer:
+
+- **Never abbreviate the identifying fields, at any length.** Recipients,
+  channel, page, project, repo, the thing being deleted. A message in the wrong
+  channel or a delete on the wrong page is the failure that actually hurts; a
+  trimmed body is not.
+- **Summarize the body — and say that you are summarizing.** "About 400 words —
+  it says <one or two sentences>. Want me to read the whole thing?" Never present
+  a summary as if it were the text: the user has to know they approved a gist,
+  and be able to ask for the full version.
+- **When you edit existing content, say what it replaces.** "Replaces the current
+  Overview section, about 200 words." The user cannot see the page — a read-back
+  covering only the new text hides that something is being overwritten.
+- **For several targets at once, give the count and name them.** "To 5 people:
+  an, binh, chi, dung, em" — never "to the team". If the list is too long to say,
+  that is itself the thing to approve: "to all 34 people in #general — go ahead?"
+
+### The read-back outranks brevity
+
+It is exempt from `keep replies short` (Rules, bottom of this file), from the
+voice skill's "1-3 sentences", and from any persona rule about keeping replies
+short. Never shorten, paraphrase or tidy up something the user is being asked to
+approve — beyond the explicit summarize-and-say-so case above. They are approving
+what you are about to send, so they have to hear what you are about to send. This
+is the one place in this skill where a long reply is the correct one.
+
+### Then wait for the yes
+
+- A yes is a yes: "send it", "do it", "yes", "gửi đi", "ok".
+- Anything else is an edit, not approval ("change the last sentence to…", "put it
+  in the other channel") — apply it, read the new payload back, wait again.
+- Silence, an ambiguous answer, or a change of subject → **do not act.** Ask
+  once, plainly: "send it?" / "delete it?"
+- "Just do it, no need to read it back" skips the read-back for **that one
+  action**, never for the next.
+- **"…and send it" / "…and post it" / "…and delete it" in the original request is
+  not approval.** The user had not heard the payload when they said it — that
+  phrase is what put you in this section, not a way out of it.
+
+**After the call returns**, say what actually happened, naming the target: "Sent
+to <recipient>", "Posted in #<channel>", "Deleted <page>". If it failed, say it
+failed (see Errors) — never report a write you did not read out of the response.
+
 Credentials for linked services live in `/root/.openclaw/workspace/configs/`:
 
 - `<code>_access_tokens.json` → one connector, shape `{"connectors":{"<code>":{"access_token","api_key","auth_type","credentials","expires_at","scopes","user_email","refresh"}}}`
@@ -154,7 +247,9 @@ connector with its own file** — having one does not give you the others:
 - **`ahrefs` or any `api_key`** → token route but `read -r TOKEN < <(jq -r '.connectors.<code>.api_key' …)`.
 - **anything else** → `.connectors.<code>.access_token` as a Bearer header to that service's API.
 
-**Send email (OAuth Gmail)** — build the RFC 822 message, base64url-encode it, POST as `raw`:
+**Send email (OAuth Gmail)** — ⛔ message class: first read `To · Subject · Body`
+back in full and wait for an explicit yes (see *Confirm every write before you
+make it*, top of this file). Then build the RFC 822 message, base64url-encode it, POST as `raw`:
 
 ```bash
 read -r TOKEN < <(jq -r '.connectors.gmail.access_token' /root/.openclaw/workspace/configs/gmail_access_tokens.json)
@@ -206,7 +301,9 @@ for mid in reversed(latest):
 mail.logout()
 ```
 
-**Send email (SMTP):**
+**Send email (SMTP):** — ⛔ same gate: read `To · Subject · Body` back in full
+and wait for an explicit yes before running this.
+
 ```python
 import smtplib, json
 
@@ -247,4 +344,5 @@ Otherwise, if it is `< now` ($(date +%s)), treat as expired (see Errors).
 - **Step −1 is not optional** — Discover in this turn before any claim about connection state, and never invent a result. See the top of this file.
 - MCP connectors: use the tool, not the file.
 - Obey **Credential safety** above — secrets never reach chat, files, or logs.
-- Match the user's language; keep replies short.
+- **No write without a read-back** — read the payload back, wait for an explicit yes, then send/post/create/change/delete. Every connector, not just mail; reads and analytics queries need no confirmation. See the top of this file.
+- Match the user's language; keep replies short — **except a write read-back**, which is always read in full.
