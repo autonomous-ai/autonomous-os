@@ -51,8 +51,6 @@ function useEmotionPresets() {
 import type { SystemInfo, NetworkInfo, HWHealth, OCStatus, PresenceInfo, VoiceStatus, ServoState, DisplayState, AudioVolume, LEDColor, SceneInfo } from "./types";
 import { StatusDot, HWBadge, SignalBars, Skeleton, SkeletonRows, SoftwareUpdateButton, StatRow, StatusBadge, STATUS_TONE, CardLabel, RestartAgentButton, DevicePowerButtons } from "./components";
 import { formatUptime, formatAgo, useCountUp } from "./utils";
-import { BuddyCard } from "./BuddyCard";
-import { HarnessCard } from "./HarnessCard";
 
 export function OverviewSection({
   sys,
@@ -703,8 +701,6 @@ export function OverviewSection({
           <DevicePowerButtons />
         </div>
 
-        <BuddyCard />
-        <HarnessCard />
         </div>
       </div>
 

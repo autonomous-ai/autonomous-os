@@ -24,7 +24,7 @@ The browser tab title (`document.title`) reflects the focused page/tab so multip
 | Route / state | Title |
 |---------------|-------|
 | `/setup` (and `/` when not provisioned) | `Lamp · Setup` |
-| `/monitor#<section>` (active section) | `Lamp · <section label>` — e.g. `Lamp · Chat`, `Lamp · Overview`, `Lamp · Info`, `Lamp · Flow`, `Lamp · Users`, `Lamp · Camera`, `Lamp · Sensing`, `Lamp · Analytics`, `Lamp · Servo`, `Lamp · Logs`, `Lamp · CLI` |
+| `/monitor#<section>` (active section) | `Lamp · <section label>` — e.g. `Lamp · Chat`, `Lamp · Overview`, `Lamp · Pairing`, `Lamp · Info`, `Lamp · Flow`, `Lamp · Users`, `Lamp · Camera`, `Lamp · Sensing`, `Lamp · Analytics`, `Lamp · Servo`, `Lamp · Logs`, `Lamp · CLI` |
 | `/setting#<section>` (Settings, active section) | `Lamp · Settings · <section label>` — e.g. `Lamp · Settings · General`, `Lamp · Settings · Wi-Fi`, `Lamp · Settings · AI Brain`, `Lamp · Settings · Language`, `Lamp · Settings · Voice`, `Lamp · Settings · My Voice`, `Lamp · Settings · Face`, `Lamp · Settings · Channels`, `Lamp · Settings · MQTT`, `Lamp · Settings · Timezone` |
 | `/gw-config` | `Lamp · GW Config` |
 
@@ -80,11 +80,14 @@ Layout: **Fixed 216px sidebar + flexible main area**, 100vh height.
 
 ### 3.2 Sidebar Navigation
 
-4 sections toggled via local state (`section: Section`):
+The **Device** sidebar group contains the primary Monitor leaves, including
+**Pairing directly below Servo**. Bluetooth remains implemented but is currently
+hidden from the navigation:
 
 | Icon | Section | Content |
 |------|---------|---------|
 | ◈ | Overview | Full system overview |
+| ⟷ | Pairing | Autonomous Buddy and Harness connections/pairing |
 | ⬡ | System | CPU/RAM/Temp details + history |
 | ◎ | Workflow | OpenClaw event feed real-time |
 | ⬟ | Camera | MJPEG stream + Display LCD |
@@ -160,7 +163,7 @@ The Settings collapsible group lives in the shared sidebar `NAV` (`system/web/sr
 | Plugins | `/setting#plugins` |
 | Timezone | `/setting#timezone` |
 
-Monitor leaves serialize as the plain id, e.g. `/monitor#overview`, `/monitor#system`, `/monitor#flow`. Defaults: `/monitor` with no/invalid hash → `overview`; `/setting` with no/invalid hash → `general` (URL normalized to `/setting#general`). Deep-links (e.g. `/setting#wifi`) and browser back/forward are honored via a `useLocation`-driven effect. Non-debug users only see the leaves in `PUBLIC_SECTIONS` (which includes Chat, Overview, Info, Flow, Camera, Users, Bluetooth, **Logs**, **CLI**, and the public Settings leaves General/Wi-Fi/My Voice/Face/MCP Tools/Plugins/Timezone); `?debug=true` reveals the rest (Sensing, Analytics, Servo, API Docs, Agent gateway, and the deeper Settings leaves AI Brain/Runtime/Language/Voice/Realtime/Channels/MQTT). Pressing `update` swaps the button for `updating…` immediately — the button never says "OK", which would read as "done" for a request that has only STARTED the install (and, for a component that finishes in seconds, arrived before the row could even show progress). Failures show the server's own reason (`rate-limited, retry in 8s`, `bootstrap unreachable`) rather than a bare "Failed". While an install runs, that row shows `updating…` in place of the button (an install takes tens of seconds — the component stops, is rebuilt and restarts — and a row that just sits there invites a second click, which is how a device once lost its HAL runtime). The `update` buttons in the Overview **Versions** card (Web / OS / HAL / Agent rows, plus Bootstrap and Device in debug) are gated the same way — regular viewers get no one-click OTA trigger. The top-bar **Debug** toggle beside the Dark/Light button toggles that query parameter while preserving the active route hash and any other query parameters; its amber state indicates that debug mode is enabled.
+Monitor leaves serialize as the plain id, e.g. `/monitor#overview`, `/monitor#pairing`, `/monitor#system`, `/monitor#flow`. Defaults: `/monitor` with no/invalid hash → `overview`; `/setting` with no/invalid hash → `general` (URL normalized to `/setting#general`). Deep-links (e.g. `/setting#wifi`) and browser back/forward are honored via a `useLocation`-driven effect. Non-debug users only see the leaves in `PUBLIC_SECTIONS` (which includes Chat, Overview, **Pairing**, Info, Flow, Camera, Users, **Logs**, **CLI**, and the public Settings leaves General/Wi-Fi/My Voice/Face/MCP Tools/Plugins/Timezone); Bluetooth remains available by direct URL but is hidden from navigation. `?debug=true` reveals the rest (Sensing, Analytics, Servo, API Docs, Agent gateway, and the deeper Settings leaves AI Brain/Runtime/Language/Voice/Realtime/Channels/MQTT). Pressing `update` swaps the button for `updating…` immediately — the button never says "OK", which would read as "done" for a request that has only STARTED the install (and, for a component that finishes in seconds, arrived before the row could even show progress). Failures show the server's own reason (`rate-limited, retry in 8s`, `bootstrap unreachable`) rather than a bare "Failed". While an install runs, that row shows `updating…` in place of the button (an install takes tens of seconds — the component stops, is rebuilt and restarts — and a row that just sits there invites a second click, which is how a device once lost its HAL runtime). The `update` buttons in the Overview **Versions** card (Web / OS / HAL / Agent rows, plus Bootstrap and Device in debug) are gated the same way — regular viewers get no one-click OTA trigger. The top-bar **Debug** toggle beside the Dark/Light button toggles that query parameter while preserving the active route hash and any other query parameters; its amber state indicates that debug mode is enabled.
 
 **Speech attention gate** lives in the public **General** settings card, not the debug-only Realtime section. Its checkbox writes the top-level `wakeword` flag; saving restarts HAL so the change applies. When enabled, speech must follow an attention trigger: a spoken phrase, single click, turning toward the lamp while speaking, or an enrolled person entering view (`presence.enter`). A stranger-only enter does not open the voice gate unless the deployment sets `HAL_PRESENCE_WAKE_STRANGERS=true`. The card lists the currently accepted **spoken** phrases, including the active agent's exact current name and the permanent `autonomous` and device-type aliases; the system manages that list. Reload Settings after an agent rename to see the new name. When disabled, every utterance is handled without a trigger.
 
@@ -384,7 +387,7 @@ the shorter Presence card from being stretched by the taller Audio card.
 > **Layout & pill clouds.** The device cluster (row 2) splits into two equal
 > columns: the right column holds the expressive cards (Emotion, Servo Pose,
 > Versions) and the left column holds the compact status cards (Hardware, Scene,
-> Harness); they collapse to one column under ~860px. Versions sits in the right
+> Power); they collapse to one column under ~860px. Versions sits in the right
 > column so the two columns balance in height rather than the right ending short
 > under Servo Pose. The Emotion preset list and the Servo recording list each
 > render as a **pill cloud** — the active pill is hoisted to the front so the
@@ -399,8 +402,19 @@ the shorter Presence card from being stretched by the taller Audio card.
 > long names such as `acknowledge`; when a card is narrow, the pill cloud wraps
 > below it rather than overlapping the current state.
 
+### 5.2 Pairing Section
+
+`/monitor#pairing` is the dedicated connection and pairing area. It renders both
+`BuddyCard.tsx` (Autonomous Buddy for Mac) and `HarnessCard.tsx`, keeping these
+computer integrations separate from the device-status cards on Overview. The
+page has a compact connection header and a two-column card layout that becomes
+one column below 760px.
+
+**Autonomous Buddy (Mac)**
+- Shows the paired Mac and its connection state. When no Mac is paired, **Pair new Mac** generates a code for Autonomous Buddy → *Pair with device…*.
+- Revoking a pairing requires confirmation and calls `DELETE /api/buddy`.
+
 **Harness pairing**
-- Overview uses `HarnessCard.tsx`; the retained Buddy component is not mounted here.
 - **Generate pairing code** calls admin-authenticated `POST /api/harness/pair` with no
   computer selection. The OS generates a six-character code valid for 60 seconds.
 - On the same local network, open Harness Desktop → Settings → Devices, select this
@@ -415,6 +429,8 @@ the shorter Presence card from being stretched by the taller Audio card.
   `POST /api/harness/pair/cancel` cancels the pending attempt.
 - Unpair requires confirmation and calls admin-authenticated `DELETE /api/harness`.
   Harness uses its original E2EE pairing/session protocol and retains separate keys from Buddy.
+
+The Pairing section is available to non-debug users.
 
 **Display Eyes**
 - Currently displayed expression (mode)
@@ -437,7 +453,7 @@ Below the nav items and OpenClaw status, the sidebar shows versions for all thre
 - **HAL** (blue): from `GET /api/system/info` → `halVersion` field. The OS server calls HAL `:5001/version` on the loopback once per minute (cached) and re-exposes it through the OS server API, so the browser doesn't need direct access to `/hw/*` (nginx gates `/hw/` to loopback only).
 - **Force Update** button: triggers `POST /api/system/force-update` → bootstrap OTA check. Shows "Checking…" while busy, then "Triggered"/"Failed" feedback for 3 seconds.
 
-### 5.2 System Section
+### 5.3 System Section
 
 **Performance** — 3 GaugeRing SVGs:
 - CPU: amber color, shows `%`
@@ -451,7 +467,7 @@ Below the nav items and OpenClaw status, the sidebar shows versions for all thre
 **Process**: goroutines, uptime, version, deviceId
 **Network Detail**: SSID, IP, signal, internet
 
-### 5.3 Workflow Section
+### 5.4 Workflow Section
 
 File-backed hybrid feed:
 
@@ -499,13 +515,13 @@ Turn Pipeline grouping behavior:
 - Flow event memory is capped at 10 000 events.
 - Telegram stitching heuristic: if a Telegram fallback input turn (without real input text) is immediately followed by an agent-output turn within 30s, Monitor stitches them into one turn so the reply stays with the original Telegram input.
 
-### 5.4 Camera Section
+### 5.5 Camera Section
 
 - **Camera Stream**: MJPEG live stream from `GET /hw/camera/stream` (downscaled + throttled; default ~10fps, ~320px width). The `<img>` remounts with a fresh connection (bumped `streamEpoch` cache-buster) whenever the camera transitions to enabled — via the Enable button or an auto-enable picked up by polling — so live video returns immediately without a page refresh. A stream error that lands right after enable (HAL's capture loop needs ~1-2s to deliver the first frame) is not latched: it auto-retries on a short delay until a frame loads.
 - **Display Eyes (GC9A01)**: Round 1.28" screen snapshot from `GET /hw/display/snapshot`, displayed as circle with amber glow. Has Refresh button.
 - **Camera Snapshot**: Static image from `GET /hw/camera/snapshot`, with Capture button to take new shot.
 
-### 5.5 Logs Section
+### 5.6 Logs Section
 
 - Dedicated runtime log panels: HAL, OS (os-server), Buddy, **Bootstrap** (source id `bootstrap`), plus **Agent** and **Agent Service** (source ids `openclaw` / `openclaw-service`).
 - **Bootstrap** reads the OTA bootstrap worker's systemd journal (`bootstrap.service`). Its initial load and manual refresh use `GET /api/logs/tail?source=bootstrap&lines=N`; live updates use `GET /api/logs/stream?source=bootstrap` (SSE). Both endpoints require the normal authenticated session.
@@ -519,7 +535,7 @@ Turn Pipeline grouping behavior:
 
 > **Note**: Camera serves a dual role — (1) live stream display for user viewing, (2) automatic sensing data source. Sensing service reads a frame from camera every 2s to detect motion, faces (Haar cascade), and light level. When significant events are detected (person appears, large motion), a full-resolution JPEG auto-snapshot is sent with the event to OpenClaw AI for vision analysis.
 
-### 5.6 Chat Section
+### 5.7 Chat Section
 
 Interactive chat interface for communicating with the agent. Layout: sidebar (conversation list) + main chat area.
 

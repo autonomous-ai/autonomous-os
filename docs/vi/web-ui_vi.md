@@ -24,7 +24,7 @@ Tiêu đề tab trình duyệt (`document.title`) hiển thị đúng theo page/
 | Route / trạng thái | Title |
 |--------------------|-------|
 | `/setup` (và `/` khi chưa provision) | `Lamp · Setup` |
-| `/monitor#<section>` (theo section đang chọn) | `Lamp · <tên section>` — ví dụ `Lamp · Chat`, `Lamp · Overview`, `Lamp · Info`, `Lamp · Flow`, `Lamp · Users`, `Lamp · Camera`, `Lamp · Sensing`, `Lamp · Analytics`, `Lamp · Servo`, `Lamp · Logs`, `Lamp · CLI` |
+| `/monitor#<section>` (theo section đang chọn) | `Lamp · <tên section>` — ví dụ `Lamp · Chat`, `Lamp · Overview`, `Lamp · Pairing`, `Lamp · Info`, `Lamp · Flow`, `Lamp · Users`, `Lamp · Camera`, `Lamp · Sensing`, `Lamp · Analytics`, `Lamp · Servo`, `Lamp · Logs`, `Lamp · CLI` |
 | `/setting#<section>` (Settings, theo section đang chọn) | `Lamp · Settings · <tên section>` — ví dụ `Lamp · Settings · General`, `Lamp · Settings · Wi-Fi`, `Lamp · Settings · AI Brain`, `Lamp · Settings · Language`, `Lamp · Settings · Voice`, `Lamp · Settings · My Voice`, `Lamp · Settings · Face`, `Lamp · Settings · Channels`, `Lamp · Settings · MQTT`, `Lamp · Settings · Timezone` |
 | `/gw-config` | `Lamp · GW Config` |
 
@@ -80,11 +80,13 @@ Layout: **Sidebar 216px cố định + Main area co giãn**, chiều cao 100vh.
 
 ### 3.2 Sidebar Navigation
 
-4 section có thể chuyển đổi bằng local state (`section: Section`):
+Nhóm **Device** trên sidebar chứa các mục Monitor chính, trong đó **Pairing nằm
+ngay dưới Servo**. Bluetooth vẫn được triển khai nhưng hiện ẩn khỏi navigation:
 
 | Icon | Section | Nội dung |
 |------|---------|---------|
 | ◈ | Overview | Tổng quan toàn bộ hệ thống |
+| ⟷ | Pairing | Kết nối/ghép đôi Autonomous Buddy và Harness |
 | ⬡ | System | CPU/RAM/Temp chi tiết + lịch sử |
 | ◎ | Workflow | OpenClaw event feed real-time |
 | ⬟ | Camera | MJPEG stream + Display LCD |
@@ -158,7 +160,7 @@ Nhóm Settings có thể thu gọn nằm trong `NAV` của sidebar dùng chung (
 | Plugins | `/setting#plugins` |
 | Timezone | `/setting#timezone` |
 
-Các mục Monitor được serialize thành id thuần, ví dụ `/monitor#overview`, `/monitor#system`, `/monitor#flow`. Mặc định: `/monitor` không có hash / hash không hợp lệ → `overview`; `/setting` không có hash / hash không hợp lệ → `general` (URL được chuẩn hóa thành `/setting#general`). Deep-link (ví dụ `/setting#wifi`) và nút back/forward của trình duyệt được tôn trọng qua một effect dựa trên `useLocation`. Người dùng không-debug chỉ thấy các mục trong `PUBLIC_SECTIONS` (gồm Chat, Overview, Info, Flow, Camera, Users, Bluetooth, **Logs**, **CLI**, và các mục Settings công khai General/Wi-Fi/My Voice/Face/MCP Tools/Plugins/Timezone); `?debug=true` mở khóa phần còn lại (Sensing, Analytics, Servo, API Docs, Agent gateway, và các mục Settings sâu hơn AI Brain/Runtime/Language/Voice/Realtime/Channels/MQTT). Bấm `update` là nút đổi ngay thành `updating…` — nút KHÔNG bao giờ báo "OK", vì chữ đó đọc như "xong rồi" trong khi request mới chỉ KHỞI ĐỘNG việc cài (và với component chạy vài giây thì nó còn hiện trước cả lúc dòng kịp báo tiến trình). Khi lỗi thì hiện đúng lý do server trả về (`rate-limited, retry in 8s`, `bootstrap unreachable`) thay vì chữ "Failed" trống rỗng. Trong lúc đang cài, dòng đó hiện `updating…` thay cho nút (một lần cài mất vài chục giây — component dừng, build lại, khởi động lại — và một dòng đứng im khiến người dùng bấm lần hai, chính là cách một máy từng mất sạch HAL runtime). Các nút `update` trong card **Versions** ở Overview (dòng Web / OS / HAL / Agent, cộng Bootstrap và Device ở debug) cũng bị chặn theo cách này — người xem thường không có nút kích OTA một chạm. Toggle **Debug** trên top bar, ngay cạnh nút Dark/Light, bật/tắt query parameter này nhưng vẫn giữ hash của mục đang mở và các query parameter khác; màu amber cho biết debug mode đang bật.
+Các mục Monitor được serialize thành id thuần, ví dụ `/monitor#overview`, `/monitor#pairing`, `/monitor#system`, `/monitor#flow`. Mặc định: `/monitor` không có hash / hash không hợp lệ → `overview`; `/setting` không có hash / hash không hợp lệ → `general` (URL được chuẩn hóa thành `/setting#general`). Deep-link (ví dụ `/setting#wifi`) và nút back/forward của trình duyệt được tôn trọng qua một effect dựa trên `useLocation`. Người dùng không-debug chỉ thấy các mục trong `PUBLIC_SECTIONS` (gồm Chat, Overview, **Pairing**, Info, Flow, Camera, Users, **Logs**, **CLI**, và các mục Settings công khai General/Wi-Fi/My Voice/Face/MCP Tools/Plugins/Timezone); Bluetooth vẫn truy cập được bằng URL trực tiếp nhưng bị ẩn khỏi navigation. `?debug=true` mở khóa phần còn lại (Sensing, Analytics, Servo, API Docs, Agent gateway, và các mục Settings sâu hơn AI Brain/Runtime/Language/Voice/Realtime/Channels/MQTT). Bấm `update` là nút đổi ngay thành `updating…` — nút KHÔNG bao giờ báo "OK", vì chữ đó đọc như "xong rồi" trong khi request mới chỉ KHỞI ĐỘNG việc cài (và với component chạy vài giây thì nó còn hiện trước cả lúc dòng kịp báo tiến trình). Khi lỗi thì hiện đúng lý do server trả về (`rate-limited, retry in 8s`, `bootstrap unreachable`) thay vì chữ "Failed" trống rỗng. Trong lúc đang cài, dòng đó hiện `updating…` thay cho nút (một lần cài mất vài chục giây — component dừng, build lại, khởi động lại — và một dòng đứng im khiến người dùng bấm lần hai, chính là cách một máy từng mất sạch HAL runtime). Các nút `update` trong card **Versions** ở Overview (dòng Web / OS / HAL / Agent, cộng Bootstrap và Device ở debug) cũng bị chặn theo cách này — người xem thường không có nút kích OTA một chạm. Toggle **Debug** trên top bar, ngay cạnh nút Dark/Light, bật/tắt query parameter này nhưng vẫn giữ hash của mục đang mở và các query parameter khác; màu amber cho biết debug mode đang bật.
 
 **Speech attention gate** nằm trong card **General** công khai, không nằm ở mục Realtime chỉ-debug. Checkbox vẫn ghi cờ `wakeword` top-level; lưu Settings sẽ restart HAL để áp dụng. Khi bật, speech phải đi sau một attention trigger: wake phrase nói ra, single click, quay về phía lamp rồi nói, hoặc một người đã enrolled xuất hiện trong khung (`presence.enter`). Event chỉ có stranger không mở voice gate, trừ khi deployment đặt `HAL_PRESENCE_WAKE_STRANGERS=true`. Card liệt kê các phrase **nói ra** hiện được chấp nhận, gồm tên agent hiện tại chính xác cùng các alias cố định `autonomous` và device type; hệ thống quản lý danh sách này. Tải lại Settings sau khi đổi tên agent để thấy tên mới. Khi tắt, mọi câu nói được xử lý mà không cần trigger.
 
@@ -372,7 +374,7 @@ không kéo giãn card Presence ngắn theo card Audio cao hơn.
 
 > **Bố cục & pill cloud.** Cụm thiết bị (hàng 2) chia thành hai cột bằng nhau:
 > cột phải cho các card biểu cảm (Emotion, Servo Pose, Versions) và cột trái cho
-> các card trạng thái gọn (Hardware, Scene, Harness); dưới ~860px hai cột gộp về
+> các card trạng thái gọn (Hardware, Scene, Power); dưới ~860px hai cột gộp về
 > một. Versions nằm ở cột phải để hai cột cân chiều cao, tránh cột phải bị cụt
 > dưới Servo Pose. Danh sách preset Emotion và danh sách recording Servo render
 > dưới dạng **pill cloud** — pill đang active được đẩy lên đầu để trạng thái hiện
@@ -386,8 +388,18 @@ không kéo giãn card Presence ngắn theo card Audio cao hơn.
 > `acknowledge`; khi card hẹp, pill cloud sẽ xuống hàng dưới thay vì đè lên
 > trạng thái hiện tại.
 
+### 5.2 Section Pairing
+
+`/monitor#pairing` là khu vực riêng cho kết nối và ghép đôi. Nó render cả
+`BuddyCard.tsx` (Autonomous Buddy cho Mac) và `HarnessCard.tsx`, tách các tích hợp
+máy tính này khỏi các card trạng thái thiết bị trên Overview. Trang có header kết
+nối gọn và bố cục card hai cột, chuyển thành một cột khi nhỏ hơn 760px.
+
+**Autonomous Buddy (Mac)**
+- Hiển thị máy Mac đã ghép và trạng thái kết nối. Khi chưa có máy Mac nào, **Pair new Mac** tạo mã để nhập trong Autonomous Buddy → *Pair with device…*.
+- Thu hồi ghép đôi yêu cầu xác nhận và gọi `DELETE /api/buddy`.
+
 **Ghép đôi Harness**
-- Overview dùng `HarnessCard.tsx`; component Buddy được giữ lại nhưng không mount ở đây.
 - **Generate pairing code** gọi `POST /api/harness/pair` có xác thực admin, không cần
   chọn máy tính. OS tạo mã sáu ký tự có hiệu lực 60 giây.
 - Trên cùng mạng nội bộ, mở Harness Desktop → Settings → Devices, chọn thiết bị
@@ -402,6 +414,8 @@ không kéo giãn card Presence ngắn theo card Audio cao hơn.
   `POST /api/harness/pair/cancel` huỷ lần ghép đang chờ.
 - Unpair cần xác nhận, gọi `DELETE /api/harness` có xác thực admin. Harness dùng giao thức
   pairing/phiên E2EE gốc và giữ khóa riêng, độc lập với Buddy.
+
+Section Pairing có mặt với người dùng không-debug.
 
 **Display Eyes**
 - Expression đang hiển thị (mode)
@@ -424,7 +438,7 @@ Dưới nav items và trạng thái OpenClaw, sidebar hiển thị version của
 - **HAL** (blue): từ `GET /api/system/info` → field `halVersion`. OS server tự gọi `:5001/version` của HAL qua loopback mỗi phút 1 lần (cache) rồi re-expose qua API của OS server, browser không cần truy cập trực tiếp `/hw/*` (nginx chặn `/hw/` chỉ cho loopback).
 - **Force Update** button: gọi `POST /api/system/force-update` → bootstrap kiểm tra OTA. Hiện "Checking…" khi đang xử lý, sau đó "Triggered"/"Failed" trong 3 giây.
 
-### 5.2 System Section
+### 5.3 System Section
 
 **Performance** — 3 GaugeRing SVG:
 - CPU: màu amber, hiện `%`
@@ -438,7 +452,7 @@ Dưới nav items và trạng thái OpenClaw, sidebar hiển thị version của
 **Process**: goroutines, uptime, version, deviceId
 **Network Detail**: SSID, IP, signal, internet
 
-### 5.3 Workflow Section
+### 5.4 Workflow Section
 
 Flow feed hybrid theo file:
 
@@ -486,13 +500,13 @@ Hành vi gom nhóm Turn Pipeline:
 - Bộ nhớ event của Flow được giới hạn 10 000 events.
 - Heuristic ghép turn Telegram: nếu turn Telegram fallback (không có text input thật) đứng ngay trước turn có output agent trong vòng 30 giây, Monitor sẽ ghép thành 1 turn để câu trả lời đi cùng input Telegram.
 
-### 5.4 Camera Section
+### 5.5 Camera Section
 
 - **Camera Stream**: MJPEG live stream từ `GET /hw/camera/stream` (downscaled + throttled; mặc định ~10fps, ~320px chiều ngang). Thẻ `<img>` remount bằng kết nối mới (cache-buster `streamEpoch` tăng lên) mỗi khi camera chuyển sang enabled — qua nút Enable hoặc auto-enable phát hiện bởi polling — nên video live trở lại ngay, khỏi refresh trang. Lỗi stream xảy ra ngay sau enable (loop capture của HAL cần ~1-2s để có frame đầu) không bị latch: nó tự retry sau khoảng trễ ngắn tới khi load được frame.
 - **Display Eyes (GC9A01)**: Snapshot màn hình tròn 1.28" từ `GET /hw/display/snapshot`, hiển thị dạng hình tròn với amber glow. Có nút Refresh.
 - **Camera Snapshot**: Ảnh tĩnh từ `GET /hw/camera/snapshot`, có nút Capture để chụp mới.
 
-### 5.5 Logs Section
+### 5.6 Logs Section
 
 - Tab log runtime: HAL, OS (os-server), Buddy, **Bootstrap**, cùng **Agent** và **Agent Service** (source id `bootstrap`, `openclaw` / `openclaw-service`). Tab **Bootstrap** đọc journal của systemd unit `bootstrap.service`.
 - Tab **Agent**/**Agent Service** là runtime-aware — backend (`resolveLogSource` trong `server/logs.go`) trỏ chúng tới backend agentic nào đang chạy:
@@ -506,7 +520,7 @@ Hành vi gom nhóm Turn Pipeline:
 
 > **Lưu ý**: Camera có vai trò kép — (1) hiển thị live stream cho user xem, (2) nguồn dữ liệu sensing tự động. Sensing service đọc frame từ camera mỗi 2s để detect motion, face (Haar cascade), và light level. Khi phát hiện sự kiện đáng kể (người xuất hiện, chuyển động lớn), auto-snapshot full-resolution JPEG được gửi kèm event tới OpenClaw AI để phân tích bằng vision.
 
-### 5.6 Chat Section
+### 5.7 Chat Section
 
 Giao diện chat tương tác với agent. Layout: sidebar (danh sách hội thoại) + vùng chat chính.
 
