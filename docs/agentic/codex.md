@@ -371,9 +371,25 @@ newer one proves it was not the reply. Exception: a non-final message carrying a
 wording cannot suppress preambles reliably — this is the enforcement point.
 
 **Usage:** `turn.completed` carries `{input_tokens, cached_input_tokens,
-output_tokens}`; the translator maps `input + cached → InputTokens` (an
-approximation of the live context size), `output → OutputTokens`,
-`TotalTokens = in + out`.
+cache_write_input_tokens, output_tokens}`. The App Server reports it on the
+`turn/completed` notification (top level, or nested under `turn` — gatewayd's
+`usageOf` accepts either) and forwards it verbatim on the `turn.completed`
+frame; before that it emitted a bare frame and the Flow Monitor turn card
+showed **no tokens at all**.
+
+Codex speaks the OpenAI Responses API, whose `input_tokens` **already includes**
+`cached_input_tokens`. The translator therefore SUBTRACTS — `input - cached →
+InputTokens`, `cached → CacheReadTokens`, `cache_write → CacheWriteTokens`,
+`output → OutputTokens`, `TotalTokens = fresh + cached + out` — the same
+conversion `runtimes/hermes/translator.go` does for the chat/completions shape,
+so the monitor renders `↓fresh R<cache> Σtotal`. Rotation keys on the RAW
+`input_tokens` (`lastContextTokens`), which is the whole prompt and hence the
+live context size; adding cached on top would halve the effective threshold.
+
+> The three wires differ: `/responses` (codex) and `chat/completions` (hermes)
+> fold the cached prefix INTO `input_tokens`; `/messages` (claudecode,
+> openclaw) and opencode report it separately. `domain.TokenUsage` follows the
+> Anthropic split, so only the first two subtract.
 
 ## 4. Session
 

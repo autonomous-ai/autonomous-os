@@ -294,11 +294,17 @@ func (s *Server) handleAppNotification(method string, params json.RawMessage) {
 		ThreadID string `json:"threadId"`
 		TurnID   string `json:"turnId"`
 		Turn     struct {
-			ID     string `json:"id"`
-			Status string `json:"status"`
-			Error  any    `json:"error"`
+			ID     string          `json:"id"`
+			Status string          `json:"status"`
+			Error  any             `json:"error"`
+			Usage  json.RawMessage `json:"usage"`
 		} `json:"turn"`
-		Item json.RawMessage `json:"item"`
+		// TurnCompletedEvent carries the token usage block. codex-rs 0.150.1
+		// has emitted it both at the notification top level and nested under
+		// `turn`; accept either (usageOf picks whichever is present) so the
+		// device turn card keeps showing tokens across codex upgrades.
+		Usage json.RawMessage `json:"usage"`
+		Item  json.RawMessage `json:"item"`
 	}
 	_ = json.Unmarshal(params, &p)
 	switch method {
@@ -347,7 +353,15 @@ func (s *Server) handleAppNotification(method string, params json.RawMessage) {
 		} else if p.Turn.Status != "completed" {
 			s.sendJSON(map[string]any{"type": "turn.failed", "error": p.Turn.Error})
 		} else {
-			s.sendJSON(map[string]any{"type": "turn.completed"})
+			// Forward the usage block verbatim: without it the translator's
+			// lifecycle.end carries no usage and the Flow Monitor turn card
+			// shows no in/out/cache tokens at all (the `codex exec` JSONL path
+			// never lost it — it forwards stdout untouched).
+			frame := map[string]any{"type": "turn.completed"}
+			if u := usageOf(p.Usage, p.Turn.Usage); u != nil {
+				frame["usage"] = u
+			}
+			s.sendJSON(frame)
 		}
 		s.mu.Lock()
 		s.activeRequestID, s.activeRunID = "", ""
@@ -448,4 +462,20 @@ func snakeItemType(v string) string {
 		b.WriteRune(r)
 	}
 	return strings.ToLower(b.String())
+}
+
+// usageOf returns the first non-empty usage block, as a decoded object so it
+// re-marshals into the frame as JSON rather than a base64 string. Empty/`null`
+// candidates are skipped; nil means the notification carried no usage.
+func usageOf(candidates ...json.RawMessage) map[string]any {
+	for _, raw := range candidates {
+		if len(raw) == 0 {
+			continue
+		}
+		var m map[string]any
+		if json.Unmarshal(raw, &m) == nil && len(m) > 0 {
+			return m
+		}
+	}
+	return nil
 }

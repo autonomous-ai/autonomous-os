@@ -363,8 +363,25 @@ giữ trong reply. Chỉnh prompt không chặn preamble một cách đáng tin 
 chỗ cưỡng chế.
 
 **Usage:** `turn.completed` mang `{input_tokens, cached_input_tokens,
-output_tokens}`; translator map `input + cached → InputTokens` (xấp xỉ kích
-thước context sống), `output → OutputTokens`, `TotalTokens = in + out`.
+cache_write_input_tokens, output_tokens}`. App Server báo khối này trên
+notification `turn/completed` (ở top level, hoặc lồng trong `turn` — `usageOf`
+của gatewayd nhận cả hai) và forward nguyên vẹn trên frame `turn.completed`;
+trước đây nó gửi frame rỗng nên thẻ turn trong Flow Monitor **không hiện token
+nào cả**.
+
+Codex nói OpenAI Responses API, mà ở đó `input_tokens` **đã bao gồm**
+`cached_input_tokens`. Nên translator phải TRỪ: `input - cached → InputTokens`,
+`cached → CacheReadTokens`, `cache_write → CacheWriteTokens`,
+`output → OutputTokens`, `TotalTokens = fresh + cached + out` — đúng phép quy
+đổi mà `runtimes/hermes/translator.go` làm cho dạng chat/completions, để monitor
+hiển thị `↓fresh R<cache> Σtotal`. Rotation dùng `input_tokens` THÔ
+(`lastContextTokens`) vì đó chính là toàn bộ prompt, tức kích thước context
+sống; cộng thêm cached vào sẽ làm ngưỡng rotate giảm còn một nửa.
+
+> Ba wire khác nhau: `/responses` (codex) và `chat/completions` (hermes) gộp
+> phần cached VÀO `input_tokens`; `/messages` (claudecode, openclaw) và opencode
+> báo tách riêng. `domain.TokenUsage` theo cách tách của Anthropic, nên chỉ hai
+> loại đầu mới phải trừ.
 
 ## 4. Session
 

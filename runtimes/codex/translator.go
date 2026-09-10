@@ -86,26 +86,45 @@ func (it codexItem) kind() string {
 
 // codexUse is the turn.completed usage block.
 type codexUse struct {
-	InputTokens       int `json:"input_tokens"`
-	CachedInputTokens int `json:"cached_input_tokens"`
-	OutputTokens      int `json:"output_tokens"`
+	InputTokens          int `json:"input_tokens"`
+	CachedInputTokens    int `json:"cached_input_tokens"`
+	CacheWriteInputToken int `json:"cache_write_input_tokens"`
+	OutputTokens         int `json:"output_tokens"`
 }
 
-// toDomain maps Codex usage onto domain.TokenUsage. input+cached approximates
-// the live context size (what ShouldRotateSession keys on); TotalTokens is the
-// full turn volume.
+// toDomain maps Codex usage onto domain.TokenUsage. Codex speaks the OpenAI
+// Responses API, whose `input_tokens` ALREADY INCLUDES `cached_input_tokens`,
+// while domain.TokenUsage follows Anthropic semantics (InputTokens = uncached
+// only, cache read separate — the Flow monitor renders ↓in R<cache> from
+// those). Subtract, exactly like runtimes/hermes/translator.go does for the
+// chat/completions shape; adding them instead double-counts the context.
+// Measured on lamp-0c89 2026-09-10 once campaign-api enabled prompt caching:
+// a fresh turn reported input 17,623 / cached 17,408 — 215 genuinely new
+// tokens, not 35k.
+//
+// The live context size for rotation is NOT read from here — translateFrame
+// stashes the raw input_tokens into s.lastContextTokens (see rotation.go).
 func (u *codexUse) toDomain() *domain.TokenUsage {
 	if u == nil {
 		return nil
 	}
-	in := u.InputTokens + u.CachedInputTokens
-	if in == 0 && u.OutputTokens == 0 {
+	if u.InputTokens == 0 && u.CachedInputTokens == 0 && u.OutputTokens == 0 {
 		return nil
 	}
+	in, cached := u.InputTokens, u.CachedInputTokens
+	if cached > 0 && cached <= in {
+		in -= cached
+	} else if cached > in {
+		// Shape we have never seen: trust the total, drop the cache split
+		// rather than report a negative fresh-input figure.
+		cached = 0
+	}
 	return &domain.TokenUsage{
-		InputTokens:  in,
-		OutputTokens: u.OutputTokens,
-		TotalTokens:  in + u.OutputTokens,
+		InputTokens:      in,
+		OutputTokens:     u.OutputTokens,
+		CacheReadTokens:  cached,
+		CacheWriteTokens: u.CacheWriteInputToken,
+		TotalTokens:      in + cached + u.OutputTokens,
 	}
 }
 
@@ -450,8 +469,11 @@ func (s *CodexService) emitFinal(f codexFrame, dispatch func(domain.WSEvent)) {
 			"inputTokens", f.Usage.InputTokens,
 			"cachedInputTokens", f.Usage.CachedInputTokens,
 			"outputTokens", f.Usage.OutputTokens)
-		// Live context size for the rotation net (see rotation.go).
-		s.lastContextTokens.Store(int64(f.Usage.InputTokens + f.Usage.CachedInputTokens))
+		// Live context size for the rotation net (see rotation.go). Responses
+		// API `input_tokens` is ALREADY the whole prompt including the cached
+		// prefix, so it IS the context size — adding cached on top double-counts
+		// it and rotates the session at half the intended threshold.
+		s.lastContextTokens.Store(int64(f.Usage.InputTokens))
 	}
 	slog.Info("codex <<< turn completed", logArgs...)
 
