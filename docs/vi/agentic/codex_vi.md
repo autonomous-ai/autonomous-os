@@ -644,8 +644,12 @@ về chế độ api-key; việc chuyển đổi tự động ở lần presync 
 
 `message.send` mang request `id` và `run_id` gốc trên device. Gatewayd giữ các
 ID đó trên event của turn. Message tương thích nhắm thread active dùng
-`turn/steer` thay vì chờ phía sau; control frame (`pong`, `bridge.status`) độc
-lập.
+`turn/steer` thay vì chờ phía sau. Trace device riêng của nó nhận xác nhận
+`bridge.steered` rồi kết thúc ngay: chỉ turn active sở hữu reply model và event
+terminal cuối. Việc này ngăn follow-up đã gộp giữ lại pending run ma và làm kẹt
+busy state. Control frame (`pong`, `bridge.status`) độc lập.
+Nếu restart gateway để lại thread ID đã lưu nhưng App Server mới không còn biết,
+gatewayd sẽ xoá session cũ đó và thử lại chính turn ấy một lần trên thread mới.
 
 Adapter giữ đối chiếu request/run cho event terminal và từ chối steer không thể
 áp dụng cho thread active, thay vì âm thầm ghép sang nơi khác. Turn đã hoàn tất

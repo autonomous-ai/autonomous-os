@@ -659,8 +659,14 @@ api-key mode; the flip is automatic on the next presync run.
 
 `message.send` carries the request `id` and originating device `run_id`.
 Gatewayd preserves those IDs on turn events. A compatible message targeting the
-active thread uses `turn/steer` instead of waiting behind it; control frames
-(`pong`, `bridge.status`) remain independent.
+active thread uses `turn/steer` instead of waiting behind it. Its independent
+device trace receives a `bridge.steered` acknowledgement and immediately ends:
+the active turn alone owns the eventual model reply and terminal turn event.
+This prevents a merged follow-up from retaining a phantom pending run and
+wedging busy state. Control frames (`pong`, `bridge.status`) remain independent.
+If a gateway restart leaves a persisted thread ID that the new App Server no
+longer has, gatewayd clears that stale session and retries the same turn once on
+a fresh thread.
 
 The adapter retains request/run correlation for terminal events and rejects a
 steer that cannot be applied to the active thread rather than silently attaching

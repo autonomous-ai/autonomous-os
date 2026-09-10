@@ -164,9 +164,20 @@ func (s *Server) startAppTurn(payload turnPayload) {
 		return
 	}
 	input := appInput(payload)
-	start := func(thread string) {
+	var startFresh func()
+	start := func(thread string, retryFreshOnMissingThread bool) {
 		app.request("turn/start", map[string]any{"threadId": thread, "input": input, "cwd": s.cfg.Workspace}, func(result, rpcErr json.RawMessage) {
 			if len(rpcErr) > 0 {
+				if retryFreshOnMissingThread && missingAppThread(rpcErr) {
+					// App Server owns threads in memory. A gateway restart can
+					// therefore reload a persisted thread id that the new child no
+					// longer knows. Drop only that invalid session and retry this
+					// same device turn once on a fresh thread.
+					log.Printf("%s persisted App Server thread is gone — retrying fresh", logPrefix)
+					s.clearSession()
+					startFresh()
+					return
+				}
 				s.endAppTurnError(rpcErr)
 				return
 			}
@@ -182,29 +193,43 @@ func (s *Server) startAppTurn(payload turnPayload) {
 			s.armAppTurnTimeout(r.Turn.ID)
 		})
 	}
+	startFresh = func() {
+		app.request("thread/start", map[string]any{"cwd": s.cfg.Workspace, "approvalPolicy": "never", "sandbox": "danger-full-access"}, func(result, rpcErr json.RawMessage) {
+			if len(rpcErr) > 0 {
+				s.endAppTurnError(rpcErr)
+				return
+			}
+			var r struct {
+				Thread struct {
+					ID string `json:"id"`
+				} `json:"thread"`
+			}
+			_ = json.Unmarshal(result, &r)
+			if r.Thread.ID == "" {
+				s.endAppTurnError(json.RawMessage(`{"message":"app-server returned no thread id"}`))
+				return
+			}
+			s.storeThreadID(r.Thread.ID)
+			s.sendJSON(map[string]any{"type": "thread.started", "thread_id": r.Thread.ID})
+			start(r.Thread.ID, false)
+		})
+	}
 	if threadID != "" {
-		start(threadID)
+		start(threadID, true)
 		return
 	}
-	app.request("thread/start", map[string]any{"cwd": s.cfg.Workspace, "approvalPolicy": "never", "sandbox": "danger-full-access"}, func(result, rpcErr json.RawMessage) {
-		if len(rpcErr) > 0 {
-			s.endAppTurnError(rpcErr)
-			return
-		}
-		var r struct {
-			Thread struct {
-				ID string `json:"id"`
-			} `json:"thread"`
-		}
-		_ = json.Unmarshal(result, &r)
-		if r.Thread.ID == "" {
-			s.endAppTurnError(json.RawMessage(`{"message":"app-server returned no thread id"}`))
-			return
-		}
-		s.storeThreadID(r.Thread.ID)
-		s.sendJSON(map[string]any{"type": "thread.started", "thread_id": r.Thread.ID})
-		start(r.Thread.ID)
-	})
+	startFresh()
+}
+
+func missingAppThread(raw json.RawMessage) bool {
+	var e struct {
+		Message string `json:"message"`
+	}
+	_ = json.Unmarshal(raw, &e)
+	message := strings.ToLower(e.Message + " " + string(raw))
+	return strings.Contains(message, "thread not found") ||
+		strings.Contains(message, "no rollout found") ||
+		strings.Contains(message, "conversation not found")
 }
 
 func appInput(p turnPayload) []map[string]any {
@@ -228,7 +253,17 @@ func (s *Server) steerAppTurn(p turnPayload) {
 	app.request("turn/steer", map[string]any{"threadId": thread, "expectedTurnId": turn, "input": appInput(p)}, func(_ json.RawMessage, rpcErr json.RawMessage) {
 		if len(rpcErr) > 0 {
 			log.Printf("%s steer rejected: %s", logPrefix, rpcErr)
+			// A steered input has no independent terminal turn event. Tell the
+			// client that this specific request was rejected so it can retire its
+			// pending correlation without ending the currently active turn.
+			s.sendJSON(map[string]any{"type": "bridge.rejected", "error": string(rpcErr), "request_id": p.RequestID, "run_id": p.RunID})
+			return
 		}
+		// The active App Server turn retains the first request/run correlation.
+		// Acknowledge this follow-up explicitly: otherwise the OS client keeps a
+		// second pending run forever, because it will never receive its own
+		// turn.completed frame.
+		s.sendJSON(map[string]any{"type": "bridge.steered", "request_id": p.RequestID, "run_id": p.RunID})
 	})
 }
 

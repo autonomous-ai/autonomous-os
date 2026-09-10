@@ -40,3 +40,18 @@ func TestSnakeItemType(t *testing.T) {
 		}
 	}
 }
+
+func TestMissingAppThread(t *testing.T) {
+	for _, raw := range []string{
+		`{"message":"thread not found: stale-thread"}`,
+		`{"message":"no rollout found for thread id stale-thread"}`,
+		`{"message":"conversation not found"}`,
+	} {
+		if !missingAppThread([]byte(raw)) {
+			t.Fatalf("missingAppThread(%s) = false", raw)
+		}
+	}
+	if missingAppThread([]byte(`{"message":"rate limit exceeded"}`)) {
+		t.Fatal("a non-session error must not retry on a fresh thread")
+	}
+}

@@ -26,9 +26,24 @@ func TestGatewaySteersConcurrentMessagesIntoActiveTurn(t *testing.T) {
 		t.Fatalf("active turn missing events: %v", frames)
 	}
 	for _, frame := range frames {
+		if frame["type"] == "bridge.steered" {
+			continue // acknowledgement belongs to the merged follow-up itself
+		}
 		if frame["request_id"] != "req-1" || frame["run_id"] != "run-1" {
 			t.Fatalf("steered turn must retain first correlation: %v", frame)
 		}
+	}
+	steered := 0
+	for _, frame := range frames {
+		if frame["type"] == "bridge.steered" && frame["request_id"] == "req-2" && frame["run_id"] == "run-2" {
+			steered++
+		}
+		if frame["type"] == "bridge.steered" && frame["request_id"] == "req-3" && frame["run_id"] == "run-3" {
+			steered++
+		}
+	}
+	if steered != 2 {
+		t.Fatalf("want acknowledgements for both steered requests, got %d frames: %v", steered, frames)
 	}
 	data, err := os.ReadFile(filepath.Join(dir, "argv.log"))
 	if err != nil {
