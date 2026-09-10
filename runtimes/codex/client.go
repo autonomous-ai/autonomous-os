@@ -164,6 +164,15 @@ func (s *CodexService) runWSConn(ctx context.Context, handler domain.AgentEventH
 	// never used to answer a later turn.
 	s.wsDispatch.Store(dispatchFn(dispatch))
 	defer s.wsDispatch.Store(dispatchFn(nil))
+	// A gateway restart drops the socket while os-server itself stays alive.
+	// End the correlated turn before the generic disconnect cleanup clears its
+	// IDs; otherwise the monitor and web chat retain a permanently ACTIVE turn.
+	// Server shutdown cancels ctx, where no live client can receive this event.
+	defer func() {
+		if ctx.Err() == nil {
+			s.failDisconnectedTurn(dispatch)
+		}
+	}()
 
 	// A reconnect may be the only new idle edge: no earlier turn is guaranteed
 	// to finish after a gateway restart. Drain only locally buffered, unsent

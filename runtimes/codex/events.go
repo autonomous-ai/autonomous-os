@@ -120,6 +120,17 @@ func (s *CodexService) failStuckTurn() {
 	dispatch(domain.WSEvent{Type: "evt", Event: "agent", Payload: payload})
 }
 
+// failDisconnectedTurn gives a live client a terminal event when only the
+// local Codex gateway restarted. It must run before runWSConn's clearTurn
+// defer, while the original run correlation still exists.
+func (s *CodexService) failDisconnectedTurn(dispatch func(domain.WSEvent)) {
+	if s.getCurrentRunID() == "" {
+		return
+	}
+	slog.Warn("codex gateway disconnected during active turn", "component", "codex", "runID", s.getCurrentRunID())
+	s.handleError("codex gateway restarted; turn cancelled", dispatch)
+}
+
 // SetBusy flips active state. Drains pending events on idle.
 func (s *CodexService) SetBusy(busy bool) {
 	// A queued rejection also emits lifecycle.error. The generic consumer has

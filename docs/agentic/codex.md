@@ -671,3 +671,9 @@ it elsewhere. A completed turn cannot be steered: its next message follows the
 normal start/resume path. OS-level queues remain for safety and delivery
 reasons, including passive sensing and speaker-busy handling, so steering is
 not a general cancellation or interruption mechanism.
+
+If a live bridge connection drops while a turn is active, the client emits a
+correlated lifecycle error (`codex gateway restarted; turn cancelled`) before
+clearing its local correlation. This prevents the monitor and web chat from
+showing a permanently active turn; it deliberately does not replay the task,
+because it may already have side effects.

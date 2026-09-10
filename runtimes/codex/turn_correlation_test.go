@@ -240,6 +240,30 @@ func TestDisconnectedPendingRequestsCannotKeepBusyForever(t *testing.T) {
 	}
 }
 
+func TestGatewayDisconnectEndsActiveTurnBeforeCleanup(t *testing.T) {
+	s := &CodexService{}
+	s.setCurrentRunID("run-active")
+	s.currentRequestID.Store("request-active")
+	var got struct {
+		RunID string `json:"runId"`
+		Data  struct {
+			Phase string `json:"phase"`
+			Error string `json:"error"`
+		} `json:"data"`
+	}
+	s.failDisconnectedTurn(func(event domain.WSEvent) {
+		if err := json.Unmarshal(event.Payload, &got); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if got.RunID != "run-active" || got.Data.Phase != "error" || got.Data.Error == "" {
+		t.Fatalf("disconnect did not emit a correlated terminal error: %+v", got)
+	}
+	if s.getCurrentRunID() != "" {
+		t.Fatalf("disconnect retained active run: %q", s.getCurrentRunID())
+	}
+}
+
 func TestReusedRequestIDWithDifferentRunSurvivesRestartOverlap(t *testing.T) {
 	s := &CodexService{}
 	s.addPendingRun("chat-1", "new-run")

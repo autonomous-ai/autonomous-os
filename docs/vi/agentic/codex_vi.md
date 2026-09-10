@@ -652,3 +652,8 @@ Adapter giữ đối chiếu request/run cho event terminal và từ chối stee
 không thể steer: message kế tiếp đi theo đường start/resume bình thường. Queue
 ở tầng OS vẫn tồn tại vì an toàn và giao nhận, gồm sensing thụ động và lúc loa
 đang bận; steering không phải cơ chế cancellation hay interruption tổng quát.
+
+Nếu bridge đang kết nối bị rớt khi turn còn active, client phát lifecycle error
+có tương quan (`codex gateway restarted; turn cancelled`) trước khi xoá tương
+quan cục bộ. Nhờ vậy Monitor và web chat không hiện turn active vĩnh viễn; task
+không tự gửi lại vì có thể đã tạo side effect.
