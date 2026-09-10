@@ -1340,8 +1340,8 @@ class RealtimeOrchestrator:
                 [
                     FunctionCallResultInput(
                         call_id=output.call_id,
-                        output='{"result": "expressed"}',
-                        trigger_response=not spoken,
+                        output='{"result": "expressed", "note": "fire-and-forget; do not react to this ack"}',
+                        trigger_response=True, # patch: not to block the session
                     )
                 ]
             )

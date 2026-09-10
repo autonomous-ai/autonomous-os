@@ -1078,8 +1078,8 @@ thúc.
 | `HAL_LIVE_MODE` | `false` | Chế độ live cho toàn tiến trình. Ép `HAL_REALTIME_TURN_DETECTION=server_vad` khi giá trị đó là `off` |
 | `HAL_LIVE_UPLINK_DURING_PLAYBACK` | `mute` | `mute` (không cắt lời, dùng được ngay) hoặc `cancelled` (song công thật, cần sửa AEC) |
 | `HAL_LIVE_PLAYBACK_TAIL_S` | `0.35` | Đuôi âm học sau lần ghi reference cuối, trong đó phòng vẫn được tính là đang phát |
-| `HAL_LIVE_IDLE_HANGUP_S` | `15` | Cúp máy sau khoảng này khi **người dùng** không có hành động nào, rồi trả mic lại cho VAD |
-| `HAL_LIVE_NO_USER_MAX_S` | `3 × K` (45) | Trần cứng cho *hoàn toàn không có tiếng người dùng*, bất kể ai đang nói — cắt vòng lặp tự nói |
+| `HAL_LIVE_IDLE_HANGUP_S` | `15` | Cúp máy sau khoảng này khi **người dùng** không có hành động nào, tính từ mốc muộn hơn: lời cuối của người dùng hoặc thời điểm thiết bị nói xong |
+| `HAL_LIVE_MAX_UNPROMPTED_REPLIES` | `3` | Trần cứng cho số câu trả lời liên tiếp của model mà không có tiếng người dùng xen giữa — cắt vòng lặp tự nói mà không cắt ngang một câu trả lời dài |
 | `HAL_LIVE_MAX_S` | `600` | Trần tuyệt đối cho một phiên |
 
 ### Hạn chế đã biết: `mute` có thể tự kích hoạt
@@ -1093,9 +1093,10 @@ khi không có ai trong phòng ("What's up?", "I'm here. What can I do for you?"
 mỗi câu lại làm mới thời gian giữ K, và một dòng log
 `barge-in: model interrupted by the user` trong khi không có người dùng nào.
 
-`HAL_LIVE_NO_USER_MAX_S` giới hạn thiệt hại — nó kết thúc phiên mà *người dùng*
-không đóng góp gì, bất kể model đang làm gì — nhưng đó là chốt chặn, không phải
-cách chữa. Cách chữa là chế độ `cancelled` trên một bộ khử vọng đủ tốt, để model
+`HAL_LIVE_MAX_UNPROMPTED_REPLIES` giới hạn thiệt hại — nó kết thúc phiên khi model
+đã nói liên tiếp bấy nhiêu câu mà không có gì từ người dùng — nhưng đó là chốt
+chặn, không phải cách chữa. Nó đếm số câu trả lời thay vì số giây chính là để một
+câu trả lời dài vài phút không bao giờ bị nhầm thành vòng lặp. Cách chữa là chế độ `cancelled` trên một bộ khử vọng đủ tốt, để model
 luôn nghe căn phòng thật mà không có chuyển tiếp nhân tạo. Giảm âm lượng loa làm
 giảm rõ rệt khả năng xảy ra trong lúc chờ.
 

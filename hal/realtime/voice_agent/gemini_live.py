@@ -221,16 +221,6 @@ class GeminiLiveAgent(VoiceAgentBase):
             [lang] if lang and self._config.use_language_codes else None
         )
 
-        # Thinking control is model-family-specific:
-        #   - 2.5 (incl. native-audio): thinking_budget (0 = OFF, -1 = dynamic).
-        #   - 3.x: thinking_level (MINIMAL..HIGH).
-        # Passing thinking_level to a 2.5 model is a NO-OP — the model keeps its
-        # default thinking budget and THINKS OUT LOUD, vocalizing chain-of-thought
-        # into the audio (device 2026-06-29: "The user is posing a classic riddle.
-        # I need to deduce..." spoken before the real answer). include_thoughts=False
-        # does NOT stop native audio from speaking reasoning. So on 2.5, map the
-        # level to a budget: MINIMAL → 0 (thinking off → no leak), anything higher
-        # → -1 (dynamic) for users who deliberately want reasoning depth.
         if "2.5" in self._config.model or "native-audio" in self._config.model:
             budget = 0 if self._config.thinking_level == GeminiThinkingLevel.MINIMAL else -1
             thinking_config = types.ThinkingConfig(
@@ -277,25 +267,13 @@ class GeminiLiveAgent(VoiceAgentBase):
                 for tool in self._tools
             ]
             live_tools.append(types.Tool(function_declarations=declarations))
-        # Google Search grounding is a separate built-in Tool (no function
-        # declaration). Gemini decides on its own when to ground; results are
-        # synthesized into the spoken reply, so the user never sees raw search
-        # output. This lets weather/news/live-lookup turns resolve in-session
-        # instead of delegating to main.
+
         if self._config.google_search_enabled:
             live_tools.append(types.Tool(google_search=types.GoogleSearch()))
+
         if live_tools:
             live_config.tools = live_tools
 
-        # Session resumption (OPT-IN, default off). When enabled, the FIRST connect
-        # sends handle=None to make the server start emitting resumption handles;
-        # a reconnect then passes the latest handle to resume the SAME session
-        # (context preserved). This only works if the WS endpoint faithfully
-        # forwards the resumption handshake — the `campaign-api` proxy does NOT, and
-        # resuming through it produces a zombie session (connected, accepts audio,
-        # never responds). Cold reconnects work through the proxy, so resumption
-        # stays gated behind HAL_GEMINI_SESSION_RESUMPTION. Enable only against an
-        # endpoint that supports it (e.g. a direct Google base_url).
         if self._config.session_resumption_enabled:
             live_config.session_resumption = types.SessionResumptionConfig(
                 handle=self._resumption_handle,
@@ -389,34 +367,34 @@ class GeminiLiveAgent(VoiceAgentBase):
             )
             self._gated_audio_frames = 0
 
-    async def _async_send_input(self, input: InputBase | None) -> None:
-        if self._session is None or input is None:
+    async def _async_send_input(self, _input: InputBase | None) -> None:
+        if self._session is None or _input is None:
             return
 
-        # if isinstance(input, AudioInput):
-        #     detail = f"{len(input.audio)} samples"
-        # elif isinstance(input, ImageInput):
-        #     detail = f"{input.image.shape}"
-        # elif isinstance(input, TextInput):
-        #     detail = f"{len(input.text)} chars"
-        # elif isinstance(input, FunctionCallResultInput):
-        #     detail = f"call_id={input.call_id}"
+        # if isinstance(_input, AudioInput):
+        #     detail = f"{len(_input.audio)} samples"
+        # elif isinstance(_input, ImageInput):
+        #     detail = f"{_input.image.shape}"
+        # elif isinstance(_input, TextInput):
+        #     detail = f"{len(_input.text)} chars"
+        # elif isinstance(_input, FunctionCallResultInput):
+        #     detail = f"call_id={_input.call_id}"
         # else:
         #     detail = "unknown input type"
 
-        # logger.info("Sending %s to Gemini Live: %s", type(input).__name__, detail)
+        # logger.info("Sending %s to Gemini Live: %s", type(_input).__name__, detail)
 
-        if not isinstance(input, FunctionCallResultInput) and self._tool_call_pending():
-            if isinstance(input, AudioInput):
+        if not isinstance(_input, FunctionCallResultInput) and self._tool_call_pending():
+            if isinstance(_input, AudioInput):
                 self._gated_audio_frames += 1
             else:
                 logger.debug(
                     "[realtime] Dropped %s while tool call(s) %s are pending",
-                    type(input).__name__,
+                    type(_input).__name__,
                     sorted(self._pending_tool_calls),
                 )
             return
-        if isinstance(input, AudioInput):
+        if isinstance(_input, AudioInput):
             # When VAD is disabled, send activityStart before first audio
             if self._vad_disabled and not self._activity_started:
                 await self._session.send_realtime_input(
@@ -425,7 +403,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                 self._activity_started = True
                 logger.debug("[realtime] Sent activityStart (manual VAD)")
 
-            pcm_bytes: bytes = float32_to_pcm16_bytes(input.audio)
+            pcm_bytes: bytes = float32_to_pcm16_bytes(_input.audio)
             await self._session.send_realtime_input(
                 audio=types.Blob(
                     data=pcm_bytes,
@@ -435,47 +413,30 @@ class GeminiLiveAgent(VoiceAgentBase):
             # This is updated per frame; once AudioCommitEvent is processed it
             # represents the final frame that reached the provider.
             self._last_audio_sent_at = time.monotonic()
-        elif isinstance(input, TextInput):
+        elif isinstance(_input, TextInput):
             await self._session.send_client_content(
                 turns=types.Content(
-                    parts=[types.Part(text=input.text)],
+                    parts=[types.Part(text=_input.text)],
                     role="user",
                 ),
                 turn_complete=False,
             )
-        elif isinstance(input, ImageInput):
+        elif isinstance(_input, ImageInput):
             _: bool
             buf: npt.NDArray[np.uint8]
-            _, buf = cv2.imencode(".jpg", input.image)
-            # NOTE (device-verified 2026-07-02): a frame sent here MID-TURN
-            # (look tool flow) is queued by the Live API for the NEXT turn —
-            # the model answers from the PREVIOUS look's image (one-image lag).
-            # Neither delaying the tool ack (0.5s/2s tried; 2s just pushed look
-            # turns over the 8s no-output timeout) nor send_client_content with
-            # inline_data (leaves a user turn open → model generates nothing)
-            # fixes it. The frame must be sent BEFORE the audio commit to
-            # belong to the current turn.
+            _, buf = cv2.imencode(".jpg", _input.image)
             await self._session.send_realtime_input(
                 video=types.Blob(data=buf.tobytes(), mime_type="image/jpeg")
             )
-        elif isinstance(input, FunctionCallResultInput):
-            # Fire-and-forget tools (trigger_response=False, e.g. express_emotion)
-            # must NOT be acknowledged on Gemini Live: unlike OpenAI (where the
-            # result is a conversation item and response.create is a separate call),
-            # Gemini's send_tool_response CONTINUES the turn — the model then
-            # RE-GENERATES and re-speaks its whole reply, double-billing TTS
-            # (device-observed 2026-06-29: reply spoken twice, with express_emotion
-            # logged between the two copies). Gemini still considers this call
-            # unresolved, so retain the gate and require a fresh session before
-            # the next turn. End the local turn now instead of waiting for a
-            # turn_complete that Gemini cannot emit without the response.
-            if not input.trigger_response:
-                if input.call_id in self._pending_tool_calls:
+        elif isinstance(_input, FunctionCallResultInput):
+            if not _input.trigger_response:
+                logger.info('[DEBUG] Function call result: %s', _input)
+                if _input.call_id in self._pending_tool_calls:
                     self._requires_fresh_session = True
                     logger.info(
                         "[realtime] Tool call %s intentionally unacknowledged — "
                         "fresh Gemini session required",
-                        input.call_id,
+                        _input.call_id,
                     )
                     turn_done: threading.Event | None = getattr(self, "_turn_done", None)
                     if turn_done is not None:
@@ -484,20 +445,17 @@ class GeminiLiveAgent(VoiceAgentBase):
                     if recv_queue is not None:
                         recv_queue.put(TurnDoneEvent())
                 return
-            # input.output is normally a JSON object string, but send_function_result()
-            # is public and may be handed arbitrary text — Gemini's response field
-            # requires a dict, so coerce non-object/invalid payloads instead of
-            # letting json.loads crash the IO loop.
+
             try:
-                parsed: Any = json.loads(input.output)
+                parsed: Any = json.loads(_input.output)
             except (json.JSONDecodeError, TypeError):
-                parsed = {"result": input.output}
+                parsed = {"result": _input.output}
             if not isinstance(parsed, dict):
                 parsed = {"result": parsed}
             await self._session.send_tool_response(
                 function_responses=[
                     types.FunctionResponse(
-                        id=input.call_id,
+                        id=_input.call_id,
                         response=parsed,
                     )
                 ]
@@ -505,7 +463,7 @@ class GeminiLiveAgent(VoiceAgentBase):
             # Gemini accepted the response, so this call is resolved. Keeping the
             # gate until after the await avoids racing subsequent client input
             # against the tool response on the wire.
-            self._pending_tool_calls.discard(input.call_id)
+            self._pending_tool_calls.discard(_input.call_id)
             if not self._pending_tool_calls:
                 self._clear_pending_tool_calls()
 

@@ -1113,8 +1113,8 @@ and gets them back the moment a session ends.
 | `HAL_LIVE_MODE` | `false` | Whole-process live mode. Forces `HAL_REALTIME_TURN_DETECTION=server_vad` when that is `off` |
 | `HAL_LIVE_UPLINK_DURING_PLAYBACK` | `mute` | `mute` (no barge-in, ships today) or `cancelled` (true full duplex, needs the AEC fix) |
 | `HAL_LIVE_PLAYBACK_TAIL_S` | `0.35` | Acoustic tail after the last reference write during which the room still counts as playing |
-| `HAL_LIVE_IDLE_HANGUP_S` | `15` | Hang up after this long with no action **from the user**, then hand the mic back to the VAD |
-| `HAL_LIVE_NO_USER_MAX_S` | `3 × K` (45) | Hard ceiling on *no user speech at all*, ignoring who is talking — breaks a self-talk loop |
+| `HAL_LIVE_IDLE_HANGUP_S` | `15` | Hang up after this long with no action **from the user**, measured from whichever came later: the user's last words or the moment the device stopped speaking |
+| `HAL_LIVE_MAX_UNPROMPTED_REPLIES` | `3` | Hard ceiling on consecutive model replies with no user speech between them — breaks a self-talk loop without cutting one long answer short |
 | `HAL_LIVE_MAX_S` | `600` | Absolute ceiling on one session |
 
 ### Known limitation: `mute` can self-trigger
@@ -1127,9 +1127,10 @@ volume: four unprompted replies in 35 s with nobody in the room ("What's up?",
 "I'm here. What can I do for you?"), each one re-arming the K hold, and one
 logged `barge-in: model interrupted by the user` with no user present.
 
-`HAL_LIVE_NO_USER_MAX_S` bounds the damage — it ends a session that the *user*
-has not contributed to, whatever the model is doing — but it is a backstop, not
-a cure. The cure is `cancelled` mode over a canceller good enough to earn it,
+`HAL_LIVE_MAX_UNPROMPTED_REPLIES` bounds the damage — it ends a session once the
+model has produced that many replies in a row with nothing from the user — but
+it is a backstop, not a cure. It counts replies rather than seconds precisely so
+that a single answer running for minutes is never mistaken for a loop. The cure is `cancelled` mode over a canceller good enough to earn it,
 so the model always hears the true room with no artificial transitions. Lower
 speaker volume makes it markedly less likely in the meantime.
 
