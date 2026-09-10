@@ -250,7 +250,7 @@ func (s *Server) steerAppTurn(p turnPayload) {
 		s.enqueue(op{kind: opTurn, payload: p})
 		return
 	}
-	app.request("turn/steer", map[string]any{"threadId": thread, "expectedTurnId": turn, "input": appInput(p)}, func(_ json.RawMessage, rpcErr json.RawMessage) {
+	app.request("turn/steer", map[string]any{"threadId": thread, "expectedTurnId": turn, "input": appSteerInput(p)}, func(_ json.RawMessage, rpcErr json.RawMessage) {
 		if len(rpcErr) > 0 {
 			log.Printf("%s steer rejected: %s", logPrefix, rpcErr)
 			// A steered input has no independent terminal turn event. Tell the
@@ -265,6 +265,16 @@ func (s *Server) steerAppTurn(p turnPayload) {
 		// turn.completed frame.
 		s.sendJSON(map[string]any{"type": "bridge.steered", "request_id": p.RequestID, "run_id": p.RunID})
 	})
+}
+
+// User requests can arrive while the model is handling a passive sensor event.
+// Keep their response address intact and explicitly distinguish them from the
+// silent realtime history synchronization that also uses turn/steer.
+func appSteerInput(p turnPayload) []map[string]any {
+	if strings.Contains(p.Content, "[harness-reply run_id=") {
+		p.Content = "[system-routing: New direct user request during the active turn. Prioritize this request over unfinished passive sensing or wellbeing work. Use this request's harness-reply address if delegating. When the user requests work from a computer agent, use harness-use; do not search the device filesystem for that computer's project. A steer acknowledgement is not task completion: handle the request before ending the turn.]\n" + p.Content
+	}
+	return appInput(p)
 }
 
 func (s *Server) endAppTurnError(raw json.RawMessage) {

@@ -1,5 +1,10 @@
 # Web UI — Monitor Dashboard
 
+Flow Monitor liên kết follow-up Codex được steer với lượt thực thi gốc qua
+`turn_merged` / `parent_run_id`. Chọn follow-up mở pipeline chung nhưng vẫn giữ
+card input và trạng thái kết thúc riêng. UI ghi rõ turn đã gộp thay vì hiện
+kết quả im lặng rỗng.
+
 ## Ngày cập nhật: 2026-08-25
 
 ---

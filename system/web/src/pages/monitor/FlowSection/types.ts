@@ -37,6 +37,7 @@ export interface Turn {
   status: "active" | "done" | "error";
   events: DisplayEvent[];
   queuedForMs?: number;
+  mergedIntoRunId?: string;
 }
 
 // Runtime detail lines

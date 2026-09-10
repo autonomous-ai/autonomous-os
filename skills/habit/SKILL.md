@@ -73,11 +73,11 @@ SOUL instructs the device to call this flow when user expresses intent for a dai
 
 **How to log:**
 
-```bash
-curl -s -X POST http://127.0.0.1:5000/api/wellbeing/log \
-  -H 'Content-Type: application/json' \
-  -d '{"action":"meal","notes":"user said: going to lunch","user":"<current_user>"}'
+```text
+[HW:/wellbeing/log:{"action":"meal","notes":"user said: going to lunch","user":"<current_user>"}]
 ```
+
+Emit the marker at the start of the normal reply; the runtime forwards it to the same wellbeing log API. Do not also send a curl POST for that intent. If the runtime explicitly rejects the marker, use the wellbeing skill's documented log fallback with the same payload.
 
 **Rules:**
 - Log silently — do NOT tell the user you're logging. Just respond naturally.

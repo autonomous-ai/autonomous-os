@@ -430,6 +430,10 @@ export function TurnBadge({ turn, pairTint, userPhotos, onViewPipeline }: {
         >
           <TriangleAlert size={12} strokeWidth={2.25} style={{ flexShrink: 0 }} /> Agent closed stream · no message · no lifecycle
         </div>
+      ) : turn.mergedIntoRunId ? (
+        <div style={{ fontSize: 11.5, color: "var(--lm-purple)", marginBottom: 2, overflowWrap: "anywhere", lineHeight: 1.45 }}>
+          Shared pipeline · {turn.status === "active" ? "awaiting result" : turn.status === "error" ? "failed" : "completed"}
+        </div>
       ) : turn.status === "done" ? (
         <div style={{
           fontSize: 11.5, color: "var(--lm-text-muted)", marginBottom: 2,
@@ -439,6 +443,11 @@ export function TurnBadge({ turn, pairTint, userPhotos, onViewPipeline }: {
           <Moon size={12} strokeWidth={2} style={{ flexShrink: 0 }} /> no output — agent processed silently
         </div>
       ) : null}
+      {turn.mergedIntoRunId && (
+        <div style={{ fontSize: 10, color: "var(--lm-purple)", marginBottom: 4, overflowWrap: "anywhere" }}>
+          Merged into {turn.mergedIntoRunId}
+        </div>
+      )}
       {/* Row 3b: output — Hardware actions */}
       {hwOutput && (
         <div style={{

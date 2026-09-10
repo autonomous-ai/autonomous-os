@@ -9,7 +9,7 @@ import type { DisplayEvent, FaceOwnersDetail } from "../types";
 import type { FlowStage } from "./types";
 import { usePolling } from "../../../hooks/usePolling";
 import { FLOW_NODES } from "./types";
-import { deriveActiveStage, groupIntoTurns, turnIO, turnBilledTokens, turnDurationMs, extractSensingType, hasSensingPrefix, isCameraAPICommand } from "./helpers";
+import { deriveActiveStage, groupIntoTurns, sharedTurnEvents, turnIO, turnBilledTokens, turnDurationMs, extractSensingType, hasSensingPrefix, isCameraAPICommand } from "./helpers";
 import { FlowDiagram } from "./FlowDiagram";
 import { TurnBadge } from "./TurnBadge";
 import { CanvasModal } from "./CanvasModal";
@@ -412,7 +412,19 @@ export function FlowSection({
     ? (turns.find((t) => t.id === selectedTurnId) ?? turns.find((t) => t.runId === selectedTurnId))
     : filteredTurns[0];
 
-  const turnEvents = selectedTurn?.events ?? events.slice(-30);
+  // Render the shared execution from its original start; the selected card
+  // retains the follow-up's own input and result without duplicating events.
+  let pipelineTurn = selectedTurn;
+  const pipelineRunIds = new Set<string>();
+  while (pipelineTurn?.mergedIntoRunId && !pipelineRunIds.has(pipelineTurn.mergedIntoRunId)) {
+    pipelineRunIds.add(pipelineTurn.mergedIntoRunId);
+    const parent = turns.find((turn) => turn.runId === pipelineTurn?.mergedIntoRunId);
+    if (!parent) break;
+    pipelineTurn = parent;
+  }
+  const turnEvents = pipelineTurn && selectedTurn
+    ? sharedTurnEvents(pipelineTurn, selectedTurn)
+    : events.slice(-30);
   const activeStage = deriveActiveStage(turnEvents);
 
   const visitedStages = new Set<FlowStage>();
@@ -534,6 +546,13 @@ export function FlowSection({
           </span>
         )}
       </div>
+      {selectedTurn?.mergedIntoRunId && (
+        <div style={{ padding: "6px 10px", fontSize: 11, color: "var(--lm-purple)", overflowWrap: "anywhere" }}>
+          Merged into {selectedTurn.mergedIntoRunId} · {pipelineTurn !== selectedTurn
+            ? "showing shared pipeline"
+            : "shared pipeline is outside the loaded history"}
+        </div>
+      )}
       <FlowDiagram activeStage={activeStage} visitedStages={visitedStages} turnEvents={turnEvents} compact />
     </>
   );

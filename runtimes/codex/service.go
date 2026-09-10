@@ -95,7 +95,7 @@ type CodexService struct {
 	busySince         atomic.Int64
 	pendingMu         sync.Mutex
 	pendingRuns       []pendingRun
-	steeredWebRuns    []pendingRun // merged web inputs awaiting the active turn's reply
+	steeredRuns       []pendingRun // merged inputs awaiting the active turn's reply
 	completedRequests []pendingRun
 	sendChatMu        sync.Mutex
 	currentRequestID  atomic.Value // string
