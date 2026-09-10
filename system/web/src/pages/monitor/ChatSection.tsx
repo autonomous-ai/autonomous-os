@@ -458,6 +458,11 @@ const REPLY_IDLE_TIMEOUT_MS = 12 * 60 * 1000;
 // a reload while they are still working must not turn a later final event into
 // a discarded "no response".
 const RECOVERY_IDLE_TIMEOUT_MS = REPLY_IDLE_TIMEOUT_MS;
+// A fallback for a lost live EventSource connection. This is deliberately only
+// active while a reply is pending: Flow SSE remains the normal path, while a
+// short replay poll ensures a terminal result written during a transient proxy
+// or browser SSE disconnect is rendered without requiring a page reload.
+const PENDING_FLOW_REPLAY_MS = 3_000;
 
 // Storage envelope so the TTL check has a timestamp to look at. Legacy
 // devices have a bare Conversation[] under CONVOS_KEY; loadConvos() handles
@@ -780,6 +785,7 @@ export function ChatSection({ events, isActive }: Props) {
   const dirtyRef = useRef(false); // whether there are pending delta/thinking updates to flush
   const [thinkingText, setThinkingText] = useState<string | null>(null); // current thinking display
   const [toolChips, setToolChips] = useState<ToolChip[]>([]); // tool calls for current pending response
+  const [replayedFlowEvents, setReplayedFlowEvents] = useState<MonitorEvent[]>([]);
 
   const active = convos.find((c) => c.id === activeId) ?? null;
   const messages = active?.messages ?? EMPTY_MESSAGES;
@@ -851,6 +857,32 @@ export function ChatSection({ events, isActive }: Props) {
     if (w) window.clearTimeout(w.timer);
     replyWatchdogRef.current = null;
   }, []);
+
+  // EventSource delivers live monitor events with minimal latency. It can still
+  // be interrupted by a proxy reconnect or a browser connection-slot change.
+  // While a chat reply is pending, replay the persisted flow periodically so a
+  // final `tts_send` or `harness_response` cannot leave the bubble on `…`
+  // until the user reloads the page.
+  useEffect(() => {
+    if (!sending || !pendingRunIdRef.current) return;
+    let cancelled = false;
+    const replay = async () => {
+      try {
+        const response = await fetch(`${API}/agent/flow-events?last=500`);
+        const payload = await response.json();
+        const next = payload?.data?.events;
+        if (!cancelled && Array.isArray(next)) setReplayedFlowEvents(next as MonitorEvent[]);
+      } catch {
+        // Live SSE and the next poll remain available; keep the pending turn.
+      }
+    };
+    void replay();
+    const timer = window.setInterval(() => void replay(), PENDING_FLOW_REPLAY_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [sending]);
 
   const armReplyWatchdog = useCallback(
     (runId: string, convoId: string, ms: number) => {
@@ -1183,12 +1215,18 @@ export function ChatSection({ events, isActive }: Props) {
     // substring containment with a 32-char guard, but we have the user's
     // full original text in pendingUserTextRef so exact match works for
     // short inputs like "hello" too.
+    // `events` is the live Flow SSE snapshot. `replayedFlowEvents` is a
+    // pending-only HTTP fallback for when that EventSource silently drops; map
+    // by stable event id so the same JSONL event is considered once.
+    const observedEvents = Array.from(
+      new Map([...replayedFlowEvents, ...events].map((event) => [event.id, event])).values(),
+    );
     const acceptedRunIds = new Set<string>([pending]);
     const userText = pendingUserTextRef.current;
     if (userText) {
       let emptyIdx = -1;
-      for (let i = 0; i < events.length; i++) {
-        const ev = events[i];
+      for (let i = 0; i < observedEvents.length; i++) {
+        const ev = observedEvents[i];
         if (ev.type !== "flow_event") continue;
         const d = ev.detail as JsonObject | undefined;
         if (d?.node !== "chat_final_empty") continue;
@@ -1197,8 +1235,8 @@ export function ChatSection({ events, isActive }: Props) {
       }
       if (emptyIdx >= 0) {
         const expected = userText.trim().toLowerCase();
-        for (let i = emptyIdx + 1; i < events.length; i++) {
-          const ev = events[i];
+        for (let i = emptyIdx + 1; i < observedEvents.length; i++) {
+          const ev = observedEvents[i];
           if (ev.type !== "flow_event") continue;
           const d = ev.detail as JsonObject | undefined;
           if (d?.node !== "chat_input") continue;
@@ -1216,7 +1254,7 @@ export function ChatSection({ events, isActive }: Props) {
       }
     }
 
-    for (const ev of [...events].reverse()) {
+    for (const ev of [...observedEvents].reverse()) {
       const evRunId: string | undefined =
         ev.runId ??
         (ev.detail as JsonObject | undefined)?.run_id ??
@@ -1273,7 +1311,7 @@ export function ChatSection({ events, isActive }: Props) {
     // `sending` is here so the reload-recovery effect below (which attaches
     // pendingRunIdRef and flips sending on) forces a re-scan of the already
     // replayed events even when no new flow event arrives afterwards.
-  }, [events, updateMessages, sending]);
+  }, [events, replayedFlowEvents, updateMessages, sending]);
 
   // Recover an in-flight turn after a page reload. The run-tracking refs
   // (pendingRunIdRef & co.) live only in memory, so a reload while waiting
