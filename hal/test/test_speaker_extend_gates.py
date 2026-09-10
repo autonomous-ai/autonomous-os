@@ -122,3 +122,48 @@ def test_the_runner_up_is_the_strongest_loser():
     # average of them and not the last one.
     confs = np.array([[0.90, 0.20, 0.60], [0.90, 0.20, 0.60]])
     assert _runner_up_mean(confs, ["leo", "mia", "sam"], "leo") == pytest.approx(0.60)
+
+
+def test_the_reported_duration_is_the_cleaned_length_not_the_raw_length(
+    recognizer, monkeypatch,
+):
+    # A 28s file holding 1.5s of speech: exactly the shape a 30s mic session
+    # produces. VAD trims it to 1.5s, so the duration handed to the extend
+    # gate must be 1.5 -- not the 28 the raw WAV reports.
+    #
+    # Unlike the gate tests above this one exercises the real preprocessing
+    # entry point, so it needs the audio_processors stack (scipy). That is
+    # present on a body and in CI but not on every dev host, hence the skip.
+    pytest.importorskip(
+        "scipy", reason="audio_processors requires scipy; run this on-device"
+    )
+    from hal.drivers.voice.speaker_recognizer import speaker_recognizer as sr_mod
+    from hal.drivers.voice.speaker_recognizer.audio_processors.base import Audio
+
+    sr = 16000
+    raw = np.zeros(28 * sr, dtype=np.float32)
+    raw[: int(1.5 * sr)] = 0.2
+
+    class _TrimToSpeech:
+        """Stand-in for the VAD chain: returns only the voiced part."""
+
+        def process(self, audio):
+            return Audio(
+                waveform=audio.waveform[: int(1.5 * sr)], sample_rate=sr
+            )
+
+    monkeypatch.setattr(sr_mod, "_get_audio_processor", lambda: _TrimToSpeech())
+
+    wav = sr_mod._float32_waveform_to_wav_bytes(raw)
+    assert sr_mod._wav_duration_s(wav) == pytest.approx(28.0, abs=0.05), (
+        "the raw WAV really is 28s -- this is what the gate used to see"
+    )
+
+    payload, cleaned_duration_s = recognizer._prepare_wav_for_embedding(wav)
+    assert isinstance(payload, list) and payload, "payload shape must not change"
+    assert cleaned_duration_s == pytest.approx(1.5, abs=0.05), (
+        f"duration must be measured after VAD, got {cleaned_duration_s}"
+    )
+    assert cleaned_duration_s < 2.0, (
+        "and must therefore fail the 2.0s extend floor that 28s cleared"
+    )

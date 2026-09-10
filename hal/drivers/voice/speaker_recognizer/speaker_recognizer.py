@@ -1458,8 +1458,18 @@ class SpeakerRecognizer:
                     raise EmbeddingAPIUnavailableError("embedding has zero norm")
                 return vec / norm
 
-    def _prepare_wav_for_embedding(self, wav_bytes: bytes) -> list[str]:
+    def _prepare_wav_for_embedding(
+        self, wav_bytes: bytes
+    ) -> tuple[list[str], float]:
         """Run the on-device preprocessing pipeline and wrap the cleaned WAV.
+
+        Returns ``(payload, cleaned_duration_s)``. The duration is measured on
+        the CLEANED waveform, after VAD has removed silence: the raw turn's
+        length is not a measure of how much speech it holds, and the caller
+        joins an ENTIRE mic session (up to MAX_SESSION_DURATION_S = 30s) into
+        one WAV, so on a quiet turn the difference is most of the file. The
+        extend duration floor exists to reject clips carrying too little
+        speaker information, which is a statement about speech, not bytes.
 
         HAL now runs the full filter/VAD/normalize chain locally (Mono →
         Resample → [HighPass] → [NoiseReduce] → VAD → [STOI] → RMS) — the
@@ -1528,11 +1538,12 @@ class SpeakerRecognizer:
             with self._debug_stage("encode_wav"):
                 cleaned_wav = _float32_waveform_to_wav_bytes(out)
                 payload = [base64.b64encode(cleaned_wav).decode("ascii")]
+                cleaned_duration_s = float(out.shape[0]) / _TARGET_SR
             if self._debug.enabled:  # SPEAKER-DEBUG
                 self._debug_preproc = self._debug_preproc_snapshot(
                     out, cleaned_wav, processor
                 )
-        return payload
+        return payload, cleaned_duration_s
 
     def _debug_preproc_snapshot(  # SPEAKER-DEBUG (remove before deploy)
         self, cleaned: np.ndarray, cleaned_wav: bytes, processor: Any
@@ -2371,7 +2382,9 @@ class SpeakerRecognizer:
                     continue
                 wb = _ensure_wav_16k_mono(raw)
                 try:
-                    emb = self._call_embedding_api(self._prepare_wav_for_embedding(wb))
+                    emb = self._call_embedding_api(
+                        self._prepare_wav_for_embedding(wb)[0]
+                    )
                 except EmbeddingAPIUnavailableError:
                     raise  # outage → bubble up so migration halts, not a bad sample
                 except SpeakerRecognizerError as e:
@@ -2551,7 +2564,7 @@ class SpeakerRecognizer:
         per_sample_debug: list[tuple[int, dict[str, Any], bytes, dict[str, bytes]]] = []
         for idx, wb in enumerate(new_wavs):
             try:
-                payload = self._prepare_wav_for_embedding(wb)
+                payload, _ = self._prepare_wav_for_embedding(wb)
                 emb = self._call_embedding_api(payload)
                 new_embeddings.append((wb, emb))
             except EmbeddingAPIUnavailableError:
@@ -2724,7 +2737,7 @@ class SpeakerRecognizer:
                         continue
                     try:
                         wb = _ensure_wav_16k_mono(raw)
-                        payload = self._prepare_wav_for_embedding(wb)
+                        payload, _ = self._prepare_wav_for_embedding(wb)
                         emb = self._call_embedding_api(payload)
                     except EmbeddingAPIUnavailableError:
                         raise
@@ -2757,7 +2770,7 @@ class SpeakerRecognizer:
                 continue
             try:
                 emb = self._call_embedding_api(
-                    self._prepare_wav_for_embedding(p.read_bytes())
+                    self._prepare_wav_for_embedding(p.read_bytes())[0]
                 )
                 np.save(_sidecar_path(p), _l2(emb))
                 backfilled += 1
@@ -3192,7 +3205,7 @@ class SpeakerRecognizer:
             }
 
         try:
-            payload = self._prepare_wav_for_embedding(wav_bytes)
+            payload, cleaned_duration_s = self._prepare_wav_for_embedding(wav_bytes)
             # Per-chunk query embeddings — same per-chunk granularity that
             # perception-service's /recognize uses internally, so per-chunk voting
             # below produces apples-to-apples confidence.
@@ -3445,7 +3458,7 @@ class SpeakerRecognizer:
                         _l2(query_chunks.mean(axis=0)),
                         wav_bytes,
                         existing_rows=own_rows,
-                        duration_s=_wav_duration_s(wav_bytes),
+                        duration_s=cleaned_duration_s,
                         margin=float(margin),
                         chunk_votes=int(vote_count[best_name]),
                         num_chunks=int(query_chunks.shape[0]),
