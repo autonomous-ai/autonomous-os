@@ -272,7 +272,7 @@ latency:
 # Copy a skill folder onto a running body. Live on the next conversation, no
 # reboot. Root SSH is off, so it lands in /tmp and moves with sudo.
 # J=<host> routes both hops through an SSH jump host, as in the deploy targets:
-#   make push-skill SKILL=./my-skill TARGET=pi@10.0.0.5 J=danielpc
+#   make push-skill SKILL=./my-skill TARGET=pi@10.0.0.5 J=proxy-host
 push-skill:
 	@test -n "$(SKILL)" -a -n "$(TARGET)" || { echo "usage: make push-skill SKILL=./my-skill TARGET=pi@lamp-xxxx.local [J=jump-host]" >&2; exit 2; }
 	@scp $(SSH_JUMP_OPT) -r $(SKILL) $(TARGET):/tmp/
@@ -398,8 +398,8 @@ ota-keygen:
 #
 # J=<host> puts an SSH jump host in front of every hop (ssh, scp and rsync all
 # get the same ProxyJump), for a device that is not routable from here:
-#   IP=10.0.0.5 J=danielpc make hal-deploy
-#   IP=10.0.0.5 J=danielpc make hal-log
+#   IP=10.0.0.5 J=proxy-host make hal-deploy
+#   IP=10.0.0.5 J=proxy-host make hal-log
 # The hop authenticates from your SSH key/agent + ~/.ssh/config; PI_PASS is the
 # DEVICE password only. Both orders work: `J=... make hal-deploy` and
 # `make hal-deploy J=...`.
@@ -417,8 +417,12 @@ ota-keygen:
 
 # Reach the script whether these came from the environment (`IP=... make x`) or
 # from make's own command line (`make x IP=...`); only the first form is
-# inherited automatically.
-export IP J PI_HOST PI_JUMP PI_USER PI_PASS LOG_LINES FOLLOW GREP
+# inherited automatically. PI_PASS is deliberately NOT in this list: make
+# exports a listed-but-undefined variable as an EMPTY string, and an empty
+# PI_PASS is the script's opt-in to key auth — it would turn off the default
+# device password for everyone. Pass it as an environment variable:
+#   PI_PASS="" IP=... make hal-deploy
+export IP J PI_HOST PI_JUMP PI_USER LOG_LINES FOLLOW GREP
 
 hal-deploy:
 	bash scripts/deploy-device.sh --hal
