@@ -684,14 +684,22 @@ api-key mode; the flip is automatic on the next presync run.
 `message.send` carries the request `id` and originating device `run_id`.
 Gatewayd preserves those IDs on turn events. A compatible message targeting the
 active thread uses `turn/steer` instead of waiting behind it. Its independent
-device trace receives a `bridge.steered` acknowledgement. A merged web-chat
-turn waits for the active turn's final reply, which is safely fanned out without
-replaying hardware markers; internal follow-ups can end immediately. This
+device trace receives a `bridge.steered` acknowledgement and a `turn_merged`
+flow event containing `parent_run_id`. Merged voice and web-chat requests stay
+active until the shared final reply or error, including disconnect and timeout.
+The latest audible follow-up owns speech under its original run ID and Harness
+response route; the host and earlier voice inputs suppress duplicate TTS.
+Hardware markers execute once on the host and are stripped from child replies.
+Merged lifecycle events do not replace or clear the host session tracking. This
 prevents a merged follow-up from retaining a phantom pending run and wedging
 busy state. Control frames (`pong`, `bridge.status`) remain independent.
 The realtime `voice_agent_handled` history sync also steers when Codex is
 active: the voice layer already spoke, so its silent trace closes on the
 acknowledgement instead of queueing behind the active task.
+Steered direct user requests retain their complete input and response address,
+with routing context prioritizing them over passive sensing work and directing
+computer-agent tasks through `harness-use`. This context is not added to silent
+history synchronization; it is guidance, not proof of a Harness delivery.
 If a gateway restart leaves a persisted thread ID that the new App Server no
 longer has, gatewayd clears that stale session and retries the same turn once on
 a fresh thread.
