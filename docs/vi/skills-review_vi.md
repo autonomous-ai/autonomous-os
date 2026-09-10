@@ -37,7 +37,7 @@ Bảng dưới lưu bằng chứng review, gồm cả hành vi chủ động gi�
 | `habit` | Log intent dùng curl dù đã hỗ trợ wellbeing marker. | Một log/turn và posture history đang được dùng. |
 | `music-suggestion` | Làm rõ dùng `audio_recent` đã inject thay đọc lại. | Không tự bật nhạc, giữ cooldown. |
 | `voice` | Mở đầu chỉ nói explicit speech, thiếu privacy; ví dụ meeting không thống nhất tắt mic hay cả hai. | Không tự chọn semantics privacy mới. |
-| `speaker-recognizer` | Description loại fragment không tên, bảng lại hỏi enrollment; bắt buộc ack mâu thuẫn silence của SOUL. | Self-enrollment, cùng cluster, đủ audio; chốt routing trước khi sửa. |
+| `speaker-recognizer` | Đã sửa: yêu cầu thông thường từ giọng chưa nhận diện không kích hoạt hỏi tên hay bắt buộc ack. Hint HAL và nudge OS chung chỉ hướng dẫn enrollment khi tự giới thiệu, yêu cầu đăng ký rõ ràng hoặc trả lời tiếp luồng đó. | Giữ self-enrollment, cùng cluster, đủ audio và quản lý giọng; ưu tiên yêu cầu mới không liên quan. |
 | `connectors` | Discover báo connected khi chưa kiểm token và giấu lỗi đọc/parse; bước sau chỉ đọc file riêng dù discovery hỗ trợ generic. | Bảo mật, official host, xác nhận write; test fixture giả trước khi sửa. |
 | `harness-use`, `computer-use`, `agent-management` | Tên người không chứng minh target Harness; tag trả lời không phải lựa chọn agent. | Dựa agent thật đã chọn/liệt kê, Buddy độc lập; batch này chưa sửa routing. |
 
@@ -54,7 +54,7 @@ Bảng dưới lưu bằng chứng review, gồm cả hành vi chủ động gi�
 ## Chủ động giữ nguyên / quyết định cho follow-up
 
 - Giữ implementation discovery connectors trong lượt tuning này. Lỗi báo connected/giấu lỗi và đọc generic storage cần fix riêng với credential fixture giả; thay authentication trong lúc chỉnh prompt vượt quá mục tiêu giữ hành vi.
-- Giữ meeting tắt mic hay cả hai và thứ tự ưu tiên enrollment/im lặng. Cần quyết định sản phẩm xuyên SOUL, routing và skill, không đoán chỉ dẫn mâu thuẫn nào là đúng.
+- Giữ meeting tắt mic hay cả hai chờ quyết định sản phẩm. Enrollment nay cần ý định từ user; giọng chưa nhận diện không ghi đè yêu cầu thông thường hay quy tắc im lặng với fragment vô nghĩa. Hướng dẫn HAL/OS chung áp dụng xuyên runtime, không đổi ngưỡng nhận diện hay API. Test local kiểm tra giữ metadata, hướng dẫn có điều kiện và cooldown; chưa chứng minh mức cải thiện latency của model.
 - Giữ routing Harness: tên riêng chưa chứng minh agent. Gate Buddy độc lập; `harness-reply` không chọn target.
 - Giữ semantics cooldown posture/check-in: reference mâu thuẫn với router/window; không đặt ngưỡng mới hoặc xóa posture history đang dùng.
 

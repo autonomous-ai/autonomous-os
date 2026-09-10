@@ -37,7 +37,7 @@ The table records the review evidence, including deliberately retained behavior;
 | `habit` | Explicit intent logging uses curl although the same wellbeing marker is supported. | One intent log per turn and existing posture history support. |
 | `music-suggestion` | History-learning wording could reuse injected `audio_recent` more clearly. | No automatic playback and existing cooldown. |
 | `voice` | Opening “only explicit speech” wording omits privacy handling; meeting examples disagree on mic-only versus both mutes. | Do not silently choose a new privacy behavior. |
-| `speaker-recognizer` | Description excludes unnamed fragments, matrix asks enrollment follow-up, and forced acknowledgment conflicts with SOUL's meaningless-fragment silence. | Self-enrollment, same-speaker cluster and audio requirements; resolve routing before editing. |
+| `speaker-recognizer` | Fixed: ordinary unknown-speaker requests no longer trigger a name question or forced acknowledgment. HAL transcript hints and the shared OS nudge condition enrollment on self-introduction, an explicit enrollment request, or its continuation. | Self-enrollment, same-speaker cluster, audio requirements and voice management remain available; unrelated requests take priority. |
 | `connectors` | Discover labels entries connected without checking token presence and suppresses read/parse errors; later reads assume per-connector storage despite generic discovery. | Credential secrecy, official destinations and confirmation rules; use synthetic fixtures before changing discovery. |
 | `harness-use`, `computer-use`, `agent-management` | Bare personal names are not proof of Harness targeting. Existing response-route tag is not a target selector. | Use actual selected/listed agent evidence; keep Buddy independent. No routing patch in this batch. |
 
@@ -54,7 +54,7 @@ The table records the review evidence, including deliberately retained behavior;
 ## Deliberately retained / follow-up decisions
 
 - Keep connector discovery implementation unchanged in this tuning pass. Its false-connected/error-suppression and generic-storage issues need a separate credential-resolution fix with synthetic fixtures; changing authentication during prompt cleanup would go beyond preserving current behavior.
-- Keep meeting mic-versus-both mute and speaker enrollment/silence precedence unchanged. These require a product decision across SOUL, routing and skills, rather than guessing which contradictory instruction is intended.
+- Keep meeting mic-versus-both mute unchanged pending a product decision. Speaker enrollment now requires user intent; unknown identity alone does not override ordinary requests or meaningless-fragment silence. This shared HAL/OS guidance applies across runtimes, without changing recognition thresholds or APIs. Local regression tests cover metadata preservation, conditional guidance and cooldown; they do not establish model latency improvements.
 - Keep Harness routing unchanged: a bare name is not a confirmed agent. Buddy's availability gate remains independent, and `harness-reply` alone does not select a target.
 - Keep posture/check-in cooldown semantics unchanged: references disagree with their router/window descriptions. Do not introduce new thresholds or delete still-used posture history.
 

@@ -156,6 +156,10 @@ Config field: `guard_mode` in `config/config.json` (bool, default `false`). The 
 5. The describe-first gate above covers only images entering a turn from OUTSIDE (chat/Telegram attachment, HAL's realtime look-frame handoff). A frame the agent captures MID-TURN with `/camera/snapshot` never passes through it — the shell tool returns only `{"path": ...}`, which a text-only main model cannot see. For that path the `camera` skill calls `POST /api/vision/look` (loopback-only, `system/server/vision.go`) instead of HAL directly: os-server takes the snapshot itself (`hal.Snapshot`, 768px/q75 fixed server-side) and returns `{"path": ..., "description": ...}`. The vision-capability branch lives here, not in the skill — when `vision.ModelSupportsVision` says the main model reads images itself, describe is SKIPPED entirely (no vision-model call, no 8-38s wait) and only `path` comes back for the agent to open. Describe failure returns 502 so the agent admits it could not see instead of guessing
 6. Chat runs (`web_chat` / `mqtt_chat`) are tagged via `MarkWebChatRun(runID)` so the SSE handler suppresses TTS at lifecycle end — reply is rendered in the chat UI only (web SSE, or MQTT `chat.event` stream).
 
+### Unknown-speaker enrollment routing
+
+An `Unknown Speaker:` label is identity metadata, not a prerequisite for answering a voice request. HAL preserves the transcript, saved WAV path and cluster tag; its enrollment hint and the shared OS `AppendEnrollNudge` guidance are conditional. The speaker skill is relevant for a clear self-introduction, an explicit enrollment/voice-management request, or a reply continuing that enrollment. Ordinary requests proceed without speaker tools or a name question; meaningless fragments retain the device's normal silence behavior. Same-tag history supports intentional enrollment but does not initiate it. Recognition thresholds, audio requirements and APIs are unchanged. This guidance is shared across agent runtimes, not a Codex-only fix.
+
 ### OpenClaw
 
 | Method | Endpoint | Description |
