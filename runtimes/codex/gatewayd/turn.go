@@ -40,7 +40,11 @@ func (s *Server) turnWorker(ctx context.Context) {
 		case o := <-s.ops:
 			switch o.kind {
 			case opTurn:
-				s.runCorrelatedAppTurn(o.payload)
+				if s.cfg.UseAppServer {
+					s.runCorrelatedAppTurn(o.payload)
+				} else {
+					s.runCorrelatedTurn(ctx, o.payload)
+				}
 			case opSessionNew:
 				s.mu.Lock()
 				active := s.activeTurnID != "" || s.activeStarting

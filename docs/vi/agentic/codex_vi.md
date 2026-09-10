@@ -31,10 +31,14 @@ não nào đang chạy.
 Thiết bị chạy một **WS bridge** mỏng cục bộ: unit systemd `codex.service` chạy
 **`os-server codex-gatewayd`** — bridge được **compile thẳng vào binary
 os-server** (`runtimes/codex/gatewayd`; **không có Python trên thiết bị**).
-Gatewayd sở hữu một tiến trình Codex App Server bền và nói JSON-RPC với nó. Nó
-bắt đầu turn bằng `turn/start` và gửi input bổ sung tương thích vào turn đang
-chạy bằng `turn/steer`; không spawn `codex exec` theo từng message hoặc xả qua
-worker FIFO nghiêm ngặt.
+Thông thường gatewayd chạy một tiến trình `codex exec --json` cho mỗi turn, bề
+mặt automation ổn định của Codex. `CODEX_APP_SERVER=1` mới opt-in vào đường
+Codex App Server JSON-RPC thường trú, mang tính experimental và phụ thuộc phiên
+bản.
+
+Đường App Server tuỳ chọn bắt đầu turn bằng `turn/start` và gửi input bổ sung
+tương thích vào turn active bằng `turn/steer`. Đường mặc định `codex exec`
+tuần tự hoá turn qua worker của bridge.
 
 Bridge mở `ws://127.0.0.1:18792/codex/ws/` (bearer token
 `autonomous_codex_token`) cho os-server. Cấu hình permissive là có chủ ý:
@@ -374,21 +378,16 @@ Codex sở hữu session: bridge bắt thread id của App Server làm session k
 chính thread đó, không bao giờ vào thread khác hoặc turn đã hoàn tất.
 
 Codex **tự auto-compact context của nó** (`model_auto_compact_token_limit`),
-nên `ShouldRotateSession` chỉ là **lưới an toàn 250k token** cho thread chạy
-hoang — hiếm khi kích hoạt. Nó tính trên kích thước **context** đang sống —
+nhưng thiết bị có lưới an toàn **120k token**: tại 134k, một lượt `codex exec`
+đã mất 100 giây; các lượt resume sau đó phình lên 376k rồi 473k. Nó tính trên kích thước **context** đang sống —
 `input_tokens + cached_input_tokens` của `turn.completed` gần nhất, được
 translator lưu vào `lastContextTokens` — chứ không phải `totalTokens` mà handler
 chung truyền vào (số đó cộng cả output của lượt này, là khối lượng turn chứ
 không phải context). Tự đọc usage frame của mình giúp thay đổi này nằm gọn
 trong codex: các backend khác không bị đụng tới.
 
-Lưới này từng là 150k và tính trên `totalTokens` của handler cho tới
-24/8/2026, khi thiết bị cho thấy nó kích hoạt trên turn bình thường chứ không
-phải turn chạy hoang — 3 trong 8 turn sensing liên tiếp trên lamp-0c89 vượt
-ngưỡng (context 153k / 170k). Mỗi lần rotate là mất thread, thread mới lại
-shell-đọc lại toàn bộ `SKILL.md` (6 lần gọi, ~60s), đẩy context vượt ngưỡng
-ngay lập tức: một vòng lặp rotate. Lưới an toàn phải nằm **trên** mức mà
-compaction của codex ổn định lại, không phải nằm trong đó. Theo
+Ngưỡng vẫn chừa một khoảng nhỏ trên sensing turn khỏe mạnh lớn nhất đã quan sát
+(116k), nhưng chặn được vách độ trễ đã đo. Theo
 [`adding-agent-runtime_vi.md`](adding-agent-runtime_vi.md) §4 "No fake
 success", `CompactSession`, `GetConfigJSON` (config của Codex là TOML + secrets
 trong `.env` — không có file JSON để lộ ra), `UpdatePrimaryModel`, và
@@ -644,10 +643,11 @@ về chế độ api-key; việc chuyển đổi tự động ở lần presync 
 
 `message.send` mang request `id` và `run_id` gốc trên device. Gatewayd giữ các
 ID đó trên event của turn. Message tương thích nhắm thread active dùng
-`turn/steer` thay vì chờ phía sau. Trace device riêng của nó nhận xác nhận
-`bridge.steered` rồi kết thúc ngay: chỉ turn active sở hữu reply model và event
-terminal cuối. Việc này ngăn follow-up đã gộp giữ lại pending run ma và làm kẹt
-busy state. Control frame (`pong`, `bridge.status`) độc lập.
+`turn/steer` thay vì chờ phía sau. Trace device riêng nhận xác nhận
+`bridge.steered`. Web chat đã gộp chờ reply cuối của turn active; reply được
+fan-out an toàn, không phát lại marker phần cứng. Follow-up nội bộ có thể kết
+thúc ngay. Việc này ngăn follow-up đã gộp giữ lại pending run ma và làm kẹt busy
+state. Control frame (`pong`, `bridge.status`) độc lập.
 Nếu restart gateway để lại thread ID đã lưu nhưng App Server mới không còn biết,
 gatewayd sẽ xoá session cũ đó và thử lại chính turn ấy một lần trên thread mới.
 

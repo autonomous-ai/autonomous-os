@@ -49,15 +49,16 @@ var resumeErrHints = []string{"no rollout found", "no conversation", "not found"
 // Config holds every tunable. Main() fills it from environment variables
 // (read once at start); tests construct it directly with temp paths.
 type Config struct {
-	Token       string        // CODEX_WS_TOKEN
-	Port        string        // CODEX_PORT (Main only; tests inject a Listener)
-	Workspace   string        // CODEX_WORKSPACE
-	CodexBin    string        // CODEX_BIN
-	CodexHome   string        // CODEX_HOME
-	SessionFile string        // CODEX_SESSION_FILE
-	AttachDir   string        // CODEX_ATTACH_DIR
-	TurnTimeout time.Duration // CODEX_TURN_TIMEOUT_S
-	Home        string        // HOME asserted into the subprocess env
+	Token        string        // CODEX_WS_TOKEN
+	Port         string        // CODEX_PORT (Main only; tests inject a Listener)
+	Workspace    string        // CODEX_WORKSPACE
+	CodexBin     string        // CODEX_BIN
+	CodexHome    string        // CODEX_HOME
+	SessionFile  string        // CODEX_SESSION_FILE
+	AttachDir    string        // CODEX_ATTACH_DIR
+	TurnTimeout  time.Duration // CODEX_TURN_TIMEOUT_S
+	Home         string        // HOME asserted into the subprocess env
+	UseAppServer bool          // false = stable codex exec JSONL path
 }
 
 func envOr(key, def string) string {
@@ -76,15 +77,16 @@ func configFromEnv() Config {
 	// the whole state dir (the client side resolves the same var via syspath).
 	home := envOr("CODEX_HOME", "/root/.codex")
 	return Config{
-		Token:       envOr("CODEX_WS_TOKEN", "autonomous_codex_token"),
-		Port:        envOr("CODEX_PORT", "18792"),
-		Workspace:   envOr("CODEX_WORKSPACE", home+"/workspace"),
-		CodexBin:    envOr("CODEX_BIN", "codex"),
-		CodexHome:   home,
-		SessionFile: envOr("CODEX_SESSION_FILE", home+"/session.json"),
-		AttachDir:   envOr("CODEX_ATTACH_DIR", home+"/attachments"),
-		TurnTimeout: timeout,
-		Home:        envOr("OS_AGENT_HOME", "/root"),
+		Token:        envOr("CODEX_WS_TOKEN", "autonomous_codex_token"),
+		Port:         envOr("CODEX_PORT", "18792"),
+		Workspace:    envOr("CODEX_WORKSPACE", home+"/workspace"),
+		CodexBin:     envOr("CODEX_BIN", "codex"),
+		CodexHome:    home,
+		SessionFile:  envOr("CODEX_SESSION_FILE", home+"/session.json"),
+		AttachDir:    envOr("CODEX_ATTACH_DIR", home+"/attachments"),
+		TurnTimeout:  timeout,
+		Home:         envOr("OS_AGENT_HOME", "/root"),
+		UseAppServer: envOr("CODEX_APP_SERVER", "1") != "0",
 	}
 }
 
@@ -133,14 +135,18 @@ func (s *Server) Serve(ctx context.Context) error {
 	}
 	s.threadID = s.loadSession()
 
-	app, err := startAppServer(ctx, s)
-	if err != nil {
-		return err
+	if s.cfg.UseAppServer {
+		app, err := startAppServer(ctx, s)
+		if err != nil {
+			return err
+		}
+		s.mu.Lock()
+		s.app = app
+		s.mu.Unlock()
+		defer app.close()
+	} else {
+		log.Printf("%s using per-turn codex exec (App Server disabled)", logPrefix)
 	}
-	s.mu.Lock()
-	s.app = app
-	s.mu.Unlock()
-	defer app.close()
 	go s.turnWorker(ctx)
 
 	mux := http.NewServeMux()
