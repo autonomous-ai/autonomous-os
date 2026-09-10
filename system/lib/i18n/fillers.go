@@ -1,5 +1,7 @@
 package i18n
 
+import "strings"
+
 // Dead-air fillers — short TTS cues spoken while OpenClaw is busy. Two
 // pools per language (Opening for first filler of a turn, Continuation for
 // re-arm after a tool finishes) plus per-tool overrides so the spoken
@@ -198,11 +200,48 @@ func FillerContinuation(lang string) []string {
 	return applyNameAll(fillerContinuation[fallbackLang])
 }
 
+// FillerToolKey normalises raw runtime tool names into the small vocabulary
+// used by toolFillers. Names from OpenClaw, OpenCode, Codex and Harness do not
+// share a wire-level enum, so unknown tools deliberately pass through and
+// fall back to FillerContinuation.
+func FillerToolKey(tool string) string {
+	key := strings.ToLower(strings.TrimSpace(tool))
+	key = strings.ReplaceAll(key, "-", "_")
+	key = strings.ReplaceAll(key, ".", "_")
+
+	switch {
+	case key == "x_search":
+		return "x_search"
+	case strings.Contains(key, "memory_search"):
+		return "memory_search"
+	case strings.Contains(key, "memory_get") || strings.Contains(key, "memory_read"):
+		return "memory_get"
+	case strings.Contains(key, "web_search") || key == "search" || strings.HasSuffix(key, "_search"):
+		return "web_search"
+	case strings.Contains(key, "web_fetch") || strings.Contains(key, "http_fetch") || strings.HasSuffix(key, "_fetch"):
+		return "web_fetch"
+	case key == "bash" || key == "shell" || key == "command_execution" || key == "command" || key == "run" ||
+		strings.HasSuffix(key, "__exec") || strings.HasSuffix(key, "__shell"):
+		return "exec"
+	case key == "read" || strings.HasSuffix(key, "__read"):
+		return "read"
+	case key == "file_changes" || key == "file_change" || key == "edit" || key == "write" || key == "patch":
+		return "apply_patch"
+	case strings.Contains(key, "image_generate") || strings.Contains(key, "image_create"):
+		return "image_generate"
+	case strings.Contains(key, "video_generate") || strings.Contains(key, "video_create"):
+		return "video_generate"
+	case strings.Contains(key, "music_generate") || strings.Contains(key, "music_create"):
+		return "music_generate"
+	}
+	return key
+}
+
 // FillerForTool returns the tool-specific override pool for (lang, tool).
 // Returns nil when no override exists — caller falls back to
 // FillerContinuation. Unknown lang routes to the English pool.
 func FillerForTool(lang, tool string) []string {
-	if tool == "" {
+	if tool = FillerToolKey(tool); tool == "" {
 		return nil
 	}
 	pools, ok := toolFillers[lang]

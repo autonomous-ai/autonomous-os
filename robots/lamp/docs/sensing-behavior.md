@@ -809,4 +809,4 @@ When a user or the agent explicitly sets an LED color/scene, breathing must not 
 
 ### Not to be confused with dead-air fillers
 
-The mumble loop speaks when the device is **idle**. A different mechanism — dead-air fillers (`system/lib/i18n/fillers.go`, driven by `server/sensing/delivery/http/deadair_filler.go`) — uses brief conversational asides such as "Hmm, let's see." **mid-turn** while the agent is busy. Tool-aware overrides remain separate for recognised tools. Different trigger, different phrase pools.
+The mumble loop speaks when the device is **idle**. A different mechanism — dead-air fillers (`system/lib/i18n/fillers.go`, driven by `server/sensing/delivery/http/deadair_filler.go`) — uses brief conversational asides such as "Hmm, let's see." **mid-turn** while the agent is busy. Tool-aware overrides remain separate for recognised tools. Raw tool names are normalised first (`bash` / `shell` → `exec`, `file_changes` → `apply_patch`, and recognised MCP suffixes), so the same pool works across runtimes; unknown names use the generic continuation pool. Different trigger, different phrase pools.

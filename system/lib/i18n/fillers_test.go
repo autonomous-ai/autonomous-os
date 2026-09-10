@@ -2,6 +2,26 @@ package i18n
 
 import "testing"
 
+func TestFillerToolKeyNormalisesRuntimeNames(t *testing.T) {
+	tests := map[string]string{
+		"web_search":                     "web_search",  // OpenClaw / Codex
+		"bash":                           "exec",        // OpenCode
+		"shell":                          "exec",        // Codex
+		"command_execution":              "exec",        // Codex item kind
+		"file_changes":                   "apply_patch", // Codex item kind
+		"mcp__filesystem__read":          "read",
+		"mcp__browser__web_search":       "web_search",
+		"mcp__runner__shell":             "exec",
+		"memory_search":                  "memory_search",
+		"unrecognised_runtime_tool_name": "unrecognised_runtime_tool_name",
+	}
+	for raw, want := range tests {
+		if got := FillerToolKey(raw); got != want {
+			t.Errorf("FillerToolKey(%q) = %q, want %q", raw, got, want)
+		}
+	}
+}
+
 func TestFillerRealtimeUsesDedicatedVietnamesePool(t *testing.T) {
 	got := FillerRealtime(LangVI)
 	want := map[string]bool{"Ừm...": true, "Hừm...": true}
