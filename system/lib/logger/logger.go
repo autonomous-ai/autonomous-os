@@ -19,7 +19,7 @@ import (
 
 // GELF centralized logging. Read inside Init() so callers can load .env
 // (godotenv) before logging is initialized. If GELF_URL is empty, the GELF
-// handler is not attached.
+// handler is attached dormant and ships nothing until EnableGELFRelay arms it.
 var (
 	gelfURL      string
 	gelfUsername string
@@ -158,6 +158,9 @@ func (m *multiHandler) WithGroup(name string) slog.Handler {
 const (
 	gelfQueueSize            = 256
 	gelfShutdownFlushTimeout = 5 * time.Second
+	// gelfRelayPath is appended to the campaign-api base URL (which already ends
+	// in /v1) to reach bff-campaign-service's GELF relay.
+	gelfRelayPath = "/logs/gelf"
 )
 
 // gelfSender owns the bounded GELF delivery queue. Logging must never create an
@@ -166,10 +169,11 @@ const (
 // reported to stderr with exponentially spaced notices to preserve observability
 // without turning a collector outage into a second log storm.
 type gelfSender struct {
-	client   *http.Client
-	url      string
-	username string
-	password string
+	client *http.Client
+	url    string
+	// auth sets the request credential: basic auth for a direct collector, the
+	// device's Bearer key for the campaign-api relay. Nil sends none.
+	auth func(*http.Request)
 
 	queue   chan []byte
 	ctx     context.Context
@@ -180,20 +184,33 @@ type gelfSender struct {
 	dropped atomic.Uint64
 }
 
-func newGELFSender(client *http.Client, url, username, password string) *gelfSender {
+func newGELFSender(client *http.Client, url string, auth func(*http.Request)) *gelfSender {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &gelfSender{
-		client:   client,
-		url:      url,
-		username: username,
-		password: password,
-		queue:    make(chan []byte, gelfQueueSize),
-		ctx:      ctx,
-		cancel:   cancel,
-		done:     make(chan struct{}),
+		client: client,
+		url:    url,
+		auth:   auth,
+		queue:  make(chan []byte, gelfQueueSize),
+		ctx:    ctx,
+		cancel: cancel,
+		done:   make(chan struct{}),
 	}
 	go s.run()
 	return s
+}
+
+// basicAuth is the direct-collector credential (GELF_USERNAME/GELF_PASSWORD).
+// Nil without a username, which sends no credential at all.
+func basicAuth(username, password string) func(*http.Request) {
+	if username == "" {
+		return nil
+	}
+	return func(r *http.Request) { r.SetBasicAuth(username, password) }
+}
+
+// bearerAuth is the relay credential: the device's lobster API key.
+func bearerAuth(key string) func(*http.Request) {
+	return func(r *http.Request) { r.Header.Set("Authorization", "Bearer "+key) }
 }
 
 func (s *gelfSender) enqueue(body []byte) {
@@ -234,8 +251,8 @@ func (s *gelfSender) send(body []byte) {
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if s.username != "" {
-		req.SetBasicAuth(s.username, s.password)
+	if s.auth != nil {
+		s.auth(req)
 	}
 	resp, err := s.client.Do(req)
 	if err != nil {
@@ -271,29 +288,51 @@ func (s *gelfSender) close() {
 	}
 }
 
+// gelfSink is the delivery slot shared by a GELF handler and every handler
+// derived from it. slog's With/WithGroup copy the handler, so a sender held by
+// value would leave loggers built before the relay was armed — package-level
+// ones are built long before config.json loads — pointing at nil forever.
+// Holding it behind one shared pointer arms all of them at once.
+type gelfSink struct {
+	sender atomic.Pointer[gelfSender]
+}
+
+func (s *gelfSink) load() *gelfSender { return s.sender.Load() }
+
 // gelfHandler serializes records and enqueues them for the shared GELF sender.
+// It is dormant (Enabled reports false, nothing is serialized) until its sink
+// holds a sender.
 type gelfHandler struct {
 	level      slog.Level
 	host       string
 	deviceType string
 	client     *http.Client
-	sender     *gelfSender
+	sink       *gelfSink
 	attrs      []slog.Attr
 	group      string
 }
 
+// newGELFHandler returns a handler delivering straight to GELF_URL.
 func newGELFHandler(level slog.Level, host string) *gelfHandler {
-	client := &http.Client{Timeout: 3 * time.Second}
+	h := newDormantGELFHandler(level, host)
+	h.sink.sender.Store(newGELFSender(h.client, gelfURL, basicAuth(gelfUsername, gelfPassword)))
+	return h
+}
+
+// newDormantGELFHandler returns a handler with no sender, and so no goroutine,
+// for EnableGELFRelay to arm once the device key is known. A process that never
+// arms it (bootstrap) ships nothing and pays nothing.
+func newDormantGELFHandler(level slog.Level, host string) *gelfHandler {
 	return &gelfHandler{
 		level:  level,
 		host:   host,
-		client: client,
-		sender: newGELFSender(client, gelfURL, gelfUsername, gelfPassword),
+		client: &http.Client{Timeout: 3 * time.Second},
+		sink:   &gelfSink{},
 	}
 }
 
 func (h *gelfHandler) Enabled(_ context.Context, level slog.Level) bool {
-	return level >= h.level
+	return level >= h.level && h.sink.load() != nil
 }
 
 func slogLevelToGELF(level slog.Level) int {
@@ -310,6 +349,11 @@ func slogLevelToGELF(level slog.Level) int {
 }
 
 func (h *gelfHandler) Handle(_ context.Context, r slog.Record) error {
+	sender := h.sink.load()
+	if sender == nil {
+		return nil // dormant: nowhere to ship yet
+	}
+
 	msg := map[string]any{
 		"version":       "1.1",
 		"host":          h.host,
@@ -346,7 +390,7 @@ func (h *gelfHandler) Handle(_ context.Context, r slog.Record) error {
 		return nil // don't block on marshal errors
 	}
 
-	h.sender.enqueue(body)
+	sender.enqueue(body)
 
 	return nil
 }
@@ -355,7 +399,7 @@ func (h *gelfHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 	newAttrs := make([]slog.Attr, len(h.attrs), len(h.attrs)+len(attrs))
 	copy(newAttrs, h.attrs)
 	newAttrs = append(newAttrs, attrs...)
-	return &gelfHandler{level: h.level, host: h.host, client: h.client, sender: h.sender, attrs: newAttrs, group: h.group}
+	return &gelfHandler{level: h.level, host: h.host, client: h.client, sink: h.sink, attrs: newAttrs, group: h.group}
 }
 
 func (h *gelfHandler) WithGroup(name string) slog.Handler {
@@ -365,7 +409,7 @@ func (h *gelfHandler) WithGroup(name string) slog.Handler {
 	}
 	newAttrs := make([]slog.Attr, len(h.attrs))
 	copy(newAttrs, h.attrs)
-	return &gelfHandler{level: h.level, host: h.host, client: h.client, sender: h.sender, attrs: newAttrs, group: g}
+	return &gelfHandler{level: h.level, host: h.host, client: h.client, sink: h.sink, attrs: newAttrs, group: g}
 }
 
 // activeGELF holds the GELF handler so SetGELFHost can update host after config loads.
@@ -384,6 +428,28 @@ func SetGELFHost(host string) {
 func SetGELFDeviceType(deviceType string) {
 	if activeGELF != nil && deviceType != "" {
 		activeGELF.deviceType = deviceType
+	}
+}
+
+// EnableGELFRelay arms the dormant GELF handler to ship through
+// bff-campaign-service instead of straight to Graylog: POST {baseURL}/logs/gelf
+// with the device's lobster key as a Bearer token. bff holds the Graylog
+// credential, so the device carries none — shipped devices are not provisioned
+// with GELF_URL/GELF_USERNAME/GELF_PASSWORD.
+//
+// Call once config.json has loaded. No-op when GELF_URL is set (direct delivery
+// wins), when baseURL or apiKey is blank, when Init attached no GELF handler, or
+// when the relay is already armed, so a repeat call cannot start a second sender.
+func EnableGELFRelay(baseURL, apiKey string) {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	apiKey = strings.TrimSpace(apiKey)
+	h := activeGELF
+	if h == nil || baseURL == "" || apiKey == "" || h.sink.load() != nil {
+		return
+	}
+	sender := newGELFSender(h.client, baseURL+gelfRelayPath, bearerAuth(apiKey))
+	if !h.sink.sender.CompareAndSwap(nil, sender) {
+		sender.close() // lost a race with a concurrent call; keep the winner
 	}
 }
 
@@ -423,22 +489,26 @@ func Init(logFilePath string) func() {
 	gelfUsername = os.Getenv("GELF_USERNAME")
 	gelfPassword = os.Getenv("GELF_PASSWORD")
 
-	handlers := []slog.Handler{consoleHandler, fileHandler}
+	// GELF_URL ships straight to that collector. Without it the handler is
+	// attached dormant for EnableGELFRelay to arm once config.json supplies the
+	// device key; until then (and forever, in bootstrap) it ships nothing.
+	// "os-server" is the pre-config host; SetGELFHost(DeviceID) overrides it.
 	var gelf *gelfHandler
 	if gelfURL != "" {
-		gelf = newGELFHandler(level, "os-server") // pre-config host; SetGELFHost(DeviceID) overrides once config loads
-		activeGELF = gelf
-		handlers = append(handlers, gelf)
+		gelf = newGELFHandler(level, "os-server")
+	} else {
+		gelf = newDormantGELFHandler(level, "os-server")
 	}
+	activeGELF = gelf
 
-	slog.SetDefault(slog.New(&multiHandler{handlers: handlers}))
+	slog.SetDefault(slog.New(&multiHandler{handlers: []slog.Handler{consoleHandler, fileHandler, gelf}}))
 
 	return func() {
 		if activeGELF == gelf {
 			activeGELF = nil
 		}
-		if gelf != nil {
-			gelf.sender.close()
+		if sender := gelf.sink.load(); sender != nil {
+			sender.close()
 		}
 		rotatingWriter.Close()
 	}

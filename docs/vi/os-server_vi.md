@@ -738,6 +738,19 @@ hoạt động và queue đầy, GELF record mới bị drop (có stderr notice 
 console và rotating file cục bộ vẫn tiếp tục. Khi shutdown, worker flush record trong
 queue tối đa năm giây trước khi hủy delivery còn lại.
 
+Khi không đặt `GELF_URL` (trường hợp bình thường trên thiết bị xuất xưởng, vốn
+không mang credential Graylog nào), OS Server và HAL relay các record đó qua
+campaign-api: mỗi record được POST tới `{base}/logs/gelf` (vd.
+`https://campaign-api.autonomous.ai/api/v1/ai/v1/logs/gelf`) với lobster key của
+thiết bị trong `Authorization: Bearer`, và bff-campaign-service chuyển tiếp tới
+Graylog bằng credential nó giữ. Base URL và key lấy từ `autonomous_defaults`
+(bộ xuất xưởng) nếu có, không thì từ `llm_base_url` / `llm_api_key`, và chỉ được
+dùng khi trỏ tới host của Autonomous (`*.autonomous.ai`, `*.autonomousdev.xyz`),
+nên thiết bị mà chủ đã chuyển sang LLM provider riêng không bao giờ gửi log tới
+provider đó. OS Server bật relay sau khi `config.json` đã load và đọc key lúc đó,
+nên các record trước thời điểm này chỉ nằm ở local; bootstrap không bao giờ bật
+relay. Khi có `GELF_URL` thì luôn gửi thẳng.
+
 ## Local Intent Matching
 
 Khi nhận event `voice_command`, `voice_followup` hoặc `voice`, OS server check local intent trước (~50ms):

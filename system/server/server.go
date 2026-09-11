@@ -215,6 +215,10 @@ func (s *Server) Serve(closeFn func()) error {
 		logger.SetGELFHost(s.config.DeviceID)
 	}
 	logger.SetGELFDeviceType(deviceType)
+	// No GELF_URL on the device (the shipped case) → relay through campaign-api
+	// with the device key; bff holds the Graylog credential. No-op when GELF_URL
+	// is set or the device has no Autonomous credential to relay with.
+	logger.EnableGELFRelay(s.config.GELFRelayCredentials())
 
 	// Common fields for every tracking event this device sends (see
 	// system/telemetry). Set once here, where the resolved device class,

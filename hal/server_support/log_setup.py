@@ -115,7 +115,9 @@ def setup_logging() -> logging.Logger:
             from hal.drivers.gelf_handler import GELFHandler
             from hal.config import _os_cfg_get
 
-            _gelf = GELFHandler()
+            # config.json supplies the campaign-api relay target when GELF_URL
+            # is unset (the shipped case — no Graylog credential on the device).
+            _gelf = GELFHandler(os_cfg_get=_os_cfg_get)
             _gelf.setFormatter(logging.Formatter("%(message)s"))
             _device_id = _os_cfg_get("device_id")
             if _device_id:

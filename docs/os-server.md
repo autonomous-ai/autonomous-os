@@ -756,6 +756,19 @@ produced GELF records are dropped (with rate-limited stderr notices) while conso
 and local rotating-file logging continue. On shutdown, the worker flushes queued
 records for up to five seconds before cancelling any remaining delivery.
 
+When `GELF_URL` is unset (the normal case on a shipped device, which carries no
+Graylog credential), OS Server and HAL relay the same records through
+campaign-api instead: each record is POSTed to `{base}/logs/gelf` (e.g.
+`https://campaign-api.autonomous.ai/api/v1/ai/v1/logs/gelf`) with the device's
+lobster key as `Authorization: Bearer`, and bff-campaign-service forwards it to
+Graylog with the credential it holds. The base URL and key are the shipped
+`autonomous_defaults` when present, else `llm_base_url` / `llm_api_key`, and are
+used only when they point at an Autonomous host (`*.autonomous.ai`,
+`*.autonomousdev.xyz`), so a device whose owner switched to their own LLM
+provider never ships logs to it. OS Server arms the relay once `config.json` has
+loaded and reads the key then, so records logged before that stay local;
+bootstrap never arms it. `GELF_URL` always wins when set.
+
 ## Local Intent Matching
 
 When receiving a `voice_command`, `voice_followup`, or `voice` event, the OS server checks local intent first (~50ms):

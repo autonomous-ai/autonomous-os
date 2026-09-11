@@ -2,9 +2,13 @@ package logger
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -52,7 +56,7 @@ func TestGELFHandlerDropsWhenBoundedQueueIsFull(t *testing.T) {
 	defer func() { gelfURL, gelfUsername, gelfPassword = oldURL, oldUsername, oldPassword }()
 
 	h := newGELFHandler(slog.LevelInfo, "test")
-	defer h.sender.close()
+	defer h.sink.load().close()
 
 	if err := h.Handle(context.Background(), slog.NewRecord(time.Now(), slog.LevelInfo, "first", 0)); err != nil {
 		t.Fatalf("first Handle() error = %v", err)
@@ -68,7 +72,7 @@ func TestGELFHandlerDropsWhenBoundedQueueIsFull(t *testing.T) {
 			t.Fatalf("Handle() error = %v", err)
 		}
 	}
-	if h.sender.dropped.Load() == 0 {
+	if h.sink.load().dropped.Load() == 0 {
 		t.Fatal("expected at least one GELF record to be dropped when queue is full")
 	}
 
@@ -100,9 +104,197 @@ func TestGELFSenderFlushesQueuedRecordsOnClose(t *testing.T) {
 			t.Fatalf("Handle() error = %v", err)
 		}
 	}
-	h.sender.close()
+	h.sink.load().close()
 
 	if got := received.Load(); got != 3 {
 		t.Fatalf("GELF records sent before close = %d, want 3", got)
+	}
+}
+
+// capturedGELF is one request a test collector received.
+type capturedGELF struct {
+	path          string
+	authorization string
+	contentType   string
+	basicUser     string
+	body          string
+}
+
+// gelfCollector records every request so a test can assert where a record went
+// and with which credential.
+type gelfCollector struct {
+	*httptest.Server
+	mu   sync.Mutex
+	reqs []capturedGELF
+}
+
+func newGELFCollector(t *testing.T) *gelfCollector {
+	t.Helper()
+	c := &gelfCollector{}
+	c.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		user, _, _ := r.BasicAuth()
+		c.mu.Lock()
+		c.reqs = append(c.reqs, capturedGELF{
+			path:          r.URL.Path,
+			authorization: r.Header.Get("Authorization"),
+			contentType:   r.Header.Get("Content-Type"),
+			basicUser:     user,
+			body:          string(body),
+		})
+		c.mu.Unlock()
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	t.Cleanup(c.Close)
+	return c
+}
+
+func (c *gelfCollector) received() []capturedGELF {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]capturedGELF(nil), c.reqs...)
+}
+
+// initTestLogger runs the real Init with GELF_URL set to gelfEnvURL ("" = the
+// relay path) and returns a func that flushes the sender and restores globals.
+// Records are only guaranteed delivered once that func has run.
+func initTestLogger(t *testing.T, gelfEnvURL string) func() {
+	t.Helper()
+	t.Setenv("GELF_URL", gelfEnvURL)
+	t.Setenv("GELF_USERNAME", "graylog-user")
+	t.Setenv("GELF_PASSWORD", "graylog-pass")
+	prev := slog.Default()
+	oldURL, oldUsername, oldPassword := gelfURL, gelfUsername, gelfPassword
+	cleanup := Init(filepath.Join(t.TempDir(), "os-server.log"))
+	return func() {
+		cleanup()
+		slog.SetDefault(prev)
+		gelfURL, gelfUsername, gelfPassword = oldURL, oldUsername, oldPassword
+	}
+}
+
+func TestGELFRelayShipsToCampaignAPIWithDeviceKey(t *testing.T) {
+	collector := newGELFCollector(t)
+	done := initTestLogger(t, "")
+
+	EnableGELFRelay(collector.URL+"/api/v1/ai/v1/", "lobster-key")
+	slog.Info("relayed record")
+	done()
+
+	got := collector.received()
+	if len(got) != 1 {
+		t.Fatalf("relay requests = %d, want 1", len(got))
+	}
+	r := got[0]
+	if r.path != "/api/v1/ai/v1/logs/gelf" {
+		t.Errorf("path = %q, want /api/v1/ai/v1/logs/gelf", r.path)
+	}
+	if r.authorization != "Bearer lobster-key" {
+		t.Errorf("Authorization = %q, want the device key as a Bearer token", r.authorization)
+	}
+	if r.basicUser != "" {
+		t.Errorf("relay sent basic auth user %q; the Graylog credential must never leave the device", r.basicUser)
+	}
+	if r.contentType != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", r.contentType)
+	}
+	if !strings.Contains(r.body, `"short_message":"relayed record"`) {
+		t.Errorf("body = %s, want the GELF record", r.body)
+	}
+}
+
+func TestGELFRelayIgnoredWhenGELFURLSet(t *testing.T) {
+	direct := newGELFCollector(t)
+	relay := newGELFCollector(t)
+	done := initTestLogger(t, direct.URL)
+
+	EnableGELFRelay(relay.URL, "lobster-key")
+	slog.Info("direct record")
+	done()
+
+	if got := relay.received(); len(got) != 0 {
+		t.Fatalf("relay requests = %d, want 0: GELF_URL must win over the relay", len(got))
+	}
+	got := direct.received()
+	if len(got) != 1 {
+		t.Fatalf("direct requests = %d, want 1", len(got))
+	}
+	if got[0].basicUser != "graylog-user" {
+		t.Errorf("direct basic auth user = %q, want graylog-user", got[0].basicUser)
+	}
+}
+
+func TestGELFHandlerDormantUntilRelayArmed(t *testing.T) {
+	done := initTestLogger(t, "")
+	defer done()
+
+	if activeGELF == nil {
+		t.Fatal("Init attached no GELF handler, so EnableGELFRelay would have nothing to arm")
+	}
+	if activeGELF.Enabled(context.Background(), slog.LevelError) {
+		t.Fatal("dormant GELF handler reports Enabled; records would be serialized for nowhere")
+	}
+	if activeGELF.sink.load() != nil {
+		t.Fatal("dormant GELF handler already has a sender (and its goroutine)")
+	}
+}
+
+func TestGELFRelayArmsLoggersCreatedBeforeIt(t *testing.T) {
+	collector := newGELFCollector(t)
+	done := initTestLogger(t, "")
+
+	// Package-level loggers are built long before config.json loads, so they
+	// hold handler copies made while the relay was still dormant.
+	early := slog.Default().With("component", "early")
+	EnableGELFRelay(collector.URL, "lobster-key")
+	early.Info("from early logger")
+	done()
+
+	got := collector.received()
+	if len(got) != 1 {
+		t.Fatalf("relay requests = %d, want 1 from the logger created before arming", len(got))
+	}
+	if !strings.Contains(got[0].body, `"_component":"early"`) {
+		t.Errorf("body = %s, want the early logger's attrs", got[0].body)
+	}
+}
+
+func TestGELFRelayStaysDormantWithoutCredentials(t *testing.T) {
+	cases := []struct {
+		name, base, key string
+	}{
+		{name: "no base URL", base: "", key: "lobster-key"},
+		{name: "blank base URL", base: "   ", key: "lobster-key"},
+		{name: "no key", base: "https://campaign-api.autonomous.ai/api/v1/ai/v1", key: ""},
+		{name: "blank key", base: "https://campaign-api.autonomous.ai/api/v1/ai/v1", key: "  "},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			done := initTestLogger(t, "")
+			defer done()
+
+			EnableGELFRelay(tc.base, tc.key)
+			if activeGELF.Enabled(context.Background(), slog.LevelError) {
+				t.Fatal("relay armed without a usable base URL and key")
+			}
+		})
+	}
+}
+
+func TestGELFRelaySecondCallKeepsFirstTarget(t *testing.T) {
+	first := newGELFCollector(t)
+	second := newGELFCollector(t)
+	done := initTestLogger(t, "")
+
+	EnableGELFRelay(first.URL, "key-1")
+	EnableGELFRelay(second.URL, "key-2")
+	slog.Info("once")
+	done()
+
+	if got := first.received(); len(got) != 1 {
+		t.Fatalf("first target requests = %d, want 1", len(got))
+	}
+	if got := second.received(); len(got) != 0 {
+		t.Fatalf("second target requests = %d, want 0: a repeat call must not re-arm", len(got))
 	}
 }
