@@ -48,6 +48,10 @@ var cotTriggerRe = regexp.MustCompile(
 		`|claims?|claimed|mentions?|mentioned|requests?|requested|greets?|greeted` +
 		`|needs?|needed)\b` +
 		`|phrasing draft|delivery guidance|spoken delivery` +
+		// Song-selection planning labels and speaker-identity bookkeeping can
+		// leak without "the user". Anchor these to avoid ordinary song/device discussion.
+		`|^\s*they named (?:a|the) song\s*:` +
+		`|^\s*speaker(?: identity)? is unknown\b` +
 		`|\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b)`,
 )
 

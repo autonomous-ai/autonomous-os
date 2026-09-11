@@ -21,6 +21,13 @@
 | GET | `/api/system/ota-security` | Trạng thái tin cậy OTA lấy từ bootstrap worker: `legacy` hay `verified`, fingerprint key đã pin, lần fetch metadata gần nhất (xem `bootstrap-ota.md`) |
 | POST | `/api/system/reboot` | Cần admin auth: trả ACK, rồi yêu cầu HAL phát cue và reboot OS |
 | POST | `/api/system/shutdown` | Cần admin auth: trả ACK, rồi yêu cầu HAL phát cue, release servo và shutdown OS |
+| POST | `/api/system/restart/:target` | Cần admin auth, chỉ restart service `hal` hoặc `os-server`. Trả `202` với `{target, scheduled: true}` khi systemd nhận lịch restart; target không hỗ trợ trả `400`, lỗi đặt lịch trả `500`. |
+
+Restart service dùng `systemd-run --collect --on-active=2s systemctl restart <target>`
+với timeout đặt lịch năm giây. Timer tạm chạy riêng để HTTP response có thể đến
+trình duyệt trước khi os-server restart; `202` xác nhận đã đặt lịch, chưa xác nhận
+service phục hồi. Card Versions trong Web Monitor cung cấp thao tác này cho HAL
+và OS Server. Host cần systemd và quyền quản lý các system service.
 
 Hai endpoint power trả `202 Accepted` trước khi đặt lịch gọi HAL, để trình duyệt
 nhận được ACK trước lúc thiết bị không còn truy cập được. Mỗi lúc chỉ có một
