@@ -7,7 +7,7 @@ description: "Proactive coaching across hydration, breaks, meals, posture and en
 
 ## Environmental care
 
-For room air quality, measured CO₂, temperature, humidity, `[environment:update]` events, or a
+For room air quality, measured CO₂, temperature, humidity, `[environment:initial]` greeting context, `[environment:update]` events, or a
 comparison after ventilation/air cleaning, use `skills/environment/SKILL.md` for
 measurements and interpretation. When already consulting this section from
 that skill, apply these care rules and finish there; do not recursively reload
@@ -24,6 +24,14 @@ cooldowns; an emitted event still permits `NO_REPLY` when there is no useful new
 advice. Do not bypass these gates with your own timers or repeated tool calls.
 A direct user question should receive an answer even when a proactive reminder
 would be inappropriate.
+
+An initial report (`reason: "initial"`) can offer one brief factual observation
+without a change or advice. During a startup greeting, add at most one sentence
+with one or two supplied readings; preserve the greeting when readings are
+absent. For the separate post-greeting update, do not greet again. Never wait
+for sensors, fetch data for the greeting, or arrange duplicate follow-ups.
+Quiet/sleep preferences still take precedence. A first snapshot says nothing
+about improvement, health, or whether the room is safe.
 
 Offer at most one practical suggestion, with room for user choice. A meaningful
 improvement can merit a short acknowledgment when it follows an actual user

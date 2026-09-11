@@ -62,6 +62,17 @@ status reads and HAL acquisition remain available.
 Capability, sleep and conversation-floor gates apply; busy queues coalesce to
 the latest environment event with a 60-second expiry and recheck capability,
 sleep and policy enabled at replay. Queue acceptance is best-effort, not guaranteed notification delivery.
+`environment.initial_report` defaults to `true`: greeting uses only cached,
+fresh readings that passed warm-up, under `[environment:initial]`, and never
+waits for HAL. Otherwise the first eligible snapshot is sent once after greeting
+completion through `environment.update` (`reason: "initial"`, `changes: {}`).
+Only eligible metrics are included; later warming metrics do not reannounce.
+Successful greeting context or accepted/queued delivery consumes this initial
+report for the OS process; retries use the configured retry interval. Reconnects
+and config edits do not rearm it. Set `initial_report: false` to disable both
+startup paths while retaining change detection. HAL's optional per-component
+`continuous_data_s` allows existing acquisition continuity to count toward
+warm-up after an OS-only restart; invalid/stale components remain excluded.
 The `environment` skill interprets measurements and consults `wellbeing` for
 proportionate advice. Hardware acquisition and OS change policy are separate;
 this feature does not enable Lamp's commented capability or disabled SEN55/SCD41.

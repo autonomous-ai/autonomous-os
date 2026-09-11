@@ -38,9 +38,10 @@ not wire colors. A compatible cable plug is JST GHR-06V-S.
 Hardware-team wiring note (reported by the owner): the **OrangePi host header**
 uses physical **pin 3 for SDA** and **pin 5 for SCL**. These are host header
 positions, not SEN55 connector pin numbers: connect OrangePi pin 3 to SEN55
-pin 3 (SDA), and OrangePi pin 5 to SEN55 pin 4 (SCL). The Linux `/dev/i2c-N`
-bus number and pin-mux configuration still require confirmation; this note
-has not been verified on the device and does not enable acquisition.
+pin 3 (SDA), and OrangePi pin 5 to SEN55 pin 4 (SCL). On the inspected OrangePi 4 Pro, `gpio readall` identifies pin 3 as
+SDA.0 (PB3) and pin 5 as SCL.0 (PB2). The live device tree maps these pins
+to `/dev/i2c-0`, with the `i2c0` overlay enabled. `sen55.json` therefore
+records `bus: 0`; acquisition remains disabled.
 
 `sen55.json` records these physical host header positions as `sda_pin: 3` and
 `scl_pin: 5`. They are wiring metadata; the driver uses `bus` and does not
@@ -53,8 +54,12 @@ pin multiplexing, available bus, and power budget before wiring. HAL does
 not select board header pins or configure bus speed. Keep the air inlet and
 outlet clear and avoid heat from the host when mounting.
 
-Physical wiring, board I2C configuration, and readings on a real SEN55 have
-not yet been verified in this integration.
+Device inspection on 2026-09-11 confirmed the host bus mapping, but the
+SEN55 product-name command at `0x69` received no address ACK (the Sunxi
+driver returned `EINVAL`). The live bus clock was 400 kHz, above the SEN55
+limit. No sensor identity or readings have been verified. Configure the bus
+for at most 100 kHz and check power, common ground, SEL and wiring before
+enabling acquisition. This inspection did not change device configuration.
 
 ## Enable in HAL
 
@@ -75,7 +80,7 @@ selected component has an independent worker and configuration.
 
 SEN55 configuration belongs to `robots/<device>/sen55.json`, using a
 `boards` map like `mpr121.json`. The target board is OrangePi (`orangepi_sun60`); Lamp ships its entry disabled
-(`{"enabled": false}`), without an assumed bus. A missing file
+(`{"enabled": false}`), with the verified host-header bus `0`. A missing file
 or selected-board entry disables the sensor. Disabled entries may omit `bus` or set it to `null` while the bus is unknown.
 Enabling acquisition requires a nonnegative integer `bus`.
 Invalid configuration, including unknown fields, is rejected at startup.
@@ -95,7 +100,8 @@ uses placeholders and is not directly loadable JSON:
 Replace the board ID with the detected board and the bus placeholder with its
 actual nonnegative integer Linux bus number. There is no default bus. Enable
 the kernel I2C interface and configure pin multiplexing and bus speed for that
-board; OrangePi is the selected board, but the physical wiring and bus still need confirmation.
+board; the inspected OrangePi 4 Pro uses bus `0`, but sensor communication
+and the required bus clock still need verification.
 HAL accesses `/dev/i2c-N` through Python's standard library; the process needs
 permission to open that device. No additional Python I2C package is needed.
 Simulation never accesses the hardware, even with an enabled entry.
@@ -260,6 +266,7 @@ This is separate from HAL timing in `sen55.json` and `scd41.json`. Defaults are:
 {
   "environment": {
     "enabled": true,
+    "initial_report": true,
     "evaluate_interval_s": 10,
     "sustain_s": 60,
     "cooldown_s": 900,
@@ -300,15 +307,40 @@ composite snapshots, `sources`, `components`, and `metric_timestamps` prevent
 a healthy sensor from making another sensor's old values appear current. A
 faulty SEN55 resets its own metrics without suppressing healthy SCD41 CO₂.
 Legacy single-sensor snapshots still use the top-level timestamp/status.
-After continuous valid readings
-for each metric's warm-up, the first value establishes a silent baseline.
+After continuous valid readings for each metric's warm-up, the first value
+establishes its change-detection baseline. Each HAL component optionally reports
+`continuous_data_s`: elapsed successful acquisition time from its first to its
+latest sample in the uninterrupted acquisition period. It is null while invalid,
+stale or errored and resets after interrupted acquisition. OS can use this
+continuity plus locally observed valid duration to satisfy warm-up after an
+OS-only restart; legacy HAL without it uses local observation. Freshness and
+per-metric validity still apply; component uptime alone is not usable data.
 Changes must meet `delta` in the same direction for `sustain_s`; falling below
 that difference or reversing direction resets the pending duration. Null
 metrics reset their own warm-up/baseline; an unavailable snapshot or read failure
 resets readings for all metrics. Large gaps also reset continuity. Warm-up is an
 OS gating period, not a certificate of sensor calibration.
 
-A qualifying event contains `[environment:update]` followed by JSON with
+`environment.initial_report` defaults to `true`. The system greeting never
+waits for a sensor or fetches HAL: it may attach a fresh, warmed-up snapshot
+already cached by the OS worker as `[environment:initial]` JSON. The agent adds
+at most one factual sentence with one or two readings to the normal greeting.
+Cold boot normally greets without environmental data. After greeting completion,
+OS sends the first eligible snapshot once through `environment.update`, with
+`reason: "initial"` and `changes: {}`, even if no significant change occurred.
+Only eligible metrics are included; metrics still warming up do not each trigger
+another initial report. A successful greeting with context consumes the report;
+otherwise it remains pending. Rejected dispatch retries at `retry_interval_s`;
+accepted or queued dispatch consumes it and starts the shared cooldown. Queued
+acceptance is best-effort, so later expiry does not generate another initial
+report. Capability, enabled policy, sleep, busy and conversation-floor rules
+still apply to the separate event. This state lasts for the OS process; sensor
+reconnections and configuration edits do not rearm a consumed report. Setting
+`initial_report: false` disables both greeting inclusion and the separate
+initial update, preserving sustained-change detection. No initial snapshot
+establishes a trend, health diagnosis, or assurance of safe air.
+
+A qualifying change event contains `[environment:update]` followed by JSON with
 `observed_at` (Unix seconds), `sample`, `changes` keyed by metric with
 `previous`, `previous_at` (baseline Unix seconds), `current`, `current_at`
 (current metric Unix seconds), `source`, signed `delta`, and `sustained_s`.
@@ -353,6 +385,10 @@ not require camera observations, identity, activity logs or hydration counters.
 
 - **Ask about the room:** read status once, report useful measurements; missing
   or stale data is unknown, not zero pollution or proof of safe air.
+- **Startup:** greet immediately; optionally use cached eligible readings in one
+  short sentence. If unavailable, the first eligible snapshot can produce a
+  separate observation after the greeting, without greeting again or fetching
+  data for this report. Stale initial data is omitted.
 - **Sustained change:** explain supported changes and offer at most one useful
   action when appropriate. Respect quiet/sleep preferences; output `NO_REPLY`
   when no useful notification is warranted.

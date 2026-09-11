@@ -59,6 +59,8 @@ type Server struct {
 	engine          *gin.Engine
 	config          *config.Config
 
+	environmentStartup *environment.StartupCoordinator
+
 	// handlers
 	healthHandler     _healthHttpDeliver.HealthHandler
 	networkHandler    _networkHttpDeliver.NetworkHandler
@@ -163,6 +165,8 @@ func ProvideServer(
 	// on — that older turn keeps running but loses the speaker.
 	sensingH.SetOnRealtimeHandled(agentH.CancelSpeechForNewerTurn)
 	s := &Server{
+		environmentStartup: environment.NewStartupCoordinator(),
+
 		config:            cfg,
 		healthHandler:     hh,
 		networkHandler:    nh,
@@ -654,6 +658,7 @@ func (s *Server) Serve(closeFn func()) error {
 	})
 
 	go environment.Service{
+		Startup:   s.environmentStartup,
 		Settings:  s.config.EnvironmentSettings,
 		Available: s.environmentAvailable,
 		Read:      hal.GetEnvironmentStatusContext,

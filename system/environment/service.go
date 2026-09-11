@@ -15,13 +15,14 @@ import (
 )
 
 type Service struct {
+	Startup   *StartupCoordinator
 	Settings  func() config.EnvironmentConfig
 	Available func() bool
 	Read      func(context.Context) (json.RawMessage, error)
 	Send      func(context.Context, Event) (bool, error)
 }
 
-// Run polls locally; no cloud call is made until a sustained change qualifies.
+// Run polls locally and dispatches an optional startup snapshot or sustained changes.
 // Settings are re-read on each tick, independently of the shared config channel.
 func (s Service) Run(ctx context.Context) {
 	var detector *Detector
@@ -38,12 +39,20 @@ func (s Service) Run(ctx context.Context) {
 		if err := settings.Validate(); err != nil {
 			slog.Warn("invalid environment config", "component", "environment", "error", err)
 			detector = nil
+			if s.Startup != nil {
+				s.Startup.update(false, nil, nil)
+			}
 			timer.Reset(10 * time.Second)
 			continue
 		}
 		if detector == nil || !reflect.DeepEqual(current, settings) {
 			current = settings.Clone()
 			detector = NewDetector(current)
+		}
+		if s.Startup != nil {
+			if acknowledged := s.Startup.takeAcknowledged(); acknowledged != nil {
+				detector.Attempted(time.Now(), acknowledged, true)
+			}
 		}
 		if settings.Enabled && s.Available() {
 			body, err := s.Read(ctx)
@@ -53,16 +62,36 @@ func (s Service) Run(ctx context.Context) {
 			}
 			if err != nil {
 				detector.ResetReadings()
+				if s.Startup != nil {
+					s.Startup.update(settings.InitialReport, nil, nil)
+				}
 				slog.Debug("environment sample unavailable", "component", "environment", "error", err)
-			} else if event := detector.Observe(time.Now(), snapshot); event != nil {
-				accepted, err := s.Send(ctx, *event)
-				detector.Attempted(time.Now(), event, accepted)
-				if err != nil {
-					slog.Warn("environment dispatch failed", "component", "environment", "error", err)
+			} else {
+				now := time.Now()
+				event := detector.Observe(now, snapshot)
+				if s.Startup != nil {
+					initial, expires := detector.startupSnapshot(now, snapshot)
+					s.Startup.update(settings.InitialReport, initial, expires)
+					if pending, next := s.Startup.initial(now, settings.RetryIntervalS); pending {
+						event = next
+					}
+				}
+				if event != nil {
+					accepted, err := s.Send(ctx, *event)
+					detector.Attempted(time.Now(), event, accepted)
+					if accepted && event.Reason == "initial" && s.Startup != nil {
+						s.Startup.acceptedInitial()
+					}
+					if err != nil {
+						slog.Warn("environment dispatch failed", "component", "environment", "error", err)
+					}
 				}
 			}
 		} else {
 			detector.ResetReadings()
+			if s.Startup != nil {
+				s.Startup.update(false, nil, nil)
+			}
 		}
 		timer.Reset(time.Duration(settings.EvaluateIntervalS * float64(time.Second)))
 	}

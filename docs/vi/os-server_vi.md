@@ -61,7 +61,19 @@ tự động (`dropped_disabled`); vẫn đọc được status chẩn đoán v�
 sleep và conversation floor; queue lúc bận chỉ giữ event môi trường mới nhất,
 hết hạn sau 60 giây, kiểm tra lại capability, sleep và policy enabled khi phát
 lại. Nhận vào queue
-là best-effort, không bảo đảm giao thông báo. Skill `environment` diễn giải
+là best-effort, không bảo đảm giao thông báo.
+`environment.initial_report` mặc định `true`: lời chào chỉ dùng số đo đã cache,
+còn mới và đủ warm-up dưới `[environment:initial]`, không chờ HAL. Nếu chưa có,
+snapshot đủ điều kiện đầu tiên được gửi một lần sau khi lời chào hoàn tất qua
+`environment.update` (`reason: "initial"`, `changes: {}`). Chỉ gồm chỉ số đủ
+điều kiện; chỉ số warm-up muộn không tạo thông báo ban đầu khác. Lời chào thành
+công có context hoặc dispatch được nhận/xếp queue tiêu thụ thông báo cho tiến
+trình OS; retry dùng chu kỳ cấu hình. Kết nối lại hay sửa config không tạo lại
+thông báo đã tiêu thụ. `initial_report: false` tắt cả hai đường khởi động nhưng
+giữ phát hiện thay đổi. Trường `continuous_data_s` tùy chọn của component HAL
+cho phép tính thời gian thu nhận liên tục sẵn có vào warm-up khi chỉ OS restart;
+vẫn loại component không hợp lệ/stale.
+Skill `environment` diễn giải
 số đo và tham khảo `wellbeing` để gợi ý phù hợp. Thu nhận phần cứng tách biệt
 chính sách thay đổi ở OS; tính năng không bật capability đang comment hay SEN55/SCD41
 đang tắt của Lamp. Xem [cảm biến môi trường Lamp](../../robots/lamp/docs/vi/environment-sensing_vi.md#chính-sách-thay-đổi-của-os-và-api-cho-agent)

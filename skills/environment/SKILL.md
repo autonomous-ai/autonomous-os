@@ -1,6 +1,6 @@
 ---
 name: environment
-description: Interpret environmental sensor readings and sustained changes for room comfort and air quality. Use for [environment:update] events, questions about room temperature, humidity, measured CO2 or air quality, and checking changes after ventilation or air cleaning. Requires the environment capability. Link to wellbeing for considerate proactive advice; do not diagnose health conditions or infer CO2 or oxygen from other measurements.
+description: Interpret environmental sensor readings and sustained changes for room comfort and air quality. Use for [environment:initial] greeting context, [environment:update] events, questions about room temperature, humidity, measured CO2 or air quality, and checking changes after ventilation or air cleaning. Requires the environment capability. Link to wellbeing for considerate proactive advice; do not diagnose health conditions or infer CO2 or oxygen from other measurements.
 ---
 
 # Environment
@@ -48,13 +48,20 @@ average. `sustained_s` describes consecutive qualifying readings, not a health
 exposure assessment. Missing context does not
 justify invented thresholds, durations, health classifications or user activity.
 
+An initial report has `reason: "initial"`, `changes: {}`, and only the metrics
+that have passed OS freshness and warm-up checks. It is either embedded in the
+startup greeting under `[environment:initial]`, or sent after the greeting as
+`[environment:update]`. It is a first observation, not a significant-change
+alert: empty `changes` is expected. Other metrics may still be warming up.
+
 ## Choose the response
 
 1. **Direct room-status question:** report the most relevant available measurements and an evidenced trend, usually in one or two sentences. Give numbers when useful or requested. A single snapshot cannot establish a trend or that the whole room is safe.
-2. **Automatic `[environment:update]`:** use the supplied change facts. A significant change means OS's configurable change policy fired; it is not automatically a harmful level. Consider whether the change merits action using the environmental-care section of `skills/wellbeing/SKILL.md`. If there is no useful new advice, output exactly `NO_REPLY`.
-3. **After an action:** compare a fresh value with an actual earlier, timestamped value in the event or conversation. State the observed direction without claiming causation: “Particles are lower than before.” If there is no comparison point, say that a change cannot yet be established. A later significant-change event may support an update, but no event is a guarantee of scheduled follow-up.
+2. **Initial report (`reason: "initial"`):** use the supplied snapshot to add at most one short factual sentence with one or two useful readings. In `[environment:initial]` greeting context, preserve the normal greeting and do not create another turn or fetch/wait for sensor data. Without usable greeting context, just greet normally. For a separate initial update, skip a second greeting; a simple observation can be useful even without a change or advice. If delayed data is no longer current, omit it rather than refresh or poll for this startup report. Respect quiet/sleep preferences with `NO_REPLY` for a separate update; in a greeting omit only the environmental sentence. Do not claim improvement, a trend, safety, or health effects from this first snapshot. OS owns one-time delivery and retries; do not schedule another report for missing or warming metrics.
+3. **Automatic changed `[environment:update]`:** use the supplied change facts. A significant change means OS's configurable change policy fired; it is not automatically a harmful level. Consider whether the change merits action using the environmental-care section of `skills/wellbeing/SKILL.md`. If there is no useful new advice, output exactly `NO_REPLY`.
+4. **After an action:** compare a fresh value with an actual earlier, timestamped value in the event or conversation. State the observed direction without claiming causation: “Particles are lower than before.” If there is no comparison point, say that a change cannot yet be established. A later significant-change event may support an update, but no event is a guarantee of scheduled follow-up.
 
-Do not route environmental updates to sensing's camera/presence reaction matrix or guard alerts, even while guard mode is active. No mandatory emotion, servo, light, camera or speech action. Never greet a person or infer presence from environmental data. Process only this event; it does not authorize resuming an unrelated task.
+Do not route environmental updates to sensing's camera/presence reaction matrix or guard alerts, even while guard mode is active. No mandatory emotion, servo, light, camera or speech action. An environmental event alone never establishes a person’s presence or authorizes a greeting; startup context only supplements an already requested system greeting. Process only this event; it does not authorize resuming an unrelated task.
 
 ## Useful, proportionate advice
 
@@ -78,6 +85,10 @@ When speaking proactively, offer one useful observation and at most one action i
 | Input | Response direction |
 |---|---|
 | “How is the room?”; temperature valid, VOC null | Report temperature and other valid readings; VOC is unavailable. Do not turn null into zero. |
+| Cold boot; greeting has no environmental context | Greet normally without waiting, checking the API, or claiming missing readings are zero. |
+| Warm HAL; greeting includes initial temperature and CO₂ | Add at most one factual sentence using supplied fresh readings; no second notification. |
+| First update has `reason: "initial"`, `changes: {}`, temperature only | Briefly report temperature when appropriate; do not require a delta or wait for VOC/NOx. |
+| Delayed initial update; readings are stale or unavailable | Omit the environmental report (`NO_REPLY` for a separate update); do not fetch or promise a retry. |
 | “Why am I tired?” | Do not attribute fatigue to the sensor readings. If a room check is requested, describe only supported environmental facts. |
 | CO₂ component stale; PM fresh | Report PM if useful; CO₂ is unavailable. Do not reuse the aggregate timestamp to call CO₂ current. |
 | CO₂ rises after a particle purifier starts | Explain that particle filtration does not address CO₂; consider ventilation conditionally, without assuming occupancy or health effects. |
