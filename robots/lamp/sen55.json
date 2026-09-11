@@ -2,7 +2,7 @@
   "boards": {
     "orangepi_sun60": {
       "enabled": false,
-      "bus": null,
+      "bus": 0,
       "sda_pin": 3,
       "scl_pin": 5,
       "poll_interval_s": 1.0,

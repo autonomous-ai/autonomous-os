@@ -37,9 +37,10 @@ không dựa vào màu dây. Đầu cáp tương thích là JST GHR-06V-S.
 Ghi nhận từ bên hardware do chủ device cung cấp: **header phía OrangePi** dùng
 **chân vật lý 3 là SDA**, **chân vật lý 5 là SCL**. Đây là vị trí chân header
 host, không phải số chân connector SEN55: nối OrangePi pin 3 với SEN55 pin 3
-(SDA), OrangePi pin 5 với SEN55 pin 4 (SCL). Số bus Linux `/dev/i2c-N` và cấu
-hình pin-mux vẫn cần xác nhận; chưa kiểm chứng trên device và ghi chú này
-không bật thu nhận dữ liệu.
+(SDA), OrangePi pin 5 với SEN55 pin 4 (SCL). Trên OrangePi 4 Pro đã kiểm tra,
+`gpio readall` xác định chân 3 là SDA.0 (PB3), chân 5 là SCL.0 (PB2).
+Device tree đang chạy ánh xạ các chân này tới `/dev/i2c-0`, overlay `i2c0`
+đã bật. Vì vậy `sen55.json` ghi `bus: 0`; thu nhận dữ liệu vẫn tắt.
 
 `sen55.json` ghi vị trí chân vật lý phía host bằng `sda_pin: 3` và `scl_pin: 5`.
 Đây là metadata dây nối; driver dùng `bus`, không tự cấu hình pin-mux GPIO
@@ -52,8 +53,12 @@ pin multiplexing, bus khả dụng và khả năng cấp nguồn trước khi đ
 HAL không chọn chân header hay cấu hình tốc độ bus. Khi lắp, giữ thông
 thoáng cửa hút/xả khí và tránh nhiệt từ host.
 
-Tích hợp này chưa được kiểm chứng dây nối, cấu hình I2C trên board hay
-số đo với SEN55 thật.
+Kiểm tra device ngày 2026-09-11 đã xác nhận mapping bus phía host, nhưng
+lệnh đọc tên SEN55 tại `0x69` không nhận ACK địa chỉ (driver Sunxi trả
+`EINVAL`). Clock bus thực tế là 400 kHz, vượt giới hạn SEN55. Chưa xác nhận
+được danh tính hay số đo sensor. Cần cấu hình bus tối đa 100 kHz và kiểm tra
+nguồn, GND chung, SEL, dây nối trước khi bật thu nhận. Lần kiểm tra này
+không thay đổi cấu hình trên device.
 
 ## Bật trong HAL
 
@@ -74,7 +79,7 @@ cấu hình riêng.
 
 Cấu hình SEN55 thuộc device tại `robots/<device>/sen55.json`, dùng map `boards`
 như `mpr121.json`. Board mục tiêu là OrangePi (`orangepi_sun60`); Lamp có entry tắt
-(`{"enabled": false}`) cho board này và chưa giả định bus. Thiếu file hoặc
+(`{"enabled": false}`) cho board này với bus header đã xác nhận là `0`. Thiếu file hoặc
 entry của board đang chọn thì cảm biến tắt. Entry tắt có thể bỏ `bus` hoặc để `null` khi chưa biết bus.
 Khi bật, `bus` phải là số nguyên không âm.
 Cấu hình sai, kể cả trường không được hỗ trợ, bị từ chối khi khởi động.
@@ -94,7 +99,8 @@ chưa phải JSON có thể nạp trực tiếp:
 Thay board ID bằng board được nhận diện và placeholder bus bằng số bus Linux
 thực tế, là số nguyên không âm. Không có bus mặc định. Bật interface I2C của
 kernel, cấu hình pin multiplexing và tốc độ bus theo board đó; tích hợp này
-đã chọn OrangePi nhưng vẫn cần xác nhận dây nối và bus thực tế. HAL truy cập `/dev/i2c-N` bằng thư viện
+đã xác nhận OrangePi 4 Pro dùng bus `0` nhưng vẫn cần kiểm chứng giao tiếp
+sensor và clock bus phù hợp. HAL truy cập `/dev/i2c-N` bằng thư viện
 chuẩn Python; process cần quyền mở thiết bị này. Không cần thêm package I2C
 Python. Chế độ mô phỏng không bao giờ truy cập phần cứng, kể cả entry đã bật.
 
