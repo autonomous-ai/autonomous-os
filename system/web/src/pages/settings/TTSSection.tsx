@@ -1,13 +1,19 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getPiperStatus, installPiperEngine, installPiperVoice, removePiperVoice, type PiperJobStart, type PiperStatus } from "@/lib/api";
 import { Loader2, Volume2, Check, AlertCircle } from "lucide-react";
 import { C, LockedField, LockedPasswordField, SectionCard } from "@/components/setup/shared";
 import { testTTSVoice } from "@/lib/api";
 import type { LlmLoadedState } from "@/hooks/setup/types";
+import { detectChoice, type ProviderChoice } from "@/pages/settings/ttsProvider";
 
 export interface TtsLoadedState {
   apiKey: boolean;
   baseUrl: boolean;
+  // The choice the STORED key belongs to. A key is always saved alongside the
+  // provider selected at the time, so the loaded (base_url, provider) pair
+  // identifies its owner. Once the operator picks a different choice, that key
+  // is a different vendor's and must not be advertised as configured.
+  choice: ProviderChoice;
 }
 
 // Provider "choice" is a UI-only construct — it groups the two on-disk fields
@@ -20,18 +26,6 @@ export interface TtsLoadedState {
 // Autonomous is special: it's a routing hub whose proxy path decides which
 // vendor the request is billed to. So picking "Autonomous" also asks for a
 // vendor (OpenAI or ElevenLabs) — that vendor becomes `tts_provider` while
-// `tts_base_url` stays the autonomous.ai campaign-api endpoint. Backend
-// implementations (see hal/drivers/voice/tts/elevenlabs.py) detect the
-// autonomous.ai host and append the `/elevenlabs` proxy path; direct-API
-// hosts skip that prefix.
-// Deepgram is intentionally NOT in this list: HAL's TTS registry
-// (hal/drivers/voice/tts/backend.py) only implements the `openai` and
-// `elevenlabs` backends — picking "deepgram" silently falls back to the
-// OpenAI backend, which produces a burst of silent audio (no error). Leave
-// Deepgram out until a real Deepgram TTS backend lands, so the operator
-// can't paint themselves into a dead-end. STT works with Deepgram on a
-// different code path (this is TTS-only).
-type ProviderChoice = "autonomous" | "openai" | "elevenlabs" | "piper" | "custom";
 
 // Vendor covers only the choices that have a distinct audio backend on disk.
 // Autonomous supports two vendors; every other choice has exactly one vendor
@@ -81,27 +75,6 @@ const CHOICES: Record<ProviderChoice, ChoiceMeta> = {
   },
 };
 
-// Detect the current choice from persisted (provider, baseUrl). Anchor on the
-// URL host — the raw provider is preserved as the vendor sub-select when the
-// choice is Autonomous. If nothing matches a preset we call it Custom rather
-// than mis-labelling as Autonomous — an operator with a self-hosted URL
-// should see "Custom", not "Autonomous", so switching provider doesn't
-// silently overwrite their URL with the campaign-api endpoint.
-function detectChoice(baseUrl: string, provider?: string): ProviderChoice {
-  // Piper is URL-less, so the URL heuristic below cannot see it. The saved
-  // provider is the only evidence it is selected.
-  if (provider === "piper") return "piper";
-  let host = "";
-  try { host = new URL(baseUrl).hostname.toLowerCase(); } catch { /* invalid — fall through */ }
-  if (!host) return "autonomous";  // empty URL = default to the proxy (matches "leave blank → reuse AI brain")
-  if (host.endsWith("autonomous.ai") || host.endsWith("autonomousdev.xyz")) return "autonomous";
-  if (host === "api.openai.com") return "openai";
-  if (host === "api.elevenlabs.io" || host.endsWith(".elevenlabs.io")) return "elevenlabs";
-  // api.deepgram.com hits this branch too — HAL has no Deepgram TTS backend
-  // so an existing config that somehow ended up on this host lands in Custom
-  // and the operator can pick a real vendor to swap to.
-  return "custom";
-}
 
 // Voices are provider-scoped: OpenAI's "alloy" doesn't exist on ElevenLabs.
 // The full catalog comes from `ttsVoices` (server-derived), but that list is
@@ -187,7 +160,7 @@ function displayVoice(v: string): string {
 export function TTSSection({
   active,
   ttsLoaded, llmLoaded,
-  ttsApiKey, setTtsApiKey,
+  ttsApiKey, setTtsApiKey, setTtsApiKeyRaw,
   ttsBaseUrl, setTtsBaseUrl,
   // ttsProviders is kept in the props signature so a future switch back to a
   // server-driven provider list is a drop-in swap.
@@ -200,6 +173,11 @@ export function TTSSection({
   ttsLoaded: TtsLoadedState;
   llmLoaded: LlmLoadedState;
   ttsApiKey: string; setTtsApiKey: (v: string) => void;
+  // Unmirrored setter. onChoice must bypass the AI-Brain mirror: it runs before
+  // this switch's setTtsBaseUrl has landed, so the mirror would evaluate the
+  // OUTGOING provider and could refill a direct vendor's box with the AI brain
+  // key. The visible input keeps the mirrored setter.
+  setTtsApiKeyRaw: (v: string) => void;
   ttsBaseUrl: string; setTtsBaseUrl: (v: string) => void;
   ttsProvider: string; setTtsProvider: (v: string) => void;
   ttsProviders: string[];
@@ -219,6 +197,13 @@ export function TTSSection({
   // last synced against: setting state in an effect would cascade an extra
   // render pass on every URL change.
   const [choice, setChoice] = useState<ProviderChoice>(() => detectChoice(ttsBaseUrl, ttsProvider));
+  // Session-only cache of keys the operator TYPED but has not saved. Never
+  // persisted: it dies on reload and on Save, and the device stores exactly one
+  // key — the one belonging to the selected provider. Its only job is that
+  // flipping ElevenLabs → Autonomous → ElevenLabs before saving doesn't force a
+  // retype. Keyed by choice, not vendor: "autonomous" and "elevenlabs" can
+  // share a vendor while needing entirely different credentials.
+  const keyDrafts = useRef<Partial<Record<ProviderChoice, string>>>({});
   const [syncedUrl, setSyncedUrl] = useState(ttsBaseUrl);
   if (syncedUrl !== ttsBaseUrl) {
     setSyncedUrl(ttsBaseUrl);
@@ -266,7 +251,27 @@ export function TTSSection({
     ? piperInstalled
     : voicesFor(vendor, lang, sttLanguage);
 
+  // Direct vendors authenticate with their own credential. Autonomous and
+  // Custom inherit the AI-brain key through the backend's GetTTSAPIKey
+  // fallback; Piper needs none at all.
+  const keyRequired = choice === "openai" || choice === "elevenlabs";
+  // A stored key belongs to the choice it was saved under. Once the operator
+  // picks a different one it is a different vendor's key, and advertising it as
+  // "configured" is what made issue #309 impossible to diagnose from the UI.
+  const storedKeyIsForThisChoice = ttsLoaded.apiKey && ttsLoaded.choice === choice;
+
   const onChoice = (next: ProviderChoice) => {
+    // Re-picking the current choice must not disturb the draft cache: it would
+    // stash the live value over itself and then restore it, which is a no-op
+    // today but becomes a footgun the moment a branch below stops being pure.
+    if (next === choice) return;
+    keyDrafts.current[choice] = ttsApiKey;
+    // Restore whatever was last typed for the incoming choice. Autonomous and
+    // Piper never carry their own key: autonomous inherits the AI-brain key via
+    // the backend's GetTTSAPIKey fallback, and piper synthesises on-device with
+    // no account to authenticate to. Direct vendors and Custom get their draft
+    // back, or a blank box if they have none.
+    setTtsApiKeyRaw(next === "autonomous" || next === "piper" ? "" : (keyDrafts.current[next] ?? ""));
     setChoice(next);   // always commit the pick — even Custom, so the picker doesn't snap back
     const nextMeta = CHOICES[next];
     // Custom: leave URL as-is if there was one — clearing would wipe a
@@ -300,12 +305,9 @@ export function TTSSection({
         setTtsProvider("elevenlabs");
         setTtsVoice(voicesFor("elevenlabs", lang, sttLanguage)[0]);
       }
-      // Clear any stale vendor-scoped key (e.g. an ElevenLabs `sk_...`
-      // left over from a previous ElevenLabs-direct config) so the
-      // backend's GetTTSAPIKey fallback picks up llm_api_key (the JWT the
-      // proxy authenticates against). Without this, a stale key silently
-      // 401s the proxy call and Test Voice comes out as ~6ms of silence.
-      setTtsApiKey("");
+      // The key is cleared at the top of onChoice, together with every other
+      // choice's key handling — a stale vendor key left here would be sent to
+      // the proxy and 401 into silence.
       return;
     }
     // Direct presets pin a vendor via nextMeta.vendor. Sync provider + reset
@@ -434,21 +436,28 @@ export function TTSSection({
           reason: an empty box after a save reads as "nothing was saved". */}
       <div style={{ marginBottom: 5, display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
         <label htmlFor="tts_api_key" style={labelStyle}>
-          API Key (optional — leave blank to reuse AI brain key)
+          {keyRequired
+            ? "API Key (required — this provider does not accept the AI brain key)"
+            : "API Key (optional — leave blank to reuse AI brain key)"}
         </label>
-        {ttsLoaded.apiKey && (
+        {storedKeyIsForThisChoice && (
           <span style={{ fontSize: 10, color: "var(--lm-green, #34d399)", fontWeight: 600 }}>
             ✓ configured
           </span>
         )}
+        {keyRequired && !storedKeyIsForThisChoice && !ttsApiKey && (
+          <span style={{ fontSize: 10, color: "var(--lm-amber, #fbbf24)", fontWeight: 600 }}>
+            key required
+          </span>
+        )}
       </div>
       <LockedPasswordField
-        lockedInitially={ttsLoaded.apiKey || llmLoaded.apiKey}
+        lockedInitially={storedKeyIsForThisChoice || (!keyRequired && llmLoaded.apiKey)}
         label=""
         id="tts_api_key"
         value={ttsApiKey}
         onChange={setTtsApiKey}
-        placeholder={ttsLoaded.apiKey ? "•••••••• saved (click ✎ to rotate)" : "sk-..."}
+        placeholder={storedKeyIsForThisChoice ? "•••••••• saved (click ✎ to rotate)" : "sk-..."}
       />
       </>)}
 

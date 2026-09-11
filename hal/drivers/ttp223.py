@@ -1,9 +1,8 @@
 """TTP223 capacitive touchpad handler (dog-head touch surface).
 
-How many pads and which lines is board data, not a constant here — see the
-`touch` entry in hal/board/boards.json. It has changed twice (the pads were
-relocated to escape LED/servo/audio coupling), so any count written into this
-docstring goes stale; ask the board profile.
+Pad wiring is supplied by the device configuration loader from ttp223.json,
+with legacy board defaults when absent. The driver owns gesture detection;
+device declarations own chip, lines and optional spatial order.
 
 Destructive gestures (reboot / shutdown) are intentionally OFF on TTP223
 because the IC on this board runs in FastMode: output drops LOW within
@@ -59,7 +58,7 @@ import threading
 import time
 
 import hal.app_state as state
-from hal.board.board import board_profile
+from hal.board.board import TouchConfig
 from hal.drivers import touch_debug
 from hal.drivers.button_actions import (
     head_pat_action,
@@ -71,8 +70,7 @@ from hal.drivers.button_actions import (
 
 logger = logging.getLogger(__name__)
 
-# TTP223 pad wiring (chip / lines) lives in the board platform layer —
-# hal/board/board.py (BoardProfile.touch).
+# TTP223 wiring is injected from hal/board/ttp223.py at startup.
 
 # Session gap: edges within this window of the previous edge belong to
 # the same session. 200ms comfortably exceeds the observed burst length
@@ -191,18 +189,9 @@ SWIPE_MAX_GAP_MS = float(os.environ.get("HAL_TOUCH_SWIPE_MAX_GAP_MS", "150"))
 PRESS_MIN_EMPTY_MS = float(os.environ.get("HAL_TOUCH_PRESS_MIN_EMPTY_MS", "15"))
 
 
-def _board_label() -> str:
-    return board_profile().id
-
-
-def _resolve_board_config():
-    """Return (chip, lines, axis) or None if TTP223 isn't wired on this board."""
-    touch = board_profile().touch
-    return (touch.chip, touch.lines, touch.axis) if touch else None
-
-
 class TTP223Handler:
-    def __init__(self):
+    def __init__(self, config: TouchConfig | None):
+        self._config = config
         self._lgpio = None
         self._handle = None
         self._callbacks = []
@@ -246,17 +235,16 @@ class TTP223Handler:
         self._ignore_edges_until = 0.0
 
     def start(self):
-        config = _resolve_board_config()
+        config = self._config
         if config is None:
-            logger.info(
-                "TTP223 disabled: board is %s (only wired on orangepi-sun60)",
-                _board_label(),
-            )
+            logger.info("TTP223 disabled: no active device/board touch wiring")
             return
 
         import lgpio
 
-        self._chip, self._lines, self._axis = config
+        self._chip = config.chip
+        self._lines = list(config.lines)
+        self._axis = list(config.axis) if config.axis is not None else None
         self._lgpio = lgpio
 
         # Arm the settle window now, before claiming: the callback registration
