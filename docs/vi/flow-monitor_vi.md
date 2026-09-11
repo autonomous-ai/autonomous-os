@@ -73,8 +73,30 @@ Component `FlowDiagram` trong `system/web/src/pages/Monitor.tsx` vẽ **ba vùng
   - **EMO** (`hw_emotion`) — `/emotion` (phối hợp LED + servo + display eyes)
   - **LED** (`hw_led`) — `/led/solid`, `/led/effect`, `/scene`, `/led/off`
   - **SERVO** (`hw_servo`) — di chuyển hoặc chạy animation servo:
-    `/servo/aim`, `/servo/play`, `/servo/track`. Chi tiết node hiển thị đúng
-    lệnh/API call agent đã chạy trong turn đang chọn.
+    `/servo/aim`, `/servo/play`, `/servo/nudge`, `/servo/search`, `/servo/demo`.
+    Chi tiết node hiển thị đúng lệnh/API call agent đã chạy trong turn đang
+    chọn. Các lệnh đọc (`/servo/position`, `/servo/status`, `/servo/bearing`)
+    không tính — một event `hw_servo` nghĩa là đèn đã làm gì đó mà người ta
+    nhìn thấy được.
+
+  **Event phần cứng được so khớp theo endpoint đã phân giải, không theo text
+  shell thô.** Arguments của tool call được quét tìm `127.0.0.1:500[01]/<path>`
+  (`hwPathFromToolArgs` trong `handler_event_agent.go`) và các nhánh `/emotion`
+  cùng `/servo/*` so sánh với path đó. Cách so khớp chuỗi con trước đây biến
+  `cat …/skills/emotion/SKILL.md` thành một cặp `hw_emotion` + `led_set` cho một
+  turn mà đèn không hề làm gì. Các nhánh `/led/*` và `/audio/play` vẫn dùng
+  dạng chuỗi con — cùng điểm yếu, nhưng chưa quan sát thấy event ma ở đó.
+
+  **`hw_failed`** — một marker `[HW:...]` mà OS đã cố bắn nhưng POST thất bại
+  ở tầng transport: client timeout 5 s, kết nối bị từ chối. Mang theo `path`,
+  `args`, `run_id` và `error`. Trước khi có event này, nhánh đó return trước
+  bất kỳ `flow.Log` nào, nên một chuyển động thân máy dài 40 s không để lại gì
+  trong monitor (`device-chat-44`: marker tìm kiếm đã bắn, HAL quét cả phòng,
+  timeline hiện một cái đèn đứng yên). Cố ý **không** phải là một cancellation:
+  nó làm sáng node OS-gate và thêm dòng `⚠ → HW call failed` vào chi tiết,
+  nhưng không gắn badge cancelled cho turn và không tô đỏ node TTS — hai thứ đó
+  nghĩa là *người dùng* đã làm turn im tiếng, và một timeout không bao giờ được
+  đọc thành hành động của người dùng.
   - **CAM** (`hw_camera`) — `GET /camera/snapshot`; ảnh đã lưu mà tool
     trả về (kể cả file workspace như `cam_face3.jpg`) hiện thumbnail bấm để
     phóng to, giúp debug đúng frame agent nhận được, không chụp lại ảnh mới.

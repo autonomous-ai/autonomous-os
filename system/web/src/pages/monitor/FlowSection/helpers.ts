@@ -1256,6 +1256,15 @@ export function extractNodeInfo(events: DisplayEvent[]): NodeInfoMap {
     if (ev.type === "flow_event" && ev.detail?.node === "hw_cancelled") {
       pushUnique(info.os_gate, "✋ → HW marker cancelled (click)");
     }
+    // Not a cancellation: the OS tried to fire the marker and the POST failed
+    // at the transport (the 5 s client timeout, a refused connection). Kept
+    // apart from the click so a timeout never reads as the user's doing.
+    if (ev.type === "flow_event" && ev.detail?.node === "hw_failed") {
+      const d = ev.detail as FlowEventDetail | undefined;
+      const path = typeof d?.data?.path === "string" ? d.data.path : "";
+      const err = typeof d?.data?.error === "string" ? d.data.error : "";
+      pushUnique(info.os_gate, `⚠ → HW call failed ${path}${err ? ` (${err})` : ""}`.trim());
+    }
     if (ev.type === "flow_event" && ev.detail?.node === "no_reply") {
       pushUnique(info.os_gate, "🚫 → no reply");
     }
