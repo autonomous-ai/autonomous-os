@@ -72,9 +72,9 @@ Board detection reads `/proc/device-tree/model`:
 
 ### Microphone slide switch
 
-`robots/lamp/mic_button.json` declares chip 1 / line 9 under `orangepi_sun60`,
+`robots/lamp/privacy_button.json` declares chip 1 / line 9 under `orangepi_sun60`,
 with `settle_s: 0.06`, `muted_level: 0`, and `watchdog_s: 30`. The shared
-`mic_button.py` driver tracks switch position, synchronizes at boot, and applies
+`privacy_button.py` driver tracks switch position, synchronizes at boot, and applies
 mute/unmute after contacts settle. The watchdog only reconciles changed GPIO
 levels so software mute is preserved while the switch stays still. Intern v2
 has no mic JSON and keeps its original chip 0 / line 97 code fallback. Lamp

@@ -5,8 +5,8 @@ from unittest import mock
 import pytest
 
 import hal.app_state as state
-from hal.board.mic_button import MicButtonConfig
-from hal.drivers.mic_button import MicButtonHandler
+from hal.board.privacy_button import PrivacyButtonConfig
+from hal.drivers.privacy_button import PrivacyButtonHandler
 
 
 @pytest.fixture
@@ -16,8 +16,8 @@ def hardware():
     gpio.gpio_read.return_value = 1
     with (
         mock.patch.dict("sys.modules", {"lgpio": gpio}),
-        mock.patch("hal.drivers.mic_button.threading.Thread") as thread,
-        mock.patch("hal.drivers.mic_button.threading.Timer") as timer,
+        mock.patch("hal.drivers.privacy_button.threading.Thread") as thread,
+        mock.patch("hal.drivers.privacy_button.threading.Timer") as timer,
     ):
         thread.return_value.is_alive.return_value = False
         yield gpio, thread, timer
@@ -25,7 +25,7 @@ def hardware():
 
 def test_disabled_switch_does_not_import_or_claim_gpio(hardware):
     gpio, thread, _ = hardware
-    handler = MicButtonHandler(None)
+    handler = PrivacyButtonHandler(None)
     handler.start()
     handler.stop()
     assert not gpio.mock_calls
@@ -36,7 +36,7 @@ def test_disabled_switch_does_not_import_or_claim_gpio(hardware):
 def test_injected_wiring_and_synchronous_boot_sync(hardware, muted_level, level, expected):
     gpio, thread, _ = hardware
     gpio.gpio_read.return_value = level
-    handler = MicButtonHandler(MicButtonConfig(chip=3, line=42, muted_level=muted_level))
+    handler = PrivacyButtonHandler(PrivacyButtonConfig(chip=3, line=42, muted_level=muted_level))
     handler._apply_state_locked = mock.Mock()
     handler.start()
     gpio.gpiochip_open.assert_called_once_with(3)
@@ -52,7 +52,7 @@ def test_injected_wiring_and_synchronous_boot_sync(hardware, muted_level, level,
 def test_failed_initial_read_keeps_legacy_unmuted_default(hardware, muted_level):
     gpio, _, _ = hardware
     gpio.gpio_read.side_effect = OSError("read unavailable")
-    handler = MicButtonHandler(MicButtonConfig(muted_level=muted_level))
+    handler = PrivacyButtonHandler(PrivacyButtonConfig(muted_level=muted_level))
     handler._apply_state_locked = mock.Mock()
     handler.start()
     handler._apply_state_locked.assert_called_once_with(False)
@@ -62,7 +62,7 @@ def test_failed_initial_read_keeps_legacy_unmuted_default(hardware, muted_level)
 
 def test_edge_restarts_configured_settle_then_reads_current_level(hardware):
     gpio, _, timer = hardware
-    handler = MicButtonHandler(MicButtonConfig(line=43, settle_s=0.12, muted_level=1))
+    handler = PrivacyButtonHandler(PrivacyButtonConfig(line=43, settle_s=0.12, muted_level=1))
     handler._apply_state_locked = mock.Mock()
     handler.start()
     handler._apply_state_locked.reset_mock()
@@ -82,7 +82,7 @@ def test_edge_restarts_configured_settle_then_reads_current_level(hardware):
 @pytest.mark.parametrize("physical_level,expected_calls", [(1, 0), (0, 1)])
 def test_watchdog_only_reconciles_changed_level(hardware, physical_level, expected_calls):
     gpio, _, _ = hardware
-    handler = MicButtonHandler(MicButtonConfig(watchdog_s=8.5))
+    handler = PrivacyButtonHandler(PrivacyButtonConfig(watchdog_s=8.5))
     handler._apply_state_locked = mock.Mock()
     handler.start()
     handler._apply_state_locked.reset_mock()
@@ -100,7 +100,7 @@ def test_watchdog_only_reconciles_changed_level(hardware, physical_level, expect
 
 def test_stop_cancels_work_and_releases_handle_once(hardware):
     gpio, thread, timer = hardware
-    handler = MicButtonHandler(MicButtonConfig())
+    handler = PrivacyButtonHandler(PrivacyButtonConfig())
     handler._apply_state_locked = mock.Mock()
     handler.start()
     handler._on_edge(0, 97, 0, 1)
@@ -122,7 +122,7 @@ def test_stop_cancels_work_and_releases_handle_once(hardware):
 def test_failed_claim_closes_open_handle(hardware):
     gpio, thread, _ = hardware
     gpio.gpio_claim_alert.side_effect = OSError("busy")
-    handler = MicButtonHandler(MicButtonConfig())
+    handler = PrivacyButtonHandler(PrivacyButtonConfig())
     handler.start()
     gpio.gpiochip_close.assert_called_once_with(12)
     thread.assert_not_called()
@@ -132,7 +132,7 @@ def test_failed_claim_closes_open_handle(hardware):
 def test_boot_publishes_hardware_lock_even_when_software_already_matches(hardware):
     gpio, _, _ = hardware
     gpio.gpio_read.return_value = 0
-    handler = MicButtonHandler(MicButtonConfig())
+    handler = PrivacyButtonHandler(PrivacyButtonConfig())
     with (
         mock.patch.object(state, "_mic_muted", True),
         mock.patch.object(state, "_hw_mic_switch_muted", None),
@@ -144,7 +144,7 @@ def test_boot_publishes_hardware_lock_even_when_software_already_matches(hardwar
 
 def test_stop_continues_cleanup_when_gpio_operations_fail(hardware, caplog):
     gpio, thread, _ = hardware
-    handler = MicButtonHandler(MicButtonConfig())
+    handler = PrivacyButtonHandler(PrivacyButtonConfig())
     handler._apply_state_locked = mock.Mock()
     handler.start()
     gpio.callback.return_value.cancel.side_effect = OSError("cancel unavailable")
@@ -161,7 +161,7 @@ def test_stop_continues_cleanup_when_gpio_operations_fail(hardware, caplog):
 
 def test_start_waits_for_previous_watchdog_to_exit(hardware):
     gpio, thread, _ = hardware
-    handler = MicButtonHandler(MicButtonConfig())
+    handler = PrivacyButtonHandler(PrivacyButtonConfig())
     handler._apply_state_locked = mock.Mock()
     handler.start()
     thread.return_value.is_alive.return_value = True

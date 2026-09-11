@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 @dataclass(frozen=True)
-class MicButtonConfig:
+class PrivacyButtonConfig:
     chip: int = 0
     line: int = 97
     settle_s: float = 0.06
@@ -15,25 +15,30 @@ class MicButtonConfig:
     watchdog_s: float = 30.0
 
 
-def load_mic_button_config(device_dir: str, board_id: str,
-                           device_type: str) -> MicButtonConfig | None:
+def load_privacy_button_config(device_dir: str, board_id: str,
+                           device_type: str) -> PrivacyButtonConfig | None:
     """Missing declarations preserve the old device-only Intern gate and wiring.
 
     Other devices remain disabled until explicitly configured. The caller skips
     simulation before invoking the loader, as for the other hardware inputs.
     """
-    fallback = MicButtonConfig() if device_type == "intern-v2" else None
-    path = Path(device_dir) / "mic_button.json"
+    fallback = PrivacyButtonConfig() if device_type == "intern-v2" else None
+    path = Path(device_dir) / "privacy_button.json"
     try:
         text = path.read_text()
     except FileNotFoundError:
-        return fallback
+        # Accept the old filename while HAL and device files roll out separately.
+        path = Path(device_dir) / "mic_button.json"
+        try:
+            text = path.read_text()
+        except FileNotFoundError:
+            return fallback
     try:
         data = json.loads(text)
         if not isinstance(data, dict) or set(data) != {"boards"} or not isinstance(data["boards"], dict):
             raise ValueError("expected an object containing a boards map")
         configs = {}
-        allowed = {field.name for field in fields(MicButtonConfig)} | {"enabled"}
+        allowed = {field.name for field in fields(PrivacyButtonConfig)} | {"enabled"}
         for board, entry in data["boards"].items():
             if not isinstance(entry, dict) or set(entry) - allowed:
                 raise ValueError(f"{board}: invalid mic switch fields")
@@ -46,7 +51,7 @@ def load_mic_button_config(device_dir: str, board_id: str,
                 continue
             if not {"chip", "line"} <= set(values):
                 raise ValueError(f"{board}: chip and line are required")
-            config = MicButtonConfig(**values)
+            config = PrivacyButtonConfig(**values)
             for name in ("chip", "line"):
                 value = getattr(config, name)
                 if type(value) is not int or value < 0:

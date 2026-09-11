@@ -10,13 +10,13 @@ import threading
 import time
 
 import hal.app_state as state
-from hal.board.mic_button import MicButtonConfig
+from hal.board.privacy_button import PrivacyButtonConfig
 
 logger = logging.getLogger(__name__)
 
 
-class MicButtonHandler:
-    def __init__(self, config: MicButtonConfig | None):
+class PrivacyButtonHandler:
+    def __init__(self, config: PrivacyButtonConfig | None):
         self._config = config
         self._stopped = threading.Event()
         self._stopped.set()

@@ -76,11 +76,14 @@ detected automatically. Malformed configuration, duplicate input names, and
 duplicate chip/line pairs are rejected before GPIO is claimed. Simulation
 skips hardware buttons.
 
-The microphone slide switch uses device-owned `mic_button.json`, initially
-shipped at `robots/lamp/mic_button.json` for physical pin 11 / PL9 / gpiochip1 line 9. The detected board's entry
+The privacy switch currently controls microphone mute only; camera behavior is unchanged.
+The loader accepts legacy `mic_button.json` only when `privacy_button.json` is absent,
+so HAL can be updated before the device JSON is renamed.
+The microphone slide switch uses device-owned `privacy_button.json`, initially
+shipped at `robots/lamp/privacy_button.json` for physical pin 11 / PL9 / gpiochip1 line 9. The detected board's entry
 under `boards` supplies `chip`, `line`, `settle_s`, `muted_level`, and
-`watchdog_s` to `hal/board/mic_button.py`, then the shared
-`hal/drivers/mic_button.py` driver. Intern v2 ships no mic JSON and continues
+`watchdog_s` to `hal/board/privacy_button.py`, then the shared
+`hal/drivers/privacy_button.py` driver. Intern v2 ships no mic JSON and continues
 using the code fallback: gpiochip0 line 97 (PD1), a 0.06 s settling delay,
 LOW (`0`) for muted, and a 30 s watchdog. Lamp uses the same timing/polarity. Pull-up remains enabled; `muted_level` accepts `0` or `1`.
 A missing file or board entry preserves the old defaults for `intern-v2`
