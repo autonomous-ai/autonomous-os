@@ -257,6 +257,28 @@ HAL gia hạn lease trong lúc kiểm tra tới đích (sai số tối đa 1 đ�
 chờ ổn định 2 giây trước khi halt và báo lỗi thay vì báo thành công. Từng request
 protocol vẫn chịu command timeout đã cấu hình.
 
+Stack-chan cũng có flow commissioning home tùy chọn, mặc định bị tắt
+(`STACKCHAN_HOME_COMMISSIONING_ENABLED=0`). `GET /servo/home` chỉ discovery
+capability và không acquire bus lease. `GET /servo/home/position` trả vị trí
+đo được trong frame rõ ràng `calibrated_home_deg_v1`, cũng không acquire lease.
+`POST /servo/home/move` yêu cầu firmware có capability
+`motion.home_degrees.v1`, chỉ nhận target pitch từ 7 đến 10 độ và duration yêu
+cầu từ 2 đến 10 giây; safety policy có thể kéo dài duration tới giới hạn 60
+giây của transport. Trước khi gửi chuyển động, HAL yêu cầu pan đo được trong
+±30 độ và pitch trong [0, 5). Lệnh bỏ qua yaw nên torque yaw sẽ tắt trong
+lúc pitch chuyển động. Stop hoặc mất transport khi dưới 5 độ có thể không giữ
+được vị trí và khiến torque tắt hoặc session lỗi; flow thử nghiệm này cần hỗ
+trợ cơ khí và giám sát trực tiếp.
+
+Feedback không hợp lệ, reconnect, yaw lệch quá 1 độ, timeout và cancellation
+đều fail-closed. Chỉ thành công khi pitch đo được nằm trong sai số 1 độ so với
+target, ít nhất 6 độ và đã tăng dương ít nhất 1 độ; sau đó HAL gửi
+`lease.release` để cấp torque lại cho cả hai trục, thiết lập trạng thái cuối giữ
+cả hai trục và đọc lại vị trí đo được. Flow này không xác minh calibration, không thay thế mapping midpoint
+legacy ±15 độ và không cho phép preset move tiếp theo. Trong lần thử có giám sát ngày 2026-09-11, robot đã chuyển động rồi khởi
+động lại do lỗi transport; không có feedback cuối hoặc xác nhận giữ vị trí.
+Commissioning chưa được qualification và phải tắt ngoài các lần chẩn đoán có giám sát.
+
 Driver Stack-chan vẫn ở giai đoạn thử nghiệm. Trước khi qualification thiết bị:
 
 - Xác định và pin bản firmware tương thích có các motion capability bắt buộc;

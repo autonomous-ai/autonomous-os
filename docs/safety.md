@@ -270,6 +270,29 @@ while checking arrival (within 1 degree), using a 2-second settling window
 before halting and returning an error instead of reporting success. Individual
 protocol requests remain subject to the configured command timeout.
 
+Stack-chan also has an optional, default-off home commissioning path
+(`STACKCHAN_HOME_COMMISSIONING_ENABLED=0`). `GET /servo/home` is capability
+discovery only and takes no bus lease. `GET /servo/home/position` returns
+measured positions in the explicit `calibrated_home_deg_v1` frame without a
+lease. `POST /servo/home/move` requires firmware capability
+`motion.home_degrees.v1`, accepts only a pitch target from 7 to 10 degrees and
+a requested duration from 2 to 10 seconds, and lets the speed policy stretch
+the duration up to the 60-second transport limit. Before it sends motion, HAL
+requires measured pan within ±30 degrees and pitch in [0, 5). The command
+omits yaw, so yaw torque is off during the pitch move. A stop or transport
+loss while below 5 degrees may fail to hold and leave torque off or the session
+faulted; mechanical support and direct supervision are required for this
+experimental path.
+
+Invalid feedback, reconnect, yaw drift over 1 degree, timeout and cancellation
+fail closed. Success requires measured pitch within 1 degree of target, at
+least 6 degrees, and at least 1 degree of positive change; HAL then sends
+`lease.release` to re-energize both axes for the both-axes-held terminal state
+and rechecks measured position. This does not verify calibration, replace the legacy ±15-degree
+midpoint mapping, or authorize later preset moves. A supervised hardware trial on 2026-09-11 produced visible motion,
+followed by a transport-failure reboot without final feedback or verified hold.
+Commissioning remains unqualified and disabled outside supervised diagnostics.
+
 The Stack-chan driver remains experimental. Before device qualification:
 
 - Identify and pin a matching firmware build with the required motion

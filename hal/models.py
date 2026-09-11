@@ -4,9 +4,9 @@ HAL Pydantic request/response models.
 All FastAPI endpoint models live here — import from server.py via `from hal.models import *`.
 """
 
-from typing import Optional, Union
+from typing import Optional, Union, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictFloat
 
 from hal.drivers.voice.tts import PROVIDER_OPENAI, PROVIDER_ELEVENLABS
 
@@ -619,6 +619,14 @@ class ServoMoveRequest(BaseModel):
             ]
         }
     }
+
+
+class ServoHomeMoveRequest(BaseModel):
+    coordinate_frame: Literal["calibrated_home_deg_v1"]
+    positions: dict[str, StrictFloat] = Field(..., description="Pitch-only saved-home commissioning: tilt 7..10 degrees")
+    duration: StrictFloat = Field(2.0, ge=2.0, le=10.0)
+
+    model_config = {"extra": "forbid"}
 
 
 class ServoMoveResponse(BaseModel):

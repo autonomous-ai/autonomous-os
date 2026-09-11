@@ -24,6 +24,7 @@ from hal.models import (
     ServoAimResponse,
     ServoNudgeRequest,
     ServoMoveRequest,
+    ServoHomeMoveRequest,
     ServoMoveResponse,
     ServoPlayResponse,
     ServoPositionResponse,
@@ -361,6 +362,46 @@ def get_servo_position():
         return {"positions": positions}
     except Exception as e:
         raise HTTPException(500, f"Failed to read position: {e}")
+
+
+def _home_call(method: str, *args):
+    operation = getattr(_svc_connected(), method, None)
+    if not callable(operation):
+        raise HTTPException(501, "Saved-home commissioning is not supported by this motion driver")
+    try:
+        return operation(*args)
+    except NotImplementedError as exc:
+        raise HTTPException(501, str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+
+@router.get("/servo/home")
+def get_servo_home_state():
+    """Optional commissioning capability; no servo request or lease."""
+    # Capability discovery is useful while disconnected, unlike a position read.
+    operation = getattr(_svc(), "home_state", None)
+    if not callable(operation):
+        raise HTTPException(501, "Saved-home commissioning is not supported by this motion driver")
+    return operation()
+
+
+@router.get("/servo/home/position")
+def get_servo_home_position():
+    """Measured positions in an explicit saved-home frame; no motion lease."""
+    return _home_call("get_home_positions")
+
+
+@router.post("/servo/home/move")
+def move_servo_home(req: ServoHomeMoveRequest):
+    """Opt-in pitch commissioning; never reinterpret a legacy coordinate."""
+    if _sleep_servo_locked():
+        raise HTTPException(409, "Home commissioning is blocked while sleeping")
+    return _home_call("move_home", req.positions, req.duration)
 
 
 @router.get("/servo/status", response_model=ServoStatusResponse)

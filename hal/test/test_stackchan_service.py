@@ -276,6 +276,7 @@ class TestStackChanMotionService(unittest.TestCase):
 class _FakeConnection:
     def __init__(self):
         self.messages = []
+        self.close_reasons = []
         self.motion_started = threading.Event()
         self.positions = {"pan": 2.0, "tilt": -3.0}
         self.apply_moves = True
@@ -314,7 +315,7 @@ class _FakeConnection:
         return {"status": "completed", "result": {}}
 
     def force_close(self, reason):
-        raise AssertionError(f"unexpected close: {reason}")
+        self.close_reasons.append(reason)
 
 
 class _FakeGateway:
@@ -354,7 +355,7 @@ class TestBodyTransport(unittest.TestCase):
         self.assertIn("motion.get", operations)
         self.assertIn("motion.halt", operations)
         self.assertNotIn("lease.release", operations)
-        self.assertEqual(gateway.closed, ["motion failed"])
+        self.assertEqual(gateway.connection_value.close_reasons, ["motion failed"])
 
     def test_move_renews_lease_until_delayed_firmware_reaches_target(self):
         gateway = _FakeGateway()
@@ -450,9 +451,13 @@ class TestBodyTransport(unittest.TestCase):
             "pitchServo": {"angle": 300, "speed": 1000},
         }
 
-        with self.assertRaisesRegex(StackChanTransportError, "measured target"):
-            transport.release(rest, duration=0.05)
+        closed = []
+        with patch.object(gateway.connection_value, "force_close", side_effect=closed.append):
+            with self.assertRaisesRegex(StackChanTransportError, "measured target"):
+                transport.release(rest, duration=0.05)
 
+        self.assertEqual(closed, ["release failed"])
+        self.assertEqual(gateway.closed, [])
         operations = [message["op"] for message in gateway.connection_value.messages]
         self.assertNotIn("motion.release", operations)
         self.assertIn("motion.halt", operations)
@@ -583,7 +588,7 @@ class TestBodyTransport(unittest.TestCase):
                 with self.assertRaises(StackChanTransportError):
                     transport.move({"yawServo": {"angle": 0, "speed": 1000}}, 0.05)
                 self.assertNotIn("motion.move", [m["op"] for m in gateway.connection_value.messages])
-                self.assertEqual(gateway.closed, ["motion failed"])
+                self.assertEqual(gateway.connection_value.close_reasons, ["motion failed"])
 
     def test_malformed_position_result_fails_closed(self):
         policy = SimpleNamespace(motion=SimpleNamespace(max_speed=5))
@@ -599,7 +604,7 @@ class TestBodyTransport(unittest.TestCase):
         with patch.object(gateway.connection_value, "request", side_effect=request):
             with self.assertRaisesRegex(StackChanTransportError, "invalid measured positions"):
                 transport.move({"yawServo": {"angle": 0, "speed": 1000}}, 0.05)
-        self.assertEqual(gateway.closed, ["motion failed"])
+        self.assertEqual(gateway.connection_value.close_reasons, ["motion failed"])
         self.assertNotIn("motion.move", [m["op"] for m in gateway.connection_value.messages])
 
     def test_handshake_acceptance_precedes_connection_publication(self):

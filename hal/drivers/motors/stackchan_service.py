@@ -57,6 +57,13 @@ MAX_MESSAGE_BYTES = 16 * 1024
 JOINT_KEYS: Set[str] = {"base_yaw.pos", "base_pitch.pos"}
 _JOINT_LIMITS = {"base_yaw.pos": 30.0, "base_pitch.pos": 15.0}
 _PITCH_MIDPOINT_DEG = 45.0
+HOME_CAPABILITY = "motion.home_degrees.v1"
+HOME_FRAME = "calibrated_home_deg_v1"
+# A commissioning band with margin above the firmware's 5-degree hold floor.
+# This is not a calibration or a general replacement for legacy movement.
+HOME_PITCH_LIMITS = (7.0, 10.0)
+_HOME_YAW_DRIFT_DEG = 1.0
+_HOME_HOLD_MARGIN_DEG = 6.0
 _FIRMWARE_SPEED = 1000  # Timed firmware uses duration_ms; speed is legacy shape compatibility.
 _MIN_MOVE_DURATION_S = 0.05
 _MAX_MOVE_DURATION_S = 60.0
@@ -87,6 +94,10 @@ _AIM_TARGETS: Dict[str, Dict[str, float]] = {
 
 class StackChanTransportError(RuntimeError):
     """The command failed or its delivery result is unknown."""
+
+
+class StackChanMotionCancelled(StackChanTransportError):
+    """A recovery command interrupted commissioning before it completed."""
 
 
 class StackChanOffline(StackChanTransportError):
@@ -133,8 +144,9 @@ class _Pending:
 
 
 class _DeviceConnection:
-    def __init__(self, socket: ServerConnection):
+    def __init__(self, socket: ServerConnection, capabilities: Optional[set[str]] = None):
         self.socket = socket
+        self.capabilities = frozenset(capabilities or ())
         self._send_lock = threading.Lock()
         self._pending_lock = threading.Lock()
         self._pending: dict[str, _Pending] = {}
@@ -263,7 +275,7 @@ class _BodyGateway:
                 socket.close(code=1008, reason="incompatible hello")
                 return
 
-            connection = _DeviceConnection(socket)
+            connection = _DeviceConnection(socket, set(capabilities))
             with self._lock:
                 if self._connection is not None and not self._connection.closed:
                     socket.close(code=1008, reason="device already connected")
@@ -314,6 +326,7 @@ class _BodyTransport:
         self._operation_lock = threading.Lock()
         self._active_lock = threading.Lock()
         self._active_cancel: Optional[threading.Event] = None
+        self._active_connection: Optional[_DeviceConnection] = None
         self._target_settle_timeout = _TARGET_SETTLE_TIMEOUT_S
 
     def _request(
@@ -322,6 +335,7 @@ class _BodyTransport:
         args: Optional[dict[str, Any]] = None,
         *,
         sequenced: bool = True,
+        connection: Optional[_DeviceConnection] = None,
     ) -> dict[str, Any]:
         message: dict[str, Any] = {
             "v": PROTOCOL_VERSION,
@@ -335,13 +349,149 @@ class _BodyTransport:
             with self._sequence_lock:
                 self._sequence += 1
                 message["seq"] = self._sequence
-        return self._gateway.connection().request(message, self._timeout)
+        peer = connection if connection is not None else self._gateway.connection()
+        return peer.request(message, self._timeout)
 
-    def _acquire(self) -> None:
-        self._request("lease.acquire", {"ttl_ms": self._ttl}, sequenced=False)
+    def _acquire(self, connection: Optional[_DeviceConnection] = None) -> None:
+        self._request("lease.acquire", {"ttl_ms": self._ttl}, sequenced=False, connection=connection)
 
-    def _read_positions(self) -> dict[str, float]:
-        result = self._request("motion.get", sequenced=False).get("result", {})
+    def home_capability(self) -> dict[str, bool]:
+        try:
+            peer = self._gateway.connection()
+        except StackChanOffline:
+            return {"connected": False, "supported": False}
+        return {"connected": True, "supported": HOME_CAPABILITY in peer.capabilities}
+
+    def _home_connection(self) -> _DeviceConnection:
+        peer = self._gateway.connection()
+        if HOME_CAPABILITY not in peer.capabilities:
+            raise NotImplementedError("Firmware does not advertise " + HOME_CAPABILITY)
+        return peer
+
+    def _read_home_positions(self, peer: _DeviceConnection) -> dict[str, float]:
+        result = self._request("motion.get_home", sequenced=False, connection=peer).get("result")
+        if not isinstance(result, dict) or result.get("coordinate_frame") != HOME_FRAME:
+            raise StackChanTransportError("Stack-chan returned an invalid saved-home coordinate frame")
+        positions = result.get("positions")
+        if (not isinstance(positions, dict) or set(positions) != {"pan", "tilt"}
+                or any(isinstance(v, bool) or not isinstance(v, (int, float))
+                       or not math.isfinite(v) or abs(v) > 312.5 for v in positions.values())):
+            raise StackChanTransportError("Stack-chan returned invalid saved-home measured positions")
+        return {key: float(value) for key, value in positions.items()}
+
+    def get_home_positions(self) -> dict[str, float]:
+        if not self._operation_lock.acquire(blocking=False):
+            raise StackChanTransportError("controller busy; position was not read")
+        try:
+            return self._read_home_positions(self._home_connection())
+        finally:
+            self._operation_lock.release()
+
+    @staticmethod
+    def _home_arrived(measured: dict[str, float], initial: dict[str, float], target: float) -> bool:
+        if abs(measured["pan"] - initial["pan"]) > _HOME_YAW_DRIFT_DEG:
+            raise StackChanTransportError("Uncommanded yaw drift during home commissioning")
+        return (abs(measured["tilt"] - target) <= _POSITION_TOLERANCE_DEG
+                and measured["tilt"] >= _HOME_HOLD_MARGIN_DEG
+                and measured["tilt"] - initial["tilt"] >= 1.0)
+
+    def commission_home(self, target: float, duration: float) -> dict[str, Any]:
+        cancel = threading.Event()
+        if not self._active_lock.acquire(blocking=False):
+            raise StackChanTransportError("controller busy; commissioning was not queued")
+        try:
+            if not self._operation_lock.acquire(blocking=False):
+                raise StackChanTransportError("controller busy; commissioning was not queued")
+            try:
+                peer = self._home_connection()
+            except Exception:
+                self._operation_lock.release()
+                raise
+            self._active_cancel = cancel
+            self._active_connection = peer
+        finally:
+            self._active_lock.release()
+
+        lease_attempted = False
+
+        def check_cancel():
+            if cancel.is_set():
+                raise StackChanMotionCancelled("Home commissioning was halted before completion")
+
+        def request(op, args=None, *, sequenced=True):
+            check_cancel()
+            return self._request(op, args, sequenced=sequenced, connection=peer)
+
+        try:
+            initial = self._read_home_positions(peer)
+            # Reject an unsuitable starting pose before acquiring any lease.
+            if not (abs(initial["pan"]) <= 30 and 0 <= initial["tilt"] < 5):
+                raise ValueError("Home commissioning requires measured pan within +/-30 and pitch in [0, 5) degrees")
+            target = round(target * 10) / 10.0
+            duration = min_move_duration(self._safety_policy,
+                                         {"base_pitch.pos": target},
+                                         {"base_pitch.pos": initial["tilt"]}, duration)
+            duration = math.ceil(duration * 1000) / 1000.0
+            if not math.isfinite(duration) or not 2 <= duration <= _MAX_MOVE_DURATION_S:
+                raise ValueError("Safe home commissioning duration must be between 2 and 60 seconds")
+            check_cancel()
+            lease_attempted = True
+            request("lease.acquire", {"ttl_ms": self._ttl}, sequenced=False)
+            request("motion.move_home", {"duration_ms": round(duration * 1000),
+                                        "motion": {"pitchServo": {"angle": round(target * 10)}}})
+            deadline = time.monotonic() + duration + _FIRMWARE_SETTLE_GRACE_S
+            renew_s = max(0.1, self._ttl / 2000.0)
+            while True:
+                check_cancel()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                cancel.wait(min(renew_s, remaining))
+                check_cancel()
+                if time.monotonic() < deadline:
+                    request("lease.renew", {"ttl_ms": self._ttl}, sequenced=False)
+
+            deadline = time.monotonic() + self._target_settle_timeout
+            while True:
+                check_cancel()
+                measured = self._read_home_positions(peer)
+                try:
+                    arrived = self._home_arrived(measured, initial, target)
+                except StackChanTransportError:
+                    request("motion.halt")
+                    raise
+                if arrived:
+                    break
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    request("motion.halt")
+                    raise StackChanTransportError("Home commissioning did not reach a measured holdable target")
+                request("lease.renew", {"ttl_ms": self._ttl}, sequenced=False)
+                cancel.wait(min(0.05, remaining))
+
+            # This performs a measured hold of BOTH axes; it is not torque-off.
+            request("lease.release", sequenced=False)
+            check_cancel()
+            final = self._read_home_positions(peer)
+            check_cancel()
+            if not self._home_arrived(final, initial, target):
+                raise StackChanTransportError("Home commissioning position changed after terminal hold")
+            return {"initial_positions": initial, "positions": final,
+                    "commanded_positions": {"tilt": target}, "duration": duration,
+                    "target_reached": True, "terminal_state": "held"}
+        except StackChanMotionCancelled:
+            # The concurrent halt owns the terminal command after this operation
+            # relinquishes its lock. Never report this move as successful.
+            raise
+        except Exception:
+            if lease_attempted:
+                peer.force_close("home commissioning failed")
+            raise
+        finally:
+            self._finish_operation(cancel)
+
+    def _read_positions(self, connection: Optional[_DeviceConnection] = None) -> dict[str, float]:
+        result = self._request("motion.get", sequenced=False, connection=connection).get("result", {})
         positions = result.get("positions") if isinstance(result, dict) else None
         if not isinstance(positions, dict):
             raise StackChanTransportError("Stack-chan returned invalid measured positions")
@@ -376,11 +526,12 @@ class _BodyTransport:
         self,
         native: dict[str, Any],
         cancel: threading.Event,
+        connection: Optional[_DeviceConnection] = None,
     ) -> None:
         expected = self._expected_positions(native)
         deadline = time.monotonic() + self._target_settle_timeout
         while not cancel.is_set():
-            measured = self._read_positions()
+            measured = self._read_positions(connection)
             if all(
                 abs(measured[joint] - target) <= _POSITION_TOLERANCE_DEG
                 for joint, target in expected.items()
@@ -389,11 +540,11 @@ class _BodyTransport:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 # Keep torque enabled and end motion before reporting failure.
-                self._request("motion.halt")
+                self._request("motion.halt", connection=connection)
                 raise StackChanTransportError(
                     "Stack-chan did not reach its measured target"
                 )
-            self._request("lease.renew", {"ttl_ms": self._ttl}, sequenced=False)
+            self._request("lease.renew", {"ttl_ms": self._ttl}, sequenced=False, connection=connection)
             cancel.wait(min(0.05, remaining))
 
     def _run_timed_motion(
@@ -404,18 +555,19 @@ class _BodyTransport:
         terminal_op: str,
         terminal_sequenced: bool,
         halt_before_measurement: bool = False,
+        connection: Optional[_DeviceConnection] = None,
     ) -> bool:
-        self._acquire()
+        self._acquire(connection)
         if self._safety_policy is not None:
             if halt_before_measurement:
                 # A release may supersede interpolation still running on the
                 # firmware. Pin it before measuring the start of the rest move.
-                self._request("motion.halt")
-                self._acquire()
+                self._request("motion.halt", connection=connection)
+                self._acquire(connection)
             duration = min_move_duration(
                 self._safety_policy,
                 self._expected_positions(native),
-                self._read_positions(),
+                self._read_positions(connection),
                 duration,
             )
             if not math.isfinite(duration) or duration > _MAX_MOVE_DURATION_S:
@@ -425,7 +577,7 @@ class _BodyTransport:
         self._request("motion.move", {
             "motion": native,
             "duration_ms": round(duration * 1000),
-        })
+        }, connection=connection)
 
         # A firmware lease is deliberately shorter than the API's move limit.
         # Renew while interpolation runs so loss of this process, socket or Wi-Fi
@@ -439,15 +591,15 @@ class _BodyTransport:
             if cancel.wait(min(renew_s, remaining)):
                 break
             if time.monotonic() < deadline:
-                self._request("lease.renew", {"ttl_ms": self._ttl}, sequenced=False)
+                self._request("lease.renew", {"ttl_ms": self._ttl}, sequenced=False, connection=connection)
 
         # Firmware schedules fixed steps; scheduler stalls extend the actual
         # trajectory. Elapsed host time is not evidence of physical arrival.
         if not cancel.is_set():
-            self._wait_for_measured_target(native, cancel)
+            self._wait_for_measured_target(native, cancel, connection)
         if cancel.is_set():
             return False
-        self._request(terminal_op, sequenced=terminal_sequenced)
+        self._request(terminal_op, sequenced=terminal_sequenced, connection=connection)
         return True
 
     def _finish_operation(self, cancel: threading.Event) -> None:
@@ -457,6 +609,7 @@ class _BodyTransport:
         with self._active_lock:
             if self._active_cancel is cancel:
                 self._active_cancel = None
+                self._active_connection = None
 
     def move(self, native: dict[str, Any], duration: float) -> None:
         cancel = threading.Event()
@@ -468,7 +621,13 @@ class _BodyTransport:
             # move instead of leaving it queued to start after recovery returns.
             if not self._operation_lock.acquire(blocking=False):
                 raise StackChanTransportError("controller busy; motion was not queued")
+            try:
+                connection = self._gateway.connection()
+            except Exception:
+                self._operation_lock.release()
+                raise
             self._active_cancel = cancel
+            self._active_connection = connection
         finally:
             self._active_lock.release()
         try:
@@ -479,16 +638,17 @@ class _BodyTransport:
                 cancel,
                 "lease.release",
                 terminal_sequenced=False,
+                connection=connection,
             )
         except StackChanTransportError:
-            self._gateway.close_connection("motion failed")
+            connection.force_close("motion failed")
             raise
         finally:
             self._finish_operation(cancel)
 
     def halt(self) -> None:
-        connection = self._gateway.connection()
         with self._active_lock:
+            connection = self._active_connection or self._gateway.connection()
             cancel = self._active_cancel
             if cancel is not None:
                 cancel.set()
@@ -502,8 +662,8 @@ class _BodyTransport:
                 # Reacquire or renew after the prior operation is fully done.
                 # This covers the small window after lease.release succeeds but
                 # before the old cancellation marker is cleared.
-                self._acquire()
-                self._request("motion.halt")
+                self._acquire(connection)
+                self._request("motion.halt", connection=connection)
             except StackChanTransportError:
                 connection.force_close("halt failed")
                 raise
@@ -513,15 +673,19 @@ class _BodyTransport:
     def release(self, native_rest: dict[str, Any], duration: float) -> None:
         cancel = threading.Event()
         with self._active_lock:
+            # Recovery belongs to the operation being interrupted, even if the
+            # gateway already has a replacement connection. Never move that peer.
+            connection = self._active_connection or self._gateway.connection()
             previous = self._active_cancel
             if previous is not None:
                 previous.set()
             # Keep _active_lock while waiting: this blocks a new move from
             # slipping between the cancelled operation and recovery ownership.
             if not self._operation_lock.acquire(timeout=self._timeout + 0.5):
-                self._gateway.close_connection("release could not claim controller")
+                connection.force_close("release could not claim controller")
                 raise StackChanTransportError("controller did not stop for release")
             self._active_cancel = cancel
+            self._active_connection = connection
         try:
             # Move to the head-down soft-limit rest before disabling torque.
             # motion.release then halt-holds measured position before torque-off.
@@ -532,9 +696,10 @@ class _BodyTransport:
                 "motion.release",
                 terminal_sequenced=True,
                 halt_before_measurement=True,
+                connection=connection,
             )
         except StackChanTransportError:
-            self._gateway.close_connection("release failed")
+            connection.force_close("release failed")
             raise
         finally:
             self._finish_operation(cancel)
@@ -558,8 +723,13 @@ class StackChanMotionService:
         command_timeout: Optional[float] = None,
         lease_ttl_ms: Optional[int] = None,
         allow_insecure_ws: Optional[bool] = None,
+        home_commissioning_enabled: Optional[bool] = None,
     ):
         self._safety_policy = safety_policy
+        self._home_commissioning_enabled = (
+            home_commissioning_enabled if home_commissioning_enabled is not None
+            else _env_flag("STACKCHAN_HOME_COMMISSIONING_ENABLED")
+        )
         self._host = host or os.getenv("STACKCHAN_BODY_HOST", "0.0.0.0")
         self._port = port if port is not None else _env_int("STACKCHAN_BODY_PORT", 8765, 1, 65535)
         self._device_id = device_id or os.getenv("STACKCHAN_DEVICE_ID", "")
@@ -773,6 +943,43 @@ class StackChanMotionService:
 
     def move_and_hold(self, target_positions: Dict[str, float], duration: float = 2.0) -> None:
         self.move_to(target_positions, duration)
+
+    def home_state(self) -> dict[str, Any]:
+        capability = self._transport.home_capability()
+        return {**capability, "coordinate_frame": HOME_FRAME,
+                "commissioning_configured": self._home_commissioning_enabled,
+                "motion_enabled": self._home_commissioning_enabled and capability["supported"],
+                "target_limits_deg": {"tilt": list(HOME_PITCH_LIMITS)},
+                "motion_scope": "pitch_only_commissioning",
+                "start_pitch_limits_deg": {"minimum": 0, "exclusive_maximum": 5},
+                "terminal_state": "both_axes_held", "calibration_verified": False}
+
+    def get_home_positions(self) -> dict[str, Any]:
+        return {"coordinate_frame": HOME_FRAME, "position_source": "measured",
+                "positions": self._transport.get_home_positions()}
+
+    def move_home(self, positions: dict[str, float], duration: float = 2.0) -> dict[str, Any]:
+        if not self._home_commissioning_enabled:
+            raise PermissionError("Home commissioning disabled; explicitly enable STACKCHAN_HOME_COMMISSIONING_ENABLED for supervised use")
+        if not isinstance(positions, dict) or set(positions) != {"tilt"}:
+            raise ValueError("Home commissioning accepts only a numeric tilt target")
+        target = positions["tilt"]
+        if (isinstance(target, bool) or not isinstance(target, (int, float))
+                or not math.isfinite(target) or not HOME_PITCH_LIMITS[0] <= target <= HOME_PITCH_LIMITS[1]):
+            raise ValueError("Home commissioning pitch must be between 7 and 10 degrees")
+        if (isinstance(duration, bool) or not isinstance(duration, (int, float))
+                or not math.isfinite(duration) or not 2 <= duration <= 10):
+            raise ValueError("Home commissioning duration must be between 2 and 10 seconds")
+        with self._state_lock:
+            if self._body_owners or self._tracking_flag or self._frozen:
+                raise PermissionError("Home commissioning requires an idle, unfrozen body")
+        result = self._transport.commission_home(float(target), float(duration))
+        with self._state_lock:
+            self._target.update({"base_yaw.pos": result["positions"]["pan"],
+                                 "base_pitch.pos": result["positions"]["tilt"] - _PITCH_MIDPOINT_DEG})
+            self._released = False
+        return {"status": "ok", "coordinate_frame": HOME_FRAME, "position_source": "measured",
+                "requested": positions, **result}
 
     def get_joint_names(self) -> Set[str]:
         return set(JOINT_KEYS)
