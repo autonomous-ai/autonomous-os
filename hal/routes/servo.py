@@ -20,6 +20,7 @@ import hal.app_state as state
 from hal.safety.policy import min_move_duration
 from hal.models import (
     ServoAimRequest,
+    ServoDemoResponse,
     ServoSearchRequest,
     ServoSearchResponse,
     ServoAimResponse,
@@ -438,6 +439,34 @@ def search_for_user(req: Optional[ServoSearchRequest] = None):
         "looks_visited": res.looks_visited,
         "bearings_visited": res.bearings_visited,
     }
+
+
+@router.post("/servo/demo", response_model=ServoDemoResponse)
+def range_demo_route():
+    """Perform a narrated tour of the movement range.
+
+    A DEMO, not a search: nothing is detected and nothing is reported. It exists
+    because "show me what you can do" used to land on the `scan` emotion — a
+    54 deg canned recording narrated as a full turn — for want of anywhere else
+    to go.
+
+    Returns as soon as the demo starts. The performance runs on its own thread
+    and speaks for itself through the filler pools, so the agent's five-second
+    marker budget is never in play.
+    """
+    if _sleep_servo_locked():
+        state.logger.info("servo/demo ignored -- device is sleeping")
+        return {"status": "ok", "started": False, "waypoints": 0,
+                "reason": "sleeping"}
+    svc = _svc_connected()
+    if svc.is_suppressed:
+        state.logger.info("servo/demo ignored -- %s mode active", svc.motion_mode)
+        return {"status": "ok", "started": False, "waypoints": 0,
+                "reason": svc.motion_mode}
+
+    from hal.drivers.motors.range_demo import start
+
+    return {"status": "ok", **start(svc)}
 
 
 @router.get("/servo/bearing")

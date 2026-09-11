@@ -452,6 +452,19 @@ class ServoSearchResponse(BaseModel):
     )
 
 
+class ServoDemoResponse(BaseModel):
+    """Whether the demo STARTED, not how it went.
+
+    The performance runs on its own thread and narrates itself, so there is
+    nothing for the caller to wait for and nothing for it to report afterwards.
+    """
+
+    status: str = "ok"
+    started: bool
+    waypoints: int = Field(0, description="Legs the demo will walk.")
+    reason: str = ""
+
+
 class ServoAimRequest(BaseModel):
     direction: str = Field(
         ...,

@@ -263,13 +263,18 @@ def _stop_active_tracking(source: str):
     # is_tracking guard below would miss it — the user would press the button to
     # stop the lamp moving and it would keep turning. Abort it unconditionally.
     try:
+        from hal.drivers.motors.range_demo import request_abort as _abort_demo
         from hal.drivers.tracking.aim import request_abort as _abort_aim
         from hal.drivers.tracking.search import request_abort as _abort_search
 
         _abort_aim()
         _abort_search()
+        # The range demo moves the body AND narrates it, so a click that only
+        # stopped the arm would leave the lamp describing legs it is no longer
+        # performing.
+        _abort_demo()
     except Exception as e:
-        logger.debug("%s single click -- aim/search abort unavailable: %s", source, e)
+        logger.debug("%s single click -- aim/search/demo abort unavailable: %s", source, e)
 
     tracker = state.tracker_service
     if not tracker or not tracker.is_tracking:

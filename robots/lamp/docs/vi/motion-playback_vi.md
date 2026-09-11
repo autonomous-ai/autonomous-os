@@ -94,3 +94,57 @@ visual và collision đã được bỏ. Nó theo gói device profile lên máy 
 clip thì không. Phải tính lại hằng số này nếu phân bố khối lượng của thân máy thay đổi.
 
 [#271]: https://github.com/autonomous-ai/autonomous-os/issues/271
+
+## Demo tầm chuyển động — tính ra, không thu sẵn
+
+`POST /servo/demo` (`hal/drivers/motors/range_demo.py`) trình diễn một vòng dạo
+qua tầm chuyển động kèm lời thoại: *"hết cỡ bên trái"* ngay khi đế quay sang
+trái, rồi sang phải, rồi ngẩng lên và cúi xuống, rồi về chỗ cũ. Không phát hiện
+gì và không báo cáo gì — chuyển động cùng lời nói chính là toàn bộ sản phẩm.
+
+Đây là chuyển động duy nhất trong tài liệu này cố ý **không** phải một bản thu,
+và lý do nằm ở chính lỗi mà nó thay thế. Khi được yêu cầu trình diễn tầm hoạt
+động, trước đây đèn trả lời bằng emotion `scan`: `hal/recordings/scanning.csv`,
+360 frame trong 17.95 s, `base_yaw.pos` trải từ **−31.3…+23.1 — tức 54.4° trên
+một tầm 270°** — mà lại thuyết minh là *"Tôi sẽ quét trọn tầm của mình… xoay một
+vòng đây!"*. Một bản thu không thể đúng theo cấu trúc được. Nó là chuyển động tay
+của ai đó bị đóng băng tại thời điểm thu, không có gì trong file nói nó với tới
+đâu, và nó sai một cách âm thầm. Waypoint đọc từ `C.YAW_MIN` / `C.YAW_MAX` thì
+đúng theo cấu trúc, vẫn đúng khi giới hạn thay đổi, và port sang hằng số của một
+robot khác mà không tốn gì.
+
+**Yaw chạy tới giới hạn thật; pitch thì cố ý không.** `WRIST_PITCH_MIN` /
+`WRIST_PITCH_MAX` khai báo ±90° còn cánh tay thì không có chừng đó — đo trên
+thiết bị lamp-ac82, `wrist_pitch` lên tới −89.55 khi ngẩng (bị chặn bởi soft
+limit chứ không phải bởi khớp) và chỉ tới −16.61 khi cúi mà không hề khựng. Dải
+khai báo không phải một phép đo, nên các chặng pitch chỉ đi `PITCH_LOOK_DEG`
+(25°) tính từ seed pose, có kẹp biên: đúng bằng độ lệch mà vòng nhìn của pha quét
+vẫn đi mỗi lần chạy. Tầm đã được kiểm chứng hơn tầm chỉ được khai báo. Các câu
+thoại bám theo sự phân đôi đó — pool của yaw nói *"hết cỡ bên trái"*, còn pool
+của pitch chỉ nói *"lên như vầy nè"*.
+
+**Đế được tăng tốc rồi trả lại.** `DEMO_YAW_SPEED` (1200 ≈ 80°/s) được ghi vào
+`base_yaw` cho màn trình diễn, y như pha quét vẫn làm và cùng một lý do: nếu
+không đụng tới, khớp này chỉ chạy ~14°/s, nên một chặng 135° mất ~9 s và câu nói
+mô tả nó kết thúc trong khi đèn vẫn còn đang xoay. Được khôi phục trong `finally`,
+vì một mức giới hạn bị bỏ quên sẽ theo demo đi ra ngoài và bóp chậm cả idle lẫn
+mọi emotion.
+
+**Lời nói do HAL định thời, còn câu chữ thuộc về os-server.** Mỗi chặng gọi
+`aim._say(pool)` → `POST /api/sensing/filler` → các pool `demo_*` trong
+`system/lib/i18n/fillers.go`. Không cần lượt LLM nào và không tốn token. Một
+marker `[HW:...]` không làm được việc này: marker bắn trước TTS, nên một demo
+thuyết minh bằng marker sẽ mô tả màn trình diễn đã xong từ đời nào. Câu nói đi
+TRƯỚC chặng của nó (nói, rồi mới di chuyển) còn chặng kế tiếp thì chờ
+`_wait_until_still` — `move_and_hold` trả về khi đã gửi xong frame chứ không phải
+khi servo đã tới nơi, nên không có bước chờ đó thì kịch bản vượt mặt thân máy chỉ
+sau hai chặng.
+
+**Các cổng chặn.** Từ chối khi thiết bị đang ngủ và khi motion service đang bị
+suppress; từ chối một demo thứ hai chồng lên demo đang chạy. `start()` trả về
+ngay và màn trình diễn chạy trên thread riêng — agent đi tới đây qua marker
+`[HW:/servo/demo:{}]`, mà `fireHWCall` chỉ cho một POST phần cứng năm giây trong
+khi demo dài ~20 s. Nút vật lý abort nó cùng với pha ngắm và pha quét
+(`button_actions._stop_active_tracking`): một cú nhấn chỉ dừng cánh tay mà không
+dừng lời thoại sẽ để lại một cái đèn đang mô tả những chặng nó không còn thực
+hiện nữa. Một demo bị abort sẽ quay về đúng tư thế lúc bắt đầu.
