@@ -66,6 +66,27 @@ nguyên. `*hermes.Service` thỏa mãn đầy đủ `domain.AgentGateway` (`Name
 `IsReady`, `ConnectedAt`, `AgentUptime`, `IsBusy`/`SetBusy`, `QueuePendingEvent`,
 `SendChat*`, `StartWS`, …).
 
+### Số liệu cache trong Flow Monitor
+
+`input_tokens` của Hermes Responses gồm input chưa cache, cache read và cache
+write. `translator.go` tách `input_tokens_details.cached_tokens` và
+`input_tokens_details.cache_write_tokens` sang các nhóm riêng trong domain để
+monitor hiện `R`/`W` mà không đếm trùng. Khi thiếu chi tiết, giữ nguyên tổng input
+cũ; bỏ qua tổng cache không hợp lệ. Ví dụ 14.097 input, 13.824 cache read và 66
+output trở thành 273 input chưa cache, `R13.8k` và 66 output (tổng 14.163).
+
+Một số phiên bản Hermes cộng dồn cache nội bộ nhưng làm mất số liệu tại
+`_finish_turn_result` và `_responses_usage_payload` trong
+`gateway/platforms/api_server.py`. Onboarding local chạy `cache_usage_patch.py`
+được embed bằng Python 3 để giữ `session_cache_read_tokens` và
+`session_cache_write_tokens` trong Responses usage. Bản vá kiểm tra cấu trúc AST
+đã biết, compile trước khi ghi atomic và không ghi lại file đã vá. Khi có thay
+đổi, OS gộp vào quyết định restart gateway hiện có. Source không khớp chỉ ghi
+cảnh báo, không sửa; bỏ qua cài đặt chưa tồn tại và endpoint remote. Người vận
+hành Hermes remote cần áp dụng bản sửa tương đương trên server đó. Không sửa
+dữ liệu lượt cũ; kiểm tra lượt mới sau restart. Không cần đổi frontend hay cấu
+hình cache provider.
+
 ## 3. Mô hình session & conversation
 
 Hermes không có socket, nên "session" nằm phía server:

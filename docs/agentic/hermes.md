@@ -66,6 +66,28 @@ all stay untouched. `*hermes.Service` satisfies `domain.AgentGateway` in full
 (`Name()`="Hermes", `IsReady`, `ConnectedAt`, `AgentUptime`, `IsBusy`/`SetBusy`,
 `QueuePendingEvent`, `SendChat*`, `StartWS`, …).
 
+### Cache usage in Flow Monitor
+
+Hermes Responses `input_tokens` includes uncached input, cache reads and cache
+writes. `translator.go` subtracts `input_tokens_details.cached_tokens` and
+`input_tokens_details.cache_write_tokens` into separate domain buckets, so the
+monitor shows `R`/`W` without counting cached input twice. Missing details retain
+the legacy input total; impossible cache totals are ignored. For example, 14,097
+input with 13,824 cache reads and 66 output becomes 273 uncached input, `R13.8k`,
+and 66 output (14,163 total).
+
+Some Hermes versions accumulate cache internally but drop it in
+`_finish_turn_result` and `_responses_usage_payload` in
+`gateway/platforms/api_server.py`. Local onboarding runs the embedded
+`cache_usage_patch.py` with Python 3 to preserve `session_cache_read_tokens` and
+`session_cache_write_tokens` in Responses usage. It checks known AST shapes,
+compiles before an atomic write, and leaves already-patched files unchanged.
+A changed patch joins the existing gateway restart decision. Unsupported source
+produces a warning without a write; missing installations and remote endpoints
+are skipped. Remote operators must apply the equivalent server fix themselves.
+Existing recorded turns are not rewritten; inspect a new turn after restart.
+No frontend change or cache-provider setting is required.
+
 ## 3. Session & conversation model
 
 Hermes has no socket, so the "session" is server-side:
