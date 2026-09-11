@@ -714,7 +714,9 @@ Khi được mount, card môi trường đọc `GET /api/hardware/environment/st
 mỗi 3 giây qua reverse proxy hardware của OS đã có xác thực, chuyển tới HAL
 `GET /environment/status`. Chu kỳ làm mới trình duyệt độc lập với
 `poll_interval_s` cấu hình trong HAL, không thay đổi nhịp thu nhận dữ liệu.
-Không thêm endpoint OS riêng cho môi trường hay event OS → agent.
+Đọc từ browser không kích hoạt lượt agent. Worker phát hiện thay đổi độc lập
+và API status cho agent local được mô tả trong
+[tài liệu môi trường Lamp](../../robots/lamp/docs/vi/environment-sensing_vi.md#chính-sách-thay-đổi-của-os-và-api-cho-agent).
 
 Card hiển thị trạng thái cảm biến, thời điểm sample, trạng thái dữ liệu
 cũ, lỗi và tám số đo: nhiệt độ (°C), độ ẩm (%), PM1 / PM2.5 / PM4 / PM10

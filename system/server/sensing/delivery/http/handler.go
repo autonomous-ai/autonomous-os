@@ -169,6 +169,10 @@ func (h *SensingHandler) SetHarnessFollowupContext(fn func() string) {
 func ProvideSensingHandler(gw domain.AgentGateway, bus *monitor.Bus, cfg *config.Config, sled *statusled.Service, isSleeping func() bool) *SensingHandler {
 	// Gate local intent rules to what this device's body can do — set once here.
 	intent.Configure(device.Capabilities(cfg.DeviceTypeOrDefault()))
+	sensingmsg.SetEnvironmentReplayAllowed(func() bool {
+		return cfg.EnvironmentSettings().Enabled && device.Capabilities(cfg.DeviceTypeOrDefault())[device.CapEnvironment] &&
+			(isSleeping == nil || !isSleeping())
+	})
 	// Social talk belongs to whoever answers first. With the realtime agent on,
 	// it takes every voice turn before os-server sees one and replies in
 	// character — so local chitchat would only ever fire on turns it stayed
@@ -195,6 +199,17 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 	}
 	if err := validator.New().Struct(req); err != nil {
 		c.JSON(http.StatusBadRequest, serializers.ResponseError(err.Error()))
+		return
+	}
+
+	// Environment is optional: unknown or unreadable declarations must not
+	// enable passive environment turns on devices without this capability.
+	if req.Type == "environment.update" && !device.Capabilities(h.config.DeviceTypeOrDefault())[device.CapEnvironment] {
+		c.JSON(http.StatusForbidden, serializers.ResponseError("environment capability not declared"))
+		return
+	}
+	if req.Type == "environment.update" && !h.config.EnvironmentSettings().Enabled {
+		c.JSON(http.StatusOK, serializers.ResponseSuccess(map[string]string{"handler": "dropped_disabled"}))
 		return
 	}
 
@@ -383,11 +398,11 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 	// ambient events stay quiet for the floor window after any interaction.
 	// Trade-off: a floored drop can make a HAL-side dedup believe "sent" —
 	// acceptable, every ambient emitter re-offers on its own heartbeat.
-	// Guard mode bypasses the floor entirely (surveillance wants every
-	// event). Placed BEFORE the describe gate so a floored event never
-	// spends a vision-describe API call.
+	// Guard mode bypasses the floor for surveillance events; environment
+	// updates remain advisory and retain the floor. Placed BEFORE the describe
+	// gate so a floored event never spends a vision-describe API call.
 	if floorS := h.config.SensingTurnFloorSeconds(); floorS > 0 &&
-		ambientFloorTypes[req.Type] && !h.config.GuardModeEnabled() {
+		ambientFloorTypes[req.Type] && (!h.config.GuardModeEnabled() || req.Type == "environment.update") {
 		if sinceMs := time.Now().UnixMilli() - h.lastAgentTurn.Load(); sinceMs < int64(floorS)*1000 {
 			slog.Info("INBOUND from HAL → FLOOR-DROPPED (ambient turn floor)",
 				"component", "sensing", "backend", h.agentGateway.Name(),
@@ -1553,6 +1568,7 @@ func (h *SensingHandler) PostMusicSuggestionStatus(c *gin.Context) {
 // and presence enter/leave (greeting UX + session bookkeeping) are deliberately
 // NOT floored.
 var ambientFloorTypes = map[string]bool{
+	"environment.update":      true,
 	"motion.activity":         true,
 	"emotion.detected":        true,
 	"speech_emotion.detected": true,
@@ -1581,7 +1597,7 @@ func shouldQueueEvent(eventType, message string, inVoiceWindow bool) bool {
 		// always been ready for it (service_events.go re-applies MarkSilentRun
 		// on replay); that branch was simply unreachable.
 		"voice_agent_handled",
-		"motion.activity", "emotion.detected", "speech_emotion.detected",
+		"motion.activity", "emotion.detected", "speech_emotion.detected", "environment.update",
 		"fire_hazard.detected",
 		"web_chat", "mqtt_chat":
 		return true

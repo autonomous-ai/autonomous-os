@@ -1,6 +1,7 @@
 package hal
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,7 +13,16 @@ import (
 // schema change. Status success means acquisition diagnostics were retrieved,
 // not that every reading is fresh or available.
 func GetEnvironmentStatus() (json.RawMessage, error) {
-	resp, err := doGet("/environment/status")
+	return GetEnvironmentStatusContext(context.Background())
+}
+
+// GetEnvironmentStatusContext allows shutdown to cancel background acquisition.
+func GetEnvironmentStatusContext(ctx context.Context) (json.RawMessage, error) {
+	req, err := newRequest(http.MethodGet, "/environment/status", nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := httpClient.Do(req.WithContext(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("get environment status: %w", err)
 	}

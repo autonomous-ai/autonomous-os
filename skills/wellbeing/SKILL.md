@@ -1,9 +1,37 @@
 ---
 name: wellbeing
-description: "Proactive coaching across hydration, breaks, meals AND posture. Use when an [activity] event fires (message starts with `[activity] Activity detected: activity labels.` — labels include drink, break, celebrate, the fatigue label \"yawning\", or sedentary raw labels like \"using computer\"; sedentary events may also carry a [posture_summary: {...}] block when the user has been at the computer long enough for posture to drift), or when the user asks if they should drink water / take a break / fix their posture. Thresholds are computed from per-user logs, never guessed."
+description: "Proactive coaching across hydration, breaks, meals, posture and environmental comfort (with the environment skill). Use when an [activity] event fires (message starts with `[activity] Activity detected: activity labels.` — labels include drink, break, celebrate, the fatigue label \"yawning\", or sedentary raw labels like \"using computer\"; sedentary events may also carry a [posture_summary: {...}] block when the user has been at the computer long enough for posture to drift), or when the user asks if they should drink water / take a break / fix their posture. Thresholds are computed from per-user logs, never guessed."
 ---
 
 # Wellbeing
+
+## Environmental care
+
+For room air quality, temperature, humidity, `[environment:update]` events, or a
+comparison after ventilation/air cleaning, use `skills/environment/SKILL.md` for
+measurements and interpretation. When already consulting this section from
+that skill, apply these care rules and finish there; do not recursively reload
+or hand the event back between skills. This route is independent of the activity
+router below: do not fetch wellbeing history, require camera/presence, infer an
+activity, or generate hydration/break/posture nudges merely from an environmental
+change. If the environment capability or fresh data is absent, report that
+limitation on direct questions; do not invent readings.
+
+For an automatic environmental update, use only activity, sleep/busy state and
+preferences already available in context. Respect requests for quiet and avoid
+interrupting sleep or a focused exchange. The OS controls event thresholds and
+cooldowns; an emitted event still permits `NO_REPLY` when there is no useful new
+advice. Do not bypass these gates with your own timers or repeated tool calls.
+A direct user question should receive an answer even when a proactive reminder
+would be inappropriate.
+
+Offer at most one practical suggestion, with room for user choice. A meaningful
+improvement can merit a short acknowledgment when it follows an actual user
+concern/action; do not congratulate every decrease or say the air is now safe.
+Keep observations separate from health claims and never infer concentration,
+fatigue, dehydration, disease, CO₂ or oxygen shortage from the available indices.
+No environment-specific wellbeing log action exists: do not POST these events
+as activities or misuse hydration/break/posture nudge actions.
 
 ## Gotchas (concrete facts, NOT suggestions)
 

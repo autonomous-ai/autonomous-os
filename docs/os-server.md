@@ -36,6 +36,33 @@ request receives `409 Conflict`. HAL owns the physical sequence: reboot plays
 the reboot cue, while shutdown plays its cue and releases servos before issuing
 the OS power command.
 
+### Environment sensing
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/environment/status` | Loopback-only, explicit `environment` capability required; returns HAL's diagnostic snapshot in the standard OS envelope |
+
+Missing capability returns 403; HAL transport/format failures return 502.
+Successful snapshots can still be disabled, errored or stale: inspect
+`data.state`, `data.stale`, `data.age_s` and `data.sample`. Reading this route
+neither forces a hardware measurement nor starts an agent turn.
+
+The OS environment worker reads HAL independently and posts sustained changes
+as `environment.update` to `/api/sensing/event`. Its top-level `environment`
+config is read/written through admin `GET`/`PUT /api/device/config`: evaluation
+10 seconds, sustain 60 seconds, cooldown 900 seconds, retry 60 seconds, maximum
+sample age 10 seconds by default. Metric deltas and warm-up are configurable.
+Disabling this policy drops automatic events (`dropped_disabled`); diagnostic
+status reads and HAL acquisition remain available.
+Capability, sleep and conversation-floor gates apply; busy queues coalesce to
+the latest environment event with a 60-second expiry and recheck capability,
+sleep and policy enabled at replay. Queue acceptance is best-effort, not guaranteed notification delivery.
+The `environment` skill interprets measurements and consults `wellbeing` for
+proportionate advice. Hardware acquisition and OS change policy are separate;
+this feature does not enable Lamp's commented capability or disabled SEN55.
+See [Lamp environment sensing](../robots/lamp/docs/environment-sensing.md#os-change-policy-and-agent-access)
+for defaults, validation, payloads and use cases.
+
 ### Device Setup
 
 | Method | Endpoint | Description |

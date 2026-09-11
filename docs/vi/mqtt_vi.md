@@ -359,6 +359,9 @@ chờ, thiết bị publish thêm phản hồi cuối `status:"failure"` kèm l�
 action đầy đủ của HAL, không chạy lệnh OS trần: reboot phát cue; shutdown phát
 cue và release servo.
 
+Request/reply này không tạo event cho agent. Worker OS riêng xử lý thay đổi
+kéo dài; xem [cảm biến môi trường Lamp](../../robots/lamp/docs/vi/environment-sensing_vi.md#chính-sách-thay-đổi-của-os-và-api-cho-agent).
+
 **`environment.status`:** gửi trên `fa_channel`:
 
 ```json
