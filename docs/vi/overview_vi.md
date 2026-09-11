@@ -64,6 +64,29 @@ thiếu file hoặc entry của board thì dùng lại mặc định `button` tr
 ứng và khởi động lại HAL; hệ thống không tự phát hiện việc đổi dây cắm.
 Config sai bị từ chối trước khi claim GPIO. Chế độ mô phỏng bỏ qua nút phần cứng.
 
+Wiring cảm ứng MPR121 tùy chọn hiện chỉ thuộc Lamp, trong
+`robots/lamp/mpr121.json`; Intern v2 không có khai báo MPR121. Cấu hình dùng
+cùng cách chọn thư mục device và được `hal/board/mpr121.py` kiểm tra. Lamp
+có sẵn entry bật cho `orangepi_sun60`, dùng bus 0 và địa chỉ 0x5A, đã kiểm tra
+khởi tạo và polling trên Lamp `lamp-0c4e`. Script phần cứng dùng chân 3/5
+(TWI0); cần xác minh wiring thực tế và bật
+đúng controller I²C bên ngoài HAL. HAL không sửa boot overlay. Thiếu
+`/dev/i2c-0` thì log lỗi khởi tạo và giữ các input hiện có hoạt động.
+Entry trong `boards` bắt buộc có `bus` I²C cụ thể; không quét hay đoán bus MPR121 để fallback. Thiếu
+file/board hoặc `enabled: false` thì bỏ qua MPR121, giữ input GPIO/TTP223
+hiện có; chế độ mô phỏng cũng bỏ qua. Cấu hình bật nhưng sai bị từ chối khi
+startup. Restart HAL sau khi đổi cấu hình wiring. Driver dùng chung
+`hal/drivers/mpr121.py` gom các electrode được chọn thành một phiên chạm rồi
+nhả đã debounce, sau đó gọi `single_click_action(source="MPR121")` một lần,
+không map double-tap hay giữ để thực hiện hành động destructive. Mặc định:
+địa chỉ `0x5A`, electrode 0–11, ngưỡng chạm/nhả 2/1, bật autoconfig,
+polling 10 ms và debounce 30 ms, chờ ổn định 100 ms lúc startup. Lỗi I²C hoặc
+cờ quá dòng chỉ dừng driver này. Logger `hal.drivers.mpr121` ghi cấu hình,
+thay đổi electrode, tap đã debounce, thực thi action và vòng đời driver trong
+log/journal HAL thường dùng; poll không đổi trạng thái không tạo log INFO.
+Xem [điều khiển vật lý](../../robots/lamp/docs/vi/physical-controls_vi.md) để
+biết cấu hình và chi tiết cử chỉ.
+
 ## Nguyên Tắc
 
 - **Hardware là plugin** — cắm vào thì play, không cắm thì skip
