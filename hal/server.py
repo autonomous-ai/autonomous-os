@@ -1024,6 +1024,7 @@ async def lifespan(app: FastAPI):
         state.environment_service = EnvironmentService(
             enabled=_sen55_config is not None,
             bus=_sen55_config.bus if _sen55_config is not None else None,
+            timing=_sen55_config.timing if _sen55_config is not None else None,
         )
         state.environment_service.start()
 

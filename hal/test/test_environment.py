@@ -203,3 +203,55 @@ def test_lamp_sen55_is_not_declared_or_enabled():
     assert "environment" not in profile.declared_routes()
     for board in profile.boards:
         assert load_sen55_config(str(robots / "lamp"), board) is None
+
+
+def test_timing_defaults_and_overrides(tmp_path):
+    import json
+    from hal.board.sen55 import load_sen55_config, SEN55Timing
+
+    assert SEN55Timing() == SEN55Timing(1, 5, 5, 30)
+    (tmp_path / "sen55.json").write_text(json.dumps({"boards": {"board": {
+        "bus": 3, "poll_interval_s": 2, "retry_interval_s": 8,
+        "stale_after_s": 10, "no_data_timeout_s": 60,
+    }}}))
+    config = load_sen55_config(str(tmp_path), "board")
+    assert config.timing == SEN55Timing(2, 8, 10, 60)
+    service = EnvironmentService(True, config.bus, timing=config.timing)
+    service._sample = {}
+    service._sample_time = time.monotonic() - 6
+    service._state = "ready"
+    assert not service.snapshot()["stale"]
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"poll_interval_s": 0}, {"retry_interval_s": -1},
+    {"stale_after_s": float("nan")}, {"no_data_timeout_s": float("inf")},
+    {"poll_interval_s": True}, {"retry_interval_s": "5"},
+    {"poll_interval_s": 5}, {"no_data_timeout_s": 1},
+])
+def test_invalid_timing_rejected_even_when_disabled(tmp_path, kwargs):
+    import json
+    from hal.board.sen55 import load_sen55_config
+
+    (tmp_path / "sen55.json").write_text(json.dumps({"boards": {
+        "board": {"enabled": False, **kwargs},
+    }}))
+    with pytest.raises(ValueError, match="Invalid SEN55 wiring"):
+        load_sen55_config(str(tmp_path), "board")
+
+
+def test_worker_uses_configured_poll_retry_and_timeout():
+    from hal.board.sen55 import SEN55Timing
+    from unittest.mock import Mock
+
+    driver = Mock()
+    driver.read.return_value = None
+    timing = SEN55Timing(2, 8, 10, 60)
+    service = EnvironmentService(True, 3, lambda _: driver, timing=timing)
+    service._stop = Mock()
+    service._stop.is_set.return_value = False
+    service._stop.wait.side_effect = [False, True]
+    with patch("hal.drivers.environment.service.time.monotonic", side_effect=[0, 61]):
+        service._run()
+    assert [call.args[0] for call in service._stop.wait.call_args_list] == [2, 8]
+    driver.close.assert_called_once()

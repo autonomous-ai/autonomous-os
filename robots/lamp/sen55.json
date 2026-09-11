@@ -1,5 +1,11 @@
 {
   "boards": {
-    "orangepi_sun60": { "enabled": false }
+    "orangepi_sun60": {
+      "enabled": false,
+      "poll_interval_s": 1.0,
+      "retry_interval_s": 5.0,
+      "stale_after_s": 5.0,
+      "no_data_timeout_s": 30.0
+    }
   }
 }

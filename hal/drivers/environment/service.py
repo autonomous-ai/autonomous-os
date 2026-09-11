@@ -5,12 +5,14 @@ import threading
 import time
 
 from hal.drivers.environment.sen55 import SEN55
+from hal.board.sen55 import SEN55Timing
 
 logger = logging.getLogger(__name__)
 
 
 class EnvironmentService:
-    def __init__(self, enabled=False, bus=None, driver_factory=SEN55):
+    def __init__(self, enabled=False, bus=None, driver_factory=SEN55, timing=None):
+        self.timing = timing if timing is not None else SEN55Timing()
         self.enabled = enabled
         self.bus = bus
         self._factory = driver_factory
@@ -45,10 +47,10 @@ class EnvironmentService:
                 driver.start()
                 self._set_state("starting")
                 last_data = time.monotonic()
-                while not self._stop.wait(1.0):
+                while not self._stop.wait(self.timing.poll_interval_s):
                     sample = driver.read()
-                    if sample is None and time.monotonic() - last_data > 30.0:
-                        raise OSError("SEN55: no new data for 30 seconds")
+                    if sample is None and time.monotonic() - last_data > self.timing.no_data_timeout_s:
+                        raise OSError(f"SEN55: no new data for {self.timing.no_data_timeout_s:g} seconds")
                     if sample is not None:
                         last_data = time.monotonic()
                         with self._lock:
@@ -64,7 +66,7 @@ class EnvironmentService:
                         driver.close()
                     except Exception as exc:
                         logger.warning("SEN55 close failed: %s", exc)
-            if self._stop.wait(5.0):
+            if self._stop.wait(self.timing.retry_interval_s):
                 break
         self._set_state("stopped")
 
@@ -86,5 +88,5 @@ class EnvironmentService:
                 "last_error": self._error,
                 "sample": None if self._sample is None else dict(self._sample),
                 "age_s": age,
-                "stale": age is None or age > 5.0 or self._state != "ready",
+                "stale": age is None or age > self.timing.stale_after_s or self._state != "ready",
             }

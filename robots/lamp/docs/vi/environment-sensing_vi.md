@@ -63,7 +63,7 @@ kernel, cấu hình pin multiplexing và tốc độ bus theo board đó; tích 
 chuẩn Python; process cần quyền mở thiết bị này. Không cần thêm package I2C
 Python. Chế độ mô phỏng không bao giờ truy cập phần cứng, kể cả entry đã bật.
 
-Worker đọc mỗi 1 giây và thử lại sau 5 giây khi phần cứng lỗi. Không có dữ liệu
+Với thời gian mặc định, worker đọc mỗi 1 giây và thử lại sau 5 giây khi phần cứng lỗi. Không có dữ liệu
 mới quá 30 giây sẽ kích hoạt phục hồi qua cùng luồng thử lại. Khi shutdown,
 HAL dừng worker và giải phóng bus. Thu nhận dữ liệu chạy riêng với vòng sensing
 camera/microphone. Privacy của camera/microphone và sleep không dừng thu nhận
@@ -82,7 +82,7 @@ hiện có. Chúng khả dụng khi robot nạp route `environment`.
 | `GET /health` | Boolean `environment` cho biết có sample còn mới hay không |
 
 Các trạng thái gồm `disabled`, `starting`, `ready`, `error`, `stopped`.
-Sample quá 5 giây là stale; mọi trạng thái khác `ready` cũng là stale,
+Sample quá `stale_after_s` (mặc định 5 giây) là stale; mọi trạng thái khác `ready` cũng là stale,
 bao gồm `error`, `disabled`, `stopped`. Khi chưa có sample, `sample` và `age_s` là
 `null`, `stale` là true. Sample được giữ trong status phục vụ chẩn đoán;
 caller phải kiểm tra độ mới. `ready` nghĩa là đã có dữ liệu, không khẳng
@@ -102,3 +102,16 @@ Một sample chứa:
 Giá trị đo chưa khả dụng được trả bằng JSON `null`; caller không được hiểu
 là số không. Số đo và trạng thái để việc diễn giải cho bước tích hợp OS/agent
 sau này.
+
+## Cấu hình thời gian
+
+Mỗi entry board nhận các trường thời gian tùy chọn sau (giây). Bỏ qua trường nào thì dùng mặc định tương ứng. Giá trị phải là số dương hữu hạn; `stale_after_s` và `no_data_timeout_s` phải lớn hơn `poll_interval_s`. Khởi động lại HAL sau khi sửa. Đây là nhịp đọc của HAL, không thay đổi nhịp đo nội bộ của sensor.
+
+```json
+{
+  "poll_interval_s": 1.0,
+  "retry_interval_s": 5.0,
+  "stale_after_s": 5.0,
+  "no_data_timeout_s": 30.0
+}
+```

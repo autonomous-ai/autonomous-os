@@ -65,7 +65,7 @@ HAL accesses `/dev/i2c-N` through Python's standard library; the process needs
 permission to open that device. No additional Python I2C package is needed.
 Simulation never accesses the hardware, even with an enabled entry.
 
-The worker polls every 1 second and retries hardware failures after 5 seconds.
+With default timing, the worker polls every 1 second and retries hardware failures after 5 seconds.
 No new data for more than 30 seconds triggers recovery through the same retry
 path. Shutdown stops the worker and releases the bus. Acquisition runs
 separately from the camera/microphone sensing loop. Camera/microphone privacy
@@ -85,7 +85,7 @@ controls. They are available when the robot loads the `environment` route.
 | `GET /health` | The `environment` boolean reports whether a fresh sample is available |
 
 States are `disabled`, `starting`, `ready`, `error`, and `stopped`. A sample
-older than 5 seconds is stale; any state other than `ready` is also stale,
+older than `stale_after_s` (default 5 seconds) is stale; any state other than `ready` is also stale,
 including `error`, `disabled`, and `stopped`. Without a sample, `sample` and `age_s` are
 `null` and `stale` is true. A retained sample in status is diagnostic;
 callers must check freshness. `ready` means data is available, not that gas
@@ -105,3 +105,16 @@ A sample contains:
 Unavailable measurement values are JSON `null`; callers must not treat them
 as zero. The raw readings and status leave future interpretation to a later
 OS/agent integration.
+
+## Timing configuration
+
+Each board entry accepts these optional timing fields (seconds). Omitted fields use these defaults. Values must be finite positive numbers; `stale_after_s` and `no_data_timeout_s` must exceed `poll_interval_s`. Restart HAL after editing. These control HAL polling, not the sensor’s internal sampling rate.
+
+```json
+{
+  "poll_interval_s": 1.0,
+  "retry_interval_s": 5.0,
+  "stale_after_s": 5.0,
+  "no_data_timeout_s": 30.0
+}
+```

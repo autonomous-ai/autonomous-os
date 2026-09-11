@@ -259,7 +259,7 @@ Chi tiết SER: [speech-emotion_vi.md](speech-emotion_vi.md).
 ## Sensing Flow
 
 Thu nhận dữ liệu môi trường SEN55 là capability HAL tùy chọn riêng. Xem
-[Cảm biến môi trường](environment-sensing_vi.md) về đấu dây, cấu hình và
+[Cảm biến môi trường](../../robots/lamp/docs/vi/environment-sensing_vi.md) về đấu dây, cấu hình và
 API snapshot; hiện chưa phát sensing event tới OS/agent.
 
 ```

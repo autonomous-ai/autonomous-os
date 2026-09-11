@@ -90,8 +90,8 @@ or automatic reaction is introduced by this capability.
 
 It has no actuator safety class and needs no new `SAFETY.md` bounds. Ambient sensor
 temperature is separate from `thermal.max_temp_c`, which protects the board using
-SoC temperature. See [environmental sensing](../../docs/environment-sensing.md)
-([Vietnamese](../../docs/vi/environment-sensing_vi.md)) for configuration and wiring.
+SoC temperature. See [environmental sensing](../lamp/docs/environment-sensing.md)
+([Vietnamese](../lamp/docs/vi/environment-sensing_vi.md)) for configuration and wiring.
 
 ## Learned-policy execution
 

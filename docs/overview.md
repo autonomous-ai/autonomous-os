@@ -264,7 +264,7 @@ Mic (always on) → Local VAD (RMS energy, free)
 ## Sensing Flow
 
 SEN55 environmental acquisition is a separate optional HAL capability. See
-[Environmental sensing](environment-sensing.md) for wiring, configuration,
+[Environmental sensing](../robots/lamp/docs/environment-sensing.md) for wiring, configuration,
 and snapshot APIs; it does not yet emit OS/agent sensing events.
 
 ```
