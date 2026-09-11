@@ -91,8 +91,13 @@ file/board or `enabled: false` skips MPR121 and preserves existing GPIO/TTP223
 inputs; simulation also skips it. Malformed enabled configuration rejects
 startup. Restart HAL after changing wiring configuration. The shared
 `hal/drivers/mpr121.py` driver groups selected electrodes into one debounced
-touch-and-release session, then calls `single_click_action(source="MPR121")`
-once, with no double-tap or destructive hold mapping. Defaults are address
+contact. It shares GPIO gesture thresholds in `hal/drivers/button_gestures.py`:
+the first short release immediately calls single-click with `announce=False`;
+a 0.4 s quiet window produces the listening cue for 1/2/4+ clicks or reboot
+for exactly 3. Holds commit only on release: 2–<5 s sleepy, 5–<10 s shutdown,
+≥10 s factory reset. Boot-held contacts are suppressed; MPR121 has no hold-tier
+LED feedback. New click/hold mappings have mocked local verification only;
+the earlier live test covered single-click. Defaults are address
 `0x5A`, electrodes 0–11, touch/release thresholds 2/1, autoconfiguration enabled,
 10 ms polling and 30 ms debounce, with 100 ms startup settling. An I²C failure
 or overcurrent fault stops only this driver. Logger `hal.drivers.mpr121` records

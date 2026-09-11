@@ -8,7 +8,7 @@ Lamp supports a mechanical button, TTP223 touchpads and an optional MPR121 capac
 |---|---|---|
 | **GPIO button** | One mechanical button. Used for decisive actions including destructive ones (reboot / shutdown / factory-reset). The mechanical feel and long-hold detection make accidental destructive actions unlikely. | Both Pi 4/5 and OrangePi sun60 |
 | **TTP223 capacitive touchpad** | Two touch pads arranged as a "dog head" surface for petting + soft stop/unmute. No destructive gestures because the IC's FastMode prevents reliable hold detection. | OrangePi sun60 only (4 Pro / A733) |
-| **MPR121 capacitive touch controller** | Up to 12 electrodes; one touch-and-release session calls the shared single-click action. No double-tap or destructive hold mapping. | Lamp with an explicit I²C configuration in `mpr121.json` |
+| **MPR121 capacitive touch controller** | Up to 12 electrodes with GPIO-like click and release-to-commit hold actions, including reboot, shutdown and reset. | Lamp with an explicit I²C configuration in `mpr121.json` |
 
 ## Wiring
 
@@ -65,7 +65,7 @@ Board detection reads `/proc/device-tree/model`:
 | **Hold 5–10 s, then release** | Shutdown OS (TTS announce → release servos → `sudo shutdown -h now`). LED blinks red while armed. | n/a — TTP223 hardware cannot reliably hold (see "FastMode" below) |
 | **Hold 10 s+, then release** | Factory-reset: wipe device state + reboot into AP setup (TTS announce → release servos → POST `/api/system/factory-reset` on the OS server). LED goes solid red while armed. | n/a |
 
-Hold gestures are intentionally only on the GPIO button because the mechanical button gives unambiguous evidence of intent. The sleep and destructive hold tiers **commit on release, not on a timer firing while held**. The destructive tiers escalate from shutdown to factory-reset after 10 s (see "GPIO button detection" below).
+The table above covers GPIO and TTP223. MPR121 also supports release-to-commit holds, as detailed in its detection section; the GPIO LED feedback in this table does not apply to MPR121. The sleep and destructive hold tiers **commit on release, not on a timer firing while held**. The destructive tiers escalate from shutdown to factory-reset after 10 s (see "GPIO button detection" below).
 
 ## Interrupting Lamp while it speaks (barge-in)
 
@@ -242,25 +242,46 @@ unavailable while GPIO/TTP223 continue. Change `bus` if verified wiring uses
 a different controller, then restart HAL.
 
 After initialization, the driver allows 100 ms for sensing to settle before
-reading the initial touch state. It then polls touch status every 10 ms by default. A stable touch followed
-by a stable release of **all selected electrodes** produces one
-`single_click_action(source="MPR121")`; both transitions use the 30 ms default
-debounce. Overlapping touches across electrodes form one session. An electrode
-held at startup is ignored until release. Holding longer does not trigger
-sleep, reboot, shutdown or reset, and there is no double-tap action. The shared
-single-click behavior described above applies after release, without a
-multi-click decision window. A bounded asynchronous action worker prevents
-polling from blocking; excess taps while busy may be coalesced or dropped
-instead of accumulating a backlog. An I²C failure or MPR121 overcurrent fault
-(`OVCF`) is logged and stops this driver while the existing input handlers
-continue.
+reading the initial touch state, then polls every 10 ms by default. Touch and
+release transitions use 30 ms debounce. Overlapping touches across selected
+electrodes form one contact; release means **all selected electrodes** are
+released. A contact held at startup is ignored until release.
+
+MPR121 shares gesture thresholds from `hal/drivers/button_gestures.py` with
+GPIO (also re-exported by `button_actions.py`) and calls the existing action
+functions:
+
+| Gesture | MPR121 action |
+|---|---|
+| First short release in a click burst | `single_click_action(source="MPR121", announce=False)` immediately stops tracking/audio, unmutes as permitted and plays the ack chime. |
+| 1, 2 or 4+ short taps, then 0.4 s quiet | Play the listening cue; repeated taps do not repeat the initial single-click action. |
+| Exactly 3 short taps, then 0.4 s quiet | `triple_click_action` reboots instead of playing the listening cue. |
+| Hold 2–<5 s, then release | `hold_release_action` enters sleepy. |
+| Hold 5–<10 s, then release | `hold_release_action` shuts down. |
+| Hold ≥10 s, then release | `hold_release_action` performs factory reset. |
+
+A short contact lasts less than 2 s. The click window does not resolve while
+any selected electrode remains touched. Releasing a hold clears the pending
+click burst. Destructive actions never commit while held. MPR121 does not
+provide the GPIO button's hold-tier LED feedback.
+
+The bounded asynchronous action worker keeps polling responsive. Excess
+actions may be dropped; a newer touch, stop or hardware error
+invalidates pending older destructive actions and listening cues. An I²C
+failure or MPR121 overcurrent fault (`OVCF`) is logged and stops this driver
+while the existing input handlers continue.
+
+The hardware verification above covered the earlier single-click behavior.
+These additional click/hold mappings are verified with mocked local tests;
+they have not been deployed or exercised destructively on the live device.
 
 Operation logs use logger `hal.drivers.mpr121` in the normal HAL log/journal;
 there is no separate raw trace file. INFO entries cover initialization and
 configuration (bus, address, electrodes, thresholds and timing), per-electrode
 raw touch/release changes, debounced transitions, suppressed startup touches,
-tap queueing/coalescing, action begin/end and lifecycle. `tap_id` correlates
-accepted taps with queued, coalesced or executed actions. Failures include
+click counts, hold duration/tier, action queueing/discarding, action begin/end
+and lifecycle. `gesture_id` correlates a click burst or hold with queued,
+discarded or executed actions. Failures include
 error logs. Unchanged 10 ms polls produce no INFO entry, so idle operation does not
 flood the log. Follow the service log with `journalctl -u hal.service -f` and
 filter for `hal.drivers.mpr121` when investigating a missed or duplicate tap.
@@ -291,7 +312,7 @@ After a session ends:
 
 **On by default** since 2026-08-27, after hands-on validation on orange-lamp across tap, fast and slow double tap, pet and swipe. Setting `HAL_TOUCH_SWIPE=false` restores the two-gesture behaviour in one step and without a redeploy — that is the rollback if a field unit misbehaves.
 
-Turning it on means a double tap toggles the **microphone** and a swipe **sleeps** the device. Both are reversible (double tap again; one tap wakes), and nothing destructive is reachable here — FastMode cannot measure a hold, so reboot / shutdown / factory-reset stay on the mechanical button.
+Turning it on means a double tap toggles the **microphone** and a swipe **sleeps** the device. Both are reversible (double tap again; one tap wakes), and nothing destructive is reachable here — FastMode cannot measure a hold, so TTP223 cannot trigger reboot / shutdown / factory-reset; those gestures are provided by the mechanical button and MPR121.
 
 **The signal is *when* pads fire, not which.** Device-measured on orange-lamp, 2026-08-27 — inter-pad gaps inside a single contact:
 
@@ -442,7 +463,8 @@ Phrases are intentionally short — they fire mid-stroke and need to feel respon
 | `hal/board/ttp223.py` | Device-owned TTP223 configuration loader with legacy fallback |
 | `hal/drivers/ttp223.py` | TTP223 capacitive touchpad handler (OrangePi sun60 only) |
 | `hal/board/mpr121.py` | Device-owned MPR121 configuration loader and validation |
-| `hal/drivers/mpr121.py` | Optional I²C MPR121 touch-and-release handler |
+| `hal/drivers/mpr121.py` | Optional I²C MPR121 click/hold handler |
+| `hal/drivers/button_gestures.py` | Shared GPIO/MPR121 gesture thresholds |
 | `hal/drivers/button_actions.py` | Shared action functions + localized phrase pools |
 | `hal/presets.py` | Language code constants (`LANG_EN`, etc.) |
 | `hal/test_ttp223_probe_orangepi.py` | Standalone pad probe (stdlib ioctl, no gpiod). `info` reads line state with HAL running; `watch` maps pad→line and needs `hal.service` stopped. Lines come from the selected device’s `ttp223.json`, with the same legacy board-profile fallback as HAL. Select the device with `--device-type`. |
