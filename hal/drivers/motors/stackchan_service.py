@@ -268,12 +268,14 @@ class _BodyGateway:
                 if self._connection is not None and not self._connection.closed:
                     socket.close(code=1008, reason="device already connected")
                     return
+                # Publish only after acceptance is on the wire. HAL callers
+                # cannot send commands while the firmware is still handshaking.
+                socket.send(json.dumps({
+                    "v": PROTOCOL_VERSION,
+                    "type": "hello.accepted",
+                    "device_id": self.device_id,
+                }, separators=(",", ":")))
                 self._connection = connection
-            socket.send(json.dumps({
-                "v": PROTOCOL_VERSION,
-                "type": "hello.accepted",
-                "device_id": self.device_id,
-            }, separators=(",", ":")))
             logger.info("[stackchan] authenticated firmware connected (%s)", self.device_id)
             for raw in socket:
                 connection.deliver(_json_object(raw))
@@ -297,12 +299,13 @@ class _BodyGateway:
 class _BodyTransport:
     """Serialize HAL operations through the firmware controller lease."""
 
-    def __init__(self, gateway: _BodyGateway, timeout: float, lease_ttl_ms: int):
+    def __init__(self, gateway: _BodyGateway, timeout: float, lease_ttl_ms: int, safety_policy: Any = None):
         if not 0 < timeout <= 10:
             raise ValueError("command timeout must be between 0 and 10 seconds")
         if not 250 <= lease_ttl_ms <= 5000:
             raise ValueError("lease TTL must be between 250 and 5000 milliseconds")
         self._gateway = gateway
+        self._safety_policy = safety_policy
         self._timeout = timeout
         self._ttl = lease_ttl_ms
         self._session = uuid.uuid4().hex
@@ -339,7 +342,7 @@ class _BodyTransport:
 
     def _read_positions(self) -> dict[str, float]:
         result = self._request("motion.get", sequenced=False).get("result", {})
-        positions = result.get("positions")
+        positions = result.get("positions") if isinstance(result, dict) else None
         if not isinstance(positions, dict):
             raise StackChanTransportError("Stack-chan returned invalid measured positions")
         pan = positions.get("pan")
@@ -403,6 +406,22 @@ class _BodyTransport:
         verify_measured_target: bool = False,
     ) -> bool:
         self._acquire()
+        if self._safety_policy is not None:
+            if verify_measured_target:
+                # A release may supersede interpolation still running on the
+                # firmware. Pin it before measuring the start of the rest move.
+                self._request("motion.halt")
+                self._acquire()
+            duration = min_move_duration(
+                self._safety_policy,
+                self._expected_positions(native),
+                self._read_positions(),
+                duration,
+            )
+            if not math.isfinite(duration) or duration > _MAX_MOVE_DURATION_S:
+                raise StackChanTransportError("safe move duration exceeds the 60 second limit")
+        # Round up so wire quantization cannot shorten a safety-stretched move.
+        duration = math.ceil(duration * 1000) / 1000
         self._request("motion.move", {
             "motion": native,
             "duration_ms": round(duration * 1000),
@@ -564,7 +583,7 @@ class StackChanMotionService:
             "STACKCHAN_BODY_LEASE_TTL_MS", 1500, 250, 5000
         )
         self._gateway = _BodyGateway(self._device_id, self._token)
-        self._transport = _BodyTransport(self._gateway, timeout, ttl)
+        self._transport = _BodyTransport(self._gateway, timeout, ttl, safety_policy)
         self._server: Optional[Server] = None
         self._server_thread: Optional[threading.Thread] = None
         self._state_lock = threading.RLock()

@@ -234,6 +234,22 @@ tracking-session riêng không thể nhả quyền của owner khác. Ownership 
 phối gaze và emotion trong HAL, tách biệt với controller lease của firmware.
 Nó không ngăn owner điều khiển chuyển động và không chặn đường halt luôn sẵn có.
 
+Transport Stack-chan kiểm tra lại mọi chuyển động có thời lượng dựa trên vị trí
+đo được và `motion.max_speed`, bao gồm về zero và gravity-rest. Khi release thay
+thế chuyển động đang chạy, driver halt-hold trước khi đo tư thế bắt đầu. Nếu
+không đọc được vị trí hoặc thời lượng an toàn vượt 60 giây, driver báo lỗi và
+không gửi chuyển động. Gateway chỉ công bố kết nối sau khi gửi `hello.accepted`,
+để lệnh chuyển động không vượt trước handshake.
+
+[Repo tích hợp Stack-chan](https://github.com/glifocat/stackchan-autonomous/tree/9a5209596b97c257b6b2c1f6ff6bec91c44f8112)
+cung cấp firmware patch và HTTP bridge độc lập. Demo Docker không khởi động
+`hal.server`, nên không phải test startup cho driver này. HAL đầy đủ vẫn cần
+profile khai báo `motion.driver: stackchan` và board của host. Firmware đã đối
+chiếu trả `completed` với state `scheduled` khi cài lịch chuyển động, chưa có
+nghĩa thân máy đã đến đích; `motion.halt` xóa lease, nên host acquire lại trước
+chuyển động tiếp theo. Việc khớp source không chứng minh qualification phần
+cứng hoặc xác định firmware thực tế đã flash trên thiết bị.
+
 Driver Stack-chan vẫn ở giai đoạn thử nghiệm. Trước khi qualification thiết bị:
 
 - Xác định và pin bản firmware tương thích có các motion capability bắt buộc;

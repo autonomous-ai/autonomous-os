@@ -983,3 +983,16 @@ replay. Xác thực bị từ chối không được đánh dấu kết nối s�
 RAM, không tồn tại qua restart tiến trình os-server. OpenClaw giữ cơ chế tương
 quan idempotency key/history riêng; thay đổi này không đưa bộ chặn output CLI
 và cách ly session của Codex vào transport OpenClaw.
+
+### HAL trên host cho Stack-chan (thử nghiệm)
+
+Máy tính có thể chạy driver HAL Stack-chan thật với `HAL_BOARD=host`,
+`DEVICE_TYPE=stackchan`, `DEVICES_DIR=<repo>/robots/_experimental` và
+`HAL_SIMULATE=0`. Board `host` được chọn tường minh, không có matcher device-tree
+và bỏ qua khởi tạo GPIO button, privacy button, touch và MPR121 cục bộ. Nó không
+thay driver chuyển động bằng mock. Profile vẫn quyết định các route được mount.
+Profile thử nghiệm chỉ khai báo motion và system, được loại khỏi discovery
+thiết bị thông thường và chưa phải bản phát hành compatibility/OTA đầy đủ.
+Xem [khởi động host và cấu hình firmware](../../robots/_experimental/stackchan/docs/vi/runtime_vi.md).
+HAL client hiện tại của OS kết nối `http://127.0.0.1:5001`, nên chạy HAL cùng
+host với os-server. ESP32 kết nối vào listener WSS riêng của HAL.

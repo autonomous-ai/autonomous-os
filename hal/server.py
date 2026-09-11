@@ -1317,22 +1317,22 @@ def _thermal_view():
 # mount any actuating route (raw match, so the default_board fallback can't mask
 # an unsupported board).
 from hal.board.board import assert_board_supported
-# Simulation has no physical wiring. HAL_BOARD=sim selects the inert board
-# profile used by common driver construction paths and is accepted only while
-# HAL_SIMULATE is set.
+# Simulation has no physical wiring and uses the inert sim board. A remote
+# body may instead explicitly declare HAL_BOARD=host while keeping its real
+# network driver. Neither board initializes local GPIO peripherals.
 _board_id = assert_board_supported([] if _simulation else _profile.boards)
 logger.info("Board gate: device=%s board=%s declared=%s", _resolve_device_type(), _board_id, _profile.boards)
 
 from hal.board.gpio_button import load_button_configs
 
 _gpio_button_configs = (
-    [] if _board_id == "sim" else load_button_configs(_device_dir, _board_id)
+    [] if _board_id in {"sim", "host"} else load_button_configs(_device_dir, _board_id)
 )
 
 from hal.board.privacy_button import load_privacy_button_config
 
 _privacy_button_config = (
-    None if _board_id == "sim" else load_privacy_button_config(
+    None if _board_id in {"sim", "host"} else load_privacy_button_config(
         _device_dir, _board_id, _resolve_device_type(),
     )
 )
@@ -1340,7 +1340,7 @@ _privacy_button_config = (
 from hal.board.mpr121 import load_mpr121_config
 
 _mpr121_config = (
-    None if _board_id == "sim" else load_mpr121_config(_device_dir, _board_id)
+    None if _board_id in {"sim", "host"} else load_mpr121_config(_device_dir, _board_id)
 )
 
 _environment_group = None
@@ -1355,7 +1355,7 @@ else:
 from hal.board.ttp223 import load_touch_config
 
 _ttp223_config = (
-    None if _board_id == "sim" else load_touch_config(_device_dir, _board_id)
+    None if _board_id in {"sim", "host"} else load_touch_config(_device_dir, _board_id)
 )
 
 from hal.board.device import plan_mounts

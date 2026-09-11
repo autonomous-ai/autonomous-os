@@ -17,6 +17,7 @@ from hal.drivers.motors.stackchan_service import (
     StackChanMotionService,
     StackChanTransportError,
     _BodyTransport,
+    _BodyGateway,
 )
 
 
@@ -510,6 +511,96 @@ class TestBodyTransport(unittest.TestCase):
 
         operations = [message["op"] for message in gateway.connection_value.messages]
         self.assertEqual(operations, ["lease.acquire", "motion.halt"])
+
+    def test_zero_and_release_obey_speed_limit_at_transport_boundary(self):
+        policy = SimpleNamespace(motion=SimpleNamespace(max_speed=5))
+        for operation in ("zero_pose", "release"):
+            with self.subTest(operation=operation):
+                gateway = _FakeGateway()
+                gateway.connection_value.positions = {"pan": 30.0, "tilt": 15.0}
+                service = StackChanMotionService(
+                    safety_policy=policy,
+                    device_id="stackchan-test",
+                    token=TOKEN,
+                    allow_insecure_ws=True,
+                )
+                self.assertIs(service._transport._safety_policy, policy)
+                service._transport._gateway = gateway
+                result = getattr(service, operation)()
+                if operation == "release":
+                    self.assertEqual(result, {})
+                messages = gateway.connection_value.messages
+                move = next(m for m in messages if m["op"] == "motion.move")
+                self.assertEqual(move["args"]["duration_ms"], 6000)
+                ops = [m["op"] for m in messages]
+                self.assertLess(ops.index("motion.get"), ops.index("motion.move"))
+                if operation == "release":
+                    self.assertLess(ops.index("motion.halt"), ops.index("motion.get"))
+                    self.assertEqual(ops[-1], "motion.release")
+
+    def test_unsafe_duration_or_invalid_measurement_does_not_send_move(self):
+        policy = SimpleNamespace(motion=SimpleNamespace(max_speed=1))
+        for pan in (100.0, float("nan")):
+            with self.subTest(pan=pan):
+                gateway = _FakeGateway()
+                gateway.connection_value.positions["pan"] = pan
+                transport = _BodyTransport(gateway, 1.0, 1000, policy)
+                with self.assertRaises(StackChanTransportError):
+                    transport.move({"yawServo": {"angle": 0, "speed": 1000}}, 0.05)
+                self.assertNotIn("motion.move", [m["op"] for m in gateway.connection_value.messages])
+                self.assertEqual(gateway.closed, ["motion failed"])
+
+    def test_malformed_position_result_fails_closed(self):
+        policy = SimpleNamespace(motion=SimpleNamespace(max_speed=5))
+        gateway = _FakeGateway()
+        transport = _BodyTransport(gateway, 1.0, 1000, policy)
+        original = gateway.connection_value.request
+
+        def request(message, timeout):
+            if message["op"] == "motion.get":
+                return {"status": "completed", "result": None}
+            return original(message, timeout)
+
+        with patch.object(gateway.connection_value, "request", side_effect=request):
+            with self.assertRaisesRegex(StackChanTransportError, "invalid measured positions"):
+                transport.move({"yawServo": {"angle": 0, "speed": 1000}}, 0.05)
+        self.assertEqual(gateway.closed, ["motion failed"])
+        self.assertNotIn("motion.move", [m["op"] for m in gateway.connection_value.messages])
+
+    def test_handshake_acceptance_precedes_connection_publication(self):
+        gateway = _BodyGateway("stackchan-test", TOKEN)
+        observed = []
+        test = self
+
+        class Socket:
+            request = SimpleNamespace(
+                path="/stackchan/body/v1",
+                headers={"Authorization": f"Bearer {TOKEN}"},
+            )
+
+            def recv(self, timeout):
+                return json.dumps({
+                    "v": 1, "type": "hello", "device_id": "stackchan-test",
+                    "capabilities": [
+                        "motion.pan_tilt", "motion.measured_position", "motion.halt_hold",
+                        "motion.torque_release", "motion.timed_move",
+                    ],
+                })
+
+            def send(self, raw):
+                observed.append(json.loads(raw)["type"])
+                # Another HAL thread cannot obtain a published connection
+                # until the acceptance send has finished.
+                test.assertIsNone(gateway._connection)
+                test.assertTrue(gateway._lock.locked())
+
+            def __iter__(self):
+                test.assertTrue(gateway.connected)
+                return iter(())
+
+        gateway.handle(Socket())
+        self.assertEqual(observed, ["hello.accepted"])
+        self.assertFalse(gateway.connected)
 
     def test_tls_is_required_without_explicit_development_opt_in(self):
         with self.assertRaisesRegex(ValueError, "requires TLS"):

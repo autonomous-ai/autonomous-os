@@ -247,6 +247,22 @@ coordination for gaze and emotion routes, distinct from the firmware controller
 lease. It does not prevent the owner from moving or bypass the always-available
 halt path.
 
+The Stack-chan transport rechecks every timed move against measured position
+and `motion.max_speed`, including zero and gravity-rest moves. A superseding
+release halt-holds before measuring its start pose. Unreadable position or a
+required duration over 60 seconds fails closed without sending the move. The
+gateway publishes a connection only after sending `hello.accepted`, so motion
+commands cannot overtake the handshake.
+
+The companion [Stack-chan integration repository](https://github.com/glifocat/stackchan-autonomous/tree/9a5209596b97c257b6b2c1f6ff6bec91c44f8112)
+ships firmware patches and a separate standalone HTTP bridge. Its Docker demo
+does not boot `hal.server` and is not a startup test for this driver. Full HAL
+still needs a device profile declaring `motion.driver: stackchan` and the host
+board. The inspected firmware returns `completed` with state `scheduled` when
+it installs a timed move, not when the body arrives; `motion.halt` clears the
+lease, so the host reacquires it before the next move. Source agreement does
+not establish physical qualification or identify the firmware flashed on a body.
+
 The Stack-chan driver remains experimental. Before device qualification:
 
 - Identify and pin a matching firmware build with the required motion
