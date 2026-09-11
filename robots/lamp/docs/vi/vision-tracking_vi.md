@@ -661,6 +661,25 @@ nhánh này — pha ngắm đã tìm rồi **thất bại** cũng không nói g�
 Một lần chụp nhanh, im lặng và đúng vốn đã là kết quả tốt — lời nói chỉ dành cho những khoảnh khắc người
 dùng thực sự phải chờ.
 
+**Hai kiểu một pool im tiếng mà không hề báo lỗi**, cả hai đều đã được sửa tận gốc chứ không né:
+
+- **Một key thiếu trong một ngôn ngữ đã biết** trước đây phân giải ra rỗng. `FillerForTool` chỉ lùi về
+  tiếng Anh khi *ngôn ngữ* không xác định, chứ không bao giờ lùi khi *key* thiếu bên trong một ngôn ngữ
+  đã biết — mà hai map zh lại hoàn toàn không có entry `look_*` nào, nên mọi filler của look trên một
+  thiết bị tiếng Trung đều bị bỏ qua, không log, không lỗi. Giờ cả hai map zh đều có đủ pool, và một
+  key thiếu ở bất kỳ đâu sẽ lùi về tiếng Anh. Một câu tiếng Anh trên thiết bị tiếng Trung là sai,
+  nhưng là cái sai *phát ra thành tiếng*: sẽ có người nghe thấy và báo lại, còn im lặng thì vô hình.
+  `TestEveryPoolIsTranslatedInEveryLanguage` giữ cho cơ chế lùi này không trở thành đường đi mặc định.
+- **Một pool chưa từng được prewarm** sẽ phải render trực tiếp ở nhà cung cấp TTS ngay lần phát đầu
+  (~1–2 s), và đoạn audio trễ đó đua với phần lời nói ngay sau nó — người dùng cảm nhận như filler bị
+  cắt ngang. `PrewarmFillers` trước đây duyệt một danh sách tên tool bảo trì thủ công mà không pool
+  `look_*` nào từng được thêm vào. Giờ nó duyệt `i18n.AllPoolKeys()`, nên một pool mới được phủ sẵn
+  nhờ chính sự tồn tại của nó.
+
+Không kiểu nào trong hai kiểu trên báo gì ở bất kỳ mức log nào: `PlayPoolFillerNow` return ngay tại
+`len(phrases) == 0` còn `POST /api/sensing/filler` thì vẫn trả 200 trong cả hai trường hợp. Một pool
+phân giải ra rỗng đơn giản là một cái đèn không nói gì.
+
 ## Canh khung gaze — giữ user trong khung hình
 
 Mọi thứ ở trên đều là do được yêu cầu: một lệnh nhìn, một phiên track, một lần tìm. Phần này là

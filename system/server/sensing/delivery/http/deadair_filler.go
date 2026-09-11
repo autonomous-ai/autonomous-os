@@ -248,15 +248,14 @@ func PrewarmFillers() {
 	// runs) hits ElevenLabs live (~1-2s render) and the resulting late
 	// audio races against the assistant TTS that follows — user perceives
 	// it as the filler getting cut off / TTS being suppressed.
-	// Flatten every tool override across all langs so prerender covers the
-	// pool for the currently-active lang (poolsForLang via i18n).
-	for _, tool := range []string{
-		"web_search", "x_search", "web_fetch", "read", "memory_search",
-		"memory_get", "exec", "process", "image_generate", "video_generate",
-		"music_generate", "update_plan", "session_status", "apply_patch",
-		"pdf", "canvas", "nodes", "subagents", "image",
-	} {
-		all = append(all, i18n.FillerForTool(lang, tool)...)
+	//
+	// Enumerated from the pool maps rather than from a list maintained by hand
+	// here. The hand-maintained version had already fallen behind twice: every
+	// look_* pool was missing from it, and so would the demo_* pools have been.
+	// A pool left out does not fail — it just renders late, on the one fire
+	// where the timing matters most.
+	for _, pool := range i18n.AllPoolKeys() {
+		all = append(all, i18n.FillerForTool(lang, pool)...)
 	}
 	all = append(all, intent.CacheableReplies...)
 	// Dedup so overlapping phrases (e.g. between a tool pool and the

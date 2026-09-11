@@ -663,6 +663,24 @@ wrong until this branch — neither does an aim that searched and **failed**, wh
 A fast, silent, correct capture is already the good outcome — speech is reserved for the moments the
 user is genuinely left waiting.
 
+**Two ways a pool goes quiet without failing**, both fixed rather than worked around:
+
+- **A key missing from a known language** used to resolve to nothing. `FillerForTool` fell back to
+  English only for an unknown *language*, never for a missing *key* inside a known one — and the zh
+  maps carried no `look_*` entries at all, so every look filler on a Chinese device was dropped with
+  no log line and no error. Both zh maps now carry the pools, and a key missing anywhere falls back
+  to English. An English phrase on a Chinese device is wrong, but wrong *out loud*: somebody hears it
+  and reports it, where silence is invisible. `TestEveryPoolIsTranslatedInEveryLanguage` keeps the
+  fallback from becoming the normal path.
+- **A pool that was never prewarmed** renders live at the TTS provider on its first fire (~1–2 s) and
+  the late audio races the speech after it — which the user perceives as the filler being cut off.
+  `PrewarmFillers` used to walk a hand-maintained list of tool names that no `look_*` pool was ever
+  added to. It now enumerates `i18n.AllPoolKeys()`, so a new pool is covered by existing.
+
+Neither failure mode reports anything at any level: `PlayPoolFillerNow` returns at `len(phrases) == 0`
+and `POST /api/sensing/filler` answers 200 either way. A pool that resolves empty is a lamp that
+simply does not speak.
+
 ## Gaze framing — keeping the user in shot
 
 Everything above is asked for: a look, a track, a search. This section is the watcher in
