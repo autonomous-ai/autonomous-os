@@ -20,6 +20,7 @@ import (
 	"go.autonomous.ai/os/system/ambient"
 	"go.autonomous.ai/os/system/device"
 	"go.autonomous.ai/os/system/domain"
+	"go.autonomous.ai/os/system/environment"
 	"go.autonomous.ai/os/system/harness"
 	"go.autonomous.ai/os/system/healthwatch"
 	"go.autonomous.ai/os/system/lib/hal"
@@ -360,6 +361,7 @@ func (s *Server) Serve(closeFn func()) error {
 	system.GET("ota-updating", s.otaUpdating)
 	system.POST("software-update/:target", adminAuthMiddleware(s.config), s.softwareUpdate)
 	system.POST("reboot", adminAuthMiddleware(s.config), systemshell.Reboot)
+	system.POST("restart/:target", adminAuthMiddleware(s.config), serviceRestartHandler(restartCommand))
 	system.POST("shutdown", adminAuthMiddleware(s.config), systemshell.Shutdown)
 	system.POST("factory-reset", adminOrLoopbackAuth(s.config), func(c *gin.Context) {
 		systemshell.FactoryReset(c, s.agentGateway)
@@ -590,6 +592,7 @@ func (s *Server) Serve(closeFn func()) error {
 	// agent's own shell tool, and it moves hardware and spends a vision-model
 	// call. See lookAndDescribe in vision.go.
 	api.POST("vision/look", localOnlyMiddleware(), s.lookAndDescribe)
+	api.GET("environment/status", localOnlyMiddleware(), s.environmentStatus)
 
 	logs := api.Group("logs")
 	logs.GET("tail", adminAuthMiddleware(s.config), s.logTail)
@@ -649,6 +652,13 @@ func (s *Server) Serve(closeFn func()) error {
 		}
 		slog.Warn("notice prerender never succeeded — notice will self-warm on first successful fire", "component", "server")
 	})
+
+	go environment.Service{
+		Settings:  s.config.EnvironmentSettings,
+		Available: s.environmentAvailable,
+		Read:      hal.GetEnvironmentStatusContext,
+		Send:      environment.HTTPSender(fmt.Sprintf("http://127.0.0.1:%d/api/sensing/event", s.config.HttpPort)),
+	}.Run(eventCtx)
 
 	go func() {
 		if err := srv.ListenAndServe(); err != nil {

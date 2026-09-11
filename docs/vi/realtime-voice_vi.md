@@ -11,6 +11,23 @@ Code nằm ở `hal/realtime/`; được điều khiển bởi
 
 > **Nguồn chân lý:** doc phản ánh code. Nếu lệch nhau, code đúng.
 
+## Telemetry xác nhận thực thi xong
+
+Với [KPI-3 giọng nói](voice-metrics_vi.md#kpi-3-chạy-xong-không-đánh-giá-làm-đúng),
+`TurnDoneEvent.execution_completed` mặc định `false`, chỉ thành true khi có
+tín hiệu kết thúc từ provider: Gemini `generation_complete` hoặc
+`turn_complete` bình thường, không interrupted; OpenAI/Qwen `response.done`
+với `response.status == "completed"`. Đóng kết nối, lỗi gửi, sentinel mở chặn,
+output dở dang rồi timeout, done cũ/phát lại, hoặc bỏ receive không phải bằng
+chứng chạy xong.
+
+Receive loop ở base truyền quan sát tới orchestrator; orchestrator snapshot
+trước khi tái tạo session rồi truyền vào
+`RealtimeTurnResult.execution_completed`. HAL chỉ phát `realtime_turn_done`
+khi turn handled và cờ này true. Run backend đồng bộ memory không chứng minh
+turn realtime đã chạy xong. Phần đo xác nhận kết thúc thực thi, không đánh giá
+trả lời đúng hay phát hết audio; không thay đổi routing hoặc hành vi playback.
+
 ## Khái niệm: handle vs. delegate
 
 Mỗi lượt nói được stream tới model realtime *cùng lúc* với pipeline STT. Cuối
@@ -1138,7 +1155,7 @@ live. Đây là đánh đổi sản phẩm, không phải lỗi:
 | transcript STT | không có `[TURN CONTEXT]`, không có bộ lọc dựa trên transcript |
 | wake word | được xác nhận từ text STT, nên `HAL_WAKEWORD_ENABLED` không có tác dụng ở chế độ live — vào phiên chỉ bằng VAD |
 | speaker ID, cảm xúc giọng nói | một phiên không tạo ra cả hai |
-| fallback về main agent | `delegate_to_main` vẫn tới, nhưng không có transcript để chuyển tiếp và không có chỗ đặt câu trả lời giữa phiên |
+| STT cục bộ khi delegate | `delegate_to_main` kết thúc phiên và chuyển tiếp `[voice-instruction]` + transcript đầu vào của chính Gemini làm `[transcript]` (`FunctionCallOutput.user_transcript` → `DelegateSignal.transcript`, `_live_out_pump` đọc); câu trả lời của main agent phát sau khi cúp máy. Provider không có input transcription chỉ chuyển tiếp instruction |
 
 Cũng không chạy bên trong một phiên: cổng RMS vào, `SPEECH_HOLDOFF_S`, đồng hồ im
 lặng, `MAX_SESSION_DURATION_S`, socket STT mỗi lượt và keepalive của nó (thậm chí

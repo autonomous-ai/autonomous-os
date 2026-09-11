@@ -1,30 +1,107 @@
-# Điều khiển vật lý — Nút GPIO + Touchpad TTP223
+# Điều khiển vật lý — Nút GPIO, TTP223 và MPR121
 
-Lamp có hai thiết bị input vật lý mà user có thể chạm trực tiếp. Chúng dùng chung thư viện action (`hal/drivers/button_actions.py`) nên cùng một cử chỉ "single click" sẽ hành xử giống nhau dù đến từ nút bấm cơ học hay touchpad cảm ứng.
+Lamp hỗ trợ các nút cơ học, touchpad TTP223 và bộ điều khiển cảm ứng điện dung MPR121 tùy chọn. Chúng dùng chung thư viện action (`hal/drivers/button_actions.py`) nên cùng một cử chỉ "single click" sẽ hành xử giống nhau dù đến từ nút bấm cơ học hay touchpad cảm ứng.
 
-## Tại sao có hai thiết bị
+## Thiết bị đầu vào
 
 | Thiết bị | Vai trò | Có ở |
 |---|---|---|
-| **Nút GPIO** | Một nút bấm cơ. Dùng cho các hành động dứt khoát kể cả destructive (reboot / shutdown / factory-reset). Cảm giác cơ + detect giữ lâu khiến destructive action khó xảy ra do vô tình. | Pi 4/5 và OrangePi sun60 |
+| **Nút GPIO** | Nút cơ chính cho click và giữ, thêm nút reset riêng trên OrangePi. Action giữ destructive chỉ thực hiện khi nhả. | Pi 4/5 và OrangePi sun60 |
 | **Touchpad cảm ứng TTP223** | Hai pad chạm xếp như "đầu cún" để vuốt ve + stop/unmute nhẹ. Không có destructive gesture vì FastMode của IC không cho detect giữ lâu tin cậy. | Chỉ OrangePi sun60 (4 Pro / A733) |
+| **Bộ điều khiển cảm ứng MPR121** | Tối đa 12 electrode, hỗ trợ click và giữ rồi nhả như GPIO, gồm reboot, shutdown và reset. | Lamp khai báo cấu hình I²C cụ thể trong `mpr121.json` |
 
 ## Wiring
 
 | Thiết bị | Pi 4/5 | OrangePi sun60 |
 |---|---|---|
-| Nút GPIO | gpiochip0 BCM 17 (pull-up, active-LOW) | gpiochip1 line 9 (pull-up, active-LOW) |
-| TTP223 | không wire | gpiochip0 line 96 / 100, **pull-up, active-LOW** (pad nghỉ ở mức HIGH; chạm là edge xuống). Pad giữa trên line 98 đã bị bỏ ngày 2026-08-28. |
+| Nút GPIO chính | gpiochip0 BCM 17 (pull-up, active-LOW) | Pin vật lý 37 / PD4 / gpiochip0 line 100 (pull-up, active-LOW) |
+| Nút GPIO reset | không wire | Pin vật lý 35 / PD3 / gpiochip0 line 99 (pull-up, active-LOW); giữ ≥5 s rồi nhả để factory-reset |
+| Công tắc gạt mic | không wire | Pin vật lý 11 / PL9 / gpiochip1 line 9; pull-up, LOW=mute, HIGH=unmute |
+| TTP223 | không wire | Hai pad: S1 tại pin vật lý 29 / PD0 / gpiochip0 line 96; S3 tại pin vật lý 33 / PD2 / gpiochip0 line 98. **Pull-up, active-LOW** (pad nghỉ ở mức HIGH; chạm là edge xuống). |
 
-Cả hai handler đều detect board qua `/proc/device-tree/model`:
+Wiring nút cơ thuộc về từng device: `robots/lamp/gpio_button.json` và
+`robots/intern-v2/gpio_button.json` đều khai báo map `boards` với các key
+`raspberry_pi_4`, `raspberry_pi_5`, `orangepi_sun60`. Entry hỗ trợ dạng phẳng
+cũ `chip`, `line`, `debounce_ns` hoặc list `buttons`. Entry OrangePi của Lamp:
+
+```json
+{
+  "buttons": [
+    {"name": "primary", "chip": 0, "line": 100, "debounce_ns": 200000000, "behavior": "standard"},
+    {"name": "factory_reset", "chip": 0, "line": 99, "debounce_ns": 200000000, "behavior": "factory_reset", "hold_s": 5}
+  ]
+}
+```
+
+JSON của Intern v2 giữ nguyên, với gpiochip1 line 9 trên OrangePi.
+Khi đổi wiring, sửa file của device tương ứng rồi restart HAL; hệ thống không
+tự phát hiện đổi dây cắm. HAL xác định thư mục qua `DEVICES_DIR` và
+`DEVICE_TYPE`. `load_button_configs` cấp cấu hình cho mỗi instance driver
+dùng chung; HAL dừng tất cả instance khi cleanup. `load_button_config` vẫn
+tương thích với caller chỉ cần nút đầu tiên (nút chính trong cấu hình Lamp). Cấu hình device được ưu tiên.
+Thiếu file hoặc entry board thì fallback về đúng một nút mặc định `button`
+cũ trong `hal/board/boards.json`: chip 0 / line 17 cho Pi 4, Pi 5, CM4 và
+sim; chip 1 / line 9 cho OrangePi sun60; tất cả debounce 200 ms. Config sai,
+tên trùng hoặc cặp chip/line trùng bị từ chối trước khi claim GPIO. Mô phỏng
+bỏ qua các nút phần cứng. Pull-up, active-LOW và nhận diện cử chỉ vẫn ở driver
+dùng chung.
+
+Wiring TTP223 cũng do device quản lý: `robots/lamp/ttp223.json` khai báo
+map `boards`. Intern v2 không có phần cứng TTP223 nên không kèm file này. Mỗi entry bật có `chip`,
+`lines` và `axis` tùy chọn (cùng các line đó theo thứ tự vật lý trái sang phải).
+`hal/board/ttp223.py` chọn board đã detect và truyền `TouchConfig` cho driver
+dùng chung. Thiếu file hoặc entry board thì fallback về `touch` cũ của board
+trong `hal/board/boards.json` (OrangePi: chip 0, line 96/100);
+`"enabled": false` tắt TTP223 rõ ràng. Config sai bị từ chối trước khi claim
+GPIO. Restart HAL sau khi sửa JSON của device được chọn. Pull-up, active-LOW
+và nhận diện cử chỉ vẫn ở driver dùng chung; mô phỏng bỏ qua phần cứng.
+
+Hardware xác nhận hai pad: S1 ở pin 29 (line 96), S3 ở pin 33 (line 98).
+JSON của Lamp dùng hai line này, dành pin 37 (line 100) cho nút cơ. Fallback
+cũ vẫn dùng line 96/100; cần giữ JSON của Lamp trên device để tránh trùng chân cũ.
+
+Board được detect qua `/proc/device-tree/model`:
 - `"sun60iw2"` → OrangePi 4 Pro / A733
 - `"raspberry pi 5"` → Pi 5
 - `"raspberry pi 4"` → Pi 4
-- khác → unknown, cả hai handler bỏ qua không claim GPIO
+- phần cứng không nhận diện được hoặc không được hỗ trợ → bị board gate từ chối khi HAL khởi động
+
+### Công tắc gạt microphone
+
+`robots/lamp/privacy_button.json` khai báo chip 1 / line 9 trong `orangepi_sun60`,
+với `settle_s: 0.06`, `muted_level: 0`, `watchdog_s: 30`. Driver dùng chung
+`privacy_button.py` theo dõi vị trí công tắc, đồng bộ lúc boot và thực hiện mute/unmute
+sau khi tiếp điểm ổn định. Watchdog chỉ đồng bộ lại khi GPIO đổi mức, giữ mute
+bằng phần mềm khi công tắc đứng yên. Intern v2 không có JSON mic, giữ fallback
+chip 0 / line 97 cũ trong code. Lamp thiếu JSON này vẫn tắt mic switch. Cần giữ
+JSON nút chính của Lamp để fallback pin 11 cũ không trùng công tắc này.
+Cấu hình mic Lamp đã deploy ngày 2026-09-11; startup xác nhận chip1/line9 ready
+và LOW ban đầu áp dụng mute. Chờ live test thao tác gạt.
+
+#### Các thiết bị được khóa bởi privacy trên Lamp
+
+`privacy_button.json` đặt `disable_camera_on_mute: true` và
+`mute_speaker_on_mute: true`. Toggle pin 11 vì vậy mute mic, dừng capture camera
+và dừng/chặn phát speaker (TTS, nhạc và backchannel). Đèn đỏ mic-muted hiện có
+tiếp tục làm đèn báo privacy.
+
+Khi khóa, camera enable/snapshot và speaker unmute trả HTTP 409; camera stream,
+realtime look, scene/wake và việc tạm bật camera để chụp không thể mở lại camera
+hay speaker. Các consumer capture không đọc được frame camera lưu đệm. Lúc HAL
+khởi động, các thiết bị đã cấu hình vẫn khóa cho tới khi đồng bộ GPIO; lỗi
+đọc/claim ban đầu thì tiếp tục giữ privacy khóa.
+
+Mở khóa dùng luồng wake/listening microphone hiện có và khôi phục camera/speaker
+về trạng thái trước đó. Camera hoặc speaker đã tắt trước khi khóa thì vẫn tắt;
+lệnh tắt thủ công trong lúc khóa cũng được giữ lại. Cue listening chỉ phát khi
+speaker khôi phục về unmute. Tùy chọn được giữ qua restart HAL trong cùng boot,
+không lưu khóa privacy tạm thời thành mute thủ công. Hai tùy chọn mặc định false
+cho device khác; Intern giữ fallback chỉ mute mic, không cần JSON.
+Cập nhật HAL trước khi upload JSON có các trường mới này.
 
 ## Bảng cử chỉ
 
-| Cử chỉ | Nút GPIO | Touchpad TTP223 |
+| Cử chỉ | Nút GPIO chính | Touchpad TTP223 |
 |---|---|---|
 | **1 chạm** | Dừng object tracking đang chạy, rồi stop loa / unmute mic + speaker + chime ack (~120 ms ping) — tất cả fire ngay khi nhả nút (không đợi click window); cue "Nghe đây" phát sau khi click window 0.4 s phân giải xong | Tương tự sau khi quyết định tap-vs-pet 1.2 s xong — tracking đang chạy dừng, rồi action mic/loa và cue chạy. Chạm đầu tiên vẫn cắt TTS đang phát và kêu chime ack ngay. |
 | **2 chạm** (≤ 0.4 s, nút) / (≤ 1.2 s, TTP223) | Không thêm gì ngoài single-click đã fire ở chạm 1 (panic-click guard) | Pet response. Khi bật `HAL_TOUCH_SWIPE` (mặc định), các cú tap lặp lại tại cùng một chỗ — nhanh hay chậm, một ngón hay nhiều ngón — là **double tap** → toggle mute mic; khi đó pet nghĩa là ngón tay đã quay lại một pad |
@@ -34,7 +111,9 @@ Cả hai handler đều detect board qua `/proc/device-tree/model`:
 | **Giữ 5–10 s rồi nhả** | Shutdown OS (TTS báo → release servo → `sudo shutdown -h now`). LED nháy đỏ khi đã arm. | n/a — phần cứng TTP223 không hold đáng tin được (xem "FastMode" dưới) |
 | **Giữ 10 s+ rồi nhả** | Factory-reset: wipe state thiết bị + reboot vào AP setup (TTS báo → release servo → POST `/api/system/factory-reset` trên OS server). LED đỏ đứng khi đã arm. | n/a |
 
-Gesture giữ chỉ có trên nút GPIO vì nút cơ học cho bằng chứng intent rõ ràng. Mức sleep và các mức destructive **commit khi nhả, không phải khi timer fire lúc đang giữ**. Các mức destructive escalate từ shutdown sang factory-reset sau 10 s (xem "Detect nút GPIO" dưới).
+Bảng trên mô tả nút GPIO chính và TTP223. Nút reset riêng ở pin 35 chỉ factory-reset khi nhả sau khi giữ ít nhất 5 s. Giữ ngắn hơn và single/triple tap đều không làm gì; nút này không gọi sleep hoặc shutdown. LED giữ nguyên dưới 5 s và dùng preset factory-reset đỏ đứng chung từ 5 s trở lên.
+
+MPR121 cũng hỗ trợ giữ rồi nhả để thực hiện action và cùng phản hồi LED theo mức giữ, xem phần detect riêng. Mức sleep và các mức destructive **commit khi nhả, không phải khi timer fire lúc đang giữ**. Các mức destructive escalate từ shutdown sang factory-reset sau 10 s (xem "Detect nút GPIO" dưới).
 
 ## Cắt Lamp giữa câu (barge-in)
 
@@ -111,7 +190,7 @@ Suy biến sạch theo cả hai chiều. Máy **không có camera** thì gaze l�
 **Đổi chỗ, chứ không phải chỉ đang ghi servo.** Có hai trạng thái ghi servo liên tục mà không đưa đầu đi đâu cả: vòng idle đang thở, và một phiên tracking đang bám mặt user. Coi hai thứ đó là "đang di chuyển" thì `last_servo_write` không bao giờ cũ và gần như mọi frame đều bị từ chối — đo thật, idle: ghi được 0.3 mẫu/s trên 4.9/s bị chặn; đo thật, tracking: 0.7/s trên 4.5/s, từ chối một user ở yaw 0.9° với mặt 130px ngay giữa khung chỉ vì cửa sổ có 1 mẫu thay vì 2. Tracking là trường hợp quan trọng nhất: đó chính là lúc đèn đang bám theo mặt user, nên từ chối nhận ra người ta đang nói với nó đúng lúc đó là khoảnh khắc trông hỏng nhất có thể — vì vậy test settle không được phép biến thành `_tracking_active` qua cửa sau. Cả hai đều là chỉnh nhỏ liên tục, góc yaw sống sót qua chúng. Dòng `[gaze] sampling at N/s; blocked: …` tách số frame bị chặn theo từng lý do, vì hai cổng đó sửa ở hai chỗ khác nhau.
 
 Chuỗi end-to-end:
-1. `gpio_button.py` / `ttp223.py` detect single click → gọi `single_click_action(source)` trong `button_actions.py`
+1. `gpio_button.py` / `ttp223.py` / `mpr121.py` detect single click → gọi `single_click_action(source)` trong `button_actions.py`
 2. `single_click_action` → `_cancel_agent_speech()` (thread fire-and-forget) + `tracker_service.stop()` nếu đang tracking + `stop_tts()` (routes/voice.py) + `audio_stop()` (routes/music.py) + thread deferred `_announce_listening()`
 2a. `_cancel_agent_speech()` → `POST /api/agent/speech/cancel` lên OS server. Cần vì `stop_tts()` chỉ bịt được thứ HAL đang giữ: câu đang phát cộng hàng đợi đã pre-synth. OS server đẩy câu trả lời theo từng câu, nên không có call này thì thiết bị im đúng một câu rồi nói tiếp. OS server bịt miệng mọi turn đang chạy (xem `docs/os-server.md`) nhưng vẫn cho turn bắt đầu sau cú click nói — nên user chạm xong nói câu mới được ngay kể cả khi còn backlog turn cũ đang chạy nốt. Turn không bị abort, chỉ là không được nói — cũng vì thế mà call này bỏ luôn filler dead-air còn treo của những turn đó: filler nói thẳng xuống HAL chứ không đi qua đường reply bị bịt, nên một turn đã huỷ mà vẫn chạy cứ tiếp tục rao "một giây nhé" cho câu trả lời nó sẽ không bao giờ nói. Chạy trên thread riêng và fire ở cả hai nhánh (unmute mic và stop loa), vì kiểu gì cú chạm cũng có nghĩa là user đang giành lượt nói.
 2b. `state.note_music_cancel()` → đóng dấu watermark huỷ nhạc ở phía HAL, và `audio_stop()` chạy ở **cả hai** nhánh (unmute mic và stop loa), không chỉ nhánh stop loa. Cần vì cancel ở OS server chỉ tác động lên TTS: turn bị huỷ vẫn chạy tiếp và tool call nhạc còn treo của nó vẫn tới `POST /audio/play` ngay sau đó, nơi một thread `music-play` mới tự `_stop_event.clear()` — nên một cú stop tại một thời điểm luôn thua cuộc đua này, và user nghe đúng bài nhạc mình vừa huỷ sau khi `yt-dlp` resolve xong (1–5 s). Trong lúc watermark còn tươi (`app_state.MUSIC_CANCEL_GUARD_S`, 3 s), `/audio/play` trả `{"status": "suppressed"}` thay vì phát. Cửa sổ được chọn đủ phủ tool call đang bay nhưng vẫn dưới sàn của một yêu cầu mới thật sự (nói → STT → LLM → tool không bao giờ dưới ~3 s), nên "chạm xong xin bài hát" vẫn chạy bình thường.
@@ -131,6 +210,8 @@ Khi barge-in được bật, đường đang chạy là vòng **warm mic**, khô
 
 ## Detect nút GPIO (`hal/drivers/gpio_button.py`)
 
+Cùng driver phục vụ từng nút được cấu hình một cách độc lập. Flow dưới đây mô tả `behavior: "standard"` (nút chính). Với `behavior: "factory_reset"`, nhả sau `hold_s` (5 s ở pin 35 của Lamp) gọi `factory_reset_action` dùng chung; giữ ngắn hơn và mọi chuỗi tap đều bị bỏ qua. Hold watcher chỉ chọn mức LED factory-reset dùng chung khi đạt ngưỡng đó.
+
 Driver đếm edge nơi **mọi destructive action commit ở rising edge (nhả) dựa trên thời lượng giữ** — không timer nào fire lúc đang giữ. Đây chính là cái cho phép user huỷ giữa chừng (nhả trước ngưỡng) hoặc escalate (giữ tiếp quá 10 s).
 
 1. **Falling edge (nhấn):** ghi `press_start` (đồng hồ monotonic) và spawn thread hold-LED watcher (mỗi lần nhấn 1 thread, có stop `Event` riêng). Không arm timer action nào.
@@ -147,7 +228,7 @@ Release edge không có press khớp (press bị debounce nuốt) thì bỏ qua 
 
 ### LED feedback khi giữ
 
-Thread watcher poll thời lượng giữ và đẩy LED RGB ở priority HIGH (preempt emotion hiện tại) để user thấy đã arm tới đâu trước khi nhả:
+Với nút chính, thread watcher GPIO poll thời lượng giữ và chọn mức giữ. `HoldLEDFeedback` dùng chung trong `hal/drivers/button_actions.py`, cũng được MPR121 sử dụng, đẩy LED RGB ở priority HIGH (preempt emotion hiện tại) để user thấy đã arm tới đâu trước khi nhả:
 
 | Thời gian giữ | LED | Ý nghĩa |
 |---|---|---|
@@ -156,11 +237,144 @@ Thread watcher poll thời lượng giữ và đẩy LED RGB ở priority HIGH (
 | 5–10 s | đỏ, nháy 2 Hz | đã arm shutdown — nhả bây giờ là tắt máy |
 | 10 s+ | đỏ, đứng | đã arm factory-reset — nhả bây giờ là wipe + reboot |
 
+Nút reset riêng chỉ dùng preset `factory_reset` đỏ đứng khi giữ ≥5 s; nhả trước 5 s không làm gì. Không factory-reset khi còn giữ. Cả hai nút GPIO dùng lại phần xử lý feedback này và thư viện action hiện có.
+
 Màu tím nhận diện mức sleep; đỏ nháy vs đỏ đứng phân biệt shutdown với factory-reset. LED là no-op im lặng khi RGB service không có (máy dev) — nút vẫn hoạt động.
 
-Ba màu này là preset chứ không phải hằng nhúng cứng trong driver: `BUTTON_LED_PRESETS` trong `hal/presets.py` (`sleep_warn` / `shutdown_warn` / `factory_reset`), device override được qua section `button_led` của `robots/<id>/presets.json` giống mọi bảng LED khác. Driver giữ phần staging — lúc nào nháy, lúc nào để đứng — và đọc màu ngay lúc paint, vì overlay merge bảng tại chỗ lúc boot.
+Ba màu này là preset chứ không phải hằng nhúng cứng trong driver: `BUTTON_LED_PRESETS` trong `hal/presets.py` (`sleep_warn` / `shutdown_warn` / `factory_reset`), device override được qua section `button_led` của `robots/<id>/presets.json` giống mọi bảng LED khác. `HoldLEDFeedback` dùng chung xử lý nháy, dọn phản hồi khi nhả và phản hồi chốt action; mỗi input cung cấp mức giữ đã detect. Nó đọc màu ngay lúc paint, vì overlay merge bảng tại chỗ lúc boot.
 
 Debounce mỗi edge là 200 ms (tick nhấn và nhả track độc lập để tap nhanh không bị drop trong khi bounce lặp của cùng một edge bị lọc).
+
+## Detect MPR121 (`hal/drivers/mpr121.py`)
+
+Wiring MPR121 theo flow cấu hình GPIO do từng device quản lý: HAL đọc
+`mpr121.json` trong thư mục được chọn qua `DEVICES_DIR` và `DEVICE_TYPE`
+(hiện là `robots/lamp/`), rồi chọn board đã detect từ map `boards`. Hiện chỉ
+Lamp có phần cứng này; Intern v2 không có khai báo MPR121. Phải khai báo
+bus I²C đã xác minh; driver không quét bus hay đoán wiring. Cấu hình Lamp
+`orangepi_sun60` dùng bus **0**, địa chỉ **0x5A**. Đã xác minh khởi tạo và
+polling trên Lamp `lamp-0c4e` ngày 2026-09-11, gồm khởi động trong HAL thật.
+Ba phiên chạm rồi nhả cũng tạo tap ID riêng và hoàn tất action single-click
+thật trong service đó. Script phần cứng chỉ định chân header 3/5 (TWI0).
+Kiểm tra wiring và bật đúng controller I²C bên ngoài HAL
+trước khi dùng; HAL không tự sửa boot overlay:
+
+```json
+{
+  "boards": {
+    "orangepi_sun60": {
+      "enabled": true,
+      "bus": 0,
+      "address": 90,
+      "electrodes": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+      "swipe_axis": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+      "touch_threshold": 2,
+      "release_threshold": 1,
+      "autoconfig": true,
+      "poll_ms": 10,
+      "debounce_ms": 30
+    }
+  }
+}
+```
+
+`bus` bắt buộc với entry bật. Các giá trị còn lại ở trên trừ `swipe_axis` là mặc định;
+địa chỉ 90 nghĩa là `0x5A` (cho phép 90–93). Electrode được chọn phải là
+các số không trùng từ 0–11, có ít nhất một electrode. Ngưỡng phải thỏa
+`0 <= release_threshold < touch_threshold <= 255`. Polling cho phép 1–1000 ms;
+debounce cho phép 0–1000 ms. Cần chỉnh ngưỡng theo electrode đã lắp và nhiễu
+motor. Cấu hình được đọc lúc khởi động; sửa xong phải restart HAL.
+
+Thiếu file, thiếu entry board, hoặc `"enabled": false` thì bỏ qua MPR121 và
+giữ các handler GPIO/TTP223 hiện có. Không có bus MPR121 cũ để fallback.
+Cấu hình bật nhưng sai bị từ chối khi startup; chế độ mô phỏng bỏ qua phần cứng.
+Nếu thiếu `/dev/i2c-0`, khởi tạo log lỗi và MPR121 không hoạt động, còn
+GPIO/TTP223 tiếp tục chạy. Sửa `bus` nếu wiring đã xác minh dùng controller
+khác, rồi restart HAL.
+
+Sau khởi tạo, driver chờ cảm biến ổn định 100 ms trước khi đọc trạng thái
+chạm ban đầu, rồi poll mỗi 10 ms theo mặc định. Chuyển trạng thái chạm và
+nhả dùng debounce 30 ms. Chạm chồng nhau trên các electrode được chọn tính
+là một contact; nhả nghĩa là **toàn bộ electrode được chọn** đã nhả.
+Contact đang bị giữ khi startup bị bỏ qua đến khi nhả.
+
+MPR121 dùng chung ngưỡng cử chỉ từ `hal/drivers/button_gestures.py` với GPIO
+(được `button_actions.py` re-export) và gọi các action hiện có:
+
+| Cử chỉ | Action MPR121 |
+|---|---|
+| Lần nhả ngắn đầu tiên trong chuỗi click | `single_click_action(source="MPR121", announce=False)` dừng tracking/audio sau khi phân giải contact, unmute khi được phép và phát ack chime. |
+| 1, 2 hoặc 4+ tap ngắn, rồi yên 0.4 s | Phát cue nghe; các tap lặp không gọi lại action single-click ban đầu. |
+| Đúng 3 tap ngắn, rồi yên 0.4 s | `triple_click_action` reboot thay vì phát cue nghe. |
+| Giữ 2–<5 s rồi nhả | `hold_release_action` vào sleepy. |
+| Giữ 5–<10 s rồi nhả | `hold_release_action` shutdown. |
+| Giữ ≥10 s rồi nhả | `hold_release_action` factory reset. |
+| Vuốt một trong hai hướng rồi nhả | `swipe_action` sleep; contact di chuyển này không gọi click hoặc action destructive. |
+
+Contact ngắn kéo dài dưới 2 s. Cửa sổ click không phân giải khi còn bất kỳ
+electrode được chọn nào đang chạm. Nhả sau giữ xóa chuỗi click đang chờ.
+Action destructive không chạy khi còn giữ.
+
+### Vuốt MPR121 để sleep
+
+`swipe_axis` là list tùy chọn gồm 2–12 electrode khác nhau, thuộc `electrodes`,
+được xếp theo thứ tự trên dải. Lamp khai báo E0…E11 dựa trên chuỗi log E11→E0,
+E0→E8 và E9→E0; xác định được thứ tự, chưa gán đầu nào là bên trái vật lý.
+Cả hai hướng gọi `swipe_action(source="MPR121")` trong `button_actions.py`,
+cùng action sleep với TTP223. Không cần vuốt hết toàn bộ dải. Thiếu/null
+`swipe_axis` chỉ tắt nhận diện vuốt, giữ nhận diện click/hold cũ.
+Cài HAL hỗ trợ trước khi deploy JSON có trường này.
+
+Debounce contact vẫn mặc định 30 ms; vùng chạm dùng tối đa 5 ms ổn định
+(thường là hai poll liên tiếp cách 10 ms) để giữ các chuyển tiếp electrode nhanh.
+Detector theo dõi vùng chạm đã debounce thay vì đếm mỗi electrode chạm chồng
+thành một tap. Chạm nhiều electrode nhưng đứng yên vẫn giữ hành vi click/hold.
+Khi phát hiện di chuyển, hủy kết quả tap/hold đang chờ và phản hồi LED giữ cho
+contact đó; vuốt hợp lệ gọi sleep một lần sau khi nhả. Di chuyển đảo chiều hoặc
+không hợp lệ không gọi reboot/shutdown/reset. Chờ nhả 120 ms để nối các đoạn
+chuyển tiếp ngắn giữa electrode; khi bật swipe, tap/hold phân giải sau khoảng
+chờ này. Contact giữ từ lúc boot vẫn bị bỏ qua. Log ghi hướng, độ dịch chuyển,
+kết quả swipe và thực thi action. Test phát lại chuỗi mask đã đo cùng các ca
+cử chỉ/vòng đời giả lập. Runtime và JSON swipe đã deploy lên Lamp `lamp-0c4e`
+ngày 2026-09-11; startup xác nhận MPR121 ready với trục cấu hình, GPIO và TTP223
+ready, mic switch Lamp ready trên chip1/line9 sau khi cài JSON. Chờ live test cử chỉ.
+
+Event `hold_tier` đã debounce truyền vào cùng `HoldLEDFeedback` với GPIO,
+dùng chung `BUTTON_LED_PRESETS`, xử lý nháy, dọn phản hồi khi nhả và phản hồi
+chốt action. Override `button_led` theo device áp dụng cho cả hai input:
+
+| Thời gian giữ | LED MPR121 |
+|---|---|
+| <2 s | Không có phản hồi giữ |
+| 2–<5 s | Tím sleepy, nháy 2 Hz |
+| 5–<10 s | Đỏ, nháy 2 Hz |
+| ≥10 s | Đỏ đứng |
+
+Nhả thì dừng nháy. Action shutdown hoặc factory-reset được chấp nhận đặt lại
+đỏ đứng trước khi chạy; sleepy tắt LED qua action dùng chung. Chạm giữ lúc
+startup không hiện phản hồi giữ. Stop hoặc lỗi phần cứng hủy phản hồi; thiếu
+RGB service không ngăn các action đầu vào hoạt động.
+
+Worker action bất đồng bộ có hàng đợi giới hạn giữ polling phản hồi kịp thời.
+Action dư có thể bị bỏ; chạm mới, stop hoặc lỗi phần cứng làm mất
+hiệu lực các action destructive và cue nghe cũ đang chờ. Lỗi I²C hoặc cờ quá
+dòng MPR121 (`OVCF`) được log và dừng driver này, các handler đầu vào hiện có
+tiếp tục chạy.
+
+Lần xác minh phần cứng ở trên chỉ kiểm tra hành vi single-click trước đây.
+Phản hồi LED khi giữ được kiểm tra bằng test mock local, chưa kiểm tra trên
+device thật. Các test này không thực thi reboot, shutdown hay reset thật.
+
+Log hoạt động dùng logger `hal.drivers.mpr121` trong log/journal HAL thông
+thường; không tạo file raw trace riêng. Log INFO gồm khởi tạo và cấu hình
+(bus, địa chỉ, electrode, ngưỡng và thời gian), thay đổi chạm/nhả thô trên từng
+electrode, chuyển trạng thái đã debounce, chạm lúc startup bị bỏ qua, xếp hàng
+hoặc bỏ action, số click, thời lượng/mức giữ, bắt đầu/kết thúc action và
+vòng đời driver. `gesture_id` liên kết chuỗi click hoặc giữ với action đã
+xếp hàng, bỏ hoặc thực thi. Khi lỗi có log lỗi.
+Các lần poll 10 ms không đổi trạng thái không tạo log INFO, tránh tràn log
+khi không chạm. Theo dõi bằng `journalctl -u hal.service -f` và lọc
+`hal.drivers.mpr121` khi cần tìm nguyên nhân mất hoặc lặp tap.
 
 ## Detect TTP223 (`hal/drivers/ttp223.py`)
 
@@ -188,7 +402,7 @@ Sau khi session kết thúc:
 
 **Mặc định bật** từ 2026-08-27, sau khi kiểm chứng trực tiếp trên orange-lamp với tap, double tap nhanh và chậm, pet và swipe. Đặt `HAL_TOUCH_SWIPE=false` sẽ khôi phục hành vi hai-cử-chỉ trong một bước và không cần deploy lại — đó là đường lùi nếu một máy ngoài thực địa hành xử sai.
 
-Bật nó lên nghĩa là một cú double tap sẽ toggle **microphone** và một cú swipe sẽ đưa thiết bị vào **giấc ngủ**. Cả hai đều đảo ngược được (double tap lần nữa; một cú tap là thức dậy), và không có hành động phá hủy nào với tới được từ đây — FastMode không đo được thao tác giữ, nên reboot / shutdown / factory-reset vẫn ở lại trên nút bấm cơ.
+Bật nó lên nghĩa là một cú double tap sẽ toggle **microphone** và một cú swipe sẽ đưa thiết bị vào **giấc ngủ**. Cả hai đều đảo ngược được (double tap lần nữa; một cú tap là thức dậy), và không có hành động phá hủy nào với tới được từ đây — FastMode không đo được thao tác giữ, nên TTP223 không kích hoạt reboot / shutdown / factory-reset; các cử chỉ đó có trên nút cơ và MPR121.
 
 **Tín hiệu nằm ở *thời điểm* các pad bắn, không phải pad nào.** Đo trên orange-lamp ngày 2026-08-27 — khoảng cách giữa các pad bên trong một lần tiếp xúc:
 
@@ -215,7 +429,7 @@ Thứ tự phân giải, khớp cái nào trước thì thắng:
 | `HAL_TOUCH_SWIPE` | **`true`** | Công tắc chính cho luật 1–3. Đặt `false` để khôi phục đúng hành vi hai-cử-chỉ — đường lùi. |
 | `HAL_TOUCH_SWIPE_MIN_GAP_MS` | 40 | Ngưỡng di chuyển, và là con số duy nhất mà mọi luật đều rút ra từ đó: khoảng cách từ mức này trở lên nghĩa là bàn tay đã di chuyển, dưới mức này nghĩa là các ngón đặt xuống cùng lúc. Nằm trong dải trống 23–53 ms đã đo. **Giờ mang tính then chốt vì bộ phân loại đã ship ở trạng thái bật** — nâng lên nếu tap dứt khoát bị đọc thành swipe, hạ xuống nếu swipe thật bị bỏ sót. `HAL_TOUCH_DEBUG` ghi lại chính các khoảng dùng để đo. |
 
-`boards.json` có thêm trường tùy chọn `axis` trong mục `touch` — các line theo thứ tự vật lý trái sang phải, ví dụ `"axis": [96, 100, 98]`. Hiện tại nó **vắng mặt**: thứ tự line không phải thứ tự không gian trên board này, và chỉ một đợt chạy có nhãn nhấn từng pad một mới xác định được. Khi vắng, phân loại lùi về thứ tự line khai báo. Một axis sai chỉ làm sai **hướng** swipe, thứ mà driver cố ý không dùng.
+`ttp223.json` nhận `axis` tùy chọn trong mỗi entry board — cùng các `lines` đã cấu hình, theo thứ tự vật lý trái sang phải. Fallback cũ đọc `axis` từ mục `touch` trong `boards.json`. Hiện tại nó **vắng mặt**: thứ tự line không phải thứ tự không gian trên board này, và chỉ một đợt chạy có nhãn nhấn từng pad một mới xác định được. Khi vắng, phân loại lùi về thứ tự line khai báo. Một axis sai chỉ làm sai **hướng** swipe, thứ mà driver cố ý không dùng.
 
 ### Hằng số (`ttp223.py`)
 
@@ -241,12 +455,12 @@ Nó cố ý không bao giờ log vào journald: HAL log nhiều đến mức c�
 | `HAL_TOUCH_DEBUG` | `false` | Công tắc chính. Tắt = mọi điểm vào đều là no-op. |
 | `HAL_TOUCH_DEBUG_DIR` | `touch_logs/` cạnh module | Thư mục output. Rơi về thư mục tạm nếu cây mã chỉ đọc. |
 | `HAL_TOUCH_DEBUG_MAX_ENTRIES` | 200 | Giới hạn số file, cũ nhất bị dọn ở mỗi lần ghi. 0 = không giới hạn. |
-| `HAL_TOUCH_DEBUG_PADS` | _(không đặt)_ | Map line→nhãn, ví dụ `96=S1,98=S2,100=S4`. Không đặt thì pad được đặt tên theo số line — các tên S lịch sử không đi theo thứ tự line sau hai lần dời chân, nên driver không đoán chúng. |
+| `HAL_TOUCH_DEBUG_PADS` | _(không đặt)_ | Map line→nhãn, ví dụ `96=S1,98=S3`. Không đặt thì pad được đặt tên theo số line — các tên S lịch sử không đi theo thứ tự line sau hai lần dời chân, nên driver không đoán chúng. |
 
 
 ## Thư viện action chung (`hal/drivers/button_actions.py`)
 
-Các action sống ở một chỗ để nút GPIO, TTP223, và mọi input tương lai (touchpad, remote) hành xử giống nhau:
+Các action sống ở một chỗ để nút GPIO, TTP223, MPR121, và mọi input tương lai (touchpad, remote) hành xử giống nhau:
 
 | Hàm | Làm gì | Cắt TTS đang phát? |
 |---|---|---|
@@ -263,7 +477,7 @@ Các action sống ở một chỗ để nút GPIO, TTP223, và mọi input tư�
 
 ### Factory-reset: wipe những gì
 
-`factory_reset_action` chỉ **báo + uỷ quyền** — phần reset thật nằm ở OS server (`system/server/system/factoryreset.go`), gọi được từ thiết bị qua loopback không cần Bearer token (authoritative nhờ hiện diện vật lý: giữ 10 s có chủ ý). `POST /api/system/factory-reset` là reset **mềm** (wipe state, không reflash — kernel / package OS / binary / `.venv` HAL không bị đụng):
+`factory_reset_action` chỉ **báo + uỷ quyền** — phần reset thật nằm ở OS server (`system/server/system/factoryreset.go`), gọi được từ thiết bị qua loopback không cần Bearer token (authoritative nhờ hiện diện vật lý: giữ có chủ ý 10 s trên nút chính/MPR121 hoặc 5 s trên nút reset riêng, rồi nhả). `POST /api/system/factory-reset` là reset **mềm** (wipe state, không reflash — kernel / package OS / binary / `.venv` HAL không bị đụng):
 
 1. Wipe state của agent backend đang chạy (OpenClaw hoặc Hermes, auto-detect từ `config.json` `agent_runtime`).
 2. Wipe các path state của thiết bị: `/root/config` (config.json — API key, channel token, MQTT creds), `/root/local/users` + `/root/local/strangers` (enrollment khuôn mặt/giọng), `/var/lib/hal/snapshots` (snapshot camera), và `/etc/wpa_supplicant/wpa_supplicant-wlan0.conf` (WiFi nhà → ép vào AP mode lần boot kế).
@@ -335,10 +549,14 @@ Phrase cố tình ngắn — chúng fire giữa lúc vuốt nên cần cảm gi�
 | Đường dẫn | Mục đích |
 |---|---|
 | `hal/drivers/gpio_button.py` | Handler nút GPIO (cơ học, cả hai board) |
+| `hal/board/ttp223.py` | Đọc cấu hình TTP223 theo device, có fallback cũ |
 | `hal/drivers/ttp223.py` | Handler touchpad cảm ứng TTP223 (chỉ OrangePi sun60) |
-| `hal/drivers/button_actions.py` | Hàm action chung + pool phrase local |
+| `hal/board/mpr121.py` | Đọc và kiểm tra cấu hình MPR121 do device quản lý |
+| `hal/drivers/mpr121.py` | Handler I²C MPR121 tùy chọn, detect click/giữ |
+| `hal/drivers/button_gestures.py` | Ngưỡng cử chỉ dùng chung GPIO/MPR121 |
+| `hal/drivers/button_actions.py` | Hàm action chung, `HoldLEDFeedback` cho GPIO/MPR121 và pool phrase local |
 | `hal/presets.py` | Hằng số mã ngôn ngữ (`LANG_EN`, v.v.) |
-| `hal/test_ttp223_probe_orangepi.py` | Probe pad độc lập (ioctl thuần stdlib, không cần gpiod). `info` đọc trạng thái line khi HAL vẫn chạy; `watch` map pad→line và cần dừng `hal.service`. Line lấy từ board profile. |
+| `hal/test_ttp223_probe_orangepi.py` | Probe pad độc lập (ioctl thuần stdlib, không cần gpiod). `info` đọc trạng thái line khi HAL vẫn chạy; `watch` map pad→line và cần dừng `hal.service`. Line lấy từ `ttp223.json` của device được chọn, fallback về board profile cũ giống HAL. Chọn device bằng `--device-type`. |
 | `hal/test_gpio.py` | Probe độc lập để verify line nút GPIO |
 
-Cả hai handler được spawn trong startup lifespan `hal/server.py` — fail thì log nhưng không crash runtime (board không có phần cứng tự skip im lặng).
+Các handler đầu vào được khởi động trong startup lifespan `hal/server.py`. Thiếu cấu hình MPR121 tùy chọn thì bỏ qua driver đó; cấu hình bật nhưng sai bị từ chối khi startup. Lỗi driver phần cứng được log mà không dừng các handler còn lại.

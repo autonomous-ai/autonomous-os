@@ -1,109 +1,27 @@
-"""Dedicated mic-mute slide switch on PD1 (Intern v2 Pro only).
+"""Configured level-driven mic-mute slide switch.
 
-Wiring is a SPST slide switch, not a momentary push button — one position
-bridges PD1 to GND, the other leaves it floating (pull-up wins). We track
-level, not edges: the switch position IS the mute state, so pressing/
-releasing has no meaning here. Every edge flips the mic to whatever the
-new level dictates, and we also re-sync at HAL start-up so a boot with
-the switch already in the "muted" position ends up with a muted mic
-without waiting for the user to toggle it.
-
-Polarity:
-- LOW  (0) → switch shorted to GND → mic MUTED
-- HIGH (1) → switch open (pull-up)   → mic UNMUTED
-Flip `_LEVEL_MUTED` below if the physical wiring is the opposite.
-
-Web admin coexistence: `/api/hardware/voice/mute` (+ /voice/unmute) share
-the same `state._mic_muted` variable. If a user mutes via the web while
-the switch is in "unmute" position, the discrepancy stands until the
-next physical throw — the switch is the authority on the *next* edge,
-not continuously. That matches how a hardware kill-switch is expected
-to behave.
-
-Device gating: Intern v2 Pro and Lamp share the same board (OrangePi
-sun60iw2) but ship different hardware kits — only Intern v2 Pro has a
-switch physically wired to PD1. Lamp's PD1 is either unpopulated or used
-for something else, so claiming it there would either float and log spam
-on stray edges, or actively collide with another driver. We gate on
-DEVICE_TYPE (the same env the OS resolves at boot — see
-server._resolve_device_type) rather than the board profile so the wiring
-declaration follows the physical kit, not the SoC.
-
-Pin choice: PE1 was the obvious candidate from the header silkscreen but
-it's already claimed by SPI3_CLK for the WS2812 LED strip (see
-boards.json led.spi_bus=3). PD1 sits next to the TTP223 touch lines
-(PD0/PD2/PD4 at chip0 lines 96/98/100) and is unclaimed on this board,
-so we route the switch there instead.
-
-PD1 wiring:
-- PD = pinctrl bank 3 on Allwinner sun60iw2 → chip 0 lines 96–127
-- PD1 = chip 0, line 97
-- Debounce mirrors the primary wake button (200 ms) — same OrangePi
-  contact-bounce characteristics; slide-switch contacts also bounce
-  briefly during the throw.
+Wiring and timing are injected from the device configuration. Boot synchronizes
+mic state with the switch; edges reconcile after settling. The watchdog only
+reconciles changed physical levels so software-only mute remains untouched.
 """
 
 import logging
-import os
 import threading
 import time
 
 import hal.app_state as state
+from hal.board.privacy_button import PrivacyButtonConfig
+from hal import privacy
 
 logger = logging.getLogger(__name__)
 
-# PD1 = pinctrl bank 3 (PD) + line 1 → gpiochip0 line 97 on Allwinner
-# sun60iw2. Only wired on Intern v2 Pro; see the module docstring.
-_MIC_BTN_CHIP = 0
-_MIC_BTN_LINE = 97
-# Settle time after the LAST edge before we re-read the pin. Slide switch
-# contacts bounce for a few ms during the throw; 60 ms covers the bounce
-# tail without introducing a noticeable delay for the operator. This is
-# the settle window, NOT a "drop-if-within" filter — see _on_edge for the
-# timer-restart pattern that makes rapid flips reliable.
-_MIC_BTN_SETTLE_SEC = 0.06
 
-# GPIO level that means "muted". Flip if the physical wiring inverts.
-_LEVEL_MUTED = 0
-
-# Watchdog reconcile period. lgpio's edge-callback thread has been observed
-# to stall silently under sustained edge storms (the HAL process stays up,
-# routes still respond, but no more edges fire). Reading the pin every
-# _WATCHDOG_SEC and driving state to match the level guarantees the mic
-# state converges to the switch's physical position even if we miss every
-# edge for a while — cheap safety net, not a replacement for the callback.
-_WATCHDOG_SEC = 30.0
-
-# Device types that ship with a mic-mute switch physically wired to PD1.
-# Add here when a new device model gets the switch — the driver stays the
-# same, only the whitelist grows. Cross-check the wiring before adding: a
-# device on the same board but different kit could have PD1 in use for
-# something else, in which case claiming it here would misfire.
-_DEVICES_WITH_MIC_BUTTON = frozenset({"intern-v2"})
-
-
-def _resolve_device_type() -> str:
-    """Same resolution order as server._resolve_device_type — env first,
-    then config.json — so the driver agrees with the rest of HAL about
-    which body it's running on. Kept local (rather than imported from
-    server) to avoid an import cycle: server imports drivers, not the
-    other way around."""
-    dev = os.environ.get("DEVICE_TYPE")
-    if dev:
-        return dev
-    try:
-        from hal.config import _os_cfg_get
-
-        cfg = _os_cfg_get("device_type")
-        if cfg:
-            return str(cfg)
-    except Exception:
-        pass
-    return ""
-
-
-class MicButtonHandler:
-    def __init__(self):
+class PrivacyButtonHandler:
+    def __init__(self, config: PrivacyButtonConfig | None):
+        self._config = config
+        self._stopped = threading.Event()
+        self._stopped.set()
+        self._watchdog_thread: threading.Thread | None = None
         self._lgpio = None
         self._handle = None
         self._callback = None
@@ -129,54 +47,60 @@ class MicButtonHandler:
         self._last_known_level: int | None = None
 
     def start(self):
-        dev = _resolve_device_type()
-        if dev not in _DEVICES_WITH_MIC_BUTTON:
-            logger.info(
-                "Mic switch disabled: device_type=%r (only wired on %s)",
-                dev or "<unset>",
-                ", ".join(sorted(_DEVICES_WITH_MIC_BUTTON)),
-            )
+        if self._config is None:
+            logger.info("Mic switch disabled: no device wiring configured")
+            return
+        if not self._stopped.is_set():
+            return
+        if self._watchdog_thread is not None and self._watchdog_thread.is_alive():
+            logger.warning("Mic switch start skipped: previous watchdog is still stopping")
             return
 
         import lgpio
 
         self._lgpio = lgpio
+        self._stopped.clear()
 
         try:
-            self._handle = lgpio.gpiochip_open(_MIC_BTN_CHIP)
+            self._handle = lgpio.gpiochip_open(self._config.chip)
         except Exception as e:
-            logger.warning("Mic switch gpiochip_open(%d) failed: %s", _MIC_BTN_CHIP, e)
+            logger.warning("Mic switch gpiochip_open(%d) failed: %s", self._config.chip, e)
+            self.stop()
             return
 
         try:
             lgpio.gpio_claim_alert(
-                self._handle, _MIC_BTN_LINE, lgpio.BOTH_EDGES, lgpio.SET_PULL_UP
+                self._handle, self._config.line, lgpio.BOTH_EDGES, lgpio.SET_PULL_UP
             )
             self._callback = lgpio.callback(
-                self._handle, _MIC_BTN_LINE, lgpio.BOTH_EDGES, self._on_edge
+                self._handle, self._config.line, lgpio.BOTH_EDGES, self._on_edge
             )
         except Exception as e:
             logger.warning(
-                "Mic switch claim line %d failed: %s -- disabled", _MIC_BTN_LINE, e
+                "Mic switch claim line %d failed: %s -- disabled", self._config.line, e
             )
+            self.stop()
             return
 
         # Sync boot-time state to the switch's current position. Without this,
         # a device that boots with the switch already in "muted" would run
         # with the mic hot until the user throws it once and back.
         try:
-            initial_level = lgpio.gpio_read(self._handle, _MIC_BTN_LINE)
+            initial_level = lgpio.gpio_read(self._handle, self._config.line)
         except Exception as e:
             logger.warning("Mic switch initial read failed: %s", e)
-            initial_level = 1  # default to unmuted if read fails
+            # Extended privacy fails closed; preserve legacy microphone fallback.
+            initial_level = (self._config.muted_level if (
+                self._config.disable_camera_on_mute or self._config.mute_speaker_on_mute
+            ) else 1 - self._config.muted_level)
 
         logger.info(
-            "Mic mute switch ready on gpiochip%d line %d (PD1, initial level=%d, settle %d ms, watchdog %ds)",
-            _MIC_BTN_CHIP,
-            _MIC_BTN_LINE,
+            "Mic mute switch ready on gpiochip%d line %d (initial level=%d, settle %d ms, watchdog %ds)",
+            self._config.chip,
+            self._config.line,
             initial_level,
-            int(_MIC_BTN_SETTLE_SEC * 1000),
-            int(_WATCHDOG_SEC),
+            int(self._config.settle_s * 1000),
+            int(self._config.watchdog_s),
         )
 
         # Boot-time sync runs SYNCHRONOUSLY (unlike the edge handler which
@@ -188,14 +112,42 @@ class MicButtonHandler:
         # (~tens of ms at most) so blocking start() here is worth it.
         self._last_known_level = initial_level
         with self._apply_lock:
-            self._apply_state_locked(initial_level == _LEVEL_MUTED)
+            self._apply_state_locked(initial_level == self._config.muted_level)
 
         # Watchdog: periodic pin re-read + reconcile. Self-heals if the
         # lgpio edge-callback thread stalls silently. Daemon so it dies with
-        # the process; no explicit stop needed.
-        threading.Thread(
+        # the process; stop() also cancels and joins the watchdog.
+        self._watchdog_thread = threading.Thread(
             target=self._watchdog_loop, daemon=True, name="mic-switch-watchdog"
-        ).start()
+        )
+        self._watchdog_thread.start()
+
+    def stop(self):
+        """Cancel asynchronous work before releasing the GPIO handle."""
+        self._stopped.set()
+        with self._timer_lock:
+            if self._settle_timer is not None:
+                self._settle_timer.cancel()
+                self._settle_timer = None
+        if self._callback is not None:
+            try:
+                self._callback.cancel()
+            except Exception as exc:
+                logger.warning("Mic switch callback cancel failed: %s", exc)
+            finally:
+                self._callback = None
+        if self._watchdog_thread is not None:
+            self._watchdog_thread.join(timeout=2.0)
+            if not self._watchdog_thread.is_alive():
+                self._watchdog_thread = None
+        with self._apply_lock:
+            if self._handle is not None:
+                try:
+                    self._lgpio.gpiochip_close(self._handle)
+                except Exception as exc:
+                    logger.warning("Mic switch gpiochip_close failed: %s", exc)
+                finally:
+                    self._handle = None
 
     def _on_edge(self, chip, gpio, level, tick):
         # Restart the settle timer on every edge. The `level` param from
@@ -207,9 +159,11 @@ class MicButtonHandler:
         self._last_edge_ts = time.monotonic()
         logger.info("[mic-switch-trace] EDGE fired (level=%d, tick=%d)", level, tick)
         with self._timer_lock:
+            if self._stopped.is_set():
+                return
             if self._settle_timer is not None:
                 self._settle_timer.cancel()
-            t = threading.Timer(_MIC_BTN_SETTLE_SEC, self._reconcile)
+            t = threading.Timer(self._config.settle_s, self._reconcile)
             t.daemon = True
             t.name = "mic-switch-settle"
             self._settle_timer = t
@@ -220,32 +174,36 @@ class MicButtonHandler:
         settle Timer (after an edge storm quiets) and from the watchdog.
         Runs under _apply_lock so concurrent triggers can't race the
         underlying mute_mic() / unmute_mic() routes."""
+        t_lock_want = time.monotonic()
+        with self._apply_lock:
+            if self._stopped.is_set():
+                return
+            logger.info(
+                "[mic-switch-trace] APPLY_LOCK acquired (waited=%.0fms)",
+                (time.monotonic() - t_lock_want) * 1000,
+            )
+            self._reconcile_locked()
+
+    def _reconcile_locked(self):
         t_recon = time.monotonic()
         since_edge = (t_recon - self._last_edge_ts) if self._last_edge_ts else -1
         try:
-            current_level = self._lgpio.gpio_read(self._handle, _MIC_BTN_LINE)
+            current_level = self._lgpio.gpio_read(self._handle, self._config.line)
         except Exception as e:
             logger.warning("Mic switch reconcile read failed: %s", e)
             return
         logger.info(
             "[mic-switch-trace] RECONCILE pin_level=%d muted=%s (settle_wait=%.0fms since last edge)",
             current_level,
-            current_level == _LEVEL_MUTED,
+            current_level == self._config.muted_level,
             since_edge * 1000 if since_edge >= 0 else -1,
         )
-        t_lock_want = time.monotonic()
-        with self._apply_lock:
-            t_lock_got = time.monotonic()
-            logger.info(
-                "[mic-switch-trace] APPLY_LOCK acquired (waited=%.0fms)",
-                (t_lock_got - t_lock_want) * 1000,
-            )
-            self._apply_state_locked(current_level == _LEVEL_MUTED)
-            self._last_known_level = current_level
-            logger.info(
-                "[mic-switch-trace] APPLY_STATE done (total_edge→done=%.0fms)",
-                (time.monotonic() - self._last_edge_ts) * 1000 if self._last_edge_ts else -1,
-            )
+        self._apply_state_locked(current_level == self._config.muted_level)
+        self._last_known_level = current_level
+        logger.info(
+            "[mic-switch-trace] APPLY_STATE done (total_edge→done=%.0fms)",
+            (time.monotonic() - self._last_edge_ts) * 1000 if self._last_edge_ts else -1,
+        )
 
     def _watchdog_loop(self):
         """Periodic pin re-read to catch missed edges (lgpio callback thread
@@ -256,10 +214,12 @@ class MicButtonHandler:
         pin never moved from its idle position, but our state did — verified
         2026-07-24: user muted via web, watchdog auto-unmuted 28s later because
         pin_level=1 while state._mic_muted=True."""
-        while True:
-            time.sleep(_WATCHDOG_SEC)
+        while not self._stopped.wait(self._config.watchdog_s):
             try:
-                current = self._lgpio.gpio_read(self._handle, _MIC_BTN_LINE)
+                with self._apply_lock:
+                    if self._stopped.is_set():
+                        return
+                    current = self._lgpio.gpio_read(self._handle, self._config.line)
             except Exception as e:
                 logger.warning("Mic switch watchdog read failed: %s", e)
                 continue
@@ -291,19 +251,21 @@ class MicButtonHandler:
         or music started meanwhile."""
         deadline = time.monotonic() + 5.0
         while time.monotonic() < deadline:
-            if state._hw_mic_switch_muted is True or state._mic_muted:
+            if self._stopped.is_set() or state._hw_mic_switch_muted is True or state._mic_muted:
                 return
             if state._music_playing:
                 return
             if not state._tts_speaking:
                 break
-            time.sleep(0.1)
+            if self._stopped.wait(0.1):
+                return
         else:
             logger.info("mic switch unmute listening cue: TTS never quiesced -- skipping")
             return
         # Small settle after TTS end so the wave's teardown restore lands
         # first; painting into a live restore path races the effect thread.
-        time.sleep(0.15)
+        if self._stopped.wait(0.15):
+            return
         if state._hw_mic_switch_muted is True or state._mic_muted:
             return
         try:
@@ -330,7 +292,14 @@ class MicButtonHandler:
         # still needs to advertise "HW-locked" to the web.
         state._hw_mic_switch_muted = muted
 
+        extended = self._config and (
+            self._config.disable_camera_on_mute or self._config.mute_speaker_on_mute
+        )
+        if extended and muted:
+            privacy.apply(True, self._config)
         if state._mic_muted == muted:
+            if extended and not muted:
+                privacy.apply(False, self._config)
             return
 
         from hal.routes.voice import mute_mic, stop_tts
@@ -370,7 +339,19 @@ class MicButtonHandler:
                 from hal.drivers.button_actions import single_click_action
 
                 t_sca = time.monotonic()
-                single_click_action("mic-switch")
+                if extended:
+                    # Wake while the peripheral gates remain closed, then restore
+                    # the user's camera/speaker preferences before playing the cue.
+                    try:
+                        single_click_action("privacy-switch", announce=False, chime=False,
+                                            unmute_output=False)
+                    finally:
+                        privacy.apply(False, self._config)
+                    from hal.drivers.button_actions import play_ack_chime, announce_listening_cue
+                    play_ack_chime("privacy-switch")
+                    announce_listening_cue("privacy-switch")
+                else:
+                    single_click_action("mic-switch")
                 logger.info("[mic-switch-trace] unmute step2 single_click_action done +%.0fms (cumul=%.0fms)", (time.monotonic() - t_sca) * 1000, (time.monotonic() - t0) * 1000)
                 # After unmute the natural resting look is warm-white
                 # ambient because _user_led_state is None on fresh boots —

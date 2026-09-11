@@ -66,6 +66,27 @@ nguyên. `*hermes.Service` thỏa mãn đầy đủ `domain.AgentGateway` (`Name
 `IsReady`, `ConnectedAt`, `AgentUptime`, `IsBusy`/`SetBusy`, `QueuePendingEvent`,
 `SendChat*`, `StartWS`, …).
 
+### Số liệu cache trong Flow Monitor
+
+`input_tokens` của Hermes Responses gồm input chưa cache, cache read và cache
+write. `translator.go` tách `input_tokens_details.cached_tokens` và
+`input_tokens_details.cache_write_tokens` sang các nhóm riêng trong domain để
+monitor hiện `R`/`W` mà không đếm trùng. Khi thiếu chi tiết, giữ nguyên tổng input
+cũ; bỏ qua tổng cache không hợp lệ. Ví dụ 14.097 input, 13.824 cache read và 66
+output trở thành 273 input chưa cache, `R13.8k` và 66 output (tổng 14.163).
+
+Một số phiên bản Hermes cộng dồn cache nội bộ nhưng làm mất số liệu tại
+`_finish_turn_result` và `_responses_usage_payload` trong
+`gateway/platforms/api_server.py`. Onboarding local chạy `cache_usage_patch.py`
+được embed bằng Python 3 để giữ `session_cache_read_tokens` và
+`session_cache_write_tokens` trong Responses usage. Bản vá kiểm tra cấu trúc AST
+đã biết, compile trước khi ghi atomic và không ghi lại file đã vá. Khi có thay
+đổi, OS gộp vào quyết định restart gateway hiện có. Source không khớp chỉ ghi
+cảnh báo, không sửa; bỏ qua cài đặt chưa tồn tại và endpoint remote. Người vận
+hành Hermes remote cần áp dụng bản sửa tương đương trên server đó. Không sửa
+dữ liệu lượt cũ; kiểm tra lượt mới sau restart. Không cần đổi frontend hay cấu
+hình cache provider.
+
 ## 3. Mô hình session & conversation
 
 Hermes không có socket, nên "session" nằm phía server:
@@ -336,6 +357,42 @@ bị bỏ trên path proactive.
 `hal.go` nối lượt Hermes vào path voice của HAL (TTS lúc speak-end, cùng entry
 point `lib/hal` mà OpenClaw dùng), nên tương tác bằng giọng hoạt động như nhau
 bất kể backend.
+
+### Câu đệm khi chờ công cụ
+
+`system/lib/i18n/fillers.go` ánh xạ tên công cụ Hermes sang các câu đệm ngắn theo
+hoạt động. Phạm vi bám theo [tài liệu công cụ chính thức](https://hermes-agent.nousresearch.com/docs/reference/tools-reference)
+(đối chiếu ngày 2026-09-11); `system/lib/i18n/fillers_test.go` giữ snapshot danh
+sách công cụ và kiểm tra độ phủ tiếng Anh, tiếng Việt, tiếng Trung giản thể và
+phồn thể. Các nhóm được ánh xạ gồm:
+
+- Công cụ lõi terminal/process, đọc và sửa tệp/skill, tìm kiếm/trích xuất web,
+  tra cứu bộ nhớ/phiên, giao việc, lập kế hoạch/cron và xử lý nội dung đa phương tiện.
+  `terminal` dùng câu đệm thực thi, `search_files` dùng câu tra cứu trung tính,
+  còn `skill_view` dùng câu đọc tài liệu. Ghi bộ nhớ và tạo giọng nói có pool
+  riêng là `memory_store` và `audio_generate`.
+- Các công cụ tùy chọn browser/CDP, desktop/preview, project/kanban, Home Assistant,
+  Feishu, Discord, Spotify và Yuanbao, cùng tên tương thích Honcho.
+  Công cụ có nhiều loại thao tác dùng câu kiểm tra trung tính vì chỉ tên công cụ
+  chưa xác định được thao tác cụ thể hay kết quả thành công.
+
+Tên đã biết cũng được nhận diện trong dạng `mcp__<server>__<tool>`. Công cụ chưa
+biết vẫn dùng câu đệm tiếp diễn chung; ánh xạ này không cài đặt hoặc bật công cụ
+tùy chọn nào. HAL làm nóng cache cho các pool tra cứu, ghi bộ nhớ và tạo giọng
+nói mới cùng các pool hiện có.
+
+Chỉ lượt được đánh dấu là lượt giọng nói mới đủ điều kiện. Bộ lập lịch dùng độ trễ
+**1,5 giây** và cooldown **2,5 giây** khi lập lịch lại tại sự kiện công cụ, với
+giới hạn **6 câu đệm mỗi lượt, tính cả lời xác nhận mở đầu** (tối đa 5 câu được
+lập lịch sau đó). Văn bản assistant tạm dừng các câu đệm đang chờ; `tool.start`
+tiếp theo cho phép lập lịch lại nhưng không đặt lại bộ đếm hoặc cooldown.
+Kết thúc/lỗi/hủy lượt hoặc người dùng ngắt lời sẽ dừng hẳn câu đệm của lượt đó.
+Khi gửi câu trả lời đầu tiên để phát giọng nói hoặc chặn công cụ TTS để xử lý,
+câu đệm cũng dừng hẳn để tránh nói chồng lên âm thanh trả lời.
+Phản ứng phần cứng cũng chặn câu đệm ở gần thời điểm phản ứng. Việc lập lịch bám
+theo sự kiện vòng đời và công cụ, không bảo đảm nói định kỳ suốt một khoảng chờ dài.
+Các nhãn Flow Monitor như `agent:first_token` và “OS Server waiting next event”
+là sự kiện pipeline/khoảng chờ, không phải tên công cụ cần pool riêng.
 
 ## 10. Vận hành
 

@@ -565,6 +565,45 @@ os-server proxies this as `GET /api/system/ota-versions`.
 | `codex` / `claudecode` / `opencode` / `picoclaw` | Run `software-update <key>` — only on the device whose `agent_runtime` IS that runtime |
 | `hermes` | Not in the loop: `hermes update` cannot be pinned, so a `min_version` it never reaches would re-trigger every poll. SSH-only. |
 
+Manual and force OpenClaw updates run `software-update openclaw`. Before
+installing the version selected by OTA metadata, the updater reads that npm
+package's `engines.node` range and checks it with npm's bundled semver library.
+A compatible Node installation is retained. Otherwise, it installs system
+Node 24.x through NodeSource and apt, then checks the range again before
+installing OpenClaw and restarting its service. Missing engine metadata,
+compatibility-check errors, or a failed/incompatible Node upgrade abort before
+the OpenClaw install and restart. Node is a shared system dependency; a
+successful Node upgrade is not rolled back if the later OpenClaw install fails.
+This prerequisite handling does not change the automatic-update gate above.
+
+OrangePi image defaults match OTA metadata checked on 2026-09-11: OpenClaw
+`2026.9.3` and Hermes `0.21.1`. The builder installs the latest NodeSource 26.x
+package even on reused base images and requires at least Node `26.8.2` (the
+current upstream release at that check). Hermes's installer and checkout are
+pinned to release `v2026.9.7`, commit `2237be355906fbe6065ce1815711eee52b2d646e`,
+and a different reported CLI version fails the build. These are image-build
+defaults; presync and subsequent `software-update` behavior are unchanged.
+
+After the OpenClaw package and plugin updates, the updater stops
+`openclaw.service` and runs `openclaw doctor --fix --non-interactive
+--no-workspace-suggestions` with `HOME=/root` and OpenClaw home/state set to
+`/root/.openclaw`. This migrates legacy workspace/state stores before the new
+gateway starts. If stopping the service or running doctor fails, the updater
+exits without restarting it; a failed migration leaves the gateway stopped
+for repair. After restart, success requires an authenticated
+`gateway status --require-rpc --timeout 5000` probe (up to 12 attempts,
+5 seconds between attempts). Exhausted probes report update failure, even if
+systemd considers the process active. Package/state changes are not
+automatically rolled back on migration or readiness failure.
+
+Manual `software-update hermes` checks Node before running `hermes update`.
+The supported build range follows the upstream Hermes installer: Node 22.22+
+within 22.x, 24.11+ within 24.x, or stable 26+. Incompatible Node is upgraded to
+system Node 24.x with the same helper used for OpenClaw, then rechecked.
+Compatibility-check or upgrade failures abort before `hermes update`.
+Hermes's update command resolves existing npm and refreshes dependencies;
+it does not run the installer's Node provisioning step.
+
 **Why the agent CLIs are gated on `agent_runtime`, not on the binary:**
 `scripts/imager/build-orangepi.sh` bakes every agent CLI onto every lamp /
 intern-v2 image regardless of `DEFAULT_AGENT`, so `inPath("codex")` is true even

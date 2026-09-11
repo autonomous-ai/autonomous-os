@@ -32,3 +32,13 @@ func TestBuildPresenceEnterUnknownUserIsLabelledUnknown(t *testing.T) {
 		t.Fatalf("presence.enter with no user = %q, want current_user=unknown", got)
 	}
 }
+
+func TestEnvironmentUsesDedicatedSkill(t *testing.T) {
+	got := Build("environment.update", "PM2.5 changed", "", "")
+	if !strings.HasPrefix(got, "[environment:update] PM2.5 changed") || !strings.Contains(got, "No mandatory speech or emotion") {
+		t.Fatalf("environment routing = %q", got)
+	}
+	if strings.Contains(got, "[sensing:") || strings.Contains(got, "[guard-active]") {
+		t.Fatalf("unexpected sensing/guard routing: %q", got)
+	}
+}

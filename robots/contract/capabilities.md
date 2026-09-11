@@ -15,6 +15,7 @@ LLM). **Skills and agents address capabilities, never routes or hardware models.
 | `audio` | `audio.speak`, `audio.listen` | audio, speaker, voice | microphone | loud-output |
 | `vision` | `vision.snapshot`, `vision.stream` | camera, depth | camera | — |
 | `sensing` | `sensing.presence`, `sensing.motion`, `sensing.sound`, `sensing.light` | sensing | ambient | — |
+| `environment` | `environment.status`, `environment.sample` | environment | ambient | — |
 | `presence` | `presence.face`, `presence.emotion` | — (perception loop → sensing events; see below) | biometric | — |
 | `motion` | `motion.move`, `motion.track`, `motion.stop` | servo, locomotion | — | motion |
 | `policy` | `policy.run`, `policy.stop` | policy | camera + task text | motion |
@@ -32,11 +33,12 @@ LLM). **Skills and agents address capabilities, never routes or hardware models.
 The OS is bidirectional, and every capability sits on one side of it. Classify it by
 asking: does it take the world **IN**, or does it drive the body **OUT**?
 
-- **Perception (IN).** `vision`, `sensing`, `presence` take the world *in*. `presence`
+- **Perception (IN).** `vision`, `sensing`, `environment`, `presence` take the world *in*. `presence`
   (face identity, user emotion) is **routeless on purpose**: it runs a background loop —
   camera → perception-service ML → `sensing` events POSTed up to the os-server — it is not a route
   the agent calls *down*. Declaring `presence` is what tells HAL to run that people-
-  perception loop and which perception-service models to call. (Raw ambient sensors are `sensing`;
+  perception loop and which perception-service models to call. (`sensing` owns ambient
+  event acquisition; `environment` owns air-quality, temperature and humidity samples;
   raw frames are `vision`. `presence` is the ML people-layer over them.) It also gates the
   idle→away→sleep auto-light state machine (dim → lights-off + `presence.away` sleep
   announcement): that machine's only `on_motion()` source is the people-perception loop, so
@@ -76,6 +78,30 @@ asking: does it take the world **IN**, or does it drive the body **OUT**?
   it. A skill that requires a capability simply does not load on a device that lacks it.
 - **`*.stop` is sacred.** Any group with a `safety` class must expose an immediate,
   deterministic stop. `motion.stop` never routes through the LLM (see `SAFETY.md`).
+
+## Environmental acquisition
+
+`environment` is an optional, read-only HAL input. Its composite backend supports SEN55 and
+SCD41 under the same capability. Device-owned `environment.json` selects
+components; `sen55.json` and `scd41.json` independently configure acquisition.
+A missing component-selection file preserves legacy SEN55-only behavior.
+SCD41 adds measured `co2_ppm` only, leaving SEN55 temperature/humidity unchanged;
+`GET /environment/status` exposes acquisition state and freshness, while
+`GET /environment/sample` returns only a fresh sample (503 otherwise). Declaring
+the capability mounts its routes; acquisition additionally requires the HAL sensor
+configuration. The OS exposes read-only snapshots through its authenticated
+hardware HTTP proxy and MQTT `data` / `environment.status` request/reply, gated
+by the declared capability rather than the sensor model. Composite status
+includes `components`, `sources`, and `metric_timestamps`; healthy readings
+remain available if another sensor fails. A group `ready` state does not make
+every component fresh. The OS separately applies configured sustained-change
+policy, emits `environment.update`, and exposes a loopback agent status API;
+these remain capability-gated and do not control actuators automatically.
+
+It has no actuator safety class and needs no new `SAFETY.md` bounds. Ambient sensor
+temperature is separate from `thermal.max_temp_c`, which protects the board using
+SoC temperature. See [environmental sensing](../lamp/docs/environment-sensing.md)
+([Vietnamese](../lamp/docs/vi/environment-sensing_vi.md)) for configuration and wiring.
 
 ## Learned-policy execution
 

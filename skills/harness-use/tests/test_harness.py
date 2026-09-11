@@ -37,6 +37,48 @@ class HarnessSkillTests(unittest.TestCase):
                 harness.run('send', {'text': 'do work'}, self.path)
             self.assertEqual(self.mutations, [])
 
+    def test_explicit_new_target_overrides_retained_agent_and_owns_followup(self):
+        with patch.object(harness, 'request', self.request):
+            harness.run('send', {'agentId': 'a', 'text': 'first task'}, self.path)
+            harness.run('send', {'agent': 'Other', 'text': 'review the first task'}, self.path)
+            harness.run('send', {'text': 'add tests for that review'}, self.path)
+        self.assertEqual([m['agentId'] for m in self.mutations], ['a', 'b', 'b'])
+
+    def test_candidate_inspection_does_not_change_followup_target(self):
+        with patch.object(harness, 'request', self.request):
+            harness.run('select', {'agentId': 'a'}, self.path)
+            harness.run('list', {}, self.path)
+            harness.run('status', {'agentId': 'b'}, self.path)
+            harness.run('recap', {'agentId': 'b', 'n': 1}, self.path)
+            self.assertEqual(self.mutations, [])
+            harness.run('send', {'text': 'continue the original task'}, self.path)
+        self.assertEqual(self.mutations[0]['agentId'], 'a')
+
+    def test_missing_explicit_target_never_falls_back_to_retained_agent(self):
+        with patch.object(harness, 'request', self.request):
+            harness.run('select', {'agentId': 'a'}, self.path)
+            with self.assertRaises(ValueError):
+                harness.run('send', {'agent': 'Missing', 'text': 'review'}, self.path)
+        self.assertEqual(self.mutations, [])
+
+    def test_ambiguous_name_requires_id_before_dispatch(self):
+        base = self.request
+
+        def request(kind, **fields):
+            if kind == 'agents.list':
+                return {'machineId': 'machine', 'agents': [
+                    {'agentId': 'a', 'name': 'Claude Code'},
+                    {'agentId': 'b', 'name': 'Claude Code'},
+                ]}
+            return base(kind, **fields)
+
+        with patch.object(harness, 'request', request):
+            with self.assertRaises(ValueError):
+                harness.run('send', {'agent': 'Claude Code', 'text': 'review'}, self.path)
+            self.assertEqual(self.mutations, [])
+            harness.run('send', {'agentId': 'b', 'text': 'review'}, self.path)
+        self.assertEqual(self.mutations[0]['agentId'], 'b')
+
     def test_uncertain_send_is_persisted_and_never_replayed(self):
         self.uncertain = True
         with patch.object(harness, 'request', self.request):

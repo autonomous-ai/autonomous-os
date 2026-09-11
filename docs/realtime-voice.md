@@ -11,6 +11,24 @@ Code lives in `hal/realtime/`; it is driven by
 
 > **Source of truth:** this doc reflects the code. If they disagree, the code wins.
 
+## Execution completion telemetry
+
+For [voice KPI-3](voice-metrics.md#kpi-3-execution-completion-not-correctness),
+`TurnDoneEvent.execution_completed` defaults to `false` and becomes true only
+for a provider terminal signal: Gemini normal `generation_complete` or
+`turn_complete` without interruption, or OpenAI/Qwen `response.done` with
+`response.status == "completed"`. Connection close, send failure, synthetic
+unblock, partial output followed by timeout, stale/replayed done, and an
+abandoned receive are not completion evidence.
+
+The base receive loop passes the observation to the orchestrator, which
+snapshots it before recycling the session, then to
+`RealtimeTurnResult.execution_completed`. HAL emits `realtime_turn_done` only
+when the turn is handled and this flag is true. A memory-sync backend run
+cannot establish completion for that realtime turn. This measures execution
+ending, not answer correctness or full audio playback, and changes no routing
+or playback behavior.
+
 ## Concept: handle vs. delegate
 
 Every spoken turn is streamed to the realtime model *at the same time* as the
@@ -1174,7 +1192,7 @@ session. These are product trade-offs, not bugs:
 | STT transcript | no `[TURN CONTEXT]`, no transcript-based filters |
 | wake word | confirmed from STT text, so `HAL_WAKEWORD_ENABLED` has no effect in live mode — entry is VAD-only |
 | speaker ID, speech emotion | a session produces neither |
-| main-agent fallback | `delegate_to_main` still arrives, but there is no transcript to forward and nowhere to put the reply mid-session |
+| local STT on delegation | `delegate_to_main` ends the session and forwards `[voice-instruction]` + Gemini's own input transcription as `[transcript]` (`FunctionCallOutput.user_transcript` → `DelegateSignal.transcript`, read by `_live_out_pump`); the main agent's reply plays after hangup. Providers without input transcription forward the instruction alone |
 
 Also not run inside a session: the RMS entry gate, `SPEECH_HOLDOFF_S`, the
 silence clock, `MAX_SESSION_DURATION_S`, the per-turn STT socket and its

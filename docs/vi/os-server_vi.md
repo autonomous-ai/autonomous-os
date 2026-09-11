@@ -21,12 +21,51 @@
 | GET | `/api/system/ota-security` | Trạng thái tin cậy OTA lấy từ bootstrap worker: `legacy` hay `verified`, fingerprint key đã pin, lần fetch metadata gần nhất (xem `bootstrap-ota.md`) |
 | POST | `/api/system/reboot` | Cần admin auth: trả ACK, rồi yêu cầu HAL phát cue và reboot OS |
 | POST | `/api/system/shutdown` | Cần admin auth: trả ACK, rồi yêu cầu HAL phát cue, release servo và shutdown OS |
+| POST | `/api/system/restart/:target` | Cần admin auth, chỉ restart service `hal` hoặc `os-server`. Trả `202` với `{target, scheduled: true}` khi systemd nhận lịch restart; target không hỗ trợ trả `400`, lỗi đặt lịch trả `500`. |
+
+Restart service dùng `systemd-run --collect --on-active=2s systemctl restart <target>`
+với timeout đặt lịch năm giây. Timer tạm chạy riêng để HTTP response có thể đến
+trình duyệt trước khi os-server restart; `202` xác nhận đã đặt lịch, chưa xác nhận
+service phục hồi. Card Versions trong Web Monitor cung cấp thao tác này cho HAL
+và OS Server. Host cần systemd và quyền quản lý các system service.
 
 Hai endpoint power trả `202 Accepted` trước khi đặt lịch gọi HAL, để trình duyệt
 nhận được ACK trước lúc thiết bị không còn truy cập được. Mỗi lúc chỉ có một
 reboot hoặc shutdown chờ chạy; request thứ hai nhận `409 Conflict`. HAL sở hữu
 chuỗi thao tác vật lý: reboot phát cue reboot; shutdown phát cue rồi release
 servo trước khi chạy lệnh power của OS.
+
+### Cảm biến môi trường
+
+| Method | Endpoint | Mô tả |
+|--------|----------|-------|
+| GET | `/api/environment/status` | Chỉ cho loopback, yêu cầu khai báo rõ capability `environment`; trả snapshot chẩn đoán HAL trong envelope OS chuẩn |
+
+Thiếu capability trả 403; lỗi kết nối/định dạng HAL trả 502. Snapshot thành công
+vẫn có thể disabled, error hoặc stale: kiểm tra `data.state`, `data.stale`,
+`data.age_s` và `data.sample`. Đọc route không ép phần cứng đo ngay hay tạo
+lượt agent.
+
+Worker môi trường của OS đọc HAL độc lập và POST thay đổi kéo dài bằng
+`environment.update` tới `/api/sensing/event`. Config `environment` cấp cao
+nhất đọc/ghi qua admin `GET`/`PUT /api/device/config`: mặc định đánh giá mỗi
+10 giây, duy trì 60 giây, cooldown 900 giây, retry 60 giây, tuổi mẫu tối đa
+10 giây. Delta và warm-up từng chỉ số cấu hình được. SCD41 thêm `co2_ppm` đo
+thật vào cùng capability, mặc định thay đổi 200 ppm và warm-up 60 giây. Map
+`metrics` khai báo tường minh vẫn thay toàn bộ map, giữ nguyên nhóm đã chọn.
+Snapshot tổng hợp có `components`, `sources`, `metric_timestamps`: kiểm tra
+độ mới/tính liên tục theo chỉ số và nguồn, nên SEN55 lỗi không chặn CO₂ SCD41
+còn tốt. Tắt policy sẽ bỏ event
+tự động (`dropped_disabled`); vẫn đọc được status chẩn đoán và HAL vẫn thu nhận.
+Áp dụng gate capability,
+sleep và conversation floor; queue lúc bận chỉ giữ event môi trường mới nhất,
+hết hạn sau 60 giây, kiểm tra lại capability, sleep và policy enabled khi phát
+lại. Nhận vào queue
+là best-effort, không bảo đảm giao thông báo. Skill `environment` diễn giải
+số đo và tham khảo `wellbeing` để gợi ý phù hợp. Thu nhận phần cứng tách biệt
+chính sách thay đổi ở OS; tính năng không bật capability đang comment hay SEN55/SCD41
+đang tắt của Lamp. Xem [cảm biến môi trường Lamp](../../robots/lamp/docs/vi/environment-sensing_vi.md#chính-sách-thay-đổi-của-os-và-api-cho-agent)
+để biết mặc định, validation, payload và use case.
 
 ### Device Setup
 

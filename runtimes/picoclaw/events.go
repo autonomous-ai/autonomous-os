@@ -12,6 +12,7 @@ import (
 	"go.autonomous.ai/os/system/lib/sensingmsg"
 	"go.autonomous.ai/os/system/lib/speakergate"
 	"go.autonomous.ai/os/system/skillcontext/mood"
+	"go.autonomous.ai/os/system/telemetry"
 )
 
 // pendingEvent is a sensing event buffered while the agent was busy.
@@ -165,6 +166,7 @@ func (s *PicoclawService) drainPendingEvents() {
 
 	const expireAfter = 60 * time.Second
 	expirable := map[string]bool{
+		"environment.update":      true,
 		"motion.activity":         true,
 		"emotion.detected":        true,
 		"speech_emotion.detected": true,
@@ -174,6 +176,10 @@ func (s *PicoclawService) drainPendingEvents() {
 	}
 	filtered := events[:0]
 	for _, ev := range events {
+		if !sensingmsg.ReplayAllowed(ev.eventType) {
+			slog.Info("environment event dropped at replay", "component", "sensing", "reason", "sleeping or capability unavailable")
+			continue
+		}
 		if expirable[ev.eventType] && time.Since(ev.queuedAt) > expireAfter {
 			slog.Info("sensing event expired from queue", "component", "sensing", "type", ev.eventType, "age_s", int(time.Since(ev.queuedAt).Seconds()))
 			continue
@@ -183,6 +189,7 @@ func (s *PicoclawService) drainPendingEvents() {
 	events = filtered
 
 	coalesce := map[string]bool{
+		"environment.update":      true,
 		"presence.enter":          true,
 		"presence.leave":          true,
 		"presence.away":           true,
@@ -263,6 +270,12 @@ func (s *PicoclawService) drainPendingEvents() {
 		if sourceType == "" {
 			sourceType = "user"
 		}
+		if telemetry.TaskGroup(ev.eventType) == "sensing" {
+			// Keep this cohort stable if the socket disappears before dispatch.
+			ev.fixedRunID = runID
+			events[i] = ev
+			telemetry.ReportTaskStarted(ev.eventType, "", runID)
+		}
 		_, err := s.sendChatNow(msg, ev.images, reqID, runID, sourceType)
 		// A missing socket is definitely unsent; a failed write is uncertain
 		// and must not be replayed. Keep the rest locally until this turn ends.
@@ -274,6 +287,9 @@ func (s *PicoclawService) drainPendingEvents() {
 		s.pendingEvents = append(tail, s.pendingEvents...)
 		s.pendingEventsMu.Unlock()
 		if err != nil {
+			if telemetry.TaskGroup(ev.eventType) != "" && !errors.Is(err, errDisconnectedBeforeSend) {
+				telemetry.ReportTaskExecution(runID, "", "failed", "dispatch_error")
+			}
 			slog.Error("failed to replay pending event", "component", "sensing", "type", ev.eventType, "error", err)
 			flow.End("sensing_input", turnStart, map[string]any{"error": err.Error()}, runID)
 		} else {

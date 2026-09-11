@@ -66,6 +66,28 @@ all stay untouched. `*hermes.Service` satisfies `domain.AgentGateway` in full
 (`Name()`="Hermes", `IsReady`, `ConnectedAt`, `AgentUptime`, `IsBusy`/`SetBusy`,
 `QueuePendingEvent`, `SendChat*`, `StartWS`, …).
 
+### Cache usage in Flow Monitor
+
+Hermes Responses `input_tokens` includes uncached input, cache reads and cache
+writes. `translator.go` subtracts `input_tokens_details.cached_tokens` and
+`input_tokens_details.cache_write_tokens` into separate domain buckets, so the
+monitor shows `R`/`W` without counting cached input twice. Missing details retain
+the legacy input total; impossible cache totals are ignored. For example, 14,097
+input with 13,824 cache reads and 66 output becomes 273 uncached input, `R13.8k`,
+and 66 output (14,163 total).
+
+Some Hermes versions accumulate cache internally but drop it in
+`_finish_turn_result` and `_responses_usage_payload` in
+`gateway/platforms/api_server.py`. Local onboarding runs the embedded
+`cache_usage_patch.py` with Python 3 to preserve `session_cache_read_tokens` and
+`session_cache_write_tokens` in Responses usage. It checks known AST shapes,
+compiles before an atomic write, and leaves already-patched files unchanged.
+A changed patch joins the existing gateway restart decision. Unsupported source
+produces a warning without a write; missing installations and remote endpoints
+are skipped. Remote operators must apply the equivalent server fix themselves.
+Existing recorded turns are not rewritten; inspect a new turn after restart.
+No frontend change or cache-provider setting is required.
+
 ## 3. Session & conversation model
 
 Hermes has no socket, so the "session" is server-side:
@@ -347,6 +369,42 @@ text-only and image attachments are dropped on the proactive path.
 `hal.go` wires Hermes turns into the HAL voice path (TTS on speak-end, the same
 `lib/hal` entry points OpenClaw uses), so spoken interaction works the same
 regardless of backend.
+
+### Dead-air fillers during tool work
+
+`system/lib/i18n/fillers.go` maps Hermes tool names to short, activity-specific
+voice phrases. Coverage follows the [official tools reference](https://hermes-agent.nousresearch.com/docs/reference/tools-reference)
+(reviewed 2026-09-11); `system/lib/i18n/fillers_test.go` keeps a registry snapshot
+and checks coverage in English, Vietnamese, Simplified Chinese and Traditional
+Chinese. The mappings cover:
+
+- Core terminal/process, file/skill reading and editing, web search/extraction,
+  memory/session lookup, delegation, planning/cron and media tools.
+  `terminal` uses execution phrases, `search_files` uses neutral lookup phrases,
+  and `skill_view` uses reading phrases. Memory writes and speech generation
+  have separate `memory_store` and `audio_generate` pools.
+- Optional browser/CDP, desktop/preview, project/kanban, Home Assistant,
+  Feishu, Discord, Spotify and Yuanbao tools, plus Honcho compatibility names.
+  Mixed-action tools use neutral checking phrases because the tool name alone
+  does not establish the action or its success.
+
+Known names also resolve inside `mcp__<server>__<tool>` wrappers. Unknown tools
+retain the generic continuation fallback; this mapping does not install or
+enable any optional tool. HAL prewarms the new lookup, memory-write and
+speech-generation pools alongside the existing pools.
+
+Only runs marked as voice turns are eligible. The scheduler uses a **1.5-second**
+delay and a **2.5-second** cooldown when rearming at tool boundaries, with at most
+**6 fillers per turn including the opening acknowledgment** (at most 5 scheduled
+fillers after it). Assistant text suspends pending fillers; a subsequent
+`tool.start` resumes scheduling without resetting the count or cooldown.
+End/error/cancellation or user interruption stops the run's fillers permanently.
+Dispatching the first spoken answer sentence or intercepting a TTS tool also
+stops them permanently to avoid overlapping the answer audio.
+Hardware reactions also suppress nearby fillers. Scheduling follows lifecycle
+and tool events; it does not guarantee periodic speech throughout a long wait.
+Flow Monitor labels such as `agent:first_token` and “OS Server waiting next
+event” are pipeline events/elapsed gaps, not tool names that need their own pool.
 
 ## 10. Operating it
 

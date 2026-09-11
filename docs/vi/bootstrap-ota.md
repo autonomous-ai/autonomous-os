@@ -550,6 +550,44 @@ resolve từ `metadata.devices.<device_type>` lồng nhau thay vì danh sách co
 | `codex` / `claudecode` / `opencode` / `picoclaw` | Chạy `software-update <key>` — CHỈ trên thiết bị có `agent_runtime` đúng bằng runtime đó |
 | `hermes` | Không nằm trong loop: `hermes update` không pin được, nên một `min_version` nó không bao giờ đạt sẽ kích lại mỗi vòng poll. Chỉ chạy tay qua SSH. |
 
+Cập nhật OpenClaw thủ công và force update chạy `software-update openclaw`.
+Trước khi cài phiên bản trong OTA metadata, updater đọc `engines.node` của
+package npm đó và kiểm tra bằng thư viện semver đi kèm npm. Node đang tương
+thích được giữ nguyên; nếu chưa tương thích, updater cài Node hệ thống nhánh
+24.x qua NodeSource và apt, rồi kiểm tra lại trước khi cài OpenClaw và restart
+dịch vụ. Thiếu engine metadata, lỗi kiểm tra, hoặc nâng Node thất bại/vẫn chưa
+tương thích đều dừng trước bước cài OpenClaw và restart. Node là dependency
+chung của hệ thống; nếu đã nâng Node thành công nhưng cài OpenClaw thất bại,
+updater không rollback Node. Xử lý prerequisite này không thay đổi gate cập
+nhật tự động ở trên.
+
+Mặc định image OrangePi khớp OTA metadata đã kiểm tra ngày 2026-09-11: OpenClaw
+`2026.9.3` và Hermes `0.21.1`. Builder cài package NodeSource 26.x mới nhất kể cả
+khi dùng lại base image, và yêu cầu tối thiểu Node `26.8.2` (bản upstream mới nhất
+tại thời điểm kiểm tra). Installer và checkout Hermes được pin vào release
+`v2026.9.7`, commit `2237be355906fbe6065ce1815711eee52b2d646e`; version CLI báo về
+khác sẽ làm build thất bại. Đây là mặc định lúc build image; presync và hành vi
+`software-update` sau đó giữ nguyên.
+
+Sau khi cập nhật package OpenClaw và plugin, updater dừng `openclaw.service`
+rồi chạy `openclaw doctor --fix --non-interactive --no-workspace-suggestions`
+với `HOME=/root` và OpenClaw home/state là `/root/.openclaw`, để migrate
+workspace/state cũ trước khi khởi động gateway mới. Nếu dừng service hoặc
+chạy doctor thất bại, updater thoát và không restart; migration thất bại sẽ
+để gateway dừng chờ sửa. Sau restart, chỉ báo thành công khi probe có xác thực
+`gateway status --require-rpc --timeout 5000` thành công (tối đa 12 lần,
+cách nhau 5 giây). Hết lượt probe sẽ báo cập nhật thất bại dù systemd thấy
+process còn active. Package/state không tự rollback khi migration hoặc
+kiểm tra readiness thất bại.
+
+`software-update hermes` thủ công kiểm tra Node trước khi chạy `hermes update`.
+Dải phiên bản dùng để build theo installer upstream Hermes: Node 22.22+ trong
+nhánh 22.x, 24.11+ trong nhánh 24.x, hoặc bản stable 26+. Nếu chưa tương thích,
+updater dùng chung helper với OpenClaw để nâng Node hệ thống lên nhánh 24.x,
+rồi kiểm tra lại. Lỗi kiểm tra hoặc nâng Node sẽ dừng trước `hermes update`.
+Lệnh update của Hermes chọn npm sẵn có và cập nhật dependencies; nó không
+chạy bước cài Node của installer.
+
 **Vì sao CLI của agent gate theo `agent_runtime` chứ không theo binary:**
 `scripts/imager/build-orangepi.sh` bake CLI của MỌI agent lên mọi image lamp /
 intern-v2 bất kể `DEFAULT_AGENT`, nên `inPath("codex")` vẫn đúng trên máy đang

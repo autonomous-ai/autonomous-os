@@ -295,8 +295,10 @@ if "display" in _declared:
     except ImportError as e:
         logger.warning(f"Display service not available: {e}")
 
-_gpio_button_handler = None
+_gpio_button_handlers = []
 _ttp223_handler = None
+_mpr121_handler = None
+_privacy_button_handler = None
 
 # Set the moment lifespan shutdown begins — late async initializers (sensing-init)
 # check it so they don't start services nobody will stop.
@@ -363,7 +365,11 @@ def _sim_audio_probe(sd_module) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _gpio_button_handler, _ttp223_handler
+    global _gpio_button_handlers, _ttp223_handler, _mpr121_handler, _privacy_button_handler
+
+    # Keep privacy-controlled peripherals closed until the GPIO boot sync.
+    from hal import privacy
+    privacy.prepare(_privacy_button_config)
 
     # --- Phase 0: Borrow the hardware from whoever owns it ---
     # Empty unless ROBOT.md declares an `owner:`. Where one exists it holds
@@ -451,6 +457,8 @@ async def lifespan(app: FastAPI):
                     brightness=CAMERA_BRIGHTNESS,
                 )
             )
+            if _privacy_button_config and _privacy_button_config.disable_camera_on_mute:
+                cap = privacy.GuardedCamera(cap)
             if state._camera_disabled:
                 # Disabled state restored from the camera sidecar: keep the
                 # capture object (so /camera/enable can start it) but don't
@@ -898,39 +906,57 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("TrackerService skipped — needs servo+camera routes mounted")
 
-    # GPIO17 button (single=stop/unmute, triple=reboot, long=shutdown). The
-    # mock board carries parser-required placeholder pins, never GPIO hardware.
-    if _board_id != "sim":
+    # Each declared button owns its GPIO handle and gesture state.
+    _gpio_button_handlers = []
+    for button in _gpio_button_configs:
         try:
             from hal.drivers.gpio_button import GPIOButtonHandler
 
-            _gpio_button_handler = GPIOButtonHandler()
-            _gpio_button_handler.start()
+            handler = GPIOButtonHandler(
+                button.wiring, name=button.name, behavior=button.behavior,
+                hold_s=button.hold_s,
+            )
+            handler.start()
+            _gpio_button_handlers.append(handler)
         except Exception as e:
-            logger.warning(f"GPIO button init failed: {e}")
-    else:
+            logger.warning("GPIO button %s init failed: %s", button.name, e)
+    if not _gpio_button_configs:
         logger.info("GPIO button skipped — mock board has no hardware")
+
+    # MPR121 is opt-in per device/board; absent hardware leaves other inputs running.
+    if _mpr121_config is not None:
+        try:
+            from hal.drivers.mpr121 import MPR121Handler
+
+            _mpr121_handler = MPR121Handler(_mpr121_config)
+            _mpr121_handler.start()
+        except Exception as e:
+            logger.warning(
+                "MPR121 init failed on i2c-%d address 0x%02x: %s",
+                _mpr121_config.bus, _mpr121_config.address, e,
+            )
+            _mpr121_handler = None
+    else:
+        logger.info("MPR121 skipped — no enabled device wiring or simulated board")
 
     # TTP223 capacitive touchpad (OrangePi sun60 only — same gestures as
     # GPIO button, runs independently. Skips silently on other boards.)
     try:
         from hal.drivers.ttp223 import TTP223Handler
 
-        _ttp223_handler = TTP223Handler()
+        _ttp223_handler = TTP223Handler(_ttp223_config)
         _ttp223_handler.start()
     except Exception as e:
         logger.warning(f"TTP223 init failed: {e}")
 
-    # Dedicated mic-mute push button (OrangePi sun60 PE1 today). One press =
-    # one mute↔unmute flip via HAL voice routes. Silent skip on boards that
-    # don't declare `mic_button` in boards.json.
+    # Slide-switch position controls mic mute; missing config preserves legacy gating.
     try:
-        from hal.drivers.mic_button import MicButtonHandler
+        from hal.drivers.privacy_button import PrivacyButtonHandler
 
-        _mic_button_handler = MicButtonHandler()
-        _mic_button_handler.start()
+        _privacy_button_handler = PrivacyButtonHandler(_privacy_button_config)
+        _privacy_button_handler.start()
     except Exception as e:
-        logger.warning(f"Mic button init failed: {e}")
+        logger.warning(f"Mic switch init failed: {e}")
 
     # Restore Bluetooth headset route if the user had one active before reboot.
     # Best effort — silent fallback to the device speaker/mic if anything goes wrong.
@@ -998,10 +1024,23 @@ async def lifespan(app: FastAPI):
             _safety.thermal.max_temp_c, _safety.thermal.resume_temp_c,
         )
 
+    if "environment" in _plan.mounted:
+        state.environment_service = _environment_group
+        state.environment_service.start()
+
     yield
 
     _lifespan_stopping.set()
+    if state.environment_service is not None:
+        state.environment_service.stop()
     _thermal_stop.set()
+    if _privacy_button_handler is not None:
+        _privacy_button_handler.stop()
+    for handler in _gpio_button_handlers:
+        handler.stop()
+    _gpio_button_handlers = []
+    if _mpr121_handler is not None:
+        _mpr121_handler.stop()
 
     # Voice/sensing stops (~3s) run concurrently with the announce+park below —
     # they only tear down mic/STT/perception threads, never the TTS output the
@@ -1111,7 +1150,7 @@ _ALWAYS_ROUTES = ("audio", "emotion", "scene", "system", "bluetooth")
 _ROUTERS_BY_NAME = {}
 for _rname in (
     "servo", "led", "camera", "audio", "emotion", "scene", "sensing",
-    "display", "voice", "music", "system", "bluetooth", "policy",
+    "display", "voice", "music", "system", "bluetooth", "policy", "environment",
 ):
     if _rname not in _declared and _rname not in _ALWAYS_ROUTES:
         logger.info("Route module '%s' skipped — not declared in ROBOT.md", _rname)
@@ -1150,6 +1189,7 @@ _route_available = {
     # actuator dependency.  A real executor must make availability conditional
     # on its driver and preserve the same response contract.
     "policy": True,
+    "environment": True,
     "emotion": True, "scene": True, "system": True, "bluetooth": True,
     "speaker": "speaker" in _ROUTERS_BY_NAME,
 }
@@ -1282,6 +1322,41 @@ from hal.board.board import assert_board_supported
 # HAL_SIMULATE is set.
 _board_id = assert_board_supported([] if _simulation else _profile.boards)
 logger.info("Board gate: device=%s board=%s declared=%s", _resolve_device_type(), _board_id, _profile.boards)
+
+from hal.board.gpio_button import load_button_configs
+
+_gpio_button_configs = (
+    [] if _board_id == "sim" else load_button_configs(_device_dir, _board_id)
+)
+
+from hal.board.privacy_button import load_privacy_button_config
+
+_privacy_button_config = (
+    None if _board_id == "sim" else load_privacy_button_config(
+        _device_dir, _board_id, _resolve_device_type(),
+    )
+)
+
+from hal.board.mpr121 import load_mpr121_config
+
+_mpr121_config = (
+    None if _board_id == "sim" else load_mpr121_config(_device_dir, _board_id)
+)
+
+_environment_group = None
+if "environment" in _declared:
+    from hal.drivers.environment.group import create_environment_group
+
+    _environment_group = create_environment_group(_device_dir, _board_id, _simulation)
+    logger.info("[environment] components=%s simulation=%s", list(_environment_group.components), _simulation)
+else:
+    logger.info("[environment] capability not declared; acquisition disabled")
+
+from hal.board.ttp223 import load_touch_config
+
+_ttp223_config = (
+    None if _board_id == "sim" else load_touch_config(_device_dir, _board_id)
+)
 
 from hal.board.device import plan_mounts
 
@@ -1526,6 +1601,10 @@ def health():
         "camera": state.camera_capture is not None and state.camera_capture.last_frame is not None,
         "audio": state.audio_output_device is not None or state.audio_input_device is not None,
         "sensing": state.sensing_service is not None,
+        "environment": (
+            state.environment_service is not None
+            and not state.environment_service.snapshot()["stale"]
+        ),
         "voice": state.voice_service is not None and state.voice_service.available
         if state.voice_service
         else False,

@@ -16,20 +16,29 @@ func TestSupported_MaximalDeviceKeepsAll(t *testing.T) {
 	caps := map[string]bool{
 		"audio": true, "vision": true, "sensing": true, "presence": true,
 		"motion": true, "light": true, "display": true, "expression": true, "media": true,
-		"connectivity": true, "companion": true, "system": true,
+		"connectivity": true, "companion": true, "system": true, "environment": true,
 	}
 	if got := Supported(caps); len(got) != len(Catalog) {
 		t.Fatalf("maximal device: got %d skills, want full catalog %d", len(got), len(Catalog))
 	}
 }
 
-// Empty capabilities (ROBOT.md declares none) fails open to the full catalog.
-func TestSupported_FailOpen(t *testing.T) {
-	if got := Supported(nil); len(got) != len(Catalog) {
-		t.Fatalf("nil caps: got %d, want full catalog %d (fail-open)", len(got), len(Catalog))
-	}
-	if got := Supported(map[string]bool{}); len(got) != len(Catalog) {
-		t.Fatalf("empty caps: got %d, want full catalog %d (fail-open)", len(got), len(Catalog))
+// Empty capabilities preserve legacy skills without opting into environment.
+func TestSupported_FailOpenPreservesLegacyOnly(t *testing.T) {
+	for _, caps := range []map[string]bool{nil, {}} {
+		got := Supported(caps)
+		for _, name := range Catalog {
+			if name == "environment" {
+				if contains(got, name) {
+					t.Error("missing capabilities must not install environment")
+				}
+			} else if !contains(got, name) {
+				t.Errorf("legacy fail-open must preserve %q", name)
+			}
+		}
+		if len(got) != len(Catalog)-1 {
+			t.Errorf("got %d skills, want %d legacy skills", len(got), len(Catalog)-1)
+		}
 	}
 }
 
@@ -44,7 +53,7 @@ func TestSupported_ReducedDevicePrunesHardware(t *testing.T) {
 	// box lacks — so they prune. Voice people-perception (speaker-recognizer,
 	// user-emotion-detection) gates on `audio` (the mic), which this box HAS — so
 	// they survive (see the kept list below).
-	for _, gone := range []string{"servo-control", "servo-tracking", "led-control", "display", "emotion", "scene", "camera", "music", "face-enroll", "guard", "computer-use"} {
+	for _, gone := range []string{"servo-control", "servo-tracking", "led-control", "display", "emotion", "scene", "camera", "music", "face-enroll", "guard", "computer-use", "environment"} {
 		if contains(got, gone) {
 			t.Errorf("expected %q pruned (device lacks its capability)", gone)
 		}
@@ -68,7 +77,7 @@ func TestCapability_Consistency(t *testing.T) {
 	known := map[string]bool{
 		"audio": true, "vision": true, "sensing": true, "presence": true,
 		"motion": true, "light": true, "display": true, "expression": true, "media": true,
-		"connectivity": true, "companion": true, "system": true,
+		"connectivity": true, "companion": true, "system": true, "environment": true,
 	}
 	for skill, caps := range Capability {
 		if len(caps) == 0 {
@@ -109,5 +118,23 @@ func TestSupported_UserEmotionDetectionAnyOfSensor(t *testing.T) {
 		if gotSpeaker := contains(Supported(tc.caps), "speaker-recognizer"); gotSpeaker != wantSpeaker {
 			t.Errorf("%s: speaker-recognizer present=%v, want %v (audio=%v)", tc.name, gotSpeaker, wantSpeaker, tc.caps["audio"])
 		}
+	}
+}
+
+// Environmental sensing does not imply a camera or an expression actuator.
+func TestSupported_EnvironmentOnly(t *testing.T) {
+	got := Supported(map[string]bool{"environment": true})
+	for _, kept := range []string{"environment", "wellbeing"} {
+		if !contains(got, kept) {
+			t.Errorf("expected %q on an environment-only device", kept)
+		}
+	}
+	for _, gone := range []string{"camera", "emotion", "sensing", "guard"} {
+		if contains(got, gone) {
+			t.Errorf("environment capability must not install %q", gone)
+		}
+	}
+	if contains(Supported(map[string]bool{"environment": false}), "environment") {
+		t.Error("explicit false environment capability must not install environment skill")
 	}
 }

@@ -45,6 +45,7 @@ This is a **history entry only**. The conversation already happened. You are bei
 2. **`[HANDLED]` → always `NO_REPLY`.** No exceptions. Even if the reply seems wrong or incomplete — the user already heard it. Do not correct, echo, paraphrase, or add to it.
 3. **Log context from `[HANDLED]` silently.** If the exchange reveals mood, intent, or information worth tracking (fatigue, stress, preferences), update memory/mood/wellbeing.
 4. **Never echo tags.** `[voice-instruction]`, `[transcript]`, `[HANDLED]`, `[REPLY]` are routing metadata, not user-facing text.
+   Interpret routing, transcript differences, and speaker metadata silently. Assistant reply text is spoken aloud: start with any required HW markers and the user-facing answer, without narrating which input or skill you chose.
 5. **No prefix = normal voice event.** Process the message as-is.
 6. **Compound instructions: execute EVERY clause.** A `[voice-instruction]` often carries several actions plus a question ("Rotate to the right, hold that position, then describe what you see"). Handle each clause, in order, with the skill it belongs to — and never confirm a clause you did not actually perform. Answering the question half while silently skipping the movement (or vice versa) is the worst outcome: the user hears "done" for something that never happened.
 

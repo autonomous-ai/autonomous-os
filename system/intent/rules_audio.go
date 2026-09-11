@@ -33,8 +33,8 @@ var audioRules = []rule{
 		exec: func(string) *Result {
 			vol := volumeStep(1.0) // as loud as this device is allowed to go
 			body := fmt.Sprintf(`{"volume":%d}`, vol)
-			post("/audio/volume", body)
-			return &Result{TTSText: "Volume up!", Actions: []string{"POST /audio/volume " + body}}
+			executionFailed := post("/audio/volume", body) != nil
+			return &Result{ExecutionFailed: executionFailed, TTSText: "Volume up!", Actions: []string{"POST /audio/volume " + body}}
 		},
 	},
 	{
@@ -44,8 +44,8 @@ var audioRules = []rule{
 		exec: func(string) *Result {
 			vol := volumeStep(0.3) // same 30% of the usable range as before
 			body := fmt.Sprintf(`{"volume":%d}`, vol)
-			post("/audio/volume", body)
-			return &Result{TTSText: "Volume down!", Actions: []string{"POST /audio/volume " + body}}
+			executionFailed := post("/audio/volume", body) != nil
+			return &Result{ExecutionFailed: executionFailed, TTSText: "Volume down!", Actions: []string{"POST /audio/volume " + body}}
 		},
 	},
 	// unmute before mute: belt-and-braces ordering on top of the
@@ -56,8 +56,8 @@ var audioRules = []rule{
 		capability: device.CapMedia,
 		match:      anyOf("unmute speaker", "unmute the speaker"),
 		exec: func(string) *Result {
-			post("/speaker/unmute", "")
-			return &Result{TTSText: "Speaker on!", Actions: []string{`POST /speaker/unmute`}}
+			executionFailed := post("/speaker/unmute", "") != nil
+			return &Result{ExecutionFailed: executionFailed, TTSText: "Speaker on!", Actions: []string{`POST /speaker/unmute`}}
 		},
 	},
 	{
@@ -65,8 +65,8 @@ var audioRules = []rule{
 		capability: device.CapMedia,
 		match:      anyOf("mute speaker", "mute the speaker"),
 		exec: func(string) *Result {
-			post("/speaker/mute", "")
-			return &Result{TTSText: "", Actions: []string{`POST /speaker/mute`}}
+			executionFailed := post("/speaker/mute", "") != nil
+			return &Result{ExecutionFailed: executionFailed, TTSText: "", Actions: []string{`POST /speaker/mute`}}
 		},
 	},
 
@@ -76,8 +76,8 @@ var audioRules = []rule{
 		capability: device.CapMedia,
 		match:      anyOf("stop music", "stop the music", "music off", "stop playing"),
 		exec: func(string) *Result {
-			post("/audio/stop", "")
-			return &Result{TTSText: "Music stopped.", Actions: []string{"POST /audio/stop"}}
+			executionFailed := post("/audio/stop", "") != nil
+			return &Result{ExecutionFailed: executionFailed, TTSText: "Music stopped.", Actions: []string{"POST /audio/stop"}}
 		},
 	},
 
@@ -87,8 +87,8 @@ var audioRules = []rule{
 		capability: device.CapAudio,
 		match:      anyOf("stop talking", "ok stop"),
 		exec: func(string) *Result {
-			post("/tts/stop", "")
-			return &Result{TTSText: "", Actions: []string{"POST /tts/stop"}}
+			executionFailed := post("/tts/stop", "") != nil
+			return &Result{ExecutionFailed: executionFailed, TTSText: "", Actions: []string{"POST /tts/stop"}}
 		},
 	},
 }

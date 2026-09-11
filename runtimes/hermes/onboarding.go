@@ -120,6 +120,12 @@ func (s *HermesService) EnsureOnboarding() error {
 		slog.Warn("hermes observer hook materialize failed", "component", "hermes", "error", err)
 	}
 
+	// Preserve cache counters in the installed API before the existing restart.
+	cacheUsageChanged, err := s.ensureCacheUsagePatch()
+	if err != nil {
+		slog.Warn("hermes cache usage compatibility patch failed", "component", "hermes", "error", err)
+	}
+
 	// Reconcile every supported platform skill from the CDN, not only an empty
 	// directory. This closes the restart race where OTA metadata is already new
 	// when the watcher seeds its versions but the local skill files are old.
@@ -138,14 +144,14 @@ func (s *HermesService) EnsureOnboarding() error {
 	gatewayInstalled := s.ensureGatewayUnit()
 	gatewayDown := !gatewayActive()
 
-	if !configChanged && !hookChanged && !skillsSynced && !skillsDeduped && !gatewayInstalled && !gatewayDown {
+	if !configChanged && !hookChanged && !cacheUsageChanged && !skillsSynced && !skillsDeduped && !gatewayInstalled && !gatewayDown {
 		slog.Info("hermes onboarding: config + hooks + skills unchanged, gateway up — no restart", "component", "hermes")
 		return nil
 	}
 
 	slog.Info("hermes onboarding: (re)starting gateway",
 		"component", "hermes", "unit", hermesGatewayUnit,
-		"config_changed", configChanged, "hook_changed", hookChanged, "skills_synced", skillsSynced,
+		"config_changed", configChanged, "hook_changed", hookChanged, "cache_usage_changed", cacheUsageChanged, "skills_synced", skillsSynced,
 		"skills_deduped", skillsDeduped, "gateway_installed", gatewayInstalled, "gateway_down", gatewayDown)
 	// Re-enable so hermes survives a reboot — factory reset disabled the unit, and a
 	// freshly installed one is not enabled for boot. Best-effort; restart still starts

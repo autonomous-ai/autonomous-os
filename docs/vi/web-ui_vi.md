@@ -142,6 +142,44 @@ base URL — thứ luôn load lên kèm giá trị thật. Thiếu điều kiệ
 AI Brain mới là ghi đè im lặng lên key TTS/STT đang cố tình khác: đã có máy giữ
 key openrouter đi kèm URL proxy autonomous, một cặp không thể chạy.
 
+**Quyền sở hữu key TTS.** Thiết bị chỉ lưu đúng một key TTS (`ttsAPIKey`), và nó
+luôn thuộc về provider đang được chọn trong Voice. `Autonomous (proxy)` và
+`Custom (BYO URL)` không lưu gì cả mà kế thừa key AI Brain qua
+`Config.GetTTSAPIKey()` (`system/server/config/config.go:605`); `Piper` không cần
+key; `OpenAI (direct)` và `ElevenLabs (direct)` **bắt buộc phải có key riêng** —
+JWT Autonomous kế thừa sẽ bị từ chối bằng 401, HAL retry rồi bỏ cuộc và trả về 0
+sample, tức là thiết bị câm mà UI không báo lỗi gì. Bốn quy tắc giữ bất biến này:
+
+- Save bị **từ chối** khi provider direct không có key vừa nhập lẫn key đã lưu
+  thuộc đúng provider đó. Nhãn API Key hiển thị "required" với provider direct và
+  "optional — leave blank to reuse AI brain key" với các lựa chọn còn lại.
+- Badge `✓ configured` và placeholder `•••••••• saved` chỉ hiện khi key đã lưu
+  thuộc về provider đang chọn. Quyền sở hữu được suy ra từ cặp `tts_base_url` +
+  `tts_provider` lúc load qua `detectChoice()`
+  (`system/web/src/pages/settings/ttsProvider.ts`) — không thêm field config nào.
+- Mirror key AI Brain chỉ điền vào ô key TTS đang trống với `autonomous` /
+  `custom` (`ttsInheritsLlmKey()` trong `SettingsPanel`). Mirror vào provider
+  direct sẽ đặt một JWT Autonomous vào ô đó — trông như đã cấu hình và lưu trót
+  lọt, nhưng vendor trả về 401. Điều này khớp với điều kiện
+  `sttProvider === "autonomous"` mà các mirror phía STT vốn đã có.
+- Đổi provider khác với chủ sở hữu của key sẽ gửi `clear_tts_api_key: true`, và
+  `applyVoicePipelineFields` xử lý bằng cách xoá rỗng `ttsAPIKey`. Gửi
+  `tts_api_key: ""` không làm được việc này: mọi field trong
+  `UpdateConfigRequest` theo ngữ nghĩa PATCH, `""` nghĩa là "không gửi". Key sau
+  khi xoá được đẩy live xuống HAL dưới dạng giá trị *đã resolve*
+  (`GetTTSAPIKey()`), vì `/voice/tts/config` của HAL hiểu key rỗng là "giữ
+  nguyên key hiện tại".
+
+Key đã gõ nhưng chưa lưu được cache theo từng provider **chỉ trong tab trình
+duyệt** (một `useRef` trong `TTSSection`), để đổi qua lại giữa các provider trước
+khi lưu không phải gõ lại. Cache này mất khi reload và khi Save; thiết bị không
+bao giờ giữ quá một key.
+
+> Luồng Setup (`system/web/src/components/setup/TTSSection.tsx`) vẫn chưa expose
+> key và base URL của TTS — cả hai mirror từ AI Brain — nên provider direct chọn
+> trong lúc setup không thể nhập key hợp lệ ở đó. Hãy cấu hình sau trong
+> Settings → Voice.
+
 Settings **không phải là một trang riêng**. Nó là một khu vực (area) của chính shell Monitor (`system/web/src/pages/monitor/index.tsx`), truy cập tại route `/setting`. Trong `App.tsx`, `/monitor` và `/setting` là các route con của một layout route duy nhất có element render `<Monitor/>`; React Router giữ element đó luôn mounted khi chỉ đường dẫn con thay đổi, nên sidebar **không** bị remount khi chuyển giữa Monitor và Settings (không có hiện tượng nháy toàn trang). Shell suy ra khu vực — `"monitor"` hoặc `"setting"` — từ `useLocation().pathname`.
 
 Nhóm Settings có thể thu gọn nằm trong `NAV` của sidebar dùng chung (`system/web/src/pages/monitor/types.ts`). Bấm một mục Settings sẽ điều hướng tới `/setting` và render `SettingsPanel` (`system/web/src/pages/settings/SettingsPanel.tsx`) ở khu vực chính; bấm một mục Monitor sẽ điều hướng tới `/monitor`.
@@ -165,7 +203,9 @@ Nhóm Settings có thể thu gọn nằm trong `NAV` của sidebar dùng chung (
 | Plugins | `/setting#plugins` |
 | Timezone | `/setting#timezone` |
 
-Các mục Monitor được serialize thành id thuần, ví dụ `/monitor#overview`, `/monitor#pairing`, `/monitor#system`, `/monitor#flow`. Mặc định: `/monitor` không có hash / hash không hợp lệ → `overview`; `/setting` không có hash / hash không hợp lệ → `general` (URL được chuẩn hóa thành `/setting#general`). Deep-link (ví dụ `/setting#wifi`) và nút back/forward của trình duyệt được tôn trọng qua một effect dựa trên `useLocation`. Người dùng không-debug chỉ thấy các mục trong `PUBLIC_SECTIONS` (gồm Chat, Overview, **Pairing**, Info, Flow, Camera, Users, **Logs**, **CLI**, và các mục Settings công khai General/Wi-Fi/My Voice/Face/MCP Tools/Plugins/Timezone); Bluetooth vẫn truy cập được bằng URL trực tiếp nhưng bị ẩn khỏi navigation. `?debug=true` mở khóa phần còn lại (Sensing, Analytics, Servo, API Docs, Agent gateway, và các mục Settings sâu hơn AI Brain/Runtime/Language/Voice/Realtime/Channels/MQTT). Bấm `update` là nút đổi ngay thành `updating…` — nút KHÔNG bao giờ báo "OK", vì chữ đó đọc như "xong rồi" trong khi request mới chỉ KHỞI ĐỘNG việc cài (và với component chạy vài giây thì nó còn hiện trước cả lúc dòng kịp báo tiến trình). Khi lỗi thì hiện đúng lý do server trả về (`rate-limited, retry in 8s`, `bootstrap unreachable`) thay vì chữ "Failed" trống rỗng. Trong lúc đang cài, dòng đó hiện `updating…` thay cho nút (một lần cài mất vài chục giây — component dừng, build lại, khởi động lại — và một dòng đứng im khiến người dùng bấm lần hai, chính là cách một máy từng mất sạch HAL runtime). Các nút `update` trong card **Versions** ở Overview (dòng Web / OS / HAL / Agent, cộng Bootstrap và Device ở debug) cũng bị chặn theo cách này — người xem thường không có nút kích OTA một chạm. Toggle **Debug** trên top bar, ngay cạnh nút Dark/Light, bật/tắt query parameter này nhưng vẫn giữ hash của mục đang mở và các query parameter khác; màu amber cho biết debug mode đang bật.
+Các mục Monitor được serialize thành id thuần, ví dụ `/monitor#overview`, `/monitor#pairing`, `/monitor#system`, `/monitor#flow`. Mặc định: `/monitor` không có hash / hash không hợp lệ → `overview`; `/setting` không có hash / hash không hợp lệ → `general` (URL được chuẩn hóa thành `/setting#general`). Deep-link (ví dụ `/setting#wifi`) và nút back/forward của trình duyệt được tôn trọng qua một effect dựa trên `useLocation`. Người dùng không-debug chỉ thấy các mục trong `PUBLIC_SECTIONS` (gồm Chat, Overview, **Pairing**, Info, Flow, Camera, **Sensing**, Users, **Logs**, **CLI**, và các mục Settings công khai General/Wi-Fi/My Voice/Face/MCP Tools/Plugins/Timezone); Bluetooth vẫn truy cập được bằng URL trực tiếp nhưng bị ẩn khỏi navigation. `?debug=true` mở khóa phần còn lại (Analytics, Servo, API Docs, Agent gateway, và các mục Settings sâu hơn AI Brain/Runtime/Language/Voice/Realtime/Channels/MQTT). Bấm `update` là nút đổi ngay thành `updating…` — nút KHÔNG bao giờ báo "OK", vì chữ đó đọc như "xong rồi" trong khi request mới chỉ KHỞI ĐỘNG việc cài (và với component chạy vài giây thì nó còn hiện trước cả lúc dòng kịp báo tiến trình). Khi lỗi thì hiện đúng lý do server trả về (`rate-limited, retry in 8s`, `bootstrap unreachable`) thay vì chữ "Failed" trống rỗng. Trong lúc đang cài, dòng đó hiện `updating…` thay cho nút (một lần cài mất vài chục giây — component dừng, build lại, khởi động lại — và một dòng đứng im khiến người dùng bấm lần hai, chính là cách một máy từng mất sạch HAL runtime). Các nút `update` trong card **Versions** ở Overview (dòng Web / OS / HAL / Agent, cộng Bootstrap và Device ở debug) cũng bị chặn theo cách này — người xem thường không có nút kích OTA một chạm. Toggle **Debug** trên top bar, ngay cạnh nút Dark/Light, bật/tắt query parameter này nhưng vẫn giữ hash của mục đang mở và các query parameter khác; màu amber cho biết debug mode đang bật.
+
+Card **Versions** ở Overview có cột thao tác thứ năm với nút `restart` cho OS Server và HAL, kể cả ngoài debug. Mỗi nút gọi `POST /api/system/restart/:target` có bảo vệ admin (`os-server` hoặc `hal`). Server hẹn restart sau 2 giây và trả HTTP 202. Nút hiện `queued`, khóa bấm lại trong 15 giây; trạng thái này chỉ xác nhận đã lên lịch, chưa xác nhận service phục hồi. Polling sẵn có của monitor cập nhật trạng thái/uptime sau khi kết nối lại. Lỗi được giữ hiển thị cạnh nút. Restart bị vô hiệu hóa khi biết dòng đó đang cập nhật; hoạt động OTA được poll cả ở chế độ thường. Card hẹp cuộn ngang để truy cập đủ năm cột.
 
 **Speech attention gate** nằm trong card **General** công khai, không nằm ở mục Realtime chỉ-debug. Checkbox vẫn ghi cờ `wakeword` top-level; lưu Settings sẽ restart HAL để áp dụng. Khi bật, speech phải đi sau một attention trigger: wake phrase nói ra, single click, quay về phía lamp rồi nói, hoặc một người đã enrolled xuất hiện trong khung (`presence.enter`). Event chỉ có stranger không mở voice gate, trừ khi deployment đặt `HAL_PRESENCE_WAKE_STRANGERS=true`. Card liệt kê các phrase **nói ra** hiện được chấp nhận, gồm tên agent hiện tại chính xác cùng các alias cố định `autonomous` và device type; hệ thống quản lý danh sách này. Tải lại Settings sau khi đổi tên agent để thấy tên mới. Khi tắt, mọi câu nói được xử lý mà không cần trigger.
 
@@ -662,6 +702,39 @@ Chat UI → POST /api/sensing/event → SensingHandler
 
 ---
 
+### 5.8 Device → Sensing
+
+Mục Sensing khả dụng không cần bật debug khi device khai báo
+`vision` hoặc `environment` trong `GET /api/system/info` → `capabilities`.
+Các card sensing camera yêu cầu `vision`. Card chỉ đọc **Environment**
+yêu cầu khai báo rõ capability `environment`; card bị ẩn và không gửi request
+khi đang tải capabilities hoặc không có capability này.
+
+Khi được mount, card môi trường đọc `GET /api/hardware/environment/status`
+mỗi 3 giây qua reverse proxy hardware của OS đã có xác thực, chuyển tới HAL
+`GET /environment/status`. Chu kỳ làm mới trình duyệt độc lập với
+`poll_interval_s` cấu hình trong HAL, không thay đổi nhịp thu nhận dữ liệu.
+Đọc từ browser không kích hoạt lượt agent. Worker phát hiện thay đổi độc lập
+và API status cho agent local được mô tả trong
+[tài liệu môi trường Lamp](../../robots/lamp/docs/vi/environment-sensing_vi.md#chính-sách-thay-đổi-của-os-và-api-cho-agent).
+
+Card hiển thị trạng thái cảm biến, thời điểm sample, trạng thái dữ liệu
+cũ, lỗi và số đo theo component được khai báo: nhiệt độ (°C), độ ẩm (%),
+PM1 / PM2.5 / PM4 / PM10 (µg/m³), VOC index, NOx index và CO₂ SCD41 (ppm).
+Nhãn nguồn chỉ rõ component; từng chỉ số có timestamp riêng. Component lỗi
+không che số đo còn tốt từ component khác. Giá trị chưa khả dụng hiện `—`, không hiện số 0.
+Số đo cũ cũng được thay bằng `—`; request thất bại được hiển thị là lỗi để
+không nhầm số đo trước đó với dữ liệu hiện tại. Không gán nhãn chất lượng không khí
+tốt/xấu, ngưỡng hay cảnh báo. Mục kỹ thuật thu gọn hiển thị trạng thái, bus I2C,
+thanh ghi trạng thái và timing đọc/thử lại/đánh dấu cũ/phục hồi của từng
+component trong `status.components`. Vẫn hỗ trợ snapshot một sensor kiểu cũ
+với `status.timing` cấp cao nhất.
+
+Lamp vẫn để `environment` được comment trong `ROBOT.md` và SEN55/SCD41 tắt trong
+file JSON tương ứng, nên card này ẩn cho đến khi capability được khai báo. Xem
+[tài liệu cảm biến môi trường của Lamp](../../robots/lamp/docs/vi/environment-sensing_vi.md)
+về đấu dây, bật cảm biến và contract dữ liệu HAL.
+
 ## 6. LED Color API
 
 ### Vấn đề
@@ -756,3 +829,14 @@ Các target trên dành cho một thiết bị trong LAN. Để phát hành cho 
 artifact và roll out.
 
 Kết quả cuối Harness được ghi vào flow JSONL bằng `harness_response`, giữ run ID thiết bị gốc và `text` đầy đủ. Web Chat dùng sự kiện này khôi phục kết quả đang chờ sau khi SSE ngắt hoặc tải lại trang. Luồng trực tiếp vẫn phát `chat_response` với state `final`.
+
+### Cấu trúc component Sensing
+
+`monitor/SensingSection.tsx` chỉ ghép các phần theo capability. Component nằm
+trong `monitor/sensing/`: mỗi card một file, dùng chung `CardHeader`, types và
+hàm định dạng. `useVisionSensing` poll một lần cho toàn bộ card vision;
+`useEnvironment` poll snapshot môi trường chung độc lập. Client `visionApi.ts` và
+`environmentApi.ts` quản lý request OS-server, kiểm tra response và lỗi;
+card không trực tiếp fetch. Cả hai dùng reverse proxy có xác thực
+`/api/hardware/*` sẵn có. Lỗi HTTP/response của vision hiển thị thông báo lỗi,
+không giữ màn hình loading hoặc số liệu cũ.

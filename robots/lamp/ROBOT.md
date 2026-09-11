@@ -7,7 +7,7 @@ type: desk_robot
 # wiring and is refused unless HAL_SIMULATE explicitly opts in.
 boards: [sim, raspberry_pi_4, raspberry_pi_5, orangepi_sun60]
 gateway:
-  default: openclaw
+  default: hermes
   protocol: websocket
 voice:
   tts_provider: elevenlabs
@@ -22,6 +22,7 @@ capabilities:
   audio:        { routes: [audio, speaker, voice], required: true }
   vision:       { routes: [camera], driver: opencv, required: true }
   sensing:      { routes: [sensing], required: true }
+  # environment:  { routes: [environment], driver: composite, required: false }
   presence:     { required: true }
   motion:       { routes: [servo], driver: feetech, required: true, safety: SAFETY.md#motion }
   light:        { routes: [led, scene], driver: ws2812, required: true, safety: SAFETY.md#light }

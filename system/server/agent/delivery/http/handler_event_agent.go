@@ -10,6 +10,7 @@ import (
 	"go.autonomous.ai/os/system/domain"
 	"go.autonomous.ai/os/system/lib/flow"
 	sensinghttp "go.autonomous.ai/os/system/server/sensing/delivery/http"
+	"go.autonomous.ai/os/system/telemetry"
 )
 
 // handleAgentStreamEvent handles WS event=="agent": the OpenClaw agent stream
@@ -540,6 +541,17 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 			lcData["original_error"] = payload.Data.Error
 		}
 		flow.Log("lifecycle_"+payload.Data.Phase, lcData, flowRunID)
+		switch payload.Data.Phase {
+		case "end":
+			telemetry.ReportTaskLifecycleEnd(flowRunID, payload.Data.Aborted, payload.Data.Error != "")
+		case "error":
+			if errorRecovered {
+				// A salvaged reply does not establish that execution finished.
+				telemetry.ReportTaskExecution(flowRunID, "", "unknown", "lifecycle_error_recovered")
+			} else {
+				telemetry.ReportTaskExecution(flowRunID, "", "failed", "lifecycle_error")
+			}
+		}
 		monEvt := domain.MonitorEvent{
 			Type:    "lifecycle",
 			Summary: fmt.Sprintf("Agent %s", payload.Data.Phase),
@@ -647,6 +659,7 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 					slog.Info("intercepted built-in tts tool, routing to HAL", "component", "agent", "run_id", flowRunID, "text", ttsText[:min(len(ttsText), 80)], "channel_run", isChannelRun, "web_chat", isWebChat, "silent", isSilent)
 					flow.Log("tts_send", map[string]any{"run_id": flowRunID, "text": ttsText, "source": "tts_tool_intercept"}, flowRunID)
 					if !isChannelRun && !isWebChat && !isSilent {
+						sensinghttp.DefaultFillerManager.Cancel(flowRunID)
 						h.deliverTTS(h.agentGateway.SendToHALTTS, ttsText, flowRunID, "TTS intercept delivery failed")
 					}
 					// Mark this turn as already spoken so lifecycle_end won't double-speak.
@@ -719,11 +732,10 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 		}
 		// Don't truncate deltas — they are merged in the frontend
 		if delta != "" {
-			// Real assistant text is streaming — hard-cancel any
-			// pending or in-flight filler so the device doesn't talk
-			// over the actual reply. Cancel is idempotent so calling
-			// it on every delta is safe.
-			sensinghttp.DefaultFillerManager.Cancel(flowRunID)
+			// Assistant text may introduce another tool call. Suspend fillers
+			// during text; only a new tool.start can resume this voice turn.
+			// Lifecycle end/error and explicit interruption still hard-cancel.
+			sensinghttp.DefaultFillerManager.OnAssistantText(flowRunID)
 			h.monitorBus.Push(domain.MonitorEvent{
 				Type:    "assistant_delta",
 				Summary: delta,
@@ -787,6 +799,8 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 						"run_id", flowRunID,
 						"sentence", cleaned[:min(len(cleaned), 100)])
 					flow.Log("tts_stream_send", map[string]any{"run_id": flowRunID, "text": cleaned}, flowRunID)
+					// Real speech ends filler eligibility even if more tools follow.
+					sensinghttp.DefaultFillerManager.Cancel(flowRunID)
 					h.deliverTTSQueue(cleaned, flowRunID, "streaming TTS delivery failed")
 				}
 			}
