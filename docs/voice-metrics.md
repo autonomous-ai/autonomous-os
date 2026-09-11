@@ -21,7 +21,7 @@ can be re-decided from the data instead of by re-instrumenting devices.
 | Layer | Path | Role |
 |-------|------|------|
 | HAL tracker | `hal/telemetry/voice_metrics.py` | Owns interaction ids, ack/stale detection, task cohort and realtime execution evidence. |
-| OS task evidence | `system/telemetry/voice_task.go` | Execution boundaries from agent lifecycle and local intent return. |
+| OS task evidence | `system/telemetry/voice_task.go` | Accepted voice task starts, run bindings, and execution boundaries from agent lifecycle and local intent return. |
 | Offline reporter | `scripts/report_voice_task_metrics.py` | Joins saved journal/AA events and reports KPI-3 without network access. |
 | HAL pipe | `hal/telemetry/client.py` | Generic: local log line, bounded queue, background POST. Reusable by future trackers. |
 | OS ingestion | `system/server/telemetry/delivery/http/handler.go` | `POST /api/telemetry/event` (loopback/LAN, same gate as `/api/sensing/event`). |
@@ -263,12 +263,34 @@ finish with an incorrect answer or an ineffective action and still meet this
 execution metric. It does not assess user satisfaction, tool-result correctness,
 physical effect, or whether the entire spoken answer played.
 
-The HAL utterance is the cohort; backend runs alone are never voice samples.
-`voice_metrics_interaction` adds these independent task fields:
+The cohort is the union of HAL task interactions and voice tasks accepted by
+OS. OS emits `voice_metrics_task_started` before routing or local execution
+for `voice`, `voice_command`, and `voice_followup` requests. This includes
+main-agent delegation and voice paths with no HAL task snapshot. Arbitrary
+backend runs and `voice_agent_handled` memory-sync notifications do not create
+a task cohort entry.
+
+`voice_metrics_task_started` carries `schema_version=1`, `interaction_id`,
+`run_id`, `event_type`, and `task_started_at_ms` (Unix milliseconds). OS preserves
+the incoming HAL interaction id, or creates `os-voice-<random>` when absent.
+The receipt event has an empty run id; a later binding event repeats the same
+interaction id with the local/main run id, including a not-ready dispatch.
+Each emission has its own timestamp; the reporter uses the earliest start.
+These are amendments to one turn, not additional turns. A busy queued `voice`
+request gets a fixed run id and binding before enqueue, preserving correlation
+when replayed; it remains unfinished in the denominator until lifecycle evidence
+arrives. Queue acceptance alone is not completion.
+
+Merge HAL and OS starts by **device + interaction_id or nonempty device +
+run_id**, including aliases, before counting. An accepted OS voice task makes
+a matching legacy or excluded HAL row eligible; it does not override the
+`realtime_handled` completion rule. Missing HAL instrumentation must not erase
+an accepted OS task from the denominator. `voice_metrics_interaction` retains
+these independent task fields:
 
 | Field | Meaning |
 |-------|---------|
-| `task_schema_version` | `1`; older rows lack task instrumentation and are coverage loss, not scored failures |
+| `task_schema_version` | `1`; older HAL rows without a matching OS task start are coverage loss, not scored failures |
 | `task_started_at_ms` | Unix milliseconds at detected speech end; selects the report cohort, not a cross-process latency |
 | `task_revision` | Increasing snapshot revision; keep the greatest revision per device + interaction, including late run-id bindings |
 | `task_eligible` | Independent of acknowledgement eligibility: mute and speech interruption do not exclude execution |
@@ -284,7 +306,7 @@ error text, transcript or tool output. Evidence is:
 |----------|----------------------------|
 | `lifecycle_end` | `completed`: the runtime explicitly ended execution without `data.aborted=true` or a nonempty `data.error` |
 | `lifecycle_end_error` | `failed`: even a lifecycle end is a failure when aborted or carrying an error; `stopReason` alone is not interpreted |
-| `lifecycle_error`, `lifecycle_end_error`, `chat_error`, `local_intent_error` | `failed`: execution failed; local intent observed a HAL action API error |
+| `lifecycle_error`, `lifecycle_end_error`, `chat_error`, `local_intent_error`, `dispatch_error` | `failed`: execution failed, dispatch failed/not ready, or local intent observed a HAL action API error |
 | `lifecycle_error_recovered` | `unknown`: recovery alone is not completion; wait for explicit end |
 | `local_intent_returned` | `completed`: the local intent handler finished without an observed HAL action error; this does not prove semantic correctness or the physical effect |
 | `realtime_turn_done` | `completed`: the provider emitted TurnDoneEvent and HAL returned a handled turn |
@@ -302,20 +324,21 @@ Dispatch failure without execution evidence counts as failed. `Result.ExecutionF
 local-intent HAL API errors that were previously only logged, so returning from
 the handler after such an error emits `local_intent_error`, not a completion.
 
-The provisional, configurable default reporting horizon is **1800 seconds**: the denominator includes
-eligible turns with `task_started_at_ms <= as_of_ms - 1800000`. Fresher turns
-are reported separately as `fresh_pending_turns`, even if already completed.
-Mature failed, unknown, and incomplete turns **stay in the denominator**;
-missing eligibility knowledge is flagged rather than silently removed.
-The numerator is mature turns whose selected evidence says `completed`.
-Compare the unrounded fraction to **85%**; an empty denominator is **N/A**
-(`kpi3_pct` and `meets_target` are JSON `null`).
+The default settling horizon is **0 seconds**: count every eligible task
+started through `as_of_ms` immediately. Failed, unknown, and unfinished turns
+**stay in the denominator**. The numerator is turns with selected `completed`
+evidence. Thus 85 completed out of 100 eligible turns is **85%**. Compare the
+unrounded fraction to **85%**; an empty denominator is **N/A** (`kpi3_pct` and
+`meets_target` are JSON `null`). Missing eligibility knowledge is reported.
 
-This horizon is a reporting choice, **not an execution timeout**. Neither the
-10-second ack observation nor the 45-second speech-active TTL ends a task.
-A late completion is counted when the report is rerun with later evidence.
-Always collect execution results through the stated as-of time; do not cut
-results off at the cohort's last speech timestamp.
+`--settle-seconds 1800` is an optional reporting policy, not the default or an
+execution timeout. With a positive horizon, only starts at or before
+`as_of_ms - settle_seconds * 1000` enter `eligible_mature_turns`; newer turns
+are `fresh_pending_turns`, even if completed. At the default 0, the historical
+field name `eligible_mature_turns` means all eligible turns through as-of.
+Neither the 10-second ack observation nor the 45-second speech-active TTL ends
+a task. A late completion counts when the report is rerun with later evidence.
+Collect execution results through as-of, not just through the last start.
 
 ## Agent runbook: query and report KPI-3
 
@@ -330,7 +353,7 @@ then run from the repo root (or pipe the export to stdin):
 
 ```bash
 python3 scripts/report_voice_task_metrics.py voice-task-journal.jsonl > voice-task-report.json
-python3 scripts/report_voice_task_metrics.py aa-export.jsonl --now-ms 1789088400000 --settle-seconds 1800 > voice-task-report.json
+python3 scripts/report_voice_task_metrics.py aa-export.jsonl --now-ms 1789088400000 --settle-seconds 0 > voice-task-report.json
 ```
 
 `--now-ms` fixes an as-of Unix millisecond timestamp for reproducibility; use
@@ -346,10 +369,19 @@ metric state rather than loading the entire journal into memory.
 without device identity; it is **not a device filter**. Journal JSONL (including ANSI-colored messages and journald `MESSAGE` byte
 arrays) and AA JSONL with `event_name`, `data.user_pseudo_id`, and `data.event_params` key/value
 pairs are accepted. Preserve amendments and execution events in the export.
-The reporter groups by device and deduplicates HAL/OS copies by task revision.
+The reporter groups by device, keeps the greatest HAL task revision, and merges
+HAL snapshots with OS start/binding events by interaction/run identity.
 Smoke interactions beginning `vi-smoke-` are excluded by default;
 `--include-synthetic --settle-seconds 0` is only for instrumentation checks,
-never a production KPI claim.
+never a production KPI claim. Diagnostic callers must supply a `vi-smoke-`
+interaction id: an unmarked accepted voice API request counts in the cohort,
+because telemetry cannot infer whether it came from a person or a test.
+
+Historical AA records missing both a versioned HAL task snapshot and an OS
+task-start event cannot be backfilled by this reporter. A Flow Monitor `DONE`
+row may prove execution ended in local logs, but does not reconstruct missing
+AA cohort/evidence. Report that coverage gap separately; never interpret zero
+instrumented eligible turns as zero actual tasks completed.
 
 Report the interval, as-of time, settling horizon, source (local logs or AA),
 per-device and aggregate `completed_turns / eligible_mature_turns`, percent,
@@ -478,91 +510,58 @@ WHERE event_name LIKE 'voice_metrics_%';
 
 ### KPI-3 warehouse extraction and scoring
 
-Use the same schema assumption and `param` helper above. This BigQuery-style
-example selects a seven-day speech cohort and reads evidence through as-of.
-Set the actual export/query cutoff and device filter in `raw` when needed.
-Do not filter execution rows to mature speech timestamps. Partial realtime
-output without provider `TurnDoneEvent` remains incomplete.
+An agent with **only AA event tracking access** can produce this report; device
+SSH and Flow Monitor access are unnecessary. Export the three event names below
+as JSONL, preserving `event_timestamp`, `data.user_pseudo_id` (device identity),
+and the complete `data.event_params` key/value array. Adapt the table name and
+array accessor to the actual warehouse schema; the schema here is an assumption.
 
 ```sql
-WITH config AS (
-  SELECT UNIX_MILLIS(CURRENT_TIMESTAMP()) AS as_of_ms, 1800000 AS settle_ms
-), raw AS (
-  SELECT event_name, event_timestamp, data.user_pseudo_id AS device,
-    data.event_params AS p
-  FROM event_tracking, config
-  WHERE event_name IN ('voice_metrics_interaction', 'voice_metrics_task_execution')
-    AND event_timestamp <= DIV(as_of_ms, 1000)
-    AND NOT STARTS_WITH(COALESCE(param(data.event_params, 'interaction_id'), ''), 'vi-smoke-')
-), snapshots AS (
-  SELECT device, param(p, 'interaction_id') AS interaction_id,
-    param(p, 'run_id') AS run_id, param(p, 'route') AS route,
-    param(p, 'task_schema_version') AS version,
-    param(p, 'task_eligible') AS eligible,
-    param(p, 'task_eligibility_known') AS eligibility_known,
-    param(p, 'failure_reason') AS failure_reason,
-    SAFE_CAST(param(p, 'task_started_at_ms') AS INT64) AS started_ms,
-    ROW_NUMBER() OVER (
-      PARTITION BY device, param(p, 'interaction_id')
-      ORDER BY COALESCE(SAFE_CAST(param(p, 'task_revision') AS INT64), 0) DESC,
-               event_timestamp DESC
-    ) AS revision_rank
-  FROM raw WHERE event_name = 'voice_metrics_interaction'
-), cohort AS (
-  SELECT s.* FROM snapshots s, config
-  WHERE revision_rank = 1
-    AND COALESCE(device, '') != '' AND COALESCE(interaction_id, '') != ''
-    -- Legacy/missing-start rows retained for coverage, not scoring.
-    AND (started_ms BETWEEN as_of_ms - 7*86400000 AND as_of_ms OR started_ms IS NULL)
-), executions AS (
-  SELECT device, param(p, 'interaction_id') AS interaction_id,
-    param(p, 'run_id') AS run_id, param(p, 'outcome') AS outcome,
-    param(p, 'evidence') AS evidence,
-    SAFE_CAST(param(p, 'execution_at_ms') AS INT64) AS execution_ms
-  FROM raw, config
-  WHERE event_name = 'voice_metrics_task_execution'
-    AND param(p, 'schema_version') = '1'
-    AND SAFE_CAST(param(p, 'execution_at_ms') AS INT64) <= as_of_ms
-), joined AS (
-  SELECT c.*, e.outcome AS execution_outcome,
-    COUNTIF(e.outcome = 'failed') OVER (
-      PARTITION BY c.device, c.interaction_id
-    ) AS terminal_errors,
-    ROW_NUMBER() OVER (
-      PARTITION BY c.device, c.interaction_id
-      ORDER BY e.execution_ms DESC,
-        CASE e.outcome WHEN 'failed' THEN 2 WHEN 'completed' THEN 1 ELSE 0 END DESC
-    ) AS evidence_rank
-  FROM cohort c LEFT JOIN executions e
-    ON c.device = e.device
-    AND (c.interaction_id = e.interaction_id
-         OR (COALESCE(c.run_id, '') != '' AND c.run_id = e.run_id))
-    AND (COALESCE(c.route, '') != 'realtime_handled' OR e.evidence = 'realtime_turn_done')
-), scored AS (
-  SELECT *, version = '1' AND COALESCE(eligible, '') != 'false'
-      AND started_ms <= as_of_ms - settle_ms AS mature,
-    IF(terminal_errors > 0, 'failed', COALESCE(execution_outcome,
-      IF(COALESCE(failure_reason, '') != '', 'failed', 'incomplete'))) AS task_outcome
-  FROM joined, config WHERE evidence_rank = 1
+-- BigQuery-style AA-only export. Set the actual interval and optional device.
+SELECT event_name, event_timestamp, data
+FROM event_tracking
+WHERE event_name IN (
+  'voice_metrics_interaction',
+  'voice_metrics_task_started',
+  'voice_metrics_task_execution'
 )
-SELECT device,
-  COUNTIF(mature) AS eligible_mature_turns,
-  COUNTIF(mature AND task_outcome = 'completed') AS completed_turns,
-  COUNTIF(mature AND task_outcome = 'failed') AS failed_turns,
-  COUNTIF(mature AND task_outcome = 'unknown') AS unknown_turns,
-  COUNTIF(mature AND task_outcome = 'incomplete') AS incomplete_turns,
-  COUNTIF(version = '1' AND COALESCE(eligible, '') != 'false'
-    AND started_ms > as_of_ms - settle_ms) AS fresh_pending_turns,
-  COUNTIF(version = '1' AND eligible = 'false') AS ineligible_turns,
-  COUNTIF(COALESCE(version, '') != '1') AS legacy_turns_excluded,
-  COUNTIF(version = '1' AND started_ms IS NULL) AS missing_start_time_turns_excluded,
-  COUNTIF(version = '1' AND COALESCE(eligible, '') != 'false'
-    AND COALESCE(eligibility_known, '') != 'true') AS eligibility_unknown_turns,
-  100 * SAFE_DIVIDE(COUNTIF(mature AND task_outcome = 'completed'), COUNTIF(mature)) AS kpi3_pct,
-  IF(COUNTIF(mature) = 0, NULL,
-    100 * COUNTIF(mature AND task_outcome = 'completed') >= 85 * COUNTIF(mature)) AS meets_target
-FROM scored GROUP BY device;
+  AND event_timestamp >= UNIX_SECONDS(TIMESTAMP('2026-09-11 00:00:00+07'))
+  AND event_timestamp <= UNIX_SECONDS(TIMESTAMP('2026-09-11 12:00:00+07'))
+-- AND data.user_pseudo_id = '<device identity stored in AA>'
+ORDER BY event_timestamp;
 ```
+
+The example interval is illustrative. Include all start/snapshot amendments and
+execution evidence through the desired as-of time. Do not export only completed
+execution events: that removes unfinished tasks from the denominator. Include
+starts before the export lower bound if their turns belong to the chosen report
+cohort. The reporter has no start-window CLI; input coverage defines its interval.
+
+Use the repository reporter as the authoritative scorer, avoiding a separate SQL
+implementation that can double-count HAL/OS aliases or omit OS-only tasks:
+
+```bash
+python3 scripts/report_voice_task_metrics.py aa-export.jsonl --settle-seconds 0 > voice-task-report.json
+```
+
+For a historical cutoff, also pass `--now-ms <cutoff in Unix milliseconds>`.
+The reporter merges starts by device + interaction/run, keeps the earliest start
+and greatest HAL revision, joins execution evidence, and applies the sticky
+terminal-error and realtime rules above. The fields needed inside event params are:
+
+| Event | Fields used for task scoring |
+|-------|------------------------------|
+| `voice_metrics_interaction` | `interaction_id`, `run_id`, `route`, `task_schema_version`, `task_revision`, `task_started_at_ms`, `task_eligible`, `task_eligibility_known`, `failure_reason` |
+| `voice_metrics_task_started` | `schema_version`, `interaction_id`, `run_id`, `event_type`, `task_started_at_ms` |
+| `voice_metrics_task_execution` | `schema_version`, `interaction_id`, `run_id`, `outcome`, `evidence`, `execution_at_ms` |
+
+Report **`completed_turns / eligible_mature_turns * 100`**, along with both counts,
+`meets_target`, failed/unknown/incomplete counts and coverage exclusions. At the
+default 0-second horizon, all eligible started turns through as-of are in the
+denominator. An empty denominator is N/A. `completed` means technically finished
+without observed terminal errors; it does not mean the user's request was done
+correctly. Without the repository script, use the same identity merge and evidence
+rules described above; counting `voice_metrics_task_execution` rows alone is invalid.
 
 Count empty device/interaction identities separately before scoring and repair
 the export; do not merge them into a fabricated device. For aggregate KPI,
@@ -580,7 +579,7 @@ SELECT data.user_pseudo_id AS device,
   MAX(SAFE_CAST(param(data.event_params, 'hal_dropped_total') AS INT64)) AS hal_dropped_max,
   MAX(SAFE_CAST(param(data.event_params, 'hal_failed_total') AS INT64)) AS hal_failed_max
 FROM event_tracking
-WHERE event_name IN ('voice_metrics_interaction', 'voice_metrics_task_execution')
+WHERE event_name IN ('voice_metrics_interaction', 'voice_metrics_task_started', 'voice_metrics_task_execution')
   AND event_timestamp >= UNIX_SECONDS(TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY))
 GROUP BY device;
 ```
@@ -688,7 +687,7 @@ No transcript or full device journal is stored in this repo.
 
 The synthetic-only offline report was **2/2** with
 `--include-synthetic --settle-seconds 0`: an instrumentation check, not evidence
-that production meets 85%. At the 08:35 +07 snapshot, the normal 1800-second
+that production meets 85%. At the 08:35 +07 snapshot, the then-used 1800-second
 report was **N/A**, with two fresh pending turns. AA HTTP send success was
 verified; no warehouse read query was performed.
 
@@ -710,3 +709,23 @@ python3 -m unittest discover -s scripts/tests -p 'test_report_voice_task_metrics
 /tmp/voice-task-test-venv/bin/python hal/scripts/lint.py
 GOOS=linux GOARCH=arm64 go build -ldflags '-s -w -X go.autonomous.ai/os/system/server/config.OSVersion=0.1.88-voice-task' -o /tmp/os-server-voice-task ./system/cmd/os-server
 ```
+
+### OS cohort correction — device verification (2026-09-11)
+
+Deployed `0.1.88-voice-task-cohort-fix` to `.169` at 09:21:06 +07.
+Two direct `curl` voice-followup requests supplied `vi-smoke-cohort-fix-*`
+interaction IDs but **no HAL task snapshots**, reproducing the missing-cohort
+case. Local intent completed at 09:21:30; delegated run
+`device-chat-3-1789093296472` ended at 09:21:59 with `aborted=false`.
+The reporter with `--include-synthetic` moved from **1/2 = 50%** while the
+main agent was running to **2/2 = 100%** after its terminal event. Receipt,
+binding and execution events all had `[telemetry] delivered` records.
+This verifies HTTP ingestion, not warehouse visibility or production KPI.
+Smoke turns remain excluded by default. Backup binary on the device:
+`/tmp/os-server-before-cohort-fix`.
+
+Validation: `go test ./system/telemetry ./system/server/sensing/delivery/http
+./system/server/agent/delivery/http` passed; reporter unittest discovery passed
+29 tests, including 100 starts / 85 completions, OS-only turns, HAL/OS dedup,
+queue binding and not-ready handling (the latter two in Go integration tests).
+Linux ARM64 os-server build passed. No historical AA records were fabricated.

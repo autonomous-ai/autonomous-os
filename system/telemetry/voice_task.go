@@ -15,9 +15,35 @@ func ReportTaskLifecycleEnd(runID string, aborted, hasError bool) {
 	ReportTaskExecution(runID, "", "completed", "lifecycle_end")
 }
 
+// ReportVoiceTaskStarted records the denominator independently of HAL delivery.
+// Repeating it with the assigned run ID binds the same turn without adding a turn.
+// Non-task events, including realtime memory sync, never enter this cohort.
+func ReportVoiceTaskStarted(eventType, interactionID, runID string) string {
+	switch eventType {
+	case "voice", "voice_command", "voice_followup":
+	default:
+		return interactionID
+	}
+	if interactionID == "" {
+		interactionID = "os-voice-" + rand.Text()
+	}
+	Report(Event{
+		Name: "voice_metrics_task_started",
+		ID:   "vts-" + rand.Text(),
+		Params: map[string]any{
+			"schema_version":     1,
+			"interaction_id":     interactionID,
+			"run_id":             runID,
+			"event_type":         eventType,
+			"task_started_at_ms": time.Now().UnixMilli(),
+		},
+	})
+	return interactionID
+}
+
 // ReportTaskExecution records an execution boundary, not answer correctness.
 // These observations may include non-voice runs; consumers must join them to
-// an eligible HAL voice task by run_id or interaction_id before scoring it.
+// an eligible voice task by run_id or interaction_id before scoring it.
 func ReportTaskExecution(runID, interactionID, outcome, evidence string) {
 	if runID == "" && interactionID == "" {
 		return
@@ -29,7 +55,7 @@ func ReportTaskExecution(runID, interactionID, outcome, evidence string) {
 		if outcome != "completed" {
 			return
 		}
-	case "lifecycle_error", "lifecycle_end_error", "chat_error", "local_intent_error":
+	case "lifecycle_error", "lifecycle_end_error", "chat_error", "local_intent_error", "dispatch_error":
 		if outcome != "failed" {
 			return
 		}

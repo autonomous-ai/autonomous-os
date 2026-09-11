@@ -143,10 +143,13 @@ make hal-lint
 cd hal && .venv/bin/python -m pytest test/test_telemetry_flag.py -q
 ```
 
-Hoàn tất tác vụ thoại còn phát `voice_metrics_task_execution` từ biên
-lifecycle/local-intent của OS và realtime trả về ở HAL. Ghép với cohort
-interaction HAL có version trước khi tính: run backend bất kỳ không phải mẫu
-thoại. “Completed” nghĩa là đã chạy xong, không đánh giá đúng yêu cầu hay phát
+Theo dõi tác vụ thoại phát `voice_metrics_task_started` khi OS nhận và bind run
+cho `voice`, `voice_command`, `voice_followup`, cùng `voice_metrics_task_execution`
+ở biên lifecycle/local-intent/dispatch lỗi của OS và realtime trả về ở HAL.
+Gộp OS start với snapshot task HAL có version bằng device + interaction/run
+trước khi chấm để lượt chỉ có OS vẫn được tính đúng một lần. Run backend bất
+kỳ và memory-sync `voice_agent_handled` không tạo lượt mới. Horizon báo cáo mặc
+định 0 giây: lượt eligible chưa xong vẫn ở mẫu số. “Completed” nghĩa là đã chạy xong, không đánh giá đúng yêu cầu hay phát
 hết audio. Xem [runbook query/report KPI-3 cho agent](voice-metrics_vi.md#runbook-cho-agent-query-và-report-kpi-3).
 
 Với `voice_metrics_*`, INFO `[telemetry] delivered` xác nhận HTTP gửi AA thành

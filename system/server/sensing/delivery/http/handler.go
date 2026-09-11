@@ -195,7 +195,10 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 		return
 	}
 
-	startPayload := map[string]any{"type": req.Type, "message": req.Message}
+	// Record receipt before execution or routing can fail. Preserve HAL ownership
+	// when present, and create one for direct API voice requests otherwise.
+	req.InteractionID = telemetry.ReportVoiceTaskStarted(req.Type, req.InteractionID, "")
+	startPayload := map[string]any{"type": req.Type, "message": req.Message, "interaction_id": req.InteractionID}
 
 	// look.capture is MONITOR-ONLY. The realtime `look` tool already sent the
 	// frame straight to the model, so forwarding text here would inject a
@@ -243,6 +246,7 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 			// Generate a dedicated local-intent trace ID so this turn doesn't
 			// share the global trace of an in-flight agent turn.
 			localRunID := fmt.Sprintf("local-intent-%d", time.Now().UnixMilli())
+			telemetry.ReportVoiceTaskStarted(req.Type, req.InteractionID, localRunID)
 			turnStart := flow.Start("sensing_input", startPayload, localRunID)
 			flow.Log("intent_match", map[string]any{"message": req.Message, "tts": result.TTSText, "rule": result.Rule, "actions": result.Actions}, localRunID)
 			if result.TTSText != "" {
@@ -571,14 +575,15 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 		// dedup think "sent" while the agent never saw the event, blocking the
 		// next real transition for 5 min.
 		if shouldQueueEvent(req.Type, req.Message, inVoiceWindow) {
-			// Pre-allocate runID for chat (web_chat / mqtt_chat) so the web
-			// client and the MQTT chat.send ack can correlate events when this
-			// turn replays. Other queued types don't need a runID (HAL doesn't
-			// track them).
+			// Preserve voice metric correlation through queued replay as well
+			// as chat acknowledgements. The queue carries the fixed run ID.
 			var queuedRunID string
-			if isChat {
+			if isChat || isVoice {
 				_, queuedRunID = h.agentGateway.NextChatRunID()
-				h.agentGateway.MarkWebChatRun(queuedRunID)
+				telemetry.ReportVoiceTaskStarted(req.Type, req.InteractionID, queuedRunID)
+				if isChat {
+					h.agentGateway.MarkWebChatRun(queuedRunID)
+				}
 			}
 			busyReason := "agent busy, will replay on idle"
 			if speakerBusy {
@@ -635,6 +640,10 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 	// No local match — forward to OpenClaw agent
 	if !h.agentGateway.IsReady() {
 		notReadyRunID := fmt.Sprintf("not-ready-%d", time.Now().UnixMilli())
+		telemetry.ReportVoiceTaskStarted(req.Type, req.InteractionID, notReadyRunID)
+		if isVoice {
+			telemetry.ReportTaskExecution(notReadyRunID, req.InteractionID, "failed", "dispatch_error")
+		}
 		turnStart := flow.Start("sensing_input", startPayload, notReadyRunID)
 		flow.End("sensing_input", turnStart, map[string]any{"error": "agent not connected"}, notReadyRunID)
 		// Announce once via TTS so user knows the brain is restarting (cooldown 60s).
@@ -659,6 +668,7 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 
 	// Same run_id as chat.send / JSONL: SetTrace before flow.Start so enter matches this turn (not previous).
 	reqID, runID := h.agentGateway.NextChatRunID()
+	telemetry.ReportVoiceTaskStarted(req.Type, req.InteractionID, runID)
 	flow.SetTrace(runID)
 
 	// Mark this run as guard-active so SSE handler broadcasts the agent response via Telegram.
@@ -834,6 +844,9 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 	}
 
 	if err != nil {
+		if isVoice {
+			telemetry.ReportTaskExecution(runID, req.InteractionID, "failed", "dispatch_error")
+		}
 		// Forward failed — drop the voice mark so we don't keep state
 		// for a run that will never produce a lifecycle.start.
 		DefaultFillerManager.Cancel(runID)

@@ -147,10 +147,14 @@ make hal-lint
 cd hal && .venv/bin/python -m pytest test/test_telemetry_flag.py -q
 ```
 
-Voice task completion also emits `voice_metrics_task_execution` from OS
-lifecycle/local-intent boundaries and HAL realtime return. Join it to the
-versioned HAL interaction cohort before scoring: arbitrary backend runs are
-not voice tasks. “Completed” means execution finished, not semantic correctness
+Voice task tracking emits `voice_metrics_task_started` at OS receipt and run
+binding for `voice`, `voice_command`, and `voice_followup`, plus
+`voice_metrics_task_execution` at OS lifecycle/local-intent/dispatch-failure
+boundaries and HAL realtime return. Merge OS starts and versioned HAL task
+snapshots by device + interaction/run before scoring, so OS-only voice paths
+count once even without HAL instrumentation. Arbitrary backend runs and
+`voice_agent_handled` memory sync do not create tasks. The default reporting
+horizon is 0 seconds: unfinished eligible tasks stay in the denominator. “Completed” means execution finished, not semantic correctness
 or finished audio playback. See the [KPI-3 agent query/report runbook](voice-metrics.md#agent-runbook-query-and-report-kpi-3).
 
 For `voice_metrics_*`, INFO `[telemetry] delivered` confirms successful AA HTTP
