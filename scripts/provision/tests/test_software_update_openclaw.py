@@ -1,4 +1,4 @@
-"""Exercise the OpenClaw updater without network, package, or service changes."""
+"""Exercise agent updaters without network, package, or service changes."""
 
 import os
 from pathlib import Path
@@ -74,21 +74,29 @@ systemctl() {
   [ "$FAIL" != "$1" ]
 }
 sleep() { event "sleep $*"; }
+hermes() {
+  event "hermes $*"
+  [ "$FAIL" != hermes ]
+}
 '''
 
 
 class OpenClawUpdateTests(unittest.TestCase):
-    def run_update(self, scenario="incompatible", failure="", readiness_failures=0):
+    def run_update(self, scenario="incompatible", failure="", readiness_failures=0,
+                   component="openclaw"):
         functions = "\n".join(
             shell_function(name)
-            for name in ("ensure_openclaw_node", "update_openclaw")
+            for name in ("ensure_node_engine", "ensure_openclaw_node",
+                         "update_openclaw", "update_hermes_package")
         )
+        command = ('update_openclaw "2026.9.3"' if component == "openclaw"
+                   else "update_hermes_package")
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
             events = directory / "events"
             result = subprocess.run(
                 ["/bin/bash", "-c", "set -e\n" + functions + MOCKS
-                 + '\nupdate_openclaw "2026.9.3"\n'],
+                 + "\n" + command + "\n"],
                 env={
                     **os.environ,
                     "EVENTS": str(events),
@@ -197,6 +205,42 @@ class OpenClawUpdateTests(unittest.TestCase):
         self.assertEqual(events.count("sleep 5"), 11)
         self.assertNotIn("openclaw updated to", result.stdout)
         self.assertIn("did not become ready", result.stderr)
+
+    def test_hermes_compatible_node_updates_without_upgrade(self):
+        result, events = self.run_update(scenario="compatible", component="hermes")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(events, [
+            "engine >=22.22.0 <23 || >=24.11.0 <25 || >=26.0.0",
+            "hermes update",
+        ])
+
+    def test_hermes_incompatible_node_upgrades_and_rechecks_before_update(self):
+        result, events = self.run_update(component="hermes")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(any("setup_24.x" in event for event in events), events)
+        checks = [index for index, event in enumerate(events)
+                  if event.startswith("engine ")]
+        self.assertEqual(len(checks), 2, events)
+        upgrade = events.index("apt-get install -y nodejs")
+        self.assertLess(checks[0], upgrade)
+        self.assertLess(upgrade, checks[1])
+        self.assertLess(checks[1], events.index("hermes update"))
+
+    def test_hermes_node_setup_failures_prevent_update(self):
+        for failure in ("download", "setup", "apt", "checker", "incompatible"):
+            with self.subTest(failure=failure):
+                result, events = self.run_update(component="hermes", failure=failure)
+                self.assertNotEqual(result.returncode, 0, events)
+                self.assertNotIn("hermes update", events)
+                if failure == "checker":
+                    self.assertFalse(any(event.startswith(("curl ", "bash ", "apt-get "))
+                                         for event in events), events)
+
+    def test_hermes_update_failure_is_propagated(self):
+        result, events = self.run_update(scenario="compatible", component="hermes",
+                                         failure="hermes")
+        self.assertNotEqual(result.returncode, 0, events)
+        self.assertIn("hermes update", events)
 
 
 if __name__ == "__main__":

@@ -588,6 +588,14 @@ for repair. After restart, success requires an authenticated
 systemd considers the process active. Package/state changes are not
 automatically rolled back on migration or readiness failure.
 
+Manual `software-update hermes` checks Node before running `hermes update`.
+The supported build range follows the upstream Hermes installer: Node 22.22+
+within 22.x, 24.11+ within 24.x, or stable 26+. Incompatible Node is upgraded to
+system Node 24.x with the same helper used for OpenClaw, then rechecked.
+Compatibility-check or upgrade failures abort before `hermes update`.
+Hermes's update command resolves existing npm and refreshes dependencies;
+it does not run the installer's Node provisioning step.
+
 **Why the agent CLIs are gated on `agent_runtime`, not on the binary:**
 `scripts/imager/build-orangepi.sh` bakes every agent CLI onto every lamp /
 intern-v2 image regardless of `DEFAULT_AGENT`, so `inPath("codex")` is true even
