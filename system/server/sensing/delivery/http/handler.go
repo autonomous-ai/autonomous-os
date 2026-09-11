@@ -43,11 +43,37 @@ import (
 	"go.autonomous.ai/os/system/vision"
 )
 
-var harnessAgentRequest = regexp.MustCompile(`(?i)\b(ask|tell|have|message|check(?:ing)?(?:\s+with)?|hỏi|bảo|nhờ)\s+(?:the\s+)?(?:harness\s+)?(?:agent\s+)?[[:alnum:]_-]+|\b(?:hoi|bao|nho|keu)\s+(?:agent\s+[[:alnum:]_-]+|[[:alnum:]_-]+\s+agent)\b`)
-var buddyAgentRequest = regexp.MustCompile(`(?i)\b(?:autonomous\s+buddy|(?:ask|tell|use|with|via)\s+(?:the\s+)?buddy)\b`)
+// Explicit Harness/agent wording can select the skill; bare names only warrant discovery.
+var harnessAgentRequest = regexp.MustCompile(`(?i)(?:^|[^\p{L}\p{N}_])(?:ask|tell|have|message|use|delegate(?:\s+to)?|check(?:ing)?\s+with|hỏi|bảo|nhờ|kêu|hoi|bao|nho|keu|dùng|dung)\s+(?:(?:the|a|an|một|mot)\s+)?(?:(?:harness|agent)(?:\s|$)|[\p{L}\p{N}_-]+\s+agent(?:\s|$))`)
+var harnessPossibleNamedRequest = regexp.MustCompile(`(?i)(?:^|[^\p{L}\p{N}_])(?:ask|tell|message|check(?:ing)?\s+with|hỏi|bảo|nhờ|kêu|hoi|bao|nho|keu)\s+([\p{L}\p{N}_-]+)(?:\s|$)`)
+var buddyAgentRequest = regexp.MustCompile(`(?i)\b(?:autonomous\s+buddy|(?:ask|tell|use|with|via|nhờ|hỏi|bảo|nho|hoi|bao)\s+(?:the\s+)?buddy)\b`)
 
-const harnessNamedAgentRouting = "[system-routing: The named Harness agent is the execution target, not a person to contact. Use harness-use only. Do not call agent-management, computer-use, Autonomous Buddy, or /api/buddy. List Harness agents and select the exact requested agent only if no retained target exists; then send that agent the underlying task directly with the harness-reply routing object. Remove the leading delegation wording from the task: for example, \"Ask David if there are events in the US\" must be sent to David as \"Find upcoming events in the US\", never as a request to ask or contact David. If a prior delivery blocks this new or corrected task, inspect its receipt once. If it is delivered, started, completed, or rejected, immediately send the user's current task in this same turn; never return NO_REPLY until that new send/answer has a known receipt. If send/answer returns queued, delivered, started, completed, or rejected, it has a known outcome: make no more Harness or shell calls (including receipt, status, recap, list, or another send), and immediately reply NO_REPLY. Inspect receipt only for DeliveryUnknown/no usable receipt or an explicit user delivery-state request; never resend automatically.]"
-const harnessFollowupRouting = "[system-routing: A Harness task or question may be awaiting a follow-up. Use harness-use only when the user's words clearly continue the retained Harness task, answer its currently open question, or ask whether it has finished or for its result. Do not route vague fragments, acknowledgements, filler, unrelated new requests, or uncertain speech to Harness; let the main agent handle those normally. When routing, use the retained target and send only the user's current words. Do not use Buddy and do not answer a clear Harness follow-up yourself. Do not read the skill/directory or run harness.py --help. If send/answer returns queued, delivered, started, completed, or rejected, make no more Harness or shell calls (including receipt, status, recap, list, or another send) and immediately reply NO_REPLY. Inspect receipt only for DeliveryUnknown/no usable receipt or an explicit user delivery-state request; never resend automatically.]"
+const harnessNamedAgentRouting = "[system-routing: For explicit Harness delegation, use harness-use to select an agent for the task. A named Harness agent is the execution target, not a person to contact. Use harness-use only. Do not call agent-management, computer-use, Autonomous Buddy, or /api/buddy. An explicitly requested agent takes priority over any retained target: list real agents and select the exact requested agent, including when the user changes agents. For a new task without an explicit name, follow the skill task-based selection policy; do not assume the retained agent is suitable. Retain a target only for a clear continuation of its task. Then send the selected agent the underlying task directly with the harness-reply routing object. Remove the leading delegation wording from the task: for example, \"Ask David if there are events in the US\" must be sent to David as \"Find upcoming events in the US\", never as a request to ask or contact David. If a prior delivery blocks this new or corrected task, inspect its receipt once. If it is delivered, started, completed, or rejected, immediately send the user's current task in this same turn; never return NO_REPLY until that new send/answer has a known receipt. If send/answer returns queued, delivered, started, completed, or rejected, it has a known outcome: make no more Harness or shell calls (including receipt, status, recap, list, or another send), and immediately reply NO_REPLY. Inspect receipt only for DeliveryUnknown/no usable receipt or an explicit user delivery-state request; never resend automatically.]"
+const harnessFollowupRouting = "[system-routing: A Harness task or question may be awaiting a follow-up. An explicit new target, a new Harness task, or a request for Buddy takes priority over this follow-up hint. Use harness-use only when the user's words clearly continue the retained Harness task, answer its currently open question, or ask whether it has finished or for its result. Do not route vague fragments, acknowledgements, filler, unrelated new requests, or uncertain speech to Harness; let the main agent handle those normally. When routing, use the retained target and send only the user's current words. Do not use Buddy and do not answer a clear Harness follow-up yourself. Do not read the skill/directory or run harness.py --help. If send/answer returns queued, delivered, started, completed, or rejected, make no more Harness or shell calls (including receipt, status, recap, list, or another send) and immediately reply NO_REPLY. Inspect receipt only for DeliveryUnknown/no usable receipt or an explicit user delivery-state request; never resend automatically.]"
+
+const harnessAgentDiscoveryRouting = "[system-routing: The user may be naming an agent or a person. This wording alone does not authorize Harness delegation. If context indicates a Harness agent request, use harness-use to list real agents and resolve the requested name before selecting or sending; an explicit new name overrides the retained target. Otherwise handle the request normally. Do not treat ordinary contact requests as agent tasks.]"
+
+// harnessRequestRouting keeps a stale follow-up target from overriding a new request.
+func harnessRequestRouting(message string, followupActive bool) string {
+	if buddyAgentRequest.MatchString(message) {
+		return ""
+	}
+	if harnessAgentRequest.MatchString(message) {
+		return harnessNamedAgentRouting
+	}
+	if match := harnessPossibleNamedRequest.FindStringSubmatch(message); len(match) > 1 {
+		// Pronouns and common task words are not evidence of a named agent.
+		switch strings.ToLower(match[1]) {
+		case "me", "my", "us", "them", "him", "her", "someone", "the", "a", "an", "if", "whether", "about", "how", "what", "why", "when", "where", "you", "your", "tôi", "tui", "toi", "mình", "minh", "bạn", "ban", "thời", "thoi", "kiểm", "kiem":
+		default:
+			return harnessAgentDiscoveryRouting
+		}
+	}
+	if followupActive {
+		return harnessFollowupRouting
+	}
+	return ""
+}
 
 const maxHarnessFollowupContextRunes = 6000
 
@@ -756,15 +782,9 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 			channel = "web"
 		}
 		msg += fmt.Sprintf("\n[harness-reply run_id=%s channel=%s]", runID, channel)
-		if harnessAgentRequest.MatchString(req.Message) {
-			// A named computer agent is a Harness target. This routing context
-			// prevents a stale Buddy skill in an existing model session from
-			// taking the request merely because it also recognises “agent”.
-			msg += "\n" + harnessNamedAgentRouting
-		}
 		followupActive := h.harnessFollowup != nil && h.harnessFollowup()
-		if followupActive {
-			msg += "\n" + harnessFollowupRouting
+		if routing := harnessRequestRouting(req.Message, followupActive); routing != "" {
+			msg += "\n" + routing
 		}
 		if followupActive && h.harnessFollowupContext != nil {
 			if result := truncateHarnessFollowupContext(h.harnessFollowupContext()); result != "" {
