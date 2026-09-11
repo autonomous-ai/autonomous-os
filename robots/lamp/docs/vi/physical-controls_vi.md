@@ -8,7 +8,7 @@ Lamp hỗ trợ nút cơ học, touchpad TTP223 và bộ điều khiển cảm �
 |---|---|---|
 | **Nút GPIO** | Một nút bấm cơ. Dùng cho các hành động dứt khoát kể cả destructive (reboot / shutdown / factory-reset). Cảm giác cơ + detect giữ lâu khiến destructive action khó xảy ra do vô tình. | Pi 4/5 và OrangePi sun60 |
 | **Touchpad cảm ứng TTP223** | Hai pad chạm xếp như "đầu cún" để vuốt ve + stop/unmute nhẹ. Không có destructive gesture vì FastMode của IC không cho detect giữ lâu tin cậy. | Chỉ OrangePi sun60 (4 Pro / A733) |
-| **Bộ điều khiển cảm ứng MPR121** | Tối đa 12 electrode; một phiên chạm rồi nhả gọi action single-click dùng chung. Không map double-tap hay giữ để thực hiện hành động destructive. | Lamp khai báo cấu hình I²C cụ thể trong `mpr121.json` |
+| **Bộ điều khiển cảm ứng MPR121** | Tối đa 12 electrode, hỗ trợ click và giữ rồi nhả như GPIO, gồm reboot, shutdown và reset. | Lamp khai báo cấu hình I²C cụ thể trong `mpr121.json` |
 
 ## Wiring
 
@@ -62,7 +62,7 @@ Board được detect qua `/proc/device-tree/model`:
 | **Giữ 5–10 s rồi nhả** | Shutdown OS (TTS báo → release servo → `sudo shutdown -h now`). LED nháy đỏ khi đã arm. | n/a — phần cứng TTP223 không hold đáng tin được (xem "FastMode" dưới) |
 | **Giữ 10 s+ rồi nhả** | Factory-reset: wipe state thiết bị + reboot vào AP setup (TTS báo → release servo → POST `/api/system/factory-reset` trên OS server). LED đỏ đứng khi đã arm. | n/a |
 
-Gesture giữ chỉ có trên nút GPIO vì nút cơ học cho bằng chứng intent rõ ràng. Mức sleep và các mức destructive **commit khi nhả, không phải khi timer fire lúc đang giữ**. Các mức destructive escalate từ shutdown sang factory-reset sau 10 s (xem "Detect nút GPIO" dưới).
+Bảng trên mô tả GPIO và TTP223. MPR121 cũng hỗ trợ giữ rồi nhả để thực hiện action, xem phần detect riêng; phản hồi LED GPIO trong bảng không áp dụng cho MPR121. Mức sleep và các mức destructive **commit khi nhả, không phải khi timer fire lúc đang giữ**. Các mức destructive escalate từ shutdown sang factory-reset sau 10 s (xem "Detect nút GPIO" dưới).
 
 ## Cắt Lamp giữa câu (barge-in)
 
@@ -236,25 +236,46 @@ Nếu thiếu `/dev/i2c-0`, khởi tạo log lỗi và MPR121 không hoạt đ�
 GPIO/TTP223 tiếp tục chạy. Sửa `bus` nếu wiring đã xác minh dùng controller
 khác, rồi restart HAL.
 
-Sau khởi tạo, driver chờ 100 ms cho cảm biến ổn định trước khi đọc trạng thái
-chạm ban đầu. Sau đó driver đọc touch status mỗi 10 ms theo mặc định. Chạm ổn định rồi nhả ổn định
-**toàn bộ electrode được chọn** tạo một lần
-`single_click_action(source="MPR121")`; cả hai chuyển trạng thái dùng debounce
-mặc định 30 ms. Các lần chạm chồng nhau trên nhiều electrode tính là một
-phiên. Electrode đang bị giữ khi startup bị bỏ qua đến khi nhả. Giữ lâu không
-kích hoạt sleep, reboot, shutdown hay reset, và không có action double-tap.
-Hành vi single-click dùng chung mô tả ở trên chạy sau khi nhả, không chờ cửa
-sổ phân loại nhiều lần click. Worker action bất đồng bộ có giới hạn giúp
-polling không bị chặn; tap dư khi worker bận có thể được gộp hoặc bỏ để tránh
-tích tụ hàng đợi. Lỗi I²C hoặc cờ quá dòng MPR121 (`OVCF`) được log và dừng
-driver này, các handler đầu vào hiện có tiếp tục chạy.
+Sau khởi tạo, driver chờ cảm biến ổn định 100 ms trước khi đọc trạng thái
+chạm ban đầu, rồi poll mỗi 10 ms theo mặc định. Chuyển trạng thái chạm và
+nhả dùng debounce 30 ms. Chạm chồng nhau trên các electrode được chọn tính
+là một contact; nhả nghĩa là **toàn bộ electrode được chọn** đã nhả.
+Contact đang bị giữ khi startup bị bỏ qua đến khi nhả.
+
+MPR121 dùng chung ngưỡng cử chỉ từ `hal/drivers/button_gestures.py` với GPIO
+(được `button_actions.py` re-export) và gọi các action hiện có:
+
+| Cử chỉ | Action MPR121 |
+|---|---|
+| Lần nhả ngắn đầu tiên trong chuỗi click | `single_click_action(source="MPR121", announce=False)` lập tức dừng tracking/audio, unmute khi được phép và phát ack chime. |
+| 1, 2 hoặc 4+ tap ngắn, rồi yên 0.4 s | Phát cue nghe; các tap lặp không gọi lại action single-click ban đầu. |
+| Đúng 3 tap ngắn, rồi yên 0.4 s | `triple_click_action` reboot thay vì phát cue nghe. |
+| Giữ 2–<5 s rồi nhả | `hold_release_action` vào sleepy. |
+| Giữ 5–<10 s rồi nhả | `hold_release_action` shutdown. |
+| Giữ ≥10 s rồi nhả | `hold_release_action` factory reset. |
+
+Contact ngắn kéo dài dưới 2 s. Cửa sổ click không phân giải khi còn bất kỳ
+electrode được chọn nào đang chạm. Nhả sau giữ xóa chuỗi click đang chờ.
+Action destructive không chạy khi còn giữ. MPR121 chưa có phản hồi LED theo
+mức giữ như nút GPIO.
+
+Worker action bất đồng bộ có hàng đợi giới hạn giữ polling phản hồi kịp thời.
+Action dư có thể bị bỏ; chạm mới, stop hoặc lỗi phần cứng làm mất
+hiệu lực các action destructive và cue nghe cũ đang chờ. Lỗi I²C hoặc cờ quá
+dòng MPR121 (`OVCF`) được log và dừng driver này, các handler đầu vào hiện có
+tiếp tục chạy.
+
+Lần xác minh phần cứng ở trên chỉ kiểm tra hành vi single-click trước đây.
+Các mapping click/giữ bổ sung được kiểm tra bằng test mock local; chưa deploy
+hoặc chạy hành động destructive trên device thật.
 
 Log hoạt động dùng logger `hal.drivers.mpr121` trong log/journal HAL thông
 thường; không tạo file raw trace riêng. Log INFO gồm khởi tạo và cấu hình
 (bus, địa chỉ, electrode, ngưỡng và thời gian), thay đổi chạm/nhả thô trên từng
 electrode, chuyển trạng thái đã debounce, chạm lúc startup bị bỏ qua, xếp hàng
-hoặc gộp tap, bắt đầu/kết thúc action và vòng đời driver. `tap_id` liên kết
-tap được nhận với action đã xếp hàng, gộp hoặc thực thi. Khi lỗi có log lỗi.
+hoặc bỏ action, số click, thời lượng/mức giữ, bắt đầu/kết thúc action và
+vòng đời driver. `gesture_id` liên kết chuỗi click hoặc giữ với action đã
+xếp hàng, bỏ hoặc thực thi. Khi lỗi có log lỗi.
 Các lần poll 10 ms không đổi trạng thái không tạo log INFO, tránh tràn log
 khi không chạm. Theo dõi bằng `journalctl -u hal.service -f` và lọc
 `hal.drivers.mpr121` khi cần tìm nguyên nhân mất hoặc lặp tap.
@@ -285,7 +306,7 @@ Sau khi session kết thúc:
 
 **Mặc định bật** từ 2026-08-27, sau khi kiểm chứng trực tiếp trên orange-lamp với tap, double tap nhanh và chậm, pet và swipe. Đặt `HAL_TOUCH_SWIPE=false` sẽ khôi phục hành vi hai-cử-chỉ trong một bước và không cần deploy lại — đó là đường lùi nếu một máy ngoài thực địa hành xử sai.
 
-Bật nó lên nghĩa là một cú double tap sẽ toggle **microphone** và một cú swipe sẽ đưa thiết bị vào **giấc ngủ**. Cả hai đều đảo ngược được (double tap lần nữa; một cú tap là thức dậy), và không có hành động phá hủy nào với tới được từ đây — FastMode không đo được thao tác giữ, nên reboot / shutdown / factory-reset vẫn ở lại trên nút bấm cơ.
+Bật nó lên nghĩa là một cú double tap sẽ toggle **microphone** và một cú swipe sẽ đưa thiết bị vào **giấc ngủ**. Cả hai đều đảo ngược được (double tap lần nữa; một cú tap là thức dậy), và không có hành động phá hủy nào với tới được từ đây — FastMode không đo được thao tác giữ, nên TTP223 không kích hoạt reboot / shutdown / factory-reset; các cử chỉ đó có trên nút cơ và MPR121.
 
 **Tín hiệu nằm ở *thời điểm* các pad bắn, không phải pad nào.** Đo trên orange-lamp ngày 2026-08-27 — khoảng cách giữa các pad bên trong một lần tiếp xúc:
 
@@ -435,7 +456,8 @@ Phrase cố tình ngắn — chúng fire giữa lúc vuốt nên cần cảm gi�
 | `hal/board/ttp223.py` | Đọc cấu hình TTP223 theo device, có fallback cũ |
 | `hal/drivers/ttp223.py` | Handler touchpad cảm ứng TTP223 (chỉ OrangePi sun60) |
 | `hal/board/mpr121.py` | Đọc và kiểm tra cấu hình MPR121 do device quản lý |
-| `hal/drivers/mpr121.py` | Handler I²C MPR121 tùy chọn, detect chạm rồi nhả |
+| `hal/drivers/mpr121.py` | Handler I²C MPR121 tùy chọn, detect click/giữ |
+| `hal/drivers/button_gestures.py` | Ngưỡng cử chỉ dùng chung GPIO/MPR121 |
 | `hal/drivers/button_actions.py` | Hàm action chung + pool phrase local |
 | `hal/presets.py` | Hằng số mã ngôn ngữ (`LANG_EN`, v.v.) |
 | `hal/test_ttp223_probe_orangepi.py` | Probe pad độc lập (ioctl thuần stdlib, không cần gpiod). `info` đọc trạng thái line khi HAL vẫn chạy; `watch` map pad→line và cần dừng `hal.service`. Line lấy từ `ttp223.json` của device được chọn, fallback về board profile cũ giống HAL. Chọn device bằng `--device-type`. |

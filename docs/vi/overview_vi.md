@@ -88,8 +88,13 @@ file/board hoặc `enabled: false` thì bỏ qua MPR121, giữ input GPIO/TTP223
 hiện có; chế độ mô phỏng cũng bỏ qua. Cấu hình bật nhưng sai bị từ chối khi
 startup. Restart HAL sau khi đổi cấu hình wiring. Driver dùng chung
 `hal/drivers/mpr121.py` gom các electrode được chọn thành một phiên chạm rồi
-nhả đã debounce, sau đó gọi `single_click_action(source="MPR121")` một lần,
-không map double-tap hay giữ để thực hiện hành động destructive. Mặc định:
+nhả đã debounce. Ngưỡng cử chỉ dùng chung GPIO trong
+`hal/drivers/button_gestures.py`: lần nhả ngắn đầu tiên gọi single-click ngay
+với `announce=False`; sau 0.4 s yên, 1/2/4+ click phát cue nghe, đúng 3 click
+thì reboot. Giữ chỉ thực hiện khi nhả: 2–<5 s sleepy, 5–<10 s shutdown,
+≥10 s factory reset. Chạm giữ lúc startup bị bỏ qua; MPR121 chưa có LED theo
+mức giữ. Mapping click/giữ mới chỉ kiểm tra bằng test mock local; lần test
+trên device trước đó chỉ kiểm tra single-click. Mặc định:
 địa chỉ `0x5A`, electrode 0–11, ngưỡng chạm/nhả 2/1, bật autoconfig,
 polling 10 ms và debounce 30 ms, chờ ổn định 100 ms lúc startup. Lỗi I²C hoặc
 cờ quá dòng chỉ dừng driver này. Logger `hal.drivers.mpr121` ghi cấu hình,

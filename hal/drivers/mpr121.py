@@ -1,4 +1,4 @@
-"""Optional MPR121 capacitive input: a complete touch maps to single click.
+"""Optional MPR121 capacitive input using shared GPIO button gestures.
 
 I2C transport and register setup adapted from the user-supplied
 mpr121_opi_test.py. Only the device-declared bus/address is accessed.
@@ -10,8 +10,13 @@ import os
 import queue
 import threading
 import time
+from dataclasses import dataclass
 
 from hal.board.mpr121 import MPR121Config
+from hal.drivers.button_gestures import (
+    DOUBLE_CLICK_WINDOW, FACTORY_RESET_DURATION, LONG_PRESS_DURATION,
+    SLEEP_HOLD_DURATION,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -65,8 +70,16 @@ class I2CBus:
         self._transfer([_I2CMsg(address, 0, 2, buffer)])
 
 
-class _TapDetector:
-    """Debounce the union of selected electrodes; ignore a boot-time hold."""
+@dataclass(frozen=True)
+class _GestureEvent:
+    kind: str
+    gesture_id: int
+    count: int = 0
+    held_s: float = 0.0
+
+
+class _GestureRecognizer:
+    """Poll-clock recognition independent of action execution and electrode count."""
 
     def __init__(self, debounce_ms):
         self._delay = debounce_ms / 1000
@@ -74,37 +87,102 @@ class _TapDetector:
         self._candidate = None
         self._since = 0.0
         self._armed = False
-        self._pressed = False
+        self._press_start = None
+        self._click_count = 0
+        self._deadline = None
+        self._gesture_id = 0
+        self._hold_tier = 0
+
+    def cancel(self):
+        self._press_start = None
+        self._click_count = 0
+        self._deadline = None
+        self._armed = False
 
     def update(self, touched, now):
+        events = []
         if self._stable is None:
             self._stable = self._candidate = touched
             self._since = now
             self._armed = not touched
             logger.info("MPR121 event=detector_seed touched=%s armed=%s startup_hold_suppressed=%s", touched, self._armed, touched)
-            return False
+            return events
         if touched != self._candidate:
             self._candidate = touched
             self._since = now
             logger.debug("MPR121 event=debounce_candidate touched=%s", touched)
-        if touched == self._stable or now - self._since < self._delay:
-            return False
-        self._stable = touched
-        if touched:
-            self._pressed = self._armed
-            logger.info("MPR121 event=stable_touch armed=%s", self._armed)
-            return False
-        clicked = self._pressed
-        self._pressed = False
-        self._armed = True
-        logger.info("MPR121 event=stable_release tap_accepted=%s startup_hold_suppressed=%s", clicked, not clicked)
-        return clicked
+            if touched:
+                # Cancel stale queued outcomes as soon as a new touch appears,
+                # but never use raw chatter to increment the gesture count.
+                events.append(_GestureEvent("invalidate", self._gesture_id))
+        if touched != self._stable and now - self._since >= self._delay:
+            self._stable = touched
+            if touched and self._armed:
+                if self._deadline is not None and self._since >= self._deadline:
+                    logger.info("MPR121 event=burst_cancelled gesture_id=%d count=%d reason=new_touch_after_deadline", self._gesture_id, self._click_count)
+                    self._click_count = 0
+                    self._deadline = None
+                if not self._click_count:
+                    self._gesture_id += 1
+                self._press_start = self._since
+                self._hold_tier = 0
+                events.append(_GestureEvent("press", self._gesture_id, self._click_count))
+            elif not touched:
+                if self._press_start is None:
+                    logger.info("MPR121 event=stable_release startup_hold_suppressed=true")
+                else:
+                    # Measure between the first samples of the accepted edges;
+                    # debounce must not push a just-short hold over a threshold.
+                    held = self._since - self._press_start
+                    events.append(_GestureEvent("release", self._gesture_id, self._click_count, held))
+                    if held >= SLEEP_HOLD_DURATION:
+                        self._click_count = 0
+                        self._deadline = None
+                        events.append(_GestureEvent("invalidate", self._gesture_id))
+                        events.append(_GestureEvent("hold", self._gesture_id, held_s=held))
+                    else:
+                        self._click_count += 1
+                        if self._click_count == 1:
+                            events.append(_GestureEvent("single", self._gesture_id, self._click_count, held))
+                        self._deadline = now + DOUBLE_CLICK_WINDOW
+                    self._press_start = None
+                self._armed = True
+        if self._press_start is not None:
+            held = (now if touched else self._since) - self._press_start
+            tier = sum(held >= threshold for threshold in (
+                SLEEP_HOLD_DURATION, LONG_PRESS_DURATION, FACTORY_RESET_DURATION,
+            ))
+            if tier > self._hold_tier:
+                self._hold_tier = tier
+                events.append(_GestureEvent("hold_tier", self._gesture_id, tier, held))
+        # A pending click window never commits a destructive outcome while
+        # another electrode is held; a completed hold clears the whole burst.
+        if not touched and not self._stable and self._deadline is not None and now >= self._deadline:
+            kind = "triple" if self._click_count == 3 else "cue"
+            events.append(_GestureEvent(kind, self._gesture_id, self._click_count))
+            self._click_count = 0
+            self._deadline = None
+        return events
 
 
-def single_click_action(*, source):
-    # Keep platform/audio dependencies out of transport initialization.
+def single_click_action(*, source, announce):
     from hal.drivers.button_actions import single_click_action as action
+    action(source=source, announce=announce)
+
+
+def announce_listening_cue(*, source):
+    from hal.drivers.button_actions import announce_listening_cue as action
     action(source=source)
+
+
+def triple_click_action(*, source):
+    from hal.drivers.button_actions import triple_click_action as action
+    action(source=source)
+
+
+def hold_release_action(held_s, *, source):
+    from hal.drivers.button_actions import hold_release_action as action
+    action(held_s, source=source)
 
 
 class MPR121Handler:
@@ -113,12 +191,14 @@ class MPR121Handler:
         self._mask = sum(1 << electrode for electrode in set(config.electrodes))
         self._bus = None
         self._stop = threading.Event()
-        self._pending = queue.Queue(maxsize=1)
+        self._pending = queue.Queue(maxsize=2)
         self._poll_thread = None
         self._action_thread = None
-        self._detector = _TapDetector(config.debounce_ms)
+        self._detector = _GestureRecognizer(config.debounce_ms)
         self._last_raw_mask = None
-        self._tap_id = 0
+        self._generation = 0
+        self._action_busy = False
+        self._gesture_lock = threading.Lock()
 
     def _initialize(self):
         config = self._config
@@ -171,15 +251,15 @@ class MPR121Handler:
         if any(thread and thread.is_alive() for thread in (self._poll_thread, self._action_thread)):
             raise RuntimeError("MPR121 handler already running or stopping")
         logger.info(
-            "MPR121 event=start bus=%d address=0x%02x electrodes=%s touch_threshold=%d release_threshold=%d autoconfig=%s poll_ms=%d debounce_ms=%d settle_ms=100 pending_capacity=1",
+            "MPR121 event=start bus=%d address=0x%02x electrodes=%s touch_threshold=%d release_threshold=%d autoconfig=%s poll_ms=%d debounce_ms=%d settle_ms=100 pending_capacity=2",
             self._config.bus, self._config.address, self._config.electrodes,
             self._config.touch_threshold, self._config.release_threshold,
             self._config.autoconfig, self._config.poll_ms, self._config.debounce_ms,
         )
         self._last_raw_mask = None
         self._stop.clear()
-        self._pending = queue.Queue(maxsize=1)
-        self._detector = _TapDetector(self._config.debounce_ms)
+        self._pending = queue.Queue(maxsize=2)
+        self._detector = _GestureRecognizer(self._config.debounce_ms)
         try:
             self._bus = I2CBus(self._config.bus)
             self._initialize()
@@ -207,54 +287,98 @@ class MPR121Handler:
             except OSError:
                 logger.exception("MPR121 bus close failed")
 
+    def _invalidate_pending(self, reason):
+        with self._gesture_lock:
+            self._generation += 1
+            while True:
+                try:
+                    _, event, _ = self._pending.get_nowait()
+                except queue.Empty:
+                    break
+                logger.info("MPR121 event=action_discarded gesture_id=%d action=%s reason=%s", event.gesture_id, event.kind, reason)
+
+    def _process_touch(self, touched, now):
+        for event in self._detector.update(touched, now):
+            if self._stop.is_set():
+                return
+            logger.info("MPR121 event=gesture kind=%s gesture_id=%d count=%d held_s=%.3f", event.kind, event.gesture_id, event.count, event.held_s)
+            if event.kind == "invalidate":
+                self._invalidate_pending("new_touch_or_hold")
+            elif event.kind in ("single", "cue", "triple", "hold"):
+                with self._gesture_lock:
+                    if self._stop.is_set():
+                        return
+                    if event.kind in ("hold", "triple") and (self._action_busy or not self._pending.empty()):
+                        logger.warning("MPR121 event=action_discarded gesture_id=%d action=%s reason=action_worker_busy", event.gesture_id, event.kind)
+                        continue
+                    try:
+                        self._pending.put_nowait((self._generation, event, time.monotonic()))
+                        logger.info("MPR121 event=action_queued gesture_id=%d action=%s", event.gesture_id, event.kind)
+                    except queue.Full:
+                        # Counts are resolved from every electrode edge above;
+                        # dropping a semantic outcome never invents a triple.
+                        logger.warning("MPR121 event=action_discarded gesture_id=%d action=%s reason=pending_queue_full", event.gesture_id, event.kind)
+
     def _poll(self):
         logger.info("MPR121 event=worker_started worker=poll")
         try:
             while not self._stop.wait(self._config.poll_ms / 1000):
-                if self._detector.update(self._read_touched(), time.monotonic()):
-                    self._tap_id += 1
-                    logger.info("MPR121 event=tap_accepted tap_id=%d", self._tap_id)
-                    try:
-                        self._pending.put_nowait(self._tap_id)
-                        logger.info("MPR121 event=action_queued tap_id=%d", self._tap_id)
-                    except queue.Full:
-                        logger.info("MPR121 event=action_coalesced tap_id=%d reason=pending_queue_full", self._tap_id)
+                self._process_touch(self._read_touched(), time.monotonic())
         except Exception:
             logger.exception("MPR121 polling stopped after hardware error")
             self._stop.set()
         finally:
+            self._detector.cancel()
+            self._invalidate_pending("poll_stopped")
             self._close_bus()
             logger.info("MPR121 event=worker_stopped worker=poll")
+
+    def _execute(self, event):
+        if event.kind == "single":
+            single_click_action(source="MPR121", announce=False)
+        elif event.kind == "cue":
+            announce_listening_cue(source="MPR121")
+        elif event.kind == "triple":
+            triple_click_action(source="MPR121")
+        elif event.kind == "hold":
+            hold_release_action(event.held_s, source="MPR121")
 
     def _dispatch(self):
         logger.info("MPR121 event=worker_started worker=action")
         try:
             while not self._stop.is_set():
                 try:
-                    tap_id = self._pending.get(timeout=0.1)
+                    generation, event, queued_at = self._pending.get(timeout=0.1)
                 except queue.Empty:
                     continue
-                if self._stop.is_set():
-                    logger.info("MPR121 event=action_discarded tap_id=%s reason=stopping", tap_id)
-                    return
+                with self._gesture_lock:
+                    valid = not self._stop.is_set() and generation == self._generation
+                    if event.kind in ("hold", "triple") and time.monotonic() - queued_at > DOUBLE_CLICK_WINDOW:
+                        valid = False
+                    if valid:
+                        self._action_busy = True
+                if not valid:
+                    logger.info("MPR121 event=action_discarded gesture_id=%d action=%s reason=stale_expired_or_stopping", event.gesture_id, event.kind)
+                    continue
                 try:
-                    logger.info("MPR121 event=action_begin tap_id=%s action=single_click", tap_id)
-                    single_click_action(source="MPR121")
-                    logger.info("MPR121 event=action_complete tap_id=%s action=single_click", tap_id)
+                    logger.info("MPR121 event=action_begin gesture_id=%d action=%s count=%d held_s=%.3f", event.gesture_id, event.kind, event.count, event.held_s)
+                    # Once a shared action starts its own I/O/OS sequence, it
+                    # cannot be interrupted here. Only pending work is canceled.
+                    self._execute(event)
+                    logger.info("MPR121 event=action_complete gesture_id=%d action=%s", event.gesture_id, event.kind)
                 except Exception:
-                    logger.exception("MPR121 event=action_failed tap_id=%s action=single_click", tap_id)
+                    logger.exception("MPR121 event=action_failed gesture_id=%d action=%s", event.gesture_id, event.kind)
+                finally:
+                    with self._gesture_lock:
+                        self._action_busy = False
         finally:
-            while True:
-                try:
-                    tap_id = self._pending.get_nowait()
-                except queue.Empty:
-                    break
-                logger.info("MPR121 event=action_discarded tap_id=%s reason=stopping", tap_id)
+            self._invalidate_pending("action_worker_stopped")
             logger.info("MPR121 event=worker_stopped worker=action")
 
     def stop(self):
         logger.info("MPR121 event=stop_requested")
         self._stop.set()
+        self._invalidate_pending("stop_requested")
         for thread in (self._poll_thread, self._action_thread):
             if thread is not None and thread.ident is not None:
                 thread.join(timeout=2)
