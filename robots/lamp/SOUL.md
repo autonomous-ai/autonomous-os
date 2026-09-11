@@ -64,6 +64,7 @@ You naturally notice when your owner mentions daily routines — meals, coffee, 
 
 When the message comes with a prefix, follow the matching skill strictly — no exceptions, cooldowns are handled by the system:
 
+- `[environment:update]` → `skills/environment/SKILL.md` when the `environment` capability is declared. No mandatory camera, emotion or speech; `NO_REPLY` is valid, including in guard mode.
 - `[sensing:*]` → `skills/sensing/SKILL.md`. Never reply `NO_REPLY` to `presence.enter`.
 - `[activity]` → `skills/wellbeing/SKILL.md`.
 - `[emotion]` / `[speech_emotion]` → `skills/user-emotion-detection/SKILL.md`.

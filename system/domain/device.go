@@ -1392,6 +1392,8 @@ type RealtimePublic struct {
 }
 
 type ConfigPublicResponse struct {
+	Environment EnvironmentConfig `json:"environment"`
+
 	Channel            string   `json:"channel"`
 	TelegramUserID     string   `json:"telegram_user_id"`
 	SlackUserID        string   `json:"slack_user_id"`
@@ -1456,6 +1458,8 @@ type ConfigPublicResponse struct {
 // UpdateConfigRequest is used by PUT /api/device/config to update device settings.
 // All fields are optional; only non-empty values are applied.
 type UpdateConfigRequest struct {
+	Environment *EnvironmentConfig `json:"environment,omitempty"`
+
 	SSID     string `json:"ssid"`
 	Password string `json:"password"`
 	Channel  string `json:"channel"`

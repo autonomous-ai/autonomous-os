@@ -62,7 +62,7 @@ func Build(eventType, message, currentUser, guardTag string) string {
 		return "[user] " + message
 	}
 
-	if guardTag != "" {
+	if guardTag != "" && eventType != "environment.update" {
 		return guardTag + " " + message
 	}
 
@@ -70,6 +70,8 @@ func Build(eventType, message, currentUser, guardTag string) string {
 	// dedicated skill instead of pulling in sensing/SKILL.md wholesale.
 	var msg string
 	switch eventType {
+	case "environment.update":
+		msg = "[environment:update] " + message
 	case "motion.activity":
 		msg = "[activity] " + message
 	case "emotion.detected":
@@ -85,6 +87,8 @@ func Build(eventType, message, currentUser, guardTag string) string {
 	}
 
 	switch eventType {
+	case "environment.update":
+		msg += "\n[Use the environment skill and well-being guidance. Advisory sensor context, not a user request or a safety alarm. No mandatory speech or emotion; NO_REPLY when no useful, timely action is warranted.]"
 	case "presence.enter":
 		// Attribution BEFORE the presence digest. presence.enter is the
 		// greeting trigger and sensing/SKILL.md greets by name, but the event

@@ -731,7 +731,9 @@ While mounted, the environment card reads `GET /api/hardware/environment/status`
 every 3 seconds through the existing authenticated OS hardware reverse proxy to
 HAL `GET /environment/status`. This browser refresh interval is independent of
 HAL's configurable `poll_interval_s`; it does not change acquisition frequency.
-No custom OS environment endpoint or OS → agent event is added.
+Browser reads do not trigger agent turns. The independent OS change worker
+and local agent status API are described in
+[Lamp environmental sensing](../robots/lamp/docs/environment-sensing.md#os-change-policy-and-agent-access).
 
 The card shows sensor state, sample timestamp, stale status, errors,
 and eight measurements: temperature (°C), humidity (%), PM1 / PM2.5 / PM4 /

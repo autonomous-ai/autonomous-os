@@ -3,21 +3,20 @@
 SEN55 is an environmental sensor: particulate matter, humidity, temperature,
 and VOC/NOx indexes. HAL exposes it as an optional `environment` capability,
 with its own driver, lifecycle, and HTTP snapshots alongside camera and audio.
-The integration provides acquisition, a read-only local web view, and MQTT
-snapshots on request. It defines no thresholds,
-notifications, OS sensing events, or agent behavior. It does not measure touch
-or pressure; tactile sensing would require a different sensor.
+The integration provides HAL acquisition, read-only web/MQTT snapshots, and
+configurable OS detection of sustained environmental changes for the agent.
+SEN55 does not measure touch, pressure, CO₂, CO or O₂.
 
-## Current scope: view only
+## Current scope: readings and sustained-change events
 
-Receiving a new sensor sample only updates HAL's latest snapshot in RAM.
-HAL does **not** automatically send it to the OS sensing/event pipeline or
-agent. No agent prompt, alert, automatic reaction, or historical storage is
-triggered by a reading.
-
-The OS server only forwards the snapshot when the web or an MQTT client asks
-to view it. This request/reply access is not OS/agent sensing integration;
-that integration remains future work.
+HAL keeps its latest snapshot in RAM. The OS environment worker independently
+polls that snapshot and sends qualifying `environment.update` events through
+`POST /api/sensing/event`; it does not invoke the agent for every sensor sample.
+The `environment` skill interprets measurements and consults `wellbeing` for
+considerate advice. Web and MQTT reads remain read-only and do not trigger turns.
+There is no environmental history store, scheduled follow-up service, automatic
+actuator control, or medical alarm. Lamp still ships with this hardware disabled
+and its capability commented out; the worker requires the declared capability.
 
 ## Wiring and mounting
 
@@ -127,8 +126,7 @@ A sample contains:
 | `device_status` | Sensor status register bitmask |
 
 Unavailable measurement values are JSON `null`; callers must not treat them
-as zero. The raw readings and status leave future interpretation to a later
-OS/agent integration.
+as zero. OS change detection and agent interpretation are described below.
 
 ## Local web view
 
@@ -147,7 +145,8 @@ time, stale status, and errors. Missing or stale values appear as `—` and
 request failures are shown explicitly so old values are not presented as live
 readings. Bus, device status register, and timing configuration are in a
 collapsed technical section; timings come from `status.timing`. This is a read-only display with no good/bad
-thresholds, historical storage, or OS → agent events.
+thresholds or historical storage. OS → agent events come from the independent
+worker below, not browser refreshes.
 
 The card stays hidden with Lamp's current commented capability. Declaring the
 capability while leaving `enabled: false` makes the card show the disabled state.
@@ -181,3 +180,115 @@ Each board entry accepts these optional timing fields (seconds). Omitted fields 
   "no_data_timeout_s": 30.0
 }
 ```
+
+## OS change policy and agent access
+
+OS interpretation is configured under the top-level `environment` object in
+`config/config.json`, through the existing admin `GET`/`PUT /api/device/config`.
+This is separate from HAL timing in `sen55.json`. Defaults are:
+
+```json
+{
+  "environment": {
+    "enabled": true,
+    "evaluate_interval_s": 10,
+    "sustain_s": 60,
+    "cooldown_s": 900,
+    "retry_interval_s": 60,
+    "max_sample_age_s": 10,
+    "metrics": {
+      "pm1_0_ug_m3": {"delta": 10, "warmup_s": 60},
+      "pm2_5_ug_m3": {"delta": 10, "warmup_s": 60},
+      "pm4_0_ug_m3": {"delta": 15, "warmup_s": 60},
+      "pm10_ug_m3": {"delta": 15, "warmup_s": 60},
+      "temperature_c": {"delta": 2, "warmup_s": 60},
+      "humidity_pct": {"delta": 10, "warmup_s": 60},
+      "voc_index": {"delta": 50, "warmup_s": 3600},
+      "nox_index": {"delta": 20, "warmup_s": 21600}
+    }
+  }
+}
+```
+
+`delta` uses each measurement's unit (humidity uses percentage points). These
+are change-detection defaults, **not medical or absolute air-quality limits**.
+Omitting the whole object uses defaults. Within a supplied object, omitted
+top-level fields use defaults; supplying `metrics` replaces the entire metric
+map, allowing a monitored subset. Each rule needs a positive finite `delta`;
+omitted per-metric fields inherit that metric’s defaults. Explicit null fields
+or maps, an empty map, and unknown fields/metrics are rejected. New configs
+persist the full default object; old configs without it use defaults without
+a migration rewrite.
+Evaluation, sustain, retry and maximum age must be 1–86400 seconds; sustain and
+retry must be at least the evaluation interval. Cooldown permits 0–604800
+seconds, warm-up 0–86400 seconds. Runtime edits apply on the next worker tick
+and reset detection baselines; they do not enable HAL hardware.
+
+Only fresh, enabled, ready snapshots with advancing timestamps qualify. The
+HAL `stale` flag and OS maximum age both apply. A nonzero `sample.device_status`
+suppresses detection and resets readings until the status is clean. After continuous valid readings
+for each metric's warm-up, the first value establishes a silent baseline.
+Changes must meet `delta` in the same direction for `sustain_s`; falling below
+that difference or reversing direction resets the pending duration. Null
+metrics reset their own warm-up/baseline; an unavailable snapshot or read failure
+resets readings for all metrics. Large gaps also reset continuity. Warm-up is an
+OS gating period, not a certificate of sensor calibration.
+
+A qualifying event contains `[environment:update]` followed by JSON with
+`observed_at` (Unix seconds), `sample`, `changes` keyed by metric with
+`previous`, `previous_at` (baseline Unix seconds), `current`, signed `delta`,
+and `sustained_s`. The POST body carries the event as JSON text in `message`;
+the sensing formatter adds `[environment:update]` when forwarding to the agent.
+`previous` is the
+baseline established initially or after the last acknowledged event for that
+metric; `current` is the latest sample, not a rolling average. Both increases
+and decreases can qualify. Acknowledged dispatch advances included baselines
+and starts the shared cooldown; rejected dispatch retains them and waits at
+least the retry interval before another attempt. The event duration is the
+configured sustained-change requirement, not a health exposure measurement.
+
+Dispatch respects the explicit capability, sleep and conversation floor even
+in guard mode. Busy-agent queues keep only the latest environment event,
+expire it after 60 seconds, and recheck capability/sleep/policy enabled before
+replay. Setting `environment.enabled: false` also makes the event handler return
+`dropped_disabled`; it stops automatic interpretation, not HAL acquisition or
+diagnostic status reads.
+A queued acknowledgement is best-effort: later expiry or dropping is possible;
+it does not guarantee the user hears a notification. Automatic environmental
+events do not require a camera reaction, emotion marker or physical action.
+
+Local agent tools can read `GET http://127.0.0.1:5000/api/environment/status`.
+This loopback-only, capability-gated OS route returns the usual
+`{"status":1,"data":{...HAL snapshot...},"message":null}` envelope. It reads
+HAL's cached diagnostic snapshot, not a forced hardware measurement; callers
+must check readiness, freshness and individual null values. Missing capability
+returns HTTP 403; HAL read/format failures return HTTP 502. Disabled/error/stale
+snapshots can still be successful diagnostic responses. Browser and MQTT
+clients continue using their existing authenticated routes.
+
+## Environment skill and well-being use cases
+
+The capability-gated `skills/environment/SKILL.md` owns data interpretation.
+It is excluded when capabilities are missing or empty, even where legacy skills
+retain their fallback availability.
+It consults only the environmental-care section of `skills/wellbeing/SKILL.md`
+for proactive timing and phrasing, avoiding a routing loop. Room questions do
+not require camera observations, identity, activity logs or hydration counters.
+
+- **Ask about the room:** read status once, report useful measurements; missing
+  or stale data is unknown, not zero pollution or proof of safe air.
+- **Sustained change:** explain supported changes and offer at most one useful
+  action when appropriate. Respect quiet/sleep preferences; output `NO_REPLY`
+  when no useful notification is warranted.
+- **After an action:** compare with a real earlier timestamped reading from the
+  event/conversation. Report improvement or worsening without claiming causation.
+  Without a baseline, explain that a comparison is unavailable. Do not promise
+  a timed recheck, start polling, or invent persistent history.
+
+VOC/NOx indices are relative, not ppm or chemical identification. SEN55 cannot
+support CO₂/O₂ claims. Instantaneous PM does not establish compliance with WHO
+24-hour or annual exposure guidelines. Consider outside conditions before
+suggesting ventilation and enclosure heat before interpreting temperature.
+The skills do not diagnose health, invent thresholds, resume unrelated tasks,
+or operate a purifier/fan/HVAC without an available authorized integration.
+No environment-specific well-being log action is introduced.

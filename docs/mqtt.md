@@ -369,6 +369,9 @@ when another power action is already pending, a terminal `status:"failure"`
 reply follows with the reason. The commands invoke HAL's full actions, not raw
 OS commands: reboot plays its cue; shutdown plays its cue and releases servos.
 
+This request/reply does not generate agent events. The separate OS worker handles
+sustained changes; see [Lamp environment sensing](../robots/lamp/docs/environment-sensing.md#os-change-policy-and-agent-access).
+
 **`environment.status`:** send on `fa_channel`:
 
 ```json
