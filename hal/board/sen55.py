@@ -28,10 +28,23 @@ class SEN55Timing:
 class SEN55Config:
     bus: int
     timing: SEN55Timing = SEN55Timing()
+    sda_pin: int | None = None
+    scl_pin: int | None = None
 
     def __post_init__(self):
+        validate_header_pins(self.sda_pin, self.scl_pin)
         if type(self.bus) is not int or self.bus < 0:
             raise ValueError("bus must be a nonnegative integer")
+
+
+def validate_header_pins(sda_pin, scl_pin):
+    """Physical host header metadata only; Linux configures I2C pin mux."""
+    if sda_pin is None and scl_pin is None:
+        return
+    if any(type(pin) is not int or pin <= 0 for pin in (sda_pin, scl_pin)):
+        raise ValueError("sda_pin and scl_pin must both be positive physical header pin numbers")
+    if sda_pin == scl_pin:
+        raise ValueError("sda_pin and scl_pin must be different")
 
 
 def load_sen55_config(device_dir: str, board_id: str) -> SEN55Config | None:
@@ -47,7 +60,7 @@ def load_sen55_config(device_dir: str, board_id: str) -> SEN55Config | None:
             raise ValueError("expected an object containing a 'boards' map")
         configs = {}
         for board, entry in data["boards"].items():
-            if not isinstance(entry, dict) or set(entry) - ({"enabled", "bus"} | {f.name for f in fields(SEN55Timing)}):
+            if not isinstance(entry, dict) or set(entry) - ({"enabled", "bus", "sda_pin", "scl_pin"} | {f.name for f in fields(SEN55Timing)}):
                 raise ValueError(f"{board}: invalid SEN55 configuration fields")
             enabled = entry.get("enabled", True)
             if type(enabled) is not bool:
@@ -57,7 +70,9 @@ def load_sen55_config(device_dir: str, board_id: str) -> SEN55Config | None:
             timing = SEN55Timing(**{
                 f.name: entry[f.name] for f in fields(SEN55Timing) if f.name in entry
             })
-            config = SEN55Config(entry["bus"], timing) if "bus" in entry else None
+            sda_pin, scl_pin = entry.get("sda_pin"), entry.get("scl_pin")
+            validate_header_pins(sda_pin, scl_pin)
+            config = SEN55Config(entry["bus"], timing, sda_pin, scl_pin) if entry.get("bus") is not None else None
             if enabled and config is None:
                 raise ValueError(f"{board}: enabled SEN55 requires bus")
             configs[board] = config if enabled else None

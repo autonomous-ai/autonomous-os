@@ -255,3 +255,31 @@ def test_worker_uses_configured_poll_retry_and_timeout():
         service._run()
     assert [call.args[0] for call in service._stop.wait.call_args_list] == [2, 8]
     driver.close.assert_called_once()
+
+
+def test_header_pin_metadata(tmp_path):
+    import json
+    from hal.board.sen55 import load_sen55_config
+
+    path = tmp_path / "sen55.json"
+    path.write_text(json.dumps({"boards": {"board": {"bus": 2, "sda_pin": 3, "scl_pin": 5}}}))
+    config = load_sen55_config(str(tmp_path), "board")
+    assert (config.bus, config.sda_pin, config.scl_pin) == (2, 3, 5)
+    for pins in ({"sda_pin": 3}, {"sda_pin": True, "scl_pin": 5}, {"sda_pin": 3, "scl_pin": 3}):
+        path.write_text(json.dumps({"boards": {"board": {"enabled": False, **pins}}}))
+        with pytest.raises(ValueError, match="Invalid SEN55 wiring"):
+            load_sen55_config(str(tmp_path), "board")
+
+
+def test_null_bus_allowed_only_when_disabled(tmp_path):
+    import json
+    from hal.board.sen55 import load_sen55_config
+
+    path = tmp_path / "sen55.json"
+    entry = {"enabled": False, "bus": None, "sda_pin": 3, "scl_pin": 5}
+    path.write_text(json.dumps({"boards": {"board": entry}}))
+    assert load_sen55_config(str(tmp_path), "board") is None
+    entry["enabled"] = True
+    path.write_text(json.dumps({"boards": {"board": entry}}))
+    with pytest.raises(ValueError, match="enabled SEN55 requires bus"):
+        load_sen55_config(str(tmp_path), "board")
