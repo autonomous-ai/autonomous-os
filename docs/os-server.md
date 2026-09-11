@@ -21,6 +21,13 @@
 | GET | `/api/system/ota-security` | OTA trust posture from the bootstrap worker: `legacy` vs `verified`, pinned key fingerprint, last metadata fetch (see `bootstrap-ota.md`) |
 | POST | `/api/system/reboot` | Admin-gated: acknowledge, then ask HAL to announce and reboot the OS |
 | POST | `/api/system/shutdown` | Admin-gated: acknowledge, then ask HAL to announce, release servos, and shut down the OS |
+| POST | `/api/system/restart/:target` | Admin-gated service restart for `hal` or `os-server` only. Returns `202` with `{target, scheduled: true}` after systemd accepts the restart timer; unsupported targets return `400`, scheduling failures return `500`. |
+
+Service restart uses `systemd-run --collect --on-active=2s systemctl restart <target>`
+with a five-second scheduling timeout. The separate transient timer lets the HTTP
+response arrive before os-server restarts; `202` confirms scheduling, not service
+recovery. The Versions card in Web Monitor exposes this action for HAL and OS
+Server. It requires systemd and permission to manage system services on the host.
 
 The power endpoints return `202 Accepted` before scheduling their HAL call, so
 the browser can receive the acknowledgement before the device becomes

@@ -8,6 +8,97 @@ ROLLBACK_DIR="/root/bootstrap/rollback"
 WEB_ROOT="/usr/share/nginx/html/setup"
 HAL_DIR="/opt/hal"
 
+# Use npm's bundled semver implementation: engine ranges can include unions
+# and upper bounds, so a major-version comparison is not sufficient.
+node_satisfies_engine() {
+  node - "$1" "$(command -v npm)" <<'NODE'
+const fs = require('fs');
+const path = require('path');
+try {
+  const npmDir = path.dirname(fs.realpathSync(process.argv[3]));
+  const semver = require(require.resolve('semver', { paths: [npmDir] }));
+  const range = process.argv[2];
+  if (!semver.validRange(range)) throw new Error('Invalid Node engine range');
+  process.exit(semver.satisfies(process.version, range) ? 0 : 1);
+} catch (error) {
+  console.error('[software-update] Cannot check Node compatibility:', error.message);
+  process.exit(2);
+}
+NODE
+}
+
+ensure_node_engine() {
+  local engine="$1" component="$2" status setup_script
+  if node_satisfies_engine "$engine"; then
+    return 0
+  else
+    status=$?
+    # A broken checker must not trigger a system package upgrade.
+    [ "$status" -eq 1 ] || return "$status"
+  fi
+  echo "[software-update] $component requires Node $engine; upgrading system Node to 24.x"
+  setup_script=$(mktemp) || return 1
+  if ! curl -fsSL https://deb.nodesource.com/setup_24.x -o "$setup_script"; then
+    rm -f "$setup_script"
+    return 1
+  fi
+  if ! bash "$setup_script"; then
+    rm -f "$setup_script"
+    return 1
+  fi
+  rm -f "$setup_script"
+  apt-get install -y nodejs || return 1
+  hash -r
+  node_satisfies_engine "$engine" || {
+    echo "[software-update] Node still does not satisfy $engine; refusing $component update (check Node version and PATH)" >&2
+    return 1
+  }
+}
+
+ensure_openclaw_node() {
+  local version="$1" engine_json engine
+  engine_json=$(npm view "openclaw@$version" engines.node --json) || return 1
+  engine=$(printf '%s' "$engine_json" | jq -er 'select(type == "string" and length > 0)') || {
+    echo "[software-update] Missing Node requirement for openclaw@$version" >&2
+    return 1
+  }
+  ensure_node_engine "$engine" "openclaw@$version"
+}
+
+update_hermes_package() {
+  # Match upstream scripts/install.sh node_satisfies_build. The update command
+  # only resolves an existing npm; it does not run the installer's Node setup.
+  ensure_node_engine '>=22.22.0 <23 || >=24.11.0 <25 || >=26.0.0' hermes || return 1
+  hermes update
+}
+
+update_openclaw() {
+  local version="$1" attempt
+  ensure_openclaw_node "$version" || return 1
+  npm install -g "openclaw@$version" || { echo "npm install openclaw failed"; return 1; }
+  openclaw plugins install "@openclaw/discord@$version" --force 2>&1 || echo "[software-update] WARN: discord plugin install failed (non-fatal)"
+  openclaw plugins install "@openclaw/slack@$version" --force 2>&1 || echo "[software-update] WARN: slack plugin install failed (non-fatal)"
+  # Doctor must own maintenance while migrating legacy workspace/state stores.
+  # Use the same state paths as the system-owned gateway, not the SSH user's.
+  systemctl stop openclaw || return 1
+  if ! HOME=/root OPENCLAW_HOME=/root/.openclaw OPENCLAW_STATE_DIR=/root/.openclaw \
+    openclaw doctor --fix --non-interactive --no-workspace-suggestions; then
+    echo "[software-update] OpenClaw migration failed; gateway left stopped. Resolve doctor errors before starting openclaw.service." >&2
+    return 1
+  fi
+  systemctl restart openclaw || return 1
+  for attempt in {1..12}; do
+    if HOME=/root OPENCLAW_HOME=/root/.openclaw OPENCLAW_STATE_DIR=/root/.openclaw \
+      openclaw gateway status --require-rpc --timeout 5000; then
+      echo "openclaw updated to $version"
+      return 0
+    fi
+    [ "$attempt" -eq 12 ] || sleep 5
+  done
+  echo "[software-update] OpenClaw gateway did not become ready after migration; check journalctl -u openclaw" >&2
+  return 1
+}
+
 # Web is a directory install, so retain the complete prior bundle and whether
 # nginx was running. The backup is only replaced after the new ZIP has been
 # downloaded and unpacked into a sibling staging directory.
@@ -648,12 +739,7 @@ elif [ "$APP" = "bootstrap" ]; then
   systemctl restart bootstrap
   echo "bootstrap updated to $VERSION"
 elif [ "$APP" = "openclaw" ]; then
-  VER="${VERSION:-latest}"
-  npm install -g "openclaw@${VER}" || { echo "npm install openclaw failed"; exit 1; }
-  openclaw plugins install @openclaw/discord@${VER} --force 2>&1 || echo "[software-update] WARN: discord plugin install failed (non-fatal)"
-  openclaw plugins install @openclaw/slack@${VER} --force 2>&1 || echo "[software-update] WARN: slack plugin install failed (non-fatal)"
-  systemctl restart openclaw
-  echo "openclaw updated to $VER"
+  update_openclaw "$VERSION"
 elif [ "$APP" = "codex" ]; then
   # The Codex CLI is a static musl binary published on GitHub releases — there
   # is no url/sha256 in metadata (nothing of ours is hosted on GCS for it), so
@@ -759,7 +845,7 @@ elif [ "$APP" = "hermes" ]; then
   # /usr/local/lib/os-runtimes/hermes/service).
   command -v hermes >/dev/null 2>&1 || { echo "hermes is not installed on this device — switch the runtime to hermes first"; exit 1; }
   export HOME=/root
-  hermes update || { echo "hermes update failed"; exit 1; }
+  update_hermes_package || { echo "hermes update failed"; exit 1; }
   HERMES_NOW=$(hermes --version 2>/dev/null | sed -nE 's/.*([0-9]+\.[0-9]+\.[0-9]+([-.+_][0-9A-Za-z.-]+)?).*/\1/p' | head -1)
   [ -n "$HERMES_NOW" ] || { echo "hermes not runnable after update"; exit 1; }
   if [ "$HERMES_NOW" != "$VERSION" ]; then

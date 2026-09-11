@@ -7,7 +7,7 @@ type: desk_robot
 # wiring and is refused unless HAL_SIMULATE explicitly opts in.
 boards: [sim, raspberry_pi_4, raspberry_pi_5, orangepi_sun60]
 gateway:
-  default: openclaw
+  default: hermes
   protocol: websocket
 voice:
   tts_provider: elevenlabs

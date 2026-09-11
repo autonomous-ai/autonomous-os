@@ -17,8 +17,8 @@ var trackingRules = []rule{
 		capability: device.CapMotion,
 		match:      anyOf("stop tracking", "stop following", "stop watching", "stop track"),
 		exec: func(string) *Result {
-			post("/servo/track/stop", "")
-			return &Result{TTSText: "Stopped tracking.", Actions: []string{"POST /servo/track/stop"}}
+			executionFailed := post("/servo/track/stop", "") != nil
+			return &Result{ExecutionFailed: executionFailed, TTSText: "Stopped tracking.", Actions: []string{"POST /servo/track/stop"}}
 		},
 	},
 	{
@@ -33,10 +33,11 @@ var trackingRules = []rule{
 		exec: func(t string) *Result {
 			target := extractTrackTarget(t)
 			body := fmt.Sprintf(`{"target":["%s"]}`, target)
-			post("/servo/track", body)
+			executionFailed := post("/servo/track", body) != nil
 			return &Result{
-				TTSText: fmt.Sprintf("Tracking %s.", target),
-				Actions: []string{"POST /servo/track " + body},
+				ExecutionFailed: executionFailed,
+				TTSText:         fmt.Sprintf("Tracking %s.", target),
+				Actions:         []string{"POST /servo/track " + body},
 			}
 		},
 	},

@@ -154,6 +154,8 @@ Một số model chạy sau openclaw/hermes (điển hình DeepSeek) xả nguyê
 
 Khi có câu bị drop, lifecycle:end emit event `cot_leak_filtered` (`data.dropped` = số câu, `data.preview` = preview giới hạn). Raw delta trong `agent_last_token` giữ nguyên không lọc để debug. Slack streaming giữa turn (`chat.appendStream`) không lọc (diff append-only không rút lại text được); reply Slack cuối thì có.
 
+Với yêu cầu nhạc được delegate, `skills/music/SKILL.md` yêu cầu HW marker đứng đầu, sau đó đúng một câu xác nhận ngắn; việc chọn bài, diễn giải transcript nhiễu và xử lý danh tính chưa biết phải giữ nội bộ. `skills/input-branching/SKILL.md` cũng không cho đọc quyết định định tuyến. Cả bộ lọc Go và HAL nhận diện nhãn lập kế hoạch đầu câu `They named a/the song:` và ghi chú `Speaker [identity] is unknown`, kể cả ở chế độ English. Kiểm thử hồi quy dùng đầu ra “Eternal Flame” được báo cáo, kiểm tra cả stream câu đầu lẫn toàn bộ câu trả lời. Đây là lớp chặn có phạm vi cụ thể; muốn xác định model hay proxy đưa reasoning vào assistant text vẫn cần raw response từ runtime/provider.
+
 ### NO_REPLY suppression
 
 OpenClaw agent trả `NO_REPLY` (hoặc dạng cắt ngắn `NO`, `NO_RE`, `NO_...`) khi quyết định không cần trả lời — thường cho passive sensing events (sound, motion). `isAgentNoReply()` trong `handler.go` suppress: không phát TTS, không hiện output. Match: `"NO"` chính xác, hoặc bắt đầu bằng `"NO_"` / `"NO_RE"` (case-insensitive).
