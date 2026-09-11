@@ -52,6 +52,11 @@ as `environment.update` to `/api/sensing/event`. Its top-level `environment`
 config is read/written through admin `GET`/`PUT /api/device/config`: evaluation
 10 seconds, sustain 60 seconds, cooldown 900 seconds, retry 60 seconds, maximum
 sample age 10 seconds by default. Metric deltas and warm-up are configurable.
+SCD41 adds measured `co2_ppm` under the same capability, with default change
+200 ppm and warm-up 60 seconds. Explicit `metrics` maps still replace the map
+and retain the configured subset. Composite snapshots include `components`,
+`sources`, and `metric_timestamps`: freshness and continuity are checked per
+metric/source, so a failed SEN55 does not suppress healthy SCD41 CO₂.
 Disabling this policy drops automatic events (`dropped_disabled`); diagnostic
 status reads and HAL acquisition remain available.
 Capability, sleep and conversation-floor gates apply; busy queues coalesce to
@@ -59,7 +64,7 @@ the latest environment event with a 60-second expiry and recheck capability,
 sleep and policy enabled at replay. Queue acceptance is best-effort, not guaranteed notification delivery.
 The `environment` skill interprets measurements and consults `wellbeing` for
 proportionate advice. Hardware acquisition and OS change policy are separate;
-this feature does not enable Lamp's commented capability or disabled SEN55.
+this feature does not enable Lamp's commented capability or disabled SEN55/SCD41.
 See [Lamp environment sensing](../robots/lamp/docs/environment-sensing.md#os-change-policy-and-agent-access)
 for defaults, validation, payloads and use cases.
 

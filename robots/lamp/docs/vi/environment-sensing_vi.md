@@ -1,10 +1,12 @@
-# Cảm biến môi trường — SEN55
+# Cảm biến môi trường — SEN55 và SCD41
 
 SEN55 đo môi trường: bụi, độ ẩm, nhiệt độ và chỉ số VOC/NOx. HAL cung cấp
 capability `environment` tùy chọn, có driver, vòng đời và HTTP snapshot riêng,
 cùng tầng với camera và audio. Tích hợp gồm thu nhận HAL, snapshot chỉ đọc qua
 web/MQTT và OS phát hiện thay đổi môi trường kéo dài theo cấu hình để gửi agent.
-SEN55 không đo chạm, lực, CO₂, CO hay O₂.
+SEN55 không đo chạm, lực, CO₂, CO hay O₂. Component SCD41 tùy chọn thêm
+`co2_ppm` đo thật vào cùng capability; không công bố nhiệt độ/độ ẩm đọc trên
+bus của SCD41, nên SEN55 vẫn là nguồn của hai chỉ số đó.
 
 ## Phạm vi hiện tại: số đo và sự kiện thay đổi kéo dài
 
@@ -57,10 +59,20 @@ số đo với SEN55 thật.
 
 Dòng khai báo tùy chọn `environment` trong `ROBOT.md` của Lamp đang được comment.
 HAL chưa mount API hoặc đọc cấu hình dây nối cho đến khi bỏ comment dòng này.
-Khai báo chuẩn bị sẵn dùng driver `sen55`, `routes: [environment]` và
+Khai báo chuẩn bị sẵn dùng driver `composite`, `routes: [environment]` và
 `required: false`.
 
-Cấu hình thuộc device tại `robots/<device>/sen55.json`, dùng map `boards`
+Chọn component tại `robots/<device>/environment.json`:
+
+```json
+{"components": ["sen55", "scd41"]}
+```
+
+Có thể chọn từng component độc lập. Thiếu file này giữ cách chạy cũ chỉ có
+SEN55; tên lạ hoặc trùng bị từ chối. Mỗi component được chọn có worker và
+cấu hình riêng.
+
+Cấu hình SEN55 thuộc device tại `robots/<device>/sen55.json`, dùng map `boards`
 như `mpr121.json`. Board mục tiêu là OrangePi (`orangepi_sun60`); Lamp có entry tắt
 (`{"enabled": false}`) cho board này và chưa giả định bus. Thiếu file hoặc
 entry của board đang chọn thì cảm biến tắt. Entry tắt có thể bỏ `bus` hoặc để `null` khi chưa biết bus.
@@ -86,12 +98,48 @@ kernel, cấu hình pin multiplexing và tốc độ bus theo board đó; tích 
 chuẩn Python; process cần quyền mở thiết bị này. Không cần thêm package I2C
 Python. Chế độ mô phỏng không bao giờ truy cập phần cứng, kể cả entry đã bật.
 
-Với thời gian mặc định, worker đọc mỗi 1 giây và thử lại sau 5 giây khi phần cứng lỗi. Không có dữ liệu
+Với thời gian mặc định, worker SEN55 đọc mỗi 1 giây và thử lại sau 5 giây khi phần cứng lỗi. Không có dữ liệu
 mới quá 30 giây sẽ kích hoạt phục hồi qua cùng luồng thử lại. Khi shutdown,
 HAL dừng worker và giải phóng bus. Thu nhận dữ liệu chạy riêng với vòng sensing
 camera/microphone. Privacy của camera/microphone và sleep không dừng thu nhận
 dữ liệu môi trường. Capability này không thêm chính sách actuator hay giới hạn
 `SAFETY.md` mới; nhiệt độ môi trường không phải nhiệt độ SoC.
+
+## Component CO₂ SCD41
+
+`robots/lamp/scd41.json` dùng cùng map `boards`. Entry OrangePi đang tắt,
+`bus`, `sda_pin`, `scl_pin` đều `null` chờ hardware xác nhận. Khi bật cần số
+bus Linux nguyên không âm; chân header là metadata tùy chọn, không cấu hình
+pin-mux. Không sao chép dây hay điện áp nguồn SEN55 khi chưa xác nhận board/
+breakout SCD41. SCD41 dùng I2C `0x62`, SEN55 dùng `0x69`, nên có thể chung bus
+nếu hardware xác nhận dây, logic, nguồn và cấu hình bus tương thích.
+
+Driver dùng đo định kỳ thông thường (mỗi 5 giây có kết quả mới), kiểm tra
+data-ready và CRC, chỉ công bố `co2_ppm`. Mặc định `poll_interval_s: 5`,
+`retry_interval_s: 5`, `stale_after_s: 15`, `no_data_timeout_s: 30`. Thay nhịp
+poll HAL không thay nhịp đo nội bộ 5 giây này.
+
+`automatic_self_calibration: null` giữ cài đặt cảm biến; `true`/`false` đặt
+ASC trong RAM trước khi đo. HAL không lưu cài đặt bền vững hay chạy forced
+recalibration. Xem điều kiện tiếp xúc không khí của ASC trước khi chọn giá trị;
+warm-up OS 60 giây không phải hiệu chuẩn. Xem [datasheet SCD4x](https://sensirion.com/media/documents/48C4B7FB/67FE0194/CD_DS_SCD4x_Datasheet_D1.pdf).
+Chưa kiểm chứng dây nối hay số đo SCD41 trên hardware thật.
+
+Log vòng đời HAL dùng key `[sen55]` và `[scd41]`: tắt/khởi động, mẫu hợp lệ
+đầu tiên, bắt đầu đo, lỗi thử lại và dừng hiển thị ở INFO (lỗi có thể dùng
+WARNING hoặc ERROR). Mỗi mẫu hợp lệ được log ở INFO với timestamp và số đo;
+lần poll chưa có mẫu mới log trạng thái chờ và tuổi dữ liệu gần nhất.
+`[environment]` ghi component đã chọn/simulation hoặc thiếu capability.
+
+Để theo dõi log trên device, dùng file log hoặc journal systemd:
+
+```sh
+tail -F /var/log/hal/server.log | grep --line-buffered -E '\[(environment|sen55|scd41)\]'
+journalctl -u hal -f | grep --line-buffered -E '\[(environment|sen55|scd41)\]'
+```
+
+Đây là hướng dẫn cho người vận hành; việc ghi tài liệu không thực hiện kết nối
+device. Root logging mặc định INFO đã đủ để thấy các dòng này.
 
 ## HAL API
 
@@ -100,16 +148,27 @@ hiện có. Chúng khả dụng khi robot nạp route `environment`.
 
 | Endpoint | Hành vi |
 |---|---|
-| `GET /environment/status` | Trả trạng thái, `last_error`, `sample` gần nhất, `age_s`, `stale` và cấu hình `timing`, kể cả khi tắt hoặc chưa khả dụng |
+| `GET /environment/status` | Trả trạng thái, `last_error`, `sample` gần nhất, `age_s`, `stale` và chẩn đoán từng component, kể cả khi tắt hoặc chưa khả dụng |
 | `GET /environment/sample` | Trả snapshot còn mới; HTTP 503 khi chưa khả dụng hoặc đã cũ |
 | `GET /health` | Boolean `environment` cho biết có sample còn mới hay không |
 
-Các trạng thái gồm `disabled`, `starting`, `ready`, `error`, `stopped`.
-Sample quá `stale_after_s` (mặc định 5 giây) là stale; mọi trạng thái khác `ready` cũng là stale,
-bao gồm `error`, `disabled`, `stopped`. Khi chưa có sample, `sample` và `age_s` là
-`null`, `stale` là true. Sample được giữ trong status phục vụ chẩn đoán;
-caller phải kiểm tra độ mới. `ready` nghĩa là đã có dữ liệu, không khẳng
-định cảm biến khí đã hoàn thành warm-up hay thích nghi.
+Các trạng thái gồm `disabled`, `starting`, `ready`, `error`, `stopped`. Mỗi
+entry trong `components` giữ state, enabled, sample, lỗi, tuổi mẫu, bus và
+timing riêng. Dữ liệu component không ready hoặc hết hạn không khả dụng;
+SEN55 có thanh ghi trạng thái khác zero cũng bị loại khỏi sample tổng hợp.
+
+Nhóm `ready` và không stale khi ít nhất một component đóng góp số đo còn mới.
+`partial: true` nghĩa là component khác đang bật nhưng không khả dụng; một
+component tắt không tự khiến nhóm partial. Số đo khỏe vẫn dùng được khi sensor
+khác lỗi. Không có số đo dùng được thì `sample`, `age_s` của nhóm là `null`,
+`stale` là true. `sample` phẳng gồm các trường thuộc component được chọn;
+giá trị không khả dụng là `null`.
+
+`sources` ánh xạ chỉ số đến component; `metric_timestamps` giữ Unix timestamp
+cho từng chỉ số dùng được. `sample.timestamp` và `age_s` cấp nhóm mô tả dữ liệu
+mới nhất, không đại diện mọi chỉ số. Consumer cần kiểm tra trạng thái nguồn
+và độ mới từng chỉ số. Bus/timing chỉ có thêm ở cấp cao nhất khi nhóm có một
+component. `ready` không chứng nhận warm-up hay hiệu chuẩn cảm biến khí.
 
 Một sample chứa:
 
@@ -120,7 +179,11 @@ Một sample chứa:
 | `humidity_pct` | Độ ẩm tương đối, % |
 | `temperature_c` | Nhiệt độ, °C |
 | `voc_index`, `nox_index` | Chỉ số khí không có đơn vị, không phải nồng độ ppm |
-| `device_status` | Bitmask thanh ghi trạng thái cảm biến |
+| `co2_ppm` | Nồng độ CO₂ đo thật, ppm, chỉ từ SCD41 |
+
+`device_status` của SEN55 nằm trong `components.sen55.sample` để chẩn đoán;
+nhóm chỉ có SEN55 vẫn giữ thêm `sample.device_status` để tương thích. Đây
+không phải trạng thái chung cho cảm biến CO₂.
 
 Giá trị đo chưa khả dụng được trả bằng JSON `null`; caller không được hiểu
 là số không. Phần dưới mô tả phát hiện thay đổi ở OS và diễn giải của agent.
@@ -128,7 +191,7 @@ là số không. Phần dưới mô tả phát hiện thay đổi ở OS và di�
 ## Hiển thị trên web local
 
 [Device → Sensing](../../../../docs/vi/web-ui_vi.md#58-device--sensing) chỉ hiện
-card **Environment · SEN55** khi device khai báo rõ capability `environment`.
+card **Environment** khi device khai báo rõ capability `environment`.
 Đang tải hoặc thiếu capability thì không gửi request tới cảm biến. Menu Sensing
 không yêu cầu bật debug; hỗ trợ device có `vision`, `environment`
 hoặc cả hai, còn card camera vẫn yêu cầu `vision`.
@@ -136,11 +199,12 @@ hoặc cả hai, còn card camera vẫn yêu cầu `vision`.
 Trình duyệt đọc `GET /api/hardware/environment/status` mỗi 3 giây qua proxy
 hardware của OS đã có xác thực, chuyển tới HAL `GET /environment/status`.
 Chu kỳ làm mới này độc lập với cấu hình nhịp đọc HAL bên dưới. Card hiển thị
-trạng thái, tám số đo, thời điểm sample, trạng thái dữ liệu cũ và lỗi.
+trạng thái, các trường của component có khai báo (tối đa chín số đo gồm CO₂
+ppm), nhãn nguồn, thời điểm sample, trạng thái dữ liệu cũ và lỗi.
 Giá trị thiếu hoặc cũ hiện `—`; request thất bại được hiển thị rõ để không
-trình bày số đo cũ như dữ liệu hiện tại. Bus, thanh ghi trạng thái cảm biến và
-cấu hình thời gian nằm trong mục kỹ thuật thu gọn mặc định; các mốc thời gian
-lấy từ `status.timing`. Đây là màn hình
+trình bày số đo cũ như dữ liệu hiện tại. Lỗi component không che số đo còn tốt.
+Bus, thanh ghi trạng thái và timing nằm trong mục kỹ thuật thu gọn theo từng
+component ở `status.components`; vẫn hỗ trợ snapshot một sensor kiểu cũ. Đây là màn hình
 chỉ đọc, không có ngưỡng tốt/xấu hay lưu lịch sử. Event OS → agent do worker
 độc lập bên dưới tạo, không do trình duyệt làm mới.
 
@@ -165,7 +229,7 @@ nên trả lỗi thiếu capability. Đây là request/reply, không stream hay 
 
 ## Cấu hình thời gian
 
-Mỗi entry board nhận các trường thời gian tùy chọn sau (giây). Bỏ qua trường nào thì dùng mặc định tương ứng. Giá trị phải là số dương hữu hạn; `stale_after_s` và `no_data_timeout_s` phải lớn hơn `poll_interval_s`. Khởi động lại HAL sau khi sửa. Đây là nhịp đọc của HAL, không thay đổi nhịp đo nội bộ của sensor.
+Mỗi entry board nhận các trường thời gian tùy chọn sau (giây). Mặc định bên dưới dành cho SEN55; mặc định SCD41 được nêu ở trên. Giá trị phải là số dương hữu hạn; `stale_after_s` và `no_data_timeout_s` phải lớn hơn `poll_interval_s`. Khởi động lại HAL sau khi sửa. Đây là nhịp đọc của HAL, không thay đổi nhịp đo nội bộ của sensor.
 
 ```json
 {
@@ -180,7 +244,7 @@ Mỗi entry board nhận các trường thời gian tùy chọn sau (giây). B�
 
 OS cấu hình diễn giải trong object `environment` cấp cao nhất của
 `config/config.json`, qua admin `GET`/`PUT /api/device/config` hiện có.
-Cấu hình này tách biệt thời gian HAL trong `sen55.json`. Giá trị mặc định:
+Cấu hình này tách biệt thời gian HAL trong `sen55.json` và `scd41.json`. Giá trị mặc định:
 
 ```json
 {
@@ -199,7 +263,8 @@ Cấu hình này tách biệt thời gian HAL trong `sen55.json`. Giá trị m�
       "temperature_c": {"delta": 2, "warmup_s": 60},
       "humidity_pct": {"delta": 10, "warmup_s": 60},
       "voc_index": {"delta": 50, "warmup_s": 3600},
-      "nox_index": {"delta": 20, "warmup_s": 21600}
+      "nox_index": {"delta": 20, "warmup_s": 21600},
+      "co2_ppm": {"delta": 200, "warmup_s": 60}
     }
   }
 }
@@ -218,9 +283,12 @@ duy trì và retry không nhỏ hơn chu kỳ đánh giá. Cooldown cho phép 0�
 giây, warm-up 0–86400 giây. Sửa lúc chạy áp dụng ở tick worker tiếp theo
 và reset baseline; không tự bật phần cứng HAL.
 
-Chỉ snapshot còn mới, enabled, ready và timestamp tiến lên mới đủ điều kiện.
-Cả cờ `stale` của HAL lẫn tuổi mẫu tối đa của OS đều được áp dụng. `sample.device_status`
-khác zero chặn phát hiện và reset số đo đến khi trạng thái sạch. Sau khi
+Chỉ số đo còn mới, enabled, ready và timestamp tiến lên mới đủ điều kiện.
+Cả cờ `stale` của HAL lẫn tuổi mẫu tối đa OS áp dụng cho từng chỉ số và nguồn.
+Snapshot tổng hợp dùng `sources`, `components`, `metric_timestamps` để sensor
+khỏe không khiến dữ liệu cũ của sensor khác có vẻ mới. SEN55 lỗi chỉ reset
+chỉ số của nó, không chặn CO₂ SCD41 còn tốt. Snapshot một sensor kiểu cũ vẫn
+dùng timestamp/status cấp cao nhất. Sau khi
 có số đo hợp lệ liên tục hết warm-up của từng chỉ số, giá trị đầu tiên tạo
 baseline im lặng. Chênh lệch phải đạt `delta` cùng chiều trong `sustain_s`;
 giảm dưới mức chênh lệch hoặc đảo chiều sẽ reset thời gian đang chờ.
@@ -230,7 +298,9 @@ Warm-up là thời gian chờ của OS, không chứng nhận cảm biến đã 
 
 Event đủ điều kiện gồm `[environment:update]` rồi JSON với `observed_at`
 (Unix giây), `sample`, `changes` theo tên chỉ số chứa `previous`, `current`,
-`previous_at` (Unix giây của baseline), `delta` có dấu, và `sustained_s`.
+`previous_at` (Unix giây của baseline), `current_at` (Unix giây của số đo hiện
+tại), `source`, `delta` có dấu, và `sustained_s`. Event tổng hợp còn chứa
+`sources`, `metric_timestamps`; số đo một sensor kiểu cũ có thể thiếu nguồn.
 Body POST chứa event dạng chuỗi JSON trong `message`; bộ định dạng sensing
 thêm `[environment:update]` khi chuyển cho agent.
 `previous` là baseline ban đầu hoặc sau event
@@ -280,7 +350,9 @@ cần quan sát camera, danh tính, log hoạt động hay bộ đếm uống n�
   hay bịa kho lịch sử bền vững.
 
 VOC/NOx là chỉ số tương đối, không phải ppm hay nhận diện hóa chất. SEN55
-không hỗ trợ kết luận CO₂/O₂. PM tức thời không chứng minh đáp ứng hướng dẫn
+không hỗ trợ kết luận CO₂/O₂. Chỉ dùng SCD41 để nói về CO₂ khi `co2_ppm` đo
+thật còn mới; không suy ra CO₂ từ VOC/NOx. Cả hai không đo O₂, CO hay tạo
+cảnh báo khói/cháy. PM tức thời không chứng minh đáp ứng hướng dẫn
 WHO về phơi nhiễm 24 giờ hoặc cả năm. Xét điều kiện ngoài trời trước khi gợi
 ý thông gió, và nhiệt vỏ máy trước khi diễn giải nhiệt độ. Skill không chẩn
 đoán sức khỏe, tự bịa ngưỡng, tiếp tục việc không liên quan hay điều khiển máy

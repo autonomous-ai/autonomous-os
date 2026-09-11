@@ -12,7 +12,8 @@ logger = logging.getLogger(__name__)
 
 
 class EnvironmentService:
-    def __init__(self, enabled=False, bus=None, driver_factory=SEN55, timing=None):
+    def __init__(self, enabled=False, bus=None, driver_factory=SEN55, timing=None, name="sen55"):
+        self.name = name
         self.timing = timing if timing is not None else SEN55Timing()
         self.enabled = enabled
         self.bus = bus
@@ -30,14 +31,19 @@ class EnvironmentService:
             self._state, self._error = state, error
 
     def start(self):
-        if not self.enabled or self._thread is not None:
+        if self._thread is not None:
+            return
+        if not self.enabled:
+            logger.info("[%s] disabled", self.name)
             return
         if self.bus is None or not str(self.bus).isascii() or not str(self.bus).isdecimal():
-            self._set_state("error", "SEN55 bus must be a nonnegative bus number")
+            self._set_state("error", f"{self.name} bus must be a nonnegative bus number")
+            logger.error("[%s] cannot start: invalid I2C bus %r", self.name, self.bus)
             return
         self.bus = int(self.bus)
         self._set_state("starting")
-        self._thread = threading.Thread(target=self._run, name="sen55", daemon=True)
+        logger.info("[%s] starting: bus=%s poll_interval_s=%s", self.name, self.bus, self.timing.poll_interval_s)
+        self._thread = threading.Thread(target=self._run, name=self.name, daemon=True)
         self._thread.start()
 
     def _run(self):
@@ -46,37 +52,47 @@ class EnvironmentService:
             try:
                 driver = self._factory(int(self.bus))
                 driver.start()
+                logger.info("[%s] measurement started: bus=%s", self.name, self.bus)
                 self._set_state("starting")
                 last_data = time.monotonic()
+                received = False
                 while not self._stop.wait(self.timing.poll_interval_s):
                     sample = driver.read()
+                    if sample is None:
+                        logger.info("[%s] waiting for data: bus=%s last_data_age_s=%.3f", self.name, self.bus, time.monotonic() - last_data)
                     if sample is None and time.monotonic() - last_data > self.timing.no_data_timeout_s:
-                        raise OSError(f"SEN55: no new data for {self.timing.no_data_timeout_s:g} seconds")
+                        raise OSError(f"{self.name}: no new data for {self.timing.no_data_timeout_s:g} seconds")
                     if sample is not None:
                         last_data = time.monotonic()
                         with self._lock:
                             self._sample = sample
                             self._sample_time = time.monotonic()
                             self._state, self._error = "ready", None
+                        if not received:
+                            logger.info("[%s] receiving data: fields=%s", self.name, ",".join(sample))
+                            received = True
+                        logger.info("[%s] sample=%s", self.name, sample)
             except Exception as exc:
                 self._set_state("error", str(exc))
-                logger.warning("SEN55 acquisition failed: %s", exc)
+                logger.warning("[%s] acquisition failed: %s; retry_interval_s=%s", self.name, exc, self.timing.retry_interval_s)
             finally:
                 if driver is not None:
                     try:
                         driver.close()
                     except Exception as exc:
-                        logger.warning("SEN55 close failed: %s", exc)
+                        logger.warning("[%s] close failed: %s", self.name, exc)
             if self._stop.wait(self.timing.retry_interval_s):
                 break
         self._set_state("stopped")
+        logger.info("[%s] stopped", self.name)
 
     def stop(self):
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=3.0)
             if self._thread.is_alive():
-                self._set_state("error", "SEN55 worker did not stop within 3 seconds")
+                self._set_state("error", f"{self.name} worker did not stop within 3 seconds")
+                logger.error("[%s] worker did not stop within 3 seconds", self.name)
                 return
         if self.enabled:
             self._set_state("stopped")

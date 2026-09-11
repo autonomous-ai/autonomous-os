@@ -1025,13 +1025,7 @@ async def lifespan(app: FastAPI):
         )
 
     if "environment" in _plan.mounted:
-        from hal.drivers.environment.service import EnvironmentService
-
-        state.environment_service = EnvironmentService(
-            enabled=_sen55_config is not None,
-            bus=_sen55_config.bus if _sen55_config is not None else None,
-            timing=_sen55_config.timing if _sen55_config is not None else None,
-        )
+        state.environment_service = _environment_group
         state.environment_service.start()
 
     yield
@@ -1349,12 +1343,14 @@ _mpr121_config = (
     None if _board_id == "sim" else load_mpr121_config(_device_dir, _board_id)
 )
 
-from hal.board.sen55 import load_sen55_config
+_environment_group = None
+if "environment" in _declared:
+    from hal.drivers.environment.group import create_environment_group
 
-_sen55_config = (
-    None if _simulation or "environment" not in _declared
-    else load_sen55_config(_device_dir, _board_id)
-)
+    _environment_group = create_environment_group(_device_dir, _board_id, _simulation)
+    logger.info("[environment] components=%s simulation=%s", list(_environment_group.components), _simulation)
+else:
+    logger.info("[environment] capability not declared; acquisition disabled")
 
 from hal.board.ttp223 import load_touch_config
 
