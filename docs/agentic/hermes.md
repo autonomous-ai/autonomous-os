@@ -348,6 +348,42 @@ text-only and image attachments are dropped on the proactive path.
 `lib/hal` entry points OpenClaw uses), so spoken interaction works the same
 regardless of backend.
 
+### Dead-air fillers during tool work
+
+`system/lib/i18n/fillers.go` maps Hermes tool names to short, activity-specific
+voice phrases. Coverage follows the [official tools reference](https://hermes-agent.nousresearch.com/docs/reference/tools-reference)
+(reviewed 2026-09-11); `system/lib/i18n/fillers_test.go` keeps a registry snapshot
+and checks coverage in English, Vietnamese, Simplified Chinese and Traditional
+Chinese. The mappings cover:
+
+- Core terminal/process, file/skill reading and editing, web search/extraction,
+  memory/session lookup, delegation, planning/cron and media tools.
+  `terminal` uses execution phrases, `search_files` uses neutral lookup phrases,
+  and `skill_view` uses reading phrases. Memory writes and speech generation
+  have separate `memory_store` and `audio_generate` pools.
+- Optional browser/CDP, desktop/preview, project/kanban, Home Assistant,
+  Feishu, Discord, Spotify and Yuanbao tools, plus Honcho compatibility names.
+  Mixed-action tools use neutral checking phrases because the tool name alone
+  does not establish the action or its success.
+
+Known names also resolve inside `mcp__<server>__<tool>` wrappers. Unknown tools
+retain the generic continuation fallback; this mapping does not install or
+enable any optional tool. HAL prewarms the new lookup, memory-write and
+speech-generation pools alongside the existing pools.
+
+Only runs marked as voice turns are eligible. The scheduler uses a **1.5-second**
+delay and a **2.5-second** cooldown when rearming at tool boundaries, with at most
+**6 fillers per turn including the opening acknowledgment** (at most 5 scheduled
+fillers after it). Assistant text suspends pending fillers; a subsequent
+`tool.start` resumes scheduling without resetting the count or cooldown.
+End/error/cancellation or user interruption stops the run's fillers permanently.
+Dispatching the first spoken answer sentence or intercepting a TTS tool also
+stops them permanently to avoid overlapping the answer audio.
+Hardware reactions also suppress nearby fillers. Scheduling follows lifecycle
+and tool events; it does not guarantee periodic speech throughout a long wait.
+Flow Monitor labels such as `agent:first_token` and “OS Server waiting next
+event” are pipeline events/elapsed gaps, not tool names that need their own pool.
+
 ## 10. Operating it
 
 Hermes is installed by `runtimes/hermes/install.sh` (co-located with
