@@ -94,3 +94,41 @@ func TestTaskExecutionRejectsUncorrelatedAndUnboundedValues(t *testing.T) {
 		t.Fatalf("unexpected observations: %+v", m.events)
 	}
 }
+
+func TestVoiceTaskStartsPreserveOwnershipAndExcludeNonTasks(t *testing.T) {
+	m := newMock(nil, 3)
+	withPipe(t, m)
+	id := ReportVoiceTaskStarted("voice_followup", "", "")
+	if id == "" {
+		t.Fatal("direct voice request must receive an interaction ID")
+	}
+	if got := ReportVoiceTaskStarted("voice_followup", id, "main-run"); got != id {
+		t.Fatal("binding changed the turn identity")
+	}
+	ReportVoiceTaskStarted("voice_command", "vi-from-hal", "local-run")
+	for _, typ := range []string{"voice_agent_handled", "voice_listening", "web_chat", "motion"} {
+		ReportVoiceTaskStarted(typ, "", "background-run")
+	}
+	m.wait(t, 3)
+	if len(m.events) != 3 {
+		t.Fatalf("non-task event entered denominator: %d", len(m.events))
+	}
+	for i, event := range m.events {
+		if event.name != "voice_metrics_task_started" || event.params["schema_version"] != 1 {
+			t.Fatalf("invalid start event: %+v", event)
+		}
+		if _, ok := event.params["task_started_at_ms"].(int64); !ok {
+			t.Fatal("missing start timestamp")
+		}
+		wantID := id
+		if i == 2 {
+			wantID = "vi-from-hal"
+		}
+		if event.params["interaction_id"] != wantID {
+			t.Fatalf("wrong ownership: %+v", event.params)
+		}
+	}
+	if m.events[1].params["run_id"] != "main-run" {
+		t.Fatal("missing main-agent correlation")
+	}
+}

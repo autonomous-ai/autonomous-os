@@ -2,7 +2,8 @@
 """Report execution completion KPI from saved journal JSONL or AA event exports.
 
 Example: python3 scripts/report_voice_task_metrics.py journal.jsonl --device lamp
-The settling horizon selects mature turns; it is never an execution timeout.
+By default all observed eligible turns count, including unfinished execution.
+An optional settling horizon selects mature turns; it is never an execution timeout.
 No network calls are made. Completion measures execution, not answer correctness.
 """
 
@@ -84,9 +85,10 @@ def normalize(row, default_device=None):
             "event_id": row.get("event_id", params.get("event_id", ""))}
 
 
-def report(rows, now_ms, settle_seconds=1800, default_device=None, include_synthetic=False):
+def report(rows, now_ms, settle_seconds=0, default_device=None, include_synthetic=False):
     interactions = {}
     executions = []
+    starts = {}
     coverage = Counter()
     losses = {}
     for row in rows:
@@ -124,7 +126,7 @@ def report(rows, now_ms, settle_seconds=1800, default_device=None, include_synth
         device_losses = losses.setdefault(device, Counter())
         for field in LOSS_COUNTERS:
             device_losses[field] = max(device_losses[field], params.get(field) or 0)
-        if event["event_name"] not in ("voice_metrics_interaction", "voice_metrics_task_execution"):
+        if event["event_name"] not in ("voice_metrics_interaction", "voice_metrics_task_started", "voice_metrics_task_execution"):
             continue
         interaction_id = params.get("interaction_id")
         if not include_synthetic and str(interaction_id or "").startswith("vi-smoke-"):
@@ -141,21 +143,106 @@ def report(rows, now_ms, settle_seconds=1800, default_device=None, include_synth
             coverage["missing_interaction_id_events"] += 1
             continue
         key = (device, str(interaction_id))
+        if event["event_name"] == "voice_metrics_task_started":
+            if str(params.get("schema_version")) != "1":
+                continue
+            if params.get("task_started_at_ms") is None:
+                coverage["malformed_events"] += 1
+                continue
+            params["_observed_at_ms"] = observed_at_ms
+            starts.setdefault(key, []).append(params)
+            continue
         # Revision is authoritative; canonical JSON makes equal revisions independent
         # of export ordering. Producers should never change an existing revision.
         rank = (params.get("task_revision") or 0, json.dumps(params, sort_keys=True))
         if key not in interactions or rank > interactions[key][0]:
             interactions[key] = (rank, params)
 
+    # Merge the two cohort sources by device + interaction ID or a bound run.
+    # Starts can arrive before HAL finalizes its snapshot and before run binding.
+    records = []
+    for key in interactions.keys() | starts.keys():
+        hal = interactions.get(key, (None, {}))[1]
+        accepted = starts.get(key, [])
+        turn = dict(hal)
+        if accepted:
+            bound = [event for event in accepted if event.get("run_id")]
+            latest = max(bound, key=lambda event: (
+                event.get("_observed_at_ms") or event["task_started_at_ms"],
+                event["task_started_at_ms"], json.dumps(event, sort_keys=True)), default={})
+            if latest:
+                turn["run_id"] = latest["run_id"]
+            if turn.get("route") != "realtime_handled":
+                turn.update(task_schema_version=1, task_eligible=True,
+                            task_eligibility_known=True)
+            times = [event["task_started_at_ms"] for event in accepted]
+            if hal.get("task_started_at_ms") is not None:
+                times.append(hal["task_started_at_ms"])
+            turn["task_started_at_ms"] = min(times)
+        turn["interaction_id"] = key[1]
+        records.append((key[0], turn))
+
+    parents = list(range(len(records)))
+
+    def root(index):
+        while parents[index] != index:
+            parents[index] = parents[parents[index]]
+            index = parents[index]
+        return index
+
+    owners = {}
+    for index, (device, turn) in enumerate(records):
+        for field in ("interaction_id", "run_id"):
+            if turn.get(field):
+                key = (device, field, str(turn[field]))
+                if key in owners:
+                    parents[root(index)] = root(owners[key])
+                owners[key] = index
+    groups = {}
+    for index, record in enumerate(records):
+        groups.setdefault(root(index), []).append(record)
+    cohort = []
+    for group in groups.values():
+        device = group[0][0]
+        turns = [turn for _, turn in group]
+        # Preserve realtime evidence restrictions even when an OS memory-sync
+        # request shares its run. Otherwise prefer a proven accepted task.
+        turn = dict(max(turns, key=lambda item: (
+            item.get("route") == "realtime_handled",
+            str(item.get("task_schema_version")) == "1",
+            _bool(item.get("task_eligible")) is True,
+            item.get("task_revision") or 0, json.dumps(item, sort_keys=True))))
+        times = [item["task_started_at_ms"] for item in turns
+                 if item.get("task_started_at_ms") is not None]
+        if times:
+            turn["task_started_at_ms"] = min(times)
+        identifiers = {(device, field, str(item[field])) for item in turns
+                       for field in ("interaction_id", "run_id") if item.get(field)}
+        cohort.append((device, turn, identifiers))
+
     indexed = {}
+    unique_executions = {}
     for device, execution in executions:
+        identity = (device, execution["_event_id"] or json.dumps(execution, sort_keys=True))
+        unique_executions[identity] = (device, execution)
+    for identity, (device, execution) in unique_executions.items():
+        if execution["execution_at_ms"] > now_ms:
+            continue
         for field in ("run_id", "interaction_id"):
             identifier = execution.get(field)
             if identifier:
-                indexed.setdefault((device, field, str(identifier)), []).append(execution)
+                indexed.setdefault((device, field, str(identifier)), {})[identity] = execution
+    cohort_identifiers = set().union(*(identifiers for _, _, identifiers in cohort))
+    matched = {identity for identifier in cohort_identifiers
+               for identity in indexed.get(identifier, {})}
+    unmatched = [execution for identity, (_, execution) in unique_executions.items()
+                 if identity not in matched and execution["execution_at_ms"] <= now_ms]
+    coverage["unmatched_execution_events"] = len(unmatched)
+    coverage["unmatched_completed_execution_events"] = sum(
+        execution.get("outcome") == "completed" for execution in unmatched)
     devices = {}
     cutoff = now_ms - settle_seconds * 1000
-    for (device, interaction_id), (_, turn) in interactions.items():
+    for device, turn, identifiers in cohort:
         counts = devices.setdefault(device, Counter())
         if str(turn.get("task_schema_version")) != "1":
             counts["legacy_turns_excluded"] += 1
@@ -173,9 +260,8 @@ def report(rows, now_ms, settle_seconds=1800, default_device=None, include_synth
         if int(started) > cutoff:
             counts["fresh_pending_turns"] += 1
             continue
-        candidates = list(indexed.get((device, "interaction_id", interaction_id), []))
-        if turn.get("run_id"):
-            candidates.extend(indexed.get((device, "run_id", str(turn["run_id"])), []))
+        candidates = list({identity: execution for identifier in identifiers
+                           for identity, execution in indexed.get(identifier, {}).items()}.values())
         if turn.get("route") == "realtime_handled":
             candidates = [e for e in candidates if e.get("evidence") == "realtime_turn_done"]
         candidates = [e for e in candidates if (e.get("execution_at_ms") or 0) <= now_ms]
@@ -242,7 +328,7 @@ def main():
     parser.add_argument("files", nargs="*", help="JSONL exports (stdin when omitted)")
     parser.add_argument("--device", help="Fallback identity for rows without a device/hostname")
     parser.add_argument("--now-ms", type=int, default=int(time.time() * 1000))
-    parser.add_argument("--settle-seconds", type=int, default=1800)
+    parser.add_argument("--settle-seconds", type=int, default=0)
     parser.add_argument("--include-synthetic", action="store_true")
     args = parser.parse_args()
     if args.settle_seconds < 0:

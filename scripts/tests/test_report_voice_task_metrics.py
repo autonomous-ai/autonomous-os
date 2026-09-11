@@ -27,9 +27,90 @@ def execution(identifier="v1", **overrides):
     return dict(event_name="voice_metrics_task_execution", device_id="lamp", params=params)
 
 
+def started(identifier="v1", **overrides):
+    params = dict(interaction_id=identifier, run_id="run-" + identifier,
+                  schema_version=1, task_started_at_ms=1000, event_type="voice_followup")
+    params.update(overrides)
+    return dict(event_name="voice_metrics_task_started", device_id="lamp", params=params)
+
+
 class ReportTests(unittest.TestCase):
     def summary(self, rows):
         return metrics.report(rows, now_ms=2000000)["aggregate"]
+
+    def test_os_start_without_hal_is_eligible_and_can_complete(self):
+        result = self.summary([started("os-voice-1"), execution("os-voice-1")])
+        self.assertEqual(result["eligible_mature_turns"], 1)
+        self.assertEqual(result["completed_turns"], 1)
+
+    def test_os_and_hal_cohorts_deduplicate_by_interaction_or_run(self):
+        for os_start in (started(), started("fallback", run_id="run-v1")):
+            result = self.summary([turn(), os_start, execution(), execution()])
+            self.assertEqual(result["eligible_mature_turns"], 1)
+            self.assertEqual(result["completed_turns"], 1)
+
+    def test_binding_keeps_earliest_start_and_latest_nonempty_run(self):
+        initial = started(run_id="", task_started_at_ms=1000)
+        bound = started(run_id="run-v1", task_started_at_ms=300000)
+        later_empty = started(run_id="", task_started_at_ms=400000)
+        for rows in ([initial, bound, later_empty], [later_empty, bound, initial]):
+            result = metrics.report(rows + [execution()], 2000000,
+                                    settle_seconds=1800)["aggregate"]
+            self.assertEqual(result["eligible_mature_turns"], 1)
+            self.assertEqual(result["completed_turns"], 1)
+        newer_binding = started(run_id="new-run", task_started_at_ms=500000)
+        result = self.summary([newer_binding, bound, initial, execution()])
+        self.assertEqual(result["incomplete_turns"], 1)
+
+    def test_started_without_terminal_is_immediately_in_denominator(self):
+        result = self.summary([started(task_started_at_ms=1999999)])
+        self.assertEqual(result["eligible_mature_turns"], 1)
+        self.assertEqual(result["incomplete_turns"], 1)
+        self.assertEqual(result["kpi3_pct"], 0)
+
+    def test_hundred_started_eighty_five_completed_is_eighty_five_percent(self):
+        rows = [started(str(i)) for i in range(100)]
+        rows += [execution(str(i)) for i in range(85)]
+        result = self.summary(rows)
+        self.assertEqual(result["eligible_mature_turns"], 100)
+        self.assertEqual(result["completed_turns"], 85)
+        self.assertEqual(result["kpi3_pct"], 85)
+        self.assertTrue(result["meets_target"])
+
+    def test_os_acceptance_upgrades_legacy_and_excluded_hal(self):
+        for hal in (turn(task_schema_version=None), turn(task_eligible=False),
+                    turn("other", run_id="run-v1", task_eligible=False)):
+            result = self.summary([hal, started(), execution()])
+            self.assertEqual(result["eligible_mature_turns"], 1)
+            self.assertEqual(result["completed_turns"], 1)
+            self.assertEqual(result["legacy_turns_excluded"], 0)
+            self.assertEqual(result["ineligible_turns"], 0)
+
+    def test_os_start_cannot_override_realtime_evidence_or_exclusion(self):
+        for os_start in (started(), started("fallback", run_id="run-v1")):
+            result = self.summary([turn(route="realtime_handled"), os_start, execution()])
+            self.assertEqual(result["completed_turns"], 0)
+            self.assertEqual(result["incomplete_turns"], 1)
+            result = self.summary([turn(route="realtime_handled", task_eligible=False),
+                                   os_start, execution()])
+            self.assertEqual(result["eligible_mature_turns"], 0)
+
+    def test_unmatched_execution_coverage_is_deduplicated(self):
+        orphan = execution("orphan")
+        result = metrics.report([started(), execution(), orphan, orphan,
+                                 execution("failed", outcome="failed")], 2000000)
+        self.assertEqual(result["aggregate"]["completed_turns"], 1)
+        self.assertEqual(result["coverage"]["unmatched_execution_events"], 2)
+        self.assertEqual(result["coverage"]["unmatched_completed_execution_events"], 1)
+
+    def test_started_smoke_and_future_binding_are_excluded(self):
+        result = metrics.report([started("vi-smoke-check"),
+                                 started(run_id=""),
+                                 {**started(), "observed_at_ms": 2000001}, execution()], 2000000)
+        self.assertEqual(result["aggregate"]["eligible_mature_turns"], 1)
+        self.assertEqual(result["aggregate"]["incomplete_turns"], 1)
+        self.assertEqual(result["coverage"]["synthetic_events_excluded"], 1)
+        self.assertEqual(result["coverage"]["future_events_excluded"], 1)
 
     def test_duplicate_revisions_and_completion_after_ten_seconds(self):
         old = turn(task_eligible=False)
@@ -66,7 +147,8 @@ class ReportTests(unittest.TestCase):
 
     def test_empty_and_fresh_are_na(self):
         self.assertIsNone(self.summary([])["kpi3_pct"])
-        report = self.summary([turn(task_started_at_ms=1999999)])
+        report = metrics.report([turn(task_started_at_ms=1999999)],
+                                now_ms=2000000, settle_seconds=1800)["aggregate"]
         self.assertEqual(report["fresh_pending_turns"], 1)
         self.assertIsNone(report["meets_target"])
 
