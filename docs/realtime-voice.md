@@ -29,6 +29,19 @@ STT pipeline. At end-of-turn the model either:
 The `delegate_to_main` tool is registered automatically by the orchestrator
 (`orchestrator.py`, `DELEGATE_TOOL`).
 
+**What the main agent is matched against.** `turn_dispatch.py` composes the
+sensing message as `[voice-instruction] <delegate message>` followed by
+`[transcript] <local STT text>` whenever a transcript exists — the paraphrase
+leads, the user's own words follow. Both halves matter because every
+`SKILL.md` trigger is matched on **vocabulary**: the same request reached the
+lamp as *"maximum capability in scanning around"* (matched the servo skill) and
+as *"movement demonstration … rotation/tilting"* (matched nothing and fell
+through to a canned emotion). The transcript cannot rescue a turn whose STT was
+garbage, so the tool description also tells the model to keep the user's key
+words rather than renaming the request into a category — a prompt instruction,
+not a code guarantee. `test_turn_routing_log.py` pins the composition; nothing
+can pin the model's compliance.
+
 ### Voice control through Harness
 
 Requests that name Harness, a Mac agent, Codex, Claude, a project, worktree, or
