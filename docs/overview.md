@@ -54,6 +54,18 @@ skills/                           — Built-in SKILL.md files for agent runtime,
 integrations/                     — Off-device: companions/, chat-bridges/, perception-service/
 ```
 
+Mechanical GPIO button wiring is owned by each device in
+`robots/lamp/gpio_button.json` and `robots/intern-v2/gpio_button.json`.
+HAL resolves the device directory through `DEVICES_DIR` and `DEVICE_TYPE`,
+selects the detected board's `chip`, `line`, and `debounce_ns` from the `boards`
+map, and passes that configuration to the shared `hal/drivers/gpio_button.py`
+driver. Device configuration takes priority; a missing file or board entry
+falls back to the existing `button` defaults in `hal/board/boards.json`.
+Changing a device's button pins requires updating its JSON file and restarting
+HAL; moving physical wires is not detected automatically. Malformed
+configuration is rejected before GPIO is claimed. Simulation skips the
+hardware button.
+
 ## Principles
 
 - **Hardware is a plugin** — plug in and it works, unplug and it's skipped

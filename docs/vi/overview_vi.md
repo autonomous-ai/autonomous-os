@@ -54,6 +54,16 @@ skills/                           — Built-in SKILL.md cho agent runtime, gồm
 integrations/                     — Off-device: companions/, chat-bridges/, perception-service/
 ```
 
+Wiring nút GPIO cơ học thuộc về từng device trong
+`robots/lamp/gpio_button.json` và `robots/intern-v2/gpio_button.json`.
+HAL xác định thư mục device qua `DEVICES_DIR` và `DEVICE_TYPE`, chọn `chip`,
+`line`, `debounce_ns` của board đã detect từ map `boards`, rồi truyền cấu hình
+vào driver dùng chung `hal/drivers/gpio_button.py`. Cấu hình device được ưu tiên;
+thiếu file hoặc entry của board thì dùng lại mặc định `button` trong
+`hal/board/boards.json`. Khi đổi chân nút của device, cần sửa file JSON tương
+ứng và khởi động lại HAL; hệ thống không tự phát hiện việc đổi dây cắm.
+Config sai bị từ chối trước khi claim GPIO. Chế độ mô phỏng bỏ qua nút phần cứng.
+
 ## Nguyên Tắc
 
 - **Hardware là plugin** — cắm vào thì play, không cắm thì skip
