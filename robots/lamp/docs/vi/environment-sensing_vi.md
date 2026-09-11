@@ -7,6 +7,16 @@ và trả snapshot qua MQTT theo yêu cầu, chưa
 định nghĩa ngưỡng, thông báo, sensing event gửi OS hay hành vi agent. SEN55
 không đo chạm hoặc lực; cảm biến xúc giác cần phần cứng khác.
 
+## Phạm vi hiện tại: chỉ xem dữ liệu
+
+Khi có mẫu đo mới, HAL chỉ cập nhật snapshot gần nhất trong RAM.
+HAL **chưa tự gửi dữ liệu vào pipeline sensing/event của OS hoặc cho agent**.
+Số đo chưa kích hoạt prompt cho agent, cảnh báo, phản ứng tự động hay lưu lịch sử.
+
+OS server chỉ chuyển tiếp snapshot khi web hoặc client MQTT yêu cầu xem.
+Luồng hỏi/đáp này chưa phải tích hợp sensing với OS/agent; phần tích hợp đó
+sẽ làm ở giai đoạn sau.
+
 ## Đấu dây và lắp đặt
 
 Xác định chiều connector theo [datasheet SEN5x của Sensirion, mục 4
@@ -21,6 +31,17 @@ không dựa vào màu dây. Đầu cáp tương thích là JST GHR-06V-S.
 | 4 | SCL | Clock I2C của host |
 | 5 | SEL | Nối GND trước khi cấp nguồn |
 | 6 | NC | Để trống |
+
+Ghi nhận từ bên hardware do chủ device cung cấp: **header phía OrangePi** dùng
+**chân vật lý 3 là SDA**, **chân vật lý 5 là SCL**. Đây là vị trí chân header
+host, không phải số chân connector SEN55: nối OrangePi pin 3 với SEN55 pin 3
+(SDA), OrangePi pin 5 với SEN55 pin 4 (SCL). Số bus Linux `/dev/i2c-N` và cấu
+hình pin-mux vẫn cần xác nhận; chưa kiểm chứng trên device và ghi chú này
+không bật thu nhận dữ liệu.
+
+`sen55.json` ghi vị trí chân vật lý phía host bằng `sda_pin: 3` và `scl_pin: 5`.
+Đây là metadata dây nối; driver dùng `bus`, không tự cấu hình pin-mux GPIO
+từ hai trường này.
 
 SDA/SCL hỗ trợ logic 3,3 V. Dùng điện trở kéo lên 3,3 V với host 3,3 V;
 5 V cấp nguồn cảm biến, không cấp cho GPIO host. Địa chỉ I2C là `0x69`,
@@ -42,7 +63,8 @@ Khai báo chuẩn bị sẵn dùng driver `sen55`, `routes: [environment]` và
 Cấu hình thuộc device tại `robots/<device>/sen55.json`, dùng map `boards`
 như `mpr121.json`. Board mục tiêu là OrangePi (`orangepi_sun60`); Lamp có entry tắt
 (`{"enabled": false}`) cho board này và chưa giả định bus. Thiếu file hoặc
-entry của board đang chọn thì cảm biến tắt. Entry tắt không cần `bus`.
+entry của board đang chọn thì cảm biến tắt. Entry tắt có thể bỏ `bus` hoặc để `null` khi chưa biết bus.
+Khi bật, `bus` phải là số nguyên không âm.
 Cấu hình sai, kể cả trường không được hỗ trợ, bị từ chối khi khởi động.
 
 Để bật sau khi xác nhận dây nối, bỏ comment capability trong `ROBOT.md`,

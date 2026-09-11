@@ -8,6 +8,17 @@ snapshots on request. It defines no thresholds,
 notifications, OS sensing events, or agent behavior. It does not measure touch
 or pressure; tactile sensing would require a different sensor.
 
+## Current scope: view only
+
+Receiving a new sensor sample only updates HAL's latest snapshot in RAM.
+HAL does **not** automatically send it to the OS sensing/event pipeline or
+agent. No agent prompt, alert, automatic reaction, or historical storage is
+triggered by a reading.
+
+The OS server only forwards the snapshot when the web or an MQTT client asks
+to view it. This request/reply access is not OS/agent sensing integration;
+that integration remains future work.
+
 ## Wiring and mounting
 
 Use the connector orientation in the [Sensirion SEN5x datasheet, sections 4
@@ -22,6 +33,17 @@ not wire colors. A compatible cable plug is JST GHR-06V-S.
 | 4 | SCL | Host I2C clock |
 | 5 | SEL | GND before power is applied |
 | 6 | NC | Leave unconnected |
+
+Hardware-team wiring note (reported by the owner): the **OrangePi host header**
+uses physical **pin 3 for SDA** and **pin 5 for SCL**. These are host header
+positions, not SEN55 connector pin numbers: connect OrangePi pin 3 to SEN55
+pin 3 (SDA), and OrangePi pin 5 to SEN55 pin 4 (SCL). The Linux `/dev/i2c-N`
+bus number and pin-mux configuration still require confirmation; this note
+has not been verified on the device and does not enable acquisition.
+
+`sen55.json` records these physical host header positions as `sda_pin: 3` and
+`scl_pin: 5`. They are wiring metadata; the driver uses `bus` and does not
+configure GPIO pin-mux from these fields.
 
 SDA/SCL support 3.3 V logic. Use pull-ups to 3.3 V with a 3.3 V host;
 5 V powers the sensor, not the host GPIO. The I2C address is `0x69`, with
@@ -43,7 +65,8 @@ The prepared declaration uses driver `sen55`, `routes: [environment]`, and
 Configuration belongs to the device in `robots/<device>/sen55.json`, using a
 `boards` map like `mpr121.json`. The target board is OrangePi (`orangepi_sun60`); Lamp ships its entry disabled
 (`{"enabled": false}`), without an assumed bus. A missing file
-or selected-board entry disables the sensor. Disabled entries need no `bus`.
+or selected-board entry disables the sensor. Disabled entries may omit `bus` or set it to `null` while the bus is unknown.
+Enabling acquisition requires a nonnegative integer `bus`.
 Invalid configuration, including unknown fields, is rejected at startup.
 
 To enable it after wiring is confirmed, uncomment the capability in `ROBOT.md`,
