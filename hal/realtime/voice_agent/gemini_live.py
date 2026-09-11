@@ -720,41 +720,21 @@ class GeminiLiveAgent(VoiceAgentBase):
                         )
                     except Exception as _e:
                         logger.info("[realtime][interrupt] dump failed: %s", _e)
-                    # A barge-in starts a NEW generation. This bump is the whole
-                    # reason the counter is not simply per-receive-turn:
-                    # `interrupted` does not end this loop (only turn_complete
-                    # and generation_complete return), so without it the audio
-                    # queued before the interruption would share a generation
-                    # with whatever follows and could never be told apart.
-                    # self._turn_gen = getattr(self, "_turn_gen", 0) + 1
-                    # Server VAD heard the user talk over the reply.
-                    #
-                    # DROP WHAT IS ALREADY QUEUED FIRST. The model generates
-                    # audio far faster than it plays, so at this moment the
-                    # recv queue can hold many seconds of speech the user has
-                    # just cancelled — and the consumer reads strictly FIFO, so
-                    # it would play every one of those before ever seeing the
-                    # interrupt. Device-observed 2026-09-08 on lamp-ee17: the
-                    # interruption was acted on only AFTER the whole buffered
-                    # reply had finished, putting "[live] barge-in" and "[live]
-                    # model said" in the SAME second, so the user heard no
-                    # reaction at all. Draining here is what makes barge-in
-                    # feel immediate; the consumer then only has to finish the
-                    # one frame it is mid-write on.
-                    dropped = 0
-                    while True:
+
+                    dropped = self._recv_queue.qsize()
+
+                    while not self._recv_queue.empty():
                         try:
                             self._recv_queue.get_nowait()
                         except queue.Empty:
                             break
-                        dropped += 1
+
                     logger.info(
                         "[realtime] Response interrupted — dropped %d queued output(s)",
                         dropped,
                     )
                     self._first_audio_received = False
                     self._turn_done.set()
-                    # self._recv_queue.put(OutputEvent(gen=getattr(self, "_turn_gen", 0), output=InterruptedOutput()))
 
                 if content.turn_complete:
                     logger.debug("[realtime] Turn complete")
