@@ -31,7 +31,7 @@ from hal import presets
 from hal.realtime.enums import AgentGateway
 from hal.realtime.models import AudioOutput as RTAudioOutput
 from hal.realtime.models import InterruptedOutput as RTInterruptedOutput
-from hal.realtime.models.signal import EndCallSignal
+from hal.realtime.models.signal import DelegateSignal, EndCallSignal
 from hal.realtime.models import TextOutput as RTTextOutput
 from hal.realtime.orchestrator import RealtimeOrchestrator
 from hal.realtime.utils import pcm16_bytes_to_float32, resample_float32
@@ -39,6 +39,7 @@ from hal.drivers.voice._internal import config as voice_cfg
 from hal.drivers.voice._internal.audio_dsp import resample_to_stt, rms
 from hal.drivers.voice._internal.audio_recorder import ArecordStream
 from hal.drivers.voice._internal.realtime_turn import (
+    ROUTE_DELEGATED,
     ROUTE_NOISE_DROPPED,
     split_first_chunk,
     ROUTE_NOT_STARTED,
@@ -1508,6 +1509,26 @@ class VoiceService:
             try:
                 for out in self._realtime.stream_output():
                     if not (self._live_running and generation == self._live_generation):
+                        break
+                    if isinstance(out, DelegateSignal):
+                        # Hang up so the main agent's reply does not play
+                        # into an open uplink.
+                        logger.info("[live] model delegated → forwarding to OS server")
+                        self._live_running = False
+                        if out.transcript:
+                            self._realtime.save_main_handoff(out.transcript)
+                        dispatch_turn(
+                            self._decorator,
+                            self._sensing_sender,
+                            out.transcript,
+                            [],
+                            [],
+                            RealtimeTurnResult(
+                                delegated=True,
+                                delegate_msg=out.message,
+                                route=ROUTE_DELEGATED,
+                            ),
+                        )
                         break
                     if isinstance(out, EndCallSignal):
                         # Do NOT tear down here. The farewell is normally

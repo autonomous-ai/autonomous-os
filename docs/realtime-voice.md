@@ -1192,7 +1192,7 @@ session. These are product trade-offs, not bugs:
 | STT transcript | no `[TURN CONTEXT]`, no transcript-based filters |
 | wake word | confirmed from STT text, so `HAL_WAKEWORD_ENABLED` has no effect in live mode — entry is VAD-only |
 | speaker ID, speech emotion | a session produces neither |
-| main-agent fallback | `delegate_to_main` still arrives, but there is no transcript to forward and nowhere to put the reply mid-session |
+| local STT on delegation | `delegate_to_main` ends the session and forwards `[voice-instruction]` + Gemini's own input transcription as `[transcript]` (`FunctionCallOutput.user_transcript` → `DelegateSignal.transcript`, read by `_live_out_pump`); the main agent's reply plays after hangup. Providers without input transcription forward the instruction alone |
 
 Also not run inside a session: the RMS entry gate, `SPEECH_HOLDOFF_S`, the
 silence clock, `MAX_SESSION_DURATION_S`, the per-turn STT socket and its

@@ -35,3 +35,6 @@ class FunctionCallOutput(OutputBase):
     name: str
     arguments: str  # JSON string
     call_id: str
+    # Provider-side transcript of the utterance that triggered the call
+    # (Gemini input_transcription); empty when the provider has none.
+    user_transcript: str = ""
