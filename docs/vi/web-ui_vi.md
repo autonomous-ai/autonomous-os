@@ -203,7 +203,7 @@ Nhóm Settings có thể thu gọn nằm trong `NAV` của sidebar dùng chung (
 | Plugins | `/setting#plugins` |
 | Timezone | `/setting#timezone` |
 
-Các mục Monitor được serialize thành id thuần, ví dụ `/monitor#overview`, `/monitor#pairing`, `/monitor#system`, `/monitor#flow`. Mặc định: `/monitor` không có hash / hash không hợp lệ → `overview`; `/setting` không có hash / hash không hợp lệ → `general` (URL được chuẩn hóa thành `/setting#general`). Deep-link (ví dụ `/setting#wifi`) và nút back/forward của trình duyệt được tôn trọng qua một effect dựa trên `useLocation`. Người dùng không-debug chỉ thấy các mục trong `PUBLIC_SECTIONS` (gồm Chat, Overview, **Pairing**, Info, Flow, Camera, Users, **Logs**, **CLI**, và các mục Settings công khai General/Wi-Fi/My Voice/Face/MCP Tools/Plugins/Timezone); Bluetooth vẫn truy cập được bằng URL trực tiếp nhưng bị ẩn khỏi navigation. `?debug=true` mở khóa phần còn lại (Sensing, Analytics, Servo, API Docs, Agent gateway, và các mục Settings sâu hơn AI Brain/Runtime/Language/Voice/Realtime/Channels/MQTT). Bấm `update` là nút đổi ngay thành `updating…` — nút KHÔNG bao giờ báo "OK", vì chữ đó đọc như "xong rồi" trong khi request mới chỉ KHỞI ĐỘNG việc cài (và với component chạy vài giây thì nó còn hiện trước cả lúc dòng kịp báo tiến trình). Khi lỗi thì hiện đúng lý do server trả về (`rate-limited, retry in 8s`, `bootstrap unreachable`) thay vì chữ "Failed" trống rỗng. Trong lúc đang cài, dòng đó hiện `updating…` thay cho nút (một lần cài mất vài chục giây — component dừng, build lại, khởi động lại — và một dòng đứng im khiến người dùng bấm lần hai, chính là cách một máy từng mất sạch HAL runtime). Các nút `update` trong card **Versions** ở Overview (dòng Web / OS / HAL / Agent, cộng Bootstrap và Device ở debug) cũng bị chặn theo cách này — người xem thường không có nút kích OTA một chạm. Toggle **Debug** trên top bar, ngay cạnh nút Dark/Light, bật/tắt query parameter này nhưng vẫn giữ hash của mục đang mở và các query parameter khác; màu amber cho biết debug mode đang bật.
+Các mục Monitor được serialize thành id thuần, ví dụ `/monitor#overview`, `/monitor#pairing`, `/monitor#system`, `/monitor#flow`. Mặc định: `/monitor` không có hash / hash không hợp lệ → `overview`; `/setting` không có hash / hash không hợp lệ → `general` (URL được chuẩn hóa thành `/setting#general`). Deep-link (ví dụ `/setting#wifi`) và nút back/forward của trình duyệt được tôn trọng qua một effect dựa trên `useLocation`. Người dùng không-debug chỉ thấy các mục trong `PUBLIC_SECTIONS` (gồm Chat, Overview, **Pairing**, Info, Flow, Camera, **Sensing**, Users, **Logs**, **CLI**, và các mục Settings công khai General/Wi-Fi/My Voice/Face/MCP Tools/Plugins/Timezone); Bluetooth vẫn truy cập được bằng URL trực tiếp nhưng bị ẩn khỏi navigation. `?debug=true` mở khóa phần còn lại (Analytics, Servo, API Docs, Agent gateway, và các mục Settings sâu hơn AI Brain/Runtime/Language/Voice/Realtime/Channels/MQTT). Bấm `update` là nút đổi ngay thành `updating…` — nút KHÔNG bao giờ báo "OK", vì chữ đó đọc như "xong rồi" trong khi request mới chỉ KHỞI ĐỘNG việc cài (và với component chạy vài giây thì nó còn hiện trước cả lúc dòng kịp báo tiến trình). Khi lỗi thì hiện đúng lý do server trả về (`rate-limited, retry in 8s`, `bootstrap unreachable`) thay vì chữ "Failed" trống rỗng. Trong lúc đang cài, dòng đó hiện `updating…` thay cho nút (một lần cài mất vài chục giây — component dừng, build lại, khởi động lại — và một dòng đứng im khiến người dùng bấm lần hai, chính là cách một máy từng mất sạch HAL runtime). Các nút `update` trong card **Versions** ở Overview (dòng Web / OS / HAL / Agent, cộng Bootstrap và Device ở debug) cũng bị chặn theo cách này — người xem thường không có nút kích OTA một chạm. Toggle **Debug** trên top bar, ngay cạnh nút Dark/Light, bật/tắt query parameter này nhưng vẫn giữ hash của mục đang mở và các query parameter khác; màu amber cho biết debug mode đang bật.
 
 Card **Versions** ở Overview có cột thao tác thứ năm với nút `restart` cho OS Server và HAL, kể cả ngoài debug. Mỗi nút gọi `POST /api/system/restart/:target` có bảo vệ admin (`os-server` hoặc `hal`). Server hẹn restart sau 2 giây và trả HTTP 202. Nút hiện `queued`, khóa bấm lại trong 15 giây; trạng thái này chỉ xác nhận đã lên lịch, chưa xác nhận service phục hồi. Polling sẵn có của monitor cập nhật trạng thái/uptime sau khi kết nối lại. Lỗi được giữ hiển thị cạnh nút. Restart bị vô hiệu hóa khi biết dòng đó đang cập nhật; hoạt động OTA được poll cả ở chế độ thường. Card hẹp cuộn ngang để truy cập đủ năm cột.
 
@@ -702,6 +702,34 @@ Chat UI → POST /api/sensing/event → SensingHandler
 
 ---
 
+### 5.8 Device → Sensing
+
+Mục Sensing khả dụng không cần bật debug khi device khai báo
+`vision` hoặc `environment` trong `GET /api/system/info` → `capabilities`.
+Các card sensing camera yêu cầu `vision`. Card chỉ đọc **Environment · SEN55**
+yêu cầu khai báo rõ capability `environment`; card bị ẩn và không gửi request
+khi đang tải capabilities hoặc không có capability này.
+
+Khi được mount, card môi trường đọc `GET /api/hardware/environment/status`
+mỗi 3 giây qua reverse proxy hardware của OS đã có xác thực, chuyển tới HAL
+`GET /environment/status`. Chu kỳ làm mới trình duyệt độc lập với
+`poll_interval_s` cấu hình trong HAL, không thay đổi nhịp thu nhận dữ liệu.
+Không thêm endpoint OS riêng cho môi trường hay event OS → agent.
+
+Card hiển thị trạng thái cảm biến, thời điểm sample, trạng thái dữ liệu
+cũ, lỗi và tám số đo: nhiệt độ (°C), độ ẩm (%), PM1 / PM2.5 / PM4 / PM10
+(µg/m³), VOC index, NOx index. Giá trị chưa khả dụng hiện `—`, không hiện số 0.
+Số đo cũ cũng được thay bằng `—`; request thất bại được hiển thị là lỗi để
+không nhầm số đo trước đó với dữ liệu hiện tại. Không gán nhãn chất lượng không khí
+tốt/xấu, ngưỡng hay cảnh báo. Mục kỹ thuật thu gọn mặc định hiển thị bus I2C,
+thanh ghi trạng thái cảm biến và các mốc thời gian đọc/thử lại/đánh dấu cũ/
+phục hồi của HAL từ `status.timing`.
+
+Lamp vẫn để `environment` được comment trong `ROBOT.md` và SEN55 tắt trong
+`sen55.json`, nên card này ẩn cho đến khi capability được khai báo. Xem
+[tài liệu cảm biến môi trường của Lamp](../../robots/lamp/docs/vi/environment-sensing_vi.md)
+về đấu dây, bật cảm biến và contract dữ liệu HAL.
+
 ## 6. LED Color API
 
 ### Vấn đề
@@ -796,3 +824,14 @@ Các target trên dành cho một thiết bị trong LAN. Để phát hành cho 
 artifact và roll out.
 
 Kết quả cuối Harness được ghi vào flow JSONL bằng `harness_response`, giữ run ID thiết bị gốc và `text` đầy đủ. Web Chat dùng sự kiện này khôi phục kết quả đang chờ sau khi SSE ngắt hoặc tải lại trang. Luồng trực tiếp vẫn phát `chat_response` với state `final`.
+
+### Cấu trúc component Sensing
+
+`monitor/SensingSection.tsx` chỉ ghép các phần theo capability. Component nằm
+trong `monitor/sensing/`: mỗi card một file, dùng chung `CardHeader`, types và
+hàm định dạng. `useVisionSensing` poll một lần cho toàn bộ card vision;
+`useEnvironment` poll SEN55 độc lập. Client `visionApi.ts` và
+`environmentApi.ts` quản lý request OS-server, kiểm tra response và lỗi;
+card không trực tiếp fetch. Cả hai dùng reverse proxy có xác thực
+`/api/hardware/*` sẵn có. Lỗi HTTP/response của vision hiển thị thông báo lỗi,
+không giữ màn hình loading hoặc số liệu cũ.

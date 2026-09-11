@@ -1,5 +1,6 @@
 """Optional background environmental acquisition; no OS/agent dispatch."""
 
+from dataclasses import asdict
 import logging
 import threading
 import time
@@ -86,6 +87,7 @@ class EnvironmentService:
             return {
                 "state": self._state, "enabled": self.enabled, "bus": self.bus,
                 "last_error": self._error,
+                "timing": asdict(self.timing),
                 "sample": None if self._sample is None else dict(self._sample),
                 "age_s": age,
                 "stale": age is None or age > self.timing.stale_after_s or self._state != "ready",

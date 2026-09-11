@@ -792,6 +792,9 @@ func NewMQTTInfoResponse(cfg *config.Config, msgType string, mac string) MQTTInf
 	}
 }
 
+// KindEnvironmentStatus queries the current model-independent HAL snapshot.
+const KindEnvironmentStatus = "environment.status"
+
 // MQTTDataCommand is the fa_channel payload for cmd:"data" — a generic envelope.
 // Sub-handlers branch on Kind and unmarshal Data into a kind-specific struct.
 //

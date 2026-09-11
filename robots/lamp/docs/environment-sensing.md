@@ -3,7 +3,8 @@
 SEN55 is an environmental sensor: particulate matter, humidity, temperature,
 and VOC/NOx indexes. HAL exposes it as an optional `environment` capability,
 with its own driver, lifecycle, and HTTP snapshots alongside camera and audio.
-This first integration provides acquisition only. It defines no thresholds,
+The integration provides acquisition, a read-only local web view, and MQTT
+snapshots on request. It defines no thresholds,
 notifications, OS sensing events, or agent behavior. It does not measure touch
 or pressure; tactile sensing would require a different sensor.
 
@@ -80,7 +81,7 @@ controls. They are available when the robot loads the `environment` route.
 
 | Endpoint | Behavior |
 |---|---|
-| `GET /environment/status` | Reports state, `last_error`, latest `sample`, `age_s`, and `stale`, including when disabled or unavailable |
+| `GET /environment/status` | Reports state, `last_error`, latest `sample`, `age_s`, `stale`, and configured `timing`, including when disabled or unavailable |
 | `GET /environment/sample` | Returns a fresh snapshot; HTTP 503 when unavailable or stale |
 | `GET /health` | The `environment` boolean reports whether a fresh sample is available |
 
@@ -105,6 +106,45 @@ A sample contains:
 Unavailable measurement values are JSON `null`; callers must not treat them
 as zero. The raw readings and status leave future interpretation to a later
 OS/agent integration.
+
+## Local web view
+
+[Device → Sensing](../../../docs/web-ui.md#58-device--sensing) shows an
+**Environment · SEN55** card only when the device explicitly declares the
+`environment` capability. Loading or missing capabilities do not trigger
+sensor requests. The Sensing menu is available without debug mode and
+supports devices with `vision`, `environment`, or both, and camera cards
+remain gated by `vision`.
+
+The browser polls `GET /api/hardware/environment/status` every 3 seconds via
+the existing authenticated OS hardware proxy, which forwards to HAL
+`GET /environment/status`. This refresh interval is separate from the HAL
+polling configuration below. The card shows state, eight measurements, sample
+time, stale status, and errors. Missing or stale values appear as `—` and
+request failures are shown explicitly so old values are not presented as live
+readings. Bus, device status register, and timing configuration are in a
+collapsed technical section; timings come from `status.timing`. This is a read-only display with no good/bad
+thresholds, historical storage, or OS → agent events.
+
+The card stays hidden with Lamp's current commented capability. Declaring the
+capability while leaving `enabled: false` makes the card show the disabled state.
+
+## MQTT reads
+
+Mobile/backend clients send `{"cmd":"data","kind":"environment.status","data":{}}`
+on `fa_channel`; the OS replies with `MQTTDataResponse` on `fd_channel`, the
+same `kind`, `status: "success"`, and the HAL snapshot in `data`. The handler
+requires the declared `environment` capability, not a SEN55 model. Local HAL
+requests time out after 5 seconds. Disabled, error, and stale sensor states are
+valid snapshots: callers must inspect `state`, `stale`, `sample`, and `last_error`
+in `data`.
+
+A missing capability returns `status: "failure"` with
+`error: "environment capability not declared"`. HAL transport errors, non-200
+HTTP responses, and invalid status JSON also return failure. Lamp's currently
+commented capability therefore returns the missing-capability error. This is
+request/reply, with no continuous stream, automatic events, or agent invocation.
+See the [MQTT protocol](../../../docs/mqtt.md) for payloads and response rules.
 
 ## Timing configuration
 

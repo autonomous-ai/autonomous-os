@@ -2,7 +2,8 @@
 
 SEN55 đo môi trường: bụi, độ ẩm, nhiệt độ và chỉ số VOC/NOx. HAL cung cấp
 capability `environment` tùy chọn, có driver, vòng đời và HTTP snapshot riêng,
-cùng tầng với camera và audio. Tích hợp đầu tiên chỉ thu nhận dữ liệu, chưa
+cùng tầng với camera và audio. Tích hợp thu nhận dữ liệu, hiển thị chỉ đọc trên web local
+và trả snapshot qua MQTT theo yêu cầu, chưa
 định nghĩa ngưỡng, thông báo, sensing event gửi OS hay hành vi agent. SEN55
 không đo chạm hoặc lực; cảm biến xúc giác cần phần cứng khác.
 
@@ -77,7 +78,7 @@ hiện có. Chúng khả dụng khi robot nạp route `environment`.
 
 | Endpoint | Hành vi |
 |---|---|
-| `GET /environment/status` | Trả trạng thái, `last_error`, `sample` gần nhất, `age_s` và `stale`, kể cả khi tắt hoặc chưa khả dụng |
+| `GET /environment/status` | Trả trạng thái, `last_error`, `sample` gần nhất, `age_s`, `stale` và cấu hình `timing`, kể cả khi tắt hoặc chưa khả dụng |
 | `GET /environment/sample` | Trả snapshot còn mới; HTTP 503 khi chưa khả dụng hoặc đã cũ |
 | `GET /health` | Boolean `environment` cho biết có sample còn mới hay không |
 
@@ -102,6 +103,43 @@ Một sample chứa:
 Giá trị đo chưa khả dụng được trả bằng JSON `null`; caller không được hiểu
 là số không. Số đo và trạng thái để việc diễn giải cho bước tích hợp OS/agent
 sau này.
+
+## Hiển thị trên web local
+
+[Device → Sensing](../../../../docs/vi/web-ui_vi.md#58-device--sensing) chỉ hiện
+card **Environment · SEN55** khi device khai báo rõ capability `environment`.
+Đang tải hoặc thiếu capability thì không gửi request tới cảm biến. Menu Sensing
+không yêu cầu bật debug; hỗ trợ device có `vision`, `environment`
+hoặc cả hai, còn card camera vẫn yêu cầu `vision`.
+
+Trình duyệt đọc `GET /api/hardware/environment/status` mỗi 3 giây qua proxy
+hardware của OS đã có xác thực, chuyển tới HAL `GET /environment/status`.
+Chu kỳ làm mới này độc lập với cấu hình nhịp đọc HAL bên dưới. Card hiển thị
+trạng thái, tám số đo, thời điểm sample, trạng thái dữ liệu cũ và lỗi.
+Giá trị thiếu hoặc cũ hiện `—`; request thất bại được hiển thị rõ để không
+trình bày số đo cũ như dữ liệu hiện tại. Bus, thanh ghi trạng thái cảm biến và
+cấu hình thời gian nằm trong mục kỹ thuật thu gọn mặc định; các mốc thời gian
+lấy từ `status.timing`. Đây là màn hình
+chỉ đọc, không có ngưỡng tốt/xấu, lưu lịch sử hay event OS → agent.
+
+Card vẫn ẩn với capability đang comment của Lamp. Nếu khai báo capability
+nhưng giữ `enabled: false`, card hiển thị trạng thái đã tắt.
+
+## Đọc qua MQTT
+
+Mobile/backend gửi `{"cmd":"data","kind":"environment.status","data":{}}`
+trên `fa_channel`; OS trả `MQTTDataResponse` trên `fd_channel`, cùng `kind`,
+`status: "success"` và snapshot HAL trong `data`. Handler yêu cầu capability
+`environment` được khai báo, không yêu cầu model SEN55. HAL local có timeout
+5 giây. Sensor đang tắt, lỗi hoặc dữ liệu cũ vẫn là snapshot hợp lệ: caller phải
+kiểm tra `state`, `stale`, `sample`, `last_error` trong `data`.
+
+Thiếu capability trả `status: "failure"`,
+`error: "environment capability not declared"`. Lỗi kết nối HAL, HTTP khác 200
+hoặc status JSON không hợp lệ cũng trả failure. Lamp hiện vẫn comment capability
+nên trả lỗi thiếu capability. Đây là request/reply, không stream hay event tự
+động, không gọi agent. Xem [giao thức MQTT](../../../../docs/vi/mqtt_vi.md)
+để biết payload và quy tắc phản hồi.
 
 ## Cấu hình thời gian
 

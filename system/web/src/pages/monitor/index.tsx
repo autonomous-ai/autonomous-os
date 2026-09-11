@@ -55,13 +55,13 @@ ChartJS.register(CategoryScale, LinearScale, BarElement, PointElement, LineEleme
 const EMBED_SECTIONS = new Set<Section>(["api-docs", "agent-config"]);
 
 // Sections shown to non-debug users. Append `?debug=true` to the URL to reveal
-// the rest of the menu (Sensing, Analytics, Servo, API Docs, Agent gateway).
-const PUBLIC_SECTIONS = new Set<Section>(["chat", "pairing", "overview", "system", "flow", "camera", "face-owners", "bluetooth", "logs", "cli", "settings:device", "settings:wifi", "settings:voice", "settings:face", "settings:mcp", "settings:plugins", "settings:timezone", "settings:scheduled"]);
+// the rest of the menu (Analytics, Servo, API Docs, Agent gateway).
+const PUBLIC_SECTIONS = new Set<Section>(["sensing", "chat", "pairing", "overview", "system", "flow", "camera", "face-owners", "bluetooth", "logs", "cli", "settings:device", "settings:wifi", "settings:voice", "settings:face", "settings:mcp", "settings:plugins", "settings:timezone", "settings:scheduled"]);
 
 // The capability a section requires, read from its NAV leaf (single source: the
 // nav definition itself declares `cap`). undefined → no hardware dependency, the
 // section is always shown.
-function sectionCap(id: Section): string | undefined {
+function sectionCap(id: Section): string | readonly string[] | undefined {
   for (const entry of NAV) {
     if (isNavGroup(entry)) {
       const child = entry.children.find((c) => !isNavLink(c) && c.id === id);
@@ -494,7 +494,7 @@ export default function Monitor() {
   const hasCap = (c: string): boolean => !caps || caps.has(c);
   const sectionVisible = (id: Section): boolean => {
     const cap = sectionCap(id);
-    return !cap || hasCap(cap);
+    return !cap || (typeof cap === "string" ? hasCap(cap) : cap.some(hasCap));
   };
 
   // If the active section is for hardware this device lacks, fall back to overview.
@@ -901,7 +901,7 @@ export default function Monitor() {
           )}
           {section === "flow"      && <FlowSection events={events} onClearEvents={clearFlowEvents} />}
           {section === "camera"    && <CameraSection displayTs={displayTs} />}
-          {section === "sensing"   && <SensingSection />}
+          {section === "sensing"   && <SensingSection hasVision={caps?.has(Cap.Vision) ?? false} hasEnvironment={caps?.has(Cap.Environment) ?? false} />}
           {section === "servo"     && <ServoSection />}
           {section === "bluetooth" && <BluetoothSection />}
           {section === "face-owners" && <FaceOwnersSection />}

@@ -85,8 +85,10 @@ asking: does it take the world **IN**, or does it drive the body **OUT**?
 `GET /environment/status` exposes acquisition state and freshness, while
 `GET /environment/sample` returns only a fresh sample (503 otherwise). Declaring
 the capability mounts its routes; acquisition additionally requires the HAL sensor
-configuration. Samples remain local in HAL: no OS event, agent tool, alert threshold,
-or automatic reaction is introduced by this capability.
+configuration. The OS exposes read-only snapshots through its authenticated
+hardware HTTP proxy and MQTT `data` / `environment.status` request/reply, gated
+by the declared capability rather than the sensor model. No OS event, agent tool,
+alert threshold, or automatic reaction is introduced by this capability.
 
 It has no actuator safety class and needs no new `SAFETY.md` bounds. Ambient sensor
 temperature is separate from `thermal.max_temp_c`, which protects the board using
