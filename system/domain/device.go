@@ -792,6 +792,9 @@ func NewMQTTInfoResponse(cfg *config.Config, msgType string, mac string) MQTTInf
 	}
 }
 
+// KindEnvironmentStatus queries the current model-independent HAL snapshot.
+const KindEnvironmentStatus = "environment.status"
+
 // MQTTDataCommand is the fa_channel payload for cmd:"data" — a generic envelope.
 // Sub-handlers branch on Kind and unmarshal Data into a kind-specific struct.
 //
@@ -1389,6 +1392,8 @@ type RealtimePublic struct {
 }
 
 type ConfigPublicResponse struct {
+	Environment EnvironmentConfig `json:"environment"`
+
 	Channel            string   `json:"channel"`
 	TelegramUserID     string   `json:"telegram_user_id"`
 	SlackUserID        string   `json:"slack_user_id"`
@@ -1453,6 +1458,8 @@ type ConfigPublicResponse struct {
 // UpdateConfigRequest is used by PUT /api/device/config to update device settings.
 // All fields are optional; only non-empty values are applied.
 type UpdateConfigRequest struct {
+	Environment *EnvironmentConfig `json:"environment,omitempty"`
+
 	SSID     string `json:"ssid"`
 	Password string `json:"password"`
 	Channel  string `json:"channel"`
@@ -1478,6 +1485,11 @@ type UpdateConfigRequest struct {
 	DeepgramAPIKey string `json:"deepgram_api_key"`
 	STTAPIKey      string `json:"stt_api_key"`
 	TTSAPIKey      string `json:"tts_api_key"`
+	// ClearTTSAPIKey deletes the stored TTS key. An empty TTSAPIKey cannot say
+	// this: every field here is PATCH-style, where "" means "not sent". The
+	// settings page sets it when the operator switches TTS provider, so the
+	// previous vendor's credential can't be handed to the new one.
+	ClearTTSAPIKey bool   `json:"clear_tts_api_key"`
 	STTBaseURL     string `json:"stt_base_url"`
 	TTSBaseURL     string `json:"tts_base_url"`
 	STTLanguage    string `json:"stt_language"`

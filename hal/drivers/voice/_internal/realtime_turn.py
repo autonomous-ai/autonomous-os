@@ -307,6 +307,8 @@ class RealtimeTurnResult(NamedTuple):
     # This is deliberately separate from `route`: an empty/no-output turn must
     # retain main-agent fallback. Only an explicit reject_turn tool call sets it.
     rejected: bool = False
+    # Observation only: the provider confirmed execution finished, not correctness.
+    execution_completed: bool = False
 
 
 def should_drop_realtime_rejection(rt: RealtimeTurnResult) -> bool:
@@ -430,6 +432,7 @@ def run_realtime_turn(
     """
     delegated = False
     handled = False
+    execution_completed = False
     rejected = False
     transcript = ""
     delegate_msg = ""
@@ -542,6 +545,7 @@ def run_realtime_turn(
                 t_commit: float = time.monotonic()
                 first_output_logged: bool = False
 
+                execution_completed = False
                 look_replay: bool = False
                 for output in realtime.stream_output():
                     if not first_output_logged:
@@ -656,6 +660,11 @@ def run_realtime_turn(
                                     )
                                     tts.speak_queue(sentence, turn_id=interaction_id, realtime_reply=True)
                             sentence_buf = ""
+
+                execution_completed = (
+                    getattr(realtime, "execution_completed", False) is True
+                    and not look_replay
+                )
 
                 # Look-replay: re-append this turn's audio to the SAME session
                 # (unlike the 1011 recovery below, which needs a fresh one) and
@@ -791,6 +800,7 @@ def run_realtime_turn(
                     except Exception:
                         pass
         except Exception as e:
+            execution_completed = False
             logger.warning(
                 "[realtime] Processing failed: %s — will forward to OS server", e
             )
@@ -851,4 +861,5 @@ def run_realtime_turn(
         delegate_msg=delegate_msg,
         route=route,
         rejected=rejected,
+        execution_completed=execution_completed,
     )

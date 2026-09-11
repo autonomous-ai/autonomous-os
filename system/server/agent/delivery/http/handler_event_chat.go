@@ -7,6 +7,7 @@ import (
 
 	"go.autonomous.ai/os/system/domain"
 	"go.autonomous.ai/os/system/lib/flow"
+	"go.autonomous.ai/os/system/telemetry"
 )
 
 // handleChatEvent handles WS event=="chat": OpenClaw chat-stream events
@@ -79,6 +80,7 @@ func (h *AgentHandler) handleChatEvent(evt domain.WSEvent) error {
 		} else {
 			slog.Error("OpenClaw chat error", "component", "agent", "run_id", flowRunID, "error", errMsg)
 			flow.Log("agent_error", map[string]any{"run_id": flowRunID, "error": errMsg}, flowRunID)
+			telemetry.ReportTaskExecution(flowRunID, "", "failed", "chat_error")
 			h.monitorBus.Push(domain.MonitorEvent{
 				Type:    "chat_response",
 				Summary: "❌ " + shortError(errMsg),

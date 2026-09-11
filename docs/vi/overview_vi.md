@@ -54,6 +54,107 @@ skills/                           — Built-in SKILL.md cho agent runtime, gồm
 integrations/                     — Off-device: companions/, chat-bridges/, perception-service/
 ```
 
+Wiring nút GPIO cơ học thuộc về từng device trong
+`robots/lamp/gpio_button.json` và `robots/intern-v2/gpio_button.json`.
+HAL xác định thư mục device qua `DEVICES_DIR` và `DEVICE_TYPE`.
+Entry của board hỗ trợ cấu hình phẳng cũ `chip`, `line`, `debounce_ns` hoặc
+list `buttons` có tên cho từng input. `load_button_configs` cấp cấu hình cho
+mỗi instance của driver dùng chung `hal/drivers/gpio_button.py`; HAL dừng tất
+cả instance khi cleanup. `load_button_config` vẫn dùng được cho caller chỉ
+cần nút đầu tiên (nút chính trong cấu hình Lamp). Lamp trên OrangePi có `primary` ở pin 37 / PD4 / gpiochip0
+line 100 (`behavior: "standard"`) và `factory_reset` ở pin 35 / PD3 /
+gpiochip0 line 99 (`behavior: "factory_reset"`, `hold_s: 5`). Nút reset bỏ
+qua tap và giữ dưới 5 s; giữ đủ 5 s bật LED đỏ đứng dùng chung để báo đã arm,
+rồi nhả mới gọi factory-reset dùng chung. Không reset khi còn giữ và không
+gọi sleep, shutdown hay action single/triple-click.
+Cấu hình device được ưu tiên; thiếu file hoặc entry board thì fallback về
+đúng một nút mặc định `button` cũ trong `hal/board/boards.json`.
+JSON của Intern v2 giữ nguyên. Khi đổi wiring, cần sửa JSON của device được
+chọn rồi restart HAL; hệ thống không tự phát hiện đổi dây cắm. Config sai,
+tên input trùng hoặc cặp chip/line trùng bị từ chối trước khi claim GPIO.
+Chế độ mô phỏng bỏ qua nút phần cứng.
+
+Công tắc privacy luôn điều khiển mute microphone. Hai trường boolean tùy chọn
+`disable_camera_on_mute` và `mute_speaker_on_mute` khóa thêm camera và speaker;
+cả hai mặc định `false`. Lamp bật cả hai trong JSON, còn Intern giữ fallback
+chỉ mute mic và không kèm JSON privacy. HAL giữ các thiết bị đã chọn ở trạng thái
+khóa cho tới lần đọc GPIO đầu tiên; lỗi đọc/claim thì tiếp tục khóa. Wrapper
+capture camera, camera routes, auto-wake và các đường phát âm thanh dùng chung
+`hal/privacy.py`. Mở khóa khôi phục trạng thái camera/speaker trước đó; khóa
+tạm thời không ghi đè tùy chọn đã lưu trong sidecar theo boot.
+Loader chỉ đọc file cũ `mic_button.json` khi chưa có `privacy_button.json`,
+để có thể cập nhật HAL trước khi đổi tên JSON của device.
+Công tắc gạt microphone dùng `privacy_button.json` do device quản lý, hiện chỉ
+kèm file `robots/lamp/privacy_button.json` cho pin vật lý 11 / PL9 / gpiochip1 line 9. Entry của board được phát hiện
+trong `boards` cung cấp `chip`, `line`, `settle_s`, `muted_level` và
+`watchdog_s` cho `hal/board/privacy_button.py`, rồi truyền vào driver dùng chung
+`hal/drivers/privacy_button.py`. Intern v2 không kèm JSON mic, tiếp tục dùng
+fallback trong code: gpiochip0 line 97 (PD1), chờ ổn định 0,06 s, LOW (`0`)
+là mute và watchdog 30 s. Lamp dùng cùng timing/polarity. Pull-up vẫn bật; `muted_level` nhận `0` hoặc `1`.
+Thiếu file hoặc entry board thì giữ default cũ chỉ cho `intern-v2`, bao gồm
+điều kiện device-type hiện có bất kể board ID. Device khác không có cấu hình
+thì bỏ qua công tắc; `enabled: false` tắt rõ ràng. Cấu hình sai bị từ chối
+trước khi claim GPIO. HAL đồng bộ mute theo vị trí công tắc lúc khởi động
+và sau khi cạnh tín hiệu ổn định. Watchdog chỉ đồng bộ lại khi chân đổi mức,
+giữ các thay đổi mute bằng phần mềm khi công tắc đứng yên. Restart HAL để
+áp dụng JSON mới; simulation bỏ qua input phần cứng này. Cần giữ JSON nút GPIO
+của Lamp vì fallback nút chính cũ cũng dùng pin 11, còn JSON device chuyển nút
+chính sang pin 37. Đã xác minh startup với JSON mic Lamp ngày 2026-09-11: chip1/line9 ready,
+vị trí LOW ban đầu áp dụng mute. Chờ live test thao tác gạt.
+
+Wiring TTP223 do device quản lý trong `robots/lamp/ttp223.json`. Intern v2
+không có phần cứng TTP223 nên không kèm file này. `hal/board/ttp223.py` chọn `chip`, `lines` và
+`axis` tùy chọn của board đã detect từ `boards`, truyền `TouchConfig` cho driver
+dùng chung. Thiếu file/board thì fallback về `touch` cũ trong
+`hal/board/boards.json`; `enabled: false` tắt TTP223 rõ ràng. Config sai bị từ
+chối trước khi claim GPIO. Restart HAL sau khi sửa config của device được
+chọn; mô phỏng bỏ qua input phần cứng. Lamp dùng hai pad TTP223: S1 ở pin vật lý
+29 / PD0 / gpiochip0 line 96, S3 ở pin 33 / PD2 / line 98. Nút cơ dùng pin 37 /
+PD4 / line 100. Cần giữ JSON của Lamp trên device vì fallback touch cũ vẫn trùng
+chân nút cơ. Intern v2 giữ wiring nút hiện có. Fallback board cũ vẫn giữ nguyên;
+chỉ thiếu file JSON không có nghĩa là driver bị tắt.
+
+Wiring cảm ứng MPR121 tùy chọn hiện chỉ thuộc Lamp, trong
+`robots/lamp/mpr121.json`; Intern v2 không có khai báo MPR121. Cấu hình dùng
+cùng cách chọn thư mục device và được `hal/board/mpr121.py` kiểm tra. Lamp
+có sẵn entry bật cho `orangepi_sun60`, dùng bus 0 và địa chỉ 0x5A, đã kiểm tra
+khởi tạo và polling trên Lamp `lamp-0c4e`. Script phần cứng dùng chân 3/5
+(TWI0); cần xác minh wiring thực tế và bật
+đúng controller I²C bên ngoài HAL. HAL không sửa boot overlay. Thiếu
+`/dev/i2c-0` thì log lỗi khởi tạo và giữ các input hiện có hoạt động.
+Entry trong `boards` bắt buộc có `bus` I²C cụ thể; không quét hay đoán bus MPR121 để fallback. Thiếu
+file/board hoặc `enabled: false` thì bỏ qua MPR121, giữ input GPIO/TTP223
+hiện có; chế độ mô phỏng cũng bỏ qua. Cấu hình bật nhưng sai bị từ chối khi
+startup. Restart HAL sau khi đổi cấu hình wiring. Driver dùng chung
+`hal/drivers/mpr121.py` gom các electrode được chọn thành một phiên chạm rồi
+nhả đã debounce. Ngưỡng cử chỉ dùng chung GPIO trong
+`hal/drivers/button_gestures.py`: lần nhả ngắn đầu tiên được phân giải gọi single-click
+với `announce=False`; sau 0.4 s yên, 1/2/4+ click phát cue nghe, đúng 3 click
+thì reboot. Giữ chỉ thực hiện khi nhả: 2–<5 s sleepy, 5–<10 s shutdown,
+≥10 s factory reset. Khi giữ, event mức giữ đã debounce dùng cùng `HoldLEDFeedback`
+trong `hal/drivers/button_actions.py` và `BUTTON_LED_PRESETS` với GPIO: tím nháy 2 Hz ở 2–<5 s, đỏ nháy 2 Hz ở
+5–<10 s và đỏ đứng từ 10 s. Nhả thì dừng nháy; action shutdown/reset được
+chấp nhận đặt lại đỏ đứng trước khi chạy. Chạm giữ lúc startup không hiện
+phản hồi; stop hoặc lỗi phần cứng hủy phản hồi. LED được kiểm tra bằng test
+mock local, chưa kiểm tra trên device thật. Mặc định:
+địa chỉ `0x5A`, electrode 0–11, ngưỡng chạm/nhả 2/1, bật autoconfig,
+polling 10 ms và debounce 30 ms, chờ ổn định 100 ms lúc startup. Lỗi I²C hoặc
+cờ quá dòng chỉ dừng driver này. Logger `hal.drivers.mpr121` ghi cấu hình,
+thay đổi electrode, tap đã debounce, thực thi action và vòng đời driver trong
+log/journal HAL thường dùng; poll không đổi trạng thái không tạo log INFO.
+Lamp bật nhận diện vuốt với `swipe_axis: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]`.
+Trục electrode này theo chuỗi di chuyển quan sát được trong log device; đảo
+chiều trục không đổi action vì cả hai hướng gọi `swipe_action` dùng chung để sleep.
+Hỗ trợ vuốt một phần dải. Chạm đứng yên giữ action click/hold; contact di chuyển
+loại bỏ các action đó để vuốt không biến thành reset. Nhận diện swipe thêm tối đa
+120 ms chờ nhả để nối chuyển tiếp giữa electrode. Thiếu/null `swipe_axis` giữ
+hành vi chỉ click/hold cũ. Cài HAL mới trước JSON device mới vì loader cũ kiểm tra
+nghiêm ngặt và từ chối trường chưa biết. Test swipe phát lại chuyển trạng thái
+electrode đã ghi; runtime và cấu hình swipe mới đã deploy lên Lamp `lamp-0c4e`
+ngày 2026-09-11, xác minh startup thành công. Chờ live test cử chỉ.
+Xem [điều khiển vật lý](../../robots/lamp/docs/vi/physical-controls_vi.md) để
+biết cấu hình và chi tiết cử chỉ.
+
 ## Nguyên Tắc
 
 - **Hardware là plugin** — cắm vào thì play, không cắm thì skip
@@ -163,6 +264,10 @@ Mic (always on) → Local VAD (RMS energy, free)
 Chi tiết SER: [speech-emotion_vi.md](speech-emotion_vi.md).
 
 ## Sensing Flow
+
+Thu nhận dữ liệu môi trường SEN55 là capability HAL tùy chọn riêng. Xem
+[Cảm biến môi trường](../../robots/lamp/docs/vi/environment-sensing_vi.md) về đấu dây, cấu hình và
+API snapshot; hiện chưa phát sensing event tới OS/agent.
 
 ```
 HAL sensing loop (mỗi 2s) → Đọc 1 frame camera, chạy tất cả detectors:

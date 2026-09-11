@@ -358,7 +358,7 @@ def resolve_device_type(default: str = "") -> str:
     fallback for dev machines). So a bare _os_cfg_get("device_type") resolves to
     the caller's fallback on every provisioned device — anything deriving
     behaviour from the device class must go through here instead. Same order as
-    server._resolve_device_type / mic_button._resolve_device_type, without the
+    server._resolve_device_type / privacy_button._resolve_device_type, without the
     fail-loud: callers here have a usable default.
     """
     dev = os.environ.get("DEVICE_TYPE")

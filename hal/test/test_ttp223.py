@@ -42,7 +42,7 @@ class _Harness:
 
     def __init__(self, mod, lines=(96, 100), axis=None):
         self.mod = mod
-        self.h = mod.TTP223Handler()
+        self.h = mod.TTP223Handler(mod.TouchConfig(chip=0, lines=list(lines), axis=axis))
         self.h._chip, self.h._lines, self.h._axis = 0, list(lines), axis
         self.h._ignore_edges_until = 0.0  # settle window already elapsed
         self.fired = []

@@ -355,6 +355,7 @@ reapplying HAL settings even when unchanged. The `info` uplink includes effectiv
 | `skills.upload` | Install one `.md`, `.zip`, or `.skill` file on the active runtime (synchronous) | `filename`, `content_base64` |
 | `chat.file.get` | Fetch one device-local file a turn named (synchronous) | `path` (required), optional `session_id`/`run_id` |
 | `chat.send` | Start an agent turn from the backend and stream it back (acks a run id, then emits `chat.event`) | `message` (required), optional `images[]`/`files[]`/`session_id`/`speak` |
+| `environment.status` | Read the HAL environment snapshot by capability, independent of sensor model | _(none)_ |
 | `system.info` | Aggregate snapshot: versions + network + host | _(none)_ |
 | `system.version` | Component versions only (cheaper than `system.info`) | _(none)_ |
 | `system.network` | network facts of the default-route interface only | _(none)_ |
@@ -367,6 +368,49 @@ the device drops off the network. They share the OS-server single-flight guard:
 when another power action is already pending, a terminal `status:"failure"`
 reply follows with the reason. The commands invoke HAL's full actions, not raw
 OS commands: reboot plays its cue; shutdown plays its cue and releases servos.
+
+This request/reply does not generate agent events. The separate OS worker handles
+sustained changes; see [Lamp environment sensing](../robots/lamp/docs/environment-sensing.md#os-change-policy-and-agent-access).
+
+The shared snapshot can combine SEN55 and SCD41 without a new MQTT kind.
+SCD41 contributes only `sample.co2_ppm`; `components` holds independent
+status/error/timing/sample diagnostics, `sources` maps metrics to components,
+and `metric_timestamps` carries their observation times. Group `ready` means
+at least one fresh metric; `partial` indicates an enabled component is
+unavailable. Check individual sources rather than treating the group's newest
+timestamp as the age of every metric. A failed sensor does not discard healthy
+readings. Disabled/absent SCD41 does not produce an inferred CO₂ value.
+
+**`environment.status`:** send on `fa_channel`:
+
+```json
+{"cmd":"data","kind":"environment.status","data":{}}
+```
+
+The OS checks the device's declared `environment` capability, not SEN55 or any
+hardware model. It reads local HAL `GET /environment/status` with a 5-second
+timeout and returns the unchanged JSON snapshot in `data` on `fd_channel`.
+Replies use the standard `MQTTDataResponse`; this example omits the normal
+device/version/id/mac/time metadata:
+
+```json
+{"type":"data","kind":"environment.status","status":"success","data":{"enabled":false,"bus":null,"state":"disabled","last_error":null,"sample":null,"age_s":null,"stale":true}}
+```
+
+The snapshot may also contain `timing` and other fields supplied by HAL.
+`success` means a valid snapshot was read, including when the sensor is disabled,
+in error, or stale. Clients must inspect `data.state`, `data.stale`, `data.sample`,
+and `data.last_error` before displaying measurements. A missing capability returns:
+
+```json
+{"type":"data","kind":"environment.status","status":"failure","error":"environment capability not declared"}
+```
+
+HAL transport errors, non-200 HTTP responses, and invalid status JSON also return
+`failure` with `error`. This is request/reply only: no subscription, continuous
+stream, events, or agent invocation. Replies retain the request's `kind`; the
+existing protocol adds no request ID. Mobile clients use the device's existing
+broker credentials and topic ACLs.
 
 **`system.info` response:** synchronous (no `starting` intermediate); each probe
 falls back to its zero value on failure.

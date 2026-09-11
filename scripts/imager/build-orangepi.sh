@@ -35,7 +35,11 @@ OTA_SIGNING_PUBLIC_KEY="${OTA_SIGNING_PUBLIC_KEY:-}"
 AP_BAND="${AP_BAND:-2.4}"
 AP_CHANNEL="${AP_CHANNEL:-}"
 COUNTRY_CODE="${COUNTRY_CODE:-US}"
-OPENCLAW_VERSION="${OPENCLAW_VERSION:-2026.6.10}"
+# Match OTA metadata checked on 2026-09-11.
+OPENCLAW_VERSION="${OPENCLAW_VERSION:-2026.9.3}"
+# Release v2026.9.7 reports Hermes 0.21.1; pin the image checkout only.
+HERMES_VERSION="0.21.1"
+HERMES_COMMIT="2237be355906fbe6065ce1815711eee52b2d646e"
 # Device class this golden image is for — bakes robots/<type>/{DEVICE,SOUL}.md
 # so one DEVICE_TYPE = one golden image. Forwarded by the Makefile via docker -e.
 # REQUIRED, no default — a golden image must declare which device class it is.
@@ -255,6 +259,8 @@ export AP_BAND="${AP_BAND}"
 export AP_CHANNEL="${AP_CHANNEL}"
 export COUNTRY_CODE="${COUNTRY_CODE}"
 export OPENCLAW_VERSION="${OPENCLAW_VERSION}"
+export HERMES_VERSION="${HERMES_VERSION}"
+export HERMES_COMMIT="${HERMES_COMMIT}"
 export DEVICE_TYPE="${DEVICE_TYPE}"
 export DEVICES_DIR="${DEVICES_DIR}"
 export DEFAULT_AGENT="${DEFAULT_AGENT}"
@@ -314,12 +320,18 @@ else
   echo 'name_servers="1.1.1.1 8.8.8.8"' > /etc/resolvconf.conf
 fi
 
-# ── Node.js 22 + OpenClaw CLI (npm global) ───────────────────────────────────
-echo "[stage] Node.js 22 + OpenClaw \${OPENCLAW_VERSION}"
-if ! command -v node &>/dev/null || ! node -v 2>/dev/null | grep -qE '^v(2[2-9]|[3-9][0-9])'; then
-  curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
-  apt-get install -y nodejs
-fi
+# ── Node.js 26 + OpenClaw CLI (npm global) ───────────────────────────────────
+# Refresh even reused base images to the newest package on the Current branch.
+echo "[stage] Node.js 26 + OpenClaw \${OPENCLAW_VERSION}"
+NODE_SETUP=\$(mktemp)
+curl -fsSL https://deb.nodesource.com/setup_26.x -o "\$NODE_SETUP"
+bash "\$NODE_SETUP"
+rm -f "\$NODE_SETUP"
+apt-get install -y nodejs
+hash -r
+# Latest upstream at the OTA version check was 26.8.2. Fail if apt/PATH left an old Node.
+node -e 'const [major, minor, patch] = process.versions.node.split(".").map(Number); if (major !== 26 || minor < 8 || (minor === 8 && patch < 2)) process.exit(1)'
+node --version
 retry "npm install -g openclaw@\${OPENCLAW_VERSION} --omit=optional" 5
 openclaw --version || true
 openclaw --version 2>/dev/null | tr -d '[:space:]' > /tmp/baked-openclaw-version || echo "unknown" > /tmp/baked-openclaw-version
@@ -354,21 +366,25 @@ chmod +x /usr/local/bin/yq
 
 # ── Hermes CLI binary pre-bake ────────────────────────────────────────────────
 # Run the same installer stages as install.sh, minus gateway/config/migrate.
-# Baking the binary + venv here means switch-runtime's install.sh skips the
-# slow git-clone + uv-sync on the device (stages fast-path because they detect
-# the existing install). Everything else (service unit, presync, claw migrate)
+# Pin the installer and checkout, including on reused base images. A later
+# hermes update can leave detached HEAD and follow upstream as usual.
+# Everything else (service unit, presync, claw migrate)
 # is handled by install.sh at actual switch time via Go switch-runtime.
 echo "[stage] hermes CLI binary pre-bake"
 HERMES_INSTALLER=\$(mktemp)
-curl -fsSL https://hermes-agent.nousresearch.com/install.sh -o "\$HERMES_INSTALLER"
+curl -fsSL "https://raw.githubusercontent.com/NousResearch/hermes-agent/\${HERMES_COMMIT}/scripts/install.sh" -o "\$HERMES_INSTALLER"
 for stage in prerequisites repository venv python-deps path config; do
   echo "[hermes-prebake] stage: \${stage}"
-  bash "\$HERMES_INSTALLER" --stage "\$stage" --non-interactive
+  bash "\$HERMES_INSTALLER" --stage "\$stage" --non-interactive --commit "\$HERMES_COMMIT" --force-commit
 done
 rm -f "\$HERMES_INSTALLER"
 echo "git" >/usr/local/lib/hermes-agent/.install_method 2>/dev/null || true
-hermes --version || true
-hermes --version 2>/dev/null | tr -d '[:space:]' > /tmp/baked-hermes-version || echo "unknown" > /tmp/baked-hermes-version
+HERMES_ACTUAL_VERSION=\$(hermes --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+([-.+_][0-9A-Za-z.-]+)?' | head -1)
+if [ "\$HERMES_ACTUAL_VERSION" != "\$HERMES_VERSION" ]; then
+  echo "ERROR: Hermes reports \$HERMES_ACTUAL_VERSION, expected \$HERMES_VERSION"
+  exit 1
+fi
+printf '%s\n' "\$HERMES_ACTUAL_VERSION" > /tmp/baked-hermes-version
 
 # ── Hermes gateway unit pre-bake (A — created, left DISABLED) ────────────────
 # Pre-baking the binary above is not enough: IsReady()/device setup wait on the

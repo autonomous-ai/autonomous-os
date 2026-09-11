@@ -6,6 +6,7 @@ import random
 from fastapi import APIRouter, HTTPException
 
 import hal.app_state as state
+from hal import privacy
 from hal.safety.policy import audio_quiet_now
 from hal.models import (
     MusicPlayRequest,
@@ -283,8 +284,12 @@ def audio_stop():
 
 
 @router.post("/speaker/mute", response_model=StatusResponse, tags=["Audio"])
+@privacy.serialized
 def mute_speaker():
     """Mute all audio output -- TTS, music, backchannel suppressed."""
+    if privacy.speaker_muted:
+        privacy.speaker_before = True
+        state._persist_speaker_state()
     if state._speaker_muted:
         return {"status": "already_muted"}
     state._speaker_muted = True
@@ -298,8 +303,11 @@ def mute_speaker():
 
 
 @router.post("/speaker/unmute", response_model=StatusResponse, tags=["Audio"])
+@privacy.serialized
 def unmute_speaker():
     """Unmute audio output."""
+    if privacy.speaker_muted:
+        raise HTTPException(409, "Privacy switch is on -- flip the switch to unmute speaker")
     if not state._speaker_muted:
         return {"status": "already_unmuted"}
     state._speaker_muted = False

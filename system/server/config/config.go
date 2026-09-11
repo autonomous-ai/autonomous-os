@@ -292,10 +292,13 @@ type Config struct {
 
 	// SensingTurnFloorS is the minimum gap in seconds between two agent turns
 	// initiated by ambient sensing events (motion/emotion/speech-emotion/sound/
-	// away/light), across ALL event types. Per-event gates live in HAL; this is
+	// away/light/environment), across ALL event types. Per-event gates live in HAL
+	// or the OS environment worker; this is
 	// the cross-type floor that stops a burst of different event types from
 	// consuming several agent turns within seconds. 0 disables. Default 120.
 	SensingTurnFloorS *int `json:"sensing_turn_floor_s,omitempty" yaml:"sensingTurnFloorS"`
+
+	Environment *EnvironmentConfig `json:"environment,omitempty" yaml:"environment"`
 
 	// GuardInstruction is a custom instruction the owner provides when enabling guard mode.
 	// Injected into sensing events so the agent follows it (e.g. "play scary sound when stranger detected").
@@ -345,8 +348,10 @@ func Load() (*Config, error) {
 }
 
 func Default() Config {
+	environment := DefaultEnvironmentConfig()
 	return Config{
-		HttpPort: 5000,
+		Environment: &environment,
+		HttpPort:    5000,
 
 		TelegramBotToken: "",
 

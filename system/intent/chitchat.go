@@ -84,12 +84,13 @@ func matchChitchat(text string) *Result {
 				if reply == "" {
 					continue
 				}
-				postEmotion(fmt.Sprintf(`{"emotion":"%s","intensity":0.7}`, r.emotion))
+				executionFailed := postEmotion(fmt.Sprintf(`{"emotion":"%s","intensity":0.7}`, r.emotion)) != nil
 				return &Result{
-					TTSText: reply,
-					Emotion: r.emotion,
-					Rule:    "chitchat_" + r.intent,
-					Actions: []string{"POST /emotion " + r.emotion},
+					ExecutionFailed: executionFailed,
+					TTSText:         reply,
+					Emotion:         r.emotion,
+					Rule:            "chitchat_" + r.intent,
+					Actions:         []string{"POST /emotion " + r.emotion},
 				}
 			}
 		}
@@ -202,11 +203,12 @@ func bareAttentionResult() *Result {
 	if reply == "" {
 		return nil
 	}
-	postEmotion(`{"emotion":"happy","intensity":0.7}`)
+	executionFailed := postEmotion(`{"emotion":"happy","intensity":0.7}`) != nil
 	return &Result{
-		TTSText: reply,
-		Emotion: "happy",
-		Rule:    "chitchat_attention",
-		Actions: []string{"POST /emotion happy"},
+		ExecutionFailed: executionFailed,
+		TTSText:         reply,
+		Emotion:         "happy",
+		Rule:            "chitchat_attention",
+		Actions:         []string{"POST /emotion happy"},
 	}
 }

@@ -51,6 +51,7 @@ class VoiceAgentBase(ABC):
         # TurnDoneEvent that arrives before any real output. See receive().
         self._newest_output_gen: int = 0
         self._skip_stale_turn_done: bool = False
+        self.execution_completed: bool = False
         # Per-turn override of the receive() silent-turn watchdog. Set by the
         # orchestrator on `look` turns: Gemini's forced thinking over a
         # text-dense image can stay silent >8s right before the answer
@@ -218,6 +219,7 @@ class VoiceAgentBase(ABC):
         # silence timeout). A look replay abandons the generator mid-turn
         # (GeneratorExit) — the extended watchdog must survive into the
         # replayed turn, so only a normal end clears the override.
+        self.execution_completed = False
         turn_ended = False
         stale = 0  # outputs skipped as belonging to a superseded generation
         turn_started: float = time.monotonic()
@@ -273,6 +275,7 @@ class VoiceAgentBase(ABC):
                         )
                         continue
                     if stop_on_done:
+                        self.execution_completed = event.execution_completed
                         turn_ended = True
                         break
                     continue

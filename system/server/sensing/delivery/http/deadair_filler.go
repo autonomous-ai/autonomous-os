@@ -100,7 +100,9 @@ type fillerRun struct {
 	playing        bool
 	fired          int       // count of fillers actually spoken this turn
 	lastActivityAt time.Time // last time something audible/visible happened (filler or HW tool)
-	ended          bool      // turn finalized (assistant delta or lifecycle.end) — no more arms
+	ended          bool      // turn finalized or explicitly cancelled — no more arms
+	suspended      bool      // assistant text is streaming; only a new tool.start may resume
+	generation     uint64    // invalidates timer callbacks and speech completions after suspension
 	lastSpoken     string    // text of the most recent filler — used to dedup back-to-back picks
 	rearmPending   bool      // tool.end arrived while playing=true; fire() re-arms after speak (otherwise the event would be silently dropped by armLocked's playing guard)
 	lastToolName   string    // name of the most recently started tool — drives tool-aware filler pool ("Đang tra mạng" for web_search, "Đang đọc tài liệu" for read, etc.). Empty when no tool has started yet (e.g. first filler before any tool call)
@@ -404,10 +406,9 @@ func PlayPoolFillerNow(pool, owner string) {
 //     timer if the turn is still active and the cap/cooldown allow it.
 //     This covers long multi-tool turns where each tool boundary is a
 //     potential dead-air pocket.
-//  5. SSE handler calls Cancel(runID) on the first assistant delta and
-//     again on lifecycle.end — hard cancel: stops any pending timer,
-//     interrupts a filler mid-speech via hal.StopTTS(), and clears
-//     run state so further events are no-ops.
+//  5. Assistant deltas suspend fillers until the next tool.start.
+//     Lifecycle end/error or explicit cancellation permanently clears the
+//     run, preventing subsequent tool events from reviving fillers.
 //
 // All exported methods are safe for concurrent use and idempotent.
 type FillerManager struct {
@@ -506,9 +507,14 @@ func (fm *FillerManager) OnToolStart(runID, toolArgs, toolName string) {
 	if toolName != "" {
 		run.lastToolName = toolName
 	}
+	wasSuspended := run.suspended
+	run.suspended = false
 	hw := isHWReactionTool(toolArgs)
 	slog.Info("filler OnToolStart", "component", "sensing", "run_id", runID, "tool", toolName, "hw", hw, "fired", run.fired, "playing", run.playing, "timer_armed", run.timer != nil)
 	if !hw {
+		if wasSuspended {
+			fm.armLocked(runID, run, fillerRearmDelay(run))
+		}
 		return
 	}
 	fm.softCancelLocked(run)
@@ -528,7 +534,7 @@ func (fm *FillerManager) OnToolEnd(runID string) {
 	fm.mu.Lock()
 	defer fm.mu.Unlock()
 	run, ok := fm.runs[runID]
-	if !ok || run.ended {
+	if !ok || run.ended || run.suspended {
 		slog.Debug("filler OnToolEnd skipped — no active run", "component", "sensing", "run_id", runID)
 		return
 	}
@@ -537,6 +543,13 @@ func (fm *FillerManager) OnToolEnd(runID string) {
 		slog.Info("filler OnToolEnd deferred (playing) — rearm after speak", "component", "sensing", "run_id", runID, "tool", run.lastToolName, "fired", run.fired)
 		return
 	}
+	delay := fillerRearmDelay(run)
+	slog.Info("filler OnToolEnd arming", "component", "sensing", "run_id", runID, "tool", run.lastToolName, "fired", run.fired, "delay_ms", delay.Milliseconds())
+	fm.armLocked(runID, run, delay)
+}
+
+// fillerRearmDelay preserves the cooldown when a tool resumes work.
+func fillerRearmDelay(run *fillerRun) time.Duration {
 	delay := FillerDelay
 	if !run.lastActivityAt.IsZero() {
 		// Respect cooldown from the last filler/HW reaction. Add the
@@ -546,8 +559,21 @@ func (fm *FillerManager) OnToolEnd(runID string) {
 			delay = (FillerCooldown - elapsed) + FillerDelay
 		}
 	}
-	slog.Info("filler OnToolEnd arming", "component", "sensing", "run_id", runID, "tool", run.lastToolName, "fired", run.fired, "delay_ms", delay.Milliseconds())
-	fm.armLocked(runID, run, delay)
+	return delay
+}
+
+// OnAssistantText interrupts fillers without ending a voice turn. Agents may
+// announce their next step before using tools; only a later tool.start can
+// resume fillers, while late tool.end events remain suppressed.
+func (fm *FillerManager) OnAssistantText(runID string) {
+	fm.mu.Lock()
+	defer fm.mu.Unlock()
+	run, ok := fm.runs[runID]
+	if !ok || run.ended || run.suspended {
+		return
+	}
+	run.suspended = true
+	fm.softCancelLocked(run)
 }
 
 // Cancel hard-cancels the run: stop pending timer, interrupt any filler
@@ -621,7 +647,7 @@ func (fm *FillerManager) HasActiveRun(runID string) bool {
 // armLocked schedules a filler timer for run after delay. Caller holds fm.mu.
 // No-op when the run has ended, the cap is reached, or a timer/filler is already active.
 func (fm *FillerManager) armLocked(runID string, run *fillerRun, delay time.Duration) {
-	if run.ended {
+	if run.ended || run.suspended {
 		slog.Debug("filler arm blocked — ended", "component", "sensing", "run_id", runID)
 		return
 	}
@@ -637,13 +663,16 @@ func (fm *FillerManager) armLocked(runID string, run *fillerRun, delay time.Dura
 		slog.Debug("filler arm blocked — currently playing", "component", "sensing", "run_id", runID)
 		return
 	}
-	run.timer = time.AfterFunc(delay, func() { fm.fire(runID) })
+	generation := run.generation
+	run.timer = time.AfterFunc(delay, func() { fm.fire(runID, run, generation) })
 }
 
 // softCancelLocked clears a pending timer and interrupts in-flight TTS,
 // but keeps the run alive so OnToolEnd can re-arm later. Counts as an
 // activity so the cooldown applies to the next re-arm.
 func (fm *FillerManager) softCancelLocked(run *fillerRun) {
+	run.generation++
+	run.rearmPending = false
 	if run.timer != nil {
 		run.timer.Stop()
 		run.timer = nil
@@ -663,10 +692,10 @@ func (fm *FillerManager) softCancelLocked(run *fillerRun) {
 // fire is the timer callback. Re-checks state under the lock, picks a
 // pool-appropriate filler, speaks it outside the lock, then re-takes the
 // lock to update counters.
-func (fm *FillerManager) fire(runID string) {
+func (fm *FillerManager) fire(runID string, expectedRun *fillerRun, generation uint64) {
 	fm.mu.Lock()
 	run, ok := fm.runs[runID]
-	if !ok || run.ended || run.timer == nil {
+	if !ok || run != expectedRun || run.generation != generation || run.ended || run.suspended || run.timer == nil {
 		// Cancel raced ahead between AfterFunc firing and this callback.
 		fm.mu.Unlock()
 		return
@@ -683,6 +712,8 @@ func (fm *FillerManager) fire(runID string) {
 	run.playing = true
 	toolName := run.lastToolName
 	fired := run.fired
+	// Count playback when it starts so suspension cannot reset the turn cap.
+	run.fired++
 	fm.mu.Unlock()
 
 	// Show whether the picked filler came from a tool-specific pool (matches
@@ -701,23 +732,21 @@ func (fm *FillerManager) fire(runID string) {
 		slog.Warn("dead air filler failed", "component", "sensing", "run_id", runID, "error", err)
 	}
 
+	fm.finishFiller(runID, expectedRun, generation, filler)
+}
+
+// finishFiller ignores completions from speech interrupted by assistant text
+// or hardware reactions, including after the run has already resumed.
+func (fm *FillerManager) finishFiller(runID string, expectedRun *fillerRun, generation uint64, filler string) {
 	fm.mu.Lock()
-	// Cancel may have run during SpeakInterruptible — in that case the
-	// run was deleted; nothing to update.
-	if run, ok := fm.runs[runID]; ok && !run.ended {
+	defer fm.mu.Unlock()
+	if run, ok := fm.runs[runID]; ok && run == expectedRun && run.generation == generation && !run.ended && !run.suspended {
 		run.playing = false
-		run.fired++
 		run.lastActivityAt = time.Now()
 		run.lastSpoken = filler
-		// Pick up tool.end events that landed during speech (run.playing
-		// was true so OnToolEnd deferred them via rearmPending). Use the
-		// plain FillerDelay — cooldown is implicit since speech already
-		// took ~1s of wall-clock, so total gap to next fire is ~speak +
-		// FillerDelay ≈ FillerCooldown.
 		if run.rearmPending {
 			run.rearmPending = false
 			fm.armLocked(runID, run, FillerDelay)
 		}
 	}
-	fm.mu.Unlock()
 }

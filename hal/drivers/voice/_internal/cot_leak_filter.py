@@ -51,12 +51,16 @@ logger = logging.getLogger("hal.voice")
 # TRIGGER: unambiguous CoT. "the user/the speaker" is verb-bound so that a
 # legitimate reply mentioning "the user manual" / "the user interface" does not
 # trip it; the leak corpus is always "The user is/wants/insists...".
+# Song-intent and identity planning are sentence-initial to preserve ordinary
+# song discussion and references to physical speakers.
 _TRIGGER = re.compile(
     r"(?i)(?:\bthe (?:user|speaker)s? (?:is|are|was|were|wants?|wanted|asks?"
     r"|asked|insists?|insisted|seems?|seemed|says?|said|repeats?|repeated"
     r"|claims?|claimed|mentions?|mentioned|requests?|requested|greets?|greeted"
     r"|needs?|needed)\b"
-    r"|phrasing draft|delivery guidance|spoken delivery)"
+    r"|phrasing draft|delivery guidance|spoken delivery"
+    r"|^\s*they named (?:a|the) song\s*:"
+    r"|^\s*speaker(?: identity)? is unknown\b)"
 )
 
 # SECONDARY: meta terms a legit reply could contain (dev users ask the device

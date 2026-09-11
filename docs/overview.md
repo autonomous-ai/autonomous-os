@@ -54,6 +54,114 @@ skills/                           — Built-in SKILL.md files for agent runtime,
 integrations/                     — Off-device: companions/, chat-bridges/, perception-service/
 ```
 
+Mechanical GPIO button wiring is owned by each device in
+`robots/lamp/gpio_button.json` and `robots/intern-v2/gpio_button.json`.
+HAL resolves the device directory through `DEVICES_DIR` and `DEVICE_TYPE`.
+Each detected-board entry accepts the original flat `chip`, `line`,
+`debounce_ns` configuration or a `buttons` list with named inputs.
+`load_button_configs` supplies one shared `hal/drivers/gpio_button.py` instance
+per input; HAL stops every instance on cleanup. `load_button_config` remains
+available for callers that need only the first input (the primary button in Lamp). Lamp on OrangePi uses
+`primary` at pin 37 / PD4 / gpiochip0 line 100 (`behavior: "standard"`) and
+`factory_reset` at pin 35 / PD3 / gpiochip0 line 99
+(`behavior: "factory_reset"`, `hold_s: 5`). The reset input ignores taps and
+holds below 5 s; holding at least 5 s arms the shared solid-red LED feedback,
+then releasing calls the shared factory-reset action. It does not reset while
+held or invoke sleep, shutdown, or single/triple-click actions.
+Device configuration takes priority; a missing file or board entry falls back
+to exactly one existing `button` default in `hal/board/boards.json`.
+Intern v2's JSON remains unchanged. Changing wiring requires updating the
+selected device's JSON and restarting HAL; moving physical wires is not
+detected automatically. Malformed configuration, duplicate input names, and
+duplicate chip/line pairs are rejected before GPIO is claimed. Simulation
+skips hardware buttons.
+
+The privacy switch always controls microphone mute. Optional boolean fields
+`disable_camera_on_mute` and `mute_speaker_on_mute` also lock camera capture
+and speaker output; both default to `false`. Lamp enables both in its JSON,
+while Intern keeps its microphone-only fallback and ships no privacy JSON.
+HAL keeps opted-in peripherals closed until the first GPIO read; read/claim
+failure leaves them locked. The camera capture wrapper, camera routes,
+auto-wake helpers and audio output gates share `hal/privacy.py`. Unlock restores
+the prior camera/speaker preferences; temporary locks do not overwrite their
+boot-scoped persisted preferences.
+The loader accepts legacy `mic_button.json` only when `privacy_button.json` is absent,
+so HAL can be updated before the device JSON is renamed.
+The microphone slide switch uses device-owned `privacy_button.json`, initially
+shipped at `robots/lamp/privacy_button.json` for physical pin 11 / PL9 / gpiochip1 line 9. The detected board's entry
+under `boards` supplies `chip`, `line`, `settle_s`, `muted_level`, and
+`watchdog_s` to `hal/board/privacy_button.py`, then the shared
+`hal/drivers/privacy_button.py` driver. Intern v2 ships no mic JSON and continues
+using the code fallback: gpiochip0 line 97 (PD1), a 0.06 s settling delay,
+LOW (`0`) for muted, and a 30 s watchdog. Lamp uses the same timing/polarity. Pull-up remains enabled; `muted_level` accepts `0` or `1`.
+A missing file or board entry preserves the old defaults for `intern-v2`
+only, including its existing device-type gate regardless of board ID. Other
+devices without configuration skip the switch; `enabled: false` explicitly
+disables it. Malformed configuration is rejected before GPIO is claimed.
+HAL synchronizes mute to the switch position at startup and after settled
+edges. The watchdog reconciles only when the pin changed, preserving software
+mute changes while the switch stays still. Restart HAL to apply JSON changes;
+simulation skips this hardware input. Keep Lamp's GPIO button JSON installed:
+its legacy primary-button fallback also uses pin 11, while the device JSON
+moves the primary button to pin 37. Lamp startup with this mic JSON was verified on 2026-09-11: chip1/line9
+was ready and the initial LOW position applied mute. Live toggle testing is pending.
+
+TTP223 touch wiring is device-owned in `robots/lamp/ttp223.json`. Intern v2
+has no TTP223 hardware and does not ship this file. `hal/board/ttp223.py` resolves the detected
+board's `chip`, `lines` and optional `axis` from `boards` and passes a
+`TouchConfig` to the shared driver. Missing file/board falls back to legacy
+`touch` in `hal/board/boards.json`; `enabled: false` disables TTP223 explicitly.
+Malformed configuration is rejected before GPIO is claimed. Restart HAL after
+editing the selected device's configuration; simulation skips hardware input.
+Lamp uses two TTP223 pads: S1 on physical pin 29 / PD0 / gpiochip0 line 96
+and S3 on pin 33 / PD2 / line 98. Its button uses pin 37 / PD4 / line 100.
+Keep the Lamp JSON installed: the legacy touch fallback still overlaps the button.
+Intern v2 retains its existing button wiring. The legacy board fallback remains
+unchanged; absence of a JSON file alone does not disable the driver.
+
+Optional MPR121 touch wiring currently belongs to Lamp only, in
+`robots/lamp/mpr121.json`; Intern v2 has no MPR121 declaration. It follows the
+same device-directory selection, validated by `hal/board/mpr121.py`. Lamp
+ships an enabled `orangepi_sun60` entry using bus 0 and address 0x5A, verified
+for initialization and polling on Lamp `lamp-0c4e`. The hardware script uses
+pins 3/5 (TWI0); verify the actual wiring and enable the
+correct I²C controller externally. HAL does not change boot overlays. Missing
+`/dev/i2c-0` logs an initialization failure and leaves existing inputs running.
+Its `boards` entry requires an explicit I²C `bus`; there is no scan or guessed MPR121 fallback. Missing
+file/board or `enabled: false` skips MPR121 and preserves existing GPIO/TTP223
+inputs; simulation also skips it. Malformed enabled configuration rejects
+startup. Restart HAL after changing wiring configuration. The shared
+`hal/drivers/mpr121.py` driver groups selected electrodes into one debounced
+contact. It shares GPIO gesture thresholds in `hal/drivers/button_gestures.py`:
+the first resolved short release calls single-click with `announce=False`;
+a 0.4 s quiet window produces the listening cue for 1/2/4+ clicks or reboot
+for exactly 3. Holds commit only on release: 2–<5 s sleepy, 5–<10 s shutdown,
+≥10 s factory reset. While held, debounced hold-tier events use the same
+`HoldLEDFeedback` in `hal/drivers/button_actions.py` and `BUTTON_LED_PRESETS`
+as GPIO: purple blinking at 2 Hz for 2–<5 s, red blinking
+at 2 Hz for 5–<10 s, and solid red from 10 s. Release stops blinking; accepted
+shutdown/reset actions reaffirm solid red before execution. Boot-held contacts
+show no feedback; stop or hardware failure cancels it. LED feedback is verified
+with mocked local tests; it has not been checked on the live device. Defaults are address
+`0x5A`, electrodes 0–11, touch/release thresholds 2/1, autoconfiguration enabled,
+10 ms polling and 30 ms debounce, with 100 ms startup settling. An I²C failure
+or overcurrent fault stops only this driver. Logger `hal.drivers.mpr121` records
+configuration, electrode changes, debounced taps, action dispatch and lifecycle
+in the normal HAL log/journal; unchanged polls do not emit INFO logs.
+Lamp enables swipe detection with `swipe_axis: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]`.
+This ordered electrode axis follows observed travel in device logs; either
+orientation works because both directions call shared `swipe_action` to sleep.
+Partial traversals are supported. Stationary contacts keep click/hold actions;
+a moving contact suppresses those actions so dragging cannot become reset.
+Swipe classification adds up to 120 ms of release grace for electrode handoff.
+Missing/null `swipe_axis` preserves the original click/hold-only behavior.
+Install the updated HAL before the new device JSON: older strict loaders reject
+unknown configuration fields. Swipe tests replay recorded electrode transitions;
+the new runtime and swipe configuration were deployed to Lamp `lamp-0c4e` on
+2026-09-11 and startup was verified. Live gesture testing is pending.
+See [physical controls](../robots/lamp/docs/physical-controls.md) for configuration
+and gesture details.
+
 ## Principles
 
 - **Hardware is a plugin** — plug in and it works, unplug and it's skipped
@@ -162,6 +270,10 @@ Mic (always on) → Local VAD (RMS energy, free)
 ```
 
 ## Sensing Flow
+
+SEN55 environmental acquisition is a separate optional HAL capability. See
+[Environmental sensing](../robots/lamp/docs/environment-sensing.md) for wiring, configuration,
+and snapshot APIs; it does not yet emit OS/agent sensing events.
 
 ```
 HAL sensing loop (every 2s) → Read 1 camera frame, run all detectors:

@@ -185,6 +185,11 @@ func (s *Service) watchInteractions(ctx context.Context, eventCh <-chan domain.M
 			switch evt.Type {
 			// Interaction types that should pause ambient and wake from sleep
 			case "sensing_input", "chat_response", "intent_match", "tts", "chat_send":
+				// Passive environmental observations do not prove user activity.
+				detail, _ := evt.Detail.(map[string]any)
+				if evt.Type == "sensing_input" && detail["type"] == "environment.update" {
+					continue
+				}
 				s.mu.Lock()
 				s.sleeping = false
 				s.mu.Unlock()

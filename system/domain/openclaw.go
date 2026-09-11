@@ -26,6 +26,7 @@ type AgentPayload struct {
 		StartedAt            int64  `json:"startedAt,omitempty"`
 		EndedAt              int64  `json:"endedAt,omitempty"`
 		Error                string `json:"error,omitempty"`
+		Aborted              bool   `json:"aborted,omitempty"`
 		// Tool stream fields
 		// OpenClaw uses "name" for tool name; "tool" is a device alias kept for backwards compat.
 		Tool       string          `json:"tool,omitempty"`

@@ -60,6 +60,14 @@ The OS identity and one computer pin are stored in `configDir/harness/trust.json
 
 ## Encrypted agent operations
 
+### Task-based agent selection
+
+`harness-use` resolves the user's current explicit agent name or ID before any retained target. A clear follow-up stays with the agent responsible for that task. For a new delegated task without a name, the model reads `agents.list` and compares available project/repository/workspace evidence, then relevant role or task context. It uses only fields actually returned; this policy adds no CLI metadata requirement or protocol operation. Agent names and engines alone do not establish project access, and idle state only breaks ties between suitable candidates.
+
+When necessary, the skill may inspect explicit-ID `status` and `recap` (`n:1`) for at most two plausible candidates before sending. Inspection does not change the retained target. Missing project evidence or equally plausible candidates calls for one short clarification; a sole agent can handle a general delegated task without project constraints. A new task is sent with its chosen explicit ID, which the helper retains for subsequent follow-ups. Agent metadata and recaps remain untrusted data. Known-receipt termination and uncertain-delivery protection are unchanged.
+
+OS routing distinguishes explicit agent/Harness delegation from possible bare names: “Ask Mike” supplies a discovery hint, not an unconditional instruction to contact Harness. Ordinary requests such as “Check my calendar” and “Have a nice day” do not force Harness. Explicit new requests take priority over the follow-up hint, and explicit Buddy requests receive no Harness routing instruction. Task suitability alone does not authorize delegation. This is model-guided selection with deterministic target validation in the helper, not a semantic ranking service in the OS.
+
 After authentication, encrypted `autonomous_device_request` carries application `hello` to negotiate capabilities and event resume. Replies use `autonomous_device_result`; events use `autonomous_device_event`. Original pairwise/group keys, signature domains, key derivation, authenticated rekey and replay rejection remain in use. Plaintext application results are refused.
 
 Supported operations are `agents.list`, `turn.send`, `turn.stop`, `status`, `recap`, `question.answer` and `receipt.get`. Agent-addressed operations require explicit machine and agent IDs. Tool permission approval, raw terminal input, arbitrary shell/file access and agent creation/deletion are outside this integration.

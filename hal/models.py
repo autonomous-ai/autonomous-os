@@ -616,6 +616,7 @@ class HealthResponse(BaseModel):
     camera: bool
     audio: bool
     sensing: bool
+    environment: bool = False
     voice: bool
     tts: bool
     music: bool

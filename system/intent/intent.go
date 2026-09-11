@@ -27,6 +27,8 @@ import (
 
 // Result holds what to do after a match: the HAL action + a TTS reply.
 type Result struct {
+	// ExecutionFailed records an error from any attempted HAL action.
+	ExecutionFailed bool
 	// TTSText is spoken back to the user via /voice/speak.
 	TTSText string
 	// LEDChanged is true when this intent sets an LED color/scene (locks ambient breathing).
@@ -316,10 +318,12 @@ func pickRandom(opts []string) string {
 	return opts[int(time.Now().UnixNano())%len(opts)]
 }
 
-func post(path, body string) {
-	if err := hal.PostRaw(path, body); err != nil {
+func post(path, body string) error {
+	err := hal.PostRaw(path, body)
+	if err != nil {
 		slog.Warn("[intent] hal call failed", "path", path, "error", err)
 	}
+	return err
 }
 
 // postEmotion drives an emotion expression, but only on a body that can show one
@@ -327,8 +331,9 @@ func post(path, body string) {
 // through). Emotion is cross-cutting (fired as a flourish by several command/
 // chitchat rules), so the guard lives here rather than on each rule's capability.
 // Fail-open via capEnabled.
-func postEmotion(body string) {
+func postEmotion(body string) error {
 	if capEnabled(device.CapExpression) {
-		post("/emotion", body)
+		return post("/emotion", body)
 	}
+	return nil
 }

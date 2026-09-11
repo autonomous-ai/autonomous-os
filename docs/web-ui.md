@@ -144,6 +144,45 @@ that gate, typing a new AI Brain key silently overwrote a deliberately different
 TTS/STT key on save — one device ended up holding an openrouter key against the
 autonomous proxy URL, a pairing that cannot work.
 
+**TTS key ownership.** The device stores exactly one TTS key (`ttsAPIKey`), and
+it always belongs to the provider currently selected in Voice. `Autonomous
+(proxy)` and `Custom (BYO URL)` store nothing and inherit the AI Brain key via
+`Config.GetTTSAPIKey()` (`system/server/config/config.go:605`); `Piper` needs no
+key at all; `OpenAI (direct)` and `ElevenLabs (direct)` **require their own** —
+the inherited Autonomous JWT is rejected with a 401 that HAL retries, abandons,
+and returns as zero samples, i.e. a mute device with no error in this UI.
+Four rules enforce the invariant:
+
+- Save is **refused** when a direct provider has neither a newly typed key nor a
+  stored key belonging to that same provider. The API Key label reads
+  "required" for direct providers and "optional — leave blank to reuse AI brain
+  key" everywhere else.
+- The `✓ configured` badge and the `•••••••• saved` placeholder render only when
+  the stored key belongs to the selected provider. Ownership is derived from the
+  loaded `tts_base_url` + `tts_provider` pair via `detectChoice()`
+  (`system/web/src/pages/settings/ttsProvider.ts`) — no extra config field.
+- The AI Brain key mirror fills a blank TTS key **only** for `autonomous` /
+  `custom` (`ttsInheritsLlmKey()` in `SettingsPanel`). Mirroring into a direct
+  vendor would put an Autonomous JWT in the box, which looks configured and
+  saves cleanly but 401s at the vendor. This matches the
+  `sttProvider === "autonomous"` gate the STT mirrors already had.
+- Switching provider away from the key's owner sends `clear_tts_api_key: true`,
+  which `applyVoicePipelineFields` honours by emptying `ttsAPIKey`. A bare
+  `tts_api_key: ""` cannot do this: every field in `UpdateConfigRequest` is
+  PATCH-style, where `""` means "not sent". The cleared key is pushed live to
+  HAL as the *resolved* value (`GetTTSAPIKey()`), because HAL's
+  `/voice/tts/config` reads an empty key as "keep the current one".
+
+Keys typed but not yet saved are cached per provider **in the browser tab only**
+(a `useRef` in `TTSSection`), so flipping providers before saving doesn't force a
+retype. That cache dies on reload and on Save; the device never holds more than
+one key.
+
+> The Setup flow (`system/web/src/components/setup/TTSSection.tsx`) still does
+> not expose the TTS key or base URL — both mirror AI Brain — so a direct
+> provider chosen during setup cannot be given a valid key there. Configure it
+> afterwards in Settings → Voice.
+
 
 Settings is **not a separate page**. It is an area of the same Monitor shell (`system/web/src/pages/monitor/index.tsx`), reached at the `/setting` route. In `App.tsx`, `/monitor` and `/setting` are child routes of a single layout route whose element renders `<Monitor/>`; React Router keeps that element mounted while only the matched child path changes, so the sidebar does **not** remount when switching between Monitor and Settings (no full-page flash). The shell derives its area — `"monitor"` or `"setting"` — from `useLocation().pathname`.
 
@@ -168,7 +207,9 @@ The Settings collapsible group lives in the shared sidebar `NAV` (`system/web/sr
 | Plugins | `/setting#plugins` |
 | Timezone | `/setting#timezone` |
 
-Monitor leaves serialize as the plain id, e.g. `/monitor#overview`, `/monitor#pairing`, `/monitor#system`, `/monitor#flow`. Defaults: `/monitor` with no/invalid hash → `overview`; `/setting` with no/invalid hash → `general` (URL normalized to `/setting#general`). Deep-links (e.g. `/setting#wifi`) and browser back/forward are honored via a `useLocation`-driven effect. Non-debug users only see the leaves in `PUBLIC_SECTIONS` (which includes Chat, Overview, **Pairing**, Info, Flow, Camera, Users, **Logs**, **CLI**, and the public Settings leaves General/Wi-Fi/My Voice/Face/MCP Tools/Plugins/Timezone); Bluetooth remains available by direct URL but is hidden from navigation. `?debug=true` reveals the rest (Sensing, Analytics, Servo, API Docs, Agent gateway, and the deeper Settings leaves AI Brain/Runtime/Language/Voice/Realtime/Channels/MQTT). Pressing `update` swaps the button for `updating…` immediately — the button never says "OK", which would read as "done" for a request that has only STARTED the install (and, for a component that finishes in seconds, arrived before the row could even show progress). Failures show the server's own reason (`rate-limited, retry in 8s`, `bootstrap unreachable`) rather than a bare "Failed". While an install runs, that row shows `updating…` in place of the button (an install takes tens of seconds — the component stops, is rebuilt and restarts — and a row that just sits there invites a second click, which is how a device once lost its HAL runtime). The `update` buttons in the Overview **Versions** card (Web / OS / HAL / Agent rows, plus Bootstrap and Device in debug) are gated the same way — regular viewers get no one-click OTA trigger. The top-bar **Debug** toggle beside the Dark/Light button toggles that query parameter while preserving the active route hash and any other query parameters; its amber state indicates that debug mode is enabled.
+Monitor leaves serialize as the plain id, e.g. `/monitor#overview`, `/monitor#pairing`, `/monitor#system`, `/monitor#flow`. Defaults: `/monitor` with no/invalid hash → `overview`; `/setting` with no/invalid hash → `general` (URL normalized to `/setting#general`). Deep-links (e.g. `/setting#wifi`) and browser back/forward are honored via a `useLocation`-driven effect. Non-debug users only see the leaves in `PUBLIC_SECTIONS` (which includes Chat, Overview, **Pairing**, Info, Flow, Camera, **Sensing**, Users, **Logs**, **CLI**, and the public Settings leaves General/Wi-Fi/My Voice/Face/MCP Tools/Plugins/Timezone); Bluetooth remains available by direct URL but is hidden from navigation. `?debug=true` reveals the rest (Analytics, Servo, API Docs, Agent gateway, and the deeper Settings leaves AI Brain/Runtime/Language/Voice/Realtime/Channels/MQTT). Pressing `update` swaps the button for `updating…` immediately — the button never says "OK", which would read as "done" for a request that has only STARTED the install (and, for a component that finishes in seconds, arrived before the row could even show progress). Failures show the server's own reason (`rate-limited, retry in 8s`, `bootstrap unreachable`) rather than a bare "Failed". While an install runs, that row shows `updating…` in place of the button (an install takes tens of seconds — the component stops, is rebuilt and restarts — and a row that just sits there invites a second click, which is how a device once lost its HAL runtime). The `update` buttons in the Overview **Versions** card (Web / OS / HAL / Agent rows, plus Bootstrap and Device in debug) are gated the same way — regular viewers get no one-click OTA trigger. The top-bar **Debug** toggle beside the Dark/Light button toggles that query parameter while preserving the active route hash and any other query parameters; its amber state indicates that debug mode is enabled.
+
+The Overview **Versions** card has a fifth action column with `restart` for OS Server and HAL, including outside debug mode. Each button calls the admin-protected `POST /api/system/restart/:target` (`os-server` or `hal`). The server schedules the restart after 2 seconds and returns HTTP 202. The button shows `queued` and disables repeat clicks for 15 seconds; this acknowledges scheduling, not service recovery. Existing monitor polling refreshes status/uptime after reconnection. Errors remain visible beside the button. Restart is disabled while the row is known to be updating; OTA activity is polled in normal mode too. Narrow cards scroll horizontally to keep all five columns accessible.
 
 **Speech attention gate** lives in the public **General** settings card, not the debug-only Realtime section. Its checkbox writes the top-level `wakeword` flag; saving restarts HAL so the change applies. When enabled, speech must follow an attention trigger: a spoken phrase, single click, turning toward the lamp while speaking, or an enrolled person entering view (`presence.enter`). A stranger-only enter does not open the voice gate unless the deployment sets `HAL_PRESENCE_WAKE_STRANGERS=true`. The card lists the currently accepted **spoken** phrases, including the active agent's exact current name and the permanent `autonomous` and device-type aliases; the system manages that list. Reload Settings after an agent rename to see the new name. When disabled, every utterance is handled without a trigger.
 
@@ -678,6 +719,39 @@ Chat UI → POST /api/sensing/event → SensingHandler
 
 ---
 
+### 5.8 Device → Sensing
+
+The Sensing navigation entry is available without debug mode when the device declares `vision` or `environment` in
+`GET /api/system/info` → `capabilities`. Camera sensing cards require `vision`.
+The read-only **Environment** card requires an explicit `environment`
+capability; it is hidden and sends no requests while capabilities are loading
+or when that capability is absent.
+
+While mounted, the environment card reads `GET /api/hardware/environment/status`
+every 3 seconds through the existing authenticated OS hardware reverse proxy to
+HAL `GET /environment/status`. This browser refresh interval is independent of
+HAL's configurable `poll_interval_s`; it does not change acquisition frequency.
+Browser reads do not trigger agent turns. The independent OS change worker
+and local agent status API are described in
+[Lamp environmental sensing](../robots/lamp/docs/environment-sensing.md#os-change-policy-and-agent-access).
+
+The card shows sensor state, sample timestamp, stale status, errors,
+and component-dependent measurements: temperature (°C), humidity (%), PM1 /
+PM2.5 / PM4 / PM10 (µg/m³), VOC index, NOx index, and SCD41 CO₂ (ppm).
+Source labels identify the component; each metric has its own timestamp.
+Unavailable components do not hide healthy readings from another component. Unavailable values appear as `—`, never
+zero. Stale measurements are also replaced with `—`; a request failure is shown
+as an error so previous readings cannot be mistaken for live data. No good/bad air
+quality labels, thresholds, or alerts are assigned. A collapsed technical
+section exposes each component's state, I2C bus, sensor status register, and HAL
+polling/retry/staleness/recovery timings under `status.components`. Legacy
+single-sensor snapshots with top-level `status.timing` remain supported.
+
+Lamp still ships with `environment` commented out in `ROBOT.md` and SEN55/SCD41
+disabled in their respective JSON configurations, so this card remains hidden until the capability is
+declared. See [Lamp environmental sensing](../robots/lamp/docs/environment-sensing.md)
+for wiring, enabling, and the HAL data contract.
+
 ## 6. LED Color API
 
 ### Problem
@@ -771,3 +845,14 @@ path instead — `make upload-hal` then `make promote-hal`, which versions the
 artifact and rolls it out.
 
 Harness final delivery records `harness_response` in flow JSONL with the original device run ID and complete `text`. Web Chat uses this event to recover pending results after SSE disconnects or page reloads. Live delivery still emits `chat_response` with state `final`.
+
+### Sensing component structure
+
+`monitor/SensingSection.tsx` only composes capability-gated sections. Components
+live under `monitor/sensing/`: one file per card, with shared `CardHeader`, types
+and formatters. `useVisionSensing` polls once for all vision cards;
+`useEnvironment` independently polls the shared environment snapshot. The `visionApi.ts` and
+`environmentApi.ts` clients own OS-server requests, response checks and errors;
+cards do not fetch directly. Both clients use the existing authenticated
+`/api/hardware/*` proxy. Vision HTTP/response failures show an error instead of
+leaving the loading placeholder or old readings on screen.

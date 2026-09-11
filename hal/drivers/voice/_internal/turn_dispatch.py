@@ -10,6 +10,7 @@ import logging
 from hal import config as hal_config
 from hal.drivers.voice._internal.realtime_turn import (
     ROUTE_NOISE_DROPPED,
+    ROUTE_HANDLED,
     should_drop_downstream_turn,
 )
 from hal.drivers.voice.speech_emotion.constants import UNKNOWN_USER_LABEL
@@ -230,6 +231,8 @@ def dispatch_turn(
             logger.info("Final message → OS server (%s): %r", event_type, final_msg)
 
         if rt.handled:
+            if rt.route == ROUTE_HANDLED and getattr(rt, "execution_completed", False):
+                voice_metrics.task_execution_finished(interaction_id)
             # Realtime already spoke — send as "voice_handled" to skip dead-air filler.
             # Include skill hint so OpenClaw reads input-branching and responds NO_REPLY.
             # [REPLY] is capped: it exists only so the main agent's memory knows

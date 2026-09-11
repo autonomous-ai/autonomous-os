@@ -345,6 +345,7 @@ tốc độ gửi đi trong `0.7–1.2`.
 | `chat.send` | Mở một turn của agent từ backend rồi stream ngược về (ack một run id, sau đó bắn `chat.event`) | `message` (bắt buộc), tuỳ chọn `images[]`/`files[]`/`session_id`/`speak` |
 | `skills.save` | Ghi một skill soạn sẵn vào thư mục skill của runtime đang chạy (đồng bộ) | `name`, `description`, `instructions` |
 | `skills.upload` | Cài một file `.md`, `.zip`, hoặc `.skill` vào runtime đang chạy (đồng bộ) | `filename`, `content_base64` |
+| `environment.status` | Đọc snapshot môi trường HAL theo capability, không phụ thuộc model cảm biến | _(không)_ |
 | `system.info` | Snapshot tổng hợp: versions + network + host | _(không)_ |
 | `system.version` | Chỉ versions các thành phần (rẻ hơn `system.info`) | _(không)_ |
 | `system.network` | Chỉ thông tin mạng của interface đang giữ default route | _(không)_ |
@@ -357,6 +358,46 @@ lệnh dùng chung single-flight guard của os-server: khi đã có power actio
 chờ, thiết bị publish thêm phản hồi cuối `status:"failure"` kèm lý do. Lệnh gọi
 action đầy đủ của HAL, không chạy lệnh OS trần: reboot phát cue; shutdown phát
 cue và release servo.
+
+Request/reply này không tạo event cho agent. Worker OS riêng xử lý thay đổi
+kéo dài; xem [cảm biến môi trường Lamp](../../robots/lamp/docs/vi/environment-sensing_vi.md#chính-sách-thay-đổi-của-os-và-api-cho-agent).
+
+Snapshot chung có thể kết hợp SEN55 và SCD41 mà không thêm MQTT kind. SCD41
+chỉ đóng góp `sample.co2_ppm`; `components` giữ status/lỗi/timing/sample riêng,
+`sources` ánh xạ chỉ số đến component, `metric_timestamps` chứa thời điểm đo
+của từng chỉ số. Nhóm `ready` nghĩa là ít nhất một số đo còn mới; `partial`
+báo component đang bật nhưng không khả dụng. Kiểm tra từng nguồn, không dùng
+timestamp mới nhất của nhóm làm tuổi mọi chỉ số. Một sensor lỗi không loại
+số đo còn tốt. SCD41 tắt/thiếu không tạo CO₂ suy diễn.
+
+**`environment.status`:** gửi trên `fa_channel`:
+
+```json
+{"cmd":"data","kind":"environment.status","data":{}}
+```
+
+OS kiểm tra device có khai báo capability `environment`, không kiểm tra SEN55
+hay model phần cứng. Sau đó đọc HAL local `GET /environment/status` với timeout
+5 giây và trả nguyên snapshot JSON trong `data` trên `fd_channel`. Phản hồi dùng
+`MQTTDataResponse` chuẩn; ví dụ dưới lược bỏ metadata device/version/id/mac/time:
+
+```json
+{"type":"data","kind":"environment.status","status":"success","data":{"enabled":false,"bus":null,"state":"disabled","last_error":null,"sample":null,"age_s":null,"stale":true}}
+```
+
+Snapshot có thể kèm `timing` và các trường do HAL cung cấp. `success` nghĩa là
+đọc được snapshot hợp lệ, kể cả sensor đang tắt, lỗi hoặc dữ liệu cũ. Client phải
+kiểm tra `data.state`, `data.stale`, `data.sample` và `data.last_error` trước khi
+hiển thị số đo. Thiếu capability trả:
+
+```json
+{"type":"data","kind":"environment.status","status":"failure","error":"environment capability not declared"}
+```
+
+Lỗi kết nối HAL, HTTP khác 200 hoặc status JSON không hợp lệ cũng trả `failure`
+kèm `error`. Chỉ trả khi có request, không có subscription, stream liên tục,
+event hay gọi agent. Response giữ cùng `kind`; protocol hiện tại không thêm
+request ID. Mobile dùng broker credentials và topic ACL hiện có của device.
 
 **Phản hồi `system.info`:** đồng bộ (không có trạng thái `starting` trung gian); mỗi
 probe lỗi sẽ rơi về zero value của nó.
