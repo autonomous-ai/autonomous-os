@@ -15,6 +15,11 @@ import time
 from collections import Counter
 
 
+TASK_START_EVENTS = {group: f"{group}_metrics_task_started"
+                     for group in ("voice", "chat", "sensing")}
+SYNTHETIC_PREFIXES = ("vi-smoke-", "chat-smoke-", "sensing-smoke-")
+
+
 LOSS_COUNTERS = ("hal_dropped_total", "hal_failed_total", "telemetry_dropped_total",
                  "telemetry_failed_total", "unknown_owner_playbacks")
 
@@ -85,7 +90,14 @@ def normalize(row, default_device=None):
             "event_id": row.get("event_id", params.get("event_id", ""))}
 
 
-def report(rows, now_ms, settle_seconds=0, default_device=None, include_synthetic=False):
+def report(rows, now_ms, settle_seconds=0, default_device=None, include_synthetic=False,
+           group="voice"):
+    if group not in TASK_START_EVENTS:
+        raise ValueError(f"unsupported task group: {group}")
+    start_event = TASK_START_EVENTS[group]
+    cohort_events = {start_event, "voice_metrics_task_execution"}
+    if group == "voice":
+        cohort_events.add("voice_metrics_interaction")
     interactions = {}
     executions = []
     starts = {}
@@ -126,10 +138,10 @@ def report(rows, now_ms, settle_seconds=0, default_device=None, include_syntheti
         device_losses = losses.setdefault(device, Counter())
         for field in LOSS_COUNTERS:
             device_losses[field] = max(device_losses[field], params.get(field) or 0)
-        if event["event_name"] not in ("voice_metrics_interaction", "voice_metrics_task_started", "voice_metrics_task_execution"):
+        if event["event_name"] not in cohort_events:
             continue
         interaction_id = params.get("interaction_id")
-        if not include_synthetic and str(interaction_id or "").startswith("vi-smoke-"):
+        if not include_synthetic and str(interaction_id or "").startswith(SYNTHETIC_PREFIXES):
             coverage["synthetic_events_excluded"] += 1
             continue
         if event["event_name"] == "voice_metrics_task_execution":
@@ -143,7 +155,7 @@ def report(rows, now_ms, settle_seconds=0, default_device=None, include_syntheti
             coverage["missing_interaction_id_events"] += 1
             continue
         key = (device, str(interaction_id))
-        if event["event_name"] == "voice_metrics_task_started":
+        if event["event_name"] == start_event:
             if str(params.get("schema_version")) != "1":
                 continue
             if params.get("task_started_at_ms") is None:
@@ -202,9 +214,9 @@ def report(rows, now_ms, settle_seconds=0, default_device=None, include_syntheti
     for index, record in enumerate(records):
         groups.setdefault(root(index), []).append(record)
     cohort = []
-    for group in groups.values():
-        device = group[0][0]
-        turns = [turn for _, turn in group]
+    for records_group in groups.values():
+        device = records_group[0][0]
+        turns = [turn for _, turn in records_group]
         # Preserve realtime evidence restrictions even when an OS memory-sync
         # request shares its run. Otherwise prefer a proven accepted task.
         turn = dict(max(turns, key=lambda item: (
@@ -291,6 +303,7 @@ def report(rows, now_ms, settle_seconds=0, default_device=None, include_syntheti
             result.setdefault(key, 0)
         denominator = result["eligible_mature_turns"]
         result["kpi3_pct"] = result["completed_turns"] * 100 / denominator if denominator else None
+        result["completion_pct"] = result["kpi3_pct"]
         result["target_pct"] = 85
         result["meets_target"] = result["completed_turns"] * 100 >= denominator * 85 if denominator else None
         return result
@@ -300,7 +313,7 @@ def report(rows, now_ms, settle_seconds=0, default_device=None, include_syntheti
         devices.setdefault(device, Counter()).update(counters)
     for counts in devices.values():
         aggregate.update(counts)
-    return {"now_ms": now_ms, "settle_seconds": settle_seconds,
+    return {"group": group, "now_ms": now_ms, "settle_seconds": settle_seconds,
             "definition": "Execution finished without observed terminal errors; semantic correctness is not assessed.",
             "aggregate": summarize(aggregate),
             "devices": {key: summarize(value) for key, value in sorted(devices.items())},
@@ -326,6 +339,8 @@ def read_rows(filenames):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("files", nargs="*", help="JSONL exports (stdin when omitted)")
+    parser.add_argument("--group", choices=tuple(TASK_START_EVENTS), default="voice",
+                        help="Task cohort to report (default: voice)")
     parser.add_argument("--device", help="Fallback identity for rows without a device/hostname")
     parser.add_argument("--now-ms", type=int, default=int(time.time() * 1000))
     parser.add_argument("--settle-seconds", type=int, default=0)
@@ -335,7 +350,7 @@ def main():
         parser.error("--settle-seconds must be nonnegative")
     try:
         result = report(read_rows(args.files), args.now_ms, args.settle_seconds,
-                        args.device, args.include_synthetic)
+                        args.device, args.include_synthetic, args.group)
     except (OSError, ValueError) as error:
         parser.error(str(error))
     print(json.dumps(result, indent=2, sort_keys=True))

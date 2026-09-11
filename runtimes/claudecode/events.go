@@ -12,6 +12,7 @@ import (
 	"go.autonomous.ai/os/system/lib/sensingmsg"
 	"go.autonomous.ai/os/system/lib/speakergate"
 	"go.autonomous.ai/os/system/skillcontext/mood"
+	"go.autonomous.ai/os/system/telemetry"
 )
 
 // pendingEvent is a sensing event buffered while the agent was busy.
@@ -239,6 +240,12 @@ func (s *ClaudeCodeService) drainPendingEvents() {
 			s.MarkSilentRun(runID)
 		}
 
+		if telemetry.TaskGroup(ev.eventType) == "sensing" {
+			// Keep this cohort stable if the socket disappears before dispatch.
+			ev.fixedRunID = runID
+			events[i] = ev
+			telemetry.ReportTaskStarted(ev.eventType, "", runID)
+		}
 		var err error
 		if len(ev.images) > 0 {
 			_, err = s.SendChatMessageWithImagesAndRun(msg, ev.images, reqID, runID)
@@ -253,6 +260,9 @@ func (s *ClaudeCodeService) drainPendingEvents() {
 				s.pendingEventsMu.Unlock()
 				flow.End("sensing_input", turnStart, map[string]any{"deferred": "disconnected before send"}, runID)
 				return
+			}
+			if telemetry.TaskGroup(ev.eventType) != "" {
+				telemetry.ReportTaskExecution(runID, "", "failed", "dispatch_error")
 			}
 			slog.Error("failed to replay pending event", "component", "sensing", "type", ev.eventType, "error", err)
 			flow.End("sensing_input", turnStart, map[string]any{"error": err.Error()}, runID)

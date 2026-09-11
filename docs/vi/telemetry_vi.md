@@ -152,6 +152,8 @@ kỳ và memory-sync `voice_agent_handled` không tạo lượt mới. Horizon b
 định 0 giây: lượt eligible chưa xong vẫn ở mẫu số. “Completed” nghĩa là đã chạy xong, không đánh giá đúng yêu cầu hay phát
 hết audio. Xem [runbook query/report KPI-3 cho agent](voice-metrics_vi.md#runbook-cho-agent-query-và-report-kpi-3).
 
-Với `voice_metrics_*`, INFO `[telemetry] delivered` xác nhận HTTP gửi AA thành
+Chat phát `chat_metrics_task_started` ngay khi nhận (kể cả queue); sensing phát `sensing_metrics_task_started` chỉ khi được chọn dispatch tác vụ, sau quyết định suppression/queue. Cả hai dùng chung `voice_metrics_task_execution` cho terminal evidence và join trong cohort được chọn. MQTT `speak: true` vẫn là voice. Xem [runbook query và report AA chat/sensing](task-metrics_vi.md) để biết eligibility, evidence dùng chung và lệnh `--group chat|sensing`.
+
+Với `voice_metrics_*`, `chat_metrics_*`, `sensing_metrics_*`, INFO `[telemetry] delivered` xác nhận HTTP gửi AA thành
 công, chưa chứng minh query thấy row trong warehouse. Cần query/export bằng
 quyền đọc để xác minh; key ingestion không tự cấp quyền đọc.

@@ -258,6 +258,8 @@ something the boundary had to suppress.
 
 ## KPI-3: execution completion, not correctness
 
+Chat and sensing have separate completion cohorts; see the [chat/sensing AA query runbook](task-metrics.md). This page scores voice (`--group voice`, the reporter default). The shared `voice_metrics_task_execution` event also carries non-voice terminals; only evidence joined to a voice cohort counts here. Reports expose `completion_pct` as an alias of `kpi3_pct` and include `group`.
+
 “Successfully complete” means **the task finished executing without observed terminal execution errors**. An agent may
 finish with an incorrect answer or an ineffective action and still meet this
 execution metric. It does not assess user satisfaction, tool-result correctness,
