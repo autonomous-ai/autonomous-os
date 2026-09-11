@@ -572,6 +572,14 @@ cách nhau 5 giây). Hết lượt probe sẽ báo cập nhật thất bại dù
 process còn active. Package/state không tự rollback khi migration hoặc
 kiểm tra readiness thất bại.
 
+`software-update hermes` thủ công kiểm tra Node trước khi chạy `hermes update`.
+Dải phiên bản dùng để build theo installer upstream Hermes: Node 22.22+ trong
+nhánh 22.x, 24.11+ trong nhánh 24.x, hoặc bản stable 26+. Nếu chưa tương thích,
+updater dùng chung helper với OpenClaw để nâng Node hệ thống lên nhánh 24.x,
+rồi kiểm tra lại. Lỗi kiểm tra hoặc nâng Node sẽ dừng trước `hermes update`.
+Lệnh update của Hermes chọn npm sẵn có và cập nhật dependencies; nó không
+chạy bước cài Node của installer.
+
 **Vì sao CLI của agent gate theo `agent_runtime` chứ không theo binary:**
 `scripts/imager/build-orangepi.sh` bake CLI của MỌI agent lên mọi image lamp /
 intern-v2 bất kể `DEFAULT_AGENT`, nên `inPath("codex")` vẫn đúng trên máy đang
