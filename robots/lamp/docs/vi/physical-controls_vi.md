@@ -75,7 +75,8 @@ sau khi tiếp điểm ổn định. Watchdog chỉ đồng bộ lại khi GPIO 
 bằng phần mềm khi công tắc đứng yên. Intern v2 không có JSON mic, giữ fallback
 chip 0 / line 97 cũ trong code. Lamp thiếu JSON này vẫn tắt mic switch. Cần giữ
 JSON nút chính của Lamp để fallback pin 11 cũ không trùng công tắc này.
-Cấu hình mic Lamp đã sẵn sàng trong repo, chưa deploy để live test.
+Cấu hình mic Lamp đã deploy ngày 2026-09-11; startup xác nhận chip1/line9 ready
+và LOW ban đầu áp dụng mute. Chờ live test thao tác gạt.
 
 ## Bảng cử chỉ
 
@@ -315,7 +316,7 @@ chờ này. Contact giữ từ lúc boot vẫn bị bỏ qua. Log ghi hướng, 
 kết quả swipe và thực thi action. Test phát lại chuỗi mask đã đo cùng các ca
 cử chỉ/vòng đời giả lập. Runtime và JSON swipe đã deploy lên Lamp `lamp-0c4e`
 ngày 2026-09-11; startup xác nhận MPR121 ready với trục cấu hình, GPIO và TTP223
-ready, mic switch Lamp vẫn tắt. Chờ live test cử chỉ.
+ready, mic switch Lamp ready trên chip1/line9 sau khi cài JSON. Chờ live test cử chỉ.
 
 Event `hold_tier` đã debounce truyền vào cùng `HoldLEDFeedback` với GPIO,
 dùng chung `BUTTON_LED_PRESETS`, xử lý nháy, dọn phản hồi khi nhả và phản hồi

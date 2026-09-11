@@ -80,7 +80,8 @@ levels so software mute is preserved while the switch stays still. Intern v2
 has no mic JSON and keeps its original chip 0 / line 97 code fallback. Lamp
 without this JSON remains disabled. Keep Lamp's primary-button JSON installed
 to avoid its legacy pin 11 fallback overlapping this switch. The Lamp mic
-configuration is ready in the repo but has not yet been deployed for live testing.
+configuration was deployed on 2026-09-11; startup confirmed chip1/line9 ready
+and initial LOW applied mute. Live toggle testing is pending.
 
 ## Gesture map
 
@@ -324,7 +325,8 @@ Logs record swipe direction, displacement and verdict alongside action dispatch.
 Tests replay measured mask sequences plus synthetic gesture/lifecycle cases;
 the runtime and swipe JSON were deployed to Lamp `lamp-0c4e` on 2026-09-11.
 Startup confirmed MPR121 ready with the configured axis, GPIO buttons and TTP223
-ready, and the Lamp mic switch disabled. Live gesture testing is pending.
+ready, and the Lamp mic switch ready on chip1/line9 after its JSON was installed.
+Live gesture testing is pending.
 
 Debounced `hold_tier` events feed the same `HoldLEDFeedback` component as
 GPIO, sharing `BUTTON_LED_PRESETS`, blinking, release cleanup and final action

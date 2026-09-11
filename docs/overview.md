@@ -92,7 +92,8 @@ edges. The watchdog reconciles only when the pin changed, preserving software
 mute changes while the switch stays still. Restart HAL to apply JSON changes;
 simulation skips this hardware input. Keep Lamp's GPIO button JSON installed:
 its legacy primary-button fallback also uses pin 11, while the device JSON
-moves the primary button to pin 37. The Lamp mic JSON has not yet been deployed.
+moves the primary button to pin 37. Lamp startup with this mic JSON was verified on 2026-09-11: chip1/line9
+was ready and the initial LOW position applied mute. Live toggle testing is pending.
 
 TTP223 touch wiring is device-owned in `robots/lamp/ttp223.json`. Intern v2
 has no TTP223 hardware and does not ship this file. `hal/board/ttp223.py` resolves the detected

@@ -89,7 +89,8 @@ và sau khi cạnh tín hiệu ổn định. Watchdog chỉ đồng bộ lại k
 giữ các thay đổi mute bằng phần mềm khi công tắc đứng yên. Restart HAL để
 áp dụng JSON mới; simulation bỏ qua input phần cứng này. Cần giữ JSON nút GPIO
 của Lamp vì fallback nút chính cũ cũng dùng pin 11, còn JSON device chuyển nút
-chính sang pin 37. JSON mic mới của Lamp chưa được deploy.
+chính sang pin 37. Đã xác minh startup với JSON mic Lamp ngày 2026-09-11: chip1/line9 ready,
+vị trí LOW ban đầu áp dụng mute. Chờ live test thao tác gạt.
 
 Wiring TTP223 do device quản lý trong `robots/lamp/ttp223.json`. Intern v2
 không có phần cứng TTP223 nên không kèm file này. `hal/board/ttp223.py` chọn `chip`, `lines` và
