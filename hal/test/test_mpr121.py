@@ -96,6 +96,63 @@ class TestMPR121(unittest.TestCase):
     def make_handler(self, **kwargs):
         return MPR121Handler(MPR121Config(bus=5, **kwargs))
 
+    def test_hold_feedback_follows_debounced_tiers_until_release(self):
+        handler = self.make_handler()
+        handler._hold_led = feedback = mock.Mock()
+        for sample in [(False, 0), (True, 1), (True, 1.04),
+                       (True, 2.999), (True, 3), (True, 6), (True, 11)]:
+            handler._process_touch(*sample)
+        self.assertEqual(feedback.set_tier.call_args_list,
+                         [mock.call(1), mock.call(2), mock.call(3)])
+        feedback.commit.assert_not_called()
+        feedback.release.reset_mock()
+        handler._process_touch(False, 11.1)
+        feedback.release.assert_not_called()
+        handler._process_touch(False, 11.14)
+        feedback.release.assert_called_once_with()
+        feedback.commit.assert_not_called()
+
+    def test_boot_held_and_chatter_do_not_arm_feedback(self):
+        handler = self.make_handler()
+        handler._hold_led = feedback = mock.Mock()
+        for sample in [(True, 0), (True, 12), (False, 13), (False, 13.04),
+                       (True, 14), (False, 14.01), (False, 20)]:
+            handler._process_touch(*sample)
+        feedback.set_tier.assert_not_called()
+        feedback.commit.assert_not_called()
+
+    def test_feedback_commits_before_shared_hold_action(self):
+        handler = self.make_handler()
+        handler._hold_led = feedback = mock.Mock()
+        calls = mock.Mock()
+        calls.attach_mock(feedback.commit, 'led')
+        with mock.patch('hal.drivers.mpr121.hold_release_action') as hold:
+            calls.attach_mock(hold, 'action')
+            handler._execute(_GestureEvent('hold', 1, held_s=5))
+        self.assertEqual(calls.mock_calls,
+                         [mock.call.led(5), mock.call.action(5, source='MPR121')])
+
+    def test_cancelled_feedback_commit_does_not_start_hold_action(self):
+        handler = self.make_handler()
+        handler._hold_led = mock.Mock()
+        handler._hold_led.commit.return_value = False
+        with mock.patch('hal.drivers.mpr121.hold_release_action') as hold:
+            handler._execute(_GestureEvent('hold', 1, held_s=10))
+        hold.assert_not_called()
+
+    def test_stop_and_poll_fault_stop_feedback(self):
+        for fault in (False, True):
+            with self.subTest(fault=fault):
+                handler = self.make_handler(poll_ms=1)
+                handler._hold_led = feedback = mock.Mock()
+                if fault:
+                    with mock.patch.object(handler, '_read_touched', side_effect=OSError('disconnected')), \
+                            self.assertLogs('hal.drivers.mpr121', level='ERROR'):
+                        handler._poll()
+                else:
+                    handler.stop()
+                feedback.stop.assert_called()
+
     def test_register_initialization(self):
         handler = self.make_handler()
         handler._bus = bus = mock.Mock()
@@ -171,6 +228,7 @@ class TestMPR121(unittest.TestCase):
 
     def test_semantic_actions_call_shared_functions(self):
         handler = self.make_handler()
+        handler._hold_led = mock.Mock()
         with mock.patch('hal.drivers.mpr121.single_click_action') as single, \
                 mock.patch('hal.drivers.mpr121.announce_listening_cue') as cue, \
                 mock.patch('hal.drivers.mpr121.triple_click_action') as triple, \
@@ -245,6 +303,7 @@ class TestMPR121(unittest.TestCase):
         for kind in ('hold', 'triple'):
             with self.subTest(kind=kind):
                 handler = self.make_handler()
+                handler._hold_led = feedback = mock.Mock()
                 handler._action_busy = True
                 handler._detector = mock.Mock()
                 handler._detector.update.return_value = [_GestureEvent(kind, 1, held_s=10)]
@@ -252,6 +311,7 @@ class TestMPR121(unittest.TestCase):
                     handler._process_touch(False, 10)
                 self.assertTrue(handler._pending.empty())
                 self.assertIn('reason=action_worker_busy', logs.output[0])
+                feedback.commit.assert_not_called()
 
     def test_new_touch_invalidates_pending_destructive_outcome(self):
         handler = self.make_handler()

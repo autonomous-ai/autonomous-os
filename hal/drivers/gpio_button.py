@@ -28,14 +28,9 @@ import logging
 import threading
 import time
 
-import hal.app_state as state
-from hal.presets import (
-    BUTTON_LED_PRESETS,
-    RGB_CMD_SOLID,
-)
 from hal.board.gpio_button import ButtonConfig
-from hal.drivers.base import Priority
 from hal.drivers.button_actions import (
+    HoldLEDFeedback,
     DOUBLE_CLICK_WINDOW,
     FACTORY_RESET_DURATION,
     LONG_PRESS_DURATION,
@@ -47,26 +42,6 @@ from hal.drivers.button_actions import (
 )
 
 logger = logging.getLogger(__name__)
-
-# LED feedback during hold (Tier B design from the factory-reset discussion).
-# Purple blink at 2–5s tells the user sleepy is armed. Red blink at 5–10s
-# tells them shutdown is armed. Red solid at 10s+ means factory-reset.
-# Both dispatch at HIGH priority so they preempt the current emotion LED.
-# The purple comes from sleepy's previous display preset.
-# The three warn colors live in hal/presets.py (BUTTON_LED_PRESETS) alongside
-# the other LED presets, so a device can restyle them via presets.json — this
-# file owns the staging (when to blink, when to go solid), not the look. Read
-# them through _warn_color() at call time: the overlay merges the table in
-# place at boot, so a name imported once would keep the pre-override value.
-LED_OFF = (0, 0, 0)
-
-
-def _warn_color(tier: str):
-    """Current color for a button hold tier, read from the (possibly
-    device-overridden) preset table at call time."""
-    return tuple(BUTTON_LED_PRESETS[tier]["color"])
-# Blink: 0.25 s on + 0.25 s off = 2 Hz full cycle.
-LED_BLINK_HALF_PERIOD_S = 0.25
 
 class GPIOButtonHandler:
     def __init__(self, config: ButtonConfig):
@@ -83,59 +58,37 @@ class GPIOButtonHandler:
         # (per-watcher stop) so the previous watcher exits cleanly without
         # racing the new one. None when no hold is active.
         self._hold_watcher_stop = None
+        self._hold_lock = threading.Lock()
+        self._hold_led = HoldLEDFeedback()
         self._chip = config.chip
         self._pin = config.line
         self._debounce_ns = config.debounce_ns
         self._last_press_tick = 0
         self._last_release_tick = 0
 
-    def _dispatch_led(self, color):
-        """Push a solid color to RGB service at HIGH priority so it preempts
-        the current emotion LED. Silent no-op when RGB service unavailable
-        (dev machines, hardware issues — button still works)."""
-        rgb = state.rgb_service
-        if rgb is None:
-            return
-        try:
-            state._stop_current_effect()
-            rgb.dispatch(RGB_CMD_SOLID, color, priority=Priority.HIGH)
-        except Exception as e:
-            logger.warning("LED dispatch failed: %s", e)
-
     def _hold_watcher(self, stop_event):
-        """Poll hold duration and update LED at threshold crossings. One
-        watcher thread per press — release sets stop_event and a new press
-        starts a fresh watcher with a new Event so the two never race."""
-        last_stage = -1
-        blink_on = False
+        """Report hold tiers; shared feedback owns all LED animation."""
+        last_stage = 0
         while not stop_event.is_set():
-            held = time.monotonic() - self._press_start
-            if held >= FACTORY_RESET_DURATION:
-                stage = 3  # red solid — armed for factory-reset
-            elif held >= LONG_PRESS_DURATION:
-                stage = 2  # red blink 2 Hz — armed for shutdown
-            elif held >= SLEEP_HOLD_DURATION:
-                stage = 1  # purple blink 2 Hz — armed for sleepy
-            else:
-                stage = 0  # quiet — short tap
-
-            # Stage 3 entry: set red solid once (no blink). Subsequent loops
-            # leave it alone so the LED doesn't flicker.
-            if stage != last_stage and stage == 3:
-                self._dispatch_led(_warn_color("factory_reset"))
-            last_stage = stage
-
-            if stage in (1, 2):
-                # Half-period toggle gives a 2 Hz blink (0.25 s on, 0.25 s off).
-                blink_on = not blink_on
-                color = _warn_color("sleep_warn" if stage == 1 else "shutdown_warn")
-                self._dispatch_led(color if blink_on else LED_OFF)
-                wait = LED_BLINK_HALF_PERIOD_S
-            else:
-                wait = 0.1
-
-            if stop_event.wait(timeout=wait):
+            with self._hold_lock:
+                if stop_event.is_set() or self._hold_watcher_stop is not stop_event:
+                    return
+                held = time.monotonic() - self._press_start
+                stage = (3 if held >= FACTORY_RESET_DURATION else
+                         2 if held >= LONG_PRESS_DURATION else
+                         1 if held >= SLEEP_HOLD_DURATION else 0)
+                if stage != last_stage:
+                    self._hold_led.set_tier(stage)
+                    last_stage = stage
+            if stop_event.wait(timeout=0.1):
                 return
+
+    def _run_hold_action(self, held):
+        if self._hold_led.commit(held) is False:
+            return
+        action = "factory-reset" if held >= FACTORY_RESET_DURATION else "shutdown" if held >= LONG_PRESS_DURATION else "sleepy"
+        logger.info("GPIO button hold %.1fs -- %s", held, action)
+        hold_release_action(held, source="GPIO button")
 
     def start(self):
         import lgpio
@@ -175,14 +128,14 @@ class GPIOButtonHandler:
             # so the user can always cancel by releasing before the next
             # threshold (or escalate from shutdown → factory-reset by
             # holding past 10s). LED feedback runs in a watcher thread.
-            self._press_start = time.monotonic()
-            self._pressed = True
-            # Signal any leftover watcher (shouldn't exist due to release
-            # cleanup, defensive) then start a fresh one with a new Event.
-            if self._hold_watcher_stop is not None:
-                self._hold_watcher_stop.set()
-            new_stop = threading.Event()
-            self._hold_watcher_stop = new_stop
+            with self._hold_lock:
+                self._press_start = time.monotonic()
+                self._pressed = True
+                if self._hold_watcher_stop is not None:
+                    self._hold_watcher_stop.set()
+                self._hold_led.release()
+                new_stop = threading.Event()
+                self._hold_watcher_stop = new_stop
             threading.Thread(
                 target=self._hold_watcher,
                 args=(new_stop,),
@@ -199,13 +152,12 @@ class GPIOButtonHandler:
             logger.warning("GPIO button release without matching press -- ignoring")
             return
         self._pressed = False
-        # Stop LED watcher. Watcher exits within its current sleep (< 0.5 s).
-        # LED stays at whatever colour it last dispatched — destructive
-        # branches below reaffirm with a solid colour so it doesn't freeze
-        # mid-blink.
-        if self._hold_watcher_stop is not None:
-            self._hold_watcher_stop.set()
-            self._hold_watcher_stop = None
+        # Cancel blinking without blocking the GPIO callback on RGB I/O.
+        with self._hold_lock:
+            if self._hold_watcher_stop is not None:
+                self._hold_watcher_stop.set()
+                self._hold_watcher_stop = None
+            self._hold_led.release()
 
         held = time.monotonic() - self._press_start
         if held >= SLEEP_HOLD_DURATION:
@@ -213,27 +165,14 @@ class GPIOButtonHandler:
             if self._click_timer:
                 self._click_timer.cancel()
                 self._click_timer = None
-            if held >= FACTORY_RESET_DURATION:
-                logger.info("GPIO button hold %.1fs -- factory-reset", held)
-                # Lock the LED at red solid until reboot kills us. Watcher already
-                # set it but reaffirm (idempotent at HIGH priority).
-                self._dispatch_led(_warn_color("factory_reset"))
-            elif held >= LONG_PRESS_DURATION:
-                logger.info("GPIO button hold %.1fs -- shutdown", held)
-                # Freeze LED at red solid (was blinking). Confirms the gesture
-                # committed to shutdown, stays on through the 5 s TTS announce.
-                self._dispatch_led(_warn_color("shutdown_warn"))
-            else:
-                logger.info("GPIO button hold %.1fs -- sleepy", held)
 
             # Edge handling only supplies the released-duration signal. The
             # action library owns which semantic action that duration selects.
             # It may wait for a cue or release servos, so keep the GPIO callback
             # short and never block subsequent hardware edges.
             threading.Thread(
-                target=hold_release_action,
+                target=self._run_hold_action,
                 args=(held,),
-                kwargs={"source": "GPIO button"},
                 daemon=True,
                 name="gpio-button-hold-action",
             ).start()

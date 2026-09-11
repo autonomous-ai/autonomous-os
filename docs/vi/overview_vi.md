@@ -93,9 +93,12 @@ nhả đã debounce. Ngưỡng cử chỉ dùng chung GPIO trong
 `hal/drivers/button_gestures.py`: lần nhả ngắn đầu tiên gọi single-click ngay
 với `announce=False`; sau 0.4 s yên, 1/2/4+ click phát cue nghe, đúng 3 click
 thì reboot. Giữ chỉ thực hiện khi nhả: 2–<5 s sleepy, 5–<10 s shutdown,
-≥10 s factory reset. Chạm giữ lúc startup bị bỏ qua; MPR121 chưa có LED theo
-mức giữ. Mapping click/giữ mới chỉ kiểm tra bằng test mock local; lần test
-trên device trước đó chỉ kiểm tra single-click. Mặc định:
+≥10 s factory reset. Khi giữ, event mức giữ đã debounce dùng cùng `HoldLEDFeedback`
+trong `hal/drivers/button_actions.py` và `BUTTON_LED_PRESETS` với GPIO: tím nháy 2 Hz ở 2–<5 s, đỏ nháy 2 Hz ở
+5–<10 s và đỏ đứng từ 10 s. Nhả thì dừng nháy; action shutdown/reset được
+chấp nhận đặt lại đỏ đứng trước khi chạy. Chạm giữ lúc startup không hiện
+phản hồi; stop hoặc lỗi phần cứng hủy phản hồi. LED được kiểm tra bằng test
+mock local, chưa kiểm tra trên device thật. Mặc định:
 địa chỉ `0x5A`, electrode 0–11, ngưỡng chạm/nhả 2/1, bật autoconfig,
 polling 10 ms và debounce 30 ms, chờ ổn định 100 ms lúc startup. Lỗi I²C hoặc
 cờ quá dòng chỉ dừng driver này. Logger `hal.drivers.mpr121` ghi cấu hình,
