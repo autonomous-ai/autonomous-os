@@ -11,6 +11,7 @@ import time
 
 import hal.app_state as state
 from hal.board.privacy_button import PrivacyButtonConfig
+from hal import privacy
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +89,10 @@ class PrivacyButtonHandler:
             initial_level = lgpio.gpio_read(self._handle, self._config.line)
         except Exception as e:
             logger.warning("Mic switch initial read failed: %s", e)
-            initial_level = 1 - self._config.muted_level  # default to unmuted if read fails
+            # Extended privacy fails closed; preserve legacy microphone fallback.
+            initial_level = (self._config.muted_level if (
+                self._config.disable_camera_on_mute or self._config.mute_speaker_on_mute
+            ) else 1 - self._config.muted_level)
 
         logger.info(
             "Mic mute switch ready on gpiochip%d line %d (initial level=%d, settle %d ms, watchdog %ds)",
@@ -288,7 +292,14 @@ class PrivacyButtonHandler:
         # still needs to advertise "HW-locked" to the web.
         state._hw_mic_switch_muted = muted
 
+        extended = self._config and (
+            self._config.disable_camera_on_mute or self._config.mute_speaker_on_mute
+        )
+        if extended and muted:
+            privacy.apply(True, self._config)
         if state._mic_muted == muted:
+            if extended and not muted:
+                privacy.apply(False, self._config)
             return
 
         from hal.routes.voice import mute_mic, stop_tts
@@ -328,7 +339,19 @@ class PrivacyButtonHandler:
                 from hal.drivers.button_actions import single_click_action
 
                 t_sca = time.monotonic()
-                single_click_action("mic-switch")
+                if extended:
+                    # Wake while the peripheral gates remain closed, then restore
+                    # the user's camera/speaker preferences before playing the cue.
+                    try:
+                        single_click_action("privacy-switch", announce=False, chime=False,
+                                            unmute_output=False)
+                    finally:
+                        privacy.apply(False, self._config)
+                    from hal.drivers.button_actions import play_ack_chime, announce_listening_cue
+                    play_ack_chime("privacy-switch")
+                    announce_listening_cue("privacy-switch")
+                else:
+                    single_click_action("mic-switch")
                 logger.info("[mic-switch-trace] unmute step2 single_click_action done +%.0fms (cumul=%.0fms)", (time.monotonic() - t_sca) * 1000, (time.monotonic() - t0) * 1000)
                 # After unmute the natural resting look is warm-white
                 # ambient because _user_led_state is None on fresh boots —

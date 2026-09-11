@@ -859,9 +859,9 @@ class TTSService:
         Lazy import avoids an app_state import cycle (app_state holds the
         TTSService instance)."""
         try:
-            from hal import app_state
+            from hal import app_state, privacy
 
-            return app_state._speaker_muted
+            return app_state._speaker_muted or privacy.speaker_muted
         except Exception:
             return False
 

@@ -178,10 +178,11 @@ class Backchannel:
     def _play(self, text: str, session_epoch: int) -> None:
         """Play a short TTS cue directly, bypassing tts_service.speak()."""
         import hal.app_state as _state
+        from hal import privacy
         if not self._session_is_current(session_epoch):
             logger.info("Backchannel skipped: originating STT session ended before playback")
             return
-        if _state._speaker_muted:
+        if _state._speaker_muted or privacy.speaker_muted:
             return
         tts = self._tts
         if tts is None or tts._backend is None or not tts._backend.available or tts._sd is None:
@@ -233,6 +234,8 @@ class Backchannel:
                             "Backchannel skipped: originating STT session ended while "
                             "waiting for TTS output"
                         )
+                        return
+                    if _state._speaker_muted or privacy.speaker_muted:
                         return
                     stream = tts._ensure_stream(dst_rate)
                     stream.write(samples_2d)

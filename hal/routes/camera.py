@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 import hal.app_state as state
+from hal import privacy
 from hal.models import CameraInfoResponse, CameraZoomRequest, StatusResponse
 from hal.config import CAMERA_WIDTH, CAMERA_HEIGHT
 
@@ -62,10 +63,16 @@ def set_camera_zoom(req: CameraZoomRequest):
 
 
 @router.post("/camera/disable", response_model=StatusResponse)
+@privacy.serialized
 def disable_camera():
     """Stop the camera capture loop (manual). Sets manual override."""
     if not state.camera_capture:
         raise HTTPException(503, "Camera not available")
+    if privacy.camera_muted:
+        privacy.camera_before = True
+        state._camera_manual_override = True
+        state._persist_camera_state()
+        return {"status": "already_disabled"}
     if state._camera_disabled:
         return {"status": "already_disabled"}
     state._camera_disabled = True
@@ -77,8 +84,11 @@ def disable_camera():
 
 
 @router.post("/camera/enable", response_model=StatusResponse)
+@privacy.serialized
 def enable_camera():
     """Restart the camera capture loop (manual). Clears manual override."""
+    if privacy.camera_muted:
+        raise HTTPException(409, "Privacy switch is on -- flip the switch to enable camera")
     if not state.camera_capture:
         raise HTTPException(503, "Camera not available")
     if not state._camera_disabled:
@@ -105,6 +115,8 @@ def camera_snapshot(
     box. Upscaling above source is not allowed (just blurs without detail) —
     requests above source are clamped.
     """
+    if privacy.camera_muted:
+        raise HTTPException(409, "Privacy switch is on -- camera capture is blocked")
     if not state.camera_capture or cv2 is None:
         raise HTTPException(503, "Camera not available")
 
@@ -135,6 +147,9 @@ def camera_snapshot(
         if was_disabled:
             state.camera_capture.stop()
 
+    if privacy.camera_muted:
+        raise HTTPException(409, "Privacy switch is on -- camera capture is blocked")
+
     if width is not None or height is not None:
         src_h, src_w = frame.shape[:2]
         # Compute target scale honoring aspect ratio, clamped so we never
@@ -153,6 +168,8 @@ def camera_snapshot(
 
     _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
 
+    if privacy.camera_muted:
+        raise HTTPException(409, "Privacy switch is on -- camera capture is blocked")
     if not save:
         return Response(content=buf.tobytes(), media_type="image/jpeg")
 
@@ -176,7 +193,7 @@ def camera_snapshot(
 @router.get("/camera/stream")
 def camera_stream():
     """MJPEG stream from the camera."""
-    if not state.camera_capture or cv2 is None or state._camera_disabled:
+    if not state.camera_capture or cv2 is None or state._camera_disabled or privacy.camera_muted:
         raise HTTPException(503, "Camera disabled" if state._camera_disabled else "Camera not available")
 
     stream_fps = float(os.environ.get("HAL_CAMERA_STREAM_FPS", "10"))
@@ -188,7 +205,7 @@ def camera_stream():
         state.camera_capture.acquire_consumer()
         try:
             last_sent_s = 0.0
-            while not state._camera_disabled:
+            while not state._camera_disabled and not privacy.camera_muted:
                 if min_interval_s > 0:
                     now_s = time.time()
                     elapsed_s = now_s - last_sent_s
@@ -225,6 +242,8 @@ def camera_stream():
                 _, buf = cv2.imencode(
                     ".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, int(stream_quality)]
                 )
+                if privacy.camera_muted:
+                    break
                 last_sent_s = time.time()
                 yield (
                     b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + buf.tobytes() + b"\r\n"

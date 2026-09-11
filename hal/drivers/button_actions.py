@@ -301,13 +301,15 @@ def _grant_wakeword_focus(source: str):
         logger.warning("%s single click -- wake-word focus grant failed: %s", source, e)
 
 
-def single_click_action(source: str = "button", announce: bool = True, chime: bool = True):
+def single_click_action(source: str = "button", announce: bool = True, chime: bool = True,
+                        unmute_output: bool = True):
     """Stop active tracking and in-flight speech / unmute mic + speaker.
 
     Then open the wake-word window (if wake word is on) and announce the
     listening cue.
     announce=False skips the cue (caller fires announce_listening_cue later).
-    chime=False skips the ack ping (caller already chimed at gesture start)."""
+    chime=False skips the ack ping (caller already chimed at gesture start).
+    unmute_output=False leaves speaker restoration to the privacy switch."""
     # Stopping movement is safe even with the hardware mic kill switch off: it
     # does not wake or unmute the microphone, but still lets the user cancel an
     # active follow session with the same direct-attention gesture.
@@ -354,7 +356,7 @@ def single_click_action(source: str = "button", announce: bool = True, chime: bo
     # is recording: that mute is a transient guard against TTS bleeding into the
     # captured WAV (see routes/speaker.py record-enroll), not a user preference.
     # Must run before the _tts_available() check below so the cue can play.
-    if state._speaker_muted and not state._enrolling:
+    if unmute_output and state._speaker_muted and not state._enrolling:
         logger.info("%s single click -- unmuting speaker", source)
         t = time.monotonic()
         unmute_speaker()

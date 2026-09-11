@@ -5,7 +5,9 @@
       "line": 9,
       "settle_s": 0.06,
       "muted_level": 0,
-      "watchdog_s": 30
+      "watchdog_s": 30,
+      "disable_camera_on_mute": true,
+      "mute_speaker_on_mute": true
     }
   }
 }

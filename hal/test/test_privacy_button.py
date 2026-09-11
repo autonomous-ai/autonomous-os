@@ -60,6 +60,20 @@ def test_failed_initial_read_keeps_legacy_unmuted_default(hardware, muted_level)
     handler.stop()
 
 
+@pytest.mark.parametrize("muted_level", [0, 1])
+def test_extended_privacy_initial_read_failure_stays_muted(hardware, muted_level):
+    gpio, _, _ = hardware
+    gpio.gpio_read.side_effect = OSError("read unavailable")
+    handler = PrivacyButtonHandler(PrivacyButtonConfig(
+        muted_level=muted_level, disable_camera_on_mute=True, mute_speaker_on_mute=True,
+    ))
+    handler._apply_state_locked = mock.Mock()
+    handler.start()
+    handler._apply_state_locked.assert_called_once_with(True)
+    assert handler._last_known_level == muted_level
+    handler.stop()
+
+
 def test_edge_restarts_configured_settle_then_reads_current_level(hardware):
     gpio, _, timer = hardware
     handler = PrivacyButtonHandler(PrivacyButtonConfig(line=43, settle_s=0.12, muted_level=1))

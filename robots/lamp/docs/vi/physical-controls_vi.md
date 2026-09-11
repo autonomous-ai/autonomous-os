@@ -78,6 +78,27 @@ JSON nút chính của Lamp để fallback pin 11 cũ không trùng công tắc 
 Cấu hình mic Lamp đã deploy ngày 2026-09-11; startup xác nhận chip1/line9 ready
 và LOW ban đầu áp dụng mute. Chờ live test thao tác gạt.
 
+#### Các thiết bị được khóa bởi privacy trên Lamp
+
+`privacy_button.json` đặt `disable_camera_on_mute: true` và
+`mute_speaker_on_mute: true`. Toggle pin 11 vì vậy mute mic, dừng capture camera
+và dừng/chặn phát speaker (TTS, nhạc và backchannel). Đèn đỏ mic-muted hiện có
+tiếp tục làm đèn báo privacy.
+
+Khi khóa, camera enable/snapshot và speaker unmute trả HTTP 409; camera stream,
+realtime look, scene/wake và việc tạm bật camera để chụp không thể mở lại camera
+hay speaker. Các consumer capture không đọc được frame camera lưu đệm. Lúc HAL
+khởi động, các thiết bị đã cấu hình vẫn khóa cho tới khi đồng bộ GPIO; lỗi
+đọc/claim ban đầu thì tiếp tục giữ privacy khóa.
+
+Mở khóa dùng luồng wake/listening microphone hiện có và khôi phục camera/speaker
+về trạng thái trước đó. Camera hoặc speaker đã tắt trước khi khóa thì vẫn tắt;
+lệnh tắt thủ công trong lúc khóa cũng được giữ lại. Cue listening chỉ phát khi
+speaker khôi phục về unmute. Tùy chọn được giữ qua restart HAL trong cùng boot,
+không lưu khóa privacy tạm thời thành mute thủ công. Hai tùy chọn mặc định false
+cho device khác; Intern giữ fallback chỉ mute mic, không cần JSON.
+Cập nhật HAL trước khi upload JSON có các trường mới này.
+
 ## Bảng cử chỉ
 
 | Cử chỉ | Nút GPIO chính | Touchpad TTP223 |

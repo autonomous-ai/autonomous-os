@@ -22,7 +22,9 @@ def test_intern_uses_fallback_and_lamp_declares_pin_11():
     root = Path(__file__).resolve().parents[2] / "robots"
     assert load_privacy_button_config(root / "intern-v2", "orangepi_sun60", "intern-v2") == PrivacyButtonConfig()
     assert not (root / "intern-v2" / "privacy_button.json").exists()
-    assert load_privacy_button_config(root / "lamp", "orangepi_sun60", "lamp") == PrivacyButtonConfig(chip=1, line=9)
+    assert load_privacy_button_config(root / "lamp", "orangepi_sun60", "lamp") == PrivacyButtonConfig(
+        chip=1, line=9, disable_camera_on_mute=True, mute_speaker_on_mute=True,
+    )
     assert load_privacy_button_config(root / "lamp", "raspberry_pi_5", "lamp") is None
 
 
@@ -38,6 +40,8 @@ def test_device_override_and_explicit_disable(tmp_path):
 
 
 @pytest.mark.parametrize("entry", [
+    {"chip": 0, "line": 97, "disable_camera_on_mute": "true"},
+    {"chip": 0, "line": 97, "mute_speaker_on_mute": 1},
     {"chip": 0}, {"chip": -1, "line": 97}, {"chip": True, "line": 97},
     {"chip": 0, "line": "97"}, {"chip": 0, "line": 97, "muted_level": 2},
     {"chip": 0, "line": 97, "muted_level": False},

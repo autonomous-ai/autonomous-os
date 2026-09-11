@@ -83,6 +83,28 @@ to avoid its legacy pin 11 fallback overlapping this switch. The Lamp mic
 configuration was deployed on 2026-09-11; startup confirmed chip1/line9 ready
 and initial LOW applied mute. Live toggle testing is pending.
 
+#### Lamp privacy peripherals
+
+`privacy_button.json` sets `disable_camera_on_mute: true` and
+`mute_speaker_on_mute: true`. The pin 11 toggle therefore mutes the mic, stops
+camera capture and stops/suppresses speaker output (TTS, music and backchannel).
+The existing red mic-muted indicator remains the privacy indicator.
+
+While locked, camera enable/snapshot and speaker unmute return HTTP 409; camera
+streaming, realtime look, scene/wake and temporary capture starts cannot reopen
+the camera or speaker. Cached camera frames are hidden from capture consumers.
+At HAL startup the configured peripherals remain closed until GPIO synchronizes;
+a failed initial read/claim keeps privacy locked.
+
+Unlock uses the existing microphone wake/listening flow and restores camera and
+speaker to their previous states. A camera or speaker already disabled before
+locking stays disabled; an explicit manual disable during the lock is also
+preserved. The listening cue only plays when the restored speaker is unmuted.
+Preferences survive HAL restarts within the same boot, without saving the
+temporary privacy lock as a manual mute. Both options default to false for
+other devices; Intern retains its existing microphone-only fallback without JSON.
+Deploy the updated HAL before uploading JSON with these new fields.
+
 ## Gesture map
 
 | Gesture | Primary GPIO button | TTP223 touchpad |

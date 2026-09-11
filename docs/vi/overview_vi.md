@@ -74,7 +74,14 @@ chọn rồi restart HAL; hệ thống không tự phát hiện đổi dây cắ
 tên input trùng hoặc cặp chip/line trùng bị từ chối trước khi claim GPIO.
 Chế độ mô phỏng bỏ qua nút phần cứng.
 
-Công tắc privacy hiện chỉ điều khiển mute microphone; hành vi camera không đổi.
+Công tắc privacy luôn điều khiển mute microphone. Hai trường boolean tùy chọn
+`disable_camera_on_mute` và `mute_speaker_on_mute` khóa thêm camera và speaker;
+cả hai mặc định `false`. Lamp bật cả hai trong JSON, còn Intern giữ fallback
+chỉ mute mic và không kèm JSON privacy. HAL giữ các thiết bị đã chọn ở trạng thái
+khóa cho tới lần đọc GPIO đầu tiên; lỗi đọc/claim thì tiếp tục khóa. Wrapper
+capture camera, camera routes, auto-wake và các đường phát âm thanh dùng chung
+`hal/privacy.py`. Mở khóa khôi phục trạng thái camera/speaker trước đó; khóa
+tạm thời không ghi đè tùy chọn đã lưu trong sidecar theo boot.
 Loader chỉ đọc file cũ `mic_button.json` khi chưa có `privacy_button.json`,
 để có thể cập nhật HAL trước khi đổi tên JSON của device.
 Công tắc gạt microphone dùng `privacy_button.json` do device quản lý, hiện chỉ

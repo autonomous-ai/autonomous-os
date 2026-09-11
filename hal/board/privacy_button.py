@@ -13,6 +13,8 @@ class PrivacyButtonConfig:
     settle_s: float = 0.06
     muted_level: int = 0
     watchdog_s: float = 30.0
+    disable_camera_on_mute: bool = False
+    mute_speaker_on_mute: bool = False
 
 
 def load_privacy_button_config(device_dir: str, board_id: str,
@@ -52,6 +54,9 @@ def load_privacy_button_config(device_dir: str, board_id: str,
             if not {"chip", "line"} <= set(values):
                 raise ValueError(f"{board}: chip and line are required")
             config = PrivacyButtonConfig(**values)
+            for name in ("disable_camera_on_mute", "mute_speaker_on_mute"):
+                if type(getattr(config, name)) is not bool:
+                    raise ValueError(f"{board}: {name} must be boolean")
             for name in ("chip", "line"):
                 value = getattr(config, name)
                 if type(value) is not int or value < 0:
