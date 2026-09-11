@@ -14,21 +14,23 @@ Two modes:
                      hal.service to be stopped: it holds its lines and the
                      kernel refuses a second claim.
 
-With no line arguments both modes read the wiring from the board profile
-(`board_profile().touch`), so this cannot drift from boards.json the way the
-previous hardcoded [96, 97, 99] did — those were the pads' pre-relocation lines
-and had been dead for two months.
+With no line arguments, read the selected device's ttp223.json through the
+same loader as HAL, falling back to legacy board wiring when absent.
+Select --device-type (or DEVICE_TYPE) and --devices-dir (or DEVICES_DIR).
 
 Why stdlib ioctl rather than gpiod: gpiod is not installed on the lamp images,
 and HAL's venv lives under /root where the orangepi user cannot execute it. A
 diagnostic that cannot run on the device it diagnoses is not a diagnostic.
 
 Usage on the device:
-    python3 hal/test_ttp223_probe_orangepi.py info
-    sudo systemctl stop hal && python3 hal/test_ttp223_probe_orangepi.py watch
+    python3 hal/test_ttp223_probe_orangepi.py info --device-type lamp --devices-dir /opt/devices
+    sudo systemctl stop hal && python3 hal/test_ttp223_probe_orangepi.py watch --device-type lamp --devices-dir /opt/devices
 """
 
 from __future__ import annotations
+
+import argparse
+from pathlib import Path
 
 import fcntl
 import os
@@ -96,19 +98,14 @@ def _decode_flags(flags: int) -> str:
     return ",".join(on) if on else "-"
 
 
-def _wiring() -> tuple[int, list[int]]:
-    """(chip, lines) from the board profile. The whole point of this script's
-    rewrite: one source of truth with boards.json."""
-    try:
-        from hal.board.board import board_profile
-    except ImportError:
-        sys.exit(
-            "cannot import hal.board.board — run from the repo root, e.g.\n"
-            "    PYTHONPATH=/opt python3 hal/test_ttp223_probe_orangepi.py info"
-        )
-    touch = board_profile().touch
+def _wiring(device_type: str, devices_dir: str) -> tuple[int, list[int]]:
+    """Resolve the same device override and board fallback as HAL."""
+    from hal.board.board import board_profile
+    from hal.board.ttp223 import load_touch_config
+
+    touch = load_touch_config(str(Path(devices_dir) / device_type), board_profile().id)
     if touch is None:
-        sys.exit(f"board {board_profile().id!r} declares no `touch` wiring")
+        sys.exit(f"device {device_type!r} has no active TTP223 wiring on this board")
     return touch.chip, list(touch.lines)
 
 
@@ -131,7 +128,7 @@ def cmd_info(chip: int, lines: list[int]) -> None:
             print(f"{line:>5}  {consumer:<16} {_decode_flags(flags)}")
     print(
         "\nA line held by consumer 'lg' is one HAL claimed. A free line that "
-        "should be a pad\nmeans boards.json and the hardware disagree."
+        "should be a pad\nmeans the selected wiring configuration and the hardware disagree."
     )
 
 
@@ -182,16 +179,20 @@ def cmd_watch(chip: int, lines: list[int]) -> None:
 
 
 def main() -> None:
-    argv = sys.argv[1:]
-    mode = argv[0] if argv else "info"
-    if mode not in ("info", "watch"):
-        sys.exit(__doc__)
-    chip, lines = _wiring()
-    if len(argv) > 1:
-        # Explicit lines override the profile — for asking about pads the
-        # driver does NOT claim, e.g. whether an abandoned line is still wired.
-        lines = [int(a) for a in argv[1:]]
-    cmd_info(chip, lines) if mode == "info" else cmd_watch(chip, lines)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("mode", choices=("info", "watch"), nargs="?", default="info")
+    parser.add_argument("lines", nargs="*", type=int)
+    parser.add_argument("--device-type", default=os.environ.get("DEVICE_TYPE"))
+    parser.add_argument("--devices-dir", default=os.environ.get("DEVICES_DIR") or
+                        str(Path(__file__).resolve().parents[1] / "robots"))
+    args = parser.parse_args()
+    if not args.device_type:
+        parser.error("--device-type or DEVICE_TYPE is required to select device wiring")
+    chip, lines = _wiring(args.device_type, args.devices_dir)
+    if args.lines:
+        lines = args.lines
+    cmd_info(chip, lines) if args.mode == "info" else cmd_watch(chip, lines)
+
 
 
 if __name__ == "__main__":

@@ -24,13 +24,14 @@ class TestButtonConfig(unittest.TestCase):
         )
         self.assertEqual(handler._debounce_ns, 10_000_000)
 
-    def test_shipped_devices_preserve_wiring(self):
+    def test_shipped_devices_select_their_wiring(self):
         root = Path(__file__).resolve().parents[2] / "robots"
         for device in ("lamp", "intern-v2"):
             for board, chip, line in (
                 ("raspberry_pi_4", 0, 17),
                 ("raspberry_pi_5", 0, 17),
-                ("orangepi_sun60", 1, 9),
+                ("orangepi_sun60", 0 if device == "lamp" else 1,
+                 100 if device == "lamp" else 9),
             ):
                 with self.subTest(device=device, board=board):
                     self.assertEqual(

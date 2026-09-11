@@ -64,6 +64,17 @@ thiếu file hoặc entry của board thì dùng lại mặc định `button` tr
 ứng và khởi động lại HAL; hệ thống không tự phát hiện việc đổi dây cắm.
 Config sai bị từ chối trước khi claim GPIO. Chế độ mô phỏng bỏ qua nút phần cứng.
 
+Wiring TTP223 do device quản lý trong `robots/lamp/ttp223.json`. Intern v2
+không có phần cứng TTP223 nên không kèm file này. `hal/board/ttp223.py` chọn `chip`, `lines` và
+`axis` tùy chọn của board đã detect từ `boards`, truyền `TouchConfig` cho driver
+dùng chung. Thiếu file/board thì fallback về `touch` cũ trong
+`hal/board/boards.json`; `enabled: false` tắt TTP223 rõ ràng. Config sai bị từ
+chối trước khi claim GPIO. Restart HAL sau khi sửa config của device được
+chọn; mô phỏng bỏ qua input phần cứng. Nút mới của Lamp (gpiochip0 line 100,
+pin vật lý 37 / PD4) trùng mapping touch cũ; chân touch thay thế vẫn cần xác
+nhận. Intern v2 giữ wiring nút hiện có. Fallback board cũ vẫn giữ nguyên;
+chỉ thiếu file JSON không có nghĩa là driver bị tắt.
+
 Wiring cảm ứng MPR121 tùy chọn hiện chỉ thuộc Lamp, trong
 `robots/lamp/mpr121.json`; Intern v2 không có khai báo MPR121. Cấu hình dùng
 cùng cách chọn thư mục device và được `hal/board/mpr121.py` kiểm tra. Lamp

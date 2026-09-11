@@ -932,7 +932,7 @@ async def lifespan(app: FastAPI):
     try:
         from hal.drivers.ttp223 import TTP223Handler
 
-        _ttp223_handler = TTP223Handler()
+        _ttp223_handler = TTP223Handler(_ttp223_config)
         _ttp223_handler.start()
     except Exception as e:
         logger.warning(f"TTP223 init failed: {e}")
@@ -1311,6 +1311,12 @@ from hal.board.mpr121 import load_mpr121_config
 
 _mpr121_config = (
     None if _board_id == "sim" else load_mpr121_config(_device_dir, _board_id)
+)
+
+from hal.board.ttp223 import load_touch_config
+
+_ttp223_config = (
+    None if _board_id == "sim" else load_touch_config(_device_dir, _board_id)
 )
 
 from hal.board.device import plan_mounts
