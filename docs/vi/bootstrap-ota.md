@@ -561,6 +561,14 @@ chung của hệ thống; nếu đã nâng Node thành công nhưng cài OpenCla
 updater không rollback Node. Xử lý prerequisite này không thay đổi gate cập
 nhật tự động ở trên.
 
+Mặc định image OrangePi khớp OTA metadata đã kiểm tra ngày 2026-09-11: OpenClaw
+`2026.9.3` và Hermes `0.21.1`. Builder cài package NodeSource 26.x mới nhất kể cả
+khi dùng lại base image, và yêu cầu tối thiểu Node `26.8.2` (bản upstream mới nhất
+tại thời điểm kiểm tra). Installer và checkout Hermes được pin vào release
+`v2026.9.7`, commit `2237be355906fbe6065ce1815711eee52b2d646e`; version CLI báo về
+khác sẽ làm build thất bại. Đây là mặc định lúc build image; presync và hành vi
+`software-update` sau đó giữ nguyên.
+
 Sau khi cập nhật package OpenClaw và plugin, updater dừng `openclaw.service`
 rồi chạy `openclaw doctor --fix --non-interactive --no-workspace-suggestions`
 với `HOME=/root` và OpenClaw home/state là `/root/.openclaw`, để migrate

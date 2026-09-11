@@ -576,6 +576,14 @@ the OpenClaw install and restart. Node is a shared system dependency; a
 successful Node upgrade is not rolled back if the later OpenClaw install fails.
 This prerequisite handling does not change the automatic-update gate above.
 
+OrangePi image defaults match OTA metadata checked on 2026-09-11: OpenClaw
+`2026.9.3` and Hermes `0.21.1`. The builder installs the latest NodeSource 26.x
+package even on reused base images and requires at least Node `26.8.2` (the
+current upstream release at that check). Hermes's installer and checkout are
+pinned to release `v2026.9.7`, commit `2237be355906fbe6065ce1815711eee52b2d646e`,
+and a different reported CLI version fails the build. These are image-build
+defaults; presync and subsequent `software-update` behavior are unchanged.
+
 After the OpenClaw package and plugin updates, the updater stops
 `openclaw.service` and runs `openclaw doctor --fix --non-interactive
 --no-workspace-suggestions` with `HOME=/root` and OpenClaw home/state set to
