@@ -10,9 +10,13 @@ import (
 )
 
 type Snapshot struct {
+	Timing struct {
+		StaleAfterS float64 `json:"stale_after_s"`
+	} `json:"timing,omitempty"`
 	State            string              `json:"state"`
 	Enabled          bool                `json:"enabled"`
 	Stale            bool                `json:"stale"`
+	ContinuousDataS  *float64            `json:"continuous_data_s,omitempty"`
 	AgeS             *float64            `json:"age_s"`
 	Sample           map[string]*float64 `json:"sample"`
 	Components       map[string]Snapshot `json:"components,omitempty"`
@@ -30,6 +34,7 @@ type Change struct {
 }
 
 type Event struct {
+	Reason           string              `json:"reason,omitempty"`
 	ObservedAt       float64             `json:"observed_at"`
 	Sample           map[string]*float64 `json:"sample"`
 	Changes          map[string]Change   `json:"changes"`
@@ -52,6 +57,8 @@ type metricState struct {
 	baselineAt float64
 	since      time.Time
 	direction  int
+	ready      bool
+	continuous *float64
 }
 
 // Detector is owned by one polling goroutine. Baselines change only after the
@@ -126,10 +133,18 @@ func (d *Detector) Observe(now time.Time, s Snapshot) *Event {
 			delete(d.metrics, key)
 			continue
 		}
+		owner := s
+		if s.Components != nil {
+			owner = s.Components[source]
+		}
+		continuous := owner.ContinuousDataS
+		if continuous != nil && (!finite(*continuous) || *continuous < 0) {
+			continuous = nil
+		}
 		state := d.metrics[key]
 		// Each source owns its warmup and outage history. One healthy component must
 		// not preserve another component's baseline across a fault or replacement.
-		if state == nil || state.source != source || (!state.lastFresh.IsZero() && now.Sub(state.lastFresh).Seconds() > math.Max(2*d.cfg.EvaluateIntervalS, d.cfg.MaxSampleAgeS)) || stamp < state.lastSample {
+		if state == nil || state.source != source || (continuous != nil && state.continuous != nil && *continuous < *state.continuous) || (!state.lastFresh.IsZero() && now.Sub(state.lastFresh).Seconds() > math.Max(2*d.cfg.EvaluateIntervalS, d.cfg.MaxSampleAgeS)) || stamp < state.lastSample {
 			state = &metricState{first: now, source: source}
 			d.metrics[key] = state
 		}
@@ -137,8 +152,17 @@ func (d *Detector) Observe(now time.Time, s Snapshot) *Event {
 			continue
 		}
 		state.lastSample, state.lastFresh = stamp, now
+		if continuous != nil {
+			v := *continuous
+			state.continuous = &v
+		}
 
-		if now.Sub(state.first).Seconds() < rule.WarmupS {
+		duration := now.Sub(state.first).Seconds()
+		if continuous != nil {
+			duration = math.Max(duration, *continuous)
+		}
+		state.ready = duration >= rule.WarmupS
+		if !state.ready {
 			continue
 		}
 		if state.baseline == nil {
@@ -177,6 +201,18 @@ func (d *Detector) Attempted(now time.Time, event *Event, accepted bool) {
 		return
 	}
 	d.lastAccepted = now
+	if event.Reason == "initial" {
+		for key, value := range event.Sample {
+			state := d.metrics[key]
+			if state == nil || value == nil || state.source != event.Sources[key] || state.baselineAt > event.MetricTimestamps[key] {
+				continue
+			}
+			v := *value
+			state.baseline, state.baselineAt = &v, event.MetricTimestamps[key]
+			state.since, state.direction = time.Time{}, 0
+		}
+		return
+	}
 	for key, change := range event.Changes {
 		if state := d.metrics[key]; state != nil {
 			v := change.Current

@@ -20,7 +20,7 @@ func TestEnvironmentDefaultsAndPartialConfig(t *testing.T) {
 		t.Fatal("settings returned shared map")
 	}
 	var old Config
-	if got := old.EnvironmentSettings(); !got.Enabled || got.SustainS != 60 || len(got.Metrics) != 9 {
+	if got := old.EnvironmentSettings(); !got.Enabled || !got.InitialReport || got.SustainS != 60 || len(got.Metrics) != 9 {
 		t.Fatalf("old config defaults: %+v", got)
 	}
 	if Default().Environment == nil {
@@ -31,7 +31,7 @@ func TestEnvironmentDefaultsAndPartialConfig(t *testing.T) {
 func TestEnvironmentRejectsInvalidConfig(t *testing.T) {
 	for _, body := range []string{
 		`{"evaluate_interval_s":0}`, `{"sustain_s":1}`, `{"retry_interval_s":1}`,
-		`{"cooldown_s":-1}`, `{"max_sample_age_s":0}`, `{"enabled":null}`,
+		`{"cooldown_s":-1}`, `{"max_sample_age_s":0}`, `{"enabled":null}`, `{"initial_report":null}`, `{"initial_report":"false"}`,
 		`{"metrics":{}}`, `{"metrics":null}`, `{"unknown":1}`,
 		`{"metrics":{"co_ppm":{"delta":10}}}`, `{"metrics":{"voc_index":null}}`,
 		`{"metrics":{"voc_index":{"delta":0}}}`, `{"metrics":{"voc_index":{"warmup_s":null}}}`,
@@ -70,5 +70,15 @@ func TestEnvironmentCO2DefaultsAndExplicitSubset(t *testing.T) {
 	}
 	if c.Metrics["co2_ppm"].WarmupS != 60 {
 		t.Fatal(c.Metrics)
+	}
+}
+
+func TestEnvironmentInitialReportCanBeDisabledIndependently(t *testing.T) {
+	var c EnvironmentConfig
+	if err := json.Unmarshal([]byte(`{"initial_report":false}`), &c); err != nil {
+		t.Fatal(err)
+	}
+	if c.InitialReport || !c.Enabled || len(c.Metrics) != 9 {
+		t.Fatalf("initial report toggle changed sensing policy: %+v", c)
 	}
 }

@@ -334,10 +334,18 @@ func (s *Server) handleSetUpCompleteChange(setupCompleted bool) {
 				slog.Info("INBOUND from system → agent (startup greeting)",
 					"component", "server", "backend", s.agentGateway.Name(),
 					"source", "wake_greeting")
-				if _, err := s.agentGateway.SendSystemChatMessage(wakeGreetingPrompt(s.agentGateway.Name(), deviceType, device.Capabilities(deviceType))); err != nil {
+				settings := s.config.EnvironmentSettings()
+				if err := sendWakeGreetingWithEnvironment(
+					wakeGreetingPrompt(s.agentGateway.Name(), deviceType, device.Capabilities(deviceType)),
+					s.environmentStartup, settings.Enabled && settings.InitialReport && s.environmentAvailable(),
+					s.agentGateway.SendSystemChatMessage,
+				); err != nil {
 					slog.Warn("startup greeting failed", "component", "server", "backend", s.agentGateway.Name(), "error", err)
 				}
 			} else {
+				if s.environmentStartup != nil {
+					s.environmentStartup.FinishGreeting(false)
+				}
 				slog.Warn("startup greeting skipped: agent gateway never reached stable readiness", "component", "server", "backend", s.agentGateway.Name())
 			}
 

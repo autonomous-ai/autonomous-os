@@ -25,10 +25,22 @@ class EnvironmentService:
         self._error = None
         self._sample = None
         self._sample_time = None
+        self._first_sample_time = None
 
     def _set_state(self, state, error=None):
         with self._lock:
             self._state, self._error = state, error
+            if state != "ready":
+                self._first_sample_time = None
+
+    def _store_sample(self, sample, sampled_at):
+        with self._lock:
+            if (self._first_sample_time is None or self._sample_time is None
+                    or sampled_at - self._sample_time > self.timing.stale_after_s):
+                self._first_sample_time = sampled_at
+            self._sample = sample
+            self._sample_time = sampled_at
+            self._state, self._error = "ready", None
 
     def start(self):
         if self._thread is not None:
@@ -64,10 +76,7 @@ class EnvironmentService:
                         raise OSError(f"{self.name}: no new data for {self.timing.no_data_timeout_s:g} seconds")
                     if sample is not None:
                         last_data = time.monotonic()
-                        with self._lock:
-                            self._sample = sample
-                            self._sample_time = time.monotonic()
-                            self._state, self._error = "ready", None
+                        self._store_sample(sample, last_data)
                         if not received:
                             logger.info("[%s] receiving data: fields=%s", self.name, ",".join(sample))
                             received = True
@@ -100,11 +109,17 @@ class EnvironmentService:
     def snapshot(self):
         with self._lock:
             age = None if self._sample_time is None else time.monotonic() - self._sample_time
+            stale = age is None or age > self.timing.stale_after_s or self._state != "ready"
+            # Count successful acquisition time, never time spent waiting for data.
+            continuous_data = None
+            if self.enabled and not stale and self._first_sample_time is not None:
+                continuous_data = self._sample_time - self._first_sample_time
             return {
                 "state": self._state, "enabled": self.enabled, "bus": self.bus,
                 "last_error": self._error,
                 "timing": asdict(self.timing),
                 "sample": None if self._sample is None else dict(self._sample),
                 "age_s": age,
-                "stale": age is None or age > self.timing.stale_after_s or self._state != "ready",
+                "stale": stale,
+                "continuous_data_s": continuous_data,
             }

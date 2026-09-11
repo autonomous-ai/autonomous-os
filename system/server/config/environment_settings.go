@@ -16,6 +16,7 @@ type EnvironmentMetricRule struct {
 // EnvironmentConfig controls OS interpretation separately from HAL acquisition.
 type EnvironmentConfig struct {
 	Enabled           bool                             `json:"enabled"`
+	InitialReport     bool                             `json:"initial_report"`
 	EvaluateIntervalS float64                          `json:"evaluate_interval_s"`
 	SustainS          float64                          `json:"sustain_s"`
 	CooldownS         float64                          `json:"cooldown_s"`
@@ -26,7 +27,7 @@ type EnvironmentConfig struct {
 
 func DefaultEnvironmentConfig() EnvironmentConfig {
 	return EnvironmentConfig{
-		Enabled: true, EvaluateIntervalS: 10, SustainS: 60, CooldownS: 900,
+		Enabled: true, InitialReport: true, EvaluateIntervalS: 10, SustainS: 60, CooldownS: 900,
 		RetryIntervalS: 60, MaxSampleAgeS: 10,
 		Metrics: map[string]EnvironmentMetricRule{
 			"pm1_0_ug_m3": {10, 60}, "pm2_5_ug_m3": {10, 60},
