@@ -565,6 +565,17 @@ os-server proxies this as `GET /api/system/ota-versions`.
 | `codex` / `claudecode` / `opencode` / `picoclaw` | Run `software-update <key>` — only on the device whose `agent_runtime` IS that runtime |
 | `hermes` | Not in the loop: `hermes update` cannot be pinned, so a `min_version` it never reaches would re-trigger every poll. SSH-only. |
 
+Manual and force OpenClaw updates run `software-update openclaw`. Before
+installing the version selected by OTA metadata, the updater reads that npm
+package's `engines.node` range and checks it with npm's bundled semver library.
+A compatible Node installation is retained. Otherwise, it installs system
+Node 24.x through NodeSource and apt, then checks the range again before
+installing OpenClaw and restarting its service. Missing engine metadata,
+compatibility-check errors, or a failed/incompatible Node upgrade abort before
+the OpenClaw install and restart. Node is a shared system dependency; a
+successful Node upgrade is not rolled back if the later OpenClaw install fails.
+This prerequisite handling does not change the automatic-update gate above.
+
 **Why the agent CLIs are gated on `agent_runtime`, not on the binary:**
 `scripts/imager/build-orangepi.sh` bakes every agent CLI onto every lamp /
 intern-v2 image regardless of `DEFAULT_AGENT`, so `inPath("codex")` is true even

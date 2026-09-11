@@ -550,6 +550,17 @@ resolve từ `metadata.devices.<device_type>` lồng nhau thay vì danh sách co
 | `codex` / `claudecode` / `opencode` / `picoclaw` | Chạy `software-update <key>` — CHỈ trên thiết bị có `agent_runtime` đúng bằng runtime đó |
 | `hermes` | Không nằm trong loop: `hermes update` không pin được, nên một `min_version` nó không bao giờ đạt sẽ kích lại mỗi vòng poll. Chỉ chạy tay qua SSH. |
 
+Cập nhật OpenClaw thủ công và force update chạy `software-update openclaw`.
+Trước khi cài phiên bản trong OTA metadata, updater đọc `engines.node` của
+package npm đó và kiểm tra bằng thư viện semver đi kèm npm. Node đang tương
+thích được giữ nguyên; nếu chưa tương thích, updater cài Node hệ thống nhánh
+24.x qua NodeSource và apt, rồi kiểm tra lại trước khi cài OpenClaw và restart
+dịch vụ. Thiếu engine metadata, lỗi kiểm tra, hoặc nâng Node thất bại/vẫn chưa
+tương thích đều dừng trước bước cài OpenClaw và restart. Node là dependency
+chung của hệ thống; nếu đã nâng Node thành công nhưng cài OpenClaw thất bại,
+updater không rollback Node. Xử lý prerequisite này không thay đổi gate cập
+nhật tự động ở trên.
+
 **Vì sao CLI của agent gate theo `agent_runtime` chứ không theo binary:**
 `scripts/imager/build-orangepi.sh` bake CLI của MỌI agent lên mọi image lamp /
 intern-v2 bất kể `DEFAULT_AGENT`, nên `inPath("codex")` vẫn đúng trên máy đang
