@@ -13,7 +13,7 @@ import threading
 import time
 from typing import Optional
 
-from hal import config
+from hal import config, privacy
 from hal.presets import (
     AMBIENT_RESTING_LED,
     ambient_resting_is_dark,
@@ -540,7 +540,9 @@ def _persist_mic_state():
 
 
 def _persist_speaker_state():
-    _save_boot_sidecar(_SPEAKER_STATE_PATH, {"muted": _speaker_muted})
+    _save_boot_sidecar(_SPEAKER_STATE_PATH, {
+        "muted": privacy.speaker_before if privacy.speaker_muted else _speaker_muted,
+    })
 
 
 def _persist_sleep_state():
@@ -575,7 +577,7 @@ def start_voice_service(reason: str) -> bool:
 
     Returns True when the pipeline was actually started.
     """
-    if voice_service is None:
+    if voice_service is None or privacy.mic_locked():
         return False
     if _enrolling:
         logger.info("voice_service.start skipped (%s) -- enrollment owns the mic", reason)
@@ -623,7 +625,8 @@ def _wake_sleepy_peripherals():
     """Restore only mic/speaker states that sleepy itself muted."""
     global _sleepy_auto_muted_mic, _sleepy_auto_muted_speaker, _mic_muted, _speaker_muted
     if _sleepy_auto_muted_speaker:
-        _speaker_muted = False
+        if not privacy.speaker_muted:
+            _speaker_muted = False
         _sleepy_auto_muted_speaker = False
     if _sleepy_auto_muted_mic:
         _sleepy_auto_muted_mic = False
@@ -637,7 +640,8 @@ def _wake_sleepy_peripherals():
 def _persist_camera_state():
     _save_boot_sidecar(
         _CAMERA_STATE_PATH,
-        {"disabled": _camera_disabled, "manual_override": _camera_manual_override},
+        {"disabled": privacy.camera_before if privacy.camera_muted else _camera_disabled,
+         "manual_override": _camera_manual_override},
     )
 
 
@@ -1471,9 +1475,12 @@ def _apply_emotion_led_display(
     return led_color
 
 
+@privacy.serialized
 def _auto_camera_off(reason: str) -> bool:
     """Auto-disable camera. Respects manual override + active tracking."""
     global _camera_disabled
+    if privacy.camera_muted:
+        return False
     if _camera_manual_override:
         logger.debug(
             "Auto camera off skipped -- manual override active (reason: %s)", reason
@@ -1494,9 +1501,12 @@ def _auto_camera_off(reason: str) -> bool:
     return True
 
 
+@privacy.serialized
 def _auto_camera_on(reason: str) -> bool:
     """Auto-enable camera. Respects manual override."""
     global _camera_disabled
+    if privacy.camera_muted:
+        return False
     if _camera_manual_override:
         logger.debug(
             "Auto camera on skipped -- manual override active (reason: %s)", reason

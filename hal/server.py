@@ -367,6 +367,10 @@ def _sim_audio_probe(sd_module) -> None:
 async def lifespan(app: FastAPI):
     global _gpio_button_handlers, _ttp223_handler, _mpr121_handler, _privacy_button_handler
 
+    # Keep privacy-controlled peripherals closed until the GPIO boot sync.
+    from hal import privacy
+    privacy.prepare(_privacy_button_config)
+
     # --- Phase 0: Borrow the hardware from whoever owns it ---
     # Empty unless ROBOT.md declares an `owner:`. Where one exists it holds
     # /dev/video* and both ALSA PCMs, and nothing below can succeed until it
@@ -453,6 +457,8 @@ async def lifespan(app: FastAPI):
                     brightness=CAMERA_BRIGHTNESS,
                 )
             )
+            if _privacy_button_config and _privacy_button_config.disable_camera_on_mute:
+                cap = privacy.GuardedCamera(cap)
             if state._camera_disabled:
                 # Disabled state restored from the camera sidecar: keep the
                 # capture object (so /camera/enable can start it) but don't

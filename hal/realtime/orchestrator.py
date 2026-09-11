@@ -1628,8 +1628,9 @@ class RealtimeOrchestrator:
             from hal.drivers.camera.video_capture_device import capture_still
         except Exception:
             return None
+        from hal import privacy
         cap = getattr(state, "camera_capture", None)
-        if cap is None:
+        if cap is None or privacy.camera_muted:
             return None
         was_disabled: bool = bool(getattr(state, "_camera_disabled", False))
         try:
@@ -1648,6 +1649,8 @@ class RealtimeOrchestrator:
                 if was_disabled:
                     cap.stop()
             if frame is None:
+                return None
+            if privacy.camera_muted:
                 return None
             max_w: int = config.REALTIME_GEMINI_VISION_MAX_WIDTH
             h, w = frame.shape[:2]

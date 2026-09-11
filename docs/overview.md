@@ -76,7 +76,15 @@ detected automatically. Malformed configuration, duplicate input names, and
 duplicate chip/line pairs are rejected before GPIO is claimed. Simulation
 skips hardware buttons.
 
-The privacy switch currently controls microphone mute only; camera behavior is unchanged.
+The privacy switch always controls microphone mute. Optional boolean fields
+`disable_camera_on_mute` and `mute_speaker_on_mute` also lock camera capture
+and speaker output; both default to `false`. Lamp enables both in its JSON,
+while Intern keeps its microphone-only fallback and ships no privacy JSON.
+HAL keeps opted-in peripherals closed until the first GPIO read; read/claim
+failure leaves them locked. The camera capture wrapper, camera routes,
+auto-wake helpers and audio output gates share `hal/privacy.py`. Unlock restores
+the prior camera/speaker preferences; temporary locks do not overwrite their
+boot-scoped persisted preferences.
 The loader accepts legacy `mic_button.json` only when `privacy_button.json` is absent,
 so HAL can be updated before the device JSON is renamed.
 The microphone slide switch uses device-owned `privacy_button.json`, initially
