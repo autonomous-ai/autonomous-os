@@ -57,13 +57,28 @@ apt-get() {
   [ "$FAIL" != apt ] || return 1
   touch "$UPGRADED"
 }
-openclaw() { event "openclaw $*"; }
-systemctl() { event "systemctl $*"; }
+openclaw() {
+  event "openclaw $*"
+  case "$1" in
+    doctor)
+      event "doctor-env $HOME $OPENCLAW_HOME $OPENCLAW_STATE_DIR"
+      [ "$FAIL" != doctor ] ;;
+    gateway)
+      event "gateway-env $HOME $OPENCLAW_HOME $OPENCLAW_STATE_DIR"
+      PROBES=$((PROBES + 1))
+      [ "$PROBES" -gt "$READINESS_FAILURES" ] ;;
+  esac
+}
+systemctl() {
+  event "systemctl $*"
+  [ "$FAIL" != "$1" ]
+}
+sleep() { event "sleep $*"; }
 '''
 
 
 class OpenClawUpdateTests(unittest.TestCase):
-    def run_update(self, scenario="incompatible", failure=""):
+    def run_update(self, scenario="incompatible", failure="", readiness_failures=0):
         functions = "\n".join(
             shell_function(name)
             for name in ("ensure_openclaw_node", "update_openclaw")
@@ -81,6 +96,11 @@ class OpenClawUpdateTests(unittest.TestCase):
                     "TMPDIR": temporary,
                     "SCENARIO": scenario,
                     "FAIL": failure,
+                    "PROBES": "0",
+                    "READINESS_FAILURES": str(readiness_failures),
+                    "HOME": str(directory / "ssh-home"),
+                    "OPENCLAW_HOME": str(directory / "ssh-openclaw"),
+                    "OPENCLAW_STATE_DIR": str(directory / "ssh-state"),
                 },
                 capture_output=True,
                 text=True,
@@ -130,6 +150,53 @@ class OpenClawUpdateTests(unittest.TestCase):
         self.assertIn("npm install -g openclaw@2026.9.3", events)
         self.assertFalse(any(line.startswith(("systemctl ", "openclaw "))
                              for line in events), events)
+
+    def test_migration_runs_stopped_with_system_state_before_readiness(self):
+        result, events = self.run_update(scenario="compatible")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        ordered = [
+            "npm install -g openclaw@2026.9.3",
+            "openclaw plugins install @openclaw/discord@2026.9.3 --force",
+            "openclaw plugins install @openclaw/slack@2026.9.3 --force",
+            "systemctl stop openclaw",
+            "openclaw doctor --fix --non-interactive --no-workspace-suggestions",
+            "doctor-env /root /root/.openclaw /root/.openclaw",
+            "systemctl restart openclaw",
+            "openclaw gateway status --require-rpc --timeout 5000",
+            "gateway-env /root /root/.openclaw /root/.openclaw",
+        ]
+        positions = [events.index(event) for event in ordered]
+        self.assertEqual(positions, sorted(positions), events)
+        self.assertIn("openclaw updated to 2026.9.3", result.stdout)
+
+    def test_migration_service_failures_abort_following_steps(self):
+        for failure, forbidden in (
+            ("stop", ("openclaw doctor", "systemctl restart", "openclaw gateway")),
+            ("doctor", ("systemctl restart", "openclaw gateway")),
+            ("restart", ("openclaw gateway",)),
+        ):
+            with self.subTest(failure=failure):
+                result, events = self.run_update(scenario="compatible", failure=failure)
+                self.assertNotEqual(result.returncode, 0, events)
+                self.assertFalse(any(event.startswith(forbidden) for event in events), events)
+                self.assertNotIn("openclaw updated to", result.stdout)
+                if failure == "doctor":
+                    self.assertIn("gateway left stopped", result.stderr)
+
+    def test_readiness_retries_until_gateway_responds(self):
+        result, events = self.run_update(scenario="compatible", readiness_failures=2)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(events.count("openclaw gateway status --require-rpc --timeout 5000"), 3)
+        self.assertEqual(events.count("sleep 5"), 2)
+        self.assertIn("openclaw updated to 2026.9.3", result.stdout)
+
+    def test_readiness_exhaustion_fails_without_success_message(self):
+        result, events = self.run_update(scenario="compatible", readiness_failures=12)
+        self.assertNotEqual(result.returncode, 0, events)
+        self.assertEqual(events.count("openclaw gateway status --require-rpc --timeout 5000"), 12)
+        self.assertEqual(events.count("sleep 5"), 11)
+        self.assertNotIn("openclaw updated to", result.stdout)
+        self.assertIn("did not become ready", result.stderr)
 
 
 if __name__ == "__main__":
