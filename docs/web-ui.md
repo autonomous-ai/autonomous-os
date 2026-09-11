@@ -723,7 +723,7 @@ Chat UI → POST /api/sensing/event → SensingHandler
 
 The Sensing navigation entry is available without debug mode when the device declares `vision` or `environment` in
 `GET /api/system/info` → `capabilities`. Camera sensing cards require `vision`.
-The read-only **Environment · SEN55** card requires an explicit `environment`
+The read-only **Environment** card requires an explicit `environment`
 capability; it is hidden and sends no requests while capabilities are loading
 or when that capability is absent.
 
@@ -736,16 +736,19 @@ and local agent status API are described in
 [Lamp environmental sensing](../robots/lamp/docs/environment-sensing.md#os-change-policy-and-agent-access).
 
 The card shows sensor state, sample timestamp, stale status, errors,
-and eight measurements: temperature (°C), humidity (%), PM1 / PM2.5 / PM4 /
-PM10 (µg/m³), VOC index, and NOx index. Unavailable values appear as `—`, never
+and component-dependent measurements: temperature (°C), humidity (%), PM1 /
+PM2.5 / PM4 / PM10 (µg/m³), VOC index, NOx index, and SCD41 CO₂ (ppm).
+Source labels identify the component; each metric has its own timestamp.
+Unavailable components do not hide healthy readings from another component. Unavailable values appear as `—`, never
 zero. Stale measurements are also replaced with `—`; a request failure is shown
 as an error so previous readings cannot be mistaken for live data. No good/bad air
 quality labels, thresholds, or alerts are assigned. A collapsed technical
-section exposes I2C bus, sensor status register, and HAL polling/retry/staleness/
-recovery timings from `status.timing`.
+section exposes each component's state, I2C bus, sensor status register, and HAL
+polling/retry/staleness/recovery timings under `status.components`. Legacy
+single-sensor snapshots with top-level `status.timing` remain supported.
 
-Lamp still ships with `environment` commented out in `ROBOT.md` and SEN55
-disabled in `sen55.json`, so this card remains hidden until the capability is
+Lamp still ships with `environment` commented out in `ROBOT.md` and SEN55/SCD41
+disabled in their respective JSON configurations, so this card remains hidden until the capability is
 declared. See [Lamp environmental sensing](../robots/lamp/docs/environment-sensing.md)
 for wiring, enabling, and the HAL data contract.
 
@@ -848,7 +851,7 @@ Harness final delivery records `harness_response` in flow JSONL with the origina
 `monitor/SensingSection.tsx` only composes capability-gated sections. Components
 live under `monitor/sensing/`: one file per card, with shared `CardHeader`, types
 and formatters. `useVisionSensing` polls once for all vision cards;
-`useEnvironment` independently polls SEN55. The `visionApi.ts` and
+`useEnvironment` independently polls the shared environment snapshot. The `visionApi.ts` and
 `environmentApi.ts` clients own OS-server requests, response checks and errors;
 cards do not fetch directly. Both clients use the existing authenticated
 `/api/hardware/*` proxy. Vision HTTP/response failures show an error instead of

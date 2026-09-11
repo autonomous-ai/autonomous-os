@@ -3,32 +3,13 @@
 import os
 import time
 
+from hal.drivers.environment.i2c import crc8, decode_words
+
 
 FIELDS = (
     "pm1_0_ug_m3", "pm2_5_ug_m3", "pm4_0_ug_m3", "pm10_ug_m3",
     "humidity_pct", "temperature_c", "voc_index", "nox_index",
 )
-
-
-def crc8(data: bytes) -> int:
-    crc = 0xFF
-    for byte in data:
-        crc ^= byte
-        for _ in range(8):
-            crc = ((crc << 1) ^ (0x31 if crc & 0x80 else 0)) & 0xFF
-    return crc
-
-
-def decode_words(data: bytes, count: int) -> list[int]:
-    if len(data) != count * 3:
-        raise OSError("SEN55: incomplete I2C response")
-    words = []
-    for offset in range(0, len(data), 3):
-        pair = data[offset:offset + 2]
-        if crc8(pair) != data[offset + 2]:
-            raise OSError("SEN55: CRC mismatch")
-        words.append(int.from_bytes(pair, "big"))
-    return words
 
 
 class SEN55:

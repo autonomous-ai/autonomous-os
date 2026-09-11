@@ -362,6 +362,14 @@ cue và release servo.
 Request/reply này không tạo event cho agent. Worker OS riêng xử lý thay đổi
 kéo dài; xem [cảm biến môi trường Lamp](../../robots/lamp/docs/vi/environment-sensing_vi.md#chính-sách-thay-đổi-của-os-và-api-cho-agent).
 
+Snapshot chung có thể kết hợp SEN55 và SCD41 mà không thêm MQTT kind. SCD41
+chỉ đóng góp `sample.co2_ppm`; `components` giữ status/lỗi/timing/sample riêng,
+`sources` ánh xạ chỉ số đến component, `metric_timestamps` chứa thời điểm đo
+của từng chỉ số. Nhóm `ready` nghĩa là ít nhất một số đo còn mới; `partial`
+báo component đang bật nhưng không khả dụng. Kiểm tra từng nguồn, không dùng
+timestamp mới nhất của nhóm làm tuổi mọi chỉ số. Một sensor lỗi không loại
+số đo còn tốt. SCD41 tắt/thiếu không tạo CO₂ suy diễn.
+
 **`environment.status`:** gửi trên `fa_channel`:
 
 ```json

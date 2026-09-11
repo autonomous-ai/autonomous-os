@@ -33,6 +33,7 @@ func DefaultEnvironmentConfig() EnvironmentConfig {
 			"pm4_0_ug_m3": {15, 60}, "pm10_ug_m3": {15, 60},
 			"temperature_c": {2, 60}, "humidity_pct": {10, 60},
 			"voc_index": {50, 3600}, "nox_index": {20, 21600},
+			"co2_ppm": {200, 60},
 		},
 	}
 }

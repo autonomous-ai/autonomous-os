@@ -22,7 +22,7 @@ capabilities:
   audio:        { routes: [audio, speaker, voice], required: true }
   vision:       { routes: [camera], driver: opencv, required: true }
   sensing:      { routes: [sensing], required: true }
-  # environment:  { routes: [environment], driver: sen55, required: false }
+  # environment:  { routes: [environment], driver: composite, required: false }
   presence:     { required: true }
   motion:       { routes: [servo], driver: feetech, required: true, safety: SAFETY.md#motion }
   light:        { routes: [led, scene], driver: ws2812, required: true, safety: SAFETY.md#light }

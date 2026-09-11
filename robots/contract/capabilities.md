@@ -81,14 +81,22 @@ asking: does it take the world **IN**, or does it drive the body **OUT**?
 
 ## Environmental acquisition
 
-`environment` is an optional, read-only HAL input. Its current backend is SEN55;
+`environment` is an optional, read-only HAL input. Its composite backend supports SEN55 and
+SCD41 under the same capability. Device-owned `environment.json` selects
+components; `sen55.json` and `scd41.json` independently configure acquisition.
+A missing component-selection file preserves legacy SEN55-only behavior.
+SCD41 adds measured `co2_ppm` only, leaving SEN55 temperature/humidity unchanged;
 `GET /environment/status` exposes acquisition state and freshness, while
 `GET /environment/sample` returns only a fresh sample (503 otherwise). Declaring
 the capability mounts its routes; acquisition additionally requires the HAL sensor
 configuration. The OS exposes read-only snapshots through its authenticated
 hardware HTTP proxy and MQTT `data` / `environment.status` request/reply, gated
-by the declared capability rather than the sensor model. No OS event, agent tool,
-alert threshold, or automatic reaction is introduced by this capability.
+by the declared capability rather than the sensor model. Composite status
+includes `components`, `sources`, and `metric_timestamps`; healthy readings
+remain available if another sensor fails. A group `ready` state does not make
+every component fresh. The OS separately applies configured sustained-change
+policy, emits `environment.update`, and exposes a loopback agent status API;
+these remain capability-gated and do not control actuators automatically.
 
 It has no actuator safety class and needs no new `SAFETY.md` bounds. Ambient sensor
 temperature is separate from `thermal.max_temp_c`, which protects the board using

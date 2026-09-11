@@ -706,7 +706,7 @@ Chat UI → POST /api/sensing/event → SensingHandler
 
 Mục Sensing khả dụng không cần bật debug khi device khai báo
 `vision` hoặc `environment` trong `GET /api/system/info` → `capabilities`.
-Các card sensing camera yêu cầu `vision`. Card chỉ đọc **Environment · SEN55**
+Các card sensing camera yêu cầu `vision`. Card chỉ đọc **Environment**
 yêu cầu khai báo rõ capability `environment`; card bị ẩn và không gửi request
 khi đang tải capabilities hoặc không có capability này.
 
@@ -719,16 +719,19 @@ và API status cho agent local được mô tả trong
 [tài liệu môi trường Lamp](../../robots/lamp/docs/vi/environment-sensing_vi.md#chính-sách-thay-đổi-của-os-và-api-cho-agent).
 
 Card hiển thị trạng thái cảm biến, thời điểm sample, trạng thái dữ liệu
-cũ, lỗi và tám số đo: nhiệt độ (°C), độ ẩm (%), PM1 / PM2.5 / PM4 / PM10
-(µg/m³), VOC index, NOx index. Giá trị chưa khả dụng hiện `—`, không hiện số 0.
+cũ, lỗi và số đo theo component được khai báo: nhiệt độ (°C), độ ẩm (%),
+PM1 / PM2.5 / PM4 / PM10 (µg/m³), VOC index, NOx index và CO₂ SCD41 (ppm).
+Nhãn nguồn chỉ rõ component; từng chỉ số có timestamp riêng. Component lỗi
+không che số đo còn tốt từ component khác. Giá trị chưa khả dụng hiện `—`, không hiện số 0.
 Số đo cũ cũng được thay bằng `—`; request thất bại được hiển thị là lỗi để
 không nhầm số đo trước đó với dữ liệu hiện tại. Không gán nhãn chất lượng không khí
-tốt/xấu, ngưỡng hay cảnh báo. Mục kỹ thuật thu gọn mặc định hiển thị bus I2C,
-thanh ghi trạng thái cảm biến và các mốc thời gian đọc/thử lại/đánh dấu cũ/
-phục hồi của HAL từ `status.timing`.
+tốt/xấu, ngưỡng hay cảnh báo. Mục kỹ thuật thu gọn hiển thị trạng thái, bus I2C,
+thanh ghi trạng thái và timing đọc/thử lại/đánh dấu cũ/phục hồi của từng
+component trong `status.components`. Vẫn hỗ trợ snapshot một sensor kiểu cũ
+với `status.timing` cấp cao nhất.
 
-Lamp vẫn để `environment` được comment trong `ROBOT.md` và SEN55 tắt trong
-`sen55.json`, nên card này ẩn cho đến khi capability được khai báo. Xem
+Lamp vẫn để `environment` được comment trong `ROBOT.md` và SEN55/SCD41 tắt trong
+file JSON tương ứng, nên card này ẩn cho đến khi capability được khai báo. Xem
 [tài liệu cảm biến môi trường của Lamp](../../robots/lamp/docs/vi/environment-sensing_vi.md)
 về đấu dây, bật cảm biến và contract dữ liệu HAL.
 
@@ -832,7 +835,7 @@ Kết quả cuối Harness được ghi vào flow JSONL bằng `harness_response
 `monitor/SensingSection.tsx` chỉ ghép các phần theo capability. Component nằm
 trong `monitor/sensing/`: mỗi card một file, dùng chung `CardHeader`, types và
 hàm định dạng. `useVisionSensing` poll một lần cho toàn bộ card vision;
-`useEnvironment` poll SEN55 độc lập. Client `visionApi.ts` và
+`useEnvironment` poll snapshot môi trường chung độc lập. Client `visionApi.ts` và
 `environmentApi.ts` quản lý request OS-server, kiểm tra response và lỗi;
 card không trực tiếp fetch. Cả hai dùng reverse proxy có xác thực
 `/api/hardware/*` sẵn có. Lỗi HTTP/response của vision hiển thị thông báo lỗi,

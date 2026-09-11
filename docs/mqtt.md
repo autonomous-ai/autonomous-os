@@ -372,6 +372,15 @@ OS commands: reboot plays its cue; shutdown plays its cue and releases servos.
 This request/reply does not generate agent events. The separate OS worker handles
 sustained changes; see [Lamp environment sensing](../robots/lamp/docs/environment-sensing.md#os-change-policy-and-agent-access).
 
+The shared snapshot can combine SEN55 and SCD41 without a new MQTT kind.
+SCD41 contributes only `sample.co2_ppm`; `components` holds independent
+status/error/timing/sample diagnostics, `sources` maps metrics to components,
+and `metric_timestamps` carries their observation times. Group `ready` means
+at least one fresh metric; `partial` indicates an enabled component is
+unavailable. Check individual sources rather than treating the group's newest
+timestamp as the age of every metric. A failed sensor does not discard healthy
+readings. Disabled/absent SCD41 does not produce an inferred CO₂ value.
+
 **`environment.status`:** send on `fa_channel`:
 
 ```json

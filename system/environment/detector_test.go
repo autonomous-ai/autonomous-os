@@ -150,3 +150,96 @@ func TestDetectorNullMetricDoesNotResetOtherMetrics(t *testing.T) {
 		}
 	}
 }
+
+func componentSample(second, co2Second int, temperature, co2 float64) Snapshot {
+	s := sample(second, temperature)
+	c := Snapshot{State: "ready", Enabled: true, AgeS: number(float64(second - co2Second)), Sample: map[string]*float64{"timestamp": number(float64(1000 + co2Second)), "co2_ppm": number(co2)}}
+	s.Components = map[string]Snapshot{"sen55": sample(second, temperature), "scd41": c}
+	s.Sample["co2_ppm"] = number(co2)
+	s.Sources = map[string]string{"temperature_c": "sen55", "co2_ppm": "scd41"}
+	s.MetricTimestamps = map[string]float64{"temperature_c": float64(1000 + second), "co2_ppm": float64(1000 + co2Second)}
+	return s
+}
+func multiDetector() *Detector {
+	c := testSettings()
+	c.Metrics["temperature_c"] = config.EnvironmentMetricRule{Delta: 2}
+	c.Metrics["co2_ppm"] = config.EnvironmentMetricRule{Delta: 200}
+	return NewDetector(c)
+}
+func TestComponentFailureIsolated(t *testing.T) {
+	for _, failed := range []string{"sen55", "scd41"} {
+		t.Run(failed, func(t *testing.T) {
+			d := multiDetector()
+			d.Observe(epoch, componentSample(0, 0, 20, 500))
+			var e *Event
+			for second := 10; second <= 30; second += 10 {
+				s := componentSample(second, second, 23, 800)
+				c := s.Components[failed]
+				c.Sample["device_status"] = number(1)
+				s.Components[failed] = c
+				e = d.Observe(epoch.Add(time.Duration(second)*time.Second), s)
+			}
+			if e == nil {
+				t.Fatal("healthy component lost change")
+			}
+			good, bad := "temperature_c", "co2_ppm"
+			if failed == "sen55" {
+				good, bad = bad, good
+			}
+			if len(e.Changes) != 1 || e.Changes[good].Current == 0 || e.Sample[bad] != nil {
+				t.Fatalf("event leaks failed component: %+v", e)
+			}
+		})
+	}
+}
+func TestComponentTimestampCannotBorrowOtherSensorFreshness(t *testing.T) {
+	d := multiDetector()
+	d.cfg.MaxSampleAgeS = 60
+	d.Observe(epoch, componentSample(0, 0, 20, 500))
+	d.Observe(epoch.Add(10*time.Second), componentSample(10, 10, 20, 800))
+	for second := 20; second <= 30; second += 10 {
+		mustNoEvent(t, d.Observe(epoch.Add(time.Duration(second)*time.Second), componentSample(second, 10, 20, 800)))
+	}
+	e := d.Observe(epoch.Add(40*time.Second), componentSample(40, 35, 20, 800))
+	if e == nil || e.Changes["co2_ppm"].CurrentAt != 1035 || e.MetricTimestamps["co2_ppm"] != 1035 || e.ObservedAt != 1040 || e.Changes["co2_ppm"].Source != "scd41" {
+		t.Fatalf("wrong provenance: %+v", e)
+	}
+	d.Attempted(epoch.Add(40*time.Second), e, true)
+	if d.metrics["co2_ppm"].baselineAt != 1035 {
+		t.Fatal("baseline borrowed aggregate timestamp")
+	}
+}
+func TestComponentInvalidProvenanceResetsOnlyMetric(t *testing.T) {
+	for _, mutate := range []func(*Snapshot){
+		func(s *Snapshot) { delete(s.Sources, "co2_ppm") },
+		func(s *Snapshot) { s.MetricTimestamps["co2_ppm"]++ },
+		func(s *Snapshot) { s.Sample["co2_ppm"] = number(999) },
+		func(s *Snapshot) { c := s.Components["scd41"]; c.Stale = true; s.Components["scd41"] = c },
+	} {
+		d := multiDetector()
+		d.Observe(epoch, componentSample(0, 0, 20, 500))
+		var e *Event
+		for second := 10; second <= 30; second += 10 {
+			s := componentSample(second, second, 23, 800)
+			mutate(&s)
+			e = d.Observe(epoch.Add(time.Duration(second)*time.Second), s)
+		}
+		mustChange(t, e, 20, 23)
+		if _, ok := e.Changes["co2_ppm"]; ok {
+			t.Fatal("invalid CO2 emitted")
+		}
+	}
+}
+func TestComponentReplacementRestartsBaseline(t *testing.T) {
+	d := multiDetector()
+	d.Observe(epoch, componentSample(0, 0, 20, 500))
+	for second := 10; second <= 30; second += 10 {
+		s := componentSample(second, second, 20, 800)
+		s.Components["replacement"] = s.Components["scd41"]
+		s.Sources["co2_ppm"] = "replacement"
+		mustNoEvent(t, d.Observe(epoch.Add(time.Duration(second)*time.Second), s))
+	}
+	if *d.metrics["co2_ppm"].baseline != 800 {
+		t.Fatal("replacement inherited old baseline")
+	}
+}

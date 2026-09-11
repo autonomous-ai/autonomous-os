@@ -10,14 +10,19 @@ import (
 )
 
 type Snapshot struct {
-	State   string              `json:"state"`
-	Enabled bool                `json:"enabled"`
-	Stale   bool                `json:"stale"`
-	AgeS    *float64            `json:"age_s"`
-	Sample  map[string]*float64 `json:"sample"`
+	State            string              `json:"state"`
+	Enabled          bool                `json:"enabled"`
+	Stale            bool                `json:"stale"`
+	AgeS             *float64            `json:"age_s"`
+	Sample           map[string]*float64 `json:"sample"`
+	Components       map[string]Snapshot `json:"components,omitempty"`
+	Sources          map[string]string   `json:"sources,omitempty"`
+	MetricTimestamps map[string]float64  `json:"metric_timestamps,omitempty"`
 }
 
 type Change struct {
+	CurrentAt  float64 `json:"current_at"`
+	Source     string  `json:"source,omitempty"`
 	Previous   float64 `json:"previous"`
 	PreviousAt float64 `json:"previous_at"`
 	Current    float64 `json:"current"`
@@ -25,10 +30,12 @@ type Change struct {
 }
 
 type Event struct {
-	ObservedAt float64             `json:"observed_at"`
-	Sample     map[string]*float64 `json:"sample"`
-	Changes    map[string]Change   `json:"changes"`
-	SustainedS float64             `json:"sustained_s"`
+	ObservedAt       float64             `json:"observed_at"`
+	Sample           map[string]*float64 `json:"sample"`
+	Changes          map[string]Change   `json:"changes"`
+	SustainedS       float64             `json:"sustained_s"`
+	Sources          map[string]string   `json:"sources,omitempty"`
+	MetricTimestamps map[string]float64  `json:"metric_timestamps,omitempty"`
 }
 
 func (e Event) Message() string {
@@ -37,6 +44,9 @@ func (e Event) Message() string {
 }
 
 type metricState struct {
+	source     string
+	lastSample float64
+	lastFresh  time.Time
 	first      time.Time
 	baseline   *float64
 	baselineAt float64
@@ -49,8 +59,6 @@ type metricState struct {
 type Detector struct {
 	cfg          config.EnvironmentConfig
 	metrics      map[string]*metricState
-	lastSample   float64
-	lastFresh    time.Time
 	lastAccepted time.Time
 	lastAttempt  time.Time
 }
@@ -63,48 +71,80 @@ func finite(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
 
 func (d *Detector) ResetReadings() {
 	d.metrics = make(map[string]*metricState)
-	d.lastSample = 0
-	d.lastFresh = time.Time{}
+}
+
+// reading validates freshness against the producing component, never the newest
+// timestamp of a different sensor. Legacy single-sensor snapshots remain valid.
+func (d *Detector) reading(s Snapshot, key string) (value *float64, stamp float64, source string) {
+	owner := s
+	if s.Components != nil {
+		source = s.Sources[key]
+		var ok bool
+		owner, ok = s.Components[source]
+		if !ok || source == "" {
+			return nil, 0, source
+		}
+	}
+	ts := owner.Sample["timestamp"]
+	value = s.Sample[key]
+	status := owner.Sample["device_status"]
+	if !s.Enabled || s.State != "ready" || s.Stale || !owner.Enabled || owner.State != "ready" || owner.Stale || owner.AgeS == nil || !finite(*owner.AgeS) || *owner.AgeS < 0 || *owner.AgeS > d.cfg.MaxSampleAgeS || ts == nil || !finite(*ts) || *ts <= 0 || value == nil || !finite(*value) || (status != nil && (!finite(*status) || *status != 0)) {
+		return nil, 0, source
+	}
+	if s.Components != nil {
+		metricStamp, ok := s.MetricTimestamps[key]
+		componentValue := owner.Sample[key]
+		if !ok || metricStamp != *ts || componentValue == nil || *componentValue != *value {
+			return nil, 0, source
+		}
+	}
+	return value, *ts, source
 }
 
 func (d *Detector) Observe(now time.Time, s Snapshot) *Event {
-	stamp := s.Sample["timestamp"]
-	if status := s.Sample["device_status"]; status != nil && *status != 0 {
-		d.ResetReadings()
-		return nil
+	event := &Event{Sample: make(map[string]*float64), Changes: make(map[string]Change), SustainedS: d.cfg.SustainS, Sources: make(map[string]string), MetricTimestamps: make(map[string]float64)}
+	for key := range s.Sample {
+		if key == "timestamp" || key == "device_status" {
+			continue
+		}
+		value, stamp, source := d.reading(s, key)
+		event.Sample[key] = value
+		if value != nil {
+			event.MetricTimestamps[key] = stamp
+			if source != "" {
+				event.Sources[key] = source
+			}
+			if stamp > event.ObservedAt {
+				event.ObservedAt = stamp
+			}
+		}
 	}
-	if !s.Enabled || s.State != "ready" || s.Stale || s.AgeS == nil || !finite(*s.AgeS) || *s.AgeS < 0 || *s.AgeS > d.cfg.MaxSampleAgeS || stamp == nil || !finite(*stamp) || *stamp <= 0 {
-		d.ResetReadings()
-		return nil
-	}
-	// An outage or a restarted sensor cannot inherit an in-progress change.
-	if !d.lastFresh.IsZero() && now.Sub(d.lastFresh).Seconds() > 2*d.cfg.EvaluateIntervalS {
-		d.ResetReadings()
-	}
-	if *stamp <= d.lastSample {
-		return nil
-	}
-	d.lastSample = *stamp
-	d.lastFresh = now
-	event := &Event{ObservedAt: *stamp, Sample: s.Sample, Changes: make(map[string]Change), SustainedS: d.cfg.SustainS}
+	event.Sample["timestamp"] = &event.ObservedAt
 	for key, rule := range d.cfg.Metrics {
-		value := s.Sample[key]
-		if value == nil || !finite(*value) {
+		value, stamp, source := d.reading(s, key)
+		if value == nil {
 			delete(d.metrics, key)
 			continue
 		}
 		state := d.metrics[key]
-		if state == nil {
-			state = &metricState{first: now}
+		// Each source owns its warmup and outage history. One healthy component must
+		// not preserve another component's baseline across a fault or replacement.
+		if state == nil || state.source != source || (!state.lastFresh.IsZero() && now.Sub(state.lastFresh).Seconds() > math.Max(2*d.cfg.EvaluateIntervalS, d.cfg.MaxSampleAgeS)) || stamp < state.lastSample {
+			state = &metricState{first: now, source: source}
 			d.metrics[key] = state
 		}
+		if stamp <= state.lastSample {
+			continue
+		}
+		state.lastSample, state.lastFresh = stamp, now
+
 		if now.Sub(state.first).Seconds() < rule.WarmupS {
 			continue
 		}
 		if state.baseline == nil {
 			v := *value
 			state.baseline = &v
-			state.baselineAt = *stamp
+			state.baselineAt = stamp
 			continue
 		}
 		delta := *value - *state.baseline
@@ -122,7 +162,7 @@ func (d *Detector) Observe(now time.Time, s Snapshot) *Event {
 			continue
 		}
 		if now.Sub(state.since).Seconds() >= d.cfg.SustainS {
-			event.Changes[key] = Change{Previous: *state.baseline, PreviousAt: state.baselineAt, Current: *value, Delta: delta}
+			event.Changes[key] = Change{CurrentAt: stamp, Source: source, Previous: *state.baseline, PreviousAt: state.baselineAt, Current: *value, Delta: delta}
 		}
 	}
 	if len(event.Changes) == 0 || (!d.lastAccepted.IsZero() && now.Sub(d.lastAccepted).Seconds() < d.cfg.CooldownS) || (!d.lastAttempt.IsZero() && now.Sub(d.lastAttempt).Seconds() < d.cfg.RetryIntervalS) {
@@ -141,7 +181,7 @@ func (d *Detector) Attempted(now time.Time, event *Event, accepted bool) {
 		if state := d.metrics[key]; state != nil {
 			v := change.Current
 			state.baseline = &v
-			state.baselineAt = event.ObservedAt
+			state.baselineAt = change.CurrentAt
 			state.since = time.Time{}
 			state.direction = 0
 		}

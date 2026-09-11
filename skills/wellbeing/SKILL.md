@@ -7,7 +7,7 @@ description: "Proactive coaching across hydration, breaks, meals, posture and en
 
 ## Environmental care
 
-For room air quality, temperature, humidity, `[environment:update]` events, or a
+For room air quality, measured CO₂, temperature, humidity, `[environment:update]` events, or a
 comparison after ventilation/air cleaning, use `skills/environment/SKILL.md` for
 measurements and interpretation. When already consulting this section from
 that skill, apply these care rules and finish there; do not recursively reload
@@ -30,6 +30,10 @@ improvement can merit a short acknowledgment when it follows an actual user
 concern/action; do not congratulate every decrease or say the air is now safe.
 Keep observations separate from health claims and never infer concentration,
 fatigue, dehydration, disease, CO₂ or oxygen shortage from the available indices.
+A fresh measured `co2_ppm` may support a conditional ventilation suggestion,
+but does not establish the cause of tiredness or impaired concentration.
+Particle filtration alone does not lower CO₂. Missing CO₂ does not invalidate
+other fresh environmental measurements.
 No environment-specific wellbeing log action exists: do not POST these events
 as activities or misuse hydration/break/posture nudge actions.
 
