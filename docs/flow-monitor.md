@@ -306,6 +306,8 @@ Some models behind openclaw/hermes (notably DeepSeek) emit their English plannin
 
 Raw deltas in `agent_last_token` stay unfiltered for debugging. Slack mid-turn streaming (`chat.appendStream`) is not filtered (append-only diffing can't retract text); the final Slack reply is.
 
+For delegated music requests, `skills/music/SKILL.md` requires leading HW markers followed by one short confirmation; song selection, noisy-transcript interpretation, and unknown-speaker attribution stay internal. `skills/input-branching/SKILL.md` also keeps routing decisions out of spoken replies. Both Go and HAL filters recognize sentence-initial `They named a/the song:` planning labels and `Speaker [identity] is unknown` bookkeeping, including in English mode. Regression coverage uses the reported “Eternal Flame” output and checks the first-sentence stream as well as the complete reply. These are targeted safeguards; identifying whether a model or proxy put reasoning into assistant text still requires the raw runtime/provider response.
+
 ### NO_REPLY suppression
 
 The agent may respond with `NO_REPLY` (or truncated forms `NO`, `NO_RE`, `NO_...`) when it decides not to respond — typically for passive sensing events like sound/motion. These are suppressed by `isAgentNoReply()` in `handler.go`: no TTS playback, no output display. Matches: exact `"NO"`, or any string starting with `"NO_"` or `"NO_RE"` (case-insensitive after trim). Source: `lifecycle_end` payload if available, otherwise fetched from `chat.history` RPC on `lifecycle_end` (async goroutine, best-effort). OpenClaw `lifecycle_end` currently does not include usage data, so `chat.history` is the primary source.
