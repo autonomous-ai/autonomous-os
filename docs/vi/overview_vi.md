@@ -258,6 +258,10 @@ Chi tiết SER: [speech-emotion_vi.md](speech-emotion_vi.md).
 
 ## Sensing Flow
 
+Thu nhận dữ liệu môi trường SEN55 là capability HAL tùy chọn riêng. Xem
+[Cảm biến môi trường](environment-sensing_vi.md) về đấu dây, cấu hình và
+API snapshot; hiện chưa phát sensing event tới OS/agent.
+
 ```
 HAL sensing loop (mỗi 2s) → Đọc 1 frame camera, chạy tất cả detectors:
     ├─ Motion detection (frame diff) → event nếu >8% pixel thay đổi

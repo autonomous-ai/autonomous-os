@@ -18,7 +18,7 @@ DEVICES_DIR = os.path.join(ROOT, "robots")
 
 # The frozen capability vocabulary (robots/contract/capabilities.md).
 KNOWN_CAPABILITIES = {
-    "audio", "vision", "sensing", "presence", "motion",
+    "audio", "vision", "sensing", "environment", "presence", "motion",
     "policy", "light", "display", "expression", "lifelike", "media", "connectivity", "companion",
     "system",
 }

@@ -71,6 +71,7 @@ ROUTE_PROBES = {
     "camera": "/camera",
     "audio": "/audio",
     "sensing": "/sensing",
+    "environment": "/environment/status",
     "scene": "/scene",
     "display": "/display",
     "emotion": "/emotion/status",

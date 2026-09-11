@@ -52,6 +52,7 @@ animation_service = None
 rgb_service = None
 camera_capture = None
 sensing_service = None
+environment_service = None
 voice_service = None
 display_service = None
 tts_service = None

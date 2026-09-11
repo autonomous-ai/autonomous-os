@@ -1,0 +1,5 @@
+{
+  "boards": {
+    "orangepi_sun60": { "enabled": false }
+  }
+}

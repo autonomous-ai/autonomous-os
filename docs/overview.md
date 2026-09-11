@@ -263,6 +263,10 @@ Mic (always on) → Local VAD (RMS energy, free)
 
 ## Sensing Flow
 
+SEN55 environmental acquisition is a separate optional HAL capability. See
+[Environmental sensing](environment-sensing.md) for wiring, configuration,
+and snapshot APIs; it does not yet emit OS/agent sensing events.
+
 ```
 HAL sensing loop (every 2s) → Read 1 camera frame, run all detectors:
     ├─ Motion detection (frame diff) → event if >8% pixels changed
