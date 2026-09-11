@@ -317,7 +317,7 @@ def single_click_action(source: str = "button", announce: bool = True, chime: bo
     # announce — the whole gesture flow would violate the kill-switch promise.
     # Skip silently (no chime, no cue): the red mic-muted LED is already the
     # visual "off" indicator; a chime here would read as "action accepted"
-    # when nothing happened. mic_button.py's own unmute-path call flips the
+    # when nothing happened. privacy_button.py's own unmute-path call flips the
     # flag to False BEFORE calling this, so the slide switch's own unmute is
     # not blocked. None = device has no HW switch (Lamp) → always fall through.
     if state._hw_mic_switch_muted is True:

@@ -68,9 +68,9 @@ Board được detect qua `/proc/device-tree/model`:
 
 ### Công tắc gạt microphone
 
-`robots/lamp/mic_button.json` khai báo chip 1 / line 9 trong `orangepi_sun60`,
+`robots/lamp/privacy_button.json` khai báo chip 1 / line 9 trong `orangepi_sun60`,
 với `settle_s: 0.06`, `muted_level: 0`, `watchdog_s: 30`. Driver dùng chung
-`mic_button.py` theo dõi vị trí công tắc, đồng bộ lúc boot và thực hiện mute/unmute
+`privacy_button.py` theo dõi vị trí công tắc, đồng bộ lúc boot và thực hiện mute/unmute
 sau khi tiếp điểm ổn định. Watchdog chỉ đồng bộ lại khi GPIO đổi mức, giữ mute
 bằng phần mềm khi công tắc đứng yên. Intern v2 không có JSON mic, giữ fallback
 chip 0 / line 97 cũ trong code. Lamp thiếu JSON này vẫn tắt mic switch. Cần giữ

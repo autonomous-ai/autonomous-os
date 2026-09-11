@@ -74,11 +74,14 @@ chọn rồi restart HAL; hệ thống không tự phát hiện đổi dây cắ
 tên input trùng hoặc cặp chip/line trùng bị từ chối trước khi claim GPIO.
 Chế độ mô phỏng bỏ qua nút phần cứng.
 
-Công tắc gạt microphone dùng `mic_button.json` do device quản lý, hiện chỉ
-kèm file `robots/lamp/mic_button.json` cho pin vật lý 11 / PL9 / gpiochip1 line 9. Entry của board được phát hiện
+Công tắc privacy hiện chỉ điều khiển mute microphone; hành vi camera không đổi.
+Loader chỉ đọc file cũ `mic_button.json` khi chưa có `privacy_button.json`,
+để có thể cập nhật HAL trước khi đổi tên JSON của device.
+Công tắc gạt microphone dùng `privacy_button.json` do device quản lý, hiện chỉ
+kèm file `robots/lamp/privacy_button.json` cho pin vật lý 11 / PL9 / gpiochip1 line 9. Entry của board được phát hiện
 trong `boards` cung cấp `chip`, `line`, `settle_s`, `muted_level` và
-`watchdog_s` cho `hal/board/mic_button.py`, rồi truyền vào driver dùng chung
-`hal/drivers/mic_button.py`. Intern v2 không kèm JSON mic, tiếp tục dùng
+`watchdog_s` cho `hal/board/privacy_button.py`, rồi truyền vào driver dùng chung
+`hal/drivers/privacy_button.py`. Intern v2 không kèm JSON mic, tiếp tục dùng
 fallback trong code: gpiochip0 line 97 (PD1), chờ ổn định 0,06 s, LOW (`0`)
 là mute và watchdog 30 s. Lamp dùng cùng timing/polarity. Pull-up vẫn bật; `muted_level` nhận `0` hoặc `1`.
 Thiếu file hoặc entry board thì giữ default cũ chỉ cho `intern-v2`, bao gồm
