@@ -608,6 +608,12 @@ MAX_STEP_DEG: float = 45.0
 # iterations of nudge + settle + detect fit comfortably, and a subject that
 # needs longer is one the loop is not converging on anyway.
 CENTRE_DEADLINE_S: float = 4.0
+# Consecutive probe misses tolerated before the correction reports the subject
+# lost. A marginal detection at the frame edge flickers frame to frame —
+# device-observed on lamp-ac82, the sweep saw a keyboard and the correction's
+# very next probe did not — so one miss is noise, not absence. Each retry waits
+# for a FRESH frame, and the deadline still bounds the whole loop.
+CENTRE_MAX_MISSES: int = 3
 
 
 @dataclass
@@ -646,6 +652,15 @@ def centre_on_box(svc: Any, cap: Any, probe: Callable[[Any], Optional[tuple]],
     """
     import hal.app_state as state
 
+    # Cleared at entry, exactly as aim_for_look does. The flag means "abort the
+    # correction IN FLIGHT"; it is set only by the button's single click and
+    # nothing resets it afterwards, so a click hours ago would otherwise defeat
+    # every correction that follows. Device-observed on lamp-ac82: the first
+    # centring ever run there returned "aborted after 0 iteration(s)" on a flag
+    # left over from long before the sweep began. A click landing DURING the
+    # correction still stops it — the loop re-checks on every iteration.
+    _abort_evt.clear()
+
     t_end = time.monotonic() + deadline_s
     iterations = 0
     yaw_total = 0.0
@@ -654,6 +669,8 @@ def centre_on_box(svc: Any, cap: Any, probe: Callable[[Any], Optional[tuple]],
     pending_calib: Optional[Tuple[float, float]] = None
     last_box: Optional[tuple] = None
     last_frame: Any = None
+    misses = 0
+    require_fresh = False
 
     def _result(centred: bool, reason: str) -> CentreResult:
         return CentreResult(centred, reason, iterations, yaw_total,
@@ -669,15 +686,22 @@ def centre_on_box(svc: Any, cap: Any, probe: Callable[[Any], Optional[tuple]],
             if time.monotonic() >= t_end:
                 return _result(False, "deadline")
 
-            frame = _grab_frame(cap, svc, require_fresh=iterations > 0)
+            frame = _grab_frame(cap, svc, require_fresh=require_fresh or iterations > 0)
+            require_fresh = False
             if frame is None:
                 return _result(_within_deadband(), "no fresh frame")
 
             box = probe(frame)
             if box is None:
-                # Lost it mid-correction. Report the last good box rather than
-                # nothing: the caller still has something true to show.
-                return _result(False, "lost the subject")
+                misses += 1
+                if misses >= CENTRE_MAX_MISSES:
+                    # Gone, not flickering. Report the last good box rather
+                    # than nothing: the caller still has something true to show.
+                    return _result(False, "lost the subject")
+                # Try again on a fresh frame; the deadline check above bounds it.
+                require_fresh = True
+                continue
+            misses = 0
 
             last_box, last_frame = box, frame
             x, _y, w, _h = box

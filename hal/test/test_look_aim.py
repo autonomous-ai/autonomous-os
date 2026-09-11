@@ -1122,3 +1122,47 @@ def test_encode_annotated_keeps_its_debug_lines_by_default():
 
     sig = inspect.signature(look_debug.encode_annotated)
     assert sig.parameters["centre_lines"].default is True
+
+
+def test_centre_on_box_is_not_defeated_by_a_stale_abort():
+    """Device-observed on lamp-ac82: `[search] centring: aborted after 0
+    iteration(s)`. Only the button's single click sets the aim's abort flag,
+    and only aim_for_look cleared it — at its own entry. A click hours earlier
+    left the flag set, and the first centring correction ever run on the unit
+    returned "aborted" before its first frame. The flag means "abort the
+    correction in flight", so a correction that is only now starting must clear
+    it, exactly as aim_for_look does."""
+    aim.request_abort()
+    boxes = [(500, 200, 40, 40), (310, 200, 40, 40)]
+
+    res = aim.centre_on_box(_FakeSvc(), _FakeCap(_frame()),
+                            probe=lambda _f: boxes.pop(0) if boxes else (310, 200, 40, 40))
+
+    assert res.reason != "aborted", "a stale abort flag defeated the correction"
+    assert res.centred is True
+    assert res.iterations >= 1
+
+
+def test_centre_on_box_tolerates_a_flickering_detection():
+    """Device-observed on lamp-ac82: the sweep's detector saw the keyboard,
+    and the correction's very next probe returned None — `lost the subject
+    after 0 iteration(s)`. A marginal detection at the frame edge flickers
+    frame to frame; giving up on the first miss means never centring on
+    exactly the objects that most need it."""
+    # miss, miss, hit-right-of-centre, then centred.
+    seen = [None, None, (500, 200, 40, 40), (310, 200, 40, 40)]
+
+    res = aim.centre_on_box(_FakeSvc(), _FakeCap(_frame()),
+                            probe=lambda _f: seen.pop(0) if seen else (310, 200, 40, 40))
+
+    assert res.centred is True, res.reason
+    assert res.iterations >= 1
+
+
+def test_centre_on_box_still_gives_up_when_the_subject_stays_gone():
+    """Tolerance is bounded: a subject that is really gone must not keep the
+    lamp hunting until the deadline."""
+    res = aim.centre_on_box(_FakeSvc(), _FakeCap(_frame()), probe=lambda _f: None)
+
+    assert res.centred is False
+    assert res.reason == "lost the subject"
