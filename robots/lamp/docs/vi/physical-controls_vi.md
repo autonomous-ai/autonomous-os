@@ -16,6 +16,7 @@ Lamp hỗ trợ các nút cơ học, touchpad TTP223 và bộ điều khiển c�
 |---|---|---|
 | Nút GPIO chính | gpiochip0 BCM 17 (pull-up, active-LOW) | Pin vật lý 37 / PD4 / gpiochip0 line 100 (pull-up, active-LOW) |
 | Nút GPIO reset | không wire | Pin vật lý 35 / PD3 / gpiochip0 line 99 (pull-up, active-LOW); giữ ≥5 s rồi nhả để factory-reset |
+| Công tắc gạt mic | không wire | Pin vật lý 11 / PL9 / gpiochip1 line 9; pull-up, LOW=mute, HIGH=unmute |
 | TTP223 | không wire | Hai pad: S1 tại pin vật lý 29 / PD0 / gpiochip0 line 96; S3 tại pin vật lý 33 / PD2 / gpiochip0 line 98. **Pull-up, active-LOW** (pad nghỉ ở mức HIGH; chạm là edge xuống). |
 
 Wiring nút cơ thuộc về từng device: `robots/lamp/gpio_button.json` và
@@ -64,6 +65,18 @@ Board được detect qua `/proc/device-tree/model`:
 - `"raspberry pi 5"` → Pi 5
 - `"raspberry pi 4"` → Pi 4
 - phần cứng không nhận diện được hoặc không được hỗ trợ → bị board gate từ chối khi HAL khởi động
+
+### Công tắc gạt microphone
+
+`robots/lamp/mic_button.json` khai báo chip 1 / line 9 trong `orangepi_sun60`,
+với `settle_s: 0.06`, `muted_level: 0`, `watchdog_s: 30`. Driver dùng chung
+`mic_button.py` theo dõi vị trí công tắc, đồng bộ lúc boot và thực hiện mute/unmute
+sau khi tiếp điểm ổn định. Watchdog chỉ đồng bộ lại khi GPIO đổi mức, giữ mute
+bằng phần mềm khi công tắc đứng yên. Intern v2 không có JSON mic, giữ fallback
+chip 0 / line 97 cũ trong code. Lamp thiếu JSON này vẫn tắt mic switch. Cần giữ
+JSON nút chính của Lamp để fallback pin 11 cũ không trùng công tắc này.
+Cấu hình mic Lamp đã deploy ngày 2026-09-11; startup xác nhận chip1/line9 ready
+và LOW ban đầu áp dụng mute. Chờ live test thao tác gạt.
 
 ## Bảng cử chỉ
 
@@ -233,6 +246,7 @@ trước khi dùng; HAL không tự sửa boot overlay:
       "bus": 0,
       "address": 90,
       "electrodes": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+      "swipe_axis": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
       "touch_threshold": 2,
       "release_threshold": 1,
       "autoconfig": true,
@@ -243,7 +257,7 @@ trước khi dùng; HAL không tự sửa boot overlay:
 }
 ```
 
-`bus` bắt buộc với entry bật. Các giá trị còn lại ở trên là mặc định;
+`bus` bắt buộc với entry bật. Các giá trị còn lại ở trên trừ `swipe_axis` là mặc định;
 địa chỉ 90 nghĩa là `0x5A` (cho phép 90–93). Electrode được chọn phải là
 các số không trùng từ 0–11, có ít nhất một electrode. Ngưỡng phải thỏa
 `0 <= release_threshold < touch_threshold <= 255`. Polling cho phép 1–1000 ms;
@@ -268,16 +282,41 @@ MPR121 dùng chung ngưỡng cử chỉ từ `hal/drivers/button_gestures.py` v�
 
 | Cử chỉ | Action MPR121 |
 |---|---|
-| Lần nhả ngắn đầu tiên trong chuỗi click | `single_click_action(source="MPR121", announce=False)` lập tức dừng tracking/audio, unmute khi được phép và phát ack chime. |
+| Lần nhả ngắn đầu tiên trong chuỗi click | `single_click_action(source="MPR121", announce=False)` dừng tracking/audio sau khi phân giải contact, unmute khi được phép và phát ack chime. |
 | 1, 2 hoặc 4+ tap ngắn, rồi yên 0.4 s | Phát cue nghe; các tap lặp không gọi lại action single-click ban đầu. |
 | Đúng 3 tap ngắn, rồi yên 0.4 s | `triple_click_action` reboot thay vì phát cue nghe. |
 | Giữ 2–<5 s rồi nhả | `hold_release_action` vào sleepy. |
 | Giữ 5–<10 s rồi nhả | `hold_release_action` shutdown. |
 | Giữ ≥10 s rồi nhả | `hold_release_action` factory reset. |
+| Vuốt một trong hai hướng rồi nhả | `swipe_action` sleep; contact di chuyển này không gọi click hoặc action destructive. |
 
 Contact ngắn kéo dài dưới 2 s. Cửa sổ click không phân giải khi còn bất kỳ
 electrode được chọn nào đang chạm. Nhả sau giữ xóa chuỗi click đang chờ.
 Action destructive không chạy khi còn giữ.
+
+### Vuốt MPR121 để sleep
+
+`swipe_axis` là list tùy chọn gồm 2–12 electrode khác nhau, thuộc `electrodes`,
+được xếp theo thứ tự trên dải. Lamp khai báo E0…E11 dựa trên chuỗi log E11→E0,
+E0→E8 và E9→E0; xác định được thứ tự, chưa gán đầu nào là bên trái vật lý.
+Cả hai hướng gọi `swipe_action(source="MPR121")` trong `button_actions.py`,
+cùng action sleep với TTP223. Không cần vuốt hết toàn bộ dải. Thiếu/null
+`swipe_axis` chỉ tắt nhận diện vuốt, giữ nhận diện click/hold cũ.
+Cài HAL hỗ trợ trước khi deploy JSON có trường này.
+
+Debounce contact vẫn mặc định 30 ms; vùng chạm dùng tối đa 5 ms ổn định
+(thường là hai poll liên tiếp cách 10 ms) để giữ các chuyển tiếp electrode nhanh.
+Detector theo dõi vùng chạm đã debounce thay vì đếm mỗi electrode chạm chồng
+thành một tap. Chạm nhiều electrode nhưng đứng yên vẫn giữ hành vi click/hold.
+Khi phát hiện di chuyển, hủy kết quả tap/hold đang chờ và phản hồi LED giữ cho
+contact đó; vuốt hợp lệ gọi sleep một lần sau khi nhả. Di chuyển đảo chiều hoặc
+không hợp lệ không gọi reboot/shutdown/reset. Chờ nhả 120 ms để nối các đoạn
+chuyển tiếp ngắn giữa electrode; khi bật swipe, tap/hold phân giải sau khoảng
+chờ này. Contact giữ từ lúc boot vẫn bị bỏ qua. Log ghi hướng, độ dịch chuyển,
+kết quả swipe và thực thi action. Test phát lại chuỗi mask đã đo cùng các ca
+cử chỉ/vòng đời giả lập. Runtime và JSON swipe đã deploy lên Lamp `lamp-0c4e`
+ngày 2026-09-11; startup xác nhận MPR121 ready với trục cấu hình, GPIO và TTP223
+ready, mic switch Lamp ready trên chip1/line9 sau khi cài JSON. Chờ live test cử chỉ.
 
 Event `hold_tier` đã debounce truyền vào cùng `HoldLEDFeedback` với GPIO,
 dùng chung `BUTTON_LED_PRESETS`, xử lý nháy, dọn phản hồi khi nhả và phản hồi
