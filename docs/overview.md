@@ -66,6 +66,18 @@ HAL; moving physical wires is not detected automatically. Malformed
 configuration is rejected before GPIO is claimed. Simulation skips the
 hardware button.
 
+TTP223 touch wiring is device-owned in `robots/lamp/ttp223.json`. Intern v2
+has no TTP223 hardware and does not ship this file. `hal/board/ttp223.py` resolves the detected
+board's `chip`, `lines` and optional `axis` from `boards` and passes a
+`TouchConfig` to the shared driver. Missing file/board falls back to legacy
+`touch` in `hal/board/boards.json`; `enabled: false` disables TTP223 explicitly.
+Malformed configuration is rejected before GPIO is claimed. Restart HAL after
+editing the selected device's configuration; simulation skips hardware input.
+Lamp's new button pin (gpiochip0 line 100, physical pin 37 / PD4) overlaps the
+legacy touch mapping; its replacement touch pin still needs confirmation.
+Intern v2 retains its existing button wiring. The legacy board fallback remains
+unchanged; absence of a JSON file alone does not disable the driver.
+
 Optional MPR121 touch wiring currently belongs to Lamp only, in
 `robots/lamp/mpr121.json`; Intern v2 has no MPR121 declaration. It follows the
 same device-directory selection, validated by `hal/board/mpr121.py`. Lamp

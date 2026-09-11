@@ -14,15 +14,15 @@ Lamp supports a mechanical button, TTP223 touchpads and an optional MPR121 capac
 
 | Device | Pi 4/5 | OrangePi sun60 |
 |---|---|---|
-| GPIO button | gpiochip0 BCM 17 (pull-up, active-LOW) | gpiochip1 line 9 (pull-up, active-LOW) |
+| GPIO button | gpiochip0 BCM 17 (pull-up, active-LOW) | Physical pin 37 / PD4 / gpiochip0 line 100 (pull-up, active-LOW) |
 | TTP223 | not wired | gpiochip0 lines 96 / 100, **pull-up, active-LOW** (pads rest HIGH; a touch is the falling edge). The middle pad on line 98 was removed 2026-08-28. |
 
 Mechanical button wiring belongs to the device: `robots/lamp/gpio_button.json`
 and `robots/intern-v2/gpio_button.json` each declare a `boards` map keyed by
 `raspberry_pi_4`, `raspberry_pi_5`, and `orangepi_sun60`. Each entry has `chip`,
-`line`, and `debounce_ns` (currently `200000000`, or 200 ms). Both devices ship
-the button pins shown above; change the selected device's file when its wiring
-changes, then restart HAL; moving physical wires is not detected automatically.
+`line`, and `debounce_ns` (currently `200000000`, or 200 ms). Lamp uses the
+button pins shown above; Intern v2 retains gpiochip1 line 9 on OrangePi.
+Change the selected device's file when its wiring changes, then restart HAL; moving physical wires is not detected automatically.
 HAL resolves the directory using `DEVICES_DIR` and `DEVICE_TYPE`, then passes
 the detected board's `ButtonConfig` to the shared driver. Device configuration
 takes priority. A missing file or board entry falls back to the existing
@@ -30,7 +30,22 @@ takes priority. A missing file or board entry falls back to the existing
 CM4 and sim; chip 1 / line 9 for OrangePi sun60; all with 200 ms debounce.
 Malformed configuration is rejected before claiming GPIO. Simulation skips
 the hardware button. Pull-up, active-LOW input and gesture behavior remain in
-the shared driver. TTP223 wiring remains in `hal/board/boards.json`.
+the shared driver.
+
+TTP223 wiring is also device-owned: `robots/lamp/ttp223.json` declares a
+`boards` map. Intern v2 has no TTP223 hardware and does not ship this file. Each enabled entry has
+`chip`, `lines` and optional `axis` (the same lines in physical left-to-right
+order). `hal/board/ttp223.py` selects the detected board and passes its
+`TouchConfig` to the shared driver. Missing file or board entry falls back to
+that board's legacy `touch` in `hal/board/boards.json` (OrangePi: chip 0,
+lines 96/100); `"enabled": false` explicitly disables TTP223. Malformed
+configuration is rejected before GPIO is claimed. Restart HAL after editing
+the selected device's JSON. Pull-up, active-LOW behavior and gesture detection
+remain in the shared driver; simulation skips the hardware.
+
+Lamp's new mechanical button uses line 100, which also appears in the legacy
+TTP223 wiring. The replacement pad pin is pending confirmation; do not treat
+that overlapping mapping as verified wiring.
 
 Board detection reads `/proc/device-tree/model`:
 - `"sun60iw2"` → OrangePi 4 Pro / A733
@@ -303,7 +318,7 @@ Resolution order, first match wins:
 | `HAL_TOUCH_SWIPE` | **`true`** | Master switch for rules 1–3. Set `false` to restore the two-gesture behaviour exactly — the rollback path. |
 | `HAL_TOUCH_SWIPE_MIN_GAP_MS` | 40 | The movement floor, and the one number every rule derives from: gaps at or above it mean the hand travelled, below it mean fingers arrived together. Sits inside the measured 23–53 ms empty band. **Load-bearing now that the classifier ships enabled** — raise it if firm taps read as swipes, lower it if real swipes are missed. `HAL_TOUCH_DEBUG` records the gaps it is measured against. |
 
-`boards.json` gains an optional `axis` on the `touch` entry — lines in physical left-to-right order, e.g. `"axis": [96, 100, 98]`. It is **absent** today: line order is not spatial order on this board, and only a labelled press-one-pad-at-a-time run can establish it. Absent, classification falls back to declared line order. A wrong axis costs only the swipe *direction*, which the driver deliberately does not use.
+`ttp223.json` accepts an optional `axis` in each board entry — the configured `lines` in physical left-to-right order. Legacy fallback reads `axis` from the `touch` entry in `boards.json`. It is **absent** today: line order is not spatial order on this board, and only a labelled press-one-pad-at-a-time run can establish it. Absent, classification falls back to declared line order. A wrong axis costs only the swipe *direction*, which the driver deliberately does not use.
 
 ### Constants (`ttp223.py`)
 
@@ -424,12 +439,13 @@ Phrases are intentionally short — they fire mid-stroke and need to feel respon
 | Path | Purpose |
 |---|---|
 | `hal/drivers/gpio_button.py` | GPIO button handler (mechanical, both boards) |
+| `hal/board/ttp223.py` | Device-owned TTP223 configuration loader with legacy fallback |
 | `hal/drivers/ttp223.py` | TTP223 capacitive touchpad handler (OrangePi sun60 only) |
 | `hal/board/mpr121.py` | Device-owned MPR121 configuration loader and validation |
 | `hal/drivers/mpr121.py` | Optional I²C MPR121 touch-and-release handler |
 | `hal/drivers/button_actions.py` | Shared action functions + localized phrase pools |
 | `hal/presets.py` | Language code constants (`LANG_EN`, etc.) |
-| `hal/test_ttp223_probe_orangepi.py` | Standalone pad probe (stdlib ioctl, no gpiod). `info` reads line state with HAL running; `watch` maps pad→line and needs `hal.service` stopped. Lines come from the board profile. |
+| `hal/test_ttp223_probe_orangepi.py` | Standalone pad probe (stdlib ioctl, no gpiod). `info` reads line state with HAL running; `watch` maps pad→line and needs `hal.service` stopped. Lines come from the selected device’s `ttp223.json`, with the same legacy board-profile fallback as HAL. Select the device with `--device-type`. |
 | `hal/test_gpio.py` | Standalone probe for verifying GPIO button line |
 
 Input handlers are started in `hal/server.py` lifespan startup. Missing optional MPR121 configuration skips that driver; malformed enabled configuration rejects startup. Hardware driver failures are logged without stopping the other handlers.

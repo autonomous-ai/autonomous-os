@@ -14,23 +14,35 @@ Lamp hỗ trợ nút cơ học, touchpad TTP223 và bộ điều khiển cảm �
 
 | Thiết bị | Pi 4/5 | OrangePi sun60 |
 |---|---|---|
-| Nút GPIO | gpiochip0 BCM 17 (pull-up, active-LOW) | gpiochip1 line 9 (pull-up, active-LOW) |
+| Nút GPIO | gpiochip0 BCM 17 (pull-up, active-LOW) | Pin vật lý 37 / PD4 / gpiochip0 line 100 (pull-up, active-LOW) |
 | TTP223 | không wire | gpiochip0 line 96 / 100, **pull-up, active-LOW** (pad nghỉ ở mức HIGH; chạm là edge xuống). Pad giữa trên line 98 đã bị bỏ ngày 2026-08-28. |
 
 Wiring nút cơ thuộc về từng device: `robots/lamp/gpio_button.json` và
 `robots/intern-v2/gpio_button.json` đều khai báo map `boards` với các key
 `raspberry_pi_4`, `raspberry_pi_5`, `orangepi_sun60`. Mỗi entry có `chip`, `line`
-và `debounce_ns` (hiện là `200000000`, tức 200 ms). Cả hai device dùng chân nút
-trong bảng trên; khi đổi wiring, sửa file của device tương ứng rồi khởi động
-lại HAL; hệ thống không tự phát hiện việc đổi dây cắm. HAL xác định thư mục
+và `debounce_ns` (hiện là `200000000`, tức 200 ms). Lamp dùng chân nút trong
+bảng trên; Intern v2 vẫn dùng gpiochip1 line 9 trên OrangePi. Khi đổi wiring,
+sửa file của device tương ứng rồi khởi động lại HAL; hệ thống không tự phát hiện việc đổi dây cắm. HAL xác định thư mục
 qua `DEVICES_DIR` và `DEVICE_TYPE`, rồi truyền `ButtonConfig` của board đã
 detect vào driver dùng chung. Cấu hình device được ưu tiên. Thiếu file hoặc
 entry của board thì dùng lại mặc định `button` trong `hal/board/boards.json`:
 chip 0 / line 17 cho Pi 4, Pi 5, CM4 và sim; chip 1 / line 9 cho OrangePi
 sun60; tất cả có debounce 200 ms. Config sai bị từ chối trước khi claim GPIO.
 Chế độ mô phỏng bỏ qua nút phần cứng. Pull-up, active-LOW và hành vi cử chỉ
-vẫn nằm trong driver dùng chung. Wiring TTP223 vẫn nằm trong
-`hal/board/boards.json`.
+vẫn nằm trong driver dùng chung.
+
+Wiring TTP223 cũng do device quản lý: `robots/lamp/ttp223.json` khai báo
+map `boards`. Intern v2 không có phần cứng TTP223 nên không kèm file này. Mỗi entry bật có `chip`,
+`lines` và `axis` tùy chọn (cùng các line đó theo thứ tự vật lý trái sang phải).
+`hal/board/ttp223.py` chọn board đã detect và truyền `TouchConfig` cho driver
+dùng chung. Thiếu file hoặc entry board thì fallback về `touch` cũ của board
+trong `hal/board/boards.json` (OrangePi: chip 0, line 96/100);
+`"enabled": false` tắt TTP223 rõ ràng. Config sai bị từ chối trước khi claim
+GPIO. Restart HAL sau khi sửa JSON của device được chọn. Pull-up, active-LOW
+và nhận diện cử chỉ vẫn ở driver dùng chung; mô phỏng bỏ qua phần cứng.
+
+Nút cơ mới của Lamp dùng line 100, cũng có trong wiring TTP223 cũ. Chân pad
+thay thế đang chờ xác nhận; mapping trùng chân này chưa phải wiring đã xác minh.
 
 Board được detect qua `/proc/device-tree/model`:
 - `"sun60iw2"` → OrangePi 4 Pro / A733
@@ -300,7 +312,7 @@ Thứ tự phân giải, khớp cái nào trước thì thắng:
 | `HAL_TOUCH_SWIPE` | **`true`** | Công tắc chính cho luật 1–3. Đặt `false` để khôi phục đúng hành vi hai-cử-chỉ — đường lùi. |
 | `HAL_TOUCH_SWIPE_MIN_GAP_MS` | 40 | Ngưỡng di chuyển, và là con số duy nhất mà mọi luật đều rút ra từ đó: khoảng cách từ mức này trở lên nghĩa là bàn tay đã di chuyển, dưới mức này nghĩa là các ngón đặt xuống cùng lúc. Nằm trong dải trống 23–53 ms đã đo. **Giờ mang tính then chốt vì bộ phân loại đã ship ở trạng thái bật** — nâng lên nếu tap dứt khoát bị đọc thành swipe, hạ xuống nếu swipe thật bị bỏ sót. `HAL_TOUCH_DEBUG` ghi lại chính các khoảng dùng để đo. |
 
-`boards.json` có thêm trường tùy chọn `axis` trong mục `touch` — các line theo thứ tự vật lý trái sang phải, ví dụ `"axis": [96, 100, 98]`. Hiện tại nó **vắng mặt**: thứ tự line không phải thứ tự không gian trên board này, và chỉ một đợt chạy có nhãn nhấn từng pad một mới xác định được. Khi vắng, phân loại lùi về thứ tự line khai báo. Một axis sai chỉ làm sai **hướng** swipe, thứ mà driver cố ý không dùng.
+`ttp223.json` nhận `axis` tùy chọn trong mỗi entry board — cùng các `lines` đã cấu hình, theo thứ tự vật lý trái sang phải. Fallback cũ đọc `axis` từ mục `touch` trong `boards.json`. Hiện tại nó **vắng mặt**: thứ tự line không phải thứ tự không gian trên board này, và chỉ một đợt chạy có nhãn nhấn từng pad một mới xác định được. Khi vắng, phân loại lùi về thứ tự line khai báo. Một axis sai chỉ làm sai **hướng** swipe, thứ mà driver cố ý không dùng.
 
 ### Hằng số (`ttp223.py`)
 
@@ -420,12 +432,13 @@ Phrase cố tình ngắn — chúng fire giữa lúc vuốt nên cần cảm gi�
 | Đường dẫn | Mục đích |
 |---|---|
 | `hal/drivers/gpio_button.py` | Handler nút GPIO (cơ học, cả hai board) |
+| `hal/board/ttp223.py` | Đọc cấu hình TTP223 theo device, có fallback cũ |
 | `hal/drivers/ttp223.py` | Handler touchpad cảm ứng TTP223 (chỉ OrangePi sun60) |
 | `hal/board/mpr121.py` | Đọc và kiểm tra cấu hình MPR121 do device quản lý |
 | `hal/drivers/mpr121.py` | Handler I²C MPR121 tùy chọn, detect chạm rồi nhả |
 | `hal/drivers/button_actions.py` | Hàm action chung + pool phrase local |
 | `hal/presets.py` | Hằng số mã ngôn ngữ (`LANG_EN`, v.v.) |
-| `hal/test_ttp223_probe_orangepi.py` | Probe pad độc lập (ioctl thuần stdlib, không cần gpiod). `info` đọc trạng thái line khi HAL vẫn chạy; `watch` map pad→line và cần dừng `hal.service`. Line lấy từ board profile. |
+| `hal/test_ttp223_probe_orangepi.py` | Probe pad độc lập (ioctl thuần stdlib, không cần gpiod). `info` đọc trạng thái line khi HAL vẫn chạy; `watch` map pad→line và cần dừng `hal.service`. Line lấy từ `ttp223.json` của device được chọn, fallback về board profile cũ giống HAL. Chọn device bằng `--device-type`. |
 | `hal/test_gpio.py` | Probe độc lập để verify line nút GPIO |
 
 Các handler đầu vào được khởi động trong startup lifespan `hal/server.py`. Thiếu cấu hình MPR121 tùy chọn thì bỏ qua driver đó; cấu hình bật nhưng sai bị từ chối khi startup. Lỗi driver phần cứng được log mà không dừng các handler còn lại.

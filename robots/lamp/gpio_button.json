@@ -11,8 +11,8 @@
       "debounce_ns": 200000000
     },
     "orangepi_sun60": {
-      "chip": 1,
-      "line": 9,
+      "chip": 0,
+      "line": 100,
       "debounce_ns": 200000000
     }
   }
