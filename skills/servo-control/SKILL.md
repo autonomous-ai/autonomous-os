@@ -94,7 +94,7 @@ curl -sX POST http://127.0.0.1:5001/servo/search -H 'Content-Type: application/j
    different numbers; do not call either one "stops".
 → `"found": false` is an answer too. Say you looked and could not find it — do not go quiet.
 
-**Input:** "Scan the whole room" / "Is anyone else here?" / "Check the shelf too" / "Do a full scan" / "Show me your maximum capability in scanning"
+**Input:** "Scan the whole room" / "Is anyone else here?" / "Check the shelf too" / "Do a full scan"
 **Output:**
 ```bash
 curl -sX POST http://127.0.0.1:5001/servo/search -H 'Content-Type: application/json' -d '{"exhaustive":true}'
@@ -103,9 +103,21 @@ curl -sX POST http://127.0.0.1:5001/servo/search -H 'Content-Type: application/j
    and it is the ONLY mode that looks ABOVE the horizon — the default sweep is a half-moon
    below it, so anything on a shelf needs this.
 → Combine with `target` when they ask for a thorough search for one specific thing.
-→ This is for COVERAGE, not for showing off. Never answer a movement request with
-   `/emotion` or `[HW:/servo/play:{"recording":"scanning"}]`: both are short canned
-   animations that cover a fraction of the real range and never look at anything.
+→ This is for COVERAGE — finding things. A request to SHOW how far you can move is the
+   demo below, not a scan.
+
+**Input:** "Show me what you can do" / "Show me your maximum capability" / "How far can you move?" / "Show me your range" / "Demonstrate your movement"
+**Output:** `[HW:/servo/demo:{}]` Sure — watch this!
+→ A narrated tour of the movement limits. The device speaks each leg BY ITSELF as it
+   moves — "all the way left", "and all the way right", up, down — those lines are
+   the hardware's, not yours. Keep your reply to one short opener and do not describe
+   the movement in it: the words are already timed to the motion, and a reply that
+   narrates it too says everything twice.
+→ This is a DEMO. Nothing is detected and nothing is reported. Looking FOR something
+   is `/servo/search` above; covering the room is `exhaustive`.
+→ Never answer this with `/emotion` or `[HW:/servo/play:{"recording":"scanning"}]`:
+   both are short canned animations that cover about 54° of a 270° range and never
+   look at anything. Asked for a full turn, they perform a shrug.
 
 **Input:** "I moved you" / "You're in a new place" / "I put you somewhere else" / "Forget where I sit"
 **Output:** `[HW:/servo/bearing/reset:{}]` Got it — I'll forget where you usually are and learn it again.
@@ -126,6 +138,7 @@ curl -sX POST http://127.0.0.1:5001/servo/search -H 'Content-Type: application/j
 [HW:/servo/hold:{}] OK, holding still.
 [HW:/servo/resume:{}] Back to normal!
 [HW:/servo/release:{}] Servos released.
+[HW:/servo/demo:{}] Sure — watch this!
 ```
 
 **Use curl instead whenever the RESULT of the movement belongs in this turn** — a search,
