@@ -15,7 +15,7 @@ Lamp supports a mechanical button, TTP223 touchpads and an optional MPR121 capac
 | Device | Pi 4/5 | OrangePi sun60 |
 |---|---|---|
 | GPIO button | gpiochip0 BCM 17 (pull-up, active-LOW) | Physical pin 37 / PD4 / gpiochip0 line 100 (pull-up, active-LOW) |
-| TTP223 | not wired | gpiochip0 lines 96 / 100, **pull-up, active-LOW** (pads rest HIGH; a touch is the falling edge). The middle pad on line 98 was removed 2026-08-28. |
+| TTP223 | not wired | Two pads: S1 at physical pin 29 / PD0 / gpiochip0 line 96; S3 at physical pin 33 / PD2 / gpiochip0 line 98. **Pull-up, active-LOW** (pads rest HIGH; a touch is the falling edge). |
 
 Mechanical button wiring belongs to the device: `robots/lamp/gpio_button.json`
 and `robots/intern-v2/gpio_button.json` each declare a `boards` map keyed by
@@ -43,9 +43,10 @@ configuration is rejected before GPIO is claimed. Restart HAL after editing
 the selected device's JSON. Pull-up, active-LOW behavior and gesture detection
 remain in the shared driver; simulation skips the hardware.
 
-Lamp's new mechanical button uses line 100, which also appears in the legacy
-TTP223 wiring. The replacement pad pin is pending confirmation; do not treat
-that overlapping mapping as verified wiring.
+Hardware confirmed two pads: S1 on pin 29 (line 96) and S3 on pin 33 (line 98).
+The Lamp JSON uses these lines, leaving pin 37 (line 100) for the mechanical
+button. The legacy fallback still uses lines 96/100; keep the Lamp JSON installed
+to avoid that old overlap.
 
 Board detection reads `/proc/device-tree/model`:
 - `"sun60iw2"` → OrangePi 4 Pro / A733
@@ -365,7 +366,7 @@ It never logs to journald, deliberately: HAL is chatty enough that the `hal.serv
 | `HAL_TOUCH_DEBUG` | `false` | Master switch. Off = every entry point is a no-op. |
 | `HAL_TOUCH_DEBUG_DIR` | `touch_logs/` next to the module | Output root. Falls back to the temp dir if the tree is read-only. |
 | `HAL_TOUCH_DEBUG_MAX_ENTRIES` | 200 | File cap, oldest pruned on each write. 0 = unbounded. |
-| `HAL_TOUCH_DEBUG_PADS` | _(unset)_ | Line→label map, e.g. `96=S1,98=S2,100=S4`. Unset, pads are labelled by line number — the historical S-names do not follow line order after two relocations, so the driver does not guess them. |
+| `HAL_TOUCH_DEBUG_PADS` | _(unset)_ | Line→label map, e.g. `96=S1,98=S3`. Unset, pads are labelled by line number — the historical S-names do not follow line order after two relocations, so the driver does not guess them. |
 
 
 ## Shared action library (`hal/drivers/button_actions.py`)

@@ -73,8 +73,9 @@ board's `chip`, `lines` and optional `axis` from `boards` and passes a
 `touch` in `hal/board/boards.json`; `enabled: false` disables TTP223 explicitly.
 Malformed configuration is rejected before GPIO is claimed. Restart HAL after
 editing the selected device's configuration; simulation skips hardware input.
-Lamp's new button pin (gpiochip0 line 100, physical pin 37 / PD4) overlaps the
-legacy touch mapping; its replacement touch pin still needs confirmation.
+Lamp uses two TTP223 pads: S1 on physical pin 29 / PD0 / gpiochip0 line 96
+and S3 on pin 33 / PD2 / line 98. Its button uses pin 37 / PD4 / line 100.
+Keep the Lamp JSON installed: the legacy touch fallback still overlaps the button.
 Intern v2 retains its existing button wiring. The legacy board fallback remains
 unchanged; absence of a JSON file alone does not disable the driver.
 

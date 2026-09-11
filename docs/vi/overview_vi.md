@@ -70,9 +70,10 @@ không có phần cứng TTP223 nên không kèm file này. `hal/board/ttp223.py
 dùng chung. Thiếu file/board thì fallback về `touch` cũ trong
 `hal/board/boards.json`; `enabled: false` tắt TTP223 rõ ràng. Config sai bị từ
 chối trước khi claim GPIO. Restart HAL sau khi sửa config của device được
-chọn; mô phỏng bỏ qua input phần cứng. Nút mới của Lamp (gpiochip0 line 100,
-pin vật lý 37 / PD4) trùng mapping touch cũ; chân touch thay thế vẫn cần xác
-nhận. Intern v2 giữ wiring nút hiện có. Fallback board cũ vẫn giữ nguyên;
+chọn; mô phỏng bỏ qua input phần cứng. Lamp dùng hai pad TTP223: S1 ở pin vật lý
+29 / PD0 / gpiochip0 line 96, S3 ở pin 33 / PD2 / line 98. Nút cơ dùng pin 37 /
+PD4 / line 100. Cần giữ JSON của Lamp trên device vì fallback touch cũ vẫn trùng
+chân nút cơ. Intern v2 giữ wiring nút hiện có. Fallback board cũ vẫn giữ nguyên;
 chỉ thiếu file JSON không có nghĩa là driver bị tắt.
 
 Wiring cảm ứng MPR121 tùy chọn hiện chỉ thuộc Lamp, trong
