@@ -1,4 +1,4 @@
-"""GPIO button handler for pin 17.
+"""GPIO button handler with device-declared wiring.
 
 Supports five actions on a single button:
 - Single click: stop speaker / unmute mic (fires immediately on release)
@@ -33,7 +33,7 @@ from hal.presets import (
     BUTTON_LED_PRESETS,
     RGB_CMD_SOLID,
 )
-from hal.board.board import board_profile
+from hal.board.gpio_button import ButtonConfig
 from hal.drivers.base import Priority
 from hal.drivers.button_actions import (
     DOUBLE_CLICK_WINDOW,
@@ -68,21 +68,8 @@ def _warn_color(tier: str):
 # Blink: 0.25 s on + 0.25 s off = 2 Hz full cycle.
 LED_BLINK_HALF_PERIOD_S = 0.25
 
-# Per-board button wiring (chip / line / debounce_ns) lives in the board
-# platform layer — hal/board/board.py — the single source of truth
-# shared across drivers. lgpio.callback tick is nanoseconds; both per-board
-# debounce values stay well under DOUBLE_CLICK_WINDOW so triple click is
-# still detectable.
-
-
-def _resolve_board_config() -> tuple[int, int, int]:
-    """Return (chip, line, debounce_ns) for the wake button on this board."""
-    b = board_profile().button
-    return b.chip, b.line, b.debounce_ns
-
-
 class GPIOButtonHandler:
-    def __init__(self):
+    def __init__(self, config: ButtonConfig):
         self._lgpio = None
         self._handle = None
         self._callback = None
@@ -96,9 +83,9 @@ class GPIOButtonHandler:
         # (per-watcher stop) so the previous watcher exits cleanly without
         # racing the new one. None when no hold is active.
         self._hold_watcher_stop = None
-        self._chip = 0
-        self._pin = 0
-        self._debounce_ns = 0  # placeholder; overwritten in start() from board_profile().button.debounce_ns
+        self._chip = config.chip
+        self._pin = config.line
+        self._debounce_ns = config.debounce_ns
         self._last_press_tick = 0
         self._last_release_tick = 0
 
@@ -153,7 +140,6 @@ class GPIOButtonHandler:
     def start(self):
         import lgpio
 
-        self._chip, self._pin, self._debounce_ns = _resolve_board_config()
         self._lgpio = lgpio
         self._handle = lgpio.gpiochip_open(self._chip)
         lgpio.gpio_claim_alert(

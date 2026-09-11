@@ -16,11 +16,26 @@ Lamp has two physical input devices the user can touch directly. They share the 
 | GPIO button | gpiochip0 BCM 17 (pull-up, active-LOW) | gpiochip1 line 9 (pull-up, active-LOW) |
 | TTP223 | not wired | gpiochip0 lines 96 / 100, **pull-up, active-LOW** (pads rest HIGH; a touch is the falling edge). The middle pad on line 98 was removed 2026-08-28. |
 
-Board detection in both handlers reads `/proc/device-tree/model`:
+Mechanical button wiring belongs to the device: `robots/lamp/gpio_button.json`
+and `robots/intern-v2/gpio_button.json` each declare a `boards` map keyed by
+`raspberry_pi_4`, `raspberry_pi_5`, and `orangepi_sun60`. Each entry has `chip`,
+`line`, and `debounce_ns` (currently `200000000`, or 200 ms). Both devices ship
+the button pins shown above; change the selected device's file when its wiring
+changes, then restart HAL; moving physical wires is not detected automatically.
+HAL resolves the directory using `DEVICES_DIR` and `DEVICE_TYPE`, then passes
+the detected board's `ButtonConfig` to the shared driver. Device configuration
+takes priority. A missing file or board entry falls back to the existing
+`button` defaults in `hal/board/boards.json`: chip 0 / line 17 for Pi 4, Pi 5,
+CM4 and sim; chip 1 / line 9 for OrangePi sun60; all with 200 ms debounce.
+Malformed configuration is rejected before claiming GPIO. Simulation skips
+the hardware button. Pull-up, active-LOW input and gesture behavior remain in
+the shared driver. TTP223 wiring remains in `hal/board/boards.json`.
+
+Board detection reads `/proc/device-tree/model`:
 - `"sun60iw2"` → OrangePi 4 Pro / A733
 - `"raspberry pi 5"` → Pi 5
 - `"raspberry pi 4"` → Pi 4
-- else → unknown, both handlers skip claiming GPIO lines
+- unknown or unsupported hardware → rejected by the HAL startup board gate
 
 ## Gesture map
 
