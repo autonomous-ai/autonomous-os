@@ -64,18 +64,48 @@ curl -sX POST http://127.0.0.1:5000/api/vision/look -H 'Content-Type: applicatio
 → Answer from the returned `description`, or inspect the returned `path` with an image tool when only a path is returned. On error, do not guess. Do **not** use `[HW:...]` markers for these movements — markers fire only *after* your reply is written, so a snapshot taken during the turn would show the OLD position. See the Camera skill.
 
 **Input:** "Where are you?" / "Can you find me?" / "Look around for me" / "Where did I go?"
-**Output:** `[HW:/servo/search:{}]` Looking around for you...
+**Output:** run it DURING the turn, then answer from what comes back:
+```bash
+curl -sX POST http://127.0.0.1:5001/servo/search -H 'Content-Type: application/json' -d '{}'
+```
+→ Do **not** use `[HW:/servo/search:...]`. Markers fire only *after* your reply is
+   written, so a marker-driven search finishes into a turn that has already ended and
+   the person is told nothing. The response body **is** your answer.
 
 **Input:** "Find my cup" / "Look around for my keyboard" / "Where did I leave my phone?"
-**Output:** `[HW:/servo/search:{"target":"cup"}]` Let me look around for it...
+**Output:**
+```bash
+curl -sX POST http://127.0.0.1:5001/servo/search -H 'Content-Type: application/json' -d '{"target":"cup"}'
+```
 → `target` is any noun — COCO classes are found locally, anything else via open-vocab.
    Without it the sweep looks for a PERSON and will end on the first one it sees,
    which is why an object search must always name its target.
+→ The sweep takes up to ~40 s and says "still looking" itself at the halfway point, so
+   the wait is covered. Wait for it. Do not reply first and do not start a second one.
+→ Read the body; do not narrate the movement:
+```json
+{"found": true, "kind": "cup", "found_at_yaw": 85.0, "centred": true,
+ "image_path": "…/media/hal-snapshots/snap_*.jpg",
+ "looks_visited": 7, "bearings_visited": 2}
+```
+   The picture at `image_path` is shown to the person automatically — you cannot see it,
+   so say what you found and roughly where, and never describe the image itself.
+   `looks_visited` counts camera looks, `bearings_visited` counts body turns. They are
+   different numbers; do not call either one "stops".
+→ `"found": false` is an answer too. Say you looked and could not find it — do not go quiet.
 
-**Input:** "Scan the whole room" / "Show me your maximum capability in scanning" / "Do a full scan"
-**Output:** `[HW:/servo/search:{"exhaustive":true}]` Doing a full sweep — this takes a moment...
-→ Walks the whole look ring at every bearing instead of returning at the first sighting.
-   Combine with `target` when they ask for a thorough search for a specific thing.
+**Input:** "Scan the whole room" / "Is anyone else here?" / "Check the shelf too" / "Do a full scan" / "Show me your maximum capability in scanning"
+**Output:**
+```bash
+curl -sX POST http://127.0.0.1:5001/servo/search -H 'Content-Type: application/json' -d '{"exhaustive":true}'
+```
+→ Walks the whole look ring at every bearing instead of returning at the first sighting,
+   and it is the ONLY mode that looks ABOVE the horizon — the default sweep is a half-moon
+   below it, so anything on a shelf needs this.
+→ Combine with `target` when they ask for a thorough search for one specific thing.
+→ This is for COVERAGE, not for showing off. Never answer a movement request with
+   `/emotion` or `[HW:/servo/play:{"recording":"scanning"}]`: both are short canned
+   animations that cover a fraction of the real range and never look at anything.
 
 **Input:** "I moved you" / "You're in a new place" / "I put you somewhere else" / "Forget where I sit"
 **Output:** `[HW:/servo/bearing/reset:{}]` Got it — I'll forget where you usually are and learn it again.
@@ -87,7 +117,7 @@ curl -sX POST http://127.0.0.1:5000/api/vision/look -H 'Content-Type: applicatio
 
 ## How to Control Servo
 
-**No exec/curl needed.** Inline markers at start of reply:
+**For a movement you just announce, no exec/curl is needed.** Inline markers at start of reply:
 
 ```
 [HW:/servo/aim:{"direction":"desk"}] Aimed at your desk.
@@ -97,6 +127,10 @@ curl -sX POST http://127.0.0.1:5000/api/vision/look -H 'Content-Type: applicatio
 [HW:/servo/resume:{}] Back to normal!
 [HW:/servo/release:{}] Servos released.
 ```
+
+**Use curl instead whenever the RESULT of the movement belongs in this turn** — a search,
+or a move followed by looking. A marker fires after your reply is already written, so
+anything it produces arrives too late for you to say. `/servo/search` is always curl.
 
 `duration` on `/servo/aim` controls move speed in seconds (default 2.0, 0 = instant).
 
@@ -142,7 +176,7 @@ Available animations:
 | `excited` | High energy, celebrations |
 | `shy` | Bashful moments |
 | `shock` | Surprise |
-| `scanning` | Looking around, searching |
+| `scanning` | A short searching *gesture* — mood only. It is a 54° canned wiggle with the camera uninvolved, so it never answers "look around for X": that is `/servo/search` above |
 | `wake_up` | Waking up, starting a new session |
 | `music_groove` | Grooving to music (auto-triggered during playback) |
 | `music_chill` | Chill/lo-fi vibe (auto-triggered during calm music) |

@@ -501,7 +501,14 @@ Distinct from the look-aim and still kept off the capture path: the aim runs ins
 a deadline, and a sweep takes seconds. What changed is that "affordable" now includes two cases the
 lamp decides for itself. A sweep is entered when:
 
-- the user asks outright — *"where are you?"*, *"can you find me?"* (`skills/servo-control`)
+- the user asks outright — *"where are you?"*, *"can you find me?"*, *"find my keyboard"*
+  (`skills/servo-control`). This one is a **blocking curl inside the turn**, not a
+  `[HW:/servo/search:...]` marker. Markers fire after the reply text is already written, so a
+  marker-driven search finishes into a turn that has ended: the lamp sweeps, finds the thing, and
+  the answer goes nowhere. It is also a 40 s call against `fireHWCall`'s 5 s client, which used to
+  abandon the request before reaching its own `flow.Log` — so the sweep did not even appear in the
+  Monitor. The agent waits for the body and answers from it, the way `/api/vision/look` already
+  works.
 - they accept an offer after a failed look — *"I can't see it. Want me to look around?"*
 - **the look-aim is about to give up** — before `look_lost` claims *"I can't find you"*, which until
   now it said having only turned toward a remembered bearing. A bearing is a guess about where

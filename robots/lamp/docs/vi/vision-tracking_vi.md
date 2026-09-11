@@ -499,7 +499,14 @@ Khác với look-aim, và vẫn cố ý nằm ngoài đường chụp: pha ngắ
 ra với hạn chót, còn một pha quét mất vài giây. Điều đã thay đổi là "thong thả" giờ bao gồm cả hai
 trường hợp đèn tự quyết định. Pha quét được vào khi:
 
-- người dùng yêu cầu thẳng — *"bạn đang ở đâu?"*, *"tìm tôi được không?"* (`skills/servo-control`)
+- người dùng yêu cầu thẳng — *"bạn đang ở đâu?"*, *"tìm tôi được không?"*, *"tìm bàn phím của tôi"*
+  (`skills/servo-control`). Trường hợp này là một lệnh **curl blocking ngay trong lượt**, không phải
+  marker `[HW:/servo/search:...]`. Marker chỉ bắn sau khi phần text trả lời đã được viết xong, nên
+  một lần tìm kiếm chạy bằng marker sẽ kết thúc vào một lượt đã đóng: đèn quét, tìm thấy vật, rồi câu
+  trả lời không đi tới đâu cả. Đó cũng là một lệnh gọi dài 40 s đối đầu với client 5 s của
+  `fireHWCall` — client này trước đây bỏ request trước cả khi kịp chạy `flow.Log` của chính nó, nên
+  pha quét thậm chí không hiện ra trong Monitor. Agent chờ body rồi trả lời dựa trên đó, đúng theo
+  cách `/api/vision/look` vẫn đang làm.
 - họ đồng ý với đề nghị sau một lần nhìn thất bại — *"Tôi không thấy nó. Bạn có muốn tôi quay quanh tìm thử không?"*
 - **look-aim sắp bỏ cuộc** — trước khi `look_lost` tuyên bố *"Tôi không tìm thấy bạn"*, câu mà đến giờ
   nó vẫn nói sau khi mới chỉ quay về một bearing đã ghi nhớ. Bearing là phỏng đoán về nơi người ta
