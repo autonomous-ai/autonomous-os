@@ -297,6 +297,7 @@ if "display" in _declared:
 
 _gpio_button_handler = None
 _ttp223_handler = None
+_mpr121_handler = None
 
 # Set the moment lifespan shutdown begins — late async initializers (sensing-init)
 # check it so they don't start services nobody will stop.
@@ -363,7 +364,7 @@ def _sim_audio_probe(sd_module) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _gpio_button_handler, _ttp223_handler
+    global _gpio_button_handler, _ttp223_handler, _mpr121_handler
 
     # --- Phase 0: Borrow the hardware from whoever owns it ---
     # Empty unless ROBOT.md declares an `owner:`. Where one exists it holds
@@ -898,25 +899,40 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("TrackerService skipped — needs servo+camera routes mounted")
 
-    # GPIO17 button (single=stop/unmute, triple=reboot, long=shutdown). The
-    # mock board carries parser-required placeholder pins, never GPIO hardware.
-    if _board_id != "sim":
+    # Device wiring overrides the legacy board defaults. Simulation skips GPIO.
+    if _gpio_button_config is not None:
         try:
             from hal.drivers.gpio_button import GPIOButtonHandler
 
-            _gpio_button_handler = GPIOButtonHandler()
+            _gpio_button_handler = GPIOButtonHandler(_gpio_button_config)
             _gpio_button_handler.start()
         except Exception as e:
             logger.warning(f"GPIO button init failed: {e}")
     else:
         logger.info("GPIO button skipped — mock board has no hardware")
 
+    # MPR121 is opt-in per device/board; absent hardware leaves other inputs running.
+    if _mpr121_config is not None:
+        try:
+            from hal.drivers.mpr121 import MPR121Handler
+
+            _mpr121_handler = MPR121Handler(_mpr121_config)
+            _mpr121_handler.start()
+        except Exception as e:
+            logger.warning(
+                "MPR121 init failed on i2c-%d address 0x%02x: %s",
+                _mpr121_config.bus, _mpr121_config.address, e,
+            )
+            _mpr121_handler = None
+    else:
+        logger.info("MPR121 skipped — no enabled device wiring or simulated board")
+
     # TTP223 capacitive touchpad (OrangePi sun60 only — same gestures as
     # GPIO button, runs independently. Skips silently on other boards.)
     try:
         from hal.drivers.ttp223 import TTP223Handler
 
-        _ttp223_handler = TTP223Handler()
+        _ttp223_handler = TTP223Handler(_ttp223_config)
         _ttp223_handler.start()
     except Exception as e:
         logger.warning(f"TTP223 init failed: {e}")
@@ -1002,6 +1018,8 @@ async def lifespan(app: FastAPI):
 
     _lifespan_stopping.set()
     _thermal_stop.set()
+    if _mpr121_handler is not None:
+        _mpr121_handler.stop()
 
     # Voice/sensing stops (~3s) run concurrently with the announce+park below —
     # they only tear down mic/STT/perception threads, never the TTS output the
@@ -1282,6 +1300,24 @@ from hal.board.board import assert_board_supported
 # HAL_SIMULATE is set.
 _board_id = assert_board_supported([] if _simulation else _profile.boards)
 logger.info("Board gate: device=%s board=%s declared=%s", _resolve_device_type(), _board_id, _profile.boards)
+
+from hal.board.gpio_button import load_button_config
+
+_gpio_button_config = (
+    None if _board_id == "sim" else load_button_config(_device_dir, _board_id)
+)
+
+from hal.board.mpr121 import load_mpr121_config
+
+_mpr121_config = (
+    None if _board_id == "sim" else load_mpr121_config(_device_dir, _board_id)
+)
+
+from hal.board.ttp223 import load_touch_config
+
+_ttp223_config = (
+    None if _board_id == "sim" else load_touch_config(_device_dir, _board_id)
+)
 
 from hal.board.device import plan_mounts
 

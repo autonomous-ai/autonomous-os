@@ -54,6 +54,53 @@ skills/                           — Built-in SKILL.md files for agent runtime,
 integrations/                     — Off-device: companions/, chat-bridges/, perception-service/
 ```
 
+Mechanical GPIO button wiring is owned by each device in
+`robots/lamp/gpio_button.json` and `robots/intern-v2/gpio_button.json`.
+HAL resolves the device directory through `DEVICES_DIR` and `DEVICE_TYPE`,
+selects the detected board's `chip`, `line`, and `debounce_ns` from the `boards`
+map, and passes that configuration to the shared `hal/drivers/gpio_button.py`
+driver. Device configuration takes priority; a missing file or board entry
+falls back to the existing `button` defaults in `hal/board/boards.json`.
+Changing a device's button pins requires updating its JSON file and restarting
+HAL; moving physical wires is not detected automatically. Malformed
+configuration is rejected before GPIO is claimed. Simulation skips the
+hardware button.
+
+TTP223 touch wiring is device-owned in `robots/lamp/ttp223.json`. Intern v2
+has no TTP223 hardware and does not ship this file. `hal/board/ttp223.py` resolves the detected
+board's `chip`, `lines` and optional `axis` from `boards` and passes a
+`TouchConfig` to the shared driver. Missing file/board falls back to legacy
+`touch` in `hal/board/boards.json`; `enabled: false` disables TTP223 explicitly.
+Malformed configuration is rejected before GPIO is claimed. Restart HAL after
+editing the selected device's configuration; simulation skips hardware input.
+Lamp's new button pin (gpiochip0 line 100, physical pin 37 / PD4) overlaps the
+legacy touch mapping; its replacement touch pin still needs confirmation.
+Intern v2 retains its existing button wiring. The legacy board fallback remains
+unchanged; absence of a JSON file alone does not disable the driver.
+
+Optional MPR121 touch wiring currently belongs to Lamp only, in
+`robots/lamp/mpr121.json`; Intern v2 has no MPR121 declaration. It follows the
+same device-directory selection, validated by `hal/board/mpr121.py`. Lamp
+ships an enabled `orangepi_sun60` entry using bus 0 and address 0x5A, verified
+for initialization and polling on Lamp `lamp-0c4e`. The hardware script uses
+pins 3/5 (TWI0); verify the actual wiring and enable the
+correct I²C controller externally. HAL does not change boot overlays. Missing
+`/dev/i2c-0` logs an initialization failure and leaves existing inputs running.
+Its `boards` entry requires an explicit I²C `bus`; there is no scan or guessed MPR121 fallback. Missing
+file/board or `enabled: false` skips MPR121 and preserves existing GPIO/TTP223
+inputs; simulation also skips it. Malformed enabled configuration rejects
+startup. Restart HAL after changing wiring configuration. The shared
+`hal/drivers/mpr121.py` driver groups selected electrodes into one debounced
+touch-and-release session, then calls `single_click_action(source="MPR121")`
+once, with no double-tap or destructive hold mapping. Defaults are address
+`0x5A`, electrodes 0–11, touch/release thresholds 2/1, autoconfiguration enabled,
+10 ms polling and 30 ms debounce, with 100 ms startup settling. An I²C failure
+or overcurrent fault stops only this driver. Logger `hal.drivers.mpr121` records
+configuration, electrode changes, debounced taps, action dispatch and lifecycle
+in the normal HAL log/journal; unchanged polls do not emit INFO logs.
+See [physical controls](../robots/lamp/docs/physical-controls.md) for configuration
+and gesture details.
+
 ## Principles
 
 - **Hardware is a plugin** — plug in and it works, unplug and it's skipped

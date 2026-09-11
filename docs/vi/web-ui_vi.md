@@ -142,6 +142,44 @@ base URL — thứ luôn load lên kèm giá trị thật. Thiếu điều kiệ
 AI Brain mới là ghi đè im lặng lên key TTS/STT đang cố tình khác: đã có máy giữ
 key openrouter đi kèm URL proxy autonomous, một cặp không thể chạy.
 
+**Quyền sở hữu key TTS.** Thiết bị chỉ lưu đúng một key TTS (`ttsAPIKey`), và nó
+luôn thuộc về provider đang được chọn trong Voice. `Autonomous (proxy)` và
+`Custom (BYO URL)` không lưu gì cả mà kế thừa key AI Brain qua
+`Config.GetTTSAPIKey()` (`system/server/config/config.go:605`); `Piper` không cần
+key; `OpenAI (direct)` và `ElevenLabs (direct)` **bắt buộc phải có key riêng** —
+JWT Autonomous kế thừa sẽ bị từ chối bằng 401, HAL retry rồi bỏ cuộc và trả về 0
+sample, tức là thiết bị câm mà UI không báo lỗi gì. Bốn quy tắc giữ bất biến này:
+
+- Save bị **từ chối** khi provider direct không có key vừa nhập lẫn key đã lưu
+  thuộc đúng provider đó. Nhãn API Key hiển thị "required" với provider direct và
+  "optional — leave blank to reuse AI brain key" với các lựa chọn còn lại.
+- Badge `✓ configured` và placeholder `•••••••• saved` chỉ hiện khi key đã lưu
+  thuộc về provider đang chọn. Quyền sở hữu được suy ra từ cặp `tts_base_url` +
+  `tts_provider` lúc load qua `detectChoice()`
+  (`system/web/src/pages/settings/ttsProvider.ts`) — không thêm field config nào.
+- Mirror key AI Brain chỉ điền vào ô key TTS đang trống với `autonomous` /
+  `custom` (`ttsInheritsLlmKey()` trong `SettingsPanel`). Mirror vào provider
+  direct sẽ đặt một JWT Autonomous vào ô đó — trông như đã cấu hình và lưu trót
+  lọt, nhưng vendor trả về 401. Điều này khớp với điều kiện
+  `sttProvider === "autonomous"` mà các mirror phía STT vốn đã có.
+- Đổi provider khác với chủ sở hữu của key sẽ gửi `clear_tts_api_key: true`, và
+  `applyVoicePipelineFields` xử lý bằng cách xoá rỗng `ttsAPIKey`. Gửi
+  `tts_api_key: ""` không làm được việc này: mọi field trong
+  `UpdateConfigRequest` theo ngữ nghĩa PATCH, `""` nghĩa là "không gửi". Key sau
+  khi xoá được đẩy live xuống HAL dưới dạng giá trị *đã resolve*
+  (`GetTTSAPIKey()`), vì `/voice/tts/config` của HAL hiểu key rỗng là "giữ
+  nguyên key hiện tại".
+
+Key đã gõ nhưng chưa lưu được cache theo từng provider **chỉ trong tab trình
+duyệt** (một `useRef` trong `TTSSection`), để đổi qua lại giữa các provider trước
+khi lưu không phải gõ lại. Cache này mất khi reload và khi Save; thiết bị không
+bao giờ giữ quá một key.
+
+> Luồng Setup (`system/web/src/components/setup/TTSSection.tsx`) vẫn chưa expose
+> key và base URL của TTS — cả hai mirror từ AI Brain — nên provider direct chọn
+> trong lúc setup không thể nhập key hợp lệ ở đó. Hãy cấu hình sau trong
+> Settings → Voice.
+
 Settings **không phải là một trang riêng**. Nó là một khu vực (area) của chính shell Monitor (`system/web/src/pages/monitor/index.tsx`), truy cập tại route `/setting`. Trong `App.tsx`, `/monitor` và `/setting` là các route con của một layout route duy nhất có element render `<Monitor/>`; React Router giữ element đó luôn mounted khi chỉ đường dẫn con thay đổi, nên sidebar **không** bị remount khi chuyển giữa Monitor và Settings (không có hiện tượng nháy toàn trang). Shell suy ra khu vực — `"monitor"` hoặc `"setting"` — từ `useLocation().pathname`.
 
 Nhóm Settings có thể thu gọn nằm trong `NAV` của sidebar dùng chung (`system/web/src/pages/monitor/types.ts`). Bấm một mục Settings sẽ điều hướng tới `/setting` và render `SettingsPanel` (`system/web/src/pages/settings/SettingsPanel.tsx`) ở khu vực chính; bấm một mục Monitor sẽ điều hướng tới `/monitor`.

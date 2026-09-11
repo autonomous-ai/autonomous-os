@@ -1,26 +1,57 @@
-# Physical Controls — GPIO Button + TTP223 Touchpad
+# Physical Controls — GPIO Button, TTP223 and MPR121
 
-Lamp has two physical input devices the user can touch directly. They share the same action library (`hal/drivers/button_actions.py`) so any gesture mapped to "single click" behaves identically whether it came from the mechanical button or the capacitive touchpad.
+Lamp supports a mechanical button, TTP223 touchpads and an optional MPR121 capacitive touch controller. They share the same action library (`hal/drivers/button_actions.py`) so any gesture mapped to "single click" behaves identically whether it came from the mechanical button or the capacitive touchpad.
 
-## Why two devices
+## Input devices
 
 | Device | Role | Where |
 |---|---|---|
 | **GPIO button** | One mechanical button. Used for decisive actions including destructive ones (reboot / shutdown / factory-reset). The mechanical feel and long-hold detection make accidental destructive actions unlikely. | Both Pi 4/5 and OrangePi sun60 |
 | **TTP223 capacitive touchpad** | Two touch pads arranged as a "dog head" surface for petting + soft stop/unmute. No destructive gestures because the IC's FastMode prevents reliable hold detection. | OrangePi sun60 only (4 Pro / A733) |
+| **MPR121 capacitive touch controller** | Up to 12 electrodes; one touch-and-release session calls the shared single-click action. No double-tap or destructive hold mapping. | Lamp with an explicit I²C configuration in `mpr121.json` |
 
 ## Wiring
 
 | Device | Pi 4/5 | OrangePi sun60 |
 |---|---|---|
-| GPIO button | gpiochip0 BCM 17 (pull-up, active-LOW) | gpiochip1 line 9 (pull-up, active-LOW) |
+| GPIO button | gpiochip0 BCM 17 (pull-up, active-LOW) | Physical pin 37 / PD4 / gpiochip0 line 100 (pull-up, active-LOW) |
 | TTP223 | not wired | gpiochip0 lines 96 / 100, **pull-up, active-LOW** (pads rest HIGH; a touch is the falling edge). The middle pad on line 98 was removed 2026-08-28. |
 
-Board detection in both handlers reads `/proc/device-tree/model`:
+Mechanical button wiring belongs to the device: `robots/lamp/gpio_button.json`
+and `robots/intern-v2/gpio_button.json` each declare a `boards` map keyed by
+`raspberry_pi_4`, `raspberry_pi_5`, and `orangepi_sun60`. Each entry has `chip`,
+`line`, and `debounce_ns` (currently `200000000`, or 200 ms). Lamp uses the
+button pins shown above; Intern v2 retains gpiochip1 line 9 on OrangePi.
+Change the selected device's file when its wiring changes, then restart HAL; moving physical wires is not detected automatically.
+HAL resolves the directory using `DEVICES_DIR` and `DEVICE_TYPE`, then passes
+the detected board's `ButtonConfig` to the shared driver. Device configuration
+takes priority. A missing file or board entry falls back to the existing
+`button` defaults in `hal/board/boards.json`: chip 0 / line 17 for Pi 4, Pi 5,
+CM4 and sim; chip 1 / line 9 for OrangePi sun60; all with 200 ms debounce.
+Malformed configuration is rejected before claiming GPIO. Simulation skips
+the hardware button. Pull-up, active-LOW input and gesture behavior remain in
+the shared driver.
+
+TTP223 wiring is also device-owned: `robots/lamp/ttp223.json` declares a
+`boards` map. Intern v2 has no TTP223 hardware and does not ship this file. Each enabled entry has
+`chip`, `lines` and optional `axis` (the same lines in physical left-to-right
+order). `hal/board/ttp223.py` selects the detected board and passes its
+`TouchConfig` to the shared driver. Missing file or board entry falls back to
+that board's legacy `touch` in `hal/board/boards.json` (OrangePi: chip 0,
+lines 96/100); `"enabled": false` explicitly disables TTP223. Malformed
+configuration is rejected before GPIO is claimed. Restart HAL after editing
+the selected device's JSON. Pull-up, active-LOW behavior and gesture detection
+remain in the shared driver; simulation skips the hardware.
+
+Lamp's new mechanical button uses line 100, which also appears in the legacy
+TTP223 wiring. The replacement pad pin is pending confirmation; do not treat
+that overlapping mapping as verified wiring.
+
+Board detection reads `/proc/device-tree/model`:
 - `"sun60iw2"` → OrangePi 4 Pro / A733
 - `"raspberry pi 5"` → Pi 5
 - `"raspberry pi 4"` → Pi 4
-- else → unknown, both handlers skip claiming GPIO lines
+- unknown or unsupported hardware → rejected by the HAL startup board gate
 
 ## Gesture map
 
@@ -111,7 +142,7 @@ Degradation is by omission in both directions. On a device with **no camera** ne
 **Relocating, not merely writing.** Two states write the servos continuously without moving the head anywhere: the idle loop breathing, and a tracking session pursuing the user's face. Treating either as a move means `last_servo_write` is never stale and nearly every frame is refused — measured, idle: 0.3 samples/s recorded against 4.9/s blocked; measured, tracking: 0.7/s against 4.5/s, refusing a user at yaw 0.9° with a 130 px face dead centre for having one sample in the window instead of two. Tracking matters most: it is the lamp following this user's face, so refusing to notice they are addressing it precisely then is the most broken-looking moment available — which is why the settling test must not become `_tracking_active` by the back door. Both are small continuous corrections and the yaw survives them. The `[gaze] sampling at N/s; blocked: …` line breaks the blocked count down by reason, because the two gates are fixed in different places.
 
 End-to-end chain:
-1. `gpio_button.py` / `ttp223.py` detect single click → call `single_click_action(source)` in `button_actions.py`
+1. `gpio_button.py` / `ttp223.py` / `mpr121.py` detect single click → call `single_click_action(source)` in `button_actions.py`
 2. `single_click_action` → `_cancel_agent_speech()` (fire-and-forget thread) + active `tracker_service.stop()` + `stop_tts()` (routes/voice.py) + `audio_stop()` (routes/music.py) + deferred `_announce_listening()` thread
 2a. `_cancel_agent_speech()` → `POST /api/agent/speech/cancel` on the OS server. Needed because `stop_tts()` only silences what HAL already holds: the sentence playing plus the pre-synthesised queue. The OS server streams a reply sentence by sentence, so without this call the device goes quiet for one sentence and then talks on. The OS server mutes every turn in flight (see `docs/os-server.md`) while letting turns started after the click speak — so the user can tap and immediately say something new even with a backlog of older turns still draining. The turns are not aborted, only unspoken — which is why the same call also drops those turns' pending dead-air fillers: they speak straight to HAL rather than through the muted reply path, so a still-running cancelled turn kept announcing "one moment" for an answer it would never give. Dispatched on its own thread and fired on both branches (mic-unmute and stop-speaker), since either way the tap means the user is taking the floor.
 2b. `state.note_music_cancel()` → stamps a HAL-side music cancel watermark, and `audio_stop()` runs on **both** branches (mic-unmute and stop-speaker), not just the stop-speaker one. Needed because the OS server's cancel is TTS-only: the cancelled turn keeps running and its pending music tool call still reaches `POST /audio/play` a moment later, where a fresh `music-play` thread clears its own `_stop_event` — so a point-in-time stop always loses that race and the user hears music they just cancelled once `yt-dlp` finishes resolving (1–5 s). While the watermark is fresh (`app_state.MUSIC_CANCEL_GUARD_S`, 3 s) `/audio/play` answers `{"status": "suppressed"}` instead of playing. The window is sized to cover the in-flight tool call but stay under the floor of a genuinely new request (speak → STT → LLM → tool is never under ~3 s), so "tap, then ask for a song" still works.
@@ -161,6 +192,78 @@ Purple identifies the sleep tier; red blink vs red solid differentiates shutdown
 The three colors are presets, not constants baked into the driver: `BUTTON_LED_PRESETS` in `hal/presets.py` (`sleep_warn` / `shutdown_warn` / `factory_reset`), overridable per device through the `button_led` section of `robots/<id>/presets.json` like every other LED table. The driver owns the staging — when to blink, when to go solid — and reads the color at the moment it paints, because the overlay merges the table in place at boot.
 
 Per-edge debounce is 200 ms (press and release ticks tracked independently so a quick tap isn't dropped while bouncy repeats of the same edge are filtered).
+
+## MPR121 detection (`hal/drivers/mpr121.py`)
+
+MPR121 wiring follows the device-owned GPIO configuration flow: HAL reads
+`mpr121.json` in the directory selected by `DEVICES_DIR` and `DEVICE_TYPE`
+(currently `robots/lamp/`), then selects the detected board from its `boards`
+map. Only Lamp currently has this hardware; Intern v2 has no MPR121
+declaration. Configure the verified I²C bus explicitly; the
+driver does not scan buses or guess wiring. Lamp ships the configuration below
+for `orangepi_sun60`: bus **0**, address **0x5A**. Initialization and polling
+were verified on Lamp `lamp-0c4e` on 2026-09-11, including startup in the live
+HAL service. Three touch-and-release sessions also produced distinct tap IDs
+and completed the real single-click action in that service. The hardware
+script specifies header pins 3/5 (TWI0). Verify
+the wiring and enable its correct I²C controller externally before use; HAL
+does not modify boot overlays automatically:
+
+```json
+{
+  "boards": {
+    "orangepi_sun60": {
+      "enabled": true,
+      "bus": 0,
+      "address": 90,
+      "electrodes": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+      "touch_threshold": 2,
+      "release_threshold": 1,
+      "autoconfig": true,
+      "poll_ms": 10,
+      "debounce_ms": 30
+    }
+  }
+}
+```
+
+`bus` is required for an enabled entry. The other values above are defaults;
+address 90 means `0x5A` (allowed addresses: 90–93). Selected electrodes must be
+unique numbers from 0–11, with at least one selected. Thresholds must satisfy
+`0 <= release_threshold < touch_threshold <= 255`. Polling accepts 1–1000 ms;
+debounce accepts 0–1000 ms. Tune thresholds against the installed electrodes
+and motor noise. Configuration is loaded at boot; restart HAL after changes.
+
+A missing file or board entry, or `"enabled": false`, skips MPR121 and retains
+the existing GPIO/TTP223 handlers. There is no legacy MPR121 bus fallback.
+Malformed enabled configuration rejects startup; simulation skips the hardware.
+If `/dev/i2c-0` is missing, initialization logs the failure and MPR121 remains
+unavailable while GPIO/TTP223 continue. Change `bus` if verified wiring uses
+a different controller, then restart HAL.
+
+After initialization, the driver allows 100 ms for sensing to settle before
+reading the initial touch state. It then polls touch status every 10 ms by default. A stable touch followed
+by a stable release of **all selected electrodes** produces one
+`single_click_action(source="MPR121")`; both transitions use the 30 ms default
+debounce. Overlapping touches across electrodes form one session. An electrode
+held at startup is ignored until release. Holding longer does not trigger
+sleep, reboot, shutdown or reset, and there is no double-tap action. The shared
+single-click behavior described above applies after release, without a
+multi-click decision window. A bounded asynchronous action worker prevents
+polling from blocking; excess taps while busy may be coalesced or dropped
+instead of accumulating a backlog. An I²C failure or MPR121 overcurrent fault
+(`OVCF`) is logged and stops this driver while the existing input handlers
+continue.
+
+Operation logs use logger `hal.drivers.mpr121` in the normal HAL log/journal;
+there is no separate raw trace file. INFO entries cover initialization and
+configuration (bus, address, electrodes, thresholds and timing), per-electrode
+raw touch/release changes, debounced transitions, suppressed startup touches,
+tap queueing/coalescing, action begin/end and lifecycle. `tap_id` correlates
+accepted taps with queued, coalesced or executed actions. Failures include
+error logs. Unchanged 10 ms polls produce no INFO entry, so idle operation does not
+flood the log. Follow the service log with `journalctl -u hal.service -f` and
+filter for `hal.drivers.mpr121` when investigating a missed or duplicate tap.
 
 ## TTP223 detection (`hal/drivers/ttp223.py`)
 
@@ -215,7 +318,7 @@ Resolution order, first match wins:
 | `HAL_TOUCH_SWIPE` | **`true`** | Master switch for rules 1–3. Set `false` to restore the two-gesture behaviour exactly — the rollback path. |
 | `HAL_TOUCH_SWIPE_MIN_GAP_MS` | 40 | The movement floor, and the one number every rule derives from: gaps at or above it mean the hand travelled, below it mean fingers arrived together. Sits inside the measured 23–53 ms empty band. **Load-bearing now that the classifier ships enabled** — raise it if firm taps read as swipes, lower it if real swipes are missed. `HAL_TOUCH_DEBUG` records the gaps it is measured against. |
 
-`boards.json` gains an optional `axis` on the `touch` entry — lines in physical left-to-right order, e.g. `"axis": [96, 100, 98]`. It is **absent** today: line order is not spatial order on this board, and only a labelled press-one-pad-at-a-time run can establish it. Absent, classification falls back to declared line order. A wrong axis costs only the swipe *direction*, which the driver deliberately does not use.
+`ttp223.json` accepts an optional `axis` in each board entry — the configured `lines` in physical left-to-right order. Legacy fallback reads `axis` from the `touch` entry in `boards.json`. It is **absent** today: line order is not spatial order on this board, and only a labelled press-one-pad-at-a-time run can establish it. Absent, classification falls back to declared line order. A wrong axis costs only the swipe *direction*, which the driver deliberately does not use.
 
 ### Constants (`ttp223.py`)
 
@@ -246,7 +349,7 @@ It never logs to journald, deliberately: HAL is chatty enough that the `hal.serv
 
 ## Shared action library (`hal/drivers/button_actions.py`)
 
-The actions live in one place so the GPIO button, TTP223, and any future input (touchpad, remote) get identical behavior:
+The actions live in one place so the GPIO button, TTP223, MPR121, and any future input (touchpad, remote) get identical behavior:
 
 | Function | What it does | Interrupts in-flight TTS? |
 |---|---|---|
@@ -336,10 +439,13 @@ Phrases are intentionally short — they fire mid-stroke and need to feel respon
 | Path | Purpose |
 |---|---|
 | `hal/drivers/gpio_button.py` | GPIO button handler (mechanical, both boards) |
+| `hal/board/ttp223.py` | Device-owned TTP223 configuration loader with legacy fallback |
 | `hal/drivers/ttp223.py` | TTP223 capacitive touchpad handler (OrangePi sun60 only) |
+| `hal/board/mpr121.py` | Device-owned MPR121 configuration loader and validation |
+| `hal/drivers/mpr121.py` | Optional I²C MPR121 touch-and-release handler |
 | `hal/drivers/button_actions.py` | Shared action functions + localized phrase pools |
 | `hal/presets.py` | Language code constants (`LANG_EN`, etc.) |
-| `hal/test_ttp223_probe_orangepi.py` | Standalone pad probe (stdlib ioctl, no gpiod). `info` reads line state with HAL running; `watch` maps pad→line and needs `hal.service` stopped. Lines come from the board profile. |
+| `hal/test_ttp223_probe_orangepi.py` | Standalone pad probe (stdlib ioctl, no gpiod). `info` reads line state with HAL running; `watch` maps pad→line and needs `hal.service` stopped. Lines come from the selected device’s `ttp223.json`, with the same legacy board-profile fallback as HAL. Select the device with `--device-type`. |
 | `hal/test_gpio.py` | Standalone probe for verifying GPIO button line |
 
-Both handlers are spawned in `hal/server.py` lifespan startup — failures are logged but never crash the runtime (a board without the hardware just skips silently).
+Input handlers are started in `hal/server.py` lifespan startup. Missing optional MPR121 configuration skips that driver; malformed enabled configuration rejects startup. Hardware driver failures are logged without stopping the other handlers.

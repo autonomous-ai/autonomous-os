@@ -1478,6 +1478,11 @@ type UpdateConfigRequest struct {
 	DeepgramAPIKey string `json:"deepgram_api_key"`
 	STTAPIKey      string `json:"stt_api_key"`
 	TTSAPIKey      string `json:"tts_api_key"`
+	// ClearTTSAPIKey deletes the stored TTS key. An empty TTSAPIKey cannot say
+	// this: every field here is PATCH-style, where "" means "not sent". The
+	// settings page sets it when the operator switches TTS provider, so the
+	// previous vendor's credential can't be handed to the new one.
+	ClearTTSAPIKey bool   `json:"clear_tts_api_key"`
 	STTBaseURL     string `json:"stt_base_url"`
 	TTSBaseURL     string `json:"tts_base_url"`
 	STTLanguage    string `json:"stt_language"`

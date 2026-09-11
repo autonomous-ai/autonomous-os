@@ -54,6 +54,50 @@ skills/                           — Built-in SKILL.md cho agent runtime, gồm
 integrations/                     — Off-device: companions/, chat-bridges/, perception-service/
 ```
 
+Wiring nút GPIO cơ học thuộc về từng device trong
+`robots/lamp/gpio_button.json` và `robots/intern-v2/gpio_button.json`.
+HAL xác định thư mục device qua `DEVICES_DIR` và `DEVICE_TYPE`, chọn `chip`,
+`line`, `debounce_ns` của board đã detect từ map `boards`, rồi truyền cấu hình
+vào driver dùng chung `hal/drivers/gpio_button.py`. Cấu hình device được ưu tiên;
+thiếu file hoặc entry của board thì dùng lại mặc định `button` trong
+`hal/board/boards.json`. Khi đổi chân nút của device, cần sửa file JSON tương
+ứng và khởi động lại HAL; hệ thống không tự phát hiện việc đổi dây cắm.
+Config sai bị từ chối trước khi claim GPIO. Chế độ mô phỏng bỏ qua nút phần cứng.
+
+Wiring TTP223 do device quản lý trong `robots/lamp/ttp223.json`. Intern v2
+không có phần cứng TTP223 nên không kèm file này. `hal/board/ttp223.py` chọn `chip`, `lines` và
+`axis` tùy chọn của board đã detect từ `boards`, truyền `TouchConfig` cho driver
+dùng chung. Thiếu file/board thì fallback về `touch` cũ trong
+`hal/board/boards.json`; `enabled: false` tắt TTP223 rõ ràng. Config sai bị từ
+chối trước khi claim GPIO. Restart HAL sau khi sửa config của device được
+chọn; mô phỏng bỏ qua input phần cứng. Nút mới của Lamp (gpiochip0 line 100,
+pin vật lý 37 / PD4) trùng mapping touch cũ; chân touch thay thế vẫn cần xác
+nhận. Intern v2 giữ wiring nút hiện có. Fallback board cũ vẫn giữ nguyên;
+chỉ thiếu file JSON không có nghĩa là driver bị tắt.
+
+Wiring cảm ứng MPR121 tùy chọn hiện chỉ thuộc Lamp, trong
+`robots/lamp/mpr121.json`; Intern v2 không có khai báo MPR121. Cấu hình dùng
+cùng cách chọn thư mục device và được `hal/board/mpr121.py` kiểm tra. Lamp
+có sẵn entry bật cho `orangepi_sun60`, dùng bus 0 và địa chỉ 0x5A, đã kiểm tra
+khởi tạo và polling trên Lamp `lamp-0c4e`. Script phần cứng dùng chân 3/5
+(TWI0); cần xác minh wiring thực tế và bật
+đúng controller I²C bên ngoài HAL. HAL không sửa boot overlay. Thiếu
+`/dev/i2c-0` thì log lỗi khởi tạo và giữ các input hiện có hoạt động.
+Entry trong `boards` bắt buộc có `bus` I²C cụ thể; không quét hay đoán bus MPR121 để fallback. Thiếu
+file/board hoặc `enabled: false` thì bỏ qua MPR121, giữ input GPIO/TTP223
+hiện có; chế độ mô phỏng cũng bỏ qua. Cấu hình bật nhưng sai bị từ chối khi
+startup. Restart HAL sau khi đổi cấu hình wiring. Driver dùng chung
+`hal/drivers/mpr121.py` gom các electrode được chọn thành một phiên chạm rồi
+nhả đã debounce, sau đó gọi `single_click_action(source="MPR121")` một lần,
+không map double-tap hay giữ để thực hiện hành động destructive. Mặc định:
+địa chỉ `0x5A`, electrode 0–11, ngưỡng chạm/nhả 2/1, bật autoconfig,
+polling 10 ms và debounce 30 ms, chờ ổn định 100 ms lúc startup. Lỗi I²C hoặc
+cờ quá dòng chỉ dừng driver này. Logger `hal.drivers.mpr121` ghi cấu hình,
+thay đổi electrode, tap đã debounce, thực thi action và vòng đời driver trong
+log/journal HAL thường dùng; poll không đổi trạng thái không tạo log INFO.
+Xem [điều khiển vật lý](../../robots/lamp/docs/vi/physical-controls_vi.md) để
+biết cấu hình và chi tiết cử chỉ.
+
 ## Nguyên Tắc
 
 - **Hardware là plugin** — cắm vào thì play, không cắm thì skip
