@@ -16,6 +16,7 @@ Lamp supports mechanical buttons, TTP223 touchpads and an optional MPR121 capaci
 |---|---|---|
 | Primary GPIO button | gpiochip0 BCM 17 (pull-up, active-LOW) | Physical pin 37 / PD4 / gpiochip0 line 100 (pull-up, active-LOW) |
 | Reset GPIO button | not wired | Physical pin 35 / PD3 / gpiochip0 line 99 (pull-up, active-LOW); hold ≥5 s then release to factory-reset |
+| Mic slide switch | not wired | Physical pin 11 / PL9 / gpiochip1 line 9; pull-up, LOW=mute, HIGH=unmute |
 | TTP223 | not wired | Two pads: S1 at physical pin 29 / PD0 / gpiochip0 line 96; S3 at physical pin 33 / PD2 / gpiochip0 line 98. **Pull-up, active-LOW** (pads rest HIGH; a touch is the falling edge). |
 
 Mechanical button wiring belongs to the device: `robots/lamp/gpio_button.json`
@@ -68,6 +69,18 @@ Board detection reads `/proc/device-tree/model`:
 - `"raspberry pi 5"` → Pi 5
 - `"raspberry pi 4"` → Pi 4
 - unknown or unsupported hardware → rejected by the HAL startup board gate
+
+### Microphone slide switch
+
+`robots/lamp/mic_button.json` declares chip 1 / line 9 under `orangepi_sun60`,
+with `settle_s: 0.06`, `muted_level: 0`, and `watchdog_s: 30`. The shared
+`mic_button.py` driver tracks switch position, synchronizes at boot, and applies
+mute/unmute after contacts settle. The watchdog only reconciles changed GPIO
+levels so software mute is preserved while the switch stays still. Intern v2
+has no mic JSON and keeps its original chip 0 / line 97 code fallback. Lamp
+without this JSON remains disabled. Keep Lamp's primary-button JSON installed
+to avoid its legacy pin 11 fallback overlapping this switch. The Lamp mic
+configuration is ready in the repo but has not yet been deployed for live testing.
 
 ## Gesture map
 

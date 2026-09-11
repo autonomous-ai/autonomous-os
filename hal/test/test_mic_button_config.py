@@ -18,11 +18,12 @@ def test_missing_file_and_board_keep_intern_defaults_only(tmp_path):
             assert load_mic_button_config(tmp_path, board, "") is None
 
 
-def test_shipped_intern_matches_legacy_and_lamp_is_not_enabled():
+def test_intern_uses_fallback_and_lamp_declares_pin_11():
     root = Path(__file__).resolve().parents[2] / "robots"
     assert load_mic_button_config(root / "intern-v2", "orangepi_sun60", "intern-v2") == MicButtonConfig()
-    assert not (root / "lamp" / "mic_button.json").exists()
-    assert load_mic_button_config(root / "lamp", "orangepi_sun60", "lamp") is None
+    assert not (root / "intern-v2" / "mic_button.json").exists()
+    assert load_mic_button_config(root / "lamp", "orangepi_sun60", "lamp") == MicButtonConfig(chip=1, line=9)
+    assert load_mic_button_config(root / "lamp", "raspberry_pi_5", "lamp") is None
 
 
 def test_device_override_and_explicit_disable(tmp_path):

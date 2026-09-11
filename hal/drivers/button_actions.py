@@ -468,14 +468,12 @@ def swipe_action(source: str = "touch"):
 def mic_toggle_action(source: str = "touch"):
     """Map a resolved double tap to the mic mute toggle.
 
-    Lamp has no hardware mic switch (`_hw_mic_switch_muted` is None here), so
-    this is the only physical path to the microphone. The mic-muted LED is the
-    whole user-facing confirmation — a muted mic has no audible acknowledgement
-    — and both routes below repaint it themselves.
+    Respect the configured hardware switch when present. The mic-muted LED
+    reflects the resulting state, and both routes below repaint it themselves.
     """
-    # The HW kill switch is the authority on boards that have one. Lamp reports
-    # None and falls through; a board that does have the switch must not have it
-    # overridden by a touch gesture. Guarding here as well as in unmute_mic
+    # The HW kill switch is the authority when configured. Devices without one
+    # report None and fall through; touch gestures cannot override a muted
+    # physical switch. Guarding here as well as in unmute_mic
     # keeps the refusal quiet rather than raising the route's 409.
     if state._hw_mic_switch_muted is True:
         logger.info("%s double tap ignored -- HW mic switch is off", source)

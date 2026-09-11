@@ -16,6 +16,7 @@ Lamp hỗ trợ các nút cơ học, touchpad TTP223 và bộ điều khiển c�
 |---|---|---|
 | Nút GPIO chính | gpiochip0 BCM 17 (pull-up, active-LOW) | Pin vật lý 37 / PD4 / gpiochip0 line 100 (pull-up, active-LOW) |
 | Nút GPIO reset | không wire | Pin vật lý 35 / PD3 / gpiochip0 line 99 (pull-up, active-LOW); giữ ≥5 s rồi nhả để factory-reset |
+| Công tắc gạt mic | không wire | Pin vật lý 11 / PL9 / gpiochip1 line 9; pull-up, LOW=mute, HIGH=unmute |
 | TTP223 | không wire | Hai pad: S1 tại pin vật lý 29 / PD0 / gpiochip0 line 96; S3 tại pin vật lý 33 / PD2 / gpiochip0 line 98. **Pull-up, active-LOW** (pad nghỉ ở mức HIGH; chạm là edge xuống). |
 
 Wiring nút cơ thuộc về từng device: `robots/lamp/gpio_button.json` và
@@ -64,6 +65,17 @@ Board được detect qua `/proc/device-tree/model`:
 - `"raspberry pi 5"` → Pi 5
 - `"raspberry pi 4"` → Pi 4
 - phần cứng không nhận diện được hoặc không được hỗ trợ → bị board gate từ chối khi HAL khởi động
+
+### Công tắc gạt microphone
+
+`robots/lamp/mic_button.json` khai báo chip 1 / line 9 trong `orangepi_sun60`,
+với `settle_s: 0.06`, `muted_level: 0`, `watchdog_s: 30`. Driver dùng chung
+`mic_button.py` theo dõi vị trí công tắc, đồng bộ lúc boot và thực hiện mute/unmute
+sau khi tiếp điểm ổn định. Watchdog chỉ đồng bộ lại khi GPIO đổi mức, giữ mute
+bằng phần mềm khi công tắc đứng yên. Intern v2 không có JSON mic, giữ fallback
+chip 0 / line 97 cũ trong code. Lamp thiếu JSON này vẫn tắt mic switch. Cần giữ
+JSON nút chính của Lamp để fallback pin 11 cũ không trùng công tắc này.
+Cấu hình mic Lamp đã sẵn sàng trong repo, chưa deploy để live test.
 
 ## Bảng cử chỉ
 

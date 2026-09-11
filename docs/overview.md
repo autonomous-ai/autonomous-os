@@ -77,12 +77,12 @@ duplicate chip/line pairs are rejected before GPIO is claimed. Simulation
 skips hardware buttons.
 
 The microphone slide switch uses device-owned `mic_button.json`, initially
-shipped only at `robots/intern-v2/mic_button.json`. The detected board's entry
+shipped at `robots/lamp/mic_button.json` for physical pin 11 / PL9 / gpiochip1 line 9. The detected board's entry
 under `boards` supplies `chip`, `line`, `settle_s`, `muted_level`, and
 `watchdog_s` to `hal/board/mic_button.py`, then the shared
-`hal/drivers/mic_button.py` driver. Intern v2's `orangepi_sun60` entry preserves
-gpiochip0 line 97 (PD1), a 0.06 s settling delay, LOW (`0`) for muted, and a
-30 s watchdog. Pull-up remains enabled; `muted_level` accepts `0` or `1`.
+`hal/drivers/mic_button.py` driver. Intern v2 ships no mic JSON and continues
+using the code fallback: gpiochip0 line 97 (PD1), a 0.06 s settling delay,
+LOW (`0`) for muted, and a 30 s watchdog. Lamp uses the same timing/polarity. Pull-up remains enabled; `muted_level` accepts `0` or `1`.
 A missing file or board entry preserves the old defaults for `intern-v2`
 only, including its existing device-type gate regardless of board ID. Other
 devices without configuration skip the switch; `enabled: false` explicitly
@@ -90,8 +90,9 @@ disables it. Malformed configuration is rejected before GPIO is claimed.
 HAL synchronizes mute to the switch position at startup and after settled
 edges. The watchdog reconciles only when the pin changed, preserving software
 mute changes while the switch stays still. Restart HAL to apply JSON changes;
-simulation skips this hardware input. Lamp has no mic-switch JSON yet and
-remains disabled; no Lamp pin mapping is introduced by this refactor.
+simulation skips this hardware input. Keep Lamp's GPIO button JSON installed:
+its legacy primary-button fallback also uses pin 11, while the device JSON
+moves the primary button to pin 37. The Lamp mic JSON has not yet been deployed.
 
 TTP223 touch wiring is device-owned in `robots/lamp/ttp223.json`. Intern v2
 has no TTP223 hardware and does not ship this file. `hal/board/ttp223.py` resolves the detected
