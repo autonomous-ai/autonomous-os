@@ -193,6 +193,10 @@ class SearchResult:
     kind: Optional[str] = None
     box: Optional[tuple] = None
     centred: bool = False
+    # Absolute path to the annotated JPEG of the winning frame, or None when
+    # nothing was found (a picture of an empty wall under a caption saying the
+    # search failed is worse than no picture).
+    image_path: Optional[str] = None
 
 
 def _stop_list(seed: float) -> List[float]:
@@ -401,6 +405,55 @@ def _abandon(svc: Any, seed_pose: Optional[dict], visited: int) -> "SearchResult
     _restore(svc, seed_pose)
     logger.info("[search] aborted after %d look(s) — back to the starting pose", visited)
     return SearchResult(False, "aborted", visited)
+
+
+def _persist_hit(frame: Any, box: Any, label: str) -> Optional[str]:
+    """Write the frame the sweep stopped on, with the detection drawn on it.
+
+    Into the SAME pool /camera/snapshot?save=true uses — the active runtime's
+    media dir, capped and rotated — for two reasons. The agent's image tool
+    only reads inside its own allow-list, and os-server's thumbnail path only
+    surfaces a file under an approved runtime dir (camera_snapshot.go). A JPEG
+    written anywhere else is a file nobody can open.
+
+    Annotated rather than raw: the answer to "did you find my keyboard" is not
+    a photograph of a desk, it is a photograph of a desk with a box round the
+    keyboard. The drawing helper is the one the look-aim debug frames already
+    use, so the box the user sees is the box the detector actually returned —
+    but with `centre_lines` off, because the dx pair is the aim's working and
+    this image has a person for a reader.
+
+    `frame` and `box` MUST come from the same grab. Drawing a box measured
+    before the centring correction onto a frame captured after it puts a green
+    rectangle next to the object instead of round it, which is a worse answer
+    than no picture at all.
+
+    Never raises — a search that found the thing must not fail over a JPEG.
+    """
+    try:
+        import os
+
+        from hal.drivers.tracking.look_debug import encode_annotated
+
+        jpg = encode_annotated(frame, box, label, centre_lines=False)
+        if jpg is None:
+            return None
+        os.makedirs(state._SNAPSHOT_DIR, exist_ok=True)
+        path = os.path.join(state._SNAPSHOT_DIR,
+                            f"snap_{int(time.time() * 1000)}.jpg")
+        with open(path, "wb") as f:
+            f.write(jpg)
+        state._snapshot_paths.append(path)
+        while len(state._snapshot_paths) > state._SNAPSHOT_MAX:
+            oldest = state._snapshot_paths.pop(0)
+            try:
+                os.remove(oldest)
+            except OSError:
+                pass
+        return path
+    except Exception as e:
+        logger.warning("[search] could not persist the winning frame: %s", e)
+        return None
 
 
 def _restore(svc: Any, pose: Optional[dict]) -> None:
@@ -703,6 +756,17 @@ def _sweep(svc: Any, cap: Any, detector: Any, target: str,
                         hit.box = centred.box
                     logger.info("[search] centring: %s after %d iteration(s)",
                                 centred.reason, centred.iterations)
+                    # Prefer the CENTRED frame and its box — that pair is what
+                    # the lamp is pointing at now. Fall back to the frame that
+                    # triggered the hit when the correction never got one (no
+                    # fresh frame, an abort, a failed nudge): the sweep did see
+                    # the thing, and "found it" with nothing to show is the
+                    # answer this whole path exists to stop. Always a matched
+                    # (frame, box) pair, never one from each.
+                    shot_frame, shot_box = ((centred.frame, centred.box)
+                                            if centred.frame is not None
+                                            else (frame, box))
+                    hit.image_path = _persist_hit(shot_frame, shot_box, kind)
                     return hit
                 found.append(hit)
 

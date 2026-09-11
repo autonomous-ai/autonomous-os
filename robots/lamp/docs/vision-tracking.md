@@ -524,6 +524,40 @@ lamp decides for itself. A sweep is entered when:
 - Coverage is `bearings x looks per bearing`: 3 x 6 = **18 looks** normally, 3 x 9 = **27**
   exhaustive. Budget roughly **2 seconds per look**.
 
+The response is a structured body, not one prose string:
+
+```json
+{"status": "ok",
+ "message": "found keyboard at yaw +85 after 7 look(s) across 2 bearing(s)",
+ "found": true, "target": "keyboard", "kind": "keyboard",
+ "found_at_yaw": 85.0, "found_at_roll": -45.0, "centred": true,
+ "image_path": "/root/.codex/media/hal-snapshots/snap_1757500000000.jpg",
+ "looks_visited": 7, "bearings_visited": 2}
+```
+
+- `looks_visited` counts LOOKS and `bearings_visited` counts base positions. They are different
+  quantities and are reported apart: the field was once called `stops_visited`, counted looks, and
+  was rendered as `"after N stop(s)"` against `MAX_STOPS = 3` — so an exhaustive sweep truthfully
+  reported "after 27 stop(s)" out of a possible 3, and the agent narrated from that string.
+- `centred` says whether the fine correction reached the deadband. `false` still means **found** —
+  the aim is simply off. On a hit the sweep now runs `aim.centre_on_box` after
+  `_straighten_head_onto`: coarse aim first, then the measure-and-nudge loop, using the sweep's own
+  target detector as the probe. Before this the head was pointed at `yaw + roll` — the look
+  *direction* of the stop, not the object — leaving an edge detection ~50° off-axis while the call
+  reported a find. The centring loop does **not** score the remembered bearing; a sweep finds an
+  object as often as a person, and teaching the estimator that a keyboard is where the user sits is
+  how the bearing quietly rots.
+- `image_path` is the winning frame, written into the active runtime's `media/hal-snapshots` — the
+  same capped, rotated pool `/camera/snapshot?save=true` uses (`_SNAPSHOT_MAX` = 20). It carries the
+  detection box drawn on it, via `look_debug.encode_annotated(..., centre_lines=False)`: the box is
+  the answer, while the green/red full-height dx lines are the aim's working and would land on top
+  of each other in the middle of a centred frame. The frame and the box always come from the **same**
+  grab — drawing a pre-correction box on a post-correction frame puts the rectangle beside the object.
+  When the centring loop never got a frame (no fresh frame, an abort, a failed nudge) the sweep falls
+  back to the frame that triggered the hit, so a find always has something to show. A miss writes
+  nothing: `image_path` is `null`.
+- The path is surfaced to the user as a thumbnail by os-server; the agent cannot read the JPEG.
+
 At each bearing the base holds still and the head walks a ring of looks — centre, left, round the
 bottom, out to the right, and (exhaustive only) over the top. The corners go to **full** roll and
 **full** pitch rather than cos(45) of each, so a rounded square rather than a circle: that way each

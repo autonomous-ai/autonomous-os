@@ -5,6 +5,7 @@ overlap so nobody falls between them, it stays inside the mechanical range,
 and it stops the moment it finds someone rather than completing the sweep.
 """
 
+import os
 import time
 from unittest import mock
 
@@ -873,3 +874,190 @@ def test_an_exhaustive_sweep_counts_bearings_and_looks_apart():
     assert res.bearings_visited == 3
     assert res.looks_visited != res.bearings_visited, (
         "looks and bearings are different quantities")
+
+
+def test_the_winning_frame_is_written_where_the_agent_can_read_it(tmp_path):
+    """#342 defect I: the sweep persisted nothing, so no image could ever be
+    shown. The path must land in the ACTIVE runtime's snapshot dir — the agent
+    image tool refuses anything outside its allow-list."""
+    def _fake_centre(svc, cap, probe, deadline_s=None):
+        from hal.drivers.tracking.aim import CentreResult
+        return CentreResult(True, "centred", 1, 5.0, 0.01, (10, 10, 20, 20),
+                            np.zeros((480, 640, 3), dtype=np.uint8))
+
+    with (
+        mock.patch.object(state, "_SNAPSHOT_DIR", str(tmp_path), create=True),
+        mock.patch.object(state, "_snapshot_paths", [], create=True),
+        mock.patch("hal.drivers.tracking.aim.centre_on_box", _fake_centre),
+    ):
+        res, _svc, _det = _run_target(target="keyboard", hits=(1,))
+
+    assert res.image_path is not None, "a find with no image is not showable"
+    assert res.image_path.startswith(str(tmp_path))
+    assert os.path.exists(res.image_path)
+    assert os.path.getsize(res.image_path) > 0
+
+
+def test_a_miss_writes_no_image():
+    """Nothing was found, so there is nothing to show. Writing the last frame
+    anyway would put a picture of an empty wall in front of the user under a
+    caption that says the search failed."""
+    res, _svc, _det = _run_target(target="keyboard", hits=())
+    assert res.found is False
+    assert res.image_path is None
+
+
+def test_a_find_always_has_an_image_even_when_centring_never_got_a_frame(tmp_path):
+    """The centring loop can exit before its first grab — no fresh frame, an
+    abort, a nudge failure. The sweep still SAW the thing: it has the frame and
+    the box that triggered the hit. Falling back to those is the difference
+    between "found it, here" and "found it" with nothing to show."""
+    def _fake_centre(svc, cap, probe, deadline_s=None):
+        from hal.drivers.tracking.aim import CentreResult
+        return CentreResult(False, "no fresh frame", 0, 0.0, None, None, None)
+
+    with (
+        mock.patch.object(state, "_SNAPSHOT_DIR", str(tmp_path), create=True),
+        mock.patch.object(state, "_snapshot_paths", [], create=True),
+        mock.patch("hal.drivers.tracking.aim.centre_on_box", _fake_centre),
+    ):
+        res, _svc, _det = _run_target(target="keyboard", hits=(1,))
+
+    assert res.found is True
+    assert res.centred is False
+    assert res.image_path is not None, "a find with no image to show"
+    assert os.path.exists(res.image_path)
+
+
+def test_the_saved_image_carries_the_box_and_not_the_aim_debug_lines(tmp_path):
+    """The box is the point — "here is your keyboard". The two full-height
+    centre lines encode_annotated draws by default are an aim-debug device for
+    reading dx, and after centring they overlap in the middle of the picture."""
+    seen = {}
+
+    def _spy(frame, box=None, label="", both_axes=False, centre_lines=True):
+        seen.update(box=box, label=label, centre_lines=centre_lines)
+        return b"\xff\xd8jpeg"
+
+    def _fake_centre(svc, cap, probe, deadline_s=None):
+        from hal.drivers.tracking.aim import CentreResult
+        return CentreResult(True, "centred", 1, 5.0, 0.01, (10, 10, 20, 20),
+                            np.zeros((480, 640, 3), dtype=np.uint8))
+
+    with (
+        mock.patch.object(state, "_SNAPSHOT_DIR", str(tmp_path), create=True),
+        mock.patch.object(state, "_snapshot_paths", [], create=True),
+        mock.patch("hal.drivers.tracking.aim.centre_on_box", _fake_centre),
+        mock.patch("hal.drivers.tracking.look_debug.encode_annotated", _spy),
+    ):
+        _run_target(target="keyboard", hits=(1,))
+
+    assert seen["box"] == (10, 10, 20, 20), "the box must be drawn"
+    assert seen["centre_lines"] is False, "aim-debug lines in a user-facing image"
+    assert seen["label"] == "keyboard", (
+        f"the caption should name the thing, got {seen['label']!r}")
+
+
+def test_the_snapshot_pool_is_rotated_like_the_camera_route(tmp_path):
+    """Same pool, same cap. A sweep that wrote without rotating would fill the
+    runtime's media dir one find at a time."""
+    def _fake_centre(svc, cap, probe, deadline_s=None):
+        from hal.drivers.tracking.aim import CentreResult
+        return CentreResult(True, "centred", 1, 5.0, 0.01, (10, 10, 20, 20),
+                            np.zeros((480, 640, 3), dtype=np.uint8))
+
+    kept = [str(tmp_path / f"old_{i}.jpg") for i in range(state._SNAPSHOT_MAX)]
+    for p in kept:
+        open(p, "wb").write(b"x")
+
+    with (
+        mock.patch.object(state, "_SNAPSHOT_DIR", str(tmp_path), create=True),
+        mock.patch.object(state, "_snapshot_paths", list(kept), create=True),
+        mock.patch("hal.drivers.tracking.aim.centre_on_box", _fake_centre),
+    ):
+        res, _svc, _det = _run_target(target="keyboard", hits=(1,))
+        assert len(state._snapshot_paths) == state._SNAPSHOT_MAX
+        assert res.image_path in state._snapshot_paths
+        assert not os.path.exists(kept[0]), "the oldest snapshot was not removed"
+
+
+def _search_client():
+    """A TestClient over the servo router — no hardware, no app startup.
+
+    The router is mounted as declared, so the `response_model` these tests pin
+    is the real one rather than a copy restated here. That matters: FastAPI
+    silently DROPS any field the model does not declare, so a field added to
+    SearchResult and forgotten in ServoSearchResponse never reaches the agent
+    and nothing anywhere reports an error.
+    """
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from hal.routes.servo import router
+
+    app = FastAPI()
+    app.include_router(router)
+    return TestClient(app)
+
+
+def test_the_route_reports_bearings_and_looks_separately():
+    """#342 defect C: "after 27 stop(s)" against MAX_STOPS = 3. The two counts
+    are different quantities and the body must not merge them."""
+    hit = search.SearchResult(True, "found keyboard", 7, 85.0, -45.0, 2,
+                              "keyboard", (1, 2, 3, 4), True, "/tmp/snap_1.jpg")
+    with mock.patch("hal.drivers.tracking.search.search_for_subject",
+                    return_value=hit):
+        body = _search_client().post("/servo/search",
+                                     json={"target": "keyboard"}).json()
+
+    assert body["looks_visited"] == 7
+    assert body["bearings_visited"] == 2
+    assert "7 look(s)" in body["message"] and "2 bearing(s)" in body["message"]
+    assert "stop(s)" not in body["message"], "looks are not stops"
+
+
+def test_the_route_carries_every_field_the_agent_needs():
+    """`response_model` SILENTLY drops anything it does not declare, so a field
+    added to SearchResult and forgotten in the model is invisible until someone
+    wonders why the picture never appears."""
+    hit = search.SearchResult(True, "found keyboard", 7, 85.0, -45.0, 2,
+                              "keyboard", (1, 2, 3, 4), True, "/tmp/snap_1.jpg")
+    with mock.patch("hal.drivers.tracking.search.search_for_subject",
+                    return_value=hit):
+        body = _search_client().post("/servo/search",
+                                     json={"target": "keyboard"}).json()
+
+    assert body["found"] is True
+    assert body["target"] == "keyboard"
+    assert body["kind"] == "keyboard"
+    assert body["found_at_yaw"] == 85.0
+    assert body["found_at_roll"] == -45.0
+    assert body["centred"] is True
+    assert body["image_path"] == "/tmp/snap_1.jpg"
+
+
+def test_the_route_answers_a_miss_without_an_image():
+    """"found: false" is an answer. It must not look like a crash, and it must
+    not carry a picture of wherever the head happened to stop."""
+    miss = search.SearchResult(False, "no keyboard found", 18,
+                               bearings_visited=3)
+    with mock.patch("hal.drivers.tracking.search.search_for_subject",
+                    return_value=miss):
+        resp = _search_client().post("/servo/search", json={"target": "keyboard"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["found"] is False
+    assert body["image_path"] is None
+    assert body["message"] == "no keyboard found after 18 look(s) across 3 bearing(s)"
+
+
+def test_an_empty_body_still_searches_for_a_person():
+    """The historical caller sends nothing at all."""
+    hit = search.SearchResult(True, "found person", 1, 5.0, 0.0, 1, "person")
+    with mock.patch("hal.drivers.tracking.search.search_for_subject",
+                    return_value=hit) as sweep:
+        body = _search_client().post("/servo/search").json()
+
+    assert sweep.call_args.kwargs["target"] == "person"
+    assert body["target"] == "person"

@@ -522,6 +522,41 @@ trường hợp đèn tự quyết định. Pha quét được vào khi:
 - Độ phủ là `số bearing x số lần nhìn mỗi bearing`: 3 x 6 = **18 lần nhìn** ở chế độ thường,
   3 x 9 = **27** ở chế độ exhaustive. Hãy tính khoảng **2 giây mỗi lần nhìn**.
 
+Response là một body có cấu trúc, không phải một chuỗi văn xuôi duy nhất:
+
+```json
+{"status": "ok",
+ "message": "found keyboard at yaw +85 after 7 look(s) across 2 bearing(s)",
+ "found": true, "target": "keyboard", "kind": "keyboard",
+ "found_at_yaw": 85.0, "found_at_roll": -45.0, "centred": true,
+ "image_path": "/root/.codex/media/hal-snapshots/snap_1757500000000.jpg",
+ "looks_visited": 7, "bearings_visited": 2}
+```
+
+- `looks_visited` đếm số LẦN NHÌN còn `bearings_visited` đếm số vị trí của đế. Đó là hai đại lượng
+  khác nhau và được báo tách riêng: trường này từng tên là `stops_visited`, đếm số lần nhìn, nhưng
+  lại được render thành `"after N stop(s)"` trong khi `MAX_STOPS = 3` — nên một pha quét exhaustive
+  thành thật báo "after 27 stop(s)" trên tổng tối đa 3, và agent thì thuật lại đúng theo chuỗi đó.
+- `centred` cho biết bước hiệu chỉnh tinh có vào được deadband hay không. `false` vẫn có nghĩa là
+  **tìm thấy** — chỉ là hướng ngắm bị lệch. Khi trúng, pha quét giờ chạy `aim.centre_on_box` sau
+  `_straighten_head_onto`: ngắm thô trước, rồi tới vòng lặp đo-và-nudge, dùng chính detector theo
+  target của pha quét làm probe. Trước đây đầu được hướng tới `yaw + roll` — tức *hướng nhìn* của
+  điểm dừng, không phải vật thể — khiến một phát hiện ở rìa khung lệch trục ~50° trong khi lệnh gọi
+  vẫn báo là đã tìm thấy. Vòng lặp canh giữa **không** chấm điểm bearing đã ghi nhớ; pha quét tìm
+  thấy đồ vật cũng thường xuyên như tìm thấy người, và dạy cho estimator rằng bàn phím là nơi người
+  dùng ngồi chính là cách bearing mục ruỗng một cách âm thầm.
+- `image_path` là frame trúng đích, được ghi vào `media/hal-snapshots` của runtime đang hoạt động —
+  đúng cái pool có giới hạn và xoay vòng mà `/camera/snapshot?save=true` đang dùng (`_SNAPSHOT_MAX`
+  = 20). Frame này có vẽ sẵn box của vật thể phát hiện được, qua
+  `look_debug.encode_annotated(..., centre_lines=False)`: cái box mới là câu trả lời, còn hai đường
+  dx cao hết khung màu xanh/đỏ là phần tính toán nội bộ của aim và sẽ nằm chồng lên nhau ngay giữa
+  một frame đã canh giữa. Frame và box luôn đến từ **cùng một** lần chụp — vẽ box đo trước khi hiệu
+  chỉnh lên frame chụp sau khi hiệu chỉnh sẽ đặt hình chữ nhật nằm cạnh vật thể. Khi vòng lặp canh
+  giữa không lấy được frame nào (không có frame mới, bị abort, nudge lỗi), pha quét lùi về dùng
+  frame đã kích hoạt lần trúng, nhờ vậy một lần tìm thấy luôn có cái để hiển thị. Khi không tìm
+  thấy thì không ghi gì cả: `image_path` là `null`.
+- Đường dẫn này được os-server hiển thị cho người dùng dưới dạng thumbnail; agent không đọc được file JPEG.
+
 Tại mỗi bearing, đế đứng yên và cái đầu đi một vòng nhìn — tâm, trái, vòng qua đáy, ra phải, và (chỉ ở
 chế độ exhaustive) vòng lên trên. Các góc chéo dùng **trọn** roll và **trọn** pitch chứ không phải
 cos(45) của mỗi trục, tức một hình vuông bo góc chứ không phải hình tròn: nhờ vậy mỗi góc nhìn được xa

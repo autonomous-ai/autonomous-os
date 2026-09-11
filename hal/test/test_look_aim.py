@@ -1111,3 +1111,14 @@ def test_centre_on_box_does_not_score_the_remembered_bearing():
 
     scored.assert_not_called()
     recorded.assert_not_called()
+
+
+def test_encode_annotated_keeps_its_debug_lines_by_default():
+    """The look-aim, the bearing sampler and the gaze loop all rely on the
+    centre lines — the flag exists for the search's user-facing image only."""
+    import inspect
+
+    from hal.drivers.tracking import look_debug
+
+    sig = inspect.signature(look_debug.encode_annotated)
+    assert sig.parameters["centre_lines"].default is True

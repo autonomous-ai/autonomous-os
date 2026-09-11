@@ -415,6 +415,43 @@ class ServoSearchRequest(BaseModel):
     )
 
 
+class ServoSearchResponse(BaseModel):
+    """What a sweep found, in fields rather than in one prose string.
+
+    `message` stays for the agent to read aloud, but every number in it is also
+    a field, because the previous single-string body forced the agent to parse
+    English to learn anything — and it was the string, not the sweep, that
+    produced "after 27 stop(s)" against a maximum of 3.
+    """
+
+    status: str = "ok"
+    message: str = Field(
+        ..., description="One line the agent can say. Every value in it is also a field."
+    )
+    found: bool
+    target: str = Field(..., description="What the sweep was asked for.")
+    kind: Optional[str] = Field(
+        None, description="What was actually recognised — 'face' where a person was asked for."
+    )
+    found_at_yaw: Optional[float] = None
+    found_at_roll: Optional[float] = None
+    centred: bool = Field(
+        False,
+        description="Whether the fine correction put the subject in the middle of "
+                    "the frame. False still means found — the aim is just off.",
+    )
+    image_path: Optional[str] = Field(
+        None,
+        description="Absolute path to the annotated JPEG of the winning frame, in "
+                    "the active runtime's media dir. Surfaced to the user as a "
+                    "thumbnail; the agent cannot read it.",
+    )
+    looks_visited: int = 0
+    bearings_visited: int = Field(
+        0, description="Base positions turned through. Looks and bearings are different quantities."
+    )
+
+
 class ServoAimRequest(BaseModel):
     direction: str = Field(
         ...,
