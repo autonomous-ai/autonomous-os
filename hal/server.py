@@ -898,13 +898,12 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("TrackerService skipped — needs servo+camera routes mounted")
 
-    # GPIO17 button (single=stop/unmute, triple=reboot, long=shutdown). The
-    # mock board carries parser-required placeholder pins, never GPIO hardware.
-    if _board_id != "sim":
+    # Device wiring overrides the legacy board defaults. Simulation skips GPIO.
+    if _gpio_button_config is not None:
         try:
             from hal.drivers.gpio_button import GPIOButtonHandler
 
-            _gpio_button_handler = GPIOButtonHandler()
+            _gpio_button_handler = GPIOButtonHandler(_gpio_button_config)
             _gpio_button_handler.start()
         except Exception as e:
             logger.warning(f"GPIO button init failed: {e}")
@@ -1282,6 +1281,12 @@ from hal.board.board import assert_board_supported
 # HAL_SIMULATE is set.
 _board_id = assert_board_supported([] if _simulation else _profile.boards)
 logger.info("Board gate: device=%s board=%s declared=%s", _resolve_device_type(), _board_id, _profile.boards)
+
+from hal.board.gpio_button import load_button_config
+
+_gpio_button_config = (
+    None if _board_id == "sim" else load_button_config(_device_dir, _board_id)
+)
 
 from hal.board.device import plan_mounts
 

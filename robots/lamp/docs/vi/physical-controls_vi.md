@@ -16,11 +16,26 @@ Lamp có hai thiết bị input vật lý mà user có thể chạm trực tiế
 | Nút GPIO | gpiochip0 BCM 17 (pull-up, active-LOW) | gpiochip1 line 9 (pull-up, active-LOW) |
 | TTP223 | không wire | gpiochip0 line 96 / 100, **pull-up, active-LOW** (pad nghỉ ở mức HIGH; chạm là edge xuống). Pad giữa trên line 98 đã bị bỏ ngày 2026-08-28. |
 
-Cả hai handler đều detect board qua `/proc/device-tree/model`:
+Wiring nút cơ thuộc về từng device: `robots/lamp/gpio_button.json` và
+`robots/intern-v2/gpio_button.json` đều khai báo map `boards` với các key
+`raspberry_pi_4`, `raspberry_pi_5`, `orangepi_sun60`. Mỗi entry có `chip`, `line`
+và `debounce_ns` (hiện là `200000000`, tức 200 ms). Cả hai device dùng chân nút
+trong bảng trên; khi đổi wiring, sửa file của device tương ứng rồi khởi động
+lại HAL; hệ thống không tự phát hiện việc đổi dây cắm. HAL xác định thư mục
+qua `DEVICES_DIR` và `DEVICE_TYPE`, rồi truyền `ButtonConfig` của board đã
+detect vào driver dùng chung. Cấu hình device được ưu tiên. Thiếu file hoặc
+entry của board thì dùng lại mặc định `button` trong `hal/board/boards.json`:
+chip 0 / line 17 cho Pi 4, Pi 5, CM4 và sim; chip 1 / line 9 cho OrangePi
+sun60; tất cả có debounce 200 ms. Config sai bị từ chối trước khi claim GPIO.
+Chế độ mô phỏng bỏ qua nút phần cứng. Pull-up, active-LOW và hành vi cử chỉ
+vẫn nằm trong driver dùng chung. Wiring TTP223 vẫn nằm trong
+`hal/board/boards.json`.
+
+Board được detect qua `/proc/device-tree/model`:
 - `"sun60iw2"` → OrangePi 4 Pro / A733
 - `"raspberry pi 5"` → Pi 5
 - `"raspberry pi 4"` → Pi 4
-- khác → unknown, cả hai handler bỏ qua không claim GPIO
+- phần cứng không nhận diện được hoặc không được hỗ trợ → bị board gate từ chối khi HAL khởi động
 
 ## Bảng cử chỉ
 
