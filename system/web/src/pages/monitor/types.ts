@@ -234,14 +234,15 @@ export const Cap = {
   Vision: "vision",
   Motion: "motion",
   Sensing: "sensing",
+  Environment: "environment",
   Connectivity: "connectivity",
   Expression: "expression",
 } as const;
 
-// A nav leaf may declare the capability it requires; the nav hides it and the
+// A nav leaf may require one capability or any capability in an array; the nav hides it and the
 // router redirects away when the device lacks that capability. Omit `cap` for
 // sections with no hardware dependency (always shown).
-export type NavLeaf = { id: Section; label: string; icon: string; cap?: string };
+export type NavLeaf = { id: Section; label: string; icon: string; cap?: string | readonly string[] };
 export type NavLink = { href: string; label: string; icon: string; external?: boolean };
 export type NavChild = NavLeaf | NavLink;
 export type NavGroup = { group: string; label: string; icon: string; children: NavChild[] };
@@ -291,13 +292,8 @@ export const NAV: NavEntry[] = [
       { id: "flow",        label: "Flow",      icon: "⇄" },
       { id: "face-owners", label: "Users",     icon: "☺", cap: Cap.Vision }, // user roster needs the camera
       { id: "camera",      label: "Camera",    icon: "◎", cap: Cap.Vision },
-      // Vision, not Sensing, despite the name. The declared `sensing` capability
-      // is not a reliable predicate for this page: Intern declares it — the
-      // agent posts voice events to /api/sensing/event — while running no
-      // SensingService at all (HAL has no /sensing/state route there), so all
-      // four cards sit on "No data" forever. What actually fills them is the
-      // vision-backed service, which only a device declaring `vision` runs.
-      { id: "sensing",     label: "Sensing",   icon: "◉", cap: Cap.Vision },
+      // Either input can populate Sensing; each card gates its own polling.
+      { id: "sensing", label: "Sensing", icon: "◉", cap: [Cap.Vision, Cap.Environment] },
       // Analytics hidden from the menu for now (section code kept; re-enable
       // by uncommenting).
       // { id: "analytics",   label: "Analytics", icon: "⊟" },

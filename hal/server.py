@@ -1024,9 +1024,21 @@ async def lifespan(app: FastAPI):
             _safety.thermal.max_temp_c, _safety.thermal.resume_temp_c,
         )
 
+    if "environment" in _plan.mounted:
+        from hal.drivers.environment.service import EnvironmentService
+
+        state.environment_service = EnvironmentService(
+            enabled=_sen55_config is not None,
+            bus=_sen55_config.bus if _sen55_config is not None else None,
+            timing=_sen55_config.timing if _sen55_config is not None else None,
+        )
+        state.environment_service.start()
+
     yield
 
     _lifespan_stopping.set()
+    if state.environment_service is not None:
+        state.environment_service.stop()
     _thermal_stop.set()
     if _privacy_button_handler is not None:
         _privacy_button_handler.stop()
@@ -1144,7 +1156,7 @@ _ALWAYS_ROUTES = ("audio", "emotion", "scene", "system", "bluetooth")
 _ROUTERS_BY_NAME = {}
 for _rname in (
     "servo", "led", "camera", "audio", "emotion", "scene", "sensing",
-    "display", "voice", "music", "system", "bluetooth", "policy",
+    "display", "voice", "music", "system", "bluetooth", "policy", "environment",
 ):
     if _rname not in _declared and _rname not in _ALWAYS_ROUTES:
         logger.info("Route module '%s' skipped — not declared in ROBOT.md", _rname)
@@ -1183,6 +1195,7 @@ _route_available = {
     # actuator dependency.  A real executor must make availability conditional
     # on its driver and preserve the same response contract.
     "policy": True,
+    "environment": True,
     "emotion": True, "scene": True, "system": True, "bluetooth": True,
     "speaker": "speaker" in _ROUTERS_BY_NAME,
 }
@@ -1334,6 +1347,13 @@ from hal.board.mpr121 import load_mpr121_config
 
 _mpr121_config = (
     None if _board_id == "sim" else load_mpr121_config(_device_dir, _board_id)
+)
+
+from hal.board.sen55 import load_sen55_config
+
+_sen55_config = (
+    None if _simulation or "environment" not in _declared
+    else load_sen55_config(_device_dir, _board_id)
 )
 
 from hal.board.ttp223 import load_touch_config
@@ -1585,6 +1605,10 @@ def health():
         "camera": state.camera_capture is not None and state.camera_capture.last_frame is not None,
         "audio": state.audio_output_device is not None or state.audio_input_device is not None,
         "sensing": state.sensing_service is not None,
+        "environment": (
+            state.environment_service is not None
+            and not state.environment_service.snapshot()["stale"]
+        ),
         "voice": state.voice_service is not None and state.voice_service.available
         if state.voice_service
         else False,
