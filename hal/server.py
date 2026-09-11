@@ -295,7 +295,7 @@ if "display" in _declared:
     except ImportError as e:
         logger.warning(f"Display service not available: {e}")
 
-_gpio_button_handler = None
+_gpio_button_handlers = []
 _ttp223_handler = None
 _mpr121_handler = None
 
@@ -364,7 +364,7 @@ def _sim_audio_probe(sd_module) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _gpio_button_handler, _ttp223_handler, _mpr121_handler
+    global _gpio_button_handlers, _ttp223_handler, _mpr121_handler
 
     # --- Phase 0: Borrow the hardware from whoever owns it ---
     # Empty unless ROBOT.md declares an `owner:`. Where one exists it holds
@@ -899,16 +899,21 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("TrackerService skipped — needs servo+camera routes mounted")
 
-    # Device wiring overrides the legacy board defaults. Simulation skips GPIO.
-    if _gpio_button_config is not None:
+    # Each declared button owns its GPIO handle and gesture state.
+    _gpio_button_handlers = []
+    for button in _gpio_button_configs:
         try:
             from hal.drivers.gpio_button import GPIOButtonHandler
 
-            _gpio_button_handler = GPIOButtonHandler(_gpio_button_config)
-            _gpio_button_handler.start()
+            handler = GPIOButtonHandler(
+                button.wiring, name=button.name, behavior=button.behavior,
+                hold_s=button.hold_s,
+            )
+            handler.start()
+            _gpio_button_handlers.append(handler)
         except Exception as e:
-            logger.warning(f"GPIO button init failed: {e}")
-    else:
+            logger.warning("GPIO button %s init failed: %s", button.name, e)
+    if not _gpio_button_configs:
         logger.info("GPIO button skipped — mock board has no hardware")
 
     # MPR121 is opt-in per device/board; absent hardware leaves other inputs running.
@@ -1018,6 +1023,9 @@ async def lifespan(app: FastAPI):
 
     _lifespan_stopping.set()
     _thermal_stop.set()
+    for handler in _gpio_button_handlers:
+        handler.stop()
+    _gpio_button_handlers = []
     if _mpr121_handler is not None:
         _mpr121_handler.stop()
 
@@ -1301,10 +1309,10 @@ from hal.board.board import assert_board_supported
 _board_id = assert_board_supported([] if _simulation else _profile.boards)
 logger.info("Board gate: device=%s board=%s declared=%s", _resolve_device_type(), _board_id, _profile.boards)
 
-from hal.board.gpio_button import load_button_config
+from hal.board.gpio_button import load_button_configs
 
-_gpio_button_config = (
-    None if _board_id == "sim" else load_button_config(_device_dir, _board_id)
+_gpio_button_configs = (
+    [] if _board_id == "sim" else load_button_configs(_device_dir, _board_id)
 )
 
 from hal.board.mpr121 import load_mpr121_config

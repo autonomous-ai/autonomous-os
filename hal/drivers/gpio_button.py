@@ -1,6 +1,6 @@
 """GPIO button handler with device-declared wiring.
 
-Supports five actions on a single button:
+Each handler owns one configured line. Standard buttons support five actions:
 - Single click: stop speaker / unmute mic (fires immediately on release)
 - Triple click: reboot OS (resolved after the click window)
 - Hold + release (2–5s):   sleepy emotion
@@ -20,6 +20,10 @@ nothing on top of the floor-grab — destructive actions (reboot/shutdown/
 factory-reset) need a deliberate gesture so a user panic-clicking the
 button to interrupt TTS doesn't accidentally reboot.
 
+A dedicated factory_reset button ignores clicks and commits reset only on
+release after its configured hold threshold; feedback and action selection
+stay in the shared action module.
+
 The actual action logic lives in `button_actions.py` so other input
 devices (touchpad, remote) can reuse the same gestures.
 """
@@ -32,11 +36,9 @@ from hal.board.gpio_button import ButtonConfig
 from hal.drivers.button_actions import (
     HoldLEDFeedback,
     DOUBLE_CLICK_WINDOW,
-    FACTORY_RESET_DURATION,
-    LONG_PRESS_DURATION,
-    SLEEP_HOLD_DURATION,
+    button_hold_tier,
+    button_hold_release_action,
     announce_listening_cue,
-    hold_release_action,
     single_click_action,
     triple_click_action,
 )
@@ -44,7 +46,16 @@ from hal.drivers.button_actions import (
 logger = logging.getLogger(__name__)
 
 class GPIOButtonHandler:
-    def __init__(self, config: ButtonConfig):
+    def __init__(self, config: ButtonConfig, *, name="primary",
+                 behavior="standard", hold_s=5.0):
+        if behavior not in ("standard", "factory_reset"):
+            raise ValueError(f"Unknown GPIO button behavior: {behavior}")
+        self._behavior = behavior
+        self._hold_s = hold_s
+        self._source = ("GPIO button" if name == "primary" and behavior == "standard" else
+                        f"GPIO button {name} (gpiochip{config.chip}/line{config.line})")
+        self._stopped = False
+        self._action_lock = threading.RLock()
         self._lgpio = None
         self._handle = None
         self._callback = None
@@ -74,9 +85,7 @@ class GPIOButtonHandler:
                 if stop_event.is_set() or self._hold_watcher_stop is not stop_event:
                     return
                 held = time.monotonic() - self._press_start
-                stage = (3 if held >= FACTORY_RESET_DURATION else
-                         2 if held >= LONG_PRESS_DURATION else
-                         1 if held >= SLEEP_HOLD_DURATION else 0)
+                stage = button_hold_tier(held, behavior=self._behavior, hold_s=self._hold_s)
                 if stage != last_stage:
                     self._hold_led.set_tier(stage)
                     last_stage = stage
@@ -84,31 +93,72 @@ class GPIOButtonHandler:
                 return
 
     def _run_hold_action(self, held):
-        if self._hold_led.commit(held) is False:
-            return
-        action = "factory-reset" if held >= FACTORY_RESET_DURATION else "shutdown" if held >= LONG_PRESS_DURATION else "sleepy"
-        logger.info("GPIO button hold %.1fs -- %s", held, action)
-        hold_release_action(held, source="GPIO button")
+        with self._action_lock:
+            if self._stopped:
+                return
+            logger.info("%s released hold %.3fs -- %s", self._source, held, self._behavior)
+            button_hold_release_action(
+                held, self._hold_led, behavior=self._behavior,
+                hold_s=self._hold_s, source=self._source,
+            )
+
+    def _run_single_click(self):
+        with self._action_lock:
+            if not self._stopped:
+                single_click_action(source=self._source, announce=False)
 
     def start(self):
         import lgpio
 
         self._lgpio = lgpio
-        self._handle = lgpio.gpiochip_open(self._chip)
-        lgpio.gpio_claim_alert(
-            self._handle, self._pin, lgpio.BOTH_EDGES, lgpio.SET_PULL_UP
-        )
-        self._callback = lgpio.callback(
-            self._handle, self._pin, lgpio.BOTH_EDGES, self._on_edge
-        )
+        try:
+            self._handle = lgpio.gpiochip_open(self._chip)
+            lgpio.gpio_claim_alert(
+                self._handle, self._pin, lgpio.BOTH_EDGES, lgpio.SET_PULL_UP
+            )
+            self._callback = lgpio.callback(
+                self._handle, self._pin, lgpio.BOTH_EDGES, self._on_edge
+            )
+        except Exception:
+            self.stop()
+            raise
         logger.info(
-            "GPIO button ready on gpiochip%d line %d (manual debounce %d ms)",
-            self._chip,
-            self._pin,
-            self._debounce_ns // 1_000_000,
+            "%s ready on gpiochip%d line %d (manual debounce %d ms, behavior=%s, hold=%.1fs)",
+            self._source, self._chip, self._pin, self._debounce_ns // 1_000_000,
+            self._behavior, self._hold_s,
         )
 
+    def stop(self):
+        """Cancel pending work; actions already executing cannot be recalled."""
+        self._stopped = True
+        with self._hold_lock:
+            self._pressed = False
+            if self._hold_watcher_stop is not None:
+                self._hold_watcher_stop.set()
+                self._hold_watcher_stop = None
+            self._hold_led.stop()
+            if self._click_timer is not None:
+                self._click_timer.cancel()
+                self._click_timer = None
+            self._click_count = 0
+        if self._callback is not None:
+            try:
+                self._callback.cancel()
+            except Exception:
+                logger.warning("%s callback cleanup failed", self._source, exc_info=True)
+            finally:
+                self._callback = None
+        if self._handle is not None:
+            try:
+                self._lgpio.gpiochip_close(self._handle)
+            except Exception:
+                logger.warning("%s chip cleanup failed", self._source, exc_info=True)
+            finally:
+                self._handle = None
+
     def _on_edge(self, chip, gpio, level, tick):
+        if self._stopped or level not in (0, 1):
+            return
         # Per-edge debounce. Track press/release ticks independently so a
         # quick click (rising edge soon after the falling edge) isn't
         # dropped, while bouncy repeats of the same edge are filtered out.
@@ -129,6 +179,8 @@ class GPIOButtonHandler:
             # threshold (or escalate from shutdown → factory-reset by
             # holding past 10s). LED feedback runs in a watcher thread.
             with self._hold_lock:
+                if self._stopped or self._pressed:
+                    return
                 self._press_start = time.monotonic()
                 self._pressed = True
                 if self._hold_watcher_stop is not None:
@@ -160,7 +212,7 @@ class GPIOButtonHandler:
             self._hold_led.release()
 
         held = time.monotonic() - self._press_start
-        if held >= SLEEP_HOLD_DURATION:
+        if button_hold_tier(held, behavior=self._behavior, hold_s=self._hold_s):
             self._click_count = 0  # destructive, terminal: scrub any pending clicks
             if self._click_timer:
                 self._click_timer.cancel()
@@ -178,6 +230,11 @@ class GPIOButtonHandler:
             ).start()
             return
 
+        if self._behavior == "factory_reset":
+            logger.info("%s released hold %.3fs -- ignored (requires %.1fs)",
+                        self._source, held, self._hold_s)
+            return
+
         # Short tap → count toward triple-click resolution. The SILENT part
         # of the single-click action (stop speaker / unmute mic) fires
         # IMMEDIATELY on the first tap of a burst — it's a non-destructive
@@ -193,8 +250,7 @@ class GPIOButtonHandler:
             # lgpio callback must return promptly (same reasoning as the
             # long-press branches above).
             threading.Thread(
-                target=single_click_action,
-                kwargs={"source": "GPIO button", "announce": False},
+                target=self._run_single_click,
                 daemon=True,
                 name="gpio-button-single-click",
             ).start()
@@ -207,10 +263,16 @@ class GPIOButtonHandler:
         self._click_timer.start()
 
     def _on_click_timeout(self):
+        with self._action_lock:
+            if self._stopped or self._behavior != "standard":
+                return
+            self._resolve_clicks()
+
+    def _resolve_clicks(self):
         count = self._click_count
         self._click_count = 0
         if count == 3:
-            triple_click_action(source="GPIO button")
+            triple_click_action(source=self._source)
             return
         if count != 1:
             # count == 2 → likely a slipped/panic double-tap of single
@@ -219,4 +281,4 @@ class GPIOButtonHandler:
         # Any non-triple burst already grabbed the floor silently on its
         # first tap — now that it's resolved, speak the deferred cue so the
         # user hears confirmation exactly once per burst.
-        announce_listening_cue(source="GPIO button")
+        announce_listening_cue(source=self._source)

@@ -1,12 +1,12 @@
 # Điều khiển vật lý — Nút GPIO, TTP223 và MPR121
 
-Lamp hỗ trợ nút cơ học, touchpad TTP223 và bộ điều khiển cảm ứng điện dung MPR121 tùy chọn. Chúng dùng chung thư viện action (`hal/drivers/button_actions.py`) nên cùng một cử chỉ "single click" sẽ hành xử giống nhau dù đến từ nút bấm cơ học hay touchpad cảm ứng.
+Lamp hỗ trợ các nút cơ học, touchpad TTP223 và bộ điều khiển cảm ứng điện dung MPR121 tùy chọn. Chúng dùng chung thư viện action (`hal/drivers/button_actions.py`) nên cùng một cử chỉ "single click" sẽ hành xử giống nhau dù đến từ nút bấm cơ học hay touchpad cảm ứng.
 
 ## Thiết bị đầu vào
 
 | Thiết bị | Vai trò | Có ở |
 |---|---|---|
-| **Nút GPIO** | Một nút bấm cơ. Dùng cho các hành động dứt khoát kể cả destructive (reboot / shutdown / factory-reset). Cảm giác cơ + detect giữ lâu khiến destructive action khó xảy ra do vô tình. | Pi 4/5 và OrangePi sun60 |
+| **Nút GPIO** | Nút cơ chính cho click và giữ, thêm nút reset riêng trên OrangePi. Action giữ destructive chỉ thực hiện khi nhả. | Pi 4/5 và OrangePi sun60 |
 | **Touchpad cảm ứng TTP223** | Hai pad chạm xếp như "đầu cún" để vuốt ve + stop/unmute nhẹ. Không có destructive gesture vì FastMode của IC không cho detect giữ lâu tin cậy. | Chỉ OrangePi sun60 (4 Pro / A733) |
 | **Bộ điều khiển cảm ứng MPR121** | Tối đa 12 electrode, hỗ trợ click và giữ rồi nhả như GPIO, gồm reboot, shutdown và reset. | Lamp khai báo cấu hình I²C cụ thể trong `mpr121.json` |
 
@@ -14,22 +14,36 @@ Lamp hỗ trợ nút cơ học, touchpad TTP223 và bộ điều khiển cảm �
 
 | Thiết bị | Pi 4/5 | OrangePi sun60 |
 |---|---|---|
-| Nút GPIO | gpiochip0 BCM 17 (pull-up, active-LOW) | Pin vật lý 37 / PD4 / gpiochip0 line 100 (pull-up, active-LOW) |
+| Nút GPIO chính | gpiochip0 BCM 17 (pull-up, active-LOW) | Pin vật lý 37 / PD4 / gpiochip0 line 100 (pull-up, active-LOW) |
+| Nút GPIO reset | không wire | Pin vật lý 35 / PD3 / gpiochip0 line 99 (pull-up, active-LOW); giữ ≥5 s rồi nhả để factory-reset |
 | TTP223 | không wire | Hai pad: S1 tại pin vật lý 29 / PD0 / gpiochip0 line 96; S3 tại pin vật lý 33 / PD2 / gpiochip0 line 98. **Pull-up, active-LOW** (pad nghỉ ở mức HIGH; chạm là edge xuống). |
 
 Wiring nút cơ thuộc về từng device: `robots/lamp/gpio_button.json` và
 `robots/intern-v2/gpio_button.json` đều khai báo map `boards` với các key
-`raspberry_pi_4`, `raspberry_pi_5`, `orangepi_sun60`. Mỗi entry có `chip`, `line`
-và `debounce_ns` (hiện là `200000000`, tức 200 ms). Lamp dùng chân nút trong
-bảng trên; Intern v2 vẫn dùng gpiochip1 line 9 trên OrangePi. Khi đổi wiring,
-sửa file của device tương ứng rồi khởi động lại HAL; hệ thống không tự phát hiện việc đổi dây cắm. HAL xác định thư mục
-qua `DEVICES_DIR` và `DEVICE_TYPE`, rồi truyền `ButtonConfig` của board đã
-detect vào driver dùng chung. Cấu hình device được ưu tiên. Thiếu file hoặc
-entry của board thì dùng lại mặc định `button` trong `hal/board/boards.json`:
-chip 0 / line 17 cho Pi 4, Pi 5, CM4 và sim; chip 1 / line 9 cho OrangePi
-sun60; tất cả có debounce 200 ms. Config sai bị từ chối trước khi claim GPIO.
-Chế độ mô phỏng bỏ qua nút phần cứng. Pull-up, active-LOW và hành vi cử chỉ
-vẫn nằm trong driver dùng chung.
+`raspberry_pi_4`, `raspberry_pi_5`, `orangepi_sun60`. Entry hỗ trợ dạng phẳng
+cũ `chip`, `line`, `debounce_ns` hoặc list `buttons`. Entry OrangePi của Lamp:
+
+```json
+{
+  "buttons": [
+    {"name": "primary", "chip": 0, "line": 100, "debounce_ns": 200000000, "behavior": "standard"},
+    {"name": "factory_reset", "chip": 0, "line": 99, "debounce_ns": 200000000, "behavior": "factory_reset", "hold_s": 5}
+  ]
+}
+```
+
+JSON của Intern v2 giữ nguyên, với gpiochip1 line 9 trên OrangePi.
+Khi đổi wiring, sửa file của device tương ứng rồi restart HAL; hệ thống không
+tự phát hiện đổi dây cắm. HAL xác định thư mục qua `DEVICES_DIR` và
+`DEVICE_TYPE`. `load_button_configs` cấp cấu hình cho mỗi instance driver
+dùng chung; HAL dừng tất cả instance khi cleanup. `load_button_config` vẫn
+tương thích với caller chỉ cần nút đầu tiên (nút chính trong cấu hình Lamp). Cấu hình device được ưu tiên.
+Thiếu file hoặc entry board thì fallback về đúng một nút mặc định `button`
+cũ trong `hal/board/boards.json`: chip 0 / line 17 cho Pi 4, Pi 5, CM4 và
+sim; chip 1 / line 9 cho OrangePi sun60; tất cả debounce 200 ms. Config sai,
+tên trùng hoặc cặp chip/line trùng bị từ chối trước khi claim GPIO. Mô phỏng
+bỏ qua các nút phần cứng. Pull-up, active-LOW và nhận diện cử chỉ vẫn ở driver
+dùng chung.
 
 Wiring TTP223 cũng do device quản lý: `robots/lamp/ttp223.json` khai báo
 map `boards`. Intern v2 không có phần cứng TTP223 nên không kèm file này. Mỗi entry bật có `chip`,
@@ -53,7 +67,7 @@ Board được detect qua `/proc/device-tree/model`:
 
 ## Bảng cử chỉ
 
-| Cử chỉ | Nút GPIO | Touchpad TTP223 |
+| Cử chỉ | Nút GPIO chính | Touchpad TTP223 |
 |---|---|---|
 | **1 chạm** | Dừng object tracking đang chạy, rồi stop loa / unmute mic + speaker + chime ack (~120 ms ping) — tất cả fire ngay khi nhả nút (không đợi click window); cue "Nghe đây" phát sau khi click window 0.4 s phân giải xong | Tương tự sau khi quyết định tap-vs-pet 1.2 s xong — tracking đang chạy dừng, rồi action mic/loa và cue chạy. Chạm đầu tiên vẫn cắt TTS đang phát và kêu chime ack ngay. |
 | **2 chạm** (≤ 0.4 s, nút) / (≤ 1.2 s, TTP223) | Không thêm gì ngoài single-click đã fire ở chạm 1 (panic-click guard) | Pet response. Khi bật `HAL_TOUCH_SWIPE` (mặc định), các cú tap lặp lại tại cùng một chỗ — nhanh hay chậm, một ngón hay nhiều ngón — là **double tap** → toggle mute mic; khi đó pet nghĩa là ngón tay đã quay lại một pad |
@@ -63,7 +77,9 @@ Board được detect qua `/proc/device-tree/model`:
 | **Giữ 5–10 s rồi nhả** | Shutdown OS (TTS báo → release servo → `sudo shutdown -h now`). LED nháy đỏ khi đã arm. | n/a — phần cứng TTP223 không hold đáng tin được (xem "FastMode" dưới) |
 | **Giữ 10 s+ rồi nhả** | Factory-reset: wipe state thiết bị + reboot vào AP setup (TTS báo → release servo → POST `/api/system/factory-reset` trên OS server). LED đỏ đứng khi đã arm. | n/a |
 
-Bảng trên mô tả GPIO và TTP223. MPR121 cũng hỗ trợ giữ rồi nhả để thực hiện action và cùng phản hồi LED theo mức giữ, xem phần detect riêng. Mức sleep và các mức destructive **commit khi nhả, không phải khi timer fire lúc đang giữ**. Các mức destructive escalate từ shutdown sang factory-reset sau 10 s (xem "Detect nút GPIO" dưới).
+Bảng trên mô tả nút GPIO chính và TTP223. Nút reset riêng ở pin 35 chỉ factory-reset khi nhả sau khi giữ ít nhất 5 s. Giữ ngắn hơn và single/triple tap đều không làm gì; nút này không gọi sleep hoặc shutdown. LED giữ nguyên dưới 5 s và dùng preset factory-reset đỏ đứng chung từ 5 s trở lên.
+
+MPR121 cũng hỗ trợ giữ rồi nhả để thực hiện action và cùng phản hồi LED theo mức giữ, xem phần detect riêng. Mức sleep và các mức destructive **commit khi nhả, không phải khi timer fire lúc đang giữ**. Các mức destructive escalate từ shutdown sang factory-reset sau 10 s (xem "Detect nút GPIO" dưới).
 
 ## Cắt Lamp giữa câu (barge-in)
 
@@ -160,6 +176,8 @@ Khi barge-in được bật, đường đang chạy là vòng **warm mic**, khô
 
 ## Detect nút GPIO (`hal/drivers/gpio_button.py`)
 
+Cùng driver phục vụ từng nút được cấu hình một cách độc lập. Flow dưới đây mô tả `behavior: "standard"` (nút chính). Với `behavior: "factory_reset"`, nhả sau `hold_s` (5 s ở pin 35 của Lamp) gọi `factory_reset_action` dùng chung; giữ ngắn hơn và mọi chuỗi tap đều bị bỏ qua. Hold watcher chỉ chọn mức LED factory-reset dùng chung khi đạt ngưỡng đó.
+
 Driver đếm edge nơi **mọi destructive action commit ở rising edge (nhả) dựa trên thời lượng giữ** — không timer nào fire lúc đang giữ. Đây chính là cái cho phép user huỷ giữa chừng (nhả trước ngưỡng) hoặc escalate (giữ tiếp quá 10 s).
 
 1. **Falling edge (nhấn):** ghi `press_start` (đồng hồ monotonic) và spawn thread hold-LED watcher (mỗi lần nhấn 1 thread, có stop `Event` riêng). Không arm timer action nào.
@@ -176,7 +194,7 @@ Release edge không có press khớp (press bị debounce nuốt) thì bỏ qua 
 
 ### LED feedback khi giữ
 
-Thread watcher GPIO poll thời lượng giữ và chọn mức giữ. `HoldLEDFeedback` dùng chung trong `hal/drivers/button_actions.py`, cũng được MPR121 sử dụng, đẩy LED RGB ở priority HIGH (preempt emotion hiện tại) để user thấy đã arm tới đâu trước khi nhả:
+Với nút chính, thread watcher GPIO poll thời lượng giữ và chọn mức giữ. `HoldLEDFeedback` dùng chung trong `hal/drivers/button_actions.py`, cũng được MPR121 sử dụng, đẩy LED RGB ở priority HIGH (preempt emotion hiện tại) để user thấy đã arm tới đâu trước khi nhả:
 
 | Thời gian giữ | LED | Ý nghĩa |
 |---|---|---|
@@ -184,6 +202,8 @@ Thread watcher GPIO poll thời lượng giữ và chọn mức giữ. `HoldLEDF
 | 2–5 s | tím sleepy, nháy 2 Hz | đã arm sleepy; nhả ra sẽ vào sleep (LED sau đó tắt) |
 | 5–10 s | đỏ, nháy 2 Hz | đã arm shutdown — nhả bây giờ là tắt máy |
 | 10 s+ | đỏ, đứng | đã arm factory-reset — nhả bây giờ là wipe + reboot |
+
+Nút reset riêng chỉ dùng preset `factory_reset` đỏ đứng khi giữ ≥5 s; nhả trước 5 s không làm gì. Không factory-reset khi còn giữ. Cả hai nút GPIO dùng lại phần xử lý feedback này và thư viện action hiện có.
 
 Màu tím nhận diện mức sleep; đỏ nháy vs đỏ đứng phân biệt shutdown với factory-reset. LED là no-op im lặng khi RGB service không có (máy dev) — nút vẫn hoạt động.
 
@@ -397,7 +417,7 @@ Các action sống ở một chỗ để nút GPIO, TTP223, MPR121, và mọi in
 
 ### Factory-reset: wipe những gì
 
-`factory_reset_action` chỉ **báo + uỷ quyền** — phần reset thật nằm ở OS server (`system/server/system/factoryreset.go`), gọi được từ thiết bị qua loopback không cần Bearer token (authoritative nhờ hiện diện vật lý: giữ 10 s có chủ ý). `POST /api/system/factory-reset` là reset **mềm** (wipe state, không reflash — kernel / package OS / binary / `.venv` HAL không bị đụng):
+`factory_reset_action` chỉ **báo + uỷ quyền** — phần reset thật nằm ở OS server (`system/server/system/factoryreset.go`), gọi được từ thiết bị qua loopback không cần Bearer token (authoritative nhờ hiện diện vật lý: giữ có chủ ý 10 s trên nút chính/MPR121 hoặc 5 s trên nút reset riêng, rồi nhả). `POST /api/system/factory-reset` là reset **mềm** (wipe state, không reflash — kernel / package OS / binary / `.venv` HAL không bị đụng):
 
 1. Wipe state của agent backend đang chạy (OpenClaw hoặc Hermes, auto-detect từ `config.json` `agent_runtime`).
 2. Wipe các path state của thiết bị: `/root/config` (config.json — API key, channel token, MQTT creds), `/root/local/users` + `/root/local/strangers` (enrollment khuôn mặt/giọng), `/var/lib/hal/snapshots` (snapshot camera), và `/etc/wpa_supplicant/wpa_supplicant-wlan0.conf` (WiFi nhà → ép vào AP mode lần boot kế).

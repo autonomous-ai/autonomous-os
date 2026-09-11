@@ -593,6 +593,27 @@ def hold_release_action(held_s: float, source: str = "button"):
         sleep_action(source)
 
 
+def button_hold_tier(held_s, *, behavior="standard", hold_s=5.0):
+    """Select shared feedback for normal and dedicated reset buttons."""
+    if behavior == "factory_reset":
+        return 3 if held_s >= hold_s else 0
+    return (3 if held_s >= FACTORY_RESET_DURATION else
+            2 if held_s >= LONG_PRESS_DURATION else
+            1 if held_s >= SLEEP_HOLD_DURATION else 0)
+
+
+def button_hold_release_action(held_s, feedback, *, behavior="standard", hold_s=5.0,
+                               source="button"):
+    """Commit the actual policy's LED and action using a released duration."""
+    if not button_hold_tier(held_s, behavior=behavior, hold_s=hold_s):
+        return
+    if behavior == "factory_reset":
+        if feedback.commit_tier(3) is not False:
+            factory_reset_action(source)
+    elif feedback.commit(held_s) is not False:
+        hold_release_action(held_s, source=source)
+
+
 def _factory_reset_phrase() -> str:
     """Inline i18n until PHRASE_FACTORY_RESET lands in i18n.py."""
     lang = _current_lang()
@@ -609,10 +630,10 @@ def factory_reset_action(source: str = "button"):
     into AP setup mode. HAL does NOT touch state itself — single source of
     truth for what gets wiped lives in the OS server's deviceWipePaths.
 
-    Authoritative because of physical presence: 10s deliberate hold + the
+    Authoritative because of physical presence: a deliberate configured hold + the
     /api/system/factory-reset endpoint allows loopback origin without Bearer
     (see os-server server.go adminOrLoopbackAuth)."""
-    logger.info("%s factory-reset hold (10s+) -- triggering soft reset", source)
+    logger.info("%s factory-reset hold -- triggering soft reset", source)
     logger.info("%s LED: red solid (factory-reset armed)", source)
 
     # Suppress the lifespan-shutdown re-announce — same reason as
@@ -722,6 +743,10 @@ class HoldLEDFeedback:
 
     def commit(self, held_s):
         tier = 3 if held_s >= FACTORY_RESET_DURATION else 2 if held_s >= LONG_PRESS_DURATION else 0
+        return self.commit_tier(tier)
+
+    def commit_tier(self, tier):
+        """Commit a semantic tier without inventing a hold duration."""
         generation = self._request(tier, committing=True)
         if generation is None:
             return False

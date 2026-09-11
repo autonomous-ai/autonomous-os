@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from hal.board.gpio_button import ButtonConfig, load_button_config
+from hal.board.gpio_button import ButtonConfig, load_button_config, load_button_configs
 
 
 class TestButtonConfig(unittest.TestCase):
@@ -53,6 +53,39 @@ class TestButtonConfig(unittest.TestCase):
                              ButtonConfig(2, 31, 10_000_000))
             self.assertEqual(load_button_config(directory, "raspberry_pi_4"),
                              ButtonConfig(0, 17, 200_000_000))
+
+    def test_lamp_has_independent_primary_and_reset_inputs(self):
+        root = Path(__file__).resolve().parents[2] / "robots"
+        buttons = load_button_configs(root / "lamp", "orangepi_sun60")
+        self.assertEqual([(b.name, b.wiring.chip, b.wiring.line, b.behavior, b.hold_s)
+                          for b in buttons],
+                         [("primary", 0, 100, "standard", 5.0),
+                          ("factory_reset", 0, 99, "factory_reset", 5.0)])
+        self.assertEqual(len(load_button_configs(root / "intern-v2", "orangepi_sun60")), 1)
+        with tempfile.TemporaryDirectory() as directory:
+            fallback = load_button_configs(directory, "orangepi_sun60")
+            self.assertEqual(len(fallback), 1)
+            self.assertEqual(fallback[0].wiring, ButtonConfig(1, 9, 200_000_000))
+            self.assertEqual(fallback[0].behavior, "standard")
+
+    def test_multiple_inputs_reject_ambiguous_or_invalid_actions(self):
+        primary = dict(name="primary", chip=0, line=100, debounce_ns=200)
+        reset = dict(name="reset", chip=0, line=99, debounce_ns=200,
+                     behavior="factory_reset", hold_s=5)
+        cases = [[], [primary, dict(reset, line=100)],
+                 [primary, dict(reset, name="primary")],
+                 [dict(reset, hold_s=0)], [dict(reset, hold_s=-1)],
+                 [dict(reset, hold_s=True)], [dict(reset, hold_s=float("inf"))],
+                 [dict(reset, hold_s=float("nan"))], [dict(reset, behavior="reboot")],
+                 [dict(primary, hold_s=5)], [dict(reset, name="reset\\ninvalid")],
+                 [dict(reset, extra=True)]]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "gpio_button.json"
+            for buttons in cases:
+                with self.subTest(buttons=buttons):
+                    path.write_text(json.dumps({"boards": {"orangepi_sun60": {"buttons": buttons}}}))
+                    with self.assertRaisesRegex(ValueError, "gpio_button.json"):
+                        load_button_configs(directory, "orangepi_sun60")
 
     def test_invalid_config_rejected_with_path(self):
         cases = ["{", "null", '{"boards": []}']

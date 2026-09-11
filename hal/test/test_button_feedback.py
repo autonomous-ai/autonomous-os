@@ -175,7 +175,7 @@ class HoldLEDFeedbackTests(unittest.TestCase):
         self.assertEqual([c.args[0] for c in handler._hold_led.set_tier.call_args_list], [1, 2, 3])
         order = Mock()
         order.attach_mock(handler._hold_led.commit, "commit")
-        with patch("hal.drivers.gpio_button.hold_release_action") as action:
+        with patch("hal.drivers.button_actions.hold_release_action") as action:
             order.attach_mock(action, "action")
             handler._run_hold_action(5)
         self.assertEqual([c[0] for c in order.mock_calls], ["commit", "action"])
