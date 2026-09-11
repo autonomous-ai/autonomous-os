@@ -157,6 +157,8 @@ count once even without HAL instrumentation. Arbitrary backend runs and
 horizon is 0 seconds: unfinished eligible tasks stay in the denominator. “Completed” means execution finished, not semantic correctness
 or finished audio playback. See the [KPI-3 agent query/report runbook](voice-metrics.md#agent-runbook-query-and-report-kpi-3).
 
-For `voice_metrics_*`, INFO `[telemetry] delivered` confirms successful AA HTTP
+Chat emits `chat_metrics_task_started` at receipt (including queued requests); sensing emits `sensing_metrics_task_started` only for selected task dispatch, after suppression/queue selection. Both reuse `voice_metrics_task_execution` for terminal evidence, joined within the chosen cohort. MQTT `speak: true` remains voice. See the [chat/sensing AA query and report runbook](task-metrics.md) for eligibility, shared evidence, and `--group chat|sensing` commands.
+
+For `voice_metrics_*`, `chat_metrics_*`, and `sensing_metrics_*`, INFO `[telemetry] delivered` confirms successful AA HTTP
 delivery, not warehouse query visibility. Use a warehouse read query/export to
 verify the latter; the ingestion key alone does not grant read access.

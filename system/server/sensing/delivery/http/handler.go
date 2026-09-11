@@ -97,9 +97,9 @@ type SensingEventRequest struct {
 	// downstream already carries `attachments[]`, so nothing here has to choose
 	// which photo survives.
 	Images []string `json:"images,omitempty"`
-	// InteractionID is HAL's voice-metrics id for the utterance behind this event
-	// (measurement only, empty for non-voice sources). It is echoed back as
-	// the owner of any audio os-server starts for this turn — the opening
+	// InteractionID correlates task metrics. HAL supplies it for voice; OS
+	// generates one for chat or selected sensing when absent. For voice it is
+	// echoed back as the owner of audio os-server starts for this turn. The opening
 	// filler fires before this request's response reaches HAL, so HAL's own
 	// run-id binding cannot cover it.
 	InteractionID string `json:"interaction_id,omitempty"`
@@ -221,9 +221,12 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 		return
 	}
 
-	// Record receipt before execution or routing can fail. Preserve HAL ownership
-	// when present, and create one for direct API voice requests otherwise.
-	req.InteractionID = telemetry.ReportVoiceTaskStarted(req.Type, req.InteractionID, "")
+	// User tasks enter the cohort at receipt, including queued chat. Sensor
+	// notifications enter only once routing selects an actual dispatch below.
+	taskGroup := telemetry.TaskGroup(req.Type)
+	if taskGroup == "voice" || taskGroup == "chat" {
+		req.InteractionID = telemetry.ReportTaskStarted(req.Type, req.InteractionID, "")
+	}
 	startPayload := map[string]any{"type": req.Type, "message": req.Message, "interaction_id": req.InteractionID}
 
 	// look.capture is MONITOR-ONLY. The realtime `look` tool already sent the
@@ -272,7 +275,7 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 			// Generate a dedicated local-intent trace ID so this turn doesn't
 			// share the global trace of an in-flight agent turn.
 			localRunID := fmt.Sprintf("local-intent-%d", time.Now().UnixMilli())
-			telemetry.ReportVoiceTaskStarted(req.Type, req.InteractionID, localRunID)
+			telemetry.ReportTaskStarted(req.Type, req.InteractionID, localRunID)
 			turnStart := flow.Start("sensing_input", startPayload, localRunID)
 			flow.Log("intent_match", map[string]any{"message": req.Message, "tts": result.TTSText, "rule": result.Rule, "actions": result.Actions}, localRunID)
 			if result.TTSText != "" {
@@ -606,7 +609,7 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 			var queuedRunID string
 			if isChat || isVoice {
 				_, queuedRunID = h.agentGateway.NextChatRunID()
-				telemetry.ReportVoiceTaskStarted(req.Type, req.InteractionID, queuedRunID)
+				telemetry.ReportTaskStarted(req.Type, req.InteractionID, queuedRunID)
 				if isChat {
 					h.agentGateway.MarkWebChatRun(queuedRunID)
 				}
@@ -666,8 +669,9 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 	// No local match — forward to OpenClaw agent
 	if !h.agentGateway.IsReady() {
 		notReadyRunID := fmt.Sprintf("not-ready-%d", time.Now().UnixMilli())
-		telemetry.ReportVoiceTaskStarted(req.Type, req.InteractionID, notReadyRunID)
-		if isVoice {
+		req.InteractionID = telemetry.ReportTaskStarted(req.Type, req.InteractionID, notReadyRunID)
+		startPayload["interaction_id"] = req.InteractionID
+		if taskGroup != "" {
 			telemetry.ReportTaskExecution(notReadyRunID, req.InteractionID, "failed", "dispatch_error")
 		}
 		turnStart := flow.Start("sensing_input", startPayload, notReadyRunID)
@@ -694,7 +698,8 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 
 	// Same run_id as chat.send / JSONL: SetTrace before flow.Start so enter matches this turn (not previous).
 	reqID, runID := h.agentGateway.NextChatRunID()
-	telemetry.ReportVoiceTaskStarted(req.Type, req.InteractionID, runID)
+	req.InteractionID = telemetry.ReportTaskStarted(req.Type, req.InteractionID, runID)
+	startPayload["interaction_id"] = req.InteractionID
 	flow.SetTrace(runID)
 
 	// Mark this run as guard-active so SSE handler broadcasts the agent response via Telegram.
@@ -864,7 +869,7 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 	}
 
 	if err != nil {
-		if isVoice {
+		if taskGroup != "" {
 			telemetry.ReportTaskExecution(runID, req.InteractionID, "failed", "dispatch_error")
 		}
 		// Forward failed — drop the voice mark so we don't keep state

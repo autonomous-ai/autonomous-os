@@ -286,5 +286,91 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(report["aggregate"]["hal_dropped_total"], 8)
 
 
+class GroupReportTests(unittest.TestCase):
+    @staticmethod
+    def start(group, identifier, **overrides):
+        event = started(identifier, **overrides)
+        event["event_name"] = f"{group}_metrics_task_started"
+        return event
+
+    def test_mixed_cohorts_keep_independent_denominators_and_results(self):
+        rows = [turn("hal"), execution("hal")]
+        for group, outcome in (("voice", "completed"), ("chat", "failed"),
+                               ("sensing", "unknown")):
+            rows += [self.start(group, group), execution(group, outcome=outcome)]
+        expected = {"voice": (2, 2, 0, 0), "chat": (1, 0, 1, 0),
+                    "sensing": (1, 0, 0, 1)}
+        for group, counts in expected.items():
+            with self.subTest(group=group):
+                result = metrics.report(rows, 2000000, group=group)
+                self.assertEqual(result["group"], group)
+                aggregate = result["aggregate"]
+                self.assertEqual(tuple(aggregate[key] for key in
+                                       ("eligible_mature_turns", "completed_turns",
+                                        "failed_turns", "unknown_turns")), counts)
+                self.assertEqual(aggregate["completion_pct"], aggregate["kpi3_pct"])
+        self.assertEqual(metrics.report(rows, 2000000),
+                         metrics.report(rows, 2000000, group="voice"))
+
+    def test_each_group_hundred_starts_eighty_five_completed(self):
+        rows = []
+        for group in ("voice", "chat", "sensing"):
+            rows += [self.start(group, f"{group}-{i}") for i in range(100)]
+            rows += [execution(f"{group}-{i}") for i in range(85)]
+        for group in ("voice", "chat", "sensing"):
+            with self.subTest(group=group):
+                result = metrics.report(rows, 2000000, group=group)["aggregate"]
+                self.assertEqual(result["eligible_mature_turns"], 100)
+                self.assertEqual(result["completed_turns"], 85)
+                self.assertEqual(result["incomplete_turns"], 15)
+                self.assertEqual(result["completion_pct"], 85)
+                self.assertTrue(result["meets_target"])
+
+    def test_queue_binding_duplicates_and_terminal_error_for_each_group(self):
+        for group in ("voice", "chat", "sensing"):
+            with self.subTest(group=group):
+                queued = self.start(group, "queued", run_id="")
+                bound = self.start(group, "queued", run_id="actual-run")
+                done = execution("other", run_id="actual-run")
+                result = metrics.report([queued, queued], 2000000, group=group)["aggregate"]
+                self.assertEqual(result["eligible_mature_turns"], 1)
+                self.assertEqual(result["incomplete_turns"], 1)
+                rows = [queued, bound, bound, done, done]
+                result = metrics.report(rows, 2000000, group=group)["aggregate"]
+                self.assertEqual(result["eligible_mature_turns"], 1)
+                self.assertEqual(result["completed_turns"], 1)
+                failure = execution("other", run_id="actual-run", outcome="failed",
+                                    evidence="lifecycle_error", execution_at_ms=10000)
+                result = metrics.report(rows + [failure], 2000000, group=group)["aggregate"]
+                self.assertEqual(result["failed_turns"], 1)
+                self.assertEqual(result["completed_turns"], 0)
+
+    def test_synthetic_prefixes_excluded_unless_requested(self):
+        for group, prefix in (("voice", "vi-smoke-"), ("chat", "chat-smoke-"),
+                              ("sensing", "sensing-smoke-")):
+            with self.subTest(group=group):
+                identifier = prefix + "test"
+                rows = [self.start(group, identifier), execution(identifier)]
+                result = metrics.report(rows, 2000000, group=group)["aggregate"]
+                self.assertEqual(result["eligible_mature_turns"], 0)
+                self.assertIsNone(result["completion_pct"])
+                result = metrics.report(rows, 2000000, include_synthetic=True,
+                                        group=group)["aggregate"]
+                self.assertEqual(result["completed_turns"], 1)
+
+    def test_cli_group_selects_cohort_and_rejects_invalid_group(self):
+        row = self.start("chat", "web")
+        output = io.StringIO()
+        with patch.object(metrics.sys, "argv", ["report", "--group", "chat", "--now-ms", "2000000"]), \
+                patch.object(metrics.sys, "stdin", io.StringIO(json.dumps(row))), \
+                patch.object(metrics.sys, "stdout", output):
+            metrics.main()
+        result = json.loads(output.getvalue())
+        self.assertEqual(result["group"], "chat")
+        self.assertEqual(result["aggregate"]["incomplete_turns"], 1)
+        with self.assertRaisesRegex(ValueError, "unsupported task group"):
+            metrics.report([], 2000000, group="invalid")
+
+
 if __name__ == "__main__":
     unittest.main()

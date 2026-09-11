@@ -245,6 +245,8 @@ không thể phát ra câu trả lời cũ, nên không tính là thứ mà biê
 
 ## KPI-3: chạy xong, không đánh giá làm đúng
 
+Chat và sensing có cohort hoàn tất riêng; xem [runbook query AA chat/sensing](task-metrics_vi.md). Trang này chấm voice (`--group voice`, mặc định của reporter). Event dùng chung `voice_metrics_task_execution` còn chứa terminal ngoài voice; chỉ evidence join với cohort voice mới được tính ở đây. Report có `completion_pct` là alias của `kpi3_pct` và field `group`.
+
 “Successfully complete” nghĩa là **tác vụ đã chạy xong, không ghi nhận lỗi kết thúc thực thi**. Agent vẫn có thể trả
 lời sai hoặc làm hành động không hiệu quả mà đạt chỉ số thực thi này. KPI không
 đánh giá đúng yêu cầu user, kết quả tool, tác động vật lý hay phát hết câu trả lời.

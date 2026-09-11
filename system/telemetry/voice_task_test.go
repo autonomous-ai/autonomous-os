@@ -98,16 +98,16 @@ func TestTaskExecutionRejectsUncorrelatedAndUnboundedValues(t *testing.T) {
 func TestVoiceTaskStartsPreserveOwnershipAndExcludeNonTasks(t *testing.T) {
 	m := newMock(nil, 3)
 	withPipe(t, m)
-	id := ReportVoiceTaskStarted("voice_followup", "", "")
+	id := ReportTaskStarted("voice_followup", "", "")
 	if id == "" {
 		t.Fatal("direct voice request must receive an interaction ID")
 	}
-	if got := ReportVoiceTaskStarted("voice_followup", id, "main-run"); got != id {
+	if got := ReportTaskStarted("voice_followup", id, "main-run"); got != id {
 		t.Fatal("binding changed the turn identity")
 	}
-	ReportVoiceTaskStarted("voice_command", "vi-from-hal", "local-run")
-	for _, typ := range []string{"voice_agent_handled", "voice_listening", "web_chat", "motion"} {
-		ReportVoiceTaskStarted(typ, "", "background-run")
+	ReportTaskStarted("voice_command", "vi-from-hal", "local-run")
+	for _, typ := range []string{"voice_agent_handled", "voice_listening", "voice_listening_end", "look.capture"} {
+		ReportTaskStarted(typ, "", "background-run")
 	}
 	m.wait(t, 3)
 	if len(m.events) != 3 {
@@ -130,5 +130,29 @@ func TestVoiceTaskStartsPreserveOwnershipAndExcludeNonTasks(t *testing.T) {
 	}
 	if m.events[1].params["run_id"] != "main-run" {
 		t.Fatal("missing main-agent correlation")
+	}
+}
+
+func TestTaskStartsSeparateChatSensingAndVoice(t *testing.T) {
+	m := newMock(nil, 5)
+	withPipe(t, m)
+	cases := []struct{ eventType, group string }{
+		{"voice_followup", "voice"}, {"web_chat", "chat"}, {"mqtt_chat", "chat"},
+		{"motion.activity", "sensing"}, {"presence.enter", "sensing"},
+	}
+	for _, tc := range cases {
+		if got := TaskGroup(tc.eventType); got != tc.group {
+			t.Fatalf("%s grouped as %s", tc.eventType, got)
+		}
+		ReportTaskStarted(tc.eventType, "", "run-"+tc.eventType)
+	}
+	m.wait(t, len(cases))
+	for i, tc := range cases {
+		if m.events[i].name != tc.group+"_metrics_task_started" {
+			t.Fatalf("wrong source event: %+v", m.events[i])
+		}
+		if tc.group == "sensing" && m.events[i].params["interaction_id"] != "os-sensing-run-"+tc.eventType {
+			t.Fatalf("sensing retry identity must be deterministic: %+v", m.events[i].params)
+		}
 	}
 }

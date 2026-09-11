@@ -204,8 +204,8 @@ func (r *reporter) send(ctx context.Context, ev Event) {
 		return
 	}
 	level := slog.LevelDebug
-	if strings.HasPrefix(ev.Name, "voice_metrics_") {
-		// Voice KPI verification needs an observable AA acceptance receipt.
+	if strings.HasPrefix(ev.Name, "voice_metrics_") || strings.HasPrefix(ev.Name, "chat_metrics_") || strings.HasPrefix(ev.Name, "sensing_metrics_") {
+		// Task KPI verification needs an observable AA acceptance receipt.
 		level = slog.LevelInfo
 	}
 	slog.Log(ctx, level, logPrefix+" delivered", "component", "telemetry",
