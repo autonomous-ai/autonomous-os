@@ -455,6 +455,17 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
       setError(`New admin password must be at least ${ADMIN_PASSWORD_MIN} characters.`);
       return;
     }
+    // A direct vendor is authenticated with its own key. Blank means the
+    // backend falls back to the AI-brain key — an Autonomous JWT — which the
+    // vendor rejects with a 401 that hal retries, gives up on, and turns into
+    // zero samples. The device goes mute with no error anywhere in this UI, so
+    // refuse the save instead of shipping a silent device. Issue #309.
+    const ttsChoiceToSave = detectChoice(ttsBaseUrl, ttsProvider);
+    const ttsNeedsOwnKey = ttsChoiceToSave === "openai" || ttsChoiceToSave === "elevenlabs";
+    if (ttsNeedsOwnKey && !ttsApiKey && !(ttsLoaded.apiKey && ttsLoaded.choice === ttsChoiceToSave)) {
+      setError(`${ttsChoiceToSave === "openai" ? "OpenAI" : "ElevenLabs"} (direct) needs its own API key — the AI brain key will not work with it.`);
+      return;
+    }
     setSaving(true);
     try {
       // Build the payload from non-secret fields first, then layer on each
@@ -491,7 +502,6 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
       // sk_... sent to the Autonomous proxy, or a proxy JWT sent to ElevenLabs.
       // Both 401, and hal turns a 401 into silence, so delete it explicitly.
       // See issue #309.
-      const ttsChoiceToSave = detectChoice(ttsBaseUrl, ttsProvider);
       if (ttsApiKey) {
         body.tts_api_key = ttsApiKey;
       } else if (ttsLoaded.apiKey && ttsLoaded.choice !== ttsChoiceToSave) {

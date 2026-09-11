@@ -251,6 +251,15 @@ export function TTSSection({
     ? piperInstalled
     : voicesFor(vendor, lang, sttLanguage);
 
+  // Direct vendors authenticate with their own credential. Autonomous and
+  // Custom inherit the AI-brain key through the backend's GetTTSAPIKey
+  // fallback; Piper needs none at all.
+  const keyRequired = choice === "openai" || choice === "elevenlabs";
+  // A stored key belongs to the choice it was saved under. Once the operator
+  // picks a different one it is a different vendor's key, and advertising it as
+  // "configured" is what made issue #309 impossible to diagnose from the UI.
+  const storedKeyIsForThisChoice = ttsLoaded.apiKey && ttsLoaded.choice === choice;
+
   const onChoice = (next: ProviderChoice) => {
     // Re-picking the current choice must not disturb the draft cache: it would
     // stash the live value over itself and then restore it, which is a no-op
@@ -427,21 +436,28 @@ export function TTSSection({
           reason: an empty box after a save reads as "nothing was saved". */}
       <div style={{ marginBottom: 5, display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
         <label htmlFor="tts_api_key" style={labelStyle}>
-          API Key (optional — leave blank to reuse AI brain key)
+          {keyRequired
+            ? "API Key (required — this provider does not accept the AI brain key)"
+            : "API Key (optional — leave blank to reuse AI brain key)"}
         </label>
-        {ttsLoaded.apiKey && (
+        {storedKeyIsForThisChoice && (
           <span style={{ fontSize: 10, color: "var(--lm-green, #34d399)", fontWeight: 600 }}>
             ✓ configured
           </span>
         )}
+        {keyRequired && !storedKeyIsForThisChoice && !ttsApiKey && (
+          <span style={{ fontSize: 10, color: "var(--lm-amber, #fbbf24)", fontWeight: 600 }}>
+            key required
+          </span>
+        )}
       </div>
       <LockedPasswordField
-        lockedInitially={ttsLoaded.apiKey || llmLoaded.apiKey}
+        lockedInitially={storedKeyIsForThisChoice || (!keyRequired && llmLoaded.apiKey)}
         label=""
         id="tts_api_key"
         value={ttsApiKey}
         onChange={setTtsApiKey}
-        placeholder={ttsLoaded.apiKey ? "•••••••• saved (click ✎ to rotate)" : "sk-..."}
+        placeholder={storedKeyIsForThisChoice ? "•••••••• saved (click ✎ to rotate)" : "sk-..."}
       />
       </>)}
 
