@@ -70,9 +70,10 @@ không có phần cứng TTP223 nên không kèm file này. `hal/board/ttp223.py
 dùng chung. Thiếu file/board thì fallback về `touch` cũ trong
 `hal/board/boards.json`; `enabled: false` tắt TTP223 rõ ràng. Config sai bị từ
 chối trước khi claim GPIO. Restart HAL sau khi sửa config của device được
-chọn; mô phỏng bỏ qua input phần cứng. Nút mới của Lamp (gpiochip0 line 100,
-pin vật lý 37 / PD4) trùng mapping touch cũ; chân touch thay thế vẫn cần xác
-nhận. Intern v2 giữ wiring nút hiện có. Fallback board cũ vẫn giữ nguyên;
+chọn; mô phỏng bỏ qua input phần cứng. Lamp dùng hai pad TTP223: S1 ở pin vật lý
+29 / PD0 / gpiochip0 line 96, S3 ở pin 33 / PD2 / line 98. Nút cơ dùng pin 37 /
+PD4 / line 100. Cần giữ JSON của Lamp trên device vì fallback touch cũ vẫn trùng
+chân nút cơ. Intern v2 giữ wiring nút hiện có. Fallback board cũ vẫn giữ nguyên;
 chỉ thiếu file JSON không có nghĩa là driver bị tắt.
 
 Wiring cảm ứng MPR121 tùy chọn hiện chỉ thuộc Lamp, trong
@@ -92,9 +93,12 @@ nhả đã debounce. Ngưỡng cử chỉ dùng chung GPIO trong
 `hal/drivers/button_gestures.py`: lần nhả ngắn đầu tiên gọi single-click ngay
 với `announce=False`; sau 0.4 s yên, 1/2/4+ click phát cue nghe, đúng 3 click
 thì reboot. Giữ chỉ thực hiện khi nhả: 2–<5 s sleepy, 5–<10 s shutdown,
-≥10 s factory reset. Chạm giữ lúc startup bị bỏ qua; MPR121 chưa có LED theo
-mức giữ. Mapping click/giữ mới chỉ kiểm tra bằng test mock local; lần test
-trên device trước đó chỉ kiểm tra single-click. Mặc định:
+≥10 s factory reset. Khi giữ, event mức giữ đã debounce dùng cùng `HoldLEDFeedback`
+trong `hal/drivers/button_actions.py` và `BUTTON_LED_PRESETS` với GPIO: tím nháy 2 Hz ở 2–<5 s, đỏ nháy 2 Hz ở
+5–<10 s và đỏ đứng từ 10 s. Nhả thì dừng nháy; action shutdown/reset được
+chấp nhận đặt lại đỏ đứng trước khi chạy. Chạm giữ lúc startup không hiện
+phản hồi; stop hoặc lỗi phần cứng hủy phản hồi. LED được kiểm tra bằng test
+mock local, chưa kiểm tra trên device thật. Mặc định:
 địa chỉ `0x5A`, electrode 0–11, ngưỡng chạm/nhả 2/1, bật autoconfig,
 polling 10 ms và debounce 30 ms, chờ ổn định 100 ms lúc startup. Lỗi I²C hoặc
 cờ quá dòng chỉ dừng driver này. Logger `hal.drivers.mpr121` ghi cấu hình,

@@ -73,8 +73,9 @@ board's `chip`, `lines` and optional `axis` from `boards` and passes a
 `touch` in `hal/board/boards.json`; `enabled: false` disables TTP223 explicitly.
 Malformed configuration is rejected before GPIO is claimed. Restart HAL after
 editing the selected device's configuration; simulation skips hardware input.
-Lamp's new button pin (gpiochip0 line 100, physical pin 37 / PD4) overlaps the
-legacy touch mapping; its replacement touch pin still needs confirmation.
+Lamp uses two TTP223 pads: S1 on physical pin 29 / PD0 / gpiochip0 line 96
+and S3 on pin 33 / PD2 / line 98. Its button uses pin 37 / PD4 / line 100.
+Keep the Lamp JSON installed: the legacy touch fallback still overlaps the button.
 Intern v2 retains its existing button wiring. The legacy board fallback remains
 unchanged; absence of a JSON file alone does not disable the driver.
 
@@ -95,9 +96,13 @@ contact. It shares GPIO gesture thresholds in `hal/drivers/button_gestures.py`:
 the first short release immediately calls single-click with `announce=False`;
 a 0.4 s quiet window produces the listening cue for 1/2/4+ clicks or reboot
 for exactly 3. Holds commit only on release: 2–<5 s sleepy, 5–<10 s shutdown,
-≥10 s factory reset. Boot-held contacts are suppressed; MPR121 has no hold-tier
-LED feedback. New click/hold mappings have mocked local verification only;
-the earlier live test covered single-click. Defaults are address
+≥10 s factory reset. While held, debounced hold-tier events use the same
+`HoldLEDFeedback` in `hal/drivers/button_actions.py` and `BUTTON_LED_PRESETS`
+as GPIO: purple blinking at 2 Hz for 2–<5 s, red blinking
+at 2 Hz for 5–<10 s, and solid red from 10 s. Release stops blinking; accepted
+shutdown/reset actions reaffirm solid red before execution. Boot-held contacts
+show no feedback; stop or hardware failure cancels it. LED feedback is verified
+with mocked local tests; it has not been checked on the live device. Defaults are address
 `0x5A`, electrodes 0–11, touch/release thresholds 2/1, autoconfiguration enabled,
 10 ms polling and 30 ms debounce, with 100 ms startup settling. An I²C failure
 or overcurrent fault stops only this driver. Logger `hal.drivers.mpr121` records

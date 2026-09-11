@@ -15,7 +15,7 @@ Lamp supports a mechanical button, TTP223 touchpads and an optional MPR121 capac
 | Device | Pi 4/5 | OrangePi sun60 |
 |---|---|---|
 | GPIO button | gpiochip0 BCM 17 (pull-up, active-LOW) | Physical pin 37 / PD4 / gpiochip0 line 100 (pull-up, active-LOW) |
-| TTP223 | not wired | gpiochip0 lines 96 / 100, **pull-up, active-LOW** (pads rest HIGH; a touch is the falling edge). The middle pad on line 98 was removed 2026-08-28. |
+| TTP223 | not wired | Two pads: S1 at physical pin 29 / PD0 / gpiochip0 line 96; S3 at physical pin 33 / PD2 / gpiochip0 line 98. **Pull-up, active-LOW** (pads rest HIGH; a touch is the falling edge). |
 
 Mechanical button wiring belongs to the device: `robots/lamp/gpio_button.json`
 and `robots/intern-v2/gpio_button.json` each declare a `boards` map keyed by
@@ -43,9 +43,10 @@ configuration is rejected before GPIO is claimed. Restart HAL after editing
 the selected device's JSON. Pull-up, active-LOW behavior and gesture detection
 remain in the shared driver; simulation skips the hardware.
 
-Lamp's new mechanical button uses line 100, which also appears in the legacy
-TTP223 wiring. The replacement pad pin is pending confirmation; do not treat
-that overlapping mapping as verified wiring.
+Hardware confirmed two pads: S1 on pin 29 (line 96) and S3 on pin 33 (line 98).
+The Lamp JSON uses these lines, leaving pin 37 (line 100) for the mechanical
+button. The legacy fallback still uses lines 96/100; keep the Lamp JSON installed
+to avoid that old overlap.
 
 Board detection reads `/proc/device-tree/model`:
 - `"sun60iw2"` → OrangePi 4 Pro / A733
@@ -65,7 +66,7 @@ Board detection reads `/proc/device-tree/model`:
 | **Hold 5–10 s, then release** | Shutdown OS (TTS announce → release servos → `sudo shutdown -h now`). LED blinks red while armed. | n/a — TTP223 hardware cannot reliably hold (see "FastMode" below) |
 | **Hold 10 s+, then release** | Factory-reset: wipe device state + reboot into AP setup (TTS announce → release servos → POST `/api/system/factory-reset` on the OS server). LED goes solid red while armed. | n/a |
 
-The table above covers GPIO and TTP223. MPR121 also supports release-to-commit holds, as detailed in its detection section; the GPIO LED feedback in this table does not apply to MPR121. The sleep and destructive hold tiers **commit on release, not on a timer firing while held**. The destructive tiers escalate from shutdown to factory-reset after 10 s (see "GPIO button detection" below).
+The table above covers GPIO and TTP223. MPR121 also supports release-to-commit holds and the same hold-tier LED feedback, as detailed in its detection section. The sleep and destructive hold tiers **commit on release, not on a timer firing while held**. The destructive tiers escalate from shutdown to factory-reset after 10 s (see "GPIO button detection" below).
 
 ## Interrupting Lamp while it speaks (barge-in)
 
@@ -178,7 +179,7 @@ A release edge with no matching press (the press was debounce-dropped) is ignore
 
 ### Hold LED feedback
 
-The watcher thread polls the hold duration and drives the RGB LED at HIGH priority (preempts the current emotion) so the user sees how far they've armed before they release:
+The GPIO watcher thread polls the hold duration and selects a tier. Shared `HoldLEDFeedback` in `hal/drivers/button_actions.py`, also used by MPR121, drives the RGB LED at HIGH priority (preempts the current emotion) so the user sees how far they've armed before they release:
 
 | Hold elapsed | LED | Meaning |
 |---|---|---|
@@ -189,7 +190,7 @@ The watcher thread polls the hold duration and drives the RGB LED at HIGH priori
 
 Purple identifies the sleep tier; red blink vs red solid differentiates shutdown from factory-reset. The LED is a silent no-op when the RGB service is unavailable (dev machines) — the button still works.
 
-The three colors are presets, not constants baked into the driver: `BUTTON_LED_PRESETS` in `hal/presets.py` (`sleep_warn` / `shutdown_warn` / `factory_reset`), overridable per device through the `button_led` section of `robots/<id>/presets.json` like every other LED table. The driver owns the staging — when to blink, when to go solid — and reads the color at the moment it paints, because the overlay merges the table in place at boot.
+The three colors are presets, not constants baked into the driver: `BUTTON_LED_PRESETS` in `hal/presets.py` (`sleep_warn` / `shutdown_warn` / `factory_reset`), overridable per device through the `button_led` section of `robots/<id>/presets.json` like every other LED table. Shared `HoldLEDFeedback` owns blinking, release cleanup and final action feedback; each input supplies its detected tier. It reads the color at the moment it paints, because the overlay merges the table in place at boot.
 
 Per-edge debounce is 200 ms (press and release ticks tracked independently so a quick tap isn't dropped while bouncy repeats of the same edge are filtered).
 
@@ -262,8 +263,23 @@ functions:
 
 A short contact lasts less than 2 s. The click window does not resolve while
 any selected electrode remains touched. Releasing a hold clears the pending
-click burst. Destructive actions never commit while held. MPR121 does not
-provide the GPIO button's hold-tier LED feedback.
+click burst. Destructive actions never commit while held.
+
+Debounced `hold_tier` events feed the same `HoldLEDFeedback` component as
+GPIO, sharing `BUTTON_LED_PRESETS`, blinking, release cleanup and final action
+feedback. Per-device `button_led` overrides apply to both inputs:
+
+| Hold elapsed | MPR121 LED |
+|---|---|
+| <2 s | No hold feedback |
+| 2–<5 s | Sleepy purple, blinking at 2 Hz |
+| 5–<10 s | Red, blinking at 2 Hz |
+| ≥10 s | Solid red |
+
+Release stops blinking. An accepted shutdown or factory-reset action reaffirms
+solid red before execution; sleepy turns the LED off through the shared action.
+A contact held at startup produces no hold feedback. Stop or hardware failure
+cancels feedback, and an unavailable RGB service does not prevent input actions.
 
 The bounded asynchronous action worker keeps polling responsive. Excess
 actions may be dropped; a newer touch, stop or hardware error
@@ -272,8 +288,8 @@ failure or MPR121 overcurrent fault (`OVCF`) is logged and stops this driver
 while the existing input handlers continue.
 
 The hardware verification above covered the earlier single-click behavior.
-These additional click/hold mappings are verified with mocked local tests;
-they have not been deployed or exercised destructively on the live device.
+Hold LED feedback is verified with mocked local tests; it has not been checked
+on the live device. These tests do not execute real reboot, shutdown or reset.
 
 Operation logs use logger `hal.drivers.mpr121` in the normal HAL log/journal;
 there is no separate raw trace file. INFO entries cover initialization and
@@ -365,7 +381,7 @@ It never logs to journald, deliberately: HAL is chatty enough that the `hal.serv
 | `HAL_TOUCH_DEBUG` | `false` | Master switch. Off = every entry point is a no-op. |
 | `HAL_TOUCH_DEBUG_DIR` | `touch_logs/` next to the module | Output root. Falls back to the temp dir if the tree is read-only. |
 | `HAL_TOUCH_DEBUG_MAX_ENTRIES` | 200 | File cap, oldest pruned on each write. 0 = unbounded. |
-| `HAL_TOUCH_DEBUG_PADS` | _(unset)_ | Line→label map, e.g. `96=S1,98=S2,100=S4`. Unset, pads are labelled by line number — the historical S-names do not follow line order after two relocations, so the driver does not guess them. |
+| `HAL_TOUCH_DEBUG_PADS` | _(unset)_ | Line→label map, e.g. `96=S1,98=S3`. Unset, pads are labelled by line number — the historical S-names do not follow line order after two relocations, so the driver does not guess them. |
 
 
 ## Shared action library (`hal/drivers/button_actions.py`)
@@ -465,7 +481,7 @@ Phrases are intentionally short — they fire mid-stroke and need to feel respon
 | `hal/board/mpr121.py` | Device-owned MPR121 configuration loader and validation |
 | `hal/drivers/mpr121.py` | Optional I²C MPR121 click/hold handler |
 | `hal/drivers/button_gestures.py` | Shared GPIO/MPR121 gesture thresholds |
-| `hal/drivers/button_actions.py` | Shared action functions + localized phrase pools |
+| `hal/drivers/button_actions.py` | Shared action functions, GPIO/MPR121 `HoldLEDFeedback` and localized phrase pools |
 | `hal/presets.py` | Language code constants (`LANG_EN`, etc.) |
 | `hal/test_ttp223_probe_orangepi.py` | Standalone pad probe (stdlib ioctl, no gpiod). `info` reads line state with HAL running; `watch` maps pad→line and needs `hal.service` stopped. Lines come from the selected device’s `ttp223.json`, with the same legacy board-profile fallback as HAL. Select the device with `--device-type`. |
 | `hal/test_gpio.py` | Standalone probe for verifying GPIO button line |

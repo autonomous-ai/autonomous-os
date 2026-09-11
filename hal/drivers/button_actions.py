@@ -648,3 +648,131 @@ def factory_reset_action(source: str = "button"):
         )
     except Exception as e:
         logger.error("factory-reset HTTP call failed: %s", e)
+
+
+# Hold LED feedback shared by GPIO and capacitive button inputs.
+LED_OFF = (0, 0, 0)
+LED_BLINK_HALF_PERIOD_S = 0.25
+
+
+def warn_color(tier):
+    """Read the live device-overridden preset on every dispatch."""
+    from hal.presets import BUTTON_LED_PRESETS
+
+    return tuple(BUTTON_LED_PRESETS[tier]["color"])
+
+
+def dispatch_led(color, *, still_current=None):
+    """Preempt emotion effects exactly as the GPIO button does."""
+    import hal.app_state as state
+    from hal.drivers.base import Priority
+    from hal.presets import RGB_CMD_SOLID
+
+    rgb = state.rgb_service
+    if rgb is None:
+        return
+    try:
+        state._stop_current_effect()
+        if still_current is None or still_current():
+            rgb.dispatch(RGB_CMD_SOLID, color, priority=Priority.HIGH)
+    except Exception:
+        logger.warning("Button LED dispatch failed", exc_info=True)
+
+
+class HoldLEDFeedback:
+    """Consume accepted hold tiers without blocking the hardware poll loop.
+
+    A single worker owns RGB calls, including commit colors. Release cancels
+    future blinking immediately; commit waits for any in-flight RGB call so an
+    old blink cannot overwrite the ensuing sleep/shutdown/reset action.
+    """
+
+    def __init__(self):
+        self._condition = threading.Condition()
+        self._thread = None
+        self._closed = False
+        self._generation = 0
+        self._completed = 0
+        self._tier = 0
+        self._committing = False
+
+    def _request(self, tier, committing=False):
+        with self._condition:
+            if self._closed:
+                return None
+            self._generation += 1
+            self._tier = tier
+            self._committing = committing
+            if self._thread is None:
+                self._thread = threading.Thread(
+                    target=self._run, daemon=True, name="button-hold-led",
+                )
+                self._thread.start()
+            self._condition.notify_all()
+            return self._generation
+
+    def set_tier(self, tier):
+        self._request(tier)
+
+    def release(self):
+        with self._condition:
+            if self._thread is None:
+                return
+            self._request(0)
+
+    def commit(self, held_s):
+        tier = 3 if held_s >= FACTORY_RESET_DURATION else 2 if held_s >= LONG_PRESS_DURATION else 0
+        generation = self._request(tier, committing=True)
+        if generation is None:
+            return False
+        with self._condition:
+            self._condition.wait_for(
+                lambda: self._closed or self._completed >= generation,
+            )
+
+            return not self._closed and self._generation == generation
+
+    def _is_current(self, generation):
+        with self._condition:
+            return not self._closed and self._generation == generation
+
+    def stop(self):
+        # Do not join here: poll cleanup must never wait for an RGB effect.
+        with self._condition:
+            self._closed = True
+            self._condition.notify_all()
+
+    def _run(self):
+        generation = -1
+        blink_on = False
+        while True:
+            with self._condition:
+                if self._closed:
+                    return
+                changed = generation != self._generation
+                if changed:
+                    generation = self._generation
+                    blink_on = False
+                tier, committing = self._tier, self._committing
+            try:
+                if tier:
+                    name = {1: "sleep_warn", 2: "shutdown_warn", 3: "factory_reset"}[tier]
+                    blink_on = not blink_on
+                    color = warn_color(name)
+                    dispatch_led(
+                        color if committing or tier == 3 or blink_on else LED_OFF,
+                        still_current=lambda: self._is_current(generation),
+                    )
+            except Exception:
+                # Missing RGB/presets must never prevent the semantic action.
+                logger.warning("Button hold LED feedback failed", exc_info=True)
+            with self._condition:
+                self._completed = max(self._completed, generation)
+                self._condition.notify_all()
+                if self._closed:
+                    return
+                timeout = LED_BLINK_HALF_PERIOD_S if tier in (1, 2) and not committing else None
+                self._condition.wait_for(
+                    lambda: self._closed or self._generation != generation,
+                    timeout=timeout,
+                )

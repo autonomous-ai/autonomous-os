@@ -15,7 +15,7 @@ Lamp hỗ trợ nút cơ học, touchpad TTP223 và bộ điều khiển cảm �
 | Thiết bị | Pi 4/5 | OrangePi sun60 |
 |---|---|---|
 | Nút GPIO | gpiochip0 BCM 17 (pull-up, active-LOW) | Pin vật lý 37 / PD4 / gpiochip0 line 100 (pull-up, active-LOW) |
-| TTP223 | không wire | gpiochip0 line 96 / 100, **pull-up, active-LOW** (pad nghỉ ở mức HIGH; chạm là edge xuống). Pad giữa trên line 98 đã bị bỏ ngày 2026-08-28. |
+| TTP223 | không wire | Hai pad: S1 tại pin vật lý 29 / PD0 / gpiochip0 line 96; S3 tại pin vật lý 33 / PD2 / gpiochip0 line 98. **Pull-up, active-LOW** (pad nghỉ ở mức HIGH; chạm là edge xuống). |
 
 Wiring nút cơ thuộc về từng device: `robots/lamp/gpio_button.json` và
 `robots/intern-v2/gpio_button.json` đều khai báo map `boards` với các key
@@ -41,8 +41,9 @@ trong `hal/board/boards.json` (OrangePi: chip 0, line 96/100);
 GPIO. Restart HAL sau khi sửa JSON của device được chọn. Pull-up, active-LOW
 và nhận diện cử chỉ vẫn ở driver dùng chung; mô phỏng bỏ qua phần cứng.
 
-Nút cơ mới của Lamp dùng line 100, cũng có trong wiring TTP223 cũ. Chân pad
-thay thế đang chờ xác nhận; mapping trùng chân này chưa phải wiring đã xác minh.
+Hardware xác nhận hai pad: S1 ở pin 29 (line 96), S3 ở pin 33 (line 98).
+JSON của Lamp dùng hai line này, dành pin 37 (line 100) cho nút cơ. Fallback
+cũ vẫn dùng line 96/100; cần giữ JSON của Lamp trên device để tránh trùng chân cũ.
 
 Board được detect qua `/proc/device-tree/model`:
 - `"sun60iw2"` → OrangePi 4 Pro / A733
@@ -62,7 +63,7 @@ Board được detect qua `/proc/device-tree/model`:
 | **Giữ 5–10 s rồi nhả** | Shutdown OS (TTS báo → release servo → `sudo shutdown -h now`). LED nháy đỏ khi đã arm. | n/a — phần cứng TTP223 không hold đáng tin được (xem "FastMode" dưới) |
 | **Giữ 10 s+ rồi nhả** | Factory-reset: wipe state thiết bị + reboot vào AP setup (TTS báo → release servo → POST `/api/system/factory-reset` trên OS server). LED đỏ đứng khi đã arm. | n/a |
 
-Bảng trên mô tả GPIO và TTP223. MPR121 cũng hỗ trợ giữ rồi nhả để thực hiện action, xem phần detect riêng; phản hồi LED GPIO trong bảng không áp dụng cho MPR121. Mức sleep và các mức destructive **commit khi nhả, không phải khi timer fire lúc đang giữ**. Các mức destructive escalate từ shutdown sang factory-reset sau 10 s (xem "Detect nút GPIO" dưới).
+Bảng trên mô tả GPIO và TTP223. MPR121 cũng hỗ trợ giữ rồi nhả để thực hiện action và cùng phản hồi LED theo mức giữ, xem phần detect riêng. Mức sleep và các mức destructive **commit khi nhả, không phải khi timer fire lúc đang giữ**. Các mức destructive escalate từ shutdown sang factory-reset sau 10 s (xem "Detect nút GPIO" dưới).
 
 ## Cắt Lamp giữa câu (barge-in)
 
@@ -175,7 +176,7 @@ Release edge không có press khớp (press bị debounce nuốt) thì bỏ qua 
 
 ### LED feedback khi giữ
 
-Thread watcher poll thời lượng giữ và đẩy LED RGB ở priority HIGH (preempt emotion hiện tại) để user thấy đã arm tới đâu trước khi nhả:
+Thread watcher GPIO poll thời lượng giữ và chọn mức giữ. `HoldLEDFeedback` dùng chung trong `hal/drivers/button_actions.py`, cũng được MPR121 sử dụng, đẩy LED RGB ở priority HIGH (preempt emotion hiện tại) để user thấy đã arm tới đâu trước khi nhả:
 
 | Thời gian giữ | LED | Ý nghĩa |
 |---|---|---|
@@ -186,7 +187,7 @@ Thread watcher poll thời lượng giữ và đẩy LED RGB ở priority HIGH (
 
 Màu tím nhận diện mức sleep; đỏ nháy vs đỏ đứng phân biệt shutdown với factory-reset. LED là no-op im lặng khi RGB service không có (máy dev) — nút vẫn hoạt động.
 
-Ba màu này là preset chứ không phải hằng nhúng cứng trong driver: `BUTTON_LED_PRESETS` trong `hal/presets.py` (`sleep_warn` / `shutdown_warn` / `factory_reset`), device override được qua section `button_led` của `robots/<id>/presets.json` giống mọi bảng LED khác. Driver giữ phần staging — lúc nào nháy, lúc nào để đứng — và đọc màu ngay lúc paint, vì overlay merge bảng tại chỗ lúc boot.
+Ba màu này là preset chứ không phải hằng nhúng cứng trong driver: `BUTTON_LED_PRESETS` trong `hal/presets.py` (`sleep_warn` / `shutdown_warn` / `factory_reset`), device override được qua section `button_led` của `robots/<id>/presets.json` giống mọi bảng LED khác. `HoldLEDFeedback` dùng chung xử lý nháy, dọn phản hồi khi nhả và phản hồi chốt action; mỗi input cung cấp mức giữ đã detect. Nó đọc màu ngay lúc paint, vì overlay merge bảng tại chỗ lúc boot.
 
 Debounce mỗi edge là 200 ms (tick nhấn và nhả track độc lập để tap nhanh không bị drop trong khi bounce lặp của cùng một edge bị lọc).
 
@@ -256,8 +257,23 @@ MPR121 dùng chung ngưỡng cử chỉ từ `hal/drivers/button_gestures.py` v�
 
 Contact ngắn kéo dài dưới 2 s. Cửa sổ click không phân giải khi còn bất kỳ
 electrode được chọn nào đang chạm. Nhả sau giữ xóa chuỗi click đang chờ.
-Action destructive không chạy khi còn giữ. MPR121 chưa có phản hồi LED theo
-mức giữ như nút GPIO.
+Action destructive không chạy khi còn giữ.
+
+Event `hold_tier` đã debounce truyền vào cùng `HoldLEDFeedback` với GPIO,
+dùng chung `BUTTON_LED_PRESETS`, xử lý nháy, dọn phản hồi khi nhả và phản hồi
+chốt action. Override `button_led` theo device áp dụng cho cả hai input:
+
+| Thời gian giữ | LED MPR121 |
+|---|---|
+| <2 s | Không có phản hồi giữ |
+| 2–<5 s | Tím sleepy, nháy 2 Hz |
+| 5–<10 s | Đỏ, nháy 2 Hz |
+| ≥10 s | Đỏ đứng |
+
+Nhả thì dừng nháy. Action shutdown hoặc factory-reset được chấp nhận đặt lại
+đỏ đứng trước khi chạy; sleepy tắt LED qua action dùng chung. Chạm giữ lúc
+startup không hiện phản hồi giữ. Stop hoặc lỗi phần cứng hủy phản hồi; thiếu
+RGB service không ngăn các action đầu vào hoạt động.
 
 Worker action bất đồng bộ có hàng đợi giới hạn giữ polling phản hồi kịp thời.
 Action dư có thể bị bỏ; chạm mới, stop hoặc lỗi phần cứng làm mất
@@ -266,8 +282,8 @@ dòng MPR121 (`OVCF`) được log và dừng driver này, các handler đầu v
 tiếp tục chạy.
 
 Lần xác minh phần cứng ở trên chỉ kiểm tra hành vi single-click trước đây.
-Các mapping click/giữ bổ sung được kiểm tra bằng test mock local; chưa deploy
-hoặc chạy hành động destructive trên device thật.
+Phản hồi LED khi giữ được kiểm tra bằng test mock local, chưa kiểm tra trên
+device thật. Các test này không thực thi reboot, shutdown hay reset thật.
 
 Log hoạt động dùng logger `hal.drivers.mpr121` trong log/journal HAL thông
 thường; không tạo file raw trace riêng. Log INFO gồm khởi tạo và cấu hình
@@ -359,7 +375,7 @@ Nó cố ý không bao giờ log vào journald: HAL log nhiều đến mức c�
 | `HAL_TOUCH_DEBUG` | `false` | Công tắc chính. Tắt = mọi điểm vào đều là no-op. |
 | `HAL_TOUCH_DEBUG_DIR` | `touch_logs/` cạnh module | Thư mục output. Rơi về thư mục tạm nếu cây mã chỉ đọc. |
 | `HAL_TOUCH_DEBUG_MAX_ENTRIES` | 200 | Giới hạn số file, cũ nhất bị dọn ở mỗi lần ghi. 0 = không giới hạn. |
-| `HAL_TOUCH_DEBUG_PADS` | _(không đặt)_ | Map line→nhãn, ví dụ `96=S1,98=S2,100=S4`. Không đặt thì pad được đặt tên theo số line — các tên S lịch sử không đi theo thứ tự line sau hai lần dời chân, nên driver không đoán chúng. |
+| `HAL_TOUCH_DEBUG_PADS` | _(không đặt)_ | Map line→nhãn, ví dụ `96=S1,98=S3`. Không đặt thì pad được đặt tên theo số line — các tên S lịch sử không đi theo thứ tự line sau hai lần dời chân, nên driver không đoán chúng. |
 
 
 ## Thư viện action chung (`hal/drivers/button_actions.py`)
@@ -458,7 +474,7 @@ Phrase cố tình ngắn — chúng fire giữa lúc vuốt nên cần cảm gi�
 | `hal/board/mpr121.py` | Đọc và kiểm tra cấu hình MPR121 do device quản lý |
 | `hal/drivers/mpr121.py` | Handler I²C MPR121 tùy chọn, detect click/giữ |
 | `hal/drivers/button_gestures.py` | Ngưỡng cử chỉ dùng chung GPIO/MPR121 |
-| `hal/drivers/button_actions.py` | Hàm action chung + pool phrase local |
+| `hal/drivers/button_actions.py` | Hàm action chung, `HoldLEDFeedback` cho GPIO/MPR121 và pool phrase local |
 | `hal/presets.py` | Hằng số mã ngôn ngữ (`LANG_EN`, v.v.) |
 | `hal/test_ttp223_probe_orangepi.py` | Probe pad độc lập (ioctl thuần stdlib, không cần gpiod). `info` đọc trạng thái line khi HAL vẫn chạy; `watch` map pad→line và cần dừng `hal.service`. Line lấy từ `ttp223.json` của device được chọn, fallback về board profile cũ giống HAL. Chọn device bằng `--device-type`. |
 | `hal/test_gpio.py` | Probe độc lập để verify line nút GPIO |
