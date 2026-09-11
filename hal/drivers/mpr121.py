@@ -199,6 +199,17 @@ class MPR121Handler:
         self._generation = 0
         self._action_busy = False
         self._gesture_lock = threading.Lock()
+        self._hold_led = None
+
+    def _feedback(self):
+        with self._gesture_lock:
+            if self._hold_led is None:
+                from hal.drivers.button_actions import HoldLEDFeedback
+
+                self._hold_led = HoldLEDFeedback()
+            if self._stop.is_set():
+                self._hold_led.stop()
+            return self._hold_led
 
     def _initialize(self):
         config = self._config
@@ -257,6 +268,9 @@ class MPR121Handler:
             self._config.autoconfig, self._config.poll_ms, self._config.debounce_ms,
         )
         self._last_raw_mask = None
+        if self._hold_led is not None:
+            self._hold_led.stop()
+        self._hold_led = None
         self._stop.clear()
         self._pending = queue.Queue(maxsize=2)
         self._detector = _GestureRecognizer(self._config.debounce_ms)
@@ -274,6 +288,8 @@ class MPR121Handler:
         except Exception:
             logger.exception("MPR121 event=start_failed")
             self._stop.set()
+            if self._hold_led is not None:
+                self._hold_led.stop()
             self._close_bus()
             raise
         logger.info("MPR121 ready on i2c-%d address 0x%02x electrodes %s", self._config.bus, self._config.address, self._config.electrodes)
@@ -304,6 +320,11 @@ class MPR121Handler:
             logger.info("MPR121 event=gesture kind=%s gesture_id=%d count=%d held_s=%.3f", event.kind, event.gesture_id, event.count, event.held_s)
             if event.kind == "invalidate":
                 self._invalidate_pending("new_touch_or_hold")
+            elif event.kind == "hold_tier":
+                self._feedback().set_tier(event.count)
+            elif event.kind == "release":
+                if self._hold_led is not None:
+                    self._hold_led.release()
             elif event.kind in ("single", "cue", "triple", "hold"):
                 with self._gesture_lock:
                     if self._stop.is_set():
@@ -329,6 +350,8 @@ class MPR121Handler:
             self._stop.set()
         finally:
             self._detector.cancel()
+            if self._hold_led is not None:
+                self._hold_led.stop()
             self._invalidate_pending("poll_stopped")
             self._close_bus()
             logger.info("MPR121 event=worker_stopped worker=poll")
@@ -341,6 +364,9 @@ class MPR121Handler:
         elif event.kind == "triple":
             triple_click_action(source="MPR121")
         elif event.kind == "hold":
+            if self._feedback().commit(event.held_s) is False:
+                logger.info("MPR121 event=action_discarded gesture_id=%d action=hold reason=feedback_cancelled", event.gesture_id)
+                return
             hold_release_action(event.held_s, source="MPR121")
 
     def _dispatch(self):
@@ -378,6 +404,8 @@ class MPR121Handler:
     def stop(self):
         logger.info("MPR121 event=stop_requested")
         self._stop.set()
+        if self._hold_led is not None:
+            self._hold_led.stop()
         self._invalidate_pending("stop_requested")
         for thread in (self._poll_thread, self._action_thread):
             if thread is not None and thread.ident is not None:
