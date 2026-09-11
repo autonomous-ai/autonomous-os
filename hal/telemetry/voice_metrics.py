@@ -1,6 +1,6 @@
 """Voice metrics measurement — observations only, no behaviour change.
 
-Two questions, measured on the device because HAL is the only process that
+Two audio questions, measured on the device because HAL is the only process that
 knows when audio actually reached the speaker:
 
   the response metric  Was the user's voice command acknowledged within
@@ -12,6 +12,11 @@ knows when audio actually reached the speaker:
 Both targets (3 s / ≥95 % / <1 %) are **provisional**: every raw duration is
 stored, so thresholds can be re-decided from the data instead of by
 re-instrumenting devices.
+
+KPI-3 reuses the utterance cohort with independent task eligibility and joins
+explicit execution terminals from realtime or os-server. It measures finished
+execution without observed terminal errors, not answer correctness. See
+``docs/voice-metrics.md`` for the reporting horizon and the 85% target.
 
 Design rules that decide whether a number is trustworthy:
 
@@ -127,10 +132,14 @@ class _Interaction:
         "exclusion_reason", "failure_reason", "reported", "report_event_id",
         "timer", "life_timer", "closed", "last_activity",
         "answer_latency_ms", "answer_kind",
+        "task_started_at_ms", "task_revision", "task_exclusion_reason",
     )
 
     def __init__(self, iid: str, speech_end: float, method: str):
         self.id = iid
+        self.task_started_at_ms = int(time.time() * 1000) - _ms(_now() - speech_end)
+        self.task_revision = 0
+        self.task_exclusion_reason = ""
         self.speech_end = speech_end
         self.speech_end_method = method
         self.event_type = ""
@@ -205,6 +214,7 @@ def speech_end(method: str, at: float = 0.0) -> str:
             # its verdict sent would otherwise vanish from the metrics entirely,
             # which is the one thing this module must never do.
             if not _interactions[oldest].reported:
+                _interactions[oldest].report_event_id = "int-" + oldest
                 evicted.append(_interaction_params(_interactions[oldest]))
                 _interactions[oldest].reported = True
             _forget(oldest)
@@ -299,6 +309,27 @@ def bind_run(iid: str, run_id: str) -> None:
             return
         it.run_id = run_id
         _by_run[run_id] = iid
+        amendment = _amend_params(it, "late_run_binding") if it.reported else None
+    if amendment:
+        _report_amendment(amendment)
+
+
+def task_execution_finished(iid: str) -> None:
+    """Realtime confirmed turn completion; this is execution, not correctness.
+
+    No playback requirement: queued speech can drain after the model finishes.
+    The backend memory-sync run must never be credited as task execution.
+    """
+    if iid:
+        client.report("voice_metrics_task_execution", {
+            "schema_version": 1,
+            "interaction_id": iid,
+            "run_id": "",
+            "outcome": "completed",
+            "evidence": "realtime_turn_done",
+            "execution_at_ms": int(time.time() * 1000),
+            "error": False,
+        }, event_id="task-rt-" + iid)
 
 
 def mark_failed(iid: str, reason: str) -> None:
@@ -328,9 +359,21 @@ def exclude(iid: str, reason: str) -> None:
     emits an amendment."""
     with _lock:
         it = _interactions.get(iid)
-        if it is None or it.exclusion_reason:
+        if it is None:
             return
-        it.exclusion_reason = reason
+        # Muting or stopping speech does not cancel execution. Keep task
+        # eligibility independent of KPI-1, including when mute arrived first.
+        task_excluded = reason in (
+            EXCL_REJECTED_NOISE, EXCL_REJECTED_NON_USER,
+            EXCL_NO_TRANSCRIPT, EXCL_NOT_ADDRESSED,
+        )
+        changed = task_excluded and not it.task_exclusion_reason
+        if changed:
+            it.task_exclusion_reason = reason
+        if it.exclusion_reason and not changed:
+            return
+        if not it.exclusion_reason:
+            it.exclusion_reason = reason
         it.closed = True
         amendment = _amend_params(it, "late_exclusion") if it.reported else None
     if amendment:
@@ -675,6 +718,7 @@ def _interaction_params(it: "_Interaction") -> dict:
     # A failure reason does NOT remove eligibility: the command was valid and
     # was not served. Only an exclusion (noise, not addressed, muted, …) means
     # "this was never a metric sample".
+    it.task_revision += 1
     eligible = not it.exclusion_reason
     if it.exclusion_reason:
         outcome = OUTCOME_EXCLUDED
@@ -685,6 +729,14 @@ def _interaction_params(it: "_Interaction") -> dict:
     return {
         "interaction_id": it.id,
         "run_id": it.run_id,
+        # KPI-3 reuses the utterance cohort, not the 10-second ack verdict.
+        # Terminal execution observations are joined separately by id/run id.
+        "task_schema_version": 1,
+        "task_started_at_ms": it.task_started_at_ms,
+        "task_revision": it.task_revision,
+        "task_eligible": not it.task_exclusion_reason,
+        "task_eligibility_known": bool(it.route or it.task_exclusion_reason),
+        "task_exclusion_reason": it.task_exclusion_reason,
         "failure_reason": it.failure_reason,
         "event_type": it.event_type,
         "route": it.route,

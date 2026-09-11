@@ -461,7 +461,9 @@ class QwenRealtimeAgent(VoiceAgentBase):
                         )
                     self._log_usage(event.get("response") or {})
                     self._turn_done.set()
-                    self._recv_queue.put(TurnDoneEvent())
+                    self._recv_queue.put(TurnDoneEvent(
+                        execution_completed=(event.get("response") or {}).get("status") == "completed",
+                    ))
                     return True
 
                 case "error":

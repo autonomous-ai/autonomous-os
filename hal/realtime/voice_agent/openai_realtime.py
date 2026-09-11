@@ -281,7 +281,11 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
                             getattr(details, "cached_tokens", None),
                         )
                     self._turn_done.set()
-                    self._recv_queue.put(TurnDoneEvent())
+                    self._recv_queue.put(TurnDoneEvent(
+                        execution_completed=getattr(
+                            getattr(event, "response", None), "status", None
+                        ) == "completed",
+                    ))
                     return True
 
                 case "error":

@@ -10,6 +10,7 @@ import (
 	"go.autonomous.ai/os/system/domain"
 	"go.autonomous.ai/os/system/lib/flow"
 	sensinghttp "go.autonomous.ai/os/system/server/sensing/delivery/http"
+	"go.autonomous.ai/os/system/telemetry"
 )
 
 // handleAgentStreamEvent handles WS event=="agent": the OpenClaw agent stream
@@ -540,6 +541,17 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 			lcData["original_error"] = payload.Data.Error
 		}
 		flow.Log("lifecycle_"+payload.Data.Phase, lcData, flowRunID)
+		switch payload.Data.Phase {
+		case "end":
+			telemetry.ReportTaskLifecycleEnd(flowRunID, payload.Data.Aborted, payload.Data.Error != "")
+		case "error":
+			if errorRecovered {
+				// A salvaged reply does not establish that execution finished.
+				telemetry.ReportTaskExecution(flowRunID, "", "unknown", "lifecycle_error_recovered")
+			} else {
+				telemetry.ReportTaskExecution(flowRunID, "", "failed", "lifecycle_error")
+			}
+		}
 		monEvt := domain.MonitorEvent{
 			Type:    "lifecycle",
 			Summary: fmt.Sprintf("Agent %s", payload.Data.Phase),
