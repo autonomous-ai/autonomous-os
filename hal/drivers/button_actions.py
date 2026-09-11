@@ -31,13 +31,14 @@ from hal.i18n import (
     PHRASES_BY_LANG,
 )
 from hal.presets import DEFAULT_LANG
+from hal.drivers.button_gestures import (
+    DOUBLE_CLICK_WINDOW,
+    FACTORY_RESET_DURATION,
+    LONG_PRESS_DURATION,
+    SLEEP_HOLD_DURATION,
+)
 
 logger = logging.getLogger(__name__)
-
-DOUBLE_CLICK_WINDOW = 0.4  # seconds to wait for second click
-SLEEP_HOLD_DURATION = 2.0  # seconds held → sleepy emotion on release
-LONG_PRESS_DURATION = 5.0  # seconds held → shutdown on release
-FACTORY_RESET_DURATION = 10.0  # seconds held → factory-reset on release (supersedes shutdown)
 
 # OS server sensing endpoint. Head-pat notify is fire-and-forget — the
 # OS server appends a NO_REPLY hint so the agent records the event in
@@ -581,9 +582,8 @@ def shutdown_action(source: str = "button"):
 def hold_release_action(held_s: float, source: str = "button"):
     """Map a released hold duration to its explicit device action.
 
-    The GPIO driver owns edge handling and LED staging; this mapping owns the
-    semantic thresholds. A future input can provide the same duration signal
-    without duplicating the sleep/shutdown/factory-reset decision tree.
+    Input drivers supply released hold durations. This mapping shares the
+    sleep/shutdown/factory-reset decision tree across GPIO and MPR121 inputs.
     """
     if held_s >= FACTORY_RESET_DURATION:
         factory_reset_action(source)

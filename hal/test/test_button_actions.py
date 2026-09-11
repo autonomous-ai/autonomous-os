@@ -126,6 +126,24 @@ def test_triple_click_only_maps_the_gesture_to_reboot_action():
     reboot.assert_called_once_with("test button")
 
 
+def test_hold_release_boundaries_do_not_escalate_early():
+    for duration, expected in (
+        (0.1, None), (1.999, None), (2.0, "sleep"), (4.999, "sleep"),
+        (5.0, "shutdown"), (9.999, "shutdown"), (10.0, "reset"),
+    ):
+        with (
+            mock.patch.object(button_actions, "sleep_action") as sleep,
+            mock.patch.object(button_actions, "shutdown_action") as shutdown,
+            mock.patch.object(button_actions, "factory_reset_action") as reset,
+        ):
+            button_actions.hold_release_action(duration, "MPR121")
+            for name, action in (("sleep", sleep), ("shutdown", shutdown), ("reset", reset)):
+                if name == expected:
+                    action.assert_called_once_with("MPR121")
+                else:
+                    action.assert_not_called()
+
+
 def test_hold_release_maps_each_duration_to_one_explicit_action():
     with (
         mock.patch.object(button_actions, "sleep_action") as sleep,
