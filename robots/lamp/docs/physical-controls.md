@@ -1,12 +1,12 @@
 # Physical Controls — GPIO Button, TTP223 and MPR121
 
-Lamp supports a mechanical button, TTP223 touchpads and an optional MPR121 capacitive touch controller. They share the same action library (`hal/drivers/button_actions.py`) so any gesture mapped to "single click" behaves identically whether it came from the mechanical button or the capacitive touchpad.
+Lamp supports mechanical buttons, TTP223 touchpads and an optional MPR121 capacitive touch controller. They share the same action library (`hal/drivers/button_actions.py`) so any gesture mapped to "single click" behaves identically whether it came from the mechanical button or the capacitive touchpad.
 
 ## Input devices
 
 | Device | Role | Where |
 |---|---|---|
-| **GPIO button** | One mechanical button. Used for decisive actions including destructive ones (reboot / shutdown / factory-reset). The mechanical feel and long-hold detection make accidental destructive actions unlikely. | Both Pi 4/5 and OrangePi sun60 |
+| **GPIO button** | A primary mechanical button for click and hold actions, plus a dedicated reset button on OrangePi. Destructive hold actions require release. | Both Pi 4/5 and OrangePi sun60 |
 | **TTP223 capacitive touchpad** | Two touch pads arranged as a "dog head" surface for petting + soft stop/unmute. No destructive gestures because the IC's FastMode prevents reliable hold detection. | OrangePi sun60 only (4 Pro / A733) |
 | **MPR121 capacitive touch controller** | Up to 12 electrodes with GPIO-like click and release-to-commit hold actions, including reboot, shutdown and reset. | Lamp with an explicit I²C configuration in `mpr121.json` |
 
@@ -14,23 +14,38 @@ Lamp supports a mechanical button, TTP223 touchpads and an optional MPR121 capac
 
 | Device | Pi 4/5 | OrangePi sun60 |
 |---|---|---|
-| GPIO button | gpiochip0 BCM 17 (pull-up, active-LOW) | Physical pin 37 / PD4 / gpiochip0 line 100 (pull-up, active-LOW) |
+| Primary GPIO button | gpiochip0 BCM 17 (pull-up, active-LOW) | Physical pin 37 / PD4 / gpiochip0 line 100 (pull-up, active-LOW) |
+| Reset GPIO button | not wired | Physical pin 35 / PD3 / gpiochip0 line 99 (pull-up, active-LOW); hold ≥5 s then release to factory-reset |
 | TTP223 | not wired | Two pads: S1 at physical pin 29 / PD0 / gpiochip0 line 96; S3 at physical pin 33 / PD2 / gpiochip0 line 98. **Pull-up, active-LOW** (pads rest HIGH; a touch is the falling edge). |
 
 Mechanical button wiring belongs to the device: `robots/lamp/gpio_button.json`
 and `robots/intern-v2/gpio_button.json` each declare a `boards` map keyed by
-`raspberry_pi_4`, `raspberry_pi_5`, and `orangepi_sun60`. Each entry has `chip`,
-`line`, and `debounce_ns` (currently `200000000`, or 200 ms). Lamp uses the
-button pins shown above; Intern v2 retains gpiochip1 line 9 on OrangePi.
-Change the selected device's file when its wiring changes, then restart HAL; moving physical wires is not detected automatically.
-HAL resolves the directory using `DEVICES_DIR` and `DEVICE_TYPE`, then passes
-the detected board's `ButtonConfig` to the shared driver. Device configuration
-takes priority. A missing file or board entry falls back to the existing
-`button` defaults in `hal/board/boards.json`: chip 0 / line 17 for Pi 4, Pi 5,
-CM4 and sim; chip 1 / line 9 for OrangePi sun60; all with 200 ms debounce.
-Malformed configuration is rejected before claiming GPIO. Simulation skips
-the hardware button. Pull-up, active-LOW input and gesture behavior remain in
-the shared driver.
+`raspberry_pi_4`, `raspberry_pi_5`, and `orangepi_sun60`. Entries accept the
+original flat `chip`, `line`, `debounce_ns` shape or a `buttons` list. Lamp's
+OrangePi entry is:
+
+```json
+{
+  "buttons": [
+    {"name": "primary", "chip": 0, "line": 100, "debounce_ns": 200000000, "behavior": "standard"},
+    {"name": "factory_reset", "chip": 0, "line": 99, "debounce_ns": 200000000, "behavior": "factory_reset", "hold_s": 5}
+  ]
+}
+```
+
+Intern v2's JSON stays unchanged, with gpiochip1 line 9 on OrangePi.
+Change the selected device's file when its wiring changes, then restart HAL;
+moving physical wires is not detected automatically. HAL resolves the directory
+using `DEVICES_DIR` and `DEVICE_TYPE`. `load_button_configs` supplies one shared
+driver instance per input; HAL stops all instances during cleanup.
+`load_button_config` remains compatible for callers needing the first input (the primary button in Lamp).
+Device configuration takes priority. A missing file or board entry falls back
+to exactly one existing `button` default in `hal/board/boards.json`: chip 0 /
+line 17 for Pi 4, Pi 5, CM4 and sim; chip 1 / line 9 for OrangePi sun60; all
+with 200 ms debounce. Malformed configuration, duplicate names, and duplicate
+chip/line pairs are rejected before claiming GPIO. Simulation skips hardware
+buttons. Pull-up, active-LOW input and gesture detection remain in the shared
+driver.
 
 TTP223 wiring is also device-owned: `robots/lamp/ttp223.json` declares a
 `boards` map. Intern v2 has no TTP223 hardware and does not ship this file. Each enabled entry has
@@ -56,7 +71,7 @@ Board detection reads `/proc/device-tree/model`:
 
 ## Gesture map
 
-| Gesture | GPIO button | TTP223 touchpad |
+| Gesture | Primary GPIO button | TTP223 touchpad |
 |---|---|---|
 | **1 tap** | Stop active object tracking, then stop speaker / unmute mic + speaker + ack chime (~120 ms ping) — all fire immediately on release (no click-window wait); the "Listening" cue plays once the 0.4 s click window resolves | Same after the 1.2 s tap-vs-pet decision resolves — active tracking stops, then the mic/speaker action and cue run. The initial touch still stops in-flight TTS and plays its ack chime immediately. |
 | **2 taps** (≤ 0.4 s apart, button) / (≤ 1.2 s apart, TTP223) | Nothing beyond the single-click already fired on tap 1 (panic-click guard) | Pet response. With `HAL_TOUCH_SWIPE` on (the default), repeated taps in one place — fast or slow, one finger or several — are a **double tap** → mic mute toggle; pet then means the finger revisited a pad |
@@ -66,7 +81,9 @@ Board detection reads `/proc/device-tree/model`:
 | **Hold 5–10 s, then release** | Shutdown OS (TTS announce → release servos → `sudo shutdown -h now`). LED blinks red while armed. | n/a — TTP223 hardware cannot reliably hold (see "FastMode" below) |
 | **Hold 10 s+, then release** | Factory-reset: wipe device state + reboot into AP setup (TTS announce → release servos → POST `/api/system/factory-reset` on the OS server). LED goes solid red while armed. | n/a |
 
-The table above covers GPIO and TTP223. MPR121 also supports release-to-commit holds and the same hold-tier LED feedback, as detailed in its detection section. The sleep and destructive hold tiers **commit on release, not on a timer firing while held**. The destructive tiers escalate from shutdown to factory-reset after 10 s (see "GPIO button detection" below).
+The table above covers the primary GPIO button and TTP223. The dedicated reset button on pin 35 only factory-resets when released after a hold of at least 5 s. Shorter holds and single/triple taps do nothing; it never invokes sleep or shutdown. LED stays unchanged below 5 s and uses the shared solid-red factory-reset preset from 5 s onward.
+
+MPR121 also supports release-to-commit holds and the same hold-tier LED feedback, as detailed in its detection section. The sleep and destructive hold tiers **commit on release, not on a timer firing while held**. The destructive tiers escalate from shutdown to factory-reset after 10 s (see "GPIO button detection" below).
 
 ## Interrupting Lamp while it speaks (barge-in)
 
@@ -163,6 +180,8 @@ To characterise a new deployment: park `HAL_BARGE_IN_RMS_THRESHOLD` at 30000, sa
 
 ## GPIO button detection (`hal/drivers/gpio_button.py`)
 
+The same driver serves each configured button independently. The sequence below describes `behavior: "standard"` (the primary button). For `behavior: "factory_reset"`, a release after `hold_s` (5 s on Lamp pin 35) calls the shared `factory_reset_action`; shorter holds and all tap sequences are ignored. Its hold watcher selects only the shared factory-reset LED tier at that threshold.
+
 Edge-counting driver where **all destructive actions commit on the release edge based on hold duration** — no timer fires while the button is held. This is what lets the user cancel mid-hold (release before a threshold) or escalate (keep holding past 10 s).
 
 1. **Falling edge (press):** record `press_start` (monotonic clock) and spawn a hold-LED watcher thread (one per press, with its own stop `Event`). No action timer is armed.
@@ -179,7 +198,7 @@ A release edge with no matching press (the press was debounce-dropped) is ignore
 
 ### Hold LED feedback
 
-The GPIO watcher thread polls the hold duration and selects a tier. Shared `HoldLEDFeedback` in `hal/drivers/button_actions.py`, also used by MPR121, drives the RGB LED at HIGH priority (preempts the current emotion) so the user sees how far they've armed before they release:
+For the primary button, the GPIO watcher thread polls the hold duration and selects a tier. Shared `HoldLEDFeedback` in `hal/drivers/button_actions.py`, also used by MPR121, drives the RGB LED at HIGH priority (preempts the current emotion) so the user sees how far they've armed before they release:
 
 | Hold elapsed | LED | Meaning |
 |---|---|---|
@@ -187,6 +206,8 @@ The GPIO watcher thread polls the hold duration and selects a tier. Shared `Hold
 | 2–5 s | sleepy purple, blinking 2 Hz | sleepy is armed; releasing enters sleep (LED then turns off) |
 | 5–10 s | red, blinking 2 Hz | shutdown armed — releasing now shuts down |
 | 10 s+ | red, solid | factory-reset armed — releasing now wipes + reboots |
+
+The dedicated reset button uses only the solid-red `factory_reset` preset at ≥5 s; releasing before 5 s does nothing. No factory-reset runs while it remains held. Both GPIO inputs reuse this feedback implementation and the existing action library.
 
 Purple identifies the sleep tier; red blink vs red solid differentiates shutdown from factory-reset. The LED is a silent no-op when the RGB service is unavailable (dev machines) — the button still works.
 
@@ -403,7 +424,7 @@ The actions live in one place so the GPIO button, TTP223, MPR121, and any future
 
 ### Factory-reset: what gets wiped
 
-`factory_reset_action` only **announces + delegates** — the actual reset lives in the OS server (`system/server/system/factoryreset.go`), reachable from the device over loopback without a Bearer token (authoritative because of physical presence: a deliberate 10 s hold). `POST /api/system/factory-reset` is a **soft** reset (state wipe, not a reflash — kernel / OS packages / binaries / HAL `.venv` are untouched):
+`factory_reset_action` only **announces + delegates** — the actual reset lives in the OS server (`system/server/system/factoryreset.go`), reachable from the device over loopback without a Bearer token (authoritative because of physical presence: a deliberate 10 s hold on the primary button/MPR121 or 5 s on the dedicated reset button, followed by release). `POST /api/system/factory-reset` is a **soft** reset (state wipe, not a reflash — kernel / OS packages / binaries / HAL `.venv` are untouched):
 
 1. Wipe the active agent backend's state (OpenClaw or Hermes, auto-detected from `config.json` `agent_runtime`).
 2. Wipe the device state paths: `/root/config` (config.json — API keys, channel tokens, MQTT creds), `/root/local/users` + `/root/local/strangers` (face/voice enrollments), `/var/lib/hal/snapshots` (camera snapshots), and `/etc/wpa_supplicant/wpa_supplicant-wlan0.conf` (home WiFi creds → forces AP mode on next boot).

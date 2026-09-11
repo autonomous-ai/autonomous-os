@@ -56,15 +56,25 @@ integrations/                     — Off-device: companions/, chat-bridges/, pe
 
 Mechanical GPIO button wiring is owned by each device in
 `robots/lamp/gpio_button.json` and `robots/intern-v2/gpio_button.json`.
-HAL resolves the device directory through `DEVICES_DIR` and `DEVICE_TYPE`,
-selects the detected board's `chip`, `line`, and `debounce_ns` from the `boards`
-map, and passes that configuration to the shared `hal/drivers/gpio_button.py`
-driver. Device configuration takes priority; a missing file or board entry
-falls back to the existing `button` defaults in `hal/board/boards.json`.
-Changing a device's button pins requires updating its JSON file and restarting
-HAL; moving physical wires is not detected automatically. Malformed
-configuration is rejected before GPIO is claimed. Simulation skips the
-hardware button.
+HAL resolves the device directory through `DEVICES_DIR` and `DEVICE_TYPE`.
+Each detected-board entry accepts the original flat `chip`, `line`,
+`debounce_ns` configuration or a `buttons` list with named inputs.
+`load_button_configs` supplies one shared `hal/drivers/gpio_button.py` instance
+per input; HAL stops every instance on cleanup. `load_button_config` remains
+available for callers that need only the first input (the primary button in Lamp). Lamp on OrangePi uses
+`primary` at pin 37 / PD4 / gpiochip0 line 100 (`behavior: "standard"`) and
+`factory_reset` at pin 35 / PD3 / gpiochip0 line 99
+(`behavior: "factory_reset"`, `hold_s: 5`). The reset input ignores taps and
+holds below 5 s; holding at least 5 s arms the shared solid-red LED feedback,
+then releasing calls the shared factory-reset action. It does not reset while
+held or invoke sleep, shutdown, or single/triple-click actions.
+Device configuration takes priority; a missing file or board entry falls back
+to exactly one existing `button` default in `hal/board/boards.json`.
+Intern v2's JSON remains unchanged. Changing wiring requires updating the
+selected device's JSON and restarting HAL; moving physical wires is not
+detected automatically. Malformed configuration, duplicate input names, and
+duplicate chip/line pairs are rejected before GPIO is claimed. Simulation
+skips hardware buttons.
 
 TTP223 touch wiring is device-owned in `robots/lamp/ttp223.json`. Intern v2
 has no TTP223 hardware and does not ship this file. `hal/board/ttp223.py` resolves the detected

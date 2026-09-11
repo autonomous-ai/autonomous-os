@@ -56,13 +56,23 @@ integrations/                     — Off-device: companions/, chat-bridges/, pe
 
 Wiring nút GPIO cơ học thuộc về từng device trong
 `robots/lamp/gpio_button.json` và `robots/intern-v2/gpio_button.json`.
-HAL xác định thư mục device qua `DEVICES_DIR` và `DEVICE_TYPE`, chọn `chip`,
-`line`, `debounce_ns` của board đã detect từ map `boards`, rồi truyền cấu hình
-vào driver dùng chung `hal/drivers/gpio_button.py`. Cấu hình device được ưu tiên;
-thiếu file hoặc entry của board thì dùng lại mặc định `button` trong
-`hal/board/boards.json`. Khi đổi chân nút của device, cần sửa file JSON tương
-ứng và khởi động lại HAL; hệ thống không tự phát hiện việc đổi dây cắm.
-Config sai bị từ chối trước khi claim GPIO. Chế độ mô phỏng bỏ qua nút phần cứng.
+HAL xác định thư mục device qua `DEVICES_DIR` và `DEVICE_TYPE`.
+Entry của board hỗ trợ cấu hình phẳng cũ `chip`, `line`, `debounce_ns` hoặc
+list `buttons` có tên cho từng input. `load_button_configs` cấp cấu hình cho
+mỗi instance của driver dùng chung `hal/drivers/gpio_button.py`; HAL dừng tất
+cả instance khi cleanup. `load_button_config` vẫn dùng được cho caller chỉ
+cần nút đầu tiên (nút chính trong cấu hình Lamp). Lamp trên OrangePi có `primary` ở pin 37 / PD4 / gpiochip0
+line 100 (`behavior: "standard"`) và `factory_reset` ở pin 35 / PD3 /
+gpiochip0 line 99 (`behavior: "factory_reset"`, `hold_s: 5`). Nút reset bỏ
+qua tap và giữ dưới 5 s; giữ đủ 5 s bật LED đỏ đứng dùng chung để báo đã arm,
+rồi nhả mới gọi factory-reset dùng chung. Không reset khi còn giữ và không
+gọi sleep, shutdown hay action single/triple-click.
+Cấu hình device được ưu tiên; thiếu file hoặc entry board thì fallback về
+đúng một nút mặc định `button` cũ trong `hal/board/boards.json`.
+JSON của Intern v2 giữ nguyên. Khi đổi wiring, cần sửa JSON của device được
+chọn rồi restart HAL; hệ thống không tự phát hiện đổi dây cắm. Config sai,
+tên input trùng hoặc cặp chip/line trùng bị từ chối trước khi claim GPIO.
+Chế độ mô phỏng bỏ qua nút phần cứng.
 
 Wiring TTP223 do device quản lý trong `robots/lamp/ttp223.json`. Intern v2
 không có phần cứng TTP223 nên không kèm file này. `hal/board/ttp223.py` chọn `chip`, `lines` và
