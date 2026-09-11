@@ -15,7 +15,7 @@ Lamp hỗ trợ nút cơ học, touchpad TTP223 và bộ điều khiển cảm �
 | Thiết bị | Pi 4/5 | OrangePi sun60 |
 |---|---|---|
 | Nút GPIO | gpiochip0 BCM 17 (pull-up, active-LOW) | Pin vật lý 37 / PD4 / gpiochip0 line 100 (pull-up, active-LOW) |
-| TTP223 | không wire | gpiochip0 line 96 / 100, **pull-up, active-LOW** (pad nghỉ ở mức HIGH; chạm là edge xuống). Pad giữa trên line 98 đã bị bỏ ngày 2026-08-28. |
+| TTP223 | không wire | Hai pad: S1 tại pin vật lý 29 / PD0 / gpiochip0 line 96; S3 tại pin vật lý 33 / PD2 / gpiochip0 line 98. **Pull-up, active-LOW** (pad nghỉ ở mức HIGH; chạm là edge xuống). |
 
 Wiring nút cơ thuộc về từng device: `robots/lamp/gpio_button.json` và
 `robots/intern-v2/gpio_button.json` đều khai báo map `boards` với các key
@@ -41,8 +41,9 @@ trong `hal/board/boards.json` (OrangePi: chip 0, line 96/100);
 GPIO. Restart HAL sau khi sửa JSON của device được chọn. Pull-up, active-LOW
 và nhận diện cử chỉ vẫn ở driver dùng chung; mô phỏng bỏ qua phần cứng.
 
-Nút cơ mới của Lamp dùng line 100, cũng có trong wiring TTP223 cũ. Chân pad
-thay thế đang chờ xác nhận; mapping trùng chân này chưa phải wiring đã xác minh.
+Hardware xác nhận hai pad: S1 ở pin 29 (line 96), S3 ở pin 33 (line 98).
+JSON của Lamp dùng hai line này, dành pin 37 (line 100) cho nút cơ. Fallback
+cũ vẫn dùng line 96/100; cần giữ JSON của Lamp trên device để tránh trùng chân cũ.
 
 Board được detect qua `/proc/device-tree/model`:
 - `"sun60iw2"` → OrangePi 4 Pro / A733
@@ -359,7 +360,7 @@ Nó cố ý không bao giờ log vào journald: HAL log nhiều đến mức c�
 | `HAL_TOUCH_DEBUG` | `false` | Công tắc chính. Tắt = mọi điểm vào đều là no-op. |
 | `HAL_TOUCH_DEBUG_DIR` | `touch_logs/` cạnh module | Thư mục output. Rơi về thư mục tạm nếu cây mã chỉ đọc. |
 | `HAL_TOUCH_DEBUG_MAX_ENTRIES` | 200 | Giới hạn số file, cũ nhất bị dọn ở mỗi lần ghi. 0 = không giới hạn. |
-| `HAL_TOUCH_DEBUG_PADS` | _(không đặt)_ | Map line→nhãn, ví dụ `96=S1,98=S2,100=S4`. Không đặt thì pad được đặt tên theo số line — các tên S lịch sử không đi theo thứ tự line sau hai lần dời chân, nên driver không đoán chúng. |
+| `HAL_TOUCH_DEBUG_PADS` | _(không đặt)_ | Map line→nhãn, ví dụ `96=S1,98=S3`. Không đặt thì pad được đặt tên theo số line — các tên S lịch sử không đi theo thứ tự line sau hai lần dời chân, nên driver không đoán chúng. |
 
 
 ## Thư viện action chung (`hal/drivers/button_actions.py`)
