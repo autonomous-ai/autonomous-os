@@ -8,16 +8,40 @@ import (
 // cameraSnapshotPathRE accepts JPEGs only from the active agent runtime's
 // approved camera-output directories. The UI receives a server URL, never the
 // runtime's filesystem path.
-var cameraSnapshotPathRE = regexp.MustCompile(`/root/\.(openclaw|hermes|picoclaw|codex|claudecode)/(workspace|media/hal-snapshots)/([A-Za-z0-9][A-Za-z0-9._-]*\.(jpg|jpeg))\b`)
+//
+// Keep the runtime list in step with hal/config.py `_AGENT_CONFIG_DIRS`, which
+// is what decides where HAL actually writes. opencode was missing here while
+// HAL was already writing into it, so every snapshot on that runtime was saved
+// and then dropped — silently, because a non-match is indistinguishable from
+// "this tool call was not a camera call".
+var cameraSnapshotPathRE = regexp.MustCompile(`/root/\.(openclaw|hermes|picoclaw|codex|claudecode|opencode)/(workspace|media/hal-snapshots)/([A-Za-z0-9][A-Za-z0-9._-]*\.(jpg|jpeg))\b`)
+
+// cameraSnapshotEndpoints are the calls that can leave the agent holding a
+// frame. Every one of them has to be listed: the gate is an allow-list, and an
+// endpoint missing from it drops the thumbnail for every turn that uses it
+// without reporting anything.
+var cameraSnapshotEndpoints = []string{
+	// HAL's raw snapshot endpoint.
+	"/camera/snapshot",
+	// os-server's snapshot + describe, which the camera skill calls instead.
+	"/api/vision/look",
+	// The search sweep: it persists the frame it centred on and returns the
+	// path in its own body, so a find carries an image the same way.
+	"/servo/search",
+}
 
 // cameraSnapshotURL returns the UI-safe URL for a snapshot produced by a
 // camera tool call. Tool output is untrusted agent text, so both the camera
 // command and an approved runtime path must match before exposing anything.
 func cameraSnapshotURL(toolArgs, result string) string {
-	// Both ways the agent can capture a frame: HAL's raw snapshot endpoint and
-	// os-server's /api/vision/look (snapshot + describe). Missing the latter
-	// would silently drop the thumbnail for every turn that follows the skill.
-	if !strings.Contains(toolArgs, "/camera/snapshot") && !strings.Contains(toolArgs, "/api/vision/look") {
+	called := false
+	for _, endpoint := range cameraSnapshotEndpoints {
+		if strings.Contains(toolArgs, endpoint) {
+			called = true
+			break
+		}
+	}
+	if !called {
 		return ""
 	}
 	matches := cameraSnapshotPathRE.FindStringSubmatch(result)

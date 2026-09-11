@@ -89,3 +89,58 @@ func TestSnapshotURLForToolCallAcceptsLookEndpoint(t *testing.T) {
 		t.Fatalf("got %q, want %q", got, want)
 	}
 }
+
+// The search sweep persists the frame it centred on and returns the path in its
+// own response body, so a find must surface a thumbnail the same way a snapshot
+// does. Before this the sweep was the one camera path the gate did not know
+// about: the JPEG was written and then dropped (#342 defect I).
+func TestCameraSnapshotURLAcceptsASearchResult(t *testing.T) {
+	args := `{"command":"curl -sX POST http://127.0.0.1:5001/servo/search -d '{\"target\":\"keyboard\"}'"}`
+	result := `{"found":true,"kind":"keyboard","image_path":"/root/.codex/media/hal-snapshots/snap_1757500000000.jpg"}`
+	want := "/api/sensing/agent-snapshot/codex/media-hal-snapshots/snap_1757500000000.jpg"
+	if got := cameraSnapshotURL(args, result); got != want {
+		t.Fatalf("search snapshot not surfaced: got %q, want %q", got, want)
+	}
+}
+
+// hal/config.py _AGENT_CONFIG_DIRS lists six runtimes and this allow-list had
+// five, so every snapshot taken on opencode was written to a path the UI then
+// refused to serve — silently, since a non-match is indistinguishable from
+// "this tool call was not a camera call".
+func TestCameraSnapshotURLCoversEveryRuntimeHALWritesTo(t *testing.T) {
+	for _, runtime := range []string{
+		"openclaw", "hermes", "picoclaw", "codex", "claudecode", "opencode",
+	} {
+		args := `curl -s http://127.0.0.1:5001/camera/snapshot?save=true`
+		result := `{"path":"/root/.` + runtime + `/media/hal-snapshots/snap_42.jpg"}`
+		want := "/api/sensing/agent-snapshot/" + runtime + "/media-hal-snapshots/snap_42.jpg"
+		if got := cameraSnapshotURL(args, result); got != want {
+			t.Errorf("%s: got %q, want %q", runtime, got, want)
+		}
+	}
+}
+
+// Tool output is untrusted agent text. Naming the search endpoint must not turn
+// an arbitrary path into a servable URL.
+func TestCameraSnapshotURLStillRejectsAnUnapprovedSearchPath(t *testing.T) {
+	args := `{"command":"curl -sX POST http://127.0.0.1:5001/servo/search -d '{}'"}`
+	for _, result := range []string{
+		`{"image_path":"/etc/shadow.jpg"}`,
+		`{"image_path":"/root/.codex/../../etc/secret.jpg"}`,
+		`{"image_path":"/root/.evilruntime/media/hal-snapshots/snap_1.jpg"}`,
+	} {
+		if got := cameraSnapshotURL(args, result); got != "" {
+			t.Errorf("unapproved path surfaced for %s: %q", result, got)
+		}
+	}
+}
+
+// A sweep that found nothing writes no frame. The body still mentions the
+// endpoint, so the gate must not invent a URL out of the miss.
+func TestCameraSnapshotURLIgnoresASearchThatFoundNothing(t *testing.T) {
+	args := `{"command":"curl -sX POST http://127.0.0.1:5001/servo/search -d '{}'"}`
+	result := `{"found":false,"image_path":null,"message":"no keyboard found after 18 look(s)"}`
+	if got := cameraSnapshotURL(args, result); got != "" {
+		t.Fatalf("a miss produced a thumbnail: %q", got)
+	}
+}

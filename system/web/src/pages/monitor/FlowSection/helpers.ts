@@ -55,7 +55,12 @@ export function isCameraAPICommand(value: string): boolean {
   return /\/camera(?:[/?\s"']|$)/.test(value);
 }
 
-const AGENT_SNAPSHOT_PATH_RE = /\/root\/\.(openclaw|hermes|picoclaw|codex|claudecode)\/(workspace|media\/hal-snapshots)\/([A-Za-z0-9][A-Za-z0-9._-]*\.(?:jpg|jpeg))\b/g;
+// Keep the runtime list in step with the two Go copies — camera_snapshot.go
+// (builds the URL) and sensing handler.go (serves it) — and with
+// hal/config.py `_AGENT_CONFIG_DIRS`, which decides where HAL writes. opencode
+// was missing from all three non-HAL copies, so snapshots on that runtime were
+// written and then never displayed.
+const AGENT_SNAPSHOT_PATH_RE = /\/root\/\.(openclaw|hermes|picoclaw|codex|claudecode|opencode)\/(workspace|media\/hal-snapshots)\/([A-Za-z0-9][A-Za-z0-9._-]*\.(?:jpg|jpeg))\b/g;
 
 function agentSnapshotURL(path: string): string | null {
   const match = [...path.matchAll(AGENT_SNAPSHOT_PATH_RE)][0];
