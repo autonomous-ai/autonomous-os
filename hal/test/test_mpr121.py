@@ -300,7 +300,7 @@ class TestMPR121(unittest.TestCase):
         bus.close.assert_called_once()
 
     def test_busy_worker_rejects_destructive_outcomes(self):
-        for kind in ('hold', 'triple'):
+        for kind in ('hold', 'triple', 'swipe'):
             with self.subTest(kind=kind):
                 handler = self.make_handler()
                 handler._hold_led = feedback = mock.Mock()
@@ -321,29 +321,31 @@ class TestMPR121(unittest.TestCase):
         self.assertTrue(handler._pending.empty())
 
     def test_expired_destructive_outcome_never_executes(self):
-        handler = self.make_handler()
-        handler._pending.put_nowait((handler._generation, _GestureEvent('triple', 1, count=3), time.monotonic() - 1))
-        with mock.patch.object(handler, '_execute') as execute, \
-                self.assertLogs('hal.drivers.mpr121', level='INFO') as logs:
-            handler._action_thread = threading.Thread(target=handler._dispatch)
-            handler._action_thread.start()
-            # Observing an empty queue means the worker has consumed the request;
-            # stop then joins it before assertions about execution/logging.
-            deadline = time.monotonic() + 1
-            while not handler._pending.empty() and time.monotonic() < deadline:
-                threading.Event().wait(.001)
-            handler.stop()
-        execute.assert_not_called()
-        self.assertTrue(any('reason=stale_expired_or_stopping' in item for item in logs.output))
+        for kind in ("triple", "hold", "swipe"):
+            handler = self.make_handler()
+            handler._pending.put_nowait((handler._generation, _GestureEvent(kind, 1, count=3), time.monotonic() - 1))
+            with mock.patch.object(handler, '_execute') as execute, \
+                    self.assertLogs('hal.drivers.mpr121', level='INFO') as logs:
+                handler._action_thread = threading.Thread(target=handler._dispatch)
+                handler._action_thread.start()
+                # Observing an empty queue means the worker has consumed the request;
+                # stop then joins it before assertions about execution/logging.
+                deadline = time.monotonic() + 1
+                while not handler._pending.empty() and time.monotonic() < deadline:
+                    threading.Event().wait(.001)
+                handler.stop()
+            execute.assert_not_called()
+            self.assertTrue(any('reason=stale_expired_or_stopping' in item for item in logs.output))
 
     def test_stop_discards_pending_actions(self):
-        handler = self.make_handler()
-        handler._pending.put_nowait((handler._generation, _GestureEvent('triple', 1, count=3), time.monotonic()))
-        with mock.patch.object(handler, '_execute') as execute:
-            handler.stop()
-            handler._dispatch()
-        self.assertTrue(handler._pending.empty())
-        execute.assert_not_called()
+        for kind in ("triple", "hold", "swipe"):
+            handler = self.make_handler()
+            handler._pending.put_nowait((handler._generation, _GestureEvent(kind, 1, count=3), time.monotonic()))
+            with mock.patch.object(handler, '_execute') as execute:
+                handler.stop()
+                handler._dispatch()
+            self.assertTrue(handler._pending.empty())
+            execute.assert_not_called()
 
     def test_queue_capacity_is_bounded_without_affecting_gesture_count(self):
         handler = self.make_handler()

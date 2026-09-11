@@ -239,6 +239,7 @@ does not modify boot overlays automatically:
       "bus": 0,
       "address": 90,
       "electrodes": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+      "swipe_axis": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
       "touch_threshold": 2,
       "release_threshold": 1,
       "autoconfig": true,
@@ -249,7 +250,7 @@ does not modify boot overlays automatically:
 }
 ```
 
-`bus` is required for an enabled entry. The other values above are defaults;
+`bus` is required for an enabled entry. The other values above except `swipe_axis` are defaults;
 address 90 means `0x5A` (allowed addresses: 90–93). Selected electrodes must be
 unique numbers from 0–11, with at least one selected. Thresholds must satisfy
 `0 <= release_threshold < touch_threshold <= 255`. Polling accepts 1–1000 ms;
@@ -275,16 +276,42 @@ functions:
 
 | Gesture | MPR121 action |
 |---|---|
-| First short release in a click burst | `single_click_action(source="MPR121", announce=False)` immediately stops tracking/audio, unmutes as permitted and plays the ack chime. |
+| First short release in a click burst | `single_click_action(source="MPR121", announce=False)` stops tracking/audio after contact resolution, unmutes as permitted and plays the ack chime. |
 | 1, 2 or 4+ short taps, then 0.4 s quiet | Play the listening cue; repeated taps do not repeat the initial single-click action. |
 | Exactly 3 short taps, then 0.4 s quiet | `triple_click_action` reboots instead of playing the listening cue. |
 | Hold 2–<5 s, then release | `hold_release_action` enters sleepy. |
 | Hold 5–<10 s, then release | `hold_release_action` shuts down. |
 | Hold ≥10 s, then release | `hold_release_action` performs factory reset. |
+| Swipe either direction, then release | `swipe_action` sleeps; no click or destructive action for this moving contact. |
 
 A short contact lasts less than 2 s. The click window does not resolve while
 any selected electrode remains touched. Releasing a hold clears the pending
 click burst. Destructive actions never commit while held.
+
+### MPR121 swipe to sleep
+
+`swipe_axis` is an optional ordered list of 2–12 distinct electrodes from
+`electrodes`. Lamp declares E0…E11 based on recorded travel E11→E0, E0→E8,
+and E9→E0; this establishes ordering, not which end physically faces left.
+Both directions call `swipe_action(source="MPR121")` from `button_actions.py`,
+the same sleep action as TTP223. A swipe need not cross the entire strip.
+Missing/null `swipe_axis` disables only swipe detection and preserves legacy
+click/hold recognition. Install HAL support before deploying JSON with this field.
+
+Contact debounce remains 30 ms by default; the spatial footprint uses up to 5 ms
+stability (normally consecutive 10 ms polls) to retain fast electrode transitions.
+The detector follows the debounced contact footprint instead of counting every
+overlapping electrode as a separate tap. Stationary multi-electrode touches
+retain click/hold behavior. Once travel is detected, pending tap/hold outcomes
+and hold LED feedback are canceled for that contact; a valid swipe sleeps once
+after release. Reversed or invalid travel does not trigger reboot/shutdown/reset.
+A release grace of 120 ms joins brief electrode handoffs, so tap/hold actions
+with swipe enabled resolve after that grace. Boot-held contacts remain ignored.
+Logs record swipe direction, displacement and verdict alongside action dispatch.
+Tests replay measured mask sequences plus synthetic gesture/lifecycle cases;
+the runtime and swipe JSON were deployed to Lamp `lamp-0c4e` on 2026-09-11.
+Startup confirmed MPR121 ready with the configured axis, GPIO buttons and TTP223
+ready, and the Lamp mic switch disabled. Live gesture testing is pending.
 
 Debounced `hold_tier` events feed the same `HoldLEDFeedback` component as
 GPIO, sharing `BUTTON_LED_PRESETS`, blinking, release cleanup and final action

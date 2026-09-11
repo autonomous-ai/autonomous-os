@@ -56,3 +56,16 @@ class TestMPR121Config(unittest.TestCase):
                     path.write_text(value)
                     with self.assertRaisesRegex(ValueError, "mpr121.json"):
                         load_mpr121_config(directory, "orangepi_sun60")
+
+    def test_swipe_axis_json_round_trip_and_rejection(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "mpr121.json"
+            path.write_text(json.dumps({"boards": {"orangepi_sun60": {
+                "bus": 0, "electrodes": [2, 4, 6], "swipe_axis": [6, 4, 2],
+            }}}))
+            self.assertEqual(load_mpr121_config(directory, "orangepi_sun60").swipe_axis, (6, 4, 2))
+            path.write_text(json.dumps({"boards": {"orangepi_sun60": {
+                "bus": 0, "electrodes": [2, 4], "swipe_axis": [2, 6],
+            }}}))
+            with self.assertRaisesRegex(ValueError, "swipe_axis"):
+                load_mpr121_config(directory, "orangepi_sun60")

@@ -76,6 +76,23 @@ detected automatically. Malformed configuration, duplicate input names, and
 duplicate chip/line pairs are rejected before GPIO is claimed. Simulation
 skips hardware buttons.
 
+The microphone slide switch uses device-owned `mic_button.json`, initially
+shipped only at `robots/intern-v2/mic_button.json`. The detected board's entry
+under `boards` supplies `chip`, `line`, `settle_s`, `muted_level`, and
+`watchdog_s` to `hal/board/mic_button.py`, then the shared
+`hal/drivers/mic_button.py` driver. Intern v2's `orangepi_sun60` entry preserves
+gpiochip0 line 97 (PD1), a 0.06 s settling delay, LOW (`0`) for muted, and a
+30 s watchdog. Pull-up remains enabled; `muted_level` accepts `0` or `1`.
+A missing file or board entry preserves the old defaults for `intern-v2`
+only, including its existing device-type gate regardless of board ID. Other
+devices without configuration skip the switch; `enabled: false` explicitly
+disables it. Malformed configuration is rejected before GPIO is claimed.
+HAL synchronizes mute to the switch position at startup and after settled
+edges. The watchdog reconciles only when the pin changed, preserving software
+mute changes while the switch stays still. Restart HAL to apply JSON changes;
+simulation skips this hardware input. Lamp has no mic-switch JSON yet and
+remains disabled; no Lamp pin mapping is introduced by this refactor.
+
 TTP223 touch wiring is device-owned in `robots/lamp/ttp223.json`. Intern v2
 has no TTP223 hardware and does not ship this file. `hal/board/ttp223.py` resolves the detected
 board's `chip`, `lines` and optional `axis` from `boards` and passes a
@@ -103,7 +120,7 @@ inputs; simulation also skips it. Malformed enabled configuration rejects
 startup. Restart HAL after changing wiring configuration. The shared
 `hal/drivers/mpr121.py` driver groups selected electrodes into one debounced
 contact. It shares GPIO gesture thresholds in `hal/drivers/button_gestures.py`:
-the first short release immediately calls single-click with `announce=False`;
+the first resolved short release calls single-click with `announce=False`;
 a 0.4 s quiet window produces the listening cue for 1/2/4+ clicks or reboot
 for exactly 3. Holds commit only on release: 2–<5 s sleepy, 5–<10 s shutdown,
 ≥10 s factory reset. While held, debounced hold-tier events use the same
@@ -118,6 +135,17 @@ with mocked local tests; it has not been checked on the live device. Defaults ar
 or overcurrent fault stops only this driver. Logger `hal.drivers.mpr121` records
 configuration, electrode changes, debounced taps, action dispatch and lifecycle
 in the normal HAL log/journal; unchanged polls do not emit INFO logs.
+Lamp enables swipe detection with `swipe_axis: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]`.
+This ordered electrode axis follows observed travel in device logs; either
+orientation works because both directions call shared `swipe_action` to sleep.
+Partial traversals are supported. Stationary contacts keep click/hold actions;
+a moving contact suppresses those actions so dragging cannot become reset.
+Swipe classification adds up to 120 ms of release grace for electrode handoff.
+Missing/null `swipe_axis` preserves the original click/hold-only behavior.
+Install the updated HAL before the new device JSON: older strict loaders reject
+unknown configuration fields. Swipe tests replay recorded electrode transitions;
+the new runtime and swipe configuration were deployed to Lamp `lamp-0c4e` on
+2026-09-11 and startup was verified. Live gesture testing is pending.
 See [physical controls](../robots/lamp/docs/physical-controls.md) for configuration
 and gesture details.
 

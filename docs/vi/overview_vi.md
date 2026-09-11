@@ -74,6 +74,22 @@ chọn rồi restart HAL; hệ thống không tự phát hiện đổi dây cắ
 tên input trùng hoặc cặp chip/line trùng bị từ chối trước khi claim GPIO.
 Chế độ mô phỏng bỏ qua nút phần cứng.
 
+Công tắc gạt microphone dùng `mic_button.json` do device quản lý, hiện chỉ
+kèm file `robots/intern-v2/mic_button.json`. Entry của board được phát hiện
+trong `boards` cung cấp `chip`, `line`, `settle_s`, `muted_level` và
+`watchdog_s` cho `hal/board/mic_button.py`, rồi truyền vào driver dùng chung
+`hal/drivers/mic_button.py`. Entry `orangepi_sun60` của Intern v2 giữ nguyên
+gpiochip0 line 97 (PD1), thời gian chờ ổn định 0,06 s, LOW (`0`) là mute và
+watchdog 30 s. Pull-up vẫn bật; `muted_level` nhận `0` hoặc `1`.
+Thiếu file hoặc entry board thì giữ default cũ chỉ cho `intern-v2`, bao gồm
+điều kiện device-type hiện có bất kể board ID. Device khác không có cấu hình
+thì bỏ qua công tắc; `enabled: false` tắt rõ ràng. Cấu hình sai bị từ chối
+trước khi claim GPIO. HAL đồng bộ mute theo vị trí công tắc lúc khởi động
+và sau khi cạnh tín hiệu ổn định. Watchdog chỉ đồng bộ lại khi chân đổi mức,
+giữ các thay đổi mute bằng phần mềm khi công tắc đứng yên. Restart HAL để
+áp dụng JSON mới; simulation bỏ qua input phần cứng này. Lamp chưa có JSON
+công tắc mic nên vẫn tắt; bước refactor này chưa thêm mapping chân cho Lamp.
+
 Wiring TTP223 do device quản lý trong `robots/lamp/ttp223.json`. Intern v2
 không có phần cứng TTP223 nên không kèm file này. `hal/board/ttp223.py` chọn `chip`, `lines` và
 `axis` tùy chọn của board đã detect từ `boards`, truyền `TouchConfig` cho driver
@@ -100,7 +116,7 @@ hiện có; chế độ mô phỏng cũng bỏ qua. Cấu hình bật nhưng sai
 startup. Restart HAL sau khi đổi cấu hình wiring. Driver dùng chung
 `hal/drivers/mpr121.py` gom các electrode được chọn thành một phiên chạm rồi
 nhả đã debounce. Ngưỡng cử chỉ dùng chung GPIO trong
-`hal/drivers/button_gestures.py`: lần nhả ngắn đầu tiên gọi single-click ngay
+`hal/drivers/button_gestures.py`: lần nhả ngắn đầu tiên được phân giải gọi single-click
 với `announce=False`; sau 0.4 s yên, 1/2/4+ click phát cue nghe, đúng 3 click
 thì reboot. Giữ chỉ thực hiện khi nhả: 2–<5 s sleepy, 5–<10 s shutdown,
 ≥10 s factory reset. Khi giữ, event mức giữ đã debounce dùng cùng `HoldLEDFeedback`
@@ -114,6 +130,16 @@ polling 10 ms và debounce 30 ms, chờ ổn định 100 ms lúc startup. Lỗi 
 cờ quá dòng chỉ dừng driver này. Logger `hal.drivers.mpr121` ghi cấu hình,
 thay đổi electrode, tap đã debounce, thực thi action và vòng đời driver trong
 log/journal HAL thường dùng; poll không đổi trạng thái không tạo log INFO.
+Lamp bật nhận diện vuốt với `swipe_axis: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]`.
+Trục electrode này theo chuỗi di chuyển quan sát được trong log device; đảo
+chiều trục không đổi action vì cả hai hướng gọi `swipe_action` dùng chung để sleep.
+Hỗ trợ vuốt một phần dải. Chạm đứng yên giữ action click/hold; contact di chuyển
+loại bỏ các action đó để vuốt không biến thành reset. Nhận diện swipe thêm tối đa
+120 ms chờ nhả để nối chuyển tiếp giữa electrode. Thiếu/null `swipe_axis` giữ
+hành vi chỉ click/hold cũ. Cài HAL mới trước JSON device mới vì loader cũ kiểm tra
+nghiêm ngặt và từ chối trường chưa biết. Test swipe phát lại chuyển trạng thái
+electrode đã ghi; runtime và cấu hình swipe mới đã deploy lên Lamp `lamp-0c4e`
+ngày 2026-09-11, xác minh startup thành công. Chờ live test cử chỉ.
 Xem [điều khiển vật lý](../../robots/lamp/docs/vi/physical-controls_vi.md) để
 biết cấu hình và chi tiết cử chỉ.
 

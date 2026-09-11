@@ -298,6 +298,7 @@ if "display" in _declared:
 _gpio_button_handlers = []
 _ttp223_handler = None
 _mpr121_handler = None
+_mic_button_handler = None
 
 # Set the moment lifespan shutdown begins — late async initializers (sensing-init)
 # check it so they don't start services nobody will stop.
@@ -364,7 +365,7 @@ def _sim_audio_probe(sd_module) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _gpio_button_handlers, _ttp223_handler, _mpr121_handler
+    global _gpio_button_handlers, _ttp223_handler, _mpr121_handler, _mic_button_handler
 
     # --- Phase 0: Borrow the hardware from whoever owns it ---
     # Empty unless ROBOT.md declares an `owner:`. Where one exists it holds
@@ -942,16 +943,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"TTP223 init failed: {e}")
 
-    # Dedicated mic-mute push button (OrangePi sun60 PE1 today). One press =
-    # one mute↔unmute flip via HAL voice routes. Silent skip on boards that
-    # don't declare `mic_button` in boards.json.
+    # Slide-switch position controls mic mute; missing config preserves legacy gating.
     try:
         from hal.drivers.mic_button import MicButtonHandler
 
-        _mic_button_handler = MicButtonHandler()
+        _mic_button_handler = MicButtonHandler(_mic_button_config)
         _mic_button_handler.start()
     except Exception as e:
-        logger.warning(f"Mic button init failed: {e}")
+        logger.warning(f"Mic switch init failed: {e}")
 
     # Restore Bluetooth headset route if the user had one active before reboot.
     # Best effort — silent fallback to the device speaker/mic if anything goes wrong.
@@ -1023,6 +1022,8 @@ async def lifespan(app: FastAPI):
 
     _lifespan_stopping.set()
     _thermal_stop.set()
+    if _mic_button_handler is not None:
+        _mic_button_handler.stop()
     for handler in _gpio_button_handlers:
         handler.stop()
     _gpio_button_handlers = []
@@ -1313,6 +1314,14 @@ from hal.board.gpio_button import load_button_configs
 
 _gpio_button_configs = (
     [] if _board_id == "sim" else load_button_configs(_device_dir, _board_id)
+)
+
+from hal.board.mic_button import load_mic_button_config
+
+_mic_button_config = (
+    None if _board_id == "sim" else load_mic_button_config(
+        _device_dir, _board_id, _resolve_device_type(),
+    )
 )
 
 from hal.board.mpr121 import load_mpr121_config

@@ -1,0 +1,11 @@
+{
+  "boards": {
+    "orangepi_sun60": {
+      "chip": 0,
+      "line": 97,
+      "settle_s": 0.06,
+      "muted_level": 0,
+      "watchdog_s": 30
+    }
+  }
+}

@@ -16,6 +16,7 @@ class MPR121Config:
     autoconfig: bool = True
     poll_ms: int = 10
     debounce_ms: int = 30
+    swipe_axis: tuple[int, ...] | None = None
 
     def __post_init__(self):
         for name in ("bus", "address", "touch_threshold", "release_threshold", "poll_ms", "debounce_ms"):
@@ -38,6 +39,13 @@ class MPR121Config:
         if len(set(self.electrodes)) != len(self.electrodes):
             raise ValueError("electrodes must not contain duplicates")
         object.__setattr__(self, "electrodes", tuple(self.electrodes))
+        if self.swipe_axis is not None:
+            axis = self.swipe_axis
+            if (not isinstance(axis, (list, tuple)) or not 2 <= len(axis) <= 12
+                    or any(type(i) is not int or i not in self.electrodes for i in axis)
+                    or len(set(axis)) != len(axis)):
+                raise ValueError("swipe_axis must contain 2..12 distinct selected electrodes in physical order")
+            object.__setattr__(self, "swipe_axis", tuple(axis))
 
 
 def load_mpr121_config(device_dir: str, board_id: str) -> Optional[MPR121Config]:
