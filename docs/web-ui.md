@@ -144,6 +144,45 @@ that gate, typing a new AI Brain key silently overwrote a deliberately different
 TTS/STT key on save — one device ended up holding an openrouter key against the
 autonomous proxy URL, a pairing that cannot work.
 
+**TTS key ownership.** The device stores exactly one TTS key (`ttsAPIKey`), and
+it always belongs to the provider currently selected in Voice. `Autonomous
+(proxy)` and `Custom (BYO URL)` store nothing and inherit the AI Brain key via
+`Config.GetTTSAPIKey()` (`system/server/config/config.go:605`); `Piper` needs no
+key at all; `OpenAI (direct)` and `ElevenLabs (direct)` **require their own** —
+the inherited Autonomous JWT is rejected with a 401 that HAL retries, abandons,
+and returns as zero samples, i.e. a mute device with no error in this UI.
+Four rules enforce the invariant:
+
+- Save is **refused** when a direct provider has neither a newly typed key nor a
+  stored key belonging to that same provider. The API Key label reads
+  "required" for direct providers and "optional — leave blank to reuse AI brain
+  key" everywhere else.
+- The `✓ configured` badge and the `•••••••• saved` placeholder render only when
+  the stored key belongs to the selected provider. Ownership is derived from the
+  loaded `tts_base_url` + `tts_provider` pair via `detectChoice()`
+  (`system/web/src/pages/settings/ttsProvider.ts`) — no extra config field.
+- The AI Brain key mirror fills a blank TTS key **only** for `autonomous` /
+  `custom` (`ttsInheritsLlmKey()` in `SettingsPanel`). Mirroring into a direct
+  vendor would put an Autonomous JWT in the box, which looks configured and
+  saves cleanly but 401s at the vendor. This matches the
+  `sttProvider === "autonomous"` gate the STT mirrors already had.
+- Switching provider away from the key's owner sends `clear_tts_api_key: true`,
+  which `applyVoicePipelineFields` honours by emptying `ttsAPIKey`. A bare
+  `tts_api_key: ""` cannot do this: every field in `UpdateConfigRequest` is
+  PATCH-style, where `""` means "not sent". The cleared key is pushed live to
+  HAL as the *resolved* value (`GetTTSAPIKey()`), because HAL's
+  `/voice/tts/config` reads an empty key as "keep the current one".
+
+Keys typed but not yet saved are cached per provider **in the browser tab only**
+(a `useRef` in `TTSSection`), so flipping providers before saving doesn't force a
+retype. That cache dies on reload and on Save; the device never holds more than
+one key.
+
+> The Setup flow (`system/web/src/components/setup/TTSSection.tsx`) still does
+> not expose the TTS key or base URL — both mirror AI Brain — so a direct
+> provider chosen during setup cannot be given a valid key there. Configure it
+> afterwards in Settings → Voice.
+
 
 Settings is **not a separate page**. It is an area of the same Monitor shell (`system/web/src/pages/monitor/index.tsx`), reached at the `/setting` route. In `App.tsx`, `/monitor` and `/setting` are child routes of a single layout route whose element renders `<Monitor/>`; React Router keeps that element mounted while only the matched child path changes, so the sidebar does **not** remount when switching between Monitor and Settings (no full-page flash). The shell derives its area — `"monitor"` or `"setting"` — from `useLocation().pathname`.
 

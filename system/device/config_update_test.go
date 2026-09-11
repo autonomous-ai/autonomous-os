@@ -413,3 +413,54 @@ func TestTTSSpeedRejectsBeforeMutation(t *testing.T) {
 		t.Fatalf("public default %v", got)
 	}
 }
+
+// A provider switch must be able to DELETE the stored TTS key. Every field in
+// UpdateConfigRequest is PATCH-style, where "" means "not sent", so an empty
+// TTSAPIKey cannot express a clear — hence the explicit flag. Without this the
+// previous vendor's key survives and GetTTSAPIKey hands it to the new provider.
+func TestApplyUpdateClearTTSAPIKey(t *testing.T) {
+	c := baseConfig()
+	ch := applyUpdate(c, domain.UpdateConfigRequest{ClearTTSAPIKey: true}, "")
+
+	if c.TTSAPIKey != "" {
+		t.Fatalf("clear flag did not empty TTSAPIKey: %q", c.TTSAPIKey)
+	}
+	// Once cleared, resolution falls back to the AI-brain key — the credential
+	// the Autonomous proxy actually authenticates against.
+	if got := c.GetTTSAPIKey(); got != "key-llm" {
+		t.Fatalf("GetTTSAPIKey after clear = %q, want the LLM key", got)
+	}
+	// The key is part of ttsSnapshot, so clearing it must flag a TTS change and
+	// get pushed live to hal. Nothing hal reads at boot changed, so no restart.
+	if !ch.tts {
+		t.Fatalf("clearing the TTS key did not flag a tts change: %+v", ch)
+	}
+	if ch.halBoot {
+		t.Fatalf("clearing the TTS key must not force a hal restart: %+v", ch)
+	}
+}
+
+// Defensive ordering check. The UI never sends both, but if it ever did, the
+// operator's newly typed key is the intent that should win.
+func TestApplyUpdateClearTTSAPIKeyWithNewKeyPrefersNewKey(t *testing.T) {
+	c := baseConfig()
+	applyUpdate(c, domain.UpdateConfigRequest{
+		ClearTTSAPIKey: true,
+		TTSAPIKey:      "key-new",
+	}, "")
+
+	if c.TTSAPIKey != "key-new" {
+		t.Fatalf("TTSAPIKey = %q, want the newly sent key", c.TTSAPIKey)
+	}
+}
+
+// Regression guard for PATCH semantics: without the flag, a save that carries
+// no TTS key must leave the stored one alone. Voice-only saves rely on this.
+func TestApplyUpdateWithoutClearKeepsTTSAPIKey(t *testing.T) {
+	c := baseConfig()
+	applyUpdate(c, domain.UpdateConfigRequest{TTSVoice: "nova"}, "")
+
+	if c.TTSAPIKey != "key-tts" {
+		t.Fatalf("TTSAPIKey = %q, want it untouched", c.TTSAPIKey)
+	}
+}

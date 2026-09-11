@@ -341,6 +341,12 @@ func applyVoicePipelineFields(c *config.Config, data domain.UpdateConfigRequest,
 	if data.STTAPIKey != "" {
 		c.STTAPIKey = data.STTAPIKey
 	}
+	// Clear before set, so a request carrying both ends up holding the newly
+	// typed key rather than nothing. The UI never sends both; this only fixes
+	// the order if it ever does.
+	if data.ClearTTSAPIKey {
+		c.TTSAPIKey = ""
+	}
 	if data.TTSAPIKey != "" {
 		c.TTSAPIKey = data.TTSAPIKey
 	}
