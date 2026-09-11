@@ -14,6 +14,7 @@ import unittest
 import urllib.error
 import urllib.request
 
+from dotenv import dotenv_values
 from websockets.sync.client import connect
 from websockets.exceptions import ConnectionClosed
 
@@ -36,13 +37,22 @@ class TestStackChanServer(unittest.TestCase):
             env = os.environ.copy()
             env.update({
                 "PYTHONPATH": str(REPO_ROOT),
-                "DEVICE_TYPE": "stackchan",
                 "DEVICES_DIR": str(REPO_ROOT / "robots/_experimental"),
-                "HAL_BOARD": "host", "HAL_SIMULATE": "0", "HAL_MODE": "developer",
+                "HAL_MODE": "developer",
                 "HAL_LOG_DIR": directory, "HAL_STATE_DIR": directory,
                 "HAL_USERS_DIR": directory + "/users",
                 "HAL_STRANGERS_DIR": directory + "/strangers",
                 "OS_CONFIG_PATH": directory + "/missing-config.json",
+            })
+            # Exercise the documented profile env-file path, not an unrelated
+            # set of hand-built process variables. Only bench connection values
+            # change; board, device and transport defaults come from the profile.
+            profile_env = dotenv_values(
+                REPO_ROOT / "robots/_experimental/stackchan/rootfs/opt/hal/.env"
+            )
+            for key in profile_env:
+                env.pop(key, None)
+            profile_env.update({
                 "STACKCHAN_DEVICE_ID": "stackchan-test",
                 "STACKCHAN_BODY_TOKEN": TOKEN,
                 "STACKCHAN_BODY_HOST": "127.0.0.1",
@@ -50,6 +60,9 @@ class TestStackChanServer(unittest.TestCase):
                 "STACKCHAN_BODY_ALLOW_INSECURE_WS": "1",
                 "STACKCHAN_BODY_TLS_CERT": "", "STACKCHAN_BODY_TLS_KEY": "",
             })
+            env_file = Path(directory) / ".env"
+            env_file.write_text("".join(f"{key}={value}\n" for key, value in profile_env.items()))
+
             def request(path, body=None):
                 data = json.dumps(body).encode() if body is not None else None
                 req = urllib.request.Request(
@@ -62,7 +75,7 @@ class TestStackChanServer(unittest.TestCase):
             with open(directory + "/server.log", "w+") as log:
                 server = subprocess.Popen(
                     [sys.executable, "-m", "uvicorn", "hal.server:app", "--host",
-                     "127.0.0.1", "--port", str(http_port)],
+                     "127.0.0.1", "--port", str(http_port), "--env-file", str(env_file)],
                     cwd=REPO_ROOT, env=env, stdout=log, stderr=subprocess.STDOUT,
                 )
                 try:

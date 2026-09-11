@@ -9,16 +9,22 @@ chọn transport thật tới thân robot từ xa.
 ## Khởi động HAL
 
 Chạy tại thư mục gốc repository, với môi trường Python HAL và dependencies
-đã có ở `hal/.venv`. Đặt định danh firmware, token riêng dài ít nhất 32 ký tự
-và đường dẫn đến certificate/key TLS đã có:
+đã có ở `hal/.venv`. Cấu hình HAL trên host nằm trong profile tại
+`rootfs/opt/hal/.env`, theo cấu trúc các robot khác. Sao chép thành file local
+riêng; `cp -n` giữ nguyên cấu hình nếu file đích đã tồn tại:
 
 ```bash
-export STACKCHAN_DEVICE_ID='your-firmware-device-id'
-export STACKCHAN_BODY_TOKEN='replace-with-your-distinct-body-token'
-export STACKCHAN_BODY_TLS_CERT='/absolute/path/to/body-server.crt'
-export STACKCHAN_BODY_TLS_KEY='/absolute/path/to/body-server.key'
-export STACKCHAN_BODY_HOST='0.0.0.0'
-export STACKCHAN_BODY_PORT='8765'
+mkdir -p "$PWD/.local/stackchan"
+cp -n robots/_experimental/stackchan/rootfs/opt/hal/.env "$PWD/.local/stackchan/.env"
+chmod 600 "$PWD/.local/stackchan/.env"
+```
+
+Sửa `.local/stackchan/.env`: đặt device ID firmware, token riêng dài ít nhất
+32 ký tự và đường dẫn đến certificate/key TLS đã có. Không ghi credential thật
+vào profile được Git theo dõi. File này cấu hình HAL trên máy tính; ESP32 cần
+cấu hình firmware riêng tương ứng. Sau đó chạy HAL với file env này:
+
+```bash
 export HAL_USERS_DIR="$PWD/.local/stackchan/users"
 export HAL_STRANGERS_DIR="$PWD/.local/stackchan/strangers"
 export HAL_LOG_DIR="$PWD/.local/stackchan/logs"
@@ -27,7 +33,8 @@ export OS_CONFIG_PATH="$PWD/.local/stackchan/config.json"
 mkdir -p "$HAL_USERS_DIR" "$HAL_STRANGERS_DIR" "$HAL_LOG_DIR" "$HAL_STATE_DIR"
 HAL_BOARD=host DEVICE_TYPE=stackchan DEVICES_DIR="$PWD/robots/_experimental" \
   HAL_SIMULATE=0 HAL_MODE=developer PYTHONPATH=. \
-  hal/.venv/bin/python -m uvicorn hal.server:app --host 127.0.0.1 --port 5001
+  hal/.venv/bin/python -m uvicorn hal.server:app \
+    --env-file "$PWD/.local/stackchan/.env" --host 127.0.0.1 --port 5001
 ```
 
 `HAL_MODE=developer` tắt hạn chế truy cập HTTP của HAL. Giữ bind HTTP tường
@@ -46,8 +53,8 @@ host đó và gửi header `Authorization: Bearer <token>`. Hello phải khớp
 đọc vị trí đo được, halt/hold và nhả torque. HAL chờ kết nối; khởi động không
 tự động di chuyển thân robot.
 
-Chỉ khi thử plain WS trong mạng cô lập: bỏ cả hai biến đường dẫn TLS, đặt
-tường minh `STACKCHAN_BODY_ALLOW_INSECURE_WS=1` và dùng URL `ws://` tương ứng
+Chỉ khi thử plain WS trong mạng cô lập: để trống cả hai giá trị TLS trong file env local, đặt
+tường minh `STACKCHAN_BODY_ALLOW_INSECURE_WS=1` trong file đó và dùng URL `ws://` tương ứng
 trong firmware. Cấu hình thông thường vẫn dùng TLS.
 
 ## Kiểm tra không di chuyển

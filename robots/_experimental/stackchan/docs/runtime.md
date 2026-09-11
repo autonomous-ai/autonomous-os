@@ -9,16 +9,23 @@ bus. `HAL_SIMULATE=0` selects the real remote transport.
 ## Start HAL
 
 Run from the repository root with the existing HAL Python environment and
-dependencies available at `hal/.venv`. Set the body identity, a distinct shared
-token of at least 32 characters, and paths to an existing TLS certificate/key:
+dependencies available at `hal/.venv`. The host-side configuration belongs to
+this profile at `rootfs/opt/hal/.env`, following the other robot profiles.
+Copy it to a private local file; `cp -n` preserves an existing configuration:
 
 ```bash
-export STACKCHAN_DEVICE_ID='your-firmware-device-id'
-export STACKCHAN_BODY_TOKEN='replace-with-your-distinct-body-token'
-export STACKCHAN_BODY_TLS_CERT='/absolute/path/to/body-server.crt'
-export STACKCHAN_BODY_TLS_KEY='/absolute/path/to/body-server.key'
-export STACKCHAN_BODY_HOST='0.0.0.0'
-export STACKCHAN_BODY_PORT='8765'
+mkdir -p "$PWD/.local/stackchan"
+cp -n robots/_experimental/stackchan/rootfs/opt/hal/.env "$PWD/.local/stackchan/.env"
+chmod 600 "$PWD/.local/stackchan/.env"
+```
+
+Edit `.local/stackchan/.env` to set the firmware device ID, a distinct shared
+token of at least 32 characters, and paths to an existing TLS certificate/key.
+Keep real credentials out of the tracked profile. This file configures HAL on
+the computer; the ESP32 requires its own matching firmware configuration.
+Then start HAL with that env file:
+
+```bash
 export HAL_USERS_DIR="$PWD/.local/stackchan/users"
 export HAL_STRANGERS_DIR="$PWD/.local/stackchan/strangers"
 export HAL_LOG_DIR="$PWD/.local/stackchan/logs"
@@ -27,7 +34,8 @@ export OS_CONFIG_PATH="$PWD/.local/stackchan/config.json"
 mkdir -p "$HAL_USERS_DIR" "$HAL_STRANGERS_DIR" "$HAL_LOG_DIR" "$HAL_STATE_DIR"
 HAL_BOARD=host DEVICE_TYPE=stackchan DEVICES_DIR="$PWD/robots/_experimental" \
   HAL_SIMULATE=0 HAL_MODE=developer PYTHONPATH=. \
-  hal/.venv/bin/python -m uvicorn hal.server:app --host 127.0.0.1 --port 5001
+  hal/.venv/bin/python -m uvicorn hal.server:app \
+    --env-file "$PWD/.local/stackchan/.env" --host 127.0.0.1 --port 5001
 ```
 
 `HAL_MODE=developer` disables HAL HTTP access restrictions. Keep the explicit
@@ -45,8 +53,8 @@ Its hello must match `STACKCHAN_DEVICE_ID` and advertise the required timed
 motion, measured-position, halt/hold and torque-release capabilities. HAL
 waits for the connection; startup does not automatically move the body.
 
-For an isolated plain-WS experiment only, unset both TLS paths and explicitly
-set `STACKCHAN_BODY_ALLOW_INSECURE_WS=1`; the firmware must use the matching
+For an isolated plain-WS experiment only, clear both TLS values in the local
+env file and explicitly set `STACKCHAN_BODY_ALLOW_INSECURE_WS=1` there; the firmware must use the matching
 `ws://` URL. TLS remains the normal configuration.
 
 ## Check without moving
