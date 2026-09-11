@@ -14,11 +14,6 @@ Agentic Runtime (AI/LLM) → OS Server (Go, :5000) → HAL (Python, :5001) → H
 
 ## Project Directory
 
-Lamp defaults to Hermes via `robots/lamp/ROBOT.md` (`gateway.default: hermes`).
-An existing `config.json` `agent_runtime` takes precedence; otherwise an image's
-`f_r_default_agent` (baked with `DEFAULT_AGENT`) overrides the device declaration.
-Changing the declaration does not switch an already-configured device.
-
 ```
 system/
 ├── cmd/os-server/main.go              — OS Server entry point

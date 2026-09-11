@@ -14,11 +14,6 @@ Agentic Runtime (AI/LLM) → OS Server (Go, :5000) → HAL (Python, :5001) → P
 
 ## Thư Mục Dự Án
 
-Lamp mặc định dùng Hermes qua `robots/lamp/ROBOT.md` (`gateway.default: hermes`).
-`agent_runtime` đã lưu trong `config.json` được ưu tiên; nếu chưa có thì
-`f_r_default_agent` của image (bake bằng `DEFAULT_AGENT`) ưu tiên hơn khai báo thiết bị.
-Đổi khai báo không tự chuyển runtime trên máy đã cấu hình.
-
 ```
 system/
 ├── cmd/os-server/main.go              — Entry point OS Server
