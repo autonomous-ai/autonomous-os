@@ -250,6 +250,7 @@ Cấu hình này tách biệt thời gian HAL trong `sen55.json` và `scd41.json
 {
   "environment": {
     "enabled": true,
+    "initial_report": true,
     "evaluate_interval_s": 10,
     "sustain_s": 60,
     "cooldown_s": 900,
@@ -288,15 +289,38 @@ Cả cờ `stale` của HAL lẫn tuổi mẫu tối đa OS áp dụng cho từn
 Snapshot tổng hợp dùng `sources`, `components`, `metric_timestamps` để sensor
 khỏe không khiến dữ liệu cũ của sensor khác có vẻ mới. SEN55 lỗi chỉ reset
 chỉ số của nó, không chặn CO₂ SCD41 còn tốt. Snapshot một sensor kiểu cũ vẫn
-dùng timestamp/status cấp cao nhất. Sau khi
-có số đo hợp lệ liên tục hết warm-up của từng chỉ số, giá trị đầu tiên tạo
-baseline im lặng. Chênh lệch phải đạt `delta` cùng chiều trong `sustain_s`;
+dùng timestamp/status cấp cao nhất. Sau khi có số đo hợp lệ liên tục hết warm-up
+của từng chỉ số, giá trị đầu tiên tạo baseline phát hiện thay đổi. Mỗi component
+HAL có thể trả `continuous_data_s`: thời gian từ mẫu thành công đầu tiên tới
+mẫu thành công mới nhất trong đợt thu nhận liên tục. Giá trị là null khi không
+hợp lệ, stale hoặc lỗi, và reset khi thu nhận bị gián đoạn. OS dùng thông tin
+liên tục này cùng thời gian quan sát hợp lệ local để đáp ứng warm-up khi chỉ
+OS restart; HAL cũ thiếu trường này dùng quan sát local. Vẫn kiểm tra độ mới và
+tính hợp lệ từng chỉ số; chỉ biết component đã chạy lâu là chưa đủ. Chênh lệch phải đạt `delta` cùng chiều trong `sustain_s`;
 giảm dưới mức chênh lệch hoặc đảo chiều sẽ reset thời gian đang chờ.
 Chỉ số null reset warm-up/baseline riêng; snapshot không khả dụng hay lỗi đọc
 reset số đo của mọi chỉ số. Khoảng gián đoạn lớn cũng reset tính liên tục.
 Warm-up là thời gian chờ của OS, không chứng nhận cảm biến đã hiệu chuẩn.
 
-Event đủ điều kiện gồm `[environment:update]` rồi JSON với `observed_at`
+`environment.initial_report` mặc định `true`. Lời chào hệ thống không chờ sensor
+hay gọi HAL: chỉ có thể đính kèm snapshot còn mới, đủ warm-up đã cache trong
+worker OS bằng JSON `[environment:initial]`. Agent thêm tối đa một câu thực tế
+với một hoặc hai số đo vào lời chào bình thường. Cold boot thường chào khi chưa
+có dữ liệu môi trường. Sau khi lời chào hoàn tất, OS gửi snapshot đủ điều kiện
+đầu tiên một lần qua `environment.update`, với `reason: "initial"` và
+`changes: {}`, kể cả chưa có thay đổi đáng kể. Chỉ gửi chỉ số đủ điều kiện;
+chỉ số còn warm-up không tạo thêm thông báo ban đầu riêng khi sẵn sàng muộn.
+Lời chào thành công có kèm context sẽ tiêu thụ thông báo này; nếu không, nó
+vẫn chờ. Dispatch bị từ chối thử lại theo `retry_interval_s`; dispatch được
+nhận hoặc xếp queue tiêu thụ thông báo và bắt đầu cooldown chung. Queue là
+best-effort, nên hết hạn về sau không tạo lại thông báo ban đầu. Event riêng
+vẫn tuân theo capability, policy enabled, sleep, busy và conversation floor.
+Trạng thái tồn tại trong tiến trình OS; sensor kết nối lại hoặc sửa config
+không tạo lại thông báo đã tiêu thụ. Đặt `initial_report: false` tắt cả dữ liệu
+kèm lời chào lẫn update ban đầu, vẫn giữ phát hiện thay đổi kéo dài. Snapshot
+ban đầu không chứng minh xu hướng, chẩn đoán sức khỏe hay không khí an toàn.
+
+Event thay đổi đủ điều kiện gồm `[environment:update]` rồi JSON với `observed_at`
 (Unix giây), `sample`, `changes` theo tên chỉ số chứa `previous`, `current`,
 `previous_at` (Unix giây của baseline), `current_at` (Unix giây của số đo hiện
 tại), `source`, `delta` có dấu, và `sustained_s`. Event tổng hợp còn chứa
@@ -341,6 +365,9 @@ cần quan sát camera, danh tính, log hoạt động hay bộ đếm uống n�
 
 - **Hỏi về phòng:** đọc status một lần, báo số đo hữu ích; thiếu dữ liệu hoặc
   dữ liệu cũ là chưa biết, không phải không ô nhiễm hay bằng chứng an toàn.
+- **Khởi động:** chào ngay; có thể thêm một câu từ số đo đã cache đủ điều kiện.
+  Nếu chưa có, snapshot đầu tiên đủ điều kiện có thể tạo update riêng sau lời
+  chào, không chào lần nữa hay gọi API cho bản tin này. Bỏ số đo ban đầu đã cũ.
 - **Thay đổi kéo dài:** giải thích thay đổi có căn cứ, gợi ý tối đa một hành
   động hữu ích khi phù hợp. Tôn trọng yêu cầu yên tĩnh/ngủ; trả `NO_REPLY`
   nếu không có thông báo hữu ích.

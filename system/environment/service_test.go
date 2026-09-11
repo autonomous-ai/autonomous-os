@@ -164,3 +164,42 @@ func TestServiceReadErrorResetsBaselineBeforeRecovery(t *testing.T) {
 		t.Fatal("worker did not stop")
 	}
 }
+
+func TestServiceStartupReportRetriesThenDoesNotReplayOnReconnect(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cfg := testSettings()
+	cfg.EvaluateIntervalS = 1
+	cfg.RetryIntervalS = 1
+	startup := NewStartupCoordinator()
+	startup.FinishGreeting(true)
+	reads, sends := 0, 0
+	done := make(chan struct{})
+	service := Service{Startup: startup, Settings: func() config.EnvironmentConfig { return cfg }, Available: func() bool { return true }, Read: func(context.Context) (json.RawMessage, error) {
+		reads++
+		if reads == 3 {
+			return nil, errors.New("reconnect")
+		}
+		if reads == 5 {
+			cancel()
+		}
+		s := sample(reads, 24)
+		s.ContinuousDataS = number(100)
+		return json.Marshal(s)
+	}, Send: func(_ context.Context, event Event) (bool, error) {
+		sends++
+		if event.Reason != "initial" || len(event.Changes) != 0 {
+			t.Error("initial report must not assert a trend")
+		}
+		return sends == 2, nil
+	}}
+	go func() { service.Run(ctx); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(7 * time.Second):
+		t.Fatal("worker did not finish")
+	}
+	if sends != 2 {
+		t.Fatalf("want dropped attempt + accepted retry, got %d", sends)
+	}
+}
