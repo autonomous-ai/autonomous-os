@@ -8,6 +8,68 @@ ROLLBACK_DIR="/root/bootstrap/rollback"
 WEB_ROOT="/usr/share/nginx/html/setup"
 HAL_DIR="/opt/hal"
 
+# Use npm's bundled semver implementation: engine ranges can include unions
+# and upper bounds, so a major-version comparison is not sufficient.
+node_satisfies_engine() {
+  node - "$1" "$(command -v npm)" <<'NODE'
+const fs = require('node:fs');
+const path = require('node:path');
+try {
+  const npmDir = path.dirname(fs.realpathSync(process.argv[3]));
+  const semver = require(require.resolve('semver', { paths: [npmDir] }));
+  const range = process.argv[2];
+  if (!semver.validRange(range)) throw new Error('Invalid Node engine range');
+  process.exit(semver.satisfies(process.version, range) ? 0 : 1);
+} catch (error) {
+  console.error('[software-update] Cannot check Node compatibility:', error.message);
+  process.exit(2);
+}
+NODE
+}
+
+ensure_openclaw_node() {
+  local version="$1" engine_json engine status setup_script
+  engine_json=$(npm view "openclaw@$version" engines.node --json) || return 1
+  engine=$(printf '%s' "$engine_json" | jq -er 'select(type == "string" and length > 0)') || {
+    echo "[software-update] Missing Node requirement for openclaw@$version" >&2
+    return 1
+  }
+  if node_satisfies_engine "$engine"; then
+    return 0
+  else
+    status=$?
+    # A broken checker must not trigger a system package upgrade.
+    [ "$status" -eq 1 ] || return "$status"
+  fi
+  echo "[software-update] openclaw@$version requires Node $engine; upgrading system Node to 24.x"
+  setup_script=$(mktemp) || return 1
+  if ! curl -fsSL https://deb.nodesource.com/setup_24.x -o "$setup_script"; then
+    rm -f "$setup_script"
+    return 1
+  fi
+  if ! bash "$setup_script"; then
+    rm -f "$setup_script"
+    return 1
+  fi
+  rm -f "$setup_script"
+  apt-get install -y nodejs || return 1
+  hash -r
+  node_satisfies_engine "$engine" || {
+    echo "[software-update] Node still does not satisfy $engine; refusing OpenClaw install (check Node version and PATH)" >&2
+    return 1
+  }
+}
+
+update_openclaw() {
+  local version="$1"
+  ensure_openclaw_node "$version" || return 1
+  npm install -g "openclaw@$version" || { echo "npm install openclaw failed"; return 1; }
+  openclaw plugins install "@openclaw/discord@$version" --force 2>&1 || echo "[software-update] WARN: discord plugin install failed (non-fatal)"
+  openclaw plugins install "@openclaw/slack@$version" --force 2>&1 || echo "[software-update] WARN: slack plugin install failed (non-fatal)"
+  systemctl restart openclaw || return 1
+  echo "openclaw updated to $version"
+}
+
 # Web is a directory install, so retain the complete prior bundle and whether
 # nginx was running. The backup is only replaced after the new ZIP has been
 # downloaded and unpacked into a sibling staging directory.
@@ -648,12 +710,7 @@ elif [ "$APP" = "bootstrap" ]; then
   systemctl restart bootstrap
   echo "bootstrap updated to $VERSION"
 elif [ "$APP" = "openclaw" ]; then
-  VER="${VERSION:-latest}"
-  npm install -g "openclaw@${VER}" || { echo "npm install openclaw failed"; exit 1; }
-  openclaw plugins install @openclaw/discord@${VER} --force 2>&1 || echo "[software-update] WARN: discord plugin install failed (non-fatal)"
-  openclaw plugins install @openclaw/slack@${VER} --force 2>&1 || echo "[software-update] WARN: slack plugin install failed (non-fatal)"
-  systemctl restart openclaw
-  echo "openclaw updated to $VER"
+  update_openclaw "$VERSION"
 elif [ "$APP" = "codex" ]; then
   # The Codex CLI is a static musl binary published on GitHub releases — there
   # is no url/sha256 in metadata (nothing of ours is hosted on GCS for it), so
