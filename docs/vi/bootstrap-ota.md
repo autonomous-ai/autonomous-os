@@ -561,6 +561,17 @@ chung của hệ thống; nếu đã nâng Node thành công nhưng cài OpenCla
 updater không rollback Node. Xử lý prerequisite này không thay đổi gate cập
 nhật tự động ở trên.
 
+Sau khi cập nhật package OpenClaw và plugin, updater dừng `openclaw.service`
+rồi chạy `openclaw doctor --fix --non-interactive --no-workspace-suggestions`
+với `HOME=/root` và OpenClaw home/state là `/root/.openclaw`, để migrate
+workspace/state cũ trước khi khởi động gateway mới. Nếu dừng service hoặc
+chạy doctor thất bại, updater thoát và không restart; migration thất bại sẽ
+để gateway dừng chờ sửa. Sau restart, chỉ báo thành công khi probe có xác thực
+`gateway status --require-rpc --timeout 5000` thành công (tối đa 12 lần,
+cách nhau 5 giây). Hết lượt probe sẽ báo cập nhật thất bại dù systemd thấy
+process còn active. Package/state không tự rollback khi migration hoặc
+kiểm tra readiness thất bại.
+
 **Vì sao CLI của agent gate theo `agent_runtime` chứ không theo binary:**
 `scripts/imager/build-orangepi.sh` bake CLI của MỌI agent lên mọi image lamp /
 intern-v2 bất kể `DEFAULT_AGENT`, nên `inPath("codex")` vẫn đúng trên máy đang

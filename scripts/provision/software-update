@@ -61,13 +61,30 @@ ensure_openclaw_node() {
 }
 
 update_openclaw() {
-  local version="$1"
+  local version="$1" attempt
   ensure_openclaw_node "$version" || return 1
   npm install -g "openclaw@$version" || { echo "npm install openclaw failed"; return 1; }
   openclaw plugins install "@openclaw/discord@$version" --force 2>&1 || echo "[software-update] WARN: discord plugin install failed (non-fatal)"
   openclaw plugins install "@openclaw/slack@$version" --force 2>&1 || echo "[software-update] WARN: slack plugin install failed (non-fatal)"
+  # Doctor must own maintenance while migrating legacy workspace/state stores.
+  # Use the same state paths as the system-owned gateway, not the SSH user's.
+  systemctl stop openclaw || return 1
+  if ! HOME=/root OPENCLAW_HOME=/root/.openclaw OPENCLAW_STATE_DIR=/root/.openclaw \
+    openclaw doctor --fix --non-interactive --no-workspace-suggestions; then
+    echo "[software-update] OpenClaw migration failed; gateway left stopped. Resolve doctor errors before starting openclaw.service." >&2
+    return 1
+  fi
   systemctl restart openclaw || return 1
-  echo "openclaw updated to $version"
+  for attempt in {1..12}; do
+    if HOME=/root OPENCLAW_HOME=/root/.openclaw OPENCLAW_STATE_DIR=/root/.openclaw \
+      openclaw gateway status --require-rpc --timeout 5000; then
+      echo "openclaw updated to $version"
+      return 0
+    fi
+    [ "$attempt" -eq 12 ] || sleep 5
+  done
+  echo "[software-update] OpenClaw gateway did not become ready after migration; check journalctl -u openclaw" >&2
+  return 1
 }
 
 # Web is a directory install, so retain the complete prior bundle and whether

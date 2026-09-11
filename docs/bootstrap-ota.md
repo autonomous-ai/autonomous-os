@@ -576,6 +576,18 @@ the OpenClaw install and restart. Node is a shared system dependency; a
 successful Node upgrade is not rolled back if the later OpenClaw install fails.
 This prerequisite handling does not change the automatic-update gate above.
 
+After the OpenClaw package and plugin updates, the updater stops
+`openclaw.service` and runs `openclaw doctor --fix --non-interactive
+--no-workspace-suggestions` with `HOME=/root` and OpenClaw home/state set to
+`/root/.openclaw`. This migrates legacy workspace/state stores before the new
+gateway starts. If stopping the service or running doctor fails, the updater
+exits without restarting it; a failed migration leaves the gateway stopped
+for repair. After restart, success requires an authenticated
+`gateway status --require-rpc --timeout 5000` probe (up to 12 attempts,
+5 seconds between attempts). Exhausted probes report update failure, even if
+systemd considers the process active. Package/state changes are not
+automatically rolled back on migration or readiness failure.
+
 **Why the agent CLIs are gated on `agent_runtime`, not on the binary:**
 `scripts/imager/build-orangepi.sh` bakes every agent CLI onto every lamp /
 intern-v2 image regardless of `DEFAULT_AGENT`, so `inPath("codex")` is true even
