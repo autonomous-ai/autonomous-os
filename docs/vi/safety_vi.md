@@ -213,6 +213,75 @@ một move chính chủ rớt gate là bằng chứng con số đã khai bị sa
 nguồn sẽ che mất tín hiệu đó. `robots/reachy-mini/SAFETY.md` ghi rõ trần đó suy
 ra từ đâu và thứ gì vẫn cần robot thật mới xác nhận được.
 
+Đường Wi-Fi của Stack-chan giữ nguyên gate theo `duration` xuyên qua ranh giới
+process và mạng. `StackChanMotionService` gửi duration đã được kéo dài dưới dạng
+`duration_ms`, gia hạn một controller lease ngắn trong lúc firmware nội suy theo
+thời gian, rồi kết thúc lease bằng cách giữ tại vị trí đo được. Lệnh nhả torque
+ưu tiên hơn move đang chạy, đưa đầu về tư thế nghỉ cúi xuống thận trọng, rồi mới
+xác nhận tư thế đó từ phản hồi vị trí đo được trước khi tắt torque. Nếu không tới
+được tư thế nghỉ, driver halt-hold và giữ torque bật. Handshake bắt buộc
+firmware khai `motion.timed_move`, đọc vị trí thật, halt-and-hold và torque
+release. Nếu HAL, process hoặc Wi-Fi biến mất, firmware ESP32 hết hạn lease (hoặc
+xử lý disconnect) rồi giữ tại vị trí đo được; firmware chỉ có tham số spring
+speed chưa hiệu chuẩn sẽ bị từ chối vì không thể giữ đúng trần độ/giây đã khai.
+Đường này đã có test protocol phía host; fault injection trên Wi-Fi và phần cứng
+thật vẫn là bước qualification trên thiết bị.
+
+Driver cũng triển khai contract đếm số owner `MotionService.acquire_body()` /
+`release_body()` dùng cho look, capture và tracking. Khi các owner chồng lấn,
+`_tracking_active` giữ giá trị true cho tới khi owner cuối cùng thoát; xoá cờ
+tracking-session riêng không thể nhả quyền của owner khác. Ownership chỉ điều
+phối gaze và emotion trong HAL, tách biệt với controller lease của firmware.
+Nó không ngăn owner điều khiển chuyển động và không chặn đường halt luôn sẵn có.
+
+Transport Stack-chan kiểm tra lại mọi chuyển động có thời lượng dựa trên vị trí
+đo được và `motion.max_speed`, bao gồm về zero và gravity-rest. Khi release thay
+thế chuyển động đang chạy, driver halt-hold trước khi đo tư thế bắt đầu. Nếu
+không đọc được vị trí hoặc thời lượng an toàn vượt 60 giây, driver báo lỗi và
+không gửi chuyển động. Gateway chỉ công bố kết nối sau khi gửi `hello.accepted`,
+để lệnh chuyển động không vượt trước handshake.
+
+[Repo tích hợp Stack-chan](https://github.com/glifocat/stackchan-autonomous/tree/9a5209596b97c257b6b2c1f6ff6bec91c44f8112)
+cung cấp firmware patch và HTTP bridge độc lập. Demo Docker không khởi động
+`hal.server`, nên không phải test startup cho driver này. HAL đầy đủ vẫn cần
+profile khai báo `motion.driver: stackchan` và board của host. Firmware đã đối
+chiếu trả `completed` với state `scheduled` khi cài lịch chuyển động, chưa có
+nghĩa thân máy đã đến đích; `motion.halt` xóa lease, nên host acquire lại trước
+chuyển động tiếp theo. Việc khớp source không chứng minh qualification phần
+cứng hoặc xác định firmware thực tế đã flash trên thiết bị.
+
+Mọi chuyển động Stack-chan xác nhận vị trí đo được đã tới đích trước khi nhả
+controller lease. Trễ lập lịch firmware có thể kéo dài nội suy quá thời lượng
+yêu cầu, nên chỉ thời gian trên host không chứng minh chuyển động hoàn tất.
+HAL gia hạn lease trong lúc kiểm tra tới đích (sai số tối đa 1 độ), dùng khoảng
+chờ ổn định 2 giây trước khi halt và báo lỗi thay vì báo thành công. Từng request
+protocol vẫn chịu command timeout đã cấu hình.
+
+Driver Stack-chan vẫn ở giai đoạn thử nghiệm. Trước khi qualification thiết bị:
+
+- Xác định và pin bản firmware tương thích có các motion capability bắt buộc;
+  driver HAL này không bổ sung các capability đó vào firmware stock.
+- Kiểm tra WSS có xác thực và xác minh certificate trên ESP32 thật.
+- Xác nhận chuyển động có giới hạn hoàn tất, vị trí đo được và giới hạn duration
+  trên cụm pan/tilt thật.
+- Thử halt, mất Wi-Fi, mất process HAL và hết hạn lease khi đang chuyển động,
+  xác minh hành vi giữ vị trí và phục hồi trên phần cứng.
+- Hiệu chỉnh tư thế gravity-rest và xác nhận thực tế rằng torque chỉ được nhả
+  sau khi đã đo được tư thế đó.
+
+Test host và loopback, cũng như test face, LED hoặc speaker riêng, không hoàn tất
+các bước qualification chuyển động này.
+
+Chọn driver bằng `driver: stackchan` trong capability `motion` của device
+profile. Đặt `STACKCHAN_DEVICE_ID`, một `STACKCHAN_BODY_TOKEN` riêng dài ít nhất
+32 ký tự, cùng `STACKCHAN_BODY_TLS_CERT` và `STACKCHAN_BODY_TLS_KEY`.
+`STACKCHAN_BODY_HOST` (mặc định `0.0.0.0`) và `STACKCHAN_BODY_PORT` (mặc định
+`8765`) cấu hình listener; `STACKCHAN_BODY_COMMAND_TIMEOUT` (mặc định `3.0` giây)
+và `STACKCHAN_BODY_LEASE_TTL_MS` (mặc định `1500`, chấp nhận `250..5000`) cấu
+hình thời gian phát hiện lỗi. TLS là bắt buộc, trừ khi
+`STACKCHAN_BODY_ALLOW_INSECURE_WS=1` bật WebSocket không mã hoá một cách tường
+minh cho mạng phát triển cô lập. Không dùng tuỳ chọn này trong production.
+
 ### Interface learned-policy (dry run)
 
 `POST /policy/run` hiện chỉ là interface cho learned controller như ACT hoặc

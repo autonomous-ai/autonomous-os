@@ -1000,3 +1000,16 @@ not mark the connection ready. The queue is in memory and does not survive an
 os-server process restart. OpenClaw retains its native idempotency-key/history
 correlation; the Codex CLI output guard and session quarantine are not part of
 this transport.
+
+### Stack-chan host HAL (experimental)
+
+A computer can run the real Stack-chan HAL driver with `HAL_BOARD=host`,
+`DEVICE_TYPE=stackchan`, `DEVICES_DIR=<repo>/robots/_experimental` and
+`HAL_SIMULATE=0`. The explicit `host` board has no device-tree matcher and skips
+local GPIO button, privacy button, touch and MPR121 initialization. It does not
+replace the motion driver with a mock. The device profile still gates routes.
+The experimental profile declares motion and system only; it is excluded from
+normal device discovery and is not a full compatibility/OTA release.
+See [host startup and firmware configuration](../robots/_experimental/stackchan/docs/runtime.md).
+The existing OS HAL client connects to `http://127.0.0.1:5001`, so run HAL and
+os-server on the same host. The ESP32 connects to HAL's separate WSS listener.
