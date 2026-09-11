@@ -3,7 +3,56 @@ package http
 import (
 	"strings"
 	"testing"
+
+	"go.autonomous.ai/os/system/server/config"
 )
+
+const songPlanningLeak = `They named a song: "Eternal Flame" — likely the Bangles song. Play it.Speaker is unknown — no person to attribute. `
+const songPlanningReply = `Playing Eternal Flame by The Bangles. Playing Eternal Flame — one of the all-time greats! Now that's what I call a favorite.`
+
+func TestSongPlanningLeakEnglish(t *testing.T) {
+	for _, lang := range []string{"", "en", "en-US"} {
+		t.Run(lang, func(t *testing.T) {
+			if got := newCoTLeakFilter(lang).filterText(songPlanningLeak + songPlanningReply); got != songPlanningReply {
+				t.Fatalf("got %q, want %q", got, songPlanningReply)
+			}
+		})
+	}
+}
+
+func TestSongPlanningFirstSentenceStream(t *testing.T) {
+	h := &AgentHandler{
+		config:           &config.Config{STTLanguage: "en"},
+		assistantBuf:     make(map[string]*strings.Builder),
+		streamedCleanLen: make(map[string]int),
+	}
+	// Feed the real leak across sentence boundaries, including missing whitespace.
+	for _, delta := range []string{`They named a song: "Eternal Flame" — likely the Bangles song. `, `Play it.Speaker is unknown — no person to attribute. `} {
+		h.accumulateAssistantDelta("song", delta)
+		if got := h.tryFirstSentenceFlush("song"); got != "" {
+			t.Fatalf("planning reached streaming TTS: %q", got)
+		}
+		if _, marked := h.streamedCleanLen["song"]; marked {
+			t.Fatal("planning must not mark the run as spoken")
+		}
+	}
+	h.accumulateAssistantDelta("song", "Playing Eternal Flame by The Bangles. Enjoy")
+	if got := h.tryFirstSentenceFlush("song"); got != "Playing Eternal Flame by The Bangles." {
+		t.Fatalf("clean confirmation did not stream: %q", got)
+	}
+}
+
+func TestSongPlanningDoesNotDropOrdinaryDiscussion(t *testing.T) {
+	for _, text := range []string{
+		`They named the song after their hometown.`,
+		`The Bluetooth speaker is unknown to this app.`,
+		`You asked for Eternal Flame. Playing it now.`,
+	} {
+		if got := newCoTLeakFilter("en").filterText(text); got != text {
+			t.Errorf("ordinary reply changed: %q -> %q", text, got)
+		}
+	}
+}
 
 // The real DeepSeek leak captured on device 2026-07-06 (emotion.detected turn,
 // openclaw + deepseek): full English planning monologue ahead of the reply.
