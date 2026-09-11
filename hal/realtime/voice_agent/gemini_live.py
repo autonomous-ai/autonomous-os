@@ -130,6 +130,7 @@ class GeminiLiveAgent(VoiceAgentBase):
         # replaced before another turn rather than locally clearing the call.
         self._pending_tool_calls: set[str] = set()
         self._requires_fresh_session: bool = False
+        self._user_transcript: str = ""
         self._gated_audio_frames: int = 0
         self._reconnect_delay_s: float = config.reconnect_delay_s
         self._last_reconnect_at: float = 0.0
@@ -678,6 +679,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                 _in_tx = getattr(content, "input_transcription", None)
                 if _in_tx is not None and _in_tx.text:
                     logger.info("[realtime] <<< user said: %r", _in_tx.text)
+                    self._user_transcript += _in_tx.text
 
                 if content.output_transcription and content.output_transcription.text:
                     if not valid_transcription_chunk_cnt:
@@ -739,6 +741,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                 if content.turn_complete:
                     logger.debug("[realtime] Turn complete")
                     self._first_audio_received = False
+                    self._user_transcript = ""
                     self._turn_done.set()
                     self._recv_queue.put(TurnDoneEvent(execution_completed=not execution_interrupted))
                     return
@@ -767,6 +770,8 @@ class GeminiLiveAgent(VoiceAgentBase):
                 self._pending_tool_calls.update(
                     fc.id or "" for fc in message.tool_call.function_calls
                 )
+                user_transcript = getattr(self, "_user_transcript", "").strip()
+                self._user_transcript = ""
                 for fc in message.tool_call.function_calls:
                     logger.debug("[realtime] Function call: %s (call_id=%s)", fc.name, fc.id)
                     self._recv_queue.put(
@@ -776,6 +781,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                                 name=fc.name or "",
                                 arguments=json.dumps(fc.args) if fc.args else "{}",
                                 call_id=fc.id or "",
+                                user_transcript=user_transcript,
                             ),
                         )
                     )

@@ -1155,7 +1155,7 @@ live. Đây là đánh đổi sản phẩm, không phải lỗi:
 | transcript STT | không có `[TURN CONTEXT]`, không có bộ lọc dựa trên transcript |
 | wake word | được xác nhận từ text STT, nên `HAL_WAKEWORD_ENABLED` không có tác dụng ở chế độ live — vào phiên chỉ bằng VAD |
 | speaker ID, cảm xúc giọng nói | một phiên không tạo ra cả hai |
-| fallback về main agent | `delegate_to_main` vẫn tới, nhưng không có transcript để chuyển tiếp và không có chỗ đặt câu trả lời giữa phiên |
+| STT cục bộ khi delegate | `delegate_to_main` kết thúc phiên và chuyển tiếp `[voice-instruction]` + transcript đầu vào của chính Gemini làm `[transcript]` (`FunctionCallOutput.user_transcript` → `DelegateSignal.transcript`, `_live_out_pump` đọc); câu trả lời của main agent phát sau khi cúp máy. Provider không có input transcription chỉ chuyển tiếp instruction |
 
 Cũng không chạy bên trong một phiên: cổng RMS vào, `SPEECH_HOLDOFF_S`, đồng hồ im
 lặng, `MAX_SESSION_DURATION_S`, socket STT mỗi lượt và keepalive của nó (thậm chí
