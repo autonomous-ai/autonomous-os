@@ -11,6 +11,24 @@ Code lives in `hal/realtime/`; it is driven by
 
 > **Source of truth:** this doc reflects the code. If they disagree, the code wins.
 
+## Execution completion telemetry
+
+For [voice KPI-3](voice-metrics.md#kpi-3-execution-completion-not-correctness),
+`TurnDoneEvent.execution_completed` defaults to `false` and becomes true only
+for a provider terminal signal: Gemini normal `generation_complete` or
+`turn_complete` without interruption, or OpenAI/Qwen `response.done` with
+`response.status == "completed"`. Connection close, send failure, synthetic
+unblock, partial output followed by timeout, stale/replayed done, and an
+abandoned receive are not completion evidence.
+
+The base receive loop passes the observation to the orchestrator, which
+snapshots it before recycling the session, then to
+`RealtimeTurnResult.execution_completed`. HAL emits `realtime_turn_done` only
+when the turn is handled and this flag is true. A memory-sync backend run
+cannot establish completion for that realtime turn. This measures execution
+ending, not answer correctness or full audio playback, and changes no routing
+or playback behavior.
+
 ## Concept: handle vs. delegate
 
 Every spoken turn is streamed to the realtime model *at the same time* as the

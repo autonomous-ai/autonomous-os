@@ -39,6 +39,7 @@ import (
 	"go.autonomous.ai/os/system/skillcontext/posture"
 	"go.autonomous.ai/os/system/skillcontext/wellbeing"
 	"go.autonomous.ai/os/system/statusled"
+	"go.autonomous.ai/os/system/telemetry"
 	"go.autonomous.ai/os/system/vision"
 )
 
@@ -273,6 +274,11 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 				Summary: "[local] " + req.Message + " → " + result.TTSText,
 			})
 			flow.End("sensing_input", turnStart, map[string]any{"path": "local"}, localRunID)
+			if result.ExecutionFailed {
+				telemetry.ReportTaskExecution(localRunID, req.InteractionID, "failed", "local_intent_error")
+			} else {
+				telemetry.ReportTaskExecution(localRunID, req.InteractionID, "completed", "local_intent_returned")
+			}
 			c.JSON(http.StatusOK, serializers.ResponseSuccess(map[string]string{
 				"handler":  "local",
 				"response": result.TTSText,

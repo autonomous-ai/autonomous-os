@@ -146,3 +146,13 @@ go test ./system/telemetry/ ./system/server/telemetry/... ./system/lib/analytics
 make hal-lint
 cd hal && .venv/bin/python -m pytest test/test_telemetry_flag.py -q
 ```
+
+Voice task completion also emits `voice_metrics_task_execution` from OS
+lifecycle/local-intent boundaries and HAL realtime return. Join it to the
+versioned HAL interaction cohort before scoring: arbitrary backend runs are
+not voice tasks. “Completed” means execution finished, not semantic correctness
+or finished audio playback. See the [KPI-3 agent query/report runbook](voice-metrics.md#agent-runbook-query-and-report-kpi-3).
+
+For `voice_metrics_*`, INFO `[telemetry] delivered` confirms successful AA HTTP
+delivery, not warehouse query visibility. Use a warehouse read query/export to
+verify the latter; the ingestion key alone does not grant read access.

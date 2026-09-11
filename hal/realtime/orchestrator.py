@@ -1043,13 +1043,15 @@ class RealtimeOrchestrator:
 
         The generator returns (StopIteration) when the model's turn is done.
         """
+        self.execution_completed = False
         if self._agent is None:
             return
+        execution_agent = self._agent
 
         self._looked_this_turn = False  # reset the per-turn `look` image-send guard
         produced = False  # did this turn yield any real output (vs stay silent)?
         replay_pending = False  # look-replay signalled — the turn continues
-        for output in self._agent.receive(stop_on_done=True):
+        for output in execution_agent.receive(stop_on_done=True):
             if (
                 isinstance(output, FunctionCallOutput)
                 and output.name == LOOK_TOOL_NAME
@@ -1196,6 +1198,12 @@ class RealtimeOrchestrator:
                 break
             produced = True
             yield output
+
+        # Capture the consumed terminal before any post-turn recycle swaps agents.
+        self.execution_completed = (
+            getattr(execution_agent, "execution_completed", False) is True
+            and not replay_pending
+        )
 
         # Look-replay pending: the logical turn CONTINUES (the caller is about
         # to re-commit this turn's audio on the SAME session). Don't stamp,

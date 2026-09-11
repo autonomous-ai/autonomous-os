@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -202,7 +203,12 @@ func (r *reporter) send(ctx context.Context, ev Event) {
 			"event_name", ev.Name, "event_id", ev.ID, "error", err, "failed_total", n)
 		return
 	}
-	slog.Debug(logPrefix+" delivered", "component", "telemetry",
+	level := slog.LevelDebug
+	if strings.HasPrefix(ev.Name, "voice_metrics_") {
+		// Voice KPI verification needs an observable AA acceptance receipt.
+		level = slog.LevelInfo
+	}
+	slog.Log(ctx, level, logPrefix+" delivered", "component", "telemetry",
 		"event_name", ev.Name, "event_id", ev.ID)
 }
 

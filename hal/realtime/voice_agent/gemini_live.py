@@ -516,6 +516,7 @@ class GeminiLiveAgent(VoiceAgentBase):
         logger.info("[realtime] Gemini turn %d receive loop start", self._turn_gen)
         valid_transcription_chunk_cnt = 0
 
+        execution_interrupted = False
         async for message in self._session.receive():
             # Liveness for the silent-turn watchdog: most of what arrives here
             # never reaches _recv_queue (thought parts, grounding metadata,
@@ -692,6 +693,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                     )
 
                 if content.interrupted:
+                    execution_interrupted = True
                     logger.info(content)
                     try:
                         _mt = content.model_turn
@@ -758,7 +760,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                     logger.debug("[realtime] Turn complete")
                     self._first_audio_received = False
                     self._turn_done.set()
-                    self._recv_queue.put(TurnDoneEvent())
+                    self._recv_queue.put(TurnDoneEvent(execution_completed=not execution_interrupted))
                     return
 
                 if getattr(content, "generation_complete", False):
@@ -774,7 +776,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                     logger.debug("[realtime] Generation complete")
                     self._first_audio_received = False
                     self._turn_done.set()
-                    self._recv_queue.put(TurnDoneEvent())
+                    self._recv_queue.put(TurnDoneEvent(execution_completed=not execution_interrupted))
                     return
 
             elif message.tool_call and message.tool_call.function_calls:

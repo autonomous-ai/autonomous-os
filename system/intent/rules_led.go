@@ -65,10 +65,10 @@ var ledRules = []rule{
 		},
 		exec: func(t string) *Result {
 			rgb, name, _ := extractColor(t)
-			post("/led/effect/stop", "")
+			executionFailed := post("/led/effect/stop", "") != nil
 			body := fmt.Sprintf(`{"color":[%d,%d,%d]}`, rgb[0], rgb[1], rgb[2])
-			post("/led/solid", body)
-			return &Result{TTSText: name + " light on!", LEDChanged: true, Actions: []string{"POST /led/effect/stop", "POST /led/solid " + body}}
+			executionFailed = post("/led/solid", body) != nil || executionFailed
+			return &Result{ExecutionFailed: executionFailed, TTSText: name + " light on!", LEDChanged: true, Actions: []string{"POST /led/effect/stop", "POST /led/solid " + body}}
 		},
 	},
 
@@ -78,9 +78,9 @@ var ledRules = []rule{
 		capability: device.CapLight,
 		match:      anyOf("turn on the light", "light on"),
 		exec: func(string) *Result {
-			post("/led/solid", `{"color":[255,220,180]}`)
-			postEmotion(`{"emotion":"happy","intensity":0.6}`)
-			return &Result{TTSText: "Light on!", LEDChanged: true, Actions: []string{`POST /led/solid {"color":[255,220,180]}`, `POST /emotion {"emotion":"happy","intensity":0.6}`}}
+			executionFailed := post("/led/solid", `{"color":[255,220,180]}`) != nil
+			executionFailed = postEmotion(`{"emotion":"happy","intensity":0.6}`) != nil || executionFailed
+			return &Result{ExecutionFailed: executionFailed, TTSText: "Light on!", LEDChanged: true, Actions: []string{`POST /led/solid {"color":[255,220,180]}`, `POST /emotion {"emotion":"happy","intensity":0.6}`}}
 		},
 	},
 	{
@@ -92,8 +92,8 @@ var ledRules = []rule{
 			// strip with its own color, undoing the off the user just asked for
 			// (the off user-state then makes LED restore "keep emotion color",
 			// so it never goes back to black). Turn off → stay off.
-			post("/led/off", "")
-			return &Result{TTSText: "Light off!", LEDOff: true, Actions: []string{"POST /led/off"}}
+			executionFailed := post("/led/off", "") != nil
+			return &Result{ExecutionFailed: executionFailed, TTSText: "Light off!", LEDOff: true, Actions: []string{"POST /led/off"}}
 		},
 	},
 
@@ -103,8 +103,8 @@ var ledRules = []rule{
 		capability: device.CapLight,
 		match:      anyOf("dim the light", "dimmer", "dim light"),
 		exec: func(string) *Result {
-			post("/led/solid", `{"color":[80,60,40]}`)
-			return &Result{TTSText: "Dimmed.", LEDChanged: true, Actions: []string{`POST /led/solid {"color":[80,60,40]}`}}
+			executionFailed := post("/led/solid", `{"color":[80,60,40]}`) != nil
+			return &Result{ExecutionFailed: executionFailed, TTSText: "Dimmed.", LEDChanged: true, Actions: []string{`POST /led/solid {"color":[80,60,40]}`}}
 		},
 	},
 }
