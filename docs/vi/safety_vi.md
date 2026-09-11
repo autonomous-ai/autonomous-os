@@ -250,6 +250,13 @@ nghĩa thân máy đã đến đích; `motion.halt` xóa lease, nên host acquir
 chuyển động tiếp theo. Việc khớp source không chứng minh qualification phần
 cứng hoặc xác định firmware thực tế đã flash trên thiết bị.
 
+Mọi chuyển động Stack-chan xác nhận vị trí đo được đã tới đích trước khi nhả
+controller lease. Trễ lập lịch firmware có thể kéo dài nội suy quá thời lượng
+yêu cầu, nên chỉ thời gian trên host không chứng minh chuyển động hoàn tất.
+HAL gia hạn lease trong lúc kiểm tra tới đích (sai số tối đa 1 độ), dùng khoảng
+chờ ổn định 2 giây trước khi halt và báo lỗi thay vì báo thành công. Từng request
+protocol vẫn chịu command timeout đã cấu hình.
+
 Driver Stack-chan vẫn ở giai đoạn thử nghiệm. Trước khi qualification thiết bị:
 
 - Xác định và pin bản firmware tương thích có các motion capability bắt buộc;

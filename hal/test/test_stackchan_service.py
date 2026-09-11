@@ -337,11 +337,46 @@ class TestBodyTransport(unittest.TestCase):
 
         operations = [message["op"] for message in gateway.connection_value.messages]
         self.assertEqual(operations, [
-            "lease.acquire", "motion.move", "lease.renew", "lease.release",
+            "lease.acquire", "motion.move", "lease.renew", "motion.get", "lease.release",
         ])
         move = gateway.connection_value.messages[1]
         self.assertEqual(move["args"]["duration_ms"], 160)
         self.assertEqual(move["seq"], 1)
+
+    def test_move_fails_when_measured_target_is_not_reached(self):
+        gateway = _FakeGateway()
+        gateway.connection_value.apply_moves = False
+        transport = _BodyTransport(gateway, timeout=1.0, lease_ttl_ms=1000)
+        transport._target_settle_timeout = 0.01
+        with self.assertRaisesRegex(StackChanTransportError, "measured target"):
+            transport.move({"yawServo": {"angle": 100, "speed": 1000}}, 0.05)
+        operations = [m["op"] for m in gateway.connection_value.messages]
+        self.assertIn("motion.get", operations)
+        self.assertIn("motion.halt", operations)
+        self.assertNotIn("lease.release", operations)
+        self.assertEqual(gateway.closed, ["motion failed"])
+
+    def test_move_renews_lease_until_delayed_firmware_reaches_target(self):
+        gateway = _FakeGateway()
+        gateway.connection_value.apply_moves = False
+        original = gateway.connection_value.request
+        reads = []
+
+        def request(message, timeout):
+            if message["op"] == "motion.get":
+                reads.append(message)
+                if len(reads) == 2:
+                    gateway.connection_value.positions["pan"] = 10.0
+            return original(message, timeout)
+
+        transport = _BodyTransport(gateway, timeout=1.0, lease_ttl_ms=1000)
+        with patch.object(gateway.connection_value, "request", side_effect=request):
+            transport.move({"yawServo": {"angle": 100, "speed": 1000}}, 0.05)
+        self.assertEqual([m["op"] for m in gateway.connection_value.messages], [
+            "lease.acquire", "motion.move", "motion.get", "lease.renew",
+            "motion.get", "lease.release",
+        ])
+        self.assertEqual(gateway.closed, [])
 
     def test_halt_interrupts_move_without_waiting_for_duration(self):
         gateway = _FakeGateway()
@@ -409,13 +444,13 @@ class TestBodyTransport(unittest.TestCase):
         gateway = _FakeGateway()
         gateway.connection_value.apply_moves = False
         transport = _BodyTransport(gateway, timeout=1.0, lease_ttl_ms=1000)
-        transport._rest_settle_timeout = 0.01
+        transport._target_settle_timeout = 0.01
         rest = {
             "yawServo": {"angle": 0, "speed": 1000},
             "pitchServo": {"angle": 300, "speed": 1000},
         }
 
-        with self.assertRaisesRegex(StackChanTransportError, "measured release pose"):
+        with self.assertRaisesRegex(StackChanTransportError, "measured target"):
             transport.release(rest, duration=0.05)
 
         operations = [message["op"] for message in gateway.connection_value.messages]

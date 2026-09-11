@@ -263,6 +263,13 @@ it installs a timed move, not when the body arrives; `motion.halt` clears the
 lease, so the host reacquires it before the next move. Source agreement does
 not establish physical qualification or identify the firmware flashed on a body.
 
+All Stack-chan moves confirm measured arrival before releasing the controller
+lease. Firmware scheduling delays can extend interpolation past the requested
+duration, so elapsed host time alone is not completion. HAL renews the lease
+while checking arrival (within 1 degree), using a 2-second settling window
+before halting and returning an error instead of reporting success. Individual
+protocol requests remain subject to the configured command timeout.
+
 The Stack-chan driver remains experimental. Before device qualification:
 
 - Identify and pin a matching firmware build with the required motion

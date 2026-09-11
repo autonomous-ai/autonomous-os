@@ -62,8 +62,8 @@ _MIN_MOVE_DURATION_S = 0.05
 _MAX_MOVE_DURATION_S = 60.0
 _FIRMWARE_SETTLE_GRACE_S = 0.05
 _RELEASE_DURATION_S = 2.0
-_RELEASE_SETTLE_TIMEOUT_S = 2.0
-_RELEASE_POSITION_TOLERANCE_DEG = 1.0
+_TARGET_SETTLE_TIMEOUT_S = 2.0
+_POSITION_TOLERANCE_DEG = 1.0
 _GRAVITY_REST = {"base_yaw.pos": 0.0, "base_pitch.pos": -15.0}
 _REQUIRED_CAPABILITIES = {
     "motion.pan_tilt",
@@ -314,7 +314,7 @@ class _BodyTransport:
         self._operation_lock = threading.Lock()
         self._active_lock = threading.Lock()
         self._active_cancel: Optional[threading.Event] = None
-        self._rest_settle_timeout = _RELEASE_SETTLE_TIMEOUT_S
+        self._target_settle_timeout = _TARGET_SETTLE_TIMEOUT_S
 
     def _request(
         self,
@@ -378,11 +378,11 @@ class _BodyTransport:
         cancel: threading.Event,
     ) -> None:
         expected = self._expected_positions(native)
-        deadline = time.monotonic() + self._rest_settle_timeout
+        deadline = time.monotonic() + self._target_settle_timeout
         while not cancel.is_set():
             measured = self._read_positions()
             if all(
-                abs(measured[joint] - target) <= _RELEASE_POSITION_TOLERANCE_DEG
+                abs(measured[joint] - target) <= _POSITION_TOLERANCE_DEG
                 for joint, target in expected.items()
             ):
                 return
@@ -391,7 +391,7 @@ class _BodyTransport:
                 # Keep torque enabled and end motion before reporting failure.
                 self._request("motion.halt")
                 raise StackChanTransportError(
-                    "Stack-chan did not reach its measured release pose"
+                    "Stack-chan did not reach its measured target"
                 )
             self._request("lease.renew", {"ttl_ms": self._ttl}, sequenced=False)
             cancel.wait(min(0.05, remaining))
@@ -403,11 +403,11 @@ class _BodyTransport:
         cancel: threading.Event,
         terminal_op: str,
         terminal_sequenced: bool,
-        verify_measured_target: bool = False,
+        halt_before_measurement: bool = False,
     ) -> bool:
         self._acquire()
         if self._safety_policy is not None:
-            if verify_measured_target:
+            if halt_before_measurement:
                 # A release may supersede interpolation still running on the
                 # firmware. Pin it before measuring the start of the rest move.
                 self._request("motion.halt")
@@ -441,7 +441,9 @@ class _BodyTransport:
             if time.monotonic() < deadline:
                 self._request("lease.renew", {"ttl_ms": self._ttl}, sequenced=False)
 
-        if verify_measured_target and not cancel.is_set():
+        # Firmware schedules fixed steps; scheduler stalls extend the actual
+        # trajectory. Elapsed host time is not evidence of physical arrival.
+        if not cancel.is_set():
             self._wait_for_measured_target(native, cancel)
         if cancel.is_set():
             return False
@@ -529,7 +531,7 @@ class _BodyTransport:
                 cancel,
                 "motion.release",
                 terminal_sequenced=True,
-                verify_measured_target=True,
+                halt_before_measurement=True,
             )
         except StackChanTransportError:
             self._gateway.close_connection("release failed")
