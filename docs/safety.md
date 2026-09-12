@@ -233,7 +233,9 @@ pose, confirms that pose from measured joint feedback, and only then disables
 torque. If the pose is not reached, it halt-holds with torque enabled. Its
 handshake requires `motion.timed_move`, measured position, halt-and-hold and
 torque-release capabilities. If HAL, its process or Wi-Fi disappears, the ESP32
-firmware expires the lease (or handles disconnect) and holds the measured pose;
+firmware expires the lease and halt-holds the measured pose; on a WebSocket
+close the installed firmware instead releases torque and restarts, which is
+why HAL keeps the transport open on a commissioning miss;
 firmware that only exposes an uncalibrated spring-speed parameter is rejected as
 incompatible because it cannot honor the declared degree-per-second ceiling.
 This path is covered by host protocol tests; physical fault-injection over a
@@ -285,7 +287,7 @@ faulted; mechanical support and direct supervision are required for this
 experimental path.
 
 Invalid feedback, reconnect, yaw drift over 1 degree, timeout and cancellation
-fail closed. Success requires measured pitch within 1 degree of target, at
+fail closed. Fail closed means the body halts and holds; HAL keeps the transport open and returns the measured settle samples in its 502 response, so a missed target leaves evidence instead of a reboot. Only a command timeout, where delivery is unknown, still closes the transport. Success requires measured pitch within 1 degree of target, at
 least 6 degrees, and at least 1 degree of positive change; HAL then sends
 `lease.release` to re-energize both axes for the both-axes-held terminal state
 and rechecks measured position. This does not verify calibration, replace the legacy ±15-degree

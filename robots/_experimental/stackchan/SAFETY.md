@@ -40,7 +40,7 @@ The commissioning command contains pitch only, so omitted yaw is torque-off
 during the pitch move. A stop or transport loss while below 5
 degrees may therefore fail to hold and leave torque off or the session faulted;
 use mechanical support and direct supervision. Invalid feedback, reconnect,
-yaw drift over 1 degree, timeout and cancellation fail closed. Success requires
+yaw drift over 1 degree, timeout and cancellation fail closed. Fail closed means the body halts and holds; HAL keeps the transport open and returns the measured settle samples in its 502 response, so a missed target leaves evidence instead of a reboot. Only a command timeout, where delivery is unknown, still closes the transport. Success requires
 measured pitch within 1 degree of target, at least 6 degrees, and at least 1
 degree of positive change. HAL then uses `lease.release` to re-energize both
 axes, establish a both-axes-held terminal state, and recheck measured position.

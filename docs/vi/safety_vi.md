@@ -221,8 +221,10 @@ thời gian, rồi kết thúc lease bằng cách giữ tại vị trí đo đư
 xác nhận tư thế đó từ phản hồi vị trí đo được trước khi tắt torque. Nếu không tới
 được tư thế nghỉ, driver halt-hold và giữ torque bật. Handshake bắt buộc
 firmware khai `motion.timed_move`, đọc vị trí thật, halt-and-hold và torque
-release. Nếu HAL, process hoặc Wi-Fi biến mất, firmware ESP32 hết hạn lease (hoặc
-xử lý disconnect) rồi giữ tại vị trí đo được; firmware chỉ có tham số spring
+release. Nếu HAL, process hoặc Wi-Fi biến mất, firmware ESP32 hết hạn lease rồi
+dừng và giữ tại vị trí đo được; còn khi WebSocket bị đóng, firmware đang cài sẽ
+nhả torque và khởi động lại, vì vậy HAL giữ kết nối mở khi commissioning không
+đạt target; firmware chỉ có tham số spring
 speed chưa hiệu chuẩn sẽ bị từ chối vì không thể giữ đúng trần độ/giây đã khai.
 Đường này đã có test protocol phía host; fault injection trên Wi-Fi và phần cứng
 thật vẫn là bước qualification trên thiết bị.
@@ -271,7 +273,7 @@ lúc pitch chuyển động. Stop hoặc mất transport khi dưới 5 độ có
 trợ cơ khí và giám sát trực tiếp.
 
 Feedback không hợp lệ, reconnect, yaw lệch quá 1 độ, timeout và cancellation
-đều fail-closed. Chỉ thành công khi pitch đo được nằm trong sai số 1 độ so với
+đều fail-closed. Fail-closed nghĩa là thân robot dừng và giữ vị trí; HAL vẫn giữ kết nối mở và trả về các mẫu đo trong phản hồi 502, nên khi không đạt target vẫn còn bằng chứng thay vì khởi động lại. Chỉ khi lệnh timeout, tức là không rõ đã giao tới firmware hay chưa, HAL mới đóng kết nối. Chỉ thành công khi pitch đo được nằm trong sai số 1 độ so với
 target, ít nhất 6 độ và đã tăng dương ít nhất 1 độ; sau đó HAL gửi
 `lease.release` để cấp torque lại cho cả hai trục, thiết lập trạng thái cuối giữ
 cả hai trục và đọc lại vị trí đo được. Flow này không xác minh calibration, không thay thế mapping midpoint

@@ -104,6 +104,17 @@ class StackChanOffline(StackChanTransportError):
     """No authenticated Stack-chan firmware is connected."""
 
 
+class StackChanCommissioningFailed(StackChanTransportError):
+    """Home commissioning halted and held without reaching its target.
+
+    The body stays connected; ``details`` carries the measured evidence.
+    """
+
+    def __init__(self, reason: str, details: dict[str, Any]):
+        super().__init__(reason)
+        self.details = {"reason": reason, **details}
+
+
 def _json_object(raw: str | bytes) -> dict[str, Any]:
     try:
         value = json.loads(raw)
@@ -412,8 +423,6 @@ class _BodyTransport:
         finally:
             self._active_lock.release()
 
-        lease_attempted = False
-
         def check_cancel():
             if cancel.is_set():
                 raise StackChanMotionCancelled("Home commissioning was halted before completion")
@@ -435,11 +444,12 @@ class _BodyTransport:
             if not math.isfinite(duration) or not 2 <= duration <= _MAX_MOVE_DURATION_S:
                 raise ValueError("Safe home commissioning duration must be between 2 and 60 seconds")
             check_cancel()
-            lease_attempted = True
             request("lease.acquire", {"ttl_ms": self._ttl}, sequenced=False)
             request("motion.move_home", {"duration_ms": round(duration * 1000),
                                         "motion": {"pitchServo": {"angle": round(target * 10)}}})
-            deadline = time.monotonic() + duration + _FIRMWARE_SETTLE_GRACE_S
+            move_started = time.monotonic()
+            samples: list[dict[str, float]] = []
+            deadline = move_started + duration + _FIRMWARE_SETTLE_GRACE_S
             renew_s = max(0.1, self._ttl / 2000.0)
             while True:
                 check_cancel()
@@ -454,18 +464,32 @@ class _BodyTransport:
             deadline = time.monotonic() + self._target_settle_timeout
             while True:
                 check_cancel()
-                measured = self._read_home_positions(peer)
                 try:
+                    measured = self._read_home_positions(peer)
+                    sample = {"elapsed_s": round(time.monotonic() - move_started, 3),
+                              "pan": measured["pan"], "tilt": measured["tilt"]}
+                    samples.append(sample)
+                    logger.info("[stackchan] commissioning sample elapsed=%.3f pan=%s tilt=%s target=%s",
+                                sample["elapsed_s"], sample["pan"], sample["tilt"], target)
                     arrived = self._home_arrived(measured, initial, target)
                 except StackChanTransportError:
+                    # Invalid feedback, a replaced peer, or yaw drift: halt the
+                    # scheduled move ourselves rather than waiting for lease expiry.
                     request("motion.halt")
                     raise
                 if arrived:
                     break
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
+                    # Halt-and-hold is the fail-closed action. The body stays
+                    # connected so the measured evidence survives the failure.
                     request("motion.halt")
-                    raise StackChanTransportError("Home commissioning did not reach a measured holdable target")
+                    reason = "Home commissioning did not reach a measured holdable target"
+                    logger.warning("[stackchan] commissioning failed: %s (final pan=%s tilt=%s, %d samples)",
+                                   reason, measured["pan"], measured["tilt"], len(samples))
+                    raise StackChanCommissioningFailed(reason, {
+                        "initial": initial, "target": {"tilt": target}, "final": measured,
+                        "samples": samples, "terminal_command": "motion.halt"})
                 request("lease.renew", {"ttl_ms": self._ttl}, sequenced=False)
                 cancel.wait(min(0.05, remaining))
 
@@ -483,9 +507,12 @@ class _BodyTransport:
             # The concurrent halt owns the terminal command after this operation
             # relinquishes its lock. Never report this move as successful.
             raise
-        except Exception:
-            if lease_attempted:
-                peer.force_close("home commissioning failed")
+        except Exception as exc:
+            # Do not close the transport here. Firmware halts and holds on its
+            # own when the lease lapses, and closing only forces a reboot that
+            # destroys the evidence of what happened. Command timeouts still
+            # close inside request(), where delivery is genuinely unknown.
+            logger.warning("[stackchan] commissioning ended without success: %s", exc)
             raise
         finally:
             self._finish_operation(cancel)

@@ -109,7 +109,7 @@ below 5 degrees, because stop or transport loss can fail to hold and leave
 torque off or the session faulted.
 
 HAL fails closed on invalid feedback, a reconnect, yaw drift over 1 degree, a
-timeout, or cancellation. Success requires measured pitch within 1 degree of
+timeout, or cancellation. Fail closed means the body halts and holds; HAL keeps the transport open and returns the measured settle samples in its 502 response, so a missed target leaves evidence instead of a reboot. Only a command timeout, where delivery is unknown, still closes the transport. Success requires measured pitch within 1 degree of
 the target, at least 6 degrees, and at least 1 degree of positive movement.
 Only then does `lease.release` re-energize both axes, establish the terminal
 both-axes-held state, and let HAL recheck the measured position. This flow does not verify calibration,

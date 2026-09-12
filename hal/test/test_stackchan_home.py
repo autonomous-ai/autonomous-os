@@ -16,7 +16,7 @@ from websockets.sync.client import connect
 
 import hal.app_state as state
 from hal.drivers.motors.stackchan_service import (
-    HOME_CAPABILITY, HOME_FRAME, StackChanMotionService, StackChanMotionCancelled,
+    HOME_CAPABILITY, HOME_FRAME, StackChanCommissioningFailed, StackChanMotionService, StackChanMotionCancelled,
     StackChanOffline, StackChanTransportError, _BodyTransport,
 )
 from hal.routes.servo import router
@@ -234,7 +234,73 @@ class TestHomeCommissioning(unittest.TestCase):
         operations = [m["op"] for m in peer.commands]
         self.assertIn("motion.halt", operations)
         self.assertNotIn("lease.release", operations)
-        self.assertEqual(peer.close_reasons, ["home commissioning failed"])
+        self.assertEqual(peer.close_reasons, [])
+        self.assertFalse(peer.closed)
+
+    def test_settle_miss_halts_holds_and_reports_samples_without_closing(self):
+        svc, peer = service(enabled=True)
+        peer.arrival = {"pan": 0.6, "tilt": 6.9}
+        with self.assertRaises(StackChanCommissioningFailed) as caught:
+            svc.move_home({"tilt": 8}, 2)
+        details = caught.exception.details
+        self.assertEqual(details["initial"], {"pan": 0.6, "tilt": 2.5})
+        self.assertEqual(details["target"], {"tilt": 8.0})
+        self.assertIn("did not reach", details["reason"])
+        self.assertEqual(details["terminal_command"], "motion.halt")
+        self.assertGreaterEqual(len(details["samples"]), 1)
+        for sample in details["samples"]:
+            self.assertEqual(set(sample), {"elapsed_s", "pan", "tilt"})
+            self.assertEqual(sample["tilt"], 6.9)
+        self.assertEqual(details["final"], {"pan": 0.6, "tilt": 6.9})
+        operations = [m["op"] for m in peer.commands]
+        self.assertIn("motion.halt", operations)
+        self.assertNotIn("lease.release", operations)
+        self.assertFalse(peer.closed)
+        self.assertEqual(peer.close_reasons, [])
+        self.assertFalse(peer.lease_active)
+
+    def test_settle_samples_are_logged(self):
+        svc, peer = service(enabled=True)
+        peer.arrival = {"pan": 0.6, "tilt": 6.9}
+        with self.assertLogs("hal.motion.stackchan", level="INFO") as logs:
+            with self.assertRaises(StackChanCommissioningFailed):
+                svc.move_home({"tilt": 8}, 2)
+        self.assertTrue(any("commissioning sample" in line and "tilt=6.9" in line for line in logs.output))
+        self.assertTrue(any("commissioning failed" in line and "did not reach" in line for line in logs.output))
+
+    def test_http_settle_miss_returns_502_with_samples(self):
+        svc, peer = service(enabled=True)
+        peer.arrival = {"pan": 0.6, "tilt": 6.9}
+        app = FastAPI()
+        app.include_router(router)
+        client = TestClient(app)
+        request = {"coordinate_frame": HOME_FRAME, "positions": {"tilt": 8}, "duration": 2}
+        with patch.object(state, "animation_service", svc), patch.object(state, "_sleeping", False):
+            response = client.post("/servo/home/move", json=request)
+        self.assertEqual(response.status_code, 502)
+        detail = response.json()["detail"]
+        self.assertIn("did not reach", detail["reason"])
+        self.assertEqual(detail["final"], {"pan": 0.6, "tilt": 6.9})
+        self.assertGreaterEqual(len(detail["samples"]), 1)
+        self.assertFalse(peer.closed)
+
+    def test_invalid_feedback_during_settle_halts_and_keeps_transport(self):
+        svc, peer = service(enabled=True)
+        peer.arrival = {"pan": 0.6, "tilt": 6.9}
+
+        def corrupt_after_move():
+            if peer.motion_started.is_set():
+                peer.result_override = {"coordinate_frame": "legacy", "positions": {"pan": 0.6, "tilt": 6.9}}
+
+        peer.after_read = corrupt_after_move
+        with self.assertRaisesRegex(StackChanTransportError, "invalid saved-home coordinate frame"):
+            svc.move_home({"tilt": 8}, 2)
+        operations = [m["op"] for m in peer.commands]
+        self.assertIn("motion.halt", operations)
+        self.assertNotIn("lease.release", operations)
+        self.assertFalse(peer.lease_active)
+        self.assertFalse(peer.closed)
+        self.assertEqual(peer.close_reasons, [])
 
     def test_yaw_drift_stops_before_terminal_success(self):
         svc, peer = service(enabled=True)
@@ -243,6 +309,8 @@ class TestHomeCommissioning(unittest.TestCase):
             svc.move_home({"tilt": 8})
         self.assertIn("motion.halt", [m["op"] for m in peer.commands])
         self.assertNotIn("lease.release", [m["op"] for m in peer.commands])
+        self.assertEqual(peer.close_reasons, [])
+        self.assertFalse(peer.closed)
 
     def test_post_hold_change_is_not_reported_as_arrival(self):
         svc, peer = service(enabled=True)
@@ -250,7 +318,7 @@ class TestHomeCommissioning(unittest.TestCase):
         with self.assertRaisesRegex(StackChanTransportError, "changed after terminal hold"):
             svc.move_home({"tilt": 8})
         self.assertIn("lease.release", [m["op"] for m in peer.commands])
-        self.assertEqual(peer.close_reasons, ["home commissioning failed"])
+        self.assertEqual(peer.close_reasons, [])
 
     def test_peer_replacement_never_receives_lease_or_move(self):
         svc, original = service(enabled=True)
@@ -265,7 +333,7 @@ class TestHomeCommissioning(unittest.TestCase):
             svc.move_home({"tilt": 8})
         self.assertEqual(replacement.commands, [])
         self.assertEqual(replacement.close_reasons, [])
-        self.assertEqual(original.close_reasons, ["home commissioning failed"])
+        self.assertEqual(original.close_reasons, [])
 
     def test_halt_cancels_without_false_success_or_a_second_terminal_command(self):
         svc, peer = service(enabled=True)

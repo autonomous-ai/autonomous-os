@@ -17,6 +17,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, File, Form, UploadFile
 
 import hal.app_state as state
+from hal.drivers.motors.stackchan_service import StackChanCommissioningFailed
 from hal.safety.policy import min_move_duration
 from hal.models import (
     ServoAimRequest,
@@ -376,6 +377,8 @@ def _home_call(method: str, *args):
         raise HTTPException(403, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+    except StackChanCommissioningFailed as exc:
+        raise HTTPException(502, exc.details) from exc
     except RuntimeError as exc:
         raise HTTPException(502, str(exc)) from exc
 
