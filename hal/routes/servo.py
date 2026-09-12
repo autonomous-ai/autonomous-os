@@ -17,7 +17,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, File, Form, UploadFile
 
 import hal.app_state as state
-from hal.drivers.motors.stackchan_service import StackChanCommissioningFailed
+from hal.drivers.motors.stackchan_service import StackChanCommandRejected, StackChanCommissioningFailed
 from hal.safety.policy import min_move_duration
 from hal.models import (
     ServoAimRequest,
@@ -316,6 +316,11 @@ def release_servos():
         except Exception as e:
             state.logger.warning(f"tracker stop before release failed: {e}")
     errors = svc.release()
+    if errors and errors.get("code"):
+        # The firmware answered the release with an error: at least one axis's
+        # torque state is unknown. Say so instead of reporting ok.
+        state.logger.warning(f"Servo release rejected by firmware: {errors}")
+        raise HTTPException(502, {"op": errors.get("op"), "code": errors["code"], "message": errors.get("stackchan", "")})
     if errors:
         state.logger.warning(f"Servo release errors (offline?): {errors}")
     return {"status": "ok"}
@@ -350,7 +355,12 @@ def stop_servos():
             state.tracker_service.stop()
         except Exception as e:
             state.logger.warning(f"tracker stop during halt failed: {e}")
-    svc.halt()
+    try:
+        svc.halt()
+    except StackChanCommandRejected as exc:
+        # The firmware refused the halt and has already released torque and
+        # faulted its session; the body is stopped and still online.
+        raise HTTPException(502, {"op": exc.op, "code": exc.code, "message": str(exc)}) from exc
     return {"status": "ok"}
 
 

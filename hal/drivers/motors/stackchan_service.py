@@ -108,6 +108,23 @@ class StackChanOffline(StackChanTransportError):
     """No authenticated Stack-chan firmware is connected."""
 
 
+class StackChanCommandRejected(StackChanTransportError):
+    """The firmware answered a command with an error code.
+
+    The firmware has already handled the physical state (held, released, or
+    faulted); HAL reports the code and keeps the transport open.
+    """
+
+    def __init__(self, op: str, code: str):
+        super().__init__(f"Stack-chan rejected {op}: {code}")
+        self.op = op
+        self.code = code
+
+
+class StackChanTargetNotReached(StackChanTransportError):
+    """A timed move settled short of its measured target; HAL halted and the body is held."""
+
+
 class StackChanCommissioningFailed(StackChanTransportError):
     """Home commissioning halted and held without reaching its target.
 
@@ -192,9 +209,15 @@ class _DeviceConnection:
                     pending.condition.wait(remaining)
                 result = pending.terminal
             if result.get("status") == "error":
-                raise StackChanTransportError(
-                    f"Stack-chan rejected command: {result.get('code', 'device_error')}"
-                )
+                code = str(result.get("code", "device_error"))
+                if code == "device_disconnected":
+                    # Synthesized by close(): the socket dropped while waiting.
+                    # No firmware reply exists; delivery is unknown.
+                    raise StackChanOffline("Stack-chan went offline while waiting; delivery is unknown")
+                # The firmware answered, so it has already applied its own
+                # fail-closed handling. Record the code; the caller decides.
+                logger.warning("[stackchan] firmware rejected %s: %s", message.get("op"), code)
+                raise StackChanCommandRejected(str(message.get("op")), code)
             return result
         except StackChanTransportError:
             raise
@@ -620,8 +643,10 @@ class _BodyTransport:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 # Keep torque enabled and end motion before reporting failure.
+                # The halt succeeded, so the body is held; the caller must not
+                # close the transport, which would only reboot a held body.
                 self._request("motion.halt", connection=connection)
-                raise StackChanTransportError(
+                raise StackChanTargetNotReached(
                     "Stack-chan did not reach its measured target"
                 )
             self._request("lease.renew", {"ttl_ms": self._ttl}, sequenced=False, connection=connection)
@@ -720,6 +745,11 @@ class _BodyTransport:
                 terminal_sequenced=False,
                 connection=connection,
             )
+        except (StackChanCommandRejected, StackChanTargetNotReached):
+            # Firmware refused the command (and has held, released, or faulted,
+            # or its lease lapses within one TTL), or HAL already halted a short
+            # move. Either way the body is stopped; closing would only reboot it.
+            raise
         except StackChanTransportError:
             connection.force_close("motion failed")
             raise
@@ -744,6 +774,10 @@ class _BodyTransport:
                 # before the old cancellation marker is cleared.
                 self._acquire(connection)
                 self._request("motion.halt", connection=connection)
+            except StackChanCommandRejected:
+                # halt_failed means the firmware already released torque and
+                # faulted the session; the body is stopped and still online.
+                raise
             except StackChanTransportError:
                 connection.force_close("halt failed")
                 raise
@@ -778,6 +812,10 @@ class _BodyTransport:
                 halt_before_measurement=True,
                 connection=connection,
             )
+        except (StackChanCommandRejected, StackChanTargetNotReached):
+            # release_failed: firmware attempted both torque-offs and faulted.
+            # A short rest move was halted by HAL and is held.
+            raise
         except StackChanTransportError:
             connection.force_close("release failed")
             raise
@@ -1085,6 +1123,9 @@ class StackChanMotionService:
     def release(self) -> Dict[str, str]:
         try:
             self._transport.release(self._native(_GRAVITY_REST), _RELEASE_DURATION_S)
+        except StackChanCommandRejected as exc:
+            # The firmware could not acknowledge a torque-off; surface the code.
+            return {"stackchan": str(exc), "op": exc.op, "code": exc.code}
         except Exception as exc:
             return {"stackchan": str(exc)}
         with self._state_lock:
