@@ -17,6 +17,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, File, Form, UploadFile
 
 import hal.app_state as state
+from hal.drivers.motors.stackchan_service import StackChanCommandRejected, StackChanCommissioningFailed
 from hal.safety.policy import min_move_duration
 from hal.models import (
     ServoAimRequest,
@@ -24,6 +25,7 @@ from hal.models import (
     ServoAimResponse,
     ServoNudgeRequest,
     ServoMoveRequest,
+    ServoHomeMoveRequest,
     ServoMoveResponse,
     ServoPlayResponse,
     ServoPositionResponse,
@@ -314,6 +316,11 @@ def release_servos():
         except Exception as e:
             state.logger.warning(f"tracker stop before release failed: {e}")
     errors = svc.release()
+    if errors and errors.get("code"):
+        # The firmware answered the release with an error: at least one axis's
+        # torque state is unknown. Say so instead of reporting ok.
+        state.logger.warning(f"Servo release rejected by firmware: {errors}")
+        raise HTTPException(502, {"op": errors.get("op"), "code": errors["code"], "message": errors.get("stackchan", "")})
     if errors:
         state.logger.warning(f"Servo release errors (offline?): {errors}")
     return {"status": "ok"}
@@ -348,7 +355,12 @@ def stop_servos():
             state.tracker_service.stop()
         except Exception as e:
             state.logger.warning(f"tracker stop during halt failed: {e}")
-    svc.halt()
+    try:
+        svc.halt()
+    except StackChanCommandRejected as exc:
+        # The firmware refused the halt and has already released torque and
+        # faulted its session; the body is stopped and still online.
+        raise HTTPException(502, {"op": exc.op, "code": exc.code, "message": str(exc)}) from exc
     return {"status": "ok"}
 
 
@@ -361,6 +373,48 @@ def get_servo_position():
         return {"positions": positions}
     except Exception as e:
         raise HTTPException(500, f"Failed to read position: {e}")
+
+
+def _home_call(method: str, *args):
+    operation = getattr(_svc_connected(), method, None)
+    if not callable(operation):
+        raise HTTPException(501, "Saved-home commissioning is not supported by this motion driver")
+    try:
+        return operation(*args)
+    except NotImplementedError as exc:
+        raise HTTPException(501, str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(403, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except StackChanCommissioningFailed as exc:
+        raise HTTPException(502, exc.details) from exc
+    except RuntimeError as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+
+@router.get("/servo/home")
+def get_servo_home_state():
+    """Optional commissioning capability; no servo request or lease."""
+    # Capability discovery is useful while disconnected, unlike a position read.
+    operation = getattr(_svc(), "home_state", None)
+    if not callable(operation):
+        raise HTTPException(501, "Saved-home commissioning is not supported by this motion driver")
+    return operation()
+
+
+@router.get("/servo/home/position")
+def get_servo_home_position():
+    """Measured positions in an explicit saved-home frame; no motion lease."""
+    return _home_call("get_home_positions")
+
+
+@router.post("/servo/home/move")
+def move_servo_home(req: ServoHomeMoveRequest):
+    """Opt-in pitch commissioning; never reinterpret a legacy coordinate."""
+    if _sleep_servo_locked():
+        raise HTTPException(409, "Home commissioning is blocked while sleeping")
+    return _home_call("move_home", req.positions, req.duration)
 
 
 @router.get("/servo/status", response_model=ServoStatusResponse)

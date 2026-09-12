@@ -90,6 +90,34 @@ gravity-rest targets yaw 0, pitch -15. These are not a physical calibration.
 Read [SAFETY.md](../SAFETY.md) before supervised motion qualification. Local
 startup and protocol tests do not establish full CTS or physical safety.
 
+### Optional home commissioning
+
+Home commissioning is a separate, supervised capability and is off by default
+(`STACKCHAN_HOME_COMMISSIONING_ENABLED=0`). `GET /servo/home` only reports
+whether the connected firmware advertises `motion.home_degrees.v1`; it does not
+take a lease or touch the bus. `GET /servo/home/position` reads measured
+positions in the explicit `calibrated_home_deg_v1` frame without a lease.
+
+When enabled, `POST /servo/home/move` accepts only a `tilt` target from 7 to 10
+degrees and a requested duration from 2 to 10 seconds. The speed policy may
+stretch that duration, up to the driver's 60-second transport limit. The
+firmware must advertise `motion.home_degrees.v1`. Before motion, HAL requires
+measured pan within ±30 degrees and measured tilt in [0, 5). The pitch-only
+command omits yaw; yaw torque is off during this pitch move. Keep mechanical
+support in place and supervise the body, especially
+below 5 degrees, because stop or transport loss can fail to hold and leave
+torque off or the session faulted.
+
+HAL fails closed on invalid feedback, a reconnect, yaw drift over 1 degree, a
+timeout, or cancellation. Fail closed means the body halts and holds; HAL keeps the transport open and returns the measured settle samples in its 502 response, so a missed target leaves evidence instead of a reboot. A command the firmware answers with an error code leaves the transport open, because the firmware has already held, released, or faulted, or its lease lapses within one TTL and it halts then; `/servo/stop` and `/servo/release` return 502 with the op and code, and a short timed move that HAL halted is likewise reported without closing. Only a command timeout, where delivery is unknown, still closes the transport. Success requires measured pitch within 1 degree of
+the target, at least 6 degrees, and at least 1 degree of positive movement. If the head stops short but holds still (last samples within 0.2 degrees, at least 1 degree of progress, short by more than the tolerance and by no more than 3 degrees), HAL repeats the same target once while keeping the lease, then applies the same arrival test; the response reports `recommands`. There is never a second repeat.
+Only then does `lease.release` re-energize both axes, establish the terminal
+both-axes-held state, and let HAL recheck the measured position. This flow does not verify calibration,
+replace the legacy ±15-degree midpoint mapping, or authorize later preset
+moves. A supervised hardware trial on 2026-09-11 produced visible motion,
+followed by a transport-failure reboot without final feedback or verified hold.
+Commissioning remains unqualified and disabled outside supervised diagnostics.
+
 ## Run the OS on the same host
 
 Keep HAL running in the first terminal. In another terminal, use the existing

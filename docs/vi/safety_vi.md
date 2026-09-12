@@ -221,8 +221,10 @@ thời gian, rồi kết thúc lease bằng cách giữ tại vị trí đo đư
 xác nhận tư thế đó từ phản hồi vị trí đo được trước khi tắt torque. Nếu không tới
 được tư thế nghỉ, driver halt-hold và giữ torque bật. Handshake bắt buộc
 firmware khai `motion.timed_move`, đọc vị trí thật, halt-and-hold và torque
-release. Nếu HAL, process hoặc Wi-Fi biến mất, firmware ESP32 hết hạn lease (hoặc
-xử lý disconnect) rồi giữ tại vị trí đo được; firmware chỉ có tham số spring
+release. Nếu HAL, process hoặc Wi-Fi biến mất, firmware ESP32 hết hạn lease rồi
+dừng và giữ tại vị trí đo được; còn khi WebSocket bị đóng, firmware đang cài sẽ
+nhả torque và khởi động lại, vì vậy HAL giữ kết nối mở khi commissioning không
+đạt target; firmware chỉ có tham số spring
 speed chưa hiệu chuẩn sẽ bị từ chối vì không thể giữ đúng trần độ/giây đã khai.
 Đường này đã có test protocol phía host; fault injection trên Wi-Fi và phần cứng
 thật vẫn là bước qualification trên thiết bị.
@@ -256,6 +258,28 @@ yêu cầu, nên chỉ thời gian trên host không chứng minh chuyển độ
 HAL gia hạn lease trong lúc kiểm tra tới đích (sai số tối đa 1 độ), dùng khoảng
 chờ ổn định 2 giây trước khi halt và báo lỗi thay vì báo thành công. Từng request
 protocol vẫn chịu command timeout đã cấu hình.
+
+Stack-chan cũng có flow commissioning home tùy chọn, mặc định bị tắt
+(`STACKCHAN_HOME_COMMISSIONING_ENABLED=0`). `GET /servo/home` chỉ discovery
+capability và không acquire bus lease. `GET /servo/home/position` trả vị trí
+đo được trong frame rõ ràng `calibrated_home_deg_v1`, cũng không acquire lease.
+`POST /servo/home/move` yêu cầu firmware có capability
+`motion.home_degrees.v1`, chỉ nhận target pitch từ 7 đến 10 độ và duration yêu
+cầu từ 2 đến 10 giây; safety policy có thể kéo dài duration tới giới hạn 60
+giây của transport. Trước khi gửi chuyển động, HAL yêu cầu pan đo được trong
+±30 độ và pitch trong [0, 5). Lệnh bỏ qua yaw nên torque yaw sẽ tắt trong
+lúc pitch chuyển động. Stop hoặc mất transport khi dưới 5 độ có thể không giữ
+được vị trí và khiến torque tắt hoặc session lỗi; flow thử nghiệm này cần hỗ
+trợ cơ khí và giám sát trực tiếp.
+
+Feedback không hợp lệ, reconnect, yaw lệch quá 1 độ, timeout và cancellation
+đều fail-closed. Fail-closed nghĩa là thân robot dừng và giữ vị trí; HAL vẫn giữ kết nối mở và trả về các mẫu đo trong phản hồi 502, nên khi không đạt target vẫn còn bằng chứng thay vì khởi động lại. Lệnh mà firmware trả lời bằng mã lỗi vẫn giữ kết nối mở, vì firmware đã tự giữ, nhả hoặc đánh dấu lỗi, hoặc lease sẽ hết hạn trong một TTL và firmware dừng khi đó; `/servo/stop` và `/servo/release` trả về 502 kèm op và mã lỗi, và một chuyển động ngắn mà HAL đã dừng cũng được báo mà không đóng kết nối. Chỉ khi lệnh timeout, tức là không rõ đã giao tới firmware hay chưa, HAL mới đóng kết nối. Chỉ thành công khi pitch đo được nằm trong sai số 1 độ so với
+target, ít nhất 6 độ và đã tăng dương ít nhất 1 độ; sau đó HAL gửi
+`lease.release` để cấp torque lại cho cả hai trục, thiết lập trạng thái cuối giữ
+cả hai trục và đọc lại vị trí đo được. Nếu đầu dừng thiếu nhưng đứng yên (các mẫu cuối trong 0,2 độ, đã tiến ít nhất 1 độ, đạt từ biên giữ 6 độ trở lên, thiếu nhiều hơn sai số nhưng không quá 3 độ), HAL lặp lại đúng target đó một lần trong khi vẫn giữ lease rồi áp dụng lại phép kiểm tra tới đích; phản hồi ghi `recommands`. Không bao giờ lặp lần thứ hai. Flow này không xác minh calibration, không thay thế mapping midpoint
+legacy ±15 độ và không cho phép preset move tiếp theo. Trong lần thử có giám sát ngày 2026-09-11, robot đã chuyển động rồi khởi
+động lại do lỗi transport; không có feedback cuối hoặc xác nhận giữ vị trí.
+Commissioning chưa được qualification và phải tắt ngoài các lần chẩn đoán có giám sát.
 
 Driver Stack-chan vẫn ở giai đoạn thử nghiệm. Trước khi qualification thiết bị:
 
