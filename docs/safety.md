@@ -290,7 +290,7 @@ Invalid feedback, reconnect, yaw drift over 1 degree, timeout and cancellation
 fail closed. Fail closed means the body halts and holds; HAL keeps the transport open and returns the measured settle samples in its 502 response, so a missed target leaves evidence instead of a reboot. Only a command timeout, where delivery is unknown, still closes the transport. Success requires measured pitch within 1 degree of target, at
 least 6 degrees, and at least 1 degree of positive change; HAL then sends
 `lease.release` to re-energize both axes for the both-axes-held terminal state
-and rechecks measured position. This does not verify calibration, replace the legacy ±15-degree
+and rechecks measured position. If the head stops short but holds still (last samples within 0.2 degrees, at least 1 degree of progress, at or above the 6 degree hold margin, short by more than the tolerance and by no more than 3 degrees), HAL repeats the same target once while keeping the lease, then applies the same arrival test; the response reports `recommands`. There is never a second repeat. This does not verify calibration, replace the legacy ±15-degree
 midpoint mapping, or authorize later preset moves. A supervised hardware trial on 2026-09-11 produced visible motion,
 followed by a transport-failure reboot without final feedback or verified hold.
 Commissioning remains unqualified and disabled outside supervised diagnostics.

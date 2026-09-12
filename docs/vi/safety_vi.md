@@ -276,7 +276,7 @@ Feedback không hợp lệ, reconnect, yaw lệch quá 1 độ, timeout và canc
 đều fail-closed. Fail-closed nghĩa là thân robot dừng và giữ vị trí; HAL vẫn giữ kết nối mở và trả về các mẫu đo trong phản hồi 502, nên khi không đạt target vẫn còn bằng chứng thay vì khởi động lại. Chỉ khi lệnh timeout, tức là không rõ đã giao tới firmware hay chưa, HAL mới đóng kết nối. Chỉ thành công khi pitch đo được nằm trong sai số 1 độ so với
 target, ít nhất 6 độ và đã tăng dương ít nhất 1 độ; sau đó HAL gửi
 `lease.release` để cấp torque lại cho cả hai trục, thiết lập trạng thái cuối giữ
-cả hai trục và đọc lại vị trí đo được. Flow này không xác minh calibration, không thay thế mapping midpoint
+cả hai trục và đọc lại vị trí đo được. Nếu đầu dừng thiếu nhưng đứng yên (các mẫu cuối trong 0,2 độ, đã tiến ít nhất 1 độ, đạt từ biên giữ 6 độ trở lên, thiếu nhiều hơn sai số nhưng không quá 3 độ), HAL lặp lại đúng target đó một lần trong khi vẫn giữ lease rồi áp dụng lại phép kiểm tra tới đích; phản hồi ghi `recommands`. Không bao giờ lặp lần thứ hai. Flow này không xác minh calibration, không thay thế mapping midpoint
 legacy ±15 độ và không cho phép preset move tiếp theo. Trong lần thử có giám sát ngày 2026-09-11, robot đã chuyển động rồi khởi
 động lại do lỗi transport; không có feedback cuối hoặc xác nhận giữ vị trí.
 Commissioning chưa được qualification và phải tắt ngoài các lần chẩn đoán có giám sát.

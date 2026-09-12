@@ -34,11 +34,14 @@ class HomePeer:
         self.close_reasons = []
         self.positions = {"pan": 0.6, "tilt": 2.5}
         self.arrival = {"pan": 0.6, "tilt": 7.8}
+        self.arrivals = None  # optional list consumed per motion.move_home
         self.post_hold_positions = None
         self.motion_started = threading.Event()
         self.result_override = None
         self.after_read = None
         self.lease_active = False
+        self.fail_move_number = None  # raise on the Nth motion.move_home
+        self.move_count = 0
 
     def request(self, message, timeout):
         del timeout
@@ -61,7 +64,13 @@ class HomePeer:
         elif op == "lease.renew":
             assert self.lease_active
         elif op == "motion.move_home":
+            self.move_count += 1
+            if self.fail_move_number == self.move_count:
+                self.lease_active = False
+                raise StackChanTransportError("Stack-chan rejected command: lease_expired")
             self.motion_started.set()
+            if self.arrivals:
+                self.arrival = self.arrivals.pop(0)
             self.positions = dict(self.arrival)
             result = {"state": "scheduled"}
         elif op in {"motion.halt", "lease.release"}:
@@ -249,7 +258,7 @@ class TestHomeCommissioning(unittest.TestCase):
         self.assertEqual(details["terminal_command"], "motion.halt")
         self.assertGreaterEqual(len(details["samples"]), 1)
         for sample in details["samples"]:
-            self.assertEqual(set(sample), {"elapsed_s", "pan", "tilt"})
+            self.assertEqual(set(sample), {"elapsed_s", "pan", "tilt", "move"})
             self.assertEqual(sample["tilt"], 6.9)
         self.assertEqual(details["final"], {"pan": 0.6, "tilt": 6.9})
         operations = [m["op"] for m in peer.commands]
@@ -302,6 +311,110 @@ class TestHomeCommissioning(unittest.TestCase):
         self.assertFalse(peer.closed)
         self.assertEqual(peer.close_reasons, [])
 
+    def test_one_recommand_closes_a_short_but_stable_target(self):
+        svc, peer = service(enabled=True)
+        svc._transport._target_settle_timeout = 0.2
+        peer.arrivals = [{"pan": 0.6, "tilt": 6.5}, {"pan": 0.6, "tilt": 7.9}]
+        value = svc.move_home({"tilt": 8}, 2)
+        self.assertTrue(value["target_reached"])
+        self.assertEqual(value["terminal_state"], "held")
+        self.assertEqual(value["positions"], {"pan": 0.6, "tilt": 7.9})
+        self.assertEqual(value["recommands"], 1)
+        operations = [m["op"] for m in peer.commands]
+        self.assertEqual(operations.count("motion.move_home"), 2)
+        self.assertEqual(operations.count("lease.release"), 1)
+        self.assertNotIn("motion.halt", operations)
+        moves = [m for m in peer.commands if m["op"] == "motion.move_home"]
+        self.assertEqual(moves[0]["args"], moves[1]["args"])
+        self.assertGreater(moves[1]["seq"], moves[0]["seq"])
+        first, second = [i for i, m in enumerate(peer.commands) if m["op"] == "motion.move_home"]
+        self.assertIn("lease.renew", [m["op"] for m in peer.commands[first + 1:second]])
+        self.assertFalse(peer.closed)
+
+    def test_persistent_short_target_fails_after_exactly_one_recommand(self):
+        svc, peer = service(enabled=True)
+        svc._transport._target_settle_timeout = 0.2
+        peer.arrivals = [{"pan": 0.6, "tilt": 6.5}, {"pan": 0.6, "tilt": 6.6}, {"pan": 0.6, "tilt": 8.0}]
+        with self.assertRaises(StackChanCommissioningFailed) as caught:
+            svc.move_home({"tilt": 8}, 2)
+        details = caught.exception.details
+        self.assertEqual(details["recommands"], 1)
+        tilts = {sample["tilt"] for sample in details["samples"]}
+        self.assertEqual(tilts, {6.5, 6.6})
+        self.assertEqual({sample["move"] for sample in details["samples"]}, {1, 2})
+        self.assertEqual(details["final"], {"pan": 0.6, "tilt": 6.6})
+        operations = [m["op"] for m in peer.commands]
+        self.assertEqual(operations.count("motion.move_home"), 2)
+        self.assertIn("motion.halt", operations)
+        self.assertNotIn("lease.release", operations)
+        self.assertFalse(peer.closed)
+
+    def test_no_recommand_when_the_head_did_not_move(self):
+        svc, peer = service(enabled=True)
+        peer.arrivals = [{"pan": 0.6, "tilt": 2.5}]
+        # Below the hold floor the halt itself is rejected; either way, no second move.
+        with self.assertRaises(StackChanTransportError):
+            svc.move_home({"tilt": 8}, 2)
+        self.assertEqual([m["op"] for m in peer.commands].count("motion.move_home"), 1)
+
+    def test_success_without_recommand_reports_zero(self):
+        svc, peer = service(enabled=True)
+        value = svc.move_home({"tilt": 8}, 2)
+        self.assertTrue(value["target_reached"])
+        self.assertEqual(value["recommands"], 0)
+
+    def test_no_recommand_while_the_head_is_still_moving(self):
+        svc, peer = service(enabled=True)
+        svc._transport._target_settle_timeout = 0.2
+        peer.arrivals = [{"pan": 0.6, "tilt": 6.0}]
+
+        def wobble():
+            # Still oscillating around 6.5: never stable, never within tolerance.
+            if peer.motion_started.is_set():
+                tilt = 6.8 if peer.positions["tilt"] <= 6.5 else 6.2
+                peer.positions = {"pan": 0.6, "tilt": tilt}
+
+        peer.after_read = wobble
+        with self.assertRaises(StackChanCommissioningFailed) as caught:
+            svc.move_home({"tilt": 8}, 2)
+        self.assertEqual(caught.exception.details["recommands"], 0)
+        self.assertEqual([m["op"] for m in peer.commands].count("motion.move_home"), 1)
+
+    def test_no_recommand_below_the_hold_margin_or_too_far_short(self):
+        for tilt in (5.5, 4.9):
+            with self.subTest(tilt=tilt):
+                svc, peer = service(enabled=True)
+                svc._transport._target_settle_timeout = 0.2
+                peer.arrivals = [{"pan": 0.6, "tilt": tilt}]
+                with self.assertRaises(StackChanTransportError) as caught:
+                    svc.move_home({"tilt": 8}, 2)
+                self.assertEqual([m["op"] for m in peer.commands].count("motion.move_home"), 1)
+                if isinstance(caught.exception, StackChanCommissioningFailed):
+                    self.assertEqual(caught.exception.details["recommands"], 0)
+
+    def test_no_recommand_after_overshoot(self):
+        svc, peer = service(enabled=True)
+        svc._transport._target_settle_timeout = 0.2
+        peer.arrivals = [{"pan": 0.6, "tilt": 9.6}]
+        with self.assertRaises(StackChanCommissioningFailed) as caught:
+            svc.move_home({"tilt": 8}, 2)
+        self.assertEqual(caught.exception.details["recommands"], 0)
+        self.assertEqual([m["op"] for m in peer.commands].count("motion.move_home"), 1)
+
+    def test_failed_recommand_still_returns_the_evidence(self):
+        svc, peer = service(enabled=True)
+        svc._transport._target_settle_timeout = 0.2
+        peer.arrivals = [{"pan": 0.6, "tilt": 6.5}]
+        peer.fail_move_number = 2
+        with self.assertRaises(StackChanCommissioningFailed) as caught:
+            svc.move_home({"tilt": 8}, 2)
+        details = caught.exception.details
+        self.assertEqual(details["recommands"], 1)
+        self.assertGreaterEqual(len(details["samples"]), 2)
+        self.assertTrue(all(sample["move"] == 1 for sample in details["samples"]))
+        self.assertIn("lease_expired", details["reason"])
+        self.assertFalse(peer.closed)
+
     def test_yaw_drift_stops_before_terminal_success(self):
         svc, peer = service(enabled=True)
         peer.arrival = {"pan": 2.0, "tilt": 7.8}
@@ -309,6 +422,7 @@ class TestHomeCommissioning(unittest.TestCase):
             svc.move_home({"tilt": 8})
         self.assertIn("motion.halt", [m["op"] for m in peer.commands])
         self.assertNotIn("lease.release", [m["op"] for m in peer.commands])
+        self.assertEqual([m["op"] for m in peer.commands].count("motion.move_home"), 1)
         self.assertEqual(peer.close_reasons, [])
         self.assertFalse(peer.closed)
 

@@ -71,6 +71,10 @@ _FIRMWARE_SETTLE_GRACE_S = 0.05
 _RELEASE_DURATION_S = 2.0
 _TARGET_SETTLE_TIMEOUT_S = 2.0
 _POSITION_TOLERANCE_DEG = 1.0
+_HOME_MIN_PROGRESS_DEG = 1.0       # measured progress required before any arrival or repeat decision
+_HOME_RECOMMAND_LIMIT = 1          # at most one repeat of the same target after a stable, short settle
+_HOME_RECOMMAND_MAX_SHORT_DEG = 3.0  # do not repeat if the head is further than this from target
+_HOME_STABLE_SPAN_DEG = 0.2        # last three samples within this span count as stable
 _GRAVITY_REST = {"base_yaw.pos": 0.0, "base_pitch.pos": -15.0}
 _REQUIRED_CAPABILITIES = {
     "motion.pan_tilt",
@@ -399,12 +403,26 @@ class _BodyTransport:
             self._operation_lock.release()
 
     @staticmethod
+    def _recommand_worthwhile(phase_samples: list[dict[str, float]], initial: dict[str, float], target: float) -> bool:
+        """Stable, moved in the right direction, and short by more than tolerance but not far."""
+        if len(phase_samples) < 2:
+            return False
+        recent = [sample["tilt"] for sample in phase_samples[-3:]]
+        if max(recent) - min(recent) > _HOME_STABLE_SPAN_DEG:
+            return False
+        tilt = recent[-1]
+        short_by = target - tilt
+        return (tilt - initial["tilt"] >= _HOME_MIN_PROGRESS_DEG
+                and tilt >= _HOME_HOLD_MARGIN_DEG
+                and _POSITION_TOLERANCE_DEG < short_by <= _HOME_RECOMMAND_MAX_SHORT_DEG)
+
+    @staticmethod
     def _home_arrived(measured: dict[str, float], initial: dict[str, float], target: float) -> bool:
         if abs(measured["pan"] - initial["pan"]) > _HOME_YAW_DRIFT_DEG:
             raise StackChanTransportError("Uncommanded yaw drift during home commissioning")
         return (abs(measured["tilt"] - target) <= _POSITION_TOLERANCE_DEG
                 and measured["tilt"] >= _HOME_HOLD_MARGIN_DEG
-                and measured["tilt"] - initial["tilt"] >= 1.0)
+                and measured["tilt"] - initial["tilt"] >= _HOME_MIN_PROGRESS_DEG)
 
     def commission_home(self, target: float, duration: float) -> dict[str, Any]:
         cancel = threading.Event()
@@ -445,53 +463,88 @@ class _BodyTransport:
                 raise ValueError("Safe home commissioning duration must be between 2 and 60 seconds")
             check_cancel()
             request("lease.acquire", {"ttl_ms": self._ttl}, sequenced=False)
-            request("motion.move_home", {"duration_ms": round(duration * 1000),
-                                        "motion": {"pitchServo": {"angle": round(target * 10)}}})
-            move_started = time.monotonic()
-            samples: list[dict[str, float]] = []
-            deadline = move_started + duration + _FIRMWARE_SETTLE_GRACE_S
+            move_args = {"duration_ms": round(duration * 1000),
+                         "motion": {"pitchServo": {"angle": round(target * 10)}}}
             renew_s = max(0.1, self._ttl / 2000.0)
+            samples: list[dict[str, float]] = []
+            recommands = 0
+            measured = dict(initial)
+            move_started = time.monotonic()
             while True:
-                check_cancel()
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    break
-                cancel.wait(min(renew_s, remaining))
-                check_cancel()
-                if time.monotonic() < deadline:
-                    request("lease.renew", {"ttl_ms": self._ttl}, sequenced=False)
+                if recommands:
+                    try:
+                        # Refresh the lease immediately before the repeat, then send it.
+                        # If either is refused (for example the lease lapsed and the
+                        # firmware already holds on its own), keep the evidence.
+                        request("lease.renew", {"ttl_ms": self._ttl}, sequenced=False)
+                        request("motion.move_home", move_args)
+                    except StackChanMotionCancelled:
+                        raise
+                    except StackChanTransportError as exc:
+                        reason = f"Home commissioning re-command was not accepted: {exc}"
+                        logger.warning("[stackchan] commissioning failed: %s (%d samples)", reason, len(samples))
+                        raise StackChanCommissioningFailed(reason, {
+                            "initial": initial, "target": {"tilt": target}, "final": measured,
+                            "samples": samples, "recommands": recommands,
+                            "terminal_command": "none; firmware holds on lease expiry"}) from exc
+                else:
+                    request("motion.move_home", move_args)
+                phase_started = time.monotonic()
+                deadline = phase_started + duration + _FIRMWARE_SETTLE_GRACE_S
+                while True:
+                    check_cancel()
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    cancel.wait(min(renew_s, remaining))
+                    check_cancel()
+                    if time.monotonic() < deadline:
+                        request("lease.renew", {"ttl_ms": self._ttl}, sequenced=False)
 
-            deadline = time.monotonic() + self._target_settle_timeout
-            while True:
-                check_cancel()
-                try:
-                    measured = self._read_home_positions(peer)
-                    sample = {"elapsed_s": round(time.monotonic() - move_started, 3),
-                              "pan": measured["pan"], "tilt": measured["tilt"]}
-                    samples.append(sample)
-                    logger.info("[stackchan] commissioning sample elapsed=%.3f pan=%s tilt=%s target=%s",
-                                sample["elapsed_s"], sample["pan"], sample["tilt"], target)
-                    arrived = self._home_arrived(measured, initial, target)
-                except StackChanTransportError:
-                    # Invalid feedback, a replaced peer, or yaw drift: halt the
-                    # scheduled move ourselves rather than waiting for lease expiry.
-                    request("motion.halt")
-                    raise
+                phase_samples: list[dict[str, float]] = []
+                deadline = time.monotonic() + self._target_settle_timeout
+                arrived = False
+                while True:
+                    check_cancel()
+                    try:
+                        measured = self._read_home_positions(peer)
+                        sample = {"elapsed_s": round(time.monotonic() - move_started, 3),
+                                  "pan": measured["pan"], "tilt": measured["tilt"], "move": recommands + 1}
+                        samples.append(sample)
+                        phase_samples.append(sample)
+                        logger.info("[stackchan] commissioning sample elapsed=%.3f pan=%s tilt=%s target=%s move=%d",
+                                    sample["elapsed_s"], sample["pan"], sample["tilt"], target, recommands + 1)
+                        arrived = self._home_arrived(measured, initial, target)
+                    except StackChanTransportError:
+                        # Invalid feedback, a replaced peer, or yaw drift: halt the
+                        # scheduled move ourselves rather than waiting for lease expiry.
+                        request("motion.halt")
+                        raise
+                    if arrived:
+                        break
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    request("lease.renew", {"ttl_ms": self._ttl}, sequenced=False)
+                    cancel.wait(min(0.05, remaining))
                 if arrived:
                     break
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    # Halt-and-hold is the fail-closed action. The body stays
-                    # connected so the measured evidence survives the failure.
-                    request("motion.halt")
-                    reason = "Home commissioning did not reach a measured holdable target"
-                    logger.warning("[stackchan] commissioning failed: %s (final pan=%s tilt=%s, %d samples)",
-                                   reason, measured["pan"], measured["tilt"], len(samples))
-                    raise StackChanCommissioningFailed(reason, {
-                        "initial": initial, "target": {"tilt": target}, "final": measured,
-                        "samples": samples, "terminal_command": "motion.halt"})
-                request("lease.renew", {"ttl_ms": self._ttl}, sequenced=False)
-                cancel.wait(min(0.05, remaining))
+                if recommands < _HOME_RECOMMAND_LIMIT and self._recommand_worthwhile(phase_samples, initial, target):
+                    # The servo stopped short but is holding still. Repeat the same
+                    # bounded target once so it rebuilds its error term from rest.
+                    recommands += 1
+                    logger.info("[stackchan] commissioning re-command %d: measured tilt=%s target=%s",
+                                recommands, measured["tilt"], target)
+                    continue
+                # Halt-and-hold is the fail-closed action. The body stays
+                # connected so the measured evidence survives the failure.
+                request("motion.halt")
+                reason = "Home commissioning did not reach a measured holdable target"
+                logger.warning("[stackchan] commissioning failed: %s (final pan=%s tilt=%s, %d samples, %d re-commands)",
+                               reason, measured["pan"], measured["tilt"], len(samples), recommands)
+                raise StackChanCommissioningFailed(reason, {
+                    "initial": initial, "target": {"tilt": target}, "final": measured,
+                    "samples": samples, "recommands": recommands, "terminal_command": "motion.halt"})
 
             # This performs a measured hold of BOTH axes; it is not torque-off.
             request("lease.release", sequenced=False)
@@ -502,7 +555,7 @@ class _BodyTransport:
                 raise StackChanTransportError("Home commissioning position changed after terminal hold")
             return {"initial_positions": initial, "positions": final,
                     "commanded_positions": {"tilt": target}, "duration": duration,
-                    "target_reached": True, "terminal_state": "held"}
+                    "target_reached": True, "terminal_state": "held", "recommands": recommands}
         except StackChanMotionCancelled:
             # The concurrent halt owns the terminal command after this operation
             # relinquishes its lock. Never report this move as successful.
