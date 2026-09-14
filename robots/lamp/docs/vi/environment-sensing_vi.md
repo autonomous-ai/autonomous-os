@@ -393,9 +393,29 @@ hiện có.
 `skills/environment/SKILL.md` yêu cầu capability và sở hữu diễn giải dữ liệu.
 Skill bị loại khi capability thiếu hoặc rỗng, kể cả khi skill cũ vẫn giữ cơ
 chế khả dụng dự phòng.
-Skill chỉ tham khảo mục environmental-care của `skills/wellbeing/SKILL.md`
-để chọn thời điểm và lời nhắc, tránh vòng lặp định tuyến. Hỏi về phòng không
-cần quan sát camera, danh tính, log hoạt động hay bộ đếm uống nước.
+Skill tham khảo mục environmental-care của `skills/wellbeing/SKILL.md`
+để chọn thời điểm và lời nhắc. Khi người dùng nói khó chịu, dùng
+`skills/wellbeing/reference/discomfort.md`; tái sử dụng hướng dẫn và dữ liệu
+đã đọc, không chuyển lượt qua lại giữa các skill. Hỏi về phòng và hỗ trợ khi
+khó chịu không cần camera, danh tính, log hoạt động hay bộ đếm uống nước.
+
+Khi người dùng nói mệt, nhức đầu, chóng mặt, bí bách hoặc khó tập trung,
+wellbeing phản hồi người dùng trước. Môi trường là phần tùy chọn: capability
+thiếu/chưa biết thì không gọi công cụ môi trường; đọc lỗi, toàn null hoặc stale
+thì bỏ qua gợi ý môi trường. Không nhắc lỗi sensor hay yêu cầu setup hardware
+khi người dùng đang chia sẻ khó chịu. Chỉ giải thích thiếu dữ liệu nếu họ hỏi
+rõ về số đo phòng. Khi có capability, đọc status tối đa một lần có timeout
+(hoặc dùng snapshot hiện tại đã cung cấp) để thêm nhận xét phù hợp và một gợi ý
+thoải mái/thông gió có điều kiện. Số đo không xác định nguyên nhân triệu chứng
+và không phủ nhận việc người dùng đang khó chịu.
+
+Reference discomfort có hướng dẫn ưu tiên triệu chứng/phơi nhiễm do người dùng
+báo trước việc kiểm tra sensor, kèm nguồn và tình huống minh họa. Đây là hướng
+dẫn phản hồi của skill, không phải engine y tế/báo động trong OS. Hướng dẫn
+CO₂ phân biệt tăng so với trước và vấn đề thông gió kéo dài; không thêm phân
+loại nồng độ tự động hay ngưỡng OS. Dữ liệu thật đến sau có thể dùng so sánh,
+nhưng không ngầm tạo lịch kiểm tra, log wellbeing mới hoặc quyền điều khiển
+thiết bị.
 
 - **Hỏi về phòng:** đọc status một lần, báo số đo hữu ích; thiếu dữ liệu hoặc
   dữ liệu cũ là chưa biết, không phải không ô nhiễm hay bằng chứng an toàn.

@@ -1,15 +1,15 @@
 ---
 name: environment
-description: Interpret environmental sensor readings and sustained changes for room comfort and air quality. Use for [environment:initial] greeting context, [environment:update] events, questions about room temperature, humidity, measured CO2 or air quality, and checking changes after ventilation or air cleaning. Requires the environment capability. Link to wellbeing for considerate proactive advice; do not diagnose health conditions or infer CO2 or oxygen from other measurements.
+description: Interpret environmental sensor readings and sustained changes for room comfort and air quality. Use for [environment:initial] greeting context, [environment:update] events, questions about room temperature, humidity, measured CO2 or air quality, checking changes after ventilation or air cleaning, and optional room context when a user reports discomfort. Requires the environment capability. Link to wellbeing for considerate proactive advice; do not diagnose health conditions or infer CO2 or oxygen from other measurements.
 ---
 
 # Environment
 
 ## Scope and data
 
-Work from the device's declared `environment` capability and the measurements actually present. Do not require a camera, microphone, emotion marker, or a particular sensor model. If the capability is absent, explain that this device has no available environment sensing; do not enable hardware or edit its declaration.
+Work from the device's declared `environment` capability and the measurements actually present. Do not require a camera, microphone, emotion marker, or a particular sensor model. If the capability is absent, skip environmental checks; explain unavailability only for an explicit room-data question. Do not enable hardware or edit its declaration.
 
-For a direct question or a requested current comparison, read the OS environment status API once:
+For a direct room question, a requested current comparison, or optional room context for a wellbeing concern when the capability is declared, read the OS environment status API once (reuse a supplied current status snapshot when available):
 
 ```bash
 curl --fail --silent --show-error --max-time 5 http://127.0.0.1:5000/api/environment/status
@@ -19,7 +19,7 @@ This read-only route admits local device callers and checks the environment capa
 
 Use the existing snapshot in an automatic event unless it is stale or the user explicitly requests a fresh check. Do not run a polling loop, start a cron job, invent a history endpoint, or promise a timed follow-up: OS owns polling, thresholds, sustained-change detection and cooldowns.
 
-A usable snapshot has `enabled: true`, `state: "ready"`, `stale: false`, and at least one fresh numeric measurement in `sample`. The shared status sample always contains nine nullable metric keys; an object of null values is not usable data. Check `age_s` and `sample.timestamp` before describing it as current. Disabled, starting, stopped, error, missing or stale data is unavailable, not zero pollution. Say so briefly on a direct question; stay silent on an unusable automatic event. Individual null or absent measurements are unknown: retain the other valid readings. For a multi-component snapshot, `sources[metric]` identifies its entry in `components`; check that component's state, age and stale flag, plus `metric_timestamps[metric]`. The aggregate timestamp may belong to another sensor and does not establish freshness for every field. One failed component does not invalidate another healthy component.
+A usable snapshot has `enabled: true`, `state: "ready"`, `stale: false`, and at least one fresh numeric measurement in `sample`. The shared status sample always contains nine nullable metric keys; an object of null values is not usable data. Check `age_s` and `sample.timestamp` before describing it as current. Disabled, starting, stopped, error, missing or stale data is unavailable, not zero pollution. Say so briefly on an explicit room-data question; stay silent on an unusable automatic event. For a wellbeing concern, silently skip unavailable environmental data and continue support without sensor-error commentary. Individual null or absent measurements are unknown: retain the other valid readings. For a multi-component snapshot, `sources[metric]` identifies its entry in `components`; check that component's state, age and stale flag, plus `metric_timestamps[metric]`. The aggregate timestamp may belong to another sensor and does not establish freshness for every field. One failed component does not invalidate another healthy component.
 
 | Sample field | Meaning |
 |---|---|
@@ -53,6 +53,38 @@ that have passed OS freshness and warm-up checks. It is either embedded in the
 startup greeting under `[environment:initial]`, or sent after the greeting as
 `[environment:update]`. It is a first observation, not a significant-change
 alert: empty `changes` is expected. Other metrics may still be warming up.
+
+## Discomfort and ventilation context
+
+When the user says they feel tired, headachy, dizzy, stuffy or unable to focus,
+consult `skills/wellbeing/reference/discomfort.md` for the response. Apply it
+here without handing the turn back through the wellbeing activity router.
+Do not inspect sensors before responding to an already apparent urgent symptom
+or reported exposure. Otherwise use at most one status read, only when the
+capability is declared. A failed read, all-null sample, stale data or absent
+metric means omit that environmental explanation, not invent a substitute.
+
+Separate three facts: how the user says they feel, what the sensor measured,
+and which action might improve comfort. An increase is not itself a high or
+harmful concentration. Two event endpoints or `sustained_s` do not establish a
+long-term concentration average. For context only, HSE workplace guidance
+flags CO₂ consistently above 1500 ppm in occupied rooms as a reason to improve
+ventilation. This is not a symptom-causation threshold, universal home safety
+boundary, or a new OS alarm rule; do not claim consistency from one sample.
+See [HSE: using CO₂ monitors](https://www.hse.gov.uk/ventilation/using-co2-monitors.htm)
+(reviewed 2026-09-14). State a lone value as a current observation, and use
+available context before suggesting action. Readings can be affected by
+placement, nearby breath and calibration; do not label the room safe from a
+low CO₂ value or diagnose poisoning from a high one.
+
+For rising measured CO₂ with a useful ventilation opportunity, suggest one
+practical option: an outside-facing opening when outdoor air/weather allow,
+a fresh-air ventilation setting, or moving to a more comfortable ventilated
+space. An interior door alone may not bring in outdoor air. Do not invent
+outdoor air quality from indoor PM or fetch unrelated services to manufacture
+certainty. If outdoor smoke/pollution or unsafe access makes opening a window
+unsuitable, choose another option. Recirculation/HEPA is not CO₂ removal.
+[HSE: improving ventilation](https://www.hse.gov.uk/ventilation/how-to-improve-ventilation.htm).
 
 ## Choose the response
 
@@ -89,7 +121,7 @@ When speaking proactively, offer one useful observation and at most one action i
 | Warm HAL; greeting includes initial temperature and CO₂ | Add at most one factual sentence using supplied fresh readings; no second notification. |
 | First update has `reason: "initial"`, `changes: {}`, temperature only | Briefly report temperature when appropriate; do not require a delta or wait for VOC/NOx. |
 | Delayed initial update; readings are stale or unavailable | Omit the environmental report (`NO_REPLY` for a separate update); do not fetch or promise a retry. |
-| “Why am I tired?” | Do not attribute fatigue to the sensor readings. If a room check is requested, describe only supported environmental facts. |
+| “I feel tired and have a headache.” | Use wellbeing’s discomfort reference. When the environment capability and fresh readings are available, optionally add one relevant observation; otherwise omit environment entirely. Never assign a cause from sensor data. |
 | CO₂ component stale; PM fresh | Report PM if useful; CO₂ is unavailable. Do not reuse the aggregate timestamp to call CO₂ current. |
 | CO₂ rises after a particle purifier starts | Explain that particle filtration does not address CO₂; consider ventilation conditionally, without assuming occupancy or health effects. |
 | VOC Index returns to 100 | Describe the relative change if relevant; never say pollution has cleared or air is safe. |
