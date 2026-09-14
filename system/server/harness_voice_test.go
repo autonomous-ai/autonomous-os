@@ -20,10 +20,13 @@ type voiceRouteTransport struct {
 }
 
 func (f *voiceRouteTransport) Status() harness.Status {
-	return harness.Status{Paired: true, Connected: true, MachineID: "computer"}
+	return harness.Status{Paired: true, Connected: true, MachineID: "computer", Capabilities: []string{"focus.get"}}
 }
 
 func (f *voiceRouteTransport) Request(_ context.Context, frame harness.Frame) (harness.Frame, error) {
+	if frame["type"] == "focus.get" {
+		return harness.Frame{"focus": map[string]any{"machineId": "computer", "agentId": "mike", "name": "Mike"}, "focusRevision": "test:1"}, nil
+	}
 	if frame["type"] == "turn.send" || frame["type"] == "question.answer" {
 		f.mutations <- frame
 		return harness.Frame{"receipt": map[string]any{"state": "queued"}}, nil
@@ -31,7 +34,7 @@ func (f *voiceRouteTransport) Request(_ context.Context, frame harness.Frame) (h
 	return harness.Frame{"machineId": "computer", "openQuestion": nil}, nil
 }
 
-func TestHarnessVoiceManagementAuthAndSelection(t *testing.T) {
+func TestHarnessVoiceManagementAuthAndFocus(t *testing.T) {
 	service, err := harness.NewService(t.TempDir(), harness.Callbacks{})
 	if err != nil {
 		t.Fatal(err)
@@ -64,24 +67,47 @@ func TestHarnessVoiceManagementAuthAndSelection(t *testing.T) {
 			t.Fatalf("unauthorized %s %s: %d", row.method, row.path, w.Code)
 		}
 	}
-	if w := call("PUT", "/api/harness/voice-mode", `{"enabled":false,"agentId":"mike"}`, "192.168.1.2:50", "owner"); w.Code != 200 {
-		t.Fatal(w.Body.String())
+	if err := s.harnessVoice.RefreshFocus(context.Background()); err != nil {
+		t.Fatal(err)
 	}
-	if state := s.harnessVoice.State(); state.Enabled || state.AgentID != "mike" {
-		t.Fatalf("selection while disabled: %+v", state)
+	if w := call("GET", "/api/harness/voice-mode", "", "127.0.0.1:50", ""); w.Code != 200 ||
+		!strings.Contains(w.Body.String(), `"enabled":false`) || !strings.Contains(w.Body.String(), `"agentId":"mike"`) ||
+		!strings.Contains(w.Body.String(), `"focusAvailable":true`) {
+		t.Fatalf("focus must sync while disabled: %d %s", w.Code, w.Body.String())
 	}
-	if w := call("PUT", "/api/harness/voice-mode", `{"enabled":true,"agentId":"mike"}`, "192.168.1.2:50", "owner"); w.Code != 200 || !s.harnessVoice.State().Enabled {
+	for _, body := range []string{`{"enabled":false,"agentId":"mike"}`, `{"enabled":true,"agentId":""}`} {
+		if w := call("PUT", "/api/harness/voice-mode", body, "192.168.1.2:50", "owner"); w.Code != 400 {
+			t.Fatalf("legacy selector must fail: %d %s", w.Code, w.Body.String())
+		}
+	}
+	if w := call("PUT", "/api/harness/voice-mode", `{"enabled":true}`, "192.168.1.2:50", "owner"); w.Code != 200 || !s.harnessVoice.State().Enabled {
 		t.Fatalf("enable: %s", w.Body.String())
 	}
-	if w := call("PUT", "/api/harness/voice-mode", `{"agentId":"mike"}`, "192.168.1.2:50", "owner"); w.Code != 400 {
+	if w := call("PUT", "/api/harness/voice-mode", `{}`, "192.168.1.2:50", "owner"); w.Code != 400 {
 		t.Fatalf("missing enabled must fail: %s", w.Body.String())
+	}
+	for _, body := range []string{
+		`{"questionRequestId":"question-1","answers":{"choice":"Yes"}}`,
+		`{"questionRequestId":"question-1","focusRevision":"","answers":{"choice":"Yes"}}`,
+	} {
+		if w := call("POST", "/api/harness/voice-mode/answer", body, "192.168.1.2:50", "owner"); w.Code != 400 {
+			t.Fatalf("missing focus revision must fail: %d %s", w.Code, w.Body.String())
+		}
+	}
+	select {
+	case frame := <-transport.mutations:
+		t.Fatalf("invalid management requests sent a mutation: %+v", frame)
+	default:
 	}
 }
 
 func TestHarnessVoiceSnapshotDispatchAndIsolation(t *testing.T) {
 	transport := &voiceRouteTransport{mutations: make(chan harness.Frame, 4)}
 	controller := harness.NewVoiceController(transport, harness.VoiceCallbacks{})
-	state, err := controller.SetMode(context.Background(), true, "mike")
+	if err := controller.RefreshFocus(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	state, err := controller.SetMode(context.Background(), true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,7 +154,7 @@ func TestHarnessVoiceSnapshotDispatchAndIsolation(t *testing.T) {
 	}
 	select {
 	case frame := <-transport.mutations:
-		if frame["text"] != "Fix reconnect" || frame["agentId"] != "mike" || frame["response"] != nil {
+		if frame["text"] != "Fix reconnect" || frame["agentId"] != "mike" || frame["focusRevision"] != "test:1" || frame["response"] != nil {
 			t.Fatalf("wire payload: %+v", frame)
 		}
 	case <-time.After(time.Second):

@@ -38,11 +38,16 @@ the OS power command.
 
 ### Harness-only voice
 
-The optional RAM mode sends HAL's finalized STT to a fixed paired Harness agent,
+The optional RAM mode sends HAL's finalized STT to the agent focused in the Harness app,
 before local intents or main-runtime readiness/busy checks. It defaults to off
 after OS-server restart. Existing Harness event/recap delivery supplies the spoken
 answer. Only direct loopback voice requests carrying `harness_voice` routing
 snapshots enter this path; typed/MQTT chat and ambient sensing are unaffected.
+The OS mirrors app focus while the mode is off too, via `focus.get`,
+`focus.changed` and a two-second refresh. Turning the mode on only changes the
+RAM flag; there is no web target selector. Missing focus, an older CLI without
+`focus.get`, or focus on another computer blocks voice dispatch. Each send carries
+the opaque `focusRevision`, checked atomically by CLI before accepting the turn.
 
 `GET /api/harness/voice-mode` allows admin or loopback reads. Admin-only management
 uses `PUT /api/harness/voice-mode`, `GET /api/harness/agents`,

@@ -52,14 +52,18 @@ The `delegate_to_main` tool is registered automatically by the orchestrator
 OS Monitor also offers **Harness-only voice**, a RAM mode that defaults to off
 after OS-server restart. When enabled, HAL snapshots `/api/harness/voice-mode`
 before capture and sends finalized, wake-word-stripped STT directly to the
-selected Harness agent through OS. That capture does not stream audio to the
+agent focused in the Harness app through OS. That capture does not stream audio to the
 realtime model or invoke the main runtime/`harness-use`; OS skips local intents
 and main-runtime readiness/busy gates. Existing wake-word authorization, VAD,
 noise and echo checks remain. Voice results still use Harness lifecycle/recap
 delivery and device TTS. Text chat and ambient sensing keep their normal routes.
 
 Each capture carries its mode generation. OS refuses a stale generation rather
-than delivering an utterance to a newly selected agent. An active realtime live
+than delivering an utterance to a newly focused agent. OS mirrors app focus even
+while off without changing ordinary voice generations. When enabled, a focus
+change advances the generation; dispatch refreshes focus and includes an opaque
+`focusRevision` for the CLI to check before reservation. There is no web agent
+selector or automatic fallback when focus is unavailable. An active realtime live
 session checks the mode every 500 ms and closes when it changes; an interrupted
 utterance is not replayed. Mode lookup has a 500 ms timeout and fails closed if
 the endpoint is unavailable or malformed, so OS and HAL must be deployed together.

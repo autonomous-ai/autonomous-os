@@ -477,12 +477,13 @@ one column below 760px.
   Harness uses its original E2EE pairing/session protocol and retains separate keys from Buddy.
 
 **Harness-only voice**
-- A paired computer exposes `HarnessVoiceMode.tsx` inside `HarnessCard.tsx`. Use **Refresh agents**, select the exact **Voice agent**, then enable **Harness-only voice**. Selection is separate from the `harness-use` skill's conversation target.
-- Spoken requests go directly to that Harness agent and replies retain device TTS. Typed chat keeps its normal behavior. The mode and target live in RAM; a device-service restart turns the mode off and clears the target.
-- Local mode status refreshes every 2 seconds. Agent discovery is explicit through `GET /api/harness/agents`; selection and switching use `PUT /api/harness/voice-mode`. Offline state disables discovery/enabling and explains delivery is unavailable; turning an enabled mode off remains possible. Turning it off does not cancel work already sent.
-- An unresolved delivery blocks target changes and new Harness voice mutations. **Check delivery** reads the existing receipt without resending. **Continue without retrying** asks for confirmation, then sends `resolution:"do_not_retry"` and the exact current `idempotencyKey` to `/api/harness/voice-mode/resolve`; the previous task may still run.
-- `HarnessQuestion.tsx` refreshes live questions every 10 seconds while available, plus **Refresh agent question**. The form supports radio options, multiple selections and custom text. **Send answer** submits all exact question keys with the live request ID. Spoken answers can instead fill questions sequentially.
-- All changes, agent discovery and question/receipt endpoints require administrator authentication. See [Harness integration](harness.md#harness-only-voice-mode) for the API, capture-switch behavior and coordinated OS/HAL rollout requirement.
+
+- A paired computer exposes `HarnessVoiceMode.tsx` inside `HarnessCard.tsx`. **Focused Harness agent** mirrors the agent pane focused in the Harness app, including while voice mode is off. There is no local agent picker; normal `harness-use` conversation targets remain independent.
+- Enable **Harness-only voice** to send spoken requests directly to that focused agent; replies retain device TTS. Text chat keeps its normal behavior. State lives in RAM; restart turns the mode off and focus syncs again after reconnect. Focus changes during capture reject the old capture and require repeating the request. Already-sent work keeps its original response route.
+- Mode/focus refresh every 2 seconds through `GET /api/harness/voice-mode`. The switch sends only `{enabled}` by `PUT` and works offline or without focus, but a failed mode lookup disables it until refresh succeeds. Offline, missing focus and unsupported CLI capability states explain why voice delivery is unavailable.
+- Unresolved delivery pauses new Harness voice mutations while focus display keeps syncing. **Check delivery** reads the existing receipt without resending. **Continue without retrying** asks for confirmation, then sends `resolution:"do_not_retry"` and the exact pending `idempotencyKey` to `/api/harness/voice-mode/resolve`; the previous task may still run.
+- `HarnessQuestion.tsx` refreshes live questions every 10 seconds while focus is available, plus **Refresh agent question**. The form supports radio options, multiple selections and custom text. **Send answer** submits all exact question keys with the live request ID and focus revision, rejecting stale focus. Spoken answers can instead fill questions sequentially.
+- Changes and question/receipt endpoints require administrator authentication. See [Harness integration](harness.md#harness-only-voice-mode) for the API and compatible OS/HAL/CLI rollout requirements.
 
 The Pairing section is available to non-debug users.
 

@@ -27,6 +27,7 @@ func (s *Server) initializeHarnessVoice(ctx context.Context) {
 			OnDispatch: func(agentID, runID string) { s.registerHarnessReply(agentID, runID, false) },
 			OnResponse: s.deliverHarnessVoiceMessage,
 		})
+		s.harnessVoice.Start(ctx)
 	}
 }
 
@@ -37,13 +38,17 @@ func (s *Server) registerHarnessVoiceRoutes(group *gin.RouterGroup) {
 	})
 	group.PUT("voice-mode", adminAuthMiddleware(s.config), func(c *gin.Context) {
 		var req struct {
-			Enabled *bool  `json:"enabled" binding:"required"`
-			AgentID string `json:"agentId"`
+			Enabled *bool   `json:"enabled" binding:"required"`
+			AgentID *string `json:"agentId"`
 		}
 		if err := bindHarnessVoiceJSON(c, &req); err != nil {
 			return
 		}
-		state, err := s.harnessVoice.SetMode(c.Request.Context(), *req.Enabled, req.AgentID)
+		if req.AgentID != nil {
+			c.JSON(http.StatusBadRequest, serializers.ResponseError("Choose the focused agent in the Harness app, not the device web UI"))
+			return
+		}
+		state, err := s.harnessVoice.SetMode(c.Request.Context(), *req.Enabled)
 		writeHarnessVoiceResult(c, state, err)
 	})
 	group.GET("agents", adminAuthMiddleware(s.config), func(c *gin.Context) {
@@ -72,6 +77,7 @@ func (s *Server) registerHarnessVoiceRoutes(group *gin.RouterGroup) {
 	group.POST("voice-mode/answer", adminAuthMiddleware(s.config), func(c *gin.Context) {
 		var req struct {
 			QuestionRequestID string            `json:"questionRequestId" binding:"required"`
+			FocusRevision     string            `json:"focusRevision" binding:"required"`
 			Answers           map[string]string `json:"answers" binding:"required"`
 		}
 		if err := bindHarnessVoiceJSON(c, &req); err != nil {
@@ -80,7 +86,7 @@ func (s *Server) registerHarnessVoiceRoutes(group *gin.RouterGroup) {
 		// An answer is a new turn. The controller validates the live question and
 		// uses the existing asynchronous Harness response path for its result.
 		runID := newHarnessVoiceRunID("")
-		err := s.harnessVoice.Answer(c.Request.Context(), req.QuestionRequestID, req.Answers, runID)
+		err := s.harnessVoice.Answer(c.Request.Context(), req.QuestionRequestID, req.Answers, runID, req.FocusRevision)
 		writeHarnessVoiceResult(c, gin.H{"runId": runID}, err)
 	})
 }
