@@ -39,15 +39,16 @@ func (s *Store) RestoreSilent(g Gateway) {
 	}
 }
 
-// Flush sends at most one pending record while the main runtime is idle. A socket
+// Flush sends at most one pending record. Realtime may steer a capable busy runtime. A socket
 // write is not an acknowledgement. Ambiguous sends remain on disk without replay.
 func (s *Store) Flush(g Gateway) {
-	if !g.IsReady() || g.IsBusy() {
+	if !g.IsReady() {
 		return
 	}
+	busy := g.IsBusy()
 	for _, r := range s.Records() {
 		if r.State == StateSending {
-			if time.Since(r.UpdatedAt) < 2*time.Minute {
+			if busy || time.Since(r.UpdatedAt) < 2*time.Minute {
 				return
 			}
 			if err := s.MarkUncertain(r.SyncRunID); err != nil {
@@ -61,6 +62,23 @@ func (s *Store) Flush(g Gateway) {
 		return
 	}
 	r := pending[0]
+	if busy {
+		steering, ok := g.(interface{ SupportsActiveTurnSteering() bool })
+		if !ok || !steering.SupportsActiveTurnSteering() {
+			return
+		}
+		// Preserve realtime's active-turn steering without changing Harness policy.
+		found := false
+		for _, candidate := range pending {
+			if candidate.Source == "realtime" {
+				r, found = candidate, true
+				break
+			}
+		}
+		if !found {
+			return
+		}
+	}
 	if err := s.MarkSending(r.SyncRunID); err != nil {
 		slog.Warn("external history send persistence failed", "error", err)
 		return

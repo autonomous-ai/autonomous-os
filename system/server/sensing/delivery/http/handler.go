@@ -154,6 +154,7 @@ type SensingHandler struct {
 	// opt-in (OS_REALTIME_SUPERSEDES_MAIN_REPLY), so on a default body nothing
 	// is suppressed and the situation is not a metric sample at all.
 	onRealtimeHandled      func() bool
+	realtimeHistory        func(string, string) (string, error)
 	harnessFollowup        func() bool
 	harnessFollowupContext func() string
 	harnessVoice           func(*gin.Context, SensingEventRequest) bool
@@ -392,6 +393,10 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 	speechSuppressed := false
 	if isRealtimeHandled && h.onRealtimeHandled != nil {
 		speechSuppressed = h.onRealtimeHandled()
+	}
+	if isRealtimeHandled && h.realtimeHistory != nil {
+		h.persistRealtimeHistory(c, req, speechSuppressed)
+		return
 	}
 	isPassive := !isVoiceCommand
 	if isPassive && !isVoice && !isRealtimeHandled && !isChat && req.Type != "presence.enter" && req.Type != "fire_hazard.detected" && h.isSleeping != nil && h.isSleeping() {

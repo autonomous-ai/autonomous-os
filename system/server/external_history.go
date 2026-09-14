@@ -17,6 +17,7 @@ func (s *Server) initializeExternalHistory(ctx context.Context) error {
 		return fmt.Errorf("initialize external conversation history: %w", err)
 	}
 	s.externalHistory = store
+	s.sensingHandler.SetRealtimeHistory(store.RecordRealtime)
 	store.RestoreSilent(s.agentGateway)
 	s.agentHandler.SetExternalHistoryObserver(func(runID string, failed bool) {
 		r, ok := store.Lookup(runID)

@@ -1,6 +1,6 @@
 # Flow Monitor (tiếng Việt)
 
-Lượt history có ID `device-chat-context-` và envelope `[external-context]` / `[HANDLED]` / `[REPLY]` hợp lệ hiển thị **History sync**, route **Harness → Main** (hoặc nguồn bên ngoài). Card hiện câu hỏi và câu trả lời gốc với nhãn **Context**, không coi là TTS mới. Tooltip route có tên agent; metadata thô giữ trong chi tiết event. Parser dùng chat-send đầy đủ khi preview chat-input bị cắt, không đổi trạng thái lifecycle.
+Lượt history có ID `device-chat-context-` và envelope `[external-context]` / `[HANDLED]` / `[REPLY]` hợp lệ hiển thị **History sync**, route **Harness → Main** hoặc **Realtime → Main** (hoặc nguồn bên ngoài khác). Card hiện câu hỏi và câu trả lời gốc với nhãn **Context**, không coi là TTS mới. Tooltip route có tên agent; metadata thô giữ trong chi tiết event. Parser dùng chat-send đầy đủ khi preview chat-input bị cắt, không đổi trạng thái lifecycle.
 
 Card voice Harness-only đọc `sensing_input.data.route: "harness_only"` để hiện **Harness** thay cho **Agent**. Sau khi gom event theo run ID, `harness_response` có nội dung đóng đúng lượt đó, cung cấp output và chi tiết node Response, kể cả khi tải lịch sử JSONL. Chỉ gửi input thành công thì vẫn active. Không ghép phản hồi Harness vào input gần đó có run ID khác; trạng thái lỗi đã có vẫn giữ lỗi. DONE nghĩa là đã nhận phản hồi cuối, không xác nhận phát âm thanh hay tác vụ thực tế thành công.
 
