@@ -76,6 +76,7 @@ def test_extended_privacy_initial_read_failure_stays_muted(hardware, muted_level
 
 def test_edge_restarts_configured_settle_then_reads_current_level(hardware):
     gpio, _, timer = hardware
+    gpio.gpio_read.return_value = 0
     handler = PrivacyButtonHandler(PrivacyButtonConfig(line=43, settle_s=0.12, muted_level=1))
     handler._apply_state_locked = mock.Mock()
     handler.start()
@@ -90,6 +91,22 @@ def test_edge_restarts_configured_settle_then_reads_current_level(hardware):
     timer.call_args.args[1]()
     handler._apply_state_locked.assert_called_once_with(True)
     gpio.gpio_read.assert_called_with(12, 43)
+    handler.stop()
+
+
+@pytest.mark.parametrize("sleeping", [False, True])
+def test_initial_or_duplicate_edge_does_not_override_software_mute(hardware, sleeping):
+    gpio, _, timer = hardware
+    handler = PrivacyButtonHandler(PrivacyButtonConfig())
+    handler._apply_state_locked = mock.Mock()
+    handler.start()
+    handler._apply_state_locked.reset_mock()
+    with mock.patch.object(state, "_sleeping", sleeping), mock.patch.object(state, "_mic_muted", True):
+        handler._on_edge(0, 97, 1, 100)
+        timer.call_args.args[1]()
+        handler._apply_state_locked.assert_not_called()
+        assert state._sleeping is sleeping
+        assert state._mic_muted is True
     handler.stop()
 
 
@@ -195,6 +212,7 @@ def test_boot_restore_does_not_masquerade_as_user_unmute(hardware, extended, ini
     config = PrivacyButtonConfig(disable_camera_on_mute=extended, mute_speaker_on_mute=extended)
     handler = PrivacyButtonHandler(config)
     with (
+        mock.patch.object(state, "_sleeping", False),
         mock.patch.object(state, "_mic_muted", True),
         mock.patch.object(state, "_hw_mic_switch_muted", None),
         mock.patch.object(state, "_clear_mic_muted_led"),
