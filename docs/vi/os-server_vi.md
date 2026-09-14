@@ -6,11 +6,14 @@
 
 ### Harness-only voice
 
-Mode RAM tùy chọn gửi STT đã chốt của HAL tới agent Harness cố định trên máy đã
-ghép, trước local intent và gate ready/busy của main runtime. Mode mặc định tắt
+Mode RAM tùy chọn gửi STT đã chốt của HAL tới agent đang focus trong app Harness, trước local intent và gate ready/busy của main runtime. Mode mặc định tắt
 sau khi OS-server khởi động lại. Event/recap Harness hiện có cung cấp câu trả lời
 được đọc trên thiết bị. Chỉ request voice loopback trực tiếp có snapshot routing
 `harness_voice` đi vào nhánh này; text/MQTT chat và sensing nền giữ luồng cũ.
+OS vẫn đồng bộ focus khi mode tắt qua `focus.get`, `focus.changed` và refresh
+mỗi hai giây. Bật mode chỉ đổi flag RAM; web không có bộ chọn target. Chưa focus,
+CLI cũ thiếu `focus.get`, hoặc focus máy khác sẽ chặn gửi voice. Mỗi lần gửi
+kèm `focusRevision` dạng opaque; CLI kiểm tra nguyên tử trước khi nhận turn.
 
 `GET /api/harness/voice-mode` cho admin hoặc loopback đọc. API quản lý chỉ cho admin
 gồm `PUT /api/harness/voice-mode`, `GET /api/harness/agents`,

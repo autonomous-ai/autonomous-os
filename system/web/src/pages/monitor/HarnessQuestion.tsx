@@ -5,6 +5,7 @@ import { harnessRequest } from "./harness-api";
 interface Question {
   agentId: string;
   questionRequestId: string;
+  focusRevision: string;
   questions: { key: string; q: string; options: string[]; multi: boolean }[];
 }
 const control: CSSProperties = {
@@ -14,7 +15,7 @@ const control: CSSProperties = {
 
 export function HarnessQuestion({ connected, disabled, refresh, onAnswer }: {
   connected: boolean; disabled: boolean; refresh: number;
-  onAnswer: (body: { questionRequestId: string; answers: Record<string, string> }) => Promise<void>;
+  onAnswer: (body: { questionRequestId: string; focusRevision: string; answers: Record<string, string> }) => Promise<void>;
 }) {
   const [question, setQuestion] = useState<Question | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -37,8 +38,8 @@ export function HarnessQuestion({ connected, disabled, refresh, onAnswer }: {
   }, [connected, disabled, refresh, reload]);
   return <>
     <button type="button" style={control} disabled={!connected || disabled} onClick={() => setReload(value => value + 1)}>Refresh agent question</button>
-    {question && <QuestionForm key={`${question.agentId}:${question.questionRequestId}`} question={question}
-      disabled={disabled || !connected || Boolean(error)} onAnswer={answers => onAnswer({ questionRequestId: question.questionRequestId, answers })} />}
+    {question && <QuestionForm key={`${question.agentId}:${question.questionRequestId}:${question.focusRevision}`} question={question}
+      disabled={disabled || !connected || Boolean(error)} onAnswer={answers => onAnswer({ questionRequestId: question.questionRequestId, focusRevision: question.focusRevision, answers })} />}
     {error && <p role="alert" style={{ margin: 0, color: "var(--lm-red)" }}>{error}</p>}
   </>;
 }

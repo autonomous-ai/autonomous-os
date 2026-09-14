@@ -164,18 +164,22 @@ func main() {
 	must(state["backend"] == false && state["commander"] == true, "direct requires backend or recap presence absent")
 	// Exercise the production controller over the authenticated encrypted link.
 	dispatched := 0
+	expectedAgent := "agent-one"
 	var nextQuestion string
 	voice := harness.NewVoiceController(s, harness.VoiceCallbacks{
 		OnDispatch: func(agentID, runID string) {
-			must(agentID == "agent-one" && runID != "", "voice response route missing")
+			must(agentID == expectedAgent && runID != "", "voice response route missing")
 			dispatched++
 		},
 		OnResponse: func(agentID, runID, text string) { nextQuestion = text },
 	})
 	must(!voice.State().Enabled, "voice default is not off")
-	mode, e := voice.SetMode(ctx, false, "agent-one")
-	must(e == nil && !mode.Enabled && mode.AgentID == "agent-one", "voice select while off failed")
-	mode, e = voice.SetMode(ctx, true, "agent-one")
+	offGeneration := voice.State().Generation
+	api("/focus", map[string]any{"agentId": "agent-one"})
+	must(voice.RefreshFocus(ctx) == nil, "voice focus refresh while off failed")
+	mode := voice.State()
+	must(!mode.Enabled && mode.AgentID == "agent-one" && mode.FocusAvailable && mode.Generation == offGeneration, "off focus mirror changed capture generation")
+	mode, e = voice.SetMode(ctx, true)
 	must(e == nil && mode.Enabled, "voice enable failed")
 	e = voice.Submit(ctx, "voice interop", "voice-one", mode.Generation)
 	must(e == nil, fmt.Sprintf("voice encrypted submit failed: %v", e))
@@ -202,11 +206,34 @@ func main() {
 	question, e = voice.Question(ctx)
 	_, noQuestion := question["question"]
 	must(e == nil && noQuestion && question["question"] == nil, "answered question remained open")
-	_, e = voice.SetMode(ctx, false, "")
+	// Let the real per-connection request bucket replenish between test batches.
+	time.Sleep(10 * time.Second)
+	// An app focus move invalidates a captured utterance before any dispatch.
+	oldMode := mode
+	api("/focus", map[string]any{"agentId": "agent-two"})
+	must(voice.Submit(ctx, "must not reach either agent", "voice-old-focus", oldMode.Generation) != nil, "old capture survived focus change")
+	mode = voice.State()
+	must(mode.AgentID == "agent-two" && mode.Generation != oldMode.Generation, "focus move did not update voice generation")
+	state = api("/state", nil)
+	must(state["submits"] == float64(2), "stale captured utterance dispatched")
+	// The CLI also checks the revision if focus changes after OS checked it.
+	r, e = s.Request(ctx, harness.Frame{"type": "turn.send", "machineId": "interop-machine", "agentId": "agent-one", "text": "must not dispatch", "idempotencyKey": "stale-focus", "focusRevision": oldMode.FocusRevision})
+	must(e == nil, "guarded focus request transport failed")
+	guardError, ok := r["error"].(map[string]any)
+	must(ok && guardError["code"] == "FOCUS_CHANGED" && r["receipt"] == nil, "CLI did not reject stale focus before reservation")
+	state = api("/state", nil)
+	must(state["submits"] == float64(2), "CLI stale focus guard dispatched")
+	expectedAgent = "agent-two"
+	e = voice.Submit(ctx, "fresh focused task", "voice-new-focus", mode.Generation)
+	must(e == nil, fmt.Sprintf("fresh focused capture failed: %v", e))
+	state = api("/state", nil)
+	targets := state["submittedAgents"].([]any)
+	must(state["submits"] == float64(3) && targets[len(targets)-1] == "agent-two" && dispatched == 3, "fresh task did not reach app-focused agent")
+	_, e = voice.SetMode(ctx, false)
 	must(e == nil, "voice disable failed")
 	must(voice.Submit(ctx, "must not send", "voice-off", mode.Generation) != nil, "disabled voice accepted input")
 	state = api("/state", nil)
-	must(state["submits"] == float64(2) && len(state["answers"].([]any)) == 1, "disabled voice sent mutation")
+	must(state["submits"] == float64(3) && len(state["answers"].([]any)) == 1, "disabled voice sent mutation")
 	api("/restart", nil)
 	wait("CLI restart reconnect", func() bool { return s.Status().Connected })
 	time.Sleep(3500 * time.Millisecond)
@@ -234,5 +261,5 @@ func main() {
 	_, e = s2.Request(ctx2, harness.Frame{"type": "agents.list"})
 	must(e != nil, "revoked access remained")
 	must(s2.Unpair() == nil && !s2.Status().Paired, "OS unpair")
-	fmt.Println("PASS real mDNS + actual BackendSocket/E2eeManager + direct client + Go Service: wrong-code failure/retry, pair, encrypted list/send/dedupe, voice selection/submit/dedupe/sequential question answers/off, CLI and OS restart reconnect, revoke/unpair. Backend never connected.")
+	fmt.Println("PASS real mDNS + actual BackendSocket/E2eeManager + direct client + Go Service: wrong-code failure/retry, pair, encrypted list/send/dedupe, app focus mirror/old capture rejection/CLI revision guard/focused submit/dedupe/sequential question answers/off, CLI and OS restart reconnect, revoke/unpair. Backend never connected.")
 }

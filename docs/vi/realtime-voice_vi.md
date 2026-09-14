@@ -51,13 +51,17 @@ Tool `delegate_to_main` được orchestrator đăng ký tự động (`orchestr
 OS Monitor có thêm **Harness-only voice**, mode trong RAM mặc định tắt sau khi
 OS-server khởi động lại. Khi bật, HAL lấy snapshot `/api/harness/voice-mode`
 trước capture và gửi STT đã chốt, bỏ wake word, qua OS tới thẳng agent Harness
-đã chọn. Capture đó không stream audio tới realtime model, không gọi main
+đang focus trong app. Capture đó không stream audio tới realtime model, không gọi main
 runtime/`harness-use`; OS bỏ qua local intent và gate ready/busy của main runtime.
 Vẫn giữ kiểm tra wake word, VAD, noise và echo. Kết quả voice tiếp tục dùng
 lifecycle/recap Harness và TTS của thiết bị. Text chat và sensing nền giữ route cũ.
 
 Mỗi capture mang generation của mode. OS từ chối generation cũ thay vì giao câu
-nói cho agent vừa được chọn. Phiên realtime live đang chạy kiểm tra mode mỗi
+nói cho agent vừa được focus. OS vẫn đồng bộ focus khi mode tắt mà không đổi
+generation của voice thường. Khi bật, đổi focus tăng generation; trước khi gửi,
+OS đọc lại focus và kèm `focusRevision` dạng opaque để CLI kiểm tra trước
+reservation. Web không chọn agent và không fallback khi thiếu focus.
+Phiên realtime live đang chạy kiểm tra mode mỗi
 500 ms và đóng khi mode đổi; câu bị ngắt không được phát lại. Đọc mode có timeout
 500 ms và chặn dispatch nếu endpoint không truy cập được hoặc trả dữ liệu sai,
 nên phải triển khai OS và HAL cùng nhau. Luồng bình thường bên dưới áp dụng khi

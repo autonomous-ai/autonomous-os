@@ -8,10 +8,12 @@ interface VoiceMode {
   generation: number;
   machineId: string;
   agentId: string;
+  agentName?: string;
+  focusRevision?: string;
+  focusAvailable: boolean;
   pending?: { idempotencyKey: string; agentId: string; runId: string };
   error?: string;
 }
-interface Agent { agentId: string; name?: string }
 const control: CSSProperties = {
   padding: "8px 12px", borderRadius: 4, border: "1px solid var(--lm-border)",
   background: "var(--lm-surface)", color: "var(--lm-text)", fontSize: 12,
@@ -19,8 +21,6 @@ const control: CSSProperties = {
 
 export function HarnessVoiceMode({ connected }: { connected: boolean }) {
   const [mode, setMode] = useState<VoiceMode | null>(null);
-  const [agents, setAgents] = useState<Agent[]>([]);
-  const [agentsLoaded, setAgentsLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [refresh, setRefresh] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -62,46 +62,30 @@ export function HarnessVoiceMode({ connected }: { connected: boolean }) {
     }
   };
 
-  const refreshAgents = async () => {
-    if (busy) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const result = await harnessRequest("/agents", { cache: "no-store" });
-      if (!Array.isArray(result?.agents)) throw new Error("Harness returned an invalid agent list.");
-      setAgents(result.agents.filter((agent: Agent) => typeof agent.agentId === "string" && agent.agentId));
-      setAgentsLoaded(true);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not list Harness agents.");
-    } finally { setBusy(false); }
-  };
-
   const unavailable = busy || !mode || Boolean(pollError);
   return <section aria-label="Harness-only voice" style={{ borderTop: "1px solid var(--lm-border)", marginTop: 14, paddingTop: 14, display: "flex", flexDirection: "column", gap: 10, fontSize: 12 }}>
     <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
       <input type="checkbox" role="switch" checked={mode?.enabled ?? false}
-        disabled={unavailable || (!mode?.enabled && (!connected || !mode?.agentId || Boolean(mode?.pending)))}
-        onChange={event => { void mutate("/voice-mode", { enabled: event.target.checked, agentId: mode?.agentId }, "PUT"); }} />
+        disabled={unavailable}
+        onChange={event => { void mutate("/voice-mode", { enabled: event.target.checked }, "PUT"); }} />
       <strong>Harness-only voice</strong>
     </label>
     <p style={{ margin: 0, lineHeight: 1.5, color: "var(--lm-text-dim)" }}>
-      Send your spoken requests directly to the selected Harness agent. Replies play on the device as usual.
+      Send your spoken requests directly to the agent focused in the Harness app. Replies play on the device as usual.
       This mode turns off when the device service restarts. Text chat keeps its normal behavior.
     </p>
-    <label style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-      Voice agent
-      <select style={control} value={mode?.agentId ?? ""} disabled={unavailable || !connected || Boolean(mode?.pending)}
-        onChange={event => { void mutate("/voice-mode", { enabled: mode?.enabled ?? false, agentId: event.target.value }, "PUT"); }}>
-        <option value="" disabled>Select an agent</option>
-        {mode?.agentId && !agents.some(agent => agent.agentId === mode.agentId) && <option value={mode.agentId}>{mode.agentId} (selected)</option>}
-        {agents.map(agent => <option key={agent.agentId} value={agent.agentId}>{agent.name || agent.agentId}{agent.name ? ` · ${agent.agentId}` : ""}</option>)}
-      </select>
-    </label>
-    <button type="button" style={control} disabled={busy || !connected} onClick={() => { void refreshAgents(); }}>Refresh agents</button>
-    {agentsLoaded && agents.length === 0 && <span>No agents are available. Start an agent in Harness and refresh.</span>}
-    {!connected && <p role="status" style={{ margin: 0, color: "var(--lm-text-dim)" }}>
-      Harness is offline.{mode?.enabled ? " Voice requests cannot be delivered until it reconnects. You can turn this mode off to use the device agent." : " Reconnect the computer to select an agent and enable this mode."}
-    </p>}
+    <div role="status" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      <strong>Focused Harness agent</strong>
+      {pollError ? <span>Focus status is unavailable. Retrying…</span> : !connected ? <span>
+        Harness is offline. Reconnect the computer to sync focus and deliver voice requests.
+      </span> : mode?.focusAvailable && mode.agentId ? <>
+        <span>{mode.agentName || mode.agentId}{mode.agentName ? ` · ${mode.agentId}` : ""}</span>
+        <span style={{ color: "var(--lm-text-dim)" }}>Synced from the Harness app, including while voice mode is off.</span>
+      </> : <span>{mode ? "Waiting for focus from Harness. Open an agent pane in the Harness app. A CLI that supports focus sync is required." : "Loading Harness focus…"}</span>}
+      {mode?.enabled && (!connected || !mode.focusAvailable) && <span>
+        Voice requests cannot be delivered until a focused agent is available. You can turn this mode off to use the device agent.
+      </span>}
+    </div>
     {mode?.pending && <div role="status" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
       <strong>Delivery is not confirmed</strong>
       <span>The last request may already be running. New voice requests are paused until this is resolved.</span>
@@ -112,7 +96,7 @@ export function HarnessVoiceMode({ connected }: { connected: boolean }) {
         }
       }}>Continue without retrying</button>
     </div>}
-    {mode?.agentId && <HarnessQuestion key={`${mode.machineId}:${mode.agentId}`} connected={connected} disabled={unavailable || Boolean(mode.pending)} refresh={refresh} onAnswer={answers => mutate("/voice-mode/answer", answers)} />}
+    {connected && !pollError && mode?.focusAvailable && mode.agentId && <HarnessQuestion key={`${mode.machineId}:${mode.agentId}:${mode.focusRevision}`} connected={connected} disabled={unavailable || Boolean(mode.pending)} refresh={refresh} onAnswer={answers => mutate("/voice-mode/answer", answers)} />}
     {(error || pollError || mode?.error) && <p role="alert" style={{ margin: 0, color: "var(--lm-red)" }}>{error || pollError || mode?.error}</p>}
   </section>;
 }

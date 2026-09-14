@@ -77,7 +77,7 @@ func (s *Server) registerHarnessRoutes(api *gin.RouterGroup, ctx context.Context
 			return
 		}
 		if s.harnessVoice != nil {
-			_, _ = s.harnessVoice.SetMode(c.Request.Context(), false, "")
+			_, _ = s.harnessVoice.SetMode(c.Request.Context(), false)
 		}
 		c.JSON(http.StatusOK, serializers.ResponseSuccess(gin.H{"unpaired": true}))
 	})
@@ -258,6 +258,12 @@ func (s *Server) rememberHarnessResult(text string) {
 // device interaction. The terminal recap is not passed through the device
 // agent, which would otherwise add a slower, altered second answer.
 func (s *Server) forwardHarnessEvent(frame harness.Frame) {
+	if kind, _ := frame["kind"].(string); kind == "focus.changed" {
+		if s.harnessVoice != nil {
+			s.harnessVoice.NotifyFocusChanged()
+		}
+		return
+	}
 	agentID, _ := frame["agentId"].(string)
 	if agentID == "" {
 		// Some Harness transports identify the originating request by run ID

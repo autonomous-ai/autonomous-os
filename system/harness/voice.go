@@ -29,12 +29,15 @@ type VoicePending struct {
 	RunID          string `json:"runId"`
 }
 type VoiceModeState struct {
-	Enabled    bool          `json:"enabled"`
-	Generation uint64        `json:"generation"`
-	MachineID  string        `json:"machineId"`
-	AgentID    string        `json:"agentId"`
-	Pending    *VoicePending `json:"pending,omitempty"`
-	Error      string        `json:"error,omitempty"`
+	Enabled        bool          `json:"enabled"`
+	Generation     uint64        `json:"generation"`
+	MachineID      string        `json:"machineId"`
+	AgentID        string        `json:"agentId"`
+	AgentName      string        `json:"agentName,omitempty"`
+	FocusRevision  string        `json:"focusRevision"`
+	FocusAvailable bool          `json:"focusAvailable"`
+	Pending        *VoicePending `json:"pending,omitempty"`
+	Error          string        `json:"error,omitempty"`
 }
 type VoiceQuestion struct {
 	Key     string   `json:"key"`
@@ -49,6 +52,9 @@ type voiceQuestionSet struct {
 type VoiceController struct {
 	mu        sync.Mutex
 	op        sync.Mutex
+	focusMu   sync.Mutex
+	focusWake chan struct{}
+	startOnce sync.Once
 	transport VoiceTransport
 	callbacks VoiceCallbacks
 	state     VoiceModeState
@@ -75,7 +81,7 @@ func nextVoiceGeneration() uint64 {
 }
 
 func NewVoiceController(t VoiceTransport, cb VoiceCallbacks) *VoiceController {
-	return &VoiceController{transport: t, callbacks: cb, state: VoiceModeState{Generation: nextVoiceGeneration()}, seen: make(map[string]bool)}
+	return &VoiceController{transport: t, callbacks: cb, state: VoiceModeState{Generation: nextVoiceGeneration()}, seen: make(map[string]bool), focusWake: make(chan struct{}, 1)}
 }
 func (v *VoiceController) State() VoiceModeState {
 	v.mu.Lock()
@@ -116,59 +122,130 @@ func (v *VoiceController) Agents(ctx context.Context) (Frame, error) {
 	}
 	return v.request(ctx, Frame{"type": "agents.list"})
 }
-func (v *VoiceController) SetMode(ctx context.Context, enabled bool, agentID string) (VoiceModeState, error) {
-	agentID = strings.TrimSpace(agentID)
-	current := v.State()
-	if !enabled && (agentID == "" || agentID == current.AgentID) {
-		v.mu.Lock()
-		// Also invalidate an enable operation that is still validating its
-		// target while the visible state remains off.
-		v.state.Generation = nextVoiceGeneration()
-		v.state.Enabled = false
-		v.question = nil
-		v.answers = nil
-		v.mu.Unlock()
-		return v.State(), nil
+
+// Start keeps the read-only focus mirror current even when voice mode is off.
+func (v *VoiceController) Start(ctx context.Context) {
+	v.startOnce.Do(func() {
+		go func() {
+			ticker := time.NewTicker(2 * time.Second)
+			defer ticker.Stop()
+			for {
+				_ = v.RefreshFocus(ctx)
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+				case <-v.focusWake:
+				}
+			}
+		}()
+	})
+}
+func (v *VoiceController) NotifyFocusChanged() {
+	select {
+	case v.focusWake <- struct{}{}:
+	default:
 	}
-	if !v.op.TryLock() {
-		return v.State(), errors.New("Harness voice operation is busy")
+}
+func (v *VoiceController) RefreshFocus(ctx context.Context) error {
+	v.focusMu.Lock()
+	defer v.focusMu.Unlock()
+	ctx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	status := v.transport.Status()
+	var snapshot struct {
+		Focus *struct {
+			MachineID string `json:"machineId"`
+			AgentID   string `json:"agentId"`
+			Name      string `json:"name"`
+		} `json:"focus"`
+		Revision string `json:"focusRevision"`
 	}
-	defer v.op.Unlock()
-	agentID = strings.TrimSpace(agentID)
-	if agentID == "" {
-		return v.State(), errors.New("Select a Harness agent")
+	var err error
+	supported := false
+	for _, cap := range status.Capabilities {
+		if cap == "focus.get" {
+			supported = true
+		}
 	}
-	before := v.State()
-	if before.Pending != nil && (before.AgentID != agentID) {
-		return before, errors.New("Resolve pending Harness delivery before changing agent")
+	if !status.Paired || !status.Connected {
+		err = errors.New("Harness is offline")
+	} else if !supported {
+		err = errors.New("Update Harness CLI to support app focus (focus.get)")
+	} else {
+		var frame Frame
+		frame, err = v.request(ctx, Frame{"type": "focus.get"})
+		if err == nil {
+			var raw []byte
+			raw, err = json.Marshal(frame)
+			if err == nil {
+				err = json.Unmarshal(raw, &snapshot)
+			}
+			if err == nil && snapshot.Revision == "" {
+				err = errors.New("Harness focus revision is missing")
+			}
+			if err == nil {
+				err = v.connected(status.MachineID)
+			}
+		}
 	}
-	if e := v.connected(""); e != nil {
-		return v.State(), e
-	}
-	machine := v.transport.Status().MachineID
-	if _, e := v.request(ctx, Frame{"type": "status", "machineId": machine, "agentId": agentID}); e != nil {
-		return v.State(), e
+	machine, agent, name, revision := "", "", "", ""
+	available := false
+	if err == nil {
+		revision = snapshot.Revision
+		if snapshot.Focus == nil {
+			err = errors.New("Focus an agent in the Harness app")
+		} else {
+			machine, agent, name = snapshot.Focus.MachineID, snapshot.Focus.AgentID, snapshot.Focus.Name
+			if machine != status.MachineID {
+				err = errors.New("The focused agent is on another computer; focus an agent on the paired computer")
+			} else if agent == "" {
+				err = errors.New("Focus an agent in the Harness app")
+			} else {
+				available = true
+			}
+		}
 	}
 	v.mu.Lock()
-	if v.state.Generation != before.Generation {
-		v.mu.Unlock()
-		return v.State(), errors.New("Harness voice mode changed")
+	changed := v.state.FocusRevision != revision || v.state.MachineID != machine || v.state.AgentID != agent || v.state.FocusAvailable != available
+	if changed {
+		// Off-mode focus polling must not invalidate ordinary HAL voice captures.
+		if v.state.Enabled {
+			v.state.Generation = nextVoiceGeneration()
+		}
+		v.question, v.answers = nil, nil
 	}
-	if v.state.Pending != nil && v.state.Pending.MachineID != machine {
-		v.mu.Unlock()
-		return v.State(), errors.New("Resolve pending delivery from the previous computer")
+	v.state.MachineID, v.state.AgentID, v.state.AgentName = machine, agent, name
+	v.state.FocusRevision, v.state.FocusAvailable = revision, available
+	if v.state.Pending == nil {
+		v.state.Error = ""
+		if err != nil {
+			v.state.Error = err.Error()
+		}
 	}
-	if v.state.Enabled != enabled || v.state.AgentID != agentID || v.state.MachineID != machine {
+	v.mu.Unlock()
+	return err
+}
+func (v *VoiceController) SetMode(_ context.Context, enabled bool) (VoiceModeState, error) {
+	v.mu.Lock()
+	if v.state.Enabled != enabled {
 		v.state.Generation = nextVoiceGeneration()
-		v.question = nil
-		v.answers = nil
+		v.question, v.answers = nil, nil
 	}
 	v.state.Enabled = enabled
-	v.state.AgentID = agentID
-	v.state.MachineID = machine
-	v.state.Error = ""
 	v.mu.Unlock()
+	v.NotifyFocusChanged()
 	return v.State(), nil
+}
+func (v *VoiceController) checkFocus(ctx context.Context, s VoiceModeState) error {
+	if err := v.RefreshFocus(ctx); err != nil {
+		return err
+	}
+	current := v.State()
+	if !current.Enabled || current.Generation != s.Generation || current.FocusRevision != s.FocusRevision {
+		return errors.New("Harness app focus or voice mode changed; please repeat")
+	}
+	return nil
 }
 func (v *VoiceController) liveQuestion(ctx context.Context, s VoiceModeState) (*voiceQuestionSet, error) {
 	if e := v.connected(s.MachineID); e != nil {
@@ -206,6 +283,10 @@ func (v *VoiceController) Question(ctx context.Context) (Frame, error) {
 	if !s.Enabled {
 		return Frame{"question": nil}, nil
 	}
+	if e := v.RefreshFocus(ctx); e != nil {
+		return nil, e
+	}
+	s = v.State()
 	q, e := v.liveQuestion(ctx, s)
 	if e != nil {
 		return nil, e
@@ -213,7 +294,10 @@ func (v *VoiceController) Question(ctx context.Context) (Frame, error) {
 	if q == nil {
 		return Frame{"question": nil}, nil
 	}
-	return Frame{"agentId": s.AgentID, "questionRequestId": q.RequestID, "questions": q.Questions}, nil
+	if current := v.State(); current.Generation != s.Generation {
+		return nil, errors.New("Harness app focus changed; refresh the question")
+	}
+	return Frame{"agentId": s.AgentID, "focusRevision": s.FocusRevision, "questionRequestId": q.RequestID, "questions": q.Questions}, nil
 }
 func (v *VoiceController) begin(runID string, generation uint64) (VoiceModeState, bool, error) {
 	v.mu.Lock()
@@ -240,6 +324,9 @@ func (v *VoiceController) begin(runID string, generation uint64) (VoiceModeState
 	return s, false, nil
 }
 func (v *VoiceController) ready(ctx context.Context, s VoiceModeState) error {
+	if e := v.checkFocus(ctx, s); e != nil {
+		return e
+	}
 	if e := v.connected(s.MachineID); e != nil {
 		return e
 	}
@@ -271,6 +358,9 @@ func (v *VoiceController) Submit(ctx context.Context, text, runID string, genera
 	}
 	q, e := v.liveQuestion(ctx, s)
 	if e != nil {
+		return e
+	}
+	if e = v.checkFocus(ctx, s); e != nil {
 		return e
 	}
 	v.mu.Lock()
@@ -322,10 +412,13 @@ func (v *VoiceController) Submit(ctx context.Context, text, runID string, genera
 	}
 	return v.dispatch(ctx, s, runID, Frame{"type": "question.answer", "questionRequestId": q.RequestID, "answers": answers})
 }
-func (v *VoiceController) Answer(ctx context.Context, questionID string, answers map[string]string, runID string) error {
+func (v *VoiceController) Answer(ctx context.Context, questionID string, answers map[string]string, runID string, focusRevision string) error {
 	s, duplicate, e := v.begin(runID, v.State().Generation)
 	if duplicate || e != nil {
 		return e
+	}
+	if focusRevision == "" || focusRevision != s.FocusRevision {
+		return errors.New("Harness app focus changed; refresh the question")
 	}
 	if !v.op.TryLock() {
 		return errors.New("Harness voice operation is busy")
@@ -351,6 +444,9 @@ func (v *VoiceController) Answer(ctx context.Context, questionID string, answers
 			return errors.New("Answer every Harness question using its exact key")
 		}
 		copyAnswers[row.Key] = a
+	}
+	if e = v.checkFocus(ctx, s); e != nil {
+		return e
 	}
 	return v.dispatch(ctx, s, runID, Frame{"type": "question.answer", "questionRequestId": questionID, "answers": copyAnswers})
 }
@@ -387,6 +483,7 @@ func (v *VoiceController) dispatch(ctx context.Context, s VoiceModeState, runID 
 	f["machineId"] = s.MachineID
 	f["agentId"] = s.AgentID
 	f["idempotencyKey"] = key
+	f["focusRevision"] = s.FocusRevision
 	if v.callbacks.OnDispatch != nil {
 		v.callbacks.OnDispatch(s.AgentID, runID)
 	}
@@ -417,7 +514,7 @@ func (v *VoiceController) dispatch(ctx context.Context, s VoiceModeState, runID 
 			}
 			_ = json.Unmarshal(raw, &remote)
 			switch remote.Code {
-			case "INVALID_REQUEST", "UNSUPPORTED_CAPABILITY", "MISSING_TARGET", "MACHINE_MISMATCH", "AGENT_NOT_FOUND", "QUESTION_STALE", "PAYLOAD_TOO_LARGE", "RATE_LIMITED", "BACKPRESSURE":
+			case "FOCUS_CHANGED", "INVALID_REQUEST", "UNSUPPORTED_CAPABILITY", "MISSING_TARGET", "MACHINE_MISMATCH", "AGENT_NOT_FOUND", "QUESTION_STALE", "PAYLOAD_TOO_LARGE", "RATE_LIMITED", "BACKPRESSURE":
 				known = true
 			}
 		}
