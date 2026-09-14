@@ -35,7 +35,8 @@ dạng event đều nằm trong hai package tracking.
 
 ## Interaction id
 
-Một interaction = **một lượt người dùng nói**. `voice_metrics.speech_end()` tạo
+Một interaction = **một lượt người dùng nói**. Trên đường turn,
+`voice_metrics.speech_end()` tạo
 `interaction_id` (`vi-<16 hex>`) đúng lúc HAL kết luận người dùng đã nói xong,
 rồi id đó đi xuyên realtime, POST sensing (gắn với `runId` os-server trả về từ
 `/api/sensing/event`), câu trả lời của agent chính (qua `turn_id` của TTS
@@ -65,6 +66,50 @@ Lần phát bị mute cũng phải có owner resolve được thì mới loại 
 được loại lệnh thoại mới nhất. Mỗi đoạn trong hàng đợi mang metadata phân loại
 riêng (câu trả lời/filler/hệ thống), không kế thừa loại của speech mở stream.
 Snapshot này không thay đổi hành vi feedback hay ngắt phát.
+
+## Độ phủ của phiên live
+
+Phiên Gemini live dùng `hal/telemetry/live_voice.py` để ánh xạ mỗi user-turn ID
+quan sát được của provider thành một
+interaction HAL, độc lập với timeout của vòng nhận. Snapshot interaction có
+`mode` (`live` hoặc `turn`) và `speech_endpoint_known` để tách độ phủ theo đường
+xử lý. Delegate mang nguyên interaction ID qua OS; provider từ chối tiếng không
+phải của người dùng thì task đó bị loại.
+
+Event kết thúc tiếng nói thật từ server dùng **thời điểm nhận** trên đồng hồ
+monotonic, với `speech_end_method=server_vad`. Mốc này bao gồm độ trễ trước khi
+HAL nhận event server, không phải điểm kết thúc âm học. Chỉ có transcript Gemini
+vẫn đủ tạo task thực thi hợp lệ, nhưng không đủ xác định điểm kết thúc tiếng nói:
+KPI-1 ghi `eligible=false`, `exclusion_reason=speech_endpoint_unavailable`,
+latency ack/answer là null. Eligibility KPI-3 độc lập với exclusion này.
+Endpoint tới sau playback không được dùng để tạo ngược mẫu latency.
+
+Realtime chỉ ghi completed khi nhận terminal thành công của provider gắn đúng
+interaction. Timeout khi nhận, tín hiệu done tự tạo và ngắt lời không phải bằng
+chứng hoàn tất; không có terminal thành công thì task vẫn là incomplete.
+Ngắt lời thật từ provider tạo biên suppression `server_barge_in`
+chỉ áp dụng cho interaction bị huỷ, giữ grace **2 giây** và cửa sổ quan sát
+**60 giây** hiện có. Audio không có owner không được tính là acknowledgement.
+Câu hỏi tiếp theo bắt đầu khi execution trước đã completed, audio cũ đã im và
+không còn phần tổng hợp/hàng đợi thuộc lượt đó thì không tạo mẫu suppression.
+Speech còn trong hàng đợi vẫn tính trong khoảng nghỉ giữa các câu. Việc chặn
+audio không phủ định terminal execution thành công gắn đúng lượt, kể cả khi
+terminal tới sau ngắt lời.
+
+Khi đóng phiên, `voice_metrics_live_coverage` ghi `observed_interactions`,
+`completed_interactions` cùng các bộ đếm có phát sinh:
+`unkeyed_user_observations`,
+`unowned_output_chunks`, `unowned_completions`,
+`unowned_interruptions`.
+Đọc chúng cùng kết quả KPI: luồng transcript Gemini không có input ID ổn định,
+nên output tới muộn hoặc không có owner không được gán ngược cho câu nói mới nhất.
+Thiếu endpoint là mất độ phủ, không phải pass hay fail KPI-1. Các hook này giữ
+nguyên định nghĩa đường turn, bộ lọc tiếng ồn và cờ routing.
+Metadata ngắt lời không thêm lệnh dừng playback, bỏ text trong bộ đệm, mở lại
+audio native hay đổi lịch xử lý turn của provider. Lỗi đo lường được bắt để
+không làm gián đoạn speech hoặc delegation. Khi các đoạn trong hàng đợi dùng
+chung stream, lần ghi đầu của đoạn mới kết thúc khoảng đo của đoạn trước;
+nó không đóng audio stream vật lý.
 
 ## Thế nào là "đã phản hồi"
 
@@ -134,14 +179,15 @@ gian phản hồi của thiết bị.
 | Field | Ý nghĩa |
 |-------|---------|
 | `interaction_id`, `run_id`, `event_type`, `route` | Định danh + turn đi đường nào (`handled` / `delegated` / fallback / noise-dropped) |
+| `mode`, `speech_endpoint_known` | Đường `live`/`turn` và có quan sát được endpoint hay không |
 | `speech_end_method` | Cách phát hiện điểm kết thúc |
 | `eligible` | `false` khi có `exclusion_reason` |
 | `outcome` | `acknowledged` \| `no_ack` \| `excluded` |
-| `exclusion_reason` | `rejected_noise`, `rejected_non_user`, `no_transcript`, `not_addressed`, `speaker_muted`, `interrupted_by_user`. `speaker_muted` được ghi đúng lúc loa **từ chối** phát, không phải đọc cờ mute lúc chốt sổ — nếu không, thiết bị được bật tiếng lại trước khi chốt sẽ trông như thiết bị không thèm trả lời |
+| `exclusion_reason` | `rejected_noise`, `rejected_non_user`, `no_transcript`, `not_addressed`, `speaker_muted`, `interrupted_by_user`, `speech_endpoint_unavailable` (chỉ KPI-1). `speaker_muted` được ghi đúng lúc loa **từ chối** phát, không phải đọc cờ mute lúc chốt sổ — nếu không, thiết bị được bật tiếng lại trước khi chốt sẽ trông như thiết bị không thèm trả lời |
 | `failure_reason` | `dispatch_failed` — lệnh hợp lệ nhưng **không được phục vụ** (POST không tới nơi). Đây *không* phải exclusion: dòng vẫn eligible và bị tính vào KPI. Lệnh os-server tự trả lời (local intent: âm lượng, LED, giờ) **không** phải lỗi — câu trả lời mang interaction id làm owner và được tính là đã phản hồi. |
-| `ack_latency_ms` | Quan sát thô, giữ nguyên bất kể kết luận (`null` khi không có gì phát) |
+| `ack_latency_ms` | Quan sát thô, giữ nguyên bất kể kết luận (`null` khi không có gì phát hoặc thiếu endpoint) |
 | `ack_modality`, `ack_kind` | Người dùng thực sự nghe thấy cái gì |
-| `answer_latency_ms`, `answer_kind` | Lúc nghe được **câu trả lời** (`agent_reply` / `native_realtime` / `realtime_tts`), khác với biên nhận. `null` = đã báo nghe nhưng chưa từng trả lời trong cửa sổ — đó là phát hiện, không phải thiếu dữ liệu |
+| `answer_latency_ms`, `answer_kind` | Lúc nghe được **câu trả lời** (`agent_reply` / `native_realtime` / `realtime_tts`), khác với biên nhận. `null` = thiếu endpoint hoặc chưa ghi nhận câu trả lời trong cửa sổ — đó là phát hiện, không phải thiếu dữ liệu |
 | `ack_deadline_ms`, `observe_window_ms` | 3000 / 10000 — ngưỡng (tạm thời) đang áp dụng lúc ghi dòng đó |
 | `unknown_owner_playbacks` | Số lần phát không ai nhận — audio bị loại khỏi quyết định ack |
 | `amends_event_id`, `amendment_reason` | Có ở dòng **đính chính**: route hoặc exclusion tới sau khi verdict đã gửi |
@@ -162,7 +208,7 @@ Verdict sai sau đó được sửa bằng dòng đính chính.
 
 | Field | Ý nghĩa |
 |-------|---------|
-| `suppression_reason` | `explicit_stop` (user click) hoặc `auto_supersede` (realtime đã trả lời câu mới hơn) |
+| `suppression_reason` | `explicit_stop` (user click) hoặc `auto_supersede` (realtime đã trả lời câu mới hơn), hoặc `server_barge_in` (provider ngắt interaction được xác định) |
 | `interaction_id` | Lượt nói kích hoạt biên này |
 | `applicable_interactions` | Có bao nhiêu interaction cũ đang bay bị biên này phủ |
 | `old_audio_playing_at_boundary` | Lúc đóng mốc có đang phát audio cũ không |
@@ -276,7 +322,7 @@ hoặc excluded tương ứng trở thành eligible, nhưng không ghi đè quy 
 | Field | Ý nghĩa |
 |-------|---------|
 | `task_schema_version` | `1`; dòng HAL cũ không ghép được OS task start được báo coverage, không tính là thất bại |
-| `task_started_at_ms` | Unix milliseconds lúc phát hiện nói xong; chọn cohort, không dùng tính latency giữa hai process |
+| `task_started_at_ms` | Unix milliseconds lúc phát hiện nói xong, hoặc lúc đầu quan sát được lượt người dùng nếu thiếu endpoint; chọn cohort, không dùng tính latency giữa hai process |
 | `task_revision` | Revision snapshot tăng dần; lấy lớn nhất theo thiết bị + interaction, kể cả bind run-id muộn |
 | `task_eligible` | Độc lập với eligibility ack: mute hoặc ngắt speech không loại tác vụ thực thi |
 | `task_eligibility_known` | Đã biết routing/exclusion chưa; báo riêng coverage chưa rõ |
@@ -294,7 +340,13 @@ lỗi, transcript hay kết quả tool.
 | `lifecycle_error`, `lifecycle_end_error`, `chat_error`, `local_intent_error`, `dispatch_error` | `failed`: lỗi thực thi, dispatch lỗi/chưa sẵn sàng hoặc local intent ghi nhận lỗi API hành động HAL |
 | `lifecycle_error_recovered` | `unknown`: recover chưa chứng minh chạy xong; cần end tường minh |
 | `local_intent_returned` | `completed`: handler local intent chạy xong, không ghi nhận lỗi hành động HAL; không chứng minh đúng ý user hay tác động vật lý |
-| `realtime_turn_done` | `completed`: provider phát TurnDoneEvent và HAL trả về turn đã handled |
+| `chat_final_no_lifecycle` | `completed`: final có nội dung tiêu thụ pending trace mà không có lifecycle (ví dụ OpenClaw `/status`, `/new`); final rỗng không chứng minh completion |
+| `execution_observation_lost` | `unknown`: runtime mất quan sát tác vụ đã gửi nhưng chưa kết thúc khi mất transport hoặc timeout; chưa chứng minh thực thi thất bại |
+| `harness_delegated` | `unknown`: thực thi chuyển sang Harness; lifecycle end của runtime cục bộ không chứng minh tác vụ remote xong |
+| `harness_turn_done`, `harness_turn_summary` | `completed`: completion Harness đã ghép đúng; summary cần nội dung, done không cần recap hay TTS |
+| `harness_turn_error` | `failed`: `turn.error` hoặc `agent.error` Harness đã ghép đúng, kể cả thiếu text |
+| `harness_question_open` | `unknown`: đang chờ trả lời câu hỏi, gồm thu thập câu trả lời từng phần cục bộ |
+| `realtime_turn_done` | `completed`: terminal thành công của provider gắn đúng lượt hoàn tất turn đã handled |
 
 Ghép bằng chứng bằng **thiết bị + run_id** hoặc **thiết bị + interaction_id**.
 OS cũng ghi run không phải thoại: không tự đưa chúng vào mẫu số. Với
@@ -308,6 +360,12 @@ mọi lần gọi tool: lỗi tool được xử lý có thể recover mà khôn
 failure. Dispatch lỗi không có execution evidence được tính failed. `Result.ExecutionFailed`
 ghi nhận lỗi API HAL của local intent vốn trước đây chỉ được log; handler trả
 về sau lỗi này phát `local_intent_error`, không phát completion.
+
+OpenClaw lưu pending trace trước khi ghi `chat.send`, rồi xoá khi ghi thất bại. Correlation telemetry giữ tối đa 1024 trace trong 24 giờ bằng buffer riêng. Routing giữ matcher và TTL 2 phút cũ, pending-send busy vẫn 30 giây. Alias UUID chỉ dành cho metric, không dùng cho TTS/dispatch, cần đúng một message khớp toàn bộ sau trim với nội dung thực gửi; match mơ hồ, không có match hoặc `chat.history` lỗi vẫn chưa xác định được ID. Thiếu terminal vẫn là `incomplete`; bản sửa không khôi phục event lịch sử hay đánh giá câu trả lời đúng/sai.
+
+Codex, Claude Code, OpenCode và PicoClaw ghi `execution_observation_lost` cho run đã gửi, chưa kết thúc trước khi cleanup do mất transport/timeout. Không tạo lifecycle giả cho runtime. Evidence này không ghi đè completed/failed đã ghép được, kể cả final đến đồng thời; thiếu terminal thì giữ `unknown` trong mẫu số. Hermes đã xử lý kết thúc stream qua lifecycle.
+
+Khi có `harness_delegated`, chỉ chọn evidence Harness, `dispatch_error` hoặc `execution_observation_lost`; bỏ lifecycle bàn giao của agent cục bộ. Marker bàn giao không ghi đè evidence tiếp theo, bất kể thứ tự nhận. Answer qua HTTP voice-mode là tác vụ Chat mới; answer nói qua microphone vẫn là Voice. Câu hỏi chờ trả lời vẫn nằm trong mẫu số với trạng thái unknown. Gemini `realtime_handled` vẫn chỉ nhận `realtime_turn_done`. Correlation Harness không đoán giữa các route đồng thời hay nhận run ID tường minh không khớp. Xem [telemetry Harness](harness_vi.md#telemetry-hoàn-tất-tác-vụ).
 
 Horizon mặc định là **0 giây**: mọi tác vụ eligible bắt đầu tới `as_of_ms`
 được đếm ngay. Lượt failed, unknown và chưa xong **vẫn ở mẫu số**. Tử số là lượt

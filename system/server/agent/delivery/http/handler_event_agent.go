@@ -99,6 +99,7 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 			hist, err := h.agentGateway.FetchChatHistory(payload.SessionKey, 5)
 			if err == nil && hist != nil {
 				if userMsg, _, _ := extractLastUserMessageFromHistory(hist); userMsg != "" {
+					h.correlateTaskRun(payload.RunID, userMsg)
 					if deviceTrace := h.agentGateway.MatchPendingByMessage(userMsg); deviceTrace != "" {
 						h.mapRunID(payload.RunID, deviceTrace)
 						slog.Info("mapped OpenClaw runId to device trace via chat.history",
@@ -583,15 +584,16 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 			lcData["original_error"] = payload.Data.Error
 		}
 		flow.Log("lifecycle_"+payload.Data.Phase, lcData, flowRunID)
+		taskRunID := h.resolveTaskRunID(payload.RunID, flowRunID)
 		switch payload.Data.Phase {
 		case "end":
-			telemetry.ReportTaskLifecycleEnd(flowRunID, payload.Data.Aborted, payload.Data.Error != "")
+			telemetry.ReportTaskLifecycleEnd(taskRunID, payload.Data.Aborted, payload.Data.Error != "")
 		case "error":
 			if errorRecovered {
 				// A salvaged reply does not establish that execution finished.
-				telemetry.ReportTaskExecution(flowRunID, "", "unknown", "lifecycle_error_recovered")
+				telemetry.ReportTaskExecution(taskRunID, "", "unknown", "lifecycle_error_recovered")
 			} else {
-				telemetry.ReportTaskExecution(flowRunID, "", "failed", "lifecycle_error")
+				telemetry.ReportTaskExecution(taskRunID, "", "failed", "lifecycle_error")
 			}
 		}
 		monEvt := domain.MonitorEvent{

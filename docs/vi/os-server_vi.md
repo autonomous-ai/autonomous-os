@@ -4,6 +4,34 @@
 
 ## OS Server Endpoints (Go, :5000)
 
+### Harness-only voice
+
+Mode RAM tùy chọn gửi STT đã chốt của HAL tới agent đang focus trong app Harness, trước local intent và gate ready/busy của main runtime. Mode mặc định tắt
+sau khi OS-server khởi động lại. Event/recap Harness hiện có cung cấp câu trả lời
+được đọc trên thiết bị. Chỉ request voice loopback trực tiếp có snapshot routing
+`harness_voice` đi vào nhánh này; text/MQTT chat và sensing nền giữ luồng cũ.
+OS vẫn đồng bộ focus khi mode tắt qua `focus.get`, `focus.changed` và refresh
+mỗi hai giây. Bật mode qua web/MQTT chỉ đổi flag RAM; web không có bộ chọn target. Chưa focus,
+CLI cũ thiếu `focus.get`, hoặc focus máy khác sẽ chặn gửi voice. Mỗi lần gửi
+kèm `focusRevision` dạng opaque; CLI kiểm tra nguyên tử trước khi nhận turn.
+
+`GET /api/harness/voice-mode` cho admin hoặc loopback đọc. API quản lý chỉ cho admin
+gồm `PUT /api/harness/voice-mode`, `GET /api/harness/agents`,
+`GET /api/harness/voice-mode/question`, và `POST` tới
+`/api/harness/voice-mode/answer`, `/receipt`, `/resolve` cùng prefix
+`/api/harness/voice-mode`. Xem [tích hợp Harness](harness_vi.md) về payload,
+kiểm tra generation, câu trả lời có cấu trúc và khôi phục receipt.
+
+`POST /api/harness/voice-mode/gesture` chỉ nhận loopback thực sự, với
+`{gestureId:"<UUID>"}` từ physical-action worker của HAL sau khi nhả cú vuốt
+MPR121 phải sang trái. HAL xác định hướng theo `swipe_axis` trái sang phải
+vật lý; vuốt trái sang phải dùng action sleep hiện có. Go bật/tắt chung mode
+RAM và trả snapshot. Khi bật, giữ focus hợp lệ hoặc gọi `focus.ensure` rồi chờ
+Desktop xác nhận; focus không khả dụng thì mode vẫn tắt. Tắt vẫn được khi offline.
+Lỗi action trả `data.code` để HAL đọc phrase theo ngôn ngữ cấu hình: `harness_unpaired` hướng dẫn ghép đôi thiết bị trong ứng dụng Harness; `harness_offline` báo đã ghép đôi nhưng chưa kết nối. Cả hai giữ mode tắt. Cache RAM
+128 kết quả chặn ID gesture lặp bật/tắt hai lần; lệnh off rõ ràng qua web/MQTT
+hủy gesture đang chờ bật.
+
 ### Health
 
 | Method | Endpoint | Mô tả |
@@ -50,8 +78,12 @@ Worker môi trường của OS đọc HAL độc lập và POST thay đổi kéo
 `environment.update` tới `/api/sensing/event`. Config `environment` cấp cao
 nhất đọc/ghi qua admin `GET`/`PUT /api/device/config`: mặc định đánh giá mỗi
 10 giây, duy trì 60 giây, cooldown 900 giây, retry 60 giây, tuổi mẫu tối đa
-10 giây. Delta và warm-up từng chỉ số cấu hình được. SCD41 thêm `co2_ppm` đo
-thật vào cùng capability, mặc định thay đổi 200 ppm và warm-up 60 giây. Map
+10 giây. Delta và warm-up từng chỉ số cấu hình được. Component HAL đã đăng ký
+dùng chung schema chỉ số: SEN55 + SCD41 hoặc SEN63C đi cùng API, thông báo
+ban đầu và flow thay đổi. Cờ `enabled` trong JSON từng component điều khiển
+hardware; OS không chọn model sensor. Sample status luôn có chín key chỉ số
+nullable: số đo không hỗ trợ/chưa khả dụng là null, bị detector bỏ qua.
+`co2_ppm` đo thật có delta mặc định 200 ppm và warm-up 60 giây. Map
 `metrics` khai báo tường minh vẫn thay toàn bộ map, giữ nguyên nhóm đã chọn.
 Snapshot tổng hợp có `components`, `sources`, `metric_timestamps`: kiểm tra
 độ mới/tính liên tục theo chỉ số và nguồn, nên SEN55 lỗi không chặn CO₂ SCD41
@@ -75,7 +107,7 @@ cho phép tính thời gian thu nhận liên tục sẵn có vào warm-up khi ch
 vẫn loại component không hợp lệ/stale.
 Skill `environment` diễn giải
 số đo và tham khảo `wellbeing` để gợi ý phù hợp. Thu nhận phần cứng tách biệt
-chính sách thay đổi ở OS; tính năng không bật capability đang comment hay SEN55/SCD41
+chính sách thay đổi ở OS; tính năng không bật capability đang comment hay SEN55/SCD41/SEN63C
 đang tắt của Lamp. Xem [cảm biến môi trường Lamp](../../robots/lamp/docs/vi/environment-sensing_vi.md#chính-sách-thay-đổi-của-os-và-api-cho-agent)
 để biết mặc định, validation, payload và use case.
 
@@ -123,19 +155,28 @@ Config field: `timezone` trong `config/config.json` (chuỗi IANA zone, omitempt
 | GET | `/api/network/current` | SSID + IP hiện tại |
 | GET | `/api/network/check-internet` | Kiểm tra kết nối internet |
 
-**Monitor kết nối** (`system/network/service.go`, chạy khi `SetUpCompleted` = true).
-Ping `8.8.8.8` mỗi 5s — không phụ thuộc interface, nên máy online qua dây vẫn được
-tính là online. Fail 5 lần liên tiếp → bật LED state `Connectivity`; fail 10 lần
-(~50s) → leo thang sang reconnect WiFi (restart `wpa_supplicant@wlan0`, bounce
-interface); reconnect fail 5 lần (~10 phút) → reboot thiết bị.
+**Monitor kết nối** (`system/network/service.go` và `recovery.go`, hoạt động khi
+`SetUpCompleted` là true). Kiểm tra Internet theo nhịp monitor 5s; ping `8.8.8.8`
+thất bại 5 lần liên tiếp thì bật LED state `Connectivity`, ping thành công thì
+xóa state này. Trạng thái Internet độc lập với phục hồi WiFi: nếu còn association
+và IPv4 dùng được ở chế độ STA, thiết bị giữ WiFi ngay cả khi mất Internet.
+Monitor không còn reboot thiết bị.
 
-Nấc leo thang đó là đường phục hồi dành cho **WiFi**, nên bị bỏ qua khi WiFi không
-phải là link đang có vấn đề — nếu không, máy chạy dây sẽ tự reboot mỗi ~10 phút suốt
-thời gian ISP hỏng mà nó chẳng liên quan. Bỏ qua khi một trong hai: không có SSID nào
-được lưu (máy provision bằng dây — xem `setupWired` trong `docs/setup-flow.md`), hoặc
-default route thuộc về interface khác (traffic đang đi ra bằng dây). Còn khi link WiFi
-rớt thật thì *không* còn default route nào cả và `PrimaryInterface()` fallback về
-`wlan0`, nên đúng sự cố mà nấc này sinh ra để xử lý vẫn lọt qua guard.
+Sau 90s không có kết nối WiFi dùng được, monitor gọi script `device-ap-mode` hiện
+có. Trong chế độ AP, sau 2 phút thiết bị thử lại WiFi đã lưu bằng `connect-wifi`
+với credentials từ config thiết bị. Hoãn thử khi có client kết nối hotspot hoặc
+kiểm tra client bị lỗi. Lần thử tạm tắt hotspot; sau khi script hoàn tất, chờ tối
+đa 45s để có association và IPv4 dùng được ở chế độ STA. Thành công thì giữ STA;
+thất bại thì bật lại AP và bắt đầu khoảng chờ thử tiếp. Giữ nguyên trạng thái
+setup và credentials đã lưu. Phục hồi chạy tuần tự với provisioning/reset thủ
+công, và bị bỏ qua khi chưa lưu SSID hoặc default route dùng interface khác.
+Khi không có default route, `PrimaryInterface()` fallback về `wlan0`, cho phép
+phục hồi kết nối WiFi bị rớt.
+
+Giữ nguyên script và web UI. Kết nối vào hotspot thiết bị rồi mở
+`http://lamp-0c4e.local/wifi` (thay bằng hostname thực tế) để đổi WiFi; dùng
+`http://192.168.100.1/wifi` nếu không phân giải được `.local`. Tự động thử lại
+sau khi các client ngắt kết nối hotspot.
 
 ### Guard Mode (Chế độ canh gác)
 
@@ -996,3 +1037,21 @@ thiết bị thông thường và chưa phải bản phát hành compatibility/O
 Xem [khởi động host và cấu hình firmware](../../robots/_experimental/stackchan/docs/vi/runtime_vi.md).
 HAL client hiện tại của OS kết nối `http://127.0.0.1:5001`, nên chạy HAL cùng
 host với os-server. ESP32 kết nối vào listener WSS riêng của HAL.
+
+### Lịch sử hội thoại từ bên ngoài
+
+`system/externalhistory` lưu lượt hội thoại được xử lý ngoài main runtime. Harness-only voice dùng adapter hai bước: lưu input trước dispatch, lưu câu trả lời trước khi bỏ reply route. Mỗi bản ghi có source, máy tính, agent ID/tên và run ID gốc. Realtime dùng `RecordCompleted` để ghi atomic cả lượt đã trả lời thẳng vào `pending`. HAL giữ payload `voice_agent_handled`; adapter Go tách `[HANDLED]` / `[REPLY]`, gắn source `realtime`, agent `Realtime voice` và dùng `interaction_id` làm định danh gốc ổn định (sinh ID ngẫu nhiên cho caller cũ không có ID). ID còn lưu được chống trùng; nội dung mâu thuẫn bị từ chối. Tích hợp khác dùng một trong hai API mà không phụ thuộc Harness.
+
+Worker kiểm tra mỗi hai giây, gửi một cặp hỏi–đáp khi main runtime sẵn sàng và rảnh. Realtime vẫn có thể steer runtime đang bận nếu runtime hỗ trợ active-turn steering; Harness vẫn chờ rảnh. Worker chờ lượt history đang gửi hoàn tất trước lượt tiếp theo. Cơ chế dùng đúng định dạng history realtime hiện có (`[skills: input-branching]`, `[HANDLED]`, `[REPLY]`, `NO_REPLY`) và gọi `MarkSilentRun` trước `SendChatMessageWithRun`. Runtime tiếp nhận ngữ cảnh có ghi rõ nguồn vào history/compaction thông thường. Giữ nguyên silent/TTS, trả lời/delegate realtime và chính sách ngắt lời cũ; không thêm lớp suppression hoặc hệ thống tóm tắt.
+
+Bản ghi lưu atomic tại `local/external-history/` (thư mục 0700, file 0600). Các trạng thái: `waiting` chờ câu trả lời bên ngoài, `pending` chờ đồng bộ main, `sending`, `uncertain`, `done`. Lifecycle end thành công của main xác nhận bản ghi sau khi handler hiện có xử lý; socket write hay `chat.final` riêng lẻ chưa chứng minh hoàn tất. Restart gửi tiếp bản pending chưa từng thử gửi, khôi phục dấu silent/pending trace cho lượt đã thử. Reply route Harness voice đang chờ chỉ được khôi phục với cùng pairing; không gửi lại task bên ngoài.
+
+Lỗi send, thiếu lifecycle acknowledgement quá hai phút khi runtime rảnh, hoặc restart giữa lúc gửi khiến record ở `uncertain`. Record vẫn nằm trên disk và nhận được ACK đến muộn; không tự gửi lại vì không phải transport runtime nào cũng có idempotency. Cơ chế giữ bằng chứng, không hứa đồng bộ exactly-once qua thời điểm crash chưa rõ kết quả. Nếu câu trả lời bên ngoài không bao giờ tới, input giữ `waiting`; startup không đoán recap mới nhất cho lượt đó.
+
+Giới hạn 1024 records, input 16 KiB và output đồng bộ 64 KiB mỗi record. Output Harness dài hơn được cắt với dấu rõ ràng cho history (phản hồi gốc vẫn gửi đầy đủ). Record done hết hạn sau 30 ngày hoặc bị loại theo thứ tự cũ nhất khi đầy; không loại record chưa hoàn tất. Chống trùng áp dụng cho source/run ID còn lưu. Hàng đợi đầy toàn record chưa xong sẽ từ chối voice input mới thay vì mất history âm thầm. Lỗi ghi kết quả giữ reply route để callback lặp/recap recovery thử lại. Journal không đọc được khiến startup báo lỗi thay vì reset ngầm. Context đã đồng bộ do main runtime quản lý, không nạp lại toàn bộ journal vào prompt.
+
+Kiểm chứng: `go test -race ./system/externalhistory`; các test history/observer/Harness tập trung trong `system/server` và `system/server/agent/delivery/http`. Phát giọng nói thật và tương quan run sau restart trên từng runtime vẫn cần kiểm chứng tích hợp.
+
+Notification realtime được lưu trước gate busy/readiness của sensing, thay queue pending-event trong RAM cho các lượt này. HTTP thành công trả `runId` gốc ổn định, `historyRunId` riêng và kết quả `speechSuppressed` hiện có. Lỗi lưu trả HTTP 500, không fallback sang gửi thiếu journal. Độ bền bắt đầu khi OS nhận lưu notification; không khôi phục được lượt HAL chưa gửi tới OS. Bằng chứng sensing và marker ảnh look vẫn nằm trong Flow Monitor; đường dẫn snapshot được bỏ khỏi context gửi main như trước.
+
+Khi nhận history realtime, sensing trả ID hội thoại gốc (`device-realtime-…`) trong `runId`, ID đồng bộ riêng trong `historyRunId`. Metrics HAL gắn với lượt gốc; journal và lượt silent gửi main giữ nguyên ID sync ổn định. Chỉ tách bản ghi monitor, không đổi routing voice/follow-up hay chính sách silent/TTS.

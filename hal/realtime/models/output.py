@@ -13,6 +13,8 @@ class OutputBase(BaseModel):
         frozen=True, arbitrary_types_allowed=True
     )
     type: OutputTypeEnum
+    # Provider user-turn key; empty means ownership could not be established.
+    user_turn_id: str = ""
 
 
 class TextOutput(OutputBase):
@@ -26,8 +28,28 @@ class AudioOutput(OutputBase):
     transcript: str | None = None
 
 
+class ExecutionOutput(OutputBase):
+    """Metric-only proof retained when the original control terminal is discarded."""
+
+    type: OutputTypeEnum = OutputTypeEnum.EXECUTION
+    execution_completed: bool = False
+
+
+class UserSpeechOutput(OutputBase):
+    """Observed user speech; transcription alone provides no speech endpoint."""
+
+    type: OutputTypeEnum = OutputTypeEnum.USER_SPEECH
+    turn_id: str
+    # Incremental provider transcription, attributed to this exact input turn.
+    transcript: str = ""
+    endpoint_at: float | None = None
+    method: str = "provider_transcript"
+
+
 class InterruptedOutput(OutputBase):
     type: OutputTypeEnum = OutputTypeEnum.INTERRUPTED
+    reason: str = "output_reset"
+    at: float | None = None
 
 
 class FunctionCallOutput(OutputBase):

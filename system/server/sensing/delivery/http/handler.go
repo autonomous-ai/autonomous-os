@@ -123,6 +123,14 @@ type SensingEventRequest struct {
 	// it would fail there, and before this field existed every attachment rode
 	// the Image field and was written as `.jpg` regardless of what it was.
 	Files []domain.InboundFile `json:"files,omitempty"`
+	// HarnessVoice is the routing snapshot taken by HAL before voice capture.
+	// It is deliberately separate from Message and is never forwarded to a model.
+	HarnessVoice *HarnessVoiceSnapshot `json:"harness_voice,omitempty"`
+}
+
+type HarnessVoiceSnapshot struct {
+	Enabled    bool   `json:"enabled"`
+	Generation uint64 `json:"generation"`
 }
 
 // SensingHandler handles incoming sensing events from HAL and forwards them to the agent.
@@ -146,8 +154,15 @@ type SensingHandler struct {
 	// opt-in (OS_REALTIME_SUPERSEDES_MAIN_REPLY), so on a default body nothing
 	// is suppressed and the situation is not a metric sample at all.
 	onRealtimeHandled      func() bool
+	realtimeHistory        func(string, string) (string, error)
 	harnessFollowup        func() bool
 	harnessFollowupContext func() string
+	harnessVoice           func(*gin.Context, SensingEventRequest) bool
+}
+
+// SetHarnessVoice installs the direct voice route before local intents or runtime gates.
+func (h *SensingHandler) SetHarnessVoice(fn func(*gin.Context, SensingEventRequest) bool) {
+	h.harnessVoice = fn
 }
 
 // SetOnRealtimeHandled installs the realtime-handled hook. Wired in
@@ -284,6 +299,10 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 		mood.ClearCurrentUser()
 	}
 
+	if h.harnessVoice != nil && h.harnessVoice(c, req) {
+		return
+	}
+
 	// Voice commands: try local intent matching first for instant response
 	if (req.Type == "voice" || req.Type == "voice_command" || req.Type == "voice_followup") && h.config.LocalIntentEnabled() {
 		if result := intent.Match(req.Message); result != nil {
@@ -374,6 +393,10 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 	speechSuppressed := false
 	if isRealtimeHandled && h.onRealtimeHandled != nil {
 		speechSuppressed = h.onRealtimeHandled()
+	}
+	if isRealtimeHandled && h.realtimeHistory != nil {
+		h.persistRealtimeHistory(c, req, speechSuppressed)
+		return
 	}
 	isPassive := !isVoiceCommand
 	if isPassive && !isVoice && !isRealtimeHandled && !isChat && req.Type != "presence.enter" && req.Type != "fire_hazard.detected" && h.isSleeping != nil && h.isSleeping() {

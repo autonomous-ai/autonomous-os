@@ -15,7 +15,9 @@ const { b64d, fingerprint } = await import(base + 'src/lib/e2ee/core.ts');
 const { default: Bonjour } = await import(base + 'node_modules/bonjour-service/dist/index.js');
 const backend = new BackendSocket('interop-machine'); // Never call connect(): backend remains offline.
 let submits = 0;
-const service = new AutonomousDeviceService({ machineId: 'interop-machine', serverInstanceId: 'interop-instance', agents: () => [{ agentId: 'agent-one', name: 'Test agent', engine: 'claude', state: 'idle' }], submit: (id, text, deliveryId) => { submits++; service.delivery({ sessionId: id, deliveryId, state: 'delivered' }); }, cancelDelivery: () => true, stop: async () => true, answer: async () => true, recent: () => [], emit: f => backend.emitAutonomousDeviceEvent(f) });
+const submittedAgents: string[] = [];
+const answers: { agentId: string; requestId: string; answers: Record<string, string> }[] = [];
+const service = new AutonomousDeviceService({ machineId: 'interop-machine', serverInstanceId: 'interop-instance', requestAppFocus: (agentId: string) => { setTimeout(() => service.appFocus('interop-machine', agentId, 'app-window'), 20); return true; }, agents: () => [{ agentId: 'agent-one', name: 'Test agent', engine: 'claude', state: 'idle' }, { agentId: 'agent-two', name: 'Second agent', engine: 'codex', state: 'idle' }], submit: (id, text, deliveryId) => { submits++; submittedAgents.push(id); service.delivery({ sessionId: id, deliveryId, state: 'delivered' }); }, cancelDelivery: () => true, stop: async () => true, answer: async (agentId, requestId, values) => { answers.push({ agentId, requestId, answers: structuredClone(values) }); return true; }, recent: () => [], emit: f => backend.emitAutonomousDeviceEvent(f) });
 backend.setAutonomousDeviceService(service);
 const host = {
     machineId: backend.machineId, label: 'Interop Mac',
@@ -61,8 +63,16 @@ const server = createServer(async (req, res) => {
             case '/revoke':
                 out = backend.revoke(body.fingerprint);
                 break;
+            case '/focus':
+                service.appFocus(body.machineId ?? 'interop-machine', body.agentId ?? null, body.connId ?? 'app-window');
+                out = service.focusSnapshot();
+                break;
+            case '/question':
+                service.commander({ type: 'commander_question', agentId: 'agent-one', payload: { requestId: body.requestId, questions: body.questions } });
+                out = { ok: true };
+                break;
             case '/state':
-                out = { submits, pairs: backend.listPairs(), backend: backend.isConnected(), commander: backend.autonomousDeviceConnected() };
+                out = { submits, submittedAgents, answers, pairs: backend.listPairs(), backend: backend.isConnected(), commander: backend.autonomousDeviceConnected() };
                 break;
             default: out = { error: 'bad route' };
         }

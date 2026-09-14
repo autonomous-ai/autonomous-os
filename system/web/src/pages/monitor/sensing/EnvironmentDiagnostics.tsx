@@ -1,6 +1,7 @@
 import type { EnvironmentComponentStatus, EnvironmentStatus } from "./environmentApi";
 
 function ComponentDetails({ name, status }: { name: string; status: EnvironmentComponentStatus }) {
+  const timestamp = status.sample?.timestamp;
   return <div>
     <h3 style={{ fontSize: 13 }}>{name} · {status.state}{status.stale && status.state === "ready" ? " · stale" : ""}</h3>
     {status.last_error && <p style={{ color: "var(--lm-amber)" }}>{status.last_error}</p>}
@@ -9,7 +10,7 @@ function ComponentDetails({ name, status }: { name: string; status: EnvironmentC
       {status.sample?.device_status != null && <>
         <dt>Device status register</dt><dd>{`0x${status.sample.device_status.toString(16).padStart(8, "0")}`}</dd>
       </>}
-      <dt>Last measurement</dt><dd>{status.sample ? new Date(status.sample.timestamp * 1000).toLocaleString() : "—"}</dd>
+      <dt>Last measurement</dt><dd>{timestamp != null && Number.isFinite(timestamp) ? new Date(timestamp * 1000).toLocaleString() : "—"}</dd>
       <dt>Poll interval</dt><dd>{status.timing ? `${status.timing.poll_interval_s} s` : "—"}</dd>
       <dt>Retry interval</dt><dd>{status.timing ? `${status.timing.retry_interval_s} s` : "—"}</dd>
       <dt>Stale after</dt><dd>{status.timing ? `${status.timing.stale_after_s} s` : "—"}</dd>
@@ -23,6 +24,6 @@ export function EnvironmentDiagnostics({ data }: { data: EnvironmentStatus | nul
     <summary style={{ cursor: "pointer" }}>Sensor details</summary>
     {data && (data.components
       ? Object.entries(data.components).map(([name, status]) => <ComponentDetails key={name} name={name.toUpperCase()} status={status} />)
-      : <ComponentDetails name="SEN55" status={data} />)}
+      : <ComponentDetails name="Environment sensor" status={data} />)}
   </details>;
 }

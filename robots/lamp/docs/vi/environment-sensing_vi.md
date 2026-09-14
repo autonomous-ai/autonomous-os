@@ -1,12 +1,14 @@
-# Cảm biến môi trường — SEN55 và SCD41
+# Cảm biến môi trường — component thay thế được
 
-SEN55 đo môi trường: bụi, độ ẩm, nhiệt độ và chỉ số VOC/NOx. HAL cung cấp
-capability `environment` tùy chọn, có driver, vòng đời và HTTP snapshot riêng,
+HAL cung cấp sensor môi trường qua một capability `environment` tùy chọn,
+với driver, vòng đời và HTTP snapshot riêng của từng component,
 cùng tầng với camera và audio. Tích hợp gồm thu nhận HAL, snapshot chỉ đọc qua
 web/MQTT và OS phát hiện thay đổi môi trường kéo dài theo cấu hình để gửi agent.
 SEN55 không đo chạm, lực, CO₂, CO hay O₂. Component SCD41 tùy chọn thêm
 `co2_ppm` đo thật vào cùng capability; không công bố nhiệt độ/độ ẩm đọc trên
-bus của SCD41, nên SEN55 vẫn là nguồn của hai chỉ số đó.
+bus của SCD41. SEN63C cung cấp PM, nhiệt độ, độ ẩm và CO₂ đo thật trong
+một component; không có chỉ số VOC/NOx. Không component được hỗ trợ nào đo
+CO hay O₂. Software dùng key chỉ số và nguồn đo, không phụ thuộc tên sensor.
 
 ## Phạm vi hiện tại: số đo và sự kiện thay đổi kéo dài
 
@@ -67,15 +69,23 @@ HAL chưa mount API hoặc đọc cấu hình dây nối cho đến khi bỏ com
 Khai báo chuẩn bị sẵn dùng driver `composite`, `routes: [environment]` và
 `required: false`.
 
-Chọn component tại `robots/<device>/environment.json`:
+HAL duyệt driver component đã đăng ký và đọc JSON riêng theo device/board:
+`sen55.json`, `scd41.json`, `sen63c.json`. Cờ `enabled` điều khiển từng
+component; entry tắt hoặc thiếu không truy cập hardware. Không có danh sách
+chọn component riêng; file `environment.json` cũ bị bỏ qua. Mỗi component bật
+có worker độc lập.
 
-```json
-{"components": ["sen55", "scd41"]}
-```
-
-Có thể chọn từng component độc lập. Thiếu file này giữ cách chạy cũ chỉ có
-SEN55; tên lạ hoặc trùng bị từ chối. Mỗi component được chọn có worker và
-cấu hình riêng.
+Để thay SEN55 + SCD41 bằng SEN63C, đặt hai entry cũ thành `"enabled": false`,
+đặt SEN63C thành `"enabled": true` với dây nối đã xác nhận, rồi restart HAL.
+Hai component bật không được cùng sở hữu một chỉ số: SEN55 + SEN63C hoặc
+SCD41 + SEN63C bị báo lỗi cấu hình thay vì âm thầm ghi đè dữ liệu. Component
+tắt không tham gia kiểm tra trùng này. Thêm hardware sau này cần driver,
+đăng ký các chỉ số cung cấp và config board; API environment và flow software
+vẫn dùng chung.
+Đăng ký tại `hal/drivers/environment/registry.py`: loader config, driver
+(`start`, `read`, `close`), timing mặc định và các key chỉ số hỗ trợ.
+Setup và `build-orangepi` giải nén toàn bộ archive profile device, nên file
+JSON sensor mới không cần nhánh cài đặt riêng theo loại sensor.
 
 Cấu hình SEN55 thuộc device tại `robots/<device>/sen55.json`, dùng map `boards`
 như `mpr121.json`. Board mục tiêu là OrangePi (`orangepi_sun60`); Lamp có entry tắt
@@ -131,17 +141,33 @@ recalibration. Xem điều kiện tiếp xúc không khí của ASC trước khi
 warm-up OS 60 giây không phải hiệu chuẩn. Xem [datasheet SCD4x](https://sensirion.com/media/documents/48C4B7FB/67FE0194/CD_DS_SCD4x_Datasheet_D1.pdf).
 Chưa kiểm chứng dây nối hay số đo SCD41 trên hardware thật.
 
-Log vòng đời HAL dùng key `[sen55]` và `[scd41]`: tắt/khởi động, mẫu hợp lệ
+## Component kết hợp SEN63C
+
+`robots/lamp/sen63c.json` dùng cùng map `boards`, mặc định tắt với `bus`,
+`sda_pin`, `scl_pin` là null. Xác nhận dây trước khi bật; ghi chú chân SEN55
+ở trên không xác nhận dây SEN63C. Driver dùng I2C `0x6B`, kiểm tra product type
+SEN63C, CRC từng word và đọc PM1/PM2.5/PM4/PM10, nhiệt độ, độ ẩm, `co2_ppm`
+đo thật. VOC/NOx giữ null trong sample chung. CO₂ có thể chưa có trong 22–24
+giây đầu dù các số đo khác đã dùng được; warm-up OS áp dụng độc lập.
+
+Mặc định `poll_interval_s: 1`, `retry_interval_s: 5`, `stale_after_s: 5`,
+`no_data_timeout_s: 30`. `automatic_self_calibration: null` giữ cài đặt sensor;
+true/false tường minh cấu hình ASC CO₂. Đây là phần riêng với warm-up và ngưỡng
+thay đổi của OS. Không gửi lệnh forced recalibration hay lưu bền vững. Xem
+[tài liệu driver SEN63C của Sensirion](https://sensirion.github.io/python-i2c-sen63c/api.html).
+Chưa kiểm chứng dây nối và số đo SEN63C trên hardware thật.
+
+Log vòng đời HAL dùng key `[sen55]`, `[scd41]` và `[sen63c]`: tắt/khởi động, mẫu hợp lệ
 đầu tiên, bắt đầu đo, lỗi thử lại và dừng hiển thị ở INFO (lỗi có thể dùng
 WARNING hoặc ERROR). Mỗi mẫu hợp lệ được log ở INFO với timestamp và số đo;
 lần poll chưa có mẫu mới log trạng thái chờ và tuổi dữ liệu gần nhất.
-`[environment]` ghi component đã chọn/simulation hoặc thiếu capability.
+`[environment]` ghi component đã đăng ký/simulation hoặc thiếu capability.
 
 Để theo dõi log trên device, dùng file log hoặc journal systemd:
 
 ```sh
-tail -F /var/log/hal/server.log | grep --line-buffered -E '\[(environment|sen55|scd41)\]'
-journalctl -u hal -f | grep --line-buffered -E '\[(environment|sen55|scd41)\]'
+tail -F /var/log/hal/server.log | grep --line-buffered -E '\[(environment|sen55|scd41|sen63c)\]'
+journalctl -u hal -f | grep --line-buffered -E '\[(environment|sen55|scd41|sen63c)\]'
 ```
 
 Đây là hướng dẫn cho người vận hành; việc ghi tài liệu không thực hiện kết nối
@@ -161,16 +187,18 @@ hiện có. Chúng khả dụng khi robot nạp route `environment`.
 Các trạng thái gồm `disabled`, `starting`, `ready`, `error`, `stopped`. Mỗi
 entry trong `components` giữ state, enabled, sample, lỗi, tuổi mẫu, bus và
 timing riêng. Dữ liệu component không ready hoặc hết hạn không khả dụng;
-SEN55 có thanh ghi trạng thái khác zero cũng bị loại khỏi sample tổng hợp.
+Component có thanh ghi trạng thái khác zero cũng bị loại khỏi sample tổng hợp.
 
 Nhóm `ready` và không stale khi ít nhất một component đóng góp số đo còn mới.
 `partial: true` nghĩa là component khác đang bật nhưng không khả dụng; một
 component tắt không tự khiến nhóm partial. Số đo khỏe vẫn dùng được khi sensor
-khác lỗi. Không có số đo dùng được thì `sample`, `age_s` của nhóm là `null`,
-`stale` là true. `sample` phẳng gồm các trường thuộc component được chọn;
-giá trị không khả dụng là `null`.
+khác lỗi. `sample` cấp nhóm luôn là object với đủ chín key chỉ số bên dưới
+và `timestamp`. Chỉ số không hỗ trợ, tắt, chưa ready hoặc stale đều là `null`.
+Không có số đo dùng được thì mọi chỉ số, `sample.timestamp` và `age_s` là
+`null`, `stale` là true. Sample thô từng component có thể giữ số đo cũ để
+chẩn đoán; đó không phải số đo hiện tại của nhóm.
 
-`sources` ánh xạ chỉ số đến component; `metric_timestamps` giữ Unix timestamp
+`sources` ánh xạ chỉ số thuộc component đang bật đến component đó; `metric_timestamps` giữ Unix timestamp
 cho từng chỉ số dùng được. `sample.timestamp` và `age_s` cấp nhóm mô tả dữ liệu
 mới nhất, không đại diện mọi chỉ số. Consumer cần kiểm tra trạng thái nguồn
 và độ mới từng chỉ số. Bus/timing chỉ có thêm ở cấp cao nhất khi nhóm có một
@@ -180,42 +208,42 @@ Một sample chứa:
 
 | Trường | Ý nghĩa |
 |---|---|
-| `timestamp` | Unix time tính bằng giây |
+| `timestamp` | Unix time tính bằng giây, hoặc `null` khi không có số đo dùng được |
 | `pm1_0_ug_m3`, `pm2_5_ug_m3`, `pm4_0_ug_m3`, `pm10_ug_m3` | Nồng độ khối lượng bụi, đơn vị µg/m³ |
 | `humidity_pct` | Độ ẩm tương đối, % |
 | `temperature_c` | Nhiệt độ, °C |
 | `voc_index`, `nox_index` | Chỉ số khí không có đơn vị, không phải nồng độ ppm |
-| `co2_ppm` | Nồng độ CO₂ đo thật, ppm, chỉ từ SCD41 |
+| `co2_ppm` | Nồng độ CO₂ đo thật, ppm, từ component CO₂ đang bật |
 
-`device_status` của SEN55 nằm trong `components.sen55.sample` để chẩn đoán;
-nhóm chỉ có SEN55 vẫn giữ thêm `sample.device_status` để tương thích. Đây
-không phải trạng thái chung cho cảm biến CO₂.
+`device_status` riêng của sensor nằm trong sample từng component để chẩn đoán.
+Consumer dùng schema chỉ số chung và trạng thái component, không coi thanh ghi
+một sensor là trạng thái chung của nhóm.
 
 Giá trị đo chưa khả dụng được trả bằng JSON `null`; caller không được hiểu
 là số không. Phần dưới mô tả phát hiện thay đổi ở OS và diễn giải của agent.
 
 ## Hiển thị trên web local
 
-[Device → Sensing](../../../../docs/vi/web-ui_vi.md#58-device--sensing) chỉ hiện
-card **Environment** khi device khai báo rõ capability `environment`.
-Đang tải hoặc thiếu capability thì không gửi request tới cảm biến. Menu Sensing
-không yêu cầu bật debug; hỗ trợ device có `vision`, `environment`
-hoặc cả hai, còn card camera vẫn yêu cầu `vision`.
+[Device → Sensing](../../../../docs/vi/web-ui_vi.md#58-device--sensing) và
+card **Environment** luôn hiện, không cần debug. Đang tải hoặc thiếu capability
+thì số đo hiện `N/A`, không gửi request tới sensor. Card camera vẫn yêu cầu
+`vision`.
 
-Trình duyệt đọc `GET /api/hardware/environment/status` mỗi 3 giây qua proxy
+Khi có capability `environment`, trình duyệt đọc
+`GET /api/hardware/environment/status` mỗi 3 giây qua proxy
 hardware của OS đã có xác thực, chuyển tới HAL `GET /environment/status`.
 Chu kỳ làm mới này độc lập với cấu hình nhịp đọc HAL bên dưới. Card hiển thị
-trạng thái, các trường của component có khai báo (tối đa chín số đo gồm CO₂
-ppm), nhãn nguồn, thời điểm sample, trạng thái dữ liệu cũ và lỗi.
-Giá trị thiếu hoặc cũ hiện `—`; request thất bại được hiển thị rõ để không
+trạng thái, chín trường chỉ số chung (gồm CO₂ ppm), nhãn nguồn, thời điểm sample, trạng thái dữ liệu cũ và lỗi.
+Giá trị thiếu hoặc cũ hiện `N/A`; request thất bại được hiển thị rõ để không
 trình bày số đo cũ như dữ liệu hiện tại. Lỗi component không che số đo còn tốt.
 Bus, thanh ghi trạng thái và timing nằm trong mục kỹ thuật thu gọn theo từng
 component ở `status.components`; vẫn hỗ trợ snapshot một sensor kiểu cũ. Đây là màn hình
 chỉ đọc, không có ngưỡng tốt/xấu hay lưu lịch sử. Event OS → agent do worker
 độc lập bên dưới tạo, không do trình duyệt làm mới.
 
-Card vẫn ẩn với capability đang comment của Lamp. Nếu khai báo capability
-nhưng giữ `enabled: false`, card hiển thị trạng thái đã tắt.
+Với capability đang comment của Lamp, card hiện `N/A` và không polling. Nếu
+khai báo capability nhưng giữ `enabled: false`, card hiển thị trạng thái đã tắt
+và số đo `N/A`. Hiển thị UI không bật thu nhận hay event agent.
 
 ## Đọc qua MQTT
 
@@ -235,7 +263,7 @@ nên trả lỗi thiếu capability. Đây là request/reply, không stream hay 
 
 ## Cấu hình thời gian
 
-Mỗi entry board nhận các trường thời gian tùy chọn sau (giây). Mặc định bên dưới dành cho SEN55; mặc định SCD41 được nêu ở trên. Giá trị phải là số dương hữu hạn; `stale_after_s` và `no_data_timeout_s` phải lớn hơn `poll_interval_s`. Khởi động lại HAL sau khi sửa. Đây là nhịp đọc của HAL, không thay đổi nhịp đo nội bộ của sensor.
+Mỗi entry board nhận các trường thời gian tùy chọn sau (giây). Mặc định bên dưới dành cho SEN55; mặc định component khác được nêu ở trên. Giá trị phải là số dương hữu hạn; `stale_after_s` và `no_data_timeout_s` phải lớn hơn `poll_interval_s`. Khởi động lại HAL sau khi sửa. Đây là nhịp đọc của HAL, không thay đổi nhịp đo nội bộ của sensor.
 
 ```json
 {
@@ -250,7 +278,7 @@ Mỗi entry board nhận các trường thời gian tùy chọn sau (giây). M�
 
 OS cấu hình diễn giải trong object `environment` cấp cao nhất của
 `config/config.json`, qua admin `GET`/`PUT /api/device/config` hiện có.
-Cấu hình này tách biệt thời gian HAL trong `sen55.json` và `scd41.json`. Giá trị mặc định:
+Cấu hình này tách biệt thời gian HAL trong JSON từng component. Giá trị mặc định:
 
 ```json
 {
@@ -365,9 +393,29 @@ hiện có.
 `skills/environment/SKILL.md` yêu cầu capability và sở hữu diễn giải dữ liệu.
 Skill bị loại khi capability thiếu hoặc rỗng, kể cả khi skill cũ vẫn giữ cơ
 chế khả dụng dự phòng.
-Skill chỉ tham khảo mục environmental-care của `skills/wellbeing/SKILL.md`
-để chọn thời điểm và lời nhắc, tránh vòng lặp định tuyến. Hỏi về phòng không
-cần quan sát camera, danh tính, log hoạt động hay bộ đếm uống nước.
+Skill tham khảo mục environmental-care của `skills/wellbeing/SKILL.md`
+để chọn thời điểm và lời nhắc. Khi người dùng nói khó chịu, dùng
+`skills/wellbeing/reference/discomfort.md`; tái sử dụng hướng dẫn và dữ liệu
+đã đọc, không chuyển lượt qua lại giữa các skill. Hỏi về phòng và hỗ trợ khi
+khó chịu không cần camera, danh tính, log hoạt động hay bộ đếm uống nước.
+
+Khi người dùng nói mệt, nhức đầu, chóng mặt, bí bách hoặc khó tập trung,
+wellbeing phản hồi người dùng trước. Môi trường là phần tùy chọn: capability
+thiếu/chưa biết thì không gọi công cụ môi trường; đọc lỗi, toàn null hoặc stale
+thì bỏ qua gợi ý môi trường. Không nhắc lỗi sensor hay yêu cầu setup hardware
+khi người dùng đang chia sẻ khó chịu. Chỉ giải thích thiếu dữ liệu nếu họ hỏi
+rõ về số đo phòng. Khi có capability, đọc status tối đa một lần có timeout
+(hoặc dùng snapshot hiện tại đã cung cấp) để thêm nhận xét phù hợp và một gợi ý
+thoải mái/thông gió có điều kiện. Số đo không xác định nguyên nhân triệu chứng
+và không phủ nhận việc người dùng đang khó chịu.
+
+Reference discomfort có hướng dẫn ưu tiên triệu chứng/phơi nhiễm do người dùng
+báo trước việc kiểm tra sensor, kèm nguồn và tình huống minh họa. Đây là hướng
+dẫn phản hồi của skill, không phải engine y tế/báo động trong OS. Hướng dẫn
+CO₂ phân biệt tăng so với trước và vấn đề thông gió kéo dài; không thêm phân
+loại nồng độ tự động hay ngưỡng OS. Dữ liệu thật đến sau có thể dùng so sánh,
+nhưng không ngầm tạo lịch kiểm tra, log wellbeing mới hoặc quyền điều khiển
+thiết bị.
 
 - **Hỏi về phòng:** đọc status một lần, báo số đo hữu ích; thiếu dữ liệu hoặc
   dữ liệu cũ là chưa biết, không phải không ô nhiễm hay bằng chứng an toàn.
@@ -382,10 +430,10 @@ cần quan sát camera, danh tính, log hoạt động hay bộ đếm uống n�
   baseline thì nói chưa so sánh được. Không hứa hẹn giờ kiểm tra lại, tự polling
   hay bịa kho lịch sử bền vững.
 
-VOC/NOx là chỉ số tương đối, không phải ppm hay nhận diện hóa chất. SEN55
-không hỗ trợ kết luận CO₂/O₂. Chỉ dùng SCD41 để nói về CO₂ khi `co2_ppm` đo
-thật còn mới; không suy ra CO₂ từ VOC/NOx. Cả hai không đo O₂, CO hay tạo
-cảnh báo khói/cháy. PM tức thời không chứng minh đáp ứng hướng dẫn
+VOC/NOx là chỉ số tương đối, không phải ppm hay nhận diện hóa chất. Chỉ nói
+về CO₂ khi `co2_ppm` đo thật còn mới, bất kể component; không suy ra CO₂ từ
+VOC/NOx. Thiếu hai chỉ số khí trên SEN63C là bình thường, không phải lỗi sensor.
+Không component được hỗ trợ nào đo O₂, CO hay tạo cảnh báo khói/cháy. PM tức thời không chứng minh đáp ứng hướng dẫn
 WHO về phơi nhiễm 24 giờ hoặc cả năm. Xét điều kiện ngoài trời trước khi gợi
 ý thông gió, và nhiệt vỏ máy trước khi diễn giải nhiệt độ. Skill không chẩn
 đoán sức khỏe, tự bịa ngưỡng, tiếp tục việc không liên quan hay điều khiển máy

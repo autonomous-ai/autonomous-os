@@ -62,6 +62,20 @@ class ReportTests(unittest.TestCase):
         result = self.summary([newer_binding, bound, initial, execution()])
         self.assertEqual(result["incomplete_turns"], 1)
 
+    def test_transport_observation_loss_never_overrides_terminal(self):
+        lost = execution(outcome="unknown", evidence="execution_observation_lost",
+                         execution_at_ms=100000)
+        result = self.summary([started(), lost])
+        self.assertEqual(result["unknown_turns"], 1)
+        self.assertEqual(result["completed_turns"], 0)
+        for outcome in ("completed", "failed"):
+            with self.subTest(outcome=outcome):
+                terminal = execution(outcome=outcome)
+                for rows in ([started(), terminal, lost], [lost, terminal, started()]):
+                    result = self.summary(rows)
+                    self.assertEqual(result[outcome + "_turns"], 1)
+                    self.assertEqual(result["unknown_turns"], 0)
+
     def test_started_without_terminal_is_immediately_in_denominator(self):
         result = self.summary([started(task_started_at_ms=1999999)])
         self.assertEqual(result["eligible_mature_turns"], 1)
@@ -293,6 +307,41 @@ class GroupReportTests(unittest.TestCase):
         event["event_name"] = f"{group}_metrics_task_started"
         return event
 
+    def test_harness_handoff_requires_remote_evidence_for_voice_and_chat(self):
+        for group in ("voice", "chat"):
+            start = self.start(group, "harness")
+            handoff = execution("harness", outcome="unknown", evidence="harness_delegated",
+                                execution_at_ms=2000)
+            local_end = execution("harness", execution_at_ms=90000)
+            for evidence, outcome in ((None, "unknown"), ("harness_question_open", "unknown"),
+                                      ("harness_turn_done", "completed"),
+                                      ("harness_turn_summary", "completed"),
+                                      ("harness_turn_error", "failed")):
+                with self.subTest(group=group, evidence=evidence):
+                    rows = [start, handoff, local_end]
+                    if evidence:
+                        remote = execution("harness", outcome=outcome, evidence=evidence,
+                                           execution_at_ms=10000)
+                        rows += [remote, remote]
+                    for order in (rows, list(reversed(rows))):
+                        result = metrics.report(order, 2000000, group=group)["aggregate"]
+                        self.assertEqual(result["eligible_mature_turns"], 1)
+                        self.assertEqual(result[outcome + "_turns"], 1)
+
+    def test_harness_marker_does_not_override_remote_terminal_or_gemini(self):
+        handoff = execution("v1", outcome="unknown", evidence="harness_delegated",
+                            execution_at_ms=100000)
+        remote = execution("v1", evidence="harness_turn_done", execution_at_ms=50000)
+        result = metrics.report([self.start("voice", "v1"), handoff, remote], 2000000)["aggregate"]
+        self.assertEqual(result["completed_turns"], 1)
+        realtime = turn("v1", route="realtime_handled")
+        result = metrics.report([realtime, handoff, remote], 2000000)["aggregate"]
+        self.assertEqual(result["completed_turns"], 0)
+        self.assertEqual(result["incomplete_turns"], 1)
+        result = metrics.report([realtime, handoff, remote,
+                                 execution("v1", evidence="realtime_turn_done")], 2000000)["aggregate"]
+        self.assertEqual(result["completed_turns"], 1)
+
     def test_mixed_cohorts_keep_independent_denominators_and_results(self):
         rows = [turn("hal"), execution("hal")]
         for group, outcome in (("voice", "completed"), ("chat", "failed"),
@@ -311,6 +360,18 @@ class GroupReportTests(unittest.TestCase):
                 self.assertEqual(aggregate["completion_pct"], aggregate["kpi3_pct"])
         self.assertEqual(metrics.report(rows, 2000000),
                          metrics.report(rows, 2000000, group="voice"))
+
+    def test_no_lifecycle_final_completes_chat_but_not_realtime_voice(self):
+        done = execution("slash", evidence="chat_final_no_lifecycle")
+        rows = [self.start("chat", "slash"), done, done]
+        result = metrics.report(rows, 2000000, group="chat")["aggregate"]
+        self.assertEqual(result["eligible_mature_turns"], 1)
+        self.assertEqual(result["completed_turns"], 1)
+        self.assertEqual(result["incomplete_turns"], 0)
+        voice = metrics.report([turn("slash", route="realtime_handled"), done],
+                               2000000)["aggregate"]
+        self.assertEqual(voice["completed_turns"], 0)
+        self.assertEqual(voice["incomplete_turns"], 1)
 
     def test_each_group_hundred_starts_eighty_five_completed(self):
         rows = []

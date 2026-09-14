@@ -157,5 +157,7 @@ func (s *ClaudeCodeService) sendChat(message string, imagesBase64 []string, fixe
 		return "", fmt.Errorf("send message.send: %w", err)
 	}
 
+	s.markPendingRunSent(reqID)
+
 	return runID, nil
 }

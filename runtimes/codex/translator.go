@@ -8,6 +8,7 @@ import (
 
 	"go.autonomous.ai/os/system/domain"
 	"go.autonomous.ai/os/system/lib/flow"
+	"go.autonomous.ai/os/system/telemetry"
 )
 
 // nowUnixMs returns the current time in milliseconds (matches the OpenClaw frame
@@ -771,6 +772,7 @@ func (s *CodexService) rejectQueuedFrame(f codexFrame, dispatch func(domain.WSEv
 // their originating run IDs if work later resumes; legacy untagged frames do
 // not have enough information to recover after a lost connection.
 func (s *CodexService) clearTurn() {
+	telemetry.ReportTaskObservationLost(s.unfinishedTaskRunIDs()...)
 	s.currentRequestID.Store("")
 	s.currentRunID.Store("")
 	s.pendingMu.Lock()
@@ -781,4 +783,36 @@ func (s *CodexService) clearTurn() {
 	s.assistantParts = nil
 	s.toolStartSeen = nil
 	s.turnMu.Unlock()
+}
+
+// markPendingRunSent records transport evidence without changing admission or correlation.
+func (s *CodexService) markPendingRunSent(reqID string) {
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
+	for i := range s.pendingRuns {
+		if s.pendingRuns[i].reqID == reqID {
+			s.pendingRuns[i].sent = true
+			return
+		}
+	}
+}
+
+// unfinishedTaskRunIDs excludes unsent attempts and normally completed turns.
+// Consumers preserve authoritative terminals if a timeout races completion.
+func (s *CodexService) unfinishedTaskRunIDs() []string {
+	var ids []string
+	if current := s.getCurrentRunID(); current != "" {
+		ids = append(ids, current)
+	}
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
+	for _, pending := range s.pendingRuns {
+		if pending.sent {
+			ids = append(ids, pending.runID)
+		}
+	}
+	for _, pending := range s.steeredRuns {
+		ids = append(ids, pending.runID)
+	}
+	return ids
 }

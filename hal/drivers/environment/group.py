@@ -1,38 +1,28 @@
 """Compose independent sensor workers into one environmental snapshot."""
 
 import math
-from functools import partial
+import logging
+from pathlib import Path
 
-from hal.board.environment import load_environment_components
-from hal.board.sen55 import load_sen55_config, SEN55Timing
-from hal.board.scd41 import load_scd41_config, SCD41Timing
-from hal.drivers.environment.sen55 import SEN55, FIELDS as SEN55_FIELDS
-from hal.drivers.environment.scd41 import SCD41
+from hal.drivers.environment.registry import COMPONENTS, MEASUREMENTS
 from hal.drivers.environment.service import EnvironmentService
 
-
-# A component owns each public measurement; adding a sensor cannot silently
-# overwrite another sensor's temperature/humidity or change their provenance.
-COMPONENT_FIELDS = {"sen55": SEN55_FIELDS, "scd41": ("co2_ppm",)}
+logger = logging.getLogger(__name__)
 
 
 def create_environment_group(device_dir, board_id, simulation=False):
-    registry = {
-        "sen55": (load_sen55_config, SEN55, SEN55Timing),
-        "scd41": (load_scd41_config, SCD41, SCD41Timing),
-    }
+    # Old installed profiles may retain this file after OTA. It no longer
+    # selects hardware: each sensor's enabled flag is the sole component gate.
+    if (Path(device_dir) / "environment.json").exists():
+        logger.info("[environment] ignoring legacy environment.json; using per-sensor enabled flags")
     workers = {}
-    for name in load_environment_components(device_dir):
-        loader, driver, timing = registry[name]
-        cfg = None if simulation else loader(device_dir, board_id)
-        factory = driver
-        if name == "scd41" and cfg is not None:
-            factory = partial(driver, automatic_self_calibration=cfg.automatic_self_calibration)
+    for name, component in COMPONENTS.items():
+        cfg = None if simulation else component.loader(device_dir, board_id)
         workers[name] = EnvironmentService(
             enabled=cfg is not None,
             bus=cfg.bus if cfg else None,
-            timing=cfg.timing if cfg else timing(),
-            driver_factory=factory,
+            timing=cfg.timing if cfg else component.timing(),
+            driver_factory=component.factory(cfg),
             name=name,
         )
     return EnvironmentGroup(workers)
@@ -45,6 +35,17 @@ def _finite(value):
 class EnvironmentGroup:
     def __init__(self, components):
         self.components = dict(components)
+        self.sources = {}
+        for name, worker in self.components.items():
+            if not worker.enabled:
+                continue
+            for field in COMPONENTS[name].measurements:
+                if field in self.sources:
+                    raise ValueError(
+                        f"Environment metric {field} is provided by enabled components "
+                        f"{self.sources[field]} and {name}; disable one in its sensor JSON"
+                    )
+                self.sources[field] = name
 
     def start(self):
         for worker in self.components.values():
@@ -56,14 +57,13 @@ class EnvironmentGroup:
 
     def snapshot(self):
         components = {name: worker.snapshot() for name, worker in self.components.items()}
-        sample, sources, timestamps = {}, {}, {}
+        sample = dict.fromkeys(MEASUREMENTS)
+        sample["timestamp"] = None
+        sources, timestamps = dict(self.sources), {}
         ages, errors, active = [], [], []
         unavailable = False
         for name, component in components.items():
-            fields = COMPONENT_FIELDS[name]
-            for field in fields:
-                sample[field] = None
-                sources[field] = name
+            fields = COMPONENTS[name].measurements
             if not component["enabled"]:
                 continue
             active.append(component)
@@ -109,7 +109,7 @@ class EnvironmentGroup:
             "state": state, "enabled": bool(active), "stale": not ready,
             "partial": ready and unavailable,
             "last_error": "; ".join(errors) or None,
-            "sample": sample if ready else None,
+            "sample": sample,
             "age_s": min(ages) if ages else None,
             "components": components,
             "sources": sources,
@@ -120,6 +120,6 @@ class EnvironmentGroup:
         if len(components) == 1:
             only = next(iter(components.values()))
             result.update(bus=only["bus"], timing=only["timing"])
-            if ready and "sen55" in components and "device_status" in only["sample"]:
+            if ready and "device_status" in only["sample"]:
                 sample["device_status"] = only["sample"]["device_status"]
         return result

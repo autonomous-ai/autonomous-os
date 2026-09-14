@@ -168,6 +168,7 @@ setup bằng dây) mới vào được nhánh dây theo cách đó.
 ## AP Mode
 
 - Khi chưa setup hoặc setup fail → tự động chuyển AP mode
+- Máy đã cấu hình cũng bật hotspot khôi phục sau 90s mất kết nối WiFi, giữ nguyên setup và credentials. Khi hotspot không có client, máy thử WiFi đã lưu mỗi 2 phút; xem [Monitor kết nối](os-server_vi.md#network) về thời gian khôi phục và trang `/wifi`.
 - Thiết bị phát WiFi hotspot
 - Web UI phục vụ trang setup
 - `SwitchToAPMode()` trong `system/network/service.go`

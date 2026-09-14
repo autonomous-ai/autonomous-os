@@ -1,5 +1,9 @@
 # Web UI — Monitor Dashboard
 
+Flow Monitor renders external history synchronization as **History sync · Harness → Main** (or the external source), with readable input and reported answer labeled **Context**. Internal instructions and JSON stay in event details, and the route tooltip identifies the external agent.
+
+Harness-only voice turns display **Harness** as their route. Persisted `harness_response` events provide the output, Response pipeline details and completion time for the matching run, so reloading the monitor no longer leaves answered turns ACTIVE. Sending an input without a final response remains ACTIVE.
+
 Flow Monitor links Codex steered follow-ups to the original execution with
 `turn_merged` / `parent_run_id`. Selecting the follow-up shows the shared
 pipeline while retaining its separate input card and terminal state. The UI
@@ -476,6 +480,15 @@ one column below 760px.
 - Unpair requires confirmation and calls admin-authenticated `DELETE /api/harness`.
   Harness uses its original E2EE pairing/session protocol and retains separate keys from Buddy.
 
+**Harness-only voice**
+
+- A paired computer exposes `HarnessVoiceMode.tsx` inside `HarnessCard.tsx`. **Focused Harness agent** mirrors the agent pane focused in the Harness app, including while voice mode is off. There is no local agent picker; normal `harness-use` conversation targets remain independent.
+- Enable **Harness-only voice** to send spoken requests directly to that focused agent; replies retain device TTS. Text chat keeps its normal behavior. State lives in RAM; restart turns the mode off and focus syncs again after reconnect. Focus changes during capture reject the old capture and require repeating the request. Already-sent work keeps its original response route.
+- Mode/focus refresh every 2 seconds through `GET /api/harness/voice-mode`. The switch sends only `{enabled}` by `PUT` and works offline or without focus, but a failed mode lookup disables it until refresh succeeds. Offline, missing focus and unsupported CLI capability states explain why voice delivery is unavailable.
+- Unresolved delivery pauses new Harness voice mutations while focus display keeps syncing. **Check delivery** reads the existing receipt without resending. **Continue without retrying** asks for confirmation, then sends `resolution:"do_not_retry"` and the exact pending `idempotencyKey` to `/api/harness/voice-mode/resolve`; the previous task may still run.
+- `HarnessQuestion.tsx` refreshes live questions every 10 seconds while focus is available, plus **Refresh agent question**. The form supports radio options, multiple selections and custom text. **Send answer** submits all exact question keys with the live request ID and focus revision, rejecting stale focus. Spoken answers can instead fill questions sequentially.
+- Changes and question/receipt endpoints require administrator authentication. See [Harness integration](harness.md#harness-only-voice-mode) for the API and compatible OS/HAL/CLI rollout requirements.
+
 The Pairing section is available to non-debug users.
 
 **Display Eyes**
@@ -721,13 +734,13 @@ Chat UI → POST /api/sensing/event → SensingHandler
 
 ### 5.8 Device → Sensing
 
-The Sensing navigation entry is available without debug mode when the device declares `vision` or `environment` in
-`GET /api/system/info` → `capabilities`. Camera sensing cards require `vision`.
-The read-only **Environment** card requires an explicit `environment`
-capability; it is hidden and sends no requests while capabilities are loading
-or when that capability is absent.
+The Sensing navigation entry and read-only **Environment** card are always
+visible without debug mode, including when no sensing capability is declared.
+Camera sensing cards still require `vision`. While capabilities are loading or
+`environment` is absent, the Environment card shows `N/A` measurements and does
+not send sensor requests. Declared but disabled sensors also show `N/A` values.
 
-While mounted, the environment card reads `GET /api/hardware/environment/status`
+When `environment` is declared, the card reads `GET /api/hardware/environment/status`
 every 3 seconds through the existing authenticated OS hardware reverse proxy to
 HAL `GET /environment/status`. This browser refresh interval is independent of
 HAL's configurable `poll_interval_s`; it does not change acquisition frequency.
@@ -736,16 +749,22 @@ and local agent status API are described in
 [Lamp environmental sensing](../robots/lamp/docs/environment-sensing.md#os-change-policy-and-agent-access).
 
 The card shows sensor state, sample timestamp, stale status, errors,
-and component-dependent measurements: temperature (°C), humidity (%), PM1 /
-PM2.5 / PM4 / PM10 (µg/m³), VOC index, NOx index, and SCD41 CO₂ (ppm).
+and all nine standard measurements: temperature (°C), humidity (%), PM1 /
+PM2.5 / PM4 / PM10 (µg/m³), VOC index, NOx index, and CO₂ (ppm).
+The UI uses metric keys and source metadata, never sensor model names, so changing
+the configured components (for example, to SEN63C) uses the same card. Unsupported
+or not-yet-ready measurements remain visible as `N/A` for their `null` values.
 Source labels identify the component; each metric has its own timestamp.
-Unavailable components do not hide healthy readings from another component. Unavailable values appear as `—`, never
-zero. Stale measurements are also replaced with `—`; a request failure is shown
+Unavailable components do not hide healthy readings from another component. Unavailable values appear as `N/A`, never
+zero. Stale measurements are also replaced with `N/A`; a request failure is shown
 as an error so previous readings cannot be mistaken for live data. No good/bad air
 quality labels, thresholds, or alerts are assigned. A collapsed technical
 section exposes each component's state, I2C bus, sensor status register, and HAL
 polling/retry/staleness/recovery timings under `status.components`. Legacy
-single-sensor snapshots with top-level `status.timing` remain supported.
+single-sensor snapshots with top-level `status.timing` remain supported and use a
+generic sensor label. A `null` sample or sample timestamp displays a waiting state,
+never an epoch date. The gas-index explanation appears only when VOC or NOx has a
+declared source or a measured value.
 
 Lamp still ships with `environment` commented out in `ROBOT.md` and SEN55/SCD41
 disabled in their respective JSON configurations, so this card remains hidden until the capability is

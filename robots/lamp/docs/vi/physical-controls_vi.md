@@ -196,17 +196,11 @@ Chuỗi end-to-end:
 2b. `state.note_music_cancel()` → đóng dấu watermark huỷ nhạc ở phía HAL, và `audio_stop()` chạy ở **cả hai** nhánh (unmute mic và stop loa), không chỉ nhánh stop loa. Cần vì cancel ở OS server chỉ tác động lên TTS: turn bị huỷ vẫn chạy tiếp và tool call nhạc còn treo của nó vẫn tới `POST /audio/play` ngay sau đó, nơi một thread `music-play` mới tự `_stop_event.clear()` — nên một cú stop tại một thời điểm luôn thua cuộc đua này, và user nghe đúng bài nhạc mình vừa huỷ sau khi `yt-dlp` resolve xong (1–5 s). Trong lúc watermark còn tươi (`app_state.MUSIC_CANCEL_GUARD_S`, 3 s), `/audio/play` trả `{"status": "suppressed"}` thay vì phát. Cửa sổ được chọn đủ phủ tool call đang bay nhưng vẫn dưới sàn của một yêu cầu mới thật sự (nói → STT → LLM → tool không bao giờ dưới ~3 s), nên "chạm xong xin bài hát" vẫn chạy bình thường.
 3. `stop_tts()` → `tts_service.stop()` set `_stop_event`; mọi blocking loop trong TTS stream (synth, render, playback) check event và abort sạch, không để loa kẹt
 
-### Voice barge-in (tắt trong profile lamp)
+### Cắt lời bằng giọng nói (không có)
 
-Cắt bằng giọng nói — nói trong lúc Lamp đang nói để Lamp dừng và lắng nghe — theo `HAL_BARGE_IN_ENABLED`, vốn mặc định bằng `HAL_AEC_ENABLED` — trong code là `false`. Profile lamp bật AEC nhưng chủ động đặt barge-in là `false`: mic USB đang dùng ở quá gần loa so với tuning khử vọng hiện tại. Cắt lời bằng chạm vẫn hoạt động.
+Không có đường "nói trong lúc TTS đang phát để Lamp dừng". Một bộ phát hiện cục bộ trên mic đã khử vọng từng chạy trong thời gian ngắn rồi bị gỡ bỏ sau một kết luận đo đạc: trên thân máy này, phần dư vọng âm sót lại sau AEC3 nằm *trên* mức một lần cắt lời thật ở mọi âm lượng loa (trần vọng âm 9804 / 9969 / 13560 ở 25 / 40 / 65 %, so với cắt lời thật 6956–8027), và chấm 79 cửa sổ đã gán nhãn trên mọi đặc trưng sẵn có cho AUC tốt nhất 0.72 — không ngưỡng nào đạt 0 % tự cắt lời mà không bỏ sót 90–100 % lần cắt lời thật. Hồ sơ đo đạc, và bài kiểm tra chấp nhận mà mọi lần thử lại phải vượt qua, nằm ở `docs/vi/realtime-voice_vi.md` (*Vì sao không có cắt lời bằng giọng nói trên mic đã khử vọng*).
 
-Khi barge-in được bật, đường đang chạy là vòng **warm mic**, không phải `_monitor_barge_in()`. Với `HAL_WARM_MIC=true` (mặc định), `arecord` vẫn mở suốt lúc phát và vòng capture rút rồi bỏ frame; barge-in được phát hiện ngay ở đó, trên chính frame 64 ms của vòng lặp, khi `HAL_BARGE_IN_WARM_FRAMES` frame liên tiếp vượt `HAL_BARGE_IN_RMS_THRESHOLD` **và** Silero đồng ý đó là tiếng nói **và** `aec.uncancelled()` xác nhận frame đó thật sự đã được khử. `_monitor_barge_in()` (256 ms blocks, chỉ xét mức) là đường cũ và không thể tới được khi warm mic bật — `HAL_BARGE_IN_BLOCK_MS` và `HAL_BARGE_IN_TRIGGER_FRAMES` chỉ định cỡ cho đường đó. Chuỗi downstream giống tap-to-interrupt.
-
-**Hai mức vẫn chồng nhau, và không threshold nào tách được.** Đo trên `lamp-ee17` (loa 25 %, `HAL_AEC_DELAY_MS=205`) với gate đặt tạm ở 30000 để không gì kích được, ba lượt trả lời đầy đủ trong phòng im lặng đạt đỉnh **9804 / 6510 / 7849** — đó là trần vọng âm. Một lần cắt lời thật đã xác nhận trên cùng máy đo được **8027**, tức *thấp hơn* trần đó. Vậy nên threshold dưới trần sẽ tự cắt lời mình (ở 4500 nó kích ở 5530 / 6446 / 6637 / 7749, hai lần chuyển chính lời Lamp thành lượt của người dùng), còn threshold trên trần sẽ bỏ sót những lần cắt lời nói nhỏ. Muốn tách được cần phép thử envelope-decorrelation — vọng âm bám theo envelope đầu xa, con người thì không — hiện chưa làm. Mặc định 5000 cố ý thiên về việc bắt được giọng nói bình thường; nâng dần lên 11000 để đổi theo hướng ngược lại.
-
-Đừng kỳ vọng cổng Silero loại được giọng của chính Lamp: vọng âm *là* tiếng nói, và nó đạt 0.50, 0.75 và 1.00 ở các sự kiện khác nhau, trong khi các lần cắt lời thật đạt 0.08, 0.88 và 1.00. Nó loại tiếng động lớn không phải giọng nói (đập cửa, chìa khoá, ho); phần còn lại do mức RMS lo.
-
-Để đặc tả một deployment mới: đặt tạm `HAL_BARGE_IN_RMS_THRESHOLD` ở 30000, không nói gì, và đọc dòng `drain peak RMS=… , longest run N frames` mà mỗi lượt trả lời ghi ra. Tap-to-interrupt vẫn active bất kể.
+Vì vậy cắt lời chỉ đến từ hai nơi: **tap-to-interrupt** ở trên, trên đường lượt, và **VAD của nhà cung cấp** bên trong một phiên live (`HAL_LIVE_MODE`, xem *Chế độ live* trong `docs/vi/realtime-voice_vi.md`), phát ra `InterruptedOutput` khi người dùng nói đè lên câu trả lời.
 
 ## Detect nút GPIO (`hal/drivers/gpio_button.py`)
 
@@ -309,19 +303,21 @@ MPR121 dùng chung ngưỡng cử chỉ từ `hal/drivers/button_gestures.py` v�
 | Giữ 2–<5 s rồi nhả | `hold_release_action` vào sleepy. |
 | Giữ 5–<10 s rồi nhả | `hold_release_action` shutdown. |
 | Giữ ≥10 s rồi nhả | `hold_release_action` factory reset. |
-| Vuốt một trong hai hướng rồi nhả | `swipe_action` sleep; contact di chuyển này không gọi click hoặc action destructive. |
+| Vuốt trái sang phải rồi nhả | `swipe_action` sleep; contact di chuyển này không gọi click hoặc action destructive. |
+| Vuốt phải sang trái rồi nhả | Bật/tắt Harness voice qua API Go; contact di chuyển này không gọi click hoặc action destructive. |
 
 Contact ngắn kéo dài dưới 2 s. Cửa sổ click không phân giải khi còn bất kỳ
 electrode được chọn nào đang chạm. Nhả sau giữ xóa chuỗi click đang chờ.
 Action destructive không chạy khi còn giữ.
 
-### Vuốt MPR121 để sleep
+### Vuốt MPR121 theo hướng
 
 `swipe_axis` là list tùy chọn gồm 2–12 electrode khác nhau, thuộc `electrodes`,
-được xếp theo thứ tự trên dải. Lamp khai báo E0…E11 dựa trên chuỗi log E11→E0,
-E0→E8 và E9→E0; xác định được thứ tự, chưa gán đầu nào là bên trái vật lý.
-Cả hai hướng gọi `swipe_action(source="MPR121")` trong `button_actions.py`,
-cùng action sleep với TTP223. Không cần vuốt hết toàn bộ dải. Thiếu/null
+theo thứ tự **trái sang phải** vật lý. Lamp mặc định E0…E11. Kiểm tra chiều
+lắp bar: nếu E11 nằm bên trái, đảo trục hiện có thành E11…E0. Tăng vị trí
+trên trục (`+1`, trái sang phải) gọi `swipe_action(source="MPR121")` trong
+`button_actions.py` để sleep. Giảm vị trí (`-1`, phải sang trái) gọi action
+bật/tắt Harness voice. Không cần vuốt hết toàn bộ dải. Thiếu/null
 `swipe_axis` chỉ tắt nhận diện vuốt, giữ nhận diện click/hold cũ.
 Cài HAL hỗ trợ trước khi deploy JSON có trường này.
 
@@ -330,8 +326,8 @@ Debounce contact vẫn mặc định 30 ms; vùng chạm dùng tối đa 5 ms �
 Detector theo dõi vùng chạm đã debounce thay vì đếm mỗi electrode chạm chồng
 thành một tap. Chạm nhiều electrode nhưng đứng yên vẫn giữ hành vi click/hold.
 Khi phát hiện di chuyển, hủy kết quả tap/hold đang chờ và phản hồi LED giữ cho
-contact đó; vuốt hợp lệ gọi sleep một lần sau khi nhả. Di chuyển đảo chiều hoặc
-không hợp lệ không gọi reboot/shutdown/reset. Chờ nhả 120 ms để nối các đoạn
+contact đó; vuốt hợp lệ gọi action theo hướng một lần sau khi nhả. Di chuyển
+đổi hướng trong cùng contact hoặc không hợp lệ không gọi reboot/shutdown/reset. Chờ nhả 120 ms để nối các đoạn
 chuyển tiếp ngắn giữa electrode; khi bật swipe, tap/hold phân giải sau khoảng
 chờ này. Contact giữ từ lúc boot vẫn bị bỏ qua. Log ghi hướng, độ dịch chuyển,
 kết quả swipe và thực thi action. Test phát lại chuỗi mask đã đo cùng các ca
@@ -560,3 +556,24 @@ Phrase cố tình ngắn — chúng fire giữa lúc vuốt nên cần cảm gi�
 | `hal/test_gpio.py` | Probe độc lập để verify line nút GPIO |
 
 Các handler đầu vào được khởi động trong startup lifespan `hal/server.py`. Thiếu cấu hình MPR121 tùy chọn thì bỏ qua driver đó; cấu hình bật nhưng sai bị từ chối khi startup. Lỗi driver phần cứng được log mà không dừng các handler còn lại.
+
+
+### Vuốt bật/tắt Harness voice
+
+Vuốt **phải sang trái** rồi nhả để bật/tắt Harness voice một lần. `swipe_axis`
+hiện có xác định hướng vật lý như mô tả ở trên. Không còn cử chỉ giữ hai pad
+hay cấu hình wiring riêng cho Harness. Chạm đơn và giữ đứng yên vẫn theo hành
+vi hiện có; khi nhận di chuyển, hủy kết quả tap/hold của contact đó. Contact
+đã giữ từ startup và lỗi polling/I²C không được kích hoạt swipe.
+
+Python nhận signal rồi đưa vào action worker có sẵn. `harness_voice_action.py`
+gọi adapter nhỏ `harness_voice_client.py`, POST một lần đến API chỉ nhận loopback
+`/api/harness/voice-mode/gesture` của Go với `gestureId` riêng. Go quản lý mode
+và chọn agent focus. Không tự retry HTTP; timeout sẽ báo chưa xác nhận được kết quả.
+
+Thành công, HAL đọc “Đã bật Harness, đang nói chuyện với {agent}.” hoặc “Đã tắt Harness, trở về trợ lý trên thiết bị.” theo
+`stt_language` (Anh, Việt, Trung giản thể hoặc phồn thể; phrase tập trung trong
+`hal/i18n.py`). LED pulse xanh khi bật hoặc màu trung tính khi tắt trong thời gian
+ngắn, không lưu trạng thái LED mới. Chưa kết nối/không có agent được báo lỗi theo
+ngôn ngữ đã chọn. Công tắc privacy mic chặn action; speaker mute chặn thông báo;
+LED vẫn tôn trọng quyền ưu tiên sleep/privacy/TTS hiện có.

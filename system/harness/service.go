@@ -111,7 +111,7 @@ type Service struct {
 	statusChanges chan struct{}
 }
 
-var capabilities = []string{"agents.list", "turn.send", "turn.stop", "status", "recap", "question.answer", "receipt.get"}
+var capabilities = []string{"focus.ensure", "focus.get", "agents.list", "turn.send", "turn.stop", "status", "recap", "question.answer", "receipt.get"}
 
 func NewService(dataDir string, callbacks Callbacks) (*Service, error) {
 	s := &Service{path: filepath.Join(dataDir, "harness", "trust.json"), callbacks: callbacks, ctx: context.Background(), sockets: make(map[*DirectChannel]bool), events: make(chan Frame, 128), statusChanges: make(chan struct{}, 1), status: Status{State: "unpaired", Capabilities: []string{}}}
@@ -353,7 +353,7 @@ func (s *Service) Request(ctx context.Context, frame Frame) (Frame, error) {
 	for k, v := range frame {
 		f[k] = v
 	}
-	if kind != "agents.list" && kind != "receipt.get" {
+	if kind != "focus.ensure" && kind != "focus.get" && kind != "agents.list" && kind != "receipt.get" {
 		if stringField(f, "machineId") != machine {
 			return nil, errors.New("MACHINE_MISMATCH")
 		}
