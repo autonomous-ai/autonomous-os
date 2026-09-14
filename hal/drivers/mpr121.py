@@ -76,6 +76,7 @@ class _GestureEvent:
     gesture_id: int
     count: int = 0
     held_s: float = 0.0
+    direction: int = 0
 
 
 class _GestureRecognizer:
@@ -223,7 +224,7 @@ class _SpatialGestureRecognizer:
             logger.info("MPR121 event=swipe_resolved gesture_id=%d direction=%s displacement=%.2f valid=%s",
                         self._gesture_id, self._direction, self._peak, valid)
             if valid:
-                events.append(_GestureEvent("swipe", self._gesture_id))
+                events.append(_GestureEvent("swipe", self._gesture_id, direction=self._direction))
             # Restart the button detector only after the spatial cycle ends.
             self._button = _GestureRecognizer(0)
             self._button.update(False, now)
@@ -511,7 +512,7 @@ class MPR121Handler:
         for event in self._detector.update(touched, now):
             if self._stop.is_set():
                 return
-            logger.info("MPR121 event=gesture kind=%s gesture_id=%d count=%d held_s=%.3f", event.kind, event.gesture_id, event.count, event.held_s)
+            logger.info("MPR121 event=gesture kind=%s gesture_id=%d count=%d held_s=%.3f direction=%d", event.kind, event.gesture_id, event.count, event.held_s, event.direction)
             if event.kind == "invalidate":
                 self._invalidate_pending("new_touch_or_hold")
             elif event.kind == "hold_tier":
@@ -550,6 +551,18 @@ class MPR121Handler:
             self._close_bus()
             logger.info("MPR121 event=worker_stopped worker=poll")
 
+    def _execute_swipe(self, direction):
+        """The declared axis runs left to right; route one resolved swipe."""
+        if self._hold_led is not None and self._hold_led.commit(0) is False:
+            return
+        if direction == 1:
+            swipe_action(source="MPR121")
+        elif direction == -1:
+            from hal.drivers.harness_voice_action import toggle_harness_voice
+            toggle_harness_voice()
+        else:
+            logger.warning("MPR121 swipe discarded: missing or invalid direction %s", direction)
+
     def _execute(self, event):
         if event.kind == "single":
             single_click_action(source="MPR121", announce=False)
@@ -558,9 +571,7 @@ class MPR121Handler:
         elif event.kind == "triple":
             triple_click_action(source="MPR121")
         elif event.kind == "swipe":
-            if self._hold_led is not None and self._hold_led.commit(0) is False:
-                return
-            swipe_action(source="MPR121")
+            self._execute_swipe(event.direction)
         elif event.kind == "hold":
             if self._feedback().commit(event.held_s) is False:
                 logger.info("MPR121 event=action_discarded gesture_id=%d action=hold reason=feedback_cancelled", event.gesture_id)

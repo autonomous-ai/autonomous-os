@@ -24,9 +24,8 @@ logger = logging.getLogger("hal.voice")
 class WebRTCVADFilter:
     """Fast C-based VAD (~0.1ms/frame). One instance per aggressiveness level.
 
-    Aggressiveness 0-3 (3 = most strict). The normal STT path uses aggressiveness=2;
-    the barge-in path uses aggressiveness=3 to discriminate user voice from
-    Device's own speaker bleed during TTS playback.
+    Aggressiveness 0-3 (3 = most strict); the STT entry gate runs at
+    HAL_WEBRTCVAD_AGGRESSIVENESS (default 2).
     """
 
     def __init__(self, aggressiveness: int, np):
@@ -198,8 +197,8 @@ class SileroVADFilter:
         turn always does, since the session prepends VAD pre-roll and keeps a
         200ms tail — and the padding then drags voiced_ratio down in proportion
         to how SHORT the utterance is. Judging a whole turn wants span_ratio;
-        judging a live sliding window (barge-in) wants voiced_ratio, since there
-        is no padding to discount and a span measure would only be more lenient.
+        judging a live sliding window wants voiced_ratio, since there is no
+        padding to discount and a span measure would only be more lenient.
 
         `span_seconds` is the WALL LENGTH of that same span — the actual
         utterance, with the padding excluded. It is not the buffer duration the

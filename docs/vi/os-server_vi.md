@@ -4,6 +4,34 @@
 
 ## OS Server Endpoints (Go, :5000)
 
+### Harness-only voice
+
+Mode RAM tùy chọn gửi STT đã chốt của HAL tới agent đang focus trong app Harness, trước local intent và gate ready/busy của main runtime. Mode mặc định tắt
+sau khi OS-server khởi động lại. Event/recap Harness hiện có cung cấp câu trả lời
+được đọc trên thiết bị. Chỉ request voice loopback trực tiếp có snapshot routing
+`harness_voice` đi vào nhánh này; text/MQTT chat và sensing nền giữ luồng cũ.
+OS vẫn đồng bộ focus khi mode tắt qua `focus.get`, `focus.changed` và refresh
+mỗi hai giây. Bật mode qua web/MQTT chỉ đổi flag RAM; web không có bộ chọn target. Chưa focus,
+CLI cũ thiếu `focus.get`, hoặc focus máy khác sẽ chặn gửi voice. Mỗi lần gửi
+kèm `focusRevision` dạng opaque; CLI kiểm tra nguyên tử trước khi nhận turn.
+
+`GET /api/harness/voice-mode` cho admin hoặc loopback đọc. API quản lý chỉ cho admin
+gồm `PUT /api/harness/voice-mode`, `GET /api/harness/agents`,
+`GET /api/harness/voice-mode/question`, và `POST` tới
+`/api/harness/voice-mode/answer`, `/receipt`, `/resolve` cùng prefix
+`/api/harness/voice-mode`. Xem [tích hợp Harness](harness_vi.md) về payload,
+kiểm tra generation, câu trả lời có cấu trúc và khôi phục receipt.
+
+`POST /api/harness/voice-mode/gesture` chỉ nhận loopback thực sự, với
+`{gestureId:"<UUID>"}` từ physical-action worker của HAL sau khi nhả cú vuốt
+MPR121 phải sang trái. HAL xác định hướng theo `swipe_axis` trái sang phải
+vật lý; vuốt trái sang phải dùng action sleep hiện có. Go bật/tắt chung mode
+RAM và trả snapshot. Khi bật, giữ focus hợp lệ hoặc gọi `focus.ensure` rồi chờ
+Desktop xác nhận; focus không khả dụng thì mode vẫn tắt. Tắt vẫn được khi offline.
+Lỗi action trả `data.code` để HAL đọc phrase theo ngôn ngữ cấu hình: `harness_unpaired` hướng dẫn ghép đôi thiết bị trong ứng dụng Harness; `harness_offline` báo đã ghép đôi nhưng chưa kết nối. Cả hai giữ mode tắt. Cache RAM
+128 kết quả chặn ID gesture lặp bật/tắt hai lần; lệnh off rõ ràng qua web/MQTT
+hủy gesture đang chờ bật.
+
 ### Health
 
 | Method | Endpoint | Mô tả |
@@ -50,8 +78,12 @@ Worker môi trường của OS đọc HAL độc lập và POST thay đổi kéo
 `environment.update` tới `/api/sensing/event`. Config `environment` cấp cao
 nhất đọc/ghi qua admin `GET`/`PUT /api/device/config`: mặc định đánh giá mỗi
 10 giây, duy trì 60 giây, cooldown 900 giây, retry 60 giây, tuổi mẫu tối đa
-10 giây. Delta và warm-up từng chỉ số cấu hình được. SCD41 thêm `co2_ppm` đo
-thật vào cùng capability, mặc định thay đổi 200 ppm và warm-up 60 giây. Map
+10 giây. Delta và warm-up từng chỉ số cấu hình được. Component HAL đã đăng ký
+dùng chung schema chỉ số: SEN55 + SCD41 hoặc SEN63C đi cùng API, thông báo
+ban đầu và flow thay đổi. Cờ `enabled` trong JSON từng component điều khiển
+hardware; OS không chọn model sensor. Sample status luôn có chín key chỉ số
+nullable: số đo không hỗ trợ/chưa khả dụng là null, bị detector bỏ qua.
+`co2_ppm` đo thật có delta mặc định 200 ppm và warm-up 60 giây. Map
 `metrics` khai báo tường minh vẫn thay toàn bộ map, giữ nguyên nhóm đã chọn.
 Snapshot tổng hợp có `components`, `sources`, `metric_timestamps`: kiểm tra
 độ mới/tính liên tục theo chỉ số và nguồn, nên SEN55 lỗi không chặn CO₂ SCD41
@@ -75,7 +107,7 @@ cho phép tính thời gian thu nhận liên tục sẵn có vào warm-up khi ch
 vẫn loại component không hợp lệ/stale.
 Skill `environment` diễn giải
 số đo và tham khảo `wellbeing` để gợi ý phù hợp. Thu nhận phần cứng tách biệt
-chính sách thay đổi ở OS; tính năng không bật capability đang comment hay SEN55/SCD41
+chính sách thay đổi ở OS; tính năng không bật capability đang comment hay SEN55/SCD41/SEN63C
 đang tắt của Lamp. Xem [cảm biến môi trường Lamp](../../robots/lamp/docs/vi/environment-sensing_vi.md#chính-sách-thay-đổi-của-os-và-api-cho-agent)
 để biết mặc định, validation, payload và use case.
 
@@ -123,19 +155,28 @@ Config field: `timezone` trong `config/config.json` (chuỗi IANA zone, omitempt
 | GET | `/api/network/current` | SSID + IP hiện tại |
 | GET | `/api/network/check-internet` | Kiểm tra kết nối internet |
 
-**Monitor kết nối** (`system/network/service.go`, chạy khi `SetUpCompleted` = true).
-Ping `8.8.8.8` mỗi 5s — không phụ thuộc interface, nên máy online qua dây vẫn được
-tính là online. Fail 5 lần liên tiếp → bật LED state `Connectivity`; fail 10 lần
-(~50s) → leo thang sang reconnect WiFi (restart `wpa_supplicant@wlan0`, bounce
-interface); reconnect fail 5 lần (~10 phút) → reboot thiết bị.
+**Monitor kết nối** (`system/network/service.go` và `recovery.go`, hoạt động khi
+`SetUpCompleted` là true). Kiểm tra Internet theo nhịp monitor 5s; ping `8.8.8.8`
+thất bại 5 lần liên tiếp thì bật LED state `Connectivity`, ping thành công thì
+xóa state này. Trạng thái Internet độc lập với phục hồi WiFi: nếu còn association
+và IPv4 dùng được ở chế độ STA, thiết bị giữ WiFi ngay cả khi mất Internet.
+Monitor không còn reboot thiết bị.
 
-Nấc leo thang đó là đường phục hồi dành cho **WiFi**, nên bị bỏ qua khi WiFi không
-phải là link đang có vấn đề — nếu không, máy chạy dây sẽ tự reboot mỗi ~10 phút suốt
-thời gian ISP hỏng mà nó chẳng liên quan. Bỏ qua khi một trong hai: không có SSID nào
-được lưu (máy provision bằng dây — xem `setupWired` trong `docs/setup-flow.md`), hoặc
-default route thuộc về interface khác (traffic đang đi ra bằng dây). Còn khi link WiFi
-rớt thật thì *không* còn default route nào cả và `PrimaryInterface()` fallback về
-`wlan0`, nên đúng sự cố mà nấc này sinh ra để xử lý vẫn lọt qua guard.
+Sau 90s không có kết nối WiFi dùng được, monitor gọi script `device-ap-mode` hiện
+có. Trong chế độ AP, sau 2 phút thiết bị thử lại WiFi đã lưu bằng `connect-wifi`
+với credentials từ config thiết bị. Hoãn thử khi có client kết nối hotspot hoặc
+kiểm tra client bị lỗi. Lần thử tạm tắt hotspot; sau khi script hoàn tất, chờ tối
+đa 45s để có association và IPv4 dùng được ở chế độ STA. Thành công thì giữ STA;
+thất bại thì bật lại AP và bắt đầu khoảng chờ thử tiếp. Giữ nguyên trạng thái
+setup và credentials đã lưu. Phục hồi chạy tuần tự với provisioning/reset thủ
+công, và bị bỏ qua khi chưa lưu SSID hoặc default route dùng interface khác.
+Khi không có default route, `PrimaryInterface()` fallback về `wlan0`, cho phép
+phục hồi kết nối WiFi bị rớt.
+
+Giữ nguyên script và web UI. Kết nối vào hotspot thiết bị rồi mở
+`http://lamp-0c4e.local/wifi` (thay bằng hostname thực tế) để đổi WiFi; dùng
+`http://192.168.100.1/wifi` nếu không phân giải được `.local`. Tự động thử lại
+sau khi các client ngắt kết nối hotspot.
 
 ### Guard Mode (Chế độ canh gác)
 

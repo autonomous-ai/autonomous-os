@@ -123,6 +123,14 @@ type SensingEventRequest struct {
 	// it would fail there, and before this field existed every attachment rode
 	// the Image field and was written as `.jpg` regardless of what it was.
 	Files []domain.InboundFile `json:"files,omitempty"`
+	// HarnessVoice is the routing snapshot taken by HAL before voice capture.
+	// It is deliberately separate from Message and is never forwarded to a model.
+	HarnessVoice *HarnessVoiceSnapshot `json:"harness_voice,omitempty"`
+}
+
+type HarnessVoiceSnapshot struct {
+	Enabled    bool   `json:"enabled"`
+	Generation uint64 `json:"generation"`
 }
 
 // SensingHandler handles incoming sensing events from HAL and forwards them to the agent.
@@ -148,6 +156,12 @@ type SensingHandler struct {
 	onRealtimeHandled      func() bool
 	harnessFollowup        func() bool
 	harnessFollowupContext func() string
+	harnessVoice           func(*gin.Context, SensingEventRequest) bool
+}
+
+// SetHarnessVoice installs the direct voice route before local intents or runtime gates.
+func (h *SensingHandler) SetHarnessVoice(fn func(*gin.Context, SensingEventRequest) bool) {
+	h.harnessVoice = fn
 }
 
 // SetOnRealtimeHandled installs the realtime-handled hook. Wired in
@@ -282,6 +296,10 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 		mood.SetCurrentUser(req.CurrentUser)
 	} else if req.Type == "presence.leave" || req.Type == "presence.away" {
 		mood.ClearCurrentUser()
+	}
+
+	if h.harnessVoice != nil && h.harnessVoice(c, req) {
+		return
 	}
 
 	// Voice commands: try local intent matching first for instant response

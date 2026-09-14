@@ -44,7 +44,7 @@ class MPR121Config:
             if (not isinstance(axis, (list, tuple)) or not 2 <= len(axis) <= 12
                     or any(type(i) is not int or i not in self.electrodes for i in axis)
                     or len(set(axis)) != len(axis)):
-                raise ValueError("swipe_axis must contain 2..12 distinct selected electrodes in physical order")
+                raise ValueError("swipe_axis must contain 2..12 distinct selected electrodes in physical left-to-right order")
             object.__setattr__(self, "swipe_axis", tuple(axis))
 
 
@@ -62,9 +62,14 @@ def load_mpr121_config(device_dir: str, board_id: str) -> Optional[MPR121Config]
         configs = {}
         allowed = {field.name for field in fields(MPR121Config)} | {"enabled"}
         for board, entry in data["boards"].items():
-            if not isinstance(entry, dict) or set(entry) - allowed:
+            if not isinstance(entry, dict):
                 raise ValueError(f"{board}: invalid MPR121 configuration fields")
             values = dict(entry)
+            # Older device declarations may outlive HAL during a component OTA.
+            # Ignore the retired chord setting; it no longer enables a gesture.
+            values.pop("harness_voice_chord", None)
+            if set(values) - allowed:
+                raise ValueError(f"{board}: invalid MPR121 configuration fields")
             enabled = values.pop("enabled", True)
             if type(enabled) is not bool:
                 raise ValueError(f"{board}: enabled must be a boolean")

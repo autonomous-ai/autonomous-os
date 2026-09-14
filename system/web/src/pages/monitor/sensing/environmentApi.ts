@@ -9,12 +9,12 @@ export interface EnvironmentComponentStatus {
   stale: boolean;
   age_s: number | null;
   timing?: { poll_interval_s: number; retry_interval_s: number; stale_after_s: number; no_data_timeout_s: number };
-  sample: ({ timestamp: number; device_status?: number } & Partial<Record<Measurement, number | null>>) | null;
+  sample: ({ timestamp: number | null; device_status?: number } & Partial<Record<Measurement, number | null>>) | null;
 }
 export interface EnvironmentStatus extends EnvironmentComponentStatus {
   components?: Record<string, EnvironmentComponentStatus>;
   sources?: Partial<Record<Measurement, string>>;
-  metric_timestamps?: Partial<Record<Measurement, number>>;
+  metric_timestamps?: Partial<Record<Measurement, number | null>>;
 }
 
 const states = new Set<EnvironmentStatus["state"]>(["disabled", "starting", "ready", "error", "stopped"]);

@@ -27,6 +27,9 @@ func (h *DeviceMQTTHandler) handleHarnessPair(env domain.MQTTDataCommand) error 
 		if err := h.harnessService.Unpair(); err != nil {
 			return h.publishDataResult(env.Kind, "failure", err.Error(), nil)
 		}
+		if voice := h.harnessVoiceController(); voice != nil {
+			_, _ = voice.SetMode(context.Background(), false)
+		}
 		return h.publishDataResult(env.Kind, "success", "", map[string]bool{"unpaired": true})
 	}
 	return nil

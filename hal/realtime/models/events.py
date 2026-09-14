@@ -62,3 +62,4 @@ class TurnDoneEvent(AgentOutputEvent):
     type: OutputEventTypeEnum = OutputEventTypeEnum.TURN_DONE
     # Synthetic unblock/error sentinels retain False; only provider proof sets True.
     execution_completed: bool = False
+    user_turn_id: str = ""

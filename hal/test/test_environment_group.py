@@ -1,6 +1,5 @@
 """Multiple environmental components retain independent freshness and faults."""
 
-import json
 import logging
 import time
 from dataclasses import asdict
@@ -8,14 +7,15 @@ from unittest.mock import Mock
 
 import pytest
 
-from hal.board.environment import load_environment_components
 from hal.board.sen55 import SEN55Timing
 from hal.drivers.environment.group import EnvironmentGroup, create_environment_group
+from hal.drivers.environment.registry import COMPONENTS, MEASUREMENTS, Component
 from hal.drivers.environment.service import EnvironmentService
 
 
 def component(sample=None, *, enabled=True, stale=False, state="ready", error=None, age=1):
     worker = Mock()
+    worker.enabled = enabled
     worker.snapshot.return_value = {
         "enabled": enabled, "state": state, "stale": stale, "sample": sample,
         "last_error": error, "age_s": age, "bus": 1, "timing": asdict(SEN55Timing()),
@@ -83,7 +83,10 @@ def test_scd41_only_and_group_lifecycle():
     scd.start.assert_called_once()
     scd.stop.assert_called_once()
     snap = group.snapshot()
-    assert snap["sample"] == {"timestamp": 100, "co2_ppm": 600}
+    assert snap["sample"]["co2_ppm"] == 600
+    assert snap["sample"]["timestamp"] == 100
+    assert all(snap["sample"][key] is None for key in MEASUREMENTS if key != "co2_ppm")
+    assert snap["sources"] == {"co2_ppm": "scd41"}
     assert snap["bus"] == 1
 
 
@@ -91,15 +94,16 @@ def test_all_disabled_or_stale():
     assert EnvironmentGroup({}).snapshot()["state"] == "disabled"
     disabled = component(enabled=False, state="disabled")
     snap = EnvironmentGroup({"scd41": disabled}).snapshot()
-    assert snap["state"] == "disabled" and snap["sample"] is None
+    assert snap["state"] == "disabled" and all(value is None for value in snap["sample"].values())
+    assert snap["sources"] == {}
     stale = component({"timestamp": 50, "co2_ppm": 900}, stale=True)
     snap = EnvironmentGroup({"scd41": stale}).snapshot()
-    assert snap["stale"] and snap["sample"] is None
+    assert snap["stale"] and all(value is None for value in snap["sample"].values())
+    assert snap["sources"] == {"co2_ppm": "scd41"}
 
 
 def test_component_configuration_and_simulation(tmp_path):
-    assert load_environment_components(str(tmp_path)) == ("sen55",)
-    (tmp_path / "environment.json").write_text('{"components":["scd41"]}')
+    assert create_environment_group(str(tmp_path), "test").snapshot()["state"] == "disabled"
     (tmp_path / "scd41.json").write_text('{"boards":{"test":{"bus":2,"automatic_self_calibration":false}}}')
     group = create_environment_group(str(tmp_path), "test")
     worker = group.components["scd41"]
@@ -107,15 +111,65 @@ def test_component_configuration_and_simulation(tmp_path):
     assert worker._factory.keywords == {"automatic_self_calibration": False}
     sim = create_environment_group(str(tmp_path), "test", simulation=True)
     assert sim.snapshot()["state"] == "disabled"
+    assert all(not worker.enabled for worker in sim.components.values())
 
 
-@pytest.mark.parametrize("value", [[], {}, {"components": None}, {"components": "scd41"},
-    {"components": ["unknown"]}, {"components": [True]}, {"components": ["sen55", "sen55"]},
-    {"components": [], "extra": 1}])
-def test_invalid_components_rejected(tmp_path, value):
-    (tmp_path / "environment.json").write_text(json.dumps(value))
-    with pytest.raises(ValueError, match="Invalid environment components"):
-        load_environment_components(str(tmp_path))
+@pytest.mark.parametrize("legacy", ['{"components":["sen55"]}', '{"components":[]}', 'invalid legacy file'])
+def test_legacy_selection_cannot_override_enabled_flags(tmp_path, legacy):
+    (tmp_path / "environment.json").write_text(legacy)
+    (tmp_path / "sen55.json").write_text('{"boards":{"test":{"enabled":false,"bus":0}}}')
+    (tmp_path / "sen63c.json").write_text('{"boards":{"test":{"enabled":true,"bus":0}}}')
+    group = create_environment_group(str(tmp_path), "test")
+    assert group.components["sen63c"].enabled
+    assert not group.components["sen55"].enabled
+    assert set(group.sources.values()) == {"sen63c"}
+
+
+@pytest.mark.parametrize("other", ["sen55", "scd41"])
+def test_overlapping_enabled_components_rejected_before_io(tmp_path, other):
+    for name in [other, "sen63c"]:
+        (tmp_path / f"{name}.json").write_text('{"boards":{"test":{"enabled":true,"bus":0}}}')
+    with pytest.raises(ValueError, match="provided by enabled components"):
+        create_environment_group(str(tmp_path), "test")
+    (tmp_path / f"{other}.json").write_text('{"boards":{"test":{"enabled":false,"bus":0}}}')
+    assert create_environment_group(str(tmp_path), "test").components["sen63c"].enabled
+
+
+@pytest.mark.parametrize("name", ["sen55", "scd41", "sen63c"])
+def test_disabled_components_never_open_hardware(tmp_path, monkeypatch, name):
+    spec = COMPONENTS[name]
+    driver = Mock(side_effect=AssertionError("disabled sensor opened hardware"))
+    monkeypatch.setitem(COMPONENTS, name, Component(spec.loader, driver, spec.timing, spec.measurements, spec.driver_options))
+    (tmp_path / f"{name}.json").write_text('{"boards":{"test":{"enabled":false,"bus":0}}}')
+    group = create_environment_group(str(tmp_path), "test")
+    group.start()
+    group.stop()
+    driver.assert_not_called()
+
+
+def test_replacement_preserves_schema_and_does_not_fabricate_gas_indices():
+    values = {key: 10 for key in COMPONENTS["sen63c"].measurements}
+    values.update(timestamp=100)
+    # Even stray driver keys cannot add measurements absent from its binding.
+    values["voc_index"] = 999
+    old = EnvironmentGroup({"sen55": component(values), "scd41": component(values)}).snapshot()
+    new = EnvironmentGroup({"sen63c": component(values)}).snapshot()
+    assert set(old["sample"]) == set(new["sample"]) == {*MEASUREMENTS, "timestamp"}
+    assert new["sample"]["voc_index"] is None and new["sample"]["nox_index"] is None
+    assert new["sample"]["co2_ppm"] == 10
+    assert set(new["sources"].values()) == {"sen63c"}
+    assert not new["partial"]
+    assert all(value == 100 for value in new["metric_timestamps"].values())
+
+
+def test_disabled_component_cannot_erase_enabled_sensor_values():
+    for workers in [
+        {"sen63c": component({"timestamp": 100, "co2_ppm": 900}), "scd41": component(enabled=False)},
+        {"scd41": component(enabled=False), "sen63c": component({"timestamp": 100, "co2_ppm": 900})},
+    ]:
+        snapshot = EnvironmentGroup(workers).snapshot()
+        assert snapshot["sample"]["co2_ppm"] == 900
+        assert snapshot["sources"]["co2_ppm"] == "sen63c"
 
 
 def test_component_logs_have_stable_sensor_keys(caplog):

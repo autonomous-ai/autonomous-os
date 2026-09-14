@@ -73,15 +73,15 @@ func ReportTaskExecution(runID, interactionID, outcome, evidence string) {
 	// Keep this payload content-free even if a future caller supplies an
 	// unexpected value: errors, transcripts and tool results must not escape.
 	switch evidence {
-	case "lifecycle_end", "local_intent_returned":
+	case "lifecycle_end", "local_intent_returned", "chat_final_no_lifecycle", "harness_turn_done", "harness_turn_summary":
 		if outcome != "completed" {
 			return
 		}
-	case "lifecycle_error", "lifecycle_end_error", "chat_error", "local_intent_error", "dispatch_error":
+	case "lifecycle_error", "lifecycle_end_error", "chat_error", "local_intent_error", "dispatch_error", "harness_turn_error":
 		if outcome != "failed" {
 			return
 		}
-	case "lifecycle_error_recovered":
+	case "lifecycle_error_recovered", "execution_observation_lost", "harness_delegated", "harness_question_open":
 		if outcome != "unknown" {
 			return
 		}
@@ -101,4 +101,17 @@ func ReportTaskExecution(runID, interactionID, outcome, evidence string) {
 			"execution_at_ms": time.Now().UnixMilli(),
 		},
 	})
+}
+
+// ReportTaskObservationLost records discarded unfinished transport correlations.
+// It does not assert that the remote execution failed or alter runtime lifecycle.
+func ReportTaskObservationLost(runIDs ...string) {
+	seen := make(map[string]bool, len(runIDs))
+	for _, runID := range runIDs {
+		if runID == "" || seen[runID] {
+			continue
+		}
+		seen[runID] = true
+		ReportTaskExecution(runID, "", "unknown", "execution_observation_lost")
+	}
 }

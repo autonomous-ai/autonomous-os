@@ -202,17 +202,11 @@ End-to-end chain:
 2b. `state.note_music_cancel()` → stamps a HAL-side music cancel watermark, and `audio_stop()` runs on **both** branches (mic-unmute and stop-speaker), not just the stop-speaker one. Needed because the OS server's cancel is TTS-only: the cancelled turn keeps running and its pending music tool call still reaches `POST /audio/play` a moment later, where a fresh `music-play` thread clears its own `_stop_event` — so a point-in-time stop always loses that race and the user hears music they just cancelled once `yt-dlp` finishes resolving (1–5 s). While the watermark is fresh (`app_state.MUSIC_CANCEL_GUARD_S`, 3 s) `/audio/play` answers `{"status": "suppressed"}` instead of playing. The window is sized to cover the in-flight tool call but stay under the floor of a genuinely new request (speak → STT → LLM → tool is never under ~3 s), so "tap, then ask for a song" still works.
 3. `stop_tts()` → `tts_service.stop()` sets `_stop_event`; every blocking loop in TTS streaming (synth, render, playback) honors the event and aborts cleanly without leaving the speaker pegged
 
-### Voice barge-in (disabled in the lamp profile)
+### Voice-driven interrupt (not available)
 
-Voice-driven interrupt — speak during TTS to make Lamp stop and listen — follows `HAL_BARGE_IN_ENABLED`, which defaults to `HAL_AEC_ENABLED` — `false` in code. The lamp profile enables AEC but explicitly sets barge-in to `false`: its active USB voice mic is too close to the speaker for the current echo-cancellation tuning. Tap-to-interrupt remains available.
+There is no "speak during TTS to make Lamp stop" path. A local detector on the echo-cancelled mic shipped briefly and was removed after a measured verdict: on this body the echo residual that survives AEC3 sits *above* a real interruption at every speaker volume (echo ceiling 9804 / 9969 / 13560 at 25 / 40 / 65 %, against real interruptions of 6956–8027), and scoring 79 labelled windows against every available feature gave a best AUC of 0.72 — no threshold reached 0 % self-interruption without missing 90–100 % of real interruptions. The record, and the acceptance test any future attempt has to pass, is in `docs/realtime-voice.md` (*Why there is no voice-driven interrupt on the cancelled mic*).
 
-If barge-in is enabled, the active path is the **warm mic** loop, not `_monitor_barge_in()`. With `HAL_WARM_MIC=true` (the default) `arecord` stays open through playback and the capture loop drains and discards frames; barge-in is detected there, on the loop's own 64 ms frames, when `HAL_BARGE_IN_WARM_FRAMES` consecutive frames exceed `HAL_BARGE_IN_RMS_THRESHOLD` **and** a Silero pass agrees it is speech **and** `aec.uncancelled()` says the frame was really cancelled. `_monitor_barge_in()` (256 ms blocks, level only) is the legacy path and is unreachable while warm mic is on — `HAL_BARGE_IN_BLOCK_MS` and `HAL_BARGE_IN_TRIGGER_FRAMES` only size that one. Downstream chain is the same as tap-to-interrupt.
-
-**The two levels still overlap, and no threshold separates them.** Measured on `lamp-ee17` (speaker 25 %, `HAL_AEC_DELAY_MS=205`) with the gate parked at 30000 so nothing could fire, three full replies into a silent room peaked at **9804 / 6510 / 7849** — that is the echo ceiling. A confirmed real interruption on the same unit measured **8027**, *below* it. So a threshold under the ceiling self-interrupts (at 4500 it fired on 5530 / 6446 / 6637 / 7749, twice transcribing Lamp's own words as the user's turn) and one above it misses quiet interruptions. Separating them needs the envelope-decorrelation test — echo tracks the far-end envelope, a person does not — which is not implemented. The shipped default of 5000 deliberately favours catching a normal speaking voice; raise toward 11000 to trade the other way.
-
-Do not expect the Silero gate to reject Lamp's own voice: echo *is* speech, and it scored 0.50, 0.75 and 1.00 on separate events while real interruptions scored 0.08, 0.88 and 1.00. It rejects loud non-speech (door slam, keys, cough); level does the rest.
-
-To characterise a new deployment: park `HAL_BARGE_IN_RMS_THRESHOLD` at 30000, say nothing, and read the `drain peak RMS=… , longest run N frames` line each reply logs. Tap-to-interrupt remains active regardless.
+Interruption therefore comes from two places only: **tap-to-interrupt** above, on the turn-based path, and the **provider's VAD** inside a live session (`HAL_LIVE_MODE`, see `docs/realtime-voice.md` *Live mode*), which emits `InterruptedOutput` when the user talks over the reply.
 
 ## GPIO button detection (`hal/drivers/gpio_button.py`)
 
@@ -318,19 +312,22 @@ functions:
 | Hold 2–<5 s, then release | `hold_release_action` enters sleepy. |
 | Hold 5–<10 s, then release | `hold_release_action` shuts down. |
 | Hold ≥10 s, then release | `hold_release_action` performs factory reset. |
-| Swipe either direction, then release | `swipe_action` sleeps; no click or destructive action for this moving contact. |
+| Swipe left to right, then release | `swipe_action` sleeps; no click or destructive action for this moving contact. |
+| Swipe right to left, then release | Toggle Harness voice through the Go API; no click or destructive action for this moving contact. |
 
 A short contact lasts less than 2 s. The click window does not resolve while
 any selected electrode remains touched. Releasing a hold clears the pending
 click burst. Destructive actions never commit while held.
 
-### MPR121 swipe to sleep
+### MPR121 directional swipe
 
 `swipe_axis` is an optional ordered list of 2–12 distinct electrodes from
-`electrodes`. Lamp declares E0…E11 based on recorded travel E11→E0, E0→E8,
-and E9→E0; this establishes ordering, not which end physically faces left.
-Both directions call `swipe_action(source="MPR121")` from `button_actions.py`,
-the same sleep action as TTP223. A swipe need not cross the entire strip.
+`electrodes`, in physical **left-to-right** order. Lamp defaults to E0…E11.
+Verify the mounted bar: if E11 is physically on the left, reverse the existing
+axis to E11…E0. Increasing axis position (`+1`, left to right) calls
+`swipe_action(source="MPR121")` from `button_actions.py` to sleep. Decreasing
+position (`-1`, right to left) calls the Harness voice toggle action.
+A swipe need not cross the entire strip.
 Missing/null `swipe_axis` disables only swipe detection and preserves legacy
 click/hold recognition. Install HAL support before deploying JSON with this field.
 
@@ -339,8 +336,9 @@ stability (normally consecutive 10 ms polls) to retain fast electrode transition
 The detector follows the debounced contact footprint instead of counting every
 overlapping electrode as a separate tap. Stationary multi-electrode touches
 retain click/hold behavior. Once travel is detected, pending tap/hold outcomes
-and hold LED feedback are canceled for that contact; a valid swipe sleeps once
-after release. Reversed or invalid travel does not trigger reboot/shutdown/reset.
+and hold LED feedback are canceled for that contact; a valid swipe invokes its
+directional action once after release. Travel that reverses within one contact
+or is otherwise invalid does not trigger reboot/shutdown/reset.
 A release grace of 120 ms joins brief electrode handoffs, so tap/hold actions
 with swipe enabled resolve after that grace. Boot-held contacts remain ignored.
 Logs record swipe direction, displacement and verdict alongside action dispatch.
@@ -572,3 +570,25 @@ Phrases are intentionally short — they fire mid-stroke and need to feel respon
 | `hal/test_gpio.py` | Standalone probe for verifying GPIO button line |
 
 Input handlers are started in `hal/server.py` lifespan startup. Missing optional MPR121 configuration skips that driver; malformed enabled configuration rejects startup. Hardware driver failures are logged without stopping the other handlers.
+
+
+### Harness voice swipe
+
+Swipe **right to left**, then release to toggle Harness voice once. The existing
+`swipe_axis` defines physical direction as described above. There is no two-pad
+hold gesture or separate Harness wiring configuration. Single taps and stationary
+holds retain their existing behavior; detected travel cancels tap/hold outcomes.
+Contacts already held at startup and polling/I²C faults cannot trigger a swipe.
+
+Python recognizes the signal and queues it on the existing action worker.
+`harness_voice_action.py` calls the small `harness_voice_client.py` adapter,
+which posts once to Go's loopback-only `/api/harness/voice-mode/gesture` with a
+unique `gestureId`. Go owns mode state and focused-agent selection. No automatic
+HTTP retry occurs; a timeout announces that the outcome could not be confirmed.
+
+On success, HAL speaks “Harness is on. You’re now talking to {agent}.” or “Harness is off. You’re back with the assistant on your device.” using the configured
+`stt_language` (English, Vietnamese, Simplified or Traditional Chinese; phrases
+live in `hal/i18n.py`). It briefly pulses blue for on or neutral for off without
+saving a new LED state. Missing connection/agents receive localized errors.
+Hardware microphone privacy disables the gesture action, speaker mute suppresses
+speech, and existing sleep/privacy/TTS LED ownership is respected.

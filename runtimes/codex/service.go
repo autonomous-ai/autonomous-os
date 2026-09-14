@@ -236,6 +236,7 @@ type CodexService struct {
 }
 
 type pendingRun struct {
+	sent  bool // Telemetry only: the outbound frame write succeeded.
 	reqID string
 	runID string
 }

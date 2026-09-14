@@ -17,6 +17,7 @@ import (
 	"go.autonomous.ai/os/system/lib/hal"
 	"go.autonomous.ai/os/system/lib/i18n"
 	"go.autonomous.ai/os/system/statusled"
+	"go.autonomous.ai/os/system/telemetry"
 )
 
 var errDisconnectedBeforeSend = errors.New("picoclaw websocket disconnected before send")
@@ -88,6 +89,7 @@ func (s *PicoclawService) runWSConnURL(ctx context.Context, handler domain.Agent
 		s.wsConnected.Store(false)
 		s.wsConnectedAt.Store(0)
 		// Transmitted work is uncertain; never put it back in the unsent queue.
+		telemetry.ReportTaskObservationLost(s.getCurrentRunID(), s.peekPendingRunID())
 		s.RemovePendingChatTraceByRunID(s.getCurrentRunID())
 		s.RemovePendingChatTraceByRunID(s.peekPendingRunID())
 		s.clearTurn()

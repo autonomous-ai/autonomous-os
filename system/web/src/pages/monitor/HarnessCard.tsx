@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import type { CSSProperties, FormEvent } from "react";
 import { Laptop } from "lucide-react";
-import { getApiToken } from "@/lib/api";
+import { harnessRequest } from "./harness-api";
+import { HarnessVoiceMode } from "./HarnessVoiceMode";
 import { S } from "./styles";
-import { API } from "./types";
 
 interface HarnessStatus {
   paired: boolean;
@@ -23,22 +23,6 @@ interface HarnessPairInfo {
   error?: string;
 }
 
-async function harnessRequest(path: string, options: RequestInit = {}) {
-  const headers = new Headers(options.headers);
-  const token = getApiToken();
-  if (token) headers.set("Authorization", `Bearer ${token}`);
-  if (options.body) headers.set("Content-Type", "application/json");
-  const response = await fetch(`${API}/harness${path}`, {
-    ...options, headers, credentials: "same-origin",
-  });
-  const result = await response.json();
-  if (!response.ok || result.status !== 1) {
-    throw new Error(result.message || (response.status === 401 || response.status === 403
-      ? "Sign in as an administrator to manage Harness pairing."
-      : "The Harness request failed."));
-  }
-  return result.data;
-}
 
 const buttonStyle: CSSProperties = {
   padding: "8px 12px", borderRadius: 4, border: "1px solid var(--lm-border)",
@@ -166,6 +150,7 @@ export function HarnessCard() {
           </button>
         </div>
       )}
+      {status?.paired && <HarnessVoiceMode key={status.machine_id} connected={status.connected && !connectionError} />}
       {pairing && <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         <span style={{ fontSize: 12, color: "var(--lm-text-dim)" }}>
           Open Harness Desktop → Settings → Devices on your computer.

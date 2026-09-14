@@ -9,6 +9,16 @@ from hal.board.mpr121 import MPR121Config, load_mpr121_config
 
 
 class TestMPR121Config(unittest.TestCase):
+    def test_retired_chord_config_does_not_block_component_upgrade(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "mpr121.json"
+            path.write_text(json.dumps({"boards": {"orangepi_sun60": {
+                "bus": 0, "swipe_axis": [0, 1], "harness_voice_chord": [0, 11],
+            }}}))
+            config = load_mpr121_config(directory, "orangepi_sun60")
+            self.assertEqual(config.swipe_axis, (0, 1))
+            self.assertFalse(hasattr(config, "harness_voice_chord"))
+
     def test_only_lamp_declares_hardware(self):
         root = Path(__file__).resolve().parents[2] / "robots"
         config = load_mpr121_config(root / "lamp", "orangepi_sun60")

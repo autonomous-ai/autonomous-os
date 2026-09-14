@@ -36,6 +36,37 @@ request receives `409 Conflict`. HAL owns the physical sequence: reboot plays
 the reboot cue, while shutdown plays its cue and releases servos before issuing
 the OS power command.
 
+### Harness-only voice
+
+The optional RAM mode sends HAL's finalized STT to the agent focused in the Harness app,
+before local intents or main-runtime readiness/busy checks. It defaults to off
+after OS-server restart. Existing Harness event/recap delivery supplies the spoken
+answer. Only direct loopback voice requests carrying `harness_voice` routing
+snapshots enter this path; typed/MQTT chat and ambient sensing are unaffected.
+The OS mirrors app focus while the mode is off too, via `focus.get`,
+`focus.changed` and a two-second refresh. Turning the mode on through web/MQTT only changes the
+RAM flag; there is no web target selector. Missing focus, an older CLI without
+`focus.get`, or focus on another computer blocks voice dispatch. Each send carries
+the opaque `focusRevision`, checked atomically by CLI before accepting the turn.
+
+`GET /api/harness/voice-mode` allows admin or loopback reads. Admin-only management
+uses `PUT /api/harness/voice-mode`, `GET /api/harness/agents`,
+`GET /api/harness/voice-mode/question`, and `POST` to
+`/api/harness/voice-mode/answer`, `/receipt` and `/resolve` under the same
+`/api/harness/voice-mode` prefix. See [Harness integration](harness.md#harness-only-voice-mode)
+for payloads, generation validation, structured answers and receipt recovery.
+
+`POST /api/harness/voice-mode/gesture` is strict-loopback-only and accepts
+`{gestureId:"<UUID>"}` from HAL's physical-action worker after a right-to-left
+MPR121 swipe is released. HAL resolves direction using the configured physical
+left-to-right `swipe_axis`; left-to-right swipes use the existing sleep action.
+Go toggles the shared RAM mode and returns its snapshot. Enable first preserves
+valid app focus or
+requests `focus.ensure` and waits for Desktop acknowledgement; unavailable focus
+leaves the mode off. Disable works offline. Action errors expose `data.code` for
+HAL's localized feedback: `harness_unpaired` asks the user to pair the device in the Harness app; `harness_offline` reports an existing pairing without a connection. Both keep the mode off. A 128-entry RAM result cache prevents duplicate gesture
+IDs from toggling twice; explicit web/MQTT off cancels a pending gesture enable.
+
 ### Environment sensing
 
 | Method | Endpoint | Description |
@@ -52,7 +83,11 @@ as `environment.update` to `/api/sensing/event`. Its top-level `environment`
 config is read/written through admin `GET`/`PUT /api/device/config`: evaluation
 10 seconds, sustain 60 seconds, cooldown 900 seconds, retry 60 seconds, maximum
 sample age 10 seconds by default. Metric deltas and warm-up are configurable.
-SCD41 adds measured `co2_ppm` under the same capability, with default change
+Registered HAL components share one metric schema: SEN55 + SCD41 or SEN63C
+use the same API, initial report and change flow. Per-component JSON `enabled`
+flags control hardware; OS does not select sensor models. The status sample
+always has nine nullable metric keys: unsupported or unavailable values are
+null and ignored by detection. Measured `co2_ppm` has default change
 200 ppm and warm-up 60 seconds. Explicit `metrics` maps still replace the map
 and retain the configured subset. Composite snapshots include `components`,
 `sources`, and `metric_timestamps`: freshness and continuity are checked per
@@ -75,7 +110,7 @@ startup paths while retaining change detection. HAL's optional per-component
 warm-up after an OS-only restart; invalid/stale components remain excluded.
 The `environment` skill interprets measurements and consults `wellbeing` for
 proportionate advice. Hardware acquisition and OS change policy are separate;
-this feature does not enable Lamp's commented capability or disabled SEN55/SCD41.
+this feature does not enable Lamp's commented capability or disabled SEN55/SCD41/SEN63C.
 See [Lamp environment sensing](../robots/lamp/docs/environment-sensing.md#os-change-policy-and-agent-access)
 for defaults, validation, payloads and use cases.
 
@@ -123,21 +158,28 @@ Config field: `timezone` in `config/config.json` (IANA zone string, omitempty) �
 | GET | `/api/network/current` | Current SSID + IP |
 | GET | `/api/network/check-internet` | Check internet connectivity |
 
-**Connectivity monitor** (`system/network/service.go`, started once
-`SetUpCompleted` flips true). Pings `8.8.8.8` every 5s — interface-agnostic, so a
-device online over ethernet is seen as online. After 5 consecutive failures it
-raises the `Connectivity` LED state; after 10 (~50s) it escalates to a WiFi
-reconnect (restart `wpa_supplicant@wlan0`, bounce the interface), and after 5
-failed reconnects (~10 min) it reboots the device.
+**Connectivity monitor** (`system/network/service.go` and `recovery.go`, active
+when `SetUpCompleted` is true). Internet checks run on a 5s monitor tick; 5
+consecutive failed pings to `8.8.8.8` raise the `Connectivity` LED state, and a
+successful ping clears it. Internet status is separate from WiFi recovery:
+association and a usable station IPv4 address keep WiFi active even without
+Internet. The monitor no longer reboots the device.
 
-That escalation is a **WiFi** recovery path, so it is skipped when WiFi is not the
-link in question — otherwise a wired device would reboot itself every ~10 minutes
-for the length of an upstream outage it plays no part in. It is skipped when
-either: no SSID is on file (the device was provisioned over ethernet — see
-`setupWired` in `docs/setup-flow.md`), or the default route belongs to another
-interface (traffic is leaving over the cable). A genuinely dropped WiFi link
-leaves *no* default route and `PrimaryInterface()` falls back to `wlan0`, so the
-outage the escalation exists for still passes the guard.
+After 90s without a usable WiFi link, the monitor calls the existing
+`device-ap-mode` script. In AP mode, it retries saved WiFi after 2 minutes, using
+`connect-wifi` with credentials from device config. It defers while a hotspot
+client is connected or the client probe fails. The attempt temporarily stops the
+hotspot; after the script finishes, it allows up to 45s for association and a
+usable station IPv4 address. Success keeps STA mode; failure restores the AP and
+starts another retry interval. Setup status and saved credentials are retained.
+Recovery is serialized with manual provisioning/reset, and is skipped when no
+SSID is saved or the default route uses another interface. With no default route,
+`PrimaryInterface()` falls back to `wlan0`, allowing recovery of a dropped link.
+
+The scripts and web UI are unchanged. Join the device hotspot, then open
+`http://lamp-0c4e.local/wifi` (using the device's actual hostname) to change WiFi;
+use `http://192.168.100.1/wifi` if `.local` resolution is unavailable. Automatic
+retry resumes after hotspot clients disconnect.
 
 ### Guard Mode
 

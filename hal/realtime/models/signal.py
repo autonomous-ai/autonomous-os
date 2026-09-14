@@ -6,6 +6,7 @@ class DelegateSignal(BaseModel):
 
     message: str = ""
     transcript: str = ""
+    user_turn_id: str = ""
 
 
 class RejectSignal(BaseModel):
@@ -14,6 +15,7 @@ class RejectSignal(BaseModel):
     This is intentionally distinct from a turn that merely ends with no output:
     only this signal is allowed to suppress the normal main-agent fallback.
     """
+    user_turn_id: str = ""
 
 
 class EndCallSignal(BaseModel):

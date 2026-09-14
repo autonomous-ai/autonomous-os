@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"go.autonomous.ai/os/runtimes/openclaw"
@@ -34,6 +35,7 @@ type DeviceMQTTHandler struct {
 	agentGateway   domain.AgentGateway
 	buddyService   *buddy.Service
 	harnessService *harness.Service
+	harnessVoice   *atomic.Pointer[harness.VoiceController]
 	// connectorWriter is the data-driven writer for the connector.set.<code> /
 	// connector.remove.<code> flow and the refresh loop. Routing (is it an MCP
 	// connector? which auth header?) is decided per-message from the payload's
@@ -189,6 +191,7 @@ func ProvideDeviceMQTTHandler(cfg *config.Config, mqttFactory *mqtt.Factory, ds 
 	scheduleIntents := schedule.NewIntentStore(filepath.Join(config.Dir(), "schedule-intents.json"))
 
 	h := DeviceMQTTHandler{
+		harnessVoice:   &atomic.Pointer[harness.VoiceController]{},
 		config:         cfg,
 		mqttFactory:    mqttFactory,
 		deviceService:  ds,
@@ -284,6 +287,8 @@ func (h *DeviceMQTTHandler) dispatchData(env domain.MQTTDataCommand) error {
 		return h.handleBuddyPairStart(env)
 	case domain.KindBuddyPairRevoke:
 		return h.handleBuddyPairRevoke(env)
+	case domain.KindHarnessVoiceModeGet, domain.KindHarnessVoiceModeSet:
+		return h.handleHarnessVoiceMode(env)
 	case domain.KindHarnessPairStart, domain.KindHarnessStatus, domain.KindHarnessPairCancel, domain.KindHarnessPairRevoke:
 		return h.handleHarnessPair(env)
 	case domain.KindTTSSet:
