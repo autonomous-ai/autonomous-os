@@ -1072,6 +1072,12 @@ loại bỏ hẳn bộ máy đó, đổi lại phải khởi động lại để
 Một giá trị khác `off` do người dùng đặt thì được giữ nguyên. Sai chỗ này sẽ tạo
 ra thiết bị stream audio mãi mãi mà không bao giờ trả lời.
 
+### Gaze gate khi vào live
+
+Khi bật `HAL_WAKEWORD_ENABLED` và `HAL_GAZE_WAKE`, đồng thời tắt gaze shadow, chỉ VAD local chưa đủ để mở audio live. Kiểm tra gaze lúc bắt đầu nói mở focus window hiện có; `_live_decision` yêu cầu window còn hiệu lực trước khi chuẩn bị phiên realtime hoặc gửi frame mic. Focus còn hiệu lực từ gaze, button hoặc lần wake trước đều cho phép vào. Focus thiếu/hết hạn thì quay về VAD local, không fallback sang STT. Chỉ kiểm tra gate lúc vào: trong phiên đã được phép, server VAD tiếp tục chia lượt hội thoại. Sau khi kết thúc phiên, lần vào tiếp theo kiểm tra focus lại.
+
+Tắt gaze, tắt wake-word gate hoặc bật `HAL_GAZE_SHADOW=true` thì giữ cách vào live chỉ dựa trên VAD như trước. `WOULD_WAKE` ở shadow chỉ quan sát, không áp dụng gate. Không bổ sung nhận diện wake phrase bằng giọng nói trong live. Harness voice giữ route riêng hiện có.
+
 ### History của lượt Gemini live hoàn tất
 
 Với `HAL_LIVE_MODE=true`, các đoạn transcript input Gemini đi kèm provider turn ID. `hal/drivers/voice/_internal/live_history.py` chỉ ghép input/output cùng ID rồi gửi một notification `voice_agent_handled` sau terminal thành công từ provider. Timeout receive giữ lượt đang dở; terminal lặp không gửi lại. Lượt reject, delegate, bị ngắt, không rõ chủ sở hữu hoặc thiếu transcript không được ghi như lượt hoàn tất. Dữ liệu history tách khỏi đường playback; output-reset hiện có cũng xóa phần câu trả lời đang gom.
@@ -1202,7 +1208,7 @@ live. Đây là đánh đổi sản phẩm, không phải lỗi:
 | mất | hệ quả |
 |---|---|
 | transcript STT | không có `[TURN CONTEXT]`, không có bộ lọc dựa trên transcript |
-| wake word | được xác nhận từ text STT, nên `HAL_WAKEWORD_ENABLED` không có tác dụng ở chế độ live — vào phiên chỉ bằng VAD |
+| wake word | wake phrase cần text STT nên chưa được nhận diện trong live; gaze/focus gate đã bật có thể giới hạn việc vào phiên từ VAD |
 | speaker ID, cảm xúc giọng nói | một phiên không tạo ra cả hai |
 | STT cục bộ khi delegate | `delegate_to_main` kết thúc phiên và chuyển tiếp `[voice-instruction]` + transcript đầu vào của chính Gemini làm `[transcript]` (`FunctionCallOutput.user_transcript` → `DelegateSignal.transcript`, `_live_out_pump` đọc); câu trả lời của main agent phát sau khi cúp máy. Provider không có input transcription chỉ chuyển tiếp instruction |
 

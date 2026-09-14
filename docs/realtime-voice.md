@@ -1116,6 +1116,12 @@ so it must be settled before those models are defined. An explicit non-`off`
 value is left alone. Getting this wrong produces a device that streams audio
 forever and never answers.
 
+### Gaze-gated live entry
+
+When `HAL_WAKEWORD_ENABLED` and `HAL_GAZE_WAKE` are enabled and gaze shadow mode is off, local VAD alone cannot open live audio. The speech-start gaze check grants the existing focus window; `_live_decision` requires that window before preparing the realtime session or sending microphone frames. A still-active focus granted by gaze, a button or a prior wake also permits entry. Missing/expired focus returns to local VAD without falling through to STT. The gate is checked only at entry: server VAD continues to own turn-taking inside an accepted live session. After hangup, the next entry checks focus again.
+
+Gaze disabled, wake-word gating disabled, or `HAL_GAZE_SHADOW=true` preserves the existing VAD-only live entry. Shadow `WOULD_WAKE` is observational and does not enforce this gate. This does not add spoken wake-phrase recognition to live mode. Harness voice continues through its existing separate route.
+
 ### Completed Gemini live history
 
 With `HAL_LIVE_MODE=true`, Gemini input transcription chunks now travel with their provider turn ID. `hal/drivers/voice/_internal/live_history.py` joins only input/output with that same ID and sends one `voice_agent_handled` notification after a successful provider terminal. Receive timeouts keep the partial turn open; duplicate terminals do not resend. Rejected, delegated, interrupted, unowned, or transcript-less replies are not recorded as completed exchanges. Input and output remain separate from the audio playback path; the existing output-reset behavior also resets the collected answer.
@@ -1243,7 +1249,7 @@ session. These are product trade-offs, not bugs:
 | lost | consequence |
 |---|---|
 | STT transcript | no `[TURN CONTEXT]`, no transcript-based filters |
-| wake word | confirmed from STT text, so `HAL_WAKEWORD_ENABLED` has no effect in live mode — entry is VAD-only |
+| wake word | confirmed from STT text, so spoken wake phrases are not recognized in live; the armed gaze/focus gate can restrict VAD entry |
 | speaker ID, speech emotion | a session produces neither |
 | local STT on delegation | `delegate_to_main` ends the session and forwards `[voice-instruction]` + Gemini's own input transcription as `[transcript]` (`FunctionCallOutput.user_transcript` → `DelegateSignal.transcript`, read by `_live_out_pump`); the main agent's reply plays after hangup. Providers without input transcription forward the instruction alone |
 

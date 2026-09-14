@@ -1102,8 +1102,19 @@ class VoiceService:
                     return "skip"
             except Exception as e:
                 logger.warning("[live] speech gate failed, allowing: %s", e)
+        # Gaze grants the existing focus window before this decision. Only
+        # enforce an armed gate; shadow mode remains observation-only.
+        if (
+            hal_config.WAKEWORD_ENABLED
+            and hal_config.GAZE_WAKE_ENABLED
+            and not hal_config.GAZE_WAKE_SHADOW
+            and not self._wakeword_focus.is_active()
+        ):
+            logger.info("[live] gaze gate closed — waiting for gaze or explicit focus")
+            return "skip"
+
         self._realtime.prepare_turn()
-        
+
         if not self._realtime.wait_until_available(5.0):
             logger.info("[live] realtime unavailable — using the turn path")
             return "turn"
