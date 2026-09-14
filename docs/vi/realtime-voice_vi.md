@@ -1062,6 +1062,25 @@ loại bỏ hẳn bộ máy đó, đổi lại phải khởi động lại để
 Một giá trị khác `off` do người dùng đặt thì được giữ nguyên. Sai chỗ này sẽ tạo
 ra thiết bị stream audio mãi mãi mà không bao giờ trả lời.
 
+### Voice metrics trong chế độ live
+
+Phiên Gemini live dùng `hal/telemetry/live_voice.py` để ánh xạ lượt người dùng của
+provider sang interaction ID HAL, gắn owner cho playback native và truyền cùng
+ID vào task delegate qua OS. Chỉ terminal thành công của provider gắn đúng lượt
+mới hoàn tất execution realtime; riêng timeout, done tự tạo hay ngắt lời không
+phải bằng chứng completed. Không có terminal thành công thì task vẫn là
+incomplete. Ngắt lời từ server ghi biên `server_barge_in` đúng interaction
+để theo dõi audio cũ.
+
+Snapshot ghi `mode=live` và có biết endpoint tiếng nói hay không. Endpoint thật
+từ server dùng thời điểm HAL nhận (`server_vad`), không phải lúc âm học kết thúc.
+Lượt Gemini chỉ có transcript vẫn hợp lệ cho metric execution nhưng bị loại
+khỏi KPI-1 latency với `speech_endpoint_unavailable` và latency null. Output
+không có owner không được gán cho câu nói mới nhất. Bộ đếm
+`voice_metrics_live_coverage` lúc đóng phiên thể hiện phần mất độ phủ này; hook
+không đổi lọc tiếng ồn, uplink hay cờ routing. Xem
+[voice metrics](voice-metrics_vi.md#độ-phủ-của-phiên-live) để biết hợp đồng event.
+
 ### Cổng vào: hai cửa, ba kết cục
 
 `_vad_loop` xác nhận tiếng nói như thường lệ, rồi `_live_decision()` trả về một

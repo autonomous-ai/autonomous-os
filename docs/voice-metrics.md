@@ -34,7 +34,8 @@ thresholds and event shapes all live in the two tracking packages.
 
 ## Interaction id
 
-An interaction is **one user utterance**. `voice_metrics.speech_end()` creates
+An interaction is **one user utterance**. On the turn path,
+`voice_metrics.speech_end()` creates
 `interaction_id` (`vi-<16 hex>`) at the moment HAL decides the user stopped
 speaking, and it is carried through realtime, the sensing POST (bound to the
 os-server `runId` returned by `/api/sensing/event`), the main agent's reply
@@ -66,6 +67,49 @@ newest voice command. Queued segments carry their own classification metadata
 (answer/filler/system), so they do not inherit the kind of the speech that
 opened their shared stream. These snapshots do not change feedback or
 interruption behavior.
+
+## Live session coverage
+
+Gemini live sessions use `hal/telemetry/live_voice.py` to map each observed
+provider user-turn ID to one HAL
+interaction, independently of receive-loop timeouts. Interaction snapshots carry
+`mode` (`live` or `turn`) and `speech_endpoint_known` so reports can separate
+coverage by path. Delegation carries the same interaction ID through OS routing;
+provider rejection of non-user speech excludes that task.
+
+A genuine server speech-end event uses its monotonic **receive time** with
+`speech_end_method=server_vad`. This includes the delay before HAL receives the
+server event; it is not the acoustic endpoint. Gemini transcript-only evidence
+can start an eligible execution task, but cannot supply a speech endpoint:
+KPI-1 records `eligible=false`, `exclusion_reason=speech_endpoint_unavailable`
+and null ack/answer latencies. KPI-3 eligibility is independent of that exclusion.
+An endpoint received after playback cannot retroactively create a latency sample.
+
+Realtime execution is completed only by a successful provider terminal correlated
+to that interaction. Receive timeouts, synthetic done signals and interruption
+are not completion evidence; without a successful terminal the task remains
+incomplete. A true provider interruption creates a
+`server_barge_in` suppression boundary targeting only the cancelled interaction,
+with the existing **2 s** grace and **60 s** observation window. Unowned audio
+never earns acknowledgement credit. Starting the next question after the previous
+execution completed and its audio went silent with no owned synthesis/queue work
+remaining creates no suppression sample. Queued speech still counts between
+sentences. Suppressing audio does not override a correlated successful execution
+terminal, even if that terminal arrives after the interruption.
+
+At session close, `voice_metrics_live_coverage` logs `observed_interactions`,
+`completed_interactions` and any `unkeyed_user_observations`,
+`unowned_output_chunks`, `unowned_completions`,
+`unowned_interruptions` counters.
+Read these alongside KPI results: Gemini's transcript stream has no stable input
+IDs, so late or unowned output is never retrospectively assigned to the newest
+utterance. Missing endpoints are coverage loss, not KPI-1 passes or failures.
+These hooks leave turn-path definitions, noise gates and routing flags unchanged.
+Interruption metadata does not issue an extra playback stop, discard buffered
+text, reopen native audio, or change provider turn scheduling. Measurement errors
+are caught without interrupting speech or delegation. When queued segments share
+a stream, the next segment's first write closes the previous measured interval;
+it does not close the physical audio stream.
 
 ## What counts as an acknowledgement
 
@@ -139,14 +183,15 @@ run in between and would otherwise be charged to the device's response time.
 | Field | Meaning |
 |-------|---------|
 | `interaction_id`, `run_id`, `event_type`, `route` | Identity + how the turn was routed (`handled` / `delegated` / fallback / noise-dropped) |
+| `mode`, `speech_endpoint_known` | `live`/`turn` path and whether an endpoint was observed |
 | `speech_end_method` | How the endpoint was detected |
 | `eligible` | `false` when `exclusion_reason` is set |
 | `outcome` | `acknowledged` \| `no_ack` \| `excluded` |
-| `exclusion_reason` | `rejected_noise`, `rejected_non_user`, `no_transcript`, `not_addressed`, `speaker_muted`, `interrupted_by_user`. `speaker_muted` is recorded when the speaker actually **refuses** the speech, not by sampling the mute flag later — otherwise a device unmuted before scoring looks like one that simply never answered |
+| `exclusion_reason` | `rejected_noise`, `rejected_non_user`, `no_transcript`, `not_addressed`, `speaker_muted`, `interrupted_by_user`, `speech_endpoint_unavailable` (KPI-1 only). `speaker_muted` is recorded when the speaker actually **refuses** the speech, not by sampling the mute flag later — otherwise a device unmuted before scoring looks like one that simply never answered |
 | `failure_reason` | `dispatch_failed` — the command was valid and went **unserved** (the POST never landed). This is *not* an exclusion: the row stays eligible and counts against the KPI. A command os-server answered itself (local intent: volume, LED, time) is **not** a failure — its reply carries the interaction id as owner and counts as answered. |
-| `ack_latency_ms` | Raw observation, kept whatever the verdict (`null` when nothing played) |
+| `ack_latency_ms` | Raw observation, kept whatever the verdict (`null` when nothing played or the endpoint is unavailable) |
 | `ack_modality`, `ack_kind` | What the user actually heard |
-| `answer_latency_ms`, `answer_kind` | When the **answer** was heard (`agent_reply` / `native_realtime` / `realtime_tts`), as opposed to the receipt. `null` = acknowledged but never answered inside the window — a finding, not missing data |
+| `answer_latency_ms`, `answer_kind` | When the **answer** was heard (`agent_reply` / `native_realtime` / `realtime_tts`), as opposed to the receipt. `null` = endpoint unavailable or no answer observed inside the window — a finding, not missing data |
 | `ack_deadline_ms`, `observe_window_ms` | 3000 / 10000 — the (provisional) thresholds in force when the row was written |
 | `unknown_owner_playbacks` | Playbacks nobody claimed so far — audio excluded from ack decisions |
 | `amends_event_id`, `amendment_reason` | Set on a **correction** row: routing or an exclusion arrived after the verdict was sent |
@@ -168,7 +213,7 @@ an amendment row.
 
 | Field | Meaning |
 |-------|---------|
-| `suppression_reason` | `explicit_stop` (user clicked) or `auto_supersede` (realtime answered a newer utterance) |
+| `suppression_reason` | `explicit_stop` (user clicked) or `auto_supersede` (realtime answered a newer utterance), or `server_barge_in` (provider interrupted the identified interaction) |
 | `interaction_id` | The utterance that triggered the boundary |
 | `applicable_interactions` | How many older in-flight interactions the boundary covers |
 | `old_audio_playing_at_boundary` | Whether old audio was already playing when the boundary was stamped |
@@ -293,7 +338,7 @@ these independent task fields:
 | Field | Meaning |
 |-------|---------|
 | `task_schema_version` | `1`; older HAL rows without a matching OS task start are coverage loss, not scored failures |
-| `task_started_at_ms` | Unix milliseconds at detected speech end; selects the report cohort, not a cross-process latency |
+| `task_started_at_ms` | Unix milliseconds at detected speech end, or initial user-turn observation when no endpoint is available; selects the report cohort, not a cross-process latency |
 | `task_revision` | Increasing snapshot revision; keep the greatest revision per device + interaction, including late run-id bindings |
 | `task_eligible` | Independent of acknowledgement eligibility: mute and speech interruption do not exclude execution |
 | `task_eligibility_known` | Whether routing/exclusion has been observed; report unknown coverage explicitly |
@@ -311,7 +356,7 @@ error text, transcript or tool output. Evidence is:
 | `lifecycle_error`, `lifecycle_end_error`, `chat_error`, `local_intent_error`, `dispatch_error` | `failed`: execution failed, dispatch failed/not ready, or local intent observed a HAL action API error |
 | `lifecycle_error_recovered` | `unknown`: recovery alone is not completion; wait for explicit end |
 | `local_intent_returned` | `completed`: the local intent handler finished without an observed HAL action error; this does not prove semantic correctness or the physical effect |
-| `realtime_turn_done` | `completed`: the provider emitted TurnDoneEvent and HAL returned a handled turn |
+| `realtime_turn_done` | `completed`: a correlated successful provider terminal completed the handled turn |
 
 Join execution evidence to the cohort by **device + run_id** or **device +
 interaction_id**. OS observations also include non-voice runs: never put those

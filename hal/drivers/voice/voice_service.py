@@ -31,7 +31,8 @@ from hal import presets
 from hal.realtime.enums import AgentGateway
 from hal.realtime.models import AudioOutput as RTAudioOutput
 from hal.realtime.models import InterruptedOutput as RTInterruptedOutput
-from hal.realtime.models.signal import DelegateSignal, EndCallSignal
+from hal.realtime.models.signal import DelegateSignal, EndCallSignal, RejectSignal
+from hal.realtime.models.output import ExecutionOutput, UserSpeechOutput
 from hal.realtime.models import TextOutput as RTTextOutput
 from hal.realtime.orchestrator import RealtimeOrchestrator
 from hal.realtime.utils import pcm16_bytes_to_float32, resample_float32
@@ -63,6 +64,7 @@ from hal.drivers.voice._internal.speaker_decorate import (
 )
 from hal.drivers.voice._internal.turn_dispatch import dispatch_turn
 from hal.telemetry import voice_metrics
+from hal.telemetry.live_voice import LiveVoiceMetrics
 from hal.drivers.voice._internal.vad_filters import (
     SileroVADFilter,
     WebRTCVADFilter,
@@ -1164,6 +1166,7 @@ class VoiceService:
         on a quiet stretch, when receive() times out having yielded nothing.
         Both simply mean "go round again and wait for the user".
         """
+        metrics = LiveVoiceMetrics()
         while self._live_running and generation == self._live_generation:
             native_started = False
             transcript = ""
@@ -1171,10 +1174,24 @@ class VoiceService:
             native = hal_config.REALTIME_NATIVE_AUDIO
             sentence_buf = ""
             first_sent = False
+            speech_iid = ""
+            buffer_mixed = False
+            native_owner = ""
             try:
                 for out in self._realtime.stream_output():
                     if not (self._live_running and generation == self._live_generation):
                         break
+                    if isinstance(out, UserSpeechOutput):
+                        metrics.speech(out.turn_id, out.endpoint_at, out.method)
+                        continue
+                    if isinstance(out, ExecutionOutput):
+                        metrics.complete(
+                            out.user_turn_id, out.execution_completed,
+                        )
+                        continue
+                    if isinstance(out, RejectSignal):
+                        metrics.reject(out.user_turn_id)
+                        continue
                     if isinstance(out, DelegateSignal):
                         # Hang up so the main agent's reply does not play
                         # into an open uplink.
@@ -1182,6 +1199,12 @@ class VoiceService:
                         self._live_running = False
                         if out.transcript:
                             self._realtime.save_main_handoff(out.transcript)
+                        # A valid delegate tool is explicit task evidence even
+                        # if the provider has not sent its input transcript yet.
+                        key = out.user_turn_id or "delegate"
+                        iid = metrics.interaction(key) or metrics.speech(
+                            key, None, "provider_delegate",
+                        )
                         dispatch_turn(
                             self._decorator,
                             self._sensing_sender,
@@ -1194,6 +1217,7 @@ class VoiceService:
                                 route=ROUTE_DELEGATED,
                             ),
                             harness_voice=harness_voice,
+                            interaction_id=iid,
                         )
                         break
                     if isinstance(out, EndCallSignal):
@@ -1211,10 +1235,18 @@ class VoiceService:
                         )
                         continue
                     if isinstance(out, RTInterruptedOutput):
-                        # The server's VAD heard the user talk over the reply.
-                        # This is the only voice-driven interruption there is
-                        # — nothing local decides it — so honour it at once.
-                        logger.info("[live] barge-in: model interrupted by the user")
+                        # The first output transcript also sends an audio reset;
+                        # that is not evidence of a user asking us to stop.
+                        if out.reason == "server_interrupt":
+                            iid = metrics.interaction(out.user_turn_id)
+                            has_pending = getattr(self._tts, "has_pending_speech", lambda owner: False)
+                            pending_audio = bool(iid) and (
+                                has_pending("run:" + iid) or has_pending("interaction:" + iid)
+                            )
+                            metrics.interrupt(out.user_turn_id, out.at, pending_audio=pending_audio)
+                            # Observe only. Playback keeps its existing stop/reset
+                            # behavior; instrumentation must not add a new stop.
+                            continue
                         if self._tts is not None:
                             self._tts.stop()
                         if native_started:
@@ -1226,12 +1258,17 @@ class VoiceService:
                         self._live_last_model_output = time.time()
                         if not native:
                             continue
+                        owner = metrics.owner(out.user_turn_id)
+                        if native_started and owner != native_owner:
+                            self._tts.set_native_playback_owner(owner)
+                            native_owner = owner
                         if not native_started:
                             native_started = self._tts is not None and (
                                 self._tts.native_play_begin(
-                                    self._realtime.output_sample_rate
+                                    self._realtime.output_sample_rate, owner=owner,
                                 )
                             )
+                            native_owner = owner
                         if native_started:
                             self._tts.native_play_frame(out.audio)
                         if out.transcript:
@@ -1242,22 +1279,40 @@ class VoiceService:
                         transcript += out.text
                         if native:
                             continue
-                        
+                        iid = metrics.interaction(out.user_turn_id)
+                        if not iid:
+                            metrics.owner(out.user_turn_id)  # coverage only
+                        if not sentence_buf:
+                            speech_iid = iid
+                            buffer_mixed = False
+                        elif iid != speech_iid:
+                            # Do not change chunking or flush early for metrics.
+                            # A mixed-owner sentence is explicitly unattributed.
+                            buffer_mixed = True
+                        if buffer_mixed:
+                            speech_iid = ""
+                        iid = speech_iid
                         sentence_buf += out.text
                         if not first_sent:
                             head, rest = split_first_chunk(sentence_buf)
                             head = self.strip_rt_markers(head) if head else ""
                             if head:
-                                if not self._tts.speak(head):
-                                    self._tts.speak_queue(head)
+                                if not self._tts.speak(head, turn_id=iid, realtime_reply=True):
+                                    self._tts.speak_queue(head, turn_id=iid, realtime_reply=True)
                                 first_sent = True
                                 sentence_buf = rest
                         if sentence_buf.rstrip().endswith((".", "!", "?", "…")):
                             sentence = self.strip_rt_markers(sentence_buf)
                             if sentence:
-                                self._tts.speak_queue(sentence)
+                                self._tts.speak_queue(sentence, turn_id=iid, realtime_reply=True)
                             sentence_buf = ""
                         continue
+                # receive() timeout and a synthetic unblock are not successful
+                # execution. Only the provider's terminal owns this evidence.
+                metrics.complete(
+                    getattr(self._realtime, "execution_turn_id", ""),
+                    getattr(self._realtime, "execution_completed", False) is True,
+                )
             except Exception as e:
                 logger.warning("[live] output pump error: %s", e)
                 time.sleep(0.2)
@@ -1268,10 +1323,11 @@ class VoiceService:
                 if not native and sentence_buf.strip():
                     tail = self.strip_rt_markers(sentence_buf)
                     if tail:
-                        self._tts.speak_queue(tail)
+                        self._tts.speak_queue(tail, turn_id=speech_iid, realtime_reply=True)
             if transcript:
                 self._live_unprompted_replies += 1
                 logger.info("[live] model said: %r", transcript[:120])
+        metrics.close()
 
     def _live_session(
         self, mic, frame_size: int, device_rate: int, pre_roll: list,

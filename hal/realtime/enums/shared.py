@@ -27,6 +27,8 @@ class OutputTypeEnum(StrEnum):
     AUDIO = "audio"
     FUNCTION_CALL = "function_call"
     INTERRUPTED = "interrupted"
+    USER_SPEECH = "user_speech"
+    EXECUTION = "execution"
 
 
 class InputEventTypeEnum(StrEnum):

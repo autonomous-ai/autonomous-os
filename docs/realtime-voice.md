@@ -1105,6 +1105,24 @@ so it must be settled before those models are defined. An explicit non-`off`
 value is left alone. Getting this wrong produces a device that streams audio
 forever and never answers.
 
+### Voice metrics in live mode
+
+Gemini live sessions use `hal/telemetry/live_voice.py` to map provider user turns to HAL
+interaction IDs, tag native playback and carry the same ID into delegated OS
+tasks. Only a correlated successful provider terminal completes realtime
+execution; timeout, synthetic done and interruption alone are not completion
+proof. Without a successful terminal the task remains incomplete. Server
+interruption records a targeted `server_barge_in` boundary for stale-playback tracking.
+
+Snapshots identify `mode=live` and whether a speech endpoint is known. A real
+server endpoint is timed when HAL receives it (`server_vad`), not at acoustic
+speech end. Gemini transcript-only turns remain eligible for execution metrics
+but are excluded from latency KPI-1 with `speech_endpoint_unavailable` and null
+latencies. Unowned output is not assigned to the newest utterance. Session-close
+`voice_metrics_live_coverage` counters expose this missing coverage; these hooks
+do not alter noise filtering, uplink or routing settings. See
+[voice metrics](voice-metrics.md#live-session-coverage) for the event contract.
+
 ### Entry: two gates, three outcomes
 
 `_vad_loop` confirms speech as usual, then `_live_decision()` returns one of:
