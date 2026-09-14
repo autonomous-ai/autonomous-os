@@ -117,6 +117,10 @@ type AgentHandler struct {
 	// runIDMap maps OpenClaw-assigned UUIDs back to device-originated idempotencyKeys.
 	// When lifecycle_start arrives with UUID while a device trace is active, we store
 	// the mapping so all subsequent events for that UUID use the device ID for flow tracing.
+	// taskRunIDs is telemetry-only; never use it for playback or dispatch.
+	taskRunIDsMu sync.Mutex
+	taskRunIDs   map[string]string
+
 	runIDMapMu sync.Mutex
 	runIDMap   map[string]string // OpenClaw UUID → device idempotencyKey
 

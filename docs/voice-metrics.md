@@ -356,6 +356,8 @@ error text, transcript or tool output. Evidence is:
 | `lifecycle_error`, `lifecycle_end_error`, `chat_error`, `local_intent_error`, `dispatch_error` | `failed`: execution failed, dispatch failed/not ready, or local intent observed a HAL action API error |
 | `lifecycle_error_recovered` | `unknown`: recovery alone is not completion; wait for explicit end |
 | `local_intent_returned` | `completed`: the local intent handler finished without an observed HAL action error; this does not prove semantic correctness or the physical effect |
+| `chat_final_no_lifecycle` | `completed`: a nonempty final reply consumes the pending trace without a lifecycle (for example OpenClaw `/status` or `/new`); empty finals are not completion evidence |
+| `execution_observation_lost` | `unknown`: a runtime lost observation of an unfinished sent task on transport loss or timeout; this does not establish execution failure |
 | `realtime_turn_done` | `completed`: a correlated successful provider terminal completed the handled turn |
 
 Join execution evidence to the cohort by **device + run_id** or **device +
@@ -370,6 +372,10 @@ tool attempt: a handled tool error may recover without terminal failure.
 Dispatch failure without execution evidence counts as failed. `Result.ExecutionFailed` records
 local-intent HAL API errors that were previously only logged, so returning from
 the handler after such an error emits `local_intent_error`, not a completion.
+
+OpenClaw records the pending trace before writing `chat.send`, and removes it on write failure. Telemetry correlation retains at most 1024 pending traces for 24 hours in a separate buffer. Routing keeps its original matcher and 2-minute TTL; the pending-send busy window remains 30 seconds. A telemetry-only UUID alias requires one exact trimmed message match to the transmitted message and is never used by TTS or dispatch; ambiguous or missing matches and failed `chat.history` requests remain unresolved. A missing terminal is still `incomplete`; these fixes do not reconstruct historical events or judge answer correctness.
+
+For Codex, Claude Code, OpenCode and PicoClaw, transport/timeout cleanup records `execution_observation_lost` for unfinished sent runs before forgetting them. It does not synthesize runtime lifecycle events. This evidence never overrides a correlated completed/failed terminal, including a racing final; without a terminal it remains `unknown` in the denominator. Hermes already reports its stream termination through lifecycle handling.
 
 The default settling horizon is **0 seconds**: count every eligible task
 started through `as_of_ms` immediately. Failed, unknown, and unfinished turns

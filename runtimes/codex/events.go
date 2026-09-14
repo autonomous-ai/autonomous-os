@@ -107,6 +107,11 @@ func (s *CodexService) failStuckTurn() {
 	s.clearTurn()
 	dispatch, _ := s.wsDispatch.Load().(dispatchFn)
 	if dispatch == nil {
+		// These acknowledged steers were removed before clearTurn; no terminal
+		// callback is available to account for them on this path.
+		for _, merged := range steeredRuns {
+			telemetry.ReportTaskObservationLost(merged.runID)
+		}
 		return // socket already gone; the reconnect path owns the cleanup
 	}
 	payload, _ := json.Marshal(map[string]any{

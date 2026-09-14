@@ -248,9 +248,13 @@ func (s *OpenclawService) sendChat(message string, imagesBase64 []string, fixedR
 	// because lifecycle_start SSE hasn't arrived yet. SSE lifecycle_end still clears it.
 	s.busySince.Store(time.Now().UnixMilli())
 	s.activeTurn.Store(true)
+	// Register before the write: a fast lifecycle/final may arrive as soon as
+	// the peer reads the frame. Match the exact post-strip wire message.
+	s.SetPendingChatTrace(idempotencyKey, wsMessage)
 	err = conn.WriteMessage(websocket.TextMessage, body)
 	s.wsMu.Unlock()
 	if err != nil {
+		s.RemovePendingChatTraceByRunID(idempotencyKey)
 		s.activeTurn.Store(false) // write failed — no turn will start, clear immediately
 		slog.Error("[chat.send] write failed", "component", "openclaw",
 			"reqId", reqID, "runId", idempotencyKey, "error", err)
@@ -259,12 +263,6 @@ func (s *OpenclawService) sendChat(message string, imagesBase64 []string, fixedR
 
 	slog.Info("[chat.send] <<< sent OK", "component", "openclaw",
 		"reqId", reqID, "runId", idempotencyKey, "hasImage", hasImage)
-	// Store pending trace + exact message text so the SSE handler can map a
-	// UUID lifecycle (drained from OpenClaw's followup queue, which strips
-	// the idempotencyKey) back to this device runId via chat.history →
-	// MatchPendingByMessage. Stores `message` (not the raw WS body) because
-	// chat.history returns the user message content, not the wrapper.
-	s.SetPendingChatTrace(idempotencyKey, message)
 	flow.Log("chat_send", map[string]any{
 		"run_id":      idempotencyKey,
 		"type":        sourceType,

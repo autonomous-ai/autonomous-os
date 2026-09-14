@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"go.autonomous.ai/os/system/domain"
+	"go.autonomous.ai/os/system/telemetry"
 )
 
 // nowUnixMs returns the current time in milliseconds (matches the OpenClaw frame
@@ -598,6 +599,7 @@ func (s *OpenCodeService) finishCurrentCorrelation() {
 // disconnect / busyTTL expiry / send failure. The normal end-of-turn path
 // clears the ids inline in emitFinal / handleError (before dispatch).
 func (s *OpenCodeService) clearTurn() {
+	telemetry.ReportTaskObservationLost(s.unfinishedTaskRunIDs()...)
 	s.pendingMu.Lock()
 	s.pendingRuns = nil
 	s.pendingMu.Unlock()
@@ -676,4 +678,33 @@ func (s *OpenCodeService) rejectQueuedFrame(f opencodeFrame, dispatch func(domai
 		"data": map[string]any{"phase": "error", "error": f.Error.Message, "endedAt": nowUnixMs()},
 	})
 	dispatch(domain.WSEvent{Type: "evt", Event: "agent", Payload: payload})
+}
+
+// markPendingRunSent records transport evidence without changing admission or correlation.
+func (s *OpenCodeService) markPendingRunSent(reqID string) {
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
+	for i := range s.pendingRuns {
+		if s.pendingRuns[i].reqID == reqID {
+			s.pendingRuns[i].sent = true
+			return
+		}
+	}
+}
+
+// unfinishedTaskRunIDs excludes unsent attempts and normally completed turns.
+// Consumers preserve authoritative terminals if a timeout races completion.
+func (s *OpenCodeService) unfinishedTaskRunIDs() []string {
+	var ids []string
+	if current := s.getCurrentRunID(); current != "" {
+		ids = append(ids, current)
+	}
+	s.pendingMu.Lock()
+	defer s.pendingMu.Unlock()
+	for _, pending := range s.pendingRuns {
+		if pending.sent {
+			ids = append(ids, pending.runID)
+		}
+	}
+	return ids
 }

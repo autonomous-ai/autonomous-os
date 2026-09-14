@@ -277,6 +277,11 @@ def report(rows, now_ms, settle_seconds=0, default_device=None, include_syntheti
         if turn.get("route") == "realtime_handled":
             candidates = [e for e in candidates if e.get("evidence") == "realtime_turn_done"]
         candidates = [e for e in candidates if (e.get("execution_at_ms") or 0) <= now_ms]
+        # Losing transport is absence of observation, not a terminal outcome.
+        # A racing disconnect snapshot must not erase a real terminal event.
+        if any(e.get("outcome") in ("completed", "failed") for e in candidates):
+            candidates = [e for e in candidates
+                          if e.get("evidence") != "execution_observation_lost"]
         priority = {"unknown": 0, "completed": 1, "failed": 2}
         selected = max(candidates, key=lambda e: (
             e.get("execution_at_ms") or 0, priority.get(e.get("outcome"), 0),

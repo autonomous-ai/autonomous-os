@@ -37,7 +37,7 @@ func TestTaskLifecycleEndRejectsAbortedAndErrorFrames(t *testing.T) {
 }
 
 func TestTaskExecutionPreservesEvidenceAndCorrelation(t *testing.T) {
-	m := newMock(nil, 6)
+	m := newMock(nil, 7)
 	withPipe(t, m)
 	start := time.Now().UnixMilli()
 	cases := []struct{ run, interaction, outcome, evidence string }{
@@ -47,6 +47,7 @@ func TestTaskExecutionPreservesEvidenceAndCorrelation(t *testing.T) {
 		{"device-4", "", "failed", "chat_error"},
 		{"", "vi-local", "completed", "local_intent_returned"},
 		{"", "vi-local-failed", "failed", "local_intent_error"},
+		{"device-chat-slash", "", "completed", "chat_final_no_lifecycle"},
 	}
 	for _, tc := range cases {
 		ReportTaskExecution(tc.run, tc.interaction, tc.outcome, tc.evidence)
@@ -88,6 +89,8 @@ func TestTaskExecutionRejectsUncorrelatedAndUnboundedValues(t *testing.T) {
 	ReportTaskExecution("device-1", "", "completed", "lifecycle_error_recovered")
 	ReportTaskExecution("device-1", "", "completed", "local_intent_error")
 	ReportTaskExecution("device-1", "", "completed", "lifecycle_end_error")
+	ReportTaskExecution("device-1", "", "failed", "chat_final_no_lifecycle")
+	ReportTaskExecution("device-1", "", "unknown", "chat_final_no_lifecycle")
 	ReportTaskExecution("device-1", "", "completed", "lifecycle_end")
 	m.wait(t, 1)
 	if len(m.events) != 1 || m.events[0].params["evidence"] != "lifecycle_end" {
@@ -153,6 +156,24 @@ func TestTaskStartsSeparateChatSensingAndVoice(t *testing.T) {
 		}
 		if tc.group == "sensing" && m.events[i].params["interaction_id"] != "os-sensing-run-"+tc.eventType {
 			t.Fatalf("sensing retry identity must be deterministic: %+v", m.events[i].params)
+		}
+	}
+}
+
+func TestTaskObservationLossIsUnknownAndDeduplicatesRunIDs(t *testing.T) {
+	m := newMock(nil, 2)
+	withPipe(t, m)
+	ReportTaskExecution("invalid", "", "completed", "execution_observation_lost")
+	ReportTaskExecution("invalid", "", "failed", "execution_observation_lost")
+	ReportTaskObservationLost("active", "", "queued", "active")
+	m.wait(t, 2)
+	if len(m.events) != 2 {
+		t.Fatalf("unexpected observations: %+v", m.events)
+	}
+	for i, run := range []string{"active", "queued"} {
+		params := m.events[i].params
+		if params["run_id"] != run || params["outcome"] != "unknown" || params["evidence"] != "execution_observation_lost" {
+			t.Fatalf("wrong lost observation: %+v", params)
 		}
 	}
 }
