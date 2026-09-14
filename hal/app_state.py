@@ -289,6 +289,14 @@ _thinking_cue_active: bool = False
 # Fires release_servos after sleepy stays active continuously. Cancelled
 # the moment the emotion changes away from sleepy (see routes/emotion.py).
 _sleepy_release_timer: Optional[threading.Timer] = None
+# Speaker drain for sleepy. os-server POSTs the reply text ~100ms after the
+# `sleepy` marker (fireHWCallsSync's budget) and HAL takes about as long to
+# reach _finalize_sleepy_peripherals, so muting there swallowed the
+# going-to-sleep line more often than not.
+SLEEPY_SPEAKER_GRACE_S = 2.0       # wait this long for an announcement to START
+SLEEPY_SPEAKER_DRAIN_MAX_S = 15.0  # hard cap on the whole drain
+_SLEEPY_DRAIN_POLL_S = 0.1
+_sleepy_drain_cancel: Optional[threading.Event] = None
 # Fires idle again after a still emotion (a preset with servo=None) halted the
 # animation loop, so the body never stays frozen once the moment has passed.
 # Cancelled on every /emotion (see routes/emotion.py).
@@ -610,23 +618,97 @@ def _finalize_sleepy_peripherals(mute_mic: bool, mute_speaker: bool):
         if voice_service and voice_service.available:
             threading.Thread(target=voice_service.stop, daemon=True, name="sleepy-mic-stop").start()
 
-    if mute_speaker and not _speaker_muted:
-        _speaker_muted = True
-        _sleepy_auto_muted_speaker = True
-        if tts_service and tts_service.speaking:
-            tts_service.stop()
+    if mute_speaker:
+        # Music is never an announcement. The speaker goes to the drain, which
+        # also means in-flight TTS is no longer cut off mid-word.
         if music_service and music_service.playing:
             music_service.stop()
+        if not _speaker_muted:
+            _start_sleepy_speaker_drain()
 
     _persist_sleep_state()
-    logger.info("Sleepy finalized: LED off, mic muted, speaker muted")
+    logger.info("Sleepy finalized: LED off, mic muted, speaker draining")
+
+
+def _start_sleepy_speaker_drain():
+    """Mute the speaker once the going-to-sleep announcement has played.
+
+    Waits SLEEPY_SPEAKER_GRACE_S for one to start, then lets it finish. The
+    grace is far wider than the measured 100ms so this never depends on
+    os-server's marker budget. SLEEPY_SPEAKER_DRAIN_MAX_S caps it: without
+    that, a stalled TTS would leave a sleeping device able to speak. A wake
+    cancels the drain.
+    """
+    global _sleepy_drain_cancel
+    _cancel_sleepy_speaker_drain()
+    cancel = threading.Event()
+    _sleepy_drain_cancel = cancel
+
+    def _drain():
+        deadline = time.monotonic() + SLEEPY_SPEAKER_DRAIN_MAX_S
+        grace_end = time.monotonic() + SLEEPY_SPEAKER_GRACE_S
+        started = False
+        while not cancel.is_set() and time.monotonic() < deadline:
+            if tts_service and tts_service.speaking:
+                started = True
+            elif started or time.monotonic() >= grace_end:
+                break  # the announcement finished, or none ever came
+            cancel.wait(_SLEEPY_DRAIN_POLL_S)
+        if not cancel.is_set():
+            _mute_speaker_for_sleep()
+
+    threading.Thread(target=_drain, daemon=True, name="sleepy-speaker-drain").start()
+
+
+def _cancel_sleepy_speaker_drain():
+    """Stop a pending drain. Safe to call when none is running."""
+    global _sleepy_drain_cancel
+    if _sleepy_drain_cancel is not None:
+        _sleepy_drain_cancel.set()
+        _sleepy_drain_cancel = None
+
+
+def _mute_speaker_for_sleep():
+    """Commit the deferred mute.
+
+    Re-reads the sleep state under privacy.lock, the same lock the wake path
+    takes. Checking it unlocked was not enough: a wake cancels the drain, but
+    the drain can already be past that check, and it would then re-mute a
+    device that has just woken — silent, marked sleep-owned, with the restore
+    already run and nothing left to undo it.
+    """
+    global _speaker_muted, _sleepy_auto_muted_speaker
+    with privacy.lock:
+        if not _sleeping or _current_emotion != EMO_SLEEPY:
+            logger.info("Sleepy speaker drain: awake again -- speaker left live")
+            return
+        if _speaker_muted:
+            return
+        _speaker_muted = True
+        _sleepy_auto_muted_speaker = True
+        _persist_sleep_state()
+
+    # The flag only gates playback that has not STARTED yet (every check in
+    # drivers/voice/tts/service.py is an entry guard), so a TTS still speaking
+    # when the cap fires would talk on past it — exactly what
+    # SLEEPY_SPEAKER_DRAIN_MAX_S exists to prevent. Stopping it is what makes
+    # the cap a real bound. Outside the lock: stop() can block on the audio
+    # device. A no-op on the normal path, where the drain already waited for
+    # the announcement to finish.
+    if tts_service and tts_service.speaking:
+        tts_service.stop()
+    logger.info("Sleepy speaker drain done -- speaker muted")
 
 
 def _wake_sleepy_peripherals():
     """Restore only mic/speaker states that sleepy itself muted."""
     global _sleepy_auto_muted_mic, _sleepy_auto_muted_speaker, _mic_muted, _speaker_muted
-    if _sleepy_auto_muted_speaker:
-        with privacy.lock:
+    # Cancel and restore under ONE lock. Cancelling outside it left a drain
+    # that was already past its own guard free to re-mute the speaker after
+    # the restore had run, on a device that is awake by then.
+    with privacy.lock:
+        _cancel_sleepy_speaker_drain()
+        if _sleepy_auto_muted_speaker:
             if privacy.speaker_muted:
                 # The privacy overlay may have captured sleep's temporary mute
                 # during HAL startup. Wake removes that mute underneath the
