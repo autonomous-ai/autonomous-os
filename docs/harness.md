@@ -76,7 +76,7 @@ All paths below use the normal OS response envelope and return non-cacheable res
 
 | Method and path | Authentication | Behavior |
 |---|---|---|
-| `GET /api/harness/voice-mode` | Administrator or strict loopback | Read `{enabled,generation,machineId,agentId,agentName?,focusRevision?,focusAvailable,pending?,error?}`. |
+| `GET /api/harness/voice-mode` | Administrator or strict loopback | Read `{enabled,generation,machineId,agentId,agentName?,focusRevision,focusAvailable,pending?,error?}`. |
 | `PUT /api/harness/voice-mode` | Administrator | Set `{enabled}` only. Enabling/disabling works offline or without focus; voice delivery requires fresh app focus. Speech without focus is rejected, never queued for a future agent. |
 | `GET /api/harness/agents` | Administrator | Explicitly refresh `agents.list`, returning `{machineId,agents}`. |
 | `GET /api/harness/voice-mode/question` | Administrator | Read the focused agent's live question as `{agentId,questionRequestId,focusRevision,questions}` or `{question:null}`. |
@@ -124,7 +124,9 @@ It temporarily advertises a local mDNS device, uses a local OS WebSocket server 
 
 ### MQTT pairing control
 
-Authenticated device MQTT data commands expose `harness.pair.start`, `harness.status`, `harness.pair.cancel`, and `harness.pair.revoke`. Replies are published on the device fd channel. The direct WebSocket remains the data channel for paired Harness computers.
+Authenticated device MQTT data commands expose `harness.pair.start`, `harness.status`, `harness.pair.cancel`, and `harness.pair.revoke`. Replies are published on the device fd channel. Revoking pairing also disables Harness-only voice, matching HTTP unpair. The direct WebSocket remains the data channel for paired Harness computers.
+
+`harness.voice-mode.get` reads the cached shared `VoiceModeState`; `harness.voice-mode.set` accepts only `data:{enabled:true|false}`. Both use `cmd:"data"` and reply on `fd_channel` with `type:"data"`, the same `kind`, and `status:"success"` plus the HTTP voice-mode snapshot, or `status:"failure"` plus `error`. Unknown fields, including `agentId`, are rejected. Explicit sets are idempotent: repeating the current value preserves generation and active captures. MQTT controls the same RAM flag as Monitor/HTTP/HAL, including default-off on restart and allowing a set while offline or without focus. The target remains the agent focused in the app, and existing skill/text routes are unchanged. There are no unsolicited voice-state pushes; clients refresh with `get`. Authorization uses the existing broker command channel and topic ACLs. See [MQTT request examples](mqtt.md#harnessvoice-modeget--harnessvoice-modeset--harness-only-voice).
 
 Codex queue replay restores the original `harness-reply` address for Web/MQTT chat and voice follow-ups. A queued request uses the same local run ID and channel as an immediately dispatched request.
 

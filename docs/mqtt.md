@@ -1040,6 +1040,47 @@ Superseded: `integrations/chat-bridges/autonomous-chat-hook/` forwards backend
 chat one-way as `type:"voice"`, so the device speaks the reply and nothing comes
 back. It cannot back a chat UI; this pair replaces it for that purpose.
 
+### `harness.voice-mode.get` / `harness.voice-mode.set` — Harness-only voice
+
+**Receive on `fa_channel`:**
+```json
+{"cmd":"data","kind":"harness.voice-mode.get"}
+{"cmd":"data","kind":"harness.voice-mode.set","data":{"enabled":true}}
+{"cmd":"data","kind":"harness.voice-mode.set","data":{"enabled":false}}
+```
+
+`get` needs no `data` and reads the cached shared voice state without querying
+Harness. `set` requires an object containing only `enabled`, a JSON boolean;
+missing/null/string values and extra fields such as `agentId` are rejected.
+This sets an explicit value, never inverts it: repeating the same value does
+not change the routing generation or interrupt another capture.
+
+Both commands reply on `fd_channel` with the standard `MQTTDataResponse`
+metadata, `type:"data"`, the request's `kind`, and the same snapshot returned
+by `GET /api/harness/voice-mode` (device metadata omitted here):
+```json
+{"type":"data","kind":"harness.voice-mode.set","status":"success","data":{"enabled":true,"generation":1789350000000000,"machineId":"computer-id","agentId":"agent-id","agentName":"Mike","focusRevision":"instance:3","focusAvailable":true}}
+```
+
+The snapshot is `{enabled,generation,machineId,agentId,agentName?,focusRevision,focusAvailable,pending?,error?}`.
+An unavailable focus can appear as `focusAvailable:false` with a snapshot
+`error` even when the command succeeds. Invalid input or an unavailable
+controller uses `status:"failure"` with the envelope's `error` field.
+There are no unsolicited voice-state MQTT pushes; clients should query `get`
+after subscribing, reconnecting, or when refreshing the current state.
+
+MQTT uses the same RAM controller as HTTP, Monitor and HAL. The flag defaults
+to off after service restart. Setting it is allowed offline or without focus;
+voice delivery still requires the agent selected in the Harness app. These
+commands cannot select an agent and do not change typed MQTT/Web chat or skill
+routing. Turning the mode off leaves already dispatched work and its output
+route intact. `harness.pair.revoke` also disables the mode, matching HTTP
+unpair. See [Harness voice mode](harness.md#harness-only-voice-mode).
+
+Authorization uses the existing broker credentials and device command-topic
+ACLs; the publisher must be authorized for that device. No new MQTT topic,
+credential or Harness transport is introduced.
+
 ### `buddy.pair.start` — Issue a Buddy pairing code
 
 **Receive on `fa_channel`:**

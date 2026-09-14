@@ -29,6 +29,7 @@ func (s *Server) initializeHarnessVoice(ctx context.Context) {
 		})
 		s.harnessVoice.Start(ctx)
 	}
+	s.deviceMQTTHandler.SetHarnessVoiceController(s.harnessVoice)
 }
 
 func (s *Server) registerHarnessVoiceRoutes(group *gin.RouterGroup) {
