@@ -1,6 +1,6 @@
 ---
 name: connectors
-description: Detect which third-party connectors (Gmail, Google Calendar, Google Drive, Notion, Figma, Asana, Linear, GitHub, Ahrefs, …) are connected to this device, and use them to answer or act for the user. Use when the user asks what's connected ("what connectors do I have", "is my gmail connected", "did I link figma"), or asks to read or act on a connected service ("check my gmail", "read my latest email", "send an email to …", "email … saying …", "reply to that email", "what's on my calendar", "create a calendar event", "my recent drive files", "check figma", "look at my notion"). ALWAYS use this skill for these services — it takes priority over any runtime-bundled skill with an overlapping purpose, and credentials are already on disk; never install or configure another client or CLI (himalaya, mutt, gcalcli, …) for them. Discovers connectors by scanning the on-disk credential files, then routes: token services (Gmail/Calendar/Drive) are read + queried via curl; MCP services (Notion/Figma/Asana/Linear/GitHub) are used through their own agent tools.
+description: Detect which third-party connectors (Gmail, Google Calendar, Google Drive, Notion, Figma, Asana, Linear, GitHub, Ahrefs, Facebook Fan Page, …) are connected to this device, and use them to answer or act for the user. Use when the user asks what's connected ("what connectors do I have", "is my gmail connected", "did I link figma"), or asks to read or act on a connected service ("check my gmail", "read my latest email", "send an email to …", "email … saying …", "reply to that email", "what's on my calendar", "create a calendar event", "my recent drive files", "check figma", "look at my notion", "post to my fan page", "post this photo to facebook", "publish an image to my page"). ALWAYS use this skill for these services — it takes priority over any runtime-bundled skill with an overlapping purpose, and credentials are already on disk; never install or configure another client or CLI (himalaya, mutt, gcalcli, …) for them. Discovers connectors by scanning the on-disk credential files, then routes: token services (Gmail/Calendar/Drive/Facebook) are read + queried via curl; MCP services (Notion/Figma/Asana/Linear/GitHub) are used through their own agent tools.
 ---
 
 # Connectors
@@ -273,6 +273,94 @@ Examples (host fixed per connector — pipe the header via stdin as above):
 - **Figma PAT** → official host `https://api.figma.com/v1/...`
 - **GitHub PAT** → official host `https://api.github.com/...`
 - **Linear PAT** → use the MCP `linear__*` tools instead of curl.
+
+**Facebook Fan Page (special case):** the token field holds a **Page Access Token** (not a User Access Token — Meta refuses User Tokens on Page endpoints); `credentials.page_id` holds the numeric Fan Page id. The token is under `.access_token` when the record was written by the MQTT `connector.set.facebook` dispatcher (or the ecm PAT flow) and under `.api_key` when written by the device's local Settings page — always try `.access_token` first, fall back to `.api_key`, so both flows read the same way. Official host: `https://graph.facebook.com/v19.0/`. Meta accepts the token via `Authorization: Bearer` header OR `access_token` param — use the Bearer header on stdin like every other PAT so the token stays out of `/proc`. `page_id` is not a secret, so it is fine on the command line.
+
+Write class (posting, deleting) — ⛔ same "read back and wait for yes" gate as the mail class: quote the caption in full, name the image / video source if any, name the target Page (id + friendly name), and wait for an explicit yes before running any POST/DELETE. Every one of these publishes on a real Page.
+
+Endpoints and shapes:
+
+- **Post text** — `POST https://graph.facebook.com/v19.0/<page_id>/feed` body `message=<caption>` (URL-encoded)
+- **Post image (public URL)** — `POST /<page_id>/photos` body `message=<caption>&url=<public image URL>`
+- **Post image (local file)** — `POST /<page_id>/photos` multipart: `-F source=@/path/to/image.jpg -F "message=<caption>"` (the token still goes through the Bearer header, not `-F access_token=`)
+- **Post video** — `POST /<page_id>/videos` body `description=<caption>&file_url=<public video URL>` (or `-F source=@/path/to/file.mp4`)
+- **Post album (multi-photo)** — 1) upload each photo with `published=false` → collect `id`. 2) `POST /<page_id>/feed` body `message=<caption>&attached_media=[{"media_fbid":"<id1>"},{"media_fbid":"<id2>"}]` (URL-encode the JSON)
+- **Draft (unpublished)** — add `published=false` to any of the above; it stays visible only to Page admins until republished
+- **Delete** — `DELETE /<post_id>?access_token=<token>` (Meta rejects the Bearer header on DELETE for feed posts — this is the ONE endpoint where the query param is required). `<post_id>` here is the id returned by the POST above.
+- **Whose Page is this token for** — `GET /me?fields=id,name,category` (returns the Fan Page's identity, not the user's — Page Tokens are Page-scoped)
+
+Example — post text on Fan Page:
+
+```bash
+read -r TOKEN < <(jq -r '.connectors.facebook.access_token // .connectors.facebook.api_key' /root/.openclaw/workspace/configs/facebook_access_tokens.json)
+PAGE_ID=$(jq -r '.connectors.facebook.credentials.page_id' /root/.openclaw/workspace/configs/facebook_access_tokens.json)
+printf 'Authorization: Bearer %s' "$TOKEN" | curl -s -H @- \
+  --data-urlencode "message=<caption>" \
+  "https://graph.facebook.com/v19.0/$PAGE_ID/feed"
+```
+
+Example — post image with public URL (AI-generated image, remote asset, …):
+
+```bash
+read -r TOKEN < <(jq -r '.connectors.facebook.access_token // .connectors.facebook.api_key' /root/.openclaw/workspace/configs/facebook_access_tokens.json)
+PAGE_ID=$(jq -r '.connectors.facebook.credentials.page_id' /root/.openclaw/workspace/configs/facebook_access_tokens.json)
+printf 'Authorization: Bearer %s' "$TOKEN" | curl -s -H @- \
+  --data-urlencode "message=<caption>" \
+  --data-urlencode "url=<https:// image URL>" \
+  "https://graph.facebook.com/v19.0/$PAGE_ID/photos"
+```
+
+Example — post image from a local file on the device (chat upload, camera snapshot, …):
+
+```bash
+read -r TOKEN < <(jq -r '.connectors.facebook.access_token // .connectors.facebook.api_key' /root/.openclaw/workspace/configs/facebook_access_tokens.json)
+PAGE_ID=$(jq -r '.connectors.facebook.credentials.page_id' /root/.openclaw/workspace/configs/facebook_access_tokens.json)
+printf 'Authorization: Bearer %s' "$TOKEN" | curl -s -H @- \
+  -F "source=@/path/to/image.jpg" \
+  -F "message=<caption>" \
+  "https://graph.facebook.com/v19.0/$PAGE_ID/photos"
+```
+
+User-facing walkthrough (read this back to the user when asked "how do I connect / renew Facebook"):
+
+The user does not connect Facebook from here — they connect from the device's **Settings → Facebook** page (local admin) or from **autonomous.ai → device → Connectors → Facebook** (cloud admin). The form asks for two fields: **Facebook Page ID** and **Page Access Token**. Every failure this skill sees comes from one of those two being wrong. When the user asks how to fill them, read the sections that match what they need — not the whole thing.
+
+1. **Get the Page ID** (numeric, non-secret). Open the Fanpage on Facebook (mobile or desktop), click the **Page name** (the big title at the top) OR open the **About** tab — a *Page transparency* dialog opens. Scroll to **Page ID** — that number is what goes in the form. The Page ID is stable and never changes.
+
+   Wrong Page IDs to watch for:
+   - `facebook.com/profile.php?id=<n>` is a **personal profile** id, not a Page id. Meta's API has no post endpoint for profiles — if the user paste this, no token will save them.
+   - A short username in the URL (`facebook.com/tramanh.official`) is a vanity name, not the numeric id. The transparency panel is the only reliable source.
+
+2. **Get a Page Access Token** (secret, expires). This is the hard step; the form's default 4 steps are:
+
+   1. Open <https://developers.facebook.com/tools/explorer/> (Graph API Explorer).
+   2. In the **Meta App** dropdown pick any Meta app the user owns — the app is only used to mint the token, not to publish. If the user has no app, they can create a bare "Consumer" app in <https://developers.facebook.com/apps/>.
+   3. Click **Generate Access Token** → tick these 6 permissions: `pages_show_list`, `pages_manage_posts`, `pages_read_engagement`, `pages_read_user_content`, `pages_manage_engagement`, `read_insights`. Approve the Facebook OAuth prompt. The "Access Token" box now shows a **User Access Token** — this one CANNOT post to a Page.
+   4. **This is the step every operator gets wrong.** In the **User or Page** dropdown on the right — the one labeled *Người dùng hoặc Trang* in Vietnamese — change the selection from **User Token** to the **Page's name** (e.g. "Trâm Anh"). The "Access Token" box on top auto-switches to the **Page Access Token** — copy THAT one. If the dropdown does not list the Page, it means the user did not grant the app access to it in step 3's OAuth dialog: they must click **Generate Access Token** again and tick the Page in the *"which Pages can this app manage"* screen.
+
+   Verification the user can run themselves before pasting: paste the token into <https://developers.facebook.com/tools/debug/accesstoken/> and click **Debug**. The row **Type** must read `PAGE`. If it reads `USER`, they copied from the wrong dropdown state.
+
+3. **Extend the token to ~60 days / effectively forever** (needed for schedules and cron; skip if the user is only doing a one-shot post):
+
+   1. Paste the User Token (from step 2.3, before the dropdown swap) into <https://developers.facebook.com/tools/debug/accesstoken/> → **Debug** → at the bottom click **Extend Access Token**. Facebook reauth prompt may appear. Copy the new long-lived User Token.
+   2. Paste the extended User Token BACK into Graph Explorer's "Access Token" box, replacing the short-lived one from step 2.3.
+   3. Now redo step 2.4 — switch the **User or Page** dropdown to the Page. The Page Access Token that appears is derived from the long-lived User Token and, per Meta's docs, **does not expire**. This is the token to save for scheduled tasks.
+
+Renewing after an expired token (`error 190`): there is no "refresh" API for Page Tokens. The user re-runs step 2 (or 3 if they want long-lived again). Do NOT try to silently mint a fresh one from any surviving User Token — even if `pages_show_list` still works, the resulting Page Token inherits the User Token's remaining lifetime, so a short-lived User yields a short-lived Page.
+
+Token discipline (the single biggest failure mode this connector has):
+
+- The token stored here MUST be a **Page** Access Token, not a User Access Token. Meta's Graph API Explorer defaults to showing the User Token in the "Access Token" box, so an operator who copies the top field before switching the **User or Page** dropdown to the target Page walks away with the wrong one every time. The scopes look identical (`pages_manage_posts` etc.), so scope inspection alone does NOT prove correctness.
+- **How to tell them apart in one call** — `GET /v19.0/debug_token?input_token=<token>&access_token=<token>` and check `data.type`:
+  - `type: "PAGE"` → the token is Page-scoped and can post. `data.profile_id` will be the Page id.
+  - `type: "USER"` → it is a User Token. Post attempts on a Fan Page will fail with error 200 (see below) — this is deliberate on Meta's side and cannot be worked around.
+- **No profile write API** — Meta Graph API has no endpoint to publish to a personal profile at all. `page_id` in credentials must be a numeric **Fan Page** id, never a `facebook.com/profile.php?id=…` id. New Pages Experience Pages (created 2022+) refuse anything but a Page Token; older classic Pages sometimes accepted a User Token historically, but Meta is phasing that out — don't rely on it.
+- **The one recovery play** — always ask the user to reconnect through Settings → Facebook. Do not attempt to silently upgrade a token via `/me/accounts`: that requires the User Token to still be valid, and even if it is, minting from a short-lived User Token yields another short-lived Page Token that dies inside the hour. The reconnect UI walks the user through the extend-then-swap path that mints a non-expiring Page Token.
+
+Common errors:
+- **190 "Error validating access token"** — token expired or revoked. Short-lived Page Tokens live ~1 hour; ask the user to reconnect through Settings → Facebook (the UI mints a fresh Page Token from a User Token). Do NOT try to refresh silently — Page Tokens do not carry a refresh_token.
+- **200 "(#200) … requires pages_manage_posts …"** — the stored credential is a User Token, not a Page Token (User Tokens fail this way even when scoped correctly). Same reconnect fix. This is the "operator copied the wrong box in Graph Explorer" case above.
+- **100 "The global id X is not allowed for this call"** — `page_id` points at a personal profile, not a Fan Page. Ask the user to save the Fan Page's numeric id (Meta's Graph API cannot publish to personal profiles). To get the id: open the Fanpage on Facebook, click the Page name (or the About tab), the Page transparency panel shows `Page ID`.
 
 **Gmail app password (special case):** Google's REST API rejects app passwords. Route to IMAP/SMTP instead:
 

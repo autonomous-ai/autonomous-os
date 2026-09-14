@@ -585,6 +585,18 @@ func (s *Server) Serve(closeFn func()) error {
 	scheduleGroup.PATCH(":id", adminAuthMiddleware(s.config), s.deviceMQTTHandler.UpdateSchedule)
 	scheduleGroup.DELETE(":id", adminAuthMiddleware(s.config), s.deviceMQTTHandler.DeleteSchedule)
 
+	// Connectors: the local Settings UI's write path for a static-credential
+	// (PAT) connector. Persists through the SAME connectorWriter the MQTT
+	// connector.set.<code> dispatcher uses, so a token pasted on-device lands
+	// in the same <code>_access_tokens.json file the skill layer already
+	// reads — no separate storage, no drift. GET reports connected + the
+	// non-secret identity fields (never the token); DELETE removes both the
+	// on-disk entry and any mcp.servers.<code> side-effect.
+	connectorGroup := api.Group("device/connectors")
+	connectorGroup.POST("pat", adminAuthMiddleware(s.config), s.deviceMQTTHandler.SetConnectorPAT)
+	connectorGroup.GET(":code", adminAuthMiddleware(s.config), s.deviceMQTTHandler.GetConnector)
+	connectorGroup.DELETE(":code", adminAuthMiddleware(s.config), s.deviceMQTTHandler.RemoveConnector)
+
 	// Look: snapshot + describe in one call, so the agent gets text it can read
 	// instead of a file path it cannot. Loopback-only — the caller is the
 	// agent's own shell tool, and it moves hardware and spends a vision-model

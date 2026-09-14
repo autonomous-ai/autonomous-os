@@ -542,6 +542,55 @@ export async function updateDeviceConfig(body: Partial<Record<string, unknown>>)
   });
 }
 
+/** Read-side of a static-credential connector (Facebook Fan Page, Gmail app
+ *  password, …). Reports whether a credential is on file plus the non-secret
+ *  identity fields the UI shows next to the "connected ✓" state. The token
+ *  itself is NEVER returned — a UI that wants to rotate one must re-collect it
+ *  from the operator. */
+export interface ConnectorInfo {
+  connector: string;
+  connected: boolean;
+  auth_type?: string;
+  user_email?: string;
+  credentials?: Record<string, string>;
+  /** Unix seconds when this device received the credentials, or 0/undefined
+   *  when nothing has been set. */
+  obtained_at?: number;
+}
+
+/** GET /api/device/connectors/:code — reads the on-disk entry the
+ *  connectorWriter maintains. Same source of truth as the MQTT
+ *  connector.set.<code> dispatcher writes, so a token pushed from the backend
+ *  is indistinguishable from one pasted locally. */
+export async function getConnector(code: string): Promise<ConnectorInfo> {
+  return apiRequest<ConnectorInfo>(`${API_BASE}/api/device/connectors/${encodeURIComponent(code)}`);
+}
+
+/** POST /api/device/connectors/pat — the local Settings UI's write path for a
+ *  static-credential connector. `credentials` carries non-secret extras (page
+ *  id, workspace slug, …); the api_key is the pasted PAT / App Password. */
+export async function setConnectorPAT(body: {
+  connector: string;
+  api_key: string;
+  user_email?: string;
+  credentials?: Record<string, string>;
+}): Promise<{ connector: string; auth_type: string; user_email?: string }> {
+  return apiRequest(`${API_BASE}/api/device/connectors/pat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+/** DELETE /api/device/connectors/:code — drops the on-disk entry (and any
+ *  mcp.servers.<code> side-effect through the writer). The UI uses this to
+ *  disconnect a connector without leaving stale credentials in place. */
+export async function removeConnector(code: string): Promise<{ connector: string; removed: boolean }> {
+  return apiRequest(`${API_BASE}/api/device/connectors/${encodeURIComponent(code)}`, {
+    method: "DELETE",
+  });
+}
+
 /** POST /api/login — server validates bcrypt(password) against
  *  config.AdminPasswordHash and sets the os_session cookie on success. */
 export async function login(password: string): Promise<boolean> {
