@@ -38,6 +38,7 @@ def localized_phrase(key: str, lang: str | None = None) -> str:
 
 PHRASE_HARNESS_ON = "harness_voice_on"
 PHRASE_HARNESS_OFF = "harness_voice_off"
+PHRASE_HARNESS_UNPAIRED = "harness_voice_unpaired"
 PHRASE_HARNESS_OFFLINE = "harness_voice_offline"
 PHRASE_HARNESS_NO_AGENTS = "harness_voice_no_agents"
 PHRASE_HARNESS_FAILED = "harness_voice_failed"
@@ -85,6 +86,12 @@ PHRASES_BY_LANG = {
     PHRASE_HARNESS_OFF: {
         LANG_EN: "Harness is off. You’re back with the assistant on your device.", LANG_VI: "Đã tắt Harness, trở về trợ lý trên thiết bị.",
         LANG_ZH_CN: "Harness 已关闭，已切回设备上的助手。", LANG_ZH_TW: "Harness 已關閉，已切回裝置上的助理。",
+    },
+    PHRASE_HARNESS_UNPAIRED: {
+        LANG_EN: "Pair this device in the Harness app first.",
+        LANG_VI: "Bạn cần ghép đôi thiết bị trong ứng dụng Harness trước.",
+        LANG_ZH_CN: "请先在 Harness 应用中配对此设备。",
+        LANG_ZH_TW: "請先在 Harness 應用程式中配對此裝置。",
     },
     PHRASE_HARNESS_OFFLINE: {
         LANG_EN: "Harness is disconnected.", LANG_VI: "Harness chưa kết nối.",

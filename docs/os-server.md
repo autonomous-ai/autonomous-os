@@ -64,7 +64,7 @@ Go toggles the shared RAM mode and returns its snapshot. Enable first preserves
 valid app focus or
 requests `focus.ensure` and waits for Desktop acknowledgement; unavailable focus
 leaves the mode off. Disable works offline. Action errors expose `data.code` for
-HAL's localized feedback. A 128-entry RAM result cache prevents duplicate gesture
+HAL's localized feedback: `harness_unpaired` asks the user to pair the device in the Harness app; `harness_offline` reports an existing pairing without a connection. Both keep the mode off. A 128-entry RAM result cache prevents duplicate gesture
 IDs from toggling twice; explicit web/MQTT off cancels a pending gesture enable.
 
 ### Environment sensing

@@ -28,7 +28,7 @@ MPR121 phải sang trái. HAL xác định hướng theo `swipe_axis` trái sang
 vật lý; vuốt trái sang phải dùng action sleep hiện có. Go bật/tắt chung mode
 RAM và trả snapshot. Khi bật, giữ focus hợp lệ hoặc gọi `focus.ensure` rồi chờ
 Desktop xác nhận; focus không khả dụng thì mode vẫn tắt. Tắt vẫn được khi offline.
-Lỗi action trả `data.code` để HAL đọc phrase theo ngôn ngữ cấu hình. Cache RAM
+Lỗi action trả `data.code` để HAL đọc phrase theo ngôn ngữ cấu hình: `harness_unpaired` hướng dẫn ghép đôi thiết bị trong ứng dụng Harness; `harness_offline` báo đã ghép đôi nhưng chưa kết nối. Cả hai giữ mode tắt. Cache RAM
 128 kết quả chặn ID gesture lặp bật/tắt hai lần; lệnh off rõ ràng qua web/MQTT
 hủy gesture đang chờ bật.
 

@@ -53,7 +53,7 @@ OS-server khởi động lại. Khi bật, HAL lấy snapshot `/api/harness/voic
 trước capture và gửi STT đã chốt, bỏ wake word, qua OS tới thẳng agent Harness
 đang focus trong app. Capture đó không stream audio tới realtime model, không gọi main
 runtime/`harness-use`; OS bỏ qua local intent và gate ready/busy của main runtime.
-Vẫn giữ kiểm tra wake word, VAD, noise và echo. Kết quả voice tiếp tục dùng
+Khi bật Harness, nhận câu nói và báo đang nghe mà không cần wake word hay cửa sổ follow-up còn hạn. Không kéo dài timer wake window chung; tắt mode thì capture tiếp theo trở về kiểm tra wake word bình thường. Vẫn giữ sleep, mute mic, VAD, noise và echo. Kết quả voice tiếp tục dùng
 lifecycle/recap Harness và TTS của thiết bị. Text chat và sensing nền giữ route cũ.
 
 Trên đèn MPR121, vuốt phải sang trái rồi nhả để bật/tắt mode; vuốt trái sang

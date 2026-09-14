@@ -1590,6 +1590,9 @@ class VoiceService:
         # between agents. OS validates the same generation on the final POST.
         harness_voice = read_voice_mode() if harness_voice is None else harness_voice
         realtime_allowed = not bypass_realtime(harness_voice)
+        # Harness explicitly owns voice input for this capture. Do not extend
+        # the normal wake window; disabling the mode restores its usual gate.
+        harness_listening = harness_voice["enabled"] and not harness_voice.get("unavailable", False)
         # A keepalive session pre-connected on the previous turn can go STALE if
         # the user stayed silent past the STT provider's inactivity window (~10s):
         # the upstream closes the idle WS (code 1000) and the next send() raises
@@ -1712,7 +1715,7 @@ class VoiceService:
             EXPIRES mid-sentence still cannot cut off someone already speaking
             (that is what the latch exists for).
             """
-            return is_addressed(
+            return harness_listening or is_addressed(
                 hal_config.WAKEWORD_ENABLED,
                 wake_word_detected.is_set(),
                 wakeword_followup_active,
@@ -2538,7 +2541,7 @@ class VoiceService:
                 or (hal_config.WAKEWORD_ENABLED and self._wakeword_focus.is_active())
             )
             wakeword_authorized = wake_word_confirmed.is_set() or wakeword_followup_active
-            dispatch_to_main = should_dispatch_to_main(
+            dispatch_to_main = harness_listening or should_dispatch_to_main(
                 hal_config.WAKEWORD_ENABLED,
                 wakeword_authorized,
             )
@@ -2581,6 +2584,7 @@ class VoiceService:
                     combined
                     and not downstream_dropped
                     and hal_config.WAKEWORD_ENABLED
+                    and not harness_listening
                     and wakeword_authorized
                 ):
                     if self._wakeword_focus.refresh():
