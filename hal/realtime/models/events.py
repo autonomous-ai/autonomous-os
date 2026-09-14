@@ -53,9 +53,13 @@ class OutputEvent(AgentOutputEvent):
 
     type: OutputEventTypeEnum = OutputEventTypeEnum.OUTPUT
     output: OutputBase
+    gen: int = 0
 
 
 class TurnDoneEvent(AgentOutputEvent):
     """Receive queue: model finished its turn."""
 
     type: OutputEventTypeEnum = OutputEventTypeEnum.TURN_DONE
+    # Synthetic unblock/error sentinels retain False; only provider proof sets True.
+    execution_completed: bool = False
+    user_turn_id: str = ""

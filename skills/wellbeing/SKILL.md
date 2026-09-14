@@ -1,9 +1,63 @@
 ---
 name: wellbeing
-description: Proactive coaching across hydration, breaks, meals AND posture. Use when an [activity] event fires (message starts with `[activity] Activity detected: <labels>.` — labels include drink, break, celebrate, the fatigue label "yawning", or sedentary raw labels like "using computer"; sedentary events may also carry a [posture_summary: {...}] block when the user has been at the computer long enough for posture to drift), or when the user asks if they should drink water / take a break / fix their posture. Thresholds are computed from per-user logs, never guessed.
+description: "Proactive coaching across hydration, breaks, meals, posture and environmental comfort (with the environment skill). Use when an [activity] event fires (message starts with `[activity] Activity detected: activity labels.` — labels include drink, break, celebrate, the fatigue label \"yawning\", or sedentary raw labels like \"using computer\"; sedentary events may also carry a [posture_summary: {...}] block when the user has been at the computer long enough for posture to drift), or when the user reports feeling tired, headachy, dizzy, stuffy or unable to focus, or asks if they should drink water / take a break / fix their posture. Activity-reminder thresholds are computed from per-user logs, never guessed."
 ---
 
 # Wellbeing
+
+## User-reported discomfort
+
+For “I feel tired and have a headache”, dizziness, a stuffy room or difficulty
+concentrating, read [reference/discomfort.md](reference/discomfort.md). Respond
+to what the user says; do not invent an activity event or run the activity/log
+router below. Environmental evidence is optional: if the capability is absent
+or unknown, or readings are unavailable, silently omit that part and continue
+ordinary support. Do not load a missing environment skill, poll hardware, or
+announce sensor setup problems in response to a wellbeing concern.
+
+## Environmental care
+
+For room air quality, measured CO₂, temperature, humidity, `[environment:initial]` greeting context, `[environment:update]` events, or a
+comparison after ventilation/air cleaning, use `skills/environment/SKILL.md` for
+measurements and interpretation. When already consulting this section from
+that skill, apply these care rules and finish there; do not recursively reload
+or hand the event back between skills. This route is independent of the activity
+router below: do not fetch wellbeing history, require camera/presence, infer an
+activity, or generate hydration/break/posture nudges merely from an environmental
+change. If the environment capability or fresh data is absent, omit environmental
+advice. Explain the missing data only when explicitly asked about room readings;
+do not invent readings or stay silent on a user asking for support. Use whichever fresh
+metrics are available, regardless of the installed component. Missing or null
+metrics do not invalidate other readings or establish a hardware fault; do not
+require gas indices before giving supported temperature or CO₂ information.
+
+For an automatic environmental update, use only activity, sleep/busy state and
+preferences already available in context. Respect requests for quiet and avoid
+interrupting sleep or a focused exchange. The OS controls event thresholds and
+cooldowns; an emitted event still permits `NO_REPLY` when there is no useful new
+advice. Do not bypass these gates with your own timers or repeated tool calls.
+A direct user question should receive an answer even when a proactive reminder
+would be inappropriate.
+
+An initial report (`reason: "initial"`) can offer one brief factual observation
+without a change or advice. During a startup greeting, add at most one sentence
+with one or two supplied readings; preserve the greeting when readings are
+absent. For the separate post-greeting update, do not greet again. Never wait
+for sensors, fetch data for the greeting, or arrange duplicate follow-ups.
+Quiet/sleep preferences still take precedence. A first snapshot says nothing
+about improvement, health, or whether the room is safe.
+
+Offer at most one practical suggestion, with room for user choice. A meaningful
+improvement can merit a short acknowledgment when it follows an actual user
+concern/action; do not congratulate every decrease or say the air is now safe.
+Keep observations separate from health claims and never infer concentration,
+fatigue, dehydration, disease, CO₂ or oxygen shortage from the available indices.
+A fresh measured `co2_ppm` may support a conditional ventilation suggestion,
+but does not establish the cause of tiredness or impaired concentration.
+Particle filtration alone does not lower CO₂. Missing CO₂ does not invalidate
+other fresh environmental measurements.
+No environment-specific wellbeing log action exists: do not POST these events
+as activities or misuse hydration/break/posture nudge actions.
 
 ## Gotchas (concrete facts, NOT suggestions)
 
@@ -318,7 +372,7 @@ Same shape for break (`action="nudge_break"`) and toilet (`action="nudge_toilet"
 `action=praise_posture`. Full marker shape + curl fallback in
 `reference/posture.md`.
 
-Skip the marker entirely when you took the **Reaction** path or stayed silent (`NO_REPLY`). The wellbeing marker is for `nudge_hydration` / `nudge_break` / `nudge_toilet` only — drink/break rows are already logged by the backend upstream. The posture marker is for `nudge_posture` / `praise_posture` only. The `notes` field is the same sentence you're about to speak — it's what the timeline will display.
+Do not duplicate backend-logged drink/break/eat/celebrate rows for ordinary **Reaction** replies. The **yawn reaction** is an exception: keep its `noted_yawn` marker to start the existing cooldown. Keep the logs explicitly required by the chosen morning-greeting, sleep-winddown, meal-reminder, or nudge route as well. A silent no-action route needs no nudge marker. Posture uses `/posture/log` for `nudge_posture` / `praise_posture`, not `/wellbeing/log`. The `notes` field is the same sentence you're about to speak — it's what the timeline will display.
 
 **Do NOT use `curl` exec for this log.** That would consume a tool turn (~5-7s LLM-think on the result) for a side-effect that has nothing to wait for. The HW marker path is single-trip.
 

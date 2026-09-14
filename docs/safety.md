@@ -224,6 +224,77 @@ official move tripping the gate is evidence the declared number is wrong, and
 excusing it by origin would hide that signal. `robots/reachy-mini/SAFETY.md`
 records how its ceiling was derived and what still needs a real robot.
 
+The Stack-chan Wi-Fi path keeps the same duration gate across a process and
+network boundary. `StackChanMotionService` sends the already-stretched duration
+as `duration_ms`, renews a short controller lease while that timed interpolation
+runs, and releases the lease into a measured-position hold at the end. A torque
+release supersedes any active move, travels to the conservative head-down rest
+pose, confirms that pose from measured joint feedback, and only then disables
+torque. If the pose is not reached, it halt-holds with torque enabled. Its
+handshake requires `motion.timed_move`, measured position, halt-and-hold and
+torque-release capabilities. If HAL, its process or Wi-Fi disappears, the ESP32
+firmware expires the lease (or handles disconnect) and holds the measured pose;
+firmware that only exposes an uncalibrated spring-speed parameter is rejected as
+incompatible because it cannot honor the declared degree-per-second ceiling.
+This path is covered by host protocol tests; physical fault-injection over a
+real Wi-Fi link remains a device qualification step.
+
+The driver also implements the refcounted `MotionService.acquire_body()` /
+`release_body()` contract used by look, capture and tracking. Overlapping owners
+keep `_tracking_active` true until the last owner exits; clearing the separate
+tracking-session flag cannot release another owner's claim. Ownership is local
+coordination for gaze and emotion routes, distinct from the firmware controller
+lease. It does not prevent the owner from moving or bypass the always-available
+halt path.
+
+The Stack-chan transport rechecks every timed move against measured position
+and `motion.max_speed`, including zero and gravity-rest moves. A superseding
+release halt-holds before measuring its start pose. Unreadable position or a
+required duration over 60 seconds fails closed without sending the move. The
+gateway publishes a connection only after sending `hello.accepted`, so motion
+commands cannot overtake the handshake.
+
+The companion [Stack-chan integration repository](https://github.com/glifocat/stackchan-autonomous/tree/9a5209596b97c257b6b2c1f6ff6bec91c44f8112)
+ships firmware patches and a separate standalone HTTP bridge. Its Docker demo
+does not boot `hal.server` and is not a startup test for this driver. Full HAL
+still needs a device profile declaring `motion.driver: stackchan` and the host
+board. The inspected firmware returns `completed` with state `scheduled` when
+it installs a timed move, not when the body arrives; `motion.halt` clears the
+lease, so the host reacquires it before the next move. Source agreement does
+not establish physical qualification or identify the firmware flashed on a body.
+
+All Stack-chan moves confirm measured arrival before releasing the controller
+lease. Firmware scheduling delays can extend interpolation past the requested
+duration, so elapsed host time alone is not completion. HAL renews the lease
+while checking arrival (within 1 degree), using a 2-second settling window
+before halting and returning an error instead of reporting success. Individual
+protocol requests remain subject to the configured command timeout.
+
+The Stack-chan driver remains experimental. Before device qualification:
+
+- Identify and pin a matching firmware build with the required motion
+  capabilities; this HAL driver does not add those capabilities to stock firmware.
+- Verify authenticated WSS and certificate validation on the real ESP32.
+- Confirm completed bounded moves, measured position and duration limits on
+  the actual pan/tilt assembly.
+- Exercise halt, Wi-Fi loss, HAL process loss and lease expiry during motion,
+  verifying the physical hold and recovery behavior.
+- Calibrate the gravity-rest pose and physically confirm torque release only
+  after that pose has been measured.
+
+Host and loopback tests, and separate face, LED or speaker tests, do not complete
+these motion qualification steps.
+
+Select it with `driver: stackchan` in the device profile's `motion` capability.
+Set `STACKCHAN_DEVICE_ID`, a distinct `STACKCHAN_BODY_TOKEN` of at least 32
+characters, and both `STACKCHAN_BODY_TLS_CERT` and `STACKCHAN_BODY_TLS_KEY`.
+`STACKCHAN_BODY_HOST` (default `0.0.0.0`) and `STACKCHAN_BODY_PORT` (default
+`8765`) configure the listener; `STACKCHAN_BODY_COMMAND_TIMEOUT` (default `3.0`
+seconds) and `STACKCHAN_BODY_LEASE_TTL_MS` (default `1500`, accepted `250..5000`)
+configure failure timing. TLS is mandatory unless
+`STACKCHAN_BODY_ALLOW_INSECURE_WS=1` explicitly enables plain WebSocket for an
+isolated development network. Never use that opt-in in production.
+
 ### Learned-policy interface (dry run)
 
 `POST /policy/run` is an interface-only endpoint for a learned controller such

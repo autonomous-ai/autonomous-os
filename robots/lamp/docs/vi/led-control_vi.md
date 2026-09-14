@@ -41,6 +41,10 @@ lệnh LED đầu tiên, có thể vài phút sau khi boot.
 
 `/led/solid`, `/led/paint`, `/led/effect`, `/led/off` chấp nhận flag tùy chọn `"transient": true`. Khi bật, call sẽ paint strip nhưng **không** ghi đè user LED state. State đã lưu sẽ được restore khi caller (vd Claude Desktop Buddy) xong việc — qua emotion restore timer tự nhiên, hoặc qua `POST /led/restore`. Pulse effect chạy với `transient: true` cũng overlay trên màu user thay vì nền đen.
 
+### Xác nhận Harness voice
+
+Thao tác bật/tắt Harness trên phần cứng đọc `button_led.harness_on` / `button_led.harness_off` trong `robots/lamp/presets.json` qua bảng preset HAL tại lúc chạy. Lamp dùng RGB `[1, 1, 3]` khi bật và `[2, 2, 2]` khi tắt. Cả hai kế thừa pulse 600 ms; có thể override cả `effect` và `duration_ms` trong preset. Hiệu ứng vẫn là transient và hẹn khôi phục LED sau thời lượng cấu hình thêm 100 ms.
+
 ## Solid Color
 
 ```json
@@ -116,6 +120,14 @@ Khi kích hoạt scene, `POST /scene` thực hiện theo thứ tự:
 4. **Camera** — tự động bật/tắt
 5. **Mic** — mute dừng voice pipeline (STT), unmute khởi động lại
 6. **Speaker** — mute dừng TTS + nhạc đang phát, unmute bật lại output
+
+**Chỉ có kích hoạt scene mới aim.** Một lần restore LED — sau emotion, khi TTS kết thúc, khi nhạc
+dừng, khi bỏ mute mic, khi tắt cue lắng nghe — chỉ vẽ lại strip chứ không làm gì khác, và một
+chuyển trạng thái presence `IDLE/AWAY → PRESENT` chỉ khôi phục ánh sáng. Trước đây cả hai đều re-aim
+khi trạng thái LED đã lưu là một scene, làm chết animation đang chạy và ghim đầu ở `__aim_hold__`
+trong 5s (#314). Hệ quả: khi một scene `hold` đang bật, đầu không còn tự trôi về tư thế của scene sau
+khi animation kết thúc — nó nội suy về idle. Muốn khôi phục tư thế đó thì việc ấy thuộc về
+`servo: hold` của scene, không thuộc về một lần vẽ lại LED.
 
 ### Chặn emotion khi hold mode
 

@@ -157,5 +157,7 @@ func (s *OpenCodeService) sendChat(message string, imagesBase64 []string, fixedR
 		return "", fmt.Errorf("send message.send: %w", err)
 	}
 
+	s.markPendingRunSent(reqID)
+
 	return runID, nil
 }

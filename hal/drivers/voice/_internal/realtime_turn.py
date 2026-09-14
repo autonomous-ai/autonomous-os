@@ -29,7 +29,7 @@ logger = logging.getLogger("hal.voice")
 SENTENCE_ENDS = (".", "!", "?", "。", "！", "？")
 
 # Clause boundaries the first chunk of a turn may be cut at — see
-# split_first_chunk. Sentence enders are handled by the normal flush above them.
+# split_first_chunk. Complete sentences bypass the early cut.
 CLAUSE_ENDS = (",", ";", ":", "—", "，", "；", "：", "、")
 # Below this many characters a clause is a runt ("Ừ,", "Sure,", "Vâng,") —
 # speaking it alone sounds like a stutter, and the pause it buys is not worth
@@ -51,17 +51,34 @@ def split_first_chunk(buf: str) -> tuple[str, str]:
     the buffer still under the cap, or a boundary too early to be a phrase.
     """
     cap: int = hal_config.REALTIME_FIRST_CHUNK_MAX_CHARS
-    if cap <= 0 or len(buf) < FIRST_CHUNK_MIN_CHARS:
+    if cap <= 0 or len(buf) < FIRST_CHUNK_MIN_CHARS or buf.rstrip().endswith(SENTENCE_ENDS):
         return "", buf
-    cut: int = max(buf.rfind(c) for c in CLAUSE_ENDS)
-    if cut + 1 < FIRST_CHUNK_MIN_CHARS:
-        # No usable clause boundary. Past the cap, cut at the last word break
-        # instead: a long comma-less opener is exactly the case this exists for.
-        if len(buf) < cap:
+    # Network text can end inside a voice tag or a number. Only consider
+    # boundaries outside square brackets, and never cut after a digit.
+    clauses = []
+    spaces = []
+    depth = 0
+    visible = 0
+    for i, char in enumerate(buf):
+        if char == "[":
+            depth += 1
+        elif char == "]" and depth:
+            depth -= 1
+        elif not depth:
+            visible += 1
+            if visible < FIRST_CHUNK_MIN_CHARS:
+                continue
+            if char in CLAUSE_ENDS and not (i and buf[i - 1].isdigit()):
+                # A colon followed by '/' belongs to a URL, not a clause.
+                if char not in (":", "：") or (i + 1 < len(buf) and buf[i + 1].isspace()):
+                    clauses.append(i)
+            if char.isspace() and i < cap:
+                spaces.append(i)
+    cut = clauses[-1] if clauses else -1
+    if cut < 0:
+        if len(buf) < cap or not spaces:
             return "", buf
-        cut = buf.rfind(" ", FIRST_CHUNK_MIN_CHARS, cap)
-        if cut < 0:
-            return "", buf
+        cut = spaces[-1]
     head: str = buf[: cut + 1].strip()
     return (head, buf[cut + 1:]) if head else ("", buf)
 
@@ -290,6 +307,8 @@ class RealtimeTurnResult(NamedTuple):
     # This is deliberately separate from `route`: an empty/no-output turn must
     # retain main-agent fallback. Only an explicit reject_turn tool call sets it.
     rejected: bool = False
+    # Observation only: the provider confirmed execution finished, not correctness.
+    execution_completed: bool = False
 
 
 def should_drop_realtime_rejection(rt: RealtimeTurnResult) -> bool:
@@ -386,6 +405,15 @@ def is_noise_turn(
     )
 
 
+def harness_followup_active() -> bool:
+    """Return whether OS has a recent paired Harness exchange awaiting speech."""
+    try:
+        response = requests.get(voice_cfg.OS_HARNESS_FOLLOWUP_URL, timeout=0.15)
+        return response.ok and response.json().get("data", {}).get("active") is True
+    except (requests.RequestException, ValueError):
+        return False
+
+
 def run_realtime_turn(
     realtime,
     tts,
@@ -404,6 +432,7 @@ def run_realtime_turn(
     """
     delegated = False
     handled = False
+    execution_completed = False
     rejected = False
     transcript = ""
     delegate_msg = ""
@@ -411,6 +440,10 @@ def run_realtime_turn(
     native = hal_config.REALTIME_NATIVE_AUDIO and tts is not None
     native_started = False  # cleanup guard: True between begin and end
     native_played = False    # did native audio actually play this turn (for handled)
+
+    if combined and harness_followup_active():
+        logger.info("[realtime] Harness follow-up active — delegating without realtime reply")
+        return RealtimeTurnResult(delegated=True, delegate_msg=combined, route=ROUTE_DELEGATED)
 
     # Noise/false-trigger guard: a session with no STT transcript is not worth a
     # model turn — committing it makes the model answer silence/noise (spurious
@@ -512,6 +545,7 @@ def run_realtime_turn(
                 t_commit: float = time.monotonic()
                 first_output_logged: bool = False
 
+                execution_completed = False
                 look_replay: bool = False
                 for output in realtime.stream_output():
                     if not first_output_logged:
@@ -626,6 +660,11 @@ def run_realtime_turn(
                                     )
                                     tts.speak_queue(sentence, turn_id=interaction_id, realtime_reply=True)
                             sentence_buf = ""
+
+                execution_completed = (
+                    getattr(realtime, "execution_completed", False) is True
+                    and not look_replay
+                )
 
                 # Look-replay: re-append this turn's audio to the SAME session
                 # (unlike the 1011 recovery below, which needs a fresh one) and
@@ -761,6 +800,7 @@ def run_realtime_turn(
                     except Exception:
                         pass
         except Exception as e:
+            execution_completed = False
             logger.warning(
                 "[realtime] Processing failed: %s — will forward to OS server", e
             )
@@ -821,4 +861,5 @@ def run_realtime_turn(
         delegate_msg=delegate_msg,
         route=route,
         rejected=rejected,
+        execution_completed=execution_completed,
     )

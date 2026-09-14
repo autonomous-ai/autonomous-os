@@ -206,12 +206,15 @@ native-notarize: ## Re-submit an existing DMG for notarization (skips build + si
 
 # Unified product: Electron owns the visible app and embeds the Swift helper.
 DESKTOP_DIR := desktop
-UNIFIED_APP := $(DESKTOP_DIR)/artifacts/package/Autonomous Buddy-darwin-$(shell node -p process.arch)/Autonomous Buddy.app
-UNIFIED_DMG := $(DIST_DIR)/Autonomous-Buddy-$(VERSION)-$(shell node -p process.arch).dmg
-.PHONY: build install app open run check all dmg app-signed dmg-signed notarize
+BUDDY_ARCH ?= $(shell node -p process.arch)
+BUDDY_ARCHS ?= arm64 x64
+UNIFIED_APP := $(DESKTOP_DIR)/artifacts/package/Autonomous Buddy-darwin-$(BUDDY_ARCH)/Autonomous Buddy.app
+UNIFIED_DMG := $(DIST_DIR)/Autonomous-Buddy-$(VERSION)-$(BUDDY_ARCH).dmg
+UNIFIED_DMG_STAGE := $(DIST_DIR)/dmg-stage-$(BUDDY_ARCH)
+.PHONY: build install app open run check all dmg dmg-arch app-signed dmg-signed notarize notarize-arch
 
 build: ## Build Electron + Swift and package one Autonomous Buddy.app (current Mac architecture)
-	$(MAKE) -C $(DESKTOP_DIR) build DEV_ID_APP="$(DEV_ID_APP)"
+	$(MAKE) -C $(DESKTOP_DIR) build DEV_ID_APP="$(DEV_ID_APP)" BUDDY_ARCH="$(BUDDY_ARCH)"
 
 app: build ## Alias for the unified build
 
@@ -230,14 +233,19 @@ check: ## Validate Swift and desktop components
 
 all: build ## Alias for the unified build
 
-dmg: build ## Package the unified application into a local DMG (no notarization)
+dmg: ## Build separate Apple Silicon and Intel DMGs (override BUDDY_ARCHS to select)
+	@set -e; for arch in $(BUDDY_ARCHS); do \
+		$(MAKE) dmg-arch BUDDY_ARCH="$$arch"; \
+	done
+
+dmg-arch: build ## Package one BUDDY_ARCH application into a DMG (no notarization)
 	@mkdir -p "$(DIST_DIR)"
-	@rm -rf "$(DMG_STAGE)"
-	@mkdir -p "$(DMG_STAGE)"
-	@ditto "$(UNIFIED_APP)" "$(DMG_STAGE)/Autonomous Buddy.app"
-	@ln -s /Applications "$(DMG_STAGE)/Applications"
-	@hdiutil create -volname "Autonomous Buddy $(VERSION)" -srcfolder "$(DMG_STAGE)" -ov -format UDZO "$(UNIFIED_DMG)"
-	@rm -rf "$(DMG_STAGE)"
+	@rm -rf "$(UNIFIED_DMG_STAGE)"
+	@mkdir -p "$(UNIFIED_DMG_STAGE)"
+	@ditto "$(UNIFIED_APP)" "$(UNIFIED_DMG_STAGE)/Autonomous Buddy.app"
+	@ln -s /Applications "$(UNIFIED_DMG_STAGE)/Applications"
+	@hdiutil create -volname "Autonomous Buddy $(VERSION) $(BUDDY_ARCH)" -srcfolder "$(UNIFIED_DMG_STAGE)" -ov -format UDZO "$(UNIFIED_DMG)"
+	@rm -rf "$(UNIFIED_DMG_STAGE)"
 	@if [ -n "$(DEV_ID_APP)" ]; then codesign --force --sign "$(DEV_ID_APP)" --timestamp "$(UNIFIED_DMG)"; fi
 
 app-signed: ## Build the unified app with an explicit Developer ID requirement
@@ -249,9 +257,15 @@ dmg-signed: ## Explicit distribution workflow: signed unified DMG, notarization,
 	$(MAKE) dmg DEV_ID_APP="$(DEV_ID_APP)"
 	$(MAKE) notarize
 
-notarize: ## Explicitly notarize an existing unified DMG
+notarize: ## Explicitly notarize both existing architecture DMGs
+	@set -e; for arch in $(BUDDY_ARCHS); do \
+		$(MAKE) notarize-arch BUDDY_ARCH="$$arch"; \
+	done
+
+notarize-arch: ## Explicitly notarize one existing BUDDY_ARCH DMG
 	@if [ -z "$(NOTARY_PROFILE)" ]; then echo "ERROR: NOTARY_PROFILE required"; exit 1; fi
 	@test -f "$(UNIFIED_DMG)"
 	xcrun notarytool submit "$(UNIFIED_DMG)" --keychain-profile "$(NOTARY_PROFILE)" --wait
 	xcrun stapler staple "$(UNIFIED_DMG)"
 	xcrun stapler validate "$(UNIFIED_DMG)"
+	spctl --assess --type open --context context:primary-signature --verbose=4 "$(UNIFIED_DMG)"

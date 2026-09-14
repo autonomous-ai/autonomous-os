@@ -1,0 +1,42 @@
+{
+  "boards": {
+    "orangepi_sun60": {
+      "enabled": true,
+      "bus": 0,
+      "address": 90,
+      "electrodes": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ],
+      "touch_threshold": 2,
+      "release_threshold": 1,
+      "autoconfig": true,
+      "poll_ms": 10,
+      "debounce_ms": 30,
+      "swipe_axis": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ]
+    }
+  }
+}

@@ -1,5 +1,14 @@
 # Web UI — Monitor Dashboard
 
+Flow Monitor hiển thị lượt đồng bộ lịch sử thành **History sync · Harness → Main** (hoặc nguồn bên ngoài), với input và câu trả lời dễ đọc, nhãn **Context**. Chỉ dẫn nội bộ và JSON nằm trong chi tiết event; tooltip route cho biết agent bên ngoài.
+
+Lượt voice Harness-only hiển thị route **Harness**. Event `harness_response` đã lưu cung cấp output, chi tiết Response và thời điểm hoàn tất cho đúng run, nên tải lại monitor không còn để lượt đã trả lời ở trạng thái ACTIVE. Gửi input mà chưa có phản hồi cuối vẫn giữ ACTIVE.
+
+Flow Monitor liên kết follow-up Codex được steer với lượt thực thi gốc qua
+`turn_merged` / `parent_run_id`. Chọn follow-up mở pipeline chung nhưng vẫn giữ
+card input và trạng thái kết thúc riêng. UI ghi rõ turn đã gộp thay vì hiện
+kết quả im lặng rỗng.
+
 ## Ngày cập nhật: 2026-08-25
 
 ---
@@ -24,7 +33,7 @@ Tiêu đề tab trình duyệt (`document.title`) hiển thị đúng theo page/
 | Route / trạng thái | Title |
 |--------------------|-------|
 | `/setup` (và `/` khi chưa provision) | `Lamp · Setup` |
-| `/monitor#<section>` (theo section đang chọn) | `Lamp · <tên section>` — ví dụ `Lamp · Chat`, `Lamp · Overview`, `Lamp · Info`, `Lamp · Flow`, `Lamp · Users`, `Lamp · Camera`, `Lamp · Sensing`, `Lamp · Analytics`, `Lamp · Servo`, `Lamp · Logs`, `Lamp · CLI` |
+| `/monitor#<section>` (theo section đang chọn) | `Lamp · <tên section>` — ví dụ `Lamp · Chat`, `Lamp · Overview`, `Lamp · Pairing`, `Lamp · Info`, `Lamp · Flow`, `Lamp · Users`, `Lamp · Camera`, `Lamp · Sensing`, `Lamp · Analytics`, `Lamp · Servo`, `Lamp · Logs`, `Lamp · CLI` |
 | `/setting#<section>` (Settings, theo section đang chọn) | `Lamp · Settings · <tên section>` — ví dụ `Lamp · Settings · General`, `Lamp · Settings · Wi-Fi`, `Lamp · Settings · AI Brain`, `Lamp · Settings · Language`, `Lamp · Settings · Voice`, `Lamp · Settings · My Voice`, `Lamp · Settings · Face`, `Lamp · Settings · Channels`, `Lamp · Settings · MQTT`, `Lamp · Settings · Timezone` |
 | `/gw-config` | `Lamp · GW Config` |
 
@@ -80,11 +89,13 @@ Layout: **Sidebar 216px cố định + Main area co giãn**, chiều cao 100vh.
 
 ### 3.2 Sidebar Navigation
 
-4 section có thể chuyển đổi bằng local state (`section: Section`):
+Nhóm **Device** trên sidebar chứa các mục Monitor chính, trong đó **Pairing nằm
+ngay dưới Servo**. Bluetooth vẫn được triển khai nhưng hiện ẩn khỏi navigation:
 
 | Icon | Section | Nội dung |
 |------|---------|---------|
 | ◈ | Overview | Tổng quan toàn bộ hệ thống |
+| ⟷ | Pairing | Kết nối/ghép đôi Autonomous Buddy và Harness |
 | ⬡ | System | CPU/RAM/Temp chi tiết + lịch sử |
 | ◎ | Workflow | OpenClaw event feed real-time |
 | ⬟ | Camera | MJPEG stream + Display LCD |
@@ -135,6 +146,44 @@ base URL — thứ luôn load lên kèm giá trị thật. Thiếu điều kiệ
 AI Brain mới là ghi đè im lặng lên key TTS/STT đang cố tình khác: đã có máy giữ
 key openrouter đi kèm URL proxy autonomous, một cặp không thể chạy.
 
+**Quyền sở hữu key TTS.** Thiết bị chỉ lưu đúng một key TTS (`ttsAPIKey`), và nó
+luôn thuộc về provider đang được chọn trong Voice. `Autonomous (proxy)` và
+`Custom (BYO URL)` không lưu gì cả mà kế thừa key AI Brain qua
+`Config.GetTTSAPIKey()` (`system/server/config/config.go:605`); `Piper` không cần
+key; `OpenAI (direct)` và `ElevenLabs (direct)` **bắt buộc phải có key riêng** —
+JWT Autonomous kế thừa sẽ bị từ chối bằng 401, HAL retry rồi bỏ cuộc và trả về 0
+sample, tức là thiết bị câm mà UI không báo lỗi gì. Bốn quy tắc giữ bất biến này:
+
+- Save bị **từ chối** khi provider direct không có key vừa nhập lẫn key đã lưu
+  thuộc đúng provider đó. Nhãn API Key hiển thị "required" với provider direct và
+  "optional — leave blank to reuse AI brain key" với các lựa chọn còn lại.
+- Badge `✓ configured` và placeholder `•••••••• saved` chỉ hiện khi key đã lưu
+  thuộc về provider đang chọn. Quyền sở hữu được suy ra từ cặp `tts_base_url` +
+  `tts_provider` lúc load qua `detectChoice()`
+  (`system/web/src/pages/settings/ttsProvider.ts`) — không thêm field config nào.
+- Mirror key AI Brain chỉ điền vào ô key TTS đang trống với `autonomous` /
+  `custom` (`ttsInheritsLlmKey()` trong `SettingsPanel`). Mirror vào provider
+  direct sẽ đặt một JWT Autonomous vào ô đó — trông như đã cấu hình và lưu trót
+  lọt, nhưng vendor trả về 401. Điều này khớp với điều kiện
+  `sttProvider === "autonomous"` mà các mirror phía STT vốn đã có.
+- Đổi provider khác với chủ sở hữu của key sẽ gửi `clear_tts_api_key: true`, và
+  `applyVoicePipelineFields` xử lý bằng cách xoá rỗng `ttsAPIKey`. Gửi
+  `tts_api_key: ""` không làm được việc này: mọi field trong
+  `UpdateConfigRequest` theo ngữ nghĩa PATCH, `""` nghĩa là "không gửi". Key sau
+  khi xoá được đẩy live xuống HAL dưới dạng giá trị *đã resolve*
+  (`GetTTSAPIKey()`), vì `/voice/tts/config` của HAL hiểu key rỗng là "giữ
+  nguyên key hiện tại".
+
+Key đã gõ nhưng chưa lưu được cache theo từng provider **chỉ trong tab trình
+duyệt** (một `useRef` trong `TTSSection`), để đổi qua lại giữa các provider trước
+khi lưu không phải gõ lại. Cache này mất khi reload và khi Save; thiết bị không
+bao giờ giữ quá một key.
+
+> Luồng Setup (`system/web/src/components/setup/TTSSection.tsx`) vẫn chưa expose
+> key và base URL của TTS — cả hai mirror từ AI Brain — nên provider direct chọn
+> trong lúc setup không thể nhập key hợp lệ ở đó. Hãy cấu hình sau trong
+> Settings → Voice.
+
 Settings **không phải là một trang riêng**. Nó là một khu vực (area) của chính shell Monitor (`system/web/src/pages/monitor/index.tsx`), truy cập tại route `/setting`. Trong `App.tsx`, `/monitor` và `/setting` là các route con của một layout route duy nhất có element render `<Monitor/>`; React Router giữ element đó luôn mounted khi chỉ đường dẫn con thay đổi, nên sidebar **không** bị remount khi chuyển giữa Monitor và Settings (không có hiện tượng nháy toàn trang). Shell suy ra khu vực — `"monitor"` hoặc `"setting"` — từ `useLocation().pathname`.
 
 Nhóm Settings có thể thu gọn nằm trong `NAV` của sidebar dùng chung (`system/web/src/pages/monitor/types.ts`). Bấm một mục Settings sẽ điều hướng tới `/setting` và render `SettingsPanel` (`system/web/src/pages/settings/SettingsPanel.tsx`) ở khu vực chính; bấm một mục Monitor sẽ điều hướng tới `/monitor`.
@@ -158,7 +207,9 @@ Nhóm Settings có thể thu gọn nằm trong `NAV` của sidebar dùng chung (
 | Plugins | `/setting#plugins` |
 | Timezone | `/setting#timezone` |
 
-Các mục Monitor được serialize thành id thuần, ví dụ `/monitor#overview`, `/monitor#system`, `/monitor#flow`. Mặc định: `/monitor` không có hash / hash không hợp lệ → `overview`; `/setting` không có hash / hash không hợp lệ → `general` (URL được chuẩn hóa thành `/setting#general`). Deep-link (ví dụ `/setting#wifi`) và nút back/forward của trình duyệt được tôn trọng qua một effect dựa trên `useLocation`. Người dùng không-debug chỉ thấy các mục trong `PUBLIC_SECTIONS` (gồm Chat, Overview, Info, Flow, Camera, Users, Bluetooth, **Logs**, **CLI**, và các mục Settings công khai General/Wi-Fi/My Voice/Face/MCP Tools/Plugins/Timezone); `?debug=true` mở khóa phần còn lại (Sensing, Analytics, Servo, API Docs, Agent gateway, và các mục Settings sâu hơn AI Brain/Runtime/Language/Voice/Realtime/Channels/MQTT). Bấm `update` là nút đổi ngay thành `updating…` — nút KHÔNG bao giờ báo "OK", vì chữ đó đọc như "xong rồi" trong khi request mới chỉ KHỞI ĐỘNG việc cài (và với component chạy vài giây thì nó còn hiện trước cả lúc dòng kịp báo tiến trình). Khi lỗi thì hiện đúng lý do server trả về (`rate-limited, retry in 8s`, `bootstrap unreachable`) thay vì chữ "Failed" trống rỗng. Trong lúc đang cài, dòng đó hiện `updating…` thay cho nút (một lần cài mất vài chục giây — component dừng, build lại, khởi động lại — và một dòng đứng im khiến người dùng bấm lần hai, chính là cách một máy từng mất sạch HAL runtime). Các nút `update` trong card **Versions** ở Overview (dòng Web / OS / HAL / Agent, cộng Bootstrap và Device ở debug) cũng bị chặn theo cách này — người xem thường không có nút kích OTA một chạm. Toggle **Debug** trên top bar, ngay cạnh nút Dark/Light, bật/tắt query parameter này nhưng vẫn giữ hash của mục đang mở và các query parameter khác; màu amber cho biết debug mode đang bật.
+Các mục Monitor được serialize thành id thuần, ví dụ `/monitor#overview`, `/monitor#pairing`, `/monitor#system`, `/monitor#flow`. Mặc định: `/monitor` không có hash / hash không hợp lệ → `overview`; `/setting` không có hash / hash không hợp lệ → `general` (URL được chuẩn hóa thành `/setting#general`). Deep-link (ví dụ `/setting#wifi`) và nút back/forward của trình duyệt được tôn trọng qua một effect dựa trên `useLocation`. Người dùng không-debug chỉ thấy các mục trong `PUBLIC_SECTIONS` (gồm Chat, Overview, **Pairing**, Info, Flow, Camera, **Sensing**, Users, **Logs**, **CLI**, và các mục Settings công khai General/Wi-Fi/My Voice/Face/MCP Tools/Plugins/Timezone); Bluetooth vẫn truy cập được bằng URL trực tiếp nhưng bị ẩn khỏi navigation. `?debug=true` mở khóa phần còn lại (Analytics, Servo, API Docs, Agent gateway, và các mục Settings sâu hơn AI Brain/Runtime/Language/Voice/Realtime/Channels/MQTT). Bấm `update` là nút đổi ngay thành `updating…` — nút KHÔNG bao giờ báo "OK", vì chữ đó đọc như "xong rồi" trong khi request mới chỉ KHỞI ĐỘNG việc cài (và với component chạy vài giây thì nó còn hiện trước cả lúc dòng kịp báo tiến trình). Khi lỗi thì hiện đúng lý do server trả về (`rate-limited, retry in 8s`, `bootstrap unreachable`) thay vì chữ "Failed" trống rỗng. Trong lúc đang cài, dòng đó hiện `updating…` thay cho nút (một lần cài mất vài chục giây — component dừng, build lại, khởi động lại — và một dòng đứng im khiến người dùng bấm lần hai, chính là cách một máy từng mất sạch HAL runtime). Các nút `update` trong card **Versions** ở Overview (dòng Web / OS / HAL / Agent, cộng Bootstrap và Device ở debug) cũng bị chặn theo cách này — người xem thường không có nút kích OTA một chạm. Toggle **Debug** trên top bar, ngay cạnh nút Dark/Light, bật/tắt query parameter này nhưng vẫn giữ hash của mục đang mở và các query parameter khác; màu amber cho biết debug mode đang bật.
+
+Card **Versions** ở Overview có cột thao tác thứ năm với nút `restart` cho OS Server và HAL, kể cả ngoài debug. Mỗi nút gọi `POST /api/system/restart/:target` có bảo vệ admin (`os-server` hoặc `hal`). Server hẹn restart sau 2 giây và trả HTTP 202. Nút hiện `queued`, khóa bấm lại trong 15 giây; trạng thái này chỉ xác nhận đã lên lịch, chưa xác nhận service phục hồi. Polling sẵn có của monitor cập nhật trạng thái/uptime sau khi kết nối lại. Lỗi được giữ hiển thị cạnh nút. Restart bị vô hiệu hóa khi biết dòng đó đang cập nhật; hoạt động OTA được poll cả ở chế độ thường. Card hẹp cuộn ngang để truy cập đủ năm cột.
 
 **Speech attention gate** nằm trong card **General** công khai, không nằm ở mục Realtime chỉ-debug. Checkbox vẫn ghi cờ `wakeword` top-level; lưu Settings sẽ restart HAL để áp dụng. Khi bật, speech phải đi sau một attention trigger: wake phrase nói ra, single click, quay về phía lamp rồi nói, hoặc một người đã enrolled xuất hiện trong khung (`presence.enter`). Event chỉ có stranger không mở voice gate, trừ khi deployment đặt `HAL_PRESENCE_WAKE_STRANGERS=true`. Card liệt kê các phrase **nói ra** hiện được chấp nhận, gồm tên agent hiện tại chính xác cùng các alias cố định `autonomous` và device type; hệ thống quản lý danh sách này. Tải lại Settings sau khi đổi tên agent để thấy tên mới. Khi tắt, mọi câu nói được xử lý mà không cần trigger.
 
@@ -372,7 +423,7 @@ không kéo giãn card Presence ngắn theo card Audio cao hơn.
 
 > **Bố cục & pill cloud.** Cụm thiết bị (hàng 2) chia thành hai cột bằng nhau:
 > cột phải cho các card biểu cảm (Emotion, Servo Pose, Versions) và cột trái cho
-> các card trạng thái gọn (Hardware, Scene, Buddy); dưới ~860px hai cột gộp về
+> các card trạng thái gọn (Hardware, Scene, Power); dưới ~860px hai cột gộp về
 > một. Versions nằm ở cột phải để hai cột cân chiều cao, tránh cột phải bị cụt
 > dưới Servo Pose. Danh sách preset Emotion và danh sách recording Servo render
 > dưới dạng **pill cloud** — pill đang active được đẩy lên đầu để trạng thái hiện
@@ -385,6 +436,44 @@ không kéo giãn card Presence ngắn theo card Audio cao hơn.
 > rõ ở dark mode. Phần tóm tắt chừa đủ chỗ cho emoji và tên dài như
 > `acknowledge`; khi card hẹp, pill cloud sẽ xuống hàng dưới thay vì đè lên
 > trạng thái hiện tại.
+
+### 5.2 Section Pairing
+
+`/monitor#pairing` là khu vực riêng cho kết nối và ghép đôi. Nó render cả
+`BuddyCard.tsx` (Autonomous Buddy cho Mac) và `HarnessCard.tsx`, tách các tích hợp
+máy tính này khỏi các card trạng thái thiết bị trên Overview. Trang có header kết
+nối gọn và bố cục card hai cột, chuyển thành một cột khi nhỏ hơn 760px.
+
+**Autonomous Buddy (Mac)**
+- Hiển thị máy Mac đã ghép và trạng thái kết nối. Khi chưa có máy Mac nào, **Pair new Mac** tạo mã để nhập trong Autonomous Buddy → *Pair with device…*.
+- Thu hồi ghép đôi yêu cầu xác nhận và gọi `DELETE /api/buddy`.
+
+**Ghép đôi Harness**
+- **Generate pairing code** gọi `POST /api/harness/pair` có xác thực admin, không cần
+  chọn máy tính. OS tạo mã sáu ký tự có hiệu lực 60 giây.
+- Trên cùng mạng nội bộ, mở Harness Desktop → Settings → Devices, chọn thiết bị
+  Autonomous được tự tìm thấy rồi nhập mã của thiết bị. Với CLI, chạy
+  `harness autonomous-device discover --json`, sau đó
+  `harness autonomous-device pair --device <discoveryId> --code-stdin`.
+  CLI kết nối trực tiếp đến `/api/harness/ws` của thiết bị; việc tìm thiết bị dùng
+  dịch vụ `_autonomous._tcp` đã có. Không nhập IP hoặc cần tài khoản backend.
+- `GET /api/harness/pair/status` chỉ dành cho admin, trả mã đang hoạt động, `expires_at`,
+  `state`, `pairing` với `Cache-Control: no-store`. OS Monitor đọc route này và `/status`
+  mỗi hai giây. Mã bị xoá khi hết hạn, huỷ hoặc hoàn tất; không lưu lâu dài.
+  `POST /api/harness/pair/cancel` huỷ lần ghép đang chờ.
+- Unpair cần xác nhận, gọi `DELETE /api/harness` có xác thực admin. Harness dùng giao thức
+  pairing/phiên E2EE gốc và giữ khóa riêng, độc lập với Buddy.
+
+**Giọng nói Harness-only**
+
+- Khi có máy đã ghép đôi, `HarnessCard.tsx` hiển thị `HarnessVoiceMode.tsx`. **Focused Harness agent** đồng bộ pane agent đang focus trong app Harness, kể cả khi mode tắt. Web không có bộ chọn agent; target hội thoại của `harness-use` thông thường vẫn độc lập.
+- Bật **Harness-only voice** để gửi yêu cầu giọng nói thẳng đến agent đang focus; kết quả vẫn qua TTS thiết bị. Chat text giữ hành vi hiện có. Trạng thái nằm trong RAM; restart tắt mode và focus đồng bộ lại sau reconnect. Đổi focus giữa capture từ chối capture cũ và yêu cầu nói lại. Task đã gửi giữ route phản hồi gốc.
+- Mode/focus refresh mỗi 2 giây qua `GET /api/harness/voice-mode`. Công tắc chỉ gửi `{enabled}` bằng `PUT`, dùng được khi offline hoặc chưa có focus; nếu đọc mode lỗi thì khóa đến khi refresh thành công. UI giải thích rõ khi offline, thiếu focus hoặc CLI chưa hỗ trợ capability nên không thể delivery giọng nói.
+- Delivery chưa rõ chặn mutation giọng nói Harness mới nhưng focus hiển thị vẫn đồng bộ. **Check delivery** đọc receipt hiện có, không gửi lại. **Continue without retrying** yêu cầu xác nhận rồi gửi `resolution:"do_not_retry"` cùng `idempotencyKey` pending chính xác đến `/api/harness/voice-mode/resolve`; task trước vẫn có thể chạy.
+- `HarnessQuestion.tsx` refresh câu hỏi live mỗi 10 giây khi focus khả dụng, kèm **Refresh agent question**. Form hỗ trợ chọn một, chọn nhiều và text tự nhập. **Send answer** gửi đủ key câu hỏi chính xác với request ID live và revision focus, từ chối focus cũ. Người dùng cũng có thể trả lời lần lượt bằng giọng nói.
+- Thay đổi và endpoint câu hỏi/receipt cần xác thực admin. Xem [Tích hợp Harness](harness_vi.md#chế-độ-giọng-nói-harness-only) về API và yêu cầu rollout OS/HAL/CLI tương thích.
+
+Section Pairing có mặt với người dùng không-debug.
 
 **Display Eyes**
 - Expression đang hiển thị (mode)
@@ -407,7 +496,7 @@ Dưới nav items và trạng thái OpenClaw, sidebar hiển thị version của
 - **HAL** (blue): từ `GET /api/system/info` → field `halVersion`. OS server tự gọi `:5001/version` của HAL qua loopback mỗi phút 1 lần (cache) rồi re-expose qua API của OS server, browser không cần truy cập trực tiếp `/hw/*` (nginx chặn `/hw/` chỉ cho loopback).
 - **Force Update** button: gọi `POST /api/system/force-update` → bootstrap kiểm tra OTA. Hiện "Checking…" khi đang xử lý, sau đó "Triggered"/"Failed" trong 3 giây.
 
-### 5.2 System Section
+### 5.3 System Section
 
 **Performance** — 3 GaugeRing SVG:
 - CPU: màu amber, hiện `%`
@@ -421,7 +510,7 @@ Dưới nav items và trạng thái OpenClaw, sidebar hiển thị version của
 **Process**: goroutines, uptime, version, deviceId
 **Network Detail**: SSID, IP, signal, internet
 
-### 5.3 Workflow Section
+### 5.4 Workflow Section
 
 Flow feed hybrid theo file:
 
@@ -469,13 +558,13 @@ Hành vi gom nhóm Turn Pipeline:
 - Bộ nhớ event của Flow được giới hạn 10 000 events.
 - Heuristic ghép turn Telegram: nếu turn Telegram fallback (không có text input thật) đứng ngay trước turn có output agent trong vòng 30 giây, Monitor sẽ ghép thành 1 turn để câu trả lời đi cùng input Telegram.
 
-### 5.4 Camera Section
+### 5.5 Camera Section
 
 - **Camera Stream**: MJPEG live stream từ `GET /hw/camera/stream` (downscaled + throttled; mặc định ~10fps, ~320px chiều ngang). Thẻ `<img>` remount bằng kết nối mới (cache-buster `streamEpoch` tăng lên) mỗi khi camera chuyển sang enabled — qua nút Enable hoặc auto-enable phát hiện bởi polling — nên video live trở lại ngay, khỏi refresh trang. Lỗi stream xảy ra ngay sau enable (loop capture của HAL cần ~1-2s để có frame đầu) không bị latch: nó tự retry sau khoảng trễ ngắn tới khi load được frame.
 - **Display Eyes (GC9A01)**: Snapshot màn hình tròn 1.28" từ `GET /hw/display/snapshot`, hiển thị dạng hình tròn với amber glow. Có nút Refresh.
 - **Camera Snapshot**: Ảnh tĩnh từ `GET /hw/camera/snapshot`, có nút Capture để chụp mới.
 
-### 5.5 Logs Section
+### 5.6 Logs Section
 
 - Tab log runtime: HAL, OS (os-server), Buddy, **Bootstrap**, cùng **Agent** và **Agent Service** (source id `bootstrap`, `openclaw` / `openclaw-service`). Tab **Bootstrap** đọc journal của systemd unit `bootstrap.service`.
 - Tab **Agent**/**Agent Service** là runtime-aware — backend (`resolveLogSource` trong `server/logs.go`) trỏ chúng tới backend agentic nào đang chạy:
@@ -489,7 +578,7 @@ Hành vi gom nhóm Turn Pipeline:
 
 > **Lưu ý**: Camera có vai trò kép — (1) hiển thị live stream cho user xem, (2) nguồn dữ liệu sensing tự động. Sensing service đọc frame từ camera mỗi 2s để detect motion, face (Haar cascade), và light level. Khi phát hiện sự kiện đáng kể (người xuất hiện, chuyển động lớn), auto-snapshot full-resolution JPEG được gửi kèm event tới OpenClaw AI để phân tích bằng vision.
 
-### 5.6 Chat Section
+### 5.7 Chat Section
 
 Giao diện chat tương tác với agent. Layout: sidebar (danh sách hội thoại) + vùng chat chính.
 
@@ -501,8 +590,8 @@ Giao diện chat tương tác với agent. Layout: sidebar (danh sách hội tho
   entry mà message không còn tồn tại. Xóa hội thoại (hoặc Clear/history-TTL)
   cũng xóa luôn ảnh đã lưu.
 - Sidebar: tìm kiếm, ghim, đổi tên (double-click), xóa (xác nhận 2 lần), xuất TXT
-- Nhóm theo ngày: Today / Yesterday / This week / Older, ghim lên đầu. Mỗi header nhóm có đường kẻ mảnh và số lượng item.
-- Mỗi dòng hiển thị một chấm avatar màu (hash từ id hội thoại, theo palette), tiêu đề, nhãn thời gian tương đối đã bản địa hóa (`vừa xong` / `5 phút` / `2 giờ` / `hôm qua` / `3 ngày`, ẩn khi hover), và preview tin nhắn cuối. Hội thoại đang mở được đánh dấu bằng thanh dọc amber bên trái.
+- Nhóm và sắp xếp theo **hoạt động tin nhắn gần nhất**: Today / Yesterday / This week / Older, ghim lên đầu. Mỗi header nhóm có đường kẻ mảnh và số lượng item. Chính thứ tự này cũng dùng khi giữ 50 hội thoại local, nên một thread cũ nhưng đang hoạt động không bị đẩy ra trước một thread mới nhưng không dùng.
+- Mỗi dòng hiển thị một chấm avatar màu (hash từ id hội thoại, theo palette), tiêu đề, nhãn thời gian tương đối đã bản địa hóa cho hoạt động mới nhất (`vừa xong` / `5 phút` / `2 giờ` / `hôm qua` / `3 ngày`, ẩn khi hover), và preview tin nhắn cuối. Hội thoại đang mở được đánh dấu bằng thanh dọc amber bên trái. Tìm kiếm hiện số kết quả; Escape hoặc nút xóa sẽ đưa ô tìm kiếm về trống.
 - Phím tắt: Cmd/Ctrl+N tạo chat mới
 - Sidebar thu gọn được
 
@@ -513,6 +602,7 @@ Giao diện chat tương tác với agent. Layout: sidebar (danh sách hội tho
   - **Skills** ▸ — sub-menu bay ra, chứa 4 màn hình bên dưới, có một đường kẻ tách 2 mục thêm skill của chính mình (Write / Upload) khỏi 2 mục làm việc với skill đã có sẵn (Browse / Manage). Mỗi cái mở một modal portal (`chat/ModalShell.tsx` shell dùng chung + `chat/styles.ts` style field); bản thân các dòng menu nằm ở `chat/MenuPanel.tsx`, dùng chung với menu trong header Manage skills.
 - Đính kèm file/ảnh (tối đa 10 MB): "+" → Attach file, kéo thả, dán từ clipboard
 - Gửi qua `POST /api/sensing/event` với `type: "web_chat"`. Handler mark run qua `MarkWebChatRun(runID)` để reply của agent bị suppress TTS (chỉ hiện trong UI này) và bỏ qua wake greeting / opening filler. **Ảnh** đính kèm đi trong mảng `images` của payload (raw base64, mỗi ảnh một phần tử — composer nhận nhiều ảnh); với từng ảnh, handler (1) lưu vào `/tmp/web-chat-<ms>-<i>.jpg` (có index nên ảnh trong CÙNG một lượt không đè tên nhau) và chèn tag `[image: <path>]` để tool đọc file trực tiếp (vd face enrollment), và (2) chạy gate describe-first trong `system/vision` (xem `docs/realtime-voice.md`, phần "Bàn giao frame"): main model text-only nhận dòng `[image description]` do vision model của catalog tả, model có vision nhận attachment thô. Cả hai bước chạy TRƯỚC fork queue lúc agent bận, nên turn bị queue replay với description đã nằm sẵn trong message.
+- Khi đang chờ reply, mũi tên Send đổi thành **Stop**. Stop hủy HTTP send nếu server chưa nhận; nếu run đã được nhận thì browser đóng bubble đó và bỏ qua mọi event đến muộn của run. Nó không interrupt task đang chạy trong agent và không xóa session/memory của agent.
 - **File không phải ảnh** chỉ đi bằng mảng `files` riêng — mỗi phần tử `{name, mime, content}`, base64 — tuyệt đối không đi vào field `images`; `agentfile.SaveInbound` xử lý chúng. Chúng rơi vào `/tmp` với **đúng đuôi thật** và turn mang tag `[file: <path> (<name>)]`. Tách hai field chứ không gộp một, vì cách xử lý ngược nhau: ảnh phải qua gate describe-first, tài liệu thì không được. Trước khi tách, mọi thứ composer nhận đều gửi trong một field `image` duy nhất và ghi thành `/tmp/web-chat-*.jpg`, nên đính một file PDF sẽ tạo ra file bị gán nhãn sai là ảnh rồi fail ở gate vision — composer nhận mọi loại file, nhưng thực tế chỉ ảnh là chạy được. `name` của client chỉ dùng để lấy đuôi (phải là hậu tố chữ-số ngắn, không thì `.bin`) và làm nhãn hiển thị; tên file ghi ra là tự sinh, nên tên kiểu `../../etc/passwd` không lái được chỗ ghi. Giới hạn 10 MB sau decode, khớp với check của composer. Đường MQTT `chat.send` mang đúng các field đó và đi ngược vào chính handler này qua loopback, nên điện thoại và browser đính file bằng chung một bản cài đặt (`docs/mqtt.md`).
 - **File đi NGƯỢC ra khỏi turn** (`chat/AgentFiles.tsx`). Một turn chỉ có thể *gọi tên* file nó tạo ra — bảo "chụp hình" thì nó kết thúc bằng một path tuyệt đối trên device kiểu `/root/.openclaw/media/hal-snapshots/snap_*.jpg`, thứ mà browser không đọc được. Mỗi message agent đã xong được quét tìm path dạng đó, mỗi cái tìm thấy render ngay dưới bubble: ảnh hiện inline, còn lại là chip download, cả hai trỏ vào `GET /api/agent/file?path=…`.
   - **Quét 3 chỗ, không chỉ text của reply.** Bảo agent gửi ảnh thì nó thường gọi tool channel — `message {"action":"send","media":"/root/.openclaw/media/…jpg"}` — còn câu trả lời không hề nhắc path nào, chỉ quét text là không thấy gì. **args** của tool có path (server log nguyên vẹn trong `detail.args` của flow event; chỉ phần HIỂN THỊ trên chip bị cắt), còn `curl /camera/snapshot` thì path nằm trong **result** của tool.
@@ -527,7 +617,7 @@ Giao diện chat tương tác với agent. Layout: sidebar (danh sách hội tho
 | **Write skill** | `chat/WriteSkillModal.tsx` | Form 3 field — Skill name / Description / Instructions — đúng cấu trúc một `SKILL.md` (name + description → front-matter, instructions → body). Lưu qua `POST /api/agent/skills`; thành công thì modal hiện đường dẫn đã ghi. Xem "Viết + cài skill" bên dưới. |
 | **Upload a skill** | `chat/UploadSkillModal.tsx` | Cài file `.skill`/`.zip` mà người dùng chọn từ máy họ — vùng kéo-thả hoặc chọn file, giới hạn 16 MB phía client khớp với phía device. Cùng đích và cùng luật thay-thế-khi-trùng-tên với nút Install từ store; chỉ khác nguồn của bytes. |
 | **Browse skills** | `chat/BrowseSkillsModal.tsx` | Chạy thật với catalog Autonomous Agent Skills — xem "Catalog skill" bên dưới. |
-| **Manage skills** | `chat/ManageSkillsModal.tsx` | Skills đang có trong thư mục skill của runtime đang chạy (`GET /api/agent/skills`), 2 view: ô search cộng một **list 3 cột** — skill (`/music` kèm description ở dòng dưới), số file, last updated — click vào mở view detail dùng đúng trình duyệt file 2 pane của Browse skills. Dùng list chứ không dùng lưới card như Browse, vì với skill đã cài thì câu hỏi có ích là đang có gì và đổi lần cuối lúc nào, cái đó đọc theo cột thẳng hàng dễ hơn. Cột "Last updated" hiện ngày cố định dạng `MM/DD/YYYY` — cột này sinh ra để nhìn phát biết skill nào cũ, mà ngày tuyệt đối rộng cố định thì so theo cột dễ hơn hẳn kiểu tương đối trộn đơn vị ("3d ago" cạnh "12m ago"); thứ tự MM/DD/YYYY hardcode chứ không theo locale để cột luôn thẳng hàng và cùng một ảnh chụp không bị người khác đọc thành ngày khác. Timestamp chính xác nằm ở tooltip của dòng. Search lọc **phía client** theo name + description — khác Browse là gửi keyword lên catalog, ở đây `ListSkills` đã trả về cả bộ nên không cần hỏi device thêm. Mọi skill runtime đang có đều hiện, bất kể từ đâu ra — soạn tay, cài từ store, role bundle, OTA push đều chung một cây. Có nút reload; list rỗng ghi "chưa cài skill nào", khác với 501 khi runtime không list được. Footer của view detail có nút **Uninstall**, cần 2 click: click đầu kích hoạt và nói rõ sẽ xoá gì, click thứ hai mới thực thi. Thành công thì list fetch lại để skill vừa xoá không còn sót. Header của view list có dropdown **New** ngay bên trái nút đóng, lặp lại Write skill / Upload a skill của menu composer — cả hai mở *đè lên* modal này chứ không thay thế nó, và đóng cái nào thì list cũng fetch lại, nên thêm skill xong là quay về đúng list đã refresh. Escape chỉ đóng lớp trên cùng. |
+| **Manage skills** | `chat/ManageSkillsModal.tsx` | Skills đang có trong thư mục skill của runtime đang chạy (`GET /api/agent/skills`), 2 view: ô search cộng một **list 4 cột** — skill (`/music` kèm description ở dòng dưới), Store, số file, last updated — click vào mở view detail dùng đúng trình duyệt file 2 pane của Browse skills. Store hiện **In store** khi catalog có slug/name khớp, **Device only** khi không có, hoặc **Unknown** khi device không đọc được toàn bộ catalog; đây là độ sẵn có hiện tại trên catalog, không phải nguồn đã cài skill. Dùng list chứ không dùng lưới card như Browse, vì với skill đã cài thì câu hỏi có ích là đang có gì và đổi lần cuối lúc nào, cái đó đọc theo cột thẳng hàng dễ hơn. Cột "Last updated" hiện ngày cố định dạng `MM/DD/YYYY` — cột này sinh ra để nhìn phát biết skill nào cũ, mà ngày tuyệt đối rộng cố định thì so theo cột dễ hơn hẳn kiểu tương đối trộn đơn vị ("3d ago" cạnh "12m ago"); thứ tự MM/DD/YYYY hardcode chứ không theo locale để cột luôn thẳng hàng và cùng một ảnh chụp không bị người khác đọc thành ngày khác. Timestamp chính xác nằm ở tooltip của dòng. Search lọc **phía client** theo name + description — khác Browse là gửi keyword lên catalog, ở đây `ListSkills` đã trả về cả bộ nên không cần hỏi device thêm. Mọi skill runtime đang có đều hiện, bất kể từ đâu ra — soạn tay, cài từ store, role bundle, OTA push đều chung một cây. Có nút reload; list rỗng ghi "chưa cài skill nào", khác với 501 khi runtime không list được. Footer của view detail có nút **Uninstall**, cần 2 click: click đầu kích hoạt và nói rõ sẽ xoá gì, click thứ hai mới thực thi. Thành công thì list fetch lại để skill vừa xoá không còn sót. Header của view list có dropdown **New** ngay bên trái nút đóng, lặp lại Write skill / Upload a skill của menu composer — cả hai mở *đè lên* modal này chứ không thay thế nó, và đóng cái nào thì list cũng fetch lại, nên thêm skill xong là quay về đúng list đã refresh. Escape chỉ đóng lớp trên cùng. |
 
 Dropdown **New** cũng có **Create with Agent**. Chọn mục này sẽ đóng Manage skills, focus ô chat và điền sẵn `Let's create a skill together using your skill-creator skill. First ask me what the skill should do.`; tin nhắn **không tự gửi**, nên owner có thể xem lại hoặc sửa trước.
 
@@ -561,8 +651,9 @@ Cả ba đường đều đi qua abstraction của agent — tầng device khôn
 
 | Endpoint device | Method gateway | Hành vi |
 |-----------------|----------------|---------|
-| `GET /api/agent/skills` | `ListSkills() ([]InstalledSkill, error)` | Duyệt thư mục skill của runtime: mỗi thư mục skill là một entry kèm cây file, sort theo tên, thư mục trước file. Description đọc từ front-matter của SKILL.md. `updated_at` (Unix giây) là **mtime mới nhất ở bất kỳ đâu trong cây skill đó**, không phải mtime của chính thư mục skill — mtime thư mục chỉ đổi khi thêm/xoá file, nên nó sẽ báo một SKILL.md vừa sửa là "không đổi"; giá trị này đi kèm ngay trong lượt duyệt cây chứ không duyệt lần hai, và fallback về mtime thư mục cho skill rỗng. Thư mục skill **không tồn tại** (runtime chưa provision) trả list rỗng, không phải lỗi. |
+| `GET /api/agent/skills` | `ListSkills() ([]InstalledSkill, error)` | Duyệt thư mục skill của runtime: mỗi thư mục skill là một entry kèm cây file, sort theo tên, thư mục trước file. Description đọc từ front-matter của SKILL.md. `updated_at` (Unix giây) là **mtime mới nhất ở bất kỳ đâu trong cây skill đó**, không phải mtime của chính thư mục skill — mtime thư mục chỉ đổi khi thêm/xoá file, nên nó sẽ báo một SKILL.md vừa sửa là "không đổi"; giá trị này đi kèm ngay trong lượt duyệt cây chứ không duyệt lần hai, và fallback về mtime thư mục cho skill rỗng. `store_availability` là `in_store`, `device_only`, hoặc `unknown`: device đọc mọi trang catalog rồi so sánh tên runtime đã chuẩn hoá với slug/name catalog; catalog không truy cập được hoặc chưa đọc đủ luôn là `unknown`, không bao giờ là `device_only`. Thư mục skill **không tồn tại** (runtime chưa provision) trả list rỗng, không phải lỗi. |
 | `GET /api/agent/skills/files?name=<skill>` | `ReadSkillFiles(name) ([]SkillBundleFile, error)` | File của một skill đã cài, dạng phẳng, nội dung UTF-8 inline. Trả **cùng envelope `domain.SkillBundle`** với preview từ store để hai view detail render bằng chung một component. Skill không còn (list cũ) trả 404. |
+| `POST /api/agent/skills/publish?name=<skill>` | — | Chỉ có từ Manage skills cho entry `device_only`. Device đóng gói toàn bộ thư mục skill thành archive `.skill` rồi proxy multipart upload tới `/api/v1/skills/publish` trên host suy ra từ `llm_base_url`; `llm_api_key` luôn ở server dưới header `x-api-key`. Upload thành công đi vào trạng thái review pending trên Store. |
 | `POST /api/agent/skills` | `SaveSkill(domain.SkillDraft) (path, error)` | Ghi `<name>/SKILL.md` do người dùng soạn. **Từ chối ghi đè** skill đã tồn tại (`skills.ErrSkillExists` → 400) để một lỗi soạn thảo không phá skill cài từ store/OTA. |
 | `DELETE /api/agent/skills?name=<skill>` | `DeleteSkill(name) (path, error)` | Xoá thư mục skill và toàn bộ bên trong. **Không idempotent**: skill chưa cài trả `404` (`skills.ErrSkillNotFound`) chứ không phải success ngầm, để caller biết list của nó đã cũ. Cũng từ chối khi thứ nằm ở path đó không phải thư mục skill. |
 | `POST /api/agent/skills/upload` | `InstallSkillArchive(...)` / `InstallSkillMarkdown(content)` | Skill từ máy người dùng, **multipart** field `file` (không dùng base64-trong-JSON như face enroll: cái đó chở một ảnh JPEG nhỏ, còn archive skill nặng vài MB và base64 sẽ phình thêm 1/3). Giới hạn 16 MB. Nhận `.zip`/`.skill` **hoặc** một file `.md` trơn, và enforce đúng yêu cầu của format upstream — xem bên dưới. |
@@ -601,7 +692,7 @@ Cả hai đường đều KHÔNG restart runtime: backend nào có thư mục sk
 - Theo dõi response qua `runId` correlation trên SSE events
 - HW control markers inline (`[HW:/emotion:...]`) được lọc bỏ khỏi text hiển thị; dạng markdown-link một số LLM emit (`[label](HW:/led/off:{})`) cũng được lọc, giữ lại label. Cả hai pattern lọc mirror đúng grammar của executor os-server — biến thể malformed mà executor không fire sẽ hiển thị nguyên văn
 - Timeout 50 phút tính theo **idle**: mỗi SSE event thuộc run đang chờ (`assistant_delta`, `thinking`, tool call) đều đẩy lùi hạn, nên một turn chạy nhiều phút vẫn ở trạng thái pending chừng nào agent còn làm việc; chỉ 50 phút im lặng thật sự mới bỏ cuộc. Đặt dài hơn mức chặn turn của backend (`CODEX_TURN_TIMEOUT_S`, 45 phút) chứ không phải đoán xem câu trả lời nên mất bao lâu: gatewayd luôn kết thúc turn và frame kết thúc đó mang đúng runId đang chờ, nên đây chỉ là lưới an toàn cuối. Không rút ngắn được — `codex exec --json` không emit gì trong lúc chạy, nên mọi cửa sổ ngắn hơn chính turn đó sẽ chốt nhầm một turn khoẻ mạnh thành "no response" (xem `docs/vi/agentic/codex_vi.md` §2.1). Khi bỏ cuộc: giữ phần text đã stream làm câu trả lời, không có thì báo lỗi kèm nút retry. Cố ý KHÔNG phải hạn tuyệt đối — hạn tuyệt đối từng chốt một turn build dài thành "no response" trong khi run vẫn đang chạy; MQTT chat và Telegram không dính vì chúng không có deadline phía client.
-- **Khôi phục turn đang chờ sau reload**: message lưu kèm epoch `ts`; bubble reply đang pending dưới 10 phút sẽ sống sót qua reload thay vì bị chốt thành lỗi. Ở lần render đầu khi tab Chat active, UI re-attach vào `runId` đã lưu và backfill câu trả lời từ flow JSONL replay (`/api/agent/flow-stream` gửi lại 500 event cuối trong ngày mỗi lần connect — `tts_send` / `tts_suppressed` / `no_reply`). Nếu sau 30 giây IM LẶNG mà không resolve được thì chốt thành "no response" kèm nút retry — cùng một idle timer như trên, chỉ khác cửa sổ ngắn hơn vì một run đã xong sẽ backfill trong ~2 giây. Event live cũng làm mới nó, nên reload GIỮA một turn dài vẫn tiếp tục chờ như mọi run pending khác.
+- **Khôi phục turn đang chờ và fallback live**: message lưu kèm epoch `ts`; bubble reply đang pending dưới 10 phút sẽ sống sót qua reload thay vì bị chốt thành lỗi. Ở lần render đầu khi tab Chat active, UI re-attach vào `runId` đã lưu và backfill câu trả lời từ flow JSONL replay (`/api/agent/flow-stream` gửi lại 500 event cuối trong ngày mỗi lần connect — `tts_send` / `tts_suppressed` / `no_reply` / `harness_response`). Khi reply đang pending, UI cũng fetch cửa sổ flow gần nhất mỗi ba giây như fallback nếu SSE live bị mất, nên kết quả cuối hiện ra mà không cần reload. Recovery dùng cùng ngân sách idle 12 phút với turn đang chạy: reload khi Harness hoặc Codex vẫn làm việc không được chốt lỗi trước khi terminal event được ghi. Event live làm mới deadline này.
 - Local intent fast path: response dưới 50ms bypass agent
 - Busy/dropped: hiển thị "busy — try again"
 - Markdown: bold, italic, inline code (tô màu amber), code block (monospace), link `[label](url)`, URL trần (scheme http/https bị gõ lỗi như `hthtps://` từ banner giới hạn quota upstream được sửa lại trước khi linkify; scheme lạ giữ nguyên plain text), danh sách, và bảng (header có nền + hàng zebra). Bubble agent render đủ markdown; bubble user giữ nguyên văn bản, riêng URL được linkify với cùng cơ chế sửa scheme
@@ -623,6 +714,44 @@ Chat UI → POST /api/sensing/event → SensingHandler
 ```
 
 ---
+
+### 5.8 Device → Sensing
+
+Menu Sensing và card chỉ đọc **Environment** luôn hiển thị, không cần debug,
+kể cả khi device không khai báo capability sensing. Card camera vẫn yêu cầu
+`vision`. Khi đang tải capabilities hoặc thiếu `environment`, card môi trường
+hiện các số đo `N/A` và không gửi request tới sensor. Sensor có khai báo nhưng
+đang tắt cũng hiển thị số đo `N/A`.
+
+Khi có capability `environment`, card đọc `GET /api/hardware/environment/status`
+mỗi 3 giây qua reverse proxy hardware của OS đã có xác thực, chuyển tới HAL
+`GET /environment/status`. Chu kỳ làm mới trình duyệt độc lập với
+`poll_interval_s` cấu hình trong HAL, không thay đổi nhịp thu nhận dữ liệu.
+Đọc từ browser không kích hoạt lượt agent. Worker phát hiện thay đổi độc lập
+và API status cho agent local được mô tả trong
+[tài liệu môi trường Lamp](../../robots/lamp/docs/vi/environment-sensing_vi.md#chính-sách-thay-đổi-của-os-và-api-cho-agent).
+
+Card hiển thị trạng thái cảm biến, thời điểm sample, trạng thái dữ liệu
+cũ, lỗi và đủ chín chỉ số chuẩn: nhiệt độ (°C), độ ẩm (%),
+PM1 / PM2.5 / PM4 / PM10 (µg/m³), VOC index, NOx index và CO₂ (ppm).
+UI dựa vào key chỉ số và metadata nguồn, không phụ thuộc tên model cảm biến,
+nên đổi component cấu hình (ví dụ sang SEN63C) vẫn dùng cùng card. Chỉ số không
+được hỗ trợ hoặc chưa sẵn sàng vẫn hiện `N/A` tương ứng giá trị `null`.
+Nhãn nguồn chỉ rõ component; từng chỉ số có timestamp riêng. Component lỗi
+không che số đo còn tốt từ component khác. Giá trị chưa khả dụng hiện `N/A`, không hiện số 0.
+Số đo cũ cũng được thay bằng `N/A`; request thất bại được hiển thị là lỗi để
+không nhầm số đo trước đó với dữ liệu hiện tại. Không gán nhãn chất lượng không khí
+tốt/xấu, ngưỡng hay cảnh báo. Mục kỹ thuật thu gọn hiển thị trạng thái, bus I2C,
+thanh ghi trạng thái và timing đọc/thử lại/đánh dấu cũ/phục hồi của từng
+component trong `status.components`. Vẫn hỗ trợ snapshot một sensor kiểu cũ
+với `status.timing` cấp cao nhất và nhãn cảm biến chung. Sample hoặc timestamp
+sample là `null` sẽ hiện trạng thái chờ, không hiển thị ngày epoch. Giải thích về
+gas index chỉ xuất hiện khi VOC hoặc NOx có nguồn được khai báo hoặc giá trị đo.
+
+Lamp vẫn để `environment` được comment trong `ROBOT.md` và SEN55/SCD41 tắt trong
+file JSON tương ứng, nên card này ẩn cho đến khi capability được khai báo. Xem
+[tài liệu cảm biến môi trường của Lamp](../../robots/lamp/docs/vi/environment-sensing_vi.md)
+về đấu dây, bật cảm biến và contract dữ liệu HAL.
 
 ## 6. LED Color API
 
@@ -684,11 +813,25 @@ make web-build        # tsc + vite build → system/web/dist/
 IP=172.168.20.255 make device-deploy   # hal + os-server
 IP=172.168.20.255 make hal-deploy      # chỉ hal, không cần build
 IP=172.168.20.255 make os-deploy       # cross-compile + thay binary
+
+# Vẫn các target đó nhưng đi qua SSH jump host, cho thiết bị không route tới được
+IP=10.0.0.5 J=proxy-host make hal-deploy
+IP=10.0.0.5 J=proxy-host make hal-log
 ```
 
 Chạy bằng `scripts/deploy-device.sh`. `PI_USER` mặc định `orangepi` và `PI_PASS`
 mặc định `orangepi` (cần `sshpass`); đặt `PI_PASS=""` để dùng SSH key của bạn và
 sudo tương tác. Có thể dùng `PI_HOST` thay cho `IP`.
+
+`J=<host>` (hoặc `PI_JUMP`, hoặc `--jump <host>` khi gọi thẳng script) đặt một
+`ProxyJump` trước mọi hop — `ssh`, `scp` và `rsync` đều nhận — nên
+`hal-deploy`, `os-deploy`, `device-deploy`, `hal-log` và `os-log` tới được
+thiết bị không route trực tiếp từ máy bạn. Hop đó xác thực bằng SSH key/agent
+và `~/.ssh/config` của bạn; `PI_PASS` chỉ là mật khẩu **thiết bị**, nên bastion
+đòi mật khẩu riêng sẽ không chạy tự động được. `make push-skill` dùng cùng knob
+`J=`. Cả hai thứ tự đều được: `J=... make hal-deploy` và
+`make hal-deploy J=...` — riêng `PI_PASS` phải là biến môi trường
+(`PI_PASS="" IP=... make hal-deploy`).
 
 `.env`, `.venv` và `calibration/` trên thiết bị không bao giờ bị ghi đè, và bước
 swap chạy không có `--delete`, nên các đường dẫn riêng của thiết bị (ngoài repo)
@@ -702,3 +845,16 @@ vẫn còn nguyên.
 Các target trên dành cho một thiết bị trong LAN. Để phát hành cho cả fleet, dùng
 đường OTA — `make upload-hal` rồi `make promote-hal`, vốn đánh version cho
 artifact và roll out.
+
+Kết quả cuối Harness được ghi vào flow JSONL bằng `harness_response`, giữ run ID thiết bị gốc và `text` đầy đủ. Web Chat dùng sự kiện này khôi phục kết quả đang chờ sau khi SSE ngắt hoặc tải lại trang. Luồng trực tiếp vẫn phát `chat_response` với state `final`.
+
+### Cấu trúc component Sensing
+
+`monitor/SensingSection.tsx` chỉ ghép các phần theo capability. Component nằm
+trong `monitor/sensing/`: mỗi card một file, dùng chung `CardHeader`, types và
+hàm định dạng. `useVisionSensing` poll một lần cho toàn bộ card vision;
+`useEnvironment` poll snapshot môi trường chung độc lập. Client `visionApi.ts` và
+`environmentApi.ts` quản lý request OS-server, kiểm tra response và lỗi;
+card không trực tiếp fetch. Cả hai dùng reverse proxy có xác thực
+`/api/hardware/*` sẵn có. Lỗi HTTP/response của vision hiển thị thông báo lỗi,
+không giữ màn hình loading hoặc số liệu cũ.

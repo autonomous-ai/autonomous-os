@@ -14,7 +14,7 @@ description: Tracks the USER's mood only — signals + synthesized decision from
 > - The mood value itself as a label (*"Mood: sad"*, *"Decision: happy"*).
 > - Any of the JSON / curl / timestamps from this skill.
 >
-> **Your reply text** to the user is at most ONE short caring sentence (or `NO_REPLY`). All the workflow, logging, and synthesis happen silently via tool calls — the user only hears what you would naturally say if you were truly noticing how they feel.
+> **Your reply text** to the user is at most ONE short caring sentence (or `NO_REPLY`). Synthesize silently and emit the log HW markers in that same reply — the user only hears what you would naturally say if you were truly noticing how they feel. Fetch mood history only for the missing-context fallback below.
 
 > **ALWAYS log.** `unknown` is a valid `user` value — log signals and decisions under `user: "unknown"` when `current_user` is unknown. Never skip logging because the user is unknown/unconfirmed; stranger mood still counts for Music decisions.
 
@@ -23,7 +23,7 @@ Mood is stored as two kinds of rows:
 - **`signal`** — raw evidence from one source (camera action, voice tone, telegram message). Multiple per minute is fine.
 - **`decision`** — your synthesized mood after looking at the recent signals + the previous decision. This is the row downstream skills (Music, Wellbeing) read.
 
-**You are the synthesis.** The store does not fuse anything. Every time a signal comes in, you log it raw, then immediately read recent history and append a fresh decision row.
+**You are the synthesis.** The store does not fuse anything. Every time a signal comes in, combine it with the pre-fetched recent signals and previous decision (or the history fallback below), then emit both the raw signal and a fresh decision as HW markers in the same reply. Include this turn's new signal in your synthesis even though it is not yet in the pre-fetched history; do not POST it and re-fetch history to see it appear.
 
 ---
 
@@ -154,7 +154,7 @@ curl -s -X POST http://127.0.0.1:5000/api/mood/log \
 
 On `emotion.detected` and `speech_emotion.detected` turns, `user-emotion-detection/SKILL.md` is the router — it picks one of `music / checkin / action / silent` and gates whether `music-suggestion/SKILL.md` fires this turn. Voice and camera share one cooldown and one decision row schema; the only thing that changes per modality is the `source` field on the raw signal row.
 
-When the router picks `music` (decision mood is suggestion-worthy — `sad`, `stressed`, `tired`, `excited`, `happy`, `bored` — and audio is idle, cooldown clear, decision fresh), the decision POST and the music-suggestion POST share a single write batch — do not split them across tool turns.
+When the router picks `music` (decision mood is suggestion-worthy — `sad`, `stressed`, `tired`, `excited`, `happy`, `bored` — and audio is idle, cooldown clear, decision fresh), emit the mood signal, decision, and music-suggestion log HW markers in the same reply. The runtime performs the POSTs; do not create a shell write batch or split the logs across tool turns. Keep the documented marker fallback for bodies the runtime cannot parse.
 
 Other moods (`frustrated`, `energetic`, `affectionate`, `unwell`, `normal`) take a non-music route (`checkin` / `action` / `silent` per the router table) and skip the music POST.
 

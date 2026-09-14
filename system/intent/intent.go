@@ -14,6 +14,7 @@ package intent
 
 import (
 	"log/slog"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -26,6 +27,8 @@ import (
 
 // Result holds what to do after a match: the HAL action + a TTS reply.
 type Result struct {
+	// ExecutionFailed records an error from any attempted HAL action.
+	ExecutionFailed bool
 	// TTSText is spoken back to the user via /voice/speak.
 	TTSText string
 	// LEDChanged is true when this intent sets an LED color/scene (locks ambient breathing).
@@ -84,15 +87,19 @@ func match(text string, allowChitchat bool) *Result {
 		}
 	}
 
-	t := normalize(text)
-	for _, r := range rules {
-		if !capEnabled(r.capability) {
-			continue
-		}
-		if r.match(t) {
-			res := r.exec(t)
-			res.Rule = r.name
-			return res
+	// Field order beats rule order: a rule matching the agent's summary wins
+	// over a different rule matching the noisy transcript. Within one field
+	// the table order is unchanged.
+	for _, t := range voiceFields(normalize(text)) {
+		for _, r := range rules {
+			if !capEnabled(r.capability) {
+				continue
+			}
+			if r.match(t) {
+				res := r.exec(t)
+				res.Rule = r.name
+				return res
+			}
 		}
 	}
 	return nil
@@ -172,6 +179,94 @@ func normalize(s string) string {
 	return strings.ToLower(strings.TrimSpace(s))
 }
 
+// Envelope markers HAL wraps around a delegated voice turn
+// (hal/drivers/voice/_internal/turn_dispatch.py:261).
+const (
+	instructionMarker = "[voice-instruction]"
+	transcriptMarker  = "[transcript]"
+)
+
+// Routing metadata that rides along with the turn but is nobody's speech. It
+// must be removed before matching: a snapshot path can contain a target noun as
+// a whole word — "/var/lib/hal/snapshots/sensing_face/1788839050669.jpg" holds
+// "face", which is a tracking target, between two non-word characters.
+// os-server strips these downstream (handler.go:689) but only well after the
+// intent match at handler.go:215.
+var (
+	reSnapshotTag = regexp.MustCompile(`\[snapshot:[^\]]*\]`)
+	reVisionHint  = regexp.MustCompile(`\[vision-image\][^\n]*`)
+)
+
+// voiceFields returns the texts the command rules should try, most
+// authoritative first.
+//
+// HAL emits three shapes, and which one arrives depends on the turn's ROUTE,
+// not on the conversation (turn_dispatch.py:260):
+//
+//	ROUTE_DELEGATED, model supplied a message -> "[voice-instruction] …\n[transcript] …"
+//	ROUTE_DELEGATED, no message               -> the bare transcript
+//	realtime_not_started / _unavailable /
+//	_no_output / _error                       -> "Unknown Speaker: [voice:x] … (audio saved at …)"
+//
+// So the preamble appears and disappears BETWEEN TURNS of one conversation:
+// green-lamp 2026-09-08, the first voice turn had none and the next five did.
+// The same sentence must therefore resolve the same way in all three shapes.
+//
+// The preamble goes first because skills/input-branching/SKILL.md makes it the
+// primary input — STT is locked to one language while the user may speak
+// another, so the transcript can be gibberish while the summary is clean. They
+// are returned SEPARATELY and never concatenated: matching one blob let a rule
+// take its verb from the summary and its target from the transcript, which is
+// how the 10:46:19 turn fired a command the user never gave.
+func voiceFields(s string) []string {
+	s = reSnapshotTag.ReplaceAllString(s, " ")
+	s = reVisionHint.ReplaceAllString(s, " ")
+	if i := strings.LastIndex(s, transcriptMarker); i >= 0 {
+		pre := s[:i]
+		if j := strings.Index(pre, instructionMarker); j >= 0 {
+			pre = pre[j+len(instructionMarker):]
+		}
+		return nonEmptyFields(neutralisePronouns(pre),
+			stripChitchatPrefixes(s[i+len(transcriptMarker):]))
+	}
+	return nonEmptyFields(stripChitchatPrefixes(s))
+}
+
+// narrationPronouns are the words a THIRD-PERSON summary uses that a rule must
+// not read as a target. The preamble talks ABOUT the user ("User wants lamp to
+// track their typing"), so "user" is a grammatical subject, not something to
+// point a camera at — and "me" in a summary means the LAMP, not the speaker:
+// green-lamp 2026-09-08 10:47:58 emitted "User wants to connect me with their
+// clock". Blanked only in the preamble; the transcript keeps its pronouns,
+// where "follow me" really does mean the person talking.
+//
+// Only the tracking rule reads these words today, but the fact is about the
+// field, not the rule, so it belongs here.
+var narrationPronouns = []string{"user", "users", "me", "myself", "us"}
+
+func neutralisePronouns(s string) string {
+	for _, w := range narrationPronouns {
+		for {
+			i := indexPhrase(s, w)
+			if i < 0 {
+				break
+			}
+			s = s[:i] + strings.Repeat(" ", len(w)) + s[i+len(w):]
+		}
+	}
+	return s
+}
+
+func nonEmptyFields(vals ...string) []string {
+	out := make([]string, 0, len(vals))
+	for _, v := range vals {
+		if v = strings.TrimSpace(v); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
 func anyOf(keywords ...string) func(string) bool {
 	return func(t string) bool {
 		for _, kw := range keywords {
@@ -188,17 +283,23 @@ func anyOf(keywords ...string) func(string) bool {
 // NOT match keyword "mute speaker". Boundaries are non-alphanumeric ASCII;
 // multibyte (Vietnamese/Chinese) neighbors count as boundaries, which is
 // correct since keywords are English-only.
-func containsPhrase(t, kw string) bool {
+func containsPhrase(t, kw string) bool { return indexPhrase(t, kw) >= 0 }
+
+// indexPhrase is containsPhrase with the position: it returns the index of the
+// first whole-phrase occurrence of kw in t, or -1. Tracking target selection
+// needs the position to tell an object named after the verb ("track my
+// keyboard") from a pronoun that merely appears somewhere in the sentence.
+func indexPhrase(t, kw string) int {
 	for i := 0; ; {
 		j := strings.Index(t[i:], kw)
 		if j < 0 {
-			return false
+			return -1
 		}
 		start := i + j
 		end := start + len(kw)
 		if (start == 0 || !isASCIIWordChar(t[start-1])) &&
 			(end == len(t) || !isASCIIWordChar(t[end])) {
-			return true
+			return start
 		}
 		i = start + 1
 	}
@@ -217,10 +318,12 @@ func pickRandom(opts []string) string {
 	return opts[int(time.Now().UnixNano())%len(opts)]
 }
 
-func post(path, body string) {
-	if err := hal.PostRaw(path, body); err != nil {
+func post(path, body string) error {
+	err := hal.PostRaw(path, body)
+	if err != nil {
 		slog.Warn("[intent] hal call failed", "path", path, "error", err)
 	}
+	return err
 }
 
 // postEmotion drives an emotion expression, but only on a body that can show one
@@ -228,8 +331,9 @@ func post(path, body string) {
 // through). Emotion is cross-cutting (fired as a flourish by several command/
 // chitchat rules), so the guard lives here rather than on each rule's capability.
 // Fail-open via capEnabled.
-func postEmotion(body string) {
+func postEmotion(body string) error {
 	if capEnabled(device.CapExpression) {
-		post("/emotion", body)
+		return post("/emotion", body)
 	}
+	return nil
 }

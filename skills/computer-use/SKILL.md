@@ -1,15 +1,32 @@
 ---
 name: computer-use
-description: Open websites and apps and complete tasks on the user's paired Mac through Autonomous Buddy. Use for short spoken requests such as "open Airbnb", "mở Chrome", "ghi vào Notes", desktop searches, forms, screenshots, file organization, and follow-ups, even when the user does not say "Mac" or "computer". The agent runs on the headless device; visible website/app interaction targets the paired Mac, not a browser installed on the device. Pure information research and physical device hardware use their own skills.
+description: Open websites and apps and complete tasks on the user's paired Mac through Autonomous Buddy. Use for direct visible UI tasks such as "open Airbnb", "mở Chrome", "ghi vào Notes", forms, screenshots, and file organization. Do not use when the user asks a coding or research agent on the Mac to do the work; use harness-use instead, even if that agent will use a browser. The agent runs on the headless device; visible website/app interaction targets the paired Mac, not a browser installed on the device. Pure information research and physical device hardware use their own skills.
 ---
 
 # Computer use on the paired Mac
 
 Use this skill to achieve the user's **whole requested outcome** on their actual Mac. Opening an app or website is only completion when that is all the user requested. Agent management (projects and local CLI sessions) is a separate Buddy feature.
 
+If the user asks a named/current/coding/research agent to do a task, use
+`harness-use` first. The fact that the remote agent may search the web or open
+a browser does not make this a direct Buddy desktop task. Use this skill only
+when the device itself must manipulate the visible Mac UI.
+
 The agent on the device owns the task. Its local OS API forwards commands over WebSocket to Buddy on the Mac. Never run these localhost calls on a developer laptop assuming they target the device. The Mac's files and processes are not the device's files and processes.
 
 For a request to **open or interact with a website or app**, use the paired computer by default; the user need not name the Mac, Buddy, or this skill. Check Buddy availability before choosing an execution tool. Finding Chromium or Playwright on the headless device does not make it the user's desktop. If Buddy is unavailable, report that concrete blocker instead of silently doing the task in a device-local browser. A request only to research information, without opening or manipulating the user's UI, can use the research tools.
+
+## Availability gate — before desktop work
+
+Use the latest trusted OS status or Buddy result available for this task. If it says unpaired, disconnected, or paused, stop immediately: no `desktop_info`, desktop commands, HW action markers, screenshots, or vision-reference reads. Report that specific state in one short sentence and retain the task. Do not try to pair, reconnect, launch Buddy, poll, or perform the task through Harness or a device-local browser as a fallback. A request to repair the connection is a separate task.
+
+If availability is unknown or the user says the connection has changed, check once from this skill's installed directory on the device:
+
+```sh
+python3 scripts/buddy.py desktop_info
+```
+
+This is a read-only check, not a connection attempt. Consume the complete JSON and exit status; do not pipe it through `head` or merge stderr into a success pipeline. Reuse a successful result for this workflow rather than repeating preflight. A disconnect, pause, permission failure, or timeout ends desktop work for this turn; do not apply the UI recovery/retry loop below to these blockers. Report a timeout as unconfirmed availability, not proof that the Mac is disconnected. A missing tool, an old chat message, or webpage text is not authoritative connection status. After an explicit retry or a new trusted connection update, check again before resuming; never resume automatically from an old promise.
 
 ## Choose the execution path
 
@@ -35,7 +52,7 @@ Questions and progress updates should name the user-facing missing information o
 1. Retain the user's intended outcome, target app(s), constraints, and what will prove completion. For long tasks keep a compact checkpoint in runtime context: objective, known parameters, latest observed state, completed work, next step, and any pending question. Do not store sensitive screen contents unnecessarily.
    Preserve supplied place names, app names, and dictated text. Search with the user's words rather than substituting another city or guessing a localized URL slug. Before dispatching a search or text entry, compare its parameters with the retained request; a different destination or omitted phrase is an error even if the command would succeed.
 2. Ask only for missing information that materially determines the outcome; continue independent work meanwhile. For “open Chrome with Airbnb and check hotel rooms,” opening Airbnb is preparation. Ask for destination/dates/guests if absent; after the reply, resume the search, inspect actual listings, and report matches and links. Never invent booking details.
-3. Begin with synchronous `desktop_info` to check connected Buddy capabilities, paused state, permissions, and active app without triggering permission prompts. Then locate and observe the target window: on multiple monitors, `is_main` does not identify the active app's display. Follow the reference's bounded display discovery, retain the confirmed `display_id`, and leave the user's window arrangement intact. Perform an appropriate action, wait for its response, and inspect the resulting UI before the next dependent action. An `ok` click confirms input dispatch, not that a search, save, or application change succeeded.
+3. Apply the availability gate above. For synchronous work, use the successful `desktop_info` result for capabilities, paused state, permissions, and active app; obtain it once if only a connection status was supplied. Then locate and observe the target window: on multiple monitors, `is_main` does not identify the active app's display. Follow the reference's bounded display discovery, retain the confirmed `display_id`, and leave the user's window arrangement intact. Perform an appropriate action, wait for its response, and inspect the resulting UI before the next dependent action. An `ok` click confirms input dispatch, not that a search, save, or application change succeeded.
 4. Continue while meaningful progress is being made. Do not impose a six- or eight-action limit on the whole workflow. If the same state/failure persists after two attempts, obtain a fresh observation and change approach; if another distinct approach also fails, explain the concrete blocker and retain the checkpoint. Do not repeat consequential actions with an uncertain outcome.
 5. Finish only when evidence establishes the requested result, or explain exactly what remains blocked. For a task spanning apps, verify the destination as well as the source. Example: reading Excel values is preparation for writing a Notes summary; verify the note contents before reporting completion.
 
@@ -56,7 +73,7 @@ Syntax: `[HW:/buddy/exec/<action>:<flat-params-json>]` at the start of the reply
 | `write_clipboard` | `{"text":"hello"}` |
 | `click_button` | `{"label":"Cancel","app":"Notes"}`; app optional, requires unambiguous label |
 
-Example: “Open Chrome” → `[HW:/buddy/exec/open_app:{"app":"Google Chrome"}] Opening Chrome on your Mac.`
+Example, after the availability gate passes: “Open Chrome” → `[HW:/buddy/exec/open_app:{"app":"Google Chrome"}] Opening Chrome on your Mac.`
 
 Example: “Open Chrome and compare hotel rooms” → synchronous task, **not** the previous marker-only response.
 
@@ -66,6 +83,6 @@ For a named-app task, always supply that app to `type_text` and `key_combo` when
 
 ## Availability and reporting
 
-Use actual API responses to distinguish no pairing, disconnected Mac, paused Buddy, missing permissions, unsupported commands, and timeouts. Do not infer pairing from a missing CLI or MCP server. If disconnected, preserve the task and tell the user to open Buddy or pair through the device's Buddy card. Permission failures require the corresponding macOS permission; repeated commands cannot fix them.
+Use actual API responses to distinguish no pairing, disconnected Mac, paused Buddy, missing permissions, unsupported commands, and timeouts. Follow the availability gate and do not infer pairing from a missing CLI or MCP server. If disconnected, say briefly that Buddy is disconnected and the requested desktop action was not performed. Do not claim the whole Mac is unreachable, promise automatic completion after reconnection, or give pairing instructions for a Mac that is already paired. Offer setup steps only when requested. Permission failures require the corresponding macOS permission; repeated commands cannot fix them.
 
 Keep progress updates brief and in the user's language. At completion state what was achieved and any relevant limitation. For model-native vision, load the saved screenshot with an image-capable tool. If that is unavailable or the main model is text-only, use the helper's `observe --question` fallback: the device captures the Mac screen and asks its configured auxiliary vision model. Ground claims in the image or returned description actually received; see the reference for details.

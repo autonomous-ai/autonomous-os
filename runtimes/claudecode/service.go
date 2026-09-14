@@ -304,6 +304,7 @@ func (s *ClaudeCodeService) IsRecentOutboundChat(text string) bool {
 }
 
 type pendingRun struct {
+	sent  bool // Telemetry only: the outbound frame write succeeded.
 	reqID string
 	runID string
 }

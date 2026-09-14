@@ -327,6 +327,8 @@ tốc độ gửi đi trong `0.7–1.2`.
 | Kind | Mục đích | Field trong `data` |
 |------|----------|--------------------|
 | `buddy.pair.start` | Cấp mã pair Buddy 6 số, dùng một lần, hết hạn sau 60s | _(không; bỏ qua `data` tùy chọn)_ |
+| `buddy.pair.revoke` | Thu hồi pairing Buddy hiện tại và ngắt WebSocket | _(không; bỏ qua `data` tùy chọn)_ |
+| `buddy.status` | Đọc snapshot pairing/kết nối Buddy; cũng tự phát khi thay đổi | _(không có; `data` tùy chọn được bỏ qua)_ |
 | `tts.set` | Lưu cấu hình TTS voice/provider/language/speed | `provider`, `voice`, `language`, `speed` (tùy chọn) |
 | `tts.preview` | Preview TTS một lần (không ghi config) | `text` (bắt buộc), tùy chọn `provider`/`voice`/`language` |
 | `wakeword.gate` | Bật/tắt wake-word gate top-level (bất đồng bộ; ack `starting`) | `enabled` (boolean bắt buộc) |
@@ -343,6 +345,7 @@ tốc độ gửi đi trong `0.7–1.2`.
 | `chat.send` | Mở một turn của agent từ backend rồi stream ngược về (ack một run id, sau đó bắn `chat.event`) | `message` (bắt buộc), tuỳ chọn `images[]`/`files[]`/`session_id`/`speak` |
 | `skills.save` | Ghi một skill soạn sẵn vào thư mục skill của runtime đang chạy (đồng bộ) | `name`, `description`, `instructions` |
 | `skills.upload` | Cài một file `.md`, `.zip`, hoặc `.skill` vào runtime đang chạy (đồng bộ) | `filename`, `content_base64` |
+| `environment.status` | Đọc snapshot môi trường HAL theo capability, không phụ thuộc model cảm biến | _(không)_ |
 | `system.info` | Snapshot tổng hợp: versions + network + host | _(không)_ |
 | `system.version` | Chỉ versions các thành phần (rẻ hơn `system.info`) | _(không)_ |
 | `system.network` | Chỉ thông tin mạng của interface đang giữ default route | _(không)_ |
@@ -355,6 +358,49 @@ lệnh dùng chung single-flight guard của os-server: khi đã có power actio
 chờ, thiết bị publish thêm phản hồi cuối `status:"failure"` kèm lý do. Lệnh gọi
 action đầy đủ của HAL, không chạy lệnh OS trần: reboot phát cue; shutdown phát
 cue và release servo.
+
+Request/reply này không tạo event cho agent. Worker OS riêng xử lý thay đổi
+kéo dài; xem [cảm biến môi trường Lamp](../../robots/lamp/docs/vi/environment-sensing_vi.md#chính-sách-thay-đổi-của-os-và-api-cho-agent).
+
+Snapshot chung hỗ trợ SEN55 + SCD41 hoặc SEN63C mà không thêm MQTT kind.
+Cờ `enabled` trong JSON từng component điều khiển thu nhận, không cần danh sách
+chọn. `sample` luôn có chín key chỉ số nullable và timestamp nullable. Số đo
+thiếu, tắt hay chưa khả dụng là null; SEN63C không có VOC/NOx.
+`components` giữ status/lỗi/timing/sample riêng,
+`sources` ánh xạ chỉ số đến component, `metric_timestamps` chứa thời điểm đo
+của từng chỉ số. Nhóm `ready` nghĩa là ít nhất một số đo còn mới; `partial`
+báo component đang bật nhưng không khả dụng. Kiểm tra từng nguồn, không dùng
+timestamp mới nhất của nhóm làm tuổi mọi chỉ số. Một sensor lỗi không loại
+số đo còn tốt. Thiếu CO₂ không tạo giá trị suy diễn.
+
+**`environment.status`:** gửi trên `fa_channel`:
+
+```json
+{"cmd":"data","kind":"environment.status","data":{}}
+```
+
+OS kiểm tra device có khai báo capability `environment`, không kiểm tra SEN55
+hay model phần cứng. Sau đó đọc HAL local `GET /environment/status` với timeout
+5 giây và trả nguyên snapshot JSON trong `data` trên `fd_channel`. Phản hồi dùng
+`MQTTDataResponse` chuẩn; ví dụ dưới lược bỏ metadata device/version/id/mac/time:
+
+```json
+{"type":"data","kind":"environment.status","status":"success","data":{"enabled":false,"state":"disabled","last_error":null,"sample":{"pm1_0_ug_m3":null,"pm2_5_ug_m3":null,"pm4_0_ug_m3":null,"pm10_ug_m3":null,"temperature_c":null,"humidity_pct":null,"voc_index":null,"nox_index":null,"co2_ppm":null,"timestamp":null},"age_s":null,"stale":true,"sources":{},"metric_timestamps":{}}}
+```
+
+Snapshot có thể kèm `timing` và các trường do HAL cung cấp. `success` nghĩa là
+đọc được snapshot hợp lệ, kể cả sensor đang tắt, lỗi hoặc dữ liệu cũ. Client phải
+kiểm tra `data.state`, `data.stale`, `data.sample` và `data.last_error` trước khi
+hiển thị số đo. Thiếu capability trả:
+
+```json
+{"type":"data","kind":"environment.status","status":"failure","error":"environment capability not declared"}
+```
+
+Lỗi kết nối HAL, HTTP khác 200 hoặc status JSON không hợp lệ cũng trả `failure`
+kèm `error`. Chỉ trả khi có request, không có subscription, stream liên tục,
+event hay gọi agent. Response giữ cùng `kind`; protocol hiện tại không thêm
+request ID. Mobile dùng broker credentials và topic ACL hiện có của device.
 
 **Phản hồi `system.info`:** đồng bộ (không có trạng thái `starting` trung gian); mỗi
 probe lỗi sẽ rơi về zero value của nó.
@@ -477,6 +523,14 @@ một MCP server stdio cục bộ (`{command:"node", args:[wrapper], env:{FIGMA_
 với script Node wrapper được ghi ra đĩa trước khi ghi entry. Code của writer đặc biệt
 bị loại (`reserved`) khỏi vòng quét refresh của writer chung để nó không ghi đè chúng
 ở dạng sai (HTTP).
+
+**Hết hạn:** `expires_in` (số giây kể từ bây giờ) được lưu thành `expires_at` tuyệt
+đối. Credential không bao giờ hết hạn — app password hoặc API key tĩnh
+(`auth_type:"pat"`, hoặc payload có `api_key` mà không có `access_token`) — được lưu
+`expires_at: 0` khi backend không gửi thông tin hết hạn, thay vì mặc định 1 giờ của
+OAuth. Không có gì xoay vòng loại credential này (loop refresh bỏ qua
+`expires_at == 0`), nên một hạn dùng bịa ra sẽ khiến nó bị coi là hết hạn vĩnh viễn
+sau một tiếng kể từ lúc lưu.
 
 **Refresh:** loop refresh quét writer chung (glob `*_access_tokens.json`) cùng từng
 writer đặc biệt, và chủ động xoay vòng entry nào có CẢ `refresh_token` LẪN
@@ -786,6 +840,8 @@ không biến kết quả upload thành thất bại.
 
 #### `chat.send` + `chat.event`
 
+Sentinel nội bộ `NO_REPLY` dùng khi chuyển tiếp sẽ được loại khỏi `chat.event`; client sẽ nhận tiến trình Harness và phản hồi cuối cùng.
+
 Cho phép backend (và qua đó là app mobile) giữ **đúng cuộc hội thoại mà chat trên
 web monitor đang giữ**. Chat web gồm 2 nửa — `POST /api/sensing/event` với
 `type:"web_chat"` để mở turn (đường này forward y như `type:"mqtt_chat"`), và
@@ -954,6 +1010,47 @@ backend một chiều dưới dạng `type:"voice"`, nên device đọc to câu 
 không có gì quay về. Nó không thể làm nền cho một UI chat; cặp kind này thay nó ở
 mục đích đó.
 
+### `harness.voice-mode.get` / `harness.voice-mode.set` — Giọng nói Harness-only
+
+**Nhận trên `fa_channel`:**
+```json
+{"cmd":"data","kind":"harness.voice-mode.get"}
+{"cmd":"data","kind":"harness.voice-mode.set","data":{"enabled":true}}
+{"cmd":"data","kind":"harness.voice-mode.set","data":{"enabled":false}}
+```
+
+`get` không cần `data`, đọc trạng thái giọng nói chung đang cache mà không gọi
+Harness. `set` bắt buộc nhận object chỉ chứa `enabled` kiểu JSON boolean;
+thiếu giá trị, null, chuỗi hoặc field thừa như `agentId` đều bị từ chối.
+Lệnh đặt giá trị rõ ràng, không đảo trạng thái: gửi lại cùng giá trị không đổi
+generation định tuyến và không ngắt capture khác.
+
+Cả hai lệnh phản hồi trên `fd_channel` bằng metadata `MQTTDataResponse` chuẩn,
+`type:"data"`, cùng `kind` với request và snapshot giống
+`GET /api/harness/voice-mode` (lược bỏ metadata thiết bị trong ví dụ):
+```json
+{"type":"data","kind":"harness.voice-mode.set","status":"success","data":{"enabled":true,"generation":1789350000000000,"machineId":"computer-id","agentId":"agent-id","agentName":"Mike","focusRevision":"instance:3","focusAvailable":true}}
+```
+
+Snapshot là `{enabled,generation,machineId,agentId,agentName?,focusRevision,focusAvailable,pending?,error?}`.
+Khi focus chưa khả dụng, snapshot có thể chứa `focusAvailable:false` và
+`error` dù lệnh thành công. Input không hợp lệ hoặc controller không khả dụng
+trả `status:"failure"` cùng field `error` của envelope.
+Không có push MQTT tự phát cho trạng thái voice; client gọi `get` sau khi
+subscribe, reconnect hoặc khi cần refresh trạng thái hiện tại.
+
+MQTT dùng cùng controller trong RAM với HTTP, Monitor và HAL. Cờ mặc định tắt
+sau khi service khởi động lại. Được phép đặt cờ khi offline hoặc thiếu focus;
+delivery giọng nói vẫn cần agent được chọn trong app Harness. Các lệnh này
+không chọn agent và không đổi routing của MQTT/Web chat dạng text hay skill.
+Tắt mode giữ nguyên task đã gửi cùng đường output của task đó.
+`harness.pair.revoke` cũng tắt mode, giống unpair qua HTTP.
+Xem [chế độ giọng nói Harness](harness_vi.md#chế-độ-giọng-nói-harness-only).
+
+Phân quyền dùng credentials broker và ACL topic lệnh của thiết bị hiện có;
+bên publish phải có quyền với thiết bị đó. Không thêm MQTT topic, credential
+hay transport Harness mới.
+
 ### `buddy.pair.start` — Cấp mã pair Buddy
 
 **Nhận trên `fa_channel`:**
@@ -974,8 +1071,74 @@ Khi lỗi, phản hồi dùng các field chuẩn `status:"failure"` và `error`.
 
 Phân quyền MQTT dựa trên credentials của broker và ACL của topic hiện có;
 backend phải kiểm tra quyền chủ sở hữu thiết bị trước khi publish yêu cầu.
-Xác nhận vẫn dùng `POST /api/buddy/pair/confirm` qua LAN. Không bổ sung lệnh
-MQTT để xác nhận, xem trạng thái hoặc thu hồi pairing.
+Xác nhận vẫn dùng `POST /api/buddy/pair/confirm` qua LAN; MQTT không xác nhận
+pairing. Query và thông báo thay đổi dùng `buddy.status` bên dưới.
+
+### `buddy.pair.revoke` — Thu hồi pairing Buddy
+
+**Nhận trên `fa_channel`:**
+```json
+{"cmd":"data","kind":"buddy.pair.revoke","data":{}}
+```
+
+`data` là tùy chọn và được bỏ qua. Phản hồi đồng bộ trên `fd_channel` dùng
+`MQTTDataResponse`, gồm metadata device/version/id/mac/time chuẩn cộng với:
+```json
+{"type":"data","kind":"buddy.pair.revoke","status":"success","data":{"revoked":true}}
+```
+
+Lệnh gọi `buddy.Service.Unpair`, cùng thao tác với `DELETE /api/buddy`:
+đóng WebSocket đang hoạt động, xóa pairing hiện tại và dữ liệu pairing đã lưu,
+đồng thời vô hiệu hóa token đã pair. Gọi lại khi chưa có pairing cũng thành công.
+Mã pairing đang chờ không bị hủy.
+
+Khi lỗi, gồm Buddy service không khả dụng hoặc không lưu được việc xóa pairing,
+phản hồi dùng các field chuẩn `status:"failure"` và `error`.
+Phân quyền MQTT dựa trên credentials của broker và ACL của topic hiện có;
+backend phải kiểm tra quyền chủ sở hữu thiết bị trước khi publish yêu cầu.
+
+### `buddy.status` — Đọc và theo dõi trạng thái Buddy
+
+**Nhận trên `fa_channel`:**
+```json
+{"cmd":"data","kind":"buddy.status","data":{}}
+```
+
+`data` là tùy chọn và được bỏ qua. Phản hồi query và thông báo trạng thái tự phát
+cùng dùng envelope `MQTTDataResponse` chuẩn trên `fd_channel` (lược bỏ metadata
+thiết bị trong ví dụ):
+```json
+{"type":"data","kind":"buddy.status","status":"success","data":{"paired":true,"connected":false,"instance_id":"service-instance-id","revision":1,"buddy_id":"buddy-id","name":"Leo’s Mac","os_version":"15.0","paired_at":"2026-09-08T10:00:00Z"}}
+```
+
+Snapshot chưa pair chỉ có `paired:false`, `connected:false`, `instance_id` và
+`revision`. `buddy_id`, `name`, `os_version`, `paired_at` dạng RFC3339 mô tả Mac
+đã pair và bị bỏ khi chưa pair (chuỗi tùy chọn rỗng cũng bị bỏ). Không có token,
+mã pairing hoặc fingerprint. `paired` nghĩa là có pairing đã lưu; `connected`
+nghĩa là WebSocket của Mac đó đang hoạt động. Mac ngắt kết nối hoặc pause vẫn
+còn paired.
+
+`instance_id` đổi mỗi lần Buddy service khởi động lại. `revision` là số nguyên
+không dấu 64 bit, bắt đầu từ 0 và tăng sau khi pair, revoke, kết nối WebSocket
+hoặc ngắt kết nối hiện tại thành công. Chỉ so revision trong cùng instance:
+bỏ bản trùng và revision thấp hơn; instance mới bắt đầu chuỗi trạng thái mới.
+Query không tăng revision.
+
+Service phát snapshot lúc khởi động và phát bất đồng bộ khi trạng thái đổi,
+gồm HTTP confirm, revoke qua HTTP/MQTT và Buddy tự revoke. Queue có giới hạn,
+gộp thay đổi đang chờ thành trạng thái mới nhất; đây là đồng bộ trạng thái,
+không bảo đảm lịch sử mọi bước chuyển. Publish FD dùng QoS 1, không retain.
+Lỗi publish chỉ log rồi bỏ, không hoàn tác pairing; client phải query sau khi
+subscribe, reconnect hoặc resume. Status có thể đến trước phản hồi lệnh
+pair/revoke. Query khi service không khả dụng trả `status:"failure"` cùng `error`.
+
+**Mobile MQTT trực tiếp:** dùng cấu hình broker và ACL topic sẵn có của thiết bị,
+client ID riêng duy nhất cho app (không dùng client ID của device). Subscribe
+`fd_channel` của thiết bị, chờ SUBACK rồi publish `buddy.status` hoặc các lệnh
+`buddy.pair.start` / `buddy.pair.revoke` hiện có lên `fa_channel`. Không cần sửa
+BFF. Cần kiểm chứng ACL và khả năng truy cập broker từ mạng mobile trên triển
+khai thật. Luồng phục vụ app foreground đang kết nối, không phải push notification
+khi app đã đóng. Xem [prompt bàn giao mobile](../buddy-mobile-handoff_vi.md).
 
 ### `ota` — Trigger OTA update
 
@@ -1019,3 +1182,7 @@ Xử lý bởi bootstrap worker, không qua MQTT handler trực tiếp.
 | `runtimes/openclaw/pairing.go` | WhatsApp Baileys QR pairing subprocess driver |
 | `system/domain/device.go` | MQTTMessage, command constants |
 | `system/domain/pairing.go` | PairingEvent + status enum |
+
+Khi không có lượt chuyển tiếp Harness đang chờ, `NO_REPLY` kết thúc được gửi thành `chat_response` với `state: final`, summary và message assistant rỗng. Mobile kết thúc trạng thái chờ mà không hiển thị sentinel nội bộ.
+
+MQTT coi mọi phản hồi final của Harness là kết thúc bất kể câu chữ; handler agent dùng chung chặn lời chuyển giao dựa trên đúng run ID.

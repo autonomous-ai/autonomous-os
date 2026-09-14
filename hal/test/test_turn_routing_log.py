@@ -77,6 +77,29 @@ def test_delegated_turn_is_labelled_as_such(caplog):
     assert "main agent" in lines[0]
 
 
+def test_delegated_tool_call_reaches_main_without_local_transcript(caplog):
+    """A tool call is usable even when local STT has not finalized yet."""
+    sender = _Sender()
+    with caplog.at_level(logging.INFO, logger="hal.voice"):
+        dispatch_turn(
+            _Decorator(),
+            sender,
+            "",
+            [],
+            [],
+            RealtimeTurnResult(
+                delegated=True,
+                delegate_msg="Ask agent temp in Harness for restaurants in Hanoi",
+                route=ROUTE_DELEGATED,
+            ),
+        )
+
+    assert sender.sent == [
+        ("[voice-instruction] Ask agent temp in Harness for restaurants in Hanoi", "voice")
+    ]
+    assert any("main agent" in record.getMessage() for record in caplog.records)
+
+
 def test_handled_turn_does_not_claim_the_main_agent_answers(caplog):
     lines = _dispatch(
         RealtimeTurnResult(handled=True, transcript="sure", route=ROUTE_HANDLED),

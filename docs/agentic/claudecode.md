@@ -139,7 +139,8 @@ no python3/websockets dependency) that:
   `bridge.error` so os-server closes the run instead of waiting out the busy
   TTL; `session.new` restarts the child **without** `--resume`;
 - queues `message.send` frames that arrive while the child is down and flushes
-  them on respawn.
+  them on respawn; on gateway shutdown it waits for the child loop to reap the
+  Claude process group before releasing runtime state.
 
 ### Security boundary: root, unsandboxed Claude execution
 

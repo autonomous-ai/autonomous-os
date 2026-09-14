@@ -174,3 +174,10 @@ same rule: **names are forever.**
 
 This is the Autonomous equivalent of the Linux syscall ABI / Android API level — the
 contract facing devices and skills is stable; the drivers behind it churn freely.
+
+## Network-controlled bodies
+
+A profile may describe a robot whose firmware stays on a microcontroller while
+OS and HAL run on a separate host. See the [Wi-Fi body integration pattern](WIFI-BODY.md)
+and its [Vietnamese version](vi/WIFI-BODY_vi.md) for driver ownership, host
+selection, the experimental Stack-chan example, and qualification boundaries.

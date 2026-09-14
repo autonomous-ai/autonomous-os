@@ -21,6 +21,7 @@ from typing import Optional
 import numpy as np
 
 from hal.drivers.voice import aec
+from hal.drivers.voice.tts.resampler import PCMResampler
 from hal.drivers.voice.tts.backend import (
     TTSBackend,
     TTS_SAMPLE_RATE,
@@ -74,6 +75,10 @@ TTS_WRITE_STALL_S = 8.0
 # lost the GIL mid-utterance to be audible as stutter. 40ms cuts that 4x and
 # still paces the reference far finer than AEC_REF_MS (500ms) of buffer.
 TTS_REF_SLICE_S = 0.040
+# Leave three slices of scheduling headroom for blocking playback plus AEC.
+# A device's "high" default can be only ~43ms, barely one 40ms slice. Preserve
+# larger defaults (notably Bluetooth); PortAudio may round the requested value.
+TTS_OUTPUT_LATENCY_S = 0.120
 
 
 class _WatchedStream:
@@ -85,9 +90,29 @@ class _WatchedStream:
     def __init__(self, stream, owner):
         self._stream = stream
         self._owner = owner
+        self._underflows = 0
+        self._last_underflow_log = float("-inf")
+        self._last_write_end = None
+        self._last_reference_s = 0.0
+
+    def _note_underflow(self, started: float) -> None:
+        # Idle keepalive deliberately lets the sink run dry between writes.
+        # The first write after idle is not evidence of a glitch within speech.
+        if not getattr(self._owner, "_audio_written_fired", False):
+            logger.debug("TTS output underflow at playback boundary (may follow idle)")
+            return
+        self._underflows += 1
+        if started - self._last_underflow_log < 5.0:
+            return
+        self._last_underflow_log = started
+        gap_ms = 0.0 if self._last_write_end is None else (started - self._last_write_end) * 1000
+        logger.warning(
+            "TTS output underflow during playback (total=%d, writer_gap_ms=%.1f, "
+            "previous_aec_ms=%.1f) — speaker ran out of samples",
+            self._underflows, gap_ms, self._last_reference_s * 1000,
+        )
 
     def write(self, data, *, track_playback: bool = True):
-        self._owner._write_started_ts = time.monotonic()
         # Echo reference, paced to PLAYBACK, not to synthesis.
         #
         # Covers synthesized speech, the queue drain and realtime native audio,
@@ -108,6 +133,11 @@ class _WatchedStream:
         # at 500): a bigger buffer lets the reference run further ahead of the
         # speaker, so the misalignment grows instead of the coverage.
         rate = self._owner._stream_rate
+        if not getattr(self._owner, "_audio_written_fired", False):
+            # Importing SciPy/designing the first FIR after the first 40ms of
+            # speech has reached the device can drain even a larger buffer.
+            # Pay that cold-start cost before handing any speech to the sink.
+            aec.prepare_reference(rate)
         # Slice the caller's own object so an ndarray stays an ndarray (its
         # dtype is what tells the device how to read the samples); len() is
         # frames for an ndarray and bytes for a buffer, hence the two steps.
@@ -119,15 +149,21 @@ class _WatchedStream:
             total = 0
         if total == 0:
             try:
+                self._owner._write_started_ts = time.monotonic()
                 return self._stream.write(data)
             finally:
                 self._owner._write_started_ts = None
         try:
-            result = None
+            result = False
             for off in range(0, total, step):
+                stop_event = getattr(self._owner, "_stop_event", None)
+                if track_playback and stop_event is not None and stop_event.is_set():
+                    return result
                 chunk = data[off:off + step]
+                started = time.monotonic()
+                self._owner._write_started_ts = started
                 try:
-                    result = self._stream.write(chunk)
+                    underflowed = self._stream.write(chunk)
                 except self._owner._sd.PortAudioError:
                     # Someone tore this stream down while we were mid-write:
                     # the stall watchdog aborting it, stop()/barge-in, or
@@ -146,6 +182,15 @@ class _WatchedStream:
                         off, total,
                     )
                     return result
+                write_end = time.monotonic()
+                self._owner._write_started_ts = None
+                if underflowed:
+                    # PortAudio reports xruns as a boolean, not an exception.
+                    # Keep flags from EVERY slice; later successful writes must
+                    # not erase the evidence of a gap earlier in this call.
+                    result = True
+                    self._note_underflow(started)
+                self._last_write_end = write_end
                 # This is the one place every playback reaches the device —
                 # synthesized speech, the queue drain, cached WAVs and realtime
                 # native audio all pass through here. Measuring at the write
@@ -153,10 +198,10 @@ class _WatchedStream:
                 # playback path cannot silently escape the metrics.
                 if track_playback:
                     self._owner._note_audio_written()
-                # Re-stamp per slice: the stall watchdog times ONE blocking
-                # write, and a long block is now many short ones.
-                self._owner._write_started_ts = time.monotonic()
+                # The watchdog monitors device writes, not DSP between writes.
+                reference_start = time.monotonic()
                 aec.reference_write(chunk, rate)
+                self._last_reference_s = time.monotonic() - reference_start
             return result
         finally:
             self._owner._write_started_ts = None
@@ -318,6 +363,18 @@ class TTSService:
         # output rate, resampled to the device stream rate per frame.
         self._native_mode: bool = False
         self._native_src_rate: int = 0
+        # Whether the output stream is open AT the model's rate (no resampling)
+        # and, when it is not, the streaming resampler's carry + read position.
+        self._native_direct: bool = False
+        self._native_rs_carry = None
+        self._native_rs_pos: float = 0.0
+        # Whether this device accepts a given model rate, keyed (device, rate).
+        # Asking costs a close + reopen of the PERSISTENT stream, which exists
+        # precisely to avoid a multi-second codec warmup — so ask once, not once
+        # per reply. Device-observed 2026-09-07 on intern-v2-6286: the ES8389
+        # refuses 24 kHz with PaErrorCode -9999, and retrying it every reply
+        # churned the stream each time.
+        self._native_direct_cache: dict = {}
 
         # Whether the CURRENT speech should be fed back to the realtime voice
         # agent as [TTS HISTORY] (via the on_speak_end hook in VoiceService).
@@ -397,17 +454,27 @@ class TTSService:
         # the whole process. One failed write is recoverable; SIGABRT is not.
         from hal.drivers.audio_route import stream_open_guard
 
+        latency = TTS_OUTPUT_LATENCY_S
+        try:
+            info = self._sd.query_devices(self._output_device, "output")
+            latency = max(latency, float(info["default_high_output_latency"]))
+        except Exception:
+            logger.debug("Output latency query failed; using %.3fs", latency, exc_info=True)
         with stream_open_guard():
             stream = self._sd.OutputStream(
                 samplerate=dst_rate,
                 channels=TTS_CHANNELS,
                 dtype="float32",
                 device=self._output_device,
+                latency=latency,
             )
             stream.start()
         self._stream = _WatchedStream(stream, self)
         self._stream_rate = dst_rate
-        logger.info("Persistent OutputStream opened at %d Hz", dst_rate)
+        logger.info(
+            "Persistent OutputStream opened at %d Hz (requested_latency=%.3fs, actual_latency=%s)",
+            dst_rate, latency, stream.latency,
+        )
         return self._stream
 
     def _invalidate_stream(self):
@@ -643,6 +710,35 @@ class TTSService:
         that produced it (see hal/telemetry/voice_metrics.py)."""
         return self._latest_queue_turn_id
 
+    def set_native_playback_owner(self, owner: str) -> None:
+        """Re-arm measurement for a native segment without touching playback."""
+        try:
+            if self._on_playback_done:
+                self._on_playback_done()
+            self._begin_playback(owner)
+        except Exception:
+            logger.exception("native playback ownership observation failed")
+
+    def has_pending_speech(self, owner: str) -> bool:
+        """Observe owned synthesis/queue work, including gaps before first audio.
+
+        Used only by live suppression measurement; a completed model response
+        can still have speech waiting to drain after its terminal event.
+        """
+        try:
+            if not owner or self._stop_event.is_set():
+                return False
+            with self._pending_queue_lock:
+                return bool(
+                    (self._speaking and owner in (
+                        self._playback_owner, getattr(self, "_pending_playback_owner", ""),
+                    ))
+                    or any(item.owner == owner for item in self._pending_queue)
+                )
+        except Exception:
+            logger.exception("pending speech observation failed")
+            return False
+
     @property
     def last_spoken_text(self) -> str:
         """Last text sent to TTS (for echo cancellation transcript filtering)."""
@@ -792,9 +888,9 @@ class TTSService:
         Lazy import avoids an app_state import cycle (app_state holds the
         TTSService instance)."""
         try:
-            from hal import app_state
+            from hal import app_state, privacy
 
-            return app_state._speaker_muted
+            return app_state._speaker_muted or privacy.speaker_muted
         except Exception:
             return False
 
@@ -932,18 +1028,13 @@ class TTSService:
         # dropped, so it cannot append itself after the replacement turn.
         with self._queue_request_lock:
             preempted = False
+
+            logger.info(
+                "speak_queue: turn_id=%r turn_seq=%r text=%r",
+                turn_id, turn_seq, text[:60],
+            )
+
             if turn_id and turn_seq:
-                # The counter lives in os-server; this threshold lives here.
-                # They restart independently, so a deploy/OTA/crash restarts the
-                # count at 1 while this process still holds the old high-water
-                # mark — and every turn of the new session looks like a late
-                # arrival from the past. Device-observed 03/09/2026: seq=1 against
-                # latest_seq=40 silenced the wake greeting (LED and servo ran, no
-                # sound), and would have stayed silent for the next 39 turns.
-                #
-                # The run id carries its creation time, so wall-clock decides
-                # when the counter itself is untrustworthy: a turn created LATER
-                # than the one holding the speaker is newer, whatever its seq.
                 if self._counter_restarted(turn_id, turn_seq):
                     logger.warning(
                         "TTS turn counter restarted (turn_id=%s seq=%d <= latest_id=%s "
@@ -1100,12 +1191,15 @@ class TTSService:
                 if not self._pending_queue:
                     break
                 item = self._pending_queue.pop(0)
+                self._pending_playback_owner = item.owner
             try:
                 first = item.frame_queue.get(timeout=15.0)
             except queue.Empty:
+                self._pending_playback_owner = ""
                 logger.warning("Pre-synth no first frame within 15s, abandoning: %s", item.text[:60])
                 continue
             if first is None:
+                self._pending_playback_owner = ""
                 if item.failed:
                     logger.warning("Pre-synth failed for queued speech: %s", item.text[:60])
                 else:
@@ -1121,6 +1215,7 @@ class TTSService:
                 realtime_feedback=item.realtime_feedback,
                 interruptible=item.interruptible,
             )
+            self._pending_playback_owner = ""
             stream.write(first)
             total += len(first)
             while not self._stop_event.is_set():
@@ -1153,6 +1248,30 @@ class TTSService:
             return False
         self._stop_event.clear()
         self._native_src_rate = src_rate
+        self._native_rs_carry = None
+        self._native_rs_pos = 0.0
+        # Prefer opening the device AT the model's rate. The alternative is
+        # resampling every chunk that arrives, and a realtime model streams many
+        # small ones — ALSA's converter runs continuously across writes, a
+        # per-chunk one in Python cannot. Falls back to the device rate plus the
+        # streaming resampler below when the device refuses the rate.
+        self._native_direct = False
+        cache_key = (self._device_key(), src_rate)
+        if self._native_direct_cache.get(cache_key) is False:
+            pass  # known to refuse this rate — go straight to the resampler
+        else:
+            try:
+                with self._stream_lock:
+                    self._ensure_stream(src_rate)
+                self._native_direct = True
+                self._native_direct_cache[cache_key] = True
+            except Exception as e:
+                self._native_direct_cache[cache_key] = False
+                logger.info(
+                    "native audio: device would not open at %d Hz (%s) — "
+                    "resampling to %s Hz for the rest of this run",
+                    src_rate, e, self._device_rate,
+                )
         self._native_mode = True
         # Native playback is the realtime model's OWN voice — never feed it back
         # (the native_mode check in the hook already skips it; clear the flag too
@@ -1179,10 +1298,16 @@ class TTSService:
         try:
             data = np.asarray(frame, dtype=np.float32)
             with self._stream_lock:
-                stream = self._ensure_stream(self._device_rate)
+                stream = self._ensure_stream(
+                    self._native_src_rate if self._native_direct else self._device_rate
+                )
                 dst = self._stream_rate
                 if self._native_src_rate and dst and self._native_src_rate != dst:
-                    data = self._resample(data, self._native_src_rate, dst)
+                    data = self._resample_stream(data, self._native_src_rate, dst)
+                if len(data) == 0:
+                    # Not enough input to land a sample yet — the remainder is
+                    # held in the carry and goes out with the next chunk.
+                    return True
                 if data.ndim == 1:
                     data = data.reshape(-1, 1)
                 if self._stream is None or self._stop_event.is_set():
@@ -1215,6 +1340,51 @@ class TTSService:
             except Exception:
                 pass
         self._native_mode = False
+        self._native_rs_carry = None
+        self._native_rs_pos = 0.0
+        self._native_direct = False
+
+    def _resample_stream(self, chunk, src_rate: int, dst_rate: int):
+        """Linear resample that stays continuous ACROSS streamed chunks.
+
+        `_resample` below maps each chunk onto [0, 1] of its own, which is fine
+        for a whole synthesized sentence and wrong for a stream: consecutive
+        chunks then overlap in phase, leaving a discontinuity at every boundary.
+        A realtime model sends many small chunks, so that is a click every few
+        tens of milliseconds — heard as a buzz over the entire reply
+        (device-observed 2026-09-07 on intern-v2-6286: 24 kHz model audio into a
+        44.1 kHz device). Carrying the read position and the unconsumed tail
+        across calls removes the seam.
+        """
+        np = self._np
+        if src_rate == dst_rate:
+            return chunk
+        buf = (
+            chunk
+            if self._native_rs_carry is None or len(self._native_rs_carry) == 0
+            else np.concatenate((self._native_rs_carry, chunk))
+        )
+        step = src_rate / dst_rate
+        pos = self._native_rs_pos
+        last = len(buf) - 1
+        if last < 1 or pos > last:
+            # Too little to interpolate over yet — hold it for the next chunk.
+            self._native_rs_carry = buf
+            self._native_rs_pos = pos
+            return np.zeros(0, dtype=np.float32)
+        n = int(math.floor((last - pos) / step)) + 1
+        idx = pos + step * np.arange(n, dtype=np.float64)
+        out = np.interp(
+            idx, np.arange(len(buf), dtype=np.float64), buf
+        ).astype(np.float32)
+        next_pos = pos + step * n
+        # Keep everything from the last whole sample index on, so the next call
+        # can interpolate across the seam, and re-express the position in the
+        # retained buffer's coordinates.
+        keep = min(int(math.floor(next_pos)), len(buf))
+        self._native_rs_carry = buf[keep:]
+        self._native_rs_pos = next_pos - keep
+        return out
 
     def _resample(self, audio, src_rate: int, dst_rate: int):
         """Linear interpolation resample (no scipy needed)."""
@@ -1285,6 +1455,9 @@ class TTSService:
         """Yield float32 sample frames from the TTS backend's PCM stream."""
         np = self._np
         src_rate = self._backend.sample_rate
+        # Head, tail and queued pre-synthesis run concurrently. Each iterator
+        # owns its sample clock; never share the realtime resampler's state.
+        resampler = PCMResampler(src_rate, dst_rate)
         remainder = b""
         first_audio_logged = False
         t0 = time.perf_counter()
@@ -1307,10 +1480,11 @@ class TTSService:
                 np.frombuffer(raw[:usable], dtype=np.int16).astype(np.float32)
                 / 32768.0
             )
-            # Boost TTS volume (provider-specific: OpenAI 2.5x, ElevenLabs 1.5x)
+            # Apply the provider's gain before resampling, including the EOF tail.
             samples = np.clip(samples * self._backend.volume_boost, -1.0, 1.0)
-            if dst_rate != src_rate:
-                samples = self._resample(samples, src_rate, dst_rate)
+            samples = resampler.process(samples)
+            if not len(samples):
+                continue
             if ttfb_tag and not first_audio_logged:
                 first_audio_logged = True
                 logger.info(
@@ -1320,15 +1494,10 @@ class TTSService:
                 )
             yield samples.reshape(-1, 1)
 
-        if not self._stop_event.is_set() and len(remainder) >= 2:
-            usable = len(remainder) - (len(remainder) % 2)
-            samples = (
-                np.frombuffer(remainder[:usable], dtype=np.int16).astype(np.float32)
-                / 32768.0
-            )
-            if dst_rate != src_rate:
-                samples = self._resample(samples, src_rate, dst_rate)
-            yield samples.reshape(-1, 1)
+        if not self._stop_event.is_set():
+            samples = resampler.process([], final=True)
+            if len(samples):
+                yield samples.reshape(-1, 1)
 
     def _stream_chunk_with_retry(self, stream, text: str, dst_rate: int, idx: int, total: int, ttfb_tag: Optional[str] = None) -> int:
         """Stream one text chunk with retry; return written sample count."""
@@ -1847,8 +2016,10 @@ class TTSService:
 
         with self._stream_lock:
             stream = self._ensure_stream(dst_rate)
-            # Write in 10ms blocks so stop() can cut in promptly.
-            block = max(1, dst_rate // 100)
+            # Match the paced stream's 40ms slices. An outer 10ms loop defeats
+            # its batching and brings back the GIL/AEC overhead on cached cues.
+            # Check stop between slices, just as for streamed speech.
+            block = max(1, int(dst_rate * TTS_REF_SLICE_S))
             for i in range(0, len(samples), block):
                 if self._stop_event.is_set():
                     break

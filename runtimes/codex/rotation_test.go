@@ -12,12 +12,10 @@ func TestShouldRotateSessionKeysOnContext(t *testing.T) {
 		want          bool
 	}{
 		{"idle sensing turn", 38_718, false},
-		{"mid sensing turn", 116_587, false},
-		// Rotated under the old 150k net: its handler total was 155_556
-		// (153_372 context + 2_184 output), so the output alone pushed it over
-		// — the thread was dropped and the next turn re-read every skill.
-		{"posture nudge turn", 153_372, false},
-		{"largest healthy turn seen", 170_872, false},
+		{"largest healthy sensing turn", 116_587, false},
+		// Device-observed 2026-09-10: 134k already took 100 seconds and the
+		// next resumed turns expanded to 376k then 473k.
+		{"latency cliff", 134_366, true},
 		{"runaway thread", 300_000, true},
 	}
 
@@ -40,7 +38,7 @@ func TestShouldRotateSessionFallsBackBeforeFirstUsage(t *testing.T) {
 	if s.ShouldRotateSession(100_000, 0) {
 		t.Error("rotated below the threshold on the fallback path")
 	}
-	if !s.ShouldRotateSession(300_000, 0) {
+	if !s.ShouldRotateSession(120_001, 0) {
 		t.Error("did not rotate above the threshold on the fallback path")
 	}
 }

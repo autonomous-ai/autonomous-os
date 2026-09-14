@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"go.autonomous.ai/os/system/domain"
+	"go.autonomous.ai/os/system/monitor"
+	agenthttp "go.autonomous.ai/os/system/server/agent/delivery/http"
 	"go.autonomous.ai/os/system/server/config"
 )
 
@@ -208,6 +210,66 @@ func TestDeltaText(t *testing.T) {
 	for _, tc := range cases {
 		if got := deltaText(tc.evt); got != tc.want {
 			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestSilentFinalTerminatesMobileRequest(t *testing.T) {
+	s, sent := newTestStream()
+	s.Track("run1", "sess1")
+	s.handle(domain.MonitorEvent{Type: "chat_response", RunID: "run1", State: "final", Summary: "NO_REPLY"})
+	got := sent()
+	if len(got) != 1 || got[0].Event.State != "final" || got[0].Event.Summary != "" {
+		t.Fatalf("missing clean terminal event: %+v", got)
+	}
+	if _, exists := s.runs["run1"]; exists {
+		t.Fatal("silent run still tracked")
+	}
+}
+
+func TestHarnessFinalIsTerminalRegardlessOfWording(t *testing.T) {
+	s, sent := newTestStream()
+	s.Track("harness-run", "session")
+	s.handle(domain.MonitorEvent{Type: "chat_response", RunID: "harness-run", State: "final", Summary: "Report sent to the agent.", Detail: map[string]string{"source": "harness"}})
+	if got := sent(); len(got) != 1 || got[0].Event.Summary != "Report sent to the agent." {
+		t.Fatalf("lost Harness text: %+v", got)
+	}
+	if _, tracked := s.runs["harness-run"]; tracked {
+		t.Fatal("final Harness result left mobile run pending")
+	}
+}
+
+func TestHarnessDeliveryReachesMQTTWithCompleteText(t *testing.T) {
+	t.Chdir(t.TempDir())
+	bus := monitor.ProvideBus()
+	events, unsubscribe := bus.Subscribe()
+	defer unsubscribe()
+	h := agenthttp.ProvideAgentHandler(nil, bus, nil, &config.Config{})
+	s, sent := newTestStream()
+	s.Track("device-chat-mqtt-harness", "mobile-session")
+	h.MarkHarnessResponseRun("device-chat-mqtt-harness", true)
+	const text = "Kết quả Harness\n\n- Một\n- Hai"
+	if !h.DeliverHarnessResponse("device-chat-mqtt-harness", text) {
+		t.Fatal("delivery rejected")
+	}
+	for {
+		select {
+		case event := <-events:
+			s.handle(event)
+		default:
+			found := false
+			for _, event := range sent() {
+				if event.Event.Type == "chat_response" && event.Event.State == "final" {
+					if found || event.Event.Summary != text || event.Event.RunID != "device-chat-mqtt-harness" {
+						t.Fatalf("wrong final: %+v", event)
+					}
+					found = true
+				}
+			}
+			if !found {
+				t.Fatal("MQTT did not receive Harness final")
+			}
+			return
 		}
 	}
 }

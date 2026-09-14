@@ -17,10 +17,8 @@
 #      it OWNS the Codex config (~/.codex/config.toml — model provider wiring
 #      from config.json llm_*), the launch env (/root/.codex/.env), and the
 #      one-time openclaw persona migration. See presync.sh.
-#   4. write + start the systemd unit. Codex runs per-turn via `codex exec`, so
-#      the unit runs the Go gatewayd (`os-server codex-gatewayd` — compiled into
-#      the os-server binary, nothing to materialize), which drives the codex
-#      process and exposes the WebSocket os-server connects to.
+#   4. write + start the systemd unit. The Go gatewayd keeps a persistent Codex
+#      App Server process so active turns can receive turn/steer input.
 #
 # UNIT NAME: codex.service (== runtime name). No service-name declaration
 #    file is needed (switch_runtime.sh defaults the unit to the runtime name).
@@ -95,15 +93,15 @@ else
   echo "[install-codex] WARN: $PRESYNC_HOOK absent — os-server did not materialize it (standalone/offline run?); config/env NOT synced"
 fi
 
-# systemd unit — the gatewayd drives `codex exec` per turn so switch-runtime
-# can enable/disable/verify it like any other backend. Unit name == runtime
+# systemd unit — the gatewayd drives a persistent Codex App Server so
+# switch-runtime can enable/disable/verify it like any other backend. Unit name == runtime
 # name (codex.service), so no service-name declaration file is needed.
 # MUST stay in sync with runtimes/codex/gateway_unit.go codexUnitContent
 # (EnsureOnboarding self-heals the same unit on a hand-switched device).
 echo "[install-codex] write systemd unit codex.service"
 cat >/etc/systemd/system/codex.service <<UNIT
 [Unit]
-Description=Codex agent gateway (os-server codex-gatewayd driving \`codex exec\` per turn)
+Description=Codex agent gateway (os-server codex-gatewayd driving Codex App Server)
 After=network-online.target
 Wants=network-online.target
 

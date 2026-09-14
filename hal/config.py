@@ -358,7 +358,7 @@ def resolve_device_type(default: str = "") -> str:
     fallback for dev machines). So a bare _os_cfg_get("device_type") resolves to
     the caller's fallback on every provisioned device — anything deriving
     behaviour from the device class must go through here instead. Same order as
-    server._resolve_device_type / mic_button._resolve_device_type, without the
+    server._resolve_device_type / privacy_button._resolve_device_type, without the
     fail-loud: callers here have a usable default.
     """
     dev = os.environ.get("DEVICE_TYPE")
@@ -660,6 +660,53 @@ SPEAKER_EXTEND_MIN_DURATION_SEC: float = float(
 SPEAKER_EXTEND_MIN_MARGIN_COS: float = float(
     os.environ.get("SPEAKER_EXTEND_MIN_MARGIN_COS", "0.05")
 )
+# Auto-extend purity gates. A turn longer than ~10s of post-VAD speech is split
+# into 6s chunks by the embedding server and identified by MAJORITY vote, but
+# the sample we store is the MEAN of every chunk -- including chunks that voted
+# for somebody else. That mean is a blend of two speakers and becomes a
+# permanent retrieval row. These two gates reject the whole turn instead.
+#
+# Reachable in normal use: the production caller joins the ENTIRE mic session
+# into one WAV (speaker_decorate.py) and a session runs to
+# MAX_SESSION_DURATION_S = 30s, so multi-speaker turns are ordinary input.
+#
+# UNANIMOUS is the cheap gate: "mixed with another speaker" is definitionally a
+# chunk that preferred someone else. It is NOT sufficient on its own -- with a
+# single enrolled speaker there is only one column, so every chunk votes for
+# them by default even at cos 0.2. MIN_CHUNK_COS is what makes "not guessing or
+# unsure audio" real, and it is the gate that catches the common case where the
+# second person in the room is not enrolled.
+SPEAKER_EXTEND_REQUIRE_UNANIMOUS_CHUNKS: bool = (
+    os.environ.get("HAL_SPEAKER_EXTEND_REQUIRE_UNANIMOUS_CHUNKS", "true").lower()
+    == "true"
+)
+# Floor for the WEAKEST winning chunk. Defaults to SPEAKER_MATCH_COS: already
+# strictly tighter than the turn-level gate (which only checks the AVERAGE of
+# the winning chunks) without inventing a number, since the thresholds have
+# never been validated against real speech. Raise it once they have been.
+SPEAKER_EXTEND_MIN_CHUNK_COS: float = float(
+    os.environ.get("HAL_SPEAKER_EXTEND_MIN_CHUNK_COS", str(SPEAKER_MATCH_COS))
+)
+# The ANCHOR rows (enrollment audio) must themselves carry the match before a
+# turn may join the extended tier. A match the extended tier carried is
+# evidence about a previous guess, not about the person, so admitting on it
+# lets one bad sample breed more -- the extended tier can vouch for its own
+# growth. Anchoring on enrollment is what makes contamination non-replicating.
+#
+# This is the audio port of FACE_EXTEND_MIN_ENROLL_SIM. The face side needed it
+# after a live bank on lamp-ac82 ended up 6/10 other people; replaying 990
+# frames under the anchored rule produced a bank that was 10/10 correct.
+#
+# Defaults to SPEAKER_MATCH_COS, which makes this EXACTLY "the anchors alone
+# would have recognized this speaker" -- no extra policy and no invented
+# number. The face side uses a floor ABOVE its match bar (0.40 vs 0.30), but
+# that number was picked against measured data and audio has none:
+# SPEAKER_MATCH_COS is itself an unvalidated conversion of a threshold tuned
+# for the previous single-vector model. Raise this once the thresholds have
+# been validated against real speech, not before.
+SPEAKER_EXTEND_MIN_ANCHOR_COS: float = float(
+    os.environ.get("HAL_SPEAKER_EXTEND_MIN_ANCHOR_COS", str(SPEAKER_MATCH_COS))
+)
 SPEAKER_EMBEDDING_API_TIMEOUT_S: float = float(
     os.environ.get("SPEAKER_EMBEDDING_API_TIMEOUT_S", "15")
 )
@@ -823,6 +870,15 @@ AGENT_GATEWAY: str = (
     or _os_cfg_get("agent_runtime")
     or "openclaw"
 ).strip().lower()
+# "remote" is Hermes-over-LAN — the device runs the Hermes client against a
+# server on another machine (typically the user's Mac). HAL's voice pipeline
+# needs a concrete gateway impl to instantiate, so it treats "remote" as
+# "hermes": same protocol, same context manager, just a different BaseURL
+# (resolved server-side in runtimes/hermes.ApplyExternalEndpoint). Without
+# this alias HAL rejects /voice/start with "'remote' is not a valid AgentGateway"
+# and the whole voice pipeline stays down.
+if AGENT_GATEWAY == "remote":
+    AGENT_GATEWAY = "hermes"
 
 # --- Realtime voice agent ---
 # Operator overrides for the realtime voice agent come from the nested "realtime"
@@ -1054,10 +1110,45 @@ REALTIME_AI_REJECT_FILTER: bool = os.environ.get(
 REALTIME_NOISE_GUARD_MAX_WORDS: int = int(
     os.environ.get("HAL_REALTIME_NOISE_GUARD_MAX_WORDS", "3")
 )
+# Live (full-duplex) mode. The local VAD stops being an endpointer and becomes a
+# doorbell: it decides when to OPEN a session, and once one is open it does not
+# run at all — the mic streams continuously and the provider owns turn taking,
+# interruption and end-of-turn. See voice_service._live_session.
+#
+# EXCLUSIVE BY DESIGN. The turn-based path and a live session need opposite turn
+# detection, and that setting is baked into the provider session at connect
+# time. Supporting both at once would mean a runtime override plus a session
+# rebuild on every entry and exit; making live mode a whole-process choice
+# removes that machinery entirely, at the cost of a restart to switch. This is
+# why REALTIME_TURN_DETECTION is FORCED below rather than merely defaulted:
+# leaving it "off" while live mode is on produces a device that streams audio
+# forever and never gets an answer, which is the confusing half of the failure.
+LIVE_MODE: bool = os.environ.get("HAL_LIVE_MODE", "false").lower() in (
+    "1",
+    "true",
+    "yes",
+)
+
+LIVE_VAD_START_SENSITIVITY: str = os.environ.get(
+    "HAL_LIVE_VAD_START_SENSITIVITY", "low"
+).strip().lower()
+LIVE_VAD_END_SENSITIVITY: str = os.environ.get(
+    "HAL_LIVE_VAD_END_SENSITIVITY", ""
+).strip().lower()
+# 0 = leave to the provider. Speech must persist this long before it counts as
+# an onset — the single most direct defence against a transient echo burst.
+LIVE_VAD_PREFIX_PADDING_MS: int = int(
+    os.environ.get("HAL_LIVE_VAD_PREFIX_PADDING_MS", "300")
+)
+# 0 = leave to the provider. How long silence must last before the turn ends.
+LIVE_VAD_SILENCE_MS: int = int(os.environ.get("HAL_LIVE_VAD_SILENCE_MS", "0"))
+
 # Turn detection / VAD: "server_vad" | "semantic_vad" | "off"
 # For Gemini: "off" disables automatic activity detection; any other value enables it.
 # For OpenAI: maps to turn_detection type in session config.
 REALTIME_TURN_DETECTION: str = os.environ.get("HAL_REALTIME_TURN_DETECTION", "off")
+if LIVE_MODE and REALTIME_TURN_DETECTION.strip().lower() in ("off", "none", ""):
+    REALTIME_TURN_DETECTION = "server_vad"
 
 # Native voice: for chit-chat handled by the realtime model, play the model's OWN
 # audio output (Gemini Live / OpenAI Realtime voice) straight to the speaker
@@ -1595,19 +1686,14 @@ REALTIME_TTS_HISTORY_MAX_CHARS: int = int(os.environ.get("HAL_REALTIME_TTS_HISTO
 # measured time-to-first-sentence, not from this default.
 REALTIME_FILLER_DELAY_S: float = float(os.environ.get("HAL_REALTIME_FILLER_DELAY_S", "1.5"))
 
-# Time-to-first-audio, text (non-native-audio) path only. Sentences are streamed
-# to TTS as they complete, so the first thing the user hears waits for a full
-# sentence terminator — and the model's opening sentence is often long. Below
-# this many characters the first utterance of a turn may instead be cut at a
-# CLAUSE boundary (comma / semicolon / colon) and spoken immediately, with the
-# remainder queued behind it; TTS is a queue, so the reply still comes out in
-# order and the split lands where a speaker would breathe anyway.
-#
-# Only ever applies to the FIRST chunk of a turn — that is the only one whose
-# latency the user is sitting in silence for. 0 disables (wait for the full
-# sentence, the pre-04/09/2026 behaviour).
+# Optional early first-clause playback on the text (non-native-audio) path.
+# Default 0 keeps the first sentence intact: play it as soon as it completes,
+# then pre-synthesize subsequent sentences in the queue. Splitting one sentence
+# into separate provider requests can break prosody and expose synthesis gaps.
+# A positive cap opts in to clause splitting, with a word-break fallback past
+# the cap. Complete sentences, numeric punctuation and voice tags stay intact.
 REALTIME_FIRST_CHUNK_MAX_CHARS: int = int(
-    os.environ.get("HAL_REALTIME_FIRST_CHUNK_MAX_CHARS", "90")
+    os.environ.get("HAL_REALTIME_FIRST_CHUNK_MAX_CHARS", "0")
 )
 
 # --- Realtime: Summarizer (Anthropic Messages API) ---

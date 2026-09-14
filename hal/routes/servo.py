@@ -20,6 +20,7 @@ import hal.app_state as state
 from hal.safety.policy import min_move_duration
 from hal.models import (
     ServoAimRequest,
+    ServoSearchRequest,
     ServoAimResponse,
     ServoNudgeRequest,
     ServoMoveRequest,
@@ -399,7 +400,7 @@ def aim_servo(req: ServoAimRequest):
 
 
 @router.post("/servo/search", response_model=StatusResponse)
-def search_for_user():
+def search_for_user(req: Optional[ServoSearchRequest] = None):
     """Sweep for the user and stop on the first one seen.
 
     Deliberately NOT what the look-aim does. The aim runs inside a live turn
@@ -411,7 +412,10 @@ def search_for_user():
     """
     from hal.drivers.tracking.search import search_for_subject
 
-    res = search_for_subject()
+    # An empty body is the common case — the agent's `[HW:/servo/search:{}]`
+    # marker sends `{}`, and every existing caller sends nothing at all.
+    req = req or ServoSearchRequest()
+    res = search_for_subject(target=req.target, exhaustive=req.exhaustive)
     return {
         "status": "ok",
         "message": (

@@ -441,6 +441,14 @@ def speak_queue_text(req: SpeakRequest):
     if state._speaker_muted:
         state.logger.info("POST /voice/speak-queue: suppressed -- speaker muted")
         return {"status": "suppressed"}
+
+    if getattr(state.voice_service, "live_active", False):
+        state.logger.info(
+            "POST /voice/speak-queue: suppressed -- a live session owns the "
+            "conversation (len=%d)", len(req.text or ""),
+        )
+        return {"status": "suppressed"}
+
     if state.music_service and state.music_service.streaming:
         state.logger.info("POST /voice/speak-queue: rejected -- music is playing")
         raise HTTPException(409, "Speaker busy -- music is playing")
@@ -510,7 +518,7 @@ def mute_mic():
 def unmute_mic():
     """Unmute mic -- restart voice pipeline."""
     # HW kill-switch beats software: while the physical PD1 slide switch is
-    # muted, the web/API is not allowed to override it — mic_button.py would
+    # muted, the web/API is not allowed to override it — privacy_button.py would
     # just flip it back on the next reconcile anyway, leaving the UI briefly
     # showing "unmuted" while the pipeline stays down. 409 lets the web toast
     # a specific "flip the switch first" message.

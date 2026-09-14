@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"go.autonomous.ai/os/system/domain"
@@ -36,6 +37,31 @@ func (h *DeviceMQTTHandler) handleConnectorSet(env domain.MQTTDataCommand) error
 	return nil
 }
 
+// staticConnectorCredential reports whether the payload carries a non-expiring
+// secret (app password / static API key) rather than an OAuth access token.
+// Mirrors connectorAuthHeader's rule — whichever field is populated is the
+// credential, not the auth_type string — with auth_type "pat" as the backend's
+// explicit hint for the case where neither token field is set.
+func staticConnectorCredential(authType, accessToken, apiKey string) bool {
+	if accessToken != "" {
+		return false
+	}
+	return apiKey != "" || strings.EqualFold(strings.TrimSpace(authType), "pat")
+}
+
+// resolveConnectorExpiresAt is resolveExpiresAt with the static-credential
+// carve-out. An app password or API key never expires and nothing rotates it
+// (connectorNeedsRefresh skips expires_at == 0), so stamping it with the OAuth
+// default lifetime would make it read as expired an hour after it was stored —
+// with no loop to correct it. Persist 0 ("no expiry") when the backend sent no
+// expiry info for such a credential.
+func resolveConnectorExpiresAt(authType, accessToken, apiKey string, expiresAt int64, expiresIn int, now time.Time) int64 {
+	if expiresAt <= 0 && expiresIn <= 0 && staticConnectorCredential(authType, accessToken, apiKey) {
+		return 0
+	}
+	return resolveExpiresAt(expiresAt, expiresIn, now)
+}
+
 func (h *DeviceMQTTHandler) runConnectorSet(env domain.MQTTDataCommand) {
 	var req domain.MQTTConnectorSetData
 	if len(env.Data) == 0 {
@@ -63,9 +89,11 @@ func (h *DeviceMQTTHandler) runConnectorSet(env domain.MQTTDataCommand) {
 		RefreshToken: req.RefreshToken,
 		TokenType:    req.TokenType,
 		// Wire ships expires_in (seconds from now); persist absolute expires_at.
-		// resolveExpiresAt (oauth_refresh.go) treats (existing=0, in>0) as
-		// "compute fresh from now", which is exactly what we want here.
-		ExpiresAt:   resolveExpiresAt(req.ExpiresAt, req.ExpiresIn, now),
+		// resolveConnectorExpiresAt treats (existing=0, in>0) as "compute fresh
+		// from now", and stores 0 for a credential that never expires.
+		ExpiresAt: resolveConnectorExpiresAt(
+			req.AuthType, req.AccessToken, req.APIKey, req.ExpiresAt, req.ExpiresIn, now,
+		),
 		APIKey:      req.APIKey,
 		Scopes:      req.Scopes,
 		UserEmail:   req.UserEmail,

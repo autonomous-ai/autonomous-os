@@ -25,7 +25,7 @@ import {
   Workflow, Users, Camera, Radar, ChartColumn, Move3d, Bluetooth, ScrollText,
   Terminal, FileCode, Hexagon, ExternalLink, SlidersHorizontal, ChevronRight,
   Server, Zap, LogOut, Clock, Search, X, CornerDownLeft, Plug, Blocks,
-  CalendarClock,
+  CalendarClock, Handshake, Facebook,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -33,6 +33,7 @@ import { S } from "./styles";
 import { API, HW, HISTORY_LEN, FLOW_EVENTS_MAX, NAV, isNavGroup, isNavLink, Cap, areaPath, sectionArea, sectionToHash, hashToSection } from "./types";
 import type { Section, Area, SystemInfo, NetworkInfo, HWHealth, OCStatus, PresenceInfo, VoiceStatus, ServoState, DisplayState, AudioVolume, LEDColor, SceneInfo, MonitorEvent, DisplayEvent, NavEntry } from "./types";
 import { OverviewSection } from "./OverviewSection";
+import { PairingSection } from "./PairingSection";
 import { SystemSection } from "./SystemSection";
 import { FlowSection } from "./FlowSection";
 import { SensingSection } from "./SensingSection";
@@ -54,13 +55,13 @@ ChartJS.register(CategoryScale, LinearScale, BarElement, PointElement, LineEleme
 const EMBED_SECTIONS = new Set<Section>(["api-docs", "agent-config"]);
 
 // Sections shown to non-debug users. Append `?debug=true` to the URL to reveal
-// the rest of the menu (Sensing, Analytics, Servo, API Docs, Agent gateway).
-const PUBLIC_SECTIONS = new Set<Section>(["chat", "overview", "system", "flow", "camera", "face-owners", "bluetooth", "logs", "cli", "settings:device", "settings:wifi", "settings:voice", "settings:face", "settings:mcp", "settings:plugins", "settings:timezone", "settings:scheduled"]);
+// the rest of the menu (Analytics, Servo, API Docs, Agent gateway).
+const PUBLIC_SECTIONS = new Set<Section>(["sensing", "chat", "pairing", "overview", "system", "flow", "camera", "face-owners", "bluetooth", "logs", "cli", "settings:device", "settings:wifi", "settings:voice", "settings:face", "settings:mcp", "settings:plugins", "settings:timezone", "settings:scheduled", "settings:facebook"]);
 
 // The capability a section requires, read from its NAV leaf (single source: the
 // nav definition itself declares `cap`). undefined → no hardware dependency, the
 // section is always shown.
-function sectionCap(id: Section): string | undefined {
+function sectionCap(id: Section): string | readonly string[] | undefined {
   for (const entry of NAV) {
     if (isNavGroup(entry)) {
       const child = entry.children.find((c) => !isNavLink(c) && c.id === id);
@@ -85,6 +86,7 @@ const iframeStyle: React.CSSProperties = {
 const NAV_ICONS: Record<string, LucideIcon> = {
   // top-level leaf
   chat: MessageCircle,
+  pairing: Handshake,
   // group headers
   settings: Settings,
   device: MonitorSmartphone,
@@ -99,6 +101,7 @@ const NAV_ICONS: Record<string, LucideIcon> = {
   "settings:voice": MicVocal,
   "settings:face": UserCircle,
   "settings:channel": MessageSquare,
+  "settings:facebook": Facebook,
   "settings:mqtt": LinkIcon,
   "settings:mcp": Plug,
   "settings:plugins": Blocks,
@@ -492,7 +495,7 @@ export default function Monitor() {
   const hasCap = (c: string): boolean => !caps || caps.has(c);
   const sectionVisible = (id: Section): boolean => {
     const cap = sectionCap(id);
-    return !cap || hasCap(cap);
+    return !cap || (typeof cap === "string" ? hasCap(cap) : cap.some(hasCap));
   };
 
   // If the active section is for hardware this device lacks, fall back to overview.
@@ -648,7 +651,7 @@ export default function Monitor() {
         {/* When a search query is active the grouped nav is replaced by the flat
             result list rendered inside SidebarSearch, so skip the normal tree. */}
         <nav style={{ padding: "10px 0", flex: 1, display: navQuery.trim() ? "none" : undefined }}>
-          {/* Order: Chat → Device → Settings → Agent Gateway → (other groups) */}
+          {/* Chat is the only top-level leaf; Pairing is grouped under Device. */}
           {NAV.filter((e) => !isNavGroup(e) && e.id === "chat").map((entry) => {
             const leaf = entry as Extract<NavEntry, { id: Section }>;
             return (
@@ -790,7 +793,15 @@ export default function Monitor() {
           ...S.content,
           ...(section === "chat" ? { padding: 0, overflow: "hidden" } : {}),
           ...(EMBED_SECTIONS.has(section) ? { padding: 0, overflow: "hidden" } : {}),
-          ...(section.startsWith("settings:") ? { padding: 0, overflow: "hidden" } : {}),
+          // display:flex + column is load-bearing, not cosmetic: SettingsPanel
+          // scrolls itself via flex:1/minHeight:0/overflowY:auto, and those do
+          // nothing unless this wrapper is a flex container. Without it the
+          // panel's height stays `auto`, grows past this overflow:hidden box,
+          // and a long list (many schedules) is simply clipped with no
+          // scrollbar anywhere to reach it.
+          ...(section.startsWith("settings:")
+            ? { padding: 0, overflow: "hidden", display: "flex", flexDirection: "column" as const }
+            : {}),
         }} className="lm-content">
           {/* Non-chat sections share a keyed wrapper so switching between them
               re-triggers the fade-in. Chat stays OUTSIDE this wrapper (always
@@ -880,6 +891,7 @@ export default function Monitor() {
               }}
             />
           )}
+          {section === "pairing" && <PairingSection />}
           {section === "system" && (
             <SystemSection
               sys={sys}
@@ -890,7 +902,7 @@ export default function Monitor() {
           )}
           {section === "flow"      && <FlowSection events={events} onClearEvents={clearFlowEvents} />}
           {section === "camera"    && <CameraSection displayTs={displayTs} />}
-          {section === "sensing"   && <SensingSection />}
+          {section === "sensing"   && <SensingSection hasVision={caps?.has(Cap.Vision) ?? false} hasEnvironment={caps?.has(Cap.Environment) ?? false} />}
           {section === "servo"     && <ServoSection />}
           {section === "bluetooth" && <BluetoothSection />}
           {section === "face-owners" && <FaceOwnersSection />}

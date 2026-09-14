@@ -4,7 +4,7 @@ import {
   FolderTree, Folder, FileText, Loader2, RefreshCw, AlertCircle, ChevronDown,
   Search, Trash2, Plus, PenLine, Sparkles, Upload,
 } from "lucide-react";
-import { listInstalledSkills, readSkillFiles, deleteSkill } from "@/lib/api";
+import { listInstalledSkills, readSkillFiles, deleteSkill, publishSkill } from "@/lib/api";
 import type { InstalledSkill, SkillBundleFile } from "@/lib/api";
 import { ModalShell } from "./ModalShell";
 import { SkillFilesView } from "./SkillFilesView";
@@ -171,6 +171,7 @@ function SkillList({
         <div>
           <div style={{ ...skillGridCols, ...listHeadStyle }}>
             <span>Skill</span>
+            <span>Store</span>
             <span style={{ textAlign: "right" }}>Files</span>
             <span style={{ textAlign: "right" }}>Last updated</span>
           </div>
@@ -287,6 +288,7 @@ function SkillRow({ skill, onOpen }: { skill: InstalledSkill; onOpen: () => void
           )}
         </span>
       </span>
+      <StoreAvailability availability={skill.store_availability} />
       <span style={{ fontSize: 12, color: "var(--lm-text)", textAlign: "right", whiteSpace: "nowrap", marginTop: 1 }}>
         {files}
       </span>
@@ -303,9 +305,28 @@ function SkillRow({ skill, onOpen }: { skill: InstalledSkill; onOpen: () => void
 // to their widest realistic content ("Last updated", "3 weeks ago").
 const skillGridCols: CSSProperties = {
   display: "grid",
-  gridTemplateColumns: "minmax(0, 1fr) 52px 96px",
+  gridTemplateColumns: "minmax(0, 1fr) 76px 52px 96px",
   gap: 10,
 };
+
+function StoreAvailability({ availability }: { availability?: InstalledSkill["store_availability"] }) {
+  const labels = {
+    in_store: { text: "In store", color: "var(--lm-green)" },
+    device_only: { text: "Device only", color: "var(--lm-text-muted)" },
+    unknown: { text: "Unknown", color: "var(--lm-amber)" },
+  } as const;
+  const label = availability ? labels[availability] : labels.unknown;
+  return (
+    <span
+      title={availability === "unknown" || !availability
+        ? "The skill store could not be checked."
+        : availability === "in_store"
+          ? "A matching skill is currently available in the skill store."
+          : "No matching skill is currently available in the skill store."}
+      style={{ fontSize: 11, color: label.color, whiteSpace: "nowrap", marginTop: 2 }}
+    >{label.text}</span>
+  );
+}
 
 const listHeadStyle: CSSProperties = {
   padding: "0 12px 6px", fontSize: 10, fontWeight: 600, letterSpacing: "0.04em",
@@ -331,6 +352,10 @@ function SkillDetail({
   const [confirming, setConfirming] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [removeError, setRemoveError] = useState("");
+  const [publishing, setPublishing] = useState(false);
+  const [publishError, setPublishError] = useState("");
+
+  const publish = async () => { setPublishing(true); setPublishError(""); try { await publishSkill(skill.name); } catch (e) { setPublishError(e instanceof Error ? e.message : "Failed to publish"); } finally { setPublishing(false); } };
 
   const uninstall = async () => {
     setRemoving(true);
@@ -406,6 +431,8 @@ function SkillDetail({
                 ? <><Trash2 size={14} /> Confirm uninstall</>
                 : <><Trash2 size={14} /> Uninstall</>}
           </button>
+          {skill.store_availability === "device_only" && <button type="button" className="lm-u-btn" style={btnStyle} disabled={publishing} onClick={() => void publish()}>{publishing ? "Publishing…" : "Publish to store"}</button>}
+          {publishError && <span style={{ color: "var(--lm-red)", fontSize: 11 }}>{publishError}</span>}
         </div>
       }
     >

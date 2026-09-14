@@ -387,7 +387,15 @@ const (
 
 // Data kinds carried inside CommandData envelope.
 const (
-	KindBuddyPairStart = "buddy.pair.start" // issue the shared 6-digit Buddy pairing code (60s)
+	KindBuddyPairStart      = "buddy.pair.start"  // issue the shared 6-digit Buddy pairing code (60s)
+	KindBuddyStatus         = "buddy.status"      // query or report the current public Buddy state
+	KindBuddyPairRevoke     = "buddy.pair.revoke" // revoke the current Buddy pairing
+	KindHarnessPairStart    = "harness.pair.start"
+	KindHarnessStatus       = "harness.status"
+	KindHarnessVoiceModeGet = "harness.voice-mode.get"
+	KindHarnessVoiceModeSet = "harness.voice-mode.set"
+	KindHarnessPairCancel   = "harness.pair.cancel"
+	KindHarnessPairRevoke   = "harness.pair.revoke"
 
 	KindTTSSet       = "tts.set"       // persist TTS voice/provider/language config
 	KindTTSPreview   = "tts.preview"   // one-shot TTS preview, no config write
@@ -435,6 +443,13 @@ const (
 	AgentRuntimeCodex      = "codex"
 	AgentRuntimeClaudeCode = "claudecode"
 	AgentRuntimeOpenCode   = "opencode"
+	// AgentRuntimeRemote — device is only a voice/chat frontend, the brain
+	// runs on another machine (typically the user's Mac). Phase A: the value
+	// is selectable in the UI and the URL/token are persisted, but the
+	// runtime switch itself is not wired end-to-end yet — SetAgentRuntime
+	// saves the config and returns without touching switch-runtime, so
+	// factory.go still resolves to whatever runtime is actually installed.
+	AgentRuntimeRemote = "remote"
 
 	KindSystemInfo     = "system.info"     // aggregate: versions + network + host
 	KindSystemVersion  = "system.version"  // lamp + bootstrap + hal + openclaw versions
@@ -778,6 +793,9 @@ func NewMQTTInfoResponse(cfg *config.Config, msgType string, mac string) MQTTInf
 		Timezone:        cfg.Timezone,
 	}
 }
+
+// KindEnvironmentStatus queries the current model-independent HAL snapshot.
+const KindEnvironmentStatus = "environment.status"
 
 // MQTTDataCommand is the fa_channel payload for cmd:"data" — a generic envelope.
 // Sub-handlers branch on Kind and unmarshal Data into a kind-specific struct.
@@ -1244,12 +1262,18 @@ type MQTTWakeWordGateAck struct {
 //	{ "cmd": "data", "kind": "claudecode.setup" }  // switch to claude code
 //	{ "cmd": "data", "kind": "openclaw.setup" }    // revert to openclaw (baseline)
 type AgentRuntimeSetData struct {
-	Runtime string `json:"runtime"` // "openclaw" | "hermes" | "picoclaw" | "claudecode"
+	Runtime string `json:"runtime"` // "openclaw" | "hermes" | "picoclaw" | "claudecode" | "remote"
+	// URL and Token are only read when Runtime == "remote": they configure the
+	// external gateway the device forwards user turns to. Ignored (and blank on
+	// the wire) for every other runtime. See AgentRuntimeRemote for the Phase-A
+	// caveat — the value is persisted but no real switch happens yet.
+	URL   string `json:"url,omitempty"`
+	Token string `json:"token,omitempty"`
 }
 
 // AgentRuntimes is the valid set, surfaced to the web settings dropdown via
 // GET /api/device/agent-runtime so the UI never hardcodes the list.
-var AgentRuntimes = []string{AgentRuntimeOpenClaw, AgentRuntimeHermes, AgentRuntimePicoclaw, AgentRuntimeCodex, AgentRuntimeClaudeCode, AgentRuntimeOpenCode}
+var AgentRuntimes = []string{AgentRuntimeOpenClaw, AgentRuntimeHermes, AgentRuntimePicoclaw, AgentRuntimeCodex, AgentRuntimeClaudeCode, AgentRuntimeOpenCode, AgentRuntimeRemote}
 
 // IsValidAgentRuntime reports whether r is a switchable backend (case-insensitive,
 // trimmed). Used to validate hermes.setup / picoclaw.setup and the HTTP runtime
@@ -1277,6 +1301,13 @@ type AgentRuntimeStatus struct {
 	// invites the operator to start a turn against a backend that is not
 	// listening yet, which reads as a broken device.
 	Ready bool `json:"ready"`
+
+	// RemoteURL and RemoteToken echo the stored remote-gateway config so the
+	// web Runtime page can pre-fill the fields when the user re-opens it.
+	// Blank on every runtime other than "remote"; the token is returned as-is
+	// (no redaction) because the settings page is behind adminAuthMiddleware.
+	RemoteURL   string `json:"remote_url,omitempty"`
+	RemoteToken string `json:"remote_token,omitempty"`
 }
 
 // TimezoneStatus is returned by GET /api/device/timezone: the device's active
@@ -1363,6 +1394,8 @@ type RealtimePublic struct {
 }
 
 type ConfigPublicResponse struct {
+	Environment EnvironmentConfig `json:"environment"`
+
 	Channel            string   `json:"channel"`
 	TelegramUserID     string   `json:"telegram_user_id"`
 	SlackUserID        string   `json:"slack_user_id"`
@@ -1427,6 +1460,8 @@ type ConfigPublicResponse struct {
 // UpdateConfigRequest is used by PUT /api/device/config to update device settings.
 // All fields are optional; only non-empty values are applied.
 type UpdateConfigRequest struct {
+	Environment *EnvironmentConfig `json:"environment,omitempty"`
+
 	SSID     string `json:"ssid"`
 	Password string `json:"password"`
 	Channel  string `json:"channel"`
@@ -1452,6 +1487,11 @@ type UpdateConfigRequest struct {
 	DeepgramAPIKey string `json:"deepgram_api_key"`
 	STTAPIKey      string `json:"stt_api_key"`
 	TTSAPIKey      string `json:"tts_api_key"`
+	// ClearTTSAPIKey deletes the stored TTS key. An empty TTSAPIKey cannot say
+	// this: every field here is PATCH-style, where "" means "not sent". The
+	// settings page sets it when the operator switches TTS provider, so the
+	// previous vendor's credential can't be handed to the new one.
+	ClearTTSAPIKey bool   `json:"clear_tts_api_key"`
 	STTBaseURL     string `json:"stt_base_url"`
 	TTSBaseURL     string `json:"tts_base_url"`
 	STTLanguage    string `json:"stt_language"`

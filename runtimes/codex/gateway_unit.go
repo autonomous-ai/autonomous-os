@@ -21,7 +21,7 @@ const codexUnitPath = "/etc/systemd/system/codex.service"
 // codexUnitContent MUST stay in sync with the unit install.sh writes —
 // two writers, one contract (cross-referenced in install.sh).
 const codexUnitContent = `[Unit]
-Description=Codex agent gateway (os-server codex-gatewayd driving ` + "`codex exec`" + ` per turn)
+Description=Codex agent gateway (os-server codex-gatewayd driving Codex App Server)
 After=network-online.target
 Wants=network-online.target
 

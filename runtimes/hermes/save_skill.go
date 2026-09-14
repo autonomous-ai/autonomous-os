@@ -72,6 +72,9 @@ func (s *HermesService) ListSkills() ([]domain.InstalledSkill, error) {
 func (s *HermesService) ReadSkillFiles(name string) ([]domain.SkillBundleFile, error) {
 	return skills.ReadSkillFilesFrom(name, hermesAuthoredSkillsDir, hermesImportedSkillsDir)
 }
+func (s *HermesService) ExportSkillArchive(name, destDir string) (string, error) {
+	return skills.ExportSkillArchive(hermesAuthoredSkillsDir, name, destDir)
+}
 
 func (s *HermesService) ReadSkillFile(name, filePath string) (domain.SkillBundleFile, error) {
 	return skills.ReadSkillFileFrom(name, filePath, hermesAuthoredSkillsDir, hermesImportedSkillsDir)

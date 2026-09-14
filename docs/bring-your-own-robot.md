@@ -96,6 +96,9 @@ description: When someone says good morning, greet them by name and wave.
 make push-skill SKILL=./my-skill TARGET=pi@my-robot.local   # live on the next conversation, no reboot
 ```
 
+Add `J=<jump-host>` if the robot is only reachable through a bastion — the same
+knob the deploy targets take.
+
 It is the same `SKILL.md` OpenClaw and Claude skills use, so the ones you have work as they are. Writing one, the marker grammar, and shipping a skill to every robot: [`skills/README.md`](../skills/README.md).
 
 ## 7. Open the PR

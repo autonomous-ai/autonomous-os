@@ -1,6 +1,6 @@
 """Voice metrics measurement — observations only, no behaviour change.
 
-Two questions, measured on the device because HAL is the only process that
+Two audio questions, measured on the device because HAL is the only process that
 knows when audio actually reached the speaker:
 
   the response metric  Was the user's voice command acknowledged within
@@ -9,9 +9,14 @@ knows when audio actually reached the speaker:
          boundary (an explicit stop, or the realtime agent answering a newer
          question)?
 
-Both targets (3 s / ≥95 % / <1 %) are **provisional**: every raw duration is
+Both targets (3 s / ≥95 % / <5 %) are **provisional**: every raw duration is
 stored, so thresholds can be re-decided from the data instead of by
 re-instrumenting devices.
+
+KPI-3 reuses the utterance cohort with independent task eligibility and joins
+explicit execution terminals from realtime or os-server. It measures finished
+execution without observed terminal errors, not answer correctness. See
+``docs/voice-metrics.md`` for the reporting horizon and the 85% target.
 
 Design rules that decide whether a number is trustworthy:
 
@@ -116,6 +121,7 @@ FAIL_DISPATCH_FAILED = "dispatch_failed"
 
 BOUNDARY_EXPLICIT_STOP = "explicit_stop"
 BOUNDARY_AUTO_SUPERSEDE = "auto_supersede"
+BOUNDARY_SERVER_BARGE_IN = "server_barge_in"
 
 _MAX_TRACKED = 32
 
@@ -127,10 +133,17 @@ class _Interaction:
         "exclusion_reason", "failure_reason", "reported", "report_event_id",
         "timer", "life_timer", "closed", "last_activity",
         "answer_latency_ms", "answer_kind",
+        "task_started_at_ms", "task_revision", "task_exclusion_reason",
+        "endpoint_known", "mode",
     )
 
     def __init__(self, iid: str, speech_end: float, method: str):
         self.id = iid
+        self.endpoint_known = True
+        self.mode = "turn"
+        self.task_started_at_ms = int(time.time() * 1000) - _ms(_now() - speech_end)
+        self.task_revision = 0
+        self.task_exclusion_reason = ""
         self.speech_end = speech_end
         self.speech_end_method = method
         self.event_type = ""
@@ -182,7 +195,8 @@ def _ms(seconds: float) -> int:
 
 # --- Capture boundary -------------------------------------------------------
 
-def speech_end(method: str, at: float = 0.0) -> str:
+def speech_end(method: str, at: float = 0.0, *, endpoint_known: bool = True,
+               mode: str = "turn") -> str:
     """Register the detected end of a user utterance. Returns its id.
 
     ``at`` is the monotonic timestamp of the detection itself (when the
@@ -196,6 +210,8 @@ def speech_end(method: str, at: float = 0.0) -> str:
     iid = "vi-" + client.new_event_id()[:16]
     with _lock:
         it = _Interaction(iid, at or _now(), method)
+        it.endpoint_known = endpoint_known
+        it.mode = mode
         _interactions[iid] = it
         _order.append(iid)
         evicted = []
@@ -205,6 +221,7 @@ def speech_end(method: str, at: float = 0.0) -> str:
             # its verdict sent would otherwise vanish from the metrics entirely,
             # which is the one thing this module must never do.
             if not _interactions[oldest].reported:
+                _interactions[oldest].report_event_id = "int-" + oldest
                 evicted.append(_interaction_params(_interactions[oldest]))
                 _interactions[oldest].reported = True
             _forget(oldest)
@@ -288,6 +305,24 @@ def set_route(iid: str, route: str, event_type: str = "") -> None:
         _report_amendment(amendment)
 
 
+def set_endpoint(iid: str, method: str, at: float) -> None:
+    """Upgrade transcript-only evidence when a real provider endpoint arrives.
+
+    Never turn an endpoint received after playback into a zero/negative latency.
+    Such an observation remains outside KPI-1, but still belongs to the task cohort.
+    """
+    with _lock:
+        it = _interactions.get(iid)
+        if it is None or it.endpoint_known or it.ack_kind:
+            return
+        it.speech_end = at
+        it.speech_end_method = method
+        it.endpoint_known = True
+        amendment = _amend_params(it, "late_endpoint") if it.reported else None
+    if amendment:
+        _report_amendment(amendment)
+
+
 def bind_run(iid: str, run_id: str) -> None:
     """Attach the os-server run id so the reply that comes back through the
     TTS queue is attributed to the utterance that asked for it."""
@@ -299,6 +334,33 @@ def bind_run(iid: str, run_id: str) -> None:
             return
         it.run_id = run_id
         _by_run[run_id] = iid
+        amendment = _amend_params(it, "late_run_binding") if it.reported else None
+    if amendment:
+        _report_amendment(amendment)
+
+
+def task_execution_finished(iid: str) -> None:
+    """Realtime confirmed turn completion; this is execution, not correctness.
+
+    No playback requirement: queued speech can drain after the model finishes.
+    The backend memory-sync run must never be credited as task execution.
+    """
+    if iid:
+        client.report("voice_metrics_task_execution", {
+            "schema_version": 1,
+            "interaction_id": iid,
+            "run_id": "",
+            "outcome": "completed",
+            "evidence": "realtime_turn_done",
+            "execution_at_ms": int(time.time() * 1000),
+            "error": False,
+        }, event_id="task-rt-" + iid)
+
+
+def is_playing(iid: str) -> bool:
+    """Whether this interaction currently owns the physical playback interval."""
+    with _lock:
+        return bool(_playing and _playing.get("interaction_id") == iid)
 
 
 def mark_failed(iid: str, reason: str) -> None:
@@ -328,9 +390,21 @@ def exclude(iid: str, reason: str) -> None:
     emits an amendment."""
     with _lock:
         it = _interactions.get(iid)
-        if it is None or it.exclusion_reason:
+        if it is None:
             return
-        it.exclusion_reason = reason
+        # Muting or stopping speech does not cancel execution. Keep task
+        # eligibility independent of KPI-1, including when mute arrived first.
+        task_excluded = reason in (
+            EXCL_REJECTED_NOISE, EXCL_REJECTED_NON_USER,
+            EXCL_NO_TRANSCRIPT, EXCL_NOT_ADDRESSED,
+        )
+        changed = task_excluded and not it.task_exclusion_reason
+        if changed:
+            it.task_exclusion_reason = reason
+        if it.exclusion_reason and not changed:
+            return
+        if not it.exclusion_reason:
+            it.exclusion_reason = reason
         it.closed = True
         amendment = _amend_params(it, "late_exclusion") if it.reported else None
     if amendment:
@@ -354,6 +428,13 @@ def playback_audio(owner: str, tts=None) -> None:
         iid = _owner_interaction(owner)
         kind = _classify(owner, tts)
         global _playing, _unknown_owner_playbacks
+        if _playing:
+            # Queue segments can share one physical stream and therefore have
+            # no intervening stream-end callback. The next segment's first
+            # write closes the previous measured interval without touching audio.
+            _observe_playback(
+                _playing["kind"], _playing["interaction_id"], _playing["started"], started,
+            )
         _playing = {
             "kind": kind, "owner": owner, "interaction_id": iid,
             "started": started, "ended": None,
@@ -372,19 +453,21 @@ def playback_audio(owner: str, tts=None) -> None:
                 it.last_activity = started
                 it.closed = False
                 _arm_lifetime(it)
-            if it is not None and it.ack_latency_ms is None:
-                it.ack_latency_ms = _ms(started - it.speech_end)
+            if it is not None and not it.ack_kind:
+                if it.endpoint_known:
+                    it.ack_latency_ms = _ms(started - it.speech_end)
                 it.ack_kind = kind
                 it.ack_modality = _ACK_MODALITY.get(kind, kind)
                 logger.info(
-                    "[voice-metrics] ack (interaction=%s kind=%s latency_ms=%d)",
+                    "[voice-metrics] ack (interaction=%s kind=%s latency_ms=%s)",
                     iid, kind, it.ack_latency_ms,
                 )
-            if it is not None and it.answer_latency_ms is None and kind in _ANSWER_KINDS:
-                it.answer_latency_ms = _ms(started - it.speech_end)
+            if it is not None and not it.answer_kind and kind in _ANSWER_KINDS:
+                if it.endpoint_known:
+                    it.answer_latency_ms = _ms(started - it.speech_end)
                 it.answer_kind = kind
                 logger.info(
-                    "[voice-metrics] answer (interaction=%s kind=%s latency_ms=%d)",
+                    "[voice-metrics] answer (interaction=%s kind=%s latency_ms=%s)",
                     iid, kind, it.answer_latency_ms,
                 )
         _observe_playback(kind, iid, started, None)
@@ -478,7 +561,9 @@ def _classify(owner: str, tts) -> str:
 
 # --- Suppression boundary (the stale-reply metric) ------------------------------------------
 
-def boundary(reason: str, triggering_interaction_id: str = "", policy_applied: bool = True) -> None:
+def boundary(reason: str, triggering_interaction_id: str = "", policy_applied: bool = True,
+             *, target_interaction_ids: set[str] | None = None,
+             at: float | None = None) -> None:
     """Stamp a suppression boundary and watch for stale audio.
 
     ``policy_applied`` must be the OS's ANSWER, not an assumption: automatic
@@ -491,9 +576,13 @@ def boundary(reason: str, triggering_interaction_id: str = "", policy_applied: b
     if not policy_applied:
         logger.info("[voice-metrics] boundary skipped -- policy not applied (reason=%s)", reason)
         return
-    at = _now()
+    at = _now() if at is None else at
     with _lock:
         applicable = _active_interactions_before(at, triggering_interaction_id)
+        if target_interaction_ids is not None:
+            # Server interruption identifies the cancelled response, not every
+            # input already waiting behind it in the receive queue.
+            applicable = target_interaction_ids.intersection(_interactions)
         playing = dict(_playing) if _playing else None
         state = {
             "reason": reason,
@@ -675,8 +764,12 @@ def _interaction_params(it: "_Interaction") -> dict:
     # A failure reason does NOT remove eligibility: the command was valid and
     # was not served. Only an exclusion (noise, not addressed, muted, …) means
     # "this was never a metric sample".
-    eligible = not it.exclusion_reason
-    if it.exclusion_reason:
+    it.task_revision += 1
+    exclusion_reason = it.exclusion_reason or (
+        "speech_endpoint_unavailable" if not it.endpoint_known else ""
+    )
+    eligible = not exclusion_reason
+    if exclusion_reason:
         outcome = OUTCOME_EXCLUDED
     elif it.ack_latency_ms is not None:
         outcome = OUTCOME_ACKED
@@ -685,13 +778,23 @@ def _interaction_params(it: "_Interaction") -> dict:
     return {
         "interaction_id": it.id,
         "run_id": it.run_id,
+        # KPI-3 reuses the utterance cohort, not the 10-second ack verdict.
+        # Terminal execution observations are joined separately by id/run id.
+        "task_schema_version": 1,
+        "task_started_at_ms": it.task_started_at_ms,
+        "task_revision": it.task_revision,
+        "task_eligible": not it.task_exclusion_reason,
+        "task_eligibility_known": bool(it.route or it.task_exclusion_reason),
+        "task_exclusion_reason": it.task_exclusion_reason,
         "failure_reason": it.failure_reason,
         "event_type": it.event_type,
         "route": it.route,
         "speech_end_method": it.speech_end_method,
+        "speech_endpoint_known": it.endpoint_known,
+        "mode": it.mode,
         "eligible": eligible,
         "outcome": outcome,
-        "exclusion_reason": it.exclusion_reason,
+        "exclusion_reason": exclusion_reason,
         # Raw observation, kept whatever the verdict, so the (provisional)
         # threshold can change without re-instrumenting the device.
         "ack_latency_ms": it.ack_latency_ms,

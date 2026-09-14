@@ -163,7 +163,16 @@ func (s *Server) handleFrame(data []byte) {
 		}
 		_ = json.Unmarshal(frame.ID, &payload.RequestID)
 		payload.RunID = frame.RunID
-		s.enqueue(op{kind: opTurn, payload: payload})
+		s.mu.Lock()
+		active := s.activeTurnID != "" || s.activeStarting
+		s.mu.Unlock()
+		if active {
+			// Keep the original turn correlation. A steered message joins that
+			// same reply rather than becoming a second independently completed turn.
+			s.steerAppTurn(payload)
+		} else {
+			s.enqueue(op{kind: opTurn, payload: payload})
+		}
 	case "session.new":
 		// Queued behind in-flight/queued turns (see op) — session_cleared is
 		// sent when it actually executes.
@@ -248,6 +257,29 @@ func (s *Server) runCorrelatedTurn(ctx context.Context, payload turnPayload) {
 		s.mu.Unlock()
 	}()
 	s.runTurn(ctx, payload)
+}
+
+// runCorrelatedAppTurn owns correlation for the lifetime of the App Server
+// turn. Completion clears it in handleAppNotification, rather than on return.
+func (s *Server) runCorrelatedAppTurn(payload turnPayload) {
+	s.mu.Lock()
+	if s.activeTurnID != "" {
+		s.mu.Unlock()
+		s.steerAppTurn(payload)
+		return
+	}
+	if s.activeStarting {
+		s.mu.Unlock()
+		// A thread/start response is imminent. Preserve the message until it
+		// yields a real turn id, then it will be steered rather than becoming a
+		// competing fresh turn.
+		go func() { time.Sleep(10 * time.Millisecond); s.enqueue(op{kind: opTurn, payload: payload}) }()
+		return
+	}
+	s.activeRequestID, s.activeRunID = payload.RequestID, payload.RunID
+	s.activeStarting = true
+	s.mu.Unlock()
+	s.startAppTurn(payload)
 }
 
 func correlateTurnFrame(data []byte, requestID, runID string) []byte {

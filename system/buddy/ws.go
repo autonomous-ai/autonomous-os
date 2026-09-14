@@ -13,7 +13,7 @@ import (
 // in a goroutine after RegisterConnection.
 func (s *Service) RunReadLoop(conn *websocket.Conn, buddyID string, agentHandlers ...func(AgentEvent)) {
 	defer func() {
-		s.registry.ClearConnection(conn)
+		s.clearConnection(conn)
 		_ = conn.Close()
 		slog.Info("buddy disconnected", "component", "buddy", "id", buddyID)
 	}()

@@ -10,6 +10,7 @@ import logging
 from hal import config as hal_config
 from hal.drivers.voice._internal.realtime_turn import (
     ROUTE_NOISE_DROPPED,
+    ROUTE_HANDLED,
     should_drop_downstream_turn,
 )
 from hal.drivers.voice.speech_emotion.constants import UNKNOWN_USER_LABEL
@@ -40,7 +41,7 @@ def _take_look_snapshot_marker() -> str:
         return ""
 
 
-def _take_vision_handoff() -> tuple[str, str]:
+def _take_vision_handoff(*, discard: bool = False) -> tuple[str, str]:
     """Consume the frame the realtime `look` tool just captured and return
     ``(hint, image_b64)`` — a one-line hint for the main agent plus the frame
     itself as base64 — or ``("", "")`` if none is fresh.
@@ -50,6 +51,8 @@ def _take_vision_handoff() -> tuple[str, str]:
     see system/vision in services). The path stays in the hint for
     traceability/monitoring only: telling the agent to *read* it does not work
     on a text-only main model (tool-read image blocks are silently dropped).
+
+    ``discard`` clears the slot without loading an image after a routing change.
 
     Always clears the app_state slot — the frame belongs to exactly ONE turn
     (look runs in run_realtime_turn, this runs right after in the same turn), so a
@@ -67,7 +70,7 @@ def _take_vision_handoff() -> tuple[str, str]:
     ts = getattr(state, "realtime_look_frame_ts", 0.0)
     state.realtime_look_frame_path = None
     state.realtime_look_frame_ts = 0.0
-    if not path:
+    if discard or not path:
         return "", ""
     max_age = getattr(cfg, "REALTIME_GEMINI_VISION_HANDOFF_MAX_AGE_S", 20.0)
     if max_age > 0 and (time.monotonic() - ts) > max_age:
@@ -129,6 +132,7 @@ def dispatch_turn(
     event_type_override: str | None = None,
     identity=None,
     interaction_id: str = "",
+    harness_voice: dict | None = None,
 ):
     """Identify the speaker, send the turn to the OS server, and submit SER.
 
@@ -152,6 +156,39 @@ def dispatch_turn(
     prepass. When given we reuse it instead of running the (embedding-server)
     recognition a SECOND time here. None → compute it now (non-realtime path).
     """
+    if harness_voice and (harness_voice.get("unavailable") or harness_voice["enabled"]):
+        # A realtime capture abandoned during a mode toggle belongs to the old
+        # route. Consume its cached frame/trace marker without forwarding it or
+        # loading the image, so it cannot leak into a later normal voice turn.
+        _take_vision_handoff(discard=True)
+        _take_look_snapshot_marker()
+        final_text, event_type = decorator.classify_wake_word(combined)
+        event_type = event_type_override or event_type
+        user = identity[1] if identity and identity[1] else UNKNOWN_USER_LABEL
+        voice_metrics.set_route(interaction_id, "harness_only", event_type)
+        if should_drop_downstream_turn(rt):
+            voice_metrics.exclude(interaction_id, voice_metrics.EXCL_REJECTED_NOISE)
+        elif not final_text:
+            voice_metrics.exclude(interaction_id, voice_metrics.EXCL_NO_TRANSCRIPT)
+        elif sensing_sender.is_echo(final_text):
+            voice_metrics.exclude(interaction_id, voice_metrics.EXCL_REJECTED_NOISE)
+        elif harness_voice.get("unavailable"):
+            voice_metrics.mark_failed(interaction_id, voice_metrics.FAIL_DISPATCH_FAILED)
+            logger.warning("[turn] voice mode unavailable; transcript not dispatched")
+        else:
+            result = _sent(sensing_sender.send(
+                final_text, event_type=event_type, interaction_id=interaction_id,
+                harness_voice=harness_voice,
+            ))
+            voice_metrics.bind_run(interaction_id, result.run_id)
+            _note_dispatch_outcome(interaction_id, result)
+        decorator.submit_speech_emotion_from_session(ser_audio_buffer, user=user)
+        return
+
+    # Preserve the disabled snapshot on every normal route too. This prevents
+    # OS from forwarding an already-handled realtime turn after a mode toggle.
+    routing_kwargs = {"harness_voice": harness_voice} if harness_voice is not None else {}
+
     # Consume the realtime `look` frame once per turn, regardless of branch below
     # (so a handled turn that already used it doesn't leak it to a later delegate).
     vision_hint, vision_image = _take_vision_handoff()
@@ -184,7 +221,7 @@ def dispatch_turn(
         destination = "nowhere (model explicitly rejected non-user turn)"
     elif rt.handled:
         destination = "realtime (main agent notified, stays silent)"
-    elif not combined:
+    elif not combined and not (rt.delegated and rt.delegate_msg):
         destination = "nowhere (no transcript — nothing to send)"
     else:
         destination = "main agent"
@@ -206,22 +243,32 @@ def dispatch_turn(
         voice_metrics.exclude(interaction_id, voice_metrics.EXCL_REJECTED_NOISE)
     elif dropped:
         voice_metrics.exclude(interaction_id, voice_metrics.EXCL_REJECTED_NON_USER)
-    elif not combined:
+    elif not combined and not (rt.delegated and rt.delegate_msg):
         voice_metrics.exclude(interaction_id, voice_metrics.EXCL_NO_TRANSCRIPT)
 
-    if combined and not dropped:
+    # A valid realtime tool call is an authoritative transcript of the user's
+    # request. Some providers yield it before local STT has finalized, so do
+    # not lose the handoff merely because ``combined`` is empty.
+    forward_delegation = rt.delegated and bool(rt.delegate_msg)
+    if (combined or forward_delegation) and not dropped:
         # Reuse the prepass result when the realtime path already identified the
         # speaker this turn; otherwise identify now. Never runs recognition twice.
-        if identity is not None:
+        # There is no local transcript to identify for a tool-call-only turn.
+        if not combined:
+            final_msg, se_user = "", ""
+        elif identity is not None:
             final_msg, se_user, _ = identity
         else:
             final_msg, se_user, _ = decorator.identify_and_decorate(
                 final_text, audio_buffer
             )
         user = se_user if se_user else UNKNOWN_USER_LABEL
-        logger.info("Final message → OS server (%s): %r", event_type, final_msg)
+        if final_msg:
+            logger.info("Final message → OS server (%s): %r", event_type, final_msg)
 
         if rt.handled:
+            if rt.route == ROUTE_HANDLED and getattr(rt, "execution_completed", False):
+                voice_metrics.task_execution_finished(interaction_id)
             # Realtime already spoke — send as "voice_handled" to skip dead-air filler.
             # Include skill hint so OpenClaw reads input-branching and responds NO_REPLY.
             # [REPLY] is capped: it exists only so the main agent's memory knows
@@ -239,6 +286,7 @@ def dispatch_turn(
                 event_type="voice_agent_handled",
                 skip_echo=True,
                 interaction_id=interaction_id,
+                **routing_kwargs,
             ))
             # This POST is a backend notification, not a second user
             # interaction: it binds to the SAME interaction the realtime agent
@@ -258,7 +306,9 @@ def dispatch_turn(
         elif rt.delegated:
             # Delegated — send voice agent's summary + STT transcript to the OS server
             if rt.delegate_msg:
-                sensing_msg: str = f"[voice-instruction] {rt.delegate_msg}\n[transcript] {final_msg}"
+                sensing_msg: str = f"[voice-instruction] {rt.delegate_msg}"
+                if final_msg:
+                    sensing_msg = f"{sensing_msg}\n[transcript] {final_msg}"
             else:
                 sensing_msg = final_msg
             # Hand off the just-captured frame (if any) so the agent reuses it.
@@ -278,6 +328,7 @@ def dispatch_turn(
                     event_type=event_type,
                     image_b64=vision_image if vision_hint else "",
                     interaction_id=interaction_id,
+                    **routing_kwargs,
                 ))
                 voice_metrics.bind_run(interaction_id, result.run_id)
                 _note_dispatch_outcome(interaction_id, result)
@@ -296,6 +347,7 @@ def dispatch_turn(
                 event_type=event_type,
                 image_b64=vision_image if vision_hint else "",
                 interaction_id=interaction_id,
+                **routing_kwargs,
             ))
             voice_metrics.bind_run(interaction_id, result.run_id)
             _note_dispatch_outcome(interaction_id, result)

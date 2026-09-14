@@ -80,7 +80,7 @@ func TestConnectionReadyDrainsOnlyUnsentEventsOnceWithoutTurnEnd(t *testing.T) {
 			t.Errorf("wrong request replayed: %v", frame)
 		}
 		payload, _ := frame["payload"].(map[string]any)
-		if !strings.Contains(fmt.Sprint(payload["content"]), "Please answer in English.") {
+		if !strings.Contains(fmt.Sprint(payload["content"]), "Please answer in English.") || !strings.Contains(fmt.Sprint(payload["content"]), "[harness-reply run_id=queued-user channel=web]") {
 			t.Error("queued user content changed")
 		}
 		// Ready-time replay must not consume or resend the old correlation record.

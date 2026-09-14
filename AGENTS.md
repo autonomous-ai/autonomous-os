@@ -120,6 +120,17 @@ Rules:
 - Pi SSH: `ssh pi@<IP>` (credentials stored in the team password manager; IP
   varies per session).
 
+## Harness integration context
+
+Before changing `skills/harness-use`, `system/harness` or the OS Harness UI/API, read
+[the integration context and ownership](docs/harness.md) and its
+[Vietnamese counterpart](docs/vi/harness_vi.md). Harness app/device support is
+maintained by a separate team in `autonomous-harness` and
+`autonomous-harness-desktop`. This repo owns the OS client and skill only; keep
+implementation edits here. Verify cross-repository contract changes against the
+Harness team's current code and coordinate them rather than inventing another
+pairing flow, transport or credential. Buddy stays independent.
+
 ## Project Overview
 
 Autonomous is an open-source OS for physical AI agents. The Go backend

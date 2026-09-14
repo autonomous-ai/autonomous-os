@@ -32,6 +32,11 @@ const (
 // one that can report the problem while the user is still looking at the form.
 const MaxSpeakChars = 2000
 
+// MaxTimesPerSchedule mirrors the BFF's cap of the same name. The device is
+// the last line of defence for a device-AUTHORED schedule, which never passes
+// through the BFF's validation before being stored locally.
+const MaxTimesPerSchedule = 12
+
 // ResolveKind maps a raw wire value onto the kind the runner should actually
 // use. Empty resolves to KindAgent because every schedule stored before the
 // field existed carries "", and each of them must keep behaving exactly as it
@@ -287,6 +292,29 @@ func (s *Store) ReplaceWithTimezone(schedules []Schedule, timezone string) error
 		Timezone:  timezone,
 		Schedules: carryLocalBookkeeping(schedules, prior),
 	})
+}
+
+// SetTimezone updates ONLY the device-wide timezone, leaving the schedule list
+// untouched.
+//
+// Exists because a timezone change arrives on its own downlink (timezone.set),
+// not as part of a schedule.sync — and the runner resolves every wall-clock
+// cadence against Store.Timezone(). Without this the store keeps whatever
+// timezone the last sync happened to carry, so a device moved from UTC to
+// Asia/Saigon goes on firing on the old zone until some unrelated edit
+// triggers a sync. Observed live: a task set for 11:00 fired at 18:02 local.
+//
+// Returns whether the value actually changed, so callers can skip the
+// next-run recompute when a timezone.set is a no-op repeat.
+func (s *Store) SetTimezone(timezone string) (changed bool, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f := s.loadFileLocked()
+	if f.Timezone == timezone {
+		return false, nil
+	}
+	f.Timezone = timezone
+	return true, s.saveFileLocked(f)
 }
 
 // Get returns one schedule by id.

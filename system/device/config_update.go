@@ -32,6 +32,7 @@ func (s *Service) GetPublicConfig() domain.ConfigPublicResponse {
 	agentName := i18n.DeviceName()
 	deviceType := s.config.DeviceTypeOrDefault()
 	return domain.ConfigPublicResponse{
+		Environment:        s.config.EnvironmentSettings(),
 		Channel:            s.config.Channel,
 		TelegramUserID:     s.config.TelegramUserID,
 		SlackUserID:        s.config.SlackUserID,
@@ -242,6 +243,10 @@ func applyUpdate(c *config.Config, data domain.UpdateConfigRequest, adminHash st
 	applyNetworkFields(c, data, &ch)
 	applyChannelPatch(c, data)
 	applyMQTTFields(c, data)
+	if data.Environment != nil {
+		settings := data.Environment.Clone()
+		c.Environment = &settings
+	}
 
 	// Admin password rotation. Empty = keep existing hash; non-empty = bcrypt
 	// + replace. Existing sessions stay valid (signed by SessionSecret), so
@@ -340,6 +345,12 @@ func applyVoicePipelineFields(c *config.Config, data domain.UpdateConfigRequest,
 	}
 	if data.STTAPIKey != "" {
 		c.STTAPIKey = data.STTAPIKey
+	}
+	// Clear before set, so a request carrying both ends up holding the newly
+	// typed key rather than nothing. The UI never sends both; this only fixes
+	// the order if it ever does.
+	if data.ClearTTSAPIKey {
+		c.TTSAPIKey = ""
 	}
 	if data.TTSAPIKey != "" {
 		c.TTSAPIKey = data.TTSAPIKey
@@ -459,6 +470,11 @@ func applyMQTTFields(c *config.Config, data domain.UpdateConfigRequest) {
 // llm_model/thinking → openclaw, stt_language → openclaw NewSession + hal,
 // voice-pipeline fields → hal. Other fields persist only; restart os-server for full effect.
 func (s *Service) UpdateConfig(data domain.UpdateConfigRequest) error {
+	if data.Environment != nil {
+		if err := data.Environment.Validate(); err != nil {
+			return err
+		}
+	}
 	if err := domain.ValidateTTSSpeed(data.TTSSpeed); err != nil {
 		return err
 	}

@@ -12,6 +12,15 @@
 #   scripts/deploy-device.sh --host 172.168.20.255 --os-server  # binary only
 #   scripts/deploy-device.sh --host lamp.local --user pi --pass secret
 #   scripts/deploy-device.sh --host 172.168.20.255 --hal --dry-run
+#   scripts/deploy-device.sh --host 172.168.20.255 --hal-log     # tail hal journal
+#   scripts/deploy-device.sh --host 172.168.20.255 --os-log      # tail os-server
+#   scripts/deploy-device.sh --host 10.0.0.5 --jump proxy-host --hal   # via a bastion
+#
+# --hal-log / --os-log tail that unit's journal on the DEVICE and exit; they
+# deploy nothing, so they are safe to run against a device mid-session. Tunable
+# with LOG_LINES (default 200), FOLLOW=0 to dump instead of follow, and GREP=<re>
+# to filter remotely (cheaper than shipping every line over the link):
+#   IP=... GREP='\[live\]|Response latency' make hal-log
 #
 # --dry-run lists what WOULD change on the device and exits. Worth running
 # whenever your branch might be behind what is deployed: the swap has no
@@ -19,9 +28,15 @@
 # work that only exists on the device.
 #
 # Or via make:  IP=172.168.20.255 make device-deploy
+#               IP=10.0.0.5 J=proxy-host make hal-deploy   # via a jump host
 #
 # AUTH: password auth when PI_PASS is set (default "orangepi", needs sshpass);
 # set PI_PASS="" to use your SSH key + interactive sudo instead.
+#
+# JUMP HOST: --jump <host> (or J=<host> / PI_JUMP=<host>) reaches a device that
+# is not routable from here. PI_PASS is the DEVICE password only — the jump hop
+# itself authenticates from your SSH key/agent and ~/.ssh/config, so a bastion
+# that wants a password of its own will not work unattended.
 #
 # NEVER TOUCHED on the device: .env (device-local tuning), .venv, and
 # calibration/ (hand-recaptured servo poses). No --delete, so device-local
@@ -29,29 +44,35 @@
 set -euo pipefail
 
 HOST="${PI_HOST:-${IP:-}}"
+JUMP="${PI_JUMP:-${J:-}}"
 USER="${PI_USER:-orangepi}"
 PASS="${PI_PASS-orangepi}"
 DO_HAL=0
 DO_OS=0
 SKIP_BUILD=0
 DRY=0
+LOG_UNIT=""      # non-empty puts us in log mode: tail and exit, deploy nothing
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --host)      HOST="$2"; shift 2 ;;
+    --jump)      JUMP="$2"; shift 2 ;;
     --user)      USER="$2"; shift 2 ;;
     --pass)      PASS="$2"; shift 2 ;;
     --hal)       DO_HAL=1; shift ;;
     --os-server) DO_OS=1; shift ;;
+    --hal-log)   LOG_UNIT="hal"; shift ;;
+    --os-log)    LOG_UNIT="os-server"; shift ;;
     --skip-build) SKIP_BUILD=1; shift ;;
     --dry-run|-n) DRY=1; shift ;;
-    -h|--help)   sed -n '2,22p' "$0"; exit 0 ;;
+    -h|--help)   sed -n '2,38p' "$0"; exit 0 ;;
     *) echo "unknown arg: $1" >&2; exit 2 ;;
   esac
 done
 
-# No component flag = both.
-if [[ $DO_HAL -eq 0 && $DO_OS -eq 0 ]]; then DO_HAL=1; DO_OS=1; fi
+# No component flag = both. Log mode is not a component: without this guard
+# `--hal-log` alone would fall through and deploy everything.
+if [[ -z "$LOG_UNIT" && $DO_HAL -eq 0 && $DO_OS -eq 0 ]]; then DO_HAL=1; DO_OS=1; fi
 
 if [[ -z "$HOST" ]]; then
   echo "ERROR: no target. Pass --host <ip> or set IP=<ip>." >&2
@@ -63,6 +84,16 @@ BIN="$REPO_ROOT/system/os-server"
 STAGE="/home/$USER/.deploy-stage"
 
 SSH_OPTS=(-o StrictHostKeyChecking=accept-new -o LogLevel=ERROR -o ConnectTimeout=10)
+
+# One ProxyJump entry is shared by ssh, scp AND rsync. -o rather than -J because
+# RSYNC_RSH below is a plain string that gets word-split: a single unspaced token
+# survives that intact, so reject whitespace instead of silently mangling it.
+if [[ -n "$JUMP" ]]; then
+  case "$JUMP" in
+    *[[:space:]]*) echo "ERROR: jump host must not contain whitespace: '$JUMP'" >&2; exit 2 ;;
+  esac
+  SSH_OPTS+=(-o "ProxyJump=$JUMP")
+fi
 
 # Password auth is optional: with PI_PASS="" fall back to key auth, so this
 # works unattended in a shell that already has an agent.
@@ -87,12 +118,39 @@ else
   SUDO="sudo"
 fi
 
-echo "=== Preflight: $USER@$HOST ==="
-ping -c 1 -W 2 "$HOST" >/dev/null 2>&1 || {
-  echo "ERROR: $HOST unreachable." >&2; exit 1; }
+echo "=== Preflight: $USER@$HOST${JUMP:+ (via $JUMP)} ==="
+# ICMP is only an advisory fast-path. A device reached through a ProxyJump (--jump
+# or ~/.ssh/config) is not pingable from here AT ALL, and failing hard on that made
+# the script unusable for every jump-host target — while SSH below is the real
+# reachability test in both cases, with a better error when it fails.
+ping -c 1 -W 2 "$HOST" >/dev/null 2>&1 \
+  || echo "  (no ICMP reply — continuing; SSH is the authoritative check)"
 "${SSH[@]}" "$USER@$HOST" true || {
-  echo "ERROR: SSH to $USER@$HOST failed (wrong user/password/key?)." >&2; exit 1; }
+  echo "ERROR: SSH to $USER@$HOST${JUMP:+ via $JUMP} failed (wrong user/password/key/jump host?)." >&2
+  exit 1; }
 echo "OK — $("${SSH[@]}" "$USER@$HOST" 'hostname; uname -m' | paste -sd' ' -)"
+
+# --- Log mode: tail the unit's journal and exit. -------------------------------
+# Deliberately placed BEFORE staging and the os-server build: reading logs must
+# never create a staging dir, cross-compile, or touch the device's files, so it
+# is safe to run against a device that is mid-session.
+if [[ -n "$LOG_UNIT" ]]; then
+  log_lines="${LOG_LINES:-200}"          # LOG_LINES, not LINES: bash owns LINES
+  follow="${FOLLOW:-1}"
+  remote="journalctl -u $LOG_UNIT -n $log_lines --no-pager"
+  [[ "$follow" == "1" ]] && remote+=" -f"
+  # Filter on the DEVICE: an -f session on a chatty unit otherwise ships every
+  # servo/animation line over the link just to drop it locally.
+  [[ -n "${GREP:-}" ]] && remote+=" | grep --line-buffered -iE $(printf '%q' "$GREP")"
+  banner="=== $LOG_UNIT journal on $HOST — last $log_lines line(s)"
+  [[ -n "${GREP:-}" ]] && banner+=", filter: $GREP"
+  [[ "$follow" == "1" ]] && banner+=", following (Ctrl-C to stop)"
+  echo "$banner ==="
+  # -t forces a TTY so Ctrl-C reaches journalctl ON THE DEVICE. Without it only
+  # the local ssh dies and the remote follower is left running.
+  exec "${SSH[@]}" -t "$USER@$HOST" "$remote"
+fi
+
 # rsync creates the staging dir on its own; scp does not, so make it here or
 # an --os-server-only run has nowhere to land.
 "${SSH[@]}" "$USER@$HOST" "mkdir -p '$STAGE'"

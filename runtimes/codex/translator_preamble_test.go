@@ -131,3 +131,30 @@ func TestSingleAgentMessageUnchanged(t *testing.T) {
 		t.Errorf("unexpected thinking: %q", c.thinking)
 	}
 }
+
+// Codex speaks the OpenAI Responses API: `input_tokens` already includes
+// `cached_input_tokens`. Adding them (as this did before campaign-api enabled
+// prompt caching, when cached was always 0 and the bug was invisible) reports
+// double the context and halves the effective rotation threshold.
+func TestCodexUsageSubtractsCachedFromInput(t *testing.T) {
+	u := &codexUse{InputTokens: 17623, CachedInputTokens: 17408, OutputTokens: 31}
+	got := u.toDomain()
+	if got.InputTokens != 215 {
+		t.Fatalf("fresh input = %d, want 215 (17623 - 17408)", got.InputTokens)
+	}
+	if got.CacheReadTokens != 17408 {
+		t.Fatalf("cache read = %d, want 17408", got.CacheReadTokens)
+	}
+	if got.TotalTokens != 17654 {
+		t.Fatalf("total = %d, want 17654 (215 + 17408 + 31)", got.TotalTokens)
+	}
+}
+
+// No caching (every turn before the campaign-api fix) must still report the
+// full prompt as fresh input.
+func TestCodexUsageWithoutCacheIsUnchanged(t *testing.T) {
+	got := (&codexUse{InputTokens: 17623, OutputTokens: 31}).toDomain()
+	if got.InputTokens != 17623 || got.CacheReadTokens != 0 || got.TotalTokens != 17654 {
+		t.Fatalf("uncached usage mangled: %+v", got)
+	}
+}

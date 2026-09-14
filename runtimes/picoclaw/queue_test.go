@@ -98,7 +98,7 @@ func TestQueueSerializesDirectAndBufferedTurnsThroughAllTerminalCallbacks(t *tes
 	s.translateFrame([]byte(`{"type":"message.create","payload":{"content":"answer one"}}`), callback)
 	f := nextQueuedFrame(t, frames, "req-2")
 	payload := f["payload"].(map[string]any)
-	if payload["content"] != "second" || len(payload["attachments"].([]any)) != 1 {
+	if payload["content"] != "second\n[harness-reply run_id=run-2 channel=web]" || len(payload["attachments"].([]any)) != 1 {
 		t.Fatalf("queued chat changed: %v", f)
 	}
 	s.SetBusy(false) // A repeated idle from the old consumer cannot drain turn 3.
@@ -118,6 +118,7 @@ func TestQueueSerializesDirectAndBufferedTurnsThroughAllTerminalCallbacks(t *tes
 }
 
 func TestReconnectDrainsOnlyUnsentWithoutTerminalEvent(t *testing.T) {
+	observations := captureLostObservations(t)
 	s := queueService(t)
 	s.pendingEvents = []pendingEvent{{eventType: "web_chat", msg: "retained", fixedRunID: "unsent", queuedAt: time.Now()}}
 	s.drainPendingEvents()
@@ -148,6 +149,7 @@ func TestReconnectDrainsOnlyUnsentWithoutTerminalEvent(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("connection teardown did not finish")
 	}
+	assertLostObservation(t, observations, "unsent")
 	// The just-written request is uncertain on disconnect, not locally queued.
 	if len(s.pendingEvents) != 0 || s.peekPendingRunID() != "" || s.activeTurn.Load() {
 		t.Fatal("disconnect retained transmitted work")

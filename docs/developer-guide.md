@@ -264,10 +264,10 @@ Sync individual files, or the whole directory:
 
 ```bash
 # One file
-sshpass -p 'orangepi' scp hal/drivers/mic_button.py orangepi@<ip>:/tmp/
+sshpass -p 'orangepi' scp hal/drivers/privacy_button.py orangepi@<ip>:/tmp/
 sshpass -p 'orangepi' ssh orangepi@<ip> "echo orangepi | sudo -S bash -c '
-  mv /tmp/mic_button.py /opt/hal/drivers/mic_button.py
-  chown root:root /opt/hal/drivers/mic_button.py
+  mv /tmp/privacy_button.py /opt/hal/drivers/privacy_button.py
+  chown root:root /opt/hal/drivers/privacy_button.py
   systemctl restart hal
 '"
 
@@ -415,7 +415,7 @@ The full STT drivers (OpenAI, Whisper local, Google, …) live under
 | Route module | `hal/routes/voice.py` |
 | `POST /voice/mute` — stops feeding audio into VAD/STT, ignores mic | `voice.py:336` — `def mute_mic()` |
 | `POST /voice/unmute` — re-arms the mic | `voice.py:349` — `def unmute_mic()` |
-| Slide-switch driver (physical mic mute on PD1, Intern v2 Pro) | `hal/drivers/mic_button.py` — calls `mute_mic()` / `unmute_mic()` on GPIO edge |
+| Slide-switch driver (physical mic mute on PD1, Intern v2 Pro) | `hal/drivers/privacy_button.py` — calls `mute_mic()` / `unmute_mic()` on GPIO edge |
 
 ```bash
 curl -X POST http://127.0.0.1:5001/voice/mute
@@ -626,7 +626,7 @@ module load and stripped from the URL for privacy (see `hooks/setup/useSetupUrlP
 | `system/` | Business services — agent, device, network, openclaw, hermes, mqtt, statusled, healthwatch, … |
 | `system/domain/` | Shared Go types |
 | `hal/` | Python HAL — drivers, routes, board profiles |
-| `hal/drivers/` | Hardware drivers (rgb, motors, voice, sensing, gpio_button, mic_button, …) |
+| `hal/drivers/` | Hardware drivers (rgb, motors, voice, sensing, gpio_button, privacy_button, …) |
 | `hal/routes/` | FastAPI routes (voice, led, camera, emotion, scene, music, servo, …) |
 | `robots/contract/` | Frozen HAL capability ABI (`capabilities.md`, `ROBOT-SPEC.md`) |
 | `skills/` | 25 built-in skills — agents auto-discover these, including `skill-creator` for authoring and evaluating new skills |

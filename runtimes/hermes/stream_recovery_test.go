@@ -184,3 +184,11 @@ func TestNotReadyReplayPreservesDetachedOrder(t *testing.T) {
 		}
 	}
 }
+
+func TestHarnessChatsReplayAsStandaloneTurns(t *testing.T) {
+	for _, kind := range []string{"web_chat", "mqtt_chat", "voice_followup"} {
+		if !standaloneDrain(pendingEvent{eventType: kind}) {
+			t.Errorf("%s must retain its own response run", kind)
+		}
+	}
+}

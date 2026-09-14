@@ -3,7 +3,7 @@ import { CalendarClock, Pencil, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { C, SectionCard } from "@/components/setup/shared";
 import {
-  createSchedule, deleteSchedule, listSchedules, resolveScheduleKind, runScheduleNow, updateSchedule,
+  createSchedule, deleteSchedule, listSchedules, resolveCadenceTimes, resolveScheduleKind, runScheduleNow, updateSchedule,
 } from "@/lib/api";
 import type { ScheduleCadence, ScheduleItem } from "@/lib/api";
 import { ScheduleEditor } from "./ScheduleEditor";
@@ -73,6 +73,67 @@ function formatMs(ms: number): string {
 // would show a wall-clock time that doesn't match what the device itself will
 // actually do. Returns null for a missing/unparseable instant so callers can
 // choose their own fallback copy ("Never" vs "Not scheduled" read differently).
+// snapToScheduledTime rewrites a next-run instant onto the wall-clock time the
+// user actually chose.
+//
+// The device applies a deterministic jitter of up to +/-5 minutes to every
+// wall-clock occurrence, to stop a fleet firing on the same second. That is
+// invisible plumbing — but next_run_at carries it, so a task set for 1:25 PM
+// reported "1:27 PM" and read as a bug to everyone who saw it. The jitter still
+// governs when the task really fires; only the DISPLAY is snapped back.
+//
+// Picks the configured time closest to the reported instant rather than
+// assuming the first: with several times a day, the jittered value can land
+// nearer a later entry, and it can cross midnight in either direction.
+function snapToScheduledTime(
+  iso: string | undefined,
+  cadence: ScheduleCadence,
+  tz: string,
+): string | undefined {
+  const times = resolveCadenceTimes(cadence);
+  if (!iso || times.length === 0) return iso;
+
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+
+  // Read the instant's own wall clock in the device's zone, so the comparison
+  // is against the same clock the user typed into.
+  let hh: number, mm: number;
+  try {
+    const parts = new Intl.DateTimeFormat("en-GB", {
+      timeZone: tz || undefined, hour: "2-digit", minute: "2-digit", hour12: false,
+    }).formatToParts(d);
+    hh = Number(parts.find((p) => p.type === "hour")?.value ?? NaN);
+    mm = Number(parts.find((p) => p.type === "minute")?.value ?? NaN);
+  } catch {
+    return iso;
+  }
+  if (!Number.isFinite(hh) || !Number.isFinite(mm)) return iso;
+
+  const actual = hh * 60 + mm;
+  let best: string | undefined;
+  let bestDelta = Infinity;
+  for (const t of times) {
+    const [th, tm] = t.split(":").map(Number);
+    if (!Number.isFinite(th) || !Number.isFinite(tm)) continue;
+    const target = th * 60 + tm;
+    // Circular distance, so 23:58 vs 00:01 is 3 minutes rather than 1437.
+    const raw = Math.abs(target - actual);
+    const delta = Math.min(raw, 1440 - raw);
+    if (delta < bestDelta) {
+      bestDelta = delta;
+      best = t;
+    }
+  }
+  // Only snap within the jitter band. Anything further apart is not jitter, and
+  // silently relabelling it would hide a genuinely wrong next-run time.
+  if (best === undefined || bestDelta > 5) return iso;
+
+  const [bh, bm] = best.split(":").map(Number);
+  const snapped = new Date(d.getTime() + ((bh * 60 + bm) - actual) * 60_000);
+  return snapped.toISOString();
+}
+
 function formatDeviceTime(iso: string | undefined, tz: string): string | null {
   if (!iso) return null;
   const d = new Date(iso);
@@ -89,18 +150,28 @@ function formatDeviceTime(iso: string | undefined, tz: string): string | null {
 // cadenceSummary renders one schedule's cadence as a single short line. Kept
 // deliberately simple — this renders on a small device screen, not a full
 // calendar editor (there is no editor at all: see the file doc comment).
+/** "09:00" / "09:00, 13:00 and 17:00" — empty when the cadence has no time. */
+function timesLabel(cadence: ScheduleCadence): string {
+  const times = resolveCadenceTimes(cadence);
+  if (times.length === 0) return "";
+  if (times.length === 1) return times[0];
+  return `${times.slice(0, -1).join(", ")} and ${times[times.length - 1]}`;
+}
+
 function cadenceSummary(cadence: ScheduleCadence, tz: string): string {
+  const at = timesLabel(cadence);
   switch (cadence.repeat) {
     case "daily":
-      return cadence.time ? `Daily at ${cadence.time}` : "Daily";
+      return at ? `Daily at ${at}` : "Daily";
     case "weekly": {
       const days = (cadence.days ?? []).map(weekdayLabel).join(", ");
-      const at = cadence.time ? ` at ${cadence.time}` : "";
-      return days ? `Weekly on ${days}${at}` : `Weekly${at}`;
+      const suffix = at ? ` at ${at}` : "";
+      return days ? `Weekly on ${days}${suffix}` : `Weekly${suffix}`;
     }
     case "monthly": {
-      const at = cadence.time ? ` at ${cadence.time}` : "";
-      return cadence.day_of_month ? `Monthly on the ${ordinal(cadence.day_of_month)}${at}` : `Monthly${at}`;
+      return cadence.day_of_month
+        ? `Monthly on the ${ordinal(cadence.day_of_month)}${at ? ` at ${at}` : ""}`
+        : `Monthly${at ? ` at ${at}` : ""}`;
     }
     case "interval":
       return cadence.every_ms ? `Every ${formatMs(cadence.every_ms)}` : "Interval";
@@ -306,7 +377,8 @@ export function ScheduledSection({ active }: { active: boolean }) {
             ? "Waiting to sync"
             : !sch.enabled
               ? "Paused"
-              : formatDeviceTime(sch.next_run_at, timezone) ?? "Not scheduled";
+              : formatDeviceTime(snapToScheduledTime(sch.next_run_at, sch.schedule, timezone), timezone) ??
+                "Not scheduled";
           const isRunning = running === sch.id;
           const isPending = Boolean(sch.pending);
           return (

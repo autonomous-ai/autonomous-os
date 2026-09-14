@@ -16,10 +16,12 @@ var Catalog = []string{
 	"connectors",
 	"display",
 	"emotion",
+	"environment",
 	"face-enroll",
 	"faq",
 	"guard",
 	"habit",
+	"harness-use",
 	"input-branching",
 	"led-control",
 	"mood",
@@ -49,12 +51,14 @@ var Capability = map[string][]string{
 	"computer-use": {device.CapCompanion},
 	"display":      {device.CapDisplay},
 	"emotion":      {device.CapExpression},
+	"environment":  {device.CapEnvironment},
 	// Camera people-perception: the ML people-layer over the camera, not the raw
 	// vision sensor — a camera that only streams must not load it.
 	"face-enroll": {device.CapPresence},
 	// Camera people-perception: the ML people-layer over the camera, not the raw
 	// vision sensor.
 	"guard":          {device.CapPresence},
+	"harness-use":    {device.CapCompanion},
 	"led-control":    {device.CapLight},
 	"music":          {device.CapMedia},
 	"scene":          {device.CapLight},

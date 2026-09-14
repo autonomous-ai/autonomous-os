@@ -7,6 +7,7 @@ import (
 
 	"go.autonomous.ai/os/system/domain"
 	"go.autonomous.ai/os/system/lib/flow"
+	"go.autonomous.ai/os/system/telemetry"
 )
 
 // handleChatEvent handles WS event=="chat": OpenClaw chat-stream events
@@ -29,6 +30,15 @@ func (h *AgentHandler) handleChatEvent(evt domain.WSEvent) error {
 		"raw_message", string(payload.RawMessage))
 	// Same as agent stream: OpenClaw may send UUID while lifecycle/tool/tts used resolved device id.
 	flowRunID := h.resolveRunID(payload.RunID)
+	// Harness owns the final response for this exact run. Do not close the
+	// Web/MQTT stream with the device agent's handoff before it arrives.
+	h.harnessRepliesMu.Lock()
+	_, harnessOwnsReply := h.harnessReplies[flowRunID]
+	h.harnessRepliesMu.Unlock()
+	if harnessOwnsReply && payload.Role != "user" && payload.State != "error" {
+		return nil
+	}
+
 	// Debug alignment: OpenClaw "chat" stream may or may not include user messages for outbound chat.send.
 	// When flowRunID belongs to the device, log role/state/message so we can confirm whether chat_input can be emitted.
 	if strings.HasPrefix(flowRunID, "device-") {
@@ -70,6 +80,7 @@ func (h *AgentHandler) handleChatEvent(evt domain.WSEvent) error {
 		} else {
 			slog.Error("OpenClaw chat error", "component", "agent", "run_id", flowRunID, "error", errMsg)
 			flow.Log("agent_error", map[string]any{"run_id": flowRunID, "error": errMsg}, flowRunID)
+			telemetry.ReportTaskExecution(h.resolveTaskRunID(payload.RunID, flowRunID), "", "failed", "chat_error")
 			h.monitorBus.Push(domain.MonitorEvent{
 				Type:    "chat_response",
 				Summary: "❌ " + shortError(errMsg),
@@ -151,6 +162,9 @@ func (h *AgentHandler) handleChatEvent(evt domain.WSEvent) error {
 			"lifecycle_started": false,
 			"message":           msgPreview,
 		}, flowRunID)
+		// This successful final is the execution boundary for a command
+		// that bypassed lifecycle events. Empty finals remain unproven.
+		telemetry.ReportTaskExecution(flowRunID, "", "completed", "chat_final_no_lifecycle")
 		// Slash commands bypass the LLM lifecycle so lifecycle.end never
 		// fires for this run. Without this, every /status (or /new etc.)
 		// wedges the busy flag for the full busyTTL (5 min), queueing

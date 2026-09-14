@@ -10,6 +10,7 @@ import (
 	"go.autonomous.ai/os/system/domain"
 	"go.autonomous.ai/os/system/lib/flow"
 	sensinghttp "go.autonomous.ai/os/system/server/sensing/delivery/http"
+	"go.autonomous.ai/os/system/telemetry"
 )
 
 // handleAgentStreamEvent handles WS event=="agent": the OpenClaw agent stream
@@ -56,6 +57,7 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 			hist, err := h.agentGateway.FetchChatHistory(payload.SessionKey, 5)
 			if err == nil && hist != nil {
 				if userMsg, _, _ := extractLastUserMessageFromHistory(hist); userMsg != "" {
+					h.correlateTaskRun(payload.RunID, userMsg)
 					if deviceTrace := h.agentGateway.MatchPendingByMessage(userMsg); deviceTrace != "" {
 						h.mapRunID(payload.RunID, deviceTrace)
 						slog.Info("mapped OpenClaw runId to device trace via chat.history",
@@ -88,7 +90,7 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 		// Clear on end/error so a subsequent channel turn on the same
 		// session within 30s isn't wrongly skipped — the previous turn
 		// is finished, agent path is no longer handling anything.
-		if payload.SessionKey != "" {
+		if payload.SessionKey != "" && !payload.Data.MergedIntoActiveTurn {
 			h.agentLifecycleMu.Lock()
 			switch payload.Data.Phase {
 			case "start":
@@ -97,8 +99,11 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 					h.activeRunIDBySession[payload.SessionKey] = payload.RunID
 				}
 			case "end", "error":
-				delete(h.agentLifecycleAt, payload.SessionKey)
-				delete(h.activeRunIDBySession, payload.SessionKey)
+				// A delayed terminal event must not clear a newer host turn.
+				if h.activeRunIDBySession[payload.SessionKey] == payload.RunID {
+					delete(h.agentLifecycleAt, payload.SessionKey)
+					delete(h.activeRunIDBySession, payload.SessionKey)
+				}
 			}
 			h.agentLifecycleMu.Unlock()
 		}
@@ -537,6 +542,18 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 			lcData["original_error"] = payload.Data.Error
 		}
 		flow.Log("lifecycle_"+payload.Data.Phase, lcData, flowRunID)
+		taskRunID := h.resolveTaskRunID(payload.RunID, flowRunID)
+		switch payload.Data.Phase {
+		case "end":
+			telemetry.ReportTaskLifecycleEnd(taskRunID, payload.Data.Aborted, payload.Data.Error != "")
+		case "error":
+			if errorRecovered {
+				// A salvaged reply does not establish that execution finished.
+				telemetry.ReportTaskExecution(taskRunID, "", "unknown", "lifecycle_error_recovered")
+			} else {
+				telemetry.ReportTaskExecution(taskRunID, "", "failed", "lifecycle_error")
+			}
+		}
 		monEvt := domain.MonitorEvent{
 			Type:    "lifecycle",
 			Summary: fmt.Sprintf("Agent %s", payload.Data.Phase),
@@ -644,6 +661,7 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 					slog.Info("intercepted built-in tts tool, routing to HAL", "component", "agent", "run_id", flowRunID, "text", ttsText[:min(len(ttsText), 80)], "channel_run", isChannelRun, "web_chat", isWebChat, "silent", isSilent)
 					flow.Log("tts_send", map[string]any{"run_id": flowRunID, "text": ttsText, "source": "tts_tool_intercept"}, flowRunID)
 					if !isChannelRun && !isWebChat && !isSilent {
+						sensinghttp.DefaultFillerManager.Cancel(flowRunID)
 						h.deliverTTS(h.agentGateway.SendToHALTTS, ttsText, flowRunID, "TTS intercept delivery failed")
 					}
 					// Mark this turn as already spoken so lifecycle_end won't double-speak.
@@ -716,11 +734,10 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 		}
 		// Don't truncate deltas — they are merged in the frontend
 		if delta != "" {
-			// Real assistant text is streaming — hard-cancel any
-			// pending or in-flight filler so the device doesn't talk
-			// over the actual reply. Cancel is idempotent so calling
-			// it on every delta is safe.
-			sensinghttp.DefaultFillerManager.Cancel(flowRunID)
+			// Assistant text may introduce another tool call. Suspend fillers
+			// during text; only a new tool.start can resume this voice turn.
+			// Lifecycle end/error and explicit interruption still hard-cancel.
+			sensinghttp.DefaultFillerManager.OnAssistantText(flowRunID)
 			h.monitorBus.Push(domain.MonitorEvent{
 				Type:    "assistant_delta",
 				Summary: delta,
@@ -784,6 +801,8 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 						"run_id", flowRunID,
 						"sentence", cleaned[:min(len(cleaned), 100)])
 					flow.Log("tts_stream_send", map[string]any{"run_id": flowRunID, "text": cleaned}, flowRunID)
+					// Real speech ends filler eligibility even if more tools follow.
+					sensinghttp.DefaultFillerManager.Cancel(flowRunID)
 					h.deliverTTSQueue(cleaned, flowRunID, "streaming TTS delivery failed")
 				}
 			}
@@ -991,6 +1010,12 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 				}, flowRunID)
 				text = filteredFull
 			}
+			if h.suppressHarnessAgentReply(flowRunID) {
+				slog.Info("agent deferred reply to Harness", "component", "agent", "run_id", flowRunID)
+				flow.Log("harness_reply_pending", map[string]any{"run_id": flowRunID}, flowRunID)
+				h.ResumeHarnessVoiceFillers(flowRunID)
+				return nil
+			}
 			if isAgentNoReply(text) || isMetaNonReply(text) {
 				// NO_REPLY in remainder. If streamed > 0 the agent
 				// already spoke sentence 1; can't unspeak it. Log a
@@ -1011,6 +1036,7 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 					Detail:  map[string]string{"role": "assistant", "message": "[no reply]"},
 				})
 			} else if remainderText == "" {
+				h.clearHarnessResponseRun(flowRunID)
 				if streamed {
 					// Reply was a single sentence already streamed
 					// mid-turn — nothing left to TTS at end. Log so
@@ -1024,9 +1050,11 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 					flow.Log("hw_only_reply", map[string]any{"run_id": flowRunID}, flowRunID)
 				}
 			} else if suppressReason != "" {
+				h.clearHarnessResponseRun(flowRunID)
 				slog.Info("assistant turn done, TTS suppressed", "component", "agent", "reason", suppressReason, "text", text[:min(len(text), 100)])
 				flow.Log("tts_suppressed", map[string]any{"run_id": flowRunID, "reason": suppressReason, "text": text}, flowRunID)
 			} else {
+				h.clearHarnessResponseRun(flowRunID)
 				// Channel detection: positive-evidence only. tg- runIDs are
 				// synthesised by the device from session.message events (real Telegram
 				// users); anything else (device-chat-*, UUID from steer/cron/

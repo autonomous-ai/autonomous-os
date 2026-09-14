@@ -137,7 +137,8 @@ còn phụ thuộc python3/websockets), gatewayd này:
   `bridge.error` để os-server đóng run thay vì chờ hết busy TTL; `session.new`
   restart child **không kèm** `--resume`;
 - queue các frame `message.send` đến trong lúc child đang down và flush khi
-  respawn.
+  respawn; khi gateway dừng, nó chờ child loop reap process group Claude rồi
+  mới giải phóng runtime state.
 
 ### Ranh giới bảo mật: Claude chạy root, không sandbox
 

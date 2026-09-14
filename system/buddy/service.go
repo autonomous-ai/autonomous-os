@@ -17,12 +17,16 @@ import (
 // pairing-code generator, a persistent pairing store, an in-memory connection
 // registry, and a dispatcher.
 type Service struct {
-	store      *Store
-	pairing    *PairingCodeStore
-	registry   *Registry
-	dispatcher *Dispatcher
-	agentMu    sync.Mutex
-	agentSeq   map[string]uint64
+	statusMu      sync.Mutex
+	instanceID    string
+	revision      uint64
+	statusChanges chan struct{}
+	store         *Store
+	pairing       *PairingCodeStore
+	registry      *Registry
+	dispatcher    *Dispatcher
+	agentMu       sync.Mutex
+	agentSeq      map[string]uint64
 }
 
 // ProvideService wires the buddy subsystem. It loads any existing pairing from
@@ -36,10 +40,12 @@ func ProvideService() (*Service, error) {
 	registry := NewRegistry()
 	dispatcher := NewDispatcher(registry)
 	return &Service{
-		store:      store,
-		pairing:    pairing,
-		registry:   registry,
-		dispatcher: dispatcher,
+		instanceID:    NewCommandID(),
+		statusChanges: make(chan struct{}, 1),
+		store:         store,
+		pairing:       pairing,
+		registry:      registry,
+		dispatcher:    dispatcher,
 	}, nil
 }
 
@@ -51,6 +57,8 @@ func (s *Service) IssuePairingCode() (string, time.Duration) {
 // ConfirmPairing validates a submitted code and persists a new pairing record,
 // returning the long-lived token + buddy ID for the buddy to use.
 func (s *Service) ConfirmPairing(name, fingerprint, osVersion, code string) (*PairingRecord, error) {
+	s.statusMu.Lock()
+	defer s.statusMu.Unlock()
 	if !s.pairing.Consume(code) {
 		return nil, fmt.Errorf("invalid or expired code")
 	}
@@ -65,19 +73,28 @@ func (s *Service) ConfirmPairing(name, fingerprint, osVersion, code string) (*Pa
 	if err := s.store.Set(record); err != nil {
 		return nil, fmt.Errorf("save pairing: %w", err)
 	}
+	// A replacement pairing must not inherit the previous buddy's connection.
+	if conn := s.registry.Conn(); conn != nil {
+		_ = conn.Close()
+	}
+	s.registry.Clear()
+	s.statusChangedLocked()
 	slog.Info("buddy paired", "component", "buddy", "id", record.BuddyID, "name", name, "os", osVersion)
 	return record, nil
 }
 
 // Unpair drops the current buddy: closes the WS, clears the registry, removes the on-disk record.
 func (s *Service) Unpair() error {
+	s.statusMu.Lock()
+	defer s.statusMu.Unlock()
+	if err := s.store.Clear(); err != nil {
+		return fmt.Errorf("clear store: %w", err)
+	}
 	if conn := s.registry.Conn(); conn != nil {
 		_ = conn.Close()
 	}
 	s.registry.Clear()
-	if err := s.store.Clear(); err != nil {
-		return fmt.Errorf("clear store: %w", err)
-	}
+	s.statusChangedLocked()
 	slog.Info("buddy unpaired", "component", "buddy")
 	return nil
 }
@@ -94,7 +111,23 @@ func (s *Service) ValidateToken(token string) *PairingRecord {
 
 // RegisterConnection installs the buddy's WS for command dispatch.
 func (s *Service) RegisterConnection(conn *websocket.Conn) {
+	s.statusMu.Lock()
+	defer s.statusMu.Unlock()
 	s.registry.Set(conn)
+	s.statusChangedLocked()
+}
+
+// RegisterAuthenticatedConnection rechecks the token under the state lock so a
+// revoke or replacement during the HTTP upgrade cannot install a stale socket.
+func (s *Service) RegisterAuthenticatedConnection(conn *websocket.Conn, token string) bool {
+	s.statusMu.Lock()
+	defer s.statusMu.Unlock()
+	if s.store.ByToken(token) == nil {
+		return false
+	}
+	s.registry.Set(conn)
+	s.statusChangedLocked()
+	return true
 }
 
 // Connected reports whether a buddy is currently online.

@@ -32,6 +32,11 @@ type InstalledSkill struct {
 	Name        string      `json:"name"`
 	Description string      `json:"description,omitempty"`
 	Files       []SkillNode `json:"files"`
+	// StoreAvailability is the result of comparing this directory name with the
+	// current skill-store catalog. It is "in_store", "device_only", or
+	// "unknown" when the catalog could not be read completely. This describes
+	// availability in the catalog, not how the skill was originally installed.
+	StoreAvailability string `json:"store_availability,omitempty"`
 	// UpdatedAt is the NEWEST modification time in the skill's tree, as Unix
 	// seconds — the skill directory's own mtime only moves when files are added
 	// or removed, so it would call an edited SKILL.md unchanged. 0 when nothing

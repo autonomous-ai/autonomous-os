@@ -275,6 +275,9 @@ export interface WifiProvisionBody {
   stt_base_url?: string;
   stt_language?: string;
   tts_api_key?: string;
+  // Explicit delete. `tts_api_key: ""` cannot express this — the backend reads
+  // an empty string as "field not sent" (PATCH semantics).
+  clear_tts_api_key?: boolean;
   tts_base_url?: string;
   tts_provider?: string;
   tts_voice?: string;
@@ -426,20 +429,43 @@ export interface AgentRuntimeStatus {
    *  `current` flips as soon as the switch lands; the gateway behind it can
    *  still be booting for tens of seconds after that. */
   ready: boolean;
+  /** Stored remote-gateway config. Blank on every runtime other than
+   *  "remote"; used by the settings page to pre-fill the URL/token inputs when
+   *  the operator re-opens it. Backend returns the token as-is (the endpoint
+   *  is behind adminAuthMiddleware). */
+  remote_url?: string;
+  remote_token?: string;
 }
 
 export async function getAgentRuntime(): Promise<AgentRuntimeStatus> {
   return apiRequest<AgentRuntimeStatus>(`${API_BASE}/api/device/agent-runtime`);
 }
 
-/** POST /api/device/agent-runtime — swap the agentic backend (openclaw ⇄ hermes).
- *  The device restarts os-server right after, so the connection drops; callers
- *  should treat success as "accepted, reconnecting" and re-poll once it's back. */
-export async function setAgentRuntime(runtime: string): Promise<boolean> {
+/** Options for `setAgentRuntime`. Only meaningful when `runtime === "remote"`:
+ *  `url` is required (http:// or https://) and points to the Hermes server on
+ *  another machine (the device uses its existing Hermes client, just against
+ *  that URL); `token` is the optional Bearer token that server requires. */
+export interface SetAgentRuntimeOptions {
+  url?: string;
+  token?: string;
+}
+
+/** POST /api/device/agent-runtime — swap the agentic backend (openclaw ⇄ hermes ⇄ remote).
+ *  The device restarts os-server right after a successful switch, so the
+ *  connection drops; callers should treat success as "accepted, reconnecting"
+ *  and re-poll once it's back. The response body is always `true` on
+ *  acceptance — a rejected switch returns an HTTP error, not `false`. */
+export async function setAgentRuntime(
+  runtime: string,
+  opts?: SetAgentRuntimeOptions,
+): Promise<boolean> {
+  const body: Record<string, string> = { runtime };
+  if (opts?.url) body.url = opts.url;
+  if (opts?.token) body.token = opts.token;
   return apiRequest<boolean>(`${API_BASE}/api/device/agent-runtime`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ runtime }),
+    body: JSON.stringify(body),
   });
 }
 
@@ -516,6 +542,55 @@ export async function updateDeviceConfig(body: Partial<Record<string, unknown>>)
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
+  });
+}
+
+/** Read-side of a static-credential connector (Facebook Fan Page, Gmail app
+ *  password, …). Reports whether a credential is on file plus the non-secret
+ *  identity fields the UI shows next to the "connected ✓" state. The token
+ *  itself is NEVER returned — a UI that wants to rotate one must re-collect it
+ *  from the operator. */
+export interface ConnectorInfo {
+  connector: string;
+  connected: boolean;
+  auth_type?: string;
+  user_email?: string;
+  credentials?: Record<string, string>;
+  /** Unix seconds when this device received the credentials, or 0/undefined
+   *  when nothing has been set. */
+  obtained_at?: number;
+}
+
+/** GET /api/device/connectors/:code — reads the on-disk entry the
+ *  connectorWriter maintains. Same source of truth as the MQTT
+ *  connector.set.<code> dispatcher writes, so a token pushed from the backend
+ *  is indistinguishable from one pasted locally. */
+export async function getConnector(code: string): Promise<ConnectorInfo> {
+  return apiRequest<ConnectorInfo>(`${API_BASE}/api/device/connectors/${encodeURIComponent(code)}`);
+}
+
+/** POST /api/device/connectors/pat — the local Settings UI's write path for a
+ *  static-credential connector. `credentials` carries non-secret extras (page
+ *  id, workspace slug, …); the api_key is the pasted PAT / App Password. */
+export async function setConnectorPAT(body: {
+  connector: string;
+  api_key: string;
+  user_email?: string;
+  credentials?: Record<string, string>;
+}): Promise<{ connector: string; auth_type: string; user_email?: string }> {
+  return apiRequest(`${API_BASE}/api/device/connectors/pat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+/** DELETE /api/device/connectors/:code — drops the on-disk entry (and any
+ *  mcp.servers.<code> side-effect through the writer). The UI uses this to
+ *  disconnect a connector without leaving stale credentials in place. */
+export async function removeConnector(code: string): Promise<{ connector: string; removed: boolean }> {
+  return apiRequest(`${API_BASE}/api/device/connectors/${encodeURIComponent(code)}`, {
+    method: "DELETE",
   });
 }
 
@@ -605,7 +680,10 @@ export interface ScheduleCadence {
   // tell the two conventions apart; Sunday is where they disagree.
   days?: number[];
   day_of_month?: number; // "monthly", 1-31 (clamped to the month's real last day)
-  time?: string; // "HH:MM" wall clock, in the response's `timezone`
+  time?: string; // "HH:MM" wall clock, in the response's `timezone`. Always times[0].
+  /** Every fire time in a day (daily/weekly/monthly). Absent on schedules
+   *  created before this field — read via resolveCadenceTimes, never directly. */
+  times?: string[];
   every_ms?: number; // "interval" gap — MILLISECONDS, not seconds
   at?: string; // "once" — absolute RFC3339 instant
 }
@@ -626,6 +704,16 @@ export const MAX_SPEAK_CHARS = 2000;
 /** Normalise a possibly-absent kind. Mirrors ResolveKind in system/schedule/store.go. */
 export function resolveScheduleKind(kind?: string | null): ScheduleKind {
   return kind?.trim().toLowerCase() === "speak" ? "speak" : "agent";
+}
+
+/** Most times one schedule may carry. Mirrors MaxTimesPerSchedule on the device. */
+export const MAX_TIMES_PER_SCHEDULE = 12;
+
+/** Effective fire times: `times` when set, else the single `time`. */
+export function resolveCadenceTimes(c: ScheduleCadence | undefined): string[] {
+  if (!c) return [];
+  if (c.times?.length) return c.times;
+  return c.time ? [c.time] : [];
 }
 
 export interface ScheduleItem {
@@ -818,6 +906,9 @@ export interface InstalledSkill {
   name: string;
   description?: string;
   files: SkillNode[];
+  /** Whether this directory name is currently present in the skill catalog.
+   * `unknown` means the device could not read the complete catalog. */
+  store_availability?: "in_store" | "device_only" | "unknown";
   /** Newest mtime anywhere in the skill's tree, Unix SECONDS. Omitted when
    *  nothing in the tree could be stat'd. */
   updated_at?: number;
@@ -828,6 +919,9 @@ export interface InstalledSkill {
  *  (HTTP 501). An un-provisioned runtime returns an empty list, not an error. */
 export async function listInstalledSkills(): Promise<InstalledSkill[]> {
   return apiRequest<InstalledSkill[]>(`${API_BASE}/api/agent/skills`);
+}
+export async function publishSkill(name: string): Promise<void> {
+  await apiRequest(`${API_BASE}/api/agent/skills/publish?name=${encodeURIComponent(name)}`, { method: "POST" });
 }
 
 /** GET /api/agent/skills/files — one installed skill's files with text inlined.

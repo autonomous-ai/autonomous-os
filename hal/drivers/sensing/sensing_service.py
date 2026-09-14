@@ -79,7 +79,6 @@ class SensingService:
         rgb_service: RGBService | None = None,
         tts_service: TTSService | None = None,
         animation_service: AnimationService | None = None,
-        on_restore_aim: Callable[[], None] | None = None,
         is_sleeping: Callable[[], bool] | None = None,
         enable_people_perception: bool = True,
     ):
@@ -89,7 +88,6 @@ class SensingService:
         self._rgb_service: RGBService | None = rgb_service
         self._tts_service: TTSService | None = tts_service
         self._animation_service: AnimationService | None = animation_service
-        self._on_restore_aim: Callable[[], None] | None = on_restore_aim
         self._is_sleeping: Callable[[], bool] | None = (
             is_sleeping  # callable → bool; suppresses non-wake events
         )
@@ -146,7 +144,6 @@ class SensingService:
         self._presense_service: PresenseService = PresenseService(
             rgb_service=rgb_service,
             send_event=self._send_event,
-            on_restore_aim=on_restore_aim,
             auto_enabled=enable_people_perception,
         )
         _ = self._perception_orchestrator.with_presence_service(self._presense_service)

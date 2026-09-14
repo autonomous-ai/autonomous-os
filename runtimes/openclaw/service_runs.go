@@ -182,6 +182,10 @@ func (s *OpenclawService) ConsumeSilentRun(runID string) bool {
 // recover automatically if OpenClaw drops a lifecycle event.
 const pendingChatTTL = 2 * time.Minute
 
+// Telemetry retains queued task evidence without extending routing or busy state.
+const pendingTaskTTL = 24 * time.Hour
+const pendingTaskMaxEntries = 1024
+
 // pendingSendBusyWindow is the freshness window used by IsBusy() to treat a
 // just-sent chat.send as "busy" even before lifecycle_start echoes back.
 // Tighter than pendingChatTTL because if the agent hasn't acknowledged the
@@ -233,6 +237,12 @@ func (s *OpenclawService) SetPendingChatTrace(runID string, message string) {
 		message: message,
 		sentAt:  time.Now(),
 	})
+	s.prunePendingTasksLocked()
+	if len(s.pendingTaskBuf) >= pendingTaskMaxEntries {
+		copy(s.pendingTaskBuf, s.pendingTaskBuf[len(s.pendingTaskBuf)-pendingTaskMaxEntries+1:])
+		s.pendingTaskBuf = s.pendingTaskBuf[:pendingTaskMaxEntries-1]
+	}
+	s.pendingTaskBuf = append(s.pendingTaskBuf, pendingTrace{runID: runID, message: message, sentAt: time.Now()})
 	s.pendingChatMu.Unlock()
 }
 
@@ -249,6 +259,14 @@ func (s *OpenclawService) RemovePendingChatTraceByRunID(target string) bool {
 	s.pendingChatMu.Lock()
 	defer s.pendingChatMu.Unlock()
 	s.pruneStalePendingChatLocked()
+	// Remove independent task evidence even after the routing entry expires.
+	s.prunePendingTasksLocked()
+	for i, p := range s.pendingTaskBuf {
+		if p.runID == target {
+			s.pendingTaskBuf = append(s.pendingTaskBuf[:i], s.pendingTaskBuf[i+1:]...)
+			break
+		}
+	}
 	for i, p := range s.pendingChatBuf {
 		if p.runID == target {
 			s.pendingChatBuf = append(s.pendingChatBuf[:i], s.pendingChatBuf[i+1:]...)
@@ -307,5 +325,46 @@ func (s *OpenclawService) MatchPendingByMessage(needle string) string {
 	}
 	matched := s.pendingChatBuf[bestIdx].runID
 	s.pendingChatBuf = append(s.pendingChatBuf[:bestIdx], s.pendingChatBuf[bestIdx+1:]...)
+	return matched
+}
+
+// prunePendingTasksLocked bounds telemetry evidence independently of routing.
+// Caller must hold pendingChatMu.
+func (s *OpenclawService) prunePendingTasksLocked() {
+	cutoff := time.Now().Add(-pendingTaskTTL)
+	kept := s.pendingTaskBuf[:0]
+	for _, p := range s.pendingTaskBuf {
+		if p.sentAt.After(cutoff) {
+			kept = append(kept, p)
+		}
+	}
+	s.pendingTaskBuf = kept
+}
+
+// MatchPendingTaskByMessage consumes only a unique exact trimmed match for
+// telemetry. It does not change routing, TTS ownership, or busy state. Duplicate
+// text and prefix matches cannot establish which task actually completed.
+func (s *OpenclawService) MatchPendingTaskByMessage(needle string) string {
+	needle = strings.TrimSpace(needle)
+	if needle == "" {
+		return ""
+	}
+	s.pendingChatMu.Lock()
+	defer s.pendingChatMu.Unlock()
+	s.prunePendingTasksLocked()
+	bestIdx := -1
+	for i, p := range s.pendingTaskBuf {
+		if strings.TrimSpace(p.message) == needle {
+			if bestIdx >= 0 {
+				return ""
+			}
+			bestIdx = i
+		}
+	}
+	if bestIdx < 0 {
+		return ""
+	}
+	matched := s.pendingTaskBuf[bestIdx].runID
+	s.pendingTaskBuf = append(s.pendingTaskBuf[:bestIdx], s.pendingTaskBuf[bestIdx+1:]...)
 	return matched
 }

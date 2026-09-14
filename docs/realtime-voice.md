@@ -11,6 +11,24 @@ Code lives in `hal/realtime/`; it is driven by
 
 > **Source of truth:** this doc reflects the code. If they disagree, the code wins.
 
+## Execution completion telemetry
+
+For [voice KPI-3](voice-metrics.md#kpi-3-execution-completion-not-correctness),
+`TurnDoneEvent.execution_completed` defaults to `false` and becomes true only
+for a provider terminal signal: Gemini normal `generation_complete` or
+`turn_complete` without interruption, or OpenAI/Qwen `response.done` with
+`response.status == "completed"`. Connection close, send failure, synthetic
+unblock, partial output followed by timeout, stale/replayed done, and an
+abandoned receive are not completion evidence.
+
+The base receive loop passes the observation to the orchestrator, which
+snapshots it before recycling the session, then to
+`RealtimeTurnResult.execution_completed`. HAL emits `realtime_turn_done` only
+when the turn is handled and this flag is true. A memory-sync backend run
+cannot establish completion for that realtime turn. This measures execution
+ending, not answer correctness or full audio playback, and changes no routing
+or playback behavior.
+
 ## Concept: handle vs. delegate
 
 Every spoken turn is streamed to the realtime model *at the same time* as the
@@ -29,7 +47,69 @@ STT pipeline. At end-of-turn the model either:
 The `delegate_to_main` tool is registered automatically by the orchestrator
 (`orchestrator.py`, `DELEGATE_TOOL`).
 
-### Voice control of Buddy agent sessions
+### Voice control through Harness
+
+OS Monitor also offers **Harness-only voice**, a RAM mode that defaults to off
+after OS-server restart. When enabled, HAL snapshots `/api/harness/voice-mode`
+before capture and sends finalized, wake-word-stripped STT directly to the
+agent focused in the Harness app through OS. That capture does not stream audio to the
+realtime model or invoke the main runtime/`harness-use`; OS skips local intents
+and main-runtime readiness/busy gates. While enabled, Harness accepts speech without a wake word or an active follow-up window, including the listening cue. It does not extend the normal wake-window timer; disabling restores normal wake authorization on the next capture. Sleep, mic mute, VAD, noise and echo checks remain. Voice results still use Harness lifecycle/recap
+delivery and device TTS. Text chat and ambient sensing keep their normal routes.
+
+On MPR121 lamps, swiping right to left and releasing toggles this mode;
+left-to-right swipes invoke sleep. Direction follows the physical left-to-right
+`swipe_axis` configuration. HAL routes the gesture through its existing
+physical-action worker and the loopback Go
+`POST /api/harness/voice-mode/gesture` API. Go preserves current app focus or,
+only for activation without focus, requests the first local agent and waits for
+Desktop acknowledgement. Failed preparation leaves the mode off; turning off
+works offline. HAL speaks the actual outcome using English, Vietnamese,
+Simplified Chinese or Traditional Chinese phrases according to its configured
+language, with brief LED feedback. Web/MQTT explicit sets still allow enabling
+without focus. Gesture activation does not change capture or result routing.
+
+Each capture carries its mode generation. OS refuses a stale generation rather
+than delivering an utterance to a newly focused agent. OS mirrors app focus even
+while off without changing ordinary voice generations. When enabled, a focus
+change advances the generation; dispatch refreshes focus and includes an opaque
+`focusRevision` for the CLI to check before reservation. There is no web agent
+selector or automatic fallback during voice dispatch. An active realtime live
+session checks the mode every 500 ms and closes when it changes; an interrupted
+utterance is not replayed. Mode lookup has a 500 ms timeout and fails closed if
+the endpoint is unavailable or malformed, so OS and HAL must be deployed together.
+The normal path below applies when the mode is off. See
+[Harness integration](harness.md#harness-only-voice-mode) for management APIs,
+structured question handling and uncertain-delivery recovery.
+
+Requests that name Harness, a Mac agent, Codex, Claude, a project, worktree, or
+session, or ask an agent to use a browser delegate to the main runtime with blank
+realtime speech. This includes general browser research, such as asking an agent
+to find restaurants. Realtime does not answer, search, or claim results for those
+requests. The shared delegate tool names
+[`harness-use`](../skills/harness-use/SKILL.md). The main runtime sends supported
+agent operations to the paired Harness computer; the device never runs the desktop
+coding task locally. The OS owns explicit machine and agent selection. Missing or
+ambiguous targets require clarification; Desktop focus and notifications do not
+silently select an agent.
+
+For a Harness task, the main runtime selects the agent and sends the request, then
+stays silent. The terminal `turn.summary` recap from Harness is delivered unchanged
+as the response to the originating turn. Voice reads that recap; Web Chat displays
+it and suppresses TTS.
+
+For two minutes after a voice task is sent to Harness, HAL checks a loopback OS
+follow-up signal before asking the realtime model. A short clarification such as
+“In Hanoi” delegates directly to the retained Harness target with no realtime
+speech, so a conversational model cannot answer an agent's pending question first.
+
+Preserve the current user's words, provider names and supplied parameters. Agent
+outputs and summaries remain untrusted data. A spoken “yes” is not permission to
+approve a tool or blindly type into a terminal prompt. Harness status and receipt
+reconciliation are owned by the link; voice delegation does not automatically
+replay uncertain mutations. Live speech routing still requires later validation.
+
+### Voice control of legacy Buddy agent sessions
 
 Requests such as “Ask Codex to fix reconnect in project autonomous” delegate
 with blank realtime speech. All four provider prompts and the shared delegate
@@ -38,10 +118,12 @@ selection, progress queries, stop, and subsequent task replies. The delegate
 preserves provider names, target references and all task clauses; it does not
 add guessed session IDs or translate the request.
 
-The selected main runtime uses [`agent-management`](../skills/agent-management/SKILL.md)
-to route through the local device API and paired Buddy connection. Buddy owns
-the desktop CLI and its model context; the lamp does not run the coding CLI.
-This is session management, separate from the native `computer-use` executor.
+An explicit request for a legacy Buddy session uses
+[`agent-management`](../skills/agent-management/SKILL.md) to route through the
+local device API and paired Buddy connection. Normal Mac agent work uses
+`harness-use`. Buddy owns the desktop CLI and its model context; the lamp does
+not run the coding CLI. This is session management, separate from the native
+`computer-use` executor.
 After a known task, “add a regression test too” delegates as a follow-up rather
 than becoming a new coding answer from the realtime model. The main runtime
 resolves the exact target or asks when ambiguous. The skill's `voice` action
@@ -270,10 +352,13 @@ silence already spent, so such a final closes the session on the next frame
 while the user is still talking (device-observed 04/09/2026 on lamp-0c89:
 final `'Hello.'` at 09:22:50.766, session closed 114ms later, mid-sentence).
 Running the clock from the final gives the speaker a real window to carry on.
+The short clock applies only when `final_ts >= last_confirmed_speech`: if
+confirmed speech continues after that final, `turn_should_close` returns to the
+2.5s fallback until a new final arrives. An old final cannot shorten a later pause.
 Sitting on the long clock after that evidence is dead air in front of every
 realtime commit — it was the largest fixed cost between the user falling silent
-and the model hearing the audio. With no final in hand there is no such
-evidence, so an empty or noise-only session keeps the long fallback clock,
+and the model hearing the audio. With no current final in hand there is no such
+evidence, so resumed speech and empty or noise-only sessions use the long fallback clock,
 `SILENCE_TIMEOUT_S` (2.5s). Set `HAL_ENDPOINT_SILENCE_S=0` to go back to the
 single long clock; raise it if the device starts cutting people off at natural
 mid-sentence pauses.
@@ -318,7 +403,8 @@ Each cue is also bound to the STT-session epoch that scheduled it. If normal TTS
 holds the output stream long enough for that source session to end, the queued cue
 is cancelled immediately before playback; it cannot leak into a newer mic session
 as a fabricated transcript. This cancels only optional device speech — it never
-closes, clears, or mutes user microphone capture, so barge-in remains available.
+closes, clears, or mutes user microphone capture, so the user can still talk
+over it.
 
 `robots/lamp/rootfs/opt/hal/.env` lowers `HAL_MAX_SESSION_DURATION_S` to `20`
 (the code default stays `30`); that ceiling is only reached when the silence
@@ -345,22 +431,27 @@ point every playback path reaches the device through — synthesized speech, the
 synthesis is deliberate: TTS renders a sentence far faster than real time, while
 the output stream writes at playback rate, which is the timing the mic sees.
 
-**Off by default** (`HAL_AEC_ENABLED=false`); the lamp image opts in via its
-device `.env`. It needs the
-`aec-audio-processing` binding, which is **not** a base hal dependency — PyPI
-ships no Linux wheels for it, so a device builds it from source. It lives behind
-the `aec` extra (`uv sync --extra aec`), deliberately kept out of `dependencies`
-and out of `hardware`: the build needs meson/ninja, which the lamp image does
-not install, so a hard dep would break both the image build and
-`software-update hal` for a feature that is off by default. When the import
-fails, `configure()` logs once and every entry point becomes a no-op; the voice
-path behaves exactly as before, so the default is safe on a device without the
-binding. It does, however, also switch **barge-in** on (see below), and that is
-not a no-op.
+**On by default** (`HAL_AEC_ENABLED=true`). Absent the binding below every AEC
+entry point degrades to a no-op, so defaulting it on cannot break a device that
+lacks it. It needs the `aec-audio-processing` binding, which is **not** a base
+hal dependency — PyPI ships no Linux wheels for it, so a device builds it from
+source. It lives behind the `aec` extra (`uv sync --extra aec`), deliberately
+kept out of `dependencies` and out of `hardware`: the build needs meson/ninja,
+which the lamp image does not install, so a hard dep would break both the image
+build and `software-update hal` for a feature that degrades to a no-op without
+it. When the import fails, `configure()` logs once and every entry point becomes
+a no-op; the voice path behaves exactly as before, so the default is safe on a
+device without the binding.
+
+The canceller cleans the mic; it does not decide interruption. Nothing on the
+turn path listens to the cancelled mic for the user talking over a reply — a
+local detector was tried and removed after the measurement recorded below. The
+user interrupts by tapping (GPIO button, TTP223 touchpad), and inside a live
+session the provider's VAD owns interruption (see *Live mode*).
 
 | Env | Default | Meaning |
 |-----|---------|---------|
-| `HAL_AEC_ENABLED` | `false` | Master switch. Also the default for `HAL_BARGE_IN_ENABLED` |
+| `HAL_AEC_ENABLED` | `true` | Master switch |
 | `HAL_AEC_DELAY_MS` | `205` | Speaker→mic delay hint. **Per-device** — measure it, don't inherit it |
 | `HAL_AEC_NS` | `true` | Also run APM noise suppression. Carries most of the cancellation on this hardware |
 | `HAL_AEC_TAIL_S` | `2.0` | Keep cancelling this long after the last speaker write, then bypass the APM |
@@ -414,8 +505,8 @@ a dev Mac, a future 3.13 — falls back to the PyPI sdist and compiles, so
 
 The main VAD loop is wrapped, and with `HAL_WARM_MIC=true` (now the default)
 the mic stays open through playback, so cancellation runs during the device's
-own speech rather than only in the legacy barge-in monitor. The reverb gate is
-deliberately left uncancelled so its timing is unchanged.
+own speech. The reverb gate is deliberately left uncancelled so its timing is
+unchanged.
 
 **Measured on a lamp** (OrangePi sun60 / A523, USB mic + USB speaker — two
 independent clock domains). The delay hint is per-device because the two USB
@@ -456,18 +547,64 @@ and at 10 ms the ~1600 round trips per reply were audible as playback stutter
 on a board whose main thread is already saturated by vision. The dedicated
 capture thread is still not implemented.
 
+Cached WAV cues (including the single-click acknowledgement) also submit 40 ms
+blocks to this wrapper. Their previous outer 10 ms loop defeated the wrapper's
+batching and kept 100 device/AEC calls per second under vision load. Cached
+playback now uses 25 calls per second, plus a final partial block, and checks
+cancellation between blocks. This can add up to 30 ms to the interval between
+stop checks compared with the old loop. This is not an acoustic stop bound:
+audio already queued in the output device can remain audible after a stop.
+
+Regular provider TTS (including ElevenLabs PCM at 24 kHz played at 44.1 kHz)
+uses continuous linear resampling across network PCM chunks within each
+synthesis request. It retains the boundary sample and sample clock instead of
+restarting interpolation at every chunk. Normal EOF flushes the held final
+sample to preserve `ceil(N * output_rate / input_rate)` output samples for `N`
+input samples; cancellation does not flush a tail. Head, tail, and queued
+synthesis requests each have independent resampling state. Native realtime
+resampling and whole-file cached WAV resampling are unchanged.
+
+AEC reference resampling caches SciPy's default Kaiser FIR coefficients by
+reduced sample-rate ratio and dtype (up to 32 entries), avoiding filter design
+on every speaker write. `resample_poly` still performs its usual gain and
+padding; the reference waveform and FIFO pacing remain unchanged. Before the
+first speaker write of a playback, HAL prepares the reference filter so a cold
+SciPy import/filter design cannot stall playback after its first 40 ms. This
+preparation is skipped when AEC is inactive or sample rates match. Cancellation
+is checked between slices, including after preparation; a stop acknowledgement
+chime can still play while the speech stop flag is set.
+
+Playback stream creation requests `max(0.120s, default_high_output_latency)`
+and logs the actual negotiated latency. The previously observed device default
+of 43.5 ms barely covered one 40 ms write slice. The 120 ms request provides
+three slices of scheduling headroom while preserving larger defaults such as
+Bluetooth outputs; it is neither a guaranteed buffer size nor a fix for network
+jitter. More queued audio can extend the audible tail after cancellation.
+
+`_WatchedStream.write` combines PortAudio's underflow results across all slices.
+Mid-playback underflows are logged at most once every 5 seconds with a cumulative
+count, `writer_gap_ms`, and `previous_aec_ms`; playback boundaries (which may
+follow idle) are debug-only and
+keepalive writes are excluded. These output underflows report playback starvation,
+whereas an AEC reference underrun only reports missing cancellation-reference
+samples and does not establish a speaker underrun. These local playback changes
+still require listening verification on hardware.
+
 `aec.uncancelled()` reports whether the frame just read went through *without*
-real cancellation — reference underrun, bypassed stream, or mic overrun. Barge-in
-gates on it so it cannot decide on raw echo. Note what it does **not** say:
+real cancellation — reference underrun, bypassed stream, or mic overrun. The
+live uplink gate keys on it in `cancelled` mode so it never sends raw echo up
+as the user. Note what it does **not** say:
 it reports whether a reference *arrived*, not whether cancellation *worked*, so
 a frame with 0.9 dB of ERLE still counts as cancelled.
 
-### Barge-in: level cannot separate echo from a person
+### Why there is no voice-driven interrupt on the cancelled mic
 
-The residual that survives cancellation is loud enough to look like a user
-interrupting, and it **is** speech, so neither the level gate nor the speech
-classifier can reject it. Measured in a silent room, echo ceiling (the
-`drain peak RMS=` each reply logs) against real interruptions:
+A local detector ("barge-in": stop TTS when the user talks over it) shipped
+between 25/08 and 13/09/2026 and was removed. The measurements are kept here so
+it is not retried from scratch. The residual that survives cancellation is loud
+enough to look like a user interrupting, and it **is** speech, so neither a
+level gate nor a speech classifier can reject it. Measured in a silent room,
+echo ceiling against real interruptions:
 
 | Speaker volume | Mixer | Echo ceiling | Real interruption |
 |---|---|---|---|
@@ -479,29 +616,13 @@ The echo ceiling sits **above** the real interruptions at every volume, so a
 threshold below it self-interrupts and one above it misses ordinary speech.
 Lowering the speaker is not a workaround either: 24 dB of mixer range moved the
 ceiling by under 3 dB, because the coupling is not dominated by the airborne
-path. Do not spend time re-tuning `HAL_BARGE_IN_RMS_THRESHOLD` — no value works.
+path.
 
-What does separate them is `aec.echo_envelope_match()`
-(`HAL_BARGE_IN_ECHO_MATCH`, default `0.65`), which runs third, only on
-candidates that already passed level and speech. It works in three steps on
-log-energy envelopes at 8 ms resolution, taken from the **raw** mic:
-
-1. **Align.** Cross-correlate the candidate window against the retained
-   reference and take the best lag. Correlation only locates the window — it is
-   not the verdict, because during double talk the raw mic carries the echo well
-   above the person and correlates highly whatever they say.
-2. **Subtract.** Remove the aligned reference plus the coupling gain (median
-   offset), keeping only frames where the reply is actually loud. In the gaps
-   between its words the reference predicts near-silence, so room noise there
-   would read as a huge unexplained excess.
-3. **Measure the skew, not the size.** Echo never fits perfectly — reverb, mic
-   noise and a coupling that is not a clean scaling leave a couple of dB either
-   way. A person is one-sided: they can only *add* energy. So a top tail that
-   outruns the bottom tail is someone else in the room, and a symmetric
-   residual is echo however large it is.
-
-Measured on `lamp-0c89`, speaker 40 %, labelled against the transcript that
-followed each candidate:
+The last defence tried was an envelope test on the **raw** mic: align the
+candidate window against the retained reference, subtract it plus the learned
+coupling gain, and read the *skew* of the residual rather than its size — a
+person can only add energy, so a one-sided residual is someone else in the
+room. Labelled on `lamp-0c89` at 40 %:
 
 | | Residual skew |
 |---|---|
@@ -509,27 +630,34 @@ followed each candidate:
 | Echo, mixed run (~40 windows) | −50.0 … **+4.8** dB |
 | Confirmed real interruption | **+8.4** … +40.4 dB |
 
-The effective cut sits near 6.6 dB, inside that gap and biased towards missing a
-quiet interruption over cutting the reply off. Verification run: 12 replies into
-a silent room fired **zero** barge-ins.
+That looked separable, and 12 replies into a silent room fired zero false
+interruptions. It did not hold: 27/08/2026, 20 replies into a silent room, the
+lamp cut itself off 4 times, and scoring 79 labelled windows (69 echo, 10
+confirmed interruptions) against every feature available — envelope
+correlation, residual skew, coupling offset, APM suppression, and the textbook
+magnitude-squared coherence — gave a best AUC of 0.72, with every threshold
+that reached 0 % self-interruption missing 90–100 % of real interruptions:
 
-Two things that were tried and rejected, both recorded in the code so they are
-not retried: comparing the **cancelled** signal instead of the raw one (the APM
-is a time-varying gain and eats the contour — echo scored 0.42–0.45 and leaked
-through), and the textbook double-talk variable σ_e/σ_d, still logged as `supp`
-(echo 0.3–10.1 dB against person 0.1–8.2 dB — fully overlapping, because ERLE
-here is 6 dB at best and swings per frame).
+| feature | echo | person |
+|---|---|---|
+| coherence | 0.03 … 0.60 | 0.04 … 0.57 |
+| correlation | 0.25 … 0.99 | 0.41 … 0.95 |
+| skew (dB) | −6.5 … 67.1 | −1.0 … 119.7 |
 
-`None` means *unknown*, not clean — too little reference, or a fit pinned at the
-oldest edge of the retained reference, which means the true alignment fell off
-the end. The caller treats it as "do not fire": the speaker is audibly playing
-at that moment, which is the one situation where unknown has to mean no.
+The classes overlap almost completely, so no classifier on this signal will do
+better. The cause is upstream: AEC3 reaches only ~6 dB ERLE on this hardware
+because the speaker and mic are separate USB devices with free-running clocks,
+and during double talk the APM does not attenuate the near-end talker — it
+removes them (a frame reading 7426 on the raw mic left the APM at 5). Comparing
+the cancelled signal instead of the raw one was also tried and is worse: the APM
+is a time-varying gain and eats the loudness contour.
 
-`EchoReference` keeps a 2 s **history** alongside the FIFO, and the canceller
-keeps the same span of raw mic. The FIFO is drained by `process()`, so by the
-time a candidate is judged the reference for its frames is already gone; 800 ms
-was not enough because the TTS tap fires when ALSA *accepts* audio and runs
-ahead of playback in bursts.
+Re-attempt only after the echo path itself improves — a neural canceller
+(DTLN-aec runs real-time on a Pi 3 B+) or one sound card for both directions —
+and gate the attempt on the acceptance test in *Live mode*: replay
+`barge-in-captures/full40-bargein-off` through the canceller and require the
+peak residual under the real-interruption floor (6956) with margin. Until then,
+tap-to-interrupt and the provider's VAD are the two interruption paths.
 
 `process()` buffers to the APM's fixed 10 ms frames and returns exactly as many
 samples as the caller asked for (priming once with up to 10 ms of silence), so
@@ -966,6 +1094,212 @@ catch-up runs in a **background thread** (after `connect()`), so the Anthropic
 call never blocks the session from becoming `available` — otherwise an early
 turn ("hello") right after a restart would leak to the main agent.
 
+## Live mode (full duplex)
+
+**What it changes.** The local VAD stops being an endpointer and becomes a
+**doorbell**: it decides when to OPEN a session, and once one is open it does
+not run at all. The mic streams continuously and the **provider** owns turn
+taking, end-of-turn and interruption. Enable with `HAL_LIVE_MODE=true`.
+
+Measured on `intern-v2-6286` (2026-09-07, Gemini 3.1 Flash Live): **97 ms** from
+last audio sent to first audio received, against 3-6 s commit→first spoken
+sentence on the turn path.
+
+**Exclusive by design.** The turn path and a live session need *opposite* turn
+detection, and that setting is baked into the provider session at connect time.
+Supporting both at once would mean a runtime override plus a session rebuild on
+every entry and exit; making live mode a whole-process choice removes that
+machinery entirely, at the cost of a restart to switch. So `HAL_LIVE_MODE=true`
+**forces** `HAL_REALTIME_TURN_DETECTION` from `off` to `server_vad`
+(`hal/config.py`) — that value is read at import by `GeminiConfig.vad_enabled`,
+so it must be settled before those models are defined. An explicit non-`off`
+value is left alone. Getting this wrong produces a device that streams audio
+forever and never answers.
+
+### Voice metrics in live mode
+
+Gemini live sessions use `hal/telemetry/live_voice.py` to map provider user turns to HAL
+interaction IDs, tag native playback and carry the same ID into delegated OS
+tasks. Only a correlated successful provider terminal completes realtime
+execution; timeout, synthetic done and interruption alone are not completion
+proof. Without a successful terminal the task remains incomplete. Server
+interruption records a targeted `server_barge_in` boundary for stale-playback tracking.
+
+Snapshots identify `mode=live` and whether a speech endpoint is known. A real
+server endpoint is timed when HAL receives it (`server_vad`), not at acoustic
+speech end. Gemini transcript-only turns remain eligible for execution metrics
+but are excluded from latency KPI-1 with `speech_endpoint_unavailable` and null
+latencies. Unowned output is not assigned to the newest utterance. Session-close
+`voice_metrics_live_coverage` counters expose this missing coverage; these hooks
+do not alter noise filtering, uplink or routing settings. See
+[voice metrics](voice-metrics.md#live-session-coverage) for the event contract.
+
+### Entry: two gates, three outcomes
+
+`_vad_loop` confirms speech as usual, then `_live_decision()` returns one of:
+
+| outcome | when | cost |
+|---|---|---|
+| `live` | trigger is speech and realtime is available | one live session |
+| `turn` | realtime disabled or unavailable | the normal turn path, so the device still answers via STT + main agent |
+| `skip` | music playing, or the trigger was **not speech** | nothing at all |
+
+The second gate is not optional on a device with a wide entry VAD. A live
+session bills upstream audio for as long as it stays open, so it must not fire
+on a click — and the entry gate cannot be trusted with that alone: `webrtcvad`
+accepted 7/7 non-speech probes where Silero rejected all 7, and
+`HAL_SILERO_ENABLED` is `false` on some devices. `_rt_noise_is_speech()`
+therefore carries its **own** Silero instance. Device-observed on
+`intern-v2-6286`: a clipped codec transient opened a session every ~25 s all
+evening. `skip` (never `turn`) is also why a rejected trigger costs no STT
+session either.
+
+### The uplink gate
+
+Every mic frame reaches the model. The only per-frame decision is whether the
+canceller can vouch for it, and a frame it cannot is **replaced by silence of
+the same length, never dropped** — the uplink is a clock, and a splice is
+exactly what a server-side VAD reads as an onset. Substitution happens *before*
+resampling, so frames-out == frames-in by construction.
+
+`HAL_LIVE_UPLINK_DURING_PLAYBACK`:
+
+- **`mute` (default)** — substitute silence for the whole playback window.
+  Ships today. Costs barge-in entirely: the user cannot interrupt until the
+  device stops talking.
+- **`cancelled`** — send the cancelled frame; substitute only frames
+  `aec.uncancelled()` flags. True full duplex.
+
+`cancelled` is the intended end state and is **not** the default, because the
+canceller does not yet earn it. Measured 2026-09-04 (`barge-in-captures/`): mean
+ERLE 14-19 dB but **peak ERLE ~5 dB** — mic peaks of 29264 leave the APM at
+25269, against a real-interruption floor of 6956. The provider's VAD sees peaks
+and has no echo defence of its own (it cannot see `uncancelled()` and applies
+no duration floor), so it reads the device's own onsets as the user
+interrupting. Flip to `cancelled` once a replay of `full40-bargein-off` puts
+peak residual under that floor with margin.
+
+Two independent "is the speaker live" signals feed the gate, because neither
+alone suffices: `tts.speaking` is authoritative and works with **no canceller at
+all** (with none, `aec.reference_idle_for()` returns `inf` and the gate would
+never fire), while the reference tail adds the acoustic decay after the flag
+drops. `HAL_LIVE_PLAYBACK_TAIL_S` is the *acoustic* tail, deliberately not
+`AEC_TAIL_S` (2.0 s): keyed on the longer one, `mute` swallows the first two
+seconds of every reply the user gives.
+
+**Music is excluded by asking `music_service`, never by asking the gate.**
+`aplay`/`paplay` write straight to ALSA and never reach the echo tap, so during
+music `reference_idle_for()` reads as a perfectly quiet room.
+
+### The output pump
+
+`_live_out_pump` loops `orchestrator.stream_output()` rather than reading the
+agent queue directly. That reuses the entire existing tool surface — `look` +
+replay, `express_emotion`, `reject_turn`, `delegate_to_main` — instead of
+reimplementing it, and it re-reads `self._agent` on every outer iteration, so a
+session rebuild cannot leave the pump reading a dead queue. `stream_output()`
+returns once per model reply (`turn_complete`) and also on a quiet stretch when
+`receive()` times out having yielded nothing; both simply mean "go round again".
+
+`InterruptedOutput` (new) is emitted by `gemini_live` on `content.interrupted`
+and is **the only voice-driven interruption there is** — nothing local decides
+it. It stops playback at once. The turn-based path never sees one: manual VAD
+gives the server no opening to emit it.
+
+**Outputs are flushed once at session start.** Without it the session opens on a
+stale output from the preceding turn — device-observed 2026-09-07: a
+`reject_turn` queued by the previous noise turn was read in the same second as
+session START, and the session then sat silent for its whole idle timeout.
+`run_realtime_turn` flushes before every commit for this reason; a live session
+commits nothing, so it flushes on entry instead. Once only — flushing per reply
+would discard output the model is still streaming.
+
+### Session recycling is suppressed
+
+`set_live_active(True)` suppresses every post-turn recycle in `stream_output()`
+for the duration of the session, because all three reasons are wrong inside one:
+
+- **zombie** — a quiet stretch produces no output, so
+  `REALTIME_ZOMBIE_RECONNECT_AFTER` of them (~24 s of the user simply not
+  talking) would force a reconnect mid-conversation.
+- **turn-cap** — swaps the session every `REALTIME_SESSION_MAX_TURNS` replies.
+- **idle** — same swap, same open uplink.
+
+A rebuild is also not survivable here the way it is between turns: the mic pump
+keeps appending straight through the swap. Deferred, not cancelled —
+`set_live_active(False)` resets the counters at hangup.
+
+### What live mode does not do
+
+Everything below hangs off the turn boundary and has no supply in a live
+session. These are product trade-offs, not bugs:
+
+| lost | consequence |
+|---|---|
+| STT transcript | no `[TURN CONTEXT]`, no transcript-based filters |
+| wake word | confirmed from STT text, so `HAL_WAKEWORD_ENABLED` has no effect in live mode — entry is VAD-only |
+| speaker ID, speech emotion | a session produces neither |
+| local STT on delegation | `delegate_to_main` ends the session and forwards `[voice-instruction]` + Gemini's own input transcription as `[transcript]` (`FunctionCallOutput.user_transcript` → `DelegateSignal.transcript`, read by `_live_out_pump`); the main agent's reply plays after hangup. Providers without input transcription forward the instruction alone |
+
+Also not run inside a session: the RMS entry gate, `SPEECH_HOLDOFF_S`, the
+silence clock, `MAX_SESSION_DURATION_S`, the per-turn STT socket and its
+keepalive (not even pre-connected — `stt_keepalive_on` is false in live mode),
+the noise guard, the warm-mic drain and echo-skip, and `commit_audio`. None are deleted: the turn path still uses every one of them,
+and gets them back the moment a session ends.
+
+### Configuration
+
+| Env | Default | Meaning |
+|-----|---------|---------|
+| `HAL_LIVE_MODE` | `false` | Whole-process live mode. Forces `HAL_REALTIME_TURN_DETECTION=server_vad` when that is `off` |
+| `HAL_LIVE_UPLINK_DURING_PLAYBACK` | `mute` | `mute` (no barge-in, ships today) or `cancelled` (true full duplex, needs the AEC fix) |
+| `HAL_LIVE_PLAYBACK_TAIL_S` | `0.35` | Acoustic tail after the last reference write during which the room still counts as playing |
+| `HAL_LIVE_IDLE_HANGUP_S` | `15` | Hang up after this long with no action **from the user**, measured from whichever came later: the user's last words or the moment the device stopped speaking |
+| `HAL_LIVE_MAX_UNPROMPTED_REPLIES` | `3` | Hard ceiling on consecutive model replies with no user speech between them — breaks a self-talk loop without cutting one long answer short |
+| `HAL_LIVE_MAX_S` | `600` | Absolute ceiling on one session |
+
+### Known limitation: `mute` can self-trigger
+
+With `mute`, the uplink carries **digital silence** for the whole playback
+window and real room audio after it. That transition is an amplitude onset, and
+a server-side VAD reads an onset as somebody starting to talk — so the device
+can answer *itself*. Device-observed 2026-09-07 on `intern-v2-6286` at 70 %
+volume: four unprompted replies in 35 s with nobody in the room ("What's up?",
+"I'm here. What can I do for you?"), each one re-arming the K hold, and one
+logged `barge-in: model interrupted by the user` with no user present.
+
+`HAL_LIVE_MAX_UNPROMPTED_REPLIES` bounds the damage — it ends a session once the
+model has produced that many replies in a row with nothing from the user — but
+it is a backstop, not a cure. It counts replies rather than seconds precisely so
+that a single answer running for minutes is never mistaken for a loop. The cure is `cancelled` mode over a canceller good enough to earn it,
+so the model always hears the true room with no artificial transitions. Lower
+speaker volume makes it markedly less likely in the meantime.
+
+### Ending a session
+
+A session ends after `HAL_LIVE_IDLE_HANGUP_S` (K, default 15 s) with **no action
+from the user**, and the mic goes straight back to the VAD, which opens a new
+session on the next real speech. Two details make this behave:
+
+- **The model's reply is not user action**, but the clock is *held* while the
+  device is speaking, so a long answer is never cut off mid-sentence. The window
+  runs from whichever came later: the user's last words, or the moment the
+  device stopped talking — which is exactly when it becomes the user's turn.
+- **RMS alone cannot carry this clock.** In a noisy room the floor sits above
+  `HAL_VAD_THRESHOLD`, so every frame reads as "the user is talking" and the
+  session never hangs up. Device-observed 2026-09-07 on `intern-v2-6286`: a
+  ~10500 noise floor against a threshold of 500 held one session open
+  indefinitely, and because a live session owns the mic, the VAD never ran
+  again — the device went deaf until restart. So RMS is the cheap first gate and
+  **Silero confirms** before the clock is refreshed, batched over
+  `HAL_SILENCE_VAD_WINDOW_FRAMES`, exactly as the turn path's silence clock does.
+
+`HAL_LIVE_MAX_S` is the backstop for a room so noisy that even Silero keeps
+agreeing.
+
+Read the counters in the session-END log line: `substituted` at ~100 % of
+`during_playback` is `mute` working as designed.
+
 ## Turn flow (in `voice_service.py`)
 
 1. **Construct + start.** `RealtimeOrchestrator(gateway=AGENT_GATEWAY)` is built;
@@ -1086,9 +1420,10 @@ turn ("hello") right after a restart would leak to the main agent.
    The same commit arms the **dead-air filler** (`_WaitFiller`), the audible
    half of that cue. After `HAL_REALTIME_FILLER_DELAY_S` (default 1.5 s) with
    still no output, HAL calls `POST /api/sensing/filler` and os-server speaks
-   one opening filler from its cache — os-server owns the phrase pools, the
-   language, and the WAV cache, so the realtime wait and the main-agent wait
-   sound alike. Whether this fires on every turn or only on slow ones is a
+   one dedicated realtime filler from its cache — a quiet non-lexical thought
+   such as "Mm...", distinct from the main-agent's opening acknowledgement.
+   Os-server owns the phrase pools, language, and WAV cache. Whether this fires
+   on every turn or only on slow ones is a
    property of the model, and the default assumes a fast one: a chit-chat reply
    arriving in ~1 s never reaches the timer, while a turn grounded with Google
    Search does. Measure before trusting that on a given body — on `lamp-0c89`
@@ -1144,16 +1479,17 @@ turn ("hello") right after a restart would leak to the main agent.
    in the middle of a live turn.
 5. **Consume.** `for output in stream_output()`:
    - `TextOutput` → sentences are flushed to TTS (`speak` / `speak_queue`).
-     The **first** utterance of a turn does not wait for a sentence terminator:
-     once the buffer holds a usable clause it is cut at the last comma /
-     semicolon / colon (or, past `HAL_REALTIME_FIRST_CHUNK_MAX_CHARS`, at the
-     last word break) and spoken immediately, with the remainder queued behind
-     it — the split lands where a speaker would breathe, and only the first
-     chunk is ever cut this way because it is the only one the user waits out in
-     silence. A clause shorter than 8 characters is a runt ("Sure,") and keeps
-     buffering. `HAL_REALTIME_FIRST_CHUNK_MAX_CHARS=0` restores waiting for the
-     full sentence. Native audio is unaffected: the model's own audio streams
-     frame by frame and never went through this path.
+     By default (`HAL_REALTIME_FIRST_CHUNK_MAX_CHARS=0`), the first complete
+     sentence is spoken immediately; later sentences continue through the
+     pre-synthesis queue. This does not wait for the whole reply. A positive
+     value opts into splitting the first incomplete sentence at its last clause
+     boundary (`,` `;` `:` `—`), or at a word break beyond that character limit.
+     Complete sentences bypass this early splitter. It preserves square-bracket
+     voice tags, including during whitespace fallback, and does not split at
+     numeric commas/colons or URL colons. A candidate needs at least 8 visible
+     characters outside voice tags. Early splitting can reduce initial waiting
+     but still create gaps between synthesis requests; it is an opt-in tradeoff.
+     Native audio is unaffected and continues to stream frame by frame.
      If `speak` returns busy (another non-interruptible TTS holds the
      speaker, e.g. an ambient nudge), the sentence falls back to
      `speak_queue` so the reply plays after it instead of being lost.
@@ -1297,7 +1633,7 @@ is a top-level `config.json` flag:
 | `HAL_REALTIME_ENABLED` | `true` | Master gate for the realtime pipeline |
 | `wakeword` | ROBOT.md `voice.wakeword` on a fresh config, else `false` | Top-level config-file wake-word gate. When true, a matching interim transcript is provisional only: HAL commits buffered audio to realtime or forwards a command only after an STT **final** result confirms a configured wake phrase. The transcript is split into sentences (`.` `!` `?`) and the phrase is accepted at the start **or the end** of any sentence; mid-sentence occurrences are rejected. The confirmation re-checks the assembled, still-punctuated transcript so the `\w+`-only merge step cannot retract a gate a partial opened. If that exact re-check fails but a partial had already matched exactly, the name alone may differ by one letter and the gate still confirms: STT rewrites its own hypothesis in the final, and on lamp-0c89 (04/09/2026) the partial `hello lamp` came back as `Hello, lamb.`, which dropped the whole turn — no realtime turn, no thinking cue, and the question fell through to the much slower main agent. The prefix (`hello`, `hey`, …) must still match exactly and the loose rule can never OPEN a gate, only confirm one an exact partial opened, so a near-miss word in ambient speech still wakes nothing. It is logged as `Wake-word confirmed with a one-letter STT slip` so the rate stays countable — many of them means the STT boost terms are not doing their job. The supported prefixes are `hello`, `hey`, `hi`, `alo`, `okay`, `ok`, and `wake up`, applied to the permanent common alias (`hey autonomous`), device type (`hey lamp`), and current agent name (`hey Luna`). A runtime rename updates only the agent-name aliases. Bare names and other prefixes do not arm the gate. A rejected utterance is discarded and its transient listening LED restores to the normal resting state; it never leaves the persistent idle effect active. A confirmed turn opens the follow-up focus window; turns in that window are forwarded as `voice_followup` without another phrase. Every authorized turn dispatches to os-server: a spoken realtime reply becomes a silent `voice_agent_handled` sync event; unavailable, silent, failed, or delegated realtime follows the normal path. If realtime is disabled, the confirmed final transcript follows the normal os-server path. Missing/false preserves the pre-gate always-listening flow unchanged. On a config.json os-server creates, the initial value comes from the body's `voice.wakeword` (see Wake-word gate above); a config loaded without the key stays `false`. HAL restarts after a local Settings save or MQTT `wakeword.gate`. |
 | `HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S` | `20` | Idle seconds for the short post-command focus window. Each accepted `voice_command` or `voice_followup` refreshes it. `0` disables follow-ups and requires a wake phrase for every mic session. Ignored when `wakeword` is false. |
-| `HAL_ENDPOINT_SILENCE_S` | `0.8` | Silence needed to close the turn once STT has emitted a final segment, measured from that final's arrival (a mid-utterance EndOfTurn therefore cannot close the session retroactively). `0` disables it, leaving only the long `HAL_SILENCE_TIMEOUT` clock. |
+| `HAL_ENDPOINT_SILENCE_S` | `0.8` | Silence needed after STT final arrival, only while `final_ts >= last_confirmed_speech`. Continued confirmed speech after that final restores the 2.5s fallback until a new final arrives. `0` disables the short clock, leaving `HAL_SILENCE_TIMEOUT`. |
 | `HAL_SILENCE_VAD_ENABLED` | `true` | Require Silero to confirm speech before the end-of-turn silence clock is refreshed. RMS remains the cheap pre-gate; set `false` to fall back to pure-RMS silence detection. |
 | `HAL_SILENCE_VAD_WINDOW_FRAMES` | `3` | Number of frames batched per Silero run for that check — Silero costs ~20 ms/frame on ARM and its LSTM needs more than one 64 ms frame to settle. |
 | `HAL_REALTIME_PROVIDER` | `gemini` | `none` \| `gemini` \| `openai` \| `qwen` |
@@ -1308,7 +1644,7 @@ is a top-level `config.json` flag:
 | `HAL_REALTIME_LOOK_RECV_TIMEOUT_S` | `20.0` | Silent-turn watchdog used instead of the default for turns where a `look` fired (per-turn, via `extend_recv_timeout()`). Gemini's forced thinking over a text-dense frame can stay silent >8 s right before the answer — the default watchdog was killing those turns. Raising it delays the look-frame handoff, so keep `HAL_GEMINI_VISION_HANDOFF_MAX_AGE_S` above it |
 | `HAL_REALTIME_REQUIRE_TRANSCRIPT` | `true` | Never commit an empty-STT turn to the model. A final transcript containing only punctuation or symbols (for example `.`) is normalized to empty before gaze, speaker-ID, realtime, dispatch, or follow-up refresh; it cannot create a `voice_followup`. Real speech that nova-3 missed (short utterances) is voiced and passes the VAD/Silero guards, so committing its raw audio makes the model invent a reply to silence (a generic greeting, often with a name nobody said). When `true`, any empty-STT turn is dropped regardless of duration/voicing — silence beats a wrong reply. Set `false` to fall back to the Silero-gated audio-only path below. |
 | `HAL_REALTIME_AI_REJECT_FILTER` | `true` | Registers `reject_turn` and enables the isolated `should_drop_realtime_rejection()` policy gate. An explicit tool call drops a transcript before OS dispatch; a silent model completion, timeout, or error still falls back to the main agent. The separate deterministic noise guard is also terminal for audio it already classified as non-speech. Set `false` to disable this experimental AI filter without changing the rest of realtime routing. |
-| `HAL_REALTIME_FIRST_CHUNK_MAX_CHARS` | `90` | Time-to-first-audio on the text (non-native-audio) path: the FIRST utterance of a turn is cut at the last clause boundary (`,` `;` `:` `—`) and spoken immediately instead of waiting for a sentence terminator; past this many characters with no clause boundary it is cut at the last word break. The remainder is queued behind it, so the reply is still spoken in order. A clause under 8 characters keeps buffering (a runt like `Sure,` alone sounds like a stutter). Only the first chunk is ever cut this way. `0` restores waiting for the full sentence. |
+| `HAL_REALTIME_FIRST_CHUNK_MAX_CHARS` | `0` | Default: speak the first complete sentence immediately and pre-synthesize later sentences in the queue, without waiting for the whole reply. Positive values opt into first-clause splitting, with a word-break fallback beyond this limit; complete sentences bypass the splitter. Keeps bracketed voice tags intact (also at whitespace fallback), skips numeric commas/colons and URL colons, and requires 8 visible characters outside tags. Early splitting may leave gaps between synthesis requests. |
 | `HAL_REALTIME_MIN_COMMIT_DURATION_S` | `0.8` | Sessions shorter than this with no STT transcript are treated as VAD noise and not committed to the model. Only consulted when `HAL_REALTIME_REQUIRE_TRANSCRIPT=false`. |
 | `HAL_REALTIME_NOISE_GUARD_MAX_WORDS` | `3` | Extends the Silero voiced-ratio guard to turns that DO have a transcript, up to this many words. STT invents a short filler out of room noise and reports full confidence for it, so such a turn used to bypass every guard (they all only ran on an empty transcript) and commit pure noise to the model. A transcript of at most this many words is re-checked against `HAL_REALTIME_NOISE_SPEECH_RATIO` and dropped when the audio was never voiced; a real short command is voiced and still commits. The ratio is measured over the voiced SPAN — first to last voiced chunk — not the whole buffer, because a capture carries VAD pre-roll at the front and a 200ms tail at the back, and that fixed padding dilutes a short utterance far more than a long one. Measuring the whole buffer dropped a real `Yes, that's right.` at 0.500 (`peak=1.000`), inverting the guard's purpose against the very turns it screens. Sustained noise still fails, since its voiced chunks are sparse within the span too. Longer transcripts are never re-checked, so the floor can't silence a real utterance. `0` disables. |
 | `HAL_REALTIME_SESSION_IDLE_RESET_S` | `240` | Cost control: when a turn arrives after this many seconds of silence, recycle (rebuild) the session **after** that turn so the next turn drops the per-turn context the provider re-bills on a long-lived session. A post-pause turn is effectively a new conversation; long-term continuity survives via the reloaded `summary.md`. For native-audio Gemini, this is skipped when a successful pre-turn recycle already made the same idle gap fresh. `0` disables. Reuses the zombie-recovery rebuild path. |
@@ -1356,7 +1692,7 @@ is a top-level `config.json` flag:
 | `config.py` | Provider config models (`GeminiConfig`, `OpenAIConfig`, `QwenConfig`) |
 | `models/`, `enums/` | Input/output/event types, provider + gateway enums |
 | `resources/` | System prompts (shared + per-provider) |
-| `../voice/voice_service.py` | Integration: streams mic audio, consumes output, routes delegate/handled |
+| `../voice/voice_service.py` | Integration: streams mic audio, consumes output, routes delegate/handled. Live mode: `_live_decision` / `_live_session` / `_live_out_pump` / `_live_uplink_frame` |
 | `../voice/aec.py` | WebRTC AEC3 on the mic path; reference tapped at the TTS output stream (all providers) |
 
 ### Buddy agent completion events
@@ -1374,3 +1710,5 @@ Delegation must preserve named applications and dictated text, not merely the ge
 The current request or follow-up is forwarded in the language the user just spoke, without commentary or a summary of previous turns. Translating it to English can incorrectly switch the main agent’s reply language because the delegated instruction is its primary input.
 
 A subsequent isolated Gemini 3.1 Live synthetic-audio comparison reused identical PCM clips across the baseline and final prompt/tool definitions. The final delegate messages were “Ghi vào Notes là sáng mai tưới cây.”, “Mở Airbnb tìm chỗ ở Đà Nẵng giúp mình.”, and the follow-up “cuối tuần này hai người”. The baseline had changed the Notes request into “Remember to water the plants tomorrow morning.”, losing the named app and changing language. The Airbnb follow-up used the same provider session after a controlled `[TTS HISTORY]` clarification; the previous server completion boundary and new audio commit were confirmed. This establishes the observed delegation behavior for those synthetic clips, not microphone/wake-word performance, an actual main-agent clarification, or main-agent/desktop end-to-end completion. The isolated final result was recorded at `/tmp/buddy-rt-final/result.json` on the test device; no production prompt or service was changed by that evaluation.
+
+Realtime and Harness-only voice now share the `system/externalhistory` journal and silent delivery worker. HAL still sends `voice_agent_handled` with `[HANDLED]` / `[REPLY]`; OS atomically persists the completed realtime exchange before acknowledging it and resumes never-sent pending history after restart. The existing speaker-supersession hook runs before persistence, and silent/TTS suppression is unchanged. Busy runtimes with active-turn steering retain that capability for realtime history; others wait durably for idle. Ambiguous sends are retained as `uncertain`, not automatically replayed. Flow Monitor displays the sync as **History sync · Realtime → Main**, with the original question/answer as Context. See [external conversation history](os-server.md#external-conversation-history).

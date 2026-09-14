@@ -337,6 +337,8 @@ reapplying HAL settings even when unchanged. The `info` uplink includes effectiv
 | Kind | Purpose | `data` fields |
 |------|---------|---------------|
 | `buddy.pair.start` | Issue a single-use 6-digit Buddy pairing code, valid 60s | _(none; optional `data` ignored)_ |
+| `buddy.pair.revoke` | Revoke the current Buddy pairing and disconnect its WebSocket | _(none; optional `data` ignored)_ |
+| `buddy.status` | Query the current Buddy pairing and connection snapshot; also emitted on changes | _(none; optional `data` ignored)_ |
 | `tts.set` | Persist TTS voice/provider/language/speed config | `provider`, `voice`, `language`, optional `speed` |
 | `tts.preview` | One-shot TTS preview (no config write) | `text` (required), optional `provider`/`voice`/`language` |
 | `wakeword.gate` | Set the top-level wake-word gate (async; acks `starting`) | `enabled` (required boolean) |
@@ -353,6 +355,7 @@ reapplying HAL settings even when unchanged. The `info` uplink includes effectiv
 | `skills.upload` | Install one `.md`, `.zip`, or `.skill` file on the active runtime (synchronous) | `filename`, `content_base64` |
 | `chat.file.get` | Fetch one device-local file a turn named (synchronous) | `path` (required), optional `session_id`/`run_id` |
 | `chat.send` | Start an agent turn from the backend and stream it back (acks a run id, then emits `chat.event`) | `message` (required), optional `images[]`/`files[]`/`session_id`/`speak` |
+| `environment.status` | Read the HAL environment snapshot by capability, independent of sensor model | _(none)_ |
 | `system.info` | Aggregate snapshot: versions + network + host | _(none)_ |
 | `system.version` | Component versions only (cheaper than `system.info`) | _(none)_ |
 | `system.network` | network facts of the default-route interface only | _(none)_ |
@@ -365,6 +368,52 @@ the device drops off the network. They share the OS-server single-flight guard:
 when another power action is already pending, a terminal `status:"failure"`
 reply follows with the reason. The commands invoke HAL's full actions, not raw
 OS commands: reboot plays its cue; shutdown plays its cue and releases servos.
+
+This request/reply does not generate agent events. The separate OS worker handles
+sustained changes; see [Lamp environment sensing](../robots/lamp/docs/environment-sensing.md#os-change-policy-and-agent-access).
+
+The shared snapshot supports SEN55 + SCD41 or SEN63C without a new MQTT kind.
+Per-component JSON `enabled` flags control acquisition, not a selection list.
+`sample` always contains nine nullable metric keys and a nullable timestamp.
+Missing, disabled or unavailable readings are null; SEN63C has no VOC/NOx.
+`components` holds independent
+status/error/timing/sample diagnostics, `sources` maps metrics to components,
+and `metric_timestamps` carries their observation times. Group `ready` means
+at least one fresh metric; `partial` indicates an enabled component is
+unavailable. Check individual sources rather than treating the group's newest
+timestamp as the age of every metric. A failed sensor does not discard healthy
+readings. Missing CO₂ never produces an inferred value.
+
+**`environment.status`:** send on `fa_channel`:
+
+```json
+{"cmd":"data","kind":"environment.status","data":{}}
+```
+
+The OS checks the device's declared `environment` capability, not SEN55 or any
+hardware model. It reads local HAL `GET /environment/status` with a 5-second
+timeout and returns the unchanged JSON snapshot in `data` on `fd_channel`.
+Replies use the standard `MQTTDataResponse`; this example omits the normal
+device/version/id/mac/time metadata:
+
+```json
+{"type":"data","kind":"environment.status","status":"success","data":{"enabled":false,"state":"disabled","last_error":null,"sample":{"pm1_0_ug_m3":null,"pm2_5_ug_m3":null,"pm4_0_ug_m3":null,"pm10_ug_m3":null,"temperature_c":null,"humidity_pct":null,"voc_index":null,"nox_index":null,"co2_ppm":null,"timestamp":null},"age_s":null,"stale":true,"sources":{},"metric_timestamps":{}}}
+```
+
+The snapshot may also contain `timing` and other fields supplied by HAL.
+`success` means a valid snapshot was read, including when the sensor is disabled,
+in error, or stale. Clients must inspect `data.state`, `data.stale`, `data.sample`,
+and `data.last_error` before displaying measurements. A missing capability returns:
+
+```json
+{"type":"data","kind":"environment.status","status":"failure","error":"environment capability not declared"}
+```
+
+HAL transport errors, non-200 HTTP responses, and invalid status JSON also return
+`failure` with `error`. This is request/reply only: no subscription, continuous
+stream, events, or agent invocation. Replies retain the request's `kind`; the
+existing protocol adds no request ID. Mobile clients use the device's existing
+broker credentials and topic ACLs.
 
 **`system.info` response:** synchronous (no `starting` intermediate); each probe
 falls back to its zero value on failure.
@@ -492,6 +541,14 @@ local stdio MCP server (`{command:"node", args:[wrapper], env:{FIGMA_ACCESS_TOKE
 whose Node wrapper is dropped on disk before the entry is written. Special-writer
 codes are excluded (`reserved`) from the generic writer's refresh scan so it never
 re-writes them in the wrong (HTTP) shape.
+
+**Expiry:** `expires_in` (seconds from now) is persisted as an absolute
+`expires_at`. A credential that never expires — an app password or static API key
+(`auth_type:"pat"`, or a payload carrying `api_key` and no `access_token`) — is
+stored with `expires_at: 0` when the backend sends no expiry info, instead of the
+1-hour OAuth default. Nothing rotates such a credential (the refresh loop skips
+`expires_at == 0`), so a synthetic expiry would leave it reading as permanently
+expired an hour after it was stored.
 
 **Refresh:** the refresh loop scans the generic writer (globbing
 `*_access_tokens.json`) plus each special writer, and proactively rotates any entry
@@ -809,6 +866,8 @@ best-effort follow-up is logged, but does not change the successful upload resul
 
 #### `chat.send` + `chat.event`
 
+Internal `NO_REPLY` handoff sentinels are suppressed from `chat.event`; clients receive Harness progress and the final Harness response instead.
+
 Lets the backend (and through it a phone app) hold the **same conversation the
 web monitor's chat holds**. The web chat is two halves — `POST
 /api/sensing/event` with `type:"web_chat"` to start a turn (this path forwards
@@ -984,6 +1043,47 @@ Superseded: `integrations/chat-bridges/autonomous-chat-hook/` forwards backend
 chat one-way as `type:"voice"`, so the device speaks the reply and nothing comes
 back. It cannot back a chat UI; this pair replaces it for that purpose.
 
+### `harness.voice-mode.get` / `harness.voice-mode.set` — Harness-only voice
+
+**Receive on `fa_channel`:**
+```json
+{"cmd":"data","kind":"harness.voice-mode.get"}
+{"cmd":"data","kind":"harness.voice-mode.set","data":{"enabled":true}}
+{"cmd":"data","kind":"harness.voice-mode.set","data":{"enabled":false}}
+```
+
+`get` needs no `data` and reads the cached shared voice state without querying
+Harness. `set` requires an object containing only `enabled`, a JSON boolean;
+missing/null/string values and extra fields such as `agentId` are rejected.
+This sets an explicit value, never inverts it: repeating the same value does
+not change the routing generation or interrupt another capture.
+
+Both commands reply on `fd_channel` with the standard `MQTTDataResponse`
+metadata, `type:"data"`, the request's `kind`, and the same snapshot returned
+by `GET /api/harness/voice-mode` (device metadata omitted here):
+```json
+{"type":"data","kind":"harness.voice-mode.set","status":"success","data":{"enabled":true,"generation":1789350000000000,"machineId":"computer-id","agentId":"agent-id","agentName":"Mike","focusRevision":"instance:3","focusAvailable":true}}
+```
+
+The snapshot is `{enabled,generation,machineId,agentId,agentName?,focusRevision,focusAvailable,pending?,error?}`.
+An unavailable focus can appear as `focusAvailable:false` with a snapshot
+`error` even when the command succeeds. Invalid input or an unavailable
+controller uses `status:"failure"` with the envelope's `error` field.
+There are no unsolicited voice-state MQTT pushes; clients should query `get`
+after subscribing, reconnecting, or when refreshing the current state.
+
+MQTT uses the same RAM controller as HTTP, Monitor and HAL. The flag defaults
+to off after service restart. Setting it is allowed offline or without focus;
+voice delivery still requires the agent selected in the Harness app. These
+commands cannot select an agent and do not change typed MQTT/Web chat or skill
+routing. Turning the mode off leaves already dispatched work and its output
+route intact. `harness.pair.revoke` also disables the mode, matching HTTP
+unpair. See [Harness voice mode](harness.md#harness-only-voice-mode).
+
+Authorization uses the existing broker credentials and device command-topic
+ACLs; the publisher must be authorized for that device. No new MQTT topic,
+credential or Harness transport is introduced.
+
 ### `buddy.pair.start` — Issue a Buddy pairing code
 
 **Receive on `fa_channel`:**
@@ -1005,8 +1105,76 @@ standard `status:"failure"` and `error` fields.
 
 MQTT authorization relies on the existing broker credentials and topic ACLs;
 the backend must authorize the device owner before publishing the request.
-Confirmation still uses `POST /api/buddy/pair/confirm` over LAN. This adds no
-MQTT confirmation, status, or revocation commands.
+Confirmation still uses `POST /api/buddy/pair/confirm` over LAN; MQTT does not
+confirm pairing. Query and change notifications use `buddy.status` below.
+
+### `buddy.pair.revoke` — Revoke Buddy pairing
+
+**Receive on `fa_channel`:**
+```json
+{"cmd":"data","kind":"buddy.pair.revoke","data":{}}
+```
+
+`data` is optional and ignored. The synchronous response on `fd_channel` uses
+`MQTTDataResponse`, with the standard device/version/id/mac/time metadata plus:
+```json
+{"type":"data","kind":"buddy.pair.revoke","status":"success","data":{"revoked":true}}
+```
+
+This calls `buddy.Service.Unpair`, the same operation as `DELETE /api/buddy`:
+it closes the active WebSocket, clears the current pairing and persisted store,
+and invalidates the paired token. Repeating the command when already unpaired
+also succeeds. A pending pairing code is not cancelled.
+
+Failures, including an unavailable Buddy service or failure to persist the
+removal, use the standard `status:"failure"` and `error` fields.
+MQTT authorization relies on the existing broker credentials and topic ACLs;
+the backend must authorize the device owner before publishing the request.
+
+### `buddy.status` — Query and observe Buddy state
+
+**Receive on `fa_channel`:**
+```json
+{"cmd":"data","kind":"buddy.status","data":{}}
+```
+
+`data` is optional and ignored. The response and unsolicited state notifications
+share the standard `MQTTDataResponse` envelope on `fd_channel` (normal device
+metadata omitted here):
+```json
+{"type":"data","kind":"buddy.status","status":"success","data":{"paired":true,"connected":false,"instance_id":"service-instance-id","revision":1,"buddy_id":"buddy-id","name":"Leo’s Mac","os_version":"15.0","paired_at":"2026-09-08T10:00:00Z"}}
+```
+
+An unpaired snapshot contains only `paired:false`, `connected:false`,
+`instance_id`, and `revision`. `buddy_id`, `name`, `os_version`, and RFC3339
+`paired_at` describe the paired Mac and are omitted when unpaired (empty optional
+strings are omitted). No token, pairing code, or fingerprint is included.
+`paired` means a saved pairing exists; `connected` means its WebSocket is active.
+A disconnected or paused Mac remains paired.
+
+`instance_id` changes on each Buddy service restart. `revision` is an unsigned
+64-bit integer, starts at 0, and increases after successful pairing, revocation,
+WebSocket connection, or disconnection of the current connection. Compare
+revisions only within the same instance: ignore duplicates and lower revisions;
+accept a new instance as a fresh state sequence. Queries do not increment it.
+
+The service emits a startup snapshot and asynchronous change snapshots, including
+HTTP pair confirmation, HTTP/MQTT revocation, and Buddy self-revocation. The bounded
+queue coalesces pending changes to the latest state; this is state synchronization,
+not a guaranteed history of every transition. FD publishes use QoS 1 without
+retain. Publish failures are logged and dropped without undoing pairing; clients
+must query after subscribing, reconnecting, or resuming. Status can arrive before
+the pair/revoke command response. An unavailable service returns
+`status:"failure"` with `error` for a query.
+
+**Direct mobile MQTT:** use the device's existing broker settings and topic ACLs,
+with an app-specific unique client ID (never the device's client ID). Subscribe to
+that device's `fd_channel`, wait for SUBACK, then publish `buddy.status` or the
+existing `buddy.pair.start` / `buddy.pair.revoke` commands on `fa_channel`. No BFF
+code change is required. ACL permissions and broker reachability from mobile
+networks must be verified against the real deployment. This supports a connected
+foreground app; it does not deliver mobile push notifications when the app is
+closed. See the [mobile handoff prompt](buddy-mobile-handoff_vi.md).
 
 ### `ota` — Trigger OTA update
 
@@ -1050,3 +1218,7 @@ Handled by bootstrap worker, not through MQTT handler directly.
 | `runtimes/openclaw/pairing.go` | WhatsApp Baileys QR pairing subprocess driver |
 | `system/domain/device.go` | MQTTMessage, command constants |
 | `system/domain/pairing.go` | PairingEvent + status enum |
+
+A silent terminal `NO_REPLY` without a pending Harness handoff is sent as a `chat_response` with `state: final`, empty summary and empty assistant message. The mobile client can terminate its pending indicator without displaying the internal sentinel.
+
+MQTT treats every final Harness response as terminal regardless of wording; handoff suppression is handled by the shared agent handler using the exact run ID.

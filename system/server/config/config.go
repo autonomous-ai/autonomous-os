@@ -207,6 +207,16 @@ type Config struct {
 	// AgentRuntime selects which agentic backend to use: "openclaw" (default), "hermes", "picoclaw", "claudecode", etc.
 	AgentRuntime string `json:"agent_runtime" yaml:"agentRuntime"`
 
+	// AgentRemoteURL + AgentRemoteToken configure the "remote" runtime — the
+	// device becomes a voice/chat frontend for a gateway on another machine
+	// (typically the user's Mac). They are only meaningful when AgentRuntime
+	// == "remote". Phase A: the fields are persisted through the settings UI
+	// but no gateway consumes them yet — factory.go still resolves to the
+	// installed runtime, so setting these two by themselves does not change
+	// runtime behavior.
+	AgentRemoteURL   string `json:"agent_remote_url,omitempty" yaml:"agentRemoteURL"`
+	AgentRemoteToken string `json:"agent_remote_token,omitempty" yaml:"agentRemoteToken"`
+
 	// Realtime configures the realtime voice agent (audio-native brain — Gemini
 	// Live / OpenAI Realtime). Sibling selector to AgentRuntime: AgentRuntime picks
 	// the turn-based text brain, Realtime picks the live-audio brain. Grouped under
@@ -282,10 +292,13 @@ type Config struct {
 
 	// SensingTurnFloorS is the minimum gap in seconds between two agent turns
 	// initiated by ambient sensing events (motion/emotion/speech-emotion/sound/
-	// away/light), across ALL event types. Per-event gates live in HAL; this is
+	// away/light/environment), across ALL event types. Per-event gates live in HAL
+	// or the OS environment worker; this is
 	// the cross-type floor that stops a burst of different event types from
 	// consuming several agent turns within seconds. 0 disables. Default 120.
 	SensingTurnFloorS *int `json:"sensing_turn_floor_s,omitempty" yaml:"sensingTurnFloorS"`
+
+	Environment *EnvironmentConfig `json:"environment,omitempty" yaml:"environment"`
 
 	// GuardInstruction is a custom instruction the owner provides when enabling guard mode.
 	// Injected into sensing events so the agent follows it (e.g. "play scary sound when stranger detected").
@@ -335,8 +348,10 @@ func Load() (*Config, error) {
 }
 
 func Default() Config {
+	environment := DefaultEnvironmentConfig()
 	return Config{
-		HttpPort: 5000,
+		Environment: &environment,
+		HttpPort:    5000,
 
 		TelegramBotToken: "",
 

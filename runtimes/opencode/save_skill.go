@@ -48,6 +48,9 @@ func (s *OpenCodeService) ListSkills() ([]domain.InstalledSkill, error) {
 func (s *OpenCodeService) ReadSkillFiles(name string) ([]domain.SkillBundleFile, error) {
 	return skills.ReadSkillFiles(opencodeSkillsDir, name)
 }
+func (s *OpenCodeService) ExportSkillArchive(name, destDir string) (string, error) {
+	return skills.ExportSkillArchive(opencodeSkillsDir, name, destDir)
+}
 
 func (s *OpenCodeService) ReadSkillFile(name, filePath string) (domain.SkillBundleFile, error) {
 	return skills.ReadSkillFile(opencodeSkillsDir, name, filePath)

@@ -22,6 +22,9 @@ from hal.realtime.models import (
     OutputBase,
     OutputEvent,
     TurnDoneEvent,
+    UserSpeechOutput,
+    ExecutionOutput,
+    InterruptedOutput,
 )
 
 logger = logging.getLogger(__name__)
@@ -49,7 +52,10 @@ class VoiceAgentBase(ABC):
         self._recv_thread: threading.Thread | None = None
         # Armed by skip_next_turn_done() (look replay): swallow ONE stale
         # TurnDoneEvent that arrives before any real output. See receive().
+        self._newest_output_gen: int = 0
         self._skip_stale_turn_done: bool = False
+        self.execution_completed: bool = False
+        self.execution_turn_id: str = ""
         # Per-turn override of the receive() silent-turn watchdog. Set by the
         # orchestrator on `look` turns: Gemini's forced thinking over a
         # text-dense image can stay silent >8s right before the answer
@@ -217,7 +223,10 @@ class VoiceAgentBase(ABC):
         # silence timeout). A look replay abandons the generator mid-turn
         # (GeneratorExit) — the extended watchdog must survive into the
         # replayed turn, so only a normal end clears the override.
+        self.execution_completed = False
+        self.execution_turn_id = ""
         turn_ended = False
+        stale = 0  # outputs skipped as belonging to a superseded generation
         turn_started: float = time.monotonic()
         try:
             while True:
@@ -271,10 +280,40 @@ class VoiceAgentBase(ABC):
                         )
                         continue
                     if stop_on_done:
+                        self.execution_completed = event.execution_completed
+                        self.execution_turn_id = event.user_turn_id
                         turn_ended = True
                         break
                     continue
                 if isinstance(event, OutputEvent):
+                    if isinstance(event.output, (UserSpeechOutput, ExecutionOutput)) or (
+                        isinstance(event.output, InterruptedOutput)
+                        and event.output.reason == "server_interrupt"
+                    ):
+                        # Input metadata survives cancelled response generations
+                        # and does not make a stale response terminal current.
+                        yield event.output
+                        continue
+                    # Drop output belonging to a superseded generation. The
+                    # provider bumps OutputEvent.gen at every turn boundary,
+                    # including an interruption, so anything still queued from
+                    # a cancelled reply is older than what we have already
+                    # yielded and must never reach the speaker. Filtered HERE
+                    # rather than in each consumer so every caller — turn path
+                    # and live pump alike — gets it for free; providers that
+                    # never set gen leave it 0 and nothing is ever dropped.
+                    if event.gen < getattr(self, "_newest_output_gen", 0):
+                        stale += 1
+                        continue
+                    if event.gen > getattr(self, "_newest_output_gen", 0):
+                        if stale:
+                            logger.info(
+                                "[realtime] dropped %d output(s) from generation "
+                                "%d, superseded by %d",
+                                stale, getattr(self, "_newest_output_gen", 0), event.gen,
+                            )
+                            stale = 0
+                        self._newest_output_gen = event.gen
                     self._skip_stale_turn_done = False  # real output → next done is live
                     yield event.output
         finally:

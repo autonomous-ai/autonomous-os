@@ -41,6 +41,10 @@ stays lit until the first LED command, which may be minutes after boot.
 
 `/led/solid`, `/led/paint`, `/led/effect`, and `/led/off` accept an optional `"transient": true` flag. When set, the call paints the strip but does **not** overwrite the saved user LED state. The saved state is restored when the caller (e.g. Claude Desktop Buddy) is done — either via the natural emotion restore timer, or by an explicit `POST /led/restore`. Pulse effects launched with `transient: true` also overlay on the user's saved color instead of black.
 
+### Harness voice confirmation
+
+Physical Harness toggles read `button_led.harness_on` / `button_led.harness_off` from `robots/lamp/presets.json` through the live HAL preset table. Lamp uses RGB `[1, 1, 3]` when enabled and `[2, 2, 2]` when disabled. Both inherit a 600 ms pulse; `effect` and `duration_ms` can also be overridden in the preset. Feedback remains transient and schedules LED restoration 100 ms after the configured duration.
+
 ## Solid Color
 
 ```json
@@ -116,6 +120,14 @@ When a scene activates, `POST /scene` applies in order:
 4. **Camera** — auto on/off via `_auto_camera_on`/`_auto_camera_off`
 5. **Mic** — mute stops voice pipeline (STT), unmute restarts it
 6. **Speaker** — mute stops TTS + music playback, unmute re-enables output
+
+**Scene activation is the only path that aims.** An LED restore — after an emotion, at TTS end, at
+music end, on mic unmute, on a listening cue clearing — repaints the strip and nothing else, and a
+presence `IDLE/AWAY → PRESENT` restores the light only. Both used to re-aim while a scene was the
+saved LED state, which killed the running animation and parked the head as `__aim_hold__` for 5s
+(#314). Consequence: with a `hold` scene active the head no longer drifts back to the scene pose
+after an animation ends — it interpolates to idle. Restoring that pose belongs in the scene's
+`servo: hold`, not in an LED repaint.
 
 ### Emotion suppression during hold mode
 

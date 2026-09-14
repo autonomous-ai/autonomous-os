@@ -244,3 +244,31 @@ def test_each_queued_segment_fires_once():
     service._drain_pending_queue(_tapped(service, writes))
 
     assert [owner for (owner,) in fired] == ["run:a", "run:b"]
+
+
+def test_cached_cue_batches_device_and_aec_work(monkeypatch, tmp_path):
+    """A one-second cached cue needs 25 round trips, not the old 100."""
+    from hal.drivers.voice.tts import service as tts_module
+
+    writes, references = [], []
+    service = _playback_service(tmp_path, writes, [])
+    service._device_rate = service._stream_rate = 44100
+    monkeypatch.setattr(tts_module.aec, "reference_write", lambda data, rate: references.append(len(data)))
+    service._play_wav_inline(_wav(tmp_path, seconds=1.01, rate=44100))
+
+    assert sum(writes) == 44541
+    assert writes == [1764] * 25 + [441]
+    assert references == writes
+
+
+def test_cached_cue_stop_discards_audio_after_current_slice(monkeypatch, tmp_path):
+    from hal.drivers.voice.tts import service as tts_module
+
+    writes = []
+    service = _playback_service(tmp_path, writes, [])
+    service._device_rate = service._stream_rate = 44100
+    # Model a stop arriving while the current device write is in flight.
+    monkeypatch.setattr(tts_module.aec, "reference_write", lambda data, rate: service._stop_event.set())
+    service._play_wav_inline(_wav(tmp_path, seconds=1.0, rate=44100))
+
+    assert writes == [1764]

@@ -22,13 +22,13 @@ def choose(params, snapshot, saved):
     sessions = [s for s in snapshot.get("sessions", []) if not s.get("closed")]
     active = snapshot.get("activeContext")
     explicit = any(params.get(k) for k in ("project_id", "session_id", "project", "worktree_path", "worktree"))
-    target = params.get("target", "explicit" if explicit else "current")
-    if target not in ("current", "active", "explicit"):
-        raise RoutingError("target must be current, active or explicit")
+    target = params.get("target", "explicit" if explicit else "previous")
+    if target not in ("current", "active", "previous", "explicit"):
+        raise RoutingError("target must be current, active, previous or explicit")
     if target != "explicit" and explicit:
-        raise RoutingError("Do not mix current/active target with explicit selectors")
-    context = active if target == "active" else saved if target == "current" and saved else active if target == "current" else None
-    if target in ("active", "current") and not context:
+        raise RoutingError("Do not mix a context target with explicit selectors")
+    context = active if target in ("active", "current") else (saved or active) if target == "previous" else None
+    if target in ("active", "current", "previous") and not context:
         raise RoutingError("No selected desktop context or retained voice session. Choose a project/session.")
     pid = context.get("projectId") if context else params.get("project_id")
     project_name = params.get("project")

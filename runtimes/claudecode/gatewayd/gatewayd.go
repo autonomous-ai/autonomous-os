@@ -132,7 +132,18 @@ func (s *Server) Serve(ctx context.Context) error {
 	s.sessionID = s.loadSession()
 	s.resumeNext = s.sessionID != ""
 
-	go s.childLoop(ctx)
+	childDone := make(chan struct{})
+	go func() {
+		defer close(childDone)
+		s.childLoop(ctx)
+	}()
+	// Do not return until the child loop has observed cancellation and reaped
+	// its process group. Besides making shutdown deterministic, this prevents a
+	// just-respawned Claude child from outliving its runtime's temporary state.
+	defer func() {
+		cancel()
+		<-childDone
+	}()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/claude/ws", s.handleWS)

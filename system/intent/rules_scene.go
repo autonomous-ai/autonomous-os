@@ -52,8 +52,8 @@ func sceneOn(keywords ...string) func(string) bool {
 func sceneExec(scene, reply string) func(string) *Result {
 	return func(string) *Result {
 		body := fmt.Sprintf(`{"scene":"%s"}`, scene)
-		post("/scene", body)
-		return &Result{TTSText: reply, LEDChanged: true, Actions: []string{"POST /scene " + body}}
+		executionFailed := post("/scene", body) != nil
+		return &Result{ExecutionFailed: executionFailed, TTSText: reply, LEDChanged: true, Actions: []string{"POST /scene " + body}}
 	}
 }
 
@@ -70,8 +70,8 @@ var sceneRules = []rule{
 				(strings.Contains(t, "mode") || strings.Contains(t, "scene") || hasSceneName(t))
 		},
 		exec: func(string) *Result {
-			post("/scene/off", "")
-			return &Result{TTSText: "Back to normal!", LEDOff: true, Actions: []string{"POST /scene/off"}}
+			executionFailed := post("/scene/off", "") != nil
+			return &Result{ExecutionFailed: executionFailed, TTSText: "Back to normal!", LEDOff: true, Actions: []string{"POST /scene/off"}}
 		},
 	},
 
@@ -105,9 +105,9 @@ var sceneRules = []rule{
 		capability: device.CapLight,
 		match:      sceneOn("goodnight", "good night", "night mode"),
 		exec: func(string) *Result {
-			post("/scene", `{"scene":"night"}`)
-			postEmotion(`{"emotion":"sleepy","intensity":0.4}`)
-			return &Result{TTSText: "Goodnight!", LEDChanged: true, Actions: []string{`POST /scene {"scene":"night"}`, `POST /emotion {"emotion":"sleepy","intensity":0.4}`}}
+			executionFailed := post("/scene", `{"scene":"night"}`) != nil
+			executionFailed = postEmotion(`{"emotion":"sleepy","intensity":0.4}`) != nil || executionFailed
+			return &Result{ExecutionFailed: executionFailed, TTSText: "Goodnight!", LEDChanged: true, Actions: []string{`POST /scene {"scene":"night"}`, `POST /emotion {"emotion":"sleepy","intensity":0.4}`}}
 		},
 	},
 	{

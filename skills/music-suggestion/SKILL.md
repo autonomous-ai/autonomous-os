@@ -1,6 +1,6 @@
 ---
 name: music-suggestion
-description: Proactive music suggestion. Routed in by user-emotion-detection/SKILL.md (the router) on emotion.detected (camera) and speech_emotion.detected (voice) events when the synthesized mood is suggestion-worthy (sad/stressed/tired/excited/happy/bored) AND audio is idle AND cooldown is clear. Reads, decision, and writes share the same parallel batch in a single turn. Does NOT fire on motion.activity / [activity] events — those route to wellbeing/SKILL.md only. NOT for user-initiated music requests (those use the music skill).
+description: Proactive music suggestion. Routed in by user-emotion-detection/SKILL.md (the router) on emotion.detected (camera) and speech_emotion.detected (voice) events when the synthesized mood is suggestion-worthy (sad/stressed/tired/excited/happy/bored) AND audio is idle AND cooldown is clear. Reuses injected context and emits log HW markers in the same reply as mood. Does NOT fire on motion.activity / [activity] events — those route to wellbeing/SKILL.md only. NOT for user-initiated music requests (those use the music skill).
 ---
 
 # Music Suggestion (Proactive)
@@ -116,7 +116,7 @@ curl -s -X POST http://127.0.0.1:5000/api/music-suggestion/log \
 
 ## Learning from history
 
-When checking `GET /audio/history`, use past behavior to personalize:
+Use `audio_recent` from the injected context to personalize; only use `GET /audio/history` in the missing-context fallback above:
 - Song ended naturally + listened > 3 min → user enjoyed it → suggest similar artist/genre.
 - User stopped manually + listened < 30s → didn't like it → try different direction.
 - No history → fall back to genre table above.

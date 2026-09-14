@@ -238,12 +238,31 @@ func ValidateIntentPayload(p *IntentPayload) error {
 // wire contract documents, so a cadence accepted here is one the runner can
 // definitely compute a next fire for. Anything else would be stored, synced,
 // and then silently never run.
+// validateClockTimes checks every wall-clock time a spec fires at. Goes
+// through effectiveTimes so a device-authored spec that sets only Time — the
+// shape every client sent before the times list — validates exactly as it did.
+func validateClockTimes(spec Spec) error {
+	times := spec.effectiveTimes()
+	if len(times) == 0 {
+		return fmt.Errorf("schedules need a time")
+	}
+	if len(times) > MaxTimesPerSchedule {
+		return fmt.Errorf("a schedule may have at most %d times, got %d", MaxTimesPerSchedule, len(times))
+	}
+	for _, t := range times {
+		if err := validateClockTime(t); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func ValidateSpec(spec Spec) error {
 	switch spec.Repeat {
 	case "daily":
-		return validateClockTime(spec.Time)
+		return validateClockTimes(spec)
 	case "weekly":
-		if err := validateClockTime(spec.Time); err != nil {
+		if err := validateClockTimes(spec); err != nil {
 			return err
 		}
 		if len(spec.Days) == 0 {
@@ -257,7 +276,7 @@ func ValidateSpec(spec Spec) error {
 		}
 		return nil
 	case "monthly":
-		if err := validateClockTime(spec.Time); err != nil {
+		if err := validateClockTimes(spec); err != nil {
 			return err
 		}
 		if spec.DayOfMonth < 1 || spec.DayOfMonth > 31 {

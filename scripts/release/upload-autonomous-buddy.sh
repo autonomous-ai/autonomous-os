@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -e
+set -euo pipefail
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ota-config.sh"
 source "${RELEASE_DIR}/ota-metadata.sh"
@@ -7,71 +7,109 @@ source "${RELEASE_DIR}/ota-metadata.sh"
 BUDDY_DIR="${ROOT_DIR}/integrations/companions/autonomous-buddy"
 VERSION_FILE="${BUDDY_DIR}/VERSION_AUTONOMOUS_BUDDY"
 DIST_DIR="${BUDDY_DIR}/dist"
-
-# Bucket and path: ${BUCKET_PREFIX}/ota/autonomous-buddy/[semver].dmg
-
-# Build target — `dmg` (unsigned, default) or `dmg-signed` (Developer ID + notarized).
-# Override via env: BUDDY_DMG_TARGET=dmg-signed scripts/release/upload-autonomous-buddy.sh
-DMG_TARGET="${BUDDY_DMG_TARGET:-dmg}"
-
-# Auto-increment semver (patch) before build
-if [[ -f "$VERSION_FILE" ]]; then
-  current_version=$(tr -d '[:space:]' < "$VERSION_FILE")
-  IFS='.' read -r major minor patch <<< "$current_version"
-  patch=$((patch + 1))
-  new_version="${major}.${minor}.${patch}"
-  echo "$new_version" > "$VERSION_FILE"
-  echo "========== Version bumped: ${current_version} -> ${new_version} =========="
-else
-  echo "1.0.0" > "$VERSION_FILE"
-  new_version="1.0.0"
-  echo "========== Version initialized: ${new_version} =========="
-fi
-
-DMG_NAME="AutonomousBuddy-${new_version}.dmg"
-DMG_PATH="${DIST_DIR}/${DMG_NAME}"
-GCS_PATH="${GCS_PATH:-${BUCKET_PREFIX}/ota/autonomous-buddy/${new_version}.dmg}"
-
-echo "========== Building DMG via 'make ${DMG_TARGET}' (VERSION=${new_version}) =========="
-(cd "$BUDDY_DIR" && make "$DMG_TARGET")
-
-if [[ ! -f "$DMG_PATH" ]]; then
-  echo "Error: expected DMG not found at $DMG_PATH"
+DMG_TARGET="${BUDDY_DMG_TARGET:-dmg-signed}"
+SKIP_BUILD="${BUDDY_SKIP_BUILD:-0}"
+ARCHS="${BUDDY_ARCHS:-arm64 x64}"
+case "$SKIP_BUILD" in
+  0|1) ;;
+  *) echo "Error: BUDDY_SKIP_BUILD must be 0 or 1" >&2; exit 1 ;;
+esac
+case "$DMG_TARGET" in
+  dmg|dmg-signed) ;;
+  *) echo "Error: BUDDY_DMG_TARGET must be dmg or dmg-signed" >&2; exit 1 ;;
+esac
+read -r -a architectures <<< "$ARCHS"
+if [[ ${#architectures[@]} -eq 0 ]]; then
+  echo "Error: BUDDY_ARCHS must contain arm64 and/or x64" >&2
   exit 1
 fi
+for arch in "${architectures[@]}"; do
+  case "$arch" in
+    arm64|x64) ;;
+    *) echo "Error: unsupported architecture: $arch" >&2; exit 1 ;;
+  esac
+done
+# One custom destination cannot represent two architecture-specific artifacts.
+if [[ ${#architectures[@]} -gt 1 && ( -n "${GCS_PATH:-}" || -n "${BUDDY_URL:-}" ) ]]; then
+  echo "Error: GCS_PATH/BUDDY_URL overrides require a single BUDDY_ARCHS value" >&2
+  exit 1
+fi
+if [[ "$DMG_TARGET" == "dmg-signed" && "$SKIP_BUILD" == "0" ]]; then
+  : "${NOTARY_PROFILE:?Set NOTARY_PROFILE to your notarytool Keychain profile}"
+  # Check credentials before incrementing the version or starting a long build.
+  xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" --output-format json >/dev/null
+fi
 
-echo "========== Upload ${DMG_NAME} to Google Cloud Storage (no-cache) =========="
-gsutil -h "Cache-Control:no-cache, no-store, must-revalidate" \
-       -h "Content-Type:application/x-apple-diskimage" \
-       cp "$DMG_PATH" "gs://${GCS_BUCKET}/${GCS_PATH}"
+current_version=$(tr -d '[:space:]' < "$VERSION_FILE")
+if [[ ! "$current_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "Error: invalid Buddy version: $current_version" >&2
+  exit 1
+fi
+new_version="$current_version"
+if [[ "$SKIP_BUILD" == "0" ]]; then
+  IFS='.' read -r major minor patch <<< "$current_version"
+  new_version="${major}.${minor}.$((10#$patch + 1))"
+  echo "$new_version" > "$VERSION_FILE"
+  echo "========== Version bumped: ${current_version} -> ${new_version} =========="
+  (cd "$BUDDY_DIR" && make "$DMG_TARGET" BUDDY_ARCHS="$ARCHS")
+fi
 
-# Update metadata.json (${BUCKET_PREFIX}/ota/metadata.json) - autonomous-buddy key
+# Verify every requested artifact before uploading any of them.
+for arch in "${architectures[@]}"; do
+  dmg_path="${DIST_DIR}/Autonomous-Buddy-${new_version}-${arch}.dmg"
+  if [[ ! -f "$dmg_path" ]]; then
+    echo "Error: expected DMG not found at $dmg_path" >&2
+    exit 1
+  fi
+  if [[ "$DMG_TARGET" == "dmg-signed" ]]; then
+    xcrun stapler validate "$dmg_path"
+    spctl --assess --type open --context context:primary-signature "$dmg_path"
+  fi
+done
+
 METADATA_PATH="${BUCKET_PREFIX}/ota/metadata.json"
 METADATA_TMP=$(mktemp)
 PAYLOAD_TMP=$(mktemp)
-BUDDY_URL="${BUDDY_URL:-https://storage.googleapis.com/${GCS_BUCKET}/${GCS_PATH}}"
+ENTRIES_TMP=$(mktemp)
+trap 'rm -f "$METADATA_TMP" "$PAYLOAD_TMP" "$ENTRIES_TMP"' EXIT
+printf '{}' > "$ENTRIES_TMP"
 
-echo "========== Fetch metadata from gs://${GCS_BUCKET}/${METADATA_PATH} =========="
-if gsutil cp "gs://${GCS_BUCKET}/${METADATA_PATH}" "$METADATA_TMP" 2>/dev/null; then
-  ota_metadata_unpack "$METADATA_TMP" "$PAYLOAD_TMP"
-else
-  printf '{}' >"$PAYLOAD_TMP"
+for arch in "${architectures[@]}"; do
+  dmg_path="${DIST_DIR}/Autonomous-Buddy-${new_version}-${arch}.dmg"
+  gcs_path="${GCS_PATH:-${BUCKET_PREFIX}/ota/autonomous-buddy/${arch}/${new_version}.dmg}"
+  buddy_url="${BUDDY_URL:-https://storage.googleapis.com/${GCS_BUCKET}/${gcs_path}}"
+  checksum=$(ota_artifact_sha256 "$dmg_path")
+  echo "========== Upload Buddy ${new_version} (${arch}) =========="
+  gsutil -h "Cache-Control:no-cache, no-store, must-revalidate" \
+         -h "Content-Type:application/x-apple-diskimage" \
+         cp "$dmg_path" "gs://${GCS_BUCKET}/${gcs_path}"
+  entries=$(jq --arg arch "$arch" --arg version "$new_version" \
+    --arg url "$buddy_url" --arg sha256 "$checksum" \
+    --arg updated_at "$(date '+%Y-%m-%d %H:%M:%S %z')" \
+    '.[$arch] = {version:$version,url:$url,sha256:$sha256,updated_at:$updated_at}' "$ENTRIES_TMP")
+  printf '%s\n' "$entries" > "$ENTRIES_TMP"
+  echo "URL (${arch}): ${buddy_url}"
+done
+
+# Fetch after artifact upload and fail closed: a read/auth/network failure must
+# never replace the shared metadata feed with a new, incomplete document.
+gsutil cp "gs://${GCS_BUCKET}/${METADATA_PATH}" "$METADATA_TMP"
+ota_metadata_unpack "$METADATA_TMP" "$PAYLOAD_TMP"
+if jq -e '.signed != null or .format == "autonomous-ota/v1"' "$METADATA_TMP" >/dev/null && [[ -z "${OTA_SIGNING_PRIVATE_KEY:-}" ]]; then
+  echo "Error: signing key required to update signed OTA metadata" >&2
+  exit 1
 fi
-
-updated_metadata=$(python3 - "$PAYLOAD_TMP" "$new_version" "$BUDDY_URL" "$(date '+%Y-%m-%d %H:%M:%S %z')" <<'PY'
-import json, sys
-data = json.load(open(sys.argv[1]))
-data.pop('claude-desktop-buddy', None)
-data['autonomous-buddy'] = {'version': sys.argv[2], 'url': sys.argv[3], 'updated_at': sys.argv[4]}
-print(json.dumps(data, indent=2))
-PY
-)
-
-echo "$updated_metadata" > "$PAYLOAD_TMP"
+# Remove the ambiguous legacy download while retaining the other architecture
+# and all unrelated component entries on a single-architecture release.
+updated_metadata=$(jq --slurpfile entries "$ENTRIES_TMP" \
+  '."autonomous-buddy" = ((."autonomous-buddy" // {} |
+    if .url != null and .arm64 == null then
+      .arm64 = ({version,url,updated_at} + (if .sha256 != null then {sha256} else {} end))
+    else . end |
+    del(.version,.url,.sha256,.updated_at,.min_version)) + $entries[0])' \
+  "$PAYLOAD_TMP")
+printf '%s\n' "$updated_metadata" > "$PAYLOAD_TMP"
 ota_metadata_sign "$PAYLOAD_TMP" "$METADATA_TMP"
-echo "========== Upload metadata (autonomous-buddy: v${new_version}) =========="
-gsutil -h "Content-Type:application/json" -h "Cache-Control:no-cache, no-store, must-revalidate" cp "$METADATA_TMP" "gs://${GCS_BUCKET}/${METADATA_PATH}"
-rm -f "$METADATA_TMP" "$PAYLOAD_TMP"
-
-echo "Done: gs://${GCS_BUCKET}/${GCS_PATH} (v${new_version})"
-echo "URL:  ${BUDDY_URL}"
+gsutil -h "Content-Type:application/json" -h "Cache-Control:no-cache, no-store, must-revalidate" \
+  cp "$METADATA_TMP" "gs://${GCS_BUCKET}/${METADATA_PATH}"
+echo "Done: published Buddy ${new_version} for ${ARCHS}"

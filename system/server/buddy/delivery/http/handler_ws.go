@@ -51,7 +51,10 @@ func (h *BuddyHandler) WS(c *gin.Context) {
 		slog.Warn("WS upgrade failed", "component", "buddy", "error", err)
 		return
 	}
-	h.service.RegisterConnection(conn)
+	if !h.service.RegisterAuthenticatedConnection(conn, token) {
+		_ = conn.Close()
+		return
+	}
 	// Fire a hello ping in the background so the buddy app's Activity window
 	// gets one immediate ✓ row — confirms end-to-end reachability the moment
 	// pairing completes. Must run in a goroutine: Dispatch blocks until the

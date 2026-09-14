@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 # How far the base turns between stops.
 #
 # 90, not 45, because the head now looks around at each stop and covers the gap.
-# With ROLL_STOPS at +/-45 and a ~100 deg lens (LOOK_AIM_FOV_DEG), one yaw stop
+# With the ring reaching +/-45 of roll and a ~100 deg lens (LOOK_AIM_FOV_DEG), one bearing
 # sees a continuous span of yaw+/-95:
 #
 #   roll -45  ->  yaw-95 .. yaw+5
@@ -108,7 +108,64 @@ MAX_STOPS: int = 3
 # Absolute, not relative to the seed: at roll 0 the camera looks along base_yaw,
 # which is what makes a yaw stop mean what the stop list says it means.
 ROLL_LOOK_DEG: float = 45.0
-ROLL_STOPS = (-ROLL_LOOK_DEG, 0.0, ROLL_LOOK_DEG)
+# How far the camera tilts from the seed pitch at the top and bottom of the
+# look circle. Positive is DOWN (gaze._maybe_pitch's convention).
+PITCH_LOOK_DEG: float = 25.0
+# The corners go to FULL roll and FULL pitch, not cos(45) of each. That makes
+# the ring a rounded square rather than a true circle, and it is deliberate:
+# device-checked 2026-09-09, the corners then see as much to the side as the
+# left/right looks do and as far down as the bottom look does, so each corner
+# adds new ground instead of re-covering the middle. A true ellipse pulled the
+# diagonals in to 31.8/17.7 and gave up that reach for a shape nobody watches.
+ROLL_DIAG_DEG: float = ROLL_LOOK_DEG
+PITCH_DIAG_DEG: float = PITCH_LOOK_DEG
+
+# The looks the head walks at each bearing, as (wrist_roll, pitch offset).
+# Positive roll is right, positive pitch is down.
+#
+# A clock face, not a raster. The base turns ONCE per bearing and the head does
+# all the looking from there — where the previous design stepped the base
+# through every bearing again for each pitch tier, retracing the whole arc two
+# or three times to cover the same ground.
+#
+# Only the two WRIST joints move. The pitch tiers used to go through
+# servo_follow.distribute_pitch, which spreads a tilt across base_pitch,
+# elbow_pitch and wrist_pitch against each joint's travel — right for a tracking
+# correction, wrong for a sweep. Device-observed 2026-09-09: the upward tier put
+# elbow_pitch at +35.8 while base_pitch dropped to +10.6, extending the arm up
+# and back far enough to look like it might tip. distribute_pitch allocates
+# against per-joint travel; nothing in it knows about the arm's balance. Moving
+# the wrist alone keeps the mass where it is and reads as a head looking around
+# rather than a body reshaping itself.
+#
+# Order: centre, then round the ring from the left, through the bottom, to the
+# right, then over the top. The first six are the default sweep — a half-moon
+# below the horizon, because the things people ask the lamp to find sit on desks.
+# It also ends on the right, which is the direction the next bearing lies in, so
+# the handover is a 45 deg step rather than a swing back across everything.
+LOOK_CIRCLE = (
+    (0.0, 0.0),                             # centre
+    (-ROLL_LOOK_DEG, 0.0),                  # left
+    (-ROLL_DIAG_DEG, +PITCH_DIAG_DEG),      # bottom-left
+    (0.0, +PITCH_LOOK_DEG),                 # bottom
+    (+ROLL_DIAG_DEG, +PITCH_DIAG_DEG),      # bottom-right
+    (+ROLL_LOOK_DEG, 0.0),                  # right
+    (+ROLL_DIAG_DEG, -PITCH_DIAG_DEG),      # top-right
+    (0.0, -PITCH_LOOK_DEG),                 # top
+    (-ROLL_DIAG_DEG, -PITCH_DIAG_DEG),      # top-left
+)
+HALF_LOOKS: int = 6
+
+# Margin held off the wrist_pitch soft stop. Device-measured 2026-09-09 on
+# lamp-ac82: wrist_pitch reached -89.55 going up (stopped by WRIST_PITCH_MIN,
+# not by the joint) and -16.61 going down with no stall at all — so the real
+# travel is far wider than PITCH_TRAVEL_MIN/MAX in constants.py claims (-33..+32),
+# which were measured in a different arm configuration and are not usable here.
+#
+# Upward is what runs out: resting near -73 there are only ~16 degrees before
+# the soft stop, less than PITCH_LOOK_DEG. The circle is therefore clamped per
+# sweep against the seed pose rather than assumed symmetric.
+WRIST_PITCH_MARGIN: float = 2.0
 
 _abort_evt = threading.Event()
 
@@ -266,7 +323,8 @@ def _wait_until_still(svc: Any, target: dict) -> None:
     logger.info("[search] still moving after %.1fs — shooting anyway", ARRIVE_TIMEOUT_S)
 
 
-def _look_at(svc: Any, roll: float, yaw: Optional[float] = None) -> bool:
+def _look_at(svc: Any, roll: float, wrist_pitch: Optional[float] = None,
+             yaw: Optional[float] = None) -> bool:
     """Point the camera at one look. False if the move could not be made.
 
     When `yaw` is given the base and the head move TOGETHER, in one command, and
@@ -282,6 +340,8 @@ def _look_at(svc: Any, roll: float, yaw: Optional[float] = None) -> bool:
 
         current = svc.get_positions()
         target = {"wrist_roll.pos": float(roll)}
+        if wrist_pitch is not None:
+            target["wrist_pitch.pos"] = float(wrist_pitch)
         if yaw is not None:
             target["base_yaw.pos"] = float(yaw)
         if all(abs(v - float(current.get(j, 0.0))) <= 0.5 for j, v in target.items()):
@@ -295,6 +355,24 @@ def _look_at(svc: Any, roll: float, yaw: Optional[float] = None) -> bool:
     except Exception as e:
         logger.warning("[search] look to roll %+.0f failed: %s", roll, e)
         return False
+
+
+def _detect_target(detector: Any, frame: Any, target: str):
+    """Find `target` in the frame. Returns (box, kind), or (None, None).
+
+    person/face keep `_detect_subject`, whose closest-person choice and face
+    fallback exist for "where are YOU" and would be wrong for an object. Any
+    other noun goes to the detector's own by-name path — the same YOLOv8n/
+    YOLOWorld chain `/servo/track` uses, so a search can name anything a track
+    can.
+    """
+    from hal.drivers.tracking.aim import _detect_subject
+
+    if target in ("person", "face"):
+        box, kind, _conf = _detect_subject(detector, frame)
+        return box, kind
+    box = detector.detect(frame, target)
+    return box, (target if box is not None else None)
 
 
 def _abandon(svc: Any, seed_pose: Optional[dict], visited: int) -> "SearchResult":
@@ -425,8 +503,8 @@ def _say_at_the_midpoint() -> Callable[[int, int], None]:
 
 
 def search_for_subject(target: str = "person", detector: Any = None,
-                       on_progress: Optional[Callable[[int, int], None]] = None
-                       ) -> SearchResult:
+                       on_progress: Optional[Callable[[int, int], None]] = None,
+                       exhaustive: bool = False) -> SearchResult:
     """Sweep for a subject, stopping at the first one seen.
 
     Returns rather than raising: a failed search still has to give the caller
@@ -468,7 +546,7 @@ def search_for_subject(target: str = "person", detector: Any = None,
     with aim.servo_ownership():
         capped = svc.set_joint_speed("base_yaw", SWEEP_YAW_SPEED)
         try:
-            return _sweep(svc, cap, detector, target, on_progress)
+            return _sweep(svc, cap, detector, target, on_progress, exhaustive)
         finally:
             if capped:
                 # Back to the resting value the driver writes at startup — 0, no
@@ -481,8 +559,35 @@ def search_for_subject(target: str = "person", detector: Any = None,
                 )
 
 
+def _look_list(seed_pose: Optional[dict], exhaustive: bool) -> list:
+    """Absolute (roll, wrist_pitch) for every look at one bearing.
+
+    Pitch is absolute, measured from the seed pose, so re-entering the ring
+    cannot accumulate an offset into a stop — the same discipline the yaw stop
+    list follows. Clamped against WRIST_PITCH_MIN/MAX because the headroom
+    above the resting pose is smaller than PITCH_LOOK_DEG on a lamp that starts
+    with its head low; a clamped look still looks somewhere useful, where a
+    commanded overrun just stalls the servo.
+    """
+    base_wp = None
+    if seed_pose:
+        try:
+            base_wp = float(seed_pose["wrist_pitch.pos"])
+        except (KeyError, TypeError, ValueError):
+            base_wp = None
+    pattern = LOOK_CIRCLE if exhaustive else LOOK_CIRCLE[:HALF_LOOKS]
+    lo = C.WRIST_PITCH_MIN + WRIST_PITCH_MARGIN
+    hi = C.WRIST_PITCH_MAX - WRIST_PITCH_MARGIN
+    out = []
+    for roll, dp in pattern:
+        wp = None if base_wp is None else max(lo, min(hi, base_wp + dp))
+        out.append((roll, wp))
+    return out
+
+
 def _sweep(svc: Any, cap: Any, detector: Any, target: str,
-           on_progress: Optional[Callable[[int, int], None]] = None) -> SearchResult:
+           on_progress: Optional[Callable[[int, int], None]] = None,
+           exhaustive: bool = False) -> SearchResult:
     """The sweep itself, with the body already owned.
 
     `on_progress(visited, total)` is called after every look. It exists so a
@@ -499,11 +604,14 @@ def _sweep(svc: Any, cap: Any, detector: Any, target: str,
                      if j.endswith('.pos')}
     except Exception:
         seed_pose = None
-    total_looks = len(stops) * len(ROLL_STOPS)
-    logger.info("[search] sweeping %d stops (%d looks) for '%s': %s",
-                len(stops), total_looks, target, [round(s) for s in stops])
+    looks = _look_list(seed_pose, exhaustive)
+    total_looks = len(stops) * len(looks)
+    logger.info("[search] sweeping %d bearings x %d looks (%d total) for '%s': %s",
+                len(stops), len(looks), total_looks, target,
+                [round(s) for s in stops])
 
     visited = 0
+    found: List[SearchResult] = []
     for yaw in stops:
         if _abort_evt.is_set():
             return _abandon(svc, seed_pose, visited)
@@ -521,12 +629,13 @@ def _sweep(svc: Any, cap: Any, detector: Any, target: str,
         # Alternating the roll direction instead was tried and is worse: it
         # destroys precisely that handover, because the next stop then opens
         # where the last one already was and the head has nowhere to carry on to.
-        for n, roll in enumerate(ROLL_STOPS):
+        for n, (roll, wrist_pitch) in enumerate(looks):
             if _abort_evt.is_set():
                 return _abandon(svc, seed_pose, visited)
             # The first look of a stop carries the base turn with it, so the
             # handover from the previous stop is one continuous movement.
-            if not _look_at(svc, roll, yaw=yaw if n == 0 else None):
+            if not _look_at(svc, roll, wrist_pitch,
+                            yaw=yaw if n == 0 else None):
                 continue
 
             # Settle before reading: a head still ringing gives a blurred frame
@@ -546,7 +655,7 @@ def _sweep(svc: Any, cap: Any, detector: Any, target: str,
             if frame is None:
                 continue
             _t_det = time.monotonic()
-            box, kind, _conf = _detect_subject(detector, frame)
+            box, kind = _detect_target(detector, frame, target)
             logger.info("[search] look %d/%d: grab %.0fms detect %.0fms -> %s",
                         visited, total_looks, _grab_ms,
                         (time.monotonic() - _t_det) * 1000,
@@ -556,12 +665,22 @@ def _sweep(svc: Any, cap: Any, detector: Any, target: str,
                     "[search] found %s at yaw %+.0f roll %+.0f after %d stop(s)",
                     kind, yaw, roll, visited,
                 )
-                _straighten_head_onto(svc, yaw, roll)
-                return SearchResult(True, f"found {kind}", visited, yaw)
+                hit = SearchResult(True, f"found {kind}", visited, yaw)
+                if not exhaustive:
+                    _straighten_head_onto(svc, yaw, roll)
+                    return hit
+                found.append(hit)
+
+    if exhaustive and found:
+        _restore(svc, seed_pose)
+        logger.info("[search] full sweep: %d sighting(s) of '%s' across %d looks",
+                    len(found), target, visited)
+        return SearchResult(True, f"found {target} x{len(found)}", visited,
+                            found[0].found_at_yaw)
 
     # Nothing found, so nothing to look at — go back to where the sweep began
     # rather than freezing wherever the last look left the head.
     _restore(svc, seed_pose)
-    logger.info("[search] nobody found after %d stop(s) — back to the starting pose",
-                visited)
-    return SearchResult(False, "nobody found", visited)
+    logger.info("[search] no %s found after %d look(s) — back to the starting pose",
+                target, visited)
+    return SearchResult(False, f"no {target} found", visited)

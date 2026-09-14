@@ -355,9 +355,9 @@ Chỉ một lời gọi `look` mới giải phóng nó, vì đó đúng là kho�
 là hãy nhìn vào một vật.
 
 **Thân máy được sở hữu trong suốt cả lượt look.** Từ lúc pha ngắm bắt đầu cho tới khi màn trập đóng,
-`servo_ownership()` bật đúng cái khóa `_tracking_active` mà vision tracker vẫn dùng, khóa này chặn
-**toàn bộ** animation servo của emotion (`routes/emotion.py`) và khiến vòng animation bỏ luôn bản ghi
-đang phát dở.
+`servo_ownership()` giữ một suất đếm tham chiếu trong đúng cái khóa `_tracking_active` mà vision
+tracker vẫn dùng, khóa này chặn **toàn bộ** animation servo của emotion (`routes/emotion.py`) và
+khiến vòng animation bỏ luôn bản ghi đang phát dở.
 
 Đây không phải phần đánh bóng cho đẹp. Các preset emotion phát những tư thế **đã ghi sẵn**, tuyệt đối
 trên mọi khớp — kể cả `wrist_roll` — nên chỉ cần một cái rơi vào giữa pha ngắm và lần chụp là đầu bị
@@ -366,8 +366,19 @@ phản ứng "tò mò" rơi vào giữa câu hỏi là đủ để chụp lên t
 animation *đang* phát, nhưng không chặn được cái được gọi *sau đó* — mà đó lại đúng là khoảng thời gian
 lần chụp nằm trong.
 
-Giá trị khóa trước đó được khôi phục chứ không bị xóa, nên một lượt look không bao giờ kết thúc một
-phiên bám vật thể đang chạy thật.
+**Quyền sở hữu được đếm tham chiếu, không lưu rồi khôi phục.** `servo_ownership()` gọi
+`acquire_body()` khi vào và `release_body()` khi ra, nên nó chỉ nhả đúng phần mình giữ và một lượt
+look không bao giờ kết thúc một phiên bám vật thể đang chạy thật. Trước đây nó lưu giá trị cũ rồi ghi
+lại, và cách đó mất cập nhật mỗi khi hai trong sáu điểm gọi chồng lên nhau — chúng chạy trên ba
+thread khác nhau (gaze watcher, tool `look` realtime, và sweep). Bên ra sau cùng ghi đè lại một giá
+trị `True` đã cũ, làm khóa kẹt cứng dù không ai giữ, âm thầm chặn toàn bộ animation emotion và cả
+gaze cho tới khi tình cờ có một phiên face-track chạy và xoá nó (#312). `acquire_body`/`release_body`
+là một phần của hợp đồng `MotionService` (`hal/drivers/motors/base.py`), nên mọi thân máy đều trả lời
+về quyền sở hữu theo cùng một cách.
+
+Một lần kẹt cũng không còn sống lâu hơn nguyên nhân gây ra nó: cờ bật mà không có bên ghi nào là
+trạng thái không thể xảy ra, nên `AnimationService` đếm giờ và tự xoá sau 30 s kèm một dòng `ERROR`
+(`hal/drivers/motors/tracking_wedge.py`).
 
 **Vì sao vòng lặp căn giữa chỉ dùng yaw.** Quy ước dấu của yaw được chép từ quy ước đã kiểm chứng
 thực nghiệm của tracker (`dx>0` → `base_yaw` tăng). `AnimationService.nudge()` điều khiển
@@ -500,10 +511,35 @@ trường hợp đèn tự quyết định. Pha quét được vào khi:
   repoint đã quay về bearing mà không thấy ai ở đó. Đường này không ai yêu cầu, nên nó là đường duy
   nhất có cooldown — xem *Tự quay quanh tìm*.
 
-`POST /servo/search` — quét và dừng ngay ở đối tượng đầu tiên nhìn thấy. Hãy tính khoảng **2 giây mỗi
-điểm dừng** (đo trên máy thật): ~0,65 s để di chuyển và ổn định, phần còn lại là lấy khung hình và nhận
-diện. Một pha quét 3×3 đầy đủ mà không thấy ai vì thế tốn khoảng 20 giây — đó là lý do chỉ vào đây khi
-còn dư thời gian.
+`POST /servo/search` — quét tìm một đối tượng. Body (tất cả đều tuỳ chọn): `{"target": "cup", "exhaustive": true}`.
+
+- `target` mặc định là `"person"`. `person`/`face` dùng chính sách chọn người gần nhất kèm dự phòng
+  khuôn mặt; mọi danh từ khác đi qua đúng chuỗi YOLOv8n/YOLOWorld mà `/servo/track` đang dùng. Trước
+  đây tham số target được hàm nhận rồi bỏ đi — mọi lần quét đều tìm người, nên "look around for my
+  keyboard" kết thúc ngay ở người đầu tiên đi ngang qua.
+- `exhaustive` mặc định `false`, tức trả về ngay ở lần nhìn thấy đầu tiên — đúng cho câu "where are
+  you?". Đặt `true` sẽ đi trọn vòng nhìn tại mọi bearing rồi báo số lần nhìn thấy.
+- Độ phủ là `số bearing x số lần nhìn mỗi bearing`: 3 x 6 = **18 lần nhìn** ở chế độ thường,
+  3 x 9 = **27** ở chế độ exhaustive. Hãy tính khoảng **2 giây mỗi lần nhìn**.
+
+Tại mỗi bearing, đế đứng yên và cái đầu đi một vòng nhìn — tâm, trái, vòng qua đáy, ra phải, và (chỉ ở
+chế độ exhaustive) vòng lên trên. Các góc chéo dùng **trọn** roll và **trọn** pitch chứ không phải
+cos(45) của mỗi trục, tức một hình vuông bo góc chứ không phải hình tròn: nhờ vậy mỗi góc nhìn được xa
+sang bên đúng bằng các lần nhìn trái/phải và xuống thấp đúng bằng lần nhìn đáy, tức thêm vùng đất mới
+thay vì phủ lại phần giữa.
+
+**Chỉ `wrist_roll` và `wrist_pitch` di chuyển trong một lần nhìn.** Đế chỉ xoay một lần cho mỗi bearing
+và cánh tay không bao giờ tự đổi dáng. Một thiết kế trước đó rải độ nghiêng lên `base_pitch`,
+`elbow_pitch` và `wrist_pitch` qua `servo_follow.distribute_pitch` — đúng cho một hiệu chỉnh tracking,
+sai cho một phép quét: quan sát trên thiết bị 2026-09-09, tầng hướng lên đẩy `elbow_pitch` tới +35.8 và
+`base_pitch` xuống +10.6, vươn cánh tay lên và ra sau đủ để trông mất thăng bằng, đồng thời bắt đế đi
+lại toàn bộ cung cho từng tầng. `distribute_pitch` phân bổ theo tầm hoạt động của từng khớp; không có
+gì trong đó biết về thăng bằng của cả cánh tay.
+
+Nửa trên của vòng bị kẹp theo `WRIST_PITCH_MIN`: khi nghỉ ở khoảng −73 thì chỉ còn ~16 độ headroom, ít
+hơn 25 độ mà vòng nhìn cần. Đo trên lamp-ac82 ngày 2026-09-09, `wrist_pitch` đạt −89.6 khi lên và −16.6
+khi xuống mà không hề kẹt, nên `PITCH_TRAVEL_MIN/MAX` trong `constants.py` (−33..+32) không mô tả đúng
+cánh tay này.
 
 **Ba điểm dừng: bearing đã ghi nhớ trước, rồi sang phải, rồi sang trái** — `seed`, `seed+90°`,
 `seed−90°`, bị kẹp vào giới hạn cơ khí chứ không bị loại bỏ. Seed đi trước vì pha quét dừng ngay ở đối

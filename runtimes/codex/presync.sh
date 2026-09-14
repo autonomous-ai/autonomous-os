@@ -201,6 +201,9 @@ umask 077
   # `os-server codex-gatewayd` (gatewayd package).
   echo "CODEX_WS_TOKEN=autonomous_codex_token"
   echo "CODEX_PORT=18792"
+  # The persistent App Server lets direct user input steer an active turn.
+  # The pinned Codex release supports this protocol.
+  echo "CODEX_APP_SERVER=1"
   echo "CODEX_HOME=$CODEX_DIR"
   echo "CODEX_WORKSPACE=$WS_DIR"
   # Subscription mode: OPENAI_API_KEY omitted — it would outrank/conflict with

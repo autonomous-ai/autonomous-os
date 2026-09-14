@@ -1,6 +1,6 @@
 ---
 name: face-enroll
-description: Manage the device's face recognition roster — enroll new faces (3 paths: user-supplied photo, agent-captured snapshot on user request, or HAL's familiar-stranger prompt) and maintain the enrolled set (status / remove / reset). All enrolled persons are friends; strangers stay unnamed until promoted via one of the enroll flows.
+description: "Manage the device's face recognition roster — enroll new faces (3 paths: user-supplied photo, agent-captured snapshot on user request, or HAL's familiar-stranger prompt) and maintain the enrolled set (status / remove / reset). All enrolled persons are friends; strangers stay unnamed until promoted via one of the enroll flows."
 ---
 
 # Face Enroll

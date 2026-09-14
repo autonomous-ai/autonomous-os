@@ -48,6 +48,9 @@ func (s *ClaudeCodeService) ListSkills() ([]domain.InstalledSkill, error) {
 func (s *ClaudeCodeService) ReadSkillFiles(name string) ([]domain.SkillBundleFile, error) {
 	return skills.ReadSkillFiles(claudecodeSkillsDir, name)
 }
+func (s *ClaudeCodeService) ExportSkillArchive(name, destDir string) (string, error) {
+	return skills.ExportSkillArchive(claudecodeSkillsDir, name, destDir)
+}
 
 func (s *ClaudeCodeService) ReadSkillFile(name, filePath string) (domain.SkillBundleFile, error) {
 	return skills.ReadSkillFile(claudecodeSkillsDir, name, filePath)
