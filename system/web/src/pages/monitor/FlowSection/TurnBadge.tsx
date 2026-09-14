@@ -42,7 +42,7 @@ export function TurnBadge({ turn, pairTint, userPhotos, onViewPipeline }: {
   const pathColor = turn.path === "dropped" ? "var(--lm-red)"
     : turn.path === "queued" ? "var(--lm-amber)"
     : turn.path === "local" ? "var(--lm-green)"
-    : turn.path === "agent" ? "var(--lm-blue)"
+    : (turn.path === "agent" || turn.path === "harness") ? "var(--lm-blue)"
     : "var(--lm-text-muted)";
   const statusColor = turn.status === "done" ? "var(--lm-green)"
     : turn.status === "error" ? "var(--lm-red)"
@@ -113,7 +113,7 @@ export function TurnBadge({ turn, pairTint, userPhotos, onViewPipeline }: {
       ev.detail?.node === "turn_steered"
     )
   );
-  const pathLabel = turn.path === "agent" ? "Agent" : turn.path === "dropped" ? "dropped" : turn.path === "queued" ? "queued" : turn.path;
+  const pathLabel = turn.path === "harness" ? "Harness" : turn.path === "agent" ? "Agent" : turn.path === "dropped" ? "dropped" : turn.path === "queued" ? "queued" : turn.path;
 
   return (
     <div data-region="FLOW_TURN_CARD" data-turn-id={turn.id} data-turn-type={turn.type} style={{

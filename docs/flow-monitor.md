@@ -1,5 +1,9 @@
 # Flow Monitor
 
+Harness-only voice cards use `sensing_input.data.route: "harness_only"` to display **Harness** instead of **Agent**. After merging events by run ID, a nonempty `harness_response` closes that same turn and supplies its output and Response pipeline details, including history loaded from JSONL. A successful input dispatch alone stays active. Harness replies are not stitched onto nearby inputs with different run IDs; existing error states remain errors. DONE means the final response arrived, not that audio playback or the requested real-world action was verified.
+
+Regression checks: `node --test system/web/tests/flow-harness.test.cjs` from the repository root (after installing web dependencies).
+
 Codex steering records `turn_merged` under the follow-up run ID with
 `data.parent_run_id` pointing to the active host. The follow-up keeps its own
 input card and displays the shared host pipeline when selected. Its status

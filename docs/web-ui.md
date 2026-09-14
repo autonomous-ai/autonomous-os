@@ -1,5 +1,7 @@
 # Web UI — Monitor Dashboard
 
+Harness-only voice turns display **Harness** as their route. Persisted `harness_response` events provide the output, Response pipeline details and completion time for the matching run, so reloading the monitor no longer leaves answered turns ACTIVE. Sending an input without a final response remains ACTIVE.
+
 Flow Monitor links Codex steered follow-ups to the original execution with
 `turn_merged` / `parent_run_id`. Selecting the follow-up shows the shared
 pipeline while retaining its separate input card and terminal state. The UI
