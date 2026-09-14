@@ -1069,7 +1069,8 @@ def test_centre_on_box_walks_the_subject_to_the_middle():
     )
 
     assert res.centred is True, res.reason
-    moved = [c.args[0] for c in svc.nudge.call_args_list]
+    moved = [c.args[0]["base_yaw.pos"] for c in svc.move_and_hold.call_args_list
+             if "base_yaw.pos" in c.args[0]]
     assert moved and moved[0] > 0, (
         f"a subject right of centre must turn the base right, got {moved}")
     assert res.box == (310, 200, 40, 40), "the result must carry the CENTRED box"
@@ -1166,3 +1167,41 @@ def test_centre_on_box_still_gives_up_when_the_subject_stays_gone():
 
     assert res.centred is False
     assert res.reason == "lost the subject"
+
+
+def test_centre_on_box_corrects_pitch_with_gazes_verified_sign():
+    """Vertical centring, copied from gaze._maybe_pitch. A box ABOVE centre
+    (dy < 0) needs the camera tilted UP, and up is the DECREASING direction on
+    the pitch joints — device-measured on lamp-0c89, paired A/B/A:
+    wrist_pitch -75 -> dy +0.009, -90 -> dy +0.113. With the sign the other way
+    every correction enlarges the error it measures. The step is spread over
+    base/elbow/wrist by servo_follow.distribute_pitch, exactly as gaze does."""
+    svc = _FakeSvc()
+    # Horizontally centred, but high in the frame: 480 tall, box centre y=60.
+    boxes = [(310, 40, 40, 40), (310, 220, 40, 40)]
+
+    res = aim.centre_on_box(svc, _FakeCap(_frame()),
+                            probe=lambda _f: boxes.pop(0) if boxes else (310, 220, 40, 40))
+
+    assert res.centred is True, res.reason
+    pitch_moves = [c.args[0] for c in svc.move_and_hold.call_args_list
+                   if any(j.endswith("pitch.pos") for j in c.args[0])]
+    assert pitch_moves, "a subject above centre produced no pitch correction"
+    # Camera-space, not joint-space: distribute_pitch applies a per-joint sign
+    # (the elbow moves POSITIVE to tilt the camera up — "elbow +1.6 framed the
+    # desk, +54.8 the ceiling"), so raw joint deltas can sum either way. The
+    # invariant is that the requested camera rotation is negative.
+    from hal.drivers.tracking.servo_follow import PITCH_AXIS_SIGN
+
+    before = {j: -40.0 for j in ("base_pitch.pos", "elbow_pitch.pos", "wrist_pitch.pos")}
+    first = pitch_moves[0]
+    camera = sum(PITCH_AXIS_SIGN[j] * (first[j] - before[j]) for j in before if j in first)
+    assert camera < 0, f"box above centre must tilt the camera UP (negative), got {camera:+.1f}"
+
+
+def test_centre_on_box_needs_both_axes_inside_the_deadband():
+    """Centred left-right but still high in the frame is not centred."""
+    res = aim.centre_on_box(_FakeSvc(), _FakeCap(_frame()),
+                            probe=lambda _f: (310, 40, 40, 40))
+    assert res.centred is False
+    assert res.dy_frac is not None and res.dy_frac < -aim.CENTRE_PITCH_DEADBAND_FRAC

@@ -1061,3 +1061,30 @@ def test_an_empty_body_still_searches_for_a_person():
 
     assert sweep.call_args.kwargs["target"] == "person"
     assert body["target"] == "person"
+
+
+def test_the_correction_runs_before_the_head_is_straightened():
+    """Device-observed twice on lamp-ac82: found at roll +/-45, then
+    `centring: lost the subject after 0 iteration(s)`. Straightening first
+    turns the base and re-levels the head, and the correction's first frames
+    were taken on a body that had just moved. The object is PROVEN in view at
+    the pose the sweep saw it from, so correct there, then straighten — the
+    straighten preserves the camera's direction, so a centred box stays
+    centred."""
+    order = []
+
+    def _fake_centre(svc, cap, probe, deadline_s=None):
+        from hal.drivers.tracking.aim import CentreResult
+        order.append("centre")
+        return CentreResult(True, "centred", 1, 10.0, 0.0, (300, 200, 40, 40), object())
+
+    def _fake_straighten(svc, yaw, roll):
+        order.append("straighten")
+
+    with (
+        mock.patch("hal.drivers.tracking.aim.centre_on_box", _fake_centre),
+        mock.patch.object(search, "_straighten_head_onto", _fake_straighten),
+    ):
+        _run_target(target="keyboard", hits=(1,))
+
+    assert order == ["centre", "straighten"], order

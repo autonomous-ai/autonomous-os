@@ -738,15 +738,22 @@ def _sweep(svc: Any, cap: Any, detector: Any, target: str,
                 hit = SearchResult(True, f"found {kind}", visited, yaw, roll,
                                    bearings, kind, box)
                 if not exhaustive:
-                    _straighten_head_onto(svc, yaw, roll)
-                    # Coarse aim first, THEN the fine correction: straightening
-                    # puts the subject roughly in front, which is where the
-                    # centring loop's first-step FOV guess is least wrong.
+                    # Correct FIRST, straighten AFTER. The object is proven in
+                    # view from exactly this pose, so this is where the
+                    # correction's first probe is most likely to see it again.
+                    # Straightening first was device-observed (lamp-ac82, twice)
+                    # to cost the find: the base turned, the head re-levelled,
+                    # and the correction's first frames came from a body that
+                    # had just moved — `centring: lost the subject after 0
+                    # iteration(s)`.
                     #
-                    # Without this the sweep pointed at `yaw + roll` — the look
-                    # DIRECTION of the stop, not the subject — so an object seen
-                    # at the frame edge left the lamp aimed ~50 deg away from it
-                    # while reporting a find.
+                    # The straighten preserves the camera's direction (base
+                    # takes what the head gives up), so a box centred now stays
+                    # centred through it. And without any correction at all the
+                    # sweep pointed at `yaw + roll` — the look DIRECTION of the
+                    # stop, not the subject — so an object at the frame edge
+                    # left the lamp aimed ~50 deg away from it while reporting
+                    # a find.
                     centred = aim.centre_on_box(
                         svc, cap,
                         probe=lambda f: _detect_target(detector, f, target)[0],
@@ -756,6 +763,16 @@ def _sweep(svc: Any, cap: Any, detector: Any, target: str,
                         hit.box = centred.box
                     logger.info("[search] centring: %s after %d iteration(s)",
                                 centred.reason, centred.iterations)
+                    # Straighten from where the correction actually left the
+                    # base, not from the stop it started at.
+                    try:
+                        now_pose = svc.get_positions()
+                        now_yaw = float(now_pose.get("base_yaw.pos", yaw))
+                        now_roll = float(now_pose.get("wrist_roll.pos", roll))
+                    except Exception:
+                        now_yaw, now_roll = yaw + centred.yaw_total, roll
+                    _straighten_head_onto(svc, now_yaw, now_roll)
+                    hit.found_at_yaw = now_yaw
                     # Prefer the CENTRED frame and its box — that pair is what
                     # the lamp is pointing at now. Fall back to the frame that
                     # triggered the hit when the correction never got one (no
