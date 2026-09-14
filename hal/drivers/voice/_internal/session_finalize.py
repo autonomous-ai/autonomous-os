@@ -28,15 +28,6 @@ def _words(text):
 def strip_echo_prefix(transcript: str, spoken: str) -> str:
     """Drop a leading run of `transcript` that the device itself just said.
 
-    A barge-in transcript is a MIXTURE, which is why the existing
-    whole-transcript filter (sensing_sender.is_echo) cannot handle it: the
-    pre-roll starts before the user did, so the reply's last words sit in front
-    of theirs. Dropping the whole thing would discard the user's turn; keeping
-    it sends the device its own words back. Device-observed 27/08/2026:
-    "If you can, just go ahead and eat it." arrived as
-    'situation. I mean, should the fine be heavy?' with 'situation' belonging
-    to the reply that was cut off.
-
     Only a PREFIX is ever removed, and only one that appears verbatim in what
     was spoken. A single short word is not enough evidence — "the" appears in
     every reply — so a one-token match must be a long word.

@@ -142,7 +142,7 @@ reachy = [
 # and needs meson/ninja, which the lamp image does not install. As a hard dep it
 # fails `uv sync` — that is BOTH the image build (scripts/imager, which stops
 # shipping devices) and `software-update hal` on every device in the field — for
-# a feature that is off by default (HAL_AEC_ENABLED). The import in
+# a feature that degrades to a no-op without it (HAL_AEC_ENABLED). The import in
 # drivers/voice/aec.py is already optional: without it the mic runs uncancelled.
 # Install on-device with: uv sync --extra aec
 aec = [

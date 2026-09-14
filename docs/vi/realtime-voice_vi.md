@@ -352,7 +352,7 @@ Mỗi cue còn được buộc vào epoch của phiên STT đã yêu cầu nó. 
 giữ output stream đủ lâu để phiên gốc kết thúc, cue đang chờ bị huỷ ngay trước lúc
 phát; nó không thể lọt vào một phiên mic mới thành transcript bịa. Cơ chế này chỉ
 huỷ lời nói tuỳ chọn của thiết bị — không đóng, xoá hay mute mic của người dùng, nên
-vẫn hỗ trợ barge-in.
+người dùng vẫn có thể nói đè lên nó.
 
 `robots/lamp/rootfs/opt/hal/.env` hạ `HAL_MAX_SESSION_DURATION_S` xuống `20`
 (default trong code vẫn là `30`); trần đó chỉ chạm tới khi đồng hồ im lặng không
@@ -380,23 +380,24 @@ phát — đúng nhịp mà mic nghe thấy.
 
 **Mặc định bật** (`HAL_AEC_ENABLED=true`). Nếu thiếu binding bên dưới thì mọi
 điểm vào AEC đều thành no-op, nên bật mặc định không thể làm hỏng thiết bị không
-có nó — nhưng lưu ý nó cũng làm `HAL_BARGE_IN_ENABLED` mặc định bật, và cái đó
-**không** phải no-op; đặt `HAL_BARGE_IN_ENABLED=false` để dùng bộ khử vọng mà
-không dùng bộ phát hiện cắt lời cục bộ. Chế độ live không bị ảnh hưởng: bên
-trong một phiên live, bộ phát hiện cục bộ không bao giờ chạy. Nó cần binding
-`aec-audio-processing`, vốn **không** phải dependency gốc của hal — PyPI không
-có wheel Linux nào, nên thiết bị phải build từ source. Nó nằm sau extra `aec`
-(`uv sync --extra aec`), cố ý để ngoài `dependencies` và ngoài `hardware`: bước
-build cần meson/ninja mà image lamp không cài, nên khai hard dep sẽ làm hỏng cả
-build image lẫn `software-update hal` cho một tính năng vốn mặc định tắt. Khi import thất bại,
-`configure()` log một lần và mọi entry point trở thành no-op; đường voice hoạt
-động y như trước, nên mặc định bật vẫn an toàn với thiết bị không có binding.
-Tuy nhiên nó cũng bật luôn **barge-in** (xem bên dưới), và cái đó thì không phải
-no-op.
+có nó. Nó cần binding `aec-audio-processing`, vốn **không** phải dependency gốc
+của hal — PyPI không có wheel Linux nào, nên thiết bị phải build từ source. Nó
+nằm sau extra `aec` (`uv sync --extra aec`), cố ý để ngoài `dependencies` và
+ngoài `hardware`: bước build cần meson/ninja mà image lamp không cài, nên khai
+hard dep sẽ làm hỏng cả build image lẫn `software-update hal` cho một tính năng
+vốn tự thành no-op khi thiếu nó. Khi import thất bại, `configure()` log một lần
+và mọi entry point trở thành no-op; đường voice hoạt động y như trước, nên mặc
+định bật vẫn an toàn với thiết bị không có binding.
+
+Bộ khử vọng chỉ làm sạch mic; nó không quyết định việc cắt lời. Trên đường lượt
+không có gì lắng nghe mic đã khử để bắt người dùng nói đè lên câu trả lời — một
+bộ phát hiện cục bộ đã được thử và gỡ bỏ sau phép đo ghi lại bên dưới. Người
+dùng cắt lời bằng cách chạm (nút GPIO, touchpad TTP223), còn bên trong một phiên
+live thì VAD của nhà cung cấp làm chủ việc cắt lời (xem *Chế độ live*).
 
 | Env | Mặc định | Ý nghĩa |
 |-----|----------|---------|
-| `HAL_AEC_ENABLED` | `true` | Công tắc chính. Cũng là mặc định của `HAL_BARGE_IN_ENABLED` |
+| `HAL_AEC_ENABLED` | `true` | Công tắc chính |
 | `HAL_AEC_DELAY_MS` | `205` | Gợi ý độ trễ loa→mic. **Theo từng thiết bị** — phải đo, đừng chép lại |
 | `HAL_AEC_NS` | `true` | Bật thêm khử nhiễu của APM. Trên phần cứng này nó gánh phần lớn việc khử |
 | `HAL_AEC_TAIL_S` | `2.0` | Tiếp tục khử trong khoảng này sau lần ghi loa cuối, rồi bypass APM |
@@ -449,8 +450,8 @@ giây**, so với **5m35s** nếu compile. Nằm ngoài marker đó — máy Mac
 lúc nào cũng chạy; chỉ đường nhanh mới được pin.
 
 Vòng VAD chính được bọc, và với `HAL_WARM_MIC=true` (nay là mặc định) mic vẫn mở
-suốt lúc phát, nên việc khử chạy ngay trong lúc thiết bị đang nói chứ không chỉ
-trong barge-in monitor cũ. Cổng reverb cố ý không khử để giữ nguyên timing.
+suốt lúc phát, nên việc khử chạy ngay trong lúc thiết bị đang nói. Cổng reverb
+cố ý không khử để giữ nguyên timing.
 
 **Đo trên lamp** (OrangePi sun60 / A523, mic USB + loa USB — hai miền clock độc
 lập). Gợi ý độ trễ phải theo từng thiết bị vì hai clock USB chạy tự do: trên
@@ -533,17 +534,20 @@ chứng minh loa bị underrun. Các thay đổi phát audio cục bộ này v�
 xác minh bằng nghe thử trên phần cứng.
 
 `aec.uncancelled()` cho biết khung vừa đọc có đi qua mà **không** được khử thật
-hay không — tham chiếu underrun, stream bị bypass, hoặc mic overrun. Barge-in
-gate theo cờ này để không quyết định dựa trên vọng âm thô. Lưu ý điều nó **không**
+hay không — tham chiếu underrun, stream bị bypass, hoặc mic overrun. Cổng đường
+lên của chế độ live dựa vào cờ này ở chế độ `cancelled` để không bao giờ gửi vọng
+âm thô lên như thể là người dùng. Lưu ý điều nó **không**
 nói: nó báo tham chiếu có *tới* hay không, chứ không báo việc khử có *hiệu quả*
 hay không — một khung ERLE 0,9 dB vẫn được tính là đã khử.
 
-### Barge-in: mức âm lượng không tách được vọng âm với người thật
+### Vì sao không có cắt lời bằng giọng nói trên mic đã khử vọng
 
-Phần dư sót lại sau khi khử đủ to để trông như người đang chen ngang, và nó
-**đúng là** tiếng nói, nên cả cổng mức lẫn bộ phân loại speech đều không loại
-được. Đo trong phòng im, trần vọng âm (dòng `drain peak RMS=` mỗi câu trả lời
-đều ghi) so với lần chen ngang thật:
+Một bộ phát hiện cục bộ ("barge-in": dừng TTS khi người dùng nói đè lên) đã
+chạy từ 25/08 tới 13/09/2026 rồi bị gỡ bỏ. Các phép đo được giữ lại ở đây để
+không ai phải thử lại từ đầu. Phần dư sót lại sau khi khử đủ to để trông như
+người đang chen ngang, và nó **đúng là** tiếng nói, nên cả cổng mức lẫn bộ phân
+loại speech đều không loại được. Đo trong phòng im, trần vọng âm so với lần chen
+ngang thật:
 
 | Âm lượng loa | Mixer | Trần vọng âm | Người chen ngang thật |
 |---|---|---|---|
@@ -554,29 +558,12 @@ Phần dư sót lại sau khi khử đủ to để trông như người đang ch
 Trần vọng âm nằm **trên** mức người thật ở mọi âm lượng, nên ngưỡng đặt dưới nó
 thì đèn tự cắt lời mình, đặt trên nó thì bỏ sót giọng nói bình thường. Hạ âm
 lượng loa cũng không phải cách chữa: cả 24 dB dải mixer chỉ kéo trần xuống chưa
-tới 3 dB, vì đường ghép không do đường truyền qua không khí chi phối. Đừng mất
-thời gian tinh chỉnh lại `HAL_BARGE_IN_RMS_THRESHOLD` — không có giá trị nào đúng.
+tới 3 dB, vì đường ghép không do đường truyền qua không khí chi phối.
 
-Thứ tách được hai nhóm là `aec.echo_envelope_match()`
-(`HAL_BARGE_IN_ECHO_MATCH`, mặc định `0.65`), chạy thứ ba và chỉ trên những ứng
-viên đã qua cổng mức và cổng speech. Nó làm ba bước trên đường bao log-năng
-lượng độ phân giải 8 ms, lấy từ mic **thô**:
-
-1. **Căn.** Tương quan chéo cửa sổ ứng viên với tham chiếu đang giữ, lấy độ trễ
-   tốt nhất. Tương quan chỉ để *định vị* cửa sổ, không phải để phán — vì lúc hai
-   bên cùng nói, mic thô mang vọng âm lớn hơn hẳn tiếng người nên vẫn tương quan
-   cao bất kể người đó nói gì.
-2. **Trừ.** Bỏ đi phần tham chiếu đã căn cộng hệ số ghép (độ lệch trung vị), chỉ
-   giữ những khung mà câu trả lời đang thật sự to. Ở khe im giữa các từ, tham
-   chiếu đoán gần như im lặng nên tiếng ồn phòng bình thường sẽ thành phần dư
-   khổng lồ.
-3. **Đo độ LỆCH, không đo độ lớn.** Vọng âm không bao giờ khớp hoàn hảo — vang
-   phòng, nhiễu mic, và đường ghép không phải phép nhân thuần đều để lại vài dB
-   về cả hai phía. Người thì một chiều: họ chỉ có thể *thêm* năng lượng. Nên đuôi
-   trên vượt đuôi dưới là có người khác trong phòng, còn phần dư đối xứng là vọng
-   âm dù nó lớn đến đâu.
-
-Đo trên `lamp-0c89`, loa 40 %, gán nhãn theo bản ghi lời nói ngay sau mỗi ứng viên:
+Phòng vệ cuối cùng được thử là phép so đường bao trên mic **thô**: căn cửa sổ
+ứng viên với tham chiếu đang giữ, trừ nó cộng hệ số ghép đã học, rồi đọc độ
+*lệch* của phần dư thay vì độ lớn — người chỉ có thể thêm năng lượng, nên phần
+dư một chiều là có người khác trong phòng. Gán nhãn trên `lamp-0c89` ở 40 %:
 
 | | Độ lệch phần dư |
 |---|---|
@@ -584,26 +571,34 @@ lượng độ phân giải 8 ms, lấy từ mic **thô**:
 | Vọng âm, mẻ trộn (~40 cửa sổ) | −50.0 … **+4.8** dB |
 | Người chen ngang đã xác nhận | **+8.4** … +40.4 dB |
 
-Ngưỡng hiệu dụng nằm quanh 6.6 dB — trong khoảng trống đó, và nghiêng về phía
-thà bỏ sót một lần chen ngang nhỏ còn hơn cắt ngang câu trả lời. Mẻ kiểm chứng:
-12 câu trả lời trong phòng im, **không** bắn lần nào.
+Trông có vẻ tách được, và 12 câu trả lời trong phòng im không bắn nhầm lần nào.
+Nhưng nó không trụ được: 27/08/2026, 20 câu trả lời trong phòng im, đèn tự cắt
+lời mình 4 lần; chấm 79 cửa sổ đã gán nhãn (69 vọng âm, 10 lần chen ngang đã xác
+nhận) trên mọi đặc trưng sẵn có — tương quan đường bao, độ lệch phần dư, độ lệch
+ghép, mức nén của APM, và magnitude-squared coherence kinh điển — cho AUC tốt
+nhất 0.72, và mọi ngưỡng đạt 0 % tự cắt lời đều bỏ sót 90–100 % lần chen ngang
+thật:
 
-Hai hướng đã thử và bị loại, đều ghi lại trong code để người sau khỏi thử lại:
-so trên tín hiệu **đã khử** thay vì mic thô (APM là bộ khuếch đại thay đổi theo
-thời gian, nó ăn mất chính đường bao cần so — vọng âm chấm 0.42–0.45 và lọt
-qua), và biến quyết định double-talk kinh điển σ_e/σ_d, vẫn được log dưới tên
-`supp` (vọng âm 0.3–10.1 dB so với người 0.1–8.2 dB — chồng lấn hoàn toàn, vì
-ERLE ở đây giỏi lắm 6 dB và dao động theo từng khung).
+| đặc trưng | vọng âm | người |
+|---|---|---|
+| coherence | 0.03 … 0.60 | 0.04 … 0.57 |
+| tương quan | 0.25 … 0.99 | 0.41 … 0.95 |
+| độ lệch (dB) | −6.5 … 67.1 | −1.0 … 119.7 |
 
-`None` nghĩa là *chưa biết*, không phải sạch — hoặc quá ít tham chiếu, hoặc phép
-căn bị dồn về mép cũ nhất, tức điểm căn đúng đã trôi ra ngoài. Caller coi đó là
-"đừng bắn": loa đang phát ngay lúc đó, và đây đúng là tình huống mà "chưa biết"
-bắt buộc phải là "không".
+Hai lớp chồng lấn gần như hoàn toàn, nên không bộ phân loại nào trên tín hiệu
+này làm tốt hơn được. Nguyên nhân nằm ở thượng nguồn: AEC3 chỉ đạt ~6 dB ERLE
+trên phần cứng này vì loa và mic là hai thiết bị USB với clock chạy tự do, và
+khi hai bên cùng nói, APM không làm nhỏ người nói gần — nó xoá luôn (một khung
+đọc 7426 trên mic thô ra khỏi APM còn 5). So trên tín hiệu đã khử thay vì mic
+thô cũng đã thử và còn tệ hơn: APM là bộ khuếch đại thay đổi theo thời gian, nó
+ăn mất đường bao.
 
-`EchoReference` giữ vùng **history** 2 giây bên cạnh FIFO, và bộ khử giữ đúng
-chừng đó mic thô. FIFO bị `process()` rút cạn, nên tới lúc phán một ứng viên thì
-phần tham chiếu ứng với các khung tạo ra nó đã mất; 800 ms không đủ vì TTS ghi
-vào loa lúc ALSA *chấp nhận* audio, chạy trước lúc phát theo từng cụm.
+Chỉ thử lại khi chính đường vọng âm tốt lên — bộ khử neural (DTLN-aec chạy thời
+gian thực trên Pi 3 B+) hoặc một sound card cho cả hai chiều — và gắn lần thử đó
+với bài kiểm tra chấp nhận ở *Chế độ live*: phát lại
+`barge-in-captures/full40-bargein-off` qua bộ khử và đòi residual đỉnh nằm dưới
+sàn chen ngang thật (6956) với biên an toàn. Trước đó, chạm-để-cắt-lời và VAD
+của nhà cung cấp là hai đường cắt lời duy nhất.
 
 `process()` gom audio về khung cố định 10 ms của APM và trả về đúng số mẫu mà
 caller yêu cầu (mồi một lần bằng tối đa 10 ms im lặng), nên khung 64 ms của hal
@@ -1087,10 +1082,9 @@ diễn ra *trước* khi resample, nên số khung ra == số khung vào theo c�
 `cancelled` là đích đến và **không** phải mặc định, vì bộ khử vọng chưa xứng
 đáng. Đo 04/09/2026 (`barge-in-captures/`): ERLE trung bình 14-19 dB nhưng **ERLE
 đỉnh ~5 dB** — đỉnh mic 29264 rời APM còn 25269, so với sàn ngắt lời thật là
-6956. VAD của nhà cung cấp nhìn thấy đỉnh và không có phòng vệ nào của bộ phát
-hiện cục bộ (không cờ `uncancelled()`, không so khớp bao hình, không sàn thời
-lượng), nên nó đọc chính điểm bắt đầu tiếng của thiết bị thành người dùng ngắt
-lời. Chuyển sang `cancelled` khi phát lại `full40-bargein-off` đưa residual đỉnh
+6956. VAD của nhà cung cấp nhìn thấy đỉnh và không có phòng vệ vọng âm nào
+của riêng nó (không thấy được `uncancelled()`, không áp sàn thời lượng), nên nó
+đọc chính điểm bắt đầu tiếng của thiết bị thành người dùng ngắt lời. Chuyển sang `cancelled` khi phát lại `full40-bargein-off` đưa residual đỉnh
 xuống dưới sàn đó với biên an toàn.
 
 Hai tín hiệu độc lập "loa có đang phát không" nuôi cổng này, vì không cái nào tự
@@ -1117,8 +1111,8 @@ một hàng đợi chết. `stream_output()` trả về một lần cho mỗi c�
 yield gì; cả hai đều chỉ có nghĩa là "quay lại vòng nữa".
 
 `InterruptedOutput` (mới) được `gemini_live` phát ra khi `content.interrupted` và
-là **cách cắt lời duy nhất mà một phiên live có** — bộ phát hiện cục bộ không
-chạy. Nó dừng phát ngay lập tức. Đường lượt không bao giờ thấy nó: manual VAD
+là **cách cắt lời bằng giọng nói duy nhất** — không có gì cục bộ quyết định
+nó. Nó dừng phát ngay lập tức. Đường lượt không bao giờ thấy nó: manual VAD
 không cho server cơ hội phát ra.
 
 **Đầu ra được flush một lần lúc bắt đầu phiên.** Không có nó, phiên sẽ mở trên
@@ -1160,7 +1154,7 @@ live. Đây là đánh đổi sản phẩm, không phải lỗi:
 Cũng không chạy bên trong một phiên: cổng RMS vào, `SPEECH_HOLDOFF_S`, đồng hồ im
 lặng, `MAX_SESSION_DURATION_S`, socket STT mỗi lượt và keepalive của nó (thậm chí
 không được kết nối trước — `stt_keepalive_on` là false ở chế độ live), noise
-guard, cắt lời cục bộ, warm-mic drain và echo-skip, và `commit_audio`. Không cái
+guard, warm-mic drain và echo-skip, và `commit_audio`. Không cái
 nào bị xóa: đường lượt vẫn dùng tất cả, và lấy lại chúng ngay khi một phiên kết
 thúc.
 
