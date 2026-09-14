@@ -98,9 +98,10 @@ clip thì không. Phải tính lại hằng số này nếu phân bố khối l�
 ## Demo tầm chuyển động — tính ra, không thu sẵn
 
 `POST /servo/demo` (`hal/drivers/motors/range_demo.py`) trình diễn một vòng dạo
-qua tầm chuyển động kèm lời thoại: *"hết cỡ bên trái"* ngay khi đế quay sang
-trái, rồi sang phải, rồi ngẩng lên và cúi xuống, rồi về chỗ cũ. Không phát hiện
-gì và không báo cáo gì — chuyển động cùng lời nói chính là toàn bộ sản phẩm.
+qua tầm chuyển động kèm lời thoại, mỗi lần một khớp: đế quay tới cả hai giới hạn
+yaw rồi về giữa, đầu tự xoay, cổ tay ngẩng lên cúi xuống, khuỷu vươn ra, đế
+nghiêng một chút, rồi về chỗ cũ. Không phát hiện gì và không báo cáo gì — chuyển
+động cùng lời nói chính là toàn bộ sản phẩm.
 
 Đây là chuyển động duy nhất trong tài liệu này cố ý **không** phải một bản thu,
 và lý do nằm ở chính lỗi mà nó thay thế. Khi được yêu cầu trình diễn tầm hoạt
@@ -113,28 +114,49 @@ của ai đó bị đóng băng tại thời điểm thu, không có gì trong f
 đúng theo cấu trúc, vẫn đúng khi giới hạn thay đổi, và port sang hằng số của một
 robot khác mà không tốn gì.
 
-**Yaw chạy tới giới hạn thật; pitch thì cố ý không.** `WRIST_PITCH_MIN` /
-`WRIST_PITCH_MAX` khai báo ±90° còn cánh tay thì không có chừng đó — đo trên
-thiết bị lamp-ac82, `wrist_pitch` lên tới −89.55 khi ngẩng (bị chặn bởi soft
-limit chứ không phải bởi khớp) và chỉ tới −16.61 khi cúi mà không hề khựng. Dải
-khai báo không phải một phép đo, nên các chặng pitch chỉ đi `PITCH_LOOK_DEG`
-(25°) tính từ seed pose, có kẹp biên: đúng bằng độ lệch mà vòng nhìn của pha quét
-vẫn đi mỗi lần chạy. Tầm đã được kiểm chứng hơn tầm chỉ được khai báo. Các câu
-thoại bám theo sự phân đôi đó — pool của yaw nói *"hết cỡ bên trái"*, còn pool
-của pitch chỉ nói *"lên như vầy nè"*.
+**Mỗi lần một khớp, và về giữa trước khi sang khớp kế.** `waypoints()` trả về
+14 chặng trong năm nhóm, mọi độ vươn đều tính từ tư thế lúc demo bắt đầu
+(`seed_pose`) và được kẹp trong tầm của khớp trừ `PITCH_MARGIN` (2°). Mỗi nhóm
+kết thúc bằng một chặng im lặng quay về giá trị seed, nên đế đã hướng ra trước
+mặt trước khi đầu bắt đầu xoay — bản đầu tiên nối thẳng yaw sang pitch từ tận
+cuối vòng quét, và trên thiết bị, cảnh đầu ngẩng trong khi thân vẫn còn quay vào
+tường trông như hai chuyển động không liên quan chứ không phải một vòng dạo.
 
-**Đế được tăng tốc rồi trả lại.** `DEMO_YAW_SPEED` (1200 ≈ 80°/s) được ghi vào
+| Khớp | Chặng | Độ vươn | Pool |
+|------|-------|---------|------|
+| `base_yaw` | −135 → +135 → seed | `YAW_MIN`..`YAW_MAX`, giới hạn thật | `demo_left`, `demo_right`, `demo_centre` |
+| `wrist_roll` | seed −45 → +45 → seed | `ROLL_REACH_DEG` | `demo_head`, rồi im lặng |
+| `wrist_pitch` | seed −25 (ngẩng) → +25 → seed | `PITCH_LOOK_DEG` | `demo_up`, `demo_down`, im lặng |
+| `elbow_pitch` | seed +10 (ngẩng) → −10 → seed | `ELBOW_REACH_DEG` | `demo_neck`, rồi im lặng |
+| `base_pitch` | seed −12 → seed | `BASE_PITCH_LEAN_DEG`, một chiều | `demo_lean`, rồi im lặng |
+
+Chỉ yaw chạy tới giới hạn khai báo; các khớp còn lại đi theo tầm đã đo trên
+thiết bị hoặc cố ý nhỏ. `WRIST_PITCH_MIN` / `WRIST_PITCH_MAX` khai báo ±90° còn
+cánh tay thì không có chừng đó — trên lamp-ac82, `wrist_pitch` lên tới −89.55
+khi ngẩng (bị chặn bởi soft limit chứ không phải bởi khớp) và chỉ tới −16.61 khi
+cúi — nên cổ tay chỉ ngẩng 25°, đúng bằng độ lệch mà vòng nhìn của pha quét vẫn
+đi mỗi lần chạy. Khuỷu giữ ở ±10 vì khuỷu +35.8 cùng đế hạ xuống +10.6 từng vươn
+cánh tay ra sau xa tới mức trông như sắp lật; demo không bao giờ di chuyển hai
+khớp đó cùng lúc. `base_pitch` chỉ nghiêng một chiều: tư thế nghỉ đã ở ~29.8 sát
+trần tầm 30. Các câu thoại bám theo sự phân đôi đó — pool của yaw nói *"hết cỡ
+bên trái"*, các pool còn lại chỉ nói *"lên như vầy nè"* hay *"nghiêng một chút nè"*.
+
+**Đế được tăng tốc rồi trả lại.** `DEMO_YAW_SPEED` (1600 ≈ 100°/s) được ghi vào
 `base_yaw` cho màn trình diễn, y như pha quét vẫn làm và cùng một lý do: nếu
 không đụng tới, khớp này chỉ chạy ~14°/s, nên một chặng 135° mất ~9 s và câu nói
-mô tả nó kết thúc trong khi đèn vẫn còn đang xoay. Được khôi phục trong `finally`,
+mô tả nó kết thúc trong khi đèn vẫn còn đang xoay. Mỗi chặng được gửi bằng một
+`move_and_hold` dài `LEG_DURATION_S` (1.0 s), kèm một nhịp dừng `DWELL_S` (0.3 s)
+khi servo đã đứng yên để giới hạn đọc như một tư thế chứ không phải một cú nảy.
+Được khôi phục trong `finally`,
 vì một mức giới hạn bị bỏ quên sẽ theo demo đi ra ngoài và bóp chậm cả idle lẫn
 mọi emotion.
 
-**Lời nói do HAL định thời, còn câu chữ thuộc về os-server.** Mỗi chặng gọi
+**Lời nói do HAL định thời, còn câu chữ thuộc về os-server.** Mỗi chặng có thoại gọi
 `aim._say(pool)` → `POST /api/sensing/filler` → các pool `demo_*` trong
 `system/lib/i18n/fillers.go`. Không cần lượt LLM nào và không tốn token. Một
 marker `[HW:...]` không làm được việc này: marker bắn trước TTS, nên một demo
-thuyết minh bằng marker sẽ mô tả màn trình diễn đã xong từ đời nào. Câu nói đi
+thuyết minh bằng marker sẽ mô tả màn trình diễn đã xong từ đời nào. Các chặng im
+lặng (nửa sau của một cặp, chặng về giữa) bỏ qua hẳn endpoint filler. Câu nói đi
 TRƯỚC chặng của nó (nói, rồi mới di chuyển) còn chặng kế tiếp thì chờ
 `_wait_until_still` — `move_and_hold` trả về khi đã gửi xong frame chứ không phải
 khi servo đã tới nơi, nên không có bước chờ đó thì kịch bản vượt mặt thân máy chỉ
@@ -144,7 +166,7 @@ sau hai chặng.
 suppress; từ chối một demo thứ hai chồng lên demo đang chạy. `start()` trả về
 ngay và màn trình diễn chạy trên thread riêng — agent đi tới đây qua marker
 `[HW:/servo/demo:{}]`, mà `fireHWCall` chỉ cho một POST phần cứng năm giây trong
-khi demo dài ~20 s. Nút vật lý abort nó cùng với pha ngắm và pha quét
+khi demo dài ~25 s. Nút vật lý abort nó cùng với pha ngắm và pha quét
 (`button_actions._stop_active_tracking`): một cú nhấn chỉ dừng cánh tay mà không
 dừng lời thoại sẽ để lại một cái đèn đang mô tả những chặng nó không còn thực
 hiện nữa. Một demo bị abort sẽ quay về đúng tư thế lúc bắt đầu.

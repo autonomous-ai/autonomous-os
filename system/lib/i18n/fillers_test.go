@@ -134,8 +134,8 @@ func TestFillerContinuationUsesNaturalVietnameseThoughtSounds(t *testing.T) {
 func TestDemoPoolsExistInEveryLanguage(t *testing.T) {
 	for _, lang := range []string{LangEN, LangVI, LangZhCN, LangZhTW} {
 		for _, pool := range []string{
-			"demo_intro", "demo_left", "demo_right",
-			"demo_up", "demo_down", "demo_done",
+			"demo_intro", "demo_left", "demo_right", "demo_centre",
+			"demo_head", "demo_up", "demo_down", "demo_neck", "demo_lean", "demo_done",
 		} {
 			if got := FillerForTool(lang, pool); len(got) == 0 {
 				t.Errorf("pool %q is empty for lang %q", pool, lang)

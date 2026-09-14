@@ -96,21 +96,64 @@ def test_the_pitch_legs_stay_inside_travel_the_device_is_known_to_have():
         assert C.WRIST_PITCH_MIN <= wp <= C.WRIST_PITCH_MAX
 
 
-def test_every_moving_leg_is_narrated():
-    """Silent movement is what the canned animation already did."""
+def test_every_joint_is_narrated_at_least_once():
+    """Silent legs are allowed — a return to centre, the second half of a pair —
+    but every JOINT the demo moves must be announced when it starts. Silent
+    movement of a joint is what the canned animation already did."""
     wps = range_demo.waypoints(_FakeSvc.REST)
-    assert wps, "no waypoints"
-    narrated = [pool for _pose, pool in wps if pool]
-    assert len(narrated) == len(wps), "a leg with no phrase"
+    announced = set()
+    for pose, pool in wps:
+        joint = next(iter(pose))
+        if pool:
+            announced.add(joint)
+    moved = {next(iter(pose)) for pose, _ in wps}
+    assert moved == announced, f"joints moved without a word: {moved - announced}"
 
 
-def test_the_demo_speaks_every_leg_in_order():
+def test_every_joint_gets_a_turn_and_returns_to_centre_before_the_next():
+    """Reviewed on device: the first cut ran yaw into pitch from the far end of
+    the yaw sweep, so the head tilted while the body still faced the wall, and
+    only two joints ever moved. Every joint performs, one at a time, and each
+    comes home before the next begins."""
+    wps = range_demo.waypoints(_FakeSvc.REST)
+    joints_in_order = []
+    for pose, _ in wps:
+        j = next(iter(pose))
+        if not joints_in_order or joints_in_order[-1] != j:
+            joints_in_order.append(j)
+    assert joints_in_order == [
+        "base_yaw.pos", "wrist_roll.pos", "wrist_pitch.pos", "elbow_pitch.pos", "base_pitch.pos",
+    ], joints_in_order
+    # Each joint's last leg is its seed value.
+    for joint in joints_in_order:
+        last = [pose[joint] for pose, _ in wps if joint in pose][-1]
+        assert last == pytest.approx(_FakeSvc.REST[joint]), f"{joint} does not return to centre"
+
+
+def test_the_small_joints_stay_inside_their_travel():
+    """Elbow and base pitch have documented limits and a documented tipping
+    case; the demo must never command past the travel table."""
+    # PITCH_TRAVEL is distribute_pitch's table and search.py documents it as
+    # unusable for wrist_pitch (rest sits at -61.7, already outside it); that
+    # joint is bounded by WRIST_PITCH_MIN/MAX and checked in its own test.
+    wps = range_demo.waypoints(_FakeSvc.REST)
+    for pose, _ in wps:
+        for joint, v in pose.items():
+            if joint in ("elbow_pitch.pos", "base_pitch.pos"):
+                assert C.PITCH_TRAVEL_MIN[joint] <= v <= C.PITCH_TRAVEL_MAX[joint], (
+                    f"{joint}={v:+.1f} outside {C.PITCH_TRAVEL_MIN[joint]}..{C.PITCH_TRAVEL_MAX[joint]}")
+            if joint == "wrist_roll.pos":
+                assert C.WRIST_ROLL_MIN <= v <= C.WRIST_ROLL_MAX
+
+
+def test_the_demo_speaks_every_narrated_leg_in_order_and_nothing_for_silent_ones():
     svc = _FakeSvc()
     res, said = _run(svc)
     assert res["completed"] is True
     assert said[0] == "demo_intro"
     assert said[-1] == "demo_done"
-    assert said[1:-1] == [pool for _p, pool in range_demo.waypoints(_FakeSvc.REST)]
+    assert said[1:-1] == [pool for _p, pool in range_demo.waypoints(_FakeSvc.REST) if pool]
+    assert "" not in said, "an empty pool reached the filler endpoint"
 
 
 def test_each_leg_is_announced_then_performed_and_never_overlaps_the_next():
@@ -135,7 +178,7 @@ def test_each_leg_is_announced_then_performed_and_never_overlaps_the_next():
     ):
         range_demo.run(svc)
 
-    legs = [pool for _p, pool in range_demo.waypoints(_FakeSvc.REST)]
+    legs = [pool for _p, pool in range_demo.waypoints(_FakeSvc.REST) if pool]
     at = {v: i for i, (k, v) in enumerate(order) if k == "say"}
     for pool in legs:
         assert pool in at, f"{pool} was never spoken"
@@ -181,6 +224,7 @@ def test_an_abort_stops_the_body_and_the_narration_together():
     assert res["completed"] is False
     assert res["reason"] == "aborted"
     assert len(said) <= 3, f"kept narrating after the abort: {said}"
+    assert "demo_done" not in said
     assert svc.holds[-1] == _FakeSvc.REST, "an aborted demo must go home"
 
 
