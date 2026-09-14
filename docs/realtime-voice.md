@@ -1116,6 +1116,12 @@ so it must be settled before those models are defined. An explicit non-`off`
 value is left alone. Getting this wrong produces a device that streams audio
 forever and never answers.
 
+### Completed Gemini live history
+
+With `HAL_LIVE_MODE=true`, Gemini input transcription chunks now travel with their provider turn ID. `hal/drivers/voice/_internal/live_history.py` joins only input/output with that same ID and sends one `voice_agent_handled` notification after a successful provider terminal. Receive timeouts keep the partial turn open; duplicate terminals do not resend. Rejected, delegated, interrupted, unowned, or transcript-less replies are not recorded as completed exchanges. Input and output remain separate from the audio playback path; the existing output-reset behavior also resets the collected answer.
+
+A single background worker sends completed exchanges using the existing interaction ID, reply-length cap and Harness routing snapshot. It drains completed notifications after live hangup without blocking playback. OS handles the notification through `externalhistory`, with silent delivery, disk persistence and the existing **History sync · Realtime → Main** web card. HAL buffering is bounded (64 incomplete turns, 64 queued notifications, 128 recent closed IDs); overflow/transport errors are logged. Durability starts only after OS accepts the notification. No live changes are made to OpenAI or Qwen in this fix; their live-history support remains a separate task.
+
 ### Voice metrics in live mode
 
 Gemini live sessions use `hal/telemetry/live_voice.py` to map provider user turns to HAL
