@@ -72,6 +72,12 @@ Text thông thường dùng operation `turn.send` hiện có. Route phản hồi
 
 HAL bắt buộc đọc được mode trước dispatch: timeout, response sai định dạng hoặc lỗi HTTP đều chặn dispatch thay vì đoán agent nào nhận microphone. Cần triển khai OS và HAL tương thích cùng nhau: OS cũ chưa có `/api/harness/voice-mode` cũng khiến HAL này từ chối dispatch giọng nói. Đây là yêu cầu rollout, không phải thao tác deploy tự động.
 
+### Telemetry hoàn tất tác vụ
+
+Lượt voice chuyển sang Harness giữ interaction ID từ HAL và run ID OS `device-harness-*`. Request gõ qua `/voice-mode/answer` tạo tác vụ `web_chat` riêng trước dispatch, gồm lỗi validation/dispatch sau khi JSON hợp lệ. Đăng ký route phản hồi Harness ghi `harness_delegated`; reporter KPI bỏ completion lifecycle của agent thiết bị (`NO_REPLY` chỉ là bàn giao). `turn.done` xác nhận thực thi xong, không chờ phát âm thanh hay recap; `turn.summary` có nội dung cũng là bằng chứng completion. `turn.error` và `agent.error` ghi failed kể cả không có text hiển thị. `question.open` và câu trả lời từng phần được lưu cục bộ là `unknown`, không phải completed; lượt trả lời là turn mới. `DeliveryUnknown` giữ unknown; lỗi dispatch xác định là failed. Receipt hoặc dispatch trả nil không tự chứng minh execution hoàn tất.
+
+Telemetry quan sát route hiện có, không đổi TTS, dispatch, busy hay protocol Harness. Run ID tường minh phải khớp; event legacy chỉ có agent được ghép khi agent có đúng một route chưa hết hạn. Event mơ hồ/sai ID không được tính completion; fallback định tuyến phản hồi cũ giữ nguyên. Route hiện có hết hạn sau 15 phút. Thay đổi không khôi phục event mất trước deploy.
+
 ### API điều khiển cục bộ
 
 Các path dưới đây dùng response envelope chuẩn của OS và không cho cache response:

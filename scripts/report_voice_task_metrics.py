@@ -277,6 +277,16 @@ def report(rows, now_ms, settle_seconds=0, default_device=None, include_syntheti
         if turn.get("route") == "realtime_handled":
             candidates = [e for e in candidates if e.get("evidence") == "realtime_turn_done"]
         candidates = [e for e in candidates if (e.get("execution_at_ms") or 0) <= now_ms]
+        # A local agent ending its handoff (NO_REPLY) is not completion of
+        # the remote task. Keep this restriction independent of callback order.
+        if any(e.get("evidence") == "harness_delegated" for e in candidates):
+            candidates = [e for e in candidates if e.get("evidence") in {
+                "harness_delegated", "harness_turn_done", "harness_turn_summary",
+                "harness_turn_error", "harness_question_open", "dispatch_error",
+                "execution_observation_lost"}]
+            if any(e.get("evidence") != "harness_delegated" for e in candidates):
+                candidates = [e for e in candidates
+                              if e.get("evidence") != "harness_delegated"]
         # Losing transport is absence of observation, not a terminal outcome.
         # A racing disconnect snapshot must not erase a real terminal event.
         if any(e.get("outcome") in ("completed", "failed") for e in candidates):

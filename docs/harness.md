@@ -72,6 +72,12 @@ Normal text uses the existing `turn.send` operation. Registered response routes,
 
 The mode lookup is mandatory for HAL dispatch: timeout, malformed response or HTTP failure fails closed instead of guessing which agent owns the microphone. Deploy matching OS and HAL versions together: an older OS without `/api/harness/voice-mode` also causes this HAL to refuse voice dispatch. This is a rollout requirement, not an automatic deployment step.
 
+### Task completion telemetry
+
+Voice captures routed to Harness retain their HAL interaction ID and OS `device-harness-*` run ID. Typed `/voice-mode/answer` submissions start a separate `web_chat` task before dispatch, including validation/dispatch errors after JSON validation. Registering a Harness response route records `harness_delegated`; the KPI reporter then ignores the local agent’s lifecycle completion (`NO_REPLY` handoff). `turn.done` completes execution without waiting for spoken output or recap; a nonempty `turn.summary` also supplies completion evidence. `turn.error` and `agent.error` supply failure evidence even without display text. `question.open` and locally collected partial answers are `unknown`, never completion; the answer is a new turn. `DeliveryUnknown` stays unknown; a definite dispatch error is failed. Receipts or a nil dispatch return alone are not execution completion.
+
+Telemetry observes existing routes without changing TTS, dispatch, busy state, or the Harness protocol. Explicit event run IDs must match; an agent-only legacy event is attributed only when exactly one nonexpired route exists for that agent. Ambiguous/mismatched events remain uncredited; the legacy reply-routing fallback is unchanged. Existing route retention is 15 minutes. These changes do not reconstruct events lost before deployment.
+
 ### Local control API
 
 All paths below use the normal OS response envelope and return non-cacheable responses:

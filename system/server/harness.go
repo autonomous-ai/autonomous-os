@@ -12,6 +12,7 @@ import (
 	"go.autonomous.ai/os/system/harness"
 	"go.autonomous.ai/os/system/lib/flow"
 	"go.autonomous.ai/os/system/server/serializers"
+	"go.autonomous.ai/os/system/telemetry"
 )
 
 type harnessReply struct {
@@ -109,6 +110,7 @@ func (s *Server) registerHarnessRoutes(api *gin.RouterGroup, ctx context.Context
 		result, err := s.harnessService.Request(requestCtx, frame)
 		if err != nil {
 			if tracksReply {
+				reportHarnessDispatchError(reply.RunID, "", err)
 				s.forgetHarnessReply(agentID, reply.RunID)
 			}
 			var uncertain *harness.DeliveryUnknownError
@@ -118,6 +120,9 @@ func (s *Server) registerHarnessRoutes(api *gin.RouterGroup, ctx context.Context
 			}
 			c.JSON(http.StatusBadGateway, serializers.ResponseError(err.Error()))
 			return
+		}
+		if tracksReply {
+			reportHarnessReceipt(reply.RunID, result)
 		}
 		c.JSON(http.StatusOK, serializers.ResponseSuccess(result))
 	})
@@ -202,6 +207,7 @@ func (s *Server) registerHarnessReply(agentID, runID string, webChat bool) {
 	s.harnessRepliesMu.Unlock()
 	s.harnessFollowup.Store(time.Now().Add(2 * time.Minute).UnixMilli())
 	s.agentHandler.MarkHarnessResponseRun(runID, webChat)
+	telemetry.ReportTaskExecution(runID, "", "unknown", "harness_delegated")
 }
 
 func (s *Server) forgetHarnessReply(agentID, runID string) {
@@ -302,6 +308,7 @@ func (s *Server) forwardHarnessEvent(frame harness.Frame) {
 	}
 
 	kind, _ := frame["kind"].(string)
+	s.observeHarnessExecution(agentID, kind, frame)
 	if kind == "turn.tool" {
 		toolName, toolArgs := harnessToolEvent(frame)
 		if toolName == "" {

@@ -342,6 +342,10 @@ lỗi, transcript hay kết quả tool.
 | `local_intent_returned` | `completed`: handler local intent chạy xong, không ghi nhận lỗi hành động HAL; không chứng minh đúng ý user hay tác động vật lý |
 | `chat_final_no_lifecycle` | `completed`: final có nội dung tiêu thụ pending trace mà không có lifecycle (ví dụ OpenClaw `/status`, `/new`); final rỗng không chứng minh completion |
 | `execution_observation_lost` | `unknown`: runtime mất quan sát tác vụ đã gửi nhưng chưa kết thúc khi mất transport hoặc timeout; chưa chứng minh thực thi thất bại |
+| `harness_delegated` | `unknown`: thực thi chuyển sang Harness; lifecycle end của runtime cục bộ không chứng minh tác vụ remote xong |
+| `harness_turn_done`, `harness_turn_summary` | `completed`: completion Harness đã ghép đúng; summary cần nội dung, done không cần recap hay TTS |
+| `harness_turn_error` | `failed`: `turn.error` hoặc `agent.error` Harness đã ghép đúng, kể cả thiếu text |
+| `harness_question_open` | `unknown`: đang chờ trả lời câu hỏi, gồm thu thập câu trả lời từng phần cục bộ |
 | `realtime_turn_done` | `completed`: terminal thành công của provider gắn đúng lượt hoàn tất turn đã handled |
 
 Ghép bằng chứng bằng **thiết bị + run_id** hoặc **thiết bị + interaction_id**.
@@ -360,6 +364,8 @@ về sau lỗi này phát `local_intent_error`, không phát completion.
 OpenClaw lưu pending trace trước khi ghi `chat.send`, rồi xoá khi ghi thất bại. Correlation telemetry giữ tối đa 1024 trace trong 24 giờ bằng buffer riêng. Routing giữ matcher và TTL 2 phút cũ, pending-send busy vẫn 30 giây. Alias UUID chỉ dành cho metric, không dùng cho TTS/dispatch, cần đúng một message khớp toàn bộ sau trim với nội dung thực gửi; match mơ hồ, không có match hoặc `chat.history` lỗi vẫn chưa xác định được ID. Thiếu terminal vẫn là `incomplete`; bản sửa không khôi phục event lịch sử hay đánh giá câu trả lời đúng/sai.
 
 Codex, Claude Code, OpenCode và PicoClaw ghi `execution_observation_lost` cho run đã gửi, chưa kết thúc trước khi cleanup do mất transport/timeout. Không tạo lifecycle giả cho runtime. Evidence này không ghi đè completed/failed đã ghép được, kể cả final đến đồng thời; thiếu terminal thì giữ `unknown` trong mẫu số. Hermes đã xử lý kết thúc stream qua lifecycle.
+
+Khi có `harness_delegated`, chỉ chọn evidence Harness, `dispatch_error` hoặc `execution_observation_lost`; bỏ lifecycle bàn giao của agent cục bộ. Marker bàn giao không ghi đè evidence tiếp theo, bất kể thứ tự nhận. Answer qua HTTP voice-mode là tác vụ Chat mới; answer nói qua microphone vẫn là Voice. Câu hỏi chờ trả lời vẫn nằm trong mẫu số với trạng thái unknown. Gemini `realtime_handled` vẫn chỉ nhận `realtime_turn_done`. Correlation Harness không đoán giữa các route đồng thời hay nhận run ID tường minh không khớp. Xem [telemetry Harness](harness_vi.md#telemetry-hoàn-tất-tác-vụ).
 
 Horizon mặc định là **0 giây**: mọi tác vụ eligible bắt đầu tới `as_of_ms`
 được đếm ngay. Lượt failed, unknown và chưa xong **vẫn ở mẫu số**. Tử số là lượt
