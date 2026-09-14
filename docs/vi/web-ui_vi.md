@@ -713,13 +713,13 @@ Chat UI → POST /api/sensing/event → SensingHandler
 
 ### 5.8 Device → Sensing
 
-Mục Sensing khả dụng không cần bật debug khi device khai báo
-`vision` hoặc `environment` trong `GET /api/system/info` → `capabilities`.
-Các card sensing camera yêu cầu `vision`. Card chỉ đọc **Environment**
-yêu cầu khai báo rõ capability `environment`; card bị ẩn và không gửi request
-khi đang tải capabilities hoặc không có capability này.
+Menu Sensing và card chỉ đọc **Environment** luôn hiển thị, không cần debug,
+kể cả khi device không khai báo capability sensing. Card camera vẫn yêu cầu
+`vision`. Khi đang tải capabilities hoặc thiếu `environment`, card môi trường
+hiện các số đo `N/A` và không gửi request tới sensor. Sensor có khai báo nhưng
+đang tắt cũng hiển thị số đo `N/A`.
 
-Khi được mount, card môi trường đọc `GET /api/hardware/environment/status`
+Khi có capability `environment`, card đọc `GET /api/hardware/environment/status`
 mỗi 3 giây qua reverse proxy hardware của OS đã có xác thực, chuyển tới HAL
 `GET /environment/status`. Chu kỳ làm mới trình duyệt độc lập với
 `poll_interval_s` cấu hình trong HAL, không thay đổi nhịp thu nhận dữ liệu.
@@ -732,10 +732,10 @@ cũ, lỗi và đủ chín chỉ số chuẩn: nhiệt độ (°C), độ ẩm (
 PM1 / PM2.5 / PM4 / PM10 (µg/m³), VOC index, NOx index và CO₂ (ppm).
 UI dựa vào key chỉ số và metadata nguồn, không phụ thuộc tên model cảm biến,
 nên đổi component cấu hình (ví dụ sang SEN63C) vẫn dùng cùng card. Chỉ số không
-được hỗ trợ hoặc chưa sẵn sàng vẫn hiện `—` tương ứng giá trị `null`.
+được hỗ trợ hoặc chưa sẵn sàng vẫn hiện `N/A` tương ứng giá trị `null`.
 Nhãn nguồn chỉ rõ component; từng chỉ số có timestamp riêng. Component lỗi
-không che số đo còn tốt từ component khác. Giá trị chưa khả dụng hiện `—`, không hiện số 0.
-Số đo cũ cũng được thay bằng `—`; request thất bại được hiển thị là lỗi để
+không che số đo còn tốt từ component khác. Giá trị chưa khả dụng hiện `N/A`, không hiện số 0.
+Số đo cũ cũng được thay bằng `N/A`; request thất bại được hiển thị là lỗi để
 không nhầm số đo trước đó với dữ liệu hiện tại. Không gán nhãn chất lượng không khí
 tốt/xấu, ngưỡng hay cảnh báo. Mục kỹ thuật thu gọn hiển thị trạng thái, bus I2C,
 thanh ghi trạng thái và timing đọc/thử lại/đánh dấu cũ/phục hồi của từng

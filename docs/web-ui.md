@@ -730,13 +730,13 @@ Chat UI → POST /api/sensing/event → SensingHandler
 
 ### 5.8 Device → Sensing
 
-The Sensing navigation entry is available without debug mode when the device declares `vision` or `environment` in
-`GET /api/system/info` → `capabilities`. Camera sensing cards require `vision`.
-The read-only **Environment** card requires an explicit `environment`
-capability; it is hidden and sends no requests while capabilities are loading
-or when that capability is absent.
+The Sensing navigation entry and read-only **Environment** card are always
+visible without debug mode, including when no sensing capability is declared.
+Camera sensing cards still require `vision`. While capabilities are loading or
+`environment` is absent, the Environment card shows `N/A` measurements and does
+not send sensor requests. Declared but disabled sensors also show `N/A` values.
 
-While mounted, the environment card reads `GET /api/hardware/environment/status`
+When `environment` is declared, the card reads `GET /api/hardware/environment/status`
 every 3 seconds through the existing authenticated OS hardware reverse proxy to
 HAL `GET /environment/status`. This browser refresh interval is independent of
 HAL's configurable `poll_interval_s`; it does not change acquisition frequency.
@@ -749,10 +749,10 @@ and all nine standard measurements: temperature (°C), humidity (%), PM1 /
 PM2.5 / PM4 / PM10 (µg/m³), VOC index, NOx index, and CO₂ (ppm).
 The UI uses metric keys and source metadata, never sensor model names, so changing
 the configured components (for example, to SEN63C) uses the same card. Unsupported
-or not-yet-ready measurements remain visible as `—` for their `null` values.
+or not-yet-ready measurements remain visible as `N/A` for their `null` values.
 Source labels identify the component; each metric has its own timestamp.
-Unavailable components do not hide healthy readings from another component. Unavailable values appear as `—`, never
-zero. Stale measurements are also replaced with `—`; a request failure is shown
+Unavailable components do not hide healthy readings from another component. Unavailable values appear as `N/A`, never
+zero. Stale measurements are also replaced with `N/A`; a request failure is shown
 as an error so previous readings cannot be mistaken for live data. No good/bad air
 quality labels, thresholds, or alerts are assigned. A collapsed technical
 section exposes each component's state, I2C bus, sensor status register, and HAL
