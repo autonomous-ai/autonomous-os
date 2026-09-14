@@ -138,19 +138,28 @@ Config field: `timezone` trong `config/config.json` (chuỗi IANA zone, omitempt
 | GET | `/api/network/current` | SSID + IP hiện tại |
 | GET | `/api/network/check-internet` | Kiểm tra kết nối internet |
 
-**Monitor kết nối** (`system/network/service.go`, chạy khi `SetUpCompleted` = true).
-Ping `8.8.8.8` mỗi 5s — không phụ thuộc interface, nên máy online qua dây vẫn được
-tính là online. Fail 5 lần liên tiếp → bật LED state `Connectivity`; fail 10 lần
-(~50s) → leo thang sang reconnect WiFi (restart `wpa_supplicant@wlan0`, bounce
-interface); reconnect fail 5 lần (~10 phút) → reboot thiết bị.
+**Monitor kết nối** (`system/network/service.go` và `recovery.go`, hoạt động khi
+`SetUpCompleted` là true). Kiểm tra Internet theo nhịp monitor 5s; ping `8.8.8.8`
+thất bại 5 lần liên tiếp thì bật LED state `Connectivity`, ping thành công thì
+xóa state này. Trạng thái Internet độc lập với phục hồi WiFi: nếu còn association
+và IPv4 dùng được ở chế độ STA, thiết bị giữ WiFi ngay cả khi mất Internet.
+Monitor không còn reboot thiết bị.
 
-Nấc leo thang đó là đường phục hồi dành cho **WiFi**, nên bị bỏ qua khi WiFi không
-phải là link đang có vấn đề — nếu không, máy chạy dây sẽ tự reboot mỗi ~10 phút suốt
-thời gian ISP hỏng mà nó chẳng liên quan. Bỏ qua khi một trong hai: không có SSID nào
-được lưu (máy provision bằng dây — xem `setupWired` trong `docs/setup-flow.md`), hoặc
-default route thuộc về interface khác (traffic đang đi ra bằng dây). Còn khi link WiFi
-rớt thật thì *không* còn default route nào cả và `PrimaryInterface()` fallback về
-`wlan0`, nên đúng sự cố mà nấc này sinh ra để xử lý vẫn lọt qua guard.
+Sau 90s không có kết nối WiFi dùng được, monitor gọi script `device-ap-mode` hiện
+có. Trong chế độ AP, sau 2 phút thiết bị thử lại WiFi đã lưu bằng `connect-wifi`
+với credentials từ config thiết bị. Hoãn thử khi có client kết nối hotspot hoặc
+kiểm tra client bị lỗi. Lần thử tạm tắt hotspot; sau khi script hoàn tất, chờ tối
+đa 45s để có association và IPv4 dùng được ở chế độ STA. Thành công thì giữ STA;
+thất bại thì bật lại AP và bắt đầu khoảng chờ thử tiếp. Giữ nguyên trạng thái
+setup và credentials đã lưu. Phục hồi chạy tuần tự với provisioning/reset thủ
+công, và bị bỏ qua khi chưa lưu SSID hoặc default route dùng interface khác.
+Khi không có default route, `PrimaryInterface()` fallback về `wlan0`, cho phép
+phục hồi kết nối WiFi bị rớt.
+
+Giữ nguyên script và web UI. Kết nối vào hotspot thiết bị rồi mở
+`http://lamp-0c4e.local/wifi` (thay bằng hostname thực tế) để đổi WiFi; dùng
+`http://192.168.100.1/wifi` nếu không phân giải được `.local`. Tự động thử lại
+sau khi các client ngắt kết nối hotspot.
 
 ### Guard Mode (Chế độ canh gác)
 

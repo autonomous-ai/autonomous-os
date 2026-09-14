@@ -31,11 +31,6 @@ const (
 	networkMonitorFailsRequired = 5
 	networkMonitorInterval      = 5 * time.Second
 	networkMonitorPingTimeout   = 3 * time.Second
-	// After this many consecutive failures, attempt WiFi reconnect.
-	networkMonitorReconnectAt       = 10 // ~50s of downtime
-	networkMonitorReconnectCooldown = 2 * time.Minute
-	// After this many reconnect failures, reboot the device.
-	networkMonitorMaxReconnects = 5 // 5 attempts × 2min cooldown = ~10min before reboot
 )
 
 // Service provides network scan, current network, and setup. When wifiManager is non-nil (production Pi),
@@ -52,8 +47,9 @@ type Service struct {
 	onConnectivityLost     func()
 	onConnectivityRestored func()
 
-	lastReconnectAttempt time.Time
-	reconnectAttempts    int
+	// Serialize recovery with explicit provisioning and reset operations.
+	operationMu sync.Mutex
+	recovery    wifiRecovery
 }
 
 // ProvideService returns a network service. Pass nil for wifiManager when not using WiFi manager (e.g. dev with NM).
@@ -386,25 +382,37 @@ func (s *Service) StartNetworkMonitor(ctx context.Context, onLost, onRestored fu
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				s.runNetworkMonitorTick()
+				s.runNetworkMonitorTick(ctx)
 			}
 		}
 	}()
 }
 
-func (s *Service) runNetworkMonitorTick() {
-	// Skip when setup not completed (e.g. factory reset, AP mode)
+func (s *Service) runNetworkMonitorTick(ctx context.Context) {
+	if !s.operationMu.TryLock() {
+		return
+	}
+	defer s.operationMu.Unlock()
+	if ctx.Err() != nil {
+		return
+	}
+	// First-time setup and factory reset own the network until setup completes.
 	if !s.config.SetUpCompleted {
 		s.networkMonitorMu.Lock()
 		s.networkMonitorConsecutive = 0
 		s.networkMonitorMu.Unlock()
+		s.recovery = wifiRecovery{}
 		return
+	}
+	if wifiReconnectSkipReason(s.config.NetworkSSID, PrimaryInterface()) == "" {
+		s.recovery.tick(ctx, time.Now(), s.config.NetworkSSID, s.config.NetworkPassword)
+	} else {
+		s.recovery = wifiRecovery{}
 	}
 	if s.pingNetworkMonitor(networkMonitorPingTarget) {
 		s.networkMonitorMu.Lock()
 		prev := s.networkMonitorConsecutive
 		s.networkMonitorConsecutive = 0
-		s.reconnectAttempts = 0
 		s.networkMonitorMu.Unlock()
 		if prev >= networkMonitorFailsRequired {
 			slog.Info("internet restored", "component", "network-monitor", "previousFails", prev)
@@ -423,40 +431,10 @@ func (s *Service) runNetworkMonitorTick() {
 	if n == networkMonitorFailsRequired && s.onConnectivityLost != nil {
 		s.onConnectivityLost()
 	}
-
-	// Auto-reconnect: restart wlan0 after sustained outage — but only when WiFi
-	// is actually the link in question (see wifiReconnectSkipReason).
-	if n >= networkMonitorReconnectAt && time.Since(s.lastReconnectAttempt) >= networkMonitorReconnectCooldown {
-		// Stamp before deciding, so a SKIP is rate-limited exactly like a real
-		// attempt. Leaving the timestamp untouched on the skip path would make
-		// this branch re-enter on every 5s tick for the whole outage — one
-		// `ip route` subprocess and one log line each tick, on an embedded
-		// device whose journal lives in zram.
-		s.lastReconnectAttempt = time.Now()
-		if reason := wifiReconnectSkipReason(s.config.NetworkSSID, PrimaryInterface()); reason != "" {
-			slog.Info("skipping WiFi reconnect escalation", "component", "network-monitor", "reason", reason, "fails", n)
-		} else {
-			go s.reconnectWiFi()
-		}
-	}
 }
 
-// wifiReconnectSkipReason returns a non-empty reason when the WiFi reconnect
-// escalation must not run for this outage, or "" when it should.
-//
-// The escalation exists to recover a dropped WiFi association, and it ends in
-// `sudo reboot` after networkMonitorMaxReconnects attempts. That is the right
-// last resort for a WiFi device, and the wrong answer for a device that reaches
-// the network over ethernet: bouncing wlan0 cannot fix an upstream outage it has
-// no part in, so the device would reboot itself roughly every 10 minutes for the
-// whole duration of an ISP problem. Two ways to be sure WiFi isn't the link:
-//
-//   - No SSID on file. A device provisioned over ethernet (empty SSID — see
-//     device.setupWired) has nothing to re-associate to.
-//   - The default route belongs to another interface, i.e. traffic is leaving
-//     over the cable. Note that a *dropped* WiFi link leaves no default route at
-//     all, and PrimaryInterface falls back to wlan0 in that case — so the outage
-//     this escalation was built for still passes the guard.
+// wifiReconnectSkipReason limits WiFi recovery to devices using WiFi.
+// A missing default route falls back to wlan0 so a dropped link can recover.
 func wifiReconnectSkipReason(configuredSSID, primaryIface string) string {
 	if strings.TrimSpace(configuredSSID) == "" {
 		return "device has no WiFi credentials (wired setup)"
@@ -467,46 +445,13 @@ func wifiReconnectSkipReason(configuredSSID, primaryIface string) string {
 	return ""
 }
 
-// reconnectWiFi restarts wpa_supplicant and wlan0 to recover from WiFi drops.
-// After networkMonitorMaxReconnects failed attempts, reboots the device.
-func (s *Service) reconnectWiFi() {
-	s.networkMonitorMu.Lock()
-	s.reconnectAttempts++
-	attempt := s.reconnectAttempts
-	s.networkMonitorMu.Unlock()
-
-	slog.Warn("attempting WiFi reconnect", "component", "network-monitor", "attempt", attempt)
-
-	// Restart wpa_supplicant to re-associate with the AP
-	_ = exec.Command("systemctl", "restart", "wpa_supplicant@wlan0").Run()
-	time.Sleep(3 * time.Second)
-
-	// Bounce the interface
-	_ = exec.Command("ip", "link", "set", wifiInterface, "down").Run()
-	time.Sleep(2 * time.Second)
-	_ = exec.Command("ip", "link", "set", wifiInterface, "up").Run()
-	time.Sleep(5 * time.Second)
-
-	if s.pingNetworkMonitor(networkMonitorPingTarget) {
-		slog.Info("WiFi reconnect succeeded", "component", "network-monitor", "attempt", attempt)
-		s.networkMonitorMu.Lock()
-		s.reconnectAttempts = 0
-		s.networkMonitorMu.Unlock()
-		return
-	}
-
-	slog.Warn("WiFi reconnect failed", "component", "network-monitor", "attempt", attempt, "max", networkMonitorMaxReconnects)
-
-	if attempt >= networkMonitorMaxReconnects {
-		slog.Error("WiFi reconnect exhausted — rebooting device", "component", "network-monitor", "attempts", attempt)
-		_ = exec.Command("sudo", "reboot").Run()
-	}
-}
-
 // ResetNetwork resets the network to the default state (clears credentials and writes minimal
 // wpa_supplicant config). Restarts wpa_supplicant so it reloads the empty config and disconnects;
 // if already in AP mode (wpa_supplicant masked), restart may fail and is ignored.
 func (s *Service) ResetNetwork() error {
+	s.operationMu.Lock()
+	defer s.operationMu.Unlock()
+	s.recovery = wifiRecovery{}
 	s.config.NetworkSSID = ""
 	s.config.NetworkPassword = ""
 	wpaSupplicantConf := "/etc/wpa_supplicant/wpa_supplicant-wlan0.conf"
@@ -521,6 +466,9 @@ func (s *Service) ResetNetwork() error {
 
 // SetupNetwork submits WiFi credentials via connect-wifi CLI.
 func (s *Service) SetupNetwork(ssid string, password string) (bool, error) {
+	s.operationMu.Lock()
+	defer s.operationMu.Unlock()
+	s.recovery = wifiRecovery{}
 	ssid = strings.TrimSpace(ssid)
 	slog.Debug("starting network setup", "component", "network", "ssid", ssid)
 	if ssid == "" {
@@ -635,6 +583,9 @@ func (s *Service) SetupNetwork(ssid string, password string) (bool, error) {
 // would leave the device broadcasting its open setup hotspot forever, since
 // nothing else on that path ever runs device-sta-mode.
 func (s *Service) LeaveAPMode() error {
+	s.operationMu.Lock()
+	defer s.operationMu.Unlock()
+	s.recovery = wifiRecovery{}
 	out, err := exec.Command("/usr/local/bin/device-sta-mode").CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("device-sta-mode: %w: %s", err, string(out))
@@ -645,6 +596,9 @@ func (s *Service) LeaveAPMode() error {
 
 // SwitchToAPMode runs device-ap-mode to return to provisioning (AP) mode for reconfiguring WiFi.
 func (s *Service) SwitchToAPMode() error {
+	s.operationMu.Lock()
+	defer s.operationMu.Unlock()
+	s.recovery = wifiRecovery{}
 	cmd := exec.Command("/usr/local/bin/device-ap-mode")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
