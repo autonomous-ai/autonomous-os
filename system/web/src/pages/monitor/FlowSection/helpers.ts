@@ -297,6 +297,34 @@ export function parseChannelSummary(summary: string): string {
   return (m[1] ?? "").trim();
 }
 
+// Only our dedicated history runs carry this envelope. Never interpret tags
+// inside an ordinary user message as a background synchronization turn.
+export function externalHistory(turn: Turn): { source: string; agentName: string; input: string; output: string } | null {
+  if (!turn.runId?.startsWith("device-chat-context-")) return null;
+  for (const event of turn.events) {
+    if (extractEventRunId(event) !== turn.runId) continue;
+    const detail = event.detail as FlowEventDetail | undefined;
+    if (event.type !== "chat_send" && event.type !== "chat_input" &&
+        !(["flow_event", "flow_enter"].includes(event.type) &&
+          ["chat_send", "chat_input"].includes(detail?.node ?? ""))) continue;
+    const message = detail?.data?.message ?? detail?.message;
+    if (typeof message !== "string") continue;
+    const metadata = message.match(/^\[external-context\] (.+)$/m);
+    const handled = message.match(/^\[HANDLED\] (.+)$/m);
+    const reply = message.match(/^\[REPLY\] (.+)$/m);
+    if (!metadata || !handled || !reply) continue;
+    try {
+      const meta = JSON.parse(metadata[1]);
+      const input = JSON.parse(handled[1]);
+      const output = JSON.parse(reply[1]);
+      if (!meta || typeof meta.source !== "string" || !meta.source ||
+          typeof input !== "string" || typeof output !== "string") continue;
+      return { source: meta.source, agentName: typeof meta.agent_name === "string" ? meta.agent_name : "", input, output };
+    } catch { /* A truncated chat_input preview may precede the complete chat_send. */ }
+  }
+  return null;
+}
+
 function harnessResponseText(ev: DisplayEvent): string {
   if (ev.type !== "flow_event" || ev.detail?.node !== "harness_response") return "";
   const detail = ev.detail as FlowEventDetail;
@@ -863,6 +891,10 @@ export function groupIntoTurns(events: DisplayEvent[]): Turn[] {
       }
       parent = parent.mergedIntoRunId ? turnsByRunId.get(parent.mergedIntoRunId) : undefined;
     }
+  }
+
+  for (const turn of stitched) {
+    if (externalHistory(turn)) turn.type = "history_sync";
   }
 
   // Detect session breaks
@@ -1621,6 +1653,11 @@ export function turnIO(turn: Turn): {
         }
       }
     }
+  }
+  const history = externalHistory(turn);
+  if (history) {
+    input = history.input;
+    output = history.output;
   }
   return { input, output, hwOutput, snapshotUrls, audioUrls, poseBucket };
 }
