@@ -58,10 +58,7 @@ func TestParseDefaultRouteIface(t *testing.T) {
 	}
 }
 
-// TestWifiReconnectSkipReason pins down when the reconnect-then-reboot
-// escalation is allowed to fire. Getting this wrong is expensive in both
-// directions: too eager and a wired device reboots itself through every ISP
-// outage, too shy and a dropped WiFi link never recovers.
+// TestWifiReconnectSkipReason keeps recovery from disrupting wired devices.
 func TestWifiReconnectSkipReason(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -93,7 +90,7 @@ func TestWifiReconnectSkipReason(t *testing.T) {
 		},
 		{
 			// Cable pulled from a wired-only device: still nothing to
-			// re-associate to, so a reboot loop would be pure noise.
+			// re-associate to, so WiFi recovery would not help.
 			name:         "wired setup, cable pulled, fallback to wlan0",
 			ssid:         "",
 			primaryIface: "wlan0",
@@ -101,7 +98,7 @@ func TestWifiReconnectSkipReason(t *testing.T) {
 		},
 		{
 			// Both links configured. Traffic goes out the cable, so bouncing
-			// wlan0 cannot fix this outage and a reboot would not either.
+			// wlan0 cannot fix this outage or switching to a hotspot would not help.
 			name:         "wifi configured but routing over ethernet",
 			ssid:         "home-wifi",
 			primaryIface: "end0",

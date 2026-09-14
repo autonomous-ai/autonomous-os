@@ -138,21 +138,28 @@ Config field: `timezone` in `config/config.json` (IANA zone string, omitempty) �
 | GET | `/api/network/current` | Current SSID + IP |
 | GET | `/api/network/check-internet` | Check internet connectivity |
 
-**Connectivity monitor** (`system/network/service.go`, started once
-`SetUpCompleted` flips true). Pings `8.8.8.8` every 5s — interface-agnostic, so a
-device online over ethernet is seen as online. After 5 consecutive failures it
-raises the `Connectivity` LED state; after 10 (~50s) it escalates to a WiFi
-reconnect (restart `wpa_supplicant@wlan0`, bounce the interface), and after 5
-failed reconnects (~10 min) it reboots the device.
+**Connectivity monitor** (`system/network/service.go` and `recovery.go`, active
+when `SetUpCompleted` is true). Internet checks run on a 5s monitor tick; 5
+consecutive failed pings to `8.8.8.8` raise the `Connectivity` LED state, and a
+successful ping clears it. Internet status is separate from WiFi recovery:
+association and a usable station IPv4 address keep WiFi active even without
+Internet. The monitor no longer reboots the device.
 
-That escalation is a **WiFi** recovery path, so it is skipped when WiFi is not the
-link in question — otherwise a wired device would reboot itself every ~10 minutes
-for the length of an upstream outage it plays no part in. It is skipped when
-either: no SSID is on file (the device was provisioned over ethernet — see
-`setupWired` in `docs/setup-flow.md`), or the default route belongs to another
-interface (traffic is leaving over the cable). A genuinely dropped WiFi link
-leaves *no* default route and `PrimaryInterface()` falls back to `wlan0`, so the
-outage the escalation exists for still passes the guard.
+After 90s without a usable WiFi link, the monitor calls the existing
+`device-ap-mode` script. In AP mode, it retries saved WiFi after 2 minutes, using
+`connect-wifi` with credentials from device config. It defers while a hotspot
+client is connected or the client probe fails. The attempt temporarily stops the
+hotspot; after the script finishes, it allows up to 45s for association and a
+usable station IPv4 address. Success keeps STA mode; failure restores the AP and
+starts another retry interval. Setup status and saved credentials are retained.
+Recovery is serialized with manual provisioning/reset, and is skipped when no
+SSID is saved or the default route uses another interface. With no default route,
+`PrimaryInterface()` falls back to `wlan0`, allowing recovery of a dropped link.
+
+The scripts and web UI are unchanged. Join the device hotspot, then open
+`http://lamp-0c4e.local/wifi` (using the device's actual hostname) to change WiFi;
+use `http://192.168.100.1/wifi` if `.local` resolution is unavailable. Automatic
+retry resumes after hotspot clients disconnect.
 
 ### Guard Mode
 
