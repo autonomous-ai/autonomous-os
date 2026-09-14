@@ -90,6 +90,11 @@ class HarnessActionTests(unittest.TestCase):
             with patch("hal.config._os_cfg_get", return_value=lang):
                 self.assertEqual(action.confirmation_phrase({"enabled": False}), expected)
                 self.assertIn("Friendly", action.confirmation_phrase({"enabled": True, "agentId": "id", "agentName": "Friendly"}))
+                from hal.i18n import PHRASE_HARNESS_UNPAIRED
+                self.assertEqual(action.failure_phrase("harness_unpaired"),
+                                 localized_phrase(PHRASE_HARNESS_UNPAIRED, lang))
+                self.assertNotEqual(action.failure_phrase("harness_unpaired"),
+                                    action.failure_phrase("harness_offline"))
                 self.assertTrue(action.failure_phrase("no_agents"))
                 self.assertTrue(action.failure_phrase("harness_offline"))
                 self.assertTrue(action.failure_phrase("busy"))

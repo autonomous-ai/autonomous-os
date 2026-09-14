@@ -54,8 +54,7 @@ after OS-server restart. When enabled, HAL snapshots `/api/harness/voice-mode`
 before capture and sends finalized, wake-word-stripped STT directly to the
 agent focused in the Harness app through OS. That capture does not stream audio to the
 realtime model or invoke the main runtime/`harness-use`; OS skips local intents
-and main-runtime readiness/busy gates. Existing wake-word authorization, VAD,
-noise and echo checks remain. Voice results still use Harness lifecycle/recap
+and main-runtime readiness/busy gates. While enabled, Harness accepts speech without a wake word or an active follow-up window, including the listening cue. It does not extend the normal wake-window timer; disabling restores normal wake authorization on the next capture. Sleep, mic mute, VAD, noise and echo checks remain. Voice results still use Harness lifecycle/recap
 delivery and device TTS. Text chat and ambient sensing keep their normal routes.
 
 On MPR121 lamps, swiping right to left and releasing toggles this mode;
