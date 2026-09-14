@@ -289,20 +289,13 @@ _thinking_cue_active: bool = False
 # Fires release_servos after sleepy stays active continuously. Cancelled
 # the moment the emotion changes away from sleepy (see routes/emotion.py).
 _sleepy_release_timer: Optional[threading.Timer] = None
-# Speaker drain for sleepy. os-server fires [HW:] markers into a goroutine and
-# waits only 100ms for them before POSTing the reply text to TTS
-# (fireHWCallsSync, system/server/agent/delivery/http/handler_hw.go). HAL needs
-# roughly as long to reach _finalize_sleepy_peripherals, so muting the speaker
-# there raced the announcement the marker was sent with and usually won:
-# measured on lamp-0c89 2026-09-14, the mute landed 68-113ms after /emotion
-# arrived while the speech POST landed at ~100ms, and 3 of 4 runs answered
-# `suppressed -- speaker muted` — the going-to-sleep line was never heard.
-# Draining removes the race instead of re-ordering either side of it.
+# Speaker drain for sleepy. os-server POSTs the reply text ~100ms after the
+# `sleepy` marker (fireHWCallsSync's budget) and HAL takes about as long to
+# reach _finalize_sleepy_peripherals, so muting there swallowed the
+# going-to-sleep line in 3 of 4 runs (lamp-0c89, 2026-09-14).
 SLEEPY_SPEAKER_GRACE_S = 2.0       # wait this long for an announcement to START
 SLEEPY_SPEAKER_DRAIN_MAX_S = 15.0  # hard cap on the whole drain
 _SLEEPY_DRAIN_POLL_S = 0.1
-# Set while a drain is pending; setting it makes the drain thread give up
-# without muting (see _cancel_sleepy_speaker_drain).
 _sleepy_drain_cancel: Optional[threading.Event] = None
 # Fires idle again after a still emotion (a preset with servo=None) halted the
 # animation loop, so the body never stays frozen once the moment has passed.
@@ -626,11 +619,8 @@ def _finalize_sleepy_peripherals(mute_mic: bool, mute_speaker: bool):
             threading.Thread(target=voice_service.stop, daemon=True, name="sleepy-mic-stop").start()
 
     if mute_speaker:
-        # Music is never an announcement, so it stops now. The speaker itself
-        # is handed to the drain below, which also means in-flight TTS is left
-        # alone: stopping it here cut the going-to-sleep line mid-word on the
-        # button path, which is why sleep_action had to sleep(5) before calling
-        # us at all.
+        # Music is never an announcement. The speaker goes to the drain, which
+        # also means in-flight TTS is no longer cut off mid-word.
         if music_service and music_service.playing:
             music_service.stop()
         if not _speaker_muted:
@@ -641,20 +631,13 @@ def _finalize_sleepy_peripherals(mute_mic: bool, mute_speaker: bool):
 
 
 def _start_sleepy_speaker_drain():
-    """Mute the speaker only once the going-to-sleep announcement has played.
+    """Mute the speaker once the going-to-sleep announcement has played.
 
-    Phase 1 waits SLEEPY_SPEAKER_GRACE_S for an announcement to START — it
-    arrives as its own /voice/speak-queue POST about 100ms behind the marker,
-    so the window is orders of magnitude wider than it needs to be, which is
-    the point: it must not depend on os-server's marker budget staying at 100ms.
-    Phase 2 lets the announcement finish. SLEEPY_SPEAKER_DRAIN_MAX_S caps the
-    whole thing so a stalled TTS can never leave a sleeping device able to
-    speak: that is the regression this window re-opens (see the note in
-    _persist_sleep_state about a turn still in flight speaking out loud), and
-    the cap is what keeps it bounded.
-
-    A wake cancels the drain and the speaker is then simply never muted, which
-    is what a woken device wants anyway.
+    Waits SLEEPY_SPEAKER_GRACE_S for one to start, then lets it finish. The
+    grace is far wider than the measured 100ms so this never depends on
+    os-server's marker budget. SLEEPY_SPEAKER_DRAIN_MAX_S caps it: without
+    that, a stalled TTS would leave a sleeping device able to speak. A wake
+    cancels the drain.
     """
     global _sleepy_drain_cancel
     _cancel_sleepy_speaker_drain()
@@ -686,11 +669,8 @@ def _cancel_sleepy_speaker_drain():
 
 
 def _mute_speaker_for_sleep():
-    """Commit the deferred speaker mute.
-
-    Re-reads the sleep state as a belt-and-braces guard: a wake that raced past
-    the cancel must not have its speaker taken away again.
-    """
+    """Commit the deferred mute. Re-reads sleep state in case a wake raced
+    past the cancel."""
     global _speaker_muted, _sleepy_auto_muted_speaker
     if not _sleeping or _current_emotion != EMO_SLEEPY:
         logger.info("Sleepy speaker drain: awake again -- speaker left live")
@@ -706,8 +686,7 @@ def _mute_speaker_for_sleep():
 def _wake_sleepy_peripherals():
     """Restore only mic/speaker states that sleepy itself muted."""
     global _sleepy_auto_muted_mic, _sleepy_auto_muted_speaker, _mic_muted, _speaker_muted
-    # A drain still counting down would mute the speaker on a device that is
-    # awake again by the time it fires.
+    # A pending drain would mute a device that is awake by the time it fires.
     _cancel_sleepy_speaker_drain()
     if _sleepy_auto_muted_speaker:
         if not privacy.speaker_muted:
