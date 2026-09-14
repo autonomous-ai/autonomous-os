@@ -1,4 +1,9 @@
-"""A narrated tour of the joint limits — "show me what you can do".
+"""A narrated tour of the joint limits — "show me how far you can move".
+
+Triggered only by a request that names MOVEMENT. A bare "show me what you can
+do" is a question about abilities in general and does not start this; the skill
+text says so explicitly, because the first cut listed that phrase as a trigger
+and it pulled every "what can you do" onto the servos.
 
 Not a search. Nothing is detected and nothing is reported; the movement and the
 words that go with it ARE the deliverable.

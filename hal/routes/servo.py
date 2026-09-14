@@ -446,7 +446,7 @@ def range_demo_route():
     """Perform a narrated tour of the movement range.
 
     A DEMO, not a search: nothing is detected and nothing is reported. It exists
-    because "show me what you can do" used to land on the `scan` emotion — a
+    because "show me how far you can move" used to land on the `scan` emotion — a
     54 deg canned recording narrated as a full turn — for want of anywhere else
     to go.
 

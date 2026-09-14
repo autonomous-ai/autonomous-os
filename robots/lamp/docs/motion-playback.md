@@ -163,7 +163,10 @@ body within two legs.
 **Gates.** Refuses while the device sleeps and while the motion service is
 suppressed; refuses a second demo on top of a running one. `start()` returns
 immediately and the performance runs on its own thread — the agent reaches this
-through a `[HW:/servo/demo:{}]` marker, and `fireHWCall` allows a hardware POST
+through a `[HW:/servo/demo:{}]` marker, and only for a request that names
+MOVEMENT (*"show me how far you can move"*, *"show me your range of motion"*): a
+bare *"show me what you can do"* is a general abilities question and the skill
+text tells the model not to start the demo for it. `fireHWCall` allows a hardware POST
 five seconds against a ~25 s demo. The physical button aborts it alongside the
 aim and the sweep (`button_actions._stop_active_tracking`): a click that stopped
 the arm but not the narration would leave the lamp describing legs it is no

@@ -89,7 +89,7 @@ DELEGATE_TOOL_DESCRIPTION: str = (
     "translate into English, append commentary, or retell prior tasks; the main agent "
     "already has that conversation. Never invent missing details. "
     "Keep the user's own key words rather than renaming the request into a category: "
-    "the main agent routes on vocabulary, so 'show me your maximum capability' must "
+    "the main agent routes on vocabulary, so 'show me how far you can move' must "
     "arrive as those words, not as 'movement demonstration'. "
     "ONLY call when you clearly understood a request or task follow-up addressed to "
     "the device. Do not invent requests from unclear or noise-like audio such as "

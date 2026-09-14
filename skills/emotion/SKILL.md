@@ -102,8 +102,10 @@ Output: Do NOT use this skill. Use **LED Control** skill instead.
 - **Do NOT call `/servo/play` or `/led/solid` separately** when using emotion — it already handles both.
 - **An emotion is never an answer to a movement request.** `scan` is a canned 54° glance
   with the camera uninvolved. "Look around for X" is `/servo/search`, "scan the whole
-  room" is `/servo/search` with `exhaustive`, and "show me what you can do / how far can
-  you move" is `/servo/demo` — all in the Servo Control skill. Asked for a full turn, an
+  room" is `/servo/search` with `exhaustive`, and "show me how far you can move / show
+  me your range of motion" is `/servo/demo` — all in the Servo Control skill. (A bare
+  "show me what you can do" is a general abilities question, not a movement request,
+  and starts nothing.) Asked for a full turn, an
   emotion performs a shrug and narrates a sweep.
 - **Do NOT use for lighting/ambiance requests** -> use **Scene** skill.
 - **Do NOT use for custom LED colors** -> use **LED Control** skill.

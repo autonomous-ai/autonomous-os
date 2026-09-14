@@ -165,7 +165,10 @@ sau hai chặng.
 **Các cổng chặn.** Từ chối khi thiết bị đang ngủ và khi motion service đang bị
 suppress; từ chối một demo thứ hai chồng lên demo đang chạy. `start()` trả về
 ngay và màn trình diễn chạy trên thread riêng — agent đi tới đây qua marker
-`[HW:/servo/demo:{}]`, mà `fireHWCall` chỉ cho một POST phần cứng năm giây trong
+`[HW:/servo/demo:{}]`, và chỉ với yêu cầu nói rõ về CHUYỂN ĐỘNG (*"cho mình xem
+bạn xoay được tới đâu"*, *"show me your range of motion"*): một câu *"show me
+what you can do"* trống không là câu hỏi chung về khả năng, và skill dặn model
+không khởi động demo cho câu đó. `fireHWCall` chỉ cho một POST phần cứng năm giây trong
 khi demo dài ~25 s. Nút vật lý abort nó cùng với pha ngắm và pha quét
 (`button_actions._stop_active_tracking`): một cú nhấn chỉ dừng cánh tay mà không
 dừng lời thoại sẽ để lại một cái đèn đang mô tả những chặng nó không còn thực

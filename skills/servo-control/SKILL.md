@@ -1,6 +1,6 @@
 ---
 name: servo-control
-description: "Use to aim/point/look the device in a DIRECTION, toggle servo state (hold/resume/release), or play a named servo animation (nod/shake/etc). ALSO the skill for SEARCHING — \"where are you\", \"find my keyboard/cup/phone\", \"look around for X\", \"scan the whole room\" — which sweeps the room with the camera via /servo/search (run it with curl DURING the turn and answer from its result), and for DEMONSTRATING the movement range — \"show me what you can do\", \"how far can you move\", \"show me your maximum capability\" — via /servo/demo. Never answer a search or a range demo with an emotion. Directions are fixed named locations or axes — supported: desk, wall, left, right, up, down, center, user. Furniture and surfaces (\"desk\", \"table\", \"floor\", \"ceiling\", \"wall\", \"door\", \"workspace\") are ALWAYS directions, never tracking targets — map them to the closest of the supported names (table/workspace → desk). MUST use /servo/aim (not /servo/track) for: \"look at the desk\"→desk, \"point at my table\"→desk, \"look at the wall\"→wall, \"look left\"→left, \"point up\"→up, \"look at me\"→user. For following a movable OBJECT by vision (cup, phone, hand, person, pet) use servo-tracking instead. Compound: if user names a direction AND an object (\"look at desk and follow cup\"), fire THIS aim skill first, then tracking."
+description: "Use to aim/point/look the device in a DIRECTION, toggle servo state (hold/resume/release), or play a named servo animation (nod/shake/etc). ALSO the skill for SEARCHING — \"where are you\", \"find my keyboard/cup/phone\", \"look around for X\", \"scan the whole room\" — which sweeps the room with the camera via /servo/search (run it with curl DURING the turn and answer from its result), and for DEMONSTRATING the movement range ONLY when the request names MOVEMENT — \"show me how far you can move\", \"how far can you turn\", \"show me your range of motion\" — via /servo/demo. A bare \"show me what you can do\" or \"what is your maximum capability\" is a general question about abilities, NOT a movement request, and must not start the demo. Never answer a search or a range demo with an emotion. Directions are fixed named locations or axes — supported: desk, wall, left, right, up, down, center, user. Furniture and surfaces (\"desk\", \"table\", \"floor\", \"ceiling\", \"wall\", \"door\", \"workspace\") are ALWAYS directions, never tracking targets — map them to the closest of the supported names (table/workspace → desk). MUST use /servo/aim (not /servo/track) for: \"look at the desk\"→desk, \"point at my table\"→desk, \"look at the wall\"→wall, \"look left\"→left, \"point up\"→up, \"look at me\"→user. For following a movable OBJECT by vision (cup, phone, hand, person, pet) use servo-tracking instead. Compound: if user names a direction AND an object (\"look at desk and follow cup\"), fire THIS aim skill first, then tracking."
 ---
 
 # Servo Control
@@ -107,8 +107,12 @@ curl -sX POST http://127.0.0.1:5001/servo/search -H 'Content-Type: application/j
    and stays pointed at it; the server ignores `exhaustive` when a `target` is given.
 → A request to SHOW how far you can move is the demo below, not a scan.
 
-**Input:** "Show me what you can do" / "Show me your maximum capability" / "How far can you move?" / "Show me your range" / "Demonstrate your movement"
+**Input:** "Show me how far you can move" / "How far can you turn?" / "Show me your range of motion" / "Show me your movement range" / "Demonstrate your movement"
 **Output:** `[HW:/servo/demo:{}]` Sure — watch this!
+→ ONLY when the request is about MOVEMENT — moving, turning, reaching, range of motion.
+   A bare "show me what you can do", "what can you do", "show me your maximum capability"
+   or "show me your skills" asks about abilities in general (camera, voice, memory, the
+   lot) and does NOT start this demo: answer it in words, without any marker.
 → A narrated tour of the movement limits. The device speaks each leg BY ITSELF as it
    moves — "all the way left", "and all the way right", up, down — those lines are
    the hardware's, not yours. Keep your reply to one short opener and do not describe
