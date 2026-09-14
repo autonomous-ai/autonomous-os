@@ -11,7 +11,7 @@ sau khi OS-server khởi động lại. Event/recap Harness hiện có cung cấ
 được đọc trên thiết bị. Chỉ request voice loopback trực tiếp có snapshot routing
 `harness_voice` đi vào nhánh này; text/MQTT chat và sensing nền giữ luồng cũ.
 OS vẫn đồng bộ focus khi mode tắt qua `focus.get`, `focus.changed` và refresh
-mỗi hai giây. Bật mode chỉ đổi flag RAM; web không có bộ chọn target. Chưa focus,
+mỗi hai giây. Bật mode qua web/MQTT chỉ đổi flag RAM; web không có bộ chọn target. Chưa focus,
 CLI cũ thiếu `focus.get`, hoặc focus máy khác sẽ chặn gửi voice. Mỗi lần gửi
 kèm `focusRevision` dạng opaque; CLI kiểm tra nguyên tử trước khi nhận turn.
 
@@ -21,6 +21,14 @@ gồm `PUT /api/harness/voice-mode`, `GET /api/harness/agents`,
 `/api/harness/voice-mode/answer`, `/receipt`, `/resolve` cùng prefix
 `/api/harness/voice-mode`. Xem [tích hợp Harness](harness_vi.md) về payload,
 kiểm tra generation, câu trả lời có cấu trúc và khôi phục receipt.
+
+`POST /api/harness/voice-mode/gesture` chỉ nhận loopback thực sự, với
+`{gestureId:"<UUID>"}` từ physical-action worker của HAL. Go bật/tắt chung mode
+RAM và trả snapshot. Khi bật, giữ focus hợp lệ hoặc gọi `focus.ensure` rồi chờ
+Desktop xác nhận; focus không khả dụng thì mode vẫn tắt. Tắt vẫn được khi offline.
+Lỗi action trả `data.code` để HAL đọc phrase theo ngôn ngữ cấu hình. Cache RAM
+128 kết quả chặn ID gesture lặp bật/tắt hai lần; lệnh off rõ ràng qua web/MQTT
+hủy gesture đang chờ bật.
 
 ### Health
 

@@ -1,0 +1,55 @@
+"""Physical action orchestration; recognition and HTTP remain independent."""
+
+import logging
+import uuid
+
+import hal.app_state as state
+from hal.drivers.harness_voice_client import HarnessGestureError, request_voice_toggle
+from hal.i18n import (PHRASE_HARNESS_FAILED, PHRASE_HARNESS_NO_AGENTS,
+                      PHRASE_HARNESS_OFF, PHRASE_HARNESS_OFFLINE,
+                      PHRASE_HARNESS_ON, localized_phrase)
+
+logger = logging.getLogger(__name__)
+
+
+def confirmation_phrase(result: dict) -> str:
+    if not result["enabled"]:
+        return localized_phrase(PHRASE_HARNESS_OFF)
+    return localized_phrase(PHRASE_HARNESS_ON).format(agent=result.get("agentName") or result["agentId"])
+
+
+def failure_phrase(code: str) -> str:
+    key = {"harness_offline": PHRASE_HARNESS_OFFLINE,
+           "no_agents": PHRASE_HARNESS_NO_AGENTS}.get(code, PHRASE_HARNESS_FAILED)
+    return localized_phrase(key)
+
+
+def _show_feedback(enabled: bool):
+    """Brief overlay; keep existing sleep, speaker and privacy LED ownership."""
+    if not state.rgb_service:
+        return
+    try:
+        from hal.models import LEDEffectRequest
+        from hal.routes.led import start_led_effect
+        previous = state._effect_thread
+        start_led_effect(LEDEffectRequest(effect="pulse", color=[80, 120, 255] if enabled else [180, 180, 180],
+                                         duration_ms=600, transient=True))
+        if state._effect_thread is not previous:
+            state._schedule_led_restore(0.7)
+    except Exception:
+        logger.warning("Harness voice LED feedback failed", exc_info=True)
+
+
+def toggle_harness_voice():
+    """Run on the input action worker, never the hardware polling thread."""
+    if state._hw_mic_switch_muted is True:
+        return
+    from hal.drivers.button_actions import _speak_gesture_ack
+    try:
+        result = request_voice_toggle(str(uuid.uuid4()))
+    except HarnessGestureError as exc:
+        logger.warning("Harness voice gesture failed: %s", exc.code)
+        _speak_gesture_ack(failure_phrase(exc.code), "MPR121")
+        return
+    _show_feedback(result["enabled"])
+    _speak_gesture_ack(confirmation_phrase(result), "MPR121")

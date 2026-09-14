@@ -56,11 +56,20 @@ runtime/`harness-use`; OS bỏ qua local intent và gate ready/busy của main r
 Vẫn giữ kiểm tra wake word, VAD, noise và echo. Kết quả voice tiếp tục dùng
 lifecycle/recap Harness và TTS của thiết bị. Text chat và sensing nền giữ route cũ.
 
+Trên đèn MPR121, giữ đồng thời điện cực 0 và 11 trong 1,5 giây để bật/tắt
+qua physical-action worker hiện có của HAL và API loopback Go
+`POST /api/harness/voice-mode/gesture`. Go giữ focus hiện tại; chỉ khi bật mà
+chưa focus mới yêu cầu chọn agent cục bộ đầu tiên và chờ Desktop xác nhận.
+Chuẩn bị focus thất bại thì mode vẫn tắt; tắt vẫn được khi offline. HAL đọc
+kết quả thực tế bằng phrase Anh, Việt, Trung giản thể hoặc Trung phồn thể theo
+ngôn ngữ cấu hình, kèm LED báo ngắn. Web/MQTT vẫn cho phép set bật khi chưa
+focus. Gesture không đổi cách capture hay định tuyến kết quả.
+
 Mỗi capture mang generation của mode. OS từ chối generation cũ thay vì giao câu
 nói cho agent vừa được focus. OS vẫn đồng bộ focus khi mode tắt mà không đổi
 generation của voice thường. Khi bật, đổi focus tăng generation; trước khi gửi,
 OS đọc lại focus và kèm `focusRevision` dạng opaque để CLI kiểm tra trước
-reservation. Web không chọn agent và không fallback khi thiếu focus.
+reservation. Web không chọn agent và không fallback trong lúc dispatch voice.
 Phiên realtime live đang chạy kiểm tra mode mỗi
 500 ms và đóng khi mode đổi; câu bị ngắt không được phát lại. Đọc mode có timeout
 500 ms và chặn dispatch nếu endpoint không truy cập được hoặc trả dữ liệu sai,

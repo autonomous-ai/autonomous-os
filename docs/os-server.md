@@ -44,7 +44,7 @@ after OS-server restart. Existing Harness event/recap delivery supplies the spok
 answer. Only direct loopback voice requests carrying `harness_voice` routing
 snapshots enter this path; typed/MQTT chat and ambient sensing are unaffected.
 The OS mirrors app focus while the mode is off too, via `focus.get`,
-`focus.changed` and a two-second refresh. Turning the mode on only changes the
+`focus.changed` and a two-second refresh. Turning the mode on through web/MQTT only changes the
 RAM flag; there is no web target selector. Missing focus, an older CLI without
 `focus.get`, or focus on another computer blocks voice dispatch. Each send carries
 the opaque `focusRevision`, checked atomically by CLI before accepting the turn.
@@ -55,6 +55,14 @@ uses `PUT /api/harness/voice-mode`, `GET /api/harness/agents`,
 `/api/harness/voice-mode/answer`, `/receipt` and `/resolve` under the same
 `/api/harness/voice-mode` prefix. See [Harness integration](harness.md#harness-only-voice-mode)
 for payloads, generation validation, structured answers and receipt recovery.
+
+`POST /api/harness/voice-mode/gesture` is strict-loopback-only and accepts
+`{gestureId:"<UUID>"}` from HAL's physical-action worker. Go toggles the shared
+RAM mode and returns its snapshot. Enable first preserves valid app focus or
+requests `focus.ensure` and waits for Desktop acknowledgement; unavailable focus
+leaves the mode off. Disable works offline. Action errors expose `data.code` for
+HAL's localized feedback. A 128-entry RAM result cache prevents duplicate gesture
+IDs from toggling twice; explicit web/MQTT off cancels a pending gesture enable.
 
 ### Environment sensing
 

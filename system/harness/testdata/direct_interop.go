@@ -234,6 +234,18 @@ func main() {
 	must(voice.Submit(ctx, "must not send", "voice-off", mode.Generation) != nil, "disabled voice accepted input")
 	state = api("/state", nil)
 	must(state["submits"] == float64(3) && len(state["answers"].([]any)) == 1, "disabled voice sent mutation")
+	// The fixture simulates a Desktop app_focus acknowledgment; the request
+	// and state response still cross the real encrypted OS/CLI connection.
+	time.Sleep(5 * time.Second)
+	api("/focus", map[string]any{"agentId": nil})
+	mode, e = voice.ToggleGesture(ctx, "interop-gesture")
+	must(e == nil && mode.Enabled && mode.AgentID == "agent-one", fmt.Sprintf("gesture first-agent focus failed: %v", e))
+	duplicateMode, e := voice.ToggleGesture(ctx, "interop-gesture")
+	must(e == nil && duplicateMode.Generation == mode.Generation && duplicateMode.Enabled, "gesture retry toggled twice")
+	mode, e = voice.ToggleGesture(ctx, "interop-gesture-off")
+	must(e == nil && !mode.Enabled, "gesture disable failed")
+	state = api("/state", nil)
+	must(state["submits"] == float64(3), "focus selection submitted an agent task")
 	api("/restart", nil)
 	wait("CLI restart reconnect", func() bool { return s.Status().Connected })
 	time.Sleep(3500 * time.Millisecond)

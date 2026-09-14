@@ -262,6 +262,7 @@ trước khi dùng; HAL không tự sửa boot overlay:
       "address": 90,
       "electrodes": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
       "swipe_axis": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+      "harness_voice_chord": [0, 11],
       "touch_threshold": 2,
       "release_threshold": 1,
       "autoconfig": true,
@@ -272,7 +273,7 @@ trước khi dùng; HAL không tự sửa boot overlay:
 }
 ```
 
-`bus` bắt buộc với entry bật. Các giá trị còn lại ở trên trừ `swipe_axis` là mặc định;
+`bus` bắt buộc với entry bật. Các giá trị còn lại ở trên trừ `swipe_axis` và `harness_voice_chord` là mặc định;
 địa chỉ 90 nghĩa là `0x5A` (cho phép 90–93). Electrode được chọn phải là
 các số không trùng từ 0–11, có ít nhất một electrode. Ngưỡng phải thỏa
 `0 <= release_threshold < touch_threshold <= 255`. Polling cho phép 1–1000 ms;
@@ -554,3 +555,30 @@ Phrase cố tình ngắn — chúng fire giữa lúc vuốt nên cần cảm gi�
 | `hal/test_gpio.py` | Probe độc lập để verify line nút GPIO |
 
 Các handler đầu vào được khởi động trong startup lifespan `hal/server.py`. Thiếu cấu hình MPR121 tùy chọn thì bỏ qua driver đó; cấu hình bật nhưng sai bị từ chối khi startup. Lỗi driver phần cứng được log mà không dừng các handler còn lại.
+
+
+### Cử chỉ bật/tắt Harness voice
+
+Giữ đồng thời **electrode 0 và 11** (hai đầu strip theo khai báo Lamp) trong
+**1,5 giây sau debounce 30 ms**. Mode đổi một lần khi đang giữ; phải nhả toàn bộ
+electrode đã chọn mới thực hiện lại. Trường wiring tùy chọn
+`harness_voice_chord` gồm đúng hai electrode khác nhau thuộc `electrodes`;
+không khai báo thì tắt cử chỉ này. Cần kiểm tra vị trí pad thực tế trên device;
+index electrode là contract wiring, không phải vị trí tự suy đoán.
+
+Ngay khi nhận cặp pad, recognizer hủy click/hold/swipe còn chờ và LED mức giữ;
+contact này không thể thành sleep, reboot, shutdown hay reset lúc nhả. Chạm thêm
+pad hoặc ngắt cặp đang giữ sẽ hủy toggle đến khi nhả hết. Pad giữ sẵn lúc startup
+và lỗi polling/I²C không được kích hoạt. Các thao tác khác giữ hành vi hiện có.
+
+Python nhận signal rồi đưa vào action worker có sẵn. `harness_voice_action.py`
+gọi adapter nhỏ `harness_voice_client.py`, POST một lần đến API chỉ nhận loopback
+`/api/harness/voice-mode/gesture` của Go với `gestureId` riêng. Go quản lý mode
+và chọn agent focus. Không tự retry HTTP; timeout sẽ báo chưa xác nhận được kết quả.
+
+Thành công, HAL đọc “Chế độ Harness — {agent}” hoặc “Chế độ thiết bị” theo
+`stt_language` (Anh, Việt, Trung giản thể hoặc phồn thể; phrase tập trung trong
+`hal/i18n.py`). LED pulse xanh khi bật hoặc màu trung tính khi tắt trong thời gian
+ngắn, không lưu trạng thái LED mới. Chưa kết nối/không có agent được báo lỗi theo
+ngôn ngữ đã chọn. Công tắc privacy mic chặn action; speaker mute chặn thông báo;
+LED vẫn tôn trọng quyền ưu tiên sleep/privacy/TTS hiện có.
