@@ -21,6 +21,7 @@ import (
 	"go.autonomous.ai/os/system/device"
 	"go.autonomous.ai/os/system/domain"
 	"go.autonomous.ai/os/system/environment"
+	"go.autonomous.ai/os/system/externalhistory"
 	"go.autonomous.ai/os/system/harness"
 	"go.autonomous.ai/os/system/healthwatch"
 	"go.autonomous.ai/os/system/lib/hal"
@@ -46,6 +47,8 @@ import (
 )
 
 type Server struct {
+	externalHistory *externalhistory.Store
+
 	harnessService   *harness.Service
 	harnessVoice     *harness.VoiceController
 	harnessVoiceCtx  context.Context
@@ -325,11 +328,15 @@ func (s *Server) Serve(closeFn func()) error {
 
 	eventCtx, cancelEvents := context.WithCancel(context.Background())
 	defer cancelEvents()
+	if err := s.initializeExternalHistory(eventCtx); err != nil {
+		return err
+	}
 	harnessService, harnessErr := harness.NewService("config", harness.Callbacks{OnEvent: s.forwardHarnessEvent})
 	if harnessErr != nil {
 		slog.Error("harness service initialization failed", "component", "harness", "error", harnessErr)
 	} else {
 		s.harnessService = harnessService
+		s.restoreHarnessHistoryReplies()
 		harnessService.Start(eventCtx)
 		s.deviceMQTTHandler.SetHarnessService(harnessService)
 	}

@@ -399,6 +399,13 @@ func (s *Server) deliverHarnessFinal(agentID, runID, text string) {
 	if text == "" {
 		return
 	}
+	if !s.hasHarnessReply(agentID, runID) {
+		return
+	}
+	if err := s.completeHarnessHistory(runID, text); err != nil {
+		slog.Warn("persist Harness conversation result failed; retaining reply route", "run_id", runID, "error", err)
+		return
+	}
 	if !s.takeHarnessReply(agentID, runID) {
 		return
 	}

@@ -151,6 +151,10 @@ func (s *Server) handleHarnessVoice(c *gin.Context, req sensinghttp.SensingEvent
 		return false
 	}
 	runID := newHarnessVoiceRunID(req.InteractionID)
+	if err := s.beginHarnessHistory(runID, req.Message, state); err != nil {
+		c.JSON(http.StatusInternalServerError, serializers.ResponseError("Could not save Harness conversation input"))
+		return true
+	}
 	interactionID := telemetry.ReportTaskStarted(req.Type, req.InteractionID, runID)
 	start := flow.Start("sensing_input", map[string]any{
 		"type": req.Type, "message": req.Message, "interaction_id": interactionID, "route": "harness_only",

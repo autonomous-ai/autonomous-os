@@ -1037,3 +1037,17 @@ thiết bị thông thường và chưa phải bản phát hành compatibility/O
 Xem [khởi động host và cấu hình firmware](../../robots/_experimental/stackchan/docs/vi/runtime_vi.md).
 HAL client hiện tại của OS kết nối `http://127.0.0.1:5001`, nên chạy HAL cùng
 host với os-server. ESP32 kết nối vào listener WSS riêng của HAL.
+
+### Lịch sử hội thoại từ bên ngoài
+
+`system/externalhistory` lưu lượt hội thoại được xử lý ngoài main runtime. Adapter đầu tiên là Harness-only voice: lưu input trước dispatch, lưu câu trả lời trước khi bỏ reply route. Mỗi bản ghi có source, máy tính, agent ID/tên và run ID gốc. Tích hợp khác có thể dùng chung `Begin` / `Complete` mà không phụ thuộc Harness.
+
+Worker gửi một cặp hỏi–đáp khi main runtime sẵn sàng và rảnh, dùng đúng định dạng history realtime hiện có (`[skills: input-branching]`, `[HANDLED]`, `[REPLY]`, `NO_REPLY`) và gọi `MarkSilentRun` trước `SendChatMessageWithRun`. Runtime tiếp nhận ngữ cảnh có ghi rõ nguồn vào history/compaction thông thường. Giữ nguyên silent/TTS và routing realtime; không thêm lớp suppression hoặc hệ thống tóm tắt.
+
+Bản ghi lưu atomic tại `local/external-history/` (thư mục 0700, file 0600). Các trạng thái: `waiting` chờ câu trả lời bên ngoài, `pending` chờ đồng bộ main, `sending`, `uncertain`, `done`. Lifecycle end thành công của main xác nhận bản ghi sau khi handler hiện có xử lý; socket write hay `chat.final` riêng lẻ chưa chứng minh hoàn tất. Restart gửi tiếp bản pending chưa từng thử gửi, khôi phục dấu silent/pending trace cho lượt đã thử. Reply route Harness voice đang chờ chỉ được khôi phục với cùng pairing; không gửi lại task bên ngoài.
+
+Lỗi send, thiếu lifecycle acknowledgement quá hai phút khi runtime rảnh, hoặc restart giữa lúc gửi khiến record ở `uncertain`. Record vẫn nằm trên disk và nhận được ACK đến muộn; không tự gửi lại vì không phải transport runtime nào cũng có idempotency. Cơ chế giữ bằng chứng, không hứa đồng bộ exactly-once qua thời điểm crash chưa rõ kết quả. Nếu câu trả lời bên ngoài không bao giờ tới, input giữ `waiting`; startup không đoán recap mới nhất cho lượt đó.
+
+Giới hạn 1024 records, input 16 KiB và output đồng bộ 64 KiB mỗi record. Output Harness dài hơn được cắt với dấu rõ ràng cho history (phản hồi gốc vẫn gửi đầy đủ). Record done hết hạn sau 30 ngày hoặc bị loại theo thứ tự cũ nhất khi đầy; không loại record chưa hoàn tất. Chống trùng áp dụng cho source/run ID còn lưu. Hàng đợi đầy toàn record chưa xong sẽ từ chối voice input mới thay vì mất history âm thầm. Lỗi ghi kết quả giữ reply route để callback lặp/recap recovery thử lại. Journal không đọc được khiến startup báo lỗi thay vì reset ngầm. Context đã đồng bộ do main runtime quản lý, không nạp lại toàn bộ journal vào prompt.
+
+Kiểm chứng: `go test -race ./system/externalhistory`; các test history/observer/Harness tập trung trong `system/server` và `system/server/agent/delivery/http`. Phát giọng nói thật và tương quan run sau restart trên từng runtime vẫn cần kiểm chứng tích hợp.
