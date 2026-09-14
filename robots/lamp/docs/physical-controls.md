@@ -586,7 +586,7 @@ which posts once to Go's loopback-only `/api/harness/voice-mode/gesture` with a
 unique `gestureId`. Go owns mode state and focused-agent selection. No automatic
 HTTP retry occurs; a timeout announces that the outcome could not be confirmed.
 
-On success, HAL speaks “Harness mode — {agent}” or “Device mode” using the configured
+On success, HAL speaks “Harness is on. You’re now talking to {agent}.” or “Harness is off. You’re back with the assistant on your device.” using the configured
 `stt_language` (English, Vietnamese, Simplified or Traditional Chinese; phrases
 live in `hal/i18n.py`). It briefly pulses blue for on or neutral for off without
 saving a new LED state. Missing connection/agents receive localized errors.

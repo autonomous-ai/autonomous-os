@@ -77,14 +77,14 @@ PHRASE_RATE_LIMIT = "rate_limit"
 # during a service reload.
 PHRASES_BY_LANG = {
     PHRASE_HARNESS_ON: {
-        LANG_EN: "Harness mode — {agent}.",
-        LANG_VI: "Chế độ Harness — {agent}.",
-        LANG_ZH_CN: "Harness 模式 — {agent}。",
-        LANG_ZH_TW: "Harness 模式 — {agent}。",
+        LANG_EN: "Harness is on. You’re now talking to {agent}.",
+        LANG_VI: "Đã bật Harness, đang nói chuyện với {agent}.",
+        LANG_ZH_CN: "Harness 已开启，现在可以和 {agent} 对话。",
+        LANG_ZH_TW: "Harness 已開啟，現在可以和 {agent} 對話。",
     },
     PHRASE_HARNESS_OFF: {
-        LANG_EN: "Device mode.", LANG_VI: "Chế độ thiết bị.",
-        LANG_ZH_CN: "设备模式。", LANG_ZH_TW: "裝置模式。",
+        LANG_EN: "Harness is off. You’re back with the assistant on your device.", LANG_VI: "Đã tắt Harness, trở về trợ lý trên thiết bị.",
+        LANG_ZH_CN: "Harness 已关闭，已切回设备上的助手。", LANG_ZH_TW: "Harness 已關閉，已切回裝置上的助理。",
     },
     PHRASE_HARNESS_OFFLINE: {
         LANG_EN: "Harness is disconnected.", LANG_VI: "Harness chưa kết nối.",

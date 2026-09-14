@@ -80,8 +80,8 @@ class HarnessActionTests(unittest.TestCase):
             restore.assert_not_called()
 
     def test_all_languages_and_config_lookup(self):
-        expected_off = {"en": "Device mode.", "vi": "Chế độ thiết bị.",
-                        "zh-CN": "设备模式。", "zh-TW": "裝置模式。"}
+        expected_off = {"en": "Harness is off. You’re back with the assistant on your device.", "vi": "Đã tắt Harness, trở về trợ lý trên thiết bị.",
+                        "zh-CN": "Harness 已关闭，已切回设备上的助手。", "zh-TW": "Harness 已關閉，已切回裝置上的助理。"}
         # Use the project language constants (currently ISO language IDs).
         from hal.presets import LANG_EN, LANG_VI, LANG_ZH_CN, LANG_ZH_TW
         for lang, expected in zip((LANG_EN, LANG_VI, LANG_ZH_CN, LANG_ZH_TW), expected_off.values()):
