@@ -58,12 +58,22 @@ and main-runtime readiness/busy gates. Existing wake-word authorization, VAD,
 noise and echo checks remain. Voice results still use Harness lifecycle/recap
 delivery and device TTS. Text chat and ambient sensing keep their normal routes.
 
+On MPR121 lamps, holding electrodes 0 and 11 together for 1.5 seconds toggles
+this mode through HAL's existing physical-action worker and the loopback Go
+`POST /api/harness/voice-mode/gesture` API. Go preserves current app focus or,
+only for activation without focus, requests the first local agent and waits for
+Desktop acknowledgement. Failed preparation leaves the mode off; turning off
+works offline. HAL speaks the actual outcome using English, Vietnamese,
+Simplified Chinese or Traditional Chinese phrases according to its configured
+language, with brief LED feedback. Web/MQTT explicit sets still allow enabling
+without focus. Gesture activation does not change capture or result routing.
+
 Each capture carries its mode generation. OS refuses a stale generation rather
 than delivering an utterance to a newly focused agent. OS mirrors app focus even
 while off without changing ordinary voice generations. When enabled, a focus
 change advances the generation; dispatch refreshes focus and includes an opaque
 `focusRevision` for the CLI to check before reservation. There is no web agent
-selector or automatic fallback when focus is unavailable. An active realtime live
+selector or automatic fallback during voice dispatch. An active realtime live
 session checks the mode every 500 ms and closes when it changes; an interrupted
 utterance is not replayed. Mode lookup has a 500 ms timeout and fails closed if
 the endpoint is unavailable or malformed, so OS and HAL must be deployed together.

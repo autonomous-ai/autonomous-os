@@ -23,6 +23,7 @@
       "autoconfig": true,
       "poll_ms": 10,
       "debounce_ms": 30,
+      "harness_voice_chord": [0, 11],
       "swipe_axis": [
         0,
         1,

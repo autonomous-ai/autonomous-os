@@ -270,6 +270,7 @@ does not modify boot overlays automatically:
       "address": 90,
       "electrodes": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
       "swipe_axis": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+      "harness_voice_chord": [0, 11],
       "touch_threshold": 2,
       "release_threshold": 1,
       "autoconfig": true,
@@ -280,7 +281,7 @@ does not modify boot overlays automatically:
 }
 ```
 
-`bus` is required for an enabled entry. The other values above except `swipe_axis` are defaults;
+`bus` is required for an enabled entry. The other values above except `swipe_axis` and `harness_voice_chord` are defaults;
 address 90 means `0x5A` (allowed addresses: 90–93). Selected electrodes must be
 unique numbers from 0–11, with at least one selected. Thresholds must satisfy
 `0 <= release_threshold < touch_threshold <= 255`. Polling accepts 1–1000 ms;
@@ -566,3 +567,32 @@ Phrases are intentionally short — they fire mid-stroke and need to feel respon
 | `hal/test_gpio.py` | Standalone probe for verifying GPIO button line |
 
 Input handlers are started in `hal/server.py` lifespan startup. Missing optional MPR121 configuration skips that driver; malformed enabled configuration rejects startup. Hardware driver failures are logged without stopping the other handlers.
+
+
+### Harness voice chord
+
+Hold **electrodes 0 and 11 together** (the two ends of Lamp's declared strip)
+for **1.5 seconds after the 30 ms debounce**. This toggles Harness voice once
+while held; release every selected electrode before repeating. The optional
+`harness_voice_chord` wiring field must name two distinct selected electrodes;
+when absent, this gesture is disabled. Verify physical pad placement on the
+actual device; electrode indices are the wiring contract, not inferred positions.
+
+The chord claims the contact immediately, cancels pending click/hold/swipe
+outcomes and hold LED feedback, and cannot become sleep, reboot, shutdown or
+reset on release. An extra pad or interrupted pair cancels the toggle until full
+release. Contacts already held at startup and polling/I²C faults cannot trigger
+it. Other touches retain their existing behavior.
+
+Python recognizes the signal and queues it on the existing action worker.
+`harness_voice_action.py` calls the small `harness_voice_client.py` adapter,
+which posts once to Go's loopback-only `/api/harness/voice-mode/gesture` with a
+unique `gestureId`. Go owns mode state and focused-agent selection. No automatic
+HTTP retry occurs; a timeout announces that the outcome could not be confirmed.
+
+On success, HAL speaks “Harness mode — {agent}” or “Device mode” using the configured
+`stt_language` (English, Vietnamese, Simplified or Traditional Chinese; phrases
+live in `hal/i18n.py`). It briefly pulses blue for on or neutral for off without
+saving a new LED state. Missing connection/agents receive localized errors.
+Hardware microphone privacy disables the gesture action, speaker mute suppresses
+speech, and existing sleep/privacy/TTS LED ownership is respected.

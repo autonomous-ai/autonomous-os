@@ -50,18 +50,20 @@ type voiceQuestionSet struct {
 	Questions []VoiceQuestion `json:"questions"`
 }
 type VoiceController struct {
-	mu        sync.Mutex
-	op        sync.Mutex
-	focusMu   sync.Mutex
-	focusWake chan struct{}
-	startOnce sync.Once
-	transport VoiceTransport
-	callbacks VoiceCallbacks
-	state     VoiceModeState
-	seen      map[string]bool
-	order     []string
-	question  *voiceQuestionSet
-	answers   map[string]string
+	mu         sync.Mutex
+	op         sync.Mutex
+	focusMu    sync.Mutex
+	focusWake  chan struct{}
+	startOnce  sync.Once
+	modeIntent uint64
+	gestures   voiceGestures
+	transport  VoiceTransport
+	callbacks  VoiceCallbacks
+	state      VoiceModeState
+	seen       map[string]bool
+	order      []string
+	question   *voiceQuestionSet
+	answers    map[string]string
 }
 
 var voiceGeneration atomic.Uint64
@@ -228,14 +230,19 @@ func (v *VoiceController) RefreshFocus(ctx context.Context) error {
 }
 func (v *VoiceController) SetMode(_ context.Context, enabled bool) (VoiceModeState, error) {
 	v.mu.Lock()
+	v.setModeLocked(enabled)
+	v.mu.Unlock()
+	v.NotifyFocusChanged()
+	return v.State(), nil
+}
+
+func (v *VoiceController) setModeLocked(enabled bool) {
+	v.modeIntent++
 	if v.state.Enabled != enabled {
 		v.state.Generation = nextVoiceGeneration()
 		v.question, v.answers = nil, nil
 	}
 	v.state.Enabled = enabled
-	v.mu.Unlock()
-	v.NotifyFocusChanged()
-	return v.State(), nil
 }
 func (v *VoiceController) checkFocus(ctx context.Context, s VoiceModeState) error {
 	if err := v.RefreshFocus(ctx); err != nil {
