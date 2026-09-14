@@ -58,8 +58,10 @@ and main-runtime readiness/busy gates. Existing wake-word authorization, VAD,
 noise and echo checks remain. Voice results still use Harness lifecycle/recap
 delivery and device TTS. Text chat and ambient sensing keep their normal routes.
 
-On MPR121 lamps, holding electrodes 0 and 11 together for 1.5 seconds toggles
-this mode through HAL's existing physical-action worker and the loopback Go
+On MPR121 lamps, swiping right to left and releasing toggles this mode;
+left-to-right swipes invoke sleep. Direction follows the physical left-to-right
+`swipe_axis` configuration. HAL routes the gesture through its existing
+physical-action worker and the loopback Go
 `POST /api/harness/voice-mode/gesture` API. Go preserves current app focus or,
 only for activation without focus, requests the first local agent and waits for
 Desktop acknowledgement. Failed preparation leaves the mode off; turning off

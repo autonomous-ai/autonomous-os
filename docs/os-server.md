@@ -57,8 +57,11 @@ uses `PUT /api/harness/voice-mode`, `GET /api/harness/agents`,
 for payloads, generation validation, structured answers and receipt recovery.
 
 `POST /api/harness/voice-mode/gesture` is strict-loopback-only and accepts
-`{gestureId:"<UUID>"}` from HAL's physical-action worker. Go toggles the shared
-RAM mode and returns its snapshot. Enable first preserves valid app focus or
+`{gestureId:"<UUID>"}` from HAL's physical-action worker after a right-to-left
+MPR121 swipe is released. HAL resolves direction using the configured physical
+left-to-right `swipe_axis`; left-to-right swipes use the existing sleep action.
+Go toggles the shared RAM mode and returns its snapshot. Enable first preserves
+valid app focus or
 requests `focus.ensure` and waits for Desktop acknowledgement; unavailable focus
 leaves the mode off. Disable works offline. Action errors expose `data.code` for
 HAL's localized feedback. A 128-entry RAM result cache prevents duplicate gesture

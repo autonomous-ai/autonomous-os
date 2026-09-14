@@ -270,7 +270,6 @@ does not modify boot overlays automatically:
       "address": 90,
       "electrodes": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
       "swipe_axis": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
-      "harness_voice_chord": [0, 11],
       "touch_threshold": 2,
       "release_threshold": 1,
       "autoconfig": true,
@@ -281,7 +280,7 @@ does not modify boot overlays automatically:
 }
 ```
 
-`bus` is required for an enabled entry. The other values above except `swipe_axis` and `harness_voice_chord` are defaults;
+`bus` is required for an enabled entry. The other values above except `swipe_axis` are defaults;
 address 90 means `0x5A` (allowed addresses: 90–93). Selected electrodes must be
 unique numbers from 0–11, with at least one selected. Thresholds must satisfy
 `0 <= release_threshold < touch_threshold <= 255`. Polling accepts 1–1000 ms;
@@ -313,19 +312,22 @@ functions:
 | Hold 2–<5 s, then release | `hold_release_action` enters sleepy. |
 | Hold 5–<10 s, then release | `hold_release_action` shuts down. |
 | Hold ≥10 s, then release | `hold_release_action` performs factory reset. |
-| Swipe either direction, then release | `swipe_action` sleeps; no click or destructive action for this moving contact. |
+| Swipe left to right, then release | `swipe_action` sleeps; no click or destructive action for this moving contact. |
+| Swipe right to left, then release | Toggle Harness voice through the Go API; no click or destructive action for this moving contact. |
 
 A short contact lasts less than 2 s. The click window does not resolve while
 any selected electrode remains touched. Releasing a hold clears the pending
 click burst. Destructive actions never commit while held.
 
-### MPR121 swipe to sleep
+### MPR121 directional swipe
 
 `swipe_axis` is an optional ordered list of 2–12 distinct electrodes from
-`electrodes`. Lamp declares E0…E11 based on recorded travel E11→E0, E0→E8,
-and E9→E0; this establishes ordering, not which end physically faces left.
-Both directions call `swipe_action(source="MPR121")` from `button_actions.py`,
-the same sleep action as TTP223. A swipe need not cross the entire strip.
+`electrodes`, in physical **left-to-right** order. Lamp defaults to E0…E11.
+Verify the mounted bar: if E11 is physically on the left, reverse the existing
+axis to E11…E0. Increasing axis position (`+1`, left to right) calls
+`swipe_action(source="MPR121")` from `button_actions.py` to sleep. Decreasing
+position (`-1`, right to left) calls the Harness voice toggle action.
+A swipe need not cross the entire strip.
 Missing/null `swipe_axis` disables only swipe detection and preserves legacy
 click/hold recognition. Install HAL support before deploying JSON with this field.
 
@@ -334,8 +336,9 @@ stability (normally consecutive 10 ms polls) to retain fast electrode transition
 The detector follows the debounced contact footprint instead of counting every
 overlapping electrode as a separate tap. Stationary multi-electrode touches
 retain click/hold behavior. Once travel is detected, pending tap/hold outcomes
-and hold LED feedback are canceled for that contact; a valid swipe sleeps once
-after release. Reversed or invalid travel does not trigger reboot/shutdown/reset.
+and hold LED feedback are canceled for that contact; a valid swipe invokes its
+directional action once after release. Travel that reverses within one contact
+or is otherwise invalid does not trigger reboot/shutdown/reset.
 A release grace of 120 ms joins brief electrode handoffs, so tap/hold actions
 with swipe enabled resolve after that grace. Boot-held contacts remain ignored.
 Logs record swipe direction, displacement and verdict alongside action dispatch.
@@ -569,20 +572,13 @@ Phrases are intentionally short — they fire mid-stroke and need to feel respon
 Input handlers are started in `hal/server.py` lifespan startup. Missing optional MPR121 configuration skips that driver; malformed enabled configuration rejects startup. Hardware driver failures are logged without stopping the other handlers.
 
 
-### Harness voice chord
+### Harness voice swipe
 
-Hold **electrodes 0 and 11 together** (the two ends of Lamp's declared strip)
-for **1.5 seconds after the 30 ms debounce**. This toggles Harness voice once
-while held; release every selected electrode before repeating. The optional
-`harness_voice_chord` wiring field must name two distinct selected electrodes;
-when absent, this gesture is disabled. Verify physical pad placement on the
-actual device; electrode indices are the wiring contract, not inferred positions.
-
-The chord claims the contact immediately, cancels pending click/hold/swipe
-outcomes and hold LED feedback, and cannot become sleep, reboot, shutdown or
-reset on release. An extra pad or interrupted pair cancels the toggle until full
-release. Contacts already held at startup and polling/I²C faults cannot trigger
-it. Other touches retain their existing behavior.
+Swipe **right to left**, then release to toggle Harness voice once. The existing
+`swipe_axis` defines physical direction as described above. There is no two-pad
+hold gesture or separate Harness wiring configuration. Single taps and stationary
+holds retain their existing behavior; detected travel cancels tap/hold outcomes.
+Contacts already held at startup and polling/I²C faults cannot trigger a swipe.
 
 Python recognizes the signal and queues it on the existing action worker.
 `harness_voice_action.py` calls the small `harness_voice_client.py` adapter,
