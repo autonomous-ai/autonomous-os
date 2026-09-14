@@ -325,8 +325,8 @@ export function externalHistory(turn: Turn): { source: string; agentName: string
   return null;
 }
 
-function harnessResponseText(ev: DisplayEvent): string {
-  if (ev.type !== "flow_event" || ev.detail?.node !== "harness_response") return "";
+function externalResponseText(ev: DisplayEvent): string {
+  if (ev.type !== "flow_event" || (ev.detail?.node !== "harness_response" && ev.detail?.node !== "realtime_response")) return "";
   const detail = ev.detail as FlowEventDetail;
   const text = detail.data?.text ?? detail.text;
   return typeof text === "string" ? text.trim() : "";
@@ -334,7 +334,7 @@ function harnessResponseText(ev: DisplayEvent): string {
 
 export function turnHasOutput(turn: Turn): boolean {
   return turn.events.some((ev) =>
-    Boolean(harnessResponseText(ev)) ||
+    Boolean(externalResponseText(ev)) ||
     ev.type === "tts" ||
     ev.type === "intent_match" ||
     (ev.type === "flow_event" && (ev.detail?.node === "tts_send" || ev.detail?.node === "tts_suppressed" || ev.detail?.node === "intent_match")),
@@ -784,7 +784,11 @@ export function groupIntoTurns(events: DisplayEvent[]): Turn[] {
       return detail?.node === "sensing_input" &&
         (detail.data?.route ?? detail.route) === "harness_only";
     })) turn.path = "harness";
-    const response = [...ownEvents].reverse().find((event) => harnessResponseText(event));
+    if (ownEvents.some((event) => event.detail?.node === "realtime_response")) {
+      turn.path = "realtime";
+      turn.type = "voice_agent_handled";
+    }
+    const response = [...ownEvents].reverse().find((event) => externalResponseText(event));
     if (response) {
       if (turn.status !== "error") turn.status = "done";
       turn.endTime = response.time;
@@ -809,7 +813,8 @@ export function groupIntoTurns(events: DisplayEvent[]): Turn[] {
     // A final Harness response is never an unowned reply to a nearby turn.
     if (turn.mergedIntoRunId || prev.mergedIntoRunId ||
         turn.path === "harness" || prev.path === "harness" ||
-        turn.events.some((event) => harnessResponseText(event))) {
+        turn.path === "realtime" || prev.path === "realtime" ||
+        turn.events.some((event) => externalResponseText(event))) {
       stitched.push(turn);
       continue;
     }
@@ -1125,8 +1130,8 @@ export function extractNodeInfo(events: DisplayEvent[]): NodeInfoMap {
         info.agent_thinking.push(`🧠 ${text}`);
       }
     }
-    if (harnessResponseText(ev)) {
-      pushAgentResponse(`"${harnessResponseText(ev)}"`);
+    if (externalResponseText(ev)) {
+      pushAgentResponse(`"${externalResponseText(ev)}"`);
     }
     if (ev.type === "flow_event" && ev.detail?.node === "no_reply") {
       pushAgentResponse("🚫 [no reply] — agent decided to do nothing");
@@ -1615,8 +1620,13 @@ export function turnIO(turn: Turn): {
       // text for older JSONL / tts_suppressed (which already logs full text).
       output = d?.data?.full_text ?? d?.full_text ?? d?.data?.text ?? d?.text ?? ev.summary ?? output;
     }
-    if (turnRunId && evRunId === turnRunId && harnessResponseText(ev)) {
-      output = harnessResponseText(ev);
+    if (turnRunId && evRunId === turnRunId && externalResponseText(ev)) {
+      output = externalResponseText(ev);
+      if (ev.detail?.node === "realtime_response") {
+        const detail = ev.detail as FlowEventDetail;
+        const question = detail.data?.input ?? detail.input;
+        if (typeof question === "string") input = question;
+      }
     }
     if (!output && sameRun && ev.type === "chat_response" && ev.state === "final") {
       const d = ev.detail as FlowEventDetail | undefined;

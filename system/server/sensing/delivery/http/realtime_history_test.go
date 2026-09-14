@@ -25,7 +25,7 @@ func TestRealtimeHistoryPersistsBeforeBusyGate(t *testing.T) {
 		return "device-chat-context-test", nil
 	})
 	rec := postRealtimeHandled(t, h)
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"speechSuppressed":true`) || !strings.Contains(rec.Body.String(), `"runId":"device-chat-context-test"`) {
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"speechSuppressed":true`) || !strings.Contains(rec.Body.String(), `"runId":"device-realtime-test"`) || !strings.Contains(rec.Body.String(), `"historyRunId":"device-chat-context-test"`) {
 		t.Fatalf("unexpected response: %d %s", rec.Code, rec.Body.String())
 	}
 	if gw.queued != 0 {

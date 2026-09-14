@@ -33,7 +33,7 @@ export interface Turn {
   sessionBreak?: boolean;
   endTime?: string;
   type: string;
-  path: "local" | "agent" | "harness" | "dropped" | "queued" | "unknown";
+  path: "local" | "agent" | "harness" | "realtime" | "dropped" | "queued" | "unknown";
   status: "active" | "done" | "error";
   events: DisplayEvent[];
   queuedForMs?: number;
@@ -129,6 +129,7 @@ export const FLOW_NODES: FlowNodeDef[] = [
       "chat_response",
       "flow_event:lifecycle_end",
       "flow_event:harness_response",
+      "flow_event:realtime_response",
       "flow_event:no_reply",
       "hw_only_reply", "flow_event:hw_only_reply",
     ] },

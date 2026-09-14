@@ -119,7 +119,7 @@ test('normal turns and malformed context envelopes do not masquerade as history 
 });
 
 
-test('realtime history shares one completed turn and keeps its original exchange', () => {
+test('legacy shared-ID realtime history keeps its existing combined display', () => {
   const id = 'device-chat-context-realtime';
   const turns = groupIntoTurns([
     input(1, id, 'voice_agent_handled', 'external_history'),
@@ -133,4 +133,40 @@ test('realtime history shares one completed turn and keeps its original exchange
   assert.equal(turn.status, 'done');
   assert.equal(turnIO(turn).input, 'Open Chrome\nand search');
   assert.equal(turnIO(turn).output, 'A tab is open.');
+});
+
+test('realtime voice remains separate when its history sync arrives and completes', () => {
+  const voice = 'device-realtime-separated';
+  const sync = 'device-chat-context-separated';
+  const voiceEvents = [input(1, voice, 'voice_agent_handled', 'realtime'),
+    event(2, voice, 'realtime_response', { input: 'What time is it?', text: 'Seven.', history_run_id: sync })];
+  for (const terminal of [[], [event(5, sync, 'lifecycle_end', {})], [{ ...event(5, sync, 'lifecycle_error', {}), type: 'lifecycle', phase: 'error', error: 'failed' }]]) {
+    const turns = groupIntoTurns([...voiceEvents,
+      event(3, sync, 'chat_input', { message: historyMessage('realtime') }),
+      event(4, sync, 'chat_send', { message: historyMessage('realtime') }), ...terminal]);
+    assert.equal(turns.length, 2);
+    const original = turns.find(t => t.runId === voice);
+    const history = turns.find(t => t.runId === sync);
+    assert.equal(original.type, 'voice_agent_handled');
+    assert.equal(original.path, 'realtime');
+    assert.equal(original.status, 'done');
+    assert.equal(turnIO(original).input, 'What time is it?');
+    assert.equal(turnIO(original).output, 'Seven.');
+    assert.equal(history.type, 'history_sync');
+    assert.equal(history.status, terminal.length ? terminal[0].detail.node === 'lifecycle_error' ? 'error' : 'done' : 'active');
+  }
+});
+
+test('ordinary voice and followup are not relabeled by neighboring history sync', () => {
+  for (const type of ['voice', 'voice_command', 'voice_followup']) {
+    const id = 'device-voice-' + type;
+    const source = input(1, id, type, 'agent');
+    source.summary = `[${type}] hello`;
+    const turns = groupIntoTurns([source,
+      event(2, id, 'lifecycle_end', {}),
+      event(3, 'device-chat-context-adjacent', 'chat_input', { message: historyMessage('realtime') }),
+      event(4, 'device-chat-context-adjacent', 'lifecycle_end', {})]);
+    assert.equal(turns.length, 2);
+    assert.equal(turns.find(t => t.runId === id).type, type);
+  }
 });
