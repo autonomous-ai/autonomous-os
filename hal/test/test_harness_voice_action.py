@@ -1,5 +1,8 @@
 """Local API adapter, confirmation localization and hardware privacy policy."""
 
+import copy
+from contextlib import ExitStack
+from pathlib import Path
 import unittest
 from unittest.mock import patch, MagicMock
 import requests
@@ -45,6 +48,37 @@ class HarnessClientTests(unittest.TestCase):
 
 
 class HarnessActionTests(unittest.TestCase):
+    def test_feedback_uses_device_overlay_and_restores_after_duration(self):
+        from hal.board.presets_overlay import _TABLES, apply_device_presets
+        from hal.presets import BUTTON_LED_PRESETS
+
+        with ExitStack() as stack:
+            for table in _TABLES.values():
+                stack.enter_context(patch.dict(table, copy.deepcopy(table)))
+            apply_device_presets("lamp", str(Path(__file__).resolve().parents[2] / "robots"))
+            stack.enter_context(patch.object(action.state, "rgb_service", MagicMock()))
+            stack.enter_context(patch.object(action.state, "_effect_thread", None))
+            restore = stack.enter_context(patch.object(action.state, "_schedule_led_restore"))
+            def start_effect(request):
+                action.state._effect_thread = object()
+            start = stack.enter_context(patch("hal.routes.led.start_led_effect", side_effect=start_effect))
+            for enabled, color in ((True, [1, 1, 3]), (False, [2, 2, 2])):
+                action._show_feedback(enabled)
+                request = start.call_args.args[0]
+                self.assertEqual(request.color, color)
+                self.assertEqual(request.effect, "pulse")
+                self.assertEqual(request.duration_ms, 600)
+                self.assertTrue(request.transient)
+                restore.assert_called_with(0.7)
+            BUTTON_LED_PRESETS["harness_on"].update(effect="blink", duration_ms=900)
+            action._show_feedback(True)
+            self.assertEqual(start.call_args.args[0].effect, "blink")
+            restore.assert_called_with(1.0)
+            restore.reset_mock()
+            start.side_effect = None
+            action._show_feedback(True)
+            restore.assert_not_called()
+
     def test_all_languages_and_config_lookup(self):
         expected_off = {"en": "Device mode.", "vi": "Chế độ thiết bị.",
                         "zh-CN": "设备模式。", "zh-TW": "裝置模式。"}

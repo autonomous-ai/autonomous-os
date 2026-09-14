@@ -30,12 +30,14 @@ def _show_feedback(enabled: bool):
         return
     try:
         from hal.models import LEDEffectRequest
+        from hal.presets import BUTTON_LED_PRESETS
         from hal.routes.led import start_led_effect
+        preset = BUTTON_LED_PRESETS["harness_on" if enabled else "harness_off"]
+        request = LEDEffectRequest(**preset, transient=True)
         previous = state._effect_thread
-        start_led_effect(LEDEffectRequest(effect="pulse", color=[80, 120, 255] if enabled else [180, 180, 180],
-                                         duration_ms=600, transient=True))
+        start_led_effect(request)
         if state._effect_thread is not previous:
-            state._schedule_led_restore(0.7)
+            state._schedule_led_restore(request.duration_ms / 1000 + 0.1)
     except Exception:
         logger.warning("Harness voice LED feedback failed", exc_info=True)
 
