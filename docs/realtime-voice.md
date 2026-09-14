@@ -49,6 +49,24 @@ The `delegate_to_main` tool is registered automatically by the orchestrator
 
 ### Voice control through Harness
 
+OS Monitor also offers **Harness-only voice**, a RAM mode that defaults to off
+after OS-server restart. When enabled, HAL snapshots `/api/harness/voice-mode`
+before capture and sends finalized, wake-word-stripped STT directly to the
+selected Harness agent through OS. That capture does not stream audio to the
+realtime model or invoke the main runtime/`harness-use`; OS skips local intents
+and main-runtime readiness/busy gates. Existing wake-word authorization, VAD,
+noise and echo checks remain. Voice results still use Harness lifecycle/recap
+delivery and device TTS. Text chat and ambient sensing keep their normal routes.
+
+Each capture carries its mode generation. OS refuses a stale generation rather
+than delivering an utterance to a newly selected agent. An active realtime live
+session checks the mode every 500 ms and closes when it changes; an interrupted
+utterance is not replayed. Mode lookup has a 500 ms timeout and fails closed if
+the endpoint is unavailable or malformed, so OS and HAL must be deployed together.
+The normal path below applies when the mode is off. See
+[Harness integration](harness.md#harness-only-voice-mode) for management APIs,
+structured question handling and uncertain-delivery recovery.
+
 Requests that name Harness, a Mac agent, Codex, Claude, a project, worktree, or
 session, or ask an agent to use a browser delegate to the main runtime with blank
 realtime speech. This includes general browser research, such as asking an agent

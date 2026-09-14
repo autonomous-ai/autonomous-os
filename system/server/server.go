@@ -47,6 +47,8 @@ import (
 
 type Server struct {
 	harnessService   *harness.Service
+	harnessVoice     *harness.VoiceController
+	harnessVoiceCtx  context.Context
 	harnessRepliesMu sync.Mutex
 	// harnessReplies is keyed by the local device run ID. A single Harness
 	// agent can work on more than one user request at once, so it cannot be
@@ -192,6 +194,7 @@ func ProvideServer(
 	}
 	sensingH.SetHarnessFollowup(s.HarnessVoiceFollowup)
 	sensingH.SetHarnessFollowupContext(s.HarnessFollowupContext)
+	sensingH.SetHarnessVoice(s.handleHarnessVoice)
 	return s
 }
 

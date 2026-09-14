@@ -95,6 +95,7 @@ class SensingSender:
         skip_echo: bool = False,
         image_b64: str = "",
         interaction_id: str = "",
+        harness_voice: dict | None = None,
     ) -> "SendResult":
         """POST decorated message to os-server /api/sensing/event with retry.
 
@@ -112,6 +113,11 @@ class SensingSender:
             return SendResult()
 
         payload = {"type": event_type, "message": message}
+        if harness_voice is not None:
+            payload["harness_voice"] = {
+                "enabled": harness_voice["enabled"],
+                "generation": harness_voice["generation"],
+            }
         if interaction_id:
             # Voice metrics ownership, sent UP so os-server can tag the audio it
             # starts on its own. The opening filler fires the moment this POST
@@ -147,7 +153,9 @@ class SensingSender:
         # response comes back — don't let the plain-text timeout abort them
         # into a spurious "failed to send" warning.
         timeout_s = 90 if image_b64 else 5
-        max_retries = 3
+        # A transport error can occur after Harness accepted the turn. Never
+        # retry that mutation without a known receipt / idempotency outcome.
+        max_retries = 1 if harness_voice and harness_voice["enabled"] else 3
         for attempt in range(1, max_retries + 1):
             try:
                 resp = requests.post(OS_SENSING_URL, json=payload, timeout=timeout_s)

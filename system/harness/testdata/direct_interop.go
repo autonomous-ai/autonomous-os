@@ -47,7 +47,11 @@ func main() {
 	}
 	_, source, _, _ := runtime.Caller(0)
 
-	cmd := exec.Command(filepath.Join(cliRoot, "node_modules/.bin/tsx"), filepath.Join(filepath.Dir(source), "direct-interop.mts"))
+	// Invoke Node directly so fixture startup does not depend on a tsx shebang
+	// resolving a different executable through /usr/bin/env.
+	node, e := exec.LookPath("node")
+	must(e == nil, "node executable missing")
+	cmd := exec.Command(node, "--import", filepath.Join(cliRoot, "node_modules/tsx/dist/loader.mjs"), filepath.Join(filepath.Dir(source), "direct-interop.mts"))
 	cmd.Env = append(os.Environ(), "HARNESS_CLI_ROOT="+cliRoot)
 	out, _ := cmd.StdoutPipe()
 	cmd.Stderr = os.Stderr
@@ -63,22 +67,33 @@ func main() {
 			<-done
 		}
 	}()
-	sc := bufio.NewScanner(out)
-	var ready map[string]any
-	for sc.Scan() {
-		if json.Unmarshal(sc.Bytes(), &ready) == nil && ready["port"] != nil {
-			break
-		}
-	}
-	must(ready["port"] != nil, "fixture port missing")
+	readyCh := make(chan map[string]any, 1)
 	go func() {
+		sc := bufio.NewScanner(out)
+		sent := false
 		for sc.Scan() {
+			var frame map[string]any
+			if !sent && json.Unmarshal(sc.Bytes(), &frame) == nil && frame["port"] != nil {
+				readyCh <- frame
+				sent = true
+			}
+		}
+		if !sent {
+			readyCh <- nil
 		}
 	}()
+	var ready map[string]any
+	select {
+	case ready = <-readyCh:
+		must(ready["port"] != nil, "fixture exited before announcing its port")
+	case <-time.After(20 * time.Second):
+		panic("fixture startup timed out after 20 seconds")
+	}
 	base := fmt.Sprintf("http://127.0.0.1:%.0f", ready["port"])
+	httpClient := &http.Client{Timeout: 35 * time.Second}
 	api := func(path string, body any) map[string]any {
 		b, _ := json.Marshal(body)
-		r, e := http.Post(base+path, "application/json", bytes.NewReader(b))
+		r, e := httpClient.Post(base+path, "application/json", bytes.NewReader(b))
 		if e != nil {
 			panic(e)
 		}
@@ -147,6 +162,51 @@ func main() {
 	state := api("/state", nil)
 	must(state["submits"] == float64(1), "duplicate dispatched")
 	must(state["backend"] == false && state["commander"] == true, "direct requires backend or recap presence absent")
+	// Exercise the production controller over the authenticated encrypted link.
+	dispatched := 0
+	var nextQuestion string
+	voice := harness.NewVoiceController(s, harness.VoiceCallbacks{
+		OnDispatch: func(agentID, runID string) {
+			must(agentID == "agent-one" && runID != "", "voice response route missing")
+			dispatched++
+		},
+		OnResponse: func(agentID, runID, text string) { nextQuestion = text },
+	})
+	must(!voice.State().Enabled, "voice default is not off")
+	mode, e := voice.SetMode(ctx, false, "agent-one")
+	must(e == nil && !mode.Enabled && mode.AgentID == "agent-one", "voice select while off failed")
+	mode, e = voice.SetMode(ctx, true, "agent-one")
+	must(e == nil && mode.Enabled, "voice enable failed")
+	e = voice.Submit(ctx, "voice interop", "voice-one", mode.Generation)
+	must(e == nil, fmt.Sprintf("voice encrypted submit failed: %v", e))
+	must(voice.Submit(ctx, "voice interop", "voice-one", mode.Generation) == nil, "voice duplicate failed")
+	state = api("/state", nil)
+	must(state["submits"] == float64(2) && dispatched == 1, "voice duplicate dispatched")
+	api("/question", map[string]any{"requestId": "voice-question", "questions": []harness.VoiceQuestion{
+		{Key: "branch", Q: "Which branch?", Options: []string{"main", "feature"}},
+		{Key: "checks", Q: "Which checks?", Options: []string{"lint", "tests"}, Multi: true},
+	}})
+	question, e := voice.Question(ctx)
+	must(e == nil && question["questionRequestId"] == "voice-question", "voice live question failed")
+	must(voice.Submit(ctx, "feature", "voice-answer-one", mode.Generation) == nil, "voice first answer failed")
+	must(nextQuestion == "Which checks?\nlint, tests", "voice sequential question prompt missing")
+	state = api("/state", nil)
+	must(len(state["answers"].([]any)) == 0, "partial questionnaire dispatched")
+	must(voice.Submit(ctx, "lint, tests", "voice-answer-two", mode.Generation) == nil, "voice second answer failed")
+	state = api("/state", nil)
+	answers := state["answers"].([]any)
+	must(len(answers) == 1 && dispatched == 2, "questionnaire did not dispatch exactly once")
+	answer := answers[0].(map[string]any)
+	values := answer["answers"].(map[string]any)
+	must(answer["agentId"] == "agent-one" && answer["requestId"] == "voice-question" && values["branch"] == "feature" && values["checks"] == "lint, tests", "voice answer wire contract mismatch")
+	question, e = voice.Question(ctx)
+	_, noQuestion := question["question"]
+	must(e == nil && noQuestion && question["question"] == nil, "answered question remained open")
+	_, e = voice.SetMode(ctx, false, "")
+	must(e == nil, "voice disable failed")
+	must(voice.Submit(ctx, "must not send", "voice-off", mode.Generation) != nil, "disabled voice accepted input")
+	state = api("/state", nil)
+	must(state["submits"] == float64(2) && len(state["answers"].([]any)) == 1, "disabled voice sent mutation")
 	api("/restart", nil)
 	wait("CLI restart reconnect", func() bool { return s.Status().Connected })
 	time.Sleep(3500 * time.Millisecond)
@@ -174,5 +234,5 @@ func main() {
 	_, e = s2.Request(ctx2, harness.Frame{"type": "agents.list"})
 	must(e != nil, "revoked access remained")
 	must(s2.Unpair() == nil && !s2.Status().Paired, "OS unpair")
-	fmt.Println("PASS real mDNS + actual BackendSocket/E2eeManager + direct client + Go Service: wrong-code failure/retry, pair, encrypted list/send/dedupe, CLI and OS restart reconnect, revoke/unpair. Backend never connected.")
+	fmt.Println("PASS real mDNS + actual BackendSocket/E2eeManager + direct client + Go Service: wrong-code failure/retry, pair, encrypted list/send/dedupe, voice selection/submit/dedupe/sequential question answers/off, CLI and OS restart reconnect, revoke/unpair. Backend never connected.")
 }

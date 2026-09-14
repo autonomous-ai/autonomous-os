@@ -460,6 +460,14 @@ nối gọn và bố cục card hai cột, chuyển thành một cột khi nhỏ
 - Unpair cần xác nhận, gọi `DELETE /api/harness` có xác thực admin. Harness dùng giao thức
   pairing/phiên E2EE gốc và giữ khóa riêng, độc lập với Buddy.
 
+**Giọng nói Harness-only**
+- Khi có máy đã ghép đôi, `HarnessCard.tsx` hiển thị `HarnessVoiceMode.tsx`. Bấm **Refresh agents**, chọn đúng **Voice agent**, rồi bật **Harness-only voice**. Lựa chọn này độc lập với target hội thoại của skill `harness-use`.
+- Yêu cầu bằng giọng nói đi thẳng đến agent Harness đó, kết quả vẫn qua TTS thiết bị. Chat dạng text giữ hành vi thông thường. Mode và target nằm trong RAM; khởi động lại service thiết bị sẽ tắt mode và xóa target.
+- Trạng thái mode cục bộ refresh mỗi 2 giây. Danh sách agent chỉ được lấy khi yêu cầu qua `GET /api/harness/agents`; chọn target và bật/tắt dùng `PUT /api/harness/voice-mode`. Khi offline, UI khóa lấy danh sách/bật mode và giải thích không thể delivery; vẫn tắt được mode đang bật. Tắt mode không hủy task đã gửi.
+- Delivery chưa rõ khóa đổi target và mutation giọng nói Harness tiếp theo. **Check delivery** đọc receipt hiện có, không gửi lại. **Continue without retrying** yêu cầu xác nhận rồi gửi `resolution:"do_not_retry"` cùng `idempotencyKey` pending hiện tại chính xác đến `/api/harness/voice-mode/resolve`; task trước vẫn có thể chạy.
+- `HarnessQuestion.tsx` refresh câu hỏi live mỗi 10 giây khi khả dụng, kèm nút **Refresh agent question**. Form hỗ trợ option chọn một, chọn nhiều và text tự nhập. **Send answer** gửi đủ key câu hỏi chính xác với request ID live. Người dùng cũng có thể trả lời lần lượt bằng giọng nói.
+- Mọi thay đổi, lấy danh sách agent và endpoint câu hỏi/receipt đều cần xác thực admin. Xem [Tích hợp Harness](harness_vi.md#chế-độ-giọng-nói-harness-only) về API, đổi mode giữa capture và yêu cầu rollout OS/HAL đồng bộ.
+
 Section Pairing có mặt với người dùng không-debug.
 
 **Display Eyes**

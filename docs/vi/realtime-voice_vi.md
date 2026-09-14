@@ -48,6 +48,22 @@ Tool `delegate_to_main` được orchestrator đăng ký tự động (`orchestr
 
 ### Điều khiển agent qua Harness bằng giọng nói
 
+OS Monitor có thêm **Harness-only voice**, mode trong RAM mặc định tắt sau khi
+OS-server khởi động lại. Khi bật, HAL lấy snapshot `/api/harness/voice-mode`
+trước capture và gửi STT đã chốt, bỏ wake word, qua OS tới thẳng agent Harness
+đã chọn. Capture đó không stream audio tới realtime model, không gọi main
+runtime/`harness-use`; OS bỏ qua local intent và gate ready/busy của main runtime.
+Vẫn giữ kiểm tra wake word, VAD, noise và echo. Kết quả voice tiếp tục dùng
+lifecycle/recap Harness và TTS của thiết bị. Text chat và sensing nền giữ route cũ.
+
+Mỗi capture mang generation của mode. OS từ chối generation cũ thay vì giao câu
+nói cho agent vừa được chọn. Phiên realtime live đang chạy kiểm tra mode mỗi
+500 ms và đóng khi mode đổi; câu bị ngắt không được phát lại. Đọc mode có timeout
+500 ms và chặn dispatch nếu endpoint không truy cập được hoặc trả dữ liệu sai,
+nên phải triển khai OS và HAL cùng nhau. Luồng bình thường bên dưới áp dụng khi
+mode tắt. Xem [tích hợp Harness](harness_vi.md) về API quản lý, trả lời câu hỏi
+có cấu trúc và xử lý delivery chưa rõ kết quả.
+
 Yêu cầu nêu Harness, một agent trên Mac, Codex, Claude, project, worktree, session,
 hoặc yêu cầu agent dùng browser được delegate về runtime chính, realtime không nói
 kèm. Kể cả research phổ thông bằng browser, ví dụ nhờ agent tìm nhà hàng, cũng đi

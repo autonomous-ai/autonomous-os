@@ -28,6 +28,7 @@ type harnessReplyRequest struct {
 
 // registerHarnessRoutes exposes management to the owner and commands only to the device runtime.
 func (s *Server) registerHarnessRoutes(api *gin.RouterGroup, ctx context.Context) {
+	s.initializeHarnessVoice(ctx)
 	group := api.Group("harness")
 	group.Use(func(c *gin.Context) {
 		if s.harnessService == nil {
@@ -45,6 +46,7 @@ func (s *Server) registerHarnessRoutes(api *gin.RouterGroup, ctx context.Context
 	group.GET("voice-followup", localOnlyMiddleware(), func(c *gin.Context) {
 		c.JSON(http.StatusOK, serializers.ResponseSuccess(gin.H{"active": s.HarnessVoiceFollowup()}))
 	})
+	s.registerHarnessVoiceRoutes(group)
 	// Pairing codes and pinned E2EE identities authenticate the direct socket.
 	group.GET("ws", func(c *gin.Context) {
 		s.harnessService.ServeHTTP(c.Writer, c.Request)
@@ -73,6 +75,9 @@ func (s *Server) registerHarnessRoutes(api *gin.RouterGroup, ctx context.Context
 		if err := s.harnessService.Unpair(); err != nil {
 			c.JSON(http.StatusInternalServerError, serializers.ResponseError("Could not remove Harness pairing"))
 			return
+		}
+		if s.harnessVoice != nil {
+			_, _ = s.harnessVoice.SetMode(c.Request.Context(), false, "")
 		}
 		c.JSON(http.StatusOK, serializers.ResponseSuccess(gin.H{"unpaired": true}))
 	})
@@ -516,9 +521,16 @@ func harnessEventText(kind string, frame harness.Frame) string {
 		questions, _ := payload["questions"].([]any)
 		for _, raw := range questions {
 			question, _ := raw.(map[string]any)
-			for _, key := range []string{"question", "prompt", "text"} {
+			for _, key := range []string{"q", "question", "prompt", "text"} {
 				if text, _ := question[key].(string); strings.TrimSpace(text) != "" {
-					return strings.TrimSpace(text)
+					text = strings.TrimSpace(text)
+					options, _ := question["options"].([]any)
+					for _, rawOption := range options {
+						if option, ok := rawOption.(string); ok && strings.TrimSpace(option) != "" {
+							text += "\n" + option
+						}
+					}
+					return text
 				}
 			}
 		}

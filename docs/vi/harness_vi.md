@@ -58,6 +58,38 @@ CLI chịu trách nhiệm tìm và kết nối lại. OS chờ socket được x
 
 Danh tính OS và pin của một máy tính lưu tại `configDir/harness/trust.json` (thư mục 0700, file 0600). Ghi nguyên tử và từ chối symlink. Trust file sai định dạng làm khởi tạo thất bại, không âm thầm tạo danh tính mới. Pin đã xác thực ở vòng ba là tạm trong năm phút để phục hồi khi mất PAKE cuối qua `e2e_hello` gốc; thiết lập phiên thành công xác nhận pin. Marker trực tiếp là `harness-device-direct-v1`; pin relay dùng E2EE gốc tương thích được chấp nhận, pin mật mã thử nghiệm trước đó thì không.
 
+## Chế độ giọng nói Harness-only
+
+OS Monitor → Pairing → Harness cung cấp đường định tuyến giọng nói thứ hai. Chọn agent bằng ID cụ thể trên máy tính đã ghép đôi rồi bật **Harness-only voice**. OS chỉ giữ cờ bật/tắt, máy/agent đích và generation định tuyến trong RAM; khởi động lại service sẽ tắt mode và cần chọn lại target. Lựa chọn này độc lập với target hội thoại mà Python helper `harness-use` lưu. Nó không chạy theo tab đang mở trên Harness Desktop và không nhờ model chọn agent.
+
+Luồng là microphone → kiểm tra wake-word/VAD, noise và echo hiện có → STT text cuối → controller Harness trong OS → agent CLI đã chọn. HAL đọc mode chính thức trước capture và bỏ qua Realtime khi bật; OS dispatch trước local intent và các gate readiness/busy của runtime chính. Mỗi capture mang generation định tuyến. Thay đổi mode hoặc target làm capture cũ hết hiệu lực, không chuyển hay phát lại text sang agent khác. Đổi mode giữa một live capture sẽ ngắt capture đó, không replay. Web/MQTT chat dạng text và ambient sensing giữ đường xử lý hiện có.
+
+Text thông thường dùng operation `turn.send` hiện có. Route phản hồi đã đăng ký, lifecycle callback, lấy recap và TTS trên thiết bị vẫn là đường output. Tắt mode không hủy task đã gửi; kết quả của task đó vẫn có thể đến. Máy Harness offline gây lỗi delivery, không chuyển ngầm sang agent chính trên thiết bị; target và cờ bật vẫn được giữ để chủ thiết bị kết nối lại hoặc tắt mode.
+
+HAL bắt buộc đọc được mode trước dispatch: timeout, response sai định dạng hoặc lỗi HTTP đều chặn dispatch thay vì đoán agent nào nhận microphone. Cần triển khai OS và HAL tương thích cùng nhau: OS cũ chưa có `/api/harness/voice-mode` cũng khiến HAL này từ chối dispatch giọng nói. Đây là yêu cầu rollout, không phải thao tác deploy tự động.
+
+### API điều khiển cục bộ
+
+Các path dưới đây dùng response envelope chuẩn của OS và không cho cache response:
+
+| Method và path | Xác thực | Hành vi |
+|---|---|---|
+| `GET /api/harness/voice-mode` | Admin hoặc loopback thực sự | Đọc `{enabled,generation,machineId,agentId,pending?,error?}`. |
+| `PUT /api/harness/voice-mode` | Admin | Đặt `{enabled,agentId?}`; kiểm tra agent được chọn trên máy đang ghép đôi. Vẫn tắt được khi offline. |
+| `GET /api/harness/agents` | Admin | Refresh rõ ràng `agents.list`, trả `{machineId,agents}`. |
+| `GET /api/harness/voice-mode/question` | Admin | Đọc câu hỏi live của agent đã chọn dưới dạng `{agentId,questionRequestId,questions}` hoặc `{question:null}`. |
+| `POST /api/harness/voice-mode/answer` | Admin | Gửi `{questionRequestId,answers}` với đầy đủ key câu hỏi chính xác. |
+| `POST /api/harness/voice-mode/receipt` | Admin | Đối chiếu request chưa rõ delivery bằng receipt key hiện có; không gửi lại. |
+| `POST /api/harness/voice-mode/resolve` | Admin | Gửi `{resolution:"do_not_retry",idempotencyKey}` khớp request pending hiện tại để tiếp tục mà không retry request đó. |
+
+Request pending lưu `{idempotencyKey,machineId,agentId,runId}`. Controller chống trùng local voice run và chỉ gửi mỗi mutation một lần. Delivery chưa rõ chặn mutation tiếp theo đến khi receipt xác định kết quả hoặc chủ thiết bị giải quyết đúng pending key đó. Một câu nói tiếp theo có thể kiểm tra receipt trước, nhưng không được tự gửi lại task cũ. Tiếp tục không retry không chứng minh task trước đã dừng; nó vẫn có thể chạy. Pending nằm trong RAM nên khởi động lại service không cung cấp khôi phục receipt bền vững.
+
+Câu hỏi có cấu trúc tái sử dụng `status.openQuestion` và `question.answer` của CLI. Mỗi dòng giữ `{key,q,options,multi}`. Câu trả lời bằng giọng nói điền lần lượt từng câu hỏi; OS đọc câu hỏi tiếp theo chưa được trả lời và gửi toàn bộ map khi thu đủ. Form Monitor có thể trả lời cả bộ câu hỏi live bằng chọn một, chọn nhiều hoặc nhập text; các nhãn chọn nhiều được nối bằng `, ` đúng định dạng CLI. Request ID và answer key chính xác được kiểm tra với câu hỏi live; nếu câu hỏi đổi thì phải refresh. Đường này không dùng model trên thiết bị để diễn giải tùy ý cách nói khác của option; CLI nhận text câu trả lời đã nhận dạng.
+
+UI poll mode cục bộ mỗi 2 giây và câu hỏi live mỗi 10 giây khi khả dụng, có nút refresh agent, refresh câu hỏi, kiểm delivery hoặc tiếp tục không retry. UI khóa đổi target khi delivery chưa rõ và hiển thị lỗi kết nối/request.
+
+Đã đối chiếu contract hiện có với checkout `autonomous-harness` revision `84a23e5f8d358b78d24ba92ce185b482b5f97ebc`, gồm `cli/src/lib/autonomous-device/service.ts` và `cli/src/lib/askQuestion.ts`. Mode này chỉ thêm API và định tuyến OS; không thêm operation CLI, pairing flow hoặc transport. Kiểm chứng trong repo không xác nhận giọng nói trên thiết bị thật hay tính tương thích với CLI đang được cài.
+
 ## Thao tác agent mã hóa
 
 ### Chọn agent theo task

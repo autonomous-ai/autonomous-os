@@ -58,6 +58,38 @@ CLI owns discovery and reconnect. OS waits for incoming authenticated sockets; t
 
 The OS identity and one computer pin are stored in `configDir/harness/trust.json` (directory 0700, file 0600). Writes are atomic and symlinks are refused. A malformed trust file fails initialization instead of silently generating a replacement identity. Round-three authenticated pins are provisional for five minutes so a lost final PAKE message can recover through original `e2e_hello`; successful session establishment confirms the pin. The direct protocol marker is `harness-device-direct-v1`; compatible original-E2EE relay pins are accepted, but the earlier experimental custom-crypto pins are not.
 
+## Harness-only voice mode
+
+OS Monitor → Pairing → Harness offers a second voice route. Select an explicit agent ID from the paired computer and enable **Harness-only voice**. OS stores the enabled flag, target machine/agent and routing generation only in RAM; a service restart starts with the mode off and requires selecting the target again. This selection is independent of the conversation target retained by the Python `harness-use` helper. It does not follow the active Harness Desktop tab or ask a model to choose an agent.
+
+The route is microphone → existing wake-word/VAD, noise and echo checks → final STT text → OS Harness controller → selected CLI agent. HAL reads the authoritative mode before capture and bypasses Realtime when enabled; OS dispatches before local intents and the main runtime's readiness/busy gates. Each capture carries its routing generation. A mode or target change invalidates an older capture rather than moving or replaying its text into another agent. Changing mode during an active live capture interrupts it without replay. Typed Web/MQTT chat and ambient sensing retain their existing routes.
+
+Normal text uses the existing `turn.send` operation. Registered response routes, lifecycle callbacks, recap retrieval and device TTS remain the output path. Turning the mode off does not cancel work already sent, and its response can still arrive. An offline Harness computer produces a delivery error rather than falling back to the main device agent; the target and enabled flag remain available so the owner can reconnect or disable the mode.
+
+The mode lookup is mandatory for HAL dispatch: timeout, malformed response or HTTP failure fails closed instead of guessing which agent owns the microphone. Deploy matching OS and HAL versions together: an older OS without `/api/harness/voice-mode` also causes this HAL to refuse voice dispatch. This is a rollout requirement, not an automatic deployment step.
+
+### Local control API
+
+All paths below use the normal OS response envelope and return non-cacheable responses:
+
+| Method and path | Authentication | Behavior |
+|---|---|---|
+| `GET /api/harness/voice-mode` | Administrator or strict loopback | Read `{enabled,generation,machineId,agentId,pending?,error?}`. |
+| `PUT /api/harness/voice-mode` | Administrator | Set `{enabled,agentId?}`; validate the selected agent on the currently paired computer. Disable remains available offline. |
+| `GET /api/harness/agents` | Administrator | Explicitly refresh `agents.list`, returning `{machineId,agents}`. |
+| `GET /api/harness/voice-mode/question` | Administrator | Read the selected agent's live question as `{agentId,questionRequestId,questions}` or `{question:null}`. |
+| `POST /api/harness/voice-mode/answer` | Administrator | Submit `{questionRequestId,answers}` using every exact question key. |
+| `POST /api/harness/voice-mode/receipt` | Administrator | Reconcile the unresolved request with its existing receipt key; never resend. |
+| `POST /api/harness/voice-mode/resolve` | Administrator | Submit `{resolution:"do_not_retry",idempotencyKey}` matching the current pending request to resume without retrying it. |
+
+A pending request records `{idempotencyKey,machineId,agentId,runId}`. The controller deduplicates local voice runs and sends each mutation once. Unknown delivery blocks further mutation until a receipt establishes an outcome or the owner explicitly resolves that exact pending key. A later voice request can check the previous receipt, but it cannot silently resend the previous task. Continuing without retrying does not prove the previous task stopped; it may still run. Pending state is in RAM, so service restart does not provide durable receipt recovery.
+
+Structured questions reuse CLI `status.openQuestion` and `question.answer`. Each row preserves `{key,q,options,multi}`. Spoken replies fill questions sequentially; OS speaks the next unanswered prompt and submits the complete map once collected. The Monitor form can answer the entire live question set with single selections, multiple selections or typed text; multiple selected labels are joined with `, `, as the CLI expects. Request IDs and exact answer keys are checked against the live question, so a changed question must be refreshed. This route does not use a device model to interpret arbitrary spoken option paraphrases; the CLI receives the spoken answer text.
+
+The UI polls local mode every 2 seconds and live questions every 10 seconds while available, with explicit buttons to refresh agents, refresh questions, check delivery or continue without retrying. It disables target changes while delivery is unresolved and displays connection/request errors.
+
+The existing owner contract was checked against local `autonomous-harness` revision `84a23e5f8d358b78d24ba92ce185b482b5f97ebc`, including `cli/src/lib/autonomous-device/service.ts` and `cli/src/lib/askQuestion.ts`. This mode adds OS APIs and routing only; it does not add a CLI operation, pairing flow or transport. Repository verification does not establish physical-device voice or installed-CLI compatibility.
+
 ## Encrypted agent operations
 
 ### Task-based agent selection
