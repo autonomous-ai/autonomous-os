@@ -1,9 +1,19 @@
 ---
 name: wellbeing
-description: "Proactive coaching across hydration, breaks, meals, posture and environmental comfort (with the environment skill). Use when an [activity] event fires (message starts with `[activity] Activity detected: activity labels.` — labels include drink, break, celebrate, the fatigue label \"yawning\", or sedentary raw labels like \"using computer\"; sedentary events may also carry a [posture_summary: {...}] block when the user has been at the computer long enough for posture to drift), or when the user asks if they should drink water / take a break / fix their posture. Thresholds are computed from per-user logs, never guessed."
+description: "Proactive coaching across hydration, breaks, meals, posture and environmental comfort (with the environment skill). Use when an [activity] event fires (message starts with `[activity] Activity detected: activity labels.` — labels include drink, break, celebrate, the fatigue label \"yawning\", or sedentary raw labels like \"using computer\"; sedentary events may also carry a [posture_summary: {...}] block when the user has been at the computer long enough for posture to drift), or when the user reports feeling tired, headachy, dizzy, stuffy or unable to focus, or asks if they should drink water / take a break / fix their posture. Activity-reminder thresholds are computed from per-user logs, never guessed."
 ---
 
 # Wellbeing
+
+## User-reported discomfort
+
+For “I feel tired and have a headache”, dizziness, a stuffy room or difficulty
+concentrating, read [reference/discomfort.md](reference/discomfort.md). Respond
+to what the user says; do not invent an activity event or run the activity/log
+router below. Environmental evidence is optional: if the capability is absent
+or unknown, or readings are unavailable, silently omit that part and continue
+ordinary support. Do not load a missing environment skill, poll hardware, or
+announce sensor setup problems in response to a wellbeing concern.
 
 ## Environmental care
 
@@ -14,8 +24,9 @@ that skill, apply these care rules and finish there; do not recursively reload
 or hand the event back between skills. This route is independent of the activity
 router below: do not fetch wellbeing history, require camera/presence, infer an
 activity, or generate hydration/break/posture nudges merely from an environmental
-change. If the environment capability or fresh data is absent, report that
-limitation on direct questions; do not invent readings. Use whichever fresh
+change. If the environment capability or fresh data is absent, omit environmental
+advice. Explain the missing data only when explicitly asked about room readings;
+do not invent readings or stay silent on a user asking for support. Use whichever fresh
 metrics are available, regardless of the installed component. Missing or null
 metrics do not invalidate other readings or establish a hardware fault; do not
 require gas indices before giving supported temperature or CO₂ information.
