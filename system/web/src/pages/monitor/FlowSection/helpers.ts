@@ -1604,6 +1604,14 @@ export function turnIO(turn: Turn): {
       }
     }
   }
+  // Frames the AGENT produced during the turn — /camera/snapshot, /api/vision/look,
+  // and the search sweep's centred, boxed frame — belong on the card as much as
+  // the sensing frame that opened it. Until now they were only drawn inside the
+  // flow diagram SVG, so "find my keyboard" answered on the card with no picture
+  // while the picture sat one click away.
+  for (const url of cameraSnapshotURLs(turn.events)) {
+    if (!snapshotUrls.includes(url)) snapshotUrls.push(url);
+  }
   return { input, output, hwOutput, snapshotUrls, audioUrls, poseBucket };
 }
 
