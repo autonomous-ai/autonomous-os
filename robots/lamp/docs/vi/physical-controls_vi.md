@@ -571,7 +571,7 @@ gọi adapter nhỏ `harness_voice_client.py`, POST một lần đến API chỉ
 `/api/harness/voice-mode/gesture` của Go với `gestureId` riêng. Go quản lý mode
 và chọn agent focus. Không tự retry HTTP; timeout sẽ báo chưa xác nhận được kết quả.
 
-Thành công, HAL đọc “Chế độ Harness — {agent}” hoặc “Chế độ thiết bị” theo
+Thành công, HAL đọc “Đã bật Harness, đang nói chuyện với {agent}.” hoặc “Đã tắt Harness, trở về trợ lý trên thiết bị.” theo
 `stt_language` (Anh, Việt, Trung giản thể hoặc phồn thể; phrase tập trung trong
 `hal/i18n.py`). LED pulse xanh khi bật hoặc màu trung tính khi tắt trong thời gian
 ngắn, không lưu trạng thái LED mới. Chưa kết nối/không có agent được báo lỗi theo
