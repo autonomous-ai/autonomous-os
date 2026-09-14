@@ -1,5 +1,9 @@
 # Flow Monitor (tiếng Việt)
 
+Card voice Harness-only đọc `sensing_input.data.route: "harness_only"` để hiện **Harness** thay cho **Agent**. Sau khi gom event theo run ID, `harness_response` có nội dung đóng đúng lượt đó, cung cấp output và chi tiết node Response, kể cả khi tải lịch sử JSONL. Chỉ gửi input thành công thì vẫn active. Không ghép phản hồi Harness vào input gần đó có run ID khác; trạng thái lỗi đã có vẫn giữ lỗi. DONE nghĩa là đã nhận phản hồi cuối, không xác nhận phát âm thanh hay tác vụ thực tế thành công.
+
+Kiểm tra hồi quy: chạy `node --test system/web/tests/flow-harness.test.cjs` từ repo root (sau khi cài dependency web).
+
 Codex steering ghi `turn_merged` theo run ID của follow-up, với
 `data.parent_run_id` trỏ đến host đang active. Follow-up giữ card input riêng
 và mở pipeline chung của host khi được chọn. Trạng thái theo host đến khi có
