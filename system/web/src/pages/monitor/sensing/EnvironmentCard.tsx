@@ -16,6 +16,10 @@ export function EnvironmentCard() {
   const { data, error } = useEnvironment();
 
   const stale = !!error || data?.stale !== false;
+  const sampleTimestamp = data?.sample?.timestamp;
+  const hasSampleTimestamp = sampleTimestamp != null && Number.isFinite(sampleTimestamp);
+  const hasGasIndexes = !!data?.sources?.voc_index || !!data?.sources?.nox_index
+    || data?.sample?.voc_index != null || data?.sample?.nox_index != null;
   const componentIssues = Object.entries(data?.components ?? {}).filter(([, status]) => status.enabled !== false && status.state !== "disabled" && (status.stale || status.last_error));
   const label = error ? "Unavailable" : !data ? "Loading…" : data.stale && data.state === "ready" ? "Stale data" : stateLabels[data.state];
   return (
@@ -34,27 +38,26 @@ export function EnvironmentCard() {
       {data?.state === "disabled" && <p style={{ color: "var(--lm-text-muted)" }}>Environment sensors are not enabled on this device.</p>}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 18 }}>
         {measurements.map(([key, title, unit]) => {
-          if (key === "co2_ppm" && !data?.components?.scd41 && !(key in (data?.sample ?? {}))) return null;
-          if (data?.components && key !== "co2_ppm" && !data.components.sen55 && !(key in (data.sample ?? {}))) return null;
           const value = data?.sample?.[key];
           const source = data?.sources?.[key];
           const sourceStatus = source ? data?.components?.[source] : undefined;
-          const unavailable = stale || sourceStatus?.stale === true;
+          const unavailable = stale || (sourceStatus != null && (sourceStatus.stale || sourceStatus.state !== "ready"));
+          const hasValue = value != null && Number.isFinite(value);
           const timestamp = data?.metric_timestamps?.[key];
           return <div key={key}>
             <div style={{ color: "var(--lm-text-muted)", fontSize: 12 }}>{title}</div>
             <div style={{ fontSize: 24, marginTop: 4, color: unavailable ? "var(--lm-text-muted)" : "var(--lm-text)" }}>
-              {!unavailable && value != null && Number.isFinite(value) ? value.toLocaleString(undefined, { maximumFractionDigits: 2 }) : "—"}
+              {!unavailable && hasValue ? value.toLocaleString(undefined, { maximumFractionDigits: 2 }) : "—"}
               <span style={{ fontSize: 12, marginLeft: 6 }}>{unit}</span>
             </div>
-            {source && <div style={{ color: "var(--lm-text-muted)", fontSize: 11, marginTop: 4 }} title={timestamp != null ? new Date(timestamp * 1000).toLocaleString() : undefined}>{source.toUpperCase()}{unavailable ? " · No fresh data" : ""}</div>}
+            {source && <div style={{ color: "var(--lm-text-muted)", fontSize: 11, marginTop: 4 }} title={timestamp != null && Number.isFinite(timestamp) ? new Date(timestamp * 1000).toLocaleString() : undefined}>{source.toUpperCase()}{unavailable || !hasValue ? " · No fresh data" : ""}</div>}
           </div>;
         })}
       </div>
       <p style={{ color: "var(--lm-text-muted)", fontSize: 12, marginTop: 18 }}>
-        {data?.sample ? `Last measurement: ${new Date(data.sample.timestamp * 1000).toLocaleString()}` : "Waiting for a measurement."}
-        {stale && data?.sample ? " · No fresh data" : ""}
-        {" · VOC and NOx are indexes, not ppm."}
+        {hasSampleTimestamp ? `Last measurement: ${new Date(sampleTimestamp * 1000).toLocaleString()}` : "Waiting for a measurement."}
+        {stale && hasSampleTimestamp ? " · No fresh data" : ""}
+        {hasGasIndexes ? " · VOC and NOx are indexes, not ppm." : ""}
       </p>
       <EnvironmentDiagnostics data={data} />
     </section>

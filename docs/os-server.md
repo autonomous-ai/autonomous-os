@@ -80,7 +80,11 @@ as `environment.update` to `/api/sensing/event`. Its top-level `environment`
 config is read/written through admin `GET`/`PUT /api/device/config`: evaluation
 10 seconds, sustain 60 seconds, cooldown 900 seconds, retry 60 seconds, maximum
 sample age 10 seconds by default. Metric deltas and warm-up are configurable.
-SCD41 adds measured `co2_ppm` under the same capability, with default change
+Registered HAL components share one metric schema: SEN55 + SCD41 or SEN63C
+use the same API, initial report and change flow. Per-component JSON `enabled`
+flags control hardware; OS does not select sensor models. The status sample
+always has nine nullable metric keys: unsupported or unavailable values are
+null and ignored by detection. Measured `co2_ppm` has default change
 200 ppm and warm-up 60 seconds. Explicit `metrics` maps still replace the map
 and retain the configured subset. Composite snapshots include `components`,
 `sources`, and `metric_timestamps`: freshness and continuity are checked per
@@ -103,7 +107,7 @@ startup paths while retaining change detection. HAL's optional per-component
 warm-up after an OS-only restart; invalid/stale components remain excluded.
 The `environment` skill interprets measurements and consults `wellbeing` for
 proportionate advice. Hardware acquisition and OS change policy are separate;
-this feature does not enable Lamp's commented capability or disabled SEN55/SCD41.
+this feature does not enable Lamp's commented capability or disabled SEN55/SCD41/SEN63C.
 See [Lamp environment sensing](../robots/lamp/docs/environment-sensing.md#os-change-policy-and-agent-access)
 for defaults, validation, payloads and use cases.
 

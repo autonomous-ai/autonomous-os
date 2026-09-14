@@ -15,7 +15,10 @@ or hand the event back between skills. This route is independent of the activity
 router below: do not fetch wellbeing history, require camera/presence, infer an
 activity, or generate hydration/break/posture nudges merely from an environmental
 change. If the environment capability or fresh data is absent, report that
-limitation on direct questions; do not invent readings.
+limitation on direct questions; do not invent readings. Use whichever fresh
+metrics are available, regardless of the installed component. Missing or null
+metrics do not invalidate other readings or establish a hardware fault; do not
+require gas indices before giving supported temperature or CO₂ information.
 
 For an automatic environmental update, use only activity, sleep/busy state and
 preferences already available in context. Respect requests for quiet and avoid
