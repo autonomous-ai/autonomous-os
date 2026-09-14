@@ -2,7 +2,7 @@ import { useState } from "react";
 import { usePolling } from "../../../hooks/usePolling";
 import { fetchEnvironmentStatus, type EnvironmentStatus } from "./environmentApi";
 
-export function useEnvironment() {
+export function useEnvironment(enabled = true) {
   const [data, setData] = useState<EnvironmentStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -13,7 +13,7 @@ export function useEnvironment() {
     } catch (cause) {
       setError(signal.aborted ? "Sensor request timed out." : cause instanceof Error ? cause.message : "Unable to reach sensor.");
     }
-  }, 3000);
+  }, 3000, { enabled });
 
-  return { data, error };
+  return { data: enabled ? data : null, error: enabled ? error : null };
 }

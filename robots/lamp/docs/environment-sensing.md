@@ -231,19 +231,18 @@ as zero. OS change detection and agent interpretation are described below.
 
 ## Local web view
 
-[Device → Sensing](../../../docs/web-ui.md#58-device--sensing) shows an
-**Environment** card only when the device explicitly declares the
-`environment` capability. Loading or missing capabilities do not trigger
-sensor requests. The Sensing menu is available without debug mode and
-supports devices with `vision`, `environment`, or both, and camera cards
-remain gated by `vision`.
+[Device → Sensing](../../../docs/web-ui.md#58-device--sensing) and its
+**Environment** card always remain visible without debug mode. Missing or
+loading capabilities show `N/A` measurements without sensor requests. Camera
+cards remain gated by `vision`.
 
-The browser polls `GET /api/hardware/environment/status` every 3 seconds via
+When `environment` is declared, the browser polls
+`GET /api/hardware/environment/status` every 3 seconds via
 the existing authenticated OS hardware proxy, which forwards to HAL
 `GET /environment/status`. This refresh interval is separate from the HAL
 polling configuration below. The card shows state, the nine shared metric fields
 (including CO₂ in ppm), source labels, sample
-time, stale status, and errors. Missing or stale values appear as `—` and
+time, stale status, and errors. Missing or stale values appear as `N/A` and
 request failures are shown explicitly so old values are not presented as live
 readings. Component failures do not hide healthy readings. Bus, device status
 register, and timing configuration are in a collapsed technical section per
@@ -251,8 +250,9 @@ component under `status.components`; legacy single-sensor snapshots remain suppo
 thresholds or historical storage. OS → agent events come from the independent
 worker below, not browser refreshes.
 
-The card stays hidden with Lamp's current commented capability. Declaring the
-capability while leaving `enabled: false` makes the card show the disabled state.
+With Lamp's current commented capability, the card shows `N/A` without polling.
+Declaring the capability while leaving `enabled: false` shows the disabled state
+and `N/A` values. UI visibility does not enable acquisition or agent events.
 
 ## MQTT reads
 

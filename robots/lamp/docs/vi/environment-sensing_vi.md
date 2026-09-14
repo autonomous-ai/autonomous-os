@@ -224,25 +224,26 @@ là số không. Phần dưới mô tả phát hiện thay đổi ở OS và di�
 
 ## Hiển thị trên web local
 
-[Device → Sensing](../../../../docs/vi/web-ui_vi.md#58-device--sensing) chỉ hiện
-card **Environment** khi device khai báo rõ capability `environment`.
-Đang tải hoặc thiếu capability thì không gửi request tới cảm biến. Menu Sensing
-không yêu cầu bật debug; hỗ trợ device có `vision`, `environment`
-hoặc cả hai, còn card camera vẫn yêu cầu `vision`.
+[Device → Sensing](../../../../docs/vi/web-ui_vi.md#58-device--sensing) và
+card **Environment** luôn hiện, không cần debug. Đang tải hoặc thiếu capability
+thì số đo hiện `N/A`, không gửi request tới sensor. Card camera vẫn yêu cầu
+`vision`.
 
-Trình duyệt đọc `GET /api/hardware/environment/status` mỗi 3 giây qua proxy
+Khi có capability `environment`, trình duyệt đọc
+`GET /api/hardware/environment/status` mỗi 3 giây qua proxy
 hardware của OS đã có xác thực, chuyển tới HAL `GET /environment/status`.
 Chu kỳ làm mới này độc lập với cấu hình nhịp đọc HAL bên dưới. Card hiển thị
 trạng thái, chín trường chỉ số chung (gồm CO₂ ppm), nhãn nguồn, thời điểm sample, trạng thái dữ liệu cũ và lỗi.
-Giá trị thiếu hoặc cũ hiện `—`; request thất bại được hiển thị rõ để không
+Giá trị thiếu hoặc cũ hiện `N/A`; request thất bại được hiển thị rõ để không
 trình bày số đo cũ như dữ liệu hiện tại. Lỗi component không che số đo còn tốt.
 Bus, thanh ghi trạng thái và timing nằm trong mục kỹ thuật thu gọn theo từng
 component ở `status.components`; vẫn hỗ trợ snapshot một sensor kiểu cũ. Đây là màn hình
 chỉ đọc, không có ngưỡng tốt/xấu hay lưu lịch sử. Event OS → agent do worker
 độc lập bên dưới tạo, không do trình duyệt làm mới.
 
-Card vẫn ẩn với capability đang comment của Lamp. Nếu khai báo capability
-nhưng giữ `enabled: false`, card hiển thị trạng thái đã tắt.
+Với capability đang comment của Lamp, card hiện `N/A` và không polling. Nếu
+khai báo capability nhưng giữ `enabled: false`, card hiển thị trạng thái đã tắt
+và số đo `N/A`. Hiển thị UI không bật thu nhận hay event agent.
 
 ## Đọc qua MQTT
 

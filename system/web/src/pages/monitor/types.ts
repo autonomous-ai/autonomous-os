@@ -293,7 +293,7 @@ export const NAV: NavEntry[] = [
       { id: "face-owners", label: "Users",     icon: "☺", cap: Cap.Vision }, // user roster needs the camera
       { id: "camera",      label: "Camera",    icon: "◎", cap: Cap.Vision },
       // Either input can populate Sensing; each card gates its own polling.
-      { id: "sensing", label: "Sensing", icon: "◉", cap: [Cap.Vision, Cap.Environment] },
+      { id: "sensing", label: "Sensing", icon: "◉" },
       // Analytics hidden from the menu for now (section code kept; re-enable
       // by uncommenting).
       // { id: "analytics",   label: "Analytics", icon: "⊟" },
