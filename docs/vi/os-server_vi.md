@@ -23,7 +23,9 @@ gồm `PUT /api/harness/voice-mode`, `GET /api/harness/agents`,
 kiểm tra generation, câu trả lời có cấu trúc và khôi phục receipt.
 
 `POST /api/harness/voice-mode/gesture` chỉ nhận loopback thực sự, với
-`{gestureId:"<UUID>"}` từ physical-action worker của HAL. Go bật/tắt chung mode
+`{gestureId:"<UUID>"}` từ physical-action worker của HAL sau khi nhả cú vuốt
+MPR121 phải sang trái. HAL xác định hướng theo `swipe_axis` trái sang phải
+vật lý; vuốt trái sang phải dùng action sleep hiện có. Go bật/tắt chung mode
 RAM và trả snapshot. Khi bật, giữ focus hợp lệ hoặc gọi `focus.ensure` rồi chờ
 Desktop xác nhận; focus không khả dụng thì mode vẫn tắt. Tắt vẫn được khi offline.
 Lỗi action trả `data.code` để HAL đọc phrase theo ngôn ngữ cấu hình. Cache RAM

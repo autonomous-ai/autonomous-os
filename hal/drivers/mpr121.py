@@ -76,6 +76,7 @@ class _GestureEvent:
     gesture_id: int
     count: int = 0
     held_s: float = 0.0
+    direction: int = 0
 
 
 class _GestureRecognizer:
@@ -223,7 +224,7 @@ class _SpatialGestureRecognizer:
             logger.info("MPR121 event=swipe_resolved gesture_id=%d direction=%s displacement=%.2f valid=%s",
                         self._gesture_id, self._direction, self._peak, valid)
             if valid:
-                events.append(_GestureEvent("swipe", self._gesture_id))
+                events.append(_GestureEvent("swipe", self._gesture_id, direction=self._direction))
             # Restart the button detector only after the spatial cycle ends.
             self._button = _GestureRecognizer(0)
             self._button.update(False, now)
@@ -344,81 +345,6 @@ class _SpatialGestureRecognizer:
         return events
 
 
-class _HarnessChordRecognizer:
-    """Claim a two-pad contact before normal gestures, until full release.
-
-    Raw chord recognition cancels other outcomes immediately. Only an exact,
-    uninterrupted pair can fire after debounce plus 1.5 seconds. Extra pads or
-    a dropped finger cancel the outcome without falling back to a button hold.
-    """
-
-    HOLD_S = 1.5
-
-    def __init__(self, config, normal):
-        self._config = config
-        self._normal = normal
-        self._pair = sum(1 << pad for pad in config.harness_voice_chord)
-        self._selected = sum(1 << pad for pad in config.electrodes)
-        self._delay = config.debounce_ms / 1000
-        self._seeded = False
-        self._blocked = False
-        self._claimed = False
-        self._since = None
-        self._release_since = None
-        self._gesture_id = 0
-
-    def cancel(self):
-        self._normal.cancel()
-        self._blocked = True
-        self._claimed = False
-        self._since = None
-        self._release_since = None
-
-    def _normal_update(self, mask, now):
-        value = mask if isinstance(self._normal, _SpatialGestureRecognizer) else bool(mask)
-        return self._normal.update(value, now)
-
-    def update(self, mask, now):
-        mask &= self._selected
-        if not self._seeded:
-            self._seeded = True
-            self._blocked = bool(mask)
-            self._normal_update(mask, now)
-            return []
-        if self._blocked or self._claimed:
-            return self._update_claimed(mask, now)
-        if mask & self._pair == self._pair:
-            self._normal.cancel()
-            self._claimed = True
-            self._gesture_id += 1
-            self._since = now if mask == self._pair else None
-            return [_GestureEvent("invalidate", self._gesture_id),
-                    _GestureEvent("release", self._gesture_id)]
-        return self._normal_update(mask, now)
-
-    def _update_claimed(self, mask, now):
-        if not mask:
-            self._since = None
-            if self._release_since is None:
-                self._release_since = now
-            if now - self._release_since >= self._delay:
-                self._blocked = self._claimed = False
-                self._since = self._release_since = None
-                # Seed a fresh detector: cancel() intentionally disarms the old
-                # button, whose stable state may already be released.
-                self._normal = (_SpatialGestureRecognizer(self._config) if self._config.swipe_axis is not None
-                                else _GestureRecognizer(self._config.debounce_ms))
-                self._normal_update(0, now)
-            return []
-        self._release_since = None
-        if mask != self._pair:
-            self._since = None
-        if self._claimed and self._since is not None and now - self._since >= self.HOLD_S + self._delay:
-            self._since = None
-            return [_GestureEvent("harness_voice", self._gesture_id)]
-        return []
-
-
 def single_click_action(*, source, announce):
     from hal.drivers.button_actions import single_click_action as action
     action(source=source, announce=announce)
@@ -461,15 +387,13 @@ class MPR121Handler:
         self._hold_led = None
 
     def _new_detector(self):
-        normal = (_SpatialGestureRecognizer(self._config) if self._config.swipe_axis is not None
-                  else _GestureRecognizer(self._config.debounce_ms))
-        if self._config.harness_voice_chord is not None:
-            return _HarnessChordRecognizer(self._config, normal)
-        return normal
+        if self._config.swipe_axis is not None:
+            return _SpatialGestureRecognizer(self._config)
+        return _GestureRecognizer(self._config.debounce_ms)
 
     def _sample(self):
         touched = self._read_touched()
-        return self._last_raw_mask if (self._config.swipe_axis is not None or self._config.harness_voice_chord is not None) else touched
+        return self._last_raw_mask if self._config.swipe_axis is not None else touched
 
     def _feedback(self):
         with self._gesture_lock:
@@ -588,7 +512,7 @@ class MPR121Handler:
         for event in self._detector.update(touched, now):
             if self._stop.is_set():
                 return
-            logger.info("MPR121 event=gesture kind=%s gesture_id=%d count=%d held_s=%.3f", event.kind, event.gesture_id, event.count, event.held_s)
+            logger.info("MPR121 event=gesture kind=%s gesture_id=%d count=%d held_s=%.3f direction=%d", event.kind, event.gesture_id, event.count, event.held_s, event.direction)
             if event.kind == "invalidate":
                 self._invalidate_pending("new_touch_or_hold")
             elif event.kind == "hold_tier":
@@ -596,11 +520,11 @@ class MPR121Handler:
             elif event.kind == "release":
                 if self._hold_led is not None:
                     self._hold_led.release()
-            elif event.kind in ("single", "cue", "triple", "hold", "swipe", "harness_voice"):
+            elif event.kind in ("single", "cue", "triple", "hold", "swipe"):
                 with self._gesture_lock:
                     if self._stop.is_set():
                         return
-                    if event.kind in ("hold", "triple", "swipe", "harness_voice") and (self._action_busy or not self._pending.empty()):
+                    if event.kind in ("hold", "triple", "swipe") and (self._action_busy or not self._pending.empty()):
                         logger.warning("MPR121 event=action_discarded gesture_id=%d action=%s reason=action_worker_busy", event.gesture_id, event.kind)
                         continue
                     try:
@@ -627,6 +551,18 @@ class MPR121Handler:
             self._close_bus()
             logger.info("MPR121 event=worker_stopped worker=poll")
 
+    def _execute_swipe(self, direction):
+        """The declared axis runs left to right; route one resolved swipe."""
+        if self._hold_led is not None and self._hold_led.commit(0) is False:
+            return
+        if direction == 1:
+            swipe_action(source="MPR121")
+        elif direction == -1:
+            from hal.drivers.harness_voice_action import toggle_harness_voice
+            toggle_harness_voice()
+        else:
+            logger.warning("MPR121 swipe discarded: missing or invalid direction %s", direction)
+
     def _execute(self, event):
         if event.kind == "single":
             single_click_action(source="MPR121", announce=False)
@@ -635,12 +571,7 @@ class MPR121Handler:
         elif event.kind == "triple":
             triple_click_action(source="MPR121")
         elif event.kind == "swipe":
-            if self._hold_led is not None and self._hold_led.commit(0) is False:
-                return
-            swipe_action(source="MPR121")
-        elif event.kind == "harness_voice":
-            from hal.drivers.harness_voice_action import toggle_harness_voice
-            toggle_harness_voice()
+            self._execute_swipe(event.direction)
         elif event.kind == "hold":
             if self._feedback().commit(event.held_s) is False:
                 logger.info("MPR121 event=action_discarded gesture_id=%d action=hold reason=feedback_cancelled", event.gesture_id)
@@ -657,7 +588,7 @@ class MPR121Handler:
                     continue
                 with self._gesture_lock:
                     valid = not self._stop.is_set() and generation == self._generation
-                    if event.kind in ("hold", "triple", "swipe", "harness_voice") and time.monotonic() - queued_at > DOUBLE_CLICK_WINDOW:
+                    if event.kind in ("hold", "triple", "swipe") and time.monotonic() - queued_at > DOUBLE_CLICK_WINDOW:
                         valid = False
                     if valid:
                         self._action_busy = True

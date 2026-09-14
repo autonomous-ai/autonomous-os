@@ -56,8 +56,9 @@ runtime/`harness-use`; OS bỏ qua local intent và gate ready/busy của main r
 Vẫn giữ kiểm tra wake word, VAD, noise và echo. Kết quả voice tiếp tục dùng
 lifecycle/recap Harness và TTS của thiết bị. Text chat và sensing nền giữ route cũ.
 
-Trên đèn MPR121, giữ đồng thời điện cực 0 và 11 trong 1,5 giây để bật/tắt
-qua physical-action worker hiện có của HAL và API loopback Go
+Trên đèn MPR121, vuốt phải sang trái rồi nhả để bật/tắt mode; vuốt trái sang
+phải gọi sleep. Hướng vuốt dựa trên `swipe_axis` theo thứ tự trái sang phải
+vật lý. HAL chuyển gesture qua physical-action worker hiện có và API loopback Go
 `POST /api/harness/voice-mode/gesture`. Go giữ focus hiện tại; chỉ khi bật mà
 chưa focus mới yêu cầu chọn agent cục bộ đầu tiên và chờ Desktop xác nhận.
 Chuẩn bị focus thất bại thì mode vẫn tắt; tắt vẫn được khi offline. HAL đọc

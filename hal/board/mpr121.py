@@ -17,7 +17,6 @@ class MPR121Config:
     poll_ms: int = 10
     debounce_ms: int = 30
     swipe_axis: tuple[int, ...] | None = None
-    harness_voice_chord: tuple[int, int] | None = None
 
     def __post_init__(self):
         for name in ("bus", "address", "touch_threshold", "release_threshold", "poll_ms", "debounce_ms"):
@@ -40,19 +39,12 @@ class MPR121Config:
         if len(set(self.electrodes)) != len(self.electrodes):
             raise ValueError("electrodes must not contain duplicates")
         object.__setattr__(self, "electrodes", tuple(self.electrodes))
-        if self.harness_voice_chord is not None:
-            chord = self.harness_voice_chord
-            if (not isinstance(chord, (list, tuple)) or len(chord) != 2
-                    or any(type(i) is not int or i not in self.electrodes for i in chord)
-                    or chord[0] == chord[1]):
-                raise ValueError("harness_voice_chord must contain two distinct selected electrodes")
-            object.__setattr__(self, "harness_voice_chord", tuple(chord))
         if self.swipe_axis is not None:
             axis = self.swipe_axis
             if (not isinstance(axis, (list, tuple)) or not 2 <= len(axis) <= 12
                     or any(type(i) is not int or i not in self.electrodes for i in axis)
                     or len(set(axis)) != len(axis)):
-                raise ValueError("swipe_axis must contain 2..12 distinct selected electrodes in physical order")
+                raise ValueError("swipe_axis must contain 2..12 distinct selected electrodes in physical left-to-right order")
             object.__setattr__(self, "swipe_axis", tuple(axis))
 
 
@@ -70,9 +62,14 @@ def load_mpr121_config(device_dir: str, board_id: str) -> Optional[MPR121Config]
         configs = {}
         allowed = {field.name for field in fields(MPR121Config)} | {"enabled"}
         for board, entry in data["boards"].items():
-            if not isinstance(entry, dict) or set(entry) - allowed:
+            if not isinstance(entry, dict):
                 raise ValueError(f"{board}: invalid MPR121 configuration fields")
             values = dict(entry)
+            # Older device declarations may outlive HAL during a component OTA.
+            # Ignore the retired chord setting; it no longer enables a gesture.
+            values.pop("harness_voice_chord", None)
+            if set(values) - allowed:
+                raise ValueError(f"{board}: invalid MPR121 configuration fields")
             enabled = values.pop("enabled", True)
             if type(enabled) is not bool:
                 raise ValueError(f"{board}: enabled must be a boolean")

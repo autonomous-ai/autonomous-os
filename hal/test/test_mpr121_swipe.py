@@ -35,7 +35,9 @@ class TestSpatialGestures(unittest.TestCase):
             samples = [(1 + i * .04, (1 << pad) | (1 << (pad + direction)))
                        for i, pad in enumerate(order)]
             samples.append((1.4, 0))
-            self.assertEqual(kinds(replay(samples)), ["swipe"])
+            events = replay(samples)
+            self.assertEqual(kinds(events), ["swipe"])
+            self.assertEqual([e.direction for e in events if e.kind == "swipe"], [direction])
 
     def test_two_pads_handoff_and_independent_taps(self):
         self.assertEqual(kinds(replay([(1, 1), (1.05, 0), (1.09, 2), (1.16, 0)], axis=(0, 1))), ["swipe"])
@@ -87,12 +89,55 @@ class TestSpatialGestures(unittest.TestCase):
         feedback = mock.Mock()
         handler._hold_led = feedback
         with mock.patch("hal.drivers.button_actions.swipe_action") as action:
-            handler._execute(_GestureEvent("swipe", 1))
+            handler._execute(_GestureEvent("swipe", 1, direction=1))
             feedback.commit.assert_called_once_with(0)
             action.assert_called_once_with(source="MPR121")
             feedback.commit.return_value = False
-            handler._execute(_GestureEvent("swipe", 2))
+            handler._execute(_GestureEvent("swipe", 2, direction=1))
             self.assertEqual(action.call_count, 1)
+
+    def test_direction_routes_to_one_action_after_release(self):
+        for direction in (1, -1):
+            handler = MPR121Handler(MPR121Config(bus=0, swipe_axis=tuple(range(12))))
+            order = range(8) if direction == 1 else range(11, 3, -1)
+            samples = [(1 + i * .04, (1 << pad) | (1 << (pad + direction)))
+                       for i, pad in enumerate(order)]
+            # Holding the final pad cannot retrigger or become a button hold.
+            samples.append((5, 0))
+            events = [e for e in replay(samples) if e.kind in ACTIONS]
+            self.assertEqual([e.kind for e in events], ["swipe"])
+            with mock.patch("hal.drivers.button_actions.swipe_action") as sleep, \
+                    mock.patch("hal.drivers.harness_voice_action.toggle_harness_voice") as harness:
+                for event in events:
+                    handler._execute(event)
+                self.assertEqual(sleep.call_count, int(direction == 1))
+                self.assertEqual(harness.call_count, int(direction == -1))
+
+    def test_harness_swipe_respects_cancelled_feedback_and_invalid_direction(self):
+        handler = MPR121Handler(MPR121Config(bus=0, swipe_axis=(0, 1)))
+        handler._hold_led = mock.Mock()
+        handler._hold_led.commit.return_value = False
+        with mock.patch("hal.drivers.harness_voice_action.toggle_harness_voice") as harness, \
+                mock.patch("hal.drivers.button_actions.swipe_action") as sleep:
+            handler._execute(_GestureEvent("swipe", 1, direction=-1))
+            harness.assert_not_called()
+            handler._hold_led.commit.return_value = True
+            with self.assertLogs("hal.drivers.mpr121", level="WARNING"):
+                handler._execute(_GestureEvent("swipe", 2))
+            harness.assert_not_called()
+            sleep.assert_not_called()
+
+    def test_axis_order_defines_left_and_right(self):
+        samples = [(1 + i * .06, 1 << pad) for i, pad in enumerate(range(5))] + [(1.4, 0)]
+        forward = [e.direction for e in replay(samples) if e.kind == "swipe"]
+        reversed_axis = [e.direction for e in replay(samples, axis=tuple(reversed(range(12)))) if e.kind == "swipe"]
+        self.assertEqual(forward, [1])
+        self.assertEqual(reversed_axis, [-1])
+
+    def test_tap_after_harness_swipe_remains_a_tap(self):
+        samples = [(1 + i * .04, 1 << pad) for i, pad in enumerate(range(11, 3, -1))]
+        samples += [(1.4, 0), (2.2, 4), (2.3, 0)]
+        self.assertEqual(kinds(replay(samples)), ["swipe", "single", "cue"])
 
     def test_optional_axis_validation(self):
         self.assertIsNone(MPR121Config(bus=0).swipe_axis)

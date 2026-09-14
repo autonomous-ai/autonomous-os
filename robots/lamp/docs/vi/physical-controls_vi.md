@@ -262,7 +262,6 @@ trước khi dùng; HAL không tự sửa boot overlay:
       "address": 90,
       "electrodes": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
       "swipe_axis": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
-      "harness_voice_chord": [0, 11],
       "touch_threshold": 2,
       "release_threshold": 1,
       "autoconfig": true,
@@ -273,7 +272,7 @@ trước khi dùng; HAL không tự sửa boot overlay:
 }
 ```
 
-`bus` bắt buộc với entry bật. Các giá trị còn lại ở trên trừ `swipe_axis` và `harness_voice_chord` là mặc định;
+`bus` bắt buộc với entry bật. Các giá trị còn lại ở trên trừ `swipe_axis` là mặc định;
 địa chỉ 90 nghĩa là `0x5A` (cho phép 90–93). Electrode được chọn phải là
 các số không trùng từ 0–11, có ít nhất một electrode. Ngưỡng phải thỏa
 `0 <= release_threshold < touch_threshold <= 255`. Polling cho phép 1–1000 ms;
@@ -304,19 +303,21 @@ MPR121 dùng chung ngưỡng cử chỉ từ `hal/drivers/button_gestures.py` v�
 | Giữ 2–<5 s rồi nhả | `hold_release_action` vào sleepy. |
 | Giữ 5–<10 s rồi nhả | `hold_release_action` shutdown. |
 | Giữ ≥10 s rồi nhả | `hold_release_action` factory reset. |
-| Vuốt một trong hai hướng rồi nhả | `swipe_action` sleep; contact di chuyển này không gọi click hoặc action destructive. |
+| Vuốt trái sang phải rồi nhả | `swipe_action` sleep; contact di chuyển này không gọi click hoặc action destructive. |
+| Vuốt phải sang trái rồi nhả | Bật/tắt Harness voice qua API Go; contact di chuyển này không gọi click hoặc action destructive. |
 
 Contact ngắn kéo dài dưới 2 s. Cửa sổ click không phân giải khi còn bất kỳ
 electrode được chọn nào đang chạm. Nhả sau giữ xóa chuỗi click đang chờ.
 Action destructive không chạy khi còn giữ.
 
-### Vuốt MPR121 để sleep
+### Vuốt MPR121 theo hướng
 
 `swipe_axis` là list tùy chọn gồm 2–12 electrode khác nhau, thuộc `electrodes`,
-được xếp theo thứ tự trên dải. Lamp khai báo E0…E11 dựa trên chuỗi log E11→E0,
-E0→E8 và E9→E0; xác định được thứ tự, chưa gán đầu nào là bên trái vật lý.
-Cả hai hướng gọi `swipe_action(source="MPR121")` trong `button_actions.py`,
-cùng action sleep với TTP223. Không cần vuốt hết toàn bộ dải. Thiếu/null
+theo thứ tự **trái sang phải** vật lý. Lamp mặc định E0…E11. Kiểm tra chiều
+lắp bar: nếu E11 nằm bên trái, đảo trục hiện có thành E11…E0. Tăng vị trí
+trên trục (`+1`, trái sang phải) gọi `swipe_action(source="MPR121")` trong
+`button_actions.py` để sleep. Giảm vị trí (`-1`, phải sang trái) gọi action
+bật/tắt Harness voice. Không cần vuốt hết toàn bộ dải. Thiếu/null
 `swipe_axis` chỉ tắt nhận diện vuốt, giữ nhận diện click/hold cũ.
 Cài HAL hỗ trợ trước khi deploy JSON có trường này.
 
@@ -325,8 +326,8 @@ Debounce contact vẫn mặc định 30 ms; vùng chạm dùng tối đa 5 ms �
 Detector theo dõi vùng chạm đã debounce thay vì đếm mỗi electrode chạm chồng
 thành một tap. Chạm nhiều electrode nhưng đứng yên vẫn giữ hành vi click/hold.
 Khi phát hiện di chuyển, hủy kết quả tap/hold đang chờ và phản hồi LED giữ cho
-contact đó; vuốt hợp lệ gọi sleep một lần sau khi nhả. Di chuyển đảo chiều hoặc
-không hợp lệ không gọi reboot/shutdown/reset. Chờ nhả 120 ms để nối các đoạn
+contact đó; vuốt hợp lệ gọi action theo hướng một lần sau khi nhả. Di chuyển
+đổi hướng trong cùng contact hoặc không hợp lệ không gọi reboot/shutdown/reset. Chờ nhả 120 ms để nối các đoạn
 chuyển tiếp ngắn giữa electrode; khi bật swipe, tap/hold phân giải sau khoảng
 chờ này. Contact giữ từ lúc boot vẫn bị bỏ qua. Log ghi hướng, độ dịch chuyển,
 kết quả swipe và thực thi action. Test phát lại chuỗi mask đã đo cùng các ca
@@ -557,19 +558,13 @@ Phrase cố tình ngắn — chúng fire giữa lúc vuốt nên cần cảm gi�
 Các handler đầu vào được khởi động trong startup lifespan `hal/server.py`. Thiếu cấu hình MPR121 tùy chọn thì bỏ qua driver đó; cấu hình bật nhưng sai bị từ chối khi startup. Lỗi driver phần cứng được log mà không dừng các handler còn lại.
 
 
-### Cử chỉ bật/tắt Harness voice
+### Vuốt bật/tắt Harness voice
 
-Giữ đồng thời **electrode 0 và 11** (hai đầu strip theo khai báo Lamp) trong
-**1,5 giây sau debounce 30 ms**. Mode đổi một lần khi đang giữ; phải nhả toàn bộ
-electrode đã chọn mới thực hiện lại. Trường wiring tùy chọn
-`harness_voice_chord` gồm đúng hai electrode khác nhau thuộc `electrodes`;
-không khai báo thì tắt cử chỉ này. Cần kiểm tra vị trí pad thực tế trên device;
-index electrode là contract wiring, không phải vị trí tự suy đoán.
-
-Ngay khi nhận cặp pad, recognizer hủy click/hold/swipe còn chờ và LED mức giữ;
-contact này không thể thành sleep, reboot, shutdown hay reset lúc nhả. Chạm thêm
-pad hoặc ngắt cặp đang giữ sẽ hủy toggle đến khi nhả hết. Pad giữ sẵn lúc startup
-và lỗi polling/I²C không được kích hoạt. Các thao tác khác giữ hành vi hiện có.
+Vuốt **phải sang trái** rồi nhả để bật/tắt Harness voice một lần. `swipe_axis`
+hiện có xác định hướng vật lý như mô tả ở trên. Không còn cử chỉ giữ hai pad
+hay cấu hình wiring riêng cho Harness. Chạm đơn và giữ đứng yên vẫn theo hành
+vi hiện có; khi nhận di chuyển, hủy kết quả tap/hold của contact đó. Contact
+đã giữ từ startup và lỗi polling/I²C không được kích hoạt swipe.
 
 Python nhận signal rồi đưa vào action worker có sẵn. `harness_voice_action.py`
 gọi adapter nhỏ `harness_voice_client.py`, POST một lần đến API chỉ nhận loopback
