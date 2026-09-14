@@ -728,8 +728,11 @@ và API status cho agent local được mô tả trong
 [tài liệu môi trường Lamp](../../robots/lamp/docs/vi/environment-sensing_vi.md#chính-sách-thay-đổi-của-os-và-api-cho-agent).
 
 Card hiển thị trạng thái cảm biến, thời điểm sample, trạng thái dữ liệu
-cũ, lỗi và số đo theo component được khai báo: nhiệt độ (°C), độ ẩm (%),
-PM1 / PM2.5 / PM4 / PM10 (µg/m³), VOC index, NOx index và CO₂ SCD41 (ppm).
+cũ, lỗi và đủ chín chỉ số chuẩn: nhiệt độ (°C), độ ẩm (%),
+PM1 / PM2.5 / PM4 / PM10 (µg/m³), VOC index, NOx index và CO₂ (ppm).
+UI dựa vào key chỉ số và metadata nguồn, không phụ thuộc tên model cảm biến,
+nên đổi component cấu hình (ví dụ sang SEN63C) vẫn dùng cùng card. Chỉ số không
+được hỗ trợ hoặc chưa sẵn sàng vẫn hiện `—` tương ứng giá trị `null`.
 Nhãn nguồn chỉ rõ component; từng chỉ số có timestamp riêng. Component lỗi
 không che số đo còn tốt từ component khác. Giá trị chưa khả dụng hiện `—`, không hiện số 0.
 Số đo cũ cũng được thay bằng `—`; request thất bại được hiển thị là lỗi để
@@ -737,7 +740,9 @@ không nhầm số đo trước đó với dữ liệu hiện tại. Không gán
 tốt/xấu, ngưỡng hay cảnh báo. Mục kỹ thuật thu gọn hiển thị trạng thái, bus I2C,
 thanh ghi trạng thái và timing đọc/thử lại/đánh dấu cũ/phục hồi của từng
 component trong `status.components`. Vẫn hỗ trợ snapshot một sensor kiểu cũ
-với `status.timing` cấp cao nhất.
+với `status.timing` cấp cao nhất và nhãn cảm biến chung. Sample hoặc timestamp
+sample là `null` sẽ hiện trạng thái chờ, không hiển thị ngày epoch. Giải thích về
+gas index chỉ xuất hiện khi VOC hoặc NOx có nguồn được khai báo hoặc giá trị đo.
 
 Lamp vẫn để `environment` được comment trong `ROBOT.md` và SEN55/SCD41 tắt trong
 file JSON tương ứng, nên card này ẩn cho đến khi capability được khai báo. Xem

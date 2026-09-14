@@ -1,13 +1,14 @@
-# Environmental sensing — SEN55 and SCD41
+# Environmental sensing — interchangeable components
 
-SEN55 is an environmental sensor: particulate matter, humidity, temperature,
-and VOC/NOx indexes. HAL exposes it as an optional `environment` capability,
-with its own driver, lifecycle, and HTTP snapshots alongside camera and audio.
+HAL exposes environmental sensors through one optional `environment` capability,
+with independent component drivers, lifecycles, and HTTP snapshots alongside camera and audio.
 The integration provides HAL acquisition, read-only web/MQTT snapshots, and
 configurable OS detection of sustained environmental changes for the agent.
 SEN55 does not measure touch, pressure, CO₂, CO or O₂. Optional SCD41 adds
 measured `co2_ppm` to the same capability; its temperature/humidity wire values
-are not published, so SEN55 remains their source.
+are not published. SEN63C provides PM, temperature, humidity and measured CO₂
+in one component; it does not provide VOC/NOx indices. No supported component
+measures CO or O₂. Software consumes metric keys and provenance, not sensor names.
 
 ## Current scope: readings and sustained-change events
 
@@ -68,15 +69,23 @@ HAL does not mount its endpoints or load its wiring until that line is uncomment
 The prepared declaration uses driver `composite`, `routes: [environment]`, and
 `required: false`.
 
-Component selection belongs to `robots/<device>/environment.json`:
+HAL discovers registered component drivers and reads their per-device, per-board
+JSON configuration: `sen55.json`, `scd41.json`, and `sen63c.json`. Each
+`enabled` flag controls that component; a disabled or missing board entry does
+not access hardware. There is no separate component selection list; an old
+`environment.json` is ignored. Each enabled component runs its own worker.
 
-```json
-{"components": ["sen55", "scd41"]}
-```
-
-Either component may be selected independently. A missing selection file keeps
-the legacy SEN55-only behavior; unknown or duplicate names are rejected. Each
-selected component has an independent worker and configuration.
+To replace SEN55 + SCD41 with SEN63C, set the former two entries to
+`"enabled": false` and SEN63C to `"enabled": true` with confirmed wiring, then
+restart HAL. Two enabled components cannot own the same metric: SEN55 + SEN63C
+or SCD41 + SEN63C is rejected as a configuration error instead of silently
+overwriting readings. Disabled components do not participate in this check.
+Adding future hardware requires its driver, registered metric ownership and
+board config; the environment API and downstream flow remain shared.
+The binding lives in `hal/drivers/environment/registry.py`: config loader,
+driver (`start`, `read`, `close`), timing defaults and supported metric keys.
+Setup and `build-orangepi` extract the full device-profile archive, so new
+sensor JSON files need no sensor-specific installation branch.
 
 SEN55 configuration belongs to `robots/<device>/sen55.json`, using a
 `boards` map like `mpr121.json`. The target board is OrangePi (`orangepi_sun60`); Lamp ships its entry disabled
@@ -137,17 +146,34 @@ installation before choosing a value; a 60-second OS warm-up is not calibration.
 See the [SCD4x datasheet](https://sensirion.com/media/documents/48C4B7FB/67FE0194/CD_DS_SCD4x_Datasheet_D1.pdf).
 Actual SCD41 wiring and measurements have not been verified on hardware.
 
-HAL lifecycle logs use component keys `[sen55]` and `[scd41]`: disabled/start,
+## SEN63C combined component
+
+`robots/lamp/sen63c.json` uses the same `boards` map and ships disabled, with
+`bus`, `sda_pin`, and `scl_pin` null. Confirm its wiring before enabling; the
+SEN55 pin note above does not establish SEN63C wiring. The driver uses I2C
+address `0x6B`, verifies the SEN63C product type, checks word CRCs, and reads
+PM1/PM2.5/PM4/PM10, temperature, humidity and measured `co2_ppm`. VOC/NOx remain
+null in the shared sample. CO₂ can be unavailable during the first 22–24 seconds
+while other readings are already usable; OS warm-up applies independently.
+
+Defaults are `poll_interval_s: 1`, `retry_interval_s: 5`, `stale_after_s: 5`,
+and `no_data_timeout_s: 30`. `automatic_self_calibration: null` preserves the
+sensor setting; explicit true/false configures CO₂ ASC. This is separate from
+OS warm-up and change thresholds. No forced recalibration or persistence command
+is sent. See [Sensirion's SEN63C driver reference](https://sensirion.github.io/python-i2c-sen63c/api.html).
+SEN63C wiring and readings have not been verified on hardware.
+
+HAL lifecycle logs use component keys `[sen55]`, `[scd41]`, and `[sen63c]`: disabled/start,
 measurement start, retry failures and stop are visible at INFO (failures may
 be WARNING or ERROR). Every valid sample is logged at INFO with timestamp and
 measured values; polls without a new sample log waiting state and last-data
-age. `[environment]` records selected components/simulation or missing capability.
+age. `[environment]` records registered components/simulation or missing capability.
 
 To follow logs on the device, use either its log file or systemd journal:
 
 ```sh
-tail -F /var/log/hal/server.log | grep --line-buffered -E '\[(environment|sen55|scd41)\]'
-journalctl -u hal -f | grep --line-buffered -E '\[(environment|sen55|scd41)\]'
+tail -F /var/log/hal/server.log | grep --line-buffered -E '\[(environment|sen55|scd41|sen63c)\]'
+journalctl -u hal -f | grep --line-buffered -E '\[(environment|sen55|scd41|sen63c)\]'
 ```
 
 These are operator instructions; no device connection is performed by setup
@@ -166,17 +192,19 @@ controls. They are available when the robot loads the `environment` route.
 
 States are `disabled`, `starting`, `ready`, `error`, and `stopped`. Each entry
 in `components` retains its own state, enabled flag, sample, error, age, bus
-and timing. Non-ready or expired component readings are unavailable; SEN55
+and timing. Non-ready or expired component readings are unavailable; a component
 with a nonzero status register is also excluded from the combined sample.
 
 The group is `ready` and not stale when at least one component contributes a
 fresh value. `partial: true` means another enabled component is unavailable;
 a disabled component alone does not make the group partial. Healthy values
-remain usable when another sensor fails. With no usable sample, group `sample`
-and `age_s` are `null` and `stale` is true. The flat `sample` includes fields
-owned by selected components, with unavailable values set to `null`.
+remain usable when another sensor fails. The group `sample` is always an object
+with all nine metric keys below plus `timestamp`. Unsupported, disabled, not-yet-ready
+and stale values are `null`. With no usable values, all metrics, `sample.timestamp`
+and `age_s` are `null`, and `stale` is true. Raw per-component samples may retain
+old values for diagnostics; they are not current aggregate readings.
 
-`sources` maps each metric to its component; `metric_timestamps` records each
+`sources` maps metrics owned by enabled components to their component; `metric_timestamps` records each
 usable metric's Unix timestamp. Group `sample.timestamp` and `age_s` describe
 the newest contributing data, not every metric. Consumers must check source
 status and metric freshness independently. Bus/timing are also exposed at the
@@ -187,16 +215,16 @@ A sample contains:
 
 | Field | Meaning |
 |---|---|
-| `timestamp` | Unix time in seconds |
+| `timestamp` | Unix time in seconds, or `null` without a usable reading |
 | `pm1_0_ug_m3`, `pm2_5_ug_m3`, `pm4_0_ug_m3`, `pm10_ug_m3` | Particle mass concentration in µg/m³ |
 | `humidity_pct` | Relative humidity in % |
 | `temperature_c` | Temperature in °C |
 | `voc_index`, `nox_index` | Unitless gas indexes, not ppm measurements |
-| `co2_ppm` | Measured carbon dioxide concentration in ppm, from SCD41 only |
+| `co2_ppm` | Measured carbon dioxide concentration in ppm, from an enabled CO₂ component |
 
-SEN55 `device_status` remains in `components.sen55.sample` for diagnostics;
-a SEN55-only group also retains `sample.device_status` for compatibility.
-It is not a combined CO₂ sensor status.
+Sensor-specific `device_status` remains inside each component sample for
+diagnostics. Consumers use the shared metric schema and component state rather
+than treating a device register as a combined sensor status.
 
 Unavailable measurement values are JSON `null`; callers must not treat them
 as zero. OS change detection and agent interpretation are described below.
@@ -213,8 +241,8 @@ remain gated by `vision`.
 The browser polls `GET /api/hardware/environment/status` every 3 seconds via
 the existing authenticated OS hardware proxy, which forwards to HAL
 `GET /environment/status`. This refresh interval is separate from the HAL
-polling configuration below. The card shows state, available component fields
-(up to nine measurements including CO₂ in ppm), source labels, sample
+polling configuration below. The card shows state, the nine shared metric fields
+(including CO₂ in ppm), source labels, sample
 time, stale status, and errors. Missing or stale values appear as `—` and
 request failures are shown explicitly so old values are not presented as live
 readings. Component failures do not hide healthy readings. Bus, device status
@@ -245,7 +273,7 @@ See the [MQTT protocol](../../../docs/mqtt.md) for payloads and response rules.
 
 ## Timing configuration
 
-Each board entry accepts these optional timing fields (seconds). The following defaults are for SEN55; SCD41 defaults are listed above. Values must be finite positive numbers; `stale_after_s` and `no_data_timeout_s` must exceed `poll_interval_s`. Restart HAL after editing. These control HAL polling, not the sensor’s internal sampling rate.
+Each board entry accepts these optional timing fields (seconds). The following defaults are for SEN55; other component defaults are listed above. Values must be finite positive numbers; `stale_after_s` and `no_data_timeout_s` must exceed `poll_interval_s`. Restart HAL after editing. These control HAL polling, not the sensor’s internal sampling rate.
 
 ```json
 {
@@ -260,7 +288,7 @@ Each board entry accepts these optional timing fields (seconds). The following d
 
 OS interpretation is configured under the top-level `environment` object in
 `config/config.json`, through the existing admin `GET`/`PUT /api/device/config`.
-This is separate from HAL timing in `sen55.json` and `scd41.json`. Defaults are:
+This is separate from HAL timing in each component JSON. Defaults are:
 
 ```json
 {
@@ -397,10 +425,10 @@ not require camera observations, identity, activity logs or hydration counters.
   Without a baseline, explain that a comparison is unavailable. Do not promise
   a timed recheck, start polling, or invent persistent history.
 
-VOC/NOx indices are relative, not ppm or chemical identification. SEN55 cannot
-support CO₂/O₂ claims. SCD41 supports CO₂ statements only when its measured
-`co2_ppm` is fresh; VOC/NOx must never be used to infer CO₂. Neither component
-measures O₂ or CO, or establishes a smoke/fire alarm. Instantaneous PM does not establish compliance with WHO
+VOC/NOx indices are relative, not ppm or chemical identification. Use CO₂
+statements only when measured `co2_ppm` is fresh, regardless of component;
+VOC/NOx must never be used to infer CO₂. Missing indices on SEN63C are expected,
+not a sensor fault. No supported component measures O₂ or CO, or establishes a smoke/fire alarm. Instantaneous PM does not establish compliance with WHO
 24-hour or annual exposure guidelines. Consider outside conditions before
 suggesting ventilation and enclosure heat before interpreting temperature.
 The skills do not diagnose health, invent thresholds, resume unrelated tasks,

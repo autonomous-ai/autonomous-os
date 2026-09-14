@@ -19,7 +19,7 @@ This read-only route admits local device callers and checks the environment capa
 
 Use the existing snapshot in an automatic event unless it is stale or the user explicitly requests a fresh check. Do not run a polling loop, start a cron job, invent a history endpoint, or promise a timed follow-up: OS owns polling, thresholds, sustained-change detection and cooldowns.
 
-A usable snapshot has `enabled: true`, `state: "ready"`, `stale: false`, and a non-null `sample`. Check `age_s` and `sample.timestamp` before describing it as current. Disabled, starting, stopped, error, missing or stale data is unavailable, not zero pollution. Say so briefly on a direct question; stay silent on an unusable automatic event. Individual null or absent measurements are unknown: retain the other valid readings. For a multi-component snapshot, `sources[metric]` identifies its entry in `components`; check that component's state, age and stale flag, plus `metric_timestamps[metric]`. The aggregate timestamp may belong to another sensor and does not establish freshness for every field. One failed component does not invalidate another healthy component.
+A usable snapshot has `enabled: true`, `state: "ready"`, `stale: false`, and at least one fresh numeric measurement in `sample`. The shared status sample always contains nine nullable metric keys; an object of null values is not usable data. Check `age_s` and `sample.timestamp` before describing it as current. Disabled, starting, stopped, error, missing or stale data is unavailable, not zero pollution. Say so briefly on a direct question; stay silent on an unusable automatic event. Individual null or absent measurements are unknown: retain the other valid readings. For a multi-component snapshot, `sources[metric]` identifies its entry in `components`; check that component's state, age and stale flag, plus `metric_timestamps[metric]`. The aggregate timestamp may belong to another sensor and does not establish freshness for every field. One failed component does not invalidate another healthy component.
 
 | Sample field | Meaning |
 |---|---|
@@ -29,7 +29,7 @@ A usable snapshot has `enabled: true`, `state: "ready"`, `stale: false`, and a n
 | `voc_index`, `nox_index` | Relative gas indices, not gas concentrations |
 | `co2_ppm` | Measured carbon dioxide concentration, ppm, when a CO₂ component is available |
 
-SEN55 supplies PM, temperature, humidity and gas indices; SCD41 adds measured `co2_ppm` only in this integration. CO₂ is distinct from CO and O₂; neither component measures those. Use CO₂ only when its own reading is fresh, never estimate it from VOC/NOx. Do not infer oxygen shortage, impaired cognition, a gas leak, a fire or a medical condition from environmental readings. Missing CO₂ does not prevent using valid SEN55 measurements.
+Interpret the available metric, independently of the component model. Unsupported metrics are null, just like currently unavailable readings; use component state and `sources` for diagnostics, not the null alone. A healthy component without VOC/NOx is normal and does not require waiting for those indices or reporting a fault. Missing CO₂ does not prevent using valid PM, temperature or humidity. CO₂ is distinct from CO and O₂; the supported measurements do not include those gases. Use CO₂ only when its own reading is fresh, never estimate it from VOC/NOx. Do not infer oxygen shortage, impaired cognition, a gas leak, a fire or a medical condition from environmental readings.
 
 VOC Index adapts to recent history (roughly 24 hours, baseline 100); NOx Index uses a different baseline (1). Neither baseline certifies safe air. Do not identify a chemical, smell or pollution source from either index. Describe an increase relative to previous readings. Do not convert indices into ppm or apply concentration guidelines to them. Instantaneous PM readings cannot establish compliance with 24-hour or annual WHO exposure guidelines. Sensor temperature may be affected by the enclosure and nearby electronics; do not present it as body temperature or a guaranteed room-wide measurement.
 
@@ -84,7 +84,7 @@ When speaking proactively, offer one useful observation and at most one action i
 
 | Input | Response direction |
 |---|---|
-| “How is the room?”; temperature valid, VOC null | Report temperature and other valid readings; VOC is unavailable. Do not turn null into zero. |
+| “How is the room?”; temperature valid, VOC null | Report temperature and other valid readings. Do not turn null into zero or assume missing VOC means hardware failure. |
 | Cold boot; greeting has no environmental context | Greet normally without waiting, checking the API, or claiming missing readings are zero. |
 | Warm HAL; greeting includes initial temperature and CO₂ | Add at most one factual sentence using supplied fresh readings; no second notification. |
 | First update has `reason: "initial"`, `changes: {}`, temperature only | Briefly report temperature when appropriate; do not require a delta or wait for VOC/NOx. |

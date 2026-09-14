@@ -76,8 +76,12 @@ Worker môi trường của OS đọc HAL độc lập và POST thay đổi kéo
 `environment.update` tới `/api/sensing/event`. Config `environment` cấp cao
 nhất đọc/ghi qua admin `GET`/`PUT /api/device/config`: mặc định đánh giá mỗi
 10 giây, duy trì 60 giây, cooldown 900 giây, retry 60 giây, tuổi mẫu tối đa
-10 giây. Delta và warm-up từng chỉ số cấu hình được. SCD41 thêm `co2_ppm` đo
-thật vào cùng capability, mặc định thay đổi 200 ppm và warm-up 60 giây. Map
+10 giây. Delta và warm-up từng chỉ số cấu hình được. Component HAL đã đăng ký
+dùng chung schema chỉ số: SEN55 + SCD41 hoặc SEN63C đi cùng API, thông báo
+ban đầu và flow thay đổi. Cờ `enabled` trong JSON từng component điều khiển
+hardware; OS không chọn model sensor. Sample status luôn có chín key chỉ số
+nullable: số đo không hỗ trợ/chưa khả dụng là null, bị detector bỏ qua.
+`co2_ppm` đo thật có delta mặc định 200 ppm và warm-up 60 giây. Map
 `metrics` khai báo tường minh vẫn thay toàn bộ map, giữ nguyên nhóm đã chọn.
 Snapshot tổng hợp có `components`, `sources`, `metric_timestamps`: kiểm tra
 độ mới/tính liên tục theo chỉ số và nguồn, nên SEN55 lỗi không chặn CO₂ SCD41
@@ -101,7 +105,7 @@ cho phép tính thời gian thu nhận liên tục sẵn có vào warm-up khi ch
 vẫn loại component không hợp lệ/stale.
 Skill `environment` diễn giải
 số đo và tham khảo `wellbeing` để gợi ý phù hợp. Thu nhận phần cứng tách biệt
-chính sách thay đổi ở OS; tính năng không bật capability đang comment hay SEN55/SCD41
+chính sách thay đổi ở OS; tính năng không bật capability đang comment hay SEN55/SCD41/SEN63C
 đang tắt của Lamp. Xem [cảm biến môi trường Lamp](../../robots/lamp/docs/vi/environment-sensing_vi.md#chính-sách-thay-đổi-của-os-và-api-cho-agent)
 để biết mặc định, validation, payload và use case.
 

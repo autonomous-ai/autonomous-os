@@ -362,13 +362,16 @@ cue và release servo.
 Request/reply này không tạo event cho agent. Worker OS riêng xử lý thay đổi
 kéo dài; xem [cảm biến môi trường Lamp](../../robots/lamp/docs/vi/environment-sensing_vi.md#chính-sách-thay-đổi-của-os-và-api-cho-agent).
 
-Snapshot chung có thể kết hợp SEN55 và SCD41 mà không thêm MQTT kind. SCD41
-chỉ đóng góp `sample.co2_ppm`; `components` giữ status/lỗi/timing/sample riêng,
+Snapshot chung hỗ trợ SEN55 + SCD41 hoặc SEN63C mà không thêm MQTT kind.
+Cờ `enabled` trong JSON từng component điều khiển thu nhận, không cần danh sách
+chọn. `sample` luôn có chín key chỉ số nullable và timestamp nullable. Số đo
+thiếu, tắt hay chưa khả dụng là null; SEN63C không có VOC/NOx.
+`components` giữ status/lỗi/timing/sample riêng,
 `sources` ánh xạ chỉ số đến component, `metric_timestamps` chứa thời điểm đo
 của từng chỉ số. Nhóm `ready` nghĩa là ít nhất một số đo còn mới; `partial`
 báo component đang bật nhưng không khả dụng. Kiểm tra từng nguồn, không dùng
 timestamp mới nhất của nhóm làm tuổi mọi chỉ số. Một sensor lỗi không loại
-số đo còn tốt. SCD41 tắt/thiếu không tạo CO₂ suy diễn.
+số đo còn tốt. Thiếu CO₂ không tạo giá trị suy diễn.
 
 **`environment.status`:** gửi trên `fa_channel`:
 
@@ -382,7 +385,7 @@ hay model phần cứng. Sau đó đọc HAL local `GET /environment/status` v�
 `MQTTDataResponse` chuẩn; ví dụ dưới lược bỏ metadata device/version/id/mac/time:
 
 ```json
-{"type":"data","kind":"environment.status","status":"success","data":{"enabled":false,"bus":null,"state":"disabled","last_error":null,"sample":null,"age_s":null,"stale":true}}
+{"type":"data","kind":"environment.status","status":"success","data":{"enabled":false,"state":"disabled","last_error":null,"sample":{"pm1_0_ug_m3":null,"pm2_5_ug_m3":null,"pm4_0_ug_m3":null,"pm10_ug_m3":null,"temperature_c":null,"humidity_pct":null,"voc_index":null,"nox_index":null,"co2_ppm":null,"timestamp":null},"age_s":null,"stale":true,"sources":{},"metric_timestamps":{}}}
 ```
 
 Snapshot có thể kèm `timing` và các trường do HAL cung cấp. `success` nghĩa là

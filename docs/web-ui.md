@@ -745,8 +745,11 @@ and local agent status API are described in
 [Lamp environmental sensing](../robots/lamp/docs/environment-sensing.md#os-change-policy-and-agent-access).
 
 The card shows sensor state, sample timestamp, stale status, errors,
-and component-dependent measurements: temperature (°C), humidity (%), PM1 /
-PM2.5 / PM4 / PM10 (µg/m³), VOC index, NOx index, and SCD41 CO₂ (ppm).
+and all nine standard measurements: temperature (°C), humidity (%), PM1 /
+PM2.5 / PM4 / PM10 (µg/m³), VOC index, NOx index, and CO₂ (ppm).
+The UI uses metric keys and source metadata, never sensor model names, so changing
+the configured components (for example, to SEN63C) uses the same card. Unsupported
+or not-yet-ready measurements remain visible as `—` for their `null` values.
 Source labels identify the component; each metric has its own timestamp.
 Unavailable components do not hide healthy readings from another component. Unavailable values appear as `—`, never
 zero. Stale measurements are also replaced with `—`; a request failure is shown
@@ -754,7 +757,10 @@ as an error so previous readings cannot be mistaken for live data. No good/bad a
 quality labels, thresholds, or alerts are assigned. A collapsed technical
 section exposes each component's state, I2C bus, sensor status register, and HAL
 polling/retry/staleness/recovery timings under `status.components`. Legacy
-single-sensor snapshots with top-level `status.timing` remain supported.
+single-sensor snapshots with top-level `status.timing` remain supported and use a
+generic sensor label. A `null` sample or sample timestamp displays a waiting state,
+never an epoch date. The gas-index explanation appears only when VOC or NOx has a
+declared source or a measured value.
 
 Lamp still ships with `environment` commented out in `ROBOT.md` and SEN55/SCD41
 disabled in their respective JSON configurations, so this card remains hidden until the capability is

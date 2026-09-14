@@ -81,11 +81,16 @@ asking: does it take the world **IN**, or does it drive the body **OUT**?
 
 ## Environmental acquisition
 
-`environment` is an optional, read-only HAL input. Its composite backend supports SEN55 and
-SCD41 under the same capability. Device-owned `environment.json` selects
-components; `sen55.json` and `scd41.json` independently configure acquisition.
-A missing component-selection file preserves legacy SEN55-only behavior.
-SCD41 adds measured `co2_ppm` only, leaving SEN55 temperature/humidity unchanged;
+`environment` is an optional, read-only HAL input. Its composite backend supports SEN55,
+SCD41 (CO₂ only), and SEN63C (PM, temperature, humidity and CO₂) under the same
+capability. Registered drivers load device-owned per-board `sen55.json`,
+`scd41.json`, and `sen63c.json`; each `enabled` flag alone controls its hardware.
+Missing or disabled entries do not access hardware. There is no selection list;
+legacy `environment.json` files are ignored. Enabled components with overlapping
+metric ownership are rejected, while disabled components do not conflict.
+The shared sample always contains nine nullable metric keys and a nullable
+timestamp; missing or unavailable measurements are null, never inferred.
+Sensor-specific diagnostics remain under `components`;
 `GET /environment/status` exposes acquisition state and freshness, while
 `GET /environment/sample` returns only a fresh sample (503 otherwise). Declaring
 the capability mounts its routes; acquisition additionally requires the HAL sensor

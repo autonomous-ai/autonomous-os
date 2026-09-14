@@ -372,14 +372,17 @@ OS commands: reboot plays its cue; shutdown plays its cue and releases servos.
 This request/reply does not generate agent events. The separate OS worker handles
 sustained changes; see [Lamp environment sensing](../robots/lamp/docs/environment-sensing.md#os-change-policy-and-agent-access).
 
-The shared snapshot can combine SEN55 and SCD41 without a new MQTT kind.
-SCD41 contributes only `sample.co2_ppm`; `components` holds independent
+The shared snapshot supports SEN55 + SCD41 or SEN63C without a new MQTT kind.
+Per-component JSON `enabled` flags control acquisition, not a selection list.
+`sample` always contains nine nullable metric keys and a nullable timestamp.
+Missing, disabled or unavailable readings are null; SEN63C has no VOC/NOx.
+`components` holds independent
 status/error/timing/sample diagnostics, `sources` maps metrics to components,
 and `metric_timestamps` carries their observation times. Group `ready` means
 at least one fresh metric; `partial` indicates an enabled component is
 unavailable. Check individual sources rather than treating the group's newest
 timestamp as the age of every metric. A failed sensor does not discard healthy
-readings. Disabled/absent SCD41 does not produce an inferred CO₂ value.
+readings. Missing CO₂ never produces an inferred value.
 
 **`environment.status`:** send on `fa_channel`:
 
@@ -394,7 +397,7 @@ Replies use the standard `MQTTDataResponse`; this example omits the normal
 device/version/id/mac/time metadata:
 
 ```json
-{"type":"data","kind":"environment.status","status":"success","data":{"enabled":false,"bus":null,"state":"disabled","last_error":null,"sample":null,"age_s":null,"stale":true}}
+{"type":"data","kind":"environment.status","status":"success","data":{"enabled":false,"state":"disabled","last_error":null,"sample":{"pm1_0_ug_m3":null,"pm2_5_ug_m3":null,"pm4_0_ug_m3":null,"pm10_ug_m3":null,"temperature_c":null,"humidity_pct":null,"voc_index":null,"nox_index":null,"co2_ppm":null,"timestamp":null},"age_s":null,"stale":true,"sources":{},"metric_timestamps":{}}}
 ```
 
 The snapshot may also contain `timing` and other fields supplied by HAL.
