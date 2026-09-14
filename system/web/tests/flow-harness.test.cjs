@@ -117,3 +117,20 @@ test('normal turns and malformed context envelopes do not masquerade as history 
     assert.notEqual(turn.type, 'history_sync');
   }
 });
+
+
+test('realtime history shares one completed turn and keeps its original exchange', () => {
+  const id = 'device-chat-context-realtime';
+  const turns = groupIntoTurns([
+    input(1, id, 'voice_agent_handled', 'external_history'),
+    event(2, id, 'chat_input', { message: historyMessage('realtime').slice(0, 140) }),
+    event(3, id, 'chat_send', { message: historyMessage('realtime') }),
+    event(4, id, 'lifecycle_end', {}),
+  ]);
+  assert.equal(turns.length, 1);
+  const [turn] = turns;
+  assert.equal(turn.type, 'history_sync');
+  assert.equal(turn.status, 'done');
+  assert.equal(turnIO(turn).input, 'Open Chrome\nand search');
+  assert.equal(turnIO(turn).output, 'A tab is open.');
+});

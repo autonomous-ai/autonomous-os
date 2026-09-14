@@ -173,6 +173,16 @@ func (s *Store) syncDir() error {
 }
 
 func (s *Store) Begin(r Record) (Record, error) {
+	return s.record(r, false)
+}
+
+// RecordCompleted atomically journals an exchange that has already been answered.
+// Unlike Begin/Complete, a crash cannot leave this exchange waiting for its answer.
+func (s *Store) RecordCompleted(r Record) (Record, error) {
+	return s.record(r, true)
+}
+
+func (s *Store) record(r Record, completedTurn bool) (Record, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := validate(r); err != nil {
@@ -180,7 +190,7 @@ func (s *Store) Begin(r Record) (Record, error) {
 	}
 	r.SyncRunID = syncID(r.Source, r.OriginRunID)
 	if old, ok := s.records[r.SyncRunID]; ok {
-		if old.Source != r.Source || old.OriginRunID != r.OriginRunID || old.Input != r.Input || old.MachineID != r.MachineID || old.AgentID != r.AgentID || old.AgentName != r.AgentName {
+		if old.Source != r.Source || old.OriginRunID != r.OriginRunID || old.Input != r.Input || old.MachineID != r.MachineID || old.AgentID != r.AgentID || old.AgentName != r.AgentName || (completedTurn && old.Output != r.Output) {
 			return Record{}, fmt.Errorf("external turn conflicts with existing input or agent")
 		}
 		return old, nil
@@ -218,8 +228,12 @@ func (s *Store) Begin(r Record) (Record, error) {
 	if len(s.records) >= MaxRecords {
 		return Record{}, fmt.Errorf("external history is full")
 	}
-	r.Output = ""
-	r.State = StateWaiting
+	if completedTurn {
+		r.State = StatePending
+	} else {
+		r.Output = ""
+		r.State = StateWaiting
+	}
 	r.CreatedAt = now
 	r.UpdatedAt = now
 	if err := s.persist(r); err != nil {
