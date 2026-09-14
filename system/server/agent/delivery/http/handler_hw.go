@@ -240,6 +240,16 @@ func (h *AgentHandler) fireHWCall(c hwCall, flowRunID string, client *http.Clien
 	resp, err := client.Post(postURL, "application/json", strings.NewReader(c.body))
 	if err != nil {
 		slog.Warn("HW marker call failed", "component", "openclaw", "path", c.path, "error", err)
+		// A flow event, not just a log line. This branch used to return before
+		// reaching the hw_* switch below, so a POST that failed at the
+		// transport — the 5 s client timeout, most often — left NOTHING in the
+		// monitor: device-chat-44 emitted a search marker, HAL swept the room
+		// for ~40 s, and the flow log for that turn showed an idle lamp. A body
+		// movement the user can see must never be invisible to the timeline.
+		flow.Log("hw_failed", map[string]any{
+			"path": c.path, "args": c.body, "run_id": flowRunID, "error": err.Error(),
+		}, flowRunID)
+		h.monitorBus.Push(domain.MonitorEvent{Type: "hw_failed", Summary: c.path + " " + err.Error(), RunID: flowRunID})
 		return false
 	}
 	hwOK := resp.StatusCode < 400

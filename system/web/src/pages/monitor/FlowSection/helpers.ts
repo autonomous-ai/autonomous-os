@@ -55,7 +55,12 @@ export function isCameraAPICommand(value: string): boolean {
   return /\/camera(?:[/?\s"']|$)/.test(value);
 }
 
-const AGENT_SNAPSHOT_PATH_RE = /\/root\/\.(openclaw|hermes|picoclaw|codex|claudecode)\/(workspace|media\/hal-snapshots)\/([A-Za-z0-9][A-Za-z0-9._-]*\.(?:jpg|jpeg))\b/g;
+// Keep the runtime list in step with the two Go copies — camera_snapshot.go
+// (builds the URL) and sensing handler.go (serves it) — and with
+// hal/config.py `_AGENT_CONFIG_DIRS`, which decides where HAL writes. opencode
+// was missing from all three non-HAL copies, so snapshots on that runtime were
+// written and then never displayed.
+const AGENT_SNAPSHOT_PATH_RE = /\/root\/\.(openclaw|hermes|picoclaw|codex|claudecode|opencode)\/(workspace|media\/hal-snapshots)\/([A-Za-z0-9][A-Za-z0-9._-]*\.(?:jpg|jpeg))\b/g;
 
 function agentSnapshotURL(path: string): string | null {
   const match = [...path.matchAll(AGENT_SNAPSHOT_PATH_RE)][0];
@@ -1317,6 +1322,15 @@ export function extractNodeInfo(events: DisplayEvent[]): NodeInfoMap {
     if (ev.type === "flow_event" && ev.detail?.node === "hw_cancelled") {
       pushUnique(info.os_gate, "✋ → HW marker cancelled (click)");
     }
+    // Not a cancellation: the OS tried to fire the marker and the POST failed
+    // at the transport (the 5 s client timeout, a refused connection). Kept
+    // apart from the click so a timeout never reads as the user's doing.
+    if (ev.type === "flow_event" && ev.detail?.node === "hw_failed") {
+      const d = ev.detail as FlowEventDetail | undefined;
+      const path = typeof d?.data?.path === "string" ? d.data.path : "";
+      const err = typeof d?.data?.error === "string" ? d.data.error : "";
+      pushUnique(info.os_gate, `⚠ → HW call failed ${path}${err ? ` (${err})` : ""}`.trim());
+    }
     if (ev.type === "flow_event" && ev.detail?.node === "no_reply") {
       pushUnique(info.os_gate, "🚫 → no reply");
     }
@@ -1663,6 +1677,14 @@ export function turnIO(turn: Turn): {
         }
       }
     }
+  }
+  // Frames the AGENT produced during the turn — /camera/snapshot, /api/vision/look,
+  // and the search sweep's centred, boxed frame — belong on the card as much as
+  // the sensing frame that opened it. Until now they were only drawn inside the
+  // flow diagram SVG, so "find my keyboard" answered on the card with no picture
+  // while the picture sat one click away.
+  for (const url of cameraSnapshotURLs(turn.events)) {
+    if (!snapshotUrls.includes(url)) snapshotUrls.push(url);
   }
   const history = externalHistory(turn);
   if (history) {

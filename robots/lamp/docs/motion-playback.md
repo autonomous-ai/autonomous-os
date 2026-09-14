@@ -95,3 +95,79 @@ at its own origin: the absolute millimetres are approximate, the ranking between
 clips is not. Re-derive the constant if the body's mass distribution changes.
 
 [#271]: https://github.com/autonomous-ai/autonomous-os/issues/271
+
+## The range demo — computed, not recorded
+
+`POST /servo/demo` (`hal/drivers/motors/range_demo.py`) performs a narrated tour
+of the movement range, one joint at a time: the base to both yaw limits and back
+to centre, the head rolled on its own, the wrist tilted up and down, the elbow
+stretched, a lean of the base, and home. Nothing is detected and nothing is
+reported — the movement and the words are the whole deliverable.
+
+It is the one motion in this file that is deliberately **not** a recording, and
+the reason is the failure it replaces. Asked to demonstrate its range, the lamp
+used to answer with the `scan` emotion: `hal/recordings/scanning.csv`, 360 frames
+over 17.95 s, `base_yaw.pos` spanning **−31.3…+23.1 — 54.4° of a 270° travel** —
+narrated as *"I'll sweep my whole range… doing a full turn now!"*. A recording
+cannot be right by construction. It is somebody's hand movement frozen at capture
+time, nothing in the file states how far it reaches, and it stays wrong silently.
+Waypoints read from `C.YAW_MIN` / `C.YAW_MAX` are right by construction, stay
+right when the limits change, and port to another robot's constants for free.
+
+**One joint at a time, and back to centre before the next.** `waypoints()`
+returns 14 legs in five groups, every excursion measured from the pose the demo
+started in (`seed_pose`) and clamped to the joint's travel minus `PITCH_MARGIN`
+(2°). Each group ends on a silent return to the seed value, so the base is facing
+front again before the head starts — the first cut chained yaw straight into
+pitch from the far end of the sweep, and on device the head tilting while the
+body still faced the wall read as two unrelated moves, not a tour.
+
+| Joint | Legs | Reach | Pools |
+|-------|------|-------|-------|
+| `base_yaw` | −135 → +135 → seed | `YAW_MIN`..`YAW_MAX`, the real limits | `demo_left`, `demo_right`, `demo_centre` |
+| `wrist_roll` | seed −45 → +45 → seed | `ROLL_REACH_DEG` | `demo_head`, then silent |
+| `wrist_pitch` | seed −25 (up) → +25 → seed | `PITCH_LOOK_DEG` | `demo_up`, `demo_down`, silent |
+| `elbow_pitch` | seed +10 (up) → −10 → seed | `ELBOW_REACH_DEG` | `demo_neck`, then silent |
+| `base_pitch` | seed −12 → seed | `BASE_PITCH_LEAN_DEG`, one way | `demo_lean`, then silent |
+
+Only yaw goes to a declared limit; the rest are device-proven or deliberately
+small. `WRIST_PITCH_MIN` / `WRIST_PITCH_MAX` declare ±90° and the arm does not
+have that — on lamp-ac82 `wrist_pitch` reached −89.55 going up (stopped by the
+soft limit, not the joint) and only −16.61 going down — so the wrist tilts the
+25° the search sweep's look ring walks every run. The elbow stays at ±10 because
+an elbow at +35.8 with the base dropped to +10.6 extended the arm far enough back
+to look like it might tip; the demo never moves the two together. `base_pitch`
+leans one way only: rest sits at ~29.8 against a travel ceiling of 30. The
+phrases match that split — the yaw pools say *"all the way left"*, the others
+only *"up, like this"* or *"a little lean"*.
+
+**The base is sped up and put back.** `DEMO_YAW_SPEED` (1600 ≈ 100°/s) is written
+to `base_yaw` for the performance, exactly as the sweep does and for the same
+reason: untouched, the joint manages ~14°/s, so a 135° leg takes ~9 s and the
+phrase describing it finishes while the lamp is still swinging. Every leg is sent
+as a `LEG_DURATION_S` (1.0 s) `move_and_hold`, with a `DWELL_S` (0.3 s) pause once
+the servos are still so a limit reads as a pose rather than a bounce. Restored in a
+`finally`, because a cap left behind would follow the demo out and throttle idle
+and every emotion.
+
+**Speech is HAL's timing, os-server's words.** Each narrated leg fires `aim._say(pool)` →
+`POST /api/sensing/filler` → the `demo_*` pools in `system/lib/i18n/fillers.go`.
+No LLM turn and no tokens. A `[HW:...]` marker could not do this: markers fire
+before TTS, so a marker-narrated demo describes a performance that has already
+finished. Silent legs (the second half of a pair, a return to centre) skip the
+filler endpoint entirely. The phrase LEADS its leg (speak, then move) and the next leg waits on
+`_wait_until_still` — `move_and_hold` returns when it has finished *sending*
+frames, not when the servos arrive, so without that wait the script outruns the
+body within two legs.
+
+**Gates.** Refuses while the device sleeps and while the motion service is
+suppressed; refuses a second demo on top of a running one. `start()` returns
+immediately and the performance runs on its own thread — the agent reaches this
+through a `[HW:/servo/demo:{}]` marker, and only for a request that names
+MOVEMENT (*"show me how far you can move"*, *"show me your range of motion"*): a
+bare *"show me what you can do"* is a general abilities question and the skill
+text tells the model not to start the demo for it. `fireHWCall` allows a hardware POST
+five seconds against a ~25 s demo. The physical button aborts it alongside the
+aim and the sweep (`button_actions._stop_active_tracking`): a click that stopped
+the arm but not the narration would leave the lamp describing legs it is no
+longer performing. An aborted demo returns to the pose it started from.

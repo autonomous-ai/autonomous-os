@@ -20,7 +20,9 @@ import hal.app_state as state
 from hal.safety.policy import min_move_duration
 from hal.models import (
     ServoAimRequest,
+    ServoDemoResponse,
     ServoSearchRequest,
+    ServoSearchResponse,
     ServoAimResponse,
     ServoNudgeRequest,
     ServoMoveRequest,
@@ -399,31 +401,72 @@ def aim_servo(req: ServoAimRequest):
         raise HTTPException(500, f"Servo aim failed: {e}")
 
 
-@router.post("/servo/search", response_model=StatusResponse)
+@router.post("/servo/search", response_model=ServoSearchResponse)
 def search_for_user(req: Optional[ServoSearchRequest] = None):
-    """Sweep for the user and stop on the first one seen.
+    """Sweep for a subject and report what was found, with a frame to show.
 
     Deliberately NOT what the look-aim does. The aim runs inside a live turn
     under a deadline; this takes seconds, so it is only entered when the user
-    asked for it ("where are you?") or accepted an offer after a failed look.
+    asked for it ("where are you?", "find my cup") or accepted an offer after a
+    failed look.
 
     Seeded from the remembered bearing and expanding outward, so the likely
     place is checked first.
+
+    Meant to be called with curl DURING a turn, not from a [HW:...] marker:
+    markers fire after the reply is already written, so a marker-driven search
+    can never speak its own result. The response body is the answer, and
+    `image_path` is what the user is shown.
     """
     from hal.drivers.tracking.search import search_for_subject
 
-    # An empty body is the common case — the agent's `[HW:/servo/search:{}]`
-    # marker sends `{}`, and every existing caller sends nothing at all.
+    # An empty body is the common case — every existing caller sends nothing.
     req = req or ServoSearchRequest()
     res = search_for_subject(target=req.target, exhaustive=req.exhaustive)
+    where = (f" at yaw {res.found_at_yaw:+.0f}"
+             if res.found and res.found_at_yaw is not None else "")
     return {
         "status": "ok",
-        "message": (
-            f"{res.reason} at yaw {res.found_at_yaw:+.0f} after {res.stops_visited} stop(s)"
-            if res.found and res.found_at_yaw is not None
-            else f"{res.reason} after {res.stops_visited} stop(s)"
-        ),
+        "message": (f"{res.reason}{where} after {res.looks_visited} look(s) "
+                    f"across {res.bearings_visited} bearing(s)"),
+        "found": res.found,
+        "target": req.target,
+        "kind": res.kind,
+        "found_at_yaw": res.found_at_yaw,
+        "found_at_roll": res.found_at_roll,
+        "centred": res.centred,
+        "image_path": res.image_path,
+        "looks_visited": res.looks_visited,
+        "bearings_visited": res.bearings_visited,
     }
+
+
+@router.post("/servo/demo", response_model=ServoDemoResponse)
+def range_demo_route():
+    """Perform a narrated tour of the movement range.
+
+    A DEMO, not a search: nothing is detected and nothing is reported. It exists
+    because "show me how far you can move" used to land on the `scan` emotion — a
+    54 deg canned recording narrated as a full turn — for want of anywhere else
+    to go.
+
+    Returns as soon as the demo starts. The performance runs on its own thread
+    and speaks for itself through the filler pools, so the agent's five-second
+    marker budget is never in play.
+    """
+    if _sleep_servo_locked():
+        state.logger.info("servo/demo ignored -- device is sleeping")
+        return {"status": "ok", "started": False, "waypoints": 0,
+                "reason": "sleeping"}
+    svc = _svc_connected()
+    if svc.is_suppressed:
+        state.logger.info("servo/demo ignored -- %s mode active", svc.motion_mode)
+        return {"status": "ok", "started": False, "waypoints": 0,
+                "reason": svc.motion_mode}
+
+    from hal.drivers.motors.range_demo import start
+
+    return {"status": "ok", **start(svc)}
 
 
 @router.get("/servo/bearing")

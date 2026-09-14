@@ -46,6 +46,19 @@ lượt, model sẽ:
 Tool `delegate_to_main` được orchestrator đăng ký tự động (`orchestrator.py`,
 `DELEGATE_TOOL`).
 
+**Agent chính được so khớp với cái gì.** `turn_dispatch.py` ghép sensing message
+theo dạng `[voice-instruction] <delegate message>` rồi tới `[transcript] <text STT
+cục bộ>` bất cứ khi nào có transcript — phần diễn giải đi trước, lời của chính
+người dùng theo sau. Cả hai nửa đều quan trọng vì mọi trigger trong `SKILL.md`
+đều được so khớp theo **từ vựng**: cùng một yêu cầu đã tới đèn dưới dạng
+*"maximum capability in scanning around"* (khớp servo skill) và dưới dạng
+*"movement demonstration … rotation/tilting"* (không khớp gì và rơi xuống một
+emotion thu sẵn). Transcript không cứu được một turn mà STT đã ra rác, nên mô tả
+tool cũng dặn model giữ lại từ khoá của chính người dùng thay vì đổi tên yêu cầu
+thành một nhãn phân loại — đây là một chỉ dẫn prompt, không phải bảo đảm ở mức
+code. `test_turn_routing_log.py` ghim cách ghép message; không gì ghim được việc
+model có tuân thủ hay không.
+
 ### Điều khiển agent qua Harness bằng giọng nói
 
 OS Monitor có thêm **Harness-only voice**, mode trong RAM mặc định tắt sau khi
