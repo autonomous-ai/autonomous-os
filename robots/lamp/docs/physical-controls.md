@@ -594,3 +594,7 @@ Hardware microphone privacy disables the gesture action, speaker mute suppresses
 speech, and existing sleep/privacy/TTS LED ownership is respected.
 
 At HAL startup, the privacy switch position is reconciled without simulating a button press: an unmuted position restores mic/peripheral access without waking the device, granting conversation focus, playing the acknowledgement/listening phrase, or scheduling the listening LED cue. A real muted-to-unmuted switch transition retains the existing wake/focus and acknowledgement behavior. Startup in the muted position still applies the hardware privacy lock synchronously.
+
+When sleep is restored after a HAL restart (including a software update), an open privacy switch does not unmute the sleeping microphone or start its voice pipeline. Sleep-owned microphone and speaker mutes remain in effect until a real wake. If privacy captured the speaker's sleep mute, waking clears that temporary mute underneath the privacy lock; output stays blocked until privacy is released. The cleared speaker preference is persisted so a later HAL restart cannot restore the expired sleep mute. A speaker mute that the user set before sleep remains muted.
+
+GPIO callbacks that settle at the last known switch position (including initial callbacks at startup) leave software mute and sleep unchanged. Only a confirmed physical level change runs the switch action.

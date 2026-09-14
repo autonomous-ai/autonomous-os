@@ -90,6 +90,48 @@ def test_prepare_does_not_change_intern_or_unconfigured_device(cfg):
     assert not state.camera_capture.mock_calls
 
 
+@pytest.mark.parametrize("extended", [False, True])
+@pytest.mark.parametrize("sleeping", [False, True])
+@pytest.mark.parametrize("sleep_owned_mute", [False, True])
+def test_startup_open_switch_preserves_restored_sleep(monkeypatch, extended, sleeping,
+                                                     sleep_owned_mute):
+    # Exercise the real privacy overlay and unmute route. Mock only hardware,
+    # persistence and user feedback so a pipeline start cannot hide in a mock.
+    cfg = PrivacyButtonConfig(disable_camera_on_mute=extended,
+                              mute_speaker_on_mute=extended)
+    for key, value in {
+        "_sleeping": sleeping, "_mic_muted": True, "_speaker_muted": True,
+        "_sleepy_auto_muted_mic": sleep_owned_mute,
+        "_sleepy_auto_muted_speaker": sleep_owned_mute,
+        "_mic_manual_override": not sleep_owned_mute, "_enrolling": False,
+        "_clear_mic_muted_led": mock.Mock(),
+    }.items():
+        monkeypatch.setattr(state, key, value)
+    privacy.prepare(cfg)
+    with (
+        mock.patch("hal.drivers.button_actions.single_click_action") as click,
+        mock.patch("hal.drivers.button_actions.play_ack_chime") as chime,
+        mock.patch("hal.drivers.button_actions.announce_listening_cue") as announce,
+    ):
+        PrivacyButtonHandler(cfg)._apply_state_locked(False, initial=True)
+    assert state._hw_mic_switch_muted is False
+    assert not privacy.mic_locked()
+    assert state._sleeping is sleeping
+    assert state._mic_muted is sleeping
+    assert state._speaker_muted is True
+    assert state._sleepy_auto_muted_mic is sleep_owned_mute
+    assert state._sleepy_auto_muted_speaker is sleep_owned_mute
+    if sleeping:
+        state.voice_service.start.assert_not_called()
+        assert state._mic_manual_override is (not sleep_owned_mute)
+        state._clear_mic_muted_led.assert_not_called()
+    else:
+        state.voice_service.start.assert_called_once_with()
+    click.assert_not_called()
+    chime.assert_not_called()
+    announce.assert_not_called()
+
+
 def test_camera_failure_cannot_prevent_speaker_mute():
     state.camera_capture.stop.side_effect = RuntimeError("camera failed")
     privacy.apply(True, config())
@@ -152,6 +194,28 @@ def test_sleep_wake_cannot_unmute_privacy_speaker(monkeypatch):
     privacy.apply(True, config())
     state._wake_sleepy_peripherals()
     assert state._speaker_muted
+
+
+@pytest.mark.parametrize("sleep_owned_mute", [False, True])
+@pytest.mark.parametrize("unlock_before_wake", [False, True])
+def test_restart_privacy_overlay_does_not_restore_sleep_mute_after_wake(
+        monkeypatch, sleep_owned_mute, unlock_before_wake):
+    monkeypatch.setattr(state, "_sleepy_auto_muted_speaker", sleep_owned_mute)
+    monkeypatch.setattr(state, "_sleepy_auto_muted_mic", False)
+    state._speaker_muted = True
+    privacy.prepare(config())
+    assert privacy.speaker_before is True
+    if unlock_before_wake:
+        privacy.apply(False, config())
+    state._wake_sleepy_peripherals()
+    if not unlock_before_wake:
+        assert state._speaker_muted  # Hardware privacy still blocks output.
+        privacy.apply(False, config())
+    assert state._speaker_muted is (not sleep_owned_mute)
+    assert not state._sleepy_auto_muted_speaker
+    state._save_boot_sidecar.assert_any_call(
+        state._SPEAKER_STATE_PATH, {"muted": not sleep_owned_mute},
+    )
 
 
 def test_extended_unlock_restores_after_shared_wake_without_unmuting_output():

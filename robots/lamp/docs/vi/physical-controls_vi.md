@@ -579,3 +579,7 @@ ngôn ngữ đã chọn. Công tắc privacy mic chặn action; speaker mute ch�
 LED vẫn tôn trọng quyền ưu tiên sleep/privacy/TTS hiện có.
 
 Khi HAL khởi động, đồng bộ vị trí privacy-switch không giả lập nhấn nút: vị trí cho phép mic khôi phục quyền mic/ngoại vi mà không đánh thức thiết bị, mở conversation focus, phát chime/câu đang nghe hoặc lên lịch LED listening. Thao tác gạt thật từ mute sang unmute vẫn giữ wake/focus và thông báo như trước. Khởi động ở vị trí mute vẫn áp hardware privacy lock đồng bộ.
+
+Khi sleep được khôi phục sau HAL restart (kể cả software update), privacy-switch đang mở không được unmute mic đang ngủ hoặc khởi chạy voice pipeline. Mic và speaker bị mute bởi sleep giữ nguyên cho đến khi wake thật. Nếu privacy đã lưu trạng thái speaker mute do sleep, wake gỡ mute tạm thời đó bên dưới privacy lock; âm thanh vẫn bị chặn cho đến khi mở privacy. Trạng thái speaker sau khi gỡ mute được lưu để HAL restart tiếp không khôi phục mute do sleep đã kết thúc. Speaker do người dùng mute trước sleep vẫn giữ mute.
+
+Callback GPIO có mức chân sau debounce trùng vị trí đã biết (kể cả callback ban đầu lúc startup) giữ nguyên software mute và sleep. Chỉ thay đổi mức chân thực sự mới chạy action của switch.

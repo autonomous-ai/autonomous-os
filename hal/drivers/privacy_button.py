@@ -192,6 +192,11 @@ class PrivacyButtonHandler:
         except Exception as e:
             logger.warning("Mic switch reconcile read failed: %s", e)
             return
+        if current_level == self._last_known_level:
+            # GPIO can emit an initial callback, or bounce back to the same
+            # position. Neither is a user gesture that may override sleep.
+            logger.info("mic switch reconcile → unchanged pin; preserving software state")
+            return
         logger.info(
             "[mic-switch-trace] RECONCILE pin_level=%d muted=%s (settle_wait=%.0fms since last edge)",
             current_level,
@@ -310,6 +315,11 @@ class PrivacyButtonHandler:
                 # user gesture: restore hardware access without wake/focus/cues.
                 if extended:
                     privacy.apply(False, self._config)
+                if state._sleeping:
+                    # An open hardware switch permits microphone access; it
+                    # does not override the mute restored from sleep's sidecar.
+                    logger.info("mic switch startup → preserved sleeping microphone state")
+                    return
                 unmute_mic()
                 logger.info("mic switch startup → restored unmuted state without wake")
                 return
