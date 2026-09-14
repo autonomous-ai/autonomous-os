@@ -93,6 +93,17 @@ ARRIVE_STILL_DEG: float = 0.8
 # stop the sweep dragging without the whole lamp whipping round beside someone.
 SWEEP_YAW_SPEED: int = 1200
 MAX_STOPS: int = 3
+# How far, as a fraction of the frame, the centring probe will follow the
+# nearest candidate between two frames. One correction is capped at
+# MAX_STEP_DEG (45) on a lens measured at ~91 deg per frame-width at the centre,
+# so the object being chased moves under half the frame per step — and can
+# overshoot to the far side of centre. Anything further than this could not be
+# the same object. Deliberately loose: the same-side swap that actually happens
+# on a two-keyboard desk is caught by the direction test below, not by distance.
+STICKY_MAX_JUMP_FRAC: float = 0.55
+# Slack on the "toward the centre" test: detector jitter on a box edge is a few
+# percent of the frame and must not read as the object retreating.
+STICKY_AWAY_TOL_FRAC: float = 0.06
 
 # Where the head looks at each yaw stop, in order: left, straight on, right —
 # then back to centre before the base turns again.
@@ -370,6 +381,80 @@ def _look_at(svc: Any, roll: float, wrist_pitch: Optional[float] = None,
     except Exception as e:
         logger.warning("[search] look to roll %+.0f failed: %s", roll, e)
         return False
+
+
+def _sticky_probe(detector: Any, target: str, first_box: tuple) -> Callable[[Any], Optional[tuple]]:
+    """A probe for the centring correction that keeps the INSTANCE the sweep
+    found, when the frame holds more than one of the class.
+
+    `detect` answers "which one box" by confidence, and that is the wrong
+    question mid-correction: device-observed on lamp-ac82, a desk with a laptop
+    keyboard and a black keyboard had the loop chase whichever scored higher on
+    each frame — dx -11% -> -43% -> +30% — until the deadline. Confidence says
+    how canonical a keyboard looks, not which keyboard the user meant.
+
+    So every probe asks for all candidates and takes the one nearest the box it
+    is already centring on, then moves the anchor there. After a correction the
+    object has shifted in the frame by roughly the step, and the other instance
+    has shifted by the same amount, so nearest-to-previous keeps following the
+    right one as long as the two are further apart than one step — which a
+    laptop and a keyboard on the same desk are.
+
+    Targets with no candidate list — open-vocab nouns served remotely, and
+    person/face with their closest-subject policy — fall back to the single-box
+    path, which is what they had before.
+    """
+    anchor = {"box": tuple(first_box)}
+
+    def _centre(b: tuple) -> tuple:
+        return (b[0] + b[2] / 2.0, b[1] + b[3] / 2.0)
+
+    def probe(frame: Any) -> Optional[tuple]:
+        cands: list = []
+        getter = getattr(detector, "detect_candidates", None)
+        if getter is not None and target not in ("person", "face"):
+            try:
+                cands = list(getter(frame, target) or [])
+            except Exception as e:
+                logger.debug("[search] detect_candidates failed, using detect: %s", e)
+                cands = []
+        if cands:
+            ax, ay = _centre(anchor["box"])
+            box = min((tuple(b) for b, _conf in cands),
+                      key=lambda b: (_centre(b)[0] - ax) ** 2 + (_centre(b)[1] - ay) ** 2)
+            # Nearest is not the same as near. On one device frame the detector
+            # returned ONLY the other keyboard, and nearest-of-one sent the
+            # correction 40% across the frame in a single step. One correction
+            # moves the object by at most MAX_STEP_DEG over a ~100 deg lens —
+            # under half the frame — so anything further has to be a different
+            # object. A miss here costs one fresh frame; a jump costs the find.
+            bx, by = _centre(box)
+            fh, fw = frame.shape[0], frame.shape[1]
+            if abs(bx - ax) > STICKY_MAX_JUMP_FRAC * fw or abs(by - ay) > STICKY_MAX_JUMP_FRAC * fh:
+                logger.info("[search] probe: nearest %s is %.0f%% away — not the same one, treating as a miss",
+                            target, 100.0 * max(abs(bx - ax) / fw, abs(by - ay) / fh))
+                return None
+            # A swap can be small — device-observed 20%, under any distance
+            # cutoff a legitimate step could also produce. The stronger test is
+            # direction: every correction moves ITS object toward the centre, so
+            # a candidate further from centre than the anchor, on the same side,
+            # cannot be the object that was just corrected. Overshoot past the
+            # centre is a real outcome and stays allowed.
+            for prev, now, size in ((ax, bx, fw), (ay, by, fh)):
+                p_off, n_off = prev - size / 2.0, now - size / 2.0
+                same_side = (p_off < 0) == (n_off < 0)
+                if same_side and abs(n_off) > abs(p_off) + STICKY_AWAY_TOL_FRAC * size:
+                    logger.info("[search] probe: nearest %s moved AWAY from centre (%.0f%% -> %.0f%%) — "
+                                "another instance, treating as a miss",
+                                target, 100.0 * p_off / size, 100.0 * n_off / size)
+                    return None
+        else:
+            box = _detect_target(detector, frame, target)[0]
+        if box is not None:
+            anchor["box"] = tuple(box)
+        return box
+
+    return probe
 
 
 def _detect_target(detector: Any, frame: Any, target: str):
@@ -768,8 +853,7 @@ def _sweep(svc: Any, cap: Any, detector: Any, target: str,
                     # left the lamp aimed ~50 deg away from it while reporting
                     # a find.
                     centred = aim.centre_on_box(
-                        svc, cap,
-                        probe=lambda f: _detect_target(detector, f, target)[0],
+                        svc, cap, probe=_sticky_probe(detector, target, box),
                     )
                     hit.centred = centred.centred
                     if centred.box is not None:

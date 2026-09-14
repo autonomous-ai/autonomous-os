@@ -1205,3 +1205,47 @@ def test_centre_on_box_needs_both_axes_inside_the_deadband():
                             probe=lambda _f: (310, 40, 40, 40))
     assert res.centred is False
     assert res.dy_frac is not None and res.dy_frac < -aim.CENTRE_PITCH_DEADBAND_FRAC
+
+
+def test_centre_on_box_reports_the_frame_after_its_last_move_not_before():
+    """Device-observed on lamp-ac82 ("find my doll"): three moves, the third
+    centred the doll — the user watched it happen — and the frame persisted was
+    the one measured BEFORE move three, with the doll top-left and
+    `centred: false`. The deadline and max-iteration exits fired at the top of
+    the next loop, before any frame was taken after the last move. An exit that
+    follows a move must measure once more and report what the lamp is actually
+    pointing at."""
+    # First probe: off-centre. Every probe after the (single allowed) move: centred.
+    boxes = [(500, 200, 40, 40)]
+
+    with mock.patch.object(aim, "MAX_ITERATIONS", 1):
+        res = aim.centre_on_box(_FakeSvc(), _FakeCap(_frame()),
+                                probe=lambda _f: boxes.pop(0) if boxes else (310, 220, 40, 40))
+
+    assert res.iterations == 1
+    assert res.box == (310, 220, 40, 40), (
+        f"reported the pre-move box {res.box}, not the frame after the last move")
+    assert res.centred is True, "the last move centred it and the result must say so"
+
+
+def test_centre_on_box_final_measurement_also_runs_on_the_deadline_exit():
+    """Same failure through the other door. A clock that jumps past the
+    deadline right after the first move must not skip the final look."""
+    boxes = [(500, 200, 40, 40)]
+    clock = {"t": 0.0}
+
+    def _monotonic():
+        clock["t"] += 2.5   # deadline_s=4: probe 1 at 2.5, move, next check at 5.0
+        return clock["t"]
+
+    # _grab_frame paces its freshness wait on the same clock; with a stepping
+    # clock it would give up at once and hand the final look no frame. That
+    # wait is not what this test is about.
+    with mock.patch.object(aim.time, "monotonic", _monotonic), \
+         mock.patch.object(aim, "_grab_frame", lambda cap, svc=None, require_fresh=False: cap.last_frame):
+        res = aim.centre_on_box(_FakeSvc(), _FakeCap(_frame()),
+                                probe=lambda _f: boxes.pop(0) if boxes else (310, 220, 40, 40),
+                                deadline_s=4.0)
+
+    assert res.box == (310, 220, 40, 40), f"pre-move box reported on deadline: {res.box}"
+    assert res.centred is True

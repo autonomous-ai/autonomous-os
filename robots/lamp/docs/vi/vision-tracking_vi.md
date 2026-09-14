@@ -525,7 +525,11 @@ trường hợp đèn tự quyết định. Pha quét được vào khi:
   đây tham số target được hàm nhận rồi bỏ đi — mọi lần quét đều tìm người, nên "look around for my
   keyboard" kết thúc ngay ở người đầu tiên đi ngang qua.
 - `exhaustive` mặc định `false`, tức trả về ngay ở lần nhìn thấy đầu tiên — đúng cho câu "where are
-  you?". Đặt `true` sẽ đi trọn vòng nhìn tại mọi bearing rồi báo số lần nhìn thấy.
+  you?" và cho mọi lần tìm đồ vật. `true` là **khảo sát người**: đi trọn vòng nhìn tại mọi bearing
+  (chế độ duy nhất có nhìn lên trên đường chân trời), đếm số lần thấy rồi quay về chỗ cũ. Nó
+  **bị bỏ qua khi target là đồ vật** và có log rõ: một agent từng truyền nó cho "find my doll" và
+  nhận về một cái đèn thấy búp bê năm lần, quay về nhà, rồi báo là tìm thấy mà không có ảnh. Tìm
+  một món đồ luôn dừng ở lần thấy đầu tiên, canh giữa vào nó và giữ nguyên hướng đó.
 - Độ phủ là `số bearing x số lần nhìn mỗi bearing`: 3 x 6 = **18 lần nhìn** ở chế độ thường,
   3 x 9 = **27** ở chế độ exhaustive. Hãy tính khoảng **2 giây mỗi lần nhìn**.
 
@@ -544,14 +548,24 @@ Response là một body có cấu trúc, không phải một chuỗi văn xuôi 
   khác nhau và được báo tách riêng: trường này từng tên là `stops_visited`, đếm số lần nhìn, nhưng
   lại được render thành `"after N stop(s)"` trong khi `MAX_STOPS = 3` — nên một pha quét exhaustive
   thành thật báo "after 27 stop(s)" trên tổng tối đa 3, và agent thì thuật lại đúng theo chuỗi đó.
-- `centred` cho biết bước hiệu chỉnh tinh có vào được deadband hay không. `false` vẫn có nghĩa là
-  **tìm thấy** — chỉ là hướng ngắm bị lệch. Khi trúng, pha quét giờ chạy `aim.centre_on_box` sau
-  `_straighten_head_onto`: ngắm thô trước, rồi tới vòng lặp đo-và-nudge, dùng chính detector theo
-  target của pha quét làm probe. Trước đây đầu được hướng tới `yaw + roll` — tức *hướng nhìn* của
-  điểm dừng, không phải vật thể — khiến một phát hiện ở rìa khung lệch trục ~50° trong khi lệnh gọi
-  vẫn báo là đã tìm thấy. Vòng lặp canh giữa **không** chấm điểm bearing đã ghi nhớ; pha quét tìm
-  thấy đồ vật cũng thường xuyên như tìm thấy người, và dạy cho estimator rằng bàn phím là nơi người
-  dùng ngồi chính là cách bearing mục ruỗng một cách âm thầm.
+- `centred` cho biết bước hiệu chỉnh tinh có vào được deadband trên **cả hai trục** hay không.
+  `false` vẫn có nghĩa là **tìm thấy** — chỉ là hướng ngắm bị lệch. Khi trúng, pha quét chạy
+  `aim.centre_on_box` *trước* `_straighten_head_onto` (vật thể chắc chắn đang trong khung từ đúng tư
+  thế đó; làm thẳng đầu trước từng được quan sát trên thiết bị là làm mất dấu), rồi làm thẳng đầu từ
+  đúng chỗ bước hiệu chỉnh để lại đế. Vòng lặp này là hiệu chỉnh yaw của `aim_for_look` cộng với
+  hiệu chỉnh pitch của gaze — `GAZE_PITCH_DEG_PER_FRAME` / `GAZE_PITCH_MAX_STEP_DEG` của gaze, dấu
+  đã kiểm chứng trên thiết bị (box nằm trên tâm thì camera ngẩng **lên**, tức chiều *giảm* của các
+  khớp pitch) và `servo_follow.distribute_pitch` chia cho base/elbow/wrist — phát ra thành một lệnh
+  di chuyển tuyệt đối duy nhất. Trước tất cả những điều này, đầu được hướng tới `yaw + roll`, tức
+  *hướng nhìn* của điểm dừng, để lại một phát hiện ở rìa khung lệch trục ~50° trong khi lệnh gọi
+  vẫn báo là tìm thấy. Mọi lối thoát đi sau một lần di chuyển đều lấy thêm một frame mới
+  (`_final_look`) để kết quả mô tả nơi đèn đang chỉ *lúc này*, chứ không phải frame trước lần di
+  chuyển cuối. Probe là `_sticky_probe`: lấy mọi ứng viên qua `detect_candidates`, ứng viên gần box
+  trước nhất thắng, và một ứng viên **dịch ra xa** tâm ở cùng một phía — hoặc xa hơn mức một bước có
+  thể mang nó đi — là một cá thể khác và bị tính là một lần trượt. Hai bàn phím trên cùng một bàn
+  từng khiến vòng lặp đuổi theo cái nào có điểm cao hơn ở mỗi frame. Vòng lặp **không** chấm điểm
+  bearing đã ghi nhớ; pha quét tìm thấy đồ vật cũng thường xuyên như tìm thấy người, và dạy cho
+  estimator rằng bàn phím là nơi người dùng ngồi chính là cách bearing mục ruỗng một cách âm thầm.
 - `image_path` là frame trúng đích, được ghi vào `media/hal-snapshots` của runtime đang hoạt động —
   đúng cái pool có giới hạn và xoay vòng mà `/camera/snapshot?save=true` đang dùng (`_SNAPSHOT_MAX`
   = 20). Frame này có vẽ sẵn box của vật thể phát hiện được, qua

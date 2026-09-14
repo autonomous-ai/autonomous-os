@@ -709,12 +709,44 @@ def centre_on_box(svc: Any, cap: Any, probe: Callable[[Any], Optional[tuple]],
     def _pitch_ok() -> bool:
         return abs(last_dy_frac if last_dy_frac is not None else 1.0) <= CENTRE_PITCH_DEADBAND_FRAC
 
+    def _measure(frame: Any, box: tuple) -> None:
+        nonlocal last_box, last_frame, last_dx_frac, last_dy_frac
+        last_box, last_frame = box, frame
+        x, y, w, h = box
+        fh, fw = frame.shape[0], frame.shape[1]
+        last_dx_frac = ((x + w / 2.0) - (fw / 2.0)) / fw
+        last_dy_frac = ((y + h / 2.0) - (fh / 2.0)) / fh
+
+    def _final_look(reason: str) -> CentreResult:
+        """One more fresh frame after the LAST move, so the result describes
+        where the lamp is pointing now rather than where it was pointing
+        before it moved there.
+
+        Device-observed on lamp-ac82 ("find my doll"): three corrections, the
+        third one centred the doll — the user watched it happen — and the frame
+        persisted was the one measured BEFORE that move, doll top-left,
+        `centred: false`. The deadline and max-iteration exits fired at the top
+        of the next iteration, before any frame had been taken since the move.
+        Bounded by _grab_frame's own wait; the deadline does not apply to it.
+        """
+        if iterations > 0:
+            frame = _grab_frame(cap, svc, require_fresh=True)
+            if frame is not None:
+                box = probe(frame)
+                if box is not None:
+                    _measure(frame, box)
+                    logger.info("[centre] final look after %s: dx=%.1f%% dy=%.1f%%",
+                                reason, last_dx_frac * 100.0, last_dy_frac * 100.0)
+                    if _yaw_ok() and _pitch_ok():
+                        return _result(True, "centred")
+        return _result(_yaw_ok() and _pitch_ok(), reason)
+
     with _camera_consumer(cap):
         while iterations < MAX_ITERATIONS:
             if _abort_evt.is_set():
                 return _result(False, "aborted")
             if time.monotonic() >= t_end:
-                return _result(False, "deadline")
+                return _final_look("deadline")
 
             frame = _grab_frame(cap, svc, require_fresh=require_fresh or iterations > 0)
             require_fresh = False
@@ -733,11 +765,7 @@ def centre_on_box(svc: Any, cap: Any, probe: Callable[[Any], Optional[tuple]],
                 continue
             misses = 0
 
-            last_box, last_frame = box, frame
-            x, y, w, h = box
-            fh, fw = frame.shape[0], frame.shape[1]
-            last_dx_frac = ((x + w / 2.0) - (fw / 2.0)) / fw
-            last_dy_frac = ((y + h / 2.0) - (fh / 2.0)) / fh
+            _measure(frame, box)
 
             # Learn the local degrees-per-dx_frac from what the previous step
             # actually achieved. The lens is fisheye — device-measured 91 deg per
@@ -802,7 +830,7 @@ def centre_on_box(svc: Any, cap: Any, probe: Callable[[Any], Optional[tuple]],
                 "" if scale_deg is not None else " guess",
             )
 
-    return _result(_yaw_ok() and _pitch_ok(), "max iterations")
+    return _final_look("max iterations")
 
 
 def _measure_scale(moved_deg: float, shift_frac: float) -> Optional[float]:

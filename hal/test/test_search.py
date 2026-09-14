@@ -1114,3 +1114,98 @@ def test_exhaustive_still_surveys_for_people():
     assert res.found is True
     assert res.looks_visited == 3 * len(search.LOOK_CIRCLE)
     assert "x" in res.reason
+
+
+def test_the_centring_probe_sticks_to_the_instance_the_sweep_found():
+    """Device-observed on lamp-ac82: two keyboards in frame (a laptop's and a
+    black one). `detect` returns whichever scores higher each frame, so the
+    correction chased a target that jumped between them —
+    dx -11% -> -43% -> +30% — and hit its deadline. The probe must prefer the
+    candidate nearest the box it is already centring, not the most canonical
+    keyboard in the picture."""
+    from hal.drivers.tracking.search import _sticky_probe
+
+    det = mock.Mock()
+    # Two keyboards: a confident one far left, a weaker one near the anchor.
+    det.detect_candidates = mock.Mock(return_value=[
+        ((40, 300, 120, 60), 0.91),     # laptop keyboard, left edge, high conf
+        ((520, 220, 130, 70), 0.62),    # the one we started on, near centre
+    ])
+    det.detect = mock.Mock(return_value=(40, 300, 120, 60))  # what detect alone would say
+
+    probe = _sticky_probe(det, "keyboard", first_box=(500, 200, 130, 70))
+    box = probe(np.zeros((480, 640, 3), dtype=np.uint8))
+
+    assert box == (520, 220, 130, 70), f"probe jumped to the higher-confidence instance: {box}"
+    det.detect.assert_not_called()
+
+
+def test_the_sticky_probe_follows_its_instance_as_the_camera_turns():
+    """After a correction the object has moved in the frame; the anchor must
+    move with it so the next probe still prefers the same instance."""
+    from hal.drivers.tracking.search import _sticky_probe
+
+    det = mock.Mock()
+    frames = [
+        [((500, 200, 100, 60), 0.7), ((40, 300, 120, 60), 0.9)],
+        [((380, 210, 100, 60), 0.7), ((40, 300, 120, 60), 0.9)],  # ours moved left
+        [((330, 215, 100, 60), 0.7), ((40, 300, 120, 60), 0.9)],
+    ]
+    det.detect_candidates = mock.Mock(side_effect=lambda f, t, **kw: frames.pop(0))
+    probe = _sticky_probe(det, "keyboard", first_box=(500, 200, 100, 60))
+    f = np.zeros((480, 640, 3), dtype=np.uint8)
+
+    assert probe(f) == (500, 200, 100, 60)
+    assert probe(f) == (380, 210, 100, 60)
+    assert probe(f) == (330, 215, 100, 60)
+
+
+def test_the_sticky_probe_falls_back_to_detect_for_targets_without_candidates():
+    """Open-vocab targets go to the remote detector, which has no candidate
+    list; a person target keeps the closest-subject policy. Both still work."""
+    from hal.drivers.tracking.search import _sticky_probe
+
+    det = mock.Mock()
+    det.detect_candidates = mock.Mock(return_value=[])
+    det.detect = mock.Mock(return_value=(300, 200, 40, 40))
+    probe = _sticky_probe(det, "unicorn", first_box=(300, 200, 40, 40))
+    assert probe(np.zeros((480, 640, 3), dtype=np.uint8)) == (300, 200, 40, 40)
+
+
+def test_the_sticky_probe_refuses_a_candidate_that_could_not_be_the_same_object():
+    """Second device observation, same desk: on one frame the detector returned
+    ONLY the laptop keyboard, so "nearest candidate" was still the wrong one —
+    dx -3% -> -43% in a single step with no move in between. A box further from
+    the anchor than a correction could have moved it is a different object; the
+    probe reports a miss and the correction's miss tolerance takes a fresh frame
+    instead of chasing it."""
+    from hal.drivers.tracking.search import _sticky_probe
+
+    det = mock.Mock()
+    det.detect_candidates = mock.Mock(return_value=[((40, 300, 120, 60), 0.91)])  # far left only
+    probe = _sticky_probe(det, "keyboard", first_box=(500, 200, 130, 70))
+
+    assert probe(np.zeros((480, 640, 3), dtype=np.uint8)) is None
+
+
+def test_the_sticky_probe_refuses_a_candidate_that_moved_away_from_centre():
+    """Third device observation: the swap can be small. Anchor at dx -20%, the
+    loop turned LEFT (object should drift right, toward centre), and the only
+    candidate sat at dx -40% — 20% away, under any sane distance cutoff, yet
+    impossible for the same object: a correction never moves its target away
+    from centre on the same side. Overshoot past centre is legitimate and must
+    still be accepted."""
+    from hal.drivers.tracking.search import _sticky_probe
+
+    f = np.zeros((480, 640, 3), dtype=np.uint8)
+    det = mock.Mock()
+    # anchor centre x = 190 -> dx -20%. Candidate centre x = 62 -> dx -40%.
+    det.detect_candidates = mock.Mock(return_value=[((32, 220, 60, 40), 0.9)])
+    probe = _sticky_probe(det, "keyboard", first_box=(160, 220, 60, 40))
+    assert probe(f) is None, "accepted a candidate that moved away from centre"
+
+    # Overshoot: anchor dx -20%, candidate at dx +25% (centre x = 480). Same
+    # object, corrected past the middle. Must be accepted.
+    det.detect_candidates = mock.Mock(return_value=[((450, 220, 60, 40), 0.9)])
+    probe = _sticky_probe(det, "keyboard", first_box=(160, 220, 60, 40))
+    assert probe(f) == (450, 220, 60, 40)
