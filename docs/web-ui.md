@@ -1,5 +1,7 @@
 # Web UI — Monitor Dashboard
 
+Flow Monitor renders external history synchronization as **History sync · Harness → Main** (or the external source), with readable input and reported answer labeled **Context**. Internal instructions and JSON stay in event details, and the route tooltip identifies the external agent.
+
 Harness-only voice turns display **Harness** as their route. Persisted `harness_response` events provide the output, Response pipeline details and completion time for the matching run, so reloading the monitor no longer leaves answered turns ACTIVE. Sending an input without a final response remains ACTIVE.
 
 Flow Monitor links Codex steered follow-ups to the original execution with

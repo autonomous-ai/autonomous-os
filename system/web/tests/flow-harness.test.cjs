@@ -82,3 +82,38 @@ test('a Harness final preserves an existing lifecycle error', () => {
   assert.equal(turn.status, 'error');
   assert.equal(turnIO(turn).output, 'answer a');
 });
+
+function historyMessage(source = 'harness') {
+  return '[skills: input-branching]\n[external-context] ' + JSON.stringify({ source, agent_name: 'Coder' }) +
+    '\nHistory only. NO_REPLY.\n[HANDLED] ' + JSON.stringify('Open Chrome\nand search') +
+    '\n[REPLY] ' + JSON.stringify('A tab is open.');
+}
+
+test('history sync displays the exchange without instruction or metadata wrappers', () => {
+  const id = 'device-chat-context-test';
+  const events = [event(1, id, 'chat_input', { message: historyMessage().slice(0, 140) }),
+    event(2, id, 'chat_send', { message: historyMessage() }),
+    event(3, id, 'lifecycle_end', {})];
+  const [turn] = groupIntoTurns(events);
+  assert.equal(turn.type, 'history_sync');
+  assert.equal(turn.status, 'done');
+  assert.equal(turnIO(turn).input, 'Open Chrome\nand search');
+  assert.equal(turnIO(turn).output, 'A tab is open.');
+});
+
+test('history parsing is source-neutral and does not close a pending sync', () => {
+  const id = 'device-chat-context-other';
+  const [turn] = groupIntoTurns([event(1, id, 'chat_input', { message: historyMessage('another-device') })]);
+  assert.equal(turn.type, 'history_sync');
+  assert.equal(turn.status, 'active');
+  assert.equal(turnIO(turn).output, 'A tab is open.');
+});
+
+test('normal turns and malformed context envelopes do not masquerade as history sync', () => {
+  for (const [id, message] of [['device-chat-user', historyMessage()],
+    ['device-chat-context-broken', historyMessage().slice(0, 150)]]) {
+    const [turn] = groupIntoTurns([event(1, id, 'chat_input', { message })]);
+    assert.ok(turn);
+    assert.notEqual(turn.type, 'history_sync');
+  }
+});
