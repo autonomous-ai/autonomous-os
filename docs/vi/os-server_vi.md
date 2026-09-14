@@ -4,6 +4,21 @@
 
 ## OS Server Endpoints (Go, :5000)
 
+### Harness-only voice
+
+Mode RAM tùy chọn gửi STT đã chốt của HAL tới agent Harness cố định trên máy đã
+ghép, trước local intent và gate ready/busy của main runtime. Mode mặc định tắt
+sau khi OS-server khởi động lại. Event/recap Harness hiện có cung cấp câu trả lời
+được đọc trên thiết bị. Chỉ request voice loopback trực tiếp có snapshot routing
+`harness_voice` đi vào nhánh này; text/MQTT chat và sensing nền giữ luồng cũ.
+
+`GET /api/harness/voice-mode` cho admin hoặc loopback đọc. API quản lý chỉ cho admin
+gồm `PUT /api/harness/voice-mode`, `GET /api/harness/agents`,
+`GET /api/harness/voice-mode/question`, và `POST` tới
+`/api/harness/voice-mode/answer`, `/receipt`, `/resolve` cùng prefix
+`/api/harness/voice-mode`. Xem [tích hợp Harness](harness_vi.md) về payload,
+kiểm tra generation, câu trả lời có cấu trúc và khôi phục receipt.
+
 ### Health
 
 | Method | Endpoint | Mô tả |

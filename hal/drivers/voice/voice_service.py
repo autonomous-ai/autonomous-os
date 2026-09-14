@@ -53,6 +53,7 @@ from hal.drivers.voice._internal.realtime_turn import (
     should_defer_speaker_id_prepass,
     should_dispatch_to_main,
 )
+from hal.drivers.voice._internal.harness_voice import bypass_realtime, read_voice_mode
 from hal.drivers.voice._internal.sensing_sender import SensingSender
 from hal.drivers.voice._internal.session_finalize import finalize_session
 from hal.drivers.voice._internal.speaker_decorate import (
@@ -1014,14 +1015,16 @@ class VoiceService:
                     # session it opens does its own endpointing from now on.
                     # Falls through to the turn path when a live session cannot
                     # start, so a device with realtime down still answers.
+                    harness_voice = read_voice_mode()
                     decision = (
                         self._live_decision(speech_pre_buffer)
-                        if voice_cfg.LIVE_MODE
+                        if voice_cfg.LIVE_MODE and not bypass_realtime(harness_voice)
                         else "turn"
                     )
                     if decision == "live":
                         if self._live_session(
-                            mic, frame_size, device_rate, speech_pre_buffer
+                            mic, frame_size, device_rate, speech_pre_buffer,
+                            harness_voice=harness_voice,
                         ):
                             logger.info(
                                 "[live] reopening the mic after playback — see "
@@ -1036,6 +1039,7 @@ class VoiceService:
                             preconnected_session=keepalive_session,
                             speech_pre_buffer=speech_pre_buffer,
                             pending_listening_cue_id=pending_listening_cue_id,
+                            harness_voice=harness_voice,
                         )
                     keepalive_session = None
                     speech_start = None
@@ -1146,7 +1150,7 @@ class VoiceService:
         self._live_frames_substituted += 1
         return self._np.zeros_like(data)
 
-    def _live_out_pump(self, generation: int) -> None:
+    def _live_out_pump(self, generation: int, harness_voice=None) -> None:
         """Play what the model says, for as long as the session lasts.
 
         Deliberately loops orchestrator.stream_output() rather than reading the
@@ -1189,6 +1193,7 @@ class VoiceService:
                                 delegate_msg=out.message,
                                 route=ROUTE_DELEGATED,
                             ),
+                            harness_voice=harness_voice,
                         )
                         break
                     if isinstance(out, EndCallSignal):
@@ -1269,7 +1274,8 @@ class VoiceService:
                 logger.info("[live] model said: %r", transcript[:120])
 
     def _live_session(
-        self, mic, frame_size: int, device_rate: int, pre_roll: list
+        self, mic, frame_size: int, device_rate: int, pre_roll: list,
+        harness_voice=None,
     ) -> bool:
         """Stream the mic continuously until the model or the clock ends it.
 
@@ -1286,6 +1292,10 @@ class VoiceService:
         `pre_roll` is the utterance that opened the session, already resampled
         to STT_RATE — the words the user was saying when the VAD fired.
         """
+        harness_voice = read_voice_mode() if harness_voice is None else harness_voice
+        if bypass_realtime(harness_voice):
+            return False
+        next_mode_check = time.monotonic() + 0.5
         self._live_generation += 1
         generation = self._live_generation
         self._live_running = True
@@ -1351,7 +1361,7 @@ class VoiceService:
         self._realtime.flush_output()
         pump = threading.Thread(
             target=self._live_out_pump,
-            args=(generation,),
+            args=(generation, harness_voice),
             daemon=True,
             name="live-out",
         )
@@ -1363,6 +1373,12 @@ class VoiceService:
                 self._realtime.append_audio(self._to_realtime(frame))
             self._listening = True
             while self._running and self._live_running:
+                if time.monotonic() >= next_mode_check:
+                    current_mode = read_voice_mode()
+                    if current_mode != harness_voice:
+                        logger.info("[live] voice mode changed; returning to VAD")
+                        break
+                    next_mode_check = time.monotonic() + 0.5
                 now = time.time()
                 if now - started > voice_cfg.LIVE_MAX_S:
                     logger.info("[live] session ceiling reached — hanging up")
@@ -1502,6 +1518,7 @@ class VoiceService:
         preconnected_session=None,
         speech_pre_buffer=None,
         pending_listening_cue_id=None,
+        harness_voice=None,
     ):
         """Stream audio to STT provider until silence or TTS interrupts.
 
@@ -1513,6 +1530,10 @@ class VoiceService:
                      scope → garbage-collected. NO state leaks to the next
                      ``_stream_session`` call.
         """
+        # Snapshot before any realtime I/O; a toggle cannot move this capture
+        # between agents. OS validates the same generation on the final POST.
+        harness_voice = read_voice_mode() if harness_voice is None else harness_voice
+        realtime_allowed = not bypass_realtime(harness_voice)
         # A keepalive session pre-connected on the previous turn can go STALE if
         # the user stayed silent past the STT provider's inactivity window (~10s):
         # the upstream closes the idle WS (code 1000) and the next send() raises
@@ -1779,7 +1800,7 @@ class VoiceService:
             """
             nonlocal realtime_deferred, realtime_turn_started, realtime_start_failed
             nonlocal sent_turn_speaker, turn_context_sent
-            if realtime_turn_started or realtime_start_failed:
+            if not realtime_allowed or realtime_turn_started or realtime_start_failed:
                 return False
 
             if hal_config.WAKEWORD_ENABLED:
@@ -1939,7 +1960,7 @@ class VoiceService:
                     # Keep the full realtime copy even while a noise-drop rebuild
                     # is warming. It is flushed once to the replacement session
                     # at turn end, preserving the opening words.
-                    if hal_config.REALTIME_ENABLED:
+                    if realtime_allowed and hal_config.REALTIME_ENABLED:
                         audio_f32 = pcm16_bytes_to_float32(frame)
                         audio_f32 = resample_float32(
                             audio_f32, voice_cfg.STT_RATE, self._realtime.sample_rate
@@ -2036,7 +2057,7 @@ class VoiceService:
                 # Parallel: stream to realtime model (non-blocking queue put).
                 # During a pending noise-drop rebuild retain frames locally and
                 # flush them once to the clean replacement session below.
-                if hal_config.REALTIME_ENABLED:
+                if realtime_allowed and hal_config.REALTIME_ENABLED:
                     audio_f32 = pcm16_bytes_to_float32(resampled)
                     audio_f32 = resample_float32(
                         audio_f32, voice_cfg.STT_RATE, self._realtime.sample_rate
@@ -2479,7 +2500,7 @@ class VoiceService:
                 # persist the user's request before sending it downstream so a
                 # session replacement cannot erase the handoff from realtime's
                 # next-session context.
-                if combined and not rt.handled and not downstream_dropped:
+                if realtime_allowed and combined and not rt.handled and not downstream_dropped:
                     self._realtime.save_main_handoff(combined)
                 # A realtime connection failure or silent timeout is not a
                 # handled turn. Preserve the STT fallback so a wake-word command
@@ -2498,6 +2519,7 @@ class VoiceService:
                         else None
                     ),
                     identity=turn_identity,
+                    harness_voice=harness_voice,
                 )
                 if (
                     combined

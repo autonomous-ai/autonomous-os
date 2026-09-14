@@ -36,6 +36,21 @@ request receives `409 Conflict`. HAL owns the physical sequence: reboot plays
 the reboot cue, while shutdown plays its cue and releases servos before issuing
 the OS power command.
 
+### Harness-only voice
+
+The optional RAM mode sends HAL's finalized STT to a fixed paired Harness agent,
+before local intents or main-runtime readiness/busy checks. It defaults to off
+after OS-server restart. Existing Harness event/recap delivery supplies the spoken
+answer. Only direct loopback voice requests carrying `harness_voice` routing
+snapshots enter this path; typed/MQTT chat and ambient sensing are unaffected.
+
+`GET /api/harness/voice-mode` allows admin or loopback reads. Admin-only management
+uses `PUT /api/harness/voice-mode`, `GET /api/harness/agents`,
+`GET /api/harness/voice-mode/question`, and `POST` to
+`/api/harness/voice-mode/answer`, `/receipt` and `/resolve` under the same
+`/api/harness/voice-mode` prefix. See [Harness integration](harness.md#harness-only-voice-mode)
+for payloads, generation validation, structured answers and receipt recovery.
+
 ### Environment sensing
 
 | Method | Endpoint | Description |
