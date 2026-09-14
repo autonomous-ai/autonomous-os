@@ -37,6 +37,8 @@ HAL fires a sound event on every audio sample that crosses `SOUND_RMS_THRESHOLD`
 
 ### Escalation behavior
 
+For standalone sound events outside guard mode, `skills/sensing/SKILL.md` specifies a direct response and end of turn: after reading the skill, no further tools, workspace/config/memory searches, or time/location/weather lookups. The event's occurrence count selects the reaction; RMS level does not escalate it. Missing/invalid count defaults to the first reaction. Silent output keeps the HW marker followed by `NO_REPLY`. A supplied second occurrence still gets `scan` (0.7) + `NO_REPLY`, although the normal tracker suppresses that event. Explicit user requests in the same input and guard events retain their own routing. This is a skill instruction, not a backend tool-execution gate.
+
 | Stage | What the agent sees | Agent reaction |
 |---|---|---|
 | Occurrence 1 | `... — occurrence 1` | `/emotion curious` (0.6), NO_REPLY |

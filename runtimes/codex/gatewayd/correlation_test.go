@@ -10,6 +10,20 @@ import (
 	"time"
 )
 
+func TestSteerPrioritizesUserRequestAndPreservesResponseRoute(t *testing.T) {
+	content := "[user] Ask Codex to review the project.\n[harness-reply run_id=device-chat-30 channel=voice]"
+	input := appSteerInput(turnPayload{Content: content})
+	text, _ := input[0]["text"].(string)
+	if !strings.HasSuffix(text, content) || !strings.Contains(text, "Prioritize this request") {
+		t.Fatalf("steer lost the user request or its priority: %q", text)
+	}
+	sync := "[voice_agent_handled] The realtime agent already answered."
+	input = appSteerInput(turnPayload{Content: sync})
+	if input[0]["text"] != sync {
+		t.Fatalf("silent history sync was promoted to a user request: %v", input)
+	}
+}
+
 func TestGatewaySteersConcurrentMessagesIntoActiveTurn(t *testing.T) {
 	dir := t.TempDir()
 	binary := writeFakeCodex(t, dir, filepath.Join(dir, "argv.log"))

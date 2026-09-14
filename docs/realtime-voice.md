@@ -11,6 +11,24 @@ Code lives in `hal/realtime/`; it is driven by
 
 > **Source of truth:** this doc reflects the code. If they disagree, the code wins.
 
+## Execution completion telemetry
+
+For [voice KPI-3](voice-metrics.md#kpi-3-execution-completion-not-correctness),
+`TurnDoneEvent.execution_completed` defaults to `false` and becomes true only
+for a provider terminal signal: Gemini normal `generation_complete` or
+`turn_complete` without interruption, or OpenAI/Qwen `response.done` with
+`response.status == "completed"`. Connection close, send failure, synthetic
+unblock, partial output followed by timeout, stale/replayed done, and an
+abandoned receive are not completion evidence.
+
+The base receive loop passes the observation to the orchestrator, which
+snapshots it before recycling the session, then to
+`RealtimeTurnResult.execution_completed`. HAL emits `realtime_turn_done` only
+when the turn is handled and this flag is true. A memory-sync backend run
+cannot establish completion for that realtime turn. This measures execution
+ending, not answer correctness or full audio playback, and changes no routing
+or playback behavior.
+
 ## Concept: handle vs. delegate
 
 Every spoken turn is streamed to the realtime model *at the same time* as the
@@ -30,6 +48,39 @@ The `delegate_to_main` tool is registered automatically by the orchestrator
 (`orchestrator.py`, `DELEGATE_TOOL`).
 
 ### Voice control through Harness
+
+OS Monitor also offers **Harness-only voice**, a RAM mode that defaults to off
+after OS-server restart. When enabled, HAL snapshots `/api/harness/voice-mode`
+before capture and sends finalized, wake-word-stripped STT directly to the
+agent focused in the Harness app through OS. That capture does not stream audio to the
+realtime model or invoke the main runtime/`harness-use`; OS skips local intents
+and main-runtime readiness/busy gates. While enabled, Harness accepts speech without a wake word or an active follow-up window, including the listening cue. It does not extend the normal wake-window timer; disabling restores normal wake authorization on the next capture. Sleep, mic mute, VAD, noise and echo checks remain. Voice results still use Harness lifecycle/recap
+delivery and device TTS. Text chat and ambient sensing keep their normal routes.
+
+On MPR121 lamps, swiping right to left and releasing toggles this mode;
+left-to-right swipes invoke sleep. Direction follows the physical left-to-right
+`swipe_axis` configuration. HAL routes the gesture through its existing
+physical-action worker and the loopback Go
+`POST /api/harness/voice-mode/gesture` API. Go preserves current app focus or,
+only for activation without focus, requests the first local agent and waits for
+Desktop acknowledgement. Failed preparation leaves the mode off; turning off
+works offline. HAL speaks the actual outcome using English, Vietnamese,
+Simplified Chinese or Traditional Chinese phrases according to its configured
+language, with brief LED feedback. Web/MQTT explicit sets still allow enabling
+without focus. Gesture activation does not change capture or result routing.
+
+Each capture carries its mode generation. OS refuses a stale generation rather
+than delivering an utterance to a newly focused agent. OS mirrors app focus even
+while off without changing ordinary voice generations. When enabled, a focus
+change advances the generation; dispatch refreshes focus and includes an opaque
+`focusRevision` for the CLI to check before reservation. There is no web agent
+selector or automatic fallback during voice dispatch. An active realtime live
+session checks the mode every 500 ms and closes when it changes; an interrupted
+utterance is not replayed. Mode lookup has a 500 ms timeout and fails closed if
+the endpoint is unavailable or malformed, so OS and HAL must be deployed together.
+The normal path below applies when the mode is off. See
+[Harness integration](harness.md#harness-only-voice-mode) for management APIs,
+structured question handling and uncertain-delivery recovery.
 
 Requests that name Harness, a Mac agent, Codex, Claude, a project, worktree, or
 session, or ask an agent to use a browser delegate to the main runtime with blank
@@ -352,7 +403,8 @@ Each cue is also bound to the STT-session epoch that scheduled it. If normal TTS
 holds the output stream long enough for that source session to end, the queued cue
 is cancelled immediately before playback; it cannot leak into a newer mic session
 as a fabricated transcript. This cancels only optional device speech — it never
-closes, clears, or mutes user microphone capture, so barge-in remains available.
+closes, clears, or mutes user microphone capture, so the user can still talk
+over it.
 
 `robots/lamp/rootfs/opt/hal/.env` lowers `HAL_MAX_SESSION_DURATION_S` to `20`
 (the code default stays `30`); that ceiling is only reached when the silence
@@ -381,24 +433,25 @@ the output stream writes at playback rate, which is the timing the mic sees.
 
 **On by default** (`HAL_AEC_ENABLED=true`). Absent the binding below every AEC
 entry point degrades to a no-op, so defaulting it on cannot break a device that
-lacks it — but note it also defaults `HAL_BARGE_IN_ENABLED` on, which is **not**
-a no-op; set `HAL_BARGE_IN_ENABLED=false` to take the canceller without the
-local barge-in detector. Live mode is unaffected either way: inside a live
-session the local detector never runs. It needs the
-`aec-audio-processing` binding, which is **not** a base hal dependency — PyPI
-ships no Linux wheels for it, so a device builds it from source. It lives behind
-the `aec` extra (`uv sync --extra aec`), deliberately kept out of `dependencies`
-and out of `hardware`: the build needs meson/ninja, which the lamp image does
-not install, so a hard dep would break both the image build and
-`software-update hal` for a feature that is off by default. When the import
-fails, `configure()` logs once and every entry point becomes a no-op; the voice
-path behaves exactly as before, so the default is safe on a device without the
-binding. It does, however, also switch **barge-in** on (see below), and that is
-not a no-op.
+lacks it. It needs the `aec-audio-processing` binding, which is **not** a base
+hal dependency — PyPI ships no Linux wheels for it, so a device builds it from
+source. It lives behind the `aec` extra (`uv sync --extra aec`), deliberately
+kept out of `dependencies` and out of `hardware`: the build needs meson/ninja,
+which the lamp image does not install, so a hard dep would break both the image
+build and `software-update hal` for a feature that degrades to a no-op without
+it. When the import fails, `configure()` logs once and every entry point becomes
+a no-op; the voice path behaves exactly as before, so the default is safe on a
+device without the binding.
+
+The canceller cleans the mic; it does not decide interruption. Nothing on the
+turn path listens to the cancelled mic for the user talking over a reply — a
+local detector was tried and removed after the measurement recorded below. The
+user interrupts by tapping (GPIO button, TTP223 touchpad), and inside a live
+session the provider's VAD owns interruption (see *Live mode*).
 
 | Env | Default | Meaning |
 |-----|---------|---------|
-| `HAL_AEC_ENABLED` | `true` | Master switch. Also the default for `HAL_BARGE_IN_ENABLED` |
+| `HAL_AEC_ENABLED` | `true` | Master switch |
 | `HAL_AEC_DELAY_MS` | `205` | Speaker→mic delay hint. **Per-device** — measure it, don't inherit it |
 | `HAL_AEC_NS` | `true` | Also run APM noise suppression. Carries most of the cancellation on this hardware |
 | `HAL_AEC_TAIL_S` | `2.0` | Keep cancelling this long after the last speaker write, then bypass the APM |
@@ -452,8 +505,8 @@ a dev Mac, a future 3.13 — falls back to the PyPI sdist and compiles, so
 
 The main VAD loop is wrapped, and with `HAL_WARM_MIC=true` (now the default)
 the mic stays open through playback, so cancellation runs during the device's
-own speech rather than only in the legacy barge-in monitor. The reverb gate is
-deliberately left uncancelled so its timing is unchanged.
+own speech. The reverb gate is deliberately left uncancelled so its timing is
+unchanged.
 
 **Measured on a lamp** (OrangePi sun60 / A523, USB mic + USB speaker — two
 independent clock domains). The delay hint is per-device because the two USB
@@ -538,17 +591,20 @@ samples and does not establish a speaker underrun. These local playback changes
 still require listening verification on hardware.
 
 `aec.uncancelled()` reports whether the frame just read went through *without*
-real cancellation — reference underrun, bypassed stream, or mic overrun. Barge-in
-gates on it so it cannot decide on raw echo. Note what it does **not** say:
+real cancellation — reference underrun, bypassed stream, or mic overrun. The
+live uplink gate keys on it in `cancelled` mode so it never sends raw echo up
+as the user. Note what it does **not** say:
 it reports whether a reference *arrived*, not whether cancellation *worked*, so
 a frame with 0.9 dB of ERLE still counts as cancelled.
 
-### Barge-in: level cannot separate echo from a person
+### Why there is no voice-driven interrupt on the cancelled mic
 
-The residual that survives cancellation is loud enough to look like a user
-interrupting, and it **is** speech, so neither the level gate nor the speech
-classifier can reject it. Measured in a silent room, echo ceiling (the
-`drain peak RMS=` each reply logs) against real interruptions:
+A local detector ("barge-in": stop TTS when the user talks over it) shipped
+between 25/08 and 13/09/2026 and was removed. The measurements are kept here so
+it is not retried from scratch. The residual that survives cancellation is loud
+enough to look like a user interrupting, and it **is** speech, so neither a
+level gate nor a speech classifier can reject it. Measured in a silent room,
+echo ceiling against real interruptions:
 
 | Speaker volume | Mixer | Echo ceiling | Real interruption |
 |---|---|---|---|
@@ -560,29 +616,13 @@ The echo ceiling sits **above** the real interruptions at every volume, so a
 threshold below it self-interrupts and one above it misses ordinary speech.
 Lowering the speaker is not a workaround either: 24 dB of mixer range moved the
 ceiling by under 3 dB, because the coupling is not dominated by the airborne
-path. Do not spend time re-tuning `HAL_BARGE_IN_RMS_THRESHOLD` — no value works.
+path.
 
-What does separate them is `aec.echo_envelope_match()`
-(`HAL_BARGE_IN_ECHO_MATCH`, default `0.65`), which runs third, only on
-candidates that already passed level and speech. It works in three steps on
-log-energy envelopes at 8 ms resolution, taken from the **raw** mic:
-
-1. **Align.** Cross-correlate the candidate window against the retained
-   reference and take the best lag. Correlation only locates the window — it is
-   not the verdict, because during double talk the raw mic carries the echo well
-   above the person and correlates highly whatever they say.
-2. **Subtract.** Remove the aligned reference plus the coupling gain (median
-   offset), keeping only frames where the reply is actually loud. In the gaps
-   between its words the reference predicts near-silence, so room noise there
-   would read as a huge unexplained excess.
-3. **Measure the skew, not the size.** Echo never fits perfectly — reverb, mic
-   noise and a coupling that is not a clean scaling leave a couple of dB either
-   way. A person is one-sided: they can only *add* energy. So a top tail that
-   outruns the bottom tail is someone else in the room, and a symmetric
-   residual is echo however large it is.
-
-Measured on `lamp-0c89`, speaker 40 %, labelled against the transcript that
-followed each candidate:
+The last defence tried was an envelope test on the **raw** mic: align the
+candidate window against the retained reference, subtract it plus the learned
+coupling gain, and read the *skew* of the residual rather than its size — a
+person can only add energy, so a one-sided residual is someone else in the
+room. Labelled on `lamp-0c89` at 40 %:
 
 | | Residual skew |
 |---|---|
@@ -590,27 +630,34 @@ followed each candidate:
 | Echo, mixed run (~40 windows) | −50.0 … **+4.8** dB |
 | Confirmed real interruption | **+8.4** … +40.4 dB |
 
-The effective cut sits near 6.6 dB, inside that gap and biased towards missing a
-quiet interruption over cutting the reply off. Verification run: 12 replies into
-a silent room fired **zero** barge-ins.
+That looked separable, and 12 replies into a silent room fired zero false
+interruptions. It did not hold: 27/08/2026, 20 replies into a silent room, the
+lamp cut itself off 4 times, and scoring 79 labelled windows (69 echo, 10
+confirmed interruptions) against every feature available — envelope
+correlation, residual skew, coupling offset, APM suppression, and the textbook
+magnitude-squared coherence — gave a best AUC of 0.72, with every threshold
+that reached 0 % self-interruption missing 90–100 % of real interruptions:
 
-Two things that were tried and rejected, both recorded in the code so they are
-not retried: comparing the **cancelled** signal instead of the raw one (the APM
-is a time-varying gain and eats the contour — echo scored 0.42–0.45 and leaked
-through), and the textbook double-talk variable σ_e/σ_d, still logged as `supp`
-(echo 0.3–10.1 dB against person 0.1–8.2 dB — fully overlapping, because ERLE
-here is 6 dB at best and swings per frame).
+| feature | echo | person |
+|---|---|---|
+| coherence | 0.03 … 0.60 | 0.04 … 0.57 |
+| correlation | 0.25 … 0.99 | 0.41 … 0.95 |
+| skew (dB) | −6.5 … 67.1 | −1.0 … 119.7 |
 
-`None` means *unknown*, not clean — too little reference, or a fit pinned at the
-oldest edge of the retained reference, which means the true alignment fell off
-the end. The caller treats it as "do not fire": the speaker is audibly playing
-at that moment, which is the one situation where unknown has to mean no.
+The classes overlap almost completely, so no classifier on this signal will do
+better. The cause is upstream: AEC3 reaches only ~6 dB ERLE on this hardware
+because the speaker and mic are separate USB devices with free-running clocks,
+and during double talk the APM does not attenuate the near-end talker — it
+removes them (a frame reading 7426 on the raw mic left the APM at 5). Comparing
+the cancelled signal instead of the raw one was also tried and is worse: the APM
+is a time-varying gain and eats the loudness contour.
 
-`EchoReference` keeps a 2 s **history** alongside the FIFO, and the canceller
-keeps the same span of raw mic. The FIFO is drained by `process()`, so by the
-time a candidate is judged the reference for its frames is already gone; 800 ms
-was not enough because the TTS tap fires when ALSA *accepts* audio and runs
-ahead of playback in bursts.
+Re-attempt only after the echo path itself improves — a neural canceller
+(DTLN-aec runs real-time on a Pi 3 B+) or one sound card for both directions —
+and gate the attempt on the acceptance test in *Live mode*: replay
+`barge-in-captures/full40-bargein-off` through the canceller and require the
+peak residual under the real-interruption floor (6956) with margin. Until then,
+tap-to-interrupt and the provider's VAD are the two interruption paths.
 
 `process()` buffers to the APM's fixed 10 ms frames and returns exactly as many
 samples as the caller asked for (priming once with up to 10 ms of silence), so
@@ -1069,6 +1116,24 @@ so it must be settled before those models are defined. An explicit non-`off`
 value is left alone. Getting this wrong produces a device that streams audio
 forever and never answers.
 
+### Voice metrics in live mode
+
+Gemini live sessions use `hal/telemetry/live_voice.py` to map provider user turns to HAL
+interaction IDs, tag native playback and carry the same ID into delegated OS
+tasks. Only a correlated successful provider terminal completes realtime
+execution; timeout, synthetic done and interruption alone are not completion
+proof. Without a successful terminal the task remains incomplete. Server
+interruption records a targeted `server_barge_in` boundary for stale-playback tracking.
+
+Snapshots identify `mode=live` and whether a speech endpoint is known. A real
+server endpoint is timed when HAL receives it (`server_vad`), not at acoustic
+speech end. Gemini transcript-only turns remain eligible for execution metrics
+but are excluded from latency KPI-1 with `speech_endpoint_unavailable` and null
+latencies. Unowned output is not assigned to the newest utterance. Session-close
+`voice_metrics_live_coverage` counters expose this missing coverage; these hooks
+do not alter noise filtering, uplink or routing settings. See
+[voice metrics](voice-metrics.md#live-session-coverage) for the event contract.
+
 ### Entry: two gates, three outcomes
 
 `_vad_loop` confirms speech as usual, then `_live_decision()` returns one of:
@@ -1109,10 +1174,10 @@ resampling, so frames-out == frames-in by construction.
 canceller does not yet earn it. Measured 2026-09-04 (`barge-in-captures/`): mean
 ERLE 14-19 dB but **peak ERLE ~5 dB** — mic peaks of 29264 leave the APM at
 25269, against a real-interruption floor of 6956. The provider's VAD sees peaks
-and has none of the local detector's defences (no `uncancelled()` flag, no
-envelope match, no duration floor), so it reads the device's own onsets as the
-user interrupting. Flip to `cancelled` once a replay of `full40-bargein-off`
-puts peak residual under that floor with margin.
+and has no echo defence of its own (it cannot see `uncancelled()` and applies
+no duration floor), so it reads the device's own onsets as the user
+interrupting. Flip to `cancelled` once a replay of `full40-bargein-off` puts
+peak residual under that floor with margin.
 
 Two independent "is the speaker live" signals feed the gate, because neither
 alone suffices: `tts.speaking` is authoritative and works with **no canceller at
@@ -1137,8 +1202,8 @@ returns once per model reply (`turn_complete`) and also on a quiet stretch when
 `receive()` times out having yielded nothing; both simply mean "go round again".
 
 `InterruptedOutput` (new) is emitted by `gemini_live` on `content.interrupted`
-and is **the only barge-in a live session has** — the local detector does not
-run. It stops playback at once. The turn-based path never sees one: manual VAD
+and is **the only voice-driven interruption there is** — nothing local decides
+it. It stops playback at once. The turn-based path never sees one: manual VAD
 gives the server no opening to emit it.
 
 **Outputs are flushed once at session start.** Without it the session opens on a
@@ -1174,13 +1239,12 @@ session. These are product trade-offs, not bugs:
 | STT transcript | no `[TURN CONTEXT]`, no transcript-based filters |
 | wake word | confirmed from STT text, so `HAL_WAKEWORD_ENABLED` has no effect in live mode — entry is VAD-only |
 | speaker ID, speech emotion | a session produces neither |
-| main-agent fallback | `delegate_to_main` still arrives, but there is no transcript to forward and nowhere to put the reply mid-session |
+| local STT on delegation | `delegate_to_main` ends the session and forwards `[voice-instruction]` + Gemini's own input transcription as `[transcript]` (`FunctionCallOutput.user_transcript` → `DelegateSignal.transcript`, read by `_live_out_pump`); the main agent's reply plays after hangup. Providers without input transcription forward the instruction alone |
 
 Also not run inside a session: the RMS entry gate, `SPEECH_HOLDOFF_S`, the
 silence clock, `MAX_SESSION_DURATION_S`, the per-turn STT socket and its
 keepalive (not even pre-connected — `stt_keepalive_on` is false in live mode),
-the noise guard, local barge-in, the warm-mic drain and echo-skip, and
-`commit_audio`. None are deleted: the turn path still uses every one of them,
+the noise guard, the warm-mic drain and echo-skip, and `commit_audio`. None are deleted: the turn path still uses every one of them,
 and gets them back the moment a session ends.
 
 ### Configuration
@@ -1190,8 +1254,8 @@ and gets them back the moment a session ends.
 | `HAL_LIVE_MODE` | `false` | Whole-process live mode. Forces `HAL_REALTIME_TURN_DETECTION=server_vad` when that is `off` |
 | `HAL_LIVE_UPLINK_DURING_PLAYBACK` | `mute` | `mute` (no barge-in, ships today) or `cancelled` (true full duplex, needs the AEC fix) |
 | `HAL_LIVE_PLAYBACK_TAIL_S` | `0.35` | Acoustic tail after the last reference write during which the room still counts as playing |
-| `HAL_LIVE_IDLE_HANGUP_S` | `15` | Hang up after this long with no action **from the user**, then hand the mic back to the VAD |
-| `HAL_LIVE_NO_USER_MAX_S` | `3 × K` (45) | Hard ceiling on *no user speech at all*, ignoring who is talking — breaks a self-talk loop |
+| `HAL_LIVE_IDLE_HANGUP_S` | `15` | Hang up after this long with no action **from the user**, measured from whichever came later: the user's last words or the moment the device stopped speaking |
+| `HAL_LIVE_MAX_UNPROMPTED_REPLIES` | `3` | Hard ceiling on consecutive model replies with no user speech between them — breaks a self-talk loop without cutting one long answer short |
 | `HAL_LIVE_MAX_S` | `600` | Absolute ceiling on one session |
 
 ### Known limitation: `mute` can self-trigger
@@ -1204,9 +1268,10 @@ volume: four unprompted replies in 35 s with nobody in the room ("What's up?",
 "I'm here. What can I do for you?"), each one re-arming the K hold, and one
 logged `barge-in: model interrupted by the user` with no user present.
 
-`HAL_LIVE_NO_USER_MAX_S` bounds the damage — it ends a session that the *user*
-has not contributed to, whatever the model is doing — but it is a backstop, not
-a cure. The cure is `cancelled` mode over a canceller good enough to earn it,
+`HAL_LIVE_MAX_UNPROMPTED_REPLIES` bounds the damage — it ends a session once the
+model has produced that many replies in a row with nothing from the user — but
+it is a backstop, not a cure. It counts replies rather than seconds precisely so
+that a single answer running for minutes is never mistaken for a loop. The cure is `cancelled` mode over a canceller good enough to earn it,
 so the model always hears the true room with no artificial transitions. Lower
 speaker volume makes it markedly less likely in the meantime.
 
@@ -1645,3 +1710,5 @@ Delegation must preserve named applications and dictated text, not merely the ge
 The current request or follow-up is forwarded in the language the user just spoke, without commentary or a summary of previous turns. Translating it to English can incorrectly switch the main agent’s reply language because the delegated instruction is its primary input.
 
 A subsequent isolated Gemini 3.1 Live synthetic-audio comparison reused identical PCM clips across the baseline and final prompt/tool definitions. The final delegate messages were “Ghi vào Notes là sáng mai tưới cây.”, “Mở Airbnb tìm chỗ ở Đà Nẵng giúp mình.”, and the follow-up “cuối tuần này hai người”. The baseline had changed the Notes request into “Remember to water the plants tomorrow morning.”, losing the named app and changing language. The Airbnb follow-up used the same provider session after a controlled `[TTS HISTORY]` clarification; the previous server completion boundary and new audio commit were confirmed. This establishes the observed delegation behavior for those synthetic clips, not microphone/wake-word performance, an actual main-agent clarification, or main-agent/desktop end-to-end completion. The isolated final result was recorded at `/tmp/buddy-rt-final/result.json` on the test device; no production prompt or service was changed by that evaluation.
+
+Realtime and Harness-only voice now share the `system/externalhistory` journal and silent delivery worker. HAL still sends `voice_agent_handled` with `[HANDLED]` / `[REPLY]`; OS atomically persists the completed realtime exchange before acknowledging it and resumes never-sent pending history after restart. The existing speaker-supersession hook runs before persistence, and silent/TTS suppression is unchanged. Busy runtimes with active-turn steering retain that capability for realtime history; others wait durably for idle. Ambiguous sends are retained as `uncertain`, not automatically replayed. Flow Monitor displays the sync as **History sync · Realtime → Main**, with the original question/answer as Context. See [external conversation history](os-server.md#external-conversation-history).

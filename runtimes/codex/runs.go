@@ -131,6 +131,9 @@ func (s *CodexService) ConsumeWebChatRun(runID string) bool {
 
 func (s *CodexService) MarkSilentRun(runID string) {
 	s.silentRunsMu.Lock()
+	if s.silentRuns == nil {
+		s.silentRuns = make(map[string]bool)
+	}
 	s.silentRuns[runID] = true
 	s.silentRunsMu.Unlock()
 	slog.Info("silent run marked — TTS will be suppressed", "component", "codex", "runID", runID)

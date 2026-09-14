@@ -37,6 +37,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 import hal.app_state as state
+from hal import privacy
 from hal import config
 from hal.drivers.voice.speaker_recognizer import (
     EmbeddingAPIUnavailableError,
@@ -424,6 +425,8 @@ def speaker_record_enroll(req: RecordEnrollRequest) -> EnrollResponse:
     enroll. ``voice_service`` is *paused* (not torn down) so we don't lose
     the configured tts/stt credentials — restart needs no extra args.
     """
+    if privacy.mic_locked():
+        raise HTTPException(409, "Privacy switch is on -- microphone recording is blocked")
     name = req.name.strip().lower()
     duration = req.duration_sec
     if not name:
@@ -515,14 +518,14 @@ def speaker_record_enroll(req: RecordEnrollRequest) -> EnrollResponse:
         # Restore speaker mute state — only relax the gate if we set it.
         # Don't overwrite a pre-existing mute the user/scene may have asked for.
         state._enrolling = False
-        if not prev_speaker_muted:
+        if not prev_speaker_muted and not privacy.speaker_muted:
             state._speaker_muted = False
         # Always restart the listener so passive recognition / wake word
         # doesn't stay broken after a failed enroll. This is the one caller
         # that bypasses state.start_voice_service(): it owns the stop above
         # and must restore the pipeline unconditionally. Safe because
         # _enrolling was already cleared, so the gate would pass anyway.
-        if was_running and state.voice_service is not None:
+        if was_running and state.voice_service is not None and not privacy.mic_locked():
             try:
                 state.voice_service.start()
             except Exception as e:

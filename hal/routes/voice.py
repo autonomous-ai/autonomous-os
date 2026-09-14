@@ -518,7 +518,7 @@ def mute_mic():
 def unmute_mic():
     """Unmute mic -- restart voice pipeline."""
     # HW kill-switch beats software: while the physical PD1 slide switch is
-    # muted, the web/API is not allowed to override it — mic_button.py would
+    # muted, the web/API is not allowed to override it — privacy_button.py would
     # just flip it back on the next reconcile anyway, leaving the UI briefly
     # showing "unmuted" while the pipeline stays down. 409 lets the web toast
     # a specific "flip the switch first" message.

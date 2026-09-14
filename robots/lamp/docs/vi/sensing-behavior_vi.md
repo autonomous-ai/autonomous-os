@@ -37,6 +37,8 @@ HAL bắn một sound event cho mỗi audio sample vượt ngưỡng `SOUND_RMS_
 
 ### Hành vi leo thang (Escalation)
 
+Với event sound độc lập ngoài guard mode, `skills/sensing/SKILL.md` yêu cầu phản ứng trực tiếp rồi kết thúc turn: sau khi đọc skill không gọi thêm tool, tìm workspace/config/memory, hay tra giờ/vị trí/thời tiết. Số occurrence trong event quyết định phản ứng; mức RMS không làm tăng cấp. Count thiếu/không hợp lệ dùng phản ứng lần đầu. Output im lặng giữ HW marker rồi tới `NO_REPLY`. Nếu nhận occurrence 2 trực tiếp, agent vẫn trả `scan` (0.7) + `NO_REPLY`, dù tracker thông thường chặn event này. Yêu cầu rõ ràng của user trong cùng input và event guard vẫn đi theo nhánh riêng. Đây là hướng dẫn skill, không phải cơ chế backend chặn thực thi tool.
+
 | Giai đoạn | Agent nhận | Phản ứng của agent |
 |---|---|---|
 | Lần 1 | `... — occurrence 1` | `/emotion curious` (0.6), im lặng |

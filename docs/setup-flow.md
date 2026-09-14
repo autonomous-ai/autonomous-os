@@ -175,6 +175,7 @@ saved SSID (fresh, or previously set up wired) reach the wired path that way.
 ## AP Mode
 
 - When not set up or setup fails → automatically switches to AP mode
+- Already configured devices also enter a recovery hotspot after 90s of WiFi link loss, retaining setup and credentials. With no hotspot clients, saved WiFi is retried every 2 minutes; see [Connectivity monitor](os-server.md#network) for recovery timing and the `/wifi` page.
 - Device broadcasts WiFi hotspot
 - Web UI serves setup page
 - `SwitchToAPMode()` in `system/network/service.go`

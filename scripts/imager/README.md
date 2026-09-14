@@ -76,7 +76,8 @@ Phase 1  Extract (stock only) + expand
 Phase 2  chroot qemu-arm64:
          - apt install (hostapd, dnsmasq, nginx, avahi, bluez, pulseaudio, alsa-utils,
            chromium, xvfb, …)
-         - Node.js 22 + openclaw@$OPENCLAW_VERSION npm global + Discord/Slack plugins
+         - Node.js 26 latest package (at least 26.8.2) + OpenClaw 2026.9.3 + Discord/Slack plugins
+         - Hermes 0.21.1 pinned to release v2026.9.7; verify CLI version before continuing
          - openclaw onboard --skip-health
          - uv (Python pkg mgr for HAL)
          - systemd units: os-server, bootstrap, hal, openclaw
@@ -164,7 +165,7 @@ rebuild. Anything that must follow `DEFAULT_AGENT` lives in Phase 2 for this rea
 | `OTA_METADATA_URL` | **(required)** | Baked into `/root/config/bootstrap.json` |
 | `OUT_IMG_SIZE` | `14G` | OPi partition size after expansion |
 | `OPI_FILE_ID` | `1CYfOaY6f5DozJBNvPJ0Gx1jBIFlGe8fn` | Google Drive ID for stock OPi .7z |
-| `OPENCLAW_VERSION` | `2026.6.10` | npm package version pin |
+| `OPENCLAW_VERSION` | `2026.9.3` (OrangePi) | npm package version pin |
 | `AP_BAND` | `2.4` | `2.4` or `5` — hostapd hw_mode |
 | `COUNTRY_CODE` | `US` | Regulatory domain |
 

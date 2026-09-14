@@ -297,8 +297,44 @@ export function parseChannelSummary(summary: string): string {
   return (m[1] ?? "").trim();
 }
 
+// Only our dedicated history runs carry this envelope. Never interpret tags
+// inside an ordinary user message as a background synchronization turn.
+export function externalHistory(turn: Turn): { source: string; agentName: string; input: string; output: string } | null {
+  if (!turn.runId?.startsWith("device-chat-context-")) return null;
+  for (const event of turn.events) {
+    if (extractEventRunId(event) !== turn.runId) continue;
+    const detail = event.detail as FlowEventDetail | undefined;
+    if (event.type !== "chat_send" && event.type !== "chat_input" &&
+        !(["flow_event", "flow_enter"].includes(event.type) &&
+          ["chat_send", "chat_input"].includes(detail?.node ?? ""))) continue;
+    const message = detail?.data?.message ?? detail?.message;
+    if (typeof message !== "string") continue;
+    const metadata = message.match(/^\[external-context\] (.+)$/m);
+    const handled = message.match(/^\[HANDLED\] (.+)$/m);
+    const reply = message.match(/^\[REPLY\] (.+)$/m);
+    if (!metadata || !handled || !reply) continue;
+    try {
+      const meta = JSON.parse(metadata[1]);
+      const input = JSON.parse(handled[1]);
+      const output = JSON.parse(reply[1]);
+      if (!meta || typeof meta.source !== "string" || !meta.source ||
+          typeof input !== "string" || typeof output !== "string") continue;
+      return { source: meta.source, agentName: typeof meta.agent_name === "string" ? meta.agent_name : "", input, output };
+    } catch { /* A truncated chat_input preview may precede the complete chat_send. */ }
+  }
+  return null;
+}
+
+function harnessResponseText(ev: DisplayEvent): string {
+  if (ev.type !== "flow_event" || ev.detail?.node !== "harness_response") return "";
+  const detail = ev.detail as FlowEventDetail;
+  const text = detail.data?.text ?? detail.text;
+  return typeof text === "string" ? text.trim() : "";
+}
+
 export function turnHasOutput(turn: Turn): boolean {
   return turn.events.some((ev) =>
+    Boolean(harnessResponseText(ev)) ||
     ev.type === "tts" ||
     ev.type === "intent_match" ||
     (ev.type === "flow_event" && (ev.detail?.node === "tts_send" || ev.detail?.node === "tts_suppressed" || ev.detail?.node === "intent_match")),
@@ -738,6 +774,27 @@ export function groupIntoTurns(events: DisplayEvent[]): Turn[] {
   }
   for (const turn of merged) {
     turn.events.sort((a, b) => a._seq - b._seq);
+    // Resolve persisted Harness results after run-ID merging: a late response
+    // can be the first event of a fragment and skip the sequential status pass.
+    const ownEvents = turn.runId
+      ? turn.events.filter((event) => extractEventRunId(event) === turn.runId)
+      : [];
+    if (ownEvents.some((event) => {
+      const detail = event.detail as FlowEventDetail | undefined;
+      return detail?.node === "sensing_input" &&
+        (detail.data?.route ?? detail.route) === "harness_only";
+    })) turn.path = "harness";
+    const response = [...ownEvents].reverse().find((event) => harnessResponseText(event));
+    if (response) {
+      if (turn.status !== "error") turn.status = "done";
+      turn.endTime = response.time;
+    }
+    const mergeEvent = turn.events.find((event) => event.type === "flow_event" && event.detail?.node === "turn_merged");
+    const mergeDetail = mergeEvent?.detail as FlowEventDetail | undefined;
+    const parentRunId = mergeDetail?.data?.parent_run_id ?? mergeDetail?.parent_run_id;
+    if (typeof parentRunId === "string" && parentRunId && parentRunId !== turn.runId) {
+      turn.mergedIntoRunId = parentRunId;
+    }
   }
 
   // Merge adjacent Telegram fallback + agent output fragments
@@ -745,6 +802,14 @@ export function groupIntoTurns(events: DisplayEvent[]): Turn[] {
   for (const turn of merged) {
     const prev = stitched[stitched.length - 1];
     if (!prev) {
+      stitched.push(turn);
+      continue;
+    }
+    // Explicitly linked follow-ups and Harness routes retain their own input.
+    // A final Harness response is never an unowned reply to a nearby turn.
+    if (turn.mergedIntoRunId || prev.mergedIntoRunId ||
+        turn.path === "harness" || prev.path === "harness" ||
+        turn.events.some((event) => harnessResponseText(event))) {
       stitched.push(turn);
       continue;
     }
@@ -799,6 +864,39 @@ export function groupIntoTurns(events: DisplayEvent[]): Turn[] {
     }
   }
 
+  // A steer acknowledgement is not completion. Follow the shared run until
+  // this input receives its own terminal event. Missing parents remain active.
+  const turnsByRunId = new Map(stitched.filter((turn) => turn.runId).map((turn) => [turn.runId, turn]));
+  for (const turn of stitched) {
+    if (!turn.mergedIntoRunId) continue;
+    // A terminal event can be the first event of an interleaved fragment,
+    // bypassing the status update in the sequential grouping pass above.
+    const ownTerminal = [...turn.events].reverse().find((event) =>
+      (event.type === "lifecycle" && (event.phase === "end" || event.phase === "error")) ||
+      (event.type === "flow_event" && (event.detail?.node === "lifecycle_end" || event.detail?.node === "lifecycle_error")));
+    if (ownTerminal) {
+      turn.status = ownTerminal.phase === "error" || ownTerminal.error || ownTerminal.detail?.node === "lifecycle_error" ? "error" : "done";
+      turn.endTime = ownTerminal.time;
+      continue;
+    }
+    if (turn.status !== "active") continue;
+    const seen = new Set([turn.runId]);
+    let parent = turnsByRunId.get(turn.mergedIntoRunId);
+    while (parent && !seen.has(parent.runId)) {
+      seen.add(parent.runId);
+      if (parent.status !== "active") {
+        turn.status = parent.status;
+        turn.endTime = parent.endTime;
+        break;
+      }
+      parent = parent.mergedIntoRunId ? turnsByRunId.get(parent.mergedIntoRunId) : undefined;
+    }
+  }
+
+  for (const turn of stitched) {
+    if (externalHistory(turn)) turn.type = "history_sync";
+  }
+
   // Detect session breaks
   for (let i = 1; i < stitched.length; i++) {
     const prev = stitched[i - 1];
@@ -811,6 +909,30 @@ export function groupIntoTurns(events: DisplayEvent[]): Turn[] {
   }
 
   return stitched.reverse();
+}
+
+// Child runs own delivery after steering. Keep those events beside the shared
+// execution without replaying the child's input or synthetic lifecycle.
+export function sharedTurnEvents(parent: Turn, child: Turn): DisplayEvent[] {
+  if (parent === child) return child.events;
+  const downstream = child.events.filter((event) => {
+    const node = event.detail?.node ?? event.type;
+    return node.startsWith("harness_") || node.startsWith("tts") || node.startsWith("hw_") ||
+      ["assistant", "assistant_delta", "agent_response", "agent_first_token", "chat_response", "telegram_alert_broadcast", "error", "lifecycle_error"].includes(node);
+  });
+  // Identical assistant chunks already present on the host represent the same
+  // shared final. Compare contents, not run IDs or timestamps.
+  const responseKey = (event: DisplayEvent) => JSON.stringify([
+    event.detail?.node ?? event.type, event.summary,
+    (event.detail as FlowEventDetail | undefined)?.data,
+    (event.detail as FlowEventDetail | undefined)?.text,
+    (event.detail as FlowEventDetail | undefined)?.delta,
+  ]);
+  const parentResponses = new Set(parent.events.map(responseKey));
+  const uniqueDownstream = downstream.filter((event) =>
+    !["assistant", "assistant_delta", "agent_response", "agent_first_token"].includes(event.detail?.node ?? event.type) ||
+    !parentResponses.has(responseKey(event)));
+  return [...parent.events, ...uniqueDownstream].sort((a, b) => a._seq - b._seq);
 }
 
 // Extract runtime info for each node from turn events
@@ -1002,6 +1124,9 @@ export function extractNodeInfo(events: DisplayEvent[]): NodeInfoMap {
       if (text && !info.agent_thinking.some((l) => l.startsWith("🧠"))) {
         info.agent_thinking.push(`🧠 ${text}`);
       }
+    }
+    if (harnessResponseText(ev)) {
+      pushAgentResponse(`"${harnessResponseText(ev)}"`);
     }
     if (ev.type === "flow_event" && ev.detail?.node === "no_reply") {
       pushAgentResponse("🚫 [no reply] — agent decided to do nothing");
@@ -1490,6 +1615,9 @@ export function turnIO(turn: Turn): {
       // text for older JSONL / tts_suppressed (which already logs full text).
       output = d?.data?.full_text ?? d?.full_text ?? d?.data?.text ?? d?.text ?? ev.summary ?? output;
     }
+    if (turnRunId && evRunId === turnRunId && harnessResponseText(ev)) {
+      output = harnessResponseText(ev);
+    }
     if (!output && sameRun && ev.type === "chat_response" && ev.state === "final") {
       const d = ev.detail as FlowEventDetail | undefined;
       output = d?.message ?? ev.summary ?? "";
@@ -1525,6 +1653,11 @@ export function turnIO(turn: Turn): {
         }
       }
     }
+  }
+  const history = externalHistory(turn);
+  if (history) {
+    input = history.input;
+    output = history.output;
   }
   return { input, output, hwOutput, snapshotUrls, audioUrls, poseBucket };
 }

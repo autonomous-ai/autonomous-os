@@ -31,13 +31,14 @@ from hal.i18n import (
     PHRASES_BY_LANG,
 )
 from hal.presets import DEFAULT_LANG
+from hal.drivers.button_gestures import (
+    DOUBLE_CLICK_WINDOW,
+    FACTORY_RESET_DURATION,
+    LONG_PRESS_DURATION,
+    SLEEP_HOLD_DURATION,
+)
 
 logger = logging.getLogger(__name__)
-
-DOUBLE_CLICK_WINDOW = 0.4  # seconds to wait for second click
-SLEEP_HOLD_DURATION = 2.0  # seconds held → sleepy emotion on release
-LONG_PRESS_DURATION = 5.0  # seconds held → shutdown on release
-FACTORY_RESET_DURATION = 10.0  # seconds held → factory-reset on release (supersedes shutdown)
 
 # OS server sensing endpoint. Head-pat notify is fire-and-forget — the
 # OS server appends a NO_REPLY hint so the agent records the event in
@@ -300,13 +301,15 @@ def _grant_wakeword_focus(source: str):
         logger.warning("%s single click -- wake-word focus grant failed: %s", source, e)
 
 
-def single_click_action(source: str = "button", announce: bool = True, chime: bool = True):
+def single_click_action(source: str = "button", announce: bool = True, chime: bool = True,
+                        unmute_output: bool = True):
     """Stop active tracking and in-flight speech / unmute mic + speaker.
 
     Then open the wake-word window (if wake word is on) and announce the
     listening cue.
     announce=False skips the cue (caller fires announce_listening_cue later).
-    chime=False skips the ack ping (caller already chimed at gesture start)."""
+    chime=False skips the ack ping (caller already chimed at gesture start).
+    unmute_output=False leaves speaker restoration to the privacy switch."""
     # Stopping movement is safe even with the hardware mic kill switch off: it
     # does not wake or unmute the microphone, but still lets the user cancel an
     # active follow session with the same direct-attention gesture.
@@ -316,7 +319,7 @@ def single_click_action(source: str = "button", announce: bool = True, chime: bo
     # announce — the whole gesture flow would violate the kill-switch promise.
     # Skip silently (no chime, no cue): the red mic-muted LED is already the
     # visual "off" indicator; a chime here would read as "action accepted"
-    # when nothing happened. mic_button.py's own unmute-path call flips the
+    # when nothing happened. privacy_button.py's own unmute-path call flips the
     # flag to False BEFORE calling this, so the slide switch's own unmute is
     # not blocked. None = device has no HW switch (Lamp) → always fall through.
     if state._hw_mic_switch_muted is True:
@@ -353,7 +356,7 @@ def single_click_action(source: str = "button", announce: bool = True, chime: bo
     # is recording: that mute is a transient guard against TTS bleeding into the
     # captured WAV (see routes/speaker.py record-enroll), not a user preference.
     # Must run before the _tts_available() check below so the cue can play.
-    if state._speaker_muted and not state._enrolling:
+    if unmute_output and state._speaker_muted and not state._enrolling:
         logger.info("%s single click -- unmuting speaker", source)
         t = time.monotonic()
         unmute_speaker()
@@ -467,14 +470,12 @@ def swipe_action(source: str = "touch"):
 def mic_toggle_action(source: str = "touch"):
     """Map a resolved double tap to the mic mute toggle.
 
-    Lamp has no hardware mic switch (`_hw_mic_switch_muted` is None here), so
-    this is the only physical path to the microphone. The mic-muted LED is the
-    whole user-facing confirmation — a muted mic has no audible acknowledgement
-    — and both routes below repaint it themselves.
+    Respect the configured hardware switch when present. The mic-muted LED
+    reflects the resulting state, and both routes below repaint it themselves.
     """
-    # The HW kill switch is the authority on boards that have one. Lamp reports
-    # None and falls through; a board that does have the switch must not have it
-    # overridden by a touch gesture. Guarding here as well as in unmute_mic
+    # The HW kill switch is the authority when configured. Devices without one
+    # report None and fall through; touch gestures cannot override a muted
+    # physical switch. Guarding here as well as in unmute_mic
     # keeps the refusal quiet rather than raising the route's 409.
     if state._hw_mic_switch_muted is True:
         logger.info("%s double tap ignored -- HW mic switch is off", source)
@@ -581,9 +582,8 @@ def shutdown_action(source: str = "button"):
 def hold_release_action(held_s: float, source: str = "button"):
     """Map a released hold duration to its explicit device action.
 
-    The GPIO driver owns edge handling and LED staging; this mapping owns the
-    semantic thresholds. A future input can provide the same duration signal
-    without duplicating the sleep/shutdown/factory-reset decision tree.
+    Input drivers supply released hold durations. This mapping shares the
+    sleep/shutdown/factory-reset decision tree across GPIO and MPR121 inputs.
     """
     if held_s >= FACTORY_RESET_DURATION:
         factory_reset_action(source)
@@ -591,6 +591,27 @@ def hold_release_action(held_s: float, source: str = "button"):
         shutdown_action(source)
     elif held_s >= SLEEP_HOLD_DURATION:
         sleep_action(source)
+
+
+def button_hold_tier(held_s, *, behavior="standard", hold_s=5.0):
+    """Select shared feedback for normal and dedicated reset buttons."""
+    if behavior == "factory_reset":
+        return 3 if held_s >= hold_s else 0
+    return (3 if held_s >= FACTORY_RESET_DURATION else
+            2 if held_s >= LONG_PRESS_DURATION else
+            1 if held_s >= SLEEP_HOLD_DURATION else 0)
+
+
+def button_hold_release_action(held_s, feedback, *, behavior="standard", hold_s=5.0,
+                               source="button"):
+    """Commit the actual policy's LED and action using a released duration."""
+    if not button_hold_tier(held_s, behavior=behavior, hold_s=hold_s):
+        return
+    if behavior == "factory_reset":
+        if feedback.commit_tier(3) is not False:
+            factory_reset_action(source)
+    elif feedback.commit(held_s) is not False:
+        hold_release_action(held_s, source=source)
 
 
 def _factory_reset_phrase() -> str:
@@ -609,10 +630,10 @@ def factory_reset_action(source: str = "button"):
     into AP setup mode. HAL does NOT touch state itself — single source of
     truth for what gets wiped lives in the OS server's deviceWipePaths.
 
-    Authoritative because of physical presence: 10s deliberate hold + the
+    Authoritative because of physical presence: a deliberate configured hold + the
     /api/system/factory-reset endpoint allows loopback origin without Bearer
     (see os-server server.go adminOrLoopbackAuth)."""
-    logger.info("%s factory-reset hold (10s+) -- triggering soft reset", source)
+    logger.info("%s factory-reset hold -- triggering soft reset", source)
     logger.info("%s LED: red solid (factory-reset armed)", source)
 
     # Suppress the lifespan-shutdown re-announce — same reason as
@@ -648,3 +669,135 @@ def factory_reset_action(source: str = "button"):
         )
     except Exception as e:
         logger.error("factory-reset HTTP call failed: %s", e)
+
+
+# Hold LED feedback shared by GPIO and capacitive button inputs.
+LED_OFF = (0, 0, 0)
+LED_BLINK_HALF_PERIOD_S = 0.25
+
+
+def warn_color(tier):
+    """Read the live device-overridden preset on every dispatch."""
+    from hal.presets import BUTTON_LED_PRESETS
+
+    return tuple(BUTTON_LED_PRESETS[tier]["color"])
+
+
+def dispatch_led(color, *, still_current=None):
+    """Preempt emotion effects exactly as the GPIO button does."""
+    import hal.app_state as state
+    from hal.drivers.base import Priority
+    from hal.presets import RGB_CMD_SOLID
+
+    rgb = state.rgb_service
+    if rgb is None:
+        return
+    try:
+        state._stop_current_effect()
+        if still_current is None or still_current():
+            rgb.dispatch(RGB_CMD_SOLID, color, priority=Priority.HIGH)
+    except Exception:
+        logger.warning("Button LED dispatch failed", exc_info=True)
+
+
+class HoldLEDFeedback:
+    """Consume accepted hold tiers without blocking the hardware poll loop.
+
+    A single worker owns RGB calls, including commit colors. Release cancels
+    future blinking immediately; commit waits for any in-flight RGB call so an
+    old blink cannot overwrite the ensuing sleep/shutdown/reset action.
+    """
+
+    def __init__(self):
+        self._condition = threading.Condition()
+        self._thread = None
+        self._closed = False
+        self._generation = 0
+        self._completed = 0
+        self._tier = 0
+        self._committing = False
+
+    def _request(self, tier, committing=False):
+        with self._condition:
+            if self._closed:
+                return None
+            self._generation += 1
+            self._tier = tier
+            self._committing = committing
+            if self._thread is None:
+                self._thread = threading.Thread(
+                    target=self._run, daemon=True, name="button-hold-led",
+                )
+                self._thread.start()
+            self._condition.notify_all()
+            return self._generation
+
+    def set_tier(self, tier):
+        self._request(tier)
+
+    def release(self):
+        with self._condition:
+            if self._thread is None:
+                return
+            self._request(0)
+
+    def commit(self, held_s):
+        tier = 3 if held_s >= FACTORY_RESET_DURATION else 2 if held_s >= LONG_PRESS_DURATION else 0
+        return self.commit_tier(tier)
+
+    def commit_tier(self, tier):
+        """Commit a semantic tier without inventing a hold duration."""
+        generation = self._request(tier, committing=True)
+        if generation is None:
+            return False
+        with self._condition:
+            self._condition.wait_for(
+                lambda: self._closed or self._completed >= generation,
+            )
+
+            return not self._closed and self._generation == generation
+
+    def _is_current(self, generation):
+        with self._condition:
+            return not self._closed and self._generation == generation
+
+    def stop(self):
+        # Do not join here: poll cleanup must never wait for an RGB effect.
+        with self._condition:
+            self._closed = True
+            self._condition.notify_all()
+
+    def _run(self):
+        generation = -1
+        blink_on = False
+        while True:
+            with self._condition:
+                if self._closed:
+                    return
+                changed = generation != self._generation
+                if changed:
+                    generation = self._generation
+                    blink_on = False
+                tier, committing = self._tier, self._committing
+            try:
+                if tier:
+                    name = {1: "sleep_warn", 2: "shutdown_warn", 3: "factory_reset"}[tier]
+                    blink_on = not blink_on
+                    color = warn_color(name)
+                    dispatch_led(
+                        color if committing or tier == 3 or blink_on else LED_OFF,
+                        still_current=lambda: self._is_current(generation),
+                    )
+            except Exception:
+                # Missing RGB/presets must never prevent the semantic action.
+                logger.warning("Button hold LED feedback failed", exc_info=True)
+            with self._condition:
+                self._completed = max(self._completed, generation)
+                self._condition.notify_all()
+                if self._closed:
+                    return
+                timeout = LED_BLINK_HALF_PERIOD_S if tier in (1, 2) and not committing else None
+                self._condition.wait_for(
+                    lambda: self._closed or self._generation != generation,
+                    timeout=timeout,
+                )

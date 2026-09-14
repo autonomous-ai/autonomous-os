@@ -13,6 +13,7 @@ import (
 	"go.autonomous.ai/os/system/lib/sensingmsg"
 	"go.autonomous.ai/os/system/lib/speakergate"
 	"go.autonomous.ai/os/system/skillcontext/mood"
+	"go.autonomous.ai/os/system/telemetry"
 )
 
 // pendingEvent is a sensing event buffered while the agent was busy.
@@ -44,12 +45,13 @@ const mergedSensingHeader = "[ambient signals batched while busy — respond onc
 // ambient signals), voice_agent_handled (silent reply can't share a turn with
 // events that should speak), and image-bearing events (a merged text turn can't
 // carry multiple images cleanly; sensing snapshots are stripped anyway).
+// Environment updates use a separate skill with no mandatory expression.
 func standaloneDrain(ev pendingEvent) bool {
 	if len(ev.images) > 0 {
 		return true
 	}
 	switch ev.eventType {
-	case "voice", "voice_command", "voice_agent_handled", "voice_followup", "web_chat", "mqtt_chat":
+	case "voice", "voice_command", "voice_agent_handled", "voice_followup", "web_chat", "mqtt_chat", "environment.update":
 		return true
 	}
 	return false
@@ -158,6 +160,7 @@ func (s *HermesService) drainPendingEvents() {
 
 	const expireAfter = 60 * time.Second
 	expirable := map[string]bool{
+		"environment.update":      true,
 		"motion.activity":         true,
 		"emotion.detected":        true,
 		"speech_emotion.detected": true,
@@ -167,6 +170,10 @@ func (s *HermesService) drainPendingEvents() {
 	}
 	filtered := events[:0]
 	for _, ev := range events {
+		if !sensingmsg.ReplayAllowed(ev.eventType) {
+			slog.Info("environment event dropped at replay", "component", "sensing", "reason", "sleeping or capability unavailable")
+			continue
+		}
 		if expirable[ev.eventType] && time.Since(ev.queuedAt) > expireAfter {
 			slog.Info("sensing event expired from queue", "component", "sensing", "type", ev.eventType, "age_s", int(time.Since(ev.queuedAt).Seconds()))
 			continue
@@ -176,6 +183,7 @@ func (s *HermesService) drainPendingEvents() {
 	events = filtered
 
 	coalesce := map[string]bool{
+		"environment.update":      true,
 		"presence.enter":          true,
 		"presence.leave":          true,
 		"presence.away":           true,
@@ -287,9 +295,17 @@ func (s *HermesService) sendOnePending(ev pendingEvent) {
 	} else {
 		_, err = s.SendChatMessageWithRun(msg, reqID, runID)
 	}
+	// An unsent ambient event may merge with others on retry, so wait for the
+	// dispatch result before creating its cohort. A process crash during this
+	// synchronous send remains outside sensing coverage until acceptance.
+	if telemetry.TaskGroup(ev.eventType) == "sensing" && !errors.Is(err, errHermesNotReady) {
+		telemetry.ReportTaskStarted(ev.eventType, "", runID)
+	}
 	if err != nil {
 		if errors.Is(err, errHermesNotReady) {
 			s.restoreUnsent([]pendingEvent{ev})
+		} else if telemetry.TaskGroup(ev.eventType) != "" {
+			telemetry.ReportTaskExecution(runID, "", "failed", "dispatch_error")
 		}
 		slog.Error("failed to replay pending event", "component", "sensing", "type", ev.eventType, "error", err)
 		flow.End("sensing_input", turnStart, map[string]any{"error": err.Error()}, runID)
@@ -339,9 +355,17 @@ func (s *HermesService) sendMergedPending(evs []pendingEvent) {
 		RunID:   runID,
 	})
 
-	if _, err := s.SendChatMessageWithRun(merged, reqID, runID); err != nil {
+	_, err := s.SendChatMessageWithRun(merged, reqID, runID)
+	// Unsent members may be regrouped on retry. Only an accepted/failed dispatch
+	// forms a merged cohort, so no old batch ID can count multiple later runs.
+	if !errors.Is(err, errHermesNotReady) {
+		telemetry.ReportTaskStarted("sensing_drain_merged", "", runID)
+	}
+	if err != nil {
 		if errors.Is(err, errHermesNotReady) {
 			s.restoreUnsent(evs)
+		} else {
+			telemetry.ReportTaskExecution(runID, "", "failed", "dispatch_error")
 		}
 		slog.Error("failed to replay merged sensing events", "component", "sensing", "types", types, "error", err)
 		flow.End("sensing_input", turnStart, map[string]any{"error": err.Error()}, runID)

@@ -5,6 +5,8 @@
 // Catalog + Supported to decide which skills to provision for a given device.
 package skills
 
+import "go.autonomous.ai/os/system/device"
+
 // Catalog and Capability are generated from the skills/ tree into
 // catalog_gen.go — one folder per skill, capabilities declared in
 // skills/<name>/skill.json. Add a skill by adding its folder, then run
@@ -17,17 +19,16 @@ package skills
 // Supported filters the catalog to the skills a device with deviceCaps can run:
 // a skill is kept when it requires no capability (platform skill) or the device
 // declares AT LEAST ONE of the skill's required capabilities (any-of). Fail-open:
-// empty deviceCaps → full catalog (a device that declares no capabilities keeps
-// everything, matching legacy behavior). The maximal reference device (Lamp)
-// declares every capability, so it keeps all.
+// empty deviceCaps retains legacy skills. Optional environment sensing always
+// requires an explicit environment capability, including on legacy devices.
 func Supported(deviceCaps map[string]bool) []string {
-	if len(deviceCaps) == 0 {
-		return Catalog
-	}
 	out := make([]string, 0, len(Catalog))
 	for _, name := range Catalog {
+		if name == "environment" && !deviceCaps[device.CapEnvironment] {
+			continue
+		}
 		reqs := Capability[name]
-		if len(reqs) == 0 || hasAny(deviceCaps, reqs) {
+		if len(deviceCaps) == 0 || len(reqs) == 0 || hasAny(deviceCaps, reqs) {
 			out = append(out, name)
 		}
 	}

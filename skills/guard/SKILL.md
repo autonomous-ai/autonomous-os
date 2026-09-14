@@ -5,6 +5,8 @@ description: Guard mode for security monitoring. Two uses — (1) Toggle on/off 
 
 # Guard Mode
 
+Environmental `[environment:update]` / `environment.update` events always route to `skills/environment/SKILL.md`, including while guard mode is active. They are not intrusion, fire or gas-leak alerts; do not broadcast them or apply the dramatic reaction rules below.
+
 ## Quick Start
 Guard mode turns the device into an alert watchdog. When enabled, the device monitors for strangers and reacts **dramatically** — jolting, flashing, and verbally describing intruders. The system auto-broadcasts alerts to Telegram so friends know what's happening. All **friends** (enrolled faces) can toggle guard mode.
 
@@ -48,7 +50,8 @@ Response: `{"status": 1, "data": {"guard_mode": true}}`
 |-----------|--------|
 | "guard mode" / "watch mode" / "security mode" | Enable guard mode |
 | "I'm going out" / "I'm leaving" / "bye, watch the house" | Enable guard mode |
-| "stop guarding" / "I'm back" / "guard off" | Disable guard mode |
+| "stop guarding" / "guard off" | Disable guard mode |
+| "I'm back" | If guard mode is active, greet, summarize, and ask whether to disable; keep guarding until explicit confirmation |
 | "are you guarding?" / "guard status" | Check and report status |
 
 ## Rules

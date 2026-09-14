@@ -166,6 +166,8 @@ Hardware-only per `feedback_lelamp_external.md`. STT → OpenClaw, OpenClaw → 
 
 ### 4.4 OpenClaw skill: `computer-use`
 
+Current skill behavior (all runtimes): trusted current unpaired, disconnected, or paused status stops desktop work before any command or vision-reference read, including simple HW markers. If status is unknown, the skill performs one read-only `desktop_info` check and consumes its full result and exit code. Successful preflight is reused within the workflow. Connection/permission failures and timeouts stop the turn without retries, automatic pairing/reconnection, or fallback to Harness/device-local browsing. The response briefly states the actual blocker without promising automatic completion. An explicit retry or new trusted connection update permits a fresh check. These are skill instructions, not a backend execution gate; no new status injection is added.
+
 - Lives in OpenClaw skills directory (path TBD per OpenClaw conventions)
 - `SKILL.md` describes triggers and tool surface
 - Trigger patterns include Vietnamese ("mở ... trên máy tính", "vào trang ... trên máy", "đóng app ...") and English ("open ... on my computer", "go to ... on my mac")

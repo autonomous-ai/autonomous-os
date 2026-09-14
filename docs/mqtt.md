@@ -355,6 +355,7 @@ reapplying HAL settings even when unchanged. The `info` uplink includes effectiv
 | `skills.upload` | Install one `.md`, `.zip`, or `.skill` file on the active runtime (synchronous) | `filename`, `content_base64` |
 | `chat.file.get` | Fetch one device-local file a turn named (synchronous) | `path` (required), optional `session_id`/`run_id` |
 | `chat.send` | Start an agent turn from the backend and stream it back (acks a run id, then emits `chat.event`) | `message` (required), optional `images[]`/`files[]`/`session_id`/`speak` |
+| `environment.status` | Read the HAL environment snapshot by capability, independent of sensor model | _(none)_ |
 | `system.info` | Aggregate snapshot: versions + network + host | _(none)_ |
 | `system.version` | Component versions only (cheaper than `system.info`) | _(none)_ |
 | `system.network` | network facts of the default-route interface only | _(none)_ |
@@ -367,6 +368,52 @@ the device drops off the network. They share the OS-server single-flight guard:
 when another power action is already pending, a terminal `status:"failure"`
 reply follows with the reason. The commands invoke HAL's full actions, not raw
 OS commands: reboot plays its cue; shutdown plays its cue and releases servos.
+
+This request/reply does not generate agent events. The separate OS worker handles
+sustained changes; see [Lamp environment sensing](../robots/lamp/docs/environment-sensing.md#os-change-policy-and-agent-access).
+
+The shared snapshot supports SEN55 + SCD41 or SEN63C without a new MQTT kind.
+Per-component JSON `enabled` flags control acquisition, not a selection list.
+`sample` always contains nine nullable metric keys and a nullable timestamp.
+Missing, disabled or unavailable readings are null; SEN63C has no VOC/NOx.
+`components` holds independent
+status/error/timing/sample diagnostics, `sources` maps metrics to components,
+and `metric_timestamps` carries their observation times. Group `ready` means
+at least one fresh metric; `partial` indicates an enabled component is
+unavailable. Check individual sources rather than treating the group's newest
+timestamp as the age of every metric. A failed sensor does not discard healthy
+readings. Missing CO₂ never produces an inferred value.
+
+**`environment.status`:** send on `fa_channel`:
+
+```json
+{"cmd":"data","kind":"environment.status","data":{}}
+```
+
+The OS checks the device's declared `environment` capability, not SEN55 or any
+hardware model. It reads local HAL `GET /environment/status` with a 5-second
+timeout and returns the unchanged JSON snapshot in `data` on `fd_channel`.
+Replies use the standard `MQTTDataResponse`; this example omits the normal
+device/version/id/mac/time metadata:
+
+```json
+{"type":"data","kind":"environment.status","status":"success","data":{"enabled":false,"state":"disabled","last_error":null,"sample":{"pm1_0_ug_m3":null,"pm2_5_ug_m3":null,"pm4_0_ug_m3":null,"pm10_ug_m3":null,"temperature_c":null,"humidity_pct":null,"voc_index":null,"nox_index":null,"co2_ppm":null,"timestamp":null},"age_s":null,"stale":true,"sources":{},"metric_timestamps":{}}}
+```
+
+The snapshot may also contain `timing` and other fields supplied by HAL.
+`success` means a valid snapshot was read, including when the sensor is disabled,
+in error, or stale. Clients must inspect `data.state`, `data.stale`, `data.sample`,
+and `data.last_error` before displaying measurements. A missing capability returns:
+
+```json
+{"type":"data","kind":"environment.status","status":"failure","error":"environment capability not declared"}
+```
+
+HAL transport errors, non-200 HTTP responses, and invalid status JSON also return
+`failure` with `error`. This is request/reply only: no subscription, continuous
+stream, events, or agent invocation. Replies retain the request's `kind`; the
+existing protocol adds no request ID. Mobile clients use the device's existing
+broker credentials and topic ACLs.
 
 **`system.info` response:** synchronous (no `starting` intermediate); each probe
 falls back to its zero value on failure.
@@ -995,6 +1042,47 @@ are optional, since a file can be requested long after its run ended.
 Superseded: `integrations/chat-bridges/autonomous-chat-hook/` forwards backend
 chat one-way as `type:"voice"`, so the device speaks the reply and nothing comes
 back. It cannot back a chat UI; this pair replaces it for that purpose.
+
+### `harness.voice-mode.get` / `harness.voice-mode.set` — Harness-only voice
+
+**Receive on `fa_channel`:**
+```json
+{"cmd":"data","kind":"harness.voice-mode.get"}
+{"cmd":"data","kind":"harness.voice-mode.set","data":{"enabled":true}}
+{"cmd":"data","kind":"harness.voice-mode.set","data":{"enabled":false}}
+```
+
+`get` needs no `data` and reads the cached shared voice state without querying
+Harness. `set` requires an object containing only `enabled`, a JSON boolean;
+missing/null/string values and extra fields such as `agentId` are rejected.
+This sets an explicit value, never inverts it: repeating the same value does
+not change the routing generation or interrupt another capture.
+
+Both commands reply on `fd_channel` with the standard `MQTTDataResponse`
+metadata, `type:"data"`, the request's `kind`, and the same snapshot returned
+by `GET /api/harness/voice-mode` (device metadata omitted here):
+```json
+{"type":"data","kind":"harness.voice-mode.set","status":"success","data":{"enabled":true,"generation":1789350000000000,"machineId":"computer-id","agentId":"agent-id","agentName":"Mike","focusRevision":"instance:3","focusAvailable":true}}
+```
+
+The snapshot is `{enabled,generation,machineId,agentId,agentName?,focusRevision,focusAvailable,pending?,error?}`.
+An unavailable focus can appear as `focusAvailable:false` with a snapshot
+`error` even when the command succeeds. Invalid input or an unavailable
+controller uses `status:"failure"` with the envelope's `error` field.
+There are no unsolicited voice-state MQTT pushes; clients should query `get`
+after subscribing, reconnecting, or when refreshing the current state.
+
+MQTT uses the same RAM controller as HTTP, Monitor and HAL. The flag defaults
+to off after service restart. Setting it is allowed offline or without focus;
+voice delivery still requires the agent selected in the Harness app. These
+commands cannot select an agent and do not change typed MQTT/Web chat or skill
+routing. Turning the mode off leaves already dispatched work and its output
+route intact. `harness.pair.revoke` also disables the mode, matching HTTP
+unpair. See [Harness voice mode](harness.md#harness-only-voice-mode).
+
+Authorization uses the existing broker credentials and device command-topic
+ACLs; the publisher must be authorized for that device. No new MQTT topic,
+credential or Harness transport is introduced.
 
 ### `buddy.pair.start` — Issue a Buddy pairing code
 

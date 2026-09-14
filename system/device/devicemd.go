@@ -73,6 +73,9 @@ func Capabilities(deviceType string) map[string]bool {
 	return caps
 }
 
+// CapEnvironment identifies model-independent environmental acquisition.
+const CapEnvironment = "environment"
+
 // Capability names — the frozen capability vocabulary (capabilities.v1) from
 // robots/contract/capabilities.md. This is the platform-wide feature taxonomy every
 // ROBOT.md declares against and every OS-core gate asks about; it is NOT a

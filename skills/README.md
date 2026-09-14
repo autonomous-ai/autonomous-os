@@ -24,13 +24,14 @@ The `[HW:/path:{json}]` marker is the grammar: `{json}` is optional (`[HW:/led/o
 
 ```bash
 make push-skill SKILL=./my-skill TARGET=pi@lamp-xxxx.local   # live on the next conversation, no reboot
+make push-skill SKILL=./my-skill TARGET=pi@10.0.0.5 J=proxy-host   # via an SSH jump host
 ```
 
 Or type what you want in the app, or tap one in the Skill Store. On the robot, skills live in `/root/.openclaw/workspace/skills/<name>/` — the same folder the agent engine already reads. No PR, no reboot, no Go.
 
 ## Shipping one to every robot
 
-1. Drop the folder in `skills/<name>/`. If it needs hardware, add `skill.json`: `{"capabilities": ["motion"]}` — any of the 13 [capability names](../robots/contract/capabilities.md), ANY-OF.
+1. Drop the folder in `skills/<name>/`. If it needs hardware, add `skill.json`: `{"capabilities": ["motion"]}` — any of the [capability names](../robots/contract/capabilities.md), ANY-OF.
 2. `python skills/skill-creator/scripts/quick_validate.py skills/<name>` checks the format; `make skills-catalog` regenerates the catalog from the tree and `go test ./system/skills/` fails if you forget.
 3. Open the PR. On merge, [`publish-skills.yml`](../.github/workflows/publish-skills.yml) uploads the feed for you; every body's skill watcher pulls it within 5 min and tells the agent to re-read. `make upload-skills` still works by hand for an out-of-band push.
 
@@ -63,6 +64,7 @@ System-only skills may be hidden from the default storefront or shown with a
 | `servo-control` | Home | motion, aiming, gestures, hardware | Lamp, Reachy Mini |
 | `servo-tracking` | Camera & Vision | vision-tracking, object-tracking, motion | Lamp, Reachy Mini |
 | `sensing` | Home | presence, sound, light, fire-safety, events | Lamp, Intern v2, Reachy Mini |
+| `environment` | Home | air-quality, temperature, humidity, wellbeing, events | Devices declaring environment (Lamp optional, disabled by default) |
 | `sensing-track` | Home | history, logs, motion, presence | Lamp, Intern v2, Reachy Mini |
 | `skill-creator` | Productivity | create, test, evaluate, package, publish | Lamp, Intern v2, Reachy Mini |
 | `guard` | Safety | monitoring, presence, alerts, smart-home | Lamp, Reachy Mini |
@@ -85,7 +87,7 @@ sidecar next to it —
 ```
 
 `capabilities` is ANY-OF: the skill installs on any body whose `ROBOT.md`
-declares at least one of them (the 13 names are in
+declares at least one of them (the names are in
 `robots/contract/capabilities.md`). No sidecar means a platform skill with no
 hardware dependency — it installs everywhere.
 

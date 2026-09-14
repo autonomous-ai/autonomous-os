@@ -38,13 +38,12 @@ type hermesUsage struct {
 	TotalTokens  int `json:"total_tokens"`
 	// OpenAI-style usage nests the cached portion under details — and its
 	// semantics differ from Anthropic: input_tokens is the TOTAL input
-	// INCLUDING the cached subset, while domain.TokenUsage follows Anthropic
-	// semantics (InputTokens = uncached only, cache read separate; the Flow
-	// monitor renders ↓in R<cache> from those). toDomain converts. Today the
-	// campaign-api path reports no cached_tokens (no caching) so this decodes
-	// to zero — mapped anyway so R appears the moment the backend supports it.
+	// INCLUDING cache reads and writes, while domain.TokenUsage stores uncached
+	// input separately. The local Hermes compatibility patch preserves both
+	// buckets through its Responses API; older servers may omit details.
 	InputTokensDetails struct {
-		CachedTokens int `json:"cached_tokens"`
+		CachedTokens     int `json:"cached_tokens"`
+		CacheWriteTokens int `json:"cache_write_tokens"`
 	} `json:"input_tokens_details"`
 }
 
@@ -56,17 +55,20 @@ func (u *hermesUsage) toDomain() *domain.TokenUsage {
 		return nil
 	}
 	in := u.InputTokens
-	cached := u.InputTokensDetails.CachedTokens
-	if cached > 0 && cached <= in {
-		in -= cached
-	} else {
-		cached = 0
+	cached := max(0, u.InputTokensDetails.CachedTokens)
+	written := max(0, u.InputTokensDetails.CacheWriteTokens)
+	// Reject impossible detail totals instead of producing negative input or
+	// double-counting tokens. Subtraction avoids overflow on malformed counts.
+	if cached > in || written > in-cached {
+		cached, written = 0, 0
 	}
+	in -= cached + written
 	return &domain.TokenUsage{
-		InputTokens:     in,
-		OutputTokens:    u.OutputTokens,
-		TotalTokens:     u.TotalTokens,
-		CacheReadTokens: cached,
+		InputTokens:      in,
+		OutputTokens:     u.OutputTokens,
+		TotalTokens:      u.TotalTokens,
+		CacheReadTokens:  cached,
+		CacheWriteTokens: written,
 	}
 }
 
@@ -325,7 +327,9 @@ func (s *HermesService) handleResponseCompleted(probe map[string]json.RawMessage
 		logArgs = append(logArgs,
 			"inputTokens", usage.InputTokens,
 			"outputTokens", usage.OutputTokens,
-			"totalTokens", usage.TotalTokens)
+			"totalTokens", usage.TotalTokens,
+			"cacheReadTokens", usage.InputTokensDetails.CachedTokens,
+			"cacheWriteTokens", usage.InputTokensDetails.CacheWriteTokens)
 	}
 	slog.Info("hermes <<< SSE response.completed (assistant final)", logArgs...)
 

@@ -1,5 +1,21 @@
 # Flow Monitor
 
+External history runs with a valid `device-chat-context-` ID and attributed `[external-context]` / `[HANDLED]` / `[REPLY]` envelope display as **History sync**, with **Harness → Main** or **Realtime → Main** (or another external source). Cards show the original question and reported answer as **Context**, not a new TTS response. Agent name is available on the route tooltip; raw metadata remains in event details. Parsing uses complete chat-send data when chat-input previews are truncated, and does not change lifecycle status.
+
+Harness-only voice cards use `sensing_input.data.route: "harness_only"` to display **Harness** instead of **Agent**. After merging events by run ID, a nonempty `harness_response` closes that same turn and supplies its output and Response pipeline details, including history loaded from JSONL. A successful input dispatch alone stays active. Harness replies are not stitched onto nearby inputs with different run IDs; existing error states remain errors. DONE means the final response arrived, not that audio playback or the requested real-world action was verified.
+
+Regression checks: `node --test system/web/tests/flow-harness.test.cjs` from the repository root (after installing web dependencies).
+
+Codex steering records `turn_merged` under the follow-up run ID with
+`data.parent_run_id` pointing to the active host. The follow-up keeps its own
+input card and displays the shared host pipeline when selected. Its status
+follows the host until its own terminal event arrives; an unavailable parent is
+identified as outside loaded history. Voice/web requests wait for actual
+completion, while silent realtime history sync may finish at acknowledgement.
+The link is available for new recorded events; older traces without the marker
+are not retroactively inferred.
+The shared view also includes the selected follow-up's Harness result, TTS and hardware delivery events, without duplicating its input or lifecycle.
+
 The Flow Monitor is an observability layer for tracking agent turns end-to-end. It records events to daily JSONL files (`local/flow_events_YYYY-MM-DD.jsonl`) and streams them to the web UI via SSE.
 
 **Important**: The flow monitor is purely observational. It does NOT affect device behavior, agent communication, TTS, LED, or any business logic.
@@ -91,12 +107,12 @@ sendChat returns idempotencyKey → used as trace_id in flow events
 - **5.4** (majority): echoes the idempotencyKey directly as the runId (verified in `src/gateway/server-methods/chat.ts:2002`, `clientRunId = p.idempotencyKey`). The lifecycle runId IS already the device trace; no map is needed.
 - **Mixed within one session**: a single chat.send can produce up to two lifecycle phases — Phase 1 with the echoed idempotencyKey, Phase 2 with a fresh UUID for the actual embedded run (drain/burst pattern). Both must be handled.
 
-**Solution: `pendingChatTrace` FIFO + search-and-remove** in the SSE handler:
+**Solution: pending traces matched by message** in the SSE handler:
 1. Sensing handler allocates `NextChatRunID()`, then calls `flow.SetTrace(idempotencyKey)` **before** `flow.Start("sensing_input", ...)` so the JSONL `enter` line uses the same `trace_id` as `chat_send` for that POST. (Calling `SetTrace` only after `SendChatMessage` used to leave `enter` tagged with the **previous** turn's id — ghost turns and mismatched Pair exports.)
-2. After `chat.send` succeeds, the OS server pushes the idempotencyKey onto `pendingChatQueue` (FIFO).
+2. Before writing `chat.send`, the OS server records the idempotencyKey and transmitted message in `pendingChatBuf`; write failure removes the trace. Routing trace retention remains 2 minutes and the pending-send busy window remains 30 seconds. A separate telemetry buffer retains at most 1024 traces for 24 hours.
 3. On `lifecycle_start` the handler branches on `payload.RunID` format:
-   - **Device-format** (`lamp-chat-*`): the runId IS the device trace. Call `RemovePendingChatTraceByRunID(payload.RunID)` to drop the matching queue entry. **No map** is created. Removing (instead of skipping) is critical: a leftover entry would later be FIFO-popped by an unrelated UUID lifecycle and shift every subsequent mapping by one.
-   - **UUID** (`a8a51f3c-...`): unknowable from the device side. FIFO-pop the oldest queue entry and store mapping `UUID → idempotencyKey`. Stale entries (>2 min) are pruned from the head before popping.
+   - **Device-format** (`device-chat-*`, including legacy `lamp-chat-*`): remove the matching pending trace by run ID; no mapping is needed.
+   - **UUID**: fetch `chat.history` for the device session. Runtime routing retains its existing trimmed exact/prefix matching and oldest-match behavior. Separately, telemetry accepts only a unique exact trimmed match and stores its alias outside the routing map; missing/ambiguous evidence does not inherit a routing guess. History fetch failure still leaves correlation unresolved.
 4. All subsequent **agent-stream** events (`lifecycle`, `tool`, `thinking`, `assistant` deltas, `tts_send`) use `resolveRunID(payload.RunID)` so `trace_id` matches the device key.
 5. **Chat stream** events (`case "chat"`: user/assistant text from the parallel chat feed) also call `resolveRunID` for `flow.Log` and monitor `RunID`. Without this, OpenClaw could emit the **UUID** in chat payloads while JSONL from step 4 used the **device id** — the Monitor would split one turn into two IDs.
 
@@ -296,6 +312,8 @@ Some models behind openclaw/hermes (notably DeepSeek) emit their English plannin
 
 Raw deltas in `agent_last_token` stay unfiltered for debugging. Slack mid-turn streaming (`chat.appendStream`) is not filtered (append-only diffing can't retract text); the final Slack reply is.
 
+For delegated music requests, `skills/music/SKILL.md` requires leading HW markers followed by one short confirmation; song selection, noisy-transcript interpretation, and unknown-speaker attribution stay internal. `skills/input-branching/SKILL.md` also keeps routing decisions out of spoken replies. Both Go and HAL filters recognize sentence-initial `They named a/the song:` planning labels and `Speaker [identity] is unknown` bookkeeping, including in English mode. Regression coverage uses the reported “Eternal Flame” output and checks the first-sentence stream as well as the complete reply. These are targeted safeguards; identifying whether a model or proxy put reasoning into assistant text still requires the raw runtime/provider response.
+
 ### NO_REPLY suppression
 
 The agent may respond with `NO_REPLY` (or truncated forms `NO`, `NO_RE`, `NO_...`) when it decides not to respond — typically for passive sensing events like sound/motion. These are suppressed by `isAgentNoReply()` in `handler.go`: no TTS playback, no output display. Matches: exact `"NO"`, or any string starting with `"NO_"` or `"NO_RE"` (case-insensitive after trim). Source: `lifecycle_end` payload if available, otherwise fetched from `chat.history` RPC on `lifecycle_end` (async goroutine, best-effort). OpenClaw `lifecycle_end` currently does not include usage data, so `chat.history` is the primary source.
@@ -351,9 +369,9 @@ The two badges are meant to be read together: ⚡ is *perceived* latency (what t
 
 ### 1. OpenClaw assigns different run_id
 OpenClaw 5.2 (and rare 5.4 paths) generate a UUID for the embedded run; 5.4 mostly echoes the `idempotencyKey`. Mapping logic must handle both.
-- **Fix**: SSE handler picks path by `payload.RunID` format — device-format → search-and-remove queue entry; UUID → FIFO pop + map. See section above.
+- **Fix**: SSE handler picks path by `payload.RunID` format — device-format → search-and-remove queue entry; UUID → existing message matcher + map. Telemetry uses a separate unique exact match. See section above.
 - **Edge case**: If server restarts between `sendChat` and `lifecycle_start`, the global trace is lost and no mapping is created. Frontend stitching handles this as a fallback.
-- **Status**: Fixed for normal operation. Fallback stitching for restart edge case.
+- **Status**: Fast replies register their trace before the write. Long queued turns retain telemetry evidence within the separate 24-hour/1024-entry bound without extending the routing TTL. Restart, history fetch failure, and missing or ambiguous matches can still leave KPI execution unmatched; UI stitching is not execution evidence.
 
 ### 1a. Pending-trace orphan misattribution (regression in 0.0.465, fixed in 0.0.468)
 A previous attempt (commit `1897dfee`) skipped the FIFO pop entirely when the runId was device-format, but left the entry in the queue. The next UUID lifecycle then popped that orphan and was misattributed to it — observed pattern: Phase 1 reply + Phase 2 reply both rendered under the Phase 1 chat-N, with Phase 2's content actually belonging to the next chat in the drain.

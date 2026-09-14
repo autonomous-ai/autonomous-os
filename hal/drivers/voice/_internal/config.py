@@ -106,11 +106,7 @@ WARM_MIC_ECHO_SKIP_MAX_S = float(os.environ.get("HAL_WARM_MIC_ECHO_SKIP_MAX_S", 
 # On by default. It needs the `aec-audio-processing` native binding, which is
 # not a hal dependency — absent, every AEC entry point degrades to a no-op and
 # the voice path behaves exactly as it did before, so defaulting this on cannot
-# break a device that lacks the binding. Note that it also turns BARGE_IN on
-# (see BARGE_IN_ENABLED below), which is NOT a no-op: set
-# HAL_BARGE_IN_ENABLED=false to take the canceller without the local barge-in
-# detector. Live mode is unaffected either way — inside a live session the
-# local detector never runs, the provider's VAD owns interruption.
+# break a device that lacks the binding.
 # ---------------------------------------------------------------------------
 AEC_ENABLED = os.environ.get("HAL_AEC_ENABLED", "true").lower() == "true"
 # Speaker→mic delay hint. AEC3 estimates the real delay itself, but the hint
@@ -188,119 +184,6 @@ SPEAKER_ID_CACHE_FOLLOWUP_S = float(
 
 
 # ---------------------------------------------------------------------------
-# Voice barge-in — interrupt in-flight TTS when the user speaks during playback.
-# Defaults to AEC_ENABLED: cancellation is what makes it safe, so the two turn
-# on together.
-#
-# EVERY NUMBER BELOW IS PER-DEVICE. They are the values running on lamp-ee17
-# (USB mic card 3 + USB speaker card 4, independent clocks, speaker at 25%) and
-# they are a starting point, not a recipe. Re-measure on new audio hardware:
-# park HAL_BARGE_IN_RMS_THRESHOLD at 30000 so nothing can fire, speak nothing,
-# and read the `drain peak RMS=` line each reply logs.
-#
-# The honest state of this gate, measured 25/08/2026 with AEC_DELAY_MS=205:
-#   echo residual ceiling (room silent, 3 replies)   9804  6510  7849
-#   real user interruptions                          8027 (and 9361-20298 on
-#                                                    24/08 at the old 150 hint)
-# The populations OVERLAP — 8027 sits under the 9804 ceiling — so no level
-# threshold separates them. A threshold below the ceiling self-interrupts; one
-# above it misses quiet interruptions. Re-measured at three speaker volumes on
-# 27/08/2026 (see BARGE_IN_ECHO_MATCH): they overlap at all three, and lowering
-# the volume does not pull the echo down. What separates them is the envelope
-# test in BARGE_IN_ECHO_MATCH, which the level gate now runs ahead of.
-#
-# BLOCK_MS sizes the per-read chunk of the LEGACY monitor's mic capture, which
-# is unreachable while WARM_MIC is true (the default) — the warm path reuses the
-# capture loop's own 64ms frames. It is kept aligned with that frame size so the
-# two paths trigger on comparable evidence if warm mic is ever turned off.
-# ---------------------------------------------------------------------------
-BARGE_IN_ENABLED = os.environ.get(
-    "HAL_BARGE_IN_ENABLED", str(AEC_ENABLED)
-).lower() == "true"
-# 5000. This is BELOW the measured echo ceiling above, deliberately: it favours
-# catching a normal speaking voice over never self-interrupting. Expect the lamp
-# to cut itself off on the loudest syllables of its own replies — at 4500 that
-# was observed firing on RMS 5530 / 6446 / 6637 / 7749, twice transcribing the
-# lamp's own words as the user's turn. Raise toward 11000 to trade the other
-# way; no value of THIS gate alone gets both — BARGE_IN_ECHO_MATCH is what
-# rejects the echo that survives it, so leave this low enough to catch a normal
-# voice and let the envelope test do the separating.
-BARGE_IN_RMS_THRESHOLD = int(os.environ.get("HAL_BARGE_IN_RMS_THRESHOLD", "5000"))
-BARGE_IN_TRIGGER_FRAMES = int(os.environ.get("HAL_BARGE_IN_TRIGGER_FRAMES", "1"))
-BARGE_IN_BLOCK_MS = int(os.environ.get("HAL_BARGE_IN_BLOCK_MS", "64"))
-# Warm-mic path only: consecutive 64ms VAD frames over threshold needed to fire.
-# BLOCK_MS above sizes the legacy monitor's own reads; the warm path reuses the
-# capture loop's frames, so the guard is expressed in frames instead.
-BARGE_IN_WARM_FRAMES = int(os.environ.get("HAL_BARGE_IN_WARM_FRAMES", "2"))
-# Second condition: the burst must also BE speech. Level alone cannot tell a
-# person from a door slam — measured on real recorded echo, webrtcvad accepted
-# 7/7 non-speech probes (door slam, keys, cough, beep, music, noise burst,
-# chair scrape) at the same level where speech fires, while Silero rejected all
-# 7 at no latency cost. Evaluated only after the level gate passes, so the
-# model runs on candidates rather than on every drained frame.
-# The ratio is below the turn-level noise guard's on purpose: the window is
-# short and the audio is post-AEC double talk, which scores lower than a clean
-# utterance. Every decision logs its ratio — tune from those.
-#
-# Do NOT expect this to reject the lamp's own voice; it cannot, because echo IS
-# speech. Measured 25/08/2026: echo scored 0.50, 0.75 and 1.00 on separate
-# events while real interruptions scored 0.08, 0.88 and 1.00. Raising it to 0.60
-# was tried and rejected real turns without stopping the echo. Level does the
-# separating; this only rejects loud NON-speech (door slam, keys, cough).
-BARGE_IN_REQUIRE_SPEECH = os.environ.get(
-    "HAL_BARGE_IN_REQUIRE_SPEECH", "true"
-).lower() == "true"
-BARGE_IN_SPEECH_RATIO = float(os.environ.get("HAL_BARGE_IN_SPEECH_RATIO", "0.35"))
-BARGE_IN_SPEECH_FRAMES = int(os.environ.get("HAL_BARGE_IN_SPEECH_FRAMES", "6"))
-# Third condition, and the only one that can tell the lamp's voice from a
-# person's: reject the candidate when its loudness envelope tracks what the
-# speaker is playing. See aec.echo_envelope_match.
-#
-# This exists because level cannot do it and re-measuring will not fix it.
-# Silent-room echo ceiling vs real interruptions, same room, same reply:
-#   speaker 25% (lamp-ee17)   echo 9804   person 8027
-#   speaker 40% (lamp-0c89)   echo 9969   person 6956-8027
-#   speaker 65% (lamp-0c89)   echo 13560  person 6956
-# The echo ceiling sits ABOVE the person at every volume, and 24dB of mixer
-# range moved it by under 3dB — so there is no volume to run at and no
-# threshold to pick. Turning the speaker down is not a workaround.
-#
-# Labelled on lamp-0c89 27/08/2026, live, speaker at 40%. The underlying
-# measurement is the residual SKEW in dB (see aec._SKEW_ECHO_FLOOR_DB); this
-# threshold is that number after mapping:
-#   echo, silent room (15 windows)   -2.8 .. +2.1 dB   -> scores 1.00
-#   echo, mixed run (~40 windows)   -50.0 .. +4.8 dB   -> scores 1.00
-#   confirmed real interruption      +8.4 .. +40.4 dB  -> scores 0.07-0.47
-# 0.65 sits in the middle of that gap; a silent-room run of 12 replies fired
-# zero barge-ins with it. It is NOT per-device: a normalised
-# correlation has no units, so mic gain, speaker level and room all cancel out
-# — unlike RMS_THRESHOLD and AEC_DELAY_MS above, which do have to be measured
-# per body. Set to 0 to disable the test (the pre-27/08 behaviour).
-BARGE_IN_ECHO_MATCH = float(os.environ.get("HAL_BARGE_IN_ECHO_MATCH", "0.65"))
-# Pre-roll kept while draining, in 64ms frames. Much longer than PRE_ROLL_FRAMES
-# (8 = 512ms) because interrupting the lamp is detected LATE: the level gate
-# waits for the person to out-shout the echo, frames arriving without
-# cancellation are skipped entirely, and the envelope test only then gets to
-# judge. Everything before that moment exists only in this buffer.
-# It is bounded on BOTH sides, which is why it is a separate number and not
-# simply "as much as possible". Device-observed 27/08/2026:
-#   8 frames (512ms)  -> "What do people there usually do?" reached STT as
-#                        'usually do.' — the session started mid-phrase.
-#   24 frames (1536ms) -> the pre-roll reached back past the interruption into
-#                        the reply's own echo and STT transcribed the LAMP:
-#                        'with your friends. Why do you think they like doing?'
-#   12 frames (768ms)  -> 'Are there any laws in the US?' arrived whole.
-# Detecting the person's exact onset instead was tried and removed: aligning a
-# 1.5s window against the reference is too unreliable to find the boundary, and
-# it returned "no answer" on every candidate on device.
-# Only bounds what a barge-in turn may prepend; ordinary turns are still
-# trimmed back to PRE_ROLL_FRAMES so their leading silence is unchanged.
-BARGE_IN_PRE_ROLL_FRAMES = int(
-    os.environ.get("HAL_BARGE_IN_PRE_ROLL_FRAMES", "12")
-)
-
-
-# ---------------------------------------------------------------------------
 # Speaker recognition — prefix every transcript with "<Name>: "
 # ---------------------------------------------------------------------------
 SPEAKER_RECOGNITION_ENABLED = _hal_config.SPEAKER_RECOGNITION_ENABLED
@@ -373,16 +256,16 @@ LIVE_MODE = _hal_config.LIVE_MODE
 #                 The only mode in which provider-native barge-in can work on a
 #                 device with a starving reference, and the least safe: with
 #                 low ERLE the model hears its own onsets as the user and cuts
-#                 itself off (see LIVE_NO_USER_MAX_S for the observed loop).
+#                 itself off (see LIVE_MAX_UNPROMPTED_REPLIES for the loop).
 #                 Lower the speaker volume before using it.
 #
 # "cancelled" is the intended end state and is NOT the default, because the
 # canceller does not yet earn it. Measured 2026-09-04 (barge-in-captures/):
 # mean ERLE 14-19 dB but PEAK ERLE ~5 dB — mic peaks of 29264 leave the APM at
 # 25269, against a real-interruption floor of 6956. The provider's VAD sees
-# peaks and has none of the defences the local barge-in detector has (no
-# uncancelled() flag, no envelope match, no duration floor), so it reads the
-# device's own onsets as the user interrupting and the reply cuts itself off.
+# peaks and has no echo defence of its own (it cannot see uncancelled(), and
+# it applies no duration floor), so it reads the device's own onsets as the
+# user interrupting and the reply cuts itself off.
 # Flip this to "cancelled" once a replay of full40-bargein-off through the
 # canceller puts peak residual under that floor with margin.
 LIVE_UPLINK_DURING_PLAYBACK = os.environ.get(
@@ -405,17 +288,9 @@ LIVE_PLAYBACK_TAIL_S = float(os.environ.get("HAL_LIVE_PLAYBACK_TAIL_S", "0.35"))
 # the device stopped talking.
 LIVE_IDLE_HANGUP_S = float(os.environ.get("HAL_LIVE_IDLE_HANGUP_S", "15"))
 
-# Hard ceiling on "the user has said nothing at all", independent of who is
-# talking. LIVE_IDLE_HANGUP_S above is HELD while the device speaks, which is
-# right for one long answer and wrong for a model that has started answering
-# ITSELF — and with `mute` that is a real failure mode, not a hypothetical: the
-# transition from substituted digital silence back to room audio is an
-# amplitude onset, and a server-side VAD reads an onset as somebody starting to
-# talk. Device-observed 2026-09-07 on intern-v2-6286: four unprompted replies
-# in 35 s with nobody in the room, each one re-arming the hold, and the session
-# would have run to LIVE_MAX_S. This ends it regardless of who is speaking.
-LIVE_NO_USER_MAX_S = float(
-    os.environ.get("HAL_LIVE_NO_USER_MAX_S", str(LIVE_IDLE_HANGUP_S * 3))
+# Hard ceiling on a model that has started answering ITSELF, counted in REPLIES rather than seconds.
+LIVE_MAX_UNPROMPTED_REPLIES = int(
+    os.environ.get("HAL_LIVE_MAX_UNPROMPTED_REPLIES", "3")
 )
 
 # Grace period after the model calls end_conversation, before the session is

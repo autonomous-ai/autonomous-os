@@ -50,6 +50,7 @@ function useEmotionPresets() {
 }
 import type { SystemInfo, NetworkInfo, HWHealth, OCStatus, PresenceInfo, VoiceStatus, ServoState, DisplayState, AudioVolume, LEDColor, SceneInfo } from "./types";
 import { StatusDot, HWBadge, SignalBars, Skeleton, SkeletonRows, SoftwareUpdateButton, StatRow, StatusBadge, STATUS_TONE, CardLabel, RestartAgentButton, DevicePowerButtons } from "./components";
+import { RestartServiceButton } from "./RestartServiceButton";
 import { formatUptime, formatAgo, useCountUp } from "./utils";
 
 export function OverviewSection({
@@ -159,7 +160,6 @@ export function OverviewSection({
   const [justTriggered, setJustTriggered] = useState<Record<string, number>>({});
   const pokePollRef = useRef<() => void>(() => {});
   useEffect(() => {
-    if (!isDebug) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const poll = async () => {
@@ -180,7 +180,7 @@ export function OverviewSection({
     pokePollRef.current = () => { if (timer) clearTimeout(timer); void poll(); };
     void poll();
     return () => { cancelled = true; if (timer) clearTimeout(timer); };
-  }, [isDebug, refreshOtaVersions]);
+  }, [refreshOtaVersions]);
 
   const onUpdateTriggered = useCallback((target: string) => {
     setJustTriggered((prev) => ({ ...prev, [target]: Date.now() }));
@@ -596,11 +596,11 @@ export function OverviewSection({
             detailed CPU/RAM/Disk live in the System tab. */}
         <div className="lm-mon-card" style={monCard}>
           <div style={{ marginBottom: 10 }}><CardLabel icon={<Tag size={13} />} text="Versions" /></div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, overflowX: "auto" }}>
             <VersionRow name="Host"   color="var(--lm-text)"   version={null}                    uptime={sys?.uptime ?? null}                                   updateTarget={null} />
             <VersionRow name="Web"    color="var(--lm-teal)"   version={webVersion}              uptime={null}                                                  updateTarget={canUpdate("web") ? "web" : null} updating={isUpdating("web")} onTriggered={onUpdateTriggered} />
-            <VersionRow name="OS"     color="var(--lm-amber)"  version={sys?.version ?? null}    uptime={sys?.serviceUptime ?? null}                            updateTarget={canUpdate("os-server") ? "os-server" : null} updating={isUpdating("os-server")} onTriggered={onUpdateTriggered} />
-            <VersionRow name="HAL"    color="var(--lm-blue)"   version={halVersion}              uptime={sys?.halUptime ?? null}                                updateTarget={canUpdate("hal") ? "hal" : null} updating={isUpdating("hal")} onTriggered={onUpdateTriggered} />
+            <VersionRow restartTarget="os-server" name="OS"     color="var(--lm-amber)"  version={sys?.version ?? null}    uptime={sys?.serviceUptime ?? null}                            updateTarget={canUpdate("os-server") ? "os-server" : null} updating={isUpdating("os-server")} onTriggered={onUpdateTriggered} />
+            <VersionRow restartTarget="hal" name="HAL"    color="var(--lm-blue)"   version={halVersion}              uptime={sys?.halUptime ?? null}                                updateTarget={canUpdate("hal") ? "hal" : null} updating={isUpdating("hal")} onTriggered={onUpdateTriggered} />
             <VersionRow name="Agent"  color="var(--lm-purple)" version={oc?.version ?? null}     uptime={oc?.connected ? (oc?.agentUptime ?? null) : null}      updateTarget={canUpdate("agent") ? "agent" : null} updating={isUpdating("agent")} onTriggered={onUpdateTriggered} />
             {isDebug && <VersionRow name="Bootstrap" color="var(--lm-text-dim)" version={otaVersions.bootstrap?.current ?? null} uptime={null} updateTarget={canUpdate("bootstrap") ? "bootstrap" : null} updating={isUpdating("bootstrap")} onTriggered={onUpdateTriggered} />}
             {isDebug && <VersionRow name="Device" color="var(--lm-text-dim)" version={otaVersions.device?.current ?? null} uptime={null} updateTarget={canUpdate("device") ? "device" : null} updating={isUpdating("device")} onTriggered={onUpdateTriggered} />}
@@ -1017,12 +1017,13 @@ function ToggleButton({ active, label, onClick, disabled = false }: {
   );
 }
 
-function VersionRow({ name, color, version, uptime, updateTarget, updating = false, onTriggered }: {
+function VersionRow({ name, color, version, uptime, updateTarget, updating = false, onTriggered, restartTarget }: {
   name: string;
   color: string;
   version: string | null;
   uptime: number | null;
   updateTarget: "os-server" | "bootstrap" | "web" | "hal" | "device" | "agent" | null;
+  restartTarget?: "os-server" | "hal";
   // An install runs for tens of seconds (the component stops, is rebuilt and
   // restarts). Without a label the row just sits there — on HAL it even shows a
   // stale version while /opt/hal does not exist — and the natural reaction is to
@@ -1030,16 +1031,17 @@ function VersionRow({ name, color, version, uptime, updateTarget, updating = fal
   updating?: boolean;
   onTriggered?: (target: string) => void;
 }) {
-  // 4-column grid keeps name/version/uptime/button vertically aligned across rows.
+  // Keep both action columns aligned, with horizontal scrolling on narrow cards.
   return (
     <div style={{
       display: "grid",
-      gridTemplateColumns: "70px 1fr 70px 70px",
+      gridTemplateColumns: "70px minmax(55px, 1fr) 70px 70px 65px",
+      minWidth: 362,
       alignItems: "center",
-      gap: 10,
+      gap: 8,
     }}>
       <span style={{ fontSize: 12.5, color: "var(--lm-text-dim)" }}>{name}</span>
-      <span style={{ fontSize: 12.5, fontWeight: 600, color, fontFamily: "monospace" }}>{version ?? "—"}</span>
+      <span title={version ?? undefined} style={{ fontSize: 12.5, fontWeight: 600, color, fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{version ?? "—"}</span>
       <span style={{ fontSize: 11, color: "var(--lm-text-muted)", textAlign: "right" }}>
         {uptime != null ? formatUptime(uptime) : "—"}
       </span>
@@ -1047,6 +1049,9 @@ function VersionRow({ name, color, version, uptime, updateTarget, updating = fal
         {updating
           ? <span style={{ fontSize: 9.5, fontWeight: 600, color: "var(--lm-amber)" }} title="Installing — the component restarts when it finishes">updating…</span>
           : updateTarget && <SoftwareUpdateButton target={updateTarget} label="update" onTriggered={onTriggered} />}
+      </span>
+      <span style={{ display: "flex", justifyContent: "flex-end" }}>
+        {restartTarget && <RestartServiceButton target={restartTarget} disabled={updating} />}
       </span>
     </div>
   );

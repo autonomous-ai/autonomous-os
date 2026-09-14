@@ -14,7 +14,7 @@ Control the device's speaker and microphone hardware directly. Use this for volu
    - Check current volume -> use `GET /audio/volume`
    - Diagnostics / test -> use `POST /audio/play-tone`
    - Raw recording -> use `POST /audio/record`
-2. Optionally check device availability first: `GET /audio`
+2. For explicit volume/tone/recording requests, call the requested endpoint directly and handle its response. Use `GET /audio` for device diagnostics, not routine preflight. Relative volume changes still need `GET /audio/volume`.
 3. Execute the appropriate API call
 4. Confirm the action to the user
 
@@ -74,9 +74,13 @@ Plays a sine wave. Use for audio testing only. Keep it short (< 1 second).
 
 ### Record audio
 ```bash
-curl -s -X POST "http://127.0.0.1:5001/audio/record?duration_ms=3000"
+record_dir=$(mktemp -d /tmp/autonomous-recording.XXXXXX) &&
+curl --fail --silent --show-error -X POST \
+  "http://127.0.0.1:5001/audio/record?duration_ms=3000" \
+  --output "$record_dir/recording.wav" &&
+printf 'Recording saved: %s\n' "$record_dir/recording.wav"
 ```
-Records from the microphone and returns a WAV file.
+Records from the microphone and returns WAV bytes; save them to a unique file rather than printing binary data to the model. Adapt the duration to the user's request. Report the path only after the request succeeds; a failed request may leave an empty or partial file and is not a recording result. Do not re-record automatically after an uncertain outcome.
 
 ## Error Handling
 - If `GET /audio` returns `"available": false`, inform the user: "The speaker/microphone is not connected right now."

@@ -6,9 +6,13 @@ description: TTS speech + mic/speaker mute for privacy. MUST trigger on meetings
 # Voice — Speak Through Speaker
 
 ## Quick Start
-Your chat replies are automatically spoken aloud through TTS. Use this skill only when you need to speak additional or separate text outside your normal reply (e.g., parallel speech during tool calls, or text different from your chat reply).
+Choose the relevant path first:
 
-## Workflow
+- **Mic/speaker mute, unmute, or privacy request:** apply **Ambient Audio Guard**, then the applicable mute/unmute or Meeting Mode section below. Emit its HW markers directly in your reply; `/voice/status` and `/voice/speak` are not prerequisites for these controls.
+- **Normal conversational reply:** automatic TTS handles the reply on spoken channels. No explicit speech call is needed.
+- **Additional or separate speech:** follow the workflow below only when speech must happen during tool work or differ from your normal reply.
+
+## Workflow — explicit additional or separate speech
 1. Determine if you need explicit speech beyond your normal reply:
    - Normal conversational reply -> do NOT call this skill, TTS is automatic
    - Need to speak while also performing tool calls -> use `POST /voice/speak`

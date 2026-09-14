@@ -166,6 +166,8 @@ Hardware-only theo `feedback_lelamp_external.md`. STT → OpenClaw, OpenClaw →
 
 ### 4.4 OpenClaw skill: `computer-use`
 
+Hành vi skill hiện tại (mọi runtime): trạng thái hiện tại đáng tin cậy xác nhận chưa pair, mất kết nối hoặc pause sẽ dừng tác vụ desktop trước mọi command hay việc đọc vision reference, kể cả HW marker đơn giản. Nếu chưa biết trạng thái, skill kiểm tra read-only `desktop_info` một lần và đọc đầy đủ kết quả cùng exit code. Kết quả kiểm tra thành công được dùng lại trong workflow. Lỗi kết nối/quyền và timeout kết thúc turn, không retry, tự pair/kết nối lại hoặc chuyển sang Harness/browser trên thiết bị. Phản hồi ngắn nêu đúng blocker, không hứa tự hoàn thành sau đó. User yêu cầu thử lại hoặc có cập nhật kết nối đáng tin cậy mới thì được kiểm tra lại. Đây là chỉ dẫn skill, không phải backend chặn thực thi; không bổ sung cơ chế inject trạng thái mới.
+
 - Nằm trong skill directory của OpenClaw (path tùy convention OpenClaw)
 - `SKILL.md` mô tả trigger và tool surface
 - Trigger pattern gồm tiếng Việt ("mở ... trên máy tính", "vào trang ... trên máy", "đóng app ...") và tiếng Anh ("open ... on my computer", "go to ... on my mac")

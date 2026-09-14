@@ -7,7 +7,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 
 import hal.app_state as state
-from hal import config
+from hal import config, privacy
 from hal.models import (
     SceneListResponse,
     SceneRequest,
@@ -137,7 +137,7 @@ def activate_scene(req: SceneRequest):
             state.voice_service.stop()
         state._persist_mic_state()
         state.logger.info("Scene %s: mic muted", req.scene)
-    elif mic == "on" and state._mic_muted:
+    elif mic == "on" and state._mic_muted and not privacy.mic_locked():
         state._mic_muted = False
         state._mic_manual_override = False
         state.start_voice_service("scene:mic-on")
@@ -157,7 +157,7 @@ def activate_scene(req: SceneRequest):
             state.music_service.stop()
         state._persist_speaker_state()
         state.logger.info("Scene %s: speaker muted", req.scene)
-    elif spk == "on" and state._speaker_muted:
+    elif spk == "on" and state._speaker_muted and not privacy.speaker_muted:
         state._speaker_muted = False
         state._persist_speaker_state()
         state.logger.info("Scene %s: speaker unmuted", req.scene)
@@ -194,7 +194,7 @@ def deactivate_scene():
         state._auto_camera_on("scene:off")
 
     # Unmute mic + restart voice pipeline
-    if state._mic_muted:
+    if state._mic_muted and not privacy.mic_locked():
         state._mic_muted = False
         state._mic_manual_override = False
         state.start_voice_service("scene:off")
@@ -203,7 +203,7 @@ def deactivate_scene():
         state.logger.info("Scene off: mic unmuted")
 
     # Unmute speaker
-    if state._speaker_muted:
+    if state._speaker_muted and not privacy.speaker_muted:
         state._speaker_muted = False
         state._persist_speaker_state()
         state.logger.info("Scene off: speaker unmuted")

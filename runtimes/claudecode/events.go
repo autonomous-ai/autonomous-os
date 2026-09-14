@@ -12,6 +12,7 @@ import (
 	"go.autonomous.ai/os/system/lib/sensingmsg"
 	"go.autonomous.ai/os/system/lib/speakergate"
 	"go.autonomous.ai/os/system/skillcontext/mood"
+	"go.autonomous.ai/os/system/telemetry"
 )
 
 // pendingEvent is a sensing event buffered while the agent was busy.
@@ -145,6 +146,7 @@ func (s *ClaudeCodeService) drainPendingEvents() {
 
 	const expireAfter = 60 * time.Second
 	expirable := map[string]bool{
+		"environment.update":      true,
 		"motion.activity":         true,
 		"emotion.detected":        true,
 		"speech_emotion.detected": true,
@@ -154,6 +156,10 @@ func (s *ClaudeCodeService) drainPendingEvents() {
 	}
 	filtered := events[:0]
 	for _, ev := range events {
+		if !sensingmsg.ReplayAllowed(ev.eventType) {
+			slog.Info("environment event dropped at replay", "component", "sensing", "reason", "sleeping or capability unavailable")
+			continue
+		}
 		if expirable[ev.eventType] && time.Since(ev.queuedAt) > expireAfter {
 			slog.Info("sensing event expired from queue", "component", "sensing", "type", ev.eventType, "age_s", int(time.Since(ev.queuedAt).Seconds()))
 			continue
@@ -163,6 +169,7 @@ func (s *ClaudeCodeService) drainPendingEvents() {
 	events = filtered
 
 	coalesce := map[string]bool{
+		"environment.update":      true,
 		"presence.enter":          true,
 		"presence.leave":          true,
 		"presence.away":           true,
@@ -239,6 +246,12 @@ func (s *ClaudeCodeService) drainPendingEvents() {
 			s.MarkSilentRun(runID)
 		}
 
+		if telemetry.TaskGroup(ev.eventType) == "sensing" {
+			// Keep this cohort stable if the socket disappears before dispatch.
+			ev.fixedRunID = runID
+			events[i] = ev
+			telemetry.ReportTaskStarted(ev.eventType, "", runID)
+		}
 		var err error
 		if len(ev.images) > 0 {
 			_, err = s.SendChatMessageWithImagesAndRun(msg, ev.images, reqID, runID)
@@ -253,6 +266,9 @@ func (s *ClaudeCodeService) drainPendingEvents() {
 				s.pendingEventsMu.Unlock()
 				flow.End("sensing_input", turnStart, map[string]any{"deferred": "disconnected before send"}, runID)
 				return
+			}
+			if telemetry.TaskGroup(ev.eventType) != "" {
+				telemetry.ReportTaskExecution(runID, "", "failed", "dispatch_error")
 			}
 			slog.Error("failed to replay pending event", "component", "sensing", "type", ev.eventType, "error", err)
 			flow.End("sensing_input", turnStart, map[string]any{"error": err.Error()}, runID)

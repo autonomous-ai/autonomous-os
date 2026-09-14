@@ -78,9 +78,9 @@ Output: Do NOT use this skill for emotion. Use **Emotion** skill instead (you CA
 
 ## Output Template
 ```
-[Scene] {scene_name} activated — {brightness}%, {color_temp}
+[HW:/scene:{"scene":"reading"}] Reading mode activated.
 ```
 Examples:
-- `[Scene] reading activated — 80%, 4000K neutral white`
-- `[Scene] night activated — 5%, 2200K ultra-warm`
-- `[Scene] energize activated — 100%, 6500K daylight`
+- `[HW:/scene:{"scene":"reading"}] Reading mode activated.`
+- `[HW:/scene:{"scene":"night"}] Night mode on.`
+- `[HW:/scene:{"scene":"energize"}] Energize mode on.`

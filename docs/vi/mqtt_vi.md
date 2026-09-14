@@ -345,6 +345,7 @@ tốc độ gửi đi trong `0.7–1.2`.
 | `chat.send` | Mở một turn của agent từ backend rồi stream ngược về (ack một run id, sau đó bắn `chat.event`) | `message` (bắt buộc), tuỳ chọn `images[]`/`files[]`/`session_id`/`speak` |
 | `skills.save` | Ghi một skill soạn sẵn vào thư mục skill của runtime đang chạy (đồng bộ) | `name`, `description`, `instructions` |
 | `skills.upload` | Cài một file `.md`, `.zip`, hoặc `.skill` vào runtime đang chạy (đồng bộ) | `filename`, `content_base64` |
+| `environment.status` | Đọc snapshot môi trường HAL theo capability, không phụ thuộc model cảm biến | _(không)_ |
 | `system.info` | Snapshot tổng hợp: versions + network + host | _(không)_ |
 | `system.version` | Chỉ versions các thành phần (rẻ hơn `system.info`) | _(không)_ |
 | `system.network` | Chỉ thông tin mạng của interface đang giữ default route | _(không)_ |
@@ -357,6 +358,49 @@ lệnh dùng chung single-flight guard của os-server: khi đã có power actio
 chờ, thiết bị publish thêm phản hồi cuối `status:"failure"` kèm lý do. Lệnh gọi
 action đầy đủ của HAL, không chạy lệnh OS trần: reboot phát cue; shutdown phát
 cue và release servo.
+
+Request/reply này không tạo event cho agent. Worker OS riêng xử lý thay đổi
+kéo dài; xem [cảm biến môi trường Lamp](../../robots/lamp/docs/vi/environment-sensing_vi.md#chính-sách-thay-đổi-của-os-và-api-cho-agent).
+
+Snapshot chung hỗ trợ SEN55 + SCD41 hoặc SEN63C mà không thêm MQTT kind.
+Cờ `enabled` trong JSON từng component điều khiển thu nhận, không cần danh sách
+chọn. `sample` luôn có chín key chỉ số nullable và timestamp nullable. Số đo
+thiếu, tắt hay chưa khả dụng là null; SEN63C không có VOC/NOx.
+`components` giữ status/lỗi/timing/sample riêng,
+`sources` ánh xạ chỉ số đến component, `metric_timestamps` chứa thời điểm đo
+của từng chỉ số. Nhóm `ready` nghĩa là ít nhất một số đo còn mới; `partial`
+báo component đang bật nhưng không khả dụng. Kiểm tra từng nguồn, không dùng
+timestamp mới nhất của nhóm làm tuổi mọi chỉ số. Một sensor lỗi không loại
+số đo còn tốt. Thiếu CO₂ không tạo giá trị suy diễn.
+
+**`environment.status`:** gửi trên `fa_channel`:
+
+```json
+{"cmd":"data","kind":"environment.status","data":{}}
+```
+
+OS kiểm tra device có khai báo capability `environment`, không kiểm tra SEN55
+hay model phần cứng. Sau đó đọc HAL local `GET /environment/status` với timeout
+5 giây và trả nguyên snapshot JSON trong `data` trên `fd_channel`. Phản hồi dùng
+`MQTTDataResponse` chuẩn; ví dụ dưới lược bỏ metadata device/version/id/mac/time:
+
+```json
+{"type":"data","kind":"environment.status","status":"success","data":{"enabled":false,"state":"disabled","last_error":null,"sample":{"pm1_0_ug_m3":null,"pm2_5_ug_m3":null,"pm4_0_ug_m3":null,"pm10_ug_m3":null,"temperature_c":null,"humidity_pct":null,"voc_index":null,"nox_index":null,"co2_ppm":null,"timestamp":null},"age_s":null,"stale":true,"sources":{},"metric_timestamps":{}}}
+```
+
+Snapshot có thể kèm `timing` và các trường do HAL cung cấp. `success` nghĩa là
+đọc được snapshot hợp lệ, kể cả sensor đang tắt, lỗi hoặc dữ liệu cũ. Client phải
+kiểm tra `data.state`, `data.stale`, `data.sample` và `data.last_error` trước khi
+hiển thị số đo. Thiếu capability trả:
+
+```json
+{"type":"data","kind":"environment.status","status":"failure","error":"environment capability not declared"}
+```
+
+Lỗi kết nối HAL, HTTP khác 200 hoặc status JSON không hợp lệ cũng trả `failure`
+kèm `error`. Chỉ trả khi có request, không có subscription, stream liên tục,
+event hay gọi agent. Response giữ cùng `kind`; protocol hiện tại không thêm
+request ID. Mobile dùng broker credentials và topic ACL hiện có của device.
 
 **Phản hồi `system.info`:** đồng bộ (không có trạng thái `starting` trung gian); mỗi
 probe lỗi sẽ rơi về zero value của nó.
@@ -965,6 +1009,47 @@ Thay thế: `integrations/chat-bridges/autonomous-chat-hook/` forward chat từ
 backend một chiều dưới dạng `type:"voice"`, nên device đọc to câu trả lời và
 không có gì quay về. Nó không thể làm nền cho một UI chat; cặp kind này thay nó ở
 mục đích đó.
+
+### `harness.voice-mode.get` / `harness.voice-mode.set` — Giọng nói Harness-only
+
+**Nhận trên `fa_channel`:**
+```json
+{"cmd":"data","kind":"harness.voice-mode.get"}
+{"cmd":"data","kind":"harness.voice-mode.set","data":{"enabled":true}}
+{"cmd":"data","kind":"harness.voice-mode.set","data":{"enabled":false}}
+```
+
+`get` không cần `data`, đọc trạng thái giọng nói chung đang cache mà không gọi
+Harness. `set` bắt buộc nhận object chỉ chứa `enabled` kiểu JSON boolean;
+thiếu giá trị, null, chuỗi hoặc field thừa như `agentId` đều bị từ chối.
+Lệnh đặt giá trị rõ ràng, không đảo trạng thái: gửi lại cùng giá trị không đổi
+generation định tuyến và không ngắt capture khác.
+
+Cả hai lệnh phản hồi trên `fd_channel` bằng metadata `MQTTDataResponse` chuẩn,
+`type:"data"`, cùng `kind` với request và snapshot giống
+`GET /api/harness/voice-mode` (lược bỏ metadata thiết bị trong ví dụ):
+```json
+{"type":"data","kind":"harness.voice-mode.set","status":"success","data":{"enabled":true,"generation":1789350000000000,"machineId":"computer-id","agentId":"agent-id","agentName":"Mike","focusRevision":"instance:3","focusAvailable":true}}
+```
+
+Snapshot là `{enabled,generation,machineId,agentId,agentName?,focusRevision,focusAvailable,pending?,error?}`.
+Khi focus chưa khả dụng, snapshot có thể chứa `focusAvailable:false` và
+`error` dù lệnh thành công. Input không hợp lệ hoặc controller không khả dụng
+trả `status:"failure"` cùng field `error` của envelope.
+Không có push MQTT tự phát cho trạng thái voice; client gọi `get` sau khi
+subscribe, reconnect hoặc khi cần refresh trạng thái hiện tại.
+
+MQTT dùng cùng controller trong RAM với HTTP, Monitor và HAL. Cờ mặc định tắt
+sau khi service khởi động lại. Được phép đặt cờ khi offline hoặc thiếu focus;
+delivery giọng nói vẫn cần agent được chọn trong app Harness. Các lệnh này
+không chọn agent và không đổi routing của MQTT/Web chat dạng text hay skill.
+Tắt mode giữ nguyên task đã gửi cùng đường output của task đó.
+`harness.pair.revoke` cũng tắt mode, giống unpair qua HTTP.
+Xem [chế độ giọng nói Harness](harness_vi.md#chế-độ-giọng-nói-harness-only).
+
+Phân quyền dùng credentials broker và ACL topic lệnh của thiết bị hiện có;
+bên publish phải có quyền với thiết bị đó. Không thêm MQTT topic, credential
+hay transport Harness mới.
 
 ### `buddy.pair.start` — Cấp mã pair Buddy
 

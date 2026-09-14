@@ -8,7 +8,7 @@ import type { Turn } from "./types";
 import { TYPE_LUCIDE, TURN_INPUT_FALLBACK } from "./types";
 import { HW } from "../types";
 import { useTheme } from "@/lib/useTheme";
-import { turnIO, turnTokenStats, turnCurrentUser } from "./helpers";
+import { turnIO, turnTokenStats, turnCurrentUser, externalHistory } from "./helpers";
 import { PoseBucketModal } from "./PoseBucketModal";
 import { UserAvatar } from "./UserAvatar";
 
@@ -42,7 +42,7 @@ export function TurnBadge({ turn, pairTint, userPhotos, onViewPipeline }: {
   const pathColor = turn.path === "dropped" ? "var(--lm-red)"
     : turn.path === "queued" ? "var(--lm-amber)"
     : turn.path === "local" ? "var(--lm-green)"
-    : turn.path === "agent" ? "var(--lm-blue)"
+    : (turn.path === "agent" || turn.path === "harness") ? "var(--lm-blue)"
     : "var(--lm-text-muted)";
   const statusColor = turn.status === "done" ? "var(--lm-green)"
     : turn.status === "error" ? "var(--lm-red)"
@@ -113,7 +113,9 @@ export function TurnBadge({ turn, pairTint, userPhotos, onViewPipeline }: {
       ev.detail?.node === "turn_steered"
     )
   );
-  const pathLabel = turn.path === "agent" ? "Agent" : turn.path === "dropped" ? "dropped" : turn.path === "queued" ? "queued" : turn.path;
+  const history = externalHistory(turn);
+  const historySource = history?.source === "harness" ? "Harness" : history?.source;
+  const pathLabel = history ? `${historySource} → Main` : turn.path === "harness" ? "Harness" : turn.path === "agent" ? "Agent" : turn.path === "dropped" ? "dropped" : turn.path === "queued" ? "queued" : turn.path;
 
   return (
     <div data-region="FLOW_TURN_CARD" data-turn-id={turn.id} data-turn-type={turn.type} style={{
@@ -142,11 +144,11 @@ export function TurnBadge({ turn, pairTint, userPhotos, onViewPipeline }: {
         <span style={{
           fontSize: 10, fontWeight: 700, color: "var(--lm-text)",
           textTransform: "uppercase" as const,
-        }}>{turn.type}</span>
+        }}>{history ? "History sync" : turn.type}</span>
         <span style={{
           fontSize: 8, padding: "1px 5px", borderRadius: 3,
           background: `${pathColor}18`, color: pathColor, fontWeight: 700,
-        }}>{pathLabel}</span>
+        }} title={history?.agentName || undefined}>{pathLabel}</span>
         <span
           className={statusLabel === "ACTIVE" ? "lm-turn-active" : undefined}
           style={{
@@ -389,7 +391,7 @@ export function TurnBadge({ turn, pairTint, userPhotos, onViewPipeline }: {
             color: "var(--lm-purple)", fontWeight: 600, marginRight: 6,
             display: "inline-flex", alignItems: "center", gap: 3, verticalAlign: "text-bottom",
           }}>
-            {["telegram","discord","slack","wechat","channel"].includes(turn.type)
+            {history ? <><MessageSquare size={12} strokeWidth={2} /> Context</> : ["telegram","discord","slack","wechat","channel"].includes(turn.type)
               ? <MessageSquare size={12} strokeWidth={2} />
               : <><Volume2 size={12} strokeWidth={2} /> TTS</>}
           </span>
@@ -430,6 +432,10 @@ export function TurnBadge({ turn, pairTint, userPhotos, onViewPipeline }: {
         >
           <TriangleAlert size={12} strokeWidth={2.25} style={{ flexShrink: 0 }} /> Agent closed stream · no message · no lifecycle
         </div>
+      ) : turn.mergedIntoRunId ? (
+        <div style={{ fontSize: 11.5, color: "var(--lm-purple)", marginBottom: 2, overflowWrap: "anywhere", lineHeight: 1.45 }}>
+          Shared pipeline · {turn.status === "active" ? "awaiting result" : turn.status === "error" ? "failed" : "completed"}
+        </div>
       ) : turn.status === "done" ? (
         <div style={{
           fontSize: 11.5, color: "var(--lm-text-muted)", marginBottom: 2,
@@ -439,6 +445,11 @@ export function TurnBadge({ turn, pairTint, userPhotos, onViewPipeline }: {
           <Moon size={12} strokeWidth={2} style={{ flexShrink: 0 }} /> no output — agent processed silently
         </div>
       ) : null}
+      {turn.mergedIntoRunId && (
+        <div style={{ fontSize: 10, color: "var(--lm-purple)", marginBottom: 4, overflowWrap: "anywhere" }}>
+          Merged into {turn.mergedIntoRunId}
+        </div>
+      )}
       {/* Row 3b: output — Hardware actions */}
       {hwOutput && (
         <div style={{

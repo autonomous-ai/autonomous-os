@@ -153,6 +153,8 @@ type OpenclawService struct {
 	// queue out of send order or drops a turn entirely.
 	pendingChatMu  sync.Mutex
 	pendingChatBuf []pendingTrace
+	// pendingTaskBuf is telemetry-only evidence, guarded by pendingChatMu.
+	pendingTaskBuf []pendingTrace
 
 	// recentOutboundTexts is a small ring buffer of message texts the os server
 	// sent via chat.send (wake greeting, ambient guard, sensing events). Used by

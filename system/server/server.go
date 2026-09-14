@@ -20,6 +20,8 @@ import (
 	"go.autonomous.ai/os/system/ambient"
 	"go.autonomous.ai/os/system/device"
 	"go.autonomous.ai/os/system/domain"
+	"go.autonomous.ai/os/system/environment"
+	"go.autonomous.ai/os/system/externalhistory"
 	"go.autonomous.ai/os/system/harness"
 	"go.autonomous.ai/os/system/healthwatch"
 	"go.autonomous.ai/os/system/lib/hal"
@@ -45,7 +47,11 @@ import (
 )
 
 type Server struct {
+	externalHistory *externalhistory.Store
+
 	harnessService   *harness.Service
+	harnessVoice     *harness.VoiceController
+	harnessVoiceCtx  context.Context
 	harnessRepliesMu sync.Mutex
 	// harnessReplies is keyed by the local device run ID. A single Harness
 	// agent can work on more than one user request at once, so it cannot be
@@ -57,6 +63,8 @@ type Server struct {
 	harnessResultAt time.Time
 	engine          *gin.Engine
 	config          *config.Config
+
+	environmentStartup *environment.StartupCoordinator
 
 	// handlers
 	healthHandler     _healthHttpDeliver.HealthHandler
@@ -162,6 +170,8 @@ func ProvideServer(
 	// on — that older turn keeps running but loses the speaker.
 	sensingH.SetOnRealtimeHandled(agentH.CancelSpeechForNewerTurn)
 	s := &Server{
+		environmentStartup: environment.NewStartupCoordinator(),
+
 		config:            cfg,
 		healthHandler:     hh,
 		networkHandler:    nh,
@@ -187,6 +197,7 @@ func ProvideServer(
 	}
 	sensingH.SetHarnessFollowup(s.HarnessVoiceFollowup)
 	sensingH.SetHarnessFollowupContext(s.HarnessFollowupContext)
+	sensingH.SetHarnessVoice(s.handleHarnessVoice)
 	return s
 }
 
@@ -317,11 +328,15 @@ func (s *Server) Serve(closeFn func()) error {
 
 	eventCtx, cancelEvents := context.WithCancel(context.Background())
 	defer cancelEvents()
+	if err := s.initializeExternalHistory(eventCtx); err != nil {
+		return err
+	}
 	harnessService, harnessErr := harness.NewService("config", harness.Callbacks{OnEvent: s.forwardHarnessEvent})
 	if harnessErr != nil {
 		slog.Error("harness service initialization failed", "component", "harness", "error", harnessErr)
 	} else {
 		s.harnessService = harnessService
+		s.restoreHarnessHistoryReplies()
 		harnessService.Start(eventCtx)
 		s.deviceMQTTHandler.SetHarnessService(harnessService)
 	}
@@ -360,6 +375,7 @@ func (s *Server) Serve(closeFn func()) error {
 	system.GET("ota-updating", s.otaUpdating)
 	system.POST("software-update/:target", adminAuthMiddleware(s.config), s.softwareUpdate)
 	system.POST("reboot", adminAuthMiddleware(s.config), systemshell.Reboot)
+	system.POST("restart/:target", adminAuthMiddleware(s.config), serviceRestartHandler(restartCommand))
 	system.POST("shutdown", adminAuthMiddleware(s.config), systemshell.Shutdown)
 	system.POST("factory-reset", adminOrLoopbackAuth(s.config), func(c *gin.Context) {
 		systemshell.FactoryReset(c, s.agentGateway)
@@ -602,6 +618,7 @@ func (s *Server) Serve(closeFn func()) error {
 	// agent's own shell tool, and it moves hardware and spends a vision-model
 	// call. See lookAndDescribe in vision.go.
 	api.POST("vision/look", localOnlyMiddleware(), s.lookAndDescribe)
+	api.GET("environment/status", localOnlyMiddleware(), s.environmentStatus)
 
 	logs := api.Group("logs")
 	logs.GET("tail", adminAuthMiddleware(s.config), s.logTail)
@@ -661,6 +678,14 @@ func (s *Server) Serve(closeFn func()) error {
 		}
 		slog.Warn("notice prerender never succeeded — notice will self-warm on first successful fire", "component", "server")
 	})
+
+	go environment.Service{
+		Startup:   s.environmentStartup,
+		Settings:  s.config.EnvironmentSettings,
+		Available: s.environmentAvailable,
+		Read:      hal.GetEnvironmentStatusContext,
+		Send:      environment.HTTPSender(fmt.Sprintf("http://127.0.0.1:%d/api/sensing/event", s.config.HttpPort)),
+	}.Run(eventCtx)
 
 	go func() {
 		if err := srv.ListenAndServe(); err != nil {

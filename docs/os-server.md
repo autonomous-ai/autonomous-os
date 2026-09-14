@@ -21,6 +21,13 @@
 | GET | `/api/system/ota-security` | OTA trust posture from the bootstrap worker: `legacy` vs `verified`, pinned key fingerprint, last metadata fetch (see `bootstrap-ota.md`) |
 | POST | `/api/system/reboot` | Admin-gated: acknowledge, then ask HAL to announce and reboot the OS |
 | POST | `/api/system/shutdown` | Admin-gated: acknowledge, then ask HAL to announce, release servos, and shut down the OS |
+| POST | `/api/system/restart/:target` | Admin-gated service restart for `hal` or `os-server` only. Returns `202` with `{target, scheduled: true}` after systemd accepts the restart timer; unsupported targets return `400`, scheduling failures return `500`. |
+
+Service restart uses `systemd-run --collect --on-active=2s systemctl restart <target>`
+with a five-second scheduling timeout. The separate transient timer lets the HTTP
+response arrive before os-server restarts; `202` confirms scheduling, not service
+recovery. The Versions card in Web Monitor exposes this action for HAL and OS
+Server. It requires systemd and permission to manage system services on the host.
 
 The power endpoints return `202 Accepted` before scheduling their HAL call, so
 the browser can receive the acknowledgement before the device becomes
@@ -28,6 +35,84 @@ unreachable. Only one reboot or shutdown can be pending at a time; a second
 request receives `409 Conflict`. HAL owns the physical sequence: reboot plays
 the reboot cue, while shutdown plays its cue and releases servos before issuing
 the OS power command.
+
+### Harness-only voice
+
+The optional RAM mode sends HAL's finalized STT to the agent focused in the Harness app,
+before local intents or main-runtime readiness/busy checks. It defaults to off
+after OS-server restart. Existing Harness event/recap delivery supplies the spoken
+answer. Only direct loopback voice requests carrying `harness_voice` routing
+snapshots enter this path; typed/MQTT chat and ambient sensing are unaffected.
+The OS mirrors app focus while the mode is off too, via `focus.get`,
+`focus.changed` and a two-second refresh. Turning the mode on through web/MQTT only changes the
+RAM flag; there is no web target selector. Missing focus, an older CLI without
+`focus.get`, or focus on another computer blocks voice dispatch. Each send carries
+the opaque `focusRevision`, checked atomically by CLI before accepting the turn.
+
+`GET /api/harness/voice-mode` allows admin or loopback reads. Admin-only management
+uses `PUT /api/harness/voice-mode`, `GET /api/harness/agents`,
+`GET /api/harness/voice-mode/question`, and `POST` to
+`/api/harness/voice-mode/answer`, `/receipt` and `/resolve` under the same
+`/api/harness/voice-mode` prefix. See [Harness integration](harness.md#harness-only-voice-mode)
+for payloads, generation validation, structured answers and receipt recovery.
+
+`POST /api/harness/voice-mode/gesture` is strict-loopback-only and accepts
+`{gestureId:"<UUID>"}` from HAL's physical-action worker after a right-to-left
+MPR121 swipe is released. HAL resolves direction using the configured physical
+left-to-right `swipe_axis`; left-to-right swipes use the existing sleep action.
+Go toggles the shared RAM mode and returns its snapshot. Enable first preserves
+valid app focus or
+requests `focus.ensure` and waits for Desktop acknowledgement; unavailable focus
+leaves the mode off. Disable works offline. Action errors expose `data.code` for
+HAL's localized feedback: `harness_unpaired` asks the user to pair the device in the Harness app; `harness_offline` reports an existing pairing without a connection. Both keep the mode off. A 128-entry RAM result cache prevents duplicate gesture
+IDs from toggling twice; explicit web/MQTT off cancels a pending gesture enable.
+
+### Environment sensing
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/environment/status` | Loopback-only, explicit `environment` capability required; returns HAL's diagnostic snapshot in the standard OS envelope |
+
+Missing capability returns 403; HAL transport/format failures return 502.
+Successful snapshots can still be disabled, errored or stale: inspect
+`data.state`, `data.stale`, `data.age_s` and `data.sample`. Reading this route
+neither forces a hardware measurement nor starts an agent turn.
+
+The OS environment worker reads HAL independently and posts sustained changes
+as `environment.update` to `/api/sensing/event`. Its top-level `environment`
+config is read/written through admin `GET`/`PUT /api/device/config`: evaluation
+10 seconds, sustain 60 seconds, cooldown 900 seconds, retry 60 seconds, maximum
+sample age 10 seconds by default. Metric deltas and warm-up are configurable.
+Registered HAL components share one metric schema: SEN55 + SCD41 or SEN63C
+use the same API, initial report and change flow. Per-component JSON `enabled`
+flags control hardware; OS does not select sensor models. The status sample
+always has nine nullable metric keys: unsupported or unavailable values are
+null and ignored by detection. Measured `co2_ppm` has default change
+200 ppm and warm-up 60 seconds. Explicit `metrics` maps still replace the map
+and retain the configured subset. Composite snapshots include `components`,
+`sources`, and `metric_timestamps`: freshness and continuity are checked per
+metric/source, so a failed SEN55 does not suppress healthy SCD41 CO₂.
+Disabling this policy drops automatic events (`dropped_disabled`); diagnostic
+status reads and HAL acquisition remain available.
+Capability, sleep and conversation-floor gates apply; busy queues coalesce to
+the latest environment event with a 60-second expiry and recheck capability,
+sleep and policy enabled at replay. Queue acceptance is best-effort, not guaranteed notification delivery.
+`environment.initial_report` defaults to `true`: greeting uses only cached,
+fresh readings that passed warm-up, under `[environment:initial]`, and never
+waits for HAL. Otherwise the first eligible snapshot is sent once after greeting
+completion through `environment.update` (`reason: "initial"`, `changes: {}`).
+Only eligible metrics are included; later warming metrics do not reannounce.
+Successful greeting context or accepted/queued delivery consumes this initial
+report for the OS process; retries use the configured retry interval. Reconnects
+and config edits do not rearm it. Set `initial_report: false` to disable both
+startup paths while retaining change detection. HAL's optional per-component
+`continuous_data_s` allows existing acquisition continuity to count toward
+warm-up after an OS-only restart; invalid/stale components remain excluded.
+The `environment` skill interprets measurements and consults `wellbeing` for
+proportionate advice. Hardware acquisition and OS change policy are separate;
+this feature does not enable Lamp's commented capability or disabled SEN55/SCD41/SEN63C.
+See [Lamp environment sensing](../robots/lamp/docs/environment-sensing.md#os-change-policy-and-agent-access)
+for defaults, validation, payloads and use cases.
 
 ### Device Setup
 
@@ -73,21 +158,28 @@ Config field: `timezone` in `config/config.json` (IANA zone string, omitempty) �
 | GET | `/api/network/current` | Current SSID + IP |
 | GET | `/api/network/check-internet` | Check internet connectivity |
 
-**Connectivity monitor** (`system/network/service.go`, started once
-`SetUpCompleted` flips true). Pings `8.8.8.8` every 5s — interface-agnostic, so a
-device online over ethernet is seen as online. After 5 consecutive failures it
-raises the `Connectivity` LED state; after 10 (~50s) it escalates to a WiFi
-reconnect (restart `wpa_supplicant@wlan0`, bounce the interface), and after 5
-failed reconnects (~10 min) it reboots the device.
+**Connectivity monitor** (`system/network/service.go` and `recovery.go`, active
+when `SetUpCompleted` is true). Internet checks run on a 5s monitor tick; 5
+consecutive failed pings to `8.8.8.8` raise the `Connectivity` LED state, and a
+successful ping clears it. Internet status is separate from WiFi recovery:
+association and a usable station IPv4 address keep WiFi active even without
+Internet. The monitor no longer reboots the device.
 
-That escalation is a **WiFi** recovery path, so it is skipped when WiFi is not the
-link in question — otherwise a wired device would reboot itself every ~10 minutes
-for the length of an upstream outage it plays no part in. It is skipped when
-either: no SSID is on file (the device was provisioned over ethernet — see
-`setupWired` in `docs/setup-flow.md`), or the default route belongs to another
-interface (traffic is leaving over the cable). A genuinely dropped WiFi link
-leaves *no* default route and `PrimaryInterface()` falls back to `wlan0`, so the
-outage the escalation exists for still passes the guard.
+After 90s without a usable WiFi link, the monitor calls the existing
+`device-ap-mode` script. In AP mode, it retries saved WiFi after 2 minutes, using
+`connect-wifi` with credentials from device config. It defers while a hotspot
+client is connected or the client probe fails. The attempt temporarily stops the
+hotspot; after the script finishes, it allows up to 45s for association and a
+usable station IPv4 address. Success keeps STA mode; failure restores the AP and
+starts another retry interval. Setup status and saved credentials are retained.
+Recovery is serialized with manual provisioning/reset, and is skipped when no
+SSID is saved or the default route uses another interface. With no default route,
+`PrimaryInterface()` falls back to `wlan0`, allowing recovery of a dropped link.
+
+The scripts and web UI are unchanged. Join the device hotspot, then open
+`http://lamp-0c4e.local/wifi` (using the device's actual hostname) to change WiFi;
+use `http://192.168.100.1/wifi` if `.local` resolution is unavailable. Automatic
+retry resumes after hotspot clients disconnect.
 
 ### Guard Mode
 
@@ -155,6 +247,10 @@ Config field: `guard_mode` in `config/config.json` (bool, default `false`). The 
 4. If event has `images` → call `SendChatMessageWithImages` → send every attached photo with the text for AI vision analysis. A LIST, not a single field: a chat client can attach several at once and every wire format behind the gateway already carries `attachments[]`; a camera event simply sends one entry. For chat types (`web_chat` / `mqtt_chat`), each image is saved to `/tmp/web-chat-<ms>-<i>.jpg` (indexed so photos attached to the SAME turn cannot collide) and tagged `[image: <path>]` so the agent can reference it (e.g. for face enrollment). When the main model is text-only, the describe-first gate runs once PER image, **concurrently** (`safego`), and the descriptions are numbered `(image N of M)`. Concurrency is not an optimisation here: the gate runs inside the HTTP handler, so the caller's POST does not return until every describe finishes — a single describe measured 8-38 s, so two photos in series left the web chat silent for ~53 s, long enough that reloading the page (which cancels the request and loses the turn) is the natural move. Fanning out makes the wait the slowest image instead of their sum.
 5. The describe-first gate above covers only images entering a turn from OUTSIDE (chat/Telegram attachment, HAL's realtime look-frame handoff). A frame the agent captures MID-TURN with `/camera/snapshot` never passes through it — the shell tool returns only `{"path": ...}`, which a text-only main model cannot see. For that path the `camera` skill calls `POST /api/vision/look` (loopback-only, `system/server/vision.go`) instead of HAL directly: os-server takes the snapshot itself (`hal.Snapshot`, 768px/q75 fixed server-side) and returns `{"path": ..., "description": ...}`. The vision-capability branch lives here, not in the skill — when `vision.ModelSupportsVision` says the main model reads images itself, describe is SKIPPED entirely (no vision-model call, no 8-38s wait) and only `path` comes back for the agent to open. Describe failure returns 502 so the agent admits it could not see instead of guessing
 6. Chat runs (`web_chat` / `mqtt_chat`) are tagged via `MarkWebChatRun(runID)` so the SSE handler suppresses TTS at lifecycle end — reply is rendered in the chat UI only (web SSE, or MQTT `chat.event` stream).
+
+### Unknown-speaker enrollment routing
+
+An `Unknown Speaker:` label is identity metadata, not a prerequisite for answering a voice request. HAL preserves the transcript, saved WAV path and cluster tag; its enrollment hint and the shared OS `AppendEnrollNudge` guidance are conditional. The speaker skill is relevant for a clear self-introduction, an explicit enrollment/voice-management request, or a reply continuing that enrollment. Ordinary requests proceed without speaker tools or a name question; meaningless fragments retain the device's normal silence behavior. Same-tag history supports intentional enrollment but does not initiate it. Recognition thresholds, audio requirements and APIs are unchanged. This guidance is shared across agent runtimes, not a Codex-only fix.
 
 ### OpenClaw
 
@@ -946,3 +1042,32 @@ not mark the connection ready. The queue is in memory and does not survive an
 os-server process restart. OpenClaw retains its native idempotency-key/history
 correlation; the Codex CLI output guard and session quarantine are not part of
 this transport.
+
+### Stack-chan host HAL (experimental)
+
+A computer can run the real Stack-chan HAL driver with `HAL_BOARD=host`,
+`DEVICE_TYPE=stackchan`, `DEVICES_DIR=<repo>/robots/_experimental` and
+`HAL_SIMULATE=0`. The explicit `host` board has no device-tree matcher and skips
+local GPIO button, privacy button, touch and MPR121 initialization. It does not
+replace the motion driver with a mock. The device profile still gates routes.
+The experimental profile declares motion and system only; it is excluded from
+normal device discovery and is not a full compatibility/OTA release.
+See [host startup and firmware configuration](../robots/_experimental/stackchan/docs/runtime.md).
+The existing OS HAL client connects to `http://127.0.0.1:5001`, so run HAL and
+os-server on the same host. The ESP32 connects to HAL's separate WSS listener.
+
+### External conversation history
+
+`system/externalhistory` stores exchanges handled outside the main runtime. Harness-only voice uses a two-phase adapter: persist the input before dispatch, then persist the reported answer before releasing its reply route. Each record identifies the source, computer, agent ID/name and original run ID. Realtime uses `RecordCompleted` to atomically save an already-answered exchange directly as `pending`. HAL keeps its existing `voice_agent_handled` payload; the Go adapter parses `[HANDLED]` / `[REPLY]`, attributes source `realtime` / agent `Realtime voice`, and uses `interaction_id` as the stable external identity (a fresh random ID for legacy callers without one). Repeated retained IDs deduplicate; conflicting content is rejected. Other integrations can use either API without depending on Harness.
+
+The worker checks every two seconds and sends one complete exchange when the main runtime is ready and idle. Realtime can also steer a busy runtime that supports active-turn steering; Harness still waits for idle. An in-flight history sync is allowed to finish before another is sent. Delivery uses the existing realtime history format (`[skills: input-branching]`, `[HANDLED]`, `[REPLY]`, `NO_REPLY`) and `MarkSilentRun` before `SendChatMessageWithRun`. The runtime absorbs the attributed exchange into its normal history and compaction. Existing silent/TTS behavior, realtime answering/delegation, and speaker-supersession policy are unchanged; no new suppression layer or summarizer is introduced.
+
+Records are atomically saved under `local/external-history/` (directory 0700, files 0600). States are `waiting` for the external answer, `pending` for main-runtime synchronization, `sending`, `uncertain`, and `done`. A successful main-runtime lifecycle end acknowledges the record after existing event handling; a socket write or `chat.final` alone is not proof of completion. Restart resumes never-sent pending records and restores silent/pending-trace marks for attempted records. Waiting Harness voice reply routes are restored only for the same pairing; external tasks are never resent.
+
+A send error, missing lifecycle acknowledgement for two minutes while idle, or restart during sending leaves the record `uncertain`. It remains on disk and can still accept a late acknowledgement; it is not blindly replayed because not all runtime transports support idempotent sends. This preserves evidence without promising exactly-once history delivery across an ambiguous crash. If the external result never arrives, its input remains `waiting`; startup does not guess a latest recap for it.
+
+Storage is bounded to 1024 records, 16 KiB input and 64 KiB synchronized output per record. Oversized Harness output is explicitly truncated for history (the original response delivery stays complete). Completed records expire after 30 days and the oldest completed records may be evicted sooner at capacity; unfinished records are never evicted. Duplicate detection applies to retained source/run IDs. A full unfinished queue rejects new direct voice input instead of silently losing history. A persistence failure keeps the final reply route available for a repeated callback/recap recovery. Unreadable journal state fails startup rather than silently resetting it. Already synchronized context is managed by the main runtime, not reloaded wholesale from this journal.
+
+Validation: `go test -race ./system/externalhistory`; focused history/observer/Harness tests in `system/server` and `system/server/agent/delivery/http`. Physical voice playback and every runtime's restart correlation still require integration verification.
+
+Realtime notifications are persisted before the sensing busy/readiness gates, replacing the volatile pending-event queue for these exchanges. HTTP success includes the stable sync `runId` and the existing `speechSuppressed` result. Persistence failure returns HTTP 500 rather than falling back to an unjournaled send. Durability starts when OS accepts the notification; it does not recover HAL turns whose notification never reached OS. Original sensing evidence and look snapshot markers remain in Flow Monitor; snapshot paths are removed from the main-agent context as before.

@@ -275,6 +275,9 @@ export interface WifiProvisionBody {
   stt_base_url?: string;
   stt_language?: string;
   tts_api_key?: string;
+  // Explicit delete. `tts_api_key: ""` cannot express this — the backend reads
+  // an empty string as "field not sent" (PATCH semantics).
+  clear_tts_api_key?: boolean;
   tts_base_url?: string;
   tts_provider?: string;
   tts_voice?: string;

@@ -95,7 +95,7 @@ type CodexService struct {
 	busySince         atomic.Int64
 	pendingMu         sync.Mutex
 	pendingRuns       []pendingRun
-	steeredWebRuns    []pendingRun // merged web inputs awaiting the active turn's reply
+	steeredRuns       []pendingRun // merged inputs awaiting the active turn's reply
 	completedRequests []pendingRun
 	sendChatMu        sync.Mutex
 	currentRequestID  atomic.Value // string
@@ -236,6 +236,7 @@ type CodexService struct {
 }
 
 type pendingRun struct {
+	sent  bool // Telemetry only: the outbound frame write succeeded.
 	reqID string
 	runID string
 }
