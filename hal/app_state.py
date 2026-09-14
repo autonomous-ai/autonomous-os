@@ -292,7 +292,7 @@ _sleepy_release_timer: Optional[threading.Timer] = None
 # Speaker drain for sleepy. os-server POSTs the reply text ~100ms after the
 # `sleepy` marker (fireHWCallsSync's budget) and HAL takes about as long to
 # reach _finalize_sleepy_peripherals, so muting there swallowed the
-# going-to-sleep line in 3 of 4 runs (lamp-0c89, 2026-09-14).
+# going-to-sleep line more often than not.
 SLEEPY_SPEAKER_GRACE_S = 2.0       # wait this long for an announcement to START
 SLEEPY_SPEAKER_DRAIN_MAX_S = 15.0  # hard cap on the whole drain
 _SLEEPY_DRAIN_POLL_S = 0.1

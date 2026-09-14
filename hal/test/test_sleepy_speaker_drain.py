@@ -3,8 +3,8 @@
 os-server fires `[HW:/emotion:sleepy]` and only waits 100ms before POSTing the
 reply text to TTS, and HAL needs roughly as long to reach
 _finalize_sleepy_peripherals — so muting the speaker there raced the
-announcement and usually won (measured on lamp-0c89 2026-09-14: 3 of 4 runs
-answered `suppressed -- speaker muted`). The drain removes the race.
+announcement and usually won, and `/voice/speak-queue` answered
+`suppressed -- speaker muted`. The drain removes the race.
 """
 import os, sys, threading, time, unittest
 
