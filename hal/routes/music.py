@@ -289,8 +289,13 @@ def mute_speaker():
     """Mute all audio output -- TTS, music, backchannel suppressed."""
     if privacy.speaker_muted:
         privacy.speaker_before = True
-        state._persist_speaker_state()
+    if state._sleepy_auto_muted_speaker:
+        # An explicit mute replaces sleep's temporary ownership, even when
+        # output is already silent. Wake must preserve this user choice.
+        state._sleepy_auto_muted_speaker = False
+        state._persist_sleep_state()
     if state._speaker_muted:
+        state._persist_speaker_state()
         return {"status": "already_muted"}
     state._speaker_muted = True
     if state.tts_service and state.tts_service.speaking:

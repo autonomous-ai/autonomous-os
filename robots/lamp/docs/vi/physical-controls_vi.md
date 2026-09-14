@@ -583,3 +583,7 @@ Khi HAL khởi động, đồng bộ vị trí privacy-switch không giả lập
 Khi sleep được khôi phục sau HAL restart (kể cả software update), privacy-switch đang mở không được unmute mic đang ngủ hoặc khởi chạy voice pipeline. Mic và speaker bị mute bởi sleep giữ nguyên cho đến khi wake thật. Nếu privacy đã lưu trạng thái speaker mute do sleep, wake gỡ mute tạm thời đó bên dưới privacy lock; âm thanh vẫn bị chặn cho đến khi mở privacy. Trạng thái speaker sau khi gỡ mute được lưu để HAL restart tiếp không khôi phục mute do sleep đã kết thúc. Speaker do người dùng mute trước sleep vẫn giữ mute.
 
 Callback GPIO có mức chân sau debounce trùng vị trí đã biết (kể cả callback ban đầu lúc startup) giữ nguyên software mute và sleep. Chỉ thay đổi mức chân thực sự mới chạy action của switch.
+
+Khi wake mở lại mic bị mute bởi sleep, HAL cũng xóa cờ LED mic mute đã khôi phục. Callback kết thúc emotion, TTS hoặc nhạc chạy sau đó không được bật lại màu đỏ privacy khi mic đã mở. Mic vẫn bị hardware privacy khóa thì giữ cờ LED mute.
+
+Lệnh mute speaker thủ công trong lúc sleep chuyển quyền giữ mute từ sleep sang người dùng và được lưu ngay cả khi loa đã im lặng. Wake phải giữ lựa chọn này, kể cả khi privacy đang khóa.

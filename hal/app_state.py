@@ -640,6 +640,7 @@ def _wake_sleepy_peripherals():
         _sleepy_auto_muted_mic = False
         if _hw_mic_switch_muted is not True:
             _mic_muted = False
+            _clear_mic_muted_led()
             start_voice_service("sleepy-wake")
     _persist_sleep_state()
     logger.info("Sleepy wake: restored sleepy-owned audio state")

@@ -218,6 +218,23 @@ def test_restart_privacy_overlay_does_not_restore_sleep_mute_after_wake(
     )
 
 
+@pytest.mark.parametrize("privacy_locked", [False, True])
+def test_manual_speaker_mute_during_sleep_survives_wake(monkeypatch, privacy_locked):
+    monkeypatch.setattr(state, "_sleeping", True)
+    monkeypatch.setattr(state, "_sleepy_auto_muted_speaker", True)
+    monkeypatch.setattr(state, "_sleepy_auto_muted_mic", False)
+    state._speaker_muted = True
+    if privacy_locked:
+        privacy.apply(True, config())
+    music.mute_speaker()
+    assert not state._sleepy_auto_muted_speaker
+    state._save_boot_sidecar.assert_any_call(state._SPEAKER_STATE_PATH, {"muted": True})
+    state._sleeping = False
+    state._wake_sleepy_peripherals()
+    privacy.apply(False, config())
+    assert state._speaker_muted
+
+
 def test_extended_unlock_restores_after_shared_wake_without_unmuting_output():
     state._mic_muted = True
     state._speaker_muted = True
