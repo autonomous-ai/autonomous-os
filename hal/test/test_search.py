@@ -1088,3 +1088,29 @@ def test_the_correction_runs_before_the_head_is_straightened():
         _run_target(target="keyboard", hits=(1,))
 
     assert order == ["centre", "straighten"], order
+
+
+def test_an_object_search_stops_at_the_first_sighting_even_when_told_to_be_exhaustive():
+    """Design decision 2026-09-14: a search for a THING stops at the first
+    sighting, always. `exhaustive` is a survey mode — "scan the room", "is
+    anyone else here" — and an agent that passed it for "find my doll" got a
+    lamp that saw the doll five times, went home, and reported a find with no
+    picture. Enforced here rather than trusted to the skill text."""
+    res, svc, det = _run_target(target="doll", exhaustive=True, hits=(2,))
+
+    assert res.found is True
+    assert res.looks_visited == 2, "kept sweeping after the first sighting"
+    assert "x" not in res.reason, f"reported a survey count for a find: {res.reason!r}"
+    assert svc.holds[-1] != _FakeSvc.IDLE_BASELINE, "went home instead of staying on the doll"
+    # Centring ran (it is what the default path does on a hit); its outcome is
+    # the fake detector's business and is pinned by the centring tests.
+    assert any(c.args[1] == "doll" for c in det.detect.call_args_list[2:]), (
+        "no probe after the sighting — the correction never ran")
+
+
+def test_exhaustive_still_surveys_for_people():
+    """The survey mode keeps its job: everyone in the room, then home."""
+    res, _svc, _det = _run_target(target="person", person_everywhere=True, exhaustive=True)
+    assert res.found is True
+    assert res.looks_visited == 3 * len(search.LOOK_CIRCLE)
+    assert "x" in res.reason

@@ -41,7 +41,13 @@ func cameraSnapshotURL(toolArgs, result string) string {
 			break
 		}
 	}
-	if !called {
+	// A sweep that outlives the exec tool's foreground window is backgrounded
+	// and its result arrives on a later `poll` call, whose args name a session
+	// rather than the endpoint. `image_path` is the search's own field — nothing
+	// else on the device writes it — so a result carrying that key is trusted on
+	// the path allow-list alone. A generic `path` still needs the endpoint in
+	// the args: that key appears in plenty of tool output that is not a frame.
+	if !called && !strings.Contains(result, `"image_path"`) {
 		return ""
 	}
 	matches := cameraSnapshotPathRE.FindStringSubmatch(result)

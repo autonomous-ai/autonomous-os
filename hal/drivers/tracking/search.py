@@ -576,6 +576,19 @@ def search_for_subject(target: str = "person", detector: Any = None,
     """
     _abort_evt.clear()
 
+    # A search for a THING stops at the first sighting, always. `exhaustive`
+    # is a survey mode — "scan the room", "is anyone else here" — that covers
+    # every look, counts sightings and goes home, which is the right shape for
+    # a headcount and the wrong one for a find: device-observed 2026-09-14, an
+    # agent that passed it for "find my doll" got a lamp that saw the doll five
+    # times, returned to its seed pose, and reported a find with no picture.
+    # Enforced here rather than trusted to the skill text, because the model
+    # is the one deciding what to pass.
+    if exhaustive and target not in ("person", "face"):
+        logger.info("[search] exhaustive ignored for '%s' — an object search "
+                    "stops at the first sighting", target)
+        exhaustive = False
+
     cap = getattr(state, "camera_capture", None)
     svc = getattr(state, "animation_service", None)
     if cap is None or svc is None:

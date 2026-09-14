@@ -410,8 +410,10 @@ class ServoSearchRequest(BaseModel):
     )
     exhaustive: bool = Field(
         False,
-        description="Visit every stop and pitch tier instead of returning at the "
-                    "first sighting. Slower; for 'scan everything' requests.",
+        description="Survey mode for PEOPLE: visit every look, count sightings, "
+                    "return home. For 'scan the room' / 'is anyone else here'. "
+                    "Ignored for an object target — a search for a thing always "
+                    "stops at the first sighting, centres on it and returns a frame.",
     )
 
 

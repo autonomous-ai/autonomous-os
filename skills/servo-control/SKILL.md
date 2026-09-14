@@ -92,19 +92,20 @@ curl -sX POST http://127.0.0.1:5001/servo/search -H 'Content-Type: application/j
    so say what you found and roughly where, and never describe the image itself.
    `looks_visited` counts camera looks, `bearings_visited` counts body turns. They are
    different numbers; do not call either one "stops".
-→ `"found": false` is an answer too. Say you looked and could not find it — do not go quiet.
+→ `"found": false` is an answer too. Say you looked and could not find it — do not go quiet,
+   and do not offer or run an `exhaustive` scan for a thing: a search always stops at the
+   first sighting, and the server ignores `exhaustive` for an object target anyway.
 
 **Input:** "Scan the whole room" / "Is anyone else here?" / "Check the shelf too" / "Do a full scan"
 **Output:**
 ```bash
 curl -sX POST http://127.0.0.1:5001/servo/search -H 'Content-Type: application/json' -d '{"exhaustive":true}'
 ```
-→ Walks the whole look ring at every bearing instead of returning at the first sighting,
-   and it is the ONLY mode that looks ABOVE the horizon — the default sweep is a half-moon
-   below it, so anything on a shelf needs this.
-→ Combine with `target` when they ask for a thorough search for one specific thing.
-→ This is for COVERAGE — finding things. A request to SHOW how far you can move is the
-   demo below, not a scan.
+→ A SURVEY of people: walks the whole look ring at every bearing, counts everyone it sees,
+   and comes back home. It is the only mode that looks above the horizon.
+→ Never for an object. "Find my doll" is the search above, which stops at the first sighting
+   and stays pointed at it; the server ignores `exhaustive` when a `target` is given.
+→ A request to SHOW how far you can move is the demo below, not a scan.
 
 **Input:** "Show me what you can do" / "Show me your maximum capability" / "How far can you move?" / "Show me your range" / "Demonstrate your movement"
 **Output:** `[HW:/servo/demo:{}]` Sure — watch this!

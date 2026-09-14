@@ -144,3 +144,32 @@ func TestCameraSnapshotURLIgnoresASearchThatFoundNothing(t *testing.T) {
 		t.Fatalf("a miss produced a thumbnail: %q", got)
 	}
 }
+
+// A sweep that outlives the exec tool's foreground window is backgrounded, and
+// its result arrives on a later `poll` call whose args name a session, not the
+// endpoint. Device-observed 2026-09-14 (lamp-ac82, three "find my doll" turns):
+// the frame was written, the URL was buildable, and the card stayed blank
+// because the endpoint gate looked at the poll's args. `image_path` is our own
+// field name — nothing but the sweep writes it — so a result carrying it under
+// an approved runtime path is trusted on the path alone.
+func TestCameraSnapshotURLAcceptsASearchResultDeliveredByAPoll(t *testing.T) {
+	args := `{"action":"poll","sessionId":"brisk-bison","timeout":15000}`
+	result := `{"status":"ok","found":true,"kind":"doll","image_path":"/root/.openclaw/media/hal-snapshots/snap_1789363665350.jpg","looks_visited":2}`
+	want := "/api/sensing/agent-snapshot/openclaw/media-hal-snapshots/snap_1789363665350.jpg"
+	if got := cameraSnapshotURL(args, result); got != want {
+		t.Errorf("polled search result not surfaced: got %q, want %q", got, want)
+	}
+}
+
+// The relaxation is scoped to OUR key. A generic `path` in a non-camera tool's
+// output must still need the endpoint in the args, and an unapproved directory
+// is refused regardless of key.
+func TestCameraSnapshotURLPollRelaxationIsScopedToImagePath(t *testing.T) {
+	poll := `{"action":"poll","sessionId":"x"}`
+	if got := cameraSnapshotURL(poll, `{"path":"/root/.openclaw/media/hal-snapshots/snap_1.jpg"}`); got != "" {
+		t.Errorf("a generic path on a poll was surfaced: %q", got)
+	}
+	if got := cameraSnapshotURL(poll, `{"image_path":"/etc/shadow.jpg"}`); got != "" {
+		t.Errorf("an unapproved image_path was surfaced: %q", got)
+	}
+}
