@@ -42,7 +42,7 @@ def test_injected_wiring_and_synchronous_boot_sync(hardware, muted_level, level,
     gpio.gpiochip_open.assert_called_once_with(3)
     gpio.gpio_claim_alert.assert_called_once_with(12, 42, gpio.BOTH_EDGES, gpio.SET_PULL_UP)
     gpio.gpio_read.assert_called_once_with(12, 42)
-    handler._apply_state_locked.assert_called_once_with(expected)
+    handler._apply_state_locked.assert_called_once_with(expected, initial=True)
     assert handler._last_known_level == level
     thread.return_value.start.assert_called_once_with()
     handler.stop()
@@ -55,7 +55,7 @@ def test_failed_initial_read_keeps_legacy_unmuted_default(hardware, muted_level)
     handler = PrivacyButtonHandler(PrivacyButtonConfig(muted_level=muted_level))
     handler._apply_state_locked = mock.Mock()
     handler.start()
-    handler._apply_state_locked.assert_called_once_with(False)
+    handler._apply_state_locked.assert_called_once_with(False, initial=True)
     assert handler._last_known_level == 1 - muted_level
     handler.stop()
 
@@ -69,7 +69,7 @@ def test_extended_privacy_initial_read_failure_stays_muted(hardware, muted_level
     ))
     handler._apply_state_locked = mock.Mock()
     handler.start()
-    handler._apply_state_locked.assert_called_once_with(True)
+    handler._apply_state_locked.assert_called_once_with(True, initial=True)
     assert handler._last_known_level == muted_level
     handler.stop()
 
@@ -187,3 +187,38 @@ def test_start_waits_for_previous_watchdog_to_exit(hardware):
     handler.start()
     assert gpio.gpiochip_open.call_count == 2
     handler.stop()
+
+
+@pytest.mark.parametrize("extended", [False, True])
+@pytest.mark.parametrize("initial", [False, True])
+def test_boot_restore_does_not_masquerade_as_user_unmute(hardware, extended, initial):
+    config = PrivacyButtonConfig(disable_camera_on_mute=extended, mute_speaker_on_mute=extended)
+    handler = PrivacyButtonHandler(config)
+    with (
+        mock.patch.object(state, "_mic_muted", True),
+        mock.patch.object(state, "_hw_mic_switch_muted", None),
+        mock.patch.object(state, "_clear_mic_muted_led"),
+        mock.patch("hal.drivers.privacy_button.privacy.apply") as apply_privacy,
+        mock.patch("hal.routes.voice.unmute_mic") as unmute,
+        mock.patch("hal.drivers.button_actions.single_click_action") as click,
+        mock.patch("hal.drivers.button_actions.play_ack_chime") as chime,
+        mock.patch("hal.drivers.button_actions.announce_listening_cue") as announce,
+    ):
+        handler._apply_state_locked(False, initial=initial)
+        assert state._hw_mic_switch_muted is False
+        if initial:
+            unmute.assert_called_once_with()
+            click.assert_not_called()
+            chime.assert_not_called()
+            announce.assert_not_called()
+            hardware[1].assert_not_called()
+        else:
+            unmute.assert_not_called()
+            click.assert_called_once()
+            if extended:
+                chime.assert_called_once_with("privacy-switch")
+                announce.assert_called_once_with("privacy-switch")
+        if extended:
+            apply_privacy.assert_called_once_with(False, config)
+        else:
+            apply_privacy.assert_not_called()

@@ -592,3 +592,5 @@ live in `hal/i18n.py`). It briefly pulses blue for on or neutral for off without
 saving a new LED state. Missing connection/agents receive localized errors.
 Hardware microphone privacy disables the gesture action, speaker mute suppresses
 speech, and existing sleep/privacy/TTS LED ownership is respected.
+
+At HAL startup, the privacy switch position is reconciled without simulating a button press: an unmuted position restores mic/peripheral access without waking the device, granting conversation focus, playing the acknowledgement/listening phrase, or scheduling the listening LED cue. A real muted-to-unmuted switch transition retains the existing wake/focus and acknowledgement behavior. Startup in the muted position still applies the hardware privacy lock synchronously.
