@@ -19,7 +19,7 @@ from hal.drivers.motors.stackchan_service import (
     HOME_CAPABILITY, HOME_FRAME, StackChanCommissioningFailed, StackChanMotionService, StackChanMotionCancelled,
     StackChanOffline, StackChanTransportError, _BodyTransport,
 )
-from hal.routes.servo import router
+from robots._experimental.stackchan.commissioning import router
 
 TOKEN = "home-commissioning-test-only-token-32-characters"
 CAPABILITIES = {"motion.pan_tilt", "motion.measured_position", "motion.halt_hold",
@@ -285,7 +285,7 @@ class TestHomeCommissioning(unittest.TestCase):
         client = TestClient(app)
         request = {"coordinate_frame": HOME_FRAME, "positions": {"tilt": 8}, "duration": 2}
         with patch.object(state, "animation_service", svc), patch.object(state, "_sleeping", False):
-            response = client.post("/servo/home/move", json=request)
+            response = client.post("/stackchan/home/move", json=request)
         self.assertEqual(response.status_code, 502)
         detail = response.json()["detail"]
         self.assertIn("did not reach", detail["reason"])
@@ -414,6 +414,49 @@ class TestHomeCommissioning(unittest.TestCase):
         self.assertTrue(all(sample["move"] == 1 for sample in details["samples"]))
         self.assertIn("lease_expired", details["reason"])
         self.assertFalse(peer.closed)
+
+    def test_in_flight_feedback_failure_halts_before_motion_duration(self):
+        for failure in ("yaw drift", "invalid saved-home coordinate frame"):
+            with self.subTest(failure=failure):
+                svc, peer = service(enabled=True)
+                errors, successes = [], []
+                finished = threading.Event()
+                original_request = peer.request
+
+                def request(message, timeout):
+                    result = original_request(message, timeout)
+                    if message["op"] == "motion.move_home":
+                        if failure == "yaw drift":
+                            peer.positions["pan"] += 10
+                        else:
+                            peer.result_override = {"coordinate_frame": "legacy"}
+                    return result
+
+                def move():
+                    try:
+                        successes.append(svc.move_home({"tilt": 8}, 10))
+                    except Exception as exc:
+                        errors.append(exc)
+                    finally:
+                        finished.set()
+
+                peer.request = request
+                worker = threading.Thread(target=move)
+                worker.start()
+                try:
+                    self.assertTrue(peer.motion_started.wait(1))
+                    self.assertTrue(finished.wait(1), "Feedback failure must halt before the 10-second move ends")
+                    self.assertEqual(successes, [])
+                    self.assertEqual(len(errors), 1)
+                    self.assertIn(failure, str(errors[0]))
+                    operations = [m["op"] for m in peer.commands]
+                    self.assertEqual(operations.count("motion.halt"), 1)
+                    self.assertNotIn("lease.release", operations)
+                    self.assertFalse(peer.closed)
+                finally:
+                    if worker.is_alive():
+                        svc.halt()
+                    worker.join(2)
 
     def test_yaw_drift_stops_before_terminal_success(self):
         svc, peer = service(enabled=True)
@@ -659,12 +702,12 @@ class TestHomeCommissioning(unittest.TestCase):
         with patch.object(state, "animation_service", svc), patch.object(state, "_sleeping", False):
             for body in invalid:
                 with self.subTest(body=body):
-                    self.assertEqual(client.post("/servo/home/move", json=body).status_code, 422)
-            self.assertEqual(client.get("/servo/home").status_code, 200)
+                    self.assertEqual(client.post("/stackchan/home/move", json=body).status_code, 422)
+            self.assertEqual(client.get("/stackchan/home").status_code, 200)
             with patch.object(state, "_sleeping", True):
-                self.assertEqual(client.post("/servo/home/move", json=request).status_code, 409)
+                self.assertEqual(client.post("/stackchan/home/move", json=request).status_code, 409)
             svc._home_commissioning_enabled = False
-            self.assertEqual(client.post("/servo/home/move", json=request).status_code, 403)
+            self.assertEqual(client.post("/stackchan/home/move", json=request).status_code, 403)
         self.assertEqual(peer.commands, [])
 
     def test_real_websocket_retains_capability_and_http_runs_home_protocol(self):
@@ -701,10 +744,10 @@ class TestHomeCommissioning(unittest.TestCase):
                 worker.start()
                 try:
                     with patch.object(state, "animation_service", svc), patch.object(state, "_sleeping", False):
-                        self.assertTrue(client.get("/servo/home").json()["supported"])
-                        self.assertEqual(client.get("/servo/home/position").json()["positions"],
+                        self.assertTrue(client.get("/stackchan/home").json()["supported"])
+                        self.assertEqual(client.get("/stackchan/home/position").json()["positions"],
                                          {"pan": 0.6, "tilt": 2.5})
-                        reply = client.post("/servo/home/move", json={"coordinate_frame": HOME_FRAME,
+                        reply = client.post("/stackchan/home/move", json={"coordinate_frame": HOME_FRAME,
                                              "positions": {"tilt": 8}, "duration": 2})
                         self.assertEqual(reply.status_code, 200, reply.text)
                         self.assertTrue(reply.json()["target_reached"])

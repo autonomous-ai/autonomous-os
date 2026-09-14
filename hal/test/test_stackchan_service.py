@@ -787,50 +787,80 @@ class TestFirmwareRejections(unittest.TestCase):
         self.assertNotIn("lease.release", operations)
         self.assertEqual(gateway.connection_value.close_reasons, [])
 
-    def test_http_stop_reports_firmware_code(self):
+    def _bench_client(self, svc, stack):
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
         import hal.app_state as state
-        from hal.routes.servo import router
-
-        class Service:
-            is_connected = True
-
-            def halt(self):
-                raise StackChanCommandRejected("motion.halt", "halt_failed")
+        from robots._experimental.stackchan.commissioning import router
 
         app = FastAPI()
         app.include_router(router)
-        client = TestClient(app)
-        with patch.object(state, "animation_service", Service()), patch.object(state, "tracker_service", None), \
-                patch.object(state, "policy_service", None):
-            response = client.post("/servo/stop")
+        stack.enter_context(patch.object(StackChanMotionService, "is_connected", True))
+        stack.enter_context(patch.object(state, "animation_service", svc))
+        stack.enter_context(patch.object(state, "tracker_service", None))
+        stack.enter_context(patch.object(state, "policy_service", None))
+        return TestClient(app)
+
+    def test_http_stop_reports_firmware_code(self):
+        svc = StackChanMotionService(device_id="t-01", token=TOKEN, port=0, allow_insecure_ws=True)
+        svc._transport = _FakeServiceTransport()
+        with ExitStack() as stack:
+            client = self._bench_client(svc, stack)
+            stack.enter_context(patch.object(svc._transport, "halt", side_effect=StackChanCommandRejected("motion.halt", "halt_failed")))
+            response = client.post("/stackchan/stop")
         self.assertEqual(response.status_code, 502)
         detail = response.json()["detail"]
         self.assertEqual((detail["op"], detail["code"]), ("motion.halt", "halt_failed"))
 
     def test_http_release_reports_firmware_code(self):
-        from fastapi import FastAPI
-        from fastapi.testclient import TestClient
-        import hal.app_state as state
-        from hal.routes.servo import router
-
-        class Service:
-            is_connected = True
-
-            def release(self):
-                return {"stackchan": "Stack-chan rejected motion.release: release_failed",
-                        "op": "motion.release", "code": "release_failed"}
-
-        app = FastAPI()
-        app.include_router(router)
-        client = TestClient(app)
-        with patch.object(state, "animation_service", Service()), patch.object(state, "tracker_service", None):
-            response = client.post("/servo/release")
+        svc = StackChanMotionService(device_id="t-01", token=TOKEN, port=0, allow_insecure_ws=True)
+        svc._transport = _FakeServiceTransport()
+        svc._transport.release_error = StackChanCommandRejected("motion.release", "release_failed")
+        with ExitStack() as stack:
+            response = self._bench_client(svc, stack).post("/stackchan/release")
         self.assertEqual(response.status_code, 502)
         self.assertEqual(response.json()["detail"]["code"], "release_failed")
 
-    def test_service_release_returns_firmware_code(self):
+    def test_http_release_requires_measured_arrival_and_torque_off(self):
+        for reaches_target in (False, True):
+            with self.subTest(reaches_target=reaches_target):
+                svc = StackChanMotionService(device_id="t-01", token=TOKEN, port=0, allow_insecure_ws=True)
+                gateway = _FakeGateway()
+                gateway.connection_value.apply_moves = reaches_target
+                svc._transport = _BodyTransport(gateway, timeout=1.0, lease_ttl_ms=1000)
+                svc._transport._target_settle_timeout = 0.01
+                with ExitStack() as stack:
+                    client = self._bench_client(svc, stack)
+                    stack.enter_context(patch("hal.drivers.motors.stackchan_service._RELEASE_DURATION_S", 0.05))
+                    response = client.post("/stackchan/release")
+                operations = [message["op"] for message in gateway.connection_value.messages]
+                self.assertEqual(gateway.connection_value.close_reasons, [])
+                if reaches_target:
+                    self.assertEqual(response.status_code, 200)
+                    self.assertEqual(response.json(), {"status": "ok"})
+                    self.assertEqual(operations[-1], "motion.release")
+                    self.assertEqual(svc.motion_mode, "released")
+                else:
+                    self.assertEqual(response.status_code, 502)
+                    self.assertIn("did not reach", response.json()["detail"]["errors"]["stackchan"])
+                    self.assertEqual(operations[-1], "motion.halt")
+                    self.assertNotIn("motion.release", operations)
+                    self.assertIsNone(svc.motion_mode)
+
+    def test_http_release_reports_cancellation_and_transport_failure(self):
+        for message in ("release was halted before torque-off", "command timed out; delivery is unknown"):
+            with self.subTest(error=message):
+                svc = StackChanMotionService(device_id="t-01", token=TOKEN, port=0, allow_insecure_ws=True)
+                transport = _FakeServiceTransport()
+                transport.release_error = StackChanTransportError(message)
+                svc._transport = transport
+                with ExitStack() as stack:
+                    response = self._bench_client(svc, stack).post("/stackchan/release")
+                self.assertEqual(response.status_code, 502)
+                self.assertEqual(response.json()["detail"]["errors"], {"stackchan": message})
+                self.assertIsNone(svc.motion_mode)
+
+    def test_service_release_preserves_os_error_dict_contract(self):
         svc = StackChanMotionService(device_id="t-01", token="x" * 40, host="127.0.0.1", port=0, allow_insecure_ws=True)
 
         class Transport:
@@ -839,7 +869,10 @@ class TestFirmwareRejections(unittest.TestCase):
 
         svc._transport = Transport()
         errors = svc.release()
-        self.assertEqual((errors["op"], errors["code"]), ("motion.release", "release_failed"))
+        self.assertEqual(errors, {"stackchan": "Stack-chan rejected motion.release: release_failed"})
+        with self.assertRaises(StackChanCommandRejected) as caught:
+            svc.release_checked()
+        self.assertEqual((caught.exception.op, caught.exception.code), ("motion.release", "release_failed"))
 
 
 if __name__ == "__main__":

@@ -64,6 +64,7 @@ HOME_FRAME = "calibrated_home_deg_v1"
 HOME_PITCH_LIMITS = (7.0, 10.0)
 _HOME_YAW_DRIFT_DEG = 1.0
 _HOME_HOLD_MARGIN_DEG = 6.0
+_HOME_FEEDBACK_INTERVAL_S = 0.25
 _FIRMWARE_SPEED = 1000  # Timed firmware uses duration_ms; speed is legacy shape compatibility.
 _MIN_MOVE_DURATION_S = 0.05
 _MAX_MOVE_DURATION_S = 60.0
@@ -440,9 +441,13 @@ class _BodyTransport:
                 and _POSITION_TOLERANCE_DEG < short_by <= _HOME_RECOMMAND_MAX_SHORT_DEG)
 
     @staticmethod
-    def _home_arrived(measured: dict[str, float], initial: dict[str, float], target: float) -> bool:
+    def _check_home_yaw(measured: dict[str, float], initial: dict[str, float]) -> None:
         if abs(measured["pan"] - initial["pan"]) > _HOME_YAW_DRIFT_DEG:
             raise StackChanTransportError("Uncommanded yaw drift during home commissioning")
+
+    @staticmethod
+    def _home_arrived(measured: dict[str, float], initial: dict[str, float], target: float) -> bool:
+        _BodyTransport._check_home_yaw(measured, initial)
         return (abs(measured["tilt"] - target) <= _POSITION_TOLERANCE_DEG
                 and measured["tilt"] >= _HOME_HOLD_MARGIN_DEG
                 and measured["tilt"] - initial["tilt"] >= _HOME_MIN_PROGRESS_DEG)
@@ -519,8 +524,17 @@ class _BodyTransport:
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
                         break
-                    cancel.wait(min(renew_s, remaining))
+                    cancel.wait(min(_HOME_FEEDBACK_INTERVAL_S, renew_s, remaining))
                     check_cancel()
+                    # Yaw has no torque during this pitch-only trajectory. Check
+                    # it while moving, including repeats and stretched durations,
+                    # instead of leaving the guard blind until settling begins.
+                    try:
+                        measured = self._read_home_positions(peer)
+                        self._check_home_yaw(measured, initial)
+                    except StackChanTransportError:
+                        request("motion.halt")
+                        raise
                     if time.monotonic() < deadline:
                         request("lease.renew", {"ttl_ms": self._ttl}, sequenced=False)
 
@@ -1122,15 +1136,16 @@ class StackChanMotionService:
 
     def release(self) -> Dict[str, str]:
         try:
-            self._transport.release(self._native(_GRAVITY_REST), _RELEASE_DURATION_S)
-        except StackChanCommandRejected as exc:
-            # The firmware could not acknowledge a torque-off; surface the code.
-            return {"stackchan": str(exc), "op": exc.op, "code": exc.code}
+            self.release_checked()
         except Exception as exc:
             return {"stackchan": str(exc)}
+        return {}
+
+    def release_checked(self) -> None:
+        """Bench release preserving diagnostics; the OS keeps its error-dict contract."""
+        self._transport.release(self._native(_GRAVITY_REST), _RELEASE_DURATION_S)
         with self._state_lock:
             self._released = True
-        return {}
 
     def halt(self) -> None:
         try:

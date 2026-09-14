@@ -272,28 +272,50 @@ while checking arrival (within 1 degree), using a 2-second settling window
 before halting and returning an error instead of reporting success. Individual
 protocol requests remain subject to the configured command timeout.
 
-Stack-chan also has an optional, default-off home commissioning path
-(`STACKCHAN_HOME_COMMISSIONING_ENABLED=0`). `GET /servo/home` is capability
-discovery only and takes no bus lease. `GET /servo/home/position` returns
-measured positions in the explicit `calibrated_home_deg_v1` frame without a
-lease. `POST /servo/home/move` requires firmware capability
-`motion.home_degrees.v1`, accepts only a pitch target from 7 to 10 degrees and
-a requested duration from 2 to 10 seconds, and lets the speed policy stretch
-the duration up to the 60-second transport limit. Before it sends motion, HAL
-requires measured pan within ±30 degrees and pitch in [0, 5). The command
-omits yaw, so yaw torque is off during the pitch move. A stop or transport
-loss while below 5 degrees may fail to hold and leave torque off or the session
-faulted; mechanical support and direct supervision are required for this
-experimental path.
+Home commissioning belongs to the experimental Stack-chan bench tool, not the
+shared OS motion contract. The standard `hal.server:app` entrypoint exposes no
+`/stackchan/*` or `/servo/home*` endpoints. The bench HTTP schema and routes live in
+`robots/_experimental/stackchan/commissioning.py`; the Stack-chan driver enforces
+its coordinate frame and commissioning bounds. Shared servo routes, models, and
+the `MotionService` contract remain unchanged.
 
-Invalid feedback, reconnect, yaw drift over 1 degree, timeout and cancellation
-fail closed. Fail closed means the body halts and holds; HAL keeps the transport open and returns the measured settle samples in its 502 response, so a missed target leaves evidence instead of a reboot. A command the firmware answers with an error code leaves the transport open, because the firmware has already held, released, or faulted, or its lease lapses within one TTL and it halts then; `/servo/stop` and `/servo/release` return 502 with the op and code, and a short timed move that HAL halted is likewise reported without closing. Only a command timeout, where delivery is unknown, still closes the transport. Success requires measured pitch within 1 degree of target, at
-least 6 degrees, and at least 1 degree of positive change; HAL then sends
-`lease.release` to re-energize both axes for the both-axes-held terminal state
-and rechecks measured position. If the head stops short but holds still (last samples within 0.2 degrees, at least 1 degree of progress, at or above the 6 degree hold margin, short by more than the tolerance and by no more than 3 degrees), HAL repeats the same target once while keeping the lease, then applies the same arrival test; the response reports `recommands`. There is never a second repeat. This does not verify calibration, replace the legacy ±15-degree
-midpoint mapping, or authorize later preset moves. A supervised hardware trial on 2026-09-11 produced visible motion,
-followed by a transport-failure reboot without final feedback or verified hold.
-Commissioning remains unqualified and disabled outside supervised diagnostics.
+The explicit bench entrypoint exposes `GET /stackchan/home` for passive capability
+discovery and `GET /stackchan/home/position` for measured pan/tilt in
+`calibrated_home_deg_v1`, both without a motion lease. Motion remains disabled by
+default (`STACKCHAN_HOME_COMMISSIONING_ENABLED=0`). When explicitly enabled,
+`POST /stackchan/home/move` requires firmware capability `motion.home_degrees.v1`,
+an explicit coordinate frame, only a tilt target from 7 to 10 degrees, and a
+requested duration from 2 to 10 seconds. The speed policy may stretch duration
+up to 60 seconds. Starting feedback must show pan within ±30 degrees and tilt
+in [0, 5). Yaw torque is off during this pitch-only move. Below 5 degrees, stop
+or transport loss can leave torque off or the session faulted; mechanical
+support and direct supervision remain required.
+
+During each trajectory, including its optional repeat, the driver reads feedback
+after waits of at most 250 ms or half the lease TTL, whichever is shorter.
+Request latency adds to this interval; configured command timeouts still apply.
+Invalid feedback or yaw drift over 1 degree triggers a halt without waiting for
+the motion duration to end. This sampled check cannot detect every excursion
+between reads. A missed target after settling is halted and reported with measured
+settle samples while preserving the connection. Firmware rejections also keep the
+connection open; command timeouts still close it, and the installed firmware
+releases torque and reboots on disconnect. A successful hold is not guaranteed
+for every failure, particularly below the firmware's hold floor.
+
+Success requires measured pitch within 1 degree of target, at least 6 degrees,
+and at least 1 degree of positive progress. If the head settles short but stable
+(last samples within 0.2 degrees, at least 1 degree of progress, at least 6 degrees,
+and short by more than 1 but no more than 3 degrees), the driver repeats the same
+target at most once. The response reports `recommands`. Only measured arrival
+allows `lease.release` to re-energize both axes; the driver then rechecks position.
+
+Use bench `POST /stackchan/stop` and `POST /stackchan/release` for diagnostics.
+Firmware rejections return 502 with `op`, `code`, and `message`; other reported
+release failures, including missed arrival and cancellation, return 502 with
+`message` and `errors`. A failed release never reports successful torque-off on
+this bench endpoint. Shared `/servo/stop` and `/servo/release` retain their existing
+OS behavior; the latter's legacy success response alone does not prove release.
+This tool does not verify calibration or qualify hardware for routine use.
 
 The Stack-chan driver remains experimental. Before device qualification:
 
