@@ -577,3 +577,5 @@ Thành công, HAL đọc “Đã bật Harness, đang nói chuyện với {agent
 ngắn, không lưu trạng thái LED mới. Chưa kết nối/không có agent được báo lỗi theo
 ngôn ngữ đã chọn. Công tắc privacy mic chặn action; speaker mute chặn thông báo;
 LED vẫn tôn trọng quyền ưu tiên sleep/privacy/TTS hiện có.
+
+Khi HAL khởi động, đồng bộ vị trí privacy-switch không giả lập nhấn nút: vị trí cho phép mic khôi phục quyền mic/ngoại vi mà không đánh thức thiết bị, mở conversation focus, phát chime/câu đang nghe hoặc lên lịch LED listening. Thao tác gạt thật từ mute sang unmute vẫn giữ wake/focus và thông báo như trước. Khởi động ở vị trí mute vẫn áp hardware privacy lock đồng bộ.
