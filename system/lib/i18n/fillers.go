@@ -1,6 +1,9 @@
 package i18n
 
-import "strings"
+import (
+	"sort"
+	"strings"
+)
 
 // Dead-air fillers — short TTS cues spoken while the agent is busy. Two
 // pools per language (Opening for first filler of a turn, Continuation for
@@ -85,6 +88,21 @@ var toolFillers = map[string]map[string][]string{
 		// thing, with nothing acknowledging that the search came up empty.
 		"look_lost":      {"Can't see you.", "Lost you."},
 		"look_capturing": {"Let's see.", "Hmm..."},
+		// Range-demo narration (hal/drivers/motors/range_demo.py). HAL speaks
+		// each leg AS IT MOVES, which is why these are pools rather than agent
+		// text: a [HW:...] marker fires before TTS, so a marker-narrated demo
+		// would describe a performance that has already finished. Short by
+		// design — the phrase has to land inside one leg of the movement.
+		"demo_intro":     {"Here's what I can do.", "Watch this."},
+		"demo_left":      {"All the way left.", "Left, as far as I go."},
+		"demo_right":     {"And all the way right.", "Right, to the end."},
+		"demo_up":        {"I can look up.", "Up, like this."},
+		"demo_down":      {"And down.", "Down, like this."},
+		"demo_done":      {"That's everything.", "That's as far as I go."},
+		"demo_centre":    {"And back to the middle.", "Back to centre."},
+		"demo_head":      {"My head turns on its own too.", "Just the head this time."},
+		"demo_neck":      {"I can stretch my neck.", "Neck up, and down."},
+		"demo_lean":      {"And I can lean.", "A little lean."},
 		"web_search":     {"Let's see.", "Hmm..."},
 		"x_search":       {"Let's see.", "Checking."},
 		"web_fetch":      {"Let's see.", "Reading."},
@@ -114,6 +132,16 @@ var toolFillers = map[string]map[string][]string{
 		"look_lost":            {"Không thấy rồi.", "Mất dấu rồi."},
 		"look_still_searching": {"Vẫn tìm đây...", "Hừm..."},
 		"look_capturing":       {"Để xem.", "Hừm..."},
+		"demo_intro":           {"Xem nè.", "Để mình khoe chút."},
+		"demo_left":            {"Hết cỡ bên trái.", "Sang trái hết mức."},
+		"demo_right":           {"Và hết cỡ bên phải.", "Sang phải hết mức."},
+		"demo_up":              {"Nhìn lên được nữa.", "Lên như vầy nè."},
+		"demo_down":            {"Và xuống.", "Xuống như vầy nè."},
+		"demo_done":            {"Đó là hết tầm của mình.", "Xa nhất là tới đó."},
+		"demo_centre":          {"Rồi về giữa.", "Quay về giữa nè."},
+		"demo_head":            {"Đầu mình cũng tự xoay được.", "Lần này chỉ xoay đầu thôi."},
+		"demo_neck":            {"Mình vươn cổ được nữa.", "Cổ lên, rồi xuống."},
+		"demo_lean":            {"Và mình nghiêng người được.", "Nghiêng một chút nè."},
 		"web_search":           {"Để coi.", "Hừm..."},
 		"x_search":             {"Coi thử.", "Để coi."},
 		"web_fetch":            {"Xem thử.", "Đọc chút."},
@@ -135,52 +163,87 @@ var toolFillers = map[string]map[string][]string{
 		"image":                {"Xem chút.", "Để coi."},
 	},
 	LangZhCN: {
-		"search_files":   {"找一下。", "查查看。"},
-		"memory_store":   {"记一下。", "等一下。"},
-		"audio_generate": {"准备音频。", "等一下。"},
-		"web_search":     {"我帮你找找", "查一下哦", "我去搜搜", "找一下啊"},
-		"x_search":       {"去X看看", "瞅瞅X", "在X瞄一下"},
-		"web_fetch":      {"我去看看", "翻开看看", "瞅一眼", "打开瞧瞧"},
-		"read":           {"我看一下", "翻翻看", "瞄一眼", "我读读"},
-		"memory_search":  {"我想想", "回忆一下", "翻翻记忆"},
-		"memory_get":     {"我想想", "让我回忆下"},
-		"exec":           {"我来弄", "马上做", "在做了", "正在弄"},
-		"process":        {"我在弄", "后台跑着"},
-		"image_generate": {"我来画", "画一张哦", "做一张看看", "画着呢"},
-		"video_generate": {"我来弄", "在做呢"},
-		"music_generate": {"在写曲子", "我来作曲"},
-		"update_plan":    {"我重新理理", "再想想", "换个思路"},
-		"session_status": {"我看看情况", "瞄一眼"},
-		"apply_patch":    {"我来改", "调整一下"},
-		"pdf":            {"我读一下", "扫一遍"},
-		"canvas":         {"在画", "随手画一下"},
-		"nodes":          {"我来", "马上"},
-		"subagents":      {"找帮手", "叫人来帮"},
-		"image":          {"我看看", "瞄一眼"},
+		// The look_* and demo_* pools were absent here while both other
+		// languages had them. A key missing from a KNOWN language used to
+		// resolve to nothing rather than falling back, so every look filler on
+		// a Chinese device was dropped in silence — the aim announced a search
+		// it then never mentioned again.
+		"look_searching":       {"在找...", "你在哪儿？"},
+		"look_still_searching": {"还在找...", "嗯..."},
+		"look_found":           {"你在这儿。", "找到了。"},
+		"look_lost":            {"看不到你。", "跟丢了。"},
+		"look_capturing":       {"我看看。", "嗯..."},
+		"demo_intro":           {"看这个。", "我给你看看。"},
+		"demo_left":            {"左边到底。", "最左边。"},
+		"demo_right":           {"右边也到底。", "最右边。"},
+		"demo_up":              {"还能往上看。", "像这样往上。"},
+		"demo_down":            {"还有往下。", "像这样往下。"},
+		"demo_done":            {"这就是我的全部范围。", "最远就到这儿。"},
+		"demo_centre":          {"再回到中间。", "回正。"},
+		"demo_head":            {"头也能自己转。", "这次只转头。"},
+		"demo_neck":            {"我还能伸脖子。", "脖子抬起来，再低下去。"},
+		"demo_lean":            {"还能前倾。", "稍微倾一下。"},
+		"search_files":         {"找一下。", "查查看。"},
+		"memory_store":         {"记一下。", "等一下。"},
+		"audio_generate":       {"准备音频。", "等一下。"},
+		"web_search":           {"我帮你找找", "查一下哦", "我去搜搜", "找一下啊"},
+		"x_search":             {"去X看看", "瞅瞅X", "在X瞄一下"},
+		"web_fetch":            {"我去看看", "翻开看看", "瞅一眼", "打开瞧瞧"},
+		"read":                 {"我看一下", "翻翻看", "瞄一眼", "我读读"},
+		"memory_search":        {"我想想", "回忆一下", "翻翻记忆"},
+		"memory_get":           {"我想想", "让我回忆下"},
+		"exec":                 {"我来弄", "马上做", "在做了", "正在弄"},
+		"process":              {"我在弄", "后台跑着"},
+		"image_generate":       {"我来画", "画一张哦", "做一张看看", "画着呢"},
+		"video_generate":       {"我来弄", "在做呢"},
+		"music_generate":       {"在写曲子", "我来作曲"},
+		"update_plan":          {"我重新理理", "再想想", "换个思路"},
+		"session_status":       {"我看看情况", "瞄一眼"},
+		"apply_patch":          {"我来改", "调整一下"},
+		"pdf":                  {"我读一下", "扫一遍"},
+		"canvas":               {"在画", "随手画一下"},
+		"nodes":                {"我来", "马上"},
+		"subagents":            {"找帮手", "叫人来帮"},
+		"image":                {"我看看", "瞄一眼"},
 	},
 	LangZhTW: {
-		"search_files":   {"找一下。", "查查看。"},
-		"memory_store":   {"記一下。", "等一下。"},
-		"audio_generate": {"準備音訊。", "等一下。"},
-		"web_search":     {"我幫你找找", "查一下喔", "我去搜搜", "找一下啊"},
-		"x_search":       {"去X看看", "瞄一下X", "在X瞧瞧"},
-		"web_fetch":      {"我去看看", "翻開看看", "瞄一眼", "打開瞧瞧"},
-		"read":           {"我看一下", "翻翻看", "瞄一眼", "我讀讀"},
-		"memory_search":  {"我想想", "回憶一下", "翻翻記憶"},
-		"memory_get":     {"我想想", "讓我回憶下"},
-		"exec":           {"我來弄", "馬上做", "在做了", "正在弄"},
-		"process":        {"我在弄", "背景跑著"},
-		"image_generate": {"我來畫", "畫一張喔", "做一張看看", "畫著呢"},
-		"video_generate": {"我來弄", "在做呢"},
-		"music_generate": {"在寫曲子", "我來作曲"},
-		"update_plan":    {"我重新理理", "再想想", "換個思路"},
-		"session_status": {"我看看情況", "瞄一眼"},
-		"apply_patch":    {"我來改", "調整一下"},
-		"pdf":            {"我讀一下", "掃一遍"},
-		"canvas":         {"在畫", "隨手畫一下"},
-		"nodes":          {"我來", "馬上"},
-		"subagents":      {"找幫手", "叫人來幫"},
-		"image":          {"我看看", "瞄一眼"},
+		"look_searching":       {"在找...", "你在哪兒？"},
+		"look_still_searching": {"還在找...", "嗯..."},
+		"look_found":           {"你在這兒。", "找到了。"},
+		"look_lost":            {"看不到你。", "跟丟了。"},
+		"look_capturing":       {"我看看。", "嗯..."},
+		"demo_intro":           {"看這個。", "我給你看看。"},
+		"demo_left":            {"左邊到底。", "最左邊。"},
+		"demo_right":           {"右邊也到底。", "最右邊。"},
+		"demo_up":              {"還能往上看。", "像這樣往上。"},
+		"demo_down":            {"還有往下。", "像這樣往下。"},
+		"demo_done":            {"這就是我的全部範圍。", "最遠就到這兒。"},
+		"demo_centre":          {"再回到中間。", "回正。"},
+		"demo_head":            {"頭也能自己轉。", "這次只轉頭。"},
+		"demo_neck":            {"我還能伸脖子。", "脖子抬起來，再低下去。"},
+		"demo_lean":            {"還能前傾。", "稍微傾一下。"},
+		"search_files":         {"找一下。", "查查看。"},
+		"memory_store":         {"記一下。", "等一下。"},
+		"audio_generate":       {"準備音訊。", "等一下。"},
+		"web_search":           {"我幫你找找", "查一下喔", "我去搜搜", "找一下啊"},
+		"x_search":             {"去X看看", "瞄一下X", "在X瞧瞧"},
+		"web_fetch":            {"我去看看", "翻開看看", "瞄一眼", "打開瞧瞧"},
+		"read":                 {"我看一下", "翻翻看", "瞄一眼", "我讀讀"},
+		"memory_search":        {"我想想", "回憶一下", "翻翻記憶"},
+		"memory_get":           {"我想想", "讓我回憶下"},
+		"exec":                 {"我來弄", "馬上做", "在做了", "正在弄"},
+		"process":              {"我在弄", "背景跑著"},
+		"image_generate":       {"我來畫", "畫一張喔", "做一張看看", "畫著呢"},
+		"video_generate":       {"我來弄", "在做呢"},
+		"music_generate":       {"在寫曲子", "我來作曲"},
+		"update_plan":          {"我重新理理", "再想想", "換個思路"},
+		"session_status":       {"我看看情況", "瞄一眼"},
+		"apply_patch":          {"我來改", "調整一下"},
+		"pdf":                  {"我讀一下", "掃一遍"},
+		"canvas":               {"在畫", "隨手畫一下"},
+		"nodes":                {"我來", "馬上"},
+		"subagents":            {"找幫手", "叫人來幫"},
+		"image":                {"我看看", "瞄一眼"},
 	},
 }
 
@@ -310,8 +373,16 @@ func FillerToolKey(tool string) string {
 }
 
 // FillerForTool returns the tool-specific override pool for (lang, tool).
-// Returns nil when no override exists — caller falls back to
+// Returns nil when no override exists in ANY language — caller falls back to
 // FillerContinuation. Unknown lang routes to the English pool.
+//
+// A key missing from a KNOWN language also falls back to English rather than
+// to nothing. Silence was the old behaviour and it is indistinguishable from a
+// muted speaker: zh carried no look_* entries at all, so the lang map existed,
+// the unknown-lang fallback never fired, and every look filler on a Chinese
+// device was dropped without a log line. An English phrase on a Chinese device
+// is wrong, but it is wrong out loud — a missing translation should be
+// reported by somebody hearing it, not disappear.
 func FillerForTool(lang, tool string) []string {
 	if tool = FillerToolKey(tool); tool == "" {
 		return nil
@@ -320,5 +391,37 @@ func FillerForTool(lang, tool string) []string {
 	if !ok {
 		pools = toolFillers[fallbackLang]
 	}
-	return applyNameAll(pools[tool])
+	if p := pools[tool]; len(p) > 0 {
+		return applyNameAll(p)
+	}
+	// nil in -> nil out through applyNameAll, so a pool that exists nowhere
+	// still reads as "no pool" rather than as an empty one.
+	return applyNameAll(toolFillers[fallbackLang][tool])
+}
+
+// AllPoolKeys returns every tool/pool key defined in any language, sorted.
+//
+// Exists so callers that must cover the WHOLE set — the WAV prewarm — cannot
+// fall behind the maps. The list it replaces was maintained by hand and had
+// already missed two whole pool families.
+//
+// Every key here must be its own FillerToolKey normalised form, or it cannot be
+// looked up through FillerForTool at all; TestEveryPoolKeyIsItsOwnNormalisedForm
+// pins that.
+func AllPoolKeys() []string {
+	seen := make(map[string]struct{})
+	keys := make([]string, 0, 32)
+	for _, pools := range toolFillers {
+		for k := range pools {
+			if _, dup := seen[k]; dup {
+				continue
+			}
+			seen[k] = struct{}{}
+			keys = append(keys, k)
+		}
+	}
+	// Sorted so the prewarm's log line is stable and diffable; map iteration
+	// order is not.
+	sort.Strings(keys)
+	return keys
 }

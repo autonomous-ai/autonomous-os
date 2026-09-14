@@ -170,8 +170,30 @@ Rendered by `FlowDiagram` in `system/web/src/pages/Monitor.tsx`. The diagram is 
   - **EMO** (`hw_emotion`) — `/emotion` calls (coordinated LED + servo + display eyes)
   - **LED** (`hw_led`) — `/led/solid`, `/led/effect`, `/scene`, `/led/off`
   - **SERVO** (`hw_servo`) — move or animate servos: `/servo/aim`,
-    `/servo/play`, `/servo/track`. The node detail shows the actual agent
-    command/API call for the selected turn.
+    `/servo/play`, `/servo/nudge`, `/servo/search`, `/servo/demo`. The node
+    detail shows the actual agent command/API call for the selected turn.
+    Reads (`/servo/position`, `/servo/status`, `/servo/bearing`) do not count —
+    a `hw_servo` event means the lamp did something a person could see.
+
+  **Hardware events are matched on the resolved endpoint, not on raw shell
+  text.** A tool call's arguments are scanned for `127.0.0.1:500[01]/<path>`
+  (`hwPathFromToolArgs` in `handler_event_agent.go`) and the `/emotion` and
+  `/servo/*` branches compare against that path. The previous substring test
+  turned `cat …/skills/emotion/SKILL.md` into a `hw_emotion` + `led_set` pair
+  for a turn in which the lamp did nothing. The `/led/*` and `/audio/play`
+  branches still use the substring form — same weakness, no phantom observed
+  there yet.
+
+  **`hw_failed`** — a `[HW:...]` marker the OS tried to fire whose POST failed
+  at the transport: the 5 s client timeout, a refused connection. Carries
+  `path`, `args`, `run_id` and `error`. Before this event existed that branch
+  returned before any `flow.Log`, so a 40 s body movement left nothing in the
+  monitor at all (`device-chat-44`: a search marker fired, HAL swept the room,
+  the timeline showed an idle lamp). Deliberately **not** a cancellation: it
+  lights the OS-gate node and adds a `⚠ → HW call failed` line to its detail,
+  but it does not set the turn's cancelled badge or turn the TTS node red —
+  those mean the *user* silenced the turn, and a timeout must never read as
+  the user's doing.
   - **CAM** (`hw_camera`) — `GET /camera/snapshot`; its saved result is
     rendered as a clickable thumbnail so operators can debug the exact frame
     returned to the agent (including an agent workspace image such as

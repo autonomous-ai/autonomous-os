@@ -1,6 +1,6 @@
 ---
 name: servo-control
-description: "Use to aim/point/look the device in a DIRECTION, toggle servo state (hold/resume/release), or play a named servo animation (nod/shake/etc). Directions are fixed named locations or axes — supported: desk, wall, left, right, up, down, center, user. Furniture and surfaces (\"desk\", \"table\", \"floor\", \"ceiling\", \"wall\", \"door\", \"workspace\") are ALWAYS directions, never tracking targets — map them to the closest of the supported names (table/workspace → desk). MUST use /servo/aim (not /servo/track) for: \"look at the desk\"→desk, \"point at my table\"→desk, \"look at the wall\"→wall, \"look left\"→left, \"point up\"→up, \"look at me\"→user. For following a movable OBJECT by vision (cup, phone, hand, person, pet) use servo-tracking instead. Compound: if user names a direction AND an object (\"look at desk and follow cup\"), fire THIS aim skill first, then tracking."
+description: "Use to aim/point/look the device in a DIRECTION, toggle servo state (hold/resume/release), or play a named servo animation (nod/shake/etc). ALSO the skill for SEARCHING — \"where are you\", \"find my keyboard/cup/phone\", \"look around for X\", \"scan the whole room\" — which sweeps the room with the camera via /servo/search (run it with curl DURING the turn and answer from its result), and for DEMONSTRATING the movement range ONLY when the request names MOVEMENT — \"show me how far you can move\", \"how far can you turn\", \"show me your range of motion\" — via /servo/demo. A bare \"show me what you can do\" or \"what is your maximum capability\" is a general question about abilities, NOT a movement request, and must not start the demo. Never answer a search or a range demo with an emotion. Directions are fixed named locations or axes — supported: desk, wall, left, right, up, down, center, user. Furniture and surfaces (\"desk\", \"table\", \"floor\", \"ceiling\", \"wall\", \"door\", \"workspace\") are ALWAYS directions, never tracking targets — map them to the closest of the supported names (table/workspace → desk). MUST use /servo/aim (not /servo/track) for: \"look at the desk\"→desk, \"point at my table\"→desk, \"look at the wall\"→wall, \"look left\"→left, \"point up\"→up, \"look at me\"→user. For following a movable OBJECT by vision (cup, phone, hand, person, pet) use servo-tracking instead. Compound: if user names a direction AND an object (\"look at desk and follow cup\"), fire THIS aim skill first, then tracking."
 ---
 
 # Servo Control
@@ -64,18 +64,65 @@ curl -sX POST http://127.0.0.1:5000/api/vision/look -H 'Content-Type: applicatio
 → Answer from the returned `description`, or inspect the returned `path` with an image tool when only a path is returned. On error, do not guess. Do **not** use `[HW:...]` markers for these movements — markers fire only *after* your reply is written, so a snapshot taken during the turn would show the OLD position. See the Camera skill.
 
 **Input:** "Where are you?" / "Can you find me?" / "Look around for me" / "Where did I go?"
-**Output:** `[HW:/servo/search:{}]` Looking around for you...
+**Output:** run it DURING the turn, then answer from what comes back:
+```bash
+curl -sX POST http://127.0.0.1:5001/servo/search -H 'Content-Type: application/json' -d '{}'
+```
+→ Do **not** use `[HW:/servo/search:...]`. Markers fire only *after* your reply is
+   written, so a marker-driven search finishes into a turn that has already ended and
+   the person is told nothing. The response body **is** your answer.
 
 **Input:** "Find my cup" / "Look around for my keyboard" / "Where did I leave my phone?"
-**Output:** `[HW:/servo/search:{"target":"cup"}]` Let me look around for it...
+**Output:**
+```bash
+curl -sX POST http://127.0.0.1:5001/servo/search -H 'Content-Type: application/json' -d '{"target":"cup"}'
+```
 → `target` is any noun — COCO classes are found locally, anything else via open-vocab.
    Without it the sweep looks for a PERSON and will end on the first one it sees,
    which is why an object search must always name its target.
+→ The sweep takes up to ~40 s and says "still looking" itself at the halfway point, so
+   the wait is covered. Wait for it. Do not reply first and do not start a second one.
+→ Read the body; do not narrate the movement:
+```json
+{"found": true, "kind": "cup", "found_at_yaw": 85.0, "centred": true,
+ "image_path": "…/media/hal-snapshots/snap_*.jpg",
+ "looks_visited": 7, "bearings_visited": 2}
+```
+   The picture at `image_path` is shown to the person automatically — you cannot see it,
+   so say what you found and roughly where, and never describe the image itself.
+   `looks_visited` counts camera looks, `bearings_visited` counts body turns. They are
+   different numbers; do not call either one "stops".
+→ `"found": false` is an answer too. Say you looked and could not find it — do not go quiet,
+   and do not offer or run an `exhaustive` scan for a thing: a search always stops at the
+   first sighting, and the server ignores `exhaustive` for an object target anyway.
 
-**Input:** "Scan the whole room" / "Show me your maximum capability in scanning" / "Do a full scan"
-**Output:** `[HW:/servo/search:{"exhaustive":true}]` Doing a full sweep — this takes a moment...
-→ Walks the whole look ring at every bearing instead of returning at the first sighting.
-   Combine with `target` when they ask for a thorough search for a specific thing.
+**Input:** "Scan the whole room" / "Is anyone else here?" / "Check the shelf too" / "Do a full scan"
+**Output:**
+```bash
+curl -sX POST http://127.0.0.1:5001/servo/search -H 'Content-Type: application/json' -d '{"exhaustive":true}'
+```
+→ A SURVEY of people: walks the whole look ring at every bearing, counts everyone it sees,
+   and comes back home. It is the only mode that looks above the horizon.
+→ Never for an object. "Find my doll" is the search above, which stops at the first sighting
+   and stays pointed at it; the server ignores `exhaustive` when a `target` is given.
+→ A request to SHOW how far you can move is the demo below, not a scan.
+
+**Input:** "Show me how far you can move" / "How far can you turn?" / "Show me your range of motion" / "Show me your movement range" / "Demonstrate your movement"
+**Output:** `[HW:/servo/demo:{}]` Sure — watch this!
+→ ONLY when the request is about MOVEMENT — moving, turning, reaching, range of motion.
+   A bare "show me what you can do", "what can you do", "show me your maximum capability"
+   or "show me your skills" asks about abilities in general (camera, voice, memory, the
+   lot) and does NOT start this demo: answer it in words, without any marker.
+→ A narrated tour of the movement limits. The device speaks each leg BY ITSELF as it
+   moves — "all the way left", "and all the way right", up, down — those lines are
+   the hardware's, not yours. Keep your reply to one short opener and do not describe
+   the movement in it: the words are already timed to the motion, and a reply that
+   narrates it too says everything twice.
+→ This is a DEMO. Nothing is detected and nothing is reported. Looking FOR something
+   is `/servo/search` above; covering the room is `exhaustive`.
+→ Never answer this with `/emotion` or `[HW:/servo/play:{"recording":"scanning"}]`:
+   both are short canned animations that cover about 54° of a 270° range and never
+   look at anything. Asked for a full turn, they perform a shrug.
 
 **Input:** "I moved you" / "You're in a new place" / "I put you somewhere else" / "Forget where I sit"
 **Output:** `[HW:/servo/bearing/reset:{}]` Got it — I'll forget where you usually are and learn it again.
@@ -87,7 +134,7 @@ curl -sX POST http://127.0.0.1:5000/api/vision/look -H 'Content-Type: applicatio
 
 ## How to Control Servo
 
-**No exec/curl needed.** Inline markers at start of reply:
+**For a movement you just announce, no exec/curl is needed.** Inline markers at start of reply:
 
 ```
 [HW:/servo/aim:{"direction":"desk"}] Aimed at your desk.
@@ -96,7 +143,12 @@ curl -sX POST http://127.0.0.1:5000/api/vision/look -H 'Content-Type: applicatio
 [HW:/servo/hold:{}] OK, holding still.
 [HW:/servo/resume:{}] Back to normal!
 [HW:/servo/release:{}] Servos released.
+[HW:/servo/demo:{}] Sure — watch this!
 ```
+
+**Use curl instead whenever the RESULT of the movement belongs in this turn** — a search,
+or a move followed by looking. A marker fires after your reply is already written, so
+anything it produces arrives too late for you to say. `/servo/search` is always curl.
 
 `duration` on `/servo/aim` controls move speed in seconds (default 2.0, 0 = instant).
 
@@ -142,7 +194,7 @@ Available animations:
 | `excited` | High energy, celebrations |
 | `shy` | Bashful moments |
 | `shock` | Surprise |
-| `scanning` | Looking around, searching |
+| `scanning` | A short searching *gesture* — mood only. It is a 54° canned wiggle with the camera uninvolved, so it never answers "look around for X": that is `/servo/search` above |
 | `wake_up` | Waking up, starting a new session |
 | `music_groove` | Grooving to music (auto-triggered during playback) |
 | `music_chill` | Chill/lo-fi vibe (auto-triggered during calm music) |

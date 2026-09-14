@@ -5,6 +5,7 @@ overlap so nobody falls between them, it stays inside the mechanical range,
 and it stops the moment it finds someone rather than completing the sweep.
 """
 
+import os
 import time
 from unittest import mock
 
@@ -205,14 +206,14 @@ def test_a_stop_past_the_limit_is_clamped_not_dropped():
 def test_stops_on_first_sighting_rather_than_completing_the_sweep():
     res, svc = _run(detect_at_stop=2)
     assert res.found is True
-    assert res.stops_visited == 2, "should stop as soon as it sees someone"
+    assert res.looks_visited == 2, "should stop as soon as it sees someone"
 
 
 def test_reports_failure_after_exhausting_the_sweep():
     res, svc = _run(detect_at_stop=None)
     assert res.found is False
     assert res.reason == "no person found"
-    assert res.stops_visited > 1
+    assert res.looks_visited > 1
 
 
 def test_camera_disabled_never_sweeps():
@@ -229,7 +230,7 @@ def test_abort_stops_the_sweep_mid_flight():
     # so a stale abort cannot prevent the next search from ever running.
     res, svc = _run(detect_at_stop=None, abort_at_stop=2)
     assert res.reason == "aborted"
-    assert res.stops_visited < search.MAX_STOPS
+    assert res.looks_visited < search.MAX_STOPS
 
 
 def test_a_stale_abort_does_not_block_the_next_search():
@@ -265,7 +266,7 @@ def test_a_low_confidence_bearing_is_not_used_to_seed_the_sweep():
     res, svc = _run(bearing=120.0, confidence=aim.MIN_BEARING_CONFIDENCE - 0.05)
     seeded_from_bearing = [h for h in svc.holds if h.get("base_yaw.pos") == 120.0]
     assert seeded_from_bearing == [], "a bearing below the floor must not aim the head"
-    assert res.stops_visited >= 1
+    assert res.looks_visited >= 1
 
 
 def test_no_bearing_rests_on_the_idle_pose_before_sweeping():
@@ -330,7 +331,7 @@ def test_a_failed_posture_restore_still_sweeps():
     ):
         res = search.search_for_subject(detector=det)
 
-    assert res.stops_visited >= 1, "a failed restore must not abort the search"
+    assert res.looks_visited >= 1, "a failed restore must not abort the search"
 
 
 # --- the head looks around at each stop ----------------------------------------
@@ -445,7 +446,7 @@ def test_a_subject_found_mid_look_stops_the_sweep_there():
     and adding a second axis must not make it keep looking past them."""
     res, svc = _run(detect_at_stop=2, bearing=None)
     assert res.found
-    assert res.stops_visited == 2, "it kept looking after finding someone"
+    assert res.looks_visited == 2, "it kept looking after finding someone"
 
 
 def test_looking_around_multiplies_the_stops_not_the_yaw_positions():
@@ -453,8 +454,8 @@ def test_looking_around_multiplies_the_stops_not_the_yaw_positions():
     from turning the body more often."""
     res, svc = _run(bearing=None)
     yaw_stops = len(search._stop_list(_FakeSvc.IDLE_BASELINE["base_yaw.pos"]))
-    assert res.stops_visited == yaw_stops * search.HALF_LOOKS, (
-        f"{res.stops_visited} stops from {yaw_stops} yaw positions"
+    assert res.looks_visited == yaw_stops * search.HALF_LOOKS, (
+        f"{res.looks_visited} stops from {yaw_stops} yaw positions"
     )
     assert yaw_stops == 3, "three yaw positions is the whole point of the wider step"
 
@@ -629,7 +630,7 @@ def test_a_talkative_caller_cannot_sink_the_sweep():
 
     res, _svc = _run(bearing=None, on_progress=boom)
     expected = 3 * search.HALF_LOOKS
-    assert res.stops_visited == expected, "the sweep stopped when the callback threw"
+    assert res.looks_visited == expected, "the sweep stopped when the callback threw"
 
 
 def test_every_sweep_narrates_its_own_midpoint():
@@ -792,8 +793,8 @@ def test_a_full_scan_does_not_stop_at_the_first_hit():
     quick, _svc, _det = _run_target(target="person", person_everywhere=True)
     full, _svc2, _det2 = _run_target(target="person", person_everywhere=True,
                                      exhaustive=True)
-    assert quick.stops_visited == 1, "the quick sweep should stop at the first hit"
-    assert full.stops_visited == 3 * len(search.LOOK_CIRCLE), (
+    assert quick.looks_visited == 1, "the quick sweep should stop at the first hit"
+    assert full.looks_visited == 3 * len(search.LOOK_CIRCLE), (
         "the full sweep stopped early")
     assert full.found is True
     assert "x" in full.reason, f"expected a sighting count, got {full.reason!r}"
@@ -806,3 +807,405 @@ def test_a_full_scan_adds_the_upper_half_of_the_ring():
     assert all(dp >= 0 for _r, dp in half), "the default sweep must not look up"
     assert any(dp < 0 for _r, dp in search.LOOK_CIRCLE), "nothing looks up at all"
     assert len(search.LOOK_CIRCLE) > search.HALF_LOOKS
+
+
+def test_a_hit_is_centred_before_the_sweep_returns():
+    """Reported (#342 defect N): the sweep aimed at the LOOK DIRECTION of the
+    stop, not at the object — up to ~50 deg off at the frame edge — and called
+    that a find."""
+    calls = []
+
+    def _fake_centre(svc, cap, probe, deadline_s=None):
+        from hal.drivers.tracking.aim import CentreResult
+        calls.append(True)
+        return CentreResult(True, "centred", 1, 12.0, 0.01,
+                            (300, 200, 40, 40), object())
+
+    with mock.patch("hal.drivers.tracking.aim.centre_on_box", _fake_centre):
+        res, _svc, _det = _run_target(target="keyboard", hits=(1,))
+
+    assert calls, "a hit must run the centring correction"
+    assert res.found is True
+    assert res.centred is True
+    assert res.box == (300, 200, 40, 40), "the result must carry the centred box"
+
+
+def test_a_failed_centring_still_reports_the_find():
+    """Losing the box during the correction means the aim is imperfect, not
+    that the object was never there. Silence would be a worse answer."""
+    def _fake_centre(svc, cap, probe, deadline_s=None):
+        from hal.drivers.tracking.aim import CentreResult
+        return CentreResult(False, "lost the subject", 2, 8.0, 0.4, None, None)
+
+    with mock.patch("hal.drivers.tracking.aim.centre_on_box", _fake_centre):
+        res, _svc, _det = _run_target(target="keyboard", hits=(1,))
+
+    assert res.found is True, "a wobbly correction must not erase the find"
+    assert res.centred is False
+
+
+def test_the_probe_handed_to_the_centring_loop_looks_for_the_TARGET():
+    """The correction must chase the thing the sweep was asked for. Handing it
+    the closest-subject policy would centre on whoever is standing nearby and
+    report it as the keyboard."""
+    probes = []
+
+    def _fake_centre(svc, cap, probe, deadline_s=None):
+        from hal.drivers.tracking.aim import CentreResult
+        import numpy as np
+        probes.append(probe(np.zeros((480, 640, 3), dtype=np.uint8)))
+        return CentreResult(True, "centred", 1, 1.0, 0.0, (1, 2, 3, 4), None)
+
+    with mock.patch("hal.drivers.tracking.aim.centre_on_box", _fake_centre):
+        _res, _svc, det = _run_target(target="keyboard", hits=(1, 2))
+
+    assert probes, "the centring loop was given no probe"
+    asked = {c.args[1] for c in det.detect.call_args_list}
+    assert asked == {"keyboard"}, f"the probe went looking for {asked}"
+
+
+def test_an_exhaustive_sweep_counts_bearings_and_looks_apart():
+    """#342 defect C: `visited` counts LOOKS and was rendered "after N stop(s)"
+    against MAX_STOPS = 3, so a full sweep truthfully reported 27 of 3."""
+    res, _svc, _det = _run_target(target="person", person_everywhere=True,
+                                  exhaustive=True)
+
+    assert res.looks_visited == 3 * len(search.LOOK_CIRCLE)
+    assert res.bearings_visited == 3
+    assert res.looks_visited != res.bearings_visited, (
+        "looks and bearings are different quantities")
+
+
+def test_the_winning_frame_is_written_where_the_agent_can_read_it(tmp_path):
+    """#342 defect I: the sweep persisted nothing, so no image could ever be
+    shown. The path must land in the ACTIVE runtime's snapshot dir — the agent
+    image tool refuses anything outside its allow-list."""
+    def _fake_centre(svc, cap, probe, deadline_s=None):
+        from hal.drivers.tracking.aim import CentreResult
+        return CentreResult(True, "centred", 1, 5.0, 0.01, (10, 10, 20, 20),
+                            np.zeros((480, 640, 3), dtype=np.uint8))
+
+    with (
+        mock.patch.object(state, "_SNAPSHOT_DIR", str(tmp_path), create=True),
+        mock.patch.object(state, "_snapshot_paths", [], create=True),
+        mock.patch("hal.drivers.tracking.aim.centre_on_box", _fake_centre),
+    ):
+        res, _svc, _det = _run_target(target="keyboard", hits=(1,))
+
+    assert res.image_path is not None, "a find with no image is not showable"
+    assert res.image_path.startswith(str(tmp_path))
+    assert os.path.exists(res.image_path)
+    assert os.path.getsize(res.image_path) > 0
+
+
+def test_a_miss_writes_no_image():
+    """Nothing was found, so there is nothing to show. Writing the last frame
+    anyway would put a picture of an empty wall in front of the user under a
+    caption that says the search failed."""
+    res, _svc, _det = _run_target(target="keyboard", hits=())
+    assert res.found is False
+    assert res.image_path is None
+
+
+def test_a_find_always_has_an_image_even_when_centring_never_got_a_frame(tmp_path):
+    """The centring loop can exit before its first grab — no fresh frame, an
+    abort, a nudge failure. The sweep still SAW the thing: it has the frame and
+    the box that triggered the hit. Falling back to those is the difference
+    between "found it, here" and "found it" with nothing to show."""
+    def _fake_centre(svc, cap, probe, deadline_s=None):
+        from hal.drivers.tracking.aim import CentreResult
+        return CentreResult(False, "no fresh frame", 0, 0.0, None, None, None)
+
+    with (
+        mock.patch.object(state, "_SNAPSHOT_DIR", str(tmp_path), create=True),
+        mock.patch.object(state, "_snapshot_paths", [], create=True),
+        mock.patch("hal.drivers.tracking.aim.centre_on_box", _fake_centre),
+    ):
+        res, _svc, _det = _run_target(target="keyboard", hits=(1,))
+
+    assert res.found is True
+    assert res.centred is False
+    assert res.image_path is not None, "a find with no image to show"
+    assert os.path.exists(res.image_path)
+
+
+def test_the_saved_image_carries_the_box_and_not_the_aim_debug_lines(tmp_path):
+    """The box is the point — "here is your keyboard". The two full-height
+    centre lines encode_annotated draws by default are an aim-debug device for
+    reading dx, and after centring they overlap in the middle of the picture."""
+    seen = {}
+
+    def _spy(frame, box=None, label="", both_axes=False, centre_lines=True):
+        seen.update(box=box, label=label, centre_lines=centre_lines)
+        return b"\xff\xd8jpeg"
+
+    def _fake_centre(svc, cap, probe, deadline_s=None):
+        from hal.drivers.tracking.aim import CentreResult
+        return CentreResult(True, "centred", 1, 5.0, 0.01, (10, 10, 20, 20),
+                            np.zeros((480, 640, 3), dtype=np.uint8))
+
+    with (
+        mock.patch.object(state, "_SNAPSHOT_DIR", str(tmp_path), create=True),
+        mock.patch.object(state, "_snapshot_paths", [], create=True),
+        mock.patch("hal.drivers.tracking.aim.centre_on_box", _fake_centre),
+        mock.patch("hal.drivers.tracking.look_debug.encode_annotated", _spy),
+    ):
+        _run_target(target="keyboard", hits=(1,))
+
+    assert seen["box"] == (10, 10, 20, 20), "the box must be drawn"
+    assert seen["centre_lines"] is False, "aim-debug lines in a user-facing image"
+    assert seen["label"] == "keyboard", (
+        f"the caption should name the thing, got {seen['label']!r}")
+
+
+def test_the_snapshot_pool_is_rotated_like_the_camera_route(tmp_path):
+    """Same pool, same cap. A sweep that wrote without rotating would fill the
+    runtime's media dir one find at a time."""
+    def _fake_centre(svc, cap, probe, deadline_s=None):
+        from hal.drivers.tracking.aim import CentreResult
+        return CentreResult(True, "centred", 1, 5.0, 0.01, (10, 10, 20, 20),
+                            np.zeros((480, 640, 3), dtype=np.uint8))
+
+    kept = [str(tmp_path / f"old_{i}.jpg") for i in range(state._SNAPSHOT_MAX)]
+    for p in kept:
+        open(p, "wb").write(b"x")
+
+    with (
+        mock.patch.object(state, "_SNAPSHOT_DIR", str(tmp_path), create=True),
+        mock.patch.object(state, "_snapshot_paths", list(kept), create=True),
+        mock.patch("hal.drivers.tracking.aim.centre_on_box", _fake_centre),
+    ):
+        res, _svc, _det = _run_target(target="keyboard", hits=(1,))
+        assert len(state._snapshot_paths) == state._SNAPSHOT_MAX
+        assert res.image_path in state._snapshot_paths
+        assert not os.path.exists(kept[0]), "the oldest snapshot was not removed"
+
+
+def _search_client():
+    """A TestClient over the servo router — no hardware, no app startup.
+
+    The router is mounted as declared, so the `response_model` these tests pin
+    is the real one rather than a copy restated here. That matters: FastAPI
+    silently DROPS any field the model does not declare, so a field added to
+    SearchResult and forgotten in ServoSearchResponse never reaches the agent
+    and nothing anywhere reports an error.
+    """
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from hal.routes.servo import router
+
+    app = FastAPI()
+    app.include_router(router)
+    return TestClient(app)
+
+
+def test_the_route_reports_bearings_and_looks_separately():
+    """#342 defect C: "after 27 stop(s)" against MAX_STOPS = 3. The two counts
+    are different quantities and the body must not merge them."""
+    hit = search.SearchResult(True, "found keyboard", 7, 85.0, -45.0, 2,
+                              "keyboard", (1, 2, 3, 4), True, "/tmp/snap_1.jpg")
+    with mock.patch("hal.drivers.tracking.search.search_for_subject",
+                    return_value=hit):
+        body = _search_client().post("/servo/search",
+                                     json={"target": "keyboard"}).json()
+
+    assert body["looks_visited"] == 7
+    assert body["bearings_visited"] == 2
+    assert "7 look(s)" in body["message"] and "2 bearing(s)" in body["message"]
+    assert "stop(s)" not in body["message"], "looks are not stops"
+
+
+def test_the_route_carries_every_field_the_agent_needs():
+    """`response_model` SILENTLY drops anything it does not declare, so a field
+    added to SearchResult and forgotten in the model is invisible until someone
+    wonders why the picture never appears."""
+    hit = search.SearchResult(True, "found keyboard", 7, 85.0, -45.0, 2,
+                              "keyboard", (1, 2, 3, 4), True, "/tmp/snap_1.jpg")
+    with mock.patch("hal.drivers.tracking.search.search_for_subject",
+                    return_value=hit):
+        body = _search_client().post("/servo/search",
+                                     json={"target": "keyboard"}).json()
+
+    assert body["found"] is True
+    assert body["target"] == "keyboard"
+    assert body["kind"] == "keyboard"
+    assert body["found_at_yaw"] == 85.0
+    assert body["found_at_roll"] == -45.0
+    assert body["centred"] is True
+    assert body["image_path"] == "/tmp/snap_1.jpg"
+
+
+def test_the_route_answers_a_miss_without_an_image():
+    """"found: false" is an answer. It must not look like a crash, and it must
+    not carry a picture of wherever the head happened to stop."""
+    miss = search.SearchResult(False, "no keyboard found", 18,
+                               bearings_visited=3)
+    with mock.patch("hal.drivers.tracking.search.search_for_subject",
+                    return_value=miss):
+        resp = _search_client().post("/servo/search", json={"target": "keyboard"})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["found"] is False
+    assert body["image_path"] is None
+    assert body["message"] == "no keyboard found after 18 look(s) across 3 bearing(s)"
+
+
+def test_an_empty_body_still_searches_for_a_person():
+    """The historical caller sends nothing at all."""
+    hit = search.SearchResult(True, "found person", 1, 5.0, 0.0, 1, "person")
+    with mock.patch("hal.drivers.tracking.search.search_for_subject",
+                    return_value=hit) as sweep:
+        body = _search_client().post("/servo/search").json()
+
+    assert sweep.call_args.kwargs["target"] == "person"
+    assert body["target"] == "person"
+
+
+def test_the_correction_runs_before_the_head_is_straightened():
+    """Device-observed twice on lamp-ac82: found at roll +/-45, then
+    `centring: lost the subject after 0 iteration(s)`. Straightening first
+    turns the base and re-levels the head, and the correction's first frames
+    were taken on a body that had just moved. The object is PROVEN in view at
+    the pose the sweep saw it from, so correct there, then straighten — the
+    straighten preserves the camera's direction, so a centred box stays
+    centred."""
+    order = []
+
+    def _fake_centre(svc, cap, probe, deadline_s=None):
+        from hal.drivers.tracking.aim import CentreResult
+        order.append("centre")
+        return CentreResult(True, "centred", 1, 10.0, 0.0, (300, 200, 40, 40), object())
+
+    def _fake_straighten(svc, yaw, roll):
+        order.append("straighten")
+
+    with (
+        mock.patch("hal.drivers.tracking.aim.centre_on_box", _fake_centre),
+        mock.patch.object(search, "_straighten_head_onto", _fake_straighten),
+    ):
+        _run_target(target="keyboard", hits=(1,))
+
+    assert order == ["centre", "straighten"], order
+
+
+def test_an_object_search_stops_at_the_first_sighting_even_when_told_to_be_exhaustive():
+    """Design decision 2026-09-14: a search for a THING stops at the first
+    sighting, always. `exhaustive` is a survey mode — "scan the room", "is
+    anyone else here" — and an agent that passed it for "find my doll" got a
+    lamp that saw the doll five times, went home, and reported a find with no
+    picture. Enforced here rather than trusted to the skill text."""
+    res, svc, det = _run_target(target="doll", exhaustive=True, hits=(2,))
+
+    assert res.found is True
+    assert res.looks_visited == 2, "kept sweeping after the first sighting"
+    assert "x" not in res.reason, f"reported a survey count for a find: {res.reason!r}"
+    assert svc.holds[-1] != _FakeSvc.IDLE_BASELINE, "went home instead of staying on the doll"
+    # Centring ran (it is what the default path does on a hit); its outcome is
+    # the fake detector's business and is pinned by the centring tests.
+    assert any(c.args[1] == "doll" for c in det.detect.call_args_list[2:]), (
+        "no probe after the sighting — the correction never ran")
+
+
+def test_exhaustive_still_surveys_for_people():
+    """The survey mode keeps its job: everyone in the room, then home."""
+    res, _svc, _det = _run_target(target="person", person_everywhere=True, exhaustive=True)
+    assert res.found is True
+    assert res.looks_visited == 3 * len(search.LOOK_CIRCLE)
+    assert "x" in res.reason
+
+
+def test_the_centring_probe_sticks_to_the_instance_the_sweep_found():
+    """Device-observed on lamp-ac82: two keyboards in frame (a laptop's and a
+    black one). `detect` returns whichever scores higher each frame, so the
+    correction chased a target that jumped between them —
+    dx -11% -> -43% -> +30% — and hit its deadline. The probe must prefer the
+    candidate nearest the box it is already centring, not the most canonical
+    keyboard in the picture."""
+    from hal.drivers.tracking.search import _sticky_probe
+
+    det = mock.Mock()
+    # Two keyboards: a confident one far left, a weaker one near the anchor.
+    det.detect_candidates = mock.Mock(return_value=[
+        ((40, 300, 120, 60), 0.91),     # laptop keyboard, left edge, high conf
+        ((520, 220, 130, 70), 0.62),    # the one we started on, near centre
+    ])
+    det.detect = mock.Mock(return_value=(40, 300, 120, 60))  # what detect alone would say
+
+    probe = _sticky_probe(det, "keyboard", first_box=(500, 200, 130, 70))
+    box = probe(np.zeros((480, 640, 3), dtype=np.uint8))
+
+    assert box == (520, 220, 130, 70), f"probe jumped to the higher-confidence instance: {box}"
+    det.detect.assert_not_called()
+
+
+def test_the_sticky_probe_follows_its_instance_as_the_camera_turns():
+    """After a correction the object has moved in the frame; the anchor must
+    move with it so the next probe still prefers the same instance."""
+    from hal.drivers.tracking.search import _sticky_probe
+
+    det = mock.Mock()
+    frames = [
+        [((500, 200, 100, 60), 0.7), ((40, 300, 120, 60), 0.9)],
+        [((380, 210, 100, 60), 0.7), ((40, 300, 120, 60), 0.9)],  # ours moved left
+        [((330, 215, 100, 60), 0.7), ((40, 300, 120, 60), 0.9)],
+    ]
+    det.detect_candidates = mock.Mock(side_effect=lambda f, t, **kw: frames.pop(0))
+    probe = _sticky_probe(det, "keyboard", first_box=(500, 200, 100, 60))
+    f = np.zeros((480, 640, 3), dtype=np.uint8)
+
+    assert probe(f) == (500, 200, 100, 60)
+    assert probe(f) == (380, 210, 100, 60)
+    assert probe(f) == (330, 215, 100, 60)
+
+
+def test_the_sticky_probe_falls_back_to_detect_for_targets_without_candidates():
+    """Open-vocab targets go to the remote detector, which has no candidate
+    list; a person target keeps the closest-subject policy. Both still work."""
+    from hal.drivers.tracking.search import _sticky_probe
+
+    det = mock.Mock()
+    det.detect_candidates = mock.Mock(return_value=[])
+    det.detect = mock.Mock(return_value=(300, 200, 40, 40))
+    probe = _sticky_probe(det, "unicorn", first_box=(300, 200, 40, 40))
+    assert probe(np.zeros((480, 640, 3), dtype=np.uint8)) == (300, 200, 40, 40)
+
+
+def test_the_sticky_probe_refuses_a_candidate_that_could_not_be_the_same_object():
+    """Second device observation, same desk: on one frame the detector returned
+    ONLY the laptop keyboard, so "nearest candidate" was still the wrong one —
+    dx -3% -> -43% in a single step with no move in between. A box further from
+    the anchor than a correction could have moved it is a different object; the
+    probe reports a miss and the correction's miss tolerance takes a fresh frame
+    instead of chasing it."""
+    from hal.drivers.tracking.search import _sticky_probe
+
+    det = mock.Mock()
+    det.detect_candidates = mock.Mock(return_value=[((40, 300, 120, 60), 0.91)])  # far left only
+    probe = _sticky_probe(det, "keyboard", first_box=(500, 200, 130, 70))
+
+    assert probe(np.zeros((480, 640, 3), dtype=np.uint8)) is None
+
+
+def test_the_sticky_probe_refuses_a_candidate_that_moved_away_from_centre():
+    """Third device observation: the swap can be small. Anchor at dx -20%, the
+    loop turned LEFT (object should drift right, toward centre), and the only
+    candidate sat at dx -40% — 20% away, under any sane distance cutoff, yet
+    impossible for the same object: a correction never moves its target away
+    from centre on the same side. Overshoot past centre is legitimate and must
+    still be accepted."""
+    from hal.drivers.tracking.search import _sticky_probe
+
+    f = np.zeros((480, 640, 3), dtype=np.uint8)
+    det = mock.Mock()
+    # anchor centre x = 190 -> dx -20%. Candidate centre x = 62 -> dx -40%.
+    det.detect_candidates = mock.Mock(return_value=[((32, 220, 60, 40), 0.9)])
+    probe = _sticky_probe(det, "keyboard", first_box=(160, 220, 60, 40))
+    assert probe(f) is None, "accepted a candidate that moved away from centre"
+
+    # Overshoot: anchor dx -20%, candidate at dx +25% (centre x = 480). Same
+    # object, corrected past the middle. Must be accepted.
+    det.detect_candidates = mock.Mock(return_value=[((450, 220, 60, 40), 0.9)])
+    probe = _sticky_probe(det, "keyboard", first_box=(160, 220, 60, 40))
+    assert probe(f) == (450, 220, 60, 40)
