@@ -157,6 +157,38 @@ class SleepySpeakerDrainTest(unittest.TestCase):
                                 "muted early — the drain did not wait for the announcement")
         self.assertLess(elapsed, state.SLEEPY_SPEAKER_DRAIN_MAX_S + 0.5,
                         "drain ran past its cap")
+        # Muting only gates playback that has not started; the speech still in
+        # progress at the cap has to be stopped or the cap bounds nothing and
+        # a sleeping device keeps talking.
+        self.assertEqual(tts.stop_calls, 1, "the stalled speech was left playing past the cap")
+        self.assertFalse(tts.speaking, "device still speaking after the drain capped out")
+
+    def test_the_commit_waits_for_the_wake_path_lock(self):
+        """The guard alone was not enough — the commit must hold privacy.lock.
+
+        Without it, a drain already past its guard writes the mute after a
+        wake has restored, leaving an awake device silent, marked sleep-owned,
+        and with nothing left to undo it.
+        """
+        state = self.state
+        state.tts_service = FakeTTS()
+        committed = threading.Event()
+
+        def commit():
+            state._mute_speaker_for_sleep()
+            committed.set()
+
+        with state.privacy.lock:   # the lock _wake_sleepy_peripherals holds
+            threading.Thread(target=commit, daemon=True).start()
+            self.assertFalse(committed.wait(0.15), "the mute committed without taking the lock")
+            self.assertFalse(state._speaker_muted, "speaker muted while the wake path held the lock")
+            # The wake this drain lost to.
+            state._sleeping = False
+            state._current_emotion = "stretching"
+
+        self.assertTrue(committed.wait(1.0), "the mute never ran after the lock was released")
+        self.assertFalse(state._speaker_muted, "drain muted a device that had woken up")
+        self.assertFalse(state._sleepy_auto_muted_speaker)
 
     def test_a_repeat_sleepy_does_not_stack_drains(self):
         """presence.away / night scene can re-send sleepy on a sleeping device."""

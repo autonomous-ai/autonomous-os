@@ -669,27 +669,46 @@ def _cancel_sleepy_speaker_drain():
 
 
 def _mute_speaker_for_sleep():
-    """Commit the deferred mute. Re-reads sleep state in case a wake raced
-    past the cancel."""
+    """Commit the deferred mute.
+
+    Re-reads the sleep state under privacy.lock, the same lock the wake path
+    takes. Checking it unlocked was not enough: a wake cancels the drain, but
+    the drain can already be past that check, and it would then re-mute a
+    device that has just woken — silent, marked sleep-owned, with the restore
+    already run and nothing left to undo it.
+    """
     global _speaker_muted, _sleepy_auto_muted_speaker
-    if not _sleeping or _current_emotion != EMO_SLEEPY:
-        logger.info("Sleepy speaker drain: awake again -- speaker left live")
-        return
-    if _speaker_muted:
-        return
-    _speaker_muted = True
-    _sleepy_auto_muted_speaker = True
-    _persist_sleep_state()
+    with privacy.lock:
+        if not _sleeping or _current_emotion != EMO_SLEEPY:
+            logger.info("Sleepy speaker drain: awake again -- speaker left live")
+            return
+        if _speaker_muted:
+            return
+        _speaker_muted = True
+        _sleepy_auto_muted_speaker = True
+        _persist_sleep_state()
+
+    # The flag only gates playback that has not STARTED yet (every check in
+    # drivers/voice/tts/service.py is an entry guard), so a TTS still speaking
+    # when the cap fires would talk on past it — exactly what
+    # SLEEPY_SPEAKER_DRAIN_MAX_S exists to prevent. Stopping it is what makes
+    # the cap a real bound. Outside the lock: stop() can block on the audio
+    # device. A no-op on the normal path, where the drain already waited for
+    # the announcement to finish.
+    if tts_service and tts_service.speaking:
+        tts_service.stop()
     logger.info("Sleepy speaker drain done -- speaker muted")
 
 
 def _wake_sleepy_peripherals():
     """Restore only mic/speaker states that sleepy itself muted."""
     global _sleepy_auto_muted_mic, _sleepy_auto_muted_speaker, _mic_muted, _speaker_muted
-    # A pending drain would mute a device that is awake by the time it fires.
-    _cancel_sleepy_speaker_drain()
-    if _sleepy_auto_muted_speaker:
-        with privacy.lock:
+    # Cancel and restore under ONE lock. Cancelling outside it left a drain
+    # that was already past its own guard free to re-mute the speaker after
+    # the restore had run, on a device that is awake by then.
+    with privacy.lock:
+        _cancel_sleepy_speaker_drain()
+        if _sleepy_auto_muted_speaker:
             if privacy.speaker_muted:
                 # The privacy overlay may have captured sleep's temporary mute
                 # during HAL startup. Wake removes that mute underneath the

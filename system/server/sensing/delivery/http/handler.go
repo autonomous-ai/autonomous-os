@@ -140,7 +140,7 @@ type SensingHandler struct {
 	config           *config.Config
 	statusLED        *statusled.Service
 	voiceActiveUntil atomic.Int64 // unix ms; set on voice_listening, extended on voice_listening_end
-	isSleeping       func() bool  // returns true when agent last expressed "sleepy" emotion
+	isSleeping       func() bool  // true when the device is asleep; HAL decides, see AgentHandler.IsSleeping
 	lastNotReadyTTS  atomic.Int64 // unix ms; cooldown for "brain restarting" TTS
 	lastAgentTurn    atomic.Int64 // unix ms of the last agent turn created here — ambient floor reference
 
