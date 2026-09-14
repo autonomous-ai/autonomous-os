@@ -41,6 +41,10 @@ lệnh LED đầu tiên, có thể vài phút sau khi boot.
 
 `/led/solid`, `/led/paint`, `/led/effect`, `/led/off` chấp nhận flag tùy chọn `"transient": true`. Khi bật, call sẽ paint strip nhưng **không** ghi đè user LED state. State đã lưu sẽ được restore khi caller (vd Claude Desktop Buddy) xong việc — qua emotion restore timer tự nhiên, hoặc qua `POST /led/restore`. Pulse effect chạy với `transient: true` cũng overlay trên màu user thay vì nền đen.
 
+### Xác nhận Harness voice
+
+Thao tác bật/tắt Harness trên phần cứng đọc `button_led.harness_on` / `button_led.harness_off` trong `robots/lamp/presets.json` qua bảng preset HAL tại lúc chạy. Lamp dùng RGB `[1, 1, 3]` khi bật và `[2, 2, 2]` khi tắt. Cả hai kế thừa pulse 600 ms; có thể override cả `effect` và `duration_ms` trong preset. Hiệu ứng vẫn là transient và hẹn khôi phục LED sau thời lượng cấu hình thêm 100 ms.
+
 ## Solid Color
 
 ```json
