@@ -1072,6 +1072,12 @@ loại bỏ hẳn bộ máy đó, đổi lại phải khởi động lại để
 Một giá trị khác `off` do người dùng đặt thì được giữ nguyên. Sai chỗ này sẽ tạo
 ra thiết bị stream audio mãi mãi mà không bao giờ trả lời.
 
+### History của lượt Gemini live hoàn tất
+
+Với `HAL_LIVE_MODE=true`, các đoạn transcript input Gemini đi kèm provider turn ID. `hal/drivers/voice/_internal/live_history.py` chỉ ghép input/output cùng ID rồi gửi một notification `voice_agent_handled` sau terminal thành công từ provider. Timeout receive giữ lượt đang dở; terminal lặp không gửi lại. Lượt reject, delegate, bị ngắt, không rõ chủ sở hữu hoặc thiếu transcript không được ghi như lượt hoàn tất. Dữ liệu history tách khỏi đường playback; output-reset hiện có cũng xóa phần câu trả lời đang gom.
+
+Một worker nền gửi lượt hoàn tất với interaction ID, giới hạn độ dài reply và snapshot Harness hiện có. Worker gửi hết notification hoàn tất sau khi live kết thúc mà không chặn playback. OS xử lý qua `externalhistory`, lưu disk, gửi silent và hiển thị card **History sync · Realtime → Main** hiện có. Buffer HAL có giới hạn (64 lượt chưa xong, 64 notification chờ gửi, 128 ID đã đóng gần nhất); lỗi đầy/transport được log. Độ bền bắt đầu khi OS nhận lưu notification. Bản sửa này không thay đổi live của OpenAI hay Qwen; history live của các provider đó là task riêng.
+
 ### Voice metrics trong chế độ live
 
 Phiên Gemini live dùng `hal/telemetry/live_voice.py` để ánh xạ lượt người dùng của

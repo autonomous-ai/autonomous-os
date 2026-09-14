@@ -65,7 +65,8 @@ def test_gemini_transcript_chunks_create_one_input_without_fake_endpoint():
         _gemini_message(transcript="a flight", reply="Looking now", done=True),
     ])
     speech = [e for e in events if isinstance(e, UserSpeechOutput)]
-    assert len(speech) == 1
+    assert len(speech) == 2
+    assert "".join(e.transcript for e in speech) == "Find a flight"
     assert speech[0].endpoint_at is None
     assert speech[0].method == "provider_transcript"
     assert all(e.user_turn_id == speech[0].turn_id for e in events)

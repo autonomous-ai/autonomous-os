@@ -65,6 +65,7 @@ from hal.drivers.voice._internal.speaker_decorate import (
 from hal.drivers.voice._internal.turn_dispatch import dispatch_turn
 from hal.telemetry import voice_metrics
 from hal.telemetry.live_voice import LiveVoiceMetrics
+from hal.drivers.voice._internal.live_history import LiveHistory
 from hal.drivers.voice._internal.vad_filters import (
     SileroVADFilter,
     WebRTCVADFilter,
@@ -1167,6 +1168,7 @@ class VoiceService:
         Both simply mean "go round again and wait for the user".
         """
         metrics = LiveVoiceMetrics()
+        history = LiveHistory(self._sensing_sender, harness_voice, self.strip_rt_markers)
         while self._live_running and generation == self._live_generation:
             native_started = False
             transcript = ""
@@ -1182,17 +1184,21 @@ class VoiceService:
                     if not (self._live_running and generation == self._live_generation):
                         break
                     if isinstance(out, UserSpeechOutput):
-                        metrics.speech(out.turn_id, out.endpoint_at, out.method)
+                        iid = metrics.speech(out.turn_id, out.endpoint_at, out.method)
+                        history.input(out.turn_id, out.transcript, iid)
                         continue
                     if isinstance(out, ExecutionOutput):
+                        history.complete(out.user_turn_id, out.execution_completed)
                         metrics.complete(
                             out.user_turn_id, out.execution_completed,
                         )
                         continue
                     if isinstance(out, RejectSignal):
+                        history.discard(out.user_turn_id)
                         metrics.reject(out.user_turn_id)
                         continue
                     if isinstance(out, DelegateSignal):
+                        history.discard(out.user_turn_id)
                         # Hang up so the main agent's reply does not play
                         # into an open uplink.
                         logger.info("[live] model delegated → forwarding to OS server")
@@ -1238,6 +1244,7 @@ class VoiceService:
                         # The first output transcript also sends an audio reset;
                         # that is not evidence of a user asking us to stop.
                         if out.reason == "server_interrupt":
+                            history.discard(out.user_turn_id)
                             iid = metrics.interaction(out.user_turn_id)
                             has_pending = getattr(self._tts, "has_pending_speech", lambda owner: False)
                             pending_audio = bool(iid) and (
@@ -1247,6 +1254,7 @@ class VoiceService:
                             # Observe only. Playback keeps its existing stop/reset
                             # behavior; instrumentation must not add a new stop.
                             continue
+                        history.reset_output(out.user_turn_id)
                         if self._tts is not None:
                             self._tts.stop()
                         if native_started:
@@ -1272,9 +1280,11 @@ class VoiceService:
                         if native_started:
                             self._tts.native_play_frame(out.audio)
                         if out.transcript:
+                            history.output(out.user_turn_id, out.transcript)
                             transcript += out.transcript
                         continue
                     if isinstance(out, RTTextOutput):
+                        history.output(out.user_turn_id, out.text)
                         self._live_last_model_output = time.time()
                         transcript += out.text
                         if native:
@@ -1324,9 +1334,15 @@ class VoiceService:
                     tail = self.strip_rt_markers(sentence_buf)
                     if tail:
                         self._tts.speak_queue(tail, turn_id=speech_iid, realtime_reply=True)
+            if self._live_running and generation == self._live_generation:
+                history.complete(
+                    getattr(self._realtime, "execution_turn_id", ""),
+                    getattr(self._realtime, "execution_completed", False) is True,
+                )
             if transcript:
                 self._live_unprompted_replies += 1
                 logger.info("[live] model said: %r", transcript[:120])
+        history.close()
         metrics.close()
 
     def _live_session(
