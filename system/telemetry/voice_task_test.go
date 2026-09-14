@@ -177,3 +177,24 @@ func TestTaskObservationLossIsUnknownAndDeduplicatesRunIDs(t *testing.T) {
 		}
 	}
 }
+
+func TestHarnessEvidenceOutcomesAreBounded(t *testing.T) {
+	m := newMock(nil, 5)
+	withPipe(t, m)
+	cases := []struct{ evidence, outcome string }{
+		{"harness_delegated", "unknown"}, {"harness_question_open", "unknown"},
+		{"harness_turn_done", "completed"}, {"harness_turn_summary", "completed"},
+		{"harness_turn_error", "failed"},
+	}
+	for _, tc := range cases {
+		for _, outcome := range []string{"completed", "failed", "unknown"} {
+			ReportTaskExecution("device-harness-test", "", outcome, tc.evidence)
+		}
+	}
+	m.wait(t, 5)
+	for i, event := range m.events {
+		if event.params["evidence"] != cases[i].evidence || event.params["outcome"] != cases[i].outcome {
+			t.Fatalf("wrong Harness evidence: %v", event.params)
+		}
+	}
+}

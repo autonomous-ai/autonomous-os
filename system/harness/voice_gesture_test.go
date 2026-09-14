@@ -11,6 +11,7 @@ type gestureTransport struct {
 	mu          sync.Mutex
 	focus       Frame
 	caps        []string
+	unpaired    bool
 	offline     bool
 	ensureCalls int
 	ensureHook  func()
@@ -20,7 +21,7 @@ type gestureTransport struct {
 func (f *gestureTransport) Status() Status {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return Status{Paired: !f.offline, Connected: !f.offline, MachineID: "computer", Capabilities: f.caps}
+	return Status{Paired: !f.unpaired, Connected: !f.unpaired && !f.offline, MachineID: "computer", Capabilities: f.caps}
 }
 func (f *gestureTransport) Request(_ context.Context, frame Frame) (Frame, error) {
 	f.mu.Lock()
@@ -84,6 +85,7 @@ func TestVoiceGestureFailuresDoNotEnableOrReplay(t *testing.T) {
 		name, code string
 		setup      func(*gestureTransport)
 	}{
+		{"unpaired", "harness_unpaired", func(f *gestureTransport) { f.unpaired = true }},
 		{"offline", "harness_offline", func(f *gestureTransport) { f.offline = true }},
 		{"no agents", "no_agents", func(f *gestureTransport) { f.ensureError = "NO_AGENTS" }},
 		{"no app", "focus_unavailable", func(f *gestureTransport) { f.ensureError = "FOCUS_UNAVAILABLE" }},
@@ -98,6 +100,7 @@ func TestVoiceGestureFailuresDoNotEnableOrReplay(t *testing.T) {
 			if v.State().Enabled {
 				t.Fatal("failed gesture enabled mode")
 			}
+			f.unpaired = false
 			f.offline = false
 			f.ensureError = ""
 			f.caps = []string{"focus.get", "focus.ensure"}

@@ -1,5 +1,11 @@
 # Flow Monitor
 
+External history runs with a valid `device-chat-context-` ID and attributed `[external-context]` / `[HANDLED]` / `[REPLY]` envelope display as **History sync**, with **Harness → Main** or **Realtime → Main** (or another external source). Cards show the original question and reported answer as **Context**, not a new TTS response. Agent name is available on the route tooltip; raw metadata remains in event details. Parsing uses complete chat-send data when chat-input previews are truncated, and does not change lifecycle status.
+
+Harness-only voice cards use `sensing_input.data.route: "harness_only"` to display **Harness** instead of **Agent**. After merging events by run ID, a nonempty `harness_response` closes that same turn and supplies its output and Response pipeline details, including history loaded from JSONL. A successful input dispatch alone stays active. Harness replies are not stitched onto nearby inputs with different run IDs; existing error states remain errors. DONE means the final response arrived, not that audio playback or the requested real-world action was verified.
+
+Regression checks: `node --test system/web/tests/flow-harness.test.cjs` from the repository root (after installing web dependencies).
+
 Codex steering records `turn_merged` under the follow-up run ID with
 `data.parent_run_id` pointing to the active host. The follow-up keeps its own
 input card and displays the shared host pipeline when selected. Its status
@@ -164,8 +170,30 @@ Rendered by `FlowDiagram` in `system/web/src/pages/Monitor.tsx`. The diagram is 
   - **EMO** (`hw_emotion`) — `/emotion` calls (coordinated LED + servo + display eyes)
   - **LED** (`hw_led`) — `/led/solid`, `/led/effect`, `/scene`, `/led/off`
   - **SERVO** (`hw_servo`) — move or animate servos: `/servo/aim`,
-    `/servo/play`, `/servo/track`. The node detail shows the actual agent
-    command/API call for the selected turn.
+    `/servo/play`, `/servo/nudge`, `/servo/search`, `/servo/demo`. The node
+    detail shows the actual agent command/API call for the selected turn.
+    Reads (`/servo/position`, `/servo/status`, `/servo/bearing`) do not count —
+    a `hw_servo` event means the lamp did something a person could see.
+
+  **Hardware events are matched on the resolved endpoint, not on raw shell
+  text.** A tool call's arguments are scanned for `127.0.0.1:500[01]/<path>`
+  (`hwPathFromToolArgs` in `handler_event_agent.go`) and the `/emotion` and
+  `/servo/*` branches compare against that path. The previous substring test
+  turned `cat …/skills/emotion/SKILL.md` into a `hw_emotion` + `led_set` pair
+  for a turn in which the lamp did nothing. The `/led/*` and `/audio/play`
+  branches still use the substring form — same weakness, no phantom observed
+  there yet.
+
+  **`hw_failed`** — a `[HW:...]` marker the OS tried to fire whose POST failed
+  at the transport: the 5 s client timeout, a refused connection. Carries
+  `path`, `args`, `run_id` and `error`. Before this event existed that branch
+  returned before any `flow.Log`, so a 40 s body movement left nothing in the
+  monitor at all (`device-chat-44`: a search marker fired, HAL swept the room,
+  the timeline showed an idle lamp). Deliberately **not** a cancellation: it
+  lights the OS-gate node and adds a `⚠ → HW call failed` line to its detail,
+  but it does not set the turn's cancelled badge or turn the TTS node red —
+  those mean the *user* silenced the turn, and a timeout must never read as
+  the user's doing.
   - **CAM** (`hw_camera`) — `GET /camera/snapshot`; its saved result is
     rendered as a clickable thumbnail so operators can debug the exact frame
     returned to the agent (including an agent workspace image such as
@@ -458,3 +486,5 @@ Turns now show every turn derivable from the fetched events. Comparing server to
 Vietnamese summary: `docs/vi/flow-monitor_vi.md`.
 
 Harness final delivery records `harness_response` in flow JSONL with the original device run ID and complete `text`. Web Chat uses this event to recover pending results after SSE disconnects or page reloads. Live delivery still emits `chat_response` with state `final`.
+
+Realtime handled voice and main-agent history sync use separate IDs: `device-realtime-…` for the original exchange, `device-chat-context-…` for synchronization. The persisted `realtime_response` closes the original card and supplies its question/answer; the History sync card follows its own lifecycle. `history_run_id` links the records without merging them. Previously stored shared-ID events retain their existing combined display.

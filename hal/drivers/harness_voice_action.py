@@ -7,7 +7,7 @@ import hal.app_state as state
 from hal.drivers.harness_voice_client import HarnessGestureError, request_voice_toggle
 from hal.i18n import (PHRASE_HARNESS_FAILED, PHRASE_HARNESS_NO_AGENTS,
                       PHRASE_HARNESS_OFF, PHRASE_HARNESS_OFFLINE,
-                      PHRASE_HARNESS_ON, localized_phrase)
+                      PHRASE_HARNESS_ON, PHRASE_HARNESS_UNPAIRED, localized_phrase)
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +19,8 @@ def confirmation_phrase(result: dict) -> str:
 
 
 def failure_phrase(code: str) -> str:
-    key = {"harness_offline": PHRASE_HARNESS_OFFLINE,
+    key = {"harness_unpaired": PHRASE_HARNESS_UNPAIRED,
+           "harness_offline": PHRASE_HARNESS_OFFLINE,
            "no_agents": PHRASE_HARNESS_NO_AGENTS}.get(code, PHRASE_HARNESS_FAILED)
     return localized_phrase(key)
 

@@ -22,6 +22,8 @@ import (
 
 // AgentHandler handles OpenClaw gateway WebSocket events and exposes monitor endpoints.
 type AgentHandler struct {
+	externalHistoryObserver func(runID string, failed bool)
+
 	agentGateway domain.AgentGateway
 	monitorBus   *monitor.Bus
 	statusLED    *statusled.Service

@@ -407,9 +407,30 @@ clients continue using their existing authenticated routes.
 The capability-gated `skills/environment/SKILL.md` owns data interpretation.
 It is excluded when capabilities are missing or empty, even where legacy skills
 retain their fallback availability.
-It consults only the environmental-care section of `skills/wellbeing/SKILL.md`
-for proactive timing and phrasing, avoiding a routing loop. Room questions do
-not require camera observations, identity, activity logs or hydration counters.
+It consults the environmental-care section of `skills/wellbeing/SKILL.md`
+for proactive timing and phrasing. User-reported discomfort uses
+`skills/wellbeing/reference/discomfort.md`; reuse already-loaded instructions
+and data rather than passing the turn repeatedly between skills. Room questions
+and discomfort support do not require camera observations, identity, activity
+logs or hydration counters.
+
+For fatigue, headache, dizziness, stuffiness or difficulty concentrating,
+wellbeing responds to the user first. Environment is optional: absent/unknown
+capability means no environment tool call; failed, all-null or stale readings
+mean silently omit environmental advice. Do not mention sensor errors or ask
+for hardware setup in response to a wellbeing concern. Only explicit questions
+about room readings need an unavailable-data explanation. With declared
+capability, one bounded status read (or a supplied current snapshot) can add a
+relevant observation and one conditional comfort/ventilation suggestion. No
+reading establishes the cause of a symptom or dismisses a user's concern.
+
+The discomfort reference covers when a reported symptom/exposure should take
+priority over sensor checks, and includes sourced guidance and example cases.
+This is skill-level response guidance, not an OS medical/alarm engine. The
+CO₂ interpretation reference distinguishes a rise from a sustained ventilation
+concern; it adds no automatic concentration classification or OS threshold.
+A later real reading may support comparison, but no scheduled follow-up,
+new wellbeing log action or appliance permission is implied.
 
 - **Ask about the room:** read status once, report useful measurements; missing
   or stale data is unknown, not zero pollution or proof of safe air.

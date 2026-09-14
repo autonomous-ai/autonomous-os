@@ -73,15 +73,15 @@ func ReportTaskExecution(runID, interactionID, outcome, evidence string) {
 	// Keep this payload content-free even if a future caller supplies an
 	// unexpected value: errors, transcripts and tool results must not escape.
 	switch evidence {
-	case "lifecycle_end", "local_intent_returned", "chat_final_no_lifecycle":
+	case "lifecycle_end", "local_intent_returned", "chat_final_no_lifecycle", "harness_turn_done", "harness_turn_summary":
 		if outcome != "completed" {
 			return
 		}
-	case "lifecycle_error", "lifecycle_end_error", "chat_error", "local_intent_error", "dispatch_error":
+	case "lifecycle_error", "lifecycle_end_error", "chat_error", "local_intent_error", "dispatch_error", "harness_turn_error":
 		if outcome != "failed" {
 			return
 		}
-	case "lifecycle_error_recovered", "execution_observation_lost":
+	case "lifecycle_error_recovered", "execution_observation_lost", "harness_delegated", "harness_question_open":
 		if outcome != "unknown" {
 			return
 		}

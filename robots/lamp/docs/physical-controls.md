@@ -586,9 +586,19 @@ which posts once to Go's loopback-only `/api/harness/voice-mode/gesture` with a
 unique `gestureId`. Go owns mode state and focused-agent selection. No automatic
 HTTP retry occurs; a timeout announces that the outcome could not be confirmed.
 
-On success, HAL speaks “Harness mode — {agent}” or “Device mode” using the configured
+On success, HAL speaks “Harness is on. You’re now talking to {agent}.” or “Harness is off. You’re back with the assistant on your device.” using the configured
 `stt_language` (English, Vietnamese, Simplified or Traditional Chinese; phrases
 live in `hal/i18n.py`). It briefly pulses blue for on or neutral for off without
 saving a new LED state. Missing connection/agents receive localized errors.
 Hardware microphone privacy disables the gesture action, speaker mute suppresses
 speech, and existing sleep/privacy/TTS LED ownership is respected.
+
+At HAL startup, the privacy switch position is reconciled without simulating a button press: an unmuted position restores mic/peripheral access without waking the device, granting conversation focus, playing the acknowledgement/listening phrase, or scheduling the listening LED cue. A real muted-to-unmuted switch transition retains the existing wake/focus and acknowledgement behavior. Startup in the muted position still applies the hardware privacy lock synchronously.
+
+When sleep is restored after a HAL restart (including a software update), an open privacy switch does not unmute the sleeping microphone or start its voice pipeline. Sleep-owned microphone and speaker mutes remain in effect until a real wake. If privacy captured the speaker's sleep mute, waking clears that temporary mute underneath the privacy lock; output stays blocked until privacy is released. The cleared speaker preference is persisted so a later HAL restart cannot restore the expired sleep mute. A speaker mute that the user set before sleep remains muted.
+
+GPIO callbacks that settle at the last known switch position (including initial callbacks at startup) leave software mute and sleep unchanged. Only a confirmed physical level change runs the switch action.
+
+When wake restores a sleep-muted microphone, it also clears the restored mic-muted LED indicator. Later emotion, TTS, or music completion callbacks must not repaint privacy red after the microphone is open. A microphone still locked by hardware privacy keeps its mute indicator.
+
+An explicit speaker-mute request during sleep takes ownership from sleep and is persisted even when the speaker is already silent. Wake must retain that choice, including under a privacy lock.

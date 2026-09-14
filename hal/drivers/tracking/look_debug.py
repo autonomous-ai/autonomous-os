@@ -162,9 +162,10 @@ def note_event(msg: str) -> None:
 
 
 def encode_annotated(frame: Any, box: Any = None, label: str = "",
-                     both_axes: bool = False) -> Optional[bytes]:
+                     both_axes: bool = False,
+                     centre_lines: bool = True) -> Optional[bytes]:
     """JPEG of `frame` with the detection drawn on. Shared by the look aim, the
-    bearing sampler and the gaze pitch loop.
+    bearing sampler, the gaze pitch loop and the search sweep.
 
     Green box and green line mark the detection; the red line is frame centre.
     The gap between them IS dx, the quantity the aim servos on.
@@ -174,6 +175,13 @@ def encode_annotated(frame: Any, box: Any = None, label: str = "",
     only move yaw, so a horizontal line in its view marks an error it has no way
     to act on, and a debug frame earns its keep by showing the one quantity its
     reader is servoing on, not every quantity that exists.
+
+    `centre_lines` turns that dx pair OFF, for the one caller whose image is
+    shown to a PERSON rather than read by an engineer: the search sweep's "here
+    is your keyboard". Somebody who is not correcting an error has no use for
+    dx, and once the search has centred on the box the two lines land on top of
+    each other down the middle of the picture. The box is the answer; the lines
+    are the working.
     """
     if frame is None:
         return None
@@ -186,12 +194,14 @@ def encode_annotated(frame: Any, box: Any = None, label: str = "",
             x, y, w, h = (int(v) for v in box)
             cv2.rectangle(img, (x, y), (x + w, y + h), (0, 255, 0), 2)
             cx, cy = x + w // 2, y + h // 2
-            cv2.line(img, (cx, 0), (cx, fh), (0, 255, 0), 1)
+            if centre_lines:
+                cv2.line(img, (cx, 0), (cx, fh), (0, 255, 0), 1)
+                if both_axes:
+                    cv2.line(img, (0, cy), (fw, cy), (0, 255, 0), 1)
+        if centre_lines:
+            cv2.line(img, (fw // 2, 0), (fw // 2, fh), (0, 0, 255), 1)
             if both_axes:
-                cv2.line(img, (0, cy), (fw, cy), (0, 255, 0), 1)
-        cv2.line(img, (fw // 2, 0), (fw // 2, fh), (0, 0, 255), 1)
-        if both_axes:
-            cv2.line(img, (0, fh // 2), (fw, fh // 2), (0, 0, 255), 1)
+                cv2.line(img, (0, fh // 2), (fw, fh // 2), (0, 0, 255), 1)
         if label:
             cv2.putText(img, label, (8, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
                         (0, 255, 255), 2, cv2.LINE_AA)

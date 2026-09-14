@@ -65,6 +65,7 @@ from hal.drivers.voice._internal.speaker_decorate import (
 from hal.drivers.voice._internal.turn_dispatch import dispatch_turn
 from hal.telemetry import voice_metrics
 from hal.telemetry.live_voice import LiveVoiceMetrics
+from hal.drivers.voice._internal.live_history import LiveHistory
 from hal.drivers.voice._internal.vad_filters import (
     SileroVADFilter,
     WebRTCVADFilter,
@@ -1101,8 +1102,19 @@ class VoiceService:
                     return "skip"
             except Exception as e:
                 logger.warning("[live] speech gate failed, allowing: %s", e)
+        # Gaze grants the existing focus window before this decision. Only
+        # enforce an armed gate; shadow mode remains observation-only.
+        if (
+            hal_config.WAKEWORD_ENABLED
+            and hal_config.GAZE_WAKE_ENABLED
+            and not hal_config.GAZE_WAKE_SHADOW
+            and not self._wakeword_focus.is_active()
+        ):
+            logger.info("[live] gaze gate closed — waiting for gaze or explicit focus")
+            return "skip"
+
         self._realtime.prepare_turn()
-        
+
         if not self._realtime.wait_until_available(5.0):
             logger.info("[live] realtime unavailable — using the turn path")
             return "turn"
@@ -1167,6 +1179,7 @@ class VoiceService:
         Both simply mean "go round again and wait for the user".
         """
         metrics = LiveVoiceMetrics()
+        history = LiveHistory(self._sensing_sender, harness_voice, self.strip_rt_markers)
         while self._live_running and generation == self._live_generation:
             native_started = False
             transcript = ""
@@ -1182,17 +1195,21 @@ class VoiceService:
                     if not (self._live_running and generation == self._live_generation):
                         break
                     if isinstance(out, UserSpeechOutput):
-                        metrics.speech(out.turn_id, out.endpoint_at, out.method)
+                        iid = metrics.speech(out.turn_id, out.endpoint_at, out.method)
+                        history.input(out.turn_id, out.transcript, iid)
                         continue
                     if isinstance(out, ExecutionOutput):
+                        history.complete(out.user_turn_id, out.execution_completed)
                         metrics.complete(
                             out.user_turn_id, out.execution_completed,
                         )
                         continue
                     if isinstance(out, RejectSignal):
+                        history.discard(out.user_turn_id)
                         metrics.reject(out.user_turn_id)
                         continue
                     if isinstance(out, DelegateSignal):
+                        history.discard(out.user_turn_id)
                         # Hang up so the main agent's reply does not play
                         # into an open uplink.
                         logger.info("[live] model delegated → forwarding to OS server")
@@ -1238,6 +1255,7 @@ class VoiceService:
                         # The first output transcript also sends an audio reset;
                         # that is not evidence of a user asking us to stop.
                         if out.reason == "server_interrupt":
+                            history.discard(out.user_turn_id)
                             iid = metrics.interaction(out.user_turn_id)
                             has_pending = getattr(self._tts, "has_pending_speech", lambda owner: False)
                             pending_audio = bool(iid) and (
@@ -1247,6 +1265,7 @@ class VoiceService:
                             # Observe only. Playback keeps its existing stop/reset
                             # behavior; instrumentation must not add a new stop.
                             continue
+                        history.reset_output(out.user_turn_id)
                         if self._tts is not None:
                             self._tts.stop()
                         if native_started:
@@ -1272,9 +1291,11 @@ class VoiceService:
                         if native_started:
                             self._tts.native_play_frame(out.audio)
                         if out.transcript:
+                            history.output(out.user_turn_id, out.transcript)
                             transcript += out.transcript
                         continue
                     if isinstance(out, RTTextOutput):
+                        history.output(out.user_turn_id, out.text)
                         self._live_last_model_output = time.time()
                         transcript += out.text
                         if native:
@@ -1324,9 +1345,15 @@ class VoiceService:
                     tail = self.strip_rt_markers(sentence_buf)
                     if tail:
                         self._tts.speak_queue(tail, turn_id=speech_iid, realtime_reply=True)
+            if self._live_running and generation == self._live_generation:
+                history.complete(
+                    getattr(self._realtime, "execution_turn_id", ""),
+                    getattr(self._realtime, "execution_completed", False) is True,
+                )
             if transcript:
                 self._live_unprompted_replies += 1
                 logger.info("[live] model said: %r", transcript[:120])
+        history.close()
         metrics.close()
 
     def _live_session(
@@ -1590,6 +1617,9 @@ class VoiceService:
         # between agents. OS validates the same generation on the final POST.
         harness_voice = read_voice_mode() if harness_voice is None else harness_voice
         realtime_allowed = not bypass_realtime(harness_voice)
+        # Harness explicitly owns voice input for this capture. Do not extend
+        # the normal wake window; disabling the mode restores its usual gate.
+        harness_listening = harness_voice["enabled"] and not harness_voice.get("unavailable", False)
         # A keepalive session pre-connected on the previous turn can go STALE if
         # the user stayed silent past the STT provider's inactivity window (~10s):
         # the upstream closes the idle WS (code 1000) and the next send() raises
@@ -1712,7 +1742,7 @@ class VoiceService:
             EXPIRES mid-sentence still cannot cut off someone already speaking
             (that is what the latch exists for).
             """
-            return is_addressed(
+            return harness_listening or is_addressed(
                 hal_config.WAKEWORD_ENABLED,
                 wake_word_detected.is_set(),
                 wakeword_followup_active,
@@ -2538,7 +2568,7 @@ class VoiceService:
                 or (hal_config.WAKEWORD_ENABLED and self._wakeword_focus.is_active())
             )
             wakeword_authorized = wake_word_confirmed.is_set() or wakeword_followup_active
-            dispatch_to_main = should_dispatch_to_main(
+            dispatch_to_main = harness_listening or should_dispatch_to_main(
                 hal_config.WAKEWORD_ENABLED,
                 wakeword_authorized,
             )
@@ -2581,6 +2611,7 @@ class VoiceService:
                     combined
                     and not downstream_dropped
                     and hal_config.WAKEWORD_ENABLED
+                    and not harness_listening
                     and wakeword_authorized
                 ):
                     if self._wakeword_focus.refresh():

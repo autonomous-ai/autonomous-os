@@ -689,13 +689,21 @@ def _wake_sleepy_peripherals():
     # A pending drain would mute a device that is awake by the time it fires.
     _cancel_sleepy_speaker_drain()
     if _sleepy_auto_muted_speaker:
-        if not privacy.speaker_muted:
-            _speaker_muted = False
-        _sleepy_auto_muted_speaker = False
+        with privacy.lock:
+            if privacy.speaker_muted:
+                # The privacy overlay may have captured sleep's temporary mute
+                # during HAL startup. Wake removes that mute underneath the
+                # lock, so releasing privacy cannot restore an expired mute.
+                privacy.speaker_before = False
+            else:
+                _speaker_muted = False
+            _sleepy_auto_muted_speaker = False
+            _persist_speaker_state()
     if _sleepy_auto_muted_mic:
         _sleepy_auto_muted_mic = False
         if _hw_mic_switch_muted is not True:
             _mic_muted = False
+            _clear_mic_muted_led()
             start_voice_service("sleepy-wake")
     _persist_sleep_state()
     logger.info("Sleepy wake: restored sleepy-owned audio state")

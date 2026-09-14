@@ -182,3 +182,48 @@ def test_direct_or_unknown_mode_discards_prior_realtime_vision_without_loading(s
     if snapshot["enabled"]:
         assert sender.send.call_args.args == ("fix the tests",)
         assert "image_b64" not in sender.send.call_args.kwargs
+
+
+@pytest.mark.parametrize("enabled,unavailable,focus,expected", [
+    (True, False, False, True),
+    (True, False, True, True),
+    (False, False, False, False),
+    (False, False, True, True),
+    (False, True, False, False),
+    (True, True, False, False),
+])
+def test_harness_capture_bypasses_wake_gate_without_extending_focus(
+        enabled, unavailable, focus, expected, monkeypatch):
+    from hal.drivers.voice import voice_service
+
+    service = Mock()
+    service._running = False
+    service._tts = None
+    service._wakeword_focus.is_active.return_value = focus
+    service._decorator.starts_with_wake_word.return_value = False
+    service._decorator.matches_wake_word_loosely.return_value = False
+    service._decorator.classify_wake_word.return_value = ("fix the tests", "voice")
+    service._decorator.identify_and_decorate.return_value = ("fix the tests", None, None)
+    stt = Mock()
+    stt.is_closed.return_value = False
+    snapshot = {"enabled": enabled, "generation": 2, "unavailable": unavailable}
+    monkeypatch.setattr(voice_service.hal_config, "WAKEWORD_ENABLED", True)
+    monkeypatch.setattr(voice_service.hal_config, "REALTIME_ENABLED", False)
+    def finalize(*args, **kwargs):
+        stt._on_transcript_cb("fix the tests", False)
+        return "fix the tests", [], 2.0
+
+    with patch.object(voice_service, "finalize_session", side_effect=finalize), \
+         patch.object(voice_service, "dispatch_turn") as dispatch, \
+         patch.object(voice_service, "voice_metrics"), \
+         patch.object(voice_service.requests, "post"):
+        voice_service.VoiceService._stream_session(
+            service, Mock(), 320, 16000, preconnected_session=stt,
+            harness_voice=snapshot,
+        )
+    assert service._backchannel.on_partial.called is expected
+    assert dispatch.called is expected
+    if expected:
+        assert dispatch.call_args.kwargs["harness_voice"] == snapshot
+    if enabled or not focus:
+        service._wakeword_focus.refresh.assert_not_called()

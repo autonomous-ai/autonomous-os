@@ -25,7 +25,7 @@ func (s *Server) initializeHarnessVoice(ctx context.Context) {
 	if s.harnessVoice == nil && s.harnessService != nil {
 		s.harnessVoice = harness.NewVoiceController(s.harnessService, harness.VoiceCallbacks{
 			OnDispatch: func(agentID, runID string) { s.registerHarnessReply(agentID, runID, false) },
-			OnResponse: s.deliverHarnessVoiceMessage,
+			OnResponse: s.deliverHarnessVoiceQuestion,
 		})
 		s.harnessVoice.Start(ctx)
 	}
@@ -88,7 +88,9 @@ func (s *Server) registerHarnessVoiceRoutes(group *gin.RouterGroup) {
 		// An answer is a new turn. The controller validates the live question and
 		// uses the existing asynchronous Harness response path for its result.
 		runID := newHarnessVoiceRunID("")
+		interactionID := telemetry.ReportTaskStarted("web_chat", "", runID)
 		err := s.harnessVoice.Answer(c.Request.Context(), req.QuestionRequestID, req.Answers, runID, req.FocusRevision)
+		reportHarnessDispatchError(runID, interactionID, err)
 		writeHarnessVoiceResult(c, gin.H{"runId": runID}, err)
 	})
 }
@@ -149,6 +151,10 @@ func (s *Server) handleHarnessVoice(c *gin.Context, req sensinghttp.SensingEvent
 		return false
 	}
 	runID := newHarnessVoiceRunID(req.InteractionID)
+	if err := s.beginHarnessHistory(runID, req.Message, state); err != nil {
+		c.JSON(http.StatusInternalServerError, serializers.ResponseError("Could not save Harness conversation input"))
+		return true
+	}
 	interactionID := telemetry.ReportTaskStarted(req.Type, req.InteractionID, runID)
 	start := flow.Start("sensing_input", map[string]any{
 		"type": req.Type, "message": req.Message, "interaction_id": interactionID, "route": "harness_only",
@@ -170,6 +176,7 @@ func (s *Server) handleHarnessVoice(c *gin.Context, req sensinghttp.SensingEvent
 		}
 		payload := map[string]any{"route": "harness_only"}
 		if err != nil {
+			reportHarnessDispatchError(runID, interactionID, err)
 			payload["error"] = err.Error()
 			slog.Warn("Harness voice dispatch", "component", "harness", "run_id", runID, "error", err)
 			var uncertain *harness.DeliveryUnknownError
@@ -180,7 +187,6 @@ func (s *Server) handleHarnessVoice(c *gin.Context, req sensinghttp.SensingEvent
 					s.deliverHarnessVoiceMessage("harness-notice", runID+"-notice", err.Error())
 				}
 			} else {
-				telemetry.ReportTaskExecution(runID, interactionID, "failed", "dispatch_error")
 				s.deliverHarnessVoiceMessage(state.AgentID, runID, err.Error())
 			}
 		}

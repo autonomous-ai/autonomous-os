@@ -154,6 +154,7 @@ type SensingHandler struct {
 	// opt-in (OS_REALTIME_SUPERSEDES_MAIN_REPLY), so on a default body nothing
 	// is suppressed and the situation is not a metric sample at all.
 	onRealtimeHandled      func() bool
+	realtimeHistory        func(string, string) (string, error)
 	harnessFollowup        func() bool
 	harnessFollowupContext func() string
 	harnessVoice           func(*gin.Context, SensingEventRequest) bool
@@ -392,6 +393,10 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 	speechSuppressed := false
 	if isRealtimeHandled && h.onRealtimeHandled != nil {
 		speechSuppressed = h.onRealtimeHandled()
+	}
+	if isRealtimeHandled && h.realtimeHistory != nil {
+		h.persistRealtimeHistory(c, req, speechSuppressed)
+		return
 	}
 	isPassive := !isVoiceCommand
 	if isPassive && !isVoice && !isRealtimeHandled && !isChat && req.Type != "presence.enter" && req.Type != "fire_hazard.detected" && h.isSleeping != nil && h.isSleeping() {
@@ -1090,6 +1095,25 @@ func (h *SensingHandler) GetSnapshot(c *gin.Context) {
 // Flow Monitor tool result. Only JPEGs in an approved runtime workspace or
 // HAL snapshot directory are accepted; the raw filesystem path is never sent
 // to the UI.
+// agentSnapshotRuntimes is the allow-list of runtimes whose snapshot dirs may
+// be served. The runtime segment comes from a URL, so an unlisted name must
+// never reach the filesystem.
+//
+// THREE places carry this list and all three must agree, or a frame is written
+// and then cannot be shown: hal/config.py `_AGENT_CONFIG_DIRS` decides where
+// HAL writes, agent/delivery/http/camera_snapshot.go decides whether a URL is
+// built, and this decides whether that URL is served. opencode was present in
+// the first and absent from the other two, so every snapshot taken on it was
+// saved to disk and silently dropped.
+var agentSnapshotRuntimes = map[string]bool{
+	"openclaw":   true,
+	"hermes":     true,
+	"picoclaw":   true,
+	"codex":      true,
+	"claudecode": true,
+	"opencode":   true,
+}
+
 func (h *SensingHandler) GetAgentSnapshot(c *gin.Context) {
 	runtime := c.Param("runtime")
 	source := c.Param("source")
@@ -1098,7 +1122,7 @@ func (h *SensingHandler) GetAgentSnapshot(c *gin.Context) {
 		c.Status(http.StatusNotFound)
 		return
 	}
-	if runtime != "openclaw" && runtime != "hermes" && runtime != "picoclaw" && runtime != "codex" && runtime != "claudecode" {
+	if !agentSnapshotRuntimes[runtime] {
 		c.Status(http.StatusNotFound)
 		return
 	}

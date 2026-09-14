@@ -358,6 +358,10 @@ error text, transcript or tool output. Evidence is:
 | `local_intent_returned` | `completed`: the local intent handler finished without an observed HAL action error; this does not prove semantic correctness or the physical effect |
 | `chat_final_no_lifecycle` | `completed`: a nonempty final reply consumes the pending trace without a lifecycle (for example OpenClaw `/status` or `/new`); empty finals are not completion evidence |
 | `execution_observation_lost` | `unknown`: a runtime lost observation of an unfinished sent task on transport loss or timeout; this does not establish execution failure |
+| `harness_delegated` | `unknown`: execution moved to Harness; local runtime lifecycle ends no longer establish remote completion |
+| `harness_turn_done`, `harness_turn_summary` | `completed`: correlated Harness completion; summary requires nonempty content, done does not require recap or TTS |
+| `harness_turn_error` | `failed`: correlated Harness `turn.error` or `agent.error`, even without display text |
+| `harness_question_open` | `unknown`: waiting for a structured answer, including local partial-answer collection |
 | `realtime_turn_done` | `completed`: a correlated successful provider terminal completed the handled turn |
 
 Join execution evidence to the cohort by **device + run_id** or **device +
@@ -376,6 +380,8 @@ the handler after such an error emits `local_intent_error`, not a completion.
 OpenClaw records the pending trace before writing `chat.send`, and removes it on write failure. Telemetry correlation retains at most 1024 pending traces for 24 hours in a separate buffer. Routing keeps its original matcher and 2-minute TTL; the pending-send busy window remains 30 seconds. A telemetry-only UUID alias requires one exact trimmed message match to the transmitted message and is never used by TTS or dispatch; ambiguous or missing matches and failed `chat.history` requests remain unresolved. A missing terminal is still `incomplete`; these fixes do not reconstruct historical events or judge answer correctness.
 
 For Codex, Claude Code, OpenCode and PicoClaw, transport/timeout cleanup records `execution_observation_lost` for unfinished sent runs before forgetting them. It does not synthesize runtime lifecycle events. This evidence never overrides a correlated completed/failed terminal, including a racing final; without a terminal it remains `unknown` in the denominator. Hermes already reports its stream termination through lifecycle handling.
+
+When `harness_delegated` is present, select only Harness evidence, `dispatch_error`, or `execution_observation_lost`; ignore the local agent’s handoff lifecycle. The delegation marker itself never overrides subsequent evidence, regardless of arrival order. A voice-mode HTTP answer is a new Chat task, while spoken answers stay Voice. Waiting questions stay in the denominator as unknown. Gemini `realtime_handled` still accepts only `realtime_turn_done`. Harness correlation does not guess between concurrent routes or accept a mismatched explicit ID. See [Harness telemetry](harness.md#task-completion-telemetry).
 
 The default settling horizon is **0 seconds**: count every eligible task
 started through `as_of_ms` immediately. Failed, unknown, and unfinished turns

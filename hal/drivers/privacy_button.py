@@ -112,7 +112,7 @@ class PrivacyButtonHandler:
         # (~tens of ms at most) so blocking start() here is worth it.
         self._last_known_level = initial_level
         with self._apply_lock:
-            self._apply_state_locked(initial_level == self._config.muted_level)
+            self._apply_state_locked(initial_level == self._config.muted_level, initial=True)
 
         # Watchdog: periodic pin re-read + reconcile. Self-heals if the
         # lgpio edge-callback thread stalls silently. Daemon so it dies with
@@ -191,6 +191,11 @@ class PrivacyButtonHandler:
             current_level = self._lgpio.gpio_read(self._handle, self._config.line)
         except Exception as e:
             logger.warning("Mic switch reconcile read failed: %s", e)
+            return
+        if current_level == self._last_known_level:
+            # GPIO can emit an initial callback, or bounce back to the same
+            # position. Neither is a user gesture that may override sleep.
+            logger.info("mic switch reconcile → unchanged pin; preserving software state")
             return
         logger.info(
             "[mic-switch-trace] RECONCILE pin_level=%d muted=%s (settle_wait=%.0fms since last edge)",
@@ -276,7 +281,7 @@ class PrivacyButtonHandler:
         except Exception as e:
             logger.warning("mic switch unmute listening cue failed: %s", e)
 
-    def _apply_state_locked(self, muted: bool):
+    def _apply_state_locked(self, muted: bool, *, initial: bool = False):
         """Push mic state to match the switch position. Idempotent — if HAL
         state already matches (web admin just set it, or start-up sync
         found the correct value), skip the route call to avoid log spam
@@ -302,9 +307,22 @@ class PrivacyButtonHandler:
                 privacy.apply(False, self._config)
             return
 
-        from hal.routes.voice import mute_mic, stop_tts
+        from hal.routes.voice import mute_mic, stop_tts, unmute_mic
 
         try:
+            if initial and not muted:
+                # Reading the boot position is state reconciliation, not a
+                # user gesture: restore hardware access without wake/focus/cues.
+                if extended:
+                    privacy.apply(False, self._config)
+                if state._sleeping:
+                    # An open hardware switch permits microphone access; it
+                    # does not override the mute restored from sleep's sidecar.
+                    logger.info("mic switch startup → preserved sleeping microphone state")
+                    return
+                unmute_mic()
+                logger.info("mic switch startup → restored unmuted state without wake")
+                return
             if muted:
                 logger.info("mic switch → muting")
                 # Order matters. Do the fast quiet-me ops FIRST (stop_tts,

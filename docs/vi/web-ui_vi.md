@@ -1,5 +1,9 @@
 # Web UI — Monitor Dashboard
 
+Flow Monitor hiển thị lượt đồng bộ lịch sử thành **History sync · Harness → Main** (hoặc nguồn bên ngoài), với input và câu trả lời dễ đọc, nhãn **Context**. Chỉ dẫn nội bộ và JSON nằm trong chi tiết event; tooltip route cho biết agent bên ngoài.
+
+Lượt voice Harness-only hiển thị route **Harness**. Event `harness_response` đã lưu cung cấp output, chi tiết Response và thời điểm hoàn tất cho đúng run, nên tải lại monitor không còn để lượt đã trả lời ở trạng thái ACTIVE. Gửi input mà chưa có phản hồi cuối vẫn giữ ACTIVE.
+
 Flow Monitor liên kết follow-up Codex được steer với lượt thực thi gốc qua
 `turn_merged` / `parent_run_id`. Chọn follow-up mở pipeline chung nhưng vẫn giữ
 card input và trạng thái kết thúc riêng. UI ghi rõ turn đã gộp thay vì hiện

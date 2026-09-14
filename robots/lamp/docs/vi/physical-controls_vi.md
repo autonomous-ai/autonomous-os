@@ -571,9 +571,19 @@ gọi adapter nhỏ `harness_voice_client.py`, POST một lần đến API chỉ
 `/api/harness/voice-mode/gesture` của Go với `gestureId` riêng. Go quản lý mode
 và chọn agent focus. Không tự retry HTTP; timeout sẽ báo chưa xác nhận được kết quả.
 
-Thành công, HAL đọc “Chế độ Harness — {agent}” hoặc “Chế độ thiết bị” theo
+Thành công, HAL đọc “Đã bật Harness, đang nói chuyện với {agent}.” hoặc “Đã tắt Harness, trở về trợ lý trên thiết bị.” theo
 `stt_language` (Anh, Việt, Trung giản thể hoặc phồn thể; phrase tập trung trong
 `hal/i18n.py`). LED pulse xanh khi bật hoặc màu trung tính khi tắt trong thời gian
 ngắn, không lưu trạng thái LED mới. Chưa kết nối/không có agent được báo lỗi theo
 ngôn ngữ đã chọn. Công tắc privacy mic chặn action; speaker mute chặn thông báo;
 LED vẫn tôn trọng quyền ưu tiên sleep/privacy/TTS hiện có.
+
+Khi HAL khởi động, đồng bộ vị trí privacy-switch không giả lập nhấn nút: vị trí cho phép mic khôi phục quyền mic/ngoại vi mà không đánh thức thiết bị, mở conversation focus, phát chime/câu đang nghe hoặc lên lịch LED listening. Thao tác gạt thật từ mute sang unmute vẫn giữ wake/focus và thông báo như trước. Khởi động ở vị trí mute vẫn áp hardware privacy lock đồng bộ.
+
+Khi sleep được khôi phục sau HAL restart (kể cả software update), privacy-switch đang mở không được unmute mic đang ngủ hoặc khởi chạy voice pipeline. Mic và speaker bị mute bởi sleep giữ nguyên cho đến khi wake thật. Nếu privacy đã lưu trạng thái speaker mute do sleep, wake gỡ mute tạm thời đó bên dưới privacy lock; âm thanh vẫn bị chặn cho đến khi mở privacy. Trạng thái speaker sau khi gỡ mute được lưu để HAL restart tiếp không khôi phục mute do sleep đã kết thúc. Speaker do người dùng mute trước sleep vẫn giữ mute.
+
+Callback GPIO có mức chân sau debounce trùng vị trí đã biết (kể cả callback ban đầu lúc startup) giữ nguyên software mute và sleep. Chỉ thay đổi mức chân thực sự mới chạy action của switch.
+
+Khi wake mở lại mic bị mute bởi sleep, HAL cũng xóa cờ LED mic mute đã khôi phục. Callback kết thúc emotion, TTS hoặc nhạc chạy sau đó không được bật lại màu đỏ privacy khi mic đã mở. Mic vẫn bị hardware privacy khóa thì giữ cờ LED mute.
+
+Lệnh mute speaker thủ công trong lúc sleep chuyển quyền giữ mute từ sleep sang người dùng và được lưu ngay cả khi loa đã im lặng. Wake phải giữ lựa chọn này, kể cả khi privacy đang khóa.

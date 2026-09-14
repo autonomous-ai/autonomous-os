@@ -80,8 +80,8 @@ class HarnessActionTests(unittest.TestCase):
             restore.assert_not_called()
 
     def test_all_languages_and_config_lookup(self):
-        expected_off = {"en": "Device mode.", "vi": "Chế độ thiết bị.",
-                        "zh-CN": "设备模式。", "zh-TW": "裝置模式。"}
+        expected_off = {"en": "Harness is off. You’re back with the assistant on your device.", "vi": "Đã tắt Harness, trở về trợ lý trên thiết bị.",
+                        "zh-CN": "Harness 已关闭，已切回设备上的助手。", "zh-TW": "Harness 已關閉，已切回裝置上的助理。"}
         # Use the project language constants (currently ISO language IDs).
         from hal.presets import LANG_EN, LANG_VI, LANG_ZH_CN, LANG_ZH_TW
         for lang, expected in zip((LANG_EN, LANG_VI, LANG_ZH_CN, LANG_ZH_TW), expected_off.values()):
@@ -90,6 +90,11 @@ class HarnessActionTests(unittest.TestCase):
             with patch("hal.config._os_cfg_get", return_value=lang):
                 self.assertEqual(action.confirmation_phrase({"enabled": False}), expected)
                 self.assertIn("Friendly", action.confirmation_phrase({"enabled": True, "agentId": "id", "agentName": "Friendly"}))
+                from hal.i18n import PHRASE_HARNESS_UNPAIRED
+                self.assertEqual(action.failure_phrase("harness_unpaired"),
+                                 localized_phrase(PHRASE_HARNESS_UNPAIRED, lang))
+                self.assertNotEqual(action.failure_phrase("harness_unpaired"),
+                                    action.failure_phrase("harness_offline"))
                 self.assertTrue(action.failure_phrase("no_agents"))
                 self.assertTrue(action.failure_phrase("harness_offline"))
                 self.assertTrue(action.failure_phrase("busy"))

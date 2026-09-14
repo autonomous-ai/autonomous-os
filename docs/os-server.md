@@ -64,7 +64,7 @@ Go toggles the shared RAM mode and returns its snapshot. Enable first preserves
 valid app focus or
 requests `focus.ensure` and waits for Desktop acknowledgement; unavailable focus
 leaves the mode off. Disable works offline. Action errors expose `data.code` for
-HAL's localized feedback. A 128-entry RAM result cache prevents duplicate gesture
+HAL's localized feedback: `harness_unpaired` asks the user to pair the device in the Harness app; `harness_offline` reports an existing pairing without a connection. Both keep the mode off. A 128-entry RAM result cache prevents duplicate gesture
 IDs from toggling twice; explicit web/MQTT off cancels a pending gesture enable.
 
 ### Environment sensing
@@ -1055,3 +1055,21 @@ normal device discovery and is not a full compatibility/OTA release.
 See [host startup and firmware configuration](../robots/_experimental/stackchan/docs/runtime.md).
 The existing OS HAL client connects to `http://127.0.0.1:5001`, so run HAL and
 os-server on the same host. The ESP32 connects to HAL's separate WSS listener.
+
+### External conversation history
+
+`system/externalhistory` stores exchanges handled outside the main runtime. Harness-only voice uses a two-phase adapter: persist the input before dispatch, then persist the reported answer before releasing its reply route. Each record identifies the source, computer, agent ID/name and original run ID. Realtime uses `RecordCompleted` to atomically save an already-answered exchange directly as `pending`. HAL keeps its existing `voice_agent_handled` payload; the Go adapter parses `[HANDLED]` / `[REPLY]`, attributes source `realtime` / agent `Realtime voice`, and uses `interaction_id` as the stable external identity (a fresh random ID for legacy callers without one). Repeated retained IDs deduplicate; conflicting content is rejected. Other integrations can use either API without depending on Harness.
+
+The worker checks every two seconds and sends one complete exchange when the main runtime is ready and idle. Realtime can also steer a busy runtime that supports active-turn steering; Harness still waits for idle. An in-flight history sync is allowed to finish before another is sent. Delivery uses the existing realtime history format (`[skills: input-branching]`, `[HANDLED]`, `[REPLY]`, `NO_REPLY`) and `MarkSilentRun` before `SendChatMessageWithRun`. The runtime absorbs the attributed exchange into its normal history and compaction. Existing silent/TTS behavior, realtime answering/delegation, and speaker-supersession policy are unchanged; no new suppression layer or summarizer is introduced.
+
+Records are atomically saved under `local/external-history/` (directory 0700, files 0600). States are `waiting` for the external answer, `pending` for main-runtime synchronization, `sending`, `uncertain`, and `done`. A successful main-runtime lifecycle end acknowledges the record after existing event handling; a socket write or `chat.final` alone is not proof of completion. Restart resumes never-sent pending records and restores silent/pending-trace marks for attempted records. Waiting Harness voice reply routes are restored only for the same pairing; external tasks are never resent.
+
+A send error, missing lifecycle acknowledgement for two minutes while idle, or restart during sending leaves the record `uncertain`. It remains on disk and can still accept a late acknowledgement; it is not blindly replayed because not all runtime transports support idempotent sends. This preserves evidence without promising exactly-once history delivery across an ambiguous crash. If the external result never arrives, its input remains `waiting`; startup does not guess a latest recap for it.
+
+Storage is bounded to 1024 records, 16 KiB input and 64 KiB synchronized output per record. Oversized Harness output is explicitly truncated for history (the original response delivery stays complete). Completed records expire after 30 days and the oldest completed records may be evicted sooner at capacity; unfinished records are never evicted. Duplicate detection applies to retained source/run IDs. A full unfinished queue rejects new direct voice input instead of silently losing history. A persistence failure keeps the final reply route available for a repeated callback/recap recovery. Unreadable journal state fails startup rather than silently resetting it. Already synchronized context is managed by the main runtime, not reloaded wholesale from this journal.
+
+Validation: `go test -race ./system/externalhistory`; focused history/observer/Harness tests in `system/server` and `system/server/agent/delivery/http`. Physical voice playback and every runtime's restart correlation still require integration verification.
+
+Realtime notifications are persisted before the sensing busy/readiness gates, replacing the volatile pending-event queue for these exchanges. HTTP success includes the stable original `runId`, separate `historyRunId`, and the existing `speechSuppressed` result. Persistence failure returns HTTP 500 rather than falling back to an unjournaled send. Durability starts when OS accepts the notification; it does not recover HAL turns whose notification never reached OS. Original sensing evidence and look snapshot markers remain in Flow Monitor; snapshot paths are removed from the main-agent context as before.
+
+For accepted realtime history, the sensing response returns the original exchange ID (`device-realtime-…`) as `runId` and the separate synchronization ID as `historyRunId`. HAL metrics bind to the original exchange; the journal and silent main-agent send retain their existing stable sync identity. This separates monitor records without changing voice/follow-up routing or silent/TTS policy.

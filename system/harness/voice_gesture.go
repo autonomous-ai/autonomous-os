@@ -92,7 +92,10 @@ func (v *VoiceController) prepareGestureFocus(parent context.Context) error {
 	ctx, cancel := context.WithTimeout(parent, 4*time.Second)
 	defer cancel()
 	status := v.transport.Status()
-	if !status.Paired || !status.Connected {
+	if !status.Paired {
+		return gestureError("harness_unpaired", "Device is not paired with Harness")
+	}
+	if !status.Connected {
 		return gestureError("harness_offline", "Harness is offline")
 	}
 	// Refresh first so older CLIs can still activate an existing valid focus.

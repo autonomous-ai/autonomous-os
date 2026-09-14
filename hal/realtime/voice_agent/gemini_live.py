@@ -508,20 +508,21 @@ class GeminiLiveAgent(VoiceAgentBase):
             else:
                 logger.debug("[realtime] Sent activityEnd (manual VAD)")
 
-    def _observe_user_speech(self, *, endpoint_at: float | None = None) -> None:
+    def _observe_user_speech(self, *, endpoint_at: float | None = None, transcript: str = "") -> None:
         """Publish one input key, enriching it only with an actual VAD endpoint."""
         if not app_config.LIVE_MODE:
             return
         if not getattr(self, "_live_user_turn_id", ""):
             self._live_user_turn_id = "gemini-" + uuid4().hex
             self._live_speech_emitted = False
-        if getattr(self, "_live_speech_emitted", False) and endpoint_at is None:
+        if getattr(self, "_live_speech_emitted", False) and endpoint_at is None and not transcript:
             return
         self._live_speech_emitted = True
         self._recv_queue.put(OutputEvent(
             gen=getattr(self, "_turn_gen", 0),
             output=UserSpeechOutput(
                 turn_id=self._live_user_turn_id,
+                transcript=transcript,
                 user_turn_id=self._live_user_turn_id,
                 endpoint_at=endpoint_at,
                 method="server_vad" if endpoint_at is not None else "provider_transcript",
@@ -668,7 +669,7 @@ class GeminiLiveAgent(VoiceAgentBase):
 
                 _in_tx = getattr(content, "input_transcription", None)
                 if _in_tx is not None and _in_tx.text:
-                    self._observe_user_speech()
+                    self._observe_user_speech(transcript=_in_tx.text)
 
                 has_model_output = bool(content.model_turn or content.output_transcription)
                 if has_model_output:

@@ -40,6 +40,8 @@ class UserSpeechOutput(OutputBase):
 
     type: OutputTypeEnum = OutputTypeEnum.USER_SPEECH
     turn_id: str
+    # Incremental provider transcription, attributed to this exact input turn.
+    transcript: str = ""
     endpoint_at: float | None = None
     method: str = "provider_transcript"
 
