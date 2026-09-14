@@ -76,7 +76,7 @@ Các path dưới đây dùng response envelope chuẩn của OS và không cho 
 
 | Method và path | Xác thực | Hành vi |
 |---|---|---|
-| `GET /api/harness/voice-mode` | Admin hoặc loopback thực sự | Đọc `{enabled,generation,machineId,agentId,agentName?,focusRevision?,focusAvailable,pending?,error?}`. |
+| `GET /api/harness/voice-mode` | Admin hoặc loopback thực sự | Đọc `{enabled,generation,machineId,agentId,agentName?,focusRevision,focusAvailable,pending?,error?}`. |
 | `PUT /api/harness/voice-mode` | Admin | Chỉ đặt `{enabled}`. Bật/tắt được khi offline hoặc chưa có focus; delivery giọng nói cần focus mới từ app. Câu nói khi thiếu focus bị từ chối, không xếp hàng chờ agent tương lai. |
 | `GET /api/harness/agents` | Admin | Refresh rõ ràng `agents.list`, trả `{machineId,agents}`. |
 | `GET /api/harness/voice-mode/question` | Admin | Đọc câu hỏi live của agent đang focus dưới dạng `{agentId,questionRequestId,focusRevision,questions}` hoặc `{question:null}`. |
@@ -124,7 +124,9 @@ Bài kiểm tra quảng bá mDNS tạm trên máy, dùng server WebSocket OS c�
 
 ### Điều khiển ghép đôi qua MQTT
 
-Các lệnh MQTT data đã xác thực của thiết bị gồm `harness.pair.start`, `harness.status`, `harness.pair.cancel` và `harness.pair.revoke`; phản hồi được publish trên fd channel của thiết bị. WebSocket trực tiếp vẫn là kênh dữ liệu cho máy tính Harness đã ghép đôi.
+Các lệnh MQTT data đã xác thực của thiết bị gồm `harness.pair.start`, `harness.status`, `harness.pair.cancel` và `harness.pair.revoke`; phản hồi được publish trên fd channel của thiết bị. Thu hồi pairing cũng tắt giọng nói Harness-only, giống unpair qua HTTP. WebSocket trực tiếp vẫn là kênh dữ liệu cho máy tính Harness đã ghép đôi.
+
+`harness.voice-mode.get` đọc `VoiceModeState` chung đang cache; `harness.voice-mode.set` chỉ nhận `data:{enabled:true|false}`. Cả hai dùng `cmd:"data"`, phản hồi trên `fd_channel` với `type:"data"`, cùng `kind`, `status:"success"` kèm snapshot voice-mode giống HTTP, hoặc `status:"failure"` kèm `error`. Field thừa, gồm `agentId`, bị từ chối. Lệnh đặt giá trị có tính idempotent: gửi lại giá trị hiện tại giữ generation và capture đang chạy. MQTT điều khiển cùng cờ RAM với Monitor/HTTP/HAL, mặc định tắt sau restart và cho phép đặt khi offline hoặc chưa có focus. Target vẫn là agent đang focus trong app; route skill/text hiện có giữ nguyên. Không có push trạng thái voice tự phát; client refresh bằng `get`. Phân quyền dùng kênh lệnh broker và ACL topic hiện có. Xem [ví dụ request MQTT](mqtt_vi.md#harnessvoice-modeget--harnessvoice-modeset--giọng-nói-harness-only).
 
 Khi phát lại hàng đợi Codex, Web/MQTT chat và voice follow-up được bổ sung lại địa chỉ `harness-reply` gốc. Yêu cầu qua hàng đợi giữ cùng run ID cục bộ và channel như khi gửi ngay.
 

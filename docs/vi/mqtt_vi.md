@@ -1007,6 +1007,47 @@ backend một chiều dưới dạng `type:"voice"`, nên device đọc to câu 
 không có gì quay về. Nó không thể làm nền cho một UI chat; cặp kind này thay nó ở
 mục đích đó.
 
+### `harness.voice-mode.get` / `harness.voice-mode.set` — Giọng nói Harness-only
+
+**Nhận trên `fa_channel`:**
+```json
+{"cmd":"data","kind":"harness.voice-mode.get"}
+{"cmd":"data","kind":"harness.voice-mode.set","data":{"enabled":true}}
+{"cmd":"data","kind":"harness.voice-mode.set","data":{"enabled":false}}
+```
+
+`get` không cần `data`, đọc trạng thái giọng nói chung đang cache mà không gọi
+Harness. `set` bắt buộc nhận object chỉ chứa `enabled` kiểu JSON boolean;
+thiếu giá trị, null, chuỗi hoặc field thừa như `agentId` đều bị từ chối.
+Lệnh đặt giá trị rõ ràng, không đảo trạng thái: gửi lại cùng giá trị không đổi
+generation định tuyến và không ngắt capture khác.
+
+Cả hai lệnh phản hồi trên `fd_channel` bằng metadata `MQTTDataResponse` chuẩn,
+`type:"data"`, cùng `kind` với request và snapshot giống
+`GET /api/harness/voice-mode` (lược bỏ metadata thiết bị trong ví dụ):
+```json
+{"type":"data","kind":"harness.voice-mode.set","status":"success","data":{"enabled":true,"generation":1789350000000000,"machineId":"computer-id","agentId":"agent-id","agentName":"Mike","focusRevision":"instance:3","focusAvailable":true}}
+```
+
+Snapshot là `{enabled,generation,machineId,agentId,agentName?,focusRevision,focusAvailable,pending?,error?}`.
+Khi focus chưa khả dụng, snapshot có thể chứa `focusAvailable:false` và
+`error` dù lệnh thành công. Input không hợp lệ hoặc controller không khả dụng
+trả `status:"failure"` cùng field `error` của envelope.
+Không có push MQTT tự phát cho trạng thái voice; client gọi `get` sau khi
+subscribe, reconnect hoặc khi cần refresh trạng thái hiện tại.
+
+MQTT dùng cùng controller trong RAM với HTTP, Monitor và HAL. Cờ mặc định tắt
+sau khi service khởi động lại. Được phép đặt cờ khi offline hoặc thiếu focus;
+delivery giọng nói vẫn cần agent được chọn trong app Harness. Các lệnh này
+không chọn agent và không đổi routing của MQTT/Web chat dạng text hay skill.
+Tắt mode giữ nguyên task đã gửi cùng đường output của task đó.
+`harness.pair.revoke` cũng tắt mode, giống unpair qua HTTP.
+Xem [chế độ giọng nói Harness](harness_vi.md#chế-độ-giọng-nói-harness-only).
+
+Phân quyền dùng credentials broker và ACL topic lệnh của thiết bị hiện có;
+bên publish phải có quyền với thiết bị đó. Không thêm MQTT topic, credential
+hay transport Harness mới.
+
 ### `buddy.pair.start` — Cấp mã pair Buddy
 
 **Nhận trên `fa_channel`:**
