@@ -1103,16 +1103,16 @@ class VoiceService:
                     return "skip"
             except Exception as e:
                 logger.warning("[live] speech gate failed, allowing: %s", e)
-        # Gaze grants the existing focus window before this decision. Only
-        # enforce an armed gate; shadow mode remains observation-only.
+        # Gaze or a button may already have granted focus. Otherwise use the
+        # regular STT turn to recognize and confirm a spoken wake phrase before
+        # any live audio is sent. Skipping capture here would also discard
+        # "Hello Lamp"; opening live would bypass its partial/final wake gate.
         if (
             hal_config.WAKEWORD_ENABLED
-            and hal_config.GAZE_WAKE_ENABLED
-            and not hal_config.GAZE_WAKE_SHADOW
             and not self._wakeword_focus.is_active()
         ):
-            logger.info("[live] gaze gate closed — waiting for gaze or explicit focus")
-            return "skip"
+            logger.info("[live] wake focus closed — using STT to check the wake phrase")
+            return "turn"
 
         self._realtime.prepare_turn()
 
@@ -1665,7 +1665,12 @@ class VoiceService:
         # Snapshot before any realtime I/O; a toggle cannot move this capture
         # between agents. OS validates the same generation on the final POST.
         harness_voice = read_voice_mode() if harness_voice is None else harness_voice
-        realtime_allowed = not bypass_realtime(harness_voice)
+        # Live providers use automatic endpointing for the whole process.
+        # A gated opener/fallback must not flush a buffered utterance through
+        # the manual commit path (which can double-commit with server VAD).
+        # STT still confirms the wake phrase and dispatches to the main agent;
+        # its focus window allows the next capture to enter full-duplex live.
+        realtime_allowed = not voice_cfg.LIVE_MODE and not bypass_realtime(harness_voice)
         # Harness explicitly owns voice input for this capture. Do not extend
         # the normal wake window; disabling the mode restores its usual gate.
         harness_listening = harness_voice["enabled"] and not harness_voice.get("unavailable", False)
