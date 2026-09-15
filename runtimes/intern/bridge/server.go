@@ -192,7 +192,9 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			result = envelope(id, "orchestration@gus", "persona", "needs_classification", "unknown", nil, text("This request needs review before I can help."))
 		} else {
 			result = route(req, id)
-			if result.Status == "fallback" && h.provider != nil {
+			if req.Operation == internbridge.Reception {
+				result = h.receive(r.Context(), req, id, result)
+			} else if result.Status == "fallback" && h.provider != nil {
 				if output, err := h.provider.Complete(r.Context(), req); err == nil && safeOutput(output) {
 					if req.Operation != internbridge.Classify || output == "question" || output == "draft" || output == "action" || output == "unknown" {
 						result.Status = "draft"
@@ -267,7 +269,7 @@ func envelope(id, destination, kind, status, intent string, handoff, output *str
 }
 
 // Match one company wake prefix and at most one explicit internal address.
-// Names are proposals only. Natural language intent is never guessed by a model.
+// Names are proposals only. Reception may classify otherwise unresolved input.
 var wake = regexp.MustCompile(`(?i)^\s*(?:(?:hey|ok|okay)[\s_]+)?(gus|rex|cassi|casi|cassandra|melvil|curator|pam|daily briefing|morning briefing|briefing|news|notification|alarm|reminder|smart[- ]home|orchestration|engineering|service|library|reception)(?:$|[\s,:!?.]+)`)
 var homeControl = regexp.MustCompile(`(?i)\b(smart[- ]home|device|lights?|scene|fan|hue|nanoleaf|kasa|home[- ]control)\b`)
 var contentService = regexp.MustCompile(`(?i)\b(news|headlines?|briefing)\b`)
@@ -303,6 +305,75 @@ func address(s string) (string, string, bool) {
 		return "gus", strings.TrimSpace(s), false
 	}
 	return strings.ToLower(s[m[2]:m[3]]), strings.TrimSpace(s[m[1]:]), true
+}
+
+// Reception can propose one allowlisted destination, never dispatch. Keep
+// deterministic custody and explicit names ahead of any local inference.
+func (h *handler) receive(ctx context.Context, req internbridge.Request, id string, base response) response {
+	if base.Status == "custody_hold" {
+		return base
+	}
+	clarify := envelope(id, "orchestration@gus", "persona", "reception_route", "unknown", nil, text("Could you clarify?"))
+	// A mixed content/PAM request is ambiguous even when it starts with a
+	// service alias. A classifier must not resolve it into an apparent grant.
+	if contentService.MatchString(req.Text) && pamService.MatchString(req.Text) {
+		return clarify
+	}
+	name, prompt, explicit := address(req.Text)
+	if name == "gus" {
+		if next, rest, ok := address(prompt); ok {
+			name, prompt, explicit = next, rest, true
+		}
+	}
+	if base.Kind == "service" || (explicit && name != "gus") {
+		return base
+	}
+	if prompt == "" {
+		clarify.Status, clarify.Output = "needs_input", text("Provide a request.")
+		return clarify
+	}
+	if h.provider == nil || (req.DataClass != internbridge.Public && req.DataClass != internbridge.Business) {
+		return clarify
+	}
+	output, err := h.provider.Complete(ctx, req)
+	if err != nil || !safeOutput(output) {
+		return clarify
+	}
+	destination, kind, ok := receptionIntent(output)
+	if !ok || output == "unknown" {
+		return clarify
+	}
+	if output == "smart-home" || output == "reception" {
+		return envelope(id, destination, kind, "custody_hold", output, nil, nil)
+	}
+	status := "reception_route"
+	if kind == "service" {
+		status = "service_route"
+	}
+	return envelope(id, destination, kind, status, output, text(destination), text("This request needs review."))
+}
+
+// Strict labels shared with provider validation. No persona names, free text,
+// lists, JSON, or model-supplied addresses can become routing metadata.
+func receptionIntent(label string) (destination, kind string, ok bool) {
+	switch label {
+	case "orchestration", "unknown":
+		return "orchestration@gus", "persona", true
+	case "engineering":
+		return "rex@dru", "persona", true
+	case "library":
+		return "melvil@lab", "persona", true
+	case "service", "notification", "alarm", "reminder":
+		return "pam@gus", "service", true
+	case "news", "briefing":
+		return "mcavoy@lab", "service", true
+	case "smart-home":
+		return "smart-home", "service", true
+	case "reception":
+		return internbridge.FirstContact, "persona", true
+	default:
+		return "", "", false
+	}
 }
 
 func route(req internbridge.Request, id string) response {

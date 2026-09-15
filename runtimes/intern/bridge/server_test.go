@@ -41,6 +41,9 @@ func TestBridgeUnchangedClientContract(t *testing.T) {
 		if strings.Contains(b["messages"].([]any)[0].(map[string]any)["content"].(string), "exactly one label") {
 			output = "question"
 		}
+		if strings.Contains(b["messages"].([]any)[0].(map[string]any)["content"].(string), "Welcome Desk") {
+			output = "orchestration"
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(ollamaReply(output))
 	})
@@ -104,8 +107,8 @@ func TestBridgeUnchangedClientContract(t *testing.T) {
 			}
 		}
 	}
-	if calls.Load() != 10 {
-		t.Fatalf("expected only 5 persona generate/classify pairs; got %d", calls.Load())
+	if calls.Load() != 11 {
+		t.Fatalf("expected 5 persona generate/classify pairs and one Gus reception classification; got %d", calls.Load())
 	}
 	if err := c.ProbeGeneration(ctx); err != nil {
 		t.Fatal(err)

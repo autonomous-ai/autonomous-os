@@ -74,10 +74,10 @@ Every response first names `cassi@mama`, with `executes_actions:false`,
 | smart-home / smart home | `smart-home` | `custody_hold`, output absent, null handoff |
 
 Wake prefixes accept `hey`, `ok`, `okay` and `hey_gus`. The bridge strips at most
-one company wake and one internal address for routing; the proposal is computed
-once before inference and retained on completion. No recursive routing or
-fan-out. `route`/`reception` use deterministic metadata only. Unaddressed input
-gets unknown intent and null handoff; it is not guessed by a classifier.
+one company wake and one internal address for routing. Explicit internal names
+remain deterministic proposals; `Gus` alone identifies the company. No recursive
+routing or fan-out. `route` remains model-free, with unknown intent and null
+handoff for unresolved input.
 Before inference, bounded service phrases route without classification: news,
 headlines, and briefing propose McAvoy; notify/notification, alarm, and
 remind/reminder propose PAM. Any smart-home, device, light, scene, fan, Hue,
@@ -86,6 +86,43 @@ service/home text is therefore held. `classify` returns only
 `question`, `draft`, `action` or `unknown`; these labels never authorize action.
 The model receives the exact admitted text and one fixed system instruction,
 without history, attachments, channel context, files or employee memory.
+
+### Ordinary-language reception
+
+For `reception`, unresolved public/business text, with or without a `Gus` wake,
+may make **one** classification call to the existing local Ollama provider.
+Explicit internal names, deterministic service routes, and custody holds do not
+call the model. Mixed content/PAM service phrases (including a leading service
+alias) return clarification without inference. An empty company-wake prompt
+returns `needs_input`. Caller data classification is never inferred or upgraded.
+
+The only accepted labels are `orchestration`, `engineering`, `service`,
+`notification`, `alarm`, `reminder`, `library`, `news`, `briefing`, `smart-home`,
+`reception`, and `unknown`, matching the bounded Python reception label contract.
+After trimming surrounding whitespace, exactly one label must remain; JSON,
+lists, persona addresses, explanations, and unknown labels are rejected. The
+fixed instruction requires `unknown` for ambiguous or multiple destinations.
+Labels map to the existing destinations above and produce at most one proposal.
+`smart-home`/`reception` classifications return `custody_hold`, without output or
+handoff. Existing home-keyword and caller-custody holds still run before inference.
+
+For example, synthetic-provider tests classify “Give me a rundown to start the
+day” as `briefing`, “What happened in the world today?” as `news`, “Wake me at
+seven” as `alarm`, and “Let me know when the report is ready” as `notification`.
+These are contract fixtures, not measurements of a live model's accuracy.
+
+Provider absence/failure, malformed or ambiguous output, and `unknown` return
+`reception_route`, intent `unknown`, null handoff, and fixed “Could you clarify?”
+text. Successful proposals also use fixed review text: raw classification output,
+reasoning, and provider errors never become user-facing prose. All existing
+final-answer, token-ratio, timeout, response-size and concurrency checks apply.
+Reception never makes a second generation call.
+
+Explicit Cerebras selection keeps its existing `generate`/`classify` behavior.
+This increment adds **local-only** reception classification: unresolved reception
+under Cerebras returns clarification without network I/O or a provider switch.
+Protocol `0.2.0`, schema `cassi-first.v1`, Cassi-first metadata, `executed:false`,
+and `next_step:safe_escalation` are unchanged; no dispatch or execution is added.
 
 ## Completion and bounds
 
@@ -109,7 +146,7 @@ without history, attachments, channel context, files or employee memory.
   Ollama token counts must be 1–256 and no more than four times trimmed output code points;
   this conservative heuristic can reject legitimate terse responses and is not
   proof of a provider's internal reasoning behavior.
-- Invalid configuration fails startup. Provider absence, timeout, rejection,
+- Invalid configuration fails startup. For `generate`/`classify`, provider absence, timeout, rejection,
   unsupported options or unsafe response returns the existing fixed `fallback`
   response (`ErrUnavailable` in the client), with no provider error text.
 - Input remains limited to 8,000 code points / 16 KiB JSON. Decoder rejects
@@ -127,4 +164,5 @@ prove a remote provider stopped computation or billing.
 API references: [Ollama chat](https://docs.ollama.com/api/chat) and
 [Cerebras chat completions](https://inference-docs.cerebras.ai/api-reference/chat-completions).
 Models/providers that do not support the bounded final-answer request fail safely.
-See the [verification receipt](../receipts/intern-native-bridge-2026-09-14.md).
+See the [original verification receipt](../receipts/intern-native-bridge-2026-09-14.md)
+and [ordinary-language reception receipt](../receipts/intern-reception-classification-2026-09-15.md).

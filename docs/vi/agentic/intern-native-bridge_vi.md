@@ -64,17 +64,53 @@ metadata Cassi-first, không kết nối tới Mama.
 | smart-home / smart home | `smart-home` | `custody_hold`, không có output, handoff null |
 
 Hỗ trợ `hey`, `ok`, `okay`, `hey_gus`; chỉ bỏ tối đa một wake công ty và một
-địa chỉ nội bộ khi định tuyến. Đề xuất được tính một lần trước suy luận và giữ
-nguyên khi hoàn tất, không đệ quy/fan-out. `route`/`reception` không
-gọi model. Recognizer bị giới hạn và xác định trước: news/headline(s)/briefing
+địa chỉ nội bộ khi định tuyến. Tên nội bộ rõ ràng vẫn tạo đề xuất xác định trước;
+`Gus` đơn lẻ nhận diện công ty. Không đệ quy/fan-out. `route` không gọi model.
+Recognizer bị giới hạn và xác định trước: news/headline(s)/briefing
 (gồm daily/morning) đề xuất `mcavoy@lab`; notify/notification, alarm và
 remind/reminder đề xuất `pam@gus`, kể cả khi `DataClass` là unknown. Bất kỳ
 smart-home, device, light, scene, fan, Hue, Nanoleaf, Kasa hoặc home-control nào
 (kể cả service trộn với home) luôn `custody_hold`, không handoff và không gọi
-model. Văn bản khác không có địa chỉ nhận intent unknown và handoff null.
+model. Với `route`, văn bản chưa xác định nhận intent unknown và handoff null.
 `classify` chỉ trả `question`, `draft`, `action`, `unknown`; nhãn không cấp
 quyền hành động. Model nhận văn bản đã chấp thuận nguyên vẹn và một system
 instruction cố định, không lịch sử, ảnh, tệp, ngữ cảnh kênh hoặc bộ nhớ nhân viên.
+
+### Reception bằng ngôn ngữ thông thường
+
+Với `reception`, văn bản public/business chưa xác định, có hoặc không có wake
+`Gus`, được gọi phân loại **tối đa một lần** qua provider Ollama cục bộ hiện có.
+Tên nội bộ rõ ràng, tuyến service xác định trước và custody hold không gọi model.
+Cụm trộn content/PAM (kể cả bắt đầu bằng alias service) trả yêu cầu làm rõ mà
+không suy luận. Wake công ty không có nội dung trả `needs_input`. Không tự suy
+ra hoặc nâng quyền nhãn dữ liệu của bên gọi.
+
+Chỉ nhận các nhãn `orchestration`, `engineering`, `service`, `notification`,
+`alarm`, `reminder`, `library`, `news`, `briefing`, `smart-home`, `reception`,
+`unknown`, tương ứng hợp đồng nhãn reception Python có giới hạn. Sau khi bỏ
+khoảng trắng đầu/cuối phải còn đúng một nhãn; chặn JSON, danh sách, địa chỉ
+persona, lời giải thích và nhãn lạ. Chỉ dẫn cố định yêu cầu `unknown` khi mơ hồ
+hoặc có nhiều đích. Nhãn ánh xạ tới đích hiện có ở trên, tối đa một đề xuất.
+Nhãn `smart-home`/`reception` trả `custody_hold`, không output hoặc handoff.
+Chặn từ khóa home và custody do bên gọi khai báo vẫn chạy trước suy luận.
+
+Fixture provider giả lập phân loại “Give me a rundown to start the day” thành
+`briefing`, “What happened in the world today?” thành `news`, “Wake me at seven”
+thành `alarm`, “Let me know when the report is ready” thành `notification`.
+Đây là kiểm thử hợp đồng, không đo độ chính xác của model thật.
+
+Provider vắng mặt/lỗi, output sai hoặc mơ hồ và `unknown` trả `reception_route`,
+intent `unknown`, handoff null và câu cố định “Could you clarify?”. Đề xuất hợp
+lệ cũng dùng câu cố định yêu cầu xem xét; output phân loại thô, reasoning và lỗi
+provider không trở thành lời trả cho người dùng. Giữ mọi kiểm tra final-answer,
+tỷ lệ token, timeout, kích thước phản hồi và giới hạn đồng thời. Reception không
+gọi generation lần thứ hai.
+
+Chọn Cerebras rõ ràng giữ hành vi `generate`/`classify` hiện có. Phần tăng thêm
+này chỉ phân loại reception cục bộ: reception chưa xác định dưới Cerebras trả
+yêu cầu làm rõ, không network I/O hoặc đổi provider. Giữ protocol `0.2.0`, schema
+`cassi-first.v1`, metadata Cassi-first, `executed:false`,
+`next_step:safe_escalation`; không thêm dispatch hoặc thực thi.
 
 ## Giới hạn và kết quả
 
@@ -97,7 +133,7 @@ instruction cố định, không lịch sử, ảnh, tệp, ngữ cảnh kênh h
   Ollama phải báo 1–256 token và không quá bốn lần số code point output sau khi
   bỏ khoảng trắng đầu/cuối; phép
   kiểm tra thận trọng có thể chặn câu ngắn hợp lệ, không chứng minh nội bộ model.
-- Sai cấu hình gây lỗi khởi động. Provider vắng mặt, timeout, từ chối, tùy chọn
+- Sai cấu hình gây lỗi khởi động. Với `generate`/`classify`, provider vắng mặt, timeout, từ chối, tùy chọn
   không hỗ trợ hoặc output không an toàn trả `fallback` cố định / `ErrUnavailable`;
   không lộ lỗi provider.
 - Input tối đa 8.000 code point / 16 KiB JSON; chặn field trùng/lạ/sai hoa-thường,
@@ -115,3 +151,4 @@ Tham khảo API [Ollama](https://docs.ollama.com/api/chat),
 [Cerebras](https://inference-docs.cerebras.ai/api-reference/chat-completions) và
 [biên bản kiểm chứng](../../receipts/intern-native-bridge-2026-09-14.md).
 Model/provider không hỗ trợ yêu cầu final-answer có giới hạn sẽ thất bại an toàn.
+Xem [biên bản reception ngôn ngữ thông thường](../../receipts/intern-reception-classification-2026-09-15.md).
