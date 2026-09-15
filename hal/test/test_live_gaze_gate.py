@@ -1,6 +1,6 @@
 """Live entry needs wake focus; closed focus must still allow STT wake detection."""
 
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -78,6 +78,7 @@ def test_live_opener_uses_stt_confirmation_before_granting_focus(
     monkeypatch.setattr(voice_service.voice_cfg, "LIVE_MODE", True)
     service = Mock()
     service._running = False
+    service._try_live_opener = MethodType(VoiceService._try_live_opener, service)
     service._tts = None
     service._wakeword_focus = WakeWordFocus(20)
     service._realtime.rebuilding = False
