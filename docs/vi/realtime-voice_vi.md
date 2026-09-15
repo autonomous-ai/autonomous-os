@@ -43,6 +43,21 @@ lượt, model sẽ:
   hẳn model im lặng: im lặng, timeout và lỗi transport vẫn fallback bình thường
   sang agent chính.
 
+**Tìm đồ là một hành động.** "Tìm chìa khóa của tôi", "cái cốc của tôi đâu",
+"giúp tôi tìm cây bút được không", "bạn có thấy cây bút của tôi đâu không" — mọi
+yêu cầu định vị một vật hoặc một người là một lượt quét bằng camera và servo do
+agent chính chạy (`/servo/search`, xem `robots/lamp/docs/vision-tracking.md`).
+Lớp realtime phải delegate nó ở mọi cách diễn đạt. Quan sát trên thiết bị
+2026-09-15 (lamp-ac82, memory sạch): câu mệnh lệnh trần "Tìm cây bút cho tôi"
+được delegate và tìm thấy bút, còn dạng câu hỏi "Bạn có thấy cây bút của tôi đâu
+không?" / "Giúp tôi tìm cây bút được không?" bị Gemini tự trả lời — hỏi bút trông
+thế nào, đoán vị trí, hoặc đề nghị nhìn mà không nhìn. Quy tắc nằm ở ba chỗ phải
+khớp nhau: mô tả tool `delegate_to_main` dùng chung, mô tả tool `look` (tìm đồ
+không phải là look), và bullet **Finding things is an action** trong cả bốn prompt
+provider; `hal/test/test_realtime_find_delegation.py` ghim phần text. Bản thân
+quyết định không được ép bằng code — chỉ giọng nói thật trên thiết bị mới kiểm
+tra được.
+
 ### Xác định lời nói hướng đến thiết bị trước persona hoặc hành động
 
 Prompt của mọi provider realtime ưu tiên quy tắc lời nói hướng đến thiết bị
@@ -776,7 +791,9 @@ phân biệt động từ theo thứ đứng sau nó, vì "nhìn tôi này" ngh�
 còn "nhìn cái này" là một câu hỏi về một vật. Chỉ áp dụng cho turn **thuần** hỏi về
 thứ nhìn thấy: nếu cùng turn còn kèm hành động ("quay sang phải, giữ nguyên đó, rồi
 nói xem thấy gì"), prompt bắt buộc gọi một `delegate_to_main` gộp cả hai vế — không
-`look` — để lệnh chuyển động không bị âm thầm bỏ rơi. Orchestrator đăng ký tool `look` (`orchestrator.py`,
+`look` — để lệnh chuyển động không bị âm thầm bỏ rơi. Mô tả tool và prompt Gemini
+đều loại trừ việc tìm một vật cụ thể ("cây bút của tôi đâu", "bạn có thấy chìa khóa
+không") — đó là một lượt tìm kiếm được delegate, không phải look. Orchestrator đăng ký tool `look` (`orchestrator.py`,
 `LOOK_TOOL`) và xử lý trong `_handle_look_call`:
 
 1. **Ngắm đầu vào đối tượng trước**, trên thiết bị có thể chuyển động — nếu
