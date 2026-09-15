@@ -39,6 +39,10 @@ data returns `ErrNeedsClassification`; restricted/secret data returns
 errors have HTTP status 0 and no result. Only public/business data may be sent,
 with its classification unchanged. This library cannot prove that a caller
 classified correctly; a misleading label does not grant custody permission.
+The sole exception is the bounded deterministic service recognizer: news/
+headlines/briefing and notify/notification/alarm/remind/reminder may be sent as
+non-executing proposals with `unknown` data. Any home-control phrase is held
+locally, including mixed service/home text.
 
 Text must be nonblank valid UTF-8, at most 8,000 Unicode code points. The
 encoded JSON body must also fit 16 KiB; escaping and multibyte text count toward

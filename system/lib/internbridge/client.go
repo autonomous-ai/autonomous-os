@@ -140,6 +140,13 @@ func (c *Client) CloseIdleConnections() { c.http.CloseIdleConnections() }
 
 var inputID = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
 var outputID = regexp.MustCompile(`^run-([a-f0-9]{24}|[a-f0-9]{32})$`)
+var homeControl = regexp.MustCompile(`(?i)\b(smart[- ]home|device|lights?|scene|fan|hue|nanoleaf|kasa|home[- ]control)\b`)
+var contentService = regexp.MustCompile(`(?i)\b(news|headlines?|briefing)\b`)
+var pamService = regexp.MustCompile(`(?i)\b(notify|notification|alarm|remind|reminder)\b`)
+
+func deterministicService(text string) bool {
+	return !homeControl.MatchString(text) && contentService.MatchString(text) != pamService.MatchString(text)
+}
 
 func (r Request) valid() bool {
 	if !utf8.ValidString(r.Text) || strings.TrimSpace(r.Text) == "" || utf8.RuneCountInString(r.Text) > 8000 {
@@ -170,6 +177,12 @@ func ValidateRequest(request Request) error {
 	case Restricted, Secret:
 		return failure(ErrCustodyHold, 0)
 	case Unknown:
+		if homeControl.MatchString(request.Text) {
+			return failure(ErrCustodyHold, 0)
+		}
+		if deterministicService(request.Text) {
+			return nil
+		}
 		return failure(ErrNeedsClassification, 0)
 	}
 	return nil
@@ -195,7 +208,12 @@ func (c *Client) Do(ctx context.Context, request Request) (*Result, error) {
 	case Restricted, Secret:
 		return nil, failure(ErrCustodyHold, 0)
 	case Unknown:
-		return nil, failure(ErrNeedsClassification, 0)
+		if homeControl.MatchString(request.Text) {
+			return nil, failure(ErrCustodyHold, 0)
+		}
+		if !deterministicService(request.Text) {
+			return nil, failure(ErrNeedsClassification, 0)
+		}
 	}
 	fields, status, err := c.call(ctx, "/v1/intern", body)
 	if err != nil {

@@ -23,6 +23,15 @@ request mạng, kể cả `route`; HTTP status bằng 0 và result bằng nil. C
 public/business được gửi với nhãn nguyên vẹn. Thư viện không thể xác minh caller
 phân loại đúng; nhãn sai không cấp quyền vượt ranh giới dữ liệu.
 
+Ngoại lệ hẹp, xác định trước: unknown có đúng một nhóm cụm từ service được chấp
+nhận và không có cụm từ home-control sẽ được gửi chỉ để nhận một đề xuất không
+thực thi. `news`, `headline(s)`, `briefing` (gồm daily/morning briefing) đề xuất
+`mcavoy@lab`; `notify`/`notification`, `alarm`, `remind`/`reminder` đề xuất
+`pam@gus`. Đây không phải phân loại dữ liệu, không cấp quyền và không gọi model.
+Bất kỳ `smart-home`, device, light, scene, fan, Hue, Nanoleaf, Kasa hoặc
+home-control nào — kể cả trộn với service — luôn trả `ErrCustodyHold` trước mạng,
+không có handoff.
+
 Text phải là UTF-8 hợp lệ, không trống, tối đa 8.000 Unicode code point; JSON
 sau mã hóa tối đa 16 KiB. Không cắt nội dung. Run ID tùy chọn phải khớp
 `[A-Za-z0-9._-]{1,64}`, không chứa dữ liệu nhạy cảm. ID được cung cấp phải trả về

@@ -66,8 +66,12 @@ metadata Cassi-first, không kết nối tới Mama.
 Hỗ trợ `hey`, `ok`, `okay`, `hey_gus`; chỉ bỏ tối đa một wake công ty và một
 địa chỉ nội bộ khi định tuyến. Đề xuất được tính một lần trước suy luận và giữ
 nguyên khi hoàn tất, không đệ quy/fan-out. `route`/`reception` không
-gọi model. Văn bản không có địa chỉ nhận intent unknown và handoff null;
-không khẳng định phát hiện intent nhà riêng qua ngôn ngữ tự nhiên.
+gọi model. Recognizer bị giới hạn và xác định trước: news/headline(s)/briefing
+(gồm daily/morning) đề xuất `mcavoy@lab`; notify/notification, alarm và
+remind/reminder đề xuất `pam@gus`, kể cả khi `DataClass` là unknown. Bất kỳ
+smart-home, device, light, scene, fan, Hue, Nanoleaf, Kasa hoặc home-control nào
+(kể cả service trộn với home) luôn `custody_hold`, không handoff và không gọi
+model. Văn bản khác không có địa chỉ nhận intent unknown và handoff null.
 `classify` chỉ trả `question`, `draft`, `action`, `unknown`; nhãn không cấp
 quyền hành động. Model nhận văn bản đã chấp thuận nguyên vẹn và một system
 instruction cố định, không lịch sử, ảnh, tệp, ngữ cảnh kênh hoặc bộ nhớ nhân viên.

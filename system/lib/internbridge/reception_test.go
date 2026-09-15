@@ -3,6 +3,7 @@ package internbridge
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -57,6 +58,22 @@ func TestCassiFirstRoutes(t *testing.T) {
 					t.Fatal("client retried or followed a proposed handoff")
 				}
 			})
+		}
+	}
+}
+
+func TestDeterministicUnknownServiceAdmission(t *testing.T) {
+	for _, tc := range []struct {
+		text string
+		want error
+	}{
+		{"Gus, daily briefing", nil}, {"Gus, news headlines", nil},
+		{"Gus, notify me", nil}, {"Gus, set an alarm", nil}, {"Gus, remind me", nil},
+		{"Gus, news and turn on the Nanoleaf scene", ErrCustodyHold},
+	} {
+		err := ValidateRequest(Request{Text: tc.text, Operation: Reception, DataClass: Unknown})
+		if !errors.Is(err, tc.want) {
+			t.Fatalf("%q: %v", tc.text, err)
 		}
 	}
 }

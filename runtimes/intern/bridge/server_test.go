@@ -66,6 +66,9 @@ func TestBridgeUnchangedClientContract(t *testing.T) {
 		{"Rex hello", "rex@dru", nil}, {"Gus Melvil hello", "melvil@lab", nil},
 		{"curator hello", "melvil@lab", nil}, {"PAM hello", "pam@gus", internbridge.ErrServiceRoute},
 		{"Gus news headlines", "mcavoy@lab", internbridge.ErrServiceRoute},
+		{"Gus, notify me", "pam@gus", internbridge.ErrServiceRoute},
+		{"Gus, remind me", "pam@gus", internbridge.ErrServiceRoute},
+		{"Gus, briefing and turn on the Hue light", "smart-home", internbridge.ErrCustodyHold},
 		{"Gus daily briefing", "mcavoy@lab", internbridge.ErrServiceRoute},
 		{"Gus morning briefing", "mcavoy@lab", internbridge.ErrServiceRoute},
 		{"Gus notification", "pam@gus", internbridge.ErrServiceRoute},
@@ -120,7 +123,15 @@ func TestBridgeServiceIntentMapping(t *testing.T) {
 		{"notification", "pam@gus", "notification", "service_route"},
 		{"alarm", "pam@gus", "alarm", "service_route"},
 		{"reminder", "pam@gus", "reminder", "service_route"},
+		{"headlines", "mcavoy@lab", "news", "service_route"},
+		{"notify me", "pam@gus", "notification", "service_route"},
+		{"remind me", "pam@gus", "reminder", "service_route"},
 		{"smart-home lights", "smart-home", "smart-home", "custody_hold"},
+		{"device status", "smart-home", "smart-home", "custody_hold"},
+		{"turn on the light", "smart-home", "smart-home", "custody_hold"},
+		{"Nanoleaf scene", "smart-home", "smart-home", "custody_hold"},
+		{"Kasa fan", "smart-home", "smart-home", "custody_hold"},
+		{"Hue home-control", "smart-home", "smart-home", "custody_hold"},
 	} {
 		t.Run(tc.text, func(t *testing.T) {
 			got := route(internbridge.Request{Text: tc.text, Operation: internbridge.Route, DataClass: internbridge.Public}, "run-test")
@@ -133,6 +144,29 @@ func TestBridgeServiceIntentMapping(t *testing.T) {
 				}
 			} else if got.Reception.Handoff == nil || *got.Reception.Handoff != tc.destination {
 				t.Fatal("service route did not make exactly one proposal")
+			}
+		})
+	}
+}
+
+func TestBridgeDeterministicUnknownServiceRequests(t *testing.T) {
+	c := bridgeFixture(t, newHandler(nil))
+	ctx := context.Background()
+	for _, tc := range []struct {
+		text string
+		want error
+	}{
+		{"Gus, morning briefing", internbridge.ErrServiceRoute},
+		{"Gus, headlines", internbridge.ErrServiceRoute},
+		{"Gus, notify me", internbridge.ErrServiceRoute},
+		{"Gus, set an alarm", internbridge.ErrServiceRoute},
+		{"Gus, remind me", internbridge.ErrServiceRoute},
+		{"Gus, news and turn on the Hue light", internbridge.ErrCustodyHold},
+	} {
+		t.Run(tc.text, func(t *testing.T) {
+			got, err := c.Do(ctx, internbridge.Request{Text: tc.text, Operation: internbridge.Reception, DataClass: internbridge.Unknown})
+			if got != nil || !errors.Is(err, tc.want) {
+				t.Fatalf("result=%+v err=%v, want %v", got, err, tc.want)
 			}
 		})
 	}

@@ -269,6 +269,33 @@ func envelope(id, destination, kind, status, intent string, handoff, output *str
 // Match one company wake prefix and at most one explicit internal address.
 // Names are proposals only. Natural language intent is never guessed by a model.
 var wake = regexp.MustCompile(`(?i)^\s*(?:(?:hey|ok|okay)[\s_]+)?(gus|rex|cassi|casi|cassandra|melvil|curator|pam|daily briefing|morning briefing|briefing|news|notification|alarm|reminder|smart[- ]home|orchestration|engineering|service|library|reception)(?:$|[\s,:!?.]+)`)
+var homeControl = regexp.MustCompile(`(?i)\b(smart[- ]home|device|lights?|scene|fan|hue|nanoleaf|kasa|home[- ]control)\b`)
+var contentService = regexp.MustCompile(`(?i)\b(news|headlines?|briefing)\b`)
+var pamService = regexp.MustCompile(`(?i)\b(notify|notification|alarm|remind|reminder)\b`)
+
+func deterministicServiceIntent(text string) string {
+	content, pam := contentService.FindString(text), pamService.FindString(text)
+	if content != "" && pam != "" {
+		return ""
+	}
+	if content != "" {
+		if strings.Contains(strings.ToLower(content), "brief") {
+			return "briefing"
+		}
+		return "news"
+	}
+	if pam == "" {
+		return ""
+	}
+	pam = strings.ToLower(pam)
+	if strings.HasPrefix(pam, "notify") {
+		return "notification"
+	}
+	if strings.HasPrefix(pam, "remind") {
+		return "reminder"
+	}
+	return pam
+}
 
 func address(s string) (string, string, bool) {
 	m := wake.FindStringSubmatchIndex(s)
@@ -279,10 +306,16 @@ func address(s string) (string, string, bool) {
 }
 
 func route(req internbridge.Request, id string) response {
+	if homeControl.MatchString(req.Text) {
+		return envelope(id, "smart-home", "service", "custody_hold", "smart-home", nil, nil)
+	}
 	name, prompt, explicit := address(req.Text)
 	if name == "gus" {
 		if next, rest, ok := address(prompt); ok {
 			name, prompt = next, rest
+		}
+		if intent := deterministicServiceIntent(prompt); intent != "" {
+			name = intent
 		}
 	}
 	destination, kind, intent := "orchestration@gus", "persona", "address_or_default"
@@ -293,13 +326,18 @@ func route(req internbridge.Request, id string) response {
 		destination, intent = "melvil@lab", "library"
 	case "pam", "service":
 		destination, kind, intent = "pam@gus", "service", "service"
-	case "news", "briefing", "daily briefing", "morning briefing":
+	case "news", "briefing", "daily briefing", "morning briefing", "headlines", "headline":
 		destination, kind, intent = "mcavoy@lab", "service", "briefing"
 		if name == "news" {
 			intent = "news"
 		}
-	case "notification", "alarm", "reminder":
+	case "notification", "notify", "alarm", "reminder", "remind":
 		destination, kind, intent = "pam@gus", "service", name
+		if name == "notify" {
+			intent = "notification"
+		} else if name == "remind" {
+			intent = "reminder"
+		}
 	case "smart-home", "smart home":
 		destination, kind, intent = "smart-home", "service", "smart-home"
 	case "cassi", "casi", "cassandra", "reception":

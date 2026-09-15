@@ -78,7 +78,11 @@ one company wake and one internal address for routing; the proposal is computed
 once before inference and retained on completion. No recursive routing or
 fan-out. `route`/`reception` use deterministic metadata only. Unaddressed input
 gets unknown intent and null handoff; it is not guessed by a classifier.
-Natural-language home intent detection is not claimed. `classify` returns only
+Before inference, bounded service phrases route without classification: news,
+headlines, and briefing propose McAvoy; notify/notification, alarm, and
+remind/reminder propose PAM. Any smart-home, device, light, scene, fan, Hue,
+Nanoleaf, Kasa, or home-control phrase overrides them to a custody hold; mixed
+service/home text is therefore held. `classify` returns only
 `question`, `draft`, `action` or `unknown`; these labels never authorize action.
 The model receives the exact admitted text and one fixed system instruction,
 without history, attachments, channel context, files or employee memory.
