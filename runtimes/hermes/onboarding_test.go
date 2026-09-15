@@ -141,12 +141,17 @@ func TestUpsertSoulPersonaBlock_SeedsEmptySoul(t *testing.T) {
 // from hermesSoulFallback on a factory reset before a soul_ref is declared.
 func TestUpsertSoulPersonaBlock_DropsManagedDefaultSoul(t *testing.T) {
 	for name, stale := range map[string]string{
-		"hermes fallback": hermesSoulFallback,
-		"openclaw seed":   "# Soul\n\nold template\n",
-		"gateway default": "# SOUL.md - Who You Are\n\nold template\n",
+		"hermes fallback":  hermesSoulFallback,
+		"openclaw seed":    "# Soul\n\nold template\n",
+		"openclaw gateway": "# SOUL.md - Who You Are\n\nold template\n",
+		// What presync leaves behind on a freshly flashed device: the Hermes
+		// gateway re-seeds its own persona whenever SOUL.md is missing, and it
+		// opens with prose rather than a heading.
+		"hermes gateway seed": "You are Hermes Agent, built by Nous Research. Be direct.\n\nold template\n",
 	} {
 		got := upsertSoulPersonaBlock(stale, testPersona)
-		if strings.Contains(got, "old template") || strings.Contains(got, "Hermes Agent Persona") {
+		if strings.Contains(got, "old template") || strings.Contains(got, "Hermes Agent Persona") ||
+			strings.Contains(got, "Nous Research") {
 			t.Errorf("%s: managed default kept as owner content:\n%q", name, got)
 		}
 		if !strings.Contains(got, soulPersonalHeading) {

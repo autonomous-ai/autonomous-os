@@ -418,8 +418,9 @@ func upsertSoulPersonaBlock(soul, core string) string {
 	rest := strings.TrimLeft(stripSoulMarkedBlock(soul, soulOSMarker, isPersonaBody), " \t\r\n")
 
 	// Drop a managed default soul so it is not kept below the block as a second,
-	// competing persona. Owner edits under `## Personal` survive.
-	if isDefaultSoulHeading(rest) {
+	// competing persona — on a freshly flashed device the Hermes gateway has
+	// already re-seeded its own. Owner edits under `## Personal` survive.
+	if isManagedDefaultSoul(rest) {
 		if idx := strings.Index(rest, soulPersonalHeading); idx >= 0 {
 			rest = rest[idx:]
 		} else {
@@ -432,17 +433,28 @@ func upsertSoulPersonaBlock(soul, core string) string {
 	return block + "\n\n" + rest
 }
 
-// isDefaultSoulHeading reports whether text opens with a MANAGED default soul
-// that must never be preserved as owner content below the persona block:
+// managedDefaultSoulPrefixes opens a default soul that some other component
+// seeded. None of them is owner content, and keeping one below the persona block
+// leaves the file carrying two personas that contradict each other.
 //
-//   - "# Hermes Agent Persona" — hermesSoulFallback, seeded by a factory reset
-//     on a device with no soul_ref, and left behind once one is declared.
-//   - "# Soul" / "# SOUL.md"   — the shapes openclaw/picoclaw guard against,
-//     which reach Hermes through persona migration.
-func isDefaultSoulHeading(text string) bool {
+// The Hermes gateway one has no heading at all: it re-seeds its own persona into
+// SOUL.md whenever the file is missing, and presync runs before we do — so on a
+// freshly flashed device that prose is what ensureSoulMDBlock finds. The
+// heading-shaped entries are what openclaw/picoclaw's isDefaultSoulHeading
+// guards against, reaching Hermes through persona migration.
+var managedDefaultSoulPrefixes = []string{
+	"You are Hermes Agent, built by Nous Research", // the Hermes gateway's own seed
+	"# Hermes Agent Persona",                       // hermesSoulFallback (factory reset)
+	"# Soul",                                       // legacy openclaw self-seed
+	"# SOUL.md",                                    // the OpenClaw gateway default
+}
+
+// isManagedDefaultSoul reports whether text opens with one of those defaults.
+// Counterpart of openclaw/picoclaw's isDefaultSoulHeading.
+func isManagedDefaultSoul(text string) bool {
 	trimmed := strings.TrimLeft(text, " \t\r\n")
-	for _, h := range []string{"# Hermes Agent Persona", "# Soul", "# SOUL.md"} {
-		if strings.HasPrefix(trimmed, h) {
+	for _, p := range managedDefaultSoulPrefixes {
+		if strings.HasPrefix(trimmed, p) {
 			return true
 		}
 	}
