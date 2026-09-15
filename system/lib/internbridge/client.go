@@ -195,6 +195,31 @@ func ValidateRequest(request Request) error {
 // completion covers the bridge request only, never an employee or service.
 // Holds and fallback statuses return safe sentinels with no output attached.
 func (c *Client) Do(ctx context.Context, request Request) (*Result, error) {
+	return c.do(ctx, request, false)
+}
+
+// DoForService returns validated service proposals to an owning service. It
+// performs no dispatch. Do retains its fail-closed ErrServiceRoute behavior.
+func (c *Client) DoForService(ctx context.Context, request Request) (*Result, error) {
+	return c.do(ctx, request, true)
+}
+
+// ValidateServiceDispatch applies the stricter cross-node custody boundary.
+// Unknown classification may reach local reception, but never the authority.
+func ValidateServiceDispatch(request Request) error {
+	if err := ValidateRequest(request); err != nil {
+		return err
+	}
+	if homeControl.MatchString(request.Text) {
+		return ErrCustodyHold
+	}
+	if request.DataClass != Public && request.DataClass != Business {
+		return ErrNeedsClassification
+	}
+	return nil
+}
+
+func (c *Client) do(ctx context.Context, request Request, service bool) (*Result, error) {
 	if !request.valid() {
 		return nil, failure(ErrInvalidRequest, 0)
 	}
@@ -258,6 +283,9 @@ func (c *Client) Do(ctx context.Context, request Request) (*Result, error) {
 	if r.Kind == "service" {
 		if r.Status != "service_route" {
 			return nil, failure(ErrProtocol, status)
+		}
+		if service {
+			return r, nil
 		}
 		return nil, failure(ErrServiceRoute, status)
 	}

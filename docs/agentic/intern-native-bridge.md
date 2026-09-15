@@ -1,9 +1,13 @@
 # Device-resident Intern bridge
 
 `runtimes/intern/bridge` implements protocol `0.2.0`, schema `cassi-first.v1`,
-inside the existing Go `os-server` binary. `runtimes/intern.Service` and the
-strict transport client are unchanged. This is text drafting and proposed
-reception metadata, never employee execution, hardware control or dispatch.
+inside the existing Go `os-server` binary. The bridge provides text drafting
+and proposed reception metadata, never employee execution or hardware control.
+The owning Intern service now has an optional authenticated service-dispatch
+seam, disabled by default; the bridge itself never dispatches. Only McAvoy and
+PAM proposals can reach the canonical substrate authority when explicitly
+configured. Receipts acknowledge acceptance/queueing with `delivered=false`.
+See [configuration and response contract](intern-bridge-client.md#staged-authenticated-service-dispatch-2026-09-15).
 
 ## Lifecycle
 

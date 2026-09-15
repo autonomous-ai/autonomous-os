@@ -1,9 +1,12 @@
 # Bridge Intern chạy trực tiếp trên thiết bị
 
 `runtimes/intern/bridge` triển khai protocol `0.2.0`, schema `cassi-first.v1`
-trong binary Go `os-server` hiện có. Không đổi `runtimes/intern.Service` hoặc
-client transport. Chức năng chỉ là soạn văn bản và đề xuất tuyến tiếp nhận;
-không thực thi công việc, phần cứng, kênh nhắn tin hoặc MQTT.
+trong binary Go `os-server` hiện có. Bridge chỉ soạn văn bản và đề xuất tuyến
+tiếp nhận, không thực thi công việc hoặc phần cứng. Intern service sở hữu
+dispatch có xác thực tùy chọn, mặc định tắt; bridge không tự dispatch. Chỉ
+đề xuất McAvoy/PAM được gửi đến substrate authority chuẩn khi cấu hình rõ ràng.
+Receipt chỉ xác nhận accepted/queued với `delivered=false`. Xem
+[cấu hình và hợp đồng response](intern-bridge-client_vi.md).
 
 ## Vòng đời và cấu hình
 

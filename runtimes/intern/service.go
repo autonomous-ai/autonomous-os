@@ -1,5 +1,5 @@
 // Package intern implements the externally owned, text-only Welcome Desk.
-// It has no runtime, HAL, credentials, filesystem or channel dependencies.
+// Optional service dispatch uses only the existing substrate authority.
 package intern
 
 import (
@@ -70,6 +70,7 @@ type Turn struct {
 	Scope           string               `json:"scope"`
 	ExecutesActions bool                 `json:"executes_actions"`
 	Result          *internbridge.Result `json:"result,omitempty"`
+	Dispatch        *DispatchReceipt     `json:"dispatch,omitempty"`
 	Error           string               `json:"error,omitempty"`
 	// A local cancellation/deadline does not cancel remote bridge work.
 	RemoteOutcomeUnknown bool `json:"remote_outcome_unknown,omitempty"`
@@ -88,6 +89,7 @@ type job struct {
 
 type Service struct {
 	client      *internbridge.Client
+	dispatcher  ServiceDispatcher
 	mu          sync.Mutex
 	running     bool
 	busy        bool
@@ -107,11 +109,13 @@ type Service struct {
 
 var _ domain.AgentGateway = (*Service)(nil)
 
-// New always owns only a client of the fixed loopback bridge. No URL, port,
-// proxy, credential or alternative runtime can be selected through config.
+// New keeps dispatch disabled unless explicitly configured in the process
+// environment. Invalid or missing configuration fails closed to ErrServiceRoute.
 func New() *Service {
 	client, _ := internbridge.New(BridgePort) // nonzero compile-time port
-	return newService(client)
+	s := newService(client)
+	s.dispatcher, _ = dispatcherFromEnvironment()
+	return s
 }
 
 func newService(client *internbridge.Client) *Service {
@@ -232,6 +236,10 @@ func (s *Service) Result(id string) (Turn, error) {
 		copy := *t.Result
 		t.Result = &copy
 	}
+	if t.Dispatch != nil {
+		copy := *t.Dispatch
+		t.Dispatch = &copy
+	}
 	return t, nil
 }
 
@@ -324,17 +332,35 @@ func (s *Service) StartWS(ctx context.Context, _ domain.AgentEventHandler) {
 		}
 		var result *internbridge.Result
 		var err error
+		var receipt *DispatchReceipt
 		sent := false
 		if j.voice != nil && j.voice.Err() != nil {
 			err = internbridge.ErrCanceled
 		} else {
 			sent = true
-			result, err = s.client.Do(callCtx, j.request)
+			if s.dispatcher == nil {
+				result, err = s.client.Do(callCtx, j.request)
+			} else {
+				result, err = s.client.DoForService(callCtx, j.request)
+				if err == nil && result.Status == "service_route" {
+					receipt, err = s.dispatcher.Dispatch(callCtx, j.request, *result)
+					if err != nil {
+						result = nil
+					}
+				}
+			}
 		}
 		stopVoice()
 		cancel()
 		s.mu.Lock()
 		s.finishLocked(j.id, result, err, sent)
+		if err == nil && receipt != nil {
+			e := s.results[j.id]
+			e.turn.Dispatch = receipt
+			e.turn.Scope = "service_dispatch"
+			e.turn.State = receipt.Status
+			s.results[j.id] = e
+		}
 		s.busy = false
 		if err == nil {
 			s.version = internbridge.Version
@@ -364,7 +390,7 @@ func (s *Service) finishLocked(id string, result *internbridge.Result, err error
 		if errors.Is(err, internbridge.ErrCanceled) {
 			e.turn.State = "canceled"
 		}
-		e.turn.RemoteOutcomeUnknown = sent && (errors.Is(err, internbridge.ErrCanceled) || errors.Is(err, internbridge.ErrDeadline) || errors.Is(err, internbridge.ErrTransport))
+		e.turn.RemoteOutcomeUnknown = sent && (errors.Is(err, internbridge.ErrCanceled) || errors.Is(err, internbridge.ErrDeadline) || errors.Is(err, internbridge.ErrTransport) || errors.Is(err, ErrDispatch))
 	}
 	e.expires = time.Now().Add(ResultTTL)
 	s.results[id] = e

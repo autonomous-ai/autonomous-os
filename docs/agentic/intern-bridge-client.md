@@ -97,7 +97,7 @@ handoff objects are rejected. Allowed intents are `orchestration`, `engineering`
 `smart-home`, `news`, `briefing`, `unknown`, and `address_or_default`. These
 fields are metadata, not a device/action API.
 
-Service destinations require `service_route` and return `ErrServiceRoute` with
+Service destinations require `service_route`; default `Do` returns `ErrServiceRoute` with
 nil result; the client never follows the handoff. Generation cannot succeed on
 a reception-only result. A hold must omit `output` entirely (even null is
 rejected) and never exposes a result. Completion describes only the HTTP bridge
@@ -151,6 +151,56 @@ harness also supports an optional provider, so transport success cannot attest
 local inference.
 
 ## Deferred integration
+
+### Staged authenticated service dispatch (2026-09-15)
+
+`DoForService` exposes the same strictly validated service proposal to the Intern
+service; it never dispatches itself. `Do` and generation preflight retain the
+nil-result `ErrServiceRoute` behavior. The service uses `DoForService` only when
+its `ServiceDispatcher` is configured. Ordinary persona results stay local;
+the dispatcher rejects every destination except `mcavoy@lab` and `pam@gus`.
+Smart-home, unknown destinations, restricted/secret content and home-control
+requests remain held. Unknown classification may reach local reception but
+requires explicit public/business classification before cross-node dispatch.
+
+Runtime opt-in requires both `GUS_INTERN_DISPATCH_TOKEN` and
+`GUS_INTERN_DISPATCH_PRINCIPAL`. The token must be assigned by the Director for
+an authorized existing `fleet-dispatch@dru`, `fleet-dispatch@gus`, or
+`fleet-dispatch@lab` principal. No value is supplied by this change. The optional
+`GUS_INTERN_DISPATCH_URL` must exactly match `http://100.115.27.81:7370` (also the
+default). Missing credentials create no default dispatcher and no authority
+network effects; invalid startup configuration also disables dispatch. Removing
+the token after construction fails closed before sending. There is no fallback
+to a provider key, another client's token, keychain lookup, proxy, or redirect.
+`DispatchConfig` injects endpoint, principal and token source for tests/embedding;
+tests replace the private HTTP transport, never relax authority URL validation.
+
+The existing `POST /dispatch` carries Bearer authorization and `X-GUS-Principal`.
+Its JSON contains `task_id`, `request_id` (both the original OS run ID), `title`,
+`task` (only the admitted input), `source=intern`, `classification` (`PUBLIC` or
+`INTERNAL`), `dry_run=false`, and `requirements`. Requirements constrain the exact
+node and service role, with bounded execution controls. There is one request,
+no retry, peer fan-out, new queue, or listener. Bridge reasoning/output, persona
+memory and history are never forwarded. Existing final-only bridge validation
+and voice-grant lifetime remain in force; this seam does not attest downstream
+inference behavior or employee delivery.
+
+Only HTTP 200/202 JSON with `ok=true`, matching `task_id`, and `status=accepted`
+or `queued` is acknowledged. Completion/delivery statuses, including
+`REPORTED_COMPLETE`, are rejected; optional `delivered` must be false. Responses
+are size-bounded, duplicate/trailing JSON is rejected, and authority content is
+discarded. Errors never echo token/source/transport errors or authority bodies.
+No authority output becomes user text. The local result has
+`scope=service_dispatch`, `state=accepted|queued`, and a `dispatch` receipt with
+original `run_id`, `bridge_run_id`, `task_id`, destination, status and
+`delivered=false`. This is a terminal local acknowledgement, not task completion;
+the usual result TTL applies. Failed authority calls mark remote outcome unknown
+and are never retried automatically.
+
+The inspected authority currently emits `REPORTED_COMPLETE` for successful
+worker execution. That response intentionally fails this stricter contract.
+Director key assignment, acceptance-response compatibility and actual deployment
+remain separate prerequisites. See the [dispatch receipt](../receipts/intern-service-dispatch-2026-09-15.md).
 
 Full gateway integration is blocked by the [runtime contract audit](intern-runtime-contract.md).
 It needs trusted custody propagation, image/session/persona/skill behavior and

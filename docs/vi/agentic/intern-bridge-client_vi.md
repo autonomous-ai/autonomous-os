@@ -80,7 +80,7 @@ handoff lồng nhau. Intent hợp lệ: `orchestration`, `engineering`, `service
 `news`, `briefing`, `unknown`, `address_or_default`.
 Đây chỉ là metadata, không phải API thiết bị hay hành động.
 
-Service yêu cầu `service_route`, trả `ErrServiceRoute` với nil result; client
+Service yêu cầu `service_route`; `Do` mặc định trả `ErrServiceRoute` với nil result; client
 không theo handoff. Generate không thành công với reception-only. Hold phải
 bỏ hoàn toàn `output` (kể cả null cũng bị từ chối), không trả result.
 Completed chỉ mô tả request HTTP, không chứng minh reception/handoff/service
@@ -124,6 +124,48 @@ protocol 0.2.0 không có chứng thực provider. Harness upstream còn hỗ tr
 provider tùy chọn nên transport thành công không chứng minh inference local.
 
 ## Tích hợp chưa thực hiện
+
+### Dispatch service có xác thực, chưa triển khai (2026-09-15)
+
+`DoForService` trả đề xuất service đã kiểm tra cho Intern service; bản thân
+client không dispatch. `Do` và generation preflight vẫn trả `ErrServiceRoute`
+với nil result. Service chỉ dùng đường mới khi có `ServiceDispatcher`.
+Chỉ `mcavoy@lab` và `pam@gus` được phép. Persona vẫn xử lý cục bộ; dispatcher
+từ chối mọi tuyến khác. Smart-home, đích lạ, dữ liệu restricted/secret và yêu
+cầu điều khiển nhà bị giữ custody. Unknown chỉ được tiếp nhận cục bộ, cần
+phân loại public/business rõ ràng trước khi gửi sang authority.
+
+Bật runtime cần cả `GUS_INTERN_DISPATCH_TOKEN` và
+`GUS_INTERN_DISPATCH_PRINCIPAL`, với khóa do Director cấp cho principal hiện có
+`fleet-dispatch@dru`, `fleet-dispatch@gus` hoặc `fleet-dispatch@lab`. Thay đổi
+này không cấp khóa. `GUS_INTERN_DISPATCH_URL` tùy chọn phải khớp chính xác
+`http://100.115.27.81:7370`, cũng là mặc định. Thiếu khóa hoặc cấu hình sai
+không tạo dispatcher mặc định, không gọi mạng authority. Xóa token sau khi
+khởi tạo cũng chặn trước khi gửi. Không lấy khóa provider, khóa client khác,
+keychain, proxy hoặc redirect làm dự phòng. `DispatchConfig` cho phép inject
+endpoint/principal/token source; test thay transport riêng, không nới URL.
+
+`POST /dispatch` hiện có dùng Bearer và `X-GUS-Principal`. JSON gồm `task_id`
+và `request_id` bằng OS run ID gốc, `title`, `task` chỉ chứa input đã được duyệt,
+`source=intern`, `classification=PUBLIC|INTERNAL`, `dry_run=false`, và
+`requirements` ràng buộc node/role service cùng giới hạn thực thi. Chỉ một
+request, không retry, fan-out ngang hàng, queue hoặc listener mới. Không gửi
+output/reasoning bridge, lịch sử hoặc bộ nhớ persona. Giữ kiểm tra final-only
+và thời hạn voice grant; không chứng thực inference phía sau hoặc giao việc.
+
+Chỉ chấp nhận HTTP 200/202 JSON với `ok=true`, `task_id` khớp và
+`status=accepted|queued`. Từ chối completion/delivery kể cả `REPORTED_COMPLETE`;
+`delivered` nếu có phải là false. Giới hạn kích thước, từ chối khóa JSON trùng
+và JSON dư. Nội dung authority bị bỏ, không đưa vào kết quả, lỗi hoặc receipt.
+Lỗi không chứa khóa, lỗi token source/transport hoặc response body.
+Kết quả cục bộ có `scope=service_dispatch`, `state=accepted|queued`, receipt
+`dispatch` giữ `run_id`, `bridge_run_id`, `task_id`, đích, status và
+`delivered=false`. Đây là xác nhận cục bộ kết thúc, không phải hoàn tất tác vụ;
+TTL kết quả không đổi. Lỗi authority đánh dấu remote outcome unknown, không
+tự retry. Mã authority đã kiểm tra hiện trả `REPORTED_COMPLETE` khi worker
+báo thành công, nên sẽ bị hợp đồng nghiêm ngặt này từ chối. Cấp khóa, kiểm tra
+response tương thích và triển khai vẫn chờ Director. Xem
+[biên bản dispatch](../../receipts/intern-service-dispatch-2026-09-15.md).
 
 Gateway đầy đủ còn bị chặn theo [kiểm toán hợp đồng runtime](intern-runtime-contract_vi.md):
 custody xuyên suốt, ảnh/session/persona/skill và activation/configuration có
