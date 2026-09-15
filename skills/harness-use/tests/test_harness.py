@@ -16,6 +16,10 @@ class HarnessSkillTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.path = Path(self.temp.name) / 'voice.json'
+        self.connection = {'paired': True, 'connected': True, 'machine_id': 'machine'}
+        api_mock = patch.object(harness, 'api', side_effect=lambda path: dict(self.connection))
+        api_mock.start()
+        self.addCleanup(api_mock.stop)
         self.mutations = []
         self.uncertain = False
 
@@ -30,6 +34,37 @@ class HarnessSkillTests(unittest.TestCase):
         if kind == 'receipt.get':
             return {'receipt': {'state': 'started'}}
         return {'state': 'running', **fields}
+
+    def test_disconnected_actions_do_not_dispatch_or_change_saved_state(self):
+        original = {'voice': {'agentId': 'a', 'machineId': 'machine',
+                              'pending': {'machineId': 'machine', 'idempotencyKey': 'old'}}}
+        self.path.write_text(json.dumps(original))
+        before = self.path.read_bytes()
+        for paired, code in [(False, 'HARNESS_UNPAIRED'), (True, 'HARNESS_OFFLINE')]:
+            self.connection.update(paired=paired, connected=False)
+            for action in ['list', 'select', 'send', 'stop', 'status', 'recap', 'answer', 'receipt']:
+                with self.subTest(paired=paired, action=action), patch.object(harness, 'request') as request:
+                    with self.assertRaisesRegex(ValueError, code):
+                        harness.run(action, {'agentId': 'a', 'text': 'work'}, self.path)
+                    request.assert_not_called()
+                    self.assertEqual(self.path.read_bytes(), before)
+
+    def test_offline_send_does_not_reserve_and_reconnect_allows_explicit_send(self):
+        self.connection['connected'] = False
+        with patch.object(harness, 'request', self.request):
+            with self.assertRaisesRegex(ValueError, 'HARNESS_OFFLINE'):
+                harness.run('send', {'agentId': 'a', 'text': 'work'}, self.path)
+            self.assertFalse(self.path.exists())
+            self.connection['connected'] = True
+            self.assertEqual(self.mutations, [])
+            harness.run('send', {'agentId': 'a', 'text': 'work'}, self.path)
+            self.assertEqual(len(self.mutations), 1)
+
+    def test_local_resolution_and_empty_receipt_work_offline(self):
+        self.connection.update(paired=False, connected=False)
+        self.assertEqual(harness.run('receipt', {}, self.path), {'receipt': None, 'pending': False})
+        result = harness.run('resolve', {'resolution': 'do_not_retry'}, self.path)
+        self.assertFalse(result['resent'])
 
     def test_no_implicit_target(self):
         with patch.object(harness, 'request', self.request):
@@ -134,7 +169,7 @@ class HarnessSkillTests(unittest.TestCase):
 
     def test_receipt_resolves_pending_without_a_second_send(self):
         self.uncertain = True
-        with patch.object(harness, 'request', self.request), patch.object(harness, 'api', return_value={'machine_id': 'machine'}):
+        with patch.object(harness, 'request', self.request), patch.object(harness, 'api', return_value={'paired': True, 'connected': True, 'machine_id': 'machine'}):
             with self.assertRaises(OSError):
                 harness.run('send', {'agentId': 'a', 'text': 'do work'}, self.path)
             self.assertIn('pending', json.loads(self.path.read_text())['voice'])
@@ -179,7 +214,7 @@ class HarnessSkillTests(unittest.TestCase):
     def test_receipt_marks_an_uncertain_response_route_as_complete(self):
         self.uncertain = True
         response = {'run_id': 'device-chat-42', 'channel': 'web'}
-        with patch.object(harness, 'request', self.request), patch.object(harness, 'api', return_value={'machine_id': 'machine'}):
+        with patch.object(harness, 'request', self.request), patch.object(harness, 'api', return_value={'paired': True, 'connected': True, 'machine_id': 'machine'}):
             with self.assertRaises(OSError):
                 harness.run('send', {'agentId': 'a', 'text': 'do work', 'response': response}, self.path)
             self.uncertain = False
