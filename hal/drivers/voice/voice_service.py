@@ -400,16 +400,14 @@ class VoiceService:
 
     @property
     def live_active(self) -> bool:
-        """Whether a live (full-duplex) session currently owns the conversation.
-
-        Read by /voice/speak-queue: while this is True the live session IS the
-        conversation, and an agent reply pushed in from os-server would be a
-        SECOND agent talking over it — device-observed 2026-09-08 on lamp-ee17,
-        Gemini (Puck) and the main agent (ElevenLabs) held separate overlapping
-        conversations through the same speaker for 484s, each feeding the other
-        through the mic.
-        """
+        """Whether the full-duplex microphone session is open."""
         return self._live_running
+
+    @property
+    def live_speaker_busy(self) -> bool:
+        """LIVE is actually playing a reply, not merely keeping the mic open."""
+        return bool(self.live_active and self._tts is not None
+                    and self._tts.realtime_speaking)
 
     @property
     def listening(self) -> bool:
@@ -1103,16 +1101,16 @@ class VoiceService:
                     return "skip"
             except Exception as e:
                 logger.warning("[live] speech gate failed, allowing: %s", e)
-        # Gaze grants the existing focus window before this decision. Only
-        # enforce an armed gate; shadow mode remains observation-only.
+        # Gaze or a button may already have granted focus. Otherwise use the
+        # regular STT turn to recognize and confirm a spoken wake phrase before
+        # any live audio is sent. Skipping capture here would also discard
+        # "Hello Lamp"; opening live would bypass its partial/final wake gate.
         if (
             hal_config.WAKEWORD_ENABLED
-            and hal_config.GAZE_WAKE_ENABLED
-            and not hal_config.GAZE_WAKE_SHADOW
             and not self._wakeword_focus.is_active()
         ):
-            logger.info("[live] gaze gate closed — waiting for gaze or explicit focus")
-            return "skip"
+            logger.info("[live] wake focus closed — using STT to check the wake phrase")
+            return "turn"
 
         self._realtime.prepare_turn()
 
@@ -1166,7 +1164,7 @@ class VoiceService:
         return self._np.zeros_like(data)
 
     def _live_emotion_addressed(self, text: str, harness_voice=None) -> bool:
-        """Mirror the regular turn's addressing gate for emotion only."""
+        """Mirror the regular turn's addressing gate for LIVE reactions."""
         harness_listening = bool(
             harness_voice and harness_voice.get("enabled")
             and not harness_voice.get("unavailable", False)
@@ -1177,6 +1175,13 @@ class VoiceService:
             False,
             self._wakeword_focus.is_active(),
         )
+
+    def _live_stop_output(self) -> None:
+        """A LIVE output reset/session exit must not stop a main-agent reply."""
+        if self._tts is None:
+            return
+        if self._tts.realtime_speaking:
+            self._tts.stop(preserve_main_queue=True)
 
     def _live_out_pump(self, generation: int, harness_voice=None, cues=None) -> None:
         """Play what the model says, for as long as the session lasts.
@@ -1192,6 +1197,49 @@ class VoiceService:
         on a quiet stretch, when receive() times out having yielded nothing.
         Both simply mean "go round again and wait for the user".
         """
+        input_text = {}
+        input_focus = {}
+        addressed_inputs = set()
+        focus_refreshed = set()
+        rejected_inputs = set()
+        harness_listening = bool(
+            harness_voice and harness_voice.get("enabled")
+            and not harness_voice.get("unavailable", False)
+        )
+        focus = getattr(self, "_wakeword_focus", None)
+        focus_at_start = bool(focus and focus.is_active())
+
+        def classify_input(key, text):
+            if not text.strip():
+                return ""
+            if key not in input_focus:
+                input_focus[key] = bool(focus_at_start or (focus and focus.is_active()))
+            # Same leading-wake-phrase classifier as the regular turn path.
+            try:
+                _, kind = self._decorator.classify_wake_word(text)
+            except Exception:
+                logger.debug("[live] wake classification unavailable", exc_info=True)
+                return ""  # Diagnostics must never block speech or delegation.
+            if (kind == "voice" and hal_config.WAKEWORD_ENABLED
+                    and input_focus[key] and not harness_listening):
+                kind = "voice_followup"
+            return kind
+
+        def refresh_focus(key, text=""):
+            # Mirror regular turns: only accepted, addressed user speech
+            # extends follow-up focus. Provider output alone is not a wake.
+            text = text or input_text.get(key, "")
+            if (not key or key in focus_refreshed or key in rejected_inputs
+                    or not text.strip() or focus is None
+                    or not hal_config.WAKEWORD_ENABLED or harness_listening):
+                return
+            if not (focus_at_start or key in addressed_inputs
+                    or self._live_emotion_addressed(text, harness_voice)):
+                return
+            focus_refreshed.add(key)
+            if focus.refresh():
+                logger.info("[live] Wake-word follow-up focus refreshed for %.0fs",
+                            hal_config.WAKEWORD_FOLLOWUP_TIMEOUT_S)
         metrics = LiveVoiceMetrics()
         history = LiveHistory(self._sensing_sender, harness_voice, self.strip_rt_markers)
         while self._live_running and generation == self._live_generation:
@@ -1209,6 +1257,18 @@ class VoiceService:
                     if not (self._live_running and generation == self._live_generation):
                         break
                     if isinstance(out, UserSpeechOutput):
+                        # A real new addressed utterance can interrupt main TTS;
+                        # opening the mic or resetting model output cannot.
+                        if out.turn_id and out.transcript.strip():
+                            text = merge_stt_hypothesis(
+                                input_text.get(out.turn_id, ""), out.transcript,
+                            )
+                            input_text[out.turn_id] = text
+                            if (out.turn_id not in addressed_inputs
+                                    and self._live_emotion_addressed(text, harness_voice)):
+                                addressed_inputs.add(out.turn_id)
+                                if self._tts is not None and self._tts.speaking:
+                                    self._tts.stop()
                         if cues is not None:
                             cues.input(
                                 out.turn_id, out.endpoint_at, transcript=out.transcript,
@@ -1219,9 +1279,14 @@ class VoiceService:
                             # not another speech observation for metrics/history.
                             continue
                         iid = metrics.speech(out.turn_id, out.endpoint_at, out.method)
-                        history.input(out.turn_id, out.transcript, iid)
+                        history.input(
+                            out.turn_id, out.transcript, iid,
+                            classify_input(out.turn_id, input_text.get(out.turn_id, out.transcript)),
+                        )
                         continue
                     if isinstance(out, ExecutionOutput):
+                        if out.execution_completed:
+                            refresh_focus(out.user_turn_id)
                         if cues is not None:
                             cues.finish(out.user_turn_id)
                         history.complete(out.user_turn_id, out.execution_completed)
@@ -1230,6 +1295,7 @@ class VoiceService:
                         )
                         continue
                     if isinstance(out, RejectSignal):
+                        rejected_inputs.add(out.user_turn_id)
                         if cues is not None:
                             cues.finish(out.user_turn_id)
                         history.discard(out.user_turn_id)
@@ -1264,7 +1330,9 @@ class VoiceService:
                             ),
                             harness_voice=harness_voice,
                             interaction_id=iid,
+                            voice_turn_type=classify_input(key, out.transcript or input_text.get(key, "")),
                         )
+                        refresh_focus(key, out.transcript)
                         break
                     if isinstance(out, EndCallSignal):
                         # Do NOT tear down here. The farewell is normally
@@ -1284,6 +1352,7 @@ class VoiceService:
                         # The first output transcript also sends an audio reset;
                         # that is not evidence of a user asking us to stop.
                         if out.reason == "server_interrupt":
+                            rejected_inputs.add(out.user_turn_id)
                             if cues is not None:
                                 cues.finish(out.user_turn_id)
                             history.discard(out.user_turn_id)
@@ -1297,8 +1366,7 @@ class VoiceService:
                             # behavior; instrumentation must not add a new stop.
                             continue
                         history.reset_output(out.user_turn_id)
-                        if self._tts is not None:
-                            self._tts.stop()
+                        self._live_stop_output()
                         if native_started:
                             self._tts.native_play_end(transcript)
                             native_started = False
@@ -1365,6 +1433,8 @@ class VoiceService:
                                 self._tts.speak_queue(sentence, turn_id=iid, realtime_reply=True)
                             sentence_buf = ""
                         continue
+                if getattr(self._realtime, "execution_completed", False) is True:
+                    refresh_focus(getattr(self._realtime, "execution_turn_id", ""))
                 if cues is not None:
                     terminal_key = getattr(self._realtime, "execution_turn_id", "")
                     if terminal_key:
@@ -1599,8 +1669,7 @@ class VoiceService:
             self._listening = False
             self._realtime.set_live_active(False)
             pump.join(timeout=2.0)
-            if self._tts is not None:
-                self._tts.stop()
+            self._live_stop_output()
             logger.info(
                 "[live] session END after %.0fs — %d frames, %d during playback, "
                 "%d substituted",
@@ -1665,7 +1734,12 @@ class VoiceService:
         # Snapshot before any realtime I/O; a toggle cannot move this capture
         # between agents. OS validates the same generation on the final POST.
         harness_voice = read_voice_mode() if harness_voice is None else harness_voice
-        realtime_allowed = not bypass_realtime(harness_voice)
+        # Live providers use automatic endpointing for the whole process.
+        # A gated opener/fallback must not flush a buffered utterance through
+        # the manual commit path (which can double-commit with server VAD).
+        # STT still confirms the wake phrase and dispatches to the main agent;
+        # its focus window allows the next capture to enter full-duplex live.
+        realtime_allowed = not voice_cfg.LIVE_MODE and not bypass_realtime(harness_voice)
         # Harness explicitly owns voice input for this capture. Do not extend
         # the normal wake window; disabling the mode restores its usual gate.
         harness_listening = harness_voice["enabled"] and not harness_voice.get("unavailable", False)

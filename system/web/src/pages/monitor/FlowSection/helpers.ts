@@ -784,6 +784,17 @@ export function groupIntoTurns(events: DisplayEvent[]): Turn[] {
     const ownEvents = turn.runId
       ? turn.events.filter((event) => extractEventRunId(event) === turn.runId)
       : [];
+    // Classification belongs to this input, never to a neighboring run or its
+    // history sync. Keep the event type intact for routing and grouping.
+    for (const event of ownEvents) {
+      const detail = event.detail as FlowEventDetail | undefined;
+      if (detail?.node !== "sensing_input" && detail?.node !== "realtime_response") continue;
+      const voiceTurnType: unknown = detail.data?.voice_turn_type;
+      if (voiceTurnType === "voice" || voiceTurnType === "voice_command" || voiceTurnType === "voice_followup") {
+        turn.voiceTurnType = voiceTurnType;
+        break;
+      }
+    }
     if (ownEvents.some((event) => {
       const detail = event.detail as FlowEventDetail | undefined;
       return detail?.node === "sensing_input" &&

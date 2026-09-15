@@ -47,7 +47,8 @@ export function TurnBadge({ turn, pairTint, userPhotos, onViewPipeline }: {
   const statusColor = turn.status === "done" ? "var(--lm-green)"
     : turn.status === "error" ? "var(--lm-red)"
     : "var(--lm-amber)";
-  const SourceIcon = TYPE_LUCIDE[turn.type] ?? Circle;
+  const displayType = turn.voiceTurnType ?? turn.type;
+  const SourceIcon = TYPE_LUCIDE[displayType] ?? Circle;
   // Source icon takes the turn's source-category color (mic / cam / channel /
   // web / cron / system) instead of a dim grey, so it stands out and doubles
   // as a quick at-a-glance source cue. Falls back to teal for unmapped types.
@@ -144,7 +145,7 @@ export function TurnBadge({ turn, pairTint, userPhotos, onViewPipeline }: {
         <span style={{
           fontSize: 10, fontWeight: 700, color: "var(--lm-text)",
           textTransform: "uppercase" as const,
-        }}>{history ? "History sync" : turn.type}</span>
+        }}>{history ? "History sync" : displayType}</span>
         <span style={{
           fontSize: 8, padding: "1px 5px", borderRadius: 3,
           background: `${pathColor}18`, color: pathColor, fontWeight: 700,

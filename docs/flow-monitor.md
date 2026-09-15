@@ -488,3 +488,7 @@ Vietnamese summary: `docs/vi/flow-monitor_vi.md`.
 Harness final delivery records `harness_response` in flow JSONL with the original device run ID and complete `text`. Web Chat uses this event to recover pending results after SSE disconnects or page reloads. Live delivery still emits `chat_response` with state `final`.
 
 Realtime handled voice and main-agent history sync use separate IDs: `device-realtime-…` for the original exchange, `device-chat-context-…` for synchronization. The persisted `realtime_response` closes the original card and supplies its question/answer; the History sync card follows its own lifecycle. `history_run_id` links the records without merging them. Previously stored shared-ID events retain their existing combined display.
+
+### Voice command and follow-up labels
+
+`sensing_input` and `realtime_response` can carry `data.voice_turn_type` (`voice`, `voice_command`, or `voice_followup`). Flow Monitor uses this optional field only for the turn badge; event type, run grouping, realtime/main path, queueing and cancellation remain unchanged. A wake phrase uses the same HAL classifier in LIVE ON/OFF. An authorized LIVE follow-up keeps its wake-focus classification even if focus expires before the provider replies. Realtime-handled replies retain `voice_agent_handled` for silent history synchronization. Legacy rows without metadata keep their original label; history sync does not inherit a neighboring voice turn's classification.

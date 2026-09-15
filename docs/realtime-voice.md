@@ -44,6 +44,26 @@ STT pipeline. At end-of-turn the model either:
   This is deliberately different from a silent completion: silence, timeout,
   and transport failure still use the normal main-agent fallback.
 
+### Addressed speech before persona or actions
+
+All realtime provider prompts give the addressed-speech policy priority over
+`DEVICE IDENTITY` / SOUL instructions to respond to ambient speech, show empathy,
+or express emotion. A meaningful question, a name mentioned to someone else,
+or an open follow-up window does not establish that someone is talking to the
+device. Genuine conversational follow-ups do not need to repeat its name.
+Confidently overheard speech calls only `reject_turn` when available, with no
+voice/text, emotion, movement, look, or delegation. The tool description allows
+rejecting an overheard request even when the device could fulfill it. Uncertainty,
+silent completion, and errors retain the existing fallback behavior.
+
+Lamp's `robots/lamp/SOUL.md` applies the same addressed-speech prerequisite to
+main-agent voice and `[ambient]` messages. Overheard speech or an unclear
+addressee requires exactly `NO_REPLY`, without tool calls or physical/emotional
+reactions. This overrides the persona's general reaction and expression rules.
+These are model instructions, not a deterministic speaker-verification gate;
+real-room conversation testing is still needed. Existing device SOUL files must
+receive the updated policy before the main agent can use it.
+
 The `delegate_to_main` tool is registered automatically by the orchestrator
 (`orchestrator.py`, `DELEGATE_TOOL`).
 
@@ -1129,11 +1149,42 @@ so it must be settled before those models are defined. An explicit non-`off`
 value is left alone. Getting this wrong produces a device that streams audio
 forever and never answers.
 
-### Gaze-gated live entry
+### Main-agent speech during LIVE
 
-When `HAL_WAKEWORD_ENABLED` and `HAL_GAZE_WAKE` are enabled and gaze shadow mode is off, local VAD alone cannot open live audio. The speech-start gaze check grants the existing focus window; `_live_decision` requires that window before preparing the realtime session or sending microphone frames. A still-active focus granted by gaze, a button or a prior wake also permits entry. Missing/expired focus returns to local VAD without falling through to STT. The gate is checked only at entry: server VAD continues to own turn-taking inside an accepted live session. After hangup, the next entry checks focus again.
+`live_active` still means the microphone session is open. The separate
+`live_speaker_busy` property identifies active realtime playback (native PCM or
+a synthesized realtime reply); an open idle mic does not suppress main TTS.
+`/voice/speak-queue` evaluates that property during queue admission. A main
+reply arriving during LIVE playback waits in the existing HAL pre-synthesis
+queue rather than preempting LIVE or returning `suppressed`. Native, streamed
+text and cached playback drain waiting speech after releasing their output.
+A newer main run replaces older queued main segments; delayed older runs keep
+the existing stale-turn rejection. No OS queue or retry mechanism is added.
 
-Gaze disabled, wake-word gating disabled, or `HAL_GAZE_SHADOW=true` preserves the existing VAD-only live entry. Shadow `WOULD_WAKE` is observational and does not enforce this gate. This does not add spoken wake-phrase recognition to live mode. Harness voice continues through its existing separate route.
+LIVE output reset/session cleanup preserves pending main replies. A new
+non-empty addressed input stops playback once per provider turn and clears the
+queue; an explicit stop also clears it, including speech retained by a preceding
+model reset. Existing OS cancellation policy remains unchanged. Confirmed-input
+interruption requires `UserSpeechOutput`: Gemini emits it; OpenAI/Qwen adapters
+currently do not. Mic streaming, server VAD, delegate routing and LIVE OFF
+admission remain unchanged. Playback handoff tests use fake audio; acoustic
+barge-in still needs a device test.
+
+### Wake-word and focus gate at live entry
+
+When `HAL_WAKEWORD_ENABLED` is enabled, local VAD alone cannot open live audio. After the music/noise checks, `_live_decision` requires an active focus window before preparing a live realtime session. Focus granted by the speech-start gaze check, a button or a prior accepted wake-word turn permits entry. If focus is missing or expired, the decision returns `turn` and uses the ordinary `_stream_session` STT path, independently of whether gaze is enabled or in shadow mode.
+
+That STT path gives a provisional listening cue when a partial matches a wake phrase such as “Hello Lamp”; the final/assembled transcript must confirm it before normal turn processing. A valid dispatched turn refreshes the existing follow-up focus window. With Live ON, the STT opener/fallback sends the authorized final transcript to the main agent; `_stream_session` disables its regular realtime path. The live provider already uses automatic turn detection, so manually committing a regular realtime turn could submit it twice. There is no handoff to live on a partial. The next VAD trigger can open full-duplex live while focus is active.
+
+Disabling wake-word gating permits VAD-only live entry. Disabling gaze or setting `HAL_GAZE_SHADOW=true` does not bypass the wake-word gate: shadow `WOULD_WAKE` is observational and grants no focus. The gate is checked only at entry; server VAD owns turn-taking inside an accepted live session. After hangup, the next entry checks focus again. Harness voice continues through its existing separate route.
+
+Accepted LIVE follow-ups also refresh `HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S`,
+once at a confirmed successful provider terminal or after delegation. The turn
+must contain user speech and be addressed (including focus latched at live
+entry). Rejected/interrupted turns, receive timeouts, empty input, model-only
+output and Harness voice do not refresh it. A duplicate terminal cannot extend
+it again. The deadline remains finite: after the configured idle interval,
+the next session needs a wake phrase or another explicit focus grant.
 
 ### Completed Gemini live history
 
@@ -1286,7 +1337,7 @@ session. These are product trade-offs, not bugs:
 | lost | consequence |
 |---|---|
 | STT transcript | no `[TURN CONTEXT]`, no transcript-based filters |
-| wake word | confirmed from STT text, so spoken wake phrases are not recognized in live; the armed gaze/focus gate can restrict VAD entry |
+| per-turn wake word | checked at entry through STT when wake-word gating is enabled and focus is absent; an accepted wake-word turn opens focus for the next live entry. No local STT wake-word checks run inside an accepted live session |
 | speaker ID, speech emotion | a session produces neither |
 | local STT on delegation | `delegate_to_main` ends the session and forwards `[voice-instruction]` + Gemini's own input transcription as `[transcript]` (`FunctionCallOutput.user_transcript` → `DelegateSignal.transcript`, read by `_live_out_pump`); the main agent's reply plays after hangup. Providers without input transcription forward the instruction alone |
 
@@ -1680,7 +1731,7 @@ is a top-level `config.json` flag:
 | Variable | Default | Notes |
 |----------|---------|-------|
 | `HAL_REALTIME_ENABLED` | `true` | Master gate for the realtime pipeline |
-| `wakeword` | ROBOT.md `voice.wakeword` on a fresh config, else `false` | Top-level config-file wake-word gate. When true, a matching interim transcript is provisional only: HAL commits buffered audio to realtime or forwards a command only after an STT **final** result confirms a configured wake phrase. The transcript is split into sentences (`.` `!` `?`) and the phrase is accepted at the start **or the end** of any sentence; mid-sentence occurrences are rejected. The confirmation re-checks the assembled, still-punctuated transcript so the `\w+`-only merge step cannot retract a gate a partial opened. If that exact re-check fails but a partial had already matched exactly, the name alone may differ by one letter and the gate still confirms: STT rewrites its own hypothesis in the final, and on lamp-0c89 (04/09/2026) the partial `hello lamp` came back as `Hello, lamb.`, which dropped the whole turn — no realtime turn, no thinking cue, and the question fell through to the much slower main agent. The prefix (`hello`, `hey`, …) must still match exactly and the loose rule can never OPEN a gate, only confirm one an exact partial opened, so a near-miss word in ambient speech still wakes nothing. It is logged as `Wake-word confirmed with a one-letter STT slip` so the rate stays countable — many of them means the STT boost terms are not doing their job. The supported prefixes are `hello`, `hey`, `hi`, `alo`, `okay`, `ok`, and `wake up`, applied to the permanent common alias (`hey autonomous`), device type (`hey lamp`), and current agent name (`hey Luna`). A runtime rename updates only the agent-name aliases. Bare names and other prefixes do not arm the gate. A rejected utterance is discarded and its transient listening LED restores to the normal resting state; it never leaves the persistent idle effect active. A confirmed turn opens the follow-up focus window; turns in that window are forwarded as `voice_followup` without another phrase. Every authorized turn dispatches to os-server: a spoken realtime reply becomes a silent `voice_agent_handled` sync event; unavailable, silent, failed, or delegated realtime follows the normal path. If realtime is disabled, the confirmed final transcript follows the normal os-server path. Missing/false preserves the pre-gate always-listening flow unchanged. On a config.json os-server creates, the initial value comes from the body's `voice.wakeword` (see Wake-word gate above); a config loaded without the key stays `false`. HAL restarts after a local Settings save or MQTT `wakeword.gate`. |
+| `wakeword` | ROBOT.md `voice.wakeword` on a fresh config, else `false` | Top-level config-file wake-word gate. When true, a matching interim transcript is provisional only: HAL commits buffered audio to realtime or forwards a command only after an STT **final** result confirms a configured wake phrase. The transcript is split into sentences (`.` `!` `?`) and the phrase is accepted at the start **or the end** of any sentence; mid-sentence occurrences are rejected. The confirmation re-checks the assembled, still-punctuated transcript so the `\w+`-only merge step cannot retract a gate a partial opened. If that exact re-check fails but a partial had already matched exactly, the name alone may differ by one letter and the gate still confirms: STT rewrites its own hypothesis in the final, and on lamp-0c89 (04/09/2026) the partial `hello lamp` came back as `Hello, lamb.`, which dropped the whole turn — no realtime turn, no thinking cue, and the question fell through to the much slower main agent. The prefix (`hello`, `hey`, …) must still match exactly and the loose rule can never OPEN a gate, only confirm one an exact partial opened, so a near-miss word in ambient speech still wakes nothing. It is logged as `Wake-word confirmed with a one-letter STT slip` so the rate stays countable — many of them means the STT boost terms are not doing their job. The supported prefixes are `hello`, `hey`, `hi`, `alo`, `okay`, `ok`, and `wake up`, applied to the permanent common alias (`hey autonomous`), device type (`hey lamp`), and current agent name (`hey Luna`). A runtime rename updates only the agent-name aliases. Bare names and other prefixes do not arm the gate. A rejected utterance is discarded and its transient listening LED restores to the normal resting state; it never leaves the persistent idle effect active. A confirmed turn opens the follow-up focus window; turns in that window are forwarded as `voice_followup` without another phrase. Every authorized turn dispatches to os-server: a spoken realtime reply becomes a silent `voice_agent_handled` sync event; unavailable, silent, failed, or delegated realtime follows the normal path. If realtime is disabled, or Live ON falls back to STT before live entry, the confirmed final transcript follows the normal os-server/main-agent path. Missing/false preserves the pre-gate always-listening flow unchanged. On a config.json os-server creates, the initial value comes from the body's `voice.wakeword` (see Wake-word gate above); a config loaded without the key stays `false`. HAL restarts after a local Settings save or MQTT `wakeword.gate`. |
 | `HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S` | `20` | Idle seconds for the short post-command focus window. Each accepted `voice_command` or `voice_followup` refreshes it. `0` disables follow-ups and requires a wake phrase for every mic session. Ignored when `wakeword` is false. |
 | `HAL_ENDPOINT_SILENCE_S` | `0.8` | Silence needed after STT final arrival, only while `final_ts >= last_confirmed_speech`. Continued confirmed speech after that final restores the 2.5s fallback until a new final arrives. `0` disables the short clock, leaving `HAL_SILENCE_TIMEOUT`. |
 | `HAL_SILENCE_VAD_ENABLED` | `true` | Require Silero to confirm speech before the end-of-turn silence clock is refreshed. RMS remains the cheap pre-gate; set `false` to fall back to pure-RMS silence detection. |
@@ -1761,3 +1812,5 @@ The current request or follow-up is forwarded in the language the user just spok
 A subsequent isolated Gemini 3.1 Live synthetic-audio comparison reused identical PCM clips across the baseline and final prompt/tool definitions. The final delegate messages were “Ghi vào Notes là sáng mai tưới cây.”, “Mở Airbnb tìm chỗ ở Đà Nẵng giúp mình.”, and the follow-up “cuối tuần này hai người”. The baseline had changed the Notes request into “Remember to water the plants tomorrow morning.”, losing the named app and changing language. The Airbnb follow-up used the same provider session after a controlled `[TTS HISTORY]` clarification; the previous server completion boundary and new audio commit were confirmed. This establishes the observed delegation behavior for those synthetic clips, not microphone/wake-word performance, an actual main-agent clarification, or main-agent/desktop end-to-end completion. The isolated final result was recorded at `/tmp/buddy-rt-final/result.json` on the test device; no production prompt or service was changed by that evaluation.
 
 Realtime and Harness-only voice now share the `system/externalhistory` journal and silent delivery worker. HAL still sends `voice_agent_handled` with `[HANDLED]` / `[REPLY]`; OS atomically persists the completed realtime exchange before acknowledging it and resumes never-sent pending history after restart. The existing speaker-supersession hook runs before persistence, and silent/TTS suppression is unchanged. Busy runtimes with active-turn steering retain that capability for realtime history; others wait durably for idle. Ambiguous sends are retained as `uncertain`, not automatically replayed. Flow Monitor displays the sync as **History sync · Realtime → Main**, with the original question/answer as Context. See [external conversation history](os-server.md#external-conversation-history).
+
+LIVE input classification is also sent as observational `voice_turn_type` metadata. It uses the regular wake-phrase classifier and the focus that authorized the input. Direct realtime answers retain the `voice_agent_handled` routing event, while the monitor can display command/follow-up independently.

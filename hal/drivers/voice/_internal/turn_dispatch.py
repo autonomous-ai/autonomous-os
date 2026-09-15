@@ -133,6 +133,7 @@ def dispatch_turn(
     identity=None,
     interaction_id: str = "",
     harness_voice: dict | None = None,
+    voice_turn_type: str = "",
 ):
     """Identify the speaker, send the turn to the OS server, and submit SER.
 
@@ -207,6 +208,8 @@ def dispatch_turn(
     final_text, event_type = decorator.classify_wake_word(combined)
     if event_type_override is not None:
         event_type = event_type_override
+    # Keep how this utterance was admitted even when realtime handled it.
+    routing_kwargs["voice_turn_type"] = voice_turn_type or event_type
     user = UNKNOWN_USER_LABEL
 
     # One line per turn saying where it went and why. Every branch below leads
