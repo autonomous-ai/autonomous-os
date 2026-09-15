@@ -81,6 +81,13 @@ DELEGATE_TOOL_DESCRIPTION: str = (
     "skill. This includes general web research such as asking agent temp to find "
     "restaurants; do not answer, search, or claim results yourself. Never perform "
     "that agent task on the device. "
+    "Finding, locating or looking for a physical object or a person — in ANY "
+    "phrasing: 'find my keys', 'where is my cup', 'can you help me find my pen', "
+    "'do you see my pen anywhere', 'look around for X', 'where are you' — is a "
+    "device action performed with the camera and servos, never a conversation: "
+    "delegate it with the user's words. Do not answer with guesses, questions "
+    "about what it looks like or where they last had it, offers to look, or "
+    "claims about what you can see. "
     "Clearly heard answers, corrections, and stop requests for a known pending task "
     "also delegate, even without an action verb. Use conversation context to recognize "
     "the task, but forward ONLY the current user's faithfully understood words in "
@@ -224,7 +231,11 @@ LOOK_TOOL_DESCRIPTION: str = (
     "the last image, so for ANY present-tense visual question you MUST call this "
     "again — never answer from a previous image, from memory, or from the "
     "conversation, even if you are sure you already know; that is exactly how you "
-    "get it embarrassingly wrong. Do NOT use it for non-visual requests."
+    "get it embarrassingly wrong. Do NOT use it for non-visual requests. Do NOT "
+    "use it to find or locate a specific object or person the user is asking "
+    "about ('where is my pen', 'do you see my keys', 'can you find my cup') — "
+    "that is a search the device performs by moving; delegate_to_main it instead "
+    "of looking and guessing."
 )
 
 # No parameters: the model just signals intent to look; the device grabs the
