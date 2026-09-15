@@ -118,7 +118,9 @@ REJECT_TURN_TOOL_DESCRIPTION: str = (
     "Call this only when you are confident this audio is background noise, "
     "other people's conversation, an incomplete fragment, or otherwise not "
     "addressed to this device. This explicitly drops the turn: never call it "
-    "for a request you could answer or delegate, and never call it merely "
+    "for a request addressed to this device that you could answer or delegate. "
+    "An overheard request is still a valid rejection even if you could fulfill it. "
+    "Never call it merely "
     "because you are uncertain. Keep voice output completely blank."
 )
 
