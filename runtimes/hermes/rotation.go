@@ -58,6 +58,11 @@ func (s *HermesService) rotateConversation() {
 	name := fmt.Sprintf("%s-%d-%d", Conversation, s.bootStamp, seq)
 	s.conversation.Store(name)
 	s.lastResponseID.Store("")
+	s.sessionUUID.Store("")
+	s.steeringMu.Lock()
+	s.managedSession = ""
+	s.managedSessionSet = true
+	s.steeringMu.Unlock()
 	slog.Info("hermes conversation rotated", "component", "hermes", "conversation", name)
 }
 

@@ -8,7 +8,7 @@ hardware markers, Flow Monitor SSE, sensing drain, Telegram fan-out) never knows
 which brain is active.
 
 - **`openclaw`** (default): persistent WebSocket to the OpenClaw daemon. See `docs/os-server.md` + `runtimes/openclaw`.
-- **`hermes`**: HTTP + SSE client against a local Hermes API server (OpenAI *Responses API* style). This doc. Code: `runtimes/hermes/`.
+- **`hermes`**: HTTP + SSE client against a local Hermes API server (native Runs when supported; OpenAI *Responses API* fallback). This doc. Code: `runtimes/hermes/`.
 
 > Source of truth is the code. This documents `runtimes/hermes/` as implemented;
 > keep it in sync on change (EN: this file, VI: `docs/vi/agentic/hermes_vi.md`).
@@ -135,7 +135,29 @@ this, os-server rotates the conversation name:
   gateway's own compression settles, not inside it (same value and reasoning as
   [`codex`](codex.md)).
 
-## 4. Request protocol — `POST /v1/responses`
+## 4. Request protocol — native Runs and Responses fallback
+
+On a server advertising `run_submission`, `run_events_sse`, `run_status`,
+`run_stop`, and `run_steer` through `GET /v1/capabilities`, plus
+`features.runs_idempotency.autonomous_run_events_v1=true`, eligible plain-text
+turns use `POST /v1/runs`. The body carries `input`, `model`, optional
+`instructions`, and the current `session_id`. Admission returns a server
+`run_id`; events arrive through `GET /v1/runs/{run_id}/events` and status through
+`GET /v1/runs/{run_id}`. The device run ID remains the trace/metric identifier.
+Unlike Responses conversation chaining, Runs reloads persisted session history
+by `session_id`; the server resolves compression continuations when opening the
+next run. A native run ID is not a Responses `previous_response_id`.
+
+Servers without these capabilities retain the Responses transport below.
+Once native support is verified, the service keeps that transport for its
+lifetime; a later capability probe failure must not resume stale Responses history.
+On capable servers, images wait for their own native run on the same session;
+the adapter converts Responses `input_text` / `input_image` parts to canonical
+`text` / `image_url` content without dropping images. Image requests are never
+injected through the text-only steer endpoint. Network failure after admission or steering is not permission to
+resubmit the same request: the server may already be executing it.
+
+### Responses fallback — `POST /v1/responses`
 
 `client.go` POSTs a `streamRequest` with `stream: true` and reads an SSE stream:
 
@@ -169,6 +191,25 @@ matches OpenClaw: `activeTurn` flips true on send and false on
 `response.completed`; the completed result carries `response.id` (cached as
 `lastResponseID`) and the full assistant text for send-and-wait callers.
 
+Native Runs names events inside each JSON `data` envelope (`event`), rather
+than an SSE `event:` line. The adapter maps `message.delta` and actual terminal
+`run.completed` / `run.failed` / `run.cancelled` / `run.interrupted` to the
+existing event pipeline. A `run.steered` acknowledgment is not task completion.
+If the stream is lost, a confirmed terminal status can recover the outcome.
+Otherwise the adapter requests stop and polls until execution settles, keeping
+remote ownership while status is unresolved. EOF or a still-running status
+cannot be reported as success.
+
+Native mode also requires the OS compatibility marker above: the unpatched
+Runs API omits tool-call IDs/results and cache details needed by the existing
+handler. The compatibility patch adds `tool.call.started` / `tool.call.completed`
+with real call IDs, arguments and results, plus `cache_read_tokens` and
+`cache_write_tokens` in usage. The adapter reuses the Responses translator and
+maps cache counters into `input_tokens_details`; legacy `tool.started` /
+`tool.completed` progress is ignored to avoid duplicate callbacks. If the patch
+is absent or refuses an unknown source shape, keep Responses until a verified
+patch is installed and the gateway restarts.
+
 Sensing/pose markers are stripped before send using the same regexes as OpenClaw
 (`[snapshot: …]`, `[pose_bucket: …]`, `[pose_worst: …]`) so the agent never sees
 internal hardware markers.
@@ -187,11 +228,37 @@ Identical contract to OpenClaw: while a turn is active (`IsBusy`), passive sensi
 events are dropped or buffered (`QueuePendingEvent`, last-write-wins per type) and
 replayed when idle, so ambient signals never interrupt an in-flight command.
 
+For a managed native run, new eligible user text can be submitted to
+`POST /v1/runs/{run_id}/steer` instead of starting another parallel agent.
+Hermes appends this guidance at an iteration/tool boundary; an accepted request
+does not imply immediate interruption of the current model call or tool.
+`POST /v1/runs/{run_id}/stop` is a distinct cancellation operation, and its
+`stopping` acknowledgment is not a terminal result. Requests that cannot steer, including images, wait for their own native turn
+rather than being dropped or moved to a disconnected Responses conversation.
+
+An accepted steer that arrives too late may return in terminal `pending_steer`.
+It must be retained for a subsequent turn, not counted as work completed by the
+finished run. Multiple pending steer texts are concatenated with newlines by
+Hermes. Device request ownership and execution outcomes remain distinct from
+these transport acknowledgments.
+
+Ordinary runs keep progressive speech. After accepting a steer, the adapter
+holds subsequent text until the terminal result identifies the consumed inputs;
+the newest audible request receives that text through the existing assistant
+buffer before lifecycle end flushes TTS. Earlier voice requests stay silent.
+The shared execution's hardware markers and token usage are emitted once.
+
+After a confirmed explicit stop, the next user request in that conversation
+carries a factual cancellation notice in its input. Hermes can merge consecutive
+user history rows after an interrupted model call; the notice records that the
+unfinished request was cancelled and should not be resumed. Passive requests do not
+consume this notice, and a new conversation does not inherit it.
+
 **Merge-drain (Hermes-only).** OpenClaw's backend has a steer mode
 (`messages.queue.mode=steer`) that merges concurrent messages into the in-flight
-turn at the next model boundary. The Hermes backend (external NousResearch
-service, stateless `POST /v1/responses`) has no such mode, so os-server batches
-client-side instead: when `drainPendingEvents` runs, surviving events are
+turn at the next model boundary. Hermes now uses native steering for eligible
+user text when the installed server supports it; passive sensing still uses
+client-side batching: when `drainPendingEvents` runs, surviving events are
 partitioned by `standaloneDrain`. Standalone events keep their own turn — real
 voice commands (`voice` / `voice_command`, answered directly), web chat (`web_chat`), `voice_agent_handled`
 (silent reply), and image-bearing events. The remaining pure-ambient sensing
