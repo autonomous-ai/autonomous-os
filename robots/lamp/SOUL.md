@@ -64,6 +64,7 @@ You naturally notice when your owner mentions daily routines — meals, coffee, 
 
 When the message comes with a prefix, follow the matching skill strictly — no exceptions, cooldowns are handled by the system:
 
+- `[environment:update]` → `skills/environment/SKILL.md` when the `environment` capability is declared. No mandatory camera, emotion or speech; `NO_REPLY` is valid, including in guard mode.
 - `[sensing:*]` → `skills/sensing/SKILL.md`. Never reply `NO_REPLY` to `presence.enter`.
 - `[activity]` → `skills/wellbeing/SKILL.md`.
 - `[emotion]` / `[speech_emotion]` → `skills/user-emotion-detection/SKILL.md`.
@@ -72,5 +73,7 @@ When the message comes with a prefix, follow the matching skill strictly — no 
 ## Memory discipline
 
 NEVER write a memory rule that overrides a SKILL.md. Blanket forms ("X → always Y") are frequency disguised as rule — describe what happened with conditions instead.
+
+Before writing a memory entry, check it against three questions. Does it name an endpoint, a tool, or a way of calling one? Does it say what to DO rather than what HAPPENED? Would you still follow it on a day the skill says otherwise? Any yes means it belongs in the skill or nowhere. A memory that prescribes an endpoint does not outrank the skill — it just keeps being followed after the skill has changed and the endpoint has moved, which is worse than being wrong once. "Full-room scan works best as curl-driven aim + look per direction" is the shape to refuse: it names endpoints, it prescribes, and it was written the day before the skill it contradicted was fixed.
 
 **Don't duplicate JSONL.** Per-event activity/mood/music data lives in `/root/local/users/{user}/*.jsonl` and `/root/local/flow_events_*.jsonl`. If `cat` of a JSONL can answer it, don't write to memory. Memory is for cross-day insights only.

@@ -710,6 +710,35 @@ class TTSService:
         that produced it (see hal/telemetry/voice_metrics.py)."""
         return self._latest_queue_turn_id
 
+    def set_native_playback_owner(self, owner: str) -> None:
+        """Re-arm measurement for a native segment without touching playback."""
+        try:
+            if self._on_playback_done:
+                self._on_playback_done()
+            self._begin_playback(owner)
+        except Exception:
+            logger.exception("native playback ownership observation failed")
+
+    def has_pending_speech(self, owner: str) -> bool:
+        """Observe owned synthesis/queue work, including gaps before first audio.
+
+        Used only by live suppression measurement; a completed model response
+        can still have speech waiting to drain after its terminal event.
+        """
+        try:
+            if not owner or self._stop_event.is_set():
+                return False
+            with self._pending_queue_lock:
+                return bool(
+                    (self._speaking and owner in (
+                        self._playback_owner, getattr(self, "_pending_playback_owner", ""),
+                    ))
+                    or any(item.owner == owner for item in self._pending_queue)
+                )
+        except Exception:
+            logger.exception("pending speech observation failed")
+            return False
+
     @property
     def last_spoken_text(self) -> str:
         """Last text sent to TTS (for echo cancellation transcript filtering)."""
@@ -859,9 +888,9 @@ class TTSService:
         Lazy import avoids an app_state import cycle (app_state holds the
         TTSService instance)."""
         try:
-            from hal import app_state
+            from hal import app_state, privacy
 
-            return app_state._speaker_muted
+            return app_state._speaker_muted or privacy.speaker_muted
         except Exception:
             return False
 
@@ -1162,12 +1191,15 @@ class TTSService:
                 if not self._pending_queue:
                     break
                 item = self._pending_queue.pop(0)
+                self._pending_playback_owner = item.owner
             try:
                 first = item.frame_queue.get(timeout=15.0)
             except queue.Empty:
+                self._pending_playback_owner = ""
                 logger.warning("Pre-synth no first frame within 15s, abandoning: %s", item.text[:60])
                 continue
             if first is None:
+                self._pending_playback_owner = ""
                 if item.failed:
                     logger.warning("Pre-synth failed for queued speech: %s", item.text[:60])
                 else:
@@ -1183,6 +1215,7 @@ class TTSService:
                 realtime_feedback=item.realtime_feedback,
                 interruptible=item.interruptible,
             )
+            self._pending_playback_owner = ""
             stream.write(first)
             total += len(first)
             while not self._stop_event.is_set():

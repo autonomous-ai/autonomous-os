@@ -41,6 +41,10 @@ lệnh LED đầu tiên, có thể vài phút sau khi boot.
 
 `/led/solid`, `/led/paint`, `/led/effect`, `/led/off` chấp nhận flag tùy chọn `"transient": true`. Khi bật, call sẽ paint strip nhưng **không** ghi đè user LED state. State đã lưu sẽ được restore khi caller (vd Claude Desktop Buddy) xong việc — qua emotion restore timer tự nhiên, hoặc qua `POST /led/restore`. Pulse effect chạy với `transient: true` cũng overlay trên màu user thay vì nền đen.
 
+### Xác nhận Harness voice
+
+Thao tác bật/tắt Harness trên phần cứng đọc `button_led.harness_on` / `button_led.harness_off` trong `robots/lamp/presets.json` qua bảng preset HAL tại lúc chạy. Lamp dùng RGB `[1, 1, 3]` khi bật và `[2, 2, 2]` khi tắt. Cả hai kế thừa pulse 600 ms; có thể override cả `effect` và `duration_ms` trong preset. Hiệu ứng vẫn là transient và hẹn khôi phục LED sau thời lượng cấu hình thêm 100 ms.
+
 ## Solid Color
 
 ```json
@@ -314,3 +318,11 @@ Mỗi emotion preset có LED color riêng:
 Một thiết bị có thể ghi đè các giá trị emotion/scene/aim này (và kích thước vòng LED) mà
 không đổi bảng mặc định dùng chung, qua file `robots/<type>/presets.json`. Đây là cơ chế
 nền tảng — xem [ROBOT-SPEC.md § Per-device presets](../../../contract/ROBOT-SPEC.md#per-device-presets-presetsjson).
+
+### Trạng thái thoại LIVE
+
+Thoại LIVE dùng cùng HW emotion `listening` và helper thinking của realtime
+theo lượt, gồm hành vi LED, màn hình và thân hiện có. Không có lớp LED riêng
+cho LIVE. Emotion cần transcript có chữ và cùng điều kiện hướng tới device;
+tiếng ồn hay mở mic không tự bật emotion. Thinking cần bằng chứng kết thúc
+từ provider, không dùng ước lượng im lặng local. Xem [realtime voice](../../../../docs/vi/realtime-voice_vi.md#phản-hồi-hw-emotion-trong-chế-độ-live) để biết thời điểm gọi và dọn trạng thái.

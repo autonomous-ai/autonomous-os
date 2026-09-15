@@ -11,9 +11,23 @@
       "debounce_ns": 200000000
     },
     "orangepi_sun60": {
-      "chip": 0,
-      "line": 100,
-      "debounce_ns": 200000000
+      "buttons": [
+        {
+          "name": "primary",
+          "chip": 0,
+          "line": 100,
+          "debounce_ns": 200000000,
+          "behavior": "standard"
+        },
+        {
+          "name": "factory_reset",
+          "chip": 0,
+          "line": 99,
+          "debounce_ns": 200000000,
+          "behavior": "factory_reset",
+          "hold_s": 5
+        }
+      ]
     }
   }
 }

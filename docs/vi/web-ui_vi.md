@@ -1,5 +1,9 @@
 # Web UI — Monitor Dashboard
 
+Flow Monitor hiển thị lượt đồng bộ lịch sử thành **History sync · Harness → Main** (hoặc nguồn bên ngoài), với input và câu trả lời dễ đọc, nhãn **Context**. Chỉ dẫn nội bộ và JSON nằm trong chi tiết event; tooltip route cho biết agent bên ngoài.
+
+Lượt voice Harness-only hiển thị route **Harness**. Event `harness_response` đã lưu cung cấp output, chi tiết Response và thời điểm hoàn tất cho đúng run, nên tải lại monitor không còn để lượt đã trả lời ở trạng thái ACTIVE. Gửi input mà chưa có phản hồi cuối vẫn giữ ACTIVE.
+
 Flow Monitor liên kết follow-up Codex được steer với lượt thực thi gốc qua
 `turn_merged` / `parent_run_id`. Chọn follow-up mở pipeline chung nhưng vẫn giữ
 card input và trạng thái kết thúc riêng. UI ghi rõ turn đã gộp thay vì hiện
@@ -203,7 +207,7 @@ Nhóm Settings có thể thu gọn nằm trong `NAV` của sidebar dùng chung (
 | Plugins | `/setting#plugins` |
 | Timezone | `/setting#timezone` |
 
-Các mục Monitor được serialize thành id thuần, ví dụ `/monitor#overview`, `/monitor#pairing`, `/monitor#system`, `/monitor#flow`. Mặc định: `/monitor` không có hash / hash không hợp lệ → `overview`; `/setting` không có hash / hash không hợp lệ → `general` (URL được chuẩn hóa thành `/setting#general`). Deep-link (ví dụ `/setting#wifi`) và nút back/forward của trình duyệt được tôn trọng qua một effect dựa trên `useLocation`. Người dùng không-debug chỉ thấy các mục trong `PUBLIC_SECTIONS` (gồm Chat, Overview, **Pairing**, Info, Flow, Camera, Users, **Logs**, **CLI**, và các mục Settings công khai General/Wi-Fi/My Voice/Face/MCP Tools/Plugins/Timezone); Bluetooth vẫn truy cập được bằng URL trực tiếp nhưng bị ẩn khỏi navigation. `?debug=true` mở khóa phần còn lại (Sensing, Analytics, Servo, API Docs, Agent gateway, và các mục Settings sâu hơn AI Brain/Runtime/Language/Voice/Realtime/Channels/MQTT). Bấm `update` là nút đổi ngay thành `updating…` — nút KHÔNG bao giờ báo "OK", vì chữ đó đọc như "xong rồi" trong khi request mới chỉ KHỞI ĐỘNG việc cài (và với component chạy vài giây thì nó còn hiện trước cả lúc dòng kịp báo tiến trình). Khi lỗi thì hiện đúng lý do server trả về (`rate-limited, retry in 8s`, `bootstrap unreachable`) thay vì chữ "Failed" trống rỗng. Trong lúc đang cài, dòng đó hiện `updating…` thay cho nút (một lần cài mất vài chục giây — component dừng, build lại, khởi động lại — và một dòng đứng im khiến người dùng bấm lần hai, chính là cách một máy từng mất sạch HAL runtime). Các nút `update` trong card **Versions** ở Overview (dòng Web / OS / HAL / Agent, cộng Bootstrap và Device ở debug) cũng bị chặn theo cách này — người xem thường không có nút kích OTA một chạm. Toggle **Debug** trên top bar, ngay cạnh nút Dark/Light, bật/tắt query parameter này nhưng vẫn giữ hash của mục đang mở và các query parameter khác; màu amber cho biết debug mode đang bật.
+Các mục Monitor được serialize thành id thuần, ví dụ `/monitor#overview`, `/monitor#pairing`, `/monitor#system`, `/monitor#flow`. Mặc định: `/monitor` không có hash / hash không hợp lệ → `overview`; `/setting` không có hash / hash không hợp lệ → `general` (URL được chuẩn hóa thành `/setting#general`). Deep-link (ví dụ `/setting#wifi`) và nút back/forward của trình duyệt được tôn trọng qua một effect dựa trên `useLocation`. Người dùng không-debug chỉ thấy các mục trong `PUBLIC_SECTIONS` (gồm Chat, Overview, **Pairing**, Info, Flow, Camera, **Sensing**, Users, **Logs**, **CLI**, và các mục Settings công khai General/Wi-Fi/My Voice/Face/MCP Tools/Plugins/Timezone); Bluetooth vẫn truy cập được bằng URL trực tiếp nhưng bị ẩn khỏi navigation. `?debug=true` mở khóa phần còn lại (Analytics, Servo, API Docs, Agent gateway, và các mục Settings sâu hơn AI Brain/Runtime/Language/Voice/Realtime/Channels/MQTT). Bấm `update` là nút đổi ngay thành `updating…` — nút KHÔNG bao giờ báo "OK", vì chữ đó đọc như "xong rồi" trong khi request mới chỉ KHỞI ĐỘNG việc cài (và với component chạy vài giây thì nó còn hiện trước cả lúc dòng kịp báo tiến trình). Khi lỗi thì hiện đúng lý do server trả về (`rate-limited, retry in 8s`, `bootstrap unreachable`) thay vì chữ "Failed" trống rỗng. Trong lúc đang cài, dòng đó hiện `updating…` thay cho nút (một lần cài mất vài chục giây — component dừng, build lại, khởi động lại — và một dòng đứng im khiến người dùng bấm lần hai, chính là cách một máy từng mất sạch HAL runtime). Các nút `update` trong card **Versions** ở Overview (dòng Web / OS / HAL / Agent, cộng Bootstrap và Device ở debug) cũng bị chặn theo cách này — người xem thường không có nút kích OTA một chạm. Toggle **Debug** trên top bar, ngay cạnh nút Dark/Light, bật/tắt query parameter này nhưng vẫn giữ hash của mục đang mở và các query parameter khác; màu amber cho biết debug mode đang bật.
 
 Card **Versions** ở Overview có cột thao tác thứ năm với nút `restart` cho OS Server và HAL, kể cả ngoài debug. Mỗi nút gọi `POST /api/system/restart/:target` có bảo vệ admin (`os-server` hoặc `hal`). Server hẹn restart sau 2 giây và trả HTTP 202. Nút hiện `queued`, khóa bấm lại trong 15 giây; trạng thái này chỉ xác nhận đã lên lịch, chưa xác nhận service phục hồi. Polling sẵn có của monitor cập nhật trạng thái/uptime sau khi kết nối lại. Lỗi được giữ hiển thị cạnh nút. Restart bị vô hiệu hóa khi biết dòng đó đang cập nhật; hoạt động OTA được poll cả ở chế độ thường. Card hẹp cuộn ngang để truy cập đủ năm cột.
 
@@ -460,6 +464,15 @@ nối gọn và bố cục card hai cột, chuyển thành một cột khi nhỏ
 - Unpair cần xác nhận, gọi `DELETE /api/harness` có xác thực admin. Harness dùng giao thức
   pairing/phiên E2EE gốc và giữ khóa riêng, độc lập với Buddy.
 
+**Giọng nói Harness-only**
+
+- Khi có máy đã ghép đôi, `HarnessCard.tsx` hiển thị `HarnessVoiceMode.tsx`. **Focused Harness agent** đồng bộ pane agent đang focus trong app Harness, kể cả khi mode tắt. Web không có bộ chọn agent; target hội thoại của `harness-use` thông thường vẫn độc lập.
+- Bật **Harness-only voice** để gửi yêu cầu giọng nói thẳng đến agent đang focus; kết quả vẫn qua TTS thiết bị. Chat text giữ hành vi hiện có. Trạng thái nằm trong RAM; restart tắt mode và focus đồng bộ lại sau reconnect. Đổi focus giữa capture từ chối capture cũ và yêu cầu nói lại. Task đã gửi giữ route phản hồi gốc.
+- Mode/focus refresh mỗi 2 giây qua `GET /api/harness/voice-mode`. Công tắc chỉ gửi `{enabled}` bằng `PUT`, dùng được khi offline hoặc chưa có focus; nếu đọc mode lỗi thì khóa đến khi refresh thành công. UI giải thích rõ khi offline, thiếu focus hoặc CLI chưa hỗ trợ capability nên không thể delivery giọng nói.
+- Delivery chưa rõ chặn mutation giọng nói Harness mới nhưng focus hiển thị vẫn đồng bộ. **Check delivery** đọc receipt hiện có, không gửi lại. **Continue without retrying** yêu cầu xác nhận rồi gửi `resolution:"do_not_retry"` cùng `idempotencyKey` pending chính xác đến `/api/harness/voice-mode/resolve`; task trước vẫn có thể chạy.
+- `HarnessQuestion.tsx` refresh câu hỏi live mỗi 10 giây khi focus khả dụng, kèm **Refresh agent question**. Form hỗ trợ chọn một, chọn nhiều và text tự nhập. **Send answer** gửi đủ key câu hỏi chính xác với request ID live và revision focus, từ chối focus cũ. Người dùng cũng có thể trả lời lần lượt bằng giọng nói.
+- Thay đổi và endpoint câu hỏi/receipt cần xác thực admin. Xem [Tích hợp Harness](harness_vi.md#chế-độ-giọng-nói-harness-only) về API và yêu cầu rollout OS/HAL/CLI tương thích.
+
 Section Pairing có mặt với người dùng không-debug.
 
 **Display Eyes**
@@ -702,6 +715,44 @@ Chat UI → POST /api/sensing/event → SensingHandler
 
 ---
 
+### 5.8 Device → Sensing
+
+Menu Sensing và card chỉ đọc **Environment** luôn hiển thị, không cần debug,
+kể cả khi device không khai báo capability sensing. Card camera vẫn yêu cầu
+`vision`. Khi đang tải capabilities hoặc thiếu `environment`, card môi trường
+hiện các số đo `N/A` và không gửi request tới sensor. Sensor có khai báo nhưng
+đang tắt cũng hiển thị số đo `N/A`.
+
+Khi có capability `environment`, card đọc `GET /api/hardware/environment/status`
+mỗi 3 giây qua reverse proxy hardware của OS đã có xác thực, chuyển tới HAL
+`GET /environment/status`. Chu kỳ làm mới trình duyệt độc lập với
+`poll_interval_s` cấu hình trong HAL, không thay đổi nhịp thu nhận dữ liệu.
+Đọc từ browser không kích hoạt lượt agent. Worker phát hiện thay đổi độc lập
+và API status cho agent local được mô tả trong
+[tài liệu môi trường Lamp](../../robots/lamp/docs/vi/environment-sensing_vi.md#chính-sách-thay-đổi-của-os-và-api-cho-agent).
+
+Card hiển thị trạng thái cảm biến, thời điểm sample, trạng thái dữ liệu
+cũ, lỗi và đủ chín chỉ số chuẩn: nhiệt độ (°C), độ ẩm (%),
+PM1 / PM2.5 / PM4 / PM10 (µg/m³), VOC index, NOx index và CO₂ (ppm).
+UI dựa vào key chỉ số và metadata nguồn, không phụ thuộc tên model cảm biến,
+nên đổi component cấu hình (ví dụ sang SEN63C) vẫn dùng cùng card. Chỉ số không
+được hỗ trợ hoặc chưa sẵn sàng vẫn hiện `N/A` tương ứng giá trị `null`.
+Nhãn nguồn chỉ rõ component; từng chỉ số có timestamp riêng. Component lỗi
+không che số đo còn tốt từ component khác. Giá trị chưa khả dụng hiện `N/A`, không hiện số 0.
+Số đo cũ cũng được thay bằng `N/A`; request thất bại được hiển thị là lỗi để
+không nhầm số đo trước đó với dữ liệu hiện tại. Không gán nhãn chất lượng không khí
+tốt/xấu, ngưỡng hay cảnh báo. Mục kỹ thuật thu gọn hiển thị trạng thái, bus I2C,
+thanh ghi trạng thái và timing đọc/thử lại/đánh dấu cũ/phục hồi của từng
+component trong `status.components`. Vẫn hỗ trợ snapshot một sensor kiểu cũ
+với `status.timing` cấp cao nhất và nhãn cảm biến chung. Sample hoặc timestamp
+sample là `null` sẽ hiện trạng thái chờ, không hiển thị ngày epoch. Giải thích về
+gas index chỉ xuất hiện khi VOC hoặc NOx có nguồn được khai báo hoặc giá trị đo.
+
+Lamp vẫn để `environment` được comment trong `ROBOT.md` và SEN55/SCD41 tắt trong
+file JSON tương ứng, nên card này ẩn cho đến khi capability được khai báo. Xem
+[tài liệu cảm biến môi trường của Lamp](../../robots/lamp/docs/vi/environment-sensing_vi.md)
+về đấu dây, bật cảm biến và contract dữ liệu HAL.
+
 ## 6. LED Color API
 
 ### Vấn đề
@@ -796,3 +847,14 @@ Các target trên dành cho một thiết bị trong LAN. Để phát hành cho 
 artifact và roll out.
 
 Kết quả cuối Harness được ghi vào flow JSONL bằng `harness_response`, giữ run ID thiết bị gốc và `text` đầy đủ. Web Chat dùng sự kiện này khôi phục kết quả đang chờ sau khi SSE ngắt hoặc tải lại trang. Luồng trực tiếp vẫn phát `chat_response` với state `final`.
+
+### Cấu trúc component Sensing
+
+`monitor/SensingSection.tsx` chỉ ghép các phần theo capability. Component nằm
+trong `monitor/sensing/`: mỗi card một file, dùng chung `CardHeader`, types và
+hàm định dạng. `useVisionSensing` poll một lần cho toàn bộ card vision;
+`useEnvironment` poll snapshot môi trường chung độc lập. Client `visionApi.ts` và
+`environmentApi.ts` quản lý request OS-server, kiểm tra response và lỗi;
+card không trực tiếp fetch. Cả hai dùng reverse proxy có xác thực
+`/api/hardware/*` sẵn có. Lỗi HTTP/response của vision hiển thị thông báo lỗi,
+không giữ màn hình loading hoặc số liệu cũ.

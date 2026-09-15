@@ -82,13 +82,13 @@ def test_prepare_primes_first_write_without_publishing_audio(monkeypatch):
     with patch.object(scipy.signal, "firwin", wraps=scipy.signal.firwin) as design:
         aec.prepare_reference(44100)
         assert design.call_count == 1
-        assert reference.history() == b""
+        assert bytes(reference._buffer) == b""
         assert reference.idle_for() == float("inf")
         assert aec._reference is reference
         assert aec._canceller is canceller
         aec.reference_write(np.zeros(441, dtype=np.float32), 44100)
         assert design.call_count == 1
-        assert len(reference.history()) == 320
+        assert len(reference._buffer) == 320
 
 
 @pytest.mark.parametrize("enabled,same_rate", [(False, False), (True, True)])
@@ -108,4 +108,4 @@ def test_prepare_dependency_failure_is_best_effort(monkeypatch):
     monkeypatch.setattr(aec, "_canceller", SimpleNamespace(_rate=16000))
     with patch.object(aec, "_reference_resample_filter", side_effect=ImportError("unavailable")):
         aec.prepare_reference(44100)
-    assert aec._reference.history() == b""
+    assert bytes(aec._reference._buffer) == b""

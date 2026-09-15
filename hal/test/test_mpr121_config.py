@@ -9,6 +9,16 @@ from hal.board.mpr121 import MPR121Config, load_mpr121_config
 
 
 class TestMPR121Config(unittest.TestCase):
+    def test_retired_chord_config_does_not_block_component_upgrade(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "mpr121.json"
+            path.write_text(json.dumps({"boards": {"orangepi_sun60": {
+                "bus": 0, "swipe_axis": [0, 1], "harness_voice_chord": [0, 11],
+            }}}))
+            config = load_mpr121_config(directory, "orangepi_sun60")
+            self.assertEqual(config.swipe_axis, (0, 1))
+            self.assertFalse(hasattr(config, "harness_voice_chord"))
+
     def test_only_lamp_declares_hardware(self):
         root = Path(__file__).resolve().parents[2] / "robots"
         config = load_mpr121_config(root / "lamp", "orangepi_sun60")
@@ -56,3 +66,16 @@ class TestMPR121Config(unittest.TestCase):
                     path.write_text(value)
                     with self.assertRaisesRegex(ValueError, "mpr121.json"):
                         load_mpr121_config(directory, "orangepi_sun60")
+
+    def test_swipe_axis_json_round_trip_and_rejection(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "mpr121.json"
+            path.write_text(json.dumps({"boards": {"orangepi_sun60": {
+                "bus": 0, "electrodes": [2, 4, 6], "swipe_axis": [6, 4, 2],
+            }}}))
+            self.assertEqual(load_mpr121_config(directory, "orangepi_sun60").swipe_axis, (6, 4, 2))
+            path.write_text(json.dumps({"boards": {"orangepi_sun60": {
+                "bus": 0, "electrodes": [2, 4], "swipe_axis": [2, 6],
+            }}}))
+            with self.assertRaisesRegex(ValueError, "swipe_axis"):
+                load_mpr121_config(directory, "orangepi_sun60")

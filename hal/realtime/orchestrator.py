@@ -53,6 +53,7 @@ from hal.realtime.models.signal import (
     LookReplaySignal,
     RejectSignal,
 )
+from hal.realtime.models.output import ExecutionOutput, InterruptedOutput, UserSpeechOutput
 from hal.realtime.summarizer import RealtimeSummarizer
 from hal.realtime.voice_agent.base import VoiceAgentBase
 
@@ -88,6 +89,9 @@ DELEGATE_TOOL_DESCRIPTION: str = (
     "timing, quantities, and supplied parameters. Do not summarize away details, "
     "translate into English, append commentary, or retell prior tasks; the main agent "
     "already has that conversation. Never invent missing details. "
+    "Keep the user's own key words rather than renaming the request into a category: "
+    "the main agent routes on vocabulary, so 'show me how far you can move' must "
+    "arrive as those words, not as 'movement demonstration'. "
     "ONLY call when you clearly understood a request or task follow-up addressed to "
     "the device. Do not invent requests from unclear or noise-like audio such as "
     "a cough or an unclear syllable; remain silent for background speech."
@@ -1044,6 +1048,7 @@ class RealtimeOrchestrator:
         The generator returns (StopIteration) when the model's turn is done.
         """
         self.execution_completed = False
+        self.execution_turn_id = ""
         if self._agent is None:
             return
         execution_agent = self._agent
@@ -1052,6 +1057,19 @@ class RealtimeOrchestrator:
         produced = False  # did this turn yield any real output (vs stay silent)?
         replay_pending = False  # look-replay signalled — the turn continues
         for output in execution_agent.receive(stop_on_done=True):
+            if isinstance(output, ExecutionOutput):
+                yield output
+                continue
+            if isinstance(output, InterruptedOutput) and output.reason == "server_interrupt":
+                # This new signal observes the provider's cancellation. It must
+                # not change the existing tool/routing state of this generator.
+                yield output
+                continue
+            if isinstance(output, UserSpeechOutput):
+                # Input observations are not an answer: they must not prevent
+                # reject_turn or change the look/emotion tool's spoken state.
+                yield output
+                continue
             if (
                 isinstance(output, FunctionCallOutput)
                 and output.name == LOOK_TOOL_NAME
@@ -1142,7 +1160,7 @@ class RealtimeOrchestrator:
                 )
                 produced = True
                 self._agent.end_turn()
-                yield RejectSignal()
+                yield RejectSignal(user_turn_id=output.user_turn_id)
                 break
             if (
                 isinstance(output, FunctionCallOutput)
@@ -1188,7 +1206,10 @@ class RealtimeOrchestrator:
                 # turn_complete that never comes after a tool call (Gemini manual
                 # VAD waits up to 10s on _turn_done otherwise).
                 self._agent.end_turn()
-                yield DelegateSignal(message=delegate_msg)
+                yield DelegateSignal(
+                    message=delegate_msg, transcript=output.user_transcript,
+                    user_turn_id=output.user_turn_id,
+                )
                 # Stop the turn here — once the model has delegated, it has nothing
                 # more to say, and waiting for turn_complete just blocks on the
                 # receive() timeout (the model stays silent for the full
@@ -1204,6 +1225,7 @@ class RealtimeOrchestrator:
             getattr(execution_agent, "execution_completed", False) is True
             and not replay_pending
         )
+        self.execution_turn_id = getattr(execution_agent, "execution_turn_id", "")
 
         # Look-replay pending: the logical turn CONTINUES (the caller is about
         # to re-commit this turn's audio on the SAME session). Don't stamp,
@@ -1626,8 +1648,9 @@ class RealtimeOrchestrator:
             from hal.drivers.camera.video_capture_device import capture_still
         except Exception:
             return None
+        from hal import privacy
         cap = getattr(state, "camera_capture", None)
-        if cap is None:
+        if cap is None or privacy.camera_muted:
             return None
         was_disabled: bool = bool(getattr(state, "_camera_disabled", False))
         try:
@@ -1646,6 +1669,8 @@ class RealtimeOrchestrator:
                 if was_disabled:
                     cap.stop()
             if frame is None:
+                return None
+            if privacy.camera_muted:
                 return None
             max_w: int = config.REALTIME_GEMINI_VISION_MAX_WIDTH
             h, w = frame.shape[:2]

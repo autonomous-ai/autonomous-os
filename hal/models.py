@@ -410,9 +410,61 @@ class ServoSearchRequest(BaseModel):
     )
     exhaustive: bool = Field(
         False,
-        description="Visit every stop and pitch tier instead of returning at the "
-                    "first sighting. Slower; for 'scan everything' requests.",
+        description="Survey mode for PEOPLE: visit every look, count sightings, "
+                    "return home. For 'scan the room' / 'is anyone else here'. "
+                    "Ignored for an object target — a search for a thing always "
+                    "stops at the first sighting, centres on it and returns a frame.",
     )
+
+
+class ServoSearchResponse(BaseModel):
+    """What a sweep found, in fields rather than in one prose string.
+
+    `message` stays for the agent to read aloud, but every number in it is also
+    a field, because the previous single-string body forced the agent to parse
+    English to learn anything — and it was the string, not the sweep, that
+    produced "after 27 stop(s)" against a maximum of 3.
+    """
+
+    status: str = "ok"
+    message: str = Field(
+        ..., description="One line the agent can say. Every value in it is also a field."
+    )
+    found: bool
+    target: str = Field(..., description="What the sweep was asked for.")
+    kind: Optional[str] = Field(
+        None, description="What was actually recognised — 'face' where a person was asked for."
+    )
+    found_at_yaw: Optional[float] = None
+    found_at_roll: Optional[float] = None
+    centred: bool = Field(
+        False,
+        description="Whether the fine correction put the subject in the middle of "
+                    "the frame. False still means found — the aim is just off.",
+    )
+    image_path: Optional[str] = Field(
+        None,
+        description="Absolute path to the annotated JPEG of the winning frame, in "
+                    "the active runtime's media dir. Surfaced to the user as a "
+                    "thumbnail; the agent cannot read it.",
+    )
+    looks_visited: int = 0
+    bearings_visited: int = Field(
+        0, description="Base positions turned through. Looks and bearings are different quantities."
+    )
+
+
+class ServoDemoResponse(BaseModel):
+    """Whether the demo STARTED, not how it went.
+
+    The performance runs on its own thread and narrates itself, so there is
+    nothing for the caller to wait for and nothing for it to report afterwards.
+    """
+
+    status: str = "ok"
+    started: bool
+    waypoints: int = Field(0, description="Legs the demo will walk.")
+    reason: str = ""
 
 
 class ServoAimRequest(BaseModel):
@@ -566,6 +618,7 @@ class HealthResponse(BaseModel):
     camera: bool
     audio: bool
     sensing: bool
+    environment: bool = False
     voice: bool
     tts: bool
     music: bool

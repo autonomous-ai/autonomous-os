@@ -22,13 +22,14 @@ import { MqttSection } from "@/pages/settings/MqttSection";
 import { MCPToolsSection } from "@/pages/settings/MCPToolsSection";
 import { PluginsSection } from "@/pages/settings/PluginsSection";
 import { ScheduledSection } from "@/pages/settings/ScheduledSection";
+import { FacebookSection } from "@/pages/settings/FacebookSection";
 
 // The set of sections this panel can render. Controlled by the parent now (the
 // page shell owns the sidebar / active-section state). `stt` is the Language
 // section (rendered under id="stt"), matching the legacy /edit layout. `runtime`
 // is the agent-backend switch (its own Switch button, not part of Save).
 // `scheduled` is read-only (see ScheduledSection's doc comment) — no Save flow.
-export type SettingsSectionId = "device" | "wifi" | "llm" | "runtime" | "voice" | "face" | "tts" | "realtime" | "stt" | "channel" | "mqtt" | "mcp" | "plugins" | "timezone" | "scheduled";
+export type SettingsSectionId = "device" | "wifi" | "llm" | "runtime" | "voice" | "face" | "tts" | "realtime" | "stt" | "channel" | "mqtt" | "mcp" | "plugins" | "timezone" | "scheduled" | "facebook";
 
 // Header-row label lookup. Kept local so the panel can render the active-section
 // title above the form without depending on the page's NAV_GROUPS config.
@@ -48,6 +49,7 @@ const SECTION_LABELS: Record<SettingsSectionId, string> = {
   plugins: "Plugins",
   timezone: "Timezone",
   scheduled: "Scheduled",
+  facebook: "Facebook",
 };
 
 // Field / LockedField / LockedPasswordField / SectionCard live in
@@ -582,7 +584,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
   // Save is hidden for sections that aren't part of the form's PUT flow: Face/My
   // Voice enroll via their own buttons, Runtime switches via its own action, and
   // Scheduled is read-only (its only action is per-row "Run now").
-  const showSave = activeSection !== "face" && activeSection !== "voice" && activeSection !== "runtime" && activeSection !== "timezone" && activeSection !== "scheduled";
+  const showSave = activeSection !== "face" && activeSection !== "voice" && activeSection !== "runtime" && activeSection !== "timezone" && activeSection !== "scheduled" && activeSection !== "facebook";
 
   return (
     <div className="lm-fade-in lm-settings-panel" style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
@@ -744,6 +746,8 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
               discordGuildId={discordGuildId} setDiscordGuildId={setDiscordGuildId}
               discordUserId={discordUserId} setDiscordUserId={setDiscordUserId}
             />
+
+            <FacebookSection active={activeSection === "facebook"} />
 
             <MCPToolsSection active={activeSection === "mcp"} />
             <PluginsSection active={activeSection === "plugins"} />

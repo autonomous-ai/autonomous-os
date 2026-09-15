@@ -80,7 +80,7 @@ func (h *AgentHandler) handleChatEvent(evt domain.WSEvent) error {
 		} else {
 			slog.Error("OpenClaw chat error", "component", "agent", "run_id", flowRunID, "error", errMsg)
 			flow.Log("agent_error", map[string]any{"run_id": flowRunID, "error": errMsg}, flowRunID)
-			telemetry.ReportTaskExecution(flowRunID, "", "failed", "chat_error")
+			telemetry.ReportTaskExecution(h.resolveTaskRunID(payload.RunID, flowRunID), "", "failed", "chat_error")
 			h.monitorBus.Push(domain.MonitorEvent{
 				Type:    "chat_response",
 				Summary: "❌ " + shortError(errMsg),
@@ -162,6 +162,9 @@ func (h *AgentHandler) handleChatEvent(evt domain.WSEvent) error {
 			"lifecycle_started": false,
 			"message":           msgPreview,
 		}, flowRunID)
+		// This successful final is the execution boundary for a command
+		// that bypassed lifecycle events. Empty finals remain unproven.
+		telemetry.ReportTaskExecution(flowRunID, "", "completed", "chat_final_no_lifecycle")
 		// Slash commands bypass the LLM lifecycle so lifecycle.end never
 		// fires for this run. Without this, every /status (or /new etc.)
 		// wedges the busy flag for the full busyTTL (5 min), queueing

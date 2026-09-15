@@ -20,6 +20,8 @@ import (
 	"go.autonomous.ai/os/system/ambient"
 	"go.autonomous.ai/os/system/device"
 	"go.autonomous.ai/os/system/domain"
+	"go.autonomous.ai/os/system/environment"
+	"go.autonomous.ai/os/system/externalhistory"
 	"go.autonomous.ai/os/system/harness"
 	"go.autonomous.ai/os/system/healthwatch"
 	"go.autonomous.ai/os/system/lib/hal"
@@ -27,6 +29,7 @@ import (
 	"go.autonomous.ai/os/system/lib/logger"
 	"go.autonomous.ai/os/system/lib/mqtt"
 	"go.autonomous.ai/os/system/lib/safego"
+	"go.autonomous.ai/os/system/lib/sensingmsg"
 	"go.autonomous.ai/os/system/network"
 	_agentHttpDeliver "go.autonomous.ai/os/system/server/agent/delivery/http"
 	_buddyHttpDeliver "go.autonomous.ai/os/system/server/buddy/delivery/http"
@@ -45,7 +48,11 @@ import (
 )
 
 type Server struct {
+	externalHistory *externalhistory.Store
+
 	harnessService   *harness.Service
+	harnessVoice     *harness.VoiceController
+	harnessVoiceCtx  context.Context
 	harnessRepliesMu sync.Mutex
 	// harnessReplies is keyed by the local device run ID. A single Harness
 	// agent can work on more than one user request at once, so it cannot be
@@ -57,6 +64,8 @@ type Server struct {
 	harnessResultAt time.Time
 	engine          *gin.Engine
 	config          *config.Config
+
+	environmentStartup *environment.StartupCoordinator
 
 	// handlers
 	healthHandler     _healthHttpDeliver.HealthHandler
@@ -162,6 +171,8 @@ func ProvideServer(
 	// on — that older turn keeps running but loses the speaker.
 	sensingH.SetOnRealtimeHandled(agentH.CancelSpeechForNewerTurn)
 	s := &Server{
+		environmentStartup: environment.NewStartupCoordinator(),
+
 		config:            cfg,
 		healthHandler:     hh,
 		networkHandler:    nh,
@@ -185,8 +196,18 @@ func ProvideServer(
 		statusLED:         sled,
 		chatStream:        chatStream,
 	}
+	harnessConnected := func() bool {
+		if s.harnessService == nil {
+			return false
+		}
+		status := s.harnessService.Status()
+		return status.Paired && status.Connected
+	}
+	sensingH.SetHarnessConnected(harnessConnected)
+	sensingmsg.SetHarnessConnected(harnessConnected)
 	sensingH.SetHarnessFollowup(s.HarnessVoiceFollowup)
 	sensingH.SetHarnessFollowupContext(s.HarnessFollowupContext)
+	sensingH.SetHarnessVoice(s.handleHarnessVoice)
 	return s
 }
 
@@ -321,11 +342,15 @@ func (s *Server) Serve(closeFn func()) error {
 
 	eventCtx, cancelEvents := context.WithCancel(context.Background())
 	defer cancelEvents()
+	if err := s.initializeExternalHistory(eventCtx); err != nil {
+		return err
+	}
 	harnessService, harnessErr := harness.NewService("config", harness.Callbacks{OnEvent: s.forwardHarnessEvent})
 	if harnessErr != nil {
 		slog.Error("harness service initialization failed", "component", "harness", "error", harnessErr)
 	} else {
 		s.harnessService = harnessService
+		s.restoreHarnessHistoryReplies()
 		harnessService.Start(eventCtx)
 		s.deviceMQTTHandler.SetHarnessService(harnessService)
 	}
@@ -590,11 +615,24 @@ func (s *Server) Serve(closeFn func()) error {
 	scheduleGroup.PATCH(":id", adminAuthMiddleware(s.config), s.deviceMQTTHandler.UpdateSchedule)
 	scheduleGroup.DELETE(":id", adminAuthMiddleware(s.config), s.deviceMQTTHandler.DeleteSchedule)
 
+	// Connectors: the local Settings UI's write path for a static-credential
+	// (PAT) connector. Persists through the SAME connectorWriter the MQTT
+	// connector.set.<code> dispatcher uses, so a token pasted on-device lands
+	// in the same <code>_access_tokens.json file the skill layer already
+	// reads — no separate storage, no drift. GET reports connected + the
+	// non-secret identity fields (never the token); DELETE removes both the
+	// on-disk entry and any mcp.servers.<code> side-effect.
+	connectorGroup := api.Group("device/connectors")
+	connectorGroup.POST("pat", adminAuthMiddleware(s.config), s.deviceMQTTHandler.SetConnectorPAT)
+	connectorGroup.GET(":code", adminAuthMiddleware(s.config), s.deviceMQTTHandler.GetConnector)
+	connectorGroup.DELETE(":code", adminAuthMiddleware(s.config), s.deviceMQTTHandler.RemoveConnector)
+
 	// Look: snapshot + describe in one call, so the agent gets text it can read
 	// instead of a file path it cannot. Loopback-only — the caller is the
 	// agent's own shell tool, and it moves hardware and spends a vision-model
 	// call. See lookAndDescribe in vision.go.
 	api.POST("vision/look", localOnlyMiddleware(), s.lookAndDescribe)
+	api.GET("environment/status", localOnlyMiddleware(), s.environmentStatus)
 
 	logs := api.Group("logs")
 	logs.GET("tail", adminAuthMiddleware(s.config), s.logTail)
@@ -654,6 +692,14 @@ func (s *Server) Serve(closeFn func()) error {
 		}
 		slog.Warn("notice prerender never succeeded — notice will self-warm on first successful fire", "component", "server")
 	})
+
+	go environment.Service{
+		Startup:   s.environmentStartup,
+		Settings:  s.config.EnvironmentSettings,
+		Available: s.environmentAvailable,
+		Read:      hal.GetEnvironmentStatusContext,
+		Send:      environment.HTTPSender(fmt.Sprintf("http://127.0.0.1:%d/api/sensing/event", s.config.HttpPort)),
+	}.Run(eventCtx)
 
 	go func() {
 		if err := srv.ListenAndServe(); err != nil {

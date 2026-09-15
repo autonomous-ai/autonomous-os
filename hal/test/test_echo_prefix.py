@@ -1,7 +1,7 @@
-"""Stripping the reply's own tail off the front of a barge-in transcript.
+"""Stripping the reply's own tail off the front of a transcript.
 
-A barge-in turn opens its capture with a pre-roll that starts BEFORE the user
-did, so the last words of the interrupted reply sit in front of theirs. The
+A turn captured on the heels of a reply opens with a pre-roll that starts
+BEFORE the user did, so the last words of that reply sit in front of theirs. The
 existing whole-transcript filter (sensing_sender.is_echo) cannot help: it drops
 the transcript entirely, which would throw the user's turn away with the echo.
 

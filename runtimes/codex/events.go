@@ -107,6 +107,11 @@ func (s *CodexService) failStuckTurn() {
 	s.clearTurn()
 	dispatch, _ := s.wsDispatch.Load().(dispatchFn)
 	if dispatch == nil {
+		// These acknowledged steers were removed before clearTurn; no terminal
+		// callback is available to account for them on this path.
+		for _, merged := range steeredRuns {
+			telemetry.ReportTaskObservationLost(merged.runID)
+		}
 		return // socket already gone; the reconnect path owns the cleanup
 	}
 	payload, _ := json.Marshal(map[string]any{
@@ -224,6 +229,7 @@ func (s *CodexService) drainPendingEvents() {
 
 	const expireAfter = 60 * time.Second
 	expirable := map[string]bool{
+		"environment.update":      true,
 		"motion.activity":         true,
 		"emotion.detected":        true,
 		"speech_emotion.detected": true,
@@ -233,6 +239,10 @@ func (s *CodexService) drainPendingEvents() {
 	}
 	filtered := events[:0]
 	for _, ev := range events {
+		if !sensingmsg.ReplayAllowed(ev.eventType) {
+			slog.Info("environment event dropped at replay", "component", "sensing", "reason", "sleeping or capability unavailable")
+			continue
+		}
 		if expirable[ev.eventType] && time.Since(ev.queuedAt) > expireAfter {
 			slog.Info("sensing event expired from queue", "component", "sensing", "type", ev.eventType, "age_s", int(time.Since(ev.queuedAt).Seconds()))
 			continue
@@ -242,6 +252,7 @@ func (s *CodexService) drainPendingEvents() {
 	events = filtered
 
 	coalesce := map[string]bool{
+		"environment.update":      true,
 		"presence.enter":          true,
 		"presence.leave":          true,
 		"presence.away":           true,

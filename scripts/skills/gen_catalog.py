@@ -34,6 +34,7 @@ CAP_CONST = {
     "audio": "CapAudio",
     "vision": "CapVision",
     "sensing": "CapSensing",
+    "environment": "CapEnvironment",
     "presence": "CapPresence",
     "motion": "CapMotion",
     "light": "CapLight",
@@ -61,7 +62,7 @@ def read_tree():
                 if c not in CAP_CONST:
                     raise SystemExit(
                         f"{sidecar}: unknown capability {c!r} — "
-                        f"the 13 names live in robots/contract/capabilities.md"
+                        f"the names live in robots/contract/capabilities.md"
                     )
         elif not (d / "SKILL.md").is_file():
             continue  # not a skill folder

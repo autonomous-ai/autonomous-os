@@ -45,12 +45,13 @@ const mergedSensingHeader = "[ambient signals batched while busy — respond onc
 // ambient signals), voice_agent_handled (silent reply can't share a turn with
 // events that should speak), and image-bearing events (a merged text turn can't
 // carry multiple images cleanly; sensing snapshots are stripped anyway).
+// Environment updates use a separate skill with no mandatory expression.
 func standaloneDrain(ev pendingEvent) bool {
 	if len(ev.images) > 0 {
 		return true
 	}
 	switch ev.eventType {
-	case "voice", "voice_command", "voice_agent_handled", "voice_followup", "web_chat", "mqtt_chat":
+	case "voice", "voice_command", "voice_agent_handled", "voice_followup", "web_chat", "mqtt_chat", "environment.update":
 		return true
 	}
 	return false
@@ -159,6 +160,7 @@ func (s *HermesService) drainPendingEvents() {
 
 	const expireAfter = 60 * time.Second
 	expirable := map[string]bool{
+		"environment.update":      true,
 		"motion.activity":         true,
 		"emotion.detected":        true,
 		"speech_emotion.detected": true,
@@ -168,6 +170,10 @@ func (s *HermesService) drainPendingEvents() {
 	}
 	filtered := events[:0]
 	for _, ev := range events {
+		if !sensingmsg.ReplayAllowed(ev.eventType) {
+			slog.Info("environment event dropped at replay", "component", "sensing", "reason", "sleeping or capability unavailable")
+			continue
+		}
 		if expirable[ev.eventType] && time.Since(ev.queuedAt) > expireAfter {
 			slog.Info("sensing event expired from queue", "component", "sensing", "type", ev.eventType, "age_s", int(time.Since(ev.queuedAt).Seconds()))
 			continue
@@ -177,6 +183,7 @@ func (s *HermesService) drainPendingEvents() {
 	events = filtered
 
 	coalesce := map[string]bool{
+		"environment.update":      true,
 		"presence.enter":          true,
 		"presence.leave":          true,
 		"presence.away":           true,

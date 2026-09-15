@@ -7,6 +7,7 @@ and output directly to ALSA device (bypassing sounddevice/PortAudio).
 
 import json
 import logging
+from hal import privacy
 import os
 import re
 import subprocess
@@ -328,6 +329,7 @@ class MusicService:
     def current_title(self) -> Optional[str]:
         return self._current_title
 
+    @privacy.serialized
     def play(self, query: str, on_started=None, person: str = "") -> bool:
         """Search YouTube and play first result. Returns True if started.
 
@@ -336,6 +338,8 @@ class MusicService:
         visual effects (e.g. groove animation) with actual audio start.
         person: who requested the music (for per-user history).
         """
+        if privacy.speaker_muted:
+            return False
         # Stop current playback if any
         if self._playing:
             self.stop()
@@ -356,11 +360,14 @@ class MusicService:
         thread.start()
         return True
 
+    @privacy.serialized
     def play_file(self, path: str, title: Optional[str] = None, on_started=None, person: str = "") -> bool:
         """Play a local audio file directly via ffmpeg. Returns True if started.
 
         on_started: optional callable fired once ffmpeg begins streaming.
         """
+        if privacy.speaker_muted:
+            return False
         if self._playing:
             self.stop()
             time.sleep(0.3)

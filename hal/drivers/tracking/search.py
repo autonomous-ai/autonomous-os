@@ -93,6 +93,17 @@ ARRIVE_STILL_DEG: float = 0.8
 # stop the sweep dragging without the whole lamp whipping round beside someone.
 SWEEP_YAW_SPEED: int = 1200
 MAX_STOPS: int = 3
+# How far, as a fraction of the frame, the centring probe will follow the
+# nearest candidate between two frames. One correction is capped at
+# MAX_STEP_DEG (45) on a lens measured at ~91 deg per frame-width at the centre,
+# so the object being chased moves under half the frame per step — and can
+# overshoot to the far side of centre. Anything further than this could not be
+# the same object. Deliberately loose: the same-side swap that actually happens
+# on a two-keyboard desk is caught by the direction test below, not by distance.
+STICKY_MAX_JUMP_FRAC: float = 0.55
+# Slack on the "toward the centre" test: detector jitter on a box edge is a few
+# percent of the frame and must not read as the object retreating.
+STICKY_AWAY_TOL_FRAC: float = 0.06
 
 # Where the head looks at each yaw stop, in order: left, straight on, right —
 # then back to centre before the base turns again.
@@ -180,8 +191,23 @@ def request_abort() -> None:
 class SearchResult:
     found: bool
     reason: str
-    stops_visited: int = 0
+    # Renamed from `stops_visited`: this counts LOOKS, and the API rendered it
+    # as "after N stop(s)" against MAX_STOPS = 3, so an exhaustive sweep
+    # truthfully reported "after 27 stop(s)" out of a possible 3.
+    looks_visited: int = 0
     found_at_yaw: Optional[float] = None
+    found_at_roll: Optional[float] = None
+    # How many BEARINGS the base actually turned through. Reported separately
+    # because "3 bearings, 27 looks" is the sentence the caller needs, and
+    # neither number on its own can be turned into it.
+    bearings_visited: int = 0
+    kind: Optional[str] = None
+    box: Optional[tuple] = None
+    centred: bool = False
+    # Absolute path to the annotated JPEG of the winning frame, or None when
+    # nothing was found (a picture of an empty wall under a caption saying the
+    # search failed is worse than no picture).
+    image_path: Optional[str] = None
 
 
 def _stop_list(seed: float) -> List[float]:
@@ -357,6 +383,80 @@ def _look_at(svc: Any, roll: float, wrist_pitch: Optional[float] = None,
         return False
 
 
+def _sticky_probe(detector: Any, target: str, first_box: tuple) -> Callable[[Any], Optional[tuple]]:
+    """A probe for the centring correction that keeps the INSTANCE the sweep
+    found, when the frame holds more than one of the class.
+
+    `detect` answers "which one box" by confidence, and that is the wrong
+    question mid-correction: device-observed on lamp-ac82, a desk with a laptop
+    keyboard and a black keyboard had the loop chase whichever scored higher on
+    each frame — dx -11% -> -43% -> +30% — until the deadline. Confidence says
+    how canonical a keyboard looks, not which keyboard the user meant.
+
+    So every probe asks for all candidates and takes the one nearest the box it
+    is already centring on, then moves the anchor there. After a correction the
+    object has shifted in the frame by roughly the step, and the other instance
+    has shifted by the same amount, so nearest-to-previous keeps following the
+    right one as long as the two are further apart than one step — which a
+    laptop and a keyboard on the same desk are.
+
+    Targets with no candidate list — open-vocab nouns served remotely, and
+    person/face with their closest-subject policy — fall back to the single-box
+    path, which is what they had before.
+    """
+    anchor = {"box": tuple(first_box)}
+
+    def _centre(b: tuple) -> tuple:
+        return (b[0] + b[2] / 2.0, b[1] + b[3] / 2.0)
+
+    def probe(frame: Any) -> Optional[tuple]:
+        cands: list = []
+        getter = getattr(detector, "detect_candidates", None)
+        if getter is not None and target not in ("person", "face"):
+            try:
+                cands = list(getter(frame, target) or [])
+            except Exception as e:
+                logger.debug("[search] detect_candidates failed, using detect: %s", e)
+                cands = []
+        if cands:
+            ax, ay = _centre(anchor["box"])
+            box = min((tuple(b) for b, _conf in cands),
+                      key=lambda b: (_centre(b)[0] - ax) ** 2 + (_centre(b)[1] - ay) ** 2)
+            # Nearest is not the same as near. On one device frame the detector
+            # returned ONLY the other keyboard, and nearest-of-one sent the
+            # correction 40% across the frame in a single step. One correction
+            # moves the object by at most MAX_STEP_DEG over a ~100 deg lens —
+            # under half the frame — so anything further has to be a different
+            # object. A miss here costs one fresh frame; a jump costs the find.
+            bx, by = _centre(box)
+            fh, fw = frame.shape[0], frame.shape[1]
+            if abs(bx - ax) > STICKY_MAX_JUMP_FRAC * fw or abs(by - ay) > STICKY_MAX_JUMP_FRAC * fh:
+                logger.info("[search] probe: nearest %s is %.0f%% away — not the same one, treating as a miss",
+                            target, 100.0 * max(abs(bx - ax) / fw, abs(by - ay) / fh))
+                return None
+            # A swap can be small — device-observed 20%, under any distance
+            # cutoff a legitimate step could also produce. The stronger test is
+            # direction: every correction moves ITS object toward the centre, so
+            # a candidate further from centre than the anchor, on the same side,
+            # cannot be the object that was just corrected. Overshoot past the
+            # centre is a real outcome and stays allowed.
+            for prev, now, size in ((ax, bx, fw), (ay, by, fh)):
+                p_off, n_off = prev - size / 2.0, now - size / 2.0
+                same_side = (p_off < 0) == (n_off < 0)
+                if same_side and abs(n_off) > abs(p_off) + STICKY_AWAY_TOL_FRAC * size:
+                    logger.info("[search] probe: nearest %s moved AWAY from centre (%.0f%% -> %.0f%%) — "
+                                "another instance, treating as a miss",
+                                target, 100.0 * p_off / size, 100.0 * n_off / size)
+                    return None
+        else:
+            box = _detect_target(detector, frame, target)[0]
+        if box is not None:
+            anchor["box"] = tuple(box)
+        return box
+
+    return probe
+
+
 def _detect_target(detector: Any, frame: Any, target: str):
     """Find `target` in the frame. Returns (box, kind), or (None, None).
 
@@ -388,8 +488,57 @@ def _abandon(svc: Any, seed_pose: Optional[dict], visited: int) -> "SearchResult
     interrupted search leaves the arm.
     """
     _restore(svc, seed_pose)
-    logger.info("[search] aborted after %d stop(s) — back to the starting pose", visited)
+    logger.info("[search] aborted after %d look(s) — back to the starting pose", visited)
     return SearchResult(False, "aborted", visited)
+
+
+def _persist_hit(frame: Any, box: Any, label: str) -> Optional[str]:
+    """Write the frame the sweep stopped on, with the detection drawn on it.
+
+    Into the SAME pool /camera/snapshot?save=true uses — the active runtime's
+    media dir, capped and rotated — for two reasons. The agent's image tool
+    only reads inside its own allow-list, and os-server's thumbnail path only
+    surfaces a file under an approved runtime dir (camera_snapshot.go). A JPEG
+    written anywhere else is a file nobody can open.
+
+    Annotated rather than raw: the answer to "did you find my keyboard" is not
+    a photograph of a desk, it is a photograph of a desk with a box round the
+    keyboard. The drawing helper is the one the look-aim debug frames already
+    use, so the box the user sees is the box the detector actually returned —
+    but with `centre_lines` off, because the dx pair is the aim's working and
+    this image has a person for a reader.
+
+    `frame` and `box` MUST come from the same grab. Drawing a box measured
+    before the centring correction onto a frame captured after it puts a green
+    rectangle next to the object instead of round it, which is a worse answer
+    than no picture at all.
+
+    Never raises — a search that found the thing must not fail over a JPEG.
+    """
+    try:
+        import os
+
+        from hal.drivers.tracking.look_debug import encode_annotated
+
+        jpg = encode_annotated(frame, box, label, centre_lines=False)
+        if jpg is None:
+            return None
+        os.makedirs(state._SNAPSHOT_DIR, exist_ok=True)
+        path = os.path.join(state._SNAPSHOT_DIR,
+                            f"snap_{int(time.time() * 1000)}.jpg")
+        with open(path, "wb") as f:
+            f.write(jpg)
+        state._snapshot_paths.append(path)
+        while len(state._snapshot_paths) > state._SNAPSHOT_MAX:
+            oldest = state._snapshot_paths.pop(0)
+            try:
+                os.remove(oldest)
+            except OSError:
+                pass
+        return path
+    except Exception as e:
+        logger.warning("[search] could not persist the winning frame: %s", e)
+        return None
 
 
 def _restore(svc: Any, pose: Optional[dict]) -> None:
@@ -512,6 +661,19 @@ def search_for_subject(target: str = "person", detector: Any = None,
     """
     _abort_evt.clear()
 
+    # A search for a THING stops at the first sighting, always. `exhaustive`
+    # is a survey mode — "scan the room", "is anyone else here" — that covers
+    # every look, counts sightings and goes home, which is the right shape for
+    # a headcount and the wrong one for a find: device-observed 2026-09-14, an
+    # agent that passed it for "find my doll" got a lamp that saw the doll five
+    # times, returned to its seed pose, and reported a find with no picture.
+    # Enforced here rather than trusted to the skill text, because the model
+    # is the one deciding what to pass.
+    if exhaustive and target not in ("person", "face"):
+        logger.info("[search] exhaustive ignored for '%s' — an object search "
+                    "stops at the first sighting", target)
+        exhaustive = False
+
     cap = getattr(state, "camera_capture", None)
     svc = getattr(state, "animation_service", None)
     if cap is None or svc is None:
@@ -595,6 +757,10 @@ def _sweep(svc: Any, cap: Any, detector: Any, target: str,
     without saying anything — while leaving the decision of WHAT to say, and
     whether to say anything at all, outside this file.
     """
+    # Deferred, like every other reach into `aim` here: that module imports from
+    # this one, so a top-level import either way is a cycle.
+    from hal.drivers.tracking import aim
+
     stops = _stop_list(_seed_yaw(svc))
     # Captured AFTER seeding, so it is the pose the sweep started from
     # rather than whatever the arm was doing before — that is where a
@@ -611,8 +777,10 @@ def _sweep(svc: Any, cap: Any, detector: Any, target: str,
                 [round(s) for s in stops])
 
     visited = 0
+    bearings = 0
     found: List[SearchResult] = []
     for yaw in stops:
+        bearings += 1
         if _abort_evt.is_set():
             return _abandon(svc, seed_pose, visited)
 
@@ -662,12 +830,57 @@ def _sweep(svc: Any, cap: Any, detector: Any, target: str,
                         kind or "nothing")
             if box is not None:
                 logger.info(
-                    "[search] found %s at yaw %+.0f roll %+.0f after %d stop(s)",
+                    "[search] found %s at yaw %+.0f roll %+.0f after %d look(s)",
                     kind, yaw, roll, visited,
                 )
-                hit = SearchResult(True, f"found {kind}", visited, yaw)
+                hit = SearchResult(True, f"found {kind}", visited, yaw, roll,
+                                   bearings, kind, box)
                 if not exhaustive:
-                    _straighten_head_onto(svc, yaw, roll)
+                    # Correct FIRST, straighten AFTER. The object is proven in
+                    # view from exactly this pose, so this is where the
+                    # correction's first probe is most likely to see it again.
+                    # Straightening first was device-observed (lamp-ac82, twice)
+                    # to cost the find: the base turned, the head re-levelled,
+                    # and the correction's first frames came from a body that
+                    # had just moved — `centring: lost the subject after 0
+                    # iteration(s)`.
+                    #
+                    # The straighten preserves the camera's direction (base
+                    # takes what the head gives up), so a box centred now stays
+                    # centred through it. And without any correction at all the
+                    # sweep pointed at `yaw + roll` — the look DIRECTION of the
+                    # stop, not the subject — so an object at the frame edge
+                    # left the lamp aimed ~50 deg away from it while reporting
+                    # a find.
+                    centred = aim.centre_on_box(
+                        svc, cap, probe=_sticky_probe(detector, target, box),
+                    )
+                    hit.centred = centred.centred
+                    if centred.box is not None:
+                        hit.box = centred.box
+                    logger.info("[search] centring: %s after %d iteration(s)",
+                                centred.reason, centred.iterations)
+                    # Straighten from where the correction actually left the
+                    # base, not from the stop it started at.
+                    try:
+                        now_pose = svc.get_positions()
+                        now_yaw = float(now_pose.get("base_yaw.pos", yaw))
+                        now_roll = float(now_pose.get("wrist_roll.pos", roll))
+                    except Exception:
+                        now_yaw, now_roll = yaw + centred.yaw_total, roll
+                    _straighten_head_onto(svc, now_yaw, now_roll)
+                    hit.found_at_yaw = now_yaw
+                    # Prefer the CENTRED frame and its box — that pair is what
+                    # the lamp is pointing at now. Fall back to the frame that
+                    # triggered the hit when the correction never got one (no
+                    # fresh frame, an abort, a failed nudge): the sweep did see
+                    # the thing, and "found it" with nothing to show is the
+                    # answer this whole path exists to stop. Always a matched
+                    # (frame, box) pair, never one from each.
+                    shot_frame, shot_box = ((centred.frame, centred.box)
+                                            if centred.frame is not None
+                                            else (frame, box))
+                    hit.image_path = _persist_hit(shot_frame, shot_box, kind)
                     return hit
                 found.append(hit)
 
@@ -676,11 +889,13 @@ def _sweep(svc: Any, cap: Any, detector: Any, target: str,
         logger.info("[search] full sweep: %d sighting(s) of '%s' across %d looks",
                     len(found), target, visited)
         return SearchResult(True, f"found {target} x{len(found)}", visited,
-                            found[0].found_at_yaw)
+                            found[0].found_at_yaw, found[0].found_at_roll,
+                            bearings, found[0].kind, found[0].box)
 
     # Nothing found, so nothing to look at — go back to where the sweep began
     # rather than freezing wherever the last look left the head.
     _restore(svc, seed_pose)
     logger.info("[search] no %s found after %d look(s) — back to the starting pose",
                 target, visited)
-    return SearchResult(False, f"no {target} found", visited)
+    return SearchResult(False, f"no {target} found", visited,
+                        bearings_visited=bearings)

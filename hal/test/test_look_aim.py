@@ -1049,3 +1049,203 @@ def test_a_sweep_that_cannot_run_does_not_sink_the_aim():
     with mock.patch.object(search, "search_for_subject",
                            side_effect=RuntimeError("no camera")):
         assert aim._sweep_for_subject() is False
+
+
+# --- centre_on_box: the correction the search sweep borrows ------------------
+
+
+def test_centre_on_box_walks_the_subject_to_the_middle():
+    """A box parked right of centre must produce a POSITIVE yaw nudge, and the
+    loop must stop as soon as the box is inside the deadband — the convention
+    the tracker verified on device: dx>0 -> base_yaw increases."""
+    svc = _FakeSvc()
+    # Right of centre on the first probe, dead centre on the second.
+    boxes = [(500, 200, 40, 40), (310, 200, 40, 40)]
+
+    res = aim.centre_on_box(
+        svc,
+        _FakeCap(_frame()),
+        probe=lambda _f: boxes.pop(0) if boxes else (310, 200, 40, 40),
+    )
+
+    assert res.centred is True, res.reason
+    moved = [c.args[0]["base_yaw.pos"] for c in svc.move_and_hold.call_args_list
+             if "base_yaw.pos" in c.args[0]]
+    assert moved and moved[0] > 0, (
+        f"a subject right of centre must turn the base right, got {moved}")
+    assert res.box == (310, 200, 40, 40), "the result must carry the CENTRED box"
+    assert res.frame is not None, "the result must carry the frame it centred on"
+
+
+def test_centre_on_box_gives_up_rather_than_hunting_forever():
+    """A detection that never moves must not spin forever — it exits with the
+    reason, not an exception."""
+    res = aim.centre_on_box(_FakeSvc(), _FakeCap(_frame()),
+                            probe=lambda _f: (600, 200, 20, 20))
+
+    assert res.centred is False
+    assert res.iterations == aim.MAX_ITERATIONS
+    assert res.reason == "max iterations"
+
+
+def test_centre_on_box_reports_the_last_good_box_when_it_loses_the_subject():
+    """Losing the detection mid-correction still leaves something true to show:
+    the frame and box from before the subject went missing."""
+    seen = [(500, 200, 40, 40), None]
+
+    res = aim.centre_on_box(_FakeSvc(), _FakeCap(_frame()),
+                            probe=lambda _f: seen.pop(0) if seen else None)
+
+    assert res.centred is False
+    assert res.reason == "lost the subject"
+    assert res.box == (500, 200, 40, 40)
+
+
+def test_centre_on_box_does_not_score_the_remembered_bearing():
+    """A sweep hit is as often an OBJECT as a person. Teaching the bearing
+    estimator that a keyboard is where the user sits is the quiet corruption
+    this loop exists to stay out of — aim_for_look scores, this must not."""
+    with mock.patch.object(aim, "_score_prediction") as scored, \
+         mock.patch.object(aim, "_record_bearing_if_centred") as recorded:
+        aim.centre_on_box(_FakeSvc(), _FakeCap(_frame()),
+                          probe=lambda _f: (310, 200, 40, 40))
+
+    scored.assert_not_called()
+    recorded.assert_not_called()
+
+
+def test_encode_annotated_keeps_its_debug_lines_by_default():
+    """The look-aim, the bearing sampler and the gaze loop all rely on the
+    centre lines — the flag exists for the search's user-facing image only."""
+    import inspect
+
+    from hal.drivers.tracking import look_debug
+
+    sig = inspect.signature(look_debug.encode_annotated)
+    assert sig.parameters["centre_lines"].default is True
+
+
+def test_centre_on_box_is_not_defeated_by_a_stale_abort():
+    """Device-observed on lamp-ac82: `[search] centring: aborted after 0
+    iteration(s)`. Only the button's single click sets the aim's abort flag,
+    and only aim_for_look cleared it — at its own entry. A click hours earlier
+    left the flag set, and the first centring correction ever run on the unit
+    returned "aborted" before its first frame. The flag means "abort the
+    correction in flight", so a correction that is only now starting must clear
+    it, exactly as aim_for_look does."""
+    aim.request_abort()
+    boxes = [(500, 200, 40, 40), (310, 200, 40, 40)]
+
+    res = aim.centre_on_box(_FakeSvc(), _FakeCap(_frame()),
+                            probe=lambda _f: boxes.pop(0) if boxes else (310, 200, 40, 40))
+
+    assert res.reason != "aborted", "a stale abort flag defeated the correction"
+    assert res.centred is True
+    assert res.iterations >= 1
+
+
+def test_centre_on_box_tolerates_a_flickering_detection():
+    """Device-observed on lamp-ac82: the sweep's detector saw the keyboard,
+    and the correction's very next probe returned None — `lost the subject
+    after 0 iteration(s)`. A marginal detection at the frame edge flickers
+    frame to frame; giving up on the first miss means never centring on
+    exactly the objects that most need it."""
+    # miss, miss, hit-right-of-centre, then centred.
+    seen = [None, None, (500, 200, 40, 40), (310, 200, 40, 40)]
+
+    res = aim.centre_on_box(_FakeSvc(), _FakeCap(_frame()),
+                            probe=lambda _f: seen.pop(0) if seen else (310, 200, 40, 40))
+
+    assert res.centred is True, res.reason
+    assert res.iterations >= 1
+
+
+def test_centre_on_box_still_gives_up_when_the_subject_stays_gone():
+    """Tolerance is bounded: a subject that is really gone must not keep the
+    lamp hunting until the deadline."""
+    res = aim.centre_on_box(_FakeSvc(), _FakeCap(_frame()), probe=lambda _f: None)
+
+    assert res.centred is False
+    assert res.reason == "lost the subject"
+
+
+def test_centre_on_box_corrects_pitch_with_gazes_verified_sign():
+    """Vertical centring, copied from gaze._maybe_pitch. A box ABOVE centre
+    (dy < 0) needs the camera tilted UP, and up is the DECREASING direction on
+    the pitch joints — device-measured on lamp-0c89, paired A/B/A:
+    wrist_pitch -75 -> dy +0.009, -90 -> dy +0.113. With the sign the other way
+    every correction enlarges the error it measures. The step is spread over
+    base/elbow/wrist by servo_follow.distribute_pitch, exactly as gaze does."""
+    svc = _FakeSvc()
+    # Horizontally centred, but high in the frame: 480 tall, box centre y=60.
+    boxes = [(310, 40, 40, 40), (310, 220, 40, 40)]
+
+    res = aim.centre_on_box(svc, _FakeCap(_frame()),
+                            probe=lambda _f: boxes.pop(0) if boxes else (310, 220, 40, 40))
+
+    assert res.centred is True, res.reason
+    pitch_moves = [c.args[0] for c in svc.move_and_hold.call_args_list
+                   if any(j.endswith("pitch.pos") for j in c.args[0])]
+    assert pitch_moves, "a subject above centre produced no pitch correction"
+    # Camera-space, not joint-space: distribute_pitch applies a per-joint sign
+    # (the elbow moves POSITIVE to tilt the camera up — "elbow +1.6 framed the
+    # desk, +54.8 the ceiling"), so raw joint deltas can sum either way. The
+    # invariant is that the requested camera rotation is negative.
+    from hal.drivers.tracking.servo_follow import PITCH_AXIS_SIGN
+
+    before = {j: -40.0 for j in ("base_pitch.pos", "elbow_pitch.pos", "wrist_pitch.pos")}
+    first = pitch_moves[0]
+    camera = sum(PITCH_AXIS_SIGN[j] * (first[j] - before[j]) for j in before if j in first)
+    assert camera < 0, f"box above centre must tilt the camera UP (negative), got {camera:+.1f}"
+
+
+def test_centre_on_box_needs_both_axes_inside_the_deadband():
+    """Centred left-right but still high in the frame is not centred."""
+    res = aim.centre_on_box(_FakeSvc(), _FakeCap(_frame()),
+                            probe=lambda _f: (310, 40, 40, 40))
+    assert res.centred is False
+    assert res.dy_frac is not None and res.dy_frac < -aim.CENTRE_PITCH_DEADBAND_FRAC
+
+
+def test_centre_on_box_reports_the_frame_after_its_last_move_not_before():
+    """Device-observed on lamp-ac82 ("find my doll"): three moves, the third
+    centred the doll — the user watched it happen — and the frame persisted was
+    the one measured BEFORE move three, with the doll top-left and
+    `centred: false`. The deadline and max-iteration exits fired at the top of
+    the next loop, before any frame was taken after the last move. An exit that
+    follows a move must measure once more and report what the lamp is actually
+    pointing at."""
+    # First probe: off-centre. Every probe after the (single allowed) move: centred.
+    boxes = [(500, 200, 40, 40)]
+
+    with mock.patch.object(aim, "MAX_ITERATIONS", 1):
+        res = aim.centre_on_box(_FakeSvc(), _FakeCap(_frame()),
+                                probe=lambda _f: boxes.pop(0) if boxes else (310, 220, 40, 40))
+
+    assert res.iterations == 1
+    assert res.box == (310, 220, 40, 40), (
+        f"reported the pre-move box {res.box}, not the frame after the last move")
+    assert res.centred is True, "the last move centred it and the result must say so"
+
+
+def test_centre_on_box_final_measurement_also_runs_on_the_deadline_exit():
+    """Same failure through the other door. A clock that jumps past the
+    deadline right after the first move must not skip the final look."""
+    boxes = [(500, 200, 40, 40)]
+    clock = {"t": 0.0}
+
+    def _monotonic():
+        clock["t"] += 2.5   # deadline_s=4: probe 1 at 2.5, move, next check at 5.0
+        return clock["t"]
+
+    # _grab_frame paces its freshness wait on the same clock; with a stepping
+    # clock it would give up at once and hand the final look no frame. That
+    # wait is not what this test is about.
+    with mock.patch.object(aim.time, "monotonic", _monotonic), \
+         mock.patch.object(aim, "_grab_frame", lambda cap, svc=None, require_fresh=False: cap.last_frame):
+        res = aim.centre_on_box(_FakeSvc(), _FakeCap(_frame()),
+                                probe=lambda _f: boxes.pop(0) if boxes else (310, 220, 40, 40),
+                                deadline_s=4.0)
+
+    assert res.box == (310, 220, 40, 40), f"pre-move box reported on deadline: {res.box}"
+    assert res.centred is True

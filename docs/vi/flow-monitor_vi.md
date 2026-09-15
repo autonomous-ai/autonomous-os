@@ -1,5 +1,11 @@
 # Flow Monitor (tiếng Việt)
 
+Lượt history có ID `device-chat-context-` và envelope `[external-context]` / `[HANDLED]` / `[REPLY]` hợp lệ hiển thị **History sync**, route **Harness → Main** hoặc **Realtime → Main** (hoặc nguồn bên ngoài khác). Card hiện câu hỏi và câu trả lời gốc với nhãn **Context**, không coi là TTS mới. Tooltip route có tên agent; metadata thô giữ trong chi tiết event. Parser dùng chat-send đầy đủ khi preview chat-input bị cắt, không đổi trạng thái lifecycle.
+
+Card voice Harness-only đọc `sensing_input.data.route: "harness_only"` để hiện **Harness** thay cho **Agent**. Sau khi gom event theo run ID, `harness_response` có nội dung đóng đúng lượt đó, cung cấp output và chi tiết node Response, kể cả khi tải lịch sử JSONL. Chỉ gửi input thành công thì vẫn active. Không ghép phản hồi Harness vào input gần đó có run ID khác; trạng thái lỗi đã có vẫn giữ lỗi. DONE nghĩa là đã nhận phản hồi cuối, không xác nhận phát âm thanh hay tác vụ thực tế thành công.
+
+Kiểm tra hồi quy: chạy `node --test system/web/tests/flow-harness.test.cjs` từ repo root (sau khi cài dependency web).
+
 Codex steering ghi `turn_merged` theo run ID của follow-up, với
 `data.parent_run_id` trỏ đến host đang active. Follow-up giữ card input riêng
 và mở pipeline chung của host khi được chọn. Trạng thái theo host đến khi có
@@ -17,7 +23,7 @@ Flow Monitor là lớp quan sát end-to-end cho agent turn: ghi JSONL (`local/fl
 
 **Run ID từ thiết bị (`chat.send`):** idempotency dùng tiền tố `lamp-chat-*` (trước đây `lamp-sensing-*`). Đó là **mọi** tin gửi qua WebSocket từ thiết bị (sensing POST, wake greeting, …), **không** có nghĩa log đó chỉ là sound/voice — đừng nhầm với Telegram chỉ vì thấy chữ “sensing” trong log cũ.
 
-**Map UUID → `lamp-chat-*`:** Hành vi runId của OpenClaw phụ thuộc version. **5.2** (và một số path 5.4 hiếm) generate UUID mới — thiết bị map UUID → idempotencyKey. **5.4** chủ yếu echo idempotencyKey trực tiếp làm runId — runId đã là device trace, không cần map. Một chat.send có thể tạo cả Phase 1 (echo) lẫn Phase 2 (UUID embedded run) trong burst/drain. SSE handler branch theo `payload.RunID` format: device-format → `RemovePendingChatTraceByRunID` (xoá entry match khỏi queue, không map); UUID → FIFO pop + map. Sau đó `resolveRunID` dùng cho agent stream **và** luồng `chat` để tránh cùng một turn bị hai `run_id` trên Monitor.
+**Map UUID → `lamp-chat-*`:** Hành vi runId của OpenClaw phụ thuộc version. **5.2** (và một số path 5.4 hiếm) generate UUID mới — thiết bị map UUID → idempotencyKey. **5.4** chủ yếu echo idempotencyKey trực tiếp làm runId — runId đã là device trace, không cần map. Một chat.send có thể tạo cả Phase 1 (echo) lẫn Phase 2 (UUID embedded run) trong burst/drain. SSE handler branch theo `payload.RunID` format: device-format → `RemovePendingChatTraceByRunID` (xoá entry match khỏi queue, không map); UUID → matcher message hiện có (exact/prefix và chọn entry cũ nhất). Trace lưu trước khi ghi WebSocket, xoá khi ghi lỗi; TTL routing vẫn 2 phút, pending-send busy vẫn 30 giây. Telemetry dùng buffer và alias riêng, tối đa 1024 entry trong 24 giờ, chỉ nhận đúng một match toàn bộ sau trim; không dùng phỏng đoán routing khi match mơ hồ. Alias metric không tham gia TTS hay dispatch. History lỗi vẫn có thể làm thiếu correlation. Sau đó `resolveRunID` dùng cho agent stream **và** luồng `chat` để tránh cùng một turn bị hai `run_id` trên Monitor.
 
 **Pending-trace orphan (regression 0.0.465, fix 0.0.468):** Bản trước skip pop khi runId device-format → entry kẹt lại làm orphan → UUID lifecycle kế tiếp pop nhầm → 2 reply khác nhau bị gắn cùng 1 turn (cascade off-by-one ~2 min cho tới khi TTL hết). Fix: dùng `RemovePendingChatTraceByRunID` để xoá entry chính xác thay vì skip.
 
@@ -73,8 +79,30 @@ Component `FlowDiagram` trong `system/web/src/pages/Monitor.tsx` vẽ **ba vùng
   - **EMO** (`hw_emotion`) — `/emotion` (phối hợp LED + servo + display eyes)
   - **LED** (`hw_led`) — `/led/solid`, `/led/effect`, `/scene`, `/led/off`
   - **SERVO** (`hw_servo`) — di chuyển hoặc chạy animation servo:
-    `/servo/aim`, `/servo/play`, `/servo/track`. Chi tiết node hiển thị đúng
-    lệnh/API call agent đã chạy trong turn đang chọn.
+    `/servo/aim`, `/servo/play`, `/servo/nudge`, `/servo/search`, `/servo/demo`.
+    Chi tiết node hiển thị đúng lệnh/API call agent đã chạy trong turn đang
+    chọn. Các lệnh đọc (`/servo/position`, `/servo/status`, `/servo/bearing`)
+    không tính — một event `hw_servo` nghĩa là đèn đã làm gì đó mà người ta
+    nhìn thấy được.
+
+  **Event phần cứng được so khớp theo endpoint đã phân giải, không theo text
+  shell thô.** Arguments của tool call được quét tìm `127.0.0.1:500[01]/<path>`
+  (`hwPathFromToolArgs` trong `handler_event_agent.go`) và các nhánh `/emotion`
+  cùng `/servo/*` so sánh với path đó. Cách so khớp chuỗi con trước đây biến
+  `cat …/skills/emotion/SKILL.md` thành một cặp `hw_emotion` + `led_set` cho một
+  turn mà đèn không hề làm gì. Các nhánh `/led/*` và `/audio/play` vẫn dùng
+  dạng chuỗi con — cùng điểm yếu, nhưng chưa quan sát thấy event ma ở đó.
+
+  **`hw_failed`** — một marker `[HW:...]` mà OS đã cố bắn nhưng POST thất bại
+  ở tầng transport: client timeout 5 s, kết nối bị từ chối. Mang theo `path`,
+  `args`, `run_id` và `error`. Trước khi có event này, nhánh đó return trước
+  bất kỳ `flow.Log` nào, nên một chuyển động thân máy dài 40 s không để lại gì
+  trong monitor (`device-chat-44`: marker tìm kiếm đã bắn, HAL quét cả phòng,
+  timeline hiện một cái đèn đứng yên). Cố ý **không** phải là một cancellation:
+  nó làm sáng node OS-gate và thêm dòng `⚠ → HW call failed` vào chi tiết,
+  nhưng không gắn badge cancelled cho turn và không tô đỏ node TTS — hai thứ đó
+  nghĩa là *người dùng* đã làm turn im tiếng, và một timeout không bao giờ được
+  đọc thành hành động của người dùng.
   - **CAM** (`hw_camera`) — `GET /camera/snapshot`; ảnh đã lưu mà tool
     trả về (kể cả file workspace như `cam_face3.jpg`) hiện thumbnail bấm để
     phóng to, giúp debug đúng frame agent nhận được, không chụp lại ảnh mới.
@@ -245,3 +273,5 @@ Marker `[HW:...]` chỉ tới HAL khi agent xuất nó ra **text trả lời** (
 - **Chống tận gốc**: `skills/music/SKILL.md` đã cấm rõ echo/exec/bash bọc marker — marker phải là text trả lời, không "chạy" nó.
 
 Kết quả cuối Harness được ghi vào flow JSONL bằng `harness_response`, giữ run ID thiết bị gốc và `text` đầy đủ. Web Chat dùng sự kiện này khôi phục kết quả đang chờ sau khi SSE ngắt hoặc tải lại trang. Luồng trực tiếp vẫn phát `chat_response` với state `final`.
+
+Lượt voice do realtime xử lý và lượt history sync dùng ID riêng: `device-realtime-…` cho hội thoại gốc, `device-chat-context-…` cho đồng bộ. Event `realtime_response` lưu câu hỏi/câu trả lời và đóng card gốc; card History sync theo lifecycle riêng. `history_run_id` liên kết mà không gộp hai lượt. Event cũ đã lưu cùng ID vẫn giữ cách hiển thị gộp trước đây.

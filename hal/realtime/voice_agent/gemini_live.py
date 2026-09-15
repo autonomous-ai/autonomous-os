@@ -8,6 +8,7 @@ import threading
 import time
 from contextlib import AsyncExitStack
 from typing import Any, override
+from uuid import uuid4
 
 import cv2
 import google.genai as genai
@@ -32,6 +33,8 @@ from hal.realtime.models import (
     InputBase,
     InputEvent,
     InterruptedOutput,
+    UserSpeechOutput,
+    ExecutionOutput,
     OutputEvent,
     TextInput,
     TextOutput,
@@ -130,6 +133,7 @@ class GeminiLiveAgent(VoiceAgentBase):
         # replaced before another turn rather than locally clearing the call.
         self._pending_tool_calls: set[str] = set()
         self._requires_fresh_session: bool = False
+        self._user_transcript: str = ""
         self._gated_audio_frames: int = 0
         self._reconnect_delay_s: float = config.reconnect_delay_s
         self._last_reconnect_at: float = 0.0
@@ -294,6 +298,10 @@ class GeminiLiveAgent(VoiceAgentBase):
     # --- Async internals (run on private event loop) ---
 
     async def _async_connect(self) -> None:
+        # A reopened session must not inherit input ownership or playback acks.
+        self._live_user_turn_id = ""
+        self._live_speech_emitted = False
+        self._awaiting_playback_turn_complete = False
         logger.info(
             "Connecting to Gemini Live API (base_url=%s, model=%s)",
             self._config.base_url,
@@ -500,6 +508,34 @@ class GeminiLiveAgent(VoiceAgentBase):
             else:
                 logger.debug("[realtime] Sent activityEnd (manual VAD)")
 
+    def _observe_user_speech(self, *, endpoint_at: float | None = None, transcript: str = "",
+                             transcript_finished: bool = False) -> None:
+        """Publish one input key, enriching it only with an actual VAD endpoint."""
+        if not app_config.LIVE_MODE:
+            return
+        if transcript_finished and not transcript and endpoint_at is None:
+            # Completion-only metadata cannot invent an input turn.
+            if not getattr(self, "_live_user_turn_id", ""):
+                return
+        if not getattr(self, "_live_user_turn_id", ""):
+            self._live_user_turn_id = "gemini-" + uuid4().hex
+            self._live_speech_emitted = False
+        if (getattr(self, "_live_speech_emitted", False) and endpoint_at is None
+                and not transcript and not transcript_finished):
+            return
+        self._live_speech_emitted = True
+        self._recv_queue.put(OutputEvent(
+            gen=getattr(self, "_turn_gen", 0),
+            output=UserSpeechOutput(
+                turn_id=self._live_user_turn_id,
+                transcript=transcript,
+                transcript_finished=transcript_finished,
+                user_turn_id=self._live_user_turn_id,
+                endpoint_at=endpoint_at,
+                method="server_vad" if endpoint_at is not None else "provider_transcript",
+            ),
+        ))
+
     async def _async_receive_turn(self) -> None:
         """Read one full turn from the session, put outputs on _recv_queue."""
         if self._session is None:
@@ -517,6 +553,7 @@ class GeminiLiveAgent(VoiceAgentBase):
         valid_transcription_chunk_cnt = 0
 
         execution_interrupted = False
+        response_user_turn_id: str | None = None
         async for message in self._session.receive():
             # Liveness for the silent-turn watchdog: most of what arrives here
             # never reaches _recv_queue (thought parts, grounding metadata,
@@ -524,6 +561,13 @@ class GeminiLiveAgent(VoiceAgentBase):
             # is indistinguishable from one the model abandoned. See
             # RealtimeVoiceAgent.note_server_activity.
             self.note_server_activity()
+            activity = getattr(message, "voice_activity", None)
+            activity_type = getattr(activity, "voice_activity_type", None)
+            if activity_type == "ACTIVITY_START":
+                self._live_user_turn_id = ""
+                self._live_speech_emitted = False
+            elif activity_type == "ACTIVITY_END":
+                self._observe_user_speech(endpoint_at=time.monotonic())
             if message.usage_metadata:
                 # Per-turn token bill. prompt_token_count is the input CONTEXT
                 # billed this turn — it grows as a long-lived session accumulates
@@ -620,6 +664,31 @@ class GeminiLiveAgent(VoiceAgentBase):
                                 "[realtime][grounding][debug] dump failed: %s", e
                             )
 
+                interrupted_user_turn_id = ""
+                if content.interrupted and app_config.LIVE_MODE:
+                    interrupted_user_turn_id = (
+                        response_user_turn_id if response_user_turn_id is not None
+                        else getattr(self, "_live_user_turn_id", "")
+                    )
+                    response_user_turn_id = interrupted_user_turn_id
+                    self._live_user_turn_id = ""
+                    self._live_speech_emitted = False
+
+                _in_tx = getattr(content, "input_transcription", None)
+                if _in_tx is not None and (_in_tx.text or getattr(_in_tx, "finished", False) is True):
+                    self._observe_user_speech(
+                        transcript=_in_tx.text or "",
+                        transcript_finished=getattr(_in_tx, "finished", False) is True,
+                    )
+
+                has_model_output = bool(content.model_turn or content.output_transcription)
+                if has_model_output:
+                    self._awaiting_playback_turn_complete = False
+                if response_user_turn_id is None and has_model_output:
+                    # Transcription can arrive after model output. Freeze unknown
+                    # ownership instead of attributing that response to a later input.
+                    response_user_turn_id = getattr(self, "_live_user_turn_id", "")
+
                 if content.model_turn and content.model_turn.parts:
                     for part in content.model_turn.parts:
                         # Skip reasoning parts: Gemini flags thought parts with
@@ -656,6 +725,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                                 OutputEvent(
                                     gen=getattr(self, "_turn_gen", 0),
                                     output=AudioOutput(
+                                        user_turn_id=response_user_turn_id or "",
                                         audio=pcm16_bytes_to_float32(
                                             part.inline_data.data
                                         )
@@ -675,20 +745,29 @@ class GeminiLiveAgent(VoiceAgentBase):
                             # truth for the spoken text + [HANDLED] transcript.
                             continue
 
-                _in_tx = getattr(content, "input_transcription", None)
                 if _in_tx is not None and _in_tx.text:
                     logger.info("[realtime] <<< user said: %r", _in_tx.text)
+                    self._user_transcript = getattr(self, "_user_transcript", "") + _in_tx.text
 
                 if content.output_transcription and content.output_transcription.text:
                     if not valid_transcription_chunk_cnt:
-                        self._recv_queue.put(OutputEvent(gen=getattr(self, "_turn_gen", 0), output=InterruptedOutput()))
+                        self._recv_queue.put(OutputEvent(
+                            gen=getattr(self, "_turn_gen", 0),
+                            output=InterruptedOutput(
+                                reason="output_reset",
+                                user_turn_id=response_user_turn_id or "",
+                            ),
+                        ))
 
                     valid_transcription_chunk_cnt += 1
 
                     self._recv_queue.put(
                         OutputEvent(
                             gen=getattr(self, "_turn_gen", 0),
-                            output=TextOutput(text=content.output_transcription.text),
+                            output=TextOutput(
+                                text=content.output_transcription.text,
+                                user_turn_id=response_user_turn_id or "",
+                            ),
                         )
                     )
 
@@ -720,47 +799,70 @@ class GeminiLiveAgent(VoiceAgentBase):
                         )
                     except Exception as _e:
                         logger.info("[realtime][interrupt] dump failed: %s", _e)
-                    # A barge-in starts a NEW generation. This bump is the whole
-                    # reason the counter is not simply per-receive-turn:
-                    # `interrupted` does not end this loop (only turn_complete
-                    # and generation_complete return), so without it the audio
-                    # queued before the interruption would share a generation
-                    # with whatever follows and could never be told apart.
-                    # self._turn_gen = getattr(self, "_turn_gen", 0) + 1
-                    # Server VAD heard the user talk over the reply.
-                    #
-                    # DROP WHAT IS ALREADY QUEUED FIRST. The model generates
-                    # audio far faster than it plays, so at this moment the
-                    # recv queue can hold many seconds of speech the user has
-                    # just cancelled — and the consumer reads strictly FIFO, so
-                    # it would play every one of those before ever seeing the
-                    # interrupt. Device-observed 2026-09-08 on lamp-ee17: the
-                    # interruption was acted on only AFTER the whole buffered
-                    # reply had finished, putting "[live] barge-in" and "[live]
-                    # model said" in the SAME second, so the user heard no
-                    # reaction at all. Draining here is what makes barge-in
-                    # feel immediate; the consumer then only has to finish the
-                    # one frame it is mid-write on.
-                    dropped = 0
-                    while True:
+
+                    dropped = self._recv_queue.qsize()
+                    metadata = []
+
+                    while not self._recv_queue.empty():
                         try:
-                            self._recv_queue.get_nowait()
+                            queued = self._recv_queue.get_nowait()
+                            if isinstance(queued, OutputEvent) and (
+                                isinstance(queued.output, (UserSpeechOutput, ExecutionOutput))
+                                or (isinstance(queued.output, InterruptedOutput)
+                                    and queued.output.reason == "server_interrupt")
+                            ):
+                                metadata.append(queued)
+                            elif app_config.LIVE_MODE and isinstance(queued, TurnDoneEvent):
+                                # Preserve metric evidence, never replay a control
+                                # terminal that the original interruption path dropped.
+                                metadata.append(OutputEvent(
+                                    gen=self._turn_gen,
+                                    output=ExecutionOutput(
+                                        user_turn_id=queued.user_turn_id,
+                                        execution_completed=queued.execution_completed,
+                                    ),
+                                ))
                         except queue.Empty:
                             break
-                        dropped += 1
+
+                    for queued in metadata:
+                        self._recv_queue.put(queued)
+                    if app_config.LIVE_MODE:
+                        self._recv_queue.put(OutputEvent(
+                            gen=self._turn_gen,
+                            output=InterruptedOutput(
+                                reason="server_interrupt", at=time.monotonic(),
+                                user_turn_id=interrupted_user_turn_id,
+                            ),
+                        ))
                     logger.info(
                         "[realtime] Response interrupted — dropped %d queued output(s)",
                         dropped,
                     )
                     self._first_audio_received = False
                     self._turn_done.set()
-                    # self._recv_queue.put(OutputEvent(gen=getattr(self, "_turn_gen", 0), output=InterruptedOutput()))
 
                 if content.turn_complete:
+                    delayed_playback_ack = app_config.LIVE_MODE and getattr(
+                        self, "_awaiting_playback_turn_complete", False
+                    )
+                    # Keep the original control terminal/unblock. Only its metric
+                    # evidence is ignored when generation_complete already reported it.
+                    self._awaiting_playback_turn_complete = False
                     logger.debug("[realtime] Turn complete")
                     self._first_audio_received = False
+                    self._user_transcript = ""
                     self._turn_done.set()
-                    self._recv_queue.put(TurnDoneEvent(execution_completed=not execution_interrupted))
+                    self._recv_queue.put(TurnDoneEvent(
+                        execution_completed=not execution_interrupted and not delayed_playback_ack,
+                        user_turn_id=("" if delayed_playback_ack else response_user_turn_id if response_user_turn_id is not None
+                                      else getattr(self, "_live_user_turn_id", "")),
+                    ))
+                    if not delayed_playback_ack and (response_user_turn_id is None or (
+                        getattr(self, "_live_user_turn_id", "") == response_user_turn_id
+                    )):
+                        self._live_user_turn_id = ""
+                        self._live_speech_emitted = False
                     return
 
                 if getattr(content, "generation_complete", False):
@@ -774,9 +876,19 @@ class GeminiLiveAgent(VoiceAgentBase):
                     # finish the consumer turn now. A late turn_complete is
                     # harmless: flush_output() drops it before the next turn.
                     logger.debug("[realtime] Generation complete")
+                    self._awaiting_playback_turn_complete = True
                     self._first_audio_received = False
                     self._turn_done.set()
-                    self._recv_queue.put(TurnDoneEvent(execution_completed=not execution_interrupted))
+                    self._recv_queue.put(TurnDoneEvent(
+                        execution_completed=not execution_interrupted,
+                        user_turn_id=(response_user_turn_id if response_user_turn_id is not None
+                                      else getattr(self, "_live_user_turn_id", "")),
+                    ))
+                    if response_user_turn_id is None or (
+                        getattr(self, "_live_user_turn_id", "") == response_user_turn_id
+                    ):
+                        self._live_user_turn_id = ""
+                        self._live_speech_emitted = False
                     return
 
             elif message.tool_call and message.tool_call.function_calls:
@@ -787,15 +899,21 @@ class GeminiLiveAgent(VoiceAgentBase):
                 self._pending_tool_calls.update(
                     fc.id or "" for fc in message.tool_call.function_calls
                 )
+                if response_user_turn_id is None:
+                    response_user_turn_id = getattr(self, "_live_user_turn_id", "")
+                user_transcript = getattr(self, "_user_transcript", "").strip()
+                self._user_transcript = ""
                 for fc in message.tool_call.function_calls:
                     logger.debug("[realtime] Function call: %s (call_id=%s)", fc.name, fc.id)
                     self._recv_queue.put(
                         OutputEvent(
                             gen=getattr(self, "_turn_gen", 0),
                             output=FunctionCallOutput(
+                                user_turn_id=response_user_turn_id or "",
                                 name=fc.name or "",
                                 arguments=json.dumps(fc.args) if fc.args else "{}",
                                 call_id=fc.id or "",
+                                user_transcript=user_transcript,
                             ),
                         )
                     )

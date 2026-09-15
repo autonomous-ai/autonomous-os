@@ -387,13 +387,15 @@ const (
 
 // Data kinds carried inside CommandData envelope.
 const (
-	KindBuddyPairStart    = "buddy.pair.start"  // issue the shared 6-digit Buddy pairing code (60s)
-	KindBuddyStatus       = "buddy.status"      // query or report the current public Buddy state
-	KindBuddyPairRevoke   = "buddy.pair.revoke" // revoke the current Buddy pairing
-	KindHarnessPairStart  = "harness.pair.start"
-	KindHarnessStatus     = "harness.status"
-	KindHarnessPairCancel = "harness.pair.cancel"
-	KindHarnessPairRevoke = "harness.pair.revoke"
+	KindBuddyPairStart      = "buddy.pair.start"  // issue the shared 6-digit Buddy pairing code (60s)
+	KindBuddyStatus         = "buddy.status"      // query or report the current public Buddy state
+	KindBuddyPairRevoke     = "buddy.pair.revoke" // revoke the current Buddy pairing
+	KindHarnessPairStart    = "harness.pair.start"
+	KindHarnessStatus       = "harness.status"
+	KindHarnessVoiceModeGet = "harness.voice-mode.get"
+	KindHarnessVoiceModeSet = "harness.voice-mode.set"
+	KindHarnessPairCancel   = "harness.pair.cancel"
+	KindHarnessPairRevoke   = "harness.pair.revoke"
 
 	KindTTSSet       = "tts.set"       // persist TTS voice/provider/language config
 	KindTTSPreview   = "tts.preview"   // one-shot TTS preview, no config write
@@ -791,6 +793,9 @@ func NewMQTTInfoResponse(cfg *config.Config, msgType string, mac string) MQTTInf
 		Timezone:        cfg.Timezone,
 	}
 }
+
+// KindEnvironmentStatus queries the current model-independent HAL snapshot.
+const KindEnvironmentStatus = "environment.status"
 
 // MQTTDataCommand is the fa_channel payload for cmd:"data" — a generic envelope.
 // Sub-handlers branch on Kind and unmarshal Data into a kind-specific struct.
@@ -1389,6 +1394,8 @@ type RealtimePublic struct {
 }
 
 type ConfigPublicResponse struct {
+	Environment EnvironmentConfig `json:"environment"`
+
 	Channel            string   `json:"channel"`
 	TelegramUserID     string   `json:"telegram_user_id"`
 	SlackUserID        string   `json:"slack_user_id"`
@@ -1453,6 +1460,8 @@ type ConfigPublicResponse struct {
 // UpdateConfigRequest is used by PUT /api/device/config to update device settings.
 // All fields are optional; only non-empty values are applied.
 type UpdateConfigRequest struct {
+	Environment *EnvironmentConfig `json:"environment,omitempty"`
+
 	SSID     string `json:"ssid"`
 	Password string `json:"password"`
 	Channel  string `json:"channel"`

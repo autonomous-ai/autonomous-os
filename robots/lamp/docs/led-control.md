@@ -41,6 +41,10 @@ stays lit until the first LED command, which may be minutes after boot.
 
 `/led/solid`, `/led/paint`, `/led/effect`, and `/led/off` accept an optional `"transient": true` flag. When set, the call paints the strip but does **not** overwrite the saved user LED state. The saved state is restored when the caller (e.g. Claude Desktop Buddy) is done — either via the natural emotion restore timer, or by an explicit `POST /led/restore`. Pulse effects launched with `transient: true` also overlay on the user's saved color instead of black.
 
+### Harness voice confirmation
+
+Physical Harness toggles read `button_led.harness_on` / `button_led.harness_off` from `robots/lamp/presets.json` through the live HAL preset table. Lamp uses RGB `[1, 1, 3]` when enabled and `[2, 2, 2]` when disabled. Both inherit a 600 ms pulse; `effect` and `duration_ms` can also be overridden in the preset. Feedback remains transient and schedules LED restoration 100 ms after the configured duration.
+
 ## Solid Color
 
 ```json
@@ -314,3 +318,11 @@ See [emotion-led-mapping.md](emotion-led-mapping.md) for the full emotion → LE
 A device can override these emotion/scene/aim values (and the LED ring size) without
 changing the shared defaults, via a `robots/<type>/presets.json` file. This is a
 platform mechanism — see [ROBOT-SPEC.md § Per-device presets](../../contract/ROBOT-SPEC.md#per-device-presets-presetsjson).
+
+### LIVE voice status
+
+LIVE voice uses the same `listening` HW emotion and realtime thinking helper
+as turn-based voice, including their existing LED, display and body behavior.
+It requires recognized input text and the regular addressing gate; noise or
+opening the mic cannot start these emotions. Thinking requires provider end
+evidence, never a local silence estimate. There is no separate LIVE LED overlay. See [realtime voice](../../../docs/realtime-voice.md#hw-emotion-feedback-in-live-mode) for timing and cleanup.

@@ -582,6 +582,27 @@ func SetEmotion(name string, intensity float64) error {
 	return post("/emotion", body)
 }
 
+// GetSleeping returns HAL's own sleep flag from /emotion/status. HAL updates it
+// on every /emotion call, including the ones that never reach os-server (a
+// button tap wakes the device in-process), so it is the authoritative answer.
+func GetSleeping() (bool, error) {
+	resp, err := doGet("/emotion/status")
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return false, fmt.Errorf("GET /emotion/status returned %d", resp.StatusCode)
+	}
+	var r struct {
+		Sleeping bool `json:"sleeping"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
+		return false, fmt.Errorf("decode /emotion/status: %w", err)
+	}
+	return r.Sleeping, nil
+}
+
 // GetEmotion returns the current emotion reported by HAL's /emotion/status.
 func GetEmotion() (string, error) {
 	resp, err := doGet("/emotion/status")

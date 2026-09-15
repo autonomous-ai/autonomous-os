@@ -1,36 +1,52 @@
 # Physical Controls — GPIO Button, TTP223 and MPR121
 
-Lamp supports a mechanical button, TTP223 touchpads and an optional MPR121 capacitive touch controller. They share the same action library (`hal/drivers/button_actions.py`) so any gesture mapped to "single click" behaves identically whether it came from the mechanical button or the capacitive touchpad.
+Lamp supports mechanical buttons, TTP223 touchpads and an optional MPR121 capacitive touch controller. They share the same action library (`hal/drivers/button_actions.py`) so any gesture mapped to "single click" behaves identically whether it came from the mechanical button or the capacitive touchpad.
 
 ## Input devices
 
 | Device | Role | Where |
 |---|---|---|
-| **GPIO button** | One mechanical button. Used for decisive actions including destructive ones (reboot / shutdown / factory-reset). The mechanical feel and long-hold detection make accidental destructive actions unlikely. | Both Pi 4/5 and OrangePi sun60 |
+| **GPIO button** | A primary mechanical button for click and hold actions, plus a dedicated reset button on OrangePi. Destructive hold actions require release. | Both Pi 4/5 and OrangePi sun60 |
 | **TTP223 capacitive touchpad** | Two touch pads arranged as a "dog head" surface for petting + soft stop/unmute. No destructive gestures because the IC's FastMode prevents reliable hold detection. | OrangePi sun60 only (4 Pro / A733) |
-| **MPR121 capacitive touch controller** | Up to 12 electrodes; one touch-and-release session calls the shared single-click action. No double-tap or destructive hold mapping. | Lamp with an explicit I²C configuration in `mpr121.json` |
+| **MPR121 capacitive touch controller** | Up to 12 electrodes with GPIO-like click and release-to-commit hold actions, including reboot, shutdown and reset. | Lamp with an explicit I²C configuration in `mpr121.json` |
 
 ## Wiring
 
 | Device | Pi 4/5 | OrangePi sun60 |
 |---|---|---|
-| GPIO button | gpiochip0 BCM 17 (pull-up, active-LOW) | Physical pin 37 / PD4 / gpiochip0 line 100 (pull-up, active-LOW) |
-| TTP223 | not wired | gpiochip0 lines 96 / 100, **pull-up, active-LOW** (pads rest HIGH; a touch is the falling edge). The middle pad on line 98 was removed 2026-08-28. |
+| Primary GPIO button | gpiochip0 BCM 17 (pull-up, active-LOW) | Physical pin 37 / PD4 / gpiochip0 line 100 (pull-up, active-LOW) |
+| Reset GPIO button | not wired | Physical pin 35 / PD3 / gpiochip0 line 99 (pull-up, active-LOW); hold ≥5 s then release to factory-reset |
+| Mic slide switch | not wired | Physical pin 11 / PL9 / gpiochip1 line 9; pull-up, LOW=mute, HIGH=unmute |
+| TTP223 | not wired | Two pads: S1 at physical pin 29 / PD0 / gpiochip0 line 96; S3 at physical pin 33 / PD2 / gpiochip0 line 98. **Pull-up, active-LOW** (pads rest HIGH; a touch is the falling edge). |
 
 Mechanical button wiring belongs to the device: `robots/lamp/gpio_button.json`
 and `robots/intern-v2/gpio_button.json` each declare a `boards` map keyed by
-`raspberry_pi_4`, `raspberry_pi_5`, and `orangepi_sun60`. Each entry has `chip`,
-`line`, and `debounce_ns` (currently `200000000`, or 200 ms). Lamp uses the
-button pins shown above; Intern v2 retains gpiochip1 line 9 on OrangePi.
-Change the selected device's file when its wiring changes, then restart HAL; moving physical wires is not detected automatically.
-HAL resolves the directory using `DEVICES_DIR` and `DEVICE_TYPE`, then passes
-the detected board's `ButtonConfig` to the shared driver. Device configuration
-takes priority. A missing file or board entry falls back to the existing
-`button` defaults in `hal/board/boards.json`: chip 0 / line 17 for Pi 4, Pi 5,
-CM4 and sim; chip 1 / line 9 for OrangePi sun60; all with 200 ms debounce.
-Malformed configuration is rejected before claiming GPIO. Simulation skips
-the hardware button. Pull-up, active-LOW input and gesture behavior remain in
-the shared driver.
+`raspberry_pi_4`, `raspberry_pi_5`, and `orangepi_sun60`. Entries accept the
+original flat `chip`, `line`, `debounce_ns` shape or a `buttons` list. Lamp's
+OrangePi entry is:
+
+```json
+{
+  "buttons": [
+    {"name": "primary", "chip": 0, "line": 100, "debounce_ns": 200000000, "behavior": "standard"},
+    {"name": "factory_reset", "chip": 0, "line": 99, "debounce_ns": 200000000, "behavior": "factory_reset", "hold_s": 5}
+  ]
+}
+```
+
+Intern v2's JSON stays unchanged, with gpiochip1 line 9 on OrangePi.
+Change the selected device's file when its wiring changes, then restart HAL;
+moving physical wires is not detected automatically. HAL resolves the directory
+using `DEVICES_DIR` and `DEVICE_TYPE`. `load_button_configs` supplies one shared
+driver instance per input; HAL stops all instances during cleanup.
+`load_button_config` remains compatible for callers needing the first input (the primary button in Lamp).
+Device configuration takes priority. A missing file or board entry falls back
+to exactly one existing `button` default in `hal/board/boards.json`: chip 0 /
+line 17 for Pi 4, Pi 5, CM4 and sim; chip 1 / line 9 for OrangePi sun60; all
+with 200 ms debounce. Malformed configuration, duplicate names, and duplicate
+chip/line pairs are rejected before claiming GPIO. Simulation skips hardware
+buttons. Pull-up, active-LOW input and gesture detection remain in the shared
+driver.
 
 TTP223 wiring is also device-owned: `robots/lamp/ttp223.json` declares a
 `boards` map. Intern v2 has no TTP223 hardware and does not ship this file. Each enabled entry has
@@ -43,9 +59,10 @@ configuration is rejected before GPIO is claimed. Restart HAL after editing
 the selected device's JSON. Pull-up, active-LOW behavior and gesture detection
 remain in the shared driver; simulation skips the hardware.
 
-Lamp's new mechanical button uses line 100, which also appears in the legacy
-TTP223 wiring. The replacement pad pin is pending confirmation; do not treat
-that overlapping mapping as verified wiring.
+Hardware confirmed two pads: S1 on pin 29 (line 96) and S3 on pin 33 (line 98).
+The Lamp JSON uses these lines, leaving pin 37 (line 100) for the mechanical
+button. The legacy fallback still uses lines 96/100; keep the Lamp JSON installed
+to avoid that old overlap.
 
 Board detection reads `/proc/device-tree/model`:
 - `"sun60iw2"` → OrangePi 4 Pro / A733
@@ -53,9 +70,44 @@ Board detection reads `/proc/device-tree/model`:
 - `"raspberry pi 4"` → Pi 4
 - unknown or unsupported hardware → rejected by the HAL startup board gate
 
+### Microphone slide switch
+
+`robots/lamp/privacy_button.json` declares chip 1 / line 9 under `orangepi_sun60`,
+with `settle_s: 0.06`, `muted_level: 0`, and `watchdog_s: 30`. The shared
+`privacy_button.py` driver tracks switch position, synchronizes at boot, and applies
+mute/unmute after contacts settle. The watchdog only reconciles changed GPIO
+levels so software mute is preserved while the switch stays still. Intern v2
+has no mic JSON and keeps its original chip 0 / line 97 code fallback. Lamp
+without this JSON remains disabled. Keep Lamp's primary-button JSON installed
+to avoid its legacy pin 11 fallback overlapping this switch. The Lamp mic
+configuration was deployed on 2026-09-11; startup confirmed chip1/line9 ready
+and initial LOW applied mute. Live toggle testing is pending.
+
+#### Lamp privacy peripherals
+
+`privacy_button.json` sets `disable_camera_on_mute: true` and
+`mute_speaker_on_mute: true`. The pin 11 toggle therefore mutes the mic, stops
+camera capture and stops/suppresses speaker output (TTS, music and backchannel).
+The existing red mic-muted indicator remains the privacy indicator.
+
+While locked, camera enable/snapshot and speaker unmute return HTTP 409; camera
+streaming, realtime look, scene/wake and temporary capture starts cannot reopen
+the camera or speaker. Cached camera frames are hidden from capture consumers.
+At HAL startup the configured peripherals remain closed until GPIO synchronizes;
+a failed initial read/claim keeps privacy locked.
+
+Unlock uses the existing microphone wake/listening flow and restores camera and
+speaker to their previous states. A camera or speaker already disabled before
+locking stays disabled; an explicit manual disable during the lock is also
+preserved. The listening cue only plays when the restored speaker is unmuted.
+Preferences survive HAL restarts within the same boot, without saving the
+temporary privacy lock as a manual mute. Both options default to false for
+other devices; Intern retains its existing microphone-only fallback without JSON.
+Deploy the updated HAL before uploading JSON with these new fields.
+
 ## Gesture map
 
-| Gesture | GPIO button | TTP223 touchpad |
+| Gesture | Primary GPIO button | TTP223 touchpad |
 |---|---|---|
 | **1 tap** | Stop active object tracking, then stop speaker / unmute mic + speaker + ack chime (~120 ms ping) — all fire immediately on release (no click-window wait); the "Listening" cue plays once the 0.4 s click window resolves | Same after the 1.2 s tap-vs-pet decision resolves — active tracking stops, then the mic/speaker action and cue run. The initial touch still stops in-flight TTS and plays its ack chime immediately. |
 | **2 taps** (≤ 0.4 s apart, button) / (≤ 1.2 s apart, TTP223) | Nothing beyond the single-click already fired on tap 1 (panic-click guard) | Pet response. With `HAL_TOUCH_SWIPE` on (the default), repeated taps in one place — fast or slow, one finger or several — are a **double tap** → mic mute toggle; pet then means the finger revisited a pad |
@@ -65,7 +117,9 @@ Board detection reads `/proc/device-tree/model`:
 | **Hold 5–10 s, then release** | Shutdown OS (TTS announce → release servos → `sudo shutdown -h now`). LED blinks red while armed. | n/a — TTP223 hardware cannot reliably hold (see "FastMode" below) |
 | **Hold 10 s+, then release** | Factory-reset: wipe device state + reboot into AP setup (TTS announce → release servos → POST `/api/system/factory-reset` on the OS server). LED goes solid red while armed. | n/a |
 
-Hold gestures are intentionally only on the GPIO button because the mechanical button gives unambiguous evidence of intent. The sleep and destructive hold tiers **commit on release, not on a timer firing while held**. The destructive tiers escalate from shutdown to factory-reset after 10 s (see "GPIO button detection" below).
+The table above covers the primary GPIO button and TTP223. The dedicated reset button on pin 35 only factory-resets when released after a hold of at least 5 s. Shorter holds and single/triple taps do nothing; it never invokes sleep or shutdown. LED stays unchanged below 5 s and uses the shared solid-red factory-reset preset from 5 s onward.
+
+MPR121 also supports release-to-commit holds and the same hold-tier LED feedback, as detailed in its detection section. The sleep and destructive hold tiers **commit on release, not on a timer firing while held**. The destructive tiers escalate from shutdown to factory-reset after 10 s (see "GPIO button detection" below).
 
 ## Interrupting Lamp while it speaks (barge-in)
 
@@ -148,19 +202,15 @@ End-to-end chain:
 2b. `state.note_music_cancel()` → stamps a HAL-side music cancel watermark, and `audio_stop()` runs on **both** branches (mic-unmute and stop-speaker), not just the stop-speaker one. Needed because the OS server's cancel is TTS-only: the cancelled turn keeps running and its pending music tool call still reaches `POST /audio/play` a moment later, where a fresh `music-play` thread clears its own `_stop_event` — so a point-in-time stop always loses that race and the user hears music they just cancelled once `yt-dlp` finishes resolving (1–5 s). While the watermark is fresh (`app_state.MUSIC_CANCEL_GUARD_S`, 3 s) `/audio/play` answers `{"status": "suppressed"}` instead of playing. The window is sized to cover the in-flight tool call but stay under the floor of a genuinely new request (speak → STT → LLM → tool is never under ~3 s), so "tap, then ask for a song" still works.
 3. `stop_tts()` → `tts_service.stop()` sets `_stop_event`; every blocking loop in TTS streaming (synth, render, playback) honors the event and aborts cleanly without leaving the speaker pegged
 
-### Voice barge-in (disabled in the lamp profile)
+### Voice-driven interrupt (not available)
 
-Voice-driven interrupt — speak during TTS to make Lamp stop and listen — follows `HAL_BARGE_IN_ENABLED`, which defaults to `HAL_AEC_ENABLED` — `false` in code. The lamp profile enables AEC but explicitly sets barge-in to `false`: its active USB voice mic is too close to the speaker for the current echo-cancellation tuning. Tap-to-interrupt remains available.
+There is no "speak during TTS to make Lamp stop" path. A local detector on the echo-cancelled mic shipped briefly and was removed after a measured verdict: on this body the echo residual that survives AEC3 sits *above* a real interruption at every speaker volume (echo ceiling 9804 / 9969 / 13560 at 25 / 40 / 65 %, against real interruptions of 6956–8027), and scoring 79 labelled windows against every available feature gave a best AUC of 0.72 — no threshold reached 0 % self-interruption without missing 90–100 % of real interruptions. The record, and the acceptance test any future attempt has to pass, is in `docs/realtime-voice.md` (*Why there is no voice-driven interrupt on the cancelled mic*).
 
-If barge-in is enabled, the active path is the **warm mic** loop, not `_monitor_barge_in()`. With `HAL_WARM_MIC=true` (the default) `arecord` stays open through playback and the capture loop drains and discards frames; barge-in is detected there, on the loop's own 64 ms frames, when `HAL_BARGE_IN_WARM_FRAMES` consecutive frames exceed `HAL_BARGE_IN_RMS_THRESHOLD` **and** a Silero pass agrees it is speech **and** `aec.uncancelled()` says the frame was really cancelled. `_monitor_barge_in()` (256 ms blocks, level only) is the legacy path and is unreachable while warm mic is on — `HAL_BARGE_IN_BLOCK_MS` and `HAL_BARGE_IN_TRIGGER_FRAMES` only size that one. Downstream chain is the same as tap-to-interrupt.
-
-**The two levels still overlap, and no threshold separates them.** Measured on `lamp-ee17` (speaker 25 %, `HAL_AEC_DELAY_MS=205`) with the gate parked at 30000 so nothing could fire, three full replies into a silent room peaked at **9804 / 6510 / 7849** — that is the echo ceiling. A confirmed real interruption on the same unit measured **8027**, *below* it. So a threshold under the ceiling self-interrupts (at 4500 it fired on 5530 / 6446 / 6637 / 7749, twice transcribing Lamp's own words as the user's turn) and one above it misses quiet interruptions. Separating them needs the envelope-decorrelation test — echo tracks the far-end envelope, a person does not — which is not implemented. The shipped default of 5000 deliberately favours catching a normal speaking voice; raise toward 11000 to trade the other way.
-
-Do not expect the Silero gate to reject Lamp's own voice: echo *is* speech, and it scored 0.50, 0.75 and 1.00 on separate events while real interruptions scored 0.08, 0.88 and 1.00. It rejects loud non-speech (door slam, keys, cough); level does the rest.
-
-To characterise a new deployment: park `HAL_BARGE_IN_RMS_THRESHOLD` at 30000, say nothing, and read the `drain peak RMS=… , longest run N frames` line each reply logs. Tap-to-interrupt remains active regardless.
+Interruption therefore comes from two places only: **tap-to-interrupt** above, on the turn-based path, and the **provider's VAD** inside a live session (`HAL_LIVE_MODE`, see `docs/realtime-voice.md` *Live mode*), which emits `InterruptedOutput` when the user talks over the reply.
 
 ## GPIO button detection (`hal/drivers/gpio_button.py`)
+
+The same driver serves each configured button independently. The sequence below describes `behavior: "standard"` (the primary button). For `behavior: "factory_reset"`, a release after `hold_s` (5 s on Lamp pin 35) calls the shared `factory_reset_action`; shorter holds and all tap sequences are ignored. Its hold watcher selects only the shared factory-reset LED tier at that threshold.
 
 Edge-counting driver where **all destructive actions commit on the release edge based on hold duration** — no timer fires while the button is held. This is what lets the user cancel mid-hold (release before a threshold) or escalate (keep holding past 10 s).
 
@@ -178,7 +228,7 @@ A release edge with no matching press (the press was debounce-dropped) is ignore
 
 ### Hold LED feedback
 
-The watcher thread polls the hold duration and drives the RGB LED at HIGH priority (preempts the current emotion) so the user sees how far they've armed before they release:
+For the primary button, the GPIO watcher thread polls the hold duration and selects a tier. Shared `HoldLEDFeedback` in `hal/drivers/button_actions.py`, also used by MPR121, drives the RGB LED at HIGH priority (preempts the current emotion) so the user sees how far they've armed before they release:
 
 | Hold elapsed | LED | Meaning |
 |---|---|---|
@@ -187,9 +237,11 @@ The watcher thread polls the hold duration and drives the RGB LED at HIGH priori
 | 5–10 s | red, blinking 2 Hz | shutdown armed — releasing now shuts down |
 | 10 s+ | red, solid | factory-reset armed — releasing now wipes + reboots |
 
+The dedicated reset button uses only the solid-red `factory_reset` preset at ≥5 s; releasing before 5 s does nothing. No factory-reset runs while it remains held. Both GPIO inputs reuse this feedback implementation and the existing action library.
+
 Purple identifies the sleep tier; red blink vs red solid differentiates shutdown from factory-reset. The LED is a silent no-op when the RGB service is unavailable (dev machines) — the button still works.
 
-The three colors are presets, not constants baked into the driver: `BUTTON_LED_PRESETS` in `hal/presets.py` (`sleep_warn` / `shutdown_warn` / `factory_reset`), overridable per device through the `button_led` section of `robots/<id>/presets.json` like every other LED table. The driver owns the staging — when to blink, when to go solid — and reads the color at the moment it paints, because the overlay merges the table in place at boot.
+The three colors are presets, not constants baked into the driver: `BUTTON_LED_PRESETS` in `hal/presets.py` (`sleep_warn` / `shutdown_warn` / `factory_reset`), overridable per device through the `button_led` section of `robots/<id>/presets.json` like every other LED table. Shared `HoldLEDFeedback` owns blinking, release cleanup and final action feedback; each input supplies its detected tier. It reads the color at the moment it paints, because the overlay merges the table in place at boot.
 
 Per-edge debounce is 200 ms (press and release ticks tracked independently so a quick tap isn't dropped while bouncy repeats of the same edge are filtered).
 
@@ -217,6 +269,7 @@ does not modify boot overlays automatically:
       "bus": 0,
       "address": 90,
       "electrodes": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+      "swipe_axis": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
       "touch_threshold": 2,
       "release_threshold": 1,
       "autoconfig": true,
@@ -227,7 +280,7 @@ does not modify boot overlays automatically:
 }
 ```
 
-`bus` is required for an enabled entry. The other values above are defaults;
+`bus` is required for an enabled entry. The other values above except `swipe_axis` are defaults;
 address 90 means `0x5A` (allowed addresses: 90–93). Selected electrodes must be
 unique numbers from 0–11, with at least one selected. Thresholds must satisfy
 `0 <= release_threshold < touch_threshold <= 255`. Polling accepts 1–1000 ms;
@@ -242,25 +295,92 @@ unavailable while GPIO/TTP223 continue. Change `bus` if verified wiring uses
 a different controller, then restart HAL.
 
 After initialization, the driver allows 100 ms for sensing to settle before
-reading the initial touch state. It then polls touch status every 10 ms by default. A stable touch followed
-by a stable release of **all selected electrodes** produces one
-`single_click_action(source="MPR121")`; both transitions use the 30 ms default
-debounce. Overlapping touches across electrodes form one session. An electrode
-held at startup is ignored until release. Holding longer does not trigger
-sleep, reboot, shutdown or reset, and there is no double-tap action. The shared
-single-click behavior described above applies after release, without a
-multi-click decision window. A bounded asynchronous action worker prevents
-polling from blocking; excess taps while busy may be coalesced or dropped
-instead of accumulating a backlog. An I²C failure or MPR121 overcurrent fault
-(`OVCF`) is logged and stops this driver while the existing input handlers
-continue.
+reading the initial touch state, then polls every 10 ms by default. Touch and
+release transitions use 30 ms debounce. Overlapping touches across selected
+electrodes form one contact; release means **all selected electrodes** are
+released. A contact held at startup is ignored until release.
+
+MPR121 shares gesture thresholds from `hal/drivers/button_gestures.py` with
+GPIO (also re-exported by `button_actions.py`) and calls the existing action
+functions:
+
+| Gesture | MPR121 action |
+|---|---|
+| First short release in a click burst | `single_click_action(source="MPR121", announce=False)` stops tracking/audio after contact resolution, unmutes as permitted and plays the ack chime. |
+| 1, 2 or 4+ short taps, then 0.4 s quiet | Play the listening cue; repeated taps do not repeat the initial single-click action. |
+| Exactly 3 short taps, then 0.4 s quiet | `triple_click_action` reboots instead of playing the listening cue. |
+| Hold 2–<5 s, then release | `hold_release_action` enters sleepy. |
+| Hold 5–<10 s, then release | `hold_release_action` shuts down. |
+| Hold ≥10 s, then release | `hold_release_action` performs factory reset. |
+| Swipe left to right, then release | `swipe_action` sleeps; no click or destructive action for this moving contact. |
+| Swipe right to left, then release | Toggle Harness voice through the Go API; no click or destructive action for this moving contact. |
+
+A short contact lasts less than 2 s. The click window does not resolve while
+any selected electrode remains touched. Releasing a hold clears the pending
+click burst. Destructive actions never commit while held.
+
+### MPR121 directional swipe
+
+`swipe_axis` is an optional ordered list of 2–12 distinct electrodes from
+`electrodes`, in physical **left-to-right** order. Lamp defaults to E0…E11.
+Verify the mounted bar: if E11 is physically on the left, reverse the existing
+axis to E11…E0. Increasing axis position (`+1`, left to right) calls
+`swipe_action(source="MPR121")` from `button_actions.py` to sleep. Decreasing
+position (`-1`, right to left) calls the Harness voice toggle action.
+A swipe need not cross the entire strip.
+Missing/null `swipe_axis` disables only swipe detection and preserves legacy
+click/hold recognition. Install HAL support before deploying JSON with this field.
+
+Contact debounce remains 30 ms by default; the spatial footprint uses up to 5 ms
+stability (normally consecutive 10 ms polls) to retain fast electrode transitions.
+The detector follows the debounced contact footprint instead of counting every
+overlapping electrode as a separate tap. Stationary multi-electrode touches
+retain click/hold behavior. Once travel is detected, pending tap/hold outcomes
+and hold LED feedback are canceled for that contact; a valid swipe invokes its
+directional action once after release. Travel that reverses within one contact
+or is otherwise invalid does not trigger reboot/shutdown/reset.
+A release grace of 120 ms joins brief electrode handoffs, so tap/hold actions
+with swipe enabled resolve after that grace. Boot-held contacts remain ignored.
+Logs record swipe direction, displacement and verdict alongside action dispatch.
+Tests replay measured mask sequences plus synthetic gesture/lifecycle cases;
+the runtime and swipe JSON were deployed to Lamp `lamp-0c4e` on 2026-09-11.
+Startup confirmed MPR121 ready with the configured axis, GPIO buttons and TTP223
+ready, and the Lamp mic switch ready on chip1/line9 after its JSON was installed.
+Live gesture testing is pending.
+
+Debounced `hold_tier` events feed the same `HoldLEDFeedback` component as
+GPIO, sharing `BUTTON_LED_PRESETS`, blinking, release cleanup and final action
+feedback. Per-device `button_led` overrides apply to both inputs:
+
+| Hold elapsed | MPR121 LED |
+|---|---|
+| <2 s | No hold feedback |
+| 2–<5 s | Sleepy purple, blinking at 2 Hz |
+| 5–<10 s | Red, blinking at 2 Hz |
+| ≥10 s | Solid red |
+
+Release stops blinking. An accepted shutdown or factory-reset action reaffirms
+solid red before execution; sleepy turns the LED off through the shared action.
+A contact held at startup produces no hold feedback. Stop or hardware failure
+cancels feedback, and an unavailable RGB service does not prevent input actions.
+
+The bounded asynchronous action worker keeps polling responsive. Excess
+actions may be dropped; a newer touch, stop or hardware error
+invalidates pending older destructive actions and listening cues. An I²C
+failure or MPR121 overcurrent fault (`OVCF`) is logged and stops this driver
+while the existing input handlers continue.
+
+The hardware verification above covered the earlier single-click behavior.
+Hold LED feedback is verified with mocked local tests; it has not been checked
+on the live device. These tests do not execute real reboot, shutdown or reset.
 
 Operation logs use logger `hal.drivers.mpr121` in the normal HAL log/journal;
 there is no separate raw trace file. INFO entries cover initialization and
 configuration (bus, address, electrodes, thresholds and timing), per-electrode
 raw touch/release changes, debounced transitions, suppressed startup touches,
-tap queueing/coalescing, action begin/end and lifecycle. `tap_id` correlates
-accepted taps with queued, coalesced or executed actions. Failures include
+click counts, hold duration/tier, action queueing/discarding, action begin/end
+and lifecycle. `gesture_id` correlates a click burst or hold with queued,
+discarded or executed actions. Failures include
 error logs. Unchanged 10 ms polls produce no INFO entry, so idle operation does not
 flood the log. Follow the service log with `journalctl -u hal.service -f` and
 filter for `hal.drivers.mpr121` when investigating a missed or duplicate tap.
@@ -291,7 +411,7 @@ After a session ends:
 
 **On by default** since 2026-08-27, after hands-on validation on orange-lamp across tap, fast and slow double tap, pet and swipe. Setting `HAL_TOUCH_SWIPE=false` restores the two-gesture behaviour in one step and without a redeploy — that is the rollback if a field unit misbehaves.
 
-Turning it on means a double tap toggles the **microphone** and a swipe **sleeps** the device. Both are reversible (double tap again; one tap wakes), and nothing destructive is reachable here — FastMode cannot measure a hold, so reboot / shutdown / factory-reset stay on the mechanical button.
+Turning it on means a double tap toggles the **microphone** and a swipe **sleeps** the device. Both are reversible (double tap again; one tap wakes), and nothing destructive is reachable here — FastMode cannot measure a hold, so TTP223 cannot trigger reboot / shutdown / factory-reset; those gestures are provided by the mechanical button and MPR121.
 
 **The signal is *when* pads fire, not which.** Device-measured on orange-lamp, 2026-08-27 — inter-pad gaps inside a single contact:
 
@@ -344,7 +464,7 @@ It never logs to journald, deliberately: HAL is chatty enough that the `hal.serv
 | `HAL_TOUCH_DEBUG` | `false` | Master switch. Off = every entry point is a no-op. |
 | `HAL_TOUCH_DEBUG_DIR` | `touch_logs/` next to the module | Output root. Falls back to the temp dir if the tree is read-only. |
 | `HAL_TOUCH_DEBUG_MAX_ENTRIES` | 200 | File cap, oldest pruned on each write. 0 = unbounded. |
-| `HAL_TOUCH_DEBUG_PADS` | _(unset)_ | Line→label map, e.g. `96=S1,98=S2,100=S4`. Unset, pads are labelled by line number — the historical S-names do not follow line order after two relocations, so the driver does not guess them. |
+| `HAL_TOUCH_DEBUG_PADS` | _(unset)_ | Line→label map, e.g. `96=S1,98=S3`. Unset, pads are labelled by line number — the historical S-names do not follow line order after two relocations, so the driver does not guess them. |
 
 
 ## Shared action library (`hal/drivers/button_actions.py`)
@@ -366,7 +486,7 @@ The actions live in one place so the GPIO button, TTP223, MPR121, and any future
 
 ### Factory-reset: what gets wiped
 
-`factory_reset_action` only **announces + delegates** — the actual reset lives in the OS server (`system/server/system/factoryreset.go`), reachable from the device over loopback without a Bearer token (authoritative because of physical presence: a deliberate 10 s hold). `POST /api/system/factory-reset` is a **soft** reset (state wipe, not a reflash — kernel / OS packages / binaries / HAL `.venv` are untouched):
+`factory_reset_action` only **announces + delegates** — the actual reset lives in the OS server (`system/server/system/factoryreset.go`), reachable from the device over loopback without a Bearer token (authoritative because of physical presence: a deliberate 10 s hold on the primary button/MPR121 or 5 s on the dedicated reset button, followed by release). `POST /api/system/factory-reset` is a **soft** reset (state wipe, not a reflash — kernel / OS packages / binaries / HAL `.venv` are untouched):
 
 1. Wipe the active agent backend's state (OpenClaw or Hermes, auto-detected from `config.json` `agent_runtime`).
 2. Wipe the device state paths: `/root/config` (config.json — API keys, channel tokens, MQTT creds), `/root/local/users` + `/root/local/strangers` (face/voice enrollments), `/var/lib/hal/snapshots` (camera snapshots), and `/etc/wpa_supplicant/wpa_supplicant-wlan0.conf` (home WiFi creds → forces AP mode on next boot).
@@ -442,10 +562,43 @@ Phrases are intentionally short — they fire mid-stroke and need to feel respon
 | `hal/board/ttp223.py` | Device-owned TTP223 configuration loader with legacy fallback |
 | `hal/drivers/ttp223.py` | TTP223 capacitive touchpad handler (OrangePi sun60 only) |
 | `hal/board/mpr121.py` | Device-owned MPR121 configuration loader and validation |
-| `hal/drivers/mpr121.py` | Optional I²C MPR121 touch-and-release handler |
-| `hal/drivers/button_actions.py` | Shared action functions + localized phrase pools |
+| `hal/drivers/mpr121.py` | Optional I²C MPR121 click/hold handler |
+| `hal/drivers/button_gestures.py` | Shared GPIO/MPR121 gesture thresholds |
+| `hal/drivers/button_actions.py` | Shared action functions, GPIO/MPR121 `HoldLEDFeedback` and localized phrase pools |
 | `hal/presets.py` | Language code constants (`LANG_EN`, etc.) |
 | `hal/test_ttp223_probe_orangepi.py` | Standalone pad probe (stdlib ioctl, no gpiod). `info` reads line state with HAL running; `watch` maps pad→line and needs `hal.service` stopped. Lines come from the selected device’s `ttp223.json`, with the same legacy board-profile fallback as HAL. Select the device with `--device-type`. |
 | `hal/test_gpio.py` | Standalone probe for verifying GPIO button line |
 
 Input handlers are started in `hal/server.py` lifespan startup. Missing optional MPR121 configuration skips that driver; malformed enabled configuration rejects startup. Hardware driver failures are logged without stopping the other handlers.
+
+
+### Harness voice swipe
+
+Swipe **right to left**, then release to toggle Harness voice once. The existing
+`swipe_axis` defines physical direction as described above. There is no two-pad
+hold gesture or separate Harness wiring configuration. Single taps and stationary
+holds retain their existing behavior; detected travel cancels tap/hold outcomes.
+Contacts already held at startup and polling/I²C faults cannot trigger a swipe.
+
+Python recognizes the signal and queues it on the existing action worker.
+`harness_voice_action.py` calls the small `harness_voice_client.py` adapter,
+which posts once to Go's loopback-only `/api/harness/voice-mode/gesture` with a
+unique `gestureId`. Go owns mode state and focused-agent selection. No automatic
+HTTP retry occurs; a timeout announces that the outcome could not be confirmed.
+
+On success, HAL speaks “Harness is on. You’re now talking to {agent}.” or “Harness is off. You’re back with the assistant on your device.” using the configured
+`stt_language` (English, Vietnamese, Simplified or Traditional Chinese; phrases
+live in `hal/i18n.py`). It briefly pulses blue for on or neutral for off without
+saving a new LED state. Missing connection/agents receive localized errors.
+Hardware microphone privacy disables the gesture action, speaker mute suppresses
+speech, and existing sleep/privacy/TTS LED ownership is respected.
+
+At HAL startup, the privacy switch position is reconciled without simulating a button press: an unmuted position restores mic/peripheral access without waking the device, granting conversation focus, playing the acknowledgement/listening phrase, or scheduling the listening LED cue. A real muted-to-unmuted switch transition retains the existing wake/focus and acknowledgement behavior. Startup in the muted position still applies the hardware privacy lock synchronously.
+
+When sleep is restored after a HAL restart (including a software update), an open privacy switch does not unmute the sleeping microphone or start its voice pipeline. Sleep-owned microphone and speaker mutes remain in effect until a real wake. If privacy captured the speaker's sleep mute, waking clears that temporary mute underneath the privacy lock; output stays blocked until privacy is released. The cleared speaker preference is persisted so a later HAL restart cannot restore the expired sleep mute. A speaker mute that the user set before sleep remains muted.
+
+GPIO callbacks that settle at the last known switch position (including initial callbacks at startup) leave software mute and sleep unchanged. Only a confirmed physical level change runs the switch action.
+
+When wake restores a sleep-muted microphone, it also clears the restored mic-muted LED indicator. Later emotion, TTS, or music completion callbacks must not repaint privacy red after the microphone is open. A microphone still locked by hardware privacy keeps its mute indicator.
+
+An explicit speaker-mute request during sleep takes ownership from sleep and is persisted even when the speaker is already silent. Wake must retain that choice, including under a privacy lock.

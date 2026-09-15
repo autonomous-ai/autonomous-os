@@ -11,6 +11,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"go.autonomous.ai/os/system/domain"
+	"go.autonomous.ai/os/system/lib/sensingmsg"
 	"go.autonomous.ai/os/system/lib/speakergate"
 	"go.autonomous.ai/os/system/monitor"
 	"go.autonomous.ai/os/system/server/config"
@@ -18,6 +19,8 @@ import (
 
 func queueService(t *testing.T) *PicoclawService {
 	t.Helper()
+	sensingmsg.SetHarnessConnected(func() bool { return true })
+	t.Cleanup(func() { sensingmsg.SetHarnessConnected(nil) })
 	old := speakergate.SpeakerBusy
 	speakergate.SpeakerBusy = func() bool { return false }
 	t.Cleanup(func() { speakergate.SpeakerBusy = old })
@@ -118,6 +121,7 @@ func TestQueueSerializesDirectAndBufferedTurnsThroughAllTerminalCallbacks(t *tes
 }
 
 func TestReconnectDrainsOnlyUnsentWithoutTerminalEvent(t *testing.T) {
+	observations := captureLostObservations(t)
 	s := queueService(t)
 	s.pendingEvents = []pendingEvent{{eventType: "web_chat", msg: "retained", fixedRunID: "unsent", queuedAt: time.Now()}}
 	s.drainPendingEvents()
@@ -148,6 +152,7 @@ func TestReconnectDrainsOnlyUnsentWithoutTerminalEvent(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("connection teardown did not finish")
 	}
+	assertLostObservation(t, observations, "unsent")
 	// The just-written request is uncertain on disconnect, not locally queued.
 	if len(s.pendingEvents) != 0 || s.peekPendingRunID() != "" || s.activeTurn.Load() {
 		t.Fatal("disconnect retained transmitted work")
