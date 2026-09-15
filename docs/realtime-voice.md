@@ -1143,18 +1143,27 @@ A single background worker sends completed exchanges using the existing interact
 
 ### HW emotion feedback in live mode
 
-LIVE uses the same HW emotion path as regular realtime turns: confirmed user
-speech calls `_set_emotion_local("listening")`, and waiting for a reply calls
-`_thinking_cue_start()`. These are full emotion calls, including the existing
-LED, display and body behavior; there is no separate LIVE LED overlay.
-A provider speech endpoint switches to thinking; when no endpoint is available,
-0.8 seconds without confirmed speech supplies a feedback-only estimate. It does
-not end the provider turn or generate a metric endpoint. Thinking expires after
-25 seconds. Reply playback, rejection, interruption, delegation and session exit
-clear the matching turn using the existing guarded cleanup helpers. Older turn
-outputs cannot clear a newer turn's feedback. Hardware calls run in order on a
-worker so effect-thread waits do not block microphone streaming; playback waits
-for its cue cleanup before starting.
+LIVE uses the same HW emotion calls as regular realtime turns, including their
+LED, display and body behavior. `listening` requires nonblank provider input
+transcription and the regular addressing rule: wake-word detection, active
+focus, disabled wake-word gating, or the existing Harness listening allowance.
+Transcript chunks are accumulated per provider turn. Addressing stays latched
+for that turn only; focus arriving during the utterance can authorize it.
+Opening a LIVE session, local RMS/Silero activity, blank provider VAD events and
+local silence never start `listening` or `thinking`.
+
+After a recognized, addressed utterance, an actual provider speech endpoint or
+an explicit transcription-finished flag switches to the existing thinking
+helper. An endpoint arriving before words waits for those words and addressing
+evidence. A finished-only notification requires an existing input key and bypasses
+metric/history speech observation; it does not create metric endpoints, events,
+or change execution eligibility.
+Without end evidence, listening expires after 8 seconds without transcript
+updates; thinking expires after 25 seconds. Playback, rejection, interruption,
+delegation and session exit clear the matching turn with the existing guarded
+helpers. Stale outputs cannot clear a newer turn. Hardware calls run in order on
+a worker; playback waits for its cleanup. Mic streaming, idle timing, server
+VAD, barge-in, routing and metric calculations are unchanged.
 
 ### Voice metrics in live mode
 

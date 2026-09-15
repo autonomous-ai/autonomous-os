@@ -6,12 +6,14 @@ import logging
 import threading
 import time
 
+from hal.drivers.voice._internal.speaker_decorate import merge_stt_hypothesis
+
 logger = logging.getLogger("hal.voice")
 
 
 class LiveVoiceCues:
-    def __init__(self, *, silence_s=0.8, timeout_s=25.0, clock=time.monotonic,
-                 show=None, clear=None):
+    def __init__(self, *, timeout_s=25.0, clock=time.monotonic,
+                 show=None, clear=None, addressed=None):
         self._executor = None
         self._pending = None
         if show is None or clear is None:
@@ -23,14 +25,17 @@ class LiveVoiceCues:
         self._show = show
         self._clear = clear
         self._clock = clock
-        self._silence_s = max(0.1, silence_s)
+        self._addressed_check = addressed or (lambda text: True)
         self._timeout_s = max(1.0, timeout_s)
         self._lock = threading.RLock()
         self._owner = object()
         self._phase = ""
         self._key = ""
         self._retired = deque(maxlen=64)
-        self._last_speech = 0.0
+        self._last_input = 0.0
+        self._transcript = ""
+        self._addressed = False
+        self._ended = False
         self._thinking_at = 0.0
         self._closed = False
 
@@ -71,52 +76,62 @@ class LiveVoiceCues:
         else:
             self._pending = self._executor.submit(apply)
 
-    def _new_input(self):
-        if self._key:
-            self._retired.append(self._key)
-        self._key = ""
-        self._paint("")
-        self._owner = object()
+    def input(self, key, endpoint_at=None, *, transcript="", transcript_finished=False):
+        """Use recognized words and addressing evidence, never raw mic activity.
 
-    def speech(self):
-        """Called only for already-confirmed speech, never to gate the uplink."""
+        A provider endpoint alone is insufficient: noise can trigger VAD too.
+        Transcript completion can drive emotion but is not a metric endpoint.
+        """
+        with self._lock:
+            if self._closed or not key or key in self._retired:
+                return
+            if key != self._key:
+                if self._key:
+                    self._retired.append(self._key)
+                self._paint("")
+                self._owner = object()
+                self._key = key
+                self._transcript = ""
+                self._addressed = False
+                self._ended = False
+            if transcript.strip():
+                self._transcript = merge_stt_hypothesis(self._transcript, transcript)
+                self._last_input = self._clock()
+            self._ended |= endpoint_at is not None or transcript_finished
+            self._update_emotion()
+
+    def _update_emotion(self):
+        if not self._transcript:
+            return
+        self._addressed = self._addressed or self._addressed_check(self._transcript)
+        if not self._addressed:
+            return
+        if not self._phase:
+            self._paint("listening")
+        if self._ended and self._phase != "thinking":
+            self._thinking_at = self._clock()
+            self._paint("thinking")
+
+    def tick(self):
+        """Recheck focus and expire cues; silence never starts an emotion."""
         with self._lock:
             if self._closed:
                 return
             now = self._clock()
-            if not self._phase or now - self._last_speech > self._silence_s:
-                self._new_input()
-            self._last_speech = now
-            self._paint("listening")
-
-    def input(self, key, endpoint_at=None):
-        with self._lock:
-            if self._closed or not key or key in self._retired:
-                return
-            if self._key and key != self._key:
-                self._new_input()
-                self._last_speech = self._clock()
-            self._key = key
-            if endpoint_at is not None:
-                if self._phase != "thinking":
-                    self._thinking_at = self._clock()
-                self._paint("thinking")
-            elif self._phase != "thinking":
-                self._last_speech = self._clock()
-                self._paint("listening")
-
-    def tick(self):
-        """A silence estimate changes emotion only; the provider still ends turns."""
-        with self._lock:
-            now = self._clock()
-            if self._phase == "listening" and now - self._last_speech >= self._silence_s:
-                self._thinking_at = now
-                self._paint("thinking")
-            elif self._phase == "thinking" and now - self._thinking_at >= self._timeout_s:
+            expired = (
+                self._phase == "thinking" and now - self._thinking_at >= self._timeout_s
+            ) or (
+                self._phase != "thinking" and self._transcript
+                and now - self._last_input >= 8.0
+            )
+            if expired:
                 if self._key:
                     self._retired.append(self._key)
                 self._key = ""
+                self._transcript = ""
                 self._paint("")
+            else:
+                self._update_emotion()
 
     def finish(self, key):
         """Old replies/terminals must not clear a newer user's cue."""
@@ -126,6 +141,7 @@ class LiveVoiceCues:
             if key:
                 self._retired.append(key)
             self._key = ""
+            self._transcript = ""
             self._paint("")
             pending = self._pending
         # Finish before playback starts, so queued thinking cannot overwrite

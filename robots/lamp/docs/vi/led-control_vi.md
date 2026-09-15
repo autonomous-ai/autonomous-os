@@ -323,4 +323,6 @@ nền tảng — xem [ROBOT-SPEC.md § Per-device presets](../../../contract/ROB
 
 Thoại LIVE dùng cùng HW emotion `listening` và helper thinking của realtime
 theo lượt, gồm hành vi LED, màn hình và thân hiện có. Không có lớp LED riêng
-cho LIVE. Xem [realtime voice](../../../../docs/vi/realtime-voice_vi.md#phản-hồi-hw-emotion-trong-chế-độ-live) để biết thời điểm gọi và dọn trạng thái.
+cho LIVE. Emotion cần transcript có chữ và cùng điều kiện hướng tới device;
+tiếng ồn hay mở mic không tự bật emotion. Thinking cần bằng chứng kết thúc
+từ provider, không dùng ước lượng im lặng local. Xem [realtime voice](../../../../docs/vi/realtime-voice_vi.md#phản-hồi-hw-emotion-trong-chế-độ-live) để biết thời điểm gọi và dọn trạng thái.

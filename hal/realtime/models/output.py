@@ -42,6 +42,8 @@ class UserSpeechOutput(OutputBase):
     turn_id: str
     # Incremental provider transcription, attributed to this exact input turn.
     transcript: str = ""
+    # Provider transcription completion is emotion evidence, not a VAD timestamp.
+    transcript_finished: bool = False
     endpoint_at: float | None = None
     method: str = "provider_transcript"
 

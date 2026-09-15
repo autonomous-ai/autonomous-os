@@ -1165,6 +1165,19 @@ class VoiceService:
         self._live_frames_substituted += 1
         return self._np.zeros_like(data)
 
+    def _live_emotion_addressed(self, text: str, harness_voice=None) -> bool:
+        """Mirror the regular turn's addressing gate for emotion only."""
+        harness_listening = bool(
+            harness_voice and harness_voice.get("enabled")
+            and not harness_voice.get("unavailable", False)
+        )
+        return harness_listening or is_addressed(
+            hal_config.WAKEWORD_ENABLED,
+            bool(text) and self._decorator.starts_with_wake_word(text),
+            False,
+            self._wakeword_focus.is_active(),
+        )
+
     def _live_out_pump(self, generation: int, harness_voice=None, cues=None) -> None:
         """Play what the model says, for as long as the session lasts.
 
@@ -1197,7 +1210,14 @@ class VoiceService:
                         break
                     if isinstance(out, UserSpeechOutput):
                         if cues is not None:
-                            cues.input(out.turn_id, out.endpoint_at)
+                            cues.input(
+                                out.turn_id, out.endpoint_at, transcript=out.transcript,
+                                transcript_finished=out.transcript_finished,
+                            )
+                        if out.transcript_finished and not out.transcript and out.endpoint_at is None:
+                            # Completion-only transcription metadata drives emotion,
+                            # not another speech observation for metrics/history.
+                            continue
                         iid = metrics.speech(out.turn_id, out.endpoint_at, out.method)
                         history.input(out.turn_id, out.transcript, iid)
                         continue
@@ -1465,8 +1485,9 @@ class VoiceService:
         # flush here instead. Once only — flushing per reply would discard
         # output the model is still streaming.
         self._realtime.flush_output()
-        cues = LiveVoiceCues()
-        cues.speech()
+        cues = LiveVoiceCues(
+            addressed=lambda text: self._live_emotion_addressed(text, harness_voice),
+        )
         pump = threading.Thread(
             target=self._live_out_pump,
             args=(generation, harness_voice, cues),
@@ -1534,8 +1555,8 @@ class VoiceService:
                 energy = rms(data, self._np)
                 self._mic_level = energy
                 self._mic_level_ts = now
-                # Feeds the idle-hangup clock and HW emotion feedback. Not an
-                # endpointer or gate — every frame goes up either way.
+                # Feeds ONLY the idle-hangup clock. Not an endpointer and not a
+                # gate — every frame goes up either way.
                 #
                 # RMS alone cannot carry this. In a noisy room the floor sits
                 # above the threshold, so every frame reads as "the user is
@@ -1556,10 +1577,8 @@ class VoiceService:
                         if self._silence_window_is_speech(window, device_rate):
                             last_user_speech = now
                             self._live_unprompted_replies = 0
-                            if not self._tts_is_speaking():
-                                cues.speech()
 
-                # HW emotion feedback only: no commit, stop, or audio gate.
+                # Expire emotion cues / recheck focus, never infer speech from silence.
                 cues.tick()
                 uplink_frame = resample_to_stt(
                     data, device_rate, voice_cfg.STT_RATE, self._np

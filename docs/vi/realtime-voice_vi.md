@@ -1099,18 +1099,24 @@ Một worker nền gửi lượt hoàn tất với interaction ID, giới hạn 
 
 ### Phản hồi HW emotion trong chế độ live
 
-LIVE dùng cùng đường gọi HW emotion như realtime thường: tiếng nói đã được
-xác nhận gọi `_set_emotion_local("listening")`; khi chờ trả lời gọi
-`_thinking_cue_start()`. Đây là lời gọi emotion đầy đủ, gồm hành vi LED, màn hình
-và thân hiện có; không có lớp LED riêng cho LIVE.
-Endpoint tiếng nói từ provider chuyển sang thinking; nếu chưa có endpoint,
-0,8 giây không có tiếng nói được xác nhận là ước lượng chỉ dành cho phản hồi
-trạng thái. Nó không kết thúc lượt provider hay tạo endpoint cho metric.
-Thinking hết hạn sau 25 giây. Phát câu trả lời, reject, ngắt lời, delegate và
-thoát phiên dọn trạng thái đúng lượt bằng các helper có kiểm tra emotion hiện
-có. Output lượt cũ không được dọn trạng thái lượt mới. Lời gọi phần cứng chạy
-đúng thứ tự trên worker để việc chờ effect thread không chặn truyền mic;
-playback chờ dọn cue của lượt trước khi bắt đầu.
+LIVE dùng cùng lời gọi HW emotion như realtime thường, gồm hành vi LED, màn
+hình và thân. `listening` cần transcript đầu vào có chữ từ provider và cùng quy
+tắc xác nhận lời nói hướng tới device: nhận wake word, focus đang mở, tắt cổng
+wake word hoặc điều kiện Harness listening hiện có. Các mảnh transcript được
+gộp theo lượt provider. Xác nhận được giữ riêng cho lượt đó; focus mở giữa câu
+vẫn có thể cho phép emotion. Mở phiên LIVE, RMS/Silero local, sự kiện VAD trống
+của provider và khoảng im lặng local không tự bật `listening` hay `thinking`.
+
+Sau khi có lời nói được nhận dạng và hướng tới device, endpoint tiếng nói thật
+hoặc cờ transcription-finished tường minh từ provider mới chuyển sang helper
+thinking hiện có. Endpoint đến trước chữ phải chờ transcript và điều kiện hướng
+tới device. Thông báo chỉ có cờ finished cần input key đã tồn tại và bỏ qua ghi nhận speech
+của metric/history; không tạo endpoint, event metric hay đổi eligibility của execution. Nếu chưa có bằng
+chứng kết thúc, listening hết hạn sau 8 giây không có cập nhật transcript;
+thinking hết hạn sau 25 giây. Playback, reject, ngắt lời, delegate và thoát phiên
+dọn đúng lượt bằng helper có kiểm tra emotion hiện có. Output cũ không được dọn
+lượt mới. Lời gọi phần cứng chạy đúng thứ tự trên worker; playback chờ dọn cue.
+Mic streaming, đồng hồ idle, server VAD, barge-in, routing và tính metric giữ nguyên.
 
 ### Voice metrics trong chế độ live
 

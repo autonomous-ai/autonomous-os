@@ -323,4 +323,6 @@ platform mechanism — see [ROBOT-SPEC.md § Per-device presets](../../contract/
 
 LIVE voice uses the same `listening` HW emotion and realtime thinking helper
 as turn-based voice, including their existing LED, display and body behavior.
-There is no separate LIVE LED overlay. See [realtime voice](../../../docs/realtime-voice.md#hw-emotion-feedback-in-live-mode) for timing and cleanup.
+It requires recognized input text and the regular addressing gate; noise or
+opening the mic cannot start these emotions. Thinking requires provider end
+evidence, never a local silence estimate. There is no separate LIVE LED overlay. See [realtime voice](../../../docs/realtime-voice.md#hw-emotion-feedback-in-live-mode) for timing and cleanup.
