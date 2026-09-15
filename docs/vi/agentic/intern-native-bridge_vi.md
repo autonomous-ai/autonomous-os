@@ -41,6 +41,36 @@ sang Cerebras.
 Bridge không log cấu hình, prompt, phản hồi provider hoặc lỗi gốc. Lỗi là chuỗi
 cố định; phản hồi chứa chính khóa provider bị từ chối.
 
+### Cấu hình model lớn hơn rõ ràng trên GUS
+
+[Phần cứng Intern v2](../../../robots/intern-v2/README.md#hardware) công bố
+4 GB RAM. Giữ các mặc định thiết bị ở trên; model đã kiểm chứng trên GUS Mac
+không chứng minh tương thích với Intern. Mặc định 4B hiện có cũng cần kiểm tra
+bộ nhớ và suy luận riêng trên thiết bị đích.
+
+Với instance Intern `os-server` chạy **trên chính GUS Mac**, các field cấu hình
+khởi động hiện có sau chọn rõ endpoint Ollama và model lớn hơn mà Director
+báo đã kiểm chứng trên GUS:
+
+```json
+{
+  "intern_provider": "ollama",
+  "intern_ollama_url": "http://127.0.0.1:11435",
+  "intern_ollama_model": "qwen3:14b"
+}
+```
+
+Đây là các field cho cấu hình hiện có của instance đó, không phải tệp cấu hình
+thay thế hoặc mặc định thiết bị. Loopback chỉ máy chạy `os-server`. Cấu hình
+này **không** cho thiết bị Intern từ xa truy cập GUS: provider Ollama hiện tại
+từ chối host ngoài loopback. Tuyến suy luận từ thiết bị đến GUS cần thiết kế
+và kiểm chứng tương thích riêng; chưa được triển khai ở đây. Không thêm network
+fallback hoặc credentials. Giữ `think:false`, `keep_alive:5m`, giới hạn một
+lời gọi đồng thời và ràng buộc một model trên node hiện có. Ví dụ này không
+triển khai, cung cấp model hoặc cấu hình service-dispatch.
+
+Xem [biên bản tương thích](../../receipts/intern-local-inference-defaults-2026-09-15.md).
+
 ## Chấp thuận và định tuyến
 
 ### Chấp thuận transcript cuối

@@ -50,6 +50,37 @@ There is no environment/provider fallback, credential lookup or proxy discovery.
 Configuration values, prompts, provider bodies and underlying errors are not logged
 by the bridge. Errors are fixed sentinels; output echoing its remote key is rejected.
 
+### Explicit larger-model configuration on GUS
+
+The [Intern v2 hardware](../../robots/intern-v2/README.md#hardware) declares
+4 GB RAM. Keep the device defaults above; a model verified on the GUS Mac is
+not evidence of compatibility with Intern hardware. The existing 4B default
+also requires a separate memory and inference check on the target device.
+
+For an Intern `os-server` instance running **on the GUS Mac itself**, these
+existing startup configuration fields select the Director-reported verified
+GUS Ollama endpoint and larger model explicitly:
+
+```json
+{
+  "intern_provider": "ollama",
+  "intern_ollama_url": "http://127.0.0.1:11435",
+  "intern_ollama_model": "qwen3:14b"
+}
+```
+
+These are fields for that instance's existing configuration, not a replacement
+configuration file or device defaults. Loopback refers to the host running
+`os-server`. This does **not** configure a remote Intern device to reach GUS:
+the current Ollama provider rejects non-loopback hosts. A device-to-GUS
+inference route requires a separate design and compatibility verification;
+none is implemented here. No network fallback or credentials are added.
+`think:false`, `keep_alive:5m`, the single-call limit, and the existing
+one-model node constraints remain unchanged. This example performs no
+deployment, model provisioning, or service-dispatch configuration.
+
+See the [compatibility receipt](../receipts/intern-local-inference-defaults-2026-09-15.md).
+
 ## Admission and routing
 
 ### Final transcript admission
