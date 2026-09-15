@@ -26,6 +26,9 @@ const healthPollInterval = 10 * time.Second
 //  3. Block on ctx.Done() to satisfy the same call shape as openclaw's
 //     reconnect loop (server.go invokes this inside a goroutine).
 func (s *HermesService) StartWS(ctx context.Context, handler domain.AgentEventHandler) {
+	s.steeringMu.Lock()
+	s.runtimeCtx = ctx
+	s.steeringMu.Unlock()
 	s.handlerMu.Lock()
 	s.handler = handler
 	s.handlerMu.Unlock()
@@ -80,6 +83,16 @@ func (s *HermesService) probeHealth(ctx context.Context) {
 	ok := resp.StatusCode >= 200 && resp.StatusCode < 300
 	if !ok {
 		slog.Warn("hermes health non-2xx", "component", "hermes", "status", resp.StatusCode)
+	}
+	if ok {
+		// Upgrade only between executions. Once native history is in use,
+		// a transient capability failure must never downgrade to Responses'
+		// separate conversation chain and silently lose that history.
+		s.steeringMu.Lock()
+		if !s.nativeRunSteering.Load() && s.inFlightStreams.Load() == 0 {
+			s.nativeRunSteering.Store(s.discoverRunSteering(probeCtx))
+		}
+		s.steeringMu.Unlock()
 	}
 	s.transitionReady(ok)
 	if ok {

@@ -8,7 +8,7 @@ kỳ backend nào `config.agent_runtime` chọn, qua đúng một interface
 nào đang chạy.
 
 - **`openclaw`** (mặc định): WebSocket bền tới daemon OpenClaw. Xem `docs/os-server.md` + `runtimes/openclaw`.
-- **`hermes`**: client HTTP + SSE tới một Hermes API server cục bộ (kiểu OpenAI *Responses API*). Tài liệu này. Code: `runtimes/hermes/`.
+- **`hermes`**: client HTTP + SSE tới Hermes API server cục bộ (Runs native khi được hỗ trợ; fallback OpenAI *Responses API*). Tài liệu này. Code: `runtimes/hermes/`.
 
 > Nguồn sự thật là code. Tài liệu này mô tả `runtimes/hermes/` đúng như đã hiện
 > thực; phải đồng bộ khi code đổi (EN: `docs/agentic/hermes.md`, VI: file này).
@@ -131,7 +131,28 @@ phải dựng lại + nén lại nó mỗi turn — biến một turn đáng l�
   mức mà cơ chế nén của gateway ổn định lại, không nằm trong đó (cùng giá trị và
   cùng lập luận với [`codex`](codex_vi.md)).
 
-## 4. Giao thức request — `POST /v1/responses`
+## 4. Giao thức request — Runs native và fallback Responses
+
+Khi server công bố đủ `run_submission`, `run_events_sse`, `run_status`,
+`run_stop`, `run_steer` qua `GET /v1/capabilities` và
+`features.runs_idempotency.autonomous_run_events_v1=true`, lượt text đủ điều kiện dùng
+`POST /v1/runs`. Body chứa `input`, `model`, `instructions` tùy chọn và
+`session_id` hiện tại. Admission trả server `run_id`; nhận event qua
+`GET /v1/runs/{run_id}/events`, đọc trạng thái qua `GET /v1/runs/{run_id}`.
+Device run ID vẫn dùng để nối trace và metric. Khác với chuỗi conversation của
+Responses, Runs nạp lịch sử session đã lưu theo `session_id`; server resolve
+session tiếp nối sau compression khi mở run kế tiếp. Native run ID không phải
+`previous_response_id` của Responses.
+
+Server thiếu capability giữ transport Responses bên dưới. Sau khi xác minh native,
+service giữ transport đó đến khi khởi động lại; lỗi dò capability sau đó không
+được đưa hội thoại về lịch sử Responses cũ. Trên server hỗ trợ,
+request có ảnh đợi run native riêng cùng session; adapter chuyển part
+`input_text` / `input_image` của Responses thành `text` / `image_url` chuẩn mà
+không bỏ ảnh. Không đưa request ảnh vào endpoint steer chỉ nhận text. Lỗi mạng sau admission
+hoặc steer không cho phép gửi lại request: server có thể đã đang thực hiện.
+
+### Fallback Responses — `POST /v1/responses`
 
 `client.go` POST một `streamRequest` với `stream: true` rồi đọc luồng SSE:
 
@@ -164,6 +185,23 @@ chúng thành frame `domain.WSEvent` và dispatch qua handler đăng ký bởi `
 khi gửi, false khi `response.completed`; kết quả completed mang `response.id`
 (cache thành `lastResponseID`) và toàn bộ text assistant cho path send-and-wait.
 
+Runs native đặt tên event trong JSON `data` (`event`), không dùng dòng SSE
+`event:`. Adapter chuyển `message.delta` và terminal thật `run.completed` /
+`run.failed` / `run.cancelled` / `run.interrupted` vào pipeline event hiện có.
+Acknowledgment `run.steered` không phải task completion. Khi mất stream, có thể
+khôi phục kết quả bằng trạng thái terminal đã xác nhận. Nếu chưa kết thúc,
+adapter yêu cầu stop và poll cho tới khi execution chốt, giữ quyền sở hữu remote
+run khi trạng thái chưa rõ. EOF hoặc trạng thái còn chạy không được báo thành công.
+
+Native mode còn yêu cầu marker tương thích OS ở trên: Runs chưa vá thiếu
+ID/kết quả tool và chi tiết cache mà handler hiện tại cần. Bản vá tương thích
+thêm `tool.call.started` / `tool.call.completed` với ID, arguments, kết quả thật,
+cùng `cache_read_tokens`, `cache_write_tokens` trong usage. Adapter dùng lại
+translator Responses và chuyển cache vào `input_tokens_details`; bỏ progress
+`tool.started` / `tool.completed` cũ để callback không chạy trùng. Khi thiếu bản
+vá hoặc source không khớp cấu trúc đã xác minh, giữ Responses cho tới khi cài
+bản vá hợp lệ và restart gateway.
+
 Marker sensing/pose bị strip trước khi gửi bằng đúng các regex như OpenClaw
 (`[snapshot: …]`, `[pose_bucket: …]`, `[pose_worst: …]`) để agent không bao giờ
 thấy marker phần cứng nội bộ.
@@ -181,11 +219,36 @@ Hợp đồng giống hệt OpenClaw: khi một lượt đang active (`IsBusy`),
 event thụ động bị drop hoặc buffer (`QueuePendingEvent`, last-write-wins theo
 loại) và replay khi rảnh, để tín hiệu ambient không cắt ngang lệnh đang chạy.
 
+Với run native được quản lý, text người dùng mới đủ điều kiện được gửi qua
+`POST /v1/runs/{run_id}/steer` thay vì tạo agent chạy song song. Hermes chèn chỉ
+dẫn vào ranh giới iteration/tool; nhận request không đồng nghĩa cắt ngay model
+call hoặc tool đang chạy. `POST /v1/runs/{run_id}/stop` là thao tác cancel riêng;
+acknowledgment `stopping` chưa phải terminal. Request không thể steer, gồm ảnh, đợi run native riêng thay vì bị bỏ hoặc
+chuyển sang conversation Responses không nối được lịch sử.
+
+Steer đã nhận nhưng đến quá muộn có thể được trả lại trong `pending_steer` của
+terminal. Phải giữ phần này cho lượt tiếp theo, không tính là công việc run vừa
+kết thúc đã hoàn thành. Hermes nối nhiều text steer còn chờ bằng newline.
+Quyền sở hữu request của thiết bị và kết quả execution tách biệt với các
+acknowledgment transport này.
+
+Lượt thông thường vẫn phát tiếng theo tiến độ. Sau khi nhận steer, adapter giữ
+text tiếp theo đến terminal để xác định input đã được xử lý; request được phát
+tiếng mới nhất nhận text qua assistant buffer hiện có trước khi lifecycle end
+đẩy TTS. Các request voice trước giữ im lặng. Hardware marker và token usage
+của execution chung chỉ phát một lần.
+
+Sau explicit stop đã xác nhận terminal, request user tiếp theo trong cùng hội
+thoại mang thông tin rằng yêu cầu trước đã bị hủy. Hermes có thể gộp các dòng
+user liên tiếp sau khi ngắt model call; thông tin này phân biệt việc đã hủy với
+việc cần tiếp tục. Request passive không tiêu thụ thông tin đó và hội thoại mới
+không kế thừa nó.
+
 **Merge-drain (chỉ Hermes).** Backend OpenClaw có steer mode
 (`messages.queue.mode=steer`) gộp các message đồng thời vào lượt đang chạy tại
-model boundary kế tiếp. Backend Hermes (service NousResearch bên ngoài,
-`POST /v1/responses` stateless) không có mode này, nên os-server gộp ở phía
-client: khi `drainPendingEvents` chạy, các event sống sót được phân nhóm bởi
+model boundary kế tiếp. Hermes nay dùng native steer cho text người dùng đủ
+điều kiện khi server hỗ trợ; sensing thụ động vẫn gộp ở phía client: khi
+`drainPendingEvents` chạy, các event sống sót được phân nhóm bởi
 `standaloneDrain`. Event standalone giữ lượt riêng — lệnh voice thật
 (`voice` / `voice_command`, trả lời trực tiếp), web chat (`web_chat`), `voice_agent_handled` (reply câm),
 và event có ảnh. Phần sensing ambient thuần còn lại (presence / motion / emotion /
