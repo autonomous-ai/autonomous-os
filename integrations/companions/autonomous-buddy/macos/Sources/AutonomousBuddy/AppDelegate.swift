@@ -49,6 +49,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 },
                 onOpenManager: embedded ? { [weak self] in
                     self?.helperBridge?.publishMenuAction("open-manager")
+                } : nil,
+                onCheckForUpdates: embedded ? { [weak self] in
+                    self?.helperBridge?.publishMenuAction("check-updates")
                 } : nil
             )
 
@@ -165,6 +168,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         switch method {
         case "status", "ping":
             bridge.respond(id: id, result: EmbeddedHelperBridge.snapshot())
+        case "update_status":
+            guard let label = params["label"] as? String, !label.isEmpty, label.count <= 120,
+                  let enabled = params["enabled"] as? Bool else {
+                bridge.fail(id: id, error: "Update status requires a label and enabled boolean")
+                return
+            }
+            // Safe in test mode: no menu or windows are created by this method.
+            menuBarController?.setUpdateStatus(label: label, enabled: enabled)
+            bridge.respond(id: id, result: ["ok": true])
         case "pair":
             showPairing(host: params["host"] as? String)
             bridge.respond(id: id, result: EmbeddedHelperBridge.snapshot())

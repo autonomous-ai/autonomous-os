@@ -29,6 +29,11 @@ for arch in "${architectures[@]}"; do
     *) echo "Error: unsupported architecture: $arch" >&2; exit 1 ;;
   esac
 done
+# Updater URLs share the DMG destination directory.
+if [[ -n "${GCS_PATH:-}" && "$GCS_PATH" != *.dmg ]] || [[ -n "${BUDDY_URL:-}" && "$BUDDY_URL" != https://*.dmg ]]; then
+  echo "Error: custom destinations must end in .dmg and BUDDY_URL must use HTTPS" >&2
+  exit 1
+fi
 # One custom destination cannot represent two architecture-specific artifacts.
 if [[ ${#architectures[@]} -gt 1 && ( -n "${GCS_PATH:-}" || -n "${BUDDY_URL:-}" ) ]]; then
   echo "Error: GCS_PATH/BUDDY_URL overrides require a single BUDDY_ARCHS value" >&2
@@ -64,6 +69,11 @@ for arch in "${architectures[@]}"; do
   if [[ "$DMG_TARGET" == "dmg-signed" ]]; then
     xcrun stapler validate "$dmg_path"
     spctl --assess --type open --context context:primary-signature "$dmg_path"
+    node "${BUDDY_DIR}/desktop/scripts/package-update.mjs" "$dmg_path" \
+      "${DIST_DIR}/Autonomous-Buddy-${new_version}-${arch}.zip" "$new_version" "$arch"
+  else
+    node "${BUDDY_DIR}/desktop/scripts/package-update.mjs" "$dmg_path" \
+      - "$new_version" "$arch" verify-only
   fi
 done
 
@@ -71,7 +81,8 @@ METADATA_PATH="${BUCKET_PREFIX}/ota/metadata.json"
 METADATA_TMP=$(mktemp)
 PAYLOAD_TMP=$(mktemp)
 ENTRIES_TMP=$(mktemp)
-trap 'rm -f "$METADATA_TMP" "$PAYLOAD_TMP" "$ENTRIES_TMP"' EXIT
+FEED_DIR=$(mktemp -d)
+trap 'rm -f "$METADATA_TMP" "$PAYLOAD_TMP" "$ENTRIES_TMP"; rm -rf "$FEED_DIR"' EXIT
 printf '{}' > "$ENTRIES_TMP"
 
 for arch in "${architectures[@]}"; do
@@ -83,6 +94,16 @@ for arch in "${architectures[@]}"; do
   gsutil -h "Cache-Control:no-cache, no-store, must-revalidate" \
          -h "Content-Type:application/x-apple-diskimage" \
          cp "$dmg_path" "gs://${GCS_BUCKET}/${gcs_path}"
+  if [[ "$DMG_TARGET" == "dmg-signed" ]]; then
+    zip_path="${DIST_DIR}/Autonomous-Buddy-${new_version}-${arch}.zip"
+    zip_gcs_path="${gcs_path%/*}/${new_version}.zip"
+    zip_url="${buddy_url%/*}/${new_version}.zip"
+    node "${BUDDY_DIR}/desktop/scripts/update-feed.mjs" "$new_version" "$zip_url" \
+      "$zip_path" "${FEED_DIR}/${arch}.json"
+    gsutil -h "Cache-Control:no-cache, no-store, must-revalidate" \
+           -h "Content-Type:application/zip" \
+           cp "$zip_path" "gs://${GCS_BUCKET}/${zip_gcs_path}"
+  fi
   entries=$(jq --arg arch "$arch" --arg version "$new_version" \
     --arg url "$buddy_url" --arg sha256 "$checksum" \
     --arg updated_at "$(date '+%Y-%m-%d %H:%M:%S %z')" \
@@ -112,4 +133,13 @@ printf '%s\n' "$updated_metadata" > "$PAYLOAD_TMP"
 ota_metadata_sign "$PAYLOAD_TMP" "$METADATA_TMP"
 gsutil -h "Content-Type:application/json" -h "Cache-Control:no-cache, no-store, must-revalidate" \
   cp "$METADATA_TMP" "gs://${GCS_BUCKET}/${METADATA_PATH}"
+# All archives and shared metadata are published before clients see a new release.
+# Only touch the requested architecture's feed; dmg-only releases leave it intact.
+if [[ "$DMG_TARGET" == "dmg-signed" ]]; then
+  for arch in "${architectures[@]}"; do
+    gcs_path="${GCS_PATH:-${BUCKET_PREFIX}/ota/autonomous-buddy/${arch}/${new_version}.dmg}"
+    gsutil -h "Content-Type:application/json" -h "Cache-Control:no-cache, no-store, must-revalidate" \
+      cp "${FEED_DIR}/${arch}.json" "gs://${GCS_BUCKET}/${gcs_path%/*}/latest.json"
+  done
+fi
 echo "Done: published Buddy ${new_version} for ${ARCHS}"

@@ -30,6 +30,16 @@ class UploadBuddyTests(unittest.TestCase):
         self.script = release / "upload-autonomous-buddy.sh"
         self.buddy = self.root / "integrations/companions/autonomous-buddy"
         (self.buddy / "dist").mkdir(parents=True)
+        helpers = self.buddy / "desktop/scripts"
+        helpers.mkdir(parents=True)
+        shutil.copyfile(RELEASE_DIR.parents[1] / "integrations/companions/autonomous-buddy/desktop/scripts/update-feed.mjs", helpers / "update-feed.mjs")
+        (helpers / "package-update.mjs").write_text("""
+import { appendFileSync, writeFileSync } from 'node:fs'
+const [, , dmg, zip, version, arch, mode] = process.argv
+appendFileSync(process.env.TEST_CALLS, `package-update ${version} ${arch} ${mode || 'notarized'}\\n`)
+if (process.env.TEST_PACKAGE_FAIL === '1') process.exit(95)
+if (mode !== 'verify-only') writeFileSync(zip, `${version}-${arch}-zip`)
+""")
         self.version = self.buddy / "VERSION_AUTONOMOUS_BUDDY"
         self.version.write_text("0.0.19\n")
         self.remote = self.root / "remote.json"
@@ -48,7 +58,12 @@ if [[ "$2" == gs://*/metadata.json ]]; then
   cp "$TEST_REMOTE" "$3"
 elif [[ "$3" == gs://*/metadata.json ]]; then
   cp "$2" "$TEST_PUBLISHED"
-elif [[ "$3" != gs://*/*.dmg ]]; then
+elif [[ "$3" == gs://*/*.zip ]]; then
+  [[ "${TEST_ZIP_UPLOAD_FAIL:-0}" == "0" ]] || exit 96
+elif [[ "$3" == gs://*/latest.json ]]; then
+  arch="$(basename "$(dirname "$3")")"
+  cp "$2" "${TEST_PUBLISHED}.${arch}.feed"
+elif [[ "$3" != gs://*/*.dmg && "$3" != gs://*/*.zip ]]; then
   exit 93
 fi
 ''')
@@ -210,6 +225,59 @@ exit "${TEST_SPCTL_FAIL:-0}"
         self.assertNotIn("xcrun", calls)
         self.assertNotIn("spctl", calls)
         self.assertTrue(self.published.exists())
+        self.assertNotIn("latest.json", calls)
+        self.assertNotIn("Content-Type:application/zip", calls)
+
+    def test_zip_feed_hash_shape_and_publication_order(self):
+        self.run_upload()
+        calls = self.calls.read_text().splitlines()
+        for arch in ("arm64", "x64"):
+            feed = json.loads(Path(f"{self.published}.{arch}.feed").read_text())
+            self.assertEqual(feed["currentRelease"], "0.0.20")
+            self.assertEqual(len(feed["releases"]), 1)
+            entry = feed["releases"][0]
+            self.assertEqual(entry["version"], feed["currentRelease"])
+            update = entry["updateTo"]
+            blob = f"0.0.20-{arch}-zip".encode()
+            self.assertEqual(update["sha256"], hashlib.sha256(blob).hexdigest())
+            self.assertEqual(update["size"], len(blob))
+            self.assertTrue(update["pub_date"].endswith("Z"))
+            self.assertTrue(update["url"].endswith(f"/{arch}/0.0.20.zip"))
+            archive = next(i for i, line in enumerate(calls) if f"/{arch}/0.0.20.zip" in line)
+            latest = next(i for i, line in enumerate(calls) if f"/{arch}/latest.json" in line)
+            metadata = next(i for i, line in enumerate(calls) if "Content-Type:application/json" in line and "metadata.json" in line)
+            self.assertLess(archive, latest)
+            self.assertLess(metadata, latest)
+
+    def test_retry_does_not_build_or_touch_other_feed(self):
+        self.artifact("x64")
+        self.run_upload(BUDDY_SKIP_BUILD="1", BUDDY_ARCHS="x64", NOTARY_PROFILE="")
+        calls = self.calls.read_text()
+        self.assertNotIn("make ", calls)
+        self.assertNotIn("notarytool", calls)
+        self.assertNotIn("/arm64/latest.json", calls)
+        self.assertIn("/x64/latest.json", calls)
+
+    def test_failed_archive_upload_does_not_advertise_release(self):
+        self.artifact("x64")
+        self.run_upload(False, BUDDY_SKIP_BUILD="1", BUDDY_ARCHS="x64", TEST_ZIP_UPLOAD_FAIL="1")
+        self.assertNotIn("latest.json", self.calls.read_text())
+        self.assertFalse(self.published.exists())
+
+    def test_custom_destination_uses_sibling_update_objects(self):
+        self.artifact("x64")
+        self.run_upload(BUDDY_SKIP_BUILD="1", BUDDY_ARCHS="x64",
+                        GCS_PATH="custom/x64/release.dmg", BUDDY_URL="https://example.test/x64/release.dmg")
+        calls = self.calls.read_text()
+        self.assertIn("gs://test-bucket/custom/x64/0.0.19.zip", calls)
+        self.assertIn("gs://test-bucket/custom/x64/latest.json", calls)
+        feed = json.loads(Path(f"{self.published}.x64.feed").read_text())
+        self.assertEqual(feed["releases"][0]["updateTo"]["url"], "https://example.test/x64/0.0.19.zip")
+
+    def test_invalid_bundle_prevents_publication(self):
+        self.artifact("x64")
+        self.run_upload(False, BUDDY_SKIP_BUILD="1", BUDDY_ARCHS="x64", TEST_PACKAGE_FAIL="1")
+        self.assertNotIn("gsutil", self.calls.read_text())
 
 
 if __name__ == "__main__":

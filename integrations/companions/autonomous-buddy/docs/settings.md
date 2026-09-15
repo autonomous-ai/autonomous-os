@@ -2,6 +2,8 @@
 
 **Current availability:** Workspace Settings is temporarily unavailable because the Agent Manager UI is disabled. Electron **Settings**, **Edit**, **View**, and **Window** menu items are hidden; **⌘,** and the sidebar cannot open Settings. There is no runtime UI override. Native pairing, Activity, and permission windows remain available through the Buddy menu bar. The following documents Settings retained in source for when the UI is re-enabled.
 
+**App updates:** Check for Updates remains available in the native and Electron menus independently of Settings. Packaged apps check after 30 seconds and every 6 hours, then download in the background; no update preference toggle is exposed. See [app updates](app-updates.md) for restart and installation behavior.
+
 When the UI is re-enabled, open **Autonomous Buddy → Settings…** in the macOS app menu, press **⌘,**, or use the sidebar's Workspace settings button. Settings opens a full page over the current workspace. Agent processes, session views, terminals, and unsent drafts remain mounted underneath. **Back to app** or **Escape** returns to the workspace. Keyboard focus stays inside Settings, and the workspace underneath is inert while the page is open.
 
 The left navigation contains only working sections: Appearance, Agents, and Computer & device. Search filters actual setting labels and descriptions across those sections. Matching advanced terminal controls automatically become visible during search; an empty result shows a clear message.
