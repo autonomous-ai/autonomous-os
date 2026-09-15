@@ -52,12 +52,15 @@ final class MenuBarController: NSObject {
         menu.addItem(header)
         menu.addItem(.separator())
 
+        // Temporarily hide the agent workspace entry point; device controls remain available.
+        /*
         if onOpenManager != nil {
             let open = NSMenuItem(title: "Open Agent Manager…", action: #selector(openManagerAction), keyEquivalent: "")
             open.target = self
             menu.addItem(open)
             menu.addItem(.separator())
         }
+        */
 
         switch state.pairing {
         case .notPaired:

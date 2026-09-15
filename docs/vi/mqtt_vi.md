@@ -914,7 +914,10 @@ Vài điểm triển khai mà người viết backend cần biết:
 - **Chỉ mirror run do backend mở.** Bus mang mọi turn trên device, kể cả turn nói
   bằng miệng; một run được track khi `chat.send` của nó được nhận và bỏ track ở
   event kết thúc, kèm TTL 10 phút cho turn chết giữa chừng không có event kết
-  thúc.
+  thúc. Trước khi gửi POST tới sensing, device tạm giữ event chưa được track
+  để không mất phản hồi nhanh xuất hiện trước khi nhận run ID. Chỉ event của
+  đúng run trả về được phát lại, theo thứ tự trước event trực tiếp; request lỗi
+  sẽ bỏ bộ đệm. Các turn không liên quan không được mirror.
 - **Một turn bắn RẤT NHIỀU event `chat_response`, chỉ cái cuối mới là hết.**
   Runtime đẩy `chat_response` liên tục trong lúc câu trả lời đang stream — những
   cái trước mang `state` `"delta"`/`"partial"`, mỗi cái là một đoạn đầu dài dần
