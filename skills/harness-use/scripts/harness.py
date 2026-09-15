@@ -35,6 +35,16 @@ def request(kind, **fields):
     return api('/request', {'type': kind, 'requestId': str(uuid.uuid4()), **fields})
 
 
+def require_connection():
+    """Distinguish missing pairing from an offline paired computer before dispatch."""
+    status = api('/status')
+    if status.get('paired') is not True:
+        raise ValueError('HARNESS_UNPAIRED: Pair this device in Harness Desktop Settings > Devices using the code from OS Monitor.')
+    if status.get('connected') is not True:
+        raise ValueError('HARNESS_OFFLINE: Open Harness on the paired computer and check the local network connection. Pairing is already saved; do not pair again.')
+    return status
+
+
 def save(path, value):
     fd, temp = tempfile.mkstemp(dir=path.parent, prefix='.harness-')
     try:
@@ -88,7 +98,7 @@ def run(action, params, path=None):
             pending = context.get('pending')
             if not pending:
                 return {'receipt': None, 'pending': False}
-            status = api('/status')
+            status = require_connection()
             if status.get('machine_id') != pending['machineId']:
                 raise ValueError('Pairing changed; unresolved request belongs to the previous computer')
             result = request('receipt.get', idempotencyKey=pending['idempotencyKey'])
@@ -99,6 +109,7 @@ def run(action, params, path=None):
                 context.pop('pending', None)
                 save(path, state)
             return result
+        require_connection()
         listing = request('agents.list')
         if listing.get('error'):
             return listing
