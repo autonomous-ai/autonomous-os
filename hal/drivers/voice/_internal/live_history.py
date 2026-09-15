@@ -33,11 +33,13 @@ class LiveHistory:
             self._turns[key] = {"input": "", "output": "", "interaction": ""}
         return self._turns[key]
 
-    def input(self, key, text, interaction):
+    def input(self, key, text, interaction, voice_turn_type=""):
         turn = self._turn(key)
         if turn is not None:
             turn["input"] += text
             turn["interaction"] = interaction or turn["interaction"]
+            if voice_turn_type:
+                turn["voice_turn_type"] = voice_turn_type
             # Match OS's input limit; never send an incorrectly truncated question.
             if len(turn["input"].encode("utf-8")) > 16 * 1024:
                 self.discard(key)
@@ -98,6 +100,8 @@ class LiveHistory:
                 if len(reply) > limit:
                     reply = reply[:limit] + " …[truncated]"
                 kwargs = {"harness_voice": self._harness_voice} if self._harness_voice is not None else {}
+                if turn.get("voice_turn_type"):
+                    kwargs["voice_turn_type"] = turn["voice_turn_type"]
                 result = self._sender.send(
                     f"[skills: input-branching]\n[HANDLED] {turn['input']}\n[REPLY] {reply}",
                     event_type="voice_agent_handled", skip_echo=True,

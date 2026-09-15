@@ -275,3 +275,7 @@ Marker `[HW:...]` chỉ tới HAL khi agent xuất nó ra **text trả lời** (
 Kết quả cuối Harness được ghi vào flow JSONL bằng `harness_response`, giữ run ID thiết bị gốc và `text` đầy đủ. Web Chat dùng sự kiện này khôi phục kết quả đang chờ sau khi SSE ngắt hoặc tải lại trang. Luồng trực tiếp vẫn phát `chat_response` với state `final`.
 
 Lượt voice do realtime xử lý và lượt history sync dùng ID riêng: `device-realtime-…` cho hội thoại gốc, `device-chat-context-…` cho đồng bộ. Event `realtime_response` lưu câu hỏi/câu trả lời và đóng card gốc; card History sync theo lifecycle riêng. `history_run_id` liên kết mà không gộp hai lượt. Event cũ đã lưu cùng ID vẫn giữ cách hiển thị gộp trước đây.
+
+### Nhãn voice command và follow-up
+
+`sensing_input` và `realtime_response` có thể mang `data.voice_turn_type` (`voice`, `voice_command`, hoặc `voice_followup`). Flow Monitor chỉ dùng trường này cho badge; loại event, gom run, đường realtime/main, queue và cancel giữ nguyên. LIVE ON/OFF dùng cùng bộ phân loại wake phrase của HAL. Follow-up LIVE đã được cho phép giữ phân loại wake focus dù window hết trước khi provider trả lời. Reply realtime vẫn giữ `voice_agent_handled` để đồng bộ history im lặng. Row cũ thiếu metadata giữ nhãn cũ; history sync không lấy phân loại từ lượt voice bên cạnh.

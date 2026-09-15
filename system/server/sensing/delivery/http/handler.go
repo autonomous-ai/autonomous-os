@@ -87,6 +87,8 @@ func truncateHarnessFollowupContext(text string) string {
 
 // SensingEventRequest is the payload from HAL sensing detectors.
 type SensingEventRequest struct {
+	// VoiceTurnType records wake admission for diagnostics, never routing.
+	VoiceTurnType string `json:"voice_turn_type,omitempty"`
 	// Type is the event category: motion, sound, presence.enter, presence.leave, light.level, etc.
 	Type string `json:"type" validate:"required"`
 	// Message is a natural-language description of what was detected.
@@ -262,6 +264,9 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 		req.InteractionID = telemetry.ReportTaskStarted(req.Type, req.InteractionID, "")
 	}
 	startPayload := map[string]any{"type": req.Type, "message": req.Message, "interaction_id": req.InteractionID}
+	if kind := req.voiceTurnType(); kind != "" {
+		startPayload["voice_turn_type"] = kind
+	}
 
 	// look.capture is MONITOR-ONLY. The realtime `look` tool already sent the
 	// frame straight to the model, so forwarding text here would inject a
@@ -279,6 +284,9 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 
 	// Push sensing input to monitor.
 	monitorDetail := map[string]any{"type": req.Type}
+	if kind := req.voiceTurnType(); kind != "" {
+		monitorDetail["voice_turn_type"] = kind
+	}
 	// Surface the debug audio clip (speech_emotion) to the Flow Monitor UI only
 	// — as a servable URL, never the raw path, and never to the LLM.
 	if audioURL := audioURLForPath(req.Audio); audioURL != "" {
