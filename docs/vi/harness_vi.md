@@ -137,7 +137,7 @@ Các lệnh MQTT data đã xác thực của thiết bị gồm `harness.pair.st
 
 `harness.voice-mode.get` đọc `VoiceModeState` chung đang cache; `harness.voice-mode.set` chỉ nhận `data:{enabled:true|false}`. Cả hai dùng `cmd:"data"`, phản hồi trên `fd_channel` với `type:"data"`, cùng `kind`, `status:"success"` kèm snapshot voice-mode giống HTTP, hoặc `status:"failure"` kèm `error`. Field thừa, gồm `agentId`, bị từ chối. Lệnh đặt giá trị có tính idempotent: gửi lại giá trị hiện tại giữ generation và capture đang chạy. MQTT điều khiển cùng cờ RAM với Monitor/HTTP/HAL, mặc định tắt sau restart và cho phép đặt khi offline hoặc chưa có focus. Target vẫn là agent đang focus trong app; route skill/text hiện có giữ nguyên. Không có push trạng thái voice tự phát; client refresh bằng `get`. Phân quyền dùng kênh lệnh broker và ACL topic hiện có. Xem [ví dụ request MQTT](mqtt_vi.md#harnessvoice-modeget--harnessvoice-modeset--giọng-nói-harness-only).
 
-Khi phát lại hàng đợi Codex, Web/MQTT chat và voice follow-up được bổ sung lại địa chỉ `harness-reply` gốc. Yêu cầu qua hàng đợi giữ cùng run ID cục bộ và channel như khi gửi ngay.
+Khi phát lại hàng đợi ở mọi runtime, Web/MQTT chat và voice follow-up chỉ được bổ sung lại địa chỉ `harness-reply` gốc nếu Harness vẫn paired và connected tại thời điểm phát lại. Yêu cầu qua hàng đợi giữ cùng run ID cục bộ và channel như khi gửi ngay.
 
 Không poll recap mới nhất ngay sau khi gửi: dữ liệu có thể vẫn thuộc lượt trước và đánh dấu đã giao trước khi kết quả mới tới. Chuyển recap cuối khi nhận `turn.summary`; nếu có `turn.done` nhưng thiếu summary thì dùng fallback có giới hạn đã mô tả ở trên.
 
@@ -158,3 +158,5 @@ Route được khóa bằng run ID cục bộ của thiết bị, không phải 
 ### History main runtime cho voice trực tiếp
 
 Harness-only voice lưu từng input và câu trả lời kèm source Harness, máy tính và danh tính agent qua `system/externalhistory`. Mỗi cặp hỏi–đáp hoàn tất được gửi riêng tới main runtime theo định dạng history silent `[HANDLED]` / `[REPLY]` hiện có; không chờ tắt mode hoặc gom batch tóm tắt. Cache kết quả follow-up ngắn hạn giữ nguyên. Delegation qua skill không bị đồng bộ thêm lần nữa. Xem [lịch sử hội thoại từ bên ngoài](os-server_vi.md#lịch-sử-hội-thoại-từ-bên-ngoài) về lưu bền, giới hạn và delivery chưa rõ. Adapter không đổi protocol Harness hay cơ chế silent/TTS hiện có.
+
+OS chỉ thêm `[harness-reply ...]`, hướng dẫn routing Harness và context follow-up đã giữ vào request voice/chat khi service Harness vừa paired vừa connected. Trạng thái transport được kiểm tra từng request: ngắt kết nối thì ngừng chèn metadata, kết nối lại thì khôi phục. Không yêu cầu bật Harness-only voice mode; skill delegation khi đang kết nối vẫn cần reply route.
