@@ -1246,26 +1246,13 @@ def _release_reacquire_hold() -> None:
     at 16:23:40, still motionless at 16:25:58 with no further log, and it
     recovered only on a HAL restart).
 
-    Same handover the tracker performs when it ends (`tracker_service.py`):
-    dispatch play(idle), because playback belongs to the event thread. Skipped
-    when something else owns the body — tracking, hold/zero mode or a scene each
-    have their own owner and their own release, and stealing the body back from
-    them is the bug this function exists to avoid repeating.
+    Shared with the search sweep and the look-aim, which park the body the same
+    way and used to have no release at all — see `tracking/body.py` for the
+    guards (owner checks, plus "still parked").
     """
-    import hal.app_state as state
+    from hal.drivers.tracking import body
 
-    svc = getattr(state, "animation_service", None)
-    if svc is None:
-        return
-    if getattr(svc, "_tracking_active", False):
-        return
-    if getattr(svc, "_hold_mode", False) or getattr(svc, "_zero_mode", False):
-        return
-    try:
-        svc.dispatch("play", svc.idle_recording)
-        logger.info("[gaze] reacquire hold released — idle resumed")
-    except Exception as e:
-        logger.warning("[gaze] could not resume idle after reacquire: %s", e)
+    body.release_to_idle("reacquire hold released")
 
 
 def on_speech_end() -> bool:
