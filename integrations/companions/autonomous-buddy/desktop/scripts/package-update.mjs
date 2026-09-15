@@ -36,7 +36,7 @@ function verifyApp(app) {
   ]) run('lipo', [join(app, 'Contents', binary), '-verify_arch', arch === 'x64' ? 'x86_64' : 'arm64'])
   run('codesign', ['--verify', '--deep', '--strict', app])
   if (mode === 'notarized') {
-    run('codesign', ['--verify', '-R', 'anchor apple generic and certificate leaf[field.1.2.840.113635.100.6.1.13] exists', app])
+    run('codesign', ['--verify', '-R', '=anchor apple generic and certificate leaf[field.1.2.840.113635.100.6.1.13] exists', app])
     run('xcrun', ['stapler', 'validate', app])
     run('spctl', ['--assess', '--type', 'execute', app])
   }
