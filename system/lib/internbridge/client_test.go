@@ -34,7 +34,10 @@ func reply(w http.ResponseWriter, status int, body any) {
 	_ = json.NewEncoder(w).Encode(body)
 }
 func result(status string) map[string]any {
-	return map[string]any{"version": Version, "run_id": "run-0123456789abcdef0123456789abcdef", "destination": "orchestration@gus", "kind": "persona", "status": status, "executes_actions": false, "transport_status": "accepted", "lifecycle_status": "completed", "output": "safe draft"}
+	return map[string]any{"version": Version, "response_schema": ResponseSchema, "run_id": "run-0123456789abcdef0123456789abcdef", "destination": FirstContact, "requested_destination": "orchestration@gus", "reception_route": reception("orchestration@gus", "address_or_default"), "kind": "persona", "status": status, "executes_actions": false, "transport_status": "accepted", "lifecycle_status": "completed", "lifecycle_scope": "bridge_request", "output": "safe draft"}
+}
+func reception(handoff any, intent string) map[string]any {
+	return map[string]any{"first_destination": FirstContact, "handoff": handoff, "intent": intent, "status": "reception_route", "executed": false, "next_step": "safe_escalation"}
 }
 func request() Request { return Request{Text: "hello", Operation: Generate, DataClass: Business} }
 func assertError(t *testing.T, err, want error) {
@@ -49,7 +52,7 @@ func assertError(t *testing.T, err, want error) {
 }
 
 func TestSuccessAndCorrelation(t *testing.T) {
-	for _, op := range []Operation{Route, Classify, Generate} {
+	for _, op := range []Operation{Route, Reception, Classify, Generate} {
 		t.Run(string(op), func(t *testing.T) {
 			r := request()
 			r.Operation = op
@@ -62,7 +65,7 @@ func TestSuccessAndCorrelation(t *testing.T) {
 				if err := json.NewDecoder(req.Body).Decode(&got); err != nil || got != r {
 					t.Error("request not preserved")
 				}
-				status := map[Operation]string{Route: "routed", Classify: "classified", Generate: "draft"}[op]
+				status := map[Operation]string{Route: "reception_route", Reception: "reception_route", Classify: "classified", Generate: "draft"}[op]
 				body := result(status)
 				hash := sha256.Sum256([]byte(r.RunID))
 				body["run_id"] = "run-" + hex.EncodeToString(hash[:12])
@@ -74,6 +77,9 @@ func TestSuccessAndCorrelation(t *testing.T) {
 			got, err := c.Do(context.Background(), r)
 			if err != nil || got == nil || got.Output == "" {
 				t.Fatalf("result=%v error=%v", got, err)
+			}
+			if got.Destination != FirstContact || got.RequestedDestination != "orchestration@gus" || got.ReceptionRoute.Handoff != "orchestration@gus" || got.ReceptionRoute.Executed {
+				t.Fatal("first contact and requested route were conflated")
 			}
 		})
 	}
@@ -88,7 +94,7 @@ func TestProbes(t *testing.T) {
 		if r.URL.Path == "/ready" {
 			status = "ready"
 		}
-		reply(w, 200, map[string]any{"version": Version, "status": status, "transport": "loopback", "executes_actions": false})
+		reply(w, 200, map[string]any{"version": Version, "response_schema": ResponseSchema, "status": status, "transport": "loopback", "executes_actions": false})
 	})
 	if err := c.Health(context.Background()); err != nil {
 		t.Fatal(err)
@@ -137,6 +143,7 @@ func TestApplicationStatuses(t *testing.T) {
 		dest   string
 		want   error
 	}{
+		{"custody_hold", Public, "cassi@mama", ErrCustodyHold},
 		{"custody_hold", Restricted, "cassi@mama", ErrCustodyHold},
 		{"custody_hold", Secret, "orchestration@gus", ErrCustodyHold},
 		{"needs_classification", Unknown, "orchestration@gus", ErrNeedsClassification},
@@ -147,12 +154,14 @@ func TestApplicationStatuses(t *testing.T) {
 		t.Run(tc.status+string(tc.class), func(t *testing.T) {
 			c := fixture(t, func(w http.ResponseWriter, r *http.Request) {
 				body := result(tc.status)
-				body["destination"] = tc.dest
+				body["requested_destination"] = tc.dest
+				body["reception_route"] = reception(tc.dest, "address_or_default")
 				if tc.dest == "pam@gus" {
 					body["kind"] = "service"
 				}
 				if tc.status == "custody_hold" {
 					delete(body, "output")
+					body["reception_route"] = reception(nil, "unknown")
 				}
 				reply(w, 200, body)
 			})
@@ -172,7 +181,7 @@ func TestStrictResponse(t *testing.T) {
 		name   string
 		mutate func(map[string]any)
 	}{
-		{"version", func(b map[string]any) { b["version"] = "0.2.0" }},
+		{"version", func(b map[string]any) { b["version"] = "0.1.0" }},
 		{"unknown", func(b map[string]any) { b["extra"] = "x" }},
 		{"missing", func(b map[string]any) { delete(b, "executes_actions") }},
 		{"null", func(b map[string]any) { b["executes_actions"] = nil }},
@@ -208,22 +217,26 @@ func TestStrictResponse(t *testing.T) {
 
 func TestSafeHTTPFailures(t *testing.T) {
 	const sensitive = "NEVER-ECHO-private-body"
-	for _, status := range []int{400, 404, 409, 413, 500} {
+	for _, status := range []int{400, 404, 409, 413, 500, 502} {
 		t.Run(fmt.Sprint(status), func(t *testing.T) {
 			c := fixture(t, func(w http.ResponseWriter, r *http.Request) {
 				b := map[string]any{"version": Version, "error": sensitive}
 				if status != 404 {
+					b["response_schema"] = ResponseSchema
+					b["lifecycle_scope"] = "bridge_request"
+					b["requested_destination"] = nil
+					b["reception_route"] = nil
 					b["executes_actions"] = false
 					b["transport_status"] = "rejected"
 					b["lifecycle_status"] = "not_started"
 				}
-				if status == 400 || status == 409 || status == 500 {
+				if status != 404 {
 					b["run_id"] = "run-rejected"
 					b["destination"] = nil
 					b["kind"] = nil
 					b["status"] = "rejected"
 				}
-				if status == 500 {
+				if status == 500 || status == 502 {
 					b["transport_status"] = "failed"
 					b["lifecycle_status"] = "failed"
 				}
@@ -233,6 +246,9 @@ func TestSafeHTTPFailures(t *testing.T) {
 			want := ErrRejected
 			if status == 500 {
 				want = ErrUnavailable
+			}
+			if status == 502 {
+				want = ErrProtocol
 			}
 			assertError(t, err, want)
 			if got != nil || strings.Contains(fmt.Sprintf("%+v", err), sensitive) {
@@ -355,10 +371,9 @@ func TestRequestAndResponseBoundaries(t *testing.T) {
 				t.Error("maximum text was truncated")
 			}
 			b := result("draft")
-			b["output"] = ""
+			// Pad with JSON whitespace; output has its own 4096-character bound.
 			raw, _ := json.Marshal(b)
-			b["output"] = strings.Repeat("a", size-len(raw))
-			raw, _ = json.Marshal(b)
+			raw = append(raw, []byte(strings.Repeat(" ", size-len(raw)))...)
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write(raw)
 		})
@@ -384,11 +399,11 @@ func TestRunMismatchAndUnknownCannotGenerate(t *testing.T) {
 	r = request()
 	r.DataClass = Unknown
 	_, err = c.Do(context.Background(), r)
-	assertError(t, err, ErrProtocol)
+	assertError(t, err, ErrNeedsClassification)
 	r = request()
 	r.DataClass = Restricted
 	_, err = c.Do(context.Background(), r)
-	assertError(t, err, ErrProtocol)
+	assertError(t, err, ErrCustodyHold)
 }
 
 func TestUnicodeEscapes(t *testing.T) {

@@ -1,4 +1,4 @@
-// Package internbridge is an unregistered client for Intern bridge protocol 0.1.0.
+// Package internbridge is an unregistered client for Intern bridge protocol 0.2.0.
 // It does not implement AgentGateway or provision a runtime. Data classification
 // must come from trusted caller policy, never from the message or a model.
 package internbridge
@@ -22,7 +22,10 @@ import (
 )
 
 const (
-	Version          = "0.1.0"
+	Version          = "0.2.0"
+	ResponseSchema   = "cassi-first.v1"
+	FirstContact     = "cassi@mama"
+	MaxOutputChars   = 4096
 	MaxRequestBytes  = 16 * 1024
 	MaxResponseBytes = 64 * 1024
 	RequestTimeout   = 20 * time.Second
@@ -57,9 +60,10 @@ func failure(kind error, status int) error { return &Error{kind: kind, HTTPStatu
 type Operation string
 
 const (
-	Route    Operation = "route"
-	Classify Operation = "classify"
-	Generate Operation = "generate"
+	Route     Operation = "route"
+	Classify  Operation = "classify"
+	Generate  Operation = "generate"
+	Reception Operation = "reception"
 )
 
 type DataClass string
@@ -82,11 +86,26 @@ type Request struct {
 }
 
 type Result struct {
-	RunID       string
+	RunID string
+	// Destination is always FirstContact, never an executor.
 	Destination string
-	Kind        string
-	Status      string
-	Output      string
+	// RequestedDestination and Kind describe a proposal after reception.
+	RequestedDestination string
+	ReceptionRoute       ReceptionRoute
+	Kind                 string
+	Status               string
+	Output               string
+}
+
+// ReceptionRoute is metadata only. An empty Handoff represents wire null.
+// No reception or handoff is executed by this client or claimed by this result.
+type ReceptionRoute struct {
+	FirstDestination string
+	Handoff          string
+	Intent           string
+	Status           string
+	Executed         bool
+	NextStep         string
 }
 
 // Client is safe for concurrent use. Its sole destination is literal IPv4
@@ -126,7 +145,7 @@ func (r Request) valid() bool {
 	if !utf8.ValidString(r.Text) || strings.TrimSpace(r.Text) == "" || utf8.RuneCountInString(r.Text) > 8000 {
 		return false
 	}
-	if r.Operation != Route && r.Operation != Classify && r.Operation != Generate {
+	if r.Operation != Route && r.Operation != Classify && r.Operation != Generate && r.Operation != Reception {
 		return false
 	}
 	switch r.DataClass {
@@ -139,8 +158,10 @@ func (r Request) valid() bool {
 
 // Do performs exactly one request. It never retries: the bridge reserves IDs
 // before inference and has no result lookup API, so a timeout is ambiguous.
-// Only routed/classified/draft results succeed; holds and fallback statuses
-// return safe sentinels with no output attached.
+// Unknown, restricted, and secret data never leave this process, even for Route.
+// Only reception_route (for Route/Reception), classified, and draft results succeed;
+// completion covers the bridge request only, never an employee or service.
+// Holds and fallback statuses return safe sentinels with no output attached.
 func (c *Client) Do(ctx context.Context, request Request) (*Result, error) {
 	if !request.valid() {
 		return nil, failure(ErrInvalidRequest, 0)
@@ -149,16 +170,24 @@ func (c *Client) Do(ctx context.Context, request Request) (*Result, error) {
 	if err != nil || len(body) > MaxRequestBytes {
 		return nil, failure(ErrInvalidRequest, 0)
 	}
+	// A loopback listener is a separate custody boundary, not trusted storage.
+	// Do not send held content there merely to obtain a server-side rejection.
+	switch request.DataClass {
+	case Restricted, Secret:
+		return nil, failure(ErrCustodyHold, 0)
+	case Unknown:
+		return nil, failure(ErrNeedsClassification, 0)
+	}
 	fields, status, err := c.call(ctx, "/v1/intern", body)
 	if err != nil {
 		return nil, err
 	}
-	if !exact(fields, "version", "run_id", "destination", "kind", "status", "executes_actions", "transport_status", "lifecycle_status", "output") ||
-		str(fields, "version") != Version || !isFalse(fields, "executes_actions") ||
+	if !exact(fields, "version", "response_schema", "run_id", "destination", "requested_destination", "reception_route", "kind", "status", "executes_actions", "transport_status", "lifecycle_status", "lifecycle_scope", "output") ||
+		str(fields, "version") != Version || str(fields, "response_schema") != ResponseSchema || !isFalse(fields, "executes_actions") || str(fields, "lifecycle_scope") != "bridge_request" ||
 		str(fields, "transport_status") != "accepted" || str(fields, "lifecycle_status") != "completed" {
 		return nil, failure(ErrProtocol, status)
 	}
-	r := &Result{RunID: str(fields, "run_id"), Destination: str(fields, "destination"), Kind: str(fields, "kind"), Status: str(fields, "status"), Output: str(fields, "output")}
+	r := &Result{RunID: str(fields, "run_id"), Destination: str(fields, "destination"), RequestedDestination: str(fields, "requested_destination"), Kind: str(fields, "kind"), Status: str(fields, "status"), Output: str(fields, "output")}
 	if !outputID.MatchString(r.RunID) {
 		return nil, failure(ErrProtocol, status)
 	}
@@ -170,30 +199,33 @@ func (c *Client) Do(ctx context.Context, request Request) (*Result, error) {
 	} else if len(r.RunID) != 36 {
 		return nil, failure(ErrProtocol, status)
 	}
-	kinds := map[string]string{"orchestration@gus": "persona", "rex@dru": "persona", "cassi@mama": "persona", "melvil@lab": "persona", "pam@gus": "service"}
-	if kinds[r.Destination] == "" || kinds[r.Destination] != r.Kind {
+	kinds := map[string]string{"orchestration@gus": "persona", "rex@dru": "persona", FirstContact: "persona", "melvil@lab": "persona", "pam@gus": "service", "mcavoy": "service", "smart-home": "service"}
+	if r.Destination != FirstContact || kinds[r.RequestedDestination] == "" || kinds[r.RequestedDestination] != r.Kind {
+		return nil, failure(ErrProtocol, status)
+	}
+	if !r.validateReception(fields["reception_route"]) {
 		return nil, failure(ErrProtocol, status)
 	}
 	if r.Status == "custody_hold" {
 		if _, exists := fields["output"]; exists {
 			return nil, failure(ErrProtocol, status)
 		}
-		if r.Destination != "cassi@mama" && request.DataClass != Restricted && request.DataClass != Secret {
+		if r.RequestedDestination != FirstContact && r.RequestedDestination != "smart-home" {
 			return nil, failure(ErrProtocol, status)
 		}
 		return nil, failure(ErrCustodyHold, status)
 	}
-	if r.Destination == "cassi@mama" || request.DataClass == Restricted || request.DataClass == Secret || strings.TrimSpace(r.Output) == "" {
+	if r.RequestedDestination == FirstContact || r.RequestedDestination == "smart-home" || strings.TrimSpace(r.Output) == "" || utf8.RuneCountInString(r.Output) > MaxOutputChars || strings.Contains(strings.ToLower(r.Output), "<think") || strings.Contains(strings.ToLower(r.Output), "[hw:") {
 		return nil, failure(ErrProtocol, status)
 	}
-	if r.Destination == "pam@gus" {
+	if r.Kind == "service" {
 		if r.Status != "service_route" {
 			return nil, failure(ErrProtocol, status)
 		}
 		return nil, failure(ErrServiceRoute, status)
 	}
-	if request.Operation == Route {
-		if r.Status != "routed" {
+	if request.Operation == Route || request.Operation == Reception && r.Status == "reception_route" {
+		if r.Status != "reception_route" {
 			return nil, failure(ErrProtocol, status)
 		}
 		return r, nil
@@ -228,8 +260,28 @@ func (c *Client) Do(ctx context.Context, request Request) (*Result, error) {
 	return r, nil
 }
 
+func (r *Result) validateReception(raw []byte) bool {
+	f, err := object(raw)
+	if err != nil || len(f) != 6 || !exact(f, "first_destination", "handoff", "intent", "status", "executed", "next_step") ||
+		str(f, "first_destination") != FirstContact || str(f, "status") != "reception_route" || !isFalse(f, "executed") || str(f, "next_step") != "safe_escalation" {
+		return false
+	}
+	intent := str(f, "intent")
+	switch intent {
+	case "orchestration", "engineering", "service", "library", "reception", "smart-home", "news", "unknown", "address_or_default":
+	default:
+		return false
+	}
+	handoff := str(f, "handoff")
+	if string(f["handoff"]) != "null" && (handoff == "" || handoff != r.RequestedDestination || handoff == FirstContact || r.Status == "custody_hold" || intent == "unknown") {
+		return false
+	}
+	r.ReceptionRoute = ReceptionRoute{FirstDestination: FirstContact, Handoff: handoff, Intent: intent, Status: "reception_route", Executed: false, NextStep: "safe_escalation"}
+	return true
+}
+
 // Health, Ready, and BridgeVersion validate transport metadata only. Ready
-// does NOT prove model availability; protocol 0.1.0 never probes the model.
+// does NOT prove model availability; protocol 0.2.0 never probes the model.
 func (c *Client) Health(ctx context.Context) error { return c.probe(ctx, "/health", "ok") }
 func (c *Client) Ready(ctx context.Context) error  { return c.probe(ctx, "/ready", "ready") }
 func (c *Client) BridgeVersion(ctx context.Context) (string, error) {
@@ -243,7 +295,7 @@ func (c *Client) probe(ctx context.Context, path, expected string) error {
 	if err != nil {
 		return err
 	}
-	if len(f) != 4 || !exact(f, "version", "status", "transport", "executes_actions") || str(f, "version") != Version || str(f, "status") != expected || str(f, "transport") != "loopback" || !isFalse(f, "executes_actions") {
+	if len(f) != 5 || !exact(f, "version", "response_schema", "status", "transport", "executes_actions") || str(f, "version") != Version || str(f, "response_schema") != ResponseSchema || str(f, "status") != expected || str(f, "transport") != "loopback" || !isFalse(f, "executes_actions") {
 		return failure(ErrProtocol, status)
 	}
 	return nil
@@ -287,36 +339,32 @@ func (c *Client) call(ctx context.Context, path string, body []byte) (map[string
 	if len(raw) > MaxResponseBytes {
 		return nil, status, failure(ErrResponseTooLarge, status)
 	}
-	f, err := object(raw)
+	f, err := parseObject(raw, path == "/v1/intern" && status == http.StatusOK)
 	if err != nil {
 		return nil, status, failure(ErrProtocol, status)
 	}
 	if status != http.StatusOK {
-		if !exact(f, "version", "error", "run_id", "destination", "kind", "status", "executes_actions", "transport_status", "lifecycle_status") || str(f, "version") != Version || str(f, "error") == "" {
+		if !exact(f, "version", "response_schema", "error", "run_id", "destination", "requested_destination", "reception_route", "kind", "status", "executes_actions", "transport_status", "lifecycle_status", "lifecycle_scope") || str(f, "version") != Version || str(f, "error") == "" {
 			return nil, status, failure(ErrProtocol, status)
 		}
-		// Error envelopes vary (400/409, 413, 404, 500); validate each exact shape.
+		// 404 is minimal; all other supported errors use the full null envelope.
 		switch status {
 		case 404:
 			if len(f) != 2 {
 				return nil, status, failure(ErrProtocol, status)
 			}
-		case 413:
-			if len(f) != 5 || !isFalse(f, "executes_actions") || str(f, "transport_status") != "rejected" || str(f, "lifecycle_status") != "not_started" {
-				return nil, status, failure(ErrProtocol, status)
-			}
-		case 400, 409, 500:
-			if status == 400 && len(f) == 5 && isFalse(f, "executes_actions") && str(f, "transport_status") == "rejected" && str(f, "lifecycle_status") == "not_started" {
-				return nil, status, failure(ErrRejected, status)
-			}
+		case 400, 409, 413, 500, 502:
 			transport, lifecycle := "rejected", "not_started"
-			if status == 500 {
+			if status == 500 || status == 502 {
 				transport, lifecycle = "failed", "failed"
 			}
-			if len(f) != 9 || str(f, "run_id") != "run-rejected" || string(f["destination"]) != "null" || string(f["kind"]) != "null" || str(f, "status") != "rejected" || !isFalse(f, "executes_actions") || str(f, "transport_status") != transport || str(f, "lifecycle_status") != lifecycle {
+			if len(f) != 13 || str(f, "response_schema") != ResponseSchema || str(f, "lifecycle_scope") != "bridge_request" || string(f["requested_destination"]) != "null" || string(f["reception_route"]) != "null" || str(f, "run_id") != "run-rejected" || string(f["destination"]) != "null" || string(f["kind"]) != "null" || str(f, "status") != "rejected" || !isFalse(f, "executes_actions") || str(f, "transport_status") != transport || str(f, "lifecycle_status") != lifecycle {
 				return nil, status, failure(ErrProtocol, status)
 			}
 		default:
+			return nil, status, failure(ErrProtocol, status)
+		}
+		if status == 502 {
 			return nil, status, failure(ErrProtocol, status)
 		}
 		if status == 500 {
@@ -339,8 +387,13 @@ func networkError(ctx context.Context, err error) error {
 }
 
 // object rejects duplicate keys, nested values, invalid UTF-8, and trailing JSON.
-// All fields in this pinned protocol are scalar; unknown keys are checked later.
 func object(raw []byte) (map[string]json.RawMessage, error) {
+	return parseObject(raw, false)
+}
+
+// Only successful intern envelopes permit one nested reception_route object.
+// Its exact scalar fields are validated separately; arrays remain forbidden.
+func parseObject(raw []byte, reception bool) (map[string]json.RawMessage, error) {
 	if !utf8.Valid(raw) {
 		return nil, ErrProtocol
 	}
@@ -366,7 +419,7 @@ func object(raw []byte) (map[string]json.RawMessage, error) {
 		if err := d.Decode(&v); err != nil {
 			return nil, ErrProtocol
 		}
-		if len(v) == 0 || v[0] == '{' || v[0] == '[' || !validSurrogates(v) {
+		if len(v) == 0 || (v[0] == '{' && !(reception && key == "reception_route")) || v[0] == '[' || !validSurrogates(v) {
 			return nil, ErrProtocol
 		}
 		f[key] = v
