@@ -521,6 +521,19 @@ re-syncs `.env` before the gateway starts, so the re-apply is an idempotent no-o
       there is a heartbeat loop, CLAUDE.md for claudecode (no loop), the SOUL.md
       block for hermes (no loop, no KNOWLEDGE.md).
       `TestEveryRuntimeTeachesThePeopleSync` fails if a runtime ships without it.
+- [ ] **Device soul injected on every boot**, from `device.ResolveSoul(deviceType)`
+      (`system/device/soul.go`) — the shared `soul_ref` resolver. Do this in
+      onboarding, not only in factory reset, and do NOT rely on persona
+      migration: migration copies from a PREVIOUS runtime, so a device that
+      boots straight into yours has nothing to copy from and comes up with no
+      persona at all. Hermes shipped that way and its lamps lost every
+      skill-routing rule (`[sensing:*]` → `skills/sensing/SKILL.md`) until
+      `ensureSoulMDBlock` was added.
+- [ ] **One delimiter per OS-managed block.** Every runtime wraps its blocks in
+      `<!-- OS DO NOT REMOVE -->`…`---`. If yours owns a SECOND block in the same
+      file, give it its own marker — a shared one makes each updater strip the
+      other's block. Hermes hit exactly this: its skill-priority block deleted
+      the persona on the next boot.
 - [ ] Capability gating via `skills.Supported` / `SupportedHooks`.
 - [ ] **Channels (§9):** `SupportedChannels()` declares real capability;
       `AddChannel`/`RefreshChannelConfig` return `domain.ErrChannelNotSupported`

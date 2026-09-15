@@ -508,6 +508,19 @@ là no-op idempotent.
       có heartbeat loop, CLAUDE.md cho claudecode (không có loop), block SOUL.md
       cho hermes (không loop, không KNOWLEDGE.md).
       `TestEveryRuntimeTeachesThePeopleSync` fail nếu một runtime thiếu nó.
+- [ ] **Soul của device được inject mỗi lần boot**, lấy từ
+      `device.ResolveSoul(deviceType)` (`system/device/soul.go`) — bộ phân giải
+      `soul_ref` dùng chung. Làm trong onboarding, không chỉ trong factory reset,
+      và KHÔNG dựa vào persona migration: migration chép từ runtime TRƯỚC ĐÓ, nên
+      một device boot thẳng vào runtime của bạn không có gì để chép và lên nguồn
+      với persona rỗng. Hermes từng ship như vậy và lamp mất toàn bộ luật định
+      tuyến skill (`[sensing:*]` → `skills/sensing/SKILL.md`) cho tới khi
+      `ensureSoulMDBlock` được thêm.
+- [ ] **Mỗi block OS-managed một delimiter riêng.** Mọi runtime đều bọc block của
+      mình bằng `<!-- OS DO NOT REMOVE -->`…`---`. Nếu runtime của bạn sở hữu
+      block THỨ HAI trong cùng một file, hãy cho nó marker riêng — dùng chung
+      marker sẽ khiến mỗi bên strip mất block của bên kia. Hermes dính đúng lỗi
+      này: block skill-priority xoá mất persona ở lần boot kế tiếp.
 - [ ] Gate capability qua `skills.Supported` / `SupportedHooks`.
 - [ ] **Kênh (§9):** `SupportedChannels()` khai báo capability thật;
       `AddChannel`/`RefreshChannelConfig` trả `domain.ErrChannelNotSupported` cho
