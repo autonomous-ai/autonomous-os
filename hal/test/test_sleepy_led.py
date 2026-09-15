@@ -99,6 +99,73 @@ class TestSleepyLED(unittest.TestCase):
         self.assertFalse(state._music_playing)
         self.assertEqual(state.rgb_service.dispatches, [])
 
+    def test_wake_clears_restored_mute_indicator_before_late_led_restore(self):
+        state._sleeping = False
+        state._current_emotion = EMO_IDLE
+        state._sleepy_auto_muted_mic = True
+        state._mic_muted = True
+        state._mic_muted_led = True
+        # Wake can happen while a feedback wave owns the strip. Its later
+        # completion must not resurrect the boot-time privacy indicator.
+        state._tts_speaking = True
+        with (
+            mock.patch.object(state, "_hw_mic_switch_muted", False),
+            mock.patch.object(state, "_active_scene", None),
+            mock.patch.object(state, "_persist_sleep_state"),
+            mock.patch.object(state, "_start_mic_muted_effect") as muted_led,
+        ):
+            state._wake_sleepy_peripherals()
+            self.assertFalse(state._mic_muted)
+            self.assertFalse(state._mic_muted_led)
+            state._on_tts_speak_end()
+            state._on_music_play_end()
+            muted_led.assert_not_called()
+
+    def test_wake_preserves_indicator_when_hardware_privacy_still_locks_mic(self):
+        state._sleeping = False
+        state._sleepy_auto_muted_mic = True
+        state._mic_muted = True
+        state._mic_muted_led = True
+        with (
+            mock.patch.object(state, "_hw_mic_switch_muted", True),
+            mock.patch.object(state, "_persist_sleep_state"),
+        ):
+            state._wake_sleepy_peripherals()
+        self.assertTrue(state._mic_muted)
+        self.assertTrue(state._mic_muted_led)
+
+    def test_shared_button_wake_does_not_restore_privacy_red_after_feedback(self):
+        from hal.drivers import button_actions
+
+        state._mic_muted = True
+        state._speaker_muted = True
+        state._sleepy_auto_muted_mic = True
+        state._sleepy_auto_muted_speaker = True
+        state._mic_muted_led = True
+        with (
+            mock.patch.object(state, "_hw_mic_switch_muted", False),
+            mock.patch.object(state, "_active_scene", None),
+            mock.patch.object(state, "_enrolling", False),
+            mock.patch.object(state, "tracker_service", None),
+            mock.patch.object(state, "_save_boot_sidecar"),
+            mock.patch.object(state, "_auto_camera_on"),
+            mock.patch.object(state, "_apply_emotion_led_display"),
+            mock.patch.object(state, "_schedule_led_restore"),
+            mock.patch.object(state, "_start_mic_muted_effect") as muted_led,
+            mock.patch.object(button_actions, "_cancel_agent_speech"),
+            mock.patch.object(button_actions, "_grant_wakeword_focus"),
+        ):
+            # Use the real shared action, emotion route and sleep wake helper.
+            button_actions.single_click_action("MPR121-test", announce=False, chime=False)
+            self.assertFalse(state._sleeping)
+            self.assertFalse(state._mic_muted)
+            self.assertFalse(state._speaker_muted)
+            self.assertFalse(state._mic_muted_led)
+            state._tts_speaking = True
+            state._on_tts_speak_end()
+            state._restore_user_led()
+            muted_led.assert_not_called()
+
     def test_muted_indicator_can_resume_after_wake(self):
         state._sleeping = False
         state._mic_muted_led = True

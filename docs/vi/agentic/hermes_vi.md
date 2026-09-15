@@ -8,7 +8,7 @@ kỳ backend nào `config.agent_runtime` chọn, qua đúng một interface
 nào đang chạy.
 
 - **`openclaw`** (mặc định): WebSocket bền tới daemon OpenClaw. Xem `docs/os-server.md` + `runtimes/openclaw`.
-- **`hermes`**: client HTTP + SSE tới một Hermes API server cục bộ (kiểu OpenAI *Responses API*). Tài liệu này. Code: `runtimes/hermes/`.
+- **`hermes`**: client HTTP + SSE tới Hermes API server cục bộ (Runs native khi được hỗ trợ; fallback OpenAI *Responses API*). Tài liệu này. Code: `runtimes/hermes/`.
 
 > Nguồn sự thật là code. Tài liệu này mô tả `runtimes/hermes/` đúng như đã hiện
 > thực; phải đồng bộ khi code đổi (EN: `docs/agentic/hermes.md`, VI: file này).
@@ -131,7 +131,28 @@ phải dựng lại + nén lại nó mỗi turn — biến một turn đáng l�
   mức mà cơ chế nén của gateway ổn định lại, không nằm trong đó (cùng giá trị và
   cùng lập luận với [`codex`](codex_vi.md)).
 
-## 4. Giao thức request — `POST /v1/responses`
+## 4. Giao thức request — Runs native và fallback Responses
+
+Khi server công bố đủ `run_submission`, `run_events_sse`, `run_status`,
+`run_stop`, `run_steer` qua `GET /v1/capabilities` và
+`features.runs_idempotency.autonomous_run_events_v1=true`, lượt text đủ điều kiện dùng
+`POST /v1/runs`. Body chứa `input`, `model`, `instructions` tùy chọn và
+`session_id` hiện tại. Admission trả server `run_id`; nhận event qua
+`GET /v1/runs/{run_id}/events`, đọc trạng thái qua `GET /v1/runs/{run_id}`.
+Device run ID vẫn dùng để nối trace và metric. Khác với chuỗi conversation của
+Responses, Runs nạp lịch sử session đã lưu theo `session_id`; server resolve
+session tiếp nối sau compression khi mở run kế tiếp. Native run ID không phải
+`previous_response_id` của Responses.
+
+Server thiếu capability giữ transport Responses bên dưới. Sau khi xác minh native,
+service giữ transport đó đến khi khởi động lại; lỗi dò capability sau đó không
+được đưa hội thoại về lịch sử Responses cũ. Trên server hỗ trợ,
+request có ảnh đợi run native riêng cùng session; adapter chuyển part
+`input_text` / `input_image` của Responses thành `text` / `image_url` chuẩn mà
+không bỏ ảnh. Không đưa request ảnh vào endpoint steer chỉ nhận text. Lỗi mạng sau admission
+hoặc steer không cho phép gửi lại request: server có thể đã đang thực hiện.
+
+### Fallback Responses — `POST /v1/responses`
 
 `client.go` POST một `streamRequest` với `stream: true` rồi đọc luồng SSE:
 
@@ -164,6 +185,23 @@ chúng thành frame `domain.WSEvent` và dispatch qua handler đăng ký bởi `
 khi gửi, false khi `response.completed`; kết quả completed mang `response.id`
 (cache thành `lastResponseID`) và toàn bộ text assistant cho path send-and-wait.
 
+Runs native đặt tên event trong JSON `data` (`event`), không dùng dòng SSE
+`event:`. Adapter chuyển `message.delta` và terminal thật `run.completed` /
+`run.failed` / `run.cancelled` / `run.interrupted` vào pipeline event hiện có.
+Acknowledgment `run.steered` không phải task completion. Khi mất stream, có thể
+khôi phục kết quả bằng trạng thái terminal đã xác nhận. Nếu chưa kết thúc,
+adapter yêu cầu stop và poll cho tới khi execution chốt, giữ quyền sở hữu remote
+run khi trạng thái chưa rõ. EOF hoặc trạng thái còn chạy không được báo thành công.
+
+Native mode còn yêu cầu marker tương thích OS ở trên: Runs chưa vá thiếu
+ID/kết quả tool và chi tiết cache mà handler hiện tại cần. Bản vá tương thích
+thêm `tool.call.started` / `tool.call.completed` với ID, arguments, kết quả thật,
+cùng `cache_read_tokens`, `cache_write_tokens` trong usage. Adapter dùng lại
+translator Responses và chuyển cache vào `input_tokens_details`; bỏ progress
+`tool.started` / `tool.completed` cũ để callback không chạy trùng. Khi thiếu bản
+vá hoặc source không khớp cấu trúc đã xác minh, giữ Responses cho tới khi cài
+bản vá hợp lệ và restart gateway.
+
 Marker sensing/pose bị strip trước khi gửi bằng đúng các regex như OpenClaw
 (`[snapshot: …]`, `[pose_bucket: …]`, `[pose_worst: …]`) để agent không bao giờ
 thấy marker phần cứng nội bộ.
@@ -181,11 +219,36 @@ Hợp đồng giống hệt OpenClaw: khi một lượt đang active (`IsBusy`),
 event thụ động bị drop hoặc buffer (`QueuePendingEvent`, last-write-wins theo
 loại) và replay khi rảnh, để tín hiệu ambient không cắt ngang lệnh đang chạy.
 
+Với run native được quản lý, text người dùng mới đủ điều kiện được gửi qua
+`POST /v1/runs/{run_id}/steer` thay vì tạo agent chạy song song. Hermes chèn chỉ
+dẫn vào ranh giới iteration/tool; nhận request không đồng nghĩa cắt ngay model
+call hoặc tool đang chạy. `POST /v1/runs/{run_id}/stop` là thao tác cancel riêng;
+acknowledgment `stopping` chưa phải terminal. Request không thể steer, gồm ảnh, đợi run native riêng thay vì bị bỏ hoặc
+chuyển sang conversation Responses không nối được lịch sử.
+
+Steer đã nhận nhưng đến quá muộn có thể được trả lại trong `pending_steer` của
+terminal. Phải giữ phần này cho lượt tiếp theo, không tính là công việc run vừa
+kết thúc đã hoàn thành. Hermes nối nhiều text steer còn chờ bằng newline.
+Quyền sở hữu request của thiết bị và kết quả execution tách biệt với các
+acknowledgment transport này.
+
+Lượt thông thường vẫn phát tiếng theo tiến độ. Sau khi nhận steer, adapter giữ
+text tiếp theo đến terminal để xác định input đã được xử lý; request được phát
+tiếng mới nhất nhận text qua assistant buffer hiện có trước khi lifecycle end
+đẩy TTS. Các request voice trước giữ im lặng. Hardware marker và token usage
+của execution chung chỉ phát một lần.
+
+Sau explicit stop đã xác nhận terminal, request user tiếp theo trong cùng hội
+thoại mang thông tin rằng yêu cầu trước đã bị hủy. Hermes có thể gộp các dòng
+user liên tiếp sau khi ngắt model call; thông tin này phân biệt việc đã hủy với
+việc cần tiếp tục. Request passive không tiêu thụ thông tin đó và hội thoại mới
+không kế thừa nó.
+
 **Merge-drain (chỉ Hermes).** Backend OpenClaw có steer mode
 (`messages.queue.mode=steer`) gộp các message đồng thời vào lượt đang chạy tại
-model boundary kế tiếp. Backend Hermes (service NousResearch bên ngoài,
-`POST /v1/responses` stateless) không có mode này, nên os-server gộp ở phía
-client: khi `drainPendingEvents` chạy, các event sống sót được phân nhóm bởi
+model boundary kế tiếp. Hermes nay dùng native steer cho text người dùng đủ
+điều kiện khi server hỗ trợ; sensing thụ động vẫn gộp ở phía client: khi
+`drainPendingEvents` chạy, các event sống sót được phân nhóm bởi
 `standaloneDrain`. Event standalone giữ lượt riêng — lệnh voice thật
 (`voice` / `voice_command`, trả lời trực tiếp), web chat (`web_chat`), `voice_agent_handled` (reply câm),
 và event có ảnh. Phần sensing ambient thuần còn lại (presence / motion / emotion /
@@ -508,7 +571,8 @@ làm 3 việc theo thứ tự:
    sau factory-reset wipe), chạy `hermes claw migrate` (nó **copy** skills openclaw,
    không transform). Guard theo thư mục rỗng để switch thường là no-op (không
    re-import churn). `claw migrate` cũng đụng SOUL/MEMORY, nhưng vô hại: migrate
-   persona Go (§12) chạy sau ghi đè sạch, chỉ skills trụ lại.
+   persona Go (§12) chạy sau ghi đè sạch, và `EnsureOnboarding` dựng lại hai
+   block SOUL.md do OS quản lý ngay sau presync (xem dưới) — chỉ skills trụ lại.
 
    Một migrate chạy khi bản canonical đã có trên đĩa (race lúc install với skill
    watcher, chạy tay) dùng `--skill-conflict rename` và để lại **bản trùng**
@@ -571,33 +635,122 @@ không mọi lượt sẽ 401. Hermes phải listen tại `127.0.0.1:8642` để
 `runtimes/hermes/constants.go` rồi build lại (việc cho phép cấu hình theo từng máy
 là phần làm sau).
 
-### Block ưu-tiên-skill trong SOUL.md (skill của máy thắng skill bundled của Hermes)
+### Hai block do OS quản lý trong SOUL.md (persona + ưu tiên skill)
 
-Hermes có catalog skill bundled riêng, và nếu để mặc định nó coi các skill đó
-ngang hàng với skill nền tảng của máy — nên request nào cả hai catalog cùng làm
-được có thể bị route sang skill bundled thay vì skill của máy. Ví dụ: được nhờ
-"gửi email", nó có thể chọn skill email bundled rồi bắt đầu cài CLI (himalaya)
-trong khi skill `connectors` đã có sẵn credential Gmail của máy trên đĩa.
-OpenClaw và PicoClaw mang quy tắc chọn skill trong block **AGENTS.md** do OS
-quản lý, nhưng Hermes không load AGENTS.md — **SOUL.md là file prompt duy nhất
-nó đọc mỗi session** — nên quy tắc đi theo đó:
+`~/.hermes/SOUL.md` là **file prompt duy nhất Hermes đọc mỗi session** (nó không
+load AGENTS.md như OpenClaw/PicoClaw), nên mọi thứ OS cần nhét vào prompt đều
+phải nằm trong file này. `EnsureOnboarding` (`runtimes/hermes/onboarding.go`) ghi
+**hai block tách biệt, mỗi block một marker riêng**:
 
-- `EnsureOnboarding` gọi `ensureSoulSkillPriorityBlock()`
-  (`runtimes/hermes/onboarding.go`) ngay **sau** presync (§0 của presync có thể
-  chạy `claw migrate` ghi đè soul). Nó strip block
-  `<!-- OS DO NOT REMOVE -->`…`---` cũ (nếu có) rồi append lại
-  `soulSkillPriorityBlock` nhúng sẵn vào cuối `~/.hermes/SOUL.md` — nên một OTA
-  os-server làm mới nội dung, và factory reset / migrate làm mất block sẽ tự-vá
-  ở boot kế tiếp.
-- Block chỉ dẫn: các skill dưới `skills/openclaw-imports/` là skill nền tảng
-  built-in của máy và **ưu tiên hơn mọi skill bundled của Hermes** có mục đích
-  trùng lặp; mọi việc trên dịch vụ bên-thứ-ba đã kết nối
-  (Gmail/Calendar/Drive/Notion/Figma/Asana/Linear/GitHub, …) đi qua skill
-  `connectors`; không bao giờ cài client/CLI thay thế (himalaya, mutt, gcalcli,
-  …) cho dịch vụ mà connector đã cover.
-- Ghi atomic tmp+rename (giống `UpdateIdentityName`), nội dung persona của chủ
-  máy và identity card inline không bị đụng, và **không cần restart gateway** —
-  Hermes đọc lại SOUL.md ở session kế tiếp.
+| Block | Marker | Vị trí | Hàm |
+|---|---|---|---|
+| Persona thiết bị | `<!-- OS DO NOT REMOVE -->` (`soulOSMarker`) | **đầu file** | `ensureSoulMDBlock()` → `upsertSoulPersonaBlock()` |
+| Ưu tiên skill | `<!-- OS HERMES SKILL PRIORITY -->` (`soulSkillPriorityMarker`) | **cuối file** | `ensureSoulSkillPriorityBlock()` → `upsertSoulSkillPriorityBlock()` |
+
+Cả hai chạy **sau** presync (§0 của presync có thể chạy `claw migrate` ghi đè
+soul), theo đúng thứ tự **persona trước, ưu-tiên-skill sau** — persona nằm trên,
+quy tắc skill append xuống dưới. Cả hai đều best-effort (lỗi chỉ `slog.Warn`,
+không chặn boot) và **nằm ngoài quyết định restart gateway**: SOUL.md được đọc
+theo từng session, không đọc lúc gateway start (cùng quy tắc mà
+`UpdateIdentityName` dựa vào). Cả hai ghi qua `writeSoulFile` — atomic tmp+rename
+dùng chung — nên một crash giữa chừng không cắt cụt soul.
+
+**Vì sao hai marker phải khác nhau.** Trước đây **cả hai** block cùng dùng
+`soulOSMarker`, và `upsertSoulSkillPriorityBlock` strip block mang marker đó
+**xuất hiện trước tiên** — trên máy đã migrate persona thì cái xuất hiện trước
+chính là persona, nên persona bị xoá âm thầm ở lần boot kế (GitHub issue #403).
+Giờ `stripSoulMarkedBlock(text, marker, match)` nhận thêm một predicate theo nội
+dung block: chỉ block mà predicate chấp nhận mới bị gỡ, block bị từ chối giữ
+nguyên verbatim — nhờ đó hai block sống chung một file mà mỗi hàm chỉ đụng phần
+của mình (`isPersonaBody` / `isSkillPriorityBody`).
+
+**Migrate marker cũ.** Máy cập nhật từ os-server đời trước vẫn mang block
+ưu-tiên-skill bọc trong `soulOSMarker`. `soulSkillPrioritySentinel`
+(`**Skill priority (MANDATORY):**`, dòng đầu của thân block) là thứ phân biệt nó
+với một persona đeo cùng marker: `upsertSoulSkillPriorityBlock` strip block theo
+marker mới trước, rồi strip thêm block `soulOSMarker` **có sentinel** — nên bản
+legacy được thay tại chỗ chứ không bị nhân đôi, và persona không bị nhầm. Ngược
+lại `upsertSoulPersonaBlock` chỉ gỡ block `soulOSMarker` **không phải**
+skill-priority (`isPersonaBody`), để bản legacy đó lại cho hàm kia xử lý.
+
+**Persona thiết bị (mới).** `ensureSoulMDBlock()` resolve persona của máy từ
+`soul_ref` trong `robots/<type>/ROBOT.md` qua `device.ResolveSoul` (xem mục kế) và ghi
+nó thành block ở **đầu** `~/.hermes/SOUL.md` mỗi lần boot, nên một OTA đổi nội
+dung persona là làm mới luôn (block cũ bị gỡ ở bất cứ chỗ nào nó đang nằm thay vì
+chồng thêm bản thứ hai). Trước đây
+Hermes **không hề làm việc này** — nó chỉ nhận persona qua migration persona giữa
+runtime (§12), nên một máy boot thẳng vào Hermes (mặc định của lamp) hoàn toàn
+**không có persona**, kéo theo mất luôn các quy tắc định tuyến biến `[sensing:*]`
+thành lời gọi skill. Block có shape byte-for-byte giống cái openclaw/picoclaw ghi
+(cùng `<!-- OS DO NOT REMOVE -->` … `---`), nên switch runtime theo chiều nào cũng
+mang persona qua nguyên vẹn. Máy **không khai `soul_ref`** thì không ghi gì —
+giữ nguyên soul mặc định Hermes ship (hoặc soul đã migrate).
+
+Nội dung của chủ máy nằm dưới block được giữ lại, trừ đúng một ngoại lệ dùng chung
+với các runtime khác: một **soul mặc định do OS/runtime quản lý** còn sót lại ở đó
+bị **bỏ đi** thay vì giữ như chỉnh sửa của chủ máy — nếu không file sẽ mọc thêm một
+persona thứ hai cạnh tranh. `isManagedDefaultSoul` (tương ứng với
+`isDefaultSoulHeading` bên openclaw/picoclaw) khớp theo danh sách prefix trong
+`managedDefaultSoulPrefixes`. Phần chủ máy tự viết dưới `## Personal` vẫn sống sót.
+
+**Gateway Hermes tự seed lại persona mặc định của nó mỗi khi SOUL.md biến mất**, và
+presync chạy **trước** `ensureSoulMDBlock` — nên trên một máy vừa flash, cái mà hàm
+upsert persona nhìn thấy nằm dưới block nó vừa ghi chính là seed đó. Đây là dạng
+default duy nhất mở đầu bằng **văn xuôi, không có heading**
+(`You are Hermes Agent, built by Nous Research…`), và đó là lý do
+`managedDefaultSoulPrefixes` là danh sách prefix chứ không phải phép kiểm heading
+như các runtime khác. Để nguyên thì nó mâu thuẫn thẳng với persona thiết bị — cùng
+một file, trên bảo agent nó là Lamp, vài dòng dưới bảo nó là Hermes Agent. Hai mục
+còn lại là `hermesSoulFallback` (`# Hermes Agent Persona`, do factory reset ghi trên
+máy chưa khai `soul_ref`) và hai dạng `# Soul` / `# SOUL.md` đi vào Hermes qua
+migration.
+
+Máy cài lần đầu được seed sẵn mục `## Personal` — **đúng từng chữ** như
+openclaw/picoclaw/codex/opencode ghi — để chủ máy có chỗ viết mà OTA không ghi đè.
+
+**Block ưu-tiên-skill (skill của máy thắng skill bundled của Hermes).** Hermes có
+catalog skill bundled riêng, và nếu để mặc định nó coi các skill đó ngang hàng với
+skill nền tảng của máy — nên request nào cả hai catalog cùng làm được có thể bị
+route sang skill bundled thay vì skill của máy. Ví dụ: được nhờ "gửi email", nó có
+thể chọn skill email bundled rồi bắt đầu cài CLI (himalaya) trong khi skill
+`connectors` đã có sẵn credential Gmail của máy trên đĩa. OpenClaw và PicoClaw
+mang quy tắc chọn skill trong block **AGENTS.md** do OS quản lý; Hermes không có
+slot đó nên quy tắc đi theo soul. `ensureSoulSkillPriorityBlock()` strip bản cũ
+(cả marker mới lẫn bản legacy có sentinel) rồi append lại `soulSkillPriorityBlock`
+nhúng sẵn vào **cuối** file — nên OTA os-server làm mới nội dung, và factory reset
+/ `claw migrate` làm mất block sẽ tự-vá ở boot kế tiếp. Block chỉ dẫn: các skill
+dưới `skills/openclaw-imports/` là skill nền tảng built-in của máy và **ưu tiên
+hơn mọi skill bundled của Hermes** có mục đích trùng lặp; mọi việc trên dịch vụ
+bên-thứ-ba đã kết nối (Gmail/Calendar/Drive/Notion/Figma/Asana/Linear/GitHub, …)
+đi qua skill `connectors`; không bao giờ cài client/CLI thay thế (himalaya, mutt,
+gcalcli, …) cho dịch vụ mà connector đã cover. Block còn mang quy tắc ghi
+`memories/USER.md` (một entry mỗi người dưới `## Users`) và quy ước im lặng bằng
+token `NO_REPLY`.
+
+Nội dung của chủ máy nằm ngoài hai block — persona tự viết thêm, identity card
+inline — không bị đụng.
+
+### `device.ResolveSoul` — resolver `soul_ref` dùng chung
+
+`system/device/soul.go` `ResolveSoul(deviceType) (content, hasSoul, err)` là nửa
+**runtime-agnostic** của hợp đồng `soul_ref`, để không runtime nào phải chép lại
+phần tra cứu (Hermes ship thiếu chính chỗ này và máy của nó boot lên không có
+persona):
+
+- không khai `soul_ref` → `hasSoul=false`, **không phải lỗi** — thân máy "không
+  hồn" giữ nguyên soul mặc định của runtime;
+- `http(s)://` → tải artifact về, timeout **30 s** (`soulDownloadTimeout`) vì
+  onboarding nằm trên đường boot, host artifact treo không được giữ gateway lại;
+- giá trị khác → đọc file theo đường dẫn tương đối dưới `DevicesDir()/<type>/`
+  (scheme lạ như `ftp://`, `s3://` bị từ chối thẳng thay vì bị hiểu nhầm là path);
+- khai `soul_ref` nhưng resolve không được → **trả lỗi**, vì đó là lỗi deploy
+  (thân máy gọi tên một nhân vật mà không ship nó) đáng phải lộ ra.
+
+Hermes dùng nó ở **cả hai** đường: `ensureSoulMDBlock()` lúc onboarding, và
+`resolveSoulContent` (`runtimes/hermes/reset.go`) lúc factory reset seed lại
+SOUL.md. Khác biệt là cách xử lý lỗi: reset **ghi cảnh báo rồi fallback về**
+`hermesSoulFallback` thay vì fail — một máy đang wipe phải quay lại với soul parse
+được, và onboarding sẽ tiêm lại bản thật ở boot kế tiếp.
 
 ### Capability kênh & add/refresh live
 
@@ -688,17 +841,21 @@ Xác nhận đã switch qua banner `AGENT BACKEND ACTIVE → HERMES` + một l�
 
 Switch openclaw→hermes chạy một migration persona Go
 (`system/agent/migrate_persona/openclaw_to_hermes.go`) lúc os-server boot —
-**tách biệt với `claw migrate`**. Nó mang vào `~/.hermes/`:
+**tách biệt với `claw migrate`**. Migration này **không còn là nguồn persona duy
+nhất** của Hermes: `ensureSoulMDBlock()` tiêm persona của máy từ `soul_ref` mỗi
+lần boot (§10), nên máy boot thẳng vào Hermes cũng có persona mà không cần đi qua
+switch. Migration mang vào `~/.hermes/`:
 
 - **SOUL.md** (rebrand) — và vì Hermes không có slot IDENTITY.md riêng, inline các
   field IDENTITY đã điền của owner thành block `## Your identity card` để tên tùy
   chỉnh (vd "Ngân") sống sót. `UpdateIdentityName` (đổi tên thiết bị) sửa block đó;
   `WatchIdentity` (`runtimes/hermes/identity.go`) poll SOUL.md và khi tên đổi thì
   đẩy wake words mới sang HAL + `i18n.SetDeviceName` — mirror `WatchIdentity` của
-  OpenClaw, chỉ khác là watch SOUL.md thay vì IDENTITY.md. Việc migration ghi đè
-  cũng làm mất **block ưu-tiên-skill** do OS quản lý, nhưng `EnsureOnboarding`
-  (chạy sau migration trong startup sequence) append lại nó (xem *Block
-  ưu-tiên-skill trong SOUL.md* phía trên).
+  OpenClaw, chỉ khác là watch SOUL.md thay vì IDENTITY.md. Block persona
+  `<!-- OS DO NOT REMOVE -->` của OpenClaw đi theo nguyên vẹn vì hai runtime ghi
+  cùng một shape; còn **block ưu-tiên-skill** do OS quản lý bị mất khi migration
+  ghi đè, nhưng `EnsureOnboarding` (chạy sau migration trong startup sequence)
+  dựng lại cả hai block (xem *Hai block do OS quản lý trong SOUL.md* phía trên).
 - **MEMORY.md + daily `memory/*.md` + KNOWLEDGE.md** → merge vào `memories/MEMORY.md`.
   Hermes chỉ load `MEMORY.md` + `USER.md` **theo tên** (không glob `memories/*.md`),
   nên KNOWLEDGE được fold vào thay vì giữ thành file riêng bị bỏ qua.

@@ -8,7 +8,7 @@ hardware markers, Flow Monitor SSE, sensing drain, Telegram fan-out) never knows
 which brain is active.
 
 - **`openclaw`** (default): persistent WebSocket to the OpenClaw daemon. See `docs/os-server.md` + `runtimes/openclaw`.
-- **`hermes`**: HTTP + SSE client against a local Hermes API server (OpenAI *Responses API* style). This doc. Code: `runtimes/hermes/`.
+- **`hermes`**: HTTP + SSE client against a local Hermes API server (native Runs when supported; OpenAI *Responses API* fallback). This doc. Code: `runtimes/hermes/`.
 
 > Source of truth is the code. This documents `runtimes/hermes/` as implemented;
 > keep it in sync on change (EN: this file, VI: `docs/vi/agentic/hermes_vi.md`).
@@ -135,7 +135,29 @@ this, os-server rotates the conversation name:
   gateway's own compression settles, not inside it (same value and reasoning as
   [`codex`](codex.md)).
 
-## 4. Request protocol — `POST /v1/responses`
+## 4. Request protocol — native Runs and Responses fallback
+
+On a server advertising `run_submission`, `run_events_sse`, `run_status`,
+`run_stop`, and `run_steer` through `GET /v1/capabilities`, plus
+`features.runs_idempotency.autonomous_run_events_v1=true`, eligible plain-text
+turns use `POST /v1/runs`. The body carries `input`, `model`, optional
+`instructions`, and the current `session_id`. Admission returns a server
+`run_id`; events arrive through `GET /v1/runs/{run_id}/events` and status through
+`GET /v1/runs/{run_id}`. The device run ID remains the trace/metric identifier.
+Unlike Responses conversation chaining, Runs reloads persisted session history
+by `session_id`; the server resolves compression continuations when opening the
+next run. A native run ID is not a Responses `previous_response_id`.
+
+Servers without these capabilities retain the Responses transport below.
+Once native support is verified, the service keeps that transport for its
+lifetime; a later capability probe failure must not resume stale Responses history.
+On capable servers, images wait for their own native run on the same session;
+the adapter converts Responses `input_text` / `input_image` parts to canonical
+`text` / `image_url` content without dropping images. Image requests are never
+injected through the text-only steer endpoint. Network failure after admission or steering is not permission to
+resubmit the same request: the server may already be executing it.
+
+### Responses fallback — `POST /v1/responses`
 
 `client.go` POSTs a `streamRequest` with `stream: true` and reads an SSE stream:
 
@@ -169,6 +191,25 @@ matches OpenClaw: `activeTurn` flips true on send and false on
 `response.completed`; the completed result carries `response.id` (cached as
 `lastResponseID`) and the full assistant text for send-and-wait callers.
 
+Native Runs names events inside each JSON `data` envelope (`event`), rather
+than an SSE `event:` line. The adapter maps `message.delta` and actual terminal
+`run.completed` / `run.failed` / `run.cancelled` / `run.interrupted` to the
+existing event pipeline. A `run.steered` acknowledgment is not task completion.
+If the stream is lost, a confirmed terminal status can recover the outcome.
+Otherwise the adapter requests stop and polls until execution settles, keeping
+remote ownership while status is unresolved. EOF or a still-running status
+cannot be reported as success.
+
+Native mode also requires the OS compatibility marker above: the unpatched
+Runs API omits tool-call IDs/results and cache details needed by the existing
+handler. The compatibility patch adds `tool.call.started` / `tool.call.completed`
+with real call IDs, arguments and results, plus `cache_read_tokens` and
+`cache_write_tokens` in usage. The adapter reuses the Responses translator and
+maps cache counters into `input_tokens_details`; legacy `tool.started` /
+`tool.completed` progress is ignored to avoid duplicate callbacks. If the patch
+is absent or refuses an unknown source shape, keep Responses until a verified
+patch is installed and the gateway restarts.
+
 Sensing/pose markers are stripped before send using the same regexes as OpenClaw
 (`[snapshot: …]`, `[pose_bucket: …]`, `[pose_worst: …]`) so the agent never sees
 internal hardware markers.
@@ -187,11 +228,37 @@ Identical contract to OpenClaw: while a turn is active (`IsBusy`), passive sensi
 events are dropped or buffered (`QueuePendingEvent`, last-write-wins per type) and
 replayed when idle, so ambient signals never interrupt an in-flight command.
 
+For a managed native run, new eligible user text can be submitted to
+`POST /v1/runs/{run_id}/steer` instead of starting another parallel agent.
+Hermes appends this guidance at an iteration/tool boundary; an accepted request
+does not imply immediate interruption of the current model call or tool.
+`POST /v1/runs/{run_id}/stop` is a distinct cancellation operation, and its
+`stopping` acknowledgment is not a terminal result. Requests that cannot steer, including images, wait for their own native turn
+rather than being dropped or moved to a disconnected Responses conversation.
+
+An accepted steer that arrives too late may return in terminal `pending_steer`.
+It must be retained for a subsequent turn, not counted as work completed by the
+finished run. Multiple pending steer texts are concatenated with newlines by
+Hermes. Device request ownership and execution outcomes remain distinct from
+these transport acknowledgments.
+
+Ordinary runs keep progressive speech. After accepting a steer, the adapter
+holds subsequent text until the terminal result identifies the consumed inputs;
+the newest audible request receives that text through the existing assistant
+buffer before lifecycle end flushes TTS. Earlier voice requests stay silent.
+The shared execution's hardware markers and token usage are emitted once.
+
+After a confirmed explicit stop, the next user request in that conversation
+carries a factual cancellation notice in its input. Hermes can merge consecutive
+user history rows after an interrupted model call; the notice records that the
+unfinished request was cancelled and should not be resumed. Passive requests do not
+consume this notice, and a new conversation does not inherit it.
+
 **Merge-drain (Hermes-only).** OpenClaw's backend has a steer mode
 (`messages.queue.mode=steer`) that merges concurrent messages into the in-flight
-turn at the next model boundary. The Hermes backend (external NousResearch
-service, stateless `POST /v1/responses`) has no such mode, so os-server batches
-client-side instead: when `drainPendingEvents` runs, surviving events are
+turn at the next model boundary. Hermes now uses native steering for eligible
+user text when the installed server supports it; passive sensing still uses
+client-side batching: when `drainPendingEvents` runs, surviving events are
 partitioned by `standaloneDrain`. Standalone events keep their own turn — real
 voice commands (`voice` / `voice_command`, answered directly), web chat (`web_chat`), `voice_agent_handled`
 (silent reply), and image-bearing events. The remaining pure-ambient sensing
@@ -591,6 +658,59 @@ To target a different Hermes endpoint / key / model today, edit
 `runtimes/hermes/constants.go` and rebuild (making these per-unit configurable is
 future work).
 
+### Device persona block in SOUL.md (`soul_ref`, injected every boot)
+
+Hermes shipped without persona injection. Every other runtime writes the device's
+character into its prompt file on each boot; Hermes only ever received one through
+the openclaw→hermes persona migration (§12), which copies from a *previous*
+runtime — so a device that booted straight into Hermes (`gateway.default: hermes`
+in `robots/<type>/ROBOT.md`, which is the lamp default) ran with **no persona at
+all**, and the routing rules that turn a `[sensing:*]` event into a skill call were
+simply absent.
+
+- `EnsureOnboarding` calls `ensureSoulMDBlock()` (`runtimes/hermes/onboarding.go`)
+  **first**, then `ensureSoulSkillPriorityBlock()`. Order matters: the persona goes
+  in at the top of the file and the skill rules are appended below it. Both run
+  after presync (whose §0 `claw migrate` can rewrite the soul), both are
+  best-effort (`slog.Warn` on failure), and both sit **outside** the gateway-restart
+  decision — SOUL.md is read per session, not at gateway start.
+- The text comes from `device.ResolveSoul(deviceType)` (`system/device/soul.go`),
+  the runtime-agnostic resolver for the `soul_ref` declared in
+  `robots/<type>/ROBOT.md`: **no ref → no-op and no error** (a soulless body keeps
+  whatever default soul Hermes ships); an `http(s)://` ref is downloaded with a 30 s
+  timeout; any other value is read as a path under `DevicesDir()/<type>/`; a
+  declared-but-unresolvable ref is an error (surfaced, boot continues). The Hermes
+  factory reset uses the same resolver via `resolveSoulContent`
+  (`runtimes/hermes/reset.go`), falling back to `hermesSoulFallback` on error so a
+  wiped device still comes back with a parseable soul — onboarding re-injects the
+  real one on the next boot.
+- `upsertSoulPersonaBlock` leaves exactly one `<!-- OS DO NOT REMOVE -->`…`---`
+  block at the **top** of `~/.hermes/SOUL.md`, dropping the previous one wherever it
+  sat — so an OTA with new soul wording refreshes in place instead of stacking a
+  second copy. The block is byte-identical in shape to the one openclaw/picoclaw
+  write (`osMandatoryMarker`), so a runtime switch in either direction carries the
+  persona across unchanged.
+- Owner content below the block is preserved, with one exception shared with the
+  other runtimes: a **managed default soul** left there is discarded rather than
+  kept as fake owner edits, or the file grows a second, competing persona.
+  `isManagedDefaultSoul` (counterpart of openclaw/picoclaw's
+  `isDefaultSoulHeading`) matches the prefixes in `managedDefaultSoulPrefixes`.
+  Owner edits under `## Personal` survive the discard.
+- **The Hermes gateway re-seeds its own persona whenever SOUL.md is missing**, and
+  presync runs before `ensureSoulMDBlock` — so on a freshly flashed device that
+  seed is exactly what the persona upsert finds below the block it just wrote. It
+  is the one managed default that opens with **prose, not a heading**
+  (`You are Hermes Agent, built by Nous Research…`), which is why
+  `managedDefaultSoulPrefixes` is a prefix list rather than the heading-only check
+  the other runtimes use. Left in place it contradicts the device persona outright
+  — one file telling the agent it is Lamp and, a few lines down, that it is Hermes
+  Agent. The remaining entries are `hermesSoulFallback` (`# Hermes Agent Persona`,
+  written by a factory reset on a device with no `soul_ref`) and the `# Soul` /
+  `# SOUL.md` shapes that reach Hermes through migration.
+- A first install is seeded with the same owner-editable `## Personal` section
+  openclaw/picoclaw/codex/opencode write, word for word, so the owner has a place
+  to write that an OTA will not overwrite.
+
 ### SOUL.md skill-priority block (device skills beat Hermes bundled skills)
 
 Hermes ships its own bundled skill catalog, and left alone it weighs those as
@@ -604,19 +724,37 @@ the one prompt file it reads every session** — so the rule rides there instead
 
 - `EnsureOnboarding` calls `ensureSoulSkillPriorityBlock()`
   (`runtimes/hermes/onboarding.go`) right **after** presync (whose §0
-  `claw migrate` can rewrite the soul). It strips any previous
-  `<!-- OS DO NOT REMOVE -->`…`---` block and re-appends the embedded
-  `soulSkillPriorityBlock` at the end of `~/.hermes/SOUL.md` — so an os-server
-  OTA refreshes the wording, and a factory reset / migrate that drops it
-  self-heals on the next boot.
+  `claw migrate` can rewrite the soul), and after the persona block above. It
+  strips any previous `<!-- OS HERMES SKILL PRIORITY -->`…`---` block and
+  re-appends the embedded `soulSkillPriorityBlock` at the end of
+  `~/.hermes/SOUL.md` — so an os-server OTA refreshes the wording, and a factory
+  reset / migrate that drops it self-heals on the next boot.
+- **The two OS-managed blocks wear different markers on purpose.** The persona uses
+  `soulOSMarker` (`<!-- OS DO NOT REMOVE -->`, the shape openclaw/picoclaw also
+  write); the skill rules use `soulSkillPriorityMarker`
+  (`<!-- OS HERMES SKILL PRIORITY -->`). Both used to use `soulOSMarker`, and since
+  the strip removed whichever marked block came first, on a migrated device that was
+  the **persona** — silently deleted on the next boot (issue #403).
+  `stripSoulMarkedBlock(text, marker, match)` now takes the marker plus an optional
+  body predicate and removes only the blocks that predicate accepts, which is what
+  lets both blocks live in one file with each updater touching only its own.
+- **A legacy block is replaced in place, not duplicated.** A device updating from an
+  older os-server still carries its skill-priority block under
+  `<!-- OS DO NOT REMOVE -->`, so `upsertSoulSkillPriorityBlock` runs a second strip
+  over that marker guarded by `isSkillPriorityBody` — which matches on
+  `soulSkillPrioritySentinel`, the block's `**Skill priority (MANDATORY):**` first
+  line. That is what tells a legacy skill-priority block apart from a persona
+  wearing the same marker; `isPersonaBody` is its inverse and guards the persona
+  upsert.
 - The block instructs: skills under `skills/openclaw-imports/` are the device's
   built-in platform skills and **take priority over any Hermes bundled skill**
   with an overlapping purpose; anything on a connected third-party service
   (Gmail/Calendar/Drive/Notion/Figma/Asana/Linear/GitHub, …) goes through the
   `connectors` skill; never install an alternative client/CLI (himalaya, mutt,
   gcalcli, …) for a service a connector covers.
-- Atomic tmp+rename (same as `UpdateIdentityName`), owner/persona content and the
-  inlined identity card are untouched, and **no gateway restart is needed** —
+- Atomic tmp+rename via the shared `writeSoulFile` (same as `UpdateIdentityName`),
+  owner content and the inlined identity card are untouched — as is the persona
+  block, which now wears its own marker — and **no gateway restart is needed**:
   Hermes re-reads SOUL.md at the next session.
 
 ### Channel capability & live add/refresh
@@ -724,7 +862,10 @@ Switching openclaw→hermes runs a Go persona migration
   OpenClaw's `WatchIdentity`, just watching SOUL.md instead of IDENTITY.md. The
   migration overwrite also drops the OS-managed **skill-priority block**, but
   `EnsureOnboarding` (which runs after the migration in the startup sequence)
-  re-appends it (see *SOUL.md skill-priority block* above).
+  re-appends it, and `ensureSoulMDBlock` re-asserts the device persona block at the
+  top of the file (see *Device persona block in SOUL.md* and *SOUL.md skill-priority
+  block* above). A device that never migrates gets its persona from
+  `ensureSoulMDBlock` alone.
 - **MEMORY.md + daily `memory/*.md` + KNOWLEDGE.md** → merged into
   `memories/MEMORY.md`. Hermes loads only `MEMORY.md` + `USER.md` **by name** (no
   `memories/*.md` glob), so KNOWLEDGE is folded in rather than kept as a separate,

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 	"time"
 
@@ -12,6 +13,47 @@ import (
 	sensinghttp "go.autonomous.ai/os/system/server/sensing/delivery/http"
 	"go.autonomous.ai/os/system/telemetry"
 )
+
+// hwHostRE matches a HAL or os-server endpoint as it appears in a tool call —
+// the loopback host and port, then the path. Anchoring on the host is what
+// separates a CALL from a MENTION: `cat …/skills/emotion/SKILL.md` contains
+// "/emotion", and a plain substring test emitted a phantom hw_emotion + led_set
+// for a documentation read (#342 defect D, device-chat-13 seq 109). The monitor
+// then showed an emotion the lamp never played.
+var hwHostRE = regexp.MustCompile(`127\.0\.0\.1:500[01](/[A-Za-z0-9_./-]*)`)
+
+// hwPathFromToolArgs returns the endpoint path a tool call actually targets, or
+// "" when the text merely mentions one. The first call in the text wins. Query
+// strings and trailing punctuation are trimmed so callers compare against a
+// plain path.
+func hwPathFromToolArgs(toolArgs string) string {
+	m := hwHostRE.FindStringSubmatch(toolArgs)
+	if len(m) != 2 {
+		return ""
+	}
+	path := m[1]
+	if i := strings.IndexAny(path, "?'\"` "); i >= 0 {
+		path = path[:i]
+	}
+	return strings.TrimRight(path, "/.")
+}
+
+// servoMovementPaths are the servo endpoints that MOVE the body. Reads
+// (/servo/position, /servo/status, /servo/bearing) are deliberately absent: a
+// hw_servo event means the lamp did something a person could see.
+//
+// /servo/search and /servo/demo were missing from the previous inline list, so
+// the one turn that actually swept (device-chat-9, a 42 s curl) showed an idle
+// lamp in the monitor while the room was being searched.
+var servoMovementPaths = map[string]bool{
+	"/servo/aim":    true,
+	"/servo/play":   true,
+	"/servo/nudge":  true,
+	"/servo/search": true,
+	"/servo/demo":   true,
+}
+
+func isServoMovementPath(path string) bool { return servoMovementPaths[path] }
 
 // handleAgentStreamEvent handles WS event=="agent": the OpenClaw agent stream
 // (lifecycle / tool / thinking / assistant) plus the lifecycle-end TTS flush.
@@ -626,7 +668,13 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 			}
 			// Emit specific hardware events for flow monitor visualization.
 			// Both flow.Log (for JSONL persistence + UI flow_event triggers) and monitorBus (for SSE).
-			if !echoedHW && strings.Contains(toolArgs, "/emotion") {
+			//
+			// Matched on the RESOLVED endpoint path, not on raw shell text. The
+			// /led and /audio branches below still use the substring form: same
+			// weakness, but no evidence of a phantom there yet, and a change to
+			// how they match is a separate decision.
+			hwPath := hwPathFromToolArgs(toolArgs)
+			if !echoedHW && strings.HasPrefix(hwPath, "/emotion") {
 				h.monitorBus.Push(domain.MonitorEvent{Type: "led_set", Summary: "agent tool: " + toolName})
 				h.monitorBus.Push(domain.MonitorEvent{Type: "hw_emotion", Summary: toolArgs, RunID: flowRunID})
 				flow.Log("hw_emotion", map[string]any{"args": toolArgs, "run_id": flowRunID}, flowRunID)
@@ -647,9 +695,9 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 				h.monitorBus.Push(domain.MonitorEvent{Type: "hw_led", Summary: toolArgs, RunID: flowRunID})
 				flow.Log("hw_led", map[string]any{"args": toolArgs, "run_id": flowRunID}, flowRunID)
 			}
-			if !echoedHW && (strings.Contains(toolArgs, "/servo/aim") || strings.Contains(toolArgs, "/servo/play")) {
+			if !echoedHW && isServoMovementPath(hwPath) {
 				h.monitorBus.Push(domain.MonitorEvent{Type: "hw_servo", Summary: toolArgs, RunID: flowRunID})
-				flow.Log("hw_servo", map[string]any{"args": toolArgs, "run_id": flowRunID}, flowRunID)
+				flow.Log("hw_servo", map[string]any{"path": hwPath, "args": toolArgs, "run_id": flowRunID}, flowRunID)
 			}
 			// Intercept OpenClaw built-in tts tool: extract text and route to HAL speaker.
 			// The built-in tts generates audio server-side but never reaches the physical speaker.

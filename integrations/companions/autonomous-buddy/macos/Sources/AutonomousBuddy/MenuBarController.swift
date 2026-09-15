@@ -1,6 +1,6 @@
 import Cocoa
 
-final class MenuBarController: NSObject {
+final class MenuBarController: NSObject, NSMenuItemValidation {
     private let statusItem: NSStatusItem
     private let menu = NSMenu()
 
@@ -11,6 +11,9 @@ final class MenuBarController: NSObject {
     private let onAbout: () -> Void
     private let onQuit: () -> Void
     private let onOpenManager: (() -> Void)?
+    private let onCheckForUpdates: (() -> Void)?
+    private var updateLabel = "Check for Updates…"
+    private var updateEnabled = true
 
     init(
         onPair: @escaping (String?) -> Void,
@@ -19,7 +22,8 @@ final class MenuBarController: NSObject {
         onShowActivity: @escaping () -> Void,
         onAbout: @escaping () -> Void,
         onQuit: @escaping () -> Void,
-        onOpenManager: (() -> Void)? = nil
+        onOpenManager: (() -> Void)? = nil,
+        onCheckForUpdates: (() -> Void)? = nil
     ) {
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         self.onPair = onPair
@@ -29,6 +33,7 @@ final class MenuBarController: NSObject {
         self.onAbout = onAbout
         self.onQuit = onQuit
         self.onOpenManager = onOpenManager
+        self.onCheckForUpdates = onCheckForUpdates
         super.init()
 
         statusItem.menu = menu
@@ -52,12 +57,15 @@ final class MenuBarController: NSObject {
         menu.addItem(header)
         menu.addItem(.separator())
 
+        // Temporarily hide the agent workspace entry point; device controls remain available.
+        /*
         if onOpenManager != nil {
             let open = NSMenuItem(title: "Open Agent Manager…", action: #selector(openManagerAction), keyEquivalent: "")
             open.target = self
             menu.addItem(open)
             menu.addItem(.separator())
         }
+        */
 
         switch state.pairing {
         case .notPaired:
@@ -71,6 +79,13 @@ final class MenuBarController: NSObject {
         let about = NSMenuItem(title: "About Autonomous Buddy", action: #selector(aboutAction), keyEquivalent: "")
         about.target = self
         menu.addItem(about)
+
+        if onCheckForUpdates != nil {
+            let update = NSMenuItem(title: updateLabel, action: #selector(checkForUpdatesAction), keyEquivalent: "")
+            update.target = self
+            update.isEnabled = updateEnabled
+            menu.addItem(update)
+        }
 
         let quit = NSMenuItem(title: "Quit Autonomous Buddy", action: #selector(quitAction), keyEquivalent: "q")
         quit.target = self
@@ -188,6 +203,23 @@ final class MenuBarController: NSObject {
     }
 
     // MARK: - actions
+
+    func setUpdateStatus(label: String, enabled: Bool) {
+        updateLabel = label
+        updateEnabled = enabled
+        rebuild()
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        // AppKit otherwise re-enables actionable menu items when opening the menu.
+        if menuItem.action == #selector(checkForUpdatesAction) { return updateEnabled }
+        return true
+    }
+
+    @objc private func checkForUpdatesAction() {
+        guard updateEnabled else { return }
+        onCheckForUpdates?()
+    }
 
     @objc private func pairDiscovered(_ sender: NSMenuItem) {
         onPair(sender.representedObject as? String)

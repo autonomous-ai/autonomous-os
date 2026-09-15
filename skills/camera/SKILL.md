@@ -140,6 +140,11 @@ camera state* belong in the table above.
 | **"look at this"** / "look at what I'm holding" / "what is this" | a visual question about an object | **`/api/vision/look`** (Workflow above) |
 | "look at the desk / table / wall" | a fixed location | `servo-control` `/servo/aim` |
 | "look at the cup and follow it" | a movable object to track | `servo-tracking` `/servo/track` |
+| **"find my keyboard"** / "where is my cup" / "look around for X" / "where are you" | something that may be OUT of view — a search, not a look | **`servo-control` `/servo/search`** (curl, in-turn) |
+
+**"Find my X" is a search, not a look.** One frame from wherever the head happens to point
+answers "what do you see", not "where is it". `/servo/search` sweeps the room, centres on the
+object, and returns the frame with a box on it — do not answer a find-request with a snapshot.
 
 **"Look at this" is a visual question, not a privacy toggle.** The user is holding something
 up to be identified. Replying "Got it, camera on" answers a question they did not ask.

@@ -96,6 +96,7 @@ class SensingSender:
         image_b64: str = "",
         interaction_id: str = "",
         harness_voice: dict | None = None,
+        voice_turn_type: str = "",
     ) -> "SendResult":
         """POST decorated message to os-server /api/sensing/event with retry.
 
@@ -113,6 +114,9 @@ class SensingSender:
             return SendResult()
 
         payload = {"type": event_type, "message": message}
+        # Observational classification only; never replace the routing event.
+        if voice_turn_type in ("voice", "voice_command", "voice_followup"):
+            payload["voice_turn_type"] = voice_turn_type
         if harness_voice is not None:
             payload["harness_voice"] = {
                 "enabled": harness_voice["enabled"],

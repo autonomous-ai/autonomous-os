@@ -21,6 +21,7 @@ import (
 	"go.autonomous.ai/os/system/device"
 	"go.autonomous.ai/os/system/domain"
 	"go.autonomous.ai/os/system/environment"
+	"go.autonomous.ai/os/system/externalhistory"
 	"go.autonomous.ai/os/system/harness"
 	"go.autonomous.ai/os/system/healthwatch"
 	"go.autonomous.ai/os/system/lib/hal"
@@ -28,6 +29,7 @@ import (
 	"go.autonomous.ai/os/system/lib/logger"
 	"go.autonomous.ai/os/system/lib/mqtt"
 	"go.autonomous.ai/os/system/lib/safego"
+	"go.autonomous.ai/os/system/lib/sensingmsg"
 	"go.autonomous.ai/os/system/network"
 	_agentHttpDeliver "go.autonomous.ai/os/system/server/agent/delivery/http"
 	_buddyHttpDeliver "go.autonomous.ai/os/system/server/buddy/delivery/http"
@@ -46,6 +48,8 @@ import (
 )
 
 type Server struct {
+	externalHistory *externalhistory.Store
+
 	harnessService   *harness.Service
 	harnessVoice     *harness.VoiceController
 	harnessVoiceCtx  context.Context
@@ -192,6 +196,15 @@ func ProvideServer(
 		statusLED:         sled,
 		chatStream:        chatStream,
 	}
+	harnessConnected := func() bool {
+		if s.harnessService == nil {
+			return false
+		}
+		status := s.harnessService.Status()
+		return status.Paired && status.Connected
+	}
+	sensingH.SetHarnessConnected(harnessConnected)
+	sensingmsg.SetHarnessConnected(harnessConnected)
 	sensingH.SetHarnessFollowup(s.HarnessVoiceFollowup)
 	sensingH.SetHarnessFollowupContext(s.HarnessFollowupContext)
 	sensingH.SetHarnessVoice(s.handleHarnessVoice)
@@ -223,6 +236,10 @@ func (s *Server) Serve(closeFn func()) error {
 		logger.SetGELFHost(s.config.DeviceID)
 	}
 	logger.SetGELFDeviceType(deviceType)
+	// No GELF_URL on the device (the shipped case) → relay through the cloud API
+	// with the device key; the collector credential stays server-side. No-op when
+	// GELF_URL is set or the device has no Autonomous credential to relay with.
+	logger.EnableGELFRelay(s.config.GELFRelayCredentials())
 
 	// Common fields for every tracking event this device sends (see
 	// system/telemetry). Set once here, where the resolved device class,
@@ -325,11 +342,15 @@ func (s *Server) Serve(closeFn func()) error {
 
 	eventCtx, cancelEvents := context.WithCancel(context.Background())
 	defer cancelEvents()
+	if err := s.initializeExternalHistory(eventCtx); err != nil {
+		return err
+	}
 	harnessService, harnessErr := harness.NewService("config", harness.Callbacks{OnEvent: s.forwardHarnessEvent})
 	if harnessErr != nil {
 		slog.Error("harness service initialization failed", "component", "harness", "error", harnessErr)
 	} else {
 		s.harnessService = harnessService
+		s.restoreHarnessHistoryReplies()
 		harnessService.Start(eventCtx)
 		s.deviceMQTTHandler.SetHarnessService(harnessService)
 	}
@@ -593,6 +614,18 @@ func (s *Server) Serve(closeFn func()) error {
 	scheduleGroup.POST("", adminAuthMiddleware(s.config), s.deviceMQTTHandler.CreateSchedule)
 	scheduleGroup.PATCH(":id", adminAuthMiddleware(s.config), s.deviceMQTTHandler.UpdateSchedule)
 	scheduleGroup.DELETE(":id", adminAuthMiddleware(s.config), s.deviceMQTTHandler.DeleteSchedule)
+
+	// Connectors: the local Settings UI's write path for a static-credential
+	// (PAT) connector. Persists through the SAME connectorWriter the MQTT
+	// connector.set.<code> dispatcher uses, so a token pasted on-device lands
+	// in the same <code>_access_tokens.json file the skill layer already
+	// reads — no separate storage, no drift. GET reports connected + the
+	// non-secret identity fields (never the token); DELETE removes both the
+	// on-disk entry and any mcp.servers.<code> side-effect.
+	connectorGroup := api.Group("device/connectors")
+	connectorGroup.POST("pat", adminAuthMiddleware(s.config), s.deviceMQTTHandler.SetConnectorPAT)
+	connectorGroup.GET(":code", adminAuthMiddleware(s.config), s.deviceMQTTHandler.GetConnector)
+	connectorGroup.DELETE(":code", adminAuthMiddleware(s.config), s.deviceMQTTHandler.RemoveConnector)
 
 	// Look: snapshot + describe in one call, so the agent gets text it can read
 	// instead of a file path it cannot. Loopback-only — the caller is the

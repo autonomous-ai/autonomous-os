@@ -12,6 +12,7 @@
 package hermes
 
 import (
+	"context"
 	"net/http"
 	"regexp"
 	"strings"
@@ -67,6 +68,14 @@ func extractPoseBucketMarkers(message string) (string, []string) {
 // and reads SSE until response.completed. Lifecycle/busy state, run tracking,
 // channel senders, and TTS plumbing are otherwise identical to openclaw.
 type HermesService struct {
+	nativeRunSteering atomic.Bool
+	steeringMu        sync.Mutex
+	steeringQueue     []managedChat
+	steeringWake      chan struct{}
+	runtimeCtx        context.Context
+	managedSession    string
+	managedSessionSet bool
+
 	config     *config.Config
 	monitorBus *monitor.Bus
 	statusLED  *statusled.Service

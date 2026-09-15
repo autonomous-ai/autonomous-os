@@ -1,6 +1,10 @@
 # Cài đặt desktop
 
-Mở **Autonomous Buddy → Settings…** trong menu app macOS, nhấn **⌘,**, hoặc dùng nút Workspace settings ở sidebar. Settings mở thành trang đầy đủ phủ lên workspace hiện tại. Tiến trình agent, session view, terminal và bản nháp chưa gửi vẫn được giữ bên dưới. **Back to app** hoặc **Escape** trở về workspace. Focus bàn phím nằm trong Settings; workspace bên dưới không nhận tương tác khi trang đang mở.
+**Trạng thái hiện tại:** Settings của workspace tạm không khả dụng vì UI Agent Manager bị vô hiệu hóa. Các mục menu Electron **Settings**, **Edit**, **View**, **Window** bị ẩn; **⌘,** và sidebar không cung cấp đường mở Settings. Không có tùy chọn bật lại UI lúc chạy. Các cửa sổ native về pairing, Activity và quyền vẫn dùng được từ menu bar Buddy. Phần bên dưới mô tả Settings được giữ trong mã nguồn để dùng khi UI được bật lại.
+
+**Cập nhật app:** Check for Updates vẫn dùng được trong menu native và Electron, độc lập với Settings. App đóng gói kiểm tra sau 30 giây rồi mỗi 6 giờ và tải trong nền; chưa có tùy chọn bật/tắt cập nhật. Xem [cập nhật app](app-updates_vi.md) về khởi động lại và cài đặt.
+
+Khi UI được bật lại, mở **Autonomous Buddy → Settings…** trong menu app macOS, nhấn **⌘,**, hoặc dùng nút Workspace settings ở sidebar. Settings mở thành trang đầy đủ phủ lên workspace hiện tại. Tiến trình agent, session view, terminal và bản nháp chưa gửi vẫn được giữ bên dưới. **Back to app** hoặc **Escape** trở về workspace. Focus bàn phím nằm trong Settings; workspace bên dưới không nhận tương tác khi trang đang mở.
 
 Điều hướng trái chỉ có các mục hoạt động thật: Appearance, Agents và Computer & device. Tìm kiếm lọc nhãn và mô tả cài đặt thật trong các mục này. Các điều khiển terminal nâng cao khớp truy vấn tự hiện khi tìm kiếm; không có kết quả sẽ có thông báo rõ ràng.
 

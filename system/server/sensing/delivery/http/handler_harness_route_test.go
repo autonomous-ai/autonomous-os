@@ -72,6 +72,9 @@ func TestHarnessNamedAgentRoutingTreatsNameAsTarget(t *testing.T) {
 		"execution target, not a person to contact",
 		"An explicitly requested agent takes priority over any retained target",
 		"For a new task without an explicit name, follow the skill task-based selection policy",
+		"use each agent's recap headline as the first evidence of its current project and work",
+		"read only the newest recap/text pair (recap n:1, turns[0]) of at most two candidates",
+		"a missing recap is unknown, not availability",
 		"Ask David if there are events in the US",
 		"Find upcoming events in the US",
 		"make no more Harness or shell calls",
@@ -85,8 +88,12 @@ func TestHarnessNamedAgentRoutingTreatsNameAsTarget(t *testing.T) {
 }
 
 func TestHarnessFollowupRoutingSupportsChatCompletionChecks(t *testing.T) {
-	const instruction = "ask whether it has finished or for its result"
-	if !strings.Contains(harnessFollowupRouting, instruction) {
-		t.Fatalf("Harness follow-up routing is missing completion checks")
+	for _, required := range []string{
+		"ask whether it has finished or for its result",
+		"if exactly one listed agent's recap describes that task, continue with that agent instead; if several do, ask which task",
+	} {
+		if !strings.Contains(harnessFollowupRouting, required) {
+			t.Fatalf("Harness follow-up routing is missing %q", required)
+		}
 	}
 }

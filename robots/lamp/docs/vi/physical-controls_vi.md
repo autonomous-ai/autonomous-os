@@ -282,9 +282,7 @@ motor. Cấu hình được đọc lúc khởi động; sửa xong phải restar
 Thiếu file, thiếu entry board, hoặc `"enabled": false` thì bỏ qua MPR121 và
 giữ các handler GPIO/TTP223 hiện có. Không có bus MPR121 cũ để fallback.
 Cấu hình bật nhưng sai bị từ chối khi startup; chế độ mô phỏng bỏ qua phần cứng.
-Nếu thiếu `/dev/i2c-0`, khởi tạo log lỗi và MPR121 không hoạt động, còn
-GPIO/TTP223 tiếp tục chạy. Sửa `bus` nếu wiring đã xác minh dùng controller
-khác, rồi restart HAL.
+Nếu bus I²C đã cấu hình không tồn tại hoặc sensor không phản hồi ACK, khởi tạo ghi `MPR121 event=unavailable` ở mức WARNING kèm bus, address và errno, không có traceback. MPR121 không hoạt động nhưng GPIO/TTP223 vẫn chạy; không khởi chạy worker touch và đóng bus đã mở. Lỗi quyền truy cập và lỗi bất thường vẫn giữ traceback mức ERROR. Không đổi `enabled` hay tự retry. Kiểm tra bus và wiring, sửa `bus` nếu cần rồi restart HAL.
 
 Sau khởi tạo, driver chờ cảm biến ổn định 100 ms trước khi đọc trạng thái
 chạm ban đầu, rồi poll mỗi 10 ms theo mặc định. Chuyển trạng thái chạm và
@@ -577,3 +575,13 @@ Thành công, HAL đọc “Đã bật Harness, đang nói chuyện với {agent
 ngắn, không lưu trạng thái LED mới. Chưa kết nối/không có agent được báo lỗi theo
 ngôn ngữ đã chọn. Công tắc privacy mic chặn action; speaker mute chặn thông báo;
 LED vẫn tôn trọng quyền ưu tiên sleep/privacy/TTS hiện có.
+
+Khi HAL khởi động, đồng bộ vị trí privacy-switch không giả lập nhấn nút: vị trí cho phép mic khôi phục quyền mic/ngoại vi mà không đánh thức thiết bị, mở conversation focus, phát chime/câu đang nghe hoặc lên lịch LED listening. Thao tác gạt thật từ mute sang unmute vẫn giữ wake/focus và thông báo như trước. Khởi động ở vị trí mute vẫn áp hardware privacy lock đồng bộ.
+
+Khi sleep được khôi phục sau HAL restart (kể cả software update), privacy-switch đang mở không được unmute mic đang ngủ hoặc khởi chạy voice pipeline. Mic và speaker bị mute bởi sleep giữ nguyên cho đến khi wake thật. Nếu privacy đã lưu trạng thái speaker mute do sleep, wake gỡ mute tạm thời đó bên dưới privacy lock; âm thanh vẫn bị chặn cho đến khi mở privacy. Trạng thái speaker sau khi gỡ mute được lưu để HAL restart tiếp không khôi phục mute do sleep đã kết thúc. Speaker do người dùng mute trước sleep vẫn giữ mute.
+
+Callback GPIO có mức chân sau debounce trùng vị trí đã biết (kể cả callback ban đầu lúc startup) giữ nguyên software mute và sleep. Chỉ thay đổi mức chân thực sự mới chạy action của switch.
+
+Khi wake mở lại mic bị mute bởi sleep, HAL cũng xóa cờ LED mic mute đã khôi phục. Callback kết thúc emotion, TTS hoặc nhạc chạy sau đó không được bật lại màu đỏ privacy khi mic đã mở. Mic vẫn bị hardware privacy khóa thì giữ cờ LED mute.
+
+Lệnh mute speaker thủ công trong lúc sleep chuyển quyền giữ mute từ sleep sang người dùng và được lưu ngay cả khi loa đã im lặng. Wake phải giữ lựa chọn này, kể cả khi privacy đang khóa.

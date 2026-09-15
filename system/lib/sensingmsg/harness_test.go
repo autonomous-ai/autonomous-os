@@ -6,6 +6,8 @@ import (
 )
 
 func TestReplayHarnessResponseAddress(t *testing.T) {
+	SetHarnessConnected(func() bool { return true })
+	t.Cleanup(func() { SetHarnessConnected(nil) })
 	for _, typ := range []string{"web_chat", "mqtt_chat", "voice_followup"} {
 		got := AppendHarnessReplyRoute("[user] ask browser to work", typ, "device-chat-42-1234")
 		channel := "web"
@@ -18,5 +20,29 @@ func TestReplayHarnessResponseAddress(t *testing.T) {
 	}
 	if got := AppendHarnessReplyRoute("sound", "sound", "run"); got != "sound" {
 		t.Fatal(got)
+	}
+}
+
+func TestReplayHarnessRouteChecksCurrentConnection(t *testing.T) {
+	SetHarnessConnected(nil)
+	t.Cleanup(func() { SetHarnessConnected(nil) })
+	const msg = "[user] Find my fan"
+	for _, typ := range []string{"web_chat", "mqtt_chat", "voice_followup"} {
+		SetHarnessConnected(nil)
+		if got := AppendHarnessReplyRoute(msg, typ, "run"); got != msg {
+			t.Fatalf("%s added route without connection provider: %q", typ, got)
+		}
+		connected := false
+		SetHarnessConnected(func() bool { return connected })
+		for _, state := range []bool{false, true, false, true} {
+			connected = state
+			got := AppendHarnessReplyRoute(msg, typ, "run")
+			if strings.Contains(got, "[harness-reply ") != connected {
+				t.Fatalf("%s connected=%t: %q", typ, connected, got)
+			}
+			if replay := AppendHarnessReplyRoute(got, typ, "run"); replay != got {
+				t.Fatalf("%s duplicated route: %q", typ, replay)
+			}
+		}
 	}
 }

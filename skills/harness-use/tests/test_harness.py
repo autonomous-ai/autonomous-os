@@ -16,6 +16,10 @@ class HarnessSkillTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.path = Path(self.temp.name) / 'voice.json'
+        self.connection = {'paired': True, 'connected': True, 'machine_id': 'machine'}
+        api_mock = patch.object(harness, 'api', side_effect=lambda path: dict(self.connection))
+        api_mock.start()
+        self.addCleanup(api_mock.stop)
         self.mutations = []
         self.uncertain = False
 
@@ -30,6 +34,37 @@ class HarnessSkillTests(unittest.TestCase):
         if kind == 'receipt.get':
             return {'receipt': {'state': 'started'}}
         return {'state': 'running', **fields}
+
+    def test_disconnected_actions_do_not_dispatch_or_change_saved_state(self):
+        original = {'voice': {'agentId': 'a', 'machineId': 'machine',
+                              'pending': {'machineId': 'machine', 'idempotencyKey': 'old'}}}
+        self.path.write_text(json.dumps(original))
+        before = self.path.read_bytes()
+        for paired, code in [(False, 'HARNESS_UNPAIRED'), (True, 'HARNESS_OFFLINE')]:
+            self.connection.update(paired=paired, connected=False)
+            for action in ['list', 'select', 'send', 'stop', 'status', 'recap', 'answer', 'receipt']:
+                with self.subTest(paired=paired, action=action), patch.object(harness, 'request') as request:
+                    with self.assertRaisesRegex(ValueError, code):
+                        harness.run(action, {'agentId': 'a', 'text': 'work'}, self.path)
+                    request.assert_not_called()
+                    self.assertEqual(self.path.read_bytes(), before)
+
+    def test_offline_send_does_not_reserve_and_reconnect_allows_explicit_send(self):
+        self.connection['connected'] = False
+        with patch.object(harness, 'request', self.request):
+            with self.assertRaisesRegex(ValueError, 'HARNESS_OFFLINE'):
+                harness.run('send', {'agentId': 'a', 'text': 'work'}, self.path)
+            self.assertFalse(self.path.exists())
+            self.connection['connected'] = True
+            self.assertEqual(self.mutations, [])
+            harness.run('send', {'agentId': 'a', 'text': 'work'}, self.path)
+            self.assertEqual(len(self.mutations), 1)
+
+    def test_local_resolution_and_empty_receipt_work_offline(self):
+        self.connection.update(paired=False, connected=False)
+        self.assertEqual(harness.run('receipt', {}, self.path), {'receipt': None, 'pending': False})
+        result = harness.run('resolve', {'resolution': 'do_not_retry'}, self.path)
+        self.assertFalse(result['resent'])
 
     def test_no_implicit_target(self):
         with patch.object(harness, 'request', self.request):
@@ -49,7 +84,9 @@ class HarnessSkillTests(unittest.TestCase):
             harness.run('select', {'agentId': 'a'}, self.path)
             harness.run('list', {}, self.path)
             harness.run('status', {'agentId': 'b'}, self.path)
-            harness.run('recap', {'agentId': 'b', 'n': 1}, self.path)
+            # Inspection reads only the newest recap/text pair unless more turns are requested.
+            self.assertEqual(harness.run('recap', {'agentId': 'b'}, self.path)['n'], 1)
+            self.assertEqual(harness.run('recap', {'agentId': 'b', 'n': 3}, self.path)['n'], 3)
             self.assertEqual(self.mutations, [])
             harness.run('send', {'text': 'continue the original task'}, self.path)
         self.assertEqual(self.mutations[0]['agentId'], 'a')
@@ -79,6 +116,45 @@ class HarnessSkillTests(unittest.TestCase):
             harness.run('send', {'agentId': 'b', 'text': 'review'}, self.path)
         self.assertEqual(self.mutations[0]['agentId'], 'b')
 
+    def test_list_keeps_bounded_recap_headline_per_agent(self):
+        base = self.request
+
+        def request(kind, **fields):
+            if kind == 'agents.list':
+                return {'machineId': 'machine', 'agents': [
+                    {'agentId': 'a', 'name': 'Project', 'engine': 'claude', 'state': 'idle', 'recap': ' Fixed reconnect\n in client.ts '},
+                    {'agentId': 'b', 'name': 'Other', 'engine': 'codex', 'state': 'running'},
+                    {'agentId': 'c', 'name': 'Long', 'recap': 'x' * (harness.AGENT_RECAP_MAX_CHARS + 500)},
+                    {'agentId': 'd', 'name': 'Odd', 'recap': 42},
+                ]}
+            return base(kind, **fields)
+
+        with patch.object(harness, 'request', request):
+            agents = harness.run('list', {}, self.path)['agents']
+        self.assertEqual(agents[0]['recap'], 'Fixed reconnect in client.ts')
+        # No summarised turn yet → no field at all; the model must read that as unknown.
+        self.assertNotIn('recap', agents[1])
+        self.assertEqual(len(agents[2]['recap']), harness.AGENT_RECAP_MAX_CHARS)
+        self.assertNotIn('recap', agents[3])
+        self.assertEqual(self.mutations, [])
+
+    def test_recap_text_never_matches_an_agent_name(self):
+        base = self.request
+
+        def request(kind, **fields):
+            if kind == 'agents.list':
+                return {'machineId': 'machine', 'agents': [
+                    {'agentId': 'a', 'name': 'Project', 'recap': 'Other'},
+                    {'agentId': 'b', 'name': 'Other', 'recap': 'Project'},
+                ]}
+            return base(kind, **fields)
+
+        with patch.object(harness, 'request', request):
+            harness.run('send', {'agent': 'Other', 'text': 'review'}, self.path)
+            with self.assertRaises(ValueError):
+                harness.run('send', {'agent': 'Fixed reconnect', 'text': 'review'}, self.path)
+        self.assertEqual([m['agentId'] for m in self.mutations], ['b'])
+
     def test_uncertain_send_is_persisted_and_never_replayed(self):
         self.uncertain = True
         with patch.object(harness, 'request', self.request):
@@ -93,7 +169,7 @@ class HarnessSkillTests(unittest.TestCase):
 
     def test_receipt_resolves_pending_without_a_second_send(self):
         self.uncertain = True
-        with patch.object(harness, 'request', self.request), patch.object(harness, 'api', return_value={'machine_id': 'machine'}):
+        with patch.object(harness, 'request', self.request), patch.object(harness, 'api', return_value={'paired': True, 'connected': True, 'machine_id': 'machine'}):
             with self.assertRaises(OSError):
                 harness.run('send', {'agentId': 'a', 'text': 'do work'}, self.path)
             self.assertIn('pending', json.loads(self.path.read_text())['voice'])
@@ -138,7 +214,7 @@ class HarnessSkillTests(unittest.TestCase):
     def test_receipt_marks_an_uncertain_response_route_as_complete(self):
         self.uncertain = True
         response = {'run_id': 'device-chat-42', 'channel': 'web'}
-        with patch.object(harness, 'request', self.request), patch.object(harness, 'api', return_value={'machine_id': 'machine'}):
+        with patch.object(harness, 'request', self.request), patch.object(harness, 'api', return_value={'paired': True, 'connected': True, 'machine_id': 'machine'}):
             with self.assertRaises(OSError):
                 harness.run('send', {'agentId': 'a', 'text': 'do work', 'response': response}, self.path)
             self.uncertain = False

@@ -942,7 +942,10 @@ Implementation notes that matter to a backend author:
 - **Only backend-started runs are mirrored.** The bus carries every turn on the
   device, including spoken ones; a run is tracked when its `chat.send` is
   accepted and untracked at its terminal event, with a 10-minute TTL for turns
-  that die without one.
+  that die without one. Before forwarding the sensing POST, the device temporarily
+  captures untracked events so a fast reply cannot be lost before the run ID
+  returns. It replays only the exact returned run, in order before live events;
+  failed requests discard their capture. This does not mirror unrelated turns.
 - **A turn emits MANY `chat_response` events, and only the last one ends it.**
   The runtime pushes `chat_response` repeatedly as a reply streams in — the
   earlier ones carry `state` `"delta"`/`"partial"`, each with a longer prefix of

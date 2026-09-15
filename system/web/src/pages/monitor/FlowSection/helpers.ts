@@ -55,7 +55,12 @@ export function isCameraAPICommand(value: string): boolean {
   return /\/camera(?:[/?\s"']|$)/.test(value);
 }
 
-const AGENT_SNAPSHOT_PATH_RE = /\/root\/\.(openclaw|hermes|picoclaw|codex|claudecode)\/(workspace|media\/hal-snapshots)\/([A-Za-z0-9][A-Za-z0-9._-]*\.(?:jpg|jpeg))\b/g;
+// Keep the runtime list in step with the two Go copies — camera_snapshot.go
+// (builds the URL) and sensing handler.go (serves it) — and with
+// hal/config.py `_AGENT_CONFIG_DIRS`, which decides where HAL writes. opencode
+// was missing from all three non-HAL copies, so snapshots on that runtime were
+// written and then never displayed.
+const AGENT_SNAPSHOT_PATH_RE = /\/root\/\.(openclaw|hermes|picoclaw|codex|claudecode|opencode)\/(workspace|media\/hal-snapshots)\/([A-Za-z0-9][A-Za-z0-9._-]*\.(?:jpg|jpeg))\b/g;
 
 function agentSnapshotURL(path: string): string | null {
   const match = [...path.matchAll(AGENT_SNAPSHOT_PATH_RE)][0];
@@ -297,8 +302,36 @@ export function parseChannelSummary(summary: string): string {
   return (m[1] ?? "").trim();
 }
 
-function harnessResponseText(ev: DisplayEvent): string {
-  if (ev.type !== "flow_event" || ev.detail?.node !== "harness_response") return "";
+// Only our dedicated history runs carry this envelope. Never interpret tags
+// inside an ordinary user message as a background synchronization turn.
+export function externalHistory(turn: Turn): { source: string; agentName: string; input: string; output: string } | null {
+  if (!turn.runId?.startsWith("device-chat-context-")) return null;
+  for (const event of turn.events) {
+    if (extractEventRunId(event) !== turn.runId) continue;
+    const detail = event.detail as FlowEventDetail | undefined;
+    if (event.type !== "chat_send" && event.type !== "chat_input" &&
+        !(["flow_event", "flow_enter"].includes(event.type) &&
+          ["chat_send", "chat_input"].includes(detail?.node ?? ""))) continue;
+    const message = detail?.data?.message ?? detail?.message;
+    if (typeof message !== "string") continue;
+    const metadata = message.match(/^\[external-context\] (.+)$/m);
+    const handled = message.match(/^\[HANDLED\] (.+)$/m);
+    const reply = message.match(/^\[REPLY\] (.+)$/m);
+    if (!metadata || !handled || !reply) continue;
+    try {
+      const meta = JSON.parse(metadata[1]);
+      const input = JSON.parse(handled[1]);
+      const output = JSON.parse(reply[1]);
+      if (!meta || typeof meta.source !== "string" || !meta.source ||
+          typeof input !== "string" || typeof output !== "string") continue;
+      return { source: meta.source, agentName: typeof meta.agent_name === "string" ? meta.agent_name : "", input, output };
+    } catch { /* A truncated chat_input preview may precede the complete chat_send. */ }
+  }
+  return null;
+}
+
+function externalResponseText(ev: DisplayEvent): string {
+  if (ev.type !== "flow_event" || (ev.detail?.node !== "harness_response" && ev.detail?.node !== "realtime_response")) return "";
   const detail = ev.detail as FlowEventDetail;
   const text = detail.data?.text ?? detail.text;
   return typeof text === "string" ? text.trim() : "";
@@ -306,7 +339,7 @@ function harnessResponseText(ev: DisplayEvent): string {
 
 export function turnHasOutput(turn: Turn): boolean {
   return turn.events.some((ev) =>
-    Boolean(harnessResponseText(ev)) ||
+    Boolean(externalResponseText(ev)) ||
     ev.type === "tts" ||
     ev.type === "intent_match" ||
     (ev.type === "flow_event" && (ev.detail?.node === "tts_send" || ev.detail?.node === "tts_suppressed" || ev.detail?.node === "intent_match")),
@@ -751,12 +784,27 @@ export function groupIntoTurns(events: DisplayEvent[]): Turn[] {
     const ownEvents = turn.runId
       ? turn.events.filter((event) => extractEventRunId(event) === turn.runId)
       : [];
+    // Classification belongs to this input, never to a neighboring run or its
+    // history sync. Keep the event type intact for routing and grouping.
+    for (const event of ownEvents) {
+      const detail = event.detail as FlowEventDetail | undefined;
+      if (detail?.node !== "sensing_input" && detail?.node !== "realtime_response") continue;
+      const voiceTurnType: unknown = detail.data?.voice_turn_type;
+      if (voiceTurnType === "voice" || voiceTurnType === "voice_command" || voiceTurnType === "voice_followup") {
+        turn.voiceTurnType = voiceTurnType;
+        break;
+      }
+    }
     if (ownEvents.some((event) => {
       const detail = event.detail as FlowEventDetail | undefined;
       return detail?.node === "sensing_input" &&
         (detail.data?.route ?? detail.route) === "harness_only";
     })) turn.path = "harness";
-    const response = [...ownEvents].reverse().find((event) => harnessResponseText(event));
+    if (ownEvents.some((event) => event.detail?.node === "realtime_response")) {
+      turn.path = "realtime";
+      turn.type = "voice_agent_handled";
+    }
+    const response = [...ownEvents].reverse().find((event) => externalResponseText(event));
     if (response) {
       if (turn.status !== "error") turn.status = "done";
       turn.endTime = response.time;
@@ -781,7 +829,8 @@ export function groupIntoTurns(events: DisplayEvent[]): Turn[] {
     // A final Harness response is never an unowned reply to a nearby turn.
     if (turn.mergedIntoRunId || prev.mergedIntoRunId ||
         turn.path === "harness" || prev.path === "harness" ||
-        turn.events.some((event) => harnessResponseText(event))) {
+        turn.path === "realtime" || prev.path === "realtime" ||
+        turn.events.some((event) => externalResponseText(event))) {
       stitched.push(turn);
       continue;
     }
@@ -863,6 +912,10 @@ export function groupIntoTurns(events: DisplayEvent[]): Turn[] {
       }
       parent = parent.mergedIntoRunId ? turnsByRunId.get(parent.mergedIntoRunId) : undefined;
     }
+  }
+
+  for (const turn of stitched) {
+    if (externalHistory(turn)) turn.type = "history_sync";
   }
 
   // Detect session breaks
@@ -1093,8 +1146,8 @@ export function extractNodeInfo(events: DisplayEvent[]): NodeInfoMap {
         info.agent_thinking.push(`🧠 ${text}`);
       }
     }
-    if (harnessResponseText(ev)) {
-      pushAgentResponse(`"${harnessResponseText(ev)}"`);
+    if (externalResponseText(ev)) {
+      pushAgentResponse(`"${externalResponseText(ev)}"`);
     }
     if (ev.type === "flow_event" && ev.detail?.node === "no_reply") {
       pushAgentResponse("🚫 [no reply] — agent decided to do nothing");
@@ -1279,6 +1332,15 @@ export function extractNodeInfo(events: DisplayEvent[]): NodeInfoMap {
     }
     if (ev.type === "flow_event" && ev.detail?.node === "hw_cancelled") {
       pushUnique(info.os_gate, "✋ → HW marker cancelled (click)");
+    }
+    // Not a cancellation: the OS tried to fire the marker and the POST failed
+    // at the transport (the 5 s client timeout, a refused connection). Kept
+    // apart from the click so a timeout never reads as the user's doing.
+    if (ev.type === "flow_event" && ev.detail?.node === "hw_failed") {
+      const d = ev.detail as FlowEventDetail | undefined;
+      const path = typeof d?.data?.path === "string" ? d.data.path : "";
+      const err = typeof d?.data?.error === "string" ? d.data.error : "";
+      pushUnique(info.os_gate, `⚠ → HW call failed ${path}${err ? ` (${err})` : ""}`.trim());
     }
     if (ev.type === "flow_event" && ev.detail?.node === "no_reply") {
       pushUnique(info.os_gate, "🚫 → no reply");
@@ -1583,8 +1645,13 @@ export function turnIO(turn: Turn): {
       // text for older JSONL / tts_suppressed (which already logs full text).
       output = d?.data?.full_text ?? d?.full_text ?? d?.data?.text ?? d?.text ?? ev.summary ?? output;
     }
-    if (turnRunId && evRunId === turnRunId && harnessResponseText(ev)) {
-      output = harnessResponseText(ev);
+    if (turnRunId && evRunId === turnRunId && externalResponseText(ev)) {
+      output = externalResponseText(ev);
+      if (ev.detail?.node === "realtime_response") {
+        const detail = ev.detail as FlowEventDetail;
+        const question = detail.data?.input ?? detail.input;
+        if (typeof question === "string") input = question;
+      }
     }
     if (!output && sameRun && ev.type === "chat_response" && ev.state === "final") {
       const d = ev.detail as FlowEventDetail | undefined;
@@ -1621,6 +1688,19 @@ export function turnIO(turn: Turn): {
         }
       }
     }
+  }
+  // Frames the AGENT produced during the turn — /camera/snapshot, /api/vision/look,
+  // and the search sweep's centred, boxed frame — belong on the card as much as
+  // the sensing frame that opened it. Until now they were only drawn inside the
+  // flow diagram SVG, so "find my keyboard" answered on the card with no picture
+  // while the picture sat one click away.
+  for (const url of cameraSnapshotURLs(turn.events)) {
+    if (!snapshotUrls.includes(url)) snapshotUrls.push(url);
+  }
+  const history = externalHistory(turn);
+  if (history) {
+    input = history.input;
+    output = history.output;
   }
   return { input, output, hwOutput, snapshotUrls, audioUrls, poseBucket };
 }
@@ -1685,4 +1765,33 @@ export function turnTokenStats(turn: Turn): { inTok: number; outTok: number; cac
     total = inTok + outTok + cacheRead + cacheWrite;
   }
   return { inTok, outTok, cacheRead, cacheWrite, total };
+}
+
+// Display/filter names are projections; never change the event's routing type.
+export function turnDisplayType(turn: Turn): string {
+  if (externalHistory(turn)) return "history_sync";
+  if (turn.type === "voice_agent_handled") {
+    return turn.voiceTurnType === "voice_command" || turn.voiceTurnType === "voice_followup"
+      ? `${turn.voiceTurnType}_handled` : turn.type;
+  }
+  return turn.voiceTurnType ?? turn.type;
+}
+
+export function turnMatchesSearch(turn: Turn, query: string): boolean {
+  const { input, output } = turnIO(turn);
+  return `${input} ${output} ${turnDisplayType(turn)} ${turn.type} ${turn.runId ?? ""} ${turn.id}`
+    .toLowerCase().includes(query.toLowerCase().trim());
+}
+
+export function migrateTurnTypeFilters(types: string[]): Set<string> {
+  const migrated = new Set(types);
+  if (migrated.has("voice_agent_handled")) {
+    migrated.add("voice_command_handled");
+    migrated.add("voice_followup_handled");
+  }
+  if (migrated.has("voice")) {
+    migrated.add("voice_command");
+    migrated.add("voice_followup");
+  }
+  return migrated;
 }

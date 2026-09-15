@@ -290,9 +290,7 @@ and motor noise. Configuration is loaded at boot; restart HAL after changes.
 A missing file or board entry, or `"enabled": false`, skips MPR121 and retains
 the existing GPIO/TTP223 handlers. There is no legacy MPR121 bus fallback.
 Malformed enabled configuration rejects startup; simulation skips the hardware.
-If `/dev/i2c-0` is missing, initialization logs the failure and MPR121 remains
-unavailable while GPIO/TTP223 continue. Change `bus` if verified wiring uses
-a different controller, then restart HAL.
+If the configured I²C bus is missing or the sensor does not acknowledge, initialization logs `MPR121 event=unavailable` at WARNING level with bus, address and errno, without a traceback. MPR121 remains unavailable while GPIO/TTP223 continue; no touch workers start and any opened bus is closed. Permission errors and unexpected failures retain ERROR tracebacks. This does not change `enabled` or automatically retry. Check bus availability and wiring, correct `bus` if needed, then restart HAL.
 
 After initialization, the driver allows 100 ms for sensing to settle before
 reading the initial touch state, then polls every 10 ms by default. Touch and
@@ -592,3 +590,13 @@ live in `hal/i18n.py`). It briefly pulses blue for on or neutral for off without
 saving a new LED state. Missing connection/agents receive localized errors.
 Hardware microphone privacy disables the gesture action, speaker mute suppresses
 speech, and existing sleep/privacy/TTS LED ownership is respected.
+
+At HAL startup, the privacy switch position is reconciled without simulating a button press: an unmuted position restores mic/peripheral access without waking the device, granting conversation focus, playing the acknowledgement/listening phrase, or scheduling the listening LED cue. A real muted-to-unmuted switch transition retains the existing wake/focus and acknowledgement behavior. Startup in the muted position still applies the hardware privacy lock synchronously.
+
+When sleep is restored after a HAL restart (including a software update), an open privacy switch does not unmute the sleeping microphone or start its voice pipeline. Sleep-owned microphone and speaker mutes remain in effect until a real wake. If privacy captured the speaker's sleep mute, waking clears that temporary mute underneath the privacy lock; output stays blocked until privacy is released. The cleared speaker preference is persisted so a later HAL restart cannot restore the expired sleep mute. A speaker mute that the user set before sleep remains muted.
+
+GPIO callbacks that settle at the last known switch position (including initial callbacks at startup) leave software mute and sleep unchanged. Only a confirmed physical level change runs the switch action.
+
+When wake restores a sleep-muted microphone, it also clears the restored mic-muted LED indicator. Later emotion, TTS, or music completion callbacks must not repaint privacy red after the microphone is open. A microphone still locked by hardware privacy keeps its mute indicator.
+
+An explicit speaker-mute request during sleep takes ownership from sleep and is persisted even when the speaker is already silent. Wake must retain that choice, including under a privacy lock.

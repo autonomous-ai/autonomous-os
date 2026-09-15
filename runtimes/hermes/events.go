@@ -30,10 +30,9 @@ const busyTTL = 5 * time.Minute
 
 // mergeDrainEnabled collapses multiple ambient sensing events that survive the
 // drain filter into a single turn, so the agent pays the per-turn prompt floor
-// once instead of once per event. Hermes' backend has no steer mode (unlike
-// openclaw's messages.queue.mode=steer, which merges concurrent messages into
-// the in-flight turn at the next model boundary), so we batch client-side on
-// idle here. Set false to fall back to one-turn-per-event replay.
+// once instead of once per event. Ambient sensing waits for idle even when
+// native steering is available for user input. Set false to fall back to
+// one-turn-per-event replay.
 const mergeDrainEnabled = true
 
 // mergedSensingHeader frames a batched drain so the agent treats the joined

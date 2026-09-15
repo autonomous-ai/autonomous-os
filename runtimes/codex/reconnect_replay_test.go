@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"go.autonomous.ai/os/system/lib/sensingmsg"
 	"go.autonomous.ai/os/system/lib/speakergate"
 	"go.autonomous.ai/os/system/monitor"
 	"go.autonomous.ai/os/system/server/config"
@@ -20,6 +21,8 @@ import (
 
 func reconnectReplayService(t *testing.T) *CodexService {
 	t.Helper()
+	sensingmsg.SetHarnessConnected(func() bool { return true })
+	t.Cleanup(func() { sensingmsg.SetHarnessConnected(nil) })
 	oldProbe := speakergate.SpeakerBusy
 	speakergate.SpeakerBusy = func() bool { return false }
 	t.Cleanup(func() { speakergate.SpeakerBusy = oldProbe })

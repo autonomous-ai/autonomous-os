@@ -10,7 +10,7 @@ afterEach(async () => {
   await Promise.all(helpers.splice(0).map((helper) => helper.stop()))
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })))
 })
-async function fixture(onMenuAction: (action: 'open-manager' | 'quit') => void = () => {}) {
+async function fixture(onMenuAction: (action: 'open-manager' | 'check-updates' | 'quit') => void = () => {}) {
   const root = await mkdtemp(join(tmpdir(), 'buddy-native-ipc-'))
   roots.push(root)
   const script = join(root, 'helper.mjs')
@@ -25,6 +25,7 @@ emit({event:'state',state:state()});
 for await (const line of createInterface({input:process.stdin})) {
 const {id,method,params}=JSON.parse(line);
 if(method==='status') emit({id,result:state()});
+else if(method==='update_status') emit({id,result:params});
 else if(method==='pause'){paused=params.paused;emit({event:'state',state:state()});emit({id,result:state()});}
 else if(method==='command') {
 if(params.action==='menu') {emit({event:'menu',action:params.params.action});emit({id,result:{ok:true}});continue;}
@@ -72,7 +73,19 @@ it('routes only supported native menu actions to the owning app', async () => {
   const actions: string[] = []
   const helper = await fixture((action) => actions.push(action))
   await helper.command('menu', { action: 'open-manager' })
+  await helper.command('menu', { action: 'check-updates' })
   await helper.command('menu', { action: 'unsupported' })
   await helper.command('menu', { action: 'quit' })
-  expect(actions).toEqual(['open-manager', 'quit'])
+  expect(actions).toEqual(['open-manager', 'check-updates', 'quit'])
+})
+
+it('sends update menu status only over the private helper method', async () => {
+  const helper = await fixture()
+  await expect(helper.setUpdateStatus('Downloading Update…', false)).resolves.toEqual({
+    label: 'Downloading Update…', enabled: false,
+  })
+  await expect(helper.setUpdateStatus('Restart to Update…', true)).resolves.toEqual({
+    label: 'Restart to Update…', enabled: true,
+  })
+  await expect(helper.action('update_status' as never)).rejects.toThrow('Unsupported computer action')
 })

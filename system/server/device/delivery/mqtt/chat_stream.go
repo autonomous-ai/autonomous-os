@@ -104,8 +104,11 @@ type ChatStream struct {
 	factory *mqtt.Factory
 	bus     *monitor.Bus
 
-	mu   sync.Mutex
-	runs map[string]*trackedRun
+	// deliveryMu keeps replay, live events, and delta flushes in delivery order.
+	deliveryMu sync.Mutex
+	mu         sync.Mutex
+	runs       map[string]*trackedRun
+	captures   map[*chatCapture][]domain.MonitorEvent
 
 	// client is the long-lived publisher, created lazily on the first event so a
 	// device that never receives a chat.send pays nothing.
@@ -122,6 +125,41 @@ func ProvideChatStream(cfg *config.Config, factory *mqtt.Factory, bus *monitor.B
 	s := &ChatStream{cfg: cfg, factory: factory, bus: bus, runs: map[string]*trackedRun{}}
 	s.publish = s.publishMQTT
 	return s
+}
+
+// chatCapture exists only while a chat.send is waiting for its sensing response.
+// Untracked events stay local until the response identifies the exact owned run.
+type chatCapture struct{ marker byte }
+
+func (s *ChatStream) capture() func(runID, sessionID string) {
+	// Use a non-zero-sized allocation so concurrent captures have unique keys.
+	token := &chatCapture{}
+	s.mu.Lock()
+	if s.captures == nil {
+		s.captures = make(map[*chatCapture][]domain.MonitorEvent)
+	}
+	s.captures[token] = nil
+	s.mu.Unlock()
+	var once sync.Once
+	return func(runID, sessionID string) {
+		once.Do(func() {
+			s.deliveryMu.Lock()
+			defer s.deliveryMu.Unlock()
+			s.mu.Lock()
+			events := s.captures[token]
+			delete(s.captures, token)
+			s.mu.Unlock()
+			if runID == "" {
+				return
+			}
+			s.Track(runID, sessionID)
+			for _, evt := range events {
+				if evt.RunID == runID {
+					s.handleOrdered(evt)
+				}
+			}
+		})
+	}
 }
 
 // Track marks a run as backend-started, so its events are mirrored. Called by
@@ -194,6 +232,12 @@ func (s *ChatStream) publishLoop(ctx context.Context, queue <-chan domain.Monito
 // pending text FIRST so the backend never sees a tool chip jump ahead of the
 // sentence that preceded it.
 func (s *ChatStream) handle(evt domain.MonitorEvent) {
+	s.deliveryMu.Lock()
+	defer s.deliveryMu.Unlock()
+	s.handleOrdered(evt)
+}
+
+func (s *ChatStream) handleOrdered(evt domain.MonitorEvent) {
 	if evt.RunID == "" {
 		return
 	}
@@ -201,6 +245,9 @@ func (s *ChatStream) handle(evt domain.MonitorEvent) {
 	s.mu.Lock()
 	run, tracked := s.runs[evt.RunID]
 	if !tracked {
+		for token := range s.captures {
+			s.captures[token] = append(s.captures[token], evt)
+		}
 		s.mu.Unlock()
 		return
 	}
@@ -262,6 +309,8 @@ func (s *ChatStream) takePending(run *trackedRun) *domain.MonitorEvent {
 }
 
 func (s *ChatStream) flushAll() {
+	s.deliveryMu.Lock()
+	defer s.deliveryMu.Unlock()
 	type pendingSend struct {
 		runID     string
 		sessionID string

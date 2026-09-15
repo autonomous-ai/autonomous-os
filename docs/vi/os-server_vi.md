@@ -1037,3 +1037,25 @@ thiết bị thông thường và chưa phải bản phát hành compatibility/O
 Xem [khởi động host và cấu hình firmware](../../robots/_experimental/stackchan/docs/vi/runtime_vi.md).
 HAL client hiện tại của OS kết nối `http://127.0.0.1:5001`, nên chạy HAL cùng
 host với os-server. ESP32 kết nối vào listener WSS riêng của HAL.
+
+### Lịch sử hội thoại từ bên ngoài
+
+`system/externalhistory` lưu lượt hội thoại được xử lý ngoài main runtime. Harness-only voice dùng adapter hai bước: lưu input trước dispatch, lưu câu trả lời trước khi bỏ reply route. Mỗi bản ghi có source, máy tính, agent ID/tên và run ID gốc. Realtime dùng `RecordCompleted` để ghi atomic cả lượt đã trả lời thẳng vào `pending`. HAL giữ payload `voice_agent_handled`; adapter Go tách `[HANDLED]` / `[REPLY]`, gắn source `realtime`, agent `Realtime voice` và dùng `interaction_id` làm định danh gốc ổn định (sinh ID ngẫu nhiên cho caller cũ không có ID). ID còn lưu được chống trùng; nội dung mâu thuẫn bị từ chối. Tích hợp khác dùng một trong hai API mà không phụ thuộc Harness.
+
+Worker kiểm tra mỗi hai giây, gửi một cặp hỏi–đáp khi main runtime sẵn sàng và rảnh. Realtime vẫn có thể steer runtime đang bận nếu runtime hỗ trợ active-turn steering; Harness vẫn chờ rảnh. Worker chờ lượt history đang gửi hoàn tất trước lượt tiếp theo. Cơ chế dùng đúng định dạng history realtime hiện có (`[skills: input-branching]`, `[HANDLED]`, `[REPLY]`, `NO_REPLY`) và gọi `MarkSilentRun` trước `SendChatMessageWithRun`. Runtime tiếp nhận ngữ cảnh có ghi rõ nguồn vào history/compaction thông thường. Giữ nguyên silent/TTS, trả lời/delegate realtime và chính sách ngắt lời cũ; không thêm lớp suppression hoặc hệ thống tóm tắt.
+
+Bản ghi lưu atomic tại `local/external-history/` (thư mục 0700, file 0600). Các trạng thái: `waiting` chờ câu trả lời bên ngoài, `pending` chờ đồng bộ main, `sending`, `uncertain`, `done`. Lifecycle end thành công của main xác nhận bản ghi sau khi handler hiện có xử lý; socket write hay `chat.final` riêng lẻ chưa chứng minh hoàn tất. Restart gửi tiếp bản pending chưa từng thử gửi, khôi phục dấu silent/pending trace cho lượt đã thử. Reply route Harness voice đang chờ chỉ được khôi phục với cùng pairing; không gửi lại task bên ngoài.
+
+Lỗi send, thiếu lifecycle acknowledgement quá hai phút khi runtime rảnh, hoặc restart giữa lúc gửi khiến record ở `uncertain`. Record vẫn nằm trên disk và nhận được ACK đến muộn; không tự gửi lại vì không phải transport runtime nào cũng có idempotency. Cơ chế giữ bằng chứng, không hứa đồng bộ exactly-once qua thời điểm crash chưa rõ kết quả. Nếu câu trả lời bên ngoài không bao giờ tới, input giữ `waiting`; startup không đoán recap mới nhất cho lượt đó.
+
+Giới hạn 1024 records, input 16 KiB và output đồng bộ 64 KiB mỗi record. Output Harness dài hơn được cắt với dấu rõ ràng cho history (phản hồi gốc vẫn gửi đầy đủ). Record done hết hạn sau 30 ngày hoặc bị loại theo thứ tự cũ nhất khi đầy; không loại record chưa hoàn tất. Chống trùng áp dụng cho source/run ID còn lưu. Hàng đợi đầy toàn record chưa xong sẽ từ chối voice input mới thay vì mất history âm thầm. Lỗi ghi kết quả giữ reply route để callback lặp/recap recovery thử lại. Journal không đọc được khiến startup báo lỗi thay vì reset ngầm. Context đã đồng bộ do main runtime quản lý, không nạp lại toàn bộ journal vào prompt.
+
+Kiểm chứng: `go test -race ./system/externalhistory`; các test history/observer/Harness tập trung trong `system/server` và `system/server/agent/delivery/http`. Phát giọng nói thật và tương quan run sau restart trên từng runtime vẫn cần kiểm chứng tích hợp.
+
+Notification realtime được lưu trước gate busy/readiness của sensing, thay queue pending-event trong RAM cho các lượt này. HTTP thành công trả `runId` gốc ổn định, `historyRunId` riêng và kết quả `speechSuppressed` hiện có. Lỗi lưu trả HTTP 500, không fallback sang gửi thiếu journal. Độ bền bắt đầu khi OS nhận lưu notification; không khôi phục được lượt HAL chưa gửi tới OS. Bằng chứng sensing và marker ảnh look vẫn nằm trong Flow Monitor; đường dẫn snapshot được bỏ khỏi context gửi main như trước.
+
+Khi nhận history realtime, sensing trả ID hội thoại gốc (`device-realtime-…`) trong `runId`, ID đồng bộ riêng trong `historyRunId`. Metrics HAL gắn với lượt gốc; journal và lượt silent gửi main giữ nguyên ID sync ổn định. Chỉ tách bản ghi monitor, không đổi routing voice/follow-up hay chính sách silent/TTS.
+
+Metadata reply-routing Harness trên request sensing voice/chat chỉ được chèn khi transport Harness đã pair và đang kết nối. Request lúc ngắt kết nối bỏ cả reply marker lẫn hint routing/follow-up riêng của Harness; routing voice và follow-up thông thường giữ nguyên.
+
+Payload sensing HAL nhận trường tùy chọn `voice_turn_type` (`voice`, `voice_command`, `voice_followup`) cho debug voice. OS chỉ ghi giá trị hợp lệ vào Flow Monitor; `type` vẫn quyết định authorization, routing, queue, đồng bộ history và cancel loa.

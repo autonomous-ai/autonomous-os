@@ -19,14 +19,16 @@ from hal.telemetry.live_voice import LiveVoiceMetrics
 from hal.test.test_voice_metrics import FakeTTS, kpi  # noqa: F401 -- fake clock/transport
 
 
-def _pump(monkeypatch, kpi, batches, *, native=False, stop_delay_ms=0, harness_voice=None):
+def _pump(monkeypatch, kpi, batches, *, native=False, stop_delay_ms=0, harness_voice=None, sender=None, cues=None, main_reply=False, addressed=True, focus=None, opener=None):
     monkeypatch.setattr(config, "REALTIME_NATIVE_AUDIO", native)
     service = object.__new__(VoiceService)
+    service._wakeword_focus = focus
     service._live_running = True
     service._live_generation = 1
     service._live_unprompted_replies = 0
-    service._decorator = object()
-    service._sensing_sender = object()
+    service._live_emotion_addressed = lambda text, harness: addressed
+    service._decorator = SimpleNamespace(classify_wake_word=lambda text: (text, "voice"))
+    service._sensing_sender = sender if sender is not None else object()
     service.strip_rt_markers = lambda text: text
     spoken = []
     batches = iter(batches)
@@ -57,6 +59,9 @@ def _pump(monkeypatch, kpi, batches, *, native=False, stop_delay_ms=0, harness_v
 
     class Speaker:
         owner = ""
+        realtime_feedback = main_reply
+        realtime_speaking = not main_reply
+        speaking = main_reply
 
         def speak(self, text, *, turn_id="", realtime_reply=False):
             spoken.append((text, turn_id))
@@ -68,7 +73,7 @@ def _pump(monkeypatch, kpi, batches, *, native=False, stop_delay_ms=0, harness_v
 
         speak_queue = speak
 
-        def stop(self):
+        def stop(self, **kwargs):
             spoken.append(("__stop__", ""))
             kpi.clock.advance(stop_delay_ms)
             voice_metrics.playback_end()
@@ -89,7 +94,7 @@ def _pump(monkeypatch, kpi, batches, *, native=False, stop_delay_ms=0, harness_v
 
     service._realtime = Provider()
     service._tts = Speaker()
-    service._live_out_pump(1, harness_voice=harness_voice)
+    service._live_out_pump(1, harness_voice=harness_voice, cues=cues, **({"opener": opener} if opener is not None else {}))
     return spoken
 
 

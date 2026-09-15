@@ -273,3 +273,91 @@ func TestHarnessDeliveryReachesMQTTWithCompleteText(t *testing.T) {
 		}
 	}
 }
+
+// A complete reply may arrive while the sensing POST is still returning its ID.
+func TestChatStreamCapturesEarlyTerminalForExactRun(t *testing.T) {
+	s, sent := newTestStream()
+	finish := s.capture()
+	s.handle(domain.MonitorEvent{Type: "assistant_delta", RunID: "voice", Summary: "private"})
+	s.handle(domain.MonitorEvent{Type: "assistant_delta", RunID: "mine", Summary: "Hello"})
+	s.handle(domain.MonitorEvent{Type: "chat_response", RunID: "mine", State: "final", Summary: "Hello"})
+	if len(sent()) != 0 {
+		t.Fatal("unacknowledged events escaped the capture")
+	}
+	finish("mine", "session")
+	finish("", "") // Deferred cleanup must not replay twice.
+	s.flushAll()
+	got := sent()
+	if len(got) != 2 || got[0].Event.Type != "assistant_delta" || got[1].Event.State != "final" {
+		t.Fatalf("reply not delivered in order: %+v", got)
+	}
+	for _, evt := range got {
+		if evt.RunID != "mine" || evt.SessionID != "session" {
+			t.Fatalf("unrelated event/session leaked: %+v", evt)
+		}
+	}
+	if len(s.runs) != 0 || len(s.captures) != 0 {
+		t.Fatal("terminal run or capture leaked")
+	}
+}
+
+func TestChatStreamCaptureFailureAndConcurrentRequests(t *testing.T) {
+	s, sent := newTestStream()
+	failed := s.capture()
+	first := s.capture()
+	second := s.capture()
+	s.handle(domain.MonitorEvent{Type: "chat_response", RunID: "first", State: "final", Summary: "one"})
+	s.handle(domain.MonitorEvent{Type: "chat_response", RunID: "second", State: "final", Summary: "two"})
+	failed("", "")
+	second("second", "s2")
+	first("first", "s1")
+	got := sent()
+	if len(got) != 2 || got[0].RunID != "second" || got[1].RunID != "first" {
+		t.Fatalf("captures duplicated or lost events: %+v", got)
+	}
+	if len(s.captures) != 0 {
+		t.Fatal("capture leaked")
+	}
+}
+
+func TestChatStreamLiveCannotOvertakeCaptureReplay(t *testing.T) {
+	s, sent := newTestStream()
+	finish := s.capture()
+	s.handle(domain.MonitorEvent{Type: "tool_call", RunID: "mine", Summary: "early"})
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	originalPublish := s.publish
+	s.publish = func(body []byte) error {
+		if string(body) != "" {
+			var payload struct {
+				Data domain.MQTTChatEventData `json:"data"`
+			}
+			if err := json.Unmarshal(body, &payload); err != nil {
+				return err
+			}
+			if payload.Data.Event.Summary == "early" {
+				close(entered)
+				<-release
+			}
+		}
+		return originalPublish(body)
+	}
+	replayed := make(chan struct{})
+	go func() { finish("mine", "session"); close(replayed) }()
+	<-entered
+	liveStarted := make(chan struct{})
+	liveDone := make(chan struct{})
+	go func() {
+		close(liveStarted)
+		s.handle(domain.MonitorEvent{Type: "chat_response", RunID: "mine", State: "final", Summary: "late"})
+		close(liveDone)
+	}()
+	<-liveStarted
+	close(release)
+	<-replayed
+	<-liveDone
+	got := sent()
+	if len(got) != 2 || got[0].Event.Summary != "early" || got[1].Event.Summary != "late" {
+		t.Fatalf("live event overtook replay: %+v", got)
+	}
+}

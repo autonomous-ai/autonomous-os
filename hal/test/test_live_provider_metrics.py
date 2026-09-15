@@ -65,7 +65,9 @@ def test_gemini_transcript_chunks_create_one_input_without_fake_endpoint():
         _gemini_message(transcript="a flight", reply="Looking now", done=True),
     ])
     speech = [e for e in events if isinstance(e, UserSpeechOutput)]
-    assert len(speech) == 1
+    assert len(speech) == 2
+    assert "".join(e.transcript for e in speech) == "Find a flight"
+    assert speech[0].transcript_finished is True
     assert speech[0].endpoint_at is None
     assert speech[0].method == "provider_transcript"
     assert all(e.user_turn_id == speech[0].turn_id for e in events)
@@ -254,3 +256,21 @@ def test_gemini_dropped_terminal_is_metadata_not_an_extra_receive_boundary():
     assert preserved.execution_completed
     assert sum(isinstance(event, TurnDoneEvent) for event in events) == 1
     assert isinstance(events[-1], TurnDoneEvent)
+
+
+def test_finished_only_transcription_preserves_key_without_metric_endpoint():
+    final = _gemini_message(done=True)
+    final.server_content.input_transcription = NS(text=None, finished=True)
+    events = _gemini([_gemini_message(transcript="hello"), final])
+    speech = [e for e in events if isinstance(e, UserSpeechOutput)]
+    assert len(speech) == 2
+    assert speech[1].turn_id == speech[0].turn_id
+    assert speech[1].transcript == ""
+    assert speech[1].transcript_finished is True
+    assert speech[1].endpoint_at is None
+
+
+def test_finished_only_transcription_cannot_create_a_task():
+    final = _gemini_message(done=True)
+    final.server_content.input_transcription = NS(text=None, finished=True)
+    assert not any(isinstance(e, UserSpeechOutput) for e in _gemini([final]))
