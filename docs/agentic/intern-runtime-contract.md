@@ -1,5 +1,61 @@
 # Intern runtime registration assessment
 
+## Welcome Desk reassessment — 2026-09-14
+
+Rechecked at `0f180391b22446d7fd2e63095b777bd0d34bc809` against the current
+`0.2.0` / `cassi-first.v1` client. **Blocked: `intern` is not selectable,
+including after this documentation change merges.** This narrower request is
+for a text-only, Cassi-first Welcome Desk with no execution, credentials, or
+device writes; it does not require adding employee tools, memory, or images.
+The historical full-brain checklist below is not a requirement to add those
+features to the Welcome Desk.
+
+Three current integration gaps still prevent a small, safe adapter:
+
+1. **Admission:** `AgentGateway.SendChatMessage*` and `QueuePendingEvent` carry
+   no trusted data class. The sensing caller sends raw strings and replays
+   them (`system/server/sensing/delivery/http/handler.go`). `Client.Do` rejects
+   unknown/restricted/secret content before networking. Defaulting all chat
+   to public/business defeats that boundary; rejecting every chat would not
+   provide a usable backend. A trusted input policy must survive queue/replay.
+2. **Lifecycle and effects:** `system/server/server.go` starts gateway event
+   and watcher loops. `system/server/config_watch.go` also invokes migrations,
+   MCP/user reconciliation, and conditional HAL restart/voice setup outside
+   the adapter. Returning unsupported from adapter methods alone cannot
+   gate those external effects. `handler_event_agent.go` consumes lifecycle
+   events through the device/TTS/delivery pipeline. Bridge output already
+   rejects hardware markers, but `executes_actions:false` is not an OS-wide
+   capability gate. A safe text-only lifecycle needs correlated terminal
+   events, bounded cancellation/queue handling, and tested suppression of
+   device and channel effects. HTTP completion remains `bridge_request` only.
+3. **Selection and ownership:** `system/domain/device.go:AgentRuntimes`
+   excludes `intern`; the settings switch rejects it. Hand-writing
+   `agent_runtime: "intern"` instead reaches the **OpenClaw fallback** in
+   `system/agent/factory.go:resolveRuntime`. Do not use that as an activation
+   recipe. Merely adding it to the list routes switching through
+   `system/device/runtime.go` and `runtime_installers.go`: script writes,
+   installation/service control, then config persistence. An externally owned
+   loopback bridge needs an explicit, verified activation path with those
+   effects gated. The existing `remote` option selects Hermes and is unsuitable.
+
+No adapter, factory case, config field, installer, or default was added.
+`internbridge.New(port)` remains a library constructor: nonzero port, fixed
+`127.0.0.1`, no URL/proxy/redirect/credential override. The documented example
+port `8765` is not a registered runtime default. Future registration must use
+the explicit name `intern`, an owned fixed loopback configuration, and no
+Hermes/OpenClaw delegation. Unsupported optional features can return explicit
+errors; nil interface embedding, panicking methods, silent image loss, and
+fabricated session/readiness success cannot complete the adapter.
+
+Next implementation boundary: establish trusted admission and a text-only
+capability/activation contract, then verify selection, real request/result
+correlation, offline/protocol/custody failures, and zero device/channel effects
+before registering the complete interface implementation. This audit stops
+at the requested larger-adapter boundary; no device access is needed to review it.
+See [local verification](../receipts/intern-welcome-desk-audit-2026-09-14.md).
+
+## Earlier full-brain assessment
+
 Inspected 2026-09-14: autonomous-os branch `codex/gus-runtime-contract-20260914`,
 base `8254e8a14`, [PR #406](https://github.com/autonomous-ai/autonomous-os/pull/406),
 the complete `system/domain/agent.go` interface and

@@ -1,5 +1,57 @@
 # Đánh giá đăng ký runtime Intern
 
+## Đánh giá lại Welcome Desk — 2026-09-14
+
+Kiểm tra tại `0f180391b22446d7fd2e63095b777bd0d34bc809` với client hiện tại
+`0.2.0` / `cassi-first.v1`. **Bị chặn: chưa thể chọn `intern`, kể cả sau khi
+merge thay đổi tài liệu này.** Phạm vi mới chỉ là Welcome Desk văn bản,
+Cassi-first, không thực thi, credentials hay ghi thiết bị. Không cần thêm
+tools nhân viên, memory hoặc ảnh; checklist full-brain cũ bên dưới không bắt
+buộc Welcome Desk phải có các tính năng đó.
+
+Ba khoảng trống hiện tại vẫn ngăn một adapter nhỏ và an toàn:
+
+1. **Admission:** `AgentGateway.SendChatMessage*` và `QueuePendingEvent` không
+   mang data class đáng tin. Caller sensing gửi và replay chuỗi thô
+   (`system/server/sensing/delivery/http/handler.go`). `Client.Do` chặn
+   unknown/restricted/secret trước mạng. Mặc định mọi chat là public/business
+   sẽ phá ranh giới custody; từ chối mọi chat không tạo backend dùng được.
+   Cần policy input đáng tin được giữ nguyên qua queue/replay.
+2. **Lifecycle và tác động:** `system/server/server.go` khởi chạy event loop
+   và watcher. `system/server/config_watch.go` còn gọi migration, reconcile
+   MCP/user và restart HAL/thiết lập voice theo điều kiện, bên ngoài adapter.
+   Trả unsupported trong adapter không chặn được các tác động đó.
+   `handler_event_agent.go` đưa lifecycle vào pipeline thiết bị/TTS/delivery.
+   Client đã chặn hardware marker, nhưng `executes_actions:false` không phải
+   capability gate toàn OS. Lifecycle chỉ văn bản cần event kết thúc có
+   correlation, queue/cancellation có giới hạn và kiểm chứng chặn tác động
+   thiết bị/channel. HTTP completion chỉ có phạm vi `bridge_request`.
+3. **Selection và quyền quản lý:** `system/domain/device.go:AgentRuntimes`
+   không có `intern`; API switch từ chối. Tự ghi `agent_runtime: "intern"`
+   lại dẫn tới **fallback OpenClaw** trong
+   `system/agent/factory.go:resolveRuntime`, không phải cách kích hoạt Intern.
+   Chỉ thêm tên vào list sẽ đi qua `system/device/runtime.go` và
+   `runtime_installers.go`: ghi script, cài đặt/điều khiển service rồi lưu
+   config. Bridge loopback do bên ngoài quản lý cần activation rõ ràng, được
+   kiểm chứng và chặn các tác động này. `remote` chọn Hermes nên không phù hợp.
+
+Không thêm adapter, factory case, config field, installer hoặc default.
+`internbridge.New(port)` vẫn là constructor thư viện: port khác 0, host cố
+định `127.0.0.1`, không override URL/proxy/redirect/credential. Port ví dụ
+`8765` chưa phải default runtime đăng ký. Bản triển khai sau phải dùng tên
+`intern`, config loopback cố định có chủ sở hữu, không ủy quyền Hermes/OpenClaw.
+Tính năng tùy chọn không hỗ trợ có thể trả lỗi rõ ràng; không nhúng interface
+nil, panic, bỏ ảnh âm thầm hoặc giả thành công session/readiness.
+
+Bước tiếp theo: xác lập trusted admission và hợp đồng capability/activation
+chỉ văn bản; sau đó chứng minh selection, correlation request/result, lỗi
+offline/protocol/custody và không có tác động thiết bị/channel trước đăng ký
+interface đầy đủ. Dừng tại ranh giới adapter lớn hơn theo yêu cầu, không cần
+truy cập thiết bị để review. Xem
+[bằng chứng local](../../receipts/intern-welcome-desk-audit-2026-09-14.md).
+
+## Đánh giá full-brain trước đó
+
 Kiểm tra ngày 2026-09-14 trên nhánh `codex/gus-runtime-contract-20260914`,
 base `8254e8a14`, [PR #406](https://github.com/autonomous-ai/autonomous-os/pull/406),
 toàn bộ interface `system/domain/agent.go` và
