@@ -1097,6 +1097,21 @@ Với `HAL_LIVE_MODE=true`, các đoạn transcript input Gemini đi kèm provid
 
 Một worker nền gửi lượt hoàn tất với interaction ID, giới hạn độ dài reply và snapshot Harness hiện có. Worker gửi hết notification hoàn tất sau khi live kết thúc mà không chặn playback. OS xử lý qua `externalhistory`, lưu disk, gửi silent và hiển thị card **History sync · Realtime → Main** hiện có. Buffer HAL có giới hạn (64 lượt chưa xong, 64 notification chờ gửi, 128 ID đã đóng gần nhất); lỗi đầy/transport được log. Độ bền bắt đầu khi OS nhận lưu notification. Bản sửa này không thay đổi live của OpenAI hay Qwen; history live của các provider đó là task riêng.
 
+### Phản hồi HW emotion trong chế độ live
+
+LIVE dùng cùng đường gọi HW emotion như realtime thường: tiếng nói đã được
+xác nhận gọi `_set_emotion_local("listening")`; khi chờ trả lời gọi
+`_thinking_cue_start()`. Đây là lời gọi emotion đầy đủ, gồm hành vi LED, màn hình
+và thân hiện có; không có lớp LED riêng cho LIVE.
+Endpoint tiếng nói từ provider chuyển sang thinking; nếu chưa có endpoint,
+0,8 giây không có tiếng nói được xác nhận là ước lượng chỉ dành cho phản hồi
+trạng thái. Nó không kết thúc lượt provider hay tạo endpoint cho metric.
+Thinking hết hạn sau 25 giây. Phát câu trả lời, reject, ngắt lời, delegate và
+thoát phiên dọn trạng thái đúng lượt bằng các helper có kiểm tra emotion hiện
+có. Output lượt cũ không được dọn trạng thái lượt mới. Lời gọi phần cứng chạy
+đúng thứ tự trên worker để việc chờ effect thread không chặn truyền mic;
+playback chờ dọn cue của lượt trước khi bắt đầu.
+
 ### Voice metrics trong chế độ live
 
 Phiên Gemini live dùng `hal/telemetry/live_voice.py` để ánh xạ lượt người dùng của

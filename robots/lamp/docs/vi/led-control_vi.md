@@ -318,3 +318,9 @@ Mỗi emotion preset có LED color riêng:
 Một thiết bị có thể ghi đè các giá trị emotion/scene/aim này (và kích thước vòng LED) mà
 không đổi bảng mặc định dùng chung, qua file `robots/<type>/presets.json`. Đây là cơ chế
 nền tảng — xem [ROBOT-SPEC.md § Per-device presets](../../../contract/ROBOT-SPEC.md#per-device-presets-presetsjson).
+
+### Trạng thái thoại LIVE
+
+Thoại LIVE dùng cùng HW emotion `listening` và helper thinking của realtime
+theo lượt, gồm hành vi LED, màn hình và thân hiện có. Không có lớp LED riêng
+cho LIVE. Xem [realtime voice](../../../../docs/vi/realtime-voice_vi.md#phản-hồi-hw-emotion-trong-chế-độ-live) để biết thời điểm gọi và dọn trạng thái.

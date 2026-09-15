@@ -1141,6 +1141,21 @@ With `HAL_LIVE_MODE=true`, Gemini input transcription chunks now travel with the
 
 A single background worker sends completed exchanges using the existing interaction ID, reply-length cap and Harness routing snapshot. It drains completed notifications after live hangup without blocking playback. OS handles the notification through `externalhistory`, with silent delivery, disk persistence and the existing **History sync · Realtime → Main** web card. HAL buffering is bounded (64 incomplete turns, 64 queued notifications, 128 recent closed IDs); overflow/transport errors are logged. Durability starts only after OS accepts the notification. No live changes are made to OpenAI or Qwen in this fix; their live-history support remains a separate task.
 
+### HW emotion feedback in live mode
+
+LIVE uses the same HW emotion path as regular realtime turns: confirmed user
+speech calls `_set_emotion_local("listening")`, and waiting for a reply calls
+`_thinking_cue_start()`. These are full emotion calls, including the existing
+LED, display and body behavior; there is no separate LIVE LED overlay.
+A provider speech endpoint switches to thinking; when no endpoint is available,
+0.8 seconds without confirmed speech supplies a feedback-only estimate. It does
+not end the provider turn or generate a metric endpoint. Thinking expires after
+25 seconds. Reply playback, rejection, interruption, delegation and session exit
+clear the matching turn using the existing guarded cleanup helpers. Older turn
+outputs cannot clear a newer turn's feedback. Hardware calls run in order on a
+worker so effect-thread waits do not block microphone streaming; playback waits
+for its cue cleanup before starting.
+
 ### Voice metrics in live mode
 
 Gemini live sessions use `hal/telemetry/live_voice.py` to map provider user turns to HAL

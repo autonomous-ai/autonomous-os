@@ -66,6 +66,7 @@ from hal.drivers.voice._internal.turn_dispatch import dispatch_turn
 from hal.telemetry import voice_metrics
 from hal.telemetry.live_voice import LiveVoiceMetrics
 from hal.drivers.voice._internal.live_history import LiveHistory
+from hal.drivers.voice._internal.live_cues import LiveVoiceCues
 from hal.drivers.voice._internal.vad_filters import (
     SileroVADFilter,
     WebRTCVADFilter,
@@ -1164,7 +1165,7 @@ class VoiceService:
         self._live_frames_substituted += 1
         return self._np.zeros_like(data)
 
-    def _live_out_pump(self, generation: int, harness_voice=None) -> None:
+    def _live_out_pump(self, generation: int, harness_voice=None, cues=None) -> None:
         """Play what the model says, for as long as the session lasts.
 
         Deliberately loops orchestrator.stream_output() rather than reading the
@@ -1195,20 +1196,28 @@ class VoiceService:
                     if not (self._live_running and generation == self._live_generation):
                         break
                     if isinstance(out, UserSpeechOutput):
+                        if cues is not None:
+                            cues.input(out.turn_id, out.endpoint_at)
                         iid = metrics.speech(out.turn_id, out.endpoint_at, out.method)
                         history.input(out.turn_id, out.transcript, iid)
                         continue
                     if isinstance(out, ExecutionOutput):
+                        if cues is not None:
+                            cues.finish(out.user_turn_id)
                         history.complete(out.user_turn_id, out.execution_completed)
                         metrics.complete(
                             out.user_turn_id, out.execution_completed,
                         )
                         continue
                     if isinstance(out, RejectSignal):
+                        if cues is not None:
+                            cues.finish(out.user_turn_id)
                         history.discard(out.user_turn_id)
                         metrics.reject(out.user_turn_id)
                         continue
                     if isinstance(out, DelegateSignal):
+                        if cues is not None:
+                            cues.close()
                         history.discard(out.user_turn_id)
                         # Hang up so the main agent's reply does not play
                         # into an open uplink.
@@ -1255,6 +1264,8 @@ class VoiceService:
                         # The first output transcript also sends an audio reset;
                         # that is not evidence of a user asking us to stop.
                         if out.reason == "server_interrupt":
+                            if cues is not None:
+                                cues.finish(out.user_turn_id)
                             history.discard(out.user_turn_id)
                             iid = metrics.interaction(out.user_turn_id)
                             has_pending = getattr(self._tts, "has_pending_speech", lambda owner: False)
@@ -1277,6 +1288,8 @@ class VoiceService:
                         self._live_last_model_output = time.time()
                         if not native:
                             continue
+                        if cues is not None:
+                            cues.finish(out.user_turn_id)
                         owner = metrics.owner(out.user_turn_id)
                         if native_started and owner != native_owner:
                             self._tts.set_native_playback_owner(owner)
@@ -1318,6 +1331,8 @@ class VoiceService:
                             head, rest = split_first_chunk(sentence_buf)
                             head = self.strip_rt_markers(head) if head else ""
                             if head:
+                                if cues is not None:
+                                    cues.finish(out.user_turn_id)
                                 if not self._tts.speak(head, turn_id=iid, realtime_reply=True):
                                     self._tts.speak_queue(head, turn_id=iid, realtime_reply=True)
                                 first_sent = True
@@ -1325,9 +1340,15 @@ class VoiceService:
                         if sentence_buf.rstrip().endswith((".", "!", "?", "…")):
                             sentence = self.strip_rt_markers(sentence_buf)
                             if sentence:
+                                if cues is not None:
+                                    cues.finish(out.user_turn_id)
                                 self._tts.speak_queue(sentence, turn_id=iid, realtime_reply=True)
                             sentence_buf = ""
                         continue
+                if cues is not None:
+                    terminal_key = getattr(self._realtime, "execution_turn_id", "")
+                    if terminal_key:
+                        cues.finish(terminal_key)
                 # receive() timeout and a synthetic unblock are not successful
                 # execution. Only the provider's terminal owns this evidence.
                 metrics.complete(
@@ -1344,6 +1365,8 @@ class VoiceService:
                 if not native and sentence_buf.strip():
                     tail = self.strip_rt_markers(sentence_buf)
                     if tail:
+                        if cues is not None:
+                            cues.finish(getattr(self._realtime, "execution_turn_id", ""))
                         self._tts.speak_queue(tail, turn_id=speech_iid, realtime_reply=True)
             if self._live_running and generation == self._live_generation:
                 history.complete(
@@ -1442,9 +1465,11 @@ class VoiceService:
         # flush here instead. Once only — flushing per reply would discard
         # output the model is still streaming.
         self._realtime.flush_output()
+        cues = LiveVoiceCues()
+        cues.speech()
         pump = threading.Thread(
             target=self._live_out_pump,
-            args=(generation, harness_voice),
+            args=(generation, harness_voice, cues),
             daemon=True,
             name="live-out",
         )
@@ -1509,8 +1534,8 @@ class VoiceService:
                 energy = rms(data, self._np)
                 self._mic_level = energy
                 self._mic_level_ts = now
-                # Feeds ONLY the idle-hangup clock. Not an endpointer and not a
-                # gate — every frame goes up either way.
+                # Feeds the idle-hangup clock and HW emotion feedback. Not an
+                # endpointer or gate — every frame goes up either way.
                 #
                 # RMS alone cannot carry this. In a noisy room the floor sits
                 # above the threshold, so every frame reads as "the user is
@@ -1531,7 +1556,11 @@ class VoiceService:
                         if self._silence_window_is_speech(window, device_rate):
                             last_user_speech = now
                             self._live_unprompted_replies = 0
+                            if not self._tts_is_speaking():
+                                cues.speech()
 
+                # HW emotion feedback only: no commit, stop, or audio gate.
+                cues.tick()
                 uplink_frame = resample_to_stt(
                     data, device_rate, voice_cfg.STT_RATE, self._np
                 )
@@ -1541,6 +1570,7 @@ class VoiceService:
         except Exception as e:
             logger.warning("[live] session error: %s", e)
         finally:
+            cues.close()
             if uplink_dump is not None:
                 try:
                     uplink_dump.close()
