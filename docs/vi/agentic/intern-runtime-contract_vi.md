@@ -1,5 +1,54 @@
 # Đánh giá đăng ký runtime Intern
 
+## Kiểm tra đăng ký an toàn đầy đủ — 2026-09-14
+
+Source OS: `ed3e8b12d3b7890047f9d60bd075f1af89105d35`, PR #406 hiện có.
+Source producer Welcome Desk được đọc cục bộ tại commit
+`16bb0d3f17083ffc9c9b466ff7470e2e4807b083`: các file
+`packages/agents/src/gus/agents/intern_bridge.py`, `intern.py` và
+`packages/voice/src/gus/voice/welcome_desk.py`. Đây là kiểm tra source,
+không phải xác minh listener hay model đã cài. Client Go vẫn ghim protocol
+`0.2.0` / `cassi-first.v1`.
+
+**Kết luận: giữ client chưa đăng ký; không cho chọn `intern`.** Hợp đồng còn
+thiếu mang tính quyết định là ai có quyền xác nhận một input cùng context bổ
+sung thuộc public/business. Thêm trường chuỗi hoặc kiểm tra loopback không tạo
+ra quyền đó. Producer tin `data_class` do caller cung cấp, không xác thực hay
+quyết định custody thay OS. Mặc định toàn bộ chat là business, đọc nhãn trong
+prompt hoặc tin type `web_chat` đều tự tạo quyền không có căn cứ. Chỉ cho phép
+probe public cố định và từ chối mọi input thường cũng không tạo runtime dùng được.
+
+### Bằng chứng source và điều kiện gỡ chặn
+
+Số dòng dưới đây ứng với commit OS trên; tên hàm là khóa tra cứu ổn định.
+Không coi các tính năng full-brain tùy chọn là yêu cầu của Welcome Desk văn bản.
+
+| Ranh giới | Bằng chứng source | Điều kiện trước đăng ký |
+|---|---|---|
+| Trusted admission | `system/server/server.go:450` gắn `sameOriginOrLAN` cho sensing. `system/server/middleware.go:22` kiểm tra vị trí/origin, không xác minh thẩm quyền phân loại input. `SensingEventRequest` tại `system/server/sensing/delivery/http/handler.go:89` không mang class hoặc bằng chứng admission; `PostEvent:211` bind JSON caller. | Xác định producer/policy có thẩm quyền và xác minh assertion trước khi dùng nội dung. Trường JSON `data_class` từ caller bất kỳ không đủ. Chặn unknown/restricted/secret và attachment không hỗ trợ trước log, lưu, bổ sung context hoặc gửi mạng. Integration được kiểm tra chưa xác lập thẩm quyền này. |
+| Class qua biến đổi và replay | `PostEvent:231` log văn bản; `:475` ghi ảnh; `:668` queue chuỗi/ảnh/ID. `:793` lấy identity từ request/mood, `:806` tạo message bổ sung, `:834` có thể thêm kết quả Harness. Gateway tại `:905` chỉ nhận text và ID. `runtimes/picoclaw/events.go:99` chụp mood; `:252` dựng lại text khi drain. | Giữ bằng chứng admission bất biến gắn với payload thực qua queue giới hạn. Identity, guard, environment và context Harness bổ sung cần admission riêng. Với Intern, bỏ qua augmentation không hỗ trợ và từ chối ảnh/file trước các thao tác ghi hiện có; không sao chép queue cũ. |
+| Completion và tác động | `system/server/server.go:343` truyền event handler chung vào `StartWS`. `system/server/agent/delivery/http/handler_event_agent.go:335` bật busy; `:346` xóa busy khi end/error. `:901` chặn TTS cho web chat nhưng `:936` vẫn gọi `fireHWCallsSync`. `system/server/config_watch.go:handleSetUpCompleteChange` độc lập khởi chạy reconcile, refresh token, schedule, HAL, ambient và healthwatch. | Cần consumer event chỉ văn bản và capability gate trước các tác động startup/config; test bằng bộ đếm tác động được inject. Chặn `[HW:` ở client không thay thế gate toàn OS. TTS suppression không bảo đảm không hành động. |
+| Correlation, hủy và readiness | Producer `_safe_run_id` hash ID; `_BridgeState.reserve_run` giữ ID trước inference. `InternBridgeHandler.do_GET` trả readiness tĩnh; `do_POST` chỉ hoàn tất `bridge_request`. Không có API hủy hoặc tra kết quả. `Client.Do` đã kiểm hash và không retry; `ProbeGeneration` dùng request public cố định. | Có thể triển khai correlation ở Go: giữ ID gốc, đúng một kết quả kết thúc cục bộ, xóa busy/marker khi lỗi hoặc shutdown, queue giới hạn. Timeout là kết quả remote chưa xác định, không phải remote đã hủy hay handoff thành công. Generation thật chỉ chứng minh khả năng sinh tại thời điểm đó, không chứng minh session, uptime, hoàn tất nhân viên hoặc provider. HTTP tự nó không phải blocker. |
+| Quyền activation | `system/device/runtime.go:updateAgentRuntime` chạy `ensureSwitchRuntime`, materializer và `runSwitchRuntime` trước lưu config; `RestartForAgentRuntime` restart os-server. `runtime_installers.go:materializeInstaller` trả nil nếu thiếu installer; `switch_runtime.sh:install_new` khi đó tải và chạy installer CDN. Switcher điều khiển unit systemd cũ/mới. HTTP yêu cầu readiness; MQTT chỉ xác nhận unit active. | Bridge do bên ngoài giám sát cần đường chọn riêng đã kiểm chứng, bỏ installer/presync/CDN/unit control; xử lý cả chuyển vào và ra Intern, lỗi lưu config và quyền restart. Không thêm installer không có nghĩa an toàn. Không tạo unit giả hoặc dùng `remote` vì nó tạo Hermes. |
+
+Default `create_server` của producer là `http://127.0.0.1:8765`; đây là default
+đọc từ source, chưa phải endpoint OS đã kích hoạt. Đăng ký sau phải cố định
+endpoint loopback với tên `intern`, Cassi là receptionist đầu tiên, wake word
+Gus vẫn xử lý phía producer và không ủy quyền Hermes/OpenClaw. Không truy cập
+credentials hay thiết bị để thực hiện đánh giá.
+
+Thiếu session, inference ảnh, skills, cấu hình model hoặc channel không tự nó
+buộc phải xây full-brain. Operation không hỗ trợ có thể trả lỗi rõ ràng;
+session trống/uptime chưa biết và watcher không hoạt động có context có thể
+đáp ứng hợp đồng khi phản ánh đúng thực tế. Không nhúng interface nil, panic,
+giả history hoặc trả thành công cho thao tác không làm. Checklist installer/
+persona full-brain lịch sử bên dưới **không** yêu cầu cài service Welcome Desk
+hay sao chép workspace không được tiêu thụ.
+
+Fallback trong phạm vi hoàn tất khi hai bản audit và proof local được ghi lại;
+đăng ký runtime vẫn chờ trusted admission và các gate integration đã kiểm thử.
+Xem [proof và giới hạn hiện tại](../../receipts/intern-welcome-desk-audit-2026-09-14.md).
+
 ## Đánh giá lại Welcome Desk — 2026-09-14
 
 Kiểm tra tại `0f180391b22446d7fd2e63095b777bd0d34bc809` với client hiện tại

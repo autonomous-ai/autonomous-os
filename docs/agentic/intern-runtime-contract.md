@@ -1,5 +1,60 @@
 # Intern runtime registration assessment
 
+## Full safe-registration recheck — 2026-09-14
+
+OS source: `ed3e8b12d3b7890047f9d60bd075f1af89105d35`, existing PR #406.
+Producer source inspected locally: project-spider-man Welcome Desk commit
+`16bb0d3f17083ffc9c9b466ff7470e2e4807b083`, specifically
+`packages/agents/src/gus/agents/intern_bridge.py`, `intern.py`, and
+`packages/voice/src/gus/voice/welcome_desk.py`. This is source inspection,
+not verification of a listener or installed model. The Go client remains pinned
+to protocol `0.2.0` / `cassi-first.v1`.
+
+**Decision: retain the unregistered client; do not make `intern` selectable.**
+The decisive missing contract is who may admit a particular input and its
+derived context as public/business. Neither an extra string field nor loopback
+reachability establishes that authority. The current producer explicitly trusts
+caller-supplied `data_class`; it does not authenticate or classify custody for
+the OS. A server-wide business default, a prompt label, or a `web_chat` type
+would therefore invent authority. Rejecting all ordinary input while permitting
+only the fixed public probe would expose an unusable runtime as ready.
+
+### Source-level findings and closure criteria
+
+Line numbers below refer to the OS source commit above; symbols are the stable
+lookup keys. These findings supplement the earlier audit with the actual
+callers and ordering, rather than treating optional full-brain features as
+requirements for a text-only Welcome Desk.
+
+| Boundary | Source evidence | Required closure before registration |
+|---|---|---|
+| Trusted input admission | `system/server/server.go:450` attaches `sameOriginOrLAN` to sensing input. `system/server/middleware.go:22` checks location/origin, not an input classification authority. `SensingEventRequest` at `system/server/sensing/delivery/http/handler.go:89` has no data class or admission evidence; `PostEvent:211` binds caller JSON. | Identify an existing authorized producer/policy and verify its assertion before content use. A JSON `data_class` supplied by an arbitrary caller is insufficient. Unknown/restricted/secret and unsupported attachments must fail before logging, persistence, augmentation, or forwarding. No such authority is established by the inspected integration. |
+| Data class across transformations and replay | `PostEvent:231` logs raw text; `:475` writes chat images; `:668` queues strings/images/ID. `:793` takes request/current mood identity, `:806` builds the augmented message, and `:834` can append Harness result context. The gateway send at `:905` receives only text and IDs. `runtimes/picoclaw/events.go:99` snapshots mood and `:252` rebuilds text on drain. | Carry immutable admission evidence bound to the actual payload through a bounded queue. Added identity, guard, environment, or Harness context needs its own admissibility decision; the class of the original text cannot authorize it. For Intern, bypass unsupported augmentation and reject images/files before their existing writes. Copying the existing queue is unsafe. |
+| Completion and effects | `system/server/server.go:343` supplies the shared event handler to `StartWS`. `system/server/agent/delivery/http/handler_event_agent.go:335` sets busy on start and `:346` clears it on end/error. `:901` suppresses web-chat TTS, but `:936` still calls `fireHWCallsSync`. `system/server/config_watch.go:handleSetUpCompleteChange` independently starts reconciliation, token refresh, schedules, HAL setup, ambient behavior, and healthwatch. | A text-only event consumer and startup/config capability gates must precede these effects, with injected effect counters in tests. Client rejection of `[HW:` is useful but is not an OS-wide gate. Do not reuse TTS suppression as a no-action guarantee. |
+| Correlation, cancellation and readiness | Producer `_safe_run_id` hashes supplied IDs; `_BridgeState.reserve_run` reserves them before inference. `InternBridgeHandler.do_GET` returns static readiness, and `do_POST` reports completion only for `bridge_request`. There is no cancel or result lookup route. `Client.Do` already verifies the hash and never retries; `ProbeGeneration` tests a fixed public request. | OS-side correlation is implementable: retain original IDs, emit one local terminal outcome, clear busy/markers on failure or shutdown, and bound pending work. Report timeout as an uncertain remote outcome, not remote cancellation or successful handoff. A real generation result can establish recent generation availability, not session state, process uptime, employee completion, or provider authenticity. These are implementable lifecycle requirements, not evidence that HTTP cannot be adapted. |
+| Activation ownership | `system/device/runtime.go:updateAgentRuntime` calls `ensureSwitchRuntime`, materializers, and `runSwitchRuntime` before saving config; `RestartForAgentRuntime` restarts os-server. `runtime_installers.go:materializeInstaller` returns nil for absent installers, allowing `switch_runtime.sh:install_new` to fetch and execute the CDN installer. The switcher also controls old/new systemd units. HTTP requests readiness; MQTT retains unit-active semantics. | An externally supervised bridge needs a dedicated, verified selection path that bypasses installer/presync/CDN/unit control, handles switching both into and out of Intern, and defines config failure/restart ownership. Merely omitting an installer is not safe. Do not add a fake unit or use `remote`, which instantiates Hermes. |
+
+The producer's `create_server` default is `http://127.0.0.1:8765`; this remains
+an inspected producer default, not an activated OS endpoint. Any eventual
+registration must fix that loopback endpoint under the explicit runtime name
+`intern`, keep Cassi as first receptionist and Gus wake-word processing on the
+producer, and never delegate to Hermes/OpenClaw. No credentials or devices were
+accessed to make this assessment.
+
+Missing sessions, image inference, skills, model configuration and channels are
+not themselves reasons to require a full-brain implementation: unsupported
+operations can return explicit errors, while truthful empty session/unknown
+uptime values and context-bound inactive watchers can satisfy their documented
+contracts. No nil interface embedding, panic, invented history, or no-op
+success is acceptable. The installer/persona checklist in the historical
+full-brain section below is **not** an instruction to install a Welcome Desk
+service or copy unused workspace files.
+
+The scoped fallback is complete when this audit and its Vietnamese counterpart
+are recorded with local checks; runtime registration remains blocked on trusted
+admission plus the tested integration gates above. See the
+[current proof and limits](../receipts/intern-welcome-desk-audit-2026-09-14.md).
+
 ## Welcome Desk reassessment — 2026-09-14
 
 Rechecked at `0f180391b22446d7fd2e63095b777bd0d34bc809` against the current
