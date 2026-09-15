@@ -1,6 +1,7 @@
 """MPR121 register setup, touch grouping, and worker lifecycle without hardware."""
 
 import threading
+import errno
 import time
 import unittest
 from unittest import mock
@@ -216,6 +217,48 @@ class TestMPR121(unittest.TestCase):
         bus.close.assert_called_once()
         handler.stop()
         bus.close.assert_called_once()
+
+    def test_missing_bus_warns_without_traceback_or_workers(self):
+        handler = self.make_handler()
+        error = FileNotFoundError(errno.ENOENT, 'No such file or directory', '/dev/i2c-5')
+        with mock.patch('hal.drivers.mpr121.I2CBus', side_effect=error), \
+                mock.patch('hal.drivers.mpr121.threading.Thread') as thread, \
+                self.assertLogs('hal.drivers.mpr121', level='WARNING') as logs:
+            with self.assertRaises(FileNotFoundError):
+                handler.start()
+        self.assertIn('event=unavailable bus=5 address=0x5a', logs.output[0])
+        self.assertIsNone(logs.records[0].exc_info)
+        self.assertEqual(logs.records[0].levelname, 'WARNING')
+        self.assertTrue(handler._stop.is_set())
+        self.assertIsNone(handler._bus)
+        thread.assert_not_called()
+
+    def test_absent_sensor_warns_and_closes_bus(self):
+        for code in (errno.ENODEV, errno.ENXIO, 121):
+            with self.subTest(errno=code):
+                handler = self.make_handler()
+                bus = mock.Mock()
+                bus.write_reg.side_effect = OSError(code, 'Sensor unavailable')
+                with mock.patch('hal.drivers.mpr121.I2CBus', return_value=bus), \
+                        self.assertLogs('hal.drivers.mpr121', level='WARNING') as logs:
+                    with self.assertRaises(OSError):
+                        handler.start()
+                self.assertIsNone(logs.records[0].exc_info)
+                self.assertIn('event=unavailable', logs.output[0])
+                self.assertTrue(handler._stop.is_set())
+                handler.stop()
+                bus.close.assert_called_once()
+
+    def test_unexpected_startup_failure_retains_traceback(self):
+        for error in (PermissionError(errno.EACCES, 'Permission denied'), RuntimeError('broken driver')):
+            with self.subTest(error=error):
+                handler = self.make_handler()
+                with mock.patch('hal.drivers.mpr121.I2CBus', side_effect=error), \
+                        self.assertLogs('hal.drivers.mpr121', level='ERROR') as logs:
+                    with self.assertRaises(type(error)):
+                        handler.start()
+                self.assertIn('event=start_failed', logs.output[0])
+                self.assertIsNotNone(logs.records[0].exc_info)
 
     def test_initial_touch_read_failure_closes_bus(self):
         handler = self.make_handler()
