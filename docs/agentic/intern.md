@@ -1,5 +1,24 @@
 # Intern Welcome Desk runtime
 
+## Voice integration status — 2026-09-14
+
+The custom `intern` runtime cannot currently serve the device microphone or
+speak its replies. The `intern-v2` hardware declaration does not enable those
+paths in this runtime. Do not treat successful administrator chat, bridge
+generation, or the readiness flag as voice readiness.
+
+The missing contract is trusted admission of the **exact voice payload**:
+which existing authority classifies it as public/business, how that decision
+is bound to the transcript, and whether any speaker/context additions are
+admitted. HAL's wake-word result and loopback origin establish neither data
+classification nor that authority. The bridge rejects unknown, restricted,
+and secret inputs even for local inference. Labeling every wake-admitted
+transcript public/business would weaken the existing provider boundary.
+
+The implementation stopped at this contract boundary without enabling a
+partial voice path. See the [voice integration receipt](../receipts/intern-voice-contract-2026-09-14.md)
+for current file evidence, remaining integration work, and verification.
+
 `intern` is an explicitly selected, externally owned, text-only runtime. It is
 not a device brain and does not install, start, stop, or fall back to OpenClaw,
 Hermes, or another runtime. Selecting or leaving it updates only

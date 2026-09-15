@@ -1,5 +1,24 @@
 # Runtime Welcome Desk Intern
 
+## Trạng thái tích hợp giọng nói — 2026-09-14
+
+Runtime `intern` tùy chỉnh hiện chưa nhận đầu vào từ micro thiết bị hoặc đọc
+phản hồi. Khai báo phần cứng `intern-v2` không bật các đường xử lý này trong
+runtime. Chat quản trị, sinh văn bản qua bridge và cờ readiness không chứng
+minh đường giọng nói đã sẵn sàng.
+
+Hợp đồng còn thiếu là chấp thuận **chính xác payload giọng nói**: thẩm quyền
+nào phân loại nội dung public/business, quyết định gắn với bản chép lời như
+thế nào, và dữ liệu người nói/ngữ cảnh bổ sung có được chấp thuận hay không.
+Kết quả wake-word của HAL và nguồn loopback không xác lập thẩm quyền phân
+loại dữ liệu. Bridge từ chối dữ liệu unknown, restricted và secret kể cả khi
+suy luận cục bộ. Tự gán public/business cho mọi bản chép lời sau wake-word
+sẽ làm yếu ranh giới provider hiện có.
+
+Đã dừng tại ranh giới hợp đồng này, chưa bật đường giọng nói một phần. Xem
+[biên nhận tích hợp giọng nói](../../receipts/intern-voice-contract-2026-09-14.md)
+để biết bằng chứng trong mã nguồn, công việc còn lại và kết quả kiểm tra.
+
 `intern` là runtime chỉ xử lý văn bản, do bên ngoài sở hữu và chỉ được kích
 hoạt khi chọn rõ ràng. Đây không phải bộ não điều khiển thiết bị; nó không cài
 đặt, khởi động, dừng hoặc tự chuyển sang OpenClaw, Hermes hay runtime khác. Khi
