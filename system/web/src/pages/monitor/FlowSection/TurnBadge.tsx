@@ -8,7 +8,7 @@ import type { Turn } from "./types";
 import { TYPE_LUCIDE, TURN_INPUT_FALLBACK } from "./types";
 import { HW } from "../types";
 import { useTheme } from "@/lib/useTheme";
-import { turnIO, turnTokenStats, turnCurrentUser, externalHistory } from "./helpers";
+import { turnIO, turnTokenStats, turnCurrentUser, externalHistory, turnDisplayType } from "./helpers";
 import { PoseBucketModal } from "./PoseBucketModal";
 import { UserAvatar } from "./UserAvatar";
 
@@ -47,7 +47,7 @@ export function TurnBadge({ turn, pairTint, userPhotos, onViewPipeline }: {
   const statusColor = turn.status === "done" ? "var(--lm-green)"
     : turn.status === "error" ? "var(--lm-red)"
     : "var(--lm-amber)";
-  const displayType = turn.voiceTurnType ?? turn.type;
+  const displayType = turnDisplayType(turn);
   const SourceIcon = TYPE_LUCIDE[displayType] ?? Circle;
   // Source icon takes the turn's source-category color (mic / cam / channel /
   // web / cron / system) instead of a dim grey, so it stands out and doubles

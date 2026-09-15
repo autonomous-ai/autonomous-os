@@ -1766,3 +1766,32 @@ export function turnTokenStats(turn: Turn): { inTok: number; outTok: number; cac
   }
   return { inTok, outTok, cacheRead, cacheWrite, total };
 }
+
+// Display/filter names are projections; never change the event's routing type.
+export function turnDisplayType(turn: Turn): string {
+  if (externalHistory(turn)) return "history_sync";
+  if (turn.type === "voice_agent_handled") {
+    return turn.voiceTurnType === "voice_command" || turn.voiceTurnType === "voice_followup"
+      ? `${turn.voiceTurnType}_handled` : turn.type;
+  }
+  return turn.voiceTurnType ?? turn.type;
+}
+
+export function turnMatchesSearch(turn: Turn, query: string): boolean {
+  const { input, output } = turnIO(turn);
+  return `${input} ${output} ${turnDisplayType(turn)} ${turn.type} ${turn.runId ?? ""} ${turn.id}`
+    .toLowerCase().includes(query.toLowerCase().trim());
+}
+
+export function migrateTurnTypeFilters(types: string[]): Set<string> {
+  const migrated = new Set(types);
+  if (migrated.has("voice_agent_handled")) {
+    migrated.add("voice_command_handled");
+    migrated.add("voice_followup_handled");
+  }
+  if (migrated.has("voice")) {
+    migrated.add("voice_command");
+    migrated.add("voice_followup");
+  }
+  return migrated;
+}
