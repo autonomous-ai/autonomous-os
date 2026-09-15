@@ -16,7 +16,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"go.autonomous.ai/os/system/device"
 	"go.autonomous.ai/os/system/domain"
 	"go.autonomous.ai/os/system/server/serializers"
 )
@@ -47,7 +46,7 @@ func (s *Server) softwareUpdate(c *gin.Context) {
 	// they share the same names by construction (domain.AgentRuntime* ==
 	// domain.OTAKey* for the CLIs).
 	if target == "agent" {
-		runtime := device.CurrentAgentRuntimeFromConfig(s.config)
+		runtime := s.activeAgentRuntime()
 		// Hermes is excluded on purpose: `hermes update` cannot be pinned to a
 		// version, so bootstrap never auto-applies it (see domain/ota.go). A
 		// button that silently did nothing would be worse than no button.
@@ -181,7 +180,7 @@ func (s *Server) otaVersions(c *gin.Context) {
 	// Hermes is never auto-applied (see domain/ota.go), so it gets no alias and
 	// the Agent row stays button-less on a Hermes device — matching what
 	// POST /software-update/agent would answer.
-	if runtime := device.CurrentAgentRuntimeFromConfig(s.config); runtime != domain.AgentRuntimeHermes {
+	if runtime := s.activeAgentRuntime(); runtime != domain.AgentRuntimeHermes {
 		if entry, ok := versions[runtime]; ok {
 			versions["agent"] = entry
 		}
@@ -217,7 +216,7 @@ func (s *Server) otaUpdating(c *gin.Context) {
 	}
 	// Mirror the "agent" alias of /ota-versions so the Agent row can be matched
 	// without the browser knowing which runtime this device runs.
-	runtime := device.CurrentAgentRuntimeFromConfig(s.config)
+	runtime := s.activeAgentRuntime()
 	out := append([]string{}, body.Updating...)
 	for _, k := range body.Updating {
 		if k == runtime {

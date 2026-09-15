@@ -73,8 +73,10 @@ func (s *HermesService) GetConfigJSON() (json.RawMessage, error) {
 // mirroring runtimes/openclaw/skill_watcher.go.
 
 // StartModelSync — model registry is owned by Hermes. No-op.
-func (s *HermesService) StartModelSync(ctx context.Context) {
+func (s *HermesService) StartModelSync(ctx context.Context) (runtimeErr error) {
 	<-ctx.Done()
+
+	return
 }
 
 // UpdatePrimaryModel — Hermes ignores the device's primary model: os-server
@@ -85,8 +87,10 @@ func (s *HermesService) UpdatePrimaryModel(_ string) error {
 }
 
 // StartPrimaryModelWatch — no openclaw.json to watch.
-func (s *HermesService) StartPrimaryModelWatch(ctx context.Context) {
+func (s *HermesService) StartPrimaryModelWatch(ctx context.Context) (runtimeErr error) {
 	<-ctx.Done()
+
+	return
 }
 
 // GetConfiguredChannel — Device config is the source of truth under Hermes.

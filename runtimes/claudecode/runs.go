@@ -10,10 +10,12 @@ import (
 
 // SetSessionKey stores the session id. Claude Code assigns it on its first inbound
 // frame (translateFrame captures it), so the read loop is the usual caller.
-func (s *ClaudeCodeService) SetSessionKey(key string) {
+func (s *ClaudeCodeService) SetSessionKey(key string) (runtimeErr error) {
 	s.sessionUUID.Store(key)
 	slog.Info("session key stored", "component", "claudecode", "key", key)
 	flow.Log("session_key_acquired", map[string]any{"key_len": len(key)})
+
+	return
 }
 
 // GetSessionKey returns the Claude Code session id or "".
@@ -22,11 +24,13 @@ func (s *ClaudeCodeService) GetSessionKey() string {
 	return v
 }
 
-func (s *ClaudeCodeService) MarkGuardRun(runID string, snapshotPath string) {
+func (s *ClaudeCodeService) MarkGuardRun(runID string, snapshotPath string) (runtimeErr error) {
 	s.guardRunsMu.Lock()
 	s.guardRuns[runID] = snapshotPath
 	s.guardRunsMu.Unlock()
 	slog.Info("guard run marked", "component", "claudecode", "runID", runID, "snapshot", snapshotPath)
+
+	return
 }
 
 func (s *ClaudeCodeService) ConsumeGuardRun(runID string) (string, bool) {
@@ -41,7 +45,7 @@ func (s *ClaudeCodeService) ConsumeGuardRun(runID string) (string, bool) {
 
 const poseBucketRunTTL = 10 * time.Minute
 
-func (s *ClaudeCodeService) MarkPoseBucketRun(runID string, bucketID string, worstFilenames []string) {
+func (s *ClaudeCodeService) MarkPoseBucketRun(runID string, bucketID string, worstFilenames []string) (runtimeErr error) {
 	if runID == "" || bucketID == "" {
 		return
 	}
@@ -62,6 +66,8 @@ func (s *ClaudeCodeService) MarkPoseBucketRun(runID string, bucketID string, wor
 	s.poseBucketRunsMu.Unlock()
 	slog.Info("pose bucket run marked",
 		"component", "claudecode", "runID", runID, "bucket", bucketID, "worst_count", len(clean))
+
+	return
 }
 
 func (s *ClaudeCodeService) ConsumePoseBucketRun(runID string) (string, []string, bool) {
@@ -88,11 +94,13 @@ func (s *ClaudeCodeService) prunePoseBucketRunsLocked() {
 	}
 }
 
-func (s *ClaudeCodeService) MarkBroadcastRun(runID string) {
+func (s *ClaudeCodeService) MarkBroadcastRun(runID string) (runtimeErr error) {
 	s.broadcastRunsMu.Lock()
 	s.broadcastRuns[runID] = true
 	s.broadcastRunsMu.Unlock()
 	slog.Info("broadcast run marked", "component", "claudecode", "runID", runID)
+
+	return
 }
 
 func (s *ClaudeCodeService) ConsumeBroadcastRun(runID string) bool {

@@ -23,7 +23,7 @@ import (
 // and mDNS fail (see docs/setup-flow.md). Every field is omitempty — a backend
 // that consumes none of them loses nothing.
 func (s *Service) buildPingPayload(status string) beclient.PingPayload {
-	runtime := CurrentAgentRuntimeFromConfig(s.config)
+	runtime := s.CurrentAgentRuntime()
 	p := beclient.PingPayload{
 		Status:              status,
 		SetupCompleted:      s.config.SetUpCompleted,

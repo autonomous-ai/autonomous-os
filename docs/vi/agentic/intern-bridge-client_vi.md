@@ -1,0 +1,187 @@
+# HTTP client cho Intern bridge
+
+`system/lib/internbridge` là Go client **chưa đăng ký runtime**, theo hợp đồng
+`0.2.0`, schema `cassi-first.v1` của [project-spider-man PR #148](https://github.com/Garman-Unified-Systems/project-spider-man/pull/148),
+commit `753b661087ee2ae1e4718babc2da618740cb52fa`. Từ chối envelope `0.1.0`,
+kể cả đổi version nhưng giữ cấu trúc cũ. Thư viện không triển khai
+`AgentGateway`, không có caller production, không cài đặt hay chuyển runtime,
+không tích hợp phần cứng.
+
+## Hợp đồng gọi
+
+Import `go.autonomous.ai/os/system/lib/internbridge`, tạo client bằng
+`internbridge.New(8765)` và gọi `Do(ctx, Request{...})`. Bridge phải có sẵn trên
+cùng máy. Constructor chỉ nhận cổng TCP khác 0; địa chỉ luôn là `127.0.0.1`.
+Không dùng DNS, proxy, redirect, cookie jar, authorization hay tìm credentials.
+
+Caller phải cung cấp rõ `Operation` (`route`, `reception`, `classify`, `generate`) và
+`DataClass` (`unknown`, `public`, `business`, `restricted`, `secret`). Phân loại
+phải đến từ chính sách caller đáng tin cậy, không lấy từ nội dung hoặc mô hình,
+không mặc định thành public/business. Với request hợp lệ, unknown trả
+`ErrNeedsClassification`, restricted/secret trả `ErrCustodyHold` trước mọi
+request mạng, kể cả `route`; HTTP status bằng 0 và result bằng nil. Chỉ
+public/business được gửi với nhãn nguyên vẹn. Thư viện không thể xác minh caller
+phân loại đúng; nhãn sai không cấp quyền vượt ranh giới dữ liệu.
+
+Ngoại lệ hẹp, xác định trước: unknown có đúng một nhóm cụm từ service được chấp
+nhận và không có cụm từ home-control sẽ được gửi chỉ để nhận một đề xuất không
+thực thi. `news`, `headline(s)`, `briefing` (gồm daily/morning briefing) đề xuất
+`mcavoy@lab`; `notify`/`notification`, `alarm`, `remind`/`reminder` đề xuất
+`pam@gus`. Đây không phải phân loại dữ liệu, không cấp quyền và không gọi model.
+Bất kỳ `smart-home`, device, light, scene, fan, Hue, Nanoleaf, Kasa hoặc
+home-control nào — kể cả trộn với service — luôn trả `ErrCustodyHold` trước mạng,
+không có handoff.
+
+Text phải là UTF-8 hợp lệ, không trống, tối đa 8.000 Unicode code point; JSON
+sau mã hóa tối đa 16 KiB. Không cắt nội dung. Run ID tùy chọn phải khớp
+`[A-Za-z0-9._-]{1,64}`, không chứa dữ liệu nhạy cảm. ID được cung cấp phải trả về
+`run-` cộng 24 ký tự hex đầu của SHA-256; ID do bridge tạo có 32 ký tự hex.
+
+## Giới hạn và kiểm tra
+
+- Mỗi lần gọi tối đa 20 giây, gồm chờ kết nối, header và body. Deadline sớm hơn
+  hoặc cancellation của caller được ưu tiên.
+- Response tối đa 64 KiB, header tối đa 8 KiB, tối đa bốn kết nối tới host.
+  Tắt compression và proxy discovery.
+- Chỉ HTTP 200 với version/envelope/status đúng mới thành công. Từ chối field
+  lạ/trùng, JSON nối đuôi, giá trị lồng nhau tùy ý, sai kiểu, thiếu field bắt buộc,
+  UTF-8 sai và UTF-16 surrogate không thành cặp; emoji escape hợp lệ được giữ.
+  Chỉ object `reception_route` gồm đúng sáu field scalar được phép lồng nhau.
+- Yêu cầu `executes_actions:false`, `transport_status:accepted`,
+  `lifecycle_status:completed`, `lifecycle_scope:bridge_request`, destination/kind
+  đã biết và run ID tương ứng. Nhãn classify chỉ nhận bốn giá trị hợp đồng;
+  output tối đa 4.096 Unicode code point; từ chối marker `<think` hoặc `[HW:`
+  ở mọi status.
+- Không tự retry. Timeout không chứng minh bridge dừng xử lý. Bridge giữ ID
+  trước inference, trả 409 nếu lặp; không có API lấy lại kết quả hay hủy từ xa.
+
+## Kết quả và lỗi
+
+Chỉ `reception_route` (cho `Route`/`Reception`), `classified`, `draft` trả `Result`.
+Reception chỉ đề xuất tuyến; draft là văn bản chưa đáng tin, không phải lệnh
+hay quyền hành động. Không đồng nghĩa nhân viên đã hoàn thành công việc.
+
+`Result.Destination` luôn là `cassi@mama`, nơi tiếp nhận đầu tiên.
+`RequestedDestination` và `Kind` mô tả tuyến đề xuất: `orchestration@gus`,
+`rex@dru`, `melvil@lab`, `cassi@mama` (persona); `pam@gus`, `mcavoy@lab`,
+`smart-home` (service). `news`, `briefing`, `notification`, `alarm`, `reminder`
+là intent, không phải destination hay node.
+Tuyến yêu cầu Cassi hoặc smart-home phải là custody hold; chỉ có envelope
+tiếp nhận Cassi không có nghĩa dữ liệu đang bị giữ.
+
+`Result.ReceptionRoute` có sáu field có kiểu: `FirstDestination`, `Handoff`,
+`Intent`, `Status`, `Executed`, `NextStep`. Nơi đầu tiên phải là Cassi,
+status `reception_route`, executed false, next step `safe_escalation`.
+Handoff là null trên wire (chuỗi rỗng trong struct) hoặc đúng một destination
+được phép trùng `RequestedDestination`, không phải Cassi. Intent unknown và
+custody hold bắt buộc null handoff. Từ chối array, field lạ/trùng và object
+handoff lồng nhau. Intent hợp lệ: `orchestration`, `engineering`, `service`,
+`notification`, `alarm`, `reminder`, `library`, `reception`, `smart-home`,
+`news`, `briefing`, `unknown`, `address_or_default`.
+Đây chỉ là metadata, không phải API thiết bị hay hành động.
+
+Service yêu cầu `service_route`; `Do` mặc định trả `ErrServiceRoute` với nil result; client
+không theo handoff. Generate không thành công với reception-only. Hold phải
+bỏ hoàn toàn `output` (kể cả null cũng bị từ chối), không trả result.
+Completed chỉ mô tả request HTTP, không chứng minh reception/handoff/service
+đã thực thi.
+
+Mọi lỗi trả nil result và `*internbridge.Error`. Dùng `errors.Is` với sentinel;
+`errors.As` đọc HTTP status khi có. Nội dung lỗi và unwrap chỉ có sentinel cố
+định, không chứa text request, output/error server, URL hay lỗi network/parser
+gốc. Thư viện không log nội dung.
+
+| Kết quả | Sentinel |
+|---|---|
+| `custody_hold`, phải không có output | `ErrCustodyHold` |
+| `needs_classification` | `ErrNeedsClassification` |
+| `needs_input` | `ErrNeedsInput` |
+| `service_route` | `ErrServiceRoute` |
+| `fallback`, HTTP 500 hợp lệ | `ErrUnavailable` |
+| HTTP 400/404/409/413 hợp lệ | `ErrRejected` |
+| JSON/envelope/version/status sai, redirect | `ErrProtocol` |
+| HTTP 502 invalid-harness envelope hợp lệ | `ErrProtocol` |
+| Response quá lớn | `ErrResponseTooLarge` |
+| Deadline/cancel/network | `ErrDeadline`, `ErrCanceled`, `ErrTransport` |
+| Input sai | `ErrInvalidRequest` |
+
+`Health`, `Ready`, `BridgeVersion` kiểm tra `/health`, `/ready`, `/version`.
+**Ready chỉ xác nhận metadata transport**, không chứng minh model sẵn sàng.
+Bridge upstream không probe inference; client không tự tạo uptime.
+
+`ProbeGeneration(ctx)` kiểm tra `Ready`, rồi gửi prompt public cố định
+`Write a brief greeting.` bằng `generate`. Chỉ draft hợp lệ mới thành công;
+fallback, chỉ định tuyến, response sai và lỗi transport vẫn là lỗi. Hai bước
+chia sẻ deadline tối đa 20 giây hoặc deadline sớm hơn của caller. Không retry,
+cache readiness, nội dung người dùng hay run ID tái sử dụng. Mỗi lần gọi tiêu
+thụ inference (tối đa 256 token sinh với bridge đã ghim); caller phải giới hạn
+tần suất. Đây không phải health check chạy nền tự động.
+
+Thành công chỉ chứng minh một response generation tại thời điểm đó, không
+chứng minh `AgentGateway` sẵn sàng, danh tính/locality của model, uptime hay
+xác thực listener. `LocalModel` trong bridge đã ghim cưỡng chế routing local;
+protocol 0.2.0 không có chứng thực provider. Harness upstream còn hỗ trợ
+provider tùy chọn nên transport thành công không chứng minh inference local.
+
+## Tích hợp chưa thực hiện
+
+### Dispatch service có xác thực, chưa triển khai (2026-09-15)
+
+`DoForService` trả đề xuất service đã kiểm tra cho Intern service; bản thân
+client không dispatch. `Do` và generation preflight vẫn trả `ErrServiceRoute`
+với nil result. Service chỉ dùng đường mới khi có `ServiceDispatcher`.
+Chỉ `mcavoy@lab` và `pam@gus` được phép. Persona vẫn xử lý cục bộ; dispatcher
+từ chối mọi tuyến khác. Smart-home, đích lạ, dữ liệu restricted/secret và yêu
+cầu điều khiển nhà bị giữ custody. Unknown chỉ được tiếp nhận cục bộ, cần
+phân loại public/business rõ ràng trước khi gửi sang authority.
+
+Bật runtime cần cả `GUS_INTERN_DISPATCH_TOKEN` và
+`GUS_INTERN_DISPATCH_PRINCIPAL`, với khóa do Director cấp cho `intern@gus`;
+từ chối principal fleet-dispatch. Thay đổi
+này không cấp khóa. `GUS_INTERN_DISPATCH_URL` tùy chọn phải khớp chính xác
+`http://100.115.27.81:7370`, cũng là mặc định. Thiếu khóa hoặc cấu hình sai
+không tạo dispatcher mặc định, không gọi mạng authority. Xóa token sau khi
+khởi tạo cũng chặn trước khi gửi. Không lấy khóa provider, khóa client khác,
+keychain, proxy hoặc redirect làm dự phòng. `DispatchConfig` cho phép inject
+endpoint/principal/token source; test thay transport riêng, không nới URL.
+
+`POST /messages/post-task` dùng Bearer và `X-GUS-Principal: intern@gus`.
+Envelope chỉ gồm `request_id` (OS run ID), `role=intern@gus`, `node=gus`,
+`requested_at` (giây Unix), `to_role`, `task`. Task chỉ có
+`schema_version=gus-bus-task/v1`, `task_id` (OS run ID), `data_zone=public|business`,
+`custody_policy=business-public-only`, `instruction_inert=true`, `body`.
+Body chỉ gồm `destination`, `service_intent`, `request_text` (input giữ nguyên),
+`idempotency_key` bằng `request_id`. Chỉ cho phép `news|briefing` tới `mcavoy@lab`
+và `notification|alarm|reminder` tới `pam@gus`. Text UTF-8 phải in được, không
+có khoảng trắng đầu/cuối và tối đa 2.000 byte. Authority vẫn kiểm tra custody/secret. Chỉ một
+request, không retry, fan-out ngang hàng, queue hoặc listener mới. Không gửi
+output/reasoning bridge, lịch sử hoặc bộ nhớ persona. Giữ kiểm tra final-only
+và thời hạn voice grant; không chứng thực inference phía sau hoặc giao việc.
+
+Chỉ chấp nhận HTTP 200/202 JSON với `ok=true`, `contract_version=gus.comms/v1`,
+`task_id` và `destination` khớp, `idempotent` boolean, `status=accepted|queued`.
+`message_id` phải bằng 16 ký tự hex đầu của SHA-256 trên
+`bus-message\0intern@gus\0` cộng request ID theo authority.
+Từ chối completion/delivery kể cả `REPORTED_COMPLETE`;
+`delivered` nếu có phải là false. Giới hạn kích thước, từ chối khóa JSON trùng
+và JSON dư; từ chối field lạ. Nội dung authority bị bỏ, không đưa vào kết quả, lỗi hoặc receipt.
+Lỗi không chứa khóa, lỗi token source/transport hoặc response body.
+Kết quả cục bộ có `scope=service_dispatch`, `state=accepted|queued`, receipt
+`dispatch` giữ `run_id`, `bridge_run_id`, `task_id`, `message_id`, `idempotent`, đích, status và
+`delivered=false`. Đây là xác nhận cục bộ kết thúc, không phải hoàn tất tác vụ;
+TTL kết quả không đổi. Lỗi authority đánh dấu remote outcome unknown, không
+tự retry. Phụ thuộc dotfiles PR #35037 chưa merge, không dùng `/dispatch` cũ.
+Completion từ Intern đi qua terminal consumer `orchestration@gus` hiện có;
+không thêm result queue. Request/task/idempotency ID được ràng buộc; authority
+từ chối tái sử dụng request ID với payload thay đổi, kể cả timestamp.
+Không bật PAM hoặc cấp credentials. Merge dependency, cấp khóa và triển khai
+là các bước riêng. Xem [biên bản tích hợp authority](../../receipts/intern-authority-2026-09-15.md).
+
+Gateway đầy đủ còn bị chặn theo [kiểm toán hợp đồng runtime](intern-runtime-contract_vi.md):
+custody xuyên suốt, ảnh/session/persona/skill và activation/configuration có
+chủ sở hữu. Watcher có thể triển khai bằng Go; chữ ký không trả lỗi tự nó
+không phải lý do đổi interface chung. Không đăng ký installer, presync,
+migration hay runtime có thể chọn trong slice này.
+Tests dùng HTTP server giả cục bộ, không model, credentials hay thiết bị.
+Xem [biên bản Cassi-first](../../receipts/intern-runtime-contract-2026-09-14.md)
+và [biên bản 0.1.0 trước đây](../../receipts/intern-bridge-client-2026-09-14.md).

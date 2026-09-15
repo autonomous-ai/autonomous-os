@@ -18,6 +18,8 @@ type fakeMCPGateway struct {
 	writeErr error
 }
 
+func (f *fakeMCPGateway) Name() string { return "hermes" }
+
 func (f *fakeMCPGateway) WriteMCPEntry(name string, entry map[string]any) error {
 	if f.writeErr != nil {
 		return f.writeErr

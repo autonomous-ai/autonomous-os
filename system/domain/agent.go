@@ -68,7 +68,7 @@ type AgentGateway interface {
 	// Last-write-wins per event type. fixedRunID lets web_chat preallocate the runID
 	// returned to the web client so it can correlate SSE events at replay time;
 	// other event types pass "" and a fresh runID is allocated at drain.
-	QueuePendingEvent(eventType, msg string, images []string, fixedRunID string)
+	QueuePendingEvent(eventType, msg string, images []string, fixedRunID string) error
 
 	// DrainPendingEvents replays whatever QueuePendingEvent buffered. The
 	// runtimes call it themselves on the idle edge; this exposes it because
@@ -119,7 +119,7 @@ type AgentGateway interface {
 	GetSessionKey() string
 
 	// SetSessionKey stores the session key for outgoing messages.
-	SetSessionKey(key string)
+	SetSessionKey(key string) error
 
 	// SetupAgent configures and starts the agent runtime from setup data.
 	SetupAgent(data SetupRequest) error
@@ -252,7 +252,7 @@ type AgentGateway interface {
 
 	// MarkGuardRun marks a runID as a guard-active turn. When the agent responds,
 	// the SSE handler will broadcast the response to all Telegram chats via Bot API.
-	MarkGuardRun(runID string, snapshotPath string)
+	MarkGuardRun(runID string, snapshotPath string) error
 
 	// ConsumeGuardRun checks if a runID is a guard-active turn and returns the
 	// snapshot path. Returns ("", false) if not a guard run.
@@ -261,7 +261,7 @@ type AgentGateway interface {
 	// MarkBroadcastRun marks a runID so the agent's response is broadcast
 	// to all messaging channels alongside TTS. Used for music.mood confirmations
 	// and other events where the user should be able to respond via voice or channel.
-	MarkBroadcastRun(runID string)
+	MarkBroadcastRun(runID string) error
 
 	// ConsumeBroadcastRun checks if a runID is marked for broadcast. One-shot.
 	ConsumeBroadcastRun(runID string) bool
@@ -272,7 +272,7 @@ type AgentGateway interface {
 	// attached to the Telegram message without the agent having to know
 	// any file paths. bucketID is hal's window_start integer; filenames
 	// are relative to <SNAPSHOT_TMP_DIR>/sensing_pose/buckets/<bucketID>/.
-	MarkPoseBucketRun(runID string, bucketID string, worstFilenames []string)
+	MarkPoseBucketRun(runID string, bucketID string, worstFilenames []string) error
 
 	// ConsumePoseBucketRun returns + removes the pose bucket info for a
 	// runID. One-shot, mirrors ConsumeGuardRun. ok is false when the run
@@ -391,7 +391,7 @@ type AgentGateway interface {
 	StartHALVoice(deepgramKey, llmKey, sttKey, ttsKey, llmBaseURL, sttBaseURL, ttsBaseURL, ttsVoice, ttsInstructions, ttsProvider string) error
 
 	// WatchIdentity polls IDENTITY.md and pushes updated wake words to HAL on rename.
-	WatchIdentity(ctx context.Context)
+	WatchIdentity(ctx context.Context) error
 
 	// UpdateIdentityName rewrites the **Name:** line in workspace/IDENTITY.md.
 	// WatchIdentity picks up the change within its next poll cycle and pushes the
@@ -399,12 +399,12 @@ type AgentGateway interface {
 	UpdateIdentityName(name string) error
 
 	// StartSkillWatcher polls OTA metadata for skill version changes and notifies the agent.
-	StartSkillWatcher(ctx context.Context)
+	StartSkillWatcher(ctx context.Context) error
 
 	// StartModelSync periodically reconciles the upstream model list (ModelsAPIURL)
 	// into openclaw.json. Fail-soft: a failed fetch logs and continues. Restarts
 	// the gateway only when the file actually changed.
-	StartModelSync(ctx context.Context)
+	StartModelSync(ctx context.Context) error
 
 	// UpdatePrimaryModel patches agents.defaults.model.primary in openclaw.json
 	// to "autonomous/{modelKey}" and restarts the gateway. No-op when modelKey
@@ -417,7 +417,7 @@ type AgentGateway interface {
 	// changes to openclaw.json. When a change is detected without an os-server write
 	// flag, it reads the new primary model and syncs it to config.LLMModel
 	// (only when provider == "autonomous"; others are silently ignored).
-	StartPrimaryModelWatch(ctx context.Context)
+	StartPrimaryModelWatch(ctx context.Context) error
 
 	// GetConfiguredChannel returns the primary messaging channel type configured
 	// in the agent runtime (e.g. "telegram", "discord", "slack").

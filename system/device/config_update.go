@@ -470,6 +470,9 @@ func applyMQTTFields(c *config.Config, data domain.UpdateConfigRequest) {
 // llm_model/thinking → openclaw, stt_language → openclaw NewSession + hal,
 // voice-pipeline fields → hal. Other fields persist only; restart os-server for full effect.
 func (s *Service) UpdateConfig(data domain.UpdateConfigRequest) error {
+	if s.externalRuntime() {
+		return domain.ErrNotSupportedByRuntime
+	}
 	if data.Environment != nil {
 		if err := data.Environment.Validate(); err != nil {
 			return err
@@ -625,6 +628,9 @@ func (s *Service) syncLLMToGateway(ch updateChanges) {
 // UpdateVoiceConfig updates only TTS provider/voice/speed and STT language — safe to call from MQTT
 // handlers since it does not touch API keys, MQTT credentials, or WiFi config.
 func (s *Service) UpdateVoiceConfig(provider, voice, language string, speed *float64) error {
+	if s.externalRuntime() {
+		return domain.ErrNotSupportedByRuntime
+	}
 	if err := domain.ValidateTTSSpeed(speed); err != nil {
 		return err
 	}
@@ -692,6 +698,9 @@ func sttModelForLanguage(lang string) string {
 // gateway model sync, agent session reset. A hand-rolled save would drift from
 // that list the first time someone adds to it.
 func (s *Service) RestoreAutonomousDefaults(section string) error {
+	if s.externalRuntime() {
+		return domain.ErrNotSupportedByRuntime
+	}
 	d := s.config.AutonomousDefaults
 	if d == nil {
 		return errors.New("no autonomous defaults stored on this device")

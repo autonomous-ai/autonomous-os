@@ -3,8 +3,13 @@ package server
 import (
 	"testing"
 
+	"go.autonomous.ai/os/system/domain"
 	"go.autonomous.ai/os/system/server/config"
 )
+
+type logSourceGateway struct{ domain.AgentGateway }
+
+func (*logSourceGateway) Name() string { return "codex" }
 
 // The web UI's log tabs must keep resolving to the board's files/units with no
 // env set — the three sources that became env-driven are the ones a laptop can
@@ -51,6 +56,33 @@ func TestResolveLogSourceOffDevice(t *testing.T) {
 		got, _ := s.resolveLogSource(src)
 		if got != w {
 			t.Errorf("%s: got %q, want %q", src, got, w)
+		}
+	}
+}
+
+func TestResolveLogSourceUsesActiveGatewayBeforeRestart(t *testing.T) {
+	t.Setenv("OS_AGENT_BRIDGE_LOG", "")
+	s := &Server{config: &config.Config{AgentRuntime: "intern"}, agentGateway: &logSourceGateway{}}
+	for _, source := range []string{"openclaw", "openclaw-service"} {
+		got, ok := s.resolveLogSource(source)
+		if !ok || got != "journal:codex.service" {
+			t.Fatalf("%s: got %q/%v, want active codex logs", source, got, ok)
+		}
+	}
+}
+
+func TestActiveAgentRuntimeNilFallback(t *testing.T) {
+	for _, tc := range []struct {
+		server *Server
+		want   string
+	}{
+		{&Server{}, "openclaw"},
+		{&Server{config: &config.Config{AgentRuntime: "hermes"}}, "hermes"},
+		{&Server{agentGateway: &logSourceGateway{}}, "codex"},
+		{&Server{agentGateway: &logSourceGateway{}, config: &config.Config{AgentRuntime: "intern"}}, "codex"},
+	} {
+		if got := tc.server.activeAgentRuntime(); got != tc.want {
+			t.Fatalf("runtime=%q want=%q", got, tc.want)
 		}
 	}
 }

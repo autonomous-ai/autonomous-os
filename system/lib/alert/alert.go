@@ -147,7 +147,7 @@ func DeviceInfo(cfg *config.Config) string {
 	label := hardwareLabel()
 	runtime, deviceID, faChannel, netSSID := "", "", "", ""
 	if cfg != nil {
-		runtime = strings.TrimSpace(cfg.AgentRuntime)
+		runtime = strings.TrimSpace(cfg.AgentRuntimeValue())
 		deviceID = strings.TrimSpace(cfg.DeviceID)
 		faChannel = strings.TrimSpace(cfg.FAChannel)
 		netSSID = strings.TrimSpace(cfg.NetworkSSID)

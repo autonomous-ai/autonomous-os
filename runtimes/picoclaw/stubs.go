@@ -78,8 +78,10 @@ func (s *PicoclawService) GetConfigJSON() (json.RawMessage, error) {
 // auto-updates workspace skills from the CDN (capability-gated), mirroring openclaw.
 
 // StartModelSync — model registry is owned by PicoClaw. No-op.
-func (s *PicoclawService) StartModelSync(ctx context.Context) {
+func (s *PicoclawService) StartModelSync(ctx context.Context) (runtimeErr error) {
 	<-ctx.Done()
+
+	return
 }
 
 // UpdatePrimaryModel — the PicoClaw model registry (config.json model_list) is
@@ -89,8 +91,10 @@ func (s *PicoclawService) UpdatePrimaryModel(_ string) error {
 }
 
 // StartPrimaryModelWatch — no agent-side config file to watch.
-func (s *PicoclawService) StartPrimaryModelWatch(ctx context.Context) {
+func (s *PicoclawService) StartPrimaryModelWatch(ctx context.Context) (runtimeErr error) {
 	<-ctx.Done()
+
+	return
 }
 
 // GetConfiguredChannel — Device config is the source of truth under PicoClaw.

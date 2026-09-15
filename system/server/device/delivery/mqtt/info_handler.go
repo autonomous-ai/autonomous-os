@@ -23,7 +23,11 @@ func (h *DeviceMQTTHandler) handleInfo(_ domain.MQTTMessage) error {
 	msg.CodexVersion = agenthttp.GetCodexVersion()
 	msg.ClaudeCodeVersion = agenthttp.GetClaudeCodeVersion()
 	msg.OpenCodeVersion = agenthttp.GetOpenCodeVersion()
-	msg.AgentRuntime = device.CurrentAgentRuntimeFromConfig(h.config)
+	if h.agentGateway != nil {
+		msg.AgentRuntime = h.agentGateway.Name()
+	} else {
+		msg.AgentRuntime = device.CurrentAgentRuntimeFromConfig(h.config)
+	}
 	// Channels configured here that the active runtime can't run (set by
 	// ChannelReconcile after a runtime switch, e.g. slack after switching to picoclaw).
 	msg.UnsupportedChannels = h.config.ChannelsUnsupported

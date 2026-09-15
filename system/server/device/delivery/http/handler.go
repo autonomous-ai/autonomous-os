@@ -394,13 +394,15 @@ func (h *DeviceHandler) GetRealtimeOptions(c *gin.Context) {
 //
 //	@Router	/device/agent-runtime [get]
 func (h *DeviceHandler) GetAgentRuntime(c *gin.Context) {
-	c.JSON(http.StatusOK, serializers.ResponseSuccess(domain.AgentRuntimeStatus{
-		Current:     h.service.CurrentAgentRuntime(),
-		Options:     domain.AgentRuntimes,
-		Ready:       h.service.AgentReady(),
-		RemoteURL:   h.config.AgentRemoteURL,
-		RemoteToken: h.config.AgentRemoteToken,
-	}))
+	status := h.config.RuntimeSelectionStatus(h.service.CurrentAgentRuntime(), h.service.AgentReady())
+	status["options"] = domain.AgentRuntimes
+	if h.config.AgentRemoteURL != "" {
+		status["remote_url"] = h.config.AgentRemoteURL
+	}
+	if h.config.AgentRemoteToken != "" {
+		status["remote_token"] = h.config.AgentRemoteToken
+	}
+	c.JSON(http.StatusOK, serializers.ResponseSuccess(status))
 }
 
 // SetAgentRuntime swaps the agentic backend (openclaw / hermes / picoclaw). The
@@ -424,6 +426,16 @@ func (h *DeviceHandler) SetAgentRuntime(c *gin.Context) {
 	if !domain.IsValidAgentRuntime(req.Runtime) {
 		c.JSON(http.StatusBadRequest, serializers.ResponseError(
 			fmt.Sprintf("invalid runtime %q (want %s)", req.Runtime, strings.Join(domain.AgentRuntimes, "|"))))
+		return
+	}
+	if domain.IsExternallyOwnedRuntime(req.Runtime) || domain.IsExternallyOwnedRuntime(h.config.AgentRuntimeValue()) || domain.IsExternallyOwnedRuntime(h.service.CurrentAgentRuntime()) {
+		if err := h.service.SelectExternalRuntime(req); err != nil {
+			c.JSON(http.StatusBadRequest, serializers.ResponseError(err.Error()))
+			return
+		}
+		status := h.config.RuntimeSelectionStatus(h.service.CurrentAgentRuntime(), h.service.AgentReady())
+		status["services_changed"] = false
+		c.JSON(http.StatusOK, serializers.ResponseSuccess(status))
 		return
 	}
 	// Phase B: "remote" is Hermes-over-LAN. It reuses the Hermes runtime with an

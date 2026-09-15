@@ -1273,7 +1273,9 @@ type AgentRuntimeSetData struct {
 
 // AgentRuntimes is the valid set, surfaced to the web settings dropdown via
 // GET /api/device/agent-runtime so the UI never hardcodes the list.
-var AgentRuntimes = []string{AgentRuntimeOpenClaw, AgentRuntimeHermes, AgentRuntimePicoclaw, AgentRuntimeCodex, AgentRuntimeClaudeCode, AgentRuntimeOpenCode, AgentRuntimeRemote}
+const AgentRuntimeIntern = "intern"
+
+var AgentRuntimes = []string{AgentRuntimeOpenClaw, AgentRuntimeHermes, AgentRuntimePicoclaw, AgentRuntimeCodex, AgentRuntimeClaudeCode, AgentRuntimeOpenCode, AgentRuntimeRemote, AgentRuntimeIntern}
 
 // IsValidAgentRuntime reports whether r is a switchable backend (case-insensitive,
 // trimmed). Used to validate hermes.setup / picoclaw.setup and the HTTP runtime

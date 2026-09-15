@@ -1059,3 +1059,11 @@ Khi nhận history realtime, sensing trả ID hội thoại gốc (`device-realt
 Metadata reply-routing Harness trên request sensing voice/chat chỉ được chèn khi transport Harness đã pair và đang kết nối. Request lúc ngắt kết nối bỏ cả reply marker lẫn hint routing/follow-up riêng của Harness; routing voice và follow-up thông thường giữ nguyên.
 
 Payload sensing HAL nhận trường tùy chọn `voice_turn_type` (`voice`, `voice_command`, `voice_followup`) cho debug voice. OS chỉ ghi giá trị hợp lệ vào Flow Monitor; `type` vẫn quyết định authorization, routing, queue, đồng bộ history và cancel loa.
+
+## Vòng đời bridge Intern native
+
+Khi runtime đang hoạt động là `intern`, tiến trình `os-server` hiện có sở hữu
+bridge native IPv4 `127.0.0.1:8765` và listener quản trị giới hạn. Xung đột lúc
+khởi động gây lỗi đóng an toàn; SIGTERM hủy yêu cầu provider đang chạy và đóng
+cả hai listener. Không cần systemd unit hoặc trình cài đặt mới. Runtime khác
+không khởi động bridge này. Xem [cấu hình và giới hạn](agentic/intern-native-bridge_vi.md).

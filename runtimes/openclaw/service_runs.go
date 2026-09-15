@@ -9,10 +9,12 @@ import (
 )
 
 // SetSessionKey stores the session key for outgoing chat messages.
-func (s *OpenclawService) SetSessionKey(key string) {
+func (s *OpenclawService) SetSessionKey(key string) (runtimeErr error) {
 	s.lastSessionKey.Store(key)
 	slog.Info("session key stored", "component", "openclaw", "key", key)
 	flow.Log("session_key_acquired", map[string]any{"key_len": len(key)})
+
+	return
 }
 
 // GetSessionKey returns the last observed session key, or empty string if none.
@@ -22,11 +24,13 @@ func (s *OpenclawService) GetSessionKey() string {
 }
 
 // MarkGuardRun marks a runID as guard-active so the SSE handler broadcasts the response.
-func (s *OpenclawService) MarkGuardRun(runID string, snapshotPath string) {
+func (s *OpenclawService) MarkGuardRun(runID string, snapshotPath string) (runtimeErr error) {
 	s.guardRunsMu.Lock()
 	s.guardRuns[runID] = snapshotPath
 	s.guardRunsMu.Unlock()
 	slog.Info("guard run marked", "component", "openclaw", "runID", runID, "snapshot", snapshotPath)
+
+	return
 }
 
 // ConsumeGuardRun checks and removes a guard-active runID. Returns snapshot path and true if found.
@@ -51,7 +55,7 @@ const poseBucketRunTTL = 10 * time.Minute
 // MarkPoseBucketRun stores the bucket + worst-snapshot filenames for a
 // motion.activity turn. Mirrors MarkGuardRun's lifecycle but carries a
 // slice instead of a single path.
-func (s *OpenclawService) MarkPoseBucketRun(runID string, bucketID string, worstFilenames []string) {
+func (s *OpenclawService) MarkPoseBucketRun(runID string, bucketID string, worstFilenames []string) (runtimeErr error) {
 	if runID == "" || bucketID == "" {
 		return
 	}
@@ -72,6 +76,8 @@ func (s *OpenclawService) MarkPoseBucketRun(runID string, bucketID string, worst
 	s.poseBucketRunsMu.Unlock()
 	slog.Info("pose bucket run marked",
 		"component", "openclaw", "runID", runID, "bucket", bucketID, "worst_count", len(clean))
+
+	return
 }
 
 // ConsumePoseBucketRun returns the bucket info for a runID and deletes
@@ -103,11 +109,13 @@ func (s *OpenclawService) prunePoseBucketRunsLocked() {
 }
 
 // MarkBroadcastRun marks a runID so the agent's response is broadcast to all channels.
-func (s *OpenclawService) MarkBroadcastRun(runID string) {
+func (s *OpenclawService) MarkBroadcastRun(runID string) (runtimeErr error) {
 	s.broadcastRunsMu.Lock()
 	s.broadcastRuns[runID] = true
 	s.broadcastRunsMu.Unlock()
 	slog.Info("broadcast run marked", "component", "openclaw", "runID", runID)
+
+	return
 }
 
 // ConsumeBroadcastRun checks and removes a broadcast-marked runID. One-shot.

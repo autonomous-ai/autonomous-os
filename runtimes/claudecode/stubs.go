@@ -91,8 +91,10 @@ func (s *ClaudeCodeService) GetConfigJSON() (json.RawMessage, error) {
 
 // StartModelSync — the model registry is fixed (ANTHROPIC_MODEL env, presync-
 // owned). No-op.
-func (s *ClaudeCodeService) StartModelSync(ctx context.Context) {
+func (s *ClaudeCodeService) StartModelSync(ctx context.Context) (runtimeErr error) {
 	<-ctx.Done()
+
+	return
 }
 
 // UpdatePrimaryModel — the model is pinned in .env (ANTHROPIC_MODEL) by
@@ -104,8 +106,10 @@ func (s *ClaudeCodeService) UpdatePrimaryModel(_ string) error {
 }
 
 // StartPrimaryModelWatch — no openclaw.json-style agent config file to watch.
-func (s *ClaudeCodeService) StartPrimaryModelWatch(ctx context.Context) {
+func (s *ClaudeCodeService) StartPrimaryModelWatch(ctx context.Context) (runtimeErr error) {
 	<-ctx.Done()
+
+	return
 }
 
 // GetConfiguredChannel — device config is the source of truth. Prefers

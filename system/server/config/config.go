@@ -144,6 +144,11 @@ type Config struct {
 	LLMAPIKey  string `json:"llm_api_key" yaml:"llmAPIKey" validate:"required"`
 	LLMModel   string `json:"llm_model" yaml:"llmModel" validate:"required"`
 	LLMBaseURL string `json:"llm_base_url" yaml:"llmBaseURL" validate:"required"`
+	// Intern owns a startup snapshot. Remote providers require explicit opt-in;
+	// inherited general LLM settings never enable remote inference by themselves.
+	InternProvider    string `json:"intern_provider,omitempty" yaml:"internProvider"`
+	InternOllamaURL   string `json:"intern_ollama_url,omitempty" yaml:"internOllamaURL"`
+	InternOllamaModel string `json:"intern_ollama_model,omitempty" yaml:"internOllamaModel"`
 
 	// AutonomousDefaults preserves the credential set the device shipped with —
 	// the Autonomous team's proxy. Captured once, the first time an operator
@@ -331,7 +336,7 @@ type Config struct {
 func Load() (*Config, error) {
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
 		d := Default()
-		return &d, fmt.Errorf("config file not found: %s", configPath)
+		return &d, fmt.Errorf("config file not found: %s: %w", configPath, os.ErrNotExist)
 	}
 	data, err := os.ReadFile(configPath)
 	if err != nil {

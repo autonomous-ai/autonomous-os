@@ -47,10 +47,10 @@ func ProvideMCPReconcile(cfg *config.Config, gw domain.AgentGateway) *MCPReconci
 // the runtime is unchanged. Never blocks startup; a transient clone failure leaves
 // the marker un-advanced so the next boot retries.
 func (r *MCPReconcile) Reconcile() {
-	current := r.cfg.AgentRuntime
-	if current == "" {
-		current = domain.AgentRuntimeOpenClaw
+	if domain.IsTextOnlyGateway(r.gw) {
+		return
 	}
+	current := r.gw.Name()
 	if r.cfg.MCPAppliedRuntime == current {
 		return // no switch since MCP was last cloned
 	}

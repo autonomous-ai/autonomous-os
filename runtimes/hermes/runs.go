@@ -12,10 +12,12 @@ import (
 // (X-Hermes-Session-Id header on responses), so the SSE consumer is the usual
 // caller; openclaw-style callers that try to overwrite it are honored but the
 // next response will refresh.
-func (s *HermesService) SetSessionKey(key string) {
+func (s *HermesService) SetSessionKey(key string) (runtimeErr error) {
 	s.sessionUUID.Store(key)
 	slog.Info("session key stored", "component", "hermes", "key", key)
 	flow.Log("session_key_acquired", map[string]any{"key_len": len(key)})
+
+	return
 }
 
 // GetSessionKey returns the Hermes session UUID (from X-Hermes-Session-Id) or "".
@@ -24,11 +26,13 @@ func (s *HermesService) GetSessionKey() string {
 	return v
 }
 
-func (s *HermesService) MarkGuardRun(runID string, snapshotPath string) {
+func (s *HermesService) MarkGuardRun(runID string, snapshotPath string) (runtimeErr error) {
 	s.guardRunsMu.Lock()
 	s.guardRuns[runID] = snapshotPath
 	s.guardRunsMu.Unlock()
 	slog.Info("guard run marked", "component", "hermes", "runID", runID, "snapshot", snapshotPath)
+
+	return
 }
 
 func (s *HermesService) ConsumeGuardRun(runID string) (string, bool) {
@@ -43,7 +47,7 @@ func (s *HermesService) ConsumeGuardRun(runID string) (string, bool) {
 
 const poseBucketRunTTL = 10 * time.Minute
 
-func (s *HermesService) MarkPoseBucketRun(runID string, bucketID string, worstFilenames []string) {
+func (s *HermesService) MarkPoseBucketRun(runID string, bucketID string, worstFilenames []string) (runtimeErr error) {
 	if runID == "" || bucketID == "" {
 		return
 	}
@@ -64,6 +68,8 @@ func (s *HermesService) MarkPoseBucketRun(runID string, bucketID string, worstFi
 	s.poseBucketRunsMu.Unlock()
 	slog.Info("pose bucket run marked",
 		"component", "hermes", "runID", runID, "bucket", bucketID, "worst_count", len(clean))
+
+	return
 }
 
 func (s *HermesService) ConsumePoseBucketRun(runID string) (string, []string, bool) {
@@ -90,11 +96,13 @@ func (s *HermesService) prunePoseBucketRunsLocked() {
 	}
 }
 
-func (s *HermesService) MarkBroadcastRun(runID string) {
+func (s *HermesService) MarkBroadcastRun(runID string) (runtimeErr error) {
 	s.broadcastRunsMu.Lock()
 	s.broadcastRuns[runID] = true
 	s.broadcastRunsMu.Unlock()
 	slog.Info("broadcast run marked", "component", "hermes", "runID", runID)
+
+	return
 }
 
 func (s *HermesService) ConsumeBroadcastRun(runID string) bool {
