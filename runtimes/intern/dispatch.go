@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"go.autonomous.ai/os/system/lib/internbridge"
@@ -38,6 +39,8 @@ type DispatchReceipt struct {
 	Destination string `json:"destination"`
 	Status      string `json:"status"`
 	Delivered   bool   `json:"delivered"`
+	MessageID   string `json:"message_id"`
+	Idempotent  bool   `json:"idempotent"`
 }
 
 // TokenSource is trusted runtime configuration, never request/model input. Its
@@ -64,7 +67,7 @@ func NewServiceDispatcher(cfg DispatchConfig) (ServiceDispatcher, error) {
 	if cfg.Endpoint == "" {
 		cfg.Endpoint = CanonicalAuthorityURL
 	}
-	if cfg.Endpoint != CanonicalAuthorityURL || (cfg.Principal != "fleet-dispatch@dru" && cfg.Principal != "fleet-dispatch@gus" && cfg.Principal != "fleet-dispatch@lab") {
+	if cfg.Endpoint != CanonicalAuthorityURL || cfg.Principal != "intern@gus" {
 		return nil, ErrDispatchConfig
 	}
 	transport := &http.Transport{Proxy: nil, DialContext: (&net.Dialer{Timeout: internbridge.RequestTimeout}).DialContext,
@@ -84,7 +87,7 @@ func dispatcherFromEnvironment() (ServiceDispatcher, error) {
 		TokenSource: func(context.Context) (string, error) { return os.Getenv("GUS_INTERN_DISPATCH_TOKEN"), nil }})
 }
 
-var dispatchRunID = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
+var dispatchRunID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 var bearerToken = regexp.MustCompile(`^[A-Za-z0-9._~+/-]+=*$`)
 
 func (d *substrateDispatcher) Dispatch(ctx context.Context, request internbridge.Request, route internbridge.Result) (*DispatchReceipt, error) {
@@ -93,6 +96,15 @@ func (d *substrateDispatcher) Dispatch(ctx context.Context, request internbridge
 	}
 	if err := internbridge.ValidateServiceDispatch(request); err != nil {
 		return nil, err
+	}
+	intent := route.ReceptionRoute.Intent
+	if !((route.RequestedDestination == "mcavoy@lab" && (intent == "news" || intent == "briefing")) ||
+		(route.RequestedDestination == "pam@gus" && (intent == "notification" || intent == "alarm" || intent == "reminder"))) {
+		return nil, internbridge.ErrProtocol
+	}
+	if len(request.Text) > 2000 || strings.TrimSpace(request.Text) != request.Text ||
+		strings.IndexFunc(request.Text, func(r rune) bool { return !unicode.IsPrint(r) }) >= 0 {
+		return nil, internbridge.ErrInvalidRequest
 	}
 	hash := sha256.Sum256([]byte(request.RunID))
 	if !dispatchRunID.MatchString(request.RunID) || route.RunID != "run-"+hex.EncodeToString(hash[:12]) || route.Kind != "service" || route.Status != "service_route" || route.Destination != internbridge.FirstContact || route.ReceptionRoute.Executed || route.ReceptionRoute.Handoff != route.RequestedDestination {
@@ -113,26 +125,26 @@ func (d *substrateDispatcher) Dispatch(ctx context.Context, request internbridge
 	}
 	// The only task content sent is the admitted input, never model output,
 	// thinking, history, persona memory, or an authority response body.
-	parts := strings.Split(route.RequestedDestination, "@")
 	payload := map[string]any{
-		"task_id": request.RunID, "request_id": request.RunID, "title": "intern service: " + route.RequestedDestination,
-		"task": request.Text, "source": "intern", "classification": "PUBLIC", "dry_run": false,
-		"requirements": map[string]any{"node": parts[1], "roles": []string{parts[0]}, "task_type": "service", "routing_hint_source": "intern-service",
-			"timeout": 20, "max_tokens": 256, "temperature": 0.2},
-	}
-	if request.DataClass == internbridge.Business {
-		payload["classification"] = "INTERNAL"
+		"request_id": request.RunID, "role": d.principal, "node": "gus", "requested_at": time.Now().Unix(),
+		"to_role": route.RequestedDestination,
+		"task": map[string]any{
+			"schema_version": "gus-bus-task/v1", "task_id": request.RunID,
+			"data_zone": request.DataClass, "custody_policy": "business-public-only", "instruction_inert": true,
+			"body": map[string]string{"destination": route.RequestedDestination, "service_intent": intent,
+				"request_text": request.Text, "idempotency_key": request.RunID},
+		},
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, internbridge.ErrInvalidRequest
 	}
-	if bytes.Contains(body, []byte(token)) {
+	if bytes.Contains(body, []byte(token)) || strings.Contains(request.Text, token) {
 		return nil, internbridge.ErrCustodyHold
 	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, d.endpoint+"/dispatch", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, d.endpoint+"/messages/post-task", bytes.NewReader(body))
 	if err != nil {
 		return nil, ErrDispatchConfig
 	}
@@ -174,10 +186,11 @@ func (d *substrateDispatcher) Dispatch(ctx context.Context, request internbridge
 		if decoder.Decode(&value) != nil {
 			return nil, ErrDispatch
 		}
-		// Keep only acknowledgement scalars during validation. Other content
-		// is discarded and cannot enter service results, errors or receipts.
-		if key == "ok" || key == "status" || key == "task_id" || key == "delivered" {
+		switch key {
+		case "ok", "status", "task_id", "delivered", "contract_version", "message_id", "idempotent", "destination":
 			fields[key] = value
+		default:
+			return nil, ErrDispatch
 		}
 	}
 	if _, err := decoder.Token(); err != nil {
@@ -194,8 +207,18 @@ func (d *substrateDispatcher) Dispatch(ctx context.Context, request internbridge
 	if status != "accepted" && status != "queued" {
 		return nil, ErrDispatch
 	}
+	var version, destination, messageID string
+	var idempotent bool
+	messageHash := sha256.Sum256([]byte("bus-message\x00" + d.principal + "\x00" + request.RunID))
+	if json.Unmarshal(fields["contract_version"], &version) != nil || version != "gus.comms/v1" ||
+		json.Unmarshal(fields["destination"], &destination) != nil || destination != route.RequestedDestination ||
+		json.Unmarshal(fields["message_id"], &messageID) != nil || messageID != hex.EncodeToString(messageHash[:8]) ||
+		(string(fields["idempotent"]) != "true" && string(fields["idempotent"]) != "false") ||
+		json.Unmarshal(fields["idempotent"], &idempotent) != nil {
+		return nil, ErrDispatch
+	}
 	if delivered, exists := fields["delivered"]; exists && string(delivered) != "false" {
 		return nil, ErrDispatch
 	}
-	return &DispatchReceipt{RunID: request.RunID, BridgeRunID: route.RunID, TaskID: request.RunID, Destination: route.RequestedDestination, Status: status, Delivered: false}, nil
+	return &DispatchReceipt{RunID: request.RunID, BridgeRunID: route.RunID, TaskID: request.RunID, Destination: route.RequestedDestination, Status: status, Delivered: false, MessageID: messageID, Idempotent: idempotent}, nil
 }

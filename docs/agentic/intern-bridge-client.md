@@ -165,8 +165,8 @@ requires explicit public/business classification before cross-node dispatch.
 
 Runtime opt-in requires both `GUS_INTERN_DISPATCH_TOKEN` and
 `GUS_INTERN_DISPATCH_PRINCIPAL`. The token must be assigned by the Director for
-an authorized existing `fleet-dispatch@dru`, `fleet-dispatch@gus`, or
-`fleet-dispatch@lab` principal. No value is supplied by this change. The optional
+the `intern@gus` principal; fleet-dispatch credentials are rejected. No value
+is supplied by this change. The optional
 `GUS_INTERN_DISPATCH_URL` must exactly match `http://100.115.27.81:7370` (also the
 default). Missing credentials create no default dispatcher and no authority
 network effects; invalid startup configuration also disables dispatch. Removing
@@ -175,32 +175,44 @@ to a provider key, another client's token, keychain lookup, proxy, or redirect.
 `DispatchConfig` injects endpoint, principal and token source for tests/embedding;
 tests replace the private HTTP transport, never relax authority URL validation.
 
-The existing `POST /dispatch` carries Bearer authorization and `X-GUS-Principal`.
-Its JSON contains `task_id`, `request_id` (both the original OS run ID), `title`,
-`task` (only the admitted input), `source=intern`, `classification` (`PUBLIC` or
-`INTERNAL`), `dry_run=false`, and `requirements`. Requirements constrain the exact
-node and service role, with bounded execution controls. There is one request,
+`POST /messages/post-task` carries Bearer authorization and `X-GUS-Principal: intern@gus`.
+Its exact envelope is `request_id` (original OS run ID), `role=intern@gus`,
+`node=gus`, `requested_at` (Unix seconds), `to_role`, and `task`. The task has
+exactly `schema_version=gus-bus-task/v1`, `task_id` (OS run ID),
+`data_zone=public|business`, `custody_policy=business-public-only`,
+`instruction_inert=true`, and `body`. The body contains only `destination`,
+`service_intent`, `request_text` (unchanged admitted input), and `idempotency_key`
+(identical to `request_id`). Only `news|briefing` to `mcavoy@lab` and
+`notification|alarm|reminder` to `pam@gus` are allowed. Text must be printable,
+trimmed UTF-8 within 2,000 bytes. Authority custody/secret screening still applies.
+There is one request,
 no retry, peer fan-out, new queue, or listener. Bridge reasoning/output, persona
 memory and history are never forwarded. Existing final-only bridge validation
 and voice-grant lifetime remain in force; this seam does not attest downstream
 inference behavior or employee delivery.
 
-Only HTTP 200/202 JSON with `ok=true`, matching `task_id`, and `status=accepted`
-or `queued` is acknowledged. Completion/delivery statuses, including
+Only HTTP 200/202 JSON with `ok=true`, `contract_version=gus.comms/v1`, matching
+`task_id` and `destination`, boolean `idempotent`, and `status=accepted|queued`
+is acknowledged. `message_id` must match the authority's first 16 hex digits of
+SHA-256 over `bus-message\0intern@gus\0` plus the request ID. Completion/delivery statuses, including
 `REPORTED_COMPLETE`, are rejected; optional `delivered` must be false. Responses
-are size-bounded, duplicate/trailing JSON is rejected, and authority content is
+are size-bounded, unknown fields and duplicate/trailing JSON are rejected, and authority content is
 discarded. Errors never echo token/source/transport errors or authority bodies.
 No authority output becomes user text. The local result has
 `scope=service_dispatch`, `state=accepted|queued`, and a `dispatch` receipt with
-original `run_id`, `bridge_run_id`, `task_id`, destination, status and
+original `run_id`, `bridge_run_id`, `task_id`, `message_id`, `idempotent`, destination, status and
 `delivered=false`. This is a terminal local acknowledgement, not task completion;
 the usual result TTL applies. Failed authority calls mark remote outcome unknown
 and are never retried automatically.
 
-The inspected authority currently emits `REPORTED_COMPLETE` for successful
-worker execution. That response intentionally fails this stricter contract.
-Director key assignment, acceptance-response compatibility and actual deployment
-remain separate prerequisites. See the [dispatch receipt](../receipts/intern-service-dispatch-2026-09-15.md).
+This depends on unmerged dotfiles PR #35037, not the legacy `/dispatch` execution
+response. Intern-originated completion goes to the existing `orchestration@gus`
+terminal consumer; no Intern result queue is added. Request/task/idempotency IDs
+remain bound; the authority rejects changed payloads under a reused request ID
+(including a changed timestamp). The client does not retry ambiguous outcomes.
+PAM remains disabled and credentials are not provisioned. Dependency merge,
+credential assignment and deployment remain separate prerequisites. See the
+[authority integration receipt](../receipts/intern-authority-2026-09-15.md).
 
 Full gateway integration is blocked by the [runtime contract audit](intern-runtime-contract.md).
 It needs trusted custody propagation, image/session/persona/skill behavior and

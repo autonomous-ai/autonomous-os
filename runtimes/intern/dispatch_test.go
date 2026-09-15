@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"go.autonomous.ai/os/system/lib/internbridge"
 )
@@ -25,7 +26,7 @@ const syntheticDispatchToken = "synthetic-intern-test-only"
 
 func dispatchFixture(t *testing.T, f dispatchTransport) *substrateDispatcher {
 	t.Helper()
-	d, err := NewServiceDispatcher(DispatchConfig{Endpoint: CanonicalAuthorityURL, Principal: "fleet-dispatch@dru", TokenSource: func(context.Context) (string, error) { return syntheticDispatchToken, nil }})
+	d, err := NewServiceDispatcher(DispatchConfig{Endpoint: CanonicalAuthorityURL, Principal: "intern@gus", TokenSource: func(context.Context) (string, error) { return syntheticDispatchToken, nil }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,8 +38,18 @@ func dispatchFixture(t *testing.T, f dispatchTransport) *substrateDispatcher {
 func serviceProposal(destination string) (internbridge.Request, internbridge.Result) {
 	r := internbridge.Request{RunID: "intern-test-1", Text: "public briefing", Operation: internbridge.Reception, DataClass: internbridge.Public}
 	h := sha256.Sum256([]byte(r.RunID))
+	intent := "briefing"
+	if destination == "pam@gus" {
+		intent = "reminder"
+		r.Text = "remind about business report"
+	}
 	return r, internbridge.Result{RunID: "run-" + hex.EncodeToString(h[:12]), Destination: internbridge.FirstContact, RequestedDestination: destination,
-		Kind: "service", Status: "service_route", Output: "Pending service review", ReceptionRoute: internbridge.ReceptionRoute{Handoff: destination}}
+		Kind: "service", Status: "service_route", Output: "Pending service review", ReceptionRoute: internbridge.ReceptionRoute{Handoff: destination, Intent: intent}}
+}
+
+func enqueueAck(id, destination, status string, idempotent bool) string {
+	h := sha256.Sum256([]byte("bus-message\x00intern@gus\x00" + id))
+	return fmt.Sprintf(`{"ok":true,"contract_version":"gus.comms/v1","message_id":%q,"idempotent":%t,"task_id":%q,"destination":%q,"status":%q}`, hex.EncodeToString(h[:8]), idempotent, id, destination, status)
 }
 
 func authorityResponse(code int, body string) *http.Response {
@@ -72,9 +83,160 @@ func TestDispatchCredentialsFailClosed(t *testing.T) {
 
 func TestDispatchCanonicalEndpoint(t *testing.T) {
 	for _, endpoint := range []string{"http://localhost:7370", CanonicalAuthorityURL + "/", CanonicalAuthorityURL + "/dispatch", CanonicalAuthorityURL + "?x=y", "http://user:password@100.115.27.81:7370", "https://100.115.27.81:7370", CanonicalAuthorityURL + "#fragment"} {
-		_, err := NewServiceDispatcher(DispatchConfig{Endpoint: endpoint, Principal: "fleet-dispatch@dru", TokenSource: func(context.Context) (string, error) { t.Fatal("resolved during construction"); return "", nil }})
+		_, err := NewServiceDispatcher(DispatchConfig{Endpoint: endpoint, Principal: "intern@gus", TokenSource: func(context.Context) (string, error) { t.Fatal("resolved during construction"); return "", nil }})
 		if !errors.Is(err, ErrDispatchConfig) {
 			t.Fatal("noncanonical endpoint accepted")
+		}
+	}
+}
+
+func TestDispatchPrincipal(t *testing.T) {
+	for _, principal := range []string{"", "fleet-dispatch@dru", "fleet-dispatch@gus", "fleet-dispatch@lab", "intern@lab", "pam@gus"} {
+		if _, err := NewServiceDispatcher(DispatchConfig{Principal: principal, TokenSource: func(context.Context) (string, error) { return syntheticDispatchToken, nil }}); !errors.Is(err, ErrDispatchConfig) {
+			t.Fatalf("principal %q accepted", principal)
+		}
+	}
+}
+
+func TestDispatchInvalidIDAndEmbeddedToken(t *testing.T) {
+	for _, id := range []string{".leading", "-leading", "_leading", ""} {
+		r, p := serviceProposal("mcavoy@lab")
+		r.RunID = id
+		h := sha256.Sum256([]byte(id))
+		p.RunID = "run-" + hex.EncodeToString(h[:12])
+		d := dispatchFixture(t, func(*http.Request) (*http.Response, error) { t.Fatal("invalid ID sent"); return nil, nil })
+		if got, err := d.Dispatch(context.Background(), r, p); got != nil || !errors.Is(err, internbridge.ErrProtocol) {
+			t.Fatal("invalid ID accepted")
+		}
+	}
+	// A valid bearer value must never be sent as task content.
+	r, p := serviceProposal("mcavoy@lab")
+	r.Text = "briefing synthetic+token"
+	d := dispatchFixture(t, func(*http.Request) (*http.Response, error) { t.Fatal("token sent as content"); return nil, nil })
+	d.tokenSource = func(context.Context) (string, error) { return "synthetic+token", nil }
+	if got, err := d.Dispatch(context.Background(), r, p); got != nil || !errors.Is(err, internbridge.ErrCustodyHold) {
+		t.Fatal("embedded token accepted")
+	}
+}
+
+func TestDispatchServiceProfile(t *testing.T) {
+	for _, destination := range []string{"mcavoy@lab", "pam@gus"} {
+		for _, intent := range []string{"news", "briefing", "notification", "alarm", "reminder", "service", "engineering", ""} {
+			t.Run(destination+"/"+intent, func(t *testing.T) {
+				r, p := serviceProposal(destination)
+				p.ReceptionRoute.Intent = intent
+				valid := (destination == "mcavoy@lab" && (intent == "news" || intent == "briefing")) ||
+					(destination == "pam@gus" && (intent == "notification" || intent == "alarm" || intent == "reminder"))
+				calls := 0
+				d := dispatchFixture(t, func(*http.Request) (*http.Response, error) {
+					calls++
+					return authorityResponse(202, enqueueAck(r.RunID, destination, "queued", true)), nil
+				})
+				got, err := d.Dispatch(context.Background(), r, p)
+				if valid {
+					if err != nil || calls != 1 || got == nil || !got.Idempotent || got.Delivered {
+						t.Fatal("valid idempotent enqueue rejected")
+					}
+				} else if !errors.Is(err, internbridge.ErrProtocol) || got != nil || calls != 0 {
+					t.Fatal("invalid intent reached authority")
+				}
+			})
+		}
+	}
+}
+
+func TestDispatchTextBounds(t *testing.T) {
+	for _, tc := range []struct {
+		text  string
+		valid bool
+	}{
+		{strings.Repeat("a", 2000), true}, {strings.Repeat("é", 1000), true},
+		{strings.Repeat("a", 2001), false}, {strings.Repeat("é", 1001), false},
+		{" briefing", false}, {"briefing ", false}, {"briefing\nnow", false},
+		{"briefing\t", false}, {"briefing\x00", false}, {"briefing\u200b", false},
+		{"briefing\xff", false}, {"", false},
+	} {
+		r, p := serviceProposal("mcavoy@lab")
+		r.Text = tc.text
+		calls := 0
+		d := dispatchFixture(t, func(*http.Request) (*http.Response, error) {
+			calls++
+			return authorityResponse(200, enqueueAck(r.RunID, p.RequestedDestination, "accepted", false)), nil
+		})
+		got, err := d.Dispatch(context.Background(), r, p)
+		if tc.valid && (err != nil || got == nil || calls != 1) || !tc.valid && (err == nil || got != nil || calls != 0) {
+			t.Fatalf("unexpected admission for %d bytes", len(tc.text))
+		}
+	}
+}
+
+func TestDispatchAckContract(t *testing.T) {
+	valid := enqueueAck("intern-test-1", "mcavoy@lab", "queued", false)
+	for _, key := range []string{"ok", "contract_version", "message_id", "idempotent", "task_id", "destination", "status"} {
+		for _, value := range []any{nil, 17, "wrong", true, map[string]any{}} {
+			// true is valid for these boolean fields.
+			if value == true && (key == "ok" || key == "idempotent") {
+				continue
+			}
+			t.Run(key+fmt.Sprintf("/%T/%v", value, value), func(t *testing.T) {
+				var ack map[string]any
+				_ = json.Unmarshal([]byte(valid), &ack)
+				ack[key] = value
+				raw, _ := json.Marshal(ack)
+				assertRejectedAck(t, string(raw))
+				delete(ack, key)
+				raw, _ = json.Marshal(ack)
+				assertRejectedAck(t, string(raw))
+			})
+		}
+	}
+	for _, suffix := range []string{`,"delivered":true}`, `,"delivered":null}`, `,"body":{"extra":true}}`, `,"content":"` + syntheticDispatchToken + `"}`, `,"ok":true}`} {
+		assertRejectedAck(t, strings.TrimSuffix(valid, "}")+suffix)
+	}
+	for _, status := range []string{"REPORTED_COMPLETE", "delivered", "completed"} {
+		assertRejectedAck(t, strings.Replace(valid, `"queued"`, fmt.Sprintf("%q", status), 1))
+	}
+	assertRejectedAck(t, valid+" {}")
+	assertRejectedAck(t, valid+" garbage")
+}
+
+func assertRejectedAck(t *testing.T, body string) {
+	t.Helper()
+	d := dispatchFixture(t, func(*http.Request) (*http.Response, error) { return authorityResponse(200, body), nil })
+	r, p := serviceProposal("mcavoy@lab")
+	if got, err := d.Dispatch(context.Background(), r, p); got != nil || !errors.Is(err, ErrDispatch) || strings.Contains(err.Error(), syntheticDispatchToken) {
+		t.Fatal("unsafe acknowledgement accepted")
+	}
+}
+
+func TestDispatchInFlightCancellationAndLimits(t *testing.T) {
+	r, p := serviceProposal("mcavoy@lab")
+	ctx, cancel := context.WithCancel(context.Background())
+	d := dispatchFixture(t, func(req *http.Request) (*http.Response, error) {
+		deadline, ok := req.Context().Deadline()
+		if !ok || time.Until(deadline) > internbridge.RequestTimeout {
+			t.Fatal("missing timeout")
+		}
+		cancel()
+		<-req.Context().Done()
+		return nil, req.Context().Err()
+	})
+	if got, err := d.Dispatch(ctx, r, p); got != nil || !errors.Is(err, ErrDispatch) {
+		t.Fatal("unsafe canceled outcome")
+	}
+	for _, mutate := range []func(*http.Response){
+		func(resp *http.Response) { resp.Header.Set("Content-Type", "text/plain") },
+		func(resp *http.Response) { resp.Header.Set("Content-Encoding", "gzip") },
+		func(resp *http.Response) { resp.StatusCode = 401 },
+		func(resp *http.Response) { resp.StatusCode = 403 },
+	} {
+		d := dispatchFixture(t, func(*http.Request) (*http.Response, error) {
+			resp := authorityResponse(200, enqueueAck(r.RunID, p.RequestedDestination, "queued", false))
+			mutate(resp)
+			return resp, nil
+		})
+		if got, err := d.Dispatch(context.Background(), r, p); got != nil || !errors.Is(err, ErrDispatch) {
+			t.Fatal("invalid response accepted")
 		}
 	}
 }
@@ -90,32 +252,35 @@ func TestDispatchPayloadHeadersAndReceipt(t *testing.T) {
 			calls := 0
 			d := dispatchFixture(t, func(req *http.Request) (*http.Response, error) {
 				calls++
-				if req.Method != "POST" || req.URL.String() != CanonicalAuthorityURL+"/dispatch" || req.Header.Get("Authorization") != "Bearer "+syntheticDispatchToken || req.Header.Get("X-GUS-Principal") != "fleet-dispatch@dru" || req.Header.Get("Content-Type") != "application/json" {
+				if req.Method != "POST" || req.URL.String() != CanonicalAuthorityURL+"/messages/post-task" || req.Header.Get("Authorization") != "Bearer "+syntheticDispatchToken || req.Header.Get("X-GUS-Principal") != "intern@gus" || req.Header.Get("Content-Type") != "application/json" {
 					t.Error("incorrect request contract")
 				}
 				var body map[string]any
 				if json.NewDecoder(req.Body).Decode(&body) != nil {
 					t.Fatal("bad payload")
 				}
-				class := "PUBLIC"
-				if destination == "pam@gus" {
-					class = "INTERNAL"
-				}
-				if len(body) != 8 || body["task_id"] != r.RunID || body["request_id"] != r.RunID || body["task"] != r.Text || body["classification"] != class || body["dry_run"] != false || body["source"] != "intern" {
+				if len(body) != 6 || body["request_id"] != r.RunID || body["role"] != "intern@gus" || body["node"] != "gus" || body["to_role"] != destination {
 					t.Error("incorrect payload fields")
 				}
-				requirements := body["requirements"].(map[string]any)
-				parts := strings.Split(destination, "@")
-				if requirements["node"] != parts[1] || requirements["roles"].([]any)[0] != parts[0] {
-					t.Error("incorrect authority routing constraint")
+				stamp := body["requested_at"].(float64)
+				if stamp != float64(int64(stamp)) || time.Now().Unix()-int64(stamp) > 2 {
+					t.Error("incorrect request timestamp")
 				}
-				return authorityResponse(200, fmt.Sprintf(`{"ok":true,"status":"accepted","task_id":%q,"content":%q}`, r.RunID, syntheticDispatchToken)), nil
+				task := body["task"].(map[string]any)
+				if len(task) != 6 || task["schema_version"] != "gus-bus-task/v1" || task["task_id"] != r.RunID || task["data_zone"] != string(r.DataClass) || task["custody_policy"] != "business-public-only" || task["instruction_inert"] != true {
+					t.Error("incorrect task contract")
+				}
+				content := task["body"].(map[string]any)
+				if len(content) != 4 || content["destination"] != destination || content["service_intent"] != p.ReceptionRoute.Intent || content["request_text"] != r.Text || content["idempotency_key"] != body["request_id"] {
+					t.Error("incorrect service body")
+				}
+				return authorityResponse(200, enqueueAck(r.RunID, destination, "accepted", false)), nil
 			})
 			got, err := d.Dispatch(context.Background(), r, p)
 			if err != nil || got == nil {
 				t.Fatal("valid authority result rejected")
 			}
-			if calls != 1 || got.RunID != r.RunID || got.TaskID != r.RunID || got.BridgeRunID != p.RunID || got.Delivered || got.Status != "accepted" {
+			if calls != 1 || got.RunID != r.RunID || got.TaskID != r.RunID || got.BridgeRunID != p.RunID || got.Delivered || got.Status != "accepted" || got.MessageID == "" || got.Idempotent {
 				t.Fatal("incorrect receipt")
 			}
 			raw, _ := json.Marshal(got)
@@ -202,7 +367,7 @@ func TestDispatchRuntimeConfigurationAndCancellation(t *testing.T) {
 	if New().dispatcher != nil {
 		t.Fatal("invalid principal enabled default dispatcher")
 	}
-	t.Setenv("GUS_INTERN_DISPATCH_PRINCIPAL", "fleet-dispatch@dru")
+	t.Setenv("GUS_INTERN_DISPATCH_PRINCIPAL", "intern@gus")
 	t.Setenv("GUS_INTERN_DISPATCH_URL", "http://127.0.0.1:7370")
 	if New().dispatcher != nil {
 		t.Fatal("invalid URL enabled default dispatcher")
@@ -261,6 +426,11 @@ func TestServiceDispatchIntegration(t *testing.T) {
 						body["kind"] = "service"
 						body["status"] = "service_route"
 						body["reception_route"].(map[string]any)["handoff"] = destination
+						intent := "briefing"
+						if destination == "pam@gus" {
+							intent = "reminder"
+						}
+						body["reception_route"].(map[string]any)["intent"] = intent
 					}
 					w.Header().Set("Content-Type", "application/json")
 					_ = json.NewEncoder(w).Encode(body)
@@ -271,7 +441,7 @@ func TestServiceDispatchIntegration(t *testing.T) {
 						calls.Add(1)
 						var body map[string]any
 						_ = json.NewDecoder(r.Body).Decode(&body)
-						return authorityResponse(202, fmt.Sprintf(`{"ok":true,"status":"queued","task_id":%q}`, body["task_id"])), nil
+						return authorityResponse(202, enqueueAck(body["request_id"].(string), destination, "queued", false)), nil
 					})
 				}
 				startWorker(t, s)

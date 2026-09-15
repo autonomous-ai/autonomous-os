@@ -136,8 +136,8 @@ cầu điều khiển nhà bị giữ custody. Unknown chỉ được tiếp nh�
 phân loại public/business rõ ràng trước khi gửi sang authority.
 
 Bật runtime cần cả `GUS_INTERN_DISPATCH_TOKEN` và
-`GUS_INTERN_DISPATCH_PRINCIPAL`, với khóa do Director cấp cho principal hiện có
-`fleet-dispatch@dru`, `fleet-dispatch@gus` hoặc `fleet-dispatch@lab`. Thay đổi
+`GUS_INTERN_DISPATCH_PRINCIPAL`, với khóa do Director cấp cho `intern@gus`;
+từ chối principal fleet-dispatch. Thay đổi
 này không cấp khóa. `GUS_INTERN_DISPATCH_URL` tùy chọn phải khớp chính xác
 `http://100.115.27.81:7370`, cũng là mặc định. Thiếu khóa hoặc cấu hình sai
 không tạo dispatcher mặc định, không gọi mạng authority. Xóa token sau khi
@@ -145,27 +145,37 @@ khởi tạo cũng chặn trước khi gửi. Không lấy khóa provider, khóa
 keychain, proxy hoặc redirect làm dự phòng. `DispatchConfig` cho phép inject
 endpoint/principal/token source; test thay transport riêng, không nới URL.
 
-`POST /dispatch` hiện có dùng Bearer và `X-GUS-Principal`. JSON gồm `task_id`
-và `request_id` bằng OS run ID gốc, `title`, `task` chỉ chứa input đã được duyệt,
-`source=intern`, `classification=PUBLIC|INTERNAL`, `dry_run=false`, và
-`requirements` ràng buộc node/role service cùng giới hạn thực thi. Chỉ một
+`POST /messages/post-task` dùng Bearer và `X-GUS-Principal: intern@gus`.
+Envelope chỉ gồm `request_id` (OS run ID), `role=intern@gus`, `node=gus`,
+`requested_at` (giây Unix), `to_role`, `task`. Task chỉ có
+`schema_version=gus-bus-task/v1`, `task_id` (OS run ID), `data_zone=public|business`,
+`custody_policy=business-public-only`, `instruction_inert=true`, `body`.
+Body chỉ gồm `destination`, `service_intent`, `request_text` (input giữ nguyên),
+`idempotency_key` bằng `request_id`. Chỉ cho phép `news|briefing` tới `mcavoy@lab`
+và `notification|alarm|reminder` tới `pam@gus`. Text UTF-8 phải in được, không
+có khoảng trắng đầu/cuối và tối đa 2.000 byte. Authority vẫn kiểm tra custody/secret. Chỉ một
 request, không retry, fan-out ngang hàng, queue hoặc listener mới. Không gửi
 output/reasoning bridge, lịch sử hoặc bộ nhớ persona. Giữ kiểm tra final-only
 và thời hạn voice grant; không chứng thực inference phía sau hoặc giao việc.
 
-Chỉ chấp nhận HTTP 200/202 JSON với `ok=true`, `task_id` khớp và
-`status=accepted|queued`. Từ chối completion/delivery kể cả `REPORTED_COMPLETE`;
+Chỉ chấp nhận HTTP 200/202 JSON với `ok=true`, `contract_version=gus.comms/v1`,
+`task_id` và `destination` khớp, `idempotent` boolean, `status=accepted|queued`.
+`message_id` phải bằng 16 ký tự hex đầu của SHA-256 trên
+`bus-message\0intern@gus\0` cộng request ID theo authority.
+Từ chối completion/delivery kể cả `REPORTED_COMPLETE`;
 `delivered` nếu có phải là false. Giới hạn kích thước, từ chối khóa JSON trùng
-và JSON dư. Nội dung authority bị bỏ, không đưa vào kết quả, lỗi hoặc receipt.
+và JSON dư; từ chối field lạ. Nội dung authority bị bỏ, không đưa vào kết quả, lỗi hoặc receipt.
 Lỗi không chứa khóa, lỗi token source/transport hoặc response body.
 Kết quả cục bộ có `scope=service_dispatch`, `state=accepted|queued`, receipt
-`dispatch` giữ `run_id`, `bridge_run_id`, `task_id`, đích, status và
+`dispatch` giữ `run_id`, `bridge_run_id`, `task_id`, `message_id`, `idempotent`, đích, status và
 `delivered=false`. Đây là xác nhận cục bộ kết thúc, không phải hoàn tất tác vụ;
 TTL kết quả không đổi. Lỗi authority đánh dấu remote outcome unknown, không
-tự retry. Mã authority đã kiểm tra hiện trả `REPORTED_COMPLETE` khi worker
-báo thành công, nên sẽ bị hợp đồng nghiêm ngặt này từ chối. Cấp khóa, kiểm tra
-response tương thích và triển khai vẫn chờ Director. Xem
-[biên bản dispatch](../../receipts/intern-service-dispatch-2026-09-15.md).
+tự retry. Phụ thuộc dotfiles PR #35037 chưa merge, không dùng `/dispatch` cũ.
+Completion từ Intern đi qua terminal consumer `orchestration@gus` hiện có;
+không thêm result queue. Request/task/idempotency ID được ràng buộc; authority
+từ chối tái sử dụng request ID với payload thay đổi, kể cả timestamp.
+Không bật PAM hoặc cấp credentials. Merge dependency, cấp khóa và triển khai
+là các bước riêng. Xem [biên bản tích hợp authority](../../receipts/intern-authority-2026-09-15.md).
 
 Gateway đầy đủ còn bị chặn theo [kiểm toán hợp đồng runtime](intern-runtime-contract_vi.md):
 custody xuyên suốt, ảnh/session/persona/skill và activation/configuration có
