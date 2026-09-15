@@ -1,23 +1,53 @@
 # Intern Welcome Desk runtime
 
-## Voice integration status — 2026-09-14
+## Voice admission — 2026-09-15
 
 The custom `intern` runtime cannot currently serve the device microphone or
 speak its replies. The `intern-v2` hardware declaration does not enable those
 paths in this runtime. Do not treat successful administrator chat, bridge
 generation, or the readiness flag as voice readiness.
 
-The missing contract is trusted admission of the **exact voice payload**:
-which existing authority classifies it as public/business, how that decision
-is bound to the transcript, and whether any speaker/context additions are
-admitted. HAL's wake-word result and loopback origin establish neither data
-classification nor that authority. The bridge rejects unknown, restricted,
-and secret inputs even for local inference. Labeling every wake-admitted
-transcript public/business would weaken the existing provider boundary.
+Microphone-derived text has a separate, default-disabled admission endpoint.
+The existing signed administrator session is the authority. An administrator
+must grant that session and classify each exact transcript; no automatic
+speaker authentication or semantic privacy classifier is claimed. “Gus” and
+other wake/address metadata never grant trust or supply classification.
 
-The implementation stopped at this contract boundary without enabling a
-partial voice path. See the [voice integration receipt](../receipts/intern-voice-contract-2026-09-14.md)
-for current file evidence, remaining integration work, and verification.
+All voice requests require `Authorization: Bearer <existing signed admin session>`
+and the existing direct administrator admission checks (no Origin or query).
+The legacy provider-key bearer and ambient cookies cannot grant voice access.
+No login, credential provisioning or new authentication store is introduced.
+
+1. `POST /api/agent/intern/voice/grant` with
+   `{"expires_in_seconds":300,"admission":"administrator_grants_voice_session"}`.
+   Expiry is mandatory, 1–300 seconds, capped by the signed session expiry.
+2. `POST /api/agent/intern/voice/chat` using the same session and the exact
+   `text`, `operation`, `data_class`, and `admission` fields documented below.
+   Only explicitly classified public/business transcripts enter the queue.
+3. `DELETE /api/agent/intern/voice/grant` disables the grant. Any valid signed
+   administrator session can revoke it. Poll the existing result endpoint.
+
+There is one in-memory grant per router lifetime. Replacing it cancels its old
+work. Only the session fingerprint and cancellation/deadline state are retained;
+neither a session token nor transcripts enter the grant. Other session tokens
+and fresh routers inherit no permission. Existing stateless session tokens
+identify a bearer, not a speaker or person; sessions issued with the same expiry
+have identical tokens under the existing single-admin authentication design.
+Results retain the existing administrator-wide access and bounded retention.
+
+Expiry/revocation prevents queued voice work from reaching the bridge and
+cancels an in-flight HTTP wait. Already-sent work reports an unknown remote
+outcome on cancellation; this cannot undo inference already performed. Restart
+starts disabled. Grants do not classify subsequent inputs implicitly, append
+speaker/context data, enable sensing/HAL/TTS, or change provider selection.
+Authenticated typed chat remains its existing per-body admission surface;
+callers must send microphone-derived text through the voice endpoint. The server
+cannot infer a transcript's physical origin from arbitrary text submitted by a
+trusted administrator. No untrusted microphone producer is wired in this slice.
+
+See the [grant verification receipt](../receipts/intern-voice-grant-2026-09-15.md).
+The [earlier blocker receipt](../receipts/intern-voice-contract-2026-09-14.md)
+remains historical evidence for the still-unwired device microphone/TTS path.
 
 `intern` is an explicitly selected, externally owned, text-only runtime. It is
 not a device brain and does not install, start, stop, or fall back to OpenClaw,

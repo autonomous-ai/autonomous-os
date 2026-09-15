@@ -32,7 +32,24 @@ var (
 // Admission contains exactly the text and classification approved by a trusted
 // caller. No context, identity, attachments or history may be appended later.
 // The zero value is invalid. This is a Go API trust boundary, not authentication.
-type Admission struct{ request internbridge.Request }
+type Admission struct {
+	request internbridge.Request
+	voice   context.Context
+}
+
+// AdmitTrustedVoiceRequest retains the authenticated grant lifetime across the
+// queue. The caller must classify the exact transcript just as for typed text.
+func AdmitTrustedVoiceRequest(ctx context.Context, r internbridge.Request) (Admission, error) {
+	if ctx == nil || ctx.Err() != nil {
+		return Admission{}, internbridge.ErrNeedsClassification
+	}
+	if _, bounded := ctx.Deadline(); !bounded {
+		return Admission{}, internbridge.ErrNeedsClassification
+	}
+	a, err := AdmitTrustedRequest(r)
+	a.voice = ctx
+	return a, err
+}
 
 // AdmitTrustedRequest must only be called by a trusted classifier. The HTTP
 // integration requires an authenticated administrator's explicit per-input
@@ -66,6 +83,7 @@ type job struct {
 	id       string
 	request  internbridge.Request
 	deadline time.Time
+	voice    context.Context
 }
 
 type Service struct {
@@ -177,6 +195,9 @@ func (*Service) NextChatRunID() (string, string) {
 // Result using the returned OS run ID; internbridge verifies the hashed wire ID.
 // The deadline includes queue time. Full queues reject without network effects.
 func (s *Service) Submit(a Admission) (string, error) {
+	if a.voice != nil && a.voice.Err() != nil {
+		return "", internbridge.ErrNeedsClassification
+	}
 	if err := internbridge.ValidateRequest(a.request); err != nil {
 		return "", err
 	}
@@ -193,7 +214,7 @@ func (s *Service) Submit(a Admission) (string, error) {
 	r := a.request
 	r.RunID = id
 	s.results[id] = entry{turn: Turn{RunID: id, State: "queued", Scope: "bridge_request"}}
-	s.queue = append(s.queue, job{id: id, request: r, deadline: time.Now().Add(internbridge.RequestTimeout)})
+	s.queue = append(s.queue, job{id: id, request: r, deadline: time.Now().Add(internbridge.RequestTimeout), voice: a.voice})
 	s.DrainPendingEvents()
 	return id, nil
 }
@@ -292,10 +313,28 @@ func (s *Service) StartWS(ctx context.Context, _ domain.AgentEventHandler) {
 		s.results[j.id] = e
 		s.mu.Unlock()
 		callCtx, cancel := context.WithDeadline(ctx, j.deadline)
-		result, err := s.client.Do(callCtx, j.request)
+		stopVoice := func() bool { return false }
+		if j.voice != nil {
+			// Enforce expiry synchronously as well as propagating revocation.
+			if deadline, ok := j.voice.Deadline(); ok && deadline.Before(j.deadline) {
+				cancel()
+				callCtx, cancel = context.WithDeadline(ctx, deadline)
+			}
+			stopVoice = context.AfterFunc(j.voice, cancel)
+		}
+		var result *internbridge.Result
+		var err error
+		sent := false
+		if j.voice != nil && j.voice.Err() != nil {
+			err = internbridge.ErrCanceled
+		} else {
+			sent = true
+			result, err = s.client.Do(callCtx, j.request)
+		}
+		stopVoice()
 		cancel()
 		s.mu.Lock()
-		s.finishLocked(j.id, result, err, true)
+		s.finishLocked(j.id, result, err, sent)
 		s.busy = false
 		if err == nil {
 			s.version = internbridge.Version

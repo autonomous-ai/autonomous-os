@@ -65,9 +65,17 @@ func newInternServer(cfg *config.Config) *Server {
 // Existing administrator sessions authenticate classifications and result reads;
 // no bridge credentials are loaded or forwarded. No body/query logging.
 func (s *Server) internRouter() *gin.Engine {
+	return s.internRouterContext(context.Background())
+}
+
+func (s *Server) internRouterContext(ctx context.Context) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
 	api := r.Group("/api", s.internAdmin())
+	voice := &internVoiceGate{lifetime: ctx}
+	api.POST("/agent/intern/voice/grant", s.internVoiceGrant(voice))
+	api.DELETE("/agent/intern/voice/grant", s.internVoiceRevoke(voice))
+	api.POST("/agent/intern/voice/chat", s.internVoiceChat(voice))
 	api.POST("/agent/intern/chat", s.internChat)
 	api.GET("/agent/intern/result/:runID", s.internResult)
 	api.GET("/agent/status", func(c *gin.Context) {
@@ -272,7 +280,7 @@ func (s *Server) runIntern(parent context.Context) error {
 			return err
 		}
 	}
-	srv := &http.Server{Addr: fmt.Sprintf("127.0.0.1:%d", s.config.HttpPort), Handler: s.internRouter(),
+	srv := &http.Server{Addr: fmt.Sprintf("127.0.0.1:%d", s.config.HttpPort), Handler: s.internRouterContext(ctx),
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 8192}
 	serverDone := make(chan error, 1)
 	go func() { serverDone <- srv.Serve(listener) }()

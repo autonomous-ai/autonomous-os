@@ -1,23 +1,49 @@
 # Runtime Welcome Desk Intern
 
-## Trạng thái tích hợp giọng nói — 2026-09-14
+## Chấp thuận giọng nói — 2026-09-15
 
 Runtime `intern` tùy chỉnh hiện chưa nhận đầu vào từ micro thiết bị hoặc đọc
 phản hồi. Khai báo phần cứng `intern-v2` không bật các đường xử lý này trong
 runtime. Chat quản trị, sinh văn bản qua bridge và cờ readiness không chứng
 minh đường giọng nói đã sẵn sàng.
 
-Hợp đồng còn thiếu là chấp thuận **chính xác payload giọng nói**: thẩm quyền
-nào phân loại nội dung public/business, quyết định gắn với bản chép lời như
-thế nào, và dữ liệu người nói/ngữ cảnh bổ sung có được chấp thuận hay không.
-Kết quả wake-word của HAL và nguồn loopback không xác lập thẩm quyền phân
-loại dữ liệu. Bridge từ chối dữ liệu unknown, restricted và secret kể cả khi
-suy luận cục bộ. Tự gán public/business cho mọi bản chép lời sau wake-word
-sẽ làm yếu ranh giới provider hiện có.
+Văn bản từ micro có endpoint riêng, mặc định bị vô hiệu hóa. Phiên quản trị
+đã ký hiện có là thẩm quyền: quản trị viên phải cấp quyền cho phiên và phân
+loại chính xác từng bản chép lời. Không có xác thực người nói hoặc bộ phân loại
+riêng tư tự động. Wake-word “Gus” không cấp quyền hay xác định phân loại.
 
-Đã dừng tại ranh giới hợp đồng này, chưa bật đường giọng nói một phần. Xem
-[biên nhận tích hợp giọng nói](../../receipts/intern-voice-contract-2026-09-14.md)
-để biết bằng chứng trong mã nguồn, công việc còn lại và kết quả kiểm tra.
+Mọi yêu cầu giọng nói cần `Authorization: Bearer <phiên quản trị đã ký>` và
+kiểm tra quản trị trực tiếp hiện có (không Origin hoặc query). Bearer khóa
+provider và cookie tự đính kèm không cấp quyền giọng nói. Không thêm đăng nhập,
+cấp thông tin xác thực hoặc kho xác thực mới.
+
+1. `POST /api/agent/intern/voice/grant` với
+   `{"expires_in_seconds":300,"admission":"administrator_grants_voice_session"}`.
+   Thời hạn bắt buộc 1–300 giây và không vượt thời hạn phiên đã ký.
+2. `POST /api/agent/intern/voice/chat` với cùng phiên và các trường `text`,
+   `operation`, `data_class`, `admission` được mô tả bên dưới. Chỉ bản chép lời
+   đã được phân loại rõ ràng public/business mới vào hàng đợi.
+3. `DELETE /api/agent/intern/voice/grant` thu hồi quyền; bất kỳ phiên quản trị
+   đã ký hợp lệ nào cũng có thể thu hồi. Đọc kết quả qua endpoint hiện có.
+
+Chỉ có một quyền trong bộ nhớ cho mỗi vòng đời router. Cấp quyền mới hủy công
+việc của quyền cũ. Chỉ lưu dấu vân tay phiên và trạng thái hủy/thời hạn, không
+lưu token hay bản chép lời trong quyền. Token khác và router mới không thừa
+hưởng quyền. Token phiên không định danh người nói: theo thiết kế quản trị
+đơn người dùng hiện có, các phiên cùng thời hạn có token giống nhau. Kết quả
+vẫn dùng quyền đọc chung của quản trị viên và thời hạn lưu hiện có.
+
+Hết hạn hoặc thu hồi ngăn công việc đang chờ gọi bridge và hủy chờ HTTP đang
+chạy. Nếu đã gửi yêu cầu, kết quả từ xa được đánh dấu chưa biết; không thể hoàn
+tác suy luận đã thực hiện. Khởi động lại luôn tắt quyền. Quyền không tự phân
+loại đầu vào sau đó, thêm ngữ cảnh/người nói, bật sensing/HAL/TTS hoặc đổi
+provider. Chat nhập tay vẫn dùng chấp thuận từng nội dung như trước. Bên gọi
+phải gửi văn bản từ micro qua endpoint giọng nói; server không thể suy ra nguồn
+vật lý của văn bản do quản trị viên tin cậy gửi. Chưa nối bộ thu micro không tin cậy.
+
+Xem [biên nhận kiểm tra quyền](../../receipts/intern-voice-grant-2026-09-15.md).
+[Biên nhận blocker trước](../../receipts/intern-voice-contract-2026-09-14.md)
+là bằng chứng lịch sử cho đường micro/TTS thiết bị vẫn chưa được nối.
 
 `intern` là runtime chỉ xử lý văn bản, do bên ngoài sở hữu và chỉ được kích
 hoạt khi chọn rõ ràng. Đây không phải bộ não điều khiển thiết bị; nó không cài
