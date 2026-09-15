@@ -282,9 +282,7 @@ motor. Cấu hình được đọc lúc khởi động; sửa xong phải restar
 Thiếu file, thiếu entry board, hoặc `"enabled": false` thì bỏ qua MPR121 và
 giữ các handler GPIO/TTP223 hiện có. Không có bus MPR121 cũ để fallback.
 Cấu hình bật nhưng sai bị từ chối khi startup; chế độ mô phỏng bỏ qua phần cứng.
-Nếu thiếu `/dev/i2c-0`, khởi tạo log lỗi và MPR121 không hoạt động, còn
-GPIO/TTP223 tiếp tục chạy. Sửa `bus` nếu wiring đã xác minh dùng controller
-khác, rồi restart HAL.
+Nếu bus I²C đã cấu hình không tồn tại hoặc sensor không phản hồi ACK, khởi tạo ghi `MPR121 event=unavailable` ở mức WARNING kèm bus, address và errno, không có traceback. MPR121 không hoạt động nhưng GPIO/TTP223 vẫn chạy; không khởi chạy worker touch và đóng bus đã mở. Lỗi quyền truy cập và lỗi bất thường vẫn giữ traceback mức ERROR. Không đổi `enabled` hay tự retry. Kiểm tra bus và wiring, sửa `bus` nếu cần rồi restart HAL.
 
 Sau khởi tạo, driver chờ cảm biến ổn định 100 ms trước khi đọc trạng thái
 chạm ban đầu, rồi poll mỗi 10 ms theo mặc định. Chuyển trạng thái chạm và

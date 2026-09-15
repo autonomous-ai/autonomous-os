@@ -5,6 +5,7 @@ mpr121_opi_test.py. Only the device-declared bus/address is accessed.
 """
 
 import ctypes
+import errno
 import logging
 import os
 import queue
@@ -480,8 +481,19 @@ class MPR121Handler:
             self._poll_thread = threading.Thread(target=self._poll, daemon=True, name="mpr121-poll")
             self._action_thread.start()
             self._poll_thread.start()
-        except Exception:
-            logger.exception("MPR121 event=start_failed")
+        except Exception as exc:
+            # Optional hardware may be declared before it is installed. Keep
+            # permission, configuration and unexpected failures diagnosable.
+            # Linux reports a non-acknowledging I2C slave as ENXIO or EREMOTEIO.
+            if isinstance(exc, OSError) and exc.errno in {
+                errno.ENOENT, errno.ENODEV, errno.ENXIO, 121,  # Linux EREMOTEIO
+            }:
+                logger.warning(
+                    "MPR121 event=unavailable bus=%d address=0x%02x errno=%d reason=%s; check I2C bus and wiring, then restart HAL",
+                    self._config.bus, self._config.address, exc.errno, exc,
+                )
+            else:
+                logger.exception("MPR121 event=start_failed")
             self._stop.set()
             if self._hold_led is not None:
                 self._hold_led.stop()

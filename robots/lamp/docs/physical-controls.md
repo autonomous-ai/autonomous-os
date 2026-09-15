@@ -290,9 +290,7 @@ and motor noise. Configuration is loaded at boot; restart HAL after changes.
 A missing file or board entry, or `"enabled": false`, skips MPR121 and retains
 the existing GPIO/TTP223 handlers. There is no legacy MPR121 bus fallback.
 Malformed enabled configuration rejects startup; simulation skips the hardware.
-If `/dev/i2c-0` is missing, initialization logs the failure and MPR121 remains
-unavailable while GPIO/TTP223 continue. Change `bus` if verified wiring uses
-a different controller, then restart HAL.
+If the configured I²C bus is missing or the sensor does not acknowledge, initialization logs `MPR121 event=unavailable` at WARNING level with bus, address and errno, without a traceback. MPR121 remains unavailable while GPIO/TTP223 continue; no touch workers start and any opened bus is closed. Permission errors and unexpected failures retain ERROR tracebacks. This does not change `enabled` or automatically retry. Check bus availability and wiring, correct `bus` if needed, then restart HAL.
 
 After initialization, the driver allows 100 ms for sensing to settle before
 reading the initial touch state, then polls every 10 ms by default. Touch and
