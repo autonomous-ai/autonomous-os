@@ -78,7 +78,7 @@ func (s *ClaudeCodeService) SetBusy(busy bool) {
 	}
 }
 
-func (s *ClaudeCodeService) QueuePendingEvent(eventType, msg string, images []string, fixedRunID string) {
+func (s *ClaudeCodeService) QueuePendingEvent(eventType, msg string, images []string, fixedRunID string) (runtimeErr error) {
 	now := time.Now()
 	curUser := mood.CurrentUser()
 	if curUser == "" {
@@ -94,6 +94,8 @@ func (s *ClaudeCodeService) QueuePendingEvent(eventType, msg string, images []st
 		Summary: "[" + eventType + "] " + msg,
 		Detail:  map[string]any{"type": eventType, "reason": "agent_busy"},
 	})
+
+	return
 }
 
 // drainPendingEvents replays buffered sensing events. Behaviour matches the

@@ -80,7 +80,7 @@ func (s *OpenclawService) SyncModelsFromAPI() (bool, error) {
 // tick is wrapped in panic recovery so a third-party JSON parser regression
 // can't kill the loop. A failed sync logs and continues — the device must
 // keep running.
-func (s *OpenclawService) StartModelSync(ctx context.Context) {
+func (s *OpenclawService) StartModelSync(ctx context.Context) (runtimeErr error) {
 	defer func() {
 		if r := recover(); r != nil {
 			slog.Error("[modelsync] PANIC recovered, sync loop stopped", "panic", r)
@@ -109,6 +109,7 @@ func (s *OpenclawService) StartModelSync(ctx context.Context) {
 			tick()
 		}
 	}
+
 }
 
 // FetchModelsFromAPI does the actual HTTP GET against ModelsAPIURL (tunables.go)

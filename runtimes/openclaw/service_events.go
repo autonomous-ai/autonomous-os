@@ -72,7 +72,7 @@ func (s *OpenclawService) SetBusy(busy bool) {
 
 // QueuePendingEvent buffers a sensing event to replay when the agent becomes idle.
 // All events are appended — motion/presence must not be missed.
-func (s *OpenclawService) QueuePendingEvent(eventType, msg string, images []string, fixedRunID string) {
+func (s *OpenclawService) QueuePendingEvent(eventType, msg string, images []string, fixedRunID string) (runtimeErr error) {
 	now := time.Now()
 	curUser := mood.CurrentUser()
 	if curUser == "" {
@@ -91,6 +91,8 @@ func (s *OpenclawService) QueuePendingEvent(eventType, msg string, images []stri
 		Summary: "[" + eventType + "] " + msg,
 		Detail:  map[string]any{"type": eventType, "reason": "agent_busy"},
 	})
+
+	return
 }
 
 // drainPendingEvents replays all buffered sensing events in order and clears the buffer.

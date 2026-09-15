@@ -23,7 +23,10 @@ type queuedVoiceGateway struct {
 func (g *queuedVoiceGateway) NextChatRunID() (string, string) {
 	return "request-voice", "queued-voice-run"
 }
-func (g *queuedVoiceGateway) QueuePendingEvent(_, _ string, _ []string, run string) { g.fixedRun = run }
+func (g *queuedVoiceGateway) QueuePendingEvent(_, _ string, _ []string, run string) (runtimeErr error) {
+	g.fixedRun = run
+	return
+}
 
 func TestVoiceTaskMetricSurvivesMissingHALAndQueuedReplay(t *testing.T) {
 	gin.SetMode(gin.TestMode)

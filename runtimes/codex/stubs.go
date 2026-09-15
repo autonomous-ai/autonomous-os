@@ -76,8 +76,10 @@ func (s *CodexService) GetConfigJSON() (json.RawMessage, error) {
 // auto-updates the codex-home skills ($CODEX_HOME/skills) from the CDN (capability-gated), mirroring openclaw.
 
 // StartModelSync — model registry is owned by Codex. No-op.
-func (s *CodexService) StartModelSync(ctx context.Context) {
+func (s *CodexService) StartModelSync(ctx context.Context) (runtimeErr error) {
 	<-ctx.Done()
+
+	return
 }
 
 // UpdatePrimaryModel — the Codex model is pinned in config.toml by presync
@@ -88,8 +90,10 @@ func (s *CodexService) UpdatePrimaryModel(_ string) error {
 }
 
 // StartPrimaryModelWatch — no agent-side config file to watch.
-func (s *CodexService) StartPrimaryModelWatch(ctx context.Context) {
+func (s *CodexService) StartPrimaryModelWatch(ctx context.Context) (runtimeErr error) {
 	<-ctx.Done()
+
+	return
 }
 
 // GetConfiguredChannel — Device config is the source of truth under Codex.

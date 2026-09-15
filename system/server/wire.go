@@ -27,7 +27,7 @@ import (
 	"go.autonomous.ai/os/system/statusled"
 )
 
-func InitializeServer() (*Server, error) {
+func initializeDeviceServer() (*Server, error) {
 	panic(wire.Build(
 		config.ProviderSet,
 		mqtt.ProviderSet,

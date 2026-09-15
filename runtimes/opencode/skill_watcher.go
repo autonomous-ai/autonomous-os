@@ -21,7 +21,7 @@ const skillWatchInterval = 5 * time.Minute
 // system/skills; this file holds only the opencode-specific loop, target dir, and
 // notify. Capability-gated so a CDN version bump never re-adds a skill this device
 // type does not support.
-func (s *OpenCodeService) StartSkillWatcher(ctx context.Context) {
+func (s *OpenCodeService) StartSkillWatcher(ctx context.Context) (runtimeErr error) {
 	slog.Info("skill watcher started", "component", "skill-watcher", "backend", "OpenCode", "interval", skillWatchInterval)
 
 	// Seed last known versions so the first poll doesn't re-notify.
@@ -74,6 +74,7 @@ func (s *OpenCodeService) StartSkillWatcher(ctx context.Context) {
 			s.notifySkillChanges(result.changed)
 		}
 	}
+
 }
 
 // downloadSkills refreshes every skill supported by this device from the CDN.

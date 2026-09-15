@@ -30,7 +30,7 @@ func identityPath() string {
 // WatchIdentity polls IDENTITY.md in the Claude Code workspace and pushes updated wake
 // words to HAL whenever the agent's name changes (e.g. the user says "call yourself
 // Noah"). Mirrors openclaw.WatchIdentity.
-func (s *ClaudeCodeService) WatchIdentity(ctx context.Context) {
+func (s *ClaudeCodeService) WatchIdentity(ctx context.Context) (runtimeErr error) {
 	path := identityPath()
 	var lastName string
 	for {
@@ -53,6 +53,7 @@ func (s *ClaudeCodeService) WatchIdentity(ctx context.Context) {
 		hal.SetVoiceConfig(words)
 		i18n.SetDeviceName(name) // {name}/{Name} + chitchat strip follow the agent name too
 	}
+
 }
 
 // UpdateIdentityName rewrites the `**Name:**` line in workspace/IDENTITY.md so

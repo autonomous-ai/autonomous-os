@@ -2,10 +2,12 @@ package agent
 
 import (
 	"log/slog"
+	"strings"
 
 	"go.autonomous.ai/os/runtimes/claudecode"
 	"go.autonomous.ai/os/runtimes/codex"
 	"go.autonomous.ai/os/runtimes/hermes"
+	"go.autonomous.ai/os/runtimes/intern"
 	"go.autonomous.ai/os/runtimes/openclaw"
 	"go.autonomous.ai/os/runtimes/opencode"
 	"go.autonomous.ai/os/runtimes/picoclaw"
@@ -29,6 +31,7 @@ import (
 // property of the runtime, not an independent knob, so ROBOT.md
 // `gateway.protocol` is only validated against this (a consistency guard).
 var gatewayTransport = map[string]string{
+	"intern":     "http",
 	"openclaw":   "websocket",
 	"hermes":     "sse",
 	"picoclaw":   "websocket",
@@ -41,6 +44,9 @@ var gatewayTransport = map[string]string{
 }
 
 func ProvideGateway(cfg *config.Config, bus *monitor.Bus, sled *statusled.Service) domain.AgentGateway {
+	if domain.IsExternallyOwnedRuntime(cfg.AgentRuntime) {
+		return intern.New()
+	}
 	// Consistency guard: a device that declares gateway.protocol should match the
 	// transport its gateway.default runtime actually speaks. Warn (don't fail) on
 	// a contradiction — it can't drive anything, but it flags a misleading
@@ -58,6 +64,8 @@ func ProvideGateway(cfg *config.Config, bus *monitor.Bus, sled *statusled.Servic
 
 	eff, raw_runtime, source := resolveRuntime(cfg)
 	switch eff {
+	case domain.AgentRuntimeIntern:
+		return intern.New()
 	case "hermes":
 		logBackendBanner("HERMES", map[string]string{
 			"base_url":     hermes.BaseURL,
@@ -131,7 +139,7 @@ func ProvideGateway(cfg *config.Config, bus *monitor.Bus, sled *statusled.Servic
 // (system/server/wire_gen.go constructs the gateway via this function before
 // device.ProvideService runs the seed; see ResolveDefaultAgent's doc comment).
 func resolveRuntime(cfg *config.Config) (effective, raw, source string) {
-	raw = cfg.AgentRuntime
+	raw = strings.ToLower(strings.TrimSpace(cfg.AgentRuntime))
 	source = "config.agent_runtime"
 	if raw == "" {
 		if g, src := device.ResolveDefaultAgent(cfg); g != "" {
@@ -139,6 +147,8 @@ func resolveRuntime(cfg *config.Config) (effective, raw, source string) {
 		}
 	}
 	switch raw {
+	case domain.AgentRuntimeIntern:
+		return domain.AgentRuntimeIntern, raw, source
 	case "hermes":
 		return "hermes", raw, source
 	case "picoclaw":

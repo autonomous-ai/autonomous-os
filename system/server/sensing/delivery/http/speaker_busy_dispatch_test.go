@@ -27,8 +27,10 @@ type idleGateway struct {
 
 func (g *idleGateway) IsBusy() bool { return false }
 func (g *idleGateway) Name() string { return "fake" }
-func (g *idleGateway) QueuePendingEvent(eventType, msg string, images []string, fixedRunID string) {
+func (g *idleGateway) QueuePendingEvent(eventType, msg string, images []string, fixedRunID string) (runtimeErr error) {
 	g.queued.Add(1)
+
+	return
 }
 func (g *idleGateway) DrainPendingEvents() { g.drained.Add(1) }
 

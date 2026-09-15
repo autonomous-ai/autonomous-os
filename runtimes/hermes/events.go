@@ -92,7 +92,7 @@ func (s *HermesService) SetBusy(busy bool) {
 	}
 }
 
-func (s *HermesService) QueuePendingEvent(eventType, msg string, images []string, fixedRunID string) {
+func (s *HermesService) QueuePendingEvent(eventType, msg string, images []string, fixedRunID string) (runtimeErr error) {
 	now := time.Now()
 	curUser := mood.CurrentUser()
 	if curUser == "" {
@@ -108,6 +108,8 @@ func (s *HermesService) QueuePendingEvent(eventType, msg string, images []string
 		Summary: "[" + eventType + "] " + msg,
 		Detail:  map[string]any{"type": eventType, "reason": "agent_busy"},
 	})
+
+	return
 }
 
 // drainPendingEvents replays buffered sensing events. Behaviour matches the

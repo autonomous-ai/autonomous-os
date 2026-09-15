@@ -39,6 +39,11 @@ func buildPoseBucketImagePaths(bucketID string, filenames []string) []string {
 
 // HandleEvent processes incoming WebSocket events from the OpenClaw gateway.
 func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) error {
+	// No Intern payload, even a forged lifecycle/tool event, can enter the
+	// hardware, speech, channel delivery or external-history pipeline.
+	if domain.IsTextOnlyGateway(h.agentGateway) {
+		return domain.ErrNotSupportedByRuntime
+	}
 	defer h.observeExternalHistory(evt)
 	slog.Debug("event received", "component", "agent", "event", evt.Event)
 

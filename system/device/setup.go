@@ -229,6 +229,9 @@ func (s *Service) setupWiFi(data domain.SetupRequest) error {
 //
 // AP teardown is the last step of connect-wifi; nothing extra needed here.
 func (s *Service) ReprovisionWifi(data domain.WifiProvisionRequest) error {
+	if s.externalRuntime() {
+		return domain.ErrNotSupportedByRuntime
+	}
 	slog.Info("starting wifi reprovision", "component", "device", "ssid", data.SSID)
 	s.setupState.begin()
 	defer s.statusLED.Clear(statusled.StateWifiConnecting)
@@ -451,6 +454,9 @@ func (s *Service) ReprovisionWifi(data domain.WifiProvisionRequest) error {
 }
 
 func (s *Service) Setup(data domain.SetupRequest) error {
+	if s.externalRuntime() {
+		return domain.ErrNotSupportedByRuntime
+	}
 	slog.Info("starting setup", "component", "device")
 	data.LLMBaseURL = urlnorm.NormalizeBaseURL(data.LLMBaseURL)
 	data.STTBaseURL = urlnorm.NormalizeBaseURL(data.STTBaseURL)

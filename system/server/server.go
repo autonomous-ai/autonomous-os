@@ -125,7 +125,7 @@ func (s *Server) Engine() *gin.Engine {
 // return "" (no injection). Resolved lazily so a runtime switch is picked up
 // without a restart.
 func (s *Server) shellAgentEnvFile() string {
-	if device.CurrentAgentRuntimeFromConfig(s.config) == domain.AgentRuntimeClaudeCode {
+	if s.activeAgentRuntime() == domain.AgentRuntimeClaudeCode {
 		return claudecode.EnvFile
 	}
 	return ""
@@ -202,6 +202,9 @@ func ProvideServer(
 }
 
 func (s *Server) Serve(closeFn func()) error {
+	if domain.IsTextOnlyGateway(s.agentGateway) {
+		return s.serveIntern(closeFn)
+	}
 	// Device type is mandatory — refuse to boot rather than silently assume a
 	// "lamp" (wrong soul/hardware/OTA). Mirrors the fail-loud provisioning layer.
 	deviceType := s.config.DeviceTypeOrDefault()
@@ -233,7 +236,7 @@ func (s *Server) Serve(closeFn func()) error {
 	telemetry.SetCommon(map[string]any{
 		"os_version":                     config.OSVersion,
 		"device_type":                    deviceType,
-		"agent_runtime":                  string(device.CurrentAgentRuntimeFromConfig(s.config)),
+		"agent_runtime":                  s.activeAgentRuntime(),
 		"realtime_supersedes_main_reply": _agentHttpDeliver.RealtimeSupersedesMainReply(),
 	})
 	// i18n device name (wake-words + {name}/{Name} in strings) — device_type as the

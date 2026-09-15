@@ -17,7 +17,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"go.autonomous.ai/os/system/device"
 	"go.autonomous.ai/os/system/domain"
 	"go.autonomous.ai/os/system/lib/syspath"
 	"go.autonomous.ai/os/system/server/serializers"
@@ -69,7 +68,7 @@ const picoclawAgentLog = "/root/.picoclaw/logs/gateway.log"
 // above stand; off-device there is no systemd and `make codex-dev` tees the
 // bridge to a file instead.
 func (s *Server) resolveLogSource(source string) (string, bool) {
-	runtime := device.CurrentAgentRuntimeFromConfig(s.config)
+	runtime := s.activeAgentRuntime()
 
 	// bridgeLog names a file to read the agent bridge from instead of its
 	// journal unit. Empty on a board, so every `journal:` mapping below stands.

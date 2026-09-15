@@ -14,7 +14,7 @@ type fakeGateway struct {
 	addCalls  []domain.AddChannelRequest
 }
 
-func (f *fakeGateway) Name() string                { return "Fake" }
+func (f *fakeGateway) Name() string                { return "hermes" }
 func (f *fakeGateway) SupportedChannels() []string { return f.supported }
 func (f *fakeGateway) AddChannel(_ context.Context, d domain.AddChannelRequest) error {
 	f.addCalls = append(f.addCalls, d)

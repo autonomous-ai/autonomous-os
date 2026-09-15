@@ -55,10 +55,10 @@ func ProvideConfigMigration(cfg *config.Config, gw domain.AgentGateway) *ConfigM
 // successful migration. Never blocks startup; failed migrations are retried on the
 // next boot because the marker is only advanced on full success.
 func (c *ConfigMigration) Reconcile() {
-	current := c.cfg.AgentRuntime
-	if current == "" {
-		current = domain.AgentRuntimeOpenClaw
+	if domain.IsTextOnlyGateway(c.gw) {
+		return
 	}
+	current := c.gw.Name()
 
 	if c.cfg.LLMConfigAppliedRuntime == current {
 		slog.Debug("[cfg-migration] no switch detected, skip", "component", cfgMigComponent, "runtime", current)

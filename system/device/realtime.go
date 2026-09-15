@@ -115,6 +115,9 @@ func applyRealtimeSet(c *config.Config, d domain.RealtimeSetData) {
 // `realtime` field) to config.json under the config lock, then restarts hal so it
 // reads the new block (HAL reads config.json at import).
 func (s *Service) UpdateRealtimeConfig(d domain.RealtimeSetData) error {
+	if s.externalRuntime() {
+		return domain.ErrNotSupportedByRuntime
+	}
 	if err := s.validateRealtimeSet(d); err != nil {
 		return err
 	}

@@ -1,4 +1,4 @@
-// Package internbridge is an unregistered client for Intern bridge protocol 0.2.0.
+// Package internbridge is a client for Intern bridge protocol 0.2.0.
 // It does not implement AgentGateway or provision a runtime. Data classification
 // must come from trusted caller policy, never from the message or a model.
 package internbridge
@@ -86,26 +86,26 @@ type Request struct {
 }
 
 type Result struct {
-	RunID string
+	RunID string `json:"run_id"`
 	// Destination is always FirstContact, never an executor.
-	Destination string
+	Destination string `json:"destination"`
 	// RequestedDestination and Kind describe a proposal after reception.
-	RequestedDestination string
-	ReceptionRoute       ReceptionRoute
-	Kind                 string
-	Status               string
-	Output               string
+	RequestedDestination string         `json:"requested_destination"`
+	ReceptionRoute       ReceptionRoute `json:"reception_route"`
+	Kind                 string         `json:"kind"`
+	Status               string         `json:"status"`
+	Output               string         `json:"output"`
 }
 
 // ReceptionRoute is metadata only. An empty Handoff represents wire null.
 // No reception or handoff is executed by this client or claimed by this result.
 type ReceptionRoute struct {
-	FirstDestination string
-	Handoff          string
-	Intent           string
-	Status           string
-	Executed         bool
-	NextStep         string
+	FirstDestination string `json:"first_destination"`
+	Handoff          string `json:"handoff,omitempty"`
+	Intent           string `json:"intent"`
+	Status           string `json:"status"`
+	Executed         bool   `json:"executed"`
+	NextStep         string `json:"next_step"`
 }
 
 // Client is safe for concurrent use. Its sole destination is literal IPv4
@@ -154,6 +154,25 @@ func (r Request) valid() bool {
 		return false
 	}
 	return r.RunID == "" || inputID.MatchString(r.RunID)
+}
+
+// ValidateRequest applies all admission bounds without any network effects.
+// Validation never infers or upgrades a caller's data classification.
+func ValidateRequest(request Request) error {
+	if !request.valid() {
+		return failure(ErrInvalidRequest, 0)
+	}
+	body, err := json.Marshal(request)
+	if err != nil || len(body) > MaxRequestBytes {
+		return failure(ErrInvalidRequest, 0)
+	}
+	switch request.DataClass {
+	case Restricted, Secret:
+		return failure(ErrCustodyHold, 0)
+	case Unknown:
+		return failure(ErrNeedsClassification, 0)
+	}
+	return nil
 }
 
 // Do performs exactly one request. It never retries: the bridge reserves IDs

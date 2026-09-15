@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"go.autonomous.ai/os/system/domain"
 	"go.autonomous.ai/os/system/server/config"
 )
 
@@ -31,6 +32,9 @@ func mcpToolServerName(name string) string {
 // AddMCPTool adds a remote MCP tool to config.json and syncs it to
 // openclaw.json so the active runtime picks it up.
 func (s *Service) AddMCPTool(tool config.MCPTool) error {
+	if s.externalRuntime() {
+		return domain.ErrNotSupportedByRuntime
+	}
 	tool.Name = strings.TrimSpace(tool.Name)
 	tool.URL = strings.TrimSpace(tool.URL)
 	if tool.Name == "" || tool.URL == "" {
@@ -63,6 +67,9 @@ func (s *Service) AddMCPTool(tool config.MCPTool) error {
 
 // RemoveMCPTool removes a remote MCP tool from config.json and openclaw.json.
 func (s *Service) RemoveMCPTool(name string) error {
+	if s.externalRuntime() {
+		return domain.ErrNotSupportedByRuntime
+	}
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return fmt.Errorf("mcp tool name is required")

@@ -331,7 +331,7 @@ type Config struct {
 func Load() (*Config, error) {
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
 		d := Default()
-		return &d, fmt.Errorf("config file not found: %s", configPath)
+		return &d, fmt.Errorf("config file not found: %s: %w", configPath, os.ErrNotExist)
 	}
 	data, err := os.ReadFile(configPath)
 	if err != nil {

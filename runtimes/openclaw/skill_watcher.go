@@ -21,7 +21,7 @@ const skillWatchInterval = 5 * time.Minute
 // lives in system/skills (FetchSkillVersions / DownloadToTempFile / FolderHash /
 // ExtractSkillZip); this file holds only the OpenClaw-specific loop, target dir,
 // and notify. runtimes/hermes/skill_watcher.go is its parallel under Hermes.
-func (s *OpenclawService) StartSkillWatcher(ctx context.Context) {
+func (s *OpenclawService) StartSkillWatcher(ctx context.Context) (runtimeErr error) {
 
 	slog.Info("skill watcher started", "component", "skill-watcher", "interval", skillWatchInterval)
 
@@ -78,6 +78,7 @@ func (s *OpenclawService) StartSkillWatcher(ctx context.Context) {
 			s.notifySkillChanges(result.changed)
 		}
 	}
+
 }
 
 // downloadSkills downloads the skills this device supports from CDN (capability-

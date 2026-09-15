@@ -100,7 +100,7 @@ func rewriteSoulName(content, name string) string {
 // log component. Voice wake words come from the shared i18n.BuildVoiceWakeWords
 // (OpenClaw's private buildWakeWords is the same 5 variants); i18n.SetDeviceName
 // then refreshes the {name}/{Name} placeholders + chitchat strip list itself.
-func (s *HermesService) WatchIdentity(ctx context.Context) {
+func (s *HermesService) WatchIdentity(ctx context.Context) (runtimeErr error) {
 	soulPath := filepath.Join(hermesHome, "SOUL.md")
 	var lastName string
 	for {
@@ -123,6 +123,7 @@ func (s *HermesService) WatchIdentity(ctx context.Context) {
 		hal.SetVoiceConfig(words)
 		i18n.SetDeviceName(name) // {name}/{Name} + chitchat strip follow the agent name too
 	}
+
 }
 
 // parseSoulName extracts the agent name from the `- **Name:** <value>` card line

@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"go.autonomous.ai/os/runtimes/intern"
+	"go.autonomous.ai/os/system/domain"
 	"go.autonomous.ai/os/system/server/config"
 )
 
@@ -82,5 +84,19 @@ schema: autonomous.device.v1
 
 	if effective != "openclaw" {
 		t.Fatalf("resolveRuntime effective = %q, want openclaw", effective)
+	}
+}
+
+func TestProvideGatewayActivatesInternOnlyWhenExplicitlySelected(t *testing.T) {
+	selected := ProvideGateway(&config.Config{AgentRuntime: "  INTERN  "}, nil, nil)
+	if _, ok := selected.(*intern.Service); !ok || selected.Name() != domain.AgentRuntimeIntern {
+		t.Fatalf("explicit intern selection produced %T (%q)", selected, selected.Name())
+	}
+
+	writeDeviceMD(t, "intern-v2", "---\nschema: autonomous.device.v1\ngateway:\n  default: intern\n---\n")
+	t.Setenv("DEVICE_TYPE", "intern-v2")
+	defaulted := ProvideGateway(&config.Config{}, nil, nil)
+	if _, ok := defaulted.(*intern.Service); ok || defaulted.Name() == domain.AgentRuntimeIntern {
+		t.Fatalf("device default activated externally-owned runtime: %T (%q)", defaulted, defaulted.Name())
 	}
 }

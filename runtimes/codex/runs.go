@@ -10,10 +10,12 @@ import (
 
 // SetSessionKey stores the session id. Codex assigns it on its first inbound
 // frame (translateFrame captures it), so the read loop is the usual caller.
-func (s *CodexService) SetSessionKey(key string) {
+func (s *CodexService) SetSessionKey(key string) (runtimeErr error) {
 	s.sessionUUID.Store(key)
 	slog.Info("session key stored", "component", "codex", "key", key)
 	flow.Log("session_key_acquired", map[string]any{"key_len": len(key)})
+
+	return
 }
 
 // GetSessionKey returns the Codex session id or "".
@@ -22,11 +24,13 @@ func (s *CodexService) GetSessionKey() string {
 	return v
 }
 
-func (s *CodexService) MarkGuardRun(runID string, snapshotPath string) {
+func (s *CodexService) MarkGuardRun(runID string, snapshotPath string) (runtimeErr error) {
 	s.guardRunsMu.Lock()
 	s.guardRuns[runID] = snapshotPath
 	s.guardRunsMu.Unlock()
 	slog.Info("guard run marked", "component", "codex", "runID", runID, "snapshot", snapshotPath)
+
+	return
 }
 
 func (s *CodexService) ConsumeGuardRun(runID string) (string, bool) {
@@ -41,7 +45,7 @@ func (s *CodexService) ConsumeGuardRun(runID string) (string, bool) {
 
 const poseBucketRunTTL = 10 * time.Minute
 
-func (s *CodexService) MarkPoseBucketRun(runID string, bucketID string, worstFilenames []string) {
+func (s *CodexService) MarkPoseBucketRun(runID string, bucketID string, worstFilenames []string) (runtimeErr error) {
 	if runID == "" || bucketID == "" {
 		return
 	}
@@ -62,6 +66,8 @@ func (s *CodexService) MarkPoseBucketRun(runID string, bucketID string, worstFil
 	s.poseBucketRunsMu.Unlock()
 	slog.Info("pose bucket run marked",
 		"component", "codex", "runID", runID, "bucket", bucketID, "worst_count", len(clean))
+
+	return
 }
 
 func (s *CodexService) ConsumePoseBucketRun(runID string) (string, []string, bool) {
@@ -88,11 +94,13 @@ func (s *CodexService) prunePoseBucketRunsLocked() {
 	}
 }
 
-func (s *CodexService) MarkBroadcastRun(runID string) {
+func (s *CodexService) MarkBroadcastRun(runID string) (runtimeErr error) {
 	s.broadcastRunsMu.Lock()
 	s.broadcastRuns[runID] = true
 	s.broadcastRunsMu.Unlock()
 	slog.Info("broadcast run marked", "component", "codex", "runID", runID)
+
+	return
 }
 
 func (s *CodexService) ConsumeBroadcastRun(runID string) bool {

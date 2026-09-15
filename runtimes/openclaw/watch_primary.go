@@ -68,7 +68,7 @@ func clearOSWriteFlag(configDir string) {
 // If the config directory does not exist yet (device not set up), the function
 // retries every primaryWatchRetryInterval until the directory appears or the
 // context is cancelled.
-func (s *OpenclawService) StartPrimaryModelWatch(ctx context.Context) {
+func (s *OpenclawService) StartPrimaryModelWatch(ctx context.Context) (runtimeErr error) {
 	dir := s.config.OpenclawConfigDir
 
 	// Wait for the config dir to exist before starting the watcher.
@@ -130,6 +130,7 @@ func (s *OpenclawService) StartPrimaryModelWatch(ctx context.Context) {
 			slog.Warn("[primarysync] watcher error", "err", err)
 		}
 	}
+
 }
 
 // syncPrimaryFromFile is the debounced handler that fires after openclaw.json

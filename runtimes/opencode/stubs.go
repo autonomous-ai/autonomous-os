@@ -90,8 +90,10 @@ func (s *OpenCodeService) GetConfigJSON() (json.RawMessage, error) {
 // CDN (capability-gated), mirroring openclaw.
 
 // StartModelSync — model registry is owned by OpenCode. No-op.
-func (s *OpenCodeService) StartModelSync(ctx context.Context) {
+func (s *OpenCodeService) StartModelSync(ctx context.Context) (runtimeErr error) {
 	<-ctx.Done()
+
+	return
 }
 
 // UpdatePrimaryModel — the OpenCode model is pinned in opencode.json by presync
@@ -102,8 +104,10 @@ func (s *OpenCodeService) UpdatePrimaryModel(_ string) error {
 }
 
 // StartPrimaryModelWatch — no agent-side config file to watch.
-func (s *OpenCodeService) StartPrimaryModelWatch(ctx context.Context) {
+func (s *OpenCodeService) StartPrimaryModelWatch(ctx context.Context) (runtimeErr error) {
 	<-ctx.Done()
+
+	return
 }
 
 // GetConfiguredChannel — Device config is the source of truth under OpenCode.

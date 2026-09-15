@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"go.autonomous.ai/os/system/device"
+	"go.autonomous.ai/os/system/domain"
 	"go.autonomous.ai/os/system/intent"
 	"go.autonomous.ai/os/system/lib/hal"
 	"go.autonomous.ai/os/system/lib/safego"
@@ -25,6 +26,9 @@ func (s *Server) runConfigChangeListener(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ch:
+			if domain.IsTextOnlyGateway(s.agentGateway) {
+				continue
+			}
 			// Refresh the HAL bearer token whenever config changes — covers
 			// llm_api_key rotation via PUT /api/device/config without restart.
 			hal.SetAPIKey(s.config.LLMAPIKey)
@@ -173,6 +177,9 @@ func waitHALReady(timeout time.Duration) bool {
 // When true: cancels any previous monitor context, creates a new one, starts monitor and reporter, and runs OpenClaw ready check.
 // When false: cancels monitor/reporter (they exit on ctx.Done()) and switches to AP mode.
 func (s *Server) handleSetUpCompleteChange(setupCompleted bool) {
+	if domain.IsTextOnlyGateway(s.agentGateway) {
+		return
+	}
 	if s.lastSetupCompleted != nil && *s.lastSetupCompleted == setupCompleted {
 		return
 	}

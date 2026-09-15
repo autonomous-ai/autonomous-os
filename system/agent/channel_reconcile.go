@@ -90,10 +90,10 @@ func (r *ChannelReconcile) configuredChannels() []domain.AddChannelRequest {
 // marker. A no-op when the runtime is unchanged. Never blocks startup; a transient
 // apply failure leaves the marker un-advanced so the next boot retries.
 func (r *ChannelReconcile) Reconcile() {
-	current := r.cfg.AgentRuntime
-	if current == "" {
-		current = domain.AgentRuntimeOpenClaw
+	if domain.IsTextOnlyGateway(r.gw) {
+		return
 	}
+	current := r.gw.Name()
 	if r.cfg.ChannelsAppliedRuntime == current {
 		return // no switch since channels were last applied
 	}

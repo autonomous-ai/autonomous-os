@@ -31,7 +31,7 @@ import (
 
 // Injectors from wire.go:
 
-func InitializeServer() (*Server, error) {
+func initializeDeviceServer() (*Server, error) {
 	configConfig := config.ProvideConfig()
 	service := network.ProvideService(configConfig)
 	bus := monitor.ProvideBus()

@@ -26,7 +26,7 @@ const skillWatchInterval = 5 * time.Minute
 // shared CDN/extract/hash plumbing from system/skills. The only differences are
 // the target dir and the notify path — keep the two files parallel so they are
 // easy to diff.
-func (s *HermesService) StartSkillWatcher(ctx context.Context) {
+func (s *HermesService) StartSkillWatcher(ctx context.Context) (runtimeErr error) {
 
 	slog.Info("skill watcher started", "component", "skill-watcher", "backend", "Hermes", "interval", skillWatchInterval)
 
@@ -82,6 +82,7 @@ func (s *HermesService) StartSkillWatcher(ctx context.Context) {
 			s.notifySkillChanges(result.changed)
 		}
 	}
+
 }
 
 // supportedSkills resolves this device's capabilities from ROBOT.md and filters

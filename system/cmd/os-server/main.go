@@ -49,6 +49,17 @@ func main() {
 	}
 
 	// Load shared env file before logger init (so GELF_* env vars are visible).
+	// The externally owned text runtime must bypass HAL environment discovery
+	// and device startup entirely, including when started by the usual binary.
+	if srv, selected, err := server.InitializeInternServer(); err != nil {
+		log.Fatal("initialize intern: ", err)
+	} else if selected {
+		if err := srv.Serve(func() {}); err != nil {
+			log.Fatal("intern server: ", err)
+		}
+		return
+	}
+
 	// Missing file is non-fatal — env may also be supplied by systemd.
 	_ = godotenv.Load("/opt/hal/.env")
 

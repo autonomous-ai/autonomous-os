@@ -96,7 +96,7 @@ func (s *PicoclawService) SetBusy(busy bool) {
 	}
 }
 
-func (s *PicoclawService) QueuePendingEvent(eventType, msg string, images []string, fixedRunID string) {
+func (s *PicoclawService) QueuePendingEvent(eventType, msg string, images []string, fixedRunID string) (runtimeErr error) {
 	now := time.Now()
 	curUser := mood.CurrentUser()
 	if curUser == "" {
@@ -112,6 +112,8 @@ func (s *PicoclawService) QueuePendingEvent(eventType, msg string, images []stri
 		Summary: "[" + eventType + "] " + msg,
 		Detail:  map[string]any{"type": eventType, "reason": "agent_busy"},
 	})
+
+	return
 }
 
 // drainPendingEvents replays buffered sensing events. Behaviour matches the

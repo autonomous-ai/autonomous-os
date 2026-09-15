@@ -79,10 +79,10 @@ func readFRDefaultAgent() string {
 // resolutions structurally impossible to drift, independent of Wire's
 // provider order.
 func ResolveDefaultAgent(cfg *config.Config) (value, source string) {
-	if g := strings.ToLower(readFRDefaultAgent()); g != "" && domain.IsValidAgentRuntime(g) {
+	if g := strings.ToLower(readFRDefaultAgent()); g != "" && domain.IsValidAgentRuntime(g) && !domain.IsExternallyOwnedRuntime(g) {
 		return g, "f_r_default_agent"
 	}
-	if g := strings.ToLower(strings.TrimSpace(GatewayDefault(cfg.DeviceTypeOrDefault()))); g != "" && domain.IsValidAgentRuntime(g) {
+	if g := strings.ToLower(strings.TrimSpace(GatewayDefault(cfg.DeviceTypeOrDefault()))); g != "" && domain.IsValidAgentRuntime(g) && !domain.IsExternallyOwnedRuntime(g) {
 		return g, "ROBOT.md gateway.default"
 	}
 	return "", ""
@@ -110,23 +110,26 @@ func SeedAgentRuntimeFromGateway(cfg *config.Config) {
 	}
 }
 
-// CurrentAgentRuntime returns the effective agentic backend, resolved the same
-// way as system/agent/factory.go: config.agent_runtime, else the device's
-// ROBOT.md gateway.default, else openclaw. Used by GET /api/device/agent-runtime
-// so the web settings page shows what is actually running.
+// CurrentAgentRuntime returns the instantiated gateway, not a saved selection
+// awaiting restart. Config resolution is only needed before a gateway exists.
 func (s *Service) CurrentAgentRuntime() string {
+	if s.agentGateway != nil {
+		return s.agentGateway.Name()
+	}
 	return CurrentAgentRuntimeFromConfig(s.config)
 }
 
-// CurrentAgentRuntimeFromConfig resolves the effective agentic backend without a
-// Service receiver, so callers holding only a *config.Config (e.g. the MQTT info
-// handler, the web-CLI env-file check in server.go) can report what is actually
-// running. Same precedence as agent.resolveRuntime: config.agent_runtime, else
+// CurrentAgentRuntimeFromConfig resolves the saved backend for the next startup,
+// not the active gateway. Lifecycle/effect callers must use the instantiated
+// gateway instead. Same precedence as agent.resolveRuntime: config.agent_runtime, else
 // ResolveDefaultAgent (f_r_default_agent, then ROBOT.md gateway.default), else
 // openclaw — routed through the same shared resolver so this can't become a
 // third place that drifts from what actually gets seeded/constructed.
 func CurrentAgentRuntimeFromConfig(cfg *config.Config) string {
-	if r := strings.ToLower(strings.TrimSpace(cfg.AgentRuntime)); r != "" {
+	if cfg == nil {
+		return domain.AgentRuntimeOpenClaw
+	}
+	if r := strings.ToLower(strings.TrimSpace(cfg.AgentRuntimeValue())); r != "" {
 		return r
 	}
 	if g, _ := ResolveDefaultAgent(cfg); g != "" {
@@ -181,6 +184,11 @@ func (s *Service) reserveAgentRuntimeSwitch(d domain.AgentRuntimeSetData, waitRe
 // no longer restarts os-server either (it used to) — that move is what lets the
 // caller's goroutine survive long enough to ack the real result.
 func (s *Service) updateAgentRuntime(d domain.AgentRuntimeSetData, waitReady bool) (bool, error) {
+	// External ownership is handled synchronously by SelectExternalRuntime.
+	// Both directions fail before script materialization or service control.
+	if domain.IsExternallyOwnedRuntime(d.Runtime) || s.externalRuntime() || (s.config != nil && domain.IsExternallyOwnedRuntime(s.config.AgentRuntimeValue())) {
+		return false, domain.ErrNotSupportedByRuntime
+	}
 	runtime := strings.ToLower(strings.TrimSpace(d.Runtime))
 	// Reject unknown values outright. factory.go falls back to openclaw on
 	// garbage, but an unknown runtime from the BFF/web is a contract error we
@@ -199,7 +207,7 @@ func (s *Service) updateAgentRuntime(d domain.AgentRuntimeSetData, waitReady boo
 
 	// Resolve the currently-active runtime BEFORE the save so switch-runtime
 	// knows which backend to stop. Default to openclaw (matches factory.go).
-	old := strings.ToLower(strings.TrimSpace(s.config.AgentRuntime))
+	old := strings.ToLower(strings.TrimSpace(s.CurrentAgentRuntime()))
 	if old == "" {
 		old = domain.AgentRuntimeOpenClaw
 	}
@@ -290,6 +298,14 @@ func (s *Service) runSwitchRuntime(newRuntime, oldRuntime string, waitReady bool
 // the unit once it's done. Callers MUST have already published their success ack —
 // this kills os-server.
 func (s *Service) RestartForAgentRuntime() error {
+	if s == nil {
+		return domain.ErrNotSupportedByRuntime
+	}
+	// This is an activation boundary, not an effect on the active gateway:
+	// a pending Intern selection also requires an operator-managed restart.
+	if (s.config != nil && domain.IsExternallyOwnedRuntime(s.config.AgentRuntimeValue())) || domain.IsTextOnlyGateway(s.agentGateway) {
+		return domain.ErrNotSupportedByRuntime
+	}
 	if err := exec.Command("systemd-run", "--collect", "--unit=os-server-runtime-restart",
 		"systemctl", "restart", "os-server").Run(); err != nil {
 		return fmt.Errorf("spawn os-server restart: %w", err)
