@@ -1034,7 +1034,7 @@ class VoiceService:
                             )
                             return
                     elif decision == "turn":
-                        self._stream_session(
+                        if self._stream_session(
                             mic,
                             frame_size,
                             device_rate,
@@ -1042,7 +1042,8 @@ class VoiceService:
                             speech_pre_buffer=speech_pre_buffer,
                             pending_listening_cue_id=pending_listening_cue_id,
                             harness_voice=harness_voice,
-                        )
+                        ):
+                            return
                     keepalive_session = None
                     speech_start = None
                     speech_pre_buffer = []
@@ -1183,7 +1184,7 @@ class VoiceService:
         if self._tts.realtime_speaking:
             self._tts.stop(preserve_main_queue=True)
 
-    def _live_out_pump(self, generation: int, harness_voice=None, cues=None) -> None:
+    def _live_out_pump(self, generation: int, harness_voice=None, cues=None, opener=None) -> None:
         """Play what the model says, for as long as the session lasts.
 
         Deliberately loops orchestrator.stream_output() rather than reading the
@@ -1242,6 +1243,30 @@ class VoiceService:
                             hal_config.WAKEWORD_FOLLOWUP_TIMEOUT_S)
         metrics = LiveVoiceMetrics()
         history = LiveHistory(self._sensing_sender, harness_voice, self.strip_rt_markers)
+
+        def bind_opener(key):
+            # The confirmed capture is the first input sent after the live
+            # session's queue flush. A provider may identify it on output
+            # before emitting input transcription. Unkeyed output stays unknown.
+            if opener is None or not key or opener["key"]:
+                return
+            opener["key"] = key
+            metrics.seed(key, opener["interaction_id"])
+            input_text[key] = opener["transcript"]
+            addressed_inputs.add(key)
+            history.input(key, opener["transcript"], opener["interaction_id"],
+                          opener["voice_turn_type"])
+
+        def complete_metrics(key, completed):
+            # A silent opener is forwarded to main, which owns its execution
+            # result. Hold its terminal until its own reply has reached TTS.
+            if opener is not None and key and key == opener["key"]:
+                if completed:
+                    opener["execution_completed"] = True
+                if not opener.get("replied", False):
+                    return
+            metrics.complete(key, completed)
+
         while self._live_running and generation == self._live_generation:
             native_started = False
             transcript = ""
@@ -1256,7 +1281,13 @@ class VoiceService:
                 for out in self._realtime.stream_output():
                     if not (self._live_running and generation == self._live_generation):
                         break
+                    if isinstance(out, (UserSpeechOutput, RTAudioOutput, RTTextOutput, DelegateSignal, RejectSignal)):
+                        bind_opener(getattr(out, "user_turn_id", "") or getattr(out, "turn_id", ""))
                     if isinstance(out, UserSpeechOutput):
+                        if opener is not None and out.turn_id and out.turn_id != opener["key"]:
+                            # Never replay an older request into main after
+                            # the user has moved on to another live input.
+                            opener["consumed"] = True
                         # A real new addressed utterance can interrupt main TTS;
                         # opening the mic or resetting model output cannot.
                         if out.turn_id and out.transcript.strip():
@@ -1280,7 +1311,9 @@ class VoiceService:
                             continue
                         iid = metrics.speech(out.turn_id, out.endpoint_at, out.method)
                         history.input(
-                            out.turn_id, out.transcript, iid,
+                            out.turn_id,
+                            "" if opener is not None and out.turn_id == opener["key"] else out.transcript,
+                            iid,
                             classify_input(out.turn_id, input_text.get(out.turn_id, out.transcript)),
                         )
                         continue
@@ -1289,12 +1322,13 @@ class VoiceService:
                             refresh_focus(out.user_turn_id)
                         if cues is not None:
                             cues.finish(out.user_turn_id)
-                        history.complete(out.user_turn_id, out.execution_completed)
-                        metrics.complete(
-                            out.user_turn_id, out.execution_completed,
-                        )
+                        if opener is None or opener["consumed"] or out.user_turn_id != opener["key"]:
+                            history.complete(out.user_turn_id, out.execution_completed)
+                        complete_metrics(out.user_turn_id, out.execution_completed)
                         continue
                     if isinstance(out, RejectSignal):
+                        if opener is not None:
+                            opener["consumed"] = True
                         rejected_inputs.add(out.user_turn_id)
                         if cues is not None:
                             cues.finish(out.user_turn_id)
@@ -1302,6 +1336,8 @@ class VoiceService:
                         metrics.reject(out.user_turn_id)
                         continue
                     if isinstance(out, DelegateSignal):
+                        if opener is not None:
+                            opener["consumed"] = True
                         if cues is not None:
                             cues.close()
                         history.discard(out.user_turn_id)
@@ -1314,13 +1350,16 @@ class VoiceService:
                         # A valid delegate tool is explicit task evidence even
                         # if the provider has not sent its input transcript yet.
                         key = out.user_turn_id or "delegate"
+                        if opener is not None and (not opener["key"] or key == opener["key"]):
+                            opener["key"] = key
+                            metrics.seed(key, opener["interaction_id"])
                         iid = metrics.interaction(key) or metrics.speech(
                             key, None, "provider_delegate",
                         )
                         dispatch_turn(
                             self._decorator,
                             self._sensing_sender,
-                            out.transcript,
+                            out.transcript or (opener["transcript"] if opener is not None and key == opener["key"] else ""),
                             [],
                             [],
                             RealtimeTurnResult(
@@ -1335,6 +1374,8 @@ class VoiceService:
                         refresh_focus(key, out.transcript)
                         break
                     if isinstance(out, EndCallSignal):
+                        if opener is not None:
+                            opener["consumed"] = True
                         # Do NOT tear down here. The farewell is normally
                         # spoken in the SAME turn as the tool call, so ending
                         # now would cut it off mid-word — the one thing a
@@ -1352,6 +1393,8 @@ class VoiceService:
                         # The first output transcript also sends an audio reset;
                         # that is not evidence of a user asking us to stop.
                         if out.reason == "server_interrupt":
+                            if opener is not None:
+                                opener["consumed"] = True
                             rejected_inputs.add(out.user_turn_id)
                             if cues is not None:
                                 cues.finish(out.user_turn_id)
@@ -1390,7 +1433,12 @@ class VoiceService:
                             )
                             native_owner = owner
                         if native_started:
+                            if opener is not None:
+                                opener["consumed"] = True
                             self._tts.native_play_frame(out.audio)
+                            if opener is not None:
+                                if out.user_turn_id and out.user_turn_id == opener["key"]:
+                                    opener["replied"] = True
                         if out.transcript:
                             history.output(out.user_turn_id, out.transcript)
                             transcript += out.transcript
@@ -1421,8 +1469,14 @@ class VoiceService:
                             if head:
                                 if cues is not None:
                                     cues.finish(out.user_turn_id)
+                                if opener is not None:
+                                    opener["consumed"] = True
                                 if not self._tts.speak(head, turn_id=iid, realtime_reply=True):
                                     self._tts.speak_queue(head, turn_id=iid, realtime_reply=True)
+                                if opener is not None:
+                                    opener["consumed"] = True
+                                    if iid == opener["interaction_id"]:
+                                        opener["replied"] = True
                                 first_sent = True
                                 sentence_buf = rest
                         if sentence_buf.rstrip().endswith((".", "!", "?", "…")):
@@ -1430,7 +1484,12 @@ class VoiceService:
                             if sentence:
                                 if cues is not None:
                                     cues.finish(out.user_turn_id)
+                                if opener is not None:
+                                    opener["consumed"] = True
                                 self._tts.speak_queue(sentence, turn_id=iid, realtime_reply=True)
+                                if opener is not None:
+                                    if iid == opener["interaction_id"]:
+                                        opener["replied"] = True
                             sentence_buf = ""
                         continue
                 if getattr(self._realtime, "execution_completed", False) is True:
@@ -1441,7 +1500,7 @@ class VoiceService:
                         cues.finish(terminal_key)
                 # receive() timeout and a synthetic unblock are not successful
                 # execution. Only the provider's terminal owns this evidence.
-                metrics.complete(
+                complete_metrics(
                     getattr(self._realtime, "execution_turn_id", ""),
                     getattr(self._realtime, "execution_completed", False) is True,
                 )
@@ -1452,17 +1511,32 @@ class VoiceService:
                 if native_started:
                     self._tts.native_play_end(transcript)
 
-                if not native and sentence_buf.strip():
+                # A stopped promoted session has handed its unanswered opener
+                # back to main. A late receive exit must not enqueue its old tail.
+                if (not native and sentence_buf.strip()
+                        and (opener is None or (self._live_running
+                             and generation == self._live_generation))):
                     tail = self.strip_rt_markers(sentence_buf)
                     if tail:
                         if cues is not None:
                             cues.finish(getattr(self._realtime, "execution_turn_id", ""))
+                        if opener is not None:
+                            opener["consumed"] = True
                         self._tts.speak_queue(tail, turn_id=speech_iid, realtime_reply=True)
-            if self._live_running and generation == self._live_generation:
+                        if opener is not None:
+                            if speech_iid == opener["interaction_id"]:
+                                opener["replied"] = True
+            if opener is not None and opener.get("replied", False):
+                complete_metrics(opener["key"], opener.get("execution_completed", False))
+            if (self._live_running and generation == self._live_generation
+                    and (opener is None or opener["consumed"])):
                 history.complete(
                     getattr(self._realtime, "execution_turn_id", ""),
                     getattr(self._realtime, "execution_completed", False) is True,
                 )
+            if opener is not None and not opener["consumed"]:
+                # No answer before receive timeout/error: retain STT fallback.
+                self._live_running = False
             if transcript:
                 self._live_unprompted_replies += 1
                 logger.info("[live] model said: %r", transcript[:120])
@@ -1471,7 +1545,7 @@ class VoiceService:
 
     def _live_session(
         self, mic, frame_size: int, device_rate: int, pre_roll: list,
-        harness_voice=None,
+        harness_voice=None, opener=None,
     ) -> bool:
         """Stream the mic continuously until the model or the clock ends it.
 
@@ -1560,7 +1634,7 @@ class VoiceService:
         )
         pump = threading.Thread(
             target=self._live_out_pump,
-            args=(generation, harness_voice, cues),
+            args=(generation, harness_voice, cues, opener),
             daemon=True,
             name="live-out",
         )
@@ -1701,6 +1775,32 @@ class VoiceService:
         # session that spoke, and nothing at all for one that stayed silent.
         return self._live_frames_during_playback > 0
 
+    def _try_live_opener(self, mic, frame_size, device_rate, audio_buffer, *,
+                         transcript, interaction_id, harness_voice,
+                         voice_turn_type="voice", speaker_display=None):
+        """Promote a confirmed STT capture; return (consumed, reopen_mic)."""
+        if (not voice_cfg.LIVE_MODE or not hal_config.REALTIME_ENABLED
+                or bypass_realtime(harness_voice) or not audio_buffer):
+            return False, False
+        opener = {"key": "", "consumed": False, "transcript": transcript,
+                  "interaction_id": interaction_id, "voice_turn_type": voice_turn_type}
+        try:
+            self._realtime.prepare_turn()
+            if not self._realtime.wait_until_available(5.0):
+                return False, False
+            self._realtime.send_text(build_turn_context(speaker_display))
+            reopen = self._live_session(
+                mic, frame_size, device_rate, audio_buffer,
+                harness_voice=harness_voice, opener=opener,
+            )
+            return opener["consumed"], reopen
+        except Exception:
+            logger.exception("[live] confirmed opener failed; preserving STT fallback")
+            self._live_running = False
+            self._realtime.set_live_active(False)
+            self._live_stop_output()
+            return opener["consumed"], True
+
     def _to_realtime(self, pcm16_bytes: bytes):
         """16 kHz PCM16 bytes → float32 at the provider's input rate."""
         audio_f32 = pcm16_bytes_to_float32(pcm16_bytes)
@@ -1737,8 +1837,8 @@ class VoiceService:
         # Live providers use automatic endpointing for the whole process.
         # A gated opener/fallback must not flush a buffered utterance through
         # the manual commit path (which can double-commit with server VAD).
-        # STT still confirms the wake phrase and dispatches to the main agent;
-        # its focus window allows the next capture to enter full-duplex live.
+        # STT confirms a gated opener before handing its buffer to the live
+        # session. An unavailable live session retains the main-agent fallback.
         realtime_allowed = not voice_cfg.LIVE_MODE and not bypass_realtime(harness_voice)
         # Harness explicitly owns voice input for this capture. Do not extend
         # the normal wake window; disabling the mode restores its usual gate.
@@ -2622,6 +2722,32 @@ class VoiceService:
                         "falling back to main agent"
                     )
 
+            live_opener_consumed = False
+            reopen_mic = False
+            opener_authorized = harness_listening or should_dispatch_to_main(
+                hal_config.WAKEWORD_ENABLED,
+                wake_word_confirmed.is_set() or wakeword_followup_active
+                or (hal_config.WAKEWORD_ENABLED and self._wakeword_focus.is_active()),
+            )
+            if (voice_cfg.LIVE_MODE and opener_authorized and combined
+                    and not is_noise_turn(combined, buf_duration, rt_audio_is_speech)):
+                try:
+                    _, opener_type = self._decorator.classify_wake_word(combined)
+                except Exception:
+                    logger.debug("[live] opener classification unavailable", exc_info=True)
+                    opener_type = "voice"
+                if (opener_type == "voice" and hal_config.WAKEWORD_ENABLED
+                        and not wake_word_confirmed.is_set()):
+                    opener_type = "voice_followup"
+                # finalize_session trims audio_buffer for speaker identity;
+                # SER's snapshot retains the real trailing silence for server VAD.
+                live_opener_consumed, reopen_mic = self._try_live_opener(
+                    mic, frame_size, device_rate, ser_audio_buffer,
+                    transcript=combined, interaction_id=interaction_id,
+                    harness_voice=harness_voice, voice_turn_type=opener_type,
+                    speaker_display=turn_speaker_display,
+                )
+
             # --- Realtime voice agent (speaks the reply for this turn) ---------
             # Wake-word mode only commits a turn authorized by a final wake
             # phrase or the short follow-up focus window.
@@ -2691,7 +2817,7 @@ class VoiceService:
                 or (hal_config.WAKEWORD_ENABLED and self._wakeword_focus.is_active())
             )
             wakeword_authorized = wake_word_confirmed.is_set() or wakeword_followup_active
-            dispatch_to_main = harness_listening or should_dispatch_to_main(
+            dispatch_to_main = (voice_cfg.LIVE_MODE and opener_authorized) or harness_listening or should_dispatch_to_main(
                 hal_config.WAKEWORD_ENABLED,
                 wakeword_authorized,
             )
@@ -2700,10 +2826,11 @@ class VoiceService:
                 # Heard, but not addressed to us (no wake word, outside the
                 # follow-up window). Not a missed response — an excluded one.
                 voice_metrics.exclude(interaction_id, voice_metrics.EXCL_NOT_ADDRESSED)
-            if defer_speaker_prepass and dispatch_to_main and not downstream_dropped:
+            if (defer_speaker_prepass and dispatch_to_main and not downstream_dropped
+                    and not live_opener_consumed):
                 resolve_turn_speaker_identity(after_realtime_decision=True)
 
-            if dispatch_to_main:
+            if dispatch_to_main and not live_opener_consumed:
                 # Gemini's audio context and [TTS HISTORY] are session-local.
                 # When this turn is delegated or falls back to the main agent,
                 # persist the user's request before sending it downstream so a
@@ -2742,7 +2869,7 @@ class VoiceService:
                             "Wake-word follow-up focus refreshed for %.0fs",
                             hal_config.WAKEWORD_FOLLOWUP_TIMEOUT_S,
                         )
-            else:
+            elif not live_opener_consumed:
                 self._decorator.submit_speech_emotion_from_session(ser_audio_buffer)
                 # A rejected utterance deliberately has no downstream agent to
                 # replace the listening cue with thinking or TTS. Restore the
@@ -2796,3 +2923,4 @@ class VoiceService:
             # fresh empty buffer. Leaving this log here as a breadcrumb so
             # operators can confirm session boundaries in the log stream.
             logger.info("Session RESET — audio_buffer discarded, ready for next turn")
+        return reopen_mic

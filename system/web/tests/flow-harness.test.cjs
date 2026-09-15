@@ -202,3 +202,73 @@ test('wake classification accepts only input metadata from its own run', () => {
     assert.equal(turns.find(turn => turn.runId === 'neighbor').voiceTurnType, undefined);
   }
 });
+
+const { turnDisplayType, turnMatchesSearch, migrateTurnTypeFilters } =
+  require('../src/pages/monitor/FlowSection/helpers.ts');
+
+function classifiedVoice(classification, realtime = true) {
+  const id = `voice-${classification}-${realtime}`;
+  const source = input(1, id, realtime ? 'voice_agent_handled' : 'voice', realtime ? 'realtime' : 'agent');
+  source.detail.data.voice_turn_type = classification;
+  return groupIntoTurns([source, ...(realtime ? [event(2, id, 'realtime_response', {
+    input: 'Hello Lamp, can you hear me?', text: 'I can!', voice_turn_type: classification,
+  })] : [])])[0];
+}
+
+test('visible handled subtypes preserve raw routing and remain searchable', () => {
+  for (const [kind, expected] of [
+    ['voice_command', 'voice_command_handled'], ['voice_followup', 'voice_followup_handled'],
+    ['voice', 'voice_agent_handled'],
+  ]) {
+    const turn = classifiedVoice(kind);
+    assert.equal(turnDisplayType(turn), expected);
+    assert.equal(turnMatchesSearch(turn, expected.toUpperCase()), true);
+    assert.equal(turnMatchesSearch(turn, 'voice_agent_handled'), true);
+    assert.equal(turnMatchesSearch(turn, 'not a matching question'), false);
+    assert.equal(turn.type, 'voice_agent_handled');
+    assert.equal(turn.path, 'realtime');
+  }
+  assert.equal(turnDisplayType(classifiedVoice('voice_command', false)), 'voice_command');
+  assert.equal(turnDisplayType(classifiedVoice('voice_followup', false)), 'voice_followup');
+  assert.equal(turnDisplayType(classifiedVoice(undefined)), 'voice_agent_handled');
+  const [history] = groupIntoTurns([event(1, 'device-chat-context-display-test', 'chat_input', { message: historyMessage('realtime') })]);
+  assert.equal(turnDisplayType(history), 'history_sync');
+});
+
+test('saved exclusions expand to new visible subtypes', () => {
+  assert.deepEqual([...migrateTurnTypeFilters(['voice_agent_handled'])],
+    ['voice_agent_handled', 'voice_command_handled', 'voice_followup_handled']);
+  assert.deepEqual([...migrateTurnTypeFilters(['voice'])], ['voice', 'voice_command', 'voice_followup']);
+  assert.deepEqual([...migrateTurnTypeFilters(['__dropped'])], ['__dropped']);
+});
+
+test('rendered realtime command and followup badges include handled', () => {
+  const Module = require('node:module');
+  const load = Module._load;
+  require.extensions['.tsx'] = (module, filename) => {
+    const { outputText } = ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
+      compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX },
+      fileName: filename,
+    });
+    module._compile(outputText, filename);
+  };
+  // Browser URL configuration does not affect server-rendered badge labels.
+  Module._load = function(name, ...args) {
+    if (name === '@/lib/api') return { hwUrl: path => path };
+    if (name === '@/lib/useTheme') return { useTheme: () => ['dark', () => {}, 'lm-dark'] };
+    return load.call(this, name, ...args);
+  };
+  try {
+    const React = require('react');
+    const { renderToStaticMarkup } = require('react-dom/server');
+    const { TurnBadge } = require('../src/pages/monitor/FlowSection/TurnBadge.tsx');
+    for (const kind of ['voice_command', 'voice_followup']) {
+      const html = renderToStaticMarkup(React.createElement(TurnBadge, { turn: classifiedVoice(kind) }));
+      assert.match(html, new RegExp(`>${kind}_handled</span>`));
+      assert.match(html, /data-turn-type="voice_agent_handled"/);
+      assert.ok(html.includes('>Realtime</span>'));
+    }
+  } finally {
+    Module._load = load;
+  }
+});

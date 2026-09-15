@@ -32,8 +32,17 @@ class LiveVoiceMetrics:
     def __init__(self):
         self.interactions: dict[str, str] = {}
         self.finished: set[str] = set()
+        self._seeded: set[str] = set()
         self.interrupted: set[str] = set()
         self.coverage = Counter()
+
+    @_observation()
+    def seed(self, turn_id: str, interaction_id: str) -> None:
+        """Attach a buffered STT opener without creating a second interaction."""
+        if turn_id and interaction_id:
+            self.interactions.setdefault(turn_id, interaction_id)
+            self._seeded.add(turn_id)
+            voice_metrics.set_route(interaction_id, "realtime_handled", "voice")
 
     @_observation("")
     def speech(self, turn_id: str, endpoint_at: float | None, method: str) -> str:
@@ -42,7 +51,7 @@ class LiveVoiceMetrics:
             return ""
         iid = self.interactions.get(turn_id, "")
         if iid:
-            if endpoint_at is not None:
+            if endpoint_at is not None and turn_id not in self._seeded:
                 voice_metrics.set_endpoint(iid, method, endpoint_at)
             return iid
         iid = voice_metrics.speech_end(
