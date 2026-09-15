@@ -1055,3 +1055,5 @@ Kiểm chứng: `go test -race ./system/externalhistory`; các test history/obse
 Notification realtime được lưu trước gate busy/readiness của sensing, thay queue pending-event trong RAM cho các lượt này. HTTP thành công trả `runId` gốc ổn định, `historyRunId` riêng và kết quả `speechSuppressed` hiện có. Lỗi lưu trả HTTP 500, không fallback sang gửi thiếu journal. Độ bền bắt đầu khi OS nhận lưu notification; không khôi phục được lượt HAL chưa gửi tới OS. Bằng chứng sensing và marker ảnh look vẫn nằm trong Flow Monitor; đường dẫn snapshot được bỏ khỏi context gửi main như trước.
 
 Khi nhận history realtime, sensing trả ID hội thoại gốc (`device-realtime-…`) trong `runId`, ID đồng bộ riêng trong `historyRunId`. Metrics HAL gắn với lượt gốc; journal và lượt silent gửi main giữ nguyên ID sync ổn định. Chỉ tách bản ghi monitor, không đổi routing voice/follow-up hay chính sách silent/TTS.
+
+Metadata reply-routing Harness trên request sensing voice/chat chỉ được chèn khi transport Harness đã pair và đang kết nối. Request lúc ngắt kết nối bỏ cả reply marker lẫn hint routing/follow-up riêng của Harness; routing voice và follow-up thông thường giữ nguyên.
