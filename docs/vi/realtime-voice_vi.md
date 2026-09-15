@@ -1085,6 +1085,25 @@ loại bỏ hẳn bộ máy đó, đổi lại phải khởi động lại để
 Một giá trị khác `off` do người dùng đặt thì được giữ nguyên. Sai chỗ này sẽ tạo
 ra thiết bị stream audio mãi mãi mà không bao giờ trả lời.
 
+### Giọng main agent trong LIVE
+
+`live_active` vẫn có nghĩa phiên mic đang mở. Property riêng
+`live_speaker_busy` nhận diện realtime đang phát (PCM native hoặc reply realtime
+qua TTS); mic mở nhưng idle không chặn TTS main. `/voice/speak-queue` kiểm tra
+property này tại lúc nhận vào queue. Main đến khi LIVE đang phát sẽ chờ trong
+hàng đợi pre-synthesis HAL hiện có, không ngắt LIVE hay trả `suppressed`.
+Playback native, text streaming và cache đều phát tiếp phần đang chờ khi xong.
+Main run mới thay phần main cũ trong queue; run cũ đến trễ vẫn bị loại theo
+quy tắc stale turn hiện có. Không thêm queue hay cơ chế retry bên OS.
+
+Reset output/cleanup LIVE giữ main đang chờ. Input mới không rỗng, qua
+addressing gate sẽ dừng playback một lần mỗi provider turn và xóa queue;
+explicit stop cũng xóa queue, kể cả speech được giữ lại sau reset model.
+Chính sách cancel OS giữ nguyên. Ngắt theo input xác nhận cần
+`UserSpeechOutput`: Gemini có phát, adapter OpenAI/Qwen hiện chưa phát.
+Mic streaming, server VAD, delegate và đường nhận TTS của LIVE OFF không đổi.
+Test chuyển loa dùng audio giả; barge-in âm thanh cần kiểm tra trên device.
+
 ### Wake-word và focus gate khi vào live
 
 Khi bật `HAL_WAKEWORD_ENABLED`, chỉ VAD local chưa đủ để mở audio live. Sau các bước kiểm tra nhạc/nhiễu, `_live_decision` yêu cầu focus window còn hiệu lực trước khi chuẩn bị phiên realtime live. Focus từ kiểm tra gaze lúc bắt đầu nói, button hoặc lượt wake-word đã được chấp nhận đều cho phép vào. Nếu focus thiếu hoặc hết hạn, decision trả về `turn` để dùng đường STT `_stream_session` thông thường, bất kể gaze đang bật, tắt hay ở shadow mode.
@@ -1092,6 +1111,14 @@ Khi bật `HAL_WAKEWORD_ENABLED`, chỉ VAD local chưa đủ để mở audio l
 Đường STT này báo đang nghe tạm thời khi partial khớp wake phrase như “Hello Lamp”; transcript final/đã ghép phải xác nhận lại trước khi xử lý lượt bình thường. Lượt hợp lệ đi qua dispatch sẽ gia hạn focus window follow-up hiện có. Với Live ON, lượt mở đầu/fallback qua STT gửi transcript final đã được phép tới main agent; `_stream_session` tắt đường realtime thông thường. Provider live đã tự chốt lượt, nên commit thủ công như một lượt realtime thường có thể gửi cùng lượt hai lần. Không chuyển sang live ngay từ partial. VAD kích hoạt lần tiếp theo có thể mở live song công khi focus còn hiệu lực.
 
 Tắt wake-word gate cho phép vào live chỉ dựa trên VAD. Tắt gaze hoặc bật `HAL_GAZE_SHADOW=true` không bỏ qua wake-word gate: `WOULD_WAKE` ở shadow chỉ quan sát và không mở focus. Chỉ kiểm tra gate lúc vào; trong phiên đã được phép, server VAD chia lượt hội thoại. Sau khi kết thúc phiên, lần vào tiếp theo kiểm tra focus lại. Harness voice giữ route riêng hiện có.
+
+Lượt hội thoại LIVE hợp lệ cũng refresh `HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S`,
+một lần tại terminal thành công được provider xác nhận hoặc sau delegate.
+Lượt phải có lời người dùng và được xác định là nói với thiết bị (kể cả focus
+đã có khi mở LIVE). Reject/interruption, timeout receive, input rỗng, output
+chỉ từ model và Harness voice không refresh. Terminal lặp không gia hạn lần
+nữa. Window vẫn có hạn: sau khoảng idle được cấu hình, phiên tiếp theo cần
+wake phrase hoặc một lần cấp focus mới.
 
 ### History của lượt Gemini live hoàn tất
 
@@ -1704,3 +1731,5 @@ Yêu cầu hoặc câu bổ sung hiện tại được chuyển tiếp bằng ng
 Một lượt so sánh audio tổng hợp riêng bằng Gemini 3.1 Live sau đó dùng cùng PCM cho prompt/tool baseline và bản cuối. Message chuyển tiếp của bản cuối là “Ghi vào Notes là sáng mai tưới cây.”, “Mở Airbnb tìm chỗ ở Đà Nẵng giúp mình.” và câu tiếp nối “cuối tuần này hai người”. Baseline đã đổi yêu cầu Notes thành “Remember to water the plants tomorrow morning.”, làm mất tên app và đổi ngôn ngữ. Câu tiếp nối Airbnb chạy trong cùng phiên provider sau câu hỏi bổ sung `[TTS HISTORY]` có kiểm soát; đã xác nhận ranh giới hoàn tất lượt trước từ server và commit audio mới. Kết quả này chứng minh hành vi chuyển tiếp quan sát được cho các clip tổng hợp đó, không chứng minh microphone/wake-word, câu hỏi thật từ main agent hoặc hoàn thành toàn luồng main-agent/desktop. Kết quả cuối riêng được lưu tại `/tmp/buddy-rt-final/result.json` trên thiết bị kiểm thử; lượt đánh giá không thay prompt production hoặc dịch vụ đang chạy.
 
 Realtime và Harness-only voice dùng chung journal `system/externalhistory` và worker gửi silent. HAL vẫn gửi `voice_agent_handled` với `[HANDLED]` / `[REPLY]`; OS ghi atomic lượt realtime hoàn tất trước khi xác nhận nhận và gửi tiếp history pending chưa từng gửi sau restart. Hook ngắt lời cũ chạy trước bước lưu; silent/chặn TTS giữ nguyên. Runtime hỗ trợ active-turn steering vẫn nhận history realtime khi bận; runtime khác chờ rảnh bằng queue trên disk. Lượt gửi chưa rõ kết quả giữ `uncertain`, không tự gửi lại. Flow Monitor hiện **History sync · Realtime → Main**, câu hỏi/câu trả lời gốc là Context. Xem [lịch sử hội thoại từ bên ngoài](os-server_vi.md#lịch-sử-hội-thoại-từ-bên-ngoài).
+
+Phân loại input LIVE còn được gửi trong metadata debug `voice_turn_type`, dùng bộ phân loại wake phrase thông thường và focus đã cho phép input. Reply realtime trực tiếp giữ event routing `voice_agent_handled`; monitor có thể hiển thị command/follow-up độc lập.

@@ -16,10 +16,11 @@ import threading
 import time
 import wave
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import numpy as np
 
+from hal import config as hal_config
 from hal.drivers.voice import aec
 from hal.drivers.voice.tts.resampler import PCMResampler
 from hal.drivers.voice.tts.backend import (
@@ -231,7 +232,7 @@ class _PendingSpeech:
     first delay) and pre-synth time is hidden behind the previous speech's
     playback. Mirrors the tail_producer/tail_q pattern in _speak_sync."""
 
-    __slots__ = ("text", "interruptible", "frame_queue", "failed", "owner", "realtime_reply", "realtime_feedback")
+    __slots__ = ("text", "interruptible", "frame_queue", "failed", "owner", "realtime_reply", "realtime_feedback", "cancelled")
 
     def __init__(self, text: str, interruptible: bool, owner: str = "",
                  realtime_reply: bool = False, realtime_feedback: bool = False):
@@ -243,6 +244,7 @@ class _PendingSpeech:
         self.owner = owner
         self.realtime_reply = realtime_reply
         self.realtime_feedback = realtime_feedback
+        self.cancelled = threading.Event()
         # Producer (pre-synth thread) appends numpy frames as they arrive
         # from the backend; consumer (_drain_pending_queue) writes them to
         # the ALSA stream. None sentinel = producer is done.
@@ -684,10 +686,15 @@ class TTSService:
         return self._realtime_feedback
 
     @property
+    def realtime_speaking(self) -> bool:
+        """The active playback comes from realtime, including native PCM."""
+        return self._speaking and (self._native_mode or self._realtime_reply)
+
+    @property
     def realtime_reply(self) -> bool:
         """This playback is a realtime text answer synthesized through TTS.
 
-        Measurement metadata only: unlike realtime_feedback, this must never
+        Also identifies realtime speaker ownership. Unlike realtime_feedback, this must never
         feed the realtime model its own words back as main-agent history.
         """
         return self._realtime_reply
@@ -749,29 +756,45 @@ class TTSService:
         """Timestamp when last TTS playback finished."""
         return self._last_spoken_time
 
-    def stop(self):
+    def stop(self, preserve_main_queue: bool = False):
         """Interrupt active TTS playback. No-op if not speaking.
 
         Also clears the speak_queue() pending list — pre-synth'd PCM is
         discarded so a stop during sentence-streaming actually silences
         everything the agent had queued ahead, not just the current sentence.
         """
-        if self._speaking:
-            logger.info("TTS stop requested — setting stop event")
-            self._stop_event.set()
-            # Setting the event is not enough on its own: both drain loops
-            # only re-check it between queue.get() calls, and the head queue's
-            # get blocks for up to 2s. A newer turn that preempts this one
-            # waits 2.0s for the lock (see speak_queue), so the winding-down
-            # worker routinely lost that race — measured 4s to release on
-            # lamp-0c89, which 503'd the new turn AFTER the old one had
-            # already been cut to 85ms of audio: both turns silent. Feeding
-            # each queue the same None sentinel the loops already treat as
-            # end-of-stream wakes them immediately.
-            self._wake_drain_queues()
+        if not hal_config.LIVE_MODE:
+            # Preserve the regular turn path's stop/wake/clear ordering.
+            if self._speaking:
+                logger.info("TTS stop requested — setting stop event")
+                self._stop_event.set()
+                self._wake_drain_queues()
+            with self._pending_queue_lock:
+                cleared = len(self._pending_queue)
+                self._pending_queue.clear()
+            if cleared:
+                logger.info("TTS stop cleared %d pending queued speech item(s)", cleared)
+            return
         with self._pending_queue_lock:
-            cleared = len(self._pending_queue)
-            self._pending_queue.clear()
+            before = len(self._pending_queue)
+            retained = []
+            for item in self._pending_queue:
+                if preserve_main_queue and item.realtime_feedback:
+                    retained.append(item)
+                else:
+                    item.cancelled.set()
+            self._pending_queue[:] = retained
+            active = getattr(self, "_active_pending_speech", None)
+            if active is not None:
+                active.cancelled.set()
+            cleared = before - len(retained)
+            self._resume_pending_after_stop = preserve_main_queue and bool(retained)
+            if self._speaking:
+                logger.info("TTS stop requested — setting stop event")
+                self._stop_event.set()
+                # Publish queue retention before waking the worker: its
+                # finalizer decides whether to resume while holding this lock.
+                self._wake_drain_queues()
         if cleared:
             logger.info("TTS stop cleared %d pending queued speech item(s)", cleared)
 
@@ -998,6 +1021,7 @@ class TTSService:
         turn_id: str = "",
         turn_seq: int = 0,
         realtime_reply: bool = False,
+        defer_preemption: Optional[Callable[[], bool]] = None,
     ) -> bool:
         """Speak `text`. If TTS is idle, plays immediately (same as speak()).
         If TTS is currently speaking, the text is appended to a pending queue
@@ -1065,7 +1089,19 @@ class TTSService:
                     self._latest_queue_turn_seq = turn_seq
                     with self._pending_queue_lock:
                         has_pending = bool(self._pending_queue)
-                    if self._speaking or has_pending:
+                    if defer_preemption is not None and defer_preemption():
+                        # A newer main run replaces queued main speech, but must
+                        # not stop the LIVE reply currently using the speaker.
+                        with self._pending_queue_lock:
+                            for item in self._pending_queue:
+                                if not item.realtime_reply:
+                                    item.cancelled.set()
+                            self._pending_queue[:] = [
+                                item for item in self._pending_queue
+                                if item.realtime_reply
+                            ]
+                        logger.info("TTS waiting for LIVE playback: turn_id=%s", turn_id)
+                    elif self._speaking or has_pending:
                         logger.info(
                             "TTS newer turn preempting speaker (old_turn=%s new_turn=%s seq=%d)",
                             previous_id or "untracked", turn_id, turn_seq,
@@ -1123,15 +1159,29 @@ class TTSService:
                 realtime_reply=realtime_reply,
                 realtime_feedback=realtime_feedback,
             )
+            resume = False
             with self._pending_queue_lock:
                 self._pending_queue.append(item)
+                if hal_config.LIVE_MODE and self._stop_event.is_set():
+                    # This item arrived after stop cleared the old queue.
+                    self._resume_pending_after_stop = True
                 depth = len(self._pending_queue)
+                # The previous worker may have finished after our first lock
+                # attempt. Do not leave accepted LIVE speech without a drain.
+                if hal_config.LIVE_MODE and self._lock.acquire(blocking=False):
+                    self._stop_event.clear()
+                    self._speaking = True
+                    self._speak_start_fired = False
+                    resume = True
             threading.Thread(
                 target=self._pre_synth_pending,
                 args=(item,),
                 daemon=True,
                 name="tts-pre-synth",
             ).start()
+            if resume:
+                threading.Thread(target=self._drain_live_queue, daemon=True,
+                                 name="tts-live-queue").start()
             logger.info(
                 "TTS queued for pre-synth (busy, queue depth=%d): %s",
                 depth,
@@ -1150,16 +1200,24 @@ class TTSService:
         Honors _stop_event so stop() during pre-synth aborts cleanly. Always
         writes the None sentinel at the end so the drain stops looking.
         """
+        stopped = item.cancelled.is_set if hal_config.LIVE_MODE else self._stop_event.is_set
         try:
             dst_rate = self._device_rate or TTS_SAMPLE_RATE
             chunks = self._split_text_into_growing_sentence_chunks(item.text)
             for chunk_text in chunks:
-                if self._stop_event.is_set():
+                if stopped():
                     return
-                for frame in self._iter_tts_samples(chunk_text, dst_rate, ttfb_tag="pre-synth"):
-                    if self._stop_event.is_set():
+                for frame in self._iter_tts_samples(
+                    chunk_text, dst_rate, ttfb_tag="pre-synth", cancelled=stopped,
+                ):
+                    if stopped():
                         return
-                    item.frame_queue.put(frame)
+                    while not stopped():
+                        try:
+                            item.frame_queue.put(frame, timeout=0.2)
+                            break
+                        except queue.Full:
+                            continue
         except Exception:
             logger.exception("Pre-synth failed for queued item")
             item.failed = True
@@ -1192,12 +1250,24 @@ class TTSService:
                     break
                 item = self._pending_queue.pop(0)
                 self._pending_playback_owner = item.owner
+                if hal_config.LIVE_MODE:
+                    # Ownership changes before waiting for synthesis. A model
+                    # reset must not mistake this main segment for LIVE audio.
+                    self._active_pending_speech = item
+                    self._realtime_reply = item.realtime_reply
+                    self._realtime_feedback = item.realtime_feedback
+                    self._interruptible = item.interruptible
+            if hal_config.LIVE_MODE:
+                self._register_drain_queue(item.frame_queue)
             try:
                 first = item.frame_queue.get(timeout=15.0)
             except queue.Empty:
                 self._pending_playback_owner = ""
                 logger.warning("Pre-synth no first frame within 15s, abandoning: %s", item.text[:60])
                 continue
+            if hal_config.LIVE_MODE and self._stop_event.is_set():
+                self._pending_playback_owner = ""
+                break
             if first is None:
                 self._pending_playback_owner = ""
                 if item.failed:
@@ -1206,6 +1276,14 @@ class TTSService:
                     logger.warning("Pre-synth produced no frames, skipping: %s", item.text[:60])
                 continue
             self._last_spoken_text = item.text
+            if hal_config.LIVE_MODE:
+                # LIVE and main speech can now share the queue. Feedback and
+                # interruption policy must follow the segment actually played.
+                self._realtime_feedback = item.realtime_feedback
+                self._interruptible = item.interruptible
+                if not self._speak_start_fired and self._on_speak_start:
+                    self._speak_start_fired = True
+                    self._on_speak_start()
             logger.info("Playing pre-synth'd queued speech (streaming): %s", item.text[:80])
             # Each queued segment is its own playback for measurement: re-arm
             # the hook under THIS item's owner so it is attributed to the turn
@@ -1329,10 +1407,11 @@ class TTSService:
         if transcript:
             self._last_spoken_text = transcript
         self._last_spoken_time = time.time()
-        try:
-            self._lock.release()
-        except RuntimeError:
-            pass
+        if not hal_config.LIVE_MODE:
+            try:
+                self._lock.release()
+            except RuntimeError:
+                pass
         self._note_playback_done()
         if self._on_speak_end:
             try:
@@ -1343,6 +1422,52 @@ class TTSService:
         self._native_rs_carry = None
         self._native_rs_pos = 0.0
         self._native_direct = False
+
+        if not hal_config.LIVE_MODE:
+            return
+
+        self._release_or_drain_live_queue()
+
+    def _release_or_drain_live_queue(self) -> None:
+        """Finish atomically with LIVE queue admission; OFF keeps its old path."""
+        if not hal_config.LIVE_MODE:
+            self._lock.release()
+            return
+        with self._pending_queue_lock:
+            pending = bool(self._pending_queue) and (
+                not self._stop_event.is_set()
+                or getattr(self, "_resume_pending_after_stop", False)
+            )
+            if pending:
+                self._resume_pending_after_stop = False
+                self._stop_event.clear()
+                self._speaking = True
+                self._speak_start_fired = False
+            else:
+                self._lock.release()
+        if pending:
+            threading.Thread(target=self._drain_live_queue, daemon=True,
+                             name="tts-live-queue").start()
+
+    def _drain_live_queue(self) -> None:
+        """Resume accepted speech after a LIVE playback worker finishes."""
+        try:
+            with self._stream_lock:
+                stream = self._ensure_stream(self._device_rate or TTS_SAMPLE_RATE)
+                self._drain_pending_queue(stream)
+        except Exception:
+            logger.exception("TTS queued playback after LIVE audio failed")
+        finally:
+            self._speaking = False
+            self._last_spoken_time = time.time()
+            self._forget_drain_queues()
+            self._note_playback_done()
+            if self._on_speak_end:
+                try:
+                    self._on_speak_end()
+                except Exception:
+                    logger.exception("on_speak_end after LIVE queue failed")
+            self._release_or_drain_live_queue()
 
     def _resample_stream(self, chunk, src_rate: int, dst_rate: int):
         """Linear resample that stays continuous ACROSS streamed chunks.
@@ -1451,8 +1576,10 @@ class TTSService:
                 chunks[-1] = f"{chunks[-1]} {remainder}".strip()
         return [c for c in chunks if c]
 
-    def _iter_tts_samples(self, text: str, dst_rate: int, ttfb_tag: Optional[str] = None):
+    def _iter_tts_samples(self, text: str, dst_rate: int, ttfb_tag: Optional[str] = None,
+                          cancelled: Optional[Callable[[], bool]] = None):
         """Yield float32 sample frames from the TTS backend's PCM stream."""
+        stopped = cancelled if cancelled is not None else self._stop_event.is_set
         np = self._np
         src_rate = self._backend.sample_rate
         # Head, tail and queued pre-synthesis run concurrently. Each iterator
@@ -1469,7 +1596,7 @@ class TTSService:
             speed=self._speed,
             instructions=self._instructions,
         ):
-            if self._stop_event.is_set():
+            if stopped():
                 return
             raw = remainder + chunk
             usable = len(raw) - (len(raw) % 2)
@@ -1494,7 +1621,7 @@ class TTSService:
                 )
             yield samples.reshape(-1, 1)
 
-        if not self._stop_event.is_set():
+        if not stopped():
             samples = resampler.process([], final=True)
             if len(samples):
                 yield samples.reshape(-1, 1)
@@ -1656,7 +1783,7 @@ class TTSService:
             self._speaking = False
             self._last_spoken_time = time.time()
             self._forget_drain_queues()
-            self._lock.release()
+            self._release_or_drain_live_queue()
             return
 
         # _on_speak_start fires on first audio frame, not here — see _stream_chunk_with_retry
@@ -1792,7 +1919,7 @@ class TTSService:
             except Exception:
                 logger.exception("on_speak_end callback failed")
 
-        self._lock.release()
+        self._release_or_drain_live_queue()
 
         # Zero-sample completion = backend failure (all producer retries
         # gave up: Cloudflare 5xx, timeout, network drop). Flash amber so
@@ -1986,7 +2113,7 @@ class TTSService:
                 except Exception:
                     logger.exception("on_speak_end (cached) failed")
             try:
-                self._lock.release()
+                self._release_or_drain_live_queue()
             except Exception:
                 pass
 
@@ -2024,6 +2151,9 @@ class TTSService:
                 if self._stop_event.is_set():
                     break
                 stream.write(samples[i : i + block])
+
+            if hal_config.LIVE_MODE:
+                self._drain_pending_queue(stream)
 
         logger.info(
             "TTS cached %s: %d samples @ %d Hz, took %.0fms (path=%s)",

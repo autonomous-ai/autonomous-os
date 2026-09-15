@@ -32,14 +32,32 @@ func (h *SensingHandler) persistRealtimeHistory(c *gin.Context, req SensingEvent
 	// Preserve the original sensing evidence and look thumbnail for the web turn.
 	start := flow.Start("sensing_input", map[string]any{
 		"type": req.Type, "message": req.Message, "interaction_id": req.InteractionID,
-		"route": "realtime", "history_run_id": historyRunID,
+		"route": "realtime", "history_run_id": historyRunID, "voice_turn_type": req.voiceTurnType(),
 	}, runID)
 	flow.End("sensing_input", start, map[string]any{"path": "realtime"}, runID)
 	flow.Log("realtime_response", map[string]any{
 		"input": input, "text": strings.TrimSpace(reSnapshotPath.ReplaceAllString(reply, "")),
-		"history_run_id": historyRunID,
+		"history_run_id": historyRunID, "voice_turn_type": req.voiceTurnType(),
 	}, runID)
 	c.JSON(http.StatusOK, serializers.ResponseSuccess(map[string]any{
 		"handler": "external_history", "runId": runID, "historyRunId": historyRunID, "speechSuppressed": suppressed,
 	}))
+}
+
+// A display hint cannot grant wake authorization or change event dispatch.
+func (req SensingEventRequest) voiceTurnType() string {
+	switch req.Type {
+	case "voice", "voice_command", "voice_followup", "voice_agent_handled":
+	default:
+		return ""
+	}
+	switch req.VoiceTurnType {
+	case "voice", "voice_command", "voice_followup":
+		return req.VoiceTurnType
+	}
+	switch req.Type {
+	case "voice", "voice_command", "voice_followup":
+		return req.Type
+	}
+	return ""
 }
