@@ -99,3 +99,31 @@ a code failure. The required checks were then rerun sequentially:
 | `go vet ./...` | Exit 0, no diagnostics. |
 | `gofmt -l $(git diff --name-only origin/main..HEAD -- '*.go')` | Exit 0, no output. |
 | `git diff --check` | Exit 0, no diagnostics. |
+
+## Final upstream refresh proof — 2026-09-15
+
+After the first push, GitHub's standard `gh pr update-branch 406` operation
+incorporated the then-current upstream base and created
+`ba2868491` (`Merge branch 'main' into codex/gus-runtime-contract-20260914`).
+`git fetch origin main` advanced the local base from `d308e08db` to
+`aea3fafe7`, and `git merge --ff-only intern-pr-fork/codex-gus-runtime-20260914`
+fast-forwarded the worktree to `ba2868491` with no conflicts. The merge commit's
+second parent is `aea3fafe7`; `git merge-base --is-ancestor origin/main HEAD`
+passed.
+
+The additional upstream commit contains Buddy in-app update files only. It did
+not alter Intern files or create an incompatibility. The final-head checks were
+rerun sequentially because Intern tests use fixed loopback fixtures:
+
+| Command | Observed result |
+|---|---|
+| `go test -race -count=1 ./runtimes/intern/... ./system/lib/internbridge ./system/server` | Exit 0; Intern 1.324s, bridge 1.652s, client 1.879s, server 9.426s. |
+| `go test ./...` | Exit 0; all packages passed. |
+| `go vet ./...` | Exit 0, no diagnostics. |
+| `gofmt -l $(git diff --name-only origin/main..HEAD -- '*.go')` | Exit 0, no output. |
+| `git diff --check` | Exit 0, no diagnostics. |
+
+GitHub compare for the final pushed head reports `behind_by: 0` and
+`ahead_by: 19`. PR #406 remains open and reports `mergeable: true` with
+`mergeStateStatus: blocked`; its check rollup is empty, so no CI result is
+available. The PR was not merged and no deployment occurred.
