@@ -170,3 +170,35 @@ test('ordinary voice and followup are not relabeled by neighboring history sync'
     assert.equal(turns.find(t => t.runId === id).type, type);
   }
 });
+
+test('wake classification labels realtime input without changing its routing or history', () => {
+  const id = 'device-realtime-followup';
+  const turns = groupIntoTurns([
+    input(1, id, 'voice_agent_handled', 'realtime'),
+    event(2, id, 'realtime_response', { input: 'And tomorrow?', text: 'Sunny.', voice_turn_type: 'voice_followup' }),
+    event(3, 'device-chat-context-followup', 'chat_input', { message: historyMessage('realtime') }),
+  ]);
+  const original = turns.find(turn => turn.runId === id);
+  assert.equal(original.voiceTurnType, 'voice_followup');
+  assert.equal(original.type, 'voice_agent_handled');
+  assert.equal(original.path, 'realtime');
+  assert.equal(turnIO(original).output, 'Sunny.');
+  assert.equal(turns.find(turn => turn.type === 'history_sync').voiceTurnType, undefined);
+});
+
+test('wake classification accepts only input metadata from its own run', () => {
+  for (const classification of ['voice', 'voice_command', 'voice_followup', 'garbage', '', null]) {
+    const source = input(1, 'classified', 'voice', 'agent');
+    source.detail.data.voice_turn_type = classification;
+    const turns = groupIntoTurns([
+      source,
+      input(2, 'neighbor', 'voice', 'agent'),
+      event(3, 'neighbor', 'tts_send', { voice_turn_type: 'voice_followup' }),
+    ]);
+    const classified = turns.find(turn => turn.runId === 'classified');
+    assert.equal(classified.voiceTurnType,
+      ['voice', 'voice_command', 'voice_followup'].includes(classification) ? classification : undefined);
+    assert.equal(classified.type, 'voice');
+    assert.equal(turns.find(turn => turn.runId === 'neighbor').voiceTurnType, undefined);
+  }
+});

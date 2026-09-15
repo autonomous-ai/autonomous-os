@@ -33,6 +33,8 @@ export interface Turn {
   sessionBreak?: boolean;
   endTime?: string;
   type: string;
+  // Observed wake classification; independent of routing and event type.
+  voiceTurnType?: "voice" | "voice_command" | "voice_followup";
   path: "local" | "agent" | "harness" | "realtime" | "dropped" | "queued" | "unknown";
   status: "active" | "done" | "error";
   events: DisplayEvent[];
@@ -302,7 +304,7 @@ import {
 } from "lucide-react";
 
 export const TYPE_LUCIDE: Record<string, LucideIcon> = {
-  voice: Mic, voice_command: Mic2, voice_agent_handled: Mic, sound: Volume2,
+  voice: Mic, voice_command: Mic2, voice_followup: Mic, voice_agent_handled: Mic, sound: Volume2,
   motion: Eye, "motion.activity": Activity,
   "presence.enter": Smile, "presence.leave": Hand, "presence.away": Moon,
   "light.level": Sun, "emotion.detected": Smile,
