@@ -127,3 +127,45 @@ GitHub compare for the final pushed head reports `behind_by: 0` and
 `ahead_by: 19`. PR #406 remains open and reports `mergeable: true` with
 `mergeStateStatus: blocked`; its check rollup is empty, so no CI result is
 available. The PR was not merged and no deployment occurred.
+
+## Device voice lifecycle audit — 2026-09-15
+
+Re-audited the active `agent_runtime: "intern"` lifecycle after the service
+intent contract work. It does **not** admit a real microphone/STT request or
+return speech through the device voice path, by deliberate design. This is a
+safe blocker, not an incomplete wiring task.
+
+- `system/server/intern.go:newInternServer` creates only the text-only gateway
+  and the minimal Intern router. It constructs no sensing, agent-event, MQTT,
+  HAL, or device handlers. `runIntern` starts the worker with a nil event
+  handler, so no legacy or interim agent frame can enter a speech delivery path.
+- The existing physical input surface,
+  `system/server/sensing/delivery/http/handler.go:PostEvent`, rejects every
+  `domain.IsTextOnlyGateway` before it binds or processes a `voice_command`.
+  This prevents local intent/device execution as well as unclassified speech
+  from reaching Intern.
+- `SensingEventRequest` has no trusted `DataClass` or admission assertion for
+  a transcript. Its `Message` is a plain string, while
+  `intern.AdmitTrustedVoiceRequest` requires a bounded context and
+  `internbridge.Request` with caller-supplied custody. Inferring public or
+  business from STT text, a wake word, channel, or a model would violate the
+  Intern boundary.
+- The existing OS speech interface is `domain.AgentGateway.SendToHALTTS` (and
+  `Speak`/queue variants), but `runtimes/intern/unsupported.go` intentionally
+  returns `domain.ErrNotSupportedByRuntime` for each. The administrator-only
+  voice grant routes only to the bounded bridge/result API and never to TTS.
+
+Required Director/upstream confirmation: define an authenticated HAL-to-server
+voice admission interface that carries an exact final transcript, explicit
+trusted custody class, bounded capture/grant lifetime, and interaction ID;
+define its final-only result ownership for the existing HAL speech endpoint.
+The contract must say how interim/STT legacy frames, mixed or unknown custody,
+and smart-home phrases are rejected before bridge submission and how a final
+answer is distinguished from reception/service proposals. No such interface
+exists today. Adding a sensing callback, assigning a default data class, or
+calling HAL directly would invent authority and would make the text-only
+Intern runtime a device-control plane, so this PR does not do so.
+
+Focused regression proof now includes an Intern-selected request to
+`/api/sensing/event` carrying a `voice_command`; it remains `501 Not
+Supported`, alongside device/channel/action and unclassified-input denials.

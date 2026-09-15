@@ -277,6 +277,7 @@ func TestInternServerRejectsDeviceChannelAndUnclassifiedEffects(t *testing.T) {
 	for _, tc := range []struct{ method, path, body string }{
 		{http.MethodPost, "/api/device/channel", `{"type":"telegram","token":"must-not-load"}`},
 		{http.MethodPost, "/api/hardware/led", `{}`},
+		{http.MethodPost, "/api/sensing/event", `{"type":"voice_command","message":"Gus, hello"}`},
 		{http.MethodPost, "/api/agent/events", `{"type":"tool","text":"act"}`},
 		{http.MethodPost, "/api/agent/intern/chat", `{"text":"unclassified","operation":"generate","data_class":"public"}`},
 		{http.MethodPost, "/api/agent/intern/chat", `{"text":"secret","operation":"generate","data_class":"secret","admission":"administrator_classified_exact_text"}`},
