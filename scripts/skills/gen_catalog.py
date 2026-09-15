@@ -49,13 +49,14 @@ CAP_CONST = {
 
 
 def read_tree():
-    """[(name, [capabilities], note)] in folder order."""
+    """[(name, [capabilities], note, disabled)] in folder order."""
     out = []
     for d in sorted(p for p in SKILLS.iterdir() if p.is_dir()):
         sidecar = d / "skill.json"
-        caps, note = [], ""
+        caps, note, disabled = [], "", False
         if sidecar.is_file():
             data = json.loads(sidecar.read_text())
+            disabled = bool(data.get("disabled"))
             caps = list(data.get("capabilities", []))
             note = data.get("note", "")
             for c in caps:
@@ -66,7 +67,7 @@ def read_tree():
                     )
         elif not (d / "SKILL.md").is_file():
             continue  # not a skill folder
-        out.append((d.name, caps, note))
+        out.append((d.name, caps, note, disabled))
     return out
 
 
@@ -83,7 +84,7 @@ def render_go(skills):
         "// Catalog is every skill folder in skills/, in folder order.",
         "var Catalog = []string{",
     ]
-    lines += [f'\t"{n}",' for n, _, _ in skills]
+    lines += [f'\t"{n}",' for n, _, _, _ in skills]
     lines += [
         "}",
         "",
@@ -92,7 +93,7 @@ def render_go(skills):
         "// absent from this map has no hardware dependency and installs everywhere.",
         "var Capability = map[string][]string{",
     ]
-    for name, caps, note in skills:
+    for name, caps, note, _ in skills:
         if not caps:
             continue
         if note:
@@ -100,6 +101,15 @@ def render_go(skills):
                 lines.append(f"\t// {chunk}")
         consts = ", ".join(f"device.{CAP_CONST[c]}" for c in caps)
         lines.append(f'\t"{name}": {{{consts}}},')
+    lines += [
+        "}",
+        "",
+        "// Disabled lists skills switched off in skill.json (\"disabled\": true):",
+        "// still catalogued so every runtime prunes them from devices, never",
+        "// installed. Note the reason in skill.json.",
+        "var Disabled = map[string]bool{",
+    ]
+    lines += [f'\t"{n}": true,' for n, _, _, d in skills if d]
     lines += ["}", ""]
     return "\n".join(lines)
 
@@ -118,7 +128,7 @@ def wrap(text, width):
 
 
 def render_shell(skills):
-    names = " ".join(n for n, _, _ in skills)
+    names = " ".join(n for n, _, _, d in skills if not d)
     lines = [
         BEGIN,
         "  SKILLS_CATALOG=\"" + names + "\"",
@@ -127,8 +137,8 @@ def render_shell(skills):
         "  skill_caps() {",
         "    case \"$1\" in",
     ]
-    for name, caps, _ in skills:
-        if not caps:
+    for name, caps, _, disabled in skills:
+        if not caps or disabled:
             continue
         value = " ".join(caps)
         quoted = f'"{value}"' if len(caps) > 1 else value
