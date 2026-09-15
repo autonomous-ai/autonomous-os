@@ -46,12 +46,24 @@ func (g *steeringBusyGateway) SendChatMessageWithRun(string, string, string) (st
 	return "run-handled", nil
 }
 
-func postRealtimeHandled(t *testing.T, h *SensingHandler) *httptest.ResponseRecorder {
+func postRealtimeHandled(t *testing.T, h *SensingHandler, voiceType ...string) *httptest.ResponseRecorder {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	body := `{"type":"voice_agent_handled","message":"[HANDLED] what time is it\n[REPLY] just past two"}`
+	if len(voiceType) > 0 {
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(body), &payload); err != nil {
+			t.Fatal(err)
+		}
+		payload["voice_turn_type"] = voiceType[0]
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body = string(encoded)
+	}
 	c.Request = httptest.NewRequest(http.MethodPost, "/api/sensing/event", bytes.NewBufferString(body))
 	c.Request.Header.Set("Content-Type", "application/json")
 	h.PostEvent(c)

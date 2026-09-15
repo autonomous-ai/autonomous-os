@@ -42,3 +42,34 @@ func TestRealtimeHistoryPersistenceErrorDoesNotFallThrough(t *testing.T) {
 		t.Fatalf("failed persistence accepted: %d", rec.Code)
 	}
 }
+
+func TestFollowupDisplayHintKeepsRealtimeHistoryRouting(t *testing.T) {
+	gw := &busyGateway{}
+	h := &SensingHandler{agentGateway: gw, monitorBus: monitor.ProvideBus(), config: &config.Config{}}
+	calls := 0
+	h.SetRealtimeHistory(func(string, string) (string, error) {
+		calls++
+		return "device-chat-context-followup", nil
+	})
+	rec := postRealtimeHandled(t, h, "voice_followup")
+	if rec.Code != http.StatusOK || calls != 1 || gw.queued != 0 {
+		t.Fatalf("display hint changed dispatch: status=%d history=%d queued=%d", rec.Code, calls, gw.queued)
+	}
+}
+
+func TestVoiceTurnTypeIsValidatedDisplayMetadata(t *testing.T) {
+	for _, tc := range []struct{ event, hint, want string }{
+		{"voice_agent_handled", "voice_followup", "voice_followup"},
+		{"voice_agent_handled", "invalid", ""},
+		{"voice_followup", "", "voice_followup"},
+		{"sound", "voice_command", ""},
+	} {
+		req := SensingEventRequest{Type: tc.event, VoiceTurnType: tc.hint}
+		if got := req.voiceTurnType(); got != tc.want {
+			t.Fatalf("%+v: got %q", tc, got)
+		}
+		if req.Type != tc.event {
+			t.Fatal("display classification mutated routing")
+		}
+	}
+}

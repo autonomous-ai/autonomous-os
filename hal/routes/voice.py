@@ -442,13 +442,6 @@ def speak_queue_text(req: SpeakRequest):
         state.logger.info("POST /voice/speak-queue: suppressed -- speaker muted")
         return {"status": "suppressed"}
 
-    if getattr(state.voice_service, "live_active", False):
-        state.logger.info(
-            "POST /voice/speak-queue: suppressed -- a live session owns the "
-            "conversation (len=%d)", len(req.text or ""),
-        )
-        return {"status": "suppressed"}
-
     if state.music_service and state.music_service.streaming:
         state.logger.info("POST /voice/speak-queue: rejected -- music is playing")
         raise HTTPException(409, "Speaker busy -- music is playing")
@@ -461,12 +454,17 @@ def speak_queue_text(req: SpeakRequest):
         len(req.text or ""),
         req.interruptible,
     )
+    # Evaluate ownership inside TTS admission, not at an earlier HTTP snapshot.
+    queue_options = {}
+    if getattr(state.voice_service, "live_active", False):
+        queue_options["defer_preemption"] = lambda: state.voice_service.live_speaker_busy
     ok = state.tts_service.speak_queue(
         req.text,
         interruptible=req.interruptible,
         realtime_feedback=req.realtime_feedback,
         turn_id=req.turn_id,
         turn_seq=req.turn_seq,
+        **queue_options,
     )
     if not ok:
         raise HTTPException(503, "TTS not available")

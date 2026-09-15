@@ -1129,6 +1129,27 @@ so it must be settled before those models are defined. An explicit non-`off`
 value is left alone. Getting this wrong produces a device that streams audio
 forever and never answers.
 
+### Main-agent speech during LIVE
+
+`live_active` still means the microphone session is open. The separate
+`live_speaker_busy` property identifies active realtime playback (native PCM or
+a synthesized realtime reply); an open idle mic does not suppress main TTS.
+`/voice/speak-queue` evaluates that property during queue admission. A main
+reply arriving during LIVE playback waits in the existing HAL pre-synthesis
+queue rather than preempting LIVE or returning `suppressed`. Native, streamed
+text and cached playback drain waiting speech after releasing their output.
+A newer main run replaces older queued main segments; delayed older runs keep
+the existing stale-turn rejection. No OS queue or retry mechanism is added.
+
+LIVE output reset/session cleanup preserves pending main replies. A new
+non-empty addressed input stops playback once per provider turn and clears the
+queue; an explicit stop also clears it, including speech retained by a preceding
+model reset. Existing OS cancellation policy remains unchanged. Confirmed-input
+interruption requires `UserSpeechOutput`: Gemini emits it; OpenAI/Qwen adapters
+currently do not. Mic streaming, server VAD, delegate routing and LIVE OFF
+admission remain unchanged. Playback handoff tests use fake audio; acoustic
+barge-in still needs a device test.
+
 ### Wake-word and focus gate at live entry
 
 When `HAL_WAKEWORD_ENABLED` is enabled, local VAD alone cannot open live audio. After the music/noise checks, `_live_decision` requires an active focus window before preparing a live realtime session. Focus granted by the speech-start gaze check, a button or a prior accepted wake-word turn permits entry. If focus is missing or expired, the decision returns `turn` and uses the ordinary `_stream_session` STT path, independently of whether gaze is enabled or in shadow mode.
@@ -1136,6 +1157,14 @@ When `HAL_WAKEWORD_ENABLED` is enabled, local VAD alone cannot open live audio. 
 That STT path gives a provisional listening cue when a partial matches a wake phrase such as “Hello Lamp”; the final/assembled transcript must confirm it before normal turn processing. A valid dispatched turn refreshes the existing follow-up focus window. With Live ON, the STT opener/fallback sends the authorized final transcript to the main agent; `_stream_session` disables its regular realtime path. The live provider already uses automatic turn detection, so manually committing a regular realtime turn could submit it twice. There is no handoff to live on a partial. The next VAD trigger can open full-duplex live while focus is active.
 
 Disabling wake-word gating permits VAD-only live entry. Disabling gaze or setting `HAL_GAZE_SHADOW=true` does not bypass the wake-word gate: shadow `WOULD_WAKE` is observational and grants no focus. The gate is checked only at entry; server VAD owns turn-taking inside an accepted live session. After hangup, the next entry checks focus again. Harness voice continues through its existing separate route.
+
+Accepted LIVE follow-ups also refresh `HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S`,
+once at a confirmed successful provider terminal or after delegation. The turn
+must contain user speech and be addressed (including focus latched at live
+entry). Rejected/interrupted turns, receive timeouts, empty input, model-only
+output and Harness voice do not refresh it. A duplicate terminal cannot extend
+it again. The deadline remains finite: after the configured idle interval,
+the next session needs a wake phrase or another explicit focus grant.
 
 ### Completed Gemini live history
 
@@ -1763,3 +1792,5 @@ The current request or follow-up is forwarded in the language the user just spok
 A subsequent isolated Gemini 3.1 Live synthetic-audio comparison reused identical PCM clips across the baseline and final prompt/tool definitions. The final delegate messages were “Ghi vào Notes là sáng mai tưới cây.”, “Mở Airbnb tìm chỗ ở Đà Nẵng giúp mình.”, and the follow-up “cuối tuần này hai người”. The baseline had changed the Notes request into “Remember to water the plants tomorrow morning.”, losing the named app and changing language. The Airbnb follow-up used the same provider session after a controlled `[TTS HISTORY]` clarification; the previous server completion boundary and new audio commit were confirmed. This establishes the observed delegation behavior for those synthetic clips, not microphone/wake-word performance, an actual main-agent clarification, or main-agent/desktop end-to-end completion. The isolated final result was recorded at `/tmp/buddy-rt-final/result.json` on the test device; no production prompt or service was changed by that evaluation.
 
 Realtime and Harness-only voice now share the `system/externalhistory` journal and silent delivery worker. HAL still sends `voice_agent_handled` with `[HANDLED]` / `[REPLY]`; OS atomically persists the completed realtime exchange before acknowledging it and resumes never-sent pending history after restart. The existing speaker-supersession hook runs before persistence, and silent/TTS suppression is unchanged. Busy runtimes with active-turn steering retain that capability for realtime history; others wait durably for idle. Ambiguous sends are retained as `uncertain`, not automatically replayed. Flow Monitor displays the sync as **History sync · Realtime → Main**, with the original question/answer as Context. See [external conversation history](os-server.md#external-conversation-history).
+
+LIVE input classification is also sent as observational `voice_turn_type` metadata. It uses the regular wake-phrase classifier and the focus that authorized the input. Direct realtime answers retain the `voice_agent_handled` routing event, while the monitor can display command/follow-up independently.
