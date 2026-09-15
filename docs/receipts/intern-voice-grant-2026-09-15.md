@@ -51,7 +51,7 @@ cannot undo a provider request already sent or prove remote computation stopped.
 Final code verification used local HTTP fixtures only, with synthetic session
 material. No provider API, live model, device, credential file, Wi-Fi or service
 was accessed or changed. No work occurred in Project Spider-Man or the live
-runtime. No merge or deployment is authorized or performed.
+runtime. No PR merge or deployment was authorized or performed.
 
 | Command | Observed result |
 |---|---|
@@ -77,3 +77,25 @@ no fan-out, local defaults, queue/result bounds and minimal activation graph.
 Full-repository tests/build and device acceptance were not rerun for this
 focused change. Provider billing and Codex token/credit metrics are unavailable,
 not reported as zero. Commit/push and PR status are reported in the task handoff.
+
+## Refresh proof — 2026-09-15
+
+`git fetch origin main` advanced `origin/main` from `86579cc3e` to
+`d308e08db`. `git merge --no-edit origin/main` completed with no conflicts and
+created merge commit `c4289522b`. The upstream commits touched harness,
+hardware fallback, Buddy, MQTT/web and version files; no Intern grant conflict
+was present. The grant gate, minimal Intern activation graph and provider
+boundary remain in the merged tree.
+
+The first parallel full/race invocation had a fixed-loopback-port contention
+between independent server test processes and timed out in
+`TestNativeInternLifecycleAndGeneration`; this was a test-runner collision, not
+a code failure. The required checks were then rerun sequentially:
+
+| Command | Observed result |
+|---|---|
+| `go test -race -count=1 ./runtimes/intern/... ./system/lib/internbridge ./system/server` | Exit 0; all four packages passed. |
+| `go test ./...` | Exit 0; all packages passed. |
+| `go vet ./...` | Exit 0, no diagnostics. |
+| `gofmt -l $(git diff --name-only origin/main..HEAD -- '*.go')` | Exit 0, no output. |
+| `git diff --check` | Exit 0, no diagnostics. |
