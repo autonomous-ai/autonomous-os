@@ -76,6 +76,7 @@ func (s *Server) internRouterContext(ctx context.Context) *gin.Engine {
 	api.POST("/agent/intern/voice/grant", s.internVoiceGrant(voice))
 	api.DELETE("/agent/intern/voice/grant", s.internVoiceRevoke(voice))
 	api.POST("/agent/intern/voice/chat", s.internVoiceChat(voice))
+	api.POST("/agent/intern/voice/transcript", s.internVoiceTranscript(voice))
 	api.POST("/agent/intern/chat", s.internChat)
 	api.GET("/agent/intern/result/:runID", s.internResult)
 	api.GET("/agent/status", func(c *gin.Context) {

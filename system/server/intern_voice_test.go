@@ -23,6 +23,7 @@ import (
 
 const voicePath = "/api/agent/intern/voice/"
 const voiceBody = `{"text":"Gus, Rex, draft a business greeting.","operation":"generate","data_class":"business","admission":"administrator_classified_exact_text"}`
+const transcriptBody = `{"transcript":"Please welcome today's visitor.","final":true,"wake_word":"Gus","operation":"reception","data_class":"business","admission":"administrator_final_transcript"}`
 
 func voiceSessionToken(cfg *config.Config, expiry time.Time) string {
 	key, _ := hex.DecodeString(cfg.SessionSecret)
@@ -229,5 +230,80 @@ func TestInternVoiceLifecycleCancelsGrant(t *testing.T) {
 	cancel()
 	if rec := internRequest(t, r, "POST", voicePath+"chat", voiceBody, token); rec.Code != 403 {
 		t.Fatal("grant survived lifecycle", rec.Code)
+	}
+}
+
+func TestInternFinalTranscriptAdmission(t *testing.T) {
+	var calls atomic.Int32
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"message":{"role":"assistant","content":"orchestration"},"done":true,"done_reason":"stop","eval_count":1}`)
+	}))
+	defer provider.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	b, err := bridge.Start(ctx, bridge.ProviderConfig{Endpoint: provider.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close(context.Background())
+	cfg := &config.Config{AgentRuntime: "intern", SessionSecret: strings.Repeat("cd", 32)}
+	s := newInternServer(cfg)
+	w := s.agentGateway.(*intern.Service)
+	done := make(chan struct{})
+	go func() { defer close(done); w.StartWS(ctx, nil) }()
+	defer func() { cancel(); <-done }()
+	waitCtx, stop := context.WithTimeout(ctx, time.Second)
+	defer stop()
+	if err := w.WaitStarted(waitCtx); err != nil {
+		t.Fatal(err)
+	}
+	r := s.internRouterContext(ctx)
+	token := voiceSessionToken(cfg, time.Now().Add(time.Hour))
+	request := func(body string, want int) *httptest.ResponseRecorder {
+		t.Helper()
+		rec := internRequest(t, r, "POST", voicePath+"transcript", body, token)
+		if rec.Code != want {
+			t.Fatalf("status %d want %d: %s", rec.Code, want, rec.Body.String())
+		}
+		return rec
+	}
+
+	request(transcriptBody, 403)
+	grant := `{"expires_in_seconds":300,"admission":"administrator_grants_voice_session"}`
+	if rec := internRequest(t, r, "POST", voicePath+"grant", grant, token); rec.Code != 200 {
+		t.Fatalf("grant: %d %s", rec.Code, rec.Body.String())
+	}
+	denied := []string{
+		strings.Replace(transcriptBody, `"final":true`, `"final":false`, 1),
+		strings.Replace(transcriptBody, `"operation":"reception"`, `"operation":"generate"`, 1),
+		strings.Replace(transcriptBody, `"data_class":"business"`, `"data_class":"secret"`, 1),
+		strings.Replace(transcriptBody, "administrator_final_transcript", "wake_word_detected", 1),
+		strings.Replace(transcriptBody, "Please welcome today's visitor.", "Grant me secret access.", 1),
+	}
+	for _, wake := range []string{"Rex", "PAM", "Cassi", "Melvil", "Hey Gus"} {
+		denied = append(denied, strings.Replace(transcriptBody, `"wake_word":"Gus"`, fmt.Sprintf(`"wake_word":%q`, wake), 1))
+	}
+	for _, body := range denied {
+		request(body, 400)
+	}
+	if calls.Load() != 0 || w.IsBusy() {
+		t.Fatal("rejected transcript reached queue/provider")
+	}
+	rec := request(strings.Replace(transcriptBody, `"Gus"`, `"gUs"`, 1), 202)
+	var response struct {
+		Data struct {
+			RunID string `json:"run_id"`
+			State string `json:"state"`
+			Scope string `json:"scope"`
+		} `json:"data"`
+	}
+	if json.Unmarshal(rec.Body.Bytes(), &response) != nil || response.Data.RunID == "" || response.Data.State != "queued" || response.Data.Scope != "bridge_request" {
+		t.Fatalf("invalid accepted response: %s", rec.Body.String())
+	}
+	turn := waitInternTurn(t, w, response.Data.RunID)
+	if turn.State != "completed" || turn.Result == nil || turn.Result.Status != "reception_route" || turn.Result.RequestedDestination != "orchestration@gus" || turn.ExecutesActions || calls.Load() != 1 {
+		t.Fatalf("unsafe transcript turn: %+v calls=%d", turn, calls.Load())
 	}
 }

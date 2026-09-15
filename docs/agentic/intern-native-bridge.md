@@ -48,6 +48,38 @@ by the bridge. Errors are fixed sentinels; output echoing its remote key is reje
 
 ## Admission and routing
 
+### Final transcript admission
+
+The custom Intern OS server exposes
+`POST /api/agent/intern/voice/transcript` beside the existing voice grant,
+revoke, and chat endpoints. It is a contract for a trusted native producer; it
+does not connect a microphone, HAL, TTS, or a device event path. The request
+must use the same signed administrator bearer session that owns an active
+ephemeral voice grant. Its exact JSON shape is:
+
+```json
+{
+  "transcript": "Please welcome today's visitor.",
+  "final": true,
+  "wake_word": "Gus",
+  "operation": "reception",
+  "data_class": "business",
+  "admission": "administrator_final_transcript"
+}
+```
+
+Only final transcripts addressed by the exact `Gus` wake word
+(case-insensitive) are admitted. `Rex`, `PAM`, `Cassi`, and `Melvil` are not
+wake words for this endpoint, and acoustic wrappers such as `Hey Gus` are not
+accepted. Operation must be `reception`; data class must be `public` or
+`business`; and the administrator assertion must match exactly. Empty,
+oversized, unknown-field, duplicate-field, interim, self-authorizing
+restricted/secret-access, and otherwise invalid requests fail before queue or
+provider access. A valid request uses the existing bounded Intern queue and
+returns HTTP 202 with `run_id`, `state:queued`, and `scope:bridge_request`, the
+same completion contract as voice chat. It never dispatches, calls HAL/TTS, or
+logs the transcript.
+
 The administrator endpoint still requires the explicit classification of the
 exact text. The transport client rejects unknown/restricted/secret data before
 network I/O. The bridge repeats validation for direct callers before routing;

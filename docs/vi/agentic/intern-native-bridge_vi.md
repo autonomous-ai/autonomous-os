@@ -40,6 +40,37 @@ cố định; phản hồi chứa chính khóa provider bị từ chối.
 
 ## Chấp thuận và định tuyến
 
+### Chấp thuận transcript cuối
+
+OS server Intern tùy chỉnh cung cấp
+`POST /api/agent/intern/voice/transcript` bên cạnh các endpoint cấp quyền, thu
+hồi và chat voice hiện có. Đây là hợp đồng cho producer native đáng tin cậy;
+không kết nối microphone, HAL, TTS hoặc đường event thiết bị. Request phải dùng
+cùng bearer session quản trị đã ký đang sở hữu voice grant tạm thời còn hiệu
+lực. JSON chính xác là:
+
+```json
+{
+  "transcript": "Please welcome today's visitor.",
+  "final": true,
+  "wake_word": "Gus",
+  "operation": "reception",
+  "data_class": "business",
+  "admission": "administrator_final_transcript"
+}
+```
+
+Chỉ nhận transcript cuối được gọi bằng wake word chính xác `Gus` (không phân
+biệt hoa thường). `Rex`, `PAM`, `Cassi`, `Melvil` không phải wake word của
+endpoint này; wrapper âm học như `Hey Gus` cũng không được nhận. Operation phải
+là `reception`, data class phải là `public` hoặc `business`, và assertion quản
+trị phải khớp tuyệt đối. Transcript rỗng/quá dài, field lạ/trùng, interim, nội
+dung tự cấp quyền truy cập restricted/secret và request sai khác đều bị chặn
+trước queue/provider. Request hợp lệ dùng queue Intern có giới hạn hiện có và
+trả HTTP 202 với `run_id`, `state:queued`, `scope:bridge_request`, cùng hợp đồng
+hoàn tất như voice chat. Endpoint không dispatch, không gọi HAL/TTS và không log
+transcript.
+
 API quản trị vẫn yêu cầu phân loại rõ ràng cho chính xác văn bản. Client chặn
 unknown/restricted/secret trước network. Bridge kiểm tra lại trước định tuyến;
 provider kiểm tra lại trước suy luận. Chỉ public/business được tới model.
