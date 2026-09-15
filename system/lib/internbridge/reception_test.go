@@ -18,7 +18,11 @@ func TestCassiFirstRoutes(t *testing.T) {
 		{"rex@dru", "engineering", "persona"},
 		{"melvil@lab", "library", "persona"},
 		{"pam@gus", "service", "service"},
+		{"pam@gus", "notification", "service"},
+		{"pam@gus", "alarm", "service"},
+		{"pam@gus", "reminder", "service"},
 		{"mcavoy@lab", "news", "service"},
+		{"mcavoy@lab", "briefing", "service"},
 	} {
 		for _, op := range []Operation{Route, Reception, Classify, Generate} {
 			t.Run(tc.destination+"/"+string(op), func(t *testing.T) {

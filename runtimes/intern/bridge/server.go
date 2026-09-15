@@ -268,7 +268,7 @@ func envelope(id, destination, kind, status, intent string, handoff, output *str
 
 // Match one company wake prefix and at most one explicit internal address.
 // Names are proposals only. Natural language intent is never guessed by a model.
-var wake = regexp.MustCompile(`(?i)^\s*(?:(?:hey|ok|okay)[\s_]+)?(gus|rex|cassi|casi|cassandra|melvil|curator|pam|news|smart[- ]home|orchestration|engineering|service|library|reception)(?:$|[\s,:!?.]+)`)
+var wake = regexp.MustCompile(`(?i)^\s*(?:(?:hey|ok|okay)[\s_]+)?(gus|rex|cassi|casi|cassandra|melvil|curator|pam|daily briefing|morning briefing|briefing|news|notification|alarm|reminder|smart[- ]home|orchestration|engineering|service|library|reception)(?:$|[\s,:!?.]+)`)
 
 func address(s string) (string, string, bool) {
 	m := wake.FindStringSubmatchIndex(s)
@@ -293,8 +293,13 @@ func route(req internbridge.Request, id string) response {
 		destination, intent = "melvil@lab", "library"
 	case "pam", "service":
 		destination, kind, intent = "pam@gus", "service", "service"
-	case "news":
-		destination, kind, intent = "mcavoy@lab", "service", "news"
+	case "news", "briefing", "daily briefing", "morning briefing":
+		destination, kind, intent = "mcavoy@lab", "service", "briefing"
+		if name == "news" {
+			intent = "news"
+		}
+	case "notification", "alarm", "reminder":
+		destination, kind, intent = "pam@gus", "service", name
 	case "smart-home", "smart home":
 		destination, kind, intent = "smart-home", "service", "smart-home"
 	case "cassi", "casi", "cassandra", "reception":

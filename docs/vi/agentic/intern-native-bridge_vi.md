@@ -59,7 +59,8 @@ metadata Cassi-first, không kết nối tới Mama.
 | Melvil / curator / library | `melvil@lab` | Route persona hoặc draft/classification |
 | PAM / service | `pam@gus` | `service_route`, không thực thi |
 | Cassi / casi / cassandra / reception | `cassi@mama` | `custody_hold`, không có output, handoff null |
-| news | `mcavoy@lab` | `service_route`, chờ xem xét, không lấy tin |
+| news / briefing / daily briefing / morning briefing | `mcavoy@lab` | `service_route`, chờ xem xét, không lấy tin |
+| notification / alarm / reminder | `pam@gus` | `service_route`, chờ xem xét, không gửi hoặc lập lịch |
 | smart-home / smart home | `smart-home` | `custody_hold`, không có output, handoff null |
 
 Hỗ trợ `hey`, `ok`, `okay`, `hey_gus`; chỉ bỏ tối đa một wake công ty và một

@@ -55,7 +55,8 @@ hay quyền hành động. Không đồng nghĩa nhân viên đã hoàn thành c
 `Result.Destination` luôn là `cassi@mama`, nơi tiếp nhận đầu tiên.
 `RequestedDestination` và `Kind` mô tả tuyến đề xuất: `orchestration@gus`,
 `rex@dru`, `melvil@lab`, `cassi@mama` (persona); `pam@gus`, `mcavoy@lab`,
-`smart-home` (service). `news` là intent, không phải destination hay node.
+`smart-home` (service). `news`, `briefing`, `notification`, `alarm`, `reminder`
+là intent, không phải destination hay node.
 Tuyến yêu cầu Cassi hoặc smart-home phải là custody hold; chỉ có envelope
 tiếp nhận Cassi không có nghĩa dữ liệu đang bị giữ.
 
@@ -66,7 +67,8 @@ Handoff là null trên wire (chuỗi rỗng trong struct) hoặc đúng một de
 được phép trùng `RequestedDestination`, không phải Cassi. Intent unknown và
 custody hold bắt buộc null handoff. Từ chối array, field lạ/trùng và object
 handoff lồng nhau. Intent hợp lệ: `orchestration`, `engineering`, `service`,
-`library`, `reception`, `smart-home`, `news`, `unknown`, `address_or_default`.
+`notification`, `alarm`, `reminder`, `library`, `reception`, `smart-home`,
+`news`, `briefing`, `unknown`, `address_or_default`.
 Đây chỉ là metadata, không phải API thiết bị hay hành động.
 
 Service yêu cầu `service_route`, trả `ErrServiceRoute` với nil result; client

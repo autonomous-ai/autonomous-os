@@ -287,7 +287,7 @@ func (r *Result) validateReception(raw []byte) bool {
 	}
 	intent := str(f, "intent")
 	switch intent {
-	case "orchestration", "engineering", "service", "library", "reception", "smart-home", "news", "unknown", "address_or_default":
+	case "orchestration", "engineering", "service", "notification", "alarm", "reminder", "library", "reception", "smart-home", "news", "briefing", "unknown", "address_or_default":
 	default:
 		return false
 	}

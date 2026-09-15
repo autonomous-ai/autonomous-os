@@ -66,6 +66,11 @@ func TestBridgeUnchangedClientContract(t *testing.T) {
 		{"Rex hello", "rex@dru", nil}, {"Gus Melvil hello", "melvil@lab", nil},
 		{"curator hello", "melvil@lab", nil}, {"PAM hello", "pam@gus", internbridge.ErrServiceRoute},
 		{"Gus news headlines", "mcavoy@lab", internbridge.ErrServiceRoute},
+		{"Gus daily briefing", "mcavoy@lab", internbridge.ErrServiceRoute},
+		{"Gus morning briefing", "mcavoy@lab", internbridge.ErrServiceRoute},
+		{"Gus notification", "pam@gus", internbridge.ErrServiceRoute},
+		{"Gus alarm", "pam@gus", internbridge.ErrServiceRoute},
+		{"Gus reminder", "pam@gus", internbridge.ErrServiceRoute},
 		{"smart-home lights", "smart-home", internbridge.ErrCustodyHold},
 		{"Gus Cassi hello", internbridge.FirstContact, internbridge.ErrCustodyHold},
 		{"casi hello", internbridge.FirstContact, internbridge.ErrCustodyHold},
@@ -101,6 +106,35 @@ func TestBridgeUnchangedClientContract(t *testing.T) {
 	}
 	if err := c.ProbeGeneration(ctx); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestBridgeServiceIntentMapping(t *testing.T) {
+	for _, tc := range []struct {
+		text, destination, intent, status string
+	}{
+		{"news headlines", "mcavoy@lab", "news", "service_route"},
+		{"briefing", "mcavoy@lab", "briefing", "service_route"},
+		{"daily briefing", "mcavoy@lab", "briefing", "service_route"},
+		{"morning briefing", "mcavoy@lab", "briefing", "service_route"},
+		{"notification", "pam@gus", "notification", "service_route"},
+		{"alarm", "pam@gus", "alarm", "service_route"},
+		{"reminder", "pam@gus", "reminder", "service_route"},
+		{"smart-home lights", "smart-home", "smart-home", "custody_hold"},
+	} {
+		t.Run(tc.text, func(t *testing.T) {
+			got := route(internbridge.Request{Text: tc.text, Operation: internbridge.Route, DataClass: internbridge.Public}, "run-test")
+			if got.Destination != internbridge.FirstContact || got.RequestedDestination != tc.destination || got.Kind != "service" || got.Status != tc.status || got.Reception.Intent != tc.intent || got.Reception.Executed || got.ExecutesActions {
+				t.Fatalf("unexpected bounded route: %+v", got)
+			}
+			if tc.status == "custody_hold" {
+				if got.Reception.Handoff != nil || got.Output != nil {
+					t.Fatal("custody hold proposed or emitted output")
+				}
+			} else if got.Reception.Handoff == nil || *got.Reception.Handoff != tc.destination {
+				t.Fatal("service route did not make exactly one proposal")
+			}
+		})
 	}
 }
 

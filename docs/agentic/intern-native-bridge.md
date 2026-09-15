@@ -69,7 +69,8 @@ Every response first names `cassi@mama`, with `executes_actions:false`,
 | Melvil / curator / library | `melvil@lab` | Persona route or draft/classification |
 | PAM / service | `pam@gus` | `service_route`, no execution |
 | Cassi / casi / cassandra / reception | `cassi@mama` | `custody_hold`, output absent, null handoff |
-| news | `mcavoy@lab` | `service_route`, pending review, no news fetch |
+| news / briefing / daily briefing / morning briefing | `mcavoy@lab` | `service_route`, pending review, no news fetch |
+| notification / alarm / reminder | `pam@gus` | `service_route`, pending review, no delivery or scheduling |
 | smart-home / smart home | `smart-home` | `custody_hold`, output absent, null handoff |
 
 Wake prefixes accept `hey`, `ok`, `okay` and `hey_gus`. The bridge strips at most

@@ -77,8 +77,9 @@ is untrusted text, not commands, persona memory, or permission to perform work.
 `Result.Destination` is always `cassi@mama`, the first contact.
 `RequestedDestination` and `Kind` describe the proposed internal route:
 `orchestration@gus`, `rex@dru`, `melvil@lab`, `cassi@mama` (persona), or
-`pam@gus`, `mcavoy@lab`, `smart-home` (service). `news` is an intent,
-not a destination or node address. Cassi and smart-home requested routes must
+`pam@gus`, `mcavoy@lab`, `smart-home` (service). `news`, `briefing`,
+`notification`, `alarm`, and `reminder` are intents, not destinations or node
+addresses. Cassi and smart-home requested routes must
 be custody holds. A first-contact Cassi envelope alone is not a custody hold.
 
 `Result.ReceptionRoute` contains typed `FirstDestination`, `Handoff`, `Intent`,
@@ -88,8 +89,9 @@ status is `reception_route`, executed is false, and next step is
 or one allowlisted requested destination, never Cassi. Unknown intent or custody
 hold requires null handoff. Arrays, extra fields, duplicate keys, and nested
 handoff objects are rejected. Allowed intents are `orchestration`, `engineering`,
-`service`, `library`, `reception`, `smart-home`, `news`, `unknown`, and
-`address_or_default`. These fields are metadata, not a device/action API.
+`service`, `notification`, `alarm`, `reminder`, `library`, `reception`,
+`smart-home`, `news`, `briefing`, `unknown`, and `address_or_default`. These
+fields are metadata, not a device/action API.
 
 Service destinations require `service_route` and return `ErrServiceRoute` with
 nil result; the client never follows the handoff. Generation cannot succeed on
