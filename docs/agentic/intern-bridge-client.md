@@ -77,7 +77,7 @@ is untrusted text, not commands, persona memory, or permission to perform work.
 `Result.Destination` is always `cassi@mama`, the first contact.
 `RequestedDestination` and `Kind` describe the proposed internal route:
 `orchestration@gus`, `rex@dru`, `melvil@lab`, `cassi@mama` (persona), or
-`pam@gus`, logical `mcavoy`, `smart-home` (service). `news` is an intent,
+`pam@gus`, `mcavoy@lab`, `smart-home` (service). `news` is an intent,
 not a destination or node address. Cassi and smart-home requested routes must
 be custody holds. A first-contact Cassi envelope alone is not a custody hold.
 

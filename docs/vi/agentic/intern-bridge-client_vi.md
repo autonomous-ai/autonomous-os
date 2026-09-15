@@ -54,7 +54,7 @@ hay quyền hành động. Không đồng nghĩa nhân viên đã hoàn thành c
 
 `Result.Destination` luôn là `cassi@mama`, nơi tiếp nhận đầu tiên.
 `RequestedDestination` và `Kind` mô tả tuyến đề xuất: `orchestration@gus`,
-`rex@dru`, `melvil@lab`, `cassi@mama` (persona); `pam@gus`, `mcavoy`,
+`rex@dru`, `melvil@lab`, `cassi@mama` (persona); `pam@gus`, `mcavoy@lab`,
 `smart-home` (service). `news` là intent, không phải destination hay node.
 Tuyến yêu cầu Cassi hoặc smart-home phải là custody hold; chỉ có envelope
 tiếp nhận Cassi không có nghĩa dữ liệu đang bị giữ.

@@ -199,7 +199,7 @@ func (c *Client) Do(ctx context.Context, request Request) (*Result, error) {
 	} else if len(r.RunID) != 36 {
 		return nil, failure(ErrProtocol, status)
 	}
-	kinds := map[string]string{"orchestration@gus": "persona", "rex@dru": "persona", FirstContact: "persona", "melvil@lab": "persona", "pam@gus": "service", "mcavoy": "service", "smart-home": "service"}
+	kinds := map[string]string{"orchestration@gus": "persona", "rex@dru": "persona", FirstContact: "persona", "melvil@lab": "persona", "pam@gus": "service", "mcavoy@lab": "service", "smart-home": "service"}
 	if r.Destination != FirstContact || kinds[r.RequestedDestination] == "" || kinds[r.RequestedDestination] != r.Kind {
 		return nil, failure(ErrProtocol, status)
 	}

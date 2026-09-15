@@ -18,8 +18,7 @@ func TestCassiFirstRoutes(t *testing.T) {
 		{"rex@dru", "engineering", "persona"},
 		{"melvil@lab", "library", "persona"},
 		{"pam@gus", "service", "service"},
-		// PR148 uses logical destination mcavoy with intent news, not a node.
-		{"mcavoy", "news", "service"},
+		{"mcavoy@lab", "news", "service"},
 	} {
 		for _, op := range []Operation{Route, Reception, Classify, Generate} {
 			t.Run(tc.destination+"/"+string(op), func(t *testing.T) {
@@ -70,12 +69,15 @@ func TestMalformedReception(t *testing.T) {
 		{"multiple destinations", func(b map[string]any) { b["requested_destination"] = []string{"rex@dru", "pam@gus"} }},
 		{"joined destinations", func(b map[string]any) { b["requested_destination"] = "rex@dru,pam@gus" }},
 		{"news is intent only", func(b map[string]any) { b["requested_destination"] = "news" }},
-		{"mcavoy node", func(b map[string]any) { b["requested_destination"] = "mcavoy@mama" }},
+		{"bare mcavoy", func(b map[string]any) {
+			b["requested_destination"], b["kind"], b["reception_route"] = "mcavoy", "service", reception("mcavoy", "news")
+		}},
+		{"wrong mcavoy node", func(b map[string]any) { b["requested_destination"] = "mcavoy@mama" }},
 		{"route array", func(b map[string]any) { b["reception_route"] = []any{reception("rex@dru", "engineering")} }},
 		{"route null", func(b map[string]any) { b["reception_route"] = nil }},
 		{"route string", func(b map[string]any) { b["reception_route"] = "rex@dru" }},
 		{"service fake draft", func(b map[string]any) {
-			b["requested_destination"], b["kind"], b["reception_route"] = "mcavoy", "service", reception("mcavoy", "news")
+			b["requested_destination"], b["kind"], b["reception_route"] = "mcavoy@lab", "service", reception("mcavoy@lab", "news")
 		}},
 		{"persona fake service", func(b map[string]any) { b["status"] = "service_route" }},
 		{"reception not generation", func(b map[string]any) { b["status"] = "reception_route" }},
