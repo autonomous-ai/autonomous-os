@@ -44,6 +44,26 @@ STT pipeline. At end-of-turn the model either:
   This is deliberately different from a silent completion: silence, timeout,
   and transport failure still use the normal main-agent fallback.
 
+### Addressed speech before persona or actions
+
+All realtime provider prompts give the addressed-speech policy priority over
+`DEVICE IDENTITY` / SOUL instructions to respond to ambient speech, show empathy,
+or express emotion. A meaningful question, a name mentioned to someone else,
+or an open follow-up window does not establish that someone is talking to the
+device. Genuine conversational follow-ups do not need to repeat its name.
+Confidently overheard speech calls only `reject_turn` when available, with no
+voice/text, emotion, movement, look, or delegation. The tool description allows
+rejecting an overheard request even when the device could fulfill it. Uncertainty,
+silent completion, and errors retain the existing fallback behavior.
+
+Lamp's `robots/lamp/SOUL.md` applies the same addressed-speech prerequisite to
+main-agent voice and `[ambient]` messages. Overheard speech or an unclear
+addressee requires exactly `NO_REPLY`, without tool calls or physical/emotional
+reactions. This overrides the persona's general reaction and expression rules.
+These are model instructions, not a deterministic speaker-verification gate;
+real-room conversation testing is still needed. Existing device SOUL files must
+receive the updated policy before the main agent can use it.
+
 The `delegate_to_main` tool is registered automatically by the orchestrator
 (`orchestrator.py`, `DELEGATE_TOOL`).
 

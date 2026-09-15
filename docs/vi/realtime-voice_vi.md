@@ -43,6 +43,26 @@ lượt, model sẽ:
   hẳn model im lặng: im lặng, timeout và lỗi transport vẫn fallback bình thường
   sang agent chính.
 
+### Xác định lời nói hướng đến thiết bị trước persona hoặc hành động
+
+Prompt của mọi provider realtime ưu tiên quy tắc lời nói hướng đến thiết bị
+hơn các chỉ dẫn trong `DEVICE IDENTITY` / SOUL về trả lời ambient, thể hiện đồng
+cảm hoặc cảm xúc. Câu hỏi có nghĩa, nhắc tên thiết bị với người khác, hay cửa sổ
+follow-up đang mở không chứng minh người nói đang nói với thiết bị. Lượt tiếp
+nối rõ ràng cuộc trò chuyện không cần lặp lại tên thiết bị.
+Khi chắc chắn là lời nghe lỏm, chỉ gọi `reject_turn` nếu có; không phát giọng/text,
+emotion, cử động, look hoặc delegate. Mô tả tool cho phép từ chối yêu cầu nghe
+lỏm kể cả khi thiết bị có thể thực hiện. Trường hợp chưa chắc chắn, kết thúc im
+lặng và lỗi vẫn giữ hành vi fallback hiện có.
+
+`robots/lamp/SOUL.md` áp dụng cùng điều kiện lời nói hướng đến thiết bị cho voice
+và `[ambient]` của main agent. Lời nghe lỏm hoặc chưa rõ đang nói với ai phải trả
+đúng `NO_REPLY`, không gọi tool hay phản ứng bằng cử động/cảm xúc. Quy tắc này
+ưu tiên hơn yêu cầu phản ứng và biểu cảm chung của persona. Đây là chỉ dẫn cho
+model, không phải gate xác minh người nói bằng code; vẫn cần thử hội thoại thực
+tế trong phòng. SOUL đang có trên thiết bị cần nhận chính sách mới trước khi
+main agent có thể áp dụng.
+
 Tool `delegate_to_main` được orchestrator đăng ký tự động (`orchestrator.py`,
 `DELEGATE_TOOL`).
 
