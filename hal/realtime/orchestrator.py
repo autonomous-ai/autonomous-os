@@ -233,9 +233,10 @@ LOOK_TOOL_DESCRIPTION: str = (
     "conversation, even if you are sure you already know; that is exactly how you "
     "get it embarrassingly wrong. Do NOT use it for non-visual requests. Do NOT "
     "use it to find or locate a specific object or person the user is asking "
-    "about ('where is my pen', 'do you see my keys', 'can you find my cup') — "
-    "that is a search the device performs by moving; delegate_to_main it instead "
-    "of looking and guessing."
+    "about ('where is my pen', 'do you see my keys', 'look for my pen', 'can you "
+    "find my cup') — one frame from wherever the head already points cannot find "
+    "anything; that is a search the device performs by moving, so delegate_to_main "
+    "it instead of looking and guessing."
 )
 
 # No parameters: the model just signals intent to look; the device grabs the
