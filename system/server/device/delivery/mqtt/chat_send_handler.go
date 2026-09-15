@@ -43,16 +43,23 @@ func (h *DeviceMQTTHandler) handleChatSend(env domain.MQTTDataCommand) error {
 		return h.publishDataResult(env.Kind, "failure", "message is required", nil)
 	}
 
+	// The agent can finish before the loopback POST returns its run ID. Capture
+	// first, then release only events belonging to the acknowledged run.
+	var finishCapture func(string, string)
+	if h.chatStream != nil {
+		finishCapture = h.chatStream.capture()
+		defer finishCapture("", "")
+	}
+
 	runID, err := h.forwardChatToSensing(data)
 	if err != nil {
 		slog.Error("chat.send: forward failed", "component", "mqtt-chat", "error", err)
 		return h.publishDataResult(env.Kind, "failure", err.Error(), nil)
 	}
 
-	// Track BEFORE acking: the agent can start emitting deltas the moment the
-	// endpoint returns, and an untracked run's events are dropped on the floor.
-	if h.chatStream != nil {
-		h.chatStream.Track(runID, data.SessionID)
+	// Replay and track before acking; the deferred call discards failed sends.
+	if finishCapture != nil {
+		finishCapture(runID, data.SessionID)
 	}
 
 	slog.Info("chat.send accepted", "component", "mqtt-chat",
