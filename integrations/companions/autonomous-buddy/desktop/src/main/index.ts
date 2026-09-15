@@ -13,6 +13,8 @@ import type { BuddyUpdate, AppearanceSettings } from '../shared/types'
 app.setName('Autonomous Buddy')
 if (process.env.BUDDY_DATA_DIR) app.setPath('userData', process.env.BUDDY_DATA_DIR)
 const rendererPath = join(__dirname, '../renderer/index.html')
+// Temporarily disable every entry point to the agent workspace while keeping device services running.
+const agentManagerUIEnabled = false
 let window: BrowserWindow | null = null
 let manager: Manager
 let settings: SettingsStore
@@ -65,6 +67,7 @@ function zoomBy(delta: number) {
   applyAppearance({ zoom: Math.min(1.5, Math.max(0.75, Math.round((current + delta) * 100) / 100)) })
 }
 function createWindow() {
+  if (!agentManagerUIEnabled) return
   window = new BrowserWindow({
     width: 1460,
     height: 920,
@@ -101,7 +104,7 @@ function createWindow() {
 }
 
 function showManager() {
-  if (quitting) return
+  if (!agentManagerUIEnabled || quitting) return
   if (!window) createWindow()
   if (window?.isMinimized()) window.restore()
   window?.show()
@@ -233,7 +236,7 @@ else {
       ] as const)
         handle(method, manager[method].bind(manager) as (...args: unknown[]) => unknown)
       Menu.setApplicationMenu(
-        Menu.buildFromTemplate([
+        Menu.buildFromTemplate(agentManagerUIEnabled ? [
           {
             label: 'Autonomous Buddy',
             submenu: [
@@ -262,6 +265,8 @@ else {
             { type: 'separator' }, { role: 'togglefullscreen' },
           ] },
           { role: 'windowMenu' },
+        ] : [
+          { label: 'Autonomous Buddy', submenu: [{ role: 'about' }, { type: 'separator' }, { role: 'quit' }] },
         ]),
       )
       createWindow()
