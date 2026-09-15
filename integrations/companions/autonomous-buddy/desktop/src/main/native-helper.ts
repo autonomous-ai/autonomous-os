@@ -23,7 +23,7 @@ export class NativeHelper {
     private executable: string,
     private publish: (state: NativeState) => void,
     private args = ['--embedded-helper'],
-    private onMenuAction: (action: 'open-manager' | 'quit') => void = () => {},
+    private onMenuAction: (action: 'open-manager' | 'check-updates' | 'quit') => void = () => {},
     private onAgentRequest?: (command: Record<string, unknown>) => Promise<unknown>,
   ) {}
 
@@ -91,7 +91,7 @@ export class NativeHelper {
       }).catch(() => {})
       return
     }
-    if (message.event === 'menu' && (message.action === 'open-manager' || message.action === 'quit'))
+    if (message.event === 'menu' && (message.action === 'open-manager' || message.action === 'check-updates' || message.action === 'quit'))
       this.onMenuAction(message.action)
     if (message.event === 'state' && message.state) this.updateState(message.state)
     if (typeof message.id !== 'string') return
@@ -179,6 +179,9 @@ export class NativeHelper {
   }
   async agentEvent(event: object): Promise<unknown> {
     return this.request('agent_event', event as Record<string, unknown>)
+  }
+  async setUpdateStatus(label: string, enabled: boolean): Promise<unknown> {
+    return this.request('update_status', { label, enabled })
   }
   async stop(): Promise<void> {
     const child = this.child
