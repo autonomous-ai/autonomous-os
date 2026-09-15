@@ -1077,3 +1077,11 @@ For accepted realtime history, the sensing response returns the original exchang
 Harness reply-routing metadata on sensing voice/chat requests is conditional on the current paired Harness transport being connected. Disconnected requests omit both the reply marker and Harness-specific routing/follow-up hints; ordinary voice and follow-up routing remains unchanged.
 
 The HAL sensing payload accepts optional `voice_turn_type` (`voice`, `voice_command`, `voice_followup`) for voice diagnostics. OS copies validated values into Flow Monitor evidence only; `type` remains the authority for authorization, routing, queueing, history synchronization and speaker cancellation.
+
+## Intern native bridge lifecycle
+
+When `intern` is the active runtime, the existing `os-server` process owns an
+IPv4 `127.0.0.1:8765` native bridge and the restricted administrator listener.
+Startup conflicts fail closed; SIGTERM cancels in-flight provider work and
+closes both listeners. No extra systemd unit or installer is required. Other
+runtimes do not start this bridge. See [configuration and limits](agentic/intern-native-bridge.md).

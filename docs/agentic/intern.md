@@ -14,10 +14,15 @@ operator-managed restart boundary in both directions.
 
 When active, `os-server` binds its restricted HTTP surface to `127.0.0.1` and
 constructs no HAL, sensing, MQTT, channel, skill, firmware, or device handlers.
-The runtime sends admitted requests only to the fixed bridge at
+The process now owns a native Go bridge; no Python installation is required.
+The unchanged runtime client sends admitted requests only to the fixed bridge at
 `http://127.0.0.1:8765/v1/intern`. It does not load or forward credentials,
 follow redirects, use proxy settings, attach images or history, or execute the
 returned reception route.
+
+See [native bridge configuration and bounds](intern-native-bridge.md) for local
+Ollama defaults and explicit remote-provider configuration. Provider credentials
+are used only by that bridge for an explicitly configured remote endpoint.
 
 ## Admission and results
 

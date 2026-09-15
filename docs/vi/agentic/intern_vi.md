@@ -14,10 +14,15 @@ runtime vẫn kiểm tra riêng lựa chọn đã lưu để yêu cầu người
 
 Khi hoạt động, `os-server` chỉ bind bề mặt HTTP giới hạn vào `127.0.0.1` và
 không tạo handler HAL, sensing, MQTT, kênh nhắn tin, skill, firmware hoặc thiết
-bị. Runtime chỉ gửi yêu cầu đã được chấp thuận đến bridge cố định tại
+bị. Tiến trình sở hữu bridge Go native, không cần cài Python. Client runtime
+hiện có chỉ gửi yêu cầu đã được chấp thuận đến bridge cố định tại
 `http://127.0.0.1:8765/v1/intern`. Nó không đọc hoặc chuyển tiếp thông tin xác
 thực, không theo redirect, không dùng proxy, không đính kèm ảnh/lịch sử và
 không thực thi tuyến tiếp nhận được trả về.
+
+Xem [cấu hình và giới hạn bridge native](intern-native-bridge_vi.md) để biết
+mặc định Ollama cục bộ và cách chọn provider từ xa rõ ràng. Chỉ bridge dùng khóa
+provider cho endpoint từ xa đã được cấu hình rõ ràng.
 
 ## Chấp thuận và kết quả
 

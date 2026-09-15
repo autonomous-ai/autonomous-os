@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"go.autonomous.ai/os/runtimes/intern"
+	"go.autonomous.ai/os/runtimes/intern/bridge"
 	"go.autonomous.ai/os/system/agent"
 	"go.autonomous.ai/os/system/device"
 	"go.autonomous.ai/os/system/domain"
@@ -236,10 +238,35 @@ func (s *Server) serveIntern(closeFn func()) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	defer closeFn()
+	return s.runIntern(ctx)
+}
+
+// Both listeners belong to the active Intern process, supervised by the
+// existing os-server systemd unit. Saved selections never start this bridge.
+func (s *Server) runIntern(parent context.Context) error {
+	if s.agentGateway.Name() != domain.AgentRuntimeIntern {
+		return domain.ErrNotSupportedByRuntime
+	}
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
+	localBridge, err := bridge.Start(ctx, s.internProviderConfig())
+	if err != nil {
+		return err
+	}
+	defer func() {
+		shutdownCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stop()
+		localBridge.Close(shutdownCtx)
+	}()
+	listener, err := net.Listen("tcp4", fmt.Sprintf("127.0.0.1:%d", s.config.HttpPort))
+	if err != nil {
+		return errors.New("intern: administrator listener unavailable")
+	}
 	done := make(chan struct{})
 	go func() { defer close(done); s.agentGateway.StartWS(ctx, nil) }()
 	if waiter, ok := s.agentGateway.(interface{ WaitStarted(context.Context) error }); ok {
 		if err := waiter.WaitStarted(ctx); err != nil {
+			_ = listener.Close()
 			cancel()
 			<-done
 			return err
@@ -247,20 +274,35 @@ func (s *Server) serveIntern(closeFn func()) error {
 	}
 	srv := &http.Server{Addr: fmt.Sprintf("127.0.0.1:%d", s.config.HttpPort), Handler: s.internRouter(),
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 8192}
-	shutdownDone := make(chan struct{})
-	go func() {
-		defer close(shutdownDone)
-		<-ctx.Done()
-		shutdownCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
-		defer stop()
-		_ = srv.Shutdown(shutdownCtx)
-	}()
-	err := srv.ListenAndServe()
+	serverDone := make(chan error, 1)
+	go func() { serverDone <- srv.Serve(listener) }()
+	select {
+	case err = <-serverDone:
+		if !errors.Is(err, http.ErrServerClosed) {
+			err = errors.New("intern: administrator listener failed")
+		}
+	case <-localBridge.Done():
+		err = bridge.ErrListener
+	case <-ctx.Done():
+		err = nil
+	}
 	cancel()
+	shutdownCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stop()
+	if srv.Shutdown(shutdownCtx) != nil {
+		_ = srv.Close()
+	}
 	<-done
-	<-shutdownDone
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
 	}
 	return err
+}
+
+func (s *Server) internProviderConfig() bridge.ProviderConfig {
+	c := s.config
+	if c.InternProvider == "" || c.InternProvider == "ollama" {
+		return bridge.ProviderConfig{Kind: "ollama", Endpoint: c.InternOllamaURL, Model: c.InternOllamaModel}
+	}
+	return bridge.ProviderConfig{Kind: c.InternProvider, Endpoint: c.LLMBaseURL, Model: c.LLMModel, APIKey: c.LLMAPIKey}
 }
