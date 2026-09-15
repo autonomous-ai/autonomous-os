@@ -626,10 +626,21 @@ giữ nguyên soul mặc định Hermes ship (hoặc soul đã migrate).
 Nội dung của chủ máy nằm dưới block được giữ lại, trừ đúng một ngoại lệ dùng chung
 với các runtime khác: một **soul mặc định do OS/runtime quản lý** còn sót lại ở đó
 bị **bỏ đi** thay vì giữ như chỉnh sửa của chủ máy — nếu không file sẽ mọc thêm một
-persona thứ hai cạnh tranh. `isDefaultSoulHeading` khớp cả `hermesSoulFallback` của
-chính Hermes (`# Hermes Agent Persona`, do factory reset ghi trên máy chưa khai
-`soul_ref`) lẫn hai dạng `# Soul` / `# SOUL.md` đi vào Hermes qua migration. Phần
-chủ máy tự viết dưới `## Personal` vẫn sống sót.
+persona thứ hai cạnh tranh. `isManagedDefaultSoul` (tương ứng với
+`isDefaultSoulHeading` bên openclaw/picoclaw) khớp theo danh sách prefix trong
+`managedDefaultSoulPrefixes`. Phần chủ máy tự viết dưới `## Personal` vẫn sống sót.
+
+**Gateway Hermes tự seed lại persona mặc định của nó mỗi khi SOUL.md biến mất**, và
+presync chạy **trước** `ensureSoulMDBlock` — nên trên một máy vừa flash, cái mà hàm
+upsert persona nhìn thấy nằm dưới block nó vừa ghi chính là seed đó. Đây là dạng
+default duy nhất mở đầu bằng **văn xuôi, không có heading**
+(`You are Hermes Agent, built by Nous Research…`), và đó là lý do
+`managedDefaultSoulPrefixes` là danh sách prefix chứ không phải phép kiểm heading
+như các runtime khác. Để nguyên thì nó mâu thuẫn thẳng với persona thiết bị — cùng
+một file, trên bảo agent nó là Lamp, vài dòng dưới bảo nó là Hermes Agent. Hai mục
+còn lại là `hermesSoulFallback` (`# Hermes Agent Persona`, do factory reset ghi trên
+máy chưa khai `soul_ref`) và hai dạng `# Soul` / `# SOUL.md` đi vào Hermes qua
+migration.
 
 Máy cài lần đầu được seed sẵn mục `## Personal` — **đúng từng chữ** như
 openclaw/picoclaw/codex/opencode ghi — để chủ máy có chỗ viết mà OTA không ghi đè.

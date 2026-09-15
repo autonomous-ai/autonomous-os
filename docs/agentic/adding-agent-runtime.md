@@ -529,6 +529,14 @@ re-syncs `.env` before the gateway starts, so the re-apply is an idempotent no-o
       persona at all. Hermes shipped that way and its lamps lost every
       skill-routing rule (`[sensing:*]` → `skills/sensing/SKILL.md`) until
       `ensureSoulMDBlock` was added.
+- [ ] **Discard the backend's OWN default soul** before keeping what sits below
+      your block. Most backends re-seed a default persona whenever their prompt
+      file is missing, and presync runs before onboarding — so a freshly flashed
+      device hands you that seed, not an empty file. Kept, it becomes a second
+      persona contradicting the device one. Check the shape on a real device:
+      Hermes' seed opens with prose, not a heading, which is why
+      `managedDefaultSoulPrefixes` is a prefix list where openclaw only needed
+      `isDefaultSoulHeading`.
 - [ ] **One delimiter per OS-managed block.** Every runtime wraps its blocks in
       `<!-- OS DO NOT REMOVE -->`…`---`. If yours owns a SECOND block in the same
       file, give it its own marker — a shared one makes each updater strip the

@@ -516,6 +516,14 @@ là no-op idempotent.
       với persona rỗng. Hermes từng ship như vậy và lamp mất toàn bộ luật định
       tuyến skill (`[sensing:*]` → `skills/sensing/SKILL.md`) cho tới khi
       `ensureSoulMDBlock` được thêm.
+- [ ] **Bỏ soul mặc định của chính backend** trước khi giữ phần nằm dưới block
+      của bạn. Đa số backend tự seed lại persona mặc định mỗi khi file prompt của
+      nó biến mất, và presync chạy trước onboarding — nên một máy vừa flash đưa
+      cho bạn cái seed đó chứ không phải file rỗng. Giữ lại thì nó thành persona
+      thứ hai mâu thuẫn với persona thiết bị. Phải kiểm hình dạng trên máy thật:
+      seed của Hermes mở đầu bằng văn xuôi chứ không phải heading, nên
+      `managedDefaultSoulPrefixes` là danh sách prefix, trong khi openclaw chỉ cần
+      `isDefaultSoulHeading`.
 - [ ] **Mỗi block OS-managed một delimiter riêng.** Mọi runtime đều bọc block của
       mình bằng `<!-- OS DO NOT REMOVE -->`…`---`. Nếu runtime của bạn sở hữu
       block THỨ HAI trong cùng một file, hãy cho nó marker riêng — dùng chung

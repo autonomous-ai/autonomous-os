@@ -626,10 +626,20 @@ simply absent.
 - Owner content below the block is preserved, with one exception shared with the
   other runtimes: a **managed default soul** left there is discarded rather than
   kept as fake owner edits, or the file grows a second, competing persona.
-  `isDefaultSoulHeading` matches Hermes' own `hermesSoulFallback`
-  (`# Hermes Agent Persona`, seeded by a factory reset on a device with no
-  `soul_ref`) plus the `# Soul` / `# SOUL.md` shapes that reach Hermes through
-  migration. Owner edits under `## Personal` survive the discard.
+  `isManagedDefaultSoul` (counterpart of openclaw/picoclaw's
+  `isDefaultSoulHeading`) matches the prefixes in `managedDefaultSoulPrefixes`.
+  Owner edits under `## Personal` survive the discard.
+- **The Hermes gateway re-seeds its own persona whenever SOUL.md is missing**, and
+  presync runs before `ensureSoulMDBlock` — so on a freshly flashed device that
+  seed is exactly what the persona upsert finds below the block it just wrote. It
+  is the one managed default that opens with **prose, not a heading**
+  (`You are Hermes Agent, built by Nous Research…`), which is why
+  `managedDefaultSoulPrefixes` is a prefix list rather than the heading-only check
+  the other runtimes use. Left in place it contradicts the device persona outright
+  — one file telling the agent it is Lamp and, a few lines down, that it is Hermes
+  Agent. The remaining entries are `hermesSoulFallback` (`# Hermes Agent Persona`,
+  written by a factory reset on a device with no `soul_ref`) and the `# Soul` /
+  `# SOUL.md` shapes that reach Hermes through migration.
 - A first install is seeded with the same owner-editable `## Personal` section
   openclaw/picoclaw/codex/opencode write, word for word, so the owner has a place
   to write that an OTA will not overwrite.
