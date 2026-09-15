@@ -19,7 +19,7 @@ from hal.telemetry.live_voice import LiveVoiceMetrics
 from hal.test.test_voice_metrics import FakeTTS, kpi  # noqa: F401 -- fake clock/transport
 
 
-def _pump(monkeypatch, kpi, batches, *, native=False, stop_delay_ms=0, harness_voice=None, sender=None):
+def _pump(monkeypatch, kpi, batches, *, native=False, stop_delay_ms=0, harness_voice=None, sender=None, cues=None):
     monkeypatch.setattr(config, "REALTIME_NATIVE_AUDIO", native)
     service = object.__new__(VoiceService)
     service._live_running = True
@@ -89,7 +89,7 @@ def _pump(monkeypatch, kpi, batches, *, native=False, stop_delay_ms=0, harness_v
 
     service._realtime = Provider()
     service._tts = Speaker()
-    service._live_out_pump(1, harness_voice=harness_voice)
+    service._live_out_pump(1, harness_voice=harness_voice, cues=cues)
     return spoken
 
 

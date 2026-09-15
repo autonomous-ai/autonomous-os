@@ -49,7 +49,9 @@ class HarnessSkillTests(unittest.TestCase):
             harness.run('select', {'agentId': 'a'}, self.path)
             harness.run('list', {}, self.path)
             harness.run('status', {'agentId': 'b'}, self.path)
-            harness.run('recap', {'agentId': 'b', 'n': 1}, self.path)
+            # Inspection reads only the newest recap/text pair unless more turns are requested.
+            self.assertEqual(harness.run('recap', {'agentId': 'b'}, self.path)['n'], 1)
+            self.assertEqual(harness.run('recap', {'agentId': 'b', 'n': 3}, self.path)['n'], 3)
             self.assertEqual(self.mutations, [])
             harness.run('send', {'text': 'continue the original task'}, self.path)
         self.assertEqual(self.mutations[0]['agentId'], 'a')
@@ -78,6 +80,45 @@ class HarnessSkillTests(unittest.TestCase):
             self.assertEqual(self.mutations, [])
             harness.run('send', {'agentId': 'b', 'text': 'review'}, self.path)
         self.assertEqual(self.mutations[0]['agentId'], 'b')
+
+    def test_list_keeps_bounded_recap_headline_per_agent(self):
+        base = self.request
+
+        def request(kind, **fields):
+            if kind == 'agents.list':
+                return {'machineId': 'machine', 'agents': [
+                    {'agentId': 'a', 'name': 'Project', 'engine': 'claude', 'state': 'idle', 'recap': ' Fixed reconnect\n in client.ts '},
+                    {'agentId': 'b', 'name': 'Other', 'engine': 'codex', 'state': 'running'},
+                    {'agentId': 'c', 'name': 'Long', 'recap': 'x' * (harness.AGENT_RECAP_MAX_CHARS + 500)},
+                    {'agentId': 'd', 'name': 'Odd', 'recap': 42},
+                ]}
+            return base(kind, **fields)
+
+        with patch.object(harness, 'request', request):
+            agents = harness.run('list', {}, self.path)['agents']
+        self.assertEqual(agents[0]['recap'], 'Fixed reconnect in client.ts')
+        # No summarised turn yet → no field at all; the model must read that as unknown.
+        self.assertNotIn('recap', agents[1])
+        self.assertEqual(len(agents[2]['recap']), harness.AGENT_RECAP_MAX_CHARS)
+        self.assertNotIn('recap', agents[3])
+        self.assertEqual(self.mutations, [])
+
+    def test_recap_text_never_matches_an_agent_name(self):
+        base = self.request
+
+        def request(kind, **fields):
+            if kind == 'agents.list':
+                return {'machineId': 'machine', 'agents': [
+                    {'agentId': 'a', 'name': 'Project', 'recap': 'Other'},
+                    {'agentId': 'b', 'name': 'Other', 'recap': 'Project'},
+                ]}
+            return base(kind, **fields)
+
+        with patch.object(harness, 'request', request):
+            harness.run('send', {'agent': 'Other', 'text': 'review'}, self.path)
+            with self.assertRaises(ValueError):
+                harness.run('send', {'agent': 'Fixed reconnect', 'text': 'review'}, self.path)
+        self.assertEqual([m['agentId'] for m in self.mutations], ['b'])
 
     def test_uncertain_send_is_persisted_and_never_replayed(self):
         self.uncertain = True

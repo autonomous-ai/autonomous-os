@@ -66,6 +66,7 @@ from hal.drivers.voice._internal.turn_dispatch import dispatch_turn
 from hal.telemetry import voice_metrics
 from hal.telemetry.live_voice import LiveVoiceMetrics
 from hal.drivers.voice._internal.live_history import LiveHistory
+from hal.drivers.voice._internal.live_cues import LiveVoiceCues
 from hal.drivers.voice._internal.vad_filters import (
     SileroVADFilter,
     WebRTCVADFilter,
@@ -1102,16 +1103,16 @@ class VoiceService:
                     return "skip"
             except Exception as e:
                 logger.warning("[live] speech gate failed, allowing: %s", e)
-        # Gaze grants the existing focus window before this decision. Only
-        # enforce an armed gate; shadow mode remains observation-only.
+        # Gaze or a button may already have granted focus. Otherwise use the
+        # regular STT turn to recognize and confirm a spoken wake phrase before
+        # any live audio is sent. Skipping capture here would also discard
+        # "Hello Lamp"; opening live would bypass its partial/final wake gate.
         if (
             hal_config.WAKEWORD_ENABLED
-            and hal_config.GAZE_WAKE_ENABLED
-            and not hal_config.GAZE_WAKE_SHADOW
             and not self._wakeword_focus.is_active()
         ):
-            logger.info("[live] gaze gate closed — waiting for gaze or explicit focus")
-            return "skip"
+            logger.info("[live] wake focus closed — using STT to check the wake phrase")
+            return "turn"
 
         self._realtime.prepare_turn()
 
@@ -1164,7 +1165,20 @@ class VoiceService:
         self._live_frames_substituted += 1
         return self._np.zeros_like(data)
 
-    def _live_out_pump(self, generation: int, harness_voice=None) -> None:
+    def _live_emotion_addressed(self, text: str, harness_voice=None) -> bool:
+        """Mirror the regular turn's addressing gate for emotion only."""
+        harness_listening = bool(
+            harness_voice and harness_voice.get("enabled")
+            and not harness_voice.get("unavailable", False)
+        )
+        return harness_listening or is_addressed(
+            hal_config.WAKEWORD_ENABLED,
+            bool(text) and self._decorator.starts_with_wake_word(text),
+            False,
+            self._wakeword_focus.is_active(),
+        )
+
+    def _live_out_pump(self, generation: int, harness_voice=None, cues=None) -> None:
         """Play what the model says, for as long as the session lasts.
 
         Deliberately loops orchestrator.stream_output() rather than reading the
@@ -1195,20 +1209,35 @@ class VoiceService:
                     if not (self._live_running and generation == self._live_generation):
                         break
                     if isinstance(out, UserSpeechOutput):
+                        if cues is not None:
+                            cues.input(
+                                out.turn_id, out.endpoint_at, transcript=out.transcript,
+                                transcript_finished=out.transcript_finished,
+                            )
+                        if out.transcript_finished and not out.transcript and out.endpoint_at is None:
+                            # Completion-only transcription metadata drives emotion,
+                            # not another speech observation for metrics/history.
+                            continue
                         iid = metrics.speech(out.turn_id, out.endpoint_at, out.method)
                         history.input(out.turn_id, out.transcript, iid)
                         continue
                     if isinstance(out, ExecutionOutput):
+                        if cues is not None:
+                            cues.finish(out.user_turn_id)
                         history.complete(out.user_turn_id, out.execution_completed)
                         metrics.complete(
                             out.user_turn_id, out.execution_completed,
                         )
                         continue
                     if isinstance(out, RejectSignal):
+                        if cues is not None:
+                            cues.finish(out.user_turn_id)
                         history.discard(out.user_turn_id)
                         metrics.reject(out.user_turn_id)
                         continue
                     if isinstance(out, DelegateSignal):
+                        if cues is not None:
+                            cues.close()
                         history.discard(out.user_turn_id)
                         # Hang up so the main agent's reply does not play
                         # into an open uplink.
@@ -1255,6 +1284,8 @@ class VoiceService:
                         # The first output transcript also sends an audio reset;
                         # that is not evidence of a user asking us to stop.
                         if out.reason == "server_interrupt":
+                            if cues is not None:
+                                cues.finish(out.user_turn_id)
                             history.discard(out.user_turn_id)
                             iid = metrics.interaction(out.user_turn_id)
                             has_pending = getattr(self._tts, "has_pending_speech", lambda owner: False)
@@ -1277,6 +1308,8 @@ class VoiceService:
                         self._live_last_model_output = time.time()
                         if not native:
                             continue
+                        if cues is not None:
+                            cues.finish(out.user_turn_id)
                         owner = metrics.owner(out.user_turn_id)
                         if native_started and owner != native_owner:
                             self._tts.set_native_playback_owner(owner)
@@ -1318,6 +1351,8 @@ class VoiceService:
                             head, rest = split_first_chunk(sentence_buf)
                             head = self.strip_rt_markers(head) if head else ""
                             if head:
+                                if cues is not None:
+                                    cues.finish(out.user_turn_id)
                                 if not self._tts.speak(head, turn_id=iid, realtime_reply=True):
                                     self._tts.speak_queue(head, turn_id=iid, realtime_reply=True)
                                 first_sent = True
@@ -1325,9 +1360,15 @@ class VoiceService:
                         if sentence_buf.rstrip().endswith((".", "!", "?", "…")):
                             sentence = self.strip_rt_markers(sentence_buf)
                             if sentence:
+                                if cues is not None:
+                                    cues.finish(out.user_turn_id)
                                 self._tts.speak_queue(sentence, turn_id=iid, realtime_reply=True)
                             sentence_buf = ""
                         continue
+                if cues is not None:
+                    terminal_key = getattr(self._realtime, "execution_turn_id", "")
+                    if terminal_key:
+                        cues.finish(terminal_key)
                 # receive() timeout and a synthetic unblock are not successful
                 # execution. Only the provider's terminal owns this evidence.
                 metrics.complete(
@@ -1344,6 +1385,8 @@ class VoiceService:
                 if not native and sentence_buf.strip():
                     tail = self.strip_rt_markers(sentence_buf)
                     if tail:
+                        if cues is not None:
+                            cues.finish(getattr(self._realtime, "execution_turn_id", ""))
                         self._tts.speak_queue(tail, turn_id=speech_iid, realtime_reply=True)
             if self._live_running and generation == self._live_generation:
                 history.complete(
@@ -1442,9 +1485,12 @@ class VoiceService:
         # flush here instead. Once only — flushing per reply would discard
         # output the model is still streaming.
         self._realtime.flush_output()
+        cues = LiveVoiceCues(
+            addressed=lambda text: self._live_emotion_addressed(text, harness_voice),
+        )
         pump = threading.Thread(
             target=self._live_out_pump,
-            args=(generation, harness_voice),
+            args=(generation, harness_voice, cues),
             daemon=True,
             name="live-out",
         )
@@ -1532,6 +1578,8 @@ class VoiceService:
                             last_user_speech = now
                             self._live_unprompted_replies = 0
 
+                # Expire emotion cues / recheck focus, never infer speech from silence.
+                cues.tick()
                 uplink_frame = resample_to_stt(
                     data, device_rate, voice_cfg.STT_RATE, self._np
                 )
@@ -1541,6 +1589,7 @@ class VoiceService:
         except Exception as e:
             logger.warning("[live] session error: %s", e)
         finally:
+            cues.close()
             if uplink_dump is not None:
                 try:
                     uplink_dump.close()
@@ -1616,7 +1665,12 @@ class VoiceService:
         # Snapshot before any realtime I/O; a toggle cannot move this capture
         # between agents. OS validates the same generation on the final POST.
         harness_voice = read_voice_mode() if harness_voice is None else harness_voice
-        realtime_allowed = not bypass_realtime(harness_voice)
+        # Live providers use automatic endpointing for the whole process.
+        # A gated opener/fallback must not flush a buffered utterance through
+        # the manual commit path (which can double-commit with server VAD).
+        # STT still confirms the wake phrase and dispatches to the main agent;
+        # its focus window allows the next capture to enter full-duplex live.
+        realtime_allowed = not voice_cfg.LIVE_MODE and not bypass_realtime(harness_voice)
         # Harness explicitly owns voice input for this capture. Do not extend
         # the normal wake window; disabling the mode restores its usual gate.
         harness_listening = harness_voice["enabled"] and not harness_voice.get("unavailable", False)

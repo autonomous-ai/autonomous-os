@@ -154,6 +154,28 @@ func main() {
 	must(s.PairStatus().Code == "", "code persisted after completion")
 	r, e = s.Request(ctx, harness.Frame{"type": "agents.list"})
 	must(e == nil && r["machineId"] == "interop-machine", "encrypted list failed")
+	// The optional per-agent recap headline (CLI PR #35) must cross the
+	// encrypted path untouched and stay absent for an agent with no summary.
+	listed := map[string]map[string]any{}
+	if agents, _ := r["agents"].([]any); agents != nil {
+		for _, a := range agents {
+			if row, ok := a.(map[string]any); ok {
+				id, _ := row["agentId"].(string)
+				listed[id] = row
+			}
+		}
+	}
+	must(listed["agent-one"] != nil && listed["agent-one"]["recap"] == "Fixed reconnect in client.ts", "agents.list recap headline missing: "+fmt.Sprint(r["agents"]))
+	_, hasRecap := listed["agent-two"]["recap"]
+	must(listed["agent-two"] != nil && !hasRecap, "agents.list recap present for an agent without a summary")
+	r, e = s.Request(ctx, harness.Frame{"type": "recap", "machineId": "interop-machine", "agentId": "agent-one", "n": 1})
+	must(e == nil, "encrypted recap failed")
+	if turns, _ := r["turns"].([]any); len(turns) == 1 {
+		turn, _ := turns[0].(map[string]any)
+		must(turn["recap"] == listed["agent-one"]["recap"], "agents.list recap differs from recap turns[0].recap")
+	} else {
+		panic("recap n:1 did not return one turn: " + fmt.Sprint(r))
+	}
 	req := harness.Frame{"type": "turn.send", "machineId": "interop-machine", "agentId": "agent-one", "text": "interop", "idempotencyKey": "direct-test"}
 	r, e = s.Request(ctx, req)
 	must(e == nil && r["status"] == "accepted", "send failed")
@@ -273,5 +295,5 @@ func main() {
 	_, e = s2.Request(ctx2, harness.Frame{"type": "agents.list"})
 	must(e != nil, "revoked access remained")
 	must(s2.Unpair() == nil && !s2.Status().Paired, "OS unpair")
-	fmt.Println("PASS real mDNS + actual BackendSocket/E2eeManager + direct client + Go Service: wrong-code failure/retry, pair, encrypted list/send/dedupe, app focus mirror/old capture rejection/CLI revision guard/focused submit/dedupe/sequential question answers/off, CLI and OS restart reconnect, revoke/unpair. Backend never connected.")
+	fmt.Println("PASS real mDNS + actual BackendSocket/E2eeManager + direct client + Go Service: wrong-code failure/retry, pair, encrypted list with recap headline/recap/send/dedupe, app focus mirror/old capture rejection/CLI revision guard/focused submit/dedupe/sequential question answers/off, CLI and OS restart reconnect, revoke/unpair. Backend never connected.")
 }

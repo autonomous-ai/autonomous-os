@@ -29,6 +29,7 @@ import (
 	"go.autonomous.ai/os/system/lib/logger"
 	"go.autonomous.ai/os/system/lib/mqtt"
 	"go.autonomous.ai/os/system/lib/safego"
+	"go.autonomous.ai/os/system/lib/sensingmsg"
 	"go.autonomous.ai/os/system/network"
 	_agentHttpDeliver "go.autonomous.ai/os/system/server/agent/delivery/http"
 	_buddyHttpDeliver "go.autonomous.ai/os/system/server/buddy/delivery/http"
@@ -195,6 +196,15 @@ func ProvideServer(
 		statusLED:         sled,
 		chatStream:        chatStream,
 	}
+	harnessConnected := func() bool {
+		if s.harnessService == nil {
+			return false
+		}
+		status := s.harnessService.Status()
+		return status.Paired && status.Connected
+	}
+	sensingH.SetHarnessConnected(harnessConnected)
+	sensingmsg.SetHarnessConnected(harnessConnected)
 	sensingH.SetHarnessFollowup(s.HarnessVoiceFollowup)
 	sensingH.SetHarnessFollowupContext(s.HarnessFollowupContext)
 	sensingH.SetHarnessVoice(s.handleHarnessVoice)

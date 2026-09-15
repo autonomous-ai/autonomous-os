@@ -318,3 +318,11 @@ See [emotion-led-mapping.md](emotion-led-mapping.md) for the full emotion → LE
 A device can override these emotion/scene/aim values (and the LED ring size) without
 changing the shared defaults, via a `robots/<type>/presets.json` file. This is a
 platform mechanism — see [ROBOT-SPEC.md § Per-device presets](../../contract/ROBOT-SPEC.md#per-device-presets-presetsjson).
+
+### LIVE voice status
+
+LIVE voice uses the same `listening` HW emotion and realtime thinking helper
+as turn-based voice, including their existing LED, display and body behavior.
+It requires recognized input text and the regular addressing gate; noise or
+opening the mic cannot start these emotions. Thinking requires provider end
+evidence, never a local silence estimate. There is no separate LIVE LED overlay. See [realtime voice](../../../docs/realtime-voice.md#hw-emotion-feedback-in-live-mode) for timing and cleanup.
