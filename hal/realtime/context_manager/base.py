@@ -33,6 +33,8 @@ def expire_open_requests(summary: str, age_s: float, ttl_s: float) -> str:
     """
     if ttl_s <= 0 or age_s < ttl_s:
         return summary
+    # Substring check is safe only because the prompt contract puts the heading
+    # on its own line — it is never embedded mid-line elsewhere in the summary.
     if OPEN_REQUESTS_HEADING.lower() not in summary.lower():
         return summary
     out: list[str] = []
@@ -331,12 +333,12 @@ class ContextManagerBase(ABC):
         """
         try:
             existing: str = self._summary_path.read_text(encoding="utf-8").strip()
+            age_s: float = time.time() - self._summary_path.stat().st_mtime
         except Exception as e:
             logger.warning("[realtime] Failed to read summary: %s", e)
             return ""
         if not existing:
             return ""
-        age_s: float = time.time() - self._summary_path.stat().st_mtime
         trimmed: str = expire_open_requests(existing, age_s, self._open_request_ttl_s)
         if trimmed != existing:
             logger.info("[realtime] dropped stale open requests from summary (age %.0fs)", age_s)
