@@ -29,6 +29,10 @@ Các gate per-type ở trên độc lập với nhau — không có gate xuyên-
 
 ---
 
+## Lời nói phản hồi sensing
+
+Với event do `skills/sensing/SKILL.md` xử lý, prompt yêu cầu HW marker đúng cú pháp rồi tới một câu tối đa 20 từ theo `current_language`, hoặc `NO_REPLY` cho dòng phản ứng im lặng. Mọi assistant text, kể cả message trung gian, không được giải thích event/ma trận, phân tích ngữ cảnh chủ nhân, viết các phương án nháp hay thêm lời sau câu nói. Ví dụ chào người lạ minh họa đầy đủ marker và câu được đọc. Nếu không có kênh reasoning riêng thì bỏ phần phân tích. Đây là hướng dẫn prompt, không phải giới hạn độ dài ở backend hay bảo đảm model luôn tuân thủ; các skill khác giữ quy tắc output riêng.
+
 ## Âm thanh (Sound)
 
 ### Cơ chế hoạt động

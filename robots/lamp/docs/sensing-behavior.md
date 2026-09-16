@@ -29,6 +29,10 @@ All per-type gates above are independent — without a cross-type gate, a burst 
 
 ---
 
+## Spoken sensing replies
+
+For events handled by `skills/sensing/SKILL.md`, the prompt requires literal HW markers followed by one sentence of at most 20 words in `current_language`, or `NO_REPLY` for a silent row. It forbids event/matrix explanations, owner-context analysis, draft alternatives and afterwords in all assistant text, including intermediate messages. A complete stranger greeting example shows the exact markers and the spoken sentence. Without a separate reasoning channel, analysis must be omitted. This is a prompt instruction, not a backend length limit or a guarantee of model compliance; other skills keep their own output rules.
+
 ## Sound
 
 ### How it works
