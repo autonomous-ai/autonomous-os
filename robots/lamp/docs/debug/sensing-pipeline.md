@@ -119,10 +119,10 @@ Common test payloads (raw Kinetics labels — agent maps each to `drink`/`break`
 {"type":"motion.activity","message":"Activity detected: drinking, using computer."}
 
 // Friend enters — should set current_user to their name
-{"type":"presence.enter","message":"Person detected — 1 face(s) visible (friend (leo))"}
+{"type":"presence.enter","message":"Person detected — new: friend (leo); faces in frame: 1 (leo)"}
 
 // Stranger enters — should set current_user to "unknown"
-{"type":"presence.enter","message":"Person detected — 1 face(s) visible (stranger (stranger_99))"}
+{"type":"presence.enter","message":"Person detected — new: stranger (stranger_99); faces in frame: 1 (stranger_99)"}
 ```
 
 **Save the `runId` from the response — everything downstream is keyed on it.**
