@@ -614,10 +614,15 @@ resampling and whole-file cached WAV resampling are unchanged.
 
 AEC reference resampling caches SciPy's default Kaiser FIR coefficients by
 reduced sample-rate ratio and dtype (up to 32 entries), avoiding filter design
-on every speaker write. `resample_poly` still performs its usual gain and
-padding; the reference waveform and FIFO pacing remain unchanged. Before the
-first speaker write of a playback, HAL prepares the reference filter so a cold
-SciPy import/filter design cannot stall playback after its first 40 ms. This
+on every speaker write. A streaming causal FIR preserves filter history and
+resampling phase across writes, producing `ceil(N * output_rate / input_rate)`
+samples for the accumulated `N` input samples. This removes per-chunk rounding
+drift and repeated filter boundaries. The same anti-alias filter adds about
+0.625 ms of delay when the lower sample rate is 16 kHz; FIFO pacing is unchanged.
+`EchoReference.clear()` or a source-rate switch resets the resampling state.
+Acoustic improvement still requires an A/B check on the device.
+Before the first speaker write of a playback, HAL prepares the reference filter
+so a cold SciPy import/filter design cannot stall playback after its first 40 ms. This
 preparation is skipped when AEC is inactive or sample rates match. Cancellation
 is checked between slices, including after preparation; a stop acknowledgement
 chime can still play while the speech stop flag is set.
