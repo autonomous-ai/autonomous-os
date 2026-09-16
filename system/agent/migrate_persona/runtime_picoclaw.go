@@ -135,3 +135,14 @@ func (picoclawAdapter) userProfilePath(opts Options) string {
 	}
 	return filepath.Join(opts.PicoclawWorkspace, "USER.md")
 }
+
+// memoryFilePath implements runtimeAdapter — MEMORY.md under memory/.
+func (picoclawAdapter) memoryFilePath(opts Options) string {
+	if opts.PicoclawWorkspace == "" {
+		return ""
+	}
+	return filepath.Join(opts.PicoclawWorkspace, "memory", "MEMORY.md")
+}
+
+// workspaceRoot implements runtimeAdapter.
+func (picoclawAdapter) workspaceRoot(opts Options) string { return opts.PicoclawWorkspace }
