@@ -16,7 +16,7 @@ func TestBuildVoiceFollowupIsAnAuthorizedUserTurn(t *testing.T) {
 }
 
 func TestBuildPresenceEnterCarriesCurrentUser(t *testing.T) {
-	got := Build("presence.enter", "Person detected — 1 face(s) visible (friend (long))", "long", "")
+	got := Build("presence.enter", "Person detected — new: friend (long); faces in frame: 1 (long)", "long", "")
 	if !strings.Contains(got, "[context: current_user=long]") {
 		t.Fatalf("presence.enter = %q, want current_user attribution", got)
 	}
@@ -27,7 +27,7 @@ func TestBuildPresenceEnterUnknownUserIsLabelledUnknown(t *testing.T) {
 	// tag — greeting routes key "speak no name" off current_user=unknown, so
 	// an absent tag would be read as "no constraint" and let the agent fall
 	// back to the persona name.
-	got := Build("presence.enter", "Person detected — 1 face(s) visible (stranger (stranger_3))", "", "")
+	got := Build("presence.enter", "Person detected — new: stranger (stranger_3); faces in frame: 1 (stranger_3)", "", "")
 	if !strings.Contains(got, "[context: current_user=unknown]") {
 		t.Fatalf("presence.enter with no user = %q, want current_user=unknown", got)
 	}

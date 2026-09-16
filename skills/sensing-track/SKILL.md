@@ -26,7 +26,7 @@ Reference these when the user asks what happened visually.
 Each line is a JSON object:
 
 ```json
-{"kind":"enter","node":"sensing_input","ts":1712345678.123,"seq":42,"trace_id":"run-abc","data":{"type":"presence.enter","message":"Person detected — 1 face(s) visible (friend (gray))\n[snapshot: /var/lib/hal/snapshots/sensing_face/1712345678123.jpg]"},"version":"1.2.3"}
+{"kind":"enter","node":"sensing_input","ts":1712345678.123,"seq":42,"trace_id":"run-abc","data":{"type":"presence.enter","message":"Person detected — new: friend (gray); faces in frame: 1 (gray)\n[snapshot: /var/lib/hal/snapshots/sensing_face/1712345678123.jpg]"},"version":"1.2.3"}
 {"kind":"exit","node":"sensing_input","ts":1712345678.456,"seq":43,"trace_id":"run-abc","duration_ms":332,"data":{"path":"agent","run_id":"run-abc"},"version":"1.2.3"}
 ```
 
@@ -226,7 +226,7 @@ Storage: `/root/local/users/{name}/mood/YYYY-MM-DD.jsonl` (30-day retention).
 - **Mention dropped events when relevant** — check `exit` records with `data.error` for events the agent missed. Mention it: "There was motion at 10:45 PM but I was mid-conversation and missed it."
 - **Resolve relative times** — translate "last hour", "this morning", "while I was away" into concrete Unix timestamps using `date -d` before filtering.
 - **Span multiple days** — for questions covering more than today, `cat` multiple JSONL files together.
-- **Parse the message field** for who/what details — `friend (gray)`, `friend (chloe)`, `stranger (stranger_1)`, `Large movement detected`, etc.
+- **Parse the message field** for who/what details — the `new:` segment carries `friend (gray)`, `friend (chloe)`, `stranger (stranger_1)`; `already present: gray (friend)` means gray was in frame when someone else arrived; `faces in frame: N (...)` is the box count of that snapshot; other events: `Large movement detected`, etc.
 - **Reference snapshots** — when the user asks "what did you see?", extract the `[snapshot: ...]` path from the message. Path format is `/var/lib/hal/snapshots/sensing_<prefix>/<ms>.jpg` (category subdir per event kind). Snapshots have 72h TTL — check the file exists before referencing (`test -f <path>`).
 - **Posture history** — for questions about the user's posture ("how was I sitting this morning?", "show me my worst posture today"), scan `/tmp/hal-sensing-snapshots/sensing_pose/buckets/`. Only sessions that crossed the bad-ratio threshold survive here, so the bucket list itself answers "when did my posture get bad today?". Read each bucket's `bucket.json` for `summary.dominant_region` and `summary.bad_ratio`, then reference `worst_snapshots[]` for representative frames.
 

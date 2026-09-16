@@ -91,9 +91,23 @@ Always triggers a full reaction — no exceptions. The agent **must** do all thr
 
 1. `/emotion greeting` (0.9) for friend — `/emotion curious` (0.8) for stranger
 2. For friend: `/servo/aim {"direction": "user"}` then `/servo/track {"target": ["person"]}` — aim orients the camera toward the user's region first (~2s), then the vision tracker locks onto the person and follows them around the room. Stranger: `/servo/play {"recording": "scanning"}` (no auto-follow — caution)
-3. Speak: warm greeting for friend (by the name in `[context: current_user=X]`), cautious acknowledgment for stranger
+3. Speak: warm greeting for friend (by the name in `[context: current_user=X]`), cautious acknowledgment for stranger — unless the text lists a friend as `already present:`, in which case the aside goes to that friend (see below)
 
 The system handles cooldowns on the HAL side. If the event reached the agent, enough time has passed — react fully.
+
+#### Event text: who is new, who was already there
+
+`presence.enter` means **newly** visible, not visible: a person is "new" only when their `last_seen` is `None` or older than the forget window (`FACE_OWNER_FORGET_S` 3600 s for friends, `FACE_STRANGER_FORGET_S` 1800 s for strangers). The text is built by `hal/drivers/sensing/perceptions/processors/faceid/enter_message.py` in three `; `-separated segments:
+
+```
+Person detected — new: stranger (stranger_2); already present: momo (friend); faces in frame: 2 (momo, stranger_2)
+```
+
+- `new:` — the arrivals, friend part first, ids sorted. The `friend (<name>)` / `stranger (<id>)` labels are a contract: the wake-focus gate opens on `friend (`, `sensing-track` greps them, `face-enroll` parses the hint appended after them.
+- `already present:` — friends boxed in the **same frame** who did not just arrive, written `<name> (friend)` so they never read as an arrival. This is the co-presence signal `sensing/SKILL.md` uses to address the user ("Hey Momo, looks like you've got company") instead of greeting the visitor. For a stranger-only enter it is only written once friend and non-friend boxes have coexisted for `FACE_COPRESENCE_MIN_TICKS` (2) consecutive sensing ticks (`unsure` boxes count — that is the tick the recognizer spends corroborating a new stranger before minting); a poster, a reflection or a one-tick glitch next to the user must not turn "hello" into "you've got company". A new friend joining a present friend is listed without that guard. It is never derived from `current_user()`, which is presence-window state and reads the same whether the user is sitting there or left two minutes ago.
+- `faces in frame:` — the number of boxes in the **current** frame and their labels in detection order (`unsure` for a box without an identity), the same labels drawn on the snapshot. It is not the number of arrivals: buffered stranger ids flushed on this tick may be from an earlier frame.
+
+Priority between arrivals is unchanged: both new in one frame → one event, friend first, sent immediately; stranger buffered first and friend later → the friend frame goes out immediately and the stranger follows as its own event after `FACE_STRANGER_FLUSH_S` (10 s), subject to `FACE_COOLDOWN_S` (10 s) and `FACE_STRANGER_ENTER_FLOOR_S` (300 s).
 
 #### Return after long absence (friend only)
 
