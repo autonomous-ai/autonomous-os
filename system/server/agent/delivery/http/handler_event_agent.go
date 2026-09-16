@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	migratepersona "go.autonomous.ai/os/system/agent/migrate_persona"
 	"go.autonomous.ai/os/system/domain"
 	"go.autonomous.ai/os/system/lib/flow"
 	sensinghttp "go.autonomous.ai/os/system/server/sensing/delivery/http"
@@ -582,6 +583,13 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 			lcData["error"] = ""
 			lcData["recovered"] = true
 			lcData["original_error"] = payload.Data.Error
+		}
+		if payload.Data.Phase == "start" {
+			// Fingerprint of the memory this turn runs with (sizes + sha8, no
+			// content) so a routing regression can be tied to a memory write.
+			if st := migratepersona.MemoryState(); st != nil {
+				lcData["memory"] = st
+			}
 		}
 		flow.Log("lifecycle_"+payload.Data.Phase, lcData, flowRunID)
 		taskRunID := h.resolveTaskRunID(payload.RunID, flowRunID)

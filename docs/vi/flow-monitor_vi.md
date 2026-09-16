@@ -251,6 +251,28 @@ Session agent auto-compact khi context vượt ~80k tokens. Mỗi lần compact 
 
 Dùng khi agent viện rule mà grep không thấy trong bất kỳ `skills/**/SKILL.md` — gần như 100% nguồn là compaction summary, không phải skill đang load. Handler: `system/server/openclaw/delivery/sse/handler_api_compaction.go`.
 
+## Trạng thái memory theo turn (`lifecycle_start.memory`, `memory_changed`)
+
+Issue #421: một dòng `USER.md` do agent tự ghi đã làm hỏng skill routing gần
+cả ngày vì không có gì cho thấy turn đó chạy với memory nào. Hai bổ sung:
+
+- Flow data của `lifecycle_start` mang thêm `memory`: `{"USER.md": {"size",
+  "sha8"}, "MEMORY.md": …, "KNOWLEDGE.md": …}` cho runtime **đang active** —
+  fingerprint do memory guard của OS publish (`docs/os-server.md`, mục "Memory
+  guard"). Chỉ có size và 8 hex đầu của sha256; không bao giờ có nội dung.
+- `memory_changed` (kind `event`) được guard emit từ fsnotify watch mỗi khi có
+  ghi vào `USER.md` / `MEMORY.md` của bất kỳ runtime nào, gắn trace hiện tại để
+  nó rơi đúng vào turn đã ghi. Data: `file`, `runtime`, `path`, `size`, `sha8`,
+  `quarantined` (số block bị gỡ), `reasons`
+  (`free-prose` | `unknown-label` | `prescriptive`), `execute`, `trigger`
+  (`startup` | `watch` | `rescan`).
+
+Footer của turn card hiện `USER 2.1k MEMORY 0.4k`; khi trong turn có event
+`memory_changed` thì nối thêm `✎ memory changed` (màu amber), và
+`· N quarantined` màu đỏ khi guard đã gỡ gì đó. Hover để xem size/hash từng
+file và reasons. So `sha8` giữa hai turn cho biết memory có thay đổi giữa hai
+turn đó hay không.
+
 ## Issue đang mở
 
 ### OpenClaw built-in `tts` tool bypass speaker HAL (ĐÃ FIX)

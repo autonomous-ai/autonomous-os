@@ -388,6 +388,28 @@ N events
 
 The two badges are meant to be read together: ⚡ is *perceived* latency (what the user feels), ⏱ is *server* latency (what ops sees). Big gap = lots of tail streaming; small gap = short reply or fast lifecycle close.
 
+## Memory state per turn (`lifecycle_start.memory`, `memory_changed`)
+
+Issue #421: one self-written `USER.md` line broke skill routing for most of a
+day because nothing showed which memory a turn ran with. Two additions:
+
+- `lifecycle_start` flow data carries `memory`: `{"USER.md": {"size", "sha8"},
+  "MEMORY.md": …, "KNOWLEDGE.md": …}` for the **active** runtime — the
+  fingerprint published by the OS memory guard (`docs/os-server.md`, "Memory
+  guard"). Sizes and 8-hex sha256 prefixes only; never content.
+- `memory_changed` (kind `event`) is emitted by the guard's fsnotify watch on
+  every write to any runtime's `USER.md` / `MEMORY.md`, tagged with the current
+  trace so it lands in the turn that wrote it. Data: `file`, `runtime`, `path`,
+  `size`, `sha8`, `quarantined` (blocks removed), `reasons`
+  (`free-prose` | `unknown-label` | `prescriptive`), `execute`, `trigger`
+  (`startup` | `watch` | `rescan`).
+
+The turn card footer shows `USER 2.1k MEMORY 0.4k`; when a `memory_changed`
+event is inside the turn it appends `✎ memory changed` (amber), and
+`· N quarantined` in red when the guard removed something. Hover for per-file
+sizes/hashes and reasons. Comparing `sha8` across two turns tells you whether
+the memory changed between them.
+
 ## Known Edge Cases
 
 ### 1. OpenClaw assigns different run_id

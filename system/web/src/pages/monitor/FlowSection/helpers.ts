@@ -1767,6 +1767,39 @@ export function turnTokenStats(turn: Turn): { inTok: number; outTok: number; cac
   return { inTok, outTok, cacheRead, cacheWrite, total };
 }
 
+export interface TurnMemoryInfo {
+  // Fingerprint attached at lifecycle_start: file → {size, sha8}.
+  files: Record<string, { size: number; sha8: string }>;
+  // memory_changed events that landed inside this turn (the agent wrote memory).
+  changed: { file: string; quarantined: number; reasons: string[] }[];
+}
+
+// Memory the turn ran with, and whether it wrote any. Both come from flow
+// events: `lifecycle_start.data.memory` (published by the OS memory guard) and
+// `memory_changed` (emitted by its fsnotify watch, tagged with the current
+// trace). Null when neither is present (older os-server, or no guard yet).
+export function turnMemoryState(turn: Turn): TurnMemoryInfo | null {
+  let files: TurnMemoryInfo["files"] | null = null;
+  const changed: TurnMemoryInfo["changed"] = [];
+  for (const ev of turn.events) {
+    if (ev.type !== "flow_event") continue;
+    const d = ev.detail as FlowEventDetail | undefined;
+    const data = d?.data ?? {};
+    if (d?.node === "lifecycle_start" && data.memory && typeof data.memory === "object") {
+      files = data.memory as TurnMemoryInfo["files"];
+    }
+    if (d?.node === "memory_changed") {
+      changed.push({
+        file: String(data.file ?? ""),
+        quarantined: Number(data.quarantined ?? 0),
+        reasons: Array.isArray(data.reasons) ? data.reasons.map(String) : [],
+      });
+    }
+  }
+  if (!files && changed.length === 0) return null;
+  return { files: files ?? {}, changed };
+}
+
 // Display/filter names are projections; never change the event's routing type.
 export function turnDisplayType(turn: Turn): string {
   if (externalHistory(turn)) return "history_sync";
