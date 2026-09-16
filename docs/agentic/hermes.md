@@ -902,6 +902,12 @@ Switching openclaw→hermes runs a Go persona migration
   ignored file.
 - **USER.md** → `memories/USER.md`.
 
+Identity parsing and renaming accept only a standalone `**Name:**` field line,
+optionally prefixed by a Markdown bullet (`-` or `*`). Inline mentions such as
+“Do NOT fill `**Name:**` or the other single-value fields” in managed SOUL
+instructions are ignored, so they cannot become wake words or be overwritten
+when the device is renamed.
+
 The soul copy uses `Overwrite=true` (a switch adopts the source runtime's persona;
 backed up first). The reverse hermes→openclaw **strips the identity card from the
 SOUL and restores its fields back into OpenClaw's `IDENTITY.md`** (`restoreIdentityCard`,

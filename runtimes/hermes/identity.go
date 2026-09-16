@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -23,6 +24,9 @@ const hermesHome = "/root/.hermes"
 // appends one with this heading when the soul has no name line yet — keep the text
 // identical to that migration so the two paths stay consistent.
 const identitySoulHeading = "## Your identity card"
+
+// Match an actual name field, never inline examples in SOUL instructions.
+var soulNameLine = regexp.MustCompile(`(?i)^(\s*(?:[-*]\s+)?)\*\*name:\*\*\s*(.*)$`)
 
 // UpdateIdentityName rewrites the agent's name under Hermes by editing the
 // `**Name:**` line in <hermes>/SOUL.md — the file Hermes loads as its identity.
@@ -78,11 +82,11 @@ func (s *HermesService) UpdateIdentityName(name string) error {
 func rewriteSoulName(content, name string) string {
 	lines := strings.Split(content, "\n")
 	for i, line := range lines {
-		idx := strings.Index(strings.ToLower(line), "**name:**")
-		if idx < 0 {
+		field := soulNameLine.FindStringSubmatch(line)
+		if field == nil {
 			continue
 		}
-		lines[i] = line[:idx] + "**Name:** " + name
+		lines[i] = field[1] + "**Name:** " + name
 		return strings.Join(lines, "\n")
 	}
 	prefix := strings.TrimRight(content, "\n")
@@ -132,13 +136,11 @@ func (s *HermesService) WatchIdentity(ctx context.Context) {
 // UpdateIdentityName writes.
 func parseSoulName(content string) string {
 	for _, line := range strings.Split(content, "\n") {
-		line = strings.TrimSpace(line)
-		lower := strings.ToLower(line)
-		idx := strings.Index(lower, "**name:**")
-		if idx < 0 {
+		field := soulNameLine.FindStringSubmatch(line)
+		if field == nil {
 			continue
 		}
-		name := strings.TrimSpace(line[idx+len("**name:**"):])
+		name := strings.TrimSpace(field[2])
 		if i := strings.IndexAny(name, "—-|"); i > 0 {
 			name = strings.TrimSpace(name[:i])
 		}

@@ -888,6 +888,11 @@ switch. Migration mang vào `~/.hermes/`:
   nên KNOWLEDGE được fold vào thay vì giữ thành file riêng bị bỏ qua.
 - **USER.md** → `memories/USER.md`.
 
+Parser tên và thao tác đổi tên chỉ nhận dòng trường `**Name:**` riêng, có thể
+có bullet Markdown (`-` hoặc `*`) ở đầu. Cụm nhắc inline như
+“Do NOT fill `**Name:**` or the other single-value fields” trong hướng dẫn SOUL
+được bỏ qua, không trở thành wake word hay bị ghi đè khi đổi tên thiết bị.
+
 Copy soul dùng `Overwrite=true` (switch lấy persona của runtime nguồn; backup
 trước). Chiều ngược hermes→openclaw **strip identity card khỏi SOUL VÀ restore các
 field của nó về `IDENTITY.md` của OpenClaw** (`restoreIdentityCard`, nghịch đảo của
