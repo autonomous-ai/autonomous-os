@@ -253,7 +253,9 @@ FACE_STRANGER_CORROBORATION_S = float(
 # FACE_STRANGER_MIN_TICKS — the unknown face is held as unsure for that long
 # before it mints, those ticks count, so a real visitor is listed on the very
 # enter that announces them. A friend arriving is a positive match and is
-# never gated by this.
+# never gated by this. Strictly consecutive, no gap tolerance — unlike
+# FACE_STRANGER_CORROBORATION_S — so a tick where the friend blurs to unsure
+# resets it; that fails safe (plain stranger greeting), never the other way.
 FACE_COPRESENCE_MIN_TICKS = int(os.environ.get("HAL_FACE_COPRESENCE_MIN_TICKS", "2"))
 # Similarity a match carried by the AUTO-CAPTURED extended bank must reach, as
 # opposed to the 0.3 an enrolled upload needs. An upload is ground truth; an

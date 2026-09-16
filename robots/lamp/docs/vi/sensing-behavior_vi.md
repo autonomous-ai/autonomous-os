@@ -89,7 +89,7 @@ Python đẩy `sound_tracker` events trực tiếp vào monitor bus qua `POST /a
 
 Luôn trigger phản ứng đầy đủ — không có ngoại lệ. Agent **phải** làm cả ba:
 
-1. `/emotion greeting` (0.9) với chủ nhà — `/emotion curious` (0.8) với người lạ
+1. `/emotion greeting` (0.9) với chủ nhà — `/emotion curious` (0.8) với người lạ, hoặc `curious` (0.6) khi người lạ tới trong lúc text liệt kê một chủ nhà ở `already present:`
 2. Với chủ nhà: `/servo/aim {"direction": "user"}` rồi `/servo/track {"target": ["person"]}` — aim xoay camera về phía user trước (~2s), sau đó vision tracker lock vào người và tự bám theo khi user di chuyển trong phòng. Người lạ: `/servo/play {"recording": "scanning"}` (không auto-follow — thận trọng)
 3. Nói: chào ấm áp với chủ nhà (gọi tên lấy từ `[context: current_user=X]`), thận trọng với người lạ — trừ khi text liệt kê một chủ nhà ở `already present:`, khi đó câu nói hướng về chủ nhà đó (xem bên dưới)
 
@@ -105,13 +105,13 @@ Person detected — new: stranger (stranger_2); already present: momo (friend); 
 
 - `new:` — người vừa tới, phần chủ nhà đứng trước, id sắp xếp theo thứ tự. Nhãn `friend (<tên>)` / `stranger (<id>)` là một hợp đồng: cổng wake-focus mở khi thấy `friend (`, `sensing-track` grep theo chúng, `face-enroll` parse hint được nối vào sau chúng.
 - `already present:` — chủ nhà có box trong **cùng frame** nhưng không phải vừa tới, viết dạng `<tên> (friend)` để không bao giờ bị đọc nhầm thành người mới tới. Đây là tín hiệu đồng hiện diện mà `sensing/SKILL.md` dùng để nói với user ("Momo ơi, có bạn tới kìa") thay vì chào người lạ. Với enter chỉ có người lạ, đoạn này chỉ được ghi khi box chủ nhà và box không-phải-chủ-nhà đã cùng xuất hiện `FACE_COPRESENCE_MIN_TICKS` (2) nhịp sensing liên tiếp (box `unsure` cũng tính — đó chính là nhịp recognizer dùng để xác nhận người lạ mới trước khi cấp id); một tấm poster, một cái bóng phản chiếu hay một nhịp nhiễu cạnh user không được biến "xin chào" thành "có bạn tới". Chủ nhà mới tới khi một chủ nhà khác đang ngồi thì được liệt kê không cần gate đó. Đoạn này không bao giờ suy ra từ `current_user()` — đó là trạng thái cửa sổ hiện diện, đọc y hệt nhau dù user đang ngồi đó hay đã rời đi hai phút trước.
-- `faces in frame:` — số box trong frame **hiện tại** và nhãn theo thứ tự phát hiện (`unsure` cho box chưa có danh tính), đúng nhãn được vẽ lên snapshot. Đây không phải số người tới: id người lạ được flush ở nhịp này có thể đến từ một frame trước đó.
+- `faces in frame:` — số box trong frame **hiện tại** và nhãn theo thứ tự phát hiện (`unsure` cho box chưa có danh tính), vẽ theo đúng cách như trên snapshot. Đây không phải số người tới: id người lạ được flush ở nhịp này — và snapshot đã buffer gửi kèm — có thể đến từ một frame sớm hơn frame được đếm ở đây.
 
 Ưu tiên giữa những người tới không đổi: cả hai cùng mới trong một frame → một event, chủ nhà đứng trước, gửi ngay; người lạ được buffer trước rồi chủ nhà tới sau → frame chủ nhà gửi ngay và người lạ theo sau bằng event riêng sau `FACE_STRANGER_FLUSH_S` (10 giây), chịu `FACE_COOLDOWN_S` (10 giây) và `FACE_STRANGER_ENTER_FLOOR_S` (300 giây).
 
 #### Quay lại sau khi vắng lâu (chỉ chủ nhà)
 
-Với mỗi `presence.enter` của chủ nhà, sensing handler chèn tag `[context: current_user=X]` (xem [User attribution](#user-attribution--context-current_userx)) rồi tới block `[presence_context: {"last_leave_age_min": N, "current_hour": H}]` vào message trước khi forward sang agent. Tag quy gán chính là nguồn của tên trong lời chào — bản thân text của event chỉ mang *label* khuôn mặt (`friend (long)`), thứ mà agent đọc như một nhãn nhận diện chứ không phải một cái tên. `last_leave_age_min` được tính từ row `leave` gần nhất trong wellbeing log, quét tối đa 3 ngày gần đây (`wellbeing.LastActionTS`); giá trị `-1` nghĩa là không tìm thấy `leave` nào trong khoảng đó.
+Với mỗi `presence.enter` mà `current_user` là chủ nhà — kể cả enter chỉ có người lạ trong lúc chủ nhà đó đang có mặt, vì `sensingmsg.Build` dựa vào `current_user` chứ không đọc text của event — sensing handler chèn tag `[context: current_user=X]` (xem [User attribution](#user-attribution--context-current_userx)) rồi tới block `[presence_context: {"last_leave_age_min": N, "current_hour": H}]` vào message trước khi forward sang agent. Tag quy gán chính là nguồn của tên trong lời chào — bản thân text của event chỉ mang *label* khuôn mặt (`friend (long)`), thứ mà agent đọc như một nhãn nhận diện chứ không phải một cái tên. `last_leave_age_min` được tính từ row `leave` gần nhất trong wellbeing log, quét tối đa 3 ngày gần đây (`wellbeing.LastActionTS`); giá trị `-1` nghĩa là không tìm thấy `leave` nào trong khoảng đó. `sensing/SKILL.md` chỉ dùng block này khi `new:` có tên chủ nhà; với enter của người lạ có `already present:` thì bỏ qua.
 
 `sensing/SKILL.md` đọc block này và **chuyển sang câu chào "quay lại sau khi vắng lâu"** khi cả ba điều kiện đúng:
 

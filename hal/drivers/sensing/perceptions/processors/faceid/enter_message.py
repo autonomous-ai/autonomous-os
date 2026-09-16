@@ -21,9 +21,9 @@ Shape (#426):
   voice gate for a stranger's arrival.
 - ``faces in frame:`` — the number of boxes in the CURRENT frame and their
   labels in detection order, ``unsure`` for a box without an identity yet.
-  Same labels ``_annotate_frame`` draws, so the count can never disagree with
-  the snapshot. It is not the number of arrivals: flushed stranger ids may be
-  from an earlier frame.
+  Same labels ``_annotate_frame`` draws. It is not the number of arrivals:
+  flushed stranger ids — and, on a delayed flush, the attached snapshot —
+  may be from an earlier frame than the one this count describes.
 """
 
 from collections.abc import Iterable

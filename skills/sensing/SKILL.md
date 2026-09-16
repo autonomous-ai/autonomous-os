@@ -76,9 +76,9 @@ Every event emits at least one `[HW:/emotion:...]` marker, even on `NO_REPLY`. N
 - **Never call any API to receive events** — they arrive automatically.
 - **Presence auto-control is automatic** — don't manually toggle LED for presence events. Override only if the user asks (see Presence auto-control below).
 
-## Return after long absence (friend `presence.enter`)
+## Return after long absence (friend `presence.enter` — `new:` names a friend)
 
-On every friend `presence.enter`, the backend injects a `[presence_context: {...}]` block:
+On every `presence.enter` whose `current_user` is a friend, the backend injects a `[presence_context: {...}]` block. Use it only when `new:` names that friend; a stranger enter while the friend is present carries the same block and must ignore it (see "Someone joins the user"):
 
 ```json
 { "last_leave_age_min": 312, "current_hour": 14 }
@@ -110,16 +110,19 @@ The event text has three segments: `new:` (who just became visible — this is w
 ```
 [sensing:presence.enter] Person detected — new: stranger (stranger_2); already present: momo (friend); faces in frame: 2 (momo, stranger_2)
 [context: current_user=momo]
+[presence_context: {"last_leave_age_min": 900, "current_hour": 11}]
 ```
 
 When `new:` names only strangers **and** `already present:` names a friend:
 
-- Talk to the friend, by name, about the company — not to the stranger. *"Hey Momo, looks like you've got company."* / *"Momo — someone's joined you."* / late at night: *"Visitor, Momo?"*
+- Talk to the friend, by name, about the company — not to the stranger. *"Hey Momo, looks like you've got company."* / *"Momo — someone's joined you."* / late at night: *"Visitor, Momo?"* If `already present:` lists more than one friend, address the one in `[context: current_user=...]`.
 - One short aside, once. Do not greet the stranger, do not ask who they are, do not announce it like an alert — in an office people lean in constantly.
 - Pick the tone from what you see: a colleague at the desk is a shrug, a guest at home is warmer, after ~22:00 shorter and quieter.
-- HW markers stay the stranger set (`curious`, aim, track).
+- HW markers: `curious` at 0.6 (lighter than a lone stranger's 0.8 — the user is here, this is company, not an unknown), plus aim and track, exactly as the matrix row shows.
 
 **`current_user` is not enough.** Trigger this ONLY from `already present:`. `[context: current_user=momo]` means momo was seen within the last hour — it reads exactly the same when she left two minutes ago and a lone stranger (who may well be momo mis-recognized at a bad angle) sat down. Saying *"Momo, someone new is near you"* to a user sitting alone is the failure this section exists to prevent. `faces in frame:` naming the friend without `already present:` naming them means HAL's guard did not pass — treat it as a regular stranger enter.
+
+**Ignore `[presence_context: ...]` here.** The backend attaches that block to every `presence.enter` whose `current_user` is a friend — it does not read the event text — so it arrives on this stranger enter too, and its numbers describe momo's own last leave, not the newcomer. The return-after-long-absence swap applies only when `new:` names a friend. Never answer a stranger's arrival with "been a while".
 
 HAL only writes `already present:` after the friend and the newcomer have been boxed together for a couple of sensing ticks (`FACE_COPRESENCE_MIN_TICKS`), so a single odd frame never reaches you as "company". The usual stranger floor and cooldown still apply.
 
