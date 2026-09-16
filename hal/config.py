@@ -1669,6 +1669,12 @@ REALTIME_MEMORY_MAX_CHARS: int = int(os.environ.get("HAL_REALTIME_MEMORY_MAX_CHA
 # Cap on the rolling realtime summary.md — part of the per-turn floor, so kept
 # tight (~1.5k tokens). Env-overridable for tuning.
 REALTIME_SUMMARY_MAX_CHARS: int = int(os.environ.get("HAL_REALTIME_SUMMARY_MAX_CHARS", "5000"))
+# Age after which the `## Open requests` section of summary.md is dropped before
+# the summary is re-fed (to the next summarize or into session context). A
+# request nobody mentioned for this long was handled by the main agent,
+# cancelled or forgotten — re-feeding it is what let a content-free nudge make
+# Gemini "answer" a stale task from memory (#419, #421). 0 disables.
+REALTIME_SUMMARY_OPEN_REQUEST_TTL_S: int = int(os.environ.get("HAL_REALTIME_SUMMARY_OPEN_REQUEST_TTL_S", "3600"))
 # Ceiling for the SOUL+IDENTITY+USER.md identity section of the realtime floor.
 # USER.md/IDENTITY.md are agent-writable, so without this the per-turn floor
 # grows unbounded. Default leaves today's ~9.6k chars untouched.

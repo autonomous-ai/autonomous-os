@@ -6,6 +6,7 @@ Subclasses implement agent-specific context loading (identity files, device memo
 import json
 import logging
 import threading
+import time
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,6 +17,35 @@ from hal.realtime.constants import RESOURCES_DIR
 from hal.realtime.summarizer import RealtimeSummarizer
 
 logger = logging.getLogger(__name__)
+
+# Heading the summariser is told to put unanswered requests under
+# (resources/summarize_prompt.md). expire_open_requests keys off it.
+OPEN_REQUESTS_HEADING = "## Open requests"
+
+
+def expire_open_requests(summary: str, age_s: float, ttl_s: float) -> str:
+    """Drop the `## Open requests` section from a summary older than ttl_s.
+
+    Deterministic counterpart of the prompt rule: the model is asked to keep
+    pending requests in one section; the device forgets that section once it is
+    stale instead of trusting the next summarize to do so. ttl_s <= 0 disables;
+    a summary younger than the TTL, or without the section, is returned as is.
+    """
+    if ttl_s <= 0 or age_s < ttl_s:
+        return summary
+    if OPEN_REQUESTS_HEADING.lower() not in summary.lower():
+        return summary
+    out: list[str] = []
+    skipping = False
+    for line in summary.splitlines():
+        if line.strip().lower() == OPEN_REQUESTS_HEADING.lower():
+            skipping = True
+            continue
+        if skipping and line.lstrip().startswith("#"):
+            skipping = False
+        if not skipping:
+            out.append(line)
+    return "\n".join(out).strip()
 
 
 class ContextManagerBase(ABC):
@@ -76,6 +106,7 @@ class ContextManagerBase(ABC):
         )
         # Billed every turn as part of the floor → keep tight (~1.5k tokens).
         self._summary_max_chars: int = app_config.REALTIME_SUMMARY_MAX_CHARS
+        self._open_request_ttl_s: float = float(app_config.REALTIME_SUMMARY_OPEN_REQUEST_TTL_S)
         # Raw archive — append-only, trimmed by flushing oldest
         self._raw_memory_path: Path = self._realtime_memory_path.with_name(
             "memory_raw.jsonl"
@@ -129,14 +160,9 @@ class ContextManagerBase(ABC):
                         return
 
                     if self._summary_path.exists():
-                        try:
-                            existing: str = self._summary_path.read_text(
-                                encoding="utf-8"
-                            ).strip()
-                            if existing:
-                                to_summarize.append(f"[Previous summary]\n{existing}")
-                        except Exception:
-                            pass
+                        existing: str = self._read_summary_for_refeed()
+                        if existing:
+                            to_summarize.append(f"[Previous summary]\n{existing}")
                     to_summarize.extend(entries)
 
                 logger.info(
@@ -296,16 +322,33 @@ class ContextManagerBase(ABC):
         with self._realtime_memory_lock:
             return self._load_realtime_memory_unlocked()
 
+    def _read_summary_for_refeed(self) -> str:
+        """summary.md with its stale `## Open requests` section removed.
+
+        Used both where the summary is re-fed as [Previous summary] to the next
+        summarize and where it is loaded into session context — the two places
+        a stale pending task could reach the model.
+        """
+        try:
+            existing: str = self._summary_path.read_text(encoding="utf-8").strip()
+        except Exception as e:
+            logger.warning("[realtime] Failed to read summary: %s", e)
+            return ""
+        if not existing:
+            return ""
+        age_s: float = time.time() - self._summary_path.stat().st_mtime
+        trimmed: str = expire_open_requests(existing, age_s, self._open_request_ttl_s)
+        if trimmed != existing:
+            logger.info("[realtime] dropped stale open requests from summary (age %.0fs)", age_s)
+        return trimmed
+
     def _load_realtime_memory_unlocked(self) -> list[str]:
         entries: list[str] = []
 
         if self._summary_path.exists():
-            try:
-                summary: str = self._summary_path.read_text(encoding="utf-8").strip()
-                if summary:
-                    entries.append(f"[Previous summary]\n{summary}")
-            except Exception as e:
-                logger.warning("[realtime] Failed to read summary: %s", e)
+            summary: str = self._read_summary_for_refeed()
+            if summary:
+                entries.append(f"[Previous summary]\n{summary}")
 
         if not self._realtime_memory_path.exists():
             return entries
