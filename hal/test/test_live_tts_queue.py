@@ -8,8 +8,12 @@ import pytest
 
 from hal import config
 from hal.drivers.voice.voice_service import VoiceService
+from hal.drivers.voice import voice_service
 from hal.drivers.voice.tts import service as module
 from hal.test.test_tts_turn_queue import _queue_service, _InlineThread
+from hal.test.test_live_voice_metrics import _pump
+from hal.test.test_voice_metrics import kpi  # noqa: F401 -- clock/transport fixture
+from hal.realtime.models.output import TextOutput, UserSpeechOutput
 
 
 def speaker(monkeypatch, tmp_path, native=False):
@@ -211,3 +215,43 @@ def test_cached_live_reply_drains_waiting_main(monkeypatch, tmp_path):
     tts._playback_owner = "live"
     tts._play_wav_inline(path)
     assert writes[-1] == ("run:main-1", 8, True, False)
+
+
+@pytest.mark.parametrize("late_key,main_reply,preserved", [
+    ("question", False, True),
+    ("new-question", False, False),
+    ("question", True, False),
+])
+def test_late_input_preserves_own_live_tail_but_new_input_stops(
+    monkeypatch, tmp_path, kpi, late_key, main_reply, preserved,
+):
+    tts, _, writes, stream = speaker(monkeypatch, tmp_path)
+    # Queue workers run inline here; history owns a long-lived background loop.
+    monkeypatch.setattr(voice_service, "LiveHistory", Mock())
+    # Keep the first sentence on the speaker while model text queues the tail.
+    tts.speak = Mock(return_value=False)
+    head = "The campaign boosted foot traffic at the pilot pubs."
+    tail = " Plus, they are working with the Vintners' Federation."
+
+    def switch_owner():
+        if main_reply:
+            tts._realtime_reply = False
+            tts._realtime_feedback = True
+
+    _pump(monkeypatch, kpi, [([
+        UserSpeechOutput(turn_id="question", endpoint_at=kpi.clock()),
+        TextOutput(text=head, user_turn_id="question"),
+        TextOutput(text=tail, user_turn_id="question"),
+        switch_owner,
+        UserSpeechOutput(turn_id=late_key, transcript="Tell me more about the campaign."),
+    ], "question", True)], tts=tts)
+
+    if preserved:
+        assert "".join(item.text for item in tts._pending_queue) == head + tail
+        assert not tts._stop_event.is_set()
+        tts._drain_pending_queue(stream)
+        assert len(writes) == 2
+    else:
+        assert tts._stop_event.is_set()
+        assert not tts._pending_queue
+        assert not writes

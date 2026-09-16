@@ -1313,6 +1313,12 @@ music `reference_idle_for()` reads as a perfectly quiet room.
 
 ### The output pump
 
+In LIVE mode, input transcription may arrive after the model has already
+started answering. Once output carries an input turn ID, a later transcript
+for that same ID must not stop its realtime playback or clear queued external
+TTS sentences (including ElevenLabs). A different addressed input can still
+interrupt; main-agent playback retains its existing interruption behavior.
+
 `_live_out_pump` loops `orchestrator.stream_output()` rather than reading the
 agent queue directly. That reuses the entire existing tool surface — `look` +
 replay, `express_emotion`, `reject_turn`, `delegate_to_main` — instead of

@@ -1209,6 +1209,7 @@ class VoiceService:
         input_text = {}
         input_focus = {}
         addressed_inputs = set()
+        response_inputs = set()
         focus_refreshed = set()
         rejected_inputs = set()
         harness_listening = bool(
@@ -1306,7 +1307,15 @@ class VoiceService:
                             if (out.turn_id not in addressed_inputs
                                     and self._live_emotion_addressed(text, harness_voice)):
                                 addressed_inputs.add(out.turn_id)
-                                if self._tts is not None and self._tts.speaking:
+                                # Input transcription can arrive after the reply
+                                # has started. That is metadata for this turn,
+                                # not a new request to cancel its queued TTS.
+                                same_reply = (
+                                    out.turn_id in response_inputs
+                                    and self._tts is not None
+                                    and self._tts.realtime_speaking
+                                )
+                                if self._tts is not None and self._tts.speaking and not same_reply:
                                     self._tts.stop()
                         if cues is not None:
                             cues.input(
@@ -1427,6 +1436,8 @@ class VoiceService:
                         self._live_last_model_output = time.time()
                         if not native:
                             continue
+                        if out.user_turn_id:
+                            response_inputs.add(out.user_turn_id)
                         if cues is not None:
                             cues.finish(out.user_turn_id)
                         owner = metrics.owner(out.user_turn_id)
@@ -1452,6 +1463,8 @@ class VoiceService:
                             transcript += out.transcript
                         continue
                     if isinstance(out, RTTextOutput):
+                        if out.user_turn_id:
+                            response_inputs.add(out.user_turn_id)
                         history.output(out.user_turn_id, out.text)
                         self._live_last_model_output = time.time()
                         transcript += out.text
