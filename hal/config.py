@@ -257,27 +257,66 @@ FACE_STRANGER_CORROBORATION_S = float(
 # FACE_STRANGER_CORROBORATION_S — so a tick where the friend blurs to unsure
 # resets it; that fails safe (plain stranger greeting), never the other way.
 FACE_COPRESENCE_MIN_TICKS = int(os.environ.get("HAL_FACE_COPRESENCE_MIN_TICKS", "2"))
+# Similarity a live face must reach against a user's ENROLLED UPLOADS to be
+# that user. The uploads are a phone photo matched against the device camera —
+# different sensor, lighting, distance — so the same person scores lower here
+# than camera-to-camera. Measured on orange-lamp 16/09/2026 against the
+# enrollment photo: owner frontal 0.60-0.85, owner 3/4 pose 0.29-0.34, owner
+# full profile / strangers / a photo held up on a phone -0.31-0.28.
+#
+# 0.40 sits in the gap between the 3/4 cluster and the frontal cluster. The
+# previous 0.30 sat INSIDE the 3/4 cluster, i.e. in the region where a genuine
+# off-angle frame and a similar-looking stranger overlap, and left 0.10 of
+# headroom over the best stranger the uploads alone ever produced (0.201 over
+# six verified strangers, #299). A stranger accepted as the owner is the worse
+# failure, so the headroom is worth the cost: the #299 replay puts the upload
+# path at 92.0% recall at 0.30 and 86.4% at 0.40, and the missing 5.6% is the
+# 3/4 band — exactly the poses the extended bank exists to recover (its views
+# are admitted at >= FACE_EXTEND_MIN_ENROLL_SIM and match at
+# FACE_EXTENDED_THRESHOLD, both camera-to-camera).
+FACE_MATCH_THRESHOLD = float(os.environ.get("HAL_FACE_MATCH_THRESHOLD", "0.40"))
 # Similarity a match carried by the AUTO-CAPTURED extended bank must reach, as
-# opposed to the 0.3 an enrolled upload needs. An upload is ground truth; an
-# extended view is a guess the device made about itself, so it is weaker
-# evidence and has to clear a higher bar.
+# opposed to FACE_MATCH_THRESHOLD for an enrolled upload. An upload is ground
+# truth; an extended view is a guess the device made about itself, so it is
+# weaker evidence and has to clear a higher bar.
 #
 # Without the asymmetry there is no safe setting at all. Measured over 990
 # logged frames (lamp-ac82, 04/09/2026): the enrollment photo alone keeps the
 # best of six verified strangers at 0.201, but ANY extended bank lifts that to
 # 0.32-0.40, because every stored view is another chance for a stranger to
-# match something. Raising the single threshold to 0.40 instead would fix that
-# and cost the frontal path 92.0% -> 86.4% recall, which is the complaint the
-# extended bank exists to answer.
+# match something. Raising a single shared threshold to 0.40 would have fixed
+# that and cost the frontal path 92.0% -> 86.4% recall, which is the complaint
+# the extended bank exists to answer.
 #
 # 0.45 leaves 0.046 of headroom over the worst of those six (0.404). 0.40 does
 # NOT: it sits 0.004 BELOW it, i.e. that stranger would be accepted. The four
 # extra frames 0.40 would recognise all have a confident recognition 2-6s away,
 # so they cost nothing visible; a false acceptance does.
 FACE_EXTENDED_THRESHOLD = float(os.environ.get("HAL_FACE_EXTENDED_THRESHOLD", "0.45"))
+# Similarity a live face must reach against the STRANGER bank to be an already-
+# known stranger_N rather than a new one. The stranger bank is the same kind of
+# evidence as the extended bank — auto-captured, single-view, camera-to-camera,
+# never re-validated — and needs the same bar. It used to match at the upload
+# threshold (0.30), which is how #429 happened: on reachy-mini a bank of 20
+# rows minted in August (before the quality gates) false-accepted one visitor
+# at 0.346 / 0.385 / 0.318 against three DIFFERENT stale rows, so her id flipped
+# stranger_9 -> stranger_10 -> stranger_4 with head pose, while her own two
+# frames scored 0.658 against each other. Same-camera re-sightings of the same
+# person land around 0.6; 0.45 leaves 0.065 over the worst false accept seen.
+#
+# The mint gate (recognizer.detect) deliberately does NOT require every stranger
+# row to be below negative_threshold: with N rows some row is nearly always
+# above 0.2, so that rule stopped minting altogether once the bank had grown.
+# A face below the owner banks' negative_threshold and below this bar is a new
+# person; it is corroborated (FACE_STRANGER_MIN_TICKS) and minted. The known
+# cost: a returning stranger at a pose their single stored view does not cover
+# (0.2-0.45) gets a second id. That is the honest outcome — one row cannot
+# vouch for a pose it has never seen.
+FACE_STRANGER_THRESHOLD = float(os.environ.get("HAL_FACE_STRANGER_THRESHOLD", "0.45"))
 # Similarity to the ENROLLED UPLOADS a live view must reach before it may be
-# auto-captured into a user's extended bank. Deliberately above the 0.3 match
-# threshold: being recognised is not enough to become a reference view.
+# auto-captured into a user's extended bank. Deliberately above
+# FACE_MATCH_THRESHOLD: being recognised is not enough to become a reference
+# view. Raised 0.40 -> 0.45 with the match bar (0.30 -> 0.40) to keep that gap.
 #
 # Admission previously had no identity test at all — only a DIVERSITY gate that
 # keeps a view when it is dissimilar to everything stored. Novelty and impostor
@@ -293,7 +332,7 @@ FACE_EXTENDED_THRESHOLD = float(os.environ.get("HAL_FACE_EXTENDED_THRESHOLD", "0
 # to it, so one bad view can never breed more. Replaying 990 logged frames under
 # this rule produced a bank that was 10/10 the enrolled user.
 FACE_EXTEND_MIN_ENROLL_SIM = float(
-    os.environ.get("HAL_FACE_EXTEND_MIN_ENROLL_SIM", "0.40")
+    os.environ.get("HAL_FACE_EXTEND_MIN_ENROLL_SIM", "0.45")
 )
 # Per-detection debug capture for face recognition: every recognized face
 # writes its own timestamped folder (input crop + aligned model input + clean
