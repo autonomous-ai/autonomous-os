@@ -97,7 +97,7 @@ User nói "Lamp, nhìn xem" / "look at me" / "camera on" → agent gọi `[HW:/c
 
 ### 7. Telegram/web chat cần visual context
 
-Agent cần snapshot (camera skill) → tự động bật camera, chụp, tùy chọn giữ bật hoặc tắt sau.
+Agent cần snapshot (camera skill) → một lệnh shell kiểm `GET /camera` trước: `disabled` → agent trả lời "camera đang tắt" rồi dừng (không tự bật, không chụp); `has_frame: false` → "camera không hoạt động" rồi dừng; còn lại `POST /api/vision/look` chụp và mô tả. Bước kiểm nằm chung tool call nên không thêm vòng model.
 
 ## Manual Override
 
@@ -137,7 +137,7 @@ Manual override KHÔNG bị ghi đè bởi scene/emotion/presence triggers. Ch�
 
 ### OpenClaw Skills
 
-10. **Camera skill**: ✅ Done — voice/chat toggle + auto-enable trước capture.
+10. **Camera skill**: ✅ Done — voice/chat toggle; capture kiểm `/camera` trong cùng lệnh shell và trả lời "tắt" / "không hoạt động" thay vì tự bật hay chụp (bỏ auto-enable trước capture 16/9/2026).
 
 ### Web Monitor
 
@@ -149,7 +149,7 @@ Manual override KHÔNG bị ghi đè bởi scene/emotion/presence triggers. Ch�
 
 - ✅ Description cập nhật với trigger phrases cho toggle
 - ✅ Examples cho disable/enable qua `[HW:/camera/disable:{}]` và `[HW:/camera/enable:{}]`
-- ✅ Rule auto-enable trước capture
+- ✅ Rule camera tắt / không có frame = trả lời và dừng (thay rule auto-enable, 16/9/2026)
 - ✅ Rule: không bao giờ toggle camera chủ động mà không có yêu cầu từ user
 
 ### Agent không nên tự ý toggle camera

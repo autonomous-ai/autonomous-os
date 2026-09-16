@@ -97,7 +97,7 @@ User says "Lamp, nhìn xem" / "look at me" / "camera on" → agent calls `[HW:/c
 
 ### 7. Telegram/web chat with visual context needed
 
-Agent needs snapshot (camera skill) → auto-enable camera, take snapshot, optionally leave on or disable after.
+Agent needs snapshot (camera skill) → one shell call checks `GET /camera` first: `disabled` → the agent answers "camera is off" and stops (no auto-enable, no capture); `has_frame: false` → "camera is not working" and stops; otherwise `POST /api/vision/look` captures and describes. The check rides in the same tool call so it adds no model round.
 
 ## Manual Override
 
@@ -137,7 +137,7 @@ Manual override does NOT get auto-overridden by scene/emotion/presence triggers.
 
 ### OpenClaw Skills
 
-10. **Camera skill**: ✅ Done — voice/chat toggle + auto-enable before capture.
+10. **Camera skill**: ✅ Done — voice/chat toggle; capture checks `/camera` in the same shell call and answers "off" / "not working" instead of enabling or capturing (auto-enable before capture removed 2026-09-16).
 
 11. **Scene / Emotion SKILL.md**: ❌ Skipped — camera toggle is automatic in server.py via preset `"camera"` field. Agent doesn't need to know.
 
