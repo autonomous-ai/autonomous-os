@@ -383,6 +383,8 @@ Tới thời điểm agent thấy event, HAL đã tự log mọi label activity 
 4. **Sau khi nhắc** (chỉ nudge, không phải reaction), log entry `nudge_hydration` hoặc `nudge_break` — đây là cái reset delta cho window tiếp theo (và hiện lên timeline user).
 5. **KHÔNG BAO GIỜ đoán** time-since từ memory — luôn tính từ log.
 
+Với lượt `[activity]` tự động, skill wellbeing cấm đọc phần chọn nhánh/skill trong mọi assistant text, kể cả trước tool. Phản ứng ăn uống (`eating *`, `dining`, `tasting food`) giới hạn một câu tối đa 20 từ theo `current_language`, không gọi tool, thêm log marker, nhắc việc khác hay bootstrap habit dù timer đã tới hạn hoặc `bootstrap_needed=true`. Ví dụ cà rốt có toàn bộ phản hồi là “Enjoy your carrots!”. Đây là hướng dẫn prompt, không phải bộ lọc TTS tất định.
+
 Reaction path được thêm vào để hành động tích cực không bị im lặng: trước đây user uống nước mà chưa qua threshold thì Lamp `NO_REPLY`, cảm giác như đèn chết. Reaction được nuôi bởi 2 field thêm trong `[wellbeing_context: ...]` — `count_today` (đếm số lần `drink` / `break` hôm nay) và `time_of_day` (`morning` / `noon` / `afternoon` / `evening` / `night`) — để câu thoại có cái cụ thể bám vào mà không tốn thêm tool call. Visual caption (kiểu "chai Lavie xanh") cố ý CHƯA làm — vision pipeline hiện chỉ trả class label, không có free-text mô tả.
 
 ### Ngưỡng

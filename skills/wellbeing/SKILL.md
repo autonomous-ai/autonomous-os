@@ -5,6 +5,20 @@ description: "Proactive coaching across hydration, breaks, meals, posture and en
 
 # Wellbeing
 
+## Automatic activity: spoken output only
+
+For `[activity]` events, every assistant text message is spoken aloud, including text before or between tool calls. Output only the words addressed to the person, preceded by any HW markers required by the selected route. Never announce reading a skill, name the event/label/route number, explain a decision, draft a response, or describe which markers are needed. Keep analysis in a separate reasoning channel; if none is available, omit it entirely. Do not add an introduction or afterword to the spoken response.
+
+**Eating reaction:** for raw eat labels (`eating *`, `dining`, `tasting food`) in route #1, give exactly one casual sentence of at most 20 words in `current_language`, then stop. No tool calls, no log marker, no hydration/break nudge, and no habit bootstrap, even when `bootstrap_needed=true` or a nudge timer is due. This overrides the longer reaction form below; it does not change routing for direct user requests or discomfort.
+
+For the standalone `eating carrots` event with `current_language=en`, a complete reply is:
+
+```text
+Enjoy your carrots!
+```
+
+That line is the entire reply, not a sentence to append after analysis. Do not prepend `An activity event.`, `Let me check the wellbeing skill`, or `According to the decision rules`. Silently remove such planning text before sending. Other eating reactions may vary the wording within the same one-sentence limit.
+
 ## User-reported discomfort
 
 For “I feel tired and have a headache”, dizziness, a stuffy room or difficulty
@@ -173,7 +187,7 @@ Read the `[activity] Activity detected: <labels>.` message + the `[wellbeing_con
 
 | # | Condition | Route | Output |
 |---|---|---|---|
-| 1 | labels list contains `drink`, `break`, or `celebrate` OR any raw eat label (`eating burger`, `dining`, `tasting food`, … — i.e. any `eating *` / `dining` / `tasting food`) | **reaction** | 1–3 sentence acknowledgment per the **Reaction** section. **No HW marker** (the backend already logged the row upstream). |
+| 1 | labels list contains `drink`, `break`, or `celebrate` OR any raw eat label (`eating burger`, `dining`, `tasting food`, … — i.e. any `eating *` / `dining` / `tasting food`) | **reaction** | For eat labels: one sentence, at most 20 words, per **Automatic activity: spoken output only**. Otherwise 1–3 sentence acknowledgment per **Reaction**. **No HW marker** (the backend already logged the row upstream). |
 | 1b | labels contain `yawning` AND (`yawn_ack_age_min == -1` OR `yawn_ack_age_min >= YAWN_ACK_COOLDOWN_MIN`) AND `current_hour < 21` | **yawn reaction** | Same shape as #1 — name the yawn, see **Reaction**. **Unlike #1 this one DOES take a marker**: POST `noted_yawn`, which is what starts the hour cooldown. Without the POST you will re-acknowledge every yawn all afternoon. |
 | 2 | `first_activity_today == true` AND `current_hour ∈ [5, 11)` AND `morning_greeting_done_today == false` | **morning-greeting** | See `reference/morning-greeting.md`. Logs `morning_greeting` action to gate next firings today. |
 | 3 | `current_hour >= 21` AND labels are sedentary and/or `yawning` (no `drink`/`break`) AND `sleep_winddown_done_today == false` | **sleep-winddown** | See `reference/sleep-winddown.md`. Logs `sleep_winddown` action. Replaces break nudge in late evening. A `yawning` label riding alongside a sedentary one does **not** disqualify this route — it is the strongest possible confirmation for it. |
@@ -217,7 +231,7 @@ After 21h the yawn belongs to sleep wind-down (#3), which outranks this — don'
 - The raw activity label that came alongside (e.g. `drink, using computer` → comment on hydrating mid-screen-time; `eating burger` → comment on the specific food).
 
 **Form:**
-- 1–4 sentences, conversational, slightly playful or surprised — NOT a nudge, NOT advice. Length should follow the moment: a quick *"Nice."* is fine; a longer riff is fine too when there's something to riff on (a milestone count, a funny pairing of label + time-of-day, a streak).
+- Eating reactions: one sentence, at most 20 words. Other reactions: 1–4 sentences, conversational, slightly playful or surprised — NOT a nudge, NOT advice. Length should follow the moment: a quick *"Nice."* is fine; a longer riff is fine too when there's something to riff on (a milestone count, a funny pairing of label + time-of-day, a streak).
 - It's OK to weave in a tiny health-context aside if it fits naturally (*"eyes will thank you"*, *"kidneys say thanks"*) — one short clause, never a lecture, and never the same line twice in a row.
 - Match the user's spoken language (Vietnamese in / Vietnamese out, English in / English out).
 - **No `[HW:...]` marker** — except the yawn reaction (#1b), which posts `noted_yawn`. For every other label the underlying `drink` / `break` / eat row was already written by the backend.

@@ -384,6 +384,8 @@ By the time the agent sees the event, HAL has already logged the activity rows f
 4. **After speaking a nudge** (not a reaction), log a `nudge_hydration` or `nudge_break` entry — this is what resets the delta for the next window (and makes the nudge visible on the user's timeline).
 5. **Never guess** time-since from memory — always compute from the log.
 
+For automatic `[activity]` turns, the wellbeing skill forbids routing/skill-selection narration in every assistant text message, including before tools. Raw eat reactions (`eating *`, `dining`, `tasting food`) are limited to one sentence of at most 20 words in `current_language`, with no tools, log marker, extra nudge or habit bootstrap even when timers are due or `bootstrap_needed=true`. The complete carrots example is “Enjoy your carrots!”. This is prompt guidance, not deterministic TTS filtering.
+
 The reaction path was added so positive actions don't fall into silence: drinking water that doesn't trigger a nudge used to produce `NO_REPLY`, which felt dead. The reaction is fed by two extra pre-computed fields in `[wellbeing_context: ...]` — `count_today` (tally of `drink` / `break` rows today) and `time_of_day` (`morning` / `noon` / `afternoon` / `evening` / `night`) — so phrasing has something specific to lean on without spawning extra tool calls. Visual captions (e.g. "blue water bottle") are intentionally NOT in scope yet — the vision pipeline returns class labels only.
 
 ### Thresholds
