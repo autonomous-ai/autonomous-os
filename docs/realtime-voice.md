@@ -71,6 +71,16 @@ voice/text, emotion, movement, look, or delegation. The tool description allows
 rejecting an overheard request even when the device could fulfill it. Uncertainty,
 silent completion, and errors retain the existing fallback behavior.
 
+The Gemini prompt additionally requires audio evidence before interpreting a
+request: do not complete noise/echo into words or repair an unrelated transcript
+using the date, location, memory, or conversation history. Unexpected foreign
+language input does not authorize translation; proper names and technical
+loanwords in a clear configured-language request remain valid. Examples cover
+spurious Spanish travel-agency text and Korean text incorrectly answered as a
+date question. Unclear input stays silent without changing uncertain-turn
+fallback or `reject_turn` eligibility. This prompt change cannot guarantee
+transcription accuracy or prevent all hallucinated history entries.
+
 Lamp's `robots/lamp/SOUL.md` applies the same addressed-speech prerequisite to
 main-agent voice and `[ambient]` messages. Overheard speech or an unclear
 addressee requires exactly `NO_REPLY`, without tool calls or physical/emotional
