@@ -1490,6 +1490,18 @@ GAZE_WAKE_FOCUS_S: float = float(os.environ.get("HAL_GAZE_WAKE_FOCUS_S", "10"))
 # body's live switches (observed 03/09/2026).
 STATE_DIR: str = os.environ.get("HAL_STATE_DIR", "/tmp")
 
+# Append-only journal of sleep/wake transitions, one JSONL per day. The
+# counterpart to the sleep sidecar above, not a duplicate of it: the sidecar
+# answers "am I asleep right now" (one record, overwritten, dropped on reboot),
+# this answers "how often, and when" (every transition, kept). The agent reads
+# it to answer questions about its own sleep; nothing in HAL reads it back.
+#
+# Persistent (not STATE_DIR) precisely because a reboot must not erase the
+# history, and `/root/local/` because that is where the agent's other JSONL
+# histories already live (see music_service's audio_history).
+SLEEP_LOG_DIR: str = os.environ.get("HAL_SLEEP_LOG_DIR", "/root/local/device/sleep")
+SLEEP_LOG_MAX_DAYS: int = int(os.environ.get("HAL_SLEEP_LOG_MAX_DAYS", "30"))
+
 # --- Simulation (laptop body: `make sim`) ---
 #
 # SIMULATE is the on/off switch; SIM_MEDIA is what the developer ASKED for.
