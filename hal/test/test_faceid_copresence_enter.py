@@ -117,3 +117,38 @@ def test_copresence_counter_resets_when_the_frame_empties(perception, monkeypatc
     assert perception._copresence_ticks == 1
     _tick(perception, [], monkeypatch)
     assert perception._copresence_ticks == 0
+
+
+def test_delayed_flush_describes_the_buffered_snapshot_not_the_flush_tick(perception, monkeypatch):
+    """Device log, orange-lamp 2026-09-16 13:5x: the photo was minted on a tick
+    with both boxes (that frame is what gets attached), the flush landed two
+    ticks later when long had blurred out, and the text said
+    "faces in frame: 1 (unsure)" over a two-box snapshot. The message must
+    describe the frame the snapshot shows."""
+    perception._stranger_flush_interval = 10_000.0  # hold the buffer
+    _tick(perception, [MOMO], monkeypatch)
+    _tick(perception, [MOMO, UNSURE], monkeypatch)     # recognizer corroborating
+    _tick(perception, [MOMO, STRANGER], monkeypatch)   # minted, buffered with both boxes
+    _tick(perception, [STRANGER], monkeypatch)         # momo blurred out
+    perception._stranger_flush_interval = 0.0          # flush lands now
+    _tick(perception, [UNSURE], monkeypatch)
+
+    assert _enters(perception)[-1] == (
+        "Person detected — new: stranger (stranger_2); "
+        "already present: momo (friend); faces in frame: 2 (momo, stranger_2)"
+    )
+
+
+def test_immediate_friend_send_still_describes_the_current_frame(perception, monkeypatch):
+    """A new friend sends the CURRENT frame at once — its facts, not a stale buffer's."""
+    perception._stranger_flush_interval = 10_000.0
+    _tick(perception, [MOMO], monkeypatch)
+    _tick(perception, [MOMO, UNSURE], monkeypatch)
+    _tick(perception, [MOMO, STRANGER], monkeypatch)   # stranger_2 buffered, not flushed
+    leo = _face(PersonKind.FRIEND, "leo")
+    _tick(perception, [MOMO, leo], monkeypatch)        # leo arrives, stranger gone
+
+    assert _enters(perception)[-1] == (
+        "Person detected — new: friend (leo); already present: momo (friend); "
+        "faces in frame: 2 (momo, leo)"
+    )

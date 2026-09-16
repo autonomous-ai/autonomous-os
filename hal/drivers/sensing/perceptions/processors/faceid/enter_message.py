@@ -19,16 +19,33 @@ Shape (#426):
   the guard fails. Written ``<name> (friend)`` on purpose: ``friend (<name>)``
   means "a friend just arrived" to ``has_new_friend`` and would open the
   voice gate for a stranger's arrival.
-- ``faces in frame:`` — the number of boxes in the CURRENT frame and their
-  labels in detection order, ``unsure`` for a box without an identity yet.
-  Same labels ``_annotate_frame`` draws. It is not the number of arrivals:
-  flushed stranger ids — and, on a delayed flush, the attached snapshot —
-  may be from an earlier frame than the one this count describes.
+- ``faces in frame:`` — the number of boxes in the frame the snapshot
+  shows and their labels in detection order, ``unsure`` for a box without
+  an identity yet. Same labels ``_annotate_frame`` draws. It is not the
+  number of arrivals: flushed stranger ids may come from several buffered
+  frames; the count and ``already present:`` describe the newest one, the
+  frame the agent is looking at (``FrameFacts``).
 """
 
 from collections.abc import Iterable
+from typing import NamedTuple
 
 from hal.drivers.sensing.perceptions.models import Face, PersonKind
+
+
+class FrameFacts(NamedTuple):
+    """What one frame says about itself, captured on the tick it was seen.
+
+    A stranger snapshot is buffered on its mint tick and flushed up to
+    FACE_STRANGER_FLUSH_S later; the frame at flush time can look nothing
+    like the one attached (device-observed: friend blurred out for two ticks
+    and the text said ``1 (unsure)`` over a two-box picture). So the facts
+    travel with the snapshot and the message is built from the frame the
+    agent actually sees.
+    """
+
+    labels: list[str]
+    present_friends: list[str]
 
 
 def copresence_ticks(prev: int, faces: list[Face]) -> int:

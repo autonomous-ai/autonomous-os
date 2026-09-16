@@ -36,7 +36,12 @@ from .constants import (
     _STRANGER_STATS_FILE,
     USERS_DIR,
 )
-from .enter_message import build_enter_message, copresence_ticks, frame_labels
+from .enter_message import (
+    FrameFacts,
+    build_enter_message,
+    copresence_ticks,
+    frame_labels,
+)
 from .recognizer import FaceRecognizer
 
 logger = logging.getLogger(__name__)
@@ -133,6 +138,9 @@ class FacePerception(Perception[cv2.typing.MatLike]):
         # Each entry: (raw_frame, annotations[(bbox, kind, label), ...])
         self._stranger_flush_interval: float = config.FACE_STRANGER_FLUSH_S
         self._stranger_snapshots_buffers: list[cv2.typing.MatLike] = []
+        # Parallel to the snapshots: what each buffered frame showed, so the
+        # flushed event describes the picture it carries, not the flush tick.
+        self._stranger_facts_buffer: list[FrameFacts] = []
         self._stranger_ids_buffer: set[str] = set()
         self._last_stranger_flush_ts: float = 0.0
 
@@ -496,12 +504,14 @@ class FacePerception(Perception[cv2.typing.MatLike]):
 
             # Strangers: always buffer snapshots; flush decides when to send
             annotated_frame = self._annotate_frame(frame, faces)
+            current_facts = self._frame_facts(faces, owners_seen, new_owners)
             annotated_frames_to_send: list[cv2.typing.MatLike] = []
             if len(new_owners) > 0:
                 annotated_frames_to_send.append(annotated_frame)
             else:
                 if new_strangers:
                     self._stranger_snapshots_buffers.append(annotated_frame)
+                    self._stranger_facts_buffer.append(current_facts)
                     self._stranger_ids_buffer.update(new_strangers)
 
             familiar_paths: dict[str, str] = {}
@@ -531,7 +541,7 @@ class FacePerception(Perception[cv2.typing.MatLike]):
                                 e,
                             )
 
-            flushed_stranger_snapshots, flushed_stranger_ids = (
+            flushed_stranger_snapshots, flushed_stranger_ids, flushed_facts = (
                 self._flush_stranger_buffer(cur_ts)
             )
 
@@ -564,24 +574,16 @@ class FacePerception(Perception[cv2.typing.MatLike]):
             if annotated_frames_to_send:
                 if not new_owners and stranger_ids_to_send:
                     self._last_stranger_enter_ts = cur_ts
-                # Friends boxed in THIS frame who did not just arrive — the
-                # co-presence signal the sensing skill keys on. A stranger-only
-                # enter waits until friend and non-friend boxes have coexisted
-                # for FACE_COPRESENCE_MIN_TICKS ticks; a new friend is a
-                # positive match and needs no such corroboration. Never derived
-                # from current_user(): that is presence-window state and reads
-                # the same whether momo is sitting here or left two minutes ago.
-                present_friends = sorted(owners_seen - new_owners)
-                if (
-                    not new_owners
-                    and self._copresence_ticks < config.FACE_COPRESENCE_MIN_TICKS
-                ):
-                    present_friends = []
+                # Describe the frame the agent will see: a new friend sends the
+                # current frame at once; a stranger-only enter sends the
+                # buffered snapshots, whose newest frame may be several ticks
+                # old by now — its own facts go with it.
+                facts = current_facts if new_owners else flushed_facts[-1]
                 message = build_enter_message(
                     new_friends=new_owners,
                     new_strangers=stranger_ids_to_send,
-                    present_friends=present_friends,
-                    frame_labels=frame_labels(faces),
+                    present_friends=facts.present_friends,
+                    frame_labels=facts.labels,
                 )
                 for sid, img_path in familiar_paths.items():
                     message += (
@@ -997,26 +999,50 @@ class FacePerception(Perception[cv2.typing.MatLike]):
             )
         return annotated
 
+    def _frame_facts(
+        self, faces: list[Face], owners_seen: set[str], new_owners: set[str]
+    ) -> FrameFacts:
+        """Labels of every box in this frame plus the friends already present.
+
+        ``present_friends`` are friends boxed in THIS frame who did not just
+        arrive — the co-presence signal the sensing skill keys on. A
+        stranger-only enter waits until friend and non-friend boxes have
+        coexisted for FACE_COPRESENCE_MIN_TICKS ticks; a new friend is a
+        positive match and needs no such corroboration. Never derived from
+        current_user(): that is presence-window state and reads the same
+        whether momo is sitting here or left two minutes ago.
+        """
+        present_friends = sorted(owners_seen - new_owners)
+        if (
+            not new_owners
+            and self._copresence_ticks < config.FACE_COPRESENCE_MIN_TICKS
+        ):
+            present_friends = []
+        return FrameFacts(labels=frame_labels(faces), present_friends=present_friends)
+
     def _flush_stranger_buffer(
         self, cur_ts: float
-    ) -> tuple[list[cv2.typing.MatLike], set[str]]:
+    ) -> tuple[list[cv2.typing.MatLike], set[str], list[FrameFacts]]:
         """Flush buffered stranger snapshots if the interval has elapsed.
 
-        Returns ([(frame, annotations), ...], flushed_ids). Empty if not yet time to flush.
+        Returns (snapshots, flushed_ids, facts) with facts[i] describing
+        snapshots[i]. All empty if not yet time to flush.
         """
         with self._state_lock:
             if (cur_ts - self._last_stranger_flush_ts) < self._stranger_flush_interval:
-                return [], set()
+                return [], set(), []
 
             snapshots = copy(self._stranger_snapshots_buffers)
+            facts = copy(self._stranger_facts_buffer)
             ids = copy(self._stranger_ids_buffer)
             self._stranger_snapshots_buffers.clear()
+            self._stranger_facts_buffer.clear()
             self._stranger_ids_buffer.clear()
             self._last_stranger_flush_ts = cur_ts
             logger.info(
                 "[face] flushing %d stranger snapshot(s) for %s", len(snapshots), ids
             )
-            return snapshots, ids
+            return snapshots, ids, facts
 
     def _send_enter_event(
         self,
