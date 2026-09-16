@@ -494,6 +494,38 @@ idle loop, nên sửa sau nghĩa là con lamp đang ngủ vẫn đứng dậy, c
 nằm xuống lại. Khôi phục cờ ngay lúc import — trước khi driver start — chính là
 thứ cho phép BỎ QUA thay vì hoàn tác. Reboot cả máy thì vẫn tỉnh như cũ.
 
+### Lịch sử ngủ — file thứ hai, trả lời câu hỏi khác
+
+Sidecar ở trên chỉ trả lời được *"ngay lúc này có đang ngủ không"*: nó giữ đúng
+một bản ghi, mỗi lần chuyển trạng thái là ghi đè, và reboot thì xoá luôn. Nên
+thiết bị không nói được nó đã ngủ bao nhiêu lần — hỏi thẳng thì agent không có
+gì để đọc, và không biết là mình đã từng ngủ.
+
+`_log_sleep_transition` (`app_state.py`) append mọi lần chuyển trạng thái vào
+`/root/local/device/sleep/YYYY-MM-DD.jsonl` (`HAL_SLEEP_LOG_DIR`, giữ 30 ngày
+theo `HAL_SLEEP_LOG_MAX_DAYS`):
+
+```json
+{"ts":1758000000.12,"date":"2026-09-16","hour":22,"event":"sleep","emotion":"sleepy","source":"api"}
+{"ts":1758021600.45,"date":"2026-09-17","hour":6,"event":"wake","emotion":"stretching","source":"button"}
+```
+
+Nằm ở chỗ persistent chứ không phải `HAL_STATE_DIR`, vì reboot không được phép
+xoá lịch sử — ngược hẳn với thứ sidecar cần. Không có gì trong HAL đọc lại file
+này; nó tồn tại cho agent, và agent truy vấn qua skill Sensing Track.
+
+Cả hai lệnh ghi đều nằm trong block chuyển trạng thái của `POST /emotion`, vì đó
+là nơi **cả bốn** đường vào/ra giấc ngủ hợp lưu: marker của agent, nút bấm,
+`presence.enter` → `greeting`, và web UI qua hardware proxy. Chính vị trí đó là
+lý do file này tồn tại. Flow event `hw_emotion` của os-server chỉ ghi được những
+marker do chính nó bắn, nên bỏ sót toàn bộ các lần ngủ vật lý — khoảng một nửa,
+và đúng là nửa do con người trực tiếp gây ra. Lỗi ghi được log rồi nuốt: một bản
+ghi về giấc ngủ không đáng giá bằng chính giấc ngủ đó.
+
+`source` ghi nguyên nhân (`button` / `touch` / `MPR121`, hoặc `api` cho marker
+và web UI — hai thứ này HAL chưa phân biệt được). Một `sleepy` gửi lại cho thiết
+bị đang ngủ không phải là chuyển trạng thái nên không ghi gì, nhờ vậy mọi dòng
+đều là thật và đếm trực tiếp được.
 
 Mic mute, speaker mute và camera disable mỗi cái persist vào một sidecar
 boot-scoped riêng — `/tmp/hal-mic-state.json`, `/tmp/hal-speaker-state.json`,

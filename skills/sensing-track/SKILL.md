@@ -1,6 +1,6 @@
 ---
 name: sensing-track
-description: Query flow event logs to answer questions about past sensing events — "Have you seen anybody between 10pm and midnight?", "Is there any motion in the last hour?", "What happened while I was away?".
+description: Query flow event logs to answer questions about past sensing events — "Have you seen anybody between 10pm and midnight?", "Is there any motion in the last hour?", "What happened while I was away?". Also holds your OWN sleep history — "how many times have you slept?", "when do you usually go to sleep?".
 ---
 
 # Sensing Event History
@@ -215,6 +215,57 @@ curl -s "http://127.0.0.1:5000/api/openclaw/mood-history?user=gray&date=$(date +
 ```
 
 Storage: `/root/local/users/{name}/mood/YYYY-MM-DD.jsonl` (30-day retention).
+
+---
+
+## Device sleep history
+
+**Your own** sleep — when you went to sleep and woke up, not the user's. Use it for
+"how many times have you slept?", "when do you usually go to sleep?", "did you sleep
+while I was out?".
+
+Storage: `/root/local/device/sleep/YYYY-MM-DD.jsonl` (30-day retention). One line per
+transition, appended:
+
+```json
+{"ts":1758000000.12,"date":"2026-09-16","hour":22,"event":"sleep","emotion":"sleepy","source":"api"}
+{"ts":1758021600.45,"date":"2026-09-17","hour":6,"event":"wake","emotion":"stretching","source":"button"}
+```
+
+- `event` — `sleep` or `wake`. Count `sleep` rows; a `sleepy` re-sent to an already
+  sleeping device writes nothing, so every row is a real transition.
+- `source` — who caused it: `button` / `touch` / `MPR121` (someone did it by hand),
+  `api` (your own `[HW:/emotion:sleepy]` marker, or the web UI).
+- `emotion` — `sleepy` going in; `stretching` or `greeting` coming out.
+
+```bash
+export TZ=$(cat /etc/timezone)
+# Times slept today
+jq -c 'select(.event=="sleep")' "/root/local/device/sleep/$(date +%Y-%m-%d).jsonl" | wc -l
+
+# Times slept over everything retained
+cat /root/local/device/sleep/*.jsonl | jq -c 'select(.event=="sleep")' | wc -l
+
+# Usual bedtime hour
+cat /root/local/device/sleep/*.jsonl \
+  | jq -r 'select(.event=="sleep") | .hour' | sort -n | uniq -c | sort -rn | head -3
+
+# Last night's sleep, paired with its wake
+cat /root/local/device/sleep/*.jsonl | jq -c '{ts,event,source}' | tail -4
+```
+
+**Do not confuse this with `action:"sleep"` in the wellbeing log** — that is the *user*
+telling you they are going to bed (see the Habit skill). This file is about your own
+body.
+
+**This file is the only complete record.** Flow events carry `hw_emotion` rows for
+sleeps your own marker fired, but the button never reaches os-server, so counting from
+`flow_events_*.jsonl` silently undercounts and misses exactly the times a person put
+you to sleep by hand. Count from here.
+
+**Nothing before the journal existed can be recovered** — it was never written down
+anywhere. If the files start mid-window, say how far back you can actually see rather
+than reporting a total as if it were lifetime.
 
 ---
 

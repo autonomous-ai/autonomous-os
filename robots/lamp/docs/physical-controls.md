@@ -507,6 +507,39 @@ the idle loop, so undoing it afterwards meant a sleeping lamp stood up, moved,
 and only then lay back down. Restoring the flag at import — before the drivers
 start — is what makes skipping possible instead of reverting. A full device reboot still starts awake.
 
+### Sleep history — a second file, a different question
+
+The sidecar above answers only *"am I asleep right now"*: it holds one record,
+every transition overwrites it, and a boot deletes it. So the device could not
+say how often it had slept — asked directly, the agent had nothing to read and
+did not know it had ever slept at all.
+
+`_log_sleep_transition` (`app_state.py`) appends every transition to
+`/root/local/device/sleep/YYYY-MM-DD.jsonl` (`HAL_SLEEP_LOG_DIR`, 30-day
+retention via `HAL_SLEEP_LOG_MAX_DAYS`):
+
+```json
+{"ts":1758000000.12,"date":"2026-09-16","hour":22,"event":"sleep","emotion":"sleepy","source":"api"}
+{"ts":1758021600.45,"date":"2026-09-17","hour":6,"event":"wake","emotion":"stretching","source":"button"}
+```
+
+Persistent rather than in `HAL_STATE_DIR`, because a reboot must not erase the
+history — the opposite of what the sidecar wants. Nothing in HAL reads it back;
+it exists for the agent, which queries it through the Sensing Track skill.
+
+Both writes sit in the `POST /emotion` transition block because that is where
+**all four** routes into and out of sleep converge: the agent's marker, the
+button, `presence.enter` → `greeting`, and the web UI through the hardware
+proxy. That placement is the point of the file. os-server's `hw_emotion` flow
+events only cover markers it fired itself, so they miss every physical sleep —
+about half of them, and precisely the half a person caused by hand. A write
+failure is logged and swallowed: a record of sleep is worth less than the sleep
+it describes.
+
+`source` labels the cause (`button` / `touch` / `MPR121`, or `api` for the
+marker and the web UI, which HAL cannot yet tell apart). A `sleepy` re-sent to
+an already sleeping device is not a transition and writes nothing, so every row
+is a real one and rows can be counted directly.
 
 Mic mute, speaker mute, and camera disable each persist to their own boot-scoped
 sidecar — `/tmp/hal-mic-state.json`, `/tmp/hal-speaker-state.json`,

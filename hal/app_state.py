@@ -574,6 +574,72 @@ def _persist_sleep_state():
     )
 
 
+def _prune_sleep_log():
+    """Drop journal days past the retention window. Cheap to run inline: a
+    device produces a handful of transitions a day, so this lists one small
+    directory a few times per day, not per turn.
+
+    Swallows its own failures rather than letting them surface as the caller's:
+    an un-prunable old file is a disk-space question, not a reason to report
+    that a transition went unrecorded when it did not.
+    """
+    try:
+        cutoff = time.time() - config.SLEEP_LOG_MAX_DAYS * 86400
+        for name in os.listdir(config.SLEEP_LOG_DIR):
+            if not name.endswith(".jsonl"):
+                continue
+            path = os.path.join(config.SLEEP_LOG_DIR, name)
+            try:
+                if os.stat(path).st_mtime < cutoff:
+                    os.unlink(path)
+            except OSError:
+                continue
+    except Exception as e:
+        logger.warning("Sleep journal prune failed: %s", e)
+
+
+def _log_sleep_transition(event: str, emotion: str, source: str):
+    """Append one sleep/wake transition to today's journal.
+
+    The sleep sidecar cannot answer "how many times have I slept": it holds a
+    single record, every transition overwrites it, and a reboot deletes it. So
+    the device had no way to know it had ever slept -- the agent asked and got
+    nothing, because nothing was ever written down.
+
+    Called from the ONE place every route into and out of sleep converges,
+    routes/emotion.py, so the physical button is recorded as faithfully as an
+    agent's marker. That matters: os-server's flow events only see transitions
+    it fired itself, which is roughly half of them, and the half they miss is
+    the half a person caused by hand.
+
+    Never raises. A journal that cannot be written is worth strictly less than
+    the sleep it describes, so a failure here logs and lets sleep proceed.
+    """
+    import json
+
+    from hal.clock import device_fromtimestamp
+
+    try:
+        os.makedirs(config.SLEEP_LOG_DIR, exist_ok=True)
+        ts = time.time()
+        when = device_fromtimestamp(ts)
+        entry = {
+            "ts": round(ts, 2),
+            "date": when.strftime("%Y-%m-%d"),
+            "hour": when.hour,
+            "event": event,
+            "emotion": emotion,
+            "source": source,
+        }
+        path = os.path.join(config.SLEEP_LOG_DIR, f"{entry['date']}.jsonl")
+        with open(path, "a") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        logger.info("Sleep journal: %s (emotion=%s source=%s)", event, emotion, source)
+        _prune_sleep_log()
+    except Exception as e:
+        logger.warning("Sleep journal write failed (%s): %s", event, e)
+
+
 def start_voice_service(reason: str) -> bool:
     """Start the voice pipeline unless a live enrollment owns the mic.
 
