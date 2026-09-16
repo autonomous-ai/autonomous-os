@@ -44,6 +44,21 @@ STT pipeline. At end-of-turn the model either:
   This is deliberately different from a silent completion: silence, timeout,
   and transport failure still use the normal main-agent fallback.
 
+**Finding things is an action.** "Find my keys", "where is my cup", "can you help
+me find my pen", "do you see my pen anywhere" — any request to locate a physical
+object or person is a camera-and-servo search the main agent runs
+(`/servo/search`, see `robots/lamp/docs/vision-tracking.md`). The realtime layer
+must delegate it in every phrasing. Device-observed 2026-09-15 (lamp-ac82, clean
+memory): the bare imperative "Tìm cây bút cho tôi" was delegated and the pen was
+found, while the question forms "Bạn có thấy cây bút của tôi đâu không?" / "Giúp
+tôi tìm cây bút được không?" were handled by Gemini itself — it asked what the pen
+looked like, guessed a location, or offered to look without looking. The rule lives
+in three places that must agree: the shared `delegate_to_main` tool description,
+the `look` tool description (a find is not a look), and a **Finding things is an
+action** bullet in all four provider prompts; `hal/test/test_realtime_find_delegation.py`
+pins the text. The decision itself is not enforced in code — only real speech on
+a device exercises it.
+
 ### Addressed speech before persona or actions
 
 All realtime provider prompts give the addressed-speech policy priority over
@@ -808,7 +823,9 @@ on" while "look at this" is a question about an object. This only applies to tur
 that are **purely** a question about what it sees: if the same turn also contains an
 action ("turn to the right, hold it there, and tell me what you see"), the prompt
 requires a single `delegate_to_main` covering both halves — no `look` — so the
-movement is never silently dropped. The orchestrator registers a `look` tool
+movement is never silently dropped. The tool description and the Gemini prompt
+both exclude finding a specific object ("where is my pen", "do you see my keys") —
+that is a delegated search, not a look. The orchestrator registers a `look` tool
 (`orchestrator.py`, `LOOK_TOOL`) and handles the call in `_handle_look_call`:
 
 1. **Aim the head at the subject first**, on devices that can move — otherwise a

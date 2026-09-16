@@ -388,6 +388,13 @@ The bearing restore in priority 3 is the exception, and it is safe for a specifi
 wrong. That is what lets a head left pointing at the floor recover its height — with yaw-only
 correction it would sweep the floor in a circle no matter how right the direction was.
 
+An aim that moved the head parks it the same way the search does (`nudge` and the bearing restore
+both end in `move_and_hold`), so `aim_for_look` schedules the same
+`release_to_idle_later(HOLD_AFTER_FIND_S)` from its result builder whenever `iterations` or
+`bearing_steps` is non-zero — see *Handing the body back* under the search sweep for the guards.
+Gaze usually retakes the body once a face is back in frame, which is why the freeze was less
+visible here; without a face it stuck exactly like the search.
+
 **Priority order:**
 
 1. **Person visible** → centre it. Person box preferred over the face box: a held-up object often
@@ -641,6 +648,21 @@ frame is read, since a moving head yields a blurred frame and a detector that mi
 
 Aborted by the physical button like the aim, and it never sweeps while the camera is disabled — a
 search is a lot of conspicuous movement to perform when the user has asked the device not to look.
+
+**Handing the body back.** Every exit of the sweep ends in `move_and_hold` — the hit centres on
+the subject, a miss and a survey `_restore` the seed pose — and `move_and_hold` leaves the body
+with nothing playing (`_current_recording = None`, `_idle_settled`), held "until the next
+play/emotion/idle command". Nobody used to issue that command: on lamp-ac82 (2026-09-14) "Find my
+keyboard" centred on the keyboard and stayed there until a HAL restart, the same
+`[preempt] dropped recording 'idle' for a direct move` signature gaze had already fixed for its
+speech reacquire. The sweep now calls `tracking/body.py: release_to_idle_later()` after it
+releases servo ownership: a find keeps pointing at the object for `HOLD_AFTER_FIND_S` (8 s) so the
+reply plays over the pose, a miss goes back to idle at once. The handback runs on a daemon timer
+so `search_for_subject` still returns immediately to the turn waiting on it, and it dispatches
+`play(idle)` only if nothing owns the body (tracking, hold mode, zero mode) **and** nothing has
+started playing since — an emotion inside the window is left alone; the animation loop returns to
+idle by itself when it ends. Scheduling a new handback cancels the previous one. The window is a
+fixed constant, not tied to the end of speech: tracking has no speak-end hook to wait on.
 
 > Not built: an LED cue while sweeping. Transient LED state lives behind the route request models, so
 > driving it from here would mean HTTP loopback (which this codebase avoids) or duplicating the

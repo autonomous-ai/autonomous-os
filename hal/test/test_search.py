@@ -86,6 +86,14 @@ class _FakeSvc(BodyOwnership):
 
     UNWRITTEN_SPEED_EQUIVALENT = 0
 
+    # The handback after a sweep dispatches play(idle) on the real service;
+    # without these the fake would raise inside body.release_to_idle (caught,
+    # but logged as a warning on every test) instead of taking the real path.
+    idle_recording = "idle"
+
+    def dispatch(self, cmd, payload):
+        pass
+
     def set_joint_speed(self, motor_name, speed):
         self.speeds.append((motor_name, speed))
         return True
@@ -1209,3 +1217,32 @@ def test_the_sticky_probe_refuses_a_candidate_that_moved_away_from_centre():
     det.detect_candidates = mock.Mock(return_value=[((450, 220, 60, 40), 0.9)])
     probe = _sticky_probe(det, "keyboard", first_box=(160, 220, 60, 40))
     assert probe(f) == (450, 220, 60, 40)
+
+
+# After a hit the arm stays on the object with nothing playing (lamp-ac82
+# 2026-09-14: motionless until a HAL restart). The sweep now hands the body
+# back to idle after a window, on a timer, so the turn still gets its result.
+def test_a_find_hands_the_body_back_after_the_hold_window():
+    with mock.patch("hal.drivers.tracking.body.release_to_idle_later") as later:
+        res, svc = _run(detect_at_stop=2)
+    assert res.found is True
+    later.assert_called_once()
+    delay, reason = later.call_args[0][0], later.call_args[0][1]
+    assert delay == search.body.HOLD_AFTER_FIND_S
+    assert "search" in reason
+
+
+# Not found → _restore parks the body on the seed pose exactly the same way.
+# Nothing to show, so no window: back to idle now.
+def test_a_miss_hands_the_body_back_immediately():
+    with mock.patch("hal.drivers.tracking.body.release_to_idle_later") as later:
+        res, _ = _run(detect_at_stop=None)
+    assert res.found is False
+    later.assert_called_once()
+    assert later.call_args[0][0] == 0.0
+
+
+def test_no_handback_when_the_sweep_never_took_the_body():
+    with mock.patch("hal.drivers.tracking.body.release_to_idle_later") as later:
+        _run(disabled=True)
+    later.assert_not_called()

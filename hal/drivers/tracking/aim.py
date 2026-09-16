@@ -32,7 +32,7 @@ from typing import Any, Callable, Optional, Tuple
 
 import hal.config as config
 from hal.safety.policy import min_move_duration
-from hal.drivers.tracking import look_debug
+from hal.drivers.tracking import body, look_debug
 
 logger = logging.getLogger(__name__)
 
@@ -1006,6 +1006,13 @@ def aim_for_look(deadline_s: float, detector: Any = None) -> AimResult:
         added later cannot forget to.
         """
         _score_prediction(bearing_steps, found=found_any)
+        # A moved head is a parked head (`nudge` and `_step_toward_bearing`
+        # both end in `move_and_hold`) — hand it back to idle after the
+        # capture the caller is about to take. Not when nothing moved:
+        # playback was never preempted, and dispatching idle over a running
+        # idle restarts it.
+        if iterations > 0 or bearing_steps > 0:
+            body.release_to_idle_later(body.HOLD_AFTER_FIND_S, f"look-aim {reason}")
         return AimResult(
             aimed, reason, iterations, yaw_total, last_dx_frac, bearing_steps,
             start_yaw, _yaw_of(svc), bearing_consulted, steps, last_move_deg,

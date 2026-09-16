@@ -1249,3 +1249,23 @@ def test_centre_on_box_final_measurement_also_runs_on_the_deadline_exit():
 
     assert res.box == (310, 220, 40, 40), f"pre-move box reported on deadline: {res.box}"
     assert res.centred is True
+
+
+# The aim parks the head on the subject with move_and_hold (nudge goes through
+# it), same as the search. Gaze usually retakes the body once a face is back in
+# frame, which is why this was less visible — but with no face it froze the
+# same way.
+def test_an_aim_that_moved_hands_the_body_back_later():
+    with mock.patch("hal.drivers.tracking.body.release_to_idle_later") as later:
+        res, svc = _run(box=(500, 100, 80, 200))  # right of centre → moves
+    assert svc.nudge.called
+    later.assert_called_once()
+    assert later.call_args[0][0] == aim.body.HOLD_AFTER_FIND_S
+
+
+def test_an_already_centred_aim_leaves_playback_alone():
+    with mock.patch("hal.drivers.tracking.body.release_to_idle_later") as later:
+        res, svc = _run(box=(300, 100, 40, 200))  # centre x == frame centre
+    assert res.iterations == 0
+    assert not svc.nudge.called
+    later.assert_not_called()
