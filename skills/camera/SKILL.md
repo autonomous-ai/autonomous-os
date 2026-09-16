@@ -169,6 +169,7 @@ up to be identified. Replying "Got it, camera on" answers a question they did no
 
 ## Error Handling
 - If capture fails, report the returned error without describing an unseen frame. `/api/vision/look` reports capture/description failures as errors; a raw `/camera/snapshot` request can return 503 when the camera is unavailable.
+- **One failed `/api/vision/look` is final for this turn.** Do NOT "try once more" and do NOT fall back to `GET /camera/snapshot` — it is the same capture path and fails the same way, costing another tool round. An error mentioning "not delivering frames" / "not connected or not detected" means the camera hardware is absent: tell the user the camera is not connected, and stop.
 - If the API is unreachable, inform the user that the camera is temporarily unavailable.
 - **Never check `/camera` status before a visual request** — call `/api/vision/look` directly unless a current image/description was already supplied.
 - If a sensing event already included an image, do not call the camera API again.

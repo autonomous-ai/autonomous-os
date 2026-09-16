@@ -361,8 +361,8 @@ Truy cập qua nginx proxy: `/hw/*` → `127.0.0.1:5001`
 
 | Method | Endpoint | Mô tả |
 |--------|----------|-------|
-| GET | `/camera` | Availability + resolution |
-| GET | `/camera/snapshot` | Chụp 1 frame JPEG. `?save=true` lưu file timestamp, trả JSON `{"path":"..."}` |
+| GET | `/camera` | Tình trạng + độ phân giải. `available` = đã tạo capture object (vẫn true khi USB camera không hề enumerate); `has_frame` = đã có ít nhất một frame, cùng phép thử `/health` dùng cho `camera` |
+| GET | `/camera/snapshot` | Chụp 1 frame JPEG. `?save=true` lưu file timestamp, trả JSON `{"path":"..."}`. 409 công tắc privacy, 503 camera vắng mặt hoặc chưa từng có frame từ lúc HAL start (detail ghi "not delivering frames"; retry vô ích), 500 hụt frame tạm thời. `/api/vision/look` chuyển tiếp `detail` trong lỗi trả về |
 | GET | `/camera/stream` | MJPEG live stream (downscaled + throttled) |
 
 ### Audio

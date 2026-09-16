@@ -30,6 +30,12 @@ def _camera_info_payload() -> dict:
     actual_fps = getattr(cap, "actual_fps", None) if available else None
     return {
         "available": available,
+        # `available` only says a capture object exists. It stays True when the
+        # USB camera never enumerated (no /dev/video*, every open failed) because
+        # the capture object is still created; the only truthful signal for
+        # "can this device see" is whether a frame ever arrived — the same test
+        # GET /health uses for its `camera` flag.
+        "has_frame": bool(available and cap.last_frame is not None),
         # Prefer the device-negotiated mode; fall back to configured values
         # until the capture loop has reported (e.g. camera disabled at boot).
         "width": actual_w if actual_w else (CAMERA_WIDTH if available else None),
@@ -142,6 +148,18 @@ def camera_snapshot(
             timeout_s=2.5,
         )
         if frame is None:
+            # Distinguish "hardware never delivered a frame" from a transient
+            # miss. lamp-0c4e 2026-09-16: the USB camera was not enumerated at
+            # all, every capture failed since boot, but the bare 500 read as a
+            # hiccup and the agent retried through a second endpoint — another
+            # 6s LLM hop for the same failure. Say it is not retryable.
+            if getattr(state.camera_capture, "last_frame_ts", 0.0) == 0.0:
+                raise HTTPException(
+                    503,
+                    "Camera hardware is not delivering frames (no frame since HAL "
+                    "start) -- the camera is not connected or not detected; "
+                    "retrying will not help",
+                )
             raise HTTPException(500, "Failed to capture frame")
     finally:
         if was_disabled:

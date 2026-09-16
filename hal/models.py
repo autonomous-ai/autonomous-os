@@ -243,6 +243,10 @@ class AudioDevicesResponse(BaseModel):
 
 class CameraInfoResponse(BaseModel):
     available: bool
+    # True only once the capture loop has delivered at least one frame. False
+    # with available=True means the hardware is missing/undetected (or the
+    # camera is disabled and has not been started yet).
+    has_frame: bool = False
     # Actual capture mode the device negotiated (None until the capture loop
     # has opened the device once). Falls back to configured CAMERA_WIDTH/
     # CAMERA_HEIGHT when device has not reported yet.

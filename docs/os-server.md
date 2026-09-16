@@ -366,8 +366,8 @@ Accessed via nginx proxy: `/hw/*` → `127.0.0.1:5001`
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/camera` | Availability + resolution |
-| GET | `/camera/snapshot` | Capture 1 JPEG frame. `?save=true` saves to timestamped file, returns JSON `{"path":"..."}` |
+| GET | `/camera` | Availability + resolution. `available` = a capture object exists (stays true when the USB camera never enumerated); `has_frame` = at least one frame has arrived, the same test `/health` uses for `camera` |
+| GET | `/camera/snapshot` | Capture 1 JPEG frame. `?save=true` saves to timestamped file, returns JSON `{"path":"..."}`. 409 privacy switch, 503 camera absent or no frame since HAL start (detail says "not delivering frames"; not retryable), 500 transient capture miss. `/api/vision/look` forwards the `detail` in its error |
 | GET | `/camera/stream` | MJPEG live stream (downscaled + throttled) |
 
 ### Audio

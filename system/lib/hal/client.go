@@ -99,6 +99,16 @@ func Snapshot(width, quality int) (string, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		// Carry HAL's `detail` up: the agent reads this string to decide whether
+		// to retry, and "returned 503" alone reads as a hiccup while HAL may be
+		// saying the camera hardware is absent.
+		var body struct {
+			Detail string `json:"detail"`
+		}
+		_ = json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&body)
+		if body.Detail != "" {
+			return "", fmt.Errorf("GET /camera/snapshot returned %d: %s", resp.StatusCode, body.Detail)
+		}
 		return "", fmt.Errorf("GET /camera/snapshot returned %d", resp.StatusCode)
 	}
 	var result struct {
