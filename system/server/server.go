@@ -577,6 +577,9 @@ func (s *Server) Serve(closeFn func()) error {
 		s.userReconcile.Reconcile()
 		c.JSON(http.StatusOK, serializers.ResponseSuccess(gin.H{"reconciled": true}))
 	})
+	// memory/reset: no-SSH recovery for self-written memory that poisoned
+	// routing (#421). Admin-only — it deletes learned memory (with a backup).
+	agent.POST("memory/reset", adminAuthMiddleware(s.config), s.agentHandler.ResetMemory)
 	// channel-turn: the Hermes gateway observer hook POSTs each turn here so
 	// channel (Telegram/Slack/…) turns surface in Flow Monitor. Loopback-only.
 	agent.POST("channel-turn", localOnlyMiddleware(), s.agentHandler.ChannelTurn)
