@@ -47,15 +47,25 @@ var toolRefRe = regexp.MustCompile(`(?i)(?:` +
 // SOUL.md's second memory-discipline question made mechanical. Deliberately
 // broad on directive phrasing; a preference stated as a fact ("prefers
 // Vietnamese", "likes jazz") does not match.
-var prescriptiveRe = regexp.MustCompile(`(?i)\b(?:` +
+//
+// The verbs use/run/call/try/avoid/skip only count as prescriptive in
+// IMPERATIVE POSITION — at the start of the block, right after
+// sentence/segment punctuation, or right after a directive adverb/modal
+// (always/never/just/please/should/must/only/then). A bare occurrence
+// elsewhere is a troubleshooting OBSERVATION, not an instruction: "Tried to
+// use the camera skill but it returned no faces" reports what happened and
+// must be kept, unlike "Use the camera skill to find things instead of
+// asking".
+var prescriptiveRe = regexp.MustCompile(`(?i)(?:\b(?:` +
 	`always|never|must|should|do not|don'?t|instead of|rather than` +
 	`|prefer(?:s|red)? (?:to|that (?:you|i))` +
-	`|use|run|call(?:ing)? (?:the|a|an|it)|avoid|skip` +
 	`|match(?:ing)? the|respond(?:ing)? in|repl(?:y|ying) in|answer(?:ing)? in|speak(?:ing)? in` +
 	`|hands[- ]on|wants? .{0,40}\bdone|works? best` +
 	`|be (?:brief|concise|short|direct)|keep (?:it|replies|answers)` +
 	`|when (?:asked|told|the user)` +
-	`)\b`)
+	`)\b` +
+	`|(?:^|[.;:!]\s+|\b(?:always|never|just|please|should|must|only|then)\s+)(?:use|run|call|try|avoid|skip)\b` +
+	`)`)
 
 func namesToolOrEndpoint(s string) bool { return toolRefRe.MatchString(s) }
 func prescribesBehaviour(s string) bool { return prescriptiveRe.MatchString(s) }

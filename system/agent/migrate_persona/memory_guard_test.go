@@ -151,3 +151,28 @@ func TestGuardMemoryTextKeepsCleanFileByteForByte(t *testing.T) {
 		t.Fatalf("clean MEMORY.md must round-trip, got %+v\n%s", dropped, out)
 	}
 }
+
+// TestGuardMemoryTextKeepsTroubleshootingObservations covers the bare-verb
+// trap: "use" (and its siblings run/call/try/avoid/skip) is only prescriptive
+// in imperative position. A troubleshooting report of what happened ("Tried
+// to use X but...") must survive; an imperative ("Use X to...") must not.
+func TestGuardMemoryTextKeepsTroubleshootingObservations(t *testing.T) {
+	observation := "- Tried to use the camera skill but it returned no faces\n"
+	imperative := "- Use the camera skill to find things instead of asking\n"
+
+	if out, dropped := GuardMemoryText(observation); len(dropped) != 0 || out != observation {
+		t.Fatalf("troubleshooting observation must be kept, got %+v\n%s", dropped, out)
+	}
+	if out, dropped := GuardMemoryText(imperative); len(dropped) != 1 || dropped[0].Reason != ReasonPrescriptive {
+		t.Fatalf("imperative use must be dropped as prescriptive, got %+v\n%s", dropped, out)
+	}
+
+	raw := observation + imperative
+	out, dropped := GuardMemoryText(raw)
+	if len(dropped) != 1 || dropped[0].Reason != ReasonPrescriptive {
+		t.Fatalf("want exactly the imperative line dropped, got %+v", dropped)
+	}
+	if out != observation {
+		t.Errorf("want:\n%s\ngot:\n%s", observation, out)
+	}
+}
