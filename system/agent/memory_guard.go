@@ -43,6 +43,12 @@ type MemoryGuard struct {
 	// path. The rename that lands our rewrite is itself a watch event; matching
 	// the hash tells it apart from an agent write and stops a rewrite loop.
 	lastWritten map[string]string
+
+	// sweepMu serialises whole sweeps so a timer-driven onChange and a rescan
+	// Run cannot guard the same file twice: both would read the poisoned file,
+	// both miss lastWritten, and both back up, quarantine and report it. g.mu
+	// only protects the map, not the read-compare-guard sequence.
+	sweepMu sync.Mutex
 }
 
 // ProvideMemoryGuard builds the guard from device config (Wire).
@@ -59,6 +65,8 @@ func ProvideMemoryGuard(cfg *config.Config) *MemoryGuard {
 // Run is one sweep of every runtime's USER.md + MEMORY.md. Logs and never
 // blocks startup; a failure here must never keep the device from booting.
 func (g *MemoryGuard) Run(trigger string) {
+	g.sweepMu.Lock()
+	defer g.sweepMu.Unlock()
 	actions, err := migratepersona.GuardMemoryFiles(g.opts, g.execute)
 	if err != nil {
 		slog.Warn("memory guard sweep failed; files left untouched",
@@ -141,6 +149,8 @@ func (g *MemoryGuard) Watch(ctx context.Context) {
 
 // onChange is the debounced per-file handler.
 func (g *MemoryGuard) onChange(path, trigger string) {
+	g.sweepMu.Lock()
+	defer g.sweepMu.Unlock()
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return // removed between event and timer; nothing to guard

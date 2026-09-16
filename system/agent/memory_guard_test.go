@@ -54,14 +54,35 @@ func TestRunQuarantinesAndPublishesState(t *testing.T) {
 }
 
 func TestOnChangeSkipsTheGuardsOwnWrite(t *testing.T) {
-	g, path := seedGuard(t, "- **Name:**\n"+poison)
-	g.onChange(path, "watch") // first: quarantines and records the hash of what it wrote
-	if n := countBackups(t, path); n != 1 {
-		t.Fatalf("want one backup after the first change, got %d", n)
+	content := "- **Name:**\n" + poison
+	g, path := seedGuard(t, content)
+
+	// Pretend the on-disk content is what the guard itself just wrote: the
+	// hash short-circuit must run BEFORE GuardMemoryFile, so the poison stays
+	// and nothing is backed up even though the file would otherwise be swept.
+	g.lastWritten[path] = migratepersona.Sha8([]byte(content))
+	g.onChange(path, "watch")
+	if got, _ := os.ReadFile(path); !strings.Contains(string(got), "Obsidian") {
+		t.Fatalf("own write must be left alone, but the guard rewrote it:\n%s", got)
 	}
-	g.onChange(path, "watch") // the rename of our own temp file lands as an event
+	if n := countBackups(t, path); n != 0 {
+		t.Fatalf("own write must not be guarded, got %d backups", n)
+	}
+
+	// Forget the hash: now the same content is an agent write and is swept.
+	delete(g.lastWritten, path)
+	g.onChange(path, "watch")
+	if got, _ := os.ReadFile(path); strings.Contains(string(got), "Obsidian") {
+		t.Fatalf("poison survived onChange:\n%s", got)
+	}
 	if n := countBackups(t, path); n != 1 {
-		t.Fatalf("own write must not trigger a second pass, got %d backups", n)
+		t.Fatalf("want one backup after the agent write, got %d", n)
+	}
+
+	// The rename of our own rewrite lands as a watch event: no second pass.
+	g.onChange(path, "watch")
+	if n := countBackups(t, path); n != 1 {
+		t.Fatalf("own rewrite must not trigger a second pass, got %d backups", n)
 	}
 }
 
