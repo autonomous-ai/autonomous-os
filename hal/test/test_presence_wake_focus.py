@@ -19,7 +19,7 @@ def test_recognized_presence_enter_grants_the_existing_wakeword_focus_window(mon
     monkeypatch.setattr(state, "voice_service", voice)
 
     SensingService._grant_wakeword_focus_for_presence(
-        "Person detected — 1 face(s) visible (friend (leo))"
+        "Person detected — new: friend (leo); faces in frame: 1 (leo)"
     )
 
     voice.grant_wakeword_focus.assert_called_once_with("presence.enter")
@@ -31,7 +31,7 @@ def test_stranger_only_presence_enter_does_not_grant_wakeword_focus(monkeypatch)
     monkeypatch.setattr(config, "PRESENCE_WAKE_STRANGERS", False)
 
     SensingService._grant_wakeword_focus_for_presence(
-        "Person detected — 1 face(s) visible (stranger (stranger_1))"
+        "Person detected — new: stranger (stranger_1); faces in frame: 1 (stranger_1)"
     )
 
     voice.grant_wakeword_focus.assert_not_called()
@@ -43,7 +43,7 @@ def test_stranger_only_presence_enter_can_grant_wakeword_focus_for_guest_mode(mo
     monkeypatch.setattr(config, "PRESENCE_WAKE_STRANGERS", True)
 
     SensingService._grant_wakeword_focus_for_presence(
-        "Person detected — 1 face(s) visible (stranger (stranger_1))"
+        "Person detected — new: stranger (stranger_1); faces in frame: 1 (stranger_1)"
     )
 
     voice.grant_wakeword_focus.assert_called_once_with("presence.enter")
@@ -53,5 +53,19 @@ def test_presence_enter_without_voice_pipeline_is_a_noop(monkeypatch):
     monkeypatch.setattr(state, "voice_service", None)
 
     SensingService._grant_wakeword_focus_for_presence(
-        "Person detected — 1 face(s) visible (friend (leo))"
+        "Person detected — new: friend (leo); faces in frame: 1 (leo)"
     )
+
+
+def test_a_stranger_joining_a_present_friend_does_not_grant_wakeword_focus(monkeypatch):
+    """`already present: leo (friend)` is not an arrival — the voice gate stays shut (#426)."""
+    voice = mock.Mock()
+    monkeypatch.setattr(state, "voice_service", voice)
+    monkeypatch.setattr(config, "PRESENCE_WAKE_STRANGERS", False)
+
+    SensingService._grant_wakeword_focus_for_presence(
+        "Person detected — new: stranger (stranger_1); "
+        "already present: leo (friend); faces in frame: 2 (leo, stranger_1)"
+    )
+
+    voice.grant_wakeword_focus.assert_not_called()
