@@ -514,12 +514,16 @@ inline, a direct `bash install.sh` is fully configured and running.
 > `echo git > /usr/local/lib/hermes-agent/.install_method` so a later
 > `hermes update` recognizes this as a git install.
 
-> **Hermes is the one runtime the OTA worker never auto-updates.** `hermes update`
-> takes no target version — it always moves to upstream HEAD — so a `min_version`
-> floor it cannot reach would re-trigger the update on every poll forever.
-> `make upload-hermes` + `make promote-hermes` publish the number, but only
-> `sudo software-update hermes` over SSH applies it (and it WARNS, rather than
-> fails, when the landed version differs). See `docs/bootstrap-ota.md` §5.
+> **Hermes is OTA-updated like the other CLIs, pinned by commit.** `hermes update`
+> takes no target version (it moves to upstream HEAD), so the metadata entry
+> carries the exact upstream commit: `make upload-hermes 0.21.1 v2026.9.7` resolves
+> the date tag to its commit, `make promote-hermes` raises the floor, and the
+> bootstrap worker runs `software-update hermes`, which checks that commit out
+> through the upstream installer (`--commit --force-commit`, as the imager does).
+> The web Versions card shows the button once bootstrap reports the entry — i.e.
+> the entry has a `commit` and the on-device updater is the pinning one. An
+> unpinned entry stays SSH-only (`hermes update` to HEAD, warning on mismatch).
+> See `docs/bootstrap-ota.md` §5.
 
 > **Install log lives off zram.** The installer tees all stdout+stderr to
 > `$HERMES_LOG`, default **`/root/.hermes/install.log`** (persistent rootfs) —

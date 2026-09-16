@@ -72,6 +72,33 @@ update_hermes_package() {
   hermes update
 }
 
+# update_hermes_pinned <full-sha>: check the exact upstream commit out and
+# rebuild the runtime, driving the upstream installer stage by stage exactly as
+# scripts/imager/build-orangepi.sh and runtimes/hermes/install.sh do (the
+# monolithic `curl | bash` runs node-deps, which hangs on this ARM board, and
+# the interactive setup/gateway stages, which os-server owns). The installer is
+# fetched AT the pinned commit so its stage logic matches the tree it installs.
+# `repository` with --commit on an existing checkout fetches + detaches at the
+# sha; --force-commit lets it roll BACK too, so a device that ran an unpinned
+# `hermes update` (HEAD) can be brought onto the released build. Stages
+# `prerequisites`/`config` are skipped: apt and config.yaml belong to the image
+# and to presync.
+update_hermes_pinned() {
+  local commit="$1" installer stage
+  ensure_node_engine '>=22.22.0 <23 || >=24.11.0 <25 || >=26.0.0' hermes || return 1
+  installer=$(mktemp)
+  curl -fsSL "https://raw.githubusercontent.com/NousResearch/hermes-agent/${commit}/scripts/install.sh" -o "$installer" || { echo "[software-update] failed to fetch hermes installer @ $commit"; rm -f "$installer"; return 1; }
+  for stage in repository venv python-deps path; do
+    echo "[software-update] hermes installer stage: $stage (commit $commit)"
+    bash "$installer" --stage "$stage" --non-interactive --commit "$commit" --force-commit || { echo "[software-update] hermes installer stage $stage failed"; rm -f "$installer"; return 1; }
+  done
+  rm -f "$installer"
+  echo "git" >/usr/local/lib/hermes-agent/.install_method 2>/dev/null || true
+  local head
+  head=$(git -C /usr/local/lib/hermes-agent rev-parse HEAD 2>/dev/null || true)
+  [ "$head" = "$commit" ] || { echo "[software-update] hermes checkout is $head, expected $commit"; return 1; }
+}
+
 update_openclaw() {
   local version="$1" attempt
   ensure_openclaw_node "$version" || return 1
@@ -835,26 +862,54 @@ elif [ "$APP" = "opencode" ]; then
   echo "opencode updated to $VERSION"
 elif [ "$APP" = "hermes" ]; then
   # Hermes is a git install (runtimes/hermes/install.sh stamps
-  # /usr/local/lib/hermes-agent/.install_method=git so the upstream updater
-  # recognizes it). `hermes update` takes NO target version — it always moves to
-  # upstream HEAD. So $VERSION here is the version we EXPECT to land on: a
-  # mismatch afterwards is a WARNING, not a failure, because there is nothing on
-  # the device that could have pinned it.
+  # /usr/local/lib/hermes-agent/.install_method=git). Two modes:
+  #
+  #   PINNED  — metadata carries hermes.commit (scripts/release/upload-hermes.sh):
+  #             check that exact commit out through the upstream installer
+  #             (`--commit <sha> --force-commit`, the flags the imager bakes
+  #             with), then rebuild the venv/deps. The landed version MUST equal
+  #             $VERSION — a mismatch is a failure, the pin is the whole point.
+  #   UNPINNED — no hermes.commit (metadata published before pinning existed):
+  #             `hermes update` to upstream HEAD; the version we land on is only
+  #             EXPECTED, so a mismatch is a warning. The bootstrap worker never
+  #             auto-applies this mode (it would re-trigger forever); it is the
+  #             manual SSH path only.
   #
   # Unit is hermes-gateway.service, not hermes.service (declared in
   # /usr/local/lib/os-runtimes/hermes/service).
   command -v hermes >/dev/null 2>&1 || { echo "hermes is not installed on this device — switch the runtime to hermes first"; exit 1; }
   export HOME=/root
-  update_hermes_package || { echo "hermes update failed"; exit 1; }
+  HERMES_COMMIT=$(jq -r '.hermes.commit // empty' "$METADATA_PAYLOAD")
+  if [ -n "$HERMES_COMMIT" ]; then
+    [[ "$HERMES_COMMIT" =~ ^[0-9a-fA-F]{40}$ ]] || { echo "Metadata hermes.commit is not a full 40-char sha: $HERMES_COMMIT"; exit 1; }
+    update_hermes_pinned "$HERMES_COMMIT" || { echo "hermes pinned update failed"; exit 1; }
+  else
+    echo "[software-update] metadata has no hermes.commit — unpinned: hermes update to upstream HEAD"
+    update_hermes_package || { echo "hermes update failed"; exit 1; }
+  fi
   HERMES_NOW=$(hermes --version 2>/dev/null | sed -nE 's/.*([0-9]+\.[0-9]+\.[0-9]+([-.+_][0-9A-Za-z.-]+)?).*/\1/p' | head -1)
   [ -n "$HERMES_NOW" ] || { echo "hermes not runnable after update"; exit 1; }
   if [ "$HERMES_NOW" != "$VERSION" ]; then
-    echo "[software-update] WARN: hermes landed on $HERMES_NOW, metadata expected $VERSION (upstream HEAD moved — hermes cannot be pinned)"
+    if [ -n "$HERMES_COMMIT" ]; then
+      echo "[software-update] ERROR: hermes landed on $HERMES_NOW, metadata pins $VERSION @ $HERMES_COMMIT — fix the metadata pair (upload-hermes.sh <version> <tag>)"
+      exit 1
+    fi
+    echo "[software-update] WARN: hermes landed on $HERMES_NOW, metadata expected $VERSION (unpinned: upstream HEAD moved)"
   fi
   if [ -f /etc/systemd/system/hermes-gateway.service ]; then
     systemctl restart hermes-gateway
   else
     echo "[software-update] hermes-gateway.service absent (runtime not active) — CLI updated, no restart"
+  fi
+  # os-server patches two Hermes sources at EnsureOnboarding (runtimes/hermes/
+  # cache_usage.go → gateway/platforms/api_server.py, runs_patch.go →
+  # api_server_runs.py). A fresh checkout drops both: the next turns fall back
+  # to /v1/responses and report no cache usage (lamp-dbda 2026-09-16 after a
+  # manual hermes update — web showed no cache column though Hermes logged 86-99%
+  # hits). Restart os-server so onboarding re-applies them.
+  if systemctl is-active --quiet os-server; then
+    echo "[software-update] restarting os-server to re-apply the Hermes compatibility patches"
+    systemctl restart os-server
   fi
   echo "hermes updated to $HERMES_NOW"
 elif [ "$APP" = "picoclaw" ]; then

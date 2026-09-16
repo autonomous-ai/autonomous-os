@@ -47,20 +47,16 @@ func (s *Server) softwareUpdate(c *gin.Context) {
 	// they share the same names by construction (domain.AgentRuntime* ==
 	// domain.OTAKey* for the CLIs).
 	if target == "agent" {
-		runtime := device.CurrentAgentRuntimeFromConfig(s.config)
-		// Hermes is excluded on purpose: `hermes update` cannot be pinned to a
-		// version, so bootstrap never auto-applies it (see domain/ota.go). A
-		// button that silently did nothing would be worse than no button.
-		if runtime == domain.AgentRuntimeHermes {
-			c.JSON(http.StatusBadRequest, serializers.ResponseError("hermes cannot be updated over OTA — run `software-update hermes` on the device"))
-			return
-		}
-		target = runtime
+		// Hermes included: bootstrap applies it once the metadata entry is
+		// commit-pinned (domain.OTAKeyHermes); an unpinned entry is simply not
+		// reported by /versions, so the button never appears for it.
+		target = device.CurrentAgentRuntimeFromConfig(s.config)
 	}
 	allowed := map[string]bool{
 		"os-server": true, domain.OTAKeyBootstrap: true, "web": true, "hal": true,
 		domain.OTAKeyDevice: true,
 		domain.OTAKeyCodex:  true, domain.OTAKeyClaudeCode: true, domain.OTAKeyOpenCode: true, domain.OTAKeyPicoClaw: true,
+		domain.OTAKeyHermes: true,
 	}
 	if !allowed[target] {
 		c.JSON(http.StatusBadRequest, serializers.ResponseError("unknown target: "+target))
@@ -178,13 +174,11 @@ func (s *Server) otaVersions(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, serializers.ResponseError("decode versions: "+err.Error()))
 		return
 	}
-	// Hermes is never auto-applied (see domain/ota.go), so it gets no alias and
-	// the Agent row stays button-less on a Hermes device — matching what
-	// POST /software-update/agent would answer.
-	if runtime := device.CurrentAgentRuntimeFromConfig(s.config); runtime != domain.AgentRuntimeHermes {
-		if entry, ok := versions[runtime]; ok {
-			versions["agent"] = entry
-		}
+	// The Agent row aliases the configured runtime's entry. Hermes appears here
+	// only when bootstrap reports it, i.e. the metadata entry is commit-pinned
+	// and the on-device updater can apply the pin (see domain.OTAKeyHermes).
+	if entry, ok := versions[device.CurrentAgentRuntimeFromConfig(s.config)]; ok {
+		versions["agent"] = entry
 	}
 	c.JSON(http.StatusOK, serializers.ResponseSuccess(versions))
 }

@@ -114,7 +114,9 @@ const (
     OTAKeyOpenClaw  = "openclaw"
     // Agent-runtime CLIs. Each value is also the runtime name in config.json
     // `agent_runtime` — that equality is how bootstrap updates only the CLI the
-    // device actually runs. Hermes is absent on purpose (cannot be pinned).
+    // device actually runs. Hermes rides along only when its entry is
+    // commit-pinned (OTAComponent.Commit) — see OTAKeyHermes.
+    OTAKeyHermes     = "hermes"
     OTAKeyCodex      = "codex"
     OTAKeyClaudeCode = "claudecode"
     OTAKeyOpenCode   = "opencode"
@@ -535,7 +537,7 @@ resolve từ `metadata.devices.<device_type>` lồng nhau thay vì danh sách co
 | `hal` | Chạy `/opt/hal/venv/bin/python -m hal --version` HOẶC đọc `/opt/hal/VERSION` |
 | `codex` / `claudecode` / `opencode` | Chạy `<cli> --version`, lấy semver ở dòng đầu (`cliSemver`) |
 | `picoclaw` | Đọc `/usr/local/lib/os-runtimes/picoclaw/installed-version` — output `version` của nó không có semver |
-| `hermes` | — không auto-update (xem bên dưới) |
+| `hermes` | Chạy `hermes --version` ("Hermes Agent v0.21.1 (2026.9.7)"), lấy semver ở dòng đầu (`cliSemver`) |
 
 ### Cách cập nhật từng thành phần
 
@@ -548,7 +550,7 @@ resolve từ `metadata.devices.<device_type>` lồng nhau thay vì danh sách co
 | `openclaw` | ~~Chạy `npm install -g openclaw@{version}` → `systemctl restart openclaw`~~ (tạm thời tắt) |
 | `hal` | Chạy `software-update hal` → `systemctl restart hal` |
 | `codex` / `claudecode` / `opencode` / `picoclaw` | Chạy `software-update <key>` — CHỈ trên thiết bị có `agent_runtime` đúng bằng runtime đó |
-| `hermes` | Không nằm trong loop: `hermes update` không pin được, nên một `min_version` nó không bao giờ đạt sẽ kích lại mỗi vòng poll. Chỉ chạy tay qua SSH. |
+| `hermes` | Chạy `software-update hermes` — chỉ khi `agent_runtime` là hermes, entry metadata có `commit`, VÀ updater trên máy là bản biết pin (`updaterSupportsHermesPin`: có đọc `.hermes.commit`). Entry chưa pin (không có `commit`) bị cả loop lẫn `/versions` bỏ qua, nên nút trên web không hiện — `hermes update` sẽ lên upstream HEAD và không bao giờ đạt sàn. |
 
 Cập nhật OpenClaw thủ công và force update chạy `software-update openclaw`.
 Trước khi cài phiên bản trong OTA metadata, updater đọc `engines.node` của
@@ -580,13 +582,33 @@ cách nhau 5 giây). Hết lượt probe sẽ báo cập nhật thất bại dù
 process còn active. Package/state không tự rollback khi migration hoặc
 kiểm tra readiness thất bại.
 
-`software-update hermes` thủ công kiểm tra Node trước khi chạy `hermes update`.
-Dải phiên bản dùng để build theo installer upstream Hermes: Node 22.22+ trong
-nhánh 22.x, 24.11+ trong nhánh 24.x, hoặc bản stable 26+. Nếu chưa tương thích,
-updater dùng chung helper với OpenClaw để nâng Node hệ thống lên nhánh 24.x,
-rồi kiểm tra lại. Lỗi kiểm tra hoặc nâng Node sẽ dừng trước `hermes update`.
-Lệnh update của Hermes chọn npm sẵn có và cập nhật dependencies; nó không
-chạy bước cài Node của installer.
+`software-update hermes` có hai chế độ, chọn theo entry metadata:
+
+- **Pinned** (có `hermes.commit` — do `scripts/release/upload-hermes.sh <version>
+  <tag|sha>` ghi; script tự resolve tag theo ngày của upstream, ví dụ `v2026.9.7`
+  → `2237be35…` = 0.21.1): tải installer upstream ĐÚNG commit đó và chạy các
+  stage `repository`, `venv`, `python-deps`, `path` với `--commit <sha>
+  --force-commit` — đúng cờ mà `scripts/imager/build-orangepi.sh` dùng khi bake
+  image. `--force-commit` còn cho phép LÙI một checkout đã bị `hermes update`
+  chưa pin kéo qua bản phát hành. `hermes --version` sau đó phải bằng semver đã
+  publish; lệch là fail (cặp version/commit trong metadata sai). Đây là chế độ
+  bootstrap tự apply.
+- **Unpinned** (không có `commit`, entry publish trước khi có pin): `hermes
+  update` lên upstream HEAD; version publish chỉ là "mong đợi", lệch thì cảnh
+  báo. Chỉ chạy tay qua SSH — bootstrap không bao giờ apply.
+
+Cả hai chế độ kiểm tra Node trước. Dải phiên bản theo installer upstream Hermes:
+Node 22.22+ trong nhánh 22.x, 24.11+ trong nhánh 24.x, hoặc stable 26+. Chưa
+tương thích thì nâng Node hệ thống lên 24.x bằng helper dùng chung với OpenClaw
+rồi kiểm lại; lỗi kiểm tra hoặc nâng Node dừng trước khi đổi gì.
+Cả hai chế độ kết thúc bằng restart `hermes-gateway` rồi **os-server**: os-server
+vá hai file của Hermes lúc `EnsureOnboarding` (`cache_usage.go` →
+`api_server.py`, `runs_patch.go` → `api_server_runs.py`), checkout mới làm mất
+vá — không restart thì các lượt sau rơi về `/v1/responses` và Flow Monitor
+không có cột cache.
+`runtimes/hermes/install.sh` (lúc switch runtime) vẫn cài upstream HEAD chưa
+pin; vòng reconcile sẽ đưa máy về commit đã pin ở lần poll kế, y như mọi
+component lệch version khác.
 
 **Vì sao CLI của agent gate theo `agent_runtime` chứ không theo binary:**
 `scripts/imager/build-orangepi.sh` bake CLI của MỌI agent lên mọi image lamp /
@@ -978,7 +1000,7 @@ echo "HAL $NEW_VERSION published."
 | `scripts/release/upload-claudecode.sh` | Version Claude Code CLI | Chỉ metadata (device chạy installer Anthropic) |
 | `scripts/release/upload-opencode.sh` | Version OpenCode CLI | Chỉ metadata (device chạy installer opencode.ai) |
 | `scripts/release/upload-picoclaw.sh` | TAG release PicoClaw | Chỉ metadata (device tải asset GitHub); kiểm tra tag có thật |
-| `scripts/release/upload-hermes.sh` | Version Hermes (chỉ SSH, không pin được) | Chỉ metadata (device chạy `hermes update`) |
+| `scripts/release/upload-hermes.sh` | Version Hermes + tag/commit upstream | Chỉ metadata: `hermes.version` + `hermes.commit` (device checkout commit qua installer upstream) |
 | `scripts/provision/install.sh` | CDN install shortcut | `curl ... \| sudo bash` trên Pi |
 | `scripts/release/tag-release.sh` | Git release tag kèm OTA metadata snapshot | Fetch metadata.json → annotated tag → `git push origin <tag>` |
 

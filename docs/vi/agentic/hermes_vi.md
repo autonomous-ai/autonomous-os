@@ -484,12 +484,15 @@ Vì vậy nó **không** còn chạy bản monolithic `curl | bash --skip-setup`
 lặp stage, installer ghi `git` vào `/usr/local/lib/hermes-agent/.install_method`
 để một lệnh `hermes update` về sau nhận ra đây là git install.
 
-> **Hermes là runtime DUY NHẤT không được OTA worker tự cập nhật.** `hermes
-> update` không nhận version đích — luôn nhảy lên upstream HEAD — nên một sàn
-> `min_version` nó không bao giờ đạt sẽ kích lại update mỗi vòng poll, mãi mãi.
-> `make upload-hermes` + `make promote-hermes` vẫn publish con số, nhưng chỉ
-> `sudo software-update hermes` qua SSH mới áp dụng (và nó CẢNH BÁO chứ không
-> fail khi version thực tế khác). Xem `docs/vi/bootstrap-ota.md` §5. Tiếp đó installer
+> **Hermes được OTA như các CLI khác, pin theo commit.** `hermes update` không
+> nhận version đích (luôn lên upstream HEAD), nên entry metadata mang đúng commit
+> upstream: `make upload-hermes 0.21.1 v2026.9.7` resolve tag theo ngày ra commit,
+> `make promote-hermes` nâng sàn, rồi bootstrap worker chạy `software-update
+> hermes` để checkout đúng commit đó qua installer upstream (`--commit
+> --force-commit`, như imager). Nút trên card Versions của web hiện khi bootstrap
+> báo có entry — tức entry có `commit` và updater trên máy là bản biết pin. Entry
+> chưa pin thì vẫn chỉ SSH (`hermes update` lên HEAD, lệch thì cảnh báo). Xem
+> `docs/vi/bootstrap-ota.md` §5. Tiếp đó installer
 dừng `openclaw` (để import skills không tranh chấp state đang chạy của nó), seed
 các key `API_SERVER_*` trong `~/.hermes/.env`, rồi **giao toàn bộ phần config.yaml
 + skills cho hook presync** (gọi inline), và cuối cùng cài + start gateway như một

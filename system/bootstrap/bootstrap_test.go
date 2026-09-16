@@ -273,3 +273,39 @@ fi
 		t.Error("missing software-update reported as supporting codex")
 	}
 }
+
+// Hermes is applied only through a PINNING updater (one that reads
+// .hermes.commit): the older HEAD-following hermes branch must not count, or a
+// pinned entry would be applied via `hermes update`, land on HEAD, and
+// re-trigger every poll — the failure hermes used to be excluded for.
+func TestUpdaterSupportsHermesPinRequiresCommitField(t *testing.T) {
+	dir := t.TempDir()
+	write := func(script string) {
+		if err := os.WriteFile(filepath.Join(dir, "software-update"), []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", dir)
+	write("#!/bin/bash\nif [ \"$APP\" = \"hermes\" ]; then hermes update; fi\n")
+	if !updaterSupports(domain.OTAKeyHermes) || updaterSupportsHermesPin() {
+		t.Fatal("HEAD-following hermes branch must count as branch-present but NOT pin-capable")
+	}
+	write("#!/bin/bash\nif [ \"$APP\" = \"hermes\" ]; then HERMES_COMMIT=$(jq -r '.hermes.commit // empty' \"$METADATA_PAYLOAD\"); fi\n")
+	if !updaterSupportsHermesPin() {
+		t.Fatal("pinning updater not recognised")
+	}
+}
+
+// An unpinned hermes metadata entry (no commit) is neither applied nor
+// advertised; every other component, and a pinned hermes entry, passes.
+func TestHermesPinnedGate(t *testing.T) {
+	if hermesPinned(domain.OTAKeyHermes, domain.OTAComponent{Version: "0.21.1"}) {
+		t.Fatal("unpinned hermes entry passed the gate")
+	}
+	if !hermesPinned(domain.OTAKeyHermes, domain.OTAComponent{Version: "0.21.1", Commit: "2237be355906fbe6065ce1815711eee52b2d646e"}) {
+		t.Fatal("pinned hermes entry blocked")
+	}
+	if !hermesPinned(domain.OTAKeyCodex, domain.OTAComponent{Version: "0.142.5"}) {
+		t.Fatal("non-hermes component blocked by the hermes gate")
+	}
+}

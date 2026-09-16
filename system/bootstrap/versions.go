@@ -44,9 +44,10 @@ func (b *Bootstrap) versionReport(ctx context.Context) map[string]ComponentVersi
 	for _, key := range []string{
 		domain.OTAKeyOSServer, domain.OTAKeyBootstrap, domain.OTAKeyWeb, domain.OTAKeyHal, domain.OTAKeyBuddy,
 		domain.OTAKeyOpenClaw, domain.OTAKeyCodex, domain.OTAKeyClaudeCode, domain.OTAKeyOpenCode, domain.OTAKeyPicoClaw,
+		domain.OTAKeyHermes,
 	} {
 		component, ok := meta[key]
-		if !ok || !b.componentInstalled(key) {
+		if !ok || !hermesPinned(key, component) || !b.componentInstalled(key) {
 			continue
 		}
 		current := b.detectVersion(ctx, key)
