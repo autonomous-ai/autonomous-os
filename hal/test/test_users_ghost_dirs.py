@@ -9,10 +9,13 @@ unmatched label to the shared `unknown` bucket instead of a fresh slug, and
 """
 
 import json
+from pathlib import Path
 
 import pytest
 
+from hal.drivers.sensing.perceptions.processors import facerecognizer_v2
 from hal.drivers.voice import music_service as ms
+from hal.routes import sensing
 
 
 @pytest.fixture
@@ -69,3 +72,77 @@ def test_log_play_event_keeps_enrolled_person(users_dir):
     ms._log_play_event("chill acoustic", "Chill", 1.0, 60.0, "user", person="gray")
     assert list((users_dir / "gray" / "audio_history").glob("*.jsonl"))
     assert not (users_dir / "unknown").exists()
+
+
+# --- /face/owners --------------------------------------------------------------
+
+
+@pytest.fixture
+def owners_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr(facerecognizer_v2, "USERS_DIR", tmp_path)
+    # The route only needs the recognizer to exist; the listing is pure filesystem.
+    monkeypatch.setattr(sensing, "_require_face_recognizer", lambda: None)
+    return tmp_path
+
+
+def _mk(root: Path, name: str, *rel_files: str) -> Path:
+    d = root / name
+    d.mkdir()
+    for rel in rel_files:
+        p = d / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"x")
+    return d
+
+
+def test_evidence_photo(owners_dir):
+    assert sensing._has_enrollment_evidence(_mk(owners_dir, "a", "1711929600000.jpg"))
+
+
+def test_evidence_voice_sample(owners_dir):
+    assert sensing._has_enrollment_evidence(_mk(owners_dir, "b", "voice/sample_1.wav"))
+
+
+def test_evidence_metadata(owners_dir):
+    assert sensing._has_enrollment_evidence(_mk(owners_dir, "c", "metadata.json"))
+
+
+def test_no_evidence_for_log_only_dir(owners_dir):
+    d = _mk(owners_dir, "leo", "audio_history/2026-09-16.jsonl", "mood/2026-09-16.jsonl")
+    assert not sensing._has_enrollment_evidence(d)
+
+
+def test_no_evidence_for_empty_voice_dir(owners_dir):
+    d = owners_dir / "d"
+    (d / "voice").mkdir(parents=True)
+    assert not sensing._has_enrollment_evidence(d)
+
+
+def test_face_owners_skips_ghost_dirs(owners_dir):
+    _mk(owners_dir, "leo", "audio_history/2026-09-16.jsonl")
+    _mk(owners_dir, "gray", "1711929600000.jpg")
+    _mk(owners_dir, "long", "voice/sample_1.wav")
+    _mk(owners_dir, ".voice_registry.json")  # hidden, must stay ignored as before
+    resp = sensing.face_owners_detail()
+    labels = [p.label for p in resp.persons]
+    assert labels == ["gray", "long"]
+    assert resp.enrolled_count == 2
+
+
+def test_face_owners_keeps_unknown_bucket_but_does_not_count_it(owners_dir):
+    _mk(owners_dir, "unknown", "mood/2026-09-16.jsonl", "audio_history/2026-09-16.jsonl")
+    _mk(owners_dir, "gray", "metadata.json")
+    resp = sensing.face_owners_detail()
+    labels = [p.label for p in resp.persons]
+    assert labels == ["gray", "unknown"]
+    assert resp.enrolled_count == 1
+    unknown = next(p for p in resp.persons if p.label == "unknown")
+    assert unknown.audio_history_days == ["2026-09-16"]
+    assert unknown.mood_days == ["2026-09-16"]
+
+
+def test_face_owners_empty_when_only_ghosts(owners_dir):
+    _mk(owners_dir, "leo", "audio_history/2026-09-16.jsonl")
+    resp = sensing.face_owners_detail()
+    assert resp.persons == []
+    assert resp.enrolled_count == 0
