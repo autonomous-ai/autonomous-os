@@ -34,6 +34,9 @@ from hal.drivers.motors.animation_service import AnimationService
 from hal.drivers.rgb.rgb_service import RGBService
 from hal.drivers.sensing.perceptions.models import PerceptionConfig
 from hal.drivers.sensing.perceptions.orchestrator import PerceptionOrchestrator
+from hal.drivers.sensing.perceptions.processors.faceid.enter_message import (
+    has_new_friend,
+)
 from hal.drivers.sensing.presence_service import PresenseService
 from hal.drivers.voice.tts import TTSService
 
@@ -391,14 +394,17 @@ class SensingService:
     def _grant_wakeword_focus_for_presence(message: str) -> None:
         """Let a newly recognized person stand in for the wake phrase.
 
-        Face perception marks enrolled identities in its stable event summary
-        as ``friend (<name>)``. Stranger-only events remain agent-visible but
-        only open the voice gate when ``HAL_PRESENCE_WAKE_STRANGERS`` opts into
-        guest-first conversation. The voice service retains its normal no-op
-        behavior when wake words are off, follow-up focus is disabled, or the
-        microphone pipeline is unavailable.
+        Face perception marks a NEWLY visible enrolled identity as
+        ``friend (<name>)`` in the ``new:`` segment of its event text
+        (``faceid/enter_message.py`` owns that format — a friend who was merely
+        already present is written ``<name> (friend)`` and does not count).
+        Stranger-only events remain agent-visible but only open the voice gate
+        when ``HAL_PRESENCE_WAKE_STRANGERS`` opts into guest-first conversation.
+        The voice service retains its normal no-op behavior when wake words are
+        off, follow-up focus is disabled, or the microphone pipeline is
+        unavailable.
         """
-        if "friend (" not in message.lower() and not config.PRESENCE_WAKE_STRANGERS:
+        if not has_new_friend(message) and not config.PRESENCE_WAKE_STRANGERS:
             logger.info("[sensing] stranger-only presence.enter — wake focus not granted")
             return
         try:
