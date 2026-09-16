@@ -131,13 +131,14 @@ Use `audio_recent` from the injected context to personalize; only use `GET /audi
 - Mood: bored (unknown) → `[HW:/emotion:{"emotion":"caring","intensity":0.5}] Need a lift? How about some upbeat indie?`
 - Mood: excited (unknown) → `[HW:/emotion:{"emotion":"happy","intensity":0.7}] Riding the energy — feel-good pop?`
 - Mood: happy, music already playing → `NO_REPLY`
-- After user confirms → `[HW:/audio/play:{"query":"Bill Evans Waltz for Debby","person":"leo"}][HW:/emotion:{"emotion":"happy","intensity":0.8}] Great choice!`
+- After user confirms (known user) → `[HW:/audio/play:{"query":"Bill Evans Waltz for Debby","person":"{name}"}][HW:/emotion:{"emotion":"happy","intensity":0.8}] Great choice!`
+- After user confirms (unknown) → `[HW:/audio/play:{"query":"Bill Evans Waltz for Debby"}][HW:/emotion:{"emotion":"happy","intensity":0.8}] Great choice!`
 
 ## Rules
 
 - All computation stays in `thinking` — reply is only the suggestion sentence (with HW markers) or `NO_REPLY`.
 - Never mention "cooldown", "interval", "threshold", or timestamps in the reply.
-- `person` field in `/audio/play` must be lowercase.
+- `person` field in `/audio/play` is `{name}` — the speaker identified in the injected context, lowercase. **Omit the field** when the context has no identified user (the "(unknown)" cases above). Never copy a name from an example or guess one; unmatched names land in the shared `unknown` bucket anyway.
 - **Never open with a greeting.** This is an emotion-driven mood event, NOT a presence/arrival event. Forbidden openers: `hello`, `hi`, `hey`, `welcome back`, `oh, you're back`, anything containing `again` or referencing the user re-arriving. Greetings belong only to `presence.enter` in `sensing/SKILL.md`.
 - **Tone must match the mood.** For `Fear` → `stressed` and `Sad` → `sad` decisions, use the `caring` emotion marker and a gentle acknowledging sentence — never cheerful or playful phrasing. If you can't produce a tone-appropriate one-liner, output `NO_REPLY`.
 - **Don't reference the camera or detection.** No "I noticed you look…", "I can see…", "your face shows…" — speak as if you simply care, not as if you're describing a sensor reading.
