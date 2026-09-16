@@ -82,7 +82,7 @@ func TestBuildPresenceEnterStrangerJoiningPresentFriendCarriesInlineRule(t *test
 	got := Build("presence.enter",
 		"Person detected — new: stranger (stranger_1); already present: long (friend); faces in frame: 2 (long, stranger_1)",
 		"long", "")
-	if !strings.Contains(got, "[A stranger joined long, who is already in frame") {
+	if !strings.Contains(got, "[A stranger joined long, who is in frame — speak to long, not to the stranger.") {
 		t.Fatalf("stranger-joins-friend presence.enter = %q, want inline rule naming the friend", got)
 	}
 }

@@ -133,7 +133,7 @@ func Build(eventType, message, currentUser, guardTag string) string {
 			// the model calls skill_view, and it skipped that and said
 			// "Hey, welcome back" to the user (orange-lamp, 2026-09-16). The
 			// one line that matters rides inline, like presence.leave's.
-			msg += "\n[A stranger joined " + currentUser + ", who is already in frame. One light aside to " + currentUser + " about the company, by name — do not greet the stranger, do not ask who they are, not a welcome-back. HW: curious 0.6, aim, track. See sensing/SKILL.md \"Someone joins the user\".]"
+			msg += "\n[A stranger joined " + currentUser + ", who is in frame — speak to " + currentUser + ", not to the stranger. See sensing/SKILL.md \"Someone joins the user\".]"
 		}
 	case "presence.leave", "presence.away":
 		msg += "\n[No crons to cancel. NO_REPLY unless worth saying.]"
