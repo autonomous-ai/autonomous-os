@@ -310,20 +310,51 @@ def face_status():
     )
 
 
+_IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp"}
+
+# Shared per-user-log bucket for an unidentified speaker. It is a real folder
+# under USERS_DIR and the Web UI renders it (PersonCard special-cases the label),
+# but it is never an enrolled person.
+SHARED_USER_BUCKET = "unknown"
+
+
+def _has_enrollment_evidence(d: Path) -> bool:
+    """True if a user dir holds something a person was actually enrolled with:
+    a face photo, a voice sample, or metadata.json. Log-only folders
+    (audio_history/, mood/, music-suggestions/, ...) are side effects of the
+    per-user loggers and do not make a person (#425)."""
+    if (d / "metadata.json").is_file():
+        return True
+    if any(f.is_file() and f.suffix.lower() in _IMG_EXTS for f in d.iterdir()):
+        return True
+    voice_dir = d / "voice"
+    return voice_dir.is_dir() and any(f.is_file() for f in voice_dir.iterdir())
+
+
 @router.get("/face/owners", response_model=FaceOwnersDetailResponse, tags=["Face"])
 def face_owners_detail():
-    """List enrolled persons with photo filenames."""
-    fr = _require_face_recognizer()
+    """List enrolled persons with photo filenames.
+
+    Only directories with enrollment evidence are persons; the shared
+    "unknown" bucket is listed (the UI shows its logs) but not counted.
+    """
+    _require_face_recognizer()
     from hal.drivers.sensing.perceptions.processors.facerecognizer_v2 import USERS_DIR
 
     persons: list[FacePersonDetail] = []
+    enrolled_count = 0
     if USERS_DIR.is_dir():
-        img_exts = {".jpg", ".jpeg", ".png", ".bmp"}
         for d in sorted(USERS_DIR.iterdir()):
             if not d.is_dir() or d.name.startswith("."):
                 continue
-            photos = sorted(f.name for f in d.iterdir() if f.is_file() and f.suffix.lower() in img_exts)
-            other_files = sorted(f.name for f in d.iterdir() if f.is_file() and f.suffix.lower() not in img_exts)
+            enrolled = _has_enrollment_evidence(d)
+            if not enrolled and d.name != SHARED_USER_BUCKET:
+                logger.debug("[face/owners] skipping log-only dir with no enrollment evidence: %s", d.name)
+                continue
+            if enrolled and d.name != SHARED_USER_BUCKET:
+                enrolled_count += 1
+            photos = sorted(f.name for f in d.iterdir() if f.is_file() and f.suffix.lower() in _IMG_EXTS)
+            other_files = sorted(f.name for f in d.iterdir() if f.is_file() and f.suffix.lower() not in _IMG_EXTS)
             mood_dir = d / "mood"
             mood_days = sorted(f.stem for f in mood_dir.iterdir() if f.suffix == ".jsonl") if mood_dir.is_dir() else []
             wb_dir = d / "wellbeing"
@@ -357,7 +388,7 @@ def face_owners_detail():
                     files=other_files,
                 )
             )
-    return FaceOwnersDetailResponse(enrolled_count=len(persons), persons=persons)
+    return FaceOwnersDetailResponse(enrolled_count=enrolled_count, persons=persons)
 
 
 @router.get("/face/photo/{label}/{filename}", tags=["Face"])

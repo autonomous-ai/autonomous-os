@@ -70,6 +70,15 @@ emotion, cử động, look hoặc delegate. Mô tả tool cho phép từ chối
 lỏm kể cả khi thiết bị có thể thực hiện. Trường hợp chưa chắc chắn, kết thúc im
 lặng và lỗi vẫn giữ hành vi fallback hiện có.
 
+Prompt Gemini còn yêu cầu có bằng chứng âm thanh trước khi diễn giải yêu cầu:
+không ghép tiếng ồn/echo thành câu hay sửa transcript không liên quan bằng ngày,
+vị trí, memory hoặc lịch sử hội thoại. Input đột ngột sang ngôn ngữ khác không
+cho phép tự dịch; tên riêng và từ kỹ thuật trong yêu cầu rõ bằng ngôn ngữ đã cấu
+hình vẫn hợp lệ. Ví dụ bao gồm transcript Tây Ban Nha về đại lý du lịch và tiếng
+Hàn bị trả lời thành câu hỏi ngày tháng. Input không rõ giữ im lặng, không đổi
+fallback cho lượt chưa chắc chắn hoặc điều kiện gọi `reject_turn`. Thay đổi
+prompt không bảo đảm transcript đúng hay chặn hết history bị hallucinate.
+
 `robots/lamp/SOUL.md` áp dụng cùng điều kiện lời nói hướng đến thiết bị cho voice
 và `[ambient]` của main agent. Lời nghe lỏm hoặc chưa rõ đang nói với ai phải trả
 đúng `NO_REPLY`, không gọi tool hay phản ứng bằng cử động/cảm xúc. Quy tắc này

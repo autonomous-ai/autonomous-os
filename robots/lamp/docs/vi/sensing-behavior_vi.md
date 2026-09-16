@@ -29,6 +29,10 @@ Các gate per-type ở trên độc lập với nhau — không có gate xuyên-
 
 ---
 
+## Lời nói phản hồi sensing
+
+Với event do `skills/sensing/SKILL.md` xử lý, prompt yêu cầu HW marker đúng cú pháp rồi tới một câu tối đa 20 từ theo `current_language`, hoặc `NO_REPLY` cho dòng phản ứng im lặng. Mọi assistant text, kể cả message trung gian, không được giải thích event/ma trận, phân tích ngữ cảnh chủ nhân, viết các phương án nháp hay thêm lời sau câu nói. Event người lạ đến độc lập ngoài guard mode yêu cầu câu chào cố định (EN: “Hi, I don’t think we’ve met.”; VI: “Chào bạn, hình như mình chưa gặp nhau.”), đúng HW marker và không thêm proactive care. Model phải tự bỏ câu dẫn trước khi gửi, không nói ra bước kiểm tra; wrapper `[user]` ở đầu không đổi nhánh detector. Event guard và yêu cầu rõ ràng của user giữ nhánh xử lý riêng. Nếu không có kênh reasoning riêng thì bỏ phần phân tích. Đây là hướng dẫn prompt, không phải giới hạn độ dài ở backend hay bảo đảm model luôn tuân thủ; các skill khác giữ quy tắc output riêng.
+
 ## Âm thanh (Sound)
 
 ### Cơ chế hoạt động
@@ -393,6 +397,8 @@ Tới thời điểm agent thấy event, HAL đã tự log mọi label activity 
 4. **Sau khi nhắc** (chỉ nudge, không phải reaction), log entry `nudge_hydration` hoặc `nudge_break` — đây là cái reset delta cho window tiếp theo (và hiện lên timeline user).
 5. **KHÔNG BAO GIỜ đoán** time-since từ memory — luôn tính từ log.
 
+Với lượt `[activity]` tự động, skill wellbeing cấm đọc phần chọn nhánh/skill trong mọi assistant text, kể cả trước tool. Phản ứng ăn uống (`eating *`, `dining`, `tasting food`) giới hạn một câu tối đa 20 từ theo `current_language`, không gọi tool, thêm log marker, nhắc việc khác hay bootstrap habit dù timer đã tới hạn hoặc `bootstrap_needed=true`. Ví dụ cà rốt có toàn bộ phản hồi là “Enjoy your carrots!”. Đây là hướng dẫn prompt, không phải bộ lọc TTS tất định.
+
 Reaction path được thêm vào để hành động tích cực không bị im lặng: trước đây user uống nước mà chưa qua threshold thì Lamp `NO_REPLY`, cảm giác như đèn chết. Reaction được nuôi bởi 2 field thêm trong `[wellbeing_context: ...]` — `count_today` (đếm số lần `drink` / `break` hôm nay) và `time_of_day` (`morning` / `noon` / `afternoon` / `evening` / `night`) — để câu thoại có cái cụ thể bám vào mà không tốn thêm tool call. Visual caption (kiểu "chai Lavie xanh") cố ý CHƯA làm — vision pipeline hiện chỉ trả class label, không có free-text mô tả.
 
 ### Ngưỡng
@@ -666,6 +672,8 @@ Sensing handler (`handler.go`) route `emotion.detected` events tới agent. Khi 
    - **#3 còn lại** → **checkin** — 1 phản ứng người ngắn. Xem `user-emotion-detection/reference/checkin.md` cho example theo raw FER label (Sad/Fear/Angry/Disgust/Happy/Surprise), mỗi label có 3 style: Ask/Comfort/Invite. Examples chỉ là gợi ý — agent tự improvise mỗi turn.
 3. **Cooldown chỉ chặn music, không chặn checkin.** Khi cooldown 7 phút còn hiệu lực, row #2 fail vế thứ ba và event rơi xuống checkin (row #3). Agent vẫn hỏi "có chuyện gì" — chỉ không suggest nhạc 2 lần liên tiếp. `NO_REPLY` chỉ xảy ra ở row #1 (đang phát nhạc).
 4. **Không bao giờ chào trên emotion event.** `emotion.detected` không phải presence/arrival event — `sensing/SKILL.md` cấm openers như `hello`, `welcome back`, mọi câu chứa `again`. Greeting chỉ dành cho `presence.enter`.
+
+Output của skill emotion cấm lời dẫn trong assistant text trước hoặc giữa các lần gọi tool/skill; phản hồi gồm marker mood signal và marker của nhánh đã chọn, rồi một câu tối đa 20 từ hoặc `NO_REPLY` theo nhánh. Sau khi đọc reference đã chọn, model kết thúc mà không đọc lại để chỉnh câu. Cue camera/voice được đánh dấu yếu không được diễn đạt thành cảm xúc hay biểu cảm chắc chắn: checkin Happy yếu dùng lời mời trung tính, không khẳng định user vui hay đang cười. Logging và routing giữ nguyên. Đây là hướng dẫn prompt, không bảo đảm model luôn tuân thủ.
 
 Cả 2 route share chung 1 cooldown: music log qua `POST /api/music-suggestion/log` với `trigger:"<genre>:<mood>"` (mood bucket); checkin log cùng endpoint với `trigger:"checkin:<emotion>"` (raw FER label). `last_suggestion_age_min` phản ánh cả 2 kênh nên music suggestion mới sẽ im lặng nhánh music trong 7 phút, nhưng checkin vẫn fire. Checkin phrasing keyed theo raw emotion (không phải mood) — mỗi FER label có 3 style: Ask / Comfort / Invite. Xem `reference/checkin.md`. Output checkin luôn prefix `[HW:/emotion:{"emotion":"caring","intensity":0.5}]`.
 

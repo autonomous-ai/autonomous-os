@@ -16,6 +16,22 @@ Voice variants share the same row — `Fearful` → use `Fear`, `Surprised` → 
 
 ## Example phrasing — INSPIRATION ONLY
 
+**Weak-cue override:** when the event says `weak camera cue` or `weak voice cue`,
+avoid wording that assumes an emotion or expression is real. For a weak Happy
+cue, do not say “Smile's contagious” or ask “what's got you happy”. Prefer a
+neutral invitation such as “Anything you'd like to share?” in `current_language`.
+One sentence, at most 20 words; no spoken reasoning before or after it.
+
+For an unknown user's weak camera Happy cue routed to checkin, with no fresh
+mood decision to log, this is a complete output example (markers included):
+
+```text
+[HW:/mood/log:{"kind":"signal","source":"camera","trigger":"happy","mood":"happy","user":"unknown"}][HW:/emotion:{"emotion":"caring","intensity":0.5}][HW:/music-suggestion/log:{"user":"unknown","trigger":"checkin:Happy","message":"Anything you'd like to share?"}] Anything you'd like to share?
+```
+
+Keep any additional decision marker required by the mood rules on other turns.
+Do not explain how the markers were chosen or combined.
+
 > **DO NOT copy these strings verbatim.** They are flavor samples to show the register/style for each emotion. Each turn the agent should phrase its own line, drawing on these only as reference. Repeating the same wording across turns is the failure mode this section is meant to prevent.
 
 English shown for clarity. Speak in the user's current language at runtime — translate or, better, rephrase from scratch in that language.

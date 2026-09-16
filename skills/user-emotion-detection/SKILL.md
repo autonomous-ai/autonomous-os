@@ -20,15 +20,16 @@ For any other event (`[sensing:presence.*]`, `[activity]`, `[sensing:sound]`, `[
 
 > **EXECUTE, don't plan.** Before any reply (including `NO_REPLY`) you MUST embed a `[HW:/mood/log:{...}]` marker in the reply for this event (it fires the POST async via the runtime — see "What this skill produces" below). Writing *"I will post a mood signal"* in `thinking` is **not** enough — if no `[HW:/mood/log:...]` marker appears in the reply text this turn, the skill failed. Every `emotion.detected` / `speech_emotion.detected` event = at least one mood signal log. No exceptions, no skips, no "already logged recently" reasoning. (`curl` POST is the documented fallback only when the HW marker would break the body regex; do not use it as the default.)
 
-> **This skill is silent.** It only logs mood data — no spoken reply needed. All steps stay in `thinking`. If you want to speak, follow normal sensing reply rules. NEVER narrate mood logging, mapping, or workflow steps in the reply.
+> **Logging has no spoken narration.** Only the selected response route supplies speech or `NO_REPLY`. Never narrate mood logging, mapping, skill selection or workflow steps. Keep analysis in a separate reasoning channel; if none is available, omit analysis entirely.
 
 > **EMOTION TURN OUTPUT CONTRACT — highest priority.** For a triggered
-> `[emotion]` / `[speech_emotion]` turn, your entire final assistant message
+> `[emotion]` / `[speech_emotion]` turn, send no assistant-text preamble before
+> or between skill/tool calls. Your entire final assistant message
 > must be exactly one of these two shapes:
 >
 > ```text
-> [zero or more HW markers] NO_REPLY
-> [zero or more HW markers] <one natural sentence addressed to the user>
+> [required mood signal and selected-route HW markers] NO_REPLY
+> [required mood signal and selected-route HW markers] <one natural sentence addressed to the user, at most 20 words>
 > ```
 >
 > Nothing may appear before, between, or after those parts. In particular, do
@@ -39,6 +40,18 @@ For any other event (`[sensing:presence.*]`, `[activity]`, `[sensing:sound]`, `[
 > markers, then start immediately with the first word the user should hear.
 > Bad: `Emotion: Anger. Weak camera cue. Route = checkin. Let me compose...`
 > Good: `[HW:...] That sounds rough — I'm right here.`
+
+After reading the selected route's reference, emit its required markers and the
+spoken sentence, then end the turn. Do not reread the reference to refine the
+wording. Silently check that removing the markers leaves only the sentence or
+`NO_REPLY`; delete all planning prose, including `An emotion event`, `Let me
+check`, `Let me route`, and `Let me combine them all`. Never announce this check.
+
+When the input explicitly says `weak camera cue` or `weak voice cue`, do not
+assert the detected feeling or a visible expression as fact. In a positive
+checkin, use a neutral invitation instead of assuming happiness or a smile.
+Keep the signal log and routing rules unchanged; uncertainty affects phrasing,
+not whether to log the event.
 
 ## What this skill does
 

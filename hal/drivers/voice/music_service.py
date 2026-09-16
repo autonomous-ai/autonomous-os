@@ -44,7 +44,10 @@ def canonicalize_person(person: str) -> str:
       2. Telegram id extracted from `NAME (123456)` → scan metadata.json files.
       3. Longest alphanumeric token that matches an existing user dir
          (e.g. "i am gray" → "gray").
-      4. Slug fallback (may create a new dir, but at least stays filesystem-safe).
+      4. No match → the shared "unknown" bucket. Never the raw slug: a label
+         that matches nobody must not mint a new user dir (#425 — the agent
+         copies example names like "leo" out of skill prompts, and /face/owners
+         then showed that log-only folder as an enrolled person).
     """
     if not person:
         return "unknown"
@@ -72,7 +75,9 @@ def canonicalize_person(person: str) -> str:
         for tok in tokens:
             if (_USERS_DIR / tok).is_dir():
                 return tok
-    return slug
+    if slug != "unknown":
+        logger.info("canonicalize_person: no user dir matches %r -> shared 'unknown' bucket", person)
+    return "unknown"
 
 
 def _history_dir(person: str = "") -> Path:

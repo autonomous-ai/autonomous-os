@@ -379,10 +379,10 @@ Accessed via nginx proxy: `/hw/*` → `127.0.0.1:5001`
 | GET | `/audio/volume` | Get volume |
 | POST | `/audio/play-tone` | Play test tone |
 | POST | `/audio/record` | Record WAV |
-| POST | `/audio/play` | Play music by query. Body: `{"query":"song artist","person":"name"}`. `person` optional — enables per-user history. Fires a short cached TTS cue ("On it.", "Coming up.", …) before yt-dlp resolve so the device sounds responsive while ffmpeg loads. Cue is suppressed when speaker muted, TTS busy, music already playing, or VoiceService is mid-STT-session. |
+| POST | `/audio/play` | Play music by query. Body: `{"query":"song artist","person":"name"}`. `person` optional — enables per-user history. Fires a short cached TTS cue ("On it.", "Coming up.", …) before yt-dlp resolve so the device sounds responsive while ffmpeg loads. Cue is suppressed when speaker muted, TTS busy, music already playing, or VoiceService is mid-STT-session. `person` is resolved against existing user folders (exact label, Telegram id in `NAME (123)`, or a matching token); a name that matches nobody is logged under the shared `unknown/` bucket — it never creates a new user folder. |
 | POST | `/audio/stop` | Stop current music playback |
 | GET | `/audio/status` | Current playback status (playing, title, elapsed) |
-| GET | `/audio/history` | Music play history. Query: `?person=name&date=YYYY-MM-DD&last=50`. `person` filters per-user; omit for shared. |
+| GET | `/audio/history` | Music play history. Query: `?person=name&date=YYYY-MM-DD&last=50`. `person` is resolved the same way as on `/audio/play`; omit it or pass an unmatched name to read the shared `unknown/` history. Response echoes the resolved `person`. |
 
 ### Emotion
 
@@ -415,6 +415,7 @@ Requires sensing with camera (InsightFace). Enrolled person JPEGs persist under 
 |--------|----------|-------------|
 | POST | `/face/enroll` | Body: `image_base64`, `label`, `telegram_username`?, `telegram_id`? — save photo, train friend embeddings, persist Telegram identity |
 | GET | `/face/status` | `enrolled_count`, `enrolled_names` |
+| GET | `/face/owners` | `enrolled_count`, `persons[]` with photos, voice samples, Telegram identity and per-user log days (mood / wellbeing / music-suggestions / posture / audio_history). A folder is a person only if it holds a face photo, a voice sample or `metadata.json`; log-only folders are skipped. The shared `unknown/` bucket is listed (so its logs are browsable) but not counted in `enrolled_count`. |
 | POST | `/face/remove` | Body: `label` — remove one person (404 if unknown) |
 | POST | `/face/reset` | Clear all enrolled persons and photos on disk |
 

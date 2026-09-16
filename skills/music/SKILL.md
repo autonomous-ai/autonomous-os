@@ -20,8 +20,9 @@ Play music through the device's speaker by searching YouTube. Use this when the 
    Otherwise → ask: *"What are you in the mood for?"*. The file is bootstrapped lazily by wellbeing on its first threshold nudge; do not invoke habit Flow A from here.
 3. Reply format:
    ```
-   [HW:/audio/play:{"query":"Bohemian Rhapsody Queen","person":"alice"}][HW:/emotion:{"emotion":"excited","intensity":0.8}] Playing Bohemian Rhapsody!
+   [HW:/audio/play:{"query":"Bohemian Rhapsody Queen","person":"{name}"}][HW:/emotion:{"emotion":"excited","intensity":0.8}] Playing Bohemian Rhapsody!
    ```
+   `{name}` is the speaker identified in the injected context. If nobody is identified, drop the field entirely — `[HW:/audio/play:{"query":"Bohemian Rhapsody Queen"}]`. Never invent a name or reuse one from an example.
 4. Stop: `[HW:/audio/stop:{}] Music stopped.`
 
 ## API schema (`/audio/play`)
@@ -29,7 +30,7 @@ Play music through the device's speaker by searching YouTube. Use this when the 
 | Field | Required | Description |
 |---|---|---|
 | `query` | **YES** | YouTube search string (include artist for better match) |
-| `person` | no | Who requested, lowercase (e.g. `"alice"`) — omit if unknown |
+| `person` | no | The identified speaker's label, lowercase (`{name}` from the injected context) — **omit the field** when nobody is identified. Unmatched names are logged under the shared `unknown` bucket, so a made-up name buys nothing. |
 
 Do NOT use `track`, `artist`, `title`, `song` — those return 422.
 
@@ -46,9 +47,10 @@ Do NOT use `track`, `artist`, `title`, `song` — those return 422.
 
 | Input | Output |
 |---|---|
-| *"Play Bohemian Rhapsody"* | `[HW:/audio/play:{"query":"Bohemian Rhapsody Queen","person":"alice"}][HW:/emotion:{"emotion":"excited","intensity":0.8}]` Playing Bohemian Rhapsody! |
+| *"Play Bohemian Rhapsody"* | `[HW:/audio/play:{"query":"Bohemian Rhapsody Queen","person":"{name}"}][HW:/emotion:{"emotion":"excited","intensity":0.8}]` Playing Bohemian Rhapsody! |
 | *"Sing me a song"* | `[HW:/emotion:{"emotion":"curious","intensity":0.6}]` What kind of vibe — chill, upbeat, or something specific? |
-| *"Something chill"* | `[HW:/audio/play:{"query":"chill acoustic playlist","person":"alice"}][HW:/emotion:{"emotion":"happy","intensity":0.8}]` Here's some chill vibes! |
+| *"Something chill"* | `[HW:/audio/play:{"query":"chill acoustic playlist","person":"{name}"}][HW:/emotion:{"emotion":"happy","intensity":0.8}]` Here's some chill vibes! |
+| *"Something chill"* (no identified speaker) | `[HW:/audio/play:{"query":"chill acoustic playlist"}][HW:/emotion:{"emotion":"happy","intensity":0.8}]` Here's some chill vibes! |
 | *"Stop the music"* | `[HW:/audio/stop:{}]` Music stopped. |
 
 Delegated request with an unknown speaker and noisy transcript:

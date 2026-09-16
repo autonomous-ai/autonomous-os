@@ -5,7 +5,27 @@ description: React to passive device events tagged [sensing:...] — presence, s
 
 # Sensing
 
-`[sensing:<type>]` messages arrive automatically from the device's detectors (camera, mic, light). React naturally — emotion marker + optional short line. Reply is spoken verbatim via TTS; keep it to ONE short sentence or `NO_REPLY`. Reasoning, thresholds, log dumps stay in `thinking`.
+`[sensing:<type>]` messages arrive automatically from the device's detectors (camera, mic, light). Your reply goes directly to the speaker.
+
+## Spoken output contract
+
+For events handled by this skill, output ONLY the exact `[HW:...]` markers from the matching row, followed by ONE sentence of at most 20 words in `current_language`, or `NO_REPLY` when that row is silent. Markers do not count toward the word limit. End the reply immediately after that sentence or token.
+
+Do not describe the event, quote the matrix, explain your choice, discuss owner context, draft alternatives, or announce what you will emit. No preamble or afterword. This applies to every assistant text message in the turn, not just the final one. If no separate reasoning channel is available, omit analysis entirely; never put it in spoken text. Use literal `[HW:...]` syntax, not shorthand such as `[emotion:curious]` or `[servo aim user]`.
+
+### Stranger arrival: exact reply
+
+For a standalone `presence.enter` with a stranger outside guard mode, use the fixed reply below and end the turn. "Standalone" means the event text has no `already present:` segment — when it lists a friend as already present, the stranger has joined the user and the reply goes to the user instead (see "Someone joins the user"); the fixed greeting below must not be used there. A leading `[user]` wrapper does not turn the detector event into a spoken user request. Do not add a reaction summary or explain the greeting. Do not continue an earlier conversation.
+
+For `current_language=en`, copy this entire reply exactly:
+
+```text
+[HW:/emotion:{"emotion":"curious","intensity":0.8}][HW:/servo/aim:{"direction":"user"}][HW:/servo/track:{"target":["face"]}] Hi, I don't think we've met.
+```
+
+For `current_language=vi`, keep the same HW markers and use exactly `Chào bạn, hình như mình chưa gặp nhau.` For another language, translate only that greeting. This fixed reply overrides optional proactive care for this stranger event. Guard events and explicit user requests in the same input retain their own routing.
+
+Before sending, silently check: the reply starts with `[HW:`, and removing all HW markers leaves only the greeting. Delete any other text. In particular, `A stranger entered.` and `Cautious acknowledgment per sensing skill.` are forbidden spoken preambles, not part of the greeting. Do not announce this check or its result.
 
 ## Sound: react and finish
 
@@ -48,7 +68,7 @@ Type them at the very start of your reply. They are NOT tool calls. The system r
 |---|---|---|---|
 | `presence.enter` (friend) | Yes | `[HW:/emotion:{"emotion":"greeting","intensity":0.9}][HW:/servo/aim:{"direction":"user"}][HW:/servo/track:{"target":["face"]}]` | YES — warm personal greeting by name. **If the injected `[presence_context: ...]` block flags a long absence, swap to the return-after-long-absence phrasing — see section below.** |
 | `presence.enter` (stranger, text contains `already present: <name> (friend)`) | Yes | `[HW:/emotion:{"emotion":"curious","intensity":0.6}][HW:/servo/aim:{"direction":"user"}][HW:/servo/track:{"target":["face"]}]` | YES — one light aside **to `<name>`**, not to the stranger. See "Someone joins the user" below. |
-| `presence.enter` (stranger) | Yes | `[HW:/emotion:{"emotion":"curious","intensity":0.8}][HW:/servo/aim:{"direction":"user"}][HW:/servo/track:{"target":["face"]}]` | YES — cautious acknowledgment |
+| `presence.enter` (stranger, no `already present:`) | Yes | `[HW:/emotion:{"emotion":"curious","intensity":0.8}][HW:/servo/aim:{"direction":"user"}][HW:/servo/track:{"target":["face"]}]` | YES — exact greeting from **Stranger arrival: exact reply**, with no preamble |
 | `presence.leave` | No | `[HW:/emotion:{"emotion":"idle","intensity":0.4}][HW:/servo/track/stop:{}]` | NO (`NO_REPLY`) — always silent |
 | `presence.away` | No | `[HW:/emotion:{"emotion":"sleepy","intensity":0.8}][HW:/servo/track/stop:{}]` | YES — brief "going to sleep" line |
 | `sound` 1st occurrence | No | `[HW:/emotion:{"emotion":"curious","intensity":0.6}]` | NO (`NO_REPLY`) |
@@ -65,9 +85,9 @@ Every event emits at least one `[HW:/emotion:...]` marker, even on `NO_REPLY`. N
 
 ## Rules
 
-- **HW markers first**, then text or `NO_REPLY`. Text = ONE short sentence max, spoken verbatim.
+- **HW markers first**, then text or `NO_REPLY`. Text = ONE sentence, at most 20 words, spoken verbatim.
 - **Tool-call scope** — only `motion.activity` (→ wellbeing) and `emotion.detected` / `speech_emotion.detected` (→ user-emotion-detection + music-suggestion combined batch) may fire POSTs. On `presence.*`, `sound`, `light.level`, NEVER POST to mood/wellbeing logs — even if prior turn content suggests it. Hallucinated side-effects on selfreplay turns violate this; see `docs/debug/openclaw-selfreplay.md`.
-- **Never dump reasoning into the reply.** No log deltas, no "Looking at context…", no "No nudge needed". Scratch stays in `thinking`. This includes announcing which skill you are using — device-observed leak, 2026-08-24: *"Using the sensing skill for this presence event. Oh — hi. I don't think we've met yet."* The lamp read both sentences. Start the reply at the first word the user should hear.
+- **No analysis in assistant text.** Follow the spoken output contract above, including before and after tool calls. Start the spoken sentence at the first word the user should hear and stop at its end.
 - **Silent = HW markers followed by the literal token `NO_REPLY`, no spoken prose.** Never narrate the decision to stay quiet ("Sound event, no user message. Nothing to say", "No response needed"). That prose is not a sentinel — the backend treats it as speech and the device reads it out loud.
 - **Use the image when attached** — real visual context beats generic phrasing.
 - **Night-aware** — lower intensity emotions and shorter speech after ~22:00. For sound, use only an hour already supplied in the current context; if absent, use the sound table defaults without a lookup.

@@ -8,6 +8,37 @@ ROLLBACK_DIR="/root/bootstrap/rollback"
 WEB_ROOT="/usr/share/nginx/html/setup"
 HAL_DIR="/opt/hal"
 
+find_hal_uv() {
+  local candidate
+  candidate="$(command -v uv || true)"
+  if [ -n "$candidate" ]; then
+    printf '%s\n' "$candidate"
+    return 0
+  fi
+  # Reachy's installer uses Pollen's per-user uv even when running as root.
+  for candidate in /root/.local/bin/uv /home/pollen/.local/bin/uv; do
+    if [ -x "$candidate" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  echo "uv not found" >&2
+  return 1
+}
+
+hal_dependency_extra() {
+  local device_type
+  device_type="$(grep -E '^DEVICE_TYPE=' "$HAL_DIR/.env" 2>/dev/null | cut -d= -f2)"
+  if [ -z "$device_type" ]; then
+    device_type="$(jq -r '.device_type // empty' /root/config/config.json 2>/dev/null || true)"
+  fi
+  # Match the Reachy installer; other devices retain hardware + aec.
+  case "$device_type" in
+    reachy-mini) printf '%s\n' reachy ;;
+    *) printf '%s\n' aec ;;
+  esac
+}
+
 # Use npm's bundled semver implementation: engine ranges can include unions
 # and upper bounds, so a major-version comparison is not sufficient.
 node_satisfies_engine() {
@@ -255,7 +286,7 @@ ensure_harness_nginx_location() {
   }
   local conf candidate changed
   conf=""
-  for candidate in /etc/nginx/conf.d/*.conf /etc/nginx/sites-enabled/default; do
+  for candidate in /etc/nginx/conf.d/*.conf /etc/nginx/sites-enabled/*; do
     [ -f "$candidate" ] || continue
     if grep -q 'location /api/ {' "$candidate" || grep -q 'location = /api/harness/ws' "$candidate"; then
       conf="$candidate"
@@ -268,9 +299,11 @@ ensure_harness_nginx_location() {
   }
   changed=$(python3 - "$conf" <<'PY'
 import os
+import re
 import sys
 
-path = sys.argv[1]
+# sites-enabled entries may be symlinks; update their source, not the link.
+path = os.path.realpath(sys.argv[1])
 with open(path) as source:
     content = source.read()
 if "location = /api/harness/ws" in content:
@@ -279,6 +312,12 @@ if "location = /api/harness/ws" in content:
 anchor = "  location /api/ {"
 if content.count(anchor) != 1:
     raise SystemExit("nginx /api/ proxy anchor differs; refusing to edit")
+# Reuse the API upstream: Reachy's spike image names it spike_backend.
+# Reject unfamiliar/nested blocks and URI rewriting rather than invent a route.
+api = re.search(r"(?m)^  location /api/ \{([^{}]*)\}", content)
+targets = re.findall(r"(?m)^\s*proxy_pass\s+(http://[A-Za-z0-9_.:-]+);\s*(?:#.*)?$", api[1]) if api else []
+if len(targets) != 1:
+    raise SystemExit("nginx /api/ proxy target differs; refusing to edit")
 route = '''  # Direct Harness pairing/session; authenticated by PAKE and pinned E2EE.
   location = /api/harness/ws {
     proxy_pass http://backend;
@@ -293,6 +332,7 @@ route = '''  # Direct Harness pairing/session; authenticated by PAKE and pinned 
   }
 
 '''
+route = route.replace("proxy_pass http://backend;", "proxy_pass " + targets[0] + ";", 1)
 temporary = path + ".harness-new"
 with open(temporary, "w") as target:
     target.write(content.replace(anchor, route + anchor, 1))
@@ -981,9 +1021,8 @@ elif [ "$APP" = "hal" ]; then
   [ -z "$URL" ] && { echo "Metadata has no url for hal"; exit 1; }
   ZIP_TMP=$(mktemp)
   download_verified "$URL" "$ZIP_TMP" "$SHA256" || { echo "Failed checksum verification for hal"; exit 1; }
-  UV_BIN="$(command -v uv || true)"
-  [ -n "$UV_BIN" ] || [ ! -x /root/.local/bin/uv ] || UV_BIN=/root/.local/bin/uv
-  [ -n "$UV_BIN" ] || { echo "uv not found"; exit 1; }
+  UV_BIN="$(find_hal_uv)" || exit 1
+  HAL_EXTRA="$(hal_dependency_extra)"
   save_hal_service_state
   arm_service_restore restore_hal_service_state
   systemctl stop hal 2>/dev/null || true
@@ -1027,7 +1066,7 @@ elif [ "$APP" = "hal" ]; then
     if [ -f "$ROLLBACK_DIR/hal.previous/.env" ]; then cp -a "$ROLLBACK_DIR/hal.previous/.env" "$DIR_TMP/.env" || exit 1; fi
     find "$UV_CACHE_DIR" -name "lerobot.egg-info" -type d 2>/dev/null | xargs rm -rf
     cd "$DIR_TMP" || exit 1
-    "$UV_BIN" sync --python 3.12 --extra hardware --extra aec || exit 1
+    "$UV_BIN" sync --python 3.12 --extra hardware --extra "$HAL_EXTRA" || exit 1
   ); then
     echo "HAL staging failed; restoring known-good runtime" >&2
     cd /

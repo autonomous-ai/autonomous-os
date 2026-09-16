@@ -29,6 +29,10 @@ All per-type gates above are independent — without a cross-type gate, a burst 
 
 ---
 
+## Spoken sensing replies
+
+For events handled by `skills/sensing/SKILL.md`, the prompt requires literal HW markers followed by one sentence of at most 20 words in `current_language`, or `NO_REPLY` for a silent row. It forbids event/matrix explanations, owner-context analysis, draft alternatives and afterwords in all assistant text, including intermediate messages. A standalone stranger arrival outside guard mode requires the fixed greeting (EN: “Hi, I don’t think we’ve met.”; VI: “Chào bạn, hình như mình chưa gặp nhau.”), with exact HW markers and no optional proactive care. The model must silently remove any preamble before sending; a leading `[user]` wrapper does not change the detector route. Guard events and explicit user requests retain their own routing. Without a separate reasoning channel, analysis must be omitted. This is a prompt instruction, not a backend length limit or a guarantee of model compliance; other skills keep their own output rules.
+
 ## Sound
 
 ### How it works
@@ -394,6 +398,8 @@ By the time the agent sees the event, HAL has already logged the activity rows f
 4. **After speaking a nudge** (not a reaction), log a `nudge_hydration` or `nudge_break` entry — this is what resets the delta for the next window (and makes the nudge visible on the user's timeline).
 5. **Never guess** time-since from memory — always compute from the log.
 
+For automatic `[activity]` turns, the wellbeing skill forbids routing/skill-selection narration in every assistant text message, including before tools. Raw eat reactions (`eating *`, `dining`, `tasting food`) are limited to one sentence of at most 20 words in `current_language`, with no tools, log marker, extra nudge or habit bootstrap even when timers are due or `bootstrap_needed=true`. The complete carrots example is “Enjoy your carrots!”. This is prompt guidance, not deterministic TTS filtering.
+
 The reaction path was added so positive actions don't fall into silence: drinking water that doesn't trigger a nudge used to produce `NO_REPLY`, which felt dead. The reaction is fed by two extra pre-computed fields in `[wellbeing_context: ...]` — `count_today` (tally of `drink` / `break` rows today) and `time_of_day` (`morning` / `noon` / `afternoon` / `evening` / `night`) — so phrasing has something specific to lean on without spawning extra tool calls. Visual captions (e.g. "blue water bottle") are intentionally NOT in scope yet — the vision pipeline returns class labels only.
 
 ### Thresholds
@@ -709,6 +715,8 @@ The `user-emotion-detection/SKILL.md` handles `emotion.detected` events:
    - **#3 anything else** → **checkin** — a short human reaction. See `user-emotion-detection/reference/checkin.md` for per-emotion examples (templates are keyed by raw FER label — Sad/Fear/Angry/Disgust/Happy/Surprise — with three style options: Ask, Comfort, Invite). Examples are inspiration only; agent improvises per turn.
 3. **Cooldown only gates music, never checkin.** When the 7-min cooldown is active, row #2 fails its third clause and the event falls through to checkin (row #3). The agent still asks "what's up?" — it just doesn't suggest music two times in a row. `NO_REPLY` only fires on row #1 (active audio playback).
 4. **Never greet on an emotion event.** `emotion.detected` is not a presence/arrival event — `sensing/SKILL.md` forbids openers like `hello`, `welcome back`, anything containing `again`. Greetings belong only to `presence.enter`.
+
+Emotion skill output forbids assistant-text preambles before or between tool/skill calls, then requires the mood signal and selected-route markers followed by one sentence of at most 20 words or the route’s `NO_REPLY`. After reading the selected reference, the model should finish without rereading for phrasing. Explicit weak camera/voice cues must not be spoken as established feelings or expressions: a weak Happy checkin uses a neutral invitation, not an assertion that the user is happy or smiling. Logging and routing remain unchanged. These are prompt instructions, not a guarantee that the model will comply.
 
 Both routes share one cooldown: music logs via `POST /api/music-suggestion/log` with `trigger:"<genre>:<mood>"` (mood bucket); checkin logs the same endpoint with `trigger:"checkin:<emotion>"` (raw FER label). `last_suggestion_age_min` reflects either channel, so a fresh music suggestion silences the music branch for 7 min but doesn't silence checkin. Checkin phrasing is keyed by raw emotion (not mood) so each FER label has its own ask/comfort/invite style options — see `reference/checkin.md`. Always prefix `[HW:/emotion:{"emotion":"caring","intensity":0.5}]` on checkin output.
 
