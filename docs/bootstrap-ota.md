@@ -114,7 +114,9 @@ const (
     OTAKeyOpenClaw  = "openclaw"
     // Agent-runtime CLIs. Each value is also the runtime name in config.json
     // `agent_runtime` — that equality is how bootstrap updates only the CLI the
-    // device actually runs. Hermes is absent on purpose (cannot be pinned).
+    // device actually runs. Hermes rides along only when its entry is
+    // commit-pinned (OTAComponent.Commit) — see OTAKeyHermes.
+    OTAKeyHermes     = "hermes"
     OTAKeyCodex      = "codex"
     OTAKeyClaudeCode = "claudecode"
     OTAKeyOpenCode   = "opencode"
@@ -550,7 +552,7 @@ os-server proxies this as `GET /api/system/ota-versions`.
 | `hal` | Run `/opt/hal/venv/bin/python -m hal --version` OR read `/opt/hal/VERSION` file |
 | `codex` / `claudecode` / `opencode` | Run `<cli> --version`, extract semver from line one (`cliSemver`) |
 | `picoclaw` | Read `/usr/local/lib/os-runtimes/picoclaw/installed-version` — its `version` output carries no semver |
-| `hermes` | — not auto-updated (see below) |
+| `hermes` | Run `hermes --version` ("Hermes Agent v0.21.1 (2026.9.7)"), extract semver from line one (`cliSemver`) |
 
 ### Update Application Per Component
 
@@ -563,7 +565,7 @@ os-server proxies this as `GET /api/system/ota-versions`.
 | `openclaw` | ~~Run `npm install -g openclaw@{version}` → `systemctl restart openclaw`~~ (temporarily disabled) |
 | `hal` | Run `software-update hal` → `systemctl restart hal` |
 | `codex` / `claudecode` / `opencode` / `picoclaw` | Run `software-update <key>` — only on the device whose `agent_runtime` IS that runtime |
-| `hermes` | Not in the loop: `hermes update` cannot be pinned, so a `min_version` it never reaches would re-trigger every poll. SSH-only. |
+| `hermes` | Run `software-update hermes` — only when `agent_runtime` is hermes, the metadata entry carries `commit`, AND the on-device updater is the pinning one (`updaterSupportsHermesPin`: it reads `.hermes.commit`). An unpinned entry (no `commit`) is skipped by both the loop and `/versions`, so the web button never appears for it — `hermes update` would land on upstream HEAD and the floor could never be met. |
 
 Manual and force OpenClaw updates run `software-update openclaw`. Before
 installing the version selected by OTA metadata, the updater reads that npm
@@ -596,13 +598,33 @@ for repair. After restart, success requires an authenticated
 systemd considers the process active. Package/state changes are not
 automatically rolled back on migration or readiness failure.
 
-Manual `software-update hermes` checks Node before running `hermes update`.
-The supported build range follows the upstream Hermes installer: Node 22.22+
-within 22.x, 24.11+ within 24.x, or stable 26+. Incompatible Node is upgraded to
-system Node 24.x with the same helper used for OpenClaw, then rechecked.
-Compatibility-check or upgrade failures abort before `hermes update`.
-Hermes's update command resolves existing npm and refreshes dependencies;
-it does not run the installer's Node provisioning step.
+`software-update hermes` has two modes, chosen by the metadata entry:
+
+- **Pinned** (`hermes.commit` present — written by `scripts/release/upload-hermes.sh
+  <version> <upstream-tag|sha>`, which resolves the date tag upstream uses,
+  e.g. `v2026.9.7` → `2237be35…` = 0.21.1): fetch the upstream installer AT
+  that commit and drive its `repository`, `venv`, `python-deps`, `path` stages
+  with `--commit <sha> --force-commit` — the flags `scripts/imager/build-orangepi.sh`
+  bakes the image with. `--force-commit` also rolls BACK a checkout that an
+  unpinned `hermes update` had moved past the release. The landed `hermes
+  --version` must equal the published semver; a mismatch fails the update
+  (the metadata pair is wrong). This is the mode bootstrap auto-applies.
+- **Unpinned** (no `commit`, entries published before pinning existed): `hermes
+  update` to upstream HEAD; the published version is only expected, so a
+  mismatch warns. Manual SSH only — bootstrap never applies it.
+
+Both modes check Node first. The supported build range follows the upstream
+Hermes installer: Node 22.22+ within 22.x, 24.11+ within 24.x, or stable 26+.
+Incompatible Node is upgraded to system Node 24.x with the same helper used for
+OpenClaw, then rechecked; a failed check or upgrade aborts before any change.
+Both modes end by restarting `hermes-gateway` and then **os-server**: os-server
+patches two Hermes sources at `EnsureOnboarding` (`cache_usage.go` →
+`api_server.py`, `runs_patch.go` → `api_server_runs.py`) and a fresh checkout
+drops them — without the restart the next turns fall back to `/v1/responses`
+and the Flow Monitor shows no cache column.
+`runtimes/hermes/install.sh` (runtime switch) still installs upstream HEAD
+unpinned; the reconcile loop then brings the device onto the pinned commit on
+its next poll, exactly as it would for any other stale component.
 
 **Why the agent CLIs are gated on `agent_runtime`, not on the binary:**
 `scripts/imager/build-orangepi.sh` bakes every agent CLI onto every lamp /
@@ -1001,7 +1023,7 @@ echo "HAL $NEW_VERSION published."
 | `scripts/release/upload-claudecode.sh` | Claude Code CLI version | Metadata only (Anthropic installer on device) |
 | `scripts/release/upload-opencode.sh` | OpenCode CLI version | Metadata only (opencode.ai installer on device) |
 | `scripts/release/upload-picoclaw.sh` | PicoClaw release TAG | Metadata only (GitHub asset on device); verifies the tag exists |
-| `scripts/release/upload-hermes.sh` | Hermes version (SSH-only, unpinnable) | Metadata only (`hermes update` on device) |
+| `scripts/release/upload-hermes.sh` | Hermes version + upstream tag/commit | Metadata only: `hermes.version` + `hermes.commit` (device checks the commit out via the upstream installer) |
 | `scripts/provision/install.sh` | CDN install shortcut | `curl ... \| sudo bash` on Pi |
 | `scripts/release/tag-release.sh` | Git release tag with OTA metadata snapshot | Fetch metadata.json → annotated tag → `git push origin <tag>` |
 

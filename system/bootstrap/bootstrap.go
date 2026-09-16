@@ -89,6 +89,7 @@ var forceTargetAllowed = map[string]bool{
 	domain.OTAKeyOSServer: true, domain.OTAKeyBootstrap: true, domain.OTAKeyWeb: true, domain.OTAKeyHal: true,
 	domain.OTAKeyDevice: true,
 	domain.OTAKeyCodex:  true, domain.OTAKeyClaudeCode: true, domain.OTAKeyOpenCode: true, domain.OTAKeyPicoClaw: true,
+	domain.OTAKeyHermes: true,
 }
 
 // Bootstrap is the simplified OTA worker.
@@ -318,15 +319,17 @@ func (b *Bootstrap) checkOnce(ctx context.Context) error {
 	// detectVersion / applyUpdate already handle OTAKeyOpenClaw (npm install +
 	// systemctl restart openclaw); the old reconcileOpenClawFromNpm() pulled
 	// "latest" from `npm view` instead and is no longer needed.
-	// The agent-runtime CLIs (codex/claudecode/opencode/picoclaw) ride the same
-	// loop; componentInstalled gates each to the runtime the device actually
-	// runs. Hermes is intentionally NOT here — see domain.OTAKeyCodex's comment.
+	// The agent-runtime CLIs (codex/claudecode/opencode/picoclaw/hermes) ride the
+	// same loop; componentInstalled gates each to the runtime the device actually
+	// runs, and hermesPinned additionally requires a commit-pinned entry — see
+	// domain.OTAKeyHermes.
 	for _, key := range []string{
 		domain.OTAKeyOSServer, domain.OTAKeyBootstrap, domain.OTAKeyWeb, domain.OTAKeyHal, domain.OTAKeyBuddy,
 		domain.OTAKeyOpenClaw, domain.OTAKeyCodex, domain.OTAKeyClaudeCode, domain.OTAKeyOpenCode, domain.OTAKeyPicoClaw,
+		domain.OTAKeyHermes,
 	} {
 		component, ok := meta[key]
-		if !ok {
+		if !ok || !hermesPinned(key, component) {
 			continue
 		}
 		updated, err := b.reconcile(ctx, key, component)
@@ -713,6 +716,13 @@ func (b *Bootstrap) detectVersion(ctx context.Context, key string) string {
 			return ""
 		}
 		return cliSemver(string(out))
+	case domain.OTAKeyHermes:
+		// "Hermes Agent v0.21.1 (2026.9.7)" — the metadata carries the bare semver.
+		out, err := system.Run(runCtx, "hermes", "--version")
+		if err != nil {
+			return ""
+		}
+		return cliSemver(string(out))
 	case domain.OTAKeyPicoClaw:
 		// Deliberately NOT `picoclaw version`: that prints a build description
 		// ("nightly-44-g1959045c-dirty") with no relation to the release tag, so
@@ -785,6 +795,14 @@ func (b *Bootstrap) componentInstalled(key string) bool {
 		// receive agent-CLI updates — which is the only outcome available to them
 		// anyway — and do it silently.
 		return resolveAgentRuntime() == key && updaterSupports(key)
+	case domain.OTAKeyHermes:
+		// Same two gates, plus the updater must be the PINNING one: an older
+		// `software-update` also has a hermes branch, but it runs `hermes update`
+		// to upstream HEAD — applying a pinned entry through it would land on a
+		// version that never matches, re-triggering every poll (the very reason
+		// hermes used to be excluded). updaterSupportsHermesPin greps for the
+		// metadata field that only the pinning branch reads.
+		return resolveAgentRuntime() == key && updaterSupports(key) && updaterSupportsHermesPin()
 	case domain.OTAKeyWeb:
 		return dirExists("/usr/share/nginx/html/setup")
 	case domain.OTAKeyHal:
@@ -850,6 +868,29 @@ func updaterSupports(key string) bool {
 	return strings.Contains(string(data), `[ "$APP" = "`+key+`" ]`)
 }
 
+// updaterSupportsHermesPin reports whether the on-device `software-update` reads
+// the commit pin (`.hermes.commit`) — i.e. it is the pinning updater, not the
+// older HEAD-following one. See componentInstalled's hermes case.
+func updaterSupportsHermesPin() bool {
+	path, err := exec.LookPath("software-update")
+	if err != nil {
+		return false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(data), ".hermes.commit")
+}
+
+// hermesPinned is the per-entry gate the reconcile loop and the version report
+// share: every component passes except an unpinned hermes entry (no commit),
+// which the worker must never apply or advertise — `hermes update` would land
+// on upstream HEAD and the published min_version could never be satisfied.
+func hermesPinned(key string, component domain.OTAComponent) bool {
+	return key != domain.OTAKeyHermes || strings.TrimSpace(component.Commit) != ""
+}
+
 func inPath(name string) bool {
 	_, err := exec.LookPath(name)
 	return err == nil
@@ -864,7 +905,7 @@ func dirExists(path string) bool {
 func (b *Bootstrap) applyUpdate(ctx context.Context, key string, component domain.OTAComponent) error {
 	switch key {
 	case domain.OTAKeyOSServer, domain.OTAKeyWeb, domain.OTAKeyHal, domain.OTAKeyBuddy, domain.OTAKeyOpenClaw, domain.OTAKeyDevice,
-		domain.OTAKeyCodex, domain.OTAKeyClaudeCode, domain.OTAKeyOpenCode, domain.OTAKeyPicoClaw:
+		domain.OTAKeyCodex, domain.OTAKeyClaudeCode, domain.OTAKeyOpenCode, domain.OTAKeyPicoClaw, domain.OTAKeyHermes:
 		// All non-bootstrap components delegate to the on-device
 		// `software-update <key>` script (installed by setup.sh) so the
 		// install logic lives in one place — the script self-fetches
