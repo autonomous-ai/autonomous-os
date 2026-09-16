@@ -11,4 +11,5 @@ var ProviderSet = wire.NewSet(
 	ProvideChannelReconcile,
 	ProvideMCPReconcile,
 	ProvideUserProfileReconcile,
+	ProvideMemoryGuard,
 )

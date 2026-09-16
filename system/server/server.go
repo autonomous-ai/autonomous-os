@@ -84,6 +84,7 @@ type Server struct {
 	channelReconcile *agent.ChannelReconcile
 	mcpReconcile     *agent.MCPReconcile
 	userReconcile    *agent.UserProfileReconcile
+	memoryGuard      *agent.MemoryGuard
 	networkService   *network.Service
 	deviceService    *device.Service
 	ambientService   *ambient.Service
@@ -159,6 +160,7 @@ func ProvideServer(
 	cr *agent.ChannelReconcile,
 	mr *agent.MCPReconcile,
 	upr *agent.UserProfileReconcile,
+	mg *agent.MemoryGuard,
 	ns *network.Service,
 	mqttFactory *mqtt.Factory,
 	ambientSvc *ambient.Service,
@@ -188,6 +190,7 @@ func ProvideServer(
 		channelReconcile:  cr,
 		mcpReconcile:      mr,
 		userReconcile:     upr,
+		memoryGuard:       mg,
 		networkService:    ns,
 		deviceService:     ds,
 		mqttFactory:       mqttFactory,

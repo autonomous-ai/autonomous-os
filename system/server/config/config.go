@@ -126,6 +126,15 @@ type Config struct {
 	// trigger — only a removed enrollment is.
 	UserProfileReconcile *bool `json:"user_profile_reconcile,omitempty" yaml:"userProfileReconcile"`
 
+	// MemoryGuard enables the sweep that quarantines self-written agent memory
+	// which could steer routing: free prose outside USER.md's `## Users` shape,
+	// and MEMORY.md lines that name a tool/endpoint AND prescribe behaviour
+	// (#421). Runs at boot and on every write to any runtime's USER.md/MEMORY.md.
+	// nil/true = quarantine (write); false = observe only (log what it would
+	// remove). Default ON — a guard that only logs does not stop the next
+	// session from inheriting the poison.
+	MemoryGuard *bool `json:"memory_guard,omitempty" yaml:"memoryGuard"`
+
 	// MCPAppliedRuntime is the agent runtime MCPReconcile last cloned the configured
 	// MCP connectors for. When it differs from AgentRuntime on boot, the reconcile
 	// reads the previous runtime's MCP servers from its on-disk config and re-pushes
@@ -665,6 +674,17 @@ func (c *Config) UserProfileReconcileEnabled() bool {
 		return false
 	}
 	return *c.UserProfileReconcile
+}
+
+// MemoryGuardEnabled reports whether the memory guard may WRITE. Defaults to
+// true: unlike the retire pass, what it removes is by construction never a
+// person's data (see migratepersona.GuardUserProfileText), and every removal
+// is backed up and copied to a `.quarantine.md` sidecar.
+func (c *Config) MemoryGuardEnabled() bool {
+	if c.MemoryGuard == nil {
+		return true
+	}
+	return *c.MemoryGuard
 }
 
 func (c *Config) GuardModeEnabled() bool {

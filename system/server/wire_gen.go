@@ -65,8 +65,9 @@ func InitializeServer() (*Server, error) {
 	channelReconcile := agent.ProvideChannelReconcile(configConfig, agentGateway)
 	mcpReconcile := agent.ProvideMCPReconcile(configConfig, agentGateway)
 	userProfileReconcile := agent.ProvideUserProfileReconcile(configConfig)
+	memoryGuard := agent.ProvideMemoryGuard(configConfig)
 	ambientService := ambient.ProvideService(bus, configConfig)
 	healthwatchService := healthwatch.ProvideService(bus, configConfig, statusledService)
-	server := ProvideServer(configConfig, healthHandler, networkHandler, deviceHandler, deviceMQTTHandler, agentHandler, sensingHandler, buddyHandler, pluginHandler, deviceService, agentGateway, personaMigration, configMigration, channelReconcile, mcpReconcile, userProfileReconcile, service, factory, ambientService, healthwatchService, statusledService, chatStream)
+	server := ProvideServer(configConfig, healthHandler, networkHandler, deviceHandler, deviceMQTTHandler, agentHandler, sensingHandler, buddyHandler, pluginHandler, deviceService, agentGateway, personaMigration, configMigration, channelReconcile, mcpReconcile, userProfileReconcile, memoryGuard, service, factory, ambientService, healthwatchService, statusledService, chatStream)
 	return server, nil
 }

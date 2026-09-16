@@ -906,6 +906,52 @@ chủ vẫn gọi tên chủ cũ (lamp-ac82, 2026-09-03).
 - Enrollment store rỗng (máy mới) là no-op; store không đọc được là lỗi và không
   đổi gì, thay vì đoán.
 
+### Memory guard — memory agent tự ghi không được vượt skill
+
+Một dòng agent tự ghi vào `USER.md` trong một phiên bị sập ("…Talks about a
+personal notebook / Obsidian vault notes, wants hands-on action done…") đã vượt
+qua toàn bộ catalogue skill và khối SOUL "Skill priority (MANDATORY)" trên
+lamp-dbda: "find my keyboard" chạy lệnh shell thay vì `/servo/search`, sống sót
+qua `/new` (nó là file, không phải lịch sử phiên) và qua cả một lần đổi runtime
+(persona là multi-homed) — issue #421. Prompt đã cấm kiểu ghi này; đây là bản
+deterministic của lệnh cấm đó.
+
+`agent.MemoryGuard` quét `USER.md` và `MEMORY.md` của **mọi** runtime:
+
+- **Lúc boot** (sau retire pass) và **mỗi lần ghi** vào một trong các file đó
+  (fsnotify trên thư mục cha, debounce 2 s, tự nhận ra lần ghi lại của chính nó
+  qua hash nên không bao giờ lặp vô hạn), cộng thêm một lần rescan mỗi 10 phút
+  cũng bắt được các workspace được tạo sau khi boot.
+- **`USER.md` — allowlist chặt.** Giữ lại: khung template (slot `**Field:**`
+  trống, gợi ý in nghiêng, rule, link, các câu của chính template), các field
+  đơn đã điền (`Name` v.v. — retire pass quản phần này) và các entry dạng
+  `**<label> (role)** — key: value; …`. Trong một entry, đoạn nào có giá trị gọi
+  tên tool/app/endpoint/file (`obsidian`, `terminal`, `curl`, `/servo/…`,
+  `*.md`, …) hoặc ra chỉ thị hành vi (`always`, `never`, `use`, `instead of`,
+  `match the`, `hands-on`, `works best`, …) sẽ bị gỡ. Entry của một label không
+  có thư mục enrollment sẽ bị gỡ (bỏ qua bước này khi store rỗng hoặc không đọc
+  được). **Mọi thứ còn lại bị quarantine** — một `**Notes:**` đã điền, một bullet
+  tự do, một đoạn văn.
+- **`MEMORY.md` — chỉ xét nội dung.** Một block bị quarantine khi nó gọi tên
+  tool/endpoint **và** ra chỉ thị ("Full-room scan works best as curl-driven
+  aim + look per direction"). Quan sát thuần được giữ, nhắc tới tool mà không
+  kèm chỉ thị cũng được giữ.
+- **Hermes** `memories/USER.md` / `MEMORY.md` dùng entry phân tách bằng `§`;
+  guard tách theo ký tự đó và nối lại đúng như vậy.
+- **Chỉ ghi khi có thay đổi.** File sạch round-trip từng byte và không bị ghi
+  (`USER.md` nằm trong prefix prompt được cache). Khi có thứ bị gỡ: bản sao
+  `.bak-<nano>`, các block bị gỡ được nối vào `<file>.quarantine.md` (xoay vòng
+  khi quá 64 KB) kèm lý do (`free-prose`, `unknown-label`, `prescriptive`), rồi
+  ghi atomic bằng temp+rename.
+- **Mặc định bật.** `memory_guard: false` trong `config.json` chuyển sang chế độ
+  chỉ quan sát (log thứ nó định gỡ).
+- Mỗi thay đổi quan sát được đều phát một flow event `memory_changed` (file,
+  runtime, size, sha8, số block bị quarantine, lý do — không bao giờ kèm nội
+  dung) và làm mới fingerprint gắn vào `lifecycle_start` của mỗi lượt — xem
+  `flow-monitor.md`.
+- **Không bao phủ:** `KNOWLEDGE.md` (OpenClaw không load nó mỗi lượt; nó được
+  reset bởi `POST /api/agent/memory/reset`), `state.db` của Hermes.
+
 ### Giữ hai file bộ nhớ không phình vô hạn
 
 Chúng tốn token theo cách khác nhau, nên cũng bị chặn theo cách khác nhau.

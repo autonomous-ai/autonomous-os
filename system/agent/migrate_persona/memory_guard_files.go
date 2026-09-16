@@ -162,3 +162,24 @@ func writeFileAtomic(path, content string) error {
 	}
 	return nil
 }
+
+// EnrolledLabels exposes enrolledLabels for callers outside the package that
+// run a single-file guard. nil (not an error) when the store is unreadable —
+// the guard then skips the label check.
+func EnrolledLabels() map[string]bool {
+	m, err := enrolledLabels()
+	if err != nil {
+		return nil
+	}
+	return m
+}
+
+// RuntimeOfPath names the runtime whose USER.md or MEMORY.md path is, or "".
+func RuntimeOfPath(opts Options, path string) string {
+	for r, a := range adapters {
+		if a.userProfilePath(opts) == path || a.memoryFilePath(opts) == path {
+			return string(r)
+		}
+	}
+	return ""
+}

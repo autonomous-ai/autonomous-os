@@ -923,6 +923,51 @@ kept greeting its previous owner by name (lamp-ac82, 2026-09-03).
 - An empty enrollment store (fresh device) is a no-op; an unreadable one is an
   error that changes nothing, rather than a guess.
 
+### Memory guard — self-written memory cannot outrank skills
+
+One line the agent wrote into `USER.md` during a collapsed session ("…Talks
+about a personal notebook / Obsidian vault notes, wants hands-on action done…")
+outranked the whole skill catalogue and the SOUL "Skill priority (MANDATORY)"
+block on lamp-dbda: "find my keyboard" ran shell commands instead of
+`/servo/search`, survived `/new` (it is a file, not session history) and a
+runtime switch (persona is multi-homed) — issue #421. The prompt already forbids
+such writes; this is the deterministic version.
+
+`agent.MemoryGuard` sweeps **every** runtime's `USER.md` and `MEMORY.md`:
+
+- **At boot** (after the retire pass) and **on every write** to one of those
+  files (fsnotify on the parent dirs, 2 s debounce, own rewrites recognised by
+  hash so they never loop), plus a 10-minute rescan that also picks up
+  workspaces created after boot.
+- **`USER.md` — strict allowlist.** Kept: template scaffolding (empty
+  `**Field:**` slots, italic hints, rules, links, the template's own sentences),
+  filled singular fields (`Name` etc. — the retire pass owns those) and
+  `**<label> (role)** — key: value; …` entries. Inside an entry a segment whose
+  value names a tool/app/endpoint/file (`obsidian`, `terminal`, `curl`,
+  `/servo/…`, `*.md`, …) or prescribes behaviour (`always`, `never`, `use`,
+  `instead of`, `match the`, `hands-on`, `works best`, …) is removed. An entry
+  for a label with no enrollment directory is removed (skipped when the store is
+  empty or unreadable). **Everything else is quarantined** — a filled
+  `**Notes:**`, a free bullet, a paragraph.
+- **`MEMORY.md` — content rule only.** A block is quarantined when it names a
+  tool/endpoint **and** prescribes ("Full-room scan works best as curl-driven
+  aim + look per direction"). Observations stay, tool mentions without a
+  prescription stay.
+- **Hermes** `memories/USER.md` / `MEMORY.md` use `§`-separated entries; the
+  guard splits on that and rejoins the same way.
+- **Writes only on change.** A clean file round-trips byte for byte and is not
+  written (`USER.md` is in the cached prompt prefix). When something is removed:
+  `.bak-<nano>` copy, the removed blocks appended to `<file>.quarantine.md`
+  (rotated at 64 KB) with a reason (`free-prose`, `unknown-label`,
+  `prescriptive`), then an atomic temp+rename write.
+- **Default on.** `memory_guard: false` in `config.json` makes it observe-only
+  (log what it would remove).
+- Every observed change emits a `memory_changed` flow event (file, runtime,
+  size, sha8, quarantined count, reasons — never content) and refreshes the
+  fingerprint attached to each turn's `lifecycle_start` — see `flow-monitor.md`.
+- **Not covered:** `KNOWLEDGE.md` (OpenClaw does not load it per turn; it is
+  reset by `POST /api/agent/memory/reset`), Hermes `state.db`.
+
 ### Keeping the two memory files bounded
 
 They cost differently, so they are bounded differently.

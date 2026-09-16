@@ -242,6 +242,13 @@ func (s *Server) handleSetUpCompleteChange(setupCompleted bool) {
 			// prefix, so an unconditional rewrite would cost a cache miss.
 			s.userReconcile.Reconcile()
 
+			// Quarantine self-written memory that could steer routing (#421),
+			// then keep watching every runtime's USER.md / MEMORY.md for the
+			// life of this monitor context. Runs AFTER the retire pass so a
+			// file it rewrote is swept in the same boot.
+			s.memoryGuard.Run("startup")
+			safego.Go("memory-guard-watch", func() { s.memoryGuard.Watch(s.monitorCtx) })
+
 			// Seed SOUL.md + IDENTITY.md into workspace (factory defaults, once only)
 			if err := s.agentGateway.EnsureOnboarding(); err != nil {
 				slog.Error("onboarding seed failed", "component", "server", "error", err)
