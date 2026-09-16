@@ -473,6 +473,9 @@ interface ConvosEnvelope {
   convos: Conversation[];
 }
 
+const clockTime = () =>
+  new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+
 interface ChatMessage {
   id: string;
   role: "user" | "agent";
@@ -799,6 +802,11 @@ export function ChatSection({ events, isActive }: Props) {
   const pendingUserTextRef = useRef<string | null>(null);
   const resolvedIds = useRef<Set<string>>(new Set());
   const deltaBufRef = useRef<Map<string, string>>(new Map()); // runId → accumulated delta text
+  // Bubble time = when the reply's first content arrived, not when the user
+  // sent. Streaming runtimes stamp it on the first delta; non-streaming ones
+  // (codex/harness reply via tts_send, chat_response final) stamp it here.
+  const firstReplyTime = (runId: string, m: ChatMessage) =>
+    deltaBufRef.current.has(runId) ? m.time : clockTime();
   const thinkingBufRef = useRef<Map<string, string>>(new Map()); // runId → accumulated thinking text
   const rafRef = useRef<number | null>(null); // requestAnimationFrame handle for batched rendering
   const dirtyRef = useRef(false); // whether there are pending delta/thinking updates to flush
@@ -1136,7 +1144,7 @@ export function ChatSection({ events, isActive }: Props) {
             const buf = deltaBufRef.current.get(pending) ?? "";
             // First token: update message time to now
             if (!buf) {
-              const firstTokenTime = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+              const firstTokenTime = clockTime();
               updateMessages((prev) =>
                 prev.map((m) => m.runId === pending && m.pending ? { ...m, time: firstTokenTime } : m),
               );
@@ -1175,7 +1183,7 @@ export function ChatSection({ events, isActive }: Props) {
             updateMessages((prev) =>
               prev.map((m) =>
                 m.runId === pending && m.role === "agent" && m.pending
-                  ? { ...m, text: cleaned, pending: false, tools: savedChips, tokenUsage: usage }
+                  ? { ...m, text: cleaned, time: firstReplyTime(pending, m), pending: false, tools: savedChips, tokenUsage: usage }
                   : m,
               ),
             );
@@ -1201,7 +1209,7 @@ export function ChatSection({ events, isActive }: Props) {
             updateMessages((prev) =>
               prev.map((m) =>
                 m.runId === pending && m.role === "agent" && m.pending
-                  ? { ...m, text: cleaned }
+                  ? { ...m, text: cleaned, time: firstReplyTime(pending, m) }
                   : m,
               ),
             );
@@ -1328,7 +1336,7 @@ export function ChatSection({ events, isActive }: Props) {
           updateMessages((prev) =>
             prev.map((m) =>
               m.runId === pending && m.role === "agent" && m.pending
-                ? { ...m, text: cleaned, pending: false, tools: savedChips, tokenUsage: usage }
+                ? { ...m, text: cleaned, time: firstReplyTime(pending, m), pending: false, tools: savedChips, tokenUsage: usage }
                 : m,
             ),
           );
@@ -1628,7 +1636,7 @@ export function ChatSection({ events, isActive }: Props) {
     }
 
     const nowDate = new Date();
-    const now = nowDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    const now = clockTime();
     const dateStr = nowDate.toISOString().slice(0, 10);
     const userMsg: ChatMessage = {
       id: `u-${Date.now()}`, role: "user", text, time: now, ts: nowDate.getTime(), date: dateStr,
@@ -1720,7 +1728,7 @@ export function ChatSection({ events, isActive }: Props) {
         pendingRunIdRef.current = runId;
         pendingLocalReplyIdRef.current = null;
         pendingUserTextRef.current = text;
-        const replyTime = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+        const replyTime = clockTime();
         // Adopt the bubble that has been spinning since the click — attaching the
         // run id to it rather than appending a second one, so the user never sees
         // two agent bubbles for one message. The id changes with it: `l-<runId>`

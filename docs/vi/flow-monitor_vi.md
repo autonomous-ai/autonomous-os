@@ -48,7 +48,7 @@ Tối đa 4 dòng JSONL bonus / turn (thực tế 0–2). Stream name từ OpenC
 
 **Badge `⏱` vs `⚡` trên Turn card:**
 - **⏱ total** = `turn.startTime → turn.endTime` (input event → `lifecycle_end` / `tts_send` / `chat_final`) — toàn bộ window server-side. Đây là **server-observed turn duration**.
-- **⚡ TTFT** = `turn.startTime → first thinking/assistant_delta` — khớp với timestamp agent bubble trên chat page (lúc user **thấy** reply bắt đầu). Đây là **perceived latency**.
+- **⚡ TTFT** = `turn.startTime → first thinking/assistant_delta` — khớp với timestamp agent bubble trên chat page (lúc user **thấy** reply bắt đầu — delta đầu tiên với runtime stream; `chat_response`/`tts_send` cuối với runtime không stream như codex). Đây là **perceived latency**.
 - Khoảng cách ⚡ ↔ ⏱ = tail-streaming các token còn lại + lifecycle close. Reply ngắn → 2 con gần bằng nhau; reply dài → gap rõ rệt.
 - Ngưỡng màu: ⏱ green ≤5s / amber ≤15s / red >15s. ⚡ green ≤3s / amber ≤8s / red >8s.
 - ⚡ ẩn khi không có LLM stream (local intent match, dropped, queued).
