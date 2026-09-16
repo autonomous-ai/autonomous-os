@@ -1300,7 +1300,10 @@ Two independent "is the speaker live" signals feed the gate, because neither
 alone suffices: `tts.speaking` is authoritative and works with **no canceller at
 all** (with none, `aec.reference_idle_for()` returns `inf` and the gate would
 never fire), while the reference tail adds the acoustic decay after the flag
-drops. `HAL_LIVE_PLAYBACK_TAIL_S` is the *acoustic* tail, deliberately not
+drops. The gate also holds a monotonic tail from the observed end of TTS,
+so disabling AEC or a missing binding cannot reopen the mic immediately onto
+room echo. This also covers short gaps between queued playback segments.
+`HAL_LIVE_PLAYBACK_TAIL_S` (default 0.35 s) is the *acoustic* tail, deliberately not
 `AEC_TAIL_S` (2.0 s): keyed on the longer one, `mute` swallows the first two
 seconds of every reply the user gives.
 
@@ -1370,7 +1373,7 @@ and gets them back the moment a session ends.
 |-----|---------|---------|
 | `HAL_LIVE_MODE` | `false` | Whole-process live mode. Forces `HAL_REALTIME_TURN_DETECTION=server_vad` when that is `off` |
 | `HAL_LIVE_UPLINK_DURING_PLAYBACK` | `mute` | `mute` (no barge-in, ships today) or `cancelled` (true full duplex, needs the AEC fix) |
-| `HAL_LIVE_PLAYBACK_TAIL_S` | `0.35` | Acoustic tail after the last reference write during which the room still counts as playing |
+| `HAL_LIVE_PLAYBACK_TAIL_S` | `0.35` | Acoustic tail after the last reference write or observed TTS end, including without AEC |
 | `HAL_LIVE_IDLE_HANGUP_S` | `15` | Hang up after this long with no action **from the user**, measured from whichever came later: the user's last words or the moment the device stopped speaking |
 | `HAL_LIVE_MAX_UNPROMPTED_REPLIES` | `3` | Hard ceiling on consecutive model replies with no user speech between them — breaks a self-talk loop without cutting one long answer short |
 | `HAL_LIVE_MAX_S` | `600` | Absolute ceiling on one session |

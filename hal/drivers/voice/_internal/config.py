@@ -272,7 +272,8 @@ LIVE_UPLINK_DURING_PLAYBACK = os.environ.get(
     "HAL_LIVE_UPLINK_DURING_PLAYBACK", "mute"
 ).strip().lower()
 
-# How long after the last reference write the room still counts as "playing".
+# How long after the last reference write or observed TTS end the room still
+# counts as "playing", including when AEC is unavailable.
 # The ACOUSTIC tail, deliberately not AEC_TAIL_S (2.0s): keyed on the longer
 # one, "mute" swallows the first two seconds of every reply the user gives.
 LIVE_PLAYBACK_TAIL_S = float(os.environ.get("HAL_LIVE_PLAYBACK_TAIL_S", "0.35"))
