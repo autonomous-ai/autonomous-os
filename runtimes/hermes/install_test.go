@@ -32,6 +32,7 @@ func TestPresyncOwnsConfigStructure(t *testing.T) {
 		`yq -i '.model = {}'`,                                  // coerce model:'' (post hermes setup --reset) to a map
 		"AUTONOMOUS_API_KEY",                                   // dynamic key sync (.env)
 		`.custom_providers[0].models["Auto-AI"].prompt_caching = true`, // cache markers on the proxy path
+		`.prompt_caching.cache_ttl = "1h"`,                              // survive the idle gaps between voice turns
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("presync.sh missing %q — config structure/sync incomplete", want)

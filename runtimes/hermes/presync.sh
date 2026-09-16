@@ -147,6 +147,13 @@ case "$LLM_BASE_URL" in
     # per-provider caching policy.
     yq -i '.custom_providers[0].models["Auto-AI"].prompt_caching = true' "$CONFIG_YAML"
     log "custom_providers[0].models.Auto-AI.prompt_caching = true (cache markers on)"
+    # 1h cache TTL: a lamp user typically speaks, then goes quiet for 10-20 min,
+    # which outlives the 5m default and re-bills the full prefill on the next
+    # turn (measured 2026-09-16: 3.6s with cache vs 11.8s after an 8 min gap).
+    # Hermes accepts only "5m" | "1h"; it sends `ttl: "1h"` on every marker. If
+    # the gateway ignores the field the cache silently stays at 5m - harmless.
+    yq -i '.prompt_caching.cache_ttl = "1h"' "$CONFIG_YAML"
+    log "prompt_caching.cache_ttl = 1h"
     ;;
   *)
     if [ -n "$LLM_MODEL" ]; then

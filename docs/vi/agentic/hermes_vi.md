@@ -609,8 +609,13 @@ làm 3 việc theo thứ tự:
      (16/9/2026), cùng câu "hello" trong một session: không marker 18.3s → 12.6s,
      `cache_read` 0; có marker 13.8s → 9.2s ổn định, `cache_read` ~85%. Brain tự
      mang (BYO) giữ nguyên chính sách cache riêng theo provider của Hermes. Lưu ý
-     `prompt_caching.cache_ttl` vẫn là mặc định `5m` của Hermes: hai lượt cách nhau
-     lâu hơn thế thì lượt sau trả tiền prefill đầy đủ lại.
+   - `.prompt_caching.cache_ttl = "1h"` — cùng điều kiện chỉ-khi-ở-proxy. Người
+     dùng đèn thường nói một câu rồi im 10-20 phút, vượt quá mặc định `5m` nên lượt
+     kế phải trả tiền prefill đầy đủ (đo 16/9/2026: 3.6s khi cache còn ấm so với
+     11.8s sau 8 phút nghỉ). Hermes chỉ nhận `5m` | `1h` và gửi `ttl: "1h"` trên
+     mọi cache marker; gateway bỏ qua trường này thì cache âm thầm giữ 5m, nên
+     thiết lập vô hại ở nơi chưa hỗ trợ. Mức 1h tính 2x giá input khi ghi cache
+     (5m là 1.25x); đọc đều 0.1x.
    - `.auxiliary.vision` (**ghi đè trọn node**) → `provider: custom:autonomous`,
      `model: qwen/qwen3.6-plus`, `timeout: 120`, `download_timeout: 30`, `extra_body: {}`
      — model hiểu ảnh, định tuyến qua cùng custom provider autonomous.

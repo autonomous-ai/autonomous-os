@@ -632,8 +632,14 @@ during install) and does three things, in order:
      turn. Measured on lamp-0c4e (2026-09-16), same "hello" in one session: no
      markers 18.3s → 12.6s with `cache_read` 0; markers 13.8s → 9.2s steady with
      `cache_read` ~85%. A BYO brain keeps Hermes' own per-provider caching policy.
-     Note `prompt_caching.cache_ttl` stays at Hermes' default `5m`: a gap longer
-     than that between two turns pays the full prefill again.
+   - `.prompt_caching.cache_ttl = "1h"` — same proxy-only scope. A lamp user
+     typically speaks once and goes quiet for 10-20 min, which outlives the `5m`
+     default and re-bills the full prefill on the next turn (measured 2026-09-16:
+     3.6s with a warm cache vs 11.8s after an 8 min gap). Hermes accepts only
+     `5m` | `1h` and sends `ttl: "1h"` on every cache marker; if the gateway
+     ignores the field the cache silently stays at 5m, so the setting is harmless
+     where unsupported. The 1h tier costs 2x input on the cache write (vs 1.25x
+     for 5m); reads are 0.1x either way.
    - `.auxiliary.vision` (the whole node is **overwritten**) → `provider: custom:autonomous`,
      `model: qwen/qwen3.6-plus`, `timeout: 120`, `download_timeout: 30`, `extra_body: {}`
      — the image-understanding model, routed through the same autonomous provider.
