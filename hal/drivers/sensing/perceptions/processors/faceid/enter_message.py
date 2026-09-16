@@ -1,0 +1,89 @@
+"""presence.enter text — the one place its wording is decided and parsed.
+
+Three consumers read this string and must agree on its shape: the agent
+(skills/sensing/SKILL.md greets from it), the wake-focus gate in
+sensing_service (``has_new_friend``) and people grepping the flow log
+(skills/sensing-track). The ``friend (<name>)`` / ``stranger (<id>)`` labels
+for NEW arrivals are that contract and stay byte-identical.
+
+Shape (#426):
+
+    Person detected — new: stranger (stranger_2); already present: momo (friend); faces in frame: 2 (momo, stranger_2)
+
+- ``new:`` — who just became visible, friend part first. This is what
+  presence.enter has always meant: NEWLY visible, not visible.
+- ``already present:`` — friends boxed in the SAME frame whose last_seen was
+  still inside the forget window. It is the co-presence signal the sensing
+  skill keys its "looks like you've got company" aside on, so the caller
+  guards it (FacePerception._copresence_ticks) and passes an empty list when
+  the guard fails. Written ``<name> (friend)`` on purpose: ``friend (<name>)``
+  means "a friend just arrived" to ``has_new_friend`` and would open the
+  voice gate for a stranger's arrival.
+- ``faces in frame:`` — the number of boxes in the CURRENT frame and their
+  labels in detection order, ``unsure`` for a box without an identity yet.
+  Same labels ``_annotate_frame`` draws, so the count can never disagree with
+  the snapshot. It is not the number of arrivals: flushed stranger ids may be
+  from an earlier frame.
+"""
+
+from collections.abc import Iterable
+
+from hal.drivers.sensing.perceptions.models import Face, PersonKind
+
+
+def copresence_ticks(prev: int, faces: list[Face]) -> int:
+    """Consecutive sensing ticks in which a friend and a non-friend were boxed together.
+
+    ``unsure`` boxes count as the non-friend: the recognizer holds an unknown
+    face as UNSURE for its first FACE_STRANGER_MIN_TICKS-1 ticks before it
+    mints a stranger id, and those are exactly the ticks that prove the second
+    box is persistent. Without them the counter would read 1 on the mint tick
+    — which is the tick presence.enter fires. Two friends alone do not count;
+    a recognized friend is a positive match and needs no corroboration.
+    """
+    has_friend = any(f.kind == PersonKind.FRIEND for f in faces)
+    has_other = any(f.kind != PersonKind.FRIEND for f in faces)
+    return prev + 1 if (has_friend and has_other) else 0
+
+
+def frame_labels(faces: Iterable[Face]) -> list[str]:
+    """One label per box, matching what ``_annotate_frame`` draws on the snapshot."""
+    return [f.person_id if f.kind != PersonKind.UNSURE else "unsure" for f in faces]
+
+
+def build_enter_message(
+    new_friends: Iterable[str],
+    new_strangers: Iterable[str],
+    present_friends: Iterable[str],
+    frame_labels: list[str],
+) -> str:
+    new_parts: list[str] = []
+    friends = sorted(new_friends)
+    strangers = sorted(new_strangers)
+    if friends:
+        new_parts.append(f"friend ({', '.join(friends)})")
+    if strangers:
+        new_parts.append(f"stranger ({', '.join(strangers)})")
+    segments = [f"new: {', '.join(new_parts)}"]
+    present = sorted(present_friends)
+    if present:
+        segments.append(
+            "already present: " + ", ".join(f"{p} (friend)" for p in present)
+        )
+    segments.append(
+        f"faces in frame: {len(frame_labels)} ({', '.join(frame_labels)})"
+    )
+    return "Person detected — " + "; ".join(segments)
+
+
+def has_new_friend(message: str) -> bool:
+    """True when the event announces a NEWLY visible friend.
+
+    Only the ``new:`` segment carries the ``friend (<name>)`` label; an
+    already-present friend is written ``<name> (friend)`` and the trailing
+    familiar-stranger hint never contains it, but the check is limited to the
+    first segment anyway so a future segment cannot open the voice gate by
+    accident.
+    """
+    head = message.split(";", 1)[0]
+    return "friend (" in head.lower()
