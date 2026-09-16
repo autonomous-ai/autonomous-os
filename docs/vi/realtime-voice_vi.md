@@ -588,10 +588,15 @@ file WAV cache không đổi.
 
 Resample tham chiếu AEC cache hệ số FIR Kaiser mặc định của SciPy theo tỉ lệ
 tần số lấy mẫu đã rút gọn và dtype (tối đa 32 mục), tránh thiết kế lại bộ lọc
-ở mỗi lần ghi loa. `resample_poly` vẫn xử lý gain và padding như trước; dạng
-sóng tham chiếu và nhịp ghi FIFO không đổi. Trước lần ghi loa đầu của mỗi lượt
-phát, HAL chuẩn bị bộ lọc tham chiếu để lần import SciPy/thiết kế bộ lọc đầu
-tiên không làm khựng sau 40 ms audio đầu. Bỏ qua chuẩn bị khi AEC chưa hoạt
+ở mỗi lần ghi loa. FIR nhân quả dạng streaming giữ lịch sử bộ lọc và pha
+resample qua các lần ghi, tạo `ceil(N * output_rate / input_rate)` mẫu đầu ra
+cho tổng cộng `N` mẫu đầu vào. Cách này loại bỏ sai lệch do làm tròn từng chunk
+và việc lặp lại biên bộ lọc. Cùng bộ lọc chống alias thêm khoảng 0,625 ms độ trễ
+khi tần số lấy mẫu thấp hơn là 16 kHz; nhịp ghi FIFO không đổi.
+`EchoReference.clear()` hoặc đổi tần số nguồn sẽ reset trạng thái resample.
+Mức cải thiện khử vọng vẫn cần được kiểm tra A/B trên thiết bị.
+Trước lần ghi loa đầu của mỗi lượt phát, HAL chuẩn bị bộ lọc tham chiếu để lần
+import SciPy/thiết kế bộ lọc đầu tiên không làm khựng sau 40 ms audio đầu. Bỏ qua chuẩn bị khi AEC chưa hoạt
 động hoặc sample rate bằng nhau. Kiểm tra hủy giữa các lát, kể cả sau chuẩn bị;
 chime xác nhận stop vẫn được phát khi cờ dừng lời nói đang bật.
 
