@@ -917,8 +917,9 @@ kept greeting its previous owner by name (lamp-ac82, 2026-09-03).
 - **Writes only on change.** `USER.md` sits in the ~28k-token cached prompt
   prefix, so an unconditional rewrite would cost a prompt-cache miss on the next
   turn of every boot. The normal pass reads and writes nothing.
-- **Observe-only by default.** `user_profile_reconcile` in `config.json` gates
-  writes; unset/false logs what it *would* retire and changes nothing.
+- **On by default.** `user_profile_reconcile: false` in `config.json` makes the
+  pass observe-only: it logs what it *would* retire and changes nothing.
+  (Observe-only was the default until 2026-09-16.)
 - Writes are atomic (temp + rename) because the gateway is live during the pass.
 - An empty enrollment store (fresh device) is a no-op; an unreadable one is an
   error that changes nothing, rather than a guess.

@@ -900,8 +900,9 @@ chủ vẫn gọi tên chủ cũ (lamp-ac82, 2026-09-03).
 - **Chỉ ghi khi có thay đổi.** `USER.md` nằm trong prefix prompt được cache
   (~28k token), nên ghi vô điều kiện sẽ tốn một lần miss cache ở lượt kế tiếp của
   mỗi lần boot. Lượt chạy bình thường đọc xong và không ghi gì.
-- **Mặc định chỉ quan sát.** `user_profile_reconcile` trong `config.json` mở khoá
-  việc ghi; không đặt/false thì chỉ log thứ nó *định* retire và không đổi gì.
+- **Mặc định bật ghi.** `user_profile_reconcile: false` trong `config.json` đưa
+  pass về chế độ chỉ quan sát: nó log thứ nó *định* retire và không đổi gì.
+  (Chỉ quan sát là mặc định cho tới 2026-09-16.)
 - Ghi theo kiểu atomic (temp + rename) vì gateway đang chạy trong lúc pass chạy.
 - Enrollment store rỗng (máy mới) là no-op; store không đọc được là lỗi và không
   đổi gì, thay vì đoán.
