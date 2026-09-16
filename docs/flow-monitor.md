@@ -354,6 +354,7 @@ To bridge that gap, the OpenClaw stream handler emits four lightweight summary f
 | `agent_last_token` | `lifecycle.end` (drain accumulator) | `{run_id, text, chunks, chars}` | Closes the assistant streaming row in the pipeline rect |
 | `thinking_first_token` | First non-empty `thinking` delta (extended-thinking only) | `{run_id}` | Same as above, for the thinking stream |
 | `thinking_last_token` | `lifecycle.end` | `{run_id, text, chunks, chars}` | Same as above, for the thinking stream |
+| `narration_demoted` | A `tool` start arrives while `assistant` text is buffered | `{run_id, tool, text}` | Text streamed BEFORE a tool call is the model narrating its plan ("Let me take a look."), not the reply. The handler drops it from the reply buffer (so it never reaches web chat / TTS at `lifecycle.end`) and shows it in the thinking row instead. Runtime-agnostic; skipped when the first sentence already streamed to TTS or the text carries an `[HW:...]` marker |
 
 Maximum 4 extra JSONL lines per turn (often 0–2). Stream from OpenClaw is still called `"assistant"` in code (`handler_events.go: case "assistant"`); only the JSONL node names use the `agent_` prefix for consistency with existing `agent_thinking` / `agent_call` / `agent_response` nodes.
 

@@ -43,6 +43,7 @@ Flow Monitor là lớp quan sát end-to-end cho agent turn: ghi JSONL (`local/fl
 | `agent_last_token` | `lifecycle.end` drain accumulator | `{run_id, text, chunks, chars}` |
 | `thinking_first_token` | Delta `thinking` đầu tiên (chỉ extended thinking) | `{run_id}` |
 | `thinking_last_token` | `lifecycle.end` | `{run_id, text, chunks, chars}` |
+| `narration_demoted` | `tool` start tới khi buffer `assistant` đang có text | `{run_id, tool, text}` — text stream TRƯỚC một tool call là model kể kế hoạch ("Let me take a look."), không phải reply. Handler bỏ nó khỏi reply buffer (không tới web chat / TTS ở `lifecycle.end`) và hiện ở row thinking. Chung mọi runtime; bỏ qua nếu câu đầu đã stream ra TTS hoặc text có marker `[HW:...]` |
 
 Tối đa 4 dòng JSONL bonus / turn (thực tế 0–2). Stream name từ OpenClaw vẫn là `"assistant"` ở code level — chỉ JSONL node dùng prefix `agent_` cho khớp các node hiện có (`agent_thinking`, `agent_call`, `agent_response`). State live trong `OpenClawHandler.streamStats`, độc lập với `assistantBuf` (phục vụ TTS flush). Drain ở `lifecycle.end`. Trước đây có `llm_first_token` event đã bị bỏ vì "redundant với pipeline aggregator" — lý do đó sai, aggregator không observe được khi raw deltas không bao giờ tới JSONL.
 
