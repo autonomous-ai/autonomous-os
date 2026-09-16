@@ -659,6 +659,8 @@ Sensing handler (`handler.go`) route `emotion.detected` events tới agent. Khi 
 3. **Cooldown chỉ chặn music, không chặn checkin.** Khi cooldown 7 phút còn hiệu lực, row #2 fail vế thứ ba và event rơi xuống checkin (row #3). Agent vẫn hỏi "có chuyện gì" — chỉ không suggest nhạc 2 lần liên tiếp. `NO_REPLY` chỉ xảy ra ở row #1 (đang phát nhạc).
 4. **Không bao giờ chào trên emotion event.** `emotion.detected` không phải presence/arrival event — `sensing/SKILL.md` cấm openers như `hello`, `welcome back`, mọi câu chứa `again`. Greeting chỉ dành cho `presence.enter`.
 
+Output của skill emotion cấm lời dẫn trong assistant text trước hoặc giữa các lần gọi tool/skill; phản hồi gồm marker mood signal và marker của nhánh đã chọn, rồi một câu tối đa 20 từ hoặc `NO_REPLY` theo nhánh. Sau khi đọc reference đã chọn, model kết thúc mà không đọc lại để chỉnh câu. Cue camera/voice được đánh dấu yếu không được diễn đạt thành cảm xúc hay biểu cảm chắc chắn: checkin Happy yếu dùng lời mời trung tính, không khẳng định user vui hay đang cười. Logging và routing giữ nguyên. Đây là hướng dẫn prompt, không bảo đảm model luôn tuân thủ.
+
 Cả 2 route share chung 1 cooldown: music log qua `POST /api/music-suggestion/log` với `trigger:"<genre>:<mood>"` (mood bucket); checkin log cùng endpoint với `trigger:"checkin:<emotion>"` (raw FER label). `last_suggestion_age_min` phản ánh cả 2 kênh nên music suggestion mới sẽ im lặng nhánh music trong 7 phút, nhưng checkin vẫn fire. Checkin phrasing keyed theo raw emotion (không phải mood) — mỗi FER label có 3 style: Ask / Comfort / Invite. Xem `reference/checkin.md`. Output checkin luôn prefix `[HW:/emotion:{"emotion":"caring","intensity":0.5}]`.
 
 ### Mood pipeline
