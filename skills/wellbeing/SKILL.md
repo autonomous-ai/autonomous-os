@@ -111,7 +111,7 @@ Schema (every field is pre-computed in the backend — agent only applies thresh
 ```json
 {
   "hydration_delta_min": 8,        // minutes since last drink/enter/nudge_hydration; -1 if no reset today
-  "break_delta_min": 23,           // minutes since last break/enter/nudge_break; -1 if no reset today
+  "break_delta_min": 23,           // minutes since last break/enter/nudge_break; if none today, minutes since the first real activity row (user seated before presence.enter fired); -1 only when no rows at all
   "latest_activity": "using computer",  // most recent action label (sedentary or reset); "" if no events
   "count_today": {"drink": 3, "break": 1},  // tally of reset actions today; missing key = 0; whole field omitted if all zero
   "time_of_day": "afternoon",      // morning|noon|afternoon|evening|night — coarse bucket for reaction flavor
