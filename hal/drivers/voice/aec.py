@@ -48,13 +48,34 @@ class EchoReference:
         self._max_bytes = int(rate * 2 * max_ms / 1000)
         self._lock = threading.Lock()
         self._last_write = 0.0
+        self._resampler = None
 
     def write(self, pcm: bytes) -> None:
         with self._lock:
-            self._buffer.extend(pcm)
-            if len(self._buffer) > self._max_bytes:
-                del self._buffer[: len(self._buffer) - self._max_bytes]
-            self._last_write = time.monotonic()
+            self._append(pcm)
+
+    def _append(self, pcm: bytes) -> None:
+        self._buffer.extend(pcm)
+        if len(self._buffer) > self._max_bytes:
+            del self._buffer[: len(self._buffer) - self._max_bytes]
+        self._last_write = time.monotonic()
+
+    def write_samples(self, samples, rate: int) -> None:
+        """Resample on one continuous sample clock, serialized with reset."""
+        import numpy as np
+
+        mono = np.asarray(samples, dtype=np.float32).reshape(-1)
+        if not len(mono):
+            return
+        with self._lock:
+            if rate != self._rate:
+                if self._resampler is None or self._resampler.src_rate != rate:
+                    self._resampler = _ReferenceResampler(rate, self._rate)
+                mono = self._resampler.process(mono)
+            else:
+                self._resampler = None
+            pcm = (np.clip(mono, -1.0, 1.0) * 32767).astype(np.int16)
+            self._append(pcm.tobytes())
 
     def read(self, nbytes: int):
         """Take the next `nbytes` of played audio; zero-pad if it ran dry.
@@ -77,6 +98,7 @@ class EchoReference:
     def clear(self) -> None:
         with self._lock:
             self._buffer.clear()
+            self._resampler = None
 
     def idle_for(self) -> float:
         """Seconds since the last speaker write (inf if nothing was ever played)."""
@@ -407,8 +429,8 @@ def _reference_resample_filter(up: int, down: int, dtype: str):
 
     Speaker writes may be only a few milliseconds long. Rebuilding the same
     Kaiser filter for every write puts avoidable work on the playback thread.
-    Keep the unscaled coefficients: resample_poly applies the upsampling gain
-    and padding itself, exactly as it does for its default window.
+    Keep the unscaled coefficients; the streaming resampler applies the
+    upsampling gain once when it creates its per-stream state.
     """
     import numpy as np
     import scipy.signal
@@ -420,6 +442,50 @@ def _reference_resample_filter(up: int, down: int, dtype: str):
     ).astype(np.dtype(dtype))
     coefficients.setflags(write=False)
     return coefficients
+
+
+class _ReferenceResampler:
+    """Causal polyphase FIR with chunk-independent timing and bounded history.
+
+    Restarting resample_poly at every speaker write rounds up each chunk and
+    pads each boundary with zeros. Here both the FIR history and rational
+    sample phase survive writes. The short FIR delay is constant; it cannot
+    accumulate into the render/capture clock drift caused by chunk rounding.
+    """
+
+    def __init__(self, src_rate: int, dst_rate: int):
+        import numpy as np
+
+        self.src_rate = src_rate
+        g = gcd(src_rate, dst_rate)
+        self._up, self._down = dst_rate // g, src_rate // g
+        self._filter = _reference_resample_filter(
+            self._up, self._down, np.dtype(np.float32).str,
+        ) * self._up
+        self._history_needed = (len(self._filter) - 1 + self._up - 1) // self._up
+        self._history = np.empty(0, dtype=np.float32)
+        self._start = self._received = self._emitted = 0
+
+    def process(self, samples):
+        import numpy as np
+        from scipy.signal import upfirdn
+
+        if not len(samples):
+            return np.empty(0, dtype=np.float32)
+        buf = np.concatenate((self._history, samples))
+        self._received += len(samples)
+        end = (self._received * self._up + self._down - 1) // self._down
+        # _start is always a multiple of down: each local convolution lands
+        # on the same global output grid, including fractional rate ratios.
+        base = self._start * self._up // self._down
+        filtered = upfirdn(self._filter, buf, up=self._up, down=self._down)
+        out = filtered[self._emitted - base:end - base].copy()
+        self._emitted = end
+        start = max(0, self._received - self._history_needed)
+        start = start // self._down * self._down
+        self._history = buf[start - self._start:].copy()
+        self._start = start
+        return out
 
 
 def prepare_reference(rate: int) -> None:
@@ -453,19 +519,7 @@ def reference_write(samples, rate: int) -> None:
     if ref is None or _canceller is None:
         return
     try:
-        import numpy as np
-
-        mono = np.asarray(samples, dtype=np.float32).reshape(-1)
-        dst = _canceller._rate
-        if rate != dst:
-            import scipy.signal
-
-            g = gcd(dst, rate)
-            up, down = dst // g, rate // g
-            coefficients = _reference_resample_filter(up, down, mono.dtype.str)
-            mono = scipy.signal.resample_poly(mono, up, down, window=coefficients)
-        pcm16 = (np.clip(mono, -1.0, 1.0) * 32767).astype(np.int16)
-        ref.write(pcm16.tobytes())
+        ref.write_samples(samples, rate)
     except Exception as e:
         logger.debug("AEC reference write skipped: %s", e)
 

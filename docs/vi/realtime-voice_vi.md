@@ -75,6 +75,15 @@ emotion, cử động, look hoặc delegate. Mô tả tool cho phép từ chối
 lỏm kể cả khi thiết bị có thể thực hiện. Trường hợp chưa chắc chắn, kết thúc im
 lặng và lỗi vẫn giữ hành vi fallback hiện có.
 
+Prompt Gemini còn yêu cầu có bằng chứng âm thanh trước khi diễn giải yêu cầu:
+không ghép tiếng ồn/echo thành câu hay sửa transcript không liên quan bằng ngày,
+vị trí, memory hoặc lịch sử hội thoại. Input đột ngột sang ngôn ngữ khác không
+cho phép tự dịch; tên riêng và từ kỹ thuật trong yêu cầu rõ bằng ngôn ngữ đã cấu
+hình vẫn hợp lệ. Ví dụ bao gồm transcript Tây Ban Nha về đại lý du lịch và tiếng
+Hàn bị trả lời thành câu hỏi ngày tháng. Input không rõ giữ im lặng, không đổi
+fallback cho lượt chưa chắc chắn hoặc điều kiện gọi `reject_turn`. Thay đổi
+prompt không bảo đảm transcript đúng hay chặn hết history bị hallucinate.
+
 `robots/lamp/SOUL.md` áp dụng cùng điều kiện lời nói hướng đến thiết bị cho voice
 và `[ambient]` của main agent. Lời nghe lỏm hoặc chưa rõ đang nói với ai phải trả
 đúng `NO_REPLY`, không gọi tool hay phản ứng bằng cử động/cảm xúc. Quy tắc này
@@ -596,10 +605,15 @@ file WAV cache không đổi.
 
 Resample tham chiếu AEC cache hệ số FIR Kaiser mặc định của SciPy theo tỉ lệ
 tần số lấy mẫu đã rút gọn và dtype (tối đa 32 mục), tránh thiết kế lại bộ lọc
-ở mỗi lần ghi loa. `resample_poly` vẫn xử lý gain và padding như trước; dạng
-sóng tham chiếu và nhịp ghi FIFO không đổi. Trước lần ghi loa đầu của mỗi lượt
-phát, HAL chuẩn bị bộ lọc tham chiếu để lần import SciPy/thiết kế bộ lọc đầu
-tiên không làm khựng sau 40 ms audio đầu. Bỏ qua chuẩn bị khi AEC chưa hoạt
+ở mỗi lần ghi loa. FIR nhân quả dạng streaming giữ lịch sử bộ lọc và pha
+resample qua các lần ghi, tạo `ceil(N * output_rate / input_rate)` mẫu đầu ra
+cho tổng cộng `N` mẫu đầu vào. Cách này loại bỏ sai lệch do làm tròn từng chunk
+và việc lặp lại biên bộ lọc. Cùng bộ lọc chống alias thêm khoảng 0,625 ms độ trễ
+khi tần số lấy mẫu thấp hơn là 16 kHz; nhịp ghi FIFO không đổi.
+`EchoReference.clear()` hoặc đổi tần số nguồn sẽ reset trạng thái resample.
+Mức cải thiện khử vọng vẫn cần được kiểm tra A/B trên thiết bị.
+Trước lần ghi loa đầu của mỗi lượt phát, HAL chuẩn bị bộ lọc tham chiếu để lần
+import SciPy/thiết kế bộ lọc đầu tiên không làm khựng sau 40 ms audio đầu. Bỏ qua chuẩn bị khi AEC chưa hoạt
 động hoặc sample rate bằng nhau. Kiểm tra hủy giữa các lát, kể cả sau chuẩn bị;
 chime xác nhận stop vẫn được phát khi cờ dừng lời nói đang bật.
 

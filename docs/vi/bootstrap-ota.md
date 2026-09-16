@@ -299,6 +299,14 @@ bỏ qua đúng target đó nên release lỗi không bị cài lại ở lần 
 có version khác, OTA của component đó tự tiếp tục. Bản thân rollback không cần
 metadata URL hoặc mạng.
 
+Trước khi update `os-server`, `web` hoặc `device`, updater bảo đảm nginx có route
+WebSocket Harness. Nó tìm trong `/etc/nginx/conf.d/*.conf` và mọi entry của
+`/etc/nginx/sites-enabled/*`, gồm `reachy-spike` trên Reachy. Route dùng lại HTTP
+upstream hiện có của `/api/` (`backend` hoặc `spike_backend`); cấu trúc proxy
+không hỗ trợ hoặc có rewrite URI bị từ chối. Site dạng symlink được sửa tại
+file đích thực, giữ nguyên link enabled. Updater kiểm tra `nginx -t` và chỉ
+reload nginx sau khi thêm route.
+
 Các component cài theo thư mục cũng có cùng hợp đồng recovery. Trước khi update
 web, updater dừng nginx, swap bundle đã giải nén hoàn chỉnh từ thư mục staging,
 và giữ bundle trước đó tại `/root/bootstrap/rollback/web.previous` cùng trạng
@@ -673,6 +681,12 @@ và exit lỗi nếu cả hai đều rỗng — không có URL hardcode.
 
 ### Xử lý HAL
 
+Updater tìm `uv` trong `PATH`, rồi `/root/.local/bin/uv`, rồi
+`/home/pollen/.local/bin/uv` (vị trí bộ cài Reachy sử dụng). Trước khi dừng HAL,
+script chọn Python extras theo `DEVICE_TYPE` trong `/opt/hal/.env`, fallback sang
+`device_type` trong `/root/config/config.json`: `reachy-mini` dùng `hardware + reachy`
+để giữ Pollen SDK; các thiết bị khác vẫn dùng `hardware + aec`.
+
 > **Cache uv nằm NGOÀI cây runtime** (`/opt/.uv-cache-hal`, cạnh `/opt/hal` để uv
 > hardlink vào venv mới). Trước đây nó ở `/opt/hal/.uv-cache` nên mỗi lần update
 > đều copy nó — đo được 2.5 GB, cạnh `.venv` 2.3 GB — sang staging trước khi sync:
@@ -694,11 +708,11 @@ và exit lỗi nếu cả hai đều rỗng — không có URL hardcode.
     systemctl stop hal
     mv /opt/hal /root/bootstrap/rollback/hal.previous
 
-    # Build candidate ở thư mục kề. .env, venv và uv cache được copy từ
-    # runtime đã giữ trước khi chạy uv sync.
+    # UV_BIN and HAL_EXTRA are resolved before stopping HAL.
+    # Build a fresh venv; preserve .env and use the external shared cache.
     unzip -q "$ZIP" -d /opt/.hal.new
-    cp -a /root/bootstrap/rollback/hal.previous/{.env,.venv,.uv-cache} /opt/.hal.new/
-    (cd /opt/.hal.new && uv sync --python 3.12 --extra hardware --extra aec)
+    cp -a /root/bootstrap/rollback/hal.previous/.env /opt/.hal.new/
+    (cd /opt/.hal.new && UV_CACHE_DIR=/opt/.uv-cache-hal "$UV_BIN" sync --python 3.12 --extra hardware --extra "$HAL_EXTRA")
     mv /opt/.hal.new /opt/hal
 
     systemctl restart hal

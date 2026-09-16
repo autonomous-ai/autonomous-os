@@ -36,7 +36,7 @@ The HAL hint surfaces exactly once per stranger when the count first reaches the
 ## Example
 
 ```
-[sensing] Person detected — 1 face(s) visible (stranger (stranger_37)) (familiar stranger stranger_37 — seen 2 times, ask user if they want to remember this face; image saved at /root/local/strangers/snapshots/stranger_37_1735...jpg)
+[sensing] Person detected — new: stranger (stranger_37); faces in frame: 1 (stranger_37) (familiar stranger stranger_37 — seen 2 times, ask user if they want to remember this face; image saved at /root/local/strangers/snapshots/stranger_37_1735...jpg)
 
 Agent (turn 1):
   Reply: "I've seen you 2 times now — mind if I remember you? What's your name?"

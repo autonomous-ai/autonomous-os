@@ -374,10 +374,10 @@ Truy cập qua nginx proxy: `/hw/*` → `127.0.0.1:5001`
 | GET | `/audio/volume` | Get volume |
 | POST | `/audio/play-tone` | Phát test tone |
 | POST | `/audio/record` | Thu âm WAV |
-| POST | `/audio/play` | Phát nhạc theo query. Body: `{"query":"tên bài","person":"tên"}`. `person` tuỳ chọn — lưu lịch sử theo người. Trước khi yt-dlp resolve sẽ phát một câu TTS ngắn cached ("On it.", "Coming up.", …) để thiết bị không im lặng trong lúc ffmpeg load. Bỏ qua câu này khi loa đang mute, TTS đang nói, nhạc đang phát, hoặc VoiceService đang giữa session STT. |
+| POST | `/audio/play` | Phát nhạc theo query. Body: `{"query":"tên bài","person":"tên"}`. `person` tuỳ chọn — lưu lịch sử theo người. Trước khi yt-dlp resolve sẽ phát một câu TTS ngắn cached ("On it.", "Coming up.", …) để thiết bị không im lặng trong lúc ffmpeg load. Bỏ qua câu này khi loa đang mute, TTS đang nói, nhạc đang phát, hoặc VoiceService đang giữa session STT. `person` được đối chiếu với các thư mục người dùng đã có (đúng label, Telegram id trong `TÊN (123)`, hoặc một token trùng tên); tên không khớp ai sẽ được ghi vào bucket chung `unknown/` — không bao giờ tạo thư mục người dùng mới. |
 | POST | `/audio/stop` | Dừng phát nhạc |
 | GET | `/audio/status` | Trạng thái phát nhạc (đang phát, tên bài, thời gian) |
-| GET | `/audio/history` | Lịch sử phát nhạc. Query: `?person=tên&date=YYYY-MM-DD&last=50`. `person` lọc theo người; bỏ trống = shared. |
+| GET | `/audio/history` | Lịch sử phát nhạc. Query: `?person=tên&date=YYYY-MM-DD&last=50`. `person` được đối chiếu giống `/audio/play`; bỏ trống hoặc truyền tên không khớp thì đọc lịch sử của bucket chung `unknown/`. Response trả về `person` đã được chuẩn hoá. |
 
 ### Emotion
 
@@ -410,6 +410,7 @@ Cần sensing có camera (InsightFace). Mặc định ảnh người đã đăng
 |--------|----------|-------|
 | POST | `/face/enroll` | Body: `image_base64`, `label`, `telegram_username`?, `telegram_id`? — lưu ảnh, train embedding, lưu Telegram identity |
 | GET | `/face/status` | `enrolled_count`, `enrolled_names` |
+| GET | `/face/owners` | `enrolled_count`, `persons[]` gồm ảnh, mẫu giọng, Telegram identity và các ngày có log theo người (mood / wellbeing / music-suggestions / posture / audio_history). Một thư mục chỉ được coi là một người khi có ảnh khuôn mặt, mẫu giọng hoặc `metadata.json`; thư mục chỉ có log bị bỏ qua. Bucket chung `unknown/` vẫn được liệt kê (để xem log) nhưng không tính vào `enrolled_count`. |
 | POST | `/face/remove` | Body: `label` — xóa một người đã đăng ký (404 nếu không có) |
 | POST | `/face/reset` | Xóa toàn bộ người đã đăng ký và ảnh trên đĩa |
 

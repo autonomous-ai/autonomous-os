@@ -29,6 +29,10 @@ Các gate per-type ở trên độc lập với nhau — không có gate xuyên-
 
 ---
 
+## Lời nói phản hồi sensing
+
+Với event do `skills/sensing/SKILL.md` xử lý, prompt yêu cầu HW marker đúng cú pháp rồi tới một câu tối đa 20 từ theo `current_language`, hoặc `NO_REPLY` cho dòng phản ứng im lặng. Mọi assistant text, kể cả message trung gian, không được giải thích event/ma trận, phân tích ngữ cảnh chủ nhân, viết các phương án nháp hay thêm lời sau câu nói. Event người lạ đến độc lập ngoài guard mode yêu cầu câu chào cố định (EN: “Hi, I don’t think we’ve met.”; VI: “Chào bạn, hình như mình chưa gặp nhau.”), đúng HW marker và không thêm proactive care. Model phải tự bỏ câu dẫn trước khi gửi, không nói ra bước kiểm tra; wrapper `[user]` ở đầu không đổi nhánh detector. Event guard và yêu cầu rõ ràng của user giữ nhánh xử lý riêng. Nếu không có kênh reasoning riêng thì bỏ phần phân tích. Đây là hướng dẫn prompt, không phải giới hạn độ dài ở backend hay bảo đảm model luôn tuân thủ; các skill khác giữ quy tắc output riêng.
+
 ## Âm thanh (Sound)
 
 ### Cơ chế hoạt động
@@ -89,15 +93,29 @@ Python đẩy `sound_tracker` events trực tiếp vào monitor bus qua `POST /a
 
 Luôn trigger phản ứng đầy đủ — không có ngoại lệ. Agent **phải** làm cả ba:
 
-1. `/emotion greeting` (0.9) với chủ nhà — `/emotion curious` (0.8) với người lạ
+1. `/emotion greeting` (0.9) với chủ nhà — `/emotion curious` (0.8) với người lạ, hoặc `curious` (0.6) khi người lạ tới trong lúc text liệt kê một chủ nhà ở `already present:`
 2. Với chủ nhà: `/servo/aim {"direction": "user"}` rồi `/servo/track {"target": ["person"]}` — aim xoay camera về phía user trước (~2s), sau đó vision tracker lock vào người và tự bám theo khi user di chuyển trong phòng. Người lạ: `/servo/play {"recording": "scanning"}` (không auto-follow — thận trọng)
-3. Nói: chào ấm áp với chủ nhà (gọi tên lấy từ `[context: current_user=X]`), thận trọng với người lạ
+3. Nói: chào ấm áp với chủ nhà (gọi tên lấy từ `[context: current_user=X]`), thận trọng với người lạ — trừ khi text liệt kê một chủ nhà ở `already present:`, khi đó câu nói hướng về chủ nhà đó (xem bên dưới)
 
 HAL xử lý cooldown. Nếu event đã đến agent thì đủ thời gian rồi — phản ứng đầy đủ.
 
+#### Nội dung event: ai mới tới, ai đã có mặt sẵn
+
+`presence.enter` nghĩa là **mới** xuất hiện, không phải đang xuất hiện: một người chỉ được coi là "mới" khi `last_seen` là `None` hoặc cũ hơn cửa sổ quên (`FACE_OWNER_FORGET_S` 3600 giây với chủ nhà, `FACE_STRANGER_FORGET_S` 1800 giây với người lạ). Text do `hal/drivers/sensing/perceptions/processors/faceid/enter_message.py` dựng, gồm ba đoạn ngăn bằng `; `:
+
+```
+Person detected — new: stranger (stranger_2); already present: momo (friend); faces in frame: 2 (momo, stranger_2)
+```
+
+- `new:` — người vừa tới, phần chủ nhà đứng trước, id sắp xếp theo thứ tự. Nhãn `friend (<tên>)` / `stranger (<id>)` là một hợp đồng: cổng wake-focus mở khi thấy `friend (`, `sensing-track` grep theo chúng, `face-enroll` parse hint được nối vào sau chúng.
+- `already present:` — chủ nhà có box trong **cùng frame** nhưng không phải vừa tới, viết dạng `<tên> (friend)` để không bao giờ bị đọc nhầm thành người mới tới. Đây là tín hiệu đồng hiện diện mà `sensing/SKILL.md` dùng để nói với user ("Momo ơi, có bạn tới kìa") thay vì chào người lạ. Với enter chỉ có người lạ, đoạn này chỉ được ghi khi box chủ nhà và box không-phải-chủ-nhà đã cùng xuất hiện `FACE_COPRESENCE_MIN_TICKS` (2) nhịp sensing liên tiếp (box `unsure` cũng tính — đó chính là nhịp recognizer dùng để xác nhận người lạ mới trước khi cấp id); một tấm poster, một cái bóng phản chiếu hay một nhịp nhiễu cạnh user không được biến "xin chào" thành "có bạn tới". Chủ nhà mới tới khi một chủ nhà khác đang ngồi thì được liệt kê không cần gate đó. Đoạn này không bao giờ suy ra từ `current_user()` — đó là trạng thái cửa sổ hiện diện, đọc y hệt nhau dù user đang ngồi đó hay đã rời đi hai phút trước.
+- `faces in frame:` — số box trong frame mà **snapshot đính kèm** thể hiện và nhãn theo thứ tự phát hiện (`unsure` cho box chưa có danh tính), đúng nhãn được vẽ lên đó. Cả đoạn này lẫn `already present:` được chốt ngay ở nhịp frame được nhìn thấy và đi kèm frame đó (`FrameFacts` trong `enter_message.py`): chủ nhà mới tới thì frame hiện tại được gửi ngay nên dùng dữ kiện hiện tại; enter chỉ có người lạ thì gửi các snapshot đã buffer và dùng dữ kiện của frame buffer mới nhất — lần flush có thể rơi muộn tới `FACE_STRANGER_FLUSH_S`, khi user có thể đã bị nhoè khỏi frame trực tiếp (quan sát trên thiết bị: ảnh có hai box, text ghi `1 (unsure)`, trước khi có quy tắc này). Đây không phải số người tới: id người lạ được flush có thể đến từ nhiều frame buffer khác nhau.
+
+Ưu tiên giữa những người tới không đổi: cả hai cùng mới trong một frame → một event, chủ nhà đứng trước, gửi ngay; người lạ được buffer trước rồi chủ nhà tới sau → frame chủ nhà gửi ngay và người lạ theo sau bằng event riêng sau `FACE_STRANGER_FLUSH_S` (10 giây), chịu `FACE_COOLDOWN_S` (10 giây) và `FACE_STRANGER_ENTER_FLOOR_S` (300 giây).
+
 #### Quay lại sau khi vắng lâu (chỉ chủ nhà)
 
-Với mỗi `presence.enter` của chủ nhà, sensing handler chèn tag `[context: current_user=X]` (xem [User attribution](#user-attribution--context-current_userx)) rồi tới block `[presence_context: {"last_leave_age_min": N, "current_hour": H}]` vào message trước khi forward sang agent. Tag quy gán chính là nguồn của tên trong lời chào — bản thân text của event chỉ mang *label* khuôn mặt (`friend (long)`), thứ mà agent đọc như một nhãn nhận diện chứ không phải một cái tên. `last_leave_age_min` được tính từ row `leave` gần nhất trong wellbeing log, quét tối đa 3 ngày gần đây (`wellbeing.LastActionTS`); giá trị `-1` nghĩa là không tìm thấy `leave` nào trong khoảng đó.
+Với mỗi `presence.enter`, sensing handler chèn tag `[context: current_user=X]` (xem [User attribution](#user-attribution--context-current_userx)); khi đoạn `new:` của event có tên chủ nhà (`sensingmsg.EnterNamesNewFriend`, bản Go của `has_new_friend` bên HAL) thì chèn thêm block `[presence_context: {"last_leave_age_min": N, "current_hour": H}]` trước khi forward sang agent. Enter chỉ có người lạ không bao giờ nhận block này dù `current_user` vẫn là chủ nhà còn trong cửa sổ quên: các con số sẽ mô tả lần rời đi gần nhất của *chính chủ nhà*, và agent đã đọc đúng như vậy thành chủ nhà quay lại (orange-lamp, 2026-09-16: nói "Long re-entering after ~28 min away" với một người khách). Ngược lại, khi text có `already present:` và không có chủ nhà mới (`sensingmsg.EnterHasPresentFriend`), handler chèn một dòng trỏ tới quy tắc — `[A stranger joined <current_user>, who is in frame — speak to <current_user>, not to the stranger. See sensing/SKILL.md "Someone joins the user".]` — vì Hermes chỉ đọc `sensing/SKILL.md` khi model gọi `skill_view`, và ở lượt nó bỏ qua bước đó, nó đã trả lời sự xuất hiện của khách bằng "Hey, welcome back" (orange-lamp, 2026-09-16). Tag quy gán chính là nguồn của tên trong lời chào — bản thân text của event chỉ mang *label* khuôn mặt (`friend (long)`), thứ mà agent đọc như một nhãn nhận diện chứ không phải một cái tên. `last_leave_age_min` được tính từ row `leave` gần nhất trong wellbeing log, quét tối đa 3 ngày gần đây (`wellbeing.LastActionTS`); giá trị `-1` nghĩa là không tìm thấy `leave` nào trong khoảng đó.
 
 `sensing/SKILL.md` đọc block này và **chuyển sang câu chào "quay lại sau khi vắng lâu"** khi cả ba điều kiện đúng:
 
@@ -379,6 +397,8 @@ Tới thời điểm agent thấy event, HAL đã tự log mọi label activity 
 4. **Sau khi nhắc** (chỉ nudge, không phải reaction), log entry `nudge_hydration` hoặc `nudge_break` — đây là cái reset delta cho window tiếp theo (và hiện lên timeline user).
 5. **KHÔNG BAO GIỜ đoán** time-since từ memory — luôn tính từ log.
 
+Với lượt `[activity]` tự động, skill wellbeing cấm đọc phần chọn nhánh/skill trong mọi assistant text, kể cả trước tool. Phản ứng ăn uống (`eating *`, `dining`, `tasting food`) giới hạn một câu tối đa 20 từ theo `current_language`, không gọi tool, thêm log marker, nhắc việc khác hay bootstrap habit dù timer đã tới hạn hoặc `bootstrap_needed=true`. Ví dụ cà rốt có toàn bộ phản hồi là “Enjoy your carrots!”. Đây là hướng dẫn prompt, không phải bộ lọc TTS tất định.
+
 Reaction path được thêm vào để hành động tích cực không bị im lặng: trước đây user uống nước mà chưa qua threshold thì Lamp `NO_REPLY`, cảm giác như đèn chết. Reaction được nuôi bởi 2 field thêm trong `[wellbeing_context: ...]` — `count_today` (đếm số lần `drink` / `break` hôm nay) và `time_of_day` (`morning` / `noon` / `afternoon` / `evening` / `night`) — để câu thoại có cái cụ thể bám vào mà không tốn thêm tool call. Visual caption (kiểu "chai Lavie xanh") cố ý CHƯA làm — vision pipeline hiện chỉ trả class label, không có free-text mô tả.
 
 ### Ngưỡng
@@ -652,6 +672,8 @@ Sensing handler (`handler.go`) route `emotion.detected` events tới agent. Khi 
    - **#3 còn lại** → **checkin** — 1 phản ứng người ngắn. Xem `user-emotion-detection/reference/checkin.md` cho example theo raw FER label (Sad/Fear/Angry/Disgust/Happy/Surprise), mỗi label có 3 style: Ask/Comfort/Invite. Examples chỉ là gợi ý — agent tự improvise mỗi turn.
 3. **Cooldown chỉ chặn music, không chặn checkin.** Khi cooldown 7 phút còn hiệu lực, row #2 fail vế thứ ba và event rơi xuống checkin (row #3). Agent vẫn hỏi "có chuyện gì" — chỉ không suggest nhạc 2 lần liên tiếp. `NO_REPLY` chỉ xảy ra ở row #1 (đang phát nhạc).
 4. **Không bao giờ chào trên emotion event.** `emotion.detected` không phải presence/arrival event — `sensing/SKILL.md` cấm openers như `hello`, `welcome back`, mọi câu chứa `again`. Greeting chỉ dành cho `presence.enter`.
+
+Output của skill emotion cấm lời dẫn trong assistant text trước hoặc giữa các lần gọi tool/skill; phản hồi gồm marker mood signal và marker của nhánh đã chọn, rồi một câu tối đa 20 từ hoặc `NO_REPLY` theo nhánh. Sau khi đọc reference đã chọn, model kết thúc mà không đọc lại để chỉnh câu. Cue camera/voice được đánh dấu yếu không được diễn đạt thành cảm xúc hay biểu cảm chắc chắn: checkin Happy yếu dùng lời mời trung tính, không khẳng định user vui hay đang cười. Logging và routing giữ nguyên. Đây là hướng dẫn prompt, không bảo đảm model luôn tuân thủ.
 
 Cả 2 route share chung 1 cooldown: music log qua `POST /api/music-suggestion/log` với `trigger:"<genre>:<mood>"` (mood bucket); checkin log cùng endpoint với `trigger:"checkin:<emotion>"` (raw FER label). `last_suggestion_age_min` phản ánh cả 2 kênh nên music suggestion mới sẽ im lặng nhánh music trong 7 phút, nhưng checkin vẫn fire. Checkin phrasing keyed theo raw emotion (không phải mood) — mỗi FER label có 3 style: Ask / Comfort / Invite. Xem `reference/checkin.md`. Output checkin luôn prefix `[HW:/emotion:{"emotion":"caring","intensity":0.5}]`.
 

@@ -14,7 +14,7 @@ light:
   quiet_hours: { start: "22:00", end: "07:00", max_brightness: 40 }   # 22:00–07:00 → ring dims to 40, agent-independent
 
 audio:
-  max_volume: 40             # 0–100 % speaker ceiling; the volume route clamps any higher request
+  max_volume: 30             # 0–100 % speaker ceiling; the volume route clamps any higher request
   # quiet_hours: { start: "22:00", end: "07:00" }   # (optional) suppress loud discretionary output (music) in-window; spoken replies still play
 
 motion:

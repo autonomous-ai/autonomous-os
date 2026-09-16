@@ -91,7 +91,7 @@ const (
 // the skill only applies thresholds; raw history is dropped from the prompt.
 type wellbeingContext struct {
 	HydrationDeltaMin        int                      `json:"hydration_delta_min"`         // minutes since last drink/enter/nudge_hydration; -1 if no reset today
-	BreakDeltaMin            int                      `json:"break_delta_min"`             // minutes since last break/enter/nudge_break;     -1 if no reset today
+	BreakDeltaMin            int                      `json:"break_delta_min"`             // minutes since last break/enter/nudge_break; falls back to first real activity today; -1 if no rows at all
 	LatestActivity           string                   `json:"latest_activity"`             // most recent action label (sedentary or reset); "" if no events today
 	CountToday               map[string]int           `json:"count_today,omitempty"`       // count of reset actions today (drink, break); zeros omitted
 	TimeOfDay                string                   `json:"time_of_day"`                 // morning|noon|afternoon|evening|night — flavors reaction phrasing
@@ -132,6 +132,13 @@ func BuildWellbeingContext(user string) string {
 	yawnAckAge := computeDeltaMin(events, now, []string{"noted_yawn"})
 	hydrationDelta := computeDeltaMin(events, now, []string{"drink", "enter", "nudge_hydration"})
 	breakDelta := computeDeltaMin(events, now, []string{"break", "enter", "nudge_break"})
+	if breakDelta == -1 {
+		// No reset point today (user was already seated at boot, or the face
+		// never triggered presence.enter). Count from the first real activity
+		// row instead so the break nudge can still fire — -1 would make the
+		// skill stay silent all day.
+		breakDelta = minutesSinceFirstActivity(events, now)
+	}
 	latestActivity := latestAction(events)
 	countToday := countTodayActions(events, reactionCountActions)
 	timeOfDay := timeOfDayLabel(now)
@@ -215,6 +222,19 @@ func computeDeltaMin(events []wellbeing.Event, now time.Time, resetActions []str
 		return -1
 	}
 	return int(now.Sub(time.Unix(int64(latestTS), 0)).Minutes())
+}
+
+// minutesSinceFirstActivity returns minutes since the earliest real
+// activity row today (anything not in nonActivityActions), or -1 if none.
+// Fallback reset point when no enter/break/nudge row exists yet.
+func minutesSinceFirstActivity(events []wellbeing.Event, now time.Time) int {
+	for _, e := range events {
+		if nonActivityActions[e.Action] {
+			continue
+		}
+		return int(now.Sub(time.Unix(int64(e.TS), 0)).Minutes())
+	}
+	return -1
 }
 
 // latestAction returns the action label of the most recent event today
