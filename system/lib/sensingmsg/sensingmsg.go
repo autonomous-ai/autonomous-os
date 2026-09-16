@@ -35,6 +35,13 @@ func EnterNamesNewFriend(message string) bool {
 	return strings.Contains(strings.ToLower(head), "friend (")
 }
 
+// EnterHasPresentFriend reports whether a presence.enter text lists a friend
+// who was already in the frame when the arrival happened — HAL writes the
+// `already present:` segment only after its co-presence guard passed.
+func EnterHasPresentFriend(message string) bool {
+	return strings.Contains(message, "already present:")
+}
+
 // Build returns the message that should be forwarded to the agent for a
 // sensing event. Precedence: voice_command/voice_followup > voice >
 // web_chat/mqtt_chat > guard > passive sensing.
@@ -120,6 +127,13 @@ func Build(eventType, message, currentUser, guardTag string) string {
 		// that format. BuildPresenceContext returns "" for unknown.
 		if EnterNamesNewFriend(message) {
 			msg += skillcontext.BuildPresenceContext(currentUser)
+		} else if EnterHasPresentFriend(message) {
+			// A visitor beside the user. sensing/SKILL.md has the full rule
+			// ("Someone joins the user"), but Hermes only reads a skill when
+			// the model calls skill_view, and it skipped that and said
+			// "Hey, welcome back" to the user (orange-lamp, 2026-09-16). The
+			// one line that matters rides inline, like presence.leave's.
+			msg += "\n[A stranger joined " + currentUser + ", who is already in frame. One light aside to " + currentUser + " about the company, by name — do not greet the stranger, do not ask who they are, not a welcome-back. HW: curious 0.6, aim, track. See sensing/SKILL.md \"Someone joins the user\".]"
 		}
 	case "presence.leave", "presence.away":
 		msg += "\n[No crons to cancel. NO_REPLY unless worth saying.]"

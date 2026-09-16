@@ -123,7 +123,7 @@ When `new:` names only strangers **and** `already present:` names a friend:
 
 **This is not momo returning.** She never left — `already present:` says she is in the frame right now, and the backend does not attach `[presence_context: ...]` to a stranger's arrival. The return-after-long-absence swap applies only when `new:` names a friend. Never answer a stranger's arrival with "been a while".
 
-HAL only writes `already present:` after the friend and the newcomer have been boxed together for a couple of sensing ticks (`FACE_COPRESENCE_MIN_TICKS`), so a single odd frame never reaches you as "company". The usual stranger floor and cooldown still apply.
+The backend repeats the one-line version of this rule inline (`[A stranger joined <name>, who is already in frame. …]`) so it holds even on a turn where you did not open this file. HAL only writes `already present:` after the friend and the newcomer have been boxed together for a couple of sensing ticks (`FACE_COPRESENCE_MIN_TICKS`), so a single odd frame never reaches you as "company". The usual stranger floor and cooldown still apply.
 
 ## Proactive care
 

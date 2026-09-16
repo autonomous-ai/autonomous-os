@@ -73,3 +73,32 @@ func TestBuildPresenceEnterLoneStrangerInsideFriendWindowSkipsPresenceContext(t 
 		t.Fatalf("lone-stranger presence.enter = %q, must not carry presence_context", got)
 	}
 }
+
+func TestBuildPresenceEnterStrangerJoiningPresentFriendCarriesInlineRule(t *testing.T) {
+	// Hermes only loads sensing/SKILL.md when the model chooses to call
+	// skill_view; on orange-lamp (2026-09-16) it skipped that and answered a
+	// visitor's arrival with "Hey, welcome back" to the user. The rule has to
+	// ride inline, the way presence.leave and environment.update already do.
+	got := Build("presence.enter",
+		"Person detected — new: stranger (stranger_1); already present: long (friend); faces in frame: 2 (long, stranger_1)",
+		"long", "")
+	if !strings.Contains(got, "[A stranger joined long, who is already in frame") {
+		t.Fatalf("stranger-joins-friend presence.enter = %q, want inline rule naming the friend", got)
+	}
+}
+
+func TestBuildPresenceEnterLoneStrangerHasNoJoinRule(t *testing.T) {
+	got := Build("presence.enter", "Person detected — new: stranger (stranger_4); faces in frame: 1 (stranger_4)", "long", "")
+	if strings.Contains(got, "[A stranger joined") {
+		t.Fatalf("lone-stranger presence.enter = %q, must not carry the join rule", got)
+	}
+}
+
+func TestBuildPresenceEnterNewFriendHasNoJoinRule(t *testing.T) {
+	got := Build("presence.enter",
+		"Person detected — new: friend (leo); already present: long (friend); faces in frame: 2 (long, leo)",
+		"leo", "")
+	if strings.Contains(got, "[A stranger joined") {
+		t.Fatalf("friend-joins-friend presence.enter = %q, must not carry the stranger join rule", got)
+	}
+}
