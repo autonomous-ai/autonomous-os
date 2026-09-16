@@ -1266,6 +1266,12 @@ toàn yên tĩnh.
 
 ### Bơm đầu ra
 
+Trong LIVE, transcript đầu vào có thể đến sau khi model đã bắt đầu trả lời.
+Khi đầu ra đã mang ID lượt đầu vào, transcript đến muộn của cùng ID không được
+dừng phần trả lời realtime hoặc xóa các câu TTS ngoài đang chờ (kể cả ElevenLabs).
+Đầu vào mới có ID khác và được xác nhận là hướng đến thiết bị vẫn có thể ngắt lời;
+quy tắc ngắt phần phát của main agent được giữ nguyên.
+
 `_live_out_pump` lặp `orchestrator.stream_output()` thay vì đọc thẳng hàng đợi
 của agent. Việc đó tái dùng toàn bộ bề mặt tool đang có — `look` + replay,
 `express_emotion`, `reject_turn`, `delegate_to_main` — thay vì cài lại, và nó đọc
