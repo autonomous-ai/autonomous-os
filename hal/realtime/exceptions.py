@@ -7,3 +7,7 @@ class OpenAIRealtimeError(Exception):
 
 class GeminiLiveError(Exception):
     """Raised on Gemini Live API errors (e.g. go_away)."""
+
+
+class GPTLiveError(Exception):
+    """Raised on GPT-Live (OpenAI /v1/live) server `error` events."""

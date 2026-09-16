@@ -41,7 +41,7 @@ never by the LLM.
 brain-tier, so it is drawn as its own band). Voice turns land here first, and it decides per turn:
 **answer directly** when the turn is simple (small talk, no skills or tools), or **delegate up** to
 the main agentic runtime (the `delegate_to_main` tool call) when the turn needs skills or complex tool calls. Runs on
-Gemini Live or OpenAI Realtime — see [realtime-voice.md](../realtime-voice.md).
+Gemini Live, OpenAI Realtime or GPT-Live — see [realtime-voice.md](../realtime-voice.md).
 
 **Linux Kernel** — the vendor kernel (Raspberry Pi OS / OrangePi, or a robot's onboard compute)
 we run on; we don't ship one. Our **Drivers** (`motors`, `rgb`, `display`, `camera`, `voice`

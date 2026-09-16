@@ -127,7 +127,7 @@ def stack():
 
     # 3b — Realtime voice: hosted in HAL, answers small talk or hands the turn to the brain
     y += ROW
-    labels = ["Gemini Live", "OpenAI Realtime"]
+    labels = ["Gemini Live", "OpenAI Realtime", "GPT-Live"]
     f.caption_left(y, "Realtime voice")
     r = f.row(y, labels, VOICE); widest = max(widest, r)
 

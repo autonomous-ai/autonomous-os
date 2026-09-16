@@ -9,6 +9,7 @@ import hal.config as app_config
 from hal.realtime.enums import (
     GeminiThinkingLevel,
     GeminiVoice,
+    GPTLiveVoice,
     OpenAIReasoningEffort,
     OpenAITruncationType,
     OpenAITurnDetectionType,
@@ -100,6 +101,30 @@ class OpenAIConfig(BaseModel):
     # How long a commit / tool result waits for the active response to finish
     # before forcing response.create anyway.
     response_wait_s: float = 10.0
+
+
+class GPTLiveConfig(BaseModel):
+    api_key: str = app_config.REALTIME_GPTLIVE_API_KEY
+    # Shared with OpenAI Realtime by default (see REALTIME_GPTLIVE_BASE_URL);
+    # the SDK derives wss://…/live/sessions from it.
+    base_url: str | None = app_config.REALTIME_GPTLIVE_BASE_URL or None
+    model: str = app_config.REALTIME_GPTLIVE_MODEL
+    voice: GPTLiveVoice = GPTLiveVoice(app_config.REALTIME_GPTLIVE_VOICE)
+    instructions: str = ""
+    sample_rate: int = app_config.REALTIME_GPTLIVE_SAMPLE_RATE
+    language: str | None = _load_language()
+    turn_gap_ms: int = app_config.REALTIME_GPTLIVE_TURN_GAP_MS
+    interrupt_gap_ms: int = app_config.REALTIME_GPTLIVE_INTERRUPT_GAP_MS
+    input_gap_ms: int = app_config.REALTIME_GPTLIVE_INPUT_GAP_MS
+    commit_silence_ms: int = app_config.REALTIME_GPTLIVE_COMMIT_SILENCE_MS
+    delegation_wait_ms: int = app_config.REALTIME_GPTLIVE_DELEGATION_WAIT_MS
+    max_retries: int = 1
+    reconnect_delay_s: float = 2.0
+    queue_poll_s: float = 1.0
+    # How long a send waits for `session.started` before giving up on the
+    # command (audio appended before the session is up is rejected).
+    start_timeout_s: float = 10.0
+    join_timeout_s: float = 5.0
 
 
 class GeminiConfig(BaseModel):

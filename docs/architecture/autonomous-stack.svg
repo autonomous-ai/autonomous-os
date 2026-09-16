@@ -89,6 +89,8 @@
   <text x="466" y="547" text-anchor="middle" fill="#23786c" font-size="28" font-weight="600">Gemini Live</text>
   <rect x="589" y="505" width="280" height="66" fill="#eaf5f3" stroke="#9ecfc6" stroke-width="2"/>
   <text x="729" y="547" text-anchor="middle" fill="#23786c" font-size="28" font-weight="600">OpenAI Realtime</text>
+  <rect x="887" y="505" width="174" height="66" fill="#eaf5f3" stroke="#9ecfc6" stroke-width="2"/>
+  <text x="974" y="547" text-anchor="middle" fill="#23786c" font-size="28" font-weight="600">GPT-Live</text>
   <text x="40" y="652" fill="#2b2b29" font-size="28" font-weight="600">Capabilities</text>
   <rect x="360" y="617" width="122" height="66" fill="#fdf4e6" stroke="#e6c489" stroke-width="2"/>
   <text x="421" y="659" text-anchor="middle" fill="#96660f" font-size="28" font-weight="600">audio</text>

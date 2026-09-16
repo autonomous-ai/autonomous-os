@@ -209,9 +209,10 @@ Common knobs:
 | `HAL_VAD_THRESHOLD` | Voice-activity RMS floor (lower = more sensitive) |
 | `HAL_SILENCE_TIMEOUT` | Seconds of silence before committing a turn (fallback clock, no STT final) |
 | `HAL_ENDPOINT_SILENCE_S` | Seconds of silence before committing a turn once STT emitted a final |
-| `HAL_REALTIME_TURN_DETECTION` | `on` = server-side VAD (Gemini/OpenAI), `off` = client VAD |
+| `HAL_REALTIME_TURN_DETECTION` | `on` = server-side VAD (Gemini/OpenAI), `off` = client VAD; ignored by GPT-Live (no VAD on the Live API) |
 | `HAL_GEMINI_LIVE_MODEL` | Gemini realtime model id |
 | `HAL_OPENAI_REALTIME_MODEL` | OpenAI realtime model id |
+| `HAL_GPTLIVE_MODEL` | GPT-Live model id (`gpt-live-1`, OpenAI `/v1/live/sessions`) |
 | `DEVICE_TYPE` | `intern-v2` — hardware kit gate for drivers like the mic mute switch |
 
 ---
@@ -643,7 +644,7 @@ module load and stripped from the URL for privacy (see `hooks/setup/useSetupUrlP
 - [`docs/os-server.md`](os-server.md) — routes, wire graph, run flags
 - [`docs/setup-flow.md`](setup-flow.md) — provisioning, AP→STA handoff, admin password default
 - [`docs/mqtt.md`](mqtt.md) — full MQTT command reference
-- [`docs/realtime-voice.md`](realtime-voice.md) — Gemini Live / OpenAI Realtime pipelines
+- [`docs/realtime-voice.md`](realtime-voice.md) — Gemini Live / OpenAI Realtime / GPT-Live pipelines
 - [`docs/bootstrap-ota.md`](bootstrap-ota.md) — OTA metadata format + promotion model
 - [`docs/agentic/hermes.md`](agentic/hermes.md), [`docs/agentic/picoclaw.md`](agentic/picoclaw.md), [`docs/agentic/codex.md`](agentic/codex.md), [`docs/agentic/opencode.md`](agentic/opencode.md) — per-runtime protocol
 

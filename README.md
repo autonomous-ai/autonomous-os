@@ -90,7 +90,7 @@ The Go daemon `os-server` on :5000, one package per box in the figure. `intent` 
 
 ### [Realtime voice](hal/realtime/)
 
-Gemini Live or OpenAI Realtime, hosted inside HAL and running beside the main path. A spoken turn lands here first: it answers directly, or hands the turn up to the engine.
+Gemini Live, OpenAI Realtime or GPT-Live (`gpt-live-1`), hosted inside HAL and running beside the main path. A spoken turn lands here first: it answers directly, or hands the turn up to the engine.
 
 ### [Capabilities](robots/contract/capabilities.md)
 

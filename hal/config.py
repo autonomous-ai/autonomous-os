@@ -902,6 +902,7 @@ def _os_cfg_realtime() -> dict:
 _RT: dict = _os_cfg_realtime()
 _RT_GEMINI: dict = _RT.get("gemini") if isinstance(_RT.get("gemini"), dict) else {}
 _RT_OPENAI: dict = _RT.get("openai") if isinstance(_RT.get("openai"), dict) else {}
+_RT_GPTLIVE: dict = _RT.get("gptlive") if isinstance(_RT.get("gptlive"), dict) else {}
 
 
 def _rt_str(env_key: str, cfg_val, default: str) -> str:
@@ -924,7 +925,7 @@ def _rt_enabled() -> bool:
 
 
 REALTIME_ENABLED: bool = _rt_enabled()
-REALTIME_PROVIDER: str = _rt_str("HAL_REALTIME_PROVIDER", _RT.get("provider"), "gemini")  # none | gemini | openai
+REALTIME_PROVIDER: str = _rt_str("HAL_REALTIME_PROVIDER", _RT.get("provider"), "gemini")  # none | gemini | openai | gptlive
 # When enabled, do not send a voice turn to the realtime agent until an STT
 # interim transcript starts with one of the configured wake phrases. This is a
 # top-level config.json setting because it also gates the non-realtime Go path.
@@ -1564,6 +1565,56 @@ REALTIME_OPENAI_NOISE_REDUCTION: str = _rt_str(
 # server_vad activation threshold (0..1, API default 0.5). 0 = derive it from
 # HAL_LIVE_VAD_START_SENSITIVITY (low → 0.7, high → 0.3); a non-zero value wins.
 REALTIME_OPENAI_VAD_THRESHOLD: float = float(os.environ.get("HAL_OPENAI_VAD_THRESHOLD", "0") or 0)
+
+# --- Realtime: GPT-Live (OpenAI /v1/live, gpt-live-1) ---
+# A DIFFERENT API from the Realtime API above (see voice_agent/gpt_live.py):
+# full-duplex, client delegation instead of tools, per-minute billing.
+REALTIME_GPTLIVE_API_KEY: str = (
+    os.environ.get("OPENAI_API_KEY", "")
+    or _RT_GPTLIVE.get("api_key", "")
+    or _RT.get("api_key", "")
+    or _os_cfg_get("llm_api_key", "")
+)
+# Same wire as OpenAI Realtime: after its own overrides it falls through to
+# REALTIME_OPENAI_BASE_URL (HAL_OPENAI_REALTIME_BASE_URL > realtime.base_url >
+# <llm_base_url>/ws/openai). The SDK appends "/live/sessions" (wss), so through
+# the campaign-api proxy the session lands on
+# <llm_base_url>/ws/openai/live/sessions — a route the proxy is adding; until it
+# is live the connect 404s and the agent stays in its reconnect backoff. Set
+# HAL_GPTLIVE_BASE_URL=https://api.openai.com/v1 (+ OPENAI_API_KEY) to go
+# direct in the meantime.
+REALTIME_GPTLIVE_BASE_URL: str = (
+    os.environ.get("HAL_GPTLIVE_BASE_URL", "")
+    or _RT_GPTLIVE.get("base_url", "")
+    or REALTIME_OPENAI_BASE_URL
+)
+REALTIME_GPTLIVE_MODEL: str = _rt_str("HAL_GPTLIVE_MODEL", _RT_GPTLIVE.get("model"), "gpt-live-1")
+REALTIME_GPTLIVE_VOICE: str = _rt_str("HAL_GPTLIVE_VOICE", _RT_GPTLIVE.get("voice"), "marin")
+# One PCM format for BOTH directions on a Live WebSocket (16000 or 24000 Hz).
+# 24000 keeps the model's voice at full quality; 16000 halves uplink bandwidth.
+REALTIME_GPTLIVE_SAMPLE_RATE: int = int(os.environ.get("HAL_GPTLIVE_SAMPLE_RATE", "24000") or 24000)
+# GPT-Live has NO turn boundary on the wire (no response.done / turn_complete),
+# so the adapter synthesizes one: a reply is over when no output audio or
+# transcript has arrived for TURN_GAP_MS. If the user spoke over the reply and
+# output then stops for INTERRUPT_GAP_MS, the reply counts as interrupted
+# (barge-in) instead of completed.
+REALTIME_GPTLIVE_TURN_GAP_MS: int = int(os.environ.get("HAL_GPTLIVE_TURN_GAP_MS", "800") or 800)
+REALTIME_GPTLIVE_INTERRUPT_GAP_MS: int = int(os.environ.get("HAL_GPTLIVE_INTERRUPT_GAP_MS", "400") or 400)
+# Input transcript fragments separated by more than this (session-timeline ms)
+# belong to a NEW user turn even when the model has not answered in between.
+REALTIME_GPTLIVE_INPUT_GAP_MS: int = int(os.environ.get("HAL_GPTLIVE_INPUT_GAP_MS", "1500") or 1500)
+# Turn-based path only: there is no commit on Live, so end-of-turn appends this
+# much silence to let the model hear that the utterance is over.
+REALTIME_GPTLIVE_COMMIT_SILENCE_MS: int = int(os.environ.get("HAL_GPTLIVE_COMMIT_SILENCE_MS", "600") or 600)
+# A client delegation carries no task text; the adapter waits this long for
+# the input transcript to catch up before forwarding delegate_to_main.
+REALTIME_GPTLIVE_DELEGATION_WAIT_MS: int = int(os.environ.get("HAL_GPTLIVE_DELEGATION_WAIT_MS", "500") or 500)
+# Cost bound. GPT-Live bills $0.05 per session-MINUTE, billed per second, whether
+# or not anyone speaks, so an idle session is money leaving. Park (close) the
+# transport after this many seconds without turn activity; the next turn's
+# prepare_turn() reconnects synchronously (~1 s handshake, audio is buffered
+# across it) exactly like the Gemini idle park. 0 disables.
+REALTIME_GPTLIVE_IDLE_PARK_S: float = float(os.environ.get("HAL_GPTLIVE_IDLE_PARK_S", "30") or 30)
 
 # --- Realtime: Context manager ---
 OPENCLAW_WORKSPACE_DIR: str = os.environ.get("HAL_OPENCLAW_WORKSPACE_DIR", "/root/.openclaw/workspace")

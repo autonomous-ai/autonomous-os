@@ -30,6 +30,7 @@ class ContextManagerBase(ABC):
     PROVIDER_PROMPT_PATHS: dict[str, Path] = {
         "openai": RESOURCES_DIR / "system_prompt_openai.md",
         "gemini": RESOURCES_DIR / "system_prompt_gemini.md",
+        "gptlive": RESOURCES_DIR / "system_prompt_gptlive.md",
     }
 
     LANGUAGE_NAMES: dict[str, str] = {

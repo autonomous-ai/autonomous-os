@@ -16,6 +16,7 @@ PROMPTS = (
     "system_prompt.md",
     "system_prompt_gemini.md",
     "system_prompt_openai.md",
+    "system_prompt_gptlive.md",
 )
 
 # The phrases the rule must list — the ones that were kept, not delegated.

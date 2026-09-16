@@ -17,7 +17,10 @@ Với [KPI-3 giọng nói](voice-metrics_vi.md#kpi-3-chạy-xong-không-đánh-g
 `TurnDoneEvent.execution_completed` mặc định `false`, chỉ thành true khi có
 tín hiệu kết thúc từ provider: Gemini `generation_complete` hoặc
 `turn_complete` bình thường, không interrupted; OpenAI `response.done`
-với `response.status == "completed"` và không có barge-in trong response đó.
+với `response.status == "completed"` và không có barge-in trong response đó;
+GPT-Live không có terminal nào trên đường truyền, nên adapter tự tổng hợp —
+watchdog đóng lượt sau `turn_gap_ms` không có output và không có overlap với
+lời người dùng (xem mục *GPT-Live*).
 Đóng kết nối, lỗi gửi, sentinel mở chặn,
 output dở dang rồi timeout, done cũ/phát lại, hoặc bỏ receive không phải bằng
 chứng chạy xong.
@@ -54,8 +57,9 @@ Lớp realtime phải delegate nó ở mọi cách diễn đạt. Quan sát trê
 không?" / "Giúp tôi tìm cây bút được không?" bị Gemini tự trả lời — hỏi bút trông
 thế nào, đoán vị trí, hoặc đề nghị nhìn mà không nhìn. Quy tắc nằm ở ba chỗ phải
 khớp nhau: mô tả tool `delegate_to_main` dùng chung, mô tả tool `look` (tìm đồ
-không phải là look), và bullet **Finding things is an action** trong cả ba prompt
-provider; `hal/test/test_realtime_find_delegation.py` ghim phần text. Bản thân
+không phải là look), và bullet **Finding things is an action** trong cả bốn prompt
+(`system_prompt.md` dùng chung, `system_prompt_gemini.md`, `system_prompt_openai.md`,
+`system_prompt_gptlive.md`); `hal/test/test_realtime_find_delegation.py` ghim phần text. Bản thân
 quyết định không được ép bằng code — chỉ giọng nói thật trên thiết bị mới kiểm
 tra được.
 
@@ -80,7 +84,10 @@ tế trong phòng. SOUL đang có trên thiết bị cần nhận chính sách m
 main agent có thể áp dụng.
 
 Tool `delegate_to_main` được orchestrator đăng ký tự động (`orchestrator.py`,
-`DELEGATE_TOOL`).
+`DELEGATE_TOOL`). Trên GPT-Live không có tool ở tầng Live: adapter `gpt_live.py`
+dịch `session.delegation.created` của model thành đúng `FunctionCallOutput`
+`delegate_to_main`, nên orchestrator xử lý y hệt (xem mục *GPT-Live*);
+`reject_turn` không tồn tại trên provider đó.
 
 **Agent chính được so khớp với cái gì.** `turn_dispatch.py` ghép sensing message
 theo dạng `[voice-instruction] <delegate message>` rồi tới `[transcript] <text STT
@@ -719,6 +726,11 @@ việc nói. Khi `stream_output()` thấy lời gọi (`_handle_emotion_call`), 
    ack (`trigger_response=True`) nếu không lượt sẽ treo tới khi watchdog nổ. Độ
    trễ cộng thêm vào giọng nói ≈ 0.
 
+Trên GPT-Live tool này **không tồn tại**: provider không có tool nào ở tầng Live
+(chỉ có client delegation), `GPTLiveAgent` log một dòng lúc khởi tạo
+(`GPT-Live has no Live-layer tools — [...] unavailable on this provider`) và bỏ
+qua mọi kết quả gửi cho nó; mặt thiết bị chỉ đổi qua main agent.
+
 ### Cô lập session khi tool call đang chờ (Gemini)
 
 Gemini Live **từ chối `send_realtime_input` khi một tool call do nó phát ra chưa
@@ -772,7 +784,9 @@ thiết bị smart-home của họ, tin nhắn của họ) cho `delegate_to_main
 Đánh đổi:
 
 - **Chỉ Gemini.** OpenAI Realtime không có tool built-in tương đương, nên prompt
-  của nó (`system_prompt_openai.md`) vẫn delegate mọi lookup bên ngoài.
+  của nó (`system_prompt_openai.md`) vẫn delegate mọi lookup bên ngoài. GPT-Live
+  càng không: không có tool nào ở tầng Live, `system_prompt_gptlive.md` xếp mọi
+  dữ liệu live bên ngoài vào việc của backend.
 - **Chi phí.** Grounding tính phí theo mỗi grounded request (cộng thêm token),
   nhưng chỉ phát sinh khi Gemini thực sự quyết định search. Prompt dặn nó *chỉ*
   ground cho dữ kiện công khai/mới thật sự, không ground cho kiến thức chung đã có
@@ -840,7 +854,8 @@ LLM vision, vài giây) bằng một round-trip ngay trong phiên.
   (`_camera_present()`), nên đúng cho mọi đường khởi tạo.
 - **Flag:** `HAL_GEMINI_VISION` / `realtime.gemini.vision` (mặc định **bật**).
 - **Provider:** chỉ Gemini (luồng inject ảnh → tiếp tục turn đã làm + test cho
-  Gemini Live; OpenAI vẫn delegate câu hỏi thị giác). System prompt Gemini
+  Gemini Live; OpenAI vẫn delegate câu hỏi thị giác; GPT-Live không có tool lẫn
+  input ảnh — `gpt_live.py` bỏ frame lạc với một cảnh báo duy nhất). System prompt Gemini
   (`system_prompt_gemini.md`) mô tả khi nào gọi `look`.
 
 Chi phí: một frame mỗi lần gọi (kích bằng tool, **không** stream video), nên token
@@ -888,14 +903,16 @@ chụp thì không có gì để bàn giao, agent chụp như bình thường.
 
 ## Các provider
 
-Hai backend thay thế cho nhau, chọn bằng `HAL_REALTIME_PROVIDER`
-(`none` | `gemini` | `openai`; Go `RealtimeProviders` và dropdown web
-`RealtimeSection.tsx` liệt kê đúng ba giá trị này):
+Ba backend thay thế cho nhau, chọn bằng `HAL_REALTIME_PROVIDER`
+(`none` | `gemini` | `openai` | `gptlive`; Go `RealtimeProviders` và dropdown web
+`RealtimeSection.tsx` liệt kê đúng bốn giá trị này, nhãn web của `gptlive` là
+"GPT-Live"):
 
 | Provider | Class | Mô hình threading | Model mặc định | Sample rate |
 |----------|-------|-------------------|----------------|-------------|
 | Gemini Live | `voice_agent/gemini_live.py` `GeminiLiveAgent` | event loop asyncio riêng trên thread `gemini-io`; thread send/recv submit coroutine qua `run_coroutine_threadsafe` | `gemini-2.5-flash-native-audio-preview-12-2025` | 16000 Hz |
 | OpenAI Realtime | `voice_agent/openai_realtime.py` `OpenAIRealtimeAgent` | thuần đồng bộ; 1 `RealtimeConnection` (SDK `openai` GA, `openai.resources.realtime`) dùng chung bởi thread send/recv, serialize bằng reentrant lock | `gpt-realtime-2` | 24000 Hz |
+| GPT-Live | `voice_agent/gpt_live.py` `GPTLiveAgent` | thuần đồng bộ; 1 `LiveConnection` (SDK `openai` ≥ 3.14.1, `openai.resources.live`) dùng chung bởi thread send/recv dưới `_conn_lock`, cộng thread watchdog `gptlive-watchdog` (tick 50 ms) tổng hợp ranh giới lượt | `gpt-live-1` | 24000 Hz (hoặc 16000; một định dạng PCM cho cả hai chiều) |
 
 Gemini Live dùng `google-genai` và private asyncio loop của nó do thread
 `gemini-io` sở hữu. Teardown đóng/hủy provider receive task trước, rồi mới join
@@ -1025,19 +1042,22 @@ response còn chạy thành `conversation_already_has_active_response`;
 `requires_fresh_session` False vì item `function_call_output` ghi được mà không
 cần response, nên tool call chưa ack không đầu độc session như Gemini (1008).
 
-Vẫn **chỉ Gemini** (không đổi): `look` vision trong phiên, Google Search
-grounding, session resumption, `requires_fresh_session`, override `end_turn()`.
+Vẫn **chỉ Gemini** (không đổi; OpenAI Realtime lẫn GPT-Live đều không có): `look`
+vision trong phiên, Google Search grounding, session resumption,
+`requires_fresh_session`, override `end_turn()`.
 
-Cả hai kế thừa `voice_agent/base.py` `VoiceAgentBase`, định nghĩa contract dựa
+Cả ba kế thừa `voice_agent/base.py` `VoiceAgentBase`, định nghĩa contract dựa
 trên queue:
 
 - **2 thread mỗi agent**: `_send_loop` rút `_send_queue` → API; `_recv_loop` đọc
-  API → `_recv_queue`. Cả hai tự reconnect khi lỗi.
-- **Fail-fast khi backend lỗi** (cả 2 driver): khi `_recv_loop` gặp lỗi thật
+  API → `_recv_queue`. Cả ba tự reconnect khi lỗi.
+- **Fail-fast khi backend lỗi** (cả 3 driver): khi `_recv_loop` gặp lỗi thật
   (Gemini Live: proxy `go_away`, hết quota / resource-exhausted, WS close bất
   thường — tức **không phải** idle close `1000` lành tính; OpenAI: event `error`
   của Realtime API ngoài các code race lành tính liệt kê ở đoạn OpenAI, hoặc
-  socket rớt), nó đẩy `TurnDoneEvent` ngay lập tức
+  socket rớt; GPT-Live: `error` không mang client `event_id` `hal-*` của mình hoặc
+  trên `hal-start`, và mọi lần `session.closed` kết thúc vòng lặp event), nó đẩy
+  `TurnDoneEvent` ngay lập tức
   (`_fail_fast_turn`) để `receive()` thoát liền và lượt fallback sang main agent
   **mà không** phải chờ hết `HAL_REALTIME_RECV_QUEUE_TIMEOUT_S`. Idle close lành
   tính vẫn reconnect êm (Gemini code `1000`; OpenAI kết thúc vòng lặp event êm,
@@ -1061,8 +1081,9 @@ trên queue:
   còn message về, tối đa `HAL_REALTIME_TURN_MAX_SILENCE_S` (mặc định 20 s) cho cả
   lượt. Lượt không có message nào về vẫn kết thúc ngay ở cửa sổ gap đầu tiên.
 - `available` ⇔ websocket/session đã connect (`_connected`).
-- **Contract live-mode** (cả hai provider phát giống nhau, xem đoạn OpenAI ở
-  trên): `user_turn_id` trên mọi output và `TurnDoneEvent`; `UserSpeechOutput`
+- **Contract live-mode** (cả ba provider phát giống nhau — xem đoạn OpenAI ở
+  trên; GPT-Live tổng hợp từ transcript input và khoảng im lặng output, xem mục
+  *GPT-Live*): `user_turn_id` trên mọi output và `TurnDoneEvent`; `UserSpeechOutput`
   (chỉ LIVE_MODE) cho onset / endpoint / transcript của người dùng;
   `InterruptedOutput` `output_reset` ở lời đầu của một reply và `server_interrupt`
   khi bị ngắt; `OutputEvent.gen` để `receive()` bỏ audio của reply đã bị thay;
@@ -1086,52 +1107,229 @@ vẫn drain được event. Reconnect là idempotent (re-check `_connected` tron
 và `_drop_connection()` chỉ null connection nếu nó vẫn là connection hiện tại —
 nên 2 thread không thể tear down / dựng lại connection của nhau.
 
-### GPT-Live-1 không phải Realtime API
+### GPT-Live (`gptlive`): full-duplex, turn được tổng hợp
 
 `gpt-live-1` (GA trong API từ 2026-09-10) là một **API khác**, không phải model
-mới trên `/v1/realtime`. Kết quả khảo sát (developers.openai.com/api/docs/guides/live,
-live-migration, live-delegation và `openai.types.live` trong SDK 3.14.1):
+mới trên `/v1/realtime`: transport, event, tool và cách tính tiền đều khác
+Realtime API, nên nó có adapter riêng — `voice_agent/gpt_live.py` `GPTLiveAgent`,
+chọn bằng `HAL_REALTIME_PROVIDER=gptlive` (`orchestrator._make_agent`), prompt
+riêng `system_prompt_gptlive.md` (`PROVIDER_PROMPT_PATHS`), log usage riêng
+`gptlive_usage.log`, lỗi riêng `GPTLiveError`. Docstring module của `gpt_live.py`
+là nguồn chân lý cho mục này. Tiền đề: đường truyền Live **không có** thứ nào mà
+contract `VoiceAgentBase` được xây quanh — không ranh giới lượt, không event VAD,
+không event ngắt lời, không tool, không commit — nên adapter **tự tổng hợp** từng
+thứ và nói rõ ở từng chỗ. Phần dưới đi qua từng cái một.
 
-- **Transport:** WebSocket chính tới `/v1/live/sessions` (SDK
-  `client.live.connect()`; `session.start` → `session.started`), KHÔNG phải
-  `/v1/realtime`. Proxy `campaign-api` không có route `/live/sessions` — phải nối
-  thẳng hoặc sửa proxy.
-- **Event:** client gửi `session.input_audio.append` (base64 PCM16 mono, 16000
-  hoặc 24000 Hz); server phát `session.output_audio.delta`,
-  `session.output_transcript.delta`, `session.input_transcript.delta` (mảnh có
-  `start_ms`/`end_ms`, tài liệu nói thẳng là "do not define complete turns"),
-  `session.delegation.created`, `session.usage.updated`, `session.closed`, `error`.
-- **Không có** `response.done` / turn-complete, **không có** `turn_detection` /
-  cấu hình VAD, **không có** audio commit, **không có** event ngắt lời — model
-  full-duplex, tự xử lý barge-in; trạng thái playback phải theo dõi phía client.
-- **Tool:** không có tool ở tầng Live với client delegation — model phát
-  `session.delegation.created` (chỉ metadata: id, target, offset_ms; nội dung
-  task phải dựng lại từ các mảnh transcript quanh `offset_ms`), app trả lời bằng
-  `session.commentary.append` (nói ra), `session.thinking.append` (im lặng) hoặc
-  `session.instructions.append`, mỗi cái ≤500 token kèm `delegation_id`. Cách khác:
-  `delegation: {type: "responses"}` chạy tool trong một backend Responses
-  (function call tới trong `response.event`, kết quả trả qua
-  `response.item.create` + `response.create`). Không nhận input ảnh.
-- **Giá:** $0.05/phút mỗi session, bill theo giây (+ model/tool của backend tính
-  riêng) — khác hẳn giá theo token của Realtime API.
+**Transport.** `client.live.connect()` (SDK `openai>=3.14.1`,
+`openai.resources.live`) mở WebSocket chính tới `/v1/live/sessions`; adapter gửi
+`session.start` (client `event_id` `hal-start`) rồi **chờ `session.started`**
+trước mọi lệnh khác — server từ chối lệnh gửi trước đó, nên thread send chặn tối
+đa `start_timeout_s` (10 s) và quá hạn thì bỏ lệnh đó (log `GPT-Live session not
+started within 10s — dropping send`). Payload `session.start` (`_build_session`,
+được test đối chiếu với `openai.types.live.SessionConfig` của SDK):
 
-**Kết luận:** KHÔNG tương thích với `voice_agent/openai_realtime.py`. Muốn dùng
-cần adapter riêng (vd `voice_agent/gpt_live.py`) và contract base phải có
-`TurnDoneEvent` **tự tổng hợp** (provider không có ranh giới lượt), không có
-`look`; bill theo phút khiến idle park/recycle thành bắt buộc; và proxy hiện tại
-không route được. Khái niệm `delegate_to_main` ánh xạ tự nhiên lên client
-delegation + `session.commentary.append`.
+```
+{model, instructions, audio: {format: {type: "audio/pcm", rate}, output: {voice}}, delegation: {type: "client"}}
+```
+
+Một WebSocket Live chỉ có **một** định dạng PCM cho cả hai chiều (16000 hoặc
+24000 Hz), nên `output_sample_rate == sample_rate`. `delegation: {type: "client"}`
+là chủ ý: model phát `session.delegation.created` và **tiến trình này** (→ main
+agent) làm việc; `responses` sẽ giao việc cho một model OpenAI-hosted thay vì bộ
+não của thiết bị. Trên đường truyền, client gửi `session.input_audio.append`
+(base64 PCM16 mono, `event_id` `hal-audio`); server phát `session.output_audio.delta`,
+`session.output_transcript.delta`, `session.input_transcript.delta` (mảnh có
+`start_ms`/`end_ms`, tài liệu nói thẳng là "do not define complete turns"),
+`session.delegation.created`, `session.usage.updated`, `session.closed`, `error`,
+`info`; các event khác (`session.updated`, `session.*.appended`, `input_audio.muted`
+/ `unmuted`, `response.event`) bị bỏ qua. SDK không tự reconnect (adapter không
+truyền `on_reconnecting`); loop send/recv của adapter tự lo hồi phục với cùng kỷ
+luật của hai provider kia: backoff 2 s → tối đa 60 s, fail-fast. `disconnect()`
+gửi `session.close()` trước khi đóng socket để server trả `session.closed` kèm
+usage cuối; session mở lại không thừa kế chủ input hay delegation nào
+(`_reset_turn_state`).
+
+**Cấu hình** (`hal/config.py`, block "Realtime: GPT-Live"; `GPTLiveConfig` trong
+`realtime/config.py`; bảng env ở mục *Cấu hình*):
+
+- `REALTIME_GPTLIVE_API_KEY` = env `OPENAI_API_KEY` > `realtime.gptlive.api_key` >
+  `realtime.api_key` chung > `llm_api_key`.
+- `REALTIME_GPTLIVE_BASE_URL` = `HAL_GPTLIVE_BASE_URL` > `realtime.gptlive.base_url`
+  > **base URL của OpenAI Realtime** (`HAL_OPENAI_REALTIME_BASE_URL` >
+  `realtime.base_url` > `<llm_base_url>/ws/openai`). SDK nối thêm `/live/sessions`
+  và chuyển sang `wss`, nên qua proxy hai provider OpenAI gọi hai path anh em với
+  cùng header `Authorization: Bearer`: Realtime →
+  `wss://…/ws/openai/realtime?model=<model>`, GPT-Live →
+  `wss://…/ws/openai/live/sessions` (model nằm trong payload `session.start`, không
+  trên URL). Proxy `campaign-api` **chưa** serve path thứ hai (kiểm 2026-09-16,
+  mọi biến thể `/ws/openai` cũng 404): cho tới khi route lên, connect 404, agent
+  log `Reconnect failed … next retry in ~Ns` và ở lại backoff 2 s → 60 s (turn rơi
+  về main agent); thiết bị không cần đổi gì khi route sẵn sàng. Muốn nối thẳng tạm
+  thời: `HAL_GPTLIVE_BASE_URL=https://api.openai.com/v1` + `OPENAI_API_KEY` trong
+  `/opt/hal/.env`.
+- `HAL_GPTLIVE_MODEL` (`gpt-live-1`), `HAL_GPTLIVE_VOICE` (`marin`; 22 giọng
+  built-in trong enum `GPTLiveVoice` = literal `BuiltInVoice` của SDK 3.14.1, Go
+  `RealtimeGPTLiveVoiceList` phải giữ khớp), `HAL_GPTLIVE_SAMPLE_RATE` (24000;
+  24000 giữ giọng full quality, 16000 giảm nửa băng thông uplink).
+- Knob tổng hợp: `HAL_GPTLIVE_TURN_GAP_MS` 800, `HAL_GPTLIVE_INTERRUPT_GAP_MS` 400,
+  `HAL_GPTLIVE_INPUT_GAP_MS` 1500, `HAL_GPTLIVE_COMMIT_SILENCE_MS` 600,
+  `HAL_GPTLIVE_DELEGATION_WAIT_MS` 500 — ý nghĩa từng cái ở các đoạn sau.
+- **Không có knob reasoning**: model Live không có; Go `ValidateRealtimeKnobs` từ
+  chối mọi giá trị reasoning cho `gptlive`, `GET /api/device/realtime-options`
+  trả list reasoning rỗng cho nó và web ẩn selector.
+
+**Ranh giới lượt (tổng hợp).** Không có `response.done` / `turn_complete`. Thread
+watchdog `gptlive-watchdog` (tick 50 ms) phát `TurnDoneEvent(execution_completed=True,
+user_turn_id=<chủ>)` khi không có `session.output_audio.delta` /
+`session.output_transcript.delta` nào tới trong `turn_gap_ms`. Deadline đo từ
+output **cuối**, output liên tục cứ đẩy deadline đi, nên model đang nói không bao
+giờ bị adapter cắt. `OutputEvent.gen` tăng ở đầu mỗi đợt trả lời và mỗi lần ngắt,
+để `receive()` bỏ audio của reply đã bị thay. `execution_completed` chỉ true khi
+ranh giới do gap (`reason == "gap"`) và không bị ngắt; ranh giới do
+`_fail_fast_turn` (lỗi transport) luôn false.
+
+**Lời người dùng (tổng hợp).** Không có event VAD. `UserSpeechOutput` (chỉ
+LIVE_MODE, key `gptlive-<hex>`, `method="provider_transcript"`, **không bao giờ**
+có `endpoint_at`) được dựng từ các mảnh `session.input_transcript.delta`. Một
+input turn mới mở khi chưa có turn nào mở, khi turn trước đã được trả lời, hoặc
+khi `start_ms − end_ms trước > input_gap_ms` (mốc trên timeline của session, nên
+hai câu cách nhau xa vẫn tách được dù model chưa đáp câu đầu). Khi model bắt đầu
+trả lời, adapter phát một `UserSpeechOutput(transcript_finished=True)` chỉ-hoàn-tất
+(input coi là xong vì model đã đáp), và `user_turn_id` của reply được **đóng
+băng** ở output đầu tiên của đợt — rỗng cho một câu model tự nói không ai hỏi.
+Sau ranh giới, input đã được trả lời không còn là chủ của gì nữa: câu tự nói sau
+đó không được gán vào nó. Như hai provider kia, key chỉ được **công bố** ở
+LIVE_MODE (`_public_key`); đường lượt nhận `user_turn_id` rỗng nhưng vẫn giữ
+transcript cho message delegate.
+
+**Barge-in (tổng hợp).** Không có event ngắt lời. Một mảnh input tới trong lúc
+reply đang stream đánh dấu *overlap* và rút cửa sổ ranh giới xuống
+`interrupt_gap_ms`. Nếu model rồi im lặng qua cửa sổ đó, reply được coi là **bị
+ngắt**: recv queue được rút cạn (giữ `UserSpeechOutput` / `ExecutionOutput` /
+`InterruptedOutput` `server_interrupt`; một `TurnDoneEvent` đang xếp hàng biến
+thành `ExecutionOutput` ở LIVE_MODE để giữ bằng chứng metric), gen tăng, phát
+`InterruptedOutput(reason="server_interrupt", at=now, user_turn_id=<chủ>)`
+(LIVE_MODE) rồi `TurnDoneEvent(execution_completed=False)`; log `Reply interrupted
+by the user — dropped N queued output(s), gen=N`. Nếu model vẫn nói tiếp quá
+`interrupt_gap_ms` kể từ lúc overlap thì đó là backchannel — cờ overlap được xoá,
+cửa sổ về `turn_gap_ms`. `InterruptedOutput(reason="output_reset")` đi trước chunk
+transcript đầu tiên của mỗi reply, như hai provider kia.
+
+**Tool: không có ở tầng Live.** Session chạy **client delegation**: khi model
+quyết định yêu cầu thuộc backend, nó phát `session.delegation.created` (chỉ
+metadata: `id`, `target`) và adapter dịch thành
+`FunctionCallOutput(name="delegate_to_main", call_id=<delegation.id>,
+arguments={"message": <transcript input đã gom>}, user_transcript=<cùng text>)` —
+orchestrator xử lý y như tool call của Gemini (`DelegateSignal`;
+`test_delegation_reaches_the_orchestrator_as_a_delegate_signal` chạy xuyên
+`RealtimeOrchestrator.stream_output`). Delegation không mang text task; text là
+transcript input gom cho user turn hiện tại. Nếu transcript còn rỗng, forward
+được hoãn tối đa `delegation_wait_ms` (watchdog flush; log `Delegation <id> before
+any transcript — waiting up to 500ms`); hết hạn mà vẫn rỗng thì **vẫn forward** —
+orchestrator trả `{"error": "message must not be empty"}` và adapter chuyển cho
+model như một handoff thất bại. Event còn mang `offset_ms` (vị trí
+trên timeline session) nhưng adapter không dùng — nó gom theo user turn thay vì
+cắt transcript quanh mốc đó. Delegation có `target` khác `client` bị bỏ qua:
+`delegation: {type: "responses"}` là cách API chạy tool trong một backend
+Responses hosted (function call tới trong `response.event`, kết quả trả qua
+`response.item.create` + `response.create`) — không phải bộ não của thiết bị,
+nên không dùng. `express_emotion`, `reject_turn`, `end_conversation`, `look`
+**không tồn tại** trên provider này — log một dòng lúc khởi tạo, kết quả cho
+chúng bị bỏ qua. Không nhận input ảnh (`ImageInput` bị bỏ với một cảnh báo duy
+nhất).
+
+**Phản hồi cho model** đi qua `session.thinking.append` (context im lặng, có
+`delegation_id`, nội dung cắt còn 1600 ký tự ≈ trần 500 token của API; client
+`event_id` `hal-context` / `hal-delegation`):
+
+- ack `{"result":"delegated"}` của orchestrator → "the main agent has taken this
+  request … do not answer it yourself" gắn `delegation_id`; delegation vẫn
+  **pending**;
+- `[TTS HISTORY] …` (câu trả lời main agent đã nói, tới qua `send_text`) → gắn vào
+  delegation pending mới nhất và **đóng** nó — model biết user đã được trả lời và
+  bởi ai;
+- `send_text` khác (`[TURN CONTEXT]`, speaker correction) → `delegation_id: null`;
+- kết quả không phải `"delegated"` (vd message rỗng) → "the handoff failed … answer
+  directly" và delegation bị bỏ.
+
+Tối đa 8 delegation pending được nhớ (`_MAX_PENDING_DELEGATIONS`); ack cho call
+adapter chưa từng phát (tool khác) bị bỏ ở mức debug. API còn hai kênh append
+khác cùng trần 500 token — `session.commentary.append` (model **nói ra** nội
+dung) và `session.instructions.append` — adapter cố ý chỉ dùng `thinking`: câu
+trả lời cho user là của main agent phát qua TTS thiết bị, model Live không được
+đọc lại nó.
+
+**`commit_audio()`.** Live không có commit — model tự quyết khi nào user nói xong.
+LIVE_MODE → no-op (mic vẫn stream). Đường lượt → append `commit_silence_ms` PCM im
+lặng (`event_id` `hal-silence`) để model nghe được câu nói đã kết thúc thay vì chờ
+tạp âm phòng nói cho nó.
+
+**Liveness.** `note_server_activity()` ở `session.started`, transcript input /
+output, audio output và delegation — **không** ở `session.usage.updated`: tick
+usage không nói gì về việc model có đang làm reply hay không.
+
+**Lỗi.** Server `error` mang `client_event_id` của mình (`hal-audio`, `hal-silence`,
+`hal-context`, `hal-delegation`) nghĩa là một lệnh của TA bị từ chối (context quá
+500 token, audio trước `session.started`, …) → WARNING `GPT-Live rejected <id>` và
+đi tiếp. `error` không có client id, hoặc trên `hal-start`, → `GPTLiveError` →
+fail-fast (`TurnDoneEvent` ngay) + reconnect nền. Vòng lặp event kết thúc
+(`session.closed`, reason `close_requested` | `expired` | `content` |
+`remote_hangup` | `connection_lost`) → cũng fail-fast + reconnect.
+
+**Latency log:** `Response latency: Nms (last_input_transcript->first_audio; full
+duplex)` — chỉ xấp xỉ, vì bản thân transcript input đã trễ hơn tiếng nói.
+
+**Usage / giá.** `session.usage.updated` và `session.closed` → dòng `[realtime]
+GPT-Live usage: session=<id> seconds=<s> est>=$<s/60×0.05> (cumulative|final;
+$0.05/min billed per second, delegated main-agent work billed separately)` trong
+`gptlive_usage.log` (xem *Pricing & log usage*). Bill theo phút-session, không
+theo token, nên một session **mở mà idle vẫn tốn tiền** — vì vậy idle park của
+orchestrator áp cho cả provider này: `_idle_park_threshold()` trả
+`HAL_GPTLIVE_IDLE_PARK_S` (mặc định `30`; `0` = tắt) cho `gptlive`,
+`HAL_GEMINI_IDLE_PARK_S` cho Gemini và `0` (không bao giờ) cho OpenAI Realtime
+(session idle của nó miễn phí). Quá ngần ấy giây không có turn,
+`_maybe_park_idle_session` đóng transport (`[realtime] Ns idle (>= 30s) —
+parking gptlive session …`); `prepare_turn()` của turn kế nối lại đồng bộ, audio
+được buffer qua handshake, đúng như Gemini. Pre-turn recycle (chỉ Gemini) không áp.
+
+**Hook base để mặc định, và lý do:** `end_turn()` no-op (không có gate `_turn_done`
+— không gì chờ provider kết thúc lượt trước lần send kế, không có
+`response.create`); `requires_fresh_session` False (delegation client không trả
+lời không làm session từ chối input, khác `1008` của Gemini);
+`output_sample_rate == sample_rate`.
+
+**Prompt.** `system_prompt_gptlive.md` theo cấu trúc Live prompting guide: Role &
+tone → Backchannel policy → Interruption policy → When NOT to speak → Delegation
+policy ("Backend tools" / "Delegate to the backend when" / "Do not delegate when")
+→ các luồng context → ví dụ. Không có cú pháp tool call, không tag ElevenLabs. Các
+dòng `delegate_to_main(message=…)` trong ví dụ gọi tên cú handoff im lặng để
+`test_realtime_find_delegation.py` dùng chung soi được; prompt nói rõ nó không bao
+giờ được đọc thành tiếng.
+
+**Test:** `hal/test/test_gptlive_live_provider_metrics.py` (22 test) lái
+`_pump_events` bằng event `session.*` và gọi `_fire_boundary()` ở chỗ watchdog sẽ
+gọi; gồm một test xuyên `RealtimeOrchestrator.stream_output` và một test đẩy JSON
+hình dạng wire qua parser của SDK (`LiveConnection.parse_event`) để đường attribute
+adapter dùng khớp pydantic types.
+
+> **Chưa kiểm chứng trên thiết bị (2026-09-16).** Không có OpenAI key trên thiết
+> bị hay Mac dev, và proxy chưa serve route `…/ws/openai/live/sessions`, nên
+> adapter mới chỉ được xác nhận bằng SDK-schema check và unit test — chưa nối API
+> thật lần nào. Route proxy đang được thêm; khi lên thì thiết bị không cần đổi gì.
 
 ## Pricing & log usage
 
-Mỗi turn ghi một dòng token/cost vào log riêng theo provider dưới
-`/var/log/hal/` (rotating, 5 MB × 3): `gemini_usage.log` (logger
-`hal.realtime.usage`) và `openai_usage.log` (logger
-`hal.realtime.usage.openai` — logger **con** của logger trên, `propagate=False`
-để dòng OpenAI không lọt vào `gemini_usage.log` lẫn `server.log`; cấu hình ở
-`server_support/log_setup.py`, một file mỗi provider, so được từng dòng). Dòng
-log mang đủ số token theo từng modality **và** cost USD ước tính, nên rate có
-sai thì sau này vẫn tính lại được từ số token đã ghi.
+Gemini và OpenAI Realtime ghi một dòng token/cost mỗi turn; GPT-Live ghi một dòng
+giây/cost mỗi `session.usage.updated` và một dòng `final` ở `session.closed`. Mỗi
+provider có log riêng dưới `/var/log/hal/` (rotating, 5 MB × 3):
+`gemini_usage.log` (logger `hal.realtime.usage`), `openai_usage.log` (logger
+`hal.realtime.usage.openai`) và `gptlive_usage.log` (logger
+`hal.realtime.usage.gptlive`) — hai logger sau là logger **con** của logger đầu,
+`propagate=False` để dòng của chúng không lọt vào `gemini_usage.log` lẫn
+`server.log`; cấu hình ở `server_support/log_setup.py`, một file mỗi provider, so
+được từng dòng. Dòng log theo token mang đủ số token theo từng modality **và**
+cost USD ước tính, nên rate có sai thì sau này vẫn tính lại được từ số token đã
+ghi.
 
 Dòng OpenAI (grep `[realtime] OpenAI usage` trong `openai_usage.log`):
 
@@ -1148,6 +1346,20 @@ history của session sống lâu và phải tụt ngay sau một lần recycle 
 `cached=0` ở mọi turn nghĩa là cache không trúng (session churn) — đó là cờ đỏ
 chi phí.
 
+Dòng GPT-Live (grep `[realtime] GPT-Live usage` trong `gptlive_usage.log`):
+
+```
+[realtime] GPT-Live usage: session=<id> seconds=<s> est>=$<usd> (cumulative|final; $0.05/min billed per second, delegated main-agent work billed separately)
+```
+
+Không có token nào để đếm: `gpt-live-1` bill **$0.05 mỗi phút session, tính theo
+giây** (`_GPTLIVE_USD_PER_MINUTE` trong `voice_agent/gpt_live.py`;
+developers.openai.com/api/docs/models/gpt-live-1, verify 2026-09-16), `est` =
+`seconds / 60 × 0.05`; `cumulative` là tick giữa phiên, `final` là số ở
+`session.closed`. Việc main agent làm sau delegate tính riêng theo model của nó.
+Hệ quả: session mở mà idle vẫn tốn tiền, nên idle park của orchestrator
+(`HAL_GPTLIVE_IDLE_PARK_S`, mặc định 30 giây) là hàng rào chi phí trên provider này.
+
 Bảng rate nằm trong code, key `(direction, modality)` tính USD trên 1M token —
 `_GEMINI_RATES` trong `voice_agent/gemini_live.py`, `_OPENAI_RATES` trong
 `voice_agent/openai_realtime.py` (khớp substring **theo thứ tự**: `mini` trước để
@@ -1163,11 +1375,14 @@ về bảng đắt nhất (cost là trần, không bao giờ báo thiếu).
 | `gpt-realtime-2` | $4.00 | $32.00 | $24.00 | $64.00 | $0.40 / $0.40 | — | developers.openai.com/api/docs/pricing (verify 2026-09-16) |
 | `gpt-realtime` | $4.00 | $32.00 | $16.00 | $64.00 | $0.40 / $0.40 | — | developers.openai.com/api/docs/pricing (verify 2026-09-16) |
 
-Cơ cấu chi phí giống nhau ở mọi provider: `in_text` chiếm áp đảo (system
+Cơ cấu chi phí giống nhau ở hai provider tính theo token (Gemini, OpenAI
+Realtime): `in_text` chiếm áp đảo (system
 prompt ~7-10k token + context session tích lũy bị re-bill mỗi turn, phình dần
 tới khi session recycle — xem `HAL_REALTIME_SESSION_IDLE_RESET_S` /
 `HAL_REALTIME_SESSION_MAX_TURNS`); token audio chỉ là phần lẻ. Gemini tính
-thêm phí Google Search theo từng request grounded, ngoài token.
+thêm phí Google Search theo từng request grounded, ngoài token. GPT-Live nằm
+ngoài cơ cấu này: chi phí tỉ lệ với thời gian session mở, không phụ thuộc độ dài
+prompt hay số turn.
 
 ## Orchestrator
 
@@ -1180,8 +1395,8 @@ nhất mà `voice_service` giao tiếp:
 | `append_audio(frame)` | Đẩy 1 frame mic (non-blocking) |
 | `commit_audio()` | Báo hết câu nói (non-blocking) |
 | `stream_output()` | Yield `AudioOutput` / `TextOutput` / `FunctionCallOutput`, hoặc `DelegateSignal` (rồi dừng) |
-| `send_text(text)` | Bơm context (turn context, TTS history) dạng user message không tạo response. Gemini Live bỏ qua bước này để tránh va chạm giữa SDK `clientContent` và lượt audio; OpenAI vẫn nhận. |
-| `send_function_result(call_id, output)` | Trả kết quả tool về model |
+| `send_text(text)` | Bơm context (turn context, TTS history) dạng user message không tạo response. Gemini Live bỏ qua bước này để tránh va chạm giữa SDK `clientContent` và lượt audio; OpenAI vẫn nhận; GPT-Live nhận dưới dạng `session.thinking.append` im lặng (`[TTS HISTORY]` còn đóng delegation đang chờ). |
+| `send_function_result(call_id, output)` | Trả kết quả tool về model (GPT-Live: thành `session.thinking.append` gắn `delegation_id`) |
 | `save_turn(user, agent)` | Lưu một lượt vào realtime memory |
 | `available` / `sample_rate` | Trạng thái sẵn sàng + sample rate của provider |
 | `rebuilding` / `wait_until_available()` | Quan sát và chờ ngắn session thay thế vốn đang kết nối, không tự khởi động thêm rebuild |
@@ -1204,8 +1419,9 @@ theo agent gateway (`HAL_AGENT_GATEWAY`):
 (`build_instructions`), lưu lượt (`add_turn`), nạp/trim memory, và summarize;
 subclass cài `load_device_context`, `load_device_memory`, `load_skills_catalog`,
 `summarize_device_memory`. Prompt nền nằm ở `resources/` (`system_prompt.md` +
-bản theo provider `system_prompt_openai.md` / `system_prompt_gemini.md`, đăng ký
-trong `PROVIDER_PROMPT_PATHS` của context_manager).
+bản theo provider `system_prompt_openai.md` / `system_prompt_gemini.md` /
+`system_prompt_gptlive.md`, đăng ký trong `PROVIDER_PROMPT_PATHS` của
+context_manager).
 
 ### Memory & summarization
 
@@ -1254,7 +1470,9 @@ loại bỏ hẳn bộ máy đó, đổi lại phải khởi động lại để
 `HAL_LIVE_MODE=true` **ép** `HAL_REALTIME_TURN_DETECTION` từ `off` sang
 `server_vad` (`hal/config.py`) — giá trị đó được đọc lúc import bởi
 `GeminiConfig.vad_enabled` và `OpenAIConfig.turn_detection_type`, nên phải chốt
-trước khi các model đó được định nghĩa.
+trước khi các model đó được định nghĩa. GPT-Live không có knob VAD nào để ép —
+model vốn full-duplex; với nó `LIVE_MODE` chỉ quyết định `commit_audio()` là
+no-op và việc công bố `UserSpeechOutput` / `user_turn_id`.
 Một giá trị khác `off` do người dùng đặt thì được giữ nguyên. Sai chỗ này sẽ tạo
 ra thiết bị stream audio mãi mãi mà không bao giờ trả lời.
 
@@ -1273,9 +1491,10 @@ Reset output/cleanup LIVE giữ main đang chờ. Input mới không rỗng, qua
 addressing gate sẽ dừng playback một lần mỗi provider turn và xóa queue;
 explicit stop cũng xóa queue, kể cả speech được giữ lại sau reset model.
 Chính sách cancel OS giữ nguyên. Ngắt theo input xác nhận cần
-`UserSpeechOutput`: cả Gemini Live lẫn OpenAI Realtime đều phát (OpenAI từ
-`input_audio_buffer.speech_started` / `speech_stopped` và input transcription,
-chỉ trong LIVE_MODE).
+`UserSpeechOutput`: cả ba provider đều phát (OpenAI từ
+`input_audio_buffer.speech_started` / `speech_stopped` và input transcription;
+GPT-Live chỉ từ `session.input_transcript.delta`, không có endpoint; đều chỉ
+trong LIVE_MODE).
 Mic streaming, server VAD, delegate và đường nhận TTS của LIVE OFF không đổi.
 Test chuyển loa dùng audio giả; barge-in âm thanh cần kiểm tra trên device.
 
@@ -1299,7 +1518,7 @@ wake phrase hoặc một lần cấp focus mới.
 
 Với `HAL_LIVE_MODE=true`, các đoạn transcript input Gemini đi kèm provider turn ID. `hal/drivers/voice/_internal/live_history.py` chỉ ghép input/output cùng ID rồi gửi một notification `voice_agent_handled` sau terminal thành công từ provider. Timeout receive giữ lượt đang dở; terminal lặp không gửi lại. Lượt reject, delegate, bị ngắt, không rõ chủ sở hữu hoặc thiếu transcript không được ghi như lượt hoàn tất. Dữ liệu history tách khỏi đường playback; output-reset hiện có cũng xóa phần câu trả lời đang gom.
 
-Một worker nền gửi lượt hoàn tất với interaction ID, giới hạn độ dài reply và snapshot Harness hiện có. Worker gửi hết notification hoàn tất sau khi live kết thúc mà không chặn playback. OS xử lý qua `externalhistory`, lưu disk, gửi silent và hiển thị card **History sync · Realtime → Main** hiện có. Buffer HAL có giới hạn (64 lượt chưa xong, 64 notification chờ gửi, 128 ID đã đóng gần nhất); lỗi đầy/transport được log. Độ bền bắt đầu khi OS nhận lưu notification. Đường này chỉ bám vào provider turn ID, không bám vào Gemini: adapter OpenAI nay phát cùng contract (transcript input và terminal đều mang `user_turn_id`), nên history live cũng ghép được cho OpenAI — hành vi đó mới được ghim bằng unit test, chưa kiểm chứng trên thiết bị.
+Một worker nền gửi lượt hoàn tất với interaction ID, giới hạn độ dài reply và snapshot Harness hiện có. Worker gửi hết notification hoàn tất sau khi live kết thúc mà không chặn playback. OS xử lý qua `externalhistory`, lưu disk, gửi silent và hiển thị card **History sync · Realtime → Main** hiện có. Buffer HAL có giới hạn (64 lượt chưa xong, 64 notification chờ gửi, 128 ID đã đóng gần nhất); lỗi đầy/transport được log. Độ bền bắt đầu khi OS nhận lưu notification. Đường này chỉ bám vào provider turn ID, không bám vào Gemini: adapter OpenAI và GPT-Live nay phát cùng contract (transcript input và terminal đều mang `user_turn_id`; terminal của GPT-Live do watchdog tổng hợp), nên history live cũng ghép được cho hai provider đó — hành vi mới được ghim bằng unit test, chưa kiểm chứng trên thiết bị.
 
 ### Phản hồi HW emotion trong chế độ live
 
@@ -1324,7 +1543,7 @@ Mic streaming, đồng hồ idle, server VAD, barge-in, routing và tính metric
 
 ### Voice metrics trong chế độ live
 
-Phiên live (Gemini Live hay OpenAI Realtime) dùng `hal/telemetry/live_voice.py` để
+Phiên live (Gemini Live, OpenAI Realtime hay GPT-Live) dùng `hal/telemetry/live_voice.py` để
 ánh xạ lượt người dùng của provider sang interaction ID HAL, gắn owner cho playback native và truyền cùng
 ID vào task delegate qua OS. Chỉ terminal thành công của provider gắn đúng lượt
 mới hoàn tất execution realtime; riêng timeout, done tự tạo hay ngắt lời không
@@ -1335,7 +1554,9 @@ incomplete. Ngắt lời từ server ghi biên `server_barge_in` đúng interact
 Snapshot ghi `mode=live` và có biết endpoint tiếng nói hay không. Endpoint thật
 từ server dùng thời điểm HAL nhận (`server_vad`), không phải lúc âm học kết thúc.
 Lượt Gemini chỉ có transcript vẫn hợp lệ cho metric execution nhưng bị loại
-khỏi KPI-1 latency với `speech_endpoint_unavailable` và latency null. Output
+khỏi KPI-1 latency với `speech_endpoint_unavailable` và latency null. Trên
+GPT-Live mọi lượt đều thuộc loại này: adapter không bao giờ có `endpoint_at`
+(không có event VAD), nên KPI-1 không đo được trên provider đó. Output
 không có owner không được gán cho câu nói mới nhất. Bộ đếm
 `voice_metrics_live_coverage` lúc đóng phiên thể hiện phần mất độ phủ này; hook
 không đổi lọc tiếng ồn, uplink hay cờ routing. Xem
@@ -1459,7 +1680,7 @@ live. Đây là đánh đổi sản phẩm, không phải lỗi:
 | transcript STT | không có `[TURN CONTEXT]`, không có bộ lọc dựa trên transcript |
 | wake word mỗi lượt | kiểm tra qua STT lúc vào khi bật wake-word gate và chưa có focus; lượt mở đầu được xác nhận có thể vào live ngay trong lần thu đó. Không kiểm tra wake word bằng STT local trong phiên live đã được phép |
 | speaker ID, cảm xúc giọng nói | một phiên không tạo ra cả hai |
-| STT cục bộ khi delegate | `delegate_to_main` kết thúc phiên và chuyển tiếp `[voice-instruction]` + transcript đầu vào của chính provider làm `[transcript]` (Gemini input transcription / OpenAI `conversation.item.input_audio_transcription.*`; `FunctionCallOutput.user_transcript` → `DelegateSignal.transcript`, `_live_out_pump` đọc); câu trả lời của main agent phát sau khi cúp máy. Provider không có input transcription chỉ chuyển tiếp instruction |
+| STT cục bộ khi delegate | `delegate_to_main` kết thúc phiên và chuyển tiếp `[voice-instruction]` + transcript đầu vào của chính provider làm `[transcript]` (Gemini input transcription / OpenAI `conversation.item.input_audio_transcription.*` / GPT-Live `session.input_transcript.delta`; `FunctionCallOutput.user_transcript` → `DelegateSignal.transcript`, `_live_out_pump` đọc); câu trả lời của main agent phát sau khi cúp máy. Provider không có input transcription chỉ chuyển tiếp instruction |
 
 Cũng không chạy bên trong một phiên: cổng RMS vào, `SPEECH_HOLDOFF_S`, đồng hồ im
 lặng, `MAX_SESSION_DURATION_S`, socket STT mỗi lượt và keepalive của nó (thậm chí
@@ -1616,7 +1837,8 @@ liên tục đồng ý.
    vì các message SDK `clientContent(turn_complete=False)` lặp lại va với lượt audio
    sau đó và đóng WS 1011. Trên các model đó cả context lẫn correction đều không tới
    được câu trả lời, và model rơi về định danh còn lưu trong memory của session.
-   `gemini-3.1-flash-live` và OpenAI thì nhận cả hai. Mọi lần bỏ đều được log
+   `gemini-3.1-flash-live` và OpenAI thì nhận cả hai; GPT-Live nhận qua
+   `session.thinking.append` (context im lặng). Mọi lần bỏ đều được log
    (`[realtime->model] DROPPED …`).
 
    **Điều này không áp dụng cho cấu hình mặc định đang ship.** `REALTIME_GEMINI_MODEL`
@@ -1758,11 +1980,13 @@ chỉ-thuộc-os-server.
 
 Model ở Go tại `system/server/config/realtime.go`; đọc ở HAL tại
 `hal/config.py`. Field chung ở trên; knob theo provider nằm trong sub-object
-`gemini` / `openai` (Go struct `GeminiRealtime` / `OpenAIRealtime`), `provider`
-chọn cái đang active (`none` hoặc vắng → tắt realtime; Go còn nhận `off` /
-`disabled` như đồng nghĩa của `none`). `api_key` / `base_url` rỗng → fallback
-`llm_api_key` / `llm_base_url` cho cả hai provider — không còn ngoại lệ
-credential nào.
+`gemini` / `openai` / `gptlive` (Go struct `GeminiRealtime` / `OpenAIRealtime` /
+`GPTLiveRealtime{APIKey,BaseURL,Model,Voice}`), `provider` chọn cái đang active
+(`none` hoặc vắng → tắt realtime; Go còn nhận `off` / `disabled` như đồng nghĩa
+của `none`). `api_key` / `base_url` rỗng → fallback `llm_api_key` /
+`llm_base_url` cho Gemini và OpenAI Realtime. GPT-Live theo đúng quy tắc đó: key
+rỗng → `llm_api_key`, `base_url` rỗng → base URL của OpenAI Realtime
+(`<llm_base_url>/ws/openai`), SDK nối thêm `/live/sessions` — xem blockquote dưới.
 
 HAL đọc thêm hai knob trong `realtime.openai` mà Go **không** model:
 `transcribe_model` và `noise_reduction` (`_RT_OPENAI` trong `hal/config.py`;
@@ -1778,6 +2002,10 @@ lần os-server lưu lại config — muốn ghim bền trên thiết bị thì 
 > handshake**. Vì vậy ô "Base URL" trong web Settings chỉ hiển thị *override tường
 > minh* (`RealtimeBaseURLOverride`, không phải giá trị đã resolve), để "để trống là
 > tự suy ra" luôn trống và mỗi lần Save không vô tình ghi đè URL trần.
+>
+> `gptlive` cũng theo quy tắc này: trống → suy `<llm_base_url>/ws/openai`, SDK
+> thêm `/live/sessions`. Chỉ set `HAL_GPTLIVE_BASE_URL` / `realtime.gptlive.base_url`
+> khi muốn nối thẳng `https://api.openai.com/v1` (route proxy chưa lên).
 
 ```json
 {
@@ -1786,14 +2014,17 @@ lần os-server lưu lại config — muốn ghim bền trên thiết bị thì 
     "enabled": true,
     "provider": "gemini",
     "gemini": { "model": "gemini-3.1-flash-live-preview", "voice": "Kore", "thinking_level": "MINIMAL" },
-    "openai": { "model": "gpt-realtime-2", "voice": "alloy", "reasoning_effort": "minimal" }
+    "openai": { "model": "gpt-realtime-2", "voice": "alloy", "reasoning_effort": "minimal" },
+    "gptlive": { "model": "gpt-live-1", "voice": "marin" }
   }
 }
 ```
 
 Knob reasoning (`thinking_level` / `reasoning_effort`) default về mức **rẻ nhất**
 (`MINIMAL` / `minimal`), không phải mức max của provider — muốn reasoning sâu hơn
-thì set tường minh. Các knob KHÔNG có trong block (turn detection, session
+thì set tường minh. `gptlive` không có knob reasoning: model Live không có,
+`ValidateRealtimeKnobs` từ chối mọi giá trị reasoning cho nó và web ẩn selector.
+Các knob KHÔNG có trong block (turn detection, session
 resumption, memory, summarizer) vẫn chỉ theo env/default.
 
 **Filter chống leak CoT.** Trên `gemini-3.1-flash-live-preview` KHÔNG tắt được
@@ -1840,8 +2071,8 @@ trong `config.json`:
 | `HAL_ENDPOINT_SILENCE_S` | `0.8` | Thời gian im lặng từ lúc STT final về, chỉ áp dụng khi `final_ts >= last_confirmed_speech`. Nếu có tiếng nói được xác nhận sau final đó, quay lại ngưỡng dự phòng 2.5s tới khi có final mới. `0` tắt đồng hồ ngắn, chỉ dùng `HAL_SILENCE_TIMEOUT`. |
 | `HAL_SILENCE_VAD_ENABLED` | `true` | Yêu cầu Silero xác nhận có tiếng nói trước khi refresh đồng hồ im lặng kết thúc lượt. RMS vẫn là cổng chặn rẻ chạy trước; đặt `false` để quay về phát hiện im lặng thuần RMS. |
 | `HAL_SILENCE_VAD_WINDOW_FRAMES` | `3` | Số frame gom lại cho mỗi lần chạy Silero ở bước kiểm đó — Silero tốn ~20 ms/frame trên ARM và LSTM của nó cần hơn một frame 64 ms mới ổn định. |
-| `HAL_REALTIME_PROVIDER` | `gemini` | `none` \| `gemini` \| `openai` |
-| `HAL_REALTIME_TURN_DETECTION` | `off` | `server_vad` \| `semantic_vad` \| `off` (Gemini: off = activity detection thủ công; OpenAI: off = `turn_detection: null`, lượt do client commit + `response.create`; `server_vad` / `semantic_vad` nhận knob từ `HAL_LIVE_VAD_*` và `HAL_OPENAI_VAD_THRESHOLD`). `HAL_LIVE_MODE=true` ép `off` → `server_vad` |
+| `HAL_REALTIME_PROVIDER` | `gemini` | `none` \| `gemini` \| `openai` \| `gptlive` |
+| `HAL_REALTIME_TURN_DETECTION` | `off` | `server_vad` \| `semantic_vad` \| `off` (Gemini: off = activity detection thủ công; OpenAI: off = `turn_detection: null`, lượt do client commit + `response.create`; `server_vad` / `semantic_vad` nhận knob từ `HAL_LIVE_VAD_*` và `HAL_OPENAI_VAD_THRESHOLD`). `HAL_LIVE_MODE=true` ép `off` → `server_vad`. GPT-Live bỏ qua knob này: Live không có cấu hình VAD, adapter tổng hợp lượt từ transcript input và khoảng im lặng output |
 | `HAL_REALTIME_RECV_QUEUE_TIMEOUT_S` | `8.0` | Số giây tối đa `receive()` chờ output event kế tiếp trước khi kết thúc lượt im lặng (fallback sang main agent) |
 | `HAL_REALTIME_GROUNDING_DEBUG` | `false` | In toàn bộ field của `grounding_metadata` từ Gemini, mỗi lượt có grounding một lần (`grounding_chunks`, `grounding_supports`, `search_entry_point`, …). Chỉ để chẩn đoán và rất dài dòng; nó sinh ra để phân biệt lượt mà search thật sự không trả về gì với lượt bị cắt payload trên đường truyền. Đo trên lamp-0c89 04/09/2026 qua bốn lượt có grounding, payload luôn về đủ — nên `chunks=0` nghĩa là model không dùng nguồn nào cho câu trả lời đó. |
 | `HAL_REALTIME_TURN_MAX_SILENCE_S` | `20.0` | Trần thời gian một lượt được im lặng khi server vẫn còn gửi message. `receive()` chỉ kéo dài quá `HAL_REALTIME_RECV_QUEUE_TIMEOUT_S` khi lưu lượng vào chứng minh model còn đang làm việc (search grounding không phát output tới khi xong); trần này chặn trường hợp server nói liên tục mà không bao giờ ra output. `0` tắt cơ chế giữ lượt, quay về watchdog gap thuần. |
@@ -1866,7 +2097,7 @@ trong `config.json`:
 | `HAL_GEMINI_VISION_MAX_WIDTH` | `768` | Bề rộng tối đa (px) frame được downscale trước khi gửi — giới hạn token ảnh. |
 | `HAL_GEMINI_VISION_MIN_INTERVAL_S` | `10` | Chặn chi phí: số giây tối thiểu giữa hai lần **gửi ảnh**. Gọi `look` lặp trong khoảng này (hoặc gọi lần hai trong cùng turn) sẽ xài lại ảnh đã có trong context thay vì gửi ảnh mới. `0` = luôn gửi ảnh mới. |
 | `HAL_GEMINI_VISION_HANDOFF_MAX_AGE_S` | `45` | Tuổi tối đa của frame `look` còn được bàn giao cho main agent khi delegate/timeout fallback để nó xài lại ảnh thay vì chụp lại. **Phải lớn hơn `HAL_REALTIME_LOOK_RECV_TIMEOUT_S` cộng thời gian dispatch** — nhánh timeout fallback chỉ chạy sau khi watchdog đó hết giờ, nên để bằng nhau là mọi frame đều hết hạn (cả hai cùng bằng `20` từ 2026-07-06 đến 2026-08-24 và handoff chưa từng bắn lần nào). `0` tắt guard tuổi (frame vẫn bị clear mỗi turn). |
-| `OPENAI_API_KEY` | — | Key OpenAI; fallback về `llm_api_key` |
+| `OPENAI_API_KEY` | — | Key OpenAI, dùng chung cho OpenAI Realtime **và** GPT-Live; fallback về `llm_api_key` (GPT-Live: env > `realtime.gptlive.api_key` > `realtime.api_key` > `llm_api_key`) |
 | `HAL_OPENAI_REALTIME_MODEL` | `gpt-realtime-2` | |
 | `HAL_OPENAI_REALTIME_VOICE` | `alloy` | |
 | `HAL_OPENAI_REALTIME_BASE_URL` | `<llm_base_url>/ws/openai` | |
@@ -1874,6 +2105,16 @@ trong `config.json`:
 | `HAL_OPENAI_TRANSCRIBE_MODEL` | `gpt-4o-mini-transcribe` | Model input transcription (`audio.input.transcription.model`) — nguồn duy nhất của lời người dùng trên đường OpenAI nên luôn bật; `gpt-4o-mini-transcribe` stream delta, `whisper-1` chỉ gửi bản `completed`. Cũng đọc từ `realtime.openai.transcribe_model` (HAL đọc, Go không model — xem trên) |
 | `HAL_OPENAI_NOISE_REDUCTION` | `far_field` | `far_field` \| `near_field` \| `off` — `audio.input.noise_reduction` phía server, lọc trước VAD và model; `off` bỏ hẳn key. Cũng đọc từ `realtime.openai.noise_reduction` |
 | `HAL_OPENAI_VAD_THRESHOLD` | `0` | Ngưỡng `server_vad.threshold` (0..1, API mặc định 0.5). `0` = suy từ `HAL_LIVE_VAD_START_SENSITIVITY` (`low` → 0.7, `high` → 0.3); giá trị khác 0 thắng. Chỉ env, không có key config.json |
+| `HAL_GPTLIVE_MODEL` | `gpt-live-1` | Cũng đọc từ `realtime.gptlive.model` |
+| `HAL_GPTLIVE_VOICE` | `marin` | 22 giọng built-in (`GPTLiveVoice`: alloy, ash, ballad, beacon, bossa, cedar, cinder, coral, delta, echo, gleam, marin, meridian, quartz, ripple, sage, shimmer, stone, tempo, verse, vesper, willow). Cũng đọc từ `realtime.gptlive.voice` |
+| `HAL_GPTLIVE_BASE_URL` | *(rỗng → base URL của OpenAI Realtime: `HAL_OPENAI_REALTIME_BASE_URL` > `realtime.base_url` > `<llm_base_url>/ws/openai`)* | Cũng đọc từ `realtime.gptlive.base_url`. SDK nối thêm `/live/sessions`, nên proxy phải serve `…/ws/openai/live/sessions` (đang chờ, 2026-09-16; tới lúc đó 404). Set `https://api.openai.com/v1` để nối thẳng |
+| `HAL_GPTLIVE_SAMPLE_RATE` | `24000` | `16000` \| `24000` — MỘT định dạng PCM cho cả hai chiều (`output_sample_rate == sample_rate`); 16000 giảm nửa băng thông uplink. Chỉ env |
+| `HAL_GPTLIVE_TURN_GAP_MS` | `800` | Ranh giới lượt tổng hợp: reply coi là xong khi không có output audio/transcript trong ngần này ms (watchdog tick 50 ms). Chỉ env |
+| `HAL_GPTLIVE_INTERRUPT_GAP_MS` | `400` | Khi user nói đè lên reply: model im lặng quá ngần này ms → reply bị ngắt (`server_interrupt`); model nói tiếp → backchannel. Chỉ env |
+| `HAL_GPTLIVE_INPUT_GAP_MS` | `1500` | Hai mảnh `session.input_transcript.delta` cách nhau hơn ngần này ms (timeline session) thuộc user turn MỚI dù model chưa đáp. Chỉ env |
+| `HAL_GPTLIVE_COMMIT_SILENCE_MS` | `600` | Chỉ đường lượt: Live không có commit, `commit_audio()` append ngần này ms PCM im lặng (`event_id` `hal-silence`) để model nghe câu nói đã hết. LIVE_MODE → no-op. Chỉ env |
+| `HAL_GPTLIVE_DELEGATION_WAIT_MS` | `500` | `session.delegation.created` không mang text task; adapter chờ transcript input tối đa ngần này ms trước khi forward `delegate_to_main` (rỗng vẫn forward, orchestrator từ chối và model được báo handoff thất bại). Chỉ env |
+| `HAL_GPTLIVE_IDLE_PARK_S` | `30` | Park GPT-Live khi idle: session bị tính tiền theo phút khi còn mở, nên sau ngần này giây không có turn orchestrator đóng transport (`_maybe_park_idle_session`, cơ chế y như `HAL_GEMINI_IDLE_PARK_S`) và nối lại ở turn kế. `0` = tắt. Chỉ env |
 | `HAL_REALTIME_MEMORY_PATH` | `<workspace>/realtime/memory.jsonl` | |
 | `HAL_REALTIME_MAX_MEMORY_ENTRIES` / `_TRIM_KEEP` | `1000` / `500` | |
 | `HAL_REALTIME_SUMMARIZER_ENABLED` | `true` | |
@@ -1889,11 +2130,12 @@ trong `config.json`:
 | `voice_agent/base.py` | Agent trừu tượng: contract 2-thread/queue, `receive()` |
 | `voice_agent/gemini_live.py` | Provider Gemini Live (IO loop asyncio) |
 | `voice_agent/openai_realtime.py` | Provider OpenAI Realtime (sync, SDK `openai` GA, connection serialize bằng lock; contract live-mode ngang Gemini — `user_turn_id`, `UserSpeechOutput`, barge-in + `conversation.item.truncate`; bảng giá `_OPENAI_RATES` + log `openai_usage.log`) |
+| `voice_agent/gpt_live.py` | Provider GPT-Live (`gptlive`; sync, SDK `openai` ≥ 3.14.1 `client.live`; contract live-mode **tổng hợp** — watchdog `gptlive-watchdog` đóng lượt theo `turn_gap_ms`, barge-in theo `interrupt_gap_ms`, `UserSpeechOutput` từ `session.input_transcript.delta`; client delegation → `delegate_to_main`, feedback qua `session.thinking.append`; $0.05/phút + log `gptlive_usage.log`) |
 | `context_manager/{base,openclaw,hermes}.py` | Lắp ráp prompt + memory + skills theo gateway |
 | `summarizer.py` | Summarizer memory dựa trên Anthropic |
-| `config.py` | Model config provider (`GeminiConfig`, `OpenAIConfig`) |
+| `config.py` | Model config provider (`GeminiConfig`, `OpenAIConfig`, `GPTLiveConfig`) |
 | `models/`, `enums/` | Kiểu input/output/event, enum provider + gateway |
-| `resources/` | System prompt (chung + theo provider) |
+| `resources/` | System prompt (chung `system_prompt.md` + theo provider `system_prompt_gemini.md` / `system_prompt_openai.md` / `system_prompt_gptlive.md`) |
 | `../voice/voice_service.py` | Tích hợp: stream audio mic, tiêu thụ output, route delegate/handled. Chế độ live: `_live_decision` / `_live_session` / `_live_out_pump` / `_live_uplink_frame` |
 | `../voice/aec.py` | WebRTC AEC3 trên đường mic; tham chiếu lấy tại TTS output stream (mọi provider) |
 

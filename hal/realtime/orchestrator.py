@@ -28,6 +28,7 @@ import hal.config as config
 import hal.presets as presets
 from hal.realtime.config import (
     GeminiConfig,
+    GPTLiveConfig,
     OpenAIConfig,
     _load_language,
     gemini_needs_idle_workaround,
@@ -497,6 +498,12 @@ class RealtimeOrchestrator:
             return OpenAIRealtimeAgent(
                 config=OpenAIConfig(instructions=instructions), tools=self._tools,
             )
+        if provider == "gptlive":
+            from hal.realtime.voice_agent.gpt_live import GPTLiveAgent
+
+            return GPTLiveAgent(
+                config=GPTLiveConfig(instructions=instructions), tools=self._tools,
+            )
         return None
 
     def _begin_rebuild(self) -> bool:
@@ -785,10 +792,8 @@ class RealtimeOrchestrator:
         lost by it: any turn arriving after this much silence would have been
         given a fresh session by the pre-turn recycle anyway.
         """
-        threshold: float = config.REALTIME_GEMINI_IDLE_PARK_S
+        threshold: float = self._idle_park_threshold()
         if threshold <= 0:
-            return
-        if config.REALTIME_PROVIDER.strip().lower() != "gemini":
             return
         if not self._started.is_set() or self._idle_parked:
             return
@@ -808,6 +813,22 @@ class RealtimeOrchestrator:
             return
         self._park_idle_session(now - last)
 
+    @staticmethod
+    def _idle_park_threshold() -> float:
+        """Seconds of inactivity before the provider session is parked; 0 = never.
+
+        Gemini: close before the server's own idle kill pages the backend.
+        GPT-Live: close because the session is billed per minute while it sits
+        open. OpenAI Realtime bills per token, so an idle session is free and is
+        left to the server's own timeout.
+        """
+        provider: str = config.REALTIME_PROVIDER.strip().lower()
+        if provider == "gemini":
+            return config.REALTIME_GEMINI_IDLE_PARK_S
+        if provider == "gptlive":
+            return config.REALTIME_GPTLIVE_IDLE_PARK_S
+        return 0.0
+
     def _park_idle_session(self, idle_s: float) -> None:
         """Disconnect the current session and mark it resumable on the next turn.
 
@@ -822,10 +843,11 @@ class RealtimeOrchestrator:
             if agent is None:
                 return
             logger.info(
-                "[realtime] %.0fs idle (>= %.0fs) — parking Gemini session "
-                "(closing before the server does)",
+                "[realtime] %.0fs idle (>= %.0fs) — parking %s session "
+                "(closing before the server does / before it bills more)",
                 idle_s,
-                config.REALTIME_GEMINI_IDLE_PARK_S,
+                self._idle_park_threshold(),
+                config.REALTIME_PROVIDER.strip().lower(),
             )
             try:
                 agent.disconnect()

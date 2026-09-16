@@ -1,6 +1,7 @@
 """Enumerations for the realtime voice agent service."""
 
 from hal.realtime.enums.gemini import GeminiThinkingLevel, GeminiVoice
+from hal.realtime.enums.gptlive import GPTLiveVoice
 from hal.realtime.enums.openai import (
     OpenAIReasoningEffort,
     OpenAITruncationType,
@@ -27,4 +28,5 @@ __all__ = [
     "OpenAIVoice",
     "GeminiThinkingLevel",
     "GeminiVoice",
+    "GPTLiveVoice",
 ]

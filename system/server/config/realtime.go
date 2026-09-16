@@ -6,15 +6,16 @@ import (
 )
 
 // This file holds the realtime voice-agent (audio-native brain — Gemini Live /
-// OpenAI Realtime) config types, defaults, and accessors. The Config.Realtime
+// OpenAI Realtime / GPT-Live) config types, defaults, and accessors. The Config.Realtime
 // field that hangs these off the main config lives in config.go.
 
 // RealtimeConfig groups the realtime voice-agent settings under the "realtime"
 // key. Shared fields (enabled/provider/api_key/base_url) sit at the top; the
-// per-provider knobs live in Gemini/OpenAI sub-objects, mirroring HAL's own
-// GeminiConfig/OpenAIConfig dataclasses and the orchestrator's provider factory.
-// `provider` selects which sub-object is active; both are kept so switching
-// provider in the UI does not lose the other's tuned model/voice/reasoning.
+// per-provider knobs live in Gemini/OpenAI/GPTLive sub-objects, mirroring HAL's
+// own GeminiConfig/OpenAIConfig/GPTLiveConfig dataclasses and the orchestrator's
+// provider factory. `provider` selects which sub-object is active; all are kept
+// so switching provider in the UI does not lose the others' tuned model/voice/
+// reasoning.
 //
 // Defaults mirror HAL/Python (hal/config.py): unset → enabled + provider
 // "gemini", so realtime runs out of the box. Only an explicit enabled:false or
@@ -25,12 +26,13 @@ import (
 type RealtimeConfig struct {
 	// Enabled toggles the realtime brain. Unset → true (mirrors HAL's
 	// HAL_REALTIME_ENABLED default); set false to disable.
-	Enabled  *bool           `json:"enabled,omitempty" yaml:"enabled"`
-	Provider string          `json:"provider,omitempty" yaml:"provider"` // none|gemini|openai ("" == none)
-	APIKey   string          `json:"api_key,omitempty" yaml:"apiKey"`    // empty → falls back to LLMAPIKey
-	BaseURL  string          `json:"base_url,omitempty" yaml:"baseURL"`  // empty → falls back to LLMBaseURL
-	Gemini   *GeminiRealtime `json:"gemini,omitempty" yaml:"gemini"`
-	OpenAI   *OpenAIRealtime `json:"openai,omitempty" yaml:"openai"`
+	Enabled  *bool            `json:"enabled,omitempty" yaml:"enabled"`
+	Provider string           `json:"provider,omitempty" yaml:"provider"` // none|gemini|openai|gptlive ("" == none)
+	APIKey   string           `json:"api_key,omitempty" yaml:"apiKey"`    // empty → falls back to LLMAPIKey
+	BaseURL  string           `json:"base_url,omitempty" yaml:"baseURL"`  // empty → falls back to LLMBaseURL
+	Gemini   *GeminiRealtime  `json:"gemini,omitempty" yaml:"gemini"`
+	OpenAI   *OpenAIRealtime  `json:"openai,omitempty" yaml:"openai"`
+	GPTLive  *GPTLiveRealtime `json:"gptlive,omitempty" yaml:"gptlive"`
 }
 
 // GeminiRealtime holds Gemini Live's provider-specific knobs. Empty fields → HAL
@@ -58,6 +60,27 @@ type OpenAIRealtime struct {
 	ReasoningEffort string `json:"reasoning_effort,omitempty" yaml:"reasoningEffort"` // OpenAI-only reasoning knob (e.g. xhigh)
 }
 
+// GPTLiveRealtime holds GPT-Live's knobs — OpenAI `/v1/live/sessions`, the
+// full-duplex Live API with client-side tool delegation (a different API from
+// the Realtime API above). No reasoning knob: the Live model has none —
+// reasoning lives in a Responses backend, which this integration does not use.
+//
+// Credentials reuse the shared realtime api_key/base_url like openai does. HAL
+// resolves the key as OPENAI_API_KEY env > realtime.gptlive.api_key >
+// realtime.api_key > llm_api_key, and the base URL as HAL_GPTLIVE_BASE_URL >
+// realtime.gptlive.base_url > the OpenAI Realtime base URL (realtime.base_url >
+// <llm_base_url>/ws/openai) — the SDK appends /live/sessions, so through the
+// campaign-api proxy the session dials …/ws/openai/live/sessions next to the
+// Realtime API's …/ws/openai/realtime. The optional api_key/base_url below only
+// persist a per-provider override; realtime.set writes credentials to the
+// shared fields.
+type GPTLiveRealtime struct {
+	APIKey  string `json:"api_key,omitempty" yaml:"apiKey"`
+	BaseURL string `json:"base_url,omitempty" yaml:"baseURL"`
+	Model   string `json:"model,omitempty" yaml:"model"`
+	Voice   string `json:"voice,omitempty" yaml:"voice"` // GPT-Live voice set (openai.types.live BuiltInVoice, e.g. marin)
+}
+
 // Realtime per-provider defaults — what os-server resolves (and pushes) when the
 // operator hasn't overridden a knob. Model/voice match HAL's defaults
 // (hal/config.py): the Gemini model is the flash (cheapest) live variant. The
@@ -77,6 +100,10 @@ const (
 	defaultRealtimeOpenAIModel     = "gpt-realtime-2"
 	defaultRealtimeOpenAIVoice     = "alloy"
 	defaultRealtimeOpenAIReasoning = "minimal"
+	// GPT-Live: the single Live model and HAL's default voice (hal/config.py).
+	// No reasoning default — the Live model exposes no such knob.
+	defaultRealtimeGPTLiveModel = "gpt-live-1"
+	defaultRealtimeGPTLiveVoice = "marin"
 )
 
 // DefaultRealtimeConfig returns the realtime block os-server seeds into
@@ -99,6 +126,10 @@ func DefaultRealtimeConfig() *RealtimeConfig {
 			Voice:           defaultRealtimeOpenAIVoice,
 			ReasoningEffort: defaultRealtimeOpenAIReasoning,
 		},
+		GPTLive: &GPTLiveRealtime{
+			Model: defaultRealtimeGPTLiveModel,
+			Voice: defaultRealtimeGPTLiveVoice,
+		},
 	}
 }
 
@@ -117,7 +148,7 @@ func (c *Config) RealtimeEnabled() bool {
 	return true
 }
 
-// RealtimeProvider returns the normalized provider ("gemini"/"openai"), defaulting
+// RealtimeProvider returns the normalized provider ("gemini"/"openai"/"gptlive"), defaulting
 // to "gemini" (mirrors HAL's HAL_REALTIME_PROVIDER default). An explicit
 // none/off/disabled returns "" — realtime off. Matches the HAL orchestrator's
 // provider vocabulary so the value can be pushed through verbatim.
@@ -195,6 +226,11 @@ func (c *Config) RealtimeModel() string {
 			return c.Realtime.OpenAI.Model
 		}
 		return defaultRealtimeOpenAIModel
+	case "gptlive":
+		if c.Realtime != nil && c.Realtime.GPTLive != nil && c.Realtime.GPTLive.Model != "" {
+			return c.Realtime.GPTLive.Model
+		}
+		return defaultRealtimeGPTLiveModel
 	}
 	return ""
 }
@@ -212,13 +248,19 @@ func (c *Config) RealtimeVoice() string {
 			return c.Realtime.OpenAI.Voice
 		}
 		return defaultRealtimeOpenAIVoice
+	case "gptlive":
+		if c.Realtime != nil && c.Realtime.GPTLive != nil && c.Realtime.GPTLive.Voice != "" {
+			return c.Realtime.GPTLive.Voice
+		}
+		return defaultRealtimeGPTLiveVoice
 	}
 	return ""
 }
 
 // RealtimeReasoning returns the active provider's reasoning knob — Gemini's
 // thinking_level or OpenAI's reasoning_effort — override or the (cost-lean)
-// provider default. Empty only when realtime is off.
+// provider default. Empty when realtime is off or the provider has no reasoning
+// knob (gptlive).
 func (c *Config) RealtimeReasoning() string {
 	switch c.RealtimeProvider() {
 	case "gemini":
@@ -232,6 +274,7 @@ func (c *Config) RealtimeReasoning() string {
 		}
 		return defaultRealtimeOpenAIReasoning
 	}
+	// gptlive: no reasoning knob on the Live model.
 	return ""
 }
 
@@ -239,22 +282,40 @@ func (c *Config) RealtimeReasoning() string {
 // Valid knob values per provider — KEEP IN SYNC with hal/realtime/
 // enums (GeminiVoice / GeminiThinkingLevel / OpenAIReasoningEffort) and the
 // OpenAI voice list in hal/routes/voice.py. Case-sensitive to match the HAL
-// StrEnums (Gemini voices are Capitalized, OpenAI voices/efforts are lowercase).
+// StrEnums (Gemini voices are Capitalized, OpenAI/GPT-Live voices and efforts
+// are lowercase).
 var (
 	realtimeGeminiVoices    = map[string]bool{"Puck": true, "Charon": true, "Kore": true, "Fenrir": true, "Aoede": true}
 	realtimeOpenAIVoices    = map[string]bool{"alloy": true, "ash": true, "coral": true, "echo": true, "fable": true, "onyx": true, "nova": true, "sage": true, "shimmer": true}
+	realtimeGPTLiveVoices   = stringSet(RealtimeGPTLiveVoiceList)
 	realtimeGeminiThinking  = map[string]bool{"MINIMAL": true, "LOW": true, "MEDIUM": true, "HIGH": true}
 	realtimeOpenAIReasoning = map[string]bool{"minimal": true, "low": true, "medium": true, "high": true, "xhigh": true}
 )
+
+// stringSet builds a membership map from an ordered option list, so the
+// validation set cannot drift from the list the web renders.
+func stringSet(list []string) map[string]bool {
+	m := make(map[string]bool, len(list))
+	for _, v := range list {
+		m[v] = true
+	}
+	return m
+}
 
 // Ordered option lists — the SINGLE SOURCE the web reads via GET realtime options
 // (so the FE never hardcodes/drifts). Order matters: first reasoning entry is the
 // cheapest (the default). Voices match the maps below; KEEP IN SYNC with the HAL
 // enums (hal/realtime/enums).
 var (
-	RealtimeProviders           = []string{"gemini", "openai", "none"}
-	RealtimeGeminiVoiceList     = []string{"Puck", "Charon", "Kore", "Fenrir", "Aoede"}
-	RealtimeOpenAIVoiceList     = []string{"alloy", "ash", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer"}
+	RealtimeProviders       = []string{"gemini", "openai", "gptlive", "none"}
+	RealtimeGeminiVoiceList = []string{"Puck", "Charon", "Kore", "Fenrir", "Aoede"}
+	RealtimeOpenAIVoiceList = []string{"alloy", "ash", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer"}
+	// GPT-Live voices: the exact BuiltInVoice literal of openai SDK 3.14.1
+	// (openai.types.live). KEEP IN SYNC when the SDK pin moves.
+	RealtimeGPTLiveVoiceList = []string{
+		"alloy", "ash", "ballad", "beacon", "bossa", "cedar", "cinder", "coral", "delta", "echo", "gleam",
+		"marin", "meridian", "quartz", "ripple", "sage", "shimmer", "stone", "tempo", "verse", "vesper", "willow",
+	}
 	RealtimeGeminiThinkingList  = []string{"MINIMAL", "LOW", "MEDIUM", "HIGH"}
 	RealtimeOpenAIReasoningList = []string{"minimal", "low", "medium", "high", "xhigh"}
 )
@@ -271,26 +332,28 @@ type RealtimeOptions struct {
 func GetRealtimeOptions() RealtimeOptions {
 	return RealtimeOptions{
 		Providers: RealtimeProviders,
-		Voices:    map[string][]string{"gemini": RealtimeGeminiVoiceList, "openai": RealtimeOpenAIVoiceList},
-		Reasoning: map[string][]string{"gemini": RealtimeGeminiThinkingList, "openai": RealtimeOpenAIReasoningList},
+		Voices:    map[string][]string{"gemini": RealtimeGeminiVoiceList, "openai": RealtimeOpenAIVoiceList, "gptlive": RealtimeGPTLiveVoiceList},
+		// gptlive → empty list: no reasoning knob, so the web hides the selector.
+		Reasoning: map[string][]string{"gemini": RealtimeGeminiThinkingList, "openai": RealtimeOpenAIReasoningList, "gptlive": {}},
 	}
 }
 
-// ValidateRealtimeProvider accepts the provider selector (gemini|openai|none and
-// the off-synonyms / empty). Anything else is rejected.
+// ValidateRealtimeProvider accepts the provider selector (gemini|openai|gptlive|
+// none and the off-synonyms / empty). Anything else is rejected.
 func ValidateRealtimeProvider(provider string) error {
 	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "gemini", "openai", "none", "off", "disabled", "":
+	case "gemini", "openai", "gptlive", "none", "off", "disabled", "":
 		return nil
 	default:
-		return fmt.Errorf("invalid realtime provider %q (want gemini|openai|none)", provider)
+		return fmt.Errorf("invalid realtime provider %q (want gemini|openai|gptlive|none)", provider)
 	}
 }
 
 // ValidateRealtimeKnobs checks voice/reasoning against a CONCRETE provider
-// (gemini|openai). Empty voice/reasoning are allowed (means "keep current"). The
-// per-provider knobs (model/voice/reasoning) only make sense for a concrete
-// provider, so anything else is an error.
+// (gemini|openai|gptlive). Empty voice/reasoning are allowed (means "keep
+// current"). The per-provider knobs (model/voice/reasoning) only make sense for
+// a concrete provider, so anything else is an error. gptlive has no reasoning
+// knob, so any reasoning value is rejected for it.
 func ValidateRealtimeKnobs(provider, voice, reasoning string) error {
 	switch strings.ToLower(strings.TrimSpace(provider)) {
 	case "gemini":
@@ -307,8 +370,15 @@ func ValidateRealtimeKnobs(provider, voice, reasoning string) error {
 		if reasoning != "" && !realtimeOpenAIReasoning[reasoning] {
 			return fmt.Errorf("invalid openai reasoning_effort %q (minimal|low|medium|high|xhigh)", reasoning)
 		}
+	case "gptlive":
+		if voice != "" && !realtimeGPTLiveVoices[voice] {
+			return fmt.Errorf("invalid gptlive voice %q (%s)", voice, strings.Join(RealtimeGPTLiveVoiceList, "|"))
+		}
+		if reasoning != "" {
+			return fmt.Errorf("gptlive realtime has no reasoning knob, got %q", reasoning)
+		}
 	default:
-		return fmt.Errorf("realtime model/voice/reasoning require a concrete provider (gemini|openai), got %q", provider)
+		return fmt.Errorf("realtime model/voice/reasoning require a concrete provider (gemini|openai|gptlive), got %q", provider)
 	}
 	return nil
 }
