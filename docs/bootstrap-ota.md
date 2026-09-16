@@ -302,6 +302,14 @@ release is not reinstalled on the next poll. Publishing a different version
 automatically resumes OTA for that component. Rollback itself does not need the
 metadata URL or network access.
 
+Before `os-server`, `web`, or `device` updates, the updater ensures the nginx
+Harness WebSocket route exists. It searches both `/etc/nginx/conf.d/*.conf` and
+all `/etc/nginx/sites-enabled/*` entries, including Reachy's `reachy-spike`.
+The route reuses the existing `/api/` HTTP upstream (`backend` or
+`spike_backend`); unsupported proxy block shapes or URI rewriting are rejected.
+Symlinked sites are updated at their real target, preserving the enabled link.
+The updater validates with `nginx -t` and reloads nginx only after adding a route.
+
 Directory installs have the same recovery contract. Before a web update, the
 updater stops nginx, swaps the fully unpacked staged bundle into place, and
 retains the previous bundle at `/root/bootstrap/rollback/web.previous` together

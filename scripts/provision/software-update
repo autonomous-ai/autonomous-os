@@ -255,7 +255,7 @@ ensure_harness_nginx_location() {
   }
   local conf candidate changed
   conf=""
-  for candidate in /etc/nginx/conf.d/*.conf /etc/nginx/sites-enabled/default; do
+  for candidate in /etc/nginx/conf.d/*.conf /etc/nginx/sites-enabled/*; do
     [ -f "$candidate" ] || continue
     if grep -q 'location /api/ {' "$candidate" || grep -q 'location = /api/harness/ws' "$candidate"; then
       conf="$candidate"
@@ -268,9 +268,11 @@ ensure_harness_nginx_location() {
   }
   changed=$(python3 - "$conf" <<'PY'
 import os
+import re
 import sys
 
-path = sys.argv[1]
+# sites-enabled entries may be symlinks; update their source, not the link.
+path = os.path.realpath(sys.argv[1])
 with open(path) as source:
     content = source.read()
 if "location = /api/harness/ws" in content:
@@ -279,6 +281,12 @@ if "location = /api/harness/ws" in content:
 anchor = "  location /api/ {"
 if content.count(anchor) != 1:
     raise SystemExit("nginx /api/ proxy anchor differs; refusing to edit")
+# Reuse the API upstream: Reachy's spike image names it spike_backend.
+# Reject unfamiliar/nested blocks and URI rewriting rather than invent a route.
+api = re.search(r"(?m)^  location /api/ \{([^{}]*)\}", content)
+targets = re.findall(r"(?m)^\s*proxy_pass\s+(http://[A-Za-z0-9_.:-]+);\s*(?:#.*)?$", api[1]) if api else []
+if len(targets) != 1:
+    raise SystemExit("nginx /api/ proxy target differs; refusing to edit")
 route = '''  # Direct Harness pairing/session; authenticated by PAKE and pinned E2EE.
   location = /api/harness/ws {
     proxy_pass http://backend;
@@ -293,6 +301,7 @@ route = '''  # Direct Harness pairing/session; authenticated by PAKE and pinned 
   }
 
 '''
+route = route.replace("proxy_pass http://backend;", "proxy_pass " + targets[0] + ";", 1)
 temporary = path + ".harness-new"
 with open(temporary, "w") as target:
     target.write(content.replace(anchor, route + anchor, 1))

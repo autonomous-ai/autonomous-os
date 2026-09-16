@@ -299,6 +299,14 @@ bỏ qua đúng target đó nên release lỗi không bị cài lại ở lần 
 có version khác, OTA của component đó tự tiếp tục. Bản thân rollback không cần
 metadata URL hoặc mạng.
 
+Trước khi update `os-server`, `web` hoặc `device`, updater bảo đảm nginx có route
+WebSocket Harness. Nó tìm trong `/etc/nginx/conf.d/*.conf` và mọi entry của
+`/etc/nginx/sites-enabled/*`, gồm `reachy-spike` trên Reachy. Route dùng lại HTTP
+upstream hiện có của `/api/` (`backend` hoặc `spike_backend`); cấu trúc proxy
+không hỗ trợ hoặc có rewrite URI bị từ chối. Site dạng symlink được sửa tại
+file đích thực, giữ nguyên link enabled. Updater kiểm tra `nginx -t` và chỉ
+reload nginx sau khi thêm route.
+
 Các component cài theo thư mục cũng có cùng hợp đồng recovery. Trước khi update
 web, updater dừng nginx, swap bundle đã giải nén hoàn chỉnh từ thư mục staging,
 và giữ bundle trước đó tại `/root/bootstrap/rollback/web.previous` cùng trạng
