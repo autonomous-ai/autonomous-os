@@ -13,13 +13,19 @@ For events handled by this skill, output ONLY the exact `[HW:...]` markers from 
 
 Do not describe the event, quote the matrix, explain your choice, discuss owner context, draft alternatives, or announce what you will emit. No preamble or afterword. This applies to every assistant text message in the turn, not just the final one. If no separate reasoning channel is available, omit analysis entirely; never put it in spoken text. Use literal `[HW:...]` syntax, not shorthand such as `[emotion:curious]` or `[servo aim user]`.
 
-For `presence.enter` with a stranger and `current_language=en`, a complete reply is:
+### Stranger arrival: exact reply
+
+For a standalone `presence.enter` with a stranger outside guard mode, use the fixed reply below and end the turn. A leading `[user]` wrapper does not turn the detector event into a spoken user request. Do not add a reaction summary or explain the greeting. Do not continue an earlier conversation.
+
+For `current_language=en`, copy this entire reply exactly:
 
 ```text
 [HW:/emotion:{"emotion":"curious","intensity":0.8}][HW:/servo/aim:{"direction":"user"}][HW:/servo/track:{"target":["face"]}] Hi, I don't think we've met.
 ```
 
-For `current_language=vi`, the spoken sentence can be `Chào bạn, hình như mình chưa gặp nhau.` Keep the same HW markers. This is the whole response, not a greeting to append after an explanation.
+For `current_language=vi`, keep the same HW markers and use exactly `Chào bạn, hình như mình chưa gặp nhau.` For another language, translate only that greeting. This fixed reply overrides optional proactive care for this stranger event. Guard events and explicit user requests in the same input retain their own routing.
+
+Before sending, silently check: the reply starts with `[HW:`, and removing all HW markers leaves only the greeting. Delete any other text. In particular, `A stranger entered.` and `Cautious acknowledgment per sensing skill.` are forbidden spoken preambles, not part of the greeting. Do not announce this check or its result.
 
 ## Sound: react and finish
 
@@ -61,7 +67,7 @@ Type them at the very start of your reply. They are NOT tool calls. The system r
 | Event | Image? | HW markers | Voice |
 |---|---|---|---|
 | `presence.enter` (friend) | Yes | `[HW:/emotion:{"emotion":"greeting","intensity":0.9}][HW:/servo/aim:{"direction":"user"}][HW:/servo/track:{"target":["face"]}]` | YES — warm personal greeting by name. **If the injected `[presence_context: ...]` block flags a long absence, swap to the return-after-long-absence phrasing — see section below.** |
-| `presence.enter` (stranger) | Yes | `[HW:/emotion:{"emotion":"curious","intensity":0.8}][HW:/servo/aim:{"direction":"user"}][HW:/servo/track:{"target":["face"]}]` | YES — cautious acknowledgment |
+| `presence.enter` (stranger) | Yes | `[HW:/emotion:{"emotion":"curious","intensity":0.8}][HW:/servo/aim:{"direction":"user"}][HW:/servo/track:{"target":["face"]}]` | YES — exact greeting from **Stranger arrival: exact reply**, with no preamble |
 | `presence.leave` | No | `[HW:/emotion:{"emotion":"idle","intensity":0.4}][HW:/servo/track/stop:{}]` | NO (`NO_REPLY`) — always silent |
 | `presence.away` | No | `[HW:/emotion:{"emotion":"sleepy","intensity":0.8}][HW:/servo/track/stop:{}]` | YES — brief "going to sleep" line |
 | `sound` 1st occurrence | No | `[HW:/emotion:{"emotion":"curious","intensity":0.6}]` | NO (`NO_REPLY`) |

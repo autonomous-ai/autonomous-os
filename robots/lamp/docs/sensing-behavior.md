@@ -31,7 +31,7 @@ All per-type gates above are independent — without a cross-type gate, a burst 
 
 ## Spoken sensing replies
 
-For events handled by `skills/sensing/SKILL.md`, the prompt requires literal HW markers followed by one sentence of at most 20 words in `current_language`, or `NO_REPLY` for a silent row. It forbids event/matrix explanations, owner-context analysis, draft alternatives and afterwords in all assistant text, including intermediate messages. A complete stranger greeting example shows the exact markers and the spoken sentence. Without a separate reasoning channel, analysis must be omitted. This is a prompt instruction, not a backend length limit or a guarantee of model compliance; other skills keep their own output rules.
+For events handled by `skills/sensing/SKILL.md`, the prompt requires literal HW markers followed by one sentence of at most 20 words in `current_language`, or `NO_REPLY` for a silent row. It forbids event/matrix explanations, owner-context analysis, draft alternatives and afterwords in all assistant text, including intermediate messages. A standalone stranger arrival outside guard mode requires the fixed greeting (EN: “Hi, I don’t think we’ve met.”; VI: “Chào bạn, hình như mình chưa gặp nhau.”), with exact HW markers and no optional proactive care. The model must silently remove any preamble before sending; a leading `[user]` wrapper does not change the detector route. Guard events and explicit user requests retain their own routing. Without a separate reasoning channel, analysis must be omitted. This is a prompt instruction, not a backend length limit or a guarantee of model compliance; other skills keep their own output rules.
 
 ## Sound
 
