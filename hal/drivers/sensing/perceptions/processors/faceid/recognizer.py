@@ -74,8 +74,9 @@ class FaceRecognizer:
         min_sharpness: float = config.FACE_MIN_SHARPNESS,
         stranger_min_ticks: int = config.FACE_STRANGER_MIN_TICKS,
         stranger_corroboration_s: float = config.FACE_STRANGER_CORROBORATION_S,
-        threshold: float = 0.3,
+        threshold: float = config.FACE_MATCH_THRESHOLD,
         extended_threshold: float = config.FACE_EXTENDED_THRESHOLD,
+        stranger_threshold: float = config.FACE_STRANGER_THRESHOLD,
         extend_min_enroll_sim: float = config.FACE_EXTEND_MIN_ENROLL_SIM,
         negative_threshold: float | None = 0.2,
         max_strangers: int = 50,
@@ -100,10 +101,16 @@ class FaceRecognizer:
         self._pending_strangers: list[
             tuple[npt.NDArray[np.float32], int, float]
         ] = []
+        # Bar for a match carried by the enrolled uploads; see
+        # FACE_MATCH_THRESHOLD in hal/config.py.
         self._threshold: float = threshold
         # Bar for a match carried by the extended bank alone — deliberately
         # higher than ``threshold``; see FACE_EXTENDED_THRESHOLD in hal/config.py.
         self._extended_threshold: float = extended_threshold
+        # Bar for matching an already-known stranger_N. Same kind of evidence as
+        # the extended bank (auto-captured, same camera, one view), same bar;
+        # see FACE_STRANGER_THRESHOLD in hal/config.py and #429.
+        self._stranger_threshold: float = stranger_threshold
         # Bar the UPLOADS must clear before a live view may be auto-captured
         # into the extended bank; see FACE_EXTEND_MIN_ENROLL_SIM.
         self._extend_min_enroll_sim: float = extend_min_enroll_sim
@@ -1106,12 +1113,13 @@ class FaceRecognizer:
             is_new_stranger: bool = False
 
             # Asymmetric owner match. The uploads are ground truth and keep the
-            # base threshold; the auto-captured extended views are a guess the
+            # match threshold; the auto-captured extended views are a guess the
             # device made about itself, so carrying a match ALONE costs them a
             # higher bar. A single threshold has no safe value here: every
-            # extended bank lifts the best stranger score well above 0.3, while
-            # raising the bar for the uploads too would cost the frontal recall
-            # the extended bank exists to recover.
+            # extended bank lifts the best stranger score into the 0.32-0.40
+            # band the uploads alone never reach, while raising the bar for the
+            # uploads to where the extended bank is safe would cost the frontal
+            # recall the extended bank exists to recover.
             up_s = float(upload_scores[i])
             ex_s = float(ext_scores[i])
             enroll_match = up_s > self._threshold
@@ -1202,7 +1210,13 @@ class FaceRecognizer:
                             },
                         )
                     )
-            elif s_score > self._threshold:
+            elif s_score > self._stranger_threshold:
+                # An already-known stranger. Matched at the SAME bar as the
+                # extended bank, not the upload bar: both banks are single
+                # auto-captured camera views that were never re-validated, and
+                # at the upload bar a stale row false-accepts a different person
+                # (#429: 0.346 / 0.385 / 0.318 against three different rows,
+                # id flipping with head pose).
                 raw_id = stranger_ids[i] or ""
                 person_id = raw_id.removeprefix(self.STRANGER_PREFIX)
                 face_kind = PersonKind.STRANGER
@@ -1211,16 +1225,28 @@ class FaceRecognizer:
                 match_source = "stranger"
             elif (
                 self._negative_threshold is None
-                or max(o_score, s_score) <= self._negative_threshold
+                or o_score <= self._negative_threshold
             ):
-                # Below everything we know. That is what an unknown person looks
-                # like — and equally what a momentarily unusable frame looks
-                # like, since a degraded crop resembles nothing. The gates above
-                # drop the unusable frames they can MEASURE; the rest are caught
-                # by asking what no single frame can answer: is this face still
-                # here a tick later? Minting is the expensive verdict (a
-                # persistent identity, a stranger presence event, a row in the
-                # Unknown Faces card), so it waits for that answer.
+                # Not anyone enrolled (both owner banks below the negative
+                # bar) and not any stranger we already know (the branch above
+                # consulted the stranger bank at its own bar). That is what an
+                # unknown person looks like — and equally what a momentarily
+                # unusable frame looks like, since a degraded crop resembles
+                # nothing. The gates above drop the unusable frames they can
+                # MEASURE; the rest are caught by asking what no single frame
+                # can answer: is this face still here a tick later? Minting is
+                # the expensive verdict (a persistent identity, a stranger
+                # presence event, a row in the Unknown Faces card), so it waits
+                # for that answer.
+                #
+                # The stranger bank is deliberately NOT part of the negative
+                # test. Requiring every stranger row <= negative_threshold
+                # meant that once the bank held a dozen rows some row was
+                # nearly always above 0.2, so a genuinely new person was either
+                # mis-assigned (above the old 0.3 bar) or parked as "?" for
+                # ever (#429). A stranger score between negative_threshold and
+                # stranger_threshold is "nobody we can vouch for", and the
+                # honest answer to that is a new identity.
                 with self._lock:
                     ticks = self._corroborate_stranger(embeds[i])
                 if ticks < self._stranger_min_ticks:
@@ -1251,7 +1277,9 @@ class FaceRecognizer:
                     new_stranger_embeds.append(embeds[i])
                     new_stranger_labels.append(raw_id)
             else:
-                # Score between negative_threshold and threshold on both banks — unsure
+                # An OWNER bank scored between negative_threshold and its match
+                # bar: too close to an enrolled user to call them a stranger,
+                # not close enough to name them. Unsure; the next frame decides.
                 person_id = "?"
                 face_kind = PersonKind.UNSURE
 
@@ -1308,6 +1336,7 @@ class FaceRecognizer:
                     stranger_similarity=s_score,
                     threshold=self._threshold,
                     extended_threshold=self._extended_threshold,
+                    stranger_threshold=self._stranger_threshold,
                     negative_threshold=self._negative_threshold,
                     det_score=det_score,
                     landmark_score=landmark_score,
