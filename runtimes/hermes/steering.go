@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"regexp"
 	"strings"
 	"time"
@@ -339,8 +340,15 @@ func (s *HermesService) managedLoop() {
 			cancel()
 			if err != nil {
 				var status *managedRunHTTPError
-				if !errors.As(err, &status) {
+				// Only a reply lost AFTER the request went out is uncertain. A
+				// dial failure (connection refused while hermes-gateway restarts —
+				// lamp-0c4e 2026-09-16, presync config change restarted it exactly
+				// as the skill-update turn was sent) means the prompt was never
+				// delivered, so the conversation stays usable.
+				var dial *net.OpError
+				if !errors.As(err, &status) && !(errors.As(err, &dial) && dial.Op == "dial") {
 					uncertainConversation = request.body.Conversation
+					s.rotateConversation() // see the stream-loss branch below
 				}
 				s.failManaged(ctx, request, fmt.Errorf("create native Hermes run: %w", err))
 				continue
@@ -477,6 +485,16 @@ func (s *HermesService) managedLoop() {
 				if update.err == nil {
 					update.err = errors.New("native Hermes stream ended without a terminal")
 				}
+				// Self-heal: the guard below refuses every later request on this
+				// conversation because the lost run may still be acting on the
+				// prompt, and nothing else ever rotates it — lamp-0c4e 2026-09-16:
+				// hermes-gateway restarted mid-run (presync config change), then
+				// every web/voice turn for 6+ minutes failed instantly with
+				// "start a new session before retrying" until os-server was
+				// restarted. Rotate now: requests already queued on the old
+				// conversation still fail (never re-send an uncertain prompt), new
+				// ones go to a fresh conversation the gateway has never seen.
+				s.rotateConversation()
 			}
 			if update.result.Terminal {
 				s.steeringMu.Lock()

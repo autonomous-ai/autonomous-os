@@ -193,6 +193,15 @@ khôi phục kết quả bằng trạng thái terminal đã xác nhận. Nếu c
 adapter yêu cầu stop và poll cho tới khi execution chốt, giữ quyền sở hữu remote
 run khi trạng thái chưa rõ. EOF hoặc trạng thái còn chạy không được báo thành công.
 
+Run chưa chốt đánh dấu conversation của nó là *không chắc*: request nào đã xếp
+hàng trên conversation đó bị từ chối ("unknown acceptance ... start a new
+session") vì run bị mất có thể vẫn đang thực thi prompt ấy. Sau đó adapter **tự
+xoay conversation** để request kế đi trên conversation mới — trước đây không có
+gì xoay nó, và lamp-0c4e (16/9/2026) hỏng mọi lượt suốt 6+ phút sau khi presync
+restart gateway, tới khi os-server được restart. **Lỗi dial** khi `POST /v1/runs`
+(connection refused lúc gateway đang restart) *không* phải không chắc: prompt chưa
+hề rời thiết bị, nên request đó lỗi nhưng conversation vẫn dùng được.
+
 Native mode còn yêu cầu marker tương thích OS ở trên: Runs chưa vá thiếu
 ID/kết quả tool và chi tiết cache mà handler hiện tại cần. Bản vá tương thích
 thêm `tool.call.started` / `tool.call.completed` với ID, arguments, kết quả thật,

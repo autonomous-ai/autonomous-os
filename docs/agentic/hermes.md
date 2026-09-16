@@ -200,6 +200,16 @@ Otherwise the adapter requests stop and polls until execution settles, keeping
 remote ownership while status is unresolved. EOF or a still-running status
 cannot be reported as success.
 
+An unresolved run marks its conversation *uncertain*: any request already queued
+on it is refused ("unknown acceptance ... start a new session") because the lost
+run may still be acting on that prompt. The adapter then **rotates the
+conversation itself** so the next request goes out on a fresh one — nothing else
+ever rotated it, and lamp-0c4e (2026-09-16) failed every turn for 6+ minutes
+after a presync-triggered gateway restart until os-server was restarted. A
+**dial failure** on `POST /v1/runs` (connection refused while the gateway
+restarts) is *not* uncertain: the prompt never left the device, so the request
+fails but the conversation stays usable.
+
 Native mode also requires the OS compatibility marker above: the unpatched
 Runs API omits tool-call IDs/results and cache details needed by the existing
 handler. The compatibility patch adds `tool.call.started` / `tool.call.completed`
