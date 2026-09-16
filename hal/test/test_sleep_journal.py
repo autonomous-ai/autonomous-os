@@ -174,6 +174,63 @@ class SleepJournalTest(unittest.TestCase):
         self.assertIsInstance(entry["hour"], int)
         self.assertTrue(0 <= entry["hour"] <= 23)
 
+    def test_the_local_time_is_written_with_its_offset(self):
+        """An epoch alone cannot be read back: whoever looks at this months
+        later has no way to know which zone the device was in. The offset
+        travels with the row."""
+        from datetime import datetime
+        from pathlib import Path
+
+        from hal import clock
+        from hal.models import EmotionRequest
+        from hal.routes.emotion import express_emotion
+
+        # Pin the zone instead of trusting the host: a dev laptop has no
+        # /etc/timezone at all, and the device's own zone is whatever the user
+        # last picked. hal.clock keeps _TZ_FILE module-level for exactly this.
+        tzfile = Path(self._tmp.name) / "timezone"
+        tzfile.write_text("Asia/Ho_Chi_Minh\n", encoding="utf-8")
+        saved = clock._TZ_FILE
+        clock._TZ_FILE = tzfile
+        try:
+            express_emotion(EmotionRequest(emotion=self.EMO_SLEEPY))
+        finally:
+            clock._TZ_FILE = saved
+        entry = self._entries()[0]
+
+        self.assertEqual(entry["tz"], "Asia/Ho_Chi_Minh")
+        self.assertTrue(entry["local"].endswith("+07:00"),
+                        f"offset missing or wrong for the configured zone: {entry['local']}")
+        parsed = datetime.fromisoformat(entry["local"])
+        self.assertIsNotNone(parsed.tzinfo, "local time was written without an offset")
+        # The three time fields must describe the same instant, not drift apart.
+        self.assertAlmostEqual(parsed.timestamp(), entry["ts"], delta=1.0)
+        self.assertEqual(parsed.hour, entry["hour"])
+        self.assertEqual(parsed.strftime("%Y-%m-%d"), entry["date"])
+        self.assertTrue(entry["tz"], "the zone name was not recorded")
+
+    def test_an_unresolvable_zone_is_visible_rather_than_silent(self):
+        """hal.clock falls back to naive local time when /etc/timezone cannot be
+        read. That fallback must be legible in the data -- a row that merely
+        LOOKS fine is how a wrong clock survives unnoticed."""
+        from pathlib import Path
+
+        from hal import clock
+        from hal.models import EmotionRequest
+        from hal.routes.emotion import express_emotion
+
+        saved = clock._TZ_FILE
+        clock._TZ_FILE = Path(self._tmp.name) / "no-such-timezone"
+        try:
+            express_emotion(EmotionRequest(emotion=self.EMO_SLEEPY))
+        finally:
+            clock._TZ_FILE = saved
+
+        entry = self._entries()[0]
+        self.assertEqual(entry["tz"], "", "an unresolved zone was reported as a real one")
+        self.assertNotIn("+", entry["local"],
+                         "naive fallback time was written as if it carried an offset")
+
     # --- the journal must never cost the device its sleep -------------------
 
     def test_an_unwritable_journal_does_not_block_sleep(self):

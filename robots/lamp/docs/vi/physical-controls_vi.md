@@ -506,8 +506,8 @@ gì để đọc, và không biết là mình đã từng ngủ.
 theo `HAL_SLEEP_LOG_MAX_DAYS`):
 
 ```json
-{"ts":1758000000.12,"date":"2026-09-16","hour":22,"event":"sleep","emotion":"sleepy","source":"api"}
-{"ts":1758021600.45,"date":"2026-09-17","hour":6,"event":"wake","emotion":"stretching","source":"button"}
+{"ts":1758000000.12,"local":"2026-09-16T22:00:00+07:00","tz":"Asia/Ho_Chi_Minh","date":"2026-09-16","hour":22,"event":"sleep","emotion":"sleepy","source":"api"}
+{"ts":1758021600.45,"local":"2026-09-17T06:00:00+07:00","tz":"Asia/Ho_Chi_Minh","date":"2026-09-17","hour":6,"event":"wake","emotion":"stretching","source":"button"}
 ```
 
 Nằm ở chỗ persistent chứ không phải `HAL_STATE_DIR`, vì reboot không được phép
@@ -521,6 +521,14 @@ lý do file này tồn tại. Flow event `hw_emotion` của os-server chỉ ghi 
 marker do chính nó bắn, nên bỏ sót toàn bộ các lần ngủ vật lý — khoảng một nửa,
 và đúng là nửa do con người trực tiếp gây ra. Lỗi ghi được log rồi nuốt: một bản
 ghi về giấc ngủ không đáng giá bằng chính giấc ngủ đó.
+
+`local` là giờ tường của chính thiết bị kèm offset UTC, lấy qua
+`hal/clock.py` nên bám theo `/etc/timezone` HIỆN TẠI chứ không phải zone glibc
+cache lúc process khởi động — người dùng đổi múi giờ từ web UI
+(`/setting#timezone`) hoặc app lúc nào cũng được. `tz` ghi tên zone đó, và rỗng
+đúng khi không resolve được và dòng đó rơi về giờ naive, nhờ vậy đồng hồ sai lộ
+ra trong dữ liệu chứ không ẩn đi. `ts` vẫn là khoá sắp xếp và là trường duy nhất
+trừ được an toàn khi múi giờ đổi giữa chừng.
 
 `source` ghi nguyên nhân (`button` / `touch` / `MPR121`, hoặc `api` cho marker
 và web UI — hai thứ này HAL chưa phân biệt được). Một `sleepy` gửi lại cho thiết

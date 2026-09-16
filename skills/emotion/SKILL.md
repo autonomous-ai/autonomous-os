@@ -86,9 +86,9 @@ Output: Do NOT use this skill. Use **LED Control** skill instead.
 This skill sets emotions; it does not read them back. When asked what state you are in
 or what you have been doing:
 
-- **Right now** — `curl -s http://127.0.0.1:5001/emotion` returns the current emotion and
-  `"sleeping": true/false`. Do not guess from the conversation; markers you emitted can be
-  ignored by the sleep gate, so what you asked for is not always what happened.
+- **Right now** — `curl -s http://127.0.0.1:5001/emotion/status` returns `current_emotion`,
+  `sleeping` and `active_scene`. Do not guess from the conversation; markers you emitted can
+  be ignored by the sleep gate, so what you asked for is not always what happened.
 - **Your sensing history** ("how many times have you slept?", "when do you usually sleep?")
   — use the **Sensing Track** skill's.
 

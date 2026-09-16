@@ -228,10 +228,16 @@ Storage: `/root/local/device/sleep/YYYY-MM-DD.jsonl` (30-day retention). One lin
 transition, appended:
 
 ```json
-{"ts":1758000000.12,"date":"2026-09-16","hour":22,"event":"sleep","emotion":"sleepy","source":"api"}
-{"ts":1758021600.45,"date":"2026-09-17","hour":6,"event":"wake","emotion":"stretching","source":"button"}
+{"ts":1758000000.12,"local":"2026-09-16T22:00:00+07:00","tz":"Asia/Ho_Chi_Minh","date":"2026-09-16","hour":22,"event":"sleep","emotion":"sleepy","source":"api"}
+{"ts":1758021600.45,"local":"2026-09-17T06:00:00+07:00","tz":"Asia/Ho_Chi_Minh","date":"2026-09-17","hour":6,"event":"wake","emotion":"stretching","source":"button"}
 ```
 
+- `local` — the device's own wall-clock with its UTC offset. **Say times to the user from
+  this field**, never by converting `ts` yourself.
+- `tz` — the zone that offset came from. Empty means the device could not resolve its zone
+  and the time is naive: report it as approximate rather than quoting it exactly.
+- `ts` — epoch seconds. Use it for ordering and for durations; it is the only field safe to
+  subtract, because the user can change the zone between two rows.
 - `event` — `sleep` or `wake`. Count `sleep` rows; a `sleepy` re-sent to an already
   sleeping device writes nothing, so every row is a real transition.
 - `source` — who caused it: `button` / `touch` / `MPR121` (someone did it by hand),
@@ -250,9 +256,28 @@ cat /root/local/device/sleep/*.jsonl | jq -c 'select(.event=="sleep")' | wc -l
 cat /root/local/device/sleep/*.jsonl \
   | jq -r 'select(.event=="sleep") | .hour' | sort -n | uniq -c | sort -rn | head -3
 
-# Last night's sleep, paired with its wake
-cat /root/local/device/sleep/*.jsonl | jq -c '{ts,event,source}' | tail -4
+# Recent transitions with readable local times
+cat /root/local/device/sleep/*.jsonl | jq -c '{local,event,source}' | tail -6
+
+# How long each sleep lasted — pair every sleep with the wake that follows it.
+# Durations come from `ts`, the times shown come from `local`.
+cat /root/local/device/sleep/*.jsonl | jq -s -r '
+  def shown: .local // ((.ts | strftime("%Y-%m-%dT%H:%M:%SZ")) + " (UTC)");
+  sort_by(.ts)
+  | reduce .[] as $r ({open:null, out:[]};
+      if $r.event == "sleep" then .open = $r
+      elif .open then .out += [{from: (.open | shown), to: ($r | shown),
+                                mins: (($r.ts - .open.ts) / 60 | floor)}] | .open = null
+      else . end)
+  | .out[] | "\(.from) → \(.to)  (\(.mins) min)"'
 ```
+
+Two gaps to report honestly rather than paper over:
+
+- A trailing `sleep` with no `wake` after it means the device is still asleep, or was
+  powered off while sleeping. The pairing drops it instead of inventing an end.
+- Rows written before `local` existed have no local time. The `shown` fallback above
+  prints those in **UTC**, labelled — do not present a UTC time as the user's local time.
 
 **Do not confuse this with `action:"sleep"` in the wellbeing log** — that is the *user*
 telling you they are going to bed (see the Habit skill). This file is about your own

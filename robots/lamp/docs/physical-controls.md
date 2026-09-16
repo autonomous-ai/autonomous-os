@@ -519,8 +519,8 @@ did not know it had ever slept at all.
 retention via `HAL_SLEEP_LOG_MAX_DAYS`):
 
 ```json
-{"ts":1758000000.12,"date":"2026-09-16","hour":22,"event":"sleep","emotion":"sleepy","source":"api"}
-{"ts":1758021600.45,"date":"2026-09-17","hour":6,"event":"wake","emotion":"stretching","source":"button"}
+{"ts":1758000000.12,"local":"2026-09-16T22:00:00+07:00","tz":"Asia/Ho_Chi_Minh","date":"2026-09-16","hour":22,"event":"sleep","emotion":"sleepy","source":"api"}
+{"ts":1758021600.45,"local":"2026-09-17T06:00:00+07:00","tz":"Asia/Ho_Chi_Minh","date":"2026-09-17","hour":6,"event":"wake","emotion":"stretching","source":"button"}
 ```
 
 Persistent rather than in `HAL_STATE_DIR`, because a reboot must not erase the
@@ -535,6 +535,14 @@ events only cover markers it fired itself, so they miss every physical sleep —
 about half of them, and precisely the half a person caused by hand. A write
 failure is logged and swallowed: a record of sleep is worth less than the sleep
 it describes.
+
+`local` carries the device's own wall-clock with its UTC offset, resolved
+through `hal/clock.py` so it follows the CURRENT `/etc/timezone` rather than the
+zone glibc cached at process start — the user can change the zone from the web
+UI (`/setting#timezone`) or the app at any time. `tz` names that zone, and is
+empty exactly when it could not be resolved and the row fell back to naive local
+time, so a wrong clock is visible in the data instead of hidden. `ts` stays the
+ordering key and the only field safe to subtract across a zone change.
 
 `source` labels the cause (`button` / `touch` / `MPR121`, or `api` for the
 marker and the web UI, which HAL cannot yet tell apart). A `sleepy` re-sent to

@@ -617,14 +617,26 @@ def _log_sleep_transition(event: str, emotion: str, source: str):
     """
     import json
 
-    from hal.clock import device_fromtimestamp
+    from hal.clock import device_fromtimestamp, device_timezone
 
     try:
         os.makedirs(config.SLEEP_LOG_DIR, exist_ok=True)
         ts = time.time()
+        # Local wall-clock, resolved through hal.clock so it follows the CURRENT
+        # /etc/timezone -- the agent and the web UI can both change the zone at
+        # runtime, and datetime.now() would keep the one glibc cached when HAL
+        # started. `local` is the field a reader actually wants; `ts` stays as
+        # the ordering key and the only value safe to subtract across a zone
+        # change. `tz` names the zone so a row can be re-read years later, and
+        # is empty exactly when the zone could not be resolved and the device
+        # fell back to naive local time -- a wrong clock then shows up in the
+        # data instead of hiding in it.
         when = device_fromtimestamp(ts)
+        zone = device_timezone()
         entry = {
             "ts": round(ts, 2),
+            "local": when.isoformat(timespec="seconds"),
+            "tz": zone.key if zone else "",
             "date": when.strftime("%Y-%m-%d"),
             "hour": when.hour,
             "event": event,
