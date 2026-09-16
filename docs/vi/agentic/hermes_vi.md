@@ -601,6 +601,16 @@ làm 3 việc theo thứ tự:
      từ `llm_model` (đó là model chính của OpenClaw, không liên quan Hermes).
    - `.custom_providers[0]` → `name: autonomous`, `key_env: AUTONOMOUS_API_KEY`,
      `api_mode: anthropic_messages`, `base_url` (mặc định campaign-api, override dưới).
+   - `.custom_providers[0].models.Auto-AI.prompt_caching = true` — **chỉ khi máy
+     đang ở proxy campaign-api** (cùng điều kiện `llm_base_url` với alias ở trên).
+     Hermes chỉ gắn breakpoint `cache_control` kiểu Anthropic cho custom provider
+     khi model khai capability này; thiếu nó thì toàn bộ floor ~18k token (system
+     prompt + 25 tool schema) bị gửi lại không cache mỗi lượt. Đo trên lamp-0c4e
+     (16/9/2026), cùng câu "hello" trong một session: không marker 18.3s → 12.6s,
+     `cache_read` 0; có marker 13.8s → 9.2s ổn định, `cache_read` ~85%. Brain tự
+     mang (BYO) giữ nguyên chính sách cache riêng theo provider của Hermes. Lưu ý
+     `prompt_caching.cache_ttl` vẫn là mặc định `5m` của Hermes: hai lượt cách nhau
+     lâu hơn thế thì lượt sau trả tiền prefill đầy đủ lại.
    - `.auxiliary.vision` (**ghi đè trọn node**) → `provider: custom:autonomous`,
      `model: qwen/qwen3.6-plus`, `timeout: 120`, `download_timeout: 30`, `extra_body: {}`
      — model hiểu ảnh, định tuyến qua cùng custom provider autonomous.

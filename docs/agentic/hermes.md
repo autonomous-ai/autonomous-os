@@ -624,6 +624,16 @@ during install) and does three things, in order:
      boot, editing `config.yaml` by hand did not survive a restart.
    - `.custom_providers[0]` → `name: autonomous`, `key_env: AUTONOMOUS_API_KEY`,
      `api_mode: anthropic_messages`, `base_url` (default campaign-api, overridden below).
+   - `.custom_providers[0].models.Auto-AI.prompt_caching = true` — **only while the
+     device is on the campaign-api proxy** (same `llm_base_url` check as the alias
+     above). Hermes emits Anthropic `cache_control` breakpoints for a custom
+     provider only when the model declares this capability; without it the whole
+     ~18k-token floor (system prompt + 25 tool schemas) is re-sent uncached every
+     turn. Measured on lamp-0c4e (2026-09-16), same "hello" in one session: no
+     markers 18.3s → 12.6s with `cache_read` 0; markers 13.8s → 9.2s steady with
+     `cache_read` ~85%. A BYO brain keeps Hermes' own per-provider caching policy.
+     Note `prompt_caching.cache_ttl` stays at Hermes' default `5m`: a gap longer
+     than that between two turns pays the full prefill again.
    - `.auxiliary.vision` (the whole node is **overwritten**) → `provider: custom:autonomous`,
      `model: qwen/qwen3.6-plus`, `timeout: 120`, `download_timeout: 30`, `extra_body: {}`
      — the image-understanding model, routed through the same autonomous provider.

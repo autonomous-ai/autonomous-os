@@ -136,7 +136,18 @@ LLM_MODEL="$(jq -r '.llm_model // empty' "$CONFIG_JSON" 2>/dev/null || true)"
 # Custom brain → the alias cannot resolve; use the operator's model. Empty base
 # URL means the device is on the default proxy, so that keeps the alias too.
 case "$LLM_BASE_URL" in
-  ""|*campaign-api.autonomous.ai*) ;;
+  ""|*campaign-api.autonomous.ai*)
+    # Prompt-cache markers for the Auto-AI alias. Hermes only emits Anthropic
+    # `cache_control` breakpoints for a custom provider when that model declares
+    # `prompt_caching: true`; without it every turn re-sends the whole ~18k-token
+    # floor (system + 25 tool schemas) uncached. Measured on lamp-0c4e 2026-09-16,
+    # same "hello" in one session: no markers 18.3s → 12.6s, cache_read 0;
+    # markers 13.8s → 9.2s steady, cache_read ~85%. Scoped to the campaign-api
+    # proxy (known to honour the markers); a BYO brain keeps Hermes' own
+    # per-provider caching policy.
+    yq -i '.custom_providers[0].models["Auto-AI"].prompt_caching = true' "$CONFIG_YAML"
+    log "custom_providers[0].models.Auto-AI.prompt_caching = true (cache markers on)"
+    ;;
   *)
     if [ -n "$LLM_MODEL" ]; then
       yq -i ".model.default = \"$LLM_MODEL\"" "$CONFIG_YAML"
