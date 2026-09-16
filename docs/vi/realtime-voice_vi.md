@@ -1252,7 +1252,10 @@ Hai tín hiệu độc lập "loa có đang phát không" nuôi cổng này, vì
 đủ: `tts.speaking` là nguồn thẩm quyền và hoạt động **kể cả khi không có bộ khử
 vọng nào** (khi không có, `aec.reference_idle_for()` trả `inf` và cổng sẽ không
 bao giờ kích hoạt), còn phần đuôi reference bổ sung độ suy giảm âm học sau khi cờ
-tắt. `HAL_LIVE_PLAYBACK_TAIL_S` là đuôi *âm học*, cố ý không phải `AEC_TAIL_S`
+tắt. Cổng còn giữ đuôi bằng đồng hồ monotonic từ lúc quan sát TTS kết thúc,
+nên khi AEC tắt hoặc thiếu thư viện, mic không mở lại ngay vào tiếng vọng
+trong phòng. Cách này cũng che khoảng nghỉ ngắn giữa các đoạn phát trong hàng đợi.
+`HAL_LIVE_PLAYBACK_TAIL_S` (mặc định 0.35 s) là đuôi *âm học*, cố ý không phải `AEC_TAIL_S`
 (2.0 s): nếu khóa theo cái dài hơn, `mute` sẽ nuốt hai giây đầu của mọi câu trả
 lời người dùng nói.
 
@@ -1325,7 +1328,7 @@ thúc.
 |-----|----------|---------|
 | `HAL_LIVE_MODE` | `false` | Chế độ live cho toàn tiến trình. Ép `HAL_REALTIME_TURN_DETECTION=server_vad` khi giá trị đó là `off` |
 | `HAL_LIVE_UPLINK_DURING_PLAYBACK` | `mute` | `mute` (không cắt lời, dùng được ngay) hoặc `cancelled` (song công thật, cần sửa AEC) |
-| `HAL_LIVE_PLAYBACK_TAIL_S` | `0.35` | Đuôi âm học sau lần ghi reference cuối, trong đó phòng vẫn được tính là đang phát |
+| `HAL_LIVE_PLAYBACK_TAIL_S` | `0.35` | Đuôi âm học sau lần ghi reference cuối hoặc lúc quan sát TTS kết thúc, kể cả khi không có AEC |
 | `HAL_LIVE_IDLE_HANGUP_S` | `15` | Cúp máy sau khoảng này khi **người dùng** không có hành động nào, tính từ mốc muộn hơn: lời cuối của người dùng hoặc thời điểm thiết bị nói xong |
 | `HAL_LIVE_MAX_UNPROMPTED_REPLIES` | `3` | Trần cứng cho số câu trả lời liên tiếp của model mà không có tiếng người dùng xen giữa — cắt vòng lặp tự nói mà không cắt ngang một câu trả lời dài |
 | `HAL_LIVE_MAX_S` | `600` | Trần tuyệt đối cho một phiên |

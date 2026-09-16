@@ -167,6 +167,8 @@ class VoiceService:
         self._live_frames = 0
         self._live_frames_during_playback = 0
         self._live_frames_substituted = 0
+        self._live_playback_was_speaking = False
+        self._live_playback_tail_until = 0.0
         # Completed model replies with no confirmed user speech since. Bumped
         # by the output pump, cleared by the mic loop, which owns user speech.
         self._live_unprompted_replies = 0
@@ -1140,10 +1142,16 @@ class VoiceService:
         # is enough. The TTS flag is authoritative and works with NO canceller
         # at all (HAL_AEC_ENABLED defaults to false, and reference_idle_for()
         # then returns inf — every frame would read as a quiet room and this
-        # gate would never fire). The reference tail adds the acoustic decay
-        # AFTER the flag drops, which the flag itself cannot express.
+        # gate would never fire). Hold a local tail from the observed falling
+        # edge as well: without AEC there is no reference to track room decay.
+        now = time.monotonic()
+        speaking = self._tts_is_speaking()
+        if self._live_playback_was_speaking and not speaking:
+            self._live_playback_tail_until = now + voice_cfg.LIVE_PLAYBACK_TAIL_S
+        self._live_playback_was_speaking = speaking
         if (
-            not self._tts_is_speaking()
+            not speaking
+            and now >= self._live_playback_tail_until
             and aec.reference_idle_for() > voice_cfg.LIVE_PLAYBACK_TAIL_S
         ):
             return data  # nothing has reached the speaker recently
@@ -1692,8 +1700,8 @@ class VoiceService:
                 if overflowed:
                     # The frame is already lost. Substitute rather than splice.
                     data = self._np.zeros_like(data)
-                else:
-                    data = self._live_uplink_frame(data)
+                # Track playback edges even when capture overflowed.
+                data = self._live_uplink_frame(data)
                 self._live_frames += 1
 
                 energy = rms(data, self._np)
