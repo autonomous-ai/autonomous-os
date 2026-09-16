@@ -1,7 +1,6 @@
 """Execution KPI observes provider completion, never partial speech or unblock sentinels."""
 
 import asyncio
-import json
 import queue
 import threading
 from types import SimpleNamespace
@@ -12,7 +11,6 @@ from hal import config
 from hal.realtime.models import OutputEvent, TextOutput, TurnDoneEvent
 from hal.realtime.voice_agent.base import VoiceAgentBase
 from hal.realtime.voice_agent.openai_realtime import OpenAIRealtimeAgent
-from hal.realtime.voice_agent.qwen_realtime import QwenRealtimeAgent
 from hal.realtime.voice_agent.gemini_live import GeminiLiveAgent
 
 
@@ -63,17 +61,6 @@ def test_openai_terminal_status_is_not_always_completion(status):
     agent._turn_done = threading.Event()
     event = SimpleNamespace(type="response.done", response=SimpleNamespace(status=status, usage=None))
     assert agent._sync_receive_turn(iter([event]))
-    assert agent._recv_queue.get_nowait().execution_completed is (status == "completed")
-
-
-@pytest.mark.parametrize("status", ["completed", "failed", "cancelled", "incomplete", None])
-def test_qwen_terminal_status_is_not_always_completion(status):
-    agent = object.__new__(QwenRealtimeAgent)
-    agent._recv_queue = queue.Queue()
-    agent._turn_done = threading.Event()
-    agent._log_usage = lambda response: None
-    conn = SimpleNamespace(recv=lambda: json.dumps({"type": "response.done", "response": {"status": status}}))
-    assert agent._sync_receive_turn(conn)
     assert agent._recv_queue.get_nowait().execution_completed is (status == "completed")
 
 

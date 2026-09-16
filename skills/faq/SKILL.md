@@ -187,7 +187,7 @@ actually speak; it also influences the default voice choices shown in TTS.
 
 This is the audio-native realtime agent path. Use the **Enabled** checkbox to
 turn it on or off. The **Provider** list comes from the device and may include
-Gemini Live, OpenAI Realtime, Qwen Omni Realtime, or None. Pick a **Reasoning**
+Gemini Live, OpenAI Realtime, or None. Pick a **Reasoning**
 level when the selected provider offers one; lower-cost options appear first.
 
 The API Key and Base URL are optional overrides. Blank fields reuse/derive from

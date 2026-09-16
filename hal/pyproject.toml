@@ -52,7 +52,7 @@ dependencies = [
     "anthropic>=0.40.0",
     "cryptography>=44.0.0",
     "google-genai>=0.7.0",
-    "openai>=1.60.0",
+    "openai>=3.14.1",
     "pydantic>=2.0.0",
     "websockets>=12.0",
 ]

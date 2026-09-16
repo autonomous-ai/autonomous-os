@@ -91,19 +91,19 @@ def setup_logging() -> logging.Logger:
     _usage.addHandler(_usage_file)
     _usage.propagate = False
 
-    # Qwen twin of the gemini usage log: "hal.realtime.usage.qwen" is a CHILD
-    # of the logger above, so propagate=False here keeps qwen lines out of
-    # gemini_usage.log — one file per provider, comparable line-for-line.
-    _usage_qwen = logging.getLogger("hal.realtime.usage.qwen")
-    _usage_qwen.setLevel(logging.DEBUG)
-    _usage_qwen_file = logging.handlers.RotatingFileHandler(
-        log_dir / "qwen_usage.log",
+    # OpenAI twin of the gemini usage log: "hal.realtime.usage.openai" is a
+    # CHILD of the logger above, so propagate=False here keeps OpenAI lines out
+    # of gemini_usage.log — one file per provider, comparable line-for-line.
+    _usage_openai = logging.getLogger("hal.realtime.usage.openai")
+    _usage_openai.setLevel(logging.DEBUG)
+    _usage_openai_file = logging.handlers.RotatingFileHandler(
+        log_dir / "openai_usage.log",
         maxBytes=5 * 1024 * 1024,
         backupCount=3,
     )
-    _usage_qwen_file.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
-    _usage_qwen.addHandler(_usage_qwen_file)
-    _usage_qwen.propagate = False
+    _usage_openai_file.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+    _usage_openai.addHandler(_usage_openai_file)
+    _usage_openai.propagate = False
 
     # GELF handler: send INFO+ logs to centralized Graylog. A simulated body
     # must be fully local — no surprise network traffic while a developer is

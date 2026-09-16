@@ -643,7 +643,7 @@ module load and stripped from the URL for privacy (see `hooks/setup/useSetupUrlP
 - [`docs/os-server.md`](os-server.md) — routes, wire graph, run flags
 - [`docs/setup-flow.md`](setup-flow.md) — provisioning, AP→STA handoff, admin password default
 - [`docs/mqtt.md`](mqtt.md) — full MQTT command reference
-- [`docs/realtime-voice.md`](realtime-voice.md) — Gemini Live / OpenAI Realtime / Qwen Omni pipelines
+- [`docs/realtime-voice.md`](realtime-voice.md) — Gemini Live / OpenAI Realtime pipelines
 - [`docs/bootstrap-ota.md`](bootstrap-ota.md) — OTA metadata format + promotion model
 - [`docs/agentic/hermes.md`](agentic/hermes.md), [`docs/agentic/picoclaw.md`](agentic/picoclaw.md), [`docs/agentic/codex.md`](agentic/codex.md), [`docs/agentic/opencode.md`](agentic/opencode.md) — per-runtime protocol
 

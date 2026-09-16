@@ -29,7 +29,6 @@ import hal.presets as presets
 from hal.realtime.config import (
     GeminiConfig,
     OpenAIConfig,
-    QwenConfig,
     _load_language,
     gemini_needs_idle_workaround,
 )
@@ -497,14 +496,6 @@ class RealtimeOrchestrator:
 
             return OpenAIRealtimeAgent(
                 config=OpenAIConfig(instructions=instructions), tools=self._tools,
-            )
-        if provider == "qwen":
-            from hal.realtime.voice_agent.qwen_realtime import (
-                QwenRealtimeAgent,
-            )
-
-            return QwenRealtimeAgent(
-                config=QwenConfig(instructions=instructions), tools=self._tools,
             )
         return None
 

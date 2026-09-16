@@ -902,7 +902,6 @@ def _os_cfg_realtime() -> dict:
 _RT: dict = _os_cfg_realtime()
 _RT_GEMINI: dict = _RT.get("gemini") if isinstance(_RT.get("gemini"), dict) else {}
 _RT_OPENAI: dict = _RT.get("openai") if isinstance(_RT.get("openai"), dict) else {}
-_RT_QWEN: dict = _RT.get("qwen") if isinstance(_RT.get("qwen"), dict) else {}
 
 
 def _rt_str(env_key: str, cfg_val, default: str) -> str:
@@ -925,7 +924,7 @@ def _rt_enabled() -> bool:
 
 
 REALTIME_ENABLED: bool = _rt_enabled()
-REALTIME_PROVIDER: str = _rt_str("HAL_REALTIME_PROVIDER", _RT.get("provider"), "gemini")  # none | gemini | openai | qwen
+REALTIME_PROVIDER: str = _rt_str("HAL_REALTIME_PROVIDER", _RT.get("provider"), "gemini")  # none | gemini | openai
 # When enabled, do not send a voice turn to the realtime agent until an STT
 # interim transcript starts with one of the configured wake phrases. This is a
 # top-level config.json setting because it also gates the non-realtime Go path.
@@ -1548,46 +1547,23 @@ REALTIME_OPENAI_MODEL: str = _rt_str("HAL_OPENAI_REALTIME_MODEL", _RT_OPENAI.get
 REALTIME_OPENAI_VOICE: str = _rt_str("HAL_OPENAI_REALTIME_VOICE", _RT_OPENAI.get("voice"), "alloy")
 REALTIME_OPENAI_SAMPLE_RATE: int = 24000
 REALTIME_OPENAI_REASONING_EFFORT: str = _rt_str("HAL_OPENAI_REASONING_EFFORT", _RT_OPENAI.get("reasoning_effort"), "minimal")
-
-# --- Realtime: Qwen Omni Realtime (DashScope / Model Studio intl) ---
-# Unlike gemini/openai there is NO llm_base_url-derived fallback: Qwen realtime
-# talks straight to the Alibaba MaaS host, not through the campaign-api proxy.
-# NOTE: deliberately NO fallback to the shared realtime.api_key/base_url — on
-# devices those hold the campaign-api credentials (gemini/openai path) and
-# would produce a baffling 401 against the Alibaba host. Both values must come
-# from env (device /opt/hal/.env: DASHSCOPE_API_KEY, HAL_QWEN_REALTIME_BASE_URL
-# = wss://<workspace>.ap-southeast-1.maas.aliyuncs.com/api-ws/v1) or from
-# config.json realtime.qwen.{api_key,base_url}; empty → the WS handshake fails
-# loudly in the hal log.
-REALTIME_QWEN_API_KEY: str = (
-    os.environ.get("DASHSCOPE_API_KEY", "")
-    or _RT_QWEN.get("api_key", "")
+# Input transcription model. The transcript is the ONLY source of the user's
+# words on the OpenAI path (UserSpeechOutput, live history, the delegate
+# message), so it is always on. gpt-4o-mini-transcribe streams deltas (live
+# history and barge-in confirmation see words early); whisper-1 only sends the
+# completed transcript. env > config.json realtime.openai.transcribe_model > default.
+REALTIME_OPENAI_TRANSCRIBE_MODEL: str = _rt_str(
+    "HAL_OPENAI_TRANSCRIBE_MODEL", _RT_OPENAI.get("transcribe_model"), "gpt-4o-mini-transcribe"
 )
-REALTIME_QWEN_BASE_URL: str = (
-    os.environ.get("HAL_QWEN_REALTIME_BASE_URL", "")
-    or _RT_QWEN.get("base_url", "")
-)
-# Default 3.5-plus: turbo (legacy) NEVER fires function calls and ignores
-# [TURN CONTEXT] (device-tested 2026-07-06 — no delegate, no time answers),
-# which breaks the whole delegate flow; 3.5-plus delegates cleanly, reads turn
-# context, and has built-in web search. Voice: 3.5-plus accepts only
-# Serena/Ethan of the QwenVoice set (Cherry/Chelsie are turbo-only, rejected
-# with InvalidParameter at first response).
-REALTIME_QWEN_MODEL: str = _rt_str("HAL_QWEN_REALTIME_MODEL", _RT_QWEN.get("model"), "qwen3.5-omni-plus-realtime")
-REALTIME_QWEN_VOICE: str = _rt_str("HAL_QWEN_REALTIME_VOICE", _RT_QWEN.get("voice"), "Ethan")
-# Built-in web search (3.5 models): session.update `enable_search: true`. The
-# qwen twin of Gemini's Google Search grounding — public live-data questions
-# (news, scores, weather) get answered IN-SESSION with fresh facts instead of
-# delegating. Without the flag the model answers from stale knowledge
-# (probed 2026-07-06: "no match today" vs the real 2-1 result with it on).
-REALTIME_QWEN_SEARCH: bool = (
-    os.environ.get(
-        "HAL_QWEN_SEARCH",
-        str(_RT_QWEN.get("search", True)),
-    ).lower()
-    in ("1", "true", "yes")
-)
-REALTIME_QWEN_SAMPLE_RATE: int = 16000
+# Server-side input noise reduction, applied before VAD and the model:
+# "far_field" (laptop / room mic — the lamp's case), "near_field" (headset), or
+# "off". The OpenAI half of the echo defence Gemini gets from VAD sensitivity.
+REALTIME_OPENAI_NOISE_REDUCTION: str = _rt_str(
+    "HAL_OPENAI_NOISE_REDUCTION", _RT_OPENAI.get("noise_reduction"), "far_field"
+).strip().lower()
+# server_vad activation threshold (0..1, API default 0.5). 0 = derive it from
+# HAL_LIVE_VAD_START_SENSITIVITY (low → 0.7, high → 0.3); a non-zero value wins.
+REALTIME_OPENAI_VAD_THRESHOLD: float = float(os.environ.get("HAL_OPENAI_VAD_THRESHOLD", "0") or 0)
 
 # --- Realtime: Context manager ---
 OPENCLAW_WORKSPACE_DIR: str = os.environ.get("HAL_OPENCLAW_WORKSPACE_DIR", "/root/.openclaw/workspace")

@@ -7,7 +7,6 @@ from hal.realtime.enums.openai import (
     OpenAITurnDetectionType,
     OpenAIVoice,
 )
-from hal.realtime.enums.qwen import QwenVoice
 from hal.realtime.enums.shared import (
     AgentGateway,
     InputEventTypeEnum,
@@ -28,5 +27,4 @@ __all__ = [
     "OpenAIVoice",
     "GeminiThinkingLevel",
     "GeminiVoice",
-    "QwenVoice",
 ]

@@ -562,8 +562,7 @@ mới xoá nó.
 Khôi phục theo **từng mục**, vì người dùng nghĩ theo cách đó — họ đổi brain, hoặc
 đổi nhà cung cấp giọng, và muốn lấy lại đúng thứ đó. Mỗi mục lấy phần của bộ đã
 lưu mà nó vốn khởi đi: AI Brain lấy url + key + model, realtime và voice lấy
-url + key. Riêng qwen realtime bị từ chối: nó nói thẳng với host Alibaba bằng
-credential riêng, đưa bộ xuất xưởng vào đó chỉ tổ nhận 401.
+url + key.
 
 Nó được cài đặt như một lượt `UpdateConfig` bình thường chứ không ghi thẳng, nên
 thừa hưởng đủ mọi side-effect của một lần sửa tay — restart hal hoặc đẩy TTS

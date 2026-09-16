@@ -13,7 +13,6 @@ from hal.realtime.enums import (
     OpenAITruncationType,
     OpenAITurnDetectionType,
     OpenAIVoice,
-    QwenVoice,
 )
 
 
@@ -85,21 +84,22 @@ class OpenAIConfig(BaseModel):
     )
     truncation_type: OpenAITruncationType = OpenAITruncationType.RETENTION_RATIO
     truncation_retention_ratio: float = 0.5
+    transcribe_model: str = app_config.REALTIME_OPENAI_TRANSCRIBE_MODEL
+    noise_reduction: str = app_config.REALTIME_OPENAI_NOISE_REDUCTION
+    # Server VAD knobs — the same HAL_LIVE_VAD_* settings Gemini reads, mapped
+    # onto server_vad threshold / prefix_padding_ms / silence_duration_ms and
+    # semantic_vad eagerness (see OpenAIRealtimeAgent._turn_detection).
+    vad_threshold: float = app_config.REALTIME_OPENAI_VAD_THRESHOLD
+    vad_start_sensitivity: str = app_config.LIVE_VAD_START_SENSITIVITY
+    vad_end_sensitivity: str = app_config.LIVE_VAD_END_SENSITIVITY
+    vad_prefix_padding_ms: int = app_config.LIVE_VAD_PREFIX_PADDING_MS
+    vad_silence_ms: int = app_config.LIVE_VAD_SILENCE_MS
     max_retries: int = 1
     reconnect_delay_s: float = 2.0
-
-
-class QwenConfig(BaseModel):
-    api_key: str = app_config.REALTIME_QWEN_API_KEY
-    base_url: str = app_config.REALTIME_QWEN_BASE_URL
-    model: str = app_config.REALTIME_QWEN_MODEL
-    voice: QwenVoice = QwenVoice(app_config.REALTIME_QWEN_VOICE)
-    instructions: str = ""
-    sample_rate: int = app_config.REALTIME_QWEN_SAMPLE_RATE
-    language: str | None = _load_language()
-    search_enabled: bool = app_config.REALTIME_QWEN_SEARCH
-    max_retries: int = 1
-    reconnect_delay_s: float = 2.0
+    queue_poll_s: float = 1.0
+    # How long a commit / tool result waits for the active response to finish
+    # before forcing response.create anyway.
+    response_wait_s: float = 10.0
 
 
 class GeminiConfig(BaseModel):

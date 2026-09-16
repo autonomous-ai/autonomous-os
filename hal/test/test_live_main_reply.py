@@ -13,7 +13,7 @@ from hal.test.test_live_voice_metrics import _pump
 from hal.test.test_voice_metrics import kpi  # noqa: F401 -- clock/transport fixture
 
 
-@pytest.mark.parametrize("provider", ["gemini", "openai", "qwen"])
+@pytest.mark.parametrize("provider", ["gemini", "openai"])
 @pytest.mark.parametrize("live", [False, True])
 def test_both_segments_reach_existing_queue_when_live_opens(monkeypatch, live, provider):
     monkeypatch.setattr(config, "REALTIME_PROVIDER", provider)
@@ -33,7 +33,7 @@ def test_both_segments_reach_existing_queue_when_live_opens(monkeypatch, live, p
     ]
 
 
-@pytest.mark.parametrize("provider", ["gemini", "openai", "qwen"])
+@pytest.mark.parametrize("provider", ["gemini", "openai"])
 @pytest.mark.parametrize("main_reply", [True, False])
 def test_live_cleanup_and_output_reset_only_stop_live_playback(monkeypatch, main_reply, provider):
     monkeypatch.setattr(config, "REALTIME_PROVIDER", provider)

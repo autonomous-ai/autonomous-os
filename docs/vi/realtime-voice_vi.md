@@ -16,8 +16,9 @@ Code nằm ở `hal/realtime/`; được điều khiển bởi
 Với [KPI-3 giọng nói](voice-metrics_vi.md#kpi-3-chạy-xong-không-đánh-giá-làm-đúng),
 `TurnDoneEvent.execution_completed` mặc định `false`, chỉ thành true khi có
 tín hiệu kết thúc từ provider: Gemini `generation_complete` hoặc
-`turn_complete` bình thường, không interrupted; OpenAI/Qwen `response.done`
-với `response.status == "completed"`. Đóng kết nối, lỗi gửi, sentinel mở chặn,
+`turn_complete` bình thường, không interrupted; OpenAI `response.done`
+với `response.status == "completed"` và không có barge-in trong response đó.
+Đóng kết nối, lỗi gửi, sentinel mở chặn,
 output dở dang rồi timeout, done cũ/phát lại, hoặc bỏ receive không phải bằng
 chứng chạy xong.
 
@@ -53,7 +54,7 @@ Lớp realtime phải delegate nó ở mọi cách diễn đạt. Quan sát trê
 không?" / "Giúp tôi tìm cây bút được không?" bị Gemini tự trả lời — hỏi bút trông
 thế nào, đoán vị trí, hoặc đề nghị nhìn mà không nhìn. Quy tắc nằm ở ba chỗ phải
 khớp nhau: mô tả tool `delegate_to_main` dùng chung, mô tả tool `look` (tìm đồ
-không phải là look), và bullet **Finding things is an action** trong cả bốn prompt
+không phải là look), và bullet **Finding things is an action** trong cả ba prompt
 provider; `hal/test/test_realtime_find_delegation.py` ghim phần text. Bản thân
 quyết định không được ép bằng code — chỉ giọng nói thật trên thiết bị mới kiểm
 tra được.
@@ -710,8 +711,8 @@ việc nói. Khi `stream_output()` thấy lời gọi (`_handle_emotion_call`), 
 2. trả lời lời gọi bằng `FunctionCallResultInput`, trong đó `trigger_response`
    phụ thuộc việc model đã nói trong lượt này hay chưa (`orchestrator.py`,
    `_handle_emotion_call`). Nếu **đã** nói (`trigger_response=False`), kết quả
-   được ghi lại mà không sinh response thứ hai — với OpenAI và Qwen điều này bỏ
-   qua `response.create` (`openai_realtime.py` / `qwen_realtime.py`); với Gemini
+   được ghi lại mà không sinh response thứ hai — với OpenAI điều này bỏ
+   qua `response.create` (`openai_realtime.py`); với Gemini
    thì ack **không được gửi đi**, vì `send_tool_response` ở đó làm lượt *tiếp
    tục* và model nói lại toàn bộ câu trả lời. Nếu **chưa** nói, tool call chính
    là toàn bộ phần model sinh ra cho tới lúc đó và Gemini dừng chờ, nên phải gửi
@@ -771,9 +772,7 @@ thiết bị smart-home của họ, tin nhắn của họ) cho `delegate_to_main
 Đánh đổi:
 
 - **Chỉ Gemini.** OpenAI Realtime không có tool built-in tương đương, nên prompt
-  của nó (`system_prompt_openai.md`) vẫn delegate mọi lookup bên ngoài. Qwen Omni
-  Realtime cũng vậy — không có search grounding, prompt của nó
-  (`system_prompt_qwen.md`) delegate mọi câu dữ liệu thời gian thực.
+  của nó (`system_prompt_openai.md`) vẫn delegate mọi lookup bên ngoài.
 - **Chi phí.** Grounding tính phí theo mỗi grounded request (cộng thêm token),
   nhưng chỉ phát sinh khi Gemini thực sự quyết định search. Prompt dặn nó *chỉ*
   ground cho dữ kiện công khai/mới thật sự, không ground cho kiến thức chung đã có
@@ -841,8 +840,7 @@ LLM vision, vài giây) bằng một round-trip ngay trong phiên.
   (`_camera_present()`), nên đúng cho mọi đường khởi tạo.
 - **Flag:** `HAL_GEMINI_VISION` / `realtime.gemini.vision` (mặc định **bật**).
 - **Provider:** chỉ Gemini (luồng inject ảnh → tiếp tục turn đã làm + test cho
-  Gemini Live; OpenAI và Qwen vẫn delegate — Qwen Omni qua đường realtime này
-  chỉ có text+audio, không có vision trong phiên). System prompt Gemini
+  Gemini Live; OpenAI vẫn delegate câu hỏi thị giác). System prompt Gemini
   (`system_prompt_gemini.md`) mô tả khi nào gọi `look`.
 
 Chi phí: một frame mỗi lần gọi (kích bằng tool, **không** stream video), nên token
@@ -867,8 +865,9 @@ os-server xử lý ảnh theo **gate describe-first** trong `system/vision` (xem
 `server/sensing/delivery/http/handler.go`): khi main model đang active KHÔNG
 khai image input trong catalog model (trường hợp Auto-AI — attachment thô sẽ
 404 tại smart-agent-router: "No endpoints found that support image input"),
-frame được `default_image_model` của catalog (qwen — cùng model mà `imageModel`
-của openclaw dùng cho ảnh Telegram) tả thành chữ và agent nhận dòng
+frame được `default_image_model` của catalog (`DefaultImageModel` trong
+`system/vision/describe.go` — cùng model mà `imageModel` của openclaw dùng cho
+ảnh Telegram) tả thành chữ và agent nhận dòng
 `[image description] …` — đồng thời hint `[vision-image]` được viết lại để
 **bỏ path file**, và **file snapshot cũng bị xoá luôn** (best-effort). Cả
 path lẫn file đều không được sống chung với description: snapshot nằm trong
@@ -889,14 +888,14 @@ chụp thì không có gì để bàn giao, agent chụp như bình thường.
 
 ## Các provider
 
-Ba backend thay thế cho nhau, chọn bằng `HAL_REALTIME_PROVIDER`
-(`none` | `gemini` | `openai` | `qwen`):
+Hai backend thay thế cho nhau, chọn bằng `HAL_REALTIME_PROVIDER`
+(`none` | `gemini` | `openai`; Go `RealtimeProviders` và dropdown web
+`RealtimeSection.tsx` liệt kê đúng ba giá trị này):
 
 | Provider | Class | Mô hình threading | Model mặc định | Sample rate |
 |----------|-------|-------------------|----------------|-------------|
 | Gemini Live | `voice_agent/gemini_live.py` `GeminiLiveAgent` | event loop asyncio riêng trên thread `gemini-io`; thread send/recv submit coroutine qua `run_coroutine_threadsafe` | `gemini-2.5-flash-native-audio-preview-12-2025` | 16000 Hz |
-| OpenAI Realtime | `voice_agent/openai_realtime.py` `OpenAIRealtimeAgent` | thuần đồng bộ; 1 `RealtimeConnection` dùng chung bởi thread send/recv, serialize bằng reentrant lock | `gpt-realtime-2` | 24000 Hz |
-| Qwen Omni Realtime | `voice_agent/qwen_realtime.py` `QwenRealtimeAgent` | thuần đồng bộ; client `websockets.sync.client` thô | `qwen3.5-omni-plus-realtime` | 16000 Hz |
+| OpenAI Realtime | `voice_agent/openai_realtime.py` `OpenAIRealtimeAgent` | thuần đồng bộ; 1 `RealtimeConnection` (SDK `openai` GA, `openai.resources.realtime`) dùng chung bởi thread send/recv, serialize bằng reentrant lock | `gpt-realtime-2` | 24000 Hz |
 
 Gemini Live dùng `google-genai` và private asyncio loop của nó do thread
 `gemini-io` sở hữu. Teardown đóng/hủy provider receive task trước, rồi mới join
@@ -926,43 +925,110 @@ Mọi provider coi teardown là trạng thái kết thúc: sau khi `disconnect()
 stop signal, worker send/receive không reconnect và cũng không ghi log lỗi
 transport trong lúc socket đã đóng đang unwind.
 
-**Qwen Omni Realtime** (Alibaba DashScope / Model Studio) nói **schema event BETA
-của OpenAI Realtime** (`session.update`, `input_audio_buffer.append/commit`,
-`response.create`, `response.audio.delta`, `response.audio_transcript.delta`,
-`response.done`) qua đường WS của DashScope
-`wss://<workspace-host>/api-ws/v1/realtime?model=...` với header
-`Authorization: Bearer <key>`. Không tái dùng được OpenAI python SDK (SDK nói
-schema GA), nên `qwen_realtime.py` là client `websockets.sync.client` thô. Audio
-input 16 kHz mono pcm16 base64, output 24 kHz mono pcm16. Luồng turn thủ công
-(HAL local VAD): append → commit → `response.create`; `response.create` **bắt
-buộc** kèm `response.modalities ["text","audio"]` tường minh, nếu không server
-trả lời text-only (verify live 2026-07-06). Model mặc định
-`qwen3.5-omni-plus-realtime`: bản legacy `qwen-omni-turbo-realtime` KHÔNG bao
-giờ gọi function call và lờ `[TURN CONTEXT]` (device-test 2026-07-06) → hỏng
-toàn bộ luồng delegate. Voice: Ethan (mặc định) và Serena trên 3.5-plus;
-Cherry/Chelsie chỉ dùng được với turbo (ghép sai → `InvalidParameter` ngay
-response đầu); **không** có knob reasoning/thinking (web ẩn selector Reasoning).
-Web search built-in (model 3.5) bật qua session `enable_search: true` (knob
-`realtime.qwen.search` / `HAL_QWEN_SEARCH`, mặc định bật) — bản qwen của Google
-Search grounding bên Gemini. Ràng buộc DashScope: search ("agent mode") KHÔNG
-cho đăng ký function tools cùng session, nên khi search bật, delegate chạy qua
-giao thức text-marker: agent nối suffix `[TOOL PROTOCOL]` vào instructions,
-model trả lời đúng `[DELEGATE] <message>`, recv loop nuốt transcript đó và tổng
-hợp FunctionCallOutput `delegate_to_main` y hệt tool call thật (orchestrator
-không phân biệt được; `express_emotion` không dùng được ở mode này). Khi search
-tắt, function tool (`delegate_to_main`, `express_emotion`) được truyền trong
-`session.update` (format beta phẳng) và
-`response.function_call_arguments.done` được xử lý. Mỗi turn, dòng token/cost
-ghi vào file log riêng `qwen_usage.log` (logger `hal.realtime.usage.qwen`, sinh
-đôi với `gemini_usage.log`); bảng giá `_QWEN_RATES` trong `qwen_realtime.py`
-($0.27/1M input, $1.07/1M output — Model Studio quốc tế công bố một mức giá
-blended duy nhất, chưa công bố tách theo modality; bảng vẫn giữ key theo
-modality để drop số tách console-verified vào sau). Audio ≈ 25 token/giây cả
-hai chiều (verify: 5.1s audio out = 128 token); usage payload gồm
-`input_tokens`/`output_tokens` + `input_tokens_details`/`output_tokens_details`
-`{text_tokens, audio_tokens}` + `cached_tokens` top-level.
+**OpenAI Realtime** nói schema **GA** của Realtime API qua SDK `openai`
+(`openai.resources.realtime`; `hal/pyproject.toml` ghim `openai>=3.14.1`, `uv.lock`
+khoá 3.14.1 — bản 1.99.9 trong lock cũ không có module `openai.resources.realtime`
+nên adapter còn không import được; module GA có từ openai 2.x, 3.x thêm
+`client.live` cho GPT-Live). `_sync_connect` gọi `client.realtime.connect(model=…)`
+rồi gửi một `session.update` (`_build_session`):
 
-Cả ba kế thừa `voice_agent/base.py` `VoiceAgentBase`, định nghĩa contract dựa
+- `type: realtime`, `output_modalities: ["audio"]` — chỉ audio; transcript của
+  audio (`response.output_audio_transcript.delta`) là nguồn text. Thêm `"text"`
+  sẽ làm model phát cả `response.output_text.delta` và câu trả lời bị nói hai lần,
+  nên recv loop lờ event đó nếu nó vẫn tới.
+- `audio.input.format` / `audio.output.format` = `{type: audio/pcm, rate: 24000}`
+  (PCM vào và ra cùng 24 kHz, `output_sample_rate` giữ bằng input).
+- `audio.input.transcription` = `{model: HAL_OPENAI_TRANSCRIBE_MODEL (mặc định
+  gpt-4o-mini-transcribe), language: <ISO-639-1 rút từ stt_language>}`. Input
+  transcription là **nguồn duy nhất** của lời người dùng trên đường OpenAI
+  (`UserSpeechOutput.transcript`, live history, message delegate) nên luôn bật;
+  `gpt-4o-mini-transcribe` stream delta (history live và xác nhận barge-in thấy
+  chữ sớm), `whisper-1` chỉ gửi bản `completed`.
+- `audio.input.noise_reduction` = `{type: HAL_OPENAI_NOISE_REDUCTION}` (mặc định
+  `far_field` — mic phòng như đèn; `near_field` — headset; `off` bỏ hẳn key). Lọc
+  buffer trước VAD và model: ít onset VAD giả từ tạp âm phòng / tàn dư echo — nửa
+  OpenAI của phòng thủ echo mà Gemini có qua VAD sensitivity.
+- `audio.input.turn_detection`: `null` khi `HAL_REALTIME_TURN_DETECTION=off` (lượt
+  thủ công, client bracket); `server_vad` → `threshold` = `HAL_OPENAI_VAD_THRESHOLD`
+  nếu khác 0, không thì 0.7 cho `HAL_LIVE_VAD_START_SENSITIVITY=low` / 0.3 cho `high`
+  (API mặc định 0.5; "low" = onset phải có bằng chứng to hơn = threshold cao hơn),
+  `prefix_padding_ms` = `HAL_LIVE_VAD_PREFIX_PADDING_MS` (khi >0),
+  `silence_duration_ms` = `HAL_LIVE_VAD_SILENCE_MS` (khi >0); `semantic_vad` không
+  có threshold, `eagerness` = `HAL_LIVE_VAD_END_SENSITIVITY` (`low`/`high`). Chỉ gửi
+  knob nào được set, phần còn lại theo mặc định API; cấu hình thực tế được log
+  `[realtime] server VAD: type=… threshold=… prefix_padding=…ms silence=…ms eagerness=…`.
+- `tools` + `tool_choice: auto` khi có tool; `reasoning.effort` theo
+  `HAL_OPENAI_REASONING_EFFORT`; `truncation` = `retention_ratio` 0.5.
+
+Lượt thủ công (HAL local VAD): append → `input_audio_buffer.commit` +
+`response.create`, kèm log `Turn timing: local_end->commit_sent=Nms`. Khi server
+VAD bật, `commit_audio()` là **no-op** trên OpenAI: server tự commit buffer và tự
+tạo response ở `speech_stopped`; commit từ client sẽ rơi vào buffer đã commit
+(rỗng) và `response.create` thứ hai va với cái của server — cùng quy tắc với
+Gemini chỉ gửi `activityEnd` khi automatic activity detection tắt. Latency được
+log `Response latency: Nms (speech_end->first_audio; commit_sent->first_audio=Nms)`
+hoặc `(…; server VAD)`.
+
+**Contract live-mode giống hệt `gemini_live.py`** (mọi thứ live pump và đường lượt
+bám vào đều được phát ở đây; `hal/test/test_openai_live_provider_metrics.py`, 21
+test, soi gương `test_live_provider_metrics.py` cho OpenAI):
+
+- mọi output và `TurnDoneEvent` mang `user_turn_id`, **đóng băng theo response**
+  tại `response.created` (hoặc ở output đầu nếu lỡ event đó), nên một input
+  transcription đến muộn không bao giờ chiếm lại reply trước đó;
+- `UserSpeechOutput` (chỉ LIVE_MODE) từ `input_audio_buffer.speech_started` (key
+  mới `openai-<hex>`), `input_audio_buffer.speech_stopped` (`endpoint_at`, method
+  `server_vad`), `conversation.item.input_audio_transcription.delta` / `.completed`
+  (method `provider_transcript`; `.completed` chỉ phát phần chưa stream qua delta
+  để consumer nối chunk không thấy câu hai lần; map `item_id → turn` — tối đa 16
+  item — gán transcription đến sau `speech_started` KẾ TIẾP về đúng input nó chép;
+  lượt thủ công không có `speech_started` nên `item_id` được biết ở
+  `input_audio_buffer.committed`);
+- `InterruptedOutput(reason="output_reset")` trước
+  `response.output_audio_transcript.delta` đầu tiên của một reply, để reply không
+  bao giờ phát sau một reply cũ trong hàng đợi TTS live;
+- `OutputEvent.gen` tăng mỗi receive turn và mỗi lần ngắt, để
+  `VoiceAgentBase.receive()` bỏ audio của reply đã bị hủy;
+- `note_server_activity()` ở mọi event vào (một turn đang reasoning hay chạy tool
+  gửi rất nhiều thứ không bao giờ vào queue — rate limit, lifecycle item,
+  transcription — nên không "im" trên đường truyền);
+- `FunctionCallOutput.user_transcript` lấy từ input transcription;
+- `TurnDoneEvent.execution_completed` = `response.status == "completed"` **và**
+  không bị ngắt.
+
+**Barge-in.** Khi `input_audio_buffer.speech_started` đến giữa lúc response đang
+chạy (server tự cancel response với `interrupt_response` mặc định của API; queue
+local là việc của HAL), hoặc `response.done` báo `status: cancelled` mà không thấy
+`speech_started` nào của mình (`response.cancel` từ client, hay semantic VAD tự
+quyết giữa câu): `_handle_interrupt` rút cạn recv queue (giữ lại
+`UserSpeechOutput` / `ExecutionOutput` / `InterruptedOutput` `server_interrupt`;
+một `TurnDoneEvent` đang xếp hàng biến thành `ExecutionOutput` trong LIVE_MODE để
+giữ bằng chứng metric mà không phát lại terminal điều khiển), tăng gen, phát
+`InterruptedOutput(reason="server_interrupt", at=now, user_turn_id=<chủ của reply
+bị hủy>)` (LIVE_MODE), bỏ delta còn bay của response bị hủy (so `response_id`), và
+gửi `conversation.item.truncate` cho item audio của assistant (`audio_end_ms` =
+audio đã nhận − audio còn trong queue; client `event_id` `hal-truncate`) để
+context của model khớp với thứ người dùng thật sự nghe. Ước lượng này dư vài trăm
+ms vì buffer playback của HAL; giá trị vượt độ dài thật chỉ sinh một `error`
+lành tính mang `event_id` đó. Log: `Response interrupted — dropped N queued
+output(s), gen=N`.
+
+**Lỗi.** Event `error` với code `input_audio_buffer_commit_empty` (local VAD chốt
+một lượt ngắn hơn 100 ms tối thiểu), `conversation_already_has_active_response`
+(server VAD và commit client chéo nhau), `response_cancel_not_active` (cancel một
+response đã xong), hoặc mang `event_id` `hal-truncate` là race lành tính: log INFO
+(`Realtime API notice (<code>)`) và bỏ qua. Mọi `error` khác vẫn fail-fast
+(`OpenAIRealtimeError` → `TurnDoneEvent` ngay, reconnect nền). Hook base để mặc
+định có lý do: `end_turn()` no-op vì OpenAI gửi `response.done` kể cả response chỉ
+có function call nên `_turn_done` luôn được recv loop nhả — ép nó sẽ race một
+response còn chạy thành `conversation_already_has_active_response`;
+`requires_fresh_session` False vì item `function_call_output` ghi được mà không
+cần response, nên tool call chưa ack không đầu độc session như Gemini (1008).
+
+Vẫn **chỉ Gemini** (không đổi): `look` vision trong phiên, Google Search
+grounding, session resumption, `requires_fresh_session`, override `end_turn()`.
+
+Cả hai kế thừa `voice_agent/base.py` `VoiceAgentBase`, định nghĩa contract dựa
 trên queue:
 
 - **2 thread mỗi agent**: `_send_loop` rút `_send_queue` → API; `_recv_loop` đọc
@@ -970,7 +1036,8 @@ trên queue:
 - **Fail-fast khi backend lỗi** (cả 2 driver): khi `_recv_loop` gặp lỗi thật
   (Gemini Live: proxy `go_away`, hết quota / resource-exhausted, WS close bất
   thường — tức **không phải** idle close `1000` lành tính; OpenAI: event `error`
-  của Realtime API hoặc socket rớt), nó đẩy `TurnDoneEvent` ngay lập tức
+  của Realtime API ngoài các code race lành tính liệt kê ở đoạn OpenAI, hoặc
+  socket rớt), nó đẩy `TurnDoneEvent` ngay lập tức
   (`_fail_fast_turn`) để `receive()` thoát liền và lượt fallback sang main agent
   **mà không** phải chờ hết `HAL_REALTIME_RECV_QUEUE_TIMEOUT_S`. Idle close lành
   tính vẫn reconnect êm (Gemini code `1000`; OpenAI kết thúc vòng lặp event êm,
@@ -994,6 +1061,15 @@ trên queue:
   còn message về, tối đa `HAL_REALTIME_TURN_MAX_SILENCE_S` (mặc định 20 s) cho cả
   lượt. Lượt không có message nào về vẫn kết thúc ngay ở cửa sổ gap đầu tiên.
 - `available` ⇔ websocket/session đã connect (`_connected`).
+- **Contract live-mode** (cả hai provider phát giống nhau, xem đoạn OpenAI ở
+  trên): `user_turn_id` trên mọi output và `TurnDoneEvent`; `UserSpeechOutput`
+  (chỉ LIVE_MODE) cho onset / endpoint / transcript của người dùng;
+  `InterruptedOutput` `output_reset` ở lời đầu của một reply và `server_interrupt`
+  khi bị ngắt; `OutputEvent.gen` để `receive()` bỏ audio của reply đã bị thay;
+  `note_server_activity()` nuôi watchdog im lặng; `TurnDoneEvent.execution_completed`
+  chỉ true khi có terminal thành công từ provider và không bị ngắt. Cái gì
+  `voice_service` / `live_history` / `live_voice` bám vào đều không phụ thuộc
+  provider.
 
 ### An toàn connection của OpenAI
 
@@ -1001,31 +1077,91 @@ Agent OpenAI dùng chung 1 `RealtimeConnection` giữa thread send và recv. M�
 thao tác ghi vào connection, việc swap connection khi reconnect, và teardown đều
 chạy dưới reentrant lock (`_conn_lock`); vòng lặp recv blocking dài chạy **ngoài**
 lock trên một snapshot của connection để send audio không bị starve giữa lượt.
-Reconnect là idempotent (re-check `_connected` trong lock) và `_drop_connection()`
-chỉ null connection nếu nó vẫn là connection hiện tại — nên 2 thread không thể
-tear down / dựng lại connection của nhau.
+Thread recv chỉ lấy lock **ngắn** cho lần ghi duy nhất của nó —
+`conversation.item.truncate` khi barge-in (`_truncate_item`) — và bỏ qua nếu
+snapshot không còn là connection hiện tại. Lock reentrant vì một thao tác send
+giữ lock trong khi kích `_safe_response_create`, hàm này lấy lại lock trên cùng
+thread; riêng phần chờ `_turn_done` của nó chạy trước khi lấy lock để recv loop
+vẫn drain được event. Reconnect là idempotent (re-check `_connected` trong lock)
+và `_drop_connection()` chỉ null connection nếu nó vẫn là connection hiện tại —
+nên 2 thread không thể tear down / dựng lại connection của nhau.
+
+### GPT-Live-1 không phải Realtime API
+
+`gpt-live-1` (GA trong API từ 2026-09-10) là một **API khác**, không phải model
+mới trên `/v1/realtime`. Kết quả khảo sát (developers.openai.com/api/docs/guides/live,
+live-migration, live-delegation và `openai.types.live` trong SDK 3.14.1):
+
+- **Transport:** WebSocket chính tới `/v1/live/sessions` (SDK
+  `client.live.connect()`; `session.start` → `session.started`), KHÔNG phải
+  `/v1/realtime`. Proxy `campaign-api` không có route `/live/sessions` — phải nối
+  thẳng hoặc sửa proxy.
+- **Event:** client gửi `session.input_audio.append` (base64 PCM16 mono, 16000
+  hoặc 24000 Hz); server phát `session.output_audio.delta`,
+  `session.output_transcript.delta`, `session.input_transcript.delta` (mảnh có
+  `start_ms`/`end_ms`, tài liệu nói thẳng là "do not define complete turns"),
+  `session.delegation.created`, `session.usage.updated`, `session.closed`, `error`.
+- **Không có** `response.done` / turn-complete, **không có** `turn_detection` /
+  cấu hình VAD, **không có** audio commit, **không có** event ngắt lời — model
+  full-duplex, tự xử lý barge-in; trạng thái playback phải theo dõi phía client.
+- **Tool:** không có tool ở tầng Live với client delegation — model phát
+  `session.delegation.created` (chỉ metadata: id, target, offset_ms; nội dung
+  task phải dựng lại từ các mảnh transcript quanh `offset_ms`), app trả lời bằng
+  `session.commentary.append` (nói ra), `session.thinking.append` (im lặng) hoặc
+  `session.instructions.append`, mỗi cái ≤500 token kèm `delegation_id`. Cách khác:
+  `delegation: {type: "responses"}` chạy tool trong một backend Responses
+  (function call tới trong `response.event`, kết quả trả qua
+  `response.item.create` + `response.create`). Không nhận input ảnh.
+- **Giá:** $0.05/phút mỗi session, bill theo giây (+ model/tool của backend tính
+  riêng) — khác hẳn giá theo token của Realtime API.
+
+**Kết luận:** KHÔNG tương thích với `voice_agent/openai_realtime.py`. Muốn dùng
+cần adapter riêng (vd `voice_agent/gpt_live.py`) và contract base phải có
+`TurnDoneEvent` **tự tổng hợp** (provider không có ranh giới lượt), không có
+`look`; bill theo phút khiến idle park/recycle thành bắt buộc; và proxy hiện tại
+không route được. Khái niệm `delegate_to_main` ánh xạ tự nhiên lên client
+delegation + `session.commentary.append`.
 
 ## Pricing & log usage
 
 Mỗi turn ghi một dòng token/cost vào log riêng theo provider dưới
 `/var/log/hal/` (rotating, 5 MB × 3): `gemini_usage.log` (logger
-`hal.realtime.usage`) và `qwen_usage.log` (logger `hal.realtime.usage.qwen`).
-OpenAI chỉ log dòng usage thường vào `server.log` (`[realtime] OpenAI usage`),
-không ước tính cost. Dòng log mang đủ số token theo từng modality **và** cost
-USD ước tính, nên rate có sai thì sau này vẫn tính lại được từ số token đã ghi.
+`hal.realtime.usage`) và `openai_usage.log` (logger
+`hal.realtime.usage.openai` — logger **con** của logger trên, `propagate=False`
+để dòng OpenAI không lọt vào `gemini_usage.log` lẫn `server.log`; cấu hình ở
+`server_support/log_setup.py`, một file mỗi provider, so được từng dòng). Dòng
+log mang đủ số token theo từng modality **và** cost USD ước tính, nên rate có
+sai thì sau này vẫn tính lại được từ số token đã ghi.
+
+Dòng OpenAI (grep `[realtime] OpenAI usage` trong `openai_usage.log`):
+
+```
+[realtime] OpenAI usage: model=… in_text=N($…) in_audio=N($…) out_text=N($…) out_audio=N($…) +unattr(Nin/Nout) | cached=Ntok total=Ntok est_full>=$… est_cached>=$…
+```
+
+`unattr` là token OpenAI đếm nhưng không gắn text/audio (input ảnh) — không định
+giá ở đây, nên `est` là **sàn** (`>=`). `cached` là prompt-cache hit
+(`input_token_details.cached_tokens`), bill lại theo rate giảm; `est_cached` trừ
+phần tiết kiệm đó (token cached không gắn modality được coi là text — sàn
+system-instruction). `in_text` là context input bị bill lượt này: nó phình theo
+history của session sống lâu và phải tụt ngay sau một lần recycle idle;
+`cached=0` ở mọi turn nghĩa là cache không trúng (session churn) — đó là cờ đỏ
+chi phí.
 
 Bảng rate nằm trong code, key `(direction, modality)` tính USD trên 1M token —
-`_GEMINI_RATES` trong `voice_agent/gemini_live.py`, `_QWEN_RATES` trong
-`voice_agent/qwen_realtime.py`. Model lạ rơi về bảng đắt nhất (cost là trần,
-không bao giờ báo thiếu).
+`_GEMINI_RATES` trong `voice_agent/gemini_live.py`, `_OPENAI_RATES` trong
+`voice_agent/openai_realtime.py` (khớp substring **theo thứ tự**: `mini` trước để
+`gpt-realtime-2-mini` không rơi vào bảng full-size, `gpt-realtime-2` trước
+`gpt-realtime` để model GA có ngày không rớt về rate text-out cũ). Model lạ rơi
+về bảng đắt nhất (cost là trần, không bao giờ báo thiếu).
 
-| Model | text in | audio in | text out | audio out | audio↔token | Nguồn |
-|---|---|---|---|---|---|---|
-| `gemini-2.5-flash-native-audio` | $0.50 | $3.00 | $2.00 | $12.00 | 25 tok/s | ai.google.dev pricing (verify 2026-06-29) |
-| `gemini-3.1-flash-live` | $0.75 | $3.00 | $4.50 | $12.00 | 25 tok/s | ai.google.dev pricing (verify 2026-06-29) |
-| `qwen-omni-turbo-realtime` | $0.27 | $4.44 | $8.89* | $8.89* | 25 tok/s in+out | bill CSV consume-detail (verify 2026-07-06); *output turn có audio bill gộp text+audio (`multi_output_token`); response text-only bill $1.07 (`purein_text_output`) |
-| `qwen3.5-omni-flash-realtime` | $0.27 | $4.44 | $8.89* | $8.89* | ~7 tok/s in, ~12.5 tok/s out | bill CSV (verify 2026-07-06): flash bill CÙNG line item rẻ như turbo, kể cả phiên bật search — text-in (phần nặng nhất) rẻ hơn Gemini 3.1 ~2.8x. Search +$0.01/request |
-| `qwen3.5-omni-plus-realtime` | $2.10 | $16.50 | $62.00* | $62.00* | ~7 tok/s in, ~12.5 tok/s out | bill CSV consume-detail (verify 2026-07-06); *một line item `omni_audio_output_token` bao cả text+audio của response. Web search tính thêm $0.01/lần search |
+| Model | text in | audio in | text out | audio out | cached in (text / audio) | audio↔token | Nguồn |
+|---|---|---|---|---|---|---|---|
+| `gemini-2.5-flash-native-audio` | $0.50 | $3.00 | $2.00 | $12.00 | text in ×0.10 (giảm 90%) | 25 tok/s | ai.google.dev pricing (verify 2026-06-29) |
+| `gemini-3.1-flash-live` | $0.75 | $3.00 | $4.50 | $12.00 | text in ×0.10 (giảm 90%) | 25 tok/s | ai.google.dev pricing (verify 2026-06-29) |
+| `*mini*` (vd `gpt-realtime-2-mini`) | $0.60 | $10.00 | $2.40 | $20.00 | $0.06 / $0.30 | — | developers.openai.com/api/docs/pricing (verify 2026-09-16) |
+| `gpt-realtime-2` | $4.00 | $32.00 | $24.00 | $64.00 | $0.40 / $0.40 | — | developers.openai.com/api/docs/pricing (verify 2026-09-16) |
+| `gpt-realtime` | $4.00 | $32.00 | $16.00 | $64.00 | $0.40 / $0.40 | — | developers.openai.com/api/docs/pricing (verify 2026-09-16) |
 
 Cơ cấu chi phí giống nhau ở mọi provider: `in_text` chiếm áp đảo (system
 prompt ~7-10k token + context session tích lũy bị re-bill mỗi turn, phình dần
@@ -1068,9 +1204,8 @@ theo agent gateway (`HAL_AGENT_GATEWAY`):
 (`build_instructions`), lưu lượt (`add_turn`), nạp/trim memory, và summarize;
 subclass cài `load_device_context`, `load_device_memory`, `load_skills_catalog`,
 `summarize_device_memory`. Prompt nền nằm ở `resources/` (`system_prompt.md` +
-bản theo provider `system_prompt_openai.md` / `system_prompt_gemini.md` /
-`system_prompt_qwen.md`, đăng ký trong `PROVIDER_PROMPT_PATHS` của
-context_manager).
+bản theo provider `system_prompt_openai.md` / `system_prompt_gemini.md`, đăng ký
+trong `PROVIDER_PROMPT_PATHS` của context_manager).
 
 ### Memory & summarization
 
@@ -1118,7 +1253,8 @@ lại phiên mỗi lần vào và ra; biến chế độ live thành lựa chọ
 loại bỏ hẳn bộ máy đó, đổi lại phải khởi động lại để chuyển. Vì vậy
 `HAL_LIVE_MODE=true` **ép** `HAL_REALTIME_TURN_DETECTION` từ `off` sang
 `server_vad` (`hal/config.py`) — giá trị đó được đọc lúc import bởi
-`GeminiConfig.vad_enabled`, nên phải chốt trước khi các model đó được định nghĩa.
+`GeminiConfig.vad_enabled` và `OpenAIConfig.turn_detection_type`, nên phải chốt
+trước khi các model đó được định nghĩa.
 Một giá trị khác `off` do người dùng đặt thì được giữ nguyên. Sai chỗ này sẽ tạo
 ra thiết bị stream audio mãi mãi mà không bao giờ trả lời.
 
@@ -1137,7 +1273,9 @@ Reset output/cleanup LIVE giữ main đang chờ. Input mới không rỗng, qua
 addressing gate sẽ dừng playback một lần mỗi provider turn và xóa queue;
 explicit stop cũng xóa queue, kể cả speech được giữ lại sau reset model.
 Chính sách cancel OS giữ nguyên. Ngắt theo input xác nhận cần
-`UserSpeechOutput`: Gemini có phát, adapter OpenAI/Qwen hiện chưa phát.
+`UserSpeechOutput`: cả Gemini Live lẫn OpenAI Realtime đều phát (OpenAI từ
+`input_audio_buffer.speech_started` / `speech_stopped` và input transcription,
+chỉ trong LIVE_MODE).
 Mic streaming, server VAD, delegate và đường nhận TTS của LIVE OFF không đổi.
 Test chuyển loa dùng audio giả; barge-in âm thanh cần kiểm tra trên device.
 
@@ -1161,7 +1299,7 @@ wake phrase hoặc một lần cấp focus mới.
 
 Với `HAL_LIVE_MODE=true`, các đoạn transcript input Gemini đi kèm provider turn ID. `hal/drivers/voice/_internal/live_history.py` chỉ ghép input/output cùng ID rồi gửi một notification `voice_agent_handled` sau terminal thành công từ provider. Timeout receive giữ lượt đang dở; terminal lặp không gửi lại. Lượt reject, delegate, bị ngắt, không rõ chủ sở hữu hoặc thiếu transcript không được ghi như lượt hoàn tất. Dữ liệu history tách khỏi đường playback; output-reset hiện có cũng xóa phần câu trả lời đang gom.
 
-Một worker nền gửi lượt hoàn tất với interaction ID, giới hạn độ dài reply và snapshot Harness hiện có. Worker gửi hết notification hoàn tất sau khi live kết thúc mà không chặn playback. OS xử lý qua `externalhistory`, lưu disk, gửi silent và hiển thị card **History sync · Realtime → Main** hiện có. Buffer HAL có giới hạn (64 lượt chưa xong, 64 notification chờ gửi, 128 ID đã đóng gần nhất); lỗi đầy/transport được log. Độ bền bắt đầu khi OS nhận lưu notification. Bản sửa này không thay đổi live của OpenAI hay Qwen; history live của các provider đó là task riêng.
+Một worker nền gửi lượt hoàn tất với interaction ID, giới hạn độ dài reply và snapshot Harness hiện có. Worker gửi hết notification hoàn tất sau khi live kết thúc mà không chặn playback. OS xử lý qua `externalhistory`, lưu disk, gửi silent và hiển thị card **History sync · Realtime → Main** hiện có. Buffer HAL có giới hạn (64 lượt chưa xong, 64 notification chờ gửi, 128 ID đã đóng gần nhất); lỗi đầy/transport được log. Độ bền bắt đầu khi OS nhận lưu notification. Đường này chỉ bám vào provider turn ID, không bám vào Gemini: adapter OpenAI nay phát cùng contract (transcript input và terminal đều mang `user_turn_id`), nên history live cũng ghép được cho OpenAI — hành vi đó mới được ghim bằng unit test, chưa kiểm chứng trên thiết bị.
 
 ### Phản hồi HW emotion trong chế độ live
 
@@ -1186,8 +1324,8 @@ Mic streaming, đồng hồ idle, server VAD, barge-in, routing và tính metric
 
 ### Voice metrics trong chế độ live
 
-Phiên Gemini live dùng `hal/telemetry/live_voice.py` để ánh xạ lượt người dùng của
-provider sang interaction ID HAL, gắn owner cho playback native và truyền cùng
+Phiên live (Gemini Live hay OpenAI Realtime) dùng `hal/telemetry/live_voice.py` để
+ánh xạ lượt người dùng của provider sang interaction ID HAL, gắn owner cho playback native và truyền cùng
 ID vào task delegate qua OS. Chỉ terminal thành công của provider gắn đúng lượt
 mới hoàn tất execution realtime; riêng timeout, done tự tạo hay ngắt lời không
 phải bằng chứng completed. Không có terminal thành công thì task vẫn là
@@ -1280,9 +1418,11 @@ một hàng đợi chết. `stream_output()` trả về một lần cho mỗi c�
 (`turn_complete`) và cũng trả về khi im lặng lâu, lúc `receive()` hết giờ mà chưa
 yield gì; cả hai đều chỉ có nghĩa là "quay lại vòng nữa".
 
-`InterruptedOutput` (mới) được `gemini_live` phát ra khi `content.interrupted` và
-là **cách cắt lời bằng giọng nói duy nhất** — không có gì cục bộ quyết định
-nó. Nó dừng phát ngay lập tức. Đường lượt không bao giờ thấy nó: manual VAD
+`InterruptedOutput` (mới) được `gemini_live` phát ra khi `content.interrupted`, và
+`openai_realtime` phát ra (`reason="server_interrupt"`) khi
+`input_audio_buffer.speech_started` đến giữa một response hoặc `response.done`
+báo `cancelled`; đó là **cách cắt lời bằng giọng nói duy nhất** — không có gì cục
+bộ quyết định nó. Nó dừng phát ngay lập tức. Đường lượt không bao giờ thấy nó: manual VAD
 không cho server cơ hội phát ra.
 
 **Đầu ra được flush một lần lúc bắt đầu phiên.** Không có nó, phiên sẽ mở trên
@@ -1319,7 +1459,7 @@ live. Đây là đánh đổi sản phẩm, không phải lỗi:
 | transcript STT | không có `[TURN CONTEXT]`, không có bộ lọc dựa trên transcript |
 | wake word mỗi lượt | kiểm tra qua STT lúc vào khi bật wake-word gate và chưa có focus; lượt mở đầu được xác nhận có thể vào live ngay trong lần thu đó. Không kiểm tra wake word bằng STT local trong phiên live đã được phép |
 | speaker ID, cảm xúc giọng nói | một phiên không tạo ra cả hai |
-| STT cục bộ khi delegate | `delegate_to_main` kết thúc phiên và chuyển tiếp `[voice-instruction]` + transcript đầu vào của chính Gemini làm `[transcript]` (`FunctionCallOutput.user_transcript` → `DelegateSignal.transcript`, `_live_out_pump` đọc); câu trả lời của main agent phát sau khi cúp máy. Provider không có input transcription chỉ chuyển tiếp instruction |
+| STT cục bộ khi delegate | `delegate_to_main` kết thúc phiên và chuyển tiếp `[voice-instruction]` + transcript đầu vào của chính provider làm `[transcript]` (Gemini input transcription / OpenAI `conversation.item.input_audio_transcription.*`; `FunctionCallOutput.user_transcript` → `DelegateSignal.transcript`, `_live_out_pump` đọc); câu trả lời của main agent phát sau khi cúp máy. Provider không có input transcription chỉ chuyển tiếp instruction |
 
 Cũng không chạy bên trong một phiên: cổng RMS vào, `SPEECH_HOLDOFF_S`, đồng hồ im
 lặng, `MAX_SESSION_DURATION_S`, socket STT mỗi lượt và keepalive của nó (thậm chí
@@ -1618,15 +1758,18 @@ chỉ-thuộc-os-server.
 
 Model ở Go tại `system/server/config/realtime.go`; đọc ở HAL tại
 `hal/config.py`. Field chung ở trên; knob theo provider nằm trong sub-object
-`gemini` / `openai` / `qwen`, `provider` chọn cái đang active (`none` hoặc vắng →
-tắt realtime). `api_key` / `base_url` rỗng → fallback `llm_api_key` /
-`llm_base_url` — **trừ qwen**: credential của qwen là của riêng nó
-(`realtime.qwen.api_key` / `realtime.qwen.base_url`, Go struct `QwenRealtime`
-còn có `model`/`voice`), **cố tình không** fallback về `realtime.api_key`/
-`base_url` chung hay credential `llm_*` — qwen nói thẳng với host Alibaba MaaS,
-không đi qua proxy `campaign-api`. Set qua `realtime.qwen.*` trong config.json
-hoặc qua env trên device (`DASHSCOPE_API_KEY`, `HAL_QWEN_REALTIME_BASE_URL`
-trong `/opt/hal/.env`); thiếu cả hai thì WS handshake fail rõ ràng trong log hal.
+`gemini` / `openai` (Go struct `GeminiRealtime` / `OpenAIRealtime`), `provider`
+chọn cái đang active (`none` hoặc vắng → tắt realtime; Go còn nhận `off` /
+`disabled` như đồng nghĩa của `none`). `api_key` / `base_url` rỗng → fallback
+`llm_api_key` / `llm_base_url` cho cả hai provider — không còn ngoại lệ
+credential nào.
+
+HAL đọc thêm hai knob trong `realtime.openai` mà Go **không** model:
+`transcribe_model` và `noise_reduction` (`_RT_OPENAI` trong `hal/config.py`;
+env `HAL_OPENAI_TRANSCRIBE_MODEL` / `HAL_OPENAI_NOISE_REDUCTION` thắng). Vì
+os-server marshal `config.json` từ struct, hai key này **không sống qua** một
+lần os-server lưu lại config — muốn ghim bền trên thiết bị thì đặt env trong
+`/opt/hal/.env`.
 
 > **Để `base_url` trống trừ khi có endpoint riêng (không qua proxy).** Khi trống,
 > HAL tự suy ra `<llm_base_url>/ws/gemini` (hoặc `/ws/openai`) — đúng suffix WS mà
@@ -1634,9 +1777,7 @@ trong `/opt/hal/.env`); thiếu cả hai thì WS handshake fail rõ ràng trong 
 > `/ws/...`), giá trị đó được đưa thẳng vào SDK provider và **404 ngay ở Live
 > handshake**. Vì vậy ô "Base URL" trong web Settings chỉ hiển thị *override tường
 > minh* (`RealtimeBaseURLOverride`, không phải giá trị đã resolve), để "để trống là
-> tự suy ra" luôn trống và mỗi lần Save không vô tình ghi đè URL trần. Quy tắc
-> này KHÔNG áp cho qwen: qwen giữ `base_url` riêng trong sub-object của nó và
-> không bao giờ suy ra từ `llm_base_url`.
+> tự suy ra" luôn trống và mỗi lần Save không vô tình ghi đè URL trần.
 
 ```json
 {
@@ -1645,17 +1786,15 @@ trong `/opt/hal/.env`); thiếu cả hai thì WS handshake fail rõ ràng trong 
     "enabled": true,
     "provider": "gemini",
     "gemini": { "model": "gemini-3.1-flash-live-preview", "voice": "Kore", "thinking_level": "MINIMAL" },
-    "openai": { "model": "gpt-realtime-2", "voice": "alloy", "reasoning_effort": "minimal" },
-    "qwen": { "api_key": "sk-…", "base_url": "wss://…", "model": "qwen3.5-omni-plus-realtime", "voice": "Ethan" }
+    "openai": { "model": "gpt-realtime-2", "voice": "alloy", "reasoning_effort": "minimal" }
   }
 }
 ```
 
 Knob reasoning (`thinking_level` / `reasoning_effort`) default về mức **rẻ nhất**
 (`MINIMAL` / `minimal`), không phải mức max của provider — muốn reasoning sâu hơn
-thì set tường minh. Qwen **không có** knob reasoning/thinking, nên web ẩn
-selector Reasoning khi provider là qwen. Các knob KHÔNG có trong block (turn
-detection, session resumption, memory, summarizer) vẫn chỉ theo env/default.
+thì set tường minh. Các knob KHÔNG có trong block (turn detection, session
+resumption, memory, summarizer) vẫn chỉ theo env/default.
 
 **Filter chống leak CoT.** Trên `gemini-3.1-flash-live-preview` KHÔNG tắt được
 thinking: `thinking_level=MINIMAL` lẫn `thinking_budget=0` đều được chấp nhận
@@ -1701,8 +1840,8 @@ trong `config.json`:
 | `HAL_ENDPOINT_SILENCE_S` | `0.8` | Thời gian im lặng từ lúc STT final về, chỉ áp dụng khi `final_ts >= last_confirmed_speech`. Nếu có tiếng nói được xác nhận sau final đó, quay lại ngưỡng dự phòng 2.5s tới khi có final mới. `0` tắt đồng hồ ngắn, chỉ dùng `HAL_SILENCE_TIMEOUT`. |
 | `HAL_SILENCE_VAD_ENABLED` | `true` | Yêu cầu Silero xác nhận có tiếng nói trước khi refresh đồng hồ im lặng kết thúc lượt. RMS vẫn là cổng chặn rẻ chạy trước; đặt `false` để quay về phát hiện im lặng thuần RMS. |
 | `HAL_SILENCE_VAD_WINDOW_FRAMES` | `3` | Số frame gom lại cho mỗi lần chạy Silero ở bước kiểm đó — Silero tốn ~20 ms/frame trên ARM và LSTM của nó cần hơn một frame 64 ms mới ổn định. |
-| `HAL_REALTIME_PROVIDER` | `gemini` | `none` \| `gemini` \| `openai` \| `qwen` |
-| `HAL_REALTIME_TURN_DETECTION` | `off` | `server_vad` \| `semantic_vad` \| `off` (Gemini: off = activity detection thủ công) |
+| `HAL_REALTIME_PROVIDER` | `gemini` | `none` \| `gemini` \| `openai` |
+| `HAL_REALTIME_TURN_DETECTION` | `off` | `server_vad` \| `semantic_vad` \| `off` (Gemini: off = activity detection thủ công; OpenAI: off = `turn_detection: null`, lượt do client commit + `response.create`; `server_vad` / `semantic_vad` nhận knob từ `HAL_LIVE_VAD_*` và `HAL_OPENAI_VAD_THRESHOLD`). `HAL_LIVE_MODE=true` ép `off` → `server_vad` |
 | `HAL_REALTIME_RECV_QUEUE_TIMEOUT_S` | `8.0` | Số giây tối đa `receive()` chờ output event kế tiếp trước khi kết thúc lượt im lặng (fallback sang main agent) |
 | `HAL_REALTIME_GROUNDING_DEBUG` | `false` | In toàn bộ field của `grounding_metadata` từ Gemini, mỗi lượt có grounding một lần (`grounding_chunks`, `grounding_supports`, `search_entry_point`, …). Chỉ để chẩn đoán và rất dài dòng; nó sinh ra để phân biệt lượt mà search thật sự không trả về gì với lượt bị cắt payload trên đường truyền. Đo trên lamp-0c89 04/09/2026 qua bốn lượt có grounding, payload luôn về đủ — nên `chunks=0` nghĩa là model không dùng nguồn nào cho câu trả lời đó. |
 | `HAL_REALTIME_TURN_MAX_SILENCE_S` | `20.0` | Trần thời gian một lượt được im lặng khi server vẫn còn gửi message. `receive()` chỉ kéo dài quá `HAL_REALTIME_RECV_QUEUE_TIMEOUT_S` khi lưu lượng vào chứng minh model còn đang làm việc (search grounding không phát output tới khi xong); trần này chặn trường hợp server nói liên tục mà không bao giờ ra output. `0` tắt cơ chế giữ lượt, quay về watchdog gap thuần. |
@@ -1732,10 +1871,9 @@ trong `config.json`:
 | `HAL_OPENAI_REALTIME_VOICE` | `alloy` | |
 | `HAL_OPENAI_REALTIME_BASE_URL` | `<llm_base_url>/ws/openai` | |
 | `HAL_OPENAI_REASONING_EFFORT` | `minimal` | `minimal` \| `low` \| `medium` \| `high` \| `xhigh` — default rẻ (trước là `xhigh`) |
-| `DASHSCOPE_API_KEY` | — | Key Qwen (DashScope); **không** fallback về `llm_api_key` — chỉ đọc `realtime.qwen.api_key` khi env trống |
-| `HAL_QWEN_REALTIME_BASE_URL` | — | WS host DashScope (`wss://<workspace-host>/api-ws/v1/realtime`); **không** fallback về `llm_base_url` — chỉ đọc `realtime.qwen.base_url` khi env trống |
-| `HAL_QWEN_REALTIME_MODEL` | `qwen3.5-omni-plus-realtime` | turbo legacy: không gọi function call, lờ turn context |
-| `HAL_QWEN_REALTIME_VOICE` | `Ethan` | 3.5-plus: thêm Serena; chỉ-turbo: Cherry \| Chelsie |
+| `HAL_OPENAI_TRANSCRIBE_MODEL` | `gpt-4o-mini-transcribe` | Model input transcription (`audio.input.transcription.model`) — nguồn duy nhất của lời người dùng trên đường OpenAI nên luôn bật; `gpt-4o-mini-transcribe` stream delta, `whisper-1` chỉ gửi bản `completed`. Cũng đọc từ `realtime.openai.transcribe_model` (HAL đọc, Go không model — xem trên) |
+| `HAL_OPENAI_NOISE_REDUCTION` | `far_field` | `far_field` \| `near_field` \| `off` — `audio.input.noise_reduction` phía server, lọc trước VAD và model; `off` bỏ hẳn key. Cũng đọc từ `realtime.openai.noise_reduction` |
+| `HAL_OPENAI_VAD_THRESHOLD` | `0` | Ngưỡng `server_vad.threshold` (0..1, API mặc định 0.5). `0` = suy từ `HAL_LIVE_VAD_START_SENSITIVITY` (`low` → 0.7, `high` → 0.3); giá trị khác 0 thắng. Chỉ env, không có key config.json |
 | `HAL_REALTIME_MEMORY_PATH` | `<workspace>/realtime/memory.jsonl` | |
 | `HAL_REALTIME_MAX_MEMORY_ENTRIES` / `_TRIM_KEEP` | `1000` / `500` | |
 | `HAL_REALTIME_SUMMARIZER_ENABLED` | `true` | |
@@ -1750,8 +1888,7 @@ trong `config.json`:
 | `orchestrator.py` | Vòng đời session, tool `delegate_to_main` + `express_emotion` + `look`, stream lượt |
 | `voice_agent/base.py` | Agent trừu tượng: contract 2-thread/queue, `receive()` |
 | `voice_agent/gemini_live.py` | Provider Gemini Live (IO loop asyncio) |
-| `voice_agent/openai_realtime.py` | Provider OpenAI Realtime (sync, connection serialize bằng lock) |
-| `voice_agent/qwen_realtime.py` | Provider Qwen Omni Realtime (sync, `websockets.sync.client` thô, schema beta OpenAI qua DashScope; bảng giá `_QWEN_RATES` + log `qwen_usage.log`) |
+| `voice_agent/openai_realtime.py` | Provider OpenAI Realtime (sync, SDK `openai` GA, connection serialize bằng lock; contract live-mode ngang Gemini — `user_turn_id`, `UserSpeechOutput`, barge-in + `conversation.item.truncate`; bảng giá `_OPENAI_RATES` + log `openai_usage.log`) |
 | `context_manager/{base,openclaw,hermes}.py` | Lắp ráp prompt + memory + skills theo gateway |
 | `summarizer.py` | Summarizer memory dựa trên Anthropic |
 | `config.py` | Model config provider (`GeminiConfig`, `OpenAIConfig`) |
@@ -1766,7 +1903,7 @@ Managed session trên desktop báo completed/needs_input/error qua sensing route
 
 ### Chuyển tiếp câu bổ sung cho tác vụ desktop trong realtime
 
-Cả bốn biến thể prompt realtime và mô tả chung của `delegate_to_main` đều chuyển thao tác app desktop native cùng câu trả lời, sửa đổi hoặc yêu cầu dừng rõ ràng cho tác vụ main agent đang chờ về main agent; realtime không phát lời nói trong lượt chuyển tiếp. Message chỉ chứa lời người dùng vừa nói được hiểu rõ và tham số đã cung cấp, giữ đủ mọi vế yêu cầu. Ngữ cảnh tác vụ chỉ dùng nội bộ để quyết định chuyển tiếp; không thêm hoặc kể lại vì main agent đã giữ cuộc hội thoại. Câu ngắn như “cuối tuần này, hai người” có thể tiếp nối câu hỏi bổ sung cho việc tìm chỗ ở trước đó; không được bỏ chỉ vì thiếu động từ hành động hoặc tự suy diễn thành ngày cụ thể.
+Cả ba biến thể prompt realtime và mô tả chung của `delegate_to_main` đều chuyển thao tác app desktop native cùng câu trả lời, sửa đổi hoặc yêu cầu dừng rõ ràng cho tác vụ main agent đang chờ về main agent; realtime không phát lời nói trong lượt chuyển tiếp. Message chỉ chứa lời người dùng vừa nói được hiểu rõ và tham số đã cung cấp, giữ đủ mọi vế yêu cầu. Ngữ cảnh tác vụ chỉ dùng nội bộ để quyết định chuyển tiếp; không thêm hoặc kể lại vì main agent đã giữ cuộc hội thoại. Câu ngắn như “cuối tuần này, hai người” có thể tiếp nối câu hỏi bổ sung cho việc tìm chỗ ở trước đó; không được bỏ chỉ vì thiếu động từ hành động hoặc tự suy diễn thành ngày cụ thể.
 
 Câu hỏi main agent đã nói gần đây trong `[TTS HISTORY]` được dùng làm ngữ cảnh để hiểu câu tiếp nối, đồng thời vẫn giữ quy tắc không nói lặp. `[TTS HISTORY, not spoken]` không chứng minh người dùng đã nghe hoặc trả lời câu hỏi đó. Kiểm tra hội thoại nền và việc lời nói có hướng tới device vẫn giữ nguyên. Thay đổi này dùng lịch sử bàn giao/câu trả lời realtime sẵn có; không thêm kho trạng thái tác vụ đang chờ có cấu trúc, không tự chứng minh voice routing trên thiết bị thật đã thành công và không loại bỏ giới hạn truyền context theo provider.
 
