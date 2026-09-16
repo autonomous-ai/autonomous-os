@@ -68,3 +68,39 @@ func TestResetMemoryFilesSkipsUninstalledRuntimes(t *testing.T) {
 		t.Fatalf("absent workspaces must be a no-op, got %+v err=%v", rep, err)
 	}
 }
+
+// TestResetMemoryFilesTwiceKeepsTheFirstBackup guards the #421 post-mortem
+// evidence: a double-clicked POST lands in the same second, so both calls
+// must get distinct backup dirs and the first one must keep the original.
+func TestResetMemoryFilesTwiceKeepsTheFirstBackup(t *testing.T) {
+	ows := filepath.Join(t.TempDir(), "workspace")
+	if err := os.MkdirAll(ows, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ows, "USER.md"), []byte("- poison\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	opts := Options{OpenclawWorkspace: ows}.withDefaults()
+
+	first, err := ResetMemoryFiles(opts)
+	if err != nil || len(first.BackupDirs) != 1 {
+		t.Fatalf("first reset: %+v err=%v", first, err)
+	}
+	second, err := ResetMemoryFiles(opts)
+	if err != nil || len(second.BackupDirs) != 1 {
+		t.Fatalf("second reset: %+v err=%v", second, err)
+	}
+	if first.BackupDirs[0] == second.BackupDirs[0] {
+		t.Fatalf("both resets used the same backup dir %s", first.BackupDirs[0])
+	}
+	dirs, _ := filepath.Glob(filepath.Join(ows, ".memory-reset-*"))
+	if len(dirs) != 2 {
+		t.Fatalf("want 2 backup dirs, got %v", dirs)
+	}
+	if got := readFile(t, filepath.Join(first.BackupDirs[0], "USER.md")); got != "- poison\n" {
+		t.Errorf("first backup overwritten, got %q", got)
+	}
+	if got := readFile(t, filepath.Join(second.BackupDirs[0], "USER.md")); got != userProfileResetForm {
+		t.Errorf("second backup should hold the blank form, got %q", got)
+	}
+}

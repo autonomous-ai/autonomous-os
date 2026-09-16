@@ -5,8 +5,14 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 	"time"
 )
+
+// resetMu serialises resets so two calls can never share or overwrite a backup
+// dir — a double-clicked POST lands in the same second, and the first backup
+// is the only copy of the poisoned file a #421 post-mortem has.
+var resetMu sync.Mutex
 
 // ResetReport lists what ResetMemoryFiles backed up and cleared.
 type ResetReport struct {
@@ -32,7 +38,8 @@ var realtimeMemoryFiles = []string{"summary.md", "device_summary.md", "memory.js
 
 // ResetMemoryFiles is the no-SSH recovery for a self-poisoned memory (#421).
 // For EVERY installed runtime it copies USER.md, MEMORY.md, KNOWLEDGE.md and
-// the realtime memory files into <workspace>/.memory-reset-<stamp>/, then
+// the realtime memory files into <workspace>/.memory-reset-<stamp>-<rand>/
+// (a fresh dir per call, so a rerun never overwrites an earlier backup), then
 // resets USER.md to the blank form (emptied for Hermes, whose file is
 // §-delimited entries, not markdown) and removes the rest — onboarding re-seeds
 // KNOWLEDGE.md from its template on its next pass, HAL recreates the realtime
@@ -45,6 +52,9 @@ var realtimeMemoryFiles = []string{"summary.md", "device_summary.md", "memory.js
 // On error the partial progress so far is returned in the report alongside the
 // wrapped error, so the caller can log what was already backed up and cleared.
 func ResetMemoryFiles(opts Options) (ResetReport, error) {
+	resetMu.Lock()
+	defer resetMu.Unlock()
+
 	var rep ResetReport
 	stamp := time.Now().Format("20060102-150405")
 
@@ -68,8 +78,12 @@ func ResetMemoryFiles(opts Options) (ResetReport, error) {
 		for _, f := range realtimeMemoryFiles {
 			targets = append(targets, filepath.Join(root, "realtime", f))
 		}
-		bak := filepath.Join(root, ".memory-reset-"+stamp)
-		touched := false
+		// The backup dir is created lazily — only once this runtime has a
+		// file to back up — and unique per call (MkdirTemp), so an absent
+		// runtime leaves nothing behind and a rerun cannot reuse a dir. It is
+		// recorded in the report as soon as it exists so the error path still
+		// tells the operator where the partial backup went.
+		bak := ""
 		for _, p := range targets {
 			data, err := os.ReadFile(p)
 			if err != nil {
@@ -79,10 +93,14 @@ func ResetMemoryFiles(opts Options) (ResetReport, error) {
 				}
 				return rep, fmt.Errorf("read %s: %w", p, err)
 			}
-			if err := os.MkdirAll(bak, 0o755); err != nil {
-				return rep, fmt.Errorf("create backup dir: %w", err)
+			if bak == "" {
+				bak, err = os.MkdirTemp(root, ".memory-reset-"+stamp+"-*")
+				if err != nil {
+					return rep, fmt.Errorf("create backup dir: %w", err)
+				}
+				rep.BackupDirs = append(rep.BackupDirs, bak)
 			}
-			if err := os.WriteFile(filepath.Join(bak, filepath.Base(p)), data, 0o644); err != nil {
+			if err := writeBackup(filepath.Join(bak, filepath.Base(p)), data); err != nil {
 				return rep, fmt.Errorf("backup %s: %w", p, err)
 			}
 			switch {
@@ -97,11 +115,30 @@ func ResetMemoryFiles(opts Options) (ResetReport, error) {
 				return rep, fmt.Errorf("clear %s: %w", p, err)
 			}
 			rep.Cleared = append(rep.Cleared, p)
-			touched = true
-		}
-		if touched {
-			rep.BackupDirs = append(rep.BackupDirs, bak)
 		}
 	}
 	return rep, nil
+}
+
+// writeBackup writes a backup copy and fsyncs it before returning. The original
+// is unlinked right after and both live on an SD card — the backup is the whole
+// point of the file, so it must be on disk, not in the page cache, before the
+// original goes. O_EXCL: the dir is fresh per call, so a collision is a bug.
+func writeBackup(dst string, data []byte) error {
+	f, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		return fmt.Errorf("create: %w", err)
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("write: %w", err)
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("fsync: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close: %w", err)
+	}
+	return nil
 }
