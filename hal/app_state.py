@@ -784,7 +784,7 @@ def _cancel_scene_speaker_drain():
 
 def _mute_speaker_for_scene(scene: str):
     """Commit a scene's deferred mute; re-checked under privacy.lock like sleep."""
-    global _speaker_muted, _scene_drain_cancel
+    global _speaker_muted
     with privacy.lock:
         if _active_scene != scene:
             logger.info("Scene %s speaker drain: scene gone -- speaker left live", scene)
@@ -795,7 +795,6 @@ def _mute_speaker_for_scene(scene: str):
         if _speaker_muted:
             return
         _speaker_muted = True
-        _scene_drain_cancel = None
         _persist_speaker_state()
     # The flag only gates playback that has not started; stop a TTS the cap cut.
     if tts_service and tts_service.speaking:
