@@ -100,6 +100,13 @@ Unlock uses the existing microphone wake/listening flow and restores camera and
 speaker to their previous states. A camera or speaker already disabled before
 locking stays disabled; an explicit manual disable during the lock is also
 preserved. The listening cue only plays when the restored speaker is unmuted.
+A mute that a **scene** set is not a preference: when the switch that wakes the
+device from sleep (night scene: camera and speaker off) deactivates the scene
+while the lock is still held, `deactivate_scene()` retargets the privacy
+snapshot (`privacy.speaker_before` / `privacy.camera_before` → `False`) so the
+release reopens the speaker and camera instead of restoring the scene's mute —
+the same pattern sleep-owned mutes use. The lock itself stays in force until
+release; a manual camera override is still honored.
 Preferences survive HAL restarts within the same boot, without saving the
 temporary privacy lock as a manual mute. Both options default to false for
 other devices; Intern retains its existing microphone-only fallback without JSON.
