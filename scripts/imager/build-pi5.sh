@@ -151,6 +151,12 @@ DEVICES_DIR="${DEVICES_DIR:-/opt/devices}"
 # seeding falls through to ROBOT.md gateway.default exactly as before.
 # Mirrors build-orangepi.sh; forwarded by the Makefile (-e) for both targets.
 DEFAULT_AGENT="${DEFAULT_AGENT:-}"
+# Optional assembly within the device package; empty/standard keeps legacy defaults.
+VARIANT="${VARIANT:-}"
+if [[ -n "$VARIANT" && ! "$VARIANT" =~ ^[a-z][a-z0-9_-]{0,63}$ ]]; then
+  echo "Invalid VARIANT: expected a lowercase name (1-64 characters)" >&2
+  exit 1
+fi
 AP_BAND="${AP_BAND:-2.4}"   # 2.4 or 5 (5 GHz needs supported regulatory domain + chip)
 AP_CHANNEL="${AP_CHANNEL:-}" # default: 6 for 2.4 GHz, 36 for 5 GHz
 COUNTRY_CODE="US"           # Regulatory country code for hostapd
@@ -2000,6 +2006,7 @@ trap 'echo "OVERLAY ERROR: command failed at line \$LINENO (exit code \$?): \$BA
 export DEBIAN_FRONTEND=noninteractive
 export OTA_METADATA_URL="${OTA_METADATA_URL}"
 export DEVICE_TYPE="${DEVICE_TYPE}"
+export VARIANT="${VARIANT}"
 export DEVICES_DIR="${DEVICES_DIR}"
 export PI5_NO_AUDIO="${PI5_NO_AUDIO:-0}"
 export DEFAULT_AGENT="${DEFAULT_AGENT}"
@@ -2185,6 +2192,17 @@ if [ -n "\${DEVICES_URL:-}" ]; then
         echo "[overlay] PI5_NO_AUDIO=1 — stripped audio capability from \$MDFILE"
       fi
     done
+  fi
+  # Bake the selection in the overlay, never in the reusable base image.
+  if [ -n "\$VARIANT" ] && [ "\$VARIANT" != standard ]; then
+    mkdir -p /etc/autonomous
+    printf '%s\n' "\$VARIANT" > /etc/autonomous/hardware-profile
+    [ -f "\$DEVICE_DEST/apply-overrides.py" ] \
+      || { echo "[overlay] ERROR: Hardware overrides require an override-capable device package" >&2; exit 1; }
+    python3 "\$DEVICE_DEST/apply-overrides.py" --profile "\$DEVICE_DEST" --root / \
+      || { echo "[overlay] ERROR: Hardware override configuration failed" >&2; exit 1; }
+  else
+    rm -f /etc/autonomous/hardware-profile
   fi
   # Device rootfs overlay: robots/<type>/rootfs/ mirrors the target filesystem,
   # so copying it onto / lands each file at its real path. This is where the

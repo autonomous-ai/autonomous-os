@@ -107,25 +107,11 @@ can pin the model's compliance.
 
 ### Voice control through Harness
 
-OS Monitor also offers **Harness-only voice**, a RAM mode that defaults to off
-after OS-server restart. When enabled, HAL snapshots `/api/harness/voice-mode`
-before capture and sends finalized, wake-word-stripped STT directly to the
-agent focused in the Harness app through OS. That capture does not stream audio to the
-realtime model or invoke the main runtime/`harness-use`; OS skips local intents
-and main-runtime readiness/busy gates. While enabled, Harness accepts speech without a wake word or an active follow-up window, including the listening cue. It does not extend the normal wake-window timer; disabling restores normal wake authorization on the next capture. Sleep, mic mute, VAD, noise and echo checks remain. Voice results still use Harness lifecycle/recap
-delivery and device TTS. Text chat and ambient sensing keep their normal routes.
+OS Monitor offers **Harness-only voice**, a RAM mode defaulting to OFF after OS-server restart. Manual captures bypass Realtime and the main runtime, retaining existing focused-agent routing, output TTS and external-history synchronization. Gesture activation requires pairing, connection and valid app focus; `focus.ensure` can select the first local agent when no focus exists. Failure leaves mode off. Web/MQTT explicit sets retain their existing semantics.
 
-On MPR121 lamps, swiping right to left and releasing toggles this mode;
-left-to-right swipes invoke sleep. Direction follows the physical left-to-right
-`swipe_axis` configuration. HAL routes the gesture through its existing
-physical-action worker and the loopback Go
-`POST /api/harness/voice-mode/gesture` API. Go preserves current app focus or,
-only for activation without focus, requests the first local agent and waits for
-Desktop acknowledgement. Failed preparation leaves the mode off; turning off
-works offline. HAL speaks the actual outcome using English, Vietnamese,
-Simplified Chinese or Traditional Chinese phrases according to its configured
-language, with brief LED feedback. Web/MQTT explicit sets still allow enabling
-without focus. Gesture activation does not change capture or result routing.
+Harness ON uses manual tap-to-record capture, not ambient listening. A tap while TTS is speaking only interrupts playback. Otherwise, the first tap starts capture; the ready beep plays only after the recorder/STT is ready. The next tap closes capture and sends one finalized STT transcript through the existing OS route to the focused Harness agent. Silence never sends automatically. Reaching `MAX_SESSION_DURATION_S` (`HAL_MAX_SESSION_DURATION_S`, default 30 seconds) cancels without dispatch. Idle mode does not record surrounding speech. Mode, generation or focus changes and privacy/stop events discard capture; a focus swipe cancels capture before changing focus. Sleep and hardware microphone privacy remain authoritative.
+
+On MPR121-equipped lamps, Harness OFF retains the existing gestures: swipe **right to left** to enable Harness and **left to right** to sleep. Harness ON replaces the old click, triple-tap reboot, shutdown/reset holds, sleep and listening-cue actions: tap controls capture or interrupts TTS, holding **for 3 seconds** immediately disables Harness and announces the result (including while offline); the remaining contact is ignored until release, swipe **right to left** selects the next agent and **left to right** the previous agent. `hal/drivers/harness/gestures.py` owns this separate gesture policy; `hal/drivers/voice/_internal/harness_capture.py` tracks manual capture ownership. GPIO/TTP223 behavior is unchanged. Direction follows the physical left-to-right `swipe_axis` (Lamp defaults E0…E11; verify mounting). Python calls Go APIs; Go owns mode/focus and the existing voice route.
 
 Each capture carries its mode generation. OS refuses a stale generation rather
 than delivering an utterance to a newly focused agent. OS mirrors app focus even

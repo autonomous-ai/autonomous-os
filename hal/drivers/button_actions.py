@@ -200,7 +200,7 @@ def _wake_if_sleepy(source: str):
     try:
         from hal.models import EmotionRequest
         from hal.routes.emotion import express_emotion
-        express_emotion(EmotionRequest(emotion="stretching"))
+        express_emotion(EmotionRequest(emotion="stretching"), source=source)
     except Exception as e:
         logger.warning("Wake emotion call failed: %s", e)
 
@@ -527,6 +527,10 @@ def sleep_action(source: str = "button"):
     if state._sleeping:
         logger.info("%s sleep hold -- already sleeping", source)
         return
+    from hal.routes.emotion import harness_blocks_sleep
+    if harness_blocks_sleep():
+        logger.info("%s sleep hold -- ignored, Harness is on", source)
+        return
 
     logger.info("%s sleep hold -- announcing sleepy emotion", source)
     if _tts_available():
@@ -540,8 +544,9 @@ def sleep_action(source: str = "button"):
         from hal.routes.emotion import express_emotion
 
         # Reuse /emotion so sleep keeps one authoritative implementation for
-        # servo animation/release, LED off, camera off, and audio mute.
-        express_emotion(EmotionRequest(emotion="sleepy"))
+        # servo animation/release, LED off, camera off, and audio mute -- and,
+        # with `source`, one authoritative record of who asked for it.
+        express_emotion(EmotionRequest(emotion="sleepy"), source=source)
     except Exception as e:
         logger.warning("%s sleep hold failed: %s", source, e)
 

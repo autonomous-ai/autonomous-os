@@ -94,6 +94,11 @@ class TestGestures(unittest.TestCase):
 
 
 class TestMPR121(unittest.TestCase):
+    def setUp(self):
+        mode = mock.patch("hal.drivers.harness.gestures.read_mode", return_value={"enabled": False, "generation": 1})
+        mode.start()
+        self.addCleanup(mode.stop)
+
     def make_handler(self, **kwargs):
         return MPR121Handler(MPR121Config(bus=5, **kwargs))
 

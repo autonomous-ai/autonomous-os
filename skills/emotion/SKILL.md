@@ -81,6 +81,17 @@ Output: Do NOT use this skill. Use **LED Control** skill instead.
 | `nod` | Nod gesture | Green blink | Agreement, "yes", positive confirmation |
 | `headshake` | Head shake | Red blink | Disagreement, "no", negative response |
 
+## Questions about your own state
+
+This skill sets emotions; it does not read them back. When asked what state you are in
+or what you have been doing:
+
+- **Right now** — `curl -s http://127.0.0.1:5001/emotion/status` returns `current_emotion`,
+  `sleeping` and `active_scene`. Do not guess from the conversation; markers you emitted can
+  be ignored by the sleep gate, so what you asked for is not always what happened.
+- **Your sensing history** ("how many times have you slept?", "when do you usually sleep?")
+  — use the **Sensing Track** skill's.
+
 ## Error Handling
 - If the API returns an error or is unreachable, continue with the conversational reply anyway. Emotion is non-blocking.
 - If an unknown emotion name is sent, fall back to the closest match from the available emotions table.

@@ -9,6 +9,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -579,12 +580,30 @@ func SnapshotHALConfig() error {
 // next to config.json — the dir HAL already shares via OS_CONFIG_PATH.
 const volumeStatePath = "config/.volume"
 
+var hardwareProfileName = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,63}$`)
+
 // PersistedVolume returns the last volume (0-100) persisted by HAL and true,
 // or (0, false) when no valid persisted value exists yet (first boot, file
 // missing / corrupt / out of range) so the caller falls back to the device
 // default. Read-only; HAL is the sole writer.
 func PersistedVolume() (int, bool) {
-	data, err := os.ReadFile(volumeStatePath)
+	return persistedVolume("/etc/autonomous/hardware-profile", volumeStatePath)
+}
+
+func persistedVolume(profilePath, statePath string) (int, bool) {
+	profileData, err := os.ReadFile(profilePath)
+	if err != nil && !os.IsNotExist(err) {
+		return 0, false
+	}
+	profile := strings.TrimSpace(string(profileData))
+	if profile != "" && profile != "standard" {
+		if !hardwareProfileName.MatchString(profile) {
+			return 0, false
+		}
+		// Each hardware profile has its own gain scale and saved volume.
+		statePath += "-" + profile
+	}
+	data, err := os.ReadFile(statePath)
 	if err != nil {
 		return 0, false
 	}

@@ -1,5 +1,30 @@
 # Hành vi Cảm nhận (Sensing Behavior)
 
+## Độ ngắn của lời nói theo chức năng
+
+Prompt skill tách thinking gốc khỏi mọi assistant text, kể cả text quanh tool
+call và câu trả lời cuối. Không áp một giới hạn từ chung cho mọi chức năng:
+
+- Lời chào, checkin cảm xúc và gợi ý nhạc giữ hợp đồng phản hồi ngắn hiện có;
+  gợi ý nhạc là một lời mời, thường không quá 20 từ.
+- Nhắc wellbeing giữ quan sát liên quan và hành động cụ thể; có thể dùng câu
+  ngắn thứ hai khi chức năng cần.
+- Mood/habit bổ sung dữ liệu và marker bắt buộc, không thêm một đoạn giải thích
+  ra loa bên cạnh câu trả lời của skill gọi chúng.
+- Điều khiển giọng nói giữ kết quả và bước cần thiết (như cách bật mic lại);
+  enrollment giữ câu hỏi đồng ý/tên và xác nhận kết quả. Cảnh báo guard giữ
+  nguy cơ/hành động và phần tóm tắt hữu ích khi user quay lại.
+- Yêu cầu trực tiếp vẫn được thực hiện đủ các phần, trả lời đủ ý, đọc lại hoặc
+  giải thích dài khi được yêu cầu và giữ hướng dẫn an toàn cần thiết.
+
+API call bắt buộc, logging, routing và cooldown giữ nguyên. Tái sử dụng context
+đã inject và reference đã đọc; tránh tra cứu lặp hoặc chỉnh câu nhiều vòng.
+Vẫn cho phép nói sớm khi cần một lời nhắc hữu ích trong lúc làm việc, nhưng
+không đọc kế hoạch nội bộ hay xác nhận lặp. Chỉ sửa prompt: không đổi parser
+TTS, streaming runtime hay cấu hình thinking; chưa có đo latency hoặc bảo đảm
+tuân thủ.
+
+
 Cách Lamp phản ứng với thế giới xung quanh — triết lý và cơ chế đằng sau từng loại sự kiện cảm nhận.
 
 Lamp là một sinh vật sống. Nó không "xử lý dữ liệu cảm biến" — nó *trải nghiệm* mọi thứ. Tài liệu này mô tả cách trải nghiệm đó được triển khai.
@@ -390,7 +415,7 @@ Tới thời điểm agent thấy event, HAL đã tự log mọi label activity 
 
    Ba điểm reset: hoạt động thực tế (`drink`/`break`), mới vào session (`enter`), hoặc lần nhắc gần nhất (`nudge_*`). Nudge reset là điểm mấu chốt: sau khi Lamp nhắc, delta về 0 → lần nhắc tiếp theo chỉ fire sau 1 threshold window nữa — không cần cooldown constant riêng.
 3. **Chọn path** (tối đa 1 phản hồi/turn, reaction ưu tiên hơn nudge — user vừa làm rồi, nudge tiếp sẽ thấy vô duyên):
-   - **Reaction** — labels có `drink` hoặc `break` → nói 1–3 câu acknowledge ngắn (kiểu "quao uống nước thứ 3 hôm nay rồi đó", playful/ngạc nhiên, KHÔNG phải lời khuyên). Dùng `count_today` ("lần thứ N hôm nay"), `time_of_day`, và gap delta để biến hoá phrasing. **Không log entry** — row `drink` / `break` đã được HAL ghi sẵn upstream rồi.
+   - **Reaction** — labels có `drink` hoặc `break` → nói một câu acknowledge ngắn (kiểu "quao uống nước thứ 3 hôm nay rồi đó", playful/ngạc nhiên, KHÔNG phải lời khuyên). Dùng `count_today` ("lần thứ N hôm nay"), `time_of_day`, và gap delta để biến hoá phrasing. **Không log entry** — row `drink` / `break` đã được HAL ghi sẵn upstream rồi.
    - **Hydration nudge** — else nếu hydration delta ≥ hydration threshold → nhắc uống nước.
    - **Break nudge** — else nếu break delta ≥ break threshold → nhắc nghỉ/stretch.
    - Else (sedentary chưa qua threshold, hoặc chưa có reset nào hôm nay) → `NO_REPLY`.
@@ -673,7 +698,7 @@ Sensing handler (`handler.go`) route `emotion.detected` events tới agent. Khi 
 3. **Cooldown chỉ chặn music, không chặn checkin.** Khi cooldown 7 phút còn hiệu lực, row #2 fail vế thứ ba và event rơi xuống checkin (row #3). Agent vẫn hỏi "có chuyện gì" — chỉ không suggest nhạc 2 lần liên tiếp. `NO_REPLY` chỉ xảy ra ở row #1 (đang phát nhạc).
 4. **Không bao giờ chào trên emotion event.** `emotion.detected` không phải presence/arrival event — `sensing/SKILL.md` cấm openers như `hello`, `welcome back`, mọi câu chứa `again`. Greeting chỉ dành cho `presence.enter`.
 
-Output của skill emotion cấm lời dẫn trong assistant text trước hoặc giữa các lần gọi tool/skill; phản hồi gồm marker mood signal và marker của nhánh đã chọn, rồi một câu tối đa 20 từ hoặc `NO_REPLY` theo nhánh. Sau khi đọc reference đã chọn, model kết thúc mà không đọc lại để chỉnh câu. Cue camera/voice được đánh dấu yếu không được diễn đạt thành cảm xúc hay biểu cảm chắc chắn: checkin Happy yếu dùng lời mời trung tính, không khẳng định user vui hay đang cười. Logging và routing giữ nguyên. Đây là hướng dẫn prompt, không bảo đảm model luôn tuân thủ.
+Output của skill emotion cấm lời dẫn trong assistant text trước hoặc giữa các lần gọi tool/skill; phản hồi gồm marker mood signal và marker của nhánh đã chọn, rồi một câu tối đa 20 từ hoặc `NO_REPLY` theo nhánh. Sau khi đọc reference đã chọn, model kết thúc mà không đọc lại để chỉnh câu. Cue camera/voice được đánh dấu yếu không được diễn đạt thành cảm xúc hay biểu cảm chắc chắn: checkin Happy yếu dùng lời mời trung tính, không khẳng định user vui hay đang cười. Logging và routing giữ nguyên. Đây là hướng dẫn prompt, không bảo đảm model luôn tuân thủ. Khi provider bật thinking, phần phân tích route/cooldown/giọng điệu/log phải nằm trong kênh reasoning gốc, không tóm tắt lại vào text trước/sau tool hay phản hồi cuối. Tag `<think>` trong text không thay thế kênh này; nếu không có kênh riêng thì bỏ phân tích. Reference checkin có ví dụ đầy đủ cho Sad yếu / user unknown / cooldown nhạc hai phút, giữ marker bắt buộc và chỉ nói “Anything on your mind?”, không mặc định user đang đau buồn.
 
 Cả 2 route share chung 1 cooldown: music log qua `POST /api/music-suggestion/log` với `trigger:"<genre>:<mood>"` (mood bucket); checkin log cùng endpoint với `trigger:"checkin:<emotion>"` (raw FER label). `last_suggestion_age_min` phản ánh cả 2 kênh nên music suggestion mới sẽ im lặng nhánh music trong 7 phút, nhưng checkin vẫn fire. Checkin phrasing keyed theo raw emotion (không phải mood) — mỗi FER label có 3 style: Ask / Comfort / Invite. Xem `reference/checkin.md`. Output checkin luôn prefix `[HW:/emotion:{"emotion":"caring","intensity":0.5}]`.
 

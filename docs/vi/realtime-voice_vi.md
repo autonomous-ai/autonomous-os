@@ -105,23 +105,11 @@ model có tuân thủ hay không.
 
 ### Điều khiển agent qua Harness bằng giọng nói
 
-OS Monitor có thêm **Harness-only voice**, mode trong RAM mặc định tắt sau khi
-OS-server khởi động lại. Khi bật, HAL lấy snapshot `/api/harness/voice-mode`
-trước capture và gửi STT đã chốt, bỏ wake word, qua OS tới thẳng agent Harness
-đang focus trong app. Capture đó không stream audio tới realtime model, không gọi main
-runtime/`harness-use`; OS bỏ qua local intent và gate ready/busy của main runtime.
-Khi bật Harness, nhận câu nói và báo đang nghe mà không cần wake word hay cửa sổ follow-up còn hạn. Không kéo dài timer wake window chung; tắt mode thì capture tiếp theo trở về kiểm tra wake word bình thường. Vẫn giữ sleep, mute mic, VAD, noise và echo. Kết quả voice tiếp tục dùng
-lifecycle/recap Harness và TTS của thiết bị. Text chat và sensing nền giữ route cũ.
+OS Monitor có **Harness-only voice**, mode RAM mặc định OFF sau khi OS-server restart. Capture thủ công bỏ qua Realtime và main runtime, giữ route tới agent focus, output TTS và đồng bộ external-history hiện có. Bật bằng gesture cần pair, kết nối và focus app hợp lệ; `focus.ensure` có thể chọn agent cục bộ đầu tiên nếu chưa focus. Thất bại thì mode vẫn tắt. Web/MQTT set rõ ràng giữ semantics hiện có.
 
-Trên đèn MPR121, vuốt phải sang trái rồi nhả để bật/tắt mode; vuốt trái sang
-phải gọi sleep. Hướng vuốt dựa trên `swipe_axis` theo thứ tự trái sang phải
-vật lý. HAL chuyển gesture qua physical-action worker hiện có và API loopback Go
-`POST /api/harness/voice-mode/gesture`. Go giữ focus hiện tại; chỉ khi bật mà
-chưa focus mới yêu cầu chọn agent cục bộ đầu tiên và chờ Desktop xác nhận.
-Chuẩn bị focus thất bại thì mode vẫn tắt; tắt vẫn được khi offline. HAL đọc
-kết quả thực tế bằng phrase Anh, Việt, Trung giản thể hoặc Trung phồn thể theo
-ngôn ngữ cấu hình, kèm LED báo ngắn. Web/MQTT vẫn cho phép set bật khi chưa
-focus. Gesture không đổi cách capture hay định tuyến kết quả.
+Harness ON dùng thu giọng thủ công bằng tap, không tự nghe môi trường. Tap khi TTS đang nói chỉ ngắt phát âm thanh. Ngoài trường hợp đó, tap đầu bắt đầu thu; beep sẵn sàng chỉ phát sau khi recorder/STT đã sẵn sàng. Tap tiếp đóng capture và gửi một transcript STT đã chốt qua route OS hiện có tới agent Harness đang focus. Im lặng không tự gửi. Đạt `MAX_SESSION_DURATION_S` (`HAL_MAX_SESSION_DURATION_S`, mặc định 30 giây) thì hủy, không dispatch. Khi rảnh, mode không ghi lời nói xung quanh. Đổi mode, generation hoặc focus và privacy/stop đều loại bỏ capture; vuốt chuyển focus hủy capture trước khi đổi focus. Sleep và khóa privacy microphone phần cứng vẫn có ưu tiên.
+
+Trên đèn MPR121, Harness OFF giữ gesture cũ: vuốt **phải sang trái** để bật Harness, **trái sang phải** để sleep. Harness ON thay thế action click cũ, triple tap reboot, giữ shutdown/reset, sleep và listening cue: tap điều khiển capture hoặc ngắt TTS; giữ **đủ 3 giây** tắt Harness và thông báo ngay (kể cả offline), không cần nhả; phần chạm còn lại bị bỏ qua tới khi buông tay; vuốt **phải sang trái** chọn agent kế tiếp, **trái sang phải** chọn agent trước. `hal/drivers/harness/gestures.py` quản lý gesture riêng này; `hal/drivers/voice/_internal/harness_capture.py` quản lý quyền sở hữu capture thủ công. GPIO/TTP223 không đổi. Hướng theo `swipe_axis` trái sang phải vật lý (Lamp mặc định E0…E11; kiểm tra chiều lắp). Python gọi API Go; Go quản lý mode/focus và route voice hiện có.
 
 Mỗi capture mang generation của mode. OS từ chối generation cũ thay vì giao câu
 nói cho agent vừa được focus. OS vẫn đồng bộ focus khi mode tắt mà không đổi
