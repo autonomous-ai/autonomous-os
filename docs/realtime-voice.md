@@ -16,8 +16,10 @@ Code lives in `hal/realtime/`; it is driven by
 For [voice KPI-3](voice-metrics.md#kpi-3-execution-completion-not-correctness),
 `TurnDoneEvent.execution_completed` defaults to `false` and becomes true only
 for a provider terminal signal: Gemini normal `generation_complete` or
-`turn_complete` without interruption, or OpenAI/Qwen `response.done` with
-`response.status == "completed"`. Connection close, send failure, synthetic
+`turn_complete` without interruption, or OpenAI `response.done` with
+`response.status == "completed"` and no interruption seen during that response, or GPT-Live's **synthesized** boundary
+(`turn_gap_ms` of output silence with no user overlap — the Live wire has no
+terminal, see *GPT-Live*). Connection close, send failure, synthetic
 unblock, partial output followed by timeout, stale/replayed done, and an
 abandoned receive are not completion evidence.
 
@@ -729,6 +731,10 @@ realtime model can't set an emotion — the registration is gated end-to-end:
 `VoiceService(enable_expression=…)` →
 `RealtimeOrchestrator(enable_expression=…)`.
 
+On GPT-Live the tool is registered but can never fire: the Live layer has no
+tools (`GPTLiveAgent` logs it as unavailable once at construction), so on that
+provider the face changes only through the main agent after a delegation.
+
 Unlike `delegate_to_main`, `express_emotion` is **fire-and-forget** and is the
 one exception to the model's binary "tool OR speech" rule — the model calls it
 *in parallel* with speaking. When `stream_output()` sees the call
@@ -743,8 +749,8 @@ one exception to the model's binary "tool OR speech" rule — the model calls it
    depends on whether the model has already spoken this turn
    (`orchestrator.py`, `_handle_emotion_call`). If it **has** spoken
    (`trigger_response=False`), the result is recorded without spawning a second
-   model response — for OpenAI and Qwen this skips `response.create`
-   (`openai_realtime.py` / `qwen_realtime.py`); on Gemini the ack is not sent at
+   model response — for OpenAI this skips `response.create`
+   (`openai_realtime.py`); on Gemini the ack is not sent at
    all, because `send_tool_response` there *continues* the turn and makes the
    model re-speak its whole reply. If it has **not** spoken yet, the tool call is
    the entire generation so far and Gemini pauses until answered, so the ack is
@@ -803,9 +809,10 @@ data (the user's calendar, their smart-home device states, their messages) to
 
 Trade-offs:
 
-- **Gemini only.** OpenAI Realtime and Qwen Omni Realtime have no equivalent
-  built-in tool, so their prompts (`system_prompt_openai.md` /
-  `system_prompt_qwen.md`) still delegate all external lookups.
+- **Gemini only.** OpenAI Realtime has no equivalent built-in tool, so its
+  prompt (`system_prompt_openai.md`) still delegates all external lookups;
+  GPT-Live has no tools at the Live layer at all, so `system_prompt_gptlive.md`
+  delegates them too.
 - **Cost.** Grounding bills per grounded request on top of tokens, but only when
   Gemini actually decides to search. The prompt tells it to ground *only* for
   genuine fresh/public facts, not general knowledge it already holds. Net effect
@@ -874,9 +881,11 @@ Gating (all three required, else visual questions fall back to delegation):
   one signal (`_camera_present()`), so it's correct for every construction path.
 - **Flag:** `HAL_GEMINI_VISION` / `realtime.gemini.vision` (default **on**).
 - **Provider:** Gemini only (the image-inject → continue-turn flow is
-  implemented + tested for Gemini Live; OpenAI and Qwen keep delegating —
-  Qwen's session is text + audio only). The
-  Gemini system prompt (`system_prompt_gemini.md`) describes when to call `look`.
+  implemented + tested for Gemini Live; OpenAI keeps delegating visual
+  questions). GPT-Live cannot have it either: no Live-layer tools, and
+  `gpt-live-1` accepts no image input, so a stray frame is dropped with one
+  `[realtime] GPT-Live has no image input — frame dropped` warning. The Gemini
+  system prompt (`system_prompt_gemini.md`) describes when to call `look`.
 
 Cost: one frame per call (tool-triggered, **not** a video stream), so the added
 tokens are marginal next to the turn's audio. A 768px frame is a few hundred
@@ -900,8 +909,9 @@ then does with the image is decided by the **describe-first gate** in
 active main model does NOT declare image input in the model catalog (the
 Auto-AI case — a raw attachment 404s at the smart-agent-router with "No
 endpoints found that support image input"), the frame is described by the
-catalog's `default_image_model` (qwen — the same model openclaw's `imageModel`
-uses for Telegram photos) and the agent receives an `[image description] …`
+catalog's `default_image_model` (falling back to `system/vision`
+`DefaultImageModel` — the same model openclaw's `imageModel` uses for Telegram
+photos) and the agent receives an `[image description] …`
 text line instead — and the `[vision-image]` hint is rewritten to drop the
 file path, plus the snapshot file itself is deleted (best-effort). Neither
 may survive alongside a description: the snapshot lives inside the agent's
@@ -927,13 +937,14 @@ snapshots normally.
 ## Providers
 
 Three interchangeable backends, selected by `HAL_REALTIME_PROVIDER` /
-`realtime.provider` (`none` | `gemini` | `openai` | `qwen`):
+`realtime.provider` (`none` | `gemini` | `openai` | `gptlive`) and built in
+`orchestrator._make_agent`:
 
 | Provider | Class | Threading model | Default model | Sample rate |
 |----------|-------|-----------------|---------------|-------------|
 | Gemini Live | `voice_agent/gemini_live.py` `GeminiLiveAgent` | private asyncio loop on a `gemini-io` thread; send/recv threads submit coroutines via `run_coroutine_threadsafe` | `gemini-2.5-flash-native-audio-preview-12-2025` | 16000 Hz |
-| OpenAI Realtime | `voice_agent/openai_realtime.py` `OpenAIRealtimeAgent` | fully synchronous; one `RealtimeConnection` shared by send/recv threads, serialized by a reentrant lock | `gpt-realtime-2` | 24000 Hz |
-| Qwen Omni Realtime | `voice_agent/qwen_realtime.py` `QwenRealtimeAgent` | fully synchronous; raw `websockets.sync.client` socket shared by send/recv threads, reusing the openai_realtime thread/queue skeleton | `qwen3.5-omni-plus-realtime` | 16000 Hz in / 24000 Hz out |
+| OpenAI Realtime | `voice_agent/openai_realtime.py` `OpenAIRealtimeAgent` | fully synchronous; one `RealtimeConnection` shared by send/recv threads, serialized by a reentrant lock | `gpt-realtime-2` | 24000 Hz in and out |
+| GPT-Live | `voice_agent/gpt_live.py` `GPTLiveAgent` | fully synchronous; one `LiveConnection` shared by send/recv threads, serialized by a reentrant lock, plus a `gptlive-watchdog` thread that synthesizes the turn boundary the wire never sends | `gpt-live-1` | 16000 or 24000 Hz, **one** PCM format for both directions (default 24000) |
 
 Gemini Live uses `google-genai` and keeps its private asyncio loop owned by its
 `gemini-io` thread. Teardown first closes/cancels the provider receive task,
@@ -964,46 +975,6 @@ All providers treat teardown as terminal: once `disconnect()` sets the stop
 signal, send/receive workers neither reconnect nor emit transport-failure logs
 while their closed socket unwinds.
 
-Qwen Omni Realtime (Alibaba DashScope / Model Studio) speaks the **OpenAI
-Realtime beta event schema** (`session.update`, `input_audio_buffer.append` /
-`commit`, `response.create`, `response.audio.delta`,
-`response.audio_transcript.delta`, `response.done`) over DashScope's own WS
-path `wss://<workspace-host>/api-ws/v1/realtime?model=...` with
-`Authorization: Bearer <key>`. The OpenAI python SDK cannot be reused (it
-emits/parses the GA schema), so `qwen_realtime.py` drives the socket directly
-with `websockets.sync.client`. Turn flow is the same manual-commit pattern (HAL
-does its own VAD: append → commit → `response.create`); `response.create` MUST
-carry an explicit `response.modalities ["text","audio"]` or the server answers
-text-only (verified live 2026-07-06). Audio is 16 kHz mono pcm16 base64 in,
-24 kHz mono pcm16 out. Built-in web search (3.5 models) is enabled via session
-`enable_search: true` (knob `realtime.qwen.search` / `HAL_QWEN_SEARCH`, default
-on) — the qwen twin of Gemini's Google Search grounding. DashScope constraint:
-search ("agent mode") REJECTS function tools in the same session, so with
-search on, delegation runs over a text-marker protocol instead — the agent
-appends a `[TOOL PROTOCOL]` suffix to the instructions, the model replies
-exactly `[DELEGATE] <message>`, and the recv loop swallows that transcript and
-synthesizes the same `delegate_to_main` FunctionCallOutput a real tool call
-would produce (the orchestrator can't tell the difference; `express_emotion`
-is unavailable in this mode). With search off, function tools
-(`delegate_to_main`, `express_emotion`) are passed in `session.update` (beta
-flat format) and `response.function_call_arguments.done` is handled. The default model is
-`qwen3.5-omni-plus-realtime`: the legacy `qwen-omni-turbo-realtime` never fires
-function calls and ignores `[TURN CONTEXT]` (device-tested 2026-07-06), which
-breaks the delegate flow entirely. Voices: `Ethan` (default) and `Serena` on
-3.5-plus; `Cherry`/`Chelsie` are turbo-only (a wrong pairing fails with
-`InvalidParameter` on the first response). There is **no reasoning/thinking
-knob** (the web Settings page hides the Reasoning selector for qwen). Capability-wise qwen has
-**no Google Search grounding and no in-session vision/`look`** (text + audio
-only) — live-data and visual questions are delegated to the main agent.
-Per-turn token/cost lines go to their own log file `qwen_usage.log` (logger
-`hal.realtime.usage.qwen`, the twin of `gemini_usage.log`); the `_QWEN_RATES`
-table in `qwen_realtime.py` holds $0.27/1M input, $1.07/1M output (Model Studio
-intl publishes a single blended rate; the table keeps per-modality keys so a
-console-verified split can be dropped in). Audio ≈ 25 tokens/second in both
-directions (verified: 5.1 s audio out = 128 tokens); the usage payload carries
-`input_tokens`/`output_tokens`, `input_tokens_details`/`output_tokens_details`
-(`text_tokens`, `audio_tokens`) and a top-level `cached_tokens`.
-
 All subclass `voice_agent/base.py` `VoiceAgentBase`, which defines the
 queue-based contract:
 
@@ -1011,14 +982,19 @@ queue-based contract:
   `_recv_loop` reads API → `_recv_queue`. Both reconnect on error.
 - **Fail-fast on backend error** (all drivers): when `_recv_loop` hits a real
   error (Gemini Live: proxy `go_away`, quota / resource-exhausted, unexpected WS
-  close — anything that is **not** a benign idle close `1000`; OpenAI/Qwen: a
-  Realtime API `error` event or dropped socket), it pushes a `TurnDoneEvent` immediately
+  close — anything that is **not** a benign idle close `1000`; OpenAI: a
+  Realtime API `error` event that is not one of the benign codes listed under
+  *OpenAI Realtime: errors* below, or a dropped socket; GPT-Live: a server
+  `error` with no `client_event_id` or one on `hal-start`, or the event
+  iteration ending on `session.closed` — see *GPT-Live* below), it pushes a `TurnDoneEvent` immediately
   (`_fail_fast_turn`) so `receive()` unblocks now and the turn falls back to the
   main agent **without** waiting out the full `HAL_REALTIME_RECV_QUEUE_TIMEOUT_S`.
   Benign idle closes still reconnect quietly (Gemini code `1000`; OpenAI ends the
-  event iteration cleanly, never an error). Only fires while a turn is awaiting
-  output (`_turn_done` clear); reconnect still runs in the background to heal the
-  session for the next turn.
+  event iteration cleanly, never an error; GPT-Live has no benign close — every
+  `session.closed` fail-fasts whatever is in flight and reconnects). Only fires
+  while a turn is awaiting output (`_turn_done` clear; on GPT-Live, while a reply
+  is streaming or an input is still waiting for one); reconnect still runs in the
+  background to heal the session for the next turn.
 - **Non-blocking**: `append_audio()`, `commit_audio()`, `send()` (queue puts,
   gated on `available`).
 - **Blocking**: `connect()`, `disconnect()`, `receive()` (a generator yielding
@@ -1038,6 +1014,165 @@ queue-based contract:
   up to `HAL_REALTIME_TURN_MAX_SILENCE_S` (default 20 s) for the whole turn.
   A turn with no inbound traffic at all still ends on the first gap window.
 - `available` ⇔ the websocket/session is connected (`_connected`).
+- **Provider user-turn key.** Every `OutputBase` and the `TurnDoneEvent` carry
+  `user_turn_id`, the provider's key for the user input that the reply answers.
+  All providers freeze it per response (OpenAI at `response.created`, or at
+  the first output if that was missed; GPT-Live at the first output of a reply
+  burst), so a late input transcription can never re-own an earlier reply. Empty means ownership could not be established.
+- **Live-mode metadata (`HAL_LIVE_MODE=true` only, all providers).**
+  `UserSpeechOutput` publishes the provider's own view of the user's speech:
+  a new key at speech onset, `endpoint_at` + `method="server_vad"` at the
+  provider's speech endpoint, and incremental `transcript` chunks with
+  `method="provider_transcript"` (a `transcript_finished` flag marks the
+  provider's completion; completion-only metadata cannot create an input turn).
+  GPT-Live has no VAD, so its keys carry transcript chunks only — never an
+  `endpoint_at` / `method="server_vad"`.
+  `ExecutionOutput` keeps completion evidence when a terminal is dropped during
+  an interruption. Neither is emitted on the turn path.
+- **Interruptions.** `InterruptedOutput(reason="output_reset")` precedes the
+  first transcript chunk of every reply (the live pump resets its TTS queue so
+  a reply never plays behind a stale one); `InterruptedOutput(reason=
+  "server_interrupt", at=<monotonic>)` announces a provider-side barge-in and
+  stops playback at once (LIVE_MODE only; on GPT-Live the barge-in is inferred
+  locally — see *GPT-Live*). `receive()` always passes
+  `UserSpeechOutput`, `ExecutionOutput` and `server_interrupt` through.
+- **Output generations.** `OutputEvent.gen` is bumped by the provider at every
+  turn boundary, including an interruption; `receive()` drops any output whose
+  `gen` is older than the newest one it has yielded (logged as
+  `dropped N output(s) from generation A, superseded by B`), so audio still
+  queued from a cancelled reply never reaches the speaker. Filtered in the base
+  class so the turn path and the live pump both get it for free.
+- **Liveness.** Providers call `note_server_activity()` on every inbound event
+  (see the silent-turn watchdog above). GPT-Live is the one exception: it does
+  **not** note `session.usage.updated`, because a usage tick says nothing about
+  whether the model is working on a reply.
+- **`FunctionCallOutput.user_transcript`** carries the provider's input
+  transcription of the utterance that produced the tool call — the source of
+  the `[transcript]` line in a live-mode delegation.
+
+### OpenAI Realtime: live-mode parity with Gemini
+
+`voice_agent/openai_realtime.py` speaks the **GA** Realtime API
+(`openai.resources.realtime`, SDK pin `openai>=3.14.1` in `hal/pyproject.toml`;
+`hal/uv.lock` holds 3.14.1. Older 1.x SDKs have no
+`openai.resources.realtime` module and the adapter does not import). Session
+shape is `type: realtime` + `audio.input` / `audio.output`; the event names are
+`response.output_audio.delta` / `response.output_audio_transcript.delta`.
+Everything the live pump and the turn path key on is emitted exactly as
+`gemini_live.py` emits it:
+
+| Contract item | OpenAI source event |
+|---|---|
+| new `UserSpeechOutput` key (`openai-<hex>`) | `input_audio_buffer.speech_started` |
+| `UserSpeechOutput.endpoint_at`, `method="server_vad"` | `input_audio_buffer.speech_stopped` (timed when HAL receives it) |
+| `UserSpeechOutput.transcript` chunks, `method="provider_transcript"` | `conversation.item.input_audio_transcription.delta`; `.completed` emits only the remainder not already streamed, with `transcript_finished=True`. Each chunk is logged `[realtime] <<< user said: '…'` |
+| late transcription attribution | an `item_id → (turn_id, emitted text)` map (`_user_items`, bounded to 16 entries) binds every user audio item to the live turn it was captured in, so a transcription that lands after the **next** `speech_started` is still attributed to the input it transcribes. Manual turns learn the item id from `input_audio_buffer.committed` |
+| `user_turn_id` on outputs / `TurnDoneEvent` | frozen at `response.created` from the live key being captured |
+| `InterruptedOutput(reason="output_reset")` | before the first `response.output_audio_transcript.delta` of a reply |
+| `AudioOutput` / `TextOutput` | `response.output_audio.delta` / `response.output_audio_transcript.delta` (`response.output_text.delta` is ignored — the session is audio-only, so the audio transcript is the text source; emitting both would double-speak the reply) |
+| `FunctionCallOutput` (+ `user_transcript`) | `response.function_call_arguments.done`; the accumulated input transcription is attached and cleared |
+| `TurnDoneEvent.execution_completed` | `response.done` with `response.status == "completed"` **and** no interruption seen during that response |
+| `OutputEvent.gen` | bumped once per receive turn and once per interruption |
+| `note_server_activity()` | every inbound event |
+
+`end_turn()` stays a no-op and `requires_fresh_session` stays `False` on
+OpenAI: `response.done` arrives even for a function-call-only response, so
+`_turn_done` is always released by the recv loop, and a `function_call_output`
+item can be recorded without a response, so an unanswered tool call never
+poisons the session the way Gemini's `1008` quarantine does.
+
+Input transcription is **always on** — it is the only source of the user's words
+on this path (`UserSpeechOutput.transcript`, live history, the delegate
+message). `conversation.item.input_audio_transcription.failed` is logged as a
+warning and the turn continues without words.
+
+### OpenAI Realtime: barge-in and server-side truncate
+
+A barge-in is detected on `input_audio_buffer.speech_started` **while a response
+is active**, or — when no `speech_started` of ours was seen — on a
+`response.done` whose `status` is `cancelled` (a client `response.cancel`, or
+semantic VAD deciding mid-reply). With `interrupt_response` (the API default)
+the server cancels the response itself; the local side (`_handle_interrupt`)
+then:
+
+1. drains the recv queue, keeping `UserSpeechOutput`, `ExecutionOutput` and any
+   queued `server_interrupt`; a queued `TurnDoneEvent` becomes an
+   `ExecutionOutput` in LIVE_MODE so completion evidence survives without
+   replaying a control terminal;
+2. bumps `OutputEvent.gen` so in-flight deltas of the cancelled response are
+   dropped by `receive()` (the recv loop also skips further
+   `response.output_audio.delta` / `response.output_audio_transcript.delta`
+   carrying the cancelled `response_id`);
+3. emits `InterruptedOutput(reason="server_interrupt", at=now,
+   user_turn_id=<owner of the cancelled reply>)` (LIVE_MODE only);
+4. sends `conversation.item.truncate` for the assistant audio item being
+   streamed, with `audio_end_ms` = audio received − audio still queued (best
+   effort; HAL's own playback buffer makes it an over-estimate by a few hundred
+   ms). The client `event_id` is `hal-truncate`, so a truncate past the real
+   audio length only yields a benign `error` (below). This keeps the model's
+   context aligned with what the user actually heard;
+5. releases `_turn_done` and logs
+   `[realtime] Response interrupted — dropped N queued output(s), gen=G`.
+
+The new input then takes over the live key (`speech_started` always resets the
+capture state before `_observe_user_speech()` publishes the new
+`UserSpeechOutput`).
+
+### OpenAI Realtime: session configuration
+
+`_build_session()` sends one `session.update` on connect:
+
+| Field | Value |
+|---|---|
+| `type` | `realtime` |
+| `instructions` | the assembled system prompt |
+| `output_modalities` | `["audio"]` (adding `"text"` would make the model emit `response.output_text.delta` as well and double-speak the reply) |
+| `audio.input.format` / `audio.output.format` | `{type: "audio/pcm", rate: 24000}` |
+| `audio.output.voice` | `HAL_OPENAI_REALTIME_VOICE` |
+| `audio.input.transcription` | `{model: HAL_OPENAI_TRANSCRIBE_MODEL, language: <ISO-639-1>}` — the language is derived from `stt_language` by taking the part before the first `-` and lower-casing it (`vi-VN` → `vi`); omitted when `stt_language` is empty |
+| `audio.input.noise_reduction` | `{type: HAL_OPENAI_NOISE_REDUCTION}` for `far_field` / `near_field`; the key is omitted for `off` |
+| `audio.input.turn_detection` | `null` when `HAL_REALTIME_TURN_DETECTION=off` (manual, client-bracketed turns). `server_vad`: `threshold` = `HAL_OPENAI_VAD_THRESHOLD` when non-zero, else `0.7` for `HAL_LIVE_VAD_START_SENSITIVITY=low` / `0.3` for `high` (API default 0.5 — a low sensitivity needs louder evidence, the OpenAI counterpart of Gemini's `START_SENSITIVITY_LOW` echo defence); `prefix_padding_ms` = `HAL_LIVE_VAD_PREFIX_PADDING_MS` when > 0; `silence_duration_ms` = `HAL_LIVE_VAD_SILENCE_MS` when > 0. `semantic_vad`: `eagerness` = `HAL_LIVE_VAD_END_SENSITIVITY` when `low` / `high`. Only the knobs that are set are sent; the API default stands for the rest. Logged once at connect as `[realtime] server VAD: type=… threshold=… prefix_padding=…ms silence=…ms eagerness=…` |
+| `tools` / `tool_choice` | the registered function tools, `auto` |
+| `reasoning.effort` | `HAL_OPENAI_REASONING_EFFORT` |
+| `truncation` | `{type: "retention_ratio", retention_ratio: 0.5}` |
+
+**Commit.** `commit_audio()` is a no-op on OpenAI whenever server VAD is on
+(`_sync_commit` logs `Commit skipped — server VAD brackets the turn` at DEBUG):
+the server commits the buffer and creates the response on its own
+`speech_stopped`, and a client commit would land on an empty buffer while a
+second `response.create` collided with the server's — the same rule as
+Gemini's `activityEnd`. In manual mode it sends `input_audio_buffer.commit`,
+logs `[realtime] Turn timing: local_end->commit_sent=Nms`, then waits up to
+`response_wait_s` (10 s) for any active response before `response.create`
+(`[realtime] Timed out waiting for active response to finish — forcing new response`
+otherwise). First-audio latency is logged as
+`[realtime] Response latency: Nms (speech_end->first_audio; commit_sent->first_audio=Nms)`
+in manual mode and `… (speech_end->first_audio; server VAD)` with server VAD.
+
+**Errors.** An `error` event whose code is `input_audio_buffer_commit_empty`
+(local VAD ended a turn shorter than the 100 ms minimum),
+`conversation_already_has_active_response` (server VAD and a client commit
+crossed) or `response_cancel_not_active` (the response already finished), or
+whose `event_id` is `hal-truncate`, is logged at INFO as
+`[realtime] Realtime API notice (<code>): …` and ignored. Any other `error`
+still fails fast: `OpenAIRealtimeError` → `_fail_fast_turn("api error")` pushes
+the `TurnDoneEvent` now and the reconnect (2 s → 60 s exponential backoff) runs
+in the background.
+
+Text (`send_text`) and image inputs are `conversation.item.create` user
+messages (`input_text` / `input_image` data URI); tool results are
+`function_call_output` items, followed by `response.create` only when
+`trigger_response` is set.
+
+Still Gemini-only, unchanged: the `look` in-session vision tool, Google Search
+grounding, session resumption, `requires_fresh_session`, and the `end_turn()`
+override.
+
+`hal/test/test_openai_live_provider_metrics.py` (21 tests) mirrors
+`test_live_provider_metrics.py` for OpenAI: shared input key, late-transcription
+attribution, barge-in drain / announce / gen bump / truncate, benign vs. fatal
+errors, the usage line, and the GA session payload validated against the SDK's
+`RealtimeSessionCreateRequest`.
 
 ### OpenAI connection safety
 
@@ -1045,34 +1180,289 @@ The OpenAI agent shares a single `RealtimeConnection` between its send and recv
 threads. All connection writes, the connection swap during reconnect, and
 teardown run under a reentrant lock (`_conn_lock`); the long blocking recv
 iteration runs **outside** the lock on a connection snapshot so audio sends are
-never starved mid-turn. Reconnect is idempotent (re-checks `_connected` under the
-lock) and `_drop_connection()` only nulls a connection that is still current, so
-the two threads can't tear down or rebuild each other's connection.
+never starved mid-turn. The recv thread takes the lock only briefly for its one
+write — the `conversation.item.truncate` on barge-in — and re-checks that the
+snapshot is still the current connection before sending. Reconnect is idempotent
+(re-checks `_connected` under the lock) and `_drop_connection()` only nulls a
+connection that is still current, so the two threads can't tear down or rebuild
+each other's connection.
+
+### GPT-Live (`gptlive`): full-duplex, synthesized turns
+
+`voice_agent/gpt_live.py` `GPTLiveAgent` speaks OpenAI's **Live API**
+(`gpt-live-1`, GA in the API on 2026-09-10) — **a different API** from the
+Realtime API above, not a new model name for `openai_realtime.py`. The wire has
+none of the things the `VoiceAgentBase` contract was built around (no turn
+boundary, no VAD, no interruption event, no tools), so the adapter
+**synthesizes** them; every item below says whether it is on the wire or
+derived. Selected by `realtime.provider = gptlive` in
+`orchestrator._make_agent`; its prompt is `system_prompt_gptlive.md`
+(`PROVIDER_PROMPT_PATHS`). API facts from
+`developers.openai.com/api/docs/guides/live`, `live-migration`,
+`live-delegation` and the openai 3.14.1 SDK (`openai.types.live`).
+
+> **Device-untested as of 2026-09-16.** There is no OpenAI key on the device or
+> on the dev Mac, and the `campaign-api` proxy does not serve the
+> `…/ws/openai/live/sessions` route yet (verified 2026-09-16: every `/ws/openai`
+> variant 404s as well), so the adapter has been validated by SDK-schema checks
+> and the unit tests in `hal/test/test_gptlive_live_provider_metrics.py` only
+> (22 tests, one of them through `RealtimeOrchestrator.stream_output`) — never
+> against the live API. The proxy route is being added; nothing on the device
+> changes when it lands (see *Wire* below).
+
+**Wire.** GPT-Live uses the **same base URL as OpenAI Realtime**:
+`HAL_GPTLIVE_BASE_URL` > `realtime.gptlive.base_url` > `REALTIME_OPENAI_BASE_URL`
+(`HAL_OPENAI_REALTIME_BASE_URL` > `realtime.base_url` > `<llm_base_url>/ws/openai`).
+The SDK appends `/live/sessions` and switches to `wss`, so through the proxy the
+two OpenAI providers dial sibling paths with the same `Authorization: Bearer`
+header:
+
+| Provider | Dials |
+|---|---|
+| OpenAI Realtime | `wss://…/ws/openai/realtime?model=<model>` |
+| GPT-Live | `wss://…/ws/openai/live/sessions` (model in the `session.start` payload, not the URL) |
+
+**Relay status and contract** (BFF *GPT-Live voice sessions — WebSocket* device
+integration doc): the route is on **staging**
+(`wss://campaign-api.staging.autonomousdev.xyz/api/v1/ai/v1/ws/openai/live/sessions`,
+branch `feat/openai-live-proxy`), not on production yet. To test from a device
+whose `llm_base_url` is production, set
+`HAL_GPTLIVE_BASE_URL=https://campaign-api.staging.autonomousdev.xyz/api/v1/ai/v1/ws/openai`
+in `/opt/hal/.env`. Until production serves the path the connect fails with HTTP
+404, the agent logs `Reconnect failed … next retry in ~Ns` and stays in its
+2 s → 60 s backoff (turns fall back to the main agent). What the relay does and
+what the adapter does about it:
+
+- **Auth.** The device never holds an OpenAI key: the SDK sends the resolved
+  key (`llm_api_key`, the device's lobster key) as `Authorization: Bearer`, the
+  BFF swaps in its own OpenAI credential upstream, meters the session under
+  provider `openai_live` (`ceil(seconds × 17)` tokens per voice row) and checks
+  the device's rate limit at connect and after every usage row. No query string
+  is forwarded (GPT-Live takes none); only this exact path is exposed — the
+  sideband/fork sockets are not.
+- **Correlation.** Every connect sends `x-request-id: hal-<12 hex>`; the BFF
+  prefixes the session's usage rows with it (`<id>:voice-N`). The id is in the
+  HAL `Connecting to GPT-Live (… x-request-id=…)` line and in every
+  `gptlive_usage.log` line (`request=`), so a device log joins `lobster_usage`.
+- **Close codes.** HTTP `401` at the handshake = no key; `4001` no key, `4002`
+  GPT-Live not configured on this BFF, `4029` device over its usage limit
+  (`GPT-Live usage limit reached`, also mid-session) — these will not change on
+  their own, so `_note_close_code` logs the meaning and jumps the reconnect
+  backoff straight to its 60 s ceiling instead of ramping. `1011` = the BFF
+  could not reach OpenAI (retried with the normal backoff); `1000`/`1008`/other
+  are OpenAI's own close codes forwarded unchanged; a `1006` with no close
+  frame means upstream vanished (reconnect = a brand-new session).
+- **Graceful close.** `disconnect()` sends `session.close` and keeps reading
+  until `session.closed` (up to `close_timeout_s`, 5 s) before closing the
+  socket, so the relay records the final usage as confirmed
+  (`final_confirmed: true`) instead of billing from its own clock. The
+  reconnect path never waits (the recv thread is the one that would read it).
+- **Continuous audio.** The relay reaps idle hops (~126 s seen on the Gemini
+  path), so in LIVE mode the mic stream must keep flowing, silence included;
+  the idle park (`HAL_GPTLIVE_IDLE_PARK_S`) closes a session cleanly before that.
+
+**Transport (on the wire).** `client.live.connect()` (`openai>=3.14.1`,
+`openai.resources.live`) opens the primary WebSocket to `/v1/live/sessions`,
+not `/v1/realtime`. The adapter sends `session.start` (client `event_id`
+`hal-start`) and waits for `session.started` before any other command — a send
+blocks up to `start_timeout_s` (10 s) and is then dropped
+(`[realtime] GPT-Live session not started within 10s — dropping send`). The
+`session.start` payload (`_build_session`, validated against the SDK
+`SessionConfig` in the tests) is
+
+```
+{model, instructions, audio: {format: {type: "audio/pcm", rate}, output: {voice}}, delegation: {type: "client"}}
+```
+
+— no `tools`, no `turn_detection`. One PCM format serves both directions
+(`HAL_GPTLIVE_SAMPLE_RATE`, 16000 or 24000), so `output_sample_rate ==
+sample_rate`. Mic audio goes out as `session.input_audio.append` (base64 PCM16
+mono, `event_id` `hal-audio`). `delegation: {type: "client"}` keeps the work in
+this process (→ the main agent); `responses` would hand it to an OpenAI-hosted
+model instead of our brain. The SDK gets no `on_reconnecting`, so it never
+reconnects on its own; the adapter's send/recv loops own recovery with the same
+2 s → 60 s backoff and fail-fast discipline as the other providers (`_conn_lock`
+serializes writes and connection swaps, the blocking recv iteration runs outside
+it, as in the OpenAI agent). Connect logs
+`Connecting to GPT-Live (base_url=…, model=…)` (`(SDK default)` when the URL is
+empty), `[realtime] GPT-Live session.start sent (voice=…)`, then
+`[realtime] GPT-Live session open (id=…, expires_at=…, voice=…)`.
+
+**Server events (on the wire).** `session.started`,
+`session.input_transcript.delta` (fragments with `start_ms` / `end_ms` that
+explicitly "do not define complete turns"), `session.output_audio.delta`,
+`session.output_transcript.delta`, `session.delegation.created` (metadata only:
+`id`, `target`, `offset_ms`), `session.usage.updated`, `session.closed`
+(reasons `close_requested` | `expired` | `content` | `remote_hangup` |
+`connection_lost`), `error`, `info`. Everything else (`session.updated`,
+`session.*.appended`, `input_audio.muted` / `unmuted`, `response.event`) is
+ignored. There is no `response.done` / turn-complete, no `turn_detection`
+config, no audio commit and no interruption event: the model is full-duplex and
+handles barge-in itself, so turn state is tracked client-side. Image input is
+unsupported by `gpt-live-1`; a stray `ImageInput` is dropped with one
+`[realtime] GPT-Live has no image input — frame dropped`.
+
+**Synthesized contract.** How each item of the base contract is derived
+(`_on_input_transcript`, `_on_output`, `_fire_boundary`, `_on_delegation`):
+
+| Contract item | GPT-Live source |
+|---|---|
+| **turn boundary** (`TurnDoneEvent`) | none on the wire. A watchdog thread (`gptlive-watchdog`, 50 ms tick) calls `_fire_boundary()` → `TurnDoneEvent(execution_completed=True, user_turn_id=<owner>)` when no `session.output_audio.delta` / `session.output_transcript.delta` has arrived for `turn_gap_ms` (`HAL_GPTLIVE_TURN_GAP_MS`, 800). `OutputEvent.gen` is bumped at the start of every reply burst and on interruption |
+| new `UserSpeechOutput` key (`gptlive-<hex>`) | no VAD events. LIVE_MODE only, from `session.input_transcript.delta` fragments (`method="provider_transcript"`, **never** an `endpoint_at`). A new input turn opens when there is no open turn, when the previous one was answered, or when the fragment's `start_ms − previous end_ms > input_gap_ms` (`HAL_GPTLIVE_INPUT_GAP_MS`, 1500). Each fragment is logged `[realtime] <<< user said: '…'` and appended to the turn's transcript |
+| `UserSpeechOutput(transcript_finished=True)` | completion-only, emitted when the model starts answering the open input — the answer is the evidence that the input is complete. Completion-only metadata cannot open an input turn |
+| `user_turn_id` on outputs / `TurnDoneEvent` | frozen at the first output of a reply burst from the open, unanswered input; empty for an unsolicited remark. When the boundary closes an answered input its key is released, so a later remark is not attributed to it |
+| `InterruptedOutput(reason="output_reset")` | before the first `session.output_transcript.delta` of every reply |
+| `AudioOutput` / `TextOutput` | `session.output_audio.delta` / `session.output_transcript.delta` |
+| **barge-in** (`InterruptedOutput(reason="server_interrupt")`) | no interruption event. An input fragment arriving while a reply is streaming marks an overlap and shortens the boundary deadline to `interrupt_gap_ms` (`HAL_GPTLIVE_INTERRUPT_GAP_MS`, 400) — measured from the **last output**, so a model that talks straight through the user's words keeps pushing the deadline and is never cut off by HAL. If the model then stays silent for that long the reply is **interrupted**: `_drain_for_interrupt` drops what is still queued from the abandoned reply, keeping `UserSpeechOutput` / `ExecutionOutput` / a queued `server_interrupt` (a queued `TurnDoneEvent` becomes an `ExecutionOutput` in LIVE_MODE), bumps `gen`, emits `InterruptedOutput(reason="server_interrupt", at=<monotonic>, user_turn_id=<owner>)` (LIVE_MODE) and logs `[realtime] Reply interrupted by the user — dropped N queued output(s), gen=G`; the boundary is then `TurnDoneEvent(execution_completed=False)`. If the model keeps talking past `interrupt_gap_ms`, the overlap was a **backchannel** and the reply completes normally. The barge-in utterance stays open as its own input turn |
+| `FunctionCallOutput` (+ `user_transcript`) | **no tools at the Live layer.** The session runs client delegation: `session.delegation.created` with `target: client` becomes `FunctionCallOutput(name="delegate_to_main", call_id=<delegation.id>, arguments={"message": <accumulated input transcript>}, user_transcript=<same>)`, which the orchestrator handles exactly like Gemini's tool call (`DelegateSignal`). A `responses`-target delegation is ignored. The event carries no task text and **can arrive before the sentence is complete in the transcript** (BFF doc §6), so the forward is never immediate: the watchdog forwards it once the input transcript has been quiet for 250 ms (`_DELEGATION_SETTLE_S`), or at the hard deadline `delegation_wait_ms` (`HAL_GPTLIVE_DELEGATION_WAIT_MS`, 500) with whatever has been heard — log `[realtime] Delegation <id> — settling the transcript (N chars so far, up to 500ms)`; a still-empty message is forwarded anyway and the orchestrator's "message must not be empty" result is relayed to the model as a failed handoff. Logged `[realtime] Delegation <id> → delegate_to_main(message='…')`. The transcript is emitted on the turn path too (no live metadata there) |
+| `TurnDoneEvent.execution_completed` | `True` only for a `turn_gap_ms` boundary with no overlap; `False` on an interruption or a fail-fast |
+| `note_server_activity()` | `session.started`, input/output transcript, output audio and delegation events — **not** `session.usage.updated` |
+
+**Unavailable tools.** `express_emotion`, `reject_turn`, `end_conversation` and
+`look` cannot exist on this provider. They are logged once at construction
+(`[realtime] GPT-Live has no Live-layer tools — [...] unavailable on this
+provider (only delegate_to_main, via client delegation)`), and a
+`FunctionCallResultInput` for a call the adapter never emitted is ignored. So on
+GPT-Live there is no in-session emotion, no AI reject filter, no explicit
+hang-up tool and no in-session vision; visual questions delegate.
+
+**Feedback to the model** goes through `session.thinking.append` (silent
+context, `event_id` `hal-context` for `send_text` / `hal-delegation` for tool
+results; content clipped to `_APPEND_MAX_CHARS` = 1600 chars ≈ the API's
+500-token cap on `session.*.append`, rather than letting the whole line be
+rejected):
+
+- the orchestrator's `{"result": "delegated"}` ack → "The device's main agent
+  has taken this request and will speak its own answer to the user. Do not
+  answer it yourself and do not mention the handoff again; keep listening."
+  with `delegation_id` = that delegation, which stays **pending**;
+- `[TTS HISTORY] …` via `send_text` (the main agent's spoken reply) → attached
+  to the **newest** pending delegation, which closes it, so the model knows the
+  user has been answered and by whom;
+- any other `send_text` (`[TURN CONTEXT]`, speaker corrections) →
+  `delegation_id: null` (general session context);
+- a non-`delegated` result → "The handoff to the main agent failed (…). Answer
+  the user directly if you can, or tell them briefly that it did not work." and
+  the delegation is dropped.
+
+At most `_MAX_PENDING_DELEGATIONS` = 8 pending delegations are remembered
+(oldest evicted). `session.commentary.append` (spoken) and
+`session.instructions.append` exist in the API but are not used.
+
+**Commit.** There is no commit on Live — the model decides when the user is
+done. `commit_audio()` is a no-op in LIVE_MODE (the mic keeps streaming). On the
+turn path it appends `commit_silence_ms` (`HAL_GPTLIVE_COMMIT_SILENCE_MS`, 600)
+of PCM silence (`event_id` `hal-silence`) so the model hears the utterance end
+instead of waiting for room noise to tell it.
+
+**Errors and fail-fast.** A server `error` whose `client_event_id` is one of
+ours (`hal-audio`, `hal-silence`, `hal-context`, `hal-delegation`) means a
+command of OURS was rejected (context over 500 tokens, audio before
+`session.started`, …) → `[realtime] GPT-Live rejected <id> (<code>): …` at
+WARNING and the session continues. An error with **no** client id, or one on
+`hal-start`, → `[realtime] GPT-Live error (<code>): …` → `GPTLiveError` →
+`_fail_fast_turn("api error")`: a reply in flight is closed with
+`execution_completed=False`, a pending input gets a bare `TurnDoneEvent`, and
+the background reconnect (2 s → 60 s) runs. The event iteration ending
+(`session.closed`, any reason — logged `[realtime] GPT-Live session closed
+(reason=…)`) → `_fail_fast_turn("session closed")` + reconnect; any other
+exception → `_fail_fast_turn("unexpected")`. A reopened session inherits no
+input ownership and no pending delegations (`_reset_turn_state`). Disconnect is
+graceful (`session.close` first, so the server answers with the final usage).
+
+**Latency log.** `[realtime] Response latency: Nms
+(last_input_transcript->first_audio; full duplex)` — approximate, since the
+input transcript itself lags the speech.
+
+**Base hooks left at their defaults, and why.** `end_turn()` no-op: there is
+no `_turn_done` gate — nothing waits for a provider turn end before the next
+send (no `response.create`). `requires_fresh_session` `False`: a delegation the
+client never answers does not make the session refuse input (unlike Gemini's
+`1008`). `output_sample_rate == sample_rate`: a Live WebSocket has one PCM
+format for both directions.
+
+**Pricing.** $0.05 per session-minute, billed per second (plus the delegated
+main-agent work separately) — versus token pricing on the Realtime API. Per-
+minute billing means an **open idle session costs money**, so the
+orchestrator's idle park covers this provider too: `_idle_park_threshold()`
+returns `HAL_GPTLIVE_IDLE_PARK_S` (default `30`; `0` disables) for `gptlive`,
+`HAL_GEMINI_IDLE_PARK_S` for Gemini and `0` (never) for OpenAI Realtime, whose
+idle sessions are free. After that many seconds without turn activity
+`_maybe_park_idle_session` closes the transport (`[realtime] Ns idle (>= 30s) —
+parking gptlive session …`); the next turn's `prepare_turn()` reconnects
+synchronously, audio buffered across the handshake, exactly as for Gemini. The
+Gemini-only pre-turn recycle is not applied. Usage lines go to
+`gptlive_usage.log` — see *Pricing & usage logs*.
+
+**Prompt.** `system_prompt_gptlive.md` follows the Live prompting-guide
+structure: Role and tone → Backchannel policy → Interruption policy → When NOT
+to speak → Delegation policy (*Backend tools* / *Delegate to the backend when*
+/ *Do not delegate when*) → the context streams it receives → examples. It
+carries no tool-call syntax and no ElevenLabs voice tags (the model's output
+transcript is a transcript of speech, not TTS input). The
+`delegate_to_main(message=…)` lines in its examples name the silent backend
+handoff so the shared find-delegation test
+(`hal/test/test_realtime_find_delegation.py`) can pin the rule text; the prompt
+says it is never spoken.
 
 ## Pricing & usage logs
 
 Every turn writes one token/cost line to a per-provider log under
-`/var/log/hal/` (rotating, 5 MB × 3): `gemini_usage.log` (logger
-`hal.realtime.usage`) and `qwen_usage.log` (logger `hal.realtime.usage.qwen`).
-OpenAI logs a plain usage line into `server.log` (`[realtime] OpenAI usage`),
-no cost estimate. The line carries per-modality token counts **and** an
-estimated USD cost, so a wrong rate can always be re-derived later from the
-logged counts.
+`/var/log/hal/` (rotating, 5 MB × 3, configured in
+`server_support/log_setup.py`): `gemini_usage.log` (logger
+`hal.realtime.usage`), `openai_usage.log` (logger
+`hal.realtime.usage.openai` — a child of the Gemini logger with
+`propagate=False`, so the files stay separate and comparable
+line-for-line) and `gptlive_usage.log` (logger `hal.realtime.usage.gptlive`,
+same pattern). None reaches `server.log`. The Gemini and OpenAI lines carry
+per-modality token counts **and** an estimated USD cost, so a wrong rate can
+always be re-derived later from the logged counts.
+
+The OpenAI line (`_log_usage`, from the `response.usage` of every
+`response.done`) is
+
+```
+[realtime] OpenAI usage: model=… in_text=N($…) in_audio=N($…) out_text=N($…) out_audio=N($…) +unattr(Nin/Nout) | cached=Ntok total=Ntok est_full>=$… est_cached>=$…
+```
+
+`+unattr` counts tokens OpenAI billed but did not tag text/audio (image input)
+— unpriced, so `est_*` is a floor (`>=`). `cached` is the prompt-cache hit
+(`input_token_details.cached_tokens`), re-billed at the discounted rate;
+`est_cached` subtracts that saving from `est_full`. `cached=0` on every turn
+means the cache is not hitting (session churn) — that is the cost red flag.
+`in_text` is the input **context** billed this turn: it grows with a long-lived
+session and should drop right after an idle recycle.
+
+GPT-Live is billed per session-minute, not per token, so its line is written
+on every `session.usage.updated` and on `session.closed` (not per turn):
+
+```
+[realtime] GPT-Live usage: session=<id> request=<x-request-id> seconds=<s> est>=$<s/60*0.05> context=<usage_ratio %|-> (cumulative|final; $0.05/min billed per second, delegated main-agent work billed separately)
+```
+
+`cumulative` on a usage tick, `final` on the close. The rate is
+`_GPTLIVE_USD_PER_MINUTE` = 0.05 in `voice_agent/gpt_live.py`
+(developers.openai.com/api/docs/models/gpt-live-1, verified 2026-09-16); the
+main agent's own tokens for delegated work are billed on top.
 
 Rate tables live in code, keyed `(direction, modality)` in USD per 1M tokens —
-`_GEMINI_RATES` in `voice_agent/gemini_live.py`, `_QWEN_RATES` in
-`voice_agent/qwen_realtime.py`. Unknown models fall back to the most expensive
-table (cost ceiling, never an under-report).
+`_GEMINI_RATES` in `voice_agent/gemini_live.py`, `_OPENAI_RATES` in
+`voice_agent/openai_realtime.py`. Unknown models fall back to the most expensive
+table (cost ceiling, never an under-report). `_OPENAI_RATES` is matched **in
+order as a substring** of the configured model: `mini` first (so
+`gpt-realtime-2-mini` never resolves to the full-size row), then
+`gpt-realtime-2`, then `gpt-realtime`.
 
-| Model | text in | audio in | text out | audio out | audio↔token | Source |
-|---|---|---|---|---|---|---|
-| `gemini-2.5-flash-native-audio` | $0.50 | $3.00 | $2.00 | $12.00 | 25 tok/s | ai.google.dev pricing (verified 2026-06-29) |
-| `gemini-3.1-flash-live` | $0.75 | $3.00 | $4.50 | $12.00 | 25 tok/s | ai.google.dev pricing (verified 2026-06-29) |
-| `qwen-omni-turbo-realtime` | $0.27 | $4.44 | $8.89* | $8.89* | 25 tok/s in+out | consume-detail bill CSV (verified 2026-07-06); *audio-modality output bills text+audio together (`multi_output_token`); text-only responses bill $1.07 (`purein_text_output`) |
-| `qwen3.5-omni-flash-realtime` | $0.27 | $4.44 | $8.89* | $8.89* | ~7 tok/s in, ~12.5 tok/s out | bill CSV (verified 2026-07-06): flash bills under the SAME cheap line items as turbo, incl. search-enabled sessions — dominant text-in cost ~2.8x cheaper than Gemini 3.1. Search +$0.01/request |
-| `qwen3.5-omni-plus-realtime` | $2.10 | $16.50 | $62.00* | $62.00* | ~7 tok/s in, ~12.5 tok/s out | consume-detail bill CSV (verified 2026-07-06); *one `omni_audio_output_token` line item covers the response's text+audio. Web search bills $0.01 per search request on top |
+| Model | text in | audio in | text out | audio out | cached text / audio in | audio↔token | Source |
+|---|---|---|---|---|---|---|---|
+| `gemini-2.5-flash-native-audio` | $0.50 | $3.00 | $2.00 | $12.00 | — | 25 tok/s | ai.google.dev pricing (verified 2026-06-29) |
+| `gemini-3.1-flash-live` | $0.75 | $3.00 | $4.50 | $12.00 | — | 25 tok/s | ai.google.dev pricing (verified 2026-06-29) |
+| `*mini*` (e.g. `gpt-realtime-2-mini`) | $0.60 | $10.00 | $2.40 | $20.00 | $0.06 / $0.30 | — | developers.openai.com/api/docs/pricing (verified 2026-09-16) |
+| `gpt-realtime-2` | $4.00 | $32.00 | $24.00 | $64.00 | $0.40 / $0.40 | — | developers.openai.com/api/docs/pricing (verified 2026-09-16) |
+| `gpt-realtime` | $4.00 | $32.00 | $16.00 | $64.00 | $0.40 / $0.40 | — | developers.openai.com/api/docs/pricing (verified 2026-09-16) |
+| unknown OpenAI model | $4.00 | $32.00 | $24.00 | $64.00 | $0.40 / $0.40 | — | falls back to the table with the highest text-out rate (`gpt-realtime-2`) — a cost ceiling |
 
-Cost anatomy is the same on every provider: `in_text` dominates (the ~7-10k
+Cost anatomy is the same on both token-billed providers: `in_text` dominates (the ~7-10k
 token system prompt plus accumulated session context is re-billed every turn
 and grows until a session recycle — see `HAL_REALTIME_SESSION_IDLE_RESET_S` /
 `HAL_REALTIME_SESSION_MAX_TURNS`); audio tokens are comparatively marginal.
@@ -1089,8 +1479,8 @@ only surface `voice_service` talks to:
 | `append_audio(frame)` | Queue one mic frame (non-blocking) |
 | `commit_audio()` | Signal end-of-utterance (non-blocking) |
 | `stream_output()` | Yield `AudioOutput` / `TextOutput` / `FunctionCallOutput`, or a `DelegateSignal` (then stop) |
-| `send_text(text)` | Inject context (turn context, TTS history) as a non-response user message. Gemini Live skips this to avoid SDK `clientContent`/audio turn collisions; OpenAI still accepts it. |
-| `send_function_result(call_id, output)` | Return a tool result to the model |
+| `send_text(text)` | Inject context (turn context, TTS history) as a non-response user message. Gemini Live skips this to avoid SDK `clientContent`/audio turn collisions; OpenAI still accepts it; GPT-Live sends it as silent `session.thinking.append` context (a `[TTS HISTORY]` line closes the newest pending delegation). |
+| `send_function_result(call_id, output)` | Return a tool result to the model (on GPT-Live: silent `session.thinking.append` on the delegation — see *GPT-Live*) |
 | `save_turn(user, agent)` | Persist a turn to realtime memory |
 | `available` / `sample_rate` | Readiness + provider audio rate |
 | `rebuilding` / `wait_until_available()` | Observe and briefly wait for an already-running replacement session without starting another rebuild |
@@ -1114,8 +1504,9 @@ assembled per agent gateway (`HAL_AGENT_GATEWAY`):
 and summarization; subclasses implement `load_device_context`,
 `load_device_memory`, `load_skills_catalog`, and `summarize_device_memory`.
 Base prompts live in `resources/` (`system_prompt.md` plus per-provider
-`system_prompt_openai.md` / `system_prompt_gemini.md` / `system_prompt_qwen.md`,
-registered in the context manager's `PROVIDER_PROMPT_PATHS` map).
+`system_prompt_openai.md` / `system_prompt_gemini.md` /
+`system_prompt_gptlive.md`, registered in the context manager's
+`PROVIDER_PROMPT_PATHS` map).
 
 ### Memory & summarization
 
@@ -1198,8 +1589,9 @@ LIVE output reset/session cleanup preserves pending main replies. A new
 non-empty addressed input stops playback once per provider turn and clears the
 queue; an explicit stop also clears it, including speech retained by a preceding
 model reset. Existing OS cancellation policy remains unchanged. Confirmed-input
-interruption requires `UserSpeechOutput`: Gemini emits it; OpenAI/Qwen adapters
-currently do not. Mic streaming, server VAD, delegate routing and LIVE OFF
+interruption requires `UserSpeechOutput`: Gemini, OpenAI and GPT-Live all emit
+it in live mode (see *OpenAI Realtime: live-mode parity with Gemini* and
+*GPT-Live*; GPT-Live's comes from transcript fragments, never a VAD endpoint). Mic streaming, server VAD, delegate routing and LIVE OFF
 admission remain unchanged. Playback handoff tests use fake audio; acoustic
 barge-in still needs a device test.
 
@@ -1223,7 +1615,7 @@ the next session needs a wake phrase or another explicit focus grant.
 
 With `HAL_LIVE_MODE=true`, Gemini input transcription chunks now travel with their provider turn ID. `hal/drivers/voice/_internal/live_history.py` joins only input/output with that same ID and sends one `voice_agent_handled` notification after a successful provider terminal. Receive timeouts keep the partial turn open; duplicate terminals do not resend. Rejected, delegated, interrupted, unowned, or transcript-less replies are not recorded as completed exchanges. Input and output remain separate from the audio playback path; the existing output-reset behavior also resets the collected answer.
 
-A single background worker sends completed exchanges using the existing interaction ID, reply-length cap and Harness routing snapshot. It drains completed notifications after live hangup without blocking playback. OS handles the notification through `externalhistory`, with silent delivery, disk persistence and the existing **History sync · Realtime → Main** web card. HAL buffering is bounded (64 incomplete turns, 64 queued notifications, 128 recent closed IDs); overflow/transport errors are logged. Durability starts only after OS accepts the notification. No live changes are made to OpenAI or Qwen in this fix; their live-history support remains a separate task.
+A single background worker sends completed exchanges using the existing interaction ID, reply-length cap and Harness routing snapshot. It drains completed notifications after live hangup without blocking playback. OS handles the notification through `externalhistory`, with silent delivery, disk persistence and the existing **History sync · Realtime → Main** web card. HAL buffering is bounded (64 incomplete turns, 64 queued notifications, 128 recent closed IDs); overflow/transport errors are logged. Durability starts only after OS accepts the notification. The OpenAI adapter now emits the same keyed input transcription chunks and terminals, so the join is provider-agnostic; it has only been device-verified on Gemini.
 
 ### HW emotion feedback in live mode
 
@@ -1343,9 +1735,11 @@ session rebuild cannot leave the pump reading a dead queue. `stream_output()`
 returns once per model reply (`turn_complete`) and also on a quiet stretch when
 `receive()` times out having yielded nothing; both simply mean "go round again".
 
-`InterruptedOutput` (new) is emitted by `gemini_live` on `content.interrupted`
-and is **the only voice-driven interruption there is** — nothing local decides
-it. It stops playback at once. The turn-based path never sees one: manual VAD
+`InterruptedOutput(reason="server_interrupt")` is emitted by `gemini_live` on
+`content.interrupted` and by `openai_realtime` on
+`input_audio_buffer.speech_started` while a response is active (or a
+`response.done` with status `cancelled`), and is **the only voice-driven
+interruption there is** — nothing local decides it. It stops playback at once. The turn-based path never sees one: manual VAD
 gives the server no opening to emit it.
 
 **Outputs are flushed once at session start.** Without it the session opens on a
@@ -1381,7 +1775,7 @@ session. These are product trade-offs, not bugs:
 | STT transcript | no `[TURN CONTEXT]`, no transcript-based filters |
 | per-turn wake word | checked at entry through STT when wake-word gating is enabled and focus is absent; a confirmed opener can enter live on the same capture. No local STT wake-word checks run inside an accepted live session |
 | speaker ID, speech emotion | a session produces neither |
-| local STT on delegation | `delegate_to_main` ends the session and forwards `[voice-instruction]` + Gemini's own input transcription as `[transcript]` (`FunctionCallOutput.user_transcript` → `DelegateSignal.transcript`, read by `_live_out_pump`); the main agent's reply plays after hangup. Providers without input transcription forward the instruction alone |
+| local STT on delegation | `delegate_to_main` ends the session and forwards `[voice-instruction]` + the provider's own input transcription as `[transcript]` (Gemini `inputTranscription`, OpenAI `conversation.item.input_audio_transcription.*`, GPT-Live `session.input_transcript.delta`; `FunctionCallOutput.user_transcript` → `DelegateSignal.transcript`, read by `_live_out_pump`); the main agent's reply plays after hangup. A turn whose transcription never arrived forwards the instruction alone |
 
 Also not run inside a session: the RMS entry gate, `SPEECH_HOLDOFF_S`, the
 silence clock, `MAX_SESSION_DURATION_S`, the per-turn STT socket and its
@@ -1697,25 +2091,28 @@ spurious HAL restart on the next boot after an os-server-only field changes.
 
 Modelled in Go at `system/server/config/realtime.go`; read in HAL at
 `hal/config.py`. Shared fields sit at the top; per-provider knobs live in
-`gemini` / `openai` / `qwen` sub-objects, with `provider` selecting the active
-one (`none` or absent → realtime off). Empty `api_key` / `base_url` fall back to
-`llm_api_key` / `llm_base_url` — **except qwen**: its credentials are its own
-(`realtime.qwen.api_key` / `realtime.qwen.base_url`, Go struct `QwenRealtime`),
-with deliberately **no fallback** to the shared `realtime.api_key`/`base_url` or
-`llm_*` credentials, because qwen talks straight to the Alibaba MaaS host, not
-through the `campaign-api` proxy. Set them via `realtime.qwen.*` in config.json
-or via env on the device (`DASHSCOPE_API_KEY`, `HAL_QWEN_REALTIME_BASE_URL` in
-`/opt/hal/.env`); with neither set the WS handshake fails loudly in the hal log.
+`gemini` / `openai` / `gptlive` sub-objects (Go structs `GeminiRealtime` /
+`OpenAIRealtime` / `GPTLiveRealtime`), with `provider` selecting the active one
+(`none` / `off` / `disabled` → realtime off; absent or empty → `gemini`, in both
+the Go accessor `RealtimeProvider()` and HAL's `REALTIME_PROVIDER` default).
+Empty `api_key` / `base_url` fall back to `llm_api_key` / `llm_base_url` for
+Gemini and OpenAI. GPT-Live resolves its key as `OPENAI_API_KEY` env >
+`realtime.gptlive.api_key` > shared `realtime.api_key` > `llm_api_key`, and its
+base URL as `HAL_GPTLIVE_BASE_URL` > `realtime.gptlive.base_url` > the OpenAI
+Realtime base URL (`realtime.base_url` > `<llm_base_url>/ws/openai`), to which
+the SDK appends `/live/sessions`. The `GPTLiveRealtime.api_key` / `base_url`
+fields only persist a per-provider override; `realtime.set` writes credentials
+to the shared fields.
 
-> **Leave `base_url` blank unless you have a non-proxy endpoint.** (Applies to
-> gemini/openai; qwen never derives from `llm_base_url` — it uses its own
-> `realtime.qwen.base_url`.) When empty, HAL
+> **Leave `base_url` blank unless you have a non-proxy endpoint.** When empty, HAL
 > derives `<llm_base_url>/ws/gemini` (or `/ws/openai`) — the WS suffix the
 > `campaign-api` proxy routes on. A `base_url` set to the bare `llm_base_url`
 > (no `/ws/...`) is handed verbatim to the provider SDK and **404s at the Live
 > handshake**. The web Settings "Base URL" field is therefore display-bound to the
 > *explicit override only* (`RealtimeBaseURLOverride`, not the resolved value), so
 > "leave blank to derive" stays blank and a save never re-persists the bare URL.
+> GPT-Live follows the same rule: blank derives `<llm_base_url>/ws/openai` and the
+> SDK adds `/live/sessions`.
 
 ```json
 {
@@ -1725,17 +2122,31 @@ or via env on the device (`DASHSCOPE_API_KEY`, `HAL_QWEN_REALTIME_BASE_URL` in
     "provider": "gemini",
     "gemini": { "model": "gemini-3.1-flash-live-preview", "voice": "Kore", "thinking_level": "MINIMAL" },
     "openai": { "model": "gpt-realtime-2", "voice": "alloy", "reasoning_effort": "minimal" },
-    "qwen": { "model": "qwen3.5-omni-plus-realtime", "voice": "Ethan", "api_key": "sk-…", "base_url": "wss://…" }
+    "gptlive": { "model": "gpt-live-1", "voice": "marin" }
   }
 }
 ```
 
 The reasoning knobs (`thinking_level` / `reasoning_effort`) default to the
 **cheapest** tier (`MINIMAL` / `minimal`), not the providers' max — raise them
-explicitly for deeper reasoning. Qwen has no reasoning/thinking knob at all, so
-the web Settings page hides the Reasoning selector when qwen is the provider.
-Knobs NOT in the block (turn detection, session
-resumption, memory, summarizer) stay env/default-only.
+explicitly for deeper reasoning. GPT-Live has **no** reasoning knob (the Live
+model exposes none): `RealtimeReasoning()` returns empty for it, the options
+endpoint returns an empty `reasoning.gptlive` list so the web hides the
+selector, and `ValidateRealtimeKnobs` rejects any reasoning value for `gptlive`
+(`gptlive realtime has no reasoning knob`). Its voice must be one of the 13
+voices `gpt-live-1` accepts at `session.start` (`RealtimeGPTLiveVoiceList`,
+HAL `GPTLiveVoice`, from the BFF integration doc): `marin` (default), `quartz`,
+`ripple`, `vesper`, `willow`, `stone`, `gleam`, `meridian`, `bossa`, `tempo`,
+`beacon`, `delta`, `cinder` (`bossa`/`tempo` are Portuguese, the rest English
+with regional accents). The SDK's wider `BuiltInVoice` literal also carries
+Realtime-only names (`alloy`, `ash`, …) that a Live session rejects — they are
+deliberately not listed; the web Settings page labels the provider "GPT-Live". HAL additionally reads
+`realtime.openai.transcribe_model` and `realtime.openai.noise_reduction` from
+the same sub-object (env `HAL_OPENAI_TRANSCRIBE_MODEL` /
+`HAL_OPENAI_NOISE_REDUCTION` win); these two are not modelled in the Go
+`OpenAIRealtime` struct, so set them by hand or via env. Knobs NOT in the block
+(turn detection, VAD threshold, session resumption, memory, summarizer) stay
+env/default-only.
 
 **CoT-leak filter.** On `gemini-3.1-flash-live-preview` thinking cannot actually
 be disabled: `thinking_level=MINIMAL` and `thinking_budget=0` are both accepted
@@ -1782,8 +2193,8 @@ is a top-level `config.json` flag:
 | `HAL_ENDPOINT_SILENCE_S` | `0.8` | Silence needed after STT final arrival, only while `final_ts >= last_confirmed_speech`. Continued confirmed speech after that final restores the 2.5s fallback until a new final arrives. `0` disables the short clock, leaving `HAL_SILENCE_TIMEOUT`. |
 | `HAL_SILENCE_VAD_ENABLED` | `true` | Require Silero to confirm speech before the end-of-turn silence clock is refreshed. RMS remains the cheap pre-gate; set `false` to fall back to pure-RMS silence detection. |
 | `HAL_SILENCE_VAD_WINDOW_FRAMES` | `3` | Number of frames batched per Silero run for that check — Silero costs ~20 ms/frame on ARM and its LSTM needs more than one 64 ms frame to settle. |
-| `HAL_REALTIME_PROVIDER` | `gemini` | `none` \| `gemini` \| `openai` \| `qwen` |
-| `HAL_REALTIME_TURN_DETECTION` | `off` | `server_vad` \| `semantic_vad` \| `off` (Gemini: off = manual activity detection) |
+| `HAL_REALTIME_PROVIDER` | `gemini` | `none` \| `gemini` \| `openai` \| `gptlive` |
+| `HAL_REALTIME_TURN_DETECTION` | `off` | `server_vad` \| `semantic_vad` \| `off` (Gemini: off = manual activity detection). Ignored by GPT-Live, which has no `turn_detection` |
 | `HAL_REALTIME_RECV_QUEUE_TIMEOUT_S` | `8.0` | Max seconds `receive()` waits for the next output event before ending a silent turn (fallback to main agent) |
 | `HAL_REALTIME_GROUNDING_DEBUG` | `false` | Dump every field of Gemini's `grounding_metadata` verbatim, once per grounded turn (`grounding_chunks`, `grounding_supports`, `search_entry_point`, …). Diagnostic only and verbose; it exists to tell a turn whose search genuinely returned nothing from one whose payload was stripped in transit. Measured on lamp-0c89 04/09/2026 over four grounded turns, the payload always arrived complete, so a `chunks=0` turn means the model did not ground that answer. |
 | `HAL_REALTIME_TURN_MAX_SILENCE_S` | `20.0` | Ceiling on how long one turn may stay silent while the server keeps sending messages. `receive()` extends a turn past `HAL_REALTIME_RECV_QUEUE_TIMEOUT_S` only while inbound traffic proves the model is still working (a grounded search emits nothing until it returns); this stops a server that chatters without ever producing output from hanging the turn. `0` disables the keep-alive and restores the plain gap watchdog. |
@@ -1808,15 +2219,24 @@ is a top-level `config.json` flag:
 | `HAL_GEMINI_VISION_MAX_WIDTH` | `768` | Max width (px) the captured frame is downscaled to before sending — bounds image tokens. |
 | `HAL_GEMINI_VISION_MIN_INTERVAL_S` | `10` | Cost guard: minimum seconds between two image **sends**. Repeat `look` calls within this window (or a second call in the same turn) reuse the frame already in context instead of sending a new one. `0` = always send fresh. |
 | `HAL_GEMINI_VISION_HANDOFF_MAX_AGE_S` | `45` | Max age of a `look` frame still handed off to the main agent on a delegate/timeout fallback so it reuses the image instead of re-snapshotting. **Must stay above `HAL_REALTIME_LOOK_RECV_TIMEOUT_S` plus dispatch time** — the timeout fallback only fires after that watchdog expires, so equal values expire every frame (both were `20` from 2026-07-06 to 2026-08-24 and the handoff never once fired). `0` disables the age guard (frame is still cleared per-turn). |
-| `OPENAI_API_KEY` | — | OpenAI key; falls back to `llm_api_key` |
+| `OPENAI_API_KEY` | — | OpenAI key, for OpenAI Realtime **and** GPT-Live; falls back to `llm_api_key`. On GPT-Live the order is env > `realtime.gptlive.api_key` > `realtime.api_key` > `llm_api_key` |
 | `HAL_OPENAI_REALTIME_MODEL` | `gpt-realtime-2` | |
 | `HAL_OPENAI_REALTIME_VOICE` | `alloy` | |
 | `HAL_OPENAI_REALTIME_BASE_URL` | `<llm_base_url>/ws/openai` | |
 | `HAL_OPENAI_REASONING_EFFORT` | `minimal` | `minimal` \| `low` \| `medium` \| `high` \| `xhigh` — cost-lean default (was `xhigh`) |
-| `DASHSCOPE_API_KEY` | — | Qwen key; overrides `realtime.qwen.api_key`. **No fallback** to `llm_api_key` / the shared `realtime.api_key` |
-| `HAL_QWEN_REALTIME_BASE_URL` | — | DashScope workspace WS host; overrides `realtime.qwen.base_url`. Never derived from `llm_base_url` |
-| `HAL_QWEN_REALTIME_MODEL` | `qwen3.5-omni-plus-realtime` | turbo is legacy: no function calls, ignores turn context |
-| `HAL_QWEN_REALTIME_VOICE` | `Ethan` | 3.5-plus: also `Serena`; turbo-only: `Cherry` \| `Chelsie` |
+| `HAL_OPENAI_TRANSCRIBE_MODEL` | `gpt-4o-mini-transcribe` | `audio.input.transcription.model`. Input transcription is always on: it is the only source of the user's words on the OpenAI path (`UserSpeechOutput.transcript`, live history, the delegate message). `gpt-4o-mini-transcribe` streams deltas; `whisper-1` only sends the completed transcript. Also `realtime.openai.transcribe_model` in config.json |
+| `HAL_OPENAI_NOISE_REDUCTION` | `far_field` | `far_field` (room mic — the lamp) \| `near_field` (headset) \| `off` (key omitted). Server-side `audio.input.noise_reduction`, applied before VAD and the model — the OpenAI half of the echo defence Gemini gets from VAD sensitivity. Also `realtime.openai.noise_reduction` in config.json |
+| `HAL_OPENAI_VAD_THRESHOLD` | `0` | `server_vad` activation threshold (0..1, API default 0.5). `0` derives it from `HAL_LIVE_VAD_START_SENSITIVITY` (`low` → `0.7`, `high` → `0.3`); a non-zero value wins. `HAL_LIVE_VAD_PREFIX_PADDING_MS` / `HAL_LIVE_VAD_SILENCE_MS` map to `prefix_padding_ms` / `silence_duration_ms` when > 0, and `HAL_LIVE_VAD_END_SENSITIVITY` to `semantic_vad` `eagerness` |
+| `HAL_GPTLIVE_BASE_URL` | *(empty → the OpenAI Realtime base URL: `HAL_OPENAI_REALTIME_BASE_URL` > `realtime.base_url` > `<llm_base_url>/ws/openai`)* | Also `realtime.gptlive.base_url`. The SDK appends `/live/sessions`, so the proxy must serve `…/ws/openai/live/sessions` (pending as of 2026-09-16; 404 until then). Set `https://api.openai.com/v1` to go direct |
+| `HAL_GPTLIVE_MODEL` | `gpt-live-1` | Also `realtime.gptlive.model` |
+| `HAL_GPTLIVE_VOICE` | `marin` | One of the 13 Live voices listed under the `config.json` block. Also `realtime.gptlive.voice` |
+| `HAL_GPTLIVE_SAMPLE_RATE` | `24000` | `16000` \| `24000`. One PCM format for **both** directions on a Live WebSocket (`output_sample_rate == sample_rate`); 24000 keeps the model's voice at full quality, 16000 halves uplink bandwidth |
+| `HAL_GPTLIVE_TURN_GAP_MS` | `800` | Synthesized turn boundary: a reply is over when no `session.output_audio.delta` / `session.output_transcript.delta` has arrived for this long (the wire has no `response.done` / `turn_complete`) |
+| `HAL_GPTLIVE_INTERRUPT_GAP_MS` | `400` | Barge-in verdict: after the user spoke over a reply, output silence this long counts the reply as interrupted; output continuing past it means the overlap was a backchannel |
+| `HAL_GPTLIVE_INPUT_GAP_MS` | `1500` | Input transcript fragments further apart than this (session-timeline `start_ms − previous end_ms`) open a new user turn even when the model has not answered in between |
+| `HAL_GPTLIVE_COMMIT_SILENCE_MS` | `600` | Turn path only: PCM silence appended at `commit_audio()` (`event_id` `hal-silence`) so the model hears the utterance end — there is no commit on Live. No-op in LIVE_MODE; `0` disables |
+| `HAL_GPTLIVE_DELEGATION_WAIT_MS` | `500` | Hard deadline for forwarding a `session.delegation.created` as `delegate_to_main`: the adapter forwards as soon as the input transcript has been quiet for 250 ms, and at this deadline at the latest with whatever was heard (empty → the orchestrator's rejection is relayed as a failed handoff) |
+| `HAL_GPTLIVE_IDLE_PARK_S` | `30` | GPT-Live idle parking: the session is billed per minute while open, so after this many seconds without turn activity the orchestrator closes the transport (`_maybe_park_idle_session`, same mechanics as `HAL_GEMINI_IDLE_PARK_S`) and reconnects on the next turn. `0` disables. |
 | `HAL_REALTIME_MEMORY_PATH` | `<workspace>/realtime/memory.jsonl` | |
 | `HAL_REALTIME_MAX_MEMORY_ENTRIES` / `_TRIM_KEEP` | `1000` / `500` | |
 | `HAL_REALTIME_SUMMARIZER_ENABLED` | `true` | |
@@ -1832,13 +2252,13 @@ is a top-level `config.json` flag:
 | `orchestrator.py` | Session lifecycle, `delegate_to_main` + `express_emotion` + `look` tools, turn streaming |
 | `voice_agent/base.py` | Abstract agent: two-thread queue contract, `receive()` |
 | `voice_agent/gemini_live.py` | Gemini Live provider (asyncio IO loop) |
-| `voice_agent/openai_realtime.py` | OpenAI Realtime provider (sync, lock-serialized connection) |
-| `voice_agent/qwen_realtime.py` | Qwen Omni Realtime provider (sync, raw WS, OpenAI beta schema; `_QWEN_RATES` cost table → `qwen_usage.log`) |
+| `voice_agent/openai_realtime.py` | OpenAI Realtime provider (GA schema, sync, lock-serialized connection; live-mode contract parity with Gemini, barge-in truncate, `_OPENAI_RATES` cost table → `openai_usage.log`) |
+| `voice_agent/gpt_live.py` | GPT-Live provider (`/v1/live/sessions`, `gpt-live-1`; sync, lock-serialized `LiveConnection`; synthesizes turn boundary / user speech / barge-in from output timing and transcript fragments via the `gptlive-watchdog` thread, client delegation → `delegate_to_main`, `session.thinking.append` feedback, per-minute usage → `gptlive_usage.log`) |
 | `context_manager/{base,openclaw,hermes}.py` | Prompt + memory + skills assembly per gateway |
 | `summarizer.py` | Anthropic-based memory summarizer |
-| `config.py` | Provider config models (`GeminiConfig`, `OpenAIConfig`, `QwenConfig`) |
+| `config.py` | Provider config models (`GeminiConfig`, `OpenAIConfig`, `GPTLiveConfig`) |
 | `models/`, `enums/` | Input/output/event types, provider + gateway enums |
-| `resources/` | System prompts (shared + per-provider) |
+| `resources/` | System prompts (shared `system_prompt.md` + per-provider `system_prompt_gemini.md` / `system_prompt_openai.md` / `system_prompt_gptlive.md`) |
 | `../voice/voice_service.py` | Integration: streams mic audio, consumes output, routes delegate/handled. Live mode: `_live_decision` / `_live_session` / `_live_out_pump` / `_live_uplink_frame` |
 | `../voice/aec.py` | WebRTC AEC3 on the mic path; reference tapped at the TTS output stream (all providers) |
 
@@ -1848,11 +2268,11 @@ Managed desktop sessions report completion/attention/error through the standard 
 
 ### Desktop task follow-ups in realtime delegation
 
-All four realtime prompt variants and the shared `delegate_to_main` description explicitly route native desktop actions and clear answers, corrections, or stop requests for a known pending main-agent task to the main agent, with blank realtime speech. The delegated message contains only the current user's faithfully understood words and supplied parameters, preserving every clause. Known task context is used internally to decide routing; it is not appended or retold because the main agent already owns the conversation. A brief reply such as “this weekend, two people” can continue the preceding lodging-search clarification; it must not be discarded solely for lacking an action verb or expanded into invented dates.
+All four realtime prompt variants (`system_prompt.md`, `system_prompt_openai.md`, `system_prompt_gemini.md`, `system_prompt_gptlive.md`) and the shared `delegate_to_main` description explicitly route native desktop actions and clear answers, corrections, or stop requests for a known pending main-agent task to the main agent, with blank realtime speech. The delegated message contains only the current user's faithfully understood words and supplied parameters, preserving every clause. Known task context is used internally to decide routing; it is not appended or retold because the main agent already owns the conversation. A brief reply such as “this weekend, two people” can continue the preceding lodging-search clarification; it must not be discarded solely for lacking an action verb or expanded into invented dates.
 
 Recent spoken main-agent questions in `[TTS HISTORY]` can supply the context needed to interpret that follow-up, while the existing no-repetition rule remains. `[TTS HISTORY, not spoken]` does not establish that the user heard or answered the question. Background-speech and addressed-to-device checks remain in force. This change uses the existing realtime handoff/reply history; it adds no structured pending-task store and does not itself prove live voice routing success or remove provider-specific context-delivery limits.
 
-Delegation must preserve named applications and dictated text, not merely the general topic. For example, “Ghi vào Notes là chiều mua sữa” must retain Notes and the full text “chiều mua sữa”; reducing it to a generic milk reminder loses both the target and content. The prompt variants and tool description now state this explicitly. A synthetic-audio observation showed that loss in a delegated message; without an input transcript it does not isolate audio recognition from summarization, and the wording change still requires behavioral verification.
+Delegation must preserve named applications and dictated text, not merely the general topic. For example, “Ghi vào Notes là chiều mua sữa” must retain Notes and the full text “chiều mua sữa”; reducing it to a generic milk reminder loses both the target and content. The Gemini/OpenAI prompt variants and the tool description state this explicitly; on GPT-Live the model writes no message at all — the adapter forwards the accumulated input transcript verbatim, so the user's words survive structurally rather than by prompt. A synthetic-audio observation showed that loss in a delegated message; without an input transcript it does not isolate audio recognition from summarization, and the wording change still requires behavioral verification.
 
 The current request or follow-up is forwarded in the language the user just spoke, without commentary or a summary of previous turns. Translating it to English can incorrectly switch the main agent’s reply language because the delegated instruction is its primary input.
 

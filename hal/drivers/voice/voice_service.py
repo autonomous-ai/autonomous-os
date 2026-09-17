@@ -35,7 +35,7 @@ from hal.realtime.models.signal import DelegateSignal, EndCallSignal, RejectSign
 from hal.realtime.models.output import ExecutionOutput, UserSpeechOutput
 from hal.realtime.models import TextOutput as RTTextOutput
 from hal.realtime.orchestrator import RealtimeOrchestrator
-from hal.realtime.utils import pcm16_bytes_to_float32, resample_float32
+from hal.realtime.utils import StreamingResampler, pcm16_bytes_to_float32, resample_float32
 from hal.drivers.voice._internal import config as voice_cfg
 from hal.drivers.voice._internal.audio_dsp import resample_to_stt, rms
 from hal.drivers.voice._internal.audio_recorder import ArecordStream
@@ -174,6 +174,9 @@ class VoiceService:
         # Completed model replies with no confirmed user speech since. Bumped
         # by the output pump, cleared by the mic loop, which owns user speech.
         self._live_unprompted_replies = 0
+        # time.time() of the last provider-transcribed user words this session;
+        # the idle-hangup clock reads it (LIVE_IDLE_REQUIRES_TRANSCRIPT).
+        self._live_last_transcript_at = 0.0
         # Deadline armed when the model calls end_conversation; the session
         # keeps running until then so the farewell is actually heard.
         # 0.0 = no hangup requested.
@@ -1353,6 +1356,9 @@ class VoiceService:
                         # A real new addressed utterance can interrupt main TTS;
                         # opening the mic or resetting model output cannot.
                         if out.turn_id and out.transcript.strip():
+                            # Provider-confirmed user words: the evidence the
+                            # idle-hangup clock trusts (LIVE_IDLE_REQUIRES_TRANSCRIPT).
+                            self._live_last_transcript_at = time.time()
                             text = merge_stt_hypothesis(
                                 input_text.get(out.turn_id, ""), out.transcript,
                             )
@@ -1648,6 +1654,7 @@ class VoiceService:
         self._live_frames_during_playback = 0
         self._live_frames_substituted = 0
         self._live_unprompted_replies = 0
+        self._live_last_transcript_at = 0.0
         self._live_hangup_at = 0.0
         started = time.time()
         # Exactly what the provider receives — see LIVE_UPLINK_DUMP_DIR.
@@ -1746,7 +1753,14 @@ class VoiceService:
                     break
                 if self._tts_is_speaking():
                     last_reply_end = now
-                quiet_for = now - max(last_user_speech, last_reply_end)
+                # "The user said something" = words the provider transcribed,
+                # not merely a voice near the mic (which can be anyone's).
+                user_spoke_at = (
+                    max(self._live_last_transcript_at, started)
+                    if voice_cfg.LIVE_IDLE_REQUIRES_TRANSCRIPT
+                    else last_user_speech
+                )
+                quiet_for = now - max(user_spoke_at, last_reply_end)
                 if quiet_for > voice_cfg.LIVE_IDLE_HANGUP_S:
                     logger.info(
                         "[live] no user action for %.0fs — hanging up, VAD resumes",
@@ -1876,11 +1890,21 @@ class VoiceService:
             return opener["consumed"], True
 
     def _to_realtime(self, pcm16_bytes: bytes):
-        """16 kHz PCM16 bytes → float32 at the provider's input rate."""
+        """16 kHz PCM16 bytes → float32 at the provider's input rate.
+
+        Stateful across frames: resampling each 20 ms frame on its own rings at
+        every frame edge (a click train that made GPT-Live at 24 kHz transcribe
+        nothing at all, 2026-09-17), so a StreamingResampler carries the tail
+        of the previous frame as filter history. Rebuilt whenever the provider
+        rate changes (a rebuild can swap the provider).
+        """
         audio_f32 = pcm16_bytes_to_float32(pcm16_bytes)
-        return resample_float32(
-            audio_f32, voice_cfg.STT_RATE, self._realtime.sample_rate
-        )
+        dst = self._realtime.sample_rate
+        rs = getattr(self, "_uplink_resampler", None)
+        if rs is None or rs.src_rate != voice_cfg.STT_RATE or rs.dst_rate != dst:
+            rs = StreamingResampler(voice_cfg.STT_RATE, dst)
+            self._uplink_resampler = rs
+        return rs.process(audio_f32)
 
     # ------------------------------------------------------------------
     # STT streaming session — fires while user is speaking

@@ -576,9 +576,7 @@ set is never mistaken for a valid default. Only a factory reset clears it.
 Restore is **per section**, because that is how an operator thinks about it —
 they swapped the brain, or the voice provider, and want that one thing back.
 Each section takes the slice of the stored set it started from: the AI Brain
-url + key + model, realtime and the voice pipeline url + key. Qwen realtime is
-refused: it talks straight to the Alibaba host with its own credentials, and the
-shipped set would produce a 401 there.
+url + key + model, realtime and the voice pipeline url + key.
 
 It is implemented as an ordinary `UpdateConfig` rather than a direct write, so
 it inherits every side effect a manual edit gets — hal restart or the live TTS
