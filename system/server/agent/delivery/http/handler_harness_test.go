@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"go.autonomous.ai/os/system/domain"
+	"go.autonomous.ai/os/system/lib/i18n"
+	"go.autonomous.ai/os/system/server/config"
 
 	"go.autonomous.ai/os/system/monitor"
 )
@@ -14,7 +16,7 @@ func TestHarnessWebResponseIsDisplayedWithoutTTS(t *testing.T) {
 	events, unsubscribe := bus.Subscribe()
 	defer unsubscribe()
 	h := &AgentHandler{monitorBus: bus}
-	h.MarkHarnessResponseRun("device-chat-42", true)
+	h.MarkHarnessResponseRun("device-chat-42", true, false)
 	if !h.DeliverHarnessResponse("device-chat-42", "Final recap from Harness") {
 		t.Fatal("Harness response was not delivered")
 	}
@@ -32,7 +34,7 @@ func TestHarnessProgressKeepsTheResponsePending(t *testing.T) {
 	events, unsubscribe := bus.Subscribe()
 	defer unsubscribe()
 	h := &AgentHandler{monitorBus: bus}
-	h.MarkHarnessResponseRun("device-chat-42", true)
+	h.MarkHarnessResponseRun("device-chat-42", true, false)
 	if !h.DeliverHarnessProgress("device-chat-42", "Harness agent is working.") {
 		t.Fatal("Harness progress was not delivered")
 	}
@@ -47,7 +49,7 @@ func TestHarnessToolIsShownWhileResponseIsPending(t *testing.T) {
 	events, unsubscribe := bus.Subscribe()
 	defer unsubscribe()
 	h := &AgentHandler{monitorBus: bus}
-	h.MarkHarnessResponseRun("device-chat-42", true)
+	h.MarkHarnessResponseRun("device-chat-42", true, false)
 	if !h.DeliverHarnessTool("device-chat-42", "web_search", "restaurants in Hanoi") {
 		t.Fatal("Harness tool was not delivered")
 	}
@@ -62,7 +64,7 @@ func TestHarnessHandoffDoesNotCloseChatBeforeResult(t *testing.T) {
 	events, unsubscribe := bus.Subscribe()
 	defer unsubscribe()
 	h := &AgentHandler{monitorBus: bus}
-	h.MarkHarnessResponseRun("test-run", true)
+	h.MarkHarnessResponseRun("test-run", true, false)
 	payload, _ := json.Marshal(map[string]string{"runId": "test-run", "role": "assistant", "state": "final", "message": "Task sent. NO_REPLY"})
 	if err := h.handleChatEvent(domain.WSEvent{Payload: payload}); err != nil {
 		t.Fatal(err)
@@ -83,8 +85,8 @@ func TestHarnessHandoffDoesNotCloseChatBeforeResult(t *testing.T) {
 
 func TestHarnessReplyCannotConsumeAnotherChat(t *testing.T) {
 	h := &AgentHandler{monitorBus: monitor.ProvideBus()}
-	h.MarkHarnessResponseRun("web-a", true)
-	h.MarkHarnessResponseRun("web-b", true)
+	h.MarkHarnessResponseRun("web-a", true, false)
+	h.MarkHarnessResponseRun("web-b", true, false)
 	if h.suppressHarnessAgentReply("unrelated") {
 		t.Fatal("unrelated chat suppressed by pending Harness task")
 	}
@@ -109,7 +111,7 @@ func TestHarnessFinalSurvivesRuntimeLifecycleOrdering(t *testing.T) {
 			events, unsubscribe := bus.Subscribe()
 			defer unsubscribe()
 			h := &AgentHandler{monitorBus: bus}
-			h.MarkHarnessResponseRun("test-run", true)
+			h.MarkHarnessResponseRun("test-run", true, false)
 			if resultFirst {
 				h.DeliverHarnessResponse("test-run", "Harness final")
 			}
@@ -134,6 +136,41 @@ func TestHarnessFinalSurvivesRuntimeLifecycleOrdering(t *testing.T) {
 			case extra := <-events:
 				t.Fatalf("extra response after Harness final: %+v", extra)
 			default:
+			}
+		})
+	}
+}
+
+func TestHarnessDelegatedResponseAttribution(t *testing.T) {
+	defer i18n.SetConfig(nil)
+	for _, tc := range []struct{ lang, prefix string }{
+		{"en", "Harness says:"}, {"vi", "Harness trả lời:"},
+		{"zh-CN", "Harness 回复："}, {"zh-TW", "Harness 回覆："},
+		{"unknown", "Harness says:"},
+	} {
+		t.Run(tc.lang, func(t *testing.T) {
+			i18n.SetConfig(&config.Config{STTLanguage: tc.lang})
+			bus := monitor.ProvideBus()
+			events, unsubscribe := bus.Subscribe()
+			defer unsubscribe()
+			h := &AgentHandler{monitorBus: bus}
+			for _, delegated := range []bool{true, false} {
+				runID := "direct"
+				want := "Original answer"
+				if delegated {
+					runID = "delegated"
+					want = tc.prefix + " " + want
+				}
+				h.MarkHarnessResponseRun(runID, true, delegated)
+				// Re-registration cannot change the original route's attribution.
+				h.MarkHarnessResponseRun(runID, true, !delegated)
+				if !h.DeliverHarnessResponse(runID, "Original answer") {
+					t.Fatal("response missing")
+				}
+				event := <-events
+				if event.Summary != want {
+					t.Fatalf("got %q, want %q", event.Summary, want)
+				}
 			}
 		})
 	}

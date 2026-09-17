@@ -179,7 +179,11 @@ class _GestureRecognizer:
 # The release grace joins a finger handoff without turning it into two taps.
 SWIPE_RELEASE_S = 0.120
 SWIPE_MAX_GAP_S = 0.150
-SWIPE_MIN_TRAVEL_S = 0.060
+# Travel time is measured from cycle start (after the contact debounce) to the
+# last new pad, so a fast full-strip swipe (~90 ms raw on Lamp) measures ~50 ms.
+# Displacement >= 3 pads already proves motion; this only rejects a whole hand
+# landing within a poll or two.
+SWIPE_MIN_TRAVEL_S = 0.030
 
 
 class _SpatialGestureRecognizer:
@@ -322,7 +326,13 @@ class _SpatialGestureRecognizer:
                 new = positions - self._seen
                 displacement = center - self._origin
                 if new:
-                    if abs(center - self._last_center) > 3:
+                    # A far-off arrival is a second finger, not travel -- unless
+                    # the contact is already moving and the jump continues in
+                    # its direction: a fast swipe (~1 pad per poll) skips pads
+                    # whose dwell is shorter than the footprint filter, so the
+                    # centroid legitimately leaps 3-4 pads (measured on Lamp).
+                    jump = center - self._last_center
+                    if abs(jump) > 3 and not (self._moving and jump * self._direction > 0):
                         self._invalid = True
                     if now - self._last_move > SWIPE_MAX_GAP_S:
                         self._invalid = True
@@ -483,7 +493,7 @@ class MPR121Handler:
             self._config.touch_threshold, self._config.release_threshold,
             self._config.autoconfig, self._config.poll_ms, self._config.debounce_ms,
         )
-        logger.info("MPR121 event=swipe_config axis=%s release_ms=120 max_gap_ms=150 min_travel_ms=60 footprint_debounce_ms=5", self._config.swipe_axis)
+        logger.info("MPR121 event=swipe_config axis=%s release_ms=120 max_gap_ms=150 min_travel_ms=30 footprint_debounce_ms=5", self._config.swipe_axis)
         self._last_raw_mask = None
         if self._hold_led is not None:
             self._hold_led.stop()

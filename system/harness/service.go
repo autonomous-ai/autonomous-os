@@ -21,7 +21,12 @@ import (
 )
 
 type Frame map[string]any
-type Callbacks struct{ OnEvent func(Frame) }
+type Callbacks struct {
+	OnEvent func(Frame)
+	// OnRevoked runs after the paired computer revoked this device and the pin
+	// was removed (same cleanup as a local unpair, e.g. disable Harness voice).
+	OnRevoked func()
+}
 type Status struct {
 	Code             string   `json:"code,omitempty"`
 	ExpiresAt        int64    `json:"expires_at,omitempty"`
@@ -510,6 +515,10 @@ func (s *Service) readLoop(c *connection) error {
 			return err
 		}
 		kind := stringField(outer, "type")
+		// The CLI seals pair.revoke as an autonomous_device_event payload.
+		if kind == "pair.revoke" || stringField(payloadOf(outer), "type") == "pair.revoke" {
+			return ErrRevoked
+		}
 		if kind == "autonomous_device_result" {
 			frame := payloadOf(outer)
 			id := stringField(frame, "requestId")
@@ -797,6 +806,9 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	connection, welcome, err := s.handshake(lifetime, channel, pinned)
 	if err != nil {
+		if errors.Is(err, ErrRevoked) {
+			s.revokedByComputer(generation)
+		}
 		return
 	}
 	s.mu.Lock()
@@ -852,4 +864,25 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.statusChangedLocked()
 	}
 	s.mu.Unlock()
+	if errors.Is(err, ErrRevoked) {
+		s.revokedByComputer(generation)
+	}
+}
+
+// revokedByComputer removes the pin after the paired computer rejected or
+// revoked this device. generation guards against a local unpair/re-pair that
+// raced with the revoke; s.conn is already nil here so Unpair sends no echo.
+func (s *Service) revokedByComputer(generation uint64) {
+	s.mu.Lock()
+	stale := s.generation != generation || s.disk.Peer == nil
+	s.mu.Unlock()
+	if stale {
+		return
+	}
+	if err := s.Unpair(); err != nil {
+		return
+	}
+	if s.callbacks.OnRevoked != nil {
+		s.callbacks.OnRevoked()
+	}
 }
