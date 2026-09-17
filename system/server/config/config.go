@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -453,13 +454,20 @@ func ProvideConfig() *Config {
 			"component", "config", "port", cfg.HttpPort)
 	}
 
-	// Seed the realtime block with defaults if an already-provisioned config.json
-	// predates it, so the file always carries an editable realtime config (HAL
-	// reads it from there). Idempotent — only the first start after upgrade writes.
-	if cfg.Realtime == nil {
-		cfg.Realtime = DefaultRealtimeConfig()
-		if err := cfg.Save(); err != nil {
-			slog.Error("seed realtime config failed", "component", "config", "error", err)
+	// Keep the realtime block in sync with the fleet defaults until an operator
+	// pins it by editing (RealtimeConfig.Pinned). HAL reads the block from this
+	// file, so a code-side default change reaches un-pinned devices on the next
+	// start. Written only when it actually differs: a rewrite changes the HAL
+	// config hash and restarts voice playback.
+	if cfg.Realtime == nil || !cfg.Realtime.Pinned {
+		def := DefaultRealtimeConfig()
+		cur, _ := json.Marshal(cfg.Realtime)
+		want, _ := json.Marshal(def)
+		if !bytes.Equal(cur, want) {
+			cfg.Realtime = def
+			if err := cfg.Save(); err != nil {
+				slog.Error("seed realtime config failed", "component", "config", "error", err)
+			}
 		}
 	}
 	// Default the top-level wake-word switch in memory for config files created

@@ -1658,8 +1658,12 @@ as a dev override and built-in defaults as the floor. Precedence per knob:
 HAL_* env var  >  config.json "realtime" block  >  built-in default
 ```
 
-os-server **seeds** the block into `config.json` on first start — and on upgrade
-when it's absent — so the file always carries an editable realtime config. HAL
+os-server **seeds** the block into `config.json` and keeps it equal to the code
+defaults (`DefaultRealtimeConfig`) on every start **until an operator edits it**:
+any web UI / MQTT `realtime.set` write sets `realtime.pinned: true`, after which
+os-server never touches the block again. So a fleet default change (say gemini →
+openai) reaches every device that never chose, and a device that did chooses
+wins. To un-pin, delete `pinned` from `config.json`. HAL
 reads it directly (same as `llm_api_key` / `stt_language`), no push down. Because
 HAL reads `config.json` at import, a config change needs a **HAL restart** to take
 effect. A live edit triggers that restart immediately (`restartHAL` in

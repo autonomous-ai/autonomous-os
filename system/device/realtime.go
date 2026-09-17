@@ -38,6 +38,8 @@ func applyRealtimeSet(c *config.Config, d domain.RealtimeSetData) {
 		c.Realtime = config.DefaultRealtimeConfig()
 	}
 	rt := c.Realtime
+	// Any operator edit pins the block: os-server stops re-seeding defaults.
+	rt.Pinned = true
 	if d.Enabled != nil {
 		rt.Enabled = d.Enabled
 	}
