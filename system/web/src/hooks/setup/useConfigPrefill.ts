@@ -104,6 +104,12 @@ export function useConfigPrefill(args: {
         discordBotToken: prev.discordBotToken || cfg.has_discord_bot_token,
         discordGuildId: prev.discordGuildId || !!cfg.discord_guild_id,
         discordUserId: prev.discordUserId || !!cfg.discord_user_id,
+        // iMessage / BlueBubbles — same prev-wins pattern as the other
+        // channels so an in-flight edit is not clobbered by a background
+        // refetch (see the file-level comment for the merge semantics).
+        bluebubblesServerUrl: prev.bluebubblesServerUrl || !!cfg.bluebubbles_server_url,
+        bluebubblesPassword: prev.bluebubblesPassword || cfg.has_bluebubbles_password,
+        bluebubblesUserAddress: prev.bluebubblesUserAddress || !!cfg.bluebubbles_user_address,
       }));
       setTeleUserId((prev) => prev || cfg.telegram_user_id || "");
       setSlackUserId((prev) => prev || cfg.slack_user_id || "");

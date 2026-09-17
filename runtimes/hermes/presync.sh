@@ -177,6 +177,17 @@ sync_env discord_bot_token  DISCORD_BOT_TOKEN
 sync_env discord_guild_id   DISCORD_GUILD_ID
 sync_env discord_user_id    DISCORD_ALLOWED_USERS
 sync_env whatsapp_user_id   WHATSAPP_ALLOWED_USERS
+# iMessage via BlueBubbles — the Hermes BlueBubbles plugin reads these three
+# env vars from ~/.hermes/.env (see hermes-agent/plugins/platforms/bluebubbles).
+# The server URL + password come from the operator's BlueBubbles UI on their
+# Mac; the allowed user address (phone / email) is the iMessage handle the
+# plugin pins its accept-allowlist to. Optional plugin knobs
+# (BLUEBUBBLES_WEBHOOK_HOST/PORT/PATH, _HOME_CHANNEL, _ALLOW_ALL_USERS,
+# _REQUIRE_MENTION, _MENTION_PATTERNS) fall back to plugin defaults; add
+# them here only when the operator explicitly opts in via UI.
+sync_env bluebubbles_server_url   BLUEBUBBLES_SERVER_URL
+sync_env bluebubbles_password     BLUEBUBBLES_PASSWORD
+sync_env bluebubbles_user_address BLUEBUBBLES_ALLOWED_USERS
 
 # ── 3. API SERVER KEY (must match constants.go APIKey) ────────────────────────
 # Enforce on every presync so a key bump in os-server self-heals on the next

@@ -109,6 +109,17 @@ type Config struct {
 	// persist its tokens here. Empty when no WhatsApp channel is configured.
 	WhatsappUserID string `json:"whatsapp_user_id" yaml:"whatsappUserID"`
 
+	// iMessage via BlueBubbles. Apple has no third-party iMessage API, so the
+	// user brings their own bridge: a Mac (with Messages.app signed in) running
+	// the BlueBubbles server (bluebubbles.app), reachable to the device at
+	// BluebubblesServerURL. Hermes has a native BlueBubbles plugin that reads
+	// these three fields from ~/.hermes/.env (presync maps them to
+	// BLUEBUBBLES_SERVER_URL / _PASSWORD / _ALLOWED_USERS). See ChannelIMessage
+	// in system/domain/device.go for the full architecture.
+	BluebubblesServerURL   string `json:"bluebubbles_server_url" yaml:"bluebubblesServerURL"`
+	BluebubblesPassword    string `json:"bluebubbles_password" yaml:"bluebubblesPassword"`
+	BluebubblesUserAddress string `json:"bluebubbles_user_address" yaml:"bluebubblesUserAddress"`
+
 	// ChannelsAppliedRuntime is the agent runtime ChannelReconcile last applied the
 	// configured channels for. When it differs from AgentRuntime on boot, the
 	// reconcile re-applies the channels to the new runtime (and updates this).

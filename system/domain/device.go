@@ -14,10 +14,20 @@ import (
 // because pairing is interactive (QR streaming) and the captive-portal setup
 // path can't carry a live event stream.
 const (
-	ChannelTelegram = "telegram"
-	ChannelSlack    = "slack"
-	ChannelDiscord  = "discord"
-	ChannelWhatsapp = "whatsapp"
+	ChannelTelegram  = "telegram"
+	ChannelSlack     = "slack"
+	ChannelDiscord   = "discord"
+	ChannelWhatsapp  = "whatsapp"
+	// ChannelIMessage — Apple iMessage via BlueBubbles. Apple has no third-party
+	// iMessage API, so the user brings their own bridge: a Mac (with Messages.app
+	// signed in) running the BlueBubbles server (bluebubbles.app), and the device
+	// talks to that server's REST + webhook API. Hermes has a native BlueBubbles
+	// plugin that consumes the credentials from env vars — os-server just lands
+	// them in ~/.hermes/.env and bounces the gateway, no receive loop of its own.
+	// Other runtimes (openclaw/codex/opencode/claudecode) do not have the plugin
+	// yet and return ErrChannelNotSupported for now — Phase 2 will add an OS-
+	// owned webhook receive loop that any runtime can use.
+	ChannelIMessage = "imessage"
 )
 
 type SetupRequest struct {
@@ -47,6 +57,16 @@ type SetupRequest struct {
 	DiscordBotToken string `json:"discord_bot_token"`
 	DiscordGuildID  string `json:"discord_guild_id"`
 	DiscordUserID   string `json:"discord_user_id"`
+
+	// iMessage channel (required when channel is imessage). Server URL is the
+	// BlueBubbles endpoint the user pasted from their Mac's BlueBubbles UI
+	// (e.g. "http://192.168.1.10:1234" for LAN, or an ngrok / Cloudflare tunnel
+	// URL for outside the LAN). Password is the BlueBubbles server password.
+	// UserAddress is the iMessage handle (phone or email) BlueBubbles should
+	// accept messages from — the operator's own iMessage identity.
+	BluebubblesServerURL  string `json:"bluebubbles_server_url"`
+	BluebubblesPassword   string `json:"bluebubbles_password"`
+	BluebubblesUserAddress string `json:"bluebubbles_user_address"`
 
 	// setup custom provider for openclaw
 	LLMBaseURL string `json:"llm_base_url" validate:"required"`
@@ -150,6 +170,11 @@ type WifiProvisionRequest struct {
 	DiscordBotToken  string `json:"discord_bot_token"`
 	DiscordGuildID   string `json:"discord_guild_id"`
 	DiscordUserID    string `json:"discord_user_id"`
+	// iMessage / BlueBubbles (WifiProvisionRequest mirrors SetupRequest so the
+	// AP-portal fast path can carry the same credentials).
+	BluebubblesServerURL   string `json:"bluebubbles_server_url"`
+	BluebubblesPassword    string `json:"bluebubbles_password"`
+	BluebubblesUserAddress string `json:"bluebubbles_user_address"`
 }
 
 // EffectiveChannel returns the resolved channel type, defaulting to "telegram".
@@ -161,6 +186,9 @@ func (r *SetupRequest) EffectiveChannel() string {
 	}
 	if r.Channel == ChannelDiscord {
 		return ChannelDiscord
+	}
+	if r.Channel == ChannelIMessage {
+		return ChannelIMessage
 	}
 	return ChannelTelegram
 }
@@ -184,6 +212,16 @@ func (r *SetupRequest) ValidateChannel() error {
 		}
 		if r.DiscordUserID == "" {
 			return fmt.Errorf("discord_user_id is required for discord channel")
+		}
+	case "imessage":
+		if r.BluebubblesServerURL == "" {
+			return fmt.Errorf("bluebubbles_server_url is required for imessage channel")
+		}
+		if r.BluebubblesPassword == "" {
+			return fmt.Errorf("bluebubbles_password is required for imessage channel")
+		}
+		if r.BluebubblesUserAddress == "" {
+			return fmt.Errorf("bluebubbles_user_address is required for imessage channel")
 		}
 	default:
 		if r.TelegramBotToken == "" {
@@ -227,6 +265,13 @@ type AddChannelRequest struct {
 	// whatsapp — bot login is handled interactively by the Baileys CLI; only
 	// the operator's E.164 phone number (the permitted DM caller) ships here.
 	WhatsappUserID string `json:"whatsapp_user_id"`
+
+	// iMessage via BlueBubbles. See ChannelIMessage docstring for the full
+	// architecture; here the tokens are just plumbed through the same
+	// persist-then-apply loop the other channels use.
+	BluebubblesServerURL   string `json:"bluebubbles_server_url"`
+	BluebubblesPassword    string `json:"bluebubbles_password"`
+	BluebubblesUserAddress string `json:"bluebubbles_user_address"`
 }
 
 // RefreshChannelRequest carries the credentials needed to re-apply a channel's
@@ -255,6 +300,11 @@ type RefreshChannelRequest struct {
 	DiscordBotToken string
 	DiscordGuildID  string
 	DiscordUserID   string
+
+	// iMessage / BlueBubbles
+	BluebubblesServerURL   string
+	BluebubblesPassword    string
+	BluebubblesUserAddress string
 }
 
 // EffectiveSlackMode resolves SlackMode, defaulting to "socket" so unset
@@ -275,6 +325,8 @@ func (r *AddChannelRequest) EffectiveChannel() string {
 		return ChannelDiscord
 	case ChannelWhatsapp:
 		return ChannelWhatsapp
+	case ChannelIMessage:
+		return ChannelIMessage
 	}
 	return ChannelTelegram
 }
@@ -310,6 +362,16 @@ func (r *AddChannelRequest) ValidateChannel() error {
 	case ChannelWhatsapp:
 		if r.WhatsappUserID == "" {
 			return fmt.Errorf("whatsapp_user_id is required for whatsapp channel")
+		}
+	case ChannelIMessage:
+		if r.BluebubblesServerURL == "" {
+			return fmt.Errorf("bluebubbles_server_url is required for imessage channel")
+		}
+		if r.BluebubblesPassword == "" {
+			return fmt.Errorf("bluebubbles_password is required for imessage channel")
+		}
+		if r.BluebubblesUserAddress == "" {
+			return fmt.Errorf("bluebubbles_user_address is required for imessage channel")
 		}
 	default:
 		if r.TelegramBotToken == "" {
@@ -1402,6 +1464,11 @@ type ConfigPublicResponse struct {
 	DiscordGuildID     string   `json:"discord_guild_id"`
 	DiscordUserID      string   `json:"discord_user_id"`
 	WhatsappUserID     string   `json:"whatsapp_user_id"`
+	// iMessage via BlueBubbles — server URL + user handle are non-secret so
+	// they come back verbatim; the server password is surfaced only via
+	// HasBluebubblesPassword below.
+	BluebubblesServerURL   string `json:"bluebubbles_server_url"`
+	BluebubblesUserAddress string `json:"bluebubbles_user_address"`
 	LLMModel           string   `json:"llm_model"`
 	LLMBaseURL         string   `json:"llm_base_url"`
 	LLMDisableThinking bool     `json:"llm_disable_thinking"`
@@ -1432,10 +1499,11 @@ type ConfigPublicResponse struct {
 
 	// Presence booleans replace raw secret values. Frontend renders
 	// "configured · update" affordance when true, empty input when false.
-	HasTelegramBotToken bool `json:"has_telegram_bot_token"`
-	HasSlackBotToken    bool `json:"has_slack_bot_token"`
-	HasSlackAppToken    bool `json:"has_slack_app_token"`
-	HasDiscordBotToken  bool `json:"has_discord_bot_token"`
+	HasTelegramBotToken   bool `json:"has_telegram_bot_token"`
+	HasSlackBotToken      bool `json:"has_slack_bot_token"`
+	HasSlackAppToken      bool `json:"has_slack_app_token"`
+	HasDiscordBotToken    bool `json:"has_discord_bot_token"`
+	HasBluebubblesPassword bool `json:"has_bluebubbles_password"`
 	HasLLMAPIKey        bool `json:"has_llm_api_key"`
 	HasDeepgramAPIKey   bool `json:"has_deepgram_api_key"`
 	HasSTTAPIKey        bool `json:"has_stt_api_key"`
@@ -1478,6 +1546,14 @@ type UpdateConfigRequest struct {
 	DiscordUserID   string `json:"discord_user_id"`
 
 	WhatsappUserID string `json:"whatsapp_user_id"`
+
+	// iMessage via BlueBubbles. UI writes the plain fields on every save (server
+	// URL + user address); the password ships only when the operator typed a
+	// new one — an empty POST value means "keep the on-disk password", matching
+	// the pattern used for the other channel secrets.
+	BluebubblesServerURL   string `json:"bluebubbles_server_url"`
+	BluebubblesPassword    string `json:"bluebubbles_password"`
+	BluebubblesUserAddress string `json:"bluebubbles_user_address"`
 
 	LLMBaseURL         string `json:"llm_base_url"`
 	LLMAPIKey          string `json:"llm_api_key"`

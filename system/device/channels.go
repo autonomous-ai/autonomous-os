@@ -58,6 +58,10 @@ func (s *Service) AddChannel(ctx context.Context, data domain.AddChannelRequest)
 			c.DiscordUserID = data.DiscordUserID
 		case domain.ChannelWhatsapp:
 			c.WhatsappUserID = data.WhatsappUserID
+		case domain.ChannelIMessage:
+			c.BluebubblesServerURL = data.BluebubblesServerURL
+			c.BluebubblesPassword = data.BluebubblesPassword
+			c.BluebubblesUserAddress = data.BluebubblesUserAddress
 		default:
 			c.TelegramBotToken = data.TelegramBotToken
 			c.TelegramUserID = data.TelegramUserID
@@ -141,6 +145,17 @@ func (s *Service) RefreshChannelConfig(ctx context.Context, channel string) (str
 		}
 		req.TelegramBotToken = s.config.TelegramBotToken
 		req.TelegramUserID = s.config.TelegramUserID
+	case domain.ChannelIMessage:
+		// All three fields are mandatory: the server URL is where the plugin
+		// dials, the password authenticates every REST call, and the allowed
+		// user address is the filter that pins Intern to the operator's own
+		// iMessage handle (bridge default is deny-all).
+		if s.config.BluebubblesServerURL == "" || s.config.BluebubblesPassword == "" || s.config.BluebubblesUserAddress == "" {
+			return "", ErrSlackCredentialsMissing
+		}
+		req.BluebubblesServerURL = s.config.BluebubblesServerURL
+		req.BluebubblesPassword = s.config.BluebubblesPassword
+		req.BluebubblesUserAddress = s.config.BluebubblesUserAddress
 	default:
 		return "", ErrChannelNotSupported
 	}

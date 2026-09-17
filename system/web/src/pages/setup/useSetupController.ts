@@ -219,6 +219,12 @@ export function useSetupController(mode: SetupMode) {
     slackUserId: !!urlParams.slackUserId,
     discordBotToken: !!urlParams.discordBotToken, discordGuildId: !!urlParams.discordGuildId,
     discordUserId: !!urlParams.discordUserId,
+    // iMessage / BlueBubbles never rides through URL params (secrets in URLs
+    // is a footgun), so these are always false at Setup entry — the operator
+    // pastes them into ChannelSection which then flips these true on next
+    // config load. Included here to keep the object shape aligned with
+    // ChannelLoadedState.
+    bluebubblesServerUrl: false, bluebubblesPassword: false, bluebubblesUserAddress: false,
   });
   const [mqttEndpoint, setMqttEndpoint] = useState("");
   const [mqttPort, setMqttPort] = useState("");

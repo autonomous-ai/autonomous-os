@@ -294,6 +294,10 @@ export interface WifiProvisionBody {
   discord_bot_token?: string;
   discord_guild_id?: string;
   discord_user_id?: string;
+  // iMessage via BlueBubbles — only honored when channel === "imessage".
+  bluebubbles_server_url?: string;
+  bluebubbles_password?: string;
+  bluebubbles_user_address?: string;
 }
 export async function wifiProvision(body: WifiProvisionBody): Promise<boolean> {
   return apiRequest<boolean>(`${API_BASE}/api/device/wifi-provision`, {
@@ -348,6 +352,11 @@ export interface DeviceConfig {
   slack_user_id: string;
   discord_guild_id: string;
   discord_user_id: string;
+  // iMessage via BlueBubbles. Server URL + user address are plain (returned
+  // verbatim); the password is secret and surfaced only through
+  // has_bluebubbles_password below.
+  bluebubbles_server_url: string;
+  bluebubbles_user_address: string;
   llm_model: string;
   llm_base_url: string;
   llm_disable_thinking: boolean;
@@ -383,6 +392,7 @@ export interface DeviceConfig {
   has_slack_bot_token: boolean;
   has_slack_app_token: boolean;
   has_discord_bot_token: boolean;
+  has_bluebubbles_password: boolean;
   has_llm_api_key: boolean;
   has_deepgram_api_key: boolean;
   has_stt_api_key: boolean;
