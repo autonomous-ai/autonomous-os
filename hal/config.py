@@ -1778,6 +1778,16 @@ REALTIME_SUMMARY_MAX_CHARS: int = int(os.environ.get("HAL_REALTIME_SUMMARY_MAX_C
 # cancelled or forgotten — re-feeding it is what let a content-free nudge make
 # Gemini "answer" a stale task from memory (#419, #421). 0 disables.
 REALTIME_SUMMARY_OPEN_REQUEST_TTL_S: int = int(os.environ.get("HAL_REALTIME_SUMMARY_OPEN_REQUEST_TTL_S", "3600"))
+# How long a delegated request counts as "the main agent is still working on
+# it" when no reply has come back. While it is open, every realtime entry point
+# answers a new utterance with a cached "still on it" filler instead of
+# committing it to the model — the model has no tool result and answers a
+# content-free nudge from memory (#419). Closed early by the main-agent reply
+# (feed_realtime_history) and by the physical click. 0 disables the guard.
+REALTIME_MAIN_HANDOFF_TTL_S: float = float(os.environ.get("HAL_REALTIME_MAIN_HANDOFF_TTL_S", "120"))
+# Minimum gap between two "still on it" fillers during one handoff, so a user
+# who keeps talking is not answered with the same phrase every second.
+REALTIME_MAIN_HANDOFF_FILLER_GAP_S: float = float(os.environ.get("HAL_REALTIME_MAIN_HANDOFF_FILLER_GAP_S", "4"))
 # Ceiling for the SOUL+IDENTITY+USER.md identity section of the realtime floor.
 # USER.md/IDENTITY.md are agent-writable, so without this the per-turn floor
 # grows unbounded. Default leaves today's ~9.6k chars untouched.
