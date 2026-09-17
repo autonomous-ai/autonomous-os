@@ -12,13 +12,28 @@ class HarnessGestureError(Exception):
 
 
 def request_voice_toggle(gesture_id: str) -> dict:
+    return _request_voice_gesture({"gestureId": gesture_id})
+
+
+def request_voice_disable(gesture_id: str) -> dict:
+    return _request_voice_gesture({"gestureId": gesture_id, "action": "disable"})
+
+
+def request_focus_step(gesture_id: str, direction: str, generation: int) -> dict:
+    return _request_voice_gesture(
+        {"gestureId": gesture_id, "direction": direction, "generation": generation},
+        url="http://127.0.0.1:5000/api/harness/voice-mode/focus",
+    )
+
+
+def _request_voice_gesture(payload: dict, *, url=OS_HARNESS_GESTURE_URL) -> dict:
     """Send once; a timeout cannot tell whether the OS already committed."""
     try:
         with requests.Session() as session:
             # Local hardware control must never inherit an HTTP proxy.
             session.trust_env = False
-            response = session.post(OS_HARNESS_GESTURE_URL,
-                                    json={"gestureId": gesture_id}, timeout=15,
+            response = session.post(url,
+                                    json=payload, timeout=15,
                                     allow_redirects=False)
         payload = response.json()
         data = payload.get("data") if isinstance(payload, dict) else None

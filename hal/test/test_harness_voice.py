@@ -17,7 +17,7 @@ def test_snapshot_is_explicit_even_when_mode_is_disabled(enabled):
     }}
     with patch.object(harness_voice.requests, "get", return_value=response) as get:
         snapshot = harness_voice.read_voice_mode()
-    assert snapshot == {"enabled": enabled, "generation": 7}
+    assert snapshot == {"enabled": enabled, "generation": 7, "agentId": "agent-a"}
     assert harness_voice.bypass_realtime(snapshot) is enabled
     get.assert_called_once_with(harness_voice.VOICE_MODE_URL, timeout=0.5)
 
@@ -131,7 +131,7 @@ def test_capture_never_opens_or_streams_realtime_for_direct_or_unknown_mode(snap
     service._realtime.send_text.assert_not_called()
     service._realtime.save_main_handoff.assert_not_called()
     realtime.assert_not_called()
-    assert dispatch.call_args.kwargs["harness_voice"] == snapshot
+    dispatch.assert_not_called()
 
 
 def test_live_session_refuses_harness_mode_before_touching_realtime():
@@ -185,8 +185,8 @@ def test_direct_or_unknown_mode_discards_prior_realtime_vision_without_loading(s
 
 
 @pytest.mark.parametrize("enabled,unavailable,focus,expected", [
-    (True, False, False, True),
-    (True, False, True, True),
+    (True, False, False, False),
+    (True, False, True, False),
     (False, False, False, False),
     (False, False, True, True),
     (False, True, False, False),
