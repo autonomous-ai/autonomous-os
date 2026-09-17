@@ -39,6 +39,7 @@ from hal.realtime.utils import StreamingResampler, pcm16_bytes_to_float32, resam
 from hal.drivers.voice._internal import config as voice_cfg
 from hal.drivers.voice._internal.audio_dsp import resample_to_stt, rms
 from hal.drivers.voice._internal.audio_recorder import ArecordStream
+from hal.drivers.voice._internal import realtime_turn as realtime_turn_mod
 from hal.drivers.voice._internal.realtime_turn import (
     ROUTE_DELEGATED,
     ROUTE_NOISE_DROPPED,
@@ -338,6 +339,18 @@ class VoiceService:
         )
         self._realtime.send_text(f"[{marker}] {text}")
         return True
+
+    def release_main_handoff(self, reason: str) -> bool:
+        """Drop the in-flight main handoff (see MainHandoffTracker).
+
+        Called by the physical cancel gesture: the click takes the speaker from
+        the delegated turn, and "click, then say something new" is a documented
+        promise — the guard must not keep answering "still on it" for a reply
+        the user just cancelled. Returns whether a handoff was open.
+        """
+        if not hal_config.REALTIME_ENABLED:
+            return False
+        return self._realtime.close_main_handoff(reason)
 
     def set_music_service(self, music_service) -> None:
         self._music = music_service
@@ -1133,12 +1146,14 @@ class VoiceService:
     # Live (full-duplex) session — the VAD is a doorbell, the model endpoints
     # ------------------------------------------------------------------
     def _live_decision(self, pre_roll: list) -> str:
-        """What this VAD trigger should become: "live", "turn" or "skip".
+        """What this VAD trigger should become: "live", "turn", "hold" or "skip".
 
         "turn" is the fallback that keeps a device answering when realtime is
         down — the turn path still reaches the main agent over STT. "skip"
         costs nothing at all, which is the point: a click must not open a
-        billed live session OR an STT session.
+        billed live session OR an STT session. "hold" is "skip" plus a spoken
+        "still on it": the main agent already has the user's request and is
+        working on it.
 
         Cheap tests first: the last one runs a neural VAD, and the one before
         it can block for a rebuild.
@@ -1170,6 +1185,20 @@ class VoiceService:
         ):
             logger.info("[live] wake focus closed — using STT to check the wake phrase")
             return "turn"
+
+        # #419: a delegated request is still with the main agent. Whatever the
+        # user is saying now, the realtime model must not answer it — it would
+        # "resolve" the pending task from memory. Say we're still on it and
+        # open nothing (no session, no STT): the answer is on its way.
+        #
+        # Placed AFTER the speech and wake-word gates on purpose: those decide
+        # whether this trigger is addressed to the device at all, and chirping
+        # "still on it" at room noise, or at a conversation the user is having
+        # with somebody else, is worse than the bug this guards against.
+        if self._realtime.main_handoff_open():
+            logger.info("[live] main handoff open — holding this trigger, filler instead of a session")
+            realtime_turn_mod.speak_main_pending_filler(self._realtime, "")
+            return "hold"
 
         self._realtime.prepare_turn()
 
@@ -1870,6 +1899,11 @@ class VoiceService:
         if (not voice_cfg.LIVE_MODE or not hal_config.REALTIME_ENABLED
                 or bypass_realtime(harness_voice) or not audio_buffer):
             return False, False
+        held = realtime_turn_mod.hold_for_main_handoff(self._realtime, transcript, interaction_id)
+        if held is not None:
+            # Consumed: the filler is the whole answer. Not dispatched to the
+            # main agent either — it already has the request it is working on.
+            return True, False
         opener = {"key": "", "consumed": False, "transcript": transcript,
                   "interaction_id": interaction_id, "voice_turn_type": voice_turn_type}
         try:

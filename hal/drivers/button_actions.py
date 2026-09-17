@@ -116,6 +116,18 @@ def _cancel_agent_speech(source: str):
     except Exception:
         logger.exception("[voice-metrics] stop boundary hook failed")
 
+    # #419: a delegated request the main agent is still working on would keep
+    # the realtime layer answering "still on it" until its reply or the TTL.
+    # The click is the user's explicit "stop" — release it now so the next
+    # utterance is a normal turn.
+    try:
+        from hal import app_state
+
+        if app_state.voice_service is not None:
+            app_state.voice_service.release_main_handoff("click")
+    except Exception:
+        logger.exception("[%s] main handoff release failed", source)
+
     def _post():
         try:
             requests.post(OS_SPEECH_CANCEL_URL, json={}, timeout=1.0)
