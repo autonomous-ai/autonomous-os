@@ -1224,20 +1224,23 @@ REALTIME_GEMINI_BASE_URL: str = (
     or _RT.get("base_url", "")
     or ((_os_cfg_get("llm_base_url", "").rstrip("/") + "/ws/gemini") if _os_cfg_get("llm_base_url", "") else "")
 )
-# Default to 3.1-flash-live. 2.5 native-audio is ~33% cheaper on text tokens
-# ($0.50 vs $0.75 /M in, same per-turn usage measured on device), but through the
-# campaign-api proxy it returns WS 1011 on a turn that follows an idle pause, so
-# it needs the whole idle-workaround set — including the suppressed
-# mid-activity [TURN CONTEXT], which silently drops the per-turn speaker identity
-# and language reminder (see gemini_needs_idle_workaround() in realtime/config.py).
-# 3.1 has neither problem, so every workaround stays off. Switching back to a
-# *native-audio* model re-enables them automatically, and also requires the
-# language_code-omit fix in gemini_live.py (native-audio rejects an explicit
-# language_code). Override via realtime.gemini.model or HAL_GEMINI_LIVE_MODEL.
-REALTIME_GEMINI_MODEL: str = _rt_str("HAL_GEMINI_LIVE_MODEL", _RT_GEMINI.get("model"), "gemini-3.1-flash-live-preview")
+# Default to 3.8-live-extended-thinking (GA 2026-09-15, same price as 3.1 through
+# 2026-12-31; 3.1-flash-live-preview is now labelled legacy). The non-thinking
+# sibling `gemini-3.8-live` rejects thinkingLevel entirely and the extended one
+# has no MINIMAL — gemini_live._build_config handles both. 2.5 native-audio is
+# ~33% cheaper on text tokens but through the campaign-api proxy it returns WS
+# 1011 on a turn that follows an idle pause, so it needs the whole idle-workaround
+# set — including the suppressed mid-activity [TURN CONTEXT], which silently drops
+# the per-turn speaker identity and language reminder (see
+# gemini_needs_idle_workaround() in realtime/config.py). 3.x has neither problem,
+# so every workaround stays off. Switching back to a *native-audio* model
+# re-enables them automatically, and also requires the language_code-omit fix in
+# gemini_live.py (native-audio rejects an explicit language_code). Override via
+# realtime.gemini.model or HAL_GEMINI_LIVE_MODEL.
+REALTIME_GEMINI_MODEL: str = _rt_str("HAL_GEMINI_LIVE_MODEL", _RT_GEMINI.get("model"), "gemini-3.8-live-extended-thinking")
 REALTIME_GEMINI_VOICE: str = _rt_str("HAL_GEMINI_LIVE_VOICE", _RT_GEMINI.get("voice"), "Kore")
 REALTIME_GEMINI_SAMPLE_RATE: int = 16000
-REALTIME_GEMINI_THINKING_LEVEL: str = _rt_str("HAL_GEMINI_THINKING_LEVEL", _RT_GEMINI.get("thinking_level"), "MINIMAL")
+REALTIME_GEMINI_THINKING_LEVEL: str = _rt_str("HAL_GEMINI_THINKING_LEVEL", _RT_GEMINI.get("thinking_level"), "LOW")
 REALTIME_GEMINI_USE_LANGUAGE_CODES: bool = os.environ.get("HAL_GEMINI_USE_LANGUAGE_CODES", "false").lower() in ("1", "true", "yes")
 # Session resumption lets a reconnect resume the SAME server session (context
 # preserved). It requires the WS endpoint to faithfully forward the resumption

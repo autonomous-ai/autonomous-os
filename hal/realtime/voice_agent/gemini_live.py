@@ -64,6 +64,13 @@ _GEMINI_RATES: dict[str, dict[tuple[str, str], float]] = {
         ("in", "TEXT"): 0.75, ("in", "AUDIO"): 3.0,
         ("out", "TEXT"): 4.5, ("out", "AUDIO"): 12.0,
     },
+    # Promo rates through 2026-12-31 (ai.google.dev pricing, verified 2026-09-17);
+    # Google announced they double afterwards. Covers both `gemini-3.8-live` and
+    # `gemini-3.8-live-extended-thinking` (substring match).
+    "gemini-3.8-live": {
+        ("in", "TEXT"): 0.75, ("in", "AUDIO"): 3.0,
+        ("out", "TEXT"): 4.5, ("out", "AUDIO"): 12.0,
+    },
 }
 # Unknown model → fall back to the entry with the highest text-out rate (the
 # dominant text cost), so a future/untabled model logs a cost CEILING rather than
@@ -230,9 +237,19 @@ class GeminiLiveAgent(VoiceAgentBase):
             thinking_config = types.ThinkingConfig(
                 thinking_budget=budget, include_thoughts=False
             )
+        elif "3.8-live" in self._config.model and "extended-thinking" not in self._config.model:
+            # `gemini-3.8-live` (no reasoning) rejects thinkingLevel outright:
+            # "thinkingLevel is not supported (omit from setup)".
+            thinking_config = None
         else:
+            level = self._config.thinking_level
+            if "extended-thinking" in self._config.model and level == GeminiThinkingLevel.MINIMAL:
+                # 3.8 extended-thinking accepts LOW/MEDIUM/HIGH only; a MINIMAL
+                # carried over from a 3.1 config.json would fail the setup.
+                logger.info("[realtime] thinking_level MINIMAL unsupported on %s — using LOW", self._config.model)
+                level = GeminiThinkingLevel.LOW
             thinking_config = types.ThinkingConfig(
-                thinking_level=self._config.thinking_level.value, include_thoughts=False
+                thinking_level=level.value, include_thoughts=False
             )
 
         live_config: types.LiveConnectConfig = types.LiveConnectConfig(
