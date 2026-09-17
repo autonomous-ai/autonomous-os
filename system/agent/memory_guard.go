@@ -182,8 +182,11 @@ func (g *MemoryGuard) report(path string, act *migratepersona.GuardAction, trigg
 	}
 	sum := migratepersona.Sha8(raw)
 	if act != nil && act.Written {
+		// Record the hash of what WE wrote, not what is on disk now: an agent
+		// write landing between our rename and this read would otherwise be
+		// remembered as our own and skipped until the next rescan.
 		g.mu.Lock()
-		g.lastWritten[path] = sum
+		g.lastWritten[path] = act.WrittenSha8
 		g.mu.Unlock()
 	}
 	quarantined := 0

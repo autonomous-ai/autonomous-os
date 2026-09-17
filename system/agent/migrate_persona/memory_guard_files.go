@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -14,11 +15,22 @@ import (
 // fresh one started, so a runaway agent cannot fill the disk with its own poison.
 const quarantineRotateBytes = 64 * 1024
 
+// guardBackupsKept caps the `.bak-<nano>` copies the guard leaves next to a
+// file. Every trip writes one, and heartbeat churn (a People-sync rewrite
+// every ~30 min) was ~50 files a day in the workspace root; five is enough to
+// recover the last few agent writes and nothing older is worth a support
+// engineer's time. The retire pass keeps its own backups and is not pruned.
+const guardBackupsKept = 5
+
 // GuardAction is one file the guard changed (execute=true) or would change.
 type GuardAction struct {
 	Path    string
 	Dropped []Quarantined
 	Written bool
+	// WrittenSha8 is Sha8 of the content the guard wrote (Written only). The
+	// watcher matches the follow-up fsnotify event against it instead of
+	// re-reading the file, which an agent write could have replaced already.
+	WrittenSha8 string
 }
 
 // MemoryFilePaths returns every runtime's MEMORY.md, deduped and sorted —
@@ -76,6 +88,11 @@ func GuardMemoryFile(path string, enrolled map[string]bool, execute bool) (*Guar
 	if err := backupFile(path); err != nil {
 		return act, fmt.Errorf("backup before quarantine: %w", err)
 	}
+	if err := pruneBackups(path, guardBackupsKept); err != nil {
+		// The backup that matters (this one) is on disk; a leftover old copy
+		// is not worth refusing to clean the file over.
+		slog.Warn("memory guard: prune old backups failed", "component", "memory-guard", "path", path, "error", err)
+	}
 	if err := appendQuarantine(path, dropped); err != nil {
 		return act, fmt.Errorf("write quarantine: %w", err)
 	}
@@ -83,7 +100,40 @@ func GuardMemoryFile(path string, enrolled map[string]bool, execute bool) (*Guar
 		return act, err
 	}
 	act.Written = true
+	act.WrittenSha8 = Sha8([]byte(out))
 	return act, nil
+}
+
+// pruneBackups removes all but the newest keep `<path>.bak-<n>` files, newest
+// meaning the largest numeric suffix (backupFile stamps UnixNano). A file whose
+// suffix is not a number is not ours and is left alone.
+func pruneBackups(path string, keep int) error {
+	matches, err := filepath.Glob(path + ".bak-*")
+	if err != nil {
+		return fmt.Errorf("glob backups: %w", err)
+	}
+	type bak struct {
+		name string
+		n    int64
+	}
+	var baks []bak
+	for _, m := range matches {
+		n, err := strconv.ParseInt(strings.TrimPrefix(m, path+".bak-"), 10, 64)
+		if err != nil {
+			continue
+		}
+		baks = append(baks, bak{name: m, n: n})
+	}
+	if len(baks) <= keep {
+		return nil
+	}
+	sort.Slice(baks, func(i, j int) bool { return baks[i].n > baks[j].n })
+	for _, b := range baks[keep:] {
+		if err := os.Remove(b.name); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove %s: %w", b.name, err)
+		}
+	}
+	return nil
 }
 
 // GuardMemoryFiles sweeps every runtime's USER.md and MEMORY.md. Every runtime,

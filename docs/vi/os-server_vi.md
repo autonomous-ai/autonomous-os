@@ -928,12 +928,18 @@ deterministic của lệnh cấm đó.
   trống, gợi ý in nghiêng, rule, link, các câu của chính template), các field
   đơn đã điền (`Name` v.v. — retire pass quản phần này) và các entry dạng
   `**<label> (role)** — key: value; …`. Trong một entry, đoạn nào có giá trị gọi
-  tên tool/app/endpoint/file (`obsidian`, `terminal`, `curl`, `/servo/…`,
-  `*.md`, …) hoặc ra chỉ thị hành vi (`always`, `never`, `use`, `instead of`,
-  `match the`, `hands-on`, `works best`, …) sẽ bị gỡ. Entry của một label không
-  có thư mục enrollment sẽ bị gỡ (bỏ qua bước này khi store rỗng hoặc không đọc
-  được). **Mọi thứ còn lại bị quarantine** — một `**Notes:**` đã điền, một bullet
-  tự do, một đoạn văn.
+  tên một tool mà agent có thể dùng để hành động (`obsidian`, `terminal`,
+  `curl`, `/servo/…`, `*.md`, …) hoặc được viết như một mệnh lệnh — trạng từ
+  chỉ thị đi kèm động từ (`never use`, `always run`), động từ mệnh lệnh đứng
+  đầu đoạn (`skip greetings`, `run a full scan…`), `instead of`, `match the`,
+  `hands-on`, `works best`, … — sẽ bị gỡ. Rule cho đoạn cố ý hẹp hơn rule của
+  `MEMORY.md`: heartbeat People-sync ghi lại các đoạn này mỗi ~30 phút, nên
+  một lần bắt nhầm ở đây sẽ thành vòng lặp ghi. Thói quen và sự thật chỉ chứa
+  `always`/`never`/`should` (`always at the desk by 9`, `never drinks coffee`)
+  hoặc một danh từ chung (`learning python`, `has a dog named Git`, `an old
+  camera`) được giữ lại. Entry của một label không có thư mục enrollment sẽ bị
+  gỡ (bỏ qua bước này khi store rỗng hoặc không đọc được). **Mọi thứ còn lại bị
+  quarantine** — một `**Notes:**` đã điền, một bullet tự do, một đoạn văn.
 - **`MEMORY.md` — chỉ xét nội dung.** Một block bị quarantine khi nó gọi tên
   tool/endpoint **và** ra chỉ thị ("Full-room scan works best as curl-driven
   aim + look per direction"). Quan sát thuần được giữ, nhắc tới tool mà không
@@ -942,9 +948,10 @@ deterministic của lệnh cấm đó.
   guard tách theo ký tự đó và nối lại đúng như vậy.
 - **Chỉ ghi khi có thay đổi.** File sạch round-trip từng byte và không bị ghi
   (`USER.md` nằm trong prefix prompt được cache). Khi có thứ bị gỡ: bản sao
-  `.bak-<nano>`, các block bị gỡ được nối vào `<file>.quarantine.txt` (xoay vòng
-  khi quá 64 KB) kèm lý do (`free-prose`, `unknown-label`, `prescriptive`), rồi
-  ghi atomic bằng temp+rename.
+  `.bak-<nano>` (mỗi file chỉ giữ 5 bản backup mới nhất của guard), các block
+  bị gỡ được nối vào `<file>.quarantine.txt` (xoay vòng sang
+  `.quarantine.txt.1` khi quá 64 KB) kèm lý do (`free-prose`, `unknown-label`,
+  `prescriptive`), rồi ghi atomic bằng temp+rename.
 - **Mặc định bật.** `memory_guard: false` trong `config.json` chuyển sang chế độ
   chỉ quan sát (log thứ nó định gỡ).
 - Mỗi thay đổi quan sát được đều phát một flow event `memory_changed` (file,

@@ -1,8 +1,10 @@
 package migratepersona
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -115,5 +117,50 @@ func TestQuarantinePathNeverEndsInMarkdown(t *testing.T) {
 	}
 	if !strings.HasPrefix(got, p+".quarantine") {
 		t.Errorf("sidecar must sit next to its file, got %q", got)
+	}
+}
+
+// TestGuardMemoryFilePrunesOldBackups covers F4: every trip writes a
+// `.bak-<nano>`, and heartbeat churn made that ~50 files a day. Only the
+// newest guardBackupsKept survive, and the one just written is among them.
+func TestGuardMemoryFilePrunesOldBackups(t *testing.T) {
+	_, path := seedDevice(t, cleanUserMD+greenLampPoison, "long")
+	// Seven stale backups with ascending numeric suffixes, all older than
+	// anything the guard will write now (UnixNano is ~1.7e18).
+	for i := 1; i <= 7; i++ {
+		name := fmt.Sprintf("%s.bak-%d", path, 1000+i)
+		if err := os.WriteFile(name, []byte("old"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	act, err := GuardMemoryFile(path, map[string]bool{"long": true}, true)
+	if err != nil || act == nil || !act.Written {
+		t.Fatalf("guard must trip and write, got %+v err=%v", act, err)
+	}
+	baks, _ := filepath.Glob(path + ".bak-*")
+	if len(baks) != guardBackupsKept {
+		t.Fatalf("want exactly %d backups after prune, got %d: %v", guardBackupsKept, len(baks), baks)
+	}
+	sort.Strings(baks)
+	// Survivors are the newest: fake 1004..1007 plus the fresh one. The
+	// numeric-suffix sort must not be fooled by string order.
+	for _, want := range []string{"1004", "1005", "1006", "1007"} {
+		if _, err := os.Stat(path + ".bak-" + want); err != nil {
+			t.Errorf("newest fake backup .bak-%s must survive: %v", want, err)
+		}
+	}
+	for _, gone := range []string{"1001", "1002", "1003"} {
+		if _, err := os.Stat(path + ".bak-" + gone); !os.IsNotExist(err) {
+			t.Errorf("oldest fake backup .bak-%s must be pruned", gone)
+		}
+	}
+	fresh := 0
+	for _, b := range baks {
+		if data, _ := os.ReadFile(b); string(data) != "old" {
+			fresh++
+		}
+	}
+	if fresh != 1 {
+		t.Errorf("the just-written backup must be among the survivors, found %d fresh", fresh)
 	}
 }

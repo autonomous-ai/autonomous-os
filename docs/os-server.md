@@ -945,11 +945,18 @@ such writes; this is the deterministic version.
   `**Field:**` slots, italic hints, rules, links, the template's own sentences),
   filled singular fields (`Name` etc. — the retire pass owns those) and
   `**<label> (role)** — key: value; …` entries. Inside an entry a segment whose
-  value names a tool/app/endpoint/file (`obsidian`, `terminal`, `curl`,
-  `/servo/…`, `*.md`, …) or prescribes behaviour (`always`, `never`, `use`,
-  `instead of`, `match the`, `hands-on`, `works best`, …) is removed. An entry
-  for a label with no enrollment directory is removed (skipped when the store is
-  empty or unreadable). **Everything else is quarantined** — a filled
+  value names a tool the agent could act with (`obsidian`, `terminal`, `curl`,
+  `/servo/…`, `*.md`, …) or is phrased as an instruction — a directive adverb
+  followed by a verb (`never use`, `always run`), a bare imperative at the
+  head of the segment (`skip greetings`, `run a full scan…`), `instead of`,
+  `match the`, `hands-on`, `works best`, … — is removed. Segment rules are
+  deliberately narrower than the `MEMORY.md` rule: the People-sync heartbeat
+  re-adds these segments every ~30 min, so a false positive there would be a
+  write loop. Habits and facts that merely contain `always`/`never`/`should`
+  (`always at the desk by 9`, `never drinks coffee`) or a generic noun
+  (`learning python`, `has a dog named Git`, `an old camera`) are kept. An
+  entry for a label with no enrollment directory is removed (skipped when the
+  store is empty or unreadable). **Everything else is quarantined** — a filled
   `**Notes:**`, a free bullet, a paragraph.
 - **`MEMORY.md` — content rule only.** A block is quarantined when it names a
   tool/endpoint **and** prescribes ("Full-room scan works best as curl-driven
@@ -959,8 +966,9 @@ such writes; this is the deterministic version.
   guard splits on that and rejoins the same way.
 - **Writes only on change.** A clean file round-trips byte for byte and is not
   written (`USER.md` is in the cached prompt prefix). When something is removed:
-  `.bak-<nano>` copy, the removed blocks appended to `<file>.quarantine.txt`
-  (rotated at 64 KB) with a reason (`free-prose`, `unknown-label`,
+  `.bak-<nano>` copy (only the newest 5 guard backups per file are kept), the
+  removed blocks appended to `<file>.quarantine.txt` (rotated at 64 KB to
+  `.quarantine.txt.1`) with a reason (`free-prose`, `unknown-label`,
   `prescriptive`), then an atomic temp+rename write.
 - **Default on.** `memory_guard: false` in `config.json` makes it observe-only
   (log what it would remove).

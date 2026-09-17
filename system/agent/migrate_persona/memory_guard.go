@@ -70,6 +70,48 @@ var prescriptiveRe = regexp.MustCompile(`(?i)(?:\b(?:` +
 func namesToolOrEndpoint(s string) bool { return toolRefRe.MatchString(s) }
 func prescribesBehaviour(s string) bool { return prescriptiveRe.MatchString(s) }
 
+// WHY `## Users` SEGMENTS GET THEIR OWN, NARROWER RULES. A MEMORY.md block
+// trips only when BOTH halves match (isPoisonForMemory), so a broad word list
+// on either side is safe there. A `## Users` segment trips on EITHER half
+// alone (guardUsersEntry), and those segments are exactly what the People-sync
+// heartbeat re-adds every ~30 min from the enrollment store: a false positive
+// is not one bad strip but a write loop — new .bak, new sidecar entry, red
+// badge, forever. "always at the desk by 9", "never drinks coffee", "has a dog
+// named Git", "learning python at school" are ordinary facts about a person
+// and must survive. So the segment rules keep only the phrasing that is
+// unambiguously an instruction: a tool the AGENT would act with (not a hobby
+// camera or a pet named Git), a directive adverb followed by a verb ("never
+// use", "always run"), or a bare imperative at the start of the segment.
+
+// segmentToolRefRe is toolRefRe without the words that are as often a fact
+// about the person as a tool for the agent: python, git, node, model,
+// notebook, camera, prompt. Shell/CLI/endpoint/file references stay.
+var segmentToolRefRe = regexp.MustCompile(`(?i)(?:` +
+	`\b(?:obsidian|vault|terminal|shell|bash|zsh|exec|curl|wget|ssh|sudo|systemctl|journalctl|pip|npm|docker|cron|cli|api|endpoint|skills?|tools?|commands?|scripts?|llm|servo|mqtt)\b` +
+	`|(?:^|[\s(` + "`" + `"'])/[a-z][a-z0-9_-]*(?:/[a-z0-9_{}.-]+)+` + // an endpoint path like /servo/search
+	`|\b[a-z0-9_-]+\.(?:md|py|sh|json|ya?ml|js|ts)\b` + // a file name
+	`|/dev/` +
+	`)`)
+
+// segmentPrescriptiveRe is prescriptiveRe without the bare modals and adverbs
+// (always/never/must/should/prefers to/when asked) that describe a habit as
+// readily as they give an order. always/never/should/must still count — but
+// only when a verb follows them (the imperative-position alternative), which
+// is how an order is actually phrased. The verb list is wider than
+// prescriptiveRe's for the same reason the adverbs are gone: "say", "reply",
+// "keep", "be" at the head of a segment are instructions, not facts.
+var segmentPrescriptiveRe = regexp.MustCompile(`(?i)(?:\b(?:` +
+	`do not|don'?t|instead of|rather than` +
+	`|match(?:ing)? the|respond(?:ing)? in|repl(?:y|ying) in|answer(?:ing)? in|speak(?:ing)? in` +
+	`|hands[- ]on|wants? .{0,40}\bdone|works? best` +
+	`|be (?:brief|concise|short|direct)|keep (?:it|replies|answers)` +
+	`)\b` +
+	`|(?:^|[.;:!]\s+|\b(?:always|never|just|please|should|must|only|then)\s+)(?:use|run|call|try|avoid|skip|do|say|reply|respond|answer|speak|match|keep|be)\b` +
+	`)`)
+
+func segmentNamesTool(s string) bool           { return segmentToolRefRe.MatchString(s) }
+func segmentPrescribesBehaviour(s string) bool { return segmentPrescriptiveRe.MatchString(s) }
+
 // isPoisonForMemory is the MEMORY.md rule: a line that names a tool/endpoint
 // AND says what to do belongs in a skill or nowhere ("Full-room scan works best
 // as curl-driven aim + look per direction" is the shape to refuse). Either half
@@ -240,9 +282,11 @@ func isUserProfileScaffolding(text string) bool {
 }
 
 // guardUsersEntry filters the `key: value; …` segments of a `**label (role)**`
-// entry. A segment whose value names a tool/endpoint or prescribes behaviour is
-// dropped; the rest are kept in order. Returns the input unchanged when nothing
-// was dropped so a clean entry is not re-serialised.
+// entry. A segment whose value names a tool/endpoint or prescribes behaviour
+// (segment rules — see segmentToolRefRe / segmentPrescriptiveRe for why they
+// are narrower than the MEMORY.md ones) is dropped; the rest are kept in
+// order. Returns the input unchanged when nothing was dropped so a clean entry
+// is not re-serialised.
 func guardUsersEntry(text string) (string, []Quarantined) {
 	head := usersBlockRe.FindString(text)
 	rest := strings.TrimLeft(strings.TrimSpace(text[len(head):]), "—–-: ")
@@ -258,11 +302,13 @@ func guardUsersEntry(text string) (string, []Quarantined) {
 		}
 		value := seg
 		// `call: Anh Long` — judge the value, not the key (the key "call" would
-		// otherwise trip the "call the/a/it" directive pattern).
+		// otherwise trip the "call the/a/it" directive pattern). Trim it: the
+		// imperative-position branch anchors on `^`, and the space after the
+		// colon used to hide "notes: run a full scan…" from it.
 		if k, v, ok := strings.Cut(seg, ":"); ok && len(strings.Fields(k)) <= 3 {
-			value = v
+			value = strings.TrimSpace(v)
 		}
-		if namesToolOrEndpoint(value) || prescribesBehaviour(value) {
+		if segmentNamesTool(value) || segmentPrescribesBehaviour(value) {
 			dropped = append(dropped, Quarantined{Text: seg, Reason: ReasonPrescriptive})
 			continue
 		}

@@ -91,3 +91,27 @@ func countBackups(t *testing.T, path string) int {
 	m, _ := filepath.Glob(path + ".bak-*")
 	return len(m)
 }
+
+// TestReportRecordsTheHashItWroteNotWhatIsOnDisk covers F6: between the
+// guard's rename and report(), an agent can already have replaced the file.
+// Reading it back would record the AGENT's hash as our own write, and the
+// next watch event for that content would be skipped until the 10-min rescan.
+func TestReportRecordsTheHashItWroteNotWhatIsOnDisk(t *testing.T) {
+	g, path := seedGuard(t, "- **Name:**\n")
+	ours := "- **Name:**\n"
+	agent := "- **Name:**\n" + poison
+	// Simulate the race: the file on disk is already the agent's write.
+	if err := os.WriteFile(path, []byte(agent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	act := &migratepersona.GuardAction{Path: path, Written: true, WrittenSha8: migratepersona.Sha8([]byte(ours))}
+	g.report(path, act, "watch")
+	if got := g.lastWritten[path]; got != migratepersona.Sha8([]byte(ours)) {
+		t.Fatalf("lastWritten must be the hash of what the guard wrote, got %q (disk=%q)", got, migratepersona.Sha8([]byte(agent)))
+	}
+	// And so the agent's write is NOT mistaken for our own: onChange sweeps it.
+	g.onChange(path, "watch")
+	if got, _ := os.ReadFile(path); strings.Contains(string(got), "Obsidian") {
+		t.Fatalf("agent write in the race window must still be swept:\n%s", got)
+	}
+}
