@@ -3,11 +3,12 @@ import { C, LockedField, LockedPasswordField, SectionCard } from "@/components/s
 import { getRealtimeOptions } from "@/lib/api";
 import type { LlmLoadedState } from "@/hooks/setup/types";
 
-// Realtime voice-agent (Gemini Live / OpenAI Realtime) config. Values map 1:1 to
-// the config.json `realtime` block (HAL reads it; os-server restarts HAL on save).
-// Voice + reasoning are provider-specific — keep these lists in sync with
-// system/server/config/realtime.go (ValidateRealtimeKnobs) and the HAL enums.
-const PROVIDERS = ["gemini", "openai", "qwen", "none"];
+// Realtime voice-agent (Gemini Live / OpenAI Realtime / GPT-Live) config. Values
+// map 1:1 to the config.json `realtime` block (HAL reads it; os-server restarts
+// HAL on save). Voice + reasoning are provider-specific — keep these lists in
+// sync with system/server/config/realtime.go (ValidateRealtimeKnobs) and the
+// HAL enums.
+const PROVIDERS = ["gemini", "openai", "gptlive", "none"];
 
 // Display labels for the Provider dropdown. Values on the wire stay lowercase
 // (server-side switch keys off "gemini" / "openai" / …); only the human-facing
@@ -16,7 +17,7 @@ const PROVIDERS = ["gemini", "openai", "qwen", "none"];
 const PROVIDER_LABEL: Record<string, string> = {
   gemini: "Gemini",
   openai: "OpenAI",
-  qwen: "Qwen",
+  gptlive: "GPT-Live",
   none: "None",
 };
 const displayProvider = (v: string): string =>
@@ -24,14 +25,21 @@ const displayProvider = (v: string): string =>
 const VOICES: Record<string, string[]> = {
   gemini: ["Puck", "Charon", "Kore", "Fenrir", "Aoede"],
   openai: ["alloy", "ash", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer"],
-  qwen: ["Cherry", "Serena", "Ethan", "Chelsie"],
+  // GPT-Live: the BuiltInVoice literal of openai SDK 3.14.1 (openai.types.live).
+  // The voices gpt-live-1 accepts (BFF integration doc); Realtime-only names
+  // such as alloy/ash are rejected at session.start and must not appear here.
+  gptlive: [
+    "marin", "quartz", "ripple", "vesper", "willow", "stone", "gleam",
+    "meridian", "bossa", "tempo", "beacon", "delta", "cinder",
+  ],
 };
 // Reasoning depth = cost knob. First entry (cheapest) is the default.
-// qwen realtime has no reasoning knob → empty list hides the selector.
+// GPT-Live has no reasoning knob (the Live model exposes none) → empty list
+// hides the selector.
 const REASONING: Record<string, string[]> = {
   gemini: ["MINIMAL", "LOW", "MEDIUM", "HIGH"],
   openai: ["minimal", "low", "medium", "high", "xhigh"],
-  qwen: [],
+  gptlive: [],
 };
 
 export interface RealtimeLoadedState {
@@ -88,7 +96,7 @@ export function RealtimeSection({
     <SectionCard id="realtime" title="Realtime" active={active}>
       <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, cursor: "pointer", fontSize: 12.5, color: C.text }}>
         <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
-        Enabled (audio-native brain — Gemini Live / OpenAI Realtime / Qwen Omni Realtime)
+        Enabled (audio-native brain — Gemini Live / OpenAI Realtime / GPT-Live)
       </label>
       <div style={{ marginBottom: 12 }}>
         <label htmlFor="realtime_provider" style={labelStyle}>Provider</label>

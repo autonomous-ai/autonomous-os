@@ -69,7 +69,7 @@ The ordinary dependency list, credited by being in the manifests rather than her
 gorilla/websocket, discordgo, paho, wire, fsnotify, go-yaml and the Go standard extras
 (`go.mod`); FastAPI, uvicorn, numpy, scipy, onnxruntime, OpenCV, Pillow, pydantic,
 sounddevice, webrtcvad, LiveKit Agents and the vendor API clients — OpenAI, Google
-GenAI, Anthropic, Deepgram, ElevenLabs, Qwen (`hal/pyproject.toml`); React, Vite,
+GenAI, Anthropic, Deepgram, ElevenLabs (`hal/pyproject.toml`); React, Vite,
 Tailwind, Radix, framer-motion, chart.js and xterm (`system/web/package.json`).
 
 ## Speech the robot makes itself

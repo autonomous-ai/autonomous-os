@@ -46,28 +46,15 @@ func applyRealtimeSet(c *config.Config, d domain.RealtimeSetData) {
 	if d.Provider != "" {
 		rt.Provider = strings.ToLower(strings.TrimSpace(d.Provider))
 	}
-	// Credentials are provider-routed: qwen keeps its own api_key/base_url in
-	// the qwen sub-object (HAL deliberately ignores the shared fields for qwen
-	// — they hold the campaign-api credentials used by gemini/openai).
-	if strings.ToLower(strings.TrimSpace(rt.Provider)) == "qwen" {
-		if d.APIKey != "" || d.BaseURL != "" {
-			if rt.Qwen == nil {
-				rt.Qwen = &config.QwenRealtime{}
-			}
-			if d.APIKey != "" {
-				rt.Qwen.APIKey = d.APIKey
-			}
-			if d.BaseURL != "" {
-				rt.Qwen.BaseURL = d.BaseURL
-			}
-		}
-	} else {
-		if d.APIKey != "" {
-			rt.APIKey = d.APIKey
-		}
-		if d.BaseURL != "" {
-			rt.BaseURL = d.BaseURL
-		}
+	// Credentials live in the shared api_key/base_url fields (empty → HAL falls
+	// back to the LLM credentials), regardless of which provider is active —
+	// gptlive included (HAL reads the shared key; its base_url is never derived
+	// from llm_base_url, so an empty override means api.openai.com).
+	if d.APIKey != "" {
+		rt.APIKey = d.APIKey
+	}
+	if d.BaseURL != "" {
+		rt.BaseURL = d.BaseURL
 	}
 	if d.Model == "" && d.Voice == "" && d.Reasoning == "" {
 		return
@@ -99,15 +86,15 @@ func applyRealtimeSet(c *config.Config, d domain.RealtimeSetData) {
 		if d.Reasoning != "" {
 			rt.OpenAI.ReasoningEffort = d.Reasoning
 		}
-	case "qwen":
-		if rt.Qwen == nil {
-			rt.Qwen = &config.QwenRealtime{}
+	case "gptlive":
+		if rt.GPTLive == nil {
+			rt.GPTLive = &config.GPTLiveRealtime{}
 		}
 		if d.Model != "" {
-			rt.Qwen.Model = d.Model
+			rt.GPTLive.Model = d.Model
 		}
 		if d.Voice != "" {
-			rt.Qwen.Voice = d.Voice
+			rt.GPTLive.Voice = d.Voice
 		}
 		// no reasoning knob — validateRealtimeSet already rejected it
 	}

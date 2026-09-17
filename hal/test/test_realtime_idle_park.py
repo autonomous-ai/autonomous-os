@@ -66,10 +66,25 @@ def test_threshold_zero_disables(monkeypatch):
 
 
 def test_non_gemini_provider_untouched(monkeypatch):
+    """OpenAI Realtime bills per token: an idle session is free, leave it open."""
     o = _orch(monkeypatch, idle_s=900)
     monkeypatch.setattr(hal_config, "REALTIME_PROVIDER", "openai", raising=False)
     o._maybe_park_idle_session()
     assert o._agent.disconnected == 0
+
+
+def test_gptlive_parks_on_its_own_threshold(monkeypatch):
+    """GPT-Live bills per session-minute while idle — park it like Gemini, but
+    on REALTIME_GPTLIVE_IDLE_PARK_S, not the Gemini knob."""
+    o = _orch(monkeypatch, idle_s=40, threshold=45.0)
+    monkeypatch.setattr(hal_config, "REALTIME_PROVIDER", "gptlive", raising=False)
+    monkeypatch.setattr(hal_config, "REALTIME_GPTLIVE_IDLE_PARK_S", 30.0, raising=False)
+    o._maybe_park_idle_session()
+    assert o._agent.disconnected == 1 and o._idle_parked
+    o2 = _orch(monkeypatch, idle_s=40)
+    monkeypatch.setattr(hal_config, "REALTIME_GPTLIVE_IDLE_PARK_S", 0.0, raising=False)
+    o2._maybe_park_idle_session()
+    assert o2._agent.disconnected == 0  # 0 disables
 
 
 def test_turn_in_flight_blocks_park(monkeypatch):
