@@ -32,6 +32,12 @@ type RealtimeConfig struct {
 	Gemini   *GeminiRealtime `json:"gemini,omitempty" yaml:"gemini"`
 	OpenAI   *OpenAIRealtime `json:"openai,omitempty" yaml:"openai"`
 	Qwen     *QwenRealtime   `json:"qwen,omitempty" yaml:"qwen"`
+	// Pinned is set the first time an operator edits this block (web UI / MQTT
+	// realtime.set). Until then the block is a fleet default: os-server rewrites
+	// it from DefaultRealtimeConfig on every start, so changing the defaults in
+	// code (e.g. gemini → openai) reaches every device that never chose. A
+	// pinned block is never touched again. See ProvideConfig in config.go.
+	Pinned bool `json:"pinned,omitempty" yaml:"pinned"`
 }
 
 // GeminiRealtime holds Gemini Live's provider-specific knobs. Empty fields → HAL

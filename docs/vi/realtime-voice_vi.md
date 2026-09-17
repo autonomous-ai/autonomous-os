@@ -1603,8 +1603,12 @@ cho dev và default built-in là sàn. Thứ tự ưu tiên mỗi knob:
 biến HAL_*  >  block "realtime" trong config.json  >  default built-in
 ```
 
-os-server **seed** block này vào `config.json` lúc start lần đầu — và khi upgrade
-nếu thiếu — nên file luôn có realtime config sửa được. HAL **tự đọc** trực tiếp
+os-server **seed** block này vào `config.json` và giữ nó bằng default trong code
+(`DefaultRealtimeConfig`) mỗi lần start **cho tới khi operator sửa**: mọi lần ghi
+qua web UI / MQTT `realtime.set` đặt `realtime.pinned: true`, từ đó os-server
+không đụng block nữa. Nên đổi default fleet (vd gemini → openai) tới mọi máy chưa
+từng chọn, còn máy đã chọn thì giữ. Muốn bỏ pin thì xoá `pinned` khỏi
+`config.json`. HAL **tự đọc** trực tiếp
 (giống `llm_api_key` / `stt_language`), không push xuống. Vì HAL đọc `config.json`
 lúc import, đổi config phải **restart HAL** mới ăn. Sửa lúc đang chạy thì restart
 liền (`restartHAL` trong `system/device/service.go`).
