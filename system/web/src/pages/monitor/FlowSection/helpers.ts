@@ -1771,13 +1771,30 @@ export interface TurnMemoryInfo {
   // Fingerprint attached at lifecycle_start: file → {size, sha8}.
   files: Record<string, { size: number; sha8: string }>;
   // memory_changed events that landed inside this turn (the agent wrote memory).
-  changed: { file: string; quarantined: number; reasons: string[] }[];
+  // `execute` is the guard's mode: true = the quarantined blocks were really
+  // removed; false = observe-only (`agent.memory_guard=false`), the file still
+  // carries them and `quarantined` is what the guard WOULD have removed.
+  changed: { file: string; quarantined: number; reasons: string[]; execute: boolean }[];
+}
+
+// Fixed display order for the memory fingerprint — the order the runtime loads
+// them in, not Object.entries order, so a glance across turn cards compares
+// like with like.
+export const MEMORY_FILE_ORDER = ["USER.md", "MEMORY.md", "KNOWLEDGE.md"] as const;
+
+export function orderedMemoryFiles(
+  files: TurnMemoryInfo["files"],
+): [string, { size: number; sha8: string }][] {
+  const known = MEMORY_FILE_ORDER.filter((n) => n in files).map((n) => [n, files[n]] as [string, { size: number; sha8: string }]);
+  const rest = Object.entries(files).filter(([n]) => !(MEMORY_FILE_ORDER as readonly string[]).includes(n));
+  return [...known, ...rest];
 }
 
 // Memory the turn ran with, and whether it wrote any. Both come from flow
 // events: `lifecycle_start.data.memory` (published by the OS memory guard) and
-// `memory_changed` (emitted by its fsnotify watch, tagged with the current
-// trace). Null when neither is present (older os-server, or no guard yet).
+// `memory_changed` (emitted by its fsnotify watch ~2 s after the write, tagged
+// with whatever trace is active then — or trace-less if the turn has already
+// ended). Null when neither is present (older os-server, or no guard yet).
 export function turnMemoryState(turn: Turn): TurnMemoryInfo | null {
   let files: TurnMemoryInfo["files"] | null = null;
   const changed: TurnMemoryInfo["changed"] = [];
@@ -1793,6 +1810,8 @@ export function turnMemoryState(turn: Turn): TurnMemoryInfo | null {
         file: String(data.file ?? ""),
         quarantined: Number(data.quarantined ?? 0),
         reasons: Array.isArray(data.reasons) ? data.reasons.map(String) : [],
+        // Missing on an older os-server that always executed: default true.
+        execute: data.execute === undefined ? true : Boolean(data.execute),
       });
     }
   }

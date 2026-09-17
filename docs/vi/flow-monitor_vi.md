@@ -261,17 +261,21 @@ cả ngày vì không có gì cho thấy turn đó chạy với memory nào. Hai
   fingerprint do memory guard của OS publish (`docs/os-server.md`, mục "Memory
   guard"). Chỉ có size và 8 hex đầu của sha256; không bao giờ có nội dung.
 - `memory_changed` (kind `event`) được guard emit từ fsnotify watch mỗi khi có
-  ghi vào `USER.md` / `MEMORY.md` của bất kỳ runtime nào, gắn trace hiện tại để
-  nó rơi đúng vào turn đã ghi. Data: `file`, `runtime`, `path`, `size`, `sha8`,
-  `quarantined` (số block bị gỡ), `reasons`
-  (`free-prose` | `unknown-label` | `prescriptive`), `execute`, `trigger`
-  (`startup` | `watch` | `rescan`).
+  ghi vào `USER.md` / `MEMORY.md` của bất kỳ runtime nào. Event phát ra ~2 s
+  sau lần ghi (debounce) và gắn trace đang active tại thời điểm đó — thường là
+  turn đã ghi, nhưng có thể là turn sau nếu turn mới đã bắt đầu, hoặc không có
+  trace nếu turn đã kết thúc. Data: `file`, `runtime`, `path`, `size`, `sha8`,
+  `quarantined` (số block bị gỡ — hoặc, khi `execute` là false, số block guard
+  lẽ ra đã gỡ), `reasons` (`free-prose` | `unknown-label` | `prescriptive`),
+  `execute` (false ở chế độ chỉ quan sát, `agent.memory_guard=false`),
+  `trigger` (`startup` | `watch` | `rescan`).
 
-Footer của turn card hiện `USER 2.1k MEMORY 0.4k`; khi trong turn có event
-`memory_changed` thì nối thêm `✎ memory changed` (màu amber), và
-`· N quarantined` màu đỏ khi guard đã gỡ gì đó. Hover để xem size/hash từng
-file và reasons. So `sha8` giữa hai turn cho biết memory có thay đổi giữa hai
-turn đó hay không.
+Footer của turn card hiện fingerprint theo thứ tự cố định `USER 2.1k MEMORY
+0.4k KNOWLEDGE 1.0k`; khi trong turn có event `memory_changed` thì nối thêm
+`✎ memory changed` (màu amber), và `· N quarantined` màu đỏ chỉ khi guard thật
+sự đã gỡ gì đó (`execute` true). Ở chế độ chỉ quan sát badge vẫn amber và ghi
+`· would quarantine N`. Hover để xem size (bytes) / hash từng file và reasons.
+So `sha8` giữa hai turn cho biết memory có thay đổi giữa hai turn đó hay không.
 
 ## Issue đang mở
 

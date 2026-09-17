@@ -8,7 +8,7 @@ import type { Turn } from "./types";
 import { TYPE_LUCIDE, TURN_INPUT_FALLBACK } from "./types";
 import { HW } from "../types";
 import { useTheme } from "@/lib/useTheme";
-import { turnIO, turnTokenStats, turnMemoryState, turnCurrentUser, externalHistory, turnDisplayType } from "./helpers";
+import { turnIO, turnTokenStats, turnMemoryState, orderedMemoryFiles, turnCurrentUser, externalHistory, turnDisplayType } from "./helpers";
 import { PoseBucketModal } from "./PoseBucketModal";
 import { UserAvatar } from "./UserAvatar";
 
@@ -513,11 +513,19 @@ export function TurnBadge({ turn, pairTint, userPhotos, onViewPipeline }: {
           );
         })()}
         {memory && (() => {
-          const files = Object.entries(memory.files);
-          const quarantined = memory.changed.reduce((n, c) => n + c.quarantined, 0);
+          const files = orderedMemoryFiles(memory.files);
+          // Red only when blocks were really removed. In observe mode the
+          // guard reports what it WOULD remove but the file is untouched, so
+          // that count is a warning, not a removal.
+          const quarantined = memory.changed.reduce((n, c) => n + (c.execute ? c.quarantined : 0), 0);
+          const wouldQuarantine = memory.changed.reduce((n, c) => n + (c.execute ? 0 : c.quarantined), 0);
           const title = [
-            ...files.map(([name, f]) => `${name} ${f.size} chars · ${f.sha8}`),
-            ...memory.changed.map((c) => `${c.file} changed${c.quarantined ? ` — ${c.quarantined} block(s) quarantined: ${c.reasons.join(", ")}` : ""}`),
+            ...files.map(([name, f]) => `${name} ${f.size} bytes · ${f.sha8}`),
+            ...memory.changed.map((c) => {
+              if (!c.quarantined) return `${c.file} changed`;
+              const verb = c.execute ? "quarantined" : "would quarantine (observe mode)";
+              return `${c.file} changed — ${verb} ${c.quarantined} block(s): ${c.reasons.join(", ")}`;
+            }),
           ].join("\n") || "memory";
           // Amber when the agent wrote memory during this turn, red when the
           // guard had to quarantine part of it — the two states #421 made
@@ -525,12 +533,15 @@ export function TurnBadge({ turn, pairTint, userPhotos, onViewPipeline }: {
           const color = quarantined > 0 ? "var(--lm-red)"
             : memory.changed.length > 0 ? "var(--lm-amber)"
             : "var(--lm-text-muted)";
+          const suffix = quarantined > 0 ? ` · ${quarantined} quarantined`
+            : wouldQuarantine > 0 ? ` · would quarantine ${wouldQuarantine}`
+            : "";
           return (
             <span title={title} style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
               <span style={{ opacity: 0.4 }}>·</span>
               <span style={{ color, fontWeight: 600 }}>
                 {files.map(([name, f]) => `${name.replace(".md", "")} ${fmtToken(f.size)}`).join(" ")}
-                {memory.changed.length > 0 && ` ✎ memory changed${quarantined > 0 ? ` · ${quarantined} quarantined` : ""}`}
+                {memory.changed.length > 0 && ` ✎ memory changed${suffix}`}
               </span>
             </span>
           );
