@@ -53,7 +53,7 @@
   },
   "_comment_button_led": "Button hold-warning and Harness confirmation RGB channels are capped at 3 for the low-glare device test. The driver distinguishes shutdown and factory reset through blink versus solid, not hue.",
   "button_led": {
-    "harness_on":     { "effect": "breathing_fine", "color": [2, 3, 0], "speed": 0.6 },
+    "harness_on":     { "effect": "breathing_fine", "color": [3, 1, 0], "speed": 0.6 },
     "harness_off":    { "effect": "blink", "color": [2, 2, 2], "speed": 1.0, "duration_ms": 300 },
     "sleep_warn":     { "color": [2, 1, 3] },
     "shutdown_warn":  { "color": [3, 0, 0] },
