@@ -1,5 +1,6 @@
 """Regression coverage for main-agent handoffs surviving a Gemini session swap."""
 
+from hal.realtime.main_handoff import MainHandoffTracker
 from hal.realtime.orchestrator import RealtimeOrchestrator
 
 
@@ -15,6 +16,7 @@ def _orchestrator() -> tuple[RealtimeOrchestrator, _RecordingContext]:
     context = _RecordingContext()
     orchestrator = object.__new__(RealtimeOrchestrator)
     orchestrator._context = context
+    orchestrator._main_handoff = MainHandoffTracker(ttl_s=120.0, filler_gap_s=4.0)
     return orchestrator, context
 
 

@@ -54,6 +54,7 @@ from hal.realtime.models.signal import (
     RejectSignal,
 )
 from hal.realtime.models.output import ExecutionOutput, InterruptedOutput, UserSpeechOutput
+from hal.realtime.main_handoff import MainHandoffTracker
 from hal.realtime.summarizer import RealtimeSummarizer
 from hal.realtime.voice_agent.base import VoiceAgentBase
 
@@ -368,6 +369,13 @@ class RealtimeOrchestrator:
         self._park_resume_failed: bool = False
         self._turn_in_flight: bool = False
         self._turn_started_monotonic: float = 0.0
+        # The delegated request the main agent is still working on, if any.
+        # Every realtime entry point checks this before committing audio to
+        # the model — see hal/realtime/main_handoff.py and #419.
+        self._main_handoff = MainHandoffTracker(
+            ttl_s=config.REALTIME_MAIN_HANDOFF_TTL_S,
+            filler_gap_s=config.REALTIME_MAIN_HANDOFF_FILLER_GAP_S,
+        )
         # Last moment this session saw turn activity (prepare/audio/text/reply
         # end). Seeded at connect so a session idle since boot parks too.
         self._last_activity_monotonic: float = 0.0
@@ -1785,16 +1793,24 @@ class RealtimeOrchestrator:
         self._context.add_turn(user_text, agent_text)
 
     def save_main_handoff(self, user_text: str) -> None:
-        """Persist a user turn that the main agent will answer.
+        """Persist a user turn that the main agent will answer, and mark the
+        handoff as in flight.
 
         The live provider retains the audio turn only while its current session
         survives. Record the handoff before OpenClaw replies so a Gemini session
         recycle cannot make the device forget what the user asked.
+
+        The in-flight mark is what stops the NEXT utterance from being answered
+        by the realtime model out of this very memory (#419): until the main
+        agent's reply comes back through save_main_agent_reply_fragment, the
+        entry points answer with a filler instead of committing audio.
         """
         self.save_turn(
             user_text=user_text,
             agent_text="[This request was handed to the main agent; its spoken reply follows.]",
         )
+        self._main_handoff.open(user_text, now=time.monotonic())
+        logger.info("[realtime] main handoff open: %r", user_text[:100])
 
     def save_main_agent_reply_fragment(self, text: str) -> None:
         """Persist a spoken main-agent reply for future realtime sessions.
@@ -1802,9 +1818,31 @@ class RealtimeOrchestrator:
         Main-agent TTS is sentence-streamed, so one logical reply may arrive as
         multiple fragments. Retaining each fragment preserves the complete
         answer without relying on the ephemeral ``[TTS HISTORY]`` injection.
+
+        The first fragment also closes the in-flight handoff: the main agent
+        has answered, the realtime layer may take the next turn again.
         """
         if text.strip():
             self.save_turn(user_text="[Main agent reply]", agent_text=text)
+            self.close_main_handoff("main_reply")
+
+    def main_handoff_open(self) -> bool:
+        """Whether a delegated request is still being worked on by the main agent."""
+        return self._main_handoff.is_open(now=time.monotonic())
+
+    def main_handoff_transcript(self) -> str:
+        return self._main_handoff.transcript()
+
+    def close_main_handoff(self, reason: str) -> bool:
+        """Release the in-flight handoff. Returns whether one was open."""
+        was_open = self._main_handoff.close(reason, now=time.monotonic())
+        if was_open:
+            logger.info("[realtime] main handoff closed (%s)", reason)
+        return was_open
+
+    def take_main_handoff_filler_slot(self) -> bool:
+        """Whether the caller may speak one "still on it" filler right now."""
+        return self._main_handoff.take_filler_slot(now=time.monotonic())
 
     def send_function_result(self, call_id: str, output: str) -> None:
         """Send a function call result back to the model."""

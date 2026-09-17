@@ -7,6 +7,7 @@ clicks / the TTL passes.
 """
 
 from hal.realtime.main_handoff import MainHandoffTracker
+from hal.realtime.orchestrator import RealtimeOrchestrator
 
 
 def _tracker(ttl_s: float = 120.0, gap_s: float = 4.0) -> MainHandoffTracker:
@@ -67,3 +68,61 @@ def test_filler_slot_is_rate_limited():
 def test_filler_slot_never_granted_while_closed():
     t = _tracker()
     assert t.take_filler_slot(now=1.0) is False
+
+
+class _RecordingContext:
+    def __init__(self) -> None:
+        self.turns: list[tuple[str, str]] = []
+
+    def add_turn(self, user_text: str, agent_text: str) -> None:
+        self.turns.append((user_text, agent_text))
+
+
+def _orchestrator(ttl_s: float = 120.0) -> RealtimeOrchestrator:
+    orchestrator = object.__new__(RealtimeOrchestrator)
+    orchestrator._context = _RecordingContext()
+    orchestrator._main_handoff = MainHandoffTracker(ttl_s=ttl_s, filler_gap_s=4.0)
+    return orchestrator
+
+
+def test_delegation_opens_the_handoff():
+    o = _orchestrator()
+    assert not o.main_handoff_open()
+
+    o.save_main_handoff("Find my pen")
+
+    assert o.main_handoff_open()
+    assert o.main_handoff_transcript() == "Find my pen"
+
+
+def test_main_agent_reply_closes_the_handoff():
+    o = _orchestrator()
+    o.save_main_handoff("Find my pen")
+
+    o.save_main_agent_reply_fragment("Found it, about fifty degrees to your right.")
+
+    assert not o.main_handoff_open()
+
+
+def test_blank_reply_fragment_does_not_close():
+    o = _orchestrator()
+    o.save_main_handoff("Find my pen")
+
+    o.save_main_agent_reply_fragment("   ")
+
+    assert o.main_handoff_open()
+
+
+def test_close_main_handoff_reports_whether_one_was_open():
+    o = _orchestrator()
+    assert o.close_main_handoff("click") is False
+    o.save_main_handoff("Find my pen")
+    assert o.close_main_handoff("click") is True
+    assert not o.main_handoff_open()
+
+
+def test_filler_slot_goes_through_the_tracker():
+    o = _orchestrator()
+    o.save_main_handoff("Find my pen")
+    assert o.take_main_handoff_filler_slot() is True
+    assert o.take_main_handoff_filler_slot() is False  # inside the 4 s gap
