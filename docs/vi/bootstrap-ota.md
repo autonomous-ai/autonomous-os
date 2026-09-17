@@ -320,11 +320,66 @@ Với device profile, updater stage ZIP, chỉ dừng `os-server` và `hal` vố
 active, rồi giữ profile cũ tại `/root/bootstrap/rollback/device.previous`. Nó
 cũng snapshot chính xác các file thuộc `rootfs/` của profile cũ hoặc mới trong
 `device.previous.rootfs`; rollback vì vậy khôi phục file bị ghi đè và xoá file
-chỉ được profile lỗi thêm vào. Tuning local trong `/opt/hal/.env` vẫn được giữ.
+chỉ được profile lỗi thêm vào. OTA thành công thay thế `.env` HAL được sinh.
 Profile bắt buộc có `ROBOT.md`; mỗi service vốn active phải khởi động lại và trả
 về health endpoint loopback. Check lỗi sẽ tự phục hồi profile known-good và trạng
 thái service cũ. Dùng `software-update rollback device` khi operator rollback;
 version profile bị loại sau đó sẽ bị chặn.
+
+### Override phần cứng tùy chọn
+
+OS đọc tên trên một dòng trong `/etc/autonomous/hardware-profile`. Thiếu file,
+rỗng hoặc `standard` dùng nguyên package device hiện tại: không thêm kiểm tra
+USB, không đổi mặc định audio/Live của máy cũ. Tên khác phải khớp
+`[a-z][a-z0-9_-]{0,63}`, chọn `overrides/<tên>/` bên trong package của device đó.
+File định danh thuộc máy, không được đóng gói trong overlay.
+
+`scripts/provision/apply-overrides.py` được đưa vào mọi ZIP device khi release.
+Helper merge `rootfs/opt/hal/.env` của override lên env chung, copy các file
+`rootfs/` khác vào rootfs staging, rồi áp hai trường số nguyên tùy chọn
+`startup_volume`/`max_volume` từ `profile.json` vào `ROBOT.md`/`SAFETY.md`.
+Giá trị riêng sản phẩm chỉ nằm trong package device. Ví dụ:
+
+```text
+robots/lamp/overrides/pro/
+  profile.json                # startup_volume 77, max_volume 77
+  rootfs/opt/hal/.env          # XMOS AEC: tắt AEC phần mềm, bật Live, uplink always
+  rootfs/etc/asound.conf       # đường mic/loa reSpeaker, lấy kênh trái đã xử lý
+```
+
+Lamp Pro dùng reSpeaker USB stereo 16 kHz, kênh trái đã xử lý; loa phải nối qua
+reSpeaker. Mức 77% đã thử là tuning riêng của bộ này, không phải độ lớn tương
+đương giữa các thiết bị. File, mặc định và ceiling hiện tại của Lamp thường
+giữ nguyên. Renderer không dò, flash hoặc tune phần cứng được gắn.
+
+Image builder/cài mới áp override trước khi cài rootfs. OTA render trước khi
+dừng service và snapshot rootfs; thiếu helper/profile hoặc render lỗi không
+đụng package đang chạy. Lỗi copy hay health check rollback đồng bộ profile và
+rootfs thực tế. Rollback không đổi lựa chọn hardware-profile của máy.
+
+Khi sản xuất, ghi tên profile trước khi cài. Với máy đang chạy, cài updater và
+HAL/os-server mới trước, sau đó:
+
+```sh
+sudo mkdir -p /etc/autonomous
+printf 'pro\n' | sudo tee /etc/autonomous/hardware-profile
+sudo software-update device
+```
+
+Kiểm tra cập nhật thành công trước khi dùng. Nếu chuyển đổi lỗi, phục hồi lựa
+chọn hardware-profile cũ cho khớp package vừa rollback. Muốn về phần cứng cũ,
+xóa lựa chọn rồi OTA package mới; chỉ xóa file không hoàn tác overlay đã render.
+Updater cũ chưa biết áp override: bootstrap tự động refresh updater trước,
+nhưng cập nhật thủ công hoặc refresh thất bại phải cài updater mới trước khi
+chọn profile.
+
+Profile được chọn lưu volume riêng trong `config/.volume-<tên>` (HAL và os-server
+thống nhất); thiếu/standard giữ `config/.volume`. Nhờ vậy mức phần trăm của loa
+cũ không ghi đè volume khởi động của bộ mới. HAL chỉnh đúng cả `PCM,0` và
+`PCM,1`, không chỉnh control capture; ghi mixer lỗi trả 503 thay vì lưu thành
+công giả. UI, lệnh giọng nói và volume khởi động vẫn qua ceiling đã chọn.
+Không thêm UI Live hay thay đổi nói chen trong TTS delegate. Sửa trực tiếp `.env`
+được sinh vẫn bị device OTA thành công ghi đè như trước.
 
 Device không có `signing_public_key` chủ ý ở legacy mode: nó đọc component top
 level và chỉ log cảnh báo, không làm OTA lỗi. Đây là compatibility bridge, không

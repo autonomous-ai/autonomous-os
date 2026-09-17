@@ -2186,6 +2186,16 @@ if [ -n "\${DEVICES_URL:-}" ]; then
       fi
     done
   fi
+  # The default hardware selection leaves the legacy profile byte-for-byte intact.
+  HARDWARE_PROFILE=""
+  [ ! -e /etc/autonomous/hardware-profile ] || HARDWARE_PROFILE=\$(sed 's/^[[:space:]]*//;s/[[:space:]]*$//' /etc/autonomous/hardware-profile) \
+    || { echo "Cannot read hardware profile selection" >&2; exit 1; }
+  if [ -n "\$HARDWARE_PROFILE" ] && [ "\$HARDWARE_PROFILE" != standard ]; then
+    [ -f "\$DEVICE_DEST/apply-overrides.py" ] \
+      || { echo "[overlay] ERROR: Hardware overrides require an override-capable device package" >&2; exit 1; }
+    python3 "\$DEVICE_DEST/apply-overrides.py" --profile "\$DEVICE_DEST" --root / \
+      || { echo "[overlay] ERROR: Hardware override configuration failed" >&2; exit 1; }
+  fi
   # Device rootfs overlay: robots/<type>/rootfs/ mirrors the target filesystem,
   # so copying it onto / lands each file at its real path. This is where the
   # device's HAL tuning lives (/opt/hal/.env — ALSA device names, VAD/camera

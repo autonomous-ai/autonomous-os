@@ -1326,6 +1326,16 @@ if [ -n "\$DEVICES_URL" ]; then
   unzip -o -q /tmp/device-profile.zip -d "\$DEVICE_PROFILE_DIR"
   rm -f /tmp/device-profile.zip
   echo "[overlay] device profile baked → \$DEVICE_PROFILE_DIR"
+  # The default hardware selection leaves the legacy profile byte-for-byte intact.
+  HARDWARE_PROFILE=""
+  [ ! -e /etc/autonomous/hardware-profile ] || HARDWARE_PROFILE=\$(sed 's/^[[:space:]]*//;s/[[:space:]]*$//' /etc/autonomous/hardware-profile) \
+    || { echo "Cannot read hardware profile selection" >&2; exit 1; }
+  if [ -n "\$HARDWARE_PROFILE" ] && [ "\$HARDWARE_PROFILE" != standard ]; then
+    [ -f "\$DEVICE_PROFILE_DIR/apply-overrides.py" ] \
+      || { echo "[overlay] ERROR: Hardware overrides require an override-capable device package" >&2; exit 1; }
+    python3 "\$DEVICE_PROFILE_DIR/apply-overrides.py" --profile "\$DEVICE_PROFILE_DIR" --root / \
+      || { echo "[overlay] ERROR: Hardware override configuration failed" >&2; exit 1; }
+  fi
   # Device rootfs overlay: robots/<type>/rootfs/ mirrors the target filesystem.
   # Copy the whole tree onto / for device-specific system config (udev rules, …).
   if [ -d "\$DEVICE_PROFILE_DIR/rootfs" ]; then
