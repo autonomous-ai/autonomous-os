@@ -1655,8 +1655,33 @@ REALTIME_GPTLIVE_BASE_URL: str = (
 REALTIME_GPTLIVE_MODEL: str = _rt_str("HAL_GPTLIVE_MODEL", _RT_GPTLIVE.get("model"), "gpt-live-1")
 REALTIME_GPTLIVE_VOICE: str = _rt_str("HAL_GPTLIVE_VOICE", _RT_GPTLIVE.get("voice"), "marin")
 # One PCM format for BOTH directions on a Live WebSocket (16000 or 24000 Hz).
-# 24000 keeps the model's voice at full quality; 16000 halves uplink bandwidth.
-REALTIME_GPTLIVE_SAMPLE_RATE: int = int(os.environ.get("HAL_GPTLIVE_SAMPLE_RATE", "24000") or 24000)
+# 16000 = the mic's own rate, so the live uplink needs no resampling at all;
+# 24000 gives the model's voice more bandwidth at the cost of a resample hop
+# (device-measured 2026-09-17: at 24 kHz the old per-frame resample_poly
+# garbled the uplink so badly GPT-Live never transcribed a word).
+REALTIME_GPTLIVE_SAMPLE_RATE: int = int(os.environ.get("HAL_GPTLIVE_SAMPLE_RATE", "16000") or 16000)
+# Who does the delegated work. "client" = this process (the main agent, via
+# delegate_to_main; no tools at the Live layer). "responses" = an OpenAI-hosted
+# Responses backend that can run `web_search` itself and calls our
+# delegate_to_main function for everything that needs the device; its tokens are
+# billed on top of the voice minutes. "auto" = responses when web search is on,
+# else client. Cannot change on a running session.
+REALTIME_GPTLIVE_DELEGATION: str = _rt_str("HAL_GPTLIVE_DELEGATION", _RT_GPTLIVE.get("delegation"), "auto").strip().lower()
+# GPT-Live twin of Gemini's Google Search grounding: public live-data questions
+# (weather, news, scores) get answered in-session by the Responses backend's
+# web_search instead of a slow delegation to the main agent.
+REALTIME_GPTLIVE_WEB_SEARCH: bool = (
+    os.environ.get("HAL_GPTLIVE_WEB_SEARCH", str(_RT_GPTLIVE.get("web_search", True))).lower()
+    in ("1", "true", "yes")
+)
+# Backend model for responses delegation. gpt-5.6-luna is OpenAI's cost-sensitive
+# recommendation (the BFF integration doc's example); gpt-5.6-terra is the
+# stronger one.
+REALTIME_GPTLIVE_BACKEND_MODEL: str = _rt_str("HAL_GPTLIVE_BACKEND_MODEL", _RT_GPTLIVE.get("backend_model"), "gpt-5.6-luna")
+# GPT-Live streams output audio CONTINUOUSLY, silence included (measured: 31 s
+# of ~100 ms deltas over 32 s, 6 s of them speech). Deltas quieter than this
+# (dBFS, RMS) are dropped and do not count as the model "speaking".
+REALTIME_GPTLIVE_OUTPUT_SILENCE_DBFS: float = float(os.environ.get("HAL_GPTLIVE_OUTPUT_SILENCE_DBFS", "-50") or -50)
 # GPT-Live has NO turn boundary on the wire (no response.done / turn_complete),
 # so the adapter synthesizes one: a reply is over when no output audio or
 # transcript has arrived for TURN_GAP_MS. If the user spoke over the reply and

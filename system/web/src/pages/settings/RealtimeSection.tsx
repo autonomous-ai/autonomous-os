@@ -26,9 +26,11 @@ const VOICES: Record<string, string[]> = {
   gemini: ["Puck", "Charon", "Kore", "Fenrir", "Aoede"],
   openai: ["alloy", "ash", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer"],
   // GPT-Live: the BuiltInVoice literal of openai SDK 3.14.1 (openai.types.live).
+  // The voices gpt-live-1 accepts (BFF integration doc); Realtime-only names
+  // such as alloy/ash are rejected at session.start and must not appear here.
   gptlive: [
-    "alloy", "ash", "ballad", "beacon", "bossa", "cedar", "cinder", "coral", "delta", "echo", "gleam",
-    "marin", "meridian", "quartz", "ripple", "sage", "shimmer", "stone", "tempo", "verse", "vesper", "willow",
+    "marin", "quartz", "ripple", "vesper", "willow", "stone", "gleam",
+    "meridian", "bossa", "tempo", "beacon", "delta", "cinder",
   ],
 };
 // Reasoning depth = cost knob. First entry (cheapest) is the default.

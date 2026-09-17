@@ -332,7 +332,7 @@ func TestRealtime_OptionsIncludeGPTLive(t *testing.T) {
 	if strings.Join(opts.Providers, ",") != strings.Join(want, ",") {
 		t.Errorf("Providers = %v, want %v", opts.Providers, want)
 	}
-	if got := opts.Voices["gptlive"]; len(got) != 22 || got[0] != "alloy" || got[len(got)-1] != "willow" {
+	if got := opts.Voices["gptlive"]; len(got) != 13 || got[0] != "marin" || got[len(got)-1] != "cinder" {
 		t.Errorf("Voices[gptlive] = %v, want the 22-entry BuiltInVoice list", got)
 	}
 	for _, v := range opts.Voices["gptlive"] {

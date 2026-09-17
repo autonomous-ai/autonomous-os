@@ -4,28 +4,23 @@ from enum import StrEnum
 
 
 class GPTLiveVoice(StrEnum):
-    """Built-in Live voices — the `BuiltInVoice` literal of openai 3.14.1
-    (`openai.types.live`). The default for a session is `marin`."""
+    """Live voices accepted by gpt-live-1 (BFF integration doc, verified on the
+    real model 2026-09-17). The SDK's `BuiltInVoice` literal is wider — it also
+    carries Realtime-only names (alloy, ash, …) that a Live `session.start`
+    rejects, which would kill the session before the first word. `marin` is the
+    default; `bossa` / `tempo` are Portuguese, the rest English with regional
+    accents."""
 
-    ALLOY = "alloy"
-    ASH = "ash"
-    BALLAD = "ballad"
-    BEACON = "beacon"
-    BOSSA = "bossa"
-    CEDAR = "cedar"
-    CINDER = "cinder"
-    CORAL = "coral"
-    DELTA = "delta"
-    ECHO = "echo"
-    GLEAM = "gleam"
     MARIN = "marin"
-    MERIDIAN = "meridian"
     QUARTZ = "quartz"
     RIPPLE = "ripple"
-    SAGE = "sage"
-    SHIMMER = "shimmer"
-    STONE = "stone"
-    TEMPO = "tempo"
-    VERSE = "verse"
     VESPER = "vesper"
     WILLOW = "willow"
+    STONE = "stone"
+    GLEAM = "gleam"
+    MERIDIAN = "meridian"
+    BOSSA = "bossa"
+    TEMPO = "tempo"
+    BEACON = "beacon"
+    DELTA = "delta"
+    CINDER = "cinder"

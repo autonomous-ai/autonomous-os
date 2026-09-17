@@ -1163,15 +1163,46 @@ usage cuối; session mở lại không thừa kế chủ input hay delegation n
   cùng header `Authorization: Bearer`: Realtime →
   `wss://…/ws/openai/realtime?model=<model>`, GPT-Live →
   `wss://…/ws/openai/live/sessions` (model nằm trong payload `session.start`, không
-  trên URL). Proxy `campaign-api` **chưa** serve path thứ hai (kiểm 2026-09-16,
-  mọi biến thể `/ws/openai` cũng 404): cho tới khi route lên, connect 404, agent
-  log `Reconnect failed … next retry in ~Ns` và ở lại backoff 2 s → 60 s (turn rơi
-  về main agent); thiết bị không cần đổi gì khi route sẵn sàng. Muốn nối thẳng tạm
-  thời: `HAL_GPTLIVE_BASE_URL=https://api.openai.com/v1` + `OPENAI_API_KEY` trong
-  `/opt/hal/.env`.
-- `HAL_GPTLIVE_MODEL` (`gpt-live-1`), `HAL_GPTLIVE_VOICE` (`marin`; 22 giọng
-  built-in trong enum `GPTLiveVoice` = literal `BuiltInVoice` của SDK 3.14.1, Go
-  `RealtimeGPTLiveVoiceList` phải giữ khớp), `HAL_GPTLIVE_SAMPLE_RATE` (24000;
+  trên URL). Theo tài liệu tích hợp thiết bị của BFF (*GPT-Live voice sessions —
+  WebSocket*), route đang ở **staging**
+  (`wss://campaign-api.staging.autonomousdev.xyz/api/v1/ai/v1/ws/openai/live/sessions`,
+  nhánh `feat/openai-live-proxy`), chưa lên production. Thiết bị có `llm_base_url`
+  production muốn test thì đặt
+  `HAL_GPTLIVE_BASE_URL=https://campaign-api.staging.autonomousdev.xyz/api/v1/ai/v1/ws/openai`
+  trong `/opt/hal/.env`. Chừng nào production chưa serve path này, connect 404,
+  agent log `Reconnect failed … next retry in ~Ns` và ở lại backoff 2 s → 60 s
+  (turn rơi về main agent). Hợp đồng với relay và cách adapter đáp lại:
+  - **Auth.** Thiết bị không bao giờ giữ key OpenAI: SDK gửi key đã resolve
+    (`llm_api_key` = lobster key của thiết bị) qua `Authorization: Bearer`, BFF thay
+    bằng credential OpenAI của nó ở upstream, tính usage dưới provider
+    `openai_live` (`ceil(seconds × 17)` token mỗi dòng voice) và kiểm rate limit
+    lúc connect lẫn sau mỗi dòng usage. Không forward query string (GPT-Live không
+    nhận); chỉ đúng path này được mở — socket sideband/fork không.
+  - **Correlation.** Mỗi lần connect gửi `x-request-id: hal-<12 hex>`; BFF gắn nó
+    vào đầu mọi dòng usage của session (`<id>:voice-N`). Id nằm trong dòng HAL
+    `Connecting to GPT-Live (… x-request-id=…)` và mọi dòng `gptlive_usage.log`
+    (`request=`), nên log thiết bị đối chiếu được với `lobster_usage`.
+  - **Close code.** HTTP `401` ở handshake = không có key; `4001` không key, `4002`
+    BFF chưa cấu hình GPT-Live, `4029` thiết bị vượt hạn mức (`GPT-Live usage
+    limit reached`, kể cả giữa phiên) — mấy mã này không tự hết, nên
+    `_note_close_code` log ý nghĩa và đẩy backoff reconnect thẳng lên trần 60 s
+    thay vì tăng dần. `1011` = BFF không nối được OpenAI (retry backoff thường);
+    `1000`/`1008`/khác là close code của OpenAI forward nguyên; `1006` không có
+    close frame = upstream biến mất (reconnect = session mới hoàn toàn).
+  - **Đóng êm.** `disconnect()` gửi `session.close` rồi **tiếp tục đọc** tới khi
+    `session.closed` về (tối đa `close_timeout_s`, 5 s) mới đóng socket, để relay
+    ghi usage cuối là đã xác nhận (`final_confirmed: true`) thay vì tính theo đồng
+    hồ của nó. Đường reconnect không bao giờ chờ (thread recv chính là thread phải
+    đọc event đó).
+  - **Audio liên tục.** Relay gặt hop idle (~126 s từng thấy trên đường Gemini),
+    nên ở LIVE mode mic phải stream liên tục kể cả im lặng; idle park
+    (`HAL_GPTLIVE_IDLE_PARK_S`) đóng session sạch sẽ trước mốc đó.
+- `HAL_GPTLIVE_MODEL` (`gpt-live-1`), `HAL_GPTLIVE_VOICE` (`marin`; 13 giọng
+  `gpt-live-1` chấp nhận ở `session.start` — enum `GPTLiveVoice`, Go
+  `RealtimeGPTLiveVoiceList` giữ khớp: marin, quartz, ripple, vesper, willow,
+  stone, gleam, meridian, bossa, tempo, beacon, delta, cinder; literal
+  `BuiltInVoice` của SDK rộng hơn nhưng các tên chỉ-Realtime như alloy/ash bị
+  Live từ chối nên cố ý không liệt kê), `HAL_GPTLIVE_SAMPLE_RATE` (24000;
   24000 giữ giọng full quality, 16000 giảm nửa băng thông uplink).
 - Knob tổng hợp: `HAL_GPTLIVE_TURN_GAP_MS` 800, `HAL_GPTLIVE_INTERRUPT_GAP_MS` 400,
   `HAL_GPTLIVE_INPUT_GAP_MS` 1500, `HAL_GPTLIVE_COMMIT_SILENCE_MS` 600,
@@ -1225,9 +1256,12 @@ arguments={"message": <transcript input đã gom>}, user_transcript=<cùng text>
 orchestrator xử lý y như tool call của Gemini (`DelegateSignal`;
 `test_delegation_reaches_the_orchestrator_as_a_delegate_signal` chạy xuyên
 `RealtimeOrchestrator.stream_output`). Delegation không mang text task; text là
-transcript input gom cho user turn hiện tại. Nếu transcript còn rỗng, forward
-được hoãn tối đa `delegation_wait_ms` (watchdog flush; log `Delegation <id> before
-any transcript — waiting up to 500ms`); hết hạn mà vẫn rỗng thì **vẫn forward** —
+transcript input gom cho user turn hiện tại, và delegation **có thể tới trước khi
+câu nói xuất hiện đủ trong transcript** (BFF doc §6), nên không bao giờ forward
+ngay: watchdog forward khi transcript input đã im 250 ms (`_DELEGATION_SETTLE_S`),
+hoặc chậm nhất ở hạn cứng `delegation_wait_ms` với những gì đã nghe (log
+`Delegation <id> — settling the transcript (N chars so far, up to 500ms)`); hết
+hạn mà vẫn rỗng thì **vẫn forward** —
 orchestrator trả `{"error": "message must not be empty"}` và adapter chuyển cho
 model như một handoff thất bại. Event còn mang `offset_ms` (vị trí
 trên timeline session) nhưng adapter không dùng — nó gom theo user turn thay vì
@@ -1282,7 +1316,7 @@ fail-fast (`TurnDoneEvent` ngay) + reconnect nền. Vòng lặp event kết thú
 duplex)` — chỉ xấp xỉ, vì bản thân transcript input đã trễ hơn tiếng nói.
 
 **Usage / giá.** `session.usage.updated` và `session.closed` → dòng `[realtime]
-GPT-Live usage: session=<id> seconds=<s> est>=$<s/60×0.05> (cumulative|final;
+GPT-Live usage: session=<id> request=<x-request-id> seconds=<s> est>=$<s/60×0.05> context=<usage_ratio %|-> (cumulative|final;
 $0.05/min billed per second, delegated main-agent work billed separately)` trong
 `gptlive_usage.log` (xem *Pricing & log usage*). Bill theo phút-session, không
 theo token, nên một session **mở mà idle vẫn tốn tiền** — vì vậy idle park của
@@ -1351,7 +1385,7 @@ chi phí.
 Dòng GPT-Live (grep `[realtime] GPT-Live usage` trong `gptlive_usage.log`):
 
 ```
-[realtime] GPT-Live usage: session=<id> seconds=<s> est>=$<usd> (cumulative|final; $0.05/min billed per second, delegated main-agent work billed separately)
+[realtime] GPT-Live usage: session=<id> request=<x-request-id> seconds=<s> est>=$<usd> context=<usage_ratio %|-> (cumulative|final; $0.05/min billed per second, delegated main-agent work billed separately)
 ```
 
 Không có token nào để đếm: `gpt-live-1` bill **$0.05 mỗi phút session, tính theo
@@ -2124,14 +2158,14 @@ trong `config.json`:
 | `HAL_OPENAI_NOISE_REDUCTION` | `far_field` | `far_field` \| `near_field` \| `off` — `audio.input.noise_reduction` phía server, lọc trước VAD và model; `off` bỏ hẳn key. Cũng đọc từ `realtime.openai.noise_reduction` |
 | `HAL_OPENAI_VAD_THRESHOLD` | `0` | Ngưỡng `server_vad.threshold` (0..1, API mặc định 0.5). `0` = suy từ `HAL_LIVE_VAD_START_SENSITIVITY` (`low` → 0.7, `high` → 0.3); giá trị khác 0 thắng. Chỉ env, không có key config.json |
 | `HAL_GPTLIVE_MODEL` | `gpt-live-1` | Cũng đọc từ `realtime.gptlive.model` |
-| `HAL_GPTLIVE_VOICE` | `marin` | 22 giọng built-in (`GPTLiveVoice`: alloy, ash, ballad, beacon, bossa, cedar, cinder, coral, delta, echo, gleam, marin, meridian, quartz, ripple, sage, shimmer, stone, tempo, verse, vesper, willow). Cũng đọc từ `realtime.gptlive.voice` |
+| `HAL_GPTLIVE_VOICE` | `marin` | 13 giọng Live (`GPTLiveVoice`: marin, quartz, ripple, vesper, willow, stone, gleam, meridian, bossa, tempo, beacon, delta, cinder). Cũng đọc từ `realtime.gptlive.voice` |
 | `HAL_GPTLIVE_BASE_URL` | *(rỗng → base URL của OpenAI Realtime: `HAL_OPENAI_REALTIME_BASE_URL` > `realtime.base_url` > `<llm_base_url>/ws/openai`)* | Cũng đọc từ `realtime.gptlive.base_url`. SDK nối thêm `/live/sessions`, nên proxy phải serve `…/ws/openai/live/sessions` (đang chờ, 2026-09-16; tới lúc đó 404). Set `https://api.openai.com/v1` để nối thẳng |
 | `HAL_GPTLIVE_SAMPLE_RATE` | `24000` | `16000` \| `24000` — MỘT định dạng PCM cho cả hai chiều (`output_sample_rate == sample_rate`); 16000 giảm nửa băng thông uplink. Chỉ env |
 | `HAL_GPTLIVE_TURN_GAP_MS` | `800` | Ranh giới lượt tổng hợp: reply coi là xong khi không có output audio/transcript trong ngần này ms (watchdog tick 50 ms). Chỉ env |
 | `HAL_GPTLIVE_INTERRUPT_GAP_MS` | `400` | Khi user nói đè lên reply: model im lặng quá ngần này ms → reply bị ngắt (`server_interrupt`); model nói tiếp → backchannel. Chỉ env |
 | `HAL_GPTLIVE_INPUT_GAP_MS` | `1500` | Hai mảnh `session.input_transcript.delta` cách nhau hơn ngần này ms (timeline session) thuộc user turn MỚI dù model chưa đáp. Chỉ env |
 | `HAL_GPTLIVE_COMMIT_SILENCE_MS` | `600` | Chỉ đường lượt: Live không có commit, `commit_audio()` append ngần này ms PCM im lặng (`event_id` `hal-silence`) để model nghe câu nói đã hết. LIVE_MODE → no-op. Chỉ env |
-| `HAL_GPTLIVE_DELEGATION_WAIT_MS` | `500` | `session.delegation.created` không mang text task; adapter chờ transcript input tối đa ngần này ms trước khi forward `delegate_to_main` (rỗng vẫn forward, orchestrator từ chối và model được báo handoff thất bại). Chỉ env |
+| `HAL_GPTLIVE_DELEGATION_WAIT_MS` | `500` | Hạn cứng để forward `session.delegation.created` thành `delegate_to_main`: adapter forward ngay khi transcript input im 250 ms, chậm nhất là ở hạn này với những gì đã nghe (rỗng → orchestrator từ chối và model được báo handoff thất bại). Chỉ env |
 | `HAL_GPTLIVE_IDLE_PARK_S` | `30` | Park GPT-Live khi idle: session bị tính tiền theo phút khi còn mở, nên sau ngần này giây không có turn orchestrator đóng transport (`_maybe_park_idle_session`, cơ chế y như `HAL_GEMINI_IDLE_PARK_S`) và nối lại ở turn kế. `0` = tắt. Chỉ env |
 | `HAL_REALTIME_MEMORY_PATH` | `<workspace>/realtime/memory.jsonl` | |
 | `HAL_REALTIME_MAX_MEMORY_ENTRIES` / `_TRIM_KEEP` | `1000` / `500` | |

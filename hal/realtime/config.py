@@ -118,12 +118,28 @@ class GPTLiveConfig(BaseModel):
     input_gap_ms: int = app_config.REALTIME_GPTLIVE_INPUT_GAP_MS
     commit_silence_ms: int = app_config.REALTIME_GPTLIVE_COMMIT_SILENCE_MS
     delegation_wait_ms: int = app_config.REALTIME_GPTLIVE_DELEGATION_WAIT_MS
+    output_silence_dbfs: float = app_config.REALTIME_GPTLIVE_OUTPUT_SILENCE_DBFS
+    delegation: str = app_config.REALTIME_GPTLIVE_DELEGATION  # client | responses | auto
+    web_search: bool = app_config.REALTIME_GPTLIVE_WEB_SEARCH
+    backend_model: str = app_config.REALTIME_GPTLIVE_BACKEND_MODEL
+
+    @property
+    def responses_mode(self) -> bool:
+        """Effective delegation owner: the Responses backend or this process."""
+        if self.delegation == "responses":
+            return True
+        if self.delegation == "client":
+            return False
+        return self.web_search
     max_retries: int = 1
     reconnect_delay_s: float = 2.0
     queue_poll_s: float = 1.0
     # How long a send waits for `session.started` before giving up on the
     # command (audio appended before the session is up is rejected).
     start_timeout_s: float = 10.0
+    # Graceful close: how long to keep reading for `session.closed` after
+    # sending `session.close`, so the relay can confirm the final usage.
+    close_timeout_s: float = 5.0
     join_timeout_s: float = 5.0
 
 

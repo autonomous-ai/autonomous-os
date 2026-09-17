@@ -60,7 +60,7 @@ func TestValidateRealtimeSetGPTLive(t *testing.T) {
 	if err := s.validateRealtimeSet(domain.RealtimeSetData{Provider: "gptlive", Voice: "marin"}); err != nil {
 		t.Fatalf("valid gptlive payload rejected: %v", err)
 	}
-	if err := s.validateRealtimeSet(domain.RealtimeSetData{Voice: "verse"}); err != nil {
+	if err := s.validateRealtimeSet(domain.RealtimeSetData{Voice: "quartz"}); err != nil {
 		t.Fatalf("voice-only payload against current gptlive provider rejected: %v", err)
 	}
 	if err := s.validateRealtimeSet(domain.RealtimeSetData{Provider: "gptlive", Reasoning: "minimal"}); err == nil {

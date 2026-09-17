@@ -310,11 +310,13 @@ var (
 	RealtimeProviders       = []string{"gemini", "openai", "gptlive", "none"}
 	RealtimeGeminiVoiceList = []string{"Puck", "Charon", "Kore", "Fenrir", "Aoede"}
 	RealtimeOpenAIVoiceList = []string{"alloy", "ash", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer"}
-	// GPT-Live voices: the exact BuiltInVoice literal of openai SDK 3.14.1
-	// (openai.types.live). KEEP IN SYNC when the SDK pin moves.
+	// GPT-Live voices: the set gpt-live-1 accepts at session.start (BFF GPT-Live
+	// integration doc, verified on the real model 2026-09-17). The SDK's wider
+	// BuiltInVoice literal also carries Realtime-only names (alloy, ash, …) that
+	// a Live session rejects — never list those here. Mirrors HAL's GPTLiveVoice.
 	RealtimeGPTLiveVoiceList = []string{
-		"alloy", "ash", "ballad", "beacon", "bossa", "cedar", "cinder", "coral", "delta", "echo", "gleam",
-		"marin", "meridian", "quartz", "ripple", "sage", "shimmer", "stone", "tempo", "verse", "vesper", "willow",
+		"marin", "quartz", "ripple", "vesper", "willow", "stone", "gleam",
+		"meridian", "bossa", "tempo", "beacon", "delta", "cinder",
 	}
 	RealtimeGeminiThinkingList  = []string{"MINIMAL", "LOW", "MEDIUM", "HIGH"}
 	RealtimeOpenAIReasoningList = []string{"minimal", "low", "medium", "high", "xhigh"}

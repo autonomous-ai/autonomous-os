@@ -288,6 +288,15 @@ LIVE_PLAYBACK_TAIL_S = float(os.environ.get("HAL_LIVE_PLAYBACK_TAIL_S", "0.35"))
 # the window runs from whichever came later, the user's last words or the moment
 # the device stopped talking.
 LIVE_IDLE_HANGUP_S = float(os.environ.get("HAL_LIVE_IDLE_HANGUP_S", "15"))
+# What counts as "the user said something" for that window. The local gate
+# (RMS + Silero) confirms that SOMEONE spoke near the mic, which held a GPT-Live
+# session open for two minutes of room chatter the model never transcribed
+# (lamp-ee17, 2026-09-17). With this on, only speech the provider actually
+# transcribed (a UserSpeechOutput carrying text) refreshes the clock; the local
+# gate still resets the unprompted-reply counter. Off = the local gate alone.
+LIVE_IDLE_REQUIRES_TRANSCRIPT = os.environ.get(
+    "HAL_LIVE_IDLE_REQUIRES_TRANSCRIPT", "true"
+).strip().lower() in ("1", "true", "yes")
 
 # Hard ceiling on a model that has started answering ITSELF, counted in REPLIES rather than seconds.
 LIVE_MAX_UNPROMPTED_REPLIES = int(
