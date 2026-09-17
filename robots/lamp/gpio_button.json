@@ -17,7 +17,8 @@
           "chip": 0,
           "line": 100,
           "debounce_ns": 200000000,
-          "behavior": "standard"
+          "behavior": "standard",
+          "factory_reset": false
         },
         {
           "name": "factory_reset",

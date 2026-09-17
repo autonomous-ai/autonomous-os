@@ -589,13 +589,15 @@ def shutdown_action(source: str = "button"):
     shutdown_os()
 
 
-def hold_release_action(held_s: float, source: str = "button"):
+def hold_release_action(held_s: float, source: str = "button", *, factory_reset: bool = True):
     """Map a released hold duration to its explicit device action.
 
     Input drivers supply released hold durations. This mapping shares the
     sleep/shutdown/factory-reset decision tree across GPIO and MPR121 inputs.
+    Inputs that must not factory-reset (MPR121) pass factory_reset=False and
+    keep any longer hold at shutdown.
     """
-    if held_s >= FACTORY_RESET_DURATION:
+    if factory_reset and held_s >= FACTORY_RESET_DURATION:
         factory_reset_action(source)
     elif held_s >= LONG_PRESS_DURATION:
         shutdown_action(source)
@@ -603,25 +605,25 @@ def hold_release_action(held_s: float, source: str = "button"):
         sleep_action(source)
 
 
-def button_hold_tier(held_s, *, behavior="standard", hold_s=5.0):
+def button_hold_tier(held_s, *, behavior="standard", hold_s=5.0, factory_reset=True):
     """Select shared feedback for normal and dedicated reset buttons."""
     if behavior == "factory_reset":
         return 3 if held_s >= hold_s else 0
-    return (3 if held_s >= FACTORY_RESET_DURATION else
+    return (3 if factory_reset and held_s >= FACTORY_RESET_DURATION else
             2 if held_s >= LONG_PRESS_DURATION else
             1 if held_s >= SLEEP_HOLD_DURATION else 0)
 
 
 def button_hold_release_action(held_s, feedback, *, behavior="standard", hold_s=5.0,
-                               source="button"):
+                               source="button", factory_reset=True):
     """Commit the actual policy's LED and action using a released duration."""
-    if not button_hold_tier(held_s, behavior=behavior, hold_s=hold_s):
+    if not button_hold_tier(held_s, behavior=behavior, hold_s=hold_s, factory_reset=factory_reset):
         return
     if behavior == "factory_reset":
         if feedback.commit_tier(3) is not False:
             factory_reset_action(source)
-    elif feedback.commit(held_s) is not False:
-        hold_release_action(held_s, source=source)
+    elif feedback.commit(held_s, factory_reset=factory_reset) is not False:
+        hold_release_action(held_s, source=source, factory_reset=factory_reset)
 
 
 def _factory_reset_phrase() -> str:
@@ -751,8 +753,8 @@ class HoldLEDFeedback:
                 return
             self._request(0)
 
-    def commit(self, held_s):
-        tier = 3 if held_s >= FACTORY_RESET_DURATION else 2 if held_s >= LONG_PRESS_DURATION else 0
+    def commit(self, held_s, *, factory_reset=True):
+        tier = 3 if factory_reset and held_s >= FACTORY_RESET_DURATION else 2 if held_s >= LONG_PRESS_DURATION else 0
         return self.commit_tier(tier)
 
     def commit_tier(self, tier):
