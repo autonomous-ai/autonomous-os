@@ -162,6 +162,12 @@ def test_hold_release_maps_each_duration_to_one_explicit_action():
         button_actions.hold_release_action(button_actions.FACTORY_RESET_DURATION, "test button")
         factory_reset.assert_called_once_with("test button")
 
+        # MPR121 opts out: a 10s+ touch hold stays at shutdown.
+        button_actions.hold_release_action(
+            button_actions.FACTORY_RESET_DURATION, "MPR121", factory_reset=False)
+        factory_reset.assert_called_once_with("test button")
+        assert shutdown.call_count == 2
+
 
 def test_swipe_sleeps_when_awake():
     """A swipe means sleep — one meaning, no direction, no state branch."""

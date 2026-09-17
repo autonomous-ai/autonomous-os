@@ -585,13 +585,15 @@ def shutdown_action(source: str = "button"):
     shutdown_os()
 
 
-def hold_release_action(held_s: float, source: str = "button"):
+def hold_release_action(held_s: float, source: str = "button", *, factory_reset: bool = True):
     """Map a released hold duration to its explicit device action.
 
     Input drivers supply released hold durations. This mapping shares the
     sleep/shutdown/factory-reset decision tree across GPIO and MPR121 inputs.
+    Inputs that must not factory-reset (MPR121) pass factory_reset=False and
+    keep any longer hold at shutdown.
     """
-    if held_s >= FACTORY_RESET_DURATION:
+    if factory_reset and held_s >= FACTORY_RESET_DURATION:
         factory_reset_action(source)
     elif held_s >= LONG_PRESS_DURATION:
         shutdown_action(source)
@@ -747,8 +749,8 @@ class HoldLEDFeedback:
                 return
             self._request(0)
 
-    def commit(self, held_s):
-        tier = 3 if held_s >= FACTORY_RESET_DURATION else 2 if held_s >= LONG_PRESS_DURATION else 0
+    def commit(self, held_s, *, factory_reset=True):
+        tier = 3 if factory_reset and held_s >= FACTORY_RESET_DURATION else 2 if held_s >= LONG_PRESS_DURATION else 0
         return self.commit_tier(tier)
 
     def commit_tier(self, tier):
