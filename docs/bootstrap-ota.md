@@ -324,11 +324,82 @@ For a device profile, the updater stages the ZIP, stops only the `os-server` and
 `/root/bootstrap/rollback/device.previous`. It also snapshots the exact files
 covered by the old or new `rootfs/` overlay in `device.previous.rootfs`; rollback
 therefore restores overwritten files and removes files introduced only by the
-rejected profile. Local `/opt/hal/.env` tuning remains preserved. The profile
+rejected profile. Successful OTA replaces the generated `/opt/hal/.env`. The profile
 must contain `ROBOT.md`; each service that was active must recover and answer
 its loopback health endpoint. A failed check restores the known-good profile and
 its prior service state automatically. Use `software-update rollback device` for
 an operator rollback; the rejected device-profile version is then blocked.
+
+### Optional hardware overrides
+
+The OS reads the single-line name in `/etc/autonomous/hardware-profile`.
+Missing, empty or `standard` uses the existing device package unchanged: no new
+USB checks, no changed legacy audio/Live defaults. Other names must match
+`[a-z][a-z0-9_-]{0,63}` and select `overrides/<name>/` inside that device's package.
+The identity file is machine-owned and must not be shipped in an overlay.
+
+`scripts/provision/apply-overrides.py` is included in every released device ZIP.
+It merges the selected `rootfs/opt/hal/.env` over the shared env, copies other
+selected `rootfs/` files into the staged rootfs, and applies the optional integer
+`startup_volume`/`max_volume` fields from `profile.json` to `ROBOT.md`/`SAFETY.md`.
+Product-specific values live only in the device package. For example:
+
+```text
+robots/lamp/overrides/pro/
+  profile.json                # startup_volume 77, max_volume 77
+  rootfs/opt/hal/.env          # XMOS AEC: software AEC off, Live on, uplink always
+  rootfs/etc/asound.conf       # reSpeaker mic/speaker routing, processed left input
+```
+
+The Lamp Pro assembly uses reSpeaker USB stereo 16 kHz with processed audio on
+the left channel; its speaker must be wired through reSpeaker. The tested
+77% tuning is specific to that assembly, not an acoustic equivalence across
+devices. Standard Lamp's existing files, defaults and ceiling remain unchanged.
+The renderer does not detect, flash or retune the attached hardware.
+
+Image builders/fresh setup apply a selected override before installing rootfs.
+OTA renders it before stopping services and taking the rootfs snapshot; missing
+helper/selected overlay or render failure leaves the installed package running. Copy
+or health failure rolls back the profile and live rootfs together. Rollback does
+not change the machine's hardware-profile selection.
+
+For new images, select the assembly at build time:
+
+```bash
+make -C scripts/imager build TARGET=opi DEVICE_TYPE=lamp VARIANT=pro OTA_METADATA_URL=...
+```
+
+`VARIANT` is the only build input for hardware selection. The overlay stage writes
+`/etc/autonomous/hardware-profile` before applying `overrides/pro`; OTA later reads
+that file. Empty or `VARIANT=standard` removes any stale selection from the image
+and uses the unchanged base package. The selection is not baked into the reusable
+base cache. Nonstandard variants add a suffix to the final image/release filename.
+Unknown variants or packages without the override helper fail the build.
+
+Provision a selected assembly by writing its name before installation. For an
+existing machine, first install the new updater and HAL/os-server, then:
+
+```sh
+sudo mkdir -p /etc/autonomous
+printf 'pro\n' | sudo tee /etc/autonomous/hardware-profile
+sudo software-update device
+```
+
+Check the update succeeds before using the device. If conversion fails, restore
+the previous hardware-profile selection to match the restored package. To return
+to legacy hardware, remove the selection and install a fresh device package via
+OTA; simply deleting the file does not undo an already rendered overlay. An old
+updater cannot apply overrides: automatic bootstrap refreshes its updater first,
+but manual/failed-refresh deployments must update it before selecting a profile.
+
+Selected profiles save volume separately as `config/.volume-<name>` (HAL and
+os-server agree); absent/standard retains `config/.volume`. This prevents a
+legacy speaker's saved percentage from overriding the new assembly's startup
+level. HAL addresses both `PCM,0` and `PCM,1`, excluding capture controls; mixer
+write failure returns 503 rather than persisting a false success. UI, voice and
+startup volume remain subject to the selected ceiling. No Live UI or delegated
+TTS barge-in behavior is added; direct generated `.env` edits are overwritten
+by the next successful device OTA, as before.
 
 Devices without `signing_public_key` deliberately remain in legacy mode: they
 read the top-level entries and emit a warning rather than failing OTA. This is a
@@ -569,7 +640,7 @@ os-server proxies this as `GET /api/system/ota-versions`.
 | `os-server` | Run `software-update os-server` (blocks up to 10 min) |
 | `bootstrap` | Spawn detached `software-update bootstrap` (self-update, survives restart) |
 | `web` | Run `software-update web` |
-| `device` | Run `software-update device` for the resolved `devices.<device_type>` profile; its rootfs overlay is applied while preserving device-local HAL `.env` |
+| `device` | Run `software-update device` for `devices.<device_type>`; apply any explicitly selected hardware override, then install rootfs including generated HAL `.env` |
 | `openclaw` | ~~Run `npm install -g openclaw@{version}` → `systemctl restart openclaw`~~ (temporarily disabled) |
 | `hal` | Run `software-update hal` → `systemctl restart hal` |
 | `codex` / `claudecode` / `opencode` / `picoclaw` | Run `software-update <key>` — only on the device whose `agent_runtime` IS that runtime |
