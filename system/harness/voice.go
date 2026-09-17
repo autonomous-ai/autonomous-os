@@ -337,14 +337,18 @@ func (v *VoiceController) ready(ctx context.Context, s VoiceModeState) error {
 	if e := v.connected(s.MachineID); e != nil {
 		return e
 	}
-	if v.State().Pending != nil {
-		if _, e := v.receipt(ctx); e != nil {
-			return e
-		}
+	// An uncertain earlier delivery must not block a new user turn.
+	// Do not reconcile or retry the old mutation automatically here.
+	/*
 		if v.State().Pending != nil {
-			return errors.New("Previous Harness delivery is unresolved; inspect its receipt or resolve it without retrying")
+			if _, e := v.receipt(ctx); e != nil {
+				return e
+			}
+			if v.State().Pending != nil {
+				return errors.New("Previous Harness delivery is unresolved; inspect its receipt or resolve it without retrying")
+			}
 		}
-	}
+	*/
 	return nil
 }
 func (v *VoiceController) Submit(ctx context.Context, text, runID string, generation uint64) error {
