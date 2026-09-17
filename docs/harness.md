@@ -2,6 +2,8 @@
 
 `system/harness` connects one Autonomous device directly to one explicitly paired Harness computer. Harness Desktop/CLI discovers devices through the existing `_autonomous._tcp` mDNS service, also used by Autonomous Buddy. Harness uses its own identity pins and the original Harness `E2eeManager` pairing/session protocol. Buddy's implementation and keys remain independent.
 
+For turns delegated by the main agent through the skill, OS prefixes the final UI/TTS response with a localized attribution (for example, “Harness says:” or “Harness trả lời:”). The response route records this origin at dispatch, so later voice-mode changes do not affect attribution. Direct Harness-only voice results remain unchanged. Original result text in external history and follow-up context stays verbatim; no additional model turn is used.
+
 ## Product context and team ownership
 
 The Harness app and its device integration are developed independently by the Harness team. This repository supplies the Autonomous OS side of that integration and the `harness-use` skill; it does not own Harness's desktop product, agent runtime or pairing protocol. The purpose is to let the device delegate coding/research tasks to agents already managed by Harness on the user's computer.

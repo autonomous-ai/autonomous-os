@@ -7,12 +7,14 @@ import (
 	"go.autonomous.ai/os/system/domain"
 	"go.autonomous.ai/os/system/lib/flow"
 	"go.autonomous.ai/os/system/lib/hal"
+	"go.autonomous.ai/os/system/lib/i18n"
 	sensinghttp "go.autonomous.ai/os/system/server/sensing/delivery/http"
 )
 
 type harnessReplyState struct {
 	created   time.Time
 	webChat   bool
+	delegated bool
 	delivered bool
 	toolName  string
 	toolArgs  string
@@ -20,7 +22,7 @@ type harnessReplyState struct {
 
 // MarkHarnessResponseRun holds a user turn open for the final recap from its
 // paired Harness agent. webChat selects display-only delivery.
-func (h *AgentHandler) MarkHarnessResponseRun(runID string, webChat bool) {
+func (h *AgentHandler) MarkHarnessResponseRun(runID string, webChat, delegated bool) {
 	if runID == "" {
 		return
 	}
@@ -34,7 +36,7 @@ func (h *AgentHandler) MarkHarnessResponseRun(runID string, webChat bool) {
 		}
 	}
 	if _, exists := h.harnessReplies[runID]; !exists {
-		h.harnessReplies[runID] = harnessReplyState{webChat: webChat, created: time.Now()}
+		h.harnessReplies[runID] = harnessReplyState{webChat: webChat, delegated: delegated, created: time.Now()}
 	}
 	h.harnessRepliesMu.Unlock()
 }
@@ -143,6 +145,10 @@ func (h *AgentHandler) DeliverHarnessResponse(runID, text string) bool {
 	state.delivered = true
 	h.harnessReplies[runID] = state
 	h.harnessRepliesMu.Unlock()
+	// Attribute delegated results only at presentation; stored external history stays verbatim.
+	if state.delegated {
+		text = i18n.One(i18n.PhraseHarnessReply) + " " + text
+	}
 	// Persist the same final text for web recovery when its live SSE is closed.
 	flow.Log("harness_response", map[string]any{"run_id": runID, "text": text}, runID)
 	// A final remote answer replaces any generic progress filler immediately.

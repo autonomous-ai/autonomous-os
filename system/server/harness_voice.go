@@ -24,7 +24,7 @@ func (s *Server) initializeHarnessVoice(ctx context.Context) {
 	s.harnessVoiceCtx = ctx
 	if s.harnessVoice == nil && s.harnessService != nil {
 		s.harnessVoice = harness.NewVoiceController(s.harnessService, harness.VoiceCallbacks{
-			OnDispatch: func(agentID, runID string) { s.registerHarnessReply(agentID, runID, false) },
+			OnDispatch: func(agentID, runID string) { s.registerHarnessReply(agentID, runID, false, false) },
 			OnResponse: s.deliverHarnessVoiceQuestion,
 		})
 		s.harnessVoice.Start(ctx)
@@ -202,7 +202,7 @@ func (s *Server) deliverHarnessVoiceMessage(agentID, runID, text string) {
 		agentID = "harness-voice"
 	}
 	if !s.hasHarnessReply(agentID, runID) {
-		s.registerHarnessReply(agentID, runID, false)
+		s.registerHarnessReply(agentID, runID, false, false)
 	}
 	s.deliverHarnessFinal(agentID, runID, text)
 }

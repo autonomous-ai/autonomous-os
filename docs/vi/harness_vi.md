@@ -2,6 +2,8 @@
 
 `system/harness` nối trực tiếp một thiết bị Autonomous với một máy tính Harness đã ghép đôi rõ ràng. Harness Desktop/CLI tìm thiết bị qua dịch vụ mDNS `_autonomous._tcp` đã có, cũng được Autonomous Buddy sử dụng. Harness giữ khóa riêng và dùng giao thức pairing/phiên gốc của `E2eeManager`. Code và khóa Buddy độc lập.
 
+Với lượt main agent giao qua skill, OS thêm câu dẫn theo ngôn ngữ vào kết quả cuối trên UI/TTS (ví dụ “Harness trả lời:”). Nguồn lượt được ghi nhận lúc dispatch, nên đổi voice mode trong khi chờ không thay đổi cách thông báo. Kết quả voice trực tiếp trong Harness-only mode giữ nguyên. Nội dung gốc trong external history và context follow-up không bị thêm câu dẫn; không tạo thêm lượt model.
+
 ## Ngữ cảnh sản phẩm và trách nhiệm giữa các team
 
 App Harness và phần tích hợp thiết bị của Harness do team Harness phát triển độc lập. Repo này cung cấp phía Autonomous OS và skill `harness-use`; không sở hữu sản phẩm Desktop, runtime agent hay giao thức pairing của Harness. Mục tiêu là để thiết bị chuyển yêu cầu coding/research tới các agent mà Harness đang quản lý trên máy tính của người dùng.
