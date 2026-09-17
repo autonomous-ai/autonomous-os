@@ -315,7 +315,7 @@ theo thứ tự **trái sang phải** vật lý. Lamp mặc định E0…E11. Ki
 lắp bar: nếu E11 nằm bên trái, đảo trục hiện có thành E11…E0. Tăng vị trí
 trên trục (`+1`, trái sang phải) gọi `swipe_action(source="MPR121")` trong
 `button_actions.py` để sleep. Giảm vị trí (`-1`, phải sang trái) gọi action
-bật Harness voice. Các action này áp dụng khi Harness OFF; khi ON cùng hai hướng chọn agent trước/kế tiếp. Không cần vuốt hết toàn bộ dải. Thiếu/null
+bật Harness voice. Các action này áp dụng khi Harness OFF; khi ON cùng hai hướng chọn agent trước/kế tiếp. Không cần vuốt hết toàn bộ dải: tâm chạm phải dịch ít nhất 3 vị trí trong ít nhất 30 ms. Vuốt nhanh có thể bỏ qua pad có thời gian chạm ngắn hơn một poll cộng bộ lọc vùng chạm; tâm chạm nhảy quá 3 vị trí được chấp nhận khi đang di chuyển tiếp cùng hướng, ngược lại bị coi là ngón thứ hai và huỷ. Thiếu/null
 `swipe_axis` chỉ tắt nhận diện vuốt, giữ nhận diện click/hold cũ.
 Cài HAL hỗ trợ trước khi deploy JSON có trường này.
 

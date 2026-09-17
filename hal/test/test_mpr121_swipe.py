@@ -196,3 +196,28 @@ class TestSpatialGestures(unittest.TestCase):
 
     def test_distant_independent_touches_are_not_swipes(self):
         self.assertEqual(kinds(replay([(1, 1), (1.06, 0), (1.08, 1 << 11), (1.15, 0)])), [])
+
+
+class TestFastSwipeSkipsPads(unittest.TestCase):
+    def test_fast_swipe_that_skips_pads_still_resolves(self):
+        # Recorded on lamp-0c4e (2026-09-17 10:31:05): a fast left-to-right swipe
+        # whose pads 7 and 8 dwelt ~12 ms, shorter than poll + footprint filter,
+        # so the stable centroid leaped 5.5 -> 9.0. It must still be a swipe.
+        samples = [(0.000, 0x00c), (0.061, 0x038), (0.074, 0x060), (0.097, 0x380), (0.109, 0x600), (0.122, 0x000)]
+        for phase in (0, .0025, .005, .0075):
+            detector = _SpatialGestureRecognizer(MPR121Config(bus=0, swipe_axis=tuple(range(12))))
+            detector.update(0, -1)
+            index, mask, events = 0, 0, []
+            for tick in range(int((samples[-1][0] + .7) * 100) + 1):
+                now = tick / 100 + phase
+                while index < len(samples) and samples[index][0] <= now:
+                    mask = samples[index][1]
+                    index += 1
+                events.extend(detector.update(mask, now))
+            self.assertEqual(kinds(events), ["swipe"], phase)
+            self.assertEqual([e.direction for e in events if e.kind == "swipe"], [1], phase)
+
+    def test_second_finger_far_away_before_travel_is_not_a_swipe(self):
+        # Hold pad 1, then land a second finger on pad 8: the centroid leaps without travel.
+        samples = [(1, 0x002), (1.1, 0x102), (1.3, 0x000)]
+        self.assertNotIn("swipe", kinds(replay(samples)))

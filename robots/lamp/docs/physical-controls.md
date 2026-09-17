@@ -325,7 +325,11 @@ Verify the mounted bar: if E11 is physically on the left, reverse the existing
 axis to E11…E0. Increasing axis position (`+1`, left to right) calls
 `swipe_action(source="MPR121")` from `button_actions.py` to sleep. Decreasing
 position (`-1`, right to left) enables Harness voice. These actions apply with Harness OFF; with Harness ON the same directions select previous/next agent.
-A swipe need not cross the entire strip.
+A swipe need not cross the entire strip: the centroid must travel at least 3
+positions over at least 30 ms. Fast swipes may skip pads whose dwell is shorter
+than a poll plus the footprint filter; a centroid leap beyond 3 positions is
+accepted while travel already continues in the same direction, and rejected as
+a second finger otherwise.
 Missing/null `swipe_axis` disables only swipe detection and preserves legacy
 click/hold recognition. Install HAL support before deploying JSON with this field.
 
