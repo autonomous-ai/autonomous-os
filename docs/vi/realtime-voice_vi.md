@@ -310,6 +310,19 @@ Hook nằm **trước** nhánh busy trong `PostEvent`, không nằm cạnh
 sẽ queue nó và return sớm — mà "agent đang bận" đúng là tình huống có turn cũ
 đang chạy, khiến vị trí đặt muộn thành no-op đúng lúc cần nhất.
 
+Mốc này **không bao giờ được đóng khi turn cũ vẫn đang chạy một tool.**
+os-server giữ tập tool call đang mở theo từng run (`openToolCalls` trên
+`AgentHandler`, nạp từ event start/end của `tool` / `session.tool`, xoá khi
+lifecycle end/error của run đó). Turn đang giữa chừng tool thì chưa trả lời, mà
+câu trả lời realtime vừa tới cũng không thể trả lời được — nó không có kết quả
+tool nào. Bịt tiếng turn đó là dập mất câu trả lời đúng duy nhất: user hỏi "tìm
+cây bút", nudge "sếp ơi?" khi servo đã quét được ba mươi giây, rồi nghe phỏng
+đoán của model realtime chứ không bao giờ nghe kết quả tìm kiếm (#419).
+`CancelSpeechForNewerTurn` khi đó trả `false` (HAL không được đếm một lần
+suppress mà policy chưa từng áp dụng) và đẩy một monitor event `speech_cancel`
+kèm `skipped: true, reason: "tool_in_flight"` để timeline cho thấy vì sao turn
+cũ vẫn giữ loa.
+
 Mốc này cố ý yếu hơn cú click vật lý: nó không bao giờ chặn marker `[HW:]` của
 turn cũ, vì hành động user thật sự yêu cầu thì vẫn phải chạy. Nhưng filler đang
 treo thì **có** bị bỏ — ranh giới là tiếng-nói/phần-cứng, không phải
@@ -354,6 +367,45 @@ hook do `VoiceService` gắn vào cạnh `_on_speak_end`, dẫn về đúng
 `feed_realtime_history(..., spoken=False)`. Hook chỉ bắn khi `realtime_feedback`
 bật, cùng lý do với đường phát: chỉ câu trả lời thật của agentic runtime mới
 được vào context của model, không phải filler hay notice bị bỏ.
+
+### Nudge khi agent chính vẫn đang xử lý (#419)
+
+`save_main_handoff` đồng thời mở một **handoff đang bay** trên orchestrator
+(`hal/realtime/main_handoff.py`, `MainHandoffTracker`). Khi nó còn mở, không
+điểm vào realtime nào commit audio của user vào model:
+
+| Điểm vào | Thay vào đó xảy ra gì |
+|---|---|
+| Turn STT (`run_realtime_turn`) | trả `route=main_agent_pending`; `dispatch_turn` coi là terminal (không gửi gì sang os-server, metric loại trừ là `main_agent_pending`) |
+| Live opener đã xác nhận (`_try_live_opener`) | tiêu thụ tại chỗ, không dispatch |
+| VAD trigger ở live mode (`_live_decision`) | trả `"hold"` — không mở live session, không STT |
+
+Chốt chặn trong `_live_decision` nằm **sau** cổng speech và cổng wake-word,
+không phải trước: chính hai cổng đó quyết định trigger này có hướng tới thiết bị
+hay không, và đáp "vẫn đang làm" cho tiếng ồn trong phòng — hoặc cho cuộc nói
+chuyện của user với người khác — còn tệ hơn chính lỗi đang được chặn. Vì vậy lời
+nói không hướng tới thiết bị vẫn trả `"turn"` và im lặng.
+
+Mỗi điểm vào xin os-server một câu từ pool filler `main_still_working`
+(`POST /api/sensing/filler {"pool": "main_still_working", "owner":
+<interaction id>}`, cùng WAV cache và cùng giọng với mọi filler khác), nhiều
+nhất một lần mỗi `HAL_REALTIME_MAIN_HANDOFF_FILLER_GAP_S`. Transcript khác rỗng
+được ghi vào realtime memory thành lời của user kèm lời agent
+`[Said while the main agent was still working on: <request> — the device
+answered only that it is still on it.]`, để session sau biết nudge đã xảy ra và
+**không** được trả lời.
+
+Handoff đóng khi câu trả lời của agent chính được feed lại
+(`feed_realtime_history` → `save_main_agent_reply_fragment`, dù có nói ra hay
+không), khi user click (`button_actions._cancel_agent_speech` →
+`VoiceService.release_main_handoff("click")`), hoặc sau
+`HAL_REALTIME_MAIN_HANDOFF_TTL_S` (mặc định 120 s) nếu không có cái nào tới — một
+turn NO_REPLY hay chỉ chạy phần cứng không được phép giữ thiết bị câm mãi mãi.
+
+Đánh đổi có chủ ý: một yêu cầu mới thật sự nói trong cửa sổ này không được chuyển
+đi đâu cả; user nghe "vẫn đang làm" rồi hỏi lại khi câu trả lời về, hoặc click.
+Lớp realtime không thể phân biệt nudge với yêu cầu mới nếu không hỏi model, mà
+hỏi model chính là cái lỗi. Tất định thay vì dựa vào prompt, vì lý do ở #418.
 
 `turn_seq` là bộ đếm của os-server, còn ngưỡng đem ra so lại nằm trong tiến trình
 HAL, và hai bên restart độc lập. Deploy, OTA hay crash làm bộ đếm bắt đầu lại từ 1
@@ -2178,6 +2230,8 @@ trong `config.json`:
 | `HAL_REALTIME_SUMMARIZER_RETRIES` | `2` | Số lần thử lại mỗi lượt summarize; `0` là tắt |
 | `HAL_REALTIME_SUMMARIZER_RETRY_BACKOFF_S` | `1.5` | Chờ trước lần thử lại đầu, mỗi lần sau nhân đôi |
 | `HAL_REALTIME_SUMMARY_OPEN_REQUEST_TTL_S` | `3600` | Summarizer đặt các request chưa được trả lời vào một mục `## Open requests` ở cuối (bullet có timestamp). HAL xóa từng bullet khỏi `summary.md` khi timestamp `[<ISO-8601>]` của nó đã cũ bằng số giây này (bullet không có timestamp đọc được thì dùng tuổi file thay thế; heading bị xóa khi không còn bullet nào), cả khi refeed lại thành `[Previous summary]` lẫn khi nạp vào session context — một task đang chờ nằm lì trong context là thứ khiến một nudge rỗng nội dung làm Gemini "trả lời" nó từ ký ức cũ (#419, #421). `0` là tắt. |
+| `HAL_REALTIME_MAIN_HANDOFF_TTL_S` | `120` | Một yêu cầu đã delegate được tính là "agent chính vẫn đang xử lý" trong bao lâu khi chưa có câu trả lời nào về. Khi còn mở, mọi điểm vào realtime đáp lời nói mới bằng filler `main_still_working` thay vì commit nó vào model (#419). Đóng sớm bởi câu trả lời của agent chính và bởi cú click vật lý. `0` là tắt chốt chặn này. |
+| `HAL_REALTIME_MAIN_HANDOFF_FILLER_GAP_S` | `4` | Khoảng cách tối thiểu giữa hai câu filler "vẫn đang làm" trong cùng một handoff đang mở. |
 
 ## Bản đồ code
 

@@ -318,6 +318,19 @@ queues it and returns early — and "the agent is busy" is exactly the case with
 an older turn in flight, which made the later placement a no-op precisely when
 it was needed.
 
+The mark is **never stamped while the older turn is executing a tool.**
+os-server keeps the set of open tool calls per run (`openToolCalls` on
+`AgentHandler`, fed by the `tool` / `session.tool` start and end events and
+cleared by the run's lifecycle end/error). A turn that is mid-tool has not
+answered yet, and the realtime reply that arrived meanwhile cannot have — it has
+no tool result. Muting it would silence the only true answer: the user asked
+"find my pen", nudged "hey?" thirty seconds into the servo search, heard the
+realtime model's guess and never the search result (#419).
+`CancelSpeechForNewerTurn` then returns `false` (HAL does not count a
+suppression the policy never applied) and pushes a `speech_cancel` monitor
+event with `skipped: true, reason: "tool_in_flight"` so the timeline shows
+why the older turn kept the speaker.
+
 The mark is deliberately weaker than the physical click: it never drops the
 older turn's `[HW:]` markers, because an action the user genuinely asked for
 must still run. Its pending fillers **are** dropped, though — the dividing line
@@ -366,6 +379,46 @@ injects next to `_on_speak_end`, which routes into the same
 `feed_realtime_history(..., spoken=False)`. It is gated on `realtime_feedback`
 for the same reason the playback feed is: only the agentic runtime's own reply
 may enter the model's context, never a dropped filler or system notice.
+
+### Nudges while the main agent is still working (#419)
+
+`save_main_handoff` also opens an **in-flight handoff** on the orchestrator
+(`hal/realtime/main_handoff.py`, `MainHandoffTracker`). While it is open, no
+realtime entry point commits the user's audio to the model:
+
+| Entry point | What happens instead |
+|---|---|
+| STT turn (`run_realtime_turn`) | returns `route=main_agent_pending`; `dispatch_turn` treats it as terminal (nothing sent to os-server, metric excluded as `main_agent_pending`) |
+| Confirmed live opener (`_try_live_opener`) | consumed on the spot, not dispatched |
+| VAD trigger in live mode (`_live_decision`) | returns `"hold"` — no live session, no STT |
+
+The `_live_decision` hold sits **after** the speech and wake-word gates, not
+before them: those decide whether the trigger is addressed to the device at
+all, and answering room noise — or a conversation the user is having with
+somebody else — with "still on it" is worse than the bug being guarded
+against. Unaddressed speech therefore still returns `"turn"` and stays silent.
+
+Each of them asks os-server for one phrase from the `main_still_working`
+filler pool (`POST /api/sensing/filler {"pool": "main_still_working", "owner":
+<interaction id>}`, same WAV cache and voice as every other filler), at most
+once per `HAL_REALTIME_MAIN_HANDOFF_FILLER_GAP_S`. A non-empty transcript is
+written to realtime memory as the user's line with the agent line
+`[Said while the main agent was still working on: <request> — the device
+answered only that it is still on it.]`, so the next session knows the nudge
+happened and was **not** answered.
+
+The handoff closes when the main agent's reply is fed back
+(`feed_realtime_history` → `save_main_agent_reply_fragment`, spoken or not),
+when the user clicks (`button_actions._cancel_agent_speech` →
+`VoiceService.release_main_handoff("click")`), or after
+`HAL_REALTIME_MAIN_HANDOFF_TTL_S` (default 120 s) if neither arrives — a
+NO_REPLY or hardware-only turn must not hold the device mute forever.
+
+Trade-off, on purpose: a genuine new request spoken inside the window is not
+forwarded anywhere; the user hears "still on it" and asks again once the reply
+lands, or clicks. The realtime layer cannot tell a nudge from a new request
+without asking the model, and asking the model is the bug. Deterministic
+rather than prompt-based for the reason in #418.
 
 `turn_seq` is os-server's counter, but the threshold it is compared against
 lives in the HAL process, and the two restart independently. A deploy, OTA or
@@ -2244,6 +2297,8 @@ is a top-level `config.json` flag:
 | `HAL_REALTIME_SUMMARIZER_RETRIES` | `2` | Extra attempts per summarize; `0` disables |
 | `HAL_REALTIME_SUMMARIZER_RETRY_BACKOFF_S` | `1.5` | Wait before the first retry, doubled each time |
 | `HAL_REALTIME_SUMMARY_OPEN_REQUEST_TTL_S` | `3600` | The summariser puts unanswered requests under a final `## Open requests` section (timestamped bullets). HAL drops each bullet from `summary.md` once its `[<ISO-8601>]` stamp is this many seconds old (a bullet without a parseable stamp falls back to the file's age; the heading goes when no bullet is left), both when re-feeding it as `[Previous summary]` and when loading it into session context — a stale pending task in context is what let a content-free nudge make Gemini "answer" it from memory (#419, #421). `0` disables. |
+| `HAL_REALTIME_MAIN_HANDOFF_TTL_S` | `120` | How long a delegated request counts as "the main agent is still working on it" when no reply has come back. While open, every realtime entry point answers a new utterance with a `main_still_working` filler instead of committing it to the model (#419). Closed early by the main-agent reply and by the physical click. `0` disables the guard. |
+| `HAL_REALTIME_MAIN_HANDOFF_FILLER_GAP_S` | `4` | Minimum gap between two "still on it" fillers during one open handoff. |
 
 ## Code map
 
