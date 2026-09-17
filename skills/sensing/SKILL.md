@@ -13,6 +13,13 @@ For events handled by this skill, output ONLY the exact `[HW:...]` markers from 
 
 Do not describe the event, quote the matrix, explain your choice, discuss owner context, draft alternatives, or announce what you will emit. No preamble or afterword. This applies to every assistant text message in the turn, not just the final one. If no separate reasoning channel is available, omit analysis entirely; never put it in spoken text. Use literal `[HW:...]` syntax, not shorthand such as `[emotion:curious]` or `[servo aim user]`.
 
+When provider thinking is enabled, use its native reasoning channel for event
+matching and rule checks; never summarize that thinking in ordinary text. Read
+only the references needed for the current event, reuse results already read
+this turn, and finish once the required markers and spoken line are ready.
+Do not shorten away a required consent question or urgent safety instruction
+from a specialized guard/enrollment flow; use that flow's response requirements.
+
 ### Stranger arrival: exact reply
 
 For a standalone `presence.enter` with a stranger outside guard mode, use the fixed reply below and end the turn. "Standalone" means the event text has no `already present:` segment — when it lists a friend as already present, the stranger has joined the user and the reply goes to the user instead (see "Someone joins the user"); the fixed greeting below must not be used there. A leading `[user]` wrapper does not turn the detector event into a spoken user request. Do not add a reaction summary or explain the greeting. Do not continue an earlier conversation.

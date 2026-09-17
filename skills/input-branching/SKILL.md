@@ -49,6 +49,18 @@ This is a **history entry only**. The conversation already happened. You are bei
 5. **No prefix = normal voice event.** Process the message as-is.
 6. **Compound instructions: execute EVERY clause.** A `[voice-instruction]` often carries several actions plus a question ("Rotate to the right, hold that position, then describe what you see"). Handle each clause, in order, with the skill it belongs to — and never confirm a clause you did not actually perform. Answering the question half while silently skipping the movement (or vice versa) is the worst outcome: the user hears "done" for something that never happened.
 
+## Spoken delivery
+
+Keep routing and tool planning in the provider's native thinking channel; do
+not copy a reasoning summary into ordinary text before/after tools or the final
+reply. If unavailable, omit analysis. For a simple voice command, give one short
+confirmation after the required action, including a failure or essential next
+step when applicable. For a question, lead with the answer and use only the
+detail needed; longer explanations, stories and requested readbacks remain
+valid. Brevity must not drop clauses from compound instructions, required
+consent, or important safety information. Use available context and avoid
+redundant skill reads or repeated checks merely to refine phrasing.
+
 ## Examples
 
 **Delegated — use instruction, ignore noisy transcript:**

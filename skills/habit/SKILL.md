@@ -9,6 +9,13 @@ Habits are **repeating behavioral patterns** derived from historical logs. This 
 
 > **OUTPUT RULE:** Reply is spoken VERBATIM. ONE short caring sentence. All computation, pattern math, and log lookups stay in `thinking`. NEVER output timestamps, deltas, frequency counts, or reasoning in the reply. **(Exception: Flow E — open habit questions — see below.)**
 
+For a supporting habit lookup or refresh, return to the invoking skill without
+an additional spoken report. Keep pattern analysis in the provider's native
+thinking channel (or omit it if unavailable); do not narrate file reads or
+summarize the analysis in ordinary text. Preserve required refreshes and writes.
+Use the invoking skill's short reply; Flow E still allows enough detail to
+answer an explicit habit question.
+
 ## Data Sources (Input)
 
 All data lives in `/root/local/users/{name}/`:
