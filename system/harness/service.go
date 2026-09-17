@@ -515,7 +515,8 @@ func (s *Service) readLoop(c *connection) error {
 			return err
 		}
 		kind := stringField(outer, "type")
-		if kind == "pair.revoke" {
+		// The CLI seals pair.revoke as an autonomous_device_event payload.
+		if kind == "pair.revoke" || stringField(payloadOf(outer), "type") == "pair.revoke" {
 			return ErrRevoked
 		}
 		if kind == "autonomous_device_result" {
