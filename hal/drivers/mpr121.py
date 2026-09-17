@@ -15,8 +15,7 @@ from dataclasses import dataclass
 
 from hal.board.mpr121 import MPR121Config
 from hal.drivers.button_gestures import (
-    DOUBLE_CLICK_WINDOW, FACTORY_RESET_DURATION, LONG_PRESS_DURATION,
-    SLEEP_HOLD_DURATION,
+    DOUBLE_CLICK_WINDOW, LONG_PRESS_DURATION, SLEEP_HOLD_DURATION,
 )
 
 logger = logging.getLogger(__name__)
@@ -84,7 +83,8 @@ class _GestureRecognizer:
     """Poll-clock recognition independent of action execution and electrode count."""
 
     def __init__(self, debounce_ms, *, hold_thresholds=None, multi_click=True, hold_on_threshold=False):
-        self._hold_thresholds = hold_thresholds or (SLEEP_HOLD_DURATION, LONG_PRESS_DURATION, FACTORY_RESET_DURATION)
+        # Touch pads never factory-reset: that tier stays on the mechanical button.
+        self._hold_thresholds = hold_thresholds or (SLEEP_HOLD_DURATION, LONG_PRESS_DURATION)
         self._multi_click = multi_click
         self._hold_on_threshold = hold_on_threshold
         self._delay = debounce_ms / 1000
@@ -388,7 +388,7 @@ def triple_click_action(*, source):
 
 def hold_release_action(held_s, *, source):
     from hal.drivers.button_actions import hold_release_action as action
-    action(held_s, source=source)
+    action(held_s, source=source, factory_reset=False)
 
 
 def swipe_action(*, source):
@@ -640,7 +640,7 @@ class MPR121Handler:
         elif event.kind == "swipe":
             self._execute_swipe(event.direction)
         elif event.kind == "hold":
-            if self._feedback().commit(event.held_s) is False:
+            if self._feedback().commit(event.held_s, factory_reset=False) is False:
                 logger.info("MPR121 event=action_discarded gesture_id=%d action=hold reason=feedback_cancelled", event.gesture_id)
                 return
             hold_release_action(event.held_s, source="MPR121")
