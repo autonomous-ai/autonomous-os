@@ -680,7 +680,7 @@ func (c *Config) UserProfileReconcileEnabled() bool {
 // MemoryGuardEnabled reports whether the memory guard may WRITE. Defaults to
 // true: unlike the retire pass, what it removes is by construction never a
 // person's data (see migratepersona.GuardUserProfileText), and every removal
-// is backed up and copied to a `.quarantine.md` sidecar.
+// is backed up and copied to a `.quarantine.txt` sidecar.
 func (c *Config) MemoryGuardEnabled() bool {
 	if c.MemoryGuard == nil {
 		return true

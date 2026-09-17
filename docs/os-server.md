@@ -959,7 +959,7 @@ such writes; this is the deterministic version.
   guard splits on that and rejoins the same way.
 - **Writes only on change.** A clean file round-trips byte for byte and is not
   written (`USER.md` is in the cached prompt prefix). When something is removed:
-  `.bak-<nano>` copy, the removed blocks appended to `<file>.quarantine.md`
+  `.bak-<nano>` copy, the removed blocks appended to `<file>.quarantine.txt`
   (rotated at 64 KB) with a reason (`free-prose`, `unknown-label`,
   `prescriptive`), then an atomic temp+rename write.
 - **Default on.** `memory_guard: false` in `config.json` makes it observe-only

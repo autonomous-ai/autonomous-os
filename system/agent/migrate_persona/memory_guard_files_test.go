@@ -100,3 +100,20 @@ func TestMemoryFilePathsCoverEveryAdapter(t *testing.T) {
 		}
 	}
 }
+
+// TestQuarantinePathNeverEndsInMarkdown pins the sidecar extension. PicoClaw's
+// MEMORY.md lives in `<ws>/memory/`, and HAL's OpenClawContextManager globs
+// `memory/*.md` (hal/realtime/context_manager/openclaw.py, load_device_memory
+// and summarize_device_memory, newest first). A `.md` sidecar there would feed
+// every quarantined block straight back into the realtime session and its
+// device_summary.md — the exact poison the guard removed.
+func TestQuarantinePathNeverEndsInMarkdown(t *testing.T) {
+	p := "/home/pi/.picoclaw/workspace/memory/MEMORY.md"
+	got := QuarantinePath(p)
+	if strings.HasSuffix(got, ".md") {
+		t.Fatalf("sidecar %q must not end in .md: HAL globs memory/*.md", got)
+	}
+	if !strings.HasPrefix(got, p+".quarantine") {
+		t.Errorf("sidecar must sit next to its file, got %q", got)
+	}
+}

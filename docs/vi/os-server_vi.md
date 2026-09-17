@@ -942,7 +942,7 @@ deterministic của lệnh cấm đó.
   guard tách theo ký tự đó và nối lại đúng như vậy.
 - **Chỉ ghi khi có thay đổi.** File sạch round-trip từng byte và không bị ghi
   (`USER.md` nằm trong prefix prompt được cache). Khi có thứ bị gỡ: bản sao
-  `.bak-<nano>`, các block bị gỡ được nối vào `<file>.quarantine.md` (xoay vòng
+  `.bak-<nano>`, các block bị gỡ được nối vào `<file>.quarantine.txt` (xoay vòng
   khi quá 64 KB) kèm lý do (`free-prose`, `unknown-label`, `prescriptive`), rồi
   ghi atomic bằng temp+rename.
 - **Mặc định bật.** `memory_guard: false` trong `config.json` chuyển sang chế độ

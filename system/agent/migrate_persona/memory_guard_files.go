@@ -40,7 +40,11 @@ func MemoryFilePaths(opts Options) []string {
 }
 
 // QuarantinePath is the sidecar that receives what the guard removed from path.
-func QuarantinePath(path string) string { return path + ".quarantine.md" }
+// It is `.txt`, never `.md`: PicoClaw's MEMORY.md lives in `<ws>/memory/` and
+// HAL's OpenClawContextManager globs `memory/*.md` into the realtime session
+// (and distils it into device_summary.md), so a `.md` sidecar would re-inject
+// exactly what the guard removed.
+func QuarantinePath(path string) string { return path + ".quarantine.txt" }
 
 // GuardMemoryFile runs the rule for path (USER.md → strict allowlist, anything
 // else → MEMORY.md prescription rule). Absent or clean files return (nil, nil)
@@ -112,7 +116,7 @@ func GuardMemoryFiles(opts Options, execute bool) ([]GuardAction, error) {
 
 // appendQuarantine records the dropped blocks, newest last, so the owner (or a
 // support engineer over SSH) can see what the agent wrote and why it was
-// removed. Rotated once past quarantineRotateBytes.
+// removed. Rotated once past quarantineRotateBytes to `.quarantine.txt.1`.
 func appendQuarantine(path string, dropped []Quarantined) error {
 	side := QuarantinePath(path)
 	if st, err := os.Stat(side); err == nil && st.Size() > quarantineRotateBytes {

@@ -8,7 +8,7 @@ import (
 )
 
 // Quarantined is one block the memory guard removed from a file, with why.
-// The text goes to the `.quarantine.md` sidecar next to the file, never to a
+// The text goes to the `.quarantine.txt` sidecar next to the file, never to a
 // flow event — it may contain personal notes.
 type Quarantined struct {
 	Text   string
