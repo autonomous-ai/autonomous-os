@@ -53,6 +53,17 @@ class HarnessClientTests(unittest.TestCase):
                              {"gestureId": "step-id", "direction": "next", "generation": 42})
             self.assertFalse(session.trust_env)
 
+    def test_focus_step_accepts_lagging_focus_snapshot(self):
+        # 200 means the app already switched; a not-yet-refreshed focus is not a failure.
+        with patch.object(client.requests, "Session") as factory:
+            session = factory.return_value.__enter__.return_value
+            session.post.return_value.status_code = 200
+            session.post.return_value.json.return_value = {
+                "status": 1, "data": {"enabled": True, "focusAvailable": False, "agentId": ""}}
+            self.assertFalse(client.request_focus_step("step-id", "next", 42)["focusAvailable"])
+            with self.assertRaises(client.HarnessGestureError):
+                client.request_voice_toggle("toggle-id")
+
     def test_timeout_never_retries(self):
         with patch.object(client.requests, "Session") as factory:
             session = factory.return_value.__enter__.return_value

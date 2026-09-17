@@ -345,7 +345,14 @@ func (s *Server) Serve(closeFn func()) error {
 	if err := s.initializeExternalHistory(eventCtx); err != nil {
 		return err
 	}
-	harnessService, harnessErr := harness.NewService("config", harness.Callbacks{OnEvent: s.forwardHarnessEvent})
+	harnessService, harnessErr := harness.NewService("config", harness.Callbacks{
+		OnEvent: s.forwardHarnessEvent,
+		OnRevoked: func() {
+			if s.harnessVoice != nil {
+				_, _ = s.harnessVoice.SetMode(eventCtx, false)
+			}
+		},
+	})
 	if harnessErr != nil {
 		slog.Error("harness service initialization failed", "component", "harness", "error", harnessErr)
 	} else {
