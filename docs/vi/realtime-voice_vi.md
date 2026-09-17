@@ -1117,10 +1117,15 @@ sớm ("hello") ngay sau khi restart sẽ rớt xuống main agent.
 Prompt của summarizer (`resources/summarize_prompt.md`) yêu cầu model đặt mọi
 request của user mà các entry không cho thấy đã được trả lời, hoàn thành hay
 hủy vào một heading cuối `## Open requests`, mỗi request một bullet có
-timestamp. Heading này không tồn tại vĩnh viễn: `expire_open_requests()`
-(`context_manager/base.py`) xóa mục này khỏi `summary.md` khi file cũ hơn
-`HAL_REALTIME_SUMMARY_OPEN_REQUEST_TTL_S` (mặc định 3600s), cả ở nơi summary
-được refeed lại thành `[Previous summary]` cho lần summarize kế tiếp lẫn nơi nó
+timestamp. Các bullet này không tồn tại vĩnh viễn: `expire_open_requests()`
+(`context_manager/base.py`) xóa mọi bullet có timestamp `[<ISO-8601>]` ở đầu
+đã cũ từ `HAL_REALTIME_SUMMARY_OPEN_REQUEST_TTL_S` (mặc định 3600s) trở lên
+(timestamp không có múi giờ được hiểu là UTC), và xóa luôn heading khi không
+còn bullet nào. Hết hạn tính theo từng bullet, không theo file: `summary.md`
+được ghi lại ở mọi session có entry mới, nên trên một thiết bị đang hoạt động
+mtime của nó không bao giờ già quá TTL — tuổi file chỉ là phương án dự phòng
+cho bullet không có timestamp đọc được. Cơ chế này chạy cả ở nơi summary được
+refeed lại thành `[Previous summary]` cho lần summarize kế tiếp lẫn nơi nó
 được nạp vào session context — cơ chế xác định (deterministic) để chặn một task
 đang chờ nằm mãi trong context rồi bị "trả lời" từ ký ức cũ bởi một nudge rỗng
 nội dung (#419, #421). `0` là tắt cơ chế hết hạn.
@@ -1767,7 +1772,7 @@ trong `config.json`:
 | `HAL_REALTIME_SUMMARIZER_MODEL` | `claude-haiku-4-5-20251001` | Anthropic Messages API |
 | `HAL_REALTIME_SUMMARIZER_RETRIES` | `2` | Số lần thử lại mỗi lượt summarize; `0` là tắt |
 | `HAL_REALTIME_SUMMARIZER_RETRY_BACKOFF_S` | `1.5` | Chờ trước lần thử lại đầu, mỗi lần sau nhân đôi |
-| `HAL_REALTIME_SUMMARY_OPEN_REQUEST_TTL_S` | `3600` | Summarizer đặt các request chưa được trả lời vào một mục `## Open requests` ở cuối (bullet có timestamp). HAL xóa mục này khỏi `summary.md` khi file cũ hơn số giây này, cả khi refeed lại thành `[Previous summary]` lẫn khi nạp vào session context — một task đang chờ nằm lì trong context là thứ khiến một nudge rỗng nội dung làm Gemini "trả lời" nó từ ký ức cũ (#419, #421). `0` là tắt. |
+| `HAL_REALTIME_SUMMARY_OPEN_REQUEST_TTL_S` | `3600` | Summarizer đặt các request chưa được trả lời vào một mục `## Open requests` ở cuối (bullet có timestamp). HAL xóa từng bullet khỏi `summary.md` khi timestamp `[<ISO-8601>]` của nó đã cũ bằng số giây này (bullet không có timestamp đọc được thì dùng tuổi file thay thế; heading bị xóa khi không còn bullet nào), cả khi refeed lại thành `[Previous summary]` lẫn khi nạp vào session context — một task đang chờ nằm lì trong context là thứ khiến một nudge rỗng nội dung làm Gemini "trả lời" nó từ ký ức cũ (#419, #421). `0` là tắt. |
 
 ## Bản đồ code
 

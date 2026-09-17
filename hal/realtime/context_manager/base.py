@@ -5,6 +5,7 @@ Subclasses implement agent-specific context loading (identity files, device memo
 
 import json
 import logging
+import re
 import threading
 import time
 from abc import ABC, abstractmethod
@@ -23,30 +24,85 @@ logger = logging.getLogger(__name__)
 OPEN_REQUESTS_HEADING = "## Open requests"
 
 
-def expire_open_requests(summary: str, age_s: float, ttl_s: float) -> str:
-    """Drop the `## Open requests` section from a summary older than ttl_s.
+# `- [2026-09-15T11:56:02+00:00] turn off the TV` — the stamp the summariser
+# is told to put at the head of every open-request bullet.
+_OPEN_REQUEST_BULLET_RE = re.compile(r"^\s*[-*]\s*\[([^\]]*)\]")
+
+
+def _parse_open_request_stamp(raw: str) -> float | None:
+    """Epoch seconds of a bullet's `[…]` stamp, or None when it is not ISO-8601.
+
+    A naive stamp is read as UTC: the summariser copies the entry timestamps,
+    which HAL writes with an explicit offset, so a naive one is a model slip and
+    UTC is the least surprising reading of it.
+    """
+    try:
+        stamp = datetime.fromisoformat(raw.strip())
+    except ValueError:
+        return None
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=timezone.utc)
+    return stamp.timestamp()
+
+
+def expire_open_requests(summary: str, now_s: float, file_age_s: float, ttl_s: float) -> str:
+    """Drop expired bullets from the `## Open requests` section of a summary.
 
     Deterministic counterpart of the prompt rule: the model is asked to keep
-    pending requests in one section; the device forgets that section once it is
-    stale instead of trusting the next summarize to do so. ttl_s <= 0 disables;
-    a summary younger than the TTL, or without the section, is returned as is.
+    pending requests in one section; the device forgets each of them once it is
+    stale instead of trusting the next summarize to do so.
+
+    Expiry is PER BULLET, keyed on the `[<ISO-8601>]` stamp at its head: a
+    bullet whose stamp is ttl_s or more before now_s goes. summary.md is
+    rewritten on every session with new entries, so on an active device its
+    mtime never ages past the TTL — the file age (file_age_s) is only the
+    fallback for a bullet without a parseable stamp. When no bullet survives,
+    the heading goes too. ttl_s <= 0 disables; a summary with nothing to drop,
+    or without the section, is returned as is.
     """
-    if ttl_s <= 0 or age_s < ttl_s:
+    if ttl_s <= 0:
         return summary
     # Substring check is safe only because the prompt contract puts the heading
     # on its own line — it is never embedded mid-line elsewhere in the summary.
     if OPEN_REQUESTS_HEADING.lower() not in summary.lower():
         return summary
     out: list[str] = []
-    skipping = False
+    in_section = False
+    section_start = 0  # index in out of the heading line, for dropping it wholesale
+    kept_bullets = 0
+    dropped = 0
+
+    def close_section() -> None:
+        # An emptied section takes its heading and trailing blanks with it, so
+        # the model never sees a heading that promises requests and lists none.
+        nonlocal in_section
+        in_section = False
+        if kept_bullets == 0:
+            del out[section_start:]
+
     for line in summary.splitlines():
         if line.strip().lower() == OPEN_REQUESTS_HEADING.lower():
-            skipping = True
-            continue
-        if skipping and line.lstrip().startswith("#"):
-            skipping = False
-        if not skipping:
+            in_section = True
+            section_start = len(out)
+            kept_bullets = 0
             out.append(line)
+            continue
+        if in_section and line.lstrip().startswith("#"):
+            close_section()
+        if in_section:
+            m = _OPEN_REQUEST_BULLET_RE.match(line)
+            if m:
+                stamp_s = _parse_open_request_stamp(m.group(1))
+                expired = (now_s - stamp_s >= ttl_s) if stamp_s is not None else (file_age_s >= ttl_s)
+                if expired:
+                    dropped += 1
+                    continue
+                kept_bullets += 1
+        out.append(line)
+    if in_section:
+        close_section()
+    if dropped == 0:
+        return summary
     return "\n".join(out).strip()
 
 
@@ -333,15 +389,16 @@ class ContextManagerBase(ABC):
         """
         try:
             existing: str = self._summary_path.read_text(encoding="utf-8").strip()
-            age_s: float = time.time() - self._summary_path.stat().st_mtime
+            now_s: float = time.time()
+            file_age_s: float = now_s - self._summary_path.stat().st_mtime
         except Exception as e:
             logger.warning("[realtime] Failed to read summary: %s", e)
             return ""
         if not existing:
             return ""
-        trimmed: str = expire_open_requests(existing, age_s, self._open_request_ttl_s)
+        trimmed: str = expire_open_requests(existing, now_s, file_age_s, self._open_request_ttl_s)
         if trimmed != existing:
-            logger.info("[realtime] dropped stale open requests from summary (age %.0fs)", age_s)
+            logger.info("[realtime] dropped stale open requests from summary (file age %.0fs)", file_age_s)
         return trimmed
 
     def _load_realtime_memory_unlocked(self) -> list[str]:

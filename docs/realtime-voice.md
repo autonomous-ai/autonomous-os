@@ -1161,14 +1161,18 @@ turn ("hello") right after a restart would leak to the main agent.
 
 The summarizer prompt (`resources/summarize_prompt.md`) tells the model to put
 any user request the entries don't show as answered, done or cancelled under a
-final `## Open requests` heading, one timestamped bullet each. That heading is
-not permanent: `expire_open_requests()` (`context_manager/base.py`) drops the
-section from `summary.md` once the file is older than
-`HAL_REALTIME_SUMMARY_OPEN_REQUEST_TTL_S` (default 3600s), both where the
-summary is re-fed as `[Previous summary]` to the next summarize and where it is
-loaded into session context — deterministic backstop so a pending task can't
-sit in context indefinitely and get "answered" from stale memory by a
-content-free nudge (#419, #421). `0` disables expiry.
+final `## Open requests` heading, one timestamped bullet each. Those bullets
+are not permanent: `expire_open_requests()` (`context_manager/base.py`) drops
+every bullet whose leading `[<ISO-8601>]` stamp is
+`HAL_REALTIME_SUMMARY_OPEN_REQUEST_TTL_S` (default 3600s) or more in the past
+(a naive stamp is read as UTC), and the heading with them once none is left.
+Expiry is per bullet, not per file: `summary.md` is rewritten on every session
+with new entries, so on an active device its mtime never ages past the TTL —
+the file age is only the fallback for a bullet without a parseable stamp. This
+runs both where the summary is re-fed as `[Previous summary]` to the next
+summarize and where it is loaded into session context — deterministic backstop
+so a pending task can't sit in context indefinitely and get "answered" from
+stale memory by a content-free nudge (#419, #421). `0` disables expiry.
 
 ## Live mode (full duplex)
 
@@ -1829,7 +1833,7 @@ is a top-level `config.json` flag:
 | `HAL_REALTIME_SUMMARIZER_MODEL` | `claude-haiku-4-5-20251001` | Anthropic Messages API |
 | `HAL_REALTIME_SUMMARIZER_RETRIES` | `2` | Extra attempts per summarize; `0` disables |
 | `HAL_REALTIME_SUMMARIZER_RETRY_BACKOFF_S` | `1.5` | Wait before the first retry, doubled each time |
-| `HAL_REALTIME_SUMMARY_OPEN_REQUEST_TTL_S` | `3600` | The summariser puts unanswered requests under a final `## Open requests` section (timestamped bullets). HAL drops that section from `summary.md` once the file is older than this many seconds, both when re-feeding it as `[Previous summary]` and when loading it into session context — a stale pending task in context is what let a content-free nudge make Gemini "answer" it from memory (#419, #421). `0` disables. |
+| `HAL_REALTIME_SUMMARY_OPEN_REQUEST_TTL_S` | `3600` | The summariser puts unanswered requests under a final `## Open requests` section (timestamped bullets). HAL drops each bullet from `summary.md` once its `[<ISO-8601>]` stamp is this many seconds old (a bullet without a parseable stamp falls back to the file's age; the heading goes when no bullet is left), both when re-feeding it as `[Previous summary]` and when loading it into session context — a stale pending task in context is what let a content-free nudge make Gemini "answer" it from memory (#419, #421). `0` disables. |
 
 ## Code map
 
