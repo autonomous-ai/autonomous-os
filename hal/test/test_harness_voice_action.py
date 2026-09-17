@@ -7,8 +7,8 @@ import unittest
 from unittest.mock import patch, MagicMock
 import requests
 
-from hal.drivers import harness_voice_client as client
-from hal.drivers import harness_voice_action as action
+from hal.drivers.harness import client as client
+from hal.drivers.harness import actions as action
 from hal.i18n import localized_phrase, PHRASE_HARNESS_ON, PHRASE_HARNESS_OFF
 
 
@@ -73,25 +73,26 @@ class HarnessActionTests(unittest.TestCase):
             apply_device_presets("lamp", str(Path(__file__).resolve().parents[2] / "robots"))
             stack.enter_context(patch.object(action.state, "rgb_service", MagicMock()))
             stack.enter_context(patch.object(action.state, "_effect_thread", None))
+            stack.enter_context(patch("hal.drivers.harness.led.set_enabled"))
             restore = stack.enter_context(patch.object(action.state, "_schedule_led_restore"))
             def start_effect(request):
                 action.state._effect_thread = object()
             start = stack.enter_context(patch("hal.routes.led.start_led_effect", side_effect=start_effect))
-            for enabled, color in ((True, [1, 1, 3]), (False, [2, 2, 2])):
+            for enabled, color in ((False, [2, 2, 2]),):
                 action._show_feedback(enabled)
                 request = start.call_args.args[0]
                 self.assertEqual(request.color, color)
-                self.assertEqual(request.effect, "pulse")
-                self.assertEqual(request.duration_ms, 600)
+                self.assertEqual(request.effect, "blink")
+                self.assertEqual(request.duration_ms, 300)
                 self.assertTrue(request.transient)
-                restore.assert_called_with(0.7)
-            BUTTON_LED_PRESETS["harness_on"].update(effect="blink", duration_ms=900)
-            action._show_feedback(True)
+                restore.assert_called_with(0.4)
+            BUTTON_LED_PRESETS["harness_off"].update(effect="blink", duration_ms=900)
+            action._show_feedback(False)
             self.assertEqual(start.call_args.args[0].effect, "blink")
             restore.assert_called_with(1.0)
             restore.reset_mock()
             start.side_effect = None
-            action._show_feedback(True)
+            action._show_feedback(False)
             restore.assert_not_called()
 
     def test_all_languages_and_config_lookup(self):

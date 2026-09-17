@@ -587,7 +587,7 @@ Phrase cố tình ngắn — chúng fire giữa lúc vuốt nên cần cảm gi�
 | `hal/drivers/ttp223.py` | Handler touchpad cảm ứng TTP223 (chỉ OrangePi sun60) |
 | `hal/board/mpr121.py` | Đọc và kiểm tra cấu hình MPR121 do device quản lý |
 | `hal/drivers/mpr121.py` | Handler I²C MPR121 tùy chọn, detect click/giữ |
-| `hal/drivers/harness_mpr121.py` | Chính sách gesture riêng cho Harness mode |
+| `hal/drivers/harness/gestures.py` | Chính sách gesture riêng cho Harness mode |
 | `hal/drivers/voice/_internal/harness_capture.py` | Quản lý quyền sở hữu capture Harness thủ công |
 | `hal/drivers/button_gestures.py` | Ngưỡng cử chỉ dùng chung GPIO/MPR121 |
 | `hal/drivers/button_actions.py` | Hàm action chung, `HoldLEDFeedback` cho GPIO/MPR121 và pool phrase local |
@@ -600,7 +600,7 @@ Các handler đầu vào được khởi động trong startup lifespan `hal/ser
 
 ### Gesture MPR121 theo Harness mode
 
-Trên đèn MPR121, Harness OFF giữ gesture cũ: vuốt **phải sang trái** để bật Harness, **trái sang phải** để sleep. Harness ON thay thế action click cũ, triple tap reboot, giữ shutdown/reset, sleep và listening cue: tap điều khiển capture hoặc ngắt TTS; giữ **ít nhất 3 giây rồi nhả** tắt Harness rõ ràng (kể cả offline); vuốt **phải sang trái** chọn agent kế tiếp, **trái sang phải** chọn agent trước. `hal/drivers/harness_mpr121.py` quản lý gesture riêng này; `hal/drivers/voice/_internal/harness_capture.py` quản lý quyền sở hữu capture thủ công. GPIO/TTP223 không đổi. Hướng theo `swipe_axis` trái sang phải vật lý (Lamp mặc định E0…E11; kiểm tra chiều lắp). Python gọi API Go; Go quản lý mode/focus và route voice hiện có.
+Trên đèn MPR121, Harness OFF giữ gesture cũ: vuốt **phải sang trái** để bật Harness, **trái sang phải** để sleep. Harness ON thay thế action click cũ, triple tap reboot, giữ shutdown/reset, sleep và listening cue: tap điều khiển capture hoặc ngắt TTS; giữ **đủ 3 giây** tắt Harness và thông báo ngay (kể cả offline), không cần nhả; phần chạm còn lại bị bỏ qua tới khi buông tay; vuốt **phải sang trái** chọn agent kế tiếp, **trái sang phải** chọn agent trước. `hal/drivers/harness/gestures.py` quản lý gesture riêng này; `hal/drivers/voice/_internal/harness_capture.py` quản lý quyền sở hữu capture thủ công. GPIO/TTP223 không đổi. Hướng theo `swipe_axis` trái sang phải vật lý (Lamp mặc định E0…E11; kiểm tra chiều lắp). Python gọi API Go; Go quản lý mode/focus và route voice hiện có.
 
 Harness ON dùng thu giọng thủ công bằng tap, không tự nghe môi trường. Tap khi TTS đang nói chỉ ngắt phát âm thanh. Ngoài trường hợp đó, tap đầu bắt đầu thu; beep sẵn sàng chỉ phát sau khi recorder/STT đã sẵn sàng. Tap tiếp đóng capture và gửi một transcript STT đã chốt qua route OS hiện có tới agent Harness đang focus. Im lặng không tự gửi. Đạt `MAX_SESSION_DURATION_S` (`HAL_MAX_SESSION_DURATION_S`, mặc định 30 giây) thì hủy, không dispatch. Khi rảnh, mode không ghi lời nói xung quanh. Đổi mode, generation hoặc focus và privacy/stop đều loại bỏ capture; vuốt chuyển focus hủy capture trước khi đổi focus. Sleep và khóa privacy microphone phần cứng vẫn có ưu tiên.
 
@@ -615,3 +615,7 @@ Callback GPIO có mức chân sau debounce trùng vị trí đã biết (kể c�
 Khi wake mở lại mic bị mute bởi sleep, HAL cũng xóa cờ LED mic mute đã khôi phục. Callback kết thúc emotion, TTS hoặc nhạc chạy sau đó không được bật lại màu đỏ privacy khi mic đã mở. Mic vẫn bị hardware privacy khóa thì giữ cờ LED mute.
 
 Lệnh mute speaker thủ công trong lúc sleep chuyển quyền giữ mute từ sleep sang người dùng và được lưu ngay cả khi loa đã im lặng. Wake phải giữ lựa chọn này, kể cả khi privacy đang khóa.
+
+Âm báo thu giọng Harness dùng hai nốt đi lên khi bắt đầu và hai nốt đi xuống khi kết thúc, riêng biệt với ping gesture thường. Âm kết thúc báo đã đóng thu giọng, không phải xác nhận agent từ xa đã nhận hoặc làm xong task. Tap ngắt TTS giữ tiếng ping xác nhận cũ và không mở thu giọng.
+
+Khi Harness mode duy trì ON, watcher mode MPR121 giữ LED thở lime nhẹ từ `button_led.harness_on` trong preset thiết bị. OFF nháy nhẹ một lần theo `harness_off`. Đèn báo nhường sleep, riêng tư và phản hồi voice/nhạc, trở lại qua luồng restore LED, không thay đổi cài đặt đèn người dùng đã lưu. Thiết bị không có RGB bỏ qua phản hồi LED.

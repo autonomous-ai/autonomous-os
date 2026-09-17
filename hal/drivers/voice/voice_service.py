@@ -2318,7 +2318,7 @@ class VoiceService:
                 # Signal readiness only after both the recorder and STT opened.
                 if self._tts:
                     cue_start = time.monotonic()
-                    self._tts.play_ack_chime()
+                    self._tts.play_harness_capture_chime()
                     # The recorder kept running during the cue. Drain its
                     # buffered frames so the beep is not transcribed.
                     cue_frames = int((time.monotonic() - cue_start) * device_rate / frame_size) + 1
@@ -2584,6 +2584,9 @@ class VoiceService:
                 logger.info("Harness manual capture discarded without a valid finish tap")
                 combined = ""
                 harness_listening = False
+            elif manual_capture is not None and self._tts:
+                # Capture is closed; this cue is not a remote delivery receipt.
+                self._tts.play_harness_capture_chime(finished=True)
             # Voice metrics clock starts here: the endpoint has been detected and
             # the transcript is assembled. Everything downstream carries this
             # id (see hal/telemetry/voice_metrics.py).
