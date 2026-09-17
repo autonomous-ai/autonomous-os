@@ -125,6 +125,7 @@ def test_partial_speech_routing_is_unchanged_but_completion_is_propagated(monkey
     monkeypatch.setattr(realtime_turn, "_WaitFiller", Mock())
     monkeypatch.setattr(realtime_turn, "harness_followup_active", lambda: False)
     realtime = Mock(available=True, execution_completed=completed)
+    realtime.main_handoff_open.return_value = False
     realtime.stream_output.return_value = iter([TextOutput(text="An answer.")])
     result = realtime_turn.run_realtime_turn(
         realtime, Mock(), lambda text: text, "Hello", [object()], 1.0,

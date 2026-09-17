@@ -29,6 +29,7 @@ def test_live_entry_respects_gaze_focus_and_configuration(monkeypatch, wake, gaz
     service._music_is_playing = lambda: False
     service._wakeword_focus = SimpleNamespace(is_active=lambda: focus)
     service._realtime = Mock()
+    service._realtime.main_handoff_open.return_value = False
     service._realtime.wait_until_available.return_value = True
 
     assert service._live_decision([]) == expected
@@ -50,6 +51,7 @@ def test_wake_focus_opens_live_and_expiry_returns_to_stt(monkeypatch, gaze, shad
     now = [0.0]
     service._wakeword_focus = WakeWordFocus(20, clock=lambda: now[0])
     service._realtime = Mock()
+    service._realtime.main_handoff_open.return_value = False
     service._realtime.wait_until_available.return_value = True
     # Ambient speech must reach STT without preparing or sending live audio.
     assert service._live_decision([]) == "turn"
@@ -83,6 +85,7 @@ def test_live_opener_uses_stt_confirmation_before_granting_focus(
     service._wakeword_focus = WakeWordFocus(20)
     service._realtime.rebuilding = False
     service._realtime.available = True
+    service._realtime.main_handoff_open.return_value = False
     service._music_is_playing.return_value = False
     service._decorator.starts_with_wake_word.side_effect = lambda text: text.lower().startswith("hello lamp")
     service._decorator.matches_wake_word_loosely.return_value = False

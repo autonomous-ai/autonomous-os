@@ -136,6 +136,7 @@ def test_realtime_turn_marks_every_reply_segment(monkeypatch, cap, chunks, spoke
     monkeypatch.setattr(realtime_turn, "_reply_language_name", lambda: "English")
     monkeypatch.setattr(realtime_turn, "_WaitFiller", Mock())
     realtime = Mock(available=True)
+    realtime.main_handoff_open.return_value = False
     tts = Mock()
     tts.speak.return_value = not busy
 
