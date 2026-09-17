@@ -121,11 +121,19 @@ type Config struct {
 
 	// UserProfileReconcile enables the startup pass that retires a person from
 	// every runtime's USER.md once they no longer have a face/voice enrollment
-	// (see agent.UserProfileReconcile). nil/false = observe only: the pass logs
-	// what it WOULD retire and writes nothing, so a fleet can watch it against
-	// real personas before it is allowed to delete. Absence is never the
-	// trigger — only a removed enrollment is.
+	// (see agent.UserProfileReconcile). nil/true = apply; false = observe only:
+	// the pass logs what it WOULD retire and writes nothing. Absence is never
+	// the trigger — only a removed enrollment is.
 	UserProfileReconcile *bool `json:"user_profile_reconcile,omitempty" yaml:"userProfileReconcile"`
+
+	// MemoryGuard enables the sweep that quarantines self-written agent memory
+	// which could steer routing: free prose outside USER.md's `## Users` shape,
+	// and MEMORY.md lines that name a tool/endpoint AND prescribe behaviour
+	// (#421). Runs at boot and on every write to any runtime's USER.md/MEMORY.md.
+	// nil/true = quarantine (write); false = observe only (log what it would
+	// remove). Default ON — a guard that only logs does not stop the next
+	// session from inheriting the poison.
+	MemoryGuard *bool `json:"memory_guard,omitempty" yaml:"memoryGuard"`
 
 	// MCPAppliedRuntime is the agent runtime MCPReconcile last cloned the configured
 	// MCP connectors for. When it differs from AgentRuntime on boot, the reconcile
@@ -677,13 +685,26 @@ func (c *Config) LLMThinkingDisabled() bool {
 
 // GuardModeEnabled returns whether guard mode is on (default false).
 // UserProfileReconcileEnabled reports whether the USER.md enrollment reconcile
-// may WRITE. Defaults to false: a pass that deletes from a live persona should
-// be observed in the log before it is trusted to act.
+// may WRITE. Defaults to true (since 2026-09-16): the pass ran observe-only on
+// the fleet for two weeks without a false retirement, and while it stayed off a
+// previous owner's name kept resurfacing after resets (#421). `false` in
+// config.json returns it to observe-only.
 func (c *Config) UserProfileReconcileEnabled() bool {
 	if c.UserProfileReconcile == nil {
-		return false
+		return true
 	}
 	return *c.UserProfileReconcile
+}
+
+// MemoryGuardEnabled reports whether the memory guard may WRITE. Defaults to
+// true: unlike the retire pass, what it removes is by construction never a
+// person's data (see migratepersona.GuardUserProfileText), and every removal
+// is backed up and copied to a `.quarantine.txt` sidecar.
+func (c *Config) MemoryGuardEnabled() bool {
+	if c.MemoryGuard == nil {
+		return true
+	}
+	return *c.MemoryGuard
 }
 
 func (c *Config) GuardModeEnabled() bool {

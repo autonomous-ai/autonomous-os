@@ -15,6 +15,9 @@
 //  3. migrator.go Options: add a root-path field for your layout (e.g. `ExampleRoot
 //     string`) and set it in DefaultOptions.
 //  4. This file: implement read() + write() below (rename exampleAdapter → your name).
+//     personaPaths/userProfilePath/memoryFilePath/workspaceRoot are already filled
+//     in against ExampleRoot — the whole adapter surface the interface requires;
+//     just swap in your own root field/path names.
 //  5. Done. RunMigration(any, RuntimeExample) and the reverse now work; the switch
 //     reconciler (persona_migration.go) picks it up via CanMigrate automatically.
 //
@@ -142,3 +145,16 @@ func (exampleAdapter) userProfilePath(opts Options) string {
 	}
 	return filepath.Join(opts.ExampleRoot, "USER.md")
 }
+
+// memoryFilePath implements runtimeAdapter: where THIS runtime keeps MEMORY.md.
+// The memory guard sweeps it alongside USER.md, so it must point at the real
+// file just like userProfilePath above.
+func (exampleAdapter) memoryFilePath(opts Options) string {
+	if opts.ExampleRoot == "" {
+		return ""
+	}
+	return filepath.Join(opts.ExampleRoot, "MEMORY.md")
+}
+
+// workspaceRoot implements runtimeAdapter.
+func (exampleAdapter) workspaceRoot(opts Options) string { return opts.ExampleRoot }

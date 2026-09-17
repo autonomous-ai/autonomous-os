@@ -125,3 +125,15 @@ func (hermesAdapter) userProfilePath(opts Options) string {
 	}
 	return filepath.Join(opts.HermesRoot, "memories", "USER.md")
 }
+
+// memoryFilePath implements runtimeAdapter. Hermes has no workspace subdir —
+// MEMORY.md lives under memories/, alongside USER.md.
+func (hermesAdapter) memoryFilePath(opts Options) string {
+	if opts.HermesRoot == "" {
+		return ""
+	}
+	return filepath.Join(opts.HermesRoot, "memories", "MEMORY.md")
+}
+
+// workspaceRoot implements runtimeAdapter.
+func (hermesAdapter) workspaceRoot(opts Options) string { return opts.HermesRoot }

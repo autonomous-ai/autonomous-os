@@ -258,6 +258,7 @@ Nhãn `Unknown Speaker:` là metadata định danh, không phải điều kiện
 | GET | `/api/agent/recent` | 100 events gần nhất (ring buffer) |
 | POST | `/api/agent/speech/cancel` | Cử chỉ huỷ vật lý (single click, do HAL gọi — auth loopback-only để nút vẫn chạy khi chưa login). Bịt miệng mọi turn đang chạy và dừng playback ở HAL (`StopTTS`, đồng thời xoá luôn hàng đợi speak đã pre-synth). **Không** abort turn: turn vẫn chạy tiếp, tool vẫn fire, text vẫn về web chat và history — chỉ mất quyền dùng loa. Cài đặt bằng một watermark unix-ms đơn điệu (`speechWatermarkMs`): `deliverTTS` bỏ mọi câu trả lời thuộc turn được tạo tại hoặc trước mốc, kèm flow event `tts_cancelled`. Tuổi của turn đọc từ runID — id thiết bị kết thúc bằng timestamp tạo (`device-chat-7-<unix-ms>`, 13 chữ số), id kênh (`tg-<messageID>`) không có nên fallback về thời điểm đầu tiên run đó xin nói. Vì turn mới luôn nằm phía sau mốc, user click xong nói ngay được trong khi backlog cũ chạy nốt trong im lặng; watermark không bao giờ cần xoá. Cùng cái mốc đó cũng chặn luôn marker `[HW:]` của turn tại `fireHWCall` — servo và LED dừng theo, vì thiết bị vẫn cựa quậy sau khi bị bảo dừng thì user đọc là "nó phớt lờ mình". runID được đưa qua `resolveRunID` trước: đường TTS đã cầm id thiết bị trong khi đường HW có thể còn cầm UUID gốc của backend cho CÙNG một turn, và phán riêng lẻ thì câu trả lời bị bịt trong khi marker vẫn fire. Riêng `/dm`, `/broadcast`, `/speak` được miễn (cổng chặn đặt sau chúng): click nghĩa là "đừng nói với tôi", không được nuốt câu trả lời gửi cho user Telegram. Một watermark **thứ hai** (`autoSpeechWatermarkMs`) hoạt động y hệt nhưng do hệ thống đóng mốc: nó tiến lên mỗi khi HAL báo `voice_agent_handled` — realtime voice agent vừa trả lời thành tiếng một câu MỚI hơn — nên turn agent chính còn đang xử lý câu trước đó mất loa thay vì trả lời muộn bằng một giọng khác. `deliverTTS` bỏ câu trả lời cũ hơn **bất kỳ** mốc nào trong hai; `fireHWCall` **chỉ** xét mốc của cú click, vì phán đoán do máy đưa ra không được phép âm thầm huỷ hành động user đã yêu cầu. Opt-in theo từng body: đặt `OS_REALTIME_SUPERSEDES_MAIN_REPLY=1` trong `/opt/hal/.env` của body. Mặc định TẮT, nên body chưa từng biết tới switch này không bị ảnh hưởng. Cú click cũng gọi `FillerManager.CancelAllActive()`. Filler nói thẳng xuống HAL, không đi qua `deliverTTS`, nên watermark một mình không với tới được — mà turn bị bịt tiếng thì vẫn chạy tiếp, nên mỗi lần nó xong một tool là lại re-arm thêm một câu "một giây nhé" cho một câu trả lời user vừa huỷ. Mọi run đang giữ trạng thái filler tại thời điểm đó đều nằm phía cũ của mốc nên bị bỏ hết; filler Opening của câu user nói TIẾP THEO được arm sau đó nên không bị ảnh hưởng. Câu trả lời bị bỏ vẫn được POST sang `POST /voice/realtime/history` của HAL: cú click lấy đi cái loa chứ không lấy đi câu trả lời, mà bản ghi của realtime về những gì agent chính đã đáp vốn treo ở lúc TTS phát xong (xem `docs/realtime-voice.md`). |
 | POST | `/api/agent/restart` | Recovery "start + enable + restart" cho runtime đang active. Các bước: (1) best-effort `systemctl enable <unit>` — `<unit>` lấy từ map runtime→unit (`openclaw`, `hermes-gateway`, `picoclaw`, `codex`, `claudecode`, `opencode`) — để fix vẫn còn sau reboot; (2) `agentGateway.RestartAgent()` gọi `systemctl restart <unit>` — tự START service ngay cả khi đang stopped. Response `{backend, enabled}`. Dùng bởi card Agent Gateway ở Overview để phục hồi gateway đã stopped+disabled, không cần SSH. Các caller restart nội bộ (config refresh, migration) vẫn bỏ qua bước enable. |
+| POST | `/api/agent/memory/reset` | Admin. Recovery không cần SSH cho memory bị tự đầu độc (#421): với **mọi** runtime đã cài, copy `USER.md`, `MEMORY.md`, `KNOWLEDGE.md` và `realtime/{summary.md,device_summary.md,memory.jsonl,memory_raw.jsonl}` vào `<workspace>/.memory-reset-<stamp>-<rand>/`, reset `USER.md` về form trống (Hermes thì làm rỗng) và xoá phần còn lại, rồi chạy lại onboarding để `KNOWLEDGE.md` được seed lại. Trả về `{backup_dirs, cleared, skipped}`. Chỉ đụng file — lịch sử phiên (session OpenClaw, `state.db` của Hermes) không bị đụng; làm tiếp `/new`. Phát flow event `memory_reset`. |
 
 ---
 
@@ -904,11 +905,68 @@ chủ vẫn gọi tên chủ cũ (lamp-ac82, 2026-09-03).
 - **Chỉ ghi khi có thay đổi.** `USER.md` nằm trong prefix prompt được cache
   (~28k token), nên ghi vô điều kiện sẽ tốn một lần miss cache ở lượt kế tiếp của
   mỗi lần boot. Lượt chạy bình thường đọc xong và không ghi gì.
-- **Mặc định chỉ quan sát.** `user_profile_reconcile` trong `config.json` mở khoá
-  việc ghi; không đặt/false thì chỉ log thứ nó *định* retire và không đổi gì.
+- **Mặc định bật ghi.** `user_profile_reconcile: false` trong `config.json` đưa
+  pass về chế độ chỉ quan sát: nó log thứ nó *định* retire và không đổi gì.
+  (Chỉ quan sát là mặc định cho tới 2026-09-16.)
 - Ghi theo kiểu atomic (temp + rename) vì gateway đang chạy trong lúc pass chạy.
 - Enrollment store rỗng (máy mới) là no-op; store không đọc được là lỗi và không
   đổi gì, thay vì đoán.
+
+### Memory guard — memory agent tự ghi không được vượt skill
+
+Một dòng agent tự ghi vào `USER.md` trong một phiên bị sập ("…Talks about a
+personal notebook / Obsidian vault notes, wants hands-on action done…") đã vượt
+qua toàn bộ catalogue skill và khối SOUL "Skill priority (MANDATORY)" trên
+lamp-dbda: "find my keyboard" chạy lệnh shell thay vì `/servo/search`, sống sót
+qua `/new` (nó là file, không phải lịch sử phiên) và qua cả một lần đổi runtime
+(persona là multi-homed) — issue #421. Prompt đã cấm kiểu ghi này; đây là bản
+deterministic của lệnh cấm đó.
+
+`agent.MemoryGuard` quét `USER.md` và `MEMORY.md` của **mọi** runtime:
+
+- **Lúc boot** (sau retire pass) và **mỗi lần ghi** vào một trong các file đó
+  (fsnotify trên thư mục cha, debounce 2 s, tự nhận ra lần ghi lại của chính nó
+  qua hash nên không bao giờ lặp vô hạn), cộng thêm một lần rescan mỗi 10 phút
+  cũng bắt được các workspace được tạo sau khi boot.
+- **`USER.md` — allowlist chặt.** Giữ lại: khung template (slot `**Field:**`
+  trống, gợi ý in nghiêng, rule, link, các câu của chính template), các field
+  đơn đã điền (`Name` v.v. — retire pass quản phần này) và các entry dạng
+  `**<label> (role)** — key: value; …`. Trong một entry, đoạn nào có giá trị gọi
+  tên một tool mà agent có thể dùng để hành động (`obsidian`, `terminal`,
+  `curl`, `/servo/…`, `*.md`, …) hoặc được viết như một mệnh lệnh — trạng từ
+  chỉ thị đi kèm động từ (`never use`, `always run`), động từ mệnh lệnh đứng
+  đầu đoạn (`skip greetings`, `run a full scan…`), `instead of`, `match the`,
+  `hands-on`, `works best`, … — sẽ bị gỡ. Rule cho đoạn cố ý hẹp hơn rule của
+  `MEMORY.md`: heartbeat People-sync ghi lại các đoạn này mỗi ~30 phút, nên
+  một lần bắt nhầm ở đây sẽ thành vòng lặp ghi. Thói quen và sự thật chỉ chứa
+  `always`/`never`/`should` (`always at the desk by 9`, `never drinks coffee`)
+  hoặc một danh từ chung (`learning python`, `has a dog named Git`, `an old
+  camera`) được giữ lại. Entry của một label không có thư mục enrollment sẽ bị
+  gỡ (bỏ qua bước này khi store rỗng hoặc không đọc được). **Mọi thứ còn lại bị
+  quarantine** — một `**Notes:**` đã điền, một bullet tự do, một đoạn văn.
+- **`MEMORY.md` — chỉ xét nội dung.** Một block bị quarantine khi nó gọi tên
+  tool/endpoint **và** ra chỉ thị ("Full-room scan works best as curl-driven
+  aim + look per direction"). Quan sát thuần được giữ, nhắc tới tool mà không
+  kèm chỉ thị cũng được giữ.
+- **Hermes** `memories/USER.md` / `MEMORY.md` dùng entry phân tách bằng `§`;
+  guard tách theo ký tự đó và nối lại đúng như vậy.
+- **Chỉ ghi khi có thay đổi.** File sạch round-trip từng byte và không bị ghi
+  (`USER.md` nằm trong prefix prompt được cache). Khi có thứ bị gỡ: bản sao
+  `.bak-<nano>` (mỗi file chỉ giữ 5 bản backup mới nhất của guard), các block
+  bị gỡ được nối vào `<file>.quarantine.txt` (xoay vòng sang
+  `.quarantine.txt.1` khi quá 64 KB) kèm lý do (`free-prose`, `unknown-label`,
+  `prescriptive`), rồi ghi atomic bằng temp+rename.
+- **Mặc định bật.** `memory_guard: false` trong `config.json` chuyển sang chế độ
+  chỉ quan sát (log thứ nó định gỡ).
+- Mỗi thay đổi quan sát được đều phát một flow event `memory_changed` (file,
+  runtime, size, sha8, số block bị quarantine, lý do — không bao giờ kèm nội
+  dung) và làm mới fingerprint gắn vào `lifecycle_start` của mỗi lượt — xem
+  `flow-monitor.md`.
+- **Không bao phủ:** `KNOWLEDGE.md` (OpenClaw không load nó mỗi lượt; nó được
+  reset bởi `POST /api/agent/memory/reset`), `state.db` của Hermes.
+- **Phục hồi:** khi guard không bắt được (hoặc chất độc có trước khi guard tồn
+  tại), `POST /api/agent/memory/reset` backup rồi xoá file memory của mọi
+  runtime mà không cần SSH — xem bảng endpoint ở trên.
 
 ### Giữ hai file bộ nhớ không phình vô hạn
 
