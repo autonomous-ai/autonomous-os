@@ -43,7 +43,7 @@ func (v *VoiceController) StepFocus(ctx context.Context, id, direction string, g
 	}
 	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
 	defer cancel()
-	_, err := v.request(ctx, Frame{
+	reply, err := v.request(ctx, Frame{
 		"type": "focus.step", "idempotencyKey": id,
 		"direction": direction, "focusRevision": snapshot.FocusRevision,
 	})
@@ -55,10 +55,16 @@ func (v *VoiceController) StepFocus(ctx context.Context, id, direction string, g
 		}
 		return v.State(), &VoiceGestureError{Code: code, Cause: err}
 	}
-	// Refresh through the same authority used by polling. It updates focus only;
-	// neither a late RPC nor a late refresh can turn voice mode back on.
-	if err := v.RefreshFocus(ctx); err != nil {
-		return v.State(), &VoiceGestureError{Code: "focus_unavailable", Cause: err}
+	// The app has switched. From here nothing may report the gesture as failed:
+	// HAL would announce "could not switch" for a switch that happened. A
+	// successful reply carries the new snapshot; apply it directly. A reply
+	// without a usable agent (single-agent desk, or the step moved focus to a
+	// tile on another computer, which the CLI reports as focus:null) is still a
+	// completed switch: refresh through the polling authority so state.Error
+	// explains why voice cannot deliver, and return that state as-is. Neither a
+	// late RPC nor a late refresh can turn voice mode back on.
+	if !v.applyFocusReply(reply, status.MachineID) {
+		_ = v.RefreshFocus(ctx)
 	}
 	v.mu.Lock()
 	changed := v.modeIntent != intent || !v.state.Enabled
@@ -67,4 +73,17 @@ func (v *VoiceController) StepFocus(ctx context.Context, id, direction string, g
 		return v.State(), gestureError("mode_changed", "Voice mode changed while switching app focus")
 	}
 	return v.State(), nil
+}
+
+// applyFocusReply stores the focus a focus.step reply carries, when it names an
+// agent on the paired computer. Returns false when the reply has no usable focus.
+func (v *VoiceController) applyFocusReply(reply Frame, machineID string) bool {
+	focus := payloadOf(Frame{"payload": reply["focus"]})
+	revision := stringField(reply, "focusRevision")
+	machine, agent, name := stringField(focus, "machineId"), stringField(focus, "agentId"), stringField(focus, "name")
+	if revision == "" || agent == "" || machine != machineID {
+		return false
+	}
+	v.setFocus(machine, agent, name, revision, true, nil)
+	return true
 }

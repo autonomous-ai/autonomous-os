@@ -208,6 +208,13 @@ func (v *VoiceController) RefreshFocus(ctx context.Context) error {
 			}
 		}
 	}
+	v.setFocus(machine, agent, name, revision, available, err)
+	return err
+}
+
+// setFocus applies one focus snapshot to the shared state. err is the reason
+// focus is unavailable (nil when available).
+func (v *VoiceController) setFocus(machine, agent, name, revision string, available bool, err error) {
 	v.mu.Lock()
 	changed := v.state.FocusRevision != revision || v.state.MachineID != machine || v.state.AgentID != agent || v.state.FocusAvailable != available
 	if changed {
@@ -226,7 +233,6 @@ func (v *VoiceController) RefreshFocus(ctx context.Context) error {
 		}
 	}
 	v.mu.Unlock()
-	return err
 }
 func (v *VoiceController) SetMode(_ context.Context, enabled bool) (VoiceModeState, error) {
 	v.mu.Lock()

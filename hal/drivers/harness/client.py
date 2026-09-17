@@ -20,13 +20,15 @@ def request_voice_disable(gesture_id: str) -> dict:
 
 
 def request_focus_step(gesture_id: str, direction: str, generation: int) -> dict:
+    # A 200 here means the app already switched; a focus snapshot that has not
+    # caught up yet is not a failure (the OS poller fills it in).
     return _request_voice_gesture(
         {"gestureId": gesture_id, "direction": direction, "generation": generation},
-        url="http://127.0.0.1:5000/api/harness/voice-mode/focus",
+        url="http://127.0.0.1:5000/api/harness/voice-mode/focus", require_focus=False,
     )
 
 
-def _request_voice_gesture(payload: dict, *, url=OS_HARNESS_GESTURE_URL) -> dict:
+def _request_voice_gesture(payload: dict, *, url=OS_HARNESS_GESTURE_URL, require_focus=True) -> dict:
     """Send once; a timeout cannot tell whether the OS already committed."""
     try:
         with requests.Session() as session:
@@ -41,7 +43,7 @@ def _request_voice_gesture(payload: dict, *, url=OS_HARNESS_GESTURE_URL) -> dict
             raise HarnessGestureError(data.get("code", "unknown") if isinstance(data, dict) else "unknown")
         if not isinstance(data, dict) or type(data.get("enabled")) is not bool:
             raise HarnessGestureError("unknown")
-        if data["enabled"] and (not data.get("focusAvailable") or not data.get("agentId")):
+        if require_focus and data["enabled"] and (not data.get("focusAvailable") or not data.get("agentId")):
             raise HarnessGestureError("focus_unavailable")
         return data
     except (requests.RequestException, ValueError, AttributeError) as exc:
