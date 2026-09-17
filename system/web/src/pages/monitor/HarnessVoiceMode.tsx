@@ -88,15 +88,15 @@ export function HarnessVoiceMode({ connected }: { connected: boolean }) {
     </div>
     {mode?.pending && <div role="status" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
       <strong>Delivery is not confirmed</strong>
-      <span>The last request may already be running. New voice requests are paused until this is resolved.</span>
+      <span>The last request may already be running. You can send a new request; the previous request will not be retried.</span>
       <button type="button" style={control} disabled={busy || !connected} onClick={() => { void mutate("/voice-mode/receipt", {}); }}>Check delivery</button>
       <button type="button" style={control} disabled={busy} onClick={() => {
-        if (window.confirm("Resume new voice requests without retrying the previous request? It may still run on Harness.")) {
+        if (window.confirm("Dismiss this delivery warning without retrying the request? It may still run on Harness.")) {
           void mutate("/voice-mode/resolve", { resolution: "do_not_retry", idempotencyKey: mode.pending?.idempotencyKey });
         }
-      }}>Continue without retrying</button>
+      }}>Dismiss without retrying</button>
     </div>}
-    {connected && !pollError && mode?.focusAvailable && mode.agentId && <HarnessQuestion key={`${mode.machineId}:${mode.agentId}:${mode.focusRevision}`} connected={connected} disabled={unavailable || Boolean(mode.pending)} refresh={refresh} onAnswer={answers => mutate("/voice-mode/answer", answers)} />}
+    {connected && !pollError && mode?.focusAvailable && mode.agentId && <HarnessQuestion key={`${mode.machineId}:${mode.agentId}:${mode.focusRevision}`} connected={connected} disabled={unavailable} refresh={refresh} onAnswer={answers => mutate("/voice-mode/answer", answers)} />}
     {(error || pollError || mode?.error) && <p role="alert" style={{ margin: 0, color: "var(--lm-red)" }}>{error || pollError || mode?.error}</p>}
   </section>;
 }

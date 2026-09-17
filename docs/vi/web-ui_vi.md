@@ -858,3 +858,5 @@ hàm định dạng. `useVisionSensing` poll một lần cho toàn bộ card vis
 card không trực tiếp fetch. Cả hai dùng reverse proxy có xác thực
 `/api/hardware/*` sẵn có. Lỗi HTTP/response của vision hiển thị thông báo lỗi,
 không giữ màn hình loading hoặc số liệu cũ.
+
+Cảnh báo delivery Harness không còn chặn câu nói mới hoặc khóa trả lời câu hỏi. Check delivery kiểm receipt pending hiện tại; Dismiss without retrying bỏ cảnh báo mà không hủy hoặc gửi lại task.
