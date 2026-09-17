@@ -82,11 +82,14 @@ def test_real_stream_silence_waits_for_tap_and_cancel_never_dispatches(reason, m
          patch.object(module, "finalize_session", return_value=("fix the tests", [], 2.0)), \
          patch.object(module, "dispatch_turn") as dispatch, \
          patch.object(module, "voice_metrics"), \
-         patch.object(module.requests, "post"):
+         patch.object(module.requests, "post"), \
+         patch("hal.drivers.harness.led.set_capturing") as capture_led:
         module.VoiceService._stream_session(
             service, mic, 320, 16000, preconnected_session=stt,
             harness_voice=SNAPSHOT, manual_capture=capture,
         )
+    from unittest.mock import call
+    assert capture_led.call_args_list == [call(True), call(False)]
     assert len(reads) == 3
     from unittest.mock import call
     expected = [call(), call(finished=True)] if reason == "finish" else [call()]

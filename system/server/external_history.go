@@ -83,7 +83,7 @@ func (s *Server) restoreHarnessHistoryReplies() {
 	for _, r := range s.externalHistory.Records() {
 		if r.Source == "harness" && r.State == externalhistory.StateWaiting &&
 			r.AgentID != "" && status.Paired && r.MachineID == status.MachineID {
-			s.registerHarnessReply(r.AgentID, r.OriginRunID, false)
+			s.registerHarnessReply(r.AgentID, r.OriginRunID, false, false)
 		}
 	}
 }

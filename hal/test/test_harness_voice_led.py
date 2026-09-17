@@ -7,6 +7,7 @@ from hal.drivers.harness import led as led
 @pytest.fixture
 def lighting(monkeypatch):
     monkeypatch.setattr(led, '_enabled', False)
+    monkeypatch.setattr(led, '_capturing', False)
     for flag in ('_sleeping', '_tts_speaking', '_music_playing', '_thinking_cue_active'):
         monkeypatch.setattr(led.state, flag, False)
     monkeypatch.setattr(led.state, 'rgb_service', Mock())
@@ -83,3 +84,28 @@ def test_optional_led_failure_does_not_break_gestures(lighting):
     led.state._restore_user_led.side_effect = OSError('LED unavailable')
     led.set_enabled(True)
     assert led.enabled()
+
+
+def test_capture_uses_listening_preset_and_restores_mode(lighting, monkeypatch):
+    led.set_enabled(True)
+    led.set_capturing(True)
+    assert led.restore()
+    led.state._start_preset_effect.assert_called_with(
+        led.EMOTION_PRESETS[led.EMO_LISTENING], 'led-harness-capture')
+    thread = Mock()
+    thread.name = 'led-harness-capture'
+    monkeypatch.setattr(led.state, '_effect_thread', thread)
+    assert led.owns_effect()
+    led.set_capturing(False)
+    assert led.restore()
+    led.state._start_preset_effect.assert_called_with(
+        led.BUTTON_LED_PRESETS['harness_on'], 'led-harness-mode')
+
+
+def test_disable_clears_capture_and_ignores_late_ready(lighting):
+    led.set_enabled(True)
+    led.set_capturing(True)
+    led.set_enabled(False)
+    led.set_capturing(True)
+    assert not led._capturing
+    assert not led.restore()
