@@ -27,7 +27,7 @@ cũ `chip`, `line`, `debounce_ns` hoặc list `buttons`. Entry OrangePi của La
 ```json
 {
   "buttons": [
-    {"name": "primary", "chip": 0, "line": 100, "debounce_ns": 200000000, "behavior": "standard"},
+    {"name": "primary", "chip": 0, "line": 100, "debounce_ns": 200000000, "behavior": "standard", "factory_reset": false},
     {"name": "factory_reset", "chip": 0, "line": 99, "debounce_ns": 200000000, "behavior": "factory_reset", "hold_s": 5}
   ]
 }
@@ -109,7 +109,7 @@ Cập nhật HAL trước khi upload JSON có các trường mới này.
 | **Swipe** qua các pad | n/a | **`HAL_TOUCH_SWIPE`, mặc định bật.** Một lần tiếp xúc chạy đơn điệu qua cả ba pad, các khoảng đều trên ngưỡng di chuyển → **sleep**. Không dùng hướng — trái-sang-phải và phải-sang-trái là cùng một cử chỉ — và cũng không dùng trạng thái thiết bị. Wake vẫn thuộc về tap / double tap. |
 | **Giữ 2–5 s rồi nhả** | Phát thông báo sleep theo ngôn ngữ, rồi vào `sleepy`: LED tắt, camera/mic/speaker tắt; servo release sau 1 s. Khi đang giữ LED nháy tím sleepy. | n/a — phần cứng TTP223 không hold đáng tin được (xem "FastMode" dưới) |
 | **Giữ 5–10 s rồi nhả** | Shutdown OS (TTS báo → release servo → `sudo shutdown -h now`). LED nháy đỏ khi đã arm. | n/a — phần cứng TTP223 không hold đáng tin được (xem "FastMode" dưới) |
-| **Giữ 10 s+ rồi nhả** | Factory-reset: wipe state thiết bị + reboot vào AP setup (TTS báo → release servo → POST `/api/system/factory-reset` trên OS server). LED đỏ đứng khi đã arm. | n/a |
+| **Giữ 10 s+ rồi nhả** | Factory-reset: wipe state thiết bị + reboot vào AP setup (TTS báo → release servo → POST `/api/system/factory-reset` trên OS server). LED đỏ đứng khi đã arm. **Tắt trên Lamp** (`"factory_reset": false` ở nút chính): giữ 10 s+ vẫn chỉ shutdown vì nút reset riêng đảm nhiệm factory-reset. | n/a |
 
 Bảng trên mô tả nút GPIO chính và TTP223. Nút reset riêng ở pin 35 chỉ factory-reset khi nhả sau khi giữ ít nhất 5 s. Giữ ngắn hơn và single/triple tap đều không làm gì; nút này không gọi sleep hoặc shutdown. LED giữ nguyên dưới 5 s và dùng preset factory-reset đỏ đứng chung từ 5 s trở lên.
 
@@ -210,7 +210,7 @@ Driver đếm edge nơi **mọi destructive action commit ở rising edge (nhả
 
 1. **Falling edge (nhấn):** ghi `press_start` (đồng hồ monotonic) và spawn thread hold-LED watcher (mỗi lần nhấn 1 thread, có stop `Event` riêng). Không arm timer action nào.
 2. **Rising edge (nhả):** dừng LED watcher, tính `held = now − press_start`, scrub click đang chờ cho mọi hold từ 2 s trở lên, rồi chốt LED feedback (đỏ đứng cho shutdown/factory reset). Sau đó nó truyền duration vào `hold_release_action(held, source)` off-thread. Mapping action này chọn:
-   - `held >= 10 s` (`FACTORY_RESET_DURATION`) → `factory_reset_action`.
+   - `held >= 10 s` (`FACTORY_RESET_DURATION`) → `factory_reset_action`, trừ khi nút khai `"factory_reset": false` (nút chính Lamp) thì giữ ở `shutdown_action` và không bao giờ hiện mức đỏ đứng.
    - `held >= 5 s` (`LONG_PRESS_DURATION`) → `shutdown_action`.
    - `held >= 2 s` (`SLEEP_HOLD_DURATION`) → `sleep_action`, hàm gọi pipeline emotion `sleepy` chuẩn.
    - khác (tap ngắn) → `click_count += 1` và (re)start click-window timer 0.4 s. Ở tap **đầu tiên** của chuỗi, phần im lặng của `single_click_action` (`announce=False`) fire ngay off-thread — nó không phá huỷ ("cho tôi nói"), nên không cần đợi window. Cue nói được hoãn lại để không nói đè lên chuỗi triple-click đang bấm dở.
@@ -229,7 +229,7 @@ Với nút chính, thread watcher GPIO poll thời lượng giữ và chọn m�
 | < 2 s | giữ nguyên | một tap ngắn |
 | 2–5 s | tím sleepy, nháy 2 Hz | đã arm sleepy; nhả ra sẽ vào sleep (LED sau đó tắt) |
 | 5–10 s | đỏ, nháy 2 Hz | đã arm shutdown — nhả bây giờ là tắt máy |
-| 10 s+ | đỏ, đứng | đã arm factory-reset — nhả bây giờ là wipe + reboot |
+| 10 s+ | đỏ, đứng | đã arm factory-reset — nhả bây giờ là wipe + reboot (bỏ qua khi `factory_reset: false`; vẫn đỏ nháy) |
 
 Nút reset riêng chỉ dùng preset `factory_reset` đỏ đứng khi giữ ≥5 s; nhả trước 5 s không làm gì. Không factory-reset khi còn giữ. Cả hai nút GPIO dùng lại phần xử lý feedback này và thư viện action hiện có.
 

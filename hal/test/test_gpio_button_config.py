@@ -57,10 +57,10 @@ class TestButtonConfig(unittest.TestCase):
     def test_lamp_has_independent_primary_and_reset_inputs(self):
         root = Path(__file__).resolve().parents[2] / "robots"
         buttons = load_button_configs(root / "lamp", "orangepi_sun60")
-        self.assertEqual([(b.name, b.wiring.chip, b.wiring.line, b.behavior, b.hold_s)
+        self.assertEqual([(b.name, b.wiring.chip, b.wiring.line, b.behavior, b.hold_s, b.factory_reset)
                           for b in buttons],
-                         [("primary", 0, 100, "standard", 5.0),
-                          ("factory_reset", 0, 99, "factory_reset", 5.0)])
+                         [("primary", 0, 100, "standard", 5.0, False),
+                          ("factory_reset", 0, 99, "factory_reset", 5.0, True)])
         self.assertEqual(len(load_button_configs(root / "intern-v2", "orangepi_sun60")), 1)
         with tempfile.TemporaryDirectory() as directory:
             fallback = load_button_configs(directory, "orangepi_sun60")
@@ -78,6 +78,7 @@ class TestButtonConfig(unittest.TestCase):
                  [dict(reset, hold_s=True)], [dict(reset, hold_s=float("inf"))],
                  [dict(reset, hold_s=float("nan"))], [dict(reset, behavior="reboot")],
                  [dict(primary, hold_s=5)], [dict(reset, name="reset\\ninvalid")],
+                 [dict(primary, factory_reset=0)], [dict(reset, factory_reset=False)],
                  [dict(reset, extra=True)]]
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "gpio_button.json"

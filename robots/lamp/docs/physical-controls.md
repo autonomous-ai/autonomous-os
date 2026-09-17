@@ -28,7 +28,7 @@ OrangePi entry is:
 ```json
 {
   "buttons": [
-    {"name": "primary", "chip": 0, "line": 100, "debounce_ns": 200000000, "behavior": "standard"},
+    {"name": "primary", "chip": 0, "line": 100, "debounce_ns": 200000000, "behavior": "standard", "factory_reset": false},
     {"name": "factory_reset", "chip": 0, "line": 99, "debounce_ns": 200000000, "behavior": "factory_reset", "hold_s": 5}
   ]
 }
@@ -115,7 +115,7 @@ Deploy the updated HAL before uploading JSON with these new fields.
 | **Swipe** across the pads | n/a | **`HAL_TOUCH_SWIPE`, default on.** One contact running monotonically over all three pads, gaps above the movement floor → **sleep**. Direction is not used — left-to-right and right-to-left are the same gesture — and neither is device state. Wake stays on tap / double tap. |
 | **Hold 2–5 s, then release** | Speak the localized sleep announcement, then enter `sleepy`: LED off, camera/mic/speaker off; servo releases after 1 s. LED blinks sleepy purple while held. | n/a — TTP223 hardware cannot reliably hold (see "FastMode" below) |
 | **Hold 5–10 s, then release** | Shutdown OS (TTS announce → release servos → `sudo shutdown -h now`). LED blinks red while armed. | n/a — TTP223 hardware cannot reliably hold (see "FastMode" below) |
-| **Hold 10 s+, then release** | Factory-reset: wipe device state + reboot into AP setup (TTS announce → release servos → POST `/api/system/factory-reset` on the OS server). LED goes solid red while armed. | n/a |
+| **Hold 10 s+, then release** | Factory-reset: wipe device state + reboot into AP setup (TTS announce → release servos → POST `/api/system/factory-reset` on the OS server). LED goes solid red while armed. **Off on Lamp** (`"factory_reset": false` on the primary button): a 10 s+ hold stays at shutdown because the dedicated reset button owns factory-reset. | n/a |
 
 The table above covers the primary GPIO button and TTP223. The dedicated reset button on pin 35 only factory-resets when released after a hold of at least 5 s. Shorter holds and single/triple taps do nothing; it never invokes sleep or shutdown. LED stays unchanged below 5 s and uses the shared solid-red factory-reset preset from 5 s onward.
 
@@ -216,7 +216,7 @@ Edge-counting driver where **all destructive actions commit on the release edge 
 
 1. **Falling edge (press):** record `press_start` (monotonic clock) and spawn a hold-LED watcher thread (one per press, with its own stop `Event`). No action timer is armed.
 2. **Rising edge (release):** stop the LED watcher, compute `held = now − press_start`, scrub pending clicks for any hold of at least 2 s, and stage its final LED feedback (solid red for shutdown/factory reset). It then passes the duration to `hold_release_action(held, source)` off-thread. That action mapping selects:
-   - `held >= 10 s` (`FACTORY_RESET_DURATION`) → `factory_reset_action`.
+   - `held >= 10 s` (`FACTORY_RESET_DURATION`) → `factory_reset_action`, unless the button sets `"factory_reset": false` (Lamp primary), which keeps it at `shutdown_action` and never shows the solid-red tier.
    - `held >= 5 s` (`LONG_PRESS_DURATION`) → `shutdown_action`.
    - `held >= 2 s` (`SLEEP_HOLD_DURATION`) → `sleep_action`, which invokes the standard `sleepy` emotion pipeline.
    - else (short tap) → increment `click_count` and (re)start a 0.4 s click-window timer. On the **first** tap of a burst, the silent part of `single_click_action` (`announce=False`) fires immediately off-thread — it's non-destructive ("give me the floor"), so it doesn't wait for the window. The audible cue is deferred so it never talks over a triple-click in progress.
@@ -235,7 +235,7 @@ For the primary button, the GPIO watcher thread polls the hold duration and sele
 | < 2 s | unchanged | a short tap |
 | 2–5 s | sleepy purple, blinking 2 Hz | sleepy is armed; releasing enters sleep (LED then turns off) |
 | 5–10 s | red, blinking 2 Hz | shutdown armed — releasing now shuts down |
-| 10 s+ | red, solid | factory-reset armed — releasing now wipes + reboots |
+| 10 s+ | red, solid | factory-reset armed — releasing now wipes + reboots (skipped when `factory_reset: false`; stays red blinking) |
 
 The dedicated reset button uses only the solid-red `factory_reset` preset at ≥5 s; releasing before 5 s does nothing. No factory-reset runs while it remains held. Both GPIO inputs reuse this feedback implementation and the existing action library.
 
