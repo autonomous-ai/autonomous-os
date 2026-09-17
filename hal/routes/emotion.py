@@ -77,6 +77,12 @@ def list_emotion_presets():
 
 
 @router.post("/emotion", response_model=EmotionResponse)
+def harness_blocks_sleep() -> bool:
+    """Sleep is refused while Harness voice mode is ON; unavailable means off."""
+    from hal.drivers.voice._internal.harness_voice import read_voice_mode
+    return bool(read_voice_mode().get("enabled"))
+
+
 def express_emotion(req: EmotionRequest, source: str = "api"):
     """Express an emotion by coordinating servo animation + LED color simultaneously.
 
@@ -114,6 +120,12 @@ def express_emotion(req: EmotionRequest, source: str = "api"):
 
     if state._sleeping and req.emotion not in _SLEEP_GATE_ALLOWED:
         state.logger.info("POST /emotion: ignored %s while sleeping", req.emotion)
+        return {"status": "ignored", "emotion": req.emotion, "servo": None, "led": None}
+
+    # Harness ON means the user is at their desk working; the absence timer
+    # and any API caller must not put the device to sleep under them.
+    if req.emotion == EMO_SLEEPY and harness_blocks_sleep():
+        state.logger.info("POST /emotion: ignored sleepy while Harness is on (source=%s)", source)
         return {"status": "ignored", "emotion": req.emotion, "servo": None, "led": None}
 
     # The gaze+VAD acknowledgement is LED-only and must yield silently to the
