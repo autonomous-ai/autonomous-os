@@ -218,8 +218,31 @@ func RealtimeSupersedesMainReply() bool {
 // Returns whether the mark was actually stamped: the caller reports that back
 // to HAL, which must not record a suppression situation the policy never
 // applied (it would inflate the stale-reply denominator).
+//
+// Never stamped while any run has an open tool call (see openToolCalls):
+// that turn is the only thing that can answer, and the realtime reply that
+// arrived meanwhile is at best a filler and at worst a guess.
 func (h *AgentHandler) CancelSpeechForNewerTurn() bool {
 	if !RealtimeSupersedesMainReply() {
+		return false
+	}
+	// A turn that is mid-tool has not answered yet, and the realtime reply
+	// that arrived meanwhile cannot have: it has no tool result. Taking the
+	// speaker now would silence the only true answer (#419 — the user hears
+	// the realtime guess about the pen and never the servo search's "+51°").
+	// Skipping the stamp is deliberate: the main agent runs one device turn
+	// at a time, so "some run is mid-tool" is "the in-flight turn is
+	// mid-tool", and a per-run exemption would buy nothing.
+	if runs := h.runsWithOpenTool(); len(runs) > 0 {
+		slog.Info("speech auto-cancel skipped -- older turn is still executing a tool",
+			"component", "agent", "runs", runs)
+		if h.monitorBus != nil {
+			h.monitorBus.Push(domain.MonitorEvent{
+				Type:    "speech_cancel",
+				Summary: "🛠 realtime answered during a tool call — older turn keeps the speaker",
+				Detail:  map[string]any{"skipped": true, "reason": "tool_in_flight", "runs": runs, "source": "realtime_handled"},
+			})
+		}
 		return false
 	}
 	now := time.Now().UnixMilli()
