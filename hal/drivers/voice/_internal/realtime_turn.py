@@ -93,6 +93,7 @@ ROUTE_ERROR = "realtime_error"              # the turn raised; forwarded instead
 ROUTE_UNAVAILABLE = "realtime_unavailable"  # no live session to commit to
 ROUTE_NOISE_DROPPED = "noise_dropped"       # never committed — noise guard rejected it
 ROUTE_NOT_STARTED = "realtime_not_started"  # realtime off, or no turn was opened this capture
+ROUTE_MAIN_PENDING = "main_agent_pending"  # never committed — main agent still working on a delegated request (#419)
 
 
 def _reply_language_name() -> str:
@@ -327,8 +328,73 @@ def should_drop_downstream_turn(rt: RealtimeTurnResult) -> bool:
     A noise guard rejection is terminal even when STT fabricated a short word:
     forwarding that word would undo the guard and let room noise reach the main
     agent. The explicit AI rejection remains separately configurable above.
+
+    A turn held because the main agent is still working on a delegated request
+    is terminal too: it was answered with a filler, not by the model, so there
+    is no `voice_agent_handled` to sync and nothing new to hand the main agent
+    (it already has the request it is working on).
     """
-    return rt.route == ROUTE_NOISE_DROPPED or should_drop_realtime_rejection(rt)
+    return (
+        rt.route == ROUTE_NOISE_DROPPED
+        or rt.route == ROUTE_MAIN_PENDING
+        or should_drop_realtime_rejection(rt)
+    )
+
+
+def speak_main_pending_filler(realtime, owner: str) -> bool:
+    """Say "still on it" for a nudge that arrived mid-handoff, at most once per
+    REALTIME_MAIN_HANDOFF_FILLER_GAP_S.
+
+    Same wire as the dead-air filler: os-server picks the phrase from its
+    `main_still_working` pool and plays it from the WAV cache, so the realtime
+    wait and this one speak with the same voice. Returns whether a filler was
+    requested (False when rate-limited or the POST failed).
+    """
+    if not realtime.take_main_handoff_filler_slot():
+        return False
+    try:
+        requests.post(
+            voice_cfg.OS_FILLER_URL,
+            json={"pool": "main_still_working", "owner": owner},
+            timeout=2,
+        )
+        return True
+    except Exception as e:
+        logger.warning("[realtime] main-pending filler request failed: %s", e)
+        return False
+
+
+def hold_for_main_handoff(realtime, combined: str, interaction_id: str) -> Optional[RealtimeTurnResult]:
+    """The #419 guard: while the main agent is still working on a delegated
+    request, do not commit the new utterance to the realtime model.
+
+    The model has no tool result for the pending task and, given a content-free
+    nudge ("hey?", "well?"), answers it from memory — a guess spoken in the
+    device's voice, which then supersedes the real answer. Deterministic on
+    purpose: prompt-only instructions to "wait" were not reliable (#418).
+
+    Returns None when no handoff is open (caller proceeds normally). Otherwise
+    speaks the filler, records the nudge in realtime memory so the next session
+    knows it happened and was NOT answered, and returns a ROUTE_MAIN_PENDING
+    result that dispatch_turn treats as terminal.
+    """
+    if not realtime.main_handoff_open():
+        return None
+    pending = realtime.main_handoff_transcript()
+    logger.info(
+        "[realtime] main handoff still open (%r) — holding new utterance %r, filler instead of model",
+        pending[:80], combined[:80] if combined else "(empty)",
+    )
+    speak_main_pending_filler(realtime, interaction_id)
+    if combined:
+        realtime.save_turn(
+            user_text=combined,
+            agent_text=(
+                f"[Said while the main agent was still working on: {pending} — "
+                "the device answered only that it is still on it.]"
+            ),
+        )
+    return RealtimeTurnResult(route=ROUTE_MAIN_PENDING, transcript=combined)
 
 
 def should_dispatch_to_main(
@@ -444,6 +510,10 @@ def run_realtime_turn(
     if combined and harness_followup_active():
         logger.info("[realtime] Harness follow-up active — delegating without realtime reply")
         return RealtimeTurnResult(delegated=True, delegate_msg=combined, route=ROUTE_DELEGATED)
+
+    held = hold_for_main_handoff(realtime, combined, interaction_id)
+    if held is not None:
+        return held
 
     # Noise/false-trigger guard: a session with no STT transcript is not worth a
     # model turn — committing it makes the model answer silence/noise (spurious

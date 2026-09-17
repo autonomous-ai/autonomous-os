@@ -9,6 +9,7 @@ import logging
 
 from hal import config as hal_config
 from hal.drivers.voice._internal.realtime_turn import (
+    ROUTE_MAIN_PENDING,
     ROUTE_NOISE_DROPPED,
     ROUTE_HANDLED,
     should_drop_downstream_turn,
@@ -220,6 +221,8 @@ def dispatch_turn(
     dropped = should_drop_downstream_turn(rt)
     if rt.route == ROUTE_NOISE_DROPPED:
         destination = "nowhere (noise guard rejected turn)"
+    elif rt.route == ROUTE_MAIN_PENDING:
+        destination = "nowhere (main agent still working on a delegated request — filler spoken)"
     elif dropped:
         destination = "nowhere (model explicitly rejected non-user turn)"
     elif rt.handled:
@@ -244,6 +247,8 @@ def dispatch_turn(
     voice_metrics.set_route(interaction_id, rt.route, event_type)
     if rt.route == ROUTE_NOISE_DROPPED:
         voice_metrics.exclude(interaction_id, voice_metrics.EXCL_REJECTED_NOISE)
+    elif rt.route == ROUTE_MAIN_PENDING:
+        voice_metrics.exclude(interaction_id, voice_metrics.EXCL_MAIN_PENDING)
     elif dropped:
         voice_metrics.exclude(interaction_id, voice_metrics.EXCL_REJECTED_NON_USER)
     elif not combined and not (rt.delegated and rt.delegate_msg):

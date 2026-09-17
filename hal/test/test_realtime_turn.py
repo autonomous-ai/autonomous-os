@@ -23,3 +23,82 @@ def test_wakeword_focus_authorizes_a_followup_turn():
 def test_wakeword_disabled_preserves_the_always_listening_main_agent_sync():
     """The legacy path always sends the finalized STT turn to the OS server."""
     assert should_dispatch_to_main(False, False)
+
+
+from hal.drivers.voice._internal import realtime_turn as rt_mod
+from hal.drivers.voice._internal.realtime_turn import (
+    ROUTE_MAIN_PENDING,
+    RealtimeTurnResult,
+    hold_for_main_handoff,
+    should_drop_downstream_turn,
+)
+
+
+class _FakeRealtime:
+    """Just enough orchestrator surface for the guard."""
+
+    def __init__(self, open_: bool, slot: bool = True) -> None:
+        self._open = open_
+        self._slot = slot
+        self.turns: list[tuple[str, str]] = []
+        self.available = True
+
+    def main_handoff_open(self) -> bool:
+        return self._open
+
+    def main_handoff_transcript(self) -> str:
+        return "Find my pen" if self._open else ""
+
+    def take_main_handoff_filler_slot(self) -> bool:
+        return self._open and self._slot
+
+    def save_turn(self, user_text: str, agent_text: str) -> None:
+        self.turns.append((user_text, agent_text))
+
+
+def test_no_handoff_means_no_hold():
+    assert hold_for_main_handoff(_FakeRealtime(open_=False), "hey", "i-1") is None
+
+
+def test_nudge_during_handoff_is_held_and_filler_spoken(monkeypatch):
+    posted: list[dict] = []
+    monkeypatch.setattr(
+        rt_mod.requests, "post",
+        lambda url, json=None, timeout=None: posted.append({"url": url, "json": json}),
+    )
+    realtime = _FakeRealtime(open_=True)
+
+    rt = hold_for_main_handoff(realtime, "sếp sếp ơi", "i-2")
+
+    assert rt is not None
+    assert rt.route == ROUTE_MAIN_PENDING
+    assert rt.handled is False and rt.delegated is False
+    assert rt.transcript == "sếp sếp ơi"
+    assert posted == [{"url": rt_mod.voice_cfg.OS_FILLER_URL,
+                       "json": {"pool": "main_still_working", "owner": "i-2"}}]
+    # Memory keeps the truth: the user spoke, the device only said it was busy.
+    assert realtime.turns == [(
+        "sếp sếp ơi",
+        "[Said while the main agent was still working on: Find my pen — the device answered only that it is still on it.]",
+    )]
+
+
+def test_filler_is_rate_limited_but_turn_is_still_held(monkeypatch):
+    posted: list[dict] = []
+    monkeypatch.setattr(rt_mod.requests, "post",
+                        lambda url, json=None, timeout=None: posted.append(json))
+    rt = hold_for_main_handoff(_FakeRealtime(open_=True, slot=False), "hey", "i-3")
+    assert rt is not None and rt.route == ROUTE_MAIN_PENDING
+    assert posted == []
+
+
+def test_empty_transcript_is_held_without_memory_entry(monkeypatch):
+    monkeypatch.setattr(rt_mod.requests, "post", lambda *a, **k: None)
+    realtime = _FakeRealtime(open_=True)
+    rt = hold_for_main_handoff(realtime, "", "i-4")
+    assert rt is not None and rt.route == ROUTE_MAIN_PENDING
+    assert realtime.turns == []
+
+
+def test_main_pending_route_never_reaches_os_server():
+    assert should_drop_downstream_turn(RealtimeTurnResult(route=ROUTE_MAIN_PENDING))
