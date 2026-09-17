@@ -81,6 +81,19 @@ type AgentHandler struct {
 	runFirstSeenMu sync.Mutex
 	runFirstSeenMs map[string]int64
 
+	// openToolCalls is the set of tool calls that have started and not yet
+	// ended, per device run. A turn with an entry here is mid-tool: the only
+	// thing that can produce a true answer to its question is the tool result
+	// still on its way. CancelSpeechForNewerTurn consults this — a realtime
+	// reply to a NUDGE spoken during that wait must not take the speaker away
+	// from the answer the user is actually waiting for (#419).
+	//
+	// Keyed by the resolved device run id, then by toolCallId. Cleared by the
+	// matching tool end and, as a backstop for runtimes that drop it, by the
+	// run's lifecycle end/error.
+	openToolMu    sync.Mutex
+	openToolCalls map[string]map[string]struct{}
+
 	// ttsTurnOrder assigns each agent turn a local, monotonic sequence when
 	// its lifecycle starts. HAL receives this sequence with queued speech, so
 	// late HTTP posts from an older turn cannot reclaim the speaker after a
@@ -289,6 +302,7 @@ func ProvideAgentHandler(gw domain.AgentGateway, bus *monitor.Bus, sled *statusl
 		errorRecoveredRuns:   make(map[string]time.Time),
 		runFirstSeenMs:       make(map[string]int64),
 		ttsTurnOrder:         make(map[string]uint64),
+		openToolCalls:        make(map[string]map[string]struct{}),
 	}
 }
 

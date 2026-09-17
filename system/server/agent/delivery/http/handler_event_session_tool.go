@@ -37,6 +37,7 @@ func (h *AgentHandler) handleSessionToolEvent(evt domain.WSEvent) error {
 	if payload.Data.Phase == "start" {
 		summary = fmt.Sprintf("Tool %s started", toolName)
 		h.rememberToolArgs(payload.Data.ToolCallID, toolArgs)
+		h.noteToolStart(flowRunID, payload.Data.ToolCallID)
 		// DEFENSIVE (2026-07-23): rescue [HW:...] markers the agent echoed
 		// inside a shell tool call (e.g. `echo '[HW:/audio/play:{...}]'`)
 		// instead of emitting them as reply text — a shell echo never reaches
@@ -95,6 +96,7 @@ func (h *AgentHandler) handleSessionToolEvent(evt domain.WSEvent) error {
 			}
 		}
 	} else if payload.Data.Phase == "end" {
+		h.noteToolEnd(flowRunID, payload.Data.ToolCallID)
 		result := payload.ResultText()
 		if len(result) > 100 {
 			result = result[:100] + "..."

@@ -345,6 +345,9 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 			sensinghttp.DefaultFillerManager.OnTurnStart(flowRunID)
 		} else if payload.Data.Phase == "end" || payload.Data.Phase == "error" {
 			h.agentGateway.SetBusy(false)
+			// Backstop for a dropped tool end: the turn is over, nothing in
+			// it is mid-tool any more (see openToolCalls).
+			h.clearOpenTools(flowRunID)
 			// Cancel on error too — lifecycle.end has its own Cancel
 			// further down (just before TTS flush), but error skips
 			// that block, so clean filler state here.
@@ -649,6 +652,7 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 			// tools leave the timer running so the filler can fire
 			// during a long Bash/curl/Read.
 			sensinghttp.DefaultFillerManager.OnToolStart(flowRunID, toolArgs, toolName)
+			h.noteToolStart(flowRunID, payload.Data.ToolCallID)
 			summary = fmt.Sprintf("Tool %s started", toolName)
 			h.rememberToolArgs(payload.Data.ToolCallID, toolArgs)
 			// Text streamed before this tool call is narration, not the reply
@@ -748,6 +752,7 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 			// and only the very first Continuation ever fired —
 			// observable as "no filler during web_search" UX.
 			sensinghttp.DefaultFillerManager.OnToolEnd(flowRunID)
+			h.noteToolEnd(flowRunID, payload.Data.ToolCallID)
 			result := payload.ResultText()
 			if len(result) > 100 {
 				result = result[:100] + "..."

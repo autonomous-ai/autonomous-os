@@ -10,6 +10,7 @@ func newCancelTestHandler() *AgentHandler {
 	return &AgentHandler{
 		runFirstSeenMs: make(map[string]int64),
 		runIDMap:       make(map[string]string),
+		openToolCalls:  make(map[string]map[string]struct{}),
 	}
 }
 
