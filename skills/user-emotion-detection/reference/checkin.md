@@ -2,6 +2,29 @@
 
 Fires whenever the routing table in `SKILL.md` picks `checkin` (row #3 — the "anything else" catch-all: cooldown active so music is blocked, mood not suggestion-worthy, decision stale with no fresh synthesis, etc.). The music and LED-ack routes own their own output; this file owns checkin only.
 
+## Output boundary
+
+Reading this reference is not a cue to announce the route. Keep all route,
+cooldown, weak-cue, style, and logging analysis in the provider's native
+thinking/reasoning channel. If unavailable, omit that analysis. Ordinary
+assistant text before or after a tool call is also spoken text: do not emit
+`Let me get the checkin reference`, `Checkin route`, or a summary of thinking.
+After reading, finish with the required HW markers and one user-facing sentence
+of at most 20 words in `current_language`. No heading, rationale, or afterword.
+
+For an unknown user's weak camera Sad cue with music suggested two minutes ago,
+when the router selects checkin and no fresh mood decision is being logged,
+this is the complete English reply:
+
+```text
+[HW:/mood/log:{"kind":"signal","source":"camera","trigger":"sad","mood":"sad","user":"unknown"}][HW:/emotion:{"emotion":"caring","intensity":0.5}][HW:/music-suggestion/log:{"user":"unknown","trigger":"checkin:sad","message":"Anything on your mind?"}] Anything on your mind?
+```
+
+The only spoken text is `Anything on your mind?`. Preserve any additional mood
+decision marker required on other turns; never explain it aloud. A weak Sad cue
+does not establish distress, tears, or a bad experience. Keep the invitation
+neutral rather than assuming any of those.
+
 ## What "checkin" means
 
 A short, human reaction to whatever the camera just caught. Three flavors to mix between — pick whichever fits the moment:

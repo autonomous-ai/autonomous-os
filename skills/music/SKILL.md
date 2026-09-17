@@ -7,7 +7,7 @@ description: Play and stop music from YouTube through the device's speaker on us
 
 Play music through the device's speaker by searching YouTube. Use this when the user asks to play, sing, or listen to music.
 
-**Spoken output:** Everything outside HW markers in your reply is read aloud. For a play/stop request, start with the HW markers, then give one short confirmation and end the reply. Keep song-selection reasoning, transcript interpretation, and speaker attribution internal; do not add a preamble, a draft confirmation, or a second confirmation.
+**Spoken output:** Everything outside HW markers in your reply is read aloud. For a play/stop request, start with the HW markers, then give one short confirmation and end the reply. Keep song-selection reasoning, transcript interpretation, and speaker attribution in the provider's native thinking channel (omit analysis if unavailable), without a text summary before/after tools or in the final answer; do not add a preamble, a draft confirmation, or a second confirmation.
 
 ## Workflow
 

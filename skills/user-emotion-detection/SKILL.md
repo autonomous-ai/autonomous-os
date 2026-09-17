@@ -22,6 +22,16 @@ For any other event (`[sensing:presence.*]`, `[activity]`, `[sensing:sound]`, `[
 
 > **Logging has no spoken narration.** Only the selected response route supplies speech or `NO_REPLY`. Never narrate mood logging, mapping, skill selection or workflow steps. Keep analysis in a separate reasoning channel; if none is available, omit analysis entirely.
 
+> **When thinking is enabled, keep channels separate.** Use only the provider's
+> native thinking/reasoning channel for route comparisons, cooldown checks,
+> uncertainty, style selection, and marker construction. Enabling thinking does
+> not permit a reasoning summary in assistant text. Every ordinary text/content
+> block can be spoken, including text before a tool call and text in the final
+> response. Do not put `<think>` tags or a heading such as `Thinking:` into text
+> as a substitute for the native channel. If that channel is unavailable, omit
+> the analysis. Call required tools directly with no text introduction; after
+> their results, emit only the required markers and the user-facing sentence.
+
 > **EMOTION TURN OUTPUT CONTRACT — highest priority.** For a triggered
 > `[emotion]` / `[speech_emotion]` turn, send no assistant-text preamble before
 > or between skill/tool calls. Your entire final assistant message
@@ -46,6 +56,10 @@ spoken sentence, then end the turn. Do not reread the reference to refine the
 wording. Silently check that removing the markers leaves only the sentence or
 `NO_REPLY`; delete all planning prose, including `An emotion event`, `Let me
 check`, `Let me route`, and `Let me combine them all`. Never announce this check.
+Also omit `Route falls to checkin`, `music cooldown active`, `Weak sad cue`,
+`comfort/invite tone`, and `Mood signal must be logged`. These are routing notes,
+not part of a checkin, even when followed by a valid spoken sentence. Do not
+repeat or summarize native thinking in the final text.
 
 When the input explicitly says `weak camera cue` or `weak voice cue`, do not
 assert the detected feeling or a visible expression as fact. In a positive

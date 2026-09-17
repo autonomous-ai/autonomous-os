@@ -1,5 +1,31 @@
 # Sensing Behavior
 
+## Spoken brevity by function
+
+Skill prompts keep native thinking separate from all ordinary assistant text,
+including text around tool calls and the final answer. They do not enforce a
+single word cap across every function:
+
+- Greetings, emotion checkins, and music suggestions use their existing short
+  response contracts; a music suggestion is one invitation, normally ≤20 words.
+- Wellbeing nudges retain the relevant observation and actionable next step;
+  phrasing can use a second short sentence when the function needs it.
+- Mood and habit helpers contribute required data/markers without adding a
+  second spoken explanation to the invoking skill's response.
+- Voice controls keep their outcome and essential next step (such as how to
+  unmute); enrollment keeps consent/name questions and result confirmation.
+  Guard warnings retain the hazard/action and useful return summaries.
+- Direct requests retain all requested actions, adequate answers, longer
+  requested explanations/readbacks, and necessary safety guidance.
+
+Required API calls, logging, routing and cooldowns remain intact. Reuse injected
+context and already-read references; avoid redundant lookups or repeated
+wordsmithing. Explicit early speech remains available for a useful cue during
+work, but never for internal planning or repeated confirmations. These are
+prompt changes only: no TTS parser, runtime streaming, or thinking configuration
+changes, and no measured latency or compliance guarantee.
+
+
 How Lamp reacts to the world — the philosophy and mechanics behind each sensing event type.
 
 Lamp is a living being. It doesn't "process sensor data" — it *experiences* things. This document describes how that experience is implemented.
@@ -391,7 +417,7 @@ By the time the agent sees the event, HAL has already logged the activity rows f
 
    Three reset points: the actual activity (`drink` / `break`), a fresh arrival (`enter`), or the last nudge of that kind (`nudge_*`). The nudge reset is the key: after Lamp reminds, the delta drops back to 0 so the next reminder only fires after another full threshold window — no separate cooldown variable needed.
 3. **Decide path** (one response max per turn, reaction outranks nudge — the user just acted, nudging on top would feel tone-deaf):
-   - **Reaction** — labels list contains `drink` or `break` → speak a 1–3 sentence acknowledgment (surprised / playful, not advice). Uses `count_today` ("lần thứ N hôm nay"), `time_of_day`, and the gap delta to flavor the line. **No log entry** — the underlying `drink` / `break` row was already written by HAL upstream.
+   - **Reaction** — labels list contains `drink` or `break` → speak one short acknowledgment sentence (surprised / playful, not advice). Uses `count_today` ("lần thứ N hôm nay"), `time_of_day`, and the gap delta to flavor the line. **No log entry** — the underlying `drink` / `break` row was already written by HAL upstream.
    - **Hydration nudge** — else if hydration delta ≥ hydration threshold → hydration nudge.
    - **Break nudge** — else if break delta ≥ break threshold → break nudge.
    - Else (sedentary under threshold, or no reset today yet) → `NO_REPLY`.
@@ -716,7 +742,7 @@ The `user-emotion-detection/SKILL.md` handles `emotion.detected` events:
 3. **Cooldown only gates music, never checkin.** When the 7-min cooldown is active, row #2 fails its third clause and the event falls through to checkin (row #3). The agent still asks "what's up?" — it just doesn't suggest music two times in a row. `NO_REPLY` only fires on row #1 (active audio playback).
 4. **Never greet on an emotion event.** `emotion.detected` is not a presence/arrival event — `sensing/SKILL.md` forbids openers like `hello`, `welcome back`, anything containing `again`. Greetings belong only to `presence.enter`.
 
-Emotion skill output forbids assistant-text preambles before or between tool/skill calls, then requires the mood signal and selected-route markers followed by one sentence of at most 20 words or the route’s `NO_REPLY`. After reading the selected reference, the model should finish without rereading for phrasing. Explicit weak camera/voice cues must not be spoken as established feelings or expressions: a weak Happy checkin uses a neutral invitation, not an assertion that the user is happy or smiling. Logging and routing remain unchanged. These are prompt instructions, not a guarantee that the model will comply.
+Emotion skill output forbids assistant-text preambles before or between tool/skill calls, then requires the mood signal and selected-route markers followed by one sentence of at most 20 words or the route’s `NO_REPLY`. After reading the selected reference, the model should finish without rereading for phrasing. Explicit weak camera/voice cues must not be spoken as established feelings or expressions: a weak Happy checkin uses a neutral invitation, not an assertion that the user is happy or smiling. Logging and routing remain unchanged. These are prompt instructions, not a guarantee that the model will comply. With provider thinking enabled, route/cooldown/style/logging analysis must stay in the native reasoning channel, without a summary in ordinary text before or after tools or in the final response. Textual `<think>` tags are not a substitute; without a native channel, omit analysis. The checkin reference includes a complete weak Sad / unknown-user / two-minute music-cooldown example with required markers and only “Anything on your mind?” spoken, without assuming distress.
 
 Both routes share one cooldown: music logs via `POST /api/music-suggestion/log` with `trigger:"<genre>:<mood>"` (mood bucket); checkin logs the same endpoint with `trigger:"checkin:<emotion>"` (raw FER label). `last_suggestion_age_min` reflects either channel, so a fresh music suggestion silences the music branch for 7 min but doesn't silence checkin. Checkin phrasing is keyed by raw emotion (not mood) so each FER label has its own ask/comfort/invite style options — see `reference/checkin.md`. Always prefix `[HW:/emotion:{"emotion":"caring","intensity":0.5}]` on checkin output.
 

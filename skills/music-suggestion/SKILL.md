@@ -7,6 +7,18 @@ description: Proactive music suggestion. Routed in by user-emotion-detection/SKI
 
 > **`unknown` users count.** Always run suggestion checks when `current_user` is `"unknown"` — speak only, no DM. Never skip because the user is unknown/unconfirmed.
 
+## Spoken output
+
+For a routed suggestion, emit all required mood/suggestion/emotion markers and
+one short invitation to play one song, normally at most 20 words. Do not add a
+separate mood checkin or a second confirmation. Keep genre selection, cooldown
+checks and marker construction in the provider's native thinking channel; do
+not summarize them in text before/after tools or in the final answer. If native
+thinking is unavailable, omit analysis. Use the supplied context and finish
+once a suitable suggestion is ready, without rereading skills to polish it.
+This changes wording only: preserve routing, logging, user consent before play,
+and the existing known-user DM behavior.
+
 ## Triggers
 
 Only one trigger: **Mood** — after logging a mood `decision` that is suggestion-worthy (`sad`, `stressed`, `tired`, `excited`, `happy`, `bored`). Activity events (`[activity] Activity detected: ...`, whether sedentary, drink/break, or celebrate) route to `wellbeing/SKILL.md` and never to this skill.
