@@ -319,6 +319,10 @@ workspace instruction về tool và session convention của runtime đó. Nó c
 `ROBOT.md` của device, để agent không giả định phần cứng không tồn tại. Nguồn
 runtime này cố ý là gateway đã ready, không phải `config.agent_runtime`, vì
 config có thể lệch tạm thời trong khi reconcile runtime switch.
+Gửi greeting xong, os-server gọi HAL `POST /voice/wake-focus?source=boot_greeting`
+để mở cửa sổ follow-up của wake word (`HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S`), nên user
+trả lời greeting được mà không cần wake phrase. HAL no-op khi wake word tắt hoặc
+follow-up timeout = 0.
 
 Cảnh báo bật khi `llm_base_url` + `llm_api_key` được set; đặt
 `alerts_disabled: true` trong `config/config.json` để tắt cảnh báo cho một thiết bị.

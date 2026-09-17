@@ -348,6 +348,11 @@ func (s *Server) handleSetUpCompleteChange(setupCompleted bool) {
 					s.agentGateway.SendSystemChatMessage,
 				); err != nil {
 					slog.Warn("startup greeting failed", "component", "server", "backend", s.agentGateway.Name(), "error", err)
+				} else if err := hal.GrantWakeFocus("boot_greeting"); err != nil {
+					// Greeting invites a reply; open the wake follow-up window so
+					// the user need not repeat the wake phrase. HAL no-ops when
+					// wake word is off.
+					slog.Warn("boot greeting wake focus failed", "component", "server", "error", err)
 				}
 			} else {
 				if s.environmentStartup != nil {
