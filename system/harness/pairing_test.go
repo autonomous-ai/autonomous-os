@@ -262,3 +262,40 @@ func TestTrustRemovalFailurePreservesPinAndAllowsRetry(t *testing.T) {
 		})
 	}
 }
+
+func TestComputerDenyingPinnedIdentityUnpairsDevice(t *testing.T) {
+	revoked := make(chan struct{}, 1)
+	s, err := NewService(t.TempDir(), Callbacks{OnRevoked: func() { revoked <- struct{}{} }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.disk.Peer = &peer{MachineID: "mac", Protocol: "harness-device-direct-v1", PublicKey: b64(make([]byte, 32))}
+	if err = s.saveLocked(); err != nil {
+		t.Fatal(err)
+	}
+	ws := testDirectSocket(t, s)
+	_ = ws.WriteJSON(Frame{"type": "machine_select", "payload": Frame{"machineId": "mac", "label": "Mac"}})
+	_ = ws.SetReadDeadline(time.Now().Add(2 * time.Second))
+	for _, want := range []string{"machine_selected", "e2e_hello"} {
+		var f Frame
+		if err = ws.ReadJSON(&f); err != nil || stringField(f, "type") != want {
+			t.Fatalf("want %s, got %v (%v)", want, f, err)
+		}
+	}
+	// The computer removed this device from its trust list.
+	_ = ws.WriteJSON(Frame{"type": "e2e_denied", "payload": Frame{}})
+	select {
+	case <-revoked:
+	case <-time.After(2 * time.Second):
+		t.Fatal("OnRevoked not called")
+	}
+	if st := s.Status(); st.Paired || st.State != "unpaired" {
+		t.Fatalf("pin kept after computer revoke: %#v", st)
+	}
+	if _, err = os.Stat(s.path); err == nil {
+		raw, _ := os.ReadFile(s.path)
+		if strings.Contains(string(raw), "\"mac\"") {
+			t.Fatal("trust.json still holds the revoked peer")
+		}
+	}
+}

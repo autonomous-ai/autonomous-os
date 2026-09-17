@@ -51,7 +51,7 @@ Sai mã làm lần ghép thất bại và Desktop hiển thị lỗi. Tạo mã 
 
 - `NewService(configDir, callbacks)` đọc danh tính; `Start(ctx)` quản lý vòng đời.
 - `POST /api/harness/pair` có xác thực admin gọi `StartPair(ctx)` không cần machine ID. `GET /api/harness/pair/status` trả mã tạm, `expires_at`, `pairing`, `state` và lỗi tùy chọn với `Cache-Control: no-store`.
-- `POST /api/harness/pair/cancel` có xác thực admin vô hiệu hóa lần ghép đang chờ. `DELETE /api/harness` xóa pin và đóng socket.
+- `POST /api/harness/pair/cancel` có xác thực admin vô hiệu hóa lần ghép đang chờ. `DELETE /api/harness` xóa pin, đóng socket và gửi `pair.revoke` (best-effort) tới máy tính đang kết nối. Thu hồi là hai chiều: nếu máy tính đã ghép gỡ thiết bị này (frame `pair.revoke` mã hóa trên kết nối đang mở, hoặc `e2e_denied` khi thiết bị reconnect bằng identity đã pin), thiết bị tự xóa pin của mình, báo `unpaired` thay vì `disconnected`, và tắt giọng nói chỉ-Harness, giống unpair tại chỗ.
 - `GET /api/harness/status` dành cho admin hoặc caller loopback trực tiếp; không trả mã.
 - `GET /api/harness/ws` nhận socket CLI trực tiếp. PAKE và E2EE với khóa đã ghim xác thực route này thay cho HTTP bearer. Từ chối header Origin của trình duyệt. Tối đa bốn socket đầu vào, giới hạn mười giây cho metadata đầu tiên và hai mươi giây cho handshake phiên/ứng dụng.
 - `POST /api/harness/request` chỉ cho loopback thực sự, có kiểm tra địa chỉ proxy, để runtime của skill gọi.

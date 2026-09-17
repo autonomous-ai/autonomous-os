@@ -51,7 +51,7 @@ An incorrect code fails the attempt and is shown in Desktop. Generate a new code
 
 - `NewService(configDir, callbacks)` loads the identity; `Start(ctx)` owns the lifetime.
 - Admin-authenticated `POST /api/harness/pair` calls `StartPair(ctx)` without a machine ID. `GET /api/harness/pair/status` returns the temporary code, `expires_at`, `pairing`, `state` and optional error with `Cache-Control: no-store`.
-- Admin-authenticated `POST /api/harness/pair/cancel` invalidates the pending attempt. `DELETE /api/harness` removes the pin and closes its sockets.
+- Admin-authenticated `POST /api/harness/pair/cancel` invalidates the pending attempt. `DELETE /api/harness` removes the pin, closes its sockets and sends a best-effort `pair.revoke` to a connected computer. Revoke is bidirectional: if the paired computer removes this device (an encrypted `pair.revoke` frame on the open connection, or `e2e_denied` when the device's pinned identity reconnects), the device removes its own pin, reports `unpaired` instead of `disconnected`, and disables Harness-only voice, matching a local unpair.
 - `GET /api/harness/status` is available to the administrator or strict loopback callers; it never returns the code.
 - `GET /api/harness/ws` accepts direct CLI sockets. PAKE and pinned E2EE authenticate this route, rather than an HTTP bearer. Browser Origin headers are refused. At most four incoming sockets are allowed, with a ten-second initial metadata timeout and a twenty-second session/application handshake timeout.
 - `POST /api/harness/request` is strict loopback only, including proxy-address checks, for the skill runtime.
