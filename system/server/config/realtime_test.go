@@ -26,8 +26,8 @@ func TestRealtime_DefaultsWhenUnset(t *testing.T) {
 	if got := c.RealtimeVoice(); got != defaultRealtimeGeminiVoice {
 		t.Errorf("RealtimeVoice() = %q, want %q", got, defaultRealtimeGeminiVoice)
 	}
-	if got := c.RealtimeReasoning(); got != "MINIMAL" {
-		t.Errorf("RealtimeReasoning() = %q, want MINIMAL (cost-lean default)", got)
+	if got := c.RealtimeReasoning(); got != defaultRealtimeGeminiThinking {
+		t.Errorf("RealtimeReasoning() = %q, want %q (cost-lean default)", got, defaultRealtimeGeminiThinking)
 	}
 	if got := c.RealtimeAPIKey(); got != "llm-key" {
 		t.Errorf("RealtimeAPIKey() = %q, want LLM fallback", got)
@@ -223,7 +223,7 @@ func TestRealtime_DefaultSeed(t *testing.T) {
 	if rt.APIKey != "" || rt.BaseURL != "" {
 		t.Error("seed: api_key/base_url should be empty (LLM fallback)")
 	}
-	if rt.Gemini == nil || rt.Gemini.ThinkingLevel != "MINIMAL" || rt.Gemini.Model != defaultRealtimeGeminiModel {
+	if rt.Gemini == nil || rt.Gemini.ThinkingLevel != defaultRealtimeGeminiThinking || rt.Gemini.Model != defaultRealtimeGeminiModel {
 		t.Errorf("seed gemini wrong: %+v", rt.Gemini)
 	}
 	if rt.OpenAI == nil || rt.OpenAI.ReasoningEffort != "minimal" {
