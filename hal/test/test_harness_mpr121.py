@@ -22,12 +22,12 @@ class HarnessGestureTests(unittest.TestCase):
         detector = harness_button_recognizer(0)
         detector.update(False, 0)
         events = detector.update(True, 1)
-        for now in (3.9, 4, 6, 11, 20):
+        for now in (2.9, 3, 6, 11, 20):
             events += detector.update(True, now)
         self.assertEqual([e.count for e in events if e.kind == 'hold_tier'], [1])
         holds = [e for e in events if e.kind == 'hold']
         self.assertEqual(len(holds), 1)
-        self.assertEqual(holds[0].held_s, 3)
+        self.assertEqual(holds[0].held_s, 2)
         self.assertEqual(detector.update(False, 21), [])
         detector.update(True, 22)
         self.assertEqual([e.kind for e in detector.update(False, 22.1)], ['release', 'single'])
@@ -69,7 +69,7 @@ class HarnessGestureTests(unittest.TestCase):
         with patch.object(gestures, '_disable') as disable, patch.object(gestures, '_tap') as tap:
             for kind in ('cue', 'triple', 'hold_tier'):
                 gestures.execute(_GestureEvent(kind, 1, count=3, held_s=15))
-            gestures.execute(_GestureEvent('hold', 2, held_s=2.99))
+            gestures.execute(_GestureEvent('hold', 2, held_s=1.99))
             disable.assert_not_called()
             tap.assert_not_called()
             gestures.execute(_GestureEvent('hold', 3, held_s=12))
@@ -119,7 +119,7 @@ class HarnessGestureTests(unittest.TestCase):
                 patch('hal.drivers.harness.gestures.request_voice_disable', return_value={'enabled': False}) as disable, \
                 patch('hal.drivers.harness.gestures._show_feedback'), \
                 patch('hal.drivers.button_actions._speak_gesture_ack'):
-            gestures.execute(_GestureEvent('hold', 1, held_s=3))
+            gestures.execute(_GestureEvent('hold', 1, held_s=2))
             disable.assert_called_once()
             self.assertFalse(gestures.snapshot['enabled'])
 

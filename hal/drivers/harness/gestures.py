@@ -9,7 +9,7 @@ from hal.drivers.harness.actions import confirmation_phrase, failure_phrase, _sh
 from hal.drivers.harness.client import HarnessGestureError, request_voice_disable, request_focus_step
 
 logger = logging.getLogger(__name__)
-EXIT_HOLD_SECONDS = 3.0
+EXIT_HOLD_SECONDS = 2.0
 
 
 def harness_button_recognizer(debounce_ms):
