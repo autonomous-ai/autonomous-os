@@ -1,6 +1,6 @@
 # Điều khiển vật lý — Nút GPIO, TTP223 và MPR121
 
-Lamp hỗ trợ các nút cơ học, touchpad TTP223 và bộ điều khiển cảm ứng điện dung MPR121 tùy chọn. Chúng dùng chung thư viện action (`hal/drivers/button_actions.py`) nên cùng một cử chỉ "single click" sẽ hành xử giống nhau dù đến từ nút bấm cơ học hay touchpad cảm ứng.
+Lamp hỗ trợ các nút cơ học, touchpad TTP223 và bộ điều khiển cảm ứng điện dung MPR121 tùy chọn. Ngoài điều khiển MPR121 ở Harness mode, chúng dùng chung thư viện action (`hal/drivers/button_actions.py`) nên cùng một cử chỉ "single click" sẽ hành xử giống nhau dù đến từ nút bấm cơ học hay touchpad cảm ứng.
 
 ## Thiết bị đầu vào
 
@@ -113,7 +113,7 @@ Cập nhật HAL trước khi upload JSON có các trường mới này.
 
 Bảng trên mô tả nút GPIO chính và TTP223. Nút reset riêng ở pin 35 chỉ factory-reset khi nhả sau khi giữ ít nhất 5 s. Giữ ngắn hơn và single/triple tap đều không làm gì; nút này không gọi sleep hoặc shutdown. LED giữ nguyên dưới 5 s và dùng preset factory-reset đỏ đứng chung từ 5 s trở lên.
 
-MPR121 cũng hỗ trợ giữ rồi nhả để thực hiện action và cùng phản hồi LED theo mức giữ, xem phần detect riêng. Mức sleep và các mức destructive **commit khi nhả, không phải khi timer fire lúc đang giữ**. Các mức destructive escalate từ shutdown sang factory-reset sau 10 s (xem "Detect nút GPIO" dưới).
+Khi Harness OFF, MPR121 cũng hỗ trợ giữ rồi nhả để thực hiện action và cùng phản hồi LED theo mức giữ, xem phần detect riêng. Mức sleep và các mức destructive **commit khi nhả, không phải khi timer fire lúc đang giữ**. Các mức destructive escalate từ shutdown sang factory-reset sau 10 s (xem "Detect nút GPIO" dưới).
 
 ## Cắt Lamp giữa câu (barge-in)
 
@@ -291,9 +291,9 @@ là một contact; nhả nghĩa là **toàn bộ electrode được chọn** đ�
 Contact đang bị giữ khi startup bị bỏ qua đến khi nhả.
 
 MPR121 dùng chung ngưỡng cử chỉ từ `hal/drivers/button_gestures.py` với GPIO
-(được `button_actions.py` re-export) và gọi các action hiện có:
+(được `button_actions.py` re-export) và gọi các action hiện có **khi Harness mode OFF**. Harness ON dùng chính sách riêng bên dưới:
 
-| Cử chỉ | Action MPR121 |
+| Cử chỉ | Action MPR121 (Harness OFF) |
 |---|---|
 | Lần nhả ngắn đầu tiên trong chuỗi click | `single_click_action(source="MPR121", announce=False)` dừng tracking/audio sau khi phân giải contact, unmute khi được phép và phát ack chime. |
 | 1, 2 hoặc 4+ tap ngắn, rồi yên 0.4 s | Phát cue nghe; các tap lặp không gọi lại action single-click ban đầu. |
@@ -302,7 +302,7 @@ MPR121 dùng chung ngưỡng cử chỉ từ `hal/drivers/button_gestures.py` v�
 | Giữ 5–<10 s rồi nhả | `hold_release_action` shutdown. |
 | Giữ ≥10 s rồi nhả | `hold_release_action` factory reset. |
 | Vuốt trái sang phải rồi nhả | `swipe_action` sleep; contact di chuyển này không gọi click hoặc action destructive. |
-| Vuốt phải sang trái rồi nhả | Bật/tắt Harness voice qua API Go; contact di chuyển này không gọi click hoặc action destructive. |
+| Vuốt phải sang trái rồi nhả | Bật Harness voice qua API Go; contact di chuyển này không gọi click hoặc action destructive. |
 
 Contact ngắn kéo dài dưới 2 s. Cửa sổ click không phân giải khi còn bất kỳ
 electrode được chọn nào đang chạm. Nhả sau giữ xóa chuỗi click đang chờ.
@@ -315,7 +315,7 @@ theo thứ tự **trái sang phải** vật lý. Lamp mặc định E0…E11. Ki
 lắp bar: nếu E11 nằm bên trái, đảo trục hiện có thành E11…E0. Tăng vị trí
 trên trục (`+1`, trái sang phải) gọi `swipe_action(source="MPR121")` trong
 `button_actions.py` để sleep. Giảm vị trí (`-1`, phải sang trái) gọi action
-bật/tắt Harness voice. Không cần vuốt hết toàn bộ dải. Thiếu/null
+bật Harness voice. Các action này áp dụng khi Harness OFF; khi ON cùng hai hướng chọn agent trước/kế tiếp. Không cần vuốt hết toàn bộ dải. Thiếu/null
 `swipe_axis` chỉ tắt nhận diện vuốt, giữ nhận diện click/hold cũ.
 Cài HAL hỗ trợ trước khi deploy JSON có trường này.
 
@@ -587,6 +587,8 @@ Phrase cố tình ngắn — chúng fire giữa lúc vuốt nên cần cảm gi�
 | `hal/drivers/ttp223.py` | Handler touchpad cảm ứng TTP223 (chỉ OrangePi sun60) |
 | `hal/board/mpr121.py` | Đọc và kiểm tra cấu hình MPR121 do device quản lý |
 | `hal/drivers/mpr121.py` | Handler I²C MPR121 tùy chọn, detect click/giữ |
+| `hal/drivers/harness_mpr121.py` | Chính sách gesture riêng cho Harness mode |
+| `hal/drivers/voice/_internal/harness_capture.py` | Quản lý quyền sở hữu capture Harness thủ công |
 | `hal/drivers/button_gestures.py` | Ngưỡng cử chỉ dùng chung GPIO/MPR121 |
 | `hal/drivers/button_actions.py` | Hàm action chung, `HoldLEDFeedback` cho GPIO/MPR121 và pool phrase local |
 | `hal/presets.py` | Hằng số mã ngôn ngữ (`LANG_EN`, v.v.) |
@@ -596,25 +598,13 @@ Phrase cố tình ngắn — chúng fire giữa lúc vuốt nên cần cảm gi�
 Các handler đầu vào được khởi động trong startup lifespan `hal/server.py`. Thiếu cấu hình MPR121 tùy chọn thì bỏ qua driver đó; cấu hình bật nhưng sai bị từ chối khi startup. Lỗi driver phần cứng được log mà không dừng các handler còn lại.
 
 
-### Vuốt bật/tắt Harness voice
+### Gesture MPR121 theo Harness mode
 
-Vuốt **phải sang trái** rồi nhả để bật/tắt Harness voice một lần. `swipe_axis`
-hiện có xác định hướng vật lý như mô tả ở trên. Không còn cử chỉ giữ hai pad
-hay cấu hình wiring riêng cho Harness. Chạm đơn và giữ đứng yên vẫn theo hành
-vi hiện có; khi nhận di chuyển, hủy kết quả tap/hold của contact đó. Contact
-đã giữ từ startup và lỗi polling/I²C không được kích hoạt swipe.
+Trên đèn MPR121, Harness OFF giữ gesture cũ: vuốt **phải sang trái** để bật Harness, **trái sang phải** để sleep. Harness ON thay thế action click cũ, triple tap reboot, giữ shutdown/reset, sleep và listening cue: tap điều khiển capture hoặc ngắt TTS; giữ **ít nhất 3 giây rồi nhả** tắt Harness rõ ràng (kể cả offline); vuốt **phải sang trái** chọn agent kế tiếp, **trái sang phải** chọn agent trước. `hal/drivers/harness_mpr121.py` quản lý gesture riêng này; `hal/drivers/voice/_internal/harness_capture.py` quản lý quyền sở hữu capture thủ công. GPIO/TTP223 không đổi. Hướng theo `swipe_axis` trái sang phải vật lý (Lamp mặc định E0…E11; kiểm tra chiều lắp). Python gọi API Go; Go quản lý mode/focus và route voice hiện có.
 
-Python nhận signal rồi đưa vào action worker có sẵn. `harness_voice_action.py`
-gọi adapter nhỏ `harness_voice_client.py`, POST một lần đến API chỉ nhận loopback
-`/api/harness/voice-mode/gesture` của Go với `gestureId` riêng. Go quản lý mode
-và chọn agent focus. Không tự retry HTTP; timeout sẽ báo chưa xác nhận được kết quả.
+Harness ON dùng thu giọng thủ công bằng tap, không tự nghe môi trường. Tap khi TTS đang nói chỉ ngắt phát âm thanh. Ngoài trường hợp đó, tap đầu bắt đầu thu; beep sẵn sàng chỉ phát sau khi recorder/STT đã sẵn sàng. Tap tiếp đóng capture và gửi một transcript STT đã chốt qua route OS hiện có tới agent Harness đang focus. Im lặng không tự gửi. Đạt `MAX_SESSION_DURATION_S` (`HAL_MAX_SESSION_DURATION_S`, mặc định 30 giây) thì hủy, không dispatch. Khi rảnh, mode không ghi lời nói xung quanh. Đổi mode, generation hoặc focus và privacy/stop đều loại bỏ capture; vuốt chuyển focus hủy capture trước khi đổi focus. Sleep và khóa privacy microphone phần cứng vẫn có ưu tiên.
 
-Thành công, HAL đọc “Đã bật Harness, đang nói chuyện với {agent}.” hoặc “Đã tắt Harness, trở về trợ lý trên thiết bị.” theo
-`stt_language` (Anh, Việt, Trung giản thể hoặc phồn thể; phrase tập trung trong
-`hal/i18n.py`). LED pulse xanh khi bật hoặc màu trung tính khi tắt trong thời gian
-ngắn, không lưu trạng thái LED mới. Chưa kết nối/không có agent được báo lỗi theo
-ngôn ngữ đã chọn. Công tắc privacy mic chặn action; speaker mute chặn thông báo;
-LED vẫn tôn trọng quyền ưu tiên sleep/privacy/TTS hiện có.
+Action mode/focus dùng worker hiện có và API Go loopback; không tự retry HTTP. Kết quả dùng phrase đa ngôn ngữ trong `hal/i18n.py`, tôn trọng speaker mute và quyền LED sleep/privacy/TTS. Chuyển focus cần capability Harness `focus.step` đã thương lượng; CLI cũ trả lỗi rõ ràng, không chuyển transport. Phần CLI tương ứng đang chờ; chưa kiểm chứng tương thích trên thiết bị đã cài.
 
 Khi HAL khởi động, đồng bộ vị trí privacy-switch không giả lập nhấn nút: vị trí cho phép mic khôi phục quyền mic/ngoại vi mà không đánh thức thiết bị, mở conversation focus, phát chime/câu đang nghe hoặc lên lịch LED listening. Thao tác gạt thật từ mute sang unmute vẫn giữ wake/focus và thông báo như trước. Khởi động ở vị trí mute vẫn áp hardware privacy lock đồng bộ.
 

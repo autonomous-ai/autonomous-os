@@ -38,6 +38,21 @@ class HarnessClientTests(unittest.TestCase):
             with self.assertRaises(client.HarnessGestureError):
                 self.request({"status": 1, "data": data})
 
+    def test_disable_and_focus_use_explicit_commands(self):
+        with patch.object(client.requests, "Session") as factory:
+            session = factory.return_value.__enter__.return_value
+            session.post.return_value.status_code = 200
+            session.post.return_value.json.return_value = {"status": 1, "data": {"enabled": False}}
+            client.request_voice_disable("exit-id")
+            self.assertEqual(session.post.call_args.kwargs["json"], {"gestureId": "exit-id", "action": "disable"})
+            session.post.return_value.json.return_value = {
+                "status": 1, "data": {"enabled": True, "focusAvailable": True, "agentId": "next"}}
+            client.request_focus_step("step-id", "next", 42)
+            self.assertTrue(session.post.call_args.args[0].endswith("/voice-mode/focus"))
+            self.assertEqual(session.post.call_args.kwargs["json"],
+                             {"gestureId": "step-id", "direction": "next", "generation": 42})
+            self.assertFalse(session.trust_env)
+
     def test_timeout_never_retries(self):
         with patch.object(client.requests, "Session") as factory:
             session = factory.return_value.__enter__.return_value
