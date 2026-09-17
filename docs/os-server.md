@@ -323,6 +323,10 @@ resolved `device_type` and a sorted `device_capabilities` list from that device'
 `ROBOT.md`; the agent can avoid assuming unavailable hardware exists. This is
 deliberately the ready gateway rather than `config.agent_runtime`, which can be
 transiently out of date while a runtime switch is being reconciled.
+Once the greeting is sent, os-server calls HAL `POST /voice/wake-focus?source=boot_greeting`
+to open the wake-word follow-up window (`HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S`), so the
+user can answer the greeting without a wake phrase. HAL no-ops when wake word is
+off or the follow-up timeout is 0.
 
 Alerts are enabled whenever `llm_base_url` + `llm_api_key` are set; set
 `alerts_disabled: true` in `config/config.json` to mute a device.
