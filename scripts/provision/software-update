@@ -1120,6 +1120,16 @@ elif [ "$APP" = "device" ]; then
   unzip -o -q "$ZIP_TMP" -d "$DIR_TMP"
   [ -f "$DIR_TMP/ROBOT.md" ] || { echo "No ROBOT.md in device profile"; exit 1; }
   [ -d "$DEST" ] || { echo "No installed device profile at $DEST"; exit 1; }
+  # The persistent hardware selection is not shipped in the OTA overlay.
+  HARDWARE_PROFILE=""
+  [ ! -e /etc/autonomous/hardware-profile ] || HARDWARE_PROFILE=$(sed 's/^[[:space:]]*//;s/[[:space:]]*$//' /etc/autonomous/hardware-profile) \
+    || { echo "Cannot read hardware profile selection" >&2; exit 1; }
+  if [ -n "$HARDWARE_PROFILE" ] && [ "$HARDWARE_PROFILE" != standard ]; then
+    [ -f "$DIR_TMP/apply-overrides.py" ] \
+      || { echo "Hardware overrides require an override-capable device package" >&2; exit 1; }
+    python3 "$DIR_TMP/apply-overrides.py" --profile "$DIR_TMP" --root / \
+      || { echo "Hardware override configuration failed; installed profile unchanged" >&2; exit 1; }
+  fi
   save_device_service_state
   arm_service_restore restore_device_service_state
   systemctl stop os-server 2>/dev/null || true
@@ -1148,9 +1158,10 @@ elif [ "$APP" = "device" ]; then
   # lamp-0c89: a published HAL_REALTIME_FILLER_DELAY_S never reached the live
   # file and HAL kept running the old value. Do not re-add the backup; if a
   # value has to differ per unit, it belongs in that unit's profile in the repo.
-  [ ! -d "$DEST/rootfs" ] || cp -a "$DEST/rootfs/." /
-  if ! restore_device_service_state || ! check_device_profile; then
-    echo "device profile health check failed; restoring the known-good profile" >&2
+  # Selected hardware overrides are applied above before snapshot/publication.
+  if ! { [ ! -d "$DEST/rootfs" ] || cp -a "$DEST/rootfs/." /; } \
+      || ! restore_device_service_state || ! check_device_profile; then
+    echo "device profile apply or health check failed; restoring the known-good profile" >&2
     systemctl stop os-server 2>/dev/null || true
     systemctl stop hal 2>/dev/null || true
     restore_device_backup

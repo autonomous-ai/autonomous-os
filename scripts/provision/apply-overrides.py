@@ -1,0 +1,110 @@
+#!/usr/bin/env python3
+"""Render an explicitly selected hardware overlay into a staged device package.
+
+No hardware-profile file (or empty/standard) preserves the legacy package.
+Product names, audio routing and tuning belong to the package's overrides/ data.
+"""
+
+import argparse
+import json
+from pathlib import Path
+import re
+import shutil
+
+
+PROFILE_PATH = "etc/autonomous/hardware-profile"
+
+
+def selected_profile(root):
+    path = root / PROFILE_PATH
+    name = path.read_text().strip() if path.exists() else ""
+    if name in ("", "standard"):
+        return None
+    if not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", name):
+        raise ValueError("invalid hardware-profile name")
+    return name
+
+
+def merge_env(base, override):
+    for line in override.splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        key, separator, _ = line.partition("=")
+        if not separator or not re.fullmatch(r"[A-Z][A-Z0-9_]*", key):
+            raise ValueError("invalid environment override")
+        pattern = rf"^{re.escape(key)}=.*$"
+        if re.search(pattern, base, re.MULTILINE):
+            base = re.sub(pattern, lambda _: line, base, flags=re.MULTILINE)
+        else:
+            base = base.rstrip() + "\n" + line + "\n"
+    return base
+
+
+def volume_field(path, pattern, value):
+    if type(value) is not int or not 0 <= value <= 100:
+        raise ValueError("volume override must be an integer from 0 to 100")
+    parts = path.read_text().split("---", 2)
+    if len(parts) != 3 or parts[0].strip():
+        raise ValueError(f"{path.name}: missing front matter")
+    parts[1], count = re.subn(pattern, lambda m: m.group(1) + str(value), parts[1], flags=re.MULTILINE)
+    if count != 1:
+        raise ValueError(f"{path.name}: expected one volume field")
+    return "---".join(parts)
+
+
+def apply_overrides(profile, root):
+    name = selected_profile(root)
+    if name is None:
+        return None
+    overlay = profile / "overrides" / name
+    settings = json.loads((overlay / "profile.json").read_text())
+    if not isinstance(settings, dict) or set(settings) - {"startup_volume", "max_volume"}:
+        raise ValueError("unknown profile override fields")
+    if {"startup_volume", "max_volume"} <= set(settings) and settings["startup_volume"] > settings["max_volume"]:
+        raise ValueError("startup volume exceeds ceiling")
+    outputs = {}
+    for key, filename, pattern in (
+        ("startup_volume", "ROBOT.md", r"^(startup_volume:\s*)[^\n]*$"),
+        ("max_volume", "SAFETY.md", r"^(  max_volume:\s*)[^\n]*$"),
+    ):
+        if key in settings:
+            outputs[profile / filename] = volume_field(profile / filename, pattern, settings[key])
+    files = []
+    for source in (overlay / "rootfs").rglob("*"):
+        if not source.is_file():
+            continue
+        relative = source.relative_to(overlay / "rootfs")
+        if relative.as_posix() == PROFILE_PATH:
+            raise ValueError("hardware-profile identity cannot be part of an overlay")
+        target = profile / "rootfs" / relative
+        if relative.as_posix() == "opt/hal/.env":
+            outputs[target] = merge_env(target.read_text(), source.read_text())
+        else:
+            files.append((source, target))
+    # A saved gain for different hardware must not override its default, even
+    # when the selected overlay only changes routing or volume policy.
+    env_path = profile / "rootfs/opt/hal/.env"
+    if env_path.exists():
+        env = outputs.get(env_path, env_path.read_text())
+        config = re.search(r"^OS_CONFIG_PATH=(.+)$", env, re.MULTILINE)
+        config_dir = Path(config.group(1) if config else "/root/config/config.json").parent
+        outputs[env_path] = merge_env(env, f"HAL_VOLUME_STATE_PATH={config_dir / ('.volume-' + name)}")
+    # Read/validate before writing. OTA owns the staging/publication transaction.
+    for target, text in outputs.items():
+        target.write_text(text)
+    for source, target in files:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+    return name
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--profile", type=Path, default=Path(__file__).resolve().parent)
+    parser.add_argument("--root", type=Path, default=Path("/"))
+    args = parser.parse_args()
+    try:
+        applied = apply_overrides(args.profile, args.root)
+    except (OSError, ValueError, TypeError) as exc:
+        parser.exit(1, f"Hardware override failed: {exc}\n")
+    print(f"Hardware overrides staged: {applied}" if applied else "Legacy profile unchanged")
