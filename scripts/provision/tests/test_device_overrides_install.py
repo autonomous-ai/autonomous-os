@@ -195,35 +195,59 @@ class DeviceOverridesImageTests(unittest.TestCase):
     def test_image_selection_requires_helper_and_legacy_runs_no_helper(self):
         for name in ("build-orangepi.sh", "build.sh", "build-pi5.sh"):
             source = (PROVISION.parent / "imager" / name).read_text()
-            block = source.split("  # The default hardware selection", 1)[1]
+            block = source.split("  # Bake the selection in the overlay", 1)[1]
             block = block[block.index("\n") + 1:].split("  # Device rootfs overlay:", 1)[0]
             # These blocks are inside a chroot heredoc; expand the escaped variables.
             block = block.replace("\\$", "$")
             for selection, helper, fail in ((None, False, False), (None, True, False),
-                                           ("", False, False), (" standard\n", False, False),
+                                           ("", False, False), ("standard", False, False),
                                            ("pro", False, False), ("pro", True, False),
                                            ("pro", True, True)):
                 with self.subTest(script=name, selection=selection, helper=helper, fail=fail):
                     with tempfile.TemporaryDirectory() as temporary:
                         root = Path(temporary)
                         selected = selection is not None and selection.strip() not in ("", "standard")
-                        if selection is not None:
-                            (root / "hardware-profile").write_text(selection)
+                        # A reused base must not leak a previous assembly selection.
+                        (root / "hardware-profile").write_text("stale-profile\n")
                         if helper:
                             (root / "apply-overrides.py").touch()
                         events = root / "events"
                         result = subprocess.run(
                             ["bash", "-c", 'python3() { echo render >> "$EVENTS"; '
-                             '[ "$FAIL" = 0 ]; }\n'
-                             + block.replace("/etc/autonomous/hardware-profile", str(root / "hardware-profile"))],
+                             'test "$(cat "$MARKER")" = "$VARIANT" || exit 2; [ "$FAIL" = 0 ]; }\n'
+                             + block.replace("/etc/autonomous", str(root))],
                             env={**os.environ, "DEVICE_TYPE": "example",
                                  "DEVICE_PROFILE_DIR": temporary, "DEVICE_DEST": temporary,
-                                 "EVENTS": str(events), "FAIL": str(int(fail))},
+                                 "EVENTS": str(events), "FAIL": str(int(fail)),
+                                 "VARIANT": selection or "", "MARKER": str(root / "hardware-profile")},
                             capture_output=True, text=True,
                         )
                         self.assertEqual(result.returncode == 0,
                                          not selected or (helper and not fail), result.stderr)
                         self.assertEqual(events.exists(), selected and helper)
+                        self.assertEqual((root / "hardware-profile").exists(), selected)
+
+    def test_variant_validation_before_build(self):
+        for name in ("build-orangepi.sh", "build.sh", "build-pi5.sh"):
+            source = (PROVISION.parent / "imager" / name).read_text()
+            block = 'VARIANT="${VARIANT:-}"' + source.split('VARIANT="${VARIANT:-}"', 1)[1].split("\nfi", 1)[0] + "\nfi\n"
+            self.assertNotIn("HARDWARE_PROFILE", source)
+            for variant in ("", "standard", "pro", "usb-v2", "../pro", "Pro", "a" * 65):
+                with self.subTest(script=name, variant=variant):
+                    result = subprocess.run(["bash", "-c", block], env={**os.environ, "VARIANT": variant},
+                                            capture_output=True, text=True)
+                    self.assertEqual(result.returncode == 0, variant in ("", "standard", "pro", "usb-v2"))
+
+    def test_make_forwards_variant_and_keeps_default_image_names(self):
+        for variant in ("", "standard", "pro"):
+            with self.subTest(variant=variant):
+                result = subprocess.run(
+                    ["make", "-n", "build", "TARGET=opi", "DEVICE_TYPE=lamp", "OTA_METADATA_URL=https://example.test/meta.json",
+                     "VARIANT=" + variant], cwd=PROVISION.parent / "imager", capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("-e VARIANT=" + variant + " ", result.stdout)
+                suffix = "-pro" if variant == "pro" else ""
+                self.assertIn("golden-opi-lamp" + suffix + ".img.xz", result.stdout)
 
 
 if __name__ == "__main__":

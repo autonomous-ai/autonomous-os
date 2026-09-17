@@ -363,6 +363,19 @@ helper/selected overlay or render failure leaves the installed package running. 
 or health failure rolls back the profile and live rootfs together. Rollback does
 not change the machine's hardware-profile selection.
 
+For new images, select the assembly at build time:
+
+```bash
+make -C scripts/imager build TARGET=opi DEVICE_TYPE=lamp VARIANT=pro OTA_METADATA_URL=...
+```
+
+`VARIANT` is the only build input for hardware selection. The overlay stage writes
+`/etc/autonomous/hardware-profile` before applying `overrides/pro`; OTA later reads
+that file. Empty or `VARIANT=standard` removes any stale selection from the image
+and uses the unchanged base package. The selection is not baked into the reusable
+base cache. Nonstandard variants add a suffix to the final image/release filename.
+Unknown variants or packages without the override helper fail the build.
+
 Provision a selected assembly by writing its name before installation. For an
 existing machine, first install the new updater and HAL/os-server, then:
 

@@ -357,6 +357,19 @@ dừng service và snapshot rootfs; thiếu helper/profile hoặc render lỗi k
 đụng package đang chạy. Lỗi copy hay health check rollback đồng bộ profile và
 rootfs thực tế. Rollback không đổi lựa chọn hardware-profile của máy.
 
+Với image mới, chọn phần cứng lúc build:
+
+```bash
+make -C scripts/imager build TARGET=opi DEVICE_TYPE=lamp VARIANT=pro OTA_METADATA_URL=...
+```
+
+`VARIANT` là input build duy nhất để chọn phần cứng. Bước overlay ghi
+`/etc/autonomous/hardware-profile` trước khi áp dụng `overrides/pro`; OTA đọc lại
+file này. Bỏ trống hoặc `VARIANT=standard` sẽ xóa lựa chọn cũ trong image và dùng
+nguyên package mặc định. Lựa chọn không nằm trong base cache dùng lại. Variant
+khác standard được thêm vào tên image/release cuối cùng. Variant không tồn tại
+hoặc package thiếu helper override sẽ làm build thất bại.
+
 Khi sản xuất, ghi tên profile trước khi cài. Với máy đang chạy, cài updater và
 HAL/os-server mới trước, sau đó:
 
