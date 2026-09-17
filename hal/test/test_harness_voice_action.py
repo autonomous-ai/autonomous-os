@@ -7,8 +7,8 @@ import unittest
 from unittest.mock import patch, MagicMock
 import requests
 
-from hal.drivers import harness_voice_client as client
-from hal.drivers import harness_voice_action as action
+from hal.drivers.harness import client as client
+from hal.drivers.harness import actions as action
 from hal.i18n import localized_phrase, PHRASE_HARNESS_ON, PHRASE_HARNESS_OFF
 
 
@@ -38,6 +38,32 @@ class HarnessClientTests(unittest.TestCase):
             with self.assertRaises(client.HarnessGestureError):
                 self.request({"status": 1, "data": data})
 
+    def test_disable_and_focus_use_explicit_commands(self):
+        with patch.object(client.requests, "Session") as factory:
+            session = factory.return_value.__enter__.return_value
+            session.post.return_value.status_code = 200
+            session.post.return_value.json.return_value = {"status": 1, "data": {"enabled": False}}
+            client.request_voice_disable("exit-id")
+            self.assertEqual(session.post.call_args.kwargs["json"], {"gestureId": "exit-id", "action": "disable"})
+            session.post.return_value.json.return_value = {
+                "status": 1, "data": {"enabled": True, "focusAvailable": True, "agentId": "next"}}
+            client.request_focus_step("step-id", "next", 42)
+            self.assertTrue(session.post.call_args.args[0].endswith("/voice-mode/focus"))
+            self.assertEqual(session.post.call_args.kwargs["json"],
+                             {"gestureId": "step-id", "direction": "next", "generation": 42})
+            self.assertFalse(session.trust_env)
+
+    def test_focus_step_accepts_lagging_focus_snapshot(self):
+        # 200 means the app already switched; a not-yet-refreshed focus is not a failure.
+        with patch.object(client.requests, "Session") as factory:
+            session = factory.return_value.__enter__.return_value
+            session.post.return_value.status_code = 200
+            session.post.return_value.json.return_value = {
+                "status": 1, "data": {"enabled": True, "focusAvailable": False, "agentId": ""}}
+            self.assertFalse(client.request_focus_step("step-id", "next", 42)["focusAvailable"])
+            with self.assertRaises(client.HarnessGestureError):
+                client.request_voice_toggle("toggle-id")
+
     def test_timeout_never_retries(self):
         with patch.object(client.requests, "Session") as factory:
             session = factory.return_value.__enter__.return_value
@@ -58,25 +84,26 @@ class HarnessActionTests(unittest.TestCase):
             apply_device_presets("lamp", str(Path(__file__).resolve().parents[2] / "robots"))
             stack.enter_context(patch.object(action.state, "rgb_service", MagicMock()))
             stack.enter_context(patch.object(action.state, "_effect_thread", None))
+            stack.enter_context(patch("hal.drivers.harness.led.set_enabled"))
             restore = stack.enter_context(patch.object(action.state, "_schedule_led_restore"))
             def start_effect(request):
                 action.state._effect_thread = object()
             start = stack.enter_context(patch("hal.routes.led.start_led_effect", side_effect=start_effect))
-            for enabled, color in ((True, [1, 1, 3]), (False, [2, 2, 2])):
+            for enabled, color in ((False, [2, 2, 2]),):
                 action._show_feedback(enabled)
                 request = start.call_args.args[0]
                 self.assertEqual(request.color, color)
-                self.assertEqual(request.effect, "pulse")
-                self.assertEqual(request.duration_ms, 600)
+                self.assertEqual(request.effect, "blink")
+                self.assertEqual(request.duration_ms, 300)
                 self.assertTrue(request.transient)
-                restore.assert_called_with(0.7)
-            BUTTON_LED_PRESETS["harness_on"].update(effect="blink", duration_ms=900)
-            action._show_feedback(True)
+                restore.assert_called_with(0.4)
+            BUTTON_LED_PRESETS["harness_off"].update(effect="blink", duration_ms=900)
+            action._show_feedback(False)
             self.assertEqual(start.call_args.args[0].effect, "blink")
             restore.assert_called_with(1.0)
             restore.reset_mock()
             start.side_effect = None
-            action._show_feedback(True)
+            action._show_feedback(False)
             restore.assert_not_called()
 
     def test_all_languages_and_config_lookup(self):

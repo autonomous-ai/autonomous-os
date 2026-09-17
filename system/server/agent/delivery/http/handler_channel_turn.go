@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	migratepersona "go.autonomous.ai/os/system/agent/migrate_persona"
 	"go.autonomous.ai/os/system/domain"
 	"go.autonomous.ai/os/system/lib/flow"
 )
@@ -144,10 +145,13 @@ func (h *AgentHandler) ChannelTurn(c *gin.Context) {
 		}, runID)
 		// Synthesise lifecycle_start so the AGENT pipeline node lights up, same
 		// anchor the openclaw session.message path emits.
-		flow.Log("lifecycle_start", map[string]any{
-			"run_id": runID,
-			"source": "channel_hook",
-		}, runID)
+		lcStart := map[string]any{"run_id": runID, "source": "channel_hook"}
+		// Fingerprint of the memory this turn runs with (sizes + sha8, no
+		// content) so a routing regression can be tied to a memory write.
+		if st := migratepersona.MemoryState(); st != nil {
+			lcStart["memory"] = st
+		}
+		flow.Log("lifecycle_start", lcStart, runID)
 		h.monitorBus.Push(domain.MonitorEvent{
 			Type:    "chat_input",
 			Summary: "[" + ctx.Platform + ":" + sender + "] " + channelTurnPreview(ctx.Message, 200),

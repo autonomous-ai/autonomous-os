@@ -200,6 +200,16 @@ Otherwise the adapter requests stop and polls until execution settles, keeping
 remote ownership while status is unresolved. EOF or a still-running status
 cannot be reported as success.
 
+An unresolved run marks its conversation *uncertain*: any request already queued
+on it is refused ("unknown acceptance ... start a new session") because the lost
+run may still be acting on that prompt. The adapter then **rotates the
+conversation itself** so the next request goes out on a fresh one — nothing else
+ever rotated it, and lamp-0c4e (2026-09-16) failed every turn for 6+ minutes
+after a presync-triggered gateway restart until os-server was restarted. A
+**dial failure** on `POST /v1/runs` (connection refused while the gateway
+restarts) is *not* uncertain: the prompt never left the device, so the request
+fails but the conversation stays usable.
+
 Native mode also requires the OS compatibility marker above: the unpatched
 Runs API omits tool-call IDs/results and cache details needed by the existing
 handler. The compatibility patch adds `tool.call.started` / `tool.call.completed`
@@ -504,12 +514,16 @@ inline, a direct `bash install.sh` is fully configured and running.
 > `echo git > /usr/local/lib/hermes-agent/.install_method` so a later
 > `hermes update` recognizes this as a git install.
 
-> **Hermes is the one runtime the OTA worker never auto-updates.** `hermes update`
-> takes no target version — it always moves to upstream HEAD — so a `min_version`
-> floor it cannot reach would re-trigger the update on every poll forever.
-> `make upload-hermes` + `make promote-hermes` publish the number, but only
-> `sudo software-update hermes` over SSH applies it (and it WARNS, rather than
-> fails, when the landed version differs). See `docs/bootstrap-ota.md` §5.
+> **Hermes is OTA-updated like the other CLIs, pinned by commit.** `hermes update`
+> takes no target version (it moves to upstream HEAD), so the metadata entry
+> carries the exact upstream commit: `make upload-hermes 0.21.1 v2026.9.7` resolves
+> the date tag to its commit, `make promote-hermes` raises the floor, and the
+> bootstrap worker runs `software-update hermes`, which checks that commit out
+> through the upstream installer (`--commit --force-commit`, as the imager does).
+> The web Versions card shows the button once bootstrap reports the entry — i.e.
+> the entry has a `commit` and the on-device updater is the pinning one. An
+> unpinned entry stays SSH-only (`hermes update` to HEAD, warning on mismatch).
+> See `docs/bootstrap-ota.md` §5.
 
 > **Install log lives off zram.** The installer tees all stdout+stderr to
 > `$HERMES_LOG`, default **`/root/.hermes/install.log`** (persistent rootfs) —
@@ -624,6 +638,22 @@ during install) and does three things, in order:
      boot, editing `config.yaml` by hand did not survive a restart.
    - `.custom_providers[0]` → `name: autonomous`, `key_env: AUTONOMOUS_API_KEY`,
      `api_mode: anthropic_messages`, `base_url` (default campaign-api, overridden below).
+   - `.custom_providers[0].models.Auto-AI.prompt_caching = true` — **only while the
+     device is on the campaign-api proxy** (same `llm_base_url` check as the alias
+     above). Hermes emits Anthropic `cache_control` breakpoints for a custom
+     provider only when the model declares this capability; without it the whole
+     ~18k-token floor (system prompt + 25 tool schemas) is re-sent uncached every
+     turn. Measured on lamp-0c4e (2026-09-16), same "hello" in one session: no
+     markers 18.3s → 12.6s with `cache_read` 0; markers 13.8s → 9.2s steady with
+     `cache_read` ~85%. A BYO brain keeps Hermes' own per-provider caching policy.
+   - `.prompt_caching.cache_ttl = "1h"` — same proxy-only scope. A lamp user
+     typically speaks once and goes quiet for 10-20 min, which outlives the `5m`
+     default and re-bills the full prefill on the next turn (measured 2026-09-16:
+     3.6s with a warm cache vs 11.8s after an 8 min gap). Hermes accepts only
+     `5m` | `1h` and sends `ttl: "1h"` on every cache marker; if the gateway
+     ignores the field the cache silently stays at 5m, so the setting is harmless
+     where unsupported. The 1h tier costs 2x input on the cache write (vs 1.25x
+     for 5m); reads are 0.1x either way.
    - `.auxiliary.vision` (the whole node is **overwritten**) → `provider: custom:autonomous`,
      `model: qwen/qwen3.6-plus`, `timeout: 120`, `download_timeout: 30`, `extra_body: {}`
      — the image-understanding model, routed through the same autonomous provider.
@@ -871,6 +901,12 @@ Switching openclaw→hermes runs a Go persona migration
   `memories/*.md` glob), so KNOWLEDGE is folded in rather than kept as a separate,
   ignored file.
 - **USER.md** → `memories/USER.md`.
+
+Identity parsing and renaming accept only a standalone `**Name:**` field line,
+optionally prefixed by a Markdown bullet (`-` or `*`). Inline mentions such as
+“Do NOT fill `**Name:**` or the other single-value fields” in managed SOUL
+instructions are ignored, so they cannot become wake words or be overwritten
+when the device is renamed.
 
 The soul copy uses `Overwrite=true` (a switch adopts the source runtime's persona;
 backed up first). The reverse hermes→openclaw **strips the identity card from the

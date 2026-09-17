@@ -24,7 +24,7 @@ func (s *Server) initializeHarnessVoice(ctx context.Context) {
 	s.harnessVoiceCtx = ctx
 	if s.harnessVoice == nil && s.harnessService != nil {
 		s.harnessVoice = harness.NewVoiceController(s.harnessService, harness.VoiceCallbacks{
-			OnDispatch: func(agentID, runID string) { s.registerHarnessReply(agentID, runID, false) },
+			OnDispatch: func(agentID, runID string) { s.registerHarnessReply(agentID, runID, false, false) },
 			OnResponse: s.deliverHarnessVoiceQuestion,
 		})
 		s.harnessVoice.Start(ctx)
@@ -34,6 +34,7 @@ func (s *Server) initializeHarnessVoice(ctx context.Context) {
 
 func (s *Server) registerHarnessVoiceRoutes(group *gin.RouterGroup) {
 	group.POST("voice-mode/gesture", localOnlyMiddleware(), s.handleHarnessVoiceGesture)
+	group.POST("voice-mode/focus", localOnlyMiddleware(), s.handleHarnessVoiceFocusGesture)
 	group.GET("voice-mode", adminOrLoopbackAuth(s.config), func(c *gin.Context) {
 		c.Header("Cache-Control", "no-store")
 		c.JSON(http.StatusOK, serializers.ResponseSuccess(s.harnessVoice.State()))
@@ -201,7 +202,7 @@ func (s *Server) deliverHarnessVoiceMessage(agentID, runID, text string) {
 		agentID = "harness-voice"
 	}
 	if !s.hasHarnessReply(agentID, runID) {
-		s.registerHarnessReply(agentID, runID, false)
+		s.registerHarnessReply(agentID, runID, false, false)
 	}
 	s.deliverHarnessFinal(agentID, runID, text)
 }

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	migratepersona "go.autonomous.ai/os/system/agent/migrate_persona"
 	"go.autonomous.ai/os/system/domain"
 	"go.autonomous.ai/os/system/lib/flow"
 	sensinghttp "go.autonomous.ai/os/system/server/sensing/delivery/http"
@@ -583,6 +584,13 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 			lcData["recovered"] = true
 			lcData["original_error"] = payload.Data.Error
 		}
+		if payload.Data.Phase == "start" {
+			// Fingerprint of the memory this turn runs with (sizes + sha8, no
+			// content) so a routing regression can be tied to a memory write.
+			if st := migratepersona.MemoryState(); st != nil {
+				lcData["memory"] = st
+			}
+		}
 		flow.Log("lifecycle_"+payload.Data.Phase, lcData, flowRunID)
 		taskRunID := h.resolveTaskRunID(payload.RunID, flowRunID)
 		switch payload.Data.Phase {
@@ -643,6 +651,16 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 			sensinghttp.DefaultFillerManager.OnToolStart(flowRunID, toolArgs, toolName)
 			summary = fmt.Sprintf("Tool %s started", toolName)
 			h.rememberToolArgs(payload.Data.ToolCallID, toolArgs)
+			// Text streamed before this tool call is narration, not the reply
+			// — see demoteAssistantBufferToThinking. Keep it visible in the
+			// Flow Monitor thinking row, drop it from the reply buffer.
+			if narration := h.demoteAssistantBufferToThinking(payload.RunID); narration != "" {
+				slog.Info("assistant text before tool call demoted to thinking",
+					"component", "agent", "run_id", flowRunID, "tool", toolName,
+					"text", narration[:min(len(narration), 120)])
+				h.monitorBus.Push(domain.MonitorEvent{Type: "thinking", Summary: narration, RunID: flowRunID})
+				flow.Log("narration_demoted", map[string]any{"run_id": flowRunID, "tool": toolName, "text": narration}, flowRunID)
+			}
 			// DEFENSIVE (2026-07-23): the agent sometimes wraps an [HW:...]
 			// marker inside a shell tool call — e.g.
 			// `echo '[HW:/audio/play:{...}]'` — instead of emitting it as

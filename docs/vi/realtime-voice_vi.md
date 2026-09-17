@@ -43,6 +43,21 @@ lượt, model sẽ:
   hẳn model im lặng: im lặng, timeout và lỗi transport vẫn fallback bình thường
   sang agent chính.
 
+**Tìm đồ là một hành động.** "Tìm chìa khóa của tôi", "cái cốc của tôi đâu",
+"giúp tôi tìm cây bút được không", "bạn có thấy cây bút của tôi đâu không" — mọi
+yêu cầu định vị một vật hoặc một người là một lượt quét bằng camera và servo do
+agent chính chạy (`/servo/search`, xem `robots/lamp/docs/vision-tracking.md`).
+Lớp realtime phải delegate nó ở mọi cách diễn đạt. Quan sát trên thiết bị
+2026-09-15 (lamp-ac82, memory sạch): câu mệnh lệnh trần "Tìm cây bút cho tôi"
+được delegate và tìm thấy bút, còn dạng câu hỏi "Bạn có thấy cây bút của tôi đâu
+không?" / "Giúp tôi tìm cây bút được không?" bị Gemini tự trả lời — hỏi bút trông
+thế nào, đoán vị trí, hoặc đề nghị nhìn mà không nhìn. Quy tắc nằm ở ba chỗ phải
+khớp nhau: mô tả tool `delegate_to_main` dùng chung, mô tả tool `look` (tìm đồ
+không phải là look), và bullet **Finding things is an action** trong cả bốn prompt
+provider; `hal/test/test_realtime_find_delegation.py` ghim phần text. Bản thân
+quyết định không được ép bằng code — chỉ giọng nói thật trên thiết bị mới kiểm
+tra được.
+
 ### Xác định lời nói hướng đến thiết bị trước persona hoặc hành động
 
 Prompt của mọi provider realtime ưu tiên quy tắc lời nói hướng đến thiết bị
@@ -54,6 +69,15 @@ Khi chắc chắn là lời nghe lỏm, chỉ gọi `reject_turn` nếu có; kh�
 emotion, cử động, look hoặc delegate. Mô tả tool cho phép từ chối yêu cầu nghe
 lỏm kể cả khi thiết bị có thể thực hiện. Trường hợp chưa chắc chắn, kết thúc im
 lặng và lỗi vẫn giữ hành vi fallback hiện có.
+
+Prompt Gemini còn yêu cầu có bằng chứng âm thanh trước khi diễn giải yêu cầu:
+không ghép tiếng ồn/echo thành câu hay sửa transcript không liên quan bằng ngày,
+vị trí, memory hoặc lịch sử hội thoại. Input đột ngột sang ngôn ngữ khác không
+cho phép tự dịch; tên riêng và từ kỹ thuật trong yêu cầu rõ bằng ngôn ngữ đã cấu
+hình vẫn hợp lệ. Ví dụ bao gồm transcript Tây Ban Nha về đại lý du lịch và tiếng
+Hàn bị trả lời thành câu hỏi ngày tháng. Input không rõ giữ im lặng, không đổi
+fallback cho lượt chưa chắc chắn hoặc điều kiện gọi `reject_turn`. Thay đổi
+prompt không bảo đảm transcript đúng hay chặn hết history bị hallucinate.
 
 `robots/lamp/SOUL.md` áp dụng cùng điều kiện lời nói hướng đến thiết bị cho voice
 và `[ambient]` của main agent. Lời nghe lỏm hoặc chưa rõ đang nói với ai phải trả
@@ -81,23 +105,11 @@ model có tuân thủ hay không.
 
 ### Điều khiển agent qua Harness bằng giọng nói
 
-OS Monitor có thêm **Harness-only voice**, mode trong RAM mặc định tắt sau khi
-OS-server khởi động lại. Khi bật, HAL lấy snapshot `/api/harness/voice-mode`
-trước capture và gửi STT đã chốt, bỏ wake word, qua OS tới thẳng agent Harness
-đang focus trong app. Capture đó không stream audio tới realtime model, không gọi main
-runtime/`harness-use`; OS bỏ qua local intent và gate ready/busy của main runtime.
-Khi bật Harness, nhận câu nói và báo đang nghe mà không cần wake word hay cửa sổ follow-up còn hạn. Không kéo dài timer wake window chung; tắt mode thì capture tiếp theo trở về kiểm tra wake word bình thường. Vẫn giữ sleep, mute mic, VAD, noise và echo. Kết quả voice tiếp tục dùng
-lifecycle/recap Harness và TTS của thiết bị. Text chat và sensing nền giữ route cũ.
+OS Monitor có **Harness-only voice**, mode RAM mặc định OFF sau khi OS-server restart. Capture thủ công bỏ qua Realtime và main runtime, giữ route tới agent focus, output TTS và đồng bộ external-history hiện có. Bật bằng gesture cần pair, kết nối và focus app hợp lệ; `focus.ensure` có thể chọn agent cục bộ đầu tiên nếu chưa focus. Thất bại thì mode vẫn tắt. Web/MQTT set rõ ràng giữ semantics hiện có.
 
-Trên đèn MPR121, vuốt phải sang trái rồi nhả để bật/tắt mode; vuốt trái sang
-phải gọi sleep. Hướng vuốt dựa trên `swipe_axis` theo thứ tự trái sang phải
-vật lý. HAL chuyển gesture qua physical-action worker hiện có và API loopback Go
-`POST /api/harness/voice-mode/gesture`. Go giữ focus hiện tại; chỉ khi bật mà
-chưa focus mới yêu cầu chọn agent cục bộ đầu tiên và chờ Desktop xác nhận.
-Chuẩn bị focus thất bại thì mode vẫn tắt; tắt vẫn được khi offline. HAL đọc
-kết quả thực tế bằng phrase Anh, Việt, Trung giản thể hoặc Trung phồn thể theo
-ngôn ngữ cấu hình, kèm LED báo ngắn. Web/MQTT vẫn cho phép set bật khi chưa
-focus. Gesture không đổi cách capture hay định tuyến kết quả.
+Harness ON dùng thu giọng thủ công bằng tap, không tự nghe môi trường. Tap khi TTS đang nói chỉ ngắt phát âm thanh. Ngoài trường hợp đó, tap đầu bắt đầu thu; beep sẵn sàng chỉ phát sau khi recorder/STT đã sẵn sàng. Tap tiếp đóng capture và gửi một transcript STT đã chốt qua route OS hiện có tới agent Harness đang focus. Im lặng không tự gửi. Đạt `MAX_SESSION_DURATION_S` (`HAL_MAX_SESSION_DURATION_S`, mặc định 30 giây) thì hủy, không dispatch. Khi rảnh, mode không ghi lời nói xung quanh. Đổi mode, generation hoặc focus và privacy/stop đều loại bỏ capture; vuốt chuyển focus hủy capture trước khi đổi focus. Sleep và khóa privacy microphone phần cứng vẫn có ưu tiên.
+
+Trên đèn MPR121, Harness OFF giữ gesture cũ: vuốt **phải sang trái** để bật Harness, **trái sang phải** để sleep. Harness ON thay thế action click cũ, triple tap reboot, giữ shutdown/reset, sleep và listening cue: tap điều khiển capture hoặc ngắt TTS; giữ **đủ 3 giây** tắt Harness và thông báo ngay (kể cả offline), không cần nhả; phần chạm còn lại bị bỏ qua tới khi buông tay; vuốt **phải sang trái** chọn agent kế tiếp, **trái sang phải** chọn agent trước. `hal/drivers/harness/gestures.py` quản lý gesture riêng này; `hal/drivers/voice/_internal/harness_capture.py` quản lý quyền sở hữu capture thủ công. GPIO/TTP223 không đổi. Hướng theo `swipe_axis` trái sang phải vật lý (Lamp mặc định E0…E11; kiểm tra chiều lắp). Python gọi API Go; Go quản lý mode/focus và route voice hiện có.
 
 Mỗi capture mang generation của mode. OS từ chối generation cũ thay vì giao câu
 nói cho agent vừa được focus. OS vẫn đồng bộ focus khi mode tắt mà không đổi
@@ -573,10 +585,15 @@ file WAV cache không đổi.
 
 Resample tham chiếu AEC cache hệ số FIR Kaiser mặc định của SciPy theo tỉ lệ
 tần số lấy mẫu đã rút gọn và dtype (tối đa 32 mục), tránh thiết kế lại bộ lọc
-ở mỗi lần ghi loa. `resample_poly` vẫn xử lý gain và padding như trước; dạng
-sóng tham chiếu và nhịp ghi FIFO không đổi. Trước lần ghi loa đầu của mỗi lượt
-phát, HAL chuẩn bị bộ lọc tham chiếu để lần import SciPy/thiết kế bộ lọc đầu
-tiên không làm khựng sau 40 ms audio đầu. Bỏ qua chuẩn bị khi AEC chưa hoạt
+ở mỗi lần ghi loa. FIR nhân quả dạng streaming giữ lịch sử bộ lọc và pha
+resample qua các lần ghi, tạo `ceil(N * output_rate / input_rate)` mẫu đầu ra
+cho tổng cộng `N` mẫu đầu vào. Cách này loại bỏ sai lệch do làm tròn từng chunk
+và việc lặp lại biên bộ lọc. Cùng bộ lọc chống alias thêm khoảng 0,625 ms độ trễ
+khi tần số lấy mẫu thấp hơn là 16 kHz; nhịp ghi FIFO không đổi.
+`EchoReference.clear()` hoặc đổi tần số nguồn sẽ reset trạng thái resample.
+Mức cải thiện khử vọng vẫn cần được kiểm tra A/B trên thiết bị.
+Trước lần ghi loa đầu của mỗi lượt phát, HAL chuẩn bị bộ lọc tham chiếu để lần
+import SciPy/thiết kế bộ lọc đầu tiên không làm khựng sau 40 ms audio đầu. Bỏ qua chuẩn bị khi AEC chưa hoạt
 động hoặc sample rate bằng nhau. Kiểm tra hủy giữa các lát, kể cả sau chuẩn bị;
 chime xác nhận stop vẫn được phát khi cờ dừng lời nói đang bật.
 
@@ -776,7 +793,9 @@ phân biệt động từ theo thứ đứng sau nó, vì "nhìn tôi này" ngh�
 còn "nhìn cái này" là một câu hỏi về một vật. Chỉ áp dụng cho turn **thuần** hỏi về
 thứ nhìn thấy: nếu cùng turn còn kèm hành động ("quay sang phải, giữ nguyên đó, rồi
 nói xem thấy gì"), prompt bắt buộc gọi một `delegate_to_main` gộp cả hai vế — không
-`look` — để lệnh chuyển động không bị âm thầm bỏ rơi. Orchestrator đăng ký tool `look` (`orchestrator.py`,
+`look` — để lệnh chuyển động không bị âm thầm bỏ rơi. Mô tả tool và prompt Gemini
+đều loại trừ việc tìm một vật cụ thể ("cây bút của tôi đâu", "bạn có thấy chìa khóa
+không") — đó là một lượt tìm kiếm được delegate, không phải look. Orchestrator đăng ký tool `look` (`orchestrator.py`,
 `LOOK_TOOL`) và xử lý trong `_handle_look_call`:
 
 1. **Ngắm đầu vào đối tượng trước**, trên thiết bị có thể chuyển động — nếu
@@ -1083,6 +1102,22 @@ catch-up ở `start()` chạy trong **thread nền** (sau `connect()`), nên l�
 Anthropic không chặn session trở thành `available` — nếu chặn thì một lượt nói
 sớm ("hello") ngay sau khi restart sẽ rớt xuống main agent.
 
+Prompt của summarizer (`resources/summarize_prompt.md`) yêu cầu model đặt mọi
+request của user mà các entry không cho thấy đã được trả lời, hoàn thành hay
+hủy vào một heading cuối `## Open requests`, mỗi request một bullet có
+timestamp. Các bullet này không tồn tại vĩnh viễn: `expire_open_requests()`
+(`context_manager/base.py`) xóa mọi bullet có timestamp `[<ISO-8601>]` ở đầu
+đã cũ từ `HAL_REALTIME_SUMMARY_OPEN_REQUEST_TTL_S` (mặc định 3600s) trở lên
+(timestamp không có múi giờ được hiểu là UTC), và xóa luôn heading khi không
+còn bullet nào. Hết hạn tính theo từng bullet, không theo file: `summary.md`
+được ghi lại ở mọi session có entry mới, nên trên một thiết bị đang hoạt động
+mtime của nó không bao giờ già quá TTL — tuổi file chỉ là phương án dự phòng
+cho bullet không có timestamp đọc được. Cơ chế này chạy cả ở nơi summary được
+refeed lại thành `[Previous summary]` cho lần summarize kế tiếp lẫn nơi nó
+được nạp vào session context — cơ chế xác định (deterministic) để chặn một task
+đang chờ nằm mãi trong context rồi bị "trả lời" từ ký ức cũ bởi một nudge rỗng
+nội dung (#419, #421). `0` là tắt cơ chế hết hạn.
+
 ## Chế độ live (song công hoàn toàn)
 
 **Nó thay đổi gì.** VAD cục bộ thôi không còn làm nhiệm vụ chốt lượt mà trở
@@ -1235,7 +1270,10 @@ Hai tín hiệu độc lập "loa có đang phát không" nuôi cổng này, vì
 đủ: `tts.speaking` là nguồn thẩm quyền và hoạt động **kể cả khi không có bộ khử
 vọng nào** (khi không có, `aec.reference_idle_for()` trả `inf` và cổng sẽ không
 bao giờ kích hoạt), còn phần đuôi reference bổ sung độ suy giảm âm học sau khi cờ
-tắt. `HAL_LIVE_PLAYBACK_TAIL_S` là đuôi *âm học*, cố ý không phải `AEC_TAIL_S`
+tắt. Cổng còn giữ đuôi bằng đồng hồ monotonic từ lúc quan sát TTS kết thúc,
+nên khi AEC tắt hoặc thiếu thư viện, mic không mở lại ngay vào tiếng vọng
+trong phòng. Cách này cũng che khoảng nghỉ ngắn giữa các đoạn phát trong hàng đợi.
+`HAL_LIVE_PLAYBACK_TAIL_S` (mặc định 0.35 s) là đuôi *âm học*, cố ý không phải `AEC_TAIL_S`
 (2.0 s): nếu khóa theo cái dài hơn, `mute` sẽ nuốt hai giây đầu của mọi câu trả
 lời người dùng nói.
 
@@ -1245,6 +1283,12 @@ vọng, nên trong lúc phát nhạc `reference_idle_for()` đọc ra một căn
 toàn yên tĩnh.
 
 ### Bơm đầu ra
+
+Trong LIVE, transcript đầu vào có thể đến sau khi model đã bắt đầu trả lời.
+Khi đầu ra đã mang ID lượt đầu vào, transcript đến muộn của cùng ID không được
+dừng phần trả lời realtime hoặc xóa các câu TTS ngoài đang chờ (kể cả ElevenLabs).
+Đầu vào mới có ID khác và được xác nhận là hướng đến thiết bị vẫn có thể ngắt lời;
+quy tắc ngắt phần phát của main agent được giữ nguyên.
 
 `_live_out_pump` lặp `orchestrator.stream_output()` thay vì đọc thẳng hàng đợi
 của agent. Việc đó tái dùng toàn bộ bề mặt tool đang có — `look` + replay,
@@ -1308,7 +1352,7 @@ thúc.
 |-----|----------|---------|
 | `HAL_LIVE_MODE` | `false` | Chế độ live cho toàn tiến trình. Ép `HAL_REALTIME_TURN_DETECTION=server_vad` khi giá trị đó là `off` |
 | `HAL_LIVE_UPLINK_DURING_PLAYBACK` | `mute` | `mute` (không cắt lời, dùng được ngay) hoặc `cancelled` (song công thật, cần sửa AEC) |
-| `HAL_LIVE_PLAYBACK_TAIL_S` | `0.35` | Đuôi âm học sau lần ghi reference cuối, trong đó phòng vẫn được tính là đang phát |
+| `HAL_LIVE_PLAYBACK_TAIL_S` | `0.35` | Đuôi âm học sau lần ghi reference cuối hoặc lúc quan sát TTS kết thúc, kể cả khi không có AEC |
 | `HAL_LIVE_IDLE_HANGUP_S` | `15` | Cúp máy sau khoảng này khi **người dùng** không có hành động nào, tính từ mốc muộn hơn: lời cuối của người dùng hoặc thời điểm thiết bị nói xong |
 | `HAL_LIVE_MAX_UNPROMPTED_REPLIES` | `3` | Trần cứng cho số câu trả lời liên tiếp của model mà không có tiếng người dùng xen giữa — cắt vòng lặp tự nói mà không cắt ngang một câu trả lời dài |
 | `HAL_LIVE_MAX_S` | `600` | Trần tuyệt đối cho một phiên |
@@ -1716,6 +1760,7 @@ trong `config.json`:
 | `HAL_REALTIME_SUMMARIZER_MODEL` | `claude-haiku-4-5-20251001` | Anthropic Messages API |
 | `HAL_REALTIME_SUMMARIZER_RETRIES` | `2` | Số lần thử lại mỗi lượt summarize; `0` là tắt |
 | `HAL_REALTIME_SUMMARIZER_RETRY_BACKOFF_S` | `1.5` | Chờ trước lần thử lại đầu, mỗi lần sau nhân đôi |
+| `HAL_REALTIME_SUMMARY_OPEN_REQUEST_TTL_S` | `3600` | Summarizer đặt các request chưa được trả lời vào một mục `## Open requests` ở cuối (bullet có timestamp). HAL xóa từng bullet khỏi `summary.md` khi timestamp `[<ISO-8601>]` của nó đã cũ bằng số giây này (bullet không có timestamp đọc được thì dùng tuổi file thay thế; heading bị xóa khi không còn bullet nào), cả khi refeed lại thành `[Previous summary]` lẫn khi nạp vào session context — một task đang chờ nằm lì trong context là thứ khiến một nudge rỗng nội dung làm Gemini "trả lời" nó từ ký ức cũ (#419, #421). `0` là tắt. |
 
 ## Bản đồ code
 

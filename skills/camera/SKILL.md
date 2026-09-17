@@ -22,23 +22,37 @@ Use the capture protocol below when no current image or description was supplied
 
 ## Capture Protocol
 
-One call. It takes the photo, sizes it, and gives you back what is in it:
+One tool call. It checks that the camera can actually deliver a frame, and only
+then takes the photo, sizes it, and gives you back what is in it:
 
 ```bash
-curl -sX POST http://127.0.0.1:5000/api/vision/look \
-  -H 'Content-Type: application/json' \
-  -d '{"question":"<what the user asked>"}'
+c=$(curl -s http://127.0.0.1:5001/camera); case "$c" in
+  *'"disabled":true'*) echo "CAMERA_OFF" ;;
+  *'"has_frame":false'*) echo "CAMERA_UNAVAILABLE" ;;
+  *) curl -sX POST http://127.0.0.1:5000/api/vision/look \
+       -H 'Content-Type: application/json' \
+       -d '{"question":"<what the user asked>"}' ;;
+esac
 ```
 
-Returns `{"data":{"description":"...","path":"..."}}` — **answer from
-`description`**. It is the only thing in this turn that actually saw the frame.
+Read the output:
 
-- No `description` field (the main model can read images itself) → open `path`
+- `CAMERA_OFF` → the user turned the camera off (privacy). Say so in one
+  sentence and that they can say "camera on" to turn it back on. **Stop.** Do
+  not look, do not enable it yourself.
+- `CAMERA_UNAVAILABLE` → the hardware is not delivering frames (not connected
+  or not detected). Say the camera is not working right now. **Stop.**
+- `{"data":{"description":"...","path":"..."}}` → **answer from
+  `description`**. It is the only thing in this turn that actually saw the frame.
+  No `description` field (the main model can read images itself) → open `path`
   with your file/image tool.
-- Any error → tell the user you couldn't see it this time. **Do not guess.**
+- Any other error → tell the user you couldn't see it this time. **Do not guess.**
 
-The server handles servo freeze, frame wait, auto-enable if the camera was off,
-and image sizing. No preparatory aim or sleep is needed unless the user explicitly requested a movement (see Move first, then snapshot).
+Keeping the check inside the same shell command costs no extra tool round: a
+separate `GET /camera` turn would add one more model call (~5s) for every look.
+The server handles servo freeze, frame wait, and image sizing. No preparatory
+aim or sleep is needed unless the user explicitly requested a movement (see Move
+first, then snapshot).
 
 For raw-frame export rather than a visual answer, use
 `GET http://127.0.0.1:5001/camera/snapshot?save=true&width=768&quality=75`
@@ -63,7 +77,7 @@ markers are executed only after your reply is composed, so a marker-based aim
 would move the device *after* the photo — you would describe the old view.
 
 ## Workflow
-1. `POST http://127.0.0.1:5000/api/vision/look` with the user's question — **call it directly, never check /camera first**. It auto-enables the camera if disabled.
+1. Run the Capture Protocol command (the `/camera` check and the `look` are one shell call). `CAMERA_OFF` / `CAMERA_UNAVAILABLE` → answer from that word and stop.
 2. Respond from the returned `description`, or inspect the returned `path` with an image tool when the server provides only a path (see Capture Protocol).
 
 You also receive camera snapshots **automatically** as part of sensing events (`[sensing:*]` messages with images). You do not need the camera API for those — just look at the attached image.
@@ -120,6 +134,13 @@ The user wants privacy. Camera stays off until the user explicitly re-enables it
 [HW:/camera/enable:{}]
 ```
 
+**Enabling is not seeing.** The marker only flips the privacy switch; you have
+not captured a frame, and the hardware may not even be delivering one (a camera
+that is unplugged still "enables" fine). Never say "I can see you again", "there
+you are" or describe anything after an enable — say the camera is on and stop,
+or, if the user wants to be seen, run the Capture Protocol in the same turn and
+answer from what it returns.
+
 ### Trigger phrases (MANDATORY — must call HW marker, not just reply with text)
 
 Any phrase meaning "stop looking" or "camera off" MUST trigger `[HW:/camera/disable:{}]`. Any phrase meaning "look at me" or "camera on" MUST trigger `[HW:/camera/enable:{}]`. Do NOT just acknowledge — you MUST include the HW marker.
@@ -152,7 +173,7 @@ up to be identified. Replying "Got it, camera on" answers a question they did no
 ### Examples
 
 **Input:** "Look at this" / "Look at what I'm holding"
-**Output:** `POST /api/vision/look` → say what the object is. Do NOT call `[HW:/camera/enable:{}]` — the look endpoint auto-enables the camera.
+**Output:** Capture Protocol command → say what the object is. Do NOT call `[HW:/camera/enable:{}]` — if the command prints `CAMERA_OFF`, say the camera is off and stop.
 
 **Input:** "Don't watch me"
 **Output:** `[HW:/camera/disable:{}]` Got it, camera off. Just say "look at me" when you want me to see again.
@@ -160,17 +181,18 @@ up to be identified. Replying "Got it, camera on" answers a question they did no
 **Input:** "Stop watching me"
 **Output:** `[HW:/camera/disable:{}]` I'll look away. Let me know when you want me back.
 
-**Input:** "Look at me"
-**Output:** `[HW:/camera/enable:{}]` Camera back on!
+**Input:** "Look at me" / "Camera on"
+**Output:** `[HW:/camera/enable:{}]` Camera back on! — nothing more: no "I can see you", no description. You have not looked yet.
 
-### Auto-enable on snapshot (IMPORTANT)
+### Camera off or unavailable (IMPORTANT)
 
-**NEVER refuse a requested capture because camera is disabled.** `/api/vision/look` uses the HAL snapshot endpoint, which temporarily enables the camera, captures the frame, then restores the disabled state. Do NOT check `/camera` status or ask the user to enable it first. Use `/api/vision/look` for visual questions and the raw snapshot endpoint only for frame export.
+A camera that is off (privacy) or has no frame (hardware) is a complete answer by itself: say it and stop. Do not enable the camera on the user's behalf, do not call `/api/vision/look` or `/camera/snapshot` anyway, do not ask them to enable it and then look — every extra step is a model round the user waits for. The Capture Protocol command already makes this decision for you from `GET /camera` (`disabled`, `has_frame`).
 
 ## Error Handling
 - If capture fails, report the returned error without describing an unseen frame. `/api/vision/look` reports capture/description failures as errors; a raw `/camera/snapshot` request can return 503 when the camera is unavailable.
+- **One failed `/api/vision/look` is final for this turn.** Do NOT "try once more" and do NOT fall back to `GET /camera/snapshot` — it is the same capture path and fails the same way, costing another tool round. An error mentioning "not delivering frames" / "not connected or not detected" means the camera hardware is absent: tell the user the camera is not connected, and stop.
 - If the API is unreachable, inform the user that the camera is temporarily unavailable.
-- **Never check `/camera` status before a visual request** — call `/api/vision/look` directly unless a current image/description was already supplied.
+- **Never spend a separate tool round on `GET /camera`** — the Capture Protocol command checks it in the same shell call as the look. Skip the call entirely when a current image/description was already supplied.
 - If a sensing event already included an image, do not call the camera API again.
 
 ## Rules

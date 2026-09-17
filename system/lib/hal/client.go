@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -99,6 +100,16 @@ func Snapshot(width, quality int) (string, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		// Carry HAL's `detail` up: the agent reads this string to decide whether
+		// to retry, and "returned 503" alone reads as a hiccup while HAL may be
+		// saying the camera hardware is absent.
+		var body struct {
+			Detail string `json:"detail"`
+		}
+		_ = json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&body)
+		if body.Detail != "" {
+			return "", fmt.Errorf("GET /camera/snapshot returned %d: %s", resp.StatusCode, body.Detail)
+		}
 		return "", fmt.Errorf("GET /camera/snapshot returned %d", resp.StatusCode)
 	}
 	var result struct {
@@ -181,6 +192,12 @@ func GetColor() ([3]int, error) {
 func Speak(text string) error {
 	body, _ := json.Marshal(map[string]string{"text": text})
 	return post("/voice/speak", body)
+}
+
+// GrantWakeFocus opens HAL's wake-word follow-up window so the next utterance
+// dispatches without a wake phrase. HAL no-ops when wake word is off.
+func GrantWakeFocus(source string) error {
+	return post("/voice/wake-focus?source="+url.QueryEscape(source), nil)
 }
 
 // ApplyTTSConfig pushes voice settings into the running hal. The service reads

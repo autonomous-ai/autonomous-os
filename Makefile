@@ -535,19 +535,25 @@ upload-opencode:
 	@if [ -z "$(OPENCODE_VERSION_ARG)" ]; then echo "Usage: make upload-opencode <version>   (bare semver, e.g. 1.18.4)" >&2; exit 1; fi
 	bash scripts/release/upload-opencode.sh "$(OPENCODE_VERSION_ARG)"
 
-# Hermes CLI: `make upload-hermes 0.5.2`. NOT pinnable — `hermes update` always
-# moves to upstream HEAD, so the version published here decides WHEN the fleet
-# updates, not WHICH build it lands on. See scripts/release/upload-hermes.sh.
+# Hermes CLI: `make upload-hermes 0.21.1 v2026.9.7` — the bare semver `hermes
+# --version` prints, plus the upstream tag (or full commit) that builds it.
+# Pinned by commit: `software-update hermes` checks that commit out through the
+# upstream installer, so the fleet lands on exactly this build. See
+# scripts/release/upload-hermes.sh.
 ifeq (upload-hermes,$(firstword $(MAKECMDGOALS)))
   HERMES_VERSION_ARG := $(word 2,$(MAKECMDGOALS))
+  HERMES_REF_ARG := $(word 3,$(MAKECMDGOALS))
   ifneq ($(HERMES_VERSION_ARG),)
     $(eval $(HERMES_VERSION_ARG):;@:)
+  endif
+  ifneq ($(HERMES_REF_ARG),)
+    $(eval $(HERMES_REF_ARG):;@:)
   endif
 endif
 
 upload-hermes:
-	@if [ -z "$(HERMES_VERSION_ARG)" ]; then echo "Usage: make upload-hermes <version>   (bare semver, e.g. 0.5.2)" >&2; exit 1; fi
-	bash scripts/release/upload-hermes.sh "$(HERMES_VERSION_ARG)"
+	@if [ -z "$(HERMES_VERSION_ARG)" ] || [ -z "$(HERMES_REF_ARG)" ]; then echo "Usage: make upload-hermes <version> <upstream-tag|commit>   (e.g. 0.21.1 v2026.9.7)" >&2; exit 1; fi
+	bash scripts/release/upload-hermes.sh "$(HERMES_VERSION_ARG)" "$(HERMES_REF_ARG)"
 
 # PicoClaw: `make upload-picoclaw v0.3.1-fixvision`. Takes the GitHub release
 # TAG, not a bare semver — `picoclaw version` reports an unrelated build

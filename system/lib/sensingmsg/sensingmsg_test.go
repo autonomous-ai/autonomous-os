@@ -16,7 +16,7 @@ func TestBuildVoiceFollowupIsAnAuthorizedUserTurn(t *testing.T) {
 }
 
 func TestBuildPresenceEnterCarriesCurrentUser(t *testing.T) {
-	got := Build("presence.enter", "Person detected — 1 face(s) visible (friend (long))", "long", "")
+	got := Build("presence.enter", "Person detected — new: friend (long); faces in frame: 1 (long)", "long", "")
 	if !strings.Contains(got, "[context: current_user=long]") {
 		t.Fatalf("presence.enter = %q, want current_user attribution", got)
 	}
@@ -27,7 +27,7 @@ func TestBuildPresenceEnterUnknownUserIsLabelledUnknown(t *testing.T) {
 	// tag — greeting routes key "speak no name" off current_user=unknown, so
 	// an absent tag would be read as "no constraint" and let the agent fall
 	// back to the persona name.
-	got := Build("presence.enter", "Person detected — 1 face(s) visible (stranger (stranger_3))", "", "")
+	got := Build("presence.enter", "Person detected — new: stranger (stranger_3); faces in frame: 1 (stranger_3)", "", "")
 	if !strings.Contains(got, "[context: current_user=unknown]") {
 		t.Fatalf("presence.enter with no user = %q, want current_user=unknown", got)
 	}
@@ -40,5 +40,65 @@ func TestEnvironmentUsesDedicatedSkill(t *testing.T) {
 	}
 	if strings.Contains(got, "[sensing:") || strings.Contains(got, "[guard-active]") {
 		t.Fatalf("unexpected sensing/guard routing: %q", got)
+	}
+}
+
+func TestBuildPresenceEnterNewFriendCarriesPresenceContext(t *testing.T) {
+	got := Build("presence.enter", "Person detected — new: friend (long); faces in frame: 1 (long)", "long", "")
+	if !strings.Contains(got, "[presence_context:") {
+		t.Fatalf("friend presence.enter = %q, want presence_context block", got)
+	}
+}
+
+func TestBuildPresenceEnterStrangerJoiningPresentFriendSkipsPresenceContext(t *testing.T) {
+	// The friend is still current_user (inside her forget window) but the
+	// arrival is a stranger. The block describes HER last leave, which the
+	// agent read as "Long re-entering after ~28 min away" and greeted the
+	// wrong situation (orange-lamp, 2026-09-16). Only a NEW friend gets it.
+	got := Build("presence.enter",
+		"Person detected — new: stranger (stranger_1); already present: long (friend); faces in frame: 2 (long, stranger_1)",
+		"long", "")
+	if strings.Contains(got, "[presence_context:") {
+		t.Fatalf("stranger-only presence.enter = %q, must not carry presence_context", got)
+	}
+	if !strings.Contains(got, "[context: current_user=long]") {
+		t.Fatalf("stranger-only presence.enter = %q, attribution tag must stay", got)
+	}
+}
+
+func TestBuildPresenceEnterLoneStrangerInsideFriendWindowSkipsPresenceContext(t *testing.T) {
+	// Same current_user, friend out of frame: the block would be equally wrong.
+	got := Build("presence.enter", "Person detected — new: stranger (stranger_4); faces in frame: 1 (stranger_4)", "long", "")
+	if strings.Contains(got, "[presence_context:") {
+		t.Fatalf("lone-stranger presence.enter = %q, must not carry presence_context", got)
+	}
+}
+
+func TestBuildPresenceEnterStrangerJoiningPresentFriendCarriesInlineRule(t *testing.T) {
+	// Hermes only loads sensing/SKILL.md when the model chooses to call
+	// skill_view; on orange-lamp (2026-09-16) it skipped that and answered a
+	// visitor's arrival with "Hey, welcome back" to the user. The rule has to
+	// ride inline, the way presence.leave and environment.update already do.
+	got := Build("presence.enter",
+		"Person detected — new: stranger (stranger_1); already present: long (friend); faces in frame: 2 (long, stranger_1)",
+		"long", "")
+	if !strings.Contains(got, "[A stranger joined long, who is in frame — speak to long, not to the stranger.") {
+		t.Fatalf("stranger-joins-friend presence.enter = %q, want inline rule naming the friend", got)
+	}
+}
+
+func TestBuildPresenceEnterLoneStrangerHasNoJoinRule(t *testing.T) {
+	got := Build("presence.enter", "Person detected — new: stranger (stranger_4); faces in frame: 1 (stranger_4)", "long", "")
+	if strings.Contains(got, "[A stranger joined") {
+		t.Fatalf("lone-stranger presence.enter = %q, must not carry the join rule", got)
+	}
+}
+
+func TestBuildPresenceEnterNewFriendHasNoJoinRule(t *testing.T) {
+	got := Build("presence.enter",
+		"Person detected — new: friend (leo); already present: long (friend); faces in frame: 2 (long, leo)",
+		"leo", "")
+	if strings.Contains(got, "[A stranger joined") {
+		t.Fatalf("friend-joins-friend presence.enter = %q, must not carry the stranger join rule", got)
 	}
 }

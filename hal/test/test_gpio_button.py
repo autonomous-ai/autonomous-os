@@ -128,8 +128,8 @@ def test_standard_policy_preserves_existing_hold_action(actions):
     button = gpio_button.GPIOButtonHandler(ButtonConfig(chip=0, line=100, debounce_ns=0))
     edge(button, 0, 0)
     edge(button, 1, 5)
-    actions[0].return_value.commit.assert_called_once_with(5)
-    actions[2].assert_called_once_with(5, source="GPIO button")
+    actions[0].return_value.commit.assert_called_once_with(5, factory_reset=True)
+    actions[2].assert_called_once_with(5, source="GPIO button", factory_reset=True)
     actions[1].assert_not_called()
 
 

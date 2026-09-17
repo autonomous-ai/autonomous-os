@@ -103,3 +103,16 @@ def test_no_pending_reacquire_means_no_handover(monkeypatch):
 
     assert gaze.release_reacquire_hold_if_pending() is False
     assert svc.dispatched == []
+
+
+# Shared with search and look-aim now (tracking/body.py). A recording that
+# started after the hold owns playback; releasing over it would cut an emotion
+# short, and the loop returns to idle by itself when the recording ends.
+def test_it_does_not_interrupt_a_recording_that_started_meanwhile(monkeypatch):
+    svc = _Svc()
+    svc._current_recording = "happy"
+    _with_service(monkeypatch, svc)
+
+    gaze._release_reacquire_hold()
+
+    assert svc.dispatched == []

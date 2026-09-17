@@ -24,6 +24,9 @@ import "go.autonomous.ai/os/system/device"
 func Supported(deviceCaps map[string]bool) []string {
 	out := make([]string, 0, len(Catalog))
 	for _, name := range Catalog {
+		if Disabled[name] {
+			continue
+		}
 		if name == "environment" && !deviceCaps[device.CapEnvironment] {
 			continue
 		}

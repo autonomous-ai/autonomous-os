@@ -479,6 +479,19 @@ def stop_tts():
     return {"status": "ok"}
 
 
+@router.post("/voice/wake-focus", response_model=StatusResponse)
+def grant_wake_focus(source: str = "os"):
+    """Open the wake-word follow-up window without a spoken wake phrase.
+
+    os-server calls this right after the boot greeting so the user can answer
+    without repeating the wake phrase. Same window a click / gaze / presence
+    grant opens; no-op when wake word is off or follow-up timeout is 0."""
+    voice = state.voice_service
+    if voice is None or not hasattr(voice, "grant_wakeword_focus"):
+        return {"status": "unavailable"}
+    return {"status": "ok" if voice.grant_wakeword_focus(source) else "skipped"}
+
+
 @router.post("/voice/mute", response_model=StatusResponse)
 def mute_mic():
     """Mute mic -- stop voice pipeline and sound perception."""

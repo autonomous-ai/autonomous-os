@@ -875,3 +875,5 @@ and formatters. `useVisionSensing` polls once for all vision cards;
 cards do not fetch directly. Both clients use the existing authenticated
 `/api/hardware/*` proxy. Vision HTTP/response failures show an error instead of
 leaving the loading placeholder or old readings on screen.
+
+Harness delivery warnings no longer pause new voice requests or disable question answers. Check delivery inspects the current pending receipt; Dismiss without retrying clears that warning without cancelling or resending its task.

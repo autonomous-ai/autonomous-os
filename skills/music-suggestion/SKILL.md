@@ -7,6 +7,18 @@ description: Proactive music suggestion. Routed in by user-emotion-detection/SKI
 
 > **`unknown` users count.** Always run suggestion checks when `current_user` is `"unknown"` — speak only, no DM. Never skip because the user is unknown/unconfirmed.
 
+## Spoken output
+
+For a routed suggestion, emit all required mood/suggestion/emotion markers and
+one short invitation to play one song, normally at most 20 words. Do not add a
+separate mood checkin or a second confirmation. Keep genre selection, cooldown
+checks and marker construction in the provider's native thinking channel; do
+not summarize them in text before/after tools or in the final answer. If native
+thinking is unavailable, omit analysis. Use the supplied context and finish
+once a suitable suggestion is ready, without rereading skills to polish it.
+This changes wording only: preserve routing, logging, user consent before play,
+and the existing known-user DM behavior.
+
 ## Triggers
 
 Only one trigger: **Mood** — after logging a mood `decision` that is suggestion-worthy (`sad`, `stressed`, `tired`, `excited`, `happy`, `bored`). Activity events (`[activity] Activity detected: ...`, whether sedentary, drink/break, or celebrate) route to `wellbeing/SKILL.md` and never to this skill.
@@ -131,13 +143,14 @@ Use `audio_recent` from the injected context to personalize; only use `GET /audi
 - Mood: bored (unknown) → `[HW:/emotion:{"emotion":"caring","intensity":0.5}] Need a lift? How about some upbeat indie?`
 - Mood: excited (unknown) → `[HW:/emotion:{"emotion":"happy","intensity":0.7}] Riding the energy — feel-good pop?`
 - Mood: happy, music already playing → `NO_REPLY`
-- After user confirms → `[HW:/audio/play:{"query":"Bill Evans Waltz for Debby","person":"leo"}][HW:/emotion:{"emotion":"happy","intensity":0.8}] Great choice!`
+- After user confirms (known user) → `[HW:/audio/play:{"query":"Bill Evans Waltz for Debby","person":"{name}"}][HW:/emotion:{"emotion":"happy","intensity":0.8}] Great choice!`
+- After user confirms (unknown) → `[HW:/audio/play:{"query":"Bill Evans Waltz for Debby"}][HW:/emotion:{"emotion":"happy","intensity":0.8}] Great choice!`
 
 ## Rules
 
 - All computation stays in `thinking` — reply is only the suggestion sentence (with HW markers) or `NO_REPLY`.
 - Never mention "cooldown", "interval", "threshold", or timestamps in the reply.
-- `person` field in `/audio/play` must be lowercase.
+- `person` field in `/audio/play` is `{name}` — the speaker identified in the injected context, lowercase. **Omit the field** when the context has no identified user (the "(unknown)" cases above). Never copy a name from an example or guess one; unmatched names land in the shared `unknown` bucket anyway.
 - **Never open with a greeting.** This is an emotion-driven mood event, NOT a presence/arrival event. Forbidden openers: `hello`, `hi`, `hey`, `welcome back`, `oh, you're back`, anything containing `again` or referencing the user re-arriving. Greetings belong only to `presence.enter` in `sensing/SKILL.md`.
 - **Tone must match the mood.** For `Fear` → `stressed` and `Sad` → `sad` decisions, use the `caring` emotion marker and a gentle acknowledging sentence — never cheerful or playful phrasing. If you can't produce a tone-appropriate one-liner, output `NO_REPLY`.
 - **Don't reference the camera or detection.** No "I noticed you look…", "I can see…", "your face shows…" — speak as if you simply care, not as if you're describing a sensor reading.

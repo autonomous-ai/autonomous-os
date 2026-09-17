@@ -193,6 +193,15 @@ khôi phục kết quả bằng trạng thái terminal đã xác nhận. Nếu c
 adapter yêu cầu stop và poll cho tới khi execution chốt, giữ quyền sở hữu remote
 run khi trạng thái chưa rõ. EOF hoặc trạng thái còn chạy không được báo thành công.
 
+Run chưa chốt đánh dấu conversation của nó là *không chắc*: request nào đã xếp
+hàng trên conversation đó bị từ chối ("unknown acceptance ... start a new
+session") vì run bị mất có thể vẫn đang thực thi prompt ấy. Sau đó adapter **tự
+xoay conversation** để request kế đi trên conversation mới — trước đây không có
+gì xoay nó, và lamp-0c4e (16/9/2026) hỏng mọi lượt suốt 6+ phút sau khi presync
+restart gateway, tới khi os-server được restart. **Lỗi dial** khi `POST /v1/runs`
+(connection refused lúc gateway đang restart) *không* phải không chắc: prompt chưa
+hề rời thiết bị, nên request đó lỗi nhưng conversation vẫn dùng được.
+
 Native mode còn yêu cầu marker tương thích OS ở trên: Runs chưa vá thiếu
 ID/kết quả tool và chi tiết cache mà handler hiện tại cần. Bản vá tương thích
 thêm `tool.call.started` / `tool.call.completed` với ID, arguments, kết quả thật,
@@ -475,12 +484,15 @@ Vì vậy nó **không** còn chạy bản monolithic `curl | bash --skip-setup`
 lặp stage, installer ghi `git` vào `/usr/local/lib/hermes-agent/.install_method`
 để một lệnh `hermes update` về sau nhận ra đây là git install.
 
-> **Hermes là runtime DUY NHẤT không được OTA worker tự cập nhật.** `hermes
-> update` không nhận version đích — luôn nhảy lên upstream HEAD — nên một sàn
-> `min_version` nó không bao giờ đạt sẽ kích lại update mỗi vòng poll, mãi mãi.
-> `make upload-hermes` + `make promote-hermes` vẫn publish con số, nhưng chỉ
-> `sudo software-update hermes` qua SSH mới áp dụng (và nó CẢNH BÁO chứ không
-> fail khi version thực tế khác). Xem `docs/vi/bootstrap-ota.md` §5. Tiếp đó installer
+> **Hermes được OTA như các CLI khác, pin theo commit.** `hermes update` không
+> nhận version đích (luôn lên upstream HEAD), nên entry metadata mang đúng commit
+> upstream: `make upload-hermes 0.21.1 v2026.9.7` resolve tag theo ngày ra commit,
+> `make promote-hermes` nâng sàn, rồi bootstrap worker chạy `software-update
+> hermes` để checkout đúng commit đó qua installer upstream (`--commit
+> --force-commit`, như imager). Nút trên card Versions của web hiện khi bootstrap
+> báo có entry — tức entry có `commit` và updater trên máy là bản biết pin. Entry
+> chưa pin thì vẫn chỉ SSH (`hermes update` lên HEAD, lệch thì cảnh báo). Xem
+> `docs/vi/bootstrap-ota.md` §5. Tiếp đó installer
 dừng `openclaw` (để import skills không tranh chấp state đang chạy của nó), seed
 các key `API_SERVER_*` trong `~/.hermes/.env`, rồi **giao toàn bộ phần config.yaml
 + skills cho hook presync** (gọi inline), và cuối cùng cài + start gateway như một
@@ -601,6 +613,21 @@ làm 3 việc theo thứ tự:
      từ `llm_model` (đó là model chính của OpenClaw, không liên quan Hermes).
    - `.custom_providers[0]` → `name: autonomous`, `key_env: AUTONOMOUS_API_KEY`,
      `api_mode: anthropic_messages`, `base_url` (mặc định campaign-api, override dưới).
+   - `.custom_providers[0].models.Auto-AI.prompt_caching = true` — **chỉ khi máy
+     đang ở proxy campaign-api** (cùng điều kiện `llm_base_url` với alias ở trên).
+     Hermes chỉ gắn breakpoint `cache_control` kiểu Anthropic cho custom provider
+     khi model khai capability này; thiếu nó thì toàn bộ floor ~18k token (system
+     prompt + 25 tool schema) bị gửi lại không cache mỗi lượt. Đo trên lamp-0c4e
+     (16/9/2026), cùng câu "hello" trong một session: không marker 18.3s → 12.6s,
+     `cache_read` 0; có marker 13.8s → 9.2s ổn định, `cache_read` ~85%. Brain tự
+     mang (BYO) giữ nguyên chính sách cache riêng theo provider của Hermes. Lưu ý
+   - `.prompt_caching.cache_ttl = "1h"` — cùng điều kiện chỉ-khi-ở-proxy. Người
+     dùng đèn thường nói một câu rồi im 10-20 phút, vượt quá mặc định `5m` nên lượt
+     kế phải trả tiền prefill đầy đủ (đo 16/9/2026: 3.6s khi cache còn ấm so với
+     11.8s sau 8 phút nghỉ). Hermes chỉ nhận `5m` | `1h` và gửi `ttl: "1h"` trên
+     mọi cache marker; gateway bỏ qua trường này thì cache âm thầm giữ 5m, nên
+     thiết lập vô hại ở nơi chưa hỗ trợ. Mức 1h tính 2x giá input khi ghi cache
+     (5m là 1.25x); đọc đều 0.1x.
    - `.auxiliary.vision` (**ghi đè trọn node**) → `provider: custom:autonomous`,
      `model: qwen/qwen3.6-plus`, `timeout: 120`, `download_timeout: 30`, `extra_body: {}`
      — model hiểu ảnh, định tuyến qua cùng custom provider autonomous.
@@ -860,6 +887,11 @@ switch. Migration mang vào `~/.hermes/`:
   Hermes chỉ load `MEMORY.md` + `USER.md` **theo tên** (không glob `memories/*.md`),
   nên KNOWLEDGE được fold vào thay vì giữ thành file riêng bị bỏ qua.
 - **USER.md** → `memories/USER.md`.
+
+Parser tên và thao tác đổi tên chỉ nhận dòng trường `**Name:**` riêng, có thể
+có bullet Markdown (`-` hoặc `*`) ở đầu. Cụm nhắc inline như
+“Do NOT fill `**Name:**` or the other single-value fields” trong hướng dẫn SOUL
+được bỏ qua, không trở thành wake word hay bị ghi đè khi đổi tên thiết bị.
 
 Copy soul dùng `Overwrite=true` (switch lấy persona của runtime nguồn; backup
 trước). Chiều ngược hermes→openclaw **strip identity card khỏi SOUL VÀ restore các

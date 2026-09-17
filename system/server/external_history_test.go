@@ -32,7 +32,7 @@ func TestHarnessHistoryPersistsInputAndExactAttributedReply(t *testing.T) {
 	if len(store.Pending()) != 0 {
 		t.Fatal("sent incomplete exchange")
 	}
-	s.registerHarnessReply("coder", "origin", true)
+	s.registerHarnessReply("coder", "origin", true, false)
 	s.deliverHarnessFinal("other-agent", "origin", "wrong answer")
 	if len(store.Pending()) != 0 {
 		t.Fatal("wrong agent supplied history")
@@ -63,7 +63,7 @@ func TestHarnessHistoryWriteFailureKeepsReplyRouteForRetry(t *testing.T) {
 	if err := s.beginHarnessHistory("origin", "question", harness.VoiceModeState{AgentID: "coder"}); err != nil {
 		t.Fatal(err)
 	}
-	s.registerHarnessReply("coder", "origin", true)
+	s.registerHarnessReply("coder", "origin", true, false)
 	saved := dir + "-saved"
 	if err := os.Rename(dir, saved); err != nil {
 		t.Fatal(err)

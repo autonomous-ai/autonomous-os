@@ -184,6 +184,18 @@ trong `migrator.go`; không cần `Direction` enum mới. openclaw, hermes, pico
 codex, claudecode, và opencode đều có adapter, nên mọi cặp migrate được cả 2 chiều. Runtime không có adapter bị
 `CanMigrate` bỏ qua — bộ reconcile lúc boot không migrate tới/từ nó.
 
+Interface `runtimeAdapter` (`migrator.go`) còn có 2 method không liên quan nội
+dung migration, nhưng mọi adapter vẫn phải implement vì các phần khác của hệ
+thống cũng dựa vào cùng interface này:
+
+- `memoryFilePath(opts)` — nơi runtime giữ `MEMORY.md` mà nó load mỗi phiên.
+  Memory guard của OS (`docs/os-server.md`, "Memory guard") quét file này cùng
+  với `userProfilePath(opts)` lúc boot và mỗi lần ghi; runtime thiếu method này
+  sẽ không được guard, đó là lý do nó nằm trên interface chứ không phải một bảng.
+- `workspaceRoot(opts)` — thư mục HAL coi là workspace của runtime
+  (`<root>/realtime/` chứa `summary.md` v.v.). `POST /api/agent/memory/reset`
+  backup rồi xóa memory dưới thư mục này cho mọi runtime đã cài.
+
 Adapter của PicoClaw (`runtime_picoclaw.go`) mirror layout openclaw nhưng đọc/ghi
 `memory/MEMORY.md` (picoclaw để MEMORY.md trong `memory/`, không ở gốc workspace).
 Lưu ý skills chiều VÀO vẫn do presync `picoclaw migrate --workspace-only`
@@ -501,6 +513,8 @@ là no-op idempotent.
 - [ ] `userProfilePath(opts)` trỏ đúng `USER.md` thật của runtime (Hermes để ở
       `memories/`) để reconcile theo enrollment lúc khởi động có thể retire
       profile của người không còn enrollment khuôn mặt/giọng nói (§7).
+- [ ] Adapter implement memoryFilePath + workspaceRoot; chạy
+      `go test ./system/agent/migrate_persona/` (`TestMemoryFilePathsCoverEveryAdapter`).
 - [ ] **People sync** trong block hướng dẫn OS-managed của chính runtime này:
       giữ mục `## Users` trong `USER.md` luôn mới, dạng `- **<label> (friend)**: …`
       khoá theo enrollment label, chỉ thêm/cập nhật, không bao giờ gán chéo người,

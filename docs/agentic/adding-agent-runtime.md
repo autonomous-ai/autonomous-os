@@ -189,6 +189,18 @@ picoclaw, codex, claudecode, and opencode all have adapters, so any pair migrate
 ways. A runtime with no registered adapter is skipped by `CanMigrate` — the boot-time
 reconciler doesn't migrate to/from it.
 
+The `runtimeAdapter` interface (`migrator.go`) also carries two methods that are
+not about migration content, but that every adapter must still implement because
+other subsystems key off the same interface:
+
+- `memoryFilePath(opts)` — where the runtime keeps the `MEMORY.md` it loads every
+  session. The OS memory guard (`docs/os-server.md`, "Memory guard") sweeps it
+  together with `userProfilePath(opts)` at boot and on every write; a runtime
+  without it is unguarded, which is why it is on the interface and not a table.
+- `workspaceRoot(opts)` — the directory HAL treats as the runtime's workspace
+  (`<root>/realtime/` holds `summary.md` etc.). `POST /api/agent/memory/reset`
+  backs up and clears memory under it for every installed runtime.
+
 PicoClaw's adapter (`runtime_picoclaw.go`) mirrors openclaw's layout but reads/writes
 `memory/MEMORY.md` (picoclaw keeps it under `memory/`, not at the workspace root).
 Note its INBOUND skills still come from presync's `picoclaw migrate --workspace-only`
@@ -514,6 +526,8 @@ re-syncs `.env` before the gateway starts, so the re-apply is an idempotent no-o
 - [ ] `userProfilePath(opts)` points at this runtime's real `USER.md` (Hermes
       keeps it under `memories/`) so the startup enrollment reconcile can retire
       a profile whose person no longer has a face/voice enrollment (§7).
+- [ ] Adapter implements memoryFilePath + workspaceRoot; run
+      `go test ./system/agent/migrate_persona/` (`TestMemoryFilePathsCoverEveryAdapter`).
 - [ ] **People sync** in this runtime's own OS-managed instruction block: keep
       `USER.md`'s `## Users` section current, as `- **<label> (friend)**: …`
       keyed by the enrollment label, add/update only, never cross-attribute,

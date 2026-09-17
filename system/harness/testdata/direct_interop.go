@@ -292,6 +292,8 @@ func main() {
 	must(e == nil, "list after OS restart")
 	api("/revoke", map[string]any{"fingerprint": fp})
 	wait("revoke disconnect", func() bool { return !s2.Status().Connected })
+	// App-side revoke sends a sealed pair.revoke; the OS drops its own pin.
+	wait("revoke unpairs OS", func() bool { return s2.Status().State == "unpaired" })
 	_, e = s2.Request(ctx2, harness.Frame{"type": "agents.list"})
 	must(e != nil, "revoked access remained")
 	must(s2.Unpair() == nil && !s2.Status().Paired, "OS unpair")

@@ -8,6 +8,37 @@ ROLLBACK_DIR="/root/bootstrap/rollback"
 WEB_ROOT="/usr/share/nginx/html/setup"
 HAL_DIR="/opt/hal"
 
+find_hal_uv() {
+  local candidate
+  candidate="$(command -v uv || true)"
+  if [ -n "$candidate" ]; then
+    printf '%s\n' "$candidate"
+    return 0
+  fi
+  # Reachy's installer uses Pollen's per-user uv even when running as root.
+  for candidate in /root/.local/bin/uv /home/pollen/.local/bin/uv; do
+    if [ -x "$candidate" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  echo "uv not found" >&2
+  return 1
+}
+
+hal_dependency_extra() {
+  local device_type
+  device_type="$(grep -E '^DEVICE_TYPE=' "$HAL_DIR/.env" 2>/dev/null | cut -d= -f2)"
+  if [ -z "$device_type" ]; then
+    device_type="$(jq -r '.device_type // empty' /root/config/config.json 2>/dev/null || true)"
+  fi
+  # Match the Reachy installer; other devices retain hardware + aec.
+  case "$device_type" in
+    reachy-mini) printf '%s\n' reachy ;;
+    *) printf '%s\n' aec ;;
+  esac
+}
+
 # Use npm's bundled semver implementation: engine ranges can include unions
 # and upper bounds, so a major-version comparison is not sufficient.
 node_satisfies_engine() {
@@ -70,6 +101,33 @@ update_hermes_package() {
   # only resolves an existing npm; it does not run the installer's Node setup.
   ensure_node_engine '>=22.22.0 <23 || >=24.11.0 <25 || >=26.0.0' hermes || return 1
   hermes update
+}
+
+# update_hermes_pinned <full-sha>: check the exact upstream commit out and
+# rebuild the runtime, driving the upstream installer stage by stage exactly as
+# scripts/imager/build-orangepi.sh and runtimes/hermes/install.sh do (the
+# monolithic `curl | bash` runs node-deps, which hangs on this ARM board, and
+# the interactive setup/gateway stages, which os-server owns). The installer is
+# fetched AT the pinned commit so its stage logic matches the tree it installs.
+# `repository` with --commit on an existing checkout fetches + detaches at the
+# sha; --force-commit lets it roll BACK too, so a device that ran an unpinned
+# `hermes update` (HEAD) can be brought onto the released build. Stages
+# `prerequisites`/`config` are skipped: apt and config.yaml belong to the image
+# and to presync.
+update_hermes_pinned() {
+  local commit="$1" installer stage
+  ensure_node_engine '>=22.22.0 <23 || >=24.11.0 <25 || >=26.0.0' hermes || return 1
+  installer=$(mktemp)
+  curl -fsSL "https://raw.githubusercontent.com/NousResearch/hermes-agent/${commit}/scripts/install.sh" -o "$installer" || { echo "[software-update] failed to fetch hermes installer @ $commit"; rm -f "$installer"; return 1; }
+  for stage in repository venv python-deps path; do
+    echo "[software-update] hermes installer stage: $stage (commit $commit)"
+    bash "$installer" --stage "$stage" --non-interactive --commit "$commit" --force-commit || { echo "[software-update] hermes installer stage $stage failed"; rm -f "$installer"; return 1; }
+  done
+  rm -f "$installer"
+  echo "git" >/usr/local/lib/hermes-agent/.install_method 2>/dev/null || true
+  local head
+  head=$(git -C /usr/local/lib/hermes-agent rev-parse HEAD 2>/dev/null || true)
+  [ "$head" = "$commit" ] || { echo "[software-update] hermes checkout is $head, expected $commit"; return 1; }
 }
 
 update_openclaw() {
@@ -228,7 +286,7 @@ ensure_harness_nginx_location() {
   }
   local conf candidate changed
   conf=""
-  for candidate in /etc/nginx/conf.d/*.conf /etc/nginx/sites-enabled/default; do
+  for candidate in /etc/nginx/conf.d/*.conf /etc/nginx/sites-enabled/*; do
     [ -f "$candidate" ] || continue
     if grep -q 'location /api/ {' "$candidate" || grep -q 'location = /api/harness/ws' "$candidate"; then
       conf="$candidate"
@@ -241,9 +299,11 @@ ensure_harness_nginx_location() {
   }
   changed=$(python3 - "$conf" <<'PY'
 import os
+import re
 import sys
 
-path = sys.argv[1]
+# sites-enabled entries may be symlinks; update their source, not the link.
+path = os.path.realpath(sys.argv[1])
 with open(path) as source:
     content = source.read()
 if "location = /api/harness/ws" in content:
@@ -252,6 +312,12 @@ if "location = /api/harness/ws" in content:
 anchor = "  location /api/ {"
 if content.count(anchor) != 1:
     raise SystemExit("nginx /api/ proxy anchor differs; refusing to edit")
+# Reuse the API upstream: Reachy's spike image names it spike_backend.
+# Reject unfamiliar/nested blocks and URI rewriting rather than invent a route.
+api = re.search(r"(?m)^  location /api/ \{([^{}]*)\}", content)
+targets = re.findall(r"(?m)^\s*proxy_pass\s+(http://[A-Za-z0-9_.:-]+);\s*(?:#.*)?$", api[1]) if api else []
+if len(targets) != 1:
+    raise SystemExit("nginx /api/ proxy target differs; refusing to edit")
 route = '''  # Direct Harness pairing/session; authenticated by PAKE and pinned E2EE.
   location = /api/harness/ws {
     proxy_pass http://backend;
@@ -266,6 +332,7 @@ route = '''  # Direct Harness pairing/session; authenticated by PAKE and pinned 
   }
 
 '''
+route = route.replace("proxy_pass http://backend;", "proxy_pass " + targets[0] + ";", 1)
 temporary = path + ".harness-new"
 with open(temporary, "w") as target:
     target.write(content.replace(anchor, route + anchor, 1))
@@ -835,26 +902,54 @@ elif [ "$APP" = "opencode" ]; then
   echo "opencode updated to $VERSION"
 elif [ "$APP" = "hermes" ]; then
   # Hermes is a git install (runtimes/hermes/install.sh stamps
-  # /usr/local/lib/hermes-agent/.install_method=git so the upstream updater
-  # recognizes it). `hermes update` takes NO target version — it always moves to
-  # upstream HEAD. So $VERSION here is the version we EXPECT to land on: a
-  # mismatch afterwards is a WARNING, not a failure, because there is nothing on
-  # the device that could have pinned it.
+  # /usr/local/lib/hermes-agent/.install_method=git). Two modes:
+  #
+  #   PINNED  — metadata carries hermes.commit (scripts/release/upload-hermes.sh):
+  #             check that exact commit out through the upstream installer
+  #             (`--commit <sha> --force-commit`, the flags the imager bakes
+  #             with), then rebuild the venv/deps. The landed version MUST equal
+  #             $VERSION — a mismatch is a failure, the pin is the whole point.
+  #   UNPINNED — no hermes.commit (metadata published before pinning existed):
+  #             `hermes update` to upstream HEAD; the version we land on is only
+  #             EXPECTED, so a mismatch is a warning. The bootstrap worker never
+  #             auto-applies this mode (it would re-trigger forever); it is the
+  #             manual SSH path only.
   #
   # Unit is hermes-gateway.service, not hermes.service (declared in
   # /usr/local/lib/os-runtimes/hermes/service).
   command -v hermes >/dev/null 2>&1 || { echo "hermes is not installed on this device — switch the runtime to hermes first"; exit 1; }
   export HOME=/root
-  update_hermes_package || { echo "hermes update failed"; exit 1; }
+  HERMES_COMMIT=$(jq -r '.hermes.commit // empty' "$METADATA_PAYLOAD")
+  if [ -n "$HERMES_COMMIT" ]; then
+    [[ "$HERMES_COMMIT" =~ ^[0-9a-fA-F]{40}$ ]] || { echo "Metadata hermes.commit is not a full 40-char sha: $HERMES_COMMIT"; exit 1; }
+    update_hermes_pinned "$HERMES_COMMIT" || { echo "hermes pinned update failed"; exit 1; }
+  else
+    echo "[software-update] metadata has no hermes.commit — unpinned: hermes update to upstream HEAD"
+    update_hermes_package || { echo "hermes update failed"; exit 1; }
+  fi
   HERMES_NOW=$(hermes --version 2>/dev/null | sed -nE 's/.*([0-9]+\.[0-9]+\.[0-9]+([-.+_][0-9A-Za-z.-]+)?).*/\1/p' | head -1)
   [ -n "$HERMES_NOW" ] || { echo "hermes not runnable after update"; exit 1; }
   if [ "$HERMES_NOW" != "$VERSION" ]; then
-    echo "[software-update] WARN: hermes landed on $HERMES_NOW, metadata expected $VERSION (upstream HEAD moved — hermes cannot be pinned)"
+    if [ -n "$HERMES_COMMIT" ]; then
+      echo "[software-update] ERROR: hermes landed on $HERMES_NOW, metadata pins $VERSION @ $HERMES_COMMIT — fix the metadata pair (upload-hermes.sh <version> <tag>)"
+      exit 1
+    fi
+    echo "[software-update] WARN: hermes landed on $HERMES_NOW, metadata expected $VERSION (unpinned: upstream HEAD moved)"
   fi
   if [ -f /etc/systemd/system/hermes-gateway.service ]; then
     systemctl restart hermes-gateway
   else
     echo "[software-update] hermes-gateway.service absent (runtime not active) — CLI updated, no restart"
+  fi
+  # os-server patches two Hermes sources at EnsureOnboarding (runtimes/hermes/
+  # cache_usage.go → gateway/platforms/api_server.py, runs_patch.go →
+  # api_server_runs.py). A fresh checkout drops both: the next turns fall back
+  # to /v1/responses and report no cache usage (lamp-dbda 2026-09-16 after a
+  # manual hermes update — web showed no cache column though Hermes logged 86-99%
+  # hits). Restart os-server so onboarding re-applies them.
+  if systemctl is-active --quiet os-server; then
+    echo "[software-update] restarting os-server to re-apply the Hermes compatibility patches"
+    systemctl restart os-server
   fi
   echo "hermes updated to $HERMES_NOW"
 elif [ "$APP" = "picoclaw" ]; then
@@ -926,9 +1021,8 @@ elif [ "$APP" = "hal" ]; then
   [ -z "$URL" ] && { echo "Metadata has no url for hal"; exit 1; }
   ZIP_TMP=$(mktemp)
   download_verified "$URL" "$ZIP_TMP" "$SHA256" || { echo "Failed checksum verification for hal"; exit 1; }
-  UV_BIN="$(command -v uv || true)"
-  [ -n "$UV_BIN" ] || [ ! -x /root/.local/bin/uv ] || UV_BIN=/root/.local/bin/uv
-  [ -n "$UV_BIN" ] || { echo "uv not found"; exit 1; }
+  UV_BIN="$(find_hal_uv)" || exit 1
+  HAL_EXTRA="$(hal_dependency_extra)"
   save_hal_service_state
   arm_service_restore restore_hal_service_state
   systemctl stop hal 2>/dev/null || true
@@ -972,7 +1066,7 @@ elif [ "$APP" = "hal" ]; then
     if [ -f "$ROLLBACK_DIR/hal.previous/.env" ]; then cp -a "$ROLLBACK_DIR/hal.previous/.env" "$DIR_TMP/.env" || exit 1; fi
     find "$UV_CACHE_DIR" -name "lerobot.egg-info" -type d 2>/dev/null | xargs rm -rf
     cd "$DIR_TMP" || exit 1
-    "$UV_BIN" sync --python 3.12 --extra hardware --extra aec || exit 1
+    "$UV_BIN" sync --python 3.12 --extra hardware --extra "$HAL_EXTRA" || exit 1
   ); then
     echo "HAL staging failed; restoring known-good runtime" >&2
     cd /
@@ -1026,6 +1120,16 @@ elif [ "$APP" = "device" ]; then
   unzip -o -q "$ZIP_TMP" -d "$DIR_TMP"
   [ -f "$DIR_TMP/ROBOT.md" ] || { echo "No ROBOT.md in device profile"; exit 1; }
   [ -d "$DEST" ] || { echo "No installed device profile at $DEST"; exit 1; }
+  # The persistent hardware selection is not shipped in the OTA overlay.
+  HARDWARE_PROFILE=""
+  [ ! -e /etc/autonomous/hardware-profile ] || HARDWARE_PROFILE=$(sed 's/^[[:space:]]*//;s/[[:space:]]*$//' /etc/autonomous/hardware-profile) \
+    || { echo "Cannot read hardware profile selection" >&2; exit 1; }
+  if [ -n "$HARDWARE_PROFILE" ] && [ "$HARDWARE_PROFILE" != standard ]; then
+    [ -f "$DIR_TMP/apply-overrides.py" ] \
+      || { echo "Hardware overrides require an override-capable device package" >&2; exit 1; }
+    python3 "$DIR_TMP/apply-overrides.py" --profile "$DIR_TMP" --root / \
+      || { echo "Hardware override configuration failed; installed profile unchanged" >&2; exit 1; }
+  fi
   save_device_service_state
   arm_service_restore restore_device_service_state
   systemctl stop os-server 2>/dev/null || true
@@ -1054,9 +1158,10 @@ elif [ "$APP" = "device" ]; then
   # lamp-0c89: a published HAL_REALTIME_FILLER_DELAY_S never reached the live
   # file and HAL kept running the old value. Do not re-add the backup; if a
   # value has to differ per unit, it belongs in that unit's profile in the repo.
-  [ ! -d "$DEST/rootfs" ] || cp -a "$DEST/rootfs/." /
-  if ! restore_device_service_state || ! check_device_profile; then
-    echo "device profile health check failed; restoring the known-good profile" >&2
+  # Selected hardware overrides are applied above before snapshot/publication.
+  if ! { [ ! -d "$DEST/rootfs" ] || cp -a "$DEST/rootfs/." /; } \
+      || ! restore_device_service_state || ! check_device_profile; then
+    echo "device profile apply or health check failed; restoring the known-good profile" >&2
     systemctl stop os-server 2>/dev/null || true
     systemctl stop hal 2>/dev/null || true
     restore_device_backup

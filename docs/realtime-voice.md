@@ -44,6 +44,21 @@ STT pipeline. At end-of-turn the model either:
   This is deliberately different from a silent completion: silence, timeout,
   and transport failure still use the normal main-agent fallback.
 
+**Finding things is an action.** "Find my keys", "where is my cup", "can you help
+me find my pen", "do you see my pen anywhere" — any request to locate a physical
+object or person is a camera-and-servo search the main agent runs
+(`/servo/search`, see `robots/lamp/docs/vision-tracking.md`). The realtime layer
+must delegate it in every phrasing. Device-observed 2026-09-15 (lamp-ac82, clean
+memory): the bare imperative "Tìm cây bút cho tôi" was delegated and the pen was
+found, while the question forms "Bạn có thấy cây bút của tôi đâu không?" / "Giúp
+tôi tìm cây bút được không?" were handled by Gemini itself — it asked what the pen
+looked like, guessed a location, or offered to look without looking. The rule lives
+in three places that must agree: the shared `delegate_to_main` tool description,
+the `look` tool description (a find is not a look), and a **Finding things is an
+action** bullet in all four provider prompts; `hal/test/test_realtime_find_delegation.py`
+pins the text. The decision itself is not enforced in code — only real speech on
+a device exercises it.
+
 ### Addressed speech before persona or actions
 
 All realtime provider prompts give the addressed-speech policy priority over
@@ -55,6 +70,16 @@ Confidently overheard speech calls only `reject_turn` when available, with no
 voice/text, emotion, movement, look, or delegation. The tool description allows
 rejecting an overheard request even when the device could fulfill it. Uncertainty,
 silent completion, and errors retain the existing fallback behavior.
+
+The Gemini prompt additionally requires audio evidence before interpreting a
+request: do not complete noise/echo into words or repair an unrelated transcript
+using the date, location, memory, or conversation history. Unexpected foreign
+language input does not authorize translation; proper names and technical
+loanwords in a clear configured-language request remain valid. Examples cover
+spurious Spanish travel-agency text and Korean text incorrectly answered as a
+date question. Unclear input stays silent without changing uncertain-turn
+fallback or `reject_turn` eligibility. This prompt change cannot guarantee
+transcription accuracy or prevent all hallucinated history entries.
 
 Lamp's `robots/lamp/SOUL.md` applies the same addressed-speech prerequisite to
 main-agent voice and `[ambient]` messages. Overheard speech or an unclear
@@ -82,25 +107,11 @@ can pin the model's compliance.
 
 ### Voice control through Harness
 
-OS Monitor also offers **Harness-only voice**, a RAM mode that defaults to off
-after OS-server restart. When enabled, HAL snapshots `/api/harness/voice-mode`
-before capture and sends finalized, wake-word-stripped STT directly to the
-agent focused in the Harness app through OS. That capture does not stream audio to the
-realtime model or invoke the main runtime/`harness-use`; OS skips local intents
-and main-runtime readiness/busy gates. While enabled, Harness accepts speech without a wake word or an active follow-up window, including the listening cue. It does not extend the normal wake-window timer; disabling restores normal wake authorization on the next capture. Sleep, mic mute, VAD, noise and echo checks remain. Voice results still use Harness lifecycle/recap
-delivery and device TTS. Text chat and ambient sensing keep their normal routes.
+OS Monitor offers **Harness-only voice**, a RAM mode defaulting to OFF after OS-server restart. Manual captures bypass Realtime and the main runtime, retaining existing focused-agent routing, output TTS and external-history synchronization. Gesture activation requires pairing, connection and valid app focus; `focus.ensure` can select the first local agent when no focus exists. Failure leaves mode off. Web/MQTT explicit sets retain their existing semantics.
 
-On MPR121 lamps, swiping right to left and releasing toggles this mode;
-left-to-right swipes invoke sleep. Direction follows the physical left-to-right
-`swipe_axis` configuration. HAL routes the gesture through its existing
-physical-action worker and the loopback Go
-`POST /api/harness/voice-mode/gesture` API. Go preserves current app focus or,
-only for activation without focus, requests the first local agent and waits for
-Desktop acknowledgement. Failed preparation leaves the mode off; turning off
-works offline. HAL speaks the actual outcome using English, Vietnamese,
-Simplified Chinese or Traditional Chinese phrases according to its configured
-language, with brief LED feedback. Web/MQTT explicit sets still allow enabling
-without focus. Gesture activation does not change capture or result routing.
+Harness ON uses manual tap-to-record capture, not ambient listening. A tap while TTS is speaking only interrupts playback. Otherwise, the first tap starts capture; the ready beep plays only after the recorder/STT is ready. The next tap closes capture and sends one finalized STT transcript through the existing OS route to the focused Harness agent. Silence never sends automatically. Reaching `MAX_SESSION_DURATION_S` (`HAL_MAX_SESSION_DURATION_S`, default 30 seconds) cancels without dispatch. Idle mode does not record surrounding speech. Mode, generation or focus changes and privacy/stop events discard capture; a focus swipe cancels capture before changing focus. Sleep and hardware microphone privacy remain authoritative.
+
+On MPR121-equipped lamps, Harness OFF retains the existing gestures: swipe **right to left** to enable Harness and **left to right** to sleep. Harness ON replaces the old click, triple-tap reboot, shutdown/reset holds, sleep and listening-cue actions: tap controls capture or interrupts TTS, holding **for 3 seconds** immediately disables Harness and announces the result (including while offline); the remaining contact is ignored until release, swipe **right to left** selects the next agent and **left to right** the previous agent. `hal/drivers/harness/gestures.py` owns this separate gesture policy; `hal/drivers/voice/_internal/harness_capture.py` tracks manual capture ownership. GPIO/TTP223 behavior is unchanged. Direction follows the physical left-to-right `swipe_axis` (Lamp defaults E0…E11; verify mounting). Python calls Go APIs; Go owns mode/focus and the existing voice route.
 
 Each capture carries its mode generation. OS refuses a stale generation rather
 than delivering an utterance to a newly focused agent. OS mirrors app focus even
@@ -599,10 +610,15 @@ resampling and whole-file cached WAV resampling are unchanged.
 
 AEC reference resampling caches SciPy's default Kaiser FIR coefficients by
 reduced sample-rate ratio and dtype (up to 32 entries), avoiding filter design
-on every speaker write. `resample_poly` still performs its usual gain and
-padding; the reference waveform and FIFO pacing remain unchanged. Before the
-first speaker write of a playback, HAL prepares the reference filter so a cold
-SciPy import/filter design cannot stall playback after its first 40 ms. This
+on every speaker write. A streaming causal FIR preserves filter history and
+resampling phase across writes, producing `ceil(N * output_rate / input_rate)`
+samples for the accumulated `N` input samples. This removes per-chunk rounding
+drift and repeated filter boundaries. The same anti-alias filter adds about
+0.625 ms of delay when the lower sample rate is 16 kHz; FIFO pacing is unchanged.
+`EchoReference.clear()` or a source-rate switch resets the resampling state.
+Acoustic improvement still requires an A/B check on the device.
+Before the first speaker write of a playback, HAL prepares the reference filter
+so a cold SciPy import/filter design cannot stall playback after its first 40 ms. This
 preparation is skipped when AEC is inactive or sample rates match. Cancellation
 is checked between slices, including after preparation; a stop acknowledgement
 chime can still play while the speech stop flag is set.
@@ -808,7 +824,9 @@ on" while "look at this" is a question about an object. This only applies to tur
 that are **purely** a question about what it sees: if the same turn also contains an
 action ("turn to the right, hold it there, and tell me what you see"), the prompt
 requires a single `delegate_to_main` covering both halves — no `look` — so the
-movement is never silently dropped. The orchestrator registers a `look` tool
+movement is never silently dropped. The tool description and the Gemini prompt
+both exclude finding a specific object ("where is my pen", "do you see my keys") —
+that is a delegated search, not a look. The orchestrator registers a `look` tool
 (`orchestrator.py`, `LOOK_TOOL`) and handles the call in `_handle_look_call`:
 
 1. **Aim the head at the subject first**, on devices that can move — otherwise a
@@ -1127,6 +1145,21 @@ catch-up runs in a **background thread** (after `connect()`), so the Anthropic
 call never blocks the session from becoming `available` — otherwise an early
 turn ("hello") right after a restart would leak to the main agent.
 
+The summarizer prompt (`resources/summarize_prompt.md`) tells the model to put
+any user request the entries don't show as answered, done or cancelled under a
+final `## Open requests` heading, one timestamped bullet each. Those bullets
+are not permanent: `expire_open_requests()` (`context_manager/base.py`) drops
+every bullet whose leading `[<ISO-8601>]` stamp is
+`HAL_REALTIME_SUMMARY_OPEN_REQUEST_TTL_S` (default 3600s) or more in the past
+(a naive stamp is read as UTC), and the heading with them once none is left.
+Expiry is per bullet, not per file: `summary.md` is rewritten on every session
+with new entries, so on an active device its mtime never ages past the TTL —
+the file age is only the fallback for a bullet without a parseable stamp. This
+runs both where the summary is re-fed as `[Previous summary]` to the next
+summarize and where it is loaded into session context — deterministic backstop
+so a pending task can't sit in context indefinitely and get "answered" from
+stale memory by a content-free nudge (#419, #421). `0` disables expiry.
+
 ## Live mode (full duplex)
 
 **What it changes.** The local VAD stops being an endpointer and becomes a
@@ -1283,7 +1316,10 @@ Two independent "is the speaker live" signals feed the gate, because neither
 alone suffices: `tts.speaking` is authoritative and works with **no canceller at
 all** (with none, `aec.reference_idle_for()` returns `inf` and the gate would
 never fire), while the reference tail adds the acoustic decay after the flag
-drops. `HAL_LIVE_PLAYBACK_TAIL_S` is the *acoustic* tail, deliberately not
+drops. The gate also holds a monotonic tail from the observed end of TTS,
+so disabling AEC or a missing binding cannot reopen the mic immediately onto
+room echo. This also covers short gaps between queued playback segments.
+`HAL_LIVE_PLAYBACK_TAIL_S` (default 0.35 s) is the *acoustic* tail, deliberately not
 `AEC_TAIL_S` (2.0 s): keyed on the longer one, `mute` swallows the first two
 seconds of every reply the user gives.
 
@@ -1292,6 +1328,12 @@ seconds of every reply the user gives.
 music `reference_idle_for()` reads as a perfectly quiet room.
 
 ### The output pump
+
+In LIVE mode, input transcription may arrive after the model has already
+started answering. Once output carries an input turn ID, a later transcript
+for that same ID must not stop its realtime playback or clear queued external
+TTS sentences (including ElevenLabs). A different addressed input can still
+interrupt; main-agent playback retains its existing interruption behavior.
 
 `_live_out_pump` loops `orchestrator.stream_output()` rather than reading the
 agent queue directly. That reuses the entire existing tool surface — `look` +
@@ -1353,7 +1395,7 @@ and gets them back the moment a session ends.
 |-----|---------|---------|
 | `HAL_LIVE_MODE` | `false` | Whole-process live mode. Forces `HAL_REALTIME_TURN_DETECTION=server_vad` when that is `off` |
 | `HAL_LIVE_UPLINK_DURING_PLAYBACK` | `mute` | `mute` (no barge-in, ships today) or `cancelled` (true full duplex, needs the AEC fix) |
-| `HAL_LIVE_PLAYBACK_TAIL_S` | `0.35` | Acoustic tail after the last reference write during which the room still counts as playing |
+| `HAL_LIVE_PLAYBACK_TAIL_S` | `0.35` | Acoustic tail after the last reference write or observed TTS end, including without AEC |
 | `HAL_LIVE_IDLE_HANGUP_S` | `15` | Hang up after this long with no action **from the user**, measured from whichever came later: the user's last words or the moment the device stopped speaking |
 | `HAL_LIVE_MAX_UNPROMPTED_REPLIES` | `3` | Hard ceiling on consecutive model replies with no user speech between them — breaks a self-talk loop without cutting one long answer short |
 | `HAL_LIVE_MAX_S` | `600` | Absolute ceiling on one session |
@@ -1777,6 +1819,7 @@ is a top-level `config.json` flag:
 | `HAL_REALTIME_SUMMARIZER_MODEL` | `claude-haiku-4-5-20251001` | Anthropic Messages API |
 | `HAL_REALTIME_SUMMARIZER_RETRIES` | `2` | Extra attempts per summarize; `0` disables |
 | `HAL_REALTIME_SUMMARIZER_RETRY_BACKOFF_S` | `1.5` | Wait before the first retry, doubled each time |
+| `HAL_REALTIME_SUMMARY_OPEN_REQUEST_TTL_S` | `3600` | The summariser puts unanswered requests under a final `## Open requests` section (timestamped bullets). HAL drops each bullet from `summary.md` once its `[<ISO-8601>]` stamp is this many seconds old (a bullet without a parseable stamp falls back to the file's age; the heading goes when no bullet is left), both when re-feeding it as `[Previous summary]` and when loading it into session context — a stale pending task in context is what let a content-free nudge make Gemini "answer" it from memory (#419, #421). `0` disables. |
 
 ## Code map
 

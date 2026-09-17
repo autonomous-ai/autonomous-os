@@ -247,7 +247,7 @@ func TestHarnessDeliveryReachesMQTTWithCompleteText(t *testing.T) {
 	h := agenthttp.ProvideAgentHandler(nil, bus, nil, &config.Config{})
 	s, sent := newTestStream()
 	s.Track("device-chat-mqtt-harness", "mobile-session")
-	h.MarkHarnessResponseRun("device-chat-mqtt-harness", true)
+	h.MarkHarnessResponseRun("device-chat-mqtt-harness", true, false)
 	const text = "Kết quả Harness\n\n- Một\n- Hai"
 	if !h.DeliverHarnessResponse("device-chat-mqtt-harness", text) {
 		t.Fatal("delivery rejected")

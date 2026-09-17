@@ -2,6 +2,29 @@
 
 Fires whenever the routing table in `SKILL.md` picks `checkin` (row #3 — the "anything else" catch-all: cooldown active so music is blocked, mood not suggestion-worthy, decision stale with no fresh synthesis, etc.). The music and LED-ack routes own their own output; this file owns checkin only.
 
+## Output boundary
+
+Reading this reference is not a cue to announce the route. Keep all route,
+cooldown, weak-cue, style, and logging analysis in the provider's native
+thinking/reasoning channel. If unavailable, omit that analysis. Ordinary
+assistant text before or after a tool call is also spoken text: do not emit
+`Let me get the checkin reference`, `Checkin route`, or a summary of thinking.
+After reading, finish with the required HW markers and one user-facing sentence
+of at most 20 words in `current_language`. No heading, rationale, or afterword.
+
+For an unknown user's weak camera Sad cue with music suggested two minutes ago,
+when the router selects checkin and no fresh mood decision is being logged,
+this is the complete English reply:
+
+```text
+[HW:/mood/log:{"kind":"signal","source":"camera","trigger":"sad","mood":"sad","user":"unknown"}][HW:/emotion:{"emotion":"caring","intensity":0.5}][HW:/music-suggestion/log:{"user":"unknown","trigger":"checkin:sad","message":"Anything on your mind?"}] Anything on your mind?
+```
+
+The only spoken text is `Anything on your mind?`. Preserve any additional mood
+decision marker required on other turns; never explain it aloud. A weak Sad cue
+does not establish distress, tears, or a bad experience. Keep the invitation
+neutral rather than assuming any of those.
+
 ## What "checkin" means
 
 A short, human reaction to whatever the camera just caught. Three flavors to mix between — pick whichever fits the moment:
@@ -15,6 +38,22 @@ Keyed by **raw emotion** (the FER or voice label from the event), not by `mapped
 Voice variants share the same row — `Fearful` → use `Fear`, `Surprised` → use `Surprise`, `Disgusted` → use `Disgust`. Same register, same phrasing inspiration.
 
 ## Example phrasing — INSPIRATION ONLY
+
+**Weak-cue override:** when the event says `weak camera cue` or `weak voice cue`,
+avoid wording that assumes an emotion or expression is real. For a weak Happy
+cue, do not say “Smile's contagious” or ask “what's got you happy”. Prefer a
+neutral invitation such as “Anything you'd like to share?” in `current_language`.
+One sentence, at most 20 words; no spoken reasoning before or after it.
+
+For an unknown user's weak camera Happy cue routed to checkin, with no fresh
+mood decision to log, this is a complete output example (markers included):
+
+```text
+[HW:/mood/log:{"kind":"signal","source":"camera","trigger":"happy","mood":"happy","user":"unknown"}][HW:/emotion:{"emotion":"caring","intensity":0.5}][HW:/music-suggestion/log:{"user":"unknown","trigger":"checkin:Happy","message":"Anything you'd like to share?"}] Anything you'd like to share?
+```
+
+Keep any additional decision marker required by the mood rules on other turns.
+Do not explain how the markers were chosen or combined.
 
 > **DO NOT copy these strings verbatim.** They are flavor samples to show the register/style for each emotion. Each turn the agent should phrase its own line, drawing on these only as reference. Repeating the same wording across turns is the failure mode this section is meant to prevent.
 

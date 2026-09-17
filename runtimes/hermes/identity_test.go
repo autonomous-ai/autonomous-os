@@ -1,6 +1,29 @@
 package hermes
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
+
+func TestSoulNameIgnoresManagedInstructions(t *testing.T) {
+	// Use the real injected block that triggered the bogus wake words.
+	if got := parseSoulName(soulSkillPriorityBlock); got != "" {
+		t.Fatalf("instructions parsed as name: %q", got)
+	}
+	for _, card := range []string{"", "\n## Your identity card\n\n- **Name:** Noah\n"} {
+		input := soulSkillPriorityBlock + card
+		if card != "" && parseSoulName(input) != "Noah" {
+			t.Fatal("instructions shadowed real identity card")
+		}
+		updated := rewriteSoulName(input, "Ngân")
+		if !strings.HasPrefix(updated, soulSkillPriorityBlock) {
+			t.Fatal("rename modified managed instructions")
+		}
+		if got := parseSoulName(updated); got != "Ngân" {
+			t.Fatalf("renamed identity = %q", got)
+		}
+	}
+}
 
 func TestRewriteSoulName_ReplacesExisting(t *testing.T) {
 	in := "# Soul\n\nYou are Lamp.\n\n## Your identity card\n\n- **Name:** Lamp\n"
@@ -41,6 +64,9 @@ func TestParseSoulName(t *testing.T) {
 		{"strips dash description", "- **Name:** Lamp - a living being\n", "Lamp"},
 		{"no name line → empty", "# Soul\n\nYou are **Lamp**.\n", ""},
 		{"empty value → empty", "- **Name:**\n", ""},
+		{"star bullet and case", "  * **NAME:** Noah\n", "Noah"},
+		{"inline example", "Set **Name:** Noah\n", ""},
+		{"quoted example", "`**Name:**` or the other single-value fields\n", ""},
 		{"first name line wins", "- **Name:** Ngân\n- **Name:** Hà\n", "Ngân"},
 	}
 	for _, c := range cases {

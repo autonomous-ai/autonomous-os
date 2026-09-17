@@ -298,6 +298,40 @@ func isAsciiDigit(b byte) bool {
 	return b >= '0' && b <= '9'
 }
 
+// demoteAssistantBufferToThinking drops the assistant text buffered so far for
+// runID and returns it, because a tool call is starting and text streamed BEFORE
+// a tool call is the model narrating its plan ("Leo's asking if I see him. Let
+// me take a look."), not the reply. Left in the buffer it is glued in front of
+// the real answer at lifecycle:end and reaches web chat / TTS (lamp-0c4e
+// 2026-09-16, Hermes + DeepSeek; Hermes' own run.completed final already
+// excludes it). Runtime-agnostic: codex/opencode demote the same thing in
+// their translators, claudecode sends only the final message, so for those
+// this is a no-op. Returns "" and keeps the buffer when:
+//   - the first sentence was already streamed to TTS (cannot be unspoken; the
+//     remainder must stay consistent with what played), or
+//   - the text carries a complete or partial [HW:...] marker (a real hardware
+//     action the end-flush must still fire).
+func (h *AgentHandler) demoteAssistantBufferToThinking(runID string) string {
+	h.assistantMu.Lock()
+	defer h.assistantMu.Unlock()
+	buf, ok := h.assistantBuf[runID]
+	if !ok || buf.Len() == 0 {
+		return ""
+	}
+	if _, streamed := h.streamedCleanLen[runID]; streamed {
+		return ""
+	}
+	raw := buf.String()
+	if hasPartialHWMarker(raw) || hasPartialHWLinkMarker(raw) {
+		return ""
+	}
+	if calls, _ := extractHWCalls(raw); len(calls) > 0 {
+		return ""
+	}
+	delete(h.assistantBuf, runID)
+	return strings.TrimSpace(raw)
+}
+
 // flushAssistantText returns the accumulated text for runId and clears the buffer.
 // HW markers are stripped here so they never appear in Telegram or other channel replies.
 // The caller is responsible for extracting and firing HW calls before flushing.

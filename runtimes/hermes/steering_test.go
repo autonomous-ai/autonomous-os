@@ -549,3 +549,74 @@ func TestManagedStopContextPreservesImageAndOriginalBody(t *testing.T) {
 		t.Fatal("mutated original image request")
 	}
 }
+
+// hermes-gateway restarting exactly when a run is created (presync config change
+// on lamp-0c4e 2026-09-16) yields a dial error. That prompt was never delivered,
+// so the conversation must stay usable: the request fails, the next one on the
+// SAME conversation is created once the gateway is back. Before the fix every
+// later turn failed with "unknown acceptance ... start a new session" until
+// os-server itself was restarted.
+func TestManagedDialFailureDoesNotPoisonConversation(t *testing.T) {
+	oldURL := BaseURL
+	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	deadURL := dead.URL
+	dead.Close() // connection refused from now on
+	var mu sync.Mutex
+	creates := 0
+	live := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/runs":
+			mu.Lock()
+			creates++
+			mu.Unlock()
+			fmt.Fprint(w, `{"run_id":"native-one"}`)
+		case strings.HasSuffix(r.URL.Path, "/events"):
+			w.Header().Set("Content-Type", "text/event-stream")
+			fmt.Fprint(w, "data: {\"event\":\"run.completed\",\"output\":\"Done\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}\n\n")
+		default:
+			fmt.Fprint(w, `{"run_id":"native-one","status":"running","session_id":"session-one"}`)
+		}
+	}))
+	BaseURL = deadURL
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() { cancel(); live.Close(); BaseURL = oldURL }()
+	events := make(chan domain.WSEvent, 50)
+	s := &HermesService{httpClient: live.Client(), runtimeCtx: ctx, silentRuns: map[string]bool{}, handler: func(_ context.Context, e domain.WSEvent) error { events <- e; return nil }}
+	waitPhase := func(runID, phase string) map[string]any {
+		t.Helper()
+		timeout := time.NewTimer(5 * time.Second)
+		defer timeout.Stop()
+		for {
+			select {
+			case e := <-events:
+				var p map[string]any
+				_ = json.Unmarshal(e.Payload, &p)
+				d, _ := p["data"].(map[string]any)
+				if p["runId"] == runID && d["phase"] == phase {
+					return d
+				}
+			case <-timeout.C:
+				t.Fatalf("missing %s/%s", runID, phase)
+				return nil
+			}
+		}
+	}
+	conversation := s.conversationName()
+	s.inFlightStreams.Store(1)
+	s.enqueueManagedRun("during-restart", streamRequest{Input: "first", Conversation: conversation}, "user")
+	if d := waitPhase("during-restart", "error"); !strings.Contains(fmt.Sprint(d["error"]), "create native Hermes run") {
+		t.Fatalf("unexpected error: %v", d["error"])
+	}
+	if s.conversationName() != conversation {
+		t.Fatal("conversation rotated on a dial failure — the prompt was never delivered")
+	}
+	BaseURL = live.URL // gateway is back
+	s.inFlightStreams.Add(1)
+	s.enqueueManagedRun("after-restart", streamRequest{Input: "next", Conversation: conversation}, "user")
+	waitPhase("after-restart", "end")
+	mu.Lock()
+	defer mu.Unlock()
+	if creates != 1 {
+		t.Fatalf("created %d runs after the gateway came back", creates)
+	}
+}
