@@ -110,3 +110,14 @@ func (openclawAdapter) userProfilePath(opts Options) string {
 	}
 	return filepath.Join(opts.OpenclawWorkspace, "USER.md")
 }
+
+// memoryFilePath implements runtimeAdapter — MEMORY.md at the workspace root.
+func (openclawAdapter) memoryFilePath(opts Options) string {
+	if opts.OpenclawWorkspace == "" {
+		return ""
+	}
+	return filepath.Join(opts.OpenclawWorkspace, "MEMORY.md")
+}
+
+// workspaceRoot implements runtimeAdapter.
+func (openclawAdapter) workspaceRoot(opts Options) string { return opts.OpenclawWorkspace }

@@ -8,7 +8,7 @@ import type { Turn } from "./types";
 import { TYPE_LUCIDE, TURN_INPUT_FALLBACK } from "./types";
 import { HW } from "../types";
 import { useTheme } from "@/lib/useTheme";
-import { turnIO, turnTokenStats, turnCurrentUser, externalHistory, turnDisplayType } from "./helpers";
+import { turnIO, turnTokenStats, turnMemoryState, orderedMemoryFiles, turnCurrentUser, externalHistory, turnDisplayType } from "./helpers";
 import { PoseBucketModal } from "./PoseBucketModal";
 import { UserAvatar } from "./UserAvatar";
 
@@ -80,6 +80,7 @@ export function TurnBadge({ turn, pairTint, userPhotos, onViewPipeline }: {
     ? [...baseSnaps.slice(0, 1), ...extraStrip].slice(0, 3)
     : baseSnaps;
   const tokenStats = turnTokenStats(turn);
+  const memory = turnMemoryState(turn);
   const currentUser = turnCurrentUser(turn);
   const hasBroadcast = turn.events.some((ev) =>
     ev.type === "flow_event" && ev.detail?.node === "telegram_alert_broadcast"
@@ -507,6 +508,40 @@ export function TurnBadge({ turn, pairTint, userPhotos, onViewPipeline }: {
                     counts realtime voice (Gemini) + TTS tokens in the same
                     bucket — this footer covers the text-agent LLM only. */}
                 <span style={{ color: "var(--lm-text-muted)" }}>LLM tokens</span>
+              </span>
+            </span>
+          );
+        })()}
+        {memory && (() => {
+          const files = orderedMemoryFiles(memory.files);
+          // Red only when blocks were really removed. In observe mode the
+          // guard reports what it WOULD remove but the file is untouched, so
+          // that count is a warning, not a removal.
+          const quarantined = memory.changed.reduce((n, c) => n + (c.execute ? c.quarantined : 0), 0);
+          const wouldQuarantine = memory.changed.reduce((n, c) => n + (c.execute ? 0 : c.quarantined), 0);
+          const title = [
+            ...files.map(([name, f]) => `${name} ${f.size} bytes · ${f.sha8}`),
+            ...memory.changed.map((c) => {
+              if (!c.quarantined) return `${c.file} changed`;
+              const verb = c.execute ? "quarantined" : "would quarantine (observe mode)";
+              return `${c.file} changed — ${verb} ${c.quarantined} block(s): ${c.reasons.join(", ")}`;
+            }),
+          ].join("\n") || "memory";
+          // Amber when the agent wrote memory during this turn, red when the
+          // guard had to quarantine part of it — the two states #421 made
+          // invisible for most of a day.
+          const color = quarantined > 0 ? "var(--lm-red)"
+            : memory.changed.length > 0 ? "var(--lm-amber)"
+            : "var(--lm-text-muted)";
+          const suffix = quarantined > 0 ? ` · ${quarantined} quarantined`
+            : wouldQuarantine > 0 ? ` · would quarantine ${wouldQuarantine}`
+            : "";
+          return (
+            <span title={title} style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
+              <span style={{ opacity: 0.4 }}>·</span>
+              <span style={{ color, fontWeight: 600 }}>
+                {files.map(([name, f]) => `${name.replace(".md", "")} ${fmtToken(f.size)}`).join(" ")}
+                {memory.changed.length > 0 && ` ✎ memory changed${suffix}`}
               </span>
             </span>
           );

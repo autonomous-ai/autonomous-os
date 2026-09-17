@@ -51,6 +51,14 @@ type runtimeAdapter interface {
 	write(b *baseMigrator, bundle *PersonaBundle, opts Options) error
 	personaPaths(opts Options) []string
 	userProfilePath(opts Options) string
+	// memoryFilePath is where THIS runtime keeps the MEMORY.md it loads every
+	// session. The memory guard (memory_guard_files.go) sweeps it alongside
+	// USER.md; part of the interface so a new runtime cannot be left unguarded.
+	memoryFilePath(opts Options) string
+	// workspaceRoot is the directory HAL's realtime layer treats as the
+	// runtime's workspace (its `realtime/` subdir holds summary.md etc.). Used
+	// by the memory reset to find and back up every runtime's copies.
+	workspaceRoot(opts Options) string
 }
 
 // adapters is the registry. To make a new runtime migratable, implement
