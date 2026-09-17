@@ -292,3 +292,49 @@ def test_scene_release_cannot_reopen_privacy_peripherals(monkeypatch):
     assert state._mic_muted and state._speaker_muted and state._camera_disabled
     state.camera_capture.start.assert_not_called()
     state.voice_service.start.assert_not_called()
+
+
+@pytest.mark.parametrize("camera_manual_override", [False, True])
+def test_scene_release_inside_privacy_lock_reopens_scene_muted_peripherals(
+        monkeypatch, camera_manual_override):
+    """Scene mutes captured by the privacy lock must not survive scene off
+    (night → sleep → privacy press; device-observed 2026-09-17, lamp-0c89)."""
+    from hal.routes import scene
+    monkeypatch.setattr(state, "_active_scene", "night")
+    monkeypatch.setattr(state, "animation_service", None)
+    monkeypatch.setattr(state, "rgb_service", None)
+    monkeypatch.setattr(state, "_save_user_led_state", mock.Mock())
+    monkeypatch.setattr(scene, "_persist_scene", mock.Mock())
+    # Scene night: speaker + camera off; sleep did not own the speaker mute.
+    state._speaker_muted = True
+    state._camera_disabled = True
+    state._camera_manual_override = camera_manual_override
+    monkeypatch.setattr(state, "_sleepy_auto_muted_speaker", False)
+    monkeypatch.setattr(state, "_sleepy_auto_muted_mic", False)
+    privacy.apply(True, config())
+    assert privacy.speaker_before is True and privacy.camera_before is True
+    # Wake runs scene off while the switch is still locked.
+    state._wake_sleepy_peripherals()
+    scene.deactivate_scene()
+    assert state._speaker_muted and state._camera_disabled  # lock still holds
+    state.camera_capture.start.assert_not_called()
+    state._save_boot_sidecar.assert_any_call(state._SPEAKER_STATE_PATH, {"muted": False})
+    privacy.apply(False, config())
+    assert not state._speaker_muted
+    assert state._camera_disabled == camera_manual_override
+    assert state.camera_capture.start.call_count == (0 if camera_manual_override else 1)
+
+
+def test_scene_release_without_privacy_lock_unmutes_directly(monkeypatch):
+    from hal.routes import scene
+    monkeypatch.setattr(state, "_active_scene", "night")
+    monkeypatch.setattr(state, "animation_service", None)
+    monkeypatch.setattr(state, "rgb_service", None)
+    monkeypatch.setattr(state, "_save_user_led_state", mock.Mock())
+    monkeypatch.setattr(scene, "_persist_scene", mock.Mock())
+    state._speaker_muted = True
+    state._camera_disabled = True
+    scene.deactivate_scene()
+    assert not state._speaker_muted and not state._camera_disabled
+    assert privacy.speaker_before is None and privacy.camera_before is None
+    state.camera_capture.start.assert_called_once()

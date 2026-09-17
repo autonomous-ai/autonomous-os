@@ -297,6 +297,10 @@ SLEEPY_SPEAKER_GRACE_S = 2.0       # wait this long for an announcement to START
 SLEEPY_SPEAKER_DRAIN_MAX_S = 15.0  # hard cap on the whole drain
 _SLEEPY_DRAIN_POLL_S = 0.1
 _sleepy_drain_cancel: Optional[threading.Event] = None
+# Same drain for scenes with speaker "off": the /scene marker lands before the
+# reply text, so an inline mute swallowed the scene's own line. Sleepy takes
+# the drain over when both arrive in one reply.
+_scene_drain_cancel: Optional[threading.Event] = None
 # Fires idle again after a still emotion (a preset with servo=None) halted the
 # animation loop, so the body never stays frozen once the moment has passed.
 # Cancelled on every /emotion (see routes/emotion.py).
@@ -702,25 +706,21 @@ def _finalize_sleepy_peripherals(mute_mic: bool, mute_speaker: bool):
         if music_service and music_service.playing:
             music_service.stop()
         if not _speaker_muted:
+            # A pending scene drain yields to sleep so wake can restore the mute.
+            _cancel_scene_speaker_drain()
             _start_sleepy_speaker_drain()
 
     _persist_sleep_state()
     logger.info("Sleepy finalized: LED off, mic muted, speaker draining")
 
 
-def _start_sleepy_speaker_drain():
-    """Mute the speaker once the going-to-sleep announcement has played.
+def _run_speaker_drain(cancel: threading.Event, commit, name: str) -> None:
+    """Let the current turn's announcement play, then call `commit`.
 
-    Waits SLEEPY_SPEAKER_GRACE_S for one to start, then lets it finish. The
-    grace is far wider than the measured 100ms so this never depends on
-    os-server's marker budget. SLEEPY_SPEAKER_DRAIN_MAX_S caps it: without
-    that, a stalled TTS would leave a sleeping device able to speak. A wake
-    cancels the drain.
+    Waits SLEEPY_SPEAKER_GRACE_S for TTS to start (well above the ~100ms
+    marker→text gap), lets it finish, and gives up at SLEEPY_SPEAKER_DRAIN_MAX_S.
+    Setting `cancel` abandons the drain without committing.
     """
-    global _sleepy_drain_cancel
-    _cancel_sleepy_speaker_drain()
-    cancel = threading.Event()
-    _sleepy_drain_cancel = cancel
 
     def _drain():
         deadline = time.monotonic() + SLEEPY_SPEAKER_DRAIN_MAX_S
@@ -733,9 +733,21 @@ def _start_sleepy_speaker_drain():
                 break  # the announcement finished, or none ever came
             cancel.wait(_SLEEPY_DRAIN_POLL_S)
         if not cancel.is_set():
-            _mute_speaker_for_sleep()
+            commit()
 
-    threading.Thread(target=_drain, daemon=True, name="sleepy-speaker-drain").start()
+    threading.Thread(target=_drain, daemon=True, name=name).start()
+
+
+def _start_sleepy_speaker_drain():
+    """Mute the speaker once the going-to-sleep announcement has played.
+
+    A wake cancels the drain.
+    """
+    global _sleepy_drain_cancel
+    _cancel_sleepy_speaker_drain()
+    cancel = threading.Event()
+    _sleepy_drain_cancel = cancel
+    _run_speaker_drain(cancel, _mute_speaker_for_sleep, "sleepy-speaker-drain")
 
 
 def _cancel_sleepy_speaker_drain():
@@ -744,6 +756,51 @@ def _cancel_sleepy_speaker_drain():
     if _sleepy_drain_cancel is not None:
         _sleepy_drain_cancel.set()
         _sleepy_drain_cancel = None
+
+
+def _start_scene_speaker_drain(scene: str):
+    """Mute the speaker for `scene` once its confirmation line has played.
+
+    Skipped while sleep owns the speaker (asleep or sleepy drain pending).
+    """
+    global _scene_drain_cancel
+    _cancel_scene_speaker_drain()
+    if _sleeping or _sleepy_drain_cancel is not None:
+        logger.info("Scene %s: speaker mute left to sleep", scene)
+        return
+    cancel = threading.Event()
+    _scene_drain_cancel = cancel
+    _run_speaker_drain(cancel, lambda: _mute_speaker_for_scene(scene), "scene-speaker-drain")
+    logger.info("Scene %s: speaker draining", scene)
+
+
+def _cancel_scene_speaker_drain():
+    """Stop a pending scene drain. Safe to call when none is running."""
+    global _scene_drain_cancel
+    if _scene_drain_cancel is not None:
+        _scene_drain_cancel.set()
+        _scene_drain_cancel = None
+
+
+def _mute_speaker_for_scene(scene: str):
+    """Commit a scene's deferred mute; re-checked under privacy.lock like sleep."""
+    global _speaker_muted, _scene_drain_cancel
+    with privacy.lock:
+        if _active_scene != scene:
+            logger.info("Scene %s speaker drain: scene gone -- speaker left live", scene)
+            return
+        if _sleeping:
+            logger.info("Scene %s speaker drain: asleep -- mute left to sleep", scene)
+            return
+        if _speaker_muted:
+            return
+        _speaker_muted = True
+        _scene_drain_cancel = None
+        _persist_speaker_state()
+    # The flag only gates playback that has not started; stop a TTS the cap cut.
+    if tts_service and tts_service.speaking:
+        tts_service.stop()
+    logger.info("Scene %s: speaker muted", scene)
 
 
 def _mute_speaker_for_sleep():
