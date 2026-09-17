@@ -76,13 +76,13 @@ def list_emotion_presets():
     return result
 
 
-@router.post("/emotion", response_model=EmotionResponse)
 def harness_blocks_sleep() -> bool:
     """Sleep is refused while Harness voice mode is ON; unavailable means off."""
     from hal.drivers.voice._internal.harness_voice import read_voice_mode
     return bool(read_voice_mode().get("enabled"))
 
 
+@router.post("/emotion", response_model=EmotionResponse)
 def express_emotion(req: EmotionRequest, source: str = "api"):
     """Express an emotion by coordinating servo animation + LED color simultaneously.
 
