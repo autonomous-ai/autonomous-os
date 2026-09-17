@@ -117,7 +117,7 @@ OS Monitor có **Harness-only voice**, mode RAM mặc định OFF sau khi OS-ser
 
 Harness ON dùng thu giọng thủ công bằng tap, không tự nghe môi trường. Tap khi TTS đang nói chỉ ngắt phát âm thanh. Ngoài trường hợp đó, tap đầu bắt đầu thu; beep sẵn sàng chỉ phát sau khi recorder/STT đã sẵn sàng. Tap tiếp đóng capture và gửi một transcript STT đã chốt qua route OS hiện có tới agent Harness đang focus. Im lặng không tự gửi. Đạt `MAX_SESSION_DURATION_S` (`HAL_MAX_SESSION_DURATION_S`, mặc định 30 giây) thì hủy, không dispatch. Khi rảnh, mode không ghi lời nói xung quanh. Đổi mode, generation hoặc focus và privacy/stop đều loại bỏ capture; vuốt chuyển focus hủy capture trước khi đổi focus. Sleep và khóa privacy microphone phần cứng vẫn có ưu tiên.
 
-Trên đèn MPR121, Harness OFF giữ gesture cũ: vuốt **phải sang trái** để bật Harness, **trái sang phải** để sleep. Harness ON thay thế action click cũ, triple tap reboot, giữ shutdown/reset, sleep và listening cue: tap điều khiển capture hoặc ngắt TTS; giữ **ít nhất 3 giây rồi nhả** tắt Harness rõ ràng (kể cả offline); vuốt **phải sang trái** chọn agent kế tiếp, **trái sang phải** chọn agent trước. `hal/drivers/harness_mpr121.py` quản lý gesture riêng này; `hal/drivers/voice/_internal/harness_capture.py` quản lý quyền sở hữu capture thủ công. GPIO/TTP223 không đổi. Hướng theo `swipe_axis` trái sang phải vật lý (Lamp mặc định E0…E11; kiểm tra chiều lắp). Python gọi API Go; Go quản lý mode/focus và route voice hiện có.
+Trên đèn MPR121, Harness OFF giữ gesture cũ: vuốt **phải sang trái** để bật Harness, **trái sang phải** để sleep. Harness ON thay thế action click cũ, triple tap reboot, giữ shutdown/reset, sleep và listening cue: tap điều khiển capture hoặc ngắt TTS; giữ **đủ 3 giây** tắt Harness và thông báo ngay (kể cả offline), không cần nhả; phần chạm còn lại bị bỏ qua tới khi buông tay; vuốt **phải sang trái** chọn agent kế tiếp, **trái sang phải** chọn agent trước. `hal/drivers/harness/gestures.py` quản lý gesture riêng này; `hal/drivers/voice/_internal/harness_capture.py` quản lý quyền sở hữu capture thủ công. GPIO/TTP223 không đổi. Hướng theo `swipe_axis` trái sang phải vật lý (Lamp mặc định E0…E11; kiểm tra chiều lắp). Python gọi API Go; Go quản lý mode/focus và route voice hiện có.
 
 Mỗi capture mang generation của mode. OS từ chối generation cũ thay vì giao câu
 nói cho agent vừa được focus. OS vẫn đồng bộ focus khi mode tắt mà không đổi
@@ -1453,6 +1453,22 @@ catch-up ở `start()` chạy trong **thread nền** (sau `connect()`), nên l�
 Anthropic không chặn session trở thành `available` — nếu chặn thì một lượt nói
 sớm ("hello") ngay sau khi restart sẽ rớt xuống main agent.
 
+Prompt của summarizer (`resources/summarize_prompt.md`) yêu cầu model đặt mọi
+request của user mà các entry không cho thấy đã được trả lời, hoàn thành hay
+hủy vào một heading cuối `## Open requests`, mỗi request một bullet có
+timestamp. Các bullet này không tồn tại vĩnh viễn: `expire_open_requests()`
+(`context_manager/base.py`) xóa mọi bullet có timestamp `[<ISO-8601>]` ở đầu
+đã cũ từ `HAL_REALTIME_SUMMARY_OPEN_REQUEST_TTL_S` (mặc định 3600s) trở lên
+(timestamp không có múi giờ được hiểu là UTC), và xóa luôn heading khi không
+còn bullet nào. Hết hạn tính theo từng bullet, không theo file: `summary.md`
+được ghi lại ở mọi session có entry mới, nên trên một thiết bị đang hoạt động
+mtime của nó không bao giờ già quá TTL — tuổi file chỉ là phương án dự phòng
+cho bullet không có timestamp đọc được. Cơ chế này chạy cả ở nơi summary được
+refeed lại thành `[Previous summary]` cho lần summarize kế tiếp lẫn nơi nó
+được nạp vào session context — cơ chế xác định (deterministic) để chặn một task
+đang chờ nằm mãi trong context rồi bị "trả lời" từ ký ức cũ bởi một nudge rỗng
+nội dung (#419, #421). `0` là tắt cơ chế hết hạn.
+
 ## Chế độ live (song công hoàn toàn)
 
 **Nó thay đổi gì.** VAD cục bộ thôi không còn làm nhiệm vụ chốt lượt mà trở
@@ -2123,6 +2139,7 @@ trong `config.json`:
 | `HAL_REALTIME_SUMMARIZER_MODEL` | `claude-haiku-4-5-20251001` | Anthropic Messages API |
 | `HAL_REALTIME_SUMMARIZER_RETRIES` | `2` | Số lần thử lại mỗi lượt summarize; `0` là tắt |
 | `HAL_REALTIME_SUMMARIZER_RETRY_BACKOFF_S` | `1.5` | Chờ trước lần thử lại đầu, mỗi lần sau nhân đôi |
+| `HAL_REALTIME_SUMMARY_OPEN_REQUEST_TTL_S` | `3600` | Summarizer đặt các request chưa được trả lời vào một mục `## Open requests` ở cuối (bullet có timestamp). HAL xóa từng bullet khỏi `summary.md` khi timestamp `[<ISO-8601>]` của nó đã cũ bằng số giây này (bullet không có timestamp đọc được thì dùng tuổi file thay thế; heading bị xóa khi không còn bullet nào), cả khi refeed lại thành `[Previous summary]` lẫn khi nạp vào session context — một task đang chờ nằm lì trong context là thứ khiến một nudge rỗng nội dung làm Gemini "trả lời" nó từ ký ức cũ (#419, #421). `0` là tắt. |
 
 ## Bản đồ code
 

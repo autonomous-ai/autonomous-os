@@ -113,7 +113,7 @@ OS Monitor offers **Harness-only voice**, a RAM mode defaulting to OFF after OS-
 
 Harness ON uses manual tap-to-record capture, not ambient listening. A tap while TTS is speaking only interrupts playback. Otherwise, the first tap starts capture; the ready beep plays only after the recorder/STT is ready. The next tap closes capture and sends one finalized STT transcript through the existing OS route to the focused Harness agent. Silence never sends automatically. Reaching `MAX_SESSION_DURATION_S` (`HAL_MAX_SESSION_DURATION_S`, default 30 seconds) cancels without dispatch. Idle mode does not record surrounding speech. Mode, generation or focus changes and privacy/stop events discard capture; a focus swipe cancels capture before changing focus. Sleep and hardware microphone privacy remain authoritative.
 
-On MPR121-equipped lamps, Harness OFF retains the existing gestures: swipe **right to left** to enable Harness and **left to right** to sleep. Harness ON replaces the old click, triple-tap reboot, shutdown/reset holds, sleep and listening-cue actions: tap controls capture or interrupts TTS, hold **at least 3 seconds then release** explicitly disables Harness (including while offline), swipe **right to left** selects the next agent and **left to right** the previous agent. `hal/drivers/harness_mpr121.py` owns this separate gesture policy; `hal/drivers/voice/_internal/harness_capture.py` tracks manual capture ownership. GPIO/TTP223 behavior is unchanged. Direction follows the physical left-to-right `swipe_axis` (Lamp defaults E0…E11; verify mounting). Python calls Go APIs; Go owns mode/focus and the existing voice route.
+On MPR121-equipped lamps, Harness OFF retains the existing gestures: swipe **right to left** to enable Harness and **left to right** to sleep. Harness ON replaces the old click, triple-tap reboot, shutdown/reset holds, sleep and listening-cue actions: tap controls capture or interrupts TTS, holding **for 3 seconds** immediately disables Harness and announces the result (including while offline); the remaining contact is ignored until release, swipe **right to left** selects the next agent and **left to right** the previous agent. `hal/drivers/harness/gestures.py` owns this separate gesture policy; `hal/drivers/voice/_internal/harness_capture.py` tracks manual capture ownership. GPIO/TTP223 behavior is unchanged. Direction follows the physical left-to-right `swipe_axis` (Lamp defaults E0…E11; verify mounting). Python calls Go APIs; Go owns mode/focus and the existing voice route.
 
 Each capture carries its mode generation. OS refuses a stale generation rather
 than delivering an utterance to a newly focused agent. OS mirrors app focus even
@@ -1503,6 +1503,21 @@ catch-up runs in a **background thread** (after `connect()`), so the Anthropic
 call never blocks the session from becoming `available` — otherwise an early
 turn ("hello") right after a restart would leak to the main agent.
 
+The summarizer prompt (`resources/summarize_prompt.md`) tells the model to put
+any user request the entries don't show as answered, done or cancelled under a
+final `## Open requests` heading, one timestamped bullet each. Those bullets
+are not permanent: `expire_open_requests()` (`context_manager/base.py`) drops
+every bullet whose leading `[<ISO-8601>]` stamp is
+`HAL_REALTIME_SUMMARY_OPEN_REQUEST_TTL_S` (default 3600s) or more in the past
+(a naive stamp is read as UTC), and the heading with them once none is left.
+Expiry is per bullet, not per file: `summary.md` is rewritten on every session
+with new entries, so on an active device its mtime never ages past the TTL —
+the file age is only the fallback for a bullet without a parseable stamp. This
+runs both where the summary is re-fed as `[Previous summary]` to the next
+summarize and where it is loaded into session context — deterministic backstop
+so a pending task can't sit in context indefinitely and get "answered" from
+stale memory by a content-free nudge (#419, #421). `0` disables expiry.
+
 ## Live mode (full duplex)
 
 **What it changes.** The local VAD stops being an endpointer and becomes a
@@ -2189,6 +2204,7 @@ is a top-level `config.json` flag:
 | `HAL_REALTIME_SUMMARIZER_MODEL` | `claude-haiku-4-5-20251001` | Anthropic Messages API |
 | `HAL_REALTIME_SUMMARIZER_RETRIES` | `2` | Extra attempts per summarize; `0` disables |
 | `HAL_REALTIME_SUMMARIZER_RETRY_BACKOFF_S` | `1.5` | Wait before the first retry, doubled each time |
+| `HAL_REALTIME_SUMMARY_OPEN_REQUEST_TTL_S` | `3600` | The summariser puts unanswered requests under a final `## Open requests` section (timestamped bullets). HAL drops each bullet from `summary.md` once its `[<ISO-8601>]` stamp is this many seconds old (a bullet without a parseable stamp falls back to the file's age; the heading goes when no bullet is left), both when re-feeding it as `[Previous summary]` and when loading it into session context — a stale pending task in context is what let a content-free nudge make Gemini "answer" it from memory (#419, #421). `0` disables. |
 
 ## Code map
 

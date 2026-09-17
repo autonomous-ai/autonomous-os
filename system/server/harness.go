@@ -103,7 +103,7 @@ func (s *Server) registerHarnessRoutes(api *gin.RouterGroup, ctx context.Context
 		// A local Harness agent can complete before Request returns its receipt.
 		// Install the local route first so an immediate terminal event is not lost.
 		if tracksReply {
-			s.registerHarnessReply(agentID, reply.RunID, reply.Channel == "web")
+			s.registerHarnessReply(agentID, reply.RunID, reply.Channel == "web", true)
 		}
 		requestCtx, cancel := context.WithTimeout(c.Request.Context(), 35*time.Second)
 		defer cancel()
@@ -195,7 +195,7 @@ func extractHarnessReply(frame harness.Frame) (*harnessReplyRequest, error) {
 	return reply, nil
 }
 
-func (s *Server) registerHarnessReply(agentID, runID string, webChat bool) {
+func (s *Server) registerHarnessReply(agentID, runID string, webChat, delegated bool) {
 	if agentID == "" || runID == "" || s.agentHandler == nil {
 		return
 	}
@@ -206,7 +206,7 @@ func (s *Server) registerHarnessReply(agentID, runID string, webChat bool) {
 	s.harnessReplies[runID] = harnessReply{agentID: agentID, runID: runID, webChat: webChat, created: time.Now()}
 	s.harnessRepliesMu.Unlock()
 	s.harnessFollowup.Store(time.Now().Add(2 * time.Minute).UnixMilli())
-	s.agentHandler.MarkHarnessResponseRun(runID, webChat)
+	s.agentHandler.MarkHarnessResponseRun(runID, webChat, delegated)
 	telemetry.ReportTaskExecution(runID, "", "unknown", "harness_delegated")
 }
 

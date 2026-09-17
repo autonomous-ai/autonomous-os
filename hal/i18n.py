@@ -80,8 +80,8 @@ PHRASE_RATE_LIMIT = "rate_limit"
 # during a service reload.
 PHRASES_BY_LANG = {
     PHRASE_HARNESS_FOCUS: {
-        LANG_EN: "Now talking to {agent}.", LANG_VI: "Đang nói chuyện với {agent}.",
-        LANG_ZH_CN: "现在和 {agent} 对话。", LANG_ZH_TW: "現在和 {agent} 對話。",
+        LANG_EN: "Agent switched.", LANG_VI: "Đã chuyển agent.",
+        LANG_ZH_CN: "已切换智能体。", LANG_ZH_TW: "已切換智慧體。",
     },
     PHRASE_HARNESS_FOCUS_FAILED: {
         LANG_EN: "Could not switch agents. Check Harness.", LANG_VI: "Chưa chuyển được agent. Hãy kiểm tra Harness.",

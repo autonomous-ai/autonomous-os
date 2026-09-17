@@ -15,8 +15,7 @@ from dataclasses import dataclass
 
 from hal.board.mpr121 import MPR121Config
 from hal.drivers.button_gestures import (
-    DOUBLE_CLICK_WINDOW, FACTORY_RESET_DURATION, LONG_PRESS_DURATION,
-    SLEEP_HOLD_DURATION,
+    DOUBLE_CLICK_WINDOW, LONG_PRESS_DURATION, SLEEP_HOLD_DURATION,
 )
 
 logger = logging.getLogger(__name__)
@@ -83,9 +82,11 @@ class _GestureEvent:
 class _GestureRecognizer:
     """Poll-clock recognition independent of action execution and electrode count."""
 
-    def __init__(self, debounce_ms, *, hold_thresholds=None, multi_click=True):
-        self._hold_thresholds = hold_thresholds or (SLEEP_HOLD_DURATION, LONG_PRESS_DURATION, FACTORY_RESET_DURATION)
+    def __init__(self, debounce_ms, *, hold_thresholds=None, multi_click=True, hold_on_threshold=False):
+        # Touch pads never factory-reset: that tier stays on the mechanical button.
+        self._hold_thresholds = hold_thresholds or (SLEEP_HOLD_DURATION, LONG_PRESS_DURATION)
         self._multi_click = multi_click
+        self._hold_on_threshold = hold_on_threshold
         self._delay = debounce_ms / 1000
         self._stable = None
         self._candidate = None
@@ -161,6 +162,10 @@ class _GestureRecognizer:
             if tier > self._hold_tier:
                 self._hold_tier = tier
                 events.append(_GestureEvent("hold_tier", self._gesture_id, tier, held))
+                if self._hold_on_threshold:
+                    events.append(_GestureEvent("invalidate", self._gesture_id))
+                    events.append(_GestureEvent("hold", self._gesture_id, held_s=held))
+                    self.cancel()
         # A pending click window never commits a destructive outcome while
         # another electrode is held; a completed hold clears the whole burst.
         if not touched and not self._stable and self._deadline is not None and now >= self._deadline:
@@ -174,7 +179,11 @@ class _GestureRecognizer:
 # The release grace joins a finger handoff without turning it into two taps.
 SWIPE_RELEASE_S = 0.120
 SWIPE_MAX_GAP_S = 0.150
-SWIPE_MIN_TRAVEL_S = 0.060
+# Travel time is measured from cycle start (after the contact debounce) to the
+# last new pad, so a fast full-strip swipe (~90 ms raw on Lamp) measures ~50 ms.
+# Displacement >= 3 pads already proves motion; this only rejects a whole hand
+# landing within a poll or two.
+SWIPE_MIN_TRAVEL_S = 0.030
 
 
 class _SpatialGestureRecognizer:
@@ -317,7 +326,13 @@ class _SpatialGestureRecognizer:
                 new = positions - self._seen
                 displacement = center - self._origin
                 if new:
-                    if abs(center - self._last_center) > 3:
+                    # A far-off arrival is a second finger, not travel -- unless
+                    # the contact is already moving and the jump continues in
+                    # its direction: a fast swipe (~1 pad per poll) skips pads
+                    # whose dwell is shorter than the footprint filter, so the
+                    # centroid legitimately leaps 3-4 pads (measured on Lamp).
+                    jump = center - self._last_center
+                    if abs(jump) > 3 and not (self._moving and jump * self._direction > 0):
                         self._invalid = True
                     if now - self._last_move > SWIPE_MAX_GAP_S:
                         self._invalid = True
@@ -341,7 +356,12 @@ class _SpatialGestureRecognizer:
                 edge_time = self._contact_since if self._button._press_start is None else now
                 if not active:
                     edge_time = max(since for value, since in self._raw.values() if not value)
-                events.extend(self._button.update(True, edge_time))
+                button_events = self._button.update(True, edge_time)
+                events.extend(button_events)
+                if any(event.kind == "hold" for event in button_events):
+                    # Threshold-fired actions consume this entire contact,
+                    # including later travel, until a stable physical release.
+                    self.cancel()
         elif self._cycle:
             if self._release_at is None:
                 # Use raw edge time, so grace/debounce cannot promote a hold.
@@ -368,7 +388,7 @@ def triple_click_action(*, source):
 
 def hold_release_action(held_s, *, source):
     from hal.drivers.button_actions import hold_release_action as action
-    action(held_s, source=source)
+    action(held_s, source=source, factory_reset=False)
 
 
 def swipe_action(*, source):
@@ -397,7 +417,7 @@ class MPR121Handler:
     def _new_detector(self):
         factory = _GestureRecognizer
         if self._harness_gestures and self._harness_gestures.snapshot.get("enabled"):
-            from hal.drivers.harness_mpr121 import harness_button_recognizer
+            from hal.drivers.harness.gestures import harness_button_recognizer
             factory = harness_button_recognizer
         if self._config.swipe_axis is not None:
             return _SpatialGestureRecognizer(self._config, factory)
@@ -473,7 +493,7 @@ class MPR121Handler:
             self._config.touch_threshold, self._config.release_threshold,
             self._config.autoconfig, self._config.poll_ms, self._config.debounce_ms,
         )
-        logger.info("MPR121 event=swipe_config axis=%s release_ms=120 max_gap_ms=150 min_travel_ms=60 footprint_debounce_ms=5", self._config.swipe_axis)
+        logger.info("MPR121 event=swipe_config axis=%s release_ms=120 max_gap_ms=150 min_travel_ms=30 footprint_debounce_ms=5", self._config.swipe_axis)
         self._last_raw_mask = None
         if self._hold_led is not None:
             self._hold_led.stop()
@@ -487,7 +507,7 @@ class MPR121Handler:
             # Allow conversions/autoconfiguration to settle before seeding the
             # boot-held suppression from the first reported electrode state.
             time.sleep(0.1)
-            from hal.drivers.harness_mpr121 import HarnessGestures
+            from hal.drivers.harness.gestures import HarnessGestures
             self._harness_gestures = HarnessGestures()
             self._harness_gestures.start()
             self._detector.update(self._sample(), time.monotonic())
@@ -599,7 +619,7 @@ class MPR121Handler:
         if direction == 1:
             swipe_action(source="MPR121")
         elif direction == -1:
-            from hal.drivers.harness_voice_action import toggle_harness_voice
+            from hal.drivers.harness.actions import toggle_harness_voice
             toggle_harness_voice()
         else:
             logger.warning("MPR121 swipe discarded: missing or invalid direction %s", direction)
@@ -620,7 +640,7 @@ class MPR121Handler:
         elif event.kind == "swipe":
             self._execute_swipe(event.direction)
         elif event.kind == "hold":
-            if self._feedback().commit(event.held_s) is False:
+            if self._feedback().commit(event.held_s, factory_reset=False) is False:
                 logger.info("MPR121 event=action_discarded gesture_id=%d action=hold reason=feedback_cancelled", event.gesture_id)
                 return
             hold_release_action(event.held_s, source="MPR121")

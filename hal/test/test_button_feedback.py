@@ -179,8 +179,8 @@ class HoldLEDFeedbackTests(unittest.TestCase):
             order.attach_mock(action, "action")
             handler._run_hold_action(5)
         self.assertEqual([c[0] for c in order.mock_calls], ["commit", "action"])
-        handler._hold_led.commit.assert_called_once_with(5)
-        action.assert_called_once_with(5, source="GPIO button")
+        handler._hold_led.commit.assert_called_once_with(5, factory_reset=True)
+        action.assert_called_once_with(5, source="GPIO button", factory_reset=True)
 
     def test_gpio_old_watcher_cannot_override_new_hold(self):
         handler = GPIOButtonHandler(ButtonConfig(chip=0, line=100, debounce_ns=0))

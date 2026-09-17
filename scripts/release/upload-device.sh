@@ -73,6 +73,9 @@ bash -n "$SWUPDATE_SRC" || { echo "Error: canonical software-update is not valid
 echo "========== Staging canonical software-update into ${ZIP_NAME} =========="
 zip -j "$ZIP_PATH" "$SWUPDATE_SRC"
 
+# One generic renderer for every device package; product overrides are data.
+zip -j "$ZIP_PATH" "${RELEASE_DIR}/../provision/apply-overrides.py"
+
 echo "========== Upload ${ZIP_NAME} to Google Cloud Storage (no-cache) =========="
 gsutil -h "Cache-Control:no-cache, no-store, must-revalidate" cp "$ZIP_PATH" "gs://${GCS_BUCKET}/${GCS_PATH}"
 ZIP_SHA256=$(ota_artifact_sha256 "$ZIP_PATH")

@@ -2066,6 +2066,8 @@ class VoiceService:
             word configured every utterance IS addressed to the device, so the
             cue fires on the first partial as before.
             """
+            if manual_capture is not None:
+                return  # Manual capture owns its LED from recorder readiness to close.
             if listening_emotion_sent[0]:
                 return
             if not addressed_to_us():
@@ -2315,10 +2317,13 @@ class VoiceService:
             if manual_capture is not None:
                 if manual_capture.cancelled.is_set() or manual_capture.finished.is_set():
                     return
+                from hal.drivers.harness.led import set_capturing
+
+                set_capturing(True)
                 # Signal readiness only after both the recorder and STT opened.
                 if self._tts:
                     cue_start = time.monotonic()
-                    self._tts.play_ack_chime()
+                    self._tts.play_harness_capture_chime()
                     # The recorder kept running during the cue. Drain its
                     # buffered frames so the beep is not transcribed.
                     cue_frames = int((time.monotonic() - cue_start) * device_rate / frame_size) + 1
@@ -2557,6 +2562,10 @@ class VoiceService:
         finally:
             self._backchannel.reset()
             self._listening = False
+            if manual_capture is not None:
+                from hal.drivers.harness.led import set_capturing
+
+                set_capturing(False)
             stt_session.close()
             if pending_listening_cue_id is not None:
                 # If STT produced a partial, its real listening emotion already
@@ -2584,6 +2593,9 @@ class VoiceService:
                 logger.info("Harness manual capture discarded without a valid finish tap")
                 combined = ""
                 harness_listening = False
+            elif manual_capture is not None and self._tts:
+                # Capture is closed; this cue is not a remote delivery receipt.
+                self._tts.play_harness_capture_chime(finished=True)
             # Voice metrics clock starts here: the endpoint has been detected and
             # the transcript is assembled. Everything downstream carries this
             # id (see hal/telemetry/voice_metrics.py).

@@ -1,5 +1,7 @@
 # LED Control — Tài Liệu
 
+Trong lúc thu giọng Harness thủ công, khi recorder/STT sẵn sàng, LED chuyển sang preset listening hiện có (Lamp: xanh dương nhẹ `[0, 0, 3]`, tốc độ `0.3`), kể cả chưa có transcript đầu tiên. Kết thúc, hủy, timeout hoặc lỗi đều xóa trạng thái LED thu và khôi phục theo thứ tự ưu tiên bình thường; thinking/TTS sau đó giữ hành vi hiện có. Cue này chỉ đổi LED, không di chuyển servo hay đổi cài đặt đã lưu.
+
 ## Phần Cứng
 
 - **32 WS2812 RGB LEDs** — một vòng ring
@@ -43,7 +45,7 @@ lệnh LED đầu tiên, có thể vài phút sau khi boot.
 
 ### Xác nhận Harness voice
 
-Thao tác bật/tắt Harness trên phần cứng đọc `button_led.harness_on` / `button_led.harness_off` trong `robots/lamp/presets.json` qua bảng preset HAL tại lúc chạy. Lamp dùng RGB `[1, 1, 3]` khi bật và `[2, 2, 2]` khi tắt. Cả hai kế thừa pulse 600 ms; có thể override cả `effect` và `duration_ms` trong preset. Hiệu ứng vẫn là transient và hẹn khôi phục LED sau thời lượng cấu hình thêm 100 ms.
+Mode Harness đọc `button_led.harness_on` / `button_led.harness_off` trong `robots/lamp/presets.json` qua bảng preset HAL tại lúc chạy. Khi ON, Lamp duy trì đèn thở hổ phách ấm nhẹ `breathing_fine`, RGB `[3, 1, 0]`, speed `0.6` (khoảng năm giây mỗi nhịp). OFF nháy trắng nhẹ một lần, RGB `[2, 2, 2]`, speed `1.0`, duration `300` ms, rồi khôi phục trạng thái đèn người dùng. Watcher mode và luồng khôi phục LED dùng chung `hal/drivers/harness/led.py`; sleep, riêng tư mic, TTS, nhạc và thinking có ưu tiên cao hơn. Thở ambient lúc nghỉ không được thay đèn báo mode. Không ghi đè tùy chọn LED đã lưu; không có RGB service thì bỏ qua. Overlay OFF khôi phục sau thời lượng cấu hình thêm 100 ms.
 
 ## Solid Color
 

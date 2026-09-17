@@ -23,6 +23,11 @@ type DirectChannel struct {
 	crypto    *deviceSessionCrypto
 }
 
+// ErrRevoked means the paired computer no longer trusts this device: it denied
+// the pinned identity on reconnect or sent pair.revoke. The device drops its
+// pin so status reports unpaired instead of a permanent "disconnected".
+var ErrRevoked = errors.New("Harness computer revoked this device")
+
 func (c *DirectChannel) Close() error { return c.ws.Close() }
 func (c *DirectChannel) Write(frame Frame) error {
 	c.writeMu.Lock()
@@ -152,7 +157,7 @@ func (c *DirectChannel) Establish(ctx context.Context, identity ed25519.PrivateK
 			c.crypto = crypto
 			return nil
 		case "e2e_denied":
-			return errors.New("Harness rejected the pinned device identity")
+			return ErrRevoked
 		}
 	}
 }

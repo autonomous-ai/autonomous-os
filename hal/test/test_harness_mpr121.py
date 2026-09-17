@@ -2,7 +2,7 @@
 import unittest
 from unittest.mock import Mock, patch
 
-from hal.drivers.harness_mpr121 import HarnessGestures, harness_button_recognizer
+from hal.drivers.harness.gestures import HarnessGestures, harness_button_recognizer
 from hal.drivers.mpr121 import _GestureEvent, _SpatialGestureRecognizer, MPR121Handler
 from hal.board.mpr121 import MPR121Config
 
@@ -18,15 +18,19 @@ class HarnessGestureTests(unittest.TestCase):
         events += detector.update(False, 3)
         self.assertEqual([e.kind for e in events if e.kind in ('single', 'cue', 'triple', 'hold')], ['single'] * 3)
 
-    def test_hold_has_only_one_tier_and_exits_on_release(self):
+    def test_hold_fires_at_threshold_once_without_release(self):
         detector = harness_button_recognizer(0)
         detector.update(False, 0)
         events = detector.update(True, 1)
-        for now in (3.9, 4, 6, 11, 20):
+        for now in (2.9, 3, 6, 11, 20):
             events += detector.update(True, now)
         self.assertEqual([e.count for e in events if e.kind == 'hold_tier'], [1])
-        self.assertFalse(any(e.kind == 'hold' for e in events))
-        self.assertEqual([e.kind for e in detector.update(False, 21)], ['release', 'invalidate', 'hold'])
+        holds = [e for e in events if e.kind == 'hold']
+        self.assertEqual(len(holds), 1)
+        self.assertEqual(holds[0].held_s, 2)
+        self.assertEqual(detector.update(False, 21), [])
+        detector.update(True, 22)
+        self.assertEqual([e.kind for e in detector.update(False, 22.1)], ['release', 'single'])
 
     def test_spatial_detector_preserves_manual_taps(self):
         detector = _SpatialGestureRecognizer(MPR121Config(bus=0, swipe_axis=(0, 1, 2, 3)), harness_button_recognizer)
@@ -40,14 +44,16 @@ class HarnessGestureTests(unittest.TestCase):
         gestures = HarnessGestures()
         gestures.snapshot = {'enabled': True, 'generation': 1, 'focusAvailable': True}
         voice, tts = Mock(), Mock()
-        with patch('hal.drivers.harness_mpr121.state.voice_service', voice), \
-                patch('hal.drivers.harness_mpr121.state.tts_service', tts), \
-                patch('hal.drivers.harness_mpr121.state._hw_mic_switch_muted', False), \
+        with patch('hal.drivers.harness.gestures.state.voice_service', voice), \
+                patch('hal.drivers.harness.gestures.state.tts_service', tts), \
+                patch('hal.drivers.harness.gestures.state._hw_mic_switch_muted', False), \
                 patch('hal.drivers.button_actions._cancel_agent_speech') as cancel, \
+                patch('hal.drivers.button_actions.play_ack_chime') as chime, \
                 patch('hal.routes.voice.stop_tts') as stop:
             tts.speaking = True
             gestures.execute(_GestureEvent('single', 1))
             stop.assert_called_once()
+            chime.assert_called_once_with("MPR121 Harness")
             cancel.assert_called_once()
             voice.start_harness_capture.assert_not_called()
             tts.speaking = False
@@ -63,7 +69,7 @@ class HarnessGestureTests(unittest.TestCase):
         with patch.object(gestures, '_disable') as disable, patch.object(gestures, '_tap') as tap:
             for kind in ('cue', 'triple', 'hold_tier'):
                 gestures.execute(_GestureEvent(kind, 1, count=3, held_s=15))
-            gestures.execute(_GestureEvent('hold', 2, held_s=2.99))
+            gestures.execute(_GestureEvent('hold', 2, held_s=1.99))
             disable.assert_not_called()
             tap.assert_not_called()
             gestures.execute(_GestureEvent('hold', 3, held_s=12))
@@ -80,7 +86,7 @@ class HarnessGestureTests(unittest.TestCase):
         handler._process_touch(False, 12)
         handler._process_touch(False, 12.04)
         self.assertTrue(handler._pending.empty())
-        with patch('hal.drivers.harness_mpr121.read_mode', return_value={'enabled': False, 'generation': 3}), \
+        with patch('hal.drivers.harness.gestures.read_mode', return_value={'enabled': False, 'generation': 3}), \
                 patch.object(gestures, 'cancel_capture'), patch('hal.drivers.mpr121.triple_click_action') as reboot:
             handler._execute(_GestureEvent('triple', 1))
             reboot.assert_not_called()
@@ -89,7 +95,7 @@ class HarnessGestureTests(unittest.TestCase):
         handler = MPR121Handler(MPR121Config(bus=0))
         gestures = HarnessGestures()
         handler._harness_gestures = gestures
-        with patch('hal.drivers.harness_mpr121.read_mode', return_value={'enabled': False, 'unavailable': True}), \
+        with patch('hal.drivers.harness.gestures.read_mode', return_value={'enabled': False, 'unavailable': True}), \
                 patch('hal.drivers.mpr121.hold_release_action') as hold:
             handler._execute(_GestureEvent('hold', 1, held_s=15))
             hold.assert_not_called()
@@ -99,7 +105,7 @@ class HarnessGestureTests(unittest.TestCase):
         gestures.snapshot = {'enabled': True, 'generation': 10, 'agentId': 'a'}
         result = {'enabled': True, 'generation': 11, 'agentId': 'b', 'agentName': 'Agent B'}
         with patch.object(gestures, 'cancel_capture') as cancel, \
-                patch('hal.drivers.harness_mpr121.request_focus_step', return_value=result) as step, \
+                patch('hal.drivers.harness.gestures.request_focus_step', return_value=result) as step, \
                 patch('hal.drivers.button_actions._speak_gesture_ack'):
             gestures.execute(_GestureEvent('swipe', 1, direction=-1))
             self.assertEqual(step.call_args.args[1:], ('next', 10))
@@ -110,10 +116,10 @@ class HarnessGestureTests(unittest.TestCase):
     def test_exit_uses_explicit_disable_even_if_mode_changed(self):
         gestures = HarnessGestures()
         with patch.object(gestures, 'cancel_capture'), \
-                patch('hal.drivers.harness_mpr121.request_voice_disable', return_value={'enabled': False}) as disable, \
-                patch('hal.drivers.harness_mpr121._show_feedback'), \
+                patch('hal.drivers.harness.gestures.request_voice_disable', return_value={'enabled': False}) as disable, \
+                patch('hal.drivers.harness.gestures._show_feedback'), \
                 patch('hal.drivers.button_actions._speak_gesture_ack'):
-            gestures.execute(_GestureEvent('hold', 1, held_s=3))
+            gestures.execute(_GestureEvent('hold', 1, held_s=2))
             disable.assert_called_once()
             self.assertFalse(gestures.snapshot['enabled'])
 
@@ -123,3 +129,26 @@ class HarnessGestureTests(unittest.TestCase):
             self.assertEqual(len(PHRASES_BY_LANG[phrase]), 4)
             for text in PHRASES_BY_LANG[phrase].values():
                 self.assertTrue(text.format(agent='Test Agent'))
+
+
+    def test_threshold_hold_consumes_spatial_contact_until_release(self):
+        detector = _SpatialGestureRecognizer(MPR121Config(bus=0, swipe_axis=(0, 1, 2, 3)), harness_button_recognizer)
+        detector.update(0, 0)
+        events = []
+        for now, mask in [(1, 1), (1.04, 1), (4.03, 1), (4.04, 1),
+                          (4.08, 2), (4.12, 4), (4.16, 8), (15, 8), (16, 0), (16.2, 0)]:
+            events += detector.update(mask, now)
+        self.assertEqual([e.kind for e in events if e.kind in ('hold', 'single', 'swipe', 'triple')], ['hold'])
+
+    def test_off_mode_does_not_reinterpret_finger_held_after_exit(self):
+        handler = MPR121Handler(MPR121Config(bus=0))
+        gestures = HarnessGestures()
+        handler._harness_gestures = gestures
+        gestures.snapshot = {'enabled': True, 'generation': 1}
+        for sample in [(False, 0), (True, 1), (True, 1.04), (True, 4)]:
+            handler._process_touch(*sample)
+        self.assertEqual(handler._pending.get_nowait()[1].kind, 'hold')
+        gestures.snapshot = {'enabled': False, 'generation': 2}
+        for sample in [(True, 4.1), (True, 16), (False, 17), (False, 17.04), (False, 18)]:
+            handler._process_touch(*sample)
+        self.assertTrue(handler._pending.empty())

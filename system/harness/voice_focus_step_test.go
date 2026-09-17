@@ -98,3 +98,23 @@ func TestFocusStepUnknownDeliveryDoesNotRetry(t *testing.T) {
 		t.Fatalf("requests=%v err=%v", f.steps, err)
 	}
 }
+func TestFocusStepSucceedsWhenRefreshLagsBehindCommittedSwitch(t *testing.T) {
+	v, f := newFocusStepController(t)
+	// The app switched and said so in the reply, but focus.get is still stale
+	// (or failing) right after the step. The gesture must not report failure.
+	f.step = func(Frame) (Frame, error) {
+		f.focusRevision = ""
+		return Frame{"focus": Frame{"machineId": "computer", "agentId": "lagging-agent", "name": "Lagging"}, "focusRevision": "rev-9"}, nil
+	}
+	state, err := v.StepFocus(context.Background(), "gesture-id", "next", v.State().Generation)
+	if err != nil || !state.FocusAvailable || state.AgentID != "lagging-agent" || state.FocusRevision != "rev-9" {
+		t.Fatalf("state=%+v err=%v", state, err)
+	}
+	// A reply without focus still never fails once the step was accepted.
+	v, f = newFocusStepController(t)
+	f.step = func(Frame) (Frame, error) { f.focusRevision = ""; return Frame{}, nil }
+	state, err = v.StepFocus(context.Background(), "gesture-id", "next", v.State().Generation)
+	if err != nil || state.FocusAvailable {
+		t.Fatalf("state=%+v err=%v", state, err)
+	}
+}

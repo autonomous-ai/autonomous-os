@@ -100,3 +100,14 @@ func (claudecodeAdapter) userProfilePath(opts Options) string {
 	}
 	return filepath.Join(opts.ClaudecodeWorkspace, "USER.md")
 }
+
+// memoryFilePath implements runtimeAdapter — MEMORY.md at the workspace root.
+func (claudecodeAdapter) memoryFilePath(opts Options) string {
+	if opts.ClaudecodeWorkspace == "" {
+		return ""
+	}
+	return filepath.Join(opts.ClaudecodeWorkspace, "MEMORY.md")
+}
+
+// workspaceRoot implements runtimeAdapter.
+func (claudecodeAdapter) workspaceRoot(opts Options) string { return opts.ClaudecodeWorkspace }

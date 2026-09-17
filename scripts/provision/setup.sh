@@ -1452,6 +1452,22 @@ stage_devices() {
   unzip -o -q /tmp/device.zip -d "$dest" \
     || { echo "[stage] ERROR: failed to extract device profile for $DEVICE_TYPE" >&2; return 1; }
   rm -f /tmp/device.zip
+  HARDWARE_PROFILE=""
+  [ ! -e /etc/autonomous/hardware-profile ] || HARDWARE_PROFILE=$(sed 's/^[[:space:]]*//;s/[[:space:]]*$//' /etc/autonomous/hardware-profile) \
+    || { echo "Cannot read hardware profile selection" >&2; return 1; }
+  if [ -n "$HARDWARE_PROFILE" ] && [ "$HARDWARE_PROFILE" != standard ]; then
+    [ -f "$dest/apply-overrides.py" ] \
+      || { echo "[stage] ERROR: Hardware overrides require an override-capable device package" >&2; return 1; }
+    python3 "$dest/apply-overrides.py" --profile "$dest" --root / \
+      || { echo "[stage] ERROR: Hardware override configuration failed" >&2; return 1; }
+    cp -a "$dest/rootfs/." / \
+      || { echo "[stage] ERROR: Hardware overlay failed" >&2; return 1; }
+    # stage_hal ran before this overlay; reload the hardware configuration.
+    if systemctl is-active --quiet hal || systemctl is-enabled --quiet hal; then
+      systemctl restart hal \
+        || { echo "[stage] ERROR: HAL restart after hardware overlay failed" >&2; return 1; }
+    fi
+  fi
   echo "[stage] Device profile '$DEVICE_TYPE' installed at $dest"
 }
 

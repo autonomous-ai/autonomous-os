@@ -90,12 +90,12 @@ class TestGestures(unittest.TestCase):
 
     def test_hold_tiers_are_logged_once_per_threshold(self):
         events = self.events([(False, 0), (True, 1), (True, 3), (True, 4), (True, 6), (True, 11)])
-        self.assertEqual([event.count for event in events if event.kind == 'hold_tier'], [1, 2, 3])
+        self.assertEqual([event.count for event in events if event.kind == 'hold_tier'], [1, 2])
 
 
 class TestMPR121(unittest.TestCase):
     def setUp(self):
-        mode = mock.patch("hal.drivers.harness_mpr121.read_mode", return_value={"enabled": False, "generation": 1})
+        mode = mock.patch("hal.drivers.harness.gestures.read_mode", return_value={"enabled": False, "generation": 1})
         mode.start()
         self.addCleanup(mode.stop)
 
@@ -109,7 +109,7 @@ class TestMPR121(unittest.TestCase):
                        (True, 2.999), (True, 3), (True, 6), (True, 11)]:
             handler._process_touch(*sample)
         self.assertEqual(feedback.set_tier.call_args_list,
-                         [mock.call(1), mock.call(2), mock.call(3)])
+                         [mock.call(1), mock.call(2)])
         feedback.commit.assert_not_called()
         feedback.release.reset_mock()
         handler._process_touch(False, 11.1)
@@ -136,7 +136,7 @@ class TestMPR121(unittest.TestCase):
             calls.attach_mock(hold, 'action')
             handler._execute(_GestureEvent('hold', 1, held_s=5))
         self.assertEqual(calls.mock_calls,
-                         [mock.call.led(5), mock.call.action(5, source='MPR121')])
+                         [mock.call.led(5, factory_reset=False), mock.call.action(5, source='MPR121')])
 
     def test_cancelled_feedback_commit_does_not_start_hold_action(self):
         handler = self.make_handler()

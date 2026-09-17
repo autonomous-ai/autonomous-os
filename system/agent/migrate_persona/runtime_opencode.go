@@ -106,3 +106,14 @@ func (opencodeAdapter) userProfilePath(opts Options) string {
 	}
 	return filepath.Join(opts.OpenCodeWorkspace, "USER.md")
 }
+
+// memoryFilePath implements runtimeAdapter — MEMORY.md at the workspace root.
+func (opencodeAdapter) memoryFilePath(opts Options) string {
+	if opts.OpenCodeWorkspace == "" {
+		return ""
+	}
+	return filepath.Join(opts.OpenCodeWorkspace, "MEMORY.md")
+}
+
+// workspaceRoot implements runtimeAdapter.
+func (opencodeAdapter) workspaceRoot(opts Options) string { return opts.OpenCodeWorkspace }
