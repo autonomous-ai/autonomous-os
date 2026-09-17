@@ -34,6 +34,7 @@ func (s *Server) initializeHarnessVoice(ctx context.Context) {
 
 func (s *Server) registerHarnessVoiceRoutes(group *gin.RouterGroup) {
 	group.POST("voice-mode/gesture", localOnlyMiddleware(), s.handleHarnessVoiceGesture)
+	group.POST("voice-mode/focus", localOnlyMiddleware(), s.handleHarnessVoiceFocusGesture)
 	group.GET("voice-mode", adminOrLoopbackAuth(s.config), func(c *gin.Context) {
 		c.Header("Cache-Control", "no-store")
 		c.JSON(http.StatusOK, serializers.ResponseSuccess(s.harnessVoice.State()))

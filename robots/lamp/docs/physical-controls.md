@@ -1,6 +1,6 @@
 # Physical Controls — GPIO Button, TTP223 and MPR121
 
-Lamp supports mechanical buttons, TTP223 touchpads and an optional MPR121 capacitive touch controller. They share the same action library (`hal/drivers/button_actions.py`) so any gesture mapped to "single click" behaves identically whether it came from the mechanical button or the capacitive touchpad.
+Lamp supports mechanical buttons, TTP223 touchpads and an optional MPR121 capacitive touch controller. Outside Harness-mode MPR121 control, they share the same action library (`hal/drivers/button_actions.py`) so any gesture mapped to "single click" behaves identically whether it came from the mechanical button or the capacitive touchpad.
 
 ## Input devices
 
@@ -119,7 +119,7 @@ Deploy the updated HAL before uploading JSON with these new fields.
 
 The table above covers the primary GPIO button and TTP223. The dedicated reset button on pin 35 only factory-resets when released after a hold of at least 5 s. Shorter holds and single/triple taps do nothing; it never invokes sleep or shutdown. LED stays unchanged below 5 s and uses the shared solid-red factory-reset preset from 5 s onward.
 
-MPR121 also supports release-to-commit holds and the same hold-tier LED feedback, as detailed in its detection section. The sleep and destructive hold tiers **commit on release, not on a timer firing while held**. The destructive tiers escalate from shutdown to factory-reset after 10 s (see "GPIO button detection" below).
+With Harness OFF, MPR121 also supports release-to-commit holds and the same hold-tier LED feedback, as detailed in its detection section. The sleep and destructive hold tiers **commit on release, not on a timer firing while held**. The destructive tiers escalate from shutdown to factory-reset after 10 s (see "GPIO button detection" below).
 
 ## Interrupting Lamp while it speaks (barge-in)
 
@@ -300,9 +300,9 @@ released. A contact held at startup is ignored until release.
 
 MPR121 shares gesture thresholds from `hal/drivers/button_gestures.py` with
 GPIO (also re-exported by `button_actions.py`) and calls the existing action
-functions:
+functions **while Harness mode is OFF**. Harness ON uses the separate policy below.
 
-| Gesture | MPR121 action |
+| Gesture | MPR121 action (Harness OFF) |
 |---|---|
 | First short release in a click burst | `single_click_action(source="MPR121", announce=False)` stops tracking/audio after contact resolution, unmutes as permitted and plays the ack chime. |
 | 1, 2 or 4+ short taps, then 0.4 s quiet | Play the listening cue; repeated taps do not repeat the initial single-click action. |
@@ -311,7 +311,7 @@ functions:
 | Hold 5–<10 s, then release | `hold_release_action` shuts down. |
 | Hold ≥10 s, then release | `hold_release_action` performs factory reset. |
 | Swipe left to right, then release | `swipe_action` sleeps; no click or destructive action for this moving contact. |
-| Swipe right to left, then release | Toggle Harness voice through the Go API; no click or destructive action for this moving contact. |
+| Swipe right to left, then release | Enable Harness voice through the Go API; no click or destructive action for this moving contact. |
 
 A short contact lasts less than 2 s. The click window does not resolve while
 any selected electrode remains touched. Releasing a hold clears the pending
@@ -324,7 +324,7 @@ click burst. Destructive actions never commit while held.
 Verify the mounted bar: if E11 is physically on the left, reverse the existing
 axis to E11…E0. Increasing axis position (`+1`, left to right) calls
 `swipe_action(source="MPR121")` from `button_actions.py` to sleep. Decreasing
-position (`-1`, right to left) calls the Harness voice toggle action.
+position (`-1`, right to left) enables Harness voice. These actions apply with Harness OFF; with Harness ON the same directions select previous/next agent.
 A swipe need not cross the entire strip.
 Missing/null `swipe_axis` disables only swipe detection and preserves legacy
 click/hold recognition. Install HAL support before deploying JSON with this field.
@@ -602,6 +602,8 @@ Phrases are intentionally short — they fire mid-stroke and need to feel respon
 | `hal/drivers/ttp223.py` | TTP223 capacitive touchpad handler (OrangePi sun60 only) |
 | `hal/board/mpr121.py` | Device-owned MPR121 configuration loader and validation |
 | `hal/drivers/mpr121.py` | Optional I²C MPR121 click/hold handler |
+| `hal/drivers/harness_mpr121.py` | Separate Harness-mode gesture policy |
+| `hal/drivers/voice/_internal/harness_capture.py` | Manual Harness capture ownership |
 | `hal/drivers/button_gestures.py` | Shared GPIO/MPR121 gesture thresholds |
 | `hal/drivers/button_actions.py` | Shared action functions, GPIO/MPR121 `HoldLEDFeedback` and localized phrase pools |
 | `hal/presets.py` | Language code constants (`LANG_EN`, etc.) |
@@ -611,26 +613,13 @@ Phrases are intentionally short — they fire mid-stroke and need to feel respon
 Input handlers are started in `hal/server.py` lifespan startup. Missing optional MPR121 configuration skips that driver; malformed enabled configuration rejects startup. Hardware driver failures are logged without stopping the other handlers.
 
 
-### Harness voice swipe
+### Harness-mode MPR121 gestures
 
-Swipe **right to left**, then release to toggle Harness voice once. The existing
-`swipe_axis` defines physical direction as described above. There is no two-pad
-hold gesture or separate Harness wiring configuration. Single taps and stationary
-holds retain their existing behavior; detected travel cancels tap/hold outcomes.
-Contacts already held at startup and polling/I²C faults cannot trigger a swipe.
+On MPR121-equipped lamps, Harness OFF retains the existing gestures: swipe **right to left** to enable Harness and **left to right** to sleep. Harness ON replaces the old click, triple-tap reboot, shutdown/reset holds, sleep and listening-cue actions: tap controls capture or interrupts TTS, hold **at least 3 seconds then release** explicitly disables Harness (including while offline), swipe **right to left** selects the next agent and **left to right** the previous agent. `hal/drivers/harness_mpr121.py` owns this separate gesture policy; `hal/drivers/voice/_internal/harness_capture.py` tracks manual capture ownership. GPIO/TTP223 behavior is unchanged. Direction follows the physical left-to-right `swipe_axis` (Lamp defaults E0…E11; verify mounting). Python calls Go APIs; Go owns mode/focus and the existing voice route.
 
-Python recognizes the signal and queues it on the existing action worker.
-`harness_voice_action.py` calls the small `harness_voice_client.py` adapter,
-which posts once to Go's loopback-only `/api/harness/voice-mode/gesture` with a
-unique `gestureId`. Go owns mode state and focused-agent selection. No automatic
-HTTP retry occurs; a timeout announces that the outcome could not be confirmed.
+Harness ON uses manual tap-to-record capture, not ambient listening. A tap while TTS is speaking only interrupts playback. Otherwise, the first tap starts capture; the ready beep plays only after the recorder/STT is ready. The next tap closes capture and sends one finalized STT transcript through the existing OS route to the focused Harness agent. Silence never sends automatically. Reaching `MAX_SESSION_DURATION_S` (`HAL_MAX_SESSION_DURATION_S`, default 30 seconds) cancels without dispatch. Idle mode does not record surrounding speech. Mode, generation or focus changes and privacy/stop events discard capture; a focus swipe cancels capture before changing focus. Sleep and hardware microphone privacy remain authoritative.
 
-On success, HAL speaks “Harness is on. You’re now talking to {agent}.” or “Harness is off. You’re back with the assistant on your device.” using the configured
-`stt_language` (English, Vietnamese, Simplified or Traditional Chinese; phrases
-live in `hal/i18n.py`). It briefly pulses blue for on or neutral for off without
-saving a new LED state. Missing connection/agents receive localized errors.
-Hardware microphone privacy disables the gesture action, speaker mute suppresses
-speech, and existing sleep/privacy/TTS LED ownership is respected.
+Mode/focus actions use the existing worker and loopback Go APIs; no automatic HTTP retry. Outcomes use localized phrases in `hal/i18n.py` and respect speaker mute and sleep/privacy/TTS LED ownership. Focus stepping requires the negotiated Harness `focus.step` capability; an older CLI fails explicitly without another transport. The CLI counterpart is pending; installed-device interoperability is not yet verified.
 
 At HAL startup, the privacy switch position is reconciled without simulating a button press: an unmuted position restores mic/peripheral access without waking the device, granting conversation focus, playing the acknowledgement/listening phrase, or scheduling the listening LED cue. A real muted-to-unmuted switch transition retains the existing wake/focus and acknowledgement behavior. Startup in the muted position still applies the hardware privacy lock synchronously.
 

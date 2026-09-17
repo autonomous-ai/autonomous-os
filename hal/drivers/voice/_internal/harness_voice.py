@@ -23,7 +23,10 @@ def read_voice_mode() -> dict:
             or data["generation"] < 0
         ):
             raise ValueError("invalid Harness voice mode response")
-        return {"enabled": data["enabled"], "generation": data["generation"]}
+        return {key: data[key] for key in (
+            "enabled", "generation", "focusAvailable", "machineId", "agentId",
+            "focusRevision",
+        ) if key in data}
     except (requests.RequestException, ValueError, TypeError, AttributeError) as exc:
         logger.warning("Harness voice mode unavailable; refusing agent dispatch: %s", exc)
         return {"enabled": False, "generation": -1, "unavailable": True}
