@@ -622,6 +622,12 @@ func (s *Server) Serve(closeFn func()) error {
 	connectorGroup.POST("pat", adminAuthMiddleware(s.config), s.deviceMQTTHandler.SetConnectorPAT)
 	connectorGroup.GET(":code", adminAuthMiddleware(s.config), s.deviceMQTTHandler.GetConnector)
 	connectorGroup.DELETE(":code", adminAuthMiddleware(s.config), s.deviceMQTTHandler.RemoveConnector)
+	// Spotify-specific: the local Settings guide replaces the terminal curl
+	// step with a "Send code to device" button that POSTs the OAuth code
+	// here. os-server exchanges it for tokens with Spotify's own token
+	// endpoint (server-side, so Client Secret never leaves this box) and
+	// persists via the same connectorWriter as the PAT path.
+	connectorGroup.POST("spotify/exchange-code", adminAuthMiddleware(s.config), s.deviceMQTTHandler.SpotifyExchangeCode)
 
 	// Look: snapshot + describe in one call, so the agent gets text it can read
 	// instead of a file path it cannot. Loopback-only — the caller is the

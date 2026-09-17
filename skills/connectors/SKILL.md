@@ -1,6 +1,6 @@
 ---
 name: connectors
-description: "Discover and use linked third-party services (Gmail, Google Calendar, Google Drive, Notion, Figma, Asana, Linear, GitHub, Ahrefs, Facebook Fan Page and others). Use for connection-status questions and requests to read, search or act on those services (\"post to my fan page\", \"publish an image to my page\" apply here). Discover credentials on disk first; never infer connection from missing MCP/CLI tools or install another client for a covered service. Token services use the documented API or mail protocol; MCP services use their available tools. Follow the credential-safety and write-confirmation rules in this skill. Takes priority over runtime-bundled skills for the same services."
+description: "Discover and use linked third-party services (Gmail, Google Calendar, Google Drive, Notion, Figma, Asana, Linear, GitHub, Ahrefs, Facebook Fan Page, Spotify and others). Use for connection-status questions and requests to read, search or act on those services (\"post to my fan page\", \"publish an image to my page\", \"play jazz on Spotify\" apply here). Discover credentials on disk first; never infer connection from missing MCP/CLI tools or install another client for a covered service. Token services use the documented API or mail protocol; MCP services use their available tools. Follow the credential-safety and write-confirmation rules in this skill. Takes priority over runtime-bundled skills for the same services."
 ---
 
 # Connectors
@@ -361,6 +361,130 @@ Common errors:
 - **190 "Error validating access token"** — token expired or revoked. Short-lived Page Tokens live ~1 hour; ask the user to reconnect through Settings → Facebook (the UI mints a fresh Page Token from a User Token). Do NOT try to refresh silently — Page Tokens do not carry a refresh_token.
 - **200 "(#200) … requires pages_manage_posts …"** — the stored credential is a User Token, not a Page Token (User Tokens fail this way even when scoped correctly). Same reconnect fix. This is the "operator copied the wrong box in Graph Explorer" case above.
 - **100 "The global id X is not allowed for this call"** — `page_id` points at a personal profile, not a Fan Page. Ask the user to save the Fan Page's numeric id (Meta's Graph API cannot publish to personal profiles). To get the id: open the Fanpage on Facebook, click the Page name (or the About tab), the Page transparency panel shows `Page ID`.
+
+**Spotify (special case):** the token field holds a **refresh_token** (long-lived — Spotify access_tokens expire after 1 hour, so what gets stored is always the durable refresh_token, never a fresh access_token). `credentials.client_id` + `credentials.client_secret` hold the user's own Spotify Developer app credentials. Same file convention as Facebook — try `.access_token` first (MQTT / cloud PAT flow), fall back to `.api_key` (device Settings paste), so both flows read the same way. Official host: `https://api.spotify.com/v1/`. Auth: **Authorization Code refresh** (never Client Credentials — that grant type has no user scope and cannot control playback).
+
+The Spotify Web API rejects the refresh_token directly. Every call **first** trades (refresh_token + client_id + client_secret) for a fresh short-lived access_token, **then** uses that on the `api.spotify.com` request. Always do this in TWO steps in the same script — do not cache the access_token to disk, it expires in an hour and Spotify's clock skew is unforgiving.
+
+**Rotate the refresh_token every time Spotify returns a new one.** Since 2024 Spotify refresh_tokens have a 180-day lifetime, but the `/api/token` response OPTIONALLY includes a new `refresh_token` field that resets the window. Grab BOTH fields from the response and write the new refresh_token back into the connectors file whenever it changes — otherwise the device silently breaks after 180 days even under daily use.
+
+```bash
+# Step 1: mint a fresh access_token from the stored refresh_token, and rotate
+#         the stored refresh_token if Spotify returned a new one.
+CFG=/root/.openclaw/workspace/configs/spotify_access_tokens.json
+# Reader picks whichever slot the writer used — the device local admin path
+# writes to .api_key and leaves .access_token as "", while the MQTT / cloud
+# PAT path writes to .access_token. jq's `//` treats null/missing as
+# fallback but NOT the empty string, so filter both explicitly.
+REFRESH=$(jq -r '[.connectors.spotify.access_token, .connectors.spotify.api_key]
+                  | map(select(. != null and . != ""))
+                  | .[0] // ""' "$CFG")
+CLIENT_ID=$(jq -r '.connectors.spotify.credentials.client_id' "$CFG")
+CLIENT_SECRET=$(jq -r '.connectors.spotify.credentials.client_secret' "$CFG")
+
+# Basic auth header via stdin so client_secret stays out of /proc.
+TOKEN_JSON=$(printf 'Authorization: Basic %s' \
+    "$(printf '%s:%s' "$CLIENT_ID" "$CLIENT_SECRET" | base64 | tr -d '\n')" \
+  | curl -s -H @- -H 'Content-Type: application/x-www-form-urlencoded' \
+      --data-urlencode "grant_type=refresh_token" \
+      --data-urlencode "refresh_token=$REFRESH" \
+      https://accounts.spotify.com/api/token)
+
+ACCESS=$(echo "$TOKEN_JSON" | jq -r '.access_token')
+NEW_REFRESH=$(echo "$TOKEN_JSON" | jq -r '.refresh_token // empty')
+
+# Rotate: if Spotify handed back a new refresh_token, write it into the same
+# slot the writer used (whichever of .access_token / .api_key is currently
+# non-empty). Preserves the "local admin path uses .api_key, cloud path uses
+# .access_token" distinction so a subsequent read from that path keeps
+# working. Atomic via temp file. Silent no-op when NEW_REFRESH is empty.
+if [ -n "$NEW_REFRESH" ] && [ "$NEW_REFRESH" != "$REFRESH" ]; then
+  SLOT=$(jq -r 'if (.connectors.spotify.access_token // "") != ""
+                then "access_token" else "api_key" end' "$CFG")
+  TMP=$(mktemp)
+  jq --arg r "$NEW_REFRESH" --arg slot "$SLOT" \
+    '.connectors.spotify[$slot] = $r' \
+    "$CFG" > "$TMP" && mv "$TMP" "$CFG"
+fi
+
+# Step 2: use $ACCESS on api.spotify.com — Bearer header via stdin as always.
+printf 'Authorization: Bearer %s' "$ACCESS" | curl -s -H @- \
+  "https://api.spotify.com/v1/me/player/devices"
+```
+
+Write class (starting/stopping playback, adding to queue, modifying playlists) — ⛔ same "read back and wait for yes" gate as posting: name the track/playlist you are about to play (title + artist), name the device it will play on, and wait for an explicit yes before the PUT/POST. `PUT /me/player/play` interrupts whatever the user is currently listening to.
+
+Endpoints (v1, JSON bodies unless noted):
+
+- **List devices** — `GET /me/player/devices` → `{ devices: [{id, name, type, is_active, volume_percent, ...}] }`. Pick the one whose `name` looks like the target speaker (typically `"Intern 2"` when Soloist / spotifyd runs on the device; otherwise the user's phone / laptop). If `devices` is empty, no client is active — tell the user to open Spotify on any device once, then retry.
+- **Search** — `GET /v1/search?q=<query>&type=track,album,playlist&limit=5`. Prefer specific type; multi-type returns fewer of each.
+- **Play a track / album / playlist / show on a specific device** — `PUT /me/player/play?device_id=<id>` body `{"uris":["spotify:track:<id>"]}` for tracks, or `{"context_uri":"spotify:album:<id>"}` / `"spotify:playlist:<id>"` for a container. Omit `device_id` to play on the currently active device.
+- **Queue one track** — `POST /me/player/queue?uri=spotify:track:<id>&device_id=<id>` (querystring, no body). Appends to the end of the user's current queue without interrupting the currently playing track.
+- **Skip / previous / seek / volume** — `POST /me/player/next` · `POST /me/player/previous` · `PUT /me/player/seek?position_ms=<n>` · `PUT /me/player/volume?volume_percent=<0..100>`
+- **What's playing now** — `GET /me/player/currently-playing` → `{ item: {name, artists, album, duration_ms, ...}, is_playing, progress_ms, device }`
+- **User playlists** — `GET /me/playlists?limit=50`. For playlists a friend shared, use search + `context_uri` instead.
+
+Example — search for a track and play it on the Intern 2 speaker (after the mint step above):
+
+```bash
+# Assume $ACCESS already minted per Step 1 above.
+TRACK_URI=$(printf 'Authorization: Bearer %s' "$ACCESS" | curl -s -G -H @- \
+    --data-urlencode "q=<user query, e.g. 'Hoa Nở Không Màu'>" \
+    --data-urlencode "type=track" --data-urlencode "limit=1" \
+    https://api.spotify.com/v1/search \
+  | jq -r '.tracks.items[0].uri')
+
+DEVICE_ID=$(printf 'Authorization: Bearer %s' "$ACCESS" | curl -s -H @- \
+    https://api.spotify.com/v1/me/player/devices \
+  | jq -r '.devices[] | select(.name | test("intern"; "i")) | .id' | head -1)
+
+printf 'Authorization: Bearer %s' "$ACCESS" | curl -s -X PUT -H @- \
+  -H 'Content-Type: application/json' \
+  --data "$(jq -nc --arg u "$TRACK_URI" '{uris:[$u]}')" \
+  "https://api.spotify.com/v1/me/player/play?device_id=$DEVICE_ID"
+```
+
+User-facing walkthrough (read this back to the user when asked "how do I connect / renew Spotify"):
+
+The user does not connect Spotify from here — they connect from the device's **Settings → Spotify** page (local admin) or from **autonomous.ai → device → Connectors → Spotify** (cloud admin). The form asks for three fields: **Client ID**, **Client Secret**, and **Refresh Token**. Every failure this skill sees comes from one of those three being wrong or missing the `streaming` scope.
+
+1. **Premium account required.** Spotify gates the `streaming` scope and every `/me/player/*` endpoint to Premium. Free accounts get search + metadata only — the "play jazz" flow will not work. If the user is on Free, tell them plainly before they run the OAuth setup.
+
+2. **Create a Spotify Developer app.** Open <https://developer.spotify.com/dashboard>, sign in with the Premium account, click **Create app**. Any name/description works. In **Redirect URIs** add `http://127.0.0.1:8888/callback` exactly (the token helper below reuses this). Under **Which API/SDKs are you planning to use?** tick **Web API** ONLY — leave Web Playback SDK, Android, iOS and Ads API unchecked (those are for browser JS / mobile apps, not this device). Save. Open the app → **Settings** → copy **Client ID** + click **View client secret** to copy **Client Secret** into the form. The dashboard also shows **Refresh Token Lifetime · 180 days** — that limit is fine because the device rotates the refresh_token on every hourly refresh (see the rotate step above); the 180-day window only fires if the device sits idle that long.
+
+3. **Mint a refresh_token** — the shortest path is browser + one curl, no server needed:
+
+   a. Paste this URL into any browser after replacing `YOUR_CLIENT_ID`:
+      ```
+      https://accounts.spotify.com/authorize?client_id=YOUR_CLIENT_ID&response_type=code&redirect_uri=http%3A%2F%2F127.0.0.1%3A8888%2Fcallback&scope=streaming%20user-modify-playback-state%20user-read-playback-state%20user-read-currently-playing%20playlist-read-private%20user-library-read
+      ```
+   b. Sign in with the Premium account → click **Agree**. The browser tries to open `127.0.0.1:8888` and shows *"This site can't be reached"* — that is expected. Look at the URL bar: it now ends with `?code=AQD...`. Copy the long string after `code=` (before `&` if there is one).
+   c. Exchange the code for tokens:
+      ```bash
+      curl -s -X POST https://accounts.spotify.com/api/token \
+        -u "CLIENT_ID:CLIENT_SECRET" \
+        -d grant_type=authorization_code \
+        -d code=CODE \
+        -d redirect_uri=http://127.0.0.1:8888/callback
+      ```
+   d. The JSON response contains `"refresh_token":"..."`. Paste that value into the form as **Refresh Token**.
+
+   `streaming` scope is required — without it, `PUT /me/player/play` returns `403 PREMIUM_REQUIRED` even on a Premium account. If the user prefers a scripted flow the official <https://developer.spotify.com/documentation/web-api/tutorials/code-flow> tutorial does the same handshake from a Node/Python example.
+
+Renewing a broken connection: refresh_tokens are revoked when the user clicks "REMOVE ACCESS" at <https://www.spotify.com/account/apps/>, or when the token has been unused for 180 days (Spotify's new lifetime). Rotation covers active devices — but a device that sits unused past 180 days is dead. There is no silent recovery — the user re-runs step 3 to mint a fresh one, then reconnects the same form. Do NOT try to work around it: Spotify's OAuth is server-side by design, so the device cannot mint a new refresh_token on its own.
+
+Token discipline (the single biggest failure mode this connector has):
+
+- **Missing `streaming` scope** — the most common failure. The refresh_token mints fine, `GET /me/player/devices` works, but `PUT /me/player/play` returns `403 Forbidden` with `Player command failed: PREMIUM_REQUIRED` even though the account IS Premium. The account is Premium; the *token* is not scoped for playback. Ask the user to re-run step 3 with `streaming` in the scopes list.
+- **Wrong Client Secret** — pasting the Client ID twice, or a stale secret after clicking "Rotate client secret" in the dashboard. Symptom: `POST /api/token` returns `400 {"error":"invalid_client"}`. Have the user open the app in the dashboard and copy the Client Secret again.
+- **No active device** — Spotify's Web API cannot play to an idle account; some client (the Intern 2 Soloist, the user's phone, the desktop app) must be open and signed in with the same Premium account. If `GET /me/player/devices` returns `{"devices":[]}`, tell the user "open Spotify on your phone or the Intern 2 speaker first, then ask me again."
+- **Never send the refresh_token in the URL** — Basic-auth header via stdin (as in the Step 1 snippet) is the only correct place for both `client_secret` and `refresh_token`. Anything on the command line or in a query string leaks into `/proc/<pid>/cmdline` and shell history.
+
+Common errors:
+- **401 `The access token expired`** — normal after ~1h. Refresh with Step 1 above. If this fires immediately after minting, the token was truncated on paste — have the user reconnect and be careful with newlines / trailing spaces.
+- **401 `Invalid access token`** — the access_token you sent is malformed, usually because Step 1's `jq -r '.access_token'` returned `null` (Spotify rejected the refresh). Print the token endpoint's raw JSON to see the real error — usually `invalid_grant` (refresh_token revoked) or `invalid_client` (Client ID / Secret wrong).
+- **403 `Player command failed: PREMIUM_REQUIRED`** — either the account is Free, or the refresh_token was minted without `streaming`. See "Missing `streaming` scope" above.
+- **404 `Device not found`** — the `device_id` you targeted is stale (the user's phone went offline). Re-fetch `GET /me/player/devices` right before the play call; do not cache device ids across turns.
 
 **Gmail app password (special case):** Google's REST API rejects app passwords. Route to IMAP/SMTP instead:
 

@@ -25,7 +25,7 @@ import {
   Workflow, Users, Camera, Radar, ChartColumn, Move3d, Bluetooth, ScrollText,
   Terminal, FileCode, Hexagon, ExternalLink, SlidersHorizontal, ChevronRight,
   Server, Zap, LogOut, Clock, Search, X, CornerDownLeft, Plug, Blocks,
-  CalendarClock, Handshake, Facebook,
+  CalendarClock, Handshake, Facebook, Music,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -56,7 +56,7 @@ const EMBED_SECTIONS = new Set<Section>(["api-docs", "agent-config"]);
 
 // Sections shown to non-debug users. Append `?debug=true` to the URL to reveal
 // the rest of the menu (Analytics, Servo, API Docs, Agent gateway).
-const PUBLIC_SECTIONS = new Set<Section>(["sensing", "chat", "pairing", "overview", "system", "flow", "camera", "face-owners", "bluetooth", "logs", "cli", "settings:device", "settings:wifi", "settings:voice", "settings:face", "settings:mcp", "settings:plugins", "settings:timezone", "settings:scheduled", "settings:facebook"]);
+const PUBLIC_SECTIONS = new Set<Section>(["sensing", "chat", "pairing", "overview", "system", "flow", "camera", "face-owners", "bluetooth", "logs", "cli", "settings:device", "settings:wifi", "settings:voice", "settings:face", "settings:mcp", "settings:plugins", "settings:timezone", "settings:scheduled", "settings:facebook", "settings:spotify"]);
 
 // The capability a section requires, read from its NAV leaf (single source: the
 // nav definition itself declares `cap`). undefined → no hardware dependency, the
@@ -102,6 +102,7 @@ const NAV_ICONS: Record<string, LucideIcon> = {
   "settings:face": UserCircle,
   "settings:channel": MessageSquare,
   "settings:facebook": Facebook,
+  "settings:spotify": Music,
   "settings:mqtt": LinkIcon,
   "settings:mcp": Plug,
   "settings:plugins": Blocks,

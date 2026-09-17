@@ -1,0 +1,236 @@
+#!/bin/bash
+# spotify-play — self-contained Spotify Connect CLI for the Intern skill layer.
+#
+# The connectors file on disk holds a REFRESH TOKEN (in .access_token or
+# .api_key, depending on which writer got there first) plus Client ID +
+# Secret. Bearer-ing the refresh_token against api.spotify.com is a 401 every
+# time — the agent used to make this mistake in ~100% of tries because the
+# field name suggests it is a Bearer token.
+#
+# This wrapper hides the mint step. The agent calls:
+#     spotify-play "Bohemian Rhapsody"        # search + play a track
+#     spotify-play --album "Rumours"           # album (context_uri)
+#     spotify-play --playlist "chill mix"      # playlist
+#     spotify-play --device "intern"           # target device by name match
+#     spotify-play --pause                     # pause current playback
+#     spotify-play --status                    # show currently-playing
+#     spotify-play --devices                   # list connect devices
+#
+# All output goes to stdout as one-line human-readable text (agent-friendly).
+# Exit codes: 0 = success, 1 = user-visible failure (see message), 2 = usage.
+set -euo pipefail
+
+CFG=/root/.openclaw/workspace/configs/spotify_access_tokens.json
+DEVICE_FILTER="intern"
+ACTION="play"
+QUERY=""
+SEARCH_TYPE="track"
+
+usage() {
+  cat <<EOF
+usage:
+  spotify-play <query>              # search track + play (default)
+  spotify-play --album <query>      # search album + play as context
+  spotify-play --playlist <query>   # search playlist + play as context
+  spotify-play --device <name>      # target Connect device by case-insensitive name match (default: "intern", fallback: first device)
+  spotify-play --pause              # pause playback
+  spotify-play --resume             # resume playback
+  spotify-play --next               # skip to next track
+  spotify-play --status             # print currently-playing
+  spotify-play --devices            # list connect devices
+EOF
+  exit 2
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --album)    SEARCH_TYPE="album"; shift ;;
+    --playlist) SEARCH_TYPE="playlist"; shift ;;
+    --track)    SEARCH_TYPE="track"; shift ;;
+    --device)   DEVICE_FILTER="$2"; shift 2 ;;
+    --pause)    ACTION="pause"; shift ;;
+    --resume)   ACTION="resume"; shift ;;
+    --next)     ACTION="next"; shift ;;
+    --status)   ACTION="status"; shift ;;
+    --devices)  ACTION="devices"; shift ;;
+    -h|--help)  usage ;;
+    --*)        echo "unknown flag: $1" >&2; usage ;;
+    *)          QUERY="${QUERY:+$QUERY }$1"; shift ;;
+  esac
+done
+
+if [ ! -r "$CFG" ]; then
+  echo "spotify not connected — no credential file at $CFG"
+  exit 1
+fi
+
+# Extract refresh_token from whichever slot the writer used. jq's `//` DOES NOT
+# fall back on empty string, so filter explicitly. This is the field that
+# looks like a Bearer token but IS NOT — never send it to api.spotify.com.
+REFRESH=$(jq -r '[.connectors.spotify.access_token, .connectors.spotify.api_key]
+                  | map(select(. != null and . != ""))
+                  | .[0] // ""' "$CFG")
+CLIENT_ID=$(jq -r '.connectors.spotify.credentials.client_id // ""' "$CFG")
+CLIENT_SECRET=$(jq -r '.connectors.spotify.credentials.client_secret // ""' "$CFG")
+
+if [ -z "$REFRESH" ] || [ -z "$CLIENT_ID" ] || [ -z "$CLIENT_SECRET" ]; then
+  echo "spotify credentials incomplete — reconnect in Settings"
+  exit 1
+fi
+
+# --- Step 1: mint a fresh access_token from the refresh_token. -----------------
+# Basic-auth header via stdin so client_secret stays out of /proc/*/cmdline.
+TOKEN_JSON=$(printf 'Authorization: Basic %s' \
+    "$(printf '%s:%s' "$CLIENT_ID" "$CLIENT_SECRET" | base64 | tr -d '\n')" \
+  | curl -sS -H @- -H 'Content-Type: application/x-www-form-urlencoded' \
+      --data-urlencode "grant_type=refresh_token" \
+      --data-urlencode "refresh_token=$REFRESH" \
+      https://accounts.spotify.com/api/token 2>&1) || {
+  echo "spotify token endpoint unreachable — network issue?"
+  exit 1
+}
+
+ACCESS=$(echo "$TOKEN_JSON" | jq -r '.access_token // empty' 2>/dev/null || true)
+NEW_REFRESH=$(echo "$TOKEN_JSON" | jq -r '.refresh_token // empty' 2>/dev/null || true)
+
+if [ -z "$ACCESS" ]; then
+  ERR=$(echo "$TOKEN_JSON" | jq -r '.error_description // .error // empty' 2>/dev/null || true)
+  # invalid_grant / invalid_client → refresh_token revoked or 180-day window
+  # expired. User must reconnect through Settings.
+  echo "spotify mint failed: ${ERR:-unknown} — reconnect in Settings"
+  exit 1
+fi
+
+# Rotate the refresh_token if Spotify returned a new one, preserving the same
+# slot the writer used. Atomic via temp file.
+if [ -n "$NEW_REFRESH" ] && [ "$NEW_REFRESH" != "$REFRESH" ]; then
+  SLOT=$(jq -r 'if (.connectors.spotify.access_token // "") != ""
+                then "access_token" else "api_key" end' "$CFG")
+  TMP=$(mktemp)
+  jq --arg r "$NEW_REFRESH" --arg slot "$SLOT" \
+    '.connectors.spotify[$slot] = $r' "$CFG" > "$TMP" && mv "$TMP" "$CFG"
+fi
+
+api() {
+  # Bearer via stdin.
+  printf 'Authorization: Bearer %s' "$ACCESS" | curl -sS -H @- "$@"
+}
+
+# --- Read-only actions --------------------------------------------------------
+case "$ACTION" in
+  devices)
+    api https://api.spotify.com/v1/me/player/devices \
+      | jq -r '.devices[]? | "\(.name)\t\(.type)\tvol=\(.volume_percent)%\tactive=\(.is_active)\tid=\(.id)"'
+    exit 0
+    ;;
+  status)
+    RES=$(api https://api.spotify.com/v1/me/player/currently-playing)
+    if [ -z "$RES" ] || [ "$RES" = "null" ]; then
+      echo "nothing playing"
+      exit 0
+    fi
+    echo "$RES" | jq -r '"\(.item.name) — \(.item.artists[0].name) [\(.item.album.name)]  (\(.progress_ms/1000|floor)s / \(.item.duration_ms/1000|floor)s, playing=\(.is_playing))"'
+    exit 0
+    ;;
+esac
+
+# --- Pick target Connect device (used by play / pause / resume / next) --------
+DEVICE_JSON=$(api https://api.spotify.com/v1/me/player/devices)
+DEVICE_INFO=$(echo "$DEVICE_JSON" | jq -r --arg f "$DEVICE_FILTER" '
+  ((.devices[] | select(.name | ascii_downcase | contains($f | ascii_downcase))),
+   .devices[0]) | select(. != null) | "\(.id)\t\(.name)"' | head -1)
+DEVICE_ID=$(echo "$DEVICE_INFO" | cut -f1)
+DEVICE_NAME=$(echo "$DEVICE_INFO" | cut -f2)
+
+if [ -z "$DEVICE_ID" ]; then
+  echo "no Spotify Connect device available — open Spotify on your phone or laptop first"
+  exit 1
+fi
+
+# --- Playback controls --------------------------------------------------------
+case "$ACTION" in
+  pause)
+    api -X PUT "https://api.spotify.com/v1/me/player/pause?device_id=$DEVICE_ID" -o /dev/null
+    echo "paused"
+    exit 0
+    ;;
+  resume)
+    api -X PUT "https://api.spotify.com/v1/me/player/play?device_id=$DEVICE_ID" -o /dev/null
+    echo "resumed"
+    exit 0
+    ;;
+  next)
+    api -X POST "https://api.spotify.com/v1/me/player/next?device_id=$DEVICE_ID" -o /dev/null
+    echo "skipped"
+    exit 0
+    ;;
+esac
+
+# --- Play a query -------------------------------------------------------------
+if [ -z "$QUERY" ]; then usage; fi
+
+SEARCH_JSON=$(api -G https://api.spotify.com/v1/search \
+  --data-urlencode "q=$QUERY" \
+  --data-urlencode "type=$SEARCH_TYPE" \
+  --data-urlencode "limit=1")
+
+case "$SEARCH_TYPE" in
+  track)
+    URI=$(echo "$SEARCH_JSON" | jq -r '.tracks.items[0].uri // empty')
+    NAME=$(echo "$SEARCH_JSON" | jq -r '.tracks.items[0].name // empty')
+    ARTIST=$(echo "$SEARCH_JSON" | jq -r '.tracks.items[0].artists[0].name // empty')
+    ;;
+  album)
+    URI=$(echo "$SEARCH_JSON" | jq -r '.albums.items[0].uri // empty')
+    NAME=$(echo "$SEARCH_JSON" | jq -r '.albums.items[0].name // empty')
+    ARTIST=$(echo "$SEARCH_JSON" | jq -r '.albums.items[0].artists[0].name // empty')
+    ;;
+  playlist)
+    URI=$(echo "$SEARCH_JSON" | jq -r '.playlists.items[0].uri // empty')
+    NAME=$(echo "$SEARCH_JSON" | jq -r '.playlists.items[0].name // empty')
+    ARTIST=$(echo "$SEARCH_JSON" | jq -r '.playlists.items[0].owner.display_name // "Spotify"')
+    ;;
+esac
+
+if [ -z "$URI" ]; then
+  echo "no $SEARCH_TYPE matched query \"$QUERY\""
+  exit 1
+fi
+
+# Track uses {"uris":[...]}; album/playlist use {"context_uri":...}.
+if [ "$SEARCH_TYPE" = "track" ]; then
+  BODY=$(jq -nc --arg u "$URI" '{uris:[$u]}')
+else
+  BODY=$(jq -nc --arg u "$URI" '{context_uri:$u}')
+fi
+
+RES=$(api -X PUT -H 'Content-Type: application/json' \
+  --data "$BODY" \
+  "https://api.spotify.com/v1/me/player/play?device_id=$DEVICE_ID" \
+  -w '\nHTTP_STATUS:%{http_code}' 2>&1)
+
+STATUS=$(echo "$RES" | grep -oE 'HTTP_STATUS:[0-9]+' | cut -d: -f2 || echo "?")
+BODY_ONLY=$(echo "$RES" | sed 's/HTTP_STATUS:.*$//')
+
+case "$STATUS" in
+  204)
+    echo "playing: $NAME — $ARTIST  ($SEARCH_TYPE, on $DEVICE_NAME)"
+    ;;
+  403)
+    if echo "$BODY_ONLY" | grep -q "PREMIUM_REQUIRED"; then
+      echo "spotify play failed: account needs Premium OR streaming scope missing"
+    else
+      echo "spotify play failed 403: $(echo "$BODY_ONLY" | jq -r '.error.message // empty' 2>/dev/null)"
+    fi
+    exit 1
+    ;;
+  404)
+    echo "spotify play failed 404: device dropped offline — refetch devices and retry"
+    exit 1
+    ;;
+  *)
+    ERR=$(echo "$BODY_ONLY" | jq -r '.error.message // empty' 2>/dev/null)
+    echo "spotify play failed HTTP $STATUS: ${ERR:-see body}"
+    exit 1
+    ;;
+esac

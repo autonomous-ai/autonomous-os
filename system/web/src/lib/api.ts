@@ -594,6 +594,28 @@ export async function removeConnector(code: string): Promise<{ connector: string
   });
 }
 
+/** POST /api/device/connectors/spotify/exchange-code — replaces the
+ *  terminal-curl step in the Settings guide. The client sends the OAuth
+ *  authorization code (scraped from the ?code=… URL bar after the user
+ *  approves) plus the Client ID / Client Secret already typed into the
+ *  form. os-server exchanges them with Spotify's token endpoint server-side
+ *  (Client Secret stays on-device) and persists the resulting refresh_token
+ *  via the same connectorWriter the PAT path uses — so the on-disk file is
+ *  indistinguishable from a manually-pasted refresh_token. Returns the
+ *  refresh_token in the response so the UI can fill it back into the form
+ *  for visual confirmation. */
+export async function exchangeSpotifyCode(body: {
+  code: string;
+  client_id: string;
+  client_secret: string;
+}): Promise<{ connector: string; refresh_token: string; scope: string }> {
+  return apiRequest(`${API_BASE}/api/device/connectors/spotify/exchange-code`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
 /** POST /api/login — server validates bcrypt(password) against
  *  config.AdminPasswordHash and sets the os_session cookie on success. */
 export async function login(password: string): Promise<boolean> {
