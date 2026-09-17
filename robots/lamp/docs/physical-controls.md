@@ -602,7 +602,7 @@ Phrases are intentionally short — they fire mid-stroke and need to feel respon
 | `hal/drivers/ttp223.py` | TTP223 capacitive touchpad handler (OrangePi sun60 only) |
 | `hal/board/mpr121.py` | Device-owned MPR121 configuration loader and validation |
 | `hal/drivers/mpr121.py` | Optional I²C MPR121 click/hold handler |
-| `hal/drivers/harness_mpr121.py` | Separate Harness-mode gesture policy |
+| `hal/drivers/harness/gestures.py` | Separate Harness-mode gesture policy |
 | `hal/drivers/voice/_internal/harness_capture.py` | Manual Harness capture ownership |
 | `hal/drivers/button_gestures.py` | Shared GPIO/MPR121 gesture thresholds |
 | `hal/drivers/button_actions.py` | Shared action functions, GPIO/MPR121 `HoldLEDFeedback` and localized phrase pools |
@@ -615,7 +615,7 @@ Input handlers are started in `hal/server.py` lifespan startup. Missing optional
 
 ### Harness-mode MPR121 gestures
 
-On MPR121-equipped lamps, Harness OFF retains the existing gestures: swipe **right to left** to enable Harness and **left to right** to sleep. Harness ON replaces the old click, triple-tap reboot, shutdown/reset holds, sleep and listening-cue actions: tap controls capture or interrupts TTS, hold **at least 3 seconds then release** explicitly disables Harness (including while offline), swipe **right to left** selects the next agent and **left to right** the previous agent. `hal/drivers/harness_mpr121.py` owns this separate gesture policy; `hal/drivers/voice/_internal/harness_capture.py` tracks manual capture ownership. GPIO/TTP223 behavior is unchanged. Direction follows the physical left-to-right `swipe_axis` (Lamp defaults E0…E11; verify mounting). Python calls Go APIs; Go owns mode/focus and the existing voice route.
+On MPR121-equipped lamps, Harness OFF retains the existing gestures: swipe **right to left** to enable Harness and **left to right** to sleep. Harness ON replaces the old click, triple-tap reboot, shutdown/reset holds, sleep and listening-cue actions: tap controls capture or interrupts TTS, holding **for 3 seconds** immediately disables Harness and announces the result (including while offline); the remaining contact is ignored until release, swipe **right to left** selects the next agent and **left to right** the previous agent. `hal/drivers/harness/gestures.py` owns this separate gesture policy; `hal/drivers/voice/_internal/harness_capture.py` tracks manual capture ownership. GPIO/TTP223 behavior is unchanged. Direction follows the physical left-to-right `swipe_axis` (Lamp defaults E0…E11; verify mounting). Python calls Go APIs; Go owns mode/focus and the existing voice route.
 
 Harness ON uses manual tap-to-record capture, not ambient listening. A tap while TTS is speaking only interrupts playback. Otherwise, the first tap starts capture; the ready beep plays only after the recorder/STT is ready. The next tap closes capture and sends one finalized STT transcript through the existing OS route to the focused Harness agent. Silence never sends automatically. Reaching `MAX_SESSION_DURATION_S` (`HAL_MAX_SESSION_DURATION_S`, default 30 seconds) cancels without dispatch. Idle mode does not record surrounding speech. Mode, generation or focus changes and privacy/stop events discard capture; a focus swipe cancels capture before changing focus. Sleep and hardware microphone privacy remain authoritative.
 
@@ -630,3 +630,7 @@ GPIO callbacks that settle at the last known switch position (including initial 
 When wake restores a sleep-muted microphone, it also clears the restored mic-muted LED indicator. Later emotion, TTS, or music completion callbacks must not repaint privacy red after the microphone is open. A microphone still locked by hardware privacy keeps its mute indicator.
 
 An explicit speaker-mute request during sleep takes ownership from sleep and is persisted even when the speaker is already silent. Wake must retain that choice, including under a privacy lock.
+
+Harness recording feedback uses a dedicated rising two-note cue to start and a falling two-note cue to finish; neither uses the normal gesture ping. The finish cue confirms recording has ended, not that the remote agent accepted or completed the task. The tap that interrupts TTS retains the normal acknowledgment ping and does not open capture.
+
+While Harness mode stays ON, the MPR121 mode watcher maintains a dim lime breathing indicator from `button_led.harness_on` in the device presets. OFF uses one brief dim blink from `harness_off`. The indicator yields to sleep, privacy and active voice/music feedback, returns on normal LED restore, and never changes saved user light settings. Devices without RGB skip LED feedback.

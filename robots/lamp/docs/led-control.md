@@ -43,7 +43,7 @@ stays lit until the first LED command, which may be minutes after boot.
 
 ### Harness voice confirmation
 
-Physical Harness toggles read `button_led.harness_on` / `button_led.harness_off` from `robots/lamp/presets.json` through the live HAL preset table. Lamp uses RGB `[1, 1, 3]` when enabled and `[2, 2, 2]` when disabled. Both inherit a 600 ms pulse; `effect` and `duration_ms` can also be overridden in the preset. Feedback remains transient and schedules LED restoration 100 ms after the configured duration.
+Harness mode reads `button_led.harness_on` / `button_led.harness_off` from `robots/lamp/presets.json` through the live HAL preset table. While ON, Lamp maintains a dim lime `breathing_fine` indicator at RGB `[2, 3, 0]`, speed `0.6` (about five seconds per breath). OFF gives one dim white blink at RGB `[2, 2, 2]`, speed `1.0`, duration `300` ms, then restores the saved user state. The mode watcher and normal LED restoration share `hal/drivers/harness/led.py`; sleep, mic privacy, TTS, music and thinking take priority. Idle ambient breathing cannot replace the indicator. User LED preferences are not overwritten; no RGB service means no LED work. The OFF overlay restores 100 ms after its configured duration.
 
 ## Solid Color
 

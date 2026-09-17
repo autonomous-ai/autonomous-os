@@ -1229,6 +1229,10 @@ def _restore_user_led():
         _apply_emotion_led_display(EMO_THINKING, 0.7, force_led=True)
         return
 
+    from hal.drivers.harness.led import restore as restore_harness_led
+    if restore_harness_led():
+        return
+
     state = _user_led_state
     if state is None:
         # A dark resting look means "no user state" settles to black, exactly

@@ -43,7 +43,8 @@ def test_real_stream_silence_waits_for_tap_and_cancel_never_dispatches(reason, m
     capture = control.claim(SNAPSHOT)
     service = Mock()
     service._running = True
-    service._tts = None
+    service._tts = Mock(last_spoken_text="")
+    service._tts.play_harness_capture_chime.return_value = True
     service._tts_is_speaking.return_value = False
     service._music_is_playing.return_value = False
     service._np = np
@@ -87,6 +88,9 @@ def test_real_stream_silence_waits_for_tap_and_cancel_never_dispatches(reason, m
             harness_voice=SNAPSHOT, manual_capture=capture,
         )
     assert len(reads) == 3
+    from unittest.mock import call
+    expected = [call(), call(finished=True)] if reason == "finish" else [call()]
+    assert service._tts.play_harness_capture_chime.call_args_list == expected
     silence.assert_not_called()
     assert dispatch.called is (reason == "finish")
     service._realtime.append_audio.assert_not_called()
@@ -108,7 +112,7 @@ def test_fast_finish_before_recorder_ready_does_not_send_or_beep(monkeypatch):
         module.VoiceService._stream_session(service, Mock(), 320, 16000,
             preconnected_session=stt, harness_voice=SNAPSHOT, manual_capture=capture)
     dispatch.assert_not_called()
-    service._tts.play_ack_chime.assert_not_called()
+    service._tts.play_harness_capture_chime.assert_not_called()
 
 
 def test_harness_idle_does_not_open_microphone(monkeypatch):

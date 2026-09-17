@@ -83,9 +83,10 @@ class _GestureEvent:
 class _GestureRecognizer:
     """Poll-clock recognition independent of action execution and electrode count."""
 
-    def __init__(self, debounce_ms, *, hold_thresholds=None, multi_click=True):
+    def __init__(self, debounce_ms, *, hold_thresholds=None, multi_click=True, hold_on_threshold=False):
         self._hold_thresholds = hold_thresholds or (SLEEP_HOLD_DURATION, LONG_PRESS_DURATION, FACTORY_RESET_DURATION)
         self._multi_click = multi_click
+        self._hold_on_threshold = hold_on_threshold
         self._delay = debounce_ms / 1000
         self._stable = None
         self._candidate = None
@@ -161,6 +162,10 @@ class _GestureRecognizer:
             if tier > self._hold_tier:
                 self._hold_tier = tier
                 events.append(_GestureEvent("hold_tier", self._gesture_id, tier, held))
+                if self._hold_on_threshold:
+                    events.append(_GestureEvent("invalidate", self._gesture_id))
+                    events.append(_GestureEvent("hold", self._gesture_id, held_s=held))
+                    self.cancel()
         # A pending click window never commits a destructive outcome while
         # another electrode is held; a completed hold clears the whole burst.
         if not touched and not self._stable and self._deadline is not None and now >= self._deadline:
@@ -341,7 +346,12 @@ class _SpatialGestureRecognizer:
                 edge_time = self._contact_since if self._button._press_start is None else now
                 if not active:
                     edge_time = max(since for value, since in self._raw.values() if not value)
-                events.extend(self._button.update(True, edge_time))
+                button_events = self._button.update(True, edge_time)
+                events.extend(button_events)
+                if any(event.kind == "hold" for event in button_events):
+                    # Threshold-fired actions consume this entire contact,
+                    # including later travel, until a stable physical release.
+                    self.cancel()
         elif self._cycle:
             if self._release_at is None:
                 # Use raw edge time, so grace/debounce cannot promote a hold.
@@ -397,7 +407,7 @@ class MPR121Handler:
     def _new_detector(self):
         factory = _GestureRecognizer
         if self._harness_gestures and self._harness_gestures.snapshot.get("enabled"):
-            from hal.drivers.harness_mpr121 import harness_button_recognizer
+            from hal.drivers.harness.gestures import harness_button_recognizer
             factory = harness_button_recognizer
         if self._config.swipe_axis is not None:
             return _SpatialGestureRecognizer(self._config, factory)
@@ -487,7 +497,7 @@ class MPR121Handler:
             # Allow conversions/autoconfiguration to settle before seeding the
             # boot-held suppression from the first reported electrode state.
             time.sleep(0.1)
-            from hal.drivers.harness_mpr121 import HarnessGestures
+            from hal.drivers.harness.gestures import HarnessGestures
             self._harness_gestures = HarnessGestures()
             self._harness_gestures.start()
             self._detector.update(self._sample(), time.monotonic())
@@ -599,7 +609,7 @@ class MPR121Handler:
         if direction == 1:
             swipe_action(source="MPR121")
         elif direction == -1:
-            from hal.drivers.harness_voice_action import toggle_harness_voice
+            from hal.drivers.harness.actions import toggle_harness_voice
             toggle_harness_voice()
         else:
             logger.warning("MPR121 swipe discarded: missing or invalid direction %s", direction)

@@ -5,8 +5,8 @@ import threading
 import uuid
 
 import hal.app_state as state
-from hal.drivers.harness_voice_action import confirmation_phrase, failure_phrase, _show_feedback
-from hal.drivers.harness_voice_client import HarnessGestureError, request_voice_disable, request_focus_step
+from hal.drivers.harness.actions import confirmation_phrase, failure_phrase, _show_feedback
+from hal.drivers.harness.client import HarnessGestureError, request_voice_disable, request_focus_step
 
 logger = logging.getLogger(__name__)
 EXIT_HOLD_SECONDS = 3.0
@@ -14,7 +14,7 @@ EXIT_HOLD_SECONDS = 3.0
 
 def harness_button_recognizer(debounce_ms):
     from hal.drivers.mpr121 import _GestureRecognizer
-    return _GestureRecognizer(debounce_ms, hold_thresholds=(EXIT_HOLD_SECONDS,), multi_click=False)
+    return _GestureRecognizer(debounce_ms, hold_thresholds=(EXIT_HOLD_SECONDS,), multi_click=False, hold_on_threshold=True)
 
 
 def read_mode():
@@ -42,6 +42,8 @@ class HarnessGestures:
         if routing_key(snapshot) != self.mode_key():
             self.cancel_capture()
         self.snapshot = snapshot
+        from hal.drivers.harness import led as harness_voice_led
+        harness_voice_led.set_enabled(snapshot.get("enabled", False))
 
     def start(self):
         self._update(read_mode())
@@ -54,6 +56,8 @@ class HarnessGestures:
 
     def stop(self):
         self._stop.set()
+        from hal.drivers.harness import led as harness_voice_led
+        harness_voice_led.set_enabled(False)
         self.cancel_capture()
         if self._thread:
             self._thread.join(timeout=1)
@@ -79,13 +83,14 @@ class HarnessGestures:
         # No listening cue, triple tap, shutdown, reset, or sleep in this mode.
 
     def _tap(self):
-        from hal.drivers.button_actions import _cancel_agent_speech
+        from hal.drivers.button_actions import _cancel_agent_speech, play_ack_chime
         from hal.routes.voice import stop_tts
         voice = state.voice_service
         if state.tts_service and state.tts_service.speaking:
             self.cancel_capture()
             _cancel_agent_speech("MPR121 Harness")
             stop_tts()
+            play_ack_chime("MPR121 Harness")
             return
         if voice is None or state._hw_mic_switch_muted is True:
             return
@@ -122,5 +127,4 @@ class HarnessGestures:
             _speak_gesture_ack(phrase, "MPR121")
             return
         self._update(result)
-        _speak_gesture_ack(localized_phrase(PHRASE_HARNESS_FOCUS).format(
-            agent=result.get("agentName") or result["agentId"]), "MPR121")
+        _speak_gesture_ack(localized_phrase(PHRASE_HARNESS_FOCUS), "MPR121")

@@ -4,7 +4,7 @@ import logging
 import uuid
 
 import hal.app_state as state
-from hal.drivers.harness_voice_client import HarnessGestureError, request_voice_toggle
+from hal.drivers.harness.client import HarnessGestureError, request_voice_toggle
 from hal.i18n import (PHRASE_HARNESS_FAILED, PHRASE_HARNESS_NO_AGENTS,
                       PHRASE_HARNESS_OFF, PHRASE_HARNESS_OFFLINE,
                       PHRASE_HARNESS_ON, PHRASE_HARNESS_UNPAIRED, localized_phrase)
@@ -26,14 +26,16 @@ def failure_phrase(code: str) -> str:
 
 
 def _show_feedback(enabled: bool):
-    """Brief overlay; keep existing sleep, speaker and privacy LED ownership."""
-    if not state.rgb_service:
+    """Maintain the ON indicator or briefly blink OFF using device presets."""
+    from hal.drivers.harness import led as harness_voice_led
+    harness_voice_led.set_enabled(enabled)
+    if enabled or not state.rgb_service:
         return
     try:
         from hal.models import LEDEffectRequest
         from hal.presets import BUTTON_LED_PRESETS
         from hal.routes.led import start_led_effect
-        preset = BUTTON_LED_PRESETS["harness_on" if enabled else "harness_off"]
+        preset = BUTTON_LED_PRESETS["harness_off"]
         request = LEDEffectRequest(**preset, transient=True)
         previous = state._effect_thread
         start_led_effect(request)

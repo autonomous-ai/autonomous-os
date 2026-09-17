@@ -2195,13 +2195,33 @@ class TTSService:
         and must survive the just-set stop event. Returns False when the
         chime can't play (no audio, speaker muted, stream unopenable —
         e.g. while a music aplay owns the ALSA device exclusively)."""
+        return self._play_gesture_chime(self._ack_chime_samples)
+
+    def play_harness_capture_chime(self, *, finished: bool = False) -> bool:
+        """Dedicated rising/falling pair for Harness capture, not delivery receipt."""
+        return self._play_gesture_chime(
+            lambda rate: self._harness_capture_chime_samples(rate, finished=finished)
+        )
+
+    def _harness_capture_chime_samples(self, rate: int, *, finished: bool):
+        """Two soft notes distinct from the normal high acknowledgment ping."""
+        np = self._np
+        frequencies = (880.0, 587.33) if finished else (587.33, 880.0)
+        t = np.arange(int(rate * 0.08)) / rate
+        envelope = np.sin(np.pi * np.arange(len(t)) / max(1, len(t) - 1)) ** 2
+        notes = [0.28 * envelope * np.sin(2 * np.pi * frequency * t)
+                 for frequency in frequencies]
+        return np.concatenate((notes[0], np.zeros(int(rate * 0.025)), notes[1])).astype(np.float32).reshape(-1, 1)
+
+    def _play_gesture_chime(self, samples_for_rate) -> bool:
+        """Use existing volume, mute, AEC and untracked playback for gesture tones."""
         if not self.available or self._speaker_muted():
             return False
         if self._np is None or self._sd is None:
             return False
         try:
             rate = self._device_rate or TTS_SAMPLE_RATE
-            samples = self._ack_chime_samples(rate)
+            samples = samples_for_rate(rate)
             # Same software gain TTS playback applies (_play_wav_inline) so
             # the chime tracks perceived speech loudness, not just ALSA volume.
             if self._backend is not None:

@@ -107,7 +107,7 @@ class TestSpatialGestures(unittest.TestCase):
             events = [e for e in replay(samples) if e.kind in ACTIONS]
             self.assertEqual([e.kind for e in events], ["swipe"])
             with mock.patch("hal.drivers.button_actions.swipe_action") as sleep, \
-                    mock.patch("hal.drivers.harness_voice_action.toggle_harness_voice") as harness:
+                    mock.patch("hal.drivers.harness.actions.toggle_harness_voice") as harness:
                 for event in events:
                     handler._execute(event)
                 self.assertEqual(sleep.call_count, int(direction == 1))
@@ -117,7 +117,7 @@ class TestSpatialGestures(unittest.TestCase):
         handler = MPR121Handler(MPR121Config(bus=0, swipe_axis=(0, 1)))
         handler._hold_led = mock.Mock()
         handler._hold_led.commit.return_value = False
-        with mock.patch("hal.drivers.harness_voice_action.toggle_harness_voice") as harness, \
+        with mock.patch("hal.drivers.harness.actions.toggle_harness_voice") as harness, \
                 mock.patch("hal.drivers.button_actions.swipe_action") as sleep:
             handler._execute(_GestureEvent("swipe", 1, direction=-1))
             harness.assert_not_called()
