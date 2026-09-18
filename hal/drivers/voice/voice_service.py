@@ -41,6 +41,7 @@ from hal.drivers.voice._internal.audio_dsp import resample_to_stt, rms
 from hal.drivers.voice._internal.audio_recorder import ArecordStream
 from hal.drivers.voice._internal import realtime_turn as realtime_turn_mod
 from hal.drivers.voice._internal.realtime_turn import (
+    _WaitFiller,
     ROUTE_DELEGATED,
     ROUTE_NOISE_DROPPED,
     split_first_chunk,
@@ -52,6 +53,7 @@ from hal.drivers.voice._internal.realtime_turn import (
     needs_noise_guard,
     run_realtime_turn,
     should_drop_downstream_turn,
+    should_arm_realtime_wait_filler,
     should_defer_speaker_id_prepass,
     should_dispatch_to_main,
 )
@@ -2246,6 +2248,9 @@ class VoiceService:
         realtime_deferred = False
         realtime_turn_started = False
         realtime_start_failed = False
+        # Dead-air filler armed before the post-capture session handshake, so
+        # the acknowledgement clock does not wait on the Gemini reconnect.
+        post_capture_wait_filler = None
         # Voice speaker-ID for THIS turn — resolved once after capture (below) and
         # passed into build_turn_context() so the realtime reply names the actual
         # speaker. None until resolved / on unknown → face fallback.
@@ -2905,7 +2910,14 @@ class VoiceService:
                         buf_duration,
                     )
             else:
+                if not realtime_turn_started and realtime_allowed:
+                    post_capture_wait_filler = _WaitFiller(owner=interaction_id)
+                    if should_arm_realtime_wait_filler(combined):
+                        post_capture_wait_filler.arm()
                 start_realtime_turn()
+                if not realtime_turn_started and post_capture_wait_filler is not None:
+                    post_capture_wait_filler.cancel()
+                    post_capture_wait_filler = None
 
             # Everything below reads the resolved speaker, so the parallel
             # window ends here.
@@ -3018,6 +3030,7 @@ class VoiceService:
                     buf_duration,
                     rt_audio_is_speech,
                     interaction_id=interaction_id,
+                    wait_filler=post_capture_wait_filler,
                 )
             else:
                 # No realtime turn was opened this capture. Distinguish the two

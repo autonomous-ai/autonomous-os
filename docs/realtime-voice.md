@@ -2049,8 +2049,15 @@ Read the counters in the session-END log line: `substituted` at ~100 % of
    model already expressed its own emotion. This fills the 1-3s
    model-latency gap where the device otherwise looked frozen.
 
-   The same commit arms the **dead-air filler** (`_WaitFiller`), the audible
-   half of that cue. After `HAL_REALTIME_FILLER_DELAY_S` (default 1.5 s) with
+   The **dead-air filler** (`_WaitFiller`) is the audible half of that cue.
+   On the wake-word / follow-up path it is armed **before** the post-capture
+   session handshake (`start_realtime_turn()` → `prepare_turn()`), not at the
+   commit: on lamp-dbda (2026-09-18) that reconnect took 2–3 s, and arming at
+   commit pushed the first acknowledgement to 4–5 s after the user stopped
+   speaking. The armed filler is handed to `run_realtime_turn(wait_filler=…)`,
+   which keeps the one-filler-per-turn rule (`arm()` is idempotent) and cancels
+   it on every exit path. Sessions opened during capture (always-listening) arm
+   at the commit as before. After `HAL_REALTIME_FILLER_DELAY_S` (default 1.5 s) with
    still no output, HAL calls `POST /api/sensing/filler` and os-server speaks
    one dedicated realtime filler from its cache — a quiet non-lexical thought
    such as "Mm...", distinct from the main-agent's opening acknowledgement.

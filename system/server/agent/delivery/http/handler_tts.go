@@ -89,6 +89,9 @@ func (h *AgentHandler) runCreatedAtMs(runID string) int64 {
 	now := time.Now().UnixMilli()
 	h.runFirstSeenMu.Lock()
 	defer h.runFirstSeenMu.Unlock()
+	if h.runFirstSeenMs == nil {
+		h.runFirstSeenMs = make(map[string]int64)
+	}
 	if seen, ok := h.runFirstSeenMs[runID]; ok {
 		return seen
 	}

@@ -135,7 +135,7 @@ class _Interaction:
         "timer", "life_timer", "closed", "last_activity",
         "answer_latency_ms", "answer_kind",
         "task_started_at_ms", "task_revision", "task_exclusion_reason",
-        "endpoint_known", "mode",
+        "endpoint_known", "mode", "suppressed",
     )
 
     def __init__(self, iid: str, speech_end: float, method: str):
@@ -172,6 +172,11 @@ class _Interaction:
         # main agent is still working on, or a later stop finds nothing to
         # suppress.
         self.closed = False
+        # Set by an explicit stop that covered this turn. Audio owned by a
+        # suppressed turn is refused at TTS admission (see is_suppressed):
+        # the user asked for silence, and a reply or filler that lands tens
+        # of seconds later must not undo that.
+        self.suppressed = False
         self.last_activity = speech_end
 
 
@@ -529,6 +534,20 @@ def _owner_interaction(owner: str) -> str:
     return ""
 
 
+def is_suppressed(owner: str) -> bool:
+    """True when the owner of a playback is a turn the user explicitly stopped.
+
+    The one admission gate for late audio: os-server mutes replies it can
+    attribute to a cancelled run, but a Harness result or a realtime wait
+    filler reaches the speaker without passing that check. Unowned audio is
+    never suppressed -- guessing would silence the sentence the user just
+    asked for.
+    """
+    with _lock:
+        it = _interactions.get(_owner_interaction(owner))
+        return bool(it is not None and it.suppressed)
+
+
 def _classify(owner: str, tts) -> str:
     """What the user heard, read from the speaking service's segment snapshots.
 
@@ -584,6 +603,9 @@ def boundary(reason: str, triggering_interaction_id: str = "", policy_applied: b
             # Server interruption identifies the cancelled response, not every
             # input already waiting behind it in the receive queue.
             applicable = target_interaction_ids.intersection(_interactions)
+        if reason == BOUNDARY_EXPLICIT_STOP:
+            for iid in applicable:
+                _interactions[iid].suppressed = True
         playing = dict(_playing) if _playing else None
         state = {
             "reason": reason,
