@@ -136,6 +136,7 @@ def test_realtime_turn_marks_every_reply_segment(monkeypatch, cap, chunks, spoke
     monkeypatch.setattr(realtime_turn, "_reply_language_name", lambda: "English")
     monkeypatch.setattr(realtime_turn, "_WaitFiller", Mock())
     realtime = Mock(available=True)
+    realtime.main_handoff_open.return_value = False
     tts = Mock()
     tts.speak.return_value = not busy
 
@@ -183,6 +184,7 @@ def test_realtime_turn_reuses_a_filler_armed_before_the_handshake(monkeypatch):
     factory = Mock()
     monkeypatch.setattr(realtime_turn, "_WaitFiller", factory)
     realtime = Mock(available=True)
+    realtime.main_handoff_open.return_value = False
     realtime.stream_output.return_value = iter([TextOutput(text="Hello there.")])
     tts = Mock()
     tts.speak.return_value = True

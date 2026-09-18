@@ -243,9 +243,20 @@ func SpeakReply(text string) error {
 // completion, so dropping the speech also dropped the realtime session's only
 // record of the answer. Same rule as SpeakReply about what may be sent —
 // genuine agent output only, never hardcoded notices.
-func FeedRealtimeHistory(text string) error {
-	body, _ := json.Marshal(map[string]string{"text": text})
+func FeedRealtimeHistory(text, runID string) error {
+	body, _ := json.Marshal(map[string]string{"text": text, "run_id": runID})
 	return post("/voice/realtime/history", body)
+}
+
+// ResolveRealtimeHandoff tells HAL that runID's turn has ended, so the realtime
+// guard that was waiting on it may stop holding new utterances. Sent at
+// lifecycle end/error because the reply text is not a reliable release: a
+// suppressed, hardware-only or dropped reply never reaches TTS, and the guard
+// would then hold the device for its whole TTL. Id-matched on the HAL side, so
+// a run that owns no handoff is a no-op.
+func ResolveRealtimeHandoff(runID string) error {
+	body, _ := json.Marshal(map[string]string{"run_id": runID})
+	return post("/voice/realtime/handoff-resolved", body)
 }
 
 // SpeakQueueReply is SpeakQueue with realtime feedback — the queued sibling of

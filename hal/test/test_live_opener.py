@@ -31,6 +31,7 @@ def test_promotion_hands_complete_audio_to_live_once(monkeypatch, consumed, reop
     monkeypatch.setattr(config, "REALTIME_ENABLED", True)
     service = object.__new__(VoiceService)
     service._realtime = Mock()
+    service._realtime.main_handoff_open.return_value = False
     service._realtime.wait_until_available.return_value = True
     frames = [b"first", b"last", b"silence"]
     mic = object()
@@ -61,6 +62,7 @@ def test_promotion_unavailable_or_bypassed_keeps_fallback(monkeypatch, live, ena
     monkeypatch.setattr(config, "REALTIME_ENABLED", enabled)
     service = object.__new__(VoiceService)
     service._realtime = Mock()
+    service._realtime.main_handoff_open.return_value = False
     service._realtime.wait_until_available.return_value = available
     service._live_session = Mock()
     assert service._try_live_opener(object(), 320, 16000, [b"audio"],
@@ -75,6 +77,7 @@ def test_error_preserves_whether_opener_already_answered(monkeypatch, consumed):
     monkeypatch.setattr(config, "REALTIME_ENABLED", True)
     service = object.__new__(VoiceService)
     service._realtime = Mock()
+    service._realtime.main_handoff_open.return_value = False
     service._live_stop_output = Mock()
 
     def live(*args, **kwargs):
@@ -164,6 +167,7 @@ def test_final_wake_confirmation_controls_promotion_and_fallback(
     service._wakeword_focus = WakeWordFocus(20)
     service._realtime.rebuilding = False
     service._realtime.available = True
+    service._realtime.main_handoff_open.return_value = False
     service._music_is_playing.return_value = False
     service._decorator.starts_with_wake_word.side_effect = lambda t: t.lower().startswith("hello lamp")
     service._decorator.matches_wake_word_loosely.return_value = False

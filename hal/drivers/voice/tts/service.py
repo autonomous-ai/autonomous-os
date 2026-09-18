@@ -356,6 +356,9 @@ class TTSService:
 
         # Echo cancellation: store last spoken text for transcript self-filtering
         self._last_spoken_text: str = ""
+        # Run id of _last_spoken_text, so the realtime history feed can say
+        # WHICH turn the reply belongs to (main-handoff close is id-matched).
+        self._last_spoken_turn_id: str = ""
         self._last_spoken_time: float = 0.0
 
         # Native realtime playback (the model's own voice straight to the speaker):
@@ -747,6 +750,11 @@ class TTSService:
             return False
 
     @property
+    def last_spoken_turn_id(self) -> str:
+        """Run id of the last speech handed to the speaker ("" when untracked)."""
+        return self._last_spoken_turn_id
+
+    @property
     def last_spoken_text(self) -> str:
         """Last text sent to TTS (for echo cancellation transcript filtering)."""
         return self._last_spoken_text
@@ -798,7 +806,7 @@ class TTSService:
         if cleared:
             logger.info("TTS stop cleared %d pending queued speech item(s)", cleared)
 
-    def _report_unspoken_reply(self, text: str, realtime_feedback: bool) -> None:
+    def _report_unspoken_reply(self, text: str, realtime_feedback: bool, turn_id: str = "") -> None:
         """Hand a dropped agent reply to the unspoken-reply hook.
 
         Gated on realtime_feedback for the same reason the playback feed is:
@@ -808,7 +816,7 @@ class TTSService:
         if not realtime_feedback or not text or self._on_unspoken_reply is None:
             return
         try:
-            self._on_unspoken_reply(text)
+            self._on_unspoken_reply(text, turn_id)
         except Exception:
             logger.exception("on_unspoken_reply callback failed")
 
@@ -986,6 +994,7 @@ class TTSService:
         self._speaking = True
         self._interruptible = interruptible
         self._last_spoken_text = text
+        self._last_spoken_turn_id = turn_id or ""
         self._realtime_feedback = realtime_feedback
         self._begin_playback(f"run:{turn_id}" if turn_id else "", realtime_reply)
 
@@ -1099,14 +1108,14 @@ class TTSService:
                         turn_id, turn_seq, self._latest_queue_turn_id,
                         self._latest_queue_turn_seq, text[:60],
                     )
-                    self._report_unspoken_reply(text, realtime_feedback)
+                    self._report_unspoken_reply(text, realtime_feedback, turn_id)
                     return True
                 if turn_seq == self._latest_queue_turn_seq and turn_id != self._latest_queue_turn_id:
                     logger.warning(
                         "TTS queued speech dropped -- conflicting turn sequence (turn_id=%s seq=%d latest_id=%s): %s",
                         turn_id, turn_seq, self._latest_queue_turn_id, text[:60],
                     )
-                    self._report_unspoken_reply(text, realtime_feedback)
+                    self._report_unspoken_reply(text, realtime_feedback, turn_id)
                     return True
                 if turn_seq > self._latest_queue_turn_seq:
                     previous_id = self._latest_queue_turn_id
@@ -1163,6 +1172,7 @@ class TTSService:
                 self._speaking = True
                 self._interruptible = interruptible
                 self._last_spoken_text = text
+                self._last_spoken_turn_id = turn_id or ""
                 self._realtime_feedback = realtime_feedback
                 self._begin_playback(f"run:{turn_id}" if turn_id else "", realtime_reply)
                 thread = threading.Thread(
@@ -2111,6 +2121,7 @@ class TTSService:
         self._speaking = True
         self._interruptible = interruptible
         self._last_spoken_text = text
+        self._last_spoken_turn_id = turn_id or ""
         self._realtime_feedback = realtime_feedback
         self._begin_playback(f"run:{turn_id}" if turn_id else "", realtime_reply)
 

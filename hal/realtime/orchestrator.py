@@ -54,6 +54,7 @@ from hal.realtime.models.signal import (
     RejectSignal,
 )
 from hal.realtime.models.output import ExecutionOutput, InterruptedOutput, UserSpeechOutput
+from hal.realtime.main_handoff import MainHandoffTracker
 from hal.realtime.summarizer import RealtimeSummarizer
 from hal.realtime.voice_agent.base import VoiceAgentBase
 
@@ -375,6 +376,13 @@ class RealtimeOrchestrator:
         self._park_resume_failed: bool = False
         self._turn_in_flight: bool = False
         self._turn_started_monotonic: float = 0.0
+        # The delegated request the main agent is still working on, if any.
+        # Every realtime entry point checks this before committing audio to
+        # the model — see hal/realtime/main_handoff.py and #419.
+        self._main_handoff = MainHandoffTracker(
+            ttl_s=config.REALTIME_MAIN_HANDOFF_TTL_S,
+            filler_gap_s=config.REALTIME_MAIN_HANDOFF_FILLER_GAP_S,
+        )
         # Last moment this session saw turn activity (prepare/audio/text/reply
         # end). Seeded at connect so a session idle since boot parks too.
         self._last_activity_monotonic: float = 0.0
@@ -1797,21 +1805,87 @@ class RealtimeOrchestrator:
         The live provider retains the audio turn only while its current session
         survives. Record the handoff before OpenClaw replies so a Gemini session
         recycle cannot make the device forget what the user asked.
+
+        Memory only. Arming the #419 guard is `begin_main_handoff`, and the two
+        are deliberately separate: this runs for EVERY turn that reaches the
+        main agent, including the no-output fallback, where the "request" is
+        often a fragment STT invented out of noise.
         """
         self.save_turn(
             user_text=user_text,
             agent_text="[This request was handed to the main agent; its spoken reply follows.]",
         )
 
-    def save_main_agent_reply_fragment(self, text: str) -> None:
+    def begin_main_handoff(self, user_text: str) -> None:
+        """Mark a DELEGATED request as in flight (the #419 guard).
+
+        Until the main agent's reply comes back, the realtime entry points
+        answer a new utterance with a filler instead of committing it to the
+        model, which would otherwise "resolve" the pending task from memory.
+
+        Only an explicit delegation may arm this. It used to be armed wherever
+        `save_main_handoff` ran, which also covers the realtime-no-output
+        fallback — so on green-lamp the fragments 'you.', 'Okay.' and 'Hello?'
+        each opened a handoff (0 of the 3 were delegations, 18/9) and the next
+        real request was met with "still on it" instead of an answer.
+        """
+        self._main_handoff.open(user_text, now=time.monotonic())
+        logger.info("[realtime] main handoff open: %r", user_text[:100])
+
+    def save_main_agent_reply_fragment(self, text: str, run_id: str = "") -> None:
         """Persist a spoken main-agent reply for future realtime sessions.
 
         Main-agent TTS is sentence-streamed, so one logical reply may arrive as
         multiple fragments. Retaining each fragment preserves the complete
         answer without relying on the ephemeral ``[TTS HISTORY]`` injection.
+
+        The first fragment also closes the in-flight handoff — but only when
+        ``run_id`` belongs to it. A reply from a superseded older turn arriving
+        after a NEWER request was delegated used to release the newer
+        handoff, re-opening the #419 hole for it.
         """
         if text.strip():
             self.save_turn(user_text="[Main agent reply]", agent_text=text)
+            self.close_main_handoff("main_reply", run_id=run_id)
+
+    def main_handoff_open(self) -> bool:
+        """Whether a delegated request is still being worked on by the main agent."""
+        return self._main_handoff.is_open(now=time.monotonic())
+
+    def main_handoff_transcript(self) -> str:
+        return self._main_handoff.transcript()
+
+    def bind_main_handoff_run(self, run_id: str) -> None:
+        """Tell the open handoff which os-server run will answer it."""
+        if not run_id:
+            return
+        self._main_handoff.bind_run(run_id)
+        logger.info("[realtime] main handoff bound to run %s", run_id)
+
+    def close_main_handoff(self, reason: str, run_id: str | None = None) -> bool:
+        """Release the in-flight handoff. Returns whether one was closed.
+
+        ``run_id`` identifies the run the closing reply came from; ``None``
+        (the click) closes whatever is open. See MainHandoffTracker.close.
+        """
+        now = time.monotonic()
+        closed = self._main_handoff.close(reason, now=now, run_id=run_id)
+        if closed:
+            logger.info("[realtime] main handoff closed (%s)", reason)
+        elif run_id and self._main_handoff.is_open(now):
+            # Only a REFUSAL is worth a line. Most replies arrive with no
+            # handoff open at all (the ordinary case, every main-agent turn),
+            # and logging those as "kept open" buried the real refusals in
+            # noise — device-observed on green-lamp, 18/9.
+            logger.info(
+                "[realtime] main handoff kept open — reply from run %s does not own it (owner=%s)",
+                run_id, self._main_handoff.run_id() or "unbound",
+            )
+        return closed
+
+    def take_main_handoff_filler_slot(self) -> bool:
+        """Whether the caller may speak one "still on it" filler right now."""
+        return self._main_handoff.take_filler_slot(now=time.monotonic())
 
     def send_function_result(self, call_id: str, output: str) -> None:
         """Send a function call result back to the model."""

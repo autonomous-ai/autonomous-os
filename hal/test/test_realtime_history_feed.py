@@ -14,7 +14,7 @@ class _RecordingRealtime:
         self.fragments: list[str] = []
         self.sent: list[str] = []
 
-    def save_main_agent_reply_fragment(self, text: str) -> None:
+    def save_main_agent_reply_fragment(self, text: str, run_id: str = "") -> None:
         self.fragments.append(text)
 
     def send_text(self, text: str) -> None:

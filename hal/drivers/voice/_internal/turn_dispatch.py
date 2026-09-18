@@ -9,6 +9,7 @@ import logging
 
 from hal import config as hal_config
 from hal.drivers.voice._internal.realtime_turn import (
+    ROUTE_MAIN_PENDING,
     ROUTE_NOISE_DROPPED,
     ROUTE_HANDLED,
     should_drop_downstream_turn,
@@ -144,6 +145,11 @@ def dispatch_turn(
       rejected  → drop only an explicit ``reject_turn`` tool result.
       neither   → send the plain transcript so the main agent answers.
 
+    Returns the os-server run id this turn was dispatched as, or "" when it
+    reached no run (dropped, handled locally, transport failure). The caller
+    binds it to an open main handoff so a later reply can be matched to the
+    turn that produced it.
+
     ``rt.route`` records WHICH of those happened and why (see the ROUTE_* values
     in realtime_turn); it is logged once per turn as ``[turn] route=…``. The
     separate explicit-rejection bit is the sole policy gate that may suppress a
@@ -157,6 +163,10 @@ def dispatch_turn(
     prepass. When given we reuse it instead of running the (embedding-server)
     recognition a SECOND time here. None → compute it now (non-realtime path).
     """
+    # The run this turn becomes on os-server, for the caller to bind to an
+    # open main handoff. "" when the turn reaches no run at all.
+    dispatched_run_id: str = ""
+
     if harness_voice and (harness_voice.get("unavailable") or harness_voice["enabled"]):
         # A realtime capture abandoned during a mode toggle belongs to the old
         # route. Consume its cached frame/trace marker without forwarding it or
@@ -182,9 +192,10 @@ def dispatch_turn(
                 harness_voice=harness_voice,
             ))
             voice_metrics.bind_run(interaction_id, result.run_id)
+            dispatched_run_id = result.run_id or dispatched_run_id
             _note_dispatch_outcome(interaction_id, result)
         decorator.submit_speech_emotion_from_session(ser_audio_buffer, user=user)
-        return
+        return dispatched_run_id
 
     # Preserve the disabled snapshot on every normal route too. This prevents
     # OS from forwarding an already-handled realtime turn after a mode toggle.
@@ -220,6 +231,8 @@ def dispatch_turn(
     dropped = should_drop_downstream_turn(rt)
     if rt.route == ROUTE_NOISE_DROPPED:
         destination = "nowhere (noise guard rejected turn)"
+    elif rt.route == ROUTE_MAIN_PENDING:
+        destination = "nowhere (main agent still working on a delegated request — filler spoken)"
     elif dropped:
         destination = "nowhere (model explicitly rejected non-user turn)"
     elif rt.handled:
@@ -244,6 +257,8 @@ def dispatch_turn(
     voice_metrics.set_route(interaction_id, rt.route, event_type)
     if rt.route == ROUTE_NOISE_DROPPED:
         voice_metrics.exclude(interaction_id, voice_metrics.EXCL_REJECTED_NOISE)
+    elif rt.route == ROUTE_MAIN_PENDING:
+        voice_metrics.exclude(interaction_id, voice_metrics.EXCL_MAIN_PENDING)
     elif dropped:
         voice_metrics.exclude(interaction_id, voice_metrics.EXCL_REJECTED_NON_USER)
     elif not combined and not (rt.delegated and rt.delegate_msg):
@@ -295,6 +310,7 @@ def dispatch_turn(
             # interaction: it binds to the SAME interaction the realtime agent
             # just answered, so no extra metric sample is created.
             voice_metrics.bind_run(interaction_id, handled_result.run_id)
+            dispatched_run_id = handled_result.run_id or dispatched_run_id
             # It is ALSO the automatic-supersession boundary — but only when
             # os-server says it actually took the speaker away from the older
             # turn. Opt-in policy (OS_REALTIME_SUPERSEDES_MAIN_REPLY, default
@@ -334,6 +350,7 @@ def dispatch_turn(
                     **routing_kwargs,
                 ))
                 voice_metrics.bind_run(interaction_id, result.run_id)
+                dispatched_run_id = result.run_id or dispatched_run_id
                 _note_dispatch_outcome(interaction_id, result)
         else:
             # Realtime not active, OR it was active but produced no output
@@ -353,6 +370,7 @@ def dispatch_turn(
                 **routing_kwargs,
             ))
             voice_metrics.bind_run(interaction_id, result.run_id)
+            dispatched_run_id = result.run_id or dispatched_run_id
             _note_dispatch_outcome(interaction_id, result)
     elif combined:
         if rt.route == ROUTE_NOISE_DROPPED:
@@ -369,3 +387,5 @@ def dispatch_turn(
 
     # Submit SER — uses the UNTRIMMED snapshot so laughter / sighs survive.
     decorator.submit_speech_emotion_from_session(ser_audio_buffer, user=user)
+
+    return dispatched_run_id

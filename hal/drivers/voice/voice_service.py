@@ -39,6 +39,7 @@ from hal.realtime.utils import StreamingResampler, pcm16_bytes_to_float32, resam
 from hal.drivers.voice._internal import config as voice_cfg
 from hal.drivers.voice._internal.audio_dsp import resample_to_stt, rms
 from hal.drivers.voice._internal.audio_recorder import ArecordStream
+from hal.drivers.voice._internal import realtime_turn as realtime_turn_mod
 from hal.drivers.voice._internal.realtime_turn import (
     _WaitFiller,
     ROUTE_DELEGATED,
@@ -286,7 +287,10 @@ class VoiceService:
                     and not tts_service.native_mode
                     and tts_service.realtime_feedback
                 ):
-                    self.feed_realtime_history(tts_service.last_spoken_text)
+                    self.feed_realtime_history(
+                        tts_service.last_spoken_text,
+                        run_id=tts_service.last_spoken_turn_id,
+                    )
 
             tts_service._on_speak_end = _tts_speak_end_with_realtime_feedback
 
@@ -295,12 +299,12 @@ class VoiceService:
             # hook is the only signal that the text existed — and a delegated
             # turn has already had save_main_handoff record the question with
             # "its spoken reply follows".
-            def _unspoken_reply_to_realtime(text: str) -> None:
-                self.feed_realtime_history(text, spoken=False)
+            def _unspoken_reply_to_realtime(text: str, turn_id: str = "") -> None:
+                self.feed_realtime_history(text, spoken=False, run_id=turn_id)
 
             tts_service._on_unspoken_reply = _unspoken_reply_to_realtime
 
-    def feed_realtime_history(self, text: str, spoken: bool = True) -> bool:
+    def feed_realtime_history(self, text: str, spoken: bool = True, run_id: str = "") -> bool:
         """Give the realtime agent a main-agent reply it must stay aware of.
 
         Two callers, one rule: the on_speak_end hook (the reply was played on
@@ -310,6 +314,9 @@ class VoiceService:
         second one the realtime session is left holding save_main_handoff's
         "its spoken reply follows" placeholder and no reply, so the next turn
         reasons from a question it believes went unanswered.
+
+        `run_id` says which os-server turn produced the reply, so the
+        main-handoff close can refuse a late reply belonging to an older one.
 
         `spoken` is False for that second caller. The persisted fragment is the
         full text either way — it is the processed result, and memory wants all
@@ -322,7 +329,7 @@ class VoiceService:
         # [TTS HISTORY] below only exists inside the CURRENT Gemini socket.
         # Persist OpenClaw's actual reply as well, or a recycle (idle recovery
         # / unresolved Gemini tool call) loses it before the next user turn.
-        self._realtime.save_main_agent_reply_fragment(text)
+        self._realtime.save_main_agent_reply_fragment(text, run_id=run_id)
         # Direction is INTO the realtime model: the reply (often an OpenClaw
         # one, not Gemini's own output) is pushed as history so it stays aware
         # of what the device said and won't repeat it. Not a Gemini-generated
@@ -340,6 +347,30 @@ class VoiceService:
         )
         self._realtime.send_text(f"[{marker}] {text}")
         return True
+
+    def resolve_main_handoff(self, run_id: str) -> bool:
+        """Close the handoff owned by `run_id` — its main-agent turn has ended.
+
+        The reply-text feed is not a reliable release: a suppressed, silent or
+        dropped reply never reaches TTS. This is the backstop that keeps a
+        delegated turn from holding the device for the whole TTL.
+        """
+        if not hal_config.REALTIME_ENABLED or not run_id:
+            return False
+        return self._realtime.close_main_handoff("lifecycle_end", run_id=run_id)
+
+    def release_main_handoff(self, reason: str) -> bool:
+        """Drop the in-flight main handoff (see MainHandoffTracker).
+
+        Called by the physical cancel gesture: the click takes the speaker from
+        the delegated turn, and "click, then say something new" is a documented
+        promise — the guard must not keep answering "still on it" for a reply
+        the user just cancelled. Returns whether a handoff was open.
+        """
+        if not hal_config.REALTIME_ENABLED:
+            return False
+        # No run id: the click drops whatever is open, by design.
+        return self._realtime.close_main_handoff(reason)
 
     def set_music_service(self, music_service) -> None:
         self._music = music_service
@@ -1173,6 +1204,21 @@ class VoiceService:
             logger.info("[live] wake focus closed — using STT to check the wake phrase")
             return "turn"
 
+        # #419: a delegated request is still with the main agent, so the model
+        # must not be handed this audio — it has no tool result for the pending
+        # task and would "resolve" it from memory. Take the STT path instead of
+        # opening a live session: no billed session, the model never sees the
+        # turn, and the transcript STT produces is what lets
+        # hold_for_main_handoff tell a nudge (rejected in silence) from a real
+        # utterance (one "still on it"). Deciding here, with only raw audio,
+        # could only guess.
+        #
+        # Placed AFTER the speech and wake-word gates on purpose: those decide
+        # whether this trigger is addressed to the device at all.
+        if self._realtime.main_handoff_open():
+            logger.info("[live] main handoff open — STT path this turn, no live session")
+            return "turn"
+
         self._realtime.prepare_turn()
 
         if not self._realtime.wait_until_available(5.0):
@@ -1425,6 +1471,7 @@ class VoiceService:
                         self._live_running = False
                         if out.transcript:
                             self._realtime.save_main_handoff(out.transcript)
+                            self._realtime.begin_main_handoff(out.transcript)
                         # A valid delegate tool is explicit task evidence even
                         # if the provider has not sent its input transcript yet.
                         key = out.user_turn_id or "delegate"
@@ -1434,7 +1481,7 @@ class VoiceService:
                         iid = metrics.interaction(key) or metrics.speech(
                             key, None, "provider_delegate",
                         )
-                        dispatch_turn(
+                        delegated_run_id = dispatch_turn(
                             self._decorator,
                             self._sensing_sender,
                             out.transcript or (opener["transcript"] if opener is not None and key == opener["key"] else ""),
@@ -1450,6 +1497,12 @@ class VoiceService:
                             voice_turn_type=classify_input(key, out.transcript or input_text.get(key, "")),
                         )
                         refresh_focus(key, out.transcript)
+                        # Bind the run that will answer this delegation, so a
+                        # LATER reply from an older run cannot release the
+                        # handoff we just opened (#419 regression). After
+                        # refresh_focus on purpose: bookkeeping must never come
+                        # between the user and their follow-up window.
+                        self._realtime.bind_main_handoff_run(delegated_run_id)
                         break
                     if isinstance(out, EndCallSignal):
                         if opener is not None:
@@ -1872,6 +1925,11 @@ class VoiceService:
         if (not voice_cfg.LIVE_MODE or not hal_config.REALTIME_ENABLED
                 or bypass_realtime(harness_voice) or not audio_buffer):
             return False, False
+        held = realtime_turn_mod.hold_for_main_handoff(self._realtime, transcript, interaction_id)
+        if held is not None:
+            # Consumed: the filler is the whole answer. Not dispatched to the
+            # main agent either — it already has the request it is working on.
+            return True, False
         opener = {"key": "", "consumed": False, "transcript": transcript,
                   "interaction_id": interaction_id, "voice_turn_type": voice_turn_type}
         try:
@@ -3027,10 +3085,18 @@ class VoiceService:
                 # next-session context.
                 if realtime_allowed and combined and not rt.handled and not downstream_dropped:
                     self._realtime.save_main_handoff(combined)
+                # ...but only an explicit delegation arms the #419 guard. The
+                # fallback turns above reach the main agent too, and their
+                # "request" is often a noise fragment ('you.', 'Okay.'); arming
+                # on those made the device answer the NEXT real request with
+                # "still on it" for up to the whole TTL.
+                opened_main_handoff = bool(rt.delegated and combined and not downstream_dropped)
+                if opened_main_handoff:
+                    self._realtime.begin_main_handoff(combined)
                 # A realtime connection failure or silent timeout is not a
                 # handled turn. Preserve the STT fallback so a wake-word command
                 # never disappears just because Gemini is temporarily down.
-                dispatch_turn(
+                dispatched_run_id = dispatch_turn(
                     self._decorator,
                     self._sensing_sender,
                     combined,
@@ -3046,6 +3112,10 @@ class VoiceService:
                     identity=turn_identity,
                     harness_voice=harness_voice,
                 )
+                if opened_main_handoff:
+                    # See the live delegate site: the handoff must know which
+                    # run answers it before any reply can arrive.
+                    self._realtime.bind_main_handoff_run(dispatched_run_id)
                 if (
                     combined
                     and not downstream_dropped

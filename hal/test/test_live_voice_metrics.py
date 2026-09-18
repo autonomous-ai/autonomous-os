@@ -57,6 +57,15 @@ def _pump(monkeypatch, kpi, batches, *, native=False, stop_delay_ms=0, harness_v
         def save_main_handoff(self, transcript):
             pass
 
+        def begin_main_handoff(self, transcript):
+            pass
+
+        def bind_main_handoff_run(self, run_id):
+            pass
+
+        def main_handoff_open(self):
+            return False
+
     class Speaker:
         owner = ""
         realtime_feedback = main_reply

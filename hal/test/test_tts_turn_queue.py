@@ -61,7 +61,7 @@ def test_dropped_older_turn_still_reaches_the_realtime_history_hook():
     service._latest_queue_turn_id = "new-run"
     service._latest_queue_turn_seq = 2
     unspoken = []
-    service._on_unspoken_reply = unspoken.append
+    service._on_unspoken_reply = lambda text, turn_id="": unspoken.append(text)
 
     service.speak_queue(
         "late old reply", turn_id="old-run", turn_seq=1, realtime_feedback=True
@@ -75,7 +75,7 @@ def test_conflicting_turn_sequence_also_reports_the_unspoken_reply():
     service._latest_queue_turn_id = "new-run"
     service._latest_queue_turn_seq = 2
     unspoken = []
-    service._on_unspoken_reply = unspoken.append
+    service._on_unspoken_reply = lambda text, turn_id="": unspoken.append(text)
 
     service.speak_queue(
         "same seq, other run", turn_id="old-run", turn_seq=2, realtime_feedback=True
@@ -91,7 +91,7 @@ def test_dropped_non_agent_speech_is_not_fed_to_realtime():
     service._latest_queue_turn_id = "new-run"
     service._latest_queue_turn_seq = 2
     unspoken = []
-    service._on_unspoken_reply = unspoken.append
+    service._on_unspoken_reply = lambda text, turn_id="": unspoken.append(text)
 
     service.speak_queue("dead-air filler", turn_id="old-run", turn_seq=1)
 
@@ -104,7 +104,7 @@ def test_failing_hook_does_not_break_the_drop_path():
     service._latest_queue_turn_id = "new-run"
     service._latest_queue_turn_seq = 2
 
-    def boom(_):
+    def boom(_text, _turn_id=""):
         raise RuntimeError("realtime socket is gone")
 
     service._on_unspoken_reply = boom

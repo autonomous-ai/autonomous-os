@@ -81,6 +81,9 @@ def test_noise_guard_drop_is_terminal_even_with_a_fabricated_transcript():
 class _RejectingRealtime:
     available = True
 
+    def main_handoff_open(self) -> bool:
+        return False
+
     def flush_output(self) -> None:
         pass
 

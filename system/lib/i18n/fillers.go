@@ -80,7 +80,13 @@ var toolFillers = map[string]map[string][]string{
 		// the start does not cover it. Repeating look_searching instead would
 		// ask "where are you?" twice, which sounds stuck rather than patient.
 		"look_still_searching": {"Still looking...", "Hmm..."},
-		"look_found":           {"There you are.", "Found you."},
+		// Spoken by HAL when the user nudges ("hey?", "well?") while the main
+		// agent is still working on a delegated request (#419). It replaces
+		// the realtime model's reply entirely — the realtime layer has no tool
+		// result and would answer from memory. Short, and no promise of what
+		// the answer is.
+		"main_still_working": {"Still on it.", "Hang on, almost there."},
+		"look_found":         {"There you are.", "Found you."},
 		// The resolution of an announced search that FAILED. look_searching
 		// promises to look; without this the lamp turns away, says "Where are
 		// you?", then goes quiet while the model describes whatever the camera
@@ -131,6 +137,7 @@ var toolFillers = map[string]map[string][]string{
 		"look_found":           {"À, đây rồi.", "Thấy rồi."},
 		"look_lost":            {"Không thấy rồi.", "Mất dấu rồi."},
 		"look_still_searching": {"Vẫn tìm đây...", "Hừm..."},
+		"main_still_working":   {"Vẫn đang làm đây.", "Chờ mình chút nữa nha."},
 		"look_capturing":       {"Để xem.", "Hừm..."},
 		"demo_intro":           {"Xem nè.", "Để mình khoe chút."},
 		"demo_left":            {"Hết cỡ bên trái.", "Sang trái hết mức."},
@@ -170,6 +177,7 @@ var toolFillers = map[string]map[string][]string{
 		// it then never mentioned again.
 		"look_searching":       {"在找...", "你在哪儿？"},
 		"look_still_searching": {"还在找...", "嗯..."},
+		"main_still_working":   {"还在弄。", "再等一下。"},
 		"look_found":           {"你在这儿。", "找到了。"},
 		"look_lost":            {"看不到你。", "跟丢了。"},
 		"look_capturing":       {"我看看。", "嗯..."},
@@ -209,6 +217,7 @@ var toolFillers = map[string]map[string][]string{
 	LangZhTW: {
 		"look_searching":       {"在找...", "你在哪兒？"},
 		"look_still_searching": {"還在找...", "嗯..."},
+		"main_still_working":   {"還在弄。", "再等一下。"},
 		"look_found":           {"你在這兒。", "找到了。"},
 		"look_lost":            {"看不到你。", "跟丟了。"},
 		"look_capturing":       {"我看看。", "嗯..."},

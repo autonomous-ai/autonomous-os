@@ -11,6 +11,7 @@ import (
 	migratepersona "go.autonomous.ai/os/system/agent/migrate_persona"
 	"go.autonomous.ai/os/system/domain"
 	"go.autonomous.ai/os/system/lib/flow"
+	"go.autonomous.ai/os/system/lib/hal"
 	sensinghttp "go.autonomous.ai/os/system/server/sensing/delivery/http"
 	"go.autonomous.ai/os/system/telemetry"
 )
@@ -345,6 +346,20 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 			sensinghttp.DefaultFillerManager.OnTurnStart(flowRunID)
 		} else if payload.Data.Phase == "end" || payload.Data.Phase == "error" {
 			h.agentGateway.SetBusy(false)
+			// Backstop for a dropped tool end: the turn is over, nothing in
+			// it is mid-tool any more (see openToolCalls).
+			h.clearOpenTools(flowRunID)
+			// Same idea one layer down: HAL may be holding new utterances for
+			// this run (#419 guard). Release it here rather than relying on the
+			// reply reaching TTS — a suppressed or dropped reply never does.
+			if runID := flowRunID; runID != "" {
+				go func() {
+					if err := hal.ResolveRealtimeHandoff(runID); err != nil {
+						slog.Debug("realtime handoff resolve failed",
+							"component", "agent", "run_id", runID, "error", err)
+					}
+				}()
+			}
 			// Cancel on error too — lifecycle.end has its own Cancel
 			// further down (just before TTS flush), but error skips
 			// that block, so clean filler state here.
@@ -649,6 +664,7 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 			// tools leave the timer running so the filler can fire
 			// during a long Bash/curl/Read.
 			sensinghttp.DefaultFillerManager.OnToolStart(flowRunID, toolArgs, toolName)
+			h.noteToolStart(flowRunID, payload.Data.ToolCallID)
 			summary = fmt.Sprintf("Tool %s started", toolName)
 			h.rememberToolArgs(payload.Data.ToolCallID, toolArgs)
 			// Text streamed before this tool call is narration, not the reply
@@ -748,6 +764,7 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 			// and only the very first Continuation ever fired —
 			// observable as "no filler during web_search" UX.
 			sensinghttp.DefaultFillerManager.OnToolEnd(flowRunID)
+			h.noteToolEnd(flowRunID, payload.Data.ToolCallID)
 			result := payload.ResultText()
 			if len(result) > 100 {
 				result = result[:100] + "..."

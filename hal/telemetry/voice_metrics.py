@@ -112,6 +112,7 @@ EXCL_REJECTED_NOISE = "rejected_noise"
 EXCL_REJECTED_NON_USER = "rejected_non_user"
 EXCL_NO_TRANSCRIPT = "no_transcript"
 EXCL_NOT_ADDRESSED = "not_addressed"
+EXCL_MAIN_PENDING = "main_agent_pending"  # held: main agent still working on a delegated request (#419)
 EXCL_SPEAKER_MUTED = "speaker_muted"
 EXCL_INTERRUPTED = "interrupted_by_user"
 # NOT an exclusion: the request was valid, the device simply failed to serve

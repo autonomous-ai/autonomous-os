@@ -203,6 +203,7 @@ func TestAllPoolKeysCoversEveryPool(t *testing.T) {
 	for _, want := range []string{
 		"look_searching", "look_still_searching", "look_found", "look_lost",
 		"look_capturing", "demo_intro", "demo_left", "demo_done", "web_search",
+		"main_still_working",
 	} {
 		if !seen[want] {
 			t.Errorf("AllPoolKeys() is missing %q — its phrases would never be prewarmed", want)
@@ -221,5 +222,22 @@ func TestEveryPoolKeyIsItsOwnNormalisedForm(t *testing.T) {
 		if got := FillerToolKey(k); got != k {
 			t.Errorf("pool key %q normalises to %q — it can never be looked up", k, got)
 		}
+	}
+}
+
+// The phrase HAL speaks when the user nudges while the main agent is still
+// working on a delegated request (#419). Must exist in every language: a
+// missing pool means the nudge is answered with silence, which reads as the
+// device having ignored the user.
+func TestMainStillWorkingPoolExistsInEveryLang(t *testing.T) {
+	for _, lang := range []string{LangEN, LangVI, LangZhCN, LangZhTW} {
+		if got := FillerForTool(lang, "main_still_working"); len(got) == 0 {
+			t.Errorf("lang %s: main_still_working pool is empty", lang)
+		}
+	}
+	// The key must survive FillerToolKey untouched — no suffix rule may
+	// rewrite it into web_search & co.
+	if got := FillerToolKey("main_still_working"); got != "main_still_working" {
+		t.Errorf("FillerToolKey rewrote the pool key to %q", got)
 	}
 }

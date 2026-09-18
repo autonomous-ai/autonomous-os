@@ -311,6 +311,26 @@ class RealtimeHistoryRequest(BaseModel):
     text: str = Field(
         ..., min_length=1, max_length=2000, description="Reply text to record as history"
     )
+    # Which os-server turn produced this reply. Used to decide whether it may
+    # close the in-flight main handoff: a late reply from a superseded run
+    # must not release a handoff opened for a newer request. Optional so an
+    # os-server that predates the field keeps working (the close then falls
+    # back to the old, unmatched behaviour).
+    run_id: str = Field("", max_length=200, description="os-server run id of the reply")
+
+
+class MainHandoffResolvedRequest(BaseModel):
+    """A main-agent run has ended, so whatever it was answering is answered.
+
+    Posted by os-server at lifecycle end/error. The reply-text feed cannot be
+    relied on to release the #419 guard: a reply that is suppressed (NO_REPLY),
+    hardware-only, or dropped (CoT leak — observed on green-lamp 18/9) never
+    reaches TTS, and the handoff would then hold the device for the whole TTL.
+    """
+
+    run_id: str = Field(
+        ..., min_length=1, max_length=200, description="os-server run id that ended"
+    )
 
 
 class SpeakRequest(BaseModel):
