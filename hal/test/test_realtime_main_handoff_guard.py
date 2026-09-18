@@ -89,15 +89,30 @@ def test_delegation_opens_the_handoff():
     o = _orchestrator()
     assert not o.main_handoff_open()
 
-    o.save_main_handoff("Find my pen")
+    o.begin_main_handoff("Find my pen")
 
     assert o.main_handoff_open()
     assert o.main_handoff_transcript() == "Find my pen"
 
 
+def test_memory_write_alone_does_not_arm_the_guard():
+    """save_main_handoff runs for every turn reaching the main agent, including
+    the no-output fallback whose "request" is often a noise fragment. Arming
+    there made 'you.' stonewall the next real request (green-lamp, 18/9)."""
+    o = _orchestrator()
+
+    o.save_main_handoff("you.")
+
+    assert not o.main_handoff_open()
+    assert o._context.turns == [(
+        "you.",
+        "[This request was handed to the main agent; its spoken reply follows.]",
+    )]
+
+
 def test_main_agent_reply_closes_the_handoff():
     o = _orchestrator()
-    o.save_main_handoff("Find my pen")
+    o.begin_main_handoff("Find my pen")
 
     o.save_main_agent_reply_fragment("Found it, about fifty degrees to your right.")
 
@@ -106,7 +121,7 @@ def test_main_agent_reply_closes_the_handoff():
 
 def test_blank_reply_fragment_does_not_close():
     o = _orchestrator()
-    o.save_main_handoff("Find my pen")
+    o.begin_main_handoff("Find my pen")
 
     o.save_main_agent_reply_fragment("   ")
 
@@ -116,14 +131,14 @@ def test_blank_reply_fragment_does_not_close():
 def test_close_main_handoff_reports_whether_one_was_open():
     o = _orchestrator()
     assert o.close_main_handoff("click") is False
-    o.save_main_handoff("Find my pen")
+    o.begin_main_handoff("Find my pen")
     assert o.close_main_handoff("click") is True
     assert not o.main_handoff_open()
 
 
 def test_filler_slot_goes_through_the_tracker():
     o = _orchestrator()
-    o.save_main_handoff("Find my pen")
+    o.begin_main_handoff("Find my pen")
     assert o.take_main_handoff_filler_slot() is True
     assert o.take_main_handoff_filler_slot() is False  # inside the 4 s gap
 
@@ -173,11 +188,11 @@ def test_binding_is_ignored_once_the_handoff_is_closed():
 def test_the_reported_regression_sequence(monkeypatch):
     """ask A → click → ask B → A's late reply must not release B."""
     o = _orchestrator()
-    o.save_main_handoff("Find my pen")
+    o.begin_main_handoff("Find my pen")
     o.bind_main_handoff_run("run-A")
 
     o.close_main_handoff("click")            # user clicks: A is dropped
-    o.save_main_handoff("Turn off the TV")   # B delegated
+    o.begin_main_handoff("Turn off the TV")  # B delegated
     o.bind_main_handoff_run("run-B")
 
     o.save_main_agent_reply_fragment("Found it at fifty-one degrees.", run_id="run-A")
@@ -192,7 +207,7 @@ def test_the_reported_regression_sequence(monkeypatch):
 def test_a_reply_without_a_run_id_still_closes():
     """An os-server that predates the field must not strand the guard."""
     o = _orchestrator()
-    o.save_main_handoff("Find my pen")
+    o.begin_main_handoff("Find my pen")
     o.bind_main_handoff_run("run-A")
 
     o.save_main_agent_reply_fragment("Found it.")
@@ -215,8 +230,29 @@ def test_a_genuine_refusal_is_logged(caplog):
     import logging
 
     o = _orchestrator()
-    o.save_main_handoff("Find my pen")
+    o.begin_main_handoff("Find my pen")
     o.bind_main_handoff_run("run-B")
     with caplog.at_level(logging.INFO, logger="hal.realtime"):
         assert o.close_main_handoff("main_reply", run_id="run-A") is False
     assert "kept open" in caplog.text
+
+
+def test_lifecycle_end_releases_a_handoff_whose_reply_never_spoke():
+    """The reply feed is not a reliable release: on green-lamp (18/9) the
+    agent's reply was dropped as a CoT leak, so nothing closed the handoff and
+    the next real utterance was stonewalled. lifecycle_end is the backstop."""
+    o = _orchestrator()
+    o.begin_main_handoff("Find my pen")
+    o.bind_main_handoff_run("run-A")
+
+    assert o.close_main_handoff("lifecycle_end", run_id="run-A") is True
+    assert not o.main_handoff_open()
+
+
+def test_lifecycle_end_of_another_run_leaves_the_handoff_alone():
+    o = _orchestrator()
+    o.begin_main_handoff("Find my pen")
+    o.bind_main_handoff_run("run-A")
+
+    assert o.close_main_handoff("lifecycle_end", run_id="run-B") is False
+    assert o.main_handoff_open()

@@ -1800,22 +1800,35 @@ class RealtimeOrchestrator:
         self._context.add_turn(user_text, agent_text)
 
     def save_main_handoff(self, user_text: str) -> None:
-        """Persist a user turn that the main agent will answer, and mark the
-        handoff as in flight.
+        """Persist a user turn that the main agent will answer.
 
         The live provider retains the audio turn only while its current session
         survives. Record the handoff before OpenClaw replies so a Gemini session
         recycle cannot make the device forget what the user asked.
 
-        The in-flight mark is what stops the NEXT utterance from being answered
-        by the realtime model out of this very memory (#419): until the main
-        agent's reply comes back through save_main_agent_reply_fragment, the
-        entry points answer with a filler instead of committing audio.
+        Memory only. Arming the #419 guard is `begin_main_handoff`, and the two
+        are deliberately separate: this runs for EVERY turn that reaches the
+        main agent, including the no-output fallback, where the "request" is
+        often a fragment STT invented out of noise.
         """
         self.save_turn(
             user_text=user_text,
             agent_text="[This request was handed to the main agent; its spoken reply follows.]",
         )
+
+    def begin_main_handoff(self, user_text: str) -> None:
+        """Mark a DELEGATED request as in flight (the #419 guard).
+
+        Until the main agent's reply comes back, the realtime entry points
+        answer a new utterance with a filler instead of committing it to the
+        model, which would otherwise "resolve" the pending task from memory.
+
+        Only an explicit delegation may arm this. It used to be armed wherever
+        `save_main_handoff` ran, which also covers the realtime-no-output
+        fallback — so on green-lamp the fragments 'you.', 'Okay.' and 'Hello?'
+        each opened a handoff (0 of the 3 were delegations, 18/9) and the next
+        real request was met with "still on it" instead of an answer.
+        """
         self._main_handoff.open(user_text, now=time.monotonic())
         logger.info("[realtime] main handoff open: %r", user_text[:100])
 

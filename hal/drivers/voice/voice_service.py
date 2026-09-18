@@ -346,6 +346,17 @@ class VoiceService:
         self._realtime.send_text(f"[{marker}] {text}")
         return True
 
+    def resolve_main_handoff(self, run_id: str) -> bool:
+        """Close the handoff owned by `run_id` — its main-agent turn has ended.
+
+        The reply-text feed is not a reliable release: a suppressed, silent or
+        dropped reply never reaches TTS. This is the backstop that keeps a
+        delegated turn from holding the device for the whole TTL.
+        """
+        if not hal_config.REALTIME_ENABLED or not run_id:
+            return False
+        return self._realtime.close_main_handoff("lifecycle_end", run_id=run_id)
+
     def release_main_handoff(self, reason: str) -> bool:
         """Drop the in-flight main handoff (see MainHandoffTracker).
 
@@ -1458,6 +1469,7 @@ class VoiceService:
                         self._live_running = False
                         if out.transcript:
                             self._realtime.save_main_handoff(out.transcript)
+                            self._realtime.begin_main_handoff(out.transcript)
                         # A valid delegate tool is explicit task evidence even
                         # if the provider has not sent its input transcript yet.
                         key = out.user_turn_id or "delegate"
@@ -3058,11 +3070,16 @@ class VoiceService:
                 # persist the user's request before sending it downstream so a
                 # session replacement cannot erase the handoff from realtime's
                 # next-session context.
-                opened_main_handoff = (
-                    realtime_allowed and combined and not rt.handled and not downstream_dropped
-                )
-                if opened_main_handoff:
+                if realtime_allowed and combined and not rt.handled and not downstream_dropped:
                     self._realtime.save_main_handoff(combined)
+                # ...but only an explicit delegation arms the #419 guard. The
+                # fallback turns above reach the main agent too, and their
+                # "request" is often a noise fragment ('you.', 'Okay.'); arming
+                # on those made the device answer the NEXT real request with
+                # "still on it" for up to the whole TTL.
+                opened_main_handoff = bool(rt.delegated and combined and not downstream_dropped)
+                if opened_main_handoff:
+                    self._realtime.begin_main_handoff(combined)
                 # A realtime connection failure or silent timeout is not a
                 # handled turn. Preserve the STT fallback so a wake-word command
                 # never disappears just because Gemini is temporarily down.

@@ -370,9 +370,14 @@ bật, cùng lý do với đường phát: chỉ câu trả lời thật của a
 
 ### Nudge khi agent chính vẫn đang xử lý (#419)
 
-`save_main_handoff` đồng thời mở một **handoff đang bay** trên orchestrator
-(`hal/realtime/main_handoff.py`, `MainHandoffTracker`). Khi nó còn mở, không
-điểm vào realtime nào commit audio của user vào model:
+Một lần delegate tường minh sẽ mở một **handoff đang bay** trên orchestrator
+(`begin_main_handoff` → `hal/realtime/main_handoff.py`, `MainHandoffTracker`).
+Chỉ delegate mới được phép bật nó — `save_main_handoff` (ghi memory) chạy cho
+MỌI turn đi tới agent chính, kể cả nhánh fallback realtime-no-output mà "yêu
+cầu" thường chỉ là mẩu chữ STT bịa ra từ tiếng ồn. Bật ở đó khiến `'you.'`,
+`'Okay.'` và `'Hello?'` mỗi cái mở một handoff trên green-lamp (0/3 là delegate,
+18/9) và yêu cầu thật kế tiếp bị đáp "vẫn đang làm" thay vì được phục vụ. Khi
+handoff còn mở, không điểm vào realtime nào commit audio của user vào model:
 
 | Điểm vào | Thay vào đó xảy ra gì |
 |---|---|
@@ -403,12 +408,18 @@ trigger có hướng tới thiết bị hay không.
   answered only that it is still on it.]` — user đã nói một điều có thật trong lúc
   chờ, và im lặng lúc đó bị đọc là bị phớt lờ.
 
-Handoff đóng khi câu trả lời của agent chính được feed lại
-(`feed_realtime_history` → `save_main_agent_reply_fragment`, dù có nói ra hay
-không), khi user click (`button_actions._cancel_agent_speech` →
+Handoff đóng khi run của agent chính kết thúc — os-server POST
+`/voice/realtime/handoff-resolved {"run_id": ...}` lúc lifecycle end/error
+(`hal.ResolveRealtimeHandoff`) — khi câu trả lời của nó được feed lại
+(`feed_realtime_history` → `save_main_agent_reply_fragment`), khi user click
+(`button_actions._cancel_agent_speech` →
 `VoiceService.release_main_handoff("click")`), hoặc sau
-`HAL_REALTIME_MAIN_HANDOFF_TTL_S` (mặc định 120 s) nếu không có cái nào tới — một
-turn NO_REPLY hay chỉ chạy phần cứng không được phép giữ thiết bị câm mãi mãi.
+`HAL_REALTIME_MAIN_HANDOFF_TTL_S` (mặc định 120 s).
+
+Cú POST lúc lifecycle end mới là chốt chính; chỉ dựa vào feed câu trả lời là
+không đủ tin cậy. Một reply bị chặn (NO_REPLY), chỉ chạy phần cứng, hoặc bị bỏ
+thì không bao giờ tới TTS — trên green-lamp reply bị bỏ vì CoT leak, không gì
+đóng handoff, và câu nói thật kế tiếp bị chặn họng. TTL chỉ là phương án cuối.
 
 **Một câu trả lời chỉ đóng được đúng handoff của nó.** Handoff được gắn với run
 id phía os-server do `dispatch_turn` trả về, và mọi đường feed đều mang theo run

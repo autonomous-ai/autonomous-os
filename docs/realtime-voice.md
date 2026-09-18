@@ -382,8 +382,14 @@ may enter the model's context, never a dropped filler or system notice.
 
 ### Nudges while the main agent is still working (#419)
 
-`save_main_handoff` also opens an **in-flight handoff** on the orchestrator
-(`hal/realtime/main_handoff.py`, `MainHandoffTracker`). While it is open, no
+An explicit delegation opens an **in-flight handoff** on the orchestrator
+(`begin_main_handoff` → `hal/realtime/main_handoff.py`, `MainHandoffTracker`).
+Only a delegation arms it — `save_main_handoff` (the memory write) runs for
+every turn that reaches the main agent, including the realtime-no-output
+fallback whose "request" is often a fragment STT invented out of noise. Arming
+there meant `'you.'`, `'Okay.'` and `'Hello?'` each opened a handoff on
+green-lamp (0 of the 3 were delegations, 18/9) and the next real request was
+answered "still on it" instead of being served. While a handoff is open, no
 realtime entry point commits the user's audio to the model:
 
 | Entry point | What happens instead |
@@ -416,12 +422,19 @@ default 3):
   answered only that it is still on it.]` — the user said something real while
   waiting, and silence there reads as being ignored.
 
-The handoff closes when the main agent's reply is fed back
-(`feed_realtime_history` → `save_main_agent_reply_fragment`, spoken or not),
-when the user clicks (`button_actions._cancel_agent_speech` →
+The handoff closes when the main agent's run ends — os-server posts
+`POST /voice/realtime/handoff-resolved {"run_id": ...}` at lifecycle end/error
+(`hal.ResolveRealtimeHandoff`) — when its reply is fed back
+(`feed_realtime_history` → `save_main_agent_reply_fragment`), when the user
+clicks (`button_actions._cancel_agent_speech` →
 `VoiceService.release_main_handoff("click")`), or after
-`HAL_REALTIME_MAIN_HANDOFF_TTL_S` (default 120 s) if neither arrives — a
-NO_REPLY or hardware-only turn must not hold the device mute forever.
+`HAL_REALTIME_MAIN_HANDOFF_TTL_S` (default 120 s).
+
+The lifecycle-end post is the load-bearing one; the reply feed alone is not a
+reliable release. A reply that is suppressed (NO_REPLY), hardware-only, or
+dropped never reaches TTS — on green-lamp the agent's reply was discarded as a
+CoT leak, nothing closed the handoff, and the next real utterance was
+stonewalled. The TTL is only the last resort.
 
 **A reply only closes the handoff it belongs to.** The handoff is bound to the
 os-server run id that `dispatch_turn` returns, and every feed path carries the

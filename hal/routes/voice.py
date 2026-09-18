@@ -18,6 +18,7 @@ import hal.app_state as state
 from hal.telemetry import tts_hooks
 from hal.config import AUDIO_INPUT_ALSA, get_tts_speed, TTS_VOICE, TTS_INSTRUCTIONS
 from hal.models import (
+    MainHandoffResolvedRequest,
     RealtimeHistoryRequest,
     SpeakRequest,
     StatusResponse,
@@ -419,6 +420,20 @@ def realtime_history(req: RealtimeHistoryRequest):
         req.text, spoken=False, run_id=req.run_id,
     )
     return {"status": "ok" if fed else "skipped"}
+
+
+@router.post("/voice/realtime/handoff-resolved", response_model=StatusResponse)
+def realtime_handoff_resolved(req: MainHandoffResolvedRequest):
+    """Release the in-flight main handoff for a run that has finished.
+
+    os-server calls this at lifecycle end/error. Id-matched, so a run that does
+    not own the handoff changes nothing. Returns skipped when realtime is off
+    or nothing was open — this is best-effort bookkeeping, never an error.
+    """
+    if state.voice_service is None:
+        return {"status": "skipped"}
+    closed = state.voice_service.resolve_main_handoff(req.run_id)
+    return {"status": "ok" if closed else "skipped"}
 
 
 @router.post("/voice/speak-queue", response_model=StatusResponse)

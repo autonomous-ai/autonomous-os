@@ -11,6 +11,7 @@ import (
 	migratepersona "go.autonomous.ai/os/system/agent/migrate_persona"
 	"go.autonomous.ai/os/system/domain"
 	"go.autonomous.ai/os/system/lib/flow"
+	"go.autonomous.ai/os/system/lib/hal"
 	sensinghttp "go.autonomous.ai/os/system/server/sensing/delivery/http"
 	"go.autonomous.ai/os/system/telemetry"
 )
@@ -348,6 +349,17 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 			// Backstop for a dropped tool end: the turn is over, nothing in
 			// it is mid-tool any more (see openToolCalls).
 			h.clearOpenTools(flowRunID)
+			// Same idea one layer down: HAL may be holding new utterances for
+			// this run (#419 guard). Release it here rather than relying on the
+			// reply reaching TTS — a suppressed or dropped reply never does.
+			if runID := flowRunID; runID != "" {
+				go func() {
+					if err := hal.ResolveRealtimeHandoff(runID); err != nil {
+						slog.Debug("realtime handoff resolve failed",
+							"component", "agent", "run_id", runID, "error", err)
+					}
+				}()
+			}
 			// Cancel on error too — lifecycle.end has its own Cancel
 			// further down (just before TTS flush), but error skips
 			// that block, so clean filler state here.
