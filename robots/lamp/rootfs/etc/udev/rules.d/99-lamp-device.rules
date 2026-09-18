@@ -26,5 +26,8 @@ SUBSYSTEM=="sound", ACTION=="change", ATTRS{idVendor}=="4c4a", ATTRS{idProduct}=
 # Speaker: TTGK Technology -> ALSA card device_speaker
 SUBSYSTEM=="sound", ACTION=="change", ATTRS{idVendor}=="3302", ATTRS{idProduct}=="1292", ATTR{id}="device_speaker"
 
-# Sensing mic: C-Media Audio Adapter (Unitek Y-247A) -> ALSA card device_micro1
-SUBSYSTEM=="sound", ACTION=="change", ATTRS{idVendor}=="0d8c", ATTRS{idProduct}=="0014", ATTR{id}="device_micro1"
+# C-Media Audio Adapter (Unitek Y-247A) -> ALSA card device_cmedia. One card,
+# two roles: its capture side is the sensing mic (alias device_micro1) and its
+# playback side is the speaker (alias device_speaker) — both in /etc/asound.conf.
+# A card gets exactly one udev id, so the id is the HARDWARE, aliases are ROLES.
+SUBSYSTEM=="sound", ACTION=="change", ATTRS{idVendor}=="0d8c", ATTRS{idProduct}=="0014", ATTR{id}="device_cmedia"
