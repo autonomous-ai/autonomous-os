@@ -1,7 +1,7 @@
 # Keep PulseAudio away from all lamp audio devices so HAL can own them.
 # Tracked source: robots/lamp/rootfs/etc/udev/rules.d/ (see 99-lamp-device.rules).
+# device_speaker is an ALSA alias onto device_micro1, not a card id, so it has
+# no line here.
 SUBSYSTEM=="sound", ATTR{id}=="sndi2s4", ENV{PULSE_IGNORE}="1"
-SUBSYSTEM=="sound", ATTR{id}=="device_micro2", ENV{PULSE_IGNORE}="1"
-SUBSYSTEM=="sound", ATTR{id}=="device_speaker", ENV{PULSE_IGNORE}="1"
-SUBSYSTEM=="sound", ATTR{id}=="device_micro3", ENV{PULSE_IGNORE}="1"
 SUBSYSTEM=="sound", ATTR{id}=="device_micro1", ENV{PULSE_IGNORE}="1"
+SUBSYSTEM=="sound", ATTR{id}=="device_micro2", ENV{PULSE_IGNORE}="1"

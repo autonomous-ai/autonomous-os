@@ -354,6 +354,25 @@ check_device_profile() {
   ! device_was_active os-server || { systemctl is-active --quiet os-server && wait_for_url http://127.0.0.1:5000/api/health/live 60; }
 }
 
+# The rootfs overlay ships udev rules (robots/<type>/rootfs/etc/udev/rules.d/)
+# that name sound cards and symlink the camera and servo by vid:pid. udev only
+# applies rules on device events, so a rule that arrives by OTA does nothing
+# for hardware that enumerated at boot — until the next reboot. Device-observed
+# 18/09/2026 on lamp-4ace: the ZVCAI camera rule landed, /dev/device-camera
+# never appeared, and HAL fell back to camera index 0. Reload and re-trigger
+# the subsystems the role rules use. Called while hal and os-server are still
+# stopped, so a sound-card rename cannot collide with an open PCM. Best-effort:
+# udev trouble must not fail (and roll back) an otherwise good profile update.
+reload_udev_rules() {
+  command -v udevadm >/dev/null 2>&1 || return 0
+  udevadm control --reload-rules 2>/dev/null || true
+  udevadm trigger --action=change \
+    --subsystem-match=sound --subsystem-match=video4linux --subsystem-match=tty \
+    2>/dev/null || true
+  udevadm settle --timeout=10 2>/dev/null || true
+  return 0
+}
+
 snapshot_device_rootfs() {
   # Save every file the old or staged profile can overlay, including an explicit
   # absent marker so rollback removes files introduced only by the failed OTA.
@@ -1159,7 +1178,7 @@ elif [ "$APP" = "device" ]; then
   # file and HAL kept running the old value. Do not re-add the backup; if a
   # value has to differ per unit, it belongs in that unit's profile in the repo.
   # Selected hardware overrides are applied above before snapshot/publication.
-  if ! { [ ! -d "$DEST/rootfs" ] || cp -a "$DEST/rootfs/." /; } \
+  if ! { [ ! -d "$DEST/rootfs" ] || { cp -a "$DEST/rootfs/." / && reload_udev_rules; }; } \
       || ! restore_device_service_state || ! check_device_profile; then
     echo "device profile apply or health check failed; restoring the known-good profile" >&2
     systemctl stop os-server 2>/dev/null || true

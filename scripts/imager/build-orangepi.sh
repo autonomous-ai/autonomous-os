@@ -1139,16 +1139,15 @@ load-module module-native-protocol-unix auth-anonymous=1 socket=/tmp/pulse-anon-
 PULSE_EOF
 fi
 
-# 91-pulseaudio-hal-ignore.rules — hardware team bakes udev rules into the base image.
-# cat > /etc/udev/rules.d/91-pulseaudio-hal-ignore.rules <<'UDEV_EOF'
-# # Keep PulseAudio away from the onboard I2S codecs so hal can own them.
-# SUBSYSTEM=="sound", ATTR{id}=="sndi2s4", ENV{PULSE_IGNORE}="1"
-# SUBSYSTEM=="sound", ATTR{id}=="wm8960soundcard", ENV{PULSE_IGNORE}="1"
-# UDEV_EOF
+# udev role rules (99-<type>-device.rules) and the PulseAudio ignore list
+# (91-pulseaudio-hal-ignore.rules) are NOT written here. They ship in the
+# device profile's rootfs overlay — robots/<type>/rootfs/etc/udev/rules.d/ —
+# which Phase 3 copies onto / and every device-profile OTA re-applies. Edit
+# them in the repo, not here and not on a device.
 
 # ── ALSA ─────────────────────────────────────────────────────────────────────
-# /etc/asound.conf is hardware-team-owned and baked into the base image.
-# It is NOT shipped in the device profile overlay.
+# /etc/asound.conf ships the same way: robots/<type>/rootfs/etc/asound.conf,
+# applied in Phase 3. Not written here.
 
 # ── disable conflicting vendor services ──────────────────────────────────────
 echo "[stage] mask conflicting vendor services"
@@ -1180,8 +1179,15 @@ fi
 
 # ── DT overlays (OrangePi 4 Pro A733): SPI3 for WS2812 LED ring, I2C0 (TWI0) ─
 echo "[stage] enable SPI3 + I2C0 overlays"
+# Append each overlay only if it is not already on the line. The lamp base
+# image already carries overlays=spi3-cs0-cs1-spidev, and a blind append
+# shipped lamp-4ace with "spi3-cs0-cs1-spidev spi3-cs0-cs1-spidev" — every
+# rebuild on a reused base stacks another copy.
 if grep -q "^overlays=" /boot/orangepiEnv.txt 2>/dev/null; then
-  sed -i "s/^overlays=.*/& spi3-cs0-cs1-spidev i2c0/" /boot/orangepiEnv.txt
+  for ov in spi3-cs0-cs1-spidev i2c0; do
+    grep -qE "^overlays=(.*[[:space:]])?\${ov}([[:space:]]|\$)" /boot/orangepiEnv.txt \\
+      || sed -i "s/^overlays=.*/& \${ov}/" /boot/orangepiEnv.txt
+  done
 else
   echo "overlays=spi3-cs0-cs1-spidev i2c0" >> /boot/orangepiEnv.txt
 fi
