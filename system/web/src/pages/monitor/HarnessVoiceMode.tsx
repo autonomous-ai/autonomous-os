@@ -71,8 +71,8 @@ export function HarnessVoiceMode({ connected }: { connected: boolean }) {
       <strong>Harness-only voice</strong>
     </label>
     <p style={{ margin: 0, lineHeight: 1.5, color: "var(--lm-text-dim)" }}>
-      Send your spoken requests directly to the agent focused in the Harness app. Replies play on the device as usual.
-      This mode turns off when the device service restarts. Text chat keeps its normal behavior.
+      Send your spoken requests directly to the agent focused in the Harness app. Replies play on the robot as usual.
+      This mode turns off when the robot service restarts. Text chat keeps its normal behavior.
     </p>
     <div role="status" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
       <strong>Focused Harness agent</strong>
@@ -83,7 +83,7 @@ export function HarnessVoiceMode({ connected }: { connected: boolean }) {
         <span style={{ color: "var(--lm-text-dim)" }}>Synced from the Harness app, including while voice mode is off.</span>
       </> : <span>{mode ? "Waiting for focus from Harness. Open an agent pane in the Harness app. A CLI that supports focus sync is required." : "Loading Harness focus…"}</span>}
       {mode?.enabled && (!connected || !mode.focusAvailable) && <span>
-        Voice requests cannot be delivered until a focused agent is available. You can turn this mode off to use the device agent.
+        Voice requests cannot be delivered until a focused agent is available. You can turn this mode off to use the robot agent.
       </span>}
     </div>
     {mode?.pending && <div role="status" style={{ display: "flex", flexDirection: "column", gap: 8 }}>

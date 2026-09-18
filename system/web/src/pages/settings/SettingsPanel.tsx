@@ -541,7 +541,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
         baseUrl: !!ttsBaseUrl,
         choice: ttsChoiceToSave,
       });
-      toast.success("Config saved — restart your device for changes to take effect.");
+      toast.success("Config saved — restart your robot for changes to take effect.");
       // Reset baseline so Save button goes back to disabled until next edit.
       // Non-secret fields adopt their current values as the new baseline.
       setBaseline({

@@ -268,7 +268,7 @@ export function OverviewSection({
             }} aria-hidden><LayoutDashboard size={22} /></div>
             <div style={{ minWidth: 0 }}>
               <div style={{ fontSize: 19, fontWeight: 700, color: "var(--lm-text)", letterSpacing: "-0.3px", lineHeight: 1.2 }}>
-                Device Overview
+                Robot Overview
               </div>
               <div style={{ fontSize: 12, color: "var(--lm-text-dim)", marginTop: 2 }}>
                 Live status across agent, network, presence & hardware
@@ -433,7 +433,7 @@ export function OverviewSection({
                     {audio?.max_volume != null && (
                       <span
                         style={{ fontSize: 11, fontWeight: 600, color: "var(--lm-text-dim)" }}
-                        title="Speaker ceiling from this device's SAFETY.md (audio.max_volume). Enforced in HAL for every caller, not just this slider."
+                        title="Speaker ceiling from this robot's SAFETY.md (audio.max_volume). Enforced in HAL for every caller, not just this slider."
                       >
                         ceiling {audio.max_volume}%
                       </span>
@@ -512,7 +512,7 @@ export function OverviewSection({
               </div>
               <div style={{ minWidth: 0 }}>
                 <div style={{ fontSize: 10, color: "var(--lm-text-dim)", marginBottom: 5, textTransform: "uppercase", letterSpacing: "0.08em" }}>
-                  Your device is feeling
+                  Your robot is feeling
                 </div>
                 {/* Keep the state name on the theme's high-contrast text colour.
                     Preset colours can be deliberately dark (e.g. sleepy), so
@@ -911,20 +911,20 @@ function MicLevelBar({ muted, onPlayback }: { muted: boolean; onPlayback?: (tts:
           {muted ? (
             <span style={{ fontSize: 10, color: "var(--lm-text-muted)" }}>muted</span>
           ) : (
-            <span title="live RMS / VAD threshold (speech must pass it to wake the device)"
+            <span title="live RMS / VAD threshold (speech must pass it to wake the robot)"
               style={{ fontSize: 11, fontWeight: 700, color: "var(--lm-amber)", fontFamily: "monospace" }}>
               <span ref={levelTextRef}>0</span>{threshold != null ? ` / ${threshold}` : ""}
             </span>
           )}
         </div>
         <LevelTrack fillRef={fillRef} dim={muted}
-          tick={muted ? null : threshold} tickTitle="VAD threshold — speech must pass this level to wake the device" />
+          tick={muted ? null : threshold} tickTitle="VAD threshold — speech must pass this level to wake the robot" />
       </div>
       {hasNoiseMic && (
         <div>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
             <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--lm-text-dim)" }}>Noise mic</span>
-            <span title="last sample RMS / loud-noise threshold (samples past it startle the device)"
+            <span title="last sample RMS / loud-noise threshold (samples past it startle the robot)"
               style={{ fontSize: 11, fontWeight: 700, color: "var(--lm-amber)", fontFamily: "monospace" }}>
               <span ref={noiseTextRef}>—</span>{noiseThreshold != null ? ` / ${noiseThreshold}` : ""}
             </span>

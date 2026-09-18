@@ -89,7 +89,7 @@ export function HarnessCard() {
   };
 
   const handleUnpair = async () => {
-    if (busy || !window.confirm("Disconnect Harness and remove this computer’s pairing from the device?")) return;
+    if (busy || !window.confirm("Disconnect Harness and remove this computer’s pairing from the robot?")) return;
     setBusy(true);
     setError(null);
     try {
@@ -154,7 +154,7 @@ export function HarnessCard() {
       {pairing && <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         <span style={{ fontSize: 12, color: "var(--lm-text-dim)" }}>
           Open Harness Desktop → Settings → Devices on your computer.
-          Select this Autonomous device and enter the code below.
+          Select this Autonomous robot and enter the code below.
         </span>
         <strong aria-label="Pairing code" style={{ fontSize: 24, letterSpacing: "0.18em" }}>
           {remaining > 0 && pairInfo?.code ? pairInfo.code : "Expired"}
@@ -170,7 +170,7 @@ export function HarnessCard() {
         <form onSubmit={handlePair} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <p style={{ margin: 0, fontSize: 12, lineHeight: 1.5, color: "var(--lm-text-dim)" }}>
             Generate a code here, then open Harness Desktop → Settings → Devices on your computer.
-            Select this Autonomous device and enter the code. Keep both on the same local network.
+            Select this Autonomous robot and enter the code. Keep both on the same local network.
           </p>
           <button type="submit" disabled={busy}
             style={{ ...buttonStyle, color: "var(--lm-green)" }}>{busy ? "Preparing…" : "Generate pairing code"}</button>
