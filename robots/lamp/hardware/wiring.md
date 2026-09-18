@@ -67,7 +67,7 @@ Feetech STS3215 servos on a TTL daisy chain, driven by a USB-to-TTL servo contro
 
 ## Speaker amplifier (PAM8610 v2) + 2× 3 W speakers
 
-Stereo class-D amp driven by a **USB audio board (DAC)** plugged into the SBC. The onboard codec → PAM8610 path was hissing / picking up static, so we moved the audio source off the SBC's onboard codec entirely. The onboard codec is no longer used for audio at all: sensing moved to a USB mic on 2026-09-17 (see Microphones).
+Stereo class-D amp driven by a **USB audio board (DAC)** plugged into the SBC — since 2026-09-18 this is the line-out of the C-Media adapter (`0d8c:0014`) that also carries the sensing mic; the earlier TTGK USB speaker is no longer fitted. The onboard codec → PAM8610 path was hissing / picking up static, so we moved the audio source off the SBC's onboard codec entirely. The onboard codec is no longer used for audio at all: sensing moved to a USB mic on 2026-09-17 (see Microphones).
 
 Signal chain:
 
@@ -79,7 +79,7 @@ SBC → USB → USB audio board (DAC) → 3.5 mm line-out → PAM8610 L/R in →
 |---|---|---|
 | Audio source | USB audio board (line-out) | USB audio board (line-out) |
 | Connection | USB-A | USB-A |
-| ALSA alias | `plug:device_speaker` (mapped to USB DAC card) | `plug:device_speaker` (mapped to USB DAC card) |
+| ALSA alias | `plug:device_speaker` (mapped to USB DAC card) | `plug:device_speaker` (ALSA alias onto card `device_cmedia`, the C-Media adapter) |
 | DAC out → amp | 3.5 mm TRS → PAM8610 L/R inputs (twisted pair, short run) | same |
 | Speaker A | PAM8610 L+ / L− → speaker A | same |
 | Speaker B | PAM8610 R+ / R− → speaker B | same |
@@ -106,7 +106,7 @@ The OPENAICAM audio endpoint (`device_micro3`) is not selected: a direct tone
 test returned near-digital silence, so it needs a hardware or firmware repair
 before it can be used for voice capture.
 
-> Mic 1 was the onboard ES8389 MEMS mic until 2026-09-17; it is now a C-Media USB adapter renamed to `device_micro1` by a udev rule keyed on `0d8c:0014` (`/etc/udev/rules.d/99-lamp-device.rules`, tracked at `robots/lamp/rootfs/etc/udev/rules.d/`). No desoldering is needed anymore.
+> Mic 1 was the onboard ES8389 MEMS mic until 2026-09-17; it is now the capture side of the C-Media USB adapter (card `device_cmedia` by a udev rule keyed on `0d8c:0014`, alias `device_micro1` in asound.conf) (`/etc/udev/rules.d/99-lamp-device.rules`, tracked at `robots/lamp/rootfs/etc/udev/rules.d/`). No desoldering is needed anymore.
 
 > ALSA aliases live in `/etc/asound.conf`. Their tracked source is `robots/lamp/rootfs/etc/asound.conf`, installed onto `/` at image build and on every device-profile OTA. Cards are addressed by **name**, not index, since USB card numbers reorder across boots.
 

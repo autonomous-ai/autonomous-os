@@ -14,8 +14,8 @@ Lamp supports mechanical buttons, TTP223 touchpads and an optional MPR121 capaci
 
 | Device | Pi 4/5 | OrangePi sun60 |
 |---|---|---|
-| Primary GPIO button | gpiochip0 BCM 17 (pull-up, active-LOW) | Physical pin 37 / PD4 / gpiochip0 line 100 (pull-up, active-LOW) |
-| Reset GPIO button | not wired | Physical pin 35 / PD3 / gpiochip0 line 99 (pull-up, active-LOW); hold ≥5 s then release to factory-reset |
+| Primary GPIO button | gpiochip0 BCM 17 (pull-up, active-LOW) | Physical pin 35 / PD3 / gpiochip0 line 99 (pull-up, active-LOW) |
+| Reset GPIO button | not wired | Physical pin 37 / PD4 / gpiochip0 line 100 (pull-up, active-LOW); hold ≥5 s then release to factory-reset |
 | Mic slide switch | not wired | Physical pin 11 / PL9 / gpiochip1 line 9; pull-up, LOW=mute, HIGH=unmute |
 | TTP223 | not wired | Two pads: S1 at physical pin 29 / PD0 / gpiochip0 line 96; S3 at physical pin 33 / PD2 / gpiochip0 line 98. **Pull-up, active-LOW** (pads rest HIGH; a touch is the falling edge). |
 
@@ -60,7 +60,7 @@ the selected device's JSON. Pull-up, active-LOW behavior and gesture detection
 remain in the shared driver; simulation skips the hardware.
 
 Hardware confirmed two pads: S1 on pin 29 (line 96) and S3 on pin 33 (line 98).
-The Lamp JSON uses these lines, leaving pin 37 (line 100) for the mechanical
+The Lamp JSON uses these lines, leaving pin 35 (line 99) for the mechanical
 button. The legacy fallback still uses lines 96/100; keep the Lamp JSON installed
 to avoid that old overlap.
 
@@ -124,7 +124,7 @@ Deploy the updated HAL before uploading JSON with these new fields.
 | **Hold 5–10 s, then release** | Shutdown OS (TTS announce → release servos → `sudo shutdown -h now`). LED blinks red while armed. | n/a — TTP223 hardware cannot reliably hold (see "FastMode" below) |
 | **Hold 10 s+, then release** | Factory-reset: wipe device state + reboot into AP setup (TTS announce → release servos → POST `/api/system/factory-reset` on the OS server). LED goes solid red while armed. **Off on Lamp** (`"factory_reset": false` on the primary button): a 10 s+ hold stays at shutdown because the dedicated reset button owns factory-reset. | n/a |
 
-The table above covers the primary GPIO button and TTP223. The dedicated reset button on pin 35 only factory-resets when released after a hold of at least 5 s. Shorter holds and single/triple taps do nothing; it never invokes sleep or shutdown. LED stays unchanged below 5 s and uses the shared solid-red factory-reset preset from 5 s onward.
+The table above covers the primary GPIO button and TTP223. The dedicated reset button on pin 37 only factory-resets when released after a hold of at least 5 s. Shorter holds and single/triple taps do nothing; it never invokes sleep or shutdown. LED stays unchanged below 5 s and uses the shared solid-red factory-reset preset from 5 s onward.
 
 With Harness OFF, MPR121 also supports release-to-commit holds and the same hold-tier LED feedback, as detailed in its detection section. The sleep and destructive hold tiers **commit on release, not on a timer firing while held**. MPR121 stops at shutdown: it has no factory-reset tier, so a 10 s+ touch hold still shuts down (`hold_release_action(..., factory_reset=False)`). Only the GPIO buttons factory-reset.
 
@@ -217,7 +217,7 @@ Interruption therefore comes from two places only: **tap-to-interrupt** above, o
 
 ## GPIO button detection (`hal/drivers/gpio_button.py`)
 
-The same driver serves each configured button independently. The sequence below describes `behavior: "standard"` (the primary button). For `behavior: "factory_reset"`, a release after `hold_s` (5 s on Lamp pin 35) calls the shared `factory_reset_action`; shorter holds and all tap sequences are ignored. Its hold watcher selects only the shared factory-reset LED tier at that threshold.
+The same driver serves each configured button independently. The sequence below describes `behavior: "standard"` (the primary button). For `behavior: "factory_reset"`, a release after `hold_s` (5 s on Lamp pin 37) calls the shared `factory_reset_action`; shorter holds and all tap sequences are ignored. Its hold watcher selects only the shared factory-reset LED tier at that threshold.
 
 Edge-counting driver where **all destructive actions commit on the release edge based on hold duration** — no timer fires while the button is held. This is what lets the user cancel mid-hold (release before a threshold) or escalate (keep holding past 10 s).
 
@@ -276,7 +276,7 @@ does not modify boot overlays automatically:
       "bus": 0,
       "address": 90,
       "electrodes": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
-      "swipe_axis": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+      "swipe_axis": [11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0],
       "touch_threshold": 2,
       "release_threshold": 1,
       "autoconfig": true,
