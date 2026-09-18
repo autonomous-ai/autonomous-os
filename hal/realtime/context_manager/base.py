@@ -119,6 +119,7 @@ class ContextManagerBase(ABC):
         "openai": RESOURCES_DIR / "system_prompt_openai.md",
         "gemini": RESOURCES_DIR / "system_prompt_gemini.md",
         "gptlive": RESOURCES_DIR / "system_prompt_gptlive.md",
+        "pipecat_v1": RESOURCES_DIR / "system_prompt_pipecat.md",
     }
 
     LANGUAGE_NAMES: dict[str, str] = {

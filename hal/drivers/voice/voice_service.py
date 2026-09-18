@@ -268,6 +268,8 @@ class VoiceService:
         self._realtime = RealtimeOrchestrator(
             gateway=AgentGateway(hal_config.AGENT_GATEWAY),
             enable_expression=enable_expression,
+            # pipecat_v1 runs STT inside its pipeline on this same provider.
+            stt_provider=stt_provider,
         )
 
         # Hook into TTS on_speak_end to feed spoken text back to the realtime agent.

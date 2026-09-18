@@ -73,3 +73,42 @@ func TestValidateRealtimeSetGPTLive(t *testing.T) {
 		t.Fatal("gemini voice on gptlive must be rejected")
 	}
 }
+
+// pipecat_v1 lands its model in the pipecat_v1 sub-object (created on demand);
+// credentials stay on the shared realtime fields; voice/reasoning are rejected
+// up front, so the apply never sees them.
+func TestApplyRealtimeSetPipecatV1(t *testing.T) {
+	c := baseConfig()
+	c.Realtime = &config.RealtimeConfig{Provider: "gemini"}
+
+	applyRealtimeSet(c, domain.RealtimeSetData{
+		Provider: " Pipecat_V1 ",
+		Model:    "qwen/qwen3.6-35b-a3b",
+		APIKey:   "rt-key",
+	})
+	rt := c.Realtime
+	if rt.Provider != "pipecat_v1" {
+		t.Fatalf("provider = %q, want normalized pipecat_v1", rt.Provider)
+	}
+	if rt.PipecatV1 == nil || rt.PipecatV1.Model != "qwen/qwen3.6-35b-a3b" {
+		t.Fatalf("pipecat_v1 sub-object not written: %+v", rt.PipecatV1)
+	}
+	if rt.APIKey != "rt-key" || rt.PipecatV1.APIKey != "" {
+		t.Fatalf("credentials must land on the shared fields only: shared=%q sub=%q", rt.APIKey, rt.PipecatV1.APIKey)
+	}
+	if c.RealtimeModel() != "qwen/qwen3.6-35b-a3b" || c.RealtimeVoice() != "" || c.RealtimeReasoning() != "" {
+		t.Fatalf("resolution after apply: model=%q voice=%q reasoning=%q",
+			c.RealtimeModel(), c.RealtimeVoice(), c.RealtimeReasoning())
+	}
+
+	s := &Service{config: c}
+	if err := s.validateRealtimeSet(domain.RealtimeSetData{Provider: "pipecat_v1", Model: "qwen/x"}); err != nil {
+		t.Fatalf("model-only set should validate: %v", err)
+	}
+	if s.validateRealtimeSet(domain.RealtimeSetData{Provider: "pipecat_v1", Voice: "marin"}) == nil {
+		t.Fatal("a voice on pipecat_v1 must be rejected")
+	}
+	if s.validateRealtimeSet(domain.RealtimeSetData{Reasoning: "low"}) == nil {
+		t.Fatal("reasoning on the current pipecat_v1 provider must be rejected")
+	}
+}
