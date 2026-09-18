@@ -60,7 +60,11 @@ def test_no_handoff_means_no_hold():
     assert hold_for_main_handoff(_FakeRealtime(open_=False), "hey", "i-1") is None
 
 
-def test_nudge_during_handoff_is_held_and_filler_spoken(monkeypatch):
+def test_nudge_during_handoff_is_rejected_in_silence(monkeypatch):
+    """A nudge at a device that is already working is noise, and noise is
+    rejected without a sound — the same verdict reject_turn reaches for a bare
+    acknowledgment. It must not be recorded either: a non-request in the next
+    session's context is what #421 is about."""
     posted: list[dict] = []
     monkeypatch.setattr(
         rt_mod.requests, "post",
@@ -73,12 +77,29 @@ def test_nudge_during_handoff_is_held_and_filler_spoken(monkeypatch):
     assert rt is not None
     assert rt.route == ROUTE_MAIN_PENDING
     assert rt.handled is False and rt.delegated is False
-    assert rt.transcript == "sếp sếp ơi"
+    assert posted == [], "a nudge must not be answered out loud"
+    assert realtime.turns == [], "a nudge must not enter realtime memory"
+
+
+def test_a_real_utterance_during_handoff_gets_one_filler_and_a_memory_line(monkeypatch):
+    """Longer than the noise threshold is not a nudge: the user said something
+    real while waiting. Still never reaches the model, but silence there would
+    read as the device ignoring them."""
+    posted: list[dict] = []
+    monkeypatch.setattr(
+        rt_mod.requests, "post",
+        lambda url, json=None, timeout=None: posted.append({"url": url, "json": json}),
+    )
+    realtime = _FakeRealtime(open_=True)
+    said = "and while you are at it turn the lights down"
+
+    rt = hold_for_main_handoff(realtime, said, "i-5")
+
+    assert rt is not None and rt.route == ROUTE_MAIN_PENDING
     assert posted == [{"url": rt_mod.voice_cfg.OS_FILLER_URL,
-                       "json": {"pool": "main_still_working", "owner": "i-2"}}]
-    # Memory keeps the truth: the user spoke, the device only said it was busy.
+                       "json": {"pool": "main_still_working", "owner": "i-5"}}]
     assert realtime.turns == [(
-        "sếp sếp ơi",
+        said,
         "[Said while the main agent was still working on: Find my pen — the device answered only that it is still on it.]",
     )]
 
@@ -87,7 +108,11 @@ def test_filler_is_rate_limited_but_turn_is_still_held(monkeypatch):
     posted: list[dict] = []
     monkeypatch.setattr(rt_mod.requests, "post",
                         lambda url, json=None, timeout=None: posted.append(json))
-    rt = hold_for_main_handoff(_FakeRealtime(open_=True, slot=False), "hey", "i-3")
+    rt = hold_for_main_handoff(
+        _FakeRealtime(open_=True, slot=False),
+        "so what did you end up finding over there",
+        "i-3",
+    )
     assert rt is not None and rt.route == ROUTE_MAIN_PENDING
     assert posted == []
 

@@ -374,26 +374,43 @@ def hold_for_main_handoff(realtime, combined: str, interaction_id: str) -> Optio
     purpose: prompt-only instructions to "wait" were not reliable (#418).
 
     Returns None when no handoff is open (caller proceeds normally). Otherwise
-    speaks the filler, records the nudge in realtime memory so the next session
-    knows it happened and was NOT answered, and returns a ROUTE_MAIN_PENDING
-    result that dispatch_turn treats as terminal.
+    the turn is terminal (`dispatch_turn` sends nothing on), and how loud that
+    is depends on what was said:
+
+    - A noise-class utterance — empty, or at most
+      REALTIME_NOISE_GUARD_MAX_WORDS words — is REJECTED IN SILENCE, and not
+      written to memory. That is the same verdict the model's own `reject_turn`
+      reaches for a bare acknowledgment or a stray word ("okay", "one sec",
+      "football."), and a nudge at a device that is already working is exactly
+      that: noise. Answering it would make the lamp chatter through every task,
+      and recording it would put a non-request into the next session's context.
+    - Anything longer is a real utterance the user made while waiting. It still
+      does not reach the model, but it gets one "still on it" filler so the
+      user is not met with silence, and a memory line saying it was heard and
+      NOT answered.
     """
     if not realtime.main_handoff_open():
         return None
     pending = realtime.main_handoff_transcript()
+    if needs_noise_guard(combined):
+        logger.info(
+            "[realtime] main handoff open (%r) — rejecting nudge %r in silence "
+            "(noise class, nothing to answer)",
+            pending[:80], combined[:80] if combined else "(empty)",
+        )
+        return RealtimeTurnResult(route=ROUTE_MAIN_PENDING, transcript=combined)
     logger.info(
         "[realtime] main handoff still open (%r) — holding new utterance %r, filler instead of model",
-        pending[:80], combined[:80] if combined else "(empty)",
+        pending[:80], combined[:80],
     )
     speak_main_pending_filler(realtime, interaction_id)
-    if combined:
-        realtime.save_turn(
-            user_text=combined,
-            agent_text=(
-                f"[Said while the main agent was still working on: {pending} — "
-                "the device answered only that it is still on it.]"
-            ),
-        )
+    realtime.save_turn(
+        user_text=combined,
+        agent_text=(
+            f"[Said while the main agent was still working on: {pending} — "
+            "the device answered only that it is still on it.]"
+        ),
+    )
     return RealtimeTurnResult(route=ROUTE_MAIN_PENDING, transcript=combined)
 
 

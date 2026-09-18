@@ -378,22 +378,30 @@ bật, cùng lý do với đường phát: chỉ câu trả lời thật của a
 |---|---|
 | Turn STT (`run_realtime_turn`) | trả `route=main_agent_pending`; `dispatch_turn` coi là terminal (không gửi gì sang os-server, metric loại trừ là `main_agent_pending`) |
 | Live opener đã xác nhận (`_try_live_opener`) | tiêu thụ tại chỗ, không dispatch |
-| VAD trigger ở live mode (`_live_decision`) | trả `"hold"` — không mở live session, không STT |
+| VAD trigger ở live mode (`_live_decision`) | trả `"turn"` — đi đường STT, nên không mở live session và model không bao giờ thấy audio này |
 
-Chốt chặn trong `_live_decision` nằm **sau** cổng speech và cổng wake-word,
-không phải trước: chính hai cổng đó quyết định trigger này có hướng tới thiết bị
-hay không, và đáp "vẫn đang làm" cho tiếng ồn trong phòng — hoặc cho cuộc nói
-chuyện của user với người khác — còn tệ hơn chính lỗi đang được chặn. Vì vậy lời
-nói không hướng tới thiết bị vẫn trả `"turn"` và im lặng.
+`_live_decision` cố ý **không** tự quyết định kết cục: ở đó chỉ có audio thô, mà
+phân biệt một câu nudge với một yêu cầu thật thì cần có chữ. Nó chuyển sang đường
+STT rẻ hơn và để `hold_for_main_handoff` phán trên transcript ở bước sau. Chốt
+chặn đó nằm **sau** cổng speech và cổng wake-word — chính hai cổng này quyết định
+trigger có hướng tới thiết bị hay không.
 
-Mỗi điểm vào xin os-server một câu từ pool filler `main_still_working`
-(`POST /api/sensing/filler {"pool": "main_still_working", "owner":
-<interaction id>}`, cùng WAV cache và cùng giọng với mọi filler khác), nhiều
-nhất một lần mỗi `HAL_REALTIME_MAIN_HANDOFF_FILLER_GAP_S`. Transcript khác rỗng
-được ghi vào realtime memory thành lời của user kèm lời agent
-`[Said while the main agent was still working on: <request> — the device
-answered only that it is still on it.]`, để session sau biết nudge đã xảy ra và
-**không** được trả lời.
+`hold_for_main_handoff` sau đó rẽ theo đúng ngưỡng nhiễu sẵn có
+(`needs_noise_guard`, tối đa `HAL_REALTIME_NOISE_GUARD_MAX_WORDS` từ, mặc định 3):
+
+- **Nhóm nhiễu — bị từ chối trong im lặng.** "sếp sếp ơi", "Sí.", "okay", một từ
+  lạc: không nói gì và không ghi gì vào memory. Đây đúng là phán quyết mà chính
+  `reject_turn` của model đưa ra cho một câu ậm ừ, và một câu nudge gửi tới thiết
+  bị đang bận thì chính là loại đó. Đáp lại nó sẽ làm cái đèn lải nhải suốt mọi
+  task; ghi lại nó sẽ nhét một thứ không phải yêu cầu vào context của session sau
+  (#421).
+- **Dài hơn ngưỡng đó** thì nhận một câu từ pool filler `main_still_working`
+  (`POST /api/sensing/filler {"pool": "main_still_working", "owner":
+  <interaction id>}`, cùng WAV cache và cùng giọng với mọi filler khác), nhiều
+  nhất một lần mỗi `HAL_REALTIME_MAIN_HANDOFF_FILLER_GAP_S`, kèm một dòng memory
+  `[Said while the main agent was still working on: <request> — the device
+  answered only that it is still on it.]` — user đã nói một điều có thật trong lúc
+  chờ, và im lặng lúc đó bị đọc là bị phớt lờ.
 
 Handoff đóng khi câu trả lời của agent chính được feed lại
 (`feed_realtime_history` → `save_main_agent_reply_fragment`, dù có nói ra hay

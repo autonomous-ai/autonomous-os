@@ -43,7 +43,7 @@ def _service(realtime) -> VoiceService:
     return svc
 
 
-def test_live_decision_holds_while_handoff_open(monkeypatch):
+def test_live_decision_takes_the_stt_path_while_handoff_open(monkeypatch):
     monkeypatch.setattr(vs_mod.hal_config, "REALTIME_ENABLED", True)
     monkeypatch.setattr(vs_mod.hal_config, "WAKEWORD_ENABLED", False)
     monkeypatch.setattr(VoiceService, "_music_is_playing", lambda self: False)
@@ -52,9 +52,12 @@ def test_live_decision_holds_while_handoff_open(monkeypatch):
                         lambda url, json=None, timeout=None: posted.append(json))
     realtime = _HandoffRealtime(open_=True)
 
-    assert _service(realtime)._live_decision([]) == "hold"
+    # No live session (the model never gets this audio) and nothing spoken:
+    # with only raw audio there is no transcript yet to tell a nudge from a
+    # real request, so the STT path makes that call one step later.
+    assert _service(realtime)._live_decision([]) == "turn"
     assert realtime.prepared == 0, "must not touch the provider session"
-    assert posted == [{"pool": "main_still_working", "owner": ""}]
+    assert posted == []
 
 
 def test_live_decision_unchanged_when_no_handoff(monkeypatch):
@@ -67,7 +70,7 @@ def test_live_decision_unchanged_when_no_handoff(monkeypatch):
     assert realtime.prepared == 1
 
 
-def test_live_opener_consumed_by_hold(monkeypatch):
+def test_live_opener_rejects_a_nudge_in_silence(monkeypatch):
     monkeypatch.setattr(vs_mod.voice_cfg, "LIVE_MODE", True)
     monkeypatch.setattr(vs_mod.hal_config, "REALTIME_ENABLED", True)
     monkeypatch.setattr(vs_mod, "bypass_realtime", lambda hv: False)
@@ -81,7 +84,28 @@ def test_live_opener_consumed_by_hold(monkeypatch):
 
     assert (consumed, reopen) == (True, False)
     assert realtime.prepared == 0
-    assert realtime.turns and realtime.turns[0][0] == "sếp sếp ơi"
+    assert realtime.turns == [], "a nudge must not enter realtime memory"
+
+
+def test_live_opener_answers_a_real_utterance_with_one_filler(monkeypatch):
+    monkeypatch.setattr(vs_mod.voice_cfg, "LIVE_MODE", True)
+    monkeypatch.setattr(vs_mod.hal_config, "REALTIME_ENABLED", True)
+    monkeypatch.setattr(vs_mod, "bypass_realtime", lambda hv: False)
+    posted: list[dict] = []
+    monkeypatch.setattr(vs_mod.realtime_turn_mod.requests, "post",
+                        lambda url, json=None, timeout=None: posted.append(json))
+    realtime = _HandoffRealtime(open_=True)
+    said = "can you also put some music on after that"
+
+    consumed, reopen = _service(realtime)._try_live_opener(
+        None, 320, 16000, [b"\x00\x00"],
+        transcript=said, interaction_id="i-10", harness_voice=None,
+    )
+
+    assert (consumed, reopen) == (True, False)
+    assert realtime.prepared == 0
+    assert posted == [{"pool": "main_still_working", "owner": "i-10"}]
+    assert realtime.turns and realtime.turns[0][0] == said
 
 
 def test_release_main_handoff_delegates_to_orchestrator():

@@ -1146,14 +1146,12 @@ class VoiceService:
     # Live (full-duplex) session — the VAD is a doorbell, the model endpoints
     # ------------------------------------------------------------------
     def _live_decision(self, pre_roll: list) -> str:
-        """What this VAD trigger should become: "live", "turn", "hold" or "skip".
+        """What this VAD trigger should become: "live", "turn" or "skip".
 
         "turn" is the fallback that keeps a device answering when realtime is
         down — the turn path still reaches the main agent over STT. "skip"
         costs nothing at all, which is the point: a click must not open a
-        billed live session OR an STT session. "hold" is "skip" plus a spoken
-        "still on it": the main agent already has the user's request and is
-        working on it.
+        billed live session OR an STT session.
 
         Cheap tests first: the last one runs a neural VAD, and the one before
         it can block for a rebuild.
@@ -1186,19 +1184,20 @@ class VoiceService:
             logger.info("[live] wake focus closed — using STT to check the wake phrase")
             return "turn"
 
-        # #419: a delegated request is still with the main agent. Whatever the
-        # user is saying now, the realtime model must not answer it — it would
-        # "resolve" the pending task from memory. Say we're still on it and
-        # open nothing (no session, no STT): the answer is on its way.
+        # #419: a delegated request is still with the main agent, so the model
+        # must not be handed this audio — it has no tool result for the pending
+        # task and would "resolve" it from memory. Take the STT path instead of
+        # opening a live session: no billed session, the model never sees the
+        # turn, and the transcript STT produces is what lets
+        # hold_for_main_handoff tell a nudge (rejected in silence) from a real
+        # utterance (one "still on it"). Deciding here, with only raw audio,
+        # could only guess.
         #
         # Placed AFTER the speech and wake-word gates on purpose: those decide
-        # whether this trigger is addressed to the device at all, and chirping
-        # "still on it" at room noise, or at a conversation the user is having
-        # with somebody else, is worse than the bug this guards against.
+        # whether this trigger is addressed to the device at all.
         if self._realtime.main_handoff_open():
-            logger.info("[live] main handoff open — holding this trigger, filler instead of a session")
-            realtime_turn_mod.speak_main_pending_filler(self._realtime, "")
-            return "hold"
+            logger.info("[live] main handoff open — STT path this turn, no live session")
+            return "turn"
 
         self._realtime.prepare_turn()
 

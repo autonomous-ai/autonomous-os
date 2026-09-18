@@ -390,22 +390,31 @@ realtime entry point commits the user's audio to the model:
 |---|---|
 | STT turn (`run_realtime_turn`) | returns `route=main_agent_pending`; `dispatch_turn` treats it as terminal (nothing sent to os-server, metric excluded as `main_agent_pending`) |
 | Confirmed live opener (`_try_live_opener`) | consumed on the spot, not dispatched |
-| VAD trigger in live mode (`_live_decision`) | returns `"hold"` — no live session, no STT |
+| VAD trigger in live mode (`_live_decision`) | returns `"turn"` — the STT path, so no live session is opened and the model never sees the audio |
 
-The `_live_decision` hold sits **after** the speech and wake-word gates, not
-before them: those decide whether the trigger is addressed to the device at
-all, and answering room noise — or a conversation the user is having with
-somebody else — with "still on it" is worse than the bug being guarded
-against. Unaddressed speech therefore still returns `"turn"` and stays silent.
+`_live_decision` deliberately does **not** decide the outcome itself: it holds
+only raw audio, and telling a nudge from a real request needs words. It takes
+the cheap STT path instead and lets `hold_for_main_handoff` judge the
+transcript one step later. That check sits **after** the speech and wake-word
+gates, which decide whether the trigger is addressed to the device at all.
 
-Each of them asks os-server for one phrase from the `main_still_working`
-filler pool (`POST /api/sensing/filler {"pool": "main_still_working", "owner":
-<interaction id>}`, same WAV cache and voice as every other filler), at most
-once per `HAL_REALTIME_MAIN_HANDOFF_FILLER_GAP_S`. A non-empty transcript is
-written to realtime memory as the user's line with the agent line
-`[Said while the main agent was still working on: <request> — the device
-answered only that it is still on it.]`, so the next session knows the nudge
-happened and was **not** answered.
+`hold_for_main_handoff` then splits on the existing noise threshold
+(`needs_noise_guard`, at most `HAL_REALTIME_NOISE_GUARD_MAX_WORDS` words,
+default 3):
+
+- **Noise class — rejected in silence.** "sếp sếp ơi", "Sí.", "okay", a stray
+  word: nothing is spoken and nothing is written to memory. This is the same
+  verdict the model's own `reject_turn` reaches for a bare acknowledgment, and
+  a nudge at a device that is already working is exactly that. Answering it
+  would make the lamp chatter through every task; recording it would put a
+  non-request into the next session's context (#421).
+- **Anything longer** gets one phrase from the `main_still_working` filler
+  pool (`POST /api/sensing/filler {"pool": "main_still_working", "owner":
+  <interaction id>}`, same WAV cache and voice as every other filler), at most
+  once per `HAL_REALTIME_MAIN_HANDOFF_FILLER_GAP_S`, plus a memory line
+  `[Said while the main agent was still working on: <request> — the device
+  answered only that it is still on it.]` — the user said something real while
+  waiting, and silence there reads as being ignored.
 
 The handoff closes when the main agent's reply is fed back
 (`feed_realtime_history` → `save_main_agent_reply_fragment`, spoken or not),
