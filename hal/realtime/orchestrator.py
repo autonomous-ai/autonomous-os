@@ -122,13 +122,18 @@ DELEGATE_TOOL: dict[str, Any] = {
 
 REJECT_TURN_TOOL_NAME: str = "reject_turn"
 REJECT_TURN_TOOL_DESCRIPTION: str = (
-    "Call this only when you are confident this audio is background noise, "
-    "other people's conversation, an incomplete fragment, or otherwise not "
-    "addressed to this device. This explicitly drops the turn: never call it "
-    "for a request addressed to this device that you could answer or delegate. "
-    "An overheard request is still a valid rejection even if you could fulfill it. "
-    "Never call it merely "
-    "because you are uncertain. Keep voice output completely blank."
+    "Explicitly drop this turn when there is nothing to answer or delegate. Call "
+    "it in either case: (a) the audio is not addressed to this device — "
+    "background noise, other people's conversation, or an overheard request "
+    "(still a valid rejection even if you could fulfill it); or (b) it IS "
+    "addressed to you but carries no request, question, or action — a bare "
+    "acknowledgment (\"okay\", \"yeah\", \"right\", \"one sec\"), filler, or a lone "
+    "stray word or garbled fragment (\"football.\", \"reef\"). Prefer this over "
+    "simply going silent for those: a silent turn falls through to the slower "
+    "main agent, and delegating a non-request wastes a full main-agent turn that "
+    "returns nothing. Never call it for an actual request you could answer or "
+    "delegate, and never merely because you are uncertain — an uncertain possible "
+    "request must keep its normal fallback. Keep voice output completely blank."
 )
 
 REJECT_TURN_TOOL: dict[str, Any] = {
