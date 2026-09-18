@@ -66,7 +66,7 @@ const CHOICES: Record<ProviderChoice, ChoiceMeta> = {
     // No vendor sub-picker and no key: synthesis happens here, so there is
     // no account to authenticate and no shared quota to share. Voices are
     // the .onnx models installed on the device, listed by HAL.
-    hint: "Runs on the device — no API key, no quota, works offline. Lower quality than a hosted voice.",
+    hint: "Runs on the robot — no API key, no quota, works offline. Lower quality than a hosted voice.",
   },
   custom: {
     label: "Custom (BYO URL)",
@@ -87,7 +87,7 @@ const CHOICES: Record<ProviderChoice, ChoiceMeta> = {
 // sttLanguage; no filtering).
 type Lang = "" | "en" | "vi" | "zh-CN" | "zh-TW";
 const LANG_LABEL: Record<Lang, string> = {
-  "":      "Auto (follow device language)",
+  "":      "Auto (follow robot language)",
   "en":    "English",
   "vi":    "Vietnamese",
   "zh-CN": "Chinese (Simplified)",
@@ -600,8 +600,8 @@ function TestVoiceButton({ voice, lang, provider, baseUrl, apiKey, blockedReason
     <Volume2 size={14} />;
   const label =
     blocked ? blockedReason :
-    phase === "loading" ? "Sending to device…" :
-    phase === "ok" ? "Playing on device" :
+    phase === "loading" ? "Sending to robot…" :
+    phase === "ok" ? "Playing on robot" :
     phase === "error" ? "Failed" :
     "Test Voice";
 
@@ -711,7 +711,7 @@ function PiperPanel({ voice, onPickVoice, onInstalledChange }: {
         // and a click landing in that window is simply lost. Saying only
         // "reconnecting" would let the operator believe the voice was removed.
         setUnreachable(true);
-        setNotice("Device was restarting — nothing changed. Try again in a moment.");
+        setNotice("Robot was restarting — nothing changed. Try again in a moment.");
       });
   }, [load]);
 
@@ -736,7 +736,7 @@ function PiperPanel({ voice, onPickVoice, onInstalledChange }: {
       })
       .catch(() => {
         setUnreachable(true);
-        setNotice("Device was restarting — nothing changed. Try again in a moment.");
+        setNotice("Robot was restarting — nothing changed. Try again in a moment.");
       })
       .finally(() => setRemoving((cur) => cur.filter((n) => n !== name)));
   }, [load]);
@@ -758,7 +758,7 @@ function PiperPanel({ voice, onPickVoice, onInstalledChange }: {
   if (!st) {
     return (
       <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 12 }}>
-        {unreachable ? "Device is restarting — reconnecting…" : "Checking device…"}
+        {unreachable ? "Robot is restarting — reconnecting…" : "Checking robot…"}
       </div>
     );
   }
@@ -826,7 +826,7 @@ function PiperPanel({ voice, onPickVoice, onInstalledChange }: {
             }} />
           </div>
           <div style={{ fontSize: 10.5, color: C.textMuted, marginTop: 5 }}>
-            Running on the device — you can leave this page or reload, it keeps going.
+            Running on the robot — you can leave this page or reload, it keeps going.
           </div>
         </div>
       )}
@@ -836,7 +836,7 @@ function PiperPanel({ voice, onPickVoice, onInstalledChange }: {
       {st.engine_installed && (
         <>
           <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 8 }}>
-            Voices are downloaded to the device. Each is 63–79 MB and stays offline once installed.
+            Voices are downloaded to the robot. Each is 63–79 MB and stays offline once installed.
           </div>
           {catalog.map((v) => {
             const downloading = busy && job.kind === "voice" && job.target === v.name;
@@ -893,7 +893,7 @@ function PiperPanel({ voice, onPickVoice, onInstalledChange }: {
 
       {unreachable && (
         <div style={{ fontSize: 11.5, color: C.textMuted, marginTop: 8 }}>
-          Device is restarting — reconnecting…
+          Robot is restarting — reconnecting…
         </div>
       )}
       {notice && (
