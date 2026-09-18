@@ -206,7 +206,7 @@ Auto-exposure của camera USB kéo dài thời gian tích sáng khi thiếu sá
 |---|---|---|
 | `HAL_CAMERA_AUTO_EXPOSURE` | `auto` | `auto` dùng auto-exposure thích ứng của camera (default; sáng/thích ứng nhưng throttle fps khi thiếu sáng). `manual` ghim exposure theo các giá trị bên dưới — rủi ro loạn màu ISP khi gain cao. |
 | `HAL_CAMERA_EXPOSURE` | `330` | Thời gian exposure manual, V4L2 `exposure_absolute` ×100µs: `200`=20ms (30fps), `330`=33ms (trần ≈30fps), `500`=50ms (≈20fps). |
-| `HAL_CAMERA_GAIN` | `96` | Gain cảm biến (tùy camera, vd 0–255). Tăng sáng không tốn fps nhưng thêm noise; trên ~144 rủi ro loạn màu ISP. |
+| `HAL_CAMERA_GAIN` | `96` | Gain cảm biến (tùy camera, vd 0–255). Tăng sáng không tốn fps nhưng thêm noise; trên ~144 rủi ro loạn màu ISP. Được ghi ở cả hai mode (xem dưới). |
 | `HAL_CAMERA_BRIGHTNESS` | _(không set)_ | Offset brightness (tùy camera, vd -64..64). Nâng sáng digital. |
 
 Default áp dụng kể cả khi `.env` không có entry nào. Muốn ghim frame rate trên một thiết bị thì set `HAL_CAMERA_AUTO_EXPOSURE=manual` per device — fallback manual (330 / 96) là bộ giá trị đã verify màu ổn định; default cũ (`manual` / 500 / 255) là combo độc đã biết.
@@ -215,7 +215,7 @@ Default áp dụng kể cả khi `.env` không có entry nào. Muốn ghim frame
 
 `_apply_camera_controls()` (`drivers/camera/video_capture_device.py`) chạy sau khi set độ phân giải lúc open **và mỗi lần reopen device** — open mới reset camera về default, nếu không áp lại thì manual exposure sẽ âm thầm mất và FPS throttle quay lại. Map sang V4L2/UVC controls qua OpenCV: `CAP_PROP_AUTO_EXPOSURE` (1=manual, 3=auto), `CAP_PROP_EXPOSURE`, `CAP_PROP_GAIN`, `CAP_PROP_BRIGHTNESS`.
 
-Ở mode `auto`, control được chủ động set về 3 (aperture-priority) mỗi lần open, chứ không bỏ mặc: camera UVC giữ nguyên manual exposure/gain qua các lần restart HAL, nên trạng thái manual sót lại từ cấu hình cũ sẽ sống dai qua cả việc đổi `.env` sang `auto`. **Gain** manual sót lại thì không bị reset (default tùy camera, auto-exposure tự bù); nếu đổi sang auto rồi mà màu vẫn sai, xóa một lần bằng `v4l2-ctl -d /dev/video0 --set-ctrl gain=<default>`. Lưu ý đổi `.env` chỉ có hiệu lực sau `systemctl restart hal` — process đang chạy vẫn giữ env lúc nó start.
+Ở mode `auto`, control được chủ động set về 3 (aperture-priority) mỗi lần open, chứ không bỏ mặc: camera UVC giữ nguyên manual exposure/gain qua các lần restart HAL, nên trạng thái manual sót lại từ cấu hình cũ sẽ sống dai qua cả việc đổi `.env` sang `auto`. **Gain** cũng được ghim về `HAL_CAMERA_GAIN` ở mode `auto`: auto-exposure UVC chỉ chỉnh thời gian tích sáng, nên gain camera còn giữ ở max từ lần chạy manual trước sẽ làm cháy sáng phòng đèn bất kể auto-exposure (lamp-4ace, 18/09/2026: gain 128/128, trần và cửa sổ trắng xoá; về 64 là ảnh bình thường). Lưu ý đổi `.env` chỉ có hiệu lực sau `systemctl restart hal` — process đang chạy vẫn giữ env lúc nó start.
 
 ### Trade-off
 

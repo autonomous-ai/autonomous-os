@@ -216,7 +216,7 @@ The USB camera's auto-exposure stretches integration time in low light (~60ms), 
 |---|---|---|
 | `HAL_CAMERA_AUTO_EXPOSURE` | `auto` | `auto` uses the camera's adaptive auto-exposure (default; brighter/adaptive but throttles fps in low light). `manual` pins exposure using the values below — risks the ISP color corruption with high gain. |
 | `HAL_CAMERA_EXPOSURE` | `330` | Manual exposure time, V4L2 `exposure_absolute` ×100µs: `200`=20ms (30fps), `330`=33ms (≈30fps ceiling), `500`=50ms (≈20fps). |
-| `HAL_CAMERA_GAIN` | `96` | Sensor gain (camera-specific, e.g. 0–255). Brightens without costing fps, but adds noise; values above ~144 risk the ISP color corruption. |
+| `HAL_CAMERA_GAIN` | `96` | Sensor gain (camera-specific, e.g. 0–255). Brightens without costing fps, but adds noise; values above ~144 risk the ISP color corruption. Written in both modes (see below). |
 | `HAL_CAMERA_BRIGHTNESS` | _(unset)_ | Brightness offset (camera-specific, e.g. -64..64). Digital lift. |
 
 The defaults apply even with no `.env` entries. To pin the frame rate on a device, set `HAL_CAMERA_AUTO_EXPOSURE=manual` per device — the manual fallbacks (330 / 96) are values verified color-stable; the old defaults (`manual` / 500 / 255) are the known-toxic combo.
@@ -225,7 +225,7 @@ The defaults apply even with no `.env` entries. To pin the frame rate on a devic
 
 `_apply_camera_controls()` (`drivers/camera/video_capture_device.py`) runs after the resolution is set on open **and on every device reopen** — a fresh open resets the camera to defaults, which would otherwise silently drop manual exposure and re-introduce the FPS throttle. It maps to V4L2/UVC controls via OpenCV: `CAP_PROP_AUTO_EXPOSURE` (1=manual, 3=auto), `CAP_PROP_EXPOSURE`, `CAP_PROP_GAIN`, `CAP_PROP_BRIGHTNESS`.
 
-In `auto` mode the control is actively set to 3 (aperture-priority) on every open, not left untouched: UVC cameras retain manual exposure/gain across HAL restarts, so a leftover manual state from an earlier configuration would otherwise survive an `.env` switch to `auto`. Leftover manual **gain** is not reset (its default is camera-specific and auto-exposure compensates); clear it once with `v4l2-ctl -d /dev/video0 --set-ctrl gain=<default>` if colors stay off after switching to auto. Note `.env` changes only take effect after `systemctl restart hal` — the running process keeps the env it started with.
+In `auto` mode the control is actively set to 3 (aperture-priority) on every open, not left untouched: UVC cameras retain manual exposure/gain across HAL restarts, so a leftover manual state from an earlier configuration would otherwise survive an `.env` switch to `auto`. **Gain** is pinned to `HAL_CAMERA_GAIN` in `auto` mode too: UVC auto-exposure only moves integration time, so a gain the camera retained at max from an earlier manual run blows out a lit room regardless of auto-exposure (lamp-4ace, 2026-09-18: gain 128/128, ceiling and windows white; 64 restored the image). Note `.env` changes only take effect after `systemctl restart hal` — the running process keeps the env it started with.
 
 ### Trade-off
 

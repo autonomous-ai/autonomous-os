@@ -333,9 +333,10 @@ class LocalVideoCaptureDevice(VideoCaptureDeviceBase):
         manual exposure/gain across process restarts, so a leftover manual
         state from an earlier configuration would otherwise survive an .env
         switch to auto forever (green/posterized frames when the leftover gain
-        is high). Leftover manual gain is NOT reset — its default is
-        camera-specific and auto-exposure compensates for it; clear it once
-        with `v4l2-ctl --set-ctrl gain=<default>` if needed.
+        is high). Gain is pinned to HAL_CAMERA_GAIN in auto mode too: UVC
+        auto-exposure only moves integration time, so a gain left at max by an
+        earlier manual run (seen on lamp-4ace, gain 128/128) blows out a lit
+        room no matter what auto-exposure does.
 
         V4L2/UVC CAP_PROP_AUTO_EXPOSURE: 1 = manual, 3 = aperture-priority
         (auto). CAP_PROP_EXPOSURE is exposure_absolute in ×100µs units.
@@ -344,9 +345,12 @@ class LocalVideoCaptureDevice(VideoCaptureDeviceBase):
         if (self._auto_exposure or "auto") != "manual":
             try:
                 video_capture.set(cv2.CAP_PROP_AUTO_EXPOSURE, 3)
+                if self._gain is not None:
+                    video_capture.set(cv2.CAP_PROP_GAIN, float(self._gain))
                 self._logger.info(
-                    "Camera exposure: auto (auto_exposure=%.0f)",
+                    "Camera exposure: auto (auto_exposure=%.0f gain=%.0f)",
                     video_capture.get(cv2.CAP_PROP_AUTO_EXPOSURE),
+                    video_capture.get(cv2.CAP_PROP_GAIN),
                 )
             except Exception:
                 self._logger.exception(

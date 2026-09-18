@@ -12,6 +12,10 @@
 # SunplusIT OPENAICAM (also exposes a built-in mic, device_micro3)
 SUBSYSTEM=="video4linux", ATTRS{idVendor}=="1bcf", ATTRS{idProduct}=="28cc", ATTR{index}=="0", SYMLINK+="device-camera"
 SUBSYSTEM=="sound", ACTION=="change", ATTRS{idVendor}=="1bcf", ATTRS{idProduct}=="28cc", ATTR{id}="device_micro3"
+# ZVCAI USB_Camera (current fit on lamp-ac82 / lamp-4ace / lamp-dbda, 2026-09)
+SUBSYSTEM=="video4linux", ATTRS{idVendor}=="01da", ATTRS{idProduct}=="5875", ATTR{index}=="0", SYMLINK+="device-camera"
+# ZVCAI USB_Camera (current standard fit, seen on lamp-ac82/4ace/dbda 2026-09)
+SUBSYSTEM=="video4linux", ATTRS{idVendor}=="01da", ATTRS{idProduct}=="5875", ATTR{index}=="0", SYMLINK+="device-camera"
 
 # Servo driver: QinHeng CH340 -> /dev/device-servo
 SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="55d3", SYMLINK+="device-servo"

@@ -50,7 +50,9 @@ CAMERA_HEIGHT = int(os.environ.get("HAL_CAMERA_HEIGHT", "480"))
 CAMERA_AUTO_EXPOSURE = os.environ.get("HAL_CAMERA_AUTO_EXPOSURE", "auto").strip().lower()
 CAMERA_EXPOSURE = int(os.environ.get("HAL_CAMERA_EXPOSURE", "330"))
 # Sensor gain (camera-specific range, e.g. 0–255). Brightens without costing fps
-# but adds noise; >~144 risks the ISP color corruption. Applied in manual mode.
+# but adds noise; >~144 risks the ISP color corruption. Applied in BOTH modes:
+# in auto it pins the camera-retained gain so a leftover max gain cannot blow
+# out a lit room (auto-exposure only moves integration time).
 CAMERA_GAIN = int(os.environ.get("HAL_CAMERA_GAIN", "96"))
 # Optional brightness offset (camera-specific, e.g. -64..64); unset = camera default.
 CAMERA_BRIGHTNESS = int(os.environ["HAL_CAMERA_BRIGHTNESS"]) if os.environ.get("HAL_CAMERA_BRIGHTNESS") else None
