@@ -242,6 +242,18 @@ mọi biên nên lựa chọn đó luôn kiểm tra được và đổi được
 Cả hai biên đều đóng mốc **ở HAL**, nơi cả hai phát sinh: cử chỉ huỷ là button
 action của HAL, còn `voice_agent_handled` do chính turn dispatcher của HAL gửi đi.
 
+**Biên explicit stop còn được HAL cưỡng chế, không chỉ đo.** Watermark click
+của os-server chỉ tắt được reply mà nó gán được vào run bị huỷ, nhưng có hai
+đường tới loa không qua kiểm tra đó (đo trên thiết bị 17/9/2026,
+`stale_started_after_ms` 12–28 s): kết quả Harness nói thẳng qua
+`hal.SpeakReply`, và filler chờ realtime do HAL tự hẹn giờ. Nay biên đánh dấu
+mọi interaction nó bao phủ là `suppressed`, và `TTSService` từ chối audio thuộc
+turn đó ở mọi cửa vào (`speak`, `speak_queue`, `speak_cached`,
+`native_play_begin`) qua `voice_metrics.is_suppressed(owner)`. Audio không có
+chủ không bao giờ bị từ chối. Đường Harness thêm vào còn đi qua `deliverTTS`
+như mọi reply khác. Auto supersede vẫn chỉ đo; cưỡng chế nó là watermark của
+os-server.
+
 **Chỉ ghi nhận biên khi os-server THẬT SỰ áp dụng.** Response của
 `/api/sensing/event` cho post `voice_agent_handled` mang theo `speechSuppressed`
 — chính câu trả lời của os-server cho "tôi có lấy loa khỏi turn cũ không". Khi

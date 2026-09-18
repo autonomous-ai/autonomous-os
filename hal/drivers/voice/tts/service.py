@@ -917,6 +917,23 @@ class TTSService:
         except Exception:
             return False
 
+    @staticmethod
+    def _owner_suppressed(owner: str) -> bool:
+        """Refuse audio for a turn the user explicitly stopped.
+
+        Checked at every admission path so a late Harness reply or a realtime
+        wait filler cannot speak after the click. voice_metrics owns the
+        boundary; unowned audio is never refused.
+        """
+        if not owner:
+            return False
+        try:
+            from hal.telemetry import voice_metrics
+            return voice_metrics.is_suppressed(owner)
+        except Exception:
+            logger.exception("suppression check failed")
+            return False
+
     def speak(self, text: str, interruptible: bool = False, realtime_feedback: bool = False,
               turn_id: str = "", realtime_reply: bool = False) -> bool:
         """Synthesize and play text. Returns True if started, False if busy or unavailable.
@@ -930,6 +947,10 @@ class TTSService:
         if self._speaker_muted():
             logger.info("TTS suppressed -- speaker muted: %s", text[:50])
             self._note_speech_muted(f"run:{turn_id}" if turn_id else "")
+            return False
+        if turn_id and self._owner_suppressed(f"run:{turn_id}"):
+            logger.info("TTS suppressed -- turn stopped by user: %s", text[:50])
+            self._report_unspoken_reply(text, realtime_feedback)
             return False
 
         # Cache-first: an exact-text WAV in the prerender cache plays with NO
@@ -1044,6 +1065,10 @@ class TTSService:
         if self._speaker_muted():
             logger.info("TTS suppressed (queue) -- speaker muted: %s", text[:50])
             self._note_speech_muted(f"run:{turn_id}" if turn_id else "")
+            return False
+        if turn_id and self._owner_suppressed(f"run:{turn_id}"):
+            logger.info("TTS suppressed (queue) -- turn stopped by user: %s", text[:50])
+            self._report_unspoken_reply(text, realtime_feedback)
             return False
 
         # Serialize the complete arrival path. A newer turn owns the speaker:
@@ -1320,6 +1345,9 @@ class TTSService:
         if self._speaker_muted():
             logger.info("native audio suppressed -- speaker muted")
             self._note_speech_muted(owner)
+            return False
+        if self._owner_suppressed(owner):
+            logger.info("native audio suppressed -- turn stopped by user")
             return False
         if not self._lock.acquire(blocking=False):
             logger.info("native audio: speaker busy, skipping")
@@ -2046,6 +2074,9 @@ class TTSService:
         if not prerender and self._speaker_muted():
             logger.info("TTS suppressed (cached) -- speaker muted: %s", text[:50])
             self._note_speech_muted(f"run:{turn_id}" if turn_id else "")
+            return False
+        if not prerender and turn_id and self._owner_suppressed(f"run:{turn_id}"):
+            logger.info("TTS suppressed (cached) -- turn stopped by user: %s", text[:50])
             return False
 
         cache_path = self._tts_cache_path(text)

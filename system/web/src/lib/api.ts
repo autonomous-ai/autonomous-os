@@ -716,6 +716,13 @@ export function resolveCadenceTimes(c: ScheduleCadence | undefined): string[] {
   return c.time ? [c.time] : [];
 }
 
+/** A run's outcome, exactly as the device's runner reports it
+ *  (system/schedule/runner.go RunReport.Status). "skipped" means the device
+ *  deliberately did not run a template task because a connector it requires is
+ *  not installed — not a failure; render it via describeLastRun
+ *  (pages/settings/scheduleRunStatus.ts), never in the failure style. */
+export type ScheduleRunStatus = "success" | "failure" | "skipped";
+
 export interface ScheduleItem {
   id: string;
   name: string;
@@ -727,7 +734,10 @@ export interface ScheduleItem {
   end_at?: string;
   next_run_at?: string; // absent = not currently due (paused, manual, or a spent "once")
   last_run_at?: string; // absent = never run — render as "Never", not a date
-  last_run_status?: "success" | "failure";
+  last_run_status?: ScheduleRunStatus;
+  /** The last run's summary: the task name on success, the error on failure,
+   *  "missing connector: <codes>" when skipped. Absent = never run. */
+  last_run_summary?: string;
 
   /** Backend revision of this row. Quoted back as base_rev when editing, which
    *  is how the backend compare-and-swaps a device edit against a concurrent
@@ -780,7 +790,7 @@ export interface ScheduleRunResult {
   id: string;
   run_id: string;
   started_at: string;
-  status: "success" | "failure";
+  status: ScheduleRunStatus;
   summary: string;
 }
 

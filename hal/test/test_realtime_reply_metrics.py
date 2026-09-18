@@ -169,3 +169,31 @@ def test_realtime_turn_marks_every_reply_segment(monkeypatch, cap, chunks, spoke
         assert call.kwargs["turn_id"] == "vi-test"
         assert call.kwargs["realtime_reply"] is True
         assert call.kwargs.get("realtime_feedback", False) is False
+
+
+def test_realtime_turn_reuses_a_filler_armed_before_the_handshake(monkeypatch):
+    """The caller may arm the dead-air filler before the Gemini reconnect and
+    hand it in; the turn must not create a second one (one filler per turn)."""
+    monkeypatch.setattr(realtime_turn.hal_config, "REALTIME_ENABLED", True)
+    monkeypatch.setattr(realtime_turn.hal_config, "REALTIME_NATIVE_AUDIO", False)
+    monkeypatch.setattr(realtime_turn.hal_config, "REALTIME_PROVIDER", "openai")
+    monkeypatch.setattr(realtime_turn, "_thinking_cue_start", lambda: None)
+    monkeypatch.setattr(realtime_turn, "_thinking_cue_clear", lambda: None)
+    monkeypatch.setattr(realtime_turn, "_reply_language_name", lambda: "English")
+    factory = Mock()
+    monkeypatch.setattr(realtime_turn, "_WaitFiller", factory)
+    realtime = Mock(available=True)
+    realtime.stream_output.return_value = iter([TextOutput(text="Hello there.")])
+    tts = Mock()
+    tts.speak.return_value = True
+    armed = Mock()
+
+    result = realtime_turn.run_realtime_turn(
+        realtime, tts, lambda text: text, "Can you hear me clearly over there today",
+        [object()], 3.0, interaction_id="vi-test", wait_filler=armed,
+    )
+
+    assert result.handled
+    factory.assert_not_called()
+    armed.arm.assert_called_once()
+    armed.cancel.assert_called()

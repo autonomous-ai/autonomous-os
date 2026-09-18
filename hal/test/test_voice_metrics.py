@@ -724,3 +724,35 @@ def test_system_audio_is_not_an_answer(kpi):
     p = kpi.one(voice_metrics.EVENT_INTERACTION)
     assert p["ack_modality"] == "acknowledgement_audio"
     assert p["answer_latency_ms"] is None
+
+
+# --- Explicit stop refuses late audio at admission ---------------------------
+
+def test_explicit_stop_suppresses_late_audio_of_covered_turns_only(kpi):
+    """Device-observed 2026-09-17: a Harness reply spoke 27 s after the click
+    and a realtime wait filler 12 s after it. The boundary must gate TTS
+    admission for every turn it covered, and only those."""
+    old = voice_metrics.speech_end("silence_clock")
+    voice_metrics.bind_run(old, "run-old")
+    kpi.clock.advance(500)
+    voice_metrics.boundary(voice_metrics.BOUNDARY_EXPLICIT_STOP)
+
+    assert voice_metrics.is_suppressed("run:run-old") is True
+    assert voice_metrics.is_suppressed(f"interaction:{old}") is True
+    assert voice_metrics.is_suppressed("") is False
+    assert voice_metrics.is_suppressed("run:never-seen") is False
+
+    kpi.clock.advance(1000)
+    new = voice_metrics.speech_end("silence_clock")
+    voice_metrics.bind_run(new, "run-new")
+    assert voice_metrics.is_suppressed("run:run-new") is False
+
+
+def test_auto_supersede_does_not_gate_admission(kpi):
+    """Automatic supersession is os-server's watermark; HAL only measures it."""
+    old = voice_metrics.speech_end("silence_clock")
+    voice_metrics.bind_run(old, "run-old")
+    kpi.clock.advance(1000)
+    new = voice_metrics.speech_end("silence_clock")
+    voice_metrics.boundary(voice_metrics.BOUNDARY_AUTO_SUPERSEDE, new)
+    assert voice_metrics.is_suppressed("run:run-old") is False
