@@ -24,7 +24,7 @@
     "enabled": true,
     "provider": "gemini",
     "gemini": {
-      "model": "gemini-3.8-live-extended-thinking",
+      "model": "gemini-3.8-live",
       "voice": "Kore",
       "thinking_level": "LOW"
     }

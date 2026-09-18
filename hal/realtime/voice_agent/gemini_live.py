@@ -289,11 +289,21 @@ class GeminiLiveAgent(VoiceAgentBase):
 
         live_tools: list[types.Tool] = []
         if self._tools:
+            # extended-thinking accepts ONLY NON_BLOCKING tool declarations;
+            # a BLOCKING one makes it error mid-turn and speak a canned
+            # "I'm sorry, an error occurred." after every tool call. Other live
+            # models take BLOCKING (the default), so leave behavior unset there.
+            behavior = (
+                types.Behavior.NON_BLOCKING
+                if "extended-thinking" in self._config.model
+                else None
+            )
             declarations: list[types.FunctionDeclaration] = [
                 types.FunctionDeclaration(
                     name=tool["name"],
                     description=tool.get("description", ""),
                     parameters=tool.get("parameters"),
+                    behavior=behavior,
                 )
                 for tool in self._tools
             ]

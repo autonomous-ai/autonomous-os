@@ -1941,9 +1941,15 @@ Read the counters in the session-END log line: `substituted` at ~100 % of
    is logged (`[realtime->model] DROPPED …`).
 
    **This does not apply to the shipped default.** `REALTIME_GEMINI_MODEL` defaults to
-   `gemini-3.8-live-extended-thinking` (`hal/config.py`), which is not native-audio, so
+   `gemini-3.8-live` (`hal/config.py`), which is not native-audio, so
    the guard is off and both the context and the correction reach the model. It
-   re-engages only when a `*native-audio*` model is configured.
+   re-engages only when a `*native-audio*` model is configured. The default is the
+   plain `gemini-3.8-live`, not `-extended-thinking`: cost-lean, it takes the
+   default BLOCKING tools and omits thinking (it rejects `thinkingLevel`, so
+   `gemini_live._build_config` sends none). The extended variant is usable too — it
+   accepts only NON_BLOCKING tool declarations, which `_build_config` now sets for
+   it (a BLOCKING one made it error mid-turn with a spoken "I'm sorry, an error
+   occurred.", device-observed 2026-09-17) — but plain live stays the default.
 4. **Commit.** At session end, if enabled + `available` + audio buffered,
    `commit_audio()` fires. A `thinking` emotion cue fires with the commit
    (face + servo + a FORCED LED pulse — `thinking` is normally a
@@ -2121,7 +2127,7 @@ to the shared fields.
   "realtime": {
     "enabled": true,
     "provider": "gemini",
-    "gemini": { "model": "gemini-3.8-live-extended-thinking", "voice": "Kore", "thinking_level": "LOW" },
+    "gemini": { "model": "gemini-3.8-live", "voice": "Kore", "thinking_level": "LOW" },
     "openai": { "model": "gpt-realtime-2", "voice": "alloy", "reasoning_effort": "minimal" },
     "gptlive": { "model": "gpt-live-1", "voice": "marin" }
   }

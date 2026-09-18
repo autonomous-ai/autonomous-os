@@ -1224,10 +1224,14 @@ REALTIME_GEMINI_BASE_URL: str = (
     or _RT.get("base_url", "")
     or ((_os_cfg_get("llm_base_url", "").rstrip("/") + "/ws/gemini") if _os_cfg_get("llm_base_url", "") else "")
 )
-# Default to 3.8-live-extended-thinking (GA 2026-09-15, same price as 3.1 through
-# 2026-12-31; 3.1-flash-live-preview is now labelled legacy). The non-thinking
-# sibling `gemini-3.8-live` rejects thinkingLevel entirely and the extended one
-# has no MINIMAL — gemini_live._build_config handles both. 2.5 native-audio is
+# Default to plain 3.8-live (GA 2026-09-15, same price as 3.1 through 2026-12-31;
+# 3.1-flash-live-preview is now labelled legacy). Cost-lean: no thinking (it
+# rejects thinkingLevel, so gemini_live._build_config omits thinking_config) and
+# takes the default BLOCKING tools. The extended-thinking sibling
+# `gemini-3.8-live-extended-thinking` is usable too — it needs NON_BLOCKING tool
+# declarations, which _build_config now sets for it (a BLOCKING one made it error
+# mid-turn with a spoken "I'm sorry, an error occurred.", device-observed
+# 2026-09-17) — but we keep plain live as the default. 2.5 native-audio is
 # ~33% cheaper on text tokens but through the campaign-api proxy it returns WS
 # 1011 on a turn that follows an idle pause, so it needs the whole idle-workaround
 # set — including the suppressed mid-activity [TURN CONTEXT], which silently drops
@@ -1237,7 +1241,7 @@ REALTIME_GEMINI_BASE_URL: str = (
 # re-enables them automatically, and also requires the language_code-omit fix in
 # gemini_live.py (native-audio rejects an explicit language_code). Override via
 # realtime.gemini.model or HAL_GEMINI_LIVE_MODEL.
-REALTIME_GEMINI_MODEL: str = _rt_str("HAL_GEMINI_LIVE_MODEL", _RT_GEMINI.get("model"), "gemini-3.8-live-extended-thinking")
+REALTIME_GEMINI_MODEL: str = _rt_str("HAL_GEMINI_LIVE_MODEL", _RT_GEMINI.get("model"), "gemini-3.8-live")
 REALTIME_GEMINI_VOICE: str = _rt_str("HAL_GEMINI_LIVE_VOICE", _RT_GEMINI.get("voice"), "Kore")
 REALTIME_GEMINI_SAMPLE_RATE: int = 16000
 REALTIME_GEMINI_THINKING_LEVEL: str = _rt_str("HAL_GEMINI_THINKING_LEVEL", _RT_GEMINI.get("thinking_level"), "LOW")

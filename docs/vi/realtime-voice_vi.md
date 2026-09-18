@@ -1895,9 +1895,15 @@ liên tục đồng ý.
    (`[realtime->model] DROPPED …`).
 
    **Điều này không áp dụng cho cấu hình mặc định đang ship.** `REALTIME_GEMINI_MODEL`
-   mặc định là `gemini-3.8-live-extended-thinking` (`hal/config.py`), không phải
+   mặc định là `gemini-3.8-live` (`hal/config.py`), không phải
    native-audio, nên guard tắt và cả context lẫn correction đều tới được model. Nó chỉ
-   bật lại khi ai đó cấu hình một model `*native-audio*`.
+   bật lại khi ai đó cấu hình một model `*native-audio*`. Mặc định là bản
+   `gemini-3.8-live` thường, KHÔNG phải `-extended-thinking`: rẻ, nhận tool BLOCKING
+   mặc định và bỏ hẳn thinking (nó từ chối `thinkingLevel` nên
+   `gemini_live._build_config` không gửi). Bản extended vẫn dùng được — nó chỉ nhận
+   tool khai báo NON_BLOCKING, và `_build_config` giờ đã set NON_BLOCKING cho nó (khai
+   BLOCKING thì model lỗi giữa turn, phát "I'm sorry, an error occurred.", quan sát
+   trên device 2026-09-17) — nhưng vẫn giữ plain live làm mặc định.
 4. **Commit.** Cuối session, nếu enabled + `available` + có audio buffer, gọi
    `commit_audio()`. Cue emotion `thinking` fire cùng lúc commit (mặt + servo +
    LED pulse ÉP HIỆN — `thinking` vốn là background emotion có LED nhường
@@ -2070,7 +2076,7 @@ lần os-server lưu lại config — muốn ghim bền trên thiết bị thì 
   "realtime": {
     "enabled": true,
     "provider": "gemini",
-    "gemini": { "model": "gemini-3.8-live-extended-thinking", "voice": "Kore", "thinking_level": "LOW" },
+    "gemini": { "model": "gemini-3.8-live", "voice": "Kore", "thinking_level": "LOW" },
     "openai": { "model": "gpt-realtime-2", "voice": "alloy", "reasoning_effort": "minimal" },
     "gptlive": { "model": "gpt-live-1", "voice": "marin" }
   }
