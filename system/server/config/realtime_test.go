@@ -26,8 +26,8 @@ func TestRealtime_DefaultsWhenUnset(t *testing.T) {
 	if got := c.RealtimeVoice(); got != defaultRealtimeGeminiVoice {
 		t.Errorf("RealtimeVoice() = %q, want %q", got, defaultRealtimeGeminiVoice)
 	}
-	if got := c.RealtimeReasoning(); got != "MINIMAL" {
-		t.Errorf("RealtimeReasoning() = %q, want MINIMAL (cost-lean default)", got)
+	if got := c.RealtimeReasoning(); got != defaultRealtimeGeminiThinking {
+		t.Errorf("RealtimeReasoning() = %q, want %q (cost-lean default)", got, defaultRealtimeGeminiThinking)
 	}
 	if got := c.RealtimeAPIKey(); got != "llm-key" {
 		t.Errorf("RealtimeAPIKey() = %q, want LLM fallback", got)
@@ -84,7 +84,7 @@ func TestRealtime_EnabledAndOff(t *testing.T) {
 // provider normalizes: empty/unset → gemini default; none/off/disabled → "".
 func TestRealtime_ProviderNormalize(t *testing.T) {
 	cases := map[string]string{
-		"  Gemini ": "gemini", "OPENAI": "openai",
+		"  Gemini ": "gemini", "OPENAI": "openai", "GPTLive": "gptlive",
 		"": "gemini", "none": "", "off": "", "disabled": "",
 	}
 	for in, want := range cases {
@@ -140,13 +140,15 @@ func TestRealtime_MissingSubAndKeyOverride(t *testing.T) {
 
 // Validation accepts good provider/voice/reasoning and rejects bad ones.
 func TestRealtime_Validate(t *testing.T) {
-	for _, ok := range []string{"gemini", "openai", "none", "off", "", "Gemini"} {
+	for _, ok := range []string{"gemini", "openai", "gptlive", "none", "off", "", "Gemini", " GPTLive "} {
 		if err := ValidateRealtimeProvider(ok); err != nil {
 			t.Errorf("provider %q should be valid: %v", ok, err)
 		}
 	}
-	if ValidateRealtimeProvider("grok") == nil {
-		t.Error("provider grok should be rejected")
+	for _, bad := range []string{"grok", "qwen", "gpt-live", "openai-live"} {
+		if ValidateRealtimeProvider(bad) == nil {
+			t.Errorf("provider %q should be rejected", bad)
+		}
 	}
 
 	// gemini knobs
@@ -165,6 +167,37 @@ func TestRealtime_Validate(t *testing.T) {
 	}
 	if ValidateRealtimeKnobs("openai", "Kore", "") == nil {
 		t.Error("gemini voice on openai should be rejected")
+	}
+	// gptlive knobs: any listed voice is fine, reasoning is always rejected
+	// (the Live model has no such knob), foreign voices are rejected.
+	for _, v := range RealtimeGPTLiveVoiceList {
+		if err := ValidateRealtimeKnobs("gptlive", v, ""); err != nil {
+			t.Errorf("valid gptlive voice %q rejected: %v", v, err)
+		}
+	}
+	if err := ValidateRealtimeKnobs(" GPTLive ", "marin", ""); err != nil {
+		t.Errorf("gptlive provider should normalize case/space: %v", err)
+	}
+	if ValidateRealtimeKnobs("gptlive", "Kore", "") == nil {
+		t.Error("gemini voice on gptlive should be rejected")
+	}
+	if ValidateRealtimeKnobs("gptlive", "fable", "") == nil {
+		t.Error("openai-only voice fable on gptlive should be rejected")
+	}
+	for _, r := range []string{"minimal", "low", "high", "xhigh", "MINIMAL"} {
+		err := ValidateRealtimeKnobs("gptlive", "", r)
+		if err == nil {
+			t.Errorf("reasoning %q on gptlive should be rejected (no reasoning knob)", r)
+		} else if !strings.Contains(err.Error(), "no reasoning knob") {
+			t.Errorf("gptlive reasoning error should say why, got: %v", err)
+		}
+	}
+	if err := ValidateRealtimeKnobs("gptlive", "", ""); err != nil {
+		t.Errorf("empty gptlive knobs should be allowed: %v", err)
+	}
+	// gptlive-only voices must not leak into the openai realtime set.
+	if ValidateRealtimeKnobs("openai", "marin", "") == nil {
+		t.Error("gptlive-only voice marin on openai should be rejected")
 	}
 	// empty voice/reasoning allowed (keep current)
 	if err := ValidateRealtimeKnobs("gemini", "", ""); err != nil {
@@ -190,11 +223,17 @@ func TestRealtime_DefaultSeed(t *testing.T) {
 	if rt.APIKey != "" || rt.BaseURL != "" {
 		t.Error("seed: api_key/base_url should be empty (LLM fallback)")
 	}
-	if rt.Gemini == nil || rt.Gemini.ThinkingLevel != "MINIMAL" || rt.Gemini.Model != defaultRealtimeGeminiModel {
+	if rt.Gemini == nil || rt.Gemini.ThinkingLevel != defaultRealtimeGeminiThinking || rt.Gemini.Model != defaultRealtimeGeminiModel {
 		t.Errorf("seed gemini wrong: %+v", rt.Gemini)
 	}
 	if rt.OpenAI == nil || rt.OpenAI.ReasoningEffort != "minimal" {
 		t.Errorf("seed openai wrong: %+v", rt.OpenAI)
+	}
+	if rt.GPTLive == nil || rt.GPTLive.Model != "gpt-live-1" || rt.GPTLive.Voice != "marin" {
+		t.Errorf("seed gptlive wrong: %+v", rt.GPTLive)
+	}
+	if rt.GPTLive != nil && (rt.GPTLive.APIKey != "" || rt.GPTLive.BaseURL != "") {
+		t.Error("seed gptlive: api_key/base_url should be empty (shared realtime credentials)")
 	}
 
 	// Default() now carries the seeded block, so a fresh config.json includes it.
@@ -235,5 +274,112 @@ func TestRealtime_JSONOmitAndRoundTrip(t *testing.T) {
 	if out.RealtimeProvider() != "openai" || out.RealtimeModel() != "gpt-rt" || out.RealtimeReasoning() != "xhigh" {
 		t.Errorf("round-trip lost data: provider=%q model=%q reasoning=%q",
 			out.RealtimeProvider(), out.RealtimeModel(), out.RealtimeReasoning())
+	}
+}
+
+// gptlive resolves like the other providers: defaults when the sub-object is
+// missing, overrides when set, and NO reasoning (the Live model has no knob).
+// Credentials stay on the shared realtime fields (LLM fallback), not the
+// sub-object — HAL reads the shared key; the base URL is never derived from
+// llm_base_url, so the override stays blank unless the operator sets one.
+func TestRealtime_GPTLiveResolution(t *testing.T) {
+	c := &Config{
+		LLMAPIKey:  "llm-key",
+		LLMBaseURL: "https://llm.example",
+		Realtime:   &RealtimeConfig{Provider: "gptlive"}, // no GPTLive sub
+	}
+	if got := c.RealtimeProvider(); got != "gptlive" {
+		t.Fatalf("RealtimeProvider() = %q, want gptlive", got)
+	}
+	if got := c.RealtimeModel(); got != "gpt-live-1" {
+		t.Errorf("RealtimeModel() = %q, want gpt-live-1 default", got)
+	}
+	if got := c.RealtimeVoice(); got != "marin" {
+		t.Errorf("RealtimeVoice() = %q, want marin default", got)
+	}
+	if got := c.RealtimeReasoning(); got != "" {
+		t.Errorf("RealtimeReasoning() = %q, want \"\" (gptlive has no reasoning knob)", got)
+	}
+	if c.RealtimeAPIKey() != "llm-key" || c.RealtimeHasAPIKey() {
+		t.Errorf("gptlive credentials should fall back to the shared/LLM key: key=%q has=%v",
+			c.RealtimeAPIKey(), c.RealtimeHasAPIKey())
+	}
+	if got := c.RealtimeBaseURLOverride(); got != "" {
+		t.Errorf("RealtimeBaseURLOverride() = %q, want \"\" (no override)", got)
+	}
+
+	c.Realtime.GPTLive = &GPTLiveRealtime{Model: "gpt-live-next", Voice: "cedar"}
+	c.Realtime.APIKey = "rt-key"
+	if c.RealtimeModel() != "gpt-live-next" || c.RealtimeVoice() != "cedar" {
+		t.Errorf("gptlive overrides not applied: model=%q voice=%q", c.RealtimeModel(), c.RealtimeVoice())
+	}
+	if c.RealtimeAPIKey() != "rt-key" || !c.RealtimeHasAPIKey() {
+		t.Errorf("shared realtime key not used for gptlive: key=%q", c.RealtimeAPIKey())
+	}
+	// The inactive providers' blocks do not bleed into gptlive resolution.
+	c.Realtime.OpenAI = &OpenAIRealtime{Model: "gpt-rt", Voice: "alloy", ReasoningEffort: "xhigh"}
+	if c.RealtimeModel() != "gpt-live-next" || c.RealtimeReasoning() != "" {
+		t.Errorf("openai block leaked into gptlive: model=%q reasoning=%q", c.RealtimeModel(), c.RealtimeReasoning())
+	}
+}
+
+// The options payload the web renders carries gptlive: listed as a provider
+// (before none), its 22-voice list, and an EMPTY (not absent, not null)
+// reasoning list so the selector is hidden client-side.
+func TestRealtime_OptionsIncludeGPTLive(t *testing.T) {
+	opts := GetRealtimeOptions()
+	want := []string{"gemini", "openai", "gptlive", "none"}
+	if strings.Join(opts.Providers, ",") != strings.Join(want, ",") {
+		t.Errorf("Providers = %v, want %v", opts.Providers, want)
+	}
+	if got := opts.Voices["gptlive"]; len(got) != 13 || got[0] != "marin" || got[len(got)-1] != "cinder" {
+		t.Errorf("Voices[gptlive] = %v, want the 22-entry BuiltInVoice list", got)
+	}
+	for _, v := range opts.Voices["gptlive"] {
+		if err := ValidateRealtimeKnobs("gptlive", v, ""); err != nil {
+			t.Errorf("options voice %q not accepted by validation: %v", v, err)
+		}
+	}
+	reasoning, ok := opts.Reasoning["gptlive"]
+	if !ok || reasoning == nil || len(reasoning) != 0 {
+		t.Errorf("Reasoning[gptlive] = %v (present=%v), want an empty non-nil list", reasoning, ok)
+	}
+	data, err := json.Marshal(opts)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(data), `"gptlive":[]`) {
+		t.Errorf("options JSON should carry \"gptlive\":[] for reasoning, got: %s", data)
+	}
+}
+
+// The gptlive sub-object round-trips through JSON (including its optional
+// per-provider credential overrides) and a nil sub-object omits the key.
+func TestRealtime_GPTLiveJSONRoundTrip(t *testing.T) {
+	noSub, err := json.Marshal(&Config{Realtime: &RealtimeConfig{Provider: "gptlive"}})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(noSub), `"gptlive":{`) {
+		t.Errorf("nil GPTLive should omit the sub-object, got: %s", noSub)
+	}
+	in := &Config{Realtime: &RealtimeConfig{
+		Provider: "gptlive",
+		GPTLive:  &GPTLiveRealtime{Model: "gpt-live-1", Voice: "marin", APIKey: "sub-key", BaseURL: "https://live.example"},
+	}}
+	data, err := json.Marshal(in)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var out Config
+	if err := json.Unmarshal(data, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if out.RealtimeProvider() != "gptlive" || out.RealtimeModel() != "gpt-live-1" || out.RealtimeVoice() != "marin" {
+		t.Errorf("round-trip lost data: provider=%q model=%q voice=%q",
+			out.RealtimeProvider(), out.RealtimeModel(), out.RealtimeVoice())
+	}
+	if out.Realtime.GPTLive == nil || out.Realtime.GPTLive.APIKey != "sub-key" || out.Realtime.GPTLive.BaseURL != "https://live.example" {
+		t.Errorf("gptlive credential overrides lost: %+v", out.Realtime.GPTLive)
 	}
 }

@@ -178,7 +178,7 @@ curl -fsSL https://cdn.autonomous.ai/os/install.sh | sudo bash
 | -1 | Locale fix | Đảm bảo encoding `C.UTF-8` |
 | 0 | Prerequisites | Packages hệ thống, Node.js 22 |
 | 0a | WiFi stability | Tắt IPv6, WiFi power saving (RPi5) |
-| 0b | Enable SPI | Cho WS2812 LED driver + GC9A01 display |
+| 0b | Bật SPI + I2C | Cho WS2812 LED driver + GC9A01 display; bus I2C cho ngoại vi |
 | 1 | Fetch OTA metadata | Tải metadata.json, trích xuất versions và URLs |
 | 1b | Install binaries | Tải + cài os-server, bootstrap-server, tạo systemd services |
 | 2 | Install OpenClaw | `npm install -g openclaw`, tạo config, systemd service |

@@ -31,6 +31,10 @@ def resolve_camera_device_id(
     devices are picked by name instead of a bare index.
 
     Preference order:
+    0. An absolute path (e.g. "/dev/device-camera", a udev SYMLINK keyed on the
+       camera's vid:pid — the camera counterpart of asound.conf's role aliases)
+       is returned as-is when it exists, so .env names a ROLE and the udev rule
+       decides which hardware fills it. Missing path falls through to 3.
     1. /dev/v4l/by-id capture symlink ("...-video-index0") whose name contains
        the needle — returned AS the symlink path, so later reopens follow it
        to the right node even when the kernel renumbers /dev/video<N> after a
@@ -43,6 +47,18 @@ def resolve_camera_device_id(
     With no name configured the legacy index passes through untouched.
     """
     if not name:
+        return fallback_index
+    if name.startswith("/"):
+        if os.path.exists(name):
+            _resolve_logger.info(
+                "Camera resolved by path %r (%s)", name, os.path.realpath(name)
+            )
+            return name
+        _resolve_logger.warning(
+            "Camera path %r does not exist — falling back to index %d",
+            name,
+            fallback_index,
+        )
         return fallback_index
     needle = _norm_device_name(name)
     try:
@@ -317,9 +333,10 @@ class LocalVideoCaptureDevice(VideoCaptureDeviceBase):
         manual exposure/gain across process restarts, so a leftover manual
         state from an earlier configuration would otherwise survive an .env
         switch to auto forever (green/posterized frames when the leftover gain
-        is high). Leftover manual gain is NOT reset — its default is
-        camera-specific and auto-exposure compensates for it; clear it once
-        with `v4l2-ctl --set-ctrl gain=<default>` if needed.
+        is high). Gain is pinned to HAL_CAMERA_GAIN in auto mode too: UVC
+        auto-exposure only moves integration time, so a gain left at max by an
+        earlier manual run (seen on lamp-4ace, gain 128/128) blows out a lit
+        room no matter what auto-exposure does.
 
         V4L2/UVC CAP_PROP_AUTO_EXPOSURE: 1 = manual, 3 = aperture-priority
         (auto). CAP_PROP_EXPOSURE is exposure_absolute in ×100µs units.
@@ -328,9 +345,12 @@ class LocalVideoCaptureDevice(VideoCaptureDeviceBase):
         if (self._auto_exposure or "auto") != "manual":
             try:
                 video_capture.set(cv2.CAP_PROP_AUTO_EXPOSURE, 3)
+                if self._gain is not None:
+                    video_capture.set(cv2.CAP_PROP_GAIN, float(self._gain))
                 self._logger.info(
-                    "Camera exposure: auto (auto_exposure=%.0f)",
+                    "Camera exposure: auto (auto_exposure=%.0f gain=%.0f)",
                     video_capture.get(cv2.CAP_PROP_AUTO_EXPOSURE),
+                    video_capture.get(cv2.CAP_PROP_GAIN),
                 )
             except Exception:
                 self._logger.exception(

@@ -51,3 +51,44 @@ def resample_float32(
     import scipy.signal
     g = gcd(dst_rate, src_rate)
     return scipy.signal.resample_poly(audio, dst_rate // g, src_rate // g).astype(np.float32)
+
+
+class StreamingResampler:
+    """Frame-by-frame resampler that keeps continuity across frames.
+
+    `resample_float32` on an isolated 20 ms frame lets the polyphase FIR see a
+    hard zero edge at both ends, so every frame boundary rings — a 50 Hz click
+    train over the speech that was loud enough to stop GPT-Live transcribing a
+    single word (device-measured 2026-09-17 on a 16 → 24 kHz uplink). The
+    filter is zero-phase, so it needs real samples on BOTH sides of every
+    output sample: this keeps `history` input samples before and after the
+    region it emits (overlap-save with lookahead), which delays the stream by
+    `history` input samples (4 ms at 16 kHz for the default 64).
+    """
+
+    def __init__(self, src_rate: int, dst_rate: int, history: int = 64) -> None:
+        self.src_rate = src_rate
+        self.dst_rate = dst_rate
+        self._history = history if src_rate != dst_rate else 0
+        # [history][not-yet-emitted lookahead] — starts as silence history.
+        self._buf: npt.NDArray[np.float32] = np.zeros(self._history, dtype=np.float32)
+
+    def process(self, audio: npt.NDArray[np.float32]) -> npt.NDArray[np.float32]:
+        if self.src_rate == self.dst_rate or len(audio) == 0:
+            return audio
+        h = self._history
+        buf = np.concatenate([self._buf, audio])
+        end_in = len(buf) - h  # input index up to which output is reliable
+        if end_in <= h:
+            self._buf = buf
+            return np.zeros(0, dtype=np.float32)
+        out = resample_float32(buf, self.src_rate, self.dst_rate)
+        lo = h * self.dst_rate // self.src_rate
+        hi = end_in * self.dst_rate // self.src_rate
+        # Keep h samples before the cut (history) and the h after it (lookahead
+        # whose output could not be trusted yet) for the next call.
+        self._buf = buf[end_in - h:]
+        return out[lo:hi]
+
+    def reset(self) -> None:
+        self._buf = np.zeros(self._history, dtype=np.float32)

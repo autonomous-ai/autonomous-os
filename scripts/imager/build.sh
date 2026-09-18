@@ -42,7 +42,7 @@
 #         - Verify btrfs binary works (shared libs check)
 #         - Generate locale
 #         - stage_rpi5_wifi_stability: disable IPv6 (legacy RPi 5 workaround)
-#         - stage_enable_spi: dtparam=spi=on in config.txt
+#         - stage_enable_spi: dtparam=spi=on + dtparam=i2c_arm=on in config.txt
 #         - stage_backend_units: systemd services (bootstrap, os-server, hal) + software-update
 #         - stage_pulseaudio: PulseAudio echo cancellation (WebRTC AEC for mic/speaker)
 #         - stage_hal_uv: install uv (Python package manager for HAL)
@@ -840,19 +840,21 @@ EOF
 sysctl -p /etc/sysctl.d/99-${DEVICE_TYPE}-wifi.conf 2>/dev/null || true
 fi
 
-# ── stage: SPI ────────────────────────────────────────────────────────────────
-# Enable the SPI bus in firmware config for hardware peripherals.
-# Checks if dtparam=spi=on is already present (commented or not) before adding.
-echo "[stage] Enable SPI"
+# ── stage: SPI + I2C ──────────────────────────────────────────────────────────
+# Enable the SPI and I2C buses in firmware config for hardware peripherals.
+# Checks if each dtparam is already present (commented or not) before adding.
+echo "[stage] Enable SPI + I2C"
 CFG=""
 [ -f /boot/firmware/config.txt ] && CFG=/boot/firmware/config.txt
 [ -z "\$CFG" ] && [ -f /boot/config.txt ] && CFG=/boot/config.txt
 if [ -n "\$CFG" ]; then
-  if grep -qE '^\s*#?\s*dtparam=spi=on' "\$CFG" 2>/dev/null; then
-    sed -i -E 's/^\s*#\s*(dtparam=spi=on)/\1/' "\$CFG" || true
-  else
-    printf '\n# SPI enabled by lamp build\ndtparam=spi=on\n' >> "\$CFG"
-  fi
+  for param in spi=on i2c_arm=on; do
+    if grep -qE "^\s*#?\s*dtparam=\$param" "\$CFG" 2>/dev/null; then
+      sed -i -E "s/^\s*#\s*(dtparam=\$param)/\1/" "\$CFG" || true
+    else
+      printf '\n# enabled by lamp build\ndtparam=%s\n' "\$param" >> "\$CFG"
+    fi
+  done
 fi
 
 # NOTE: OTA metadata fetch, backend binary downloads, and web UI download

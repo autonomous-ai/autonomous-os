@@ -216,7 +216,7 @@ The USB camera's auto-exposure stretches integration time in low light (~60ms), 
 |---|---|---|
 | `HAL_CAMERA_AUTO_EXPOSURE` | `auto` | `auto` uses the camera's adaptive auto-exposure (default; brighter/adaptive but throttles fps in low light). `manual` pins exposure using the values below — risks the ISP color corruption with high gain. |
 | `HAL_CAMERA_EXPOSURE` | `330` | Manual exposure time, V4L2 `exposure_absolute` ×100µs: `200`=20ms (30fps), `330`=33ms (≈30fps ceiling), `500`=50ms (≈20fps). |
-| `HAL_CAMERA_GAIN` | `96` | Sensor gain (camera-specific, e.g. 0–255). Brightens without costing fps, but adds noise; values above ~144 risk the ISP color corruption. |
+| `HAL_CAMERA_GAIN` | `96` | Sensor gain (camera-specific, e.g. 0–255). Brightens without costing fps, but adds noise; values above ~144 risk the ISP color corruption. Written in both modes (see below). |
 | `HAL_CAMERA_BRIGHTNESS` | _(unset)_ | Brightness offset (camera-specific, e.g. -64..64). Digital lift. |
 
 The defaults apply even with no `.env` entries. To pin the frame rate on a device, set `HAL_CAMERA_AUTO_EXPOSURE=manual` per device — the manual fallbacks (330 / 96) are values verified color-stable; the old defaults (`manual` / 500 / 255) are the known-toxic combo.
@@ -225,7 +225,7 @@ The defaults apply even with no `.env` entries. To pin the frame rate on a devic
 
 `_apply_camera_controls()` (`drivers/camera/video_capture_device.py`) runs after the resolution is set on open **and on every device reopen** — a fresh open resets the camera to defaults, which would otherwise silently drop manual exposure and re-introduce the FPS throttle. It maps to V4L2/UVC controls via OpenCV: `CAP_PROP_AUTO_EXPOSURE` (1=manual, 3=auto), `CAP_PROP_EXPOSURE`, `CAP_PROP_GAIN`, `CAP_PROP_BRIGHTNESS`.
 
-In `auto` mode the control is actively set to 3 (aperture-priority) on every open, not left untouched: UVC cameras retain manual exposure/gain across HAL restarts, so a leftover manual state from an earlier configuration would otherwise survive an `.env` switch to `auto`. Leftover manual **gain** is not reset (its default is camera-specific and auto-exposure compensates); clear it once with `v4l2-ctl -d /dev/video0 --set-ctrl gain=<default>` if colors stay off after switching to auto. Note `.env` changes only take effect after `systemctl restart hal` — the running process keeps the env it started with.
+In `auto` mode the control is actively set to 3 (aperture-priority) on every open, not left untouched: UVC cameras retain manual exposure/gain across HAL restarts, so a leftover manual state from an earlier configuration would otherwise survive an `.env` switch to `auto`. **Gain** is pinned to `HAL_CAMERA_GAIN` in `auto` mode too: UVC auto-exposure only moves integration time, so a gain the camera retained at max from an earlier manual run blows out a lit room regardless of auto-exposure (lamp-4ace, 2026-09-18: gain 128/128, ceiling and windows white; 64 restored the image). Note `.env` changes only take effect after `systemctl restart hal` — the running process keeps the env it started with.
 
 ### Trade-off
 
@@ -235,8 +235,9 @@ Frame rate vs brightness is a hard physical trade-off in a dark room: the max ex
 
 By default the camera is opened by index: `HAL_CAMERA_INDEX` (default `0`) → `/dev/video0`, with a fallback scan (`/dev/cam` udev symlink, then indexes 0–5). A bare index is fragile — plugging another USB device or a changed boot enumeration order can shuffle `/dev/video<N>`.
 
-`HAL_CAMERA_NAME` (optional) selects the camera by hardware name instead, mirroring how audio devices are picked (`resolve_camera_device_id()` in `drivers/camera/video_capture_device.py`). It is a case-insensitive substring of the v4l2 device name (e.g. `OPENAICAM`). Resolution order:
+`HAL_CAMERA_NAME` (optional) selects the camera by role alias or hardware name instead, mirroring how audio devices are picked (`resolve_camera_device_id()` in `drivers/camera/video_capture_device.py`). It is either an absolute path or a case-insensitive substring of the v4l2 device name (e.g. `OPENAICAM`). Resolution order:
 
+0. **Absolute path** (e.g. `/dev/device-camera`, the udev `SYMLINK` keyed on the camera's vid:pid in `99-lamp-device.rules`) — returned as-is when it exists. This is the camera counterpart of `asound.conf`'s `device_speaker`: `.env` names a role, udev decides which hardware fills it, so a camera swap is a udev change only. The lamp standard `.env` uses this. A missing path falls back to the index (step 3).
 1. **`/dev/v4l/by-id` capture symlink** (`...-video-index0`) whose name contains the needle — returned as the symlink path, so reopens keep following it even when the kernel renumbers `/dev/video<N>` after a replug or USB power-cycle.
 2. **sysfs name scan** — `/sys/class/video4linux/video<N>/name` match (lowest N first), skipping UVC metadata sibling nodes (same name, non-zero `index` attribute, cannot capture).
 3. **Legacy index fallback** with a warning when nothing matches (camera absent or renamed).

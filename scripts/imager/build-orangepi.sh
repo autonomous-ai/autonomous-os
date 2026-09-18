@@ -1178,12 +1178,12 @@ else
   systemctl enable ssh 2>/dev/null || true
 fi
 
-# ── SPI3 overlay for WS2812 RGB LED ring (OrangePi 4 Pro A733) ───────────────
-echo "[stage] enable SPI3 overlay for LED ring"
+# ── DT overlays (OrangePi 4 Pro A733): SPI3 for WS2812 LED ring, I2C0 (TWI0) ─
+echo "[stage] enable SPI3 + I2C0 overlays"
 if grep -q "^overlays=" /boot/orangepiEnv.txt 2>/dev/null; then
-  sed -i "s/^overlays=.*/& spi3-cs0-cs1-spidev/" /boot/orangepiEnv.txt
+  sed -i "s/^overlays=.*/& spi3-cs0-cs1-spidev i2c0/" /boot/orangepiEnv.txt
 else
-  echo "overlays=spi3-cs0-cs1-spidev" >> /boot/orangepiEnv.txt
+  echo "overlays=spi3-cs0-cs1-spidev i2c0" >> /boot/orangepiEnv.txt
 fi
 
 echo "[stage] chroot Phase 2 complete"
@@ -1581,6 +1581,14 @@ sync
 umount "${MNT}"
 losetup -d "${LOOP_DEV}"; LOOP_DEV=""
 
+# COMPRESS=0 skips the .xz step (single-threaded under Docker's ~2 GB memory
+# cap, so it can take longer than the whole build). The raw .img is complete
+# and flashable via `make sd-card-flash-raw`.
+if [ "${COMPRESS:-1}" = "0" ]; then
+  log "DONE: ${OUT_IMG} (COMPRESS=0, skipped .xz)"
+  log "Flash:  make sd-card-flash-raw DEVICE_TYPE=${DEVICE_TYPE} DISK=N"
+  exit 0
+fi
 log "Compressing ${OUT_IMG} → ${OUT_IMG}.xz (this takes a few minutes)…"
 rm -f "${OUT_IMG}.xz"
 # -k keeps the original .img alongside the .xz so operator can verify/inspect

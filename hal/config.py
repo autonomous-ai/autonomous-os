@@ -27,12 +27,13 @@ _mode = os.environ.get("HAL_MODE", "production").strip().lower()
 MODE: str = "developer" if _mode == "developer" else "production"
 HTTP_HOST: str = "0.0.0.0" if MODE == "developer" else "127.0.0.1"
 CAMERA_INDEX = int(os.environ.get("HAL_CAMERA_INDEX", "0"))
-# Optional camera selection by device NAME instead of a bare index (mirrors how
-# audio picks devices by hardware name). Case-insensitive substring matched
-# against the v4l2 device name (e.g. "OPENAICAM"); resolution prefers the
-# stable /dev/v4l/by-id capture symlink so the pick survives index shuffles
-# from replug/boot-order. Unset = legacy index behavior. On no match HAL logs
-# a warning and falls back to HAL_CAMERA_INDEX.
+# Optional camera selection instead of a bare index. Either an absolute path
+# (e.g. "/dev/device-camera", a udev SYMLINK keyed on vid:pid — same role-alias
+# idea as asound.conf's device_speaker) or a case-insensitive substring of the
+# v4l2 device name (e.g. "OPENAICAM"); name resolution prefers the stable
+# /dev/v4l/by-id capture symlink so the pick survives index shuffles from
+# replug/boot-order. Unset = legacy index behavior. On no match HAL logs a
+# warning and falls back to HAL_CAMERA_INDEX.
 CAMERA_NAME = os.environ.get("HAL_CAMERA_NAME", "").strip() or None
 CAMERA_WIDTH = int(os.environ.get("HAL_CAMERA_WIDTH", "640"))
 CAMERA_HEIGHT = int(os.environ.get("HAL_CAMERA_HEIGHT", "480"))
@@ -49,7 +50,9 @@ CAMERA_HEIGHT = int(os.environ.get("HAL_CAMERA_HEIGHT", "480"))
 CAMERA_AUTO_EXPOSURE = os.environ.get("HAL_CAMERA_AUTO_EXPOSURE", "auto").strip().lower()
 CAMERA_EXPOSURE = int(os.environ.get("HAL_CAMERA_EXPOSURE", "330"))
 # Sensor gain (camera-specific range, e.g. 0–255). Brightens without costing fps
-# but adds noise; >~144 risks the ISP color corruption. Applied in manual mode.
+# but adds noise; >~144 risks the ISP color corruption. Applied in BOTH modes:
+# in auto it pins the camera-retained gain so a leftover max gain cannot blow
+# out a lit room (auto-exposure only moves integration time).
 CAMERA_GAIN = int(os.environ.get("HAL_CAMERA_GAIN", "96"))
 # Optional brightness offset (camera-specific, e.g. -64..64); unset = camera default.
 CAMERA_BRIGHTNESS = int(os.environ["HAL_CAMERA_BRIGHTNESS"]) if os.environ.get("HAL_CAMERA_BRIGHTNESS") else None
@@ -954,7 +957,7 @@ def _os_cfg_realtime() -> dict:
 _RT: dict = _os_cfg_realtime()
 _RT_GEMINI: dict = _RT.get("gemini") if isinstance(_RT.get("gemini"), dict) else {}
 _RT_OPENAI: dict = _RT.get("openai") if isinstance(_RT.get("openai"), dict) else {}
-_RT_QWEN: dict = _RT.get("qwen") if isinstance(_RT.get("qwen"), dict) else {}
+_RT_GPTLIVE: dict = _RT.get("gptlive") if isinstance(_RT.get("gptlive"), dict) else {}
 
 
 def _rt_str(env_key: str, cfg_val, default: str) -> str:
@@ -977,7 +980,7 @@ def _rt_enabled() -> bool:
 
 
 REALTIME_ENABLED: bool = _rt_enabled()
-REALTIME_PROVIDER: str = _rt_str("HAL_REALTIME_PROVIDER", _RT.get("provider"), "gemini")  # none | gemini | openai | qwen
+REALTIME_PROVIDER: str = _rt_str("HAL_REALTIME_PROVIDER", _RT.get("provider"), "gemini")  # none | gemini | openai | gptlive
 # When enabled, do not send a voice turn to the realtime agent until an STT
 # interim transcript starts with one of the configured wake phrases. This is a
 # top-level config.json setting because it also gates the non-realtime Go path.
@@ -1224,20 +1227,27 @@ REALTIME_GEMINI_BASE_URL: str = (
     or _RT.get("base_url", "")
     or ((_os_cfg_get("llm_base_url", "").rstrip("/") + "/ws/gemini") if _os_cfg_get("llm_base_url", "") else "")
 )
-# Default to 3.1-flash-live. 2.5 native-audio is ~33% cheaper on text tokens
-# ($0.50 vs $0.75 /M in, same per-turn usage measured on device), but through the
-# campaign-api proxy it returns WS 1011 on a turn that follows an idle pause, so
-# it needs the whole idle-workaround set — including the suppressed
-# mid-activity [TURN CONTEXT], which silently drops the per-turn speaker identity
-# and language reminder (see gemini_needs_idle_workaround() in realtime/config.py).
-# 3.1 has neither problem, so every workaround stays off. Switching back to a
-# *native-audio* model re-enables them automatically, and also requires the
-# language_code-omit fix in gemini_live.py (native-audio rejects an explicit
-# language_code). Override via realtime.gemini.model or HAL_GEMINI_LIVE_MODEL.
-REALTIME_GEMINI_MODEL: str = _rt_str("HAL_GEMINI_LIVE_MODEL", _RT_GEMINI.get("model"), "gemini-3.1-flash-live-preview")
+# Default to plain 3.8-live (GA 2026-09-15, same price as 3.1 through 2026-12-31;
+# 3.1-flash-live-preview is now labelled legacy). Cost-lean: no thinking (it
+# rejects thinkingLevel, so gemini_live._build_config omits thinking_config) and
+# takes the default BLOCKING tools. The extended-thinking sibling
+# `gemini-3.8-live-extended-thinking` is usable too — it needs NON_BLOCKING tool
+# declarations, which _build_config now sets for it (a BLOCKING one made it error
+# mid-turn with a spoken "I'm sorry, an error occurred.", device-observed
+# 2026-09-17) — but we keep plain live as the default. 2.5 native-audio is
+# ~33% cheaper on text tokens but through the campaign-api proxy it returns WS
+# 1011 on a turn that follows an idle pause, so it needs the whole idle-workaround
+# set — including the suppressed mid-activity [TURN CONTEXT], which silently drops
+# the per-turn speaker identity and language reminder (see
+# gemini_needs_idle_workaround() in realtime/config.py). 3.x has neither problem,
+# so every workaround stays off. Switching back to a *native-audio* model
+# re-enables them automatically, and also requires the language_code-omit fix in
+# gemini_live.py (native-audio rejects an explicit language_code). Override via
+# realtime.gemini.model or HAL_GEMINI_LIVE_MODEL.
+REALTIME_GEMINI_MODEL: str = _rt_str("HAL_GEMINI_LIVE_MODEL", _RT_GEMINI.get("model"), "gemini-3.8-live")
 REALTIME_GEMINI_VOICE: str = _rt_str("HAL_GEMINI_LIVE_VOICE", _RT_GEMINI.get("voice"), "Kore")
 REALTIME_GEMINI_SAMPLE_RATE: int = 16000
-REALTIME_GEMINI_THINKING_LEVEL: str = _rt_str("HAL_GEMINI_THINKING_LEVEL", _RT_GEMINI.get("thinking_level"), "MINIMAL")
+REALTIME_GEMINI_THINKING_LEVEL: str = _rt_str("HAL_GEMINI_THINKING_LEVEL", _RT_GEMINI.get("thinking_level"), "LOW")
 REALTIME_GEMINI_USE_LANGUAGE_CODES: bool = os.environ.get("HAL_GEMINI_USE_LANGUAGE_CODES", "false").lower() in ("1", "true", "yes")
 # Session resumption lets a reconnect resume the SAME server session (context
 # preserved). It requires the WS endpoint to faithfully forward the resumption
@@ -1612,46 +1622,98 @@ REALTIME_OPENAI_MODEL: str = _rt_str("HAL_OPENAI_REALTIME_MODEL", _RT_OPENAI.get
 REALTIME_OPENAI_VOICE: str = _rt_str("HAL_OPENAI_REALTIME_VOICE", _RT_OPENAI.get("voice"), "alloy")
 REALTIME_OPENAI_SAMPLE_RATE: int = 24000
 REALTIME_OPENAI_REASONING_EFFORT: str = _rt_str("HAL_OPENAI_REASONING_EFFORT", _RT_OPENAI.get("reasoning_effort"), "minimal")
+# Input transcription model. The transcript is the ONLY source of the user's
+# words on the OpenAI path (UserSpeechOutput, live history, the delegate
+# message), so it is always on. gpt-4o-mini-transcribe streams deltas (live
+# history and barge-in confirmation see words early); whisper-1 only sends the
+# completed transcript. env > config.json realtime.openai.transcribe_model > default.
+REALTIME_OPENAI_TRANSCRIBE_MODEL: str = _rt_str(
+    "HAL_OPENAI_TRANSCRIBE_MODEL", _RT_OPENAI.get("transcribe_model"), "gpt-4o-mini-transcribe"
+)
+# Server-side input noise reduction, applied before VAD and the model:
+# "far_field" (laptop / room mic — the lamp's case), "near_field" (headset), or
+# "off". The OpenAI half of the echo defence Gemini gets from VAD sensitivity.
+REALTIME_OPENAI_NOISE_REDUCTION: str = _rt_str(
+    "HAL_OPENAI_NOISE_REDUCTION", _RT_OPENAI.get("noise_reduction"), "far_field"
+).strip().lower()
+# server_vad activation threshold (0..1, API default 0.5). 0 = derive it from
+# HAL_LIVE_VAD_START_SENSITIVITY (low → 0.7, high → 0.3); a non-zero value wins.
+REALTIME_OPENAI_VAD_THRESHOLD: float = float(os.environ.get("HAL_OPENAI_VAD_THRESHOLD", "0") or 0)
 
-# --- Realtime: Qwen Omni Realtime (DashScope / Model Studio intl) ---
-# Unlike gemini/openai there is NO llm_base_url-derived fallback: Qwen realtime
-# talks straight to the Alibaba MaaS host, not through the campaign-api proxy.
-# NOTE: deliberately NO fallback to the shared realtime.api_key/base_url — on
-# devices those hold the campaign-api credentials (gemini/openai path) and
-# would produce a baffling 401 against the Alibaba host. Both values must come
-# from env (device /opt/hal/.env: DASHSCOPE_API_KEY, HAL_QWEN_REALTIME_BASE_URL
-# = wss://<workspace>.ap-southeast-1.maas.aliyuncs.com/api-ws/v1) or from
-# config.json realtime.qwen.{api_key,base_url}; empty → the WS handshake fails
-# loudly in the hal log.
-REALTIME_QWEN_API_KEY: str = (
-    os.environ.get("DASHSCOPE_API_KEY", "")
-    or _RT_QWEN.get("api_key", "")
+# --- Realtime: GPT-Live (OpenAI /v1/live, gpt-live-1) ---
+# A DIFFERENT API from the Realtime API above (see voice_agent/gpt_live.py):
+# full-duplex, client delegation instead of tools, per-minute billing.
+REALTIME_GPTLIVE_API_KEY: str = (
+    os.environ.get("OPENAI_API_KEY", "")
+    or _RT_GPTLIVE.get("api_key", "")
+    or _RT.get("api_key", "")
+    or _os_cfg_get("llm_api_key", "")
 )
-REALTIME_QWEN_BASE_URL: str = (
-    os.environ.get("HAL_QWEN_REALTIME_BASE_URL", "")
-    or _RT_QWEN.get("base_url", "")
+# Same wire as OpenAI Realtime: after its own overrides it falls through to
+# REALTIME_OPENAI_BASE_URL (HAL_OPENAI_REALTIME_BASE_URL > realtime.base_url >
+# <llm_base_url>/ws/openai). The SDK appends "/live/sessions" (wss), so through
+# the campaign-api proxy the session lands on
+# <llm_base_url>/ws/openai/live/sessions — a route the proxy is adding; until it
+# is live the connect 404s and the agent stays in its reconnect backoff. Set
+# HAL_GPTLIVE_BASE_URL=https://api.openai.com/v1 (+ OPENAI_API_KEY) to go
+# direct in the meantime.
+REALTIME_GPTLIVE_BASE_URL: str = (
+    os.environ.get("HAL_GPTLIVE_BASE_URL", "")
+    or _RT_GPTLIVE.get("base_url", "")
+    or REALTIME_OPENAI_BASE_URL
 )
-# Default 3.5-plus: turbo (legacy) NEVER fires function calls and ignores
-# [TURN CONTEXT] (device-tested 2026-07-06 — no delegate, no time answers),
-# which breaks the whole delegate flow; 3.5-plus delegates cleanly, reads turn
-# context, and has built-in web search. Voice: 3.5-plus accepts only
-# Serena/Ethan of the QwenVoice set (Cherry/Chelsie are turbo-only, rejected
-# with InvalidParameter at first response).
-REALTIME_QWEN_MODEL: str = _rt_str("HAL_QWEN_REALTIME_MODEL", _RT_QWEN.get("model"), "qwen3.5-omni-plus-realtime")
-REALTIME_QWEN_VOICE: str = _rt_str("HAL_QWEN_REALTIME_VOICE", _RT_QWEN.get("voice"), "Ethan")
-# Built-in web search (3.5 models): session.update `enable_search: true`. The
-# qwen twin of Gemini's Google Search grounding — public live-data questions
-# (news, scores, weather) get answered IN-SESSION with fresh facts instead of
-# delegating. Without the flag the model answers from stale knowledge
-# (probed 2026-07-06: "no match today" vs the real 2-1 result with it on).
-REALTIME_QWEN_SEARCH: bool = (
-    os.environ.get(
-        "HAL_QWEN_SEARCH",
-        str(_RT_QWEN.get("search", True)),
-    ).lower()
+REALTIME_GPTLIVE_MODEL: str = _rt_str("HAL_GPTLIVE_MODEL", _RT_GPTLIVE.get("model"), "gpt-live-1")
+REALTIME_GPTLIVE_VOICE: str = _rt_str("HAL_GPTLIVE_VOICE", _RT_GPTLIVE.get("voice"), "marin")
+# One PCM format for BOTH directions on a Live WebSocket (16000 or 24000 Hz).
+# 16000 = the mic's own rate, so the live uplink needs no resampling at all;
+# 24000 gives the model's voice more bandwidth at the cost of a resample hop
+# (device-measured 2026-09-17: at 24 kHz the old per-frame resample_poly
+# garbled the uplink so badly GPT-Live never transcribed a word).
+REALTIME_GPTLIVE_SAMPLE_RATE: int = int(os.environ.get("HAL_GPTLIVE_SAMPLE_RATE", "16000") or 16000)
+# Who does the delegated work. "client" = this process (the main agent, via
+# delegate_to_main; no tools at the Live layer). "responses" = an OpenAI-hosted
+# Responses backend that can run `web_search` itself and calls our
+# delegate_to_main function for everything that needs the device; its tokens are
+# billed on top of the voice minutes. "auto" = responses when web search is on,
+# else client. Cannot change on a running session.
+REALTIME_GPTLIVE_DELEGATION: str = _rt_str("HAL_GPTLIVE_DELEGATION", _RT_GPTLIVE.get("delegation"), "auto").strip().lower()
+# GPT-Live twin of Gemini's Google Search grounding: public live-data questions
+# (weather, news, scores) get answered in-session by the Responses backend's
+# web_search instead of a slow delegation to the main agent.
+REALTIME_GPTLIVE_WEB_SEARCH: bool = (
+    os.environ.get("HAL_GPTLIVE_WEB_SEARCH", str(_RT_GPTLIVE.get("web_search", True))).lower()
     in ("1", "true", "yes")
 )
-REALTIME_QWEN_SAMPLE_RATE: int = 16000
+# Backend model for responses delegation. gpt-5.6-luna is OpenAI's cost-sensitive
+# recommendation (the BFF integration doc's example); gpt-5.6-terra is the
+# stronger one.
+REALTIME_GPTLIVE_BACKEND_MODEL: str = _rt_str("HAL_GPTLIVE_BACKEND_MODEL", _RT_GPTLIVE.get("backend_model"), "gpt-5.6-luna")
+# GPT-Live streams output audio CONTINUOUSLY, silence included (measured: 31 s
+# of ~100 ms deltas over 32 s, 6 s of them speech). Deltas quieter than this
+# (dBFS, RMS) are dropped and do not count as the model "speaking".
+REALTIME_GPTLIVE_OUTPUT_SILENCE_DBFS: float = float(os.environ.get("HAL_GPTLIVE_OUTPUT_SILENCE_DBFS", "-50") or -50)
+# GPT-Live has NO turn boundary on the wire (no response.done / turn_complete),
+# so the adapter synthesizes one: a reply is over when no output audio or
+# transcript has arrived for TURN_GAP_MS. If the user spoke over the reply and
+# output then stops for INTERRUPT_GAP_MS, the reply counts as interrupted
+# (barge-in) instead of completed.
+REALTIME_GPTLIVE_TURN_GAP_MS: int = int(os.environ.get("HAL_GPTLIVE_TURN_GAP_MS", "800") or 800)
+REALTIME_GPTLIVE_INTERRUPT_GAP_MS: int = int(os.environ.get("HAL_GPTLIVE_INTERRUPT_GAP_MS", "400") or 400)
+# Input transcript fragments separated by more than this (session-timeline ms)
+# belong to a NEW user turn even when the model has not answered in between.
+REALTIME_GPTLIVE_INPUT_GAP_MS: int = int(os.environ.get("HAL_GPTLIVE_INPUT_GAP_MS", "1500") or 1500)
+# Turn-based path only: there is no commit on Live, so end-of-turn appends this
+# much silence to let the model hear that the utterance is over.
+REALTIME_GPTLIVE_COMMIT_SILENCE_MS: int = int(os.environ.get("HAL_GPTLIVE_COMMIT_SILENCE_MS", "600") or 600)
+# A client delegation carries no task text; the adapter waits this long for
+# the input transcript to catch up before forwarding delegate_to_main.
+REALTIME_GPTLIVE_DELEGATION_WAIT_MS: int = int(os.environ.get("HAL_GPTLIVE_DELEGATION_WAIT_MS", "500") or 500)
+# Cost bound. GPT-Live bills $0.05 per session-MINUTE, billed per second, whether
+# or not anyone speaks, so an idle session is money leaving. Park (close) the
+# transport after this many seconds without turn activity; the next turn's
+# prepare_turn() reconnects synchronously (~1 s handshake, audio is buffered
+# across it) exactly like the Gemini idle park. 0 disables.
+REALTIME_GPTLIVE_IDLE_PARK_S: float = float(os.environ.get("HAL_GPTLIVE_IDLE_PARK_S", "30") or 30)
 
 # --- Realtime: Context manager ---
 OPENCLAW_WORKSPACE_DIR: str = os.environ.get("HAL_OPENCLAW_WORKSPACE_DIR", "/root/.openclaw/workspace")

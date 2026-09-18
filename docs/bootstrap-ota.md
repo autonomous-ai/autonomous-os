@@ -179,7 +179,7 @@ curl -fsSL https://cdn.autonomous.ai/os/install.sh | sudo bash
 | -1 | Locale fix | Ensure `C.UTF-8` encoding |
 | 0 | Prerequisites | System packages, Node.js 22 |
 | 0a | WiFi stability | Disable IPv6, WiFi power saving (RPi5) |
-| 0b | Enable SPI | For WS2812 LED driver |
+| 0b | Enable SPI + I2C | For WS2812 LED driver; I2C bus for peripherals |
 | 1 | Fetch OTA metadata | Download metadata.json, extract versions and URLs |
 | 1b | Install binaries | Download + install os-server, bootstrap-server, create systemd services |
 | 2 | Install OpenClaw | `npm install -g openclaw`, create config, create systemd service |
