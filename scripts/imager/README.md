@@ -225,7 +225,7 @@ openclaw --version
 cat /opt/hal/.env | grep HAL_AUDIO      # audio vars present
 cat /etc/asound.conf                    # baked by hardware team (not by build script)
 ls /etc/udev/rules.d/                   # udev rules baked by hardware team
-grep overlays /boot/orangepiEnv.txt     # spi3 + no uart8 (uart8 claims PL9 = GPIO button pin)
+grep overlays /boot/orangepiEnv.txt     # spi3 + i2c0, no uart8 (uart8 claims PL9 = GPIO button pin)
 findmnt /                               # ext4, expanded to full SD
 systemctl is-enabled resize-once 2>&1 | grep -q "not found" && echo "OK: self-destructed"
 ```

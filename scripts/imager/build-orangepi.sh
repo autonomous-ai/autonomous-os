@@ -1178,12 +1178,12 @@ else
   systemctl enable ssh 2>/dev/null || true
 fi
 
-# ── SPI3 overlay for WS2812 RGB LED ring (OrangePi 4 Pro A733) ───────────────
-echo "[stage] enable SPI3 overlay for LED ring"
+# ── DT overlays (OrangePi 4 Pro A733): SPI3 for WS2812 LED ring, I2C0 (TWI0) ─
+echo "[stage] enable SPI3 + I2C0 overlays"
 if grep -q "^overlays=" /boot/orangepiEnv.txt 2>/dev/null; then
-  sed -i "s/^overlays=.*/& spi3-cs0-cs1-spidev/" /boot/orangepiEnv.txt
+  sed -i "s/^overlays=.*/& spi3-cs0-cs1-spidev i2c0/" /boot/orangepiEnv.txt
 else
-  echo "overlays=spi3-cs0-cs1-spidev" >> /boot/orangepiEnv.txt
+  echo "overlays=spi3-cs0-cs1-spidev i2c0" >> /boot/orangepiEnv.txt
 fi
 
 echo "[stage] chroot Phase 2 complete"
