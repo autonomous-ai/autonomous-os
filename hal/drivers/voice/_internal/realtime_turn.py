@@ -479,8 +479,15 @@ def run_realtime_turn(
     buf_duration: float,
     audio_is_speech: bool = True,
     interaction_id: str = "",
+    wait_filler: "Optional[_WaitFiller]" = None,
 ) -> RealtimeTurnResult:
     """Commit the captured audio to the realtime agent and stream its reply.
+
+    ``wait_filler`` lets the caller arm the dead-air filler BEFORE the session
+    handshake that precedes this call: on the wake-word path the filler used to
+    start its 0.5 s clock only here, after 2-3 s of Gemini reconnect, so the
+    user's first audible acknowledgement landed at 4-5 s (device-observed
+    lamp-dbda 2026-09-18). One filler per turn still holds: arm() is idempotent.
 
     Runs even if the STT transcript is empty — the model has the raw audio.
     Speaks complete sentences as they arrive. Returns how the turn resolved so
@@ -534,7 +541,8 @@ def run_realtime_turn(
         # Audible half of the same wait (see _WaitFiller). Armed here rather
         # than per attempt so a 1011 retry does not restart the clock — from the
         # user's side it is one uninterrupted silence.
-        wait_filler = _WaitFiller(owner=interaction_id)
+        if wait_filler is None:
+            wait_filler = _WaitFiller(owner=interaction_id)
         if should_arm_realtime_wait_filler(combined):
             wait_filler.arm()
         else:

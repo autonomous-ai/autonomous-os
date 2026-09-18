@@ -1913,8 +1913,14 @@ liên tục đồng ý.
    express emotion riêng. Lấp khoảng 1-3s latency của model mà trước đây device
    nhìn như đứng hình.
 
-   Cùng lúc commit cũng arm **dead-air filler** (`_WaitFiller`) — nửa phần tiếng
-   của chính cue đó. Mặc định (`HAL_REALTIME_FIRST_CHUNK_MAX_CHARS=0`), câu
+   **Dead-air filler** (`_WaitFiller`) là nửa phần tiếng của chính cue đó.
+   Trên đường wake-word / follow-up nó được arm **trước** bước nối lại session
+   sau capture (`start_realtime_turn()` → `prepare_turn()`), không phải lúc
+   commit: trên lamp-dbda (18/9/2026) bước nối lại mất 2–3 s, arm lúc commit
+   đẩy lời xác nhận đầu tiên ra 4–5 s sau khi user ngừng nói. Filler đã arm
+   được truyền vào `run_realtime_turn(wait_filler=…)`, vẫn giữ luật một filler
+   mỗi turn (`arm()` idempotent) và bị cancel ở mọi đường thoát. Session mở
+   trong lúc capture (always-listening) vẫn arm lúc commit như cũ. Mặc định (`HAL_REALTIME_FIRST_CHUNK_MAX_CHARS=0`), câu
    hoàn chỉnh đầu tiên được nói ngay; các câu sau vẫn được tổng hợp trước qua
    hàng đợi, không chờ toàn bộ câu trả lời. Giá trị dương bật tùy chọn cắt câu
    đầu chưa hoàn chỉnh tại ranh giới mệnh đề cuối (`,` `;` `:` `—`), hoặc tại
