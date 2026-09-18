@@ -90,7 +90,7 @@ type GPTLiveRealtime struct {
 // Realtime per-provider defaults — what os-server resolves (and pushes) when the
 // operator hasn't overridden a knob. Model/voice match HAL's defaults
 // (hal/config.py). The reasoning knobs sit at the cheapest tier each model
-// accepts (OpenAI minimal; the Gemini default has no thinking knob) — os-server picks a
+// accepts (Gemini extended-thinking LOW, OpenAI minimal) — os-server picks a
 // cost-lean default; an operator who wants deeper reasoning sets it explicitly.
 // Values must stay valid against HAL's enums (GeminiThinkingLevel / GeminiVoice /
 // OpenAIReasoningEffort / OpenAI voices).
@@ -101,13 +101,12 @@ const (
 	// 2.5 native-audio: ~33% cheaper text tokens but needs HAL's idle workarounds
 	// and rejects speech_config.language_code. Override via realtime.gemini.model.
 	//defaultRealtimeGeminiModel     = "gemini-2.5-flash-native-audio-preview-12-2025"
-	// Plain gemini-3.8-live, not the extended-thinking variant: cost-lean, takes
-	// the default BLOCKING tools and omits thinking. defaultRealtimeGeminiThinking
-	// below is carried in config.json but HAL ignores it for this model. The
-	// extended-thinking variant is usable — HAL declares NON_BLOCKING tools for it
-	// (a BLOCKING one made it error mid-turn, device-observed 2026-09-17) — but we
-	// keep plain live as the seeded default.
-	defaultRealtimeGeminiModel     = "gemini-3.8-live"
+	// The extended-thinking variant, not plain gemini-3.8-live: it answers chit-chat
+	// DIRECTLY via voice, whereas plain gemini-3.8-live delegates or stays silent
+	// every turn so realtime never speaks (device-observed 2026-09-18). HAL declares
+	// NON_BLOCKING tools for it (a BLOCKING one made it error mid-turn, device-observed
+	// 2026-09-17). It accepts LOW/MEDIUM/HIGH thinking (no MINIMAL).
+	defaultRealtimeGeminiModel     = "gemini-3.8-live-extended-thinking"
 	defaultRealtimeGeminiVoice     = "Kore"
 	defaultRealtimeGeminiThinking  = "LOW"
 	defaultRealtimeOpenAIModel     = "gpt-realtime-2"
