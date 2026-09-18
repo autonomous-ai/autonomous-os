@@ -10,6 +10,7 @@
 #   make sd-card-flash DISK=N         — flash the .xz image to /dev/diskN
 #   make sd-card-flash TARGET=rpi DISK=N — flash RPi image instead
 #   make sd-card-flash-raw DEVICE_TYPE=lamp DISK=N — flash the raw .img via rdiskN (fast, no wait for .xz)
+#   make build ... COMPRESS=0          — skip the .xz step, keep only the raw .img
 # =============================================================================
 
 TARGET ?= opi
@@ -149,6 +150,7 @@ build: build-preflight
 	-e DEFAULT_AGENT=$(DEFAULT_AGENT) \
 	-e VARIANT=$(VARIANT) \
 	-e PI5_NO_AUDIO=$(PI5_NO_AUDIO) \
+	-e COMPRESS=$(COMPRESS) \
 	-e BUILD_GIT_SHA=$(shell git -C .. rev-parse HEAD 2>/dev/null || echo unknown) \
 	pi-builder /work/$(BUILD_SCRIPT)
 	@# Name the output per device type so lamp/intern/dog images don't clobber.

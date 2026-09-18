@@ -1459,6 +1459,7 @@ về bảng đắt nhất (cost là trần, không bao giờ báo thiếu).
 |---|---|---|---|---|---|---|---|
 | `gemini-2.5-flash-native-audio` | $0.50 | $3.00 | $2.00 | $12.00 | text in ×0.10 (giảm 90%) | 25 tok/s | ai.google.dev pricing (verify 2026-06-29) |
 | `gemini-3.1-flash-live` | $0.75 | $3.00 | $4.50 | $12.00 | text in ×0.10 (giảm 90%) | 25 tok/s | ai.google.dev pricing (verify 2026-06-29) |
+| `gemini-3.8-live` / `-extended-thinking` | $0.75 | $3.00 | $4.50 | $12.00 | — | 25 tok/s | ai.google.dev pricing (verify 2026-09-17; giá khuyến mãi tới 31/12/2026, sau đó gấp đôi) |
 | `*mini*` (vd `gpt-realtime-2-mini`) | $0.60 | $10.00 | $2.40 | $20.00 | $0.06 / $0.30 | — | developers.openai.com/api/docs/pricing (verify 2026-09-16) |
 | `gpt-realtime-2` | $4.00 | $32.00 | $24.00 | $64.00 | $0.40 / $0.40 | — | developers.openai.com/api/docs/pricing (verify 2026-09-16) |
 | `gpt-realtime` | $4.00 | $32.00 | $16.00 | $64.00 | $0.40 / $0.40 | — | developers.openai.com/api/docs/pricing (verify 2026-09-16) |
@@ -1946,9 +1947,15 @@ liên tục đồng ý.
    (`[realtime->model] DROPPED …`).
 
    **Điều này không áp dụng cho cấu hình mặc định đang ship.** `REALTIME_GEMINI_MODEL`
-   mặc định là `gemini-3.1-flash-live-preview` (`hal/config.py:734`), không phải
+   mặc định là `gemini-3.8-live` (`hal/config.py`), không phải
    native-audio, nên guard tắt và cả context lẫn correction đều tới được model. Nó chỉ
-   bật lại khi ai đó cấu hình một model `*native-audio*`.
+   bật lại khi ai đó cấu hình một model `*native-audio*`. Mặc định là bản
+   `gemini-3.8-live` thường, KHÔNG phải `-extended-thinking`: rẻ, nhận tool BLOCKING
+   mặc định và bỏ hẳn thinking (nó từ chối `thinkingLevel` nên
+   `gemini_live._build_config` không gửi). Bản extended vẫn dùng được — nó chỉ nhận
+   tool khai báo NON_BLOCKING, và `_build_config` giờ đã set NON_BLOCKING cho nó (khai
+   BLOCKING thì model lỗi giữa turn, phát "I'm sorry, an error occurred.", quan sát
+   trên device 2026-09-17) — nhưng vẫn giữ plain live làm mặc định.
 4. **Commit.** Cuối session, nếu enabled + `available` + có audio buffer, gọi
    `commit_audio()`. Cue emotion `thinking` fire cùng lúc commit (mặt + servo +
    LED pulse ÉP HIỆN — `thinking` vốn là background emotion có LED nhường
@@ -2121,7 +2128,7 @@ lần os-server lưu lại config — muốn ghim bền trên thiết bị thì 
   "realtime": {
     "enabled": true,
     "provider": "gemini",
-    "gemini": { "model": "gemini-3.1-flash-live-preview", "voice": "Kore", "thinking_level": "MINIMAL" },
+    "gemini": { "model": "gemini-3.8-live", "voice": "Kore", "thinking_level": "LOW" },
     "openai": { "model": "gpt-realtime-2", "voice": "alloy", "reasoning_effort": "minimal" },
     "gptlive": { "model": "gpt-live-1", "voice": "marin" }
   }
@@ -2199,7 +2206,7 @@ trong `config.json`:
 | `HAL_GEMINI_LIVE_MODEL` | `gemini-2.5-flash-native-audio-preview-12-2025` | |
 | `HAL_GEMINI_LIVE_VOICE` | `Kore` | |
 | `HAL_GEMINI_LIVE_BASE_URL` | `<llm_base_url>/ws/gemini` | |
-| `HAL_GEMINI_THINKING_LEVEL` | `MINIMAL` | `MINIMAL` \| `LOW` \| `MEDIUM` \| `HIGH` — default rẻ (trước là `HIGH`) |
+| `HAL_GEMINI_THINKING_LEVEL` | `LOW` | `MINIMAL` \| `LOW` \| `MEDIUM` \| `HIGH`. `gemini-3.8-live-extended-thinking` không có MINIMAL (HAL tự kẹp về LOW); `gemini-3.8-live` thường từ chối thinkingLevel nên HAL bỏ hẳn field đó |
 | `HAL_GEMINI_GOOGLE_SEARCH` | `true` | Google Search grounding (chỉ Gemini). Cho model realtime tự trả lời câu dữ liệu công khai theo thời gian thực (thời tiết, tin tức, lookup) ngay trong phiên thay vì delegate. Tính phí theo mỗi grounded request (cộng token); chỉ phát sinh khi Gemini quyết định search. Cũng đặt được qua `realtime.gemini.google_search` trong config.json. |
 | `HAL_GEMINI_VISION` | `true` | Tool `look` trong phiên (chỉ Gemini). Cho model realtime chụp một frame camera và trả lời câu hỏi thị giác ("cái này là gì?") ngay trong phiên thay vì delegate. Mặc định bật; chỉ đăng ký khi thiết bị còn có capability `vision`. Cũng đặt được qua `realtime.gemini.vision` trong config.json. |
 | `HAL_GEMINI_VISION_MAX_WIDTH` | `768` | Bề rộng tối đa (px) frame được downscale trước khi gửi — giới hạn token ảnh. |

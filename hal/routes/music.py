@@ -313,6 +313,8 @@ def unmute_speaker():
     """Unmute audio output."""
     if privacy.speaker_muted:
         raise HTTPException(409, "Privacy switch is on -- flip the switch to unmute speaker")
+    # Drop a pending scene drain, or it would re-mute seconds later.
+    state._cancel_scene_speaker_drain()
     if not state._speaker_muted:
         return {"status": "already_unmuted"}
     state._speaker_muted = False

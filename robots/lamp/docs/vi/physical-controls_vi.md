@@ -94,7 +94,13 @@ khởi động, các thiết bị đã cấu hình vẫn khóa cho tới khi đ�
 Mở khóa dùng luồng wake/listening microphone hiện có và khôi phục camera/speaker
 về trạng thái trước đó. Camera hoặc speaker đã tắt trước khi khóa thì vẫn tắt;
 lệnh tắt thủ công trong lúc khóa cũng được giữ lại. Cue listening chỉ phát khi
-speaker khôi phục về unmute. Tùy chọn được giữ qua restart HAL trong cùng boot,
+speaker khôi phục về unmute. Mute do **scene** đặt không phải sở thích người
+dùng: khi công tắc đánh thức thiết bị khỏi sleep (scene night: camera và
+speaker tắt) tắt scene trong lúc còn đang khóa, `deactivate_scene()` đổi
+snapshot của privacy (`privacy.speaker_before` / `privacy.camera_before` →
+`False`) để lúc nhả khóa speaker và camera mở lại thay vì khôi phục mute của
+scene — cùng pattern với mute do sleep sở hữu. Khóa vẫn giữ nguyên cho tới khi
+nhả; override camera thủ công vẫn được tôn trọng. Tùy chọn được giữ qua restart HAL trong cùng boot,
 không lưu khóa privacy tạm thời thành mute thủ công. Hai tùy chọn mặc định false
 cho device khác; Intern giữ fallback chỉ mute mic, không cần JSON.
 Cập nhật HAL trước khi upload JSON có các trường mới này.

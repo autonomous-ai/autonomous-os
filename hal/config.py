@@ -27,12 +27,13 @@ _mode = os.environ.get("HAL_MODE", "production").strip().lower()
 MODE: str = "developer" if _mode == "developer" else "production"
 HTTP_HOST: str = "0.0.0.0" if MODE == "developer" else "127.0.0.1"
 CAMERA_INDEX = int(os.environ.get("HAL_CAMERA_INDEX", "0"))
-# Optional camera selection by device NAME instead of a bare index (mirrors how
-# audio picks devices by hardware name). Case-insensitive substring matched
-# against the v4l2 device name (e.g. "OPENAICAM"); resolution prefers the
-# stable /dev/v4l/by-id capture symlink so the pick survives index shuffles
-# from replug/boot-order. Unset = legacy index behavior. On no match HAL logs
-# a warning and falls back to HAL_CAMERA_INDEX.
+# Optional camera selection instead of a bare index. Either an absolute path
+# (e.g. "/dev/device-camera", a udev SYMLINK keyed on vid:pid — same role-alias
+# idea as asound.conf's device_speaker) or a case-insensitive substring of the
+# v4l2 device name (e.g. "OPENAICAM"); name resolution prefers the stable
+# /dev/v4l/by-id capture symlink so the pick survives index shuffles from
+# replug/boot-order. Unset = legacy index behavior. On no match HAL logs a
+# warning and falls back to HAL_CAMERA_INDEX.
 CAMERA_NAME = os.environ.get("HAL_CAMERA_NAME", "").strip() or None
 CAMERA_WIDTH = int(os.environ.get("HAL_CAMERA_WIDTH", "640"))
 CAMERA_HEIGHT = int(os.environ.get("HAL_CAMERA_HEIGHT", "480"))
@@ -49,7 +50,9 @@ CAMERA_HEIGHT = int(os.environ.get("HAL_CAMERA_HEIGHT", "480"))
 CAMERA_AUTO_EXPOSURE = os.environ.get("HAL_CAMERA_AUTO_EXPOSURE", "auto").strip().lower()
 CAMERA_EXPOSURE = int(os.environ.get("HAL_CAMERA_EXPOSURE", "330"))
 # Sensor gain (camera-specific range, e.g. 0–255). Brightens without costing fps
-# but adds noise; >~144 risks the ISP color corruption. Applied in manual mode.
+# but adds noise; >~144 risks the ISP color corruption. Applied in BOTH modes:
+# in auto it pins the camera-retained gain so a leftover max gain cannot blow
+# out a lit room (auto-exposure only moves integration time).
 CAMERA_GAIN = int(os.environ.get("HAL_CAMERA_GAIN", "96"))
 # Optional brightness offset (camera-specific, e.g. -64..64); unset = camera default.
 CAMERA_BRIGHTNESS = int(os.environ["HAL_CAMERA_BRIGHTNESS"]) if os.environ.get("HAL_CAMERA_BRIGHTNESS") else None
@@ -1224,20 +1227,27 @@ REALTIME_GEMINI_BASE_URL: str = (
     or _RT.get("base_url", "")
     or ((_os_cfg_get("llm_base_url", "").rstrip("/") + "/ws/gemini") if _os_cfg_get("llm_base_url", "") else "")
 )
-# Default to 3.1-flash-live. 2.5 native-audio is ~33% cheaper on text tokens
-# ($0.50 vs $0.75 /M in, same per-turn usage measured on device), but through the
-# campaign-api proxy it returns WS 1011 on a turn that follows an idle pause, so
-# it needs the whole idle-workaround set — including the suppressed
-# mid-activity [TURN CONTEXT], which silently drops the per-turn speaker identity
-# and language reminder (see gemini_needs_idle_workaround() in realtime/config.py).
-# 3.1 has neither problem, so every workaround stays off. Switching back to a
-# *native-audio* model re-enables them automatically, and also requires the
-# language_code-omit fix in gemini_live.py (native-audio rejects an explicit
-# language_code). Override via realtime.gemini.model or HAL_GEMINI_LIVE_MODEL.
-REALTIME_GEMINI_MODEL: str = _rt_str("HAL_GEMINI_LIVE_MODEL", _RT_GEMINI.get("model"), "gemini-3.1-flash-live-preview")
+# Default to plain 3.8-live (GA 2026-09-15, same price as 3.1 through 2026-12-31;
+# 3.1-flash-live-preview is now labelled legacy). Cost-lean: no thinking (it
+# rejects thinkingLevel, so gemini_live._build_config omits thinking_config) and
+# takes the default BLOCKING tools. The extended-thinking sibling
+# `gemini-3.8-live-extended-thinking` is usable too — it needs NON_BLOCKING tool
+# declarations, which _build_config now sets for it (a BLOCKING one made it error
+# mid-turn with a spoken "I'm sorry, an error occurred.", device-observed
+# 2026-09-17) — but we keep plain live as the default. 2.5 native-audio is
+# ~33% cheaper on text tokens but through the campaign-api proxy it returns WS
+# 1011 on a turn that follows an idle pause, so it needs the whole idle-workaround
+# set — including the suppressed mid-activity [TURN CONTEXT], which silently drops
+# the per-turn speaker identity and language reminder (see
+# gemini_needs_idle_workaround() in realtime/config.py). 3.x has neither problem,
+# so every workaround stays off. Switching back to a *native-audio* model
+# re-enables them automatically, and also requires the language_code-omit fix in
+# gemini_live.py (native-audio rejects an explicit language_code). Override via
+# realtime.gemini.model or HAL_GEMINI_LIVE_MODEL.
+REALTIME_GEMINI_MODEL: str = _rt_str("HAL_GEMINI_LIVE_MODEL", _RT_GEMINI.get("model"), "gemini-3.8-live")
 REALTIME_GEMINI_VOICE: str = _rt_str("HAL_GEMINI_LIVE_VOICE", _RT_GEMINI.get("voice"), "Kore")
 REALTIME_GEMINI_SAMPLE_RATE: int = 16000
-REALTIME_GEMINI_THINKING_LEVEL: str = _rt_str("HAL_GEMINI_THINKING_LEVEL", _RT_GEMINI.get("thinking_level"), "MINIMAL")
+REALTIME_GEMINI_THINKING_LEVEL: str = _rt_str("HAL_GEMINI_THINKING_LEVEL", _RT_GEMINI.get("thinking_level"), "LOW")
 REALTIME_GEMINI_USE_LANGUAGE_CODES: bool = os.environ.get("HAL_GEMINI_USE_LANGUAGE_CODES", "false").lower() in ("1", "true", "yes")
 # Session resumption lets a reconnect resume the SAME server session (context
 # preserved). It requires the WS endpoint to faithfully forward the resumption

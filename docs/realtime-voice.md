@@ -1510,6 +1510,7 @@ order as a substring** of the configured model: `mini` first (so
 |---|---|---|---|---|---|---|---|
 | `gemini-2.5-flash-native-audio` | $0.50 | $3.00 | $2.00 | $12.00 | — | 25 tok/s | ai.google.dev pricing (verified 2026-06-29) |
 | `gemini-3.1-flash-live` | $0.75 | $3.00 | $4.50 | $12.00 | — | 25 tok/s | ai.google.dev pricing (verified 2026-06-29) |
+| `gemini-3.8-live` / `-extended-thinking` | $0.75 | $3.00 | $4.50 | $12.00 | — | 25 tok/s | ai.google.dev pricing (verified 2026-09-17; promo through 2026-12-31, doubles after) |
 | `*mini*` (e.g. `gpt-realtime-2-mini`) | $0.60 | $10.00 | $2.40 | $20.00 | $0.06 / $0.30 | — | developers.openai.com/api/docs/pricing (verified 2026-09-16) |
 | `gpt-realtime-2` | $4.00 | $32.00 | $24.00 | $64.00 | $0.40 / $0.40 | — | developers.openai.com/api/docs/pricing (verified 2026-09-16) |
 | `gpt-realtime` | $4.00 | $32.00 | $16.00 | $64.00 | $0.40 / $0.40 | — | developers.openai.com/api/docs/pricing (verified 2026-09-16) |
@@ -1993,9 +1994,15 @@ Read the counters in the session-END log line: `substituted` at ~100 % of
    is logged (`[realtime->model] DROPPED …`).
 
    **This does not apply to the shipped default.** `REALTIME_GEMINI_MODEL` defaults to
-   `gemini-3.1-flash-live-preview` (`hal/config.py:734`), which is not native-audio, so
+   `gemini-3.8-live` (`hal/config.py`), which is not native-audio, so
    the guard is off and both the context and the correction reach the model. It
-   re-engages only when a `*native-audio*` model is configured.
+   re-engages only when a `*native-audio*` model is configured. The default is the
+   plain `gemini-3.8-live`, not `-extended-thinking`: cost-lean, it takes the
+   default BLOCKING tools and omits thinking (it rejects `thinkingLevel`, so
+   `gemini_live._build_config` sends none). The extended variant is usable too — it
+   accepts only NON_BLOCKING tool declarations, which `_build_config` now sets for
+   it (a BLOCKING one made it error mid-turn with a spoken "I'm sorry, an error
+   occurred.", device-observed 2026-09-17) — but plain live stays the default.
 4. **Commit.** At session end, if enabled + `available` + audio buffered,
    `commit_audio()` fires. A `thinking` emotion cue fires with the commit
    (face + servo + a FORCED LED pulse — `thinking` is normally a
@@ -2173,7 +2180,7 @@ to the shared fields.
   "realtime": {
     "enabled": true,
     "provider": "gemini",
-    "gemini": { "model": "gemini-3.1-flash-live-preview", "voice": "Kore", "thinking_level": "MINIMAL" },
+    "gemini": { "model": "gemini-3.8-live", "voice": "Kore", "thinking_level": "LOW" },
     "openai": { "model": "gpt-realtime-2", "voice": "alloy", "reasoning_effort": "minimal" },
     "gptlive": { "model": "gpt-live-1", "voice": "marin" }
   }
@@ -2266,7 +2273,7 @@ is a top-level `config.json` flag:
 | `HAL_GEMINI_LIVE_MODEL` | `gemini-2.5-flash-native-audio-preview-12-2025` | |
 | `HAL_GEMINI_LIVE_VOICE` | `Kore` | |
 | `HAL_GEMINI_LIVE_BASE_URL` | `<llm_base_url>/ws/gemini` | |
-| `HAL_GEMINI_THINKING_LEVEL` | `MINIMAL` | `MINIMAL` \| `LOW` \| `MEDIUM` \| `HIGH` — cost-lean default (was `HIGH`) |
+| `HAL_GEMINI_THINKING_LEVEL` | `LOW` | `MINIMAL` \| `LOW` \| `MEDIUM` \| `HIGH`. `gemini-3.8-live-extended-thinking` has no MINIMAL (HAL clamps it to LOW); plain `gemini-3.8-live` rejects thinkingLevel, so HAL omits it there |
 | `HAL_GEMINI_GOOGLE_SEARCH` | `true` | Google Search grounding (Gemini only). Lets the realtime model answer public live-data questions (weather, news, lookups) in-session instead of delegating. Bills per grounded request on top of tokens; fires only when Gemini decides to search. Also settable via `realtime.gemini.google_search` in config.json. |
 | `HAL_GEMINI_VISION` | `true` | In-session `look` tool (Gemini only). Lets the realtime model capture one camera frame and answer visual questions ("what is this?") in-session instead of delegating. Default on; only registered when the device also has the `vision` capability. Also settable via `realtime.gemini.vision` in config.json. |
 | `HAL_GEMINI_VISION_MAX_WIDTH` | `768` | Max width (px) the captured frame is downscaled to before sending — bounds image tokens. |
