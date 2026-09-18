@@ -75,6 +75,13 @@ required-environments = [
     "sys_platform == 'linux' and platform_machine == 'aarch64'",
     "sys_platform == 'darwin' and platform_machine == 'arm64'",
 ]
+# `reachy` (Pollen's SDK) pins onnxruntime==1.27.0; `pipecat` (pipecat-ai)
+# pins ~=1.24. They never share a body — reachy is the Reachy Mini Pi, pipecat
+# the lamp — so tell the resolver they are mutually exclusive instead of
+# letting the lock fail outright.
+conflicts = [
+    [{ extra = "reachy" }, { extra = "pipecat" }],
+]
 
 [tool.uv.sources]
 lerobot = { git = "https://github.com/huggingface/lerobot", rev = "55198de096f46a8e0447a8795129dd9ee84c088c" }
@@ -147,4 +154,15 @@ reachy = [
 # Install on-device with: uv sync --extra aec
 aec = [
     "aec-audio-processing>=1.0.1",
+]
+# On-device Pipecat pipeline — the `pipecat_v1` realtime provider
+# (hal/realtime/voice_agent/pipecat_v1.py, docs/realtime-voice.md). NOT in
+# `dependencies`: pipecat-ai drags numba, resampy, nltk and a pinned
+# onnxruntime (~1.24) that nothing else here needs, and the provider degrades
+# to "unavailable" without it (the orchestrator falls back to the main agent).
+# Silero VAD, Smart Turn v3 and the OpenAI-compatible LLM service ship in the
+# core package; STT is HAL's own provider, so no vendor extra is required.
+# Install on-device with: uv sync --extra pipecat
+pipecat = [
+    "pipecat-ai>=1.11.0,<2",
 ]
