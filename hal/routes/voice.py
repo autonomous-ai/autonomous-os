@@ -415,7 +415,9 @@ def realtime_history(req: RealtimeHistoryRequest):
     """
     if state.voice_service is None:
         return {"status": "skipped"}
-    fed = state.voice_service.feed_realtime_history(req.text, spoken=False)
+    fed = state.voice_service.feed_realtime_history(
+        req.text, spoken=False, run_id=req.run_id,
+    )
     return {"status": "ok" if fed else "skipped"}
 
 

@@ -1819,19 +1819,21 @@ class RealtimeOrchestrator:
         self._main_handoff.open(user_text, now=time.monotonic())
         logger.info("[realtime] main handoff open: %r", user_text[:100])
 
-    def save_main_agent_reply_fragment(self, text: str) -> None:
+    def save_main_agent_reply_fragment(self, text: str, run_id: str = "") -> None:
         """Persist a spoken main-agent reply for future realtime sessions.
 
         Main-agent TTS is sentence-streamed, so one logical reply may arrive as
         multiple fragments. Retaining each fragment preserves the complete
         answer without relying on the ephemeral ``[TTS HISTORY]`` injection.
 
-        The first fragment also closes the in-flight handoff: the main agent
-        has answered, the realtime layer may take the next turn again.
+        The first fragment also closes the in-flight handoff — but only when
+        ``run_id`` belongs to it. A reply from a superseded older turn arriving
+        after a NEWER request was delegated used to release the newer
+        handoff, re-opening the #419 hole for it.
         """
         if text.strip():
             self.save_turn(user_text="[Main agent reply]", agent_text=text)
-            self.close_main_handoff("main_reply")
+            self.close_main_handoff("main_reply", run_id=run_id)
 
     def main_handoff_open(self) -> bool:
         """Whether a delegated request is still being worked on by the main agent."""
@@ -1840,12 +1842,28 @@ class RealtimeOrchestrator:
     def main_handoff_transcript(self) -> str:
         return self._main_handoff.transcript()
 
-    def close_main_handoff(self, reason: str) -> bool:
-        """Release the in-flight handoff. Returns whether one was open."""
-        was_open = self._main_handoff.close(reason, now=time.monotonic())
-        if was_open:
+    def bind_main_handoff_run(self, run_id: str) -> None:
+        """Tell the open handoff which os-server run will answer it."""
+        if not run_id:
+            return
+        self._main_handoff.bind_run(run_id)
+        logger.info("[realtime] main handoff bound to run %s", run_id)
+
+    def close_main_handoff(self, reason: str, run_id: str | None = None) -> bool:
+        """Release the in-flight handoff. Returns whether one was closed.
+
+        ``run_id`` identifies the run the closing reply came from; ``None``
+        (the click) closes whatever is open. See MainHandoffTracker.close.
+        """
+        closed = self._main_handoff.close(reason, now=time.monotonic(), run_id=run_id)
+        if closed:
             logger.info("[realtime] main handoff closed (%s)", reason)
-        return was_open
+        elif run_id:
+            logger.info(
+                "[realtime] main handoff kept open — reply from run %s does not own it (%s)",
+                run_id, self._main_handoff.run_id() or "unbound",
+            )
+        return closed
 
     def take_main_handoff_filler_slot(self) -> bool:
         """Whether the caller may speak one "still on it" filler right now."""

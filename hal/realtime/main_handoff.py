@@ -15,6 +15,13 @@ A handoff opens when the realtime model delegates a request to the main agent
 While open, the realtime entry points do not commit the user's audio to the
 model; they speak a cached filler instead. The rate limit on that filler is
 here too, so all three entry points share one clock.
+
+A handoff carries the os-server run id of the turn it is waiting on, bound
+once dispatch returns it. Closing is then id-matched: a reply from an OLDER
+run must not release a handoff opened for a NEWER one. Without that check, the
+sequence "ask A → click → ask B → A's reply finally lands" closed B's handoff
+and put the #419 hole straight back, and a long tool (`/servo/search`) holds
+that window open for tens of seconds.
 """
 
 from __future__ import annotations
@@ -29,6 +36,7 @@ class MainHandoffTracker:
         self._lock = threading.Lock()
         self._opened_at: float | None = None
         self._transcript: str = ""
+        self._run_id: str = ""
         self._last_filler_at: float | None = None
 
     def open(self, transcript: str, now: float) -> None:
@@ -41,16 +49,48 @@ class MainHandoffTracker:
         with self._lock:
             self._opened_at = now
             self._transcript = transcript
+            self._run_id = ""
             self._last_filler_at = None
 
-    def close(self, reason: str, now: float) -> bool:
-        """Mark the handoff answered/abandoned. Returns whether one was open."""
+    def bind_run(self, run_id: str) -> None:
+        """Attach the os-server run id of the turn this handoff is waiting on.
+
+        Dispatch mints the id, so it arrives a moment after ``open``. Until it
+        does the handoff is unbound and any reply may close it — a window of
+        milliseconds, and the alternative (refusing every reply) would strand
+        the guard for the whole TTL whenever dispatch returns no id at all.
+        """
         with self._lock:
-            was_open = self._is_open_locked(now)
+            if self._opened_at is not None:
+                self._run_id = run_id or ""
+
+    def run_id(self) -> str:
+        with self._lock:
+            return self._run_id if self._opened_at is not None else ""
+
+    def close(self, reason: str, now: float, run_id: str | None = None) -> bool:
+        """Mark the handoff answered/abandoned. Returns whether one was closed.
+
+        ``run_id`` is the run the closing reply belongs to:
+
+        - ``None`` — close unconditionally. The physical click means "drop what
+          you are doing", not "drop run X".
+        - a run id — close only when it matches the handoff, so a late reply
+          from a superseded turn cannot release a newer one.
+        - ``""`` — the caller has no id (an os-server that predates this
+          field). Treated as a match rather than refused: the old, occasionally
+          too-eager close is a better failure than a guard stuck for the TTL.
+        """
+        with self._lock:
+            if not self._is_open_locked(now):
+                return False
+            if run_id and self._run_id and run_id != self._run_id:
+                return False
             self._opened_at = None
             self._transcript = ""
+            self._run_id = ""
             self._last_filler_at = None
-            return was_open
+            return True
 
     def is_open(self, now: float) -> bool:
         with self._lock:

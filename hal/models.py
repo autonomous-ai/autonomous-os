@@ -311,6 +311,12 @@ class RealtimeHistoryRequest(BaseModel):
     text: str = Field(
         ..., min_length=1, max_length=2000, description="Reply text to record as history"
     )
+    # Which os-server turn produced this reply. Used to decide whether it may
+    # close the in-flight main handoff: a late reply from a superseded run
+    # must not release a handoff opened for a newer request. Optional so an
+    # os-server that predates the field keeps working (the close then falls
+    # back to the old, unmatched behaviour).
+    run_id: str = Field("", max_length=200, description="os-server run id of the reply")
 
 
 class SpeakRequest(BaseModel):

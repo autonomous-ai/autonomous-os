@@ -286,7 +286,7 @@ func (h *AgentHandler) deliverTTS(send func(string) error, text, flowRunID, errC
 		// realtime turn then reasons from a question it believes went
 		// unanswered. Give it the text without the speaker.
 		go func() {
-			if err := hal.FeedRealtimeHistory(text); err != nil {
+			if err := hal.FeedRealtimeHistory(text, flowRunID); err != nil {
 				slog.Warn("realtime history feed failed for cancelled turn",
 					"component", "agent", "run_id", flowRunID, "error", err)
 			}

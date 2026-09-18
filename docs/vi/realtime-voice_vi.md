@@ -410,6 +410,20 @@ không), khi user click (`button_actions._cancel_agent_speech` →
 `HAL_REALTIME_MAIN_HANDOFF_TTL_S` (mặc định 120 s) nếu không có cái nào tới — một
 turn NO_REPLY hay chỉ chạy phần cứng không được phép giữ thiết bị câm mãi mãi.
 
+**Một câu trả lời chỉ đóng được đúng handoff của nó.** Handoff được gắn với run
+id phía os-server do `dispatch_turn` trả về, và mọi đường feed đều mang theo run
+mà nó thuộc về: hook speak-end dùng `TTSService.last_spoken_turn_id`,
+`_on_unspoken_reply(text, turn_id)` mang id của turn bị bỏ, còn
+`POST /voice/realtime/history` của os-server nay gửi kèm `run_id` cạnh `text`.
+Không có phép khớp này thì chuỗi "hỏi A → click → hỏi B → reply của A về muộn"
+sẽ mở khoá **handoff của B** — `speak_queue` bỏ A vì bị vượt mặt, cú bỏ đó feed
+history, và lệnh close lấy luôn cái handoff đang mở — nên guard tắt mất cho B và
+#419 quay lại với B. Một tool chạy lâu giữ cửa sổ này mở hàng chục giây. Hai lối
+thoát có chủ ý: cú click đóng bất cứ handoff nào đang mở (nó nghĩa là "bỏ hết
+đi"), và một reply hoàn toàn không có run id — gateway bên thứ ba không có hàng
+đợi turn-aware, hoặc os-server bản cũ — thì vẫn đóng, vì cách đóng cũ hơi vội
+vẫn tốt hơn một guard kẹt trọn TTL.
+
 Đánh đổi có chủ ý: một yêu cầu mới thật sự nói trong cửa sổ này không được chuyển
 đi đâu cả; user nghe "vẫn đang làm" rồi hỏi lại khi câu trả lời về, hoặc click.
 Lớp realtime không thể phân biệt nudge với yêu cầu mới nếu không hỏi model, mà

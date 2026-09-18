@@ -243,8 +243,8 @@ func SpeakReply(text string) error {
 // completion, so dropping the speech also dropped the realtime session's only
 // record of the answer. Same rule as SpeakReply about what may be sent —
 // genuine agent output only, never hardcoded notices.
-func FeedRealtimeHistory(text string) error {
-	body, _ := json.Marshal(map[string]string{"text": text})
+func FeedRealtimeHistory(text, runID string) error {
+	body, _ := json.Marshal(map[string]string{"text": text, "run_id": runID})
 	return post("/voice/realtime/history", body)
 }
 

@@ -423,6 +423,20 @@ when the user clicks (`button_actions._cancel_agent_speech` →
 `HAL_REALTIME_MAIN_HANDOFF_TTL_S` (default 120 s) if neither arrives — a
 NO_REPLY or hardware-only turn must not hold the device mute forever.
 
+**A reply only closes the handoff it belongs to.** The handoff is bound to the
+os-server run id that `dispatch_turn` returns, and every feed path carries the
+run it came from: the speak-end hook uses `TTSService.last_spoken_turn_id`,
+`_on_unspoken_reply(text, turn_id)` carries the dropped turn's id, and
+os-server's `POST /voice/realtime/history` now sends `run_id` alongside `text`.
+Without the match, "ask A → click → ask B → A's reply finally lands" released
+**B's** handoff — `speak_queue` drops the superseded A as unspoken, that fed
+history, and the close took whatever was open — so the guard went off for B and
+#419 came back for it. A long tool holds that window open for tens of seconds.
+Two deliberate escapes: the click closes whatever is open (it means "drop what
+you are doing"), and a reply with no run id at all — a third-party gateway
+without the turn-aware queue, or an older os-server — still closes, because the
+old too-eager close beats a guard stuck for the full TTL.
+
 Trade-off, on purpose: a genuine new request spoken inside the window is not
 forwarded anywhere; the user hears "still on it" and asks again once the reply
 lands, or clicks. The realtime layer cannot tell a nudge from a new request

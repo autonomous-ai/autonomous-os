@@ -285,7 +285,10 @@ class VoiceService:
                     and not tts_service.native_mode
                     and tts_service.realtime_feedback
                 ):
-                    self.feed_realtime_history(tts_service.last_spoken_text)
+                    self.feed_realtime_history(
+                        tts_service.last_spoken_text,
+                        run_id=tts_service.last_spoken_turn_id,
+                    )
 
             tts_service._on_speak_end = _tts_speak_end_with_realtime_feedback
 
@@ -294,12 +297,12 @@ class VoiceService:
             # hook is the only signal that the text existed — and a delegated
             # turn has already had save_main_handoff record the question with
             # "its spoken reply follows".
-            def _unspoken_reply_to_realtime(text: str) -> None:
-                self.feed_realtime_history(text, spoken=False)
+            def _unspoken_reply_to_realtime(text: str, turn_id: str = "") -> None:
+                self.feed_realtime_history(text, spoken=False, run_id=turn_id)
 
             tts_service._on_unspoken_reply = _unspoken_reply_to_realtime
 
-    def feed_realtime_history(self, text: str, spoken: bool = True) -> bool:
+    def feed_realtime_history(self, text: str, spoken: bool = True, run_id: str = "") -> bool:
         """Give the realtime agent a main-agent reply it must stay aware of.
 
         Two callers, one rule: the on_speak_end hook (the reply was played on
@@ -309,6 +312,9 @@ class VoiceService:
         second one the realtime session is left holding save_main_handoff's
         "its spoken reply follows" placeholder and no reply, so the next turn
         reasons from a question it believes went unanswered.
+
+        `run_id` says which os-server turn produced the reply, so the
+        main-handoff close can refuse a late reply belonging to an older one.
 
         `spoken` is False for that second caller. The persisted fragment is the
         full text either way — it is the processed result, and memory wants all
@@ -321,7 +327,7 @@ class VoiceService:
         # [TTS HISTORY] below only exists inside the CURRENT Gemini socket.
         # Persist OpenClaw's actual reply as well, or a recycle (idle recovery
         # / unresolved Gemini tool call) loses it before the next user turn.
-        self._realtime.save_main_agent_reply_fragment(text)
+        self._realtime.save_main_agent_reply_fragment(text, run_id=run_id)
         # Direction is INTO the realtime model: the reply (often an OpenClaw
         # one, not Gemini's own output) is pushed as history so it stays aware
         # of what the device said and won't repeat it. Not a Gemini-generated
@@ -350,6 +356,7 @@ class VoiceService:
         """
         if not hal_config.REALTIME_ENABLED:
             return False
+        # No run id: the click drops whatever is open, by design.
         return self._realtime.close_main_handoff(reason)
 
     def set_music_service(self, music_service) -> None:
@@ -1460,7 +1467,7 @@ class VoiceService:
                         iid = metrics.interaction(key) or metrics.speech(
                             key, None, "provider_delegate",
                         )
-                        dispatch_turn(
+                        delegated_run_id = dispatch_turn(
                             self._decorator,
                             self._sensing_sender,
                             out.transcript or (opener["transcript"] if opener is not None and key == opener["key"] else ""),
@@ -1476,6 +1483,12 @@ class VoiceService:
                             voice_turn_type=classify_input(key, out.transcript or input_text.get(key, "")),
                         )
                         refresh_focus(key, out.transcript)
+                        # Bind the run that will answer this delegation, so a
+                        # LATER reply from an older run cannot release the
+                        # handoff we just opened (#419 regression). After
+                        # refresh_focus on purpose: bookkeeping must never come
+                        # between the user and their follow-up window.
+                        self._realtime.bind_main_handoff_run(delegated_run_id)
                         break
                     if isinstance(out, EndCallSignal):
                         if opener is not None:
@@ -3045,12 +3058,15 @@ class VoiceService:
                 # persist the user's request before sending it downstream so a
                 # session replacement cannot erase the handoff from realtime's
                 # next-session context.
-                if realtime_allowed and combined and not rt.handled and not downstream_dropped:
+                opened_main_handoff = (
+                    realtime_allowed and combined and not rt.handled and not downstream_dropped
+                )
+                if opened_main_handoff:
                     self._realtime.save_main_handoff(combined)
                 # A realtime connection failure or silent timeout is not a
                 # handled turn. Preserve the STT fallback so a wake-word command
                 # never disappears just because Gemini is temporarily down.
-                dispatch_turn(
+                dispatched_run_id = dispatch_turn(
                     self._decorator,
                     self._sensing_sender,
                     combined,
@@ -3066,6 +3082,10 @@ class VoiceService:
                     identity=turn_identity,
                     harness_voice=harness_voice,
                 )
+                if opened_main_handoff:
+                    # See the live delegate site: the handoff must know which
+                    # run answers it before any reply can arrive.
+                    self._realtime.bind_main_handoff_run(dispatched_run_id)
                 if (
                     combined
                     and not downstream_dropped

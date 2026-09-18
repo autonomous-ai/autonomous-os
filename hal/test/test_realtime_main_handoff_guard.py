@@ -126,3 +126,75 @@ def test_filler_slot_goes_through_the_tracker():
     o.save_main_handoff("Find my pen")
     assert o.take_main_handoff_filler_slot() is True
     assert o.take_main_handoff_filler_slot() is False  # inside the 4 s gap
+
+
+# --- id-matched closing -------------------------------------------------
+# A reply only releases the handoff it belongs to. Without this, "ask A →
+# click → ask B → A's reply finally lands" closed B's handoff and put the
+# #419 hole straight back for B.
+
+
+def test_a_reply_from_another_run_does_not_close_the_handoff():
+    t = _tracker()
+    t.open("Find my pen", now=0.0)
+    t.bind_run("device-chat-7-1787885628360")
+
+    assert t.close("main_reply", now=1.0, run_id="device-chat-6-1787885620000") is False
+    assert t.is_open(now=1.0)
+    assert t.close("main_reply", now=1.0, run_id="device-chat-7-1787885628360") is True
+
+
+def test_an_unbound_handoff_accepts_any_reply():
+    """Dispatch may return no run id at all; refusing every reply would strand
+    the guard for the whole TTL."""
+    t = _tracker()
+    t.open("Find my pen", now=0.0)
+
+    assert t.close("main_reply", now=1.0, run_id="device-chat-9-1787885629999") is True
+
+
+def test_the_click_closes_whatever_is_open():
+    t = _tracker()
+    t.open("Find my pen", now=0.0)
+    t.bind_run("device-chat-7-1787885628360")
+
+    assert t.close("click", now=1.0) is True
+
+
+def test_binding_is_ignored_once_the_handoff_is_closed():
+    t = _tracker()
+    t.open("Find my pen", now=0.0)
+    t.close("click", now=1.0)
+    t.bind_run("device-chat-7-1787885628360")
+
+    assert t.run_id() == ""
+
+
+def test_the_reported_regression_sequence(monkeypatch):
+    """ask A → click → ask B → A's late reply must not release B."""
+    o = _orchestrator()
+    o.save_main_handoff("Find my pen")
+    o.bind_main_handoff_run("run-A")
+
+    o.close_main_handoff("click")            # user clicks: A is dropped
+    o.save_main_handoff("Turn off the TV")   # B delegated
+    o.bind_main_handoff_run("run-B")
+
+    o.save_main_agent_reply_fragment("Found it at fifty-one degrees.", run_id="run-A")
+
+    assert o.main_handoff_open(), "A's late reply must not release B's handoff"
+    assert o.main_handoff_transcript() == "Turn off the TV"
+
+    o.save_main_agent_reply_fragment("The TV is off.", run_id="run-B")
+    assert not o.main_handoff_open()
+
+
+def test_a_reply_without_a_run_id_still_closes():
+    """An os-server that predates the field must not strand the guard."""
+    o = _orchestrator()
+    o.save_main_handoff("Find my pen")
+    o.bind_main_handoff_run("run-A")
+
+    o.save_main_agent_reply_fragment("Found it.")
+
+    assert not o.main_handoff_open()
