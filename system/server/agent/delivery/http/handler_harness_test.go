@@ -3,6 +3,7 @@ package http
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"go.autonomous.ai/os/system/domain"
 	"go.autonomous.ai/os/system/lib/i18n"
@@ -173,5 +174,22 @@ func TestHarnessDelegatedResponseAttribution(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestHarnessVoiceRunLosesSpeakerAfterClick(t *testing.T) {
+	// Harness ids have no creation stamp; registration must date the run so a
+	// click that follows mutes its reply even when that reply is the first
+	// time deliverTTS sees the id.
+	h := &AgentHandler{monitorBus: monitor.ProvideBus()}
+	h.MarkHarnessResponseRun("device-harness-abc", false, false)
+	time.Sleep(2 * time.Millisecond)
+	h.CancelSpeech()
+	if !h.isSpeechCancelled("device-harness-abc") {
+		t.Fatal("Harness run registered before the click still owns the speaker")
+	}
+	h.MarkHarnessResponseRun("device-harness-later", false, false)
+	if h.isSpeechCancelled("device-harness-later") {
+		t.Fatal("Harness run registered after the click was muted")
 	}
 }
