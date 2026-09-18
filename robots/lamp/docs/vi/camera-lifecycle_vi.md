@@ -225,8 +225,9 @@ Frame rate vs độ sáng là trade-off vật lý cứng trong phòng tối: exp
 
 Mặc định camera mở theo index: `HAL_CAMERA_INDEX` (default `0`) → `/dev/video0`, kèm fallback scan (symlink udev `/dev/cam`, rồi quét index 0–5). Index trần dễ vỡ — cắm thêm USB device khác hoặc thứ tự enumerate lúc boot đổi là `/dev/video<N>` xáo trộn.
 
-`HAL_CAMERA_NAME` (tuỳ chọn) chọn camera theo **tên phần cứng**, giống cách audio chọn device (`resolve_camera_device_id()` trong `drivers/camera/video_capture_device.py`). Giá trị là substring không phân biệt hoa thường của tên thiết bị v4l2 (ví dụ `OPENAICAM`). Thứ tự resolve:
+`HAL_CAMERA_NAME` (tuỳ chọn) chọn camera theo **alias vai trò** hoặc **tên phần cứng**, giống cách audio chọn device (`resolve_camera_device_id()` trong `drivers/camera/video_capture_device.py`). Giá trị là một đường dẫn tuyệt đối, hoặc substring không phân biệt hoa thường của tên thiết bị v4l2 (ví dụ `OPENAICAM`). Thứ tự resolve:
 
+0. **Đường dẫn tuyệt đối** (ví dụ `/dev/device-camera`, `SYMLINK` udev gắn theo vid:pid của camera trong `99-lamp-device.rules`) — trả về nguyên nếu tồn tại. Đây là bản camera của `device_speaker` trong `asound.conf`: `.env` đặt tên vai trò, udev quyết định phần cứng nào đảm nhận, nên đổi camera chỉ cần sửa udev. `.env` lamp standard dùng cách này. Đường dẫn không tồn tại thì rơi về index (bước 3).
 1. **Symlink capture `/dev/v4l/by-id`** (`...-video-index0`) có tên chứa needle — trả về chính đường symlink, nên các lần reopen sau vẫn bám đúng thiết bị kể cả khi kernel đánh số lại `/dev/video<N>` sau replug hay USB power-cycle.
 2. **Scan tên sysfs** — match `/sys/class/video4linux/video<N>/name` (N nhỏ nhất trước), bỏ qua node metadata anh em của UVC (cùng tên, thuộc tính `index` khác 0, không capture được).
 3. **Fallback về index cũ** kèm warning khi không match gì (camera rớt hoặc đổi tên).

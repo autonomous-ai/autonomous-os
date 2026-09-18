@@ -235,8 +235,9 @@ Frame rate vs brightness is a hard physical trade-off in a dark room: the max ex
 
 By default the camera is opened by index: `HAL_CAMERA_INDEX` (default `0`) → `/dev/video0`, with a fallback scan (`/dev/cam` udev symlink, then indexes 0–5). A bare index is fragile — plugging another USB device or a changed boot enumeration order can shuffle `/dev/video<N>`.
 
-`HAL_CAMERA_NAME` (optional) selects the camera by hardware name instead, mirroring how audio devices are picked (`resolve_camera_device_id()` in `drivers/camera/video_capture_device.py`). It is a case-insensitive substring of the v4l2 device name (e.g. `OPENAICAM`). Resolution order:
+`HAL_CAMERA_NAME` (optional) selects the camera by role alias or hardware name instead, mirroring how audio devices are picked (`resolve_camera_device_id()` in `drivers/camera/video_capture_device.py`). It is either an absolute path or a case-insensitive substring of the v4l2 device name (e.g. `OPENAICAM`). Resolution order:
 
+0. **Absolute path** (e.g. `/dev/device-camera`, the udev `SYMLINK` keyed on the camera's vid:pid in `99-lamp-device.rules`) — returned as-is when it exists. This is the camera counterpart of `asound.conf`'s `device_speaker`: `.env` names a role, udev decides which hardware fills it, so a camera swap is a udev change only. The lamp standard `.env` uses this. A missing path falls back to the index (step 3).
 1. **`/dev/v4l/by-id` capture symlink** (`...-video-index0`) whose name contains the needle — returned as the symlink path, so reopens keep following it even when the kernel renumbers `/dev/video<N>` after a replug or USB power-cycle.
 2. **sysfs name scan** — `/sys/class/video4linux/video<N>/name` match (lowest N first), skipping UVC metadata sibling nodes (same name, non-zero `index` attribute, cannot capture).
 3. **Legacy index fallback** with a warning when nothing matches (camera absent or renamed).

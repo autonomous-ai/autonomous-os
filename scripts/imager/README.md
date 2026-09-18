@@ -48,8 +48,8 @@ After placing the file, run `make build DEVICE_TYPE=lamp OTA_METADATA_URL=…` a
 | Config | Owner | How it gets on the Pi |
 |---|---|---|
 | `hal.env` | **OS team** | Written into the image by the device rootfs overlay — build-orangepi.sh Phase 3, build.sh Phase 2 |
-| `asound.conf` | **Hardware team** | Baked into base image — not shipped in device profile |
-| udev rules | **Hardware team** | Baked into base image |
+| `asound.conf` | **OS team** (hardware team reviews) | `robots/<type>/rootfs/etc/asound.conf` — device rootfs overlay, copied onto `/` at build and on every device-profile OTA |
+| udev rules | **OS team** (hardware team reviews) | `robots/lamp/rootfs/etc/udev/rules.d/` — same overlay; vid:pid → role (device-camera, device_speaker, …). Edit in repo, never on the device |
 | SPI3 overlay | **Hardware team** | Baked into base image |
 
 The device profile overlay (`robots/<type>/rootfs/`) only contains files owned by the OS team.
@@ -85,7 +85,7 @@ Phase 2  chroot qemu-arm64:
          - hal.env (OS team owned): HAL_AUDIO_*, HAL_VAD_THRESHOLD, DEVICE_TYPE, …
          - configs: hostapd, dnsmasq, dhcpcd, nginx (CSP + WS + captive-portal),
            PulseAudio (WebRTC AEC + anon socket)
-         - NOTE: asound.conf + udev rules NOT written here — hardware team bakes into base image
+         - NOTE: asound.conf + udev rules NOT written here — they ship in the device rootfs overlay (Phase 3)
          - mask orangepi-firstrun-config.service
 Phase 3  OTA bake from metadata.json:
          - bootstrap-server + os-server binaries
@@ -223,8 +223,8 @@ ls /usr/local/bin/{os-server,bootstrap-server,device-ap-mode,connect-wifi,softwa
 ls /opt/hal/.venv/bin/uvicorn
 openclaw --version
 cat /opt/hal/.env | grep HAL_AUDIO      # audio vars present
-cat /etc/asound.conf                    # baked by hardware team (not by build script)
-ls /etc/udev/rules.d/                   # udev rules baked by hardware team
+cat /etc/asound.conf                    # from robots/<type>/rootfs overlay
+ls /etc/udev/rules.d/                   # 99-lamp-device.rules + 91-pulseaudio-hal-ignore.rules from robots/lamp/rootfs overlay
 grep overlays /boot/orangepiEnv.txt     # spi3 + i2c0, no uart8 (uart8 claims PL9 = GPIO button pin)
 findmnt /                               # ext4, expanded to full SD
 systemctl is-enabled resize-once 2>&1 | grep -q "not found" && echo "OK: self-destructed"
@@ -283,6 +283,8 @@ Expected: non-zero bytes near offsets `0x2000` (SPL) and `0x20000` (U-Boot).
 - `base.img` cache is stamped with `<device_type>/rpi<model>` and a mismatched reuse
   now aborts instead of silently shipping the wrong image
 - QC checks extended to cover all of the above
+
+**2026-09-18** — udev rules move into the device profile overlay (`robots/lamp/rootfs/etc/udev/rules.d/`), next to `asound.conf`: hardware swaps are a vid:pid line in the repo, OTA-delivered; hand edits on a device are overwritten by the next device-profile OTA.
 
 **2026-06-17** — Config ownership clarified, per-device base image:
 - `asound.conf` removed from device profile overlay — hardware team bakes it into base image

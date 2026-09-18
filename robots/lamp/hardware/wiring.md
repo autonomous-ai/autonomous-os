@@ -106,7 +106,7 @@ The OPENAICAM audio endpoint (`device_micro3`) is not selected: a direct tone
 test returned near-digital silence, so it needs a hardware or firmware repair
 before it can be used for voice capture.
 
-> Mic 1 was the onboard ES8389 MEMS mic until 2026-09-17; it is now a C-Media USB adapter renamed to `device_micro1` by a udev rule keyed on `0d8c:0014` (`/etc/udev/rules.d/99-lamp-device.rules`, baked by the hardware team, not tracked here). No desoldering is needed anymore.
+> Mic 1 was the onboard ES8389 MEMS mic until 2026-09-17; it is now a C-Media USB adapter renamed to `device_micro1` by a udev rule keyed on `0d8c:0014` (`/etc/udev/rules.d/99-lamp-device.rules`, tracked at `robots/lamp/rootfs/etc/udev/rules.d/`). No desoldering is needed anymore.
 
 > ALSA aliases live in `/etc/asound.conf`. Their tracked source is `robots/lamp/rootfs/etc/asound.conf`, installed onto `/` at image build and on every device-profile OTA. Cards are addressed by **name**, not index, since USB card numbers reorder across boots.
 

@@ -31,6 +31,10 @@ def resolve_camera_device_id(
     devices are picked by name instead of a bare index.
 
     Preference order:
+    0. An absolute path (e.g. "/dev/device-camera", a udev SYMLINK keyed on the
+       camera's vid:pid — the camera counterpart of asound.conf's role aliases)
+       is returned as-is when it exists, so .env names a ROLE and the udev rule
+       decides which hardware fills it. Missing path falls through to 3.
     1. /dev/v4l/by-id capture symlink ("...-video-index0") whose name contains
        the needle — returned AS the symlink path, so later reopens follow it
        to the right node even when the kernel renumbers /dev/video<N> after a
@@ -43,6 +47,18 @@ def resolve_camera_device_id(
     With no name configured the legacy index passes through untouched.
     """
     if not name:
+        return fallback_index
+    if name.startswith("/"):
+        if os.path.exists(name):
+            _resolve_logger.info(
+                "Camera resolved by path %r (%s)", name, os.path.realpath(name)
+            )
+            return name
+        _resolve_logger.warning(
+            "Camera path %r does not exist — falling back to index %d",
+            name,
+            fallback_index,
+        )
         return fallback_index
     needle = _norm_device_name(name)
     try:
