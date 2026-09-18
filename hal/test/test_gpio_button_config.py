@@ -31,7 +31,7 @@ class TestButtonConfig(unittest.TestCase):
                 ("raspberry_pi_4", 0, 17),
                 ("raspberry_pi_5", 0, 17),
                 ("orangepi_sun60", 0 if device == "lamp" else 1,
-                 100 if device == "lamp" else 9),
+                 99 if device == "lamp" else 9),
             ):
                 with self.subTest(device=device, board=board):
                     self.assertEqual(
@@ -59,8 +59,8 @@ class TestButtonConfig(unittest.TestCase):
         buttons = load_button_configs(root / "lamp", "orangepi_sun60")
         self.assertEqual([(b.name, b.wiring.chip, b.wiring.line, b.behavior, b.hold_s, b.factory_reset)
                           for b in buttons],
-                         [("primary", 0, 100, "standard", 5.0, False),
-                          ("factory_reset", 0, 99, "factory_reset", 5.0, True)])
+                         [("primary", 0, 99, "standard", 5.0, False),
+                          ("factory_reset", 0, 100, "factory_reset", 5.0, True)])
         self.assertEqual(len(load_button_configs(root / "intern-v2", "orangepi_sun60")), 1)
         with tempfile.TemporaryDirectory() as directory:
             fallback = load_button_configs(directory, "orangepi_sun60")
