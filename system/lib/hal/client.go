@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -191,6 +192,12 @@ func GetColor() ([3]int, error) {
 func Speak(text string) error {
 	body, _ := json.Marshal(map[string]string{"text": text})
 	return post("/voice/speak", body)
+}
+
+// GrantWakeFocus opens HAL's wake-word follow-up window so the next utterance
+// dispatches without a wake phrase. HAL no-ops when wake word is off.
+func GrantWakeFocus(source string) error {
+	return post("/voice/wake-focus?source="+url.QueryEscape(source), nil)
 }
 
 // ApplyTTSConfig pushes voice settings into the running hal. The service reads

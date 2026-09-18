@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -254,28 +253,8 @@ func backupFile(path string) error {
 // writeEntriesAtomic writes via a temp file + rename so a live agent reading
 // USER.md mid-turn can never see a half-written file. Migration can get away
 // with a plain write because it runs at a switch, when no turn is in flight;
-// this reconcile runs while the gateway is up.
+// this reconcile runs while the gateway is up. Serialises entries and writes
+// them via writeFileAtomic.
 func writeEntriesAtomic(path string, entries []string, format entryFormat) error {
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, ".USER.md.tmp-*")
-	if err != nil {
-		return fmt.Errorf("create temp: %w", err)
-	}
-	tmpName := tmp.Name()
-	defer func() { _ = os.Remove(tmpName) }() // no-op once renamed
-
-	if _, err := tmp.WriteString(format.serialize(entries)); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("write temp: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close temp: %w", err)
-	}
-	if err := os.Chmod(tmpName, 0o644); err != nil {
-		return fmt.Errorf("chmod temp: %w", err)
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return fmt.Errorf("rename: %w", err)
-	}
-	return nil
+	return writeFileAtomic(path, format.serialize(entries))
 }

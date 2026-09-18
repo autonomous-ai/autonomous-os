@@ -28,8 +28,8 @@ import hal.config as config
 import hal.presets as presets
 from hal.realtime.config import (
     GeminiConfig,
+    GPTLiveConfig,
     OpenAIConfig,
-    QwenConfig,
     _load_language,
     gemini_needs_idle_workaround,
 )
@@ -122,13 +122,20 @@ DELEGATE_TOOL: dict[str, Any] = {
 
 REJECT_TURN_TOOL_NAME: str = "reject_turn"
 REJECT_TURN_TOOL_DESCRIPTION: str = (
-    "Call this only when you are confident this audio is background noise, "
-    "other people's conversation, an incomplete fragment, or otherwise not "
-    "addressed to this device. This explicitly drops the turn: never call it "
-    "for a request addressed to this device that you could answer or delegate. "
-    "An overheard request is still a valid rejection even if you could fulfill it. "
-    "Never call it merely "
-    "because you are uncertain. Keep voice output completely blank."
+    "Explicitly drop this turn when there is nothing to answer or delegate. Call "
+    "it in either case: (a) the audio is not addressed to this device — "
+    "background noise, other people's conversation, or an overheard request "
+    "(still a valid rejection even if you could fulfill it); or (b) it IS "
+    "addressed to you but carries no request, question, or action — a bare "
+    "acknowledgment (\"okay\", \"yeah\", \"right\", \"one sec\"), filler, or a lone "
+    "stray word or garbled fragment (\"football.\", \"reef\"); or (c) it is "
+    "clearly spoken in a language this device is not configured for — do not "
+    "translate or answer it, reject the turn. Prefer this over "
+    "simply going silent for those: a silent turn falls through to the slower "
+    "main agent, and delegating a non-request wastes a full main-agent turn that "
+    "returns nothing. Never call it for an actual request you could answer or "
+    "delegate, and never merely because you are uncertain — an uncertain possible "
+    "request must keep its normal fallback. Keep voice output completely blank."
 )
 
 REJECT_TURN_TOOL: dict[str, Any] = {
@@ -498,13 +505,11 @@ class RealtimeOrchestrator:
             return OpenAIRealtimeAgent(
                 config=OpenAIConfig(instructions=instructions), tools=self._tools,
             )
-        if provider == "qwen":
-            from hal.realtime.voice_agent.qwen_realtime import (
-                QwenRealtimeAgent,
-            )
+        if provider == "gptlive":
+            from hal.realtime.voice_agent.gpt_live import GPTLiveAgent
 
-            return QwenRealtimeAgent(
-                config=QwenConfig(instructions=instructions), tools=self._tools,
+            return GPTLiveAgent(
+                config=GPTLiveConfig(instructions=instructions), tools=self._tools,
             )
         return None
 
@@ -794,10 +799,8 @@ class RealtimeOrchestrator:
         lost by it: any turn arriving after this much silence would have been
         given a fresh session by the pre-turn recycle anyway.
         """
-        threshold: float = config.REALTIME_GEMINI_IDLE_PARK_S
+        threshold: float = self._idle_park_threshold()
         if threshold <= 0:
-            return
-        if config.REALTIME_PROVIDER.strip().lower() != "gemini":
             return
         if not self._started.is_set() or self._idle_parked:
             return
@@ -817,6 +820,22 @@ class RealtimeOrchestrator:
             return
         self._park_idle_session(now - last)
 
+    @staticmethod
+    def _idle_park_threshold() -> float:
+        """Seconds of inactivity before the provider session is parked; 0 = never.
+
+        Gemini: close before the server's own idle kill pages the backend.
+        GPT-Live: close because the session is billed per minute while it sits
+        open. OpenAI Realtime bills per token, so an idle session is free and is
+        left to the server's own timeout.
+        """
+        provider: str = config.REALTIME_PROVIDER.strip().lower()
+        if provider == "gemini":
+            return config.REALTIME_GEMINI_IDLE_PARK_S
+        if provider == "gptlive":
+            return config.REALTIME_GPTLIVE_IDLE_PARK_S
+        return 0.0
+
     def _park_idle_session(self, idle_s: float) -> None:
         """Disconnect the current session and mark it resumable on the next turn.
 
@@ -831,10 +850,11 @@ class RealtimeOrchestrator:
             if agent is None:
                 return
             logger.info(
-                "[realtime] %.0fs idle (>= %.0fs) — parking Gemini session "
-                "(closing before the server does)",
+                "[realtime] %.0fs idle (>= %.0fs) — parking %s session "
+                "(closing before the server does / before it bills more)",
                 idle_s,
-                config.REALTIME_GEMINI_IDLE_PARK_S,
+                self._idle_park_threshold(),
+                config.REALTIME_PROVIDER.strip().lower(),
             )
             try:
                 agent.disconnect()

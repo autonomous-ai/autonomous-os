@@ -16,6 +16,14 @@ description: Tracks the USER's mood only — signals + synthesized decision from
 >
 > **Your reply text** to the user is at most ONE short caring sentence (or `NO_REPLY`). Synthesize silently and emit the log HW markers in that same reply — the user only hears what you would naturally say if you were truly noticing how they feel. Fetch mood history only for the missing-context fallback below.
 
+When another skill invokes Mood, contribute the required signal/decision
+markers to that skill's reply; do not add a separate caring sentence. Keep
+synthesis in the provider's native thinking channel, never in ordinary text
+before/after tools or in a final recap. Without that channel, omit the analysis.
+The decision marker's required `reasoning` field remains structured log data;
+do not repeat it aloud. Preserve required synthesis and logging while reusing
+the supplied context instead of fetching the same data again.
+
 > **ALWAYS log.** `unknown` is a valid `user` value — log signals and decisions under `user: "unknown"` when `current_user` is unknown. Never skip logging because the user is unknown/unconfirmed; stranger mood still counts for Music decisions.
 
 Mood is stored as two kinds of rows:

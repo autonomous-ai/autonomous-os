@@ -172,8 +172,10 @@ FACE_STRANGER_MIN_TICKS = 2         # Sightings before an unknown face earns an 
 FACE_STRANGER_CORROBORATION_S = 6.0 # How long a pending candidate stays countable
 FACE_COPRESENCE_MIN_TICKS = 2       # Ticks friend + non-friend boxes must share a frame before "already present"
 HAL_FACE_LANDMARK_CONF_THRESHOLD = 0.99  # Skip crops the face mesh isn't sure about
+FACE_MATCH_THRESHOLD = 0.40         # Bar for a match carried by the enrolled uploads
 FACE_EXTENDED_THRESHOLD = 0.45      # Bar for a match carried by the extended bank alone
-FACE_EXTEND_MIN_ENROLL_SIM = 0.40   # Bar the uploads must clear to auto-capture a view
+FACE_STRANGER_THRESHOLD = 0.45      # Bar for matching an already-known stranger_N
+FACE_EXTEND_MIN_ENROLL_SIM = 0.45   # Bar the uploads must clear to auto-capture a view
 FACE_COOLDOWN_S = 10.0              # Min seconds between face presence events
 FACE_OWNER_FORGET_S = 3600.0        # Re-fire presence after N seconds without seeing owner
 FACE_STRANGER_FORGET_S = 1800.0     # Same for strangers
@@ -221,19 +223,38 @@ Recognition *rises* as the gate tightens, because the unidentifiable crops leave
 
 **Reach.** At 640×480 with a ~65° horizontal FOV, 0.10 corresponds to a 48 px face box at roughly 2.2 m. Note the gate is scale-invariant: raising `HAL_CAMERA_WIDTH`/`HEIGHT` does not change which faces pass, but it does raise the pixel quality of the crop handed to the recognizer (EdgeFace warps to 112×112, and SCRFD returns bboxes in original-frame coordinates, so the crop comes from the full-resolution frame). At 1280×720 the same 0.10 yields a 72 px crop instead of 48 px.
 
-**Two thresholds, not one.** A face is a FRIEND when the enrolled **uploads**
-score above 0.30, **or** the auto-captured **extended** views score above
-`FACE_EXTENDED_THRESHOLD` (0.45). The uploads are ground truth; an extended view
-is a guess the device made about itself, so carrying a match alone costs it a
-higher bar. The identity comes from whichever bank *authorised* the match — an
+**Three banks, three bars.** A face is a FRIEND when the enrolled **uploads**
+score above `FACE_MATCH_THRESHOLD` (0.40), **or** the auto-captured **extended**
+views score above `FACE_EXTENDED_THRESHOLD` (0.45). Otherwise it is a known
+stranger when the **stranger bank** scores above `FACE_STRANGER_THRESHOLD`
+(0.45). The identity comes from whichever bank *authorised* the match — an
 extended view below its own threshold supplies neither the decision nor the name.
+
+| bank | what it holds | domain | bar |
+|------|------|------|------|
+| uploads | the user's enrollment photo(s) | phone photo ↔ camera | `FACE_MATCH_THRESHOLD` 0.40 |
+| `.extended` | views the device auto-captured of a recognised user | camera ↔ camera | `FACE_EXTENDED_THRESHOLD` 0.45 |
+| strangers | one view per minted `stranger_N` | camera ↔ camera | `FACE_STRANGER_THRESHOLD` 0.45 |
+
+The uploads are ground truth, but they are also the hardest match: a phone
+photo against a ceiling camera. Measured on a lamp (2026-09-16) against the
+enrollment photo, the owner scores **0.60–0.85** frontal, **0.29–0.34** at a ¾
+pose, and **−0.31–0.28** in full profile — the same range as strangers and as a
+photo held up on a phone. 0.40 sits in the gap between the ¾ and frontal
+clusters. The previous 0.30 sat inside the ¾ cluster, where a genuine off-angle
+frame and a similar-looking stranger overlap; a stranger accepted as the owner
+is the worse failure. The cost is the ¾ band — the #299 replay puts the upload
+path at 92.0% recall at 0.30 and 86.4% at 0.40 — and that band is exactly what
+the extended bank exists to recover.
+
+The two auto-captured banks are the same kind of evidence — a single view the
+device captured on its own, camera-to-camera, never re-validated — and need the
+same higher bar. Same-camera re-sightings of the same person land around 0.6.
 
 A single shared threshold has no safe value. Measured over 990 logged frames
 (2026-09-04): the enrollment photo alone keeps the best of six verified
 strangers at 0.201, but **any** extended bank lifts that to 0.32–0.40, because
-every stored view is another chance for a stranger to match something. Raising
-the shared threshold to 0.40 instead fixes that and costs the frontal path
-92.0% → 86.4% recall — the very complaint the extended bank exists to answer.
+every stored view is another chance for a stranger to match something.
 
 | `FACE_EXTENDED_THRESHOLD` | recognised | margin over the worst stranger (0.404) |
 |------|------|------|
@@ -245,9 +266,18 @@ the shared threshold to 0.40 instead fixes that and costs the frontal path
 The four frames 0.40 would additionally recognise all have a confident
 recognition 2–6 s away, so they cost nothing visible; a false acceptance does.
 
+**Why the stranger bank is not matched at the upload bar (#429).** It was, and
+on a device whose bank held 20 single-view rows minted before the quality gates
+existed, one visitor was reported as `stranger_9` → `stranger_10` → `stranger_4`
+within minutes: her frames scored **0.346 / 0.385 / 0.318** against three
+different stale rows of three different people — each just clearing 0.30, the
+argmax flipping with head pose — while her own two frames scored **0.658**
+against each other. At 0.45 none of the stale rows match, she is minted after
+`FACE_STRANGER_MIN_TICKS`, and her next frames match the fresh row at ~0.66.
+
 **What gets auto-captured.** A recognised frame may join a user's extended bank
 only when **both** hold: the enrolled uploads carried the match and scored above
-`FACE_EXTEND_MIN_ENROLL_SIM` (0.40), and the view is different enough from what
+`FACE_EXTEND_MIN_ENROLL_SIM` (0.45), and the view is different enough from what
 is already stored to be worth keeping.
 
 Both are needed. Novelty alone was the only test before, and "far from
@@ -264,10 +294,10 @@ frame recognised **by** the extended bank can no longer add to it, so one bad
 view cannot breed more.
 
 This does not make the bank pointless — the stored view is not there for its own
-sake. A view the uploads recognise at 0.40–0.59 becomes a **new anchor** one step
+sake. A view the uploads recognise at 0.45–0.69 becomes a **new anchor** one step
 further out in pose space. Replaying 990 logged frames: 879 frames were
 recognised by the uploads directly, and **11 more were rescued by the extended
-bank alone**, at enroll similarity 0.157–0.298 — below the 0.30 bar, so without
+bank alone**, at enroll similarity 0.157–0.298 — below the upload bar (0.30 at the time, 0.40 now), so without
 the bank they would have been missed. One of them is a frame the live device
 labelled `stranger_4`.
 
@@ -300,7 +330,12 @@ to be other people.
 
 **Minting an identity needs corroboration.** An unrecognised face does not get a `stranger_N` from a single frame. It must be seen `FACE_STRANGER_MIN_TICKS` times (2) within `FACE_STRANGER_CORROBORATION_S` (6 s), matched **by embedding** rather than by position, so "again" means the same person and not merely another face in the same corner.
 
-Minting is the expensive verdict — a persistent identity, a stranger presence event, a row in the Unknown Faces card — and it is reached by scoring *below* everything, which is what an unknown person looks like and equally what a momentarily unusable frame looks like. The gates above drop the unusable frames they can measure; this catches the rest by asking what no single frame can answer: is this face still there a tick later? Measured over 990 logged frames, 19 of the 28 runs that reach this branch are a single isolated tick.
+Minting is the expensive verdict — a persistent identity, a stranger presence event, a row in the Unknown Faces card — and it is reached by scoring *below* both owner banks' negative bar (0.20) **and** below `FACE_STRANGER_THRESHOLD` — the stranger bank is not part of the negative test, because once it holds a dozen rows some row is nearly always above 0.20 and a genuinely new person could never mint (#429). Scoring there is what an unknown person looks like and equally what a momentarily unusable frame looks like. The gates above drop the unusable frames they can measure; this catches the rest by asking what no single frame can answer: is this face still there a tick later? Measured over 990 logged frames, 19 of the 28 runs that reach this branch are a single isolated tick.
+
+The known cost of that gate: a returning stranger seen at a pose their single
+stored view does not cover (0.20–0.45 against their own row) gets a second
+`stranger_N`. One row cannot vouch for a pose it has never seen; a second id is
+the honest outcome, and it beats being absorbed into somebody else's.
 
 A real visitor is unaffected beyond one tick of delay: they are still there 2 s later and mint then. The window is deliberately ~3 sensing ticks rather than strictly back-to-back, so one dropped or blurred frame in the middle does not reset a genuine visitor's count.
 
@@ -312,9 +347,12 @@ A real visitor is unaffected beyond one tick of delay: they are still there 2 s 
 |---------|-----|
 | Distant people not recognized | Decrease `FACE_HEIGHT_RATIO_THRESHOLD` (0.10 → 0.07) |
 | Someone else is recognized as an enrolled user | Raise `FACE_EXTENDED_THRESHOLD` (0.45 → 0.50) and check `match_source` in the face debug log — `extended` means an auto-captured view carried it |
+| The enrolled user is `unsure` at a ¾ head turn | Expected while the extended bank is refilling — those poses score 0.29–0.34 against a frontal upload. Check `.extended/` is growing; only lower `FACE_MATCH_THRESHOLD` (0.40 → 0.35) after re-measuring against known strangers |
+| One visitor is reported under several `stranger_N` ids within minutes | Stale stranger rows are being false-accepted (#429). Check `stranger_similarity` in the face debug log sits just over the bar; raise `FACE_STRANGER_THRESHOLD` (0.45 → 0.50), and clear `/root/local/strangers/*.npy` if the rows predate 2026-09-04 (no quality gates) |
+| A returning visitor keeps getting a new `stranger_N` | Their single stored view does not cover the pose. Lower `FACE_STRANGER_THRESHOLD` (0.45 → 0.40) only with headroom over the false accepts in the debug log; below 0.40 #429 comes back |
 | An enrolled user is missed at angles the frontal photo cannot cover | Lower `FACE_EXTENDED_THRESHOLD`, but not below 0.45 without re-measuring against known strangers |
 | Extended bank fills with other people | Should no longer happen; if it does, raise `FACE_EXTEND_MIN_ENROLL_SIM` and check each stored view's `match_source` in the face debug log |
-| Extended bank stays empty or stops growing | Lower `FACE_EXTEND_MIN_ENROLL_SIM` (0.40 → 0.35). Only frames the *uploads* recognise are eligible, so a user with a single frontal photo grows the bank slowly by design |
+| Extended bank stays empty or stops growing | Lower `FACE_EXTEND_MIN_ENROLL_SIM` (0.45 → 0.40). Only frames the *uploads* recognise are eligible, so a user with a single frontal photo grows the bank slowly by design |
 | False detections from tiny face-like patches | Increase `FACE_HEIGHT_RATIO_THRESHOLD` (0.10 → 0.15) |
 | Recognition flickers / mints new `stranger_N` ids repeatedly | Crop is too small to embed reliably — increase `FACE_HEIGHT_RATIO_THRESHOLD`, or raise camera resolution to 1280×720 |
 | Wrong person matched when someone sits close to a frame edge | Face is clipped — decrease `FACE_MAX_TRUNCATION` (0.05 → 0.03), or re-aim the camera so heads stay fully in frame |

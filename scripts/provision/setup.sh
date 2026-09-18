@@ -147,7 +147,7 @@ EOF
 # Stage 0c: Enable SPI in firmware config
 # ----------------------------------------------------------device-
 stage_enable_spi() {
-  echo "[stage] Enable SPI in firmware config"
+  echo "[stage] Enable SPI + I2C in firmware config"
 
   local cfg=""
   if [ -f /boot/firmware/config.txt ]; then
@@ -155,24 +155,27 @@ stage_enable_spi() {
   elif [ -f /boot/config.txt ]; then
     cfg="/boot/config.txt"
   else
-    echo "[stage] No /boot/firmware/config.txt or /boot/config.txt found; skipping SPI enable"
+    echo "[stage] No /boot/firmware/config.txt or /boot/config.txt found; skipping SPI/I2C enable"
     return 0
   fi
 
-  # If dtparam=spi=on is present but commented, uncomment it; otherwise append.
-  if grep -qE '^\s*#?\s*dtparam=spi=on' "$cfg" 2>/dev/null; then
-    sed -i -E 's/^\s*#\s*(dtparam=spi=on)/\1/' "$cfg" 2>/dev/null || true
-    echo "[stage] Ensured dtparam=spi=on is enabled in $cfg"
-  else
-    {
-      echo ""
-      echo "# Enabled by lamp setup.sh to turn on SPI"
-      echo "dtparam=spi=on"
-    } >>"$cfg"
-    echo "[stage] Added dtparam=spi=on to $cfg"
-  fi
+  # For each bus: if the dtparam is present but commented, uncomment it; otherwise append.
+  local param
+  for param in spi=on i2c_arm=on; do
+    if grep -qE "^\s*#?\s*dtparam=$param" "$cfg" 2>/dev/null; then
+      sed -i -E "s/^\s*#\s*(dtparam=$param)/\1/" "$cfg" 2>/dev/null || true
+      echo "[stage] Ensured dtparam=$param is enabled in $cfg"
+    else
+      {
+        echo ""
+        echo "# Enabled by lamp setup.sh"
+        echo "dtparam=$param"
+      } >>"$cfg"
+      echo "[stage] Added dtparam=$param to $cfg"
+    fi
+  done
 
-  echo "[stage] SPI enablement will take effect after reboot"
+  echo "[stage] SPI/I2C enablement will take effect after reboot"
 }
 
 # OTA metadata URL must be provided by the caller (install.sh sets it). No
@@ -1452,6 +1455,22 @@ stage_devices() {
   unzip -o -q /tmp/device.zip -d "$dest" \
     || { echo "[stage] ERROR: failed to extract device profile for $DEVICE_TYPE" >&2; return 1; }
   rm -f /tmp/device.zip
+  HARDWARE_PROFILE=""
+  [ ! -e /etc/autonomous/hardware-profile ] || HARDWARE_PROFILE=$(sed 's/^[[:space:]]*//;s/[[:space:]]*$//' /etc/autonomous/hardware-profile) \
+    || { echo "Cannot read hardware profile selection" >&2; return 1; }
+  if [ -n "$HARDWARE_PROFILE" ] && [ "$HARDWARE_PROFILE" != standard ]; then
+    [ -f "$dest/apply-overrides.py" ] \
+      || { echo "[stage] ERROR: Hardware overrides require an override-capable device package" >&2; return 1; }
+    python3 "$dest/apply-overrides.py" --profile "$dest" --root / \
+      || { echo "[stage] ERROR: Hardware override configuration failed" >&2; return 1; }
+    cp -a "$dest/rootfs/." / \
+      || { echo "[stage] ERROR: Hardware overlay failed" >&2; return 1; }
+    # stage_hal ran before this overlay; reload the hardware configuration.
+    if systemctl is-active --quiet hal || systemctl is-enabled --quiet hal; then
+      systemctl restart hal \
+        || { echo "[stage] ERROR: HAL restart after hardware overlay failed" >&2; return 1; }
+    fi
+  fi
   echo "[stage] Device profile '$DEVICE_TYPE' installed at $dest"
 }
 

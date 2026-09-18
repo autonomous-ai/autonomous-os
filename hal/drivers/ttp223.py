@@ -645,7 +645,7 @@ class TTP223Handler:
         def _run():
             try:
                 tts = state.tts_service
-                if tts is not None and tts.speaking:
+                if False and tts is not None and tts.speaking:  # PARKED (no issue): only pet acts on TTP223
                     logger.info("TTP223 first touch during TTS -- stopping speech early")
                     from hal.routes.voice import stop_tts
                     stop_tts()
@@ -677,6 +677,8 @@ class TTP223Handler:
             # 1) SWIPE — one contact that ran cleanly across every pad in order.
             #    Checked first so a resolved swipe never also fires a tap.
             if is_swipe:
+                self._reset_cycle()
+                return  # PARKED (no issue): only pet acts on TTP223
                 self._dispatch(
                     "SWIPE", f"one contact traversed all pads, gaps {gaps[0]:.0f}-{gaps[1]:.0f}ms",
                     count, "swipe_action", swipe_action,
@@ -695,6 +697,8 @@ class TTP223Handler:
             # lift, tap L100. Nothing but the press count separates that from a
             # slow swipe.
             if (revisited and landed) or (presses >= 2 and not revisited):
+                self._reset_cycle()
+                return  # PARKED (no issue): only pet acts on TTP223
                 self._dispatch(
                     "DOUBLE_TAP",
                     ("revisited a pad, and two pads lit together" if revisited
@@ -722,6 +726,8 @@ class TTP223Handler:
             #    touched": several fingers land on several pads at once, and
             #    requiring a single pad made this reachable only with a fingertip.
             if count >= PET_SESSION_THRESHOLD:
+                self._reset_cycle()
+                return  # PARKED (no issue): only pet acts on TTP223
                 self._dispatch(
                     "DOUBLE_TAP", f"{count} contacts, no revisit and no movement",
                     count, "mic_toggle_action", mic_toggle_action,
@@ -739,6 +745,8 @@ class TTP223Handler:
         # comment was not, so the file claimed the opposite of what it did.
         # chime=False: the ack chime already sounded at the first session end
         # (_ack_first_session) — don't ping twice.
+        self._reset_cycle()
+        return  # PARKED (no issue): only pet acts on TTP223
         self._dispatch(
             "TAP", self._tap_reason(count),
             count, "single_click_action",

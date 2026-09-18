@@ -54,3 +54,15 @@ def test_sysfs_fallback_skips_metadata_sibling(tmp_path):
 def test_no_match_falls_back_to_index(tmp_path):
     sysfs = _make_sysfs(tmp_path, {"video0": ("cedrus", "0")})
     assert resolve_camera_device_id("OPENAICAM", 5, str(tmp_path / "none"), sysfs) == 5
+
+
+def test_absolute_path_returned_as_is_when_present(tmp_path):
+    link = tmp_path / "device-camera"
+    link.write_text("")
+    got = resolve_camera_device_id(str(link), 0, str(tmp_path / "none"), str(tmp_path / "none"))
+    assert got == str(link)
+
+
+def test_absolute_path_missing_falls_back_to_index(tmp_path):
+    missing = str(tmp_path / "device-camera")
+    assert resolve_camera_device_id(missing, 4, str(tmp_path / "none"), str(tmp_path / "none")) == 4

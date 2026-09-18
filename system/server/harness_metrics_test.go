@@ -91,7 +91,7 @@ func TestHarnessExecutionUsesLifecycleNotDeliveryText(t *testing.T) {
 		t.Run(tc.kind+tc.outcome, func(t *testing.T) {
 			capture := captureHarnessMetrics(t)
 			s := &Server{agentHandler: &agenthttp.AgentHandler{}}
-			s.registerHarnessReply("agent", "device-harness-test", true)
+			s.registerHarnessReply("agent", "device-harness-test", true, false)
 			frame := harness.Frame{"kind": tc.kind, "agentId": "agent", "runId": "device-harness-test"}
 			if tc.payload != nil {
 				frame["payload"] = tc.payload
@@ -129,9 +129,9 @@ func TestHarnessMetricRejectsAmbiguousOrMismatchedRoute(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			capture := captureHarnessMetrics(t)
 			s := &Server{agentHandler: &agenthttp.AgentHandler{}}
-			s.registerHarnessReply("agent", "first", true)
+			s.registerHarnessReply("agent", "first", true, false)
 			if tc.second {
-				s.registerHarnessReply("agent", "second", true)
+				s.registerHarnessReply("agent", "second", true, false)
 			}
 			if tc.expired {
 				r := s.harnessReplies["first"]
@@ -155,7 +155,7 @@ func TestHarnessDispatchUnknownAndLocalQuestionAreNotSuccess(t *testing.T) {
 	reportHarnessDispatchError("uncertain", "i2", &harness.DeliveryUnknownError{})
 	reportHarnessDispatchError("accepted", "i3", nil)
 	s := &Server{agentHandler: &agenthttp.AgentHandler{}}
-	s.registerHarnessReply("agent", "question", true)
+	s.registerHarnessReply("agent", "question", true, false)
 	s.deliverHarnessVoiceQuestion("agent", "question", "Next question?")
 	rows := capture.executions()
 	if len(rows) != 3 || rows[0]["outcome"] != "failed" || rows[1]["outcome"] != "unknown" || rows[2]["evidence"] != "harness_question_open" {
@@ -186,7 +186,7 @@ func TestHarnessAnswerAPIStartsChatBeforeImmediateTerminal(t *testing.T) {
 	s := &Server{config: &config.Config{LLMAPIKey: "owner"}, agentHandler: &agenthttp.AgentHandler{}}
 	transport := &harnessAnswerMetricTransport{server: s}
 	s.harnessVoice = harness.NewVoiceController(transport, harness.VoiceCallbacks{
-		OnDispatch: func(agentID, runID string) { transport.runID = runID; s.registerHarnessReply(agentID, runID, true) },
+		OnDispatch: func(agentID, runID string) { transport.runID = runID; s.registerHarnessReply(agentID, runID, true, false) },
 	})
 	if err := s.harnessVoice.RefreshFocus(context.Background()); err != nil {
 		t.Fatal(err)

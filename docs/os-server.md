@@ -261,6 +261,7 @@ An `Unknown Speaker:` label is identity metadata, not a prerequisite for answeri
 | GET | `/api/agent/recent` | 100 most recent events (ring buffer) |
 | POST | `/api/agent/speech/cancel` | Physical cancel gesture (single click, called by HAL — loopback-only auth so the button works without a login). Silences every turn currently in flight and stops HAL playback (`StopTTS`, which also clears the pre-synthesised speak-queue). The turns are **not** aborted: they keep running, their tools still fire, and their text still reaches web chat and history — they only lose the speaker. Implemented as a monotone unix-ms watermark (`speechWatermarkMs`): `deliverTTS` drops any reply whose turn was created at or before the mark and logs a `tts_cancelled` flow event. Turn age comes from the runID — device ids end in their creation stamp (`device-chat-7-<unix-ms>`, 13 digits), channel ids (`tg-<messageID>`) have none and fall back to the first time speech was requested for that run. Because new turns are always on the far side of the mark, the user can click and immediately speak again while an older backlog drains silently; the watermark never needs clearing. The same mark also drops the turn's `[HW:]` markers in `fireHWCall` — servos and LEDs stop too, since a device that keeps moving after being told to stop reads as ignoring the user. The run id is put through `resolveRunID` first: the TTS path already holds the device id while HW dispatch may still carry the raw backend UUID for the same turn, and judging them separately muted the reply while the markers fired anyway. `/dm`, `/broadcast` and `/speak` are exempt (the gate sits after them): the click means "stop talking to me" and must not swallow a reply addressed to a Telegram user. A **second** watermark (`autoSpeechWatermarkMs`) works the same way but is stamped by the system: it moves forward whenever HAL reports `voice_agent_handled` — the realtime voice agent has answered a newer utterance out loud — so the main-agent turn still working on the question before it loses the speaker instead of answering it afterwards in a different voice. `deliverTTS` drops a reply older than **either** mark; `fireHWCall` consults **only** the click mark, since a machine judgement must not silently cancel an action the user did ask for. Opt-in per body: set `OS_REALTIME_SUPERSEDES_MAIN_REPLY=1` in the body's `/opt/hal/.env`. Default OFF, so a body that has never heard of the switch is unaffected. The click also calls `FillerManager.CancelAllActive()`. Fillers speak straight to HAL and never pass through `deliverTTS`, so the watermark alone cannot reach them — and because a muted turn keeps running, every tool boundary it crossed re-armed another "one moment" for a reply the user had just cancelled. Every run holding filler state at that instant is on the old side of the mark, so all of them are dropped; the Opening filler for whatever the user says next is armed afterwards and is unaffected. A dropped reply is still posted to HAL's `POST /voice/realtime/history`: the click takes the speaker, not the answer, and the realtime agent's record of what the main agent replied otherwise rides on TTS completion (see `docs/realtime-voice.md`). |
 | POST | `/api/agent/restart` | "Start + enable + restart" recovery for the active runtime. Steps: (1) best-effort `systemctl enable <unit>` — where `<unit>` is picked from a runtime→unit map (`openclaw`, `hermes-gateway`, `picoclaw`, `codex`, `claudecode`, `opencode`) — so the fix survives a reboot; (2) `agentGateway.RestartAgent()` which resolves to `systemctl restart <unit>` and thus STARTS the service even if it was stopped. Response `{backend, enabled}`. Used by the Overview's Agent Gateway card to recover a gateway that was stopped+disabled, without SSH. Internal restart callers (config refresh, migration) still bypass the enable step. |
+| POST | `/api/agent/memory/reset` | Admin. No-SSH recovery for self-poisoned memory (#421): for **every** installed runtime, copies `USER.md`, `MEMORY.md`, `KNOWLEDGE.md` and `realtime/{summary.md,device_summary.md,memory.jsonl,memory_raw.jsonl}` into `<workspace>/.memory-reset-<stamp>-<rand>/`, resets `USER.md` to the blank form (emptied for Hermes) and removes the rest, then re-runs onboarding so `KNOWLEDGE.md` is re-seeded. Returns `{backup_dirs, cleared, skipped}`. Files only — session history (OpenClaw sessions, Hermes `state.db`) is untouched; follow with `/new`. Emits a `memory_reset` flow event. |
 
 ---
 
@@ -323,6 +324,10 @@ resolved `device_type` and a sorted `device_capabilities` list from that device'
 `ROBOT.md`; the agent can avoid assuming unavailable hardware exists. This is
 deliberately the ready gateway rather than `config.agent_runtime`, which can be
 transiently out of date while a runtime switch is being reconciled.
+Once the greeting is sent, os-server calls HAL `POST /voice/wake-focus?source=boot_greeting`
+to open the wake-word follow-up window (`HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S`), so the
+user can answer the greeting without a wake phrase. HAL no-ops when wake word is
+off or the follow-up timeout is 0.
 
 Alerts are enabled whenever `llm_base_url` + `llm_api_key` are set; set
 `alerts_disabled: true` in `config/config.json` to mute a device.
@@ -571,9 +576,7 @@ set is never mistaken for a valid default. Only a factory reset clears it.
 Restore is **per section**, because that is how an operator thinks about it —
 they swapped the brain, or the voice provider, and want that one thing back.
 Each section takes the slice of the stored set it started from: the AI Brain
-url + key + model, realtime and the voice pipeline url + key. Qwen realtime is
-refused: it talks straight to the Alibaba host with its own credentials, and the
-shipped set would produce a 401 there.
+url + key + model, realtime and the voice pipeline url + key.
 
 It is implemented as an ordinary `UpdateConfig` rather than a direct write, so
 it inherits every side effect a manual edit gets — hal restart or the live TTS
@@ -917,11 +920,68 @@ kept greeting its previous owner by name (lamp-ac82, 2026-09-03).
 - **Writes only on change.** `USER.md` sits in the ~28k-token cached prompt
   prefix, so an unconditional rewrite would cost a prompt-cache miss on the next
   turn of every boot. The normal pass reads and writes nothing.
-- **Observe-only by default.** `user_profile_reconcile` in `config.json` gates
-  writes; unset/false logs what it *would* retire and changes nothing.
+- **On by default.** `user_profile_reconcile: false` in `config.json` makes the
+  pass observe-only: it logs what it *would* retire and changes nothing.
+  (Observe-only was the default until 2026-09-16.)
 - Writes are atomic (temp + rename) because the gateway is live during the pass.
 - An empty enrollment store (fresh device) is a no-op; an unreadable one is an
   error that changes nothing, rather than a guess.
+
+### Memory guard — self-written memory cannot outrank skills
+
+One line the agent wrote into `USER.md` during a collapsed session ("…Talks
+about a personal notebook / Obsidian vault notes, wants hands-on action done…")
+outranked the whole skill catalogue and the SOUL "Skill priority (MANDATORY)"
+block on lamp-dbda: "find my keyboard" ran shell commands instead of
+`/servo/search`, survived `/new` (it is a file, not session history) and a
+runtime switch (persona is multi-homed) — issue #421. The prompt already forbids
+such writes; this is the deterministic version.
+
+`agent.MemoryGuard` sweeps **every** runtime's `USER.md` and `MEMORY.md`:
+
+- **At boot** (after the retire pass) and **on every write** to one of those
+  files (fsnotify on the parent dirs, 2 s debounce, own rewrites recognised by
+  hash so they never loop), plus a 10-minute rescan that also picks up
+  workspaces created after boot.
+- **`USER.md` — strict allowlist.** Kept: template scaffolding (empty
+  `**Field:**` slots, italic hints, rules, links, the template's own sentences),
+  filled singular fields (`Name` etc. — the retire pass owns those) and
+  `**<label> (role)** — key: value; …` entries. Inside an entry a segment whose
+  value names a tool the agent could act with (`obsidian`, `terminal`, `curl`,
+  `/servo/…`, `*.md`, …) or is phrased as an instruction — a directive adverb
+  followed by a verb (`never use`, `always run`), a bare imperative at the
+  head of the segment (`skip greetings`, `run a full scan…`), `instead of`,
+  `match the`, `hands-on`, `works best`, … — is removed. Segment rules are
+  deliberately narrower than the `MEMORY.md` rule: the People-sync heartbeat
+  re-adds these segments every ~30 min, so a false positive there would be a
+  write loop. Habits and facts that merely contain `always`/`never`/`should`
+  (`always at the desk by 9`, `never drinks coffee`) or a generic noun
+  (`learning python`, `has a dog named Git`, `an old camera`) are kept. An
+  entry for a label with no enrollment directory is removed (skipped when the
+  store is empty or unreadable). **Everything else is quarantined** — a filled
+  `**Notes:**`, a free bullet, a paragraph.
+- **`MEMORY.md` — content rule only.** A block is quarantined when it names a
+  tool/endpoint **and** prescribes ("Full-room scan works best as curl-driven
+  aim + look per direction"). Observations stay, tool mentions without a
+  prescription stay.
+- **Hermes** `memories/USER.md` / `MEMORY.md` use `§`-separated entries; the
+  guard splits on that and rejoins the same way.
+- **Writes only on change.** A clean file round-trips byte for byte and is not
+  written (`USER.md` is in the cached prompt prefix). When something is removed:
+  `.bak-<nano>` copy (only the newest 5 guard backups per file are kept), the
+  removed blocks appended to `<file>.quarantine.txt` (rotated at 64 KB to
+  `.quarantine.txt.1`) with a reason (`free-prose`, `unknown-label`,
+  `prescriptive`), then an atomic temp+rename write.
+- **Default on.** `memory_guard: false` in `config.json` makes it observe-only
+  (log what it would remove).
+- Every observed change emits a `memory_changed` flow event (file, runtime,
+  size, sha8, quarantined count, reasons — never content) and refreshes the
+  fingerprint attached to each turn's `lifecycle_start` — see `flow-monitor.md`.
+- **Not covered:** `KNOWLEDGE.md` (OpenClaw does not load it per turn; it is
+  reset by `POST /api/agent/memory/reset`), Hermes `state.db`.
+- **Recovery:** when the guard did not catch it (or the poison predates it),
+  `POST /api/agent/memory/reset` backs up and clears every runtime's memory
+  files without SSH — see the endpoint table above.
 
 ### Keeping the two memory files bounded
 

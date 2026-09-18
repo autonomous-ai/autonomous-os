@@ -84,6 +84,7 @@ type Server struct {
 	channelReconcile *agent.ChannelReconcile
 	mcpReconcile     *agent.MCPReconcile
 	userReconcile    *agent.UserProfileReconcile
+	memoryGuard      *agent.MemoryGuard
 	networkService   *network.Service
 	deviceService    *device.Service
 	ambientService   *ambient.Service
@@ -159,6 +160,7 @@ func ProvideServer(
 	cr *agent.ChannelReconcile,
 	mr *agent.MCPReconcile,
 	upr *agent.UserProfileReconcile,
+	mg *agent.MemoryGuard,
 	ns *network.Service,
 	mqttFactory *mqtt.Factory,
 	ambientSvc *ambient.Service,
@@ -188,6 +190,7 @@ func ProvideServer(
 		channelReconcile:  cr,
 		mcpReconcile:      mr,
 		userReconcile:     upr,
+		memoryGuard:       mg,
 		networkService:    ns,
 		deviceService:     ds,
 		mqttFactory:       mqttFactory,
@@ -345,7 +348,14 @@ func (s *Server) Serve(closeFn func()) error {
 	if err := s.initializeExternalHistory(eventCtx); err != nil {
 		return err
 	}
-	harnessService, harnessErr := harness.NewService("config", harness.Callbacks{OnEvent: s.forwardHarnessEvent})
+	harnessService, harnessErr := harness.NewService("config", harness.Callbacks{
+		OnEvent: s.forwardHarnessEvent,
+		OnRevoked: func() {
+			if s.harnessVoice != nil {
+				_, _ = s.harnessVoice.SetMode(eventCtx, false)
+			}
+		},
+	})
 	if harnessErr != nil {
 		slog.Error("harness service initialization failed", "component", "harness", "error", harnessErr)
 	} else {
@@ -574,6 +584,9 @@ func (s *Server) Serve(closeFn func()) error {
 		s.userReconcile.Reconcile()
 		c.JSON(http.StatusOK, serializers.ResponseSuccess(gin.H{"reconciled": true}))
 	})
+	// memory/reset: no-SSH recovery for self-written memory that poisoned
+	// routing (#421). Admin-only — it deletes learned memory (with a backup).
+	agent.POST("memory/reset", adminAuthMiddleware(s.config), s.agentHandler.ResetMemory)
 	// channel-turn: the Hermes gateway observer hook POSTs each turn here so
 	// channel (Telegram/Slack/…) turns surface in Flow Monitor. Loopback-only.
 	agent.POST("channel-turn", localOnlyMiddleware(), s.agentHandler.ChannelTurn)

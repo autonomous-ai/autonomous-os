@@ -12,6 +12,25 @@ Choose the relevant path first:
 - **Normal conversational reply:** automatic TTS handles the reply on spoken channels. No explicit speech call is needed.
 - **Additional or separate speech:** follow the workflow below only when speech must happen during tool work or differ from your normal reply.
 
+## Brief speech that completes the task
+
+- Simple command or automatic reaction: normally one short sentence. Include
+  the actual outcome, required question, or essential next step; do not add a
+  second acknowledgment just to sound conversational.
+- Mute/privacy controls: keep the confirmation AND how to unmute. Enrollment:
+  keep consent/name questions and the success or failure confirmation. Guard
+  alerts: keep the hazard and required action; returning-user summaries may
+  need several short sentences. Never remove these to meet a word target.
+- Direct questions: answer first, then only the detail needed. Requested stories,
+  explanations, exact readbacks, and important safety guidance may be longer.
+- All analysis belongs in the provider's native thinking channel, not ordinary
+  text or an explicit speech API payload. Do not recap reasoning after thinking
+  ends; if no native channel is available, omit analysis. Required tool calls
+  need no spoken introduction. Do not make extra calls solely to narrate progress.
+- Explicit early speech is for a useful user-facing cue needed before an action
+  or during a wait, not for route/skill/cooldown commentary. Say it once; do not
+  repeat it in the final reply. Automatic TTS is sufficient for routine events.
+
 ## Workflow — explicit additional or separate speech
 1. Determine if you need explicit speech beyond your normal reply:
    - Normal conversational reply -> do NOT call this skill, TTS is automatic
