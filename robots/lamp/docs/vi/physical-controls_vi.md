@@ -14,8 +14,8 @@ Lamp hỗ trợ các nút cơ học, touchpad TTP223 và bộ điều khiển c�
 
 | Thiết bị | Pi 4/5 | OrangePi sun60 |
 |---|---|---|
-| Nút GPIO chính | gpiochip0 BCM 17 (pull-up, active-LOW) | Pin vật lý 37 / PD4 / gpiochip0 line 100 (pull-up, active-LOW) |
-| Nút GPIO reset | không wire | Pin vật lý 35 / PD3 / gpiochip0 line 99 (pull-up, active-LOW); giữ ≥5 s rồi nhả để factory-reset |
+| Nút GPIO chính | gpiochip0 BCM 17 (pull-up, active-LOW) | Pin vật lý 35 / PD3 / gpiochip0 line 99 (pull-up, active-LOW) |
+| Nút GPIO reset | không wire | Pin vật lý 37 / PD4 / gpiochip0 line 100 (pull-up, active-LOW); giữ ≥5 s rồi nhả để factory-reset |
 | Công tắc gạt mic | không wire | Pin vật lý 11 / PL9 / gpiochip1 line 9; pull-up, LOW=mute, HIGH=unmute |
 | TTP223 | không wire | Hai pad: S1 tại pin vật lý 29 / PD0 / gpiochip0 line 96; S3 tại pin vật lý 33 / PD2 / gpiochip0 line 98. **Pull-up, active-LOW** (pad nghỉ ở mức HIGH; chạm là edge xuống). |
 
@@ -57,7 +57,7 @@ GPIO. Restart HAL sau khi sửa JSON của device được chọn. Pull-up, acti
 và nhận diện cử chỉ vẫn ở driver dùng chung; mô phỏng bỏ qua phần cứng.
 
 Hardware xác nhận hai pad: S1 ở pin 29 (line 96), S3 ở pin 33 (line 98).
-JSON của Lamp dùng hai line này, dành pin 37 (line 100) cho nút cơ. Fallback
+JSON của Lamp dùng hai line này, dành pin 35 (line 99) cho nút cơ. Fallback
 cũ vẫn dùng line 96/100; cần giữ JSON của Lamp trên device để tránh trùng chân cũ.
 
 Board được detect qua `/proc/device-tree/model`:
@@ -117,7 +117,7 @@ Cập nhật HAL trước khi upload JSON có các trường mới này.
 | **Giữ 5–10 s rồi nhả** | Shutdown OS (TTS báo → release servo → `sudo shutdown -h now`). LED nháy đỏ khi đã arm. | n/a — phần cứng TTP223 không hold đáng tin được (xem "FastMode" dưới) |
 | **Giữ 10 s+ rồi nhả** | Factory-reset: wipe state thiết bị + reboot vào AP setup (TTS báo → release servo → POST `/api/system/factory-reset` trên OS server). LED đỏ đứng khi đã arm. **Tắt trên Lamp** (`"factory_reset": false` ở nút chính): giữ 10 s+ vẫn chỉ shutdown vì nút reset riêng đảm nhiệm factory-reset. | n/a |
 
-Bảng trên mô tả nút GPIO chính và TTP223. Nút reset riêng ở pin 35 chỉ factory-reset khi nhả sau khi giữ ít nhất 5 s. Giữ ngắn hơn và single/triple tap đều không làm gì; nút này không gọi sleep hoặc shutdown. LED giữ nguyên dưới 5 s và dùng preset factory-reset đỏ đứng chung từ 5 s trở lên.
+Bảng trên mô tả nút GPIO chính và TTP223. Nút reset riêng ở pin 37 chỉ factory-reset khi nhả sau khi giữ ít nhất 5 s. Giữ ngắn hơn và single/triple tap đều không làm gì; nút này không gọi sleep hoặc shutdown. LED giữ nguyên dưới 5 s và dùng preset factory-reset đỏ đứng chung từ 5 s trở lên.
 
 Khi Harness OFF, MPR121 cũng hỗ trợ giữ rồi nhả để thực hiện action và cùng phản hồi LED theo mức giữ, xem phần detect riêng. Mức sleep và các mức destructive **commit khi nhả, không phải khi timer fire lúc đang giữ**. MPR121 dừng ở shutdown: không có mức factory-reset, nên giữ 10 s+ trên touch vẫn chỉ shutdown (`hold_release_action(..., factory_reset=False)`). Chỉ nút GPIO mới factory-reset.
 
@@ -210,7 +210,7 @@ Vì vậy cắt lời chỉ đến từ hai nơi: **tap-to-interrupt** ở trên
 
 ## Detect nút GPIO (`hal/drivers/gpio_button.py`)
 
-Cùng driver phục vụ từng nút được cấu hình một cách độc lập. Flow dưới đây mô tả `behavior: "standard"` (nút chính). Với `behavior: "factory_reset"`, nhả sau `hold_s` (5 s ở pin 35 của Lamp) gọi `factory_reset_action` dùng chung; giữ ngắn hơn và mọi chuỗi tap đều bị bỏ qua. Hold watcher chỉ chọn mức LED factory-reset dùng chung khi đạt ngưỡng đó.
+Cùng driver phục vụ từng nút được cấu hình một cách độc lập. Flow dưới đây mô tả `behavior: "standard"` (nút chính). Với `behavior: "factory_reset"`, nhả sau `hold_s` (5 s ở pin 37 của Lamp) gọi `factory_reset_action` dùng chung; giữ ngắn hơn và mọi chuỗi tap đều bị bỏ qua. Hold watcher chỉ chọn mức LED factory-reset dùng chung khi đạt ngưỡng đó.
 
 Driver đếm edge nơi **mọi destructive action commit ở rising edge (nhả) dựa trên thời lượng giữ** — không timer nào fire lúc đang giữ. Đây chính là cái cho phép user huỷ giữa chừng (nhả trước ngưỡng) hoặc escalate (giữ tiếp quá 10 s).
 

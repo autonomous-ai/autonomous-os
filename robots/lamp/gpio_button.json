@@ -15,7 +15,7 @@
         {
           "name": "primary",
           "chip": 0,
-          "line": 100,
+          "line": 99,
           "debounce_ns": 200000000,
           "behavior": "standard",
           "factory_reset": false
@@ -23,7 +23,7 @@
         {
           "name": "factory_reset",
           "chip": 0,
-          "line": 99,
+          "line": 100,
           "debounce_ns": 200000000,
           "behavior": "factory_reset",
           "hold_s": 5
