@@ -198,3 +198,25 @@ def test_a_reply_without_a_run_id_still_closes():
     o.save_main_agent_reply_fragment("Found it.")
 
     assert not o.main_handoff_open()
+
+
+def test_a_reply_with_no_handoff_open_is_not_reported_as_a_refusal(caplog):
+    """The ordinary case — every main-agent reply when nothing is pending —
+    must stay silent in the log, or real refusals drown in it."""
+    import logging
+
+    o = _orchestrator()
+    with caplog.at_level(logging.INFO, logger="hal.realtime"):
+        assert o.close_main_handoff("main_reply", run_id="run-A") is False
+    assert "kept open" not in caplog.text
+
+
+def test_a_genuine_refusal_is_logged(caplog):
+    import logging
+
+    o = _orchestrator()
+    o.save_main_handoff("Find my pen")
+    o.bind_main_handoff_run("run-B")
+    with caplog.at_level(logging.INFO, logger="hal.realtime"):
+        assert o.close_main_handoff("main_reply", run_id="run-A") is False
+    assert "kept open" in caplog.text

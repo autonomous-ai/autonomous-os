@@ -1855,12 +1855,17 @@ class RealtimeOrchestrator:
         ``run_id`` identifies the run the closing reply came from; ``None``
         (the click) closes whatever is open. See MainHandoffTracker.close.
         """
-        closed = self._main_handoff.close(reason, now=time.monotonic(), run_id=run_id)
+        now = time.monotonic()
+        closed = self._main_handoff.close(reason, now=now, run_id=run_id)
         if closed:
             logger.info("[realtime] main handoff closed (%s)", reason)
-        elif run_id:
+        elif run_id and self._main_handoff.is_open(now):
+            # Only a REFUSAL is worth a line. Most replies arrive with no
+            # handoff open at all (the ordinary case, every main-agent turn),
+            # and logging those as "kept open" buried the real refusals in
+            # noise — device-observed on green-lamp, 18/9.
             logger.info(
-                "[realtime] main handoff kept open — reply from run %s does not own it (%s)",
+                "[realtime] main handoff kept open — reply from run %s does not own it (owner=%s)",
                 run_id, self._main_handoff.run_id() or "unbound",
             )
         return closed
