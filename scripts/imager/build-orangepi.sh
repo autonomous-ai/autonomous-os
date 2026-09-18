@@ -1581,6 +1581,14 @@ sync
 umount "${MNT}"
 losetup -d "${LOOP_DEV}"; LOOP_DEV=""
 
+# COMPRESS=0 skips the .xz step (single-threaded under Docker's ~2 GB memory
+# cap, so it can take longer than the whole build). The raw .img is complete
+# and flashable via `make sd-card-flash-raw`.
+if [ "${COMPRESS:-1}" = "0" ]; then
+  log "DONE: ${OUT_IMG} (COMPRESS=0, skipped .xz)"
+  log "Flash:  make sd-card-flash-raw DEVICE_TYPE=${DEVICE_TYPE} DISK=N"
+  exit 0
+fi
 log "Compressing ${OUT_IMG} → ${OUT_IMG}.xz (this takes a few minutes)…"
 rm -f "${OUT_IMG}.xz"
 # -k keeps the original .img alongside the .xz so operator can verify/inspect

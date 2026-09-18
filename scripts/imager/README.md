@@ -164,6 +164,7 @@ rebuild. Anything that must follow `DEFAULT_AGENT` lives in Phase 2 for this rea
 | `DEFAULT_AGENT` | *(unset)* | Bakes `/root/config/f_r_default_agent` (survives factory reset, wins over `ROBOT.md` `gateway.default`) and gates SSH for `intern-v2`. Unset = unchanged behavior |
 | `OTA_METADATA_URL` | **(required)** | Baked into `/root/config/bootstrap.json` |
 | `OUT_IMG_SIZE` | `14G` | OPi partition size after expansion |
+| `COMPRESS` | `1` | `0` skips the `.xz` step; flash the raw `.img` with `make sd-card-flash-raw` |
 | `OPI_FILE_ID` | `1CYfOaY6f5DozJBNvPJ0Gx1jBIFlGe8fn` | Google Drive ID for stock OPi .7z |
 | `OPENCLAW_VERSION` | `2026.9.3` (OrangePi) | npm package version pin |
 | `AP_BAND` | `2.4` | `2.4` or `5` — hostapd hw_mode |
