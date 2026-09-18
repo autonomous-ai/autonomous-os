@@ -7,6 +7,7 @@ orchestrator / TTS handles and the marker-stripper passed in.
 """
 
 import logging
+import re
 import threading
 import time
 from typing import Callable, NamedTuple, Optional
@@ -92,6 +93,7 @@ ROUTE_NO_OUTPUT = "realtime_no_output"      # committed, but nothing came back (
 ROUTE_ERROR = "realtime_error"              # the turn raised; forwarded instead of lost
 ROUTE_UNAVAILABLE = "realtime_unavailable"  # no live session to commit to
 ROUTE_NOISE_DROPPED = "noise_dropped"       # never committed — noise guard rejected it
+ROUTE_FOREIGN_DROPPED = "foreign_dropped"   # reply in a script the device can't speak
 ROUTE_NOT_STARTED = "realtime_not_started"  # realtime off, or no turn was opened this capture
 
 
@@ -328,7 +330,10 @@ def should_drop_downstream_turn(rt: RealtimeTurnResult) -> bool:
     forwarding that word would undo the guard and let room noise reach the main
     agent. The explicit AI rejection remains separately configurable above.
     """
-    return rt.route == ROUTE_NOISE_DROPPED or should_drop_realtime_rejection(rt)
+    return (
+        rt.route in (ROUTE_NOISE_DROPPED, ROUTE_FOREIGN_DROPPED)
+        or should_drop_realtime_rejection(rt)
+    )
 
 
 def should_dispatch_to_main(
@@ -388,10 +393,61 @@ def should_defer_speaker_id_prepass(combined: str) -> bool:
     )
 
 
+def is_nonactionable_transcript(combined: str) -> bool:
+    """Return whether the whole transcript is only backchannel/filler words.
+
+    A turn like "okay", "yeah", "uh", "one sec" carries no request. The realtime
+    model tends to stay silent on these rather than call reject_turn, so the turn
+    falls through to a dead main-agent turn (burns a full LLM turn for nothing,
+    device-observed 2026-09-18). This deterministic backstop drops it. Whole-
+    utterance match only: a filler inside a longer request ("okay do it") has a
+    non-filler token and is NOT dropped. Empty transcript is handled elsewhere.
+    """
+    fillers = hal_config.REALTIME_NONACTIONABLE_FILLERS
+    if not combined or not fillers:
+        return False
+    norm: str = re.sub(r"[^\w\s-]", " ", combined.lower())
+    norm = re.sub(r"\s+", " ", norm).strip()
+    if not norm:
+        return False
+    if norm in fillers:  # multi-word filler ("one sec")
+        return True
+    return all(tok.strip("-") in fillers for tok in norm.split())
+
+
+# Scripts an English (or any non-CJK/non-Vietnamese) device must never speak.
+# From noise or a language switch the model sometimes hallucinates a reply in
+# Japanese/Korean/Chinese (device-observed on 3.1) or Vietnamese. These are
+# unmistakable by codepoint, so a wrong-script reply is dropped deterministically
+# rather than spoken. Only catches a WRONG-SCRIPT reply — a model that answers
+# foreign speech by translating INTO the device language is not caught here.
+_CJK_KANA_HANGUL = re.compile(r"[぀-ヿ㐀-䶿一-鿿가-힯]")
+# đ Đ + Vietnamese base vowels + Latin Extended Additional (precomposed vi vowels).
+_VIET_CHARS = re.compile(r"[đĐăĂâÂêÊôÔơƠưƯẠ-ỿ]")
+
+
+def reply_is_foreign_script(text: str, reply_language: str) -> bool:
+    """Return whether a realtime reply is in a script the device must not speak."""
+    if not text or not hal_config.REALTIME_FOREIGN_SCRIPT_GUARD:
+        return False
+    lang: str = (reply_language or "English").strip().lower()
+    if not lang.startswith(("chin", "japan", "korea", "zh", "ja", "ko")):
+        if _CJK_KANA_HANGUL.search(text):
+            return True
+    if not lang.startswith(("viet", "vi")):
+        if _VIET_CHARS.search(text):
+            return True
+    return False
+
+
 def is_noise_turn(
     combined: str, buf_duration: float, audio_is_speech: bool = True
 ) -> bool:
     """Return whether this capture must not be committed to the realtime model."""
+    # A finalized transcript that is only acknowledgment/filler words is not a
+    # request — drop it here so it reaches neither the realtime model nor main.
+    if is_nonactionable_transcript(combined):
+        return True
     # A short transcript that Silero judged non-speech is an STT fabrication over
     # noise, not a short command — drop it whatever REQUIRE_TRANSCRIPT says. Only
     # reachable when the caller actually ran the guard (audio_is_speech defaults
@@ -434,6 +490,7 @@ def run_realtime_turn(
     handled = False
     execution_completed = False
     rejected = False
+    foreign_suppressed = False  # reply came back in a script the device can't speak
     transcript = ""
     delegate_msg = ""
     route = ROUTE_NOT_STARTED
@@ -608,6 +665,24 @@ def run_realtime_turn(
                             # memory + the [HANDLED] hint; don't synthesize it.
                             continue
                         sentence_buf += output.text
+                        # Wrong-script reply (e.g. noise hallucinated as JP/KR, or
+                        # a Vietnamese reply on an English device): never speak it.
+                        # Detected on the accumulated text so the first foreign
+                        # chunk trips it before any audio goes out. Drop the whole
+                        # turn (handled below) rather than forwarding to main.
+                        if not foreign_suppressed and reply_is_foreign_script(
+                            "".join(text_parts), reply_lang
+                        ):
+                            foreign_suppressed = True
+                            logger.info(
+                                "[realtime] Foreign-script reply suppressed (lang=%s): %r",
+                                reply_lang, "".join(text_parts)[:60],
+                            )
+                            wait_filler.cancel()
+                            _thinking_cue_clear()
+                        if foreign_suppressed:
+                            sentence_buf = ""
+                            continue
                         # Nothing spoken yet: cut the opening at a clause
                         # boundary rather than making the user wait out a whole
                         # sentence. Only ever once per turn (see split_first_chunk).
@@ -693,6 +768,7 @@ def run_realtime_turn(
                 produced: bool = (
                     delegated
                     or rejected
+                    or foreign_suppressed
                     or first_sentence_sent
                     or native_started
                     or bool("".join(text_parts).strip())
@@ -716,7 +792,21 @@ def run_realtime_turn(
                 native_started = False
                 native_played = True
 
-            if rejected:
+            if foreign_suppressed:
+                # Wrong-script reply: drop the whole turn. Not spoken, not saved,
+                # not forwarded to main (main would just re-answer the same foreign
+                # input). Terminal like the noise guard, independent of the
+                # AI-reject filter.
+                route = ROUTE_FOREIGN_DROPPED
+                transcript = ""
+                _thinking_cue_clear()
+                try:
+                    from hal.routes.led import restore_led
+
+                    restore_led()
+                except Exception:
+                    pass
+            elif rejected:
                 route = ROUTE_AI_REJECTED
                 logger.info(
                     "[realtime] Model explicitly rejected turn — no main-agent dispatch"

@@ -1165,6 +1165,35 @@ REALTIME_AI_REJECT_FILTER: bool = os.environ.get(
 REALTIME_NOISE_GUARD_MAX_WORDS: int = int(
     os.environ.get("HAL_REALTIME_NOISE_GUARD_MAX_WORDS", "3")
 )
+# Backchannel / acknowledgment words that carry no request. A turn whose entire
+# finalized transcript is only these tokens is dropped like noise: not committed
+# to the realtime model and not dispatched to the main agent (device-observed
+# 2026-09-18: the realtime model just stays silent on them and the turn falls
+# through to a dead main-agent turn). Deterministic backstop for the model's
+# own reject_turn, which it often skips in favor of silence. Whole-utterance
+# match only — a filler inside a longer request ("okay do it") is NOT dropped.
+# Comma-separated; empty disables. English default (device is en-configured);
+# extend per stt_language via the env var.
+# Excludes yes/no/wait/stop/thanks (real answers or commands) and "go on"
+# (a request to continue). Whole-utterance match, so a filler inside a longer
+# request is unaffected.
+_FILLERS_DEFAULT = (
+    "ok,okay,kay,yeah,yep,yup,uh,uhh,um,umm,uh-huh,uhhuh,mm,mmm,mm-hmm,"
+    "mmhmm,mhm,hmm,huh,oh,ah,right,one sec,hold on,hang on"
+)
+REALTIME_NONACTIONABLE_FILLERS: frozenset[str] = frozenset(
+    w.strip().lower()
+    for w in os.environ.get("HAL_REALTIME_NONACTIONABLE_FILLERS", _FILLERS_DEFAULT).split(",")
+    if w.strip()
+)
+# Drop a realtime reply written in a script the device is not configured for
+# (CJK/Kana/Hangul on a non-CJK device, Vietnamese on a non-vi device). From
+# noise or a language switch the model can hallucinate a foreign-script reply;
+# these are unmistakable by codepoint. Catches wrong-SCRIPT output only, not a
+# reply translated INTO the device language. Set false to disable.
+REALTIME_FOREIGN_SCRIPT_GUARD: bool = os.environ.get(
+    "HAL_REALTIME_FOREIGN_SCRIPT_GUARD", "true"
+).lower() in ("1", "true", "yes")
 # Live (full-duplex) mode. The local VAD stops being an endpointer and becomes a
 # doorbell: it decides when to OPEN a session, and once one is open it does not
 # run at all — the mic streams continuously and the provider owns turn taking,
