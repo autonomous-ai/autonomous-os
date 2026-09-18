@@ -121,7 +121,7 @@ When a scene activates, `POST /scene` applies in order:
 3. **Servo hold** — if `"servo": "hold"`, freezes servo **after** aim completes (aim → hold in one thread). Released when switching to a scene without hold.
 4. **Camera** — auto on/off via `_auto_camera_on`/`_auto_camera_off`
 5. **Mic** — mute stops voice pipeline (STT), unmute restarts it
-6. **Speaker** — mute stops TTS + music playback, unmute re-enables output
+6. **Speaker** — `off` stops music at once and mutes speech on a **drain** (`_start_scene_speaker_drain`, see `sensing-behavior.md`): the scene's own confirmation line, sent by os-server after the `/scene` marker, still plays before the speaker closes; `sleepy` chained in the same reply takes the drain over so wake can restore the speaker. `on` re-enables output. Scene off under a held privacy lock retargets the lock's snapshot so release reopens the speaker/camera (see `physical-controls.md`).
 
 **Scene activation is the only path that aims.** An LED restore — after an emotion, at TTS end, at
 music end, on mic unmute, on a listening cue clearing — repaints the strip and nothing else, and a
