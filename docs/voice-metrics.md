@@ -250,6 +250,19 @@ Both boundaries are stamped **in HAL**, where both originate: the cancel
 gesture is a HAL button action, and `voice_agent_handled` is emitted by HAL's
 turn dispatcher.
 
+**The explicit stop is also enforced in HAL, not only measured.** os-server's
+click watermark mutes replies it can attribute to a cancelled run, but two
+paths reached the speaker without that check (device-observed 2026-09-17,
+`stale_started_after_ms` 12–28 s): a Harness result spoken straight through
+`hal.SpeakReply`, and the realtime wait filler that HAL arms itself. The
+boundary now marks every covered interaction `suppressed`, and
+`TTSService` refuses audio owned by such a turn at every admission path
+(`speak`, `speak_queue`, `speak_cached`, `native_play_begin`) via
+`voice_metrics.is_suppressed(owner)`. Unowned audio is never refused. The
+Harness path additionally goes through `deliverTTS` like every other reply.
+Automatic supersession stays measurement-only; its enforcement is os-server's
+watermark.
+
 **A boundary is recorded only when os-server actually applied it.** The
 `/api/sensing/event` response to a `voice_agent_handled` post carries
 `speechSuppressed` — os-server's own answer to "did I take the speaker away

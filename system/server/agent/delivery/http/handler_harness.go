@@ -1,7 +1,6 @@
 package http
 
 import (
-	"log/slog"
 	"time"
 
 	"go.autonomous.ai/os/system/domain"
@@ -26,6 +25,10 @@ func (h *AgentHandler) MarkHarnessResponseRun(runID string, webChat, delegated b
 	if runID == "" {
 		return
 	}
+	// Harness run ids carry no creation stamp, so the click watermark would
+	// otherwise date this run from its first spoken reply -- which lands
+	// after the click it should have respected. Date it from registration.
+	h.runCreatedAtMs(runID)
 	h.harnessRepliesMu.Lock()
 	if h.harnessReplies == nil {
 		h.harnessReplies = make(map[string]harnessReplyState)
@@ -160,11 +163,10 @@ func (h *AgentHandler) DeliverHarnessResponse(runID, text string) bool {
 		})
 	}
 	if !state.webChat {
-		go func() {
-			if err := hal.SpeakReply(text); err != nil {
-				slog.Warn("speak Harness result failed", "component", "harness", "error", err)
-			}
-		}()
+		// Same gate as every other reply: a run the user cancelled by click
+		// keeps its answer in history but loses the speaker. Harness results
+		// land tens of seconds later, exactly when a bypass is audible.
+		h.deliverTTS(hal.SpeakReply, text, runID, "speak Harness result")
 	}
 	return true
 }
