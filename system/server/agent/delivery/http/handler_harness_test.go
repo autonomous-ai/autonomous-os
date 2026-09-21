@@ -188,6 +188,9 @@ func TestHarnessVoiceRunLosesSpeakerAfterClick(t *testing.T) {
 	if !h.isSpeechCancelled("device-harness-abc") {
 		t.Fatal("Harness run registered before the click still owns the speaker")
 	}
+	// The watermark is inclusive (<=) at millisecond resolution, so a run
+	// registered in the same ms as the click still counts as cancelled.
+	time.Sleep(2 * time.Millisecond)
 	h.MarkHarnessResponseRun("device-harness-later", false, false)
 	if h.isSpeechCancelled("device-harness-later") {
 		t.Fatal("Harness run registered after the click was muted")

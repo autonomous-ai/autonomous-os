@@ -88,7 +88,13 @@ An endpoint received after playback cannot retroactively create a latency sample
 Realtime execution is completed only by a successful provider terminal correlated
 to that interaction. Receive timeouts, synthetic done signals and interruption
 are not completion evidence; without a successful terminal the task remains
-incomplete. A true provider interruption creates a
+incomplete. Gemini extended-thinking NON_BLOCKING direct answers additionally
+require the model's explicit `complete_response` confirmation. If no outcome
+arrives within the tool grace, HAL delegates the original provider transcript
+without claiming completion: filler, a promise, or spoken error cannot establish
+KPI-3 success. KPI-1 playback timing and all KPI thresholds stay unchanged.
+The model can still misclassify an answer with `complete_response`; this is
+execution evidence, not proof of semantic correctness. A true provider interruption creates a
 `server_barge_in` suppression boundary targeting only the cancelled interaction,
 with the existing **2 s** grace and **60 s** observation window. Unowned audio
 never earns acknowledgement credit. Starting the next question after the previous
@@ -375,7 +381,7 @@ error text, transcript or tool output. Evidence is:
 | `harness_turn_done`, `harness_turn_summary` | `completed`: correlated Harness completion; summary requires nonempty content, done does not require recap or TTS |
 | `harness_turn_error` | `failed`: correlated Harness `turn.error` or `agent.error`, even without display text |
 | `harness_question_open` | `unknown`: waiting for a structured answer, including local partial-answer collection |
-| `realtime_turn_done` | `completed`: a correlated successful provider terminal completed the handled turn |
+| `realtime_turn_done` | `completed`: a correlated successful provider terminal completed the handled turn; Gemini extended-thinking NON_BLOCKING additionally requires explicit `complete_response`, not filler or a missing-outcome fallback |
 
 Join execution evidence to the cohort by **device + run_id** or **device +
 interaction_id**. OS observations also include non-voice runs: never put those
