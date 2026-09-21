@@ -97,6 +97,14 @@ func applyRealtimeSet(c *config.Config, d domain.RealtimeSetData) {
 			rt.GPTLive.Voice = d.Voice
 		}
 		// no reasoning knob — validateRealtimeSet already rejected it
+	case "pipecat_v1":
+		if rt.PipecatV1 == nil {
+			rt.PipecatV1 = &config.PipecatV1Realtime{}
+		}
+		if d.Model != "" {
+			rt.PipecatV1.Model = d.Model
+		}
+		// no voice, no reasoning — validateRealtimeSet already rejected them
 	}
 }
 

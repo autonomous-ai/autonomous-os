@@ -30,6 +30,7 @@ from hal.realtime.config import (
     GeminiConfig,
     GPTLiveConfig,
     OpenAIConfig,
+    PipecatV1Config,
     _load_language,
     gemini_needs_idle_workaround,
 )
@@ -311,7 +312,13 @@ class RealtimeOrchestrator:
         gateway: AgentGateway = AgentGateway.OPENCLAW,
         extra_tools: list[dict[str, Any]] | None = None,
         enable_expression: bool = False,
+        stt_provider: Any = None,
     ) -> None:
+        # VoiceService's STT provider, handed to providers that run STT
+        # themselves (pipecat_v1) so the pipeline transcribes on the same
+        # relay, key, model and boost terms as the turn-based path. None →
+        # such a provider builds its own from config.
+        self._stt_provider: Any = stt_provider
         # express_emotion is registered ONLY when the device declares the
         # `expression` capability (ROBOT.md → expression: { routes: [emotion] }).
         # A device with no face (e.g. mic+speaker only) never sees the tool, so
@@ -510,6 +517,14 @@ class RealtimeOrchestrator:
 
             return GPTLiveAgent(
                 config=GPTLiveConfig(instructions=instructions), tools=self._tools,
+            )
+        if provider == "pipecat_v1":
+            from hal.realtime.voice_agent.pipecat_v1 import PipecatV1Agent
+
+            return PipecatV1Agent(
+                config=PipecatV1Config(instructions=instructions),
+                tools=self._tools,
+                stt_provider=self._stt_provider,
             )
         return None
 
@@ -827,7 +842,9 @@ class RealtimeOrchestrator:
         Gemini: close before the server's own idle kill pages the backend.
         GPT-Live: close because the session is billed per minute while it sits
         open. OpenAI Realtime bills per token, so an idle session is free and is
-        left to the server's own timeout.
+        left to the server's own timeout. Pipecat v1 has no vendor session at
+        all (the pipeline is local; its STT socket only lives during a turn or
+        a live call), so it is never parked.
         """
         provider: str = config.REALTIME_PROVIDER.strip().lower()
         if provider == "gemini":
