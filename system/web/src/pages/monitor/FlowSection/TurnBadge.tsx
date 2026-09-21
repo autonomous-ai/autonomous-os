@@ -8,7 +8,8 @@ import type { Turn } from "./types";
 import { TYPE_LUCIDE, TURN_INPUT_FALLBACK } from "./types";
 import { HW } from "../types";
 import { useTheme } from "@/lib/useTheme";
-import { turnIO, turnTokenStats, turnMemoryState, orderedMemoryFiles, turnCurrentUser, externalHistory, turnDisplayType } from "./helpers";
+import { turnIO, turnTokenStats, turnCurrentUser, externalHistory, turnDisplayType } from "./helpers";
+import { turnMemoryState, orderedMemoryFiles } from "./memory";
 import { PoseBucketModal } from "./PoseBucketModal";
 import { UserAvatar } from "./UserAvatar";
 
