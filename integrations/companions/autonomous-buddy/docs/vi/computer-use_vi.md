@@ -47,8 +47,8 @@ Helper của skill cung cấp endpoint:
 
 ```sh
 python3 scripts/buddy.py suggest --goal 'Focus the search field' --params '{"app":"Safari"}'
-# Hoặc truyền file JSON chứa goal và app tùy chọn.
-python3 scripts/buddy.py suggest --params-file /tmp/buddy-suggestion.json
+# Hoặc truyền file JSON params chứa app tùy chọn.
+python3 scripts/buddy.py suggest --goal 'Focus the search field' --params-file /tmp/buddy-suggestion.json
 ```
 
 Chỉ dùng đường tùy chọn này khi thông tin deployment đáng tin cậy xác nhận đã bật. Không thêm request cho đường đang tắt vào mọi bước desktop thông thường. Đối chiếu gợi ý với control định thao tác, mục tiêu hiện tại và quyền người dùng đã cho trước khi dùng `perform_ui_action` với chính xác `snapshot_id`, `ref`, `ui_action` trả về. Nếu chưa đủ bằng chứng nhận diện mục tiêu, bỏ gợi ý và quan sát bình thường. Khi chấp nhận gợi ý, không lấy cây mới trước khi thực thi vì sẽ làm mất hiệu lực reference. Quan sát và kiểm chứng sau thực thi. Khi null, tiếp tục lập kế hoạch bình thường, không lặp gọi gợi ý; blocker kết nối, pause, quyền và timeout vẫn theo availability gate của skill.
