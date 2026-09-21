@@ -809,10 +809,13 @@ data (the user's calendar, their smart-home device states, their messages) to
 
 Trade-offs:
 
-- **Gemini only.** OpenAI Realtime has no equivalent built-in tool, so its
-  prompt (`system_prompt_openai.md`) still delegates all external lookups;
-  GPT-Live has no tools at the Live layer at all, so `system_prompt_gptlive.md`
-  delegates them too.
+- **Gemini only as a hosted tool.** OpenAI Realtime has no equivalent built-in
+  tool, so its prompt (`system_prompt_openai.md`) still delegates all external
+  lookups; GPT-Live has no tools at the Live layer at all, so
+  `system_prompt_gptlive.md` delegates them too (its Responses backend searches
+  instead). Pipecat v1 has no hosted search either, but gets a **client-side**
+  `web_search` function tool that answers through the campaign-api
+  Google-Search relay — see *Web search* under the Pipecat v1 section.
 - **Cost.** Grounding bills per grounded request on top of tokens, but only when
   Gemini actually decides to search. The prompt tells it to ground *only* for
   genuine fresh/public facts, not general knowledge it already holds. Net effect
@@ -1489,9 +1492,9 @@ there the pipeline's is the only one. The mode this provider is really for is
 live.
 
 **Tools are bridged one-for-one.** Every orchestrator tool
-(`delegate_to_main`, `reject_turn`, `express_emotion`, `end_conversation`;
-`look` is Gemini-only and never registered) is registered on the LLM service as
-a `FunctionSchema` + handler. The handler publishes `FunctionCallOutput(name,
+(`delegate_to_main`, `reject_turn`, `express_emotion`, `end_conversation`,
+`web_search` — pipecat-only, below; `look` is Gemini-only and never registered)
+is registered on the LLM service as a `FunctionSchema` + handler. The handler publishes `FunctionCallOutput(name,
 arguments=<JSON>, call_id=<tool_call_id>, user_transcript=<STT finals of this
 turn>)` and awaits the orchestrator's `FunctionCallResultInput` for that
 `call_id` (bounded by `HAL_PIPECAT_TOOL_RESULT_TIMEOUT_S`, after which the
@@ -1516,6 +1519,43 @@ message anywhere but first (`System message must be at the beginning`, HTTP
 400). Without it, on lamp-ee17 the boot whose realtime-memory summary was 8 k
 chars answered "please play some music" with "You got it, what vibe?" while the
 same pipeline with a 3 k summary delegated; with it, the request delegates.
+
+**Web search — the `web_search` tool (pipecat only).** The Qwen relay has no
+hosted search, so until this tool every public live fact (weather, news, scores,
+prices) cost a `delegate_to_main` round-trip. With `HAL_PIPECAT_WEB_SEARCH` on
+(default) and `realtime.provider = pipecat_v1`, the orchestrator registers one
+more function tool, `web_search(query)` (`WEB_SEARCH_TOOL`, gate
+`_web_search_available()`), bridged like the others. Its handler
+(`_handle_web_search_call`) runs `hal/realtime/web_search.py`
+`grounded_search`: one POST to the campaign-api Google-Search relay
+(`HAL_PIPECAT_SEARCH_URL`, a Gemini *Interactions* endpoint) with
+`{"model": <HAL_PIPECAT_SEARCH_MODEL>, "input": <query>, "tools":
+[{"type": "google_search"}]}` and the chat key as Bearer. The reply is an
+Interaction — `status`, and `steps[]` of `google_search_call` (the queries Google
+ran), `google_search_result`, `thought`, `model_output` — and
+`parse_interaction` takes the `model_output` text (an already-grounded
+**answer**, not a list of links), strips Gemini's markdown, caps it at
+`MAX_ANSWER_CHARS` (1200) on a sentence boundary and collects the distinct
+citation titles (`wikipedia.org`, …). The model receives `{"result": <answer>,
+"sources": [...]}` with `trigger_response=True` → `run_llm=True`: the follow-up
+response is the spoken answer, in the user's language, and its end closes the
+turn. The lookup blocks the turn's output loop (~4 s measured 2026-09-21) while
+the pipeline's tool future waits, which is why `HAL_PIPECAT_SEARCH_TIMEOUT_S`
+(10 s) must stay below `HAL_PIPECAT_TOOL_RESULT_TIMEOUT_S` (15 s); on the
+turn-based path the dead-air filler (`REALTIME_FILLER_DELAY_S`, 1.5 s) and the
+thinking cue already cover the wait. Every failure (timeout, non-200 from the
+relay, empty answer) is still acknowledged — `{"error": …, "hint":
+"…delegate_to_main…"}` — so the model either says it could not check or
+delegates the question, which is where it went before the tool existed; an empty
+`query` is refused without a request. `system_prompt_pipecat.md` lists public
+lookups under *Direct Home Run* (search, then speak in the same turn; no text
+before the call; one search per question; private/account live data still
+delegates) and no longer routes weather/news to main when the tool exists.
+Gemini and GPT-Live never see this tool: they ground on their own side.
+`realtime.pipecat_v1.web_search` in config.json (`PipecatV1Realtime.WebSearch
+*bool`, nil → HAL default on) keeps an operator's override across os-server
+re-saves. Pinned by `hal/test/test_realtime_web_search.py` (20 tests: the relay's
+response shape, the ack contract, the registration gate).
 
 **Turn boundary and generations.** `OutputEvent.gen` is the **user-turn**
 generation — bumped when a user turn starts and on an interruption, never per
@@ -2483,6 +2523,11 @@ is a top-level `config.json` flag:
 | `HAL_PIPECAT_MIN_WORDS` | `2` | Live mode: **while the model is generating** (or a tool call is in flight) a new user turn — and the interruption it broadcasts — starts only once the STT has transcribed this many words; otherwise one word opens a turn, so "yes" / "stop" still work. `_BusyAwareMinWordsStrategy` keys Pipecat's `MinWordsUserTurnStartStrategy` on the agent's LLM state because the stock strategy needs `BotStartedSpeakingFrame`s this pipeline never has. On lamp-ee17 a one-word burst (`do.`) right after a question opened a turn and cancelled the reply mid-generation; `0` = Pipecat's default VAD/transcription start |
 | `HAL_PIPECAT_TURN_STOP_TIMEOUT_S` | `5` | Watchdog on a user turn whose transcript never arrives: the aggregator finalizes it anyway (turn-based: an empty committed session already ended the turn earlier) |
 | `HAL_PIPECAT_TOOL_RESULT_TIMEOUT_S` | `15` | How long a bridged tool call waits for the orchestrator's `FunctionCallResultInput` before the model gets `{"error": "no result from the device"}` (no follow-up) |
+| `HAL_PIPECAT_WEB_SEARCH` | `true` | Registers the client-side `web_search` tool (pipecat only): public live facts are answered in-session through the Google-Search relay instead of delegating to main. Also `realtime.pipecat_v1.web_search` in config.json |
+| `HAL_PIPECAT_SEARCH_URL` | `https://campaign-api.autonomous.ai/api/v1/ai/v1/google-search/v1beta/interactions` | The Gemini Interactions endpoint the tool POSTs to (`tools: [{"type": "google_search"}]`) |
+| `HAL_PIPECAT_SEARCH_MODEL` | `gemini-3.7-flash` | Model the relay grounds with |
+| `HAL_PIPECAT_SEARCH_API_KEY` | *(empty → the chat key, `HAL_PIPECAT_API_KEY` resolution)* | Bearer key for the search relay |
+| `HAL_PIPECAT_SEARCH_TIMEOUT_S` | `10` | HTTP timeout of one lookup (~4 s measured). Blocks the turn's output loop, so keep it below `HAL_PIPECAT_TOOL_RESULT_TIMEOUT_S` or the bridge's generic error answers first |
 | `HAL_REALTIME_MEMORY_PATH` | `<workspace>/realtime/memory.jsonl` | |
 | `HAL_REALTIME_MAX_MEMORY_ENTRIES` / `_TRIM_KEEP` | `1000` / `500` | |
 | `HAL_REALTIME_SUMMARIZER_ENABLED` | `true` | |

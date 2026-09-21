@@ -785,10 +785,13 @@ thiết bị smart-home của họ, tin nhắn của họ) cho `delegate_to_main
 
 Đánh đổi:
 
-- **Chỉ Gemini.** OpenAI Realtime không có tool built-in tương đương, nên prompt
-  của nó (`system_prompt_openai.md`) vẫn delegate mọi lookup bên ngoài. GPT-Live
-  càng không: không có tool nào ở tầng Live, `system_prompt_gptlive.md` xếp mọi
-  dữ liệu live bên ngoài vào việc của backend.
+- **Chỉ Gemini có dạng tool hosted.** OpenAI Realtime không có tool built-in
+  tương đương, nên prompt của nó (`system_prompt_openai.md`) vẫn delegate mọi
+  lookup bên ngoài. GPT-Live càng không: không có tool nào ở tầng Live,
+  `system_prompt_gptlive.md` xếp mọi dữ liệu live bên ngoài vào việc của backend
+  (backend Responses của nó tự search). Pipecat v1 cũng không có search hosted,
+  nhưng được cấp một function tool **phía client** `web_search` trả lời qua relay
+  Google-Search của campaign-api — xem *Web search* trong mục Pipecat v1.
 - **Chi phí.** Grounding tính phí theo mỗi grounded request (cộng thêm token),
   nhưng chỉ phát sinh khi Gemini thực sự quyết định search. Prompt dặn nó *chỉ*
   ground cho dữ kiện công khai/mới thật sự, không ground cho kiến thức chung đã có
@@ -1438,9 +1441,9 @@ STT session của HAL, nên ở đó session của pipeline là cái duy nhất.
 provider này thực sự sinh ra để phục vụ là live.
 
 **Tool được bắc cầu một-một.** Mọi tool của orchestrator (`delegate_to_main`,
-`reject_turn`, `express_emotion`, `end_conversation`; `look` chỉ có ở Gemini và
-không bao giờ được đăng ký) được đăng ký lên LLM service dưới dạng
-`FunctionSchema` + handler. Handler phát `FunctionCallOutput(name,
+`reject_turn`, `express_emotion`, `end_conversation`, `web_search` — chỉ pipecat,
+xem bên dưới; `look` chỉ có ở Gemini và không bao giờ được đăng ký) được đăng
+ký lên LLM service dưới dạng `FunctionSchema` + handler. Handler phát `FunctionCallOutput(name,
 arguments=<JSON>, call_id=<tool_call_id>, user_transcript=<các STT final của
 lượt này>)` rồi chờ `FunctionCallResultInput` của orchestrator cho đúng
 `call_id` đó (giới hạn bởi `HAL_PIPECAT_TOOL_RESULT_TIMEOUT_S`, quá hạn thì
@@ -1465,6 +1468,43 @@ bất kỳ vị trí nào ngoài đầu tiên (`System message must be at the be
 HTTP 400). Không có nó, trên lamp-ee17 lần boot có summary realtime-memory dài
 8 k ký tự trả lời "please play some music" bằng "You got it, what vibe?" trong
 khi cùng pipeline với summary 3 k thì delegate; có nó, yêu cầu được delegate.
+
+**Web search — tool `web_search` (chỉ pipecat).** Relay Qwen không có search
+hosted, nên trước khi có tool này mọi dữ kiện công khai theo thời gian thực
+(thời tiết, tin tức, tỉ số, giá cả) đều tốn một vòng `delegate_to_main`. Khi
+`HAL_PIPECAT_WEB_SEARCH` bật (mặc định) và `realtime.provider = pipecat_v1`,
+orchestrator đăng ký thêm một function tool `web_search(query)`
+(`WEB_SEARCH_TOOL`, cổng `_web_search_available()`), bắc cầu như các tool khác.
+Handler của nó (`_handle_web_search_call`) chạy `hal/realtime/web_search.py`
+`grounded_search`: một POST tới relay Google-Search của campaign-api
+(`HAL_PIPECAT_SEARCH_URL`, một endpoint Gemini *Interactions*) với `{"model":
+<HAL_PIPECAT_SEARCH_MODEL>, "input": <query>, "tools": [{"type":
+"google_search"}]}` và key chat làm Bearer. Phản hồi là một Interaction —
+`status`, và `steps[]` gồm `google_search_call` (các query Google đã chạy),
+`google_search_result`, `thought`, `model_output` — `parse_interaction` lấy text
+của `model_output` (một **câu trả lời** đã grounded, không phải danh sách link),
+bỏ markdown Gemini viết, cắt ở ranh giới câu tại `MAX_ANSWER_CHARS` (1200) và
+gom các tiêu đề trích dẫn khác nhau (`wikipedia.org`, …). Model nhận `{"result":
+<answer>, "sources": [...]}` với `trigger_response=True` → `run_llm=True`:
+response follow-up chính là câu trả lời được đọc, bằng ngôn ngữ của người dùng,
+và kết thúc của nó đóng lượt. Lookup chặn vòng output của lượt (~4 s đo ngày
+2026-09-21) trong khi tool future của pipeline chờ, nên
+`HAL_PIPECAT_SEARCH_TIMEOUT_S` (10 s) phải nhỏ hơn
+`HAL_PIPECAT_TOOL_RESULT_TIMEOUT_S` (15 s); trên đường turn-based filler
+khoảng lặng (`REALTIME_FILLER_DELAY_S`, 1,5 s) và thinking cue đã che khoảng
+chờ. Mọi thất bại (timeout, relay trả khác 200, câu trả lời rỗng) vẫn được ack
+— `{"error": …, "hint": "…delegate_to_main…"}` — để model hoặc nói là không
+kiểm tra được hoặc delegate câu hỏi, đúng chỗ nó từng đi trước khi có tool;
+`query` rỗng bị từ chối mà không gửi request. `system_prompt_pipecat.md` xếp
+lookup công khai vào *Direct Home Run* (search rồi nói ngay trong cùng lượt;
+không viết text trước khi gọi; mỗi câu hỏi một search; dữ liệu live riêng
+tư/tài khoản vẫn delegate) và không còn đẩy thời tiết/tin tức sang main khi tool
+tồn tại. Gemini và GPT-Live không bao giờ thấy tool này: chúng tự ground ở phía
+mình. `realtime.pipecat_v1.web_search` trong config.json
+(`PipecatV1Realtime.WebSearch *bool`, nil → mặc định HAL là bật) giữ override
+của operator qua các lần os-server ghi lại config. Được ghim bởi
+`hal/test/test_realtime_web_search.py` (20 test: hình dạng phản hồi của relay,
+contract ack, cổng đăng ký).
 
 **Ranh giới lượt và generation.** `OutputEvent.gen` là generation của
 **user-turn** — tăng khi một user turn bắt đầu và khi có interruption, không
@@ -2413,6 +2453,11 @@ trong `config.json`:
 | `HAL_PIPECAT_MIN_WORDS` | `2` | Chế độ live: **khi model đang sinh** (hoặc một tool call đang chạy) một user turn mới — và interruption nó broadcast — chỉ bắt đầu khi STT đã transcribe được ngần này từ; ngoài lúc đó một từ là đủ mở lượt, nên "yes" / "stop" vẫn hoạt động. `_BusyAwareMinWordsStrategy` gắn `MinWordsUserTurnStartStrategy` của Pipecat vào trạng thái LLM của agent vì strategy gốc cần các `BotStartedSpeakingFrame` mà pipeline này không bao giờ có. Trên lamp-ee17 một tiếng bật ra một từ (`do.`) ngay sau câu hỏi đã mở một lượt và hủy reply giữa chừng; `0` = mặc định của Pipecat, bắt đầu theo VAD/transcription |
 | `HAL_PIPECAT_TURN_STOP_TIMEOUT_S` | `5` | Watchdog cho user turn mà transcript không bao giờ về: aggregator vẫn finalize nó (turn-based: session đã commit mà rỗng thì đã kết thúc lượt từ trước) |
 | `HAL_PIPECAT_TOOL_RESULT_TIMEOUT_S` | `15` | Thời gian một tool call được bắc cầu chờ `FunctionCallResultInput` của orchestrator trước khi model nhận `{"error": "no result from the device"}` (không có follow-up) |
+| `HAL_PIPECAT_WEB_SEARCH` | `true` | Đăng ký tool `web_search` phía client (chỉ pipecat): dữ kiện công khai theo thời gian thực được trả lời ngay trong phiên qua relay Google-Search thay vì delegate sang main. Cũng đọc từ `realtime.pipecat_v1.web_search` trong config.json |
+| `HAL_PIPECAT_SEARCH_URL` | `https://campaign-api.autonomous.ai/api/v1/ai/v1/google-search/v1beta/interactions` | Endpoint Gemini Interactions mà tool POST tới (`tools: [{"type": "google_search"}]`) |
+| `HAL_PIPECAT_SEARCH_MODEL` | `gemini-3.7-flash` | Model relay dùng để ground |
+| `HAL_PIPECAT_SEARCH_API_KEY` | *(rỗng → key chat, theo thứ tự resolve của `HAL_PIPECAT_API_KEY`)* | Bearer key cho relay search |
+| `HAL_PIPECAT_SEARCH_TIMEOUT_S` | `10` | Timeout HTTP của một lookup (~4 s đo được). Chặn vòng output của lượt, nên giữ nhỏ hơn `HAL_PIPECAT_TOOL_RESULT_TIMEOUT_S`, nếu không lỗi chung của bridge sẽ trả lời trước |
 | `HAL_REALTIME_MEMORY_PATH` | `<workspace>/realtime/memory.jsonl` | |
 | `HAL_REALTIME_MAX_MEMORY_ENTRIES` / `_TRIM_KEEP` | `1000` / `500` | |
 | `HAL_REALTIME_SUMMARIZER_ENABLED` | `true` | |

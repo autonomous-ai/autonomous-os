@@ -1818,6 +1818,32 @@ REALTIME_PIPECAT_TURN_STOP_TIMEOUT_S: float = float(os.environ.get("HAL_PIPECAT_
 # How long a bridged tool call waits for the orchestrator's FunctionCallResultInput
 # before answering the model with an error so the pipeline never wedges.
 REALTIME_PIPECAT_TOOL_RESULT_TIMEOUT_S: float = float(os.environ.get("HAL_PIPECAT_TOOL_RESULT_TIMEOUT_S", "15") or 15)
+# Client-side `web_search` tool (hal/realtime/web_search.py). The Qwen relay has
+# no hosted search, so public live facts (weather, news, scores, prices) used to
+# delegate to main. With this on, the orchestrator registers `web_search` for
+# the pipecat provider only; each call is one POST to the campaign-api
+# Google-Search relay (Gemini Interactions + google_search grounding) whose
+# grounded answer the voice model rephrases. Mirrors HAL_GEMINI_GOOGLE_SEARCH:
+# defaults ON; env HAL_PIPECAT_WEB_SEARCH or realtime.pipecat_v1.web_search
+# overrides.
+REALTIME_PIPECAT_WEB_SEARCH: bool = (
+    os.environ.get(
+        "HAL_PIPECAT_WEB_SEARCH",
+        str(_RT_PIPECAT.get("web_search", True)),
+    ).lower()
+    in ("1", "true", "yes")
+)
+REALTIME_PIPECAT_SEARCH_URL: str = os.environ.get(
+    "HAL_PIPECAT_SEARCH_URL",
+    "https://campaign-api.autonomous.ai/api/v1/ai/v1/google-search/v1beta/interactions",
+)
+REALTIME_PIPECAT_SEARCH_MODEL: str = os.environ.get("HAL_PIPECAT_SEARCH_MODEL", "gemini-3.7-flash")
+# Same relay, same key as the chat endpoint unless overridden.
+REALTIME_PIPECAT_SEARCH_API_KEY: str = os.environ.get("HAL_PIPECAT_SEARCH_API_KEY", "") or REALTIME_PIPECAT_API_KEY
+# The search blocks the turn's output loop while the pipeline's tool future
+# waits, so keep this below REALTIME_PIPECAT_TOOL_RESULT_TIMEOUT_S (a grounded
+# answer measured ~4 s; the bridge's generic error would win past 15 s).
+REALTIME_PIPECAT_SEARCH_TIMEOUT_S: float = float(os.environ.get("HAL_PIPECAT_SEARCH_TIMEOUT_S", "10") or 10)
 
 # --- Realtime: Context manager ---
 OPENCLAW_WORKSPACE_DIR: str = os.environ.get("HAL_OPENCLAW_WORKSPACE_DIR", "/root/.openclaw/workspace")

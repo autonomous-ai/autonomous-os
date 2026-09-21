@@ -5,8 +5,8 @@ Pipecat pipeline running on a private asyncio loop inside HAL (see
 `pipecat_pipeline.py`). Audio goes in, **text** comes out; HAL's own TTS speaks
 it. VAD and STT are the pipeline's, the LLM is any OpenAI-compatible chat
 endpoint (default: the campaign-api Qwen relay), and the orchestrator's tools
-(`delegate_to_main`, `reject_turn`, `express_emotion`, `end_conversation`)
-are bridged one-for-one.
+(`delegate_to_main`, `reject_turn`, `express_emotion`, `end_conversation`,
+`web_search`) are bridged one-for-one.
 
 Both HAL modes are served by the same class:
 
