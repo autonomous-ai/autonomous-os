@@ -154,6 +154,12 @@ func (s *HermesService) EnsureOnboarding() error {
 	// and must still restart the gateway for the Hermes server to pick the channel up.
 	configChanged := fileHash(hermesConfigYAML)+fileHash(hermesEnvFile) != before
 
+	// Reconcile the optional plugin on existing devices too. Keep its allow-list
+	// update outside configChanged: installing Jev alone must not restart Hermes.
+	if err := s.ensureJevPlugin(); err != nil {
+		slog.Warn("hermes Jev plugin sync failed", "component", "hermes", "error", err)
+	}
+
 	// Materialize the os-server-observer hook so channel turns surface in Flow
 	// Monitor. Best-effort: a hook write failure must not block the boot path
 	// (config self-heal above already succeeded).

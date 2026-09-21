@@ -1001,3 +1001,79 @@ sạch. (Xem quy tắc fold-vs-move ở [`adding-agent-runtime_vi.md`](adding-ag
 > [`adding-agent-runtime_vi.md`](adding-agent-runtime_vi.md) cho hợp đồng
 > `AgentGateway`, mẫu install/presync, migration, skills, hooks, reset, và checklist
 > đầy đủ.
+
+## 13. Gợi ý skill bằng Jev (tuỳ chọn)
+
+Plugin `jev` do OS quản lý gợi ý một skill đã cài trước lần gọi model
+đầu tiên của mỗi lượt người dùng trong Hermes. Plugin dùng hook `pre_llm_call`;
+không thực thi tool, nạp skill, chọn model hay lọc memory. Context trả về gợi ý
+`skill_view(name=...)`; Hermes vẫn phải đánh giá mức phù hợp và tuân thủ quyền
+hạn bình thường cùng các quy tắc connector/platform bắt buộc. Gợi ý có thể được
+giữ lại trong context hội thoại.
+
+### Cài đặt cho device hiện có
+
+`runtimes/hermes/jev_plugin.go` nhúng plugin Python ở
+`runtimes/hermes/plugins/jev/` vào os-server. `EnsureOnboarding` đồng bộ plugin khi
+OS khởi động và setup nếu Hermes chạy local và đã có
+`/root/.hermes/config.yaml`. Bỏ qua Hermes remote. Device cũ nhận plugin cùng bản
+cập nhật OS, không cần chạy lại provisioning hay cài riêng package Python.
+
+Go ghi atomic các asset thay đổi vào `/root/.hermes/plugins/jev/`
+và thêm `jev` vào `plugins.enabled` trong `config.yaml` của Hermes,
+giữ nguyên cấu hình plugin khác và tôn trọng mục `plugins.disabled` được đặt rõ.
+File sinh ra `os-config-path.json` chỉ chứa đường dẫn tuyệt đối tới config OS,
+không chứa API key. Asset không đổi thì không ghi lại.
+
+Cài hoặc cập nhật plugin **không** thêm lý do restart gateway. os-server ghi log
+rằng code plugin mới cần lần restart gateway tiếp theo để được nạp; các lý do
+restart khác trong onboarding vẫn giữ nguyên. Muốn bật Jev cần đổi hằng số trong
+plugin, build lại os-server, đồng bộ plugin rồi restart Hermes để nạp code mới.
+
+### Cấu hình và hợp đồng proxy
+
+Plugin dùng hằng số trong `runtimes/hermes/plugins/jev/router.py`:
+
+```python
+ENABLED = False
+TIMEOUT_SECONDS = 0.350
+```
+
+Không có block config Jev riêng cho Hermes hay kiểu config Go riêng. Các hằng số
+này độc lập với `local_intent` và `jev_intent`. Khi OFF, bỏ qua cả việc đọc config,
+catalog và gọi mạng.
+Khi bật, plugin dùng lại `llm_base_url` và `llm_api_key` để gọi
+`POST {llm_base_url}/jev/decisions` với bearer authentication. Không có key Jev
+riêng trong `.env`, không fallback gọi thẳng provider. Bắt buộc HTTPS, ngoại trừ
+HTTP loopback để test local. BFF cần triển khai
+[hợp đồng Decisions đề xuất](../os-server_vi.md#jev-bff-contract); plugin gửi model
+`typesafe/jev-1.13`, câu hỏi choice `skill` gồm `none`, và một câu hỏi noul
+`fit_<id>` cho mỗi ứng viên. Response raw phải chứa `answers`.
+
+Chỉ gửi tin nhắn hiện tại và tên/mô tả skill nền tảng OS từ catalog live đã được
+Hermes lọc; chỉ category `openclaw-imports` đủ điều kiện. Loại các category skill
+bundled, authored và plugin khác. Không gửi lịch sử hội thoại hoặc nội dung đầy
+đủ của skill. Mô tả mỗi ứng viên tối đa 500 ký tự. Nếu có quá 32 ứng viên đủ điều
+kiện, bỏ qua Jev hoàn toàn thay vì cắt bớt catalog. Tin nhắn rỗng, dài quá 8.000
+byte UTF-8 hoặc có lựa chọn `[skills:...]` rõ ràng cũng bỏ qua router. Đây là thử
+nghiệm gợi ý cho skill nền tảng OS; Hermes tiếp tục tìm các skill khác theo cách
+bình thường.
+
+Chỉ gợi ý khi xác suất choice ít nhất 0,90, cách ứng viên kế tiếp ít nhất 0,40,
+và fit ít nhất 0,95. Quyết định không chắc chắn hoặc không hợp lệ giữ nguyên cách
+Hermes hoạt động. Thời gian chờ quyết định hardcode là 350 ms;
+không retry hay redirect. Lỗi hoặc timeout tạo cooldown 30 giây. Mỗi router chỉ
+có một worker; đang bận thì bỏ qua ngay. Worker timeout có thể hoàn thành request
+ở background nhưng kết quả muộn không thể chèn gợi ý. Log ghi kết quả và thời
+gian quyết định, không ghi prompt hoặc credential.
+
+Kiểm thử local dùng response proxy giả lập và thư mục Hermes tạm. Chưa chứng minh
+độ chính xác Jev thực tế hay mức cải thiện latency; chỉ so sánh OFF/ON trên device
+sau khi BFF hỗ trợ endpoint. Các kiểm tra local không cần deploy lên device.
+
+Các lệnh kiểm tra local trọng tâm (CI cũng chạy test plugin Python):
+
+```bash
+go test -race -timeout 90s ./runtimes/hermes ./system/server/config ./system/intent/...
+python3 -B -m unittest discover -s runtimes/hermes/plugins/jev -p 'test_*.py' -v
+```
