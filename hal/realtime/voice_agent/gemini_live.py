@@ -6,6 +6,7 @@ import logging
 import queue
 import threading
 import time
+from collections.abc import Callable
 from contextlib import AsyncExitStack
 from typing import Any, override
 from uuid import uuid4
@@ -497,13 +498,11 @@ class GeminiLiveAgent(VoiceAgentBase):
                 parsed = {"result": _input.output}
             if not isinstance(parsed, dict):
                 parsed = {"result": parsed}
+            # NON_BLOCKING declarations do not imply scheduling support. The
+            # deployed 3.8 extended-thinking backend closes with 1007 when a
+            # FunctionResponse includes scheduling (device-observed 2026-09-21).
             await self._session.send_tool_response(
-                function_responses=[
-                    types.FunctionResponse(
-                        id=_input.call_id,
-                        response=parsed,
-                    )
-                ]
+                function_responses=[types.FunctionResponse(id=_input.call_id, response=parsed)]
             )
             # Gemini accepted the response, so this call is resolved. Keeping the
             # gate until after the await avoids racing subsequent client input
@@ -581,7 +580,79 @@ class GeminiLiveAgent(VoiceAgentBase):
 
         execution_interrupted = False
         response_user_turn_id: str | None = None
-        async for message in self._session.receive():
+        # NON_BLOCKING tools (extended-thinking) let the model speak a filler,
+        # send turn_complete, THEN emit the tool call. Ending the turn at
+        # turn_complete drops that late delegate/reject (#453). Hold the loop a
+        # short grace after the terminal to catch a trailing tool call, cut short
+        # when a routing call arrives. Filler output is still queued immediately.
+        _grace_s: float = app_config.REALTIME_NONBLOCKING_TOOL_GRACE_S
+        # getattr: tests drive this loop on agents built without __init__ (no _config).
+        _grace_model: str = getattr(getattr(self, "_config", None), "model", "") or ""
+        _grace_on: bool = _grace_s > 0 and "extended-thinking" in _grace_model
+        _grace_deadline: float = 0.0
+        _deferred_finalize: Callable[[], None] | None = None
+        _receiver = self._session.receive().__aiter__()
+
+        def _finalize_turn_complete(delayed_playback_ack: bool) -> None:
+            self._awaiting_playback_turn_complete = False
+            self._first_audio_received = False
+            self._user_transcript = ""
+            self._turn_done.set()
+            self._recv_queue.put(TurnDoneEvent(
+                execution_completed=not execution_interrupted and not delayed_playback_ack,
+                user_turn_id=("" if delayed_playback_ack else response_user_turn_id
+                              if response_user_turn_id is not None
+                              else getattr(self, "_live_user_turn_id", "")),
+            ))
+            if not delayed_playback_ack and (response_user_turn_id is None or (
+                    getattr(self, "_live_user_turn_id", "") == response_user_turn_id)):
+                self._live_user_turn_id = ""
+                self._live_speech_emitted = False
+
+        def _finalize_generation_complete() -> None:
+            self._awaiting_playback_turn_complete = True
+            self._first_audio_received = False
+            self._turn_done.set()
+            self._recv_queue.put(TurnDoneEvent(
+                execution_completed=not execution_interrupted,
+                user_turn_id=(response_user_turn_id if response_user_turn_id is not None
+                              else getattr(self, "_live_user_turn_id", "")),
+            ))
+            if response_user_turn_id is None or (
+                    getattr(self, "_live_user_turn_id", "") == response_user_turn_id):
+                self._live_user_turn_id = ""
+                self._live_speech_emitted = False
+
+        while True:
+            try:
+                if _deferred_finalize is not None:
+                    _remaining = _grace_deadline - time.monotonic()
+                    if _remaining <= 0:
+                        logger.info("[realtime] NON_BLOCKING grace expired (%.2fs, pending_tools=%d)",
+                                    _grace_s, len(self._pending_tool_calls))
+                        _deferred_finalize()
+                        return
+                    message = await asyncio.wait_for(
+                        _receiver.__anext__(), timeout=_remaining
+                    )
+                else:
+                    message = await _receiver.__anext__()
+            except StopAsyncIteration:
+                if _deferred_finalize is not None:
+                    # The SDK receive() iterator ends at turn_complete, not at
+                    # socket close. Read the next iterator on the SAME session
+                    # while preserving this logical turn and its deadline.
+                    _receiver = self._session.receive().__aiter__()
+                    await asyncio.sleep(0)
+                    continue
+                return
+            except (asyncio.TimeoutError, TimeoutError):
+                if _deferred_finalize is not None:
+                    logger.info("[realtime] NON_BLOCKING grace expired (%.2fs, pending_tools=%d)",
+                                _grace_s, len(self._pending_tool_calls))
+                    _deferred_finalize()
+                    return
+                raise
             # Liveness for the silent-turn watchdog: most of what arrives here
             # never reaches _recv_queue (thought parts, grounding metadata,
             # usage-only frames), and without this a turn that is busy grounding
@@ -873,23 +944,18 @@ class GeminiLiveAgent(VoiceAgentBase):
                     delayed_playback_ack = app_config.LIVE_MODE and getattr(
                         self, "_awaiting_playback_turn_complete", False
                     )
-                    # Keep the original control terminal/unblock. Only its metric
-                    # evidence is ignored when generation_complete already reported it.
-                    self._awaiting_playback_turn_complete = False
                     logger.debug("[realtime] Turn complete")
-                    self._first_audio_received = False
-                    self._user_transcript = ""
-                    self._turn_done.set()
-                    self._recv_queue.put(TurnDoneEvent(
-                        execution_completed=not execution_interrupted and not delayed_playback_ack,
-                        user_turn_id=("" if delayed_playback_ack else response_user_turn_id if response_user_turn_id is not None
-                                      else getattr(self, "_live_user_turn_id", "")),
-                    ))
-                    if not delayed_playback_ack and (response_user_turn_id is None or (
-                        getattr(self, "_live_user_turn_id", "") == response_user_turn_id
-                    )):
-                        self._live_user_turn_id = ""
-                        self._live_speech_emitted = False
+                    # Hold for a trailing NON_BLOCKING tool call (#453) before
+                    # ending the turn; _finalize_turn_complete emits TurnDoneEvent.
+                    if _grace_on and not delayed_playback_ack:
+                        if _deferred_finalize is None:
+                            _grace_deadline = time.monotonic() + _grace_s
+                            logger.info("[realtime] NON_BLOCKING grace started at turn_complete (%.2fs)", _grace_s)
+                        _deferred_finalize = (
+                            lambda dpa=delayed_playback_ack: _finalize_turn_complete(dpa)
+                        )
+                        continue
+                    _finalize_turn_complete(delayed_playback_ack)
                     return
 
                 if getattr(content, "generation_complete", False):
@@ -897,28 +963,23 @@ class GeminiLiveAgent(VoiceAgentBase):
                     # real-time audio playback ends. HAL plays the received
                     # response itself, so waiting for that acknowledgement
                     # makes an already-spoken turn block until the consumer's
-                    # silent-output watchdog expires. generation_complete
-                    # guarantees that no more model content will arrive for
-                    # this turn, so release the next manual-VAD commit and
-                    # finish the consumer turn now. A late turn_complete is
-                    # harmless: flush_output() drops it before the next turn.
+                    # silent-output watchdog expires. BLOCKING models can finish
+                    # now; NON_BLOCKING models still need the tool grace below.
                     logger.debug("[realtime] Generation complete")
-                    self._awaiting_playback_turn_complete = True
-                    self._first_audio_received = False
-                    self._turn_done.set()
-                    self._recv_queue.put(TurnDoneEvent(
-                        execution_completed=not execution_interrupted,
-                        user_turn_id=(response_user_turn_id if response_user_turn_id is not None
-                                      else getattr(self, "_live_user_turn_id", "")),
-                    ))
-                    if response_user_turn_id is None or (
-                        getattr(self, "_live_user_turn_id", "") == response_user_turn_id
-                    ):
-                        self._live_user_turn_id = ""
-                        self._live_speech_emitted = False
+                    # Audio generation can finish before a NON_BLOCKING tool
+                    # arrives. Neither terminal may bypass or extend the grace.
+                    if _grace_on:
+                        if _deferred_finalize is None:
+                            _grace_deadline = time.monotonic() + _grace_s
+                            logger.info("[realtime] NON_BLOCKING grace started at generation_complete (%.2fs)", _grace_s)
+                            _deferred_finalize = _finalize_generation_complete
+                        continue
+                    _finalize_generation_complete()
                     return
 
             elif message.tool_call and message.tool_call.function_calls:
+                # A tool call this turn — even one arriving after turn_complete on
+                # a NON_BLOCKING model (the #453 case the grace window catches).
                 # Close the audio gate before the events are queued: the consumer
                 # runs on another thread and can dispatch a result immediately, so
                 # registering the call_ids afterwards could race a clear and leave
@@ -931,7 +992,8 @@ class GeminiLiveAgent(VoiceAgentBase):
                 user_transcript = getattr(self, "_user_transcript", "").strip()
                 self._user_transcript = ""
                 for fc in message.tool_call.function_calls:
-                    logger.debug("[realtime] Function call: %s (call_id=%s)", fc.name, fc.id)
+                    logger.info("[realtime] Function call: %s (call_id=%s, after_terminal=%s)",
+                                fc.name, fc.id, _deferred_finalize is not None)
                     self._recv_queue.put(
                         OutputEvent(
                             gen=getattr(self, "_turn_gen", 0),
@@ -944,6 +1006,14 @@ class GeminiLiveAgent(VoiceAgentBase):
                             ),
                         )
                     )
+                if _deferred_finalize is not None and any(
+                    fc.name in {"delegate_to_main", "reject_turn"}
+                    for fc in message.tool_call.function_calls
+                ):
+                    # Routing tools finish the consumer turn. Auxiliary tools
+                    # (such as emotion) must not hide a subsequent delegate.
+                    _deferred_finalize()
+                    return
 
             if message.session_resumption_update:
                 update = message.session_resumption_update

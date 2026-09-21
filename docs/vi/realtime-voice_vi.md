@@ -224,10 +224,32 @@ result đã được gửi lại model trước khi break; turn còn mở dang d
 
 Gemini cũng có thể gửi `generation_complete` trước `turn_complete`: cờ sau bị
 trì hoãn trong lúc Gemini giả định client đang phát audio theo thời gian thực.
-HAL tự phát câu trả lời đã nhận nên kết thúc consumer turn ngay ở
-`generation_complete`, đồng thời nhả commit manual-VAD kế tiếp. Nhờ đó không
+Với model BLOCKING, HAL tự phát câu trả lời đã nhận nên kết thúc consumer turn
+ngay ở `generation_complete`, đồng thời nhả commit manual-VAD kế tiếp. Nhờ đó không
 còn chờ silent-watchdog vô ích sau khi đã trả lời; `turn_complete` đến muộn sẽ
 được bỏ trước lượt sau.
+
+Với Gemini `extended-thinking`, tool dùng `NON_BLOCKING`: câu filler như
+“I can help with that.” không được kết thúc consumer trước `delegate_to_main`
+đến sau (#453). Text/audio filler vẫn stream ngay để phục vụ KPI-1 (Voice
+Acknowledge); chỉ việc chốt lượt chờ tối đa
+`HAL_REALTIME_NONBLOCKING_TOOL_GRACE_S` (mặc định **6 giây**, `0` để tắt).
+Cửa sổ bắt đầu ở `generation_complete` hoặc `turn_complete` đầu tiên; terminal
+sau không kéo dài thời hạn. HAL mở iterator `receive()` kế tiếp của SDK trên
+cùng session sau `turn_complete`, giữ định danh lượt logic.
+Delegate/reject được đưa vào queue trước terminal và kết thúc cửa sổ sớm;
+tool phụ không ngăn việc nhận delegate sau đó. Nếu không có routing call,
+lượt được chốt đúng một lần khi hết hạn. Model BLOCKING vẫn kết thúc ngay.
+Delegate sau filler vẫn có route `delegated`, không gắn `[HANDLED]`, giữ nguyên
+yêu cầu người dùng cho main agent. Prompt Gemini cho phép một câu xác nhận ngắn
+phát ngay nhưng bắt buộc gọi delegate trong cùng lượt; câu xác nhận đơn lẻ không
+thực hiện được hành động. Reject vẫn hoàn toàn im lặng. Delegate và reject dùng
+ACK function response thông thường, bỏ trường `scheduling`: ngày 2026-09-21, backend Gemini 3.8
+extended-thinking trên thiết bị từ chối `SILENT` bằng WebSocket 1007,
+`Function response scheduling is not supported for this model`. Hỗ trợ tool
+NON_BLOCKING không đồng nghĩa hỗ trợ response scheduling. Cửa sổ hữu hạn này
+không bảo đảm nhận call đến sau thời hạn; cần xác minh thời điểm thực tế trên
+thiết bị.
 
 Bản thân cổng này là `wakeword` trong `config.json` (Settings → "Require a wake
 word before handling speech"). Thiết bị được set up lần đầu lấy giá trị khởi

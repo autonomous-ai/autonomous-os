@@ -226,10 +226,32 @@ the dangling open turn is cleared by the next turn's `flush_output()`.
 
 Gemini can similarly emit `generation_complete` before `turn_complete`: the
 latter is delayed while Gemini assumes the client is playing its audio in real
-time. HAL plays the generated response itself, so it ends the consumer turn on
-`generation_complete` and releases the next manual-VAD commit immediately.
+time. For BLOCKING models, HAL plays the generated response itself and ends the
+consumer turn on `generation_complete` and releases the next manual-VAD commit immediately.
 This avoids an otherwise unnecessary silent-watchdog delay after the reply;
 any late `turn_complete` is discarded before the next turn.
+
+For Gemini `extended-thinking` models, tools are `NON_BLOCKING`: a spoken filler
+such as “I can help with that.” must not close the consumer before a subsequent
+`delegate_to_main` (#453). Filler text/audio still streams immediately for KPI-1
+(Voice Acknowledge); only finalization waits up to
+`HAL_REALTIME_NONBLOCKING_TOOL_GRACE_S` (default **6 seconds**, `0` disables).
+The grace starts at the first `generation_complete` or `turn_complete`; later
+terminals do not extend it. HAL reopens the SDK's per-turn `receive()` iterator
+on the same session after `turn_complete`, retaining the logical turn identity.
+A delegate/reject call is queued before the terminal and cuts the grace short;
+auxiliary tools do not suppress a later delegate. Without a routing call, the
+turn finalizes once at the deadline. BLOCKING models retain immediate completion.
+A delegate after filler still routes as `delegated`, never `[HANDLED]`, preserving
+the user's request for the main agent. The Gemini prompt allows one immediate,
+brief acknowledgement but requires the delegate in the same turn; an acknowledgement
+alone cannot fulfill an action. Rejection remains completely silent. Delegate and
+reject use ordinary function response acknowledgements, omitting `scheduling`: on 2026-09-21 the device's
+Gemini 3.8 extended-thinking backend rejected `SILENT` with WebSocket 1007,
+`Function response scheduling is not supported for this model`. NON_BLOCKING
+tool support does not imply response-scheduling support. This bounded grace
+does not guarantee delivery of calls that arrive after its deadline; real device
+timing must be verified.
 
 The gate itself is `wakeword` in `config.json` (Settings → "Require a wake word
 before handling speech"). A device being set up for the first time takes its
