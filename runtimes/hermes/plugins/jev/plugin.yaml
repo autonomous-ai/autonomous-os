@@ -1,0 +1,5 @@
+name: jev
+version: 0.1.0
+description: Optional advisory skill routing through the configured proxy
+provides_hooks:
+  - pre_llm_call
