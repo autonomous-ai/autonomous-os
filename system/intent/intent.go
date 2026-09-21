@@ -27,6 +27,8 @@ import (
 
 // Result holds what to do after a match: the HAL action + a TTS reply.
 type Result struct {
+	// Source is "jev" for an optional semantic fallback; empty means local rules.
+	Source string
 	// ExecutionFailed records an error from any attempted HAL action.
 	ExecutionFailed bool
 	// TTSText is spoken back to the user via /voice/speak.
@@ -87,18 +89,37 @@ func match(text string, allowChitchat bool) *Result {
 		}
 	}
 
+	return recognizeCommand(text).execute()
+}
+
+// command separates recognition from side effects. Only code-owned rules and
+// their validated input reach execution; a model never supplies a HAL payload.
+type command struct {
+	rule *rule
+	text string
+}
+
+func (c *command) execute() *Result {
+	if c == nil || !capEnabled(c.rule.capability) {
+		return nil
+	}
+	result := c.rule.exec(c.text)
+	result.Rule = c.rule.name
+	return result
+}
+
+func recognizeCommand(text string) *command {
 	// Field order beats rule order: a rule matching the agent's summary wins
 	// over a different rule matching the noisy transcript. Within one field
 	// the table order is unchanged.
 	for _, t := range voiceFields(normalize(text)) {
-		for _, r := range rules {
+		for i := range rules {
+			r := &rules[i]
 			if !capEnabled(r.capability) {
 				continue
 			}
 			if r.match(t) {
-				res := r.exec(t)
-				res.Rule = r.name
-				return res
+				return &command{rule: r, text: t}
 			}
 		}
 	}
