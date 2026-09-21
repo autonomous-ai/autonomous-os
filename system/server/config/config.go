@@ -281,6 +281,9 @@ type Config struct {
 	// LocalIntent enables local keyword matching for common voice commands (default true).
 	// When false, all voice commands go through the agent (OpenClaw).
 	LocalIntent *bool `json:"local_intent,omitempty" yaml:"localIntent"`
+	// JevIntent configures semantic fallback after local rules miss (default off).
+	// It shares the configured Autonomous proxy URL and device API key.
+	JevIntent *JevIntentConfig `json:"jev_intent,omitempty" yaml:"jevIntent"`
 
 	// LLMDisableThinking disables extended thinking/reasoning for all LLM models (default false).
 	// Enable this to reduce latency on fast models like Haiku that don't benefit from thinking.
