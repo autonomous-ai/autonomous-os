@@ -1066,7 +1066,11 @@ elif [ "$APP" = "hal" ]; then
     if [ -f "$ROLLBACK_DIR/hal.previous/.env" ]; then cp -a "$ROLLBACK_DIR/hal.previous/.env" "$DIR_TMP/.env" || exit 1; fi
     find "$UV_CACHE_DIR" -name "lerobot.egg-info" -type d 2>/dev/null | xargs rm -rf
     cd "$DIR_TMP" || exit 1
-    "$UV_BIN" sync --python 3.12 --extra hardware --extra "$HAL_EXTRA" || exit 1
+    # New archives carry the validated lock. Preserve legacy archive support,
+    # but never silently re-resolve a release that includes one.
+    HAL_LOCK_ARGS=()
+    [ ! -f uv.lock ] || HAL_LOCK_ARGS+=(--locked)
+    "$UV_BIN" sync --python 3.12 --extra hardware --extra "$HAL_EXTRA" "${HAL_LOCK_ARGS[@]}" || exit 1
   ); then
     echo "HAL staging failed; restoring known-good runtime" >&2
     cd /

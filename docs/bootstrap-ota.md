@@ -12,6 +12,25 @@ The device runs **5 software components** on a supported board (Raspberry Pi 4, 
 | **OpenClaw** | Node.js package | `npm install -g` | `openclaw.service` | Global npm |
 | **HAL** | Python package | Download zip from OTA | `hal.service` | `/opt/hal/` |
 
+HAL supports CPython **3.12.x** (`requires-python = ">=3.12,<3.13"`).
+`uv sync --python 3.12` selects the interpreter but still resolves the project's
+entire supported Python range and optional extras. An unbounded `>=3.12` can
+therefore fail an ARM64 update while resolving Python 3.14 (the pinned LeRobot
+requires Torch <2.8, without compatible wheels for that split). Keep the Python
+range and `hal/uv.lock` aligned; a staging resolution failure restores the old HAL.
+
+HAL release packaging includes `uv.lock` and validates it with
+`uv lock --python 3.12 --check` before bumping the version or uploading. The
+updater uses `uv sync --locked` when the archive contains a lockfile; older
+archives without one retain their legacy resolution path. Excluding the lock
+forced device-side fresh resolution: on uv 0.12.15, HAL 0.1.169 failed on a
+Python >=3.13 ARM64/Reachy split despite a 3.12-only project range; the same
+archive with the validated lock passed a locked install dry-run on the device.
+
+Image builders for OrangePi, Pi 4, and Pi 5 also use `--locked` when the
+downloaded HAL archive contains `uv.lock`. They fetch HAL from the OTA metadata,
+not from the local checkout; rerun the build after publishing the fixed archive.
+
 ### Architecture Diagram
 
 ```
@@ -1185,7 +1204,7 @@ HAL version is a plain text `VERSION` file in the package root. Read by bootstra
 - [x] **HAL source**: Mono-repo. Driver code copied from `humancomputerlab/lelamp_runtime` into `hal/`, with LiveKit/OpenAI removed and HTTP API + DisplayService added. Upstream tracked manually via `hal/UPSTREAM.md`.
 - [x] **HAL HTTP port**: `5001` (OS Server is `5000`).
 - [x] **Bridge protocol**: Simple HTTP proxy. HAL runs FastAPI on `127.0.0.1:5001`, OS Server proxies from port 5000.
-- [x] **Python version**: Pinned to Python 3.12+ (`pyproject.toml`, `.python-version`, `setup.sh` uses `uv sync --python 3.12`).
+- [x] **Python version**: Pinned to Python 3.12.x (`pyproject.toml`, `.python-version`, `setup.sh` uses `uv sync --python 3.12`).
 - [x] **HAL packaging**: On-device venv via `uv sync --python 3.12 --extra hardware` plus `--extra reachy` for Reachy Mini or `--extra aec` for other devices. OTA builds a fresh venv using the shared cache, preserves `.env`, and retains the old runtime for rollback.
 - [x] **Display driver**: DisplayService (GC9A01) is part of HAL Python at `hal/service/display/display_service.py`.
 - [x] **HAL config**: Environment variable-based (`config.py` reads from env vars). `.env` file support via `python-dotenv`. No separate config file needed.
