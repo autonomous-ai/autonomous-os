@@ -1,5 +1,6 @@
 """Bounded, fail-open skill suggestions; never executes or loads a skill."""
 
+import contextvars
 import ipaddress
 import json
 import logging
@@ -152,6 +153,8 @@ class Router:
         # Never inspect or transmit conversation_history supplied in kwargs.
         if not isinstance(user_message, str) or not user_message.strip() or len(user_message.encode()) > 8000:
             return None
+        if user_message.lstrip().startswith("/"):
+            return None  # Explicit commands already select their own behavior.
         if re.search(r"\[skills\s*:", user_message, re.IGNORECASE):
             return None
         try:
@@ -179,7 +182,10 @@ class Router:
         # Socket timeouts do not bound DNS or slow streaming responses. The caller
         # waits only its budget; at most one background worker exists per router.
         try:
-            threading.Thread(target=decide, daemon=True).start()
+            # Hermes uses ContextVars for session/platform skill filters. A new
+            # thread must inherit this turn's context, not process-wide defaults.
+            turn_context = contextvars.copy_context()
+            threading.Thread(target=turn_context.run, args=(decide,), daemon=True).start()
         except Exception:
             self.busy.release()
             return None

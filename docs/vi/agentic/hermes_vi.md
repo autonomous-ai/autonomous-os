@@ -1055,7 +1055,9 @@ Hermes lọc; chỉ category `openclaw-imports` đủ điều kiện. Loại cá
 bundled, authored và plugin khác. Không gửi lịch sử hội thoại hoặc nội dung đầy
 đủ của skill. Mô tả mỗi ứng viên tối đa 500 ký tự. Nếu có quá 32 ứng viên đủ điều
 kiện, bỏ qua Jev hoàn toàn thay vì cắt bớt catalog. Tin nhắn rỗng, dài quá 8.000
-byte UTF-8 hoặc có lựa chọn `[skills:...]` rõ ràng cũng bỏ qua router. Đây là thử
+byte UTF-8, lệnh slash hoặc có lựa chọn `[skills:...]` rõ ràng cũng bỏ qua router.
+Worker catalog kế thừa context Hermes của lượt hiện tại để giữ bộ lọc skill
+theo phiên/kênh. Đây là thử
 nghiệm gợi ý cho skill nền tảng OS; Hermes tiếp tục tìm các skill khác theo cách
 bình thường.
 
@@ -1077,3 +1079,33 @@ Các lệnh kiểm tra local trọng tâm (CI cũng chạy test plugin Python):
 go test -race -timeout 90s ./runtimes/hermes ./system/server/config ./system/intent/...
 python3 -B -m unittest discover -s runtimes/hermes/plugins/jev -p 'test_*.py' -v
 ```
+
+### Review implementation tham chiếu (2026-09-21)
+
+Đã đọc code thực tế của plugin cộng đồng
+[`typesafe-skill-router`](https://github.com/DECRUX9812/typesafe-skill-router/tree/e6cdac26f9ed588b4a94b8a2f7f9f026e1b9faf3)
+tại commit được catalog Hermes ghim `e6cdac26f9ed588b4a94b8a2f7f9f026e1b9faf3`
+và upstream `f150284d3da33c85b8adc97e2d326987573b30d3`. Đây là plugin cộng đồng
+được Hermes đưa vào catalog, không phải Hermes core hay plugin do TypeSafe duy trì.
+Thuật toán dựa trên [cookbook chọn skill của TypeSafe](https://docs.typesafe.ai/cookbooks/skill_suggestion).
+
+| Phần | Plugin tham chiếu | Plugin OS |
+|---|---|---|
+| Hook | `pre_llm_call`, trả context tùy chọn cho tin nhắn user | Cùng hook và dạng trả về; không sửa system prompt |
+| Dữ liệu skill | Quét filesystem; shortlist có mô tả đầy đủ và tối đa 700 ký tự nội dung | Chỉ catalog `openclaw-imports` đã được Hermes lọc; mô tả có thể đã bị Hermes cắt ngắn, không gửi nội dung skill |
+| Quyết định | Bước 1 xếp hạng và xét có cần skill; bước 2 đánh giá lại shortlist 3 skill mỗi nhóm | Một request với choice, `none` và fit từng ứng viên |
+| Catalog lớn | Chia nhóm 240 lựa chọn | Bỏ qua nếu quá 32 skill đủ điều kiện |
+| Ngưỡng | Bản catalog: gate 0,30 và fit người thắng 0,40; upstream mới còn xử lý choice/fit bất đồng | Choice 0,90, margin 0,40, fit 0,95; chưa hiệu chỉnh bằng dữ liệu tác vụ này |
+| Latency | Budget hook mặc định 10 giây, cache đáp án và client có retry | Budget 350 ms, không retry/cache, bỏ qua khi bận và có cooldown |
+| Credential | API TypeSafe với key riêng | Credential proxy OS dùng chung |
+
+Bản OS là thử nghiệm phạm vi hẹp hơn, không tương đương thuật toán hai bước.
+Ngưỡng cao và deadline ngắn có thể bỏ qua gợi ý hữu ích; mock test không chứng
+minh độ chính xác hay tỷ lệ yêu cầu được gợi ý. Không áp dụng benchmark của
+plugin tham chiếu cho bản OS. Trước khi bật cần so sánh hai chính sách trên cùng
+bộ yêu cầu đại diện và catalog đã cài, gồm chat không cần skill, skill gần nghĩa,
+lệnh chỉ định rõ và tiếng Việt.
+
+Các sửa lỗi sau review giữ context phiên Hermes trong worker (cần cho bộ lọc
+skill bị tắt theo kênh) và bỏ qua lệnh slash giống hook tham chiếu. Không thay
+ngưỡng, mặc định OFF hay trạng thái device.

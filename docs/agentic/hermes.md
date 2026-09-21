@@ -1060,8 +1060,9 @@ eligible. Other bundled, authored, and plugin skill categories are excluded.
 Conversation history and skill bodies are not sent. Each candidate description
 is capped at 500 characters. If there are more than 32 eligible candidates, the
 router skips Jev entirely rather than truncating the catalog. Empty messages,
-messages over 8,000 UTF-8 bytes, and explicit `[skills:...]` selections also
-bypass the router. This is an advisory experiment for OS platform skills;
+messages over 8,000 UTF-8 bytes, slash commands, and explicit `[skills:...]`
+selections also bypass the router. The catalog worker inherits the current
+Hermes context so session/platform skill filters still apply. This is an advisory experiment for OS platform skills;
 normal Hermes discovery continues to handle other skills.
 
 A suggestion requires choice probability at least 0.90, a margin of at least
@@ -1083,3 +1084,33 @@ Focused local checks (Python plugin tests also run in CI):
 go test -race -timeout 90s ./runtimes/hermes ./system/server/config ./system/intent/...
 python3 -B -m unittest discover -s runtimes/hermes/plugins/jev -p 'test_*.py' -v
 ```
+
+### Reference implementation review (2026-09-21)
+
+Reviewed actual code from the community
+[`typesafe-skill-router`](https://github.com/DECRUX9812/typesafe-skill-router/tree/e6cdac26f9ed588b4a94b8a2f7f9f026e1b9faf3)
+at the Hermes catalog pin `e6cdac26f9ed588b4a94b8a2f7f9f026e1b9faf3`, and upstream
+`f150284d3da33c85b8adc97e2d326987573b30d3`. This is a community plugin listed by
+Hermes, not Hermes core or a TypeSafe-maintained plugin. Its routing recipe is
+based on the [TypeSafe skill-suggestion cookbook](https://docs.typesafe.ai/cookbooks/skill_suggestion).
+
+| Area | Reference plugin | OS plugin |
+|---|---|---|
+| Hook | `pre_llm_call`, returns optional user-message context | Same hook and return shape; no system-prompt modification |
+| Skill data | Filesystem roster; shortlist receives full descriptions and up to 700 body characters | Hermes-filtered `openclaw-imports` catalog only; descriptions may already be shortened by Hermes, no body text |
+| Decision | Stage 1 ranks and gates skill need; stage 2 reranks a shortlist of 3 (per chunk) | One request with choice, `none`, and per-candidate fit |
+| Large catalogs | Splits into chunks of 240 choices | Skips when more than 32 eligible skills |
+| Acceptance | Catalog pin: gate 0.30 and winner fit 0.40; newer upstream also arbitrates disagreeing choice/fit signals | Choice 0.90, margin 0.40, fit 0.95; uncalibrated for this workload |
+| Latency | Default hook budget 10 seconds, answer cache and retry-capable client | 350 ms budget, no retries/cache, busy bypass and cooldown |
+| Credentials | TypeSafe API with separate key | Shared OS proxy credentials |
+
+The OS implementation is a narrower experiment, not an equivalent implementation
+of the two-stage recipe. Its higher thresholds and shorter deadline may suppress
+useful suggestions; mock tests cannot establish routing accuracy or coverage.
+Do not transfer the reference's benchmark results to this plugin. Before enabling,
+compare both policies on the same representative requests and installed roster,
+including unrelated chat, ambiguous skills, explicit commands, and Vietnamese.
+
+Review fixes preserve Hermes session context in the worker (needed for
+platform-specific disabled-skill filtering) and skip slash commands, as the
+reference hook does. No thresholds, default OFF setting, or device state changed.
