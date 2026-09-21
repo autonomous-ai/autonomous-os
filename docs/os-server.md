@@ -324,6 +324,13 @@ resolved `device_type` and a sorted `device_capabilities` list from that device'
 `ROBOT.md`; the agent can avoid assuming unavailable hardware exists. This is
 deliberately the ready gateway rather than `config.agent_runtime`, which can be
 transiently out of date while a runtime switch is being reconciled.
+Restarting os-server does not authorize waking a sleeping device. On bodies with
+`expression`, startup checks HAL `GET /emotion/status` immediately before the
+greeting and skips both the greeting and wake-focus when asleep or when the
+sleep state cannot be read. Bodies without `expression` skip this probe.
+Passive sensing also consults HAL rather than assuming a fresh Go process is
+awake; ambient output checks HAL before resuming idle movements or speech.
+
 Once the greeting is sent, os-server calls HAL `POST /voice/wake-focus?source=boot_greeting`
 to open the wake-word follow-up window (`HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S`), so the
 user can answer the greeting without a wake phrase. HAL no-ops when wake word is
