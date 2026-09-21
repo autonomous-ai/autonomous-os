@@ -275,7 +275,7 @@ debug chỉ là toggle trên header, không phải URL param ẩn:
 
 | State | Nghĩa | Chế độ thường | Chế độ debug |
 |---|---|---|---|
-| xám | turn chỉ đọc memory | ẩn | `USER 251 B MEMORY 1.2 KB` |
+| xám | turn chỉ đọc memory | ẩn | `USER.md 251B · MEMORY.md 1.2kB` |
 | amber | agent có ghi, guard chấp nhận | ẩn | `… ✎ memory changed` |
 | đỏ | guard đã gỡ block | `✎ memory updated · 1 entry removed in hermes` | như trên, thêm size phía trước |
 
@@ -291,8 +291,10 @@ có UI). Chữ dùng là "entry removed", không phải "quarantined" — từ n
 runtime **đang active**, nên nếu không nêu tên thì một lần gỡ ở runtime không
 active sẽ làm card đỏ lên cạnh size của file chẳng liên quan.
 
-Size là byte kèm đơn vị (`251 B`, `1.2 KB`) — không dùng `k` cơ số 1000 như các
-số token LLM cùng hàng. Ở chế độ chỉ quan sát (`agent.memory_guard=false`) badge
+Size là byte với đơn vị dính liền số (`251B`, `1.2kB`) — không dùng `k` cơ số
+1000 như các số token LLM cùng hàng. Tên file giữ nguyên đuôi `.md` và ngăn
+nhau bằng dấu chấm giữa, để dòng này đọc ra hai file hai size chứ không phải
+một nhãn dính liền. Ở chế độ chỉ quan sát (`agent.memory_guard=false`) badge
 vẫn amber và ghi `· would remove 1 entry`; chưa gỡ gì cả, file vẫn còn block đó.
 Hover để xem số byte chính xác, `sha8`, runtime và reasons. So `sha8` giữa hai
 turn cho biết memory có thay đổi giữa hai turn đó hay không.

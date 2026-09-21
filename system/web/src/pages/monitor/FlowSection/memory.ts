@@ -68,12 +68,13 @@ export function turnMemoryState(turn: Turn): TurnMemoryInfo | null {
 
 // Bytes, with a unit, always. The memory sizes share a footer row with the LLM
 // token counts, which use a bare 1000-based `k` — a number formatted the same
-// way, a few pixels away, is read as a token count (#463). The exact byte
-// count stays in the tooltip.
+// way, a few pixels away, is read as a token count (#463). The unit is glued to
+// the number (`854B`, not `854 B`) so the footer reads as two values, not four
+// words. The exact byte count stays in the tooltip.
 export function fmtBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+  if (n < 1024) return `${n}B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)}kB`;
+  return `${(n / (1024 * 1024)).toFixed(1)}MB`;
 }
 
 // "1 entry" / "2 entries". The badge speaks to the device owner, so the guard's
@@ -151,7 +152,10 @@ export function memoryBadge(memory: TurnMemoryInfo, isDebug: boolean): MemoryBad
   if (removed === 0 && !isDebug) return null;
 
   const files = orderedMemoryFiles(memory.files);
-  const sizes = files.map(([name, f]) => `${name.replace(".md", "")} ${fmtBytes(f.size)}`).join(" ");
+  // Full filenames with the `.md`, separated by a middot: these are files on
+  // disk, and "USER 854B MEMORY 1.9kB" ran together as one label instead of
+  // reading as two sizes.
+  const sizes = files.map(([name, f]) => `${name} ${fmtBytes(f.size)}`).join(" · ");
   const changedLabel = removed > 0
     ? `✎ memory updated · ${entries(removed)} removed${removalRuntimes(removals)}`
     : wouldRemove > 0

@@ -413,7 +413,7 @@ section and debug is a one-click header toggle, not a hidden URL param:
 
 | State | Meaning | Normal mode | Debug mode |
 |---|---|---|---|
-| gray | the turn only read memory | hidden | `USER 251 B MEMORY 1.2 KB` |
+| gray | the turn only read memory | hidden | `USER.md 251B · MEMORY.md 1.2kB` |
 | amber | the agent wrote, the guard accepted | hidden | `… ✎ memory changed` |
 | red | the guard removed blocks | `✎ memory updated · 1 entry removed in hermes` | same, prefixed with the sizes |
 
@@ -429,8 +429,10 @@ sweeps all six runtime trees while the sizes beside it are the **active**
 runtime's, so without the name a removal in an inactive runtime would turn the
 card red next to unrelated file sizes.
 
-Sizes are bytes with a unit (`251 B`, `1.2 KB`) — never the 1000-based `k` the
-LLM token counts on the same row use. In observe mode
+Sizes are bytes with the unit glued to the number (`251B`, `1.2kB`) — never the
+1000-based `k` the LLM token counts on the same row use. Filenames keep their
+`.md` and are separated by a middot, so the row reads as two files with two
+sizes rather than one run-on label. In observe mode
 (`agent.memory_guard=false`) the badge stays amber and reads
 `· would remove 1 entry`; nothing was removed and the file still carries the
 block. Hover for exact bytes, `sha8`, the runtime and the reasons. Comparing

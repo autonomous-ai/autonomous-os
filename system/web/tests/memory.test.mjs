@@ -30,16 +30,16 @@ const state = (files, changed) => ({ files, changed });
 const FP = { "USER.md": { size: 251, sha8: "a1b2c3d4" }, "MEMORY.md": { size: 1229, sha8: "e5f6a7b8" } };
 
 test("bytes get a unit so they cannot be read as the token count beside them", () => {
-  assert.equal(fmtBytes(251), "251 B");
-  assert.equal(fmtBytes(1023), "1023 B");
-  assert.equal(fmtBytes(1229), "1.2 KB");
-  assert.equal(fmtBytes(2 * 1024 * 1024), "2.0 MB");
+  assert.equal(fmtBytes(251), "251B");
+  assert.equal(fmtBytes(1023), "1023B");
+  assert.equal(fmtBytes(1229), "1.2kB");
+  assert.equal(fmtBytes(2 * 1024 * 1024), "2.0MB");
 });
 
 test("a read-only turn shows nothing in normal mode and sizes in debug", () => {
   assert.equal(memoryBadge(state(FP, []), false), null);
   const dbg = memoryBadge(state(FP, []), true);
-  assert.equal(dbg.text, "USER 251 B MEMORY 1.2 KB");
+  assert.equal(dbg.text, "USER.md 251B · MEMORY.md 1.2kB");
   assert.equal(dbg.color, "var(--lm-text-muted)");
   assert.match(dbg.title, /USER\.md 251 bytes · a1b2c3d4/);
 });
@@ -49,7 +49,7 @@ test("an accepted write stays out of normal mode so a removal still lands", () =
   assert.equal(memoryBadge(accepted, false), null);
   const dbg = memoryBadge(accepted, true);
   assert.equal(dbg.color, "var(--lm-amber)");
-  assert.equal(dbg.text, "USER 251 B MEMORY 1.2 KB ✎ memory changed");
+  assert.equal(dbg.text, "USER.md 251B · MEMORY.md 1.2kB ✎ memory changed");
 });
 
 test("a removal is visible without debug, in the owner's words, and names the runtime", () => {
@@ -68,7 +68,7 @@ test("several removals read as entries and debug keeps the sizes and reasons", (
   const removed = state(FP, [{ file: "USER.md", runtime: "hermes", quarantined: 2, reasons: ["prescriptive", "free-prose"], execute: true }]);
   assert.equal(memoryBadge(removed, false).text, "✎ memory updated · 2 entries removed in hermes");
   const dbg = memoryBadge(removed, true);
-  assert.equal(dbg.text, "USER 251 B MEMORY 1.2 KB ✎ memory updated · 2 entries removed in hermes");
+  assert.equal(dbg.text, "USER.md 251B · MEMORY.md 1.2kB ✎ memory updated · 2 entries removed in hermes");
   assert.match(dbg.title, /prescriptive, free-prose/);
 });
 
@@ -86,7 +86,7 @@ test("observe mode never claims a removal — the file still carries the block",
   assert.equal(memoryBadge(observed, false), null);
   const dbg = memoryBadge(observed, true);
   assert.equal(dbg.color, "var(--lm-amber)");
-  assert.equal(dbg.text, "USER 251 B MEMORY 1.2 KB ✎ memory changed · would remove 1 entry");
+  assert.equal(dbg.text, "USER.md 251B · MEMORY.md 1.2kB ✎ memory changed · would remove 1 entry");
 });
 
 test("an unnamed runtime is omitted rather than guessed", () => {
