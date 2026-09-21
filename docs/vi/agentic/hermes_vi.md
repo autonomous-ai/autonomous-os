@@ -1047,7 +1047,7 @@ Plugin dùng hằng số trong `runtimes/hermes/plugins/jev/router.py`:
 
 ```python
 ENABLED = True
-TIMEOUT_SECONDS = 0.350
+TIMEOUT_SECONDS = 3.0
 ```
 
 Không có block config Jev riêng cho Hermes hay kiểu config Go riêng. Các hằng số
@@ -1055,34 +1055,69 @@ này độc lập với `local_intent` và `jev_intent`. Khi OFF, bỏ qua cả 
 catalog và gọi mạng.
 Khi bật, plugin dùng lại `llm_base_url` và `llm_api_key` để gọi
 `POST {llm_base_url}/jev/decisions` với bearer authentication. Không có key Jev
-riêng trong `.env`, không fallback gọi thẳng provider. Bắt buộc HTTPS, ngoại trừ
+riêng trong `.env`, không fallback gọi thẳng provider. Request dùng
+`User-Agent: AutonomousOS-Jev/0.1` để định danh client; lớp proxy edge trả HTTP 403
+với signature mặc định của Python urllib. Khi lỗi HTTP chỉ log mã trạng thái,
+không log credential hay nội dung response. Bắt buộc HTTPS, ngoại trừ
 HTTP loopback để test local. BFF cần hỗ trợ
 [hợp đồng Decisions tương thích](../os-server_vi.md#jev-bff-contract); plugin gửi model
 `typesafe/jev-1.13`, câu hỏi choice `skill` gồm `none`, và một câu hỏi noul
-`fit_<id>` cho mỗi ứng viên. Response raw phải chứa `answers`.
+`fit_<id>` cho mỗi ứng viên. Response raw phải chứa `answers`. Chỉ dẫn định tuyến
+ưu tiên hành động user yêu cầu rõ ràng hơn lời xã giao, cách đặt câu hỏi/ngữ cảnh,
+và các skill chủ động hoặc hỗ trợ. Thiếu tham số hành động không ngăn việc chọn
+skill: skill được chọn có thể làm rõ các tham số sau đó.
 
-Chỉ gửi tin nhắn hiện tại và tên/mô tả skill nền tảng OS từ catalog live đã được
-Hermes lọc; chỉ category `openclaw-imports` đủ điều kiện. Loại các category skill
-bundled, authored và plugin khác. Không gửi lịch sử hội thoại hoặc nội dung đầy
-đủ của skill. Mô tả mỗi ứng viên tối đa 500 ký tự. Nếu có quá 32 ứng viên đủ điều
-kiện, bỏ qua Jev hoàn toàn thay vì cắt bớt catalog. Tin nhắn rỗng, dài quá 8.000
-byte UTF-8, lệnh slash hoặc có lựa chọn `[skills:...]` rõ ràng cũng bỏ qua router.
-Worker catalog kế thừa context Hermes của lượt hiện tại để giữ bộ lọc skill
-theo phiên/kênh. Đây là thử
-nghiệm gợi ý cho skill nền tảng OS; Hermes tiếp tục tìm các skill khác theo cách
-bình thường.
+Chỉ gửi tin nhắn hiện tại và tên/mô tả skill nền tảng OS. Roster quét
+`skills/openclaw-imports` trong Hermes home đang hoạt động, dùng các helper gốc
+của `agent.skill_utils`: `iter_skill_index_files`, `parse_frontmatter`,
+`get_disabled_skill_names`, `skill_matches_platform` và
+`skill_matches_environment`.
+Cách này tránh việc `skills_list()` loại tên trùng theo kết quả đầu tiên khiến
+skill OS bị skill bundled cùng tên che mất. Loại các category skill bundled,
+authored và plugin khác. Giới hạn lượng metadata đọc tại máy; không gửi lịch sử
+hội thoại hoặc nội dung skill. Mô tả mỗi ứng viên tối đa 500 ký tự. Gợi ý tra cứu
+`skill_view` dùng đường dẫn đầy đủ `openclaw-imports/<thư mục tương đối>` để tránh
+trùng tên.
 
-Chỉ gợi ý khi xác suất choice ít nhất 0,90, cách ứng viên kế tiếp ít nhất 0,40,
-và fit ít nhất 0,95. Quyết định không chắc chắn hoặc không hợp lệ giữ nguyên cách
-Hermes hoạt động. Thời gian chờ quyết định hardcode là 350 ms;
+Nếu có quá 32 ứng viên đủ điều kiện, bỏ qua Jev hoàn toàn thay vì cắt bớt catalog.
+Tin nhắn rỗng, dài quá 8.000 byte UTF-8, lệnh slash hoặc có lựa chọn `[skills:...]`
+rõ ràng cũng bỏ qua router. Worker catalog kế thừa context Hermes của lượt hiện
+tại để giữ bộ lọc skill theo phiên/kênh. Đây là thử nghiệm gợi ý cho skill nền
+tảng OS; Hermes tiếp tục tìm các skill khác theo cách bình thường.
+
+Chỉ gợi ý khi xác suất choice ít nhất 0,70, cách ứng viên kế tiếp ít nhất 0,20,
+và fit ít nhất 0,60. Đây là ngưỡng tạm thời để gợi ý chọn skill, không phải cấp
+quyền thực hiện hành động; các kiểm tra quyền của skill và nền tảng vẫn áp dụng.
+Ngưỡng Buddy và OS intent giữ nguyên: choice 0,90, margin 0,40 và fit 0,95.
+Quyết định không chắc chắn hoặc không hợp lệ giữ nguyên cách Hermes hoạt động. Thời gian chờ quyết định tạm hardcode là 3 giây để kiểm tra proxy trước khi tối ưu latency;
 không retry hay redirect. Lỗi hoặc timeout tạo cooldown 30 giây. Mỗi router chỉ
 có một worker; đang bận thì bỏ qua ngay. Worker timeout có thể hoàn thành request
-ở background nhưng kết quả muộn không thể chèn gợi ý. Log ghi kết quả và thời
-gian quyết định, không ghi prompt hoặc credential.
+ở background nhưng kết quả muộn không thể chèn gợi ý.
 
-Kiểm thử local dùng response proxy giả lập và thư mục Hermes tạm. Chưa chứng minh
-độ chính xác Jev thực tế hay mức cải thiện latency; so sánh OFF/ON trên device
-với endpoint BFF tương thích. Các kiểm tra local không cần deploy lên device.
+Log có cấu trúc phân biệt gợi ý thành công, quyết định hợp lệ nhưng không gợi ý,
+và lỗi, thay vì gộp chung thành `deferred`:
+
+| Outcome | Ý nghĩa / reason |
+|---|---|
+| `suggested` | Quyết định hợp lệ vượt qua mọi ngưỡng chấp nhận |
+| `abstained` | Quyết định hợp lệ chọn `none` hoặc không đạt `low_choice`, `low_margin`, hay `low_fit` |
+| `error` | `http_error`, `network_error`, `invalid_json`, `response_too_large`, `provider_error`, `invalid_schema`, `catalog_error`, `thread_error`, hoặc `config_error` |
+| `skipped` | `disabled`, `invalid_message`, `explicit_selection`, `unconfigured`, `cooldown`, `busy`, hoặc `no_candidates` |
+| `timeout` | Hết thời gian chờ quyết định |
+
+Log có `decision_ms` và `catalog_ms` / `request_ms` khi có dữ liệu; `request_ms`
+đo toàn bộ lượt gọi proxy, không phải riêng thời gian model suy luận. Quyết định
+hợp lệ có các số `choice_probability`, `margin`, `fit` khi áp dụng. `candidate`
+ghi tên đầy đủ của ứng viên được chọn kể cả khi quyết định hợp lệ bị từ chối,
+hoặc `none` khi không chọn skill; gợi ý được chấp nhận còn có `skill`. Lỗi HTTP có
+`http_status`. Không log prompt, credential, nội dung response hoặc nội dung
+exception.
+
+Kiểm thử local dùng response proxy giả lập và thư mục Hermes tạm. Các test này
+và từng probe tổng hợp trên device đều không chứng minh độ chính xác định tuyến,
+tỷ lệ yêu cầu được gợi ý hay mức cải thiện latency thực tế. Cần so sánh OFF/ON
+trên bộ yêu cầu đại diện với roster đã cài và endpoint BFF tương thích; không xem
+probe tổng hợp là benchmark. Các kiểm tra local không cần deploy lên device.
 
 Các lệnh kiểm tra local trọng tâm (CI cũng chạy test plugin Python):
 
@@ -1103,16 +1138,17 @@ Thuật toán dựa trên [cookbook chọn skill của TypeSafe](https://docs.ty
 | Phần | Plugin tham chiếu | Plugin OS |
 |---|---|---|
 | Hook | `pre_llm_call`, trả context tùy chọn cho tin nhắn user | Cùng hook và dạng trả về; không sửa system prompt |
-| Dữ liệu skill | Quét filesystem; shortlist có mô tả đầy đủ và tối đa 700 ký tự nội dung | Chỉ catalog `openclaw-imports` đã được Hermes lọc; mô tả có thể đã bị Hermes cắt ngắn, không gửi nội dung skill |
+| Dữ liệu skill | Quét filesystem; shortlist có mô tả đầy đủ và tối đa 700 ký tự nội dung | Đọc metadata có giới hạn từ file `openclaw-imports` với bộ lọc điều kiện gốc của Hermes, mô tả tối đa 500 ký tự, không gửi nội dung skill; tra cứu bằng đường dẫn đầy đủ tránh trùng tên |
 | Quyết định | Bước 1 xếp hạng và xét có cần skill; bước 2 đánh giá lại shortlist 3 skill mỗi nhóm | Một request với choice, `none` và fit từng ứng viên |
 | Catalog lớn | Chia nhóm 240 lựa chọn | Bỏ qua nếu quá 32 skill đủ điều kiện |
-| Ngưỡng | Bản catalog: gate 0,30 và fit người thắng 0,40; upstream mới còn xử lý choice/fit bất đồng | Choice 0,90, margin 0,40, fit 0,95; chưa hiệu chỉnh bằng dữ liệu tác vụ này |
-| Latency | Budget hook mặc định 10 giây, cache đáp án và client có retry | Budget 350 ms, không retry/cache, bỏ qua khi bận và có cooldown |
+| Ngưỡng | Bản catalog: gate 0,30 và fit người thắng 0,40; upstream mới còn xử lý choice/fit bất đồng | Choice 0,70, margin 0,20, fit 0,60; ngưỡng gợi ý tạm thời, chưa hiệu chỉnh bằng dữ liệu tác vụ này |
+| Latency | Budget hook mặc định 10 giây, cache đáp án và client có retry | Budget chẩn đoán tạm thời 3 giây, không retry/cache, bỏ qua khi bận và có cooldown |
 | Credential | API TypeSafe với key riêng | Credential proxy OS dùng chung |
 
 Bản OS là thử nghiệm phạm vi hẹp hơn, không tương đương thuật toán hai bước.
-Ngưỡng cao và deadline ngắn có thể bỏ qua gợi ý hữu ích; mock test không chứng
-minh độ chính xác hay tỷ lệ yêu cầu được gợi ý. Không áp dụng benchmark của
+Ngưỡng tạm thời và deadline ngắn có thể bỏ qua gợi ý hữu ích; mock test và một
+số ít probe tổng hợp không chứng minh độ chính xác đã hiệu chỉnh hay tỷ lệ yêu
+cầu được gợi ý. Không áp dụng benchmark của
 plugin tham chiếu cho bản OS. Để đánh giá thử nghiệm đang bật, cần so sánh hai chính sách trên cùng
 bộ yêu cầu đại diện và catalog đã cài, gồm chat không cần skill, skill gần nghĩa,
 lệnh chỉ định rõ và tiếng Việt.
