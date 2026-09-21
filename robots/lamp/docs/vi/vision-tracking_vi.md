@@ -391,6 +391,12 @@ Việc khôi phục bearing ở ưu tiên 3 là ngoại lệ, và nó an toàn v
 để sai. Đó chính là thứ cho phép cái đầu đang chúi xuống sàn lấy lại đúng độ cao — nếu chỉ chỉnh yaw,
 nó sẽ quét sàn theo vòng tròn dù hướng có đúng tới đâu.
 
+Một lượt aim đã di chuyển đầu thì đỗ body y như search (`nudge` và khôi phục bearing đều kết thúc
+bằng `move_and_hold`), nên `aim_for_look` lên lịch cùng `release_to_idle_later(HOLD_AFTER_FIND_S)`
+từ hàm dựng kết quả mỗi khi `iterations` hoặc `bearing_steps` khác 0 — xem *Trả body về idle* ở
+mục quét tìm kiếm để biết các guard. Gaze thường lấy lại body khi có mặt trong khung, vì thế chỗ
+này ít lộ hơn; không có mặt thì nó kẹt y hệt search.
+
 **Thứ tự ưu tiên:**
 
 1. **Thấy người** → căn giữa. Ưu tiên khung bao người hơn khung bao mặt: vật giơ lên hay che mất mặt
@@ -499,7 +505,14 @@ Khác với look-aim, và vẫn cố ý nằm ngoài đường chụp: pha ngắ
 ra với hạn chót, còn một pha quét mất vài giây. Điều đã thay đổi là "thong thả" giờ bao gồm cả hai
 trường hợp đèn tự quyết định. Pha quét được vào khi:
 
-- người dùng yêu cầu thẳng — *"bạn đang ở đâu?"*, *"tìm tôi được không?"* (`skills/servo-control`)
+- người dùng yêu cầu thẳng — *"bạn đang ở đâu?"*, *"tìm tôi được không?"*, *"tìm bàn phím của tôi"*
+  (`skills/servo-control`). Trường hợp này là một lệnh **curl blocking ngay trong lượt**, không phải
+  marker `[HW:/servo/search:...]`. Marker chỉ bắn sau khi phần text trả lời đã được viết xong, nên
+  một lần tìm kiếm chạy bằng marker sẽ kết thúc vào một lượt đã đóng: đèn quét, tìm thấy vật, rồi câu
+  trả lời không đi tới đâu cả. Đó cũng là một lệnh gọi dài 40 s đối đầu với client 5 s của
+  `fireHWCall` — client này trước đây bỏ request trước cả khi kịp chạy `flow.Log` của chính nó, nên
+  pha quét thậm chí không hiện ra trong Monitor. Agent chờ body rồi trả lời dựa trên đó, đúng theo
+  cách `/api/vision/look` vẫn đang làm.
 - họ đồng ý với đề nghị sau một lần nhìn thất bại — *"Tôi không thấy nó. Bạn có muốn tôi quay quanh tìm thử không?"*
 - **look-aim sắp bỏ cuộc** — trước khi `look_lost` tuyên bố *"Tôi không tìm thấy bạn"*, câu mà đến giờ
   nó vẫn nói sau khi mới chỉ quay về một bearing đã ghi nhớ. Bearing là phỏng đoán về nơi người ta
@@ -518,9 +531,58 @@ trường hợp đèn tự quyết định. Pha quét được vào khi:
   đây tham số target được hàm nhận rồi bỏ đi — mọi lần quét đều tìm người, nên "look around for my
   keyboard" kết thúc ngay ở người đầu tiên đi ngang qua.
 - `exhaustive` mặc định `false`, tức trả về ngay ở lần nhìn thấy đầu tiên — đúng cho câu "where are
-  you?". Đặt `true` sẽ đi trọn vòng nhìn tại mọi bearing rồi báo số lần nhìn thấy.
+  you?" và cho mọi lần tìm đồ vật. `true` là **khảo sát người**: đi trọn vòng nhìn tại mọi bearing
+  (chế độ duy nhất có nhìn lên trên đường chân trời), đếm số lần thấy rồi quay về chỗ cũ. Nó
+  **bị bỏ qua khi target là đồ vật** và có log rõ: một agent từng truyền nó cho "find my doll" và
+  nhận về một cái đèn thấy búp bê năm lần, quay về nhà, rồi báo là tìm thấy mà không có ảnh. Tìm
+  một món đồ luôn dừng ở lần thấy đầu tiên, canh giữa vào nó và giữ nguyên hướng đó.
 - Độ phủ là `số bearing x số lần nhìn mỗi bearing`: 3 x 6 = **18 lần nhìn** ở chế độ thường,
   3 x 9 = **27** ở chế độ exhaustive. Hãy tính khoảng **2 giây mỗi lần nhìn**.
+
+Response là một body có cấu trúc, không phải một chuỗi văn xuôi duy nhất:
+
+```json
+{"status": "ok",
+ "message": "found keyboard at yaw +85 after 7 look(s) across 2 bearing(s)",
+ "found": true, "target": "keyboard", "kind": "keyboard",
+ "found_at_yaw": 85.0, "found_at_roll": -45.0, "centred": true,
+ "image_path": "/root/.codex/media/hal-snapshots/snap_1757500000000.jpg",
+ "looks_visited": 7, "bearings_visited": 2}
+```
+
+- `looks_visited` đếm số LẦN NHÌN còn `bearings_visited` đếm số vị trí của đế. Đó là hai đại lượng
+  khác nhau và được báo tách riêng: trường này từng tên là `stops_visited`, đếm số lần nhìn, nhưng
+  lại được render thành `"after N stop(s)"` trong khi `MAX_STOPS = 3` — nên một pha quét exhaustive
+  thành thật báo "after 27 stop(s)" trên tổng tối đa 3, và agent thì thuật lại đúng theo chuỗi đó.
+- `centred` cho biết bước hiệu chỉnh tinh có vào được deadband trên **cả hai trục** hay không.
+  `false` vẫn có nghĩa là **tìm thấy** — chỉ là hướng ngắm bị lệch. Khi trúng, pha quét chạy
+  `aim.centre_on_box` *trước* `_straighten_head_onto` (vật thể chắc chắn đang trong khung từ đúng tư
+  thế đó; làm thẳng đầu trước từng được quan sát trên thiết bị là làm mất dấu), rồi làm thẳng đầu từ
+  đúng chỗ bước hiệu chỉnh để lại đế. Vòng lặp này là hiệu chỉnh yaw của `aim_for_look` cộng với
+  hiệu chỉnh pitch của gaze — `GAZE_PITCH_DEG_PER_FRAME` / `GAZE_PITCH_MAX_STEP_DEG` của gaze, dấu
+  đã kiểm chứng trên thiết bị (box nằm trên tâm thì camera ngẩng **lên**, tức chiều *giảm* của các
+  khớp pitch) và `servo_follow.distribute_pitch` chia cho base/elbow/wrist — phát ra thành một lệnh
+  di chuyển tuyệt đối duy nhất. Trước tất cả những điều này, đầu được hướng tới `yaw + roll`, tức
+  *hướng nhìn* của điểm dừng, để lại một phát hiện ở rìa khung lệch trục ~50° trong khi lệnh gọi
+  vẫn báo là tìm thấy. Mọi lối thoát đi sau một lần di chuyển đều lấy thêm một frame mới
+  (`_final_look`) để kết quả mô tả nơi đèn đang chỉ *lúc này*, chứ không phải frame trước lần di
+  chuyển cuối. Probe là `_sticky_probe`: lấy mọi ứng viên qua `detect_candidates`, ứng viên gần box
+  trước nhất thắng, và một ứng viên **dịch ra xa** tâm ở cùng một phía — hoặc xa hơn mức một bước có
+  thể mang nó đi — là một cá thể khác và bị tính là một lần trượt. Hai bàn phím trên cùng một bàn
+  từng khiến vòng lặp đuổi theo cái nào có điểm cao hơn ở mỗi frame. Vòng lặp **không** chấm điểm
+  bearing đã ghi nhớ; pha quét tìm thấy đồ vật cũng thường xuyên như tìm thấy người, và dạy cho
+  estimator rằng bàn phím là nơi người dùng ngồi chính là cách bearing mục ruỗng một cách âm thầm.
+- `image_path` là frame trúng đích, được ghi vào `media/hal-snapshots` của runtime đang hoạt động —
+  đúng cái pool có giới hạn và xoay vòng mà `/camera/snapshot?save=true` đang dùng (`_SNAPSHOT_MAX`
+  = 20). Frame này có vẽ sẵn box của vật thể phát hiện được, qua
+  `look_debug.encode_annotated(..., centre_lines=False)`: cái box mới là câu trả lời, còn hai đường
+  dx cao hết khung màu xanh/đỏ là phần tính toán nội bộ của aim và sẽ nằm chồng lên nhau ngay giữa
+  một frame đã canh giữa. Frame và box luôn đến từ **cùng một** lần chụp — vẽ box đo trước khi hiệu
+  chỉnh lên frame chụp sau khi hiệu chỉnh sẽ đặt hình chữ nhật nằm cạnh vật thể. Khi vòng lặp canh
+  giữa không lấy được frame nào (không có frame mới, bị abort, nudge lỗi), pha quét lùi về dùng
+  frame đã kích hoạt lần trúng, nhờ vậy một lần tìm thấy luôn có cái để hiển thị. Khi không tìm
+  thấy thì không ghi gì cả: `image_path` là `null`.
+- Đường dẫn này được os-server hiển thị cho người dùng dưới dạng thumbnail; agent không đọc được file JPEG.
 
 Tại mỗi bearing, đế đứng yên và cái đầu đi một vòng nhìn — tâm, trái, vòng qua đáy, ra phải, và (chỉ ở
 chế độ exhaustive) vòng lên trên. Các góc chéo dùng **trọn** roll và **trọn** pitch chứ không phải
@@ -584,6 +646,20 @@ chuyển động cho ảnh nhòe và bộ phát hiện sẽ bỏ sót thứ đan
 Bị hủy bởi nút bấm vật lý giống như pha ngắm, và không bao giờ quét khi camera đang tắt — một pha quét
 là rất nhiều chuyển động lộ liễu để thực hiện khi người dùng vừa yêu cầu thiết bị đừng nhìn.
 
+**Trả body về idle.** Mọi đường ra của lượt quét đều kết thúc bằng `move_and_hold` — hit thì canh
+giữa đối tượng, miss và survey thì `_restore` về pose seed — và `move_and_hold` để body không phát
+gì (`_current_recording = None`, `_idle_settled`), giữ "cho tới lệnh play/emotion/idle kế tiếp".
+Trước đây không ai gửi lệnh đó: trên lamp-ac82 (2026-09-14) "Find my keyboard" canh giữa bàn phím
+rồi đứng yên tới khi restart HAL, đúng dấu hiệu `[preempt] dropped recording 'idle' for a direct
+move` mà gaze đã sửa cho reacquire theo giọng nói. Lượt quét giờ gọi
+`tracking/body.py: release_to_idle_later()` sau khi nhả quyền sở hữu servo: tìm thấy thì giữ hướng
+vào vật trong `HOLD_AFTER_FIND_S` (8 s) để câu trả lời phát trên pose đó, không thấy thì về idle
+ngay. Handback chạy trên daemon timer nên `search_for_subject` vẫn trả kết quả ngay cho lượt đang
+chờ, và chỉ dispatch `play(idle)` khi không ai sở hữu body (tracking, hold mode, zero mode) **và**
+chưa có gì bắt đầu phát từ đó — một emotion trong cửa sổ được để yên; vòng lặp animation tự về
+idle khi nó kết thúc. Lên lịch handback mới sẽ hủy cái trước. Cửa sổ là hằng số cố định, không gắn
+với lúc kết thúc nói: tracking không có hook speak-end để chờ.
+
 > Chưa làm: tín hiệu LED trong lúc quét. Trạng thái LED transient nằm sau các request model của route,
 > nên điều khiển nó từ đây sẽ phải đi vòng qua HTTP loopback (điều codebase này tránh) hoặc nhân bản
 > phần bookkeeping khôi phục — và một tín hiệu không khôi phục được sẽ làm kẹt LED của lamp. Đáng làm
@@ -618,6 +694,25 @@ nhánh này — pha ngắm đã tìm rồi **thất bại** cũng không nói g�
 
 Một lần chụp nhanh, im lặng và đúng vốn đã là kết quả tốt — lời nói chỉ dành cho những khoảnh khắc người
 dùng thực sự phải chờ.
+
+**Hai kiểu một pool im tiếng mà không hề báo lỗi**, cả hai đều đã được sửa tận gốc chứ không né:
+
+- **Một key thiếu trong một ngôn ngữ đã biết** trước đây phân giải ra rỗng. `FillerForTool` chỉ lùi về
+  tiếng Anh khi *ngôn ngữ* không xác định, chứ không bao giờ lùi khi *key* thiếu bên trong một ngôn ngữ
+  đã biết — mà hai map zh lại hoàn toàn không có entry `look_*` nào, nên mọi filler của look trên một
+  thiết bị tiếng Trung đều bị bỏ qua, không log, không lỗi. Giờ cả hai map zh đều có đủ pool, và một
+  key thiếu ở bất kỳ đâu sẽ lùi về tiếng Anh. Một câu tiếng Anh trên thiết bị tiếng Trung là sai,
+  nhưng là cái sai *phát ra thành tiếng*: sẽ có người nghe thấy và báo lại, còn im lặng thì vô hình.
+  `TestEveryPoolIsTranslatedInEveryLanguage` giữ cho cơ chế lùi này không trở thành đường đi mặc định.
+- **Một pool chưa từng được prewarm** sẽ phải render trực tiếp ở nhà cung cấp TTS ngay lần phát đầu
+  (~1–2 s), và đoạn audio trễ đó đua với phần lời nói ngay sau nó — người dùng cảm nhận như filler bị
+  cắt ngang. `PrewarmFillers` trước đây duyệt một danh sách tên tool bảo trì thủ công mà không pool
+  `look_*` nào từng được thêm vào. Giờ nó duyệt `i18n.AllPoolKeys()`, nên một pool mới được phủ sẵn
+  nhờ chính sự tồn tại của nó.
+
+Không kiểu nào trong hai kiểu trên báo gì ở bất kỳ mức log nào: `PlayPoolFillerNow` return ngay tại
+`len(phrases) == 0` còn `POST /api/sensing/filler` thì vẫn trả 200 trong cả hai trường hợp. Một pool
+phân giải ra rỗng đơn giản là một cái đèn không nói gì.
 
 ## Canh khung gaze — giữ user trong khung hình
 

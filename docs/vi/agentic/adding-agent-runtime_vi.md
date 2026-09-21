@@ -184,6 +184,18 @@ trong `migrator.go`; không cần `Direction` enum mới. openclaw, hermes, pico
 codex, claudecode, và opencode đều có adapter, nên mọi cặp migrate được cả 2 chiều. Runtime không có adapter bị
 `CanMigrate` bỏ qua — bộ reconcile lúc boot không migrate tới/từ nó.
 
+Interface `runtimeAdapter` (`migrator.go`) còn có 2 method không liên quan nội
+dung migration, nhưng mọi adapter vẫn phải implement vì các phần khác của hệ
+thống cũng dựa vào cùng interface này:
+
+- `memoryFilePath(opts)` — nơi runtime giữ `MEMORY.md` mà nó load mỗi phiên.
+  Memory guard của OS (`docs/os-server.md`, "Memory guard") quét file này cùng
+  với `userProfilePath(opts)` lúc boot và mỗi lần ghi; runtime thiếu method này
+  sẽ không được guard, đó là lý do nó nằm trên interface chứ không phải một bảng.
+- `workspaceRoot(opts)` — thư mục HAL coi là workspace của runtime
+  (`<root>/realtime/` chứa `summary.md` v.v.). `POST /api/agent/memory/reset`
+  backup rồi xóa memory dưới thư mục này cho mọi runtime đã cài.
+
 Adapter của PicoClaw (`runtime_picoclaw.go`) mirror layout openclaw nhưng đọc/ghi
 `memory/MEMORY.md` (picoclaw để MEMORY.md trong `memory/`, không ở gốc workspace).
 Lưu ý skills chiều VÀO vẫn do presync `picoclaw migrate --workspace-only`
@@ -501,6 +513,8 @@ là no-op idempotent.
 - [ ] `userProfilePath(opts)` trỏ đúng `USER.md` thật của runtime (Hermes để ở
       `memories/`) để reconcile theo enrollment lúc khởi động có thể retire
       profile của người không còn enrollment khuôn mặt/giọng nói (§7).
+- [ ] Adapter implement memoryFilePath + workspaceRoot; chạy
+      `go test ./system/agent/migrate_persona/` (`TestMemoryFilePathsCoverEveryAdapter`).
 - [ ] **People sync** trong block hướng dẫn OS-managed của chính runtime này:
       giữ mục `## Users` trong `USER.md` luôn mới, dạng `- **<label> (friend)**: …`
       khoá theo enrollment label, chỉ thêm/cập nhật, không bao giờ gán chéo người,
@@ -508,6 +522,27 @@ là no-op idempotent.
       có heartbeat loop, CLAUDE.md cho claudecode (không có loop), block SOUL.md
       cho hermes (không loop, không KNOWLEDGE.md).
       `TestEveryRuntimeTeachesThePeopleSync` fail nếu một runtime thiếu nó.
+- [ ] **Soul của device được inject mỗi lần boot**, lấy từ
+      `device.ResolveSoul(deviceType)` (`system/device/soul.go`) — bộ phân giải
+      `soul_ref` dùng chung. Làm trong onboarding, không chỉ trong factory reset,
+      và KHÔNG dựa vào persona migration: migration chép từ runtime TRƯỚC ĐÓ, nên
+      một device boot thẳng vào runtime của bạn không có gì để chép và lên nguồn
+      với persona rỗng. Hermes từng ship như vậy và lamp mất toàn bộ luật định
+      tuyến skill (`[sensing:*]` → `skills/sensing/SKILL.md`) cho tới khi
+      `ensureSoulMDBlock` được thêm.
+- [ ] **Bỏ soul mặc định của chính backend** trước khi giữ phần nằm dưới block
+      của bạn. Đa số backend tự seed lại persona mặc định mỗi khi file prompt của
+      nó biến mất, và presync chạy trước onboarding — nên một máy vừa flash đưa
+      cho bạn cái seed đó chứ không phải file rỗng. Giữ lại thì nó thành persona
+      thứ hai mâu thuẫn với persona thiết bị. Phải kiểm hình dạng trên máy thật:
+      seed của Hermes mở đầu bằng văn xuôi chứ không phải heading, nên
+      `managedDefaultSoulPrefixes` là danh sách prefix, trong khi openclaw chỉ cần
+      `isDefaultSoulHeading`.
+- [ ] **Mỗi block OS-managed một delimiter riêng.** Mọi runtime đều bọc block của
+      mình bằng `<!-- OS DO NOT REMOVE -->`…`---`. Nếu runtime của bạn sở hữu
+      block THỨ HAI trong cùng một file, hãy cho nó marker riêng — dùng chung
+      marker sẽ khiến mỗi bên strip mất block của bên kia. Hermes dính đúng lỗi
+      này: block skill-priority xoá mất persona ở lần boot kế tiếp.
 - [ ] Gate capability qua `skills.Supported` / `SupportedHooks`.
 - [ ] **Kênh (§9):** `SupportedChannels()` khai báo capability thật;
       `AddChannel`/`RefreshChannelConfig` trả `domain.ErrChannelNotSupported` cho

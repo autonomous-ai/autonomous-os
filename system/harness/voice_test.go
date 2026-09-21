@@ -137,37 +137,40 @@ func TestVoiceCallbackBeforeMutationAndDuplicate(t *testing.T) {
 		t.Fatal("duplicate mutation")
 	}
 }
-func TestVoiceUnknownReceiptBlocksThenSendsNewInput(t *testing.T) {
+func TestVoiceUnknownReceiptAllowsNewInputWithoutRetry(t *testing.T) {
 	ctx := context.Background()
 	f := newVoiceFake()
 	v := enableVoice(t, f, VoiceCallbacks{})
 	f.mutationError = &DeliveryUnknownError{Cause: errors.New("timeout")}
-	if e := v.Submit(ctx, "first", "first", v.State().Generation); e == nil {
+	if err := v.Submit(ctx, "first", "first", v.State().Generation); err == nil {
 		t.Fatal("unknown accepted")
 	}
-	pending := v.State().Pending
-	if pending == nil {
+	original := v.State().Pending
+	if original == nil {
 		t.Fatal("missing pending")
 	}
-	f.receiptState = "unknown"
-	if e := v.Submit(ctx, "second", "second", v.State().Generation); e == nil {
-		t.Fatal("pending accepted")
-	}
-	if mutationCount(f) != 1 {
-		t.Fatal("resent")
-	}
-	f.receiptState = "completed"
 	f.mutationError = nil
-	if e := v.Submit(ctx, "third", "third", v.State().Generation); e != nil {
-		t.Fatal(e)
+	f.receiptState = "queued"
+	if err := v.Submit(ctx, "second", "second", v.State().Generation); err != nil {
+		t.Fatal(err)
+	}
+	if err := v.Submit(ctx, "first", "first", v.State().Generation); err != nil {
+		t.Fatal(err)
 	}
 	if mutationCount(f) != 2 {
-		t.Fatal("new input lost after receipt")
+		t.Fatal("old turn retried or new turn lost")
 	}
-	if f.frames[len(f.frames)-1]["text"] != "third" {
-		t.Fatal("wrong input sent")
+	for _, frame := range f.frames {
+		if frame["type"] == "receipt.get" {
+			t.Fatal("new input waited for old receipt")
+		}
+	}
+	last := f.frames[len(f.frames)-1]
+	if last["text"] != "second" || last["idempotencyKey"] == original.IdempotencyKey {
+		t.Fatal("new input reused old mutation")
 	}
 }
+
 func TestVoiceResolveDoesNotRetryAndOffPreservesPending(t *testing.T) {
 	ctx := context.Background()
 	f := newVoiceFake()
@@ -407,7 +410,7 @@ func TestVoiceFocusChangedResponseIsKnownRejection(t *testing.T) {
 	}
 }
 
-func TestVoicePendingKeepsOriginalAgentAcrossFocusChanges(t *testing.T) {
+func TestVoiceNewInputAfterFocusChangeDoesNotResendPending(t *testing.T) {
 	ctx := context.Background()
 	f := newVoiceFake()
 	v := enableVoice(t, f, VoiceCallbacks{})
@@ -424,16 +427,18 @@ func TestVoicePendingKeepsOriginalAgentAcrossFocusChanges(t *testing.T) {
 	if state := v.State(); state.AgentID != "next" || state.Pending == nil || *state.Pending != original {
 		t.Fatalf("pending retargeted: %+v", state)
 	}
-	if err := v.Submit(ctx, "another", "blocked", v.State().Generation); err == nil {
-		t.Fatal("pending allowed mutation")
+	f.receiptState = "queued"
+	if err := v.Submit(ctx, "another", "new-turn", v.State().Generation); err != nil {
+		t.Fatal(err)
 	}
-	if mutationCount(f) != 1 {
-		t.Fatal("new target received unresolved delivery")
+	if mutationCount(f) != 2 {
+		t.Fatal("new input not sent")
 	}
 	last := f.frames[len(f.frames)-1]
-	if last["type"] != "receipt.get" || last["idempotencyKey"] != original.IdempotencyKey {
-		t.Fatalf("wrong receipt: %#v", last)
+	if last["type"] != "turn.send" || last["agentId"] != "next" || last["idempotencyKey"] == original.IdempotencyKey {
+		t.Fatalf("old delivery resent or wrong target: %#v", last)
 	}
+
 }
 
 func TestVoiceConcurrentDuplicateAndDisable(t *testing.T) {

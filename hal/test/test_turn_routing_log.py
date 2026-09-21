@@ -167,3 +167,56 @@ def test_undelivered_command_is_still_marked_as_failed(monkeypatch):
 
     turn_dispatch._note_dispatch_outcome("vi-2", turn_dispatch._NoResult)
     assert failed == [("vi-2", turn_dispatch.voice_metrics.FAIL_DISPATCH_FAILED)]
+
+
+# ─── What the main agent is matched against ──────────────────────────────────
+#
+# The composed sensing message is the ONLY text every SKILL.md trigger is
+# matched on. #342 defect L: the same request reached the lamp as
+# "maximum capability in scanning around" (matched the servo skill, real sweep)
+# and as "movement demonstration … rotation/tilting" (matched nothing, fell
+# through to a canned emotion). Nothing pinned what goes into that text.
+
+
+def _sent_message(rt, combined):
+    sender = _Sender()
+    dispatch_turn(_Decorator(), sender, combined, [], [], rt)
+    assert len(sender.sent) == 1, sender.sent
+    return sender.sent[0][0]
+
+
+def test_the_transcript_survives_next_to_the_paraphrase():
+    """The delegate's message is a PARAPHRASE and skills are matched on
+    vocabulary. Keeping the user's own words in the text is what lets a trigger
+    still fire when the paraphrase has rewritten it."""
+    msg = _sent_message(
+        RealtimeTurnResult(
+            delegated=True,
+            delegate_msg="movement demonstration with rotation and tilting",
+            route=ROUTE_DELEGATED,
+        ),
+        "show me your maximum capability",
+    )
+    assert msg.startswith("[voice-instruction] movement demonstration"), msg
+    assert "\n[transcript] show me your maximum capability" in msg, (
+        "the trigger vocabulary was dropped in favour of the paraphrase")
+
+
+def test_the_paraphrase_alone_is_forwarded_when_there_is_no_transcript():
+    """A tool call can land before local STT finalises; the handoff must not
+    be lost, and no empty `[transcript]` line may be invented."""
+    msg = _sent_message(
+        RealtimeTurnResult(delegated=True, delegate_msg="find my keyboard",
+                           route=ROUTE_DELEGATED),
+        "",
+    )
+    assert msg == "[voice-instruction] find my keyboard"
+
+
+def test_the_transcript_alone_is_forwarded_when_the_delegate_said_nothing():
+    """device-chat-16: no preamble, the raw words reached the skill and matched."""
+    msg = _sent_message(
+        RealtimeTurnResult(delegated=True, delegate_msg="", route=ROUTE_DELEGATED),
+        "Maximum capability",
+    )
+    assert msg == "Maximum capability"

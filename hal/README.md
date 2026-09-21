@@ -17,7 +17,7 @@ make hal-lint                         # broken imports + undefined names
 | `drivers/` | userspace drivers by subsystem — `motors/`, `rgb/`, `camera/`, `voice/` (STT, TTS, VAD), `sensing/`, `tracking/`, `display/`, `media_owner/`, plus GPIO button, TTP223 touch, Bluetooth |
 | `board/` | `boards.json` (per-board wiring, matched against `/proc/device-tree/model`) and the declaration-driven mount planner (`device.py`) |
 | `safety/` | `policy.py` — `SAFETY.md` parsed into pure gate functions |
-| `realtime/` | the realtime voice agent (Gemini Live, OpenAI Realtime, Qwen) that answers small talk and delegates the rest to the brain |
+| `realtime/` | the realtime voice agent (Gemini Live, OpenAI Realtime, GPT-Live) that answers small talk and delegates the rest to the brain |
 | `recordings/`, `calibration/` | the 32 teleop-recorded servo animations and the per-unit calibration story |
 
 How it fits the rest of the OS: [`docs/architecture/hal.md`](../docs/architecture/hal.md) ·

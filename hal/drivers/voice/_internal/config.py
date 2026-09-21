@@ -149,20 +149,14 @@ STT_KEEPALIVE = os.environ.get("HAL_STT_KEEPALIVE", "false").lower() == "true"
 STT_KEEPALIVE_PING_S = float(os.environ.get("HAL_STT_KEEPALIVE_PING_S", "3"))
 
 # ---------------------------------------------------------------------------
-# Speaker-ID prepass — how long the turn may wait for it before committing
+# Speaker-ID prepass — bounded waits before commit and downstream dispatch
 # ---------------------------------------------------------------------------
-# The prepass is an external embedding call (measured 1.49s on lamp-0c89,
-# 03/09/2026) and it used to run STRICTLY BEFORE the realtime turn opened, so
-# its whole round trip sat in front of the Gemini connect and the audio flush —
-# dead time between the user finishing a sentence and the model hearing it. It
-# now runs on its own thread while that connect happens, and the turn joins it
-# here, just before the point where the speaker's name is actually needed.
-#
-# The wait is a ceiling, not a delay: a prepass that finished during the connect
-# costs nothing. Reaching the ceiling only means this turn's [TURN CONTEXT] goes
-# out with the speaker unresolved — the same thing the always-listening path has
-# always done, and the late-correction path already covers it.
+# Recognition runs in the background. Turn-based realtime gives it only the
+# short COMMIT budget before sending activityEnd; the normal JOIN budget is
+# retained before downstream dispatch and for live/non-realtime paths.
 SPEAKER_PREPASS_JOIN_S = float(os.environ.get("HAL_SPEAKER_PREPASS_JOIN_S", "2.0"))
+# Brief pre-commit opportunity; the remaining identity work overlaps the reply.
+SPEAKER_PREPASS_COMMIT_JOIN_S = float(os.environ.get("HAL_SPEAKER_PREPASS_COMMIT_JOIN_S", "0.2"))
 
 # How long a resolved speaker identity is reused instead of re-running the
 # recognizer. The prepass is an external inference call on every turn — a
@@ -272,7 +266,8 @@ LIVE_UPLINK_DURING_PLAYBACK = os.environ.get(
     "HAL_LIVE_UPLINK_DURING_PLAYBACK", "mute"
 ).strip().lower()
 
-# How long after the last reference write the room still counts as "playing".
+# How long after the last reference write or observed TTS end the room still
+# counts as "playing", including when AEC is unavailable.
 # The ACOUSTIC tail, deliberately not AEC_TAIL_S (2.0s): keyed on the longer
 # one, "mute" swallows the first two seconds of every reply the user gives.
 LIVE_PLAYBACK_TAIL_S = float(os.environ.get("HAL_LIVE_PLAYBACK_TAIL_S", "0.35"))
@@ -287,6 +282,15 @@ LIVE_PLAYBACK_TAIL_S = float(os.environ.get("HAL_LIVE_PLAYBACK_TAIL_S", "0.35"))
 # the window runs from whichever came later, the user's last words or the moment
 # the device stopped talking.
 LIVE_IDLE_HANGUP_S = float(os.environ.get("HAL_LIVE_IDLE_HANGUP_S", "15"))
+# What counts as "the user said something" for that window. The local gate
+# (RMS + Silero) confirms that SOMEONE spoke near the mic, which held a GPT-Live
+# session open for two minutes of room chatter the model never transcribed
+# (lamp-ee17, 2026-09-17). With this on, only speech the provider actually
+# transcribed (a UserSpeechOutput carrying text) refreshes the clock; the local
+# gate still resets the unprompted-reply counter. Off = the local gate alone.
+LIVE_IDLE_REQUIRES_TRANSCRIPT = os.environ.get(
+    "HAL_LIVE_IDLE_REQUIRES_TRANSCRIPT", "true"
+).strip().lower() in ("1", "true", "yes")
 
 # Hard ceiling on a model that has started answering ITSELF, counted in REPLIES rather than seconds.
 LIVE_MAX_UNPROMPTED_REPLIES = int(

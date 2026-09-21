@@ -33,7 +33,9 @@ export interface Turn {
   sessionBreak?: boolean;
   endTime?: string;
   type: string;
-  path: "local" | "agent" | "harness" | "dropped" | "queued" | "unknown";
+  // Observed wake classification; independent of routing and event type.
+  voiceTurnType?: "voice" | "voice_command" | "voice_followup";
+  path: "local" | "agent" | "harness" | "realtime" | "dropped" | "queued" | "unknown";
   status: "active" | "done" | "error";
   events: DisplayEvent[];
   queuedForMs?: number;
@@ -129,6 +131,7 @@ export const FLOW_NODES: FlowNodeDef[] = [
       "chat_response",
       "flow_event:lifecycle_end",
       "flow_event:harness_response",
+      "flow_event:realtime_response",
       "flow_event:no_reply",
       "hw_only_reply", "flow_event:hw_only_reply",
     ] },
@@ -166,6 +169,7 @@ export const FLOW_NODES: FlowNodeDef[] = [
       "flow_event:tts_muted",
       "flow_event:tts_cancelled",
       "flow_event:hw_cancelled",
+      "flow_event:hw_failed",
       "hw_emotion", "flow_event:hw_emotion",
       "hw_led", "flow_event:hw_led",
       "hw_servo", "flow_event:hw_servo",
@@ -300,7 +304,7 @@ import {
 } from "lucide-react";
 
 export const TYPE_LUCIDE: Record<string, LucideIcon> = {
-  voice: Mic, voice_command: Mic2, voice_agent_handled: Mic, sound: Volume2,
+  voice: Mic, voice_command: Mic2, voice_followup: Mic, voice_agent_handled: Mic, voice_command_handled: Mic2, voice_followup_handled: Mic, sound: Volume2,
   motion: Eye, "motion.activity": Activity,
   "presence.enter": Smile, "presence.leave": Hand, "presence.away": Moon,
   "light.level": Sun, "emotion.detected": Smile,
@@ -326,7 +330,7 @@ export const TYPE_LUCIDE: Record<string, LucideIcon> = {
 
 // Short display label per turn sub-type, used by the filter sub-type chips.
 export const TYPE_LABEL: Record<string, string> = {
-  voice: "voice", voice_command: "cmd", voice_agent_handled: "handled", sound: "sound",
+  voice: "voice", voice_command: "cmd", voice_followup: "followup", voice_agent_handled: "handled", voice_command_handled: "voice_command_handled", voice_followup_handled: "voice_followup_handled", sound: "sound",
   motion: "motion", "motion.activity": "activity", "emotion.detected": "emotion",
   "speech_emotion": "voice_emo", "speech_emotion.detected": "voice_emo",
   "pose.ergo_risk": "posture", "presence.enter": "enter", "presence.leave": "leave",

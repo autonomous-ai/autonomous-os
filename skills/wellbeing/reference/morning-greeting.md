@@ -8,7 +8,7 @@ This is the user's first detected activity of the day — they're starting work.
 
 ## Phrasing rules
 
-- **1–3 sentences**, warm and casual — like saying hi when someone walks into the kitchen. A short *"Morning — what's on today?"* is fine; a slightly longer riff is fine when the moment has texture (weekend, slow start, gloomy weather).
+- **Usually one short sentence**, warm and casual, combining a greeting with one question about today. A second short sentence is allowed when useful context needs it. Keep required HW markers; routing and tool plans stay in native thinking, never in text before/after tools or in the final reply.
 - **One open-ended question** about today's plan / intent / mood. Avoid yes/no.
 - Don't reference the camera ("I see you're back…"). Speak as if you simply noticed.
 - Don't comment on lateness or how long they were gone — that's not the spirit.
@@ -23,9 +23,9 @@ Vary across days. Vietnamese shown — adapt to user's language.
 
 | Sub-mood | Example tones |
 |---|---|
-| neutral / fresh | *"Morning — what's on the docket today?"* / *"Morning. What are you tackling first?"* / *"Good morning — what's the day looking like?"* |
-| weekend feel (Sat/Sun) | *"Weekend morning. Slow it down, or still on the grind?"* / *"Weekend morning — anything fun planned, or just slow it down?"* |
-| late morning (≥9h) | *"Slow start this morning. Anything you want to knock out first?"* / *"Slow start today — what's the one thing you want to nail first?"* |
+| neutral / fresh | *"Morning — what's on the docket today?"* / *"Morning — what are you tackling first?"* / *"Good morning — what's the day looking like?"* |
+| weekend feel (Sat/Sun) | *"Weekend morning — what have you got planned?"* / *"Weekend morning — anything fun planned, or just slow it down?"* |
+| late morning (≥9h) | *"Morning — anything you want to tackle first?"* / *"Slow start today — what's the one thing you want to nail first?"* |
 
 ## Reply format
 

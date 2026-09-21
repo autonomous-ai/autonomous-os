@@ -210,8 +210,9 @@ BUDDY_ARCH ?= $(shell node -p process.arch)
 BUDDY_ARCHS ?= arm64 x64
 UNIFIED_APP := $(DESKTOP_DIR)/artifacts/package/Autonomous Buddy-darwin-$(BUDDY_ARCH)/Autonomous Buddy.app
 UNIFIED_DMG := $(DIST_DIR)/Autonomous-Buddy-$(VERSION)-$(BUDDY_ARCH).dmg
+UNIFIED_ZIP := $(DIST_DIR)/Autonomous-Buddy-$(VERSION)-$(BUDDY_ARCH).zip
 UNIFIED_DMG_STAGE := $(DIST_DIR)/dmg-stage-$(BUDDY_ARCH)
-.PHONY: build install app open run check all dmg dmg-arch app-signed dmg-signed notarize notarize-arch
+.PHONY: build install app open run check all dmg dmg-arch app-signed dmg-signed notarize notarize-arch update-zip
 
 build: ## Build Electron + Swift and package one Autonomous Buddy.app (current Mac architecture)
 	$(MAKE) -C $(DESKTOP_DIR) build DEV_ID_APP="$(DEV_ID_APP)" BUDDY_ARCH="$(BUDDY_ARCH)"
@@ -269,3 +270,8 @@ notarize-arch: ## Explicitly notarize one existing BUDDY_ARCH DMG
 	xcrun stapler staple "$(UNIFIED_DMG)"
 	xcrun stapler validate "$(UNIFIED_DMG)"
 	spctl --assess --type open --context context:primary-signature --verbose=4 "$(UNIFIED_DMG)"
+
+update-zip: ## Create and verify an updater ZIP from an existing notarized BUDDY_ARCH DMG (no rebuild)
+	xcrun stapler validate "$(UNIFIED_DMG)"
+	spctl --assess --type open --context context:primary-signature "$(UNIFIED_DMG)"
+	node "$(DESKTOP_DIR)/scripts/package-update.mjs" "$(UNIFIED_DMG)" "$(UNIFIED_ZIP)" "$(VERSION)" "$(BUDDY_ARCH)"

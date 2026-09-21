@@ -21,7 +21,12 @@ import (
 )
 
 type Frame map[string]any
-type Callbacks struct{ OnEvent func(Frame) }
+type Callbacks struct {
+	OnEvent func(Frame)
+	// OnRevoked runs after the paired computer revoked this device and the pin
+	// was removed (same cleanup as a local unpair, e.g. disable Harness voice).
+	OnRevoked func()
+}
 type Status struct {
 	Code             string   `json:"code,omitempty"`
 	ExpiresAt        int64    `json:"expires_at,omitempty"`
@@ -111,7 +116,7 @@ type Service struct {
 	statusChanges chan struct{}
 }
 
-var capabilities = []string{"focus.ensure", "focus.get", "agents.list", "turn.send", "turn.stop", "status", "recap", "question.answer", "receipt.get"}
+var capabilities = []string{"focus.ensure", "focus.get", "focus.step", "agents.list", "turn.send", "turn.stop", "status", "recap", "question.answer", "receipt.get"}
 
 func NewService(dataDir string, callbacks Callbacks) (*Service, error) {
 	s := &Service{path: filepath.Join(dataDir, "harness", "trust.json"), callbacks: callbacks, ctx: context.Background(), sockets: make(map[*DirectChannel]bool), events: make(chan Frame, 128), statusChanges: make(chan struct{}, 1), status: Status{State: "unpaired", Capabilities: []string{}}}
@@ -327,7 +332,7 @@ func (s *Service) CancelPair() error {
 }
 
 func mutation(kind string) bool {
-	return kind == "turn.send" || kind == "turn.stop" || kind == "question.answer"
+	return kind == "turn.send" || kind == "turn.stop" || kind == "question.answer" || kind == "focus.step"
 }
 
 // Request sends exactly once. The caller owns stable idempotency keys for mutations.
@@ -353,7 +358,7 @@ func (s *Service) Request(ctx context.Context, frame Frame) (Frame, error) {
 	for k, v := range frame {
 		f[k] = v
 	}
-	if kind != "focus.ensure" && kind != "focus.get" && kind != "agents.list" && kind != "receipt.get" {
+	if kind != "focus.ensure" && kind != "focus.get" && kind != "focus.step" && kind != "agents.list" && kind != "receipt.get" {
 		if stringField(f, "machineId") != machine {
 			return nil, errors.New("MACHINE_MISMATCH")
 		}
@@ -510,6 +515,10 @@ func (s *Service) readLoop(c *connection) error {
 			return err
 		}
 		kind := stringField(outer, "type")
+		// The CLI seals pair.revoke as an autonomous_device_event payload.
+		if kind == "pair.revoke" || stringField(payloadOf(outer), "type") == "pair.revoke" {
+			return ErrRevoked
+		}
 		if kind == "autonomous_device_result" {
 			frame := payloadOf(outer)
 			id := stringField(frame, "requestId")
@@ -797,6 +806,9 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	connection, welcome, err := s.handshake(lifetime, channel, pinned)
 	if err != nil {
+		if errors.Is(err, ErrRevoked) {
+			s.revokedByComputer(generation)
+		}
 		return
 	}
 	s.mu.Lock()
@@ -852,4 +864,25 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.statusChangedLocked()
 	}
 	s.mu.Unlock()
+	if errors.Is(err, ErrRevoked) {
+		s.revokedByComputer(generation)
+	}
+}
+
+// revokedByComputer removes the pin after the paired computer rejected or
+// revoked this device. generation guards against a local unpair/re-pair that
+// raced with the revoke; s.conn is already nil here so Unpair sends no echo.
+func (s *Service) revokedByComputer(generation uint64) {
+	s.mu.Lock()
+	stale := s.generation != generation || s.disk.Peer == nil
+	s.mu.Unlock()
+	if stale {
+		return
+	}
+	if err := s.Unpair(); err != nil {
+		return
+	}
+	if s.callbacks.OnRevoked != nil {
+		s.callbacks.OnRevoked()
+	}
 }

@@ -9,11 +9,11 @@ import hal.config as app_config
 from hal.realtime.enums import (
     GeminiThinkingLevel,
     GeminiVoice,
+    GPTLiveVoice,
     OpenAIReasoningEffort,
     OpenAITruncationType,
     OpenAITurnDetectionType,
     OpenAIVoice,
-    QwenVoice,
 )
 
 
@@ -85,21 +85,100 @@ class OpenAIConfig(BaseModel):
     )
     truncation_type: OpenAITruncationType = OpenAITruncationType.RETENTION_RATIO
     truncation_retention_ratio: float = 0.5
+    transcribe_model: str = app_config.REALTIME_OPENAI_TRANSCRIBE_MODEL
+    noise_reduction: str = app_config.REALTIME_OPENAI_NOISE_REDUCTION
+    # Server VAD knobs — the same HAL_LIVE_VAD_* settings Gemini reads, mapped
+    # onto server_vad threshold / prefix_padding_ms / silence_duration_ms and
+    # semantic_vad eagerness (see OpenAIRealtimeAgent._turn_detection).
+    vad_threshold: float = app_config.REALTIME_OPENAI_VAD_THRESHOLD
+    vad_start_sensitivity: str = app_config.LIVE_VAD_START_SENSITIVITY
+    vad_end_sensitivity: str = app_config.LIVE_VAD_END_SENSITIVITY
+    vad_prefix_padding_ms: int = app_config.LIVE_VAD_PREFIX_PADDING_MS
+    vad_silence_ms: int = app_config.LIVE_VAD_SILENCE_MS
     max_retries: int = 1
     reconnect_delay_s: float = 2.0
+    queue_poll_s: float = 1.0
+    # How long a commit / tool result waits for the active response to finish
+    # before forcing response.create anyway.
+    response_wait_s: float = 10.0
 
 
-class QwenConfig(BaseModel):
-    api_key: str = app_config.REALTIME_QWEN_API_KEY
-    base_url: str = app_config.REALTIME_QWEN_BASE_URL
-    model: str = app_config.REALTIME_QWEN_MODEL
-    voice: QwenVoice = QwenVoice(app_config.REALTIME_QWEN_VOICE)
+class GPTLiveConfig(BaseModel):
+    api_key: str = app_config.REALTIME_GPTLIVE_API_KEY
+    # Shared with OpenAI Realtime by default (see REALTIME_GPTLIVE_BASE_URL);
+    # the SDK derives wss://…/live/sessions from it.
+    base_url: str | None = app_config.REALTIME_GPTLIVE_BASE_URL or None
+    model: str = app_config.REALTIME_GPTLIVE_MODEL
+    voice: GPTLiveVoice = GPTLiveVoice(app_config.REALTIME_GPTLIVE_VOICE)
     instructions: str = ""
-    sample_rate: int = app_config.REALTIME_QWEN_SAMPLE_RATE
+    sample_rate: int = app_config.REALTIME_GPTLIVE_SAMPLE_RATE
     language: str | None = _load_language()
-    search_enabled: bool = app_config.REALTIME_QWEN_SEARCH
+    turn_gap_ms: int = app_config.REALTIME_GPTLIVE_TURN_GAP_MS
+    interrupt_gap_ms: int = app_config.REALTIME_GPTLIVE_INTERRUPT_GAP_MS
+    input_gap_ms: int = app_config.REALTIME_GPTLIVE_INPUT_GAP_MS
+    commit_silence_ms: int = app_config.REALTIME_GPTLIVE_COMMIT_SILENCE_MS
+    delegation_wait_ms: int = app_config.REALTIME_GPTLIVE_DELEGATION_WAIT_MS
+    output_silence_dbfs: float = app_config.REALTIME_GPTLIVE_OUTPUT_SILENCE_DBFS
+    delegation: str = app_config.REALTIME_GPTLIVE_DELEGATION  # client | responses | auto
+    web_search: bool = app_config.REALTIME_GPTLIVE_WEB_SEARCH
+    backend_model: str = app_config.REALTIME_GPTLIVE_BACKEND_MODEL
+
+    @property
+    def responses_mode(self) -> bool:
+        """Effective delegation owner: the Responses backend or this process."""
+        if self.delegation == "responses":
+            return True
+        if self.delegation == "client":
+            return False
+        return self.web_search
     max_retries: int = 1
     reconnect_delay_s: float = 2.0
+    queue_poll_s: float = 1.0
+    # How long a send waits for `session.started` before giving up on the
+    # command (audio appended before the session is up is rejected).
+    start_timeout_s: float = 10.0
+    # Graceful close: how long to keep reading for `session.closed` after
+    # sending `session.close`, so the relay can confirm the final usage.
+    close_timeout_s: float = 5.0
+    join_timeout_s: float = 5.0
+
+
+class PipecatV1Config(BaseModel):
+    """On-device Pipecat pipeline (voice_agent/pipecat_v1.py). Text out only —
+    no voice field: HAL's TTS speaks the reply."""
+
+    api_key: str = app_config.REALTIME_PIPECAT_API_KEY
+    base_url: str | None = app_config.REALTIME_PIPECAT_BASE_URL or None
+    model: str = app_config.REALTIME_PIPECAT_MODEL
+    instructions: str = ""
+    sample_rate: int = app_config.REALTIME_PIPECAT_SAMPLE_RATE
+    language: str | None = _load_language()
+    temperature: float = app_config.REALTIME_PIPECAT_TEMPERATURE
+    max_tokens: int = app_config.REALTIME_PIPECAT_MAX_TOKENS
+    disable_thinking: bool = app_config.REALTIME_PIPECAT_DISABLE_THINKING
+    # STT fallback credentials (the injected VoiceService provider wins).
+    stt_api_key: str = app_config.REALTIME_PIPECAT_STT_API_KEY
+    stt_base_url: str = app_config.REALTIME_PIPECAT_STT_BASE_URL
+    stt_model: str = app_config.REALTIME_PIPECAT_STT_MODEL
+    # Live-mode turn detection (ignored on the turn-based path, where HAL's
+    # own VAD brackets the utterance and commit ends it).
+    smart_turn: bool = app_config.REALTIME_PIPECAT_SMART_TURN
+    smart_turn_stop_secs: float = app_config.REALTIME_PIPECAT_SMART_TURN_STOP_SECS
+    vad_confidence: float = app_config.REALTIME_PIPECAT_VAD_CONFIDENCE
+    vad_start_secs: float = app_config.REALTIME_PIPECAT_VAD_START_SECS
+    vad_stop_secs: float = app_config.REALTIME_PIPECAT_VAD_STOP_SECS
+    vad_min_volume: float = app_config.REALTIME_PIPECAT_VAD_MIN_VOLUME
+    silence_timeout_s: float = app_config.REALTIME_PIPECAT_SILENCE_TIMEOUT_S
+    min_words: int = app_config.REALTIME_PIPECAT_MIN_WORDS
+    turn_stop_timeout_s: float = app_config.REALTIME_PIPECAT_TURN_STOP_TIMEOUT_S
+    tool_result_timeout_s: float = app_config.REALTIME_PIPECAT_TOOL_RESULT_TIMEOUT_S
+    max_retries: int = 1
+    reconnect_delay_s: float = 2.0
+    queue_poll_s: float = 1.0
+    # Pipeline build + StartFrame must land within this; else "unavailable".
+    # Loading Silero + Smart Turn ONNX took ~12 s on lamp-ee17 (A55) cold.
+    start_timeout_s: float = 60.0
+    join_timeout_s: float = 5.0
 
 
 class GeminiConfig(BaseModel):

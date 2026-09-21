@@ -388,6 +388,13 @@ The bearing restore in priority 3 is the exception, and it is safe for a specifi
 wrong. That is what lets a head left pointing at the floor recover its height — with yaw-only
 correction it would sweep the floor in a circle no matter how right the direction was.
 
+An aim that moved the head parks it the same way the search does (`nudge` and the bearing restore
+both end in `move_and_hold`), so `aim_for_look` schedules the same
+`release_to_idle_later(HOLD_AFTER_FIND_S)` from its result builder whenever `iterations` or
+`bearing_steps` is non-zero — see *Handing the body back* under the search sweep for the guards.
+Gaze usually retakes the body once a face is back in frame, which is why the freeze was less
+visible here; without a face it stuck exactly like the search.
+
 **Priority order:**
 
 1. **Person visible** → centre it. Person box preferred over the face box: a held-up object often
@@ -501,7 +508,14 @@ Distinct from the look-aim and still kept off the capture path: the aim runs ins
 a deadline, and a sweep takes seconds. What changed is that "affordable" now includes two cases the
 lamp decides for itself. A sweep is entered when:
 
-- the user asks outright — *"where are you?"*, *"can you find me?"* (`skills/servo-control`)
+- the user asks outright — *"where are you?"*, *"can you find me?"*, *"find my keyboard"*
+  (`skills/servo-control`). This one is a **blocking curl inside the turn**, not a
+  `[HW:/servo/search:...]` marker. Markers fire after the reply text is already written, so a
+  marker-driven search finishes into a turn that has ended: the lamp sweeps, finds the thing, and
+  the answer goes nowhere. It is also a 40 s call against `fireHWCall`'s 5 s client, which used to
+  abandon the request before reaching its own `flow.Log` — so the sweep did not even appear in the
+  Monitor. The agent waits for the body and answers from it, the way `/api/vision/look` already
+  works.
 - they accept an offer after a failed look — *"I can't see it. Want me to look around?"*
 - **the look-aim is about to give up** — before `look_lost` claims *"I can't find you"*, which until
   now it said having only turned toward a remembered bearing. A bearing is a guess about where
@@ -519,10 +533,58 @@ lamp decides for itself. A sweep is entered when:
   fallback; any other noun goes to the same YOLOv8n/YOLOWorld chain `/servo/track` uses. Before this
   the target was accepted by the function and dropped on the floor — every sweep looked for a person,
   so "look around for my keyboard" ended at the first bystander.
-- `exhaustive` defaults to `false`, which returns at the first sighting — right for "where are you?".
-  `true` walks the whole ring at every bearing and reports the number of sightings.
+- `exhaustive` defaults to `false`, which returns at the first sighting — right for "where are you?"
+  and for every object search. `true` is a **survey of people**: it walks the whole ring at every
+  bearing (the only mode that looks above the horizon), counts sightings and returns home. It is
+  **ignored for an object target** and logged as such: an agent that passed it for "find my doll"
+  got a lamp that saw the doll five times, went home, and reported a find with no picture. A
+  search for a thing always stops at the first sighting, centres on it and stays there.
 - Coverage is `bearings x looks per bearing`: 3 x 6 = **18 looks** normally, 3 x 9 = **27**
   exhaustive. Budget roughly **2 seconds per look**.
+
+The response is a structured body, not one prose string:
+
+```json
+{"status": "ok",
+ "message": "found keyboard at yaw +85 after 7 look(s) across 2 bearing(s)",
+ "found": true, "target": "keyboard", "kind": "keyboard",
+ "found_at_yaw": 85.0, "found_at_roll": -45.0, "centred": true,
+ "image_path": "/root/.codex/media/hal-snapshots/snap_1757500000000.jpg",
+ "looks_visited": 7, "bearings_visited": 2}
+```
+
+- `looks_visited` counts LOOKS and `bearings_visited` counts base positions. They are different
+  quantities and are reported apart: the field was once called `stops_visited`, counted looks, and
+  was rendered as `"after N stop(s)"` against `MAX_STOPS = 3` — so an exhaustive sweep truthfully
+  reported "after 27 stop(s)" out of a possible 3, and the agent narrated from that string.
+- `centred` says whether the fine correction reached the deadband on **both axes**. `false` still
+  means **found** — the aim is simply off. On a hit the sweep runs `aim.centre_on_box` *before*
+  `_straighten_head_onto` (the object is proven in view from that pose; straightening first was
+  device-observed to cost the find), then straightens from wherever the correction left the base.
+  The loop is `aim_for_look`'s yaw correction plus gaze's pitch correction — gaze's
+  `GAZE_PITCH_DEG_PER_FRAME` / `GAZE_PITCH_MAX_STEP_DEG`, its device-verified sign (a box above
+  centre tilts the camera **up**, which is the *decreasing* direction on the pitch joints) and
+  `servo_follow.distribute_pitch` across base/elbow/wrist — issued as one absolute move. Before any
+  of this the head was pointed at `yaw + roll`, the look *direction* of the stop, leaving an edge
+  detection ~50° off-axis while the call reported a find. Every exit that follows a move takes one
+  more fresh frame (`_final_look`) so the result describes where the lamp points *now*, not the
+  frame from before its last move. The probe is `_sticky_probe`: all candidates via
+  `detect_candidates`, nearest to the previous box wins, and a candidate that moved **away** from
+  centre on the same side — or further than one step could carry it — is another instance and
+  counts as a miss. Two keyboards on one desk used to have the loop chase whichever scored higher
+  each frame. The loop does **not** score the remembered bearing; a sweep finds an object as often
+  as a person, and teaching the estimator that a keyboard is where the user sits is how the bearing
+  quietly rots.
+- `image_path` is the winning frame, written into the active runtime's `media/hal-snapshots` — the
+  same capped, rotated pool `/camera/snapshot?save=true` uses (`_SNAPSHOT_MAX` = 20). It carries the
+  detection box drawn on it, via `look_debug.encode_annotated(..., centre_lines=False)`: the box is
+  the answer, while the green/red full-height dx lines are the aim's working and would land on top
+  of each other in the middle of a centred frame. The frame and the box always come from the **same**
+  grab — drawing a pre-correction box on a post-correction frame puts the rectangle beside the object.
+  When the centring loop never got a frame (no fresh frame, an abort, a failed nudge) the sweep falls
+  back to the frame that triggered the hit, so a find always has something to show. A miss writes
+  nothing: `image_path` is `null`.
+- The path is surfaced to the user as a thumbnail by os-server; the agent cannot read the JPEG.
 
 At each bearing the base holds still and the head walks a ring of looks — centre, left, round the
 bottom, out to the right, and (exhaustive only) over the top. The corners go to **full** roll and
@@ -587,6 +649,21 @@ frame is read, since a moving head yields a blurred frame and a detector that mi
 Aborted by the physical button like the aim, and it never sweeps while the camera is disabled — a
 search is a lot of conspicuous movement to perform when the user has asked the device not to look.
 
+**Handing the body back.** Every exit of the sweep ends in `move_and_hold` — the hit centres on
+the subject, a miss and a survey `_restore` the seed pose — and `move_and_hold` leaves the body
+with nothing playing (`_current_recording = None`, `_idle_settled`), held "until the next
+play/emotion/idle command". Nobody used to issue that command: on lamp-ac82 (2026-09-14) "Find my
+keyboard" centred on the keyboard and stayed there until a HAL restart, the same
+`[preempt] dropped recording 'idle' for a direct move` signature gaze had already fixed for its
+speech reacquire. The sweep now calls `tracking/body.py: release_to_idle_later()` after it
+releases servo ownership: a find keeps pointing at the object for `HOLD_AFTER_FIND_S` (8 s) so the
+reply plays over the pose, a miss goes back to idle at once. The handback runs on a daemon timer
+so `search_for_subject` still returns immediately to the turn waiting on it, and it dispatches
+`play(idle)` only if nothing owns the body (tracking, hold mode, zero mode) **and** nothing has
+started playing since — an emotion inside the window is left alone; the animation loop returns to
+idle by itself when it ends. Scheduling a new handback cancels the previous one. The window is a
+fixed constant, not tied to the end of speech: tracking has no speak-end hook to wait on.
+
 > Not built: an LED cue while sweeping. Transient LED state lives behind the route request models, so
 > driving it from here would mean HTTP loopback (which this codebase avoids) or duplicating the
 > restore bookkeeping — and a cue that fails to restore would strand the lamp's LED. Worth doing
@@ -621,6 +698,24 @@ wrong until this branch — neither does an aim that searched and **failed**, wh
 
 A fast, silent, correct capture is already the good outcome — speech is reserved for the moments the
 user is genuinely left waiting.
+
+**Two ways a pool goes quiet without failing**, both fixed rather than worked around:
+
+- **A key missing from a known language** used to resolve to nothing. `FillerForTool` fell back to
+  English only for an unknown *language*, never for a missing *key* inside a known one — and the zh
+  maps carried no `look_*` entries at all, so every look filler on a Chinese device was dropped with
+  no log line and no error. Both zh maps now carry the pools, and a key missing anywhere falls back
+  to English. An English phrase on a Chinese device is wrong, but wrong *out loud*: somebody hears it
+  and reports it, where silence is invisible. `TestEveryPoolIsTranslatedInEveryLanguage` keeps the
+  fallback from becoming the normal path.
+- **A pool that was never prewarmed** renders live at the TTS provider on its first fire (~1–2 s) and
+  the late audio races the speech after it — which the user perceives as the filler being cut off.
+  `PrewarmFillers` used to walk a hand-maintained list of tool names that no `look_*` pool was ever
+  added to. It now enumerates `i18n.AllPoolKeys()`, so a new pool is covered by existing.
+
+Neither failure mode reports anything at any level: `PlayPoolFillerNow` returns at `len(phrases) == 0`
+and `POST /api/sensing/filler` answers 200 either way. A pool that resolves empty is a lamp that
+simply does not speak.
 
 ## Gaze framing — keeping the user in shot
 

@@ -289,6 +289,18 @@ _thinking_cue_active: bool = False
 # Fires release_servos after sleepy stays active continuously. Cancelled
 # the moment the emotion changes away from sleepy (see routes/emotion.py).
 _sleepy_release_timer: Optional[threading.Timer] = None
+# Speaker drain for sleepy. os-server POSTs the reply text ~100ms after the
+# `sleepy` marker (fireHWCallsSync's budget) and HAL takes about as long to
+# reach _finalize_sleepy_peripherals, so muting there swallowed the
+# going-to-sleep line more often than not.
+SLEEPY_SPEAKER_GRACE_S = 2.0       # wait this long for an announcement to START
+SLEEPY_SPEAKER_DRAIN_MAX_S = 15.0  # hard cap on the whole drain
+_SLEEPY_DRAIN_POLL_S = 0.1
+_sleepy_drain_cancel: Optional[threading.Event] = None
+# Same drain for scenes with speaker "off": the /scene marker lands before the
+# reply text, so an inline mute swallowed the scene's own line. Sleepy takes
+# the drain over when both arrive in one reply.
+_scene_drain_cancel: Optional[threading.Event] = None
 # Fires idle again after a still emotion (a preset with servo=None) halted the
 # animation loop, so the body never stays frozen once the moment has passed.
 # Cancelled on every /emotion (see routes/emotion.py).
@@ -566,6 +578,84 @@ def _persist_sleep_state():
     )
 
 
+def _prune_sleep_log():
+    """Drop journal days past the retention window. Cheap to run inline: a
+    device produces a handful of transitions a day, so this lists one small
+    directory a few times per day, not per turn.
+
+    Swallows its own failures rather than letting them surface as the caller's:
+    an un-prunable old file is a disk-space question, not a reason to report
+    that a transition went unrecorded when it did not.
+    """
+    try:
+        cutoff = time.time() - config.SLEEP_LOG_MAX_DAYS * 86400
+        for name in os.listdir(config.SLEEP_LOG_DIR):
+            if not name.endswith(".jsonl"):
+                continue
+            path = os.path.join(config.SLEEP_LOG_DIR, name)
+            try:
+                if os.stat(path).st_mtime < cutoff:
+                    os.unlink(path)
+            except OSError:
+                continue
+    except Exception as e:
+        logger.warning("Sleep journal prune failed: %s", e)
+
+
+def _log_sleep_transition(event: str, emotion: str, source: str):
+    """Append one sleep/wake transition to today's journal.
+
+    The sleep sidecar cannot answer "how many times have I slept": it holds a
+    single record, every transition overwrites it, and a reboot deletes it. So
+    the device had no way to know it had ever slept -- the agent asked and got
+    nothing, because nothing was ever written down.
+
+    Called from the ONE place every route into and out of sleep converges,
+    routes/emotion.py, so the physical button is recorded as faithfully as an
+    agent's marker. That matters: os-server's flow events only see transitions
+    it fired itself, which is roughly half of them, and the half they miss is
+    the half a person caused by hand.
+
+    Never raises. A journal that cannot be written is worth strictly less than
+    the sleep it describes, so a failure here logs and lets sleep proceed.
+    """
+    import json
+
+    from hal.clock import device_fromtimestamp, device_timezone
+
+    try:
+        os.makedirs(config.SLEEP_LOG_DIR, exist_ok=True)
+        ts = time.time()
+        # Local wall-clock, resolved through hal.clock so it follows the CURRENT
+        # /etc/timezone -- the agent and the web UI can both change the zone at
+        # runtime, and datetime.now() would keep the one glibc cached when HAL
+        # started. `local` is the field a reader actually wants; `ts` stays as
+        # the ordering key and the only value safe to subtract across a zone
+        # change. `tz` names the zone so a row can be re-read years later, and
+        # is empty exactly when the zone could not be resolved and the device
+        # fell back to naive local time -- a wrong clock then shows up in the
+        # data instead of hiding in it.
+        when = device_fromtimestamp(ts)
+        zone = device_timezone()
+        entry = {
+            "ts": round(ts, 2),
+            "local": when.isoformat(timespec="seconds"),
+            "tz": zone.key if zone else "",
+            "date": when.strftime("%Y-%m-%d"),
+            "hour": when.hour,
+            "event": event,
+            "emotion": emotion,
+            "source": source,
+        }
+        path = os.path.join(config.SLEEP_LOG_DIR, f"{entry['date']}.jsonl")
+        with open(path, "a") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        logger.info("Sleep journal: %s (emotion=%s source=%s)", event, emotion, source)
+        _prune_sleep_log()
+    except Exception as e:
+        logger.warning("Sleep journal write failed (%s): %s", event, e)
+
+
 def start_voice_service(reason: str) -> bool:
     """Start the voice pipeline unless a live enrollment owns the mic.
 
@@ -610,29 +700,163 @@ def _finalize_sleepy_peripherals(mute_mic: bool, mute_speaker: bool):
         if voice_service and voice_service.available:
             threading.Thread(target=voice_service.stop, daemon=True, name="sleepy-mic-stop").start()
 
-    if mute_speaker and not _speaker_muted:
-        _speaker_muted = True
-        _sleepy_auto_muted_speaker = True
-        if tts_service and tts_service.speaking:
-            tts_service.stop()
+    if mute_speaker:
+        # Music is never an announcement. The speaker goes to the drain, which
+        # also means in-flight TTS is no longer cut off mid-word.
         if music_service and music_service.playing:
             music_service.stop()
+        if not _speaker_muted:
+            # A pending scene drain yields to sleep so wake can restore the mute.
+            _cancel_scene_speaker_drain()
+            _start_sleepy_speaker_drain()
 
     _persist_sleep_state()
-    logger.info("Sleepy finalized: LED off, mic muted, speaker muted")
+    logger.info("Sleepy finalized: LED off, mic muted, speaker draining")
+
+
+def _run_speaker_drain(cancel: threading.Event, commit, name: str) -> None:
+    """Let the current turn's announcement play, then call `commit`.
+
+    Waits SLEEPY_SPEAKER_GRACE_S for TTS to start (well above the ~100ms
+    marker→text gap), lets it finish, and gives up at SLEEPY_SPEAKER_DRAIN_MAX_S.
+    Setting `cancel` abandons the drain without committing.
+    """
+
+    def _drain():
+        deadline = time.monotonic() + SLEEPY_SPEAKER_DRAIN_MAX_S
+        grace_end = time.monotonic() + SLEEPY_SPEAKER_GRACE_S
+        started = False
+        while not cancel.is_set() and time.monotonic() < deadline:
+            if tts_service and tts_service.speaking:
+                started = True
+            elif started or time.monotonic() >= grace_end:
+                break  # the announcement finished, or none ever came
+            cancel.wait(_SLEEPY_DRAIN_POLL_S)
+        if not cancel.is_set():
+            commit()
+
+    threading.Thread(target=_drain, daemon=True, name=name).start()
+
+
+def _start_sleepy_speaker_drain():
+    """Mute the speaker once the going-to-sleep announcement has played.
+
+    A wake cancels the drain.
+    """
+    global _sleepy_drain_cancel
+    _cancel_sleepy_speaker_drain()
+    cancel = threading.Event()
+    _sleepy_drain_cancel = cancel
+    _run_speaker_drain(cancel, _mute_speaker_for_sleep, "sleepy-speaker-drain")
+
+
+def _cancel_sleepy_speaker_drain():
+    """Stop a pending drain. Safe to call when none is running."""
+    global _sleepy_drain_cancel
+    if _sleepy_drain_cancel is not None:
+        _sleepy_drain_cancel.set()
+        _sleepy_drain_cancel = None
+
+
+def _start_scene_speaker_drain(scene: str):
+    """Mute the speaker for `scene` once its confirmation line has played.
+
+    Skipped while sleep owns the speaker (asleep or sleepy drain pending).
+    """
+    global _scene_drain_cancel
+    _cancel_scene_speaker_drain()
+    if _sleeping or _sleepy_drain_cancel is not None:
+        logger.info("Scene %s: speaker mute left to sleep", scene)
+        return
+    cancel = threading.Event()
+    _scene_drain_cancel = cancel
+    _run_speaker_drain(cancel, lambda: _mute_speaker_for_scene(scene), "scene-speaker-drain")
+    logger.info("Scene %s: speaker draining", scene)
+
+
+def _cancel_scene_speaker_drain():
+    """Stop a pending scene drain. Safe to call when none is running."""
+    global _scene_drain_cancel
+    if _scene_drain_cancel is not None:
+        _scene_drain_cancel.set()
+        _scene_drain_cancel = None
+
+
+def _mute_speaker_for_scene(scene: str):
+    """Commit a scene's deferred mute; re-checked under privacy.lock like sleep."""
+    global _speaker_muted
+    with privacy.lock:
+        if _active_scene != scene:
+            logger.info("Scene %s speaker drain: scene gone -- speaker left live", scene)
+            return
+        if _sleeping:
+            logger.info("Scene %s speaker drain: asleep -- mute left to sleep", scene)
+            return
+        if _speaker_muted:
+            return
+        _speaker_muted = True
+        _persist_speaker_state()
+    # The flag only gates playback that has not started; stop a TTS the cap cut.
+    if tts_service and tts_service.speaking:
+        tts_service.stop()
+    logger.info("Scene %s: speaker muted", scene)
+
+
+def _mute_speaker_for_sleep():
+    """Commit the deferred mute.
+
+    Re-reads the sleep state under privacy.lock, the same lock the wake path
+    takes. Checking it unlocked was not enough: a wake cancels the drain, but
+    the drain can already be past that check, and it would then re-mute a
+    device that has just woken — silent, marked sleep-owned, with the restore
+    already run and nothing left to undo it.
+    """
+    global _speaker_muted, _sleepy_auto_muted_speaker
+    with privacy.lock:
+        if not _sleeping or _current_emotion != EMO_SLEEPY:
+            logger.info("Sleepy speaker drain: awake again -- speaker left live")
+            return
+        if _speaker_muted:
+            return
+        _speaker_muted = True
+        _sleepy_auto_muted_speaker = True
+        _persist_sleep_state()
+
+    # The flag only gates playback that has not STARTED yet (every check in
+    # drivers/voice/tts/service.py is an entry guard), so a TTS still speaking
+    # when the cap fires would talk on past it — exactly what
+    # SLEEPY_SPEAKER_DRAIN_MAX_S exists to prevent. Stopping it is what makes
+    # the cap a real bound. Outside the lock: stop() can block on the audio
+    # device. A no-op on the normal path, where the drain already waited for
+    # the announcement to finish.
+    if tts_service and tts_service.speaking:
+        tts_service.stop()
+    logger.info("Sleepy speaker drain done -- speaker muted")
 
 
 def _wake_sleepy_peripherals():
     """Restore only mic/speaker states that sleepy itself muted."""
     global _sleepy_auto_muted_mic, _sleepy_auto_muted_speaker, _mic_muted, _speaker_muted
-    if _sleepy_auto_muted_speaker:
-        if not privacy.speaker_muted:
-            _speaker_muted = False
-        _sleepy_auto_muted_speaker = False
+    # Cancel and restore under ONE lock. Cancelling outside it left a drain
+    # that was already past its own guard free to re-mute the speaker after
+    # the restore had run, on a device that is awake by then.
+    with privacy.lock:
+        _cancel_sleepy_speaker_drain()
+        if _sleepy_auto_muted_speaker:
+            if privacy.speaker_muted:
+                # The privacy overlay may have captured sleep's temporary mute
+                # during HAL startup. Wake removes that mute underneath the
+                # lock, so releasing privacy cannot restore an expired mute.
+                privacy.speaker_before = False
+            else:
+                _speaker_muted = False
+            _sleepy_auto_muted_speaker = False
+            _persist_speaker_state()
     if _sleepy_auto_muted_mic:
         _sleepy_auto_muted_mic = False
         if _hw_mic_switch_muted is not True:
             _mic_muted = False
+            _clear_mic_muted_led()
             start_voice_service("sleepy-wake")
     _persist_sleep_state()
     logger.info("Sleepy wake: restored sleepy-owned audio state")
@@ -1059,6 +1283,10 @@ def _restore_user_led():
     if _thinking_cue_active:
         logger.info("LED restore: realtime thinking cue still active -- repainting")
         _apply_emotion_led_display(EMO_THINKING, 0.7, force_led=True)
+        return
+
+    from hal.drivers.harness.led import restore as restore_harness_led
+    if restore_harness_led():
         return
 
     state = _user_led_state

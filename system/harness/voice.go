@@ -208,6 +208,13 @@ func (v *VoiceController) RefreshFocus(ctx context.Context) error {
 			}
 		}
 	}
+	v.setFocus(machine, agent, name, revision, available, err)
+	return err
+}
+
+// setFocus applies one focus snapshot to the shared state. err is the reason
+// focus is unavailable (nil when available).
+func (v *VoiceController) setFocus(machine, agent, name, revision string, available bool, err error) {
 	v.mu.Lock()
 	changed := v.state.FocusRevision != revision || v.state.MachineID != machine || v.state.AgentID != agent || v.state.FocusAvailable != available
 	if changed {
@@ -226,7 +233,6 @@ func (v *VoiceController) RefreshFocus(ctx context.Context) error {
 		}
 	}
 	v.mu.Unlock()
-	return err
 }
 func (v *VoiceController) SetMode(_ context.Context, enabled bool) (VoiceModeState, error) {
 	v.mu.Lock()
@@ -337,14 +343,18 @@ func (v *VoiceController) ready(ctx context.Context, s VoiceModeState) error {
 	if e := v.connected(s.MachineID); e != nil {
 		return e
 	}
-	if v.State().Pending != nil {
-		if _, e := v.receipt(ctx); e != nil {
-			return e
-		}
+	// An uncertain earlier delivery must not block a new user turn.
+	// Do not reconcile or retry the old mutation automatically here.
+	/*
 		if v.State().Pending != nil {
-			return errors.New("Previous Harness delivery is unresolved; inspect its receipt or resolve it without retrying")
+			if _, e := v.receipt(ctx); e != nil {
+				return e
+			}
+			if v.State().Pending != nil {
+				return errors.New("Previous Harness delivery is unresolved; inspect its receipt or resolve it without retrying")
+			}
 		}
-	}
+	*/
 	return nil
 }
 func (v *VoiceController) Submit(ctx context.Context, text, runID string, generation uint64) error {

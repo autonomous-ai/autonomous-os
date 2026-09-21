@@ -774,6 +774,16 @@ type MQTTInfoResponse struct {
 	// drift). Populated only by handleInfo; omitempty keeps it out of the `data`
 	// replies that embed this struct.
 	Skills []SkillSummary `json:"skills,omitempty"`
+	// SchedulesDigest fingerprints the scheduled-task rows this device holds
+	// (schedule.Digest: "v1:" + sha256 over each row's id|rev|requires). The
+	// backend compares it with the same digest over its own rows and forces a
+	// full schedule.sync when they differ — the only way a device that was
+	// reset, lost schedules.json, or was swapped under the same record gets its
+	// schedules back, since schedule.sync is otherwise sent only on edits.
+	// Populated only by handleInfo, and omitted when the store cannot be read
+	// (never "no schedules" by mistake); omitempty keeps it out of the `data`
+	// replies that embed this struct, and old firmware never sends it.
+	SchedulesDigest string `json:"schedules_digest,omitempty"`
 }
 
 // NewDeviceMessage creates a base message with required fields populated from config.
@@ -1207,10 +1217,10 @@ type MQTTTTSSetAck struct {
 // `realtime.set` downlink (data block) and the HTTP UpdateConfig `realtime` field.
 type RealtimeSetData struct {
 	Enabled   *bool  `json:"enabled,omitempty"`   // nil = leave unchanged
-	Provider  string `json:"provider,omitempty"`  // gemini | openai | none
+	Provider  string `json:"provider,omitempty"`  // gemini | openai | gptlive | pipecat_v1 | none
 	Model     string `json:"model,omitempty"`     // active provider's model
 	Voice     string `json:"voice,omitempty"`     // active provider's voice
-	Reasoning string `json:"reasoning,omitempty"` // gemini thinking_level OR openai reasoning_effort
+	Reasoning string `json:"reasoning,omitempty"` // gemini thinking_level OR openai reasoning_effort (gptlive / pipecat_v1: none)
 	APIKey    string `json:"api_key,omitempty"`   // optional override; empty → llm_api_key
 	BaseURL   string `json:"base_url,omitempty"`  // optional override; empty → llm_base_url-derived
 }

@@ -9,7 +9,7 @@ import type { DisplayEvent, FaceOwnersDetail } from "../types";
 import type { FlowStage } from "./types";
 import { usePolling } from "../../../hooks/usePolling";
 import { FLOW_NODES } from "./types";
-import { deriveActiveStage, groupIntoTurns, sharedTurnEvents, turnIO, turnBilledTokens, turnDurationMs, extractSensingType, hasSensingPrefix, isCameraAPICommand } from "./helpers";
+import { turnDisplayType, turnMatchesSearch, migrateTurnTypeFilters, deriveActiveStage, groupIntoTurns, sharedTurnEvents, turnIO, turnBilledTokens, turnDurationMs, extractSensingType, hasSensingPrefix, isCameraAPICommand } from "./helpers";
 import { FlowDiagram } from "./FlowDiagram";
 import { TurnBadge } from "./TurnBadge";
 import { CanvasModal } from "./CanvasModal";
@@ -31,7 +31,7 @@ type FlowEventDetail = Record<string, any>;
 
 // Category → turn types mapping
 const CAT_TYPES: Record<string, string[]> = {
-  mic: ["voice", "voice_command", "voice_agent_handled", "sound", "speech_emotion", "speech_emotion.detected"],
+  mic: ["voice", "voice_command", "voice_followup", "voice_agent_handled", "voice_command_handled", "voice_followup_handled", "sound", "speech_emotion", "speech_emotion.detected"],
   cam: ["motion", "motion.activity", "emotion.detected", "pose.ergo_risk", "presence.enter", "presence.leave", "presence.away", "light.level", "environment"],
   channel: ["telegram", "discord", "slack", "wechat", "channel"],
   // Typed chat, either origin: monitor composer (web_chat) or MQTT chat.send
@@ -74,8 +74,10 @@ export function FlowSection({
   // Opt-out model: store what user has EXCLUDED. Empty = show all.
   const [excludedTypes, setExcludedTypes] = useState<Set<string>>(() => {
     try {
-      const saved = localStorage.getItem("os-excluded-types-v1");
-      if (saved) return new Set(JSON.parse(saved));
+      const saved = localStorage.getItem("os-excluded-types-v2");
+      if (saved) return new Set<string>(JSON.parse(saved));
+      const legacy = localStorage.getItem("os-excluded-types-v1");
+      if (legacy) return migrateTurnTypeFilters(JSON.parse(legacy));
     } catch {
       // Corrupt or unreadable saved filter: start with nothing excluded so the
       // Flow view always renders, and the next save overwrites the bad value.
@@ -211,7 +213,7 @@ export function FlowSection({
   }, [downloadServerJsonlTail, downloadUISnapshot]);
 
   const saveExcluded = (next: Set<string>) => {
-    try { localStorage.setItem("os-excluded-types-v1", JSON.stringify([...next])); } catch { /* Filter persistence only: the in-memory Set below still drives this session's view. */ }
+    try { localStorage.setItem("os-excluded-types-v2", JSON.stringify([...next])); } catch { /* Filter persistence only: the in-memory Set below still drives this session's view. */ }
   };
 
   const toggleType = (type: string) => {
@@ -286,7 +288,7 @@ export function FlowSection({
   // Sub-types that actually appear in the current turns list
   const availableTypes = useMemo(() => {
     const seen = new Set<string>();
-    for (const t of turns) seen.add(t.type);
+    for (const t of turns) seen.add(turnDisplayType(t));
     return [...seen];
   }, [turns]);
 
@@ -314,7 +316,7 @@ export function FlowSection({
   const filteredTurns = useMemo(() => {
     const filtered = turns.filter((t) => {
       if (t.path === "dropped" && excludedTypes.has("__dropped")) return false;
-      if (t.path !== "dropped" && excludedTypes.has(t.type)) return false;
+      if (t.path !== "dropped" && excludedTypes.has(turnDisplayType(t))) return false;
       if (fromTime || toTime) {
         const m = t.startTime.match(/T(\d{2}:\d{2})/);
         const tt = m?.[1] ?? "";
@@ -322,9 +324,7 @@ export function FlowSection({
         if (toTime && tt > toTime) return false;
       }
       if (searchText.trim()) {
-        const q = searchText.toLowerCase().trim();
-        const { input, output } = turnIO(t);
-        if (!`${input} ${output} ${t.type} ${t.runId ?? ""} ${t.id}`.toLowerCase().includes(q)) return false;
+        if (!turnMatchesSearch(t, searchText)) return false;
       }
       return true;
     });
@@ -664,8 +664,8 @@ export function FlowSection({
                 <span
                   title={
                     isUnknown
-                      ? "Device knows someone is here but not who (stranger / unrecognized voice)"
-                      : `Device's current user: ${currentUser}` +
+                      ? "Robot knows someone is here but not who (stranger / unrecognized voice)"
+                      : `Robot's current user: ${currentUser}` +
                         (currentUserSource === "voice"
                           ? " (heard — recognized by voice)"
                           : currentUserSource === "face"
@@ -744,7 +744,7 @@ export function FlowSection({
         <div style={{ ...S.card, padding: "10px 14px" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
             <span style={S.cardLabel}>Simulate Event</span>
-            <span style={{ fontSize: 10, color: "var(--lm-text-muted)" }}>dev only · fires POST /sensing/event on device</span>
+            <span style={{ fontSize: 10, color: "var(--lm-text-muted)" }}>dev only · fires POST /sensing/event on robot</span>
           </div>
           <div style={{ display: "flex", flexWrap: "wrap" as const, gap: 6 }}>
             {FAKE_EVENTS.map((ev) => (

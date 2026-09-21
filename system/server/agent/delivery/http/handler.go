@@ -1,13 +1,16 @@
 package http
 
 import (
+	"log/slog"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"go.autonomous.ai/os/system/device"
 	"go.autonomous.ai/os/system/domain"
 	"go.autonomous.ai/os/system/lib/flow"
+	"go.autonomous.ai/os/system/lib/hal"
 	"go.autonomous.ai/os/system/monitor"
 	"go.autonomous.ai/os/system/server/config"
 	"go.autonomous.ai/os/system/skillcontext/mood"
@@ -289,12 +292,31 @@ func ProvideAgentHandler(gw domain.AgentGateway, bus *monitor.Bus, sled *statusl
 	}
 }
 
-// IsSleeping returns true when the last emotion expressed by the agent was "sleepy".
-// Used by SensingHandler to suppress passive sensing events during sleep mode.
+// IsSleeping reports whether the device is asleep, for SensingHandler's gate on
+// passive sensing events. HAL decides: lastEmotion only moves when the AGENT
+// expresses an emotion, so a wake that skips the agent (button tap, web UI,
+// direct POST to HAL) left this stuck on "sleepy" and dropped sensing on an
+// awake device. It stays as the awake-path filter, which keeps HTTP off the
+// common path, and as the fallback when HAL is unreachable.
 func (h *AgentHandler) IsSleeping() bool {
 	h.lastEmotionMu.Lock()
-	defer h.lastEmotionMu.Unlock()
-	return h.lastEmotion == "sleepy"
+	believesAsleep := h.lastEmotion == "sleepy"
+	h.lastEmotionMu.Unlock()
+	if !believesAsleep {
+		return false
+	}
+	// Devices without `expression` never mount HAL's /emotion route, so asking
+	// would 404 on every event (same gate as fetchHALEmotion).
+	if !device.Has(h.config.DeviceTypeOrDefault(), device.CapExpression) {
+		return true
+	}
+	sleeping, err := hal.GetSleeping()
+	if err != nil {
+		slog.Debug("sleep gate: HAL unreachable, keeping lastEmotion",
+			"component", "agent", "error", err)
+		return true
+	}
+	return sleeping
 }
 
 // consumeInterleavedDM atomically reads and removes the captured Telegram

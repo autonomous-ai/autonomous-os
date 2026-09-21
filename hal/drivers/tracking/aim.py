@@ -28,11 +28,11 @@ import logging
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Any, Optional, Tuple
+from typing import Any, Callable, Optional, Tuple
 
 import hal.config as config
 from hal.safety.policy import min_move_duration
-from hal.drivers.tracking import look_debug
+from hal.drivers.tracking import body, look_debug
 
 logger = logging.getLogger(__name__)
 
@@ -339,8 +339,8 @@ def _sweep_for_subject() -> bool:
         from hal.drivers.tracking.search import search_for_subject
 
         res = search_for_subject()
-        logger.info("[look-aim] looked around: %s after %d stop(s)",
-                    res.reason, res.stops_visited)
+        logger.info("[look-aim] looked around: %s after %d look(s)",
+                    res.reason, res.looks_visited)
         return bool(res.found)
     except Exception as e:
         # A sweep that cannot run must not sink the aim — the caller still needs
@@ -603,6 +603,236 @@ CALIB_ALPHA: float = 0.6
 MAX_STEP_DEG: float = 45.0
 
 
+# How long a centring correction may run. A search hit is already seconds into
+# a sweep, so this is a top-up rather than the aim's own deadline: six
+# iterations of move + settle + detect fit comfortably, and a subject that
+# needs longer is one the loop is not converging on anyway.
+CENTRE_DEADLINE_S: float = 4.0
+# Consecutive probe misses tolerated before the correction reports the subject
+# lost. A marginal detection at the frame edge flickers frame to frame —
+# device-observed on lamp-ac82, the sweep saw a keyboard and the correction's
+# very next probe did not — so one miss is noise, not absence. Each retry waits
+# for a FRESH frame, and the deadline still bounds the whole loop.
+CENTRE_MAX_MISSES: int = 3
+# Vertical deadband, as a fraction of frame HEIGHT. Looser than the yaw one:
+# the things a sweep is asked for sit on desks and are wide, so "centred
+# enough" vertically is a band, not a line, and every pitch step costs a full
+# settle of three joints.
+CENTRE_PITCH_DEADBAND_FRAC: float = 0.10
+
+
+@dataclass
+class CentreResult:
+    centred: bool
+    reason: str
+    iterations: int = 0
+    yaw_total: float = 0.0
+    dx_frac: Optional[float] = None
+    # The box and the frame AS LAST SEEN, so a caller that wants to SHOW what it
+    # centred on does not have to grab and detect all over again — a second
+    # capture would be a different frame from a body that has since settled, and
+    # drawing this box on that frame puts the rectangle beside the subject.
+    box: Optional[tuple] = None
+    frame: Any = None
+    dy_frac: Optional[float] = None
+
+
+def centre_on_box(svc: Any, cap: Any, probe: Callable[[Any], Optional[tuple]],
+                  deadline_s: float = CENTRE_DEADLINE_S) -> CentreResult:
+    """Turn and tilt the camera until `probe`'s box sits in the middle of the
+    frame — both axes.
+
+    Yaw is the measure-and-nudge loop `aim_for_look` runs, with everything that
+    is specific to answering "where are you" left out: no bearing steps, no
+    filler announcements, no occlusion hold, no bearing scoring. A search hit
+    must not score the remembered bearing — the sweep finds an OBJECT as often
+    as a person, and teaching the user-bearing estimator that a keyboard is
+    where the user sits is exactly the kind of quiet corruption #226 was about.
+
+    Pitch is copied from `gaze._maybe_pitch`, the one loop on this arm whose
+    pitch sign was measured rather than assumed. A box ABOVE centre (dy < 0)
+    needs the camera tilted UP, and up is the DECREASING direction on the pitch
+    joints — device-measured on lamp-0c89, paired A/B/A, 18 samples per
+    position: wrist_pitch -75 -> dy +0.009, -90 -> dy +0.113. With the sign
+    the other way every correction enlarges the error it measures. The step is
+    spread across base/elbow/wrist by `servo_follow.distribute_pitch`, because
+    the wrist alone stalls at -34.8 on the way up while idle rests it near -32.
+    The calibration constants are gaze's own (GAZE_PITCH_DEG_PER_FRAME,
+    GAZE_PITCH_MAX_STEP_DEG): one source of truth for how many degrees a frame
+    fraction is worth on this lens.
+
+    Both corrections go out as ONE absolute `move_and_hold`, the way `nudge`
+    and gaze each already move — a yaw nudge followed by a separate pitch move
+    would double the settle time of every iteration.
+
+    Deliberately duplicated rather than factored out of `aim_for_look` or
+    `_maybe_pitch`: each of those loops is entangled with the state it keeps
+    across calls, and pulling them apart is a larger change than any caller
+    needs today.
+
+    `probe` takes a frame and returns an (x, y, w, h) box or None, so the caller
+    keeps ownership of WHAT is being centred — the search passes its own target
+    detector, where the aim would pass the closest-subject policy.
+    """
+    import hal.app_state as state
+    from hal.drivers.tracking import constants as C
+    from hal.drivers.tracking import servo_follow
+
+    # Cleared at entry, exactly as aim_for_look does. The flag means "abort the
+    # correction IN FLIGHT"; it is set only by the button's single click and
+    # nothing resets it afterwards, so a click hours ago would otherwise defeat
+    # every correction that follows. Device-observed on lamp-ac82: the first
+    # centring ever run there returned "aborted after 0 iteration(s)" on a flag
+    # left over from long before the sweep began. A click landing DURING the
+    # correction still stops it — the loop re-checks on every iteration.
+    _abort_evt.clear()
+
+    t_end = time.monotonic() + deadline_s
+    iterations = 0
+    yaw_total = 0.0
+    last_dx_frac: Optional[float] = None
+    last_dy_frac: Optional[float] = None
+    scale_deg: Optional[float] = None
+    pending_calib: Optional[Tuple[float, float]] = None
+    last_box: Optional[tuple] = None
+    last_frame: Any = None
+    misses = 0
+    require_fresh = False
+
+    def _result(centred: bool, reason: str) -> CentreResult:
+        return CentreResult(centred, reason, iterations, yaw_total,
+                            last_dx_frac, last_box, last_frame, last_dy_frac)
+
+    def _yaw_ok() -> bool:
+        return abs(last_dx_frac if last_dx_frac is not None else 1.0) <= CENTRE_DEADBAND_FRAC
+
+    def _pitch_ok() -> bool:
+        return abs(last_dy_frac if last_dy_frac is not None else 1.0) <= CENTRE_PITCH_DEADBAND_FRAC
+
+    def _measure(frame: Any, box: tuple) -> None:
+        nonlocal last_box, last_frame, last_dx_frac, last_dy_frac
+        last_box, last_frame = box, frame
+        x, y, w, h = box
+        fh, fw = frame.shape[0], frame.shape[1]
+        last_dx_frac = ((x + w / 2.0) - (fw / 2.0)) / fw
+        last_dy_frac = ((y + h / 2.0) - (fh / 2.0)) / fh
+
+    def _final_look(reason: str) -> CentreResult:
+        """One more fresh frame after the LAST move, so the result describes
+        where the lamp is pointing now rather than where it was pointing
+        before it moved there.
+
+        Device-observed on lamp-ac82 ("find my doll"): three corrections, the
+        third one centred the doll — the user watched it happen — and the frame
+        persisted was the one measured BEFORE that move, doll top-left,
+        `centred: false`. The deadline and max-iteration exits fired at the top
+        of the next iteration, before any frame had been taken since the move.
+        Bounded by _grab_frame's own wait; the deadline does not apply to it.
+        """
+        if iterations > 0:
+            frame = _grab_frame(cap, svc, require_fresh=True)
+            if frame is not None:
+                box = probe(frame)
+                if box is not None:
+                    _measure(frame, box)
+                    logger.info("[centre] final look after %s: dx=%.1f%% dy=%.1f%%",
+                                reason, last_dx_frac * 100.0, last_dy_frac * 100.0)
+                    if _yaw_ok() and _pitch_ok():
+                        return _result(True, "centred")
+        return _result(_yaw_ok() and _pitch_ok(), reason)
+
+    with _camera_consumer(cap):
+        while iterations < MAX_ITERATIONS:
+            if _abort_evt.is_set():
+                return _result(False, "aborted")
+            if time.monotonic() >= t_end:
+                return _final_look("deadline")
+
+            frame = _grab_frame(cap, svc, require_fresh=require_fresh or iterations > 0)
+            require_fresh = False
+            if frame is None:
+                return _result(_yaw_ok() and _pitch_ok(), "no fresh frame")
+
+            box = probe(frame)
+            if box is None:
+                misses += 1
+                if misses >= CENTRE_MAX_MISSES:
+                    # Gone, not flickering. Report the last good box rather
+                    # than nothing: the caller still has something true to show.
+                    return _result(False, "lost the subject")
+                # Try again on a fresh frame; the deadline check above bounds it.
+                require_fresh = True
+                continue
+            misses = 0
+
+            _measure(frame, box)
+
+            # Learn the local degrees-per-dx_frac from what the previous step
+            # actually achieved. The lens is fisheye — device-measured 91 deg per
+            # frac at the centre against 229 at the edge — so a fixed FOV is only
+            # ever the first guess.
+            if pending_calib is not None:
+                prev_yaw, prev_dx = pending_calib
+                measured = _measure_scale(_yaw_of(svc) - prev_yaw,
+                                          prev_dx - last_dx_frac)
+                if measured is not None:
+                    scale_deg = (
+                        measured if scale_deg is None
+                        else (1.0 - CALIB_ALPHA) * scale_deg + CALIB_ALPHA * measured
+                    )
+                pending_calib = None
+
+            if _yaw_ok() and _pitch_ok():
+                return _result(True, "centred")
+
+            try:
+                current = svc.get_positions()
+            except Exception as e:
+                return _result(False, f"no pose: {e}")
+            target = dict(current)
+
+            # Yaw sign per the tracker's verified convention: dx>0 (subject right
+            # of centre) -> base_yaw INCREASES. Do not flip this without device
+            # evidence. Magnitude from the MEASURED scale once we have one; the
+            # config FOV is only the first-step guess.
+            yaw_deg = 0.0
+            if not _yaw_ok():
+                scale = (scale_deg * SCALE_SAFETY if scale_deg is not None
+                         else config.LOOK_AIM_FOV_DEG)
+                yaw_deg = AIM_GAIN * last_dx_frac * scale
+                yaw_deg = max(-MAX_STEP_DEG, min(MAX_STEP_DEG, yaw_deg))
+                base_yaw = float(current.get("base_yaw.pos", 0.0)) + yaw_deg
+                target["base_yaw.pos"] = max(C.YAW_MIN, min(C.YAW_MAX, base_yaw))
+                pending_calib = (_yaw_of(svc), last_dx_frac)
+
+            # Pitch: gaze's step, gaze's sign, gaze's joint distribution.
+            pitch_deg = 0.0
+            if not _pitch_ok():
+                pitch_deg = last_dy_frac * config.GAZE_PITCH_DEG_PER_FRAME
+                pitch_deg = max(-config.GAZE_PITCH_MAX_STEP_DEG,
+                                min(config.GAZE_PITCH_MAX_STEP_DEG, pitch_deg))
+                target.update(servo_follow.distribute_pitch(current, pitch_deg))
+
+            try:
+                duration = min_move_duration(state.safety_policy, target, current,
+                                             MOVE_DURATION_S)
+                svc.move_and_hold(target, duration=duration)
+            except Exception as e:
+                logger.warning("[centre] move failed: %s", e)
+                return _result(False, f"move failed: {e}")
+
+            yaw_total += yaw_deg
+            iterations += 1
+            logger.info(
+                "[centre] iter=%d dx=%.1f%% dy=%.1f%% -> yaw %+.1f pitch %+.1f deg (scale=%.0f%s)",
+                iterations, last_dx_frac * 100.0, last_dy_frac * 100.0, yaw_deg, pitch_deg,
+                scale_deg * SCALE_SAFETY if scale_deg is not None else config.LOOK_AIM_FOV_DEG,
+                "" if scale_deg is not None else " guess",
+            )
+
+    return _final_look("max iterations")
+
+
 def _measure_scale(moved_deg: float, shift_frac: float) -> Optional[float]:
     """Degrees of yaw per unit dx_frac, measured from what the last step did.
 
@@ -776,6 +1006,13 @@ def aim_for_look(deadline_s: float, detector: Any = None) -> AimResult:
         added later cannot forget to.
         """
         _score_prediction(bearing_steps, found=found_any)
+        # A moved head is a parked head (`nudge` and `_step_toward_bearing`
+        # both end in `move_and_hold`) — hand it back to idle after the
+        # capture the caller is about to take. Not when nothing moved:
+        # playback was never preempted, and dispatching idle over a running
+        # idle restarts it.
+        if iterations > 0 or bearing_steps > 0:
+            body.release_to_idle_later(body.HOLD_AFTER_FIND_S, f"look-aim {reason}")
         return AimResult(
             aimed, reason, iterations, yaw_total, last_dx_frac, bearing_steps,
             start_yaw, _yaw_of(svc), bearing_consulted, steps, last_move_deg,

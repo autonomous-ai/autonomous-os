@@ -26,9 +26,10 @@ type UserProfileReconcile struct {
 // ProvideUserProfileReconcile builds the reconciler from device config.
 //
 // execute is gated on config so a device can be put in observe-only mode: the
-// pass logs what it WOULD retire and writes nothing. Deleting from a live
-// persona deserves to be watchable before it is allowed to bite, and the default
-// (see config.UserProfileReconcileEnabled) decides which way a fleet leans.
+// pass logs what it WOULD retire and writes nothing. The default (see
+// config.UserProfileReconcileEnabled) is to apply — the fleet watched this pass
+// observe-only for two weeks without a false retirement, and a `false` in
+// config.json returns any device to observe-only.
 func ProvideUserProfileReconcile(cfg *config.Config) *UserProfileReconcile {
 	opts := migratepersona.DefaultOptions(cfg.OpenclawConfigDir, hermesHome)
 	return &UserProfileReconcile{
@@ -49,7 +50,7 @@ func (r *UserProfileReconcile) Reconcile() {
 	if len(actions) == 0 {
 		return // the normal case: nothing stale, nothing written, no cache miss
 	}
-	mode := "dry-run (set agent.user_profile_reconcile=true to apply)"
+	mode := "dry-run (agent.user_profile_reconcile=false)"
 	if r.execute {
 		mode = "applied"
 	}

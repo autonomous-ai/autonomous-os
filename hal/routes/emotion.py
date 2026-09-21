@@ -76,9 +76,21 @@ def list_emotion_presets():
     return result
 
 
+def harness_blocks_sleep() -> bool:
+    """Sleep is refused while Harness voice mode is ON; unavailable means off."""
+    from hal.drivers.voice._internal.harness_voice import read_voice_mode
+    return bool(read_voice_mode().get("enabled"))
+
+
 @router.post("/emotion", response_model=EmotionResponse)
-def express_emotion(req: EmotionRequest):
-    """Express an emotion by coordinating servo animation + LED color simultaneously."""
+def express_emotion(req: EmotionRequest, source: str = "api"):
+    """Express an emotion by coordinating servo animation + LED color simultaneously.
+
+    `source` only labels the sleep journal -- it says who caused a transition,
+    not what happens. FastAPI reads it as an optional query parameter, so every
+    existing HTTP caller keeps working and lands under the default; the
+    in-process callers (button, touchpad) name themselves.
+    """
     emotion = (req.emotion or "").strip().lower()
     preset = EMOTION_PRESETS.get(emotion)
     if not preset:
@@ -110,6 +122,12 @@ def express_emotion(req: EmotionRequest):
         state.logger.info("POST /emotion: ignored %s while sleeping", req.emotion)
         return {"status": "ignored", "emotion": req.emotion, "servo": None, "led": None}
 
+    # Harness ON means the user is at their desk working; the absence timer
+    # and any API caller must not put the device to sleep under them.
+    if req.emotion == EMO_SLEEPY and harness_blocks_sleep():
+        state.logger.info("POST /emotion: ignored sleepy while Harness is on (source=%s)", source)
+        return {"status": "ignored", "emotion": req.emotion, "servo": None, "led": None}
+
     # The gaze+VAD acknowledgement is LED-only and must yield silently to the
     # real emotion that now owns the device (normally ``listening`` on first
     # STT partial). Do not restore between the two effects or the user sees a
@@ -122,6 +140,14 @@ def express_emotion(req: EmotionRequest):
         # Survive a HAL restart (OTA, deploy, crash): without this the device
         # wakes up on its own the next time the service restarts.
         state._persist_sleep_state()
+        # Two writes, two questions. The sidecar above is overwritten and dies
+        # with the boot, so it can only say whether the device is asleep NOW;
+        # the journal keeps every transition so it can also say how often and
+        # when. Both sit here because this is where all four routes into and
+        # out of sleep meet -- marker, button, presence.enter, web UI.
+        state._log_sleep_transition(
+            "sleep" if state._sleeping else "wake", req.emotion, source
+        )
     state._current_emotion = req.emotion
     # Any other emotion supersedes the realtime thinking cue — drop its claim
     # so an LED restore never repaints thinking over what was just expressed.

@@ -77,9 +77,20 @@ Output: Do NOT use this skill. Use **LED Control** skill instead.
 | `stretching` | Big extension + settle | Warm white breathing | After waking up, starting new session |
 | `music_strong` | Rock head bang | Green rainbow | Energetic music, high-tempo beats |
 | `music_chill` | Groove sway | Orange breathing | Chill music, lo-fi, jazz |
-| `scan` | Scanning sweep | Green pulse | Looking around, surveying environment |
+| `scan` | Quick searching glance (~54°) | Green pulse | Mood only — "hmm, where is it?"; NOT for actually looking around |
 | `nod` | Nod gesture | Green blink | Agreement, "yes", positive confirmation |
 | `headshake` | Head shake | Red blink | Disagreement, "no", negative response |
+
+## Questions about your own state
+
+This skill sets emotions; it does not read them back. When asked what state you are in
+or what you have been doing:
+
+- **Right now** — `curl -s http://127.0.0.1:5001/emotion/status` returns `current_emotion`,
+  `sleeping` and `active_scene`. Do not guess from the conversation; markers you emitted can
+  be ignored by the sleep gate, so what you asked for is not always what happened.
+- **Your sensing history** ("how many times have you slept?", "when do you usually sleep?")
+  — use the **Sensing Track** skill's.
 
 ## Error Handling
 - If the API returns an error or is unreachable, continue with the conversational reply anyway. Emotion is non-blocking.
@@ -100,6 +111,13 @@ Output: Do NOT use this skill. Use **LED Control** skill instead.
 - **Emotion LED is temporary** — it shows YOUR reaction. If the user previously set a Scene (reading, night, etc.), the scene color takes precedence for ambient lighting. Emotion is a brief flash of personality.
 - **Display eyes auto-sync** — no need to call `/display/eyes` separately.
 - **Do NOT call `/servo/play` or `/led/solid` separately** when using emotion — it already handles both.
+- **An emotion is never an answer to a movement request.** `scan` is a canned 54° glance
+  with the camera uninvolved. "Look around for X" is `/servo/search`, "scan the whole
+  room" is `/servo/search` with `exhaustive`, and "show me how far you can move / show
+  me your range of motion" is `/servo/demo` — all in the Servo Control skill. (A bare
+  "show me what you can do" is a general abilities question, not a movement request,
+  and starts nothing.) Asked for a full turn, an
+  emotion performs a shrug and narrates a sweep.
 - **Do NOT use for lighting/ambiance requests** -> use **Scene** skill.
 - **Do NOT use for custom LED colors** -> use **LED Control** skill.
 

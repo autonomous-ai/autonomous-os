@@ -42,6 +42,8 @@ PHRASE_HARNESS_UNPAIRED = "harness_voice_unpaired"
 PHRASE_HARNESS_OFFLINE = "harness_voice_offline"
 PHRASE_HARNESS_NO_AGENTS = "harness_voice_no_agents"
 PHRASE_HARNESS_FAILED = "harness_voice_failed"
+PHRASE_HARNESS_FOCUS = "harness_voice_focus"
+PHRASE_HARNESS_FOCUS_FAILED = "harness_voice_focus_failed"
 PHRASE_LISTENING = "listening"
 PHRASE_REBOOT = "reboot"
 PHRASE_SLEEP = "sleep"
@@ -77,11 +79,19 @@ PHRASE_RATE_LIMIT = "rate_limit"
 # glance whether the board is going dark for minutes or just blinking
 # during a service reload.
 PHRASES_BY_LANG = {
+    PHRASE_HARNESS_FOCUS: {
+        LANG_EN: "Agent switched.", LANG_VI: "Đã chuyển agent.",
+        LANG_ZH_CN: "已切换智能体。", LANG_ZH_TW: "已切換智慧體。",
+    },
+    PHRASE_HARNESS_FOCUS_FAILED: {
+        LANG_EN: "Could not switch agents. Check Harness.", LANG_VI: "Chưa chuyển được agent. Hãy kiểm tra Harness.",
+        LANG_ZH_CN: "无法切换智能体。请检查 Harness。", LANG_ZH_TW: "無法切換智慧體。請檢查 Harness。",
+    },
     PHRASE_HARNESS_ON: {
-        LANG_EN: "Harness is on. You’re now talking to {agent}.",
-        LANG_VI: "Đã bật Harness, đang nói chuyện với {agent}.",
-        LANG_ZH_CN: "Harness 已开启，现在可以和 {agent} 对话。",
-        LANG_ZH_TW: "Harness 已開啟，現在可以和 {agent} 對話。",
+        LANG_EN: "Harness is on with {agent}. Tap to speak.",
+        LANG_VI: "Đã bật Harness với {agent}. Chạm để nói.",
+        LANG_ZH_CN: "Harness 已开启，当前智能体是 {agent}。轻触开始说话。",
+        LANG_ZH_TW: "Harness 已開啟，目前智慧體是 {agent}。輕觸開始說話。",
     },
     PHRASE_HARNESS_OFF: {
         LANG_EN: "Harness is off. You’re back with the assistant on your device.", LANG_VI: "Đã tắt Harness, trở về trợ lý trên thiết bị.",

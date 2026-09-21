@@ -47,11 +47,12 @@ logger = logging.getLogger(__name__)
 
 class GPIOButtonHandler:
     def __init__(self, config: ButtonConfig, *, name="primary",
-                 behavior="standard", hold_s=5.0):
+                 behavior="standard", hold_s=5.0, factory_reset=True):
         if behavior not in ("standard", "factory_reset"):
             raise ValueError(f"Unknown GPIO button behavior: {behavior}")
         self._behavior = behavior
         self._hold_s = hold_s
+        self._factory_reset = factory_reset
         self._source = ("GPIO button" if name == "primary" and behavior == "standard" else
                         f"GPIO button {name} (gpiochip{config.chip}/line{config.line})")
         self._stopped = False
@@ -85,7 +86,8 @@ class GPIOButtonHandler:
                 if stop_event.is_set() or self._hold_watcher_stop is not stop_event:
                     return
                 held = time.monotonic() - self._press_start
-                stage = button_hold_tier(held, behavior=self._behavior, hold_s=self._hold_s)
+                stage = button_hold_tier(held, behavior=self._behavior, hold_s=self._hold_s,
+                                         factory_reset=self._factory_reset)
                 if stage != last_stage:
                     self._hold_led.set_tier(stage)
                     last_stage = stage
@@ -100,6 +102,7 @@ class GPIOButtonHandler:
             button_hold_release_action(
                 held, self._hold_led, behavior=self._behavior,
                 hold_s=self._hold_s, source=self._source,
+                factory_reset=self._factory_reset,
             )
 
     def _run_single_click(self):
@@ -212,7 +215,8 @@ class GPIOButtonHandler:
             self._hold_led.release()
 
         held = time.monotonic() - self._press_start
-        if button_hold_tier(held, behavior=self._behavior, hold_s=self._hold_s):
+        if button_hold_tier(held, behavior=self._behavior, hold_s=self._hold_s,
+                            factory_reset=self._factory_reset):
             self._click_count = 0  # destructive, terminal: scrub any pending clicks
             if self._click_timer:
                 self._click_timer.cancel()

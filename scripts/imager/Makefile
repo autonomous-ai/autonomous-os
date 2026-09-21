@@ -10,6 +10,7 @@
 #   make sd-card-flash DISK=N         — flash the .xz image to /dev/diskN
 #   make sd-card-flash TARGET=rpi DISK=N — flash RPi image instead
 #   make sd-card-flash-raw DEVICE_TYPE=lamp DISK=N — flash the raw .img via rdiskN (fast, no wait for .xz)
+#   make build ... COMPRESS=0          — skip the .xz step, keep only the raw .img
 # =============================================================================
 
 TARGET ?= opi
@@ -47,6 +48,11 @@ DEVICE_TYPE ?=
 # runtime and the SSH policy so the two can't disagree.
 DEFAULT_AGENT ?=
 
+# Optional hardware assembly from robots/<device>/overrides/<variant>.
+# Empty or standard preserves legacy defaults.
+VARIANT ?=
+VARIANT_SUFFIX := $(if $(filter-out standard,$(VARIANT)),-$(VARIANT),)
+
 # Pi 5 V1 hardware (case đầu) không có loa/mic. Set PI5_NO_AUDIO=1 để build-pi5.sh
 # strip audio capability khỏi ROBOT.md — healthwatch skip audio check (LED không
 # vàng), HAL skip PortAudio init (không crash log). Chỉ có effect khi
@@ -77,8 +83,8 @@ endif
 BUILT_IMG_rpi := golden.img
 BUILT_IMG_opi := $(DEVICE_TYPE)/golden-opi.img.xz
 BUILT_IMG := $(BUILT_IMG_$(TARGET))
-IMG_FILE_rpi := golden-$(DEVICE_TYPE)$(if $(DEFAULT_AGENT),-$(DEFAULT_AGENT),).img
-IMG_FILE_opi := $(DEVICE_TYPE)/golden-opi-$(DEVICE_TYPE)$(if $(DEFAULT_AGENT),-$(DEFAULT_AGENT),).img.xz
+IMG_FILE_rpi := golden-$(DEVICE_TYPE)$(if $(DEFAULT_AGENT),-$(DEFAULT_AGENT),)$(VARIANT_SUFFIX).img
+IMG_FILE_opi := $(DEVICE_TYPE)/golden-opi-$(DEVICE_TYPE)$(if $(DEFAULT_AGENT),-$(DEFAULT_AGENT),)$(VARIANT_SUFFIX).img.xz
 IMG_FILE := $(IMG_FILE_$(TARGET))
 
 # Uncompressed raw image (independent of the .xz). Used by sd-card-flash-raw to flash
@@ -142,7 +148,9 @@ build: build-preflight
 	-e OTA_METADATA_URL=$(OTA_METADATA_URL) \
 	-e DEVICE_TYPE=$(DEVICE_TYPE) \
 	-e DEFAULT_AGENT=$(DEFAULT_AGENT) \
+	-e VARIANT=$(VARIANT) \
 	-e PI5_NO_AUDIO=$(PI5_NO_AUDIO) \
+	-e COMPRESS=$(COMPRESS) \
 	-e BUILD_GIT_SHA=$(shell git -C .. rev-parse HEAD 2>/dev/null || echo unknown) \
 	pi-builder /work/$(BUILD_SCRIPT)
 	@# Name the output per device type so lamp/intern/dog images don't clobber.
@@ -209,7 +217,7 @@ VERSION    := $(shell date -u +%Y%m%d-%H%M%S)-$(shell git -C .. rev-parse --shor
 TARGET_PREFIX_rpi := golden-rpi
 TARGET_PREFIX_opi := golden-opi
 TARGET_PREFIX := $(TARGET_PREFIX_$(TARGET))
-VERSIONED_BASE := $(TARGET_PREFIX)-$(DEVICE_TYPE)-$(VERSION)
+VERSIONED_BASE := $(TARGET_PREFIX)-$(DEVICE_TYPE)$(VARIANT_SUFFIX)-$(VERSION)
 VERSIONED_IMG  := $(VERSIONED_BASE)$(if $(filter %.xz,$(IMG_FILE)),.img.xz,.img)
 RELEASE_NOTE   := output/$(DEVICE_TYPE)/$(VERSIONED_BASE).release.txt
 MANIFEST_FILE  := output/$(DEVICE_TYPE)/manifest-$(TARGET).json

@@ -74,3 +74,10 @@ var Capability = map[string][]string{
 	"user-emotion-detection": {device.CapAudio, device.CapPresence},
 	"voice":                  {device.CapAudio},
 }
+
+// Disabled lists skills switched off in skill.json ("disabled": true):
+// still catalogued so every runtime prunes them from devices, never
+// installed. Note the reason in skill.json.
+var Disabled = map[string]bool{
+	"agent-management": true,
+}

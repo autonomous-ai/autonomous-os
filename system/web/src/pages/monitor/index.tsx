@@ -733,7 +733,7 @@ export default function Monitor() {
           <button
             onClick={() => setShowLogoutConfirm(true)}
             className="lm-logout-btn"
-            title="Log out of this device"
+            title="Log out of this robot"
           >
             <LogOut size={15} strokeWidth={1.9} />
             Logout
@@ -947,7 +947,7 @@ export default function Monitor() {
       {showLogoutConfirm && (
         <ConfirmDialog
           title="Log out?"
-          message="You'll need to sign in again with the admin password to access this device."
+          message="You'll need to sign in again with the admin password to access this robot."
           confirmLabel="Logout"
           destructive
           onConfirm={() => { setShowLogoutConfirm(false); handleLogout(); }}

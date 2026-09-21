@@ -18,6 +18,7 @@ import { UploadSkillModal } from "./chat/UploadSkillModal";
 import { BrowseSkillsModal } from "./chat/BrowseSkillsModal";
 import { ManageSkillsModal } from "./chat/ManageSkillsModal";
 import { AgentFiles } from "./chat/AgentFiles";
+import { pendingReplyKey, replayedReply } from "./chat/pendingReplies";
 
 const CREATE_SKILL_WITH_AGENT_PROMPT =
   "Let's create a skill together using your skill-creator skill. First ask me what the skill should do.";
@@ -472,6 +473,9 @@ interface ConvosEnvelope {
   convos: Conversation[];
 }
 
+const clockTime = () =>
+  new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+
 interface ChatMessage {
   id: string;
   role: "user" | "agent";
@@ -798,6 +802,11 @@ export function ChatSection({ events, isActive }: Props) {
   const pendingUserTextRef = useRef<string | null>(null);
   const resolvedIds = useRef<Set<string>>(new Set());
   const deltaBufRef = useRef<Map<string, string>>(new Map()); // runId → accumulated delta text
+  // Bubble time = when the reply's first content arrived, not when the user
+  // sent. Streaming runtimes stamp it on the first delta; non-streaming ones
+  // (codex/harness reply via tts_send, chat_response final) stamp it here.
+  const firstReplyTime = (runId: string, m: ChatMessage) =>
+    deltaBufRef.current.has(runId) ? m.time : clockTime();
   const thinkingBufRef = useRef<Map<string, string>>(new Map()); // runId → accumulated thinking text
   const rafRef = useRef<number | null>(null); // requestAnimationFrame handle for batched rendering
   const dirtyRef = useRef(false); // whether there are pending delta/thinking updates to flush
@@ -878,29 +887,55 @@ export function ChatSection({ events, isActive }: Props) {
 
   // EventSource delivers live monitor events with minimal latency. It can still
   // be interrupted by a proxy reconnect or a browser connection-slot change.
-  // While a chat reply is pending, replay the persisted flow periodically so a
+  // While any chat reply is pending, replay the persisted flow periodically so a
   // final `tts_send` or `harness_response` cannot leave the bubble on `…`
   // until the user reloads the page.
+  const pendingRepliesKey = pendingReplyKey(convos);
   useEffect(() => {
-    if (!sending || !pendingRunIdRef.current) return;
+    if (pendingRepliesKey === "[]") return;
     let cancelled = false;
+    const abort = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const replay = async () => {
       try {
-        const response = await fetch(`${API}/agent/flow-events?last=500`);
+        const response = await fetch(`${API}/agent/flow-events?last=500`, { signal: abort.signal });
         const payload = await response.json();
         const next = payload?.data?.events;
-        if (!cancelled && Array.isArray(next)) setReplayedFlowEvents(next as MonitorEvent[]);
+        if (!cancelled && Array.isArray(next)) {
+          const flowEvents = next as MonitorEvent[];
+          // The active-run watcher below owns its streaming buffers/tool chips.
+          setReplayedFlowEvents(flowEvents);
+          const replies = new Map<string, string>();
+          for (const runId of JSON.parse(pendingRepliesKey) as string[]) {
+            if (runId === pendingRunIdRef.current) continue;
+            const text = replayedReply(flowEvents, runId);
+            if (text !== undefined) replies.set(runId, stripHWMarkers(text));
+          }
+          if (replies.size > 0) {
+            setConvos((prev) => prev.map((conversation) => ({
+              ...conversation,
+              messages: conversation.messages.map((message) =>
+                message.role === "agent" && message.pending && message.runId && replies.has(message.runId)
+                  ? { ...message, text: replies.get(message.runId)!, pending: false }
+                  : message,
+              ),
+            })));
+          }
+        }
       } catch {
         // Live SSE and the next poll remain available; keep the pending turn.
+      } finally {
+        // Do not overlap requests on a slow device.
+        if (!cancelled) timer = setTimeout(() => void replay(), PENDING_FLOW_REPLAY_MS);
       }
     };
     void replay();
-    const timer = window.setInterval(() => void replay(), PENDING_FLOW_REPLAY_MS);
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
+      abort.abort();
+      clearTimeout(timer);
     };
-  }, [sending]);
+  }, [pendingRepliesKey]);
 
   const armReplyWatchdog = useCallback(
     (runId: string, convoId: string, ms: number) => {
@@ -1109,7 +1144,7 @@ export function ChatSection({ events, isActive }: Props) {
             const buf = deltaBufRef.current.get(pending) ?? "";
             // First token: update message time to now
             if (!buf) {
-              const firstTokenTime = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+              const firstTokenTime = clockTime();
               updateMessages((prev) =>
                 prev.map((m) => m.runId === pending && m.pending ? { ...m, time: firstTokenTime } : m),
               );
@@ -1148,7 +1183,7 @@ export function ChatSection({ events, isActive }: Props) {
             updateMessages((prev) =>
               prev.map((m) =>
                 m.runId === pending && m.role === "agent" && m.pending
-                  ? { ...m, text: cleaned, pending: false, tools: savedChips, tokenUsage: usage }
+                  ? { ...m, text: cleaned, time: firstReplyTime(pending, m), pending: false, tools: savedChips, tokenUsage: usage }
                   : m,
               ),
             );
@@ -1174,7 +1209,7 @@ export function ChatSection({ events, isActive }: Props) {
             updateMessages((prev) =>
               prev.map((m) =>
                 m.runId === pending && m.role === "agent" && m.pending
-                  ? { ...m, text: cleaned }
+                  ? { ...m, text: cleaned, time: firstReplyTime(pending, m) }
                   : m,
               ),
             );
@@ -1301,7 +1336,7 @@ export function ChatSection({ events, isActive }: Props) {
           updateMessages((prev) =>
             prev.map((m) =>
               m.runId === pending && m.role === "agent" && m.pending
-                ? { ...m, text: cleaned, pending: false, tools: savedChips, tokenUsage: usage }
+                ? { ...m, text: cleaned, time: firstReplyTime(pending, m), pending: false, tools: savedChips, tokenUsage: usage }
                 : m,
             ),
           );
@@ -1363,7 +1398,7 @@ export function ChatSection({ events, isActive }: Props) {
         prev.map((c) =>
           c.id === convo.id
             ? { ...c, messages: c.messages.map((m) => stranded.has(m.id)
-                ? { ...m, text: "⏹ interrupted — the page reloaded before the device answered", pending: false, error: true }
+                ? { ...m, text: "⏹ interrupted — the page reloaded before the robot answered", pending: false, error: true }
                 : m) }
             : c,
         ),
@@ -1601,7 +1636,7 @@ export function ChatSection({ events, isActive }: Props) {
     }
 
     const nowDate = new Date();
-    const now = nowDate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    const now = clockTime();
     const dateStr = nowDate.toISOString().slice(0, 10);
     const userMsg: ChatMessage = {
       id: `u-${Date.now()}`, role: "user", text, time: now, ts: nowDate.getTime(), date: dateStr,
@@ -1693,7 +1728,7 @@ export function ChatSection({ events, isActive }: Props) {
         pendingRunIdRef.current = runId;
         pendingLocalReplyIdRef.current = null;
         pendingUserTextRef.current = text;
-        const replyTime = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+        const replyTime = clockTime();
         // Adopt the bubble that has been spinning since the click — attaching the
         // run id to it rather than appending a second one, so the user never sees
         // two agent bubbles for one message. The id changes with it: `l-<runId>`

@@ -11,6 +11,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"go.autonomous.ai/os/system/domain"
+	"go.autonomous.ai/os/system/lib/sensingmsg"
 	"go.autonomous.ai/os/system/lib/speakergate"
 	"go.autonomous.ai/os/system/monitor"
 	"go.autonomous.ai/os/system/server/config"
@@ -18,6 +19,8 @@ import (
 
 func queueService(t *testing.T) *PicoclawService {
 	t.Helper()
+	sensingmsg.SetHarnessConnected(func() bool { return true })
+	t.Cleanup(func() { sensingmsg.SetHarnessConnected(nil) })
 	old := speakergate.SpeakerBusy
 	speakergate.SpeakerBusy = func() bool { return false }
 	t.Cleanup(func() { speakergate.SpeakerBusy = old })

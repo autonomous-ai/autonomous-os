@@ -97,7 +97,7 @@ User nói "Lamp, nhìn xem" / "look at me" / "camera on" → agent gọi `[HW:/c
 
 ### 7. Telegram/web chat cần visual context
 
-Agent cần snapshot (camera skill) → tự động bật camera, chụp, tùy chọn giữ bật hoặc tắt sau.
+Agent cần snapshot (camera skill) → một lệnh shell kiểm `GET /camera` trước: `disabled` → agent trả lời "camera đang tắt" rồi dừng (không tự bật, không chụp); `has_frame: false` → "camera không hoạt động" rồi dừng; còn lại `POST /api/vision/look` chụp và mô tả. Bước kiểm nằm chung tool call nên không thêm vòng model.
 
 ## Manual Override
 
@@ -137,7 +137,7 @@ Manual override KHÔNG bị ghi đè bởi scene/emotion/presence triggers. Ch�
 
 ### OpenClaw Skills
 
-10. **Camera skill**: ✅ Done — voice/chat toggle + auto-enable trước capture.
+10. **Camera skill**: ✅ Done — voice/chat toggle; capture kiểm `/camera` trong cùng lệnh shell và trả lời "tắt" / "không hoạt động" thay vì tự bật hay chụp (bỏ auto-enable trước capture 16/9/2026).
 
 ### Web Monitor
 
@@ -149,7 +149,7 @@ Manual override KHÔNG bị ghi đè bởi scene/emotion/presence triggers. Ch�
 
 - ✅ Description cập nhật với trigger phrases cho toggle
 - ✅ Examples cho disable/enable qua `[HW:/camera/disable:{}]` và `[HW:/camera/enable:{}]`
-- ✅ Rule auto-enable trước capture
+- ✅ Rule camera tắt / không có frame = trả lời và dừng (thay rule auto-enable, 16/9/2026)
 - ✅ Rule: không bao giờ toggle camera chủ động mà không có yêu cầu từ user
 
 ### Agent không nên tự ý toggle camera
@@ -206,7 +206,7 @@ Auto-exposure của camera USB kéo dài thời gian tích sáng khi thiếu sá
 |---|---|---|
 | `HAL_CAMERA_AUTO_EXPOSURE` | `auto` | `auto` dùng auto-exposure thích ứng của camera (default; sáng/thích ứng nhưng throttle fps khi thiếu sáng). `manual` ghim exposure theo các giá trị bên dưới — rủi ro loạn màu ISP khi gain cao. |
 | `HAL_CAMERA_EXPOSURE` | `330` | Thời gian exposure manual, V4L2 `exposure_absolute` ×100µs: `200`=20ms (30fps), `330`=33ms (trần ≈30fps), `500`=50ms (≈20fps). |
-| `HAL_CAMERA_GAIN` | `96` | Gain cảm biến (tùy camera, vd 0–255). Tăng sáng không tốn fps nhưng thêm noise; trên ~144 rủi ro loạn màu ISP. |
+| `HAL_CAMERA_GAIN` | `96` | Gain cảm biến (tùy camera, vd 0–255). Tăng sáng không tốn fps nhưng thêm noise; trên ~144 rủi ro loạn màu ISP. Được ghi ở cả hai mode (xem dưới). |
 | `HAL_CAMERA_BRIGHTNESS` | _(không set)_ | Offset brightness (tùy camera, vd -64..64). Nâng sáng digital. |
 
 Default áp dụng kể cả khi `.env` không có entry nào. Muốn ghim frame rate trên một thiết bị thì set `HAL_CAMERA_AUTO_EXPOSURE=manual` per device — fallback manual (330 / 96) là bộ giá trị đã verify màu ổn định; default cũ (`manual` / 500 / 255) là combo độc đã biết.
@@ -215,7 +215,7 @@ Default áp dụng kể cả khi `.env` không có entry nào. Muốn ghim frame
 
 `_apply_camera_controls()` (`drivers/camera/video_capture_device.py`) chạy sau khi set độ phân giải lúc open **và mỗi lần reopen device** — open mới reset camera về default, nếu không áp lại thì manual exposure sẽ âm thầm mất và FPS throttle quay lại. Map sang V4L2/UVC controls qua OpenCV: `CAP_PROP_AUTO_EXPOSURE` (1=manual, 3=auto), `CAP_PROP_EXPOSURE`, `CAP_PROP_GAIN`, `CAP_PROP_BRIGHTNESS`.
 
-Ở mode `auto`, control được chủ động set về 3 (aperture-priority) mỗi lần open, chứ không bỏ mặc: camera UVC giữ nguyên manual exposure/gain qua các lần restart HAL, nên trạng thái manual sót lại từ cấu hình cũ sẽ sống dai qua cả việc đổi `.env` sang `auto`. **Gain** manual sót lại thì không bị reset (default tùy camera, auto-exposure tự bù); nếu đổi sang auto rồi mà màu vẫn sai, xóa một lần bằng `v4l2-ctl -d /dev/video0 --set-ctrl gain=<default>`. Lưu ý đổi `.env` chỉ có hiệu lực sau `systemctl restart hal` — process đang chạy vẫn giữ env lúc nó start.
+Ở mode `auto`, control được chủ động set về 3 (aperture-priority) mỗi lần open, chứ không bỏ mặc: camera UVC giữ nguyên manual exposure/gain qua các lần restart HAL, nên trạng thái manual sót lại từ cấu hình cũ sẽ sống dai qua cả việc đổi `.env` sang `auto`. **Gain** cũng được ghim về `HAL_CAMERA_GAIN` ở mode `auto`: auto-exposure UVC chỉ chỉnh thời gian tích sáng, nên gain camera còn giữ ở max từ lần chạy manual trước sẽ làm cháy sáng phòng đèn bất kể auto-exposure (lamp-4ace, 18/09/2026: gain 128/128, trần và cửa sổ trắng xoá; về 64 là ảnh bình thường). Lưu ý đổi `.env` chỉ có hiệu lực sau `systemctl restart hal` — process đang chạy vẫn giữ env lúc nó start.
 
 ### Trade-off
 
@@ -225,8 +225,9 @@ Frame rate vs độ sáng là trade-off vật lý cứng trong phòng tối: exp
 
 Mặc định camera mở theo index: `HAL_CAMERA_INDEX` (default `0`) → `/dev/video0`, kèm fallback scan (symlink udev `/dev/cam`, rồi quét index 0–5). Index trần dễ vỡ — cắm thêm USB device khác hoặc thứ tự enumerate lúc boot đổi là `/dev/video<N>` xáo trộn.
 
-`HAL_CAMERA_NAME` (tuỳ chọn) chọn camera theo **tên phần cứng**, giống cách audio chọn device (`resolve_camera_device_id()` trong `drivers/camera/video_capture_device.py`). Giá trị là substring không phân biệt hoa thường của tên thiết bị v4l2 (ví dụ `OPENAICAM`). Thứ tự resolve:
+`HAL_CAMERA_NAME` (tuỳ chọn) chọn camera theo **alias vai trò** hoặc **tên phần cứng**, giống cách audio chọn device (`resolve_camera_device_id()` trong `drivers/camera/video_capture_device.py`). Giá trị là một đường dẫn tuyệt đối, hoặc substring không phân biệt hoa thường của tên thiết bị v4l2 (ví dụ `OPENAICAM`). Thứ tự resolve:
 
+0. **Đường dẫn tuyệt đối** (ví dụ `/dev/device-camera`, `SYMLINK` udev gắn theo vid:pid của camera trong `99-lamp-device.rules`) — trả về nguyên nếu tồn tại. Đây là bản camera của `device_speaker` trong `asound.conf`: `.env` đặt tên vai trò, udev quyết định phần cứng nào đảm nhận, nên đổi camera chỉ cần sửa udev. `.env` lamp standard dùng cách này. Đường dẫn không tồn tại thì rơi về index (bước 3).
 1. **Symlink capture `/dev/v4l/by-id`** (`...-video-index0`) có tên chứa needle — trả về chính đường symlink, nên các lần reopen sau vẫn bám đúng thiết bị kể cả khi kernel đánh số lại `/dev/video<N>` sau replug hay USB power-cycle.
 2. **Scan tên sysfs** — match `/sys/class/video4linux/video<N>/name` (N nhỏ nhất trước), bỏ qua node metadata anh em của UVC (cùng tên, thuộc tính `index` khác 0, không capture được).
 3. **Fallback về index cũ** kèm warning khi không match gì (camera rớt hoặc đổi tên).

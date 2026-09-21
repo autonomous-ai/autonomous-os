@@ -43,12 +43,13 @@ Flow Monitor là lớp quan sát end-to-end cho agent turn: ghi JSONL (`local/fl
 | `agent_last_token` | `lifecycle.end` drain accumulator | `{run_id, text, chunks, chars}` |
 | `thinking_first_token` | Delta `thinking` đầu tiên (chỉ extended thinking) | `{run_id}` |
 | `thinking_last_token` | `lifecycle.end` | `{run_id, text, chunks, chars}` |
+| `narration_demoted` | `tool` start tới khi buffer `assistant` đang có text | `{run_id, tool, text}` — text stream TRƯỚC một tool call là model kể kế hoạch ("Let me take a look."), không phải reply. Handler bỏ nó khỏi reply buffer (không tới web chat / TTS ở `lifecycle.end`) và hiện ở row thinking. Chung mọi runtime; bỏ qua nếu câu đầu đã stream ra TTS hoặc text có marker `[HW:...]` |
 
 Tối đa 4 dòng JSONL bonus / turn (thực tế 0–2). Stream name từ OpenClaw vẫn là `"assistant"` ở code level — chỉ JSONL node dùng prefix `agent_` cho khớp các node hiện có (`agent_thinking`, `agent_call`, `agent_response`). State live trong `OpenClawHandler.streamStats`, độc lập với `assistantBuf` (phục vụ TTS flush). Drain ở `lifecycle.end`. Trước đây có `llm_first_token` event đã bị bỏ vì "redundant với pipeline aggregator" — lý do đó sai, aggregator không observe được khi raw deltas không bao giờ tới JSONL.
 
 **Badge `⏱` vs `⚡` trên Turn card:**
 - **⏱ total** = `turn.startTime → turn.endTime` (input event → `lifecycle_end` / `tts_send` / `chat_final`) — toàn bộ window server-side. Đây là **server-observed turn duration**.
-- **⚡ TTFT** = `turn.startTime → first thinking/assistant_delta` — khớp với timestamp agent bubble trên chat page (lúc user **thấy** reply bắt đầu). Đây là **perceived latency**.
+- **⚡ TTFT** = `turn.startTime → first thinking/assistant_delta` — khớp với timestamp agent bubble trên chat page (lúc user **thấy** reply bắt đầu — delta đầu tiên với runtime stream; `chat_response`/`tts_send` cuối với runtime không stream như codex). Đây là **perceived latency**.
 - Khoảng cách ⚡ ↔ ⏱ = tail-streaming các token còn lại + lifecycle close. Reply ngắn → 2 con gần bằng nhau; reply dài → gap rõ rệt.
 - Ngưỡng màu: ⏱ green ≤5s / amber ≤15s / red >15s. ⚡ green ≤3s / amber ≤8s / red >8s.
 - ⚡ ẩn khi không có LLM stream (local intent match, dropped, queued).
@@ -79,8 +80,30 @@ Component `FlowDiagram` trong `system/web/src/pages/Monitor.tsx` vẽ **ba vùng
   - **EMO** (`hw_emotion`) — `/emotion` (phối hợp LED + servo + display eyes)
   - **LED** (`hw_led`) — `/led/solid`, `/led/effect`, `/scene`, `/led/off`
   - **SERVO** (`hw_servo`) — di chuyển hoặc chạy animation servo:
-    `/servo/aim`, `/servo/play`, `/servo/track`. Chi tiết node hiển thị đúng
-    lệnh/API call agent đã chạy trong turn đang chọn.
+    `/servo/aim`, `/servo/play`, `/servo/nudge`, `/servo/search`, `/servo/demo`.
+    Chi tiết node hiển thị đúng lệnh/API call agent đã chạy trong turn đang
+    chọn. Các lệnh đọc (`/servo/position`, `/servo/status`, `/servo/bearing`)
+    không tính — một event `hw_servo` nghĩa là đèn đã làm gì đó mà người ta
+    nhìn thấy được.
+
+  **Event phần cứng được so khớp theo endpoint đã phân giải, không theo text
+  shell thô.** Arguments của tool call được quét tìm `127.0.0.1:500[01]/<path>`
+  (`hwPathFromToolArgs` trong `handler_event_agent.go`) và các nhánh `/emotion`
+  cùng `/servo/*` so sánh với path đó. Cách so khớp chuỗi con trước đây biến
+  `cat …/skills/emotion/SKILL.md` thành một cặp `hw_emotion` + `led_set` cho một
+  turn mà đèn không hề làm gì. Các nhánh `/led/*` và `/audio/play` vẫn dùng
+  dạng chuỗi con — cùng điểm yếu, nhưng chưa quan sát thấy event ma ở đó.
+
+  **`hw_failed`** — một marker `[HW:...]` mà OS đã cố bắn nhưng POST thất bại
+  ở tầng transport: client timeout 5 s, kết nối bị từ chối. Mang theo `path`,
+  `args`, `run_id` và `error`. Trước khi có event này, nhánh đó return trước
+  bất kỳ `flow.Log` nào, nên một chuyển động thân máy dài 40 s không để lại gì
+  trong monitor (`device-chat-44`: marker tìm kiếm đã bắn, HAL quét cả phòng,
+  timeline hiện một cái đèn đứng yên). Cố ý **không** phải là một cancellation:
+  nó làm sáng node OS-gate và thêm dòng `⚠ → HW call failed` vào chi tiết,
+  nhưng không gắn badge cancelled cho turn và không tô đỏ node TTS — hai thứ đó
+  nghĩa là *người dùng* đã làm turn im tiếng, và một timeout không bao giờ được
+  đọc thành hành động của người dùng.
   - **CAM** (`hw_camera`) — `GET /camera/snapshot`; ảnh đã lưu mà tool
     trả về (kể cả file workspace như `cam_face3.jpg`) hiện thumbnail bấm để
     phóng to, giúp debug đúng frame agent nhận được, không chụp lại ảnh mới.
@@ -228,6 +251,32 @@ Session agent auto-compact khi context vượt ~80k tokens. Mỗi lần compact 
 
 Dùng khi agent viện rule mà grep không thấy trong bất kỳ `skills/**/SKILL.md` — gần như 100% nguồn là compaction summary, không phải skill đang load. Handler: `system/server/openclaw/delivery/sse/handler_api_compaction.go`.
 
+## Trạng thái memory theo turn (`lifecycle_start.memory`, `memory_changed`)
+
+Issue #421: một dòng `USER.md` do agent tự ghi đã làm hỏng skill routing gần
+cả ngày vì không có gì cho thấy turn đó chạy với memory nào. Hai bổ sung:
+
+- Flow data của `lifecycle_start` mang thêm `memory`: `{"USER.md": {"size",
+  "sha8"}, "MEMORY.md": …, "KNOWLEDGE.md": …}` cho runtime **đang active** —
+  fingerprint do memory guard của OS publish (`docs/os-server.md`, mục "Memory
+  guard"). Chỉ có size và 8 hex đầu của sha256; không bao giờ có nội dung.
+- `memory_changed` (kind `event`) được guard emit từ fsnotify watch mỗi khi có
+  ghi vào `USER.md` / `MEMORY.md` của bất kỳ runtime nào. Event phát ra ~2 s
+  sau lần ghi (debounce) và gắn trace đang active tại thời điểm đó — thường là
+  turn đã ghi, nhưng có thể là turn sau nếu turn mới đã bắt đầu, hoặc không có
+  trace nếu turn đã kết thúc. Data: `file`, `runtime`, `path`, `size`, `sha8`,
+  `quarantined` (số block bị gỡ — hoặc, khi `execute` là false, số block guard
+  lẽ ra đã gỡ), `reasons` (`free-prose` | `unknown-label` | `prescriptive`),
+  `execute` (false ở chế độ chỉ quan sát, `agent.memory_guard=false`),
+  `trigger` (`startup` | `watch` | `rescan`).
+
+Footer của turn card hiện fingerprint theo thứ tự cố định `USER 2.1k MEMORY
+0.4k KNOWLEDGE 1.0k`; khi trong turn có event `memory_changed` thì nối thêm
+`✎ memory changed` (màu amber), và `· N quarantined` màu đỏ chỉ khi guard thật
+sự đã gỡ gì đó (`execute` true). Ở chế độ chỉ quan sát badge vẫn amber và ghi
+`· would quarantine N`. Hover để xem size (bytes) / hash từng file và reasons.
+So `sha8` giữa hai turn cho biết memory có thay đổi giữa hai turn đó hay không.
+
 ## Issue đang mở
 
 ### OpenClaw built-in `tts` tool bypass speaker HAL (ĐÃ FIX)
@@ -251,3 +300,9 @@ Marker `[HW:...]` chỉ tới HAL khi agent xuất nó ra **text trả lời** (
 - **Chống tận gốc**: `skills/music/SKILL.md` đã cấm rõ echo/exec/bash bọc marker — marker phải là text trả lời, không "chạy" nó.
 
 Kết quả cuối Harness được ghi vào flow JSONL bằng `harness_response`, giữ run ID thiết bị gốc và `text` đầy đủ. Web Chat dùng sự kiện này khôi phục kết quả đang chờ sau khi SSE ngắt hoặc tải lại trang. Luồng trực tiếp vẫn phát `chat_response` với state `final`.
+
+Lượt voice do realtime xử lý và lượt history sync dùng ID riêng: `device-realtime-…` cho hội thoại gốc, `device-chat-context-…` cho đồng bộ. Event `realtime_response` lưu câu hỏi/câu trả lời và đóng card gốc; card History sync theo lifecycle riêng. `history_run_id` liên kết mà không gộp hai lượt. Event cũ đã lưu cùng ID vẫn giữ cách hiển thị gộp trước đây.
+
+### Nhãn voice command và follow-up
+
+`sensing_input` và `realtime_response` có thể mang `data.voice_turn_type` (`voice`, `voice_command`, hoặc `voice_followup`). Flow Monitor ghép trường này với loại event handled: wake command do realtime xử lý hiện `VOICE_COMMAND_HANDLED`, follow-up hiện `VOICE_FOLLOWUP_HANDLED`, lượt handled thường hoặc cũ giữ `VOICE_AGENT_HANDLED`. Badge, bộ lọc subtype và search dùng cùng nhãn; search cũng nhận loại event gốc. Bộ lọc loại trừ đã lưu được mở rộng sang các subtype mới. Đây chỉ là thay đổi hiển thị; loại event, gom run, đường realtime/main, queue và cancel giữ nguyên. LIVE ON/OFF dùng cùng bộ phân loại wake phrase của HAL. Follow-up LIVE đã được cho phép giữ phân loại wake focus dù window hết trước khi provider trả lời. Reply realtime vẫn giữ `voice_agent_handled` để đồng bộ history im lặng. Row cũ thiếu metadata giữ nhãn cũ; history sync không lấy phân loại từ lượt voice bên cạnh.

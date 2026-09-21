@@ -42,7 +42,7 @@ The headers of both scripts list the duplicated regions; search for
 Board-specific lines that should NOT be mirrored:
 
 - `build.sh`: anything touching `/boot/firmware/config.txt`, `cmdline.txt`,
-  Btrfs `@`/`@factory` subvolumes, `auto_initramfs`, `dtparam=spi=on`.
+  Btrfs `@`/`@factory` subvolumes, `auto_initramfs`, `dtparam=spi=on` + `dtparam=i2c_arm=on`.
 - `build-orangepi.sh`: anything touching `/boot/orangepiEnv.txt`, ES8389
   ALSA aliases (sndi2s4-specific), `orangepi-firstrun-config.service` mask,
   ext4-single-partition assumptions.

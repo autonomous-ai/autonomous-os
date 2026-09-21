@@ -14,6 +14,12 @@ type OTAComponent struct {
 	MinVersion string `json:"min_version,omitempty"`
 	URL        string `json:"url"`
 	SHA256     string `json:"sha256,omitempty"`
+	// Commit pins a git-installed component (hermes) to the exact upstream
+	// commit that reports Version. Written by scripts/release/upload-hermes.sh;
+	// `software-update hermes` checks that commit out through the upstream
+	// installer's --commit flag. Empty on entries published before pinning
+	// existed, which the updater treats as "unpinned: hermes update to HEAD".
+	Commit string `json:"commit,omitempty"`
 }
 
 const (
@@ -36,10 +42,13 @@ const (
 	// of the runtime a device actually runs (every lamp/intern-v2 image bakes ALL
 	// of these binaries regardless of runtime, so binary presence proves nothing).
 	//
-	// Hermes is deliberately absent: `hermes update` takes no target version and
-	// always moves to upstream HEAD, so a min_version floor it cannot reach would
-	// re-trigger the update every poll forever. It stays manual-only
-	// (`software-update hermes` over SSH).
+	// OTAKeyHermes rides the same loop ONLY when the metadata entry carries a
+	// Commit: Hermes is a git install and `hermes update` takes no target (it
+	// moves to upstream HEAD), so an unpinned entry's min_version could never be
+	// reached and would re-trigger every poll. With a commit, `software-update
+	// hermes` checks that exact build out (see OTAComponent.Commit) and the
+	// landed `hermes --version` matches the published semver like any other CLI.
+	OTAKeyHermes     = "hermes"
 	OTAKeyCodex      = "codex"
 	OTAKeyClaudeCode = "claudecode"
 	OTAKeyOpenCode   = "opencode"

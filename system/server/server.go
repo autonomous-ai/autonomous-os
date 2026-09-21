@@ -29,6 +29,7 @@ import (
 	"go.autonomous.ai/os/system/lib/logger"
 	"go.autonomous.ai/os/system/lib/mqtt"
 	"go.autonomous.ai/os/system/lib/safego"
+	"go.autonomous.ai/os/system/lib/sensingmsg"
 	"go.autonomous.ai/os/system/network"
 	_agentHttpDeliver "go.autonomous.ai/os/system/server/agent/delivery/http"
 	_buddyHttpDeliver "go.autonomous.ai/os/system/server/buddy/delivery/http"
@@ -83,6 +84,7 @@ type Server struct {
 	channelReconcile *agent.ChannelReconcile
 	mcpReconcile     *agent.MCPReconcile
 	userReconcile    *agent.UserProfileReconcile
+	memoryGuard      *agent.MemoryGuard
 	networkService   *network.Service
 	deviceService    *device.Service
 	ambientService   *ambient.Service
@@ -158,6 +160,7 @@ func ProvideServer(
 	cr *agent.ChannelReconcile,
 	mr *agent.MCPReconcile,
 	upr *agent.UserProfileReconcile,
+	mg *agent.MemoryGuard,
 	ns *network.Service,
 	mqttFactory *mqtt.Factory,
 	ambientSvc *ambient.Service,
@@ -187,6 +190,7 @@ func ProvideServer(
 		channelReconcile:  cr,
 		mcpReconcile:      mr,
 		userReconcile:     upr,
+		memoryGuard:       mg,
 		networkService:    ns,
 		deviceService:     ds,
 		mqttFactory:       mqttFactory,
@@ -195,6 +199,15 @@ func ProvideServer(
 		statusLED:         sled,
 		chatStream:        chatStream,
 	}
+	harnessConnected := func() bool {
+		if s.harnessService == nil {
+			return false
+		}
+		status := s.harnessService.Status()
+		return status.Paired && status.Connected
+	}
+	sensingH.SetHarnessConnected(harnessConnected)
+	sensingmsg.SetHarnessConnected(harnessConnected)
 	sensingH.SetHarnessFollowup(s.HarnessVoiceFollowup)
 	sensingH.SetHarnessFollowupContext(s.HarnessFollowupContext)
 	sensingH.SetHarnessVoice(s.handleHarnessVoice)
@@ -226,6 +239,10 @@ func (s *Server) Serve(closeFn func()) error {
 		logger.SetGELFHost(s.config.DeviceID)
 	}
 	logger.SetGELFDeviceType(deviceType)
+	// No GELF_URL on the device (the shipped case) → relay through the cloud API
+	// with the device key; the collector credential stays server-side. No-op when
+	// GELF_URL is set or the device has no Autonomous credential to relay with.
+	logger.EnableGELFRelay(s.config.GELFRelayCredentials())
 
 	// Common fields for every tracking event this device sends (see
 	// system/telemetry). Set once here, where the resolved device class,
@@ -331,7 +348,14 @@ func (s *Server) Serve(closeFn func()) error {
 	if err := s.initializeExternalHistory(eventCtx); err != nil {
 		return err
 	}
-	harnessService, harnessErr := harness.NewService("config", harness.Callbacks{OnEvent: s.forwardHarnessEvent})
+	harnessService, harnessErr := harness.NewService("config", harness.Callbacks{
+		OnEvent: s.forwardHarnessEvent,
+		OnRevoked: func() {
+			if s.harnessVoice != nil {
+				_, _ = s.harnessVoice.SetMode(eventCtx, false)
+			}
+		},
+	})
 	if harnessErr != nil {
 		slog.Error("harness service initialization failed", "component", "harness", "error", harnessErr)
 	} else {
@@ -560,6 +584,9 @@ func (s *Server) Serve(closeFn func()) error {
 		s.userReconcile.Reconcile()
 		c.JSON(http.StatusOK, serializers.ResponseSuccess(gin.H{"reconciled": true}))
 	})
+	// memory/reset: no-SSH recovery for self-written memory that poisoned
+	// routing (#421). Admin-only — it deletes learned memory (with a backup).
+	agent.POST("memory/reset", adminAuthMiddleware(s.config), s.agentHandler.ResetMemory)
 	// channel-turn: the Hermes gateway observer hook POSTs each turn here so
 	// channel (Telegram/Slack/…) turns surface in Flow Monitor. Loopback-only.
 	agent.POST("channel-turn", localOnlyMiddleware(), s.agentHandler.ChannelTurn)

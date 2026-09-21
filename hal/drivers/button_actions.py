@@ -200,7 +200,7 @@ def _wake_if_sleepy(source: str):
     try:
         from hal.models import EmotionRequest
         from hal.routes.emotion import express_emotion
-        express_emotion(EmotionRequest(emotion="stretching"))
+        express_emotion(EmotionRequest(emotion="stretching"), source=source)
     except Exception as e:
         logger.warning("Wake emotion call failed: %s", e)
 
@@ -264,13 +264,18 @@ def _stop_active_tracking(source: str):
     # is_tracking guard below would miss it — the user would press the button to
     # stop the lamp moving and it would keep turning. Abort it unconditionally.
     try:
+        from hal.drivers.motors.range_demo import request_abort as _abort_demo
         from hal.drivers.tracking.aim import request_abort as _abort_aim
         from hal.drivers.tracking.search import request_abort as _abort_search
 
         _abort_aim()
         _abort_search()
+        # The range demo moves the body AND narrates it, so a click that only
+        # stopped the arm would leave the lamp describing legs it is no longer
+        # performing.
+        _abort_demo()
     except Exception as e:
-        logger.debug("%s single click -- aim/search abort unavailable: %s", source, e)
+        logger.debug("%s single click -- aim/search/demo abort unavailable: %s", source, e)
 
     tracker = state.tracker_service
     if not tracker or not tracker.is_tracking:
@@ -522,6 +527,10 @@ def sleep_action(source: str = "button"):
     if state._sleeping:
         logger.info("%s sleep hold -- already sleeping", source)
         return
+    from hal.routes.emotion import harness_blocks_sleep
+    if harness_blocks_sleep():
+        logger.info("%s sleep hold -- ignored, Harness is on", source)
+        return
 
     logger.info("%s sleep hold -- announcing sleepy emotion", source)
     if _tts_available():
@@ -535,8 +544,9 @@ def sleep_action(source: str = "button"):
         from hal.routes.emotion import express_emotion
 
         # Reuse /emotion so sleep keeps one authoritative implementation for
-        # servo animation/release, LED off, camera off, and audio mute.
-        express_emotion(EmotionRequest(emotion="sleepy"))
+        # servo animation/release, LED off, camera off, and audio mute -- and,
+        # with `source`, one authoritative record of who asked for it.
+        express_emotion(EmotionRequest(emotion="sleepy"), source=source)
     except Exception as e:
         logger.warning("%s sleep hold failed: %s", source, e)
 
@@ -579,13 +589,15 @@ def shutdown_action(source: str = "button"):
     shutdown_os()
 
 
-def hold_release_action(held_s: float, source: str = "button"):
+def hold_release_action(held_s: float, source: str = "button", *, factory_reset: bool = True):
     """Map a released hold duration to its explicit device action.
 
     Input drivers supply released hold durations. This mapping shares the
     sleep/shutdown/factory-reset decision tree across GPIO and MPR121 inputs.
+    Inputs that must not factory-reset (MPR121) pass factory_reset=False and
+    keep any longer hold at shutdown.
     """
-    if held_s >= FACTORY_RESET_DURATION:
+    if factory_reset and held_s >= FACTORY_RESET_DURATION:
         factory_reset_action(source)
     elif held_s >= LONG_PRESS_DURATION:
         shutdown_action(source)
@@ -593,25 +605,25 @@ def hold_release_action(held_s: float, source: str = "button"):
         sleep_action(source)
 
 
-def button_hold_tier(held_s, *, behavior="standard", hold_s=5.0):
+def button_hold_tier(held_s, *, behavior="standard", hold_s=5.0, factory_reset=True):
     """Select shared feedback for normal and dedicated reset buttons."""
     if behavior == "factory_reset":
         return 3 if held_s >= hold_s else 0
-    return (3 if held_s >= FACTORY_RESET_DURATION else
+    return (3 if factory_reset and held_s >= FACTORY_RESET_DURATION else
             2 if held_s >= LONG_PRESS_DURATION else
             1 if held_s >= SLEEP_HOLD_DURATION else 0)
 
 
 def button_hold_release_action(held_s, feedback, *, behavior="standard", hold_s=5.0,
-                               source="button"):
+                               source="button", factory_reset=True):
     """Commit the actual policy's LED and action using a released duration."""
-    if not button_hold_tier(held_s, behavior=behavior, hold_s=hold_s):
+    if not button_hold_tier(held_s, behavior=behavior, hold_s=hold_s, factory_reset=factory_reset):
         return
     if behavior == "factory_reset":
         if feedback.commit_tier(3) is not False:
             factory_reset_action(source)
-    elif feedback.commit(held_s) is not False:
-        hold_release_action(held_s, source=source)
+    elif feedback.commit(held_s, factory_reset=factory_reset) is not False:
+        hold_release_action(held_s, source=source, factory_reset=factory_reset)
 
 
 def _factory_reset_phrase() -> str:
@@ -741,8 +753,8 @@ class HoldLEDFeedback:
                 return
             self._request(0)
 
-    def commit(self, held_s):
-        tier = 3 if held_s >= FACTORY_RESET_DURATION else 2 if held_s >= LONG_PRESS_DURATION else 0
+    def commit(self, held_s, *, factory_reset=True):
+        tier = 3 if factory_reset and held_s >= FACTORY_RESET_DURATION else 2 if held_s >= LONG_PRESS_DURATION else 0
         return self.commit_tier(tier)
 
     def commit_tier(self, tier):

@@ -14,6 +14,7 @@ import uuid
 BASE = 'http://127.0.0.1:5000/api/harness'
 MAX_BYTES = 3 * 1024 * 1024
 KNOWN_RECEIPT_STATES = ('queued', 'delivered', 'started', 'completed', 'rejected')
+AGENT_RECAP_MAX_CHARS = 1000
 
 
 def api(path, payload=None):
@@ -34,6 +35,16 @@ def request(kind, **fields):
     return api('/request', {'type': kind, 'requestId': str(uuid.uuid4()), **fields})
 
 
+def require_connection():
+    """Distinguish missing pairing from an offline paired computer before dispatch."""
+    status = api('/status')
+    if status.get('paired') is not True:
+        raise ValueError('HARNESS_UNPAIRED: Pair this device in Harness Desktop Settings > Devices using the code from OS Monitor.')
+    if status.get('connected') is not True:
+        raise ValueError('HARNESS_OFFLINE: Open Harness on the paired computer and check the local network connection. Pairing is already saved; do not pair again.')
+    return status
+
+
 def save(path, value):
     fd, temp = tempfile.mkstemp(dir=path.parent, prefix='.harness-')
     try:
@@ -45,6 +56,21 @@ def save(path, value):
     finally:
         if os.path.exists(temp):
             os.unlink(temp)
+
+
+def bounded_agents(listing):
+    """Keep each agent's optional recap headline a bounded one-line string; drop anything else."""
+    agents = listing.get('agents')
+    if not isinstance(agents, list):
+        return listing
+    for agent in agents:
+        if not isinstance(agent, dict) or 'recap' not in agent:
+            continue
+        recap = agent.pop('recap')
+        recap = ' '.join(recap.split()) if isinstance(recap, str) else ''
+        if recap:
+            agent['recap'] = recap[:AGENT_RECAP_MAX_CHARS]
+    return listing
 
 
 def run(action, params, path=None):
@@ -72,7 +98,7 @@ def run(action, params, path=None):
             pending = context.get('pending')
             if not pending:
                 return {'receipt': None, 'pending': False}
-            status = api('/status')
+            status = require_connection()
             if status.get('machine_id') != pending['machineId']:
                 raise ValueError('Pairing changed; unresolved request belongs to the previous computer')
             result = request('receipt.get', idempotencyKey=pending['idempotencyKey'])
@@ -83,11 +109,12 @@ def run(action, params, path=None):
                 context.pop('pending', None)
                 save(path, state)
             return result
+        require_connection()
         listing = request('agents.list')
         if listing.get('error'):
             return listing
         if action == 'list':
-            return listing
+            return bounded_agents(listing)
         agents = listing.get('agents', [])
         machine = listing.get('machineId')
         explicit = params.get('agentId') or params.get('agent')
@@ -103,7 +130,8 @@ def run(action, params, path=None):
             save(path, state)
             return {'selected': target}
         if action in ('status', 'recap'):
-            return request(action, **target, **({'n': params.get('n', 3)} if action == 'recap' else {}))
+            # Default to the newest turn only: its recap/text pair is what selection and progress checks need.
+            return request(action, **target, **({'n': params.get('n', 1)} if action == 'recap' else {}))
         if context.get('pending'):
             raise ValueError('A previous delivery is unresolved. Inspect receipt/status; do not resend automatically')
         response = params.get('response')

@@ -1,5 +1,7 @@
 # LED Control — Documentation
 
+During manual Harness capture, recorder/STT readiness switches the indicator to the existing listening preset (Lamp: dim blue `[0, 0, 3]`, speed `0.3`). It stays active even before the first transcript. Finish, cancellation, timeout or failure clears this capture indicator and restores the normal priority policy; subsequent thinking/TTS cues keep their existing behavior. This LED-only cue does not move the servos or change saved preferences.
+
 ## Hardware
 
 - **32 WS2812 RGB LEDs** — one ring
@@ -43,7 +45,7 @@ stays lit until the first LED command, which may be minutes after boot.
 
 ### Harness voice confirmation
 
-Physical Harness toggles read `button_led.harness_on` / `button_led.harness_off` from `robots/lamp/presets.json` through the live HAL preset table. Lamp uses RGB `[1, 1, 3]` when enabled and `[2, 2, 2]` when disabled. Both inherit a 600 ms pulse; `effect` and `duration_ms` can also be overridden in the preset. Feedback remains transient and schedules LED restoration 100 ms after the configured duration.
+Harness mode reads `button_led.harness_on` / `button_led.harness_off` from `robots/lamp/presets.json` through the live HAL preset table. While ON, Lamp maintains a dim warm amber `breathing_fine` indicator at RGB `[3, 1, 0]`, speed `0.6` (about five seconds per breath). OFF gives one dim white blink at RGB `[2, 2, 2]`, speed `1.0`, duration `300` ms, then restores the saved user state. The mode watcher and normal LED restoration share `hal/drivers/harness/led.py`; sleep, mic privacy, TTS, music and thinking take priority. Idle ambient breathing cannot replace the indicator. User LED preferences are not overwritten; no RGB service means no LED work. The OFF overlay restores 100 ms after its configured duration.
 
 ## Solid Color
 
@@ -119,7 +121,7 @@ When a scene activates, `POST /scene` applies in order:
 3. **Servo hold** — if `"servo": "hold"`, freezes servo **after** aim completes (aim → hold in one thread). Released when switching to a scene without hold.
 4. **Camera** — auto on/off via `_auto_camera_on`/`_auto_camera_off`
 5. **Mic** — mute stops voice pipeline (STT), unmute restarts it
-6. **Speaker** — mute stops TTS + music playback, unmute re-enables output
+6. **Speaker** — `off` stops music at once and mutes speech on a **drain** (`_start_scene_speaker_drain`, see `sensing-behavior.md`): the scene's own confirmation line, sent by os-server after the `/scene` marker, still plays before the speaker closes; `sleepy` chained in the same reply takes the drain over so wake can restore the speaker. `on` re-enables output. Scene off under a held privacy lock retargets the lock's snapshot so release reopens the speaker/camera (see `physical-controls.md`).
 
 **Scene activation is the only path that aims.** An LED restore — after an emotion, at TTS end, at
 music end, on mic unmute, on a listening cue clearing — repaints the strip and nothing else, and a
@@ -318,3 +320,11 @@ See [emotion-led-mapping.md](emotion-led-mapping.md) for the full emotion → LE
 A device can override these emotion/scene/aim values (and the LED ring size) without
 changing the shared defaults, via a `robots/<type>/presets.json` file. This is a
 platform mechanism — see [ROBOT-SPEC.md § Per-device presets](../../contract/ROBOT-SPEC.md#per-device-presets-presetsjson).
+
+### LIVE voice status
+
+LIVE voice uses the same `listening` HW emotion and realtime thinking helper
+as turn-based voice, including their existing LED, display and body behavior.
+It requires recognized input text and the regular addressing gate; noise or
+opening the mic cannot start these emotions. Thinking requires provider end
+evidence, never a local silence estimate. There is no separate LIVE LED overlay. See [realtime voice](../../../docs/realtime-voice.md#hw-emotion-feedback-in-live-mode) for timing and cleanup.

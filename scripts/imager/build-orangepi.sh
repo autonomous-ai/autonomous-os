@@ -66,6 +66,12 @@ DEVICES_DIR="${DEVICES_DIR:-/opt/devices}"
 # the SSH policy, so there is exactly one thing to set per case color and no
 # way for the two to disagree.
 DEFAULT_AGENT="${DEFAULT_AGENT:-}"
+# Optional assembly within the device package; empty/standard keeps legacy defaults.
+VARIANT="${VARIANT:-}"
+if [[ -n "$VARIANT" && ! "$VARIANT" =~ ^[a-z][a-z0-9_-]{0,63}$ ]]; then
+  echo "Invalid VARIANT: expected a lowercase name (1-64 characters)" >&2
+  exit 1
+fi
 
 # Google Drive file ID for the bookworm server image. Override via env var when
 # the dev team rotates the .7z (new Orange Pi release).
@@ -1172,12 +1178,12 @@ else
   systemctl enable ssh 2>/dev/null || true
 fi
 
-# ── SPI3 overlay for WS2812 RGB LED ring (OrangePi 4 Pro A733) ───────────────
-echo "[stage] enable SPI3 overlay for LED ring"
+# ── DT overlays (OrangePi 4 Pro A733): SPI3 for WS2812 LED ring, I2C0 (TWI0) ─
+echo "[stage] enable SPI3 + I2C0 overlays"
 if grep -q "^overlays=" /boot/orangepiEnv.txt 2>/dev/null; then
-  sed -i "s/^overlays=.*/& spi3-cs0-cs1-spidev/" /boot/orangepiEnv.txt
+  sed -i "s/^overlays=.*/& spi3-cs0-cs1-spidev i2c0/" /boot/orangepiEnv.txt
 else
-  echo "overlays=spi3-cs0-cs1-spidev" >> /boot/orangepiEnv.txt
+  echo "overlays=spi3-cs0-cs1-spidev i2c0" >> /boot/orangepiEnv.txt
 fi
 
 echo "[stage] chroot Phase 2 complete"
@@ -1211,6 +1217,7 @@ trap 'echo "OVERLAY ERROR: command failed at line \$LINENO (exit \$?): \$BASH_CO
 export DEBIAN_FRONTEND=noninteractive
 export PATH="/root/.local/bin:\$PATH"
 export DEVICE_TYPE="${DEVICE_TYPE}"
+export VARIANT="${VARIANT}"
 export DEVICES_DIR="${DEVICES_DIR}"
 
 retry() {
@@ -1326,6 +1333,17 @@ if [ -n "\$DEVICES_URL" ]; then
   unzip -o -q /tmp/device-profile.zip -d "\$DEVICE_PROFILE_DIR"
   rm -f /tmp/device-profile.zip
   echo "[overlay] device profile baked → \$DEVICE_PROFILE_DIR"
+  # Bake the selection in the overlay, never in the reusable base image.
+  if [ -n "\$VARIANT" ] && [ "\$VARIANT" != standard ]; then
+    mkdir -p /etc/autonomous
+    printf '%s\n' "\$VARIANT" > /etc/autonomous/hardware-profile
+    [ -f "\$DEVICE_PROFILE_DIR/apply-overrides.py" ] \
+      || { echo "[overlay] ERROR: Hardware overrides require an override-capable device package" >&2; exit 1; }
+    python3 "\$DEVICE_PROFILE_DIR/apply-overrides.py" --profile "\$DEVICE_PROFILE_DIR" --root / \
+      || { echo "[overlay] ERROR: Hardware override configuration failed" >&2; exit 1; }
+  else
+    rm -f /etc/autonomous/hardware-profile
+  fi
   # Device rootfs overlay: robots/<type>/rootfs/ mirrors the target filesystem.
   # Copy the whole tree onto / for device-specific system config (udev rules, …).
   if [ -d "\$DEVICE_PROFILE_DIR/rootfs" ]; then
@@ -1563,6 +1581,14 @@ sync
 umount "${MNT}"
 losetup -d "${LOOP_DEV}"; LOOP_DEV=""
 
+# COMPRESS=0 skips the .xz step (single-threaded under Docker's ~2 GB memory
+# cap, so it can take longer than the whole build). The raw .img is complete
+# and flashable via `make sd-card-flash-raw`.
+if [ "${COMPRESS:-1}" = "0" ]; then
+  log "DONE: ${OUT_IMG} (COMPRESS=0, skipped .xz)"
+  log "Flash:  make sd-card-flash-raw DEVICE_TYPE=${DEVICE_TYPE} DISK=N"
+  exit 0
+fi
 log "Compressing ${OUT_IMG} → ${OUT_IMG}.xz (this takes a few minutes)…"
 rm -f "${OUT_IMG}.xz"
 # -k keeps the original .img alongside the .xz so operator can verify/inspect

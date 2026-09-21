@@ -914,7 +914,7 @@ async def lifespan(app: FastAPI):
 
             handler = GPIOButtonHandler(
                 button.wiring, name=button.name, behavior=button.behavior,
-                hold_s=button.hold_s,
+                hold_s=button.hold_s, factory_reset=button.factory_reset,
             )
             handler.start()
             _gpio_button_handlers.append(handler)

@@ -150,17 +150,16 @@ def activate_scene(req: SceneRequest):
     # Speaker control
     spk = preset.get("speaker")
     if spk == "off" and not state._speaker_muted:
-        state._speaker_muted = True
-        if state.tts_service and state.tts_service.speaking:
-            state.tts_service.stop()
+        # Stop music now; speech drains so the scene's own line still plays.
         if state.music_service and state.music_service.playing:
             state.music_service.stop()
-        state._persist_speaker_state()
-        state.logger.info("Scene %s: speaker muted", req.scene)
-    elif spk == "on" and state._speaker_muted and not privacy.speaker_muted:
-        state._speaker_muted = False
-        state._persist_speaker_state()
-        state.logger.info("Scene %s: speaker unmuted", req.scene)
+        state._start_scene_speaker_drain(req.scene)
+    elif spk == "on":
+        state._cancel_scene_speaker_drain()
+        if state._speaker_muted and not privacy.speaker_muted:
+            state._speaker_muted = False
+            state._persist_speaker_state()
+            state.logger.info("Scene %s: speaker unmuted", req.scene)
 
     return {
         "status": "ok",
@@ -182,6 +181,7 @@ def deactivate_scene():
     state._active_scene = None
     _persist_scene(None)
     state._save_user_led_state(None)
+    state._cancel_scene_speaker_drain()
 
     # Release servo hold
     if state.animation_service and state.animation_service._hold_mode:
@@ -189,24 +189,38 @@ def deactivate_scene():
         state.animation_service._hold_explicit = False
         state.logger.info("Scene off: servo released")
 
-    # Re-enable camera
-    if state._camera_disabled:
-        state._auto_camera_on("scene:off")
+    # Under a privacy lock the overlay would restore the scene's mute as the
+    # user's preference; retarget its snapshot instead (as sleepy wake does).
+    with privacy.lock:
+        # Re-enable camera
+        if state._camera_disabled:
+            if privacy.camera_muted:
+                if not state._camera_manual_override:
+                    privacy.camera_before = False
+                    state._persist_camera_state()
+                    state.logger.info("Scene off: camera reopens when privacy releases")
+            else:
+                state._auto_camera_on("scene:off")
 
-    # Unmute mic + restart voice pipeline
-    if state._mic_muted and not privacy.mic_locked():
-        state._mic_muted = False
-        state._mic_manual_override = False
-        state.start_voice_service("scene:off")
-        state._clear_mic_muted_led()
-        state._persist_mic_state()
-        state.logger.info("Scene off: mic unmuted")
+        # Unmute mic + restart voice pipeline
+        if state._mic_muted and not privacy.mic_locked():
+            state._mic_muted = False
+            state._mic_manual_override = False
+            state.start_voice_service("scene:off")
+            state._clear_mic_muted_led()
+            state._persist_mic_state()
+            state.logger.info("Scene off: mic unmuted")
 
-    # Unmute speaker
-    if state._speaker_muted and not privacy.speaker_muted:
-        state._speaker_muted = False
-        state._persist_speaker_state()
-        state.logger.info("Scene off: speaker unmuted")
+        # Unmute speaker
+        if state._speaker_muted:
+            if privacy.speaker_muted:
+                privacy.speaker_before = False
+                state._persist_speaker_state()
+                state.logger.info("Scene off: speaker unmutes when privacy releases")
+            else:
+                state._speaker_muted = False
+                state._persist_speaker_state()
+                state.logger.info("Scene off: speaker unmuted")
 
     # Settle the strip the same way every other release path does. This used to
     # paint the `idle` preset color unconditionally, from back when the resting

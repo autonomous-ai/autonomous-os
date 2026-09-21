@@ -170,8 +170,30 @@ Rendered by `FlowDiagram` in `system/web/src/pages/Monitor.tsx`. The diagram is 
   - **EMO** (`hw_emotion`) — `/emotion` calls (coordinated LED + servo + display eyes)
   - **LED** (`hw_led`) — `/led/solid`, `/led/effect`, `/scene`, `/led/off`
   - **SERVO** (`hw_servo`) — move or animate servos: `/servo/aim`,
-    `/servo/play`, `/servo/track`. The node detail shows the actual agent
-    command/API call for the selected turn.
+    `/servo/play`, `/servo/nudge`, `/servo/search`, `/servo/demo`. The node
+    detail shows the actual agent command/API call for the selected turn.
+    Reads (`/servo/position`, `/servo/status`, `/servo/bearing`) do not count —
+    a `hw_servo` event means the lamp did something a person could see.
+
+  **Hardware events are matched on the resolved endpoint, not on raw shell
+  text.** A tool call's arguments are scanned for `127.0.0.1:500[01]/<path>`
+  (`hwPathFromToolArgs` in `handler_event_agent.go`) and the `/emotion` and
+  `/servo/*` branches compare against that path. The previous substring test
+  turned `cat …/skills/emotion/SKILL.md` into a `hw_emotion` + `led_set` pair
+  for a turn in which the lamp did nothing. The `/led/*` and `/audio/play`
+  branches still use the substring form — same weakness, no phantom observed
+  there yet.
+
+  **`hw_failed`** — a `[HW:...]` marker the OS tried to fire whose POST failed
+  at the transport: the 5 s client timeout, a refused connection. Carries
+  `path`, `args`, `run_id` and `error`. Before this event existed that branch
+  returned before any `flow.Log`, so a 40 s body movement left nothing in the
+  monitor at all (`device-chat-44`: a search marker fired, HAL swept the room,
+  the timeline showed an idle lamp). Deliberately **not** a cancellation: it
+  lights the OS-gate node and adds a `⚠ → HW call failed` line to its detail,
+  but it does not set the turn's cancelled badge or turn the TTS node red —
+  those mean the *user* silenced the turn, and a timeout must never read as
+  the user's doing.
   - **CAM** (`hw_camera`) — `GET /camera/snapshot`; its saved result is
     rendered as a clickable thumbnail so operators can debug the exact frame
     returned to the agent (including an agent workspace image such as
@@ -332,6 +354,7 @@ To bridge that gap, the OpenClaw stream handler emits four lightweight summary f
 | `agent_last_token` | `lifecycle.end` (drain accumulator) | `{run_id, text, chunks, chars}` | Closes the assistant streaming row in the pipeline rect |
 | `thinking_first_token` | First non-empty `thinking` delta (extended-thinking only) | `{run_id}` | Same as above, for the thinking stream |
 | `thinking_last_token` | `lifecycle.end` | `{run_id, text, chunks, chars}` | Same as above, for the thinking stream |
+| `narration_demoted` | A `tool` start arrives while `assistant` text is buffered | `{run_id, tool, text}` | Text streamed BEFORE a tool call is the model narrating its plan ("Let me take a look."), not the reply. The handler drops it from the reply buffer (so it never reaches web chat / TTS at `lifecycle.end`) and shows it in the thinking row instead. Runtime-agnostic; skipped when the first sentence already streamed to TTS or the text carries an `[HW:...]` marker |
 
 Maximum 4 extra JSONL lines per turn (often 0–2). Stream from OpenClaw is still called `"assistant"` in code (`handler_events.go: case "assistant"`); only the JSONL node names use the `agent_` prefix for consistency with existing `agent_thinking` / `agent_call` / `agent_response` nodes.
 
@@ -357,13 +380,41 @@ N events
 - **OUT**: from `intent_match` (local) or `tts_send` (agent). Intent match is authoritative and won't be overwritten by stale tts_send from different runs.
 - **Path badge**: LOCAL (green) / AGENT (blue) — only set from events belonging to the same run
 - **⏱ total**: `turn.startTime → turn.endTime` (full server-observed window: input event → lifecycle_end / tts_send / chat_final). Green ≤5s, amber ≤15s, red >15s.
-- **⚡ TTFT** (time-to-first-token): `turn.startTime → first thinking/assistant_delta`. Matches the chat page agent-bubble stamp — the moment the user *sees* a reply begin. Gap between ⚡ and ⏱ = tail streaming + lifecycle close. Green ≤3s, amber ≤8s, red >8s. Hidden when no LLM stream (e.g., local intent match).
+- **⚡ TTFT** (time-to-first-token): `turn.startTime → first thinking/assistant_delta`. Matches the chat page agent-bubble stamp — the moment the user *sees* a reply begin (first delta for streaming runtimes; the final `chat_response`/`tts_send` for non-streaming ones such as codex). Gap between ⚡ and ⏱ = tail streaming + lifecycle close. Green ≤3s, amber ≤8s, red >8s. Hidden when no LLM stream (e.g., local intent match).
 - **Snapshot strip**: extracted from `[snapshot:]` markers in `sensing_input`. For `motion.activity` with a pose bucket, the strip is capped at 3 tiles (the activity snapshot + two worst pose snapshots). Clicking a tile opens the inline lightbox.
 - **Pose bucket popup**: when `[pose_bucket:]` is present, a `LOAD MORE` button surfaces `PoseBucketModal`, which fetches `/api/hardware/sensing/pose-bucket/<id>` (proxied to lelamp) and renders the full per-sample table — same monospace grid + click-thumbnail-to-lightbox as the live Sensing tab. Rows whose filename is in `worst_snapshots` are highlighted (red border, ⭐).
 - **Debug audio clip** (`speech_emotion.detected`): a click-to-play `<audio controls>` player labeled `🎙 debug` is rendered for each audio URL, so you can listen to the exact clip that produced the detected emotion. The clip's on-Pi path arrives as the optional `audio` field in the `POST /api/sensing/event` body. `system/server/sensing/delivery/http/handler.go` converts the path's basename into a servable URL (`audioURLForPath` → `/api/sensing/audio/<file>.wav`) and stores it in the monitor event `Detail` under key `audio` — **only the basename URL, never the raw path**. The frontend `turnIO()` (`helpers.ts`) pulls these into `audioUrls` from the `sensing_input` event's `detail.audio`; `TurnBadge.tsx` renders the players. **This is a DEBUG-ONLY affordance — the audio is NEVER sent to the LLM.** The path lives in a separate JSON field, never in the chat message text, so it is naturally excluded from what the agent sees — mirroring how `motion.activity` snapshots are surfaced in the UI but stripped before the LLM.
   - **Route**: `GET /api/sensing/audio/:name` (`SensingHandler.GetAudio`) serves the `.wav` by basename from `/var/lib/hal/speech-emotion` or `/tmp/hal-speech-emotion`, with strict basename validation — the name must end in `.wav` and contain no `/`, `\`, or `..` (otherwise `404`).
 
 The two badges are meant to be read together: ⚡ is *perceived* latency (what the user feels), ⏱ is *server* latency (what ops sees). Big gap = lots of tail streaming; small gap = short reply or fast lifecycle close.
+
+## Memory state per turn (`lifecycle_start.memory`, `memory_changed`)
+
+Issue #421: one self-written `USER.md` line broke skill routing for most of a
+day because nothing showed which memory a turn ran with. Two additions:
+
+- `lifecycle_start` flow data carries `memory`: `{"USER.md": {"size", "sha8"},
+  "MEMORY.md": …, "KNOWLEDGE.md": …}` for the **active** runtime — the
+  fingerprint published by the OS memory guard (`docs/os-server.md`, "Memory
+  guard"). Sizes and 8-hex sha256 prefixes only; never content.
+- `memory_changed` (kind `event`) is emitted by the guard's fsnotify watch on
+  every write to any runtime's `USER.md` / `MEMORY.md`. It fires ~2 s after
+  the write (debounce) and is tagged with whatever trace is active at that
+  moment — usually the turn that wrote, but a later turn if one has started,
+  or trace-less if the turn has already ended. Data: `file`, `runtime`,
+  `path`, `size`, `sha8`, `quarantined` (blocks removed — or, when `execute`
+  is false, blocks the guard would have removed), `reasons`
+  (`free-prose` | `unknown-label` | `prescriptive`), `execute` (false in
+  observe mode, `agent.memory_guard=false`), `trigger`
+  (`startup` | `watch` | `rescan`).
+
+The turn card footer shows the fingerprint in fixed order `USER 2.1k MEMORY
+0.4k KNOWLEDGE 1.0k`; when a `memory_changed` event is inside the turn it
+appends `✎ memory changed` (amber), and `· N quarantined` in red only when the
+guard actually removed something (`execute` true). In observe mode the badge
+stays amber and reads `· would quarantine N`. Hover for per-file sizes (bytes)
+/ hashes and reasons. Comparing `sha8` across two turns tells you whether the
+memory changed between them.
 
 ## Known Edge Cases
 
@@ -464,3 +515,9 @@ Turns now show every turn derivable from the fetched events. Comparing server to
 Vietnamese summary: `docs/vi/flow-monitor_vi.md`.
 
 Harness final delivery records `harness_response` in flow JSONL with the original device run ID and complete `text`. Web Chat uses this event to recover pending results after SSE disconnects or page reloads. Live delivery still emits `chat_response` with state `final`.
+
+Realtime handled voice and main-agent history sync use separate IDs: `device-realtime-…` for the original exchange, `device-chat-context-…` for synchronization. The persisted `realtime_response` closes the original card and supplies its question/answer; the History sync card follows its own lifecycle. `history_run_id` links the records without merging them. Previously stored shared-ID events retain their existing combined display.
+
+### Voice command and follow-up labels
+
+`sensing_input` and `realtime_response` can carry `data.voice_turn_type` (`voice`, `voice_command`, or `voice_followup`). Flow Monitor combines this field with the handled event type: realtime wake commands display `VOICE_COMMAND_HANDLED`, follow-ups display `VOICE_FOLLOWUP_HANDLED`, and ordinary or legacy handled turns retain `VOICE_AGENT_HANDLED`. Badges, subtype filters and search share the same display name; search also accepts the original event type. Saved broad exclusions expand to the new subtypes. This is display-only; event type, run grouping, realtime/main path, queueing and cancellation remain unchanged. A wake phrase uses the same HAL classifier in LIVE ON/OFF. An authorized LIVE follow-up keeps its wake-focus classification even if focus expires before the provider replies. Realtime-handled replies retain `voice_agent_handled` for silent history synchronization. Legacy rows without metadata keep their original label; history sync does not inherit a neighboring voice turn's classification.
