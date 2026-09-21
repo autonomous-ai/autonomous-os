@@ -63,6 +63,22 @@ không phải là look), và bullet **Finding things is an action** trong cả b
 quyết định không được ép bằng code — chỉ giọng nói thật trên thiết bị mới kiểm
 tra được.
 
+### Research, analysis và tài liệu thì delegate
+
+Grounding chỉ trả lời MỘT sự kiện công khai mới. Việc nhiều bước — nghiên cứu,
+so sánh, "nên chọn phương án nào", brainstorm, bất cứ gì kết thúc bằng một báo
+cáo hay tài liệu — không phải là tra cứu, và trả lời nó bằng hai câu nói chính
+là lỗi mà quy tắc này loại bỏ. Nó nằm ở bullet **Research, analysis &
+documents** trong mọi prompt provider và một câu trong mô tả `delegate_to_main`
+dùng chung. Hai prompt tìm kiếm được ngay trong phiên mang thêm ranh giới
+"single facts only" ngay cạnh quy tắc tìm kiếm của chúng: bullet Google Search
+của Gemini, và quy tắc `web_search` ở tầng **backend** của GPT-Live (tầng voice
+không có tìm kiếm nên chỉ delegate). Main agent xử lý
+tiếp thế nào là việc của nó — có thể đã cài một skill research, cũng có thể trả
+lời trong khả năng và nói rõ phần nào chưa kiểm chứng được; kiểu gì việc đó cũng
+thuộc lane chính. `hal/test/test_realtime_research_delegation.py` pin phần text
+này.
+
 ### Xác định lời nói hướng đến thiết bị trước persona hoặc hành động
 
 Prompt của mọi provider realtime ưu tiên quy tắc lời nói hướng đến thiết bị
@@ -224,10 +240,70 @@ result đã được gửi lại model trước khi break; turn còn mở dang d
 
 Gemini cũng có thể gửi `generation_complete` trước `turn_complete`: cờ sau bị
 trì hoãn trong lúc Gemini giả định client đang phát audio theo thời gian thực.
-HAL tự phát câu trả lời đã nhận nên kết thúc consumer turn ngay ở
-`generation_complete`, đồng thời nhả commit manual-VAD kế tiếp. Nhờ đó không
+Với model BLOCKING, HAL tự phát câu trả lời đã nhận nên kết thúc consumer turn
+ngay ở `generation_complete`, đồng thời nhả commit manual-VAD kế tiếp. Nhờ đó không
 còn chờ silent-watchdog vô ích sau khi đã trả lời; `turn_complete` đến muộn sẽ
 được bỏ trước lượt sau.
+
+Với Gemini `extended-thinking`, tool dùng `NON_BLOCKING`: câu filler như
+“I can help with that.” không được làm mất tác vụ người dùng (#453).
+Provider thêm `complete_response` để xác nhận câu trả lời trực tiếp đã đáp ứng
+yêu cầu. Hội thoại, kiến thức hoặc tra cứu công khai đã xong có thể dùng xác nhận
+này; hành động, lời hứa, lỗi và việc chưa giải quyết phải delegate. Câu trả lời
+trực tiếp cần outcome được xác nhận cùng terminal thành công của provider mới
+được tính handled/completed. Text/audio đơn thuần không chứng minh hoàn tất.
+
+Với lời đã phát nhưng thiếu quyết định routing, HAL chạy kiểm tra độc lập bằng
+text model trong cửa sổ grace hiện có, dùng model, endpoint và credential của
+realtime summarizer. Đầu vào gồm yêu cầu gốc, lời đã nói và bằng chứng tìm kiếm
+công khai; bước kiểm tra không có tool hay phát âm thanh. Chỉ kết quả chính xác
+`COMPLETE` chấp nhận lượt hội thoại/tra cứu đã trả lời đủ. Filler, lỗi, truy cập
+tài khoản, hành động vật lý và yêu cầu hỗn hợp còn việc giữ fallback. Timeout,
+thiếu credential hoặc kết quả sai định dạng không cung cấp xác nhận độc lập.
+Có thêm một lượt text model với hạn riêng `HAL_REALTIME_OUTCOME_TIMEOUT_S`
+(mặc định 10 giây từ terminal
+đầu tiên). Bước này chạy đồng thời với grace tool 6 giây; khi hết grace có thể
+chờ kết quả thêm tối đa 4 giây theo mặc định. Tool routing thật hủy kiểm tra.
+INCOMPLETE ghi đè `complete_response` sai sau filler; kiểm tra không khả dụng
+giữ quyết định provider, hoặc fallback nếu chưa có quyết định. Câu trả lời được
+xác nhận đi qua `realtime_handled` → `voice_agent_handled` → history sync, không
+chạy main agent. Kiểm tra ngữ nghĩa bằng model không chứng minh mọi thông tin
+trong câu trả lời đều đúng.
+
+Text/audio filler vẫn stream ngay để phục vụ KPI-1 (Voice Acknowledge).
+HAL chờ tool routing tối đa `HAL_REALTIME_NONBLOCKING_TOOL_GRACE_S`
+(mặc định **6 giây**, `0` tắt thời gian chờ, không tắt yêu cầu outcome).
+Cửa sổ bắt đầu ở `generation_complete` hoặc `turn_complete` đầu tiên; terminal
+sau không kéo dài thời hạn. HAL mở iterator `receive()` kế tiếp của SDK trên
+cùng session sau `turn_complete`, giữ định danh lượt logic.
+Chỉ delegate/reject kết thúc cửa sổ sớm. `complete_response` ghi nhận xác nhận
+nhưng vẫn chờ để nhận delegate ở frame tiếp theo; tool phụ không
+xác nhận hoàn tất và không ngăn delegate đến sau. Sau xác nhận câu trả lời trực
+tiếp, HAL bỏ lời nói bổ sung do ACK kích hoạt nhưng vẫn nhận routing call. Sau
+terminal đầu tiên, cửa sổ NON_BLOCKING chỉ nhận tool và metadata đầu vào, không
+phát thêm text/audio. Câu trả lời hoặc filler ban đầu vẫn phát ngay; câu lỗi hoặc
+từ chối quyền truy cập được sinh sau đó không bị nối vào lời nói hay lịch sử. Lỗi
+receive trên nhóm model này cũng yêu cầu fallback sang main, kể cả đã phát filler.
+
+Nếu hết cả hai hạn chờ mà lượt không bị ngắt vẫn thiếu outcome, HAL phát
+`MainAgentFallbackOutput`, rồi `DelegateSignal`, giữ nguyên transcript gốc từ
+provider và định danh lượt. Fallback cục bộ không bịa function call và không gửi
+tool ACK. Route là `delegated`, không gắn `[HANDLED]`, kể cả khi filler đã phát;
+bằng chứng hoàn tất phải đến từ tác vụ phía sau. Model BLOCKING giữ cách kết
+thúc ngay hiện có. Prompt Gemini cho phép một câu xác nhận ngắn phát ngay trước
+delegate; reject vẫn hoàn toàn im lặng. Yêu cầu email/tài khoản/connector, kể cả
+"your email", thuộc main agent: Gemini chỉ xác nhận trung tính, không tự kết luận
+có/không có tài khoản hay quyền truy cập, hoặc viện persona thiết bị để từ chối.
+Chỉ main agent kiểm tra trạng thái connector thực tế.
+
+Tool call thật dùng ACK function response thông thường, bỏ trường `scheduling`:
+ngày 2026-09-21, backend Gemini 3.8 extended-thinking trên thiết bị từ chối
+`SILENT` bằng WebSocket 1007,
+`Function response scheduling is not supported for this model`. Hỗ trợ tool
+NON_BLOCKING không đồng nghĩa hỗ trợ response scheduling. Không bảo đảm nhận
+call đến sau thời hạn; model vẫn có thể phân loại sai khi gọi tường minh
+`complete_response`. Cổng outcome ngăn việc thiếu call âm thầm làm mất tác vụ,
+không loại bỏ mọi lỗi hiểu ý người dùng.
 
 Bản thân cổng này là `wakeword` trong `config.json` (Settings → "Require a wake
 word before handling speech"). Thiết bị được set up lần đầu lấy giá trị khởi
@@ -2089,17 +2165,21 @@ liên tục đồng ý.
    reject vẫn nhận cùng một kết quả identity duy nhất trước khi đi hạ nguồn. Bỏ qua
    khi context đã mang đúng tên, hoặc khi lượt đó là noise.
 
-   **Prepass không còn chặn model.** Trước đây nó chạy nội tuyến, ngay trước khi
-   mở lượt realtime, nên trọn vòng gọi ra ngoài nằm giữa lúc user dứt lời và lúc
-   model nhận được câu nói — đo trên lamp-0c89 (03/09/2026): 1.49s trong khoảng
-   trống 3.0s, phần còn lại là cú reconnect Gemini trước turn. Giờ nó chạy trên
-   thread riêng song song với cú reconnect đó, và lượt nói chỉ join lại
-   (`SPEAKER_PREPASS_JOIN_S`, `HAL_SPEAKER_PREPASS_JOIN_S`, mặc định 2.0s) ở đúng
-   chỗ đầu tiên cần tới tên người nói. Thời gian chờ là **trần**, không phải độ
-   trễ: prepass xong trong lúc reconnect thì không tốn gì, còn chạm trần chỉ có
-   nghĩa là context lượt này gửi đi khi chưa biết người nói — đúng bằng những gì
-   dòng always-listening ở trên vẫn làm, và correction `[TURN CONTEXT UPDATE]` vẫn
-   phủ được. Đường deferred cho transcript ngắn giữ nguyên.
+   **Giới hạn chờ identity.** Nhận diện người nói chạy trên thread riêng.
+   Realtime theo lượt chỉ chờ tối đa `HAL_SPEAKER_PREPASS_COMMIT_JOIN_S`
+   (mặc định **0.2s**) trước commit, tránh thêm tới 2s chờ embedding trước khi
+   Gemini phản hồi. Kết quả có trước commit vẫn cập nhật context của lượt;
+   kết quả muộn dùng để gắn danh tính khi gửi downstream, không chèn vào lời
+   đang sinh. Trước dispatch, HAL join cùng worker bằng
+   `HAL_SPEAKER_PREPASS_JOIN_S` (mặc định **2.0s**). Live và đường không qua
+   realtime giữ thời gian chờ identity thông thường. Transcript ngắn mơ hồ
+   giữ nguyên chính sách trì hoãn nhận diện.
+
+   Với lượt hợp lệ, không phải noise, timer filler trung tính được bật trước
+   khoảng chờ pre-commit, kể cả khi realtime đã stream audio trong lúc thu.
+   Cùng timer được truyền cho bộ nhận phản hồi, không tạo thêm timer filler.
+   Delay và ownership giữ nguyên; endpoint im lặng vẫn là 0.8s sau STT final,
+   cùng ngưỡng fallback được cấu hình riêng.
 
    **Kết quả được cache.** Trước đây nhận dạng chạy mỗi lượt, lượt nào cũng chạy:
    một cuộc mười lượt trả tiền mười lần gọi ra ngoài để nghe đúng một cái tên.

@@ -23,6 +23,7 @@ import (
 	"go.autonomous.ai/os/system/device"
 	"go.autonomous.ai/os/system/domain"
 	"go.autonomous.ai/os/system/intent"
+	"go.autonomous.ai/os/system/intent/jev"
 	"go.autonomous.ai/os/system/lib/flow"
 	"go.autonomous.ai/os/system/lib/hal"
 	"go.autonomous.ai/os/system/lib/i18n"
@@ -137,6 +138,7 @@ type HarnessVoiceSnapshot struct {
 
 // SensingHandler handles incoming sensing events from HAL and forwards them to the agent.
 type SensingHandler struct {
+	intentResolver   *jev.Resolver
 	agentGateway     domain.AgentGateway
 	monitorBus       *monitor.Bus
 	config           *config.Config
@@ -202,11 +204,12 @@ func ProvideSensingHandler(gw domain.AgentGateway, bus *monitor.Bus, cfg *config
 	// the model. Re-evaluated on every config change (see runConfigChangeListener).
 	intent.SetChitchatEnabled(!cfg.RealtimeEnabled())
 	return &SensingHandler{
-		agentGateway: gw,
-		monitorBus:   bus,
-		config:       cfg,
-		statusLED:    sled,
-		isSleeping:   isSleeping,
+		intentResolver: jev.NewResolver(),
+		agentGateway:   gw,
+		monitorBus:     bus,
+		config:         cfg,
+		statusLED:      sled,
+		isSleeping:     isSleeping,
 	}
 }
 
@@ -305,7 +308,27 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 	// friend on their own timeline, stranger collapsed to "unknown"
 	// timeline) — the handler no longer writes them here. See
 	// faceid/perception.py _post_wellbeing.
-	if req.CurrentUser != "" {
+	// speech_emotion.detected is exempt: SER identifies nobody. Its
+	// current_user is a courier value computed by the voice turn, and five
+	// unrelated situations collapse into the literal string "unknown" —
+	// speaker-ID found no enrolled match, speaker-ID could not run, the turn
+	// had no transcript at all, the wake-word gate rejected it, or the noise
+	// guard dropped it. Letting that write here means one ambient sigh from an
+	// unrecognized voice erases a live face-derived identity.
+	//
+	// Nothing is lost by skipping it. SER inherits its user from speaker-ID
+	// only (never face), and a confident speaker-ID match is already promoted
+	// device-wide by voice_service.py set_voice_user() before the SER event is
+	// even queued — so every other producer (voice turns, sensing) is already
+	// shipping that identity via app_state.resolve_current_user(), where face
+	// outranks voice. SER's copy is at best a duplicate, and always the
+	// latest-arriving one (queue + cloud call + flush window).
+	//
+	// This does NOT change the event's own attribution: the message the agent
+	// sees still carries "[context: current_user=...]" built from
+	// req.CurrentUser below, so stranger mood still logs under "unknown" as
+	// skills/mood/SKILL.md requires.
+	if req.CurrentUser != "" && req.Type != "speech_emotion.detected" {
 		mood.SetCurrentUser(req.CurrentUser)
 	} else if req.Type == "presence.leave" || req.Type == "presence.away" {
 		mood.ClearCurrentUser()
@@ -317,13 +340,17 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 
 	// Voice commands: try local intent matching first for instant response
 	if (req.Type == "voice" || req.Type == "voice_command" || req.Type == "voice_followup") && h.config.LocalIntentEnabled() {
-		if result := intent.Match(req.Message); result != nil {
+		if result := h.matchVoiceIntent(c.Request.Context(), req.Message); result != nil {
 			// Generate a dedicated local-intent trace ID so this turn doesn't
 			// share the global trace of an in-flight agent turn.
 			localRunID := fmt.Sprintf("local-intent-%d", time.Now().UnixMilli())
 			telemetry.ReportTaskStarted(req.Type, req.InteractionID, localRunID)
 			turnStart := flow.Start("sensing_input", startPayload, localRunID)
-			flow.Log("intent_match", map[string]any{"message": req.Message, "tts": result.TTSText, "rule": result.Rule, "actions": result.Actions}, localRunID)
+			source := "local"
+			if result.Source != "" {
+				source = result.Source
+			}
+			flow.Log("intent_match", map[string]any{"message": req.Message, "tts": result.TTSText, "rule": result.Rule, "actions": result.Actions, "source": source}, localRunID)
 			if result.TTSText != "" {
 				owner := req.InteractionID
 				go func() {
@@ -350,7 +377,7 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 			}
 			h.monitorBus.Push(domain.MonitorEvent{
 				Type:    "intent_match",
-				Summary: "[local] " + req.Message + " → " + result.TTSText,
+				Summary: "[" + source + "] " + req.Message + " → " + result.TTSText,
 			})
 			flow.End("sensing_input", turnStart, map[string]any{"path": "local"}, localRunID)
 			if result.ExecutionFailed {

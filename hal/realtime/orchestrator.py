@@ -45,6 +45,7 @@ from hal.realtime.models import (
     FunctionCallOutput,
     FunctionCallResultInput,
     ImageInput,
+    MainAgentFallbackOutput,
     OutputBase,
     TextInput,
 )
@@ -89,6 +90,9 @@ DELEGATE_TOOL_DESCRIPTION: str = (
     "delegate it with the user's words. Do not answer with guesses, questions "
     "about what it looks like or where they last had it, offers to look, or "
     "claims about what you can see. "
+    "Research, analysis, comparison, brainstorming, planning an idea, and any "
+    "request for a report, summary or document also delegate: these are "
+    "multi-step work with a delivered document, not a single live fact. "
     "Clearly heard answers, corrections, and stop requests for a known pending task "
     "also delegate, even without an action verb. Use conversation context to recognize "
     "the task, but forward ONLY the current user's faithfully understood words in "
@@ -1162,6 +1166,18 @@ class RealtimeOrchestrator:
         produced = False  # did this turn yield any real output (vs stay silent)?
         replay_pending = False  # look-replay signalled — the turn continues
         for output in execution_agent.receive(stop_on_done=True):
+            if isinstance(output, MainAgentFallbackOutput):
+                # This is a local fail-safe, not a provider function call: there
+                # is no call ID to acknowledge. Preserve the user's request even
+                # when a filler has already reached the speaker.
+                produced = True
+                execution_agent.end_turn()
+                yield DelegateSignal(
+                    message=output.transcript,
+                    transcript=output.transcript,
+                    user_turn_id=output.user_turn_id,
+                )
+                break
             if isinstance(output, ExecutionOutput):
                 yield output
                 continue

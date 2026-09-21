@@ -751,6 +751,14 @@ simply absent.
 
 ### AGENTS.md rule block (device skills beat Hermes bundled skills)
 
+For a live connector request, `skills/connectors/SKILL.md` requires Discover
+in one terminal call immediately after loading the skill, before auxiliary
+skill reads such as `input-branching` for ordinary voice input. A successful
+check with no matching connector ends that service task with a short reply;
+unreadable or invalid config is a verification failure, not proof of absence.
+Explicit history-only routing still takes precedence. This is skill guidance,
+not a runtime latency guarantee.
+
 Hermes ships its own bundled skill catalog, and left alone it weighs those as
 equals of the device's platform skills — so any request both catalogs can serve
 may get routed to a bundled skill instead of the device one. Example: asked to
@@ -1003,3 +1011,118 @@ would map them 1:1 and round-trip cleanly. (See the fold-vs-move rule in
 > [`adding-agent-runtime.md`](adding-agent-runtime.md) for the `AgentGateway`
 > contract, the install/presync pattern, migration, skills, hooks, reset, and the
 > full checklist.
+
+## 13. Optional Jev skill suggestions
+
+The OS-managed `jev` plugin suggests one installed skill before a
+Hermes user turn's first model call. It uses Hermes's `pre_llm_call` hook; it does
+not execute tools, load skills, select models, or filter memory. The returned
+context suggests `skill_view(name=...)`; Hermes must still assess relevance and
+follow normal permissions and mandatory connector/platform rules. The hint may
+remain in conversation context.
+
+### Installation on existing devices
+
+`runtimes/hermes/jev_plugin.go` embeds the Python plugin under
+`runtimes/hermes/plugins/jev/` into os-server. `EnsureOnboarding` reconciles it on
+OS startup and setup for a local Hermes installation with an existing
+`/root/.hermes/config.yaml`. Remote Hermes is skipped. Thus an existing device
+receives the plugin with its OS update; rerunning provisioning or installing a
+Python package separately is unnecessary.
+
+Go writes changed assets atomically to `/root/.hermes/plugins/jev/`
+and adds `jev` to `plugins.enabled` in Hermes's `config.yaml`, preserving
+other plugin settings and an explicit `plugins.disabled` entry. The generated
+`os-config-path.json` contains only the absolute path to the OS config, never an
+API key. Unchanged assets are not rewritten.
+
+Plugin installation or updates do **not** add a gateway restart reason. os-server
+logs that loading changed plugin code needs the next gateway restart; existing
+restart reasons elsewhere in onboarding remain unchanged. This build enables Jev
+in the embedded plugin. Existing devices need the updated OS to sync the plugin
+and a gateway restart to load its changed code; this update does not add an
+automatic restart. To disable Jev, set `ENABLED = False`, rebuild os-server, sync
+the plugin, and restart Hermes to load it.
+
+### Configuration and proxy contract
+
+The plugin uses hardcoded defaults in `runtimes/hermes/plugins/jev/router.py`:
+
+```python
+ENABLED = True
+TIMEOUT_SECONDS = 0.350
+```
+
+There is no separate Hermes Jev config block or Go config type. These defaults
+are independent of `local_intent` and `jev_intent`. OFF bypasses even config
+reads, catalog lookup, and network requests.
+When enabled, the plugin reuses `llm_base_url` and `llm_api_key` for
+`POST {llm_base_url}/jev/decisions` with bearer authentication. There is no
+separate Jev key in `.env` and no direct-provider fallback. HTTPS is required,
+except HTTP on loopback for local tests. BFF must support the compatible
+[Decisions contract](../os-server.md#jev-bff-contract); the plugin sends model
+`typesafe/jev-1.13`, a `skill` choice including `none`, and one `fit_<id>` noul
+question per candidate. The raw response must contain `answers`.
+
+Only the current user message and OS platform skill names/descriptions from
+Hermes's filtered live catalog are sent; only category `openclaw-imports` is
+eligible. Other bundled, authored, and plugin skill categories are excluded.
+Conversation history and skill bodies are not sent. Each candidate description
+is capped at 500 characters. If there are more than 32 eligible candidates, the
+router skips Jev entirely rather than truncating the catalog. Empty messages,
+messages over 8,000 UTF-8 bytes, slash commands, and explicit `[skills:...]`
+selections also bypass the router. The catalog worker inherits the current
+Hermes context so session/platform skill filters still apply. This is an advisory experiment for OS platform skills;
+normal Hermes discovery continues to handle other skills.
+
+A suggestion requires choice probability at least 0.90, a margin of at least
+0.40 over the runner-up, and fit at least 0.95. Uncertain or invalid decisions
+leave normal Hermes behavior unchanged. The decision wait is hardcoded to 350 ms; there are no retries or redirects. An error or timeout starts
+a 30-second cooldown. One worker per router is allowed; a busy router bypasses
+immediately. A timed-out worker may finish its request in the background, but
+its late result cannot inject a hint. Logs record outcome and decision time,
+not prompts or credentials.
+
+Local validation uses mocked proxy responses and temporary Hermes homes. It does
+not establish live Jev accuracy or latency improvements; compare OFF/ON on a
+device using a compatible BFF endpoint. No device deployment is required by
+the local checks.
+
+Focused local checks (Python plugin tests also run in CI):
+
+```bash
+go test -race -timeout 90s ./runtimes/hermes ./system/server/config ./system/intent/...
+python3 -B -m unittest discover -s runtimes/hermes/plugins/jev -p 'test_*.py' -v
+```
+
+### Reference implementation review (2026-09-21)
+
+Reviewed actual code from the community
+[`typesafe-skill-router`](https://github.com/DECRUX9812/typesafe-skill-router/tree/e6cdac26f9ed588b4a94b8a2f7f9f026e1b9faf3)
+at the Hermes catalog pin `e6cdac26f9ed588b4a94b8a2f7f9f026e1b9faf3`, and upstream
+`f150284d3da33c85b8adc97e2d326987573b30d3`. This is a community plugin listed by
+Hermes, not Hermes core or a TypeSafe-maintained plugin. Its routing recipe is
+based on the [TypeSafe skill-suggestion cookbook](https://docs.typesafe.ai/cookbooks/skill_suggestion).
+
+| Area | Reference plugin | OS plugin |
+|---|---|---|
+| Hook | `pre_llm_call`, returns optional user-message context | Same hook and return shape; no system-prompt modification |
+| Skill data | Filesystem roster; shortlist receives full descriptions and up to 700 body characters | Hermes-filtered `openclaw-imports` catalog only; descriptions may already be shortened by Hermes, no body text |
+| Decision | Stage 1 ranks and gates skill need; stage 2 reranks a shortlist of 3 (per chunk) | One request with choice, `none`, and per-candidate fit |
+| Large catalogs | Splits into chunks of 240 choices | Skips when more than 32 eligible skills |
+| Acceptance | Catalog pin: gate 0.30 and winner fit 0.40; newer upstream also arbitrates disagreeing choice/fit signals | Choice 0.90, margin 0.40, fit 0.95; uncalibrated for this workload |
+| Latency | Default hook budget 10 seconds, answer cache and retry-capable client | 350 ms budget, no retries/cache, busy bypass and cooldown |
+| Credentials | TypeSafe API with separate key | Shared OS proxy credentials |
+
+The OS implementation is a narrower experiment, not an equivalent implementation
+of the two-stage recipe. Its higher thresholds and shorter deadline may suppress
+useful suggestions; mock tests cannot establish routing accuracy or coverage.
+Do not transfer the reference's benchmark results to this plugin. To evaluate
+the enabled experiment, compare both policies on the same representative requests and installed roster,
+including unrelated chat, ambiguous skills, explicit commands, and Vietnamese.
+
+Review fixes preserve Hermes session context in the worker (needed for
+platform-specific disabled-skill filtering) and skip slash commands, as the
+reference hook does. Those review fixes did not change thresholds, the default
+OFF setting at review time, or device state. The current build enables the
+plugin separately as described above.

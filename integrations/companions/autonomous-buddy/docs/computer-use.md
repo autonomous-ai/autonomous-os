@@ -33,6 +33,28 @@ Nodes include `ref`, optional `parent_ref`, `role`, supported `actions`, `secure
 
 References remain within Buddy's process. They expire after 30 seconds, a new observation, another mutating command, or an attempted reference mutation after validation. The observed process must still be foreground. Buddy rechecks PID, role, title, enabled state, and action support. Obtain a fresh observation after every action or error. References reduce ambiguity but cannot make a changing UI transactional; the agent must still verify the outcome. Setting a value does not necessarily submit a form or trigger every app-specific event.
 
+## Experimental Jev action suggestions
+
+`POST /api/buddy/suggest` is device-local (loopback-only). It accepts `goal` (required, 1–2000 Unicode characters) and optional `app` (1–256 characters, a running app name or bundle ID). The device agent still owns the workflow. This endpoint only proposes one Accessibility action; it never executes it and adds no Swift planner or native protocol command.
+
+Suggestions are hardcoded **ON** by `Enabled = true` in `system/buddy/jev`; there is no additional config block. To disable them, set that constant to `false` and rebuild/deploy os-server. Disabled calls return a null suggestion without observing the Mac or calling the proxy. When enabled, the handler requests a fresh native `get_ui_tree` with a 5000 ms deadline. Caller-supplied trees and screenshots are not accepted. A fresh observation invalidates earlier references, including when inference later falls back.
+
+The selector considers only observed, enabled, non-secure controls with supported `press` or `focus` actions; descendants of secure controls are also excluded. It declines incomplete, truncated, expired, or non-frontmost trees and catalogs exceeding 32 candidates. It does not propose typing, `set_value`, coordinates, or screenshot-derived actions. A single selection request goes through `{llm_base_url}/jev/decisions` using the shared `llm_api_key`; the device does not need a separate provider credential. The goal and bounded UI candidate descriptions are sent to that configured proxy. UI text is untrusted task data, not authority to change the user's goal.
+
+The 350 ms inference timeout does **not** include native tree acquisition. Unavailable configuration, observation failure, provider failure, timeout, or an uncertain decision produce no suggestion. The standard OS success envelope contains `data.suggestion` (`null` or an object with `snapshot_id`, `ref`, `ui_action`) and a fallback `reason` when no suggestion is available. Successful selections also include `data.target` with `role`, `title`, and `description` copied from the observed node, not model-generated text, so the agent can review the target without invalidating the snapshot. A null suggestion is not proof that the intended control is absent or the task is complete.
+
+The skill helper exposes the endpoint:
+
+```sh
+python3 scripts/buddy.py suggest --goal 'Focus the search field' --params '{"app":"Safari"}'
+# Alternatively supply a JSON params file containing optional app.
+python3 scripts/buddy.py suggest --goal 'Focus the search field' --params-file /tmp/buddy-suggestion.json
+```
+
+This build enables the optional path for suitable concrete press/focus steps after the availability gate passes; do not invoke it for every desktop step. Older or explicitly disabled builds can return reason `disabled`; continue normal planning and skip further suggestion calls in that workflow. Review the suggestion against the intended control, current goal, and user authorization before using `perform_ui_action` with its exact `snapshot_id`, `ref`, and `ui_action`. If there is insufficient evidence to identify the target, discard it and observe normally. When accepting a suggestion, do not fetch another tree before executing: that would invalidate its reference. Observe and verify after execution. On null, resume normal planning without retrying suggestions; connection, pause, permission, and timeout blockers still follow the skill's availability gate.
+
+This path requires a compatible BFF `/jev/decisions` endpoint. It is an experimental selection aid, not a replacement for the agent or a measured speed improvement; live accuracy and latency have not yet been tested. Acceptance should compare correct selections, abstentions, inference time, and total workflow latency using the same authorized tasks with suggestions disabled/enabled. In particular, verify OFF performs no native/proxy request; provider failures cause no mutation; secure, truncated, stale, and non-frontmost trees produce no suggestion; and accepted references can be executed once then rejected when stale. These are validation scenarios, not a claim of live BFF or device testing.
+
 ## Screenshots and input
 
 `list_displays` returns display IDs, global point origins/dimensions, backing pixel dimensions, and scale. `screenshot` accepts an active `display_id`, `scale` from 0.01 through 1 (default 1), and `return_format` of `path`, `base64`, or `both` (default `path`). Output dimensions must be 1–16384 pixels per axis and at most 40 million pixels. JPEG captures have unique names under `~/Library/Application Support/AutonomousBuddy/screenshots/`; Buddy retains the newest 20 managed captures.

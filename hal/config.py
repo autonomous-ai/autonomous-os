@@ -1002,6 +1002,14 @@ WAKEWORD_FOLLOWUP_TIMEOUT_S: float = max(
 REALTIME_RECV_QUEUE_TIMEOUT_S: float = float(
     os.environ.get("HAL_REALTIME_RECV_QUEUE_TIMEOUT_S", "8.0")
 )
+# Grace after turn_complete OR generation_complete on NON_BLOCKING-tool models
+# (Gemini extended-thinking). Keep late delegate/reject calls in the consumer
+# turn after a spoken filler (#453), across SDK receive() iterator boundaries.
+# Filler output is streamed immediately; only finalization waits. A routing call
+# cuts the window short; auxiliary tools do not. 0 disables; BLOCKING models skip.
+REALTIME_NONBLOCKING_TOOL_GRACE_S: float = float(
+    os.environ.get("HAL_REALTIME_NONBLOCKING_TOOL_GRACE_S", "6.0")
+)
 # Silent-turn watchdog for turns where a `look` fired. Gemini 3.1's forced
 # thinking over a text-dense frame ("read this label") stays silent >8s with
 # zero output events — the default watchdog killed such turns seconds before
@@ -1957,6 +1965,10 @@ REALTIME_FILLER_DELAY_S: float = float(os.environ.get("HAL_REALTIME_FILLER_DELAY
 REALTIME_FIRST_CHUNK_MAX_CHARS: int = int(
     os.environ.get("HAL_REALTIME_FIRST_CHUNK_MAX_CHARS", "0")
 )
+
+
+# Independent spoken-response routing check; overlaps the tool grace.
+REALTIME_OUTCOME_TIMEOUT_S: float = float(os.environ.get("HAL_REALTIME_OUTCOME_TIMEOUT_S", "10"))
 
 # --- Realtime: Summarizer (Anthropic Messages API) ---
 REALTIME_SUMMARIZER_ENABLED: bool = os.environ.get("HAL_REALTIME_SUMMARIZER_ENABLED", "true").lower() in ("1", "true", "yes")

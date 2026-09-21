@@ -61,6 +61,21 @@ action** bullet in all four provider prompts; `hal/test/test_realtime_find_deleg
 pins the text. The decision itself is not enforced in code — only real speech on
 a device exercises it.
 
+### Research, analysis and documents delegate
+
+Grounding answers ONE fresh public fact. Multi-step work — research, a
+comparison, "which option should I pick", brainstorming, anything that ends in
+a report or document — is not a lookup, and answering it in two spoken
+sentences is the failure this rule removes. It is listed as a **Research,
+analysis & documents** bullet in every provider prompt and as a sentence in the
+shared `delegate_to_main` description. The two prompts that can search
+in-session carry the matching "single facts only" boundary next to their own
+search rule: Gemini's Google Search bullet, and the GPT-Live **backend** stage's
+`web_search` rule (its voice stage has no search and simply delegates). What the main agent then does with the request is its own
+business — it may have a research skill installed, or it may answer as best it
+can and say what it could not verify; either way the work belongs on the main
+lane. `hal/test/test_realtime_research_delegation.py` pins the text.
+
 ### Addressed speech before persona or actions
 
 All realtime provider prompts give the addressed-speech policy priority over
@@ -226,10 +241,74 @@ the dangling open turn is cleared by the next turn's `flush_output()`.
 
 Gemini can similarly emit `generation_complete` before `turn_complete`: the
 latter is delayed while Gemini assumes the client is playing its audio in real
-time. HAL plays the generated response itself, so it ends the consumer turn on
-`generation_complete` and releases the next manual-VAD commit immediately.
+time. For BLOCKING models, HAL plays the generated response itself and ends the
+consumer turn on `generation_complete` and releases the next manual-VAD commit immediately.
 This avoids an otherwise unnecessary silent-watchdog delay after the reply;
 any late `turn_complete` is discarded before the next turn.
+
+For Gemini `extended-thinking` models, tools are `NON_BLOCKING`: a spoken filler
+such as “I can help with that.” must not consume the user's task (#453).
+The provider adds `complete_response`, which confirms that a direct spoken
+answer fulfilled the request. Conversation, knowledge, or a completed public
+lookup can use this confirmation; actions, promises, errors, and unresolved work
+must delegate. A direct answer needs a confirmed outcome and a successful
+provider terminal before it counts as handled/completed. Text/audio alone is
+not completion evidence.
+
+For a spoken response with no routing decision, HAL starts an independent text
+check during the existing grace, using the configured realtime summarizer model,
+endpoint and credentials. It checks the original request, spoken answer and public
+search evidence, with no tools or speech output. Only exact `COMPLETE` accepts a
+fully answered conversational/public lookup turn. Fillers, errors, account access,
+physical actions and mixed requests with remaining work retain fallback. Timeouts,
+missing credentials and malformed replies provide no independent confirmation.
+This adds one small text-model call with a separate
+`HAL_REALTIME_OUTCOME_TIMEOUT_S` deadline (default 10 seconds
+from the first terminal). It overlaps the 6-second tool grace; finalization waits
+for a pending check, at most 4 more seconds at default settings. A real routing
+call cancels the check. Explicit INCOMPLETE overrides an erroneous
+`complete_response` after a filler; an unavailable check preserves the provider
+decision, or fallback if there is none.
+A confirmed answer follows `realtime_handled` → `voice_agent_handled` → history sync,
+without main-agent execution. The semantic check is model-based, not proof that
+all factual claims are correct.
+
+Filler text/audio still streams immediately for KPI-1 (Voice Acknowledge).
+HAL waits for routing tools up to `HAL_REALTIME_NONBLOCKING_TOOL_GRACE_S`
+(default **6 seconds**, `0` disables the wait, not the outcome requirement).
+The grace starts at the first `generation_complete` or `turn_complete`; later
+terminals do not extend it. HAL reopens the SDK's per-turn `receive()` iterator
+on the same session after `turn_complete`, retaining the logical turn identity.
+Only delegate/reject calls end the grace early; `complete_response` records
+confirmation but keeps the window open for a delegate in a subsequent frame; auxiliary
+tools do not confirm completion or suppress a later delegate. After direct-answer
+confirmation, HAL suppresses additional speech prompted by its ACK while still
+receiving routing calls. More generally, once the first provider terminal arrives,
+NON_BLOCKING grace accepts tool and input metadata but no further text/audio.
+This preserves the initial answer/filler and prevents a later generated error or
+account-access denial from being appended to speech or history. A receive error also requests main-agent fallback for
+this model family, even if a filler already played.
+
+If both waits finish without an outcome on an uninterrupted turn, HAL emits
+`MainAgentFallbackOutput`, then `DelegateSignal`, preserving the original
+provider transcript and turn identity. This local fallback invents no function
+call and sends no tool ACK. It routes as `delegated`, never `[HANDLED]`, even
+when a filler has already played; completion must come from the downstream task.
+BLOCKING models keep their existing immediate-completion behavior. The Gemini
+prompt allows one immediate, brief acknowledgement before a delegate; rejection
+remains completely silent. Email/account/connector requests, including "your
+email", belong to the main agent: Gemini may acknowledge neutrally but must not
+claim that accounts or access are present or absent, or use its device persona
+as a reason to refuse. Only the main agent checks actual connector state.
+
+Actual tool calls use ordinary function response acknowledgements, omitting
+`scheduling`: on 2026-09-21 the device's Gemini 3.8 extended-thinking backend
+rejected `SILENT` with WebSocket 1007,
+`Function response scheduling is not supported for this model`. NON_BLOCKING
+tool support does not imply response-scheduling support. Calls arriving after
+the grace deadline are not guaranteed to be received, and the model can still
+misclassify a request by explicitly calling `complete_response`; the outcome
+gate prevents missing calls from silently consuming tasks, not all semantic errors.
 
 The gate itself is `wakeword` in `config.json` (Settings → "Require a wake word
 before handling speech"). A device being set up for the first time takes its
@@ -2136,18 +2215,21 @@ Read the counters in the session-END log line: `substituted` at ~100 % of
    the same one-time identity result. It is skipped when the context already carried
    the right name, or when the turn is noise.
 
-   **The prepass no longer blocks the model.** It used to run inline, strictly
-   before the realtime turn opened, so its whole external round trip sat between
-   the user falling silent and the model receiving the utterance — measured on
-   lamp-0c89 (03/09/2026): 1.49s of a 3.0s gap, the rest being the Gemini
-   pre-turn reconnect. It now runs on its own thread while that reconnect
-   happens, and the turn joins it (`SPEAKER_PREPASS_JOIN_S`, `HAL_SPEAKER_PREPASS_JOIN_S`,
-   default 2.0s) at the first point the name is needed. The wait is a ceiling,
-   not a delay: a prepass that finished during the reconnect costs nothing, and
-   reaching the ceiling only means this turn's context goes out with the speaker
-   unresolved — exactly what the always-listening row above already does, and the
-   `[TURN CONTEXT UPDATE]` correction still covers it. The deferred short-transcript
-   path is unchanged.
+   **Bounded identity waits.** Speaker recognition runs on its own thread.
+   Turn-based realtime waits at most `HAL_SPEAKER_PREPASS_COMMIT_JOIN_S`
+   (default **0.2s**) before commit, so an external embedding call no longer adds
+   up to 2s before Gemini can respond. A result ready before commit still updates
+   this turn's context; a later result is used for downstream speaker decoration,
+   not injected into an already-generating reply. Before downstream dispatch,
+   HAL joins the same worker with `HAL_SPEAKER_PREPASS_JOIN_S` (default **2.0s**).
+   Live and non-realtime paths retain that normal identity wait. Short ambiguous
+   transcripts retain their deferred identity policy.
+
+   For an authorized, non-noise turn, the existing neutral filler timer is armed
+   before the pre-commit wait, even when realtime already started streaming during
+   capture. The same timer is passed to the response consumer, preventing a second
+   filler timer. Its delay and ownership remain unchanged; silence endpointing
+   remains 0.8s after STT final, with the separately configured fallback clock.
 
    **The verdict is cached.** Recognition used to run once per turn, every turn:
    a ten-turn conversation paid for ten external calls to be told the same name.
