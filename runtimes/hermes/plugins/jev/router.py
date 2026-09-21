@@ -15,7 +15,7 @@ import urllib.request
 
 LOG = logging.getLogger(__name__)
 # Build-time defaults; changing these requires shipping and reloading the plugin.
-ENABLED = False
+ENABLED = True
 TIMEOUT_SECONDS = 0.350
 MAX_RESPONSE = 65536
 BOUNDARY = (

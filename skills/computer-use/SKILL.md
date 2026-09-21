@@ -39,9 +39,9 @@ Use the documented helper commands directly. Reading `scripts/buddy.py`, running
 
 ## Optional action suggestions (experimental)
 
-Only use `suggest` when trusted deployment information explicitly says Buddy Jev suggestions are enabled. They are **OFF by default**; do not add a suggestion call to every ordinary desktop step or probe this endpoint as routine preflight. The device agent still owns planning, authorization, execution, and verification.
+This build enables Buddy Jev suggestions by default. Use `suggest` for suitable concrete next steps that press or focus a control after the availability gate passes; do not add a suggestion call to every desktop step or use it as routine preflight. Older or explicitly disabled builds may return a null suggestion with reason `disabled`; continue normal planning and skip further suggestion calls for that workflow. The device agent still owns planning, authorization, execution, and verification.
 
-After the availability gate passes, an enabled deployment can request one suggestion for a concrete next-step goal:
+After the availability gate passes, request one suggestion for a concrete next-step goal:
 
 ```sh
 python3 scripts/buddy.py suggest --goal 'Focus the search field' --params '{"app":"Safari"}'

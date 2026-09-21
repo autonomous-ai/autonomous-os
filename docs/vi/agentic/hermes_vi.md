@@ -1036,15 +1036,17 @@ không chứa API key. Asset không đổi thì không ghi lại.
 
 Cài hoặc cập nhật plugin **không** thêm lý do restart gateway. os-server ghi log
 rằng code plugin mới cần lần restart gateway tiếp theo để được nạp; các lý do
-restart khác trong onboarding vẫn giữ nguyên. Muốn bật Jev cần đổi hằng số trong
-plugin, build lại os-server, đồng bộ plugin rồi restart Hermes để nạp code mới.
+restart khác trong onboarding vẫn giữ nguyên. Build này bật Jev trong plugin
+nhúng. Device cũ cần OS mới đồng bộ plugin và một lần restart gateway để nạp
+code thay đổi; bản cập nhật không thêm auto restart. Muốn tắt, đặt
+`ENABLED = False`, build lại os-server, đồng bộ plugin rồi restart Hermes.
 
 ### Cấu hình và hợp đồng proxy
 
 Plugin dùng hằng số trong `runtimes/hermes/plugins/jev/router.py`:
 
 ```python
-ENABLED = False
+ENABLED = True
 TIMEOUT_SECONDS = 0.350
 ```
 
@@ -1054,8 +1056,8 @@ catalog và gọi mạng.
 Khi bật, plugin dùng lại `llm_base_url` và `llm_api_key` để gọi
 `POST {llm_base_url}/jev/decisions` với bearer authentication. Không có key Jev
 riêng trong `.env`, không fallback gọi thẳng provider. Bắt buộc HTTPS, ngoại trừ
-HTTP loopback để test local. BFF cần triển khai
-[hợp đồng Decisions đề xuất](../os-server_vi.md#jev-bff-contract); plugin gửi model
+HTTP loopback để test local. BFF cần hỗ trợ
+[hợp đồng Decisions tương thích](../os-server_vi.md#jev-bff-contract); plugin gửi model
 `typesafe/jev-1.13`, câu hỏi choice `skill` gồm `none`, và một câu hỏi noul
 `fit_<id>` cho mỗi ứng viên. Response raw phải chứa `answers`.
 
@@ -1079,8 +1081,8 @@ có một worker; đang bận thì bỏ qua ngay. Worker timeout có thể hoàn
 gian quyết định, không ghi prompt hoặc credential.
 
 Kiểm thử local dùng response proxy giả lập và thư mục Hermes tạm. Chưa chứng minh
-độ chính xác Jev thực tế hay mức cải thiện latency; chỉ so sánh OFF/ON trên device
-sau khi BFF hỗ trợ endpoint. Các kiểm tra local không cần deploy lên device.
+độ chính xác Jev thực tế hay mức cải thiện latency; so sánh OFF/ON trên device
+với endpoint BFF tương thích. Các kiểm tra local không cần deploy lên device.
 
 Các lệnh kiểm tra local trọng tâm (CI cũng chạy test plugin Python):
 
@@ -1111,10 +1113,11 @@ Thuật toán dựa trên [cookbook chọn skill của TypeSafe](https://docs.ty
 Bản OS là thử nghiệm phạm vi hẹp hơn, không tương đương thuật toán hai bước.
 Ngưỡng cao và deadline ngắn có thể bỏ qua gợi ý hữu ích; mock test không chứng
 minh độ chính xác hay tỷ lệ yêu cầu được gợi ý. Không áp dụng benchmark của
-plugin tham chiếu cho bản OS. Trước khi bật cần so sánh hai chính sách trên cùng
+plugin tham chiếu cho bản OS. Để đánh giá thử nghiệm đang bật, cần so sánh hai chính sách trên cùng
 bộ yêu cầu đại diện và catalog đã cài, gồm chat không cần skill, skill gần nghĩa,
 lệnh chỉ định rõ và tiếng Việt.
 
 Các sửa lỗi sau review giữ context phiên Hermes trong worker (cần cho bộ lọc
-skill bị tắt theo kênh) và bỏ qua lệnh slash giống hook tham chiếu. Không thay
-ngưỡng, mặc định OFF hay trạng thái device.
+skill bị tắt theo kênh) và bỏ qua lệnh slash giống hook tham chiếu. Các sửa lỗi
+lúc review không thay ngưỡng, mặc định OFF tại thời điểm đó hay trạng thái
+device. Build hiện tại bật plugin riêng như mô tả bên trên.

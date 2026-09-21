@@ -176,7 +176,7 @@ class RouterTest(unittest.TestCase):
         class Context:
             def register_hook(self, hook_name, callback):
                 hooks[hook_name] = callback
-        self.assertFalse(package.Router.before_turn.__globals__["ENABLED"])
+        self.assertTrue(package.Router.before_turn.__globals__["ENABLED"])
         package.register(Context())
         self.assertEqual(list(hooks), ["pre_llm_call"])
         self.assertIsNone(hooks["pre_llm_call"](session_id="s", user_message="hello", conversation_history=[],
