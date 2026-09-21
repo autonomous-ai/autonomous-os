@@ -728,6 +728,15 @@ Máy cài lần đầu được seed sẵn mục `## Personal` — **đúng từ
 openclaw/picoclaw/codex/opencode ghi — để chủ máy có chỗ viết mà OTA không ghi đè.
 
 **Block luật trong `AGENTS.md` (skill của máy thắng skill bundled của Hermes).**
+
+Với yêu cầu connector cần xử lý, `skills/connectors/SKILL.md` yêu cầu chạy
+Discover trong một lần gọi terminal ngay sau khi đọc skill, trước các lần đọc
+skill phụ như `input-branching` cho đầu vào giọng nói thông thường. Kiểm tra
+thành công nhưng không có connector phù hợp thì kết thúc tác vụ dịch vụ đó bằng
+câu trả lời ngắn; config không đọc được hoặc sai định dạng là lỗi xác minh,
+không phải bằng chứng chưa kết nối. Tag chỉ ghi lịch sử vẫn được ưu tiên xử lý.
+Đây là hướng dẫn skill, không phải cam kết độ trễ từ runtime.
+
 Hermes có catalog skill bundled riêng, và nếu để mặc định nó coi các skill đó ngang
 hàng với skill nền tảng của máy — nên request nào cả hai catalog cùng làm được có thể
 bị route sang skill bundled thay vì skill của máy. Ví dụ: được nhờ "gửi email", nó có
@@ -1027,15 +1036,17 @@ không chứa API key. Asset không đổi thì không ghi lại.
 
 Cài hoặc cập nhật plugin **không** thêm lý do restart gateway. os-server ghi log
 rằng code plugin mới cần lần restart gateway tiếp theo để được nạp; các lý do
-restart khác trong onboarding vẫn giữ nguyên. Muốn bật Jev cần đổi hằng số trong
-plugin, build lại os-server, đồng bộ plugin rồi restart Hermes để nạp code mới.
+restart khác trong onboarding vẫn giữ nguyên. Build này bật Jev trong plugin
+nhúng. Device cũ cần OS mới đồng bộ plugin và một lần restart gateway để nạp
+code thay đổi; bản cập nhật không thêm auto restart. Muốn tắt, đặt
+`ENABLED = False`, build lại os-server, đồng bộ plugin rồi restart Hermes.
 
 ### Cấu hình và hợp đồng proxy
 
 Plugin dùng hằng số trong `runtimes/hermes/plugins/jev/router.py`:
 
 ```python
-ENABLED = False
+ENABLED = True
 TIMEOUT_SECONDS = 0.350
 ```
 
@@ -1045,8 +1056,8 @@ catalog và gọi mạng.
 Khi bật, plugin dùng lại `llm_base_url` và `llm_api_key` để gọi
 `POST {llm_base_url}/jev/decisions` với bearer authentication. Không có key Jev
 riêng trong `.env`, không fallback gọi thẳng provider. Bắt buộc HTTPS, ngoại trừ
-HTTP loopback để test local. BFF cần triển khai
-[hợp đồng Decisions đề xuất](../os-server_vi.md#jev-bff-contract); plugin gửi model
+HTTP loopback để test local. BFF cần hỗ trợ
+[hợp đồng Decisions tương thích](../os-server_vi.md#jev-bff-contract); plugin gửi model
 `typesafe/jev-1.13`, câu hỏi choice `skill` gồm `none`, và một câu hỏi noul
 `fit_<id>` cho mỗi ứng viên. Response raw phải chứa `answers`.
 
@@ -1055,7 +1066,9 @@ Hermes lọc; chỉ category `openclaw-imports` đủ điều kiện. Loại cá
 bundled, authored và plugin khác. Không gửi lịch sử hội thoại hoặc nội dung đầy
 đủ của skill. Mô tả mỗi ứng viên tối đa 500 ký tự. Nếu có quá 32 ứng viên đủ điều
 kiện, bỏ qua Jev hoàn toàn thay vì cắt bớt catalog. Tin nhắn rỗng, dài quá 8.000
-byte UTF-8 hoặc có lựa chọn `[skills:...]` rõ ràng cũng bỏ qua router. Đây là thử
+byte UTF-8, lệnh slash hoặc có lựa chọn `[skills:...]` rõ ràng cũng bỏ qua router.
+Worker catalog kế thừa context Hermes của lượt hiện tại để giữ bộ lọc skill
+theo phiên/kênh. Đây là thử
 nghiệm gợi ý cho skill nền tảng OS; Hermes tiếp tục tìm các skill khác theo cách
 bình thường.
 
@@ -1068,8 +1081,8 @@ có một worker; đang bận thì bỏ qua ngay. Worker timeout có thể hoàn
 gian quyết định, không ghi prompt hoặc credential.
 
 Kiểm thử local dùng response proxy giả lập và thư mục Hermes tạm. Chưa chứng minh
-độ chính xác Jev thực tế hay mức cải thiện latency; chỉ so sánh OFF/ON trên device
-sau khi BFF hỗ trợ endpoint. Các kiểm tra local không cần deploy lên device.
+độ chính xác Jev thực tế hay mức cải thiện latency; so sánh OFF/ON trên device
+với endpoint BFF tương thích. Các kiểm tra local không cần deploy lên device.
 
 Các lệnh kiểm tra local trọng tâm (CI cũng chạy test plugin Python):
 
@@ -1077,3 +1090,34 @@ Các lệnh kiểm tra local trọng tâm (CI cũng chạy test plugin Python):
 go test -race -timeout 90s ./runtimes/hermes ./system/server/config ./system/intent/...
 python3 -B -m unittest discover -s runtimes/hermes/plugins/jev -p 'test_*.py' -v
 ```
+
+### Review implementation tham chiếu (2026-09-21)
+
+Đã đọc code thực tế của plugin cộng đồng
+[`typesafe-skill-router`](https://github.com/DECRUX9812/typesafe-skill-router/tree/e6cdac26f9ed588b4a94b8a2f7f9f026e1b9faf3)
+tại commit được catalog Hermes ghim `e6cdac26f9ed588b4a94b8a2f7f9f026e1b9faf3`
+và upstream `f150284d3da33c85b8adc97e2d326987573b30d3`. Đây là plugin cộng đồng
+được Hermes đưa vào catalog, không phải Hermes core hay plugin do TypeSafe duy trì.
+Thuật toán dựa trên [cookbook chọn skill của TypeSafe](https://docs.typesafe.ai/cookbooks/skill_suggestion).
+
+| Phần | Plugin tham chiếu | Plugin OS |
+|---|---|---|
+| Hook | `pre_llm_call`, trả context tùy chọn cho tin nhắn user | Cùng hook và dạng trả về; không sửa system prompt |
+| Dữ liệu skill | Quét filesystem; shortlist có mô tả đầy đủ và tối đa 700 ký tự nội dung | Chỉ catalog `openclaw-imports` đã được Hermes lọc; mô tả có thể đã bị Hermes cắt ngắn, không gửi nội dung skill |
+| Quyết định | Bước 1 xếp hạng và xét có cần skill; bước 2 đánh giá lại shortlist 3 skill mỗi nhóm | Một request với choice, `none` và fit từng ứng viên |
+| Catalog lớn | Chia nhóm 240 lựa chọn | Bỏ qua nếu quá 32 skill đủ điều kiện |
+| Ngưỡng | Bản catalog: gate 0,30 và fit người thắng 0,40; upstream mới còn xử lý choice/fit bất đồng | Choice 0,90, margin 0,40, fit 0,95; chưa hiệu chỉnh bằng dữ liệu tác vụ này |
+| Latency | Budget hook mặc định 10 giây, cache đáp án và client có retry | Budget 350 ms, không retry/cache, bỏ qua khi bận và có cooldown |
+| Credential | API TypeSafe với key riêng | Credential proxy OS dùng chung |
+
+Bản OS là thử nghiệm phạm vi hẹp hơn, không tương đương thuật toán hai bước.
+Ngưỡng cao và deadline ngắn có thể bỏ qua gợi ý hữu ích; mock test không chứng
+minh độ chính xác hay tỷ lệ yêu cầu được gợi ý. Không áp dụng benchmark của
+plugin tham chiếu cho bản OS. Để đánh giá thử nghiệm đang bật, cần so sánh hai chính sách trên cùng
+bộ yêu cầu đại diện và catalog đã cài, gồm chat không cần skill, skill gần nghĩa,
+lệnh chỉ định rõ và tiếng Việt.
+
+Các sửa lỗi sau review giữ context phiên Hermes trong worker (cần cho bộ lọc
+skill bị tắt theo kênh) và bỏ qua lệnh slash giống hook tham chiếu. Các sửa lỗi
+lúc review không thay ngưỡng, mặc định OFF tại thời điểm đó hay trạng thái
+device. Build hiện tại bật plugin riêng như mô tả bên trên.

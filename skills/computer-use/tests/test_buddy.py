@@ -200,6 +200,118 @@ class ScreenshotTests(unittest.TestCase):
                 buddy.save_screenshot(self.response(), target)
 
 
+class SuggestTests(MockServerCase):
+    def setUp(self):
+        super().setUp()
+        self.choice = {"snapshot_id": "fresh-snapshot", "ref": "button-1", "ui_action": "press"}
+        self.target = {"role": "AXButton", "title": "Tìm kiếm", "description": "Search the page"}
+        self.server.reply = lambda _: {"status": 1, "data": {"suggestion": self.choice, "target": self.target, "reason": "selected"}}
+
+    def send_suggest(self, goal="Find search", params=None):
+        return buddy.suggest(goal, {} if params is None else params, endpoint=self.endpoint)
+
+    def test_suggestion_is_only_advice_and_preserves_unicode(self):
+        with patch.object(buddy, "command") as command:
+            result = self.send_suggest("Tìm ô tìm kiếm", {"app": "Safari"})
+        self.assertEqual(result, {"ok": True, "suggestion": self.choice, "target": self.target, "reason": "selected"})
+        self.assertEqual(self.server.requests, [{"goal": "Tìm ô tìm kiếm", "app": "Safari"}])
+        command.assert_not_called()
+
+    def test_null_suggestion_is_normal_fallback(self):
+        for reason in ["disabled", "timeout", "uncertain"]:
+            with self.subTest(reason=reason):
+                self.server.reply = lambda _, reason=reason: {"status": 1, "data": {"suggestion": None, "reason": reason}}
+                self.assertEqual(self.send_suggest(), {"ok": True, "suggestion": None, "reason": reason})
+
+    def test_invalid_inputs_do_not_reach_network(self):
+        for goal in [None, True, " ", "x" * 2001]:
+            with self.subTest(goal=goal), self.assertRaises(buddy.BuddyError):
+                self.send_suggest(goal)
+        for params in [[], {"app": None}, {"app": ""}, {"app": " "}, {"app": "x" * 257},
+                       {"snapshot_id": "stale"}, {"ref": "button"}, {"ui_action": "press"}]:
+            with self.subTest(params=params), self.assertRaises(buddy.BuddyError):
+                self.send_suggest(params=params)
+        self.assertEqual(self.server.requests, [])
+
+    def test_unicode_limits_count_characters(self):
+        self.send_suggest("ệ" * 2000, {"app": "ệ" * 256})
+        self.assertEqual(len(self.server.requests), 1)
+
+    def test_invalid_results_are_rejected(self):
+        invalid_data = [{}, {"suggestion": None}, {"suggestion": None, "reason": 1}]
+        for choice in [[], {}, dict(self.choice, snapshot_id=" "), dict(self.choice, ref=1),
+                       dict(self.choice, ui_action="type_text"), dict(self.choice, text="injected")]:
+            invalid_data.append({"suggestion": choice, "target": self.target, "reason": "selected"})
+        for target in [None, {}, [], dict(self.target, title=1), dict(self.target, role="r" * 129),
+                       dict(self.target, title="t" * 2001), dict(self.target, description="d" * 2001),
+                       dict(self.target, text="injected")]:
+            invalid_data.append({"suggestion": self.choice, "target": target, "reason": "selected"})
+        invalid_data.append({"suggestion": self.choice, "reason": "selected"})
+        invalid_data.append({"suggestion": None, "target": self.target, "reason": "disabled"})
+        for data in invalid_data:
+            with self.subTest(data=data):
+                self.server.reply = lambda _, data=data: {"status": 1, "data": data}
+                with self.assertRaises(buddy.BuddyError):
+                    self.send_suggest()
+        for body in [b"not json", [], {"status": True}, {"status": 0, "message": "failed"}]:
+            with self.subTest(body=body):
+                self.server.reply = lambda _, body=body: body
+                with self.assertRaises(buddy.BuddyError):
+                    self.send_suggest()
+
+    def test_http_failure_does_not_retry_or_execute(self):
+        self.server.status_code = 502
+        self.server.reply = lambda _: {"status": 0, "message": "no buddy connected"}
+        with patch.object(buddy, "command") as command, self.assertRaisesRegex(buddy.BuddyError, "no buddy connected"):
+            self.send_suggest()
+        command.assert_not_called()
+        self.assertEqual(len(self.server.requests), 1)
+
+    def test_response_size_is_bounded(self):
+        with patch.object(buddy, "MAX_SUGGEST_RESPONSE_BYTES", 8), self.assertRaisesRegex(buddy.BuddyError, "exceeds"):
+            self.send_suggest()
+
+    def test_timeout_uses_fixed_budget_without_proxy_retry_or_mutation(self):
+        with patch.object(buddy.urllib.request, "build_opener") as build, patch.object(buddy, "command") as command:
+            build.return_value.open.side_effect = TimeoutError("timeout")
+            with self.assertRaisesRegex(buddy.BuddyError, "no action was executed"):
+                buddy.suggest("Find search", {})
+            build.return_value.open.assert_called_once()
+            request = build.return_value.open.call_args.args[0]
+            self.assertEqual(request.full_url, buddy.SUGGEST_ENDPOINT)
+            self.assertEqual(build.return_value.open.call_args.kwargs["timeout"], 15)
+            self.assertEqual(build.call_args.args[0].proxies, {})
+            command.assert_not_called()
+
+    def test_cli_with_mock_http_returns_advice_or_fallback_without_command(self):
+        original = buddy.suggest
+        for choice in [None, self.choice]:
+            with self.subTest(choice=choice), tempfile.TemporaryDirectory() as folder:
+                params = Path(folder) / "params.json"
+                params.write_text('{"app":"Safari"}')
+                self.server.reply = lambda _, choice=choice: {"status": 1, "data": {
+                    "suggestion": choice, "target": self.target if choice else None, "reason": "test"}}
+                output = io.StringIO()
+                with patch.object(buddy, "suggest", side_effect=lambda goal, params: original(goal, params, endpoint=self.endpoint)), \
+                     patch.object(buddy, "command") as command, patch("sys.stdout", output):
+                    self.assertEqual(buddy.main(["suggest", "--goal", "Find search", "--params-file", str(params)]), 0)
+                expected = {"ok": True, "suggestion": choice, "reason": "test"}
+                if choice:
+                    expected["target"] = self.target
+                self.assertEqual(json.loads(output.getvalue()), expected)
+                command.assert_not_called()
+
+    def test_cli_missing_goal_and_incompatible_arguments_fail_without_network(self):
+        for args in [["suggest"], ["suggest", "--goal", "Find", "--id", "id"],
+                     ["suggest", "--goal", "Find", "--question", "other"],
+                     ["suggest", "--goal", "Find", "--timeout-ms", "1000"],
+                     ["get_ui_tree", "--goal", "Find"]]:
+            with self.subTest(args=args), patch("sys.stderr", io.StringIO()), patch.object(buddy, "command") as command:
+                self.assertEqual(buddy.main(args), 1)
+                command.assert_not_called()
+        self.assertEqual(self.server.requests, [])
+
+
 class ObserveTests(MockServerCase):
     def setUp(self):
         super().setUp()

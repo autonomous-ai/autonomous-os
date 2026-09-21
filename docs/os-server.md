@@ -1205,6 +1205,19 @@ management in the separate Buddy desktop workspace is independent of this flow.
   result. Request bodies are limited to 1 MiB; optional `timeout_ms` is `0` for
   default or an integer from `500` to `60000`. Native UI observation uses
   `get_ui_tree`; snapshot-scoped mutations use `perform_ui_action`.
+- `POST /api/buddy/suggest` is loopback-only and experimentally suggests one
+  observed Accessibility `press`/`focus` action, without executing it. Request:
+  `goal` (1–2000 characters), optional `app` (1–256 characters). It is hardcoded
+  ON (`Enabled = true`) in `system/buddy/jev`, with no new config. Set the constant
+  to `false` and rebuild/deploy to disable it. When enabled, the server obtains
+  a fresh tree (native deadline 5000 ms), then selects via the shared LLM proxy
+  `/jev/decisions` (350 ms inference timeout). Tree acquisition invalidates prior
+  snapshot references. `data.suggestion` is null with a fallback reason or an
+  object with `snapshot_id`, `ref`, `ui_action`. A selection also returns
+  `data.target` (`role`, `title`, `description`) from the observed node for agent
+  review without a new tree. The agent reviews authorization and target before
+  executing, then verifies the result. No latency benefit is
+  established; see the Computer use documentation below for limits and fallback.
 - `POST /api/buddy/observe` is loopback-only. It captures the paired Mac's desktop
   and asks the configured auxiliary vision model a desktop-specific question,
   returning text plus screenshot coordinate metadata. This supports a text-only

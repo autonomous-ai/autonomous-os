@@ -1191,6 +1191,18 @@ Agent management trong workspace desktop Buddy riêng biệt với luồng này.
   Request body giới hạn 1 MiB; `timeout_ms` tùy chọn là `0` dùng mặc định hoặc số
   nguyên từ `500` đến `60000`. Quan sát UI native dùng `get_ui_tree`; thao tác theo
   tham chiếu snapshot dùng `perform_ui_action`.
+- `POST /api/buddy/suggest` chỉ nhận từ loopback, thử nghiệm gợi ý một thao tác
+  Accessibility `press`/`focus` đã quan sát, không tự thực thi. Request có `goal`
+  (1–2000 ký tự), `app` tùy chọn (1–256 ký tự). Hardcode ON (`Enabled = true`)
+  trong `system/buddy/jev`, không thêm config. Đổi hằng số thành `false` và
+  build/deploy lại để tắt. Khi bật, server lấy cây mới (thời hạn
+  native 5000 ms), rồi chọn qua LLM proxy dùng chung `/jev/decisions` (timeout
+  inference 350 ms). Lấy cây làm mất hiệu lực reference snapshot trước đó.
+  `data.suggestion` là null kèm lý do fallback hoặc object có `snapshot_id`,
+  `ref`, `ui_action`. Khi chọn thành công, `data.target` (`role`, `title`,
+  `description`) lấy từ node đã quan sát cho agent kiểm tra mà không lấy cây mới.
+  Agent kiểm tra quyền và mục tiêu trước khi thực thi, rồi kiểm chứng kết quả. Chưa chứng minh nhanh hơn; xem tài liệu Computer use bên
+  dưới để biết giới hạn và fallback.
 - `POST /api/buddy/observe` chỉ nhận từ loopback. Endpoint chụp desktop Mac đã
   ghép đôi và hỏi auxiliary vision model đã cấu hình bằng câu hỏi dành cho
   desktop, trả text cùng metadata tọa độ screenshot. Luồng này hỗ trợ main agent

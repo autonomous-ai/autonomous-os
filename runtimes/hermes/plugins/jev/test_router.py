@@ -1,5 +1,6 @@
 """Local contract tests: no Hermes installation or external inference required."""
 
+import contextvars
 import importlib.util
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -53,7 +54,34 @@ class RouterTest(unittest.TestCase):
              patch.object(plugin, "catalog", side_effect=AssertionError("must not scan")):
             self.assertIsNone(plugin.before_turn(user_message="read email"))
         self.assertIsNone(plugin.before_turn(user_message="[skills: other] read email"))
+        self.assertIsNone(plugin.before_turn(user_message="  /connectors read email"))
         self.assertEqual(self.calls, [])
+
+    def test_catalog_keeps_current_session_context_in_worker(self):
+        platform = contextvars.ContextVar("test_hermes_platform", default="unknown")
+        plugin = self.make()
+        observed = []
+
+        def catalog():
+            current = platform.get()
+            observed.append(current)
+            if current == "restricted":
+                return []
+            return [{"name": "connectors", "description": "Read email", "category": "openclaw-imports"}]
+
+        plugin.catalog = catalog
+        for current in ("restricted", "allowed", "restricted"):
+            token = platform.set(current)
+            try:
+                hint = plugin.before_turn(user_message="read email")
+                self.assertEqual(hint is not None, current == "allowed")
+                # Wait for worker cleanup so the next turn is not a busy bypass.
+                with plugin.busy:
+                    pass
+            finally:
+                platform.reset(token)
+        self.assertEqual(observed, ["restricted", "allowed", "restricted"])
+        self.assertEqual(len(self.calls), 1)
 
     def test_advisory_current_message_only_and_shared_proxy_config(self):
         plugin = self.make()
@@ -148,7 +176,7 @@ class RouterTest(unittest.TestCase):
         class Context:
             def register_hook(self, hook_name, callback):
                 hooks[hook_name] = callback
-        self.assertFalse(package.Router.before_turn.__globals__["ENABLED"])
+        self.assertTrue(package.Router.before_turn.__globals__["ENABLED"])
         package.register(Context())
         self.assertEqual(list(hooks), ["pre_llm_call"])
         self.assertIsNone(hooks["pre_llm_call"](session_id="s", user_message="hello", conversation_history=[],
