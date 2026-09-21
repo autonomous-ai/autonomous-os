@@ -63,3 +63,6 @@ class TurnDoneEvent(AgentOutputEvent):
     # Synthetic unblock/error sentinels retain False; only provider proof sets True.
     execution_completed: bool = False
     user_turn_id: str = ""
+    # Providers opt in when speech alone does not establish task completion.
+    fallback_to_main: bool = False
+    user_transcript: str = ""

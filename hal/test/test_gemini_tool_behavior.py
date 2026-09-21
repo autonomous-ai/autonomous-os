@@ -39,7 +39,12 @@ def _tool_behavior(cfg: types.LiveConnectConfig):
 
 def test_extended_thinking_declares_non_blocking() -> None:
     cfg = _build("gemini-3.8-live-extended-thinking")
-    assert _tool_behavior(cfg) == types.Behavior.NON_BLOCKING
+    declarations = cfg.tools[0].function_declarations
+    assert {tool.name for tool in declarations} == {"delegate_to_main", "complete_response"}
+    assert all(tool.behavior == types.Behavior.NON_BLOCKING for tool in declarations)
+    completion, = [tool for tool in declarations if tool.name == "complete_response"]
+    assert completion.parameters.required in (None, [])
+    assert "Never use for an action" in completion.description
 
 
 def test_plain_live_leaves_tool_blocking() -> None:
@@ -47,6 +52,7 @@ def test_plain_live_leaves_tool_blocking() -> None:
     for model in ("gemini-3.8-live", "gemini-3.1-flash-live-preview"):
         cfg = _build(model)
         assert _tool_behavior(cfg) != types.Behavior.NON_BLOCKING
+        assert [tool.name for tool in cfg.tools[0].function_declarations] == ["delegate_to_main"]
 
 
 if __name__ == "__main__":

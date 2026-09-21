@@ -226,10 +226,50 @@ the dangling open turn is cleared by the next turn's `flush_output()`.
 
 Gemini can similarly emit `generation_complete` before `turn_complete`: the
 latter is delayed while Gemini assumes the client is playing its audio in real
-time. HAL plays the generated response itself, so it ends the consumer turn on
-`generation_complete` and releases the next manual-VAD commit immediately.
+time. For BLOCKING models, HAL plays the generated response itself and ends the
+consumer turn on `generation_complete` and releases the next manual-VAD commit immediately.
 This avoids an otherwise unnecessary silent-watchdog delay after the reply;
 any late `turn_complete` is discarded before the next turn.
+
+For Gemini `extended-thinking` models, tools are `NON_BLOCKING`: a spoken filler
+such as “I can help with that.” must not consume the user's task (#453).
+The provider adds `complete_response`, which confirms that a direct spoken
+answer fulfilled the request. Conversation, knowledge, or a completed public
+lookup can use this confirmation; actions, promises, errors, and unresolved work
+must delegate. A direct answer needs this explicit outcome and a successful
+provider terminal before it counts as handled/completed. Text/audio alone is
+not completion evidence.
+
+Filler text/audio still streams immediately for KPI-1 (Voice Acknowledge).
+HAL waits for the outcome up to `HAL_REALTIME_NONBLOCKING_TOOL_GRACE_S`
+(default **6 seconds**, `0` disables the wait, not the outcome requirement).
+The grace starts at the first `generation_complete` or `turn_complete`; later
+terminals do not extend it. HAL reopens the SDK's per-turn `receive()` iterator
+on the same session after `turn_complete`, retaining the logical turn identity.
+Only delegate/reject calls end the grace early; `complete_response` records
+confirmation but keeps the window open for a delegate in a subsequent frame; auxiliary
+tools do not confirm completion or suppress a later delegate. After direct-answer
+confirmation, HAL suppresses additional speech prompted by its ACK while still
+receiving routing calls. A receive error also requests main-agent fallback for
+this model family, even if a filler already played.
+
+If the grace expires without an outcome on an uninterrupted turn, HAL emits
+`MainAgentFallbackOutput`, then `DelegateSignal`, preserving the original
+provider transcript and turn identity. This local fallback invents no function
+call and sends no tool ACK. It routes as `delegated`, never `[HANDLED]`, even
+when a filler has already played; completion must come from the downstream task.
+BLOCKING models keep their existing immediate-completion behavior. The Gemini
+prompt allows one immediate, brief acknowledgement before a delegate; rejection
+remains completely silent.
+
+Actual tool calls use ordinary function response acknowledgements, omitting
+`scheduling`: on 2026-09-21 the device's Gemini 3.8 extended-thinking backend
+rejected `SILENT` with WebSocket 1007,
+`Function response scheduling is not supported for this model`. NON_BLOCKING
+tool support does not imply response-scheduling support. Calls arriving after
+the grace deadline are not guaranteed to be received, and the model can still
+misclassify a request by explicitly calling `complete_response`; the outcome
+gate prevents missing calls from silently consuming tasks, not all semantic errors.
 
 The gate itself is `wakeword` in `config.json` (Settings → "Require a wake word
 before handling speech"). A device being set up for the first time takes its
@@ -1025,15 +1065,18 @@ snapshots normally.
 
 ## Providers
 
-Three interchangeable backends, selected by `HAL_REALTIME_PROVIDER` /
-`realtime.provider` (`none` | `gemini` | `openai` | `gptlive`) and built in
-`orchestrator._make_agent`:
+Four interchangeable backends, selected by `HAL_REALTIME_PROVIDER` /
+`realtime.provider` (`none` | `gemini` | `openai` | `gptlive` | `pipecat_v1`)
+and built in `orchestrator._make_agent`; Go `RealtimeProviders` and the web
+dropdown (`RealtimeSection.tsx`) list the same values, in that order, before
+`none`:
 
 | Provider | Class | Threading model | Default model | Sample rate |
 |----------|-------|-----------------|---------------|-------------|
 | Gemini Live | `voice_agent/gemini_live.py` `GeminiLiveAgent` | private asyncio loop on a `gemini-io` thread; send/recv threads submit coroutines via `run_coroutine_threadsafe` | `gemini-2.5-flash-native-audio-preview-12-2025` | 16000 Hz |
 | OpenAI Realtime | `voice_agent/openai_realtime.py` `OpenAIRealtimeAgent` | fully synchronous; one `RealtimeConnection` shared by send/recv threads, serialized by a reentrant lock | `gpt-realtime-2` | 24000 Hz in and out |
 | GPT-Live | `voice_agent/gpt_live.py` `GPTLiveAgent` | fully synchronous; one `LiveConnection` shared by send/recv threads, serialized by a reentrant lock, plus a `gptlive-watchdog` thread that synthesizes the turn boundary the wire never sends | `gpt-live-1` | 16000 or 24000 Hz, **one** PCM format for both directions (default 24000) |
+| Pipecat v1 | `voice_agent/pipecat_v1.py` `PipecatV1Agent` (+ `pipecat_pipeline.py`, `pipecat_stt.py`) | **no vendor session**: a Pipecat pipeline on a private asyncio loop (`pipecat-io` thread) inside HAL; the send thread submits frames with `run_coroutine_threadsafe`, the pipeline's `EventSink` writes straight to the recv queue, the recv thread only watches pipeline health | `qwen/qwen3.6-35b-a3b` via the campaign-api Qwen relay (any OpenAI-compatible chat endpoint) | 16000 Hz in; **text out** (HAL's TTS speaks) |
 
 Gemini Live uses `google-genai` and keeps its private asyncio loop owned by its
 `gemini-io` thread. Teardown first closes/cancels the provider receive task,
@@ -1494,6 +1537,199 @@ handoff so the shared find-delegation test
 (`hal/test/test_realtime_find_delegation.py`) can pin the rule text; the prompt
 says it is never spoken.
 
+### Pipecat v1 (`pipecat_v1`): on-device pipeline, text out
+
+`voice_agent/pipecat_v1.py` `PipecatV1Agent` is the provider that has no
+provider: the "server" is a [Pipecat](https://github.com/pipecat-ai/pipecat)
+pipeline running inside HAL, built on a private asyncio loop (`pipecat-io`
+thread) by `voice_agent/pipecat_pipeline.py`. Audio goes in, **text** comes out
+and HAL's own TTS speaks it — the model never produces audio, so
+`REALTIME_NATIVE_AUDIO` is meaningless here and there is no voice knob. It was
+built after the audio-path analysis of 2026-09-18 (AEC, the playing-state and
+barge-in decisions can only live on the device that plays the audio; see
+`audio-path-design.md`), so the whole pipeline stays on the robot and only the
+model calls leave it. Selected by `realtime.provider = pipecat_v1`; its prompt
+is `system_prompt_pipecat.md` (`PROVIDER_PROMPT_PATHS`) — the OpenAI prompt
+with a preamble saying the model reads an STT **transcript**, not audio, and
+writes text for TTS.
+
+**Install.** `pipecat-ai` is the optional extra `pipecat` in
+`hal/pyproject.toml` (`uv sync --extra pipecat` on the device — the lamp's
+`uv sync --python 3.12 --extra hardware --extra aec` line gains `--extra
+pipecat`). It is not a hard dependency: the core package drags `numba` +
+`llvmlite` (~140 MB), `resampy`, `nltk` and pins `onnxruntime ~=1.24`, which
+conflicts with the `reachy` extra's `onnxruntime==1.27.0` — the two extras are
+declared mutually exclusive (`[tool.uv] conflicts`) because they never share a
+body. Without the package `PipecatV1Agent` raises `PipecatV1Error` at connect
+and the orchestrator treats the provider as unavailable (main-agent fallback),
+exactly like a vendor outage. Silero VAD, Smart Turn v3 (bundled
+`smart-turn-v3.2-cpu.onnx`, 8.7 MB) and the OpenAI-compatible LLM service ship
+in the core package; no vendor STT extra is needed (below).
+
+**Pipeline** (one per provider session, rebuilt on every `recover_session`):
+
+```
+PipelineWorker.queue_frame ─▶ HALSTTService ─▶ user aggregator ─▶ OpenAILLMService ─▶ EventSink ─▶ assistant aggregator
+   InputAudioRawFrame          (device STT)     (VAD / turns)      (text + tools)      (→ _ev_* on the agent)
+```
+
+There is **no transport**: HAL owns the mic and the speaker, and the agent's
+send thread pushes each `AudioInput` (float32 → PCM16) into the pipeline head
+with `worker.queue_frame`. `EventSink` is a pass-through `FrameProcessor` that
+reports frames to the agent as plain method calls (`_ev_text`,
+`_ev_response_started/ended`, `_ev_calls_started`, `_ev_call_result`,
+`_ev_user_turn_started/stopped`, `_ev_interruption`, `_ev_error`, metrics), so
+all of the `VoiceAgentBase` contract is produced in `pipecat_v1.py` without a
+`pipecat` import and is unit-tested there
+(`hal/test/test_pipecat_v1_agent.py`, 17 tests).
+
+**STT is the pipeline's, on the device's own provider.** `pipecat_stt.py`
+`HALSTTService` is a Pipecat `STTService` over HAL's `STTProvider`
+(`AutonomousSTT` — the Deepgram-compatible relay behind campaign-api on the
+`llm_api_key` — or `DeepgramSTT`): Pipecat's stock STT services dial the
+vendor's public endpoint with a vendor key the device does not have.
+`VoiceService` hands its provider to the orchestrator (`stt_provider=`), which
+passes it to the agent, so transcription uses the same relay, key, model and
+boost terms as the turn-based path; without one the agent builds an
+`AutonomousSTT` from `HAL_PIPECAT_STT_*`. All provider I/O (open, send, close)
+runs on one `pipecat-stt` sender thread so the blocking `close()` (which joins
+the recv thread for up to 15 s while the server flushes the last transcript)
+never stalls the asyncio loop; transcripts are handed back to the loop with
+`call_soon_threadsafe` as `TranscriptionFrame(finalized=True)` for finals and
+`InterimTranscriptionFrame` for interims, and to the agent (`_ev_transcript`)
+for `FunctionCallOutput.user_transcript` and live-mode `UserSpeechOutput`.
+
+**Both `HAL_LIVE_MODE` shapes, one class** — the mode is read at construction
+(`config.LIVE_MODE`), the same way the rest of HAL is exclusive by design:
+
+| | `HAL_LIVE_MODE=false` (turn-based) | `HAL_LIVE_MODE=true` (live) |
+|---|---|---|
+| who ends the user's speech | HAL's VAD (`_vad_loop`) → `append_audio` × N, `commit_audio` | the pipeline: Silero VAD opens the turn (`HAL_PIPECAT_VAD_*`), Smart Turn v3 closes it (`HAL_PIPECAT_SMART_TURN`, else a `HAL_PIPECAT_SILENCE_TIMEOUT_S` silence timeout) |
+| turn strategies | `ExternalUserTurnStrategies`: the first frame after a commit queues `ProposedUserStartedSpeakingFrame` (which also broadcasts an interruption, cancelling a reply still streaming from the previous turn); `commit_audio` queues `ProposedUserStoppedSpeakingFrame` **and** an `STTFinalizeFrame`. A subclassed stop strategy (`_CommittedTurnStopStrategy`) finalizes the moment the committed STT final lands instead of waiting the stock 0.5 s aggregation timeout | Pipecat defaults: start on VAD / transcription, stop on the turn analyzer; an onset while the model is answering broadcasts an interruption |
+| STT session | **per turn**: opened on the first frame, closed by the `STTFinalizeFrame` — a system frame pushed *through the pipeline* behind the audio so it reaches the STT stage only after every frame of the utterance (signalling the sender thread directly raced the audio still in flight and finalized an empty session; fixed 2026-09-18). `close()` sends CloseStream, the server flushes the final. A turn whose session closes with no text at all ends at once (`TurnDoneEvent(execution_completed=False)`) so HAL falls back with its own transcript instead of waiting out `REALTIME_RECV_QUEUE_TIMEOUT_S` | **one long session** for the pipeline's life, reopened if the relay drops it, kept alive with `KeepAlive` every 5 s while nobody talks; the provider's own end-of-turn (Flux `TurnInfo`) just arrives as a final |
+| `UserSpeechOutput` | none (no live metadata on the turn path) | turn start (`method="server_vad"`), each STT **final** as the part not emitted yet (`method="provider_transcript"`, `transcript_finished=True`), turn stop (`endpoint_at`) — the same keys the live pump reads from Gemini/OpenAI. Interims are never surfaced: STT hypotheses are cumulative and get rewritten mid-utterance (`place a music` → `play some music`), and the pump's `LiveHistory.input` concatenates chunks it cannot retract — on lamp-ee17 the rewrite landed in the `[HANDLED]` text. Interims still feed MinWords and `note_server_activity()` |
+| barge-in | the next utterance's first frame interrupts the pipeline; no `TurnDoneEvent` is emitted for it (the orchestrator left the old turn long ago and a late terminal could only end the new turn empty) | `InterruptedOutput(reason="server_interrupt", at=…)` + `TurnDoneEvent(execution_completed=False)`, `gen` bumped. While the model is generating, a new turn needs `HAL_PIPECAT_MIN_WORDS` transcribed words to open (`_BusyAwareMinWordsStrategy`); otherwise a one-word burst right after the question cancels the reply |
+| commit | proposes the stop + finalizes STT; a commit with **no audio** since the last one ends the turn immediately | ignored (a live session never commits) |
+
+Note the turn-based path runs STT **twice** on the same utterance — HAL's own
+session (wake word, noise guard, `[transcript]`, dispatch) and the pipeline's —
+which doubles STT cost on that path; live mode has no HAL STT session, so
+there the pipeline's is the only one. The mode this provider is really for is
+live.
+
+**Tools are bridged one-for-one.** Every orchestrator tool
+(`delegate_to_main`, `reject_turn`, `express_emotion`, `end_conversation`;
+`look` is Gemini-only and never registered) is registered on the LLM service as
+a `FunctionSchema` + handler. The handler publishes `FunctionCallOutput(name,
+arguments=<JSON>, call_id=<tool_call_id>, user_transcript=<STT finals of this
+turn>)` and awaits the orchestrator's `FunctionCallResultInput` for that
+`call_id` (bounded by `HAL_PIPECAT_TOOL_RESULT_TIMEOUT_S`, after which the
+model gets `{"error": "no result from the device"}` and no follow-up so the
+pipeline never wedges); the result's `trigger_response` becomes Pipecat's
+`run_llm`. Two exceptions are decided by name: **`delegate_to_main` and
+`reject_turn` never run the model again** (`_NO_FOLLOWUP_TOOLS`). The
+orchestrator acknowledges those with `trigger_response=True` (a Gemini
+pending-tool-call rule, not a wish for a reply) and then leaves the turn
+(`end_turn()` + `DelegateSignal` / `RejectSignal`), so a follow-up could only
+ever be spoken as a stale answer on the *next* turn — the local smoke run
+answered "How are you?" with the music-genre follow-up of the previous
+delegation before this rule existed. `express_emotion` (`trigger_response=True`
+since the ack patch) and `end_conversation` do run the model again. Because a
+35B-A3B model weighs recency, the action rule is stated twice: as a `## FINAL
+RULE` appended to the system instruction, and as a user-role `[RULE] …` line
+(`_TOOL_RULE`, ~60 tokens) re-injected right before every utterance
+(`PipelineHandle.remind_tools`, from the first frame on the turn path and from
+`_ev_user_turn_started` in live mode, so it lands before the aggregator appends
+the transcript). It is a user-role line because the Qwen relay rejects a system
+message anywhere but first (`System message must be at the beginning`, HTTP
+400). Without it, on lamp-ee17 the boot whose realtime-memory summary was 8 k
+chars answered "please play some music" with "You got it, what vibe?" while the
+same pipeline with a 3 k summary delegated; with it, the request delegates.
+
+**Turn boundary and generations.** `OutputEvent.gen` is the **user-turn**
+generation — bumped when a user turn starts and on an interruption, never per
+response — so a tool-result follow-up stays in its turn. `TurnDoneEvent` is
+emitted at `LLMFullResponseEndFrame` only when no tool call is pending
+(`FunctionCallsStartedFrame` is broadcast **before** the end frame, the
+`FunctionCallInProgressFrame`s may land after it); a call whose result came
+back with `run_llm=False` ends the turn itself once the last pending call is
+answered, one with `run_llm=True` hands it to the follow-up response's end.
+`InterruptedOutput(reason="output_reset")` precedes the first reply of every
+user turn (not every response — a tool-result follow-up must not reset the
+TTS queue of the sentence already playing). `end_turn()` **fences** the current
+generation: `_newest_output_gen` is raised past it and its `TurnDoneEvent` is
+swallowed, so whatever the fenced turn still produces is dropped by
+`receive()` instead of ending or being spoken on the next turn.
+`note_server_activity()` fires on every transcript fragment, text delta,
+tool frame and metrics frame, so a turn whose STT or LLM is still working is
+kept alive by the silent-turn watchdog. Pipeline errors reach the agent through
+the worker's `on_pipeline_error` event (Pipecat pushes `ErrorFrame`s
+*upstream*, so a sink behind the LLM never sees one): a non-fatal one while a
+response is open ends the turn with `execution_completed=False` (main-agent
+fallback) instead of letting the response end frame report a completed empty
+turn; a fatal one, or the pipeline run ending, drops the session
+(`_recv_loop` polls `PipelineHandle.alive` every second and rebuilds with the
+usual 2 s → 60 s backoff). Idle parking does not apply (`_idle_park_threshold` → 0): there is
+no vendor session to park, and the STT socket only lives during a turn or a
+live call.
+
+**LLM.** `OpenAILLMService` against `HAL_PIPECAT_BASE_URL` (default
+`https://campaign-api.autonomous.ai/api/v1/ai/v1/qwen/v1`, the low-latency
+Qwen relay; the EternalAI gateway `https://vibe-agent-gateway.eternalai.org/v2`
+serves the same model without a key and is what the local smoke tests use),
+model `HAL_PIPECAT_MODEL` (`qwen/qwen3.6-35b-a3b`), `temperature` 0.7,
+`max_tokens` 300, the system prompt as the service's `system_instruction`
+(an initial system message in `LLMContext` is deprecated since Pipecat 1.9).
+Qwen3 models can emit `reasoning` before `content` and Pipecat streams only
+`content`, so thinking is disabled through
+`extra_body.chat_template_kwargs.enable_thinking=false`
+(`HAL_PIPECAT_DISABLE_THINKING`, set `false` for an endpoint that rejects the
+extra body). `[TURN CONTEXT]` / `[TTS HISTORY]` `TextInput`s become
+`LLMMessagesAppendFrame(role=user, run_llm=False)` — recorded, never a turn.
+`ImageInput` is dropped with a warning. Measured on a dev Mac through the
+EternalAI gateway (fake STT, so this is LLM only): first text 0.8–1.0 s after
+end of turn, ~5.8 k prompt tokens per turn (the prompt), 2–30 completion
+tokens.
+
+**Usage log.** `pipecat_usage.log` (logger `hal.realtime.usage.pipecat`,
+`server_support/log_setup.py`): one `first text +N.NNs after turn end` line per
+reply (turn-based: after the commit; live: after end-of-speech), Pipecat's
+per-stage `ttfb` lines, and `llm usage model=… in=N out=N` from the LLM
+service's usage metrics — token counts only, no cost estimate.
+
+**Device verification (lamp-ee17, 2026-09-18, `HAL_LIVE_MODE=true`,
+uplink `mute`).** Pipeline build (Silero + Smart Turn ONNX load) ~12 s on the
+A55; a live call opened by HAL's doorbell VAD, Flux transcribed "Hey, lamb.
+What is the capital of France?", the pipeline answered `Paris.` with first
+text 1.3–1.8 s after end of speech (11.5 k prompt tokens through the Qwen
+relay) and ElevenLabs first audio ~1 s later; "Hey, lamp. Please play some
+music for me." became `delegate_to_main(message="Please play some music for
+me.")` → `[voice-instruction]` + `[transcript]` to os-server → the main agent
+answered. Three things this run changed: `HAL_LIVE_UPLINK_DURING_PLAYBACK`
+must be `mute` on this hardware — on `cancelled` the pipeline transcribed the
+lamp's own reply (`Its parents` for "It's Paris") and answered itself for four
+rounds, the same 7–13 dB AEC limit measured with GPT-Live; the VAD floor moved
+to the far-field values (`0.85` / `0.7`) after the lamp answered a conversation
+across the room; and `MinWords` / the `[RULE]` line above. Install on the lamp
+is `uv sync --python 3.12 --extra hardware --extra aec --extra pipecat`
+(pulls `onnxruntime 1.24.4`, `numba`, `llvmlite`; ~30 s from the cache).
+`/var/log/hal/pipecat_usage.log` holds the per-turn lines.
+
+**Known limits (2026-09-18).** Smart Turn v3 CPU cost on the A55 is not
+measured yet (it runs once per pause, not per frame); the Qwen relay drops the
+`tool_calls` payload from a **non-streaming** completion (`finish_reason:
+"tool_calls"` with an empty message) — Pipecat streams, so the pipeline is
+unaffected, but a non-streaming probe will look tool-less; whether the model
+delegates still depends on that boot's realtime-memory summary (see the
+`[RULE]` note) — `HAL_PIPECAT_TEMPERATURE` is the remaining knob; no image
+input; `test_pipecat_v1_agent.py` covers the contract, not the pipeline — the
+pipeline was verified by the local smoke runs (turn mode with a fake STT: "What
+is two plus two?" → `Four.`, "Please play some music" →
+`delegate_to_main(message="Play some music")`; live mode with synthesized
+speech through Silero + Smart Turn: "What is the capital of France?" →
+`Paris.`, "Please turn the brightness up a bit." → delegated with the
+transcript) and the device run above.
+
 ## Pricing & usage logs
 
 Every turn writes one token/cost line to a per-provider log under
@@ -1502,8 +1738,10 @@ Every turn writes one token/cost line to a per-provider log under
 `hal.realtime.usage`), `openai_usage.log` (logger
 `hal.realtime.usage.openai` — a child of the Gemini logger with
 `propagate=False`, so the files stay separate and comparable
-line-for-line) and `gptlive_usage.log` (logger `hal.realtime.usage.gptlive`,
-same pattern). None reaches `server.log`. The Gemini and OpenAI lines carry
+line-for-line), `gptlive_usage.log` (logger `hal.realtime.usage.gptlive`,
+same pattern) and `pipecat_usage.log` (logger `hal.realtime.usage.pipecat`:
+latency + token counts, no cost — see *Pipecat v1*). None reaches
+`server.log`. The Gemini and OpenAI lines carry
 per-modality token counts **and** an estimated USD cost, so a wrong rate can
 always be re-derived later from the logged counts.
 
@@ -2194,8 +2432,9 @@ spurious HAL restart on the next boot after an os-server-only field changes.
 
 Modelled in Go at `system/server/config/realtime.go`; read in HAL at
 `hal/config.py`. Shared fields sit at the top; per-provider knobs live in
-`gemini` / `openai` / `gptlive` sub-objects (Go structs `GeminiRealtime` /
-`OpenAIRealtime` / `GPTLiveRealtime`), with `provider` selecting the active one
+`gemini` / `openai` / `gptlive` / `pipecat_v1` sub-objects (Go structs
+`GeminiRealtime` / `OpenAIRealtime` / `GPTLiveRealtime` / `PipecatV1Realtime`),
+with `provider` selecting the active one
 (`none` / `off` / `disabled` → realtime off; absent or empty → `gemini`, in both
 the Go accessor `RealtimeProvider()` and HAL's `REALTIME_PROVIDER` default).
 Empty `api_key` / `base_url` fall back to `llm_api_key` / `llm_base_url` for
@@ -2205,7 +2444,13 @@ base URL as `HAL_GPTLIVE_BASE_URL` > `realtime.gptlive.base_url` > the OpenAI
 Realtime base URL (`realtime.base_url` > `<llm_base_url>/ws/openai`), to which
 the SDK appends `/live/sessions`. The `GPTLiveRealtime.api_key` / `base_url`
 fields only persist a per-provider override; `realtime.set` writes credentials
-to the shared fields.
+to the shared fields. Pipecat v1 resolves its key as `HAL_PIPECAT_API_KEY` >
+`realtime.pipecat_v1.api_key` > shared `realtime.api_key` > `llm_api_key`, and
+its chat base URL as `HAL_PIPECAT_BASE_URL` > `realtime.pipecat_v1.base_url` >
+the Qwen relay default — the shared `realtime.base_url` is deliberately **not**
+consulted (it carries a `/ws/...` relay shape, not a chat-completions
+endpoint), which is why the web Settings page hides the Base URL field for this
+provider and points at `realtime.pipecat_v1.base_url` instead.
 
 > **Leave `base_url` blank unless you have a non-proxy endpoint.** When empty, HAL
 > derives `<llm_base_url>/ws/gemini` (or `/ws/openai`) — the WS suffix the
@@ -2225,7 +2470,8 @@ to the shared fields.
     "provider": "gemini",
     "gemini": { "model": "gemini-3.8-live", "voice": "Kore", "thinking_level": "LOW" },
     "openai": { "model": "gpt-realtime-2", "voice": "alloy", "reasoning_effort": "minimal" },
-    "gptlive": { "model": "gpt-live-1", "voice": "marin" }
+    "gptlive": { "model": "gpt-live-1", "voice": "marin" },
+    "pipecat_v1": { "model": "qwen/qwen3.6-35b-a3b" }
   }
 }
 ```
@@ -2243,7 +2489,15 @@ HAL `GPTLiveVoice`, from the BFF integration doc): `marin` (default), `quartz`,
 `beacon`, `delta`, `cinder` (`bossa`/`tempo` are Portuguese, the rest English
 with regional accents). The SDK's wider `BuiltInVoice` literal also carries
 Realtime-only names (`alloy`, `ash`, …) that a Live session rejects — they are
-deliberately not listed; the web Settings page labels the provider "GPT-Live". HAL additionally reads
+deliberately not listed; the web Settings page labels the provider "GPT-Live".
+Pipecat v1 has **neither** a voice nor a reasoning knob (the pipeline emits
+text and HAL's TTS voice speaks it): `RealtimeVoice()` and
+`RealtimeReasoning()` return empty, the options endpoint returns empty
+`voices.pipecat_v1` and `reasoning.pipecat_v1` lists so the web hides both
+selectors, `ValidateRealtimeKnobs` rejects any voice (`pipecat_v1 realtime has
+no voice`) or reasoning value for it, and `realtime.set` only writes `model`
+into the `pipecat_v1` sub-object; the web label is "Pipecat v1 (on-device)".
+HAL additionally reads
 `realtime.openai.transcribe_model` and `realtime.openai.noise_reduction` from
 the same sub-object (env `HAL_OPENAI_TRANSCRIBE_MODEL` /
 `HAL_OPENAI_NOISE_REDUCTION` win); these two are not modelled in the Go
@@ -2296,7 +2550,7 @@ is a top-level `config.json` flag:
 | `HAL_ENDPOINT_SILENCE_S` | `0.8` | Silence needed after STT final arrival, only while `final_ts >= last_confirmed_speech`. Continued confirmed speech after that final restores the 2.5s fallback until a new final arrives. `0` disables the short clock, leaving `HAL_SILENCE_TIMEOUT`. |
 | `HAL_SILENCE_VAD_ENABLED` | `true` | Require Silero to confirm speech before the end-of-turn silence clock is refreshed. RMS remains the cheap pre-gate; set `false` to fall back to pure-RMS silence detection. |
 | `HAL_SILENCE_VAD_WINDOW_FRAMES` | `3` | Number of frames batched per Silero run for that check — Silero costs ~20 ms/frame on ARM and its LSTM needs more than one 64 ms frame to settle. |
-| `HAL_REALTIME_PROVIDER` | `gemini` | `none` \| `gemini` \| `openai` \| `gptlive` |
+| `HAL_REALTIME_PROVIDER` | `gemini` | `none` \| `gemini` \| `openai` \| `gptlive` \| `pipecat_v1` |
 | `HAL_REALTIME_TURN_DETECTION` | `off` | `server_vad` \| `semantic_vad` \| `off` (Gemini: off = manual activity detection). Ignored by GPT-Live, which has no `turn_detection` |
 | `HAL_REALTIME_RECV_QUEUE_TIMEOUT_S` | `8.0` | Max seconds `receive()` waits for the next output event before ending a silent turn (fallback to main agent) |
 | `HAL_REALTIME_GROUNDING_DEBUG` | `false` | Dump every field of Gemini's `grounding_metadata` verbatim, once per grounded turn (`grounding_chunks`, `grounding_supports`, `search_entry_point`, …). Diagnostic only and verbose; it exists to tell a turn whose search genuinely returned nothing from one whose payload was stripped in transit. Measured on lamp-0c89 04/09/2026 over four grounded turns, the payload always arrived complete, so a `chunks=0` turn means the model did not ground that answer. |
@@ -2340,6 +2594,24 @@ is a top-level `config.json` flag:
 | `HAL_GPTLIVE_COMMIT_SILENCE_MS` | `600` | Turn path only: PCM silence appended at `commit_audio()` (`event_id` `hal-silence`) so the model hears the utterance end — there is no commit on Live. No-op in LIVE_MODE; `0` disables |
 | `HAL_GPTLIVE_DELEGATION_WAIT_MS` | `500` | Hard deadline for forwarding a `session.delegation.created` as `delegate_to_main`: the adapter forwards as soon as the input transcript has been quiet for 250 ms, and at this deadline at the latest with whatever was heard (empty → the orchestrator's rejection is relayed as a failed handoff) |
 | `HAL_GPTLIVE_IDLE_PARK_S` | `30` | GPT-Live idle parking: the session is billed per minute while open, so after this many seconds without turn activity the orchestrator closes the transport (`_maybe_park_idle_session`, same mechanics as `HAL_GEMINI_IDLE_PARK_S`) and reconnects on the next turn. `0` disables. |
+| `HAL_PIPECAT_API_KEY` | *(empty → `realtime.pipecat_v1.api_key` > `realtime.api_key` > `llm_api_key`)* | Bearer key for the chat endpoint |
+| `HAL_PIPECAT_BASE_URL` | `https://campaign-api.autonomous.ai/api/v1/ai/v1/qwen/v1` | Also `realtime.pipecat_v1.base_url`. Any OpenAI-compatible chat-completions base; the shared `realtime.base_url` is never used (WS relay shape). `https://vibe-agent-gateway.eternalai.org/v2` serves the same model keyless |
+| `HAL_PIPECAT_MODEL` | `qwen/qwen3.6-35b-a3b` | Also `realtime.pipecat_v1.model` |
+| `HAL_PIPECAT_TEMPERATURE` | `0.7` | LLM sampling temperature |
+| `HAL_PIPECAT_MAX_TOKENS` | `300` | Reply cap per response |
+| `HAL_PIPECAT_DISABLE_THINKING` | `true` | Sends `extra_body.chat_template_kwargs.enable_thinking=false` (Qwen3 / vLLM); Pipecat streams only `content`, so thinking would be dead air. `false` for an endpoint that rejects the extra body |
+| `HAL_PIPECAT_STT_API_KEY` / `HAL_PIPECAT_STT_BASE_URL` / `HAL_PIPECAT_STT_MODEL` | `llm_api_key` / `llm_base_url` / `stt_model` | Only when the agent must build its own `AutonomousSTT` (no `VoiceService` provider injected — tests, `/voice/start` before STT); on a running device the pipeline uses `VoiceService`'s STT provider |
+| `HAL_PIPECAT_SAMPLE_RATE` | `16000` | Mic PCM rate the pipeline expects (no resample: Silero, Smart Turn and the STT relay take 16 kHz natively) |
+| `HAL_PIPECAT_SMART_TURN` | `true` | Live mode: Smart Turn v3 (bundled ONNX, CPU) decides end-of-turn after each Silero stop; `false` → a `HAL_PIPECAT_SILENCE_TIMEOUT_S` silence timeout instead. Ignored on the turn-based path |
+| `HAL_PIPECAT_SMART_TURN_STOP_SECS` | `3.0` | Live mode: longest silence Smart Turn waits before forcing the turn closed |
+| `HAL_PIPECAT_VAD_CONFIDENCE` | `0.85` | Live mode Silero confidence (Pipecat default 0.7 — the far-field value: at 0.8 the lamp still answered a conversation across the room, 2026-09-18) |
+| `HAL_PIPECAT_VAD_START_SECS` | `0.2` | Live mode: speech must persist this long before Silero reports an onset |
+| `HAL_PIPECAT_VAD_STOP_SECS` | `0.2` | Live mode: silence before Silero reports a stop — the value Smart Turn's built-in latency figures assume; the model, not this timer, decides whether the turn is over |
+| `HAL_PIPECAT_VAD_MIN_VOLUME` | `0.7` | Live mode Silero volume floor (Pipecat default 0.6; far-field value) |
+| `HAL_PIPECAT_SILENCE_TIMEOUT_S` | `0.8` | Live mode with Smart Turn off: silence after speech that ends the turn |
+| `HAL_PIPECAT_MIN_WORDS` | `2` | Live mode: **while the model is generating** (or a tool call is in flight) a new user turn — and the interruption it broadcasts — starts only once the STT has transcribed this many words; otherwise one word opens a turn, so "yes" / "stop" still work. `_BusyAwareMinWordsStrategy` keys Pipecat's `MinWordsUserTurnStartStrategy` on the agent's LLM state because the stock strategy needs `BotStartedSpeakingFrame`s this pipeline never has. On lamp-ee17 a one-word burst (`do.`) right after a question opened a turn and cancelled the reply mid-generation; `0` = Pipecat's default VAD/transcription start |
+| `HAL_PIPECAT_TURN_STOP_TIMEOUT_S` | `5` | Watchdog on a user turn whose transcript never arrives: the aggregator finalizes it anyway (turn-based: an empty committed session already ended the turn earlier) |
+| `HAL_PIPECAT_TOOL_RESULT_TIMEOUT_S` | `15` | How long a bridged tool call waits for the orchestrator's `FunctionCallResultInput` before the model gets `{"error": "no result from the device"}` (no follow-up) |
 | `HAL_REALTIME_MEMORY_PATH` | `<workspace>/realtime/memory.jsonl` | |
 | `HAL_REALTIME_MAX_MEMORY_ENTRIES` / `_TRIM_KEEP` | `1000` / `500` | |
 | `HAL_REALTIME_SUMMARIZER_ENABLED` | `true` | |
@@ -2359,11 +2631,14 @@ is a top-level `config.json` flag:
 | `voice_agent/gemini_live.py` | Gemini Live provider (asyncio IO loop) |
 | `voice_agent/openai_realtime.py` | OpenAI Realtime provider (GA schema, sync, lock-serialized connection; live-mode contract parity with Gemini, barge-in truncate, `_OPENAI_RATES` cost table → `openai_usage.log`) |
 | `voice_agent/gpt_live.py` | GPT-Live provider (`/v1/live/sessions`, `gpt-live-1`; sync, lock-serialized `LiveConnection`; synthesizes turn boundary / user speech / barge-in from output timing and transcript fragments via the `gptlive-watchdog` thread, client delegation → `delegate_to_main`, `session.thinking.append` feedback, per-minute usage → `gptlive_usage.log`) |
+| `voice_agent/pipecat_v1.py` | Pipecat v1 provider: the `VoiceAgentBase` contract (threads, queues, user-turn generations, `end_turn()` fence, tool bridge, both `HAL_LIVE_MODE` shapes) with no `pipecat` import; unit-tested in `hal/test/test_pipecat_v1_agent.py` |
+| `voice_agent/pipecat_pipeline.py` | The Pipecat side: builds the pipeline (`HALSTTService` → user aggregator → `OpenAILLMService` → `EventSink` → assistant aggregator) on the `pipecat-io` loop, tool handlers, `PipelineHandle` (thread-safe queue_frame / proposals / finalize / stop), `_CommittedTurnStopStrategy` |
+| `voice_agent/pipecat_stt.py` | `HALSTTService`: Pipecat `STTService` over HAL's `STTProvider` (per-turn or long session on a `pipecat-stt` sender thread), `STTFinalizeFrame` |
 | `context_manager/{base,openclaw,hermes}.py` | Prompt + memory + skills assembly per gateway |
 | `summarizer.py` | Anthropic-based memory summarizer |
-| `config.py` | Provider config models (`GeminiConfig`, `OpenAIConfig`, `GPTLiveConfig`) |
+| `config.py` | Provider config models (`GeminiConfig`, `OpenAIConfig`, `GPTLiveConfig`, `PipecatV1Config`) |
 | `models/`, `enums/` | Input/output/event types, provider + gateway enums |
-| `resources/` | System prompts (shared `system_prompt.md` + per-provider `system_prompt_gemini.md` / `system_prompt_openai.md` / `system_prompt_gptlive.md`) |
+| `resources/` | System prompts (shared `system_prompt.md` + per-provider `system_prompt_gemini.md` / `system_prompt_openai.md` / `system_prompt_gptlive.md` / `system_prompt_pipecat.md`) |
 | `../voice/voice_service.py` | Integration: streams mic audio, consumes output, routes delegate/handled. Live mode: `_live_decision` / `_live_session` / `_live_out_pump` / `_live_uplink_frame` |
 | `../voice/aec.py` | WebRTC AEC3 on the mic path; reference tapped at the TTS output stream (all providers) |
 

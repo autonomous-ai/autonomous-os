@@ -958,6 +958,7 @@ _RT: dict = _os_cfg_realtime()
 _RT_GEMINI: dict = _RT.get("gemini") if isinstance(_RT.get("gemini"), dict) else {}
 _RT_OPENAI: dict = _RT.get("openai") if isinstance(_RT.get("openai"), dict) else {}
 _RT_GPTLIVE: dict = _RT.get("gptlive") if isinstance(_RT.get("gptlive"), dict) else {}
+_RT_PIPECAT: dict = _RT.get("pipecat_v1") if isinstance(_RT.get("pipecat_v1"), dict) else {}
 
 
 def _rt_str(env_key: str, cfg_val, default: str) -> str:
@@ -980,7 +981,7 @@ def _rt_enabled() -> bool:
 
 
 REALTIME_ENABLED: bool = _rt_enabled()
-REALTIME_PROVIDER: str = _rt_str("HAL_REALTIME_PROVIDER", _RT.get("provider"), "gemini")  # none | gemini | openai | gptlive
+REALTIME_PROVIDER: str = _rt_str("HAL_REALTIME_PROVIDER", _RT.get("provider"), "gemini")  # none | gemini | openai | gptlive | pipecat_v1
 # When enabled, do not send a voice turn to the realtime agent until an STT
 # interim transcript starts with one of the configured wake phrases. This is a
 # top-level config.json setting because it also gates the non-realtime Go path.
@@ -1000,6 +1001,14 @@ WAKEWORD_FOLLOWUP_TIMEOUT_S: float = max(
 # agent — keep it just above realtime first-token latency (~1-2s), not minutes.
 REALTIME_RECV_QUEUE_TIMEOUT_S: float = float(
     os.environ.get("HAL_REALTIME_RECV_QUEUE_TIMEOUT_S", "8.0")
+)
+# Grace after turn_complete OR generation_complete on NON_BLOCKING-tool models
+# (Gemini extended-thinking). Keep late delegate/reject calls in the consumer
+# turn after a spoken filler (#453), across SDK receive() iterator boundaries.
+# Filler output is streamed immediately; only finalization waits. A routing call
+# cuts the window short; auxiliary tools do not. 0 disables; BLOCKING models skip.
+REALTIME_NONBLOCKING_TOOL_GRACE_S: float = float(
+    os.environ.get("HAL_REALTIME_NONBLOCKING_TOOL_GRACE_S", "6.0")
 )
 # Silent-turn watchdog for turns where a `look` fired. Gemini 3.1's forced
 # thinking over a text-dense frame ("read this label") stays silent >8s with
@@ -1743,6 +1752,80 @@ REALTIME_GPTLIVE_DELEGATION_WAIT_MS: int = int(os.environ.get("HAL_GPTLIVE_DELEG
 # prepare_turn() reconnects synchronously (~1 s handshake, audio is buffered
 # across it) exactly like the Gemini idle park. 0 disables.
 REALTIME_GPTLIVE_IDLE_PARK_S: float = float(os.environ.get("HAL_GPTLIVE_IDLE_PARK_S", "30") or 30)
+
+# --- Realtime: Pipecat v1 (on-device pipeline, text out) ---
+# Not a vendor session: a Pipecat pipeline inside HAL (voice_agent/pipecat_v1.py)
+# — the device's own STT + an OpenAI-compatible chat LLM + the orchestrator's
+# tools. Audio in, TEXT out; HAL's TTS speaks the reply. Serves both
+# HAL_LIVE_MODE shapes: turn-based (HAL's VAD brackets the utterance) and live
+# (Silero VAD + Smart Turn v3 inside the pipeline). Needs the optional extra:
+# `uv sync --extra pipecat`; without it the provider is simply unavailable.
+REALTIME_PIPECAT_API_KEY: str = (
+    os.environ.get("HAL_PIPECAT_API_KEY", "")
+    or _RT_PIPECAT.get("api_key", "")
+    or _RT.get("api_key", "")
+    or _os_cfg_get("llm_api_key", "")
+)
+# The chat-completions base URL. Deliberately NOT derived from the shared
+# realtime.base_url: that field carries a WebSocket relay (…/ws/gemini) shape.
+# Default is the low-latency Qwen relay on campaign-api.
+REALTIME_PIPECAT_BASE_URL: str = _rt_str(
+    "HAL_PIPECAT_BASE_URL",
+    _RT_PIPECAT.get("base_url"),
+    "https://campaign-api.autonomous.ai/api/v1/ai/v1/qwen/v1",
+)
+REALTIME_PIPECAT_MODEL: str = _rt_str("HAL_PIPECAT_MODEL", _RT_PIPECAT.get("model"), "qwen/qwen3.6-35b-a3b")
+REALTIME_PIPECAT_TEMPERATURE: float = float(os.environ.get("HAL_PIPECAT_TEMPERATURE", "0.7") or 0.7)
+REALTIME_PIPECAT_MAX_TOKENS: int = int(os.environ.get("HAL_PIPECAT_MAX_TOKENS", "300") or 300)
+# Qwen3 models can emit `reasoning` before `content`; Pipecat streams only
+# `content`, so thinking is seconds of dead air per turn. Off by default (vLLM
+# chat_template_kwargs.enable_thinking=false); set false for a non-Qwen endpoint
+# that rejects the extra body.
+REALTIME_PIPECAT_DISABLE_THINKING: bool = (
+    os.environ.get("HAL_PIPECAT_DISABLE_THINKING", "true").lower() in ("1", "true", "yes")
+)
+# STT inside the pipeline. By default the agent reuses VoiceService's own STT
+# provider (same relay, key, model and boost terms as the turn path); these
+# only matter when the agent has to build one itself (tests, /voice/start
+# without a provider).
+REALTIME_PIPECAT_STT_API_KEY: str = os.environ.get("HAL_PIPECAT_STT_API_KEY", "") or _os_cfg_get("llm_api_key", "")
+REALTIME_PIPECAT_STT_BASE_URL: str = os.environ.get("HAL_PIPECAT_STT_BASE_URL", "") or _os_cfg_get("llm_base_url", "")
+REALTIME_PIPECAT_STT_MODEL: str = os.environ.get("HAL_PIPECAT_STT_MODEL", "") or _os_cfg_get("stt_model", "")
+# Mic PCM rate the pipeline expects. 16 kHz = the mic's own rate: no resample,
+# and what Silero / Smart Turn / the STT relay take natively.
+REALTIME_PIPECAT_SAMPLE_RATE: int = int(os.environ.get("HAL_PIPECAT_SAMPLE_RATE", "16000") or 16000)
+# Live mode only — the pipeline's own turn detection. Silero opens the turn;
+# Smart Turn v3 (bundled ONNX, CPU) decides end-of-turn, else a plain silence
+# timeout. Confidence / min_volume sit above Pipecat's 0.7 / 0.6 defaults —
+# the far-field values from the AEC deck — so a quiet echo tail or distant
+# room talk is not an onset (lamp-ee17, 2026-09-18: at 0.8 / 0.6 the lamp
+# answered a conversation across the room).
+REALTIME_PIPECAT_SMART_TURN: bool = (
+    os.environ.get("HAL_PIPECAT_SMART_TURN", "true").lower() in ("1", "true", "yes")
+)
+REALTIME_PIPECAT_SMART_TURN_STOP_SECS: float = float(os.environ.get("HAL_PIPECAT_SMART_TURN_STOP_SECS", "3.0") or 3.0)
+REALTIME_PIPECAT_VAD_CONFIDENCE: float = float(os.environ.get("HAL_PIPECAT_VAD_CONFIDENCE", "0.85") or 0.85)
+REALTIME_PIPECAT_VAD_START_SECS: float = float(os.environ.get("HAL_PIPECAT_VAD_START_SECS", "0.2") or 0.2)
+# Silence before Silero reports a stop. 0.2 is what Smart Turn's built-in
+# latency figures assume — with Smart Turn on, the pause only asks the model
+# "done?", so keep it short; the model itself waits up to SMART_TURN_STOP_SECS.
+REALTIME_PIPECAT_VAD_STOP_SECS: float = float(os.environ.get("HAL_PIPECAT_VAD_STOP_SECS", "0.2") or 0.2)
+REALTIME_PIPECAT_VAD_MIN_VOLUME: float = float(os.environ.get("HAL_PIPECAT_VAD_MIN_VOLUME", "0.7") or 0.7)
+# Smart Turn off: end the turn after this much silence following speech.
+REALTIME_PIPECAT_SILENCE_TIMEOUT_S: float = float(os.environ.get("HAL_PIPECAT_SILENCE_TIMEOUT_S", "0.8") or 0.8)
+# Live mode: while the model is generating a reply (or a tool call is in
+# flight), a new user turn — and the interruption it broadcasts — starts only
+# once the STT has transcribed this many words; otherwise one word opens a
+# turn as usual. On lamp-ee17 (2026-09-18) a one-word burst ("do.") right after
+# a question opened a turn and cancelled the reply mid-generation. 0 = Pipecat's
+# default start strategies (VAD onset / first transcription).
+REALTIME_PIPECAT_MIN_WORDS: int = int(os.environ.get("HAL_PIPECAT_MIN_WORDS", "2") or 0)
+# Watchdog on a user turn whose transcript never arrives (turn-based: after the
+# commit; live: after Smart Turn fired) — the aggregator finalizes it anyway.
+REALTIME_PIPECAT_TURN_STOP_TIMEOUT_S: float = float(os.environ.get("HAL_PIPECAT_TURN_STOP_TIMEOUT_S", "5") or 5)
+# How long a bridged tool call waits for the orchestrator's FunctionCallResultInput
+# before answering the model with an error so the pipeline never wedges.
+REALTIME_PIPECAT_TOOL_RESULT_TIMEOUT_S: float = float(os.environ.get("HAL_PIPECAT_TOOL_RESULT_TIMEOUT_S", "15") or 15)
 
 # --- Realtime: Context manager ---
 OPENCLAW_WORKSPACE_DIR: str = os.environ.get("HAL_OPENCLAW_WORKSPACE_DIR", "/root/.openclaw/workspace")

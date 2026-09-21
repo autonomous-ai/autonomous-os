@@ -224,10 +224,47 @@ result đã được gửi lại model trước khi break; turn còn mở dang d
 
 Gemini cũng có thể gửi `generation_complete` trước `turn_complete`: cờ sau bị
 trì hoãn trong lúc Gemini giả định client đang phát audio theo thời gian thực.
-HAL tự phát câu trả lời đã nhận nên kết thúc consumer turn ngay ở
-`generation_complete`, đồng thời nhả commit manual-VAD kế tiếp. Nhờ đó không
+Với model BLOCKING, HAL tự phát câu trả lời đã nhận nên kết thúc consumer turn
+ngay ở `generation_complete`, đồng thời nhả commit manual-VAD kế tiếp. Nhờ đó không
 còn chờ silent-watchdog vô ích sau khi đã trả lời; `turn_complete` đến muộn sẽ
 được bỏ trước lượt sau.
+
+Với Gemini `extended-thinking`, tool dùng `NON_BLOCKING`: câu filler như
+“I can help with that.” không được làm mất tác vụ người dùng (#453).
+Provider thêm `complete_response` để xác nhận câu trả lời trực tiếp đã đáp ứng
+yêu cầu. Hội thoại, kiến thức hoặc tra cứu công khai đã xong có thể dùng xác nhận
+này; hành động, lời hứa, lỗi và việc chưa giải quyết phải delegate. Câu trả lời
+trực tiếp cần outcome tường minh này cùng terminal thành công của provider mới
+được tính handled/completed. Text/audio đơn thuần không chứng minh hoàn tất.
+
+Text/audio filler vẫn stream ngay để phục vụ KPI-1 (Voice Acknowledge).
+HAL chờ outcome tối đa `HAL_REALTIME_NONBLOCKING_TOOL_GRACE_S`
+(mặc định **6 giây**, `0` tắt thời gian chờ, không tắt yêu cầu outcome).
+Cửa sổ bắt đầu ở `generation_complete` hoặc `turn_complete` đầu tiên; terminal
+sau không kéo dài thời hạn. HAL mở iterator `receive()` kế tiếp của SDK trên
+cùng session sau `turn_complete`, giữ định danh lượt logic.
+Chỉ delegate/reject kết thúc cửa sổ sớm. `complete_response` ghi nhận xác nhận
+nhưng vẫn chờ để nhận delegate ở frame tiếp theo; tool phụ không
+xác nhận hoàn tất và không ngăn delegate đến sau. Sau xác nhận câu trả lời trực
+tiếp, HAL bỏ lời nói bổ sung do ACK kích hoạt nhưng vẫn nhận routing call. Lỗi
+receive trên nhóm model này cũng yêu cầu fallback sang main, kể cả đã phát filler.
+
+Nếu hết cửa sổ mà lượt không bị ngắt vẫn thiếu outcome, HAL phát
+`MainAgentFallbackOutput`, rồi `DelegateSignal`, giữ nguyên transcript gốc từ
+provider và định danh lượt. Fallback cục bộ không bịa function call và không gửi
+tool ACK. Route là `delegated`, không gắn `[HANDLED]`, kể cả khi filler đã phát;
+bằng chứng hoàn tất phải đến từ tác vụ phía sau. Model BLOCKING giữ cách kết
+thúc ngay hiện có. Prompt Gemini cho phép một câu xác nhận ngắn phát ngay trước
+delegate; reject vẫn hoàn toàn im lặng.
+
+Tool call thật dùng ACK function response thông thường, bỏ trường `scheduling`:
+ngày 2026-09-21, backend Gemini 3.8 extended-thinking trên thiết bị từ chối
+`SILENT` bằng WebSocket 1007,
+`Function response scheduling is not supported for this model`. Hỗ trợ tool
+NON_BLOCKING không đồng nghĩa hỗ trợ response scheduling. Không bảo đảm nhận
+call đến sau thời hạn; model vẫn có thể phân loại sai khi gọi tường minh
+`complete_response`. Cổng outcome ngăn việc thiếu call âm thầm làm mất tác vụ,
+không loại bỏ mọi lỗi hiểu ý người dùng.
 
 Bản thân cổng này là `wakeword` trong `config.json` (Settings → "Require a wake
 word before handling speech"). Thiết bị được set up lần đầu lấy giá trị khởi
@@ -990,16 +1027,18 @@ chụp thì không có gì để bàn giao, agent chụp như bình thường.
 
 ## Các provider
 
-Ba backend thay thế cho nhau, chọn bằng `HAL_REALTIME_PROVIDER`
-(`none` | `gemini` | `openai` | `gptlive`; Go `RealtimeProviders` và dropdown web
-`RealtimeSection.tsx` liệt kê đúng bốn giá trị này, nhãn web của `gptlive` là
-"GPT-Live"):
+Bốn backend thay thế cho nhau, chọn bằng `HAL_REALTIME_PROVIDER` /
+`realtime.provider` (`none` | `gemini` | `openai` | `gptlive` | `pipecat_v1`)
+và dựng trong `orchestrator._make_agent`; Go `RealtimeProviders` và dropdown web
+(`RealtimeSection.tsx`) liệt kê đúng các giá trị này, theo đúng thứ tự đó, trước
+`none` (nhãn web của `gptlive` là "GPT-Live"):
 
 | Provider | Class | Mô hình threading | Model mặc định | Sample rate |
 |----------|-------|-------------------|----------------|-------------|
 | Gemini Live | `voice_agent/gemini_live.py` `GeminiLiveAgent` | event loop asyncio riêng trên thread `gemini-io`; thread send/recv submit coroutine qua `run_coroutine_threadsafe` | `gemini-2.5-flash-native-audio-preview-12-2025` | 16000 Hz |
 | OpenAI Realtime | `voice_agent/openai_realtime.py` `OpenAIRealtimeAgent` | thuần đồng bộ; 1 `RealtimeConnection` (SDK `openai` GA, `openai.resources.realtime`) dùng chung bởi thread send/recv, serialize bằng reentrant lock | `gpt-realtime-2` | 24000 Hz |
 | GPT-Live | `voice_agent/gpt_live.py` `GPTLiveAgent` | thuần đồng bộ; 1 `LiveConnection` (SDK `openai` ≥ 3.14.1, `openai.resources.live`) dùng chung bởi thread send/recv dưới `_conn_lock`, cộng thread watchdog `gptlive-watchdog` (tick 50 ms) tổng hợp ranh giới lượt | `gpt-live-1` | 24000 Hz (hoặc 16000; một định dạng PCM cho cả hai chiều) |
+| Pipecat v1 | `voice_agent/pipecat_v1.py` `PipecatV1Agent` (+ `pipecat_pipeline.py`, `pipecat_stt.py`) | **không có session vendor**: một pipeline Pipecat trên event loop asyncio riêng (thread `pipecat-io`) ngay trong HAL; thread send submit frame qua `run_coroutine_threadsafe`, `EventSink` của pipeline ghi thẳng vào recv queue, thread recv chỉ canh sức khỏe của pipeline | `qwen/qwen3.6-35b-a3b` qua relay Qwen của campaign-api (bất kỳ endpoint chat tương thích OpenAI nào) | 16000 Hz vào; **text ra** (TTS của HAL đọc) |
 
 Gemini Live dùng `google-genai` và private asyncio loop của nó do thread
 `gemini-io` sở hữu. Teardown đóng/hủy provider receive task trước, rồi mới join
@@ -1438,17 +1477,210 @@ adapter dùng khớp pydantic types.
 > adapter mới chỉ được xác nhận bằng SDK-schema check và unit test — chưa nối API
 > thật lần nào. Route proxy đang được thêm; khi lên thì thiết bị không cần đổi gì.
 
+### Pipecat v1 (`pipecat_v1`): pipeline chạy trên thiết bị, đầu ra text
+
+`voice_agent/pipecat_v1.py` `PipecatV1Agent` là provider không có provider:
+"server" ở đây là một pipeline [Pipecat](https://github.com/pipecat-ai/pipecat)
+chạy ngay trong HAL, do `voice_agent/pipecat_pipeline.py` dựng trên một event
+loop asyncio riêng (thread `pipecat-io`). Audio đi vào, **text** đi ra và TTS
+của chính HAL đọc nó — model không bao giờ sinh audio, nên
+`REALTIME_NATIVE_AUDIO` vô nghĩa ở đây và không có knob voice. Nó ra đời sau
+phân tích đường audio ngày 2026-09-18 (AEC, trạng thái playing và quyết định
+barge-in chỉ có thể nằm trên thiết bị đang phát audio; xem
+`audio-path-design.md`), nên toàn bộ pipeline ở lại trên robot và chỉ có lời
+gọi model rời khỏi nó. Chọn bằng `realtime.provider = pipecat_v1`; prompt của
+nó là `system_prompt_pipecat.md` (`PROVIDER_PROMPT_PATHS`) — prompt OpenAI kèm
+một đoạn mở đầu nói rằng model đọc **transcript** STT chứ không phải audio, và
+viết text cho TTS.
+
+**Cài đặt.** `pipecat-ai` là extra tùy chọn `pipecat` trong
+`hal/pyproject.toml` (`uv sync --extra pipecat` trên thiết bị — dòng
+`uv sync --python 3.12 --extra hardware --extra aec` của lamp có thêm `--extra
+pipecat`). Nó không phải dependency cứng: package lõi kéo theo `numba` +
+`llvmlite` (~140 MB), `resampy`, `nltk` và ghim `onnxruntime ~=1.24`, xung đột
+với `onnxruntime==1.27.0` của extra `reachy` — hai extra được khai báo loại trừ
+lẫn nhau (`[tool.uv] conflicts`) vì chúng không bao giờ ở chung một thân máy.
+Không có package thì `PipecatV1Agent` raise `PipecatV1Error` lúc connect và
+orchestrator coi provider là unavailable (fallback về main agent), y như khi
+vendor sập. Silero VAD, Smart Turn v3 (`smart-turn-v3.2-cpu.onnx` đóng gói sẵn,
+8.7 MB) và LLM service tương thích OpenAI đều nằm trong package lõi; không cần
+extra STT của vendor nào (xem dưới).
+
+**Pipeline** (một pipeline mỗi provider session, dựng lại ở mỗi lần
+`recover_session`):
+
+```
+PipelineWorker.queue_frame ─▶ HALSTTService ─▶ user aggregator ─▶ OpenAILLMService ─▶ EventSink ─▶ assistant aggregator
+   InputAudioRawFrame          (device STT)     (VAD / turns)      (text + tools)      (→ _ev_* on the agent)
+```
+
+**Không có transport**: HAL sở hữu mic và loa, thread send của agent đẩy từng
+`AudioInput` (float32 → PCM16) vào đầu pipeline bằng `worker.queue_frame`.
+`EventSink` là một `FrameProcessor` pass-through, báo frame cho agent bằng lời
+gọi method thường (`_ev_text`, `_ev_response_started/ended`,
+`_ev_calls_started`, `_ev_call_result`, `_ev_user_turn_started/stopped`,
+`_ev_interruption`, `_ev_error`, metrics), nên toàn bộ contract
+`VoiceAgentBase` được tạo ra trong `pipecat_v1.py` mà không cần `import
+pipecat` và được unit-test ở đó (`hal/test/test_pipecat_v1_agent.py`, 17 test).
+
+**STT là của pipeline, chạy trên provider của chính thiết bị.**
+`pipecat_stt.py` `HALSTTService` là một `STTService` của Pipecat bọc
+`STTProvider` của HAL (`AutonomousSTT` — relay tương thích Deepgram sau
+campaign-api trên `llm_api_key` — hoặc `DeepgramSTT`): các STT service có sẵn
+của Pipecat quay số tới endpoint công khai của vendor bằng key vendor mà thiết
+bị không có. `VoiceService` trao provider của nó cho orchestrator
+(`stt_provider=`), orchestrator chuyển tiếp cho agent, nên transcription dùng
+đúng relay, key, model và boost term như đường turn-based; không có provider
+nào thì agent tự dựng một `AutonomousSTT` từ `HAL_PIPECAT_STT_*`. Mọi I/O với
+provider (open, send, close) chạy trên một thread sender `pipecat-stt` duy
+nhất để `close()` blocking (join thread recv tới 15 s trong khi server flush
+transcript cuối) không bao giờ làm kẹt event loop asyncio; transcript được trả
+về loop bằng `call_soon_threadsafe` dưới dạng
+`TranscriptionFrame(finalized=True)` cho final và `InterimTranscriptionFrame`
+cho interim, và về agent (`_ev_transcript`) cho
+`FunctionCallOutput.user_transcript` và `UserSpeechOutput` ở chế độ live.
+
+**Cả hai hình dạng `HAL_LIVE_MODE`, một class** — mode được đọc lúc khởi tạo
+(`config.LIVE_MODE`), giống cách phần còn lại của HAL loại trừ lẫn nhau theo
+thiết kế:
+
+| | `HAL_LIVE_MODE=false` (turn-based) | `HAL_LIVE_MODE=true` (live) |
+|---|---|---|
+| ai kết thúc lời nói của user | VAD của HAL (`_vad_loop`) → `append_audio` × N, `commit_audio` | pipeline: Silero VAD mở lượt (`HAL_PIPECAT_VAD_*`), Smart Turn v3 đóng lượt (`HAL_PIPECAT_SMART_TURN`, không thì timeout im lặng `HAL_PIPECAT_SILENCE_TIMEOUT_S`) |
+| chiến lược lượt | `ExternalUserTurnStrategies`: frame đầu tiên sau một commit queue `ProposedUserStartedSpeakingFrame` (đồng thời broadcast một interruption, hủy reply còn đang stream từ lượt trước); `commit_audio` queue `ProposedUserStoppedSpeakingFrame` **và** một `STTFinalizeFrame`. Stop strategy kế thừa (`_CommittedTurnStopStrategy`) finalize ngay khi STT final đã commit về, thay vì chờ timeout gom 0.5 s mặc định | mặc định của Pipecat: bắt đầu theo VAD / transcription, dừng theo turn analyzer; user cất tiếng khi model đang trả lời thì broadcast một interruption |
+| STT session | **theo từng lượt**: mở ở frame đầu, đóng bởi `STTFinalizeFrame` — một system frame được đẩy *xuyên qua pipeline* phía sau audio để nó chỉ tới stage STT sau mọi frame của câu nói (báo thẳng cho thread sender từng chạy đua với audio còn trên đường và finalize một session rỗng; sửa 2026-09-18). `close()` gửi CloseStream, server flush final. Lượt mà session đóng lại không có chữ nào thì kết thúc ngay (`TurnDoneEvent(execution_completed=False)`) để HAL fallback bằng transcript của chính nó thay vì chờ hết `REALTIME_RECV_QUEUE_TIMEOUT_S` | **một session dài** suốt đời pipeline, mở lại nếu relay rớt, giữ sống bằng `KeepAlive` mỗi 5 s khi không ai nói; end-of-turn riêng của provider (Flux `TurnInfo`) chỉ về như một final |
+| `UserSpeechOutput` | không (đường turn không có metadata live) | bắt đầu lượt (`method="server_vad"`), mỗi STT **final** dưới dạng phần chưa được phát (`method="provider_transcript"`, `transcript_finished=True`), kết thúc lượt (`endpoint_at`) — cùng các key mà live pump đọc từ Gemini/OpenAI. Interim không bao giờ được đưa ra ngoài: giả thuyết STT là tích lũy và bị viết lại giữa câu (`place a music` → `play some music`), còn `LiveHistory.input` của pump nối các chunk lại mà không rút lại được — trên lamp-ee17 bản viết lại lọt vào text `[HANDLED]`. Interim vẫn nuôi MinWords và `note_server_activity()` |
+| barge-in | frame đầu của câu nói kế tiếp ngắt pipeline; không phát `TurnDoneEvent` cho nó (orchestrator đã rời lượt cũ từ lâu và một terminal muộn chỉ có thể kết thúc rỗng lượt mới) | `InterruptedOutput(reason="server_interrupt", at=…)` + `TurnDoneEvent(execution_completed=False)`, `gen` được tăng. Khi model đang sinh, lượt mới cần đủ `HAL_PIPECAT_MIN_WORDS` từ đã transcribe mới mở được (`_BusyAwareMinWordsStrategy`); không thì một tiếng bật ra một từ ngay sau câu hỏi sẽ hủy reply |
+| commit | đề xuất stop + finalize STT; commit **không có audio** kể từ lần trước kết thúc lượt ngay | bỏ qua (session live không bao giờ commit) |
+
+Lưu ý đường turn-based chạy STT **hai lần** trên cùng một câu nói — session
+riêng của HAL (wake word, noise guard, `[transcript]`, dispatch) và của
+pipeline — nên chi phí STT trên đường đó tăng gấp đôi; chế độ live không có
+STT session của HAL, nên ở đó session của pipeline là cái duy nhất. Mode mà
+provider này thực sự sinh ra để phục vụ là live.
+
+**Tool được bắc cầu một-một.** Mọi tool của orchestrator (`delegate_to_main`,
+`reject_turn`, `express_emotion`, `end_conversation`; `look` chỉ có ở Gemini và
+không bao giờ được đăng ký) được đăng ký lên LLM service dưới dạng
+`FunctionSchema` + handler. Handler phát `FunctionCallOutput(name,
+arguments=<JSON>, call_id=<tool_call_id>, user_transcript=<các STT final của
+lượt này>)` rồi chờ `FunctionCallResultInput` của orchestrator cho đúng
+`call_id` đó (giới hạn bởi `HAL_PIPECAT_TOOL_RESULT_TIMEOUT_S`, quá hạn thì
+model nhận `{"error": "no result from the device"}` và không có follow-up để
+pipeline không bao giờ kẹt); `trigger_response` của kết quả trở thành `run_llm`
+của Pipecat. Hai ngoại lệ được quyết định theo tên: **`delegate_to_main` và
+`reject_turn` không bao giờ chạy lại model** (`_NO_FOLLOWUP_TOOLS`).
+Orchestrator ack hai tool đó với `trigger_response=True` (một luật
+pending-tool-call của Gemini, không phải mong muốn có reply) rồi rời lượt
+(`end_turn()` + `DelegateSignal` / `RejectSignal`), nên một follow-up chỉ có
+thể được đọc thành câu trả lời cũ ở lượt *kế tiếp* — lần smoke chạy local từng
+trả lời "How are you?" bằng câu follow-up về thể loại nhạc của lần delegate
+trước, trước khi có luật này. `express_emotion` (`trigger_response=True` từ
+bản vá ack) và `end_conversation` thì có chạy lại model. Vì model 35B-A3B nặng
+về recency, luật hành động được nêu hai lần: dưới dạng `## FINAL RULE` nối vào
+cuối system instruction, và dưới dạng một dòng `[RULE] …` role user
+(`_TOOL_RULE`, ~60 token) được bơm lại ngay trước mỗi câu nói
+(`PipelineHandle.remind_tools`, từ frame đầu tiên trên đường turn và từ
+`_ev_user_turn_started` ở chế độ live, để nó nằm trước khi aggregator nối
+transcript vào). Nó là dòng role user vì relay Qwen từ chối system message ở
+bất kỳ vị trí nào ngoài đầu tiên (`System message must be at the beginning`,
+HTTP 400). Không có nó, trên lamp-ee17 lần boot có summary realtime-memory dài
+8 k ký tự trả lời "please play some music" bằng "You got it, what vibe?" trong
+khi cùng pipeline với summary 3 k thì delegate; có nó, yêu cầu được delegate.
+
+**Ranh giới lượt và generation.** `OutputEvent.gen` là generation của
+**user-turn** — tăng khi một user turn bắt đầu và khi có interruption, không
+bao giờ tăng theo từng response — nên follow-up sau tool result vẫn nằm trong
+lượt của nó. `TurnDoneEvent` được phát ở `LLMFullResponseEndFrame` chỉ khi
+không còn tool call nào đang chờ (`FunctionCallsStartedFrame` được broadcast
+**trước** end frame, các `FunctionCallInProgressFrame` có thể tới sau nó); call
+mà kết quả về với `run_llm=False` tự kết thúc lượt khi call pending cuối cùng
+được trả lời, call với `run_llm=True` giao việc đó cho end của response
+follow-up. `InterruptedOutput(reason="output_reset")` đi trước reply đầu tiên
+của mỗi user turn (không phải mỗi response — follow-up sau tool result không
+được reset hàng đợi TTS của câu đang phát). `end_turn()` **rào** generation
+hiện tại: `_newest_output_gen` được nâng vượt qua nó và `TurnDoneEvent` của nó
+bị nuốt, nên bất cứ thứ gì lượt bị rào còn sinh ra sẽ bị `receive()` bỏ thay
+vì kết thúc hay được đọc ở lượt kế. `note_server_activity()` chạy ở mọi mảnh
+transcript, text delta, tool frame và metrics frame, nên lượt mà STT hay LLM
+còn đang làm việc được watchdog silent-turn giữ sống. Lỗi pipeline tới agent
+qua event `on_pipeline_error` của worker (Pipecat đẩy `ErrorFrame` *ngược
+dòng*, nên một sink nằm sau LLM không bao giờ thấy nó): lỗi không fatal khi
+một response đang mở sẽ kết thúc lượt với `execution_completed=False`
+(fallback về main agent) thay vì để end frame của response báo một lượt rỗng
+đã hoàn tất; lỗi fatal, hoặc pipeline run kết thúc, làm rớt session
+(`_recv_loop` poll `PipelineHandle.alive` mỗi giây và dựng lại với backoff
+2 s → 60 s thông thường). Idle parking không áp dụng (`_idle_park_threshold` →
+0): không có session vendor để park, và socket STT chỉ sống trong một lượt
+hoặc một live call.
+
+**LLM.** `OpenAILLMService` nối tới `HAL_PIPECAT_BASE_URL` (mặc định
+`https://campaign-api.autonomous.ai/api/v1/ai/v1/qwen/v1`, relay Qwen độ trễ
+thấp; gateway EternalAI `https://vibe-agent-gateway.eternalai.org/v2` serve
+cùng model không cần key và là cái các smoke test local dùng), model
+`HAL_PIPECAT_MODEL` (`qwen/qwen3.6-35b-a3b`), `temperature` 0.7, `max_tokens`
+300, system prompt làm `system_instruction` của service (system message khởi
+tạo trong `LLMContext` đã deprecated từ Pipecat 1.9). Các model Qwen3 có thể
+phát `reasoning` trước `content` mà Pipecat chỉ stream `content`, nên thinking
+bị tắt qua `extra_body.chat_template_kwargs.enable_thinking=false`
+(`HAL_PIPECAT_DISABLE_THINKING`, đặt `false` cho endpoint từ chối extra body).
+Các `TextInput` `[TURN CONTEXT]` / `[TTS HISTORY]` trở thành
+`LLMMessagesAppendFrame(role=user, run_llm=False)` — được ghi lại, không bao
+giờ là một lượt. `ImageInput` bị bỏ kèm warning. Đo trên Mac dev qua gateway
+EternalAI (STT giả, nên chỉ là LLM): text đầu tiên 0.8–1.0 s sau khi hết lượt,
+~5.8 k prompt token mỗi lượt (chính prompt), 2–30 completion token.
+
+**Log usage.** `pipecat_usage.log` (logger `hal.realtime.usage.pipecat`,
+`server_support/log_setup.py`): một dòng `first text +N.NNs after turn end` mỗi
+reply (turn-based: sau commit; live: sau end-of-speech), các dòng `ttfb` theo
+từng stage của Pipecat, và `llm usage model=… in=N out=N` từ usage metrics của
+LLM service — chỉ đếm token, không ước tính cost.
+
+**Kiểm chứng trên thiết bị (lamp-ee17, 2026-09-18, `HAL_LIVE_MODE=true`,
+uplink `mute`).** Dựng pipeline (nạp ONNX Silero + Smart Turn) ~12 s trên A55;
+một live call do VAD "chuông cửa" của HAL mở, Flux transcribe "Hey, lamb. What
+is the capital of France?", pipeline trả lời `Paris.` với text đầu tiên 1.3–1.8
+s sau khi hết tiếng nói (11.5 k prompt token qua relay Qwen) và audio đầu tiên
+của ElevenLabs ~1 s sau đó; "Hey, lamp. Please play some music for me." thành
+`delegate_to_main(message="Please play some music for me.")` →
+`[voice-instruction]` + `[transcript]` sang os-server → main agent trả lời. Ba
+thứ lần chạy này đã thay đổi: `HAL_LIVE_UPLINK_DURING_PLAYBACK` phải là `mute`
+trên phần cứng này — với `cancelled` pipeline transcribe chính câu trả lời của
+lamp (`Its parents` cho "It's Paris") và tự trả lời mình bốn vòng, đúng giới
+hạn AEC 7–13 dB đã đo với GPT-Live; sàn VAD chuyển sang giá trị far-field
+(`0.85` / `0.7`) sau khi lamp trả lời một cuộc trò chuyện ở phía bên kia
+phòng; và `MinWords` / dòng `[RULE]` ở trên. Cài trên lamp là
+`uv sync --python 3.12 --extra hardware --extra aec --extra pipecat` (kéo
+`onnxruntime 1.24.4`, `numba`, `llvmlite`; ~30 s từ cache).
+`/var/log/hal/pipecat_usage.log` giữ các dòng theo từng lượt.
+
+**Hạn chế đã biết (2026-09-18).** Chi phí CPU của Smart Turn v3 trên A55 chưa
+đo (nó chạy một lần mỗi khoảng ngừng, không phải mỗi frame); relay Qwen bỏ
+payload `tool_calls` khỏi completion **không streaming** (`finish_reason:
+"tool_calls"` với message rỗng) — Pipecat stream, nên pipeline không bị ảnh
+hưởng, nhưng một lần probe không streaming sẽ trông như không có tool; model có
+delegate hay không vẫn phụ thuộc vào summary realtime-memory của lần boot đó
+(xem ghi chú `[RULE]`) — `HAL_PIPECAT_TEMPERATURE` là knob còn lại; không có
+image input; `test_pipecat_v1_agent.py` bao contract, không bao pipeline —
+pipeline được kiểm bằng các lần smoke chạy local (turn mode với STT giả: "What
+is two plus two?" → `Four.`, "Please play some music" →
+`delegate_to_main(message="Play some music")`; live mode với giọng tổng hợp
+qua Silero + Smart Turn: "What is the capital of France?" → `Paris.`, "Please
+turn the brightness up a bit." → delegate kèm transcript) và lần chạy trên
+thiết bị ở trên.
+
 ## Pricing & log usage
 
 Gemini và OpenAI Realtime ghi một dòng token/cost mỗi turn; GPT-Live ghi một dòng
 giây/cost mỗi `session.usage.updated` và một dòng `final` ở `session.closed`. Mỗi
 provider có log riêng dưới `/var/log/hal/` (rotating, 5 MB × 3):
 `gemini_usage.log` (logger `hal.realtime.usage`), `openai_usage.log` (logger
-`hal.realtime.usage.openai`) và `gptlive_usage.log` (logger
-`hal.realtime.usage.gptlive`) — hai logger sau là logger **con** của logger đầu,
-`propagate=False` để dòng của chúng không lọt vào `gemini_usage.log` lẫn
-`server.log`; cấu hình ở `server_support/log_setup.py`, một file mỗi provider, so
-được từng dòng. Dòng log theo token mang đủ số token theo từng modality **và**
+`hal.realtime.usage.openai`), `gptlive_usage.log` (logger
+`hal.realtime.usage.gptlive`) và `pipecat_usage.log` (logger
+`hal.realtime.usage.pipecat`: độ trễ + số token, không có cost — xem *Pipecat
+v1*) — các logger sau là logger **con** của logger đầu, `propagate=False` để
+dòng của chúng không lọt vào `gemini_usage.log` lẫn `server.log`; cấu hình ở
+`server_support/log_setup.py`, một file mỗi provider, so được từng dòng. Dòng log theo token mang đủ số token theo từng modality **và**
 cost USD ước tính, nên rate có sai thì sau này vẫn tính lại được từ số token đã
 ghi.
 
@@ -2134,13 +2366,21 @@ chỉ-thuộc-os-server.
 
 Model ở Go tại `system/server/config/realtime.go`; đọc ở HAL tại
 `hal/config.py`. Field chung ở trên; knob theo provider nằm trong sub-object
-`gemini` / `openai` / `gptlive` (Go struct `GeminiRealtime` / `OpenAIRealtime` /
-`GPTLiveRealtime{APIKey,BaseURL,Model,Voice}`), `provider` chọn cái đang active
+`gemini` / `openai` / `gptlive` / `pipecat_v1` (Go struct `GeminiRealtime` /
+`OpenAIRealtime` / `GPTLiveRealtime{APIKey,BaseURL,Model,Voice}` /
+`PipecatV1Realtime`), `provider` chọn cái đang active
 (`none` hoặc vắng → tắt realtime; Go còn nhận `off` / `disabled` như đồng nghĩa
 của `none`). `api_key` / `base_url` rỗng → fallback `llm_api_key` /
 `llm_base_url` cho Gemini và OpenAI Realtime. GPT-Live theo đúng quy tắc đó: key
 rỗng → `llm_api_key`, `base_url` rỗng → base URL của OpenAI Realtime
 (`<llm_base_url>/ws/openai`), SDK nối thêm `/live/sessions` — xem blockquote dưới.
+Pipecat v1 resolve key theo thứ tự `HAL_PIPECAT_API_KEY` >
+`realtime.pipecat_v1.api_key` > `realtime.api_key` dùng chung > `llm_api_key`,
+và base URL chat theo `HAL_PIPECAT_BASE_URL` > `realtime.pipecat_v1.base_url` >
+mặc định relay Qwen — `realtime.base_url` dùng chung **cố ý không** được xét
+(nó mang hình dạng relay `/ws/...`, không phải endpoint chat-completions), đó là
+lý do trang Settings web ẩn ô Base URL với provider này và trỏ sang
+`realtime.pipecat_v1.base_url` thay thế.
 
 HAL đọc thêm hai knob trong `realtime.openai` mà Go **không** model:
 `transcribe_model` và `noise_reduction` (`_RT_OPENAI` trong `hal/config.py`;
@@ -2169,7 +2409,8 @@ lần os-server lưu lại config — muốn ghim bền trên thiết bị thì 
     "provider": "gemini",
     "gemini": { "model": "gemini-3.8-live", "voice": "Kore", "thinking_level": "LOW" },
     "openai": { "model": "gpt-realtime-2", "voice": "alloy", "reasoning_effort": "minimal" },
-    "gptlive": { "model": "gpt-live-1", "voice": "marin" }
+    "gptlive": { "model": "gpt-live-1", "voice": "marin" },
+    "pipecat_v1": { "model": "qwen/qwen3.6-35b-a3b" }
   }
 }
 ```
@@ -2178,6 +2419,13 @@ Knob reasoning (`thinking_level` / `reasoning_effort`) default về mức **rẻ
 (`MINIMAL` / `minimal`), không phải mức max của provider — muốn reasoning sâu hơn
 thì set tường minh. `gptlive` không có knob reasoning: model Live không có,
 `ValidateRealtimeKnobs` từ chối mọi giá trị reasoning cho nó và web ẩn selector.
+Pipecat v1 **không có cả** knob voice lẫn knob reasoning (pipeline phát text và
+giọng TTS của HAL đọc nó): `RealtimeVoice()` và `RealtimeReasoning()` trả về
+rỗng, endpoint options trả về danh sách `voices.pipecat_v1` và
+`reasoning.pipecat_v1` rỗng để web ẩn cả hai selector, `ValidateRealtimeKnobs`
+từ chối mọi giá trị voice (`pipecat_v1 realtime has no voice`) hay reasoning
+cho nó, và `realtime.set` chỉ ghi `model` vào sub-object `pipecat_v1`; nhãn web
+là "Pipecat v1 (on-device)".
 Các knob KHÔNG có trong block (turn detection, session
 resumption, memory, summarizer) vẫn chỉ theo env/default.
 
@@ -2225,7 +2473,7 @@ trong `config.json`:
 | `HAL_ENDPOINT_SILENCE_S` | `0.8` | Thời gian im lặng từ lúc STT final về, chỉ áp dụng khi `final_ts >= last_confirmed_speech`. Nếu có tiếng nói được xác nhận sau final đó, quay lại ngưỡng dự phòng 2.5s tới khi có final mới. `0` tắt đồng hồ ngắn, chỉ dùng `HAL_SILENCE_TIMEOUT`. |
 | `HAL_SILENCE_VAD_ENABLED` | `true` | Yêu cầu Silero xác nhận có tiếng nói trước khi refresh đồng hồ im lặng kết thúc lượt. RMS vẫn là cổng chặn rẻ chạy trước; đặt `false` để quay về phát hiện im lặng thuần RMS. |
 | `HAL_SILENCE_VAD_WINDOW_FRAMES` | `3` | Số frame gom lại cho mỗi lần chạy Silero ở bước kiểm đó — Silero tốn ~20 ms/frame trên ARM và LSTM của nó cần hơn một frame 64 ms mới ổn định. |
-| `HAL_REALTIME_PROVIDER` | `gemini` | `none` \| `gemini` \| `openai` \| `gptlive` |
+| `HAL_REALTIME_PROVIDER` | `gemini` | `none` \| `gemini` \| `openai` \| `gptlive` \| `pipecat_v1` |
 | `HAL_REALTIME_TURN_DETECTION` | `off` | `server_vad` \| `semantic_vad` \| `off` (Gemini: off = activity detection thủ công; OpenAI: off = `turn_detection: null`, lượt do client commit + `response.create`; `server_vad` / `semantic_vad` nhận knob từ `HAL_LIVE_VAD_*` và `HAL_OPENAI_VAD_THRESHOLD`). `HAL_LIVE_MODE=true` ép `off` → `server_vad`. GPT-Live bỏ qua knob này: Live không có cấu hình VAD, adapter tổng hợp lượt từ transcript input và khoảng im lặng output |
 | `HAL_REALTIME_RECV_QUEUE_TIMEOUT_S` | `8.0` | Số giây tối đa `receive()` chờ output event kế tiếp trước khi kết thúc lượt im lặng (fallback sang main agent) |
 | `HAL_REALTIME_GROUNDING_DEBUG` | `false` | In toàn bộ field của `grounding_metadata` từ Gemini, mỗi lượt có grounding một lần (`grounding_chunks`, `grounding_supports`, `search_entry_point`, …). Chỉ để chẩn đoán và rất dài dòng; nó sinh ra để phân biệt lượt mà search thật sự không trả về gì với lượt bị cắt payload trên đường truyền. Đo trên lamp-0c89 04/09/2026 qua bốn lượt có grounding, payload luôn về đủ — nên `chunks=0` nghĩa là model không dùng nguồn nào cho câu trả lời đó. |
@@ -2269,6 +2517,24 @@ trong `config.json`:
 | `HAL_GPTLIVE_COMMIT_SILENCE_MS` | `600` | Chỉ đường lượt: Live không có commit, `commit_audio()` append ngần này ms PCM im lặng (`event_id` `hal-silence`) để model nghe câu nói đã hết. LIVE_MODE → no-op. Chỉ env |
 | `HAL_GPTLIVE_DELEGATION_WAIT_MS` | `500` | Hạn cứng để forward `session.delegation.created` thành `delegate_to_main`: adapter forward ngay khi transcript input im 250 ms, chậm nhất là ở hạn này với những gì đã nghe (rỗng → orchestrator từ chối và model được báo handoff thất bại). Chỉ env |
 | `HAL_GPTLIVE_IDLE_PARK_S` | `30` | Park GPT-Live khi idle: session bị tính tiền theo phút khi còn mở, nên sau ngần này giây không có turn orchestrator đóng transport (`_maybe_park_idle_session`, cơ chế y như `HAL_GEMINI_IDLE_PARK_S`) và nối lại ở turn kế. `0` = tắt. Chỉ env |
+| `HAL_PIPECAT_API_KEY` | *(rỗng → `realtime.pipecat_v1.api_key` > `realtime.api_key` > `llm_api_key`)* | Bearer key cho endpoint chat |
+| `HAL_PIPECAT_BASE_URL` | `https://campaign-api.autonomous.ai/api/v1/ai/v1/qwen/v1` | Cũng đọc từ `realtime.pipecat_v1.base_url`. Bất kỳ base chat-completions tương thích OpenAI nào; `realtime.base_url` dùng chung không bao giờ được dùng (hình dạng relay WS). `https://vibe-agent-gateway.eternalai.org/v2` serve cùng model không cần key |
+| `HAL_PIPECAT_MODEL` | `qwen/qwen3.6-35b-a3b` | Cũng đọc từ `realtime.pipecat_v1.model` |
+| `HAL_PIPECAT_TEMPERATURE` | `0.7` | Temperature sampling của LLM |
+| `HAL_PIPECAT_MAX_TOKENS` | `300` | Trần độ dài reply mỗi response |
+| `HAL_PIPECAT_DISABLE_THINKING` | `true` | Gửi `extra_body.chat_template_kwargs.enable_thinking=false` (Qwen3 / vLLM); Pipecat chỉ stream `content`, nên thinking sẽ thành khoảng im lặng chết. `false` cho endpoint từ chối extra body |
+| `HAL_PIPECAT_STT_API_KEY` / `HAL_PIPECAT_STT_BASE_URL` / `HAL_PIPECAT_STT_MODEL` | `llm_api_key` / `llm_base_url` / `stt_model` | Chỉ khi agent phải tự dựng `AutonomousSTT` của riêng nó (không có provider từ `VoiceService` được inject — test, `/voice/start` trước STT); trên thiết bị đang chạy pipeline dùng STT provider của `VoiceService` |
+| `HAL_PIPECAT_SAMPLE_RATE` | `16000` | Rate PCM mic mà pipeline mong đợi (không resample: Silero, Smart Turn và relay STT đều nhận 16 kHz natively) |
+| `HAL_PIPECAT_SMART_TURN` | `true` | Chế độ live: Smart Turn v3 (ONNX đóng gói sẵn, CPU) quyết định end-of-turn sau mỗi lần Silero stop; `false` → thay bằng timeout im lặng `HAL_PIPECAT_SILENCE_TIMEOUT_S`. Bị bỏ qua trên đường turn-based |
+| `HAL_PIPECAT_SMART_TURN_STOP_SECS` | `3.0` | Chế độ live: khoảng im lặng dài nhất Smart Turn chờ trước khi ép đóng lượt |
+| `HAL_PIPECAT_VAD_CONFIDENCE` | `0.85` | Confidence Silero ở chế độ live (Pipecat mặc định 0.7 — giá trị far-field: ở 0.8 lamp vẫn trả lời một cuộc trò chuyện ở phía bên kia phòng, 2026-09-18) |
+| `HAL_PIPECAT_VAD_START_SECS` | `0.2` | Chế độ live: tiếng nói phải kéo dài ngần này trước khi Silero báo onset |
+| `HAL_PIPECAT_VAD_STOP_SECS` | `0.2` | Chế độ live: khoảng im lặng trước khi Silero báo stop — giá trị mà các con số độ trễ tích hợp sẵn của Smart Turn giả định; model, chứ không phải timer này, quyết định lượt đã xong hay chưa |
+| `HAL_PIPECAT_VAD_MIN_VOLUME` | `0.7` | Sàn âm lượng Silero ở chế độ live (Pipecat mặc định 0.6; giá trị far-field) |
+| `HAL_PIPECAT_SILENCE_TIMEOUT_S` | `0.8` | Chế độ live khi Smart Turn tắt: khoảng im lặng sau tiếng nói để kết thúc lượt |
+| `HAL_PIPECAT_MIN_WORDS` | `2` | Chế độ live: **khi model đang sinh** (hoặc một tool call đang chạy) một user turn mới — và interruption nó broadcast — chỉ bắt đầu khi STT đã transcribe được ngần này từ; ngoài lúc đó một từ là đủ mở lượt, nên "yes" / "stop" vẫn hoạt động. `_BusyAwareMinWordsStrategy` gắn `MinWordsUserTurnStartStrategy` của Pipecat vào trạng thái LLM của agent vì strategy gốc cần các `BotStartedSpeakingFrame` mà pipeline này không bao giờ có. Trên lamp-ee17 một tiếng bật ra một từ (`do.`) ngay sau câu hỏi đã mở một lượt và hủy reply giữa chừng; `0` = mặc định của Pipecat, bắt đầu theo VAD/transcription |
+| `HAL_PIPECAT_TURN_STOP_TIMEOUT_S` | `5` | Watchdog cho user turn mà transcript không bao giờ về: aggregator vẫn finalize nó (turn-based: session đã commit mà rỗng thì đã kết thúc lượt từ trước) |
+| `HAL_PIPECAT_TOOL_RESULT_TIMEOUT_S` | `15` | Thời gian một tool call được bắc cầu chờ `FunctionCallResultInput` của orchestrator trước khi model nhận `{"error": "no result from the device"}` (không có follow-up) |
 | `HAL_REALTIME_MEMORY_PATH` | `<workspace>/realtime/memory.jsonl` | |
 | `HAL_REALTIME_MAX_MEMORY_ENTRIES` / `_TRIM_KEEP` | `1000` / `500` | |
 | `HAL_REALTIME_SUMMARIZER_ENABLED` | `true` | |
@@ -2288,11 +2554,14 @@ trong `config.json`:
 | `voice_agent/gemini_live.py` | Provider Gemini Live (IO loop asyncio) |
 | `voice_agent/openai_realtime.py` | Provider OpenAI Realtime (sync, SDK `openai` GA, connection serialize bằng lock; contract live-mode ngang Gemini — `user_turn_id`, `UserSpeechOutput`, barge-in + `conversation.item.truncate`; bảng giá `_OPENAI_RATES` + log `openai_usage.log`) |
 | `voice_agent/gpt_live.py` | Provider GPT-Live (`gptlive`; sync, SDK `openai` ≥ 3.14.1 `client.live`; contract live-mode **tổng hợp** — watchdog `gptlive-watchdog` đóng lượt theo `turn_gap_ms`, barge-in theo `interrupt_gap_ms`, `UserSpeechOutput` từ `session.input_transcript.delta`; client delegation → `delegate_to_main`, feedback qua `session.thinking.append`; $0.05/phút + log `gptlive_usage.log`) |
+| `voice_agent/pipecat_v1.py` | Provider Pipecat v1: contract `VoiceAgentBase` (thread, queue, generation theo user-turn, rào `end_turn()`, cầu nối tool, cả hai hình dạng `HAL_LIVE_MODE`) mà không cần `import pipecat`; unit-test ở `hal/test/test_pipecat_v1_agent.py` |
+| `voice_agent/pipecat_pipeline.py` | Phía Pipecat: dựng pipeline (`HALSTTService` → user aggregator → `OpenAILLMService` → `EventSink` → assistant aggregator) trên loop `pipecat-io`, tool handler, `PipelineHandle` (queue_frame / proposal / finalize / stop thread-safe), `_CommittedTurnStopStrategy` |
+| `voice_agent/pipecat_stt.py` | `HALSTTService`: `STTService` của Pipecat bọc `STTProvider` của HAL (session theo lượt hoặc session dài trên thread sender `pipecat-stt`), `STTFinalizeFrame` |
 | `context_manager/{base,openclaw,hermes}.py` | Lắp ráp prompt + memory + skills theo gateway |
 | `summarizer.py` | Summarizer memory dựa trên Anthropic |
-| `config.py` | Model config provider (`GeminiConfig`, `OpenAIConfig`, `GPTLiveConfig`) |
+| `config.py` | Model config provider (`GeminiConfig`, `OpenAIConfig`, `GPTLiveConfig`, `PipecatV1Config`) |
 | `models/`, `enums/` | Kiểu input/output/event, enum provider + gateway |
-| `resources/` | System prompt (chung `system_prompt.md` + theo provider `system_prompt_gemini.md` / `system_prompt_openai.md` / `system_prompt_gptlive.md`) |
+| `resources/` | System prompt (chung `system_prompt.md` + theo provider `system_prompt_gemini.md` / `system_prompt_openai.md` / `system_prompt_gptlive.md` / `system_prompt_pipecat.md`) |
 | `../voice/voice_service.py` | Tích hợp: stream audio mic, tiêu thụ output, route delegate/handled. Chế độ live: `_live_decision` / `_live_session` / `_live_out_pump` / `_live_uplink_frame` |
 | `../voice/aec.py` | WebRTC AEC3 trên đường mic; tham chiếu lấy tại TTS output stream (mọi provider) |
 

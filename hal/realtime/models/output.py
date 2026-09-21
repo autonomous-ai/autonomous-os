@@ -22,6 +22,13 @@ class TextOutput(OutputBase):
     text: str
 
 
+class MainAgentFallbackOutput(OutputBase):
+    """Provider explicitly could not establish an outcome for the user's turn."""
+
+    type: OutputTypeEnum = OutputTypeEnum.MAIN_AGENT_FALLBACK
+    transcript: str = ""
+
+
 class AudioOutput(OutputBase):
     type: OutputTypeEnum = OutputTypeEnum.AUDIO
     audio: npt.NDArray[np.float32]
