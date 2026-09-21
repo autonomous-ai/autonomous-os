@@ -115,7 +115,7 @@ func TestSuggestionInvalidObservationDefers(t *testing.T) {
 	}
 }
 
-func TestSuggestHTTPValidationAndDefaultOff(t *testing.T) {
+func TestSuggestHTTPValidationAndEnabledWithoutDependencies(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	handler := BuddyHandler{}
@@ -133,7 +133,7 @@ func TestSuggestHTTPValidationAndDefaultOff(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/buddy/suggest", strings.NewReader(`{"goal":"Tìm nút tìm kiếm"}`))
 	req.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(w, req)
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"suggestion":null`) || !strings.Contains(w.Body.String(), `"reason":"disabled"`) {
-		t.Fatalf("default OFF contract: %d %s", w.Code, w.Body.String())
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"suggestion":null`) || !strings.Contains(w.Body.String(), `"reason":"unavailable"`) {
+		t.Fatalf("enabled handler without dependencies: %d %s", w.Code, w.Body.String())
 	}
 }

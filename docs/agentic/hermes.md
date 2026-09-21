@@ -1038,16 +1038,18 @@ API key. Unchanged assets are not rewritten.
 
 Plugin installation or updates do **not** add a gateway restart reason. os-server
 logs that loading changed plugin code needs the next gateway restart; existing
-restart reasons elsewhere in onboarding remain unchanged. Enabling Jev requires
-changing the plugin constant, rebuilding os-server, syncing the plugin, and
-restarting Hermes to load it.
+restart reasons elsewhere in onboarding remain unchanged. This build enables Jev
+in the embedded plugin. Existing devices need the updated OS to sync the plugin
+and a gateway restart to load its changed code; this update does not add an
+automatic restart. To disable Jev, set `ENABLED = False`, rebuild os-server, sync
+the plugin, and restart Hermes to load it.
 
 ### Configuration and proxy contract
 
 The plugin uses hardcoded defaults in `runtimes/hermes/plugins/jev/router.py`:
 
 ```python
-ENABLED = False
+ENABLED = True
 TIMEOUT_SECONDS = 0.350
 ```
 
@@ -1057,7 +1059,7 @@ reads, catalog lookup, and network requests.
 When enabled, the plugin reuses `llm_base_url` and `llm_api_key` for
 `POST {llm_base_url}/jev/decisions` with bearer authentication. There is no
 separate Jev key in `.env` and no direct-provider fallback. HTTPS is required,
-except HTTP on loopback for local tests. BFF must implement the proposed
+except HTTP on loopback for local tests. BFF must support the compatible
 [Decisions contract](../os-server.md#jev-bff-contract); the plugin sends model
 `typesafe/jev-1.13`, a `skill` choice including `none`, and one `fit_<id>` noul
 question per candidate. The raw response must contain `answers`.
@@ -1083,7 +1085,7 @@ not prompts or credentials.
 
 Local validation uses mocked proxy responses and temporary Hermes homes. It does
 not establish live Jev accuracy or latency improvements; compare OFF/ON on a
-device only after BFF support is available. No device deployment is required by
+device using a compatible BFF endpoint. No device deployment is required by
 the local checks.
 
 Focused local checks (Python plugin tests also run in CI):
@@ -1115,10 +1117,12 @@ based on the [TypeSafe skill-suggestion cookbook](https://docs.typesafe.ai/cookb
 The OS implementation is a narrower experiment, not an equivalent implementation
 of the two-stage recipe. Its higher thresholds and shorter deadline may suppress
 useful suggestions; mock tests cannot establish routing accuracy or coverage.
-Do not transfer the reference's benchmark results to this plugin. Before enabling,
-compare both policies on the same representative requests and installed roster,
+Do not transfer the reference's benchmark results to this plugin. To evaluate
+the enabled experiment, compare both policies on the same representative requests and installed roster,
 including unrelated chat, ambiguous skills, explicit commands, and Vietnamese.
 
 Review fixes preserve Hermes session context in the worker (needed for
 platform-specific disabled-skill filtering) and skip slash commands, as the
-reference hook does. No thresholds, default OFF setting, or device state changed.
+reference hook does. Those review fixes did not change thresholds, the default
+OFF setting at review time, or device state. The current build enables the
+plugin separately as described above.

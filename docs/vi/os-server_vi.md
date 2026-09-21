@@ -1193,8 +1193,9 @@ Agent management trong workspace desktop Buddy riêng biệt với luồng này.
   tham chiếu snapshot dùng `perform_ui_action`.
 - `POST /api/buddy/suggest` chỉ nhận từ loopback, thử nghiệm gợi ý một thao tác
   Accessibility `press`/`focus` đã quan sát, không tự thực thi. Request có `goal`
-  (1–2000 ký tự), `app` tùy chọn (1–256 ký tự). Hardcode OFF trong
-  `system/buddy/jev`, không thêm config. Khi bật, server lấy cây mới (thời hạn
+  (1–2000 ký tự), `app` tùy chọn (1–256 ký tự). Hardcode ON (`Enabled = true`)
+  trong `system/buddy/jev`, không thêm config. Đổi hằng số thành `false` và
+  build/deploy lại để tắt. Khi bật, server lấy cây mới (thời hạn
   native 5000 ms), rồi chọn qua LLM proxy dùng chung `/jev/decisions` (timeout
   inference 350 ms). Lấy cây làm mất hiệu lực reference snapshot trước đó.
   `data.suggestion` là null kèm lý do fallback hoặc object có `snapshot_id`,

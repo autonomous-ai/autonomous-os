@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	Enabled  = false
+	Enabled  = true
 	Budget   = 350 * time.Millisecond
 	cooldown = 30 * time.Second
 )
