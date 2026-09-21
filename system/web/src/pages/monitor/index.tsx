@@ -900,7 +900,7 @@ export default function Monitor() {
               ramHistory={ramHistory}
             />
           )}
-          {section === "flow"      && <FlowSection events={events} onClearEvents={clearFlowEvents} />}
+          {section === "flow"      && <FlowSection events={events} onClearEvents={clearFlowEvents} isDebug={isDebug} />}
           {section === "camera"    && <CameraSection displayTs={displayTs} />}
           {section === "sensing"   && <SensingSection hasVision={caps?.has(Cap.Vision) ?? false} hasEnvironment={caps?.has(Cap.Environment) ?? false} />}
           {section === "servo"     && <ServoSection />}

@@ -270,12 +270,37 @@ cả ngày vì không có gì cho thấy turn đó chạy với memory nào. Hai
   `execute` (false ở chế độ chỉ quan sát, `agent.memory_guard=false`),
   `trigger` (`startup` | `watch` | `rescan`).
 
-Footer của turn card hiện fingerprint theo thứ tự cố định `USER 2.1k MEMORY
-0.4k KNOWLEDGE 1.0k`; khi trong turn có event `memory_changed` thì nối thêm
-`✎ memory changed` (màu amber), và `· N quarantined` màu đỏ chỉ khi guard thật
-sự đã gỡ gì đó (`execute` true). Ở chế độ chỉ quan sát badge vẫn amber và ghi
-`· would quarantine N`. Hover để xem size (bytes) / hash từng file và reasons.
-So `sha8` giữa hai turn cho biết memory có thay đổi giữa hai turn đó hay không.
+Footer của turn card gate badge theo state (#463) — `flow` là section public và
+debug chỉ là toggle trên header, không phải URL param ẩn:
+
+| State | Nghĩa | Chế độ thường | Chế độ debug |
+|---|---|---|---|
+| xám | turn chỉ đọc memory | ẩn | `USER.md 251B · MEMORY.md 1.2kB` |
+| amber | agent có ghi, guard chấp nhận | ẩn | `… ✎ memory changed` |
+| đỏ | guard đã gỡ block | `✎ memory updated · 1 entry removed in hermes` | như trên, thêm size phía trước |
+
+Xám hiện size của một file mà chủ máy không mở được, trên mọi turn; amber sáng
+ở mọi lần ghi thành công sẽ tập cho người dùng bỏ qua dòng này, và rồi đỏ cũng
+không còn được chú ý — nên cả hai là công cụ debug. Đỏ thì luôn hiện: đây là
+chỗ duy nhất trong sản phẩm mà chủ máy thấy được OS đã xoá thứ agent viết ra
+(phần còn lại của việc gỡ là atomic rename, file `.quarantine.txt` và
+`.bak-<nano>`, chỉ xem được qua SSH, và endpoint reset của #421 ship mà không
+có UI). Chữ dùng là "entry removed", không phải "quarantined" — từ nội bộ này
+đọc lên giống một sự cố bảo mật — và badge nêu luôn `runtime` lấy từ
+`memory_changed`: guard quét cả sáu runtime tree trong khi size bên cạnh là của
+runtime **đang active**, nên nếu không nêu tên thì một lần gỡ ở runtime không
+active sẽ làm card đỏ lên cạnh size của file chẳng liên quan.
+
+Size là byte với đơn vị dính liền số (`251B`, `1.2kB`) — không dùng `k` cơ số
+1000 như các số token LLM cùng hàng. Tên file giữ nguyên đuôi `.md` và ngăn
+nhau bằng dấu chấm giữa, để dòng này đọc ra hai file hai size chứ không phải
+một nhãn dính liền. Ở chế độ chỉ quan sát (`agent.memory_guard=false`) badge
+vẫn amber và ghi `· would remove 1 entry`; chưa gỡ gì cả, file vẫn còn block đó.
+Hover để xem số byte chính xác, `sha8`, runtime và reasons. So `sha8` giữa hai
+turn cho biết memory có thay đổi giữa hai turn đó hay không.
+
+Logic của badge nằm ở `system/web/src/pages/monitor/FlowSection/memory.ts` và có
+unit test: `cd system/web && node --test tests/memory.test.mjs`.
 
 ## Issue đang mở
 
