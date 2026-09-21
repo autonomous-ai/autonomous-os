@@ -60,9 +60,15 @@ const FAKE_EVENTS: { label: string; type: string; message: string; color: string
 export function FlowSection({
   events,
   onClearEvents,
+  isDebug,
 }: {
   events: DisplayEvent[];
   onClearEvents: () => void;
+  // Debug mode is a header toggle (`?debug=true`), not a hidden URL param, so
+  // "debug-only" means one click away. Passed down from Monitor rather than
+  // re-parsed per turn card: window.location is not reactive, and a card must
+  // re-render the moment the toggle flips (#463).
+  isDebug: boolean;
 }) {
   const [showCanvas, setShowCanvas] = useState(false);
   const [showCompaction, setShowCompaction] = useState(false);
@@ -930,6 +936,7 @@ export function FlowSection({
                       turn={turn}
                       pairTint={pairTintMap.get(turn.id)}
                       userPhotos={userPhotos}
+                      isDebug={isDebug}
                       onViewPipeline={() => {
                         setSelectedTurnId(turn.id);
                         setMobilePipelineOpen(true);
