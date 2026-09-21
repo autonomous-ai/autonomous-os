@@ -1107,8 +1107,16 @@ class VoiceService:
                     keepalive_session = None
                     speech_start = None
                     speech_pre_buffer = []
-                    # Clear lookback so the next session doesn't replay tail
-                    lookback.clear()
+                    # Clear lookback so the next session doesn't replay tail —
+                    # but NOT after a "skip": the noise guard rejects short
+                    # plosive words on their own ("Play" — span 0.32s, voiced
+                    # 0.21 on lamp-0c4e 2026-09-21), and the rest of the
+                    # sentence re-triggers ~100ms later. Clearing here left that
+                    # trigger with pre-roll=0, so Gemini heard "song for me
+                    # again." The lookback is a bounded deque, so keeping it
+                    # costs nothing and the next trigger carries the word.
+                    if decision != "skip":
+                        lookback.clear()
                     self._silero_reset_state()
                     logger.info("VAD resumed — mic active, waiting for next speech")
                     # Cooldown after session to let resources clean up
