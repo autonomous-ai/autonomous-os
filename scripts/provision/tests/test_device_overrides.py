@@ -56,8 +56,8 @@ class DeviceOverrideTests(unittest.TestCase):
                       "HAL_LIVE_UPLINK_DURING_PLAYBACK=always",
                       "HAL_VOLUME_STATE_PATH=/root/config/.volume-pro", "HAL_TTS_SPEED=1.1"):
             self.assertIn(value + "\n", env)
-        self.assertIn("startup_volume: 77", (self.profile / "ROBOT.md").read_text())
-        self.assertIn("max_volume: 77", (self.profile / "SAFETY.md").read_text())
+        self.assertIn("startup_volume: 35", (self.profile / "ROBOT.md").read_text())
+        self.assertIn("max_volume: 35", (self.profile / "SAFETY.md").read_text())
         self.assertIn("max_speed: 120", (self.profile / "SAFETY.md").read_text())
         self.assertEqual((self.profile / "rootfs/etc/asound.conf").read_bytes(), (SOURCE / "overrides/pro/rootfs/etc/asound.conf").read_bytes())
         self.assertEqual(identity.read_text(), "pro\n")
