@@ -1208,7 +1208,8 @@ management in the separate Buddy desktop workspace is independent of this flow.
 - `POST /api/buddy/suggest` is loopback-only and experimentally suggests one
   observed Accessibility `press`/`focus` action, without executing it. Request:
   `goal` (1–2000 characters), optional `app` (1–256 characters). It is hardcoded
-  OFF in `system/buddy/jev`, with no new config. When enabled, the server obtains
+  ON (`Enabled = true`) in `system/buddy/jev`, with no new config. Set the constant
+  to `false` and rebuild/deploy to disable it. When enabled, the server obtains
   a fresh tree (native deadline 5000 ms), then selects via the shared LLM proxy
   `/jev/decisions` (350 ms inference timeout). Tree acquisition invalidates prior
   snapshot references. `data.suggestion` is null with a fallback reason or an
