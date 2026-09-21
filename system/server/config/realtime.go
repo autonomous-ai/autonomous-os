@@ -144,6 +144,9 @@ const (
 	// Pipecat v1: the low-latency Qwen relay model (hal/config.py). No voice,
 	// no reasoning — the pipeline emits text and HAL's TTS speaks it.
 	defaultRealtimePipecatV1Model = "qwen/qwen3.6-35b-a3b"
+	// Pipecat v1: the client-side `web_search` tool is on unless the operator
+	// turns it off (HAL default, hal/config.py REALTIME_PIPECAT_WEB_SEARCH).
+	defaultRealtimePipecatV1WebSearch = true
 )
 
 // DefaultRealtimeConfig returns the realtime block os-server seeds into
@@ -325,6 +328,22 @@ func (c *Config) RealtimeReasoning() string {
 	}
 	// gptlive / pipecat_v1: no reasoning knob.
 	return ""
+}
+
+// RealtimeWebSearch returns the resolved in-session web-search toggle for the
+// active provider: the operator override when set, else the HAL default (on).
+// nil for every provider but pipecat_v1 — Gemini grounds and GPT-Live's backend
+// searches on their own side, so the knob does not exist there.
+func (c *Config) RealtimeWebSearch() *bool {
+	if c.RealtimeProvider() != "pipecat_v1" {
+		return nil
+	}
+	if c.Realtime != nil && c.Realtime.PipecatV1 != nil && c.Realtime.PipecatV1.WebSearch != nil {
+		v := *c.Realtime.PipecatV1.WebSearch
+		return &v
+	}
+	v := defaultRealtimePipecatV1WebSearch
+	return &v
 }
 
 // --- Validation (for realtime.set MQTT downlinks) ---------------------------

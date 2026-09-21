@@ -68,6 +68,7 @@ export function RealtimeSection({
   reasoning, setReasoning,
   apiKey, setApiKey,
   baseUrl, setBaseUrl,
+  webSearch, setWebSearch,
 }: {
   active: boolean;
   realtimeLoaded: RealtimeLoadedState;
@@ -78,6 +79,8 @@ export function RealtimeSection({
   reasoning: string; setReasoning: (v: string) => void;
   apiKey: string; setApiKey: (v: string) => void;
   baseUrl: string; setBaseUrl: (v: string) => void;
+  // pipecat_v1 only: the in-session `web_search` tool (realtime.pipecat_v1.web_search).
+  webSearch: boolean; setWebSearch: (v: boolean) => void;
 }) {
   // Options come from the API (single source = server config); the const lists
   // above are only a fallback if the fetch fails.
@@ -134,10 +137,24 @@ export function RealtimeSection({
             // The shared Base URL carries a WebSocket relay shape (…/ws/gemini) that
             // HAL never uses for this provider; its chat endpoint is
             // realtime.pipecat_v1.base_url in config.json (default: the Qwen relay).
-            <div style={{ fontSize: 11, color: C.textDim, marginBottom: 12 }}>
-              Runs the voice pipeline on the robot (its own STT + a text LLM, spoken by the TTS voice above).
-              LLM endpoint: <code>realtime.pipecat_v1.base_url</code> in config.json — default is the low-latency Qwen relay.
-            </div>
+            <>
+              <div style={{ fontSize: 11, color: C.textDim, marginBottom: 12 }}>
+                Runs the voice pipeline on the robot (its own STT + a text LLM, spoken by the TTS voice above).
+                LLM endpoint: <code>realtime.pipecat_v1.base_url</code> in config.json — default is the low-latency Qwen relay.
+              </div>
+              {/* The relay LLM has no hosted search; this is the client-side
+                  web_search tool (HAL_PIPECAT_WEB_SEARCH). Off → public live
+                  facts (weather, news, scores) delegate to the main agent. */}
+              <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 12.5, color: C.text, cursor: "pointer", marginBottom: 12 }}>
+                <input type="checkbox" checked={webSearch} onChange={(e) => setWebSearch(e.target.checked)} style={{ marginTop: 3 }} />
+                <span>
+                  Web search — answer public live facts (weather, news, scores, prices) in-session through the Google-Search relay.
+                  <span style={{ display: "block", fontSize: 11, color: C.textDim, marginTop: 3 }}>
+                    Off: those questions are delegated to the main agent instead. One relay call (~4 s) per lookup.
+                  </span>
+                </span>
+              </label>
+            </>
           ) : (
             <LockedField lockedInitially={llmLoaded.baseUrl} label="Base URL (optional — leave blank to derive from AI brain base URL)" id="realtime_base_url" value={baseUrl} onChange={setBaseUrl} placeholder="wss://… /ws/gemini" />
           )}
