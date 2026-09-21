@@ -12,8 +12,9 @@ import (
 )
 
 const (
-	Enabled  = true
-	Budget   = 350 * time.Millisecond
+	Enabled = true
+	// Temporary diagnostic budget for validating the proxy path before latency tuning.
+	Budget   = 3 * time.Second
 	cooldown = 30 * time.Second
 )
 
