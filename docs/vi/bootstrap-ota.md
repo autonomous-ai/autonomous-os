@@ -342,13 +342,18 @@ Giá trị riêng sản phẩm chỉ nằm trong package device. Ví dụ:
 
 ```text
 robots/lamp/overrides/pro/
-  profile.json                # startup_volume 77, max_volume 77
+  profile.json                # startup_volume 35, max_volume 35 (softvol -40..0 dB, 35 ≈ -26 dB; chỉnh bằng tai trên lamp-0c4e 21/09/2026)
   rootfs/opt/hal/.env          # XMOS AEC: tắt AEC phần mềm, bật Live, uplink always
-  rootfs/etc/asound.conf       # đường mic/loa reSpeaker, lấy kênh trái đã xử lý
+  rootfs/etc/asound.conf       # ReSpeaker Lite dmix/dsnoop + softvol "Speaker", kênh trái đã xử lý
+  rootfs/etc/udev/rules.d/     # 90-respeaker-lite (kích oneshot softvol khi card xuất hiện), 91-pulseaudio (danh sách base + Lite)
+  rootfs/etc/systemd/system/   # respeaker-lite-softvol.service (tạo control softvol trước hal)
 ```
 
-Lamp Pro dùng reSpeaker USB stereo 16 kHz, kênh trái đã xử lý; loa phải nối qua
-reSpeaker. Mức 77% đã thử là tuning riêng của bộ này, không phải độ lớn tương
+Lamp Pro dùng Seeed ReSpeaker Lite (XMOS XU316, USB `2886:0019`, card ALSA
+`Lite`): cố định S16_LE 2 kênh 16 kHz cả hai chiều, kênh trái đã xử lý; loa phải
+nối qua Lite. Card không có mixer ALSA nên volume loa là một tầng softvol, chỉ
+tồn tại sau lần mở PCM đầu tiên — một oneshot do udev kích mở nó trước
+`hal.service` để bước khôi phục volume lúc boot có control để ghi. Mức 35% đã thử là tuning riêng của bộ này, không phải độ lớn tương
 đương giữa các thiết bị. File, mặc định và ceiling hiện tại của Lamp thường
 giữ nguyên. Renderer không dò, flash hoặc tune phần cứng được gắn.
 
