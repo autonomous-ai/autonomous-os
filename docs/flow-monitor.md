@@ -408,13 +408,36 @@ day because nothing showed which memory a turn ran with. Two additions:
   observe mode, `agent.memory_guard=false`), `trigger`
   (`startup` | `watch` | `rescan`).
 
-The turn card footer shows the fingerprint in fixed order `USER 2.1k MEMORY
-0.4k KNOWLEDGE 1.0k`; when a `memory_changed` event is inside the turn it
-appends `✎ memory changed` (amber), and `· N quarantined` in red only when the
-guard actually removed something (`execute` true). In observe mode the badge
-stays amber and reads `· would quarantine N`. Hover for per-file sizes (bytes)
-/ hashes and reasons. Comparing `sha8` across two turns tells you whether the
-memory changed between them.
+The turn card footer gates the badge by state (#463) — `flow` is a public
+section and debug is a one-click header toggle, not a hidden URL param:
+
+| State | Meaning | Normal mode | Debug mode |
+|---|---|---|---|
+| gray | the turn only read memory | hidden | `USER 251 B MEMORY 1.2 KB` |
+| amber | the agent wrote, the guard accepted | hidden | `… ✎ memory changed` |
+| red | the guard removed blocks | `✎ memory updated · 1 entry removed in hermes` | same, prefixed with the sizes |
+
+Gray reports the size of a file the owner cannot open, on every turn; amber on
+every successful write trains people to ignore the row, and then red does not
+land either — so both are debugging aids. Red is permanent: it is the only
+place in the product where the owner can see that the OS deleted something the
+agent wrote (the rest of the removal is an atomic rename, a `.quarantine.txt`
+sidecar and a `.bak-<nano>`, all SSH-only, and the #421 reset endpoint ships
+without UI). It reads "entry removed", not "quarantined", which sounds like a
+security incident, and it names the `runtime` from `memory_changed`: the guard
+sweeps all six runtime trees while the sizes beside it are the **active**
+runtime's, so without the name a removal in an inactive runtime would turn the
+card red next to unrelated file sizes.
+
+Sizes are bytes with a unit (`251 B`, `1.2 KB`) — never the 1000-based `k` the
+LLM token counts on the same row use. In observe mode
+(`agent.memory_guard=false`) the badge stays amber and reads
+`· would remove 1 entry`; nothing was removed and the file still carries the
+block. Hover for exact bytes, `sha8`, the runtime and the reasons. Comparing
+`sha8` across two turns tells you whether the memory changed between them.
+
+Badge logic lives in `system/web/src/pages/monitor/FlowSection/memory.ts` and is
+unit-tested: `cd system/web && node --test tests/memory.test.mjs`.
 
 ## Known Edge Cases
 
