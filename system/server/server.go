@@ -539,6 +539,7 @@ func (s *Server) Serve(closeFn func()) error {
 	buddy.GET("ws", s.buddyHandler.WS)
 	buddy.POST("command", localOnlyMiddleware(), s.buddyHandler.Command)
 	buddy.POST("observe", localOnlyMiddleware(), s.buddyHandler.Observe)
+	buddy.POST("suggest", localOnlyMiddleware(), s.buddyHandler.Suggest)
 	// /exec/:action is the marker-friendly variant used by OpenClaw skills via
 	// [HW:/buddy/exec/<action>:{...}]. Localhost-only (loopback from agent handler's hwMarker dispatcher).
 	buddy.POST("exec/:action", localOnlyMiddleware(), s.buddyHandler.Exec)

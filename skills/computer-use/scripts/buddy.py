@@ -17,12 +17,72 @@ import uuid
 
 ENDPOINT = "http://127.0.0.1:5000/api/buddy/command"
 OBSERVE_ENDPOINT = "http://127.0.0.1:5000/api/buddy/observe"
+SUGGEST_ENDPOINT = "http://127.0.0.1:5000/api/buddy/suggest"
+MAX_SUGGEST_RESPONSE_BYTES = 64 * 1024
 MAX_RESPONSE_BYTES = 24 * 1024 * 1024
 MAX_CAPTURES = 50
 
 
 class BuddyError(Exception):
     """An invalid command, transport failure, or rejected Buddy action."""
+
+
+def suggest(goal, params, endpoint=SUGGEST_ENDPOINT):
+    """Request advice from a fresh native UI tree; never execute the suggestion."""
+    if not isinstance(goal, str) or not goal.strip() or len(goal) > 2000:
+        raise BuddyError("goal must contain 1–2000 characters")
+    if not isinstance(params, dict) or set(params) - {"app"}:
+        raise BuddyError("suggest params may contain only app")
+    if "app" in params and (not isinstance(params["app"], str) or not params["app"].strip() or len(params["app"]) > 256):
+        raise BuddyError("app must contain 1–256 characters")
+    request = urllib.request.Request(
+        endpoint, data=json.dumps(dict(params, goal=goal), allow_nan=False).encode("utf-8"),
+        headers={"Content-Type": "application/json"}, method="POST",
+    )
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with opener.open(request, timeout=15) as response:
+            raw = response.read(MAX_SUGGEST_RESPONSE_BYTES + 1)
+    except urllib.error.HTTPError as exc:
+        try:
+            failure = json.loads(exc.read(8192))
+            detail = failure.get("message") if isinstance(failure, dict) else None
+        except (ValueError, OSError):
+            detail = None
+        finally:
+            exc.close()
+        raise BuddyError(f"desktop suggestion HTTP {exc.code}: {detail or 'request failed'}") from exc
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise BuddyError("desktop suggestion unavailable or timed out; no action was executed") from exc
+    if len(raw) > MAX_SUGGEST_RESPONSE_BYTES:
+        raise BuddyError("desktop suggestion response exceeds 64 KiB")
+    try:
+        envelope = json.loads(raw)
+    except (ValueError, UnicodeError) as exc:
+        raise BuddyError("desktop suggestion returned invalid JSON") from exc
+    if not isinstance(envelope, dict) or type(envelope.get("status")) is not int or envelope["status"] != 1:
+        detail = envelope.get("message") if isinstance(envelope, dict) else None
+        raise BuddyError(str(detail or "desktop suggestion failed"))
+    data = envelope.get("data")
+    if not isinstance(data, dict) or "suggestion" not in data or not isinstance(data.get("reason"), str):
+        raise BuddyError("desktop suggestion returned invalid result")
+    choice = data["suggestion"]
+    target = data.get("target")
+    if choice is not None:
+        if (not isinstance(choice, dict) or set(choice) != {"snapshot_id", "ref", "ui_action"}
+                or any(not isinstance(choice.get(key), str) or not choice[key].strip() for key in ("snapshot_id", "ref"))
+                or choice.get("ui_action") not in ("press", "focus")):
+            raise BuddyError("desktop suggestion returned invalid action reference")
+        if (not isinstance(target, dict) or set(target) != {"role", "title", "description"}
+                or any(not isinstance(target.get(key), str) or len(target[key]) > limit
+                       for key, limit in (("role", 128), ("title", 2000), ("description", 2000)))):
+            raise BuddyError("desktop suggestion returned invalid target description")
+    elif target is not None:
+        raise BuddyError("desktop suggestion returned a target without a suggestion")
+    result = {"ok": True, "suggestion": choice, "reason": data["reason"]}
+    if choice is not None:
+        result["target"] = target
+    return result
 
 
 def observe(question, params, endpoint=OBSERVE_ENDPOINT):
@@ -201,6 +261,7 @@ def main(argv=None):
     parser.add_argument("--timeout-ms", type=int, default=15000)
     parser.add_argument("--id", help="Unique command ID, retained for cancellation; never reuse IDs")
     parser.add_argument("--question", help="Required for observe: ask about a fresh Mac screenshot")
+    parser.add_argument("--goal", help="Required for suggest: describe the next UI step")
     parser.add_argument("--output-dir", type=Path, help="Device-local screenshot directory")
     args = parser.parse_args(argv)
     try:
@@ -208,6 +269,13 @@ def main(argv=None):
         params = json.loads(raw)
         if not isinstance(params, dict):
             raise BuddyError("params must be a JSON object")
+        if args.action == "suggest":
+            if args.id or args.output_dir or args.timeout_ms != 15000 or args.question is not None:
+                raise BuddyError("suggest uses a fixed 15-second HTTP timeout and does not accept --id, --output-dir or --question")
+            print(json.dumps(suggest(args.goal, params), ensure_ascii=False, allow_nan=False))
+            return 0
+        if args.goal is not None:
+            raise BuddyError("--goal is only supported by suggest")
         if args.action == "observe":
             if args.id or args.output_dir or args.timeout_ms != 15000:
                 raise BuddyError("observe uses a fixed 90-second HTTP timeout and does not accept --id or --output-dir")
