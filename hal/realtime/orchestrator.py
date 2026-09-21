@@ -45,6 +45,7 @@ from hal.realtime.models import (
     FunctionCallOutput,
     FunctionCallResultInput,
     ImageInput,
+    MainAgentFallbackOutput,
     OutputBase,
     TextInput,
 )
@@ -1108,6 +1109,18 @@ class RealtimeOrchestrator:
         produced = False  # did this turn yield any real output (vs stay silent)?
         replay_pending = False  # look-replay signalled — the turn continues
         for output in execution_agent.receive(stop_on_done=True):
+            if isinstance(output, MainAgentFallbackOutput):
+                # This is a local fail-safe, not a provider function call: there
+                # is no call ID to acknowledge. Preserve the user's request even
+                # when a filler has already reached the speaker.
+                produced = True
+                execution_agent.end_turn()
+                yield DelegateSignal(
+                    message=output.transcript,
+                    transcript=output.transcript,
+                    user_turn_id=output.user_turn_id,
+                )
+                break
             if isinstance(output, ExecutionOutput):
                 yield output
                 continue

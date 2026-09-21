@@ -308,6 +308,18 @@ class GeminiLiveAgent(VoiceAgentBase):
                 )
                 for tool in self._tools
             ]
+            if behavior == types.Behavior.NON_BLOCKING:
+                declarations.append(types.FunctionDeclaration(
+                    name="complete_response",
+                    description=(
+                        "Confirm that your spoken answer fully fulfills this user's request. "
+                        "Use ONLY for direct conversation, knowledge or a completed public lookup. "
+                        "Never use for an action, a promise/filler, an error or unresolved work: "
+                        "call delegate_to_main for those instead. Call after the direct answer."
+                    ),
+                    parameters={"type": "object", "properties": {}},
+                    behavior=types.Behavior.NON_BLOCKING,
+                ))
             live_tools.append(types.Tool(function_declarations=declarations))
 
         if self._config.google_search_enabled:
@@ -588,18 +600,32 @@ class GeminiLiveAgent(VoiceAgentBase):
         _grace_s: float = app_config.REALTIME_NONBLOCKING_TOOL_GRACE_S
         # getattr: tests drive this loop on agents built without __init__ (no _config).
         _grace_model: str = getattr(getattr(self, "_config", None), "model", "") or ""
-        _grace_on: bool = _grace_s > 0 and "extended-thinking" in _grace_model
+        _requires_outcome = "extended-thinking" in _grace_model
+        _grace_on: bool = _grace_s > 0 and _requires_outcome
+        _outcome_received = False
+        _direct_answer_confirmed = False
+        _turn_transcript = ""
         _grace_deadline: float = 0.0
         _deferred_finalize: Callable[[], None] | None = None
         _receiver = self._session.receive().__aiter__()
 
+        def _fallback_needed(delayed_playback_ack: bool = False) -> bool:
+            return (_requires_outcome and not _outcome_received
+                    and not execution_interrupted and not delayed_playback_ack)
+
         def _finalize_turn_complete(delayed_playback_ack: bool) -> None:
+            transcript = getattr(self, "_user_transcript", "") or _turn_transcript
+            fallback = _fallback_needed(delayed_playback_ack)
+            if fallback:
+                logger.warning("[realtime] No confirmed outcome after NON_BLOCKING response — forwarding to main")
             self._awaiting_playback_turn_complete = False
             self._first_audio_received = False
             self._user_transcript = ""
             self._turn_done.set()
             self._recv_queue.put(TurnDoneEvent(
-                execution_completed=not execution_interrupted and not delayed_playback_ack,
+                execution_completed=not execution_interrupted and not delayed_playback_ack and not fallback,
+                fallback_to_main=fallback,
+                user_transcript=transcript,
                 user_turn_id=("" if delayed_playback_ack else response_user_turn_id
                               if response_user_turn_id is not None
                               else getattr(self, "_live_user_turn_id", "")),
@@ -610,11 +636,18 @@ class GeminiLiveAgent(VoiceAgentBase):
                 self._live_speech_emitted = False
 
         def _finalize_generation_complete() -> None:
+            transcript = getattr(self, "_user_transcript", "") or _turn_transcript
+            fallback = _fallback_needed()
+            if fallback:
+                logger.warning("[realtime] No confirmed outcome after NON_BLOCKING response — forwarding to main")
+            self._user_transcript = ""
             self._awaiting_playback_turn_complete = True
             self._first_audio_received = False
             self._turn_done.set()
             self._recv_queue.put(TurnDoneEvent(
-                execution_completed=not execution_interrupted,
+                execution_completed=not execution_interrupted and not fallback,
+                fallback_to_main=fallback,
+                user_transcript=transcript,
                 user_turn_id=(response_user_turn_id if response_user_turn_id is not None
                               else getattr(self, "_live_user_turn_id", "")),
             ))
@@ -787,7 +820,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                     # ownership instead of attributing that response to a later input.
                     response_user_turn_id = getattr(self, "_live_user_turn_id", "")
 
-                if content.model_turn and content.model_turn.parts:
+                if content.model_turn and content.model_turn.parts and not _direct_answer_confirmed:
                     for part in content.model_turn.parts:
                         # Skip reasoning parts: Gemini flags thought parts with
                         # part.thought=True. Emitting them would speak/show the
@@ -847,7 +880,8 @@ class GeminiLiveAgent(VoiceAgentBase):
                     logger.info("[realtime] <<< user said: %r", _in_tx.text)
                     self._user_transcript = getattr(self, "_user_transcript", "") + _in_tx.text
 
-                if content.output_transcription and content.output_transcription.text:
+                if (content.output_transcription and content.output_transcription.text
+                        and not _direct_answer_confirmed):
                     if not valid_transcription_chunk_cnt:
                         self._recv_queue.put(OutputEvent(
                             gen=getattr(self, "_turn_gen", 0),
@@ -989,11 +1023,32 @@ class GeminiLiveAgent(VoiceAgentBase):
                 )
                 if response_user_turn_id is None:
                     response_user_turn_id = getattr(self, "_live_user_turn_id", "")
-                user_transcript = getattr(self, "_user_transcript", "").strip()
+                user_transcript = getattr(self, "_user_transcript", "").strip() or _turn_transcript
+                if user_transcript:
+                    _turn_transcript = user_transcript
                 self._user_transcript = ""
                 for fc in message.tool_call.function_calls:
                     logger.info("[realtime] Function call: %s (call_id=%s, after_terminal=%s)",
                                 fc.name, fc.id, _deferred_finalize is not None)
+                    if _requires_outcome and fc.name == "complete_response":
+                        # An explicit direct-answer outcome, never an inferred
+                        # success from audio or a terminal alone. Ack normally;
+                        # this backend does not support scheduling=SILENT.
+                        await self._session.send_tool_response(function_responses=[
+                            types.FunctionResponse(id=fc.id, name=fc.name,
+                                                   response={"result": "recorded"})
+                        ])
+                        self._pending_tool_calls.discard(fc.id or "")
+                        _outcome_received = True
+                        _direct_answer_confirmed = True
+                        # The plain ACK can prompt another spoken answer. Once
+                        # confirmed, retain routing events but suppress that
+                        # post-confirmation speech until this turn finalizes.
+                        # Keep the grace open: a delegate can follow this call in
+                        # another frame (device-observed 2026-09-21, +39ms).
+                        continue
+                    if fc.name in {"delegate_to_main", "reject_turn", "end_conversation"}:
+                        _outcome_received = True
                     self._recv_queue.put(
                         OutputEvent(
                             gen=getattr(self, "_turn_gen", 0),
@@ -1124,7 +1179,12 @@ class GeminiLiveAgent(VoiceAgentBase):
             return  # no turn awaiting output — nothing to unblock
         self._first_audio_received = False
         self._turn_done.set()
-        self._recv_queue.put(TurnDoneEvent())
+        model = getattr(getattr(self, "_config", None), "model", "") or ""
+        self._recv_queue.put(TurnDoneEvent(
+            fallback_to_main="extended-thinking" in model,
+            user_transcript=getattr(self, "_user_transcript", ""),
+            user_turn_id=getattr(self, "_live_user_turn_id", ""),
+        ))
         logger.info(
             "[realtime] Recv error (%s) — ending turn now, falling back to main "
             "(skipping receive timeout wait)",

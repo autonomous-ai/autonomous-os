@@ -37,3 +37,20 @@ def test_rejection_stays_silent_even_when_delegation_allows_acknowledgment():
     assert "For `reject_turn`, voice and text MUST remain completely blank" in PROMPT
     assert "rejection never gets an acknowledgment" in PROMPT
     assert "`reject_turn` when available + completely blank voice/text; no acknowledgment" in PROMPT
+
+
+def test_direct_answer_completion_is_conditional_and_requires_fulfilled_intent():
+    assert "only if `complete_response` is available" in PROMPT
+    assert "fully fulfills the user's intent through speech alone" in PROMPT
+    assert "MUST call `complete_response` in the SAME turn" in PROMPT
+    assert "answered conversation, knowledge, public search, or a `look` question" in PROMPT
+    assert "No such tool available → do not call or imitate it" in PROMPT
+    assert "call it after speaking the answer" in PROMPT
+
+
+def test_unresolved_actions_cannot_be_marked_as_direct_answer_completion():
+    assert "Never call it for an action request, a filler acknowledgment, a promise" in PROMPT
+    assert "an apology or system-error reply, or any unresolved work" in PROMPT
+    assert "those require `delegate_to_main` with the user's request instead" in PROMPT
+    assert "Do not call `complete_response` after delegation or rejection" in PROMPT
+    assert 'call `delegate_to_main(message="Play a song")`, never `complete_response`' in PROMPT

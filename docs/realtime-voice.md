@@ -232,26 +232,44 @@ This avoids an otherwise unnecessary silent-watchdog delay after the reply;
 any late `turn_complete` is discarded before the next turn.
 
 For Gemini `extended-thinking` models, tools are `NON_BLOCKING`: a spoken filler
-such as “I can help with that.” must not close the consumer before a subsequent
-`delegate_to_main` (#453). Filler text/audio still streams immediately for KPI-1
-(Voice Acknowledge); only finalization waits up to
-`HAL_REALTIME_NONBLOCKING_TOOL_GRACE_S` (default **6 seconds**, `0` disables).
+such as “I can help with that.” must not consume the user's task (#453).
+The provider adds `complete_response`, which confirms that a direct spoken
+answer fulfilled the request. Conversation, knowledge, or a completed public
+lookup can use this confirmation; actions, promises, errors, and unresolved work
+must delegate. A direct answer needs this explicit outcome and a successful
+provider terminal before it counts as handled/completed. Text/audio alone is
+not completion evidence.
+
+Filler text/audio still streams immediately for KPI-1 (Voice Acknowledge).
+HAL waits for the outcome up to `HAL_REALTIME_NONBLOCKING_TOOL_GRACE_S`
+(default **6 seconds**, `0` disables the wait, not the outcome requirement).
 The grace starts at the first `generation_complete` or `turn_complete`; later
 terminals do not extend it. HAL reopens the SDK's per-turn `receive()` iterator
 on the same session after `turn_complete`, retaining the logical turn identity.
-A delegate/reject call is queued before the terminal and cuts the grace short;
-auxiliary tools do not suppress a later delegate. Without a routing call, the
-turn finalizes once at the deadline. BLOCKING models retain immediate completion.
-A delegate after filler still routes as `delegated`, never `[HANDLED]`, preserving
-the user's request for the main agent. The Gemini prompt allows one immediate,
-brief acknowledgement but requires the delegate in the same turn; an acknowledgement
-alone cannot fulfill an action. Rejection remains completely silent. Delegate and
-reject use ordinary function response acknowledgements, omitting `scheduling`: on 2026-09-21 the device's
-Gemini 3.8 extended-thinking backend rejected `SILENT` with WebSocket 1007,
+Only delegate/reject calls end the grace early; `complete_response` records
+confirmation but keeps the window open for a delegate in a subsequent frame; auxiliary
+tools do not confirm completion or suppress a later delegate. After direct-answer
+confirmation, HAL suppresses additional speech prompted by its ACK while still
+receiving routing calls. A receive error also requests main-agent fallback for
+this model family, even if a filler already played.
+
+If the grace expires without an outcome on an uninterrupted turn, HAL emits
+`MainAgentFallbackOutput`, then `DelegateSignal`, preserving the original
+provider transcript and turn identity. This local fallback invents no function
+call and sends no tool ACK. It routes as `delegated`, never `[HANDLED]`, even
+when a filler has already played; completion must come from the downstream task.
+BLOCKING models keep their existing immediate-completion behavior. The Gemini
+prompt allows one immediate, brief acknowledgement before a delegate; rejection
+remains completely silent.
+
+Actual tool calls use ordinary function response acknowledgements, omitting
+`scheduling`: on 2026-09-21 the device's Gemini 3.8 extended-thinking backend
+rejected `SILENT` with WebSocket 1007,
 `Function response scheduling is not supported for this model`. NON_BLOCKING
-tool support does not imply response-scheduling support. This bounded grace
-does not guarantee delivery of calls that arrive after its deadline; real device
-timing must be verified.
+tool support does not imply response-scheduling support. Calls arriving after
+the grace deadline are not guaranteed to be received, and the model can still
+misclassify a request by explicitly calling `complete_response`; the outcome
+gate prevents missing calls from silently consuming tasks, not all semantic errors.
 
 The gate itself is `wakeword` in `config.json` (Settings → "Require a wake word
 before handling speech"). A device being set up for the first time takes its

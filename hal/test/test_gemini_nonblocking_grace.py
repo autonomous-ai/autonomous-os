@@ -23,10 +23,14 @@ class _Session:
         for message in messages:
             self.messages.put_nowait(message)
         self.reads = 0
+        self.tool_responses = []
 
     async def _receive(self):
         self.reads += 1
         return await self.messages.get()
+
+    async def send_tool_response(self, *, function_responses):
+        self.tool_responses.extend(function_responses)
 
 
 def _terminal(*, generation=False):
@@ -96,6 +100,7 @@ def test_trailing_tool_call_caught_across_sdk_turn_boundary(name):
     events = _receive(agent)
     assert [call.name for call in _calls(events)] == [name]
     assert isinstance(events[-1], TurnDoneEvent)
+    assert not events[-1].fallback_to_main
     _assert_done(agent, events)
 
 
@@ -106,6 +111,9 @@ def test_no_tool_finalizes_after_grace_expires(generation):
     _assert_done(agent, events)
     assert agent._session.reads == 2
     assert not _calls(events)
+    assert events[-1].fallback_to_main
+    assert not events[-1].execution_completed
+    assert events[-1].user_transcript == "play a song"
 
 
 def test_generation_complete_then_turn_complete_keeps_late_delegate_in_turn():
@@ -138,6 +146,115 @@ def test_plain_model_or_disabled_grace_finishes_immediately(monkeypatch, generat
     _assert_done(agent, events)
     assert agent._session.reads == 1
     assert not _calls(events)
+    assert events[-1].fallback_to_main is not plain_model
+    assert events[-1].execution_completed is plain_model
+
+
+@pytest.mark.parametrize("spoken", ["I can help with that.", "Sorry, there was a system error."])
+@pytest.mark.parametrize("generation", [False, True])
+def test_spoken_filler_or_error_without_outcome_falls_back_with_original_request(spoken, generation):
+    response = _terminal(generation=generation)
+    response.server_content.output_transcription = SimpleNamespace(text=spoken)
+    agent = _agent([response])
+    events = _receive(agent)
+    assert any(isinstance(event, OutputEvent) and isinstance(event.output, TextOutput)
+               and event.output.text == spoken for event in events)
+    done = events[-1]
+    assert isinstance(done, TurnDoneEvent)
+    assert done.fallback_to_main
+    assert not done.execution_completed
+    assert done.user_transcript == "play a song"
+    _assert_done(agent, events)
+
+
+@pytest.mark.parametrize("after_terminal", [False, True])
+def test_complete_response_is_acknowledged_internally_and_confirms_direct_answer(after_terminal):
+    response = _terminal()
+    response.server_content.turn_complete = False
+    response.server_content.output_transcription = SimpleNamespace(text="Two plus two is four.")
+    completion = _tool("complete_response", "direct-answer")
+    completion.tool_call.function_calls[0].args = {}
+    suffix = [_terminal(), completion] if after_terminal else [completion, _terminal()]
+    agent = _agent([response, *suffix])
+    agent._user_transcript = "What is two plus two?"
+    events = _receive(agent)
+    assert not _calls(events)
+    assert not events[-1].fallback_to_main
+    assert events[-1].execution_completed
+    assert not agent._pending_tool_calls
+    response, = agent._session.tool_responses
+    assert response.name == "complete_response"
+    assert response.id == "direct-answer"
+    assert response.response == {"result": "recorded"}
+    assert response.scheduling is None
+    _assert_done(agent, events)
+
+
+def test_auxiliary_tool_without_outcome_preserves_request_for_fallback():
+    agent = _agent([_tool("express_emotion", "emotion"), _terminal()])
+    events = _receive(agent)
+    assert events[-1].fallback_to_main
+    assert not events[-1].execution_completed
+    assert events[-1].user_transcript == "play a song"
+
+
+def test_delegate_after_complete_response_wins_and_keeps_original_request():
+    completion = _tool("complete_response", "premature-completion")
+    completion.tool_call.function_calls[0].args = {}
+    agent = _agent([_terminal(), completion, _tool()])
+    events = _receive(agent)
+
+    calls = _calls(events)
+    assert len(calls) == 1
+    assert calls[0].name == "delegate_to_main"
+    assert calls[0].user_transcript == "play a song"
+    assert calls[0].user_turn_id == "user-1"
+    assert isinstance(events[-1], TurnDoneEvent)
+    assert not events[-1].fallback_to_main
+    _assert_done(agent, events)
+    assert agent._session.messages.empty()
+    response, = agent._session.tool_responses
+    assert response.name == "complete_response"
+    assert response.id == "premature-completion"
+
+
+def test_completion_ack_does_not_repeat_spoken_answer_or_hide_later_delegate():
+    def answer():
+        message = _terminal()
+        message.server_content.turn_complete = False
+        message.server_content.output_transcription = SimpleNamespace(text="Two plus two is four.")
+        return message
+
+    completion = _tool("complete_response", "direct-answer")
+    completion.tool_call.function_calls[0].args = {}
+    agent = _agent([answer(), _terminal(), completion, answer(), _tool()])
+    events = _receive(agent)
+    texts = [event.output.text for event in events
+             if isinstance(event, OutputEvent) and isinstance(event.output, TextOutput)]
+    assert texts == ["Two plus two is four."]
+    call, = _calls(events)
+    assert call.name == "delegate_to_main"
+    assert call.user_transcript == "play a song"
+    assert isinstance(events[-1], TurnDoneEvent)
+    assert not events[-1].fallback_to_main
+    _assert_done(agent, events)
+
+
+@pytest.mark.parametrize("extended", [False, True])
+def test_fail_fast_preserves_request_and_explicitly_falls_back_for_extended(extended):
+    model = "gemini-3.8-live-extended-thinking" if extended else "gemini-3.1-flash-live-preview"
+    agent = _agent([], model=model)
+    agent._fail_fast_turn("test connection closed")
+    done = agent._recv_queue.get_nowait()
+    assert isinstance(done, TurnDoneEvent)
+    assert done.fallback_to_main is extended
+    assert not done.execution_completed
+    assert done.user_transcript == "play a song"
+    assert done.user_turn_id == "user-1"
+    assert agent._turn_done.is_set()
+    assert agent._recv_queue.empty()
+    agent._fail_fast_turn("duplicate close notification")
+    assert agent._recv_queue.empty()
 
 
 def test_grace_timeout_leaves_session_usable_without_replaying_frames():

@@ -29,6 +29,7 @@ class OutputTypeEnum(StrEnum):
     INTERRUPTED = "interrupted"
     USER_SPEECH = "user_speech"
     EXECUTION = "execution"
+    MAIN_AGENT_FALLBACK = "main_agent_fallback"
 
 
 class InputEventTypeEnum(StrEnum):

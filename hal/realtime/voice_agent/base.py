@@ -25,6 +25,7 @@ from hal.realtime.models import (
     UserSpeechOutput,
     ExecutionOutput,
     InterruptedOutput,
+    MainAgentFallbackOutput,
 )
 
 logger = logging.getLogger(__name__)
@@ -278,6 +279,18 @@ class VoiceAgentBase(ABC):
                         logger.info(
                             "[realtime] swallowed stale turn_complete from a cancelled turn"
                         )
+                        continue
+                    if event.fallback_to_main:
+                        # Spoken acknowledgement is not evidence the task ran.
+                        self.execution_completed = False
+                        self.execution_turn_id = event.user_turn_id
+                        turn_ended = stop_on_done
+                        yield MainAgentFallbackOutput(
+                            transcript=event.user_transcript,
+                            user_turn_id=event.user_turn_id,
+                        )
+                        if stop_on_done:
+                            break
                         continue
                     if stop_on_done:
                         self.execution_completed = event.execution_completed
