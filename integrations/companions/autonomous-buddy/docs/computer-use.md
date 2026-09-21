@@ -47,8 +47,8 @@ The skill helper exposes the endpoint:
 
 ```sh
 python3 scripts/buddy.py suggest --goal 'Focus the search field' --params '{"app":"Safari"}'
-# Alternatively supply a JSON file containing goal and optional app.
-python3 scripts/buddy.py suggest --params-file /tmp/buddy-suggestion.json
+# Alternatively supply a JSON params file containing optional app.
+python3 scripts/buddy.py suggest --goal 'Focus the search field' --params-file /tmp/buddy-suggestion.json
 ```
 
 Only invoke this optional path when trusted deployment information explicitly confirms it is enabled. Do not add a disabled-path request to every normal desktop step. Review the suggestion against the intended control, current goal, and user authorization before using `perform_ui_action` with its exact `snapshot_id`, `ref`, and `ui_action`. If there is insufficient evidence to identify the target, discard it and observe normally. When accepting a suggestion, do not fetch another tree before executing: that would invalidate its reference. Observe and verify after execution. On null, resume normal planning without retrying suggestions; connection, pause, permission, and timeout blockers still follow the skill's availability gate.
