@@ -1197,7 +1197,7 @@ Agent management trong workspace desktop Buddy riêng biệt với luồng này.
   trong `system/buddy/jev`, không thêm config. Đổi hằng số thành `false` và
   build/deploy lại để tắt. Khi bật, server lấy cây mới (thời hạn
   native 5000 ms), rồi chọn qua LLM proxy dùng chung `/jev/decisions` (timeout
-  inference 350 ms). Lấy cây làm mất hiệu lực reference snapshot trước đó.
+  inference tạm thời 3 giây để chẩn đoán; deadline tổng quan sát/quyết định 8 giây). Lấy cây làm mất hiệu lực reference snapshot trước đó.
   `data.suggestion` là null kèm lý do fallback hoặc object có `snapshot_id`,
   `ref`, `ui_action`. Khi chọn thành công, `data.target` (`role`, `title`,
   `description`) lấy từ node đã quan sát cho agent kiểm tra mà không lấy cây mới.

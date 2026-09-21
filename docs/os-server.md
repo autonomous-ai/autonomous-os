@@ -1211,7 +1211,7 @@ management in the separate Buddy desktop workspace is independent of this flow.
   ON (`Enabled = true`) in `system/buddy/jev`, with no new config. Set the constant
   to `false` and rebuild/deploy to disable it. When enabled, the server obtains
   a fresh tree (native deadline 5000 ms), then selects via the shared LLM proxy
-  `/jev/decisions` (350 ms inference timeout). Tree acquisition invalidates prior
+  `/jev/decisions` (temporary 3-second diagnostic inference timeout; 8-second total observation/decision deadline). Tree acquisition invalidates prior
   snapshot references. `data.suggestion` is null with a fallback reason or an
   object with `snapshot_id`, `ref`, `ui_action`. A selection also returns
   `data.target` (`role`, `title`, `description`) from the observed node for agent
