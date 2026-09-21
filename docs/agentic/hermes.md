@@ -1003,3 +1003,83 @@ would map them 1:1 and round-trip cleanly. (See the fold-vs-move rule in
 > [`adding-agent-runtime.md`](adding-agent-runtime.md) for the `AgentGateway`
 > contract, the install/presync pattern, migration, skills, hooks, reset, and the
 > full checklist.
+
+## 13. Optional Jev skill suggestions
+
+The OS-managed `jev` plugin suggests one installed skill before a
+Hermes user turn's first model call. It uses Hermes's `pre_llm_call` hook; it does
+not execute tools, load skills, select models, or filter memory. The returned
+context suggests `skill_view(name=...)`; Hermes must still assess relevance and
+follow normal permissions and mandatory connector/platform rules. The hint may
+remain in conversation context.
+
+### Installation on existing devices
+
+`runtimes/hermes/jev_plugin.go` embeds the Python plugin under
+`runtimes/hermes/plugins/jev/` into os-server. `EnsureOnboarding` reconciles it on
+OS startup and setup for a local Hermes installation with an existing
+`/root/.hermes/config.yaml`. Remote Hermes is skipped. Thus an existing device
+receives the plugin with its OS update; rerunning provisioning or installing a
+Python package separately is unnecessary.
+
+Go writes changed assets atomically to `/root/.hermes/plugins/jev/`
+and adds `jev` to `plugins.enabled` in Hermes's `config.yaml`, preserving
+other plugin settings and an explicit `plugins.disabled` entry. The generated
+`os-config-path.json` contains only the absolute path to the OS config, never an
+API key. Unchanged assets are not rewritten.
+
+Plugin installation or updates do **not** add a gateway restart reason. os-server
+logs that loading changed plugin code needs the next gateway restart; existing
+restart reasons elsewhere in onboarding remain unchanged. Enabling Jev requires
+changing the plugin constant, rebuilding os-server, syncing the plugin, and
+restarting Hermes to load it.
+
+### Configuration and proxy contract
+
+The plugin uses hardcoded defaults in `runtimes/hermes/plugins/jev/router.py`:
+
+```python
+ENABLED = False
+TIMEOUT_SECONDS = 0.350
+```
+
+There is no separate Hermes Jev config block or Go config type. These defaults
+are independent of `local_intent` and `jev_intent`. OFF bypasses even config
+reads, catalog lookup, and network requests.
+When enabled, the plugin reuses `llm_base_url` and `llm_api_key` for
+`POST {llm_base_url}/jev/decisions` with bearer authentication. There is no
+separate Jev key in `.env` and no direct-provider fallback. HTTPS is required,
+except HTTP on loopback for local tests. BFF must implement the proposed
+[Decisions contract](../os-server.md#jev-bff-contract); the plugin sends model
+`typesafe/jev-1.13`, a `skill` choice including `none`, and one `fit_<id>` noul
+question per candidate. The raw response must contain `answers`.
+
+Only the current user message and OS platform skill names/descriptions from
+Hermes's filtered live catalog are sent; only category `openclaw-imports` is
+eligible. Other bundled, authored, and plugin skill categories are excluded.
+Conversation history and skill bodies are not sent. Each candidate description
+is capped at 500 characters. If there are more than 32 eligible candidates, the
+router skips Jev entirely rather than truncating the catalog. Empty messages,
+messages over 8,000 UTF-8 bytes, and explicit `[skills:...]` selections also
+bypass the router. This is an advisory experiment for OS platform skills;
+normal Hermes discovery continues to handle other skills.
+
+A suggestion requires choice probability at least 0.90, a margin of at least
+0.40 over the runner-up, and fit at least 0.95. Uncertain or invalid decisions
+leave normal Hermes behavior unchanged. The decision wait is hardcoded to 350 ms; there are no retries or redirects. An error or timeout starts
+a 30-second cooldown. One worker per router is allowed; a busy router bypasses
+immediately. A timed-out worker may finish its request in the background, but
+its late result cannot inject a hint. Logs record outcome and decision time,
+not prompts or credentials.
+
+Local validation uses mocked proxy responses and temporary Hermes homes. It does
+not establish live Jev accuracy or latency improvements; compare OFF/ON on a
+device only after BFF support is available. No device deployment is required by
+the local checks.
+
+Focused local checks (Python plugin tests also run in CI):
+
+```bash
+go test -race -timeout 90s ./runtimes/hermes ./system/server/config ./system/intent/...
+python3 -B -m unittest discover -s runtimes/hermes/plugins/jev -p 'test_*.py' -v
+```
