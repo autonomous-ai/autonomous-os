@@ -751,6 +751,14 @@ simply absent.
 
 ### AGENTS.md rule block (device skills beat Hermes bundled skills)
 
+For a live connector request, `skills/connectors/SKILL.md` requires Discover
+in one terminal call immediately after loading the skill, before auxiliary
+skill reads such as `input-branching` for ordinary voice input. A successful
+check with no matching connector ends that service task with a short reply;
+unreadable or invalid config is a verification failure, not proof of absence.
+Explicit history-only routing still takes precedence. This is skill guidance,
+not a runtime latency guarantee.
+
 Hermes ships its own bundled skill catalog, and left alone it weighs those as
 equals of the device's platform skills — so any request both catalogs can serve
 may get routed to a bundled skill instead of the device one. Example: asked to

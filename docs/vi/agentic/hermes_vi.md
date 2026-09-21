@@ -728,6 +728,15 @@ Máy cài lần đầu được seed sẵn mục `## Personal` — **đúng từ
 openclaw/picoclaw/codex/opencode ghi — để chủ máy có chỗ viết mà OTA không ghi đè.
 
 **Block luật trong `AGENTS.md` (skill của máy thắng skill bundled của Hermes).**
+
+Với yêu cầu connector cần xử lý, `skills/connectors/SKILL.md` yêu cầu chạy
+Discover trong một lần gọi terminal ngay sau khi đọc skill, trước các lần đọc
+skill phụ như `input-branching` cho đầu vào giọng nói thông thường. Kiểm tra
+thành công nhưng không có connector phù hợp thì kết thúc tác vụ dịch vụ đó bằng
+câu trả lời ngắn; config không đọc được hoặc sai định dạng là lỗi xác minh,
+không phải bằng chứng chưa kết nối. Tag chỉ ghi lịch sử vẫn được ưu tiên xử lý.
+Đây là hướng dẫn skill, không phải cam kết độ trễ từ runtime.
+
 Hermes có catalog skill bundled riêng, và nếu để mặc định nó coi các skill đó ngang
 hàng với skill nền tảng của máy — nên request nào cả hai catalog cùng làm được có thể
 bị route sang skill bundled thay vì skill của máy. Ví dụ: được nhờ "gửi email", nó có
