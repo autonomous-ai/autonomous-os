@@ -347,11 +347,18 @@ Product-specific values live only in the device package. For example:
 ```text
 robots/lamp/overrides/pro/
   profile.json                # startup_volume 35, max_volume 35 (softvol -40..0 dB, 35 ≈ -26 dB; tuned by ear on lamp-0c4e 2026-09-21)
-  rootfs/opt/hal/.env          # XMOS AEC: software AEC off, Live on, uplink always
+  rootfs/opt/hal/.env          # Live OFF (Lite AEC residual too high for a live session), HAL canceller on, Silero 0.10 (measured trade-offs in the file)
   rootfs/etc/asound.conf       # ReSpeaker Lite dmix/dsnoop + softvol "Speaker", processed left input
   rootfs/etc/udev/rules.d/     # 90-respeaker-lite (start softvol oneshot when card appears), 91-pulseaudio (base list + Lite)
   rootfs/etc/systemd/system/   # respeaker-lite-softvol.service (creates the softvol control before hal)
+
+robots/lamp/overrides/pro-xvf3800/   # the earlier Pro assembly (reSpeaker XVF3800 4-mic array, card Array)
+  profile.json                # startup_volume 77, max_volume 77
+  rootfs/opt/hal/.env          # XMOS AEC: software AEC off, Live on, uplink always
+  rootfs/etc/asound.conf       # XVF3800 dmix/dsnoop, processed left input
 ```
+
+`pro-xvf3800` is kept selectable (`printf 'pro-xvf3800\n' > /etc/autonomous/hardware-profile`) so a return to the array is one line, not a git archaeology; the Lite build is `pro`.
 
 The Lamp Pro assembly uses the Seeed ReSpeaker Lite (XMOS XU316, USB `2886:0019`,
 ALSA card `Lite`): fixed S16_LE 2 ch 16 kHz both ways, processed audio on the
