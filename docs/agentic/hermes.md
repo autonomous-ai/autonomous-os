@@ -1050,7 +1050,7 @@ The plugin uses hardcoded defaults in `runtimes/hermes/plugins/jev/router.py`:
 
 ```python
 ENABLED = True
-TIMEOUT_SECONDS = 0.350
+TIMEOUT_SECONDS = 3.0
 ```
 
 There is no separate Hermes Jev config block or Go config type. These defaults
@@ -1058,35 +1058,71 @@ are independent of `local_intent` and `jev_intent`. OFF bypasses even config
 reads, catalog lookup, and network requests.
 When enabled, the plugin reuses `llm_base_url` and `llm_api_key` for
 `POST {llm_base_url}/jev/decisions` with bearer authentication. There is no
-separate Jev key in `.env` and no direct-provider fallback. HTTPS is required,
+separate Jev key in `.env` and no direct-provider fallback. Requests identify the client
+with `User-Agent: AutonomousOS-Jev/0.1`; the proxy edge rejects Python urllib's
+default signature with HTTP 403. HTTP failures log only the status code, never
+credentials or response bodies. HTTPS is required,
 except HTTP on loopback for local tests. BFF must support the compatible
 [Decisions contract](../os-server.md#jev-bff-contract); the plugin sends model
 `typesafe/jev-1.13`, a `skill` choice including `none`, and one `fit_<id>` noul
-question per candidate. The raw response must contain `answers`.
+question per candidate. The raw response must contain `answers`. Routing
+instructions prioritize the explicitly requested action over small talk,
+question/context modifiers, and proactive or supporting skills. Missing action
+parameters do not prevent routing: the selected skill can resolve them later.
 
-Only the current user message and OS platform skill names/descriptions from
-Hermes's filtered live catalog are sent; only category `openclaw-imports` is
-eligible. Other bundled, authored, and plugin skill categories are excluded.
-Conversation history and skill bodies are not sent. Each candidate description
-is capped at 500 characters. If there are more than 32 eligible candidates, the
-router skips Jev entirely rather than truncating the catalog. Empty messages,
-messages over 8,000 UTF-8 bytes, slash commands, and explicit `[skills:...]`
-selections also bypass the router. The catalog worker inherits the current
-Hermes context so session/platform skill filters still apply. This is an advisory experiment for OS platform skills;
-normal Hermes discovery continues to handle other skills.
+Only the current user message and OS platform skill names/descriptions are
+sent. The roster scans `skills/openclaw-imports` under the active Hermes home,
+using Hermes's native `agent.skill_utils` helpers: `iter_skill_index_files`,
+`parse_frontmatter`, `get_disabled_skill_names`, `skill_matches_platform`, and
+`skill_matches_environment`. This avoids `skills_list()` deduplication by first matching
+name hiding an OS skill behind a bundled skill with the same name. Other bundled,
+authored, and plugin skill categories are excluded. Metadata reads are bounded;
+conversation history and skill bodies are not sent. Each candidate description
+is capped at 500 characters. Suggested `skill_view` lookups use the qualified
+`openclaw-imports/<relative directory>` path to avoid name collisions.
 
-A suggestion requires choice probability at least 0.90, a margin of at least
-0.40 over the runner-up, and fit at least 0.95. Uncertain or invalid decisions
-leave normal Hermes behavior unchanged. The decision wait is hardcoded to 350 ms; there are no retries or redirects. An error or timeout starts
+If there are more than 32 eligible candidates, the router skips Jev entirely
+rather than truncating the catalog. Empty messages, messages over 8,000 UTF-8
+bytes, slash commands, and explicit `[skills:...]` selections also bypass the
+router. The catalog worker inherits the current Hermes context so
+session/platform skill filters still apply. This is an advisory experiment for
+OS platform skills; normal Hermes discovery continues to handle other skills.
+
+A suggestion requires choice probability at least 0.70, a margin of at least
+0.20 over the runner-up, and fit at least 0.60. These are provisional thresholds
+for advisory skill selection, not action authorization; skill and platform
+permission checks still apply. Buddy and OS intent thresholds remain unchanged
+at choice 0.90, margin 0.40, and fit 0.95. Uncertain or invalid decisions leave
+normal Hermes behavior unchanged. The decision wait is temporarily hardcoded to 3 seconds for proxy validation before latency tuning; there are no retries or redirects. An error or timeout starts
 a 30-second cooldown. One worker per router is allowed; a busy router bypasses
 immediately. A timed-out worker may finish its request in the background, but
-its late result cannot inject a hint. Logs record outcome and decision time,
-not prompts or credentials.
+its late result cannot inject a hint.
 
-Local validation uses mocked proxy responses and temporary Hermes homes. It does
-not establish live Jev accuracy or latency improvements; compare OFF/ON on a
-device using a compatible BFF endpoint. No device deployment is required by
-the local checks.
+Structured logs distinguish successful suggestions from valid abstentions and
+failures instead of grouping them as `deferred`:
+
+| Outcome | Meaning / reason |
+|---|---|
+| `suggested` | A valid decision passed all acceptance thresholds |
+| `abstained` | A valid decision selected `none` or failed `low_choice`, `low_margin`, or `low_fit` |
+| `error` | `http_error`, `network_error`, `invalid_json`, `response_too_large`, `provider_error`, `invalid_schema`, `catalog_error`, `thread_error`, or `config_error` |
+| `skipped` | `disabled`, `invalid_message`, `explicit_selection`, `unconfigured`, `cooldown`, `busy`, or `no_candidates` |
+| `timeout` | The decision wait budget expired |
+
+Logs include `decision_ms`, and `catalog_ms` / `request_ms` when available;
+`request_ms` measures the full proxy round trip, not model inference alone.
+Valid decisions include numeric `choice_probability`, `margin`, and `fit` where
+applicable. `candidate` records the qualified selected name even when a valid
+decision is rejected, or `none` when no skill was chosen; accepted suggestions
+also include `skill`. HTTP errors include `http_status`. Logs exclude prompts, credentials,
+response bodies, and exception text.
+
+Local validation uses mocked proxy responses and temporary Hermes homes. Neither
+these tests nor individual synthetic on-device probes establish live routing
+accuracy, coverage, or latency improvements. Compare OFF/ON on representative
+requests using the installed roster and a compatible BFF endpoint; do not treat
+synthetic probes as a benchmark. No device deployment is required by the local
+checks.
 
 Focused local checks (Python plugin tests also run in CI):
 
@@ -1107,16 +1143,17 @@ based on the [TypeSafe skill-suggestion cookbook](https://docs.typesafe.ai/cookb
 | Area | Reference plugin | OS plugin |
 |---|---|---|
 | Hook | `pre_llm_call`, returns optional user-message context | Same hook and return shape; no system-prompt modification |
-| Skill data | Filesystem roster; shortlist receives full descriptions and up to 700 body characters | Hermes-filtered `openclaw-imports` catalog only; descriptions may already be shortened by Hermes, no body text |
+| Skill data | Filesystem roster; shortlist receives full descriptions and up to 700 body characters | Bounded metadata from `openclaw-imports` files with native Hermes eligibility filters, descriptions capped at 500 characters, no body text; qualified skill lookup avoids name collisions |
 | Decision | Stage 1 ranks and gates skill need; stage 2 reranks a shortlist of 3 (per chunk) | One request with choice, `none`, and per-candidate fit |
 | Large catalogs | Splits into chunks of 240 choices | Skips when more than 32 eligible skills |
-| Acceptance | Catalog pin: gate 0.30 and winner fit 0.40; newer upstream also arbitrates disagreeing choice/fit signals | Choice 0.90, margin 0.40, fit 0.95; uncalibrated for this workload |
-| Latency | Default hook budget 10 seconds, answer cache and retry-capable client | 350 ms budget, no retries/cache, busy bypass and cooldown |
+| Acceptance | Catalog pin: gate 0.30 and winner fit 0.40; newer upstream also arbitrates disagreeing choice/fit signals | Choice 0.70, margin 0.20, fit 0.60; provisional advisory thresholds, uncalibrated for this workload |
+| Latency | Default hook budget 10 seconds, answer cache and retry-capable client | Temporary 3-second diagnostic budget, no retries/cache, busy bypass and cooldown |
 | Credentials | TypeSafe API with separate key | Shared OS proxy credentials |
 
 The OS implementation is a narrower experiment, not an equivalent implementation
-of the two-stage recipe. Its higher thresholds and shorter deadline may suppress
-useful suggestions; mock tests cannot establish routing accuracy or coverage.
+of the two-stage recipe. Its provisional thresholds and shorter deadline may suppress
+useful suggestions; mock tests and limited synthetic probes cannot establish
+calibrated routing accuracy or coverage.
 Do not transfer the reference's benchmark results to this plugin. To evaluate
 the enabled experiment, compare both policies on the same representative requests and installed roster,
 including unrelated chat, ambiguous skills, explicit commands, and Vietnamese.

@@ -10,6 +10,7 @@ import tempfile
 import threading
 import time
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 SPEC = importlib.util.spec_from_file_location("jev_router", Path(__file__).with_name("router.py"))
@@ -89,7 +90,7 @@ class RouterTest(unittest.TestCase):
         self.assertIn('skill_view(name="connectors")', hint["context"])
         self.assertIn("mandatory connectors", hint["context"])
         endpoint, key, timeout, payload = self.calls[0]
-        self.assertEqual((endpoint, key, timeout), ("https://proxy.test/v1/jev/decisions", "secret", .35))
+        self.assertEqual((endpoint, key, timeout), ("https://proxy.test/v1/jev/decisions", "secret", 3.0))
         self.assertNotIn("history", json.dumps(payload))
         self.config.write_text(json.dumps({"llm_base_url": "https://new-proxy.test", "llm_api_key": "rotated"}))
         self.assertIsNotNone(plugin.before_turn(user_message="read email"))
@@ -141,11 +142,178 @@ class RouterTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 router.parse_decision(result, {"skill_0": "connectors"})
         result = decision(payload)
-        result["answers"]["skill"]["probabilities"] = {"skill_0": .8, "none": .2}
+        result["answers"]["skill"]["probabilities"] = {"skill_0": .6, "none": .4}
         self.assertIsNone(router.parse_decision(result, {"skill_0": "connectors"}))
 
+    def test_advisory_confidence_boundaries_and_realistic_music(self):
+        candidates = [{"id": "skill_0", "description": "music: Play music matching the user's mood"},
+                      {"id": "skill_1", "description": "computer-use: Control desktop applications"}]
+        payload = router.payload_for("play music by that mood", candidates)
+        names = {"skill_0": "openclaw-imports/music", "skill_1": "openclaw-imports/computer-use"}
+        cases = (
+            ("thresholds", .70, .20, .10, .60, "suggested", "accepted"),
+            ("below_choice", .699, .201, .10, .68, "abstained", "low_choice"),
+            ("below_fit", .73, .17, .10, .599, "abstained", "low_fit"),
+            ("observed_music", .73, .17, .10, .68, "suggested", "accepted"),
+            ("ambiguous", .49, .48, .03, .68, "abstained", "low_choice"),
+        )
+        for label, selected, other, none, fit, outcome, reason in cases:
+            with self.subTest(case=label):
+                result = decision(payload)
+                result["answers"]["skill"]["probabilities"] = {
+                    "skill_0": selected, "skill_1": other, "none": none}
+                result["answers"]["fit_skill_0"]["noul"] = fit
+                evaluation = router.evaluate_decision(result, names)
+                self.assertEqual((evaluation["outcome"], evaluation["reason"]), (outcome, reason))
+                self.assertEqual(evaluation["selected"], names["skill_0"] if outcome == "suggested" else None)
+        result = decision(payload)
+        result["answers"]["skill"].update(
+            choice="none", probabilities={"skill_0": .20, "skill_1": .07, "none": .73})
+        evaluation = router.evaluate_decision(result, names)
+        self.assertEqual((evaluation["outcome"], evaluation["reason"], evaluation["selected"]),
+                         ("abstained", "none", None))
+
+    def test_margin_remains_an_independent_guard(self):
+        payload = router.payload_for("play music", [{"id": "skill_0", "description": "music"}])
+        result = decision(payload)
+        result["answers"]["skill"]["probabilities"] = {"skill_0": .55, "none": .45}
+        with patch.object(router, "MIN_CHOICE_PROBABILITY", .55):
+            evaluation = router.evaluate_decision(result, {"skill_0": "openclaw-imports/music"})
+        self.assertEqual((evaluation["outcome"], evaluation["reason"], evaluation["selected"]),
+                         ("abstained", "low_margin", None))
+
+    def test_valid_abstentions_are_distinct_and_do_not_cool_down(self):
+        for reason in ("none", "low_choice", "low_fit"):
+            with self.subTest(reason=reason):
+                def abstain(*args):
+                    result = decision(args[-1])
+                    choice = result["answers"]["skill"]
+                    if reason == "none":
+                        choice.update(choice="none", probabilities={"skill_0": .02, "none": .98})
+                    elif reason == "low_choice":
+                        choice["probabilities"] = {"skill_0": .6, "none": .4}
+                    else:
+                        result["answers"]["fit_skill_0"]["noul"] = .59
+                    return result
+                plugin = self.make(abstain)
+                with self.assertLogs(router.LOG, level="INFO") as captured:
+                    self.assertIsNone(plugin.before_turn(user_message="private user prompt"))
+                log = "\n".join(captured.output)
+                self.assertIn("outcome=abstained reason=" + reason, log)
+                self.assertIn("choice_probability=", log)
+                self.assertIn("request_ms=", log)
+                self.assertNotIn("private user prompt", log)
+                self.assertEqual(plugin.cooldown_until, 0)
+
+    def test_errors_are_distinct_sanitized_and_cool_down(self):
+        for reason in ("http_error", "invalid_schema", "catalog_error", "network_error"):
+            with self.subTest(reason=reason):
+                plugin = self.make()
+                if reason == "http_error":
+                    def rejected(*args):
+                        raise router.DecisionError("http_error", 403)
+                    plugin.request = rejected
+                elif reason == "invalid_schema":
+                    plugin.request = lambda *args: {"raw_body": "private response body"}
+                elif reason == "catalog_error":
+                    plugin.catalog = lambda: (_ for _ in ()).throw(RuntimeError("private catalog exception"))
+                else:
+                    plugin.request = lambda *args: (_ for _ in ()).throw(RuntimeError("private network exception"))
+                with self.assertLogs(router.LOG, level="INFO") as captured:
+                    self.assertIsNone(plugin.before_turn(user_message="private user prompt"))
+                log = "\n".join(captured.output)
+                self.assertIn("outcome=error reason=" + reason, log)
+                if reason == "http_error":
+                    self.assertIn("http_status=403", log)
+                for private in ("secret", "private user prompt", "private response body",
+                                "private catalog exception", "private network exception"):
+                    self.assertNotIn(private, log)
+                self.assertGreater(plugin.cooldown_until, time.monotonic())
+                with self.assertLogs(router.LOG, level="INFO") as captured:
+                    self.assertIsNone(plugin.before_turn(user_message="read email"))
+                self.assertIn("outcome=skipped reason=cooldown", "\n".join(captured.output))
+
+    def test_empty_catalog_skips_without_request_or_cooldown(self):
+        plugin = self.make()
+        plugin.catalog = lambda: []
+        with self.assertLogs(router.LOG, level="INFO") as captured:
+            self.assertIsNone(plugin.before_turn(user_message="play music"))
+        self.assertIn("outcome=skipped reason=no_candidates", "\n".join(captured.output))
+        self.assertEqual(self.calls, [])
+        self.assertEqual(plugin.cooldown_until, 0)
+
+    def test_choice_must_agree_with_probability_argmax(self):
+        payload = router.payload_for("email", [{"id": "skill_0", "description": "email"}])
+        result = decision(payload)
+        result["answers"]["skill"]["choice"] = "none"
+        with self.assertRaises(router.DecisionError) as error:
+            router.evaluate_decision(result, {"skill_0": "connectors"})
+        self.assertEqual(error.exception.reason, "invalid_schema")
+
+    def test_live_os_catalog_preserves_namespace_and_native_filters(self):
+        os_root = self.root / "skills" / "openclaw-imports"
+        metadata = {
+            "computer-use": {"name": "computer-use", "description": "Control the connected Mac", "platform": "allowed"},
+            "disabled-name": {"name": "disabled-name", "description": "Disabled by name"},
+            "disabled-path": {"name": "disabled-path", "description": "Disabled by qualified path"},
+            "wrong-platform": {"name": "wrong-platform", "description": "Wrong platform", "platform": "other"},
+            "missing-env": {"name": "missing-env", "description": "Missing environment", "env": False},
+        }
+        index_paths = []
+        for folder, value in metadata.items():
+            path = os_root / folder / "SKILL.md"
+            path.parent.mkdir(parents=True)
+            path.write_text(json.dumps(value))
+            index_paths.append(path)
+        # A bundled namesake must not win before the OS category is considered.
+        bundled = self.root / "skills" / "desktop" / "computer-use" / "SKILL.md"
+        bundled.parent.mkdir(parents=True)
+        bundled.write_text(json.dumps({"name": "computer-use", "description": "Bundled desktop"}))
+        support = os_root / "computer-use" / "references" / "example.md"
+        support.parent.mkdir()
+        support.write_text("Support document, not a skill")
+        platform = contextvars.ContextVar("native_catalog_platform", default="restricted")
+        seen_platforms = []
+
+        def matches_platform(frontmatter):
+            current = platform.get()
+            seen_platforms.append(current)
+            return frontmatter.get("platform", current) == current
+
+        def iterate(root, filename):
+            self.assertEqual((root, filename), (os_root, "SKILL.md"))
+            return iter(index_paths)
+
+        modules = {
+            "hermes_constants": SimpleNamespace(get_hermes_home=lambda: self.root),
+            "agent.skill_utils": SimpleNamespace(
+                get_disabled_skill_names=lambda: {"disabled-name", "openclaw-imports/disabled-path"},
+                iter_skill_index_files=iterate,
+                parse_frontmatter=lambda text: (json.loads(text), ""),
+                skill_matches_platform=matches_platform,
+                skill_matches_environment=lambda frontmatter: frontmatter.get("env", True)),
+        }
+        with patch.dict(sys.modules, modules):
+            token = platform.set("allowed")
+            try:
+                skills = router.live_skills()
+                self.assertEqual([skill["name"] for skill in skills], ["computer-use"])
+                self.assertEqual(skills[0]["lookup_name"], "openclaw-imports/computer-use")
+                self.assertEqual(skills[0]["description"], "Control the connected Mac")
+                candidates, names = router.candidates_for(skills)
+                self.assertEqual(names, {"skill_0": "openclaw-imports/computer-use"})
+                plugin = self.make()
+                plugin.catalog = router.live_skills
+                hint = plugin.before_turn(user_message="open Calculator on my Mac")
+                self.assertIn('skill_view(name="openclaw-imports/computer-use")', hint["context"])
+                self.assertTrue(seen_platforms)
+                self.assertEqual(set(seen_platforms), {"allowed"})
+            finally:
+                platform.reset(token)
+            self.assertEqual(router.live_skills(), [])
+
     def test_config_timeout_and_endpoint_validation(self):
-        self.assertEqual(router.read_config(self.pointer)[2], .35)
+        self.assertEqual(router.read_config(self.pointer)[2], 3.0)
         for base in ("http://remote.test", "https://u:p@proxy.test", "https://proxy.test?x=1", "https://proxy.test#"):
             config = json.loads(self.config.read_text())
             config["llm_base_url"] = base
@@ -188,6 +356,10 @@ class RouterTest(unittest.TestCase):
             def do_POST(self):
                 seen.append(self.path)
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                if self.headers.get("User-Agent") != "AutonomousOS-Jev/0.1":
+                    self.send_response(403)
+                    self.end_headers()
+                    return
                 if self.path == "/redirect":
                     self.send_response(302)
                     self.send_header("Location", "/must-not-follow")

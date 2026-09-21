@@ -232,7 +232,7 @@ func TestJevLocalProxyFailuresFallThroughAndDoNotRetry(t *testing.T) {
 				if slow {
 					select {
 					case <-r.Context().Done():
-					case <-time.After(time.Second):
+					case <-time.After(Budget + time.Second):
 					}
 					return
 				}
@@ -245,7 +245,7 @@ func TestJevLocalProxyFailuresFallThroughAndDoNotRetry(t *testing.T) {
 			if got := resolver.Suggest(context.Background(), "Press Continue", fixtureTree(), opts); got.Suggestion != nil {
 				t.Fatalf("failed request selected %+v", got)
 			}
-			if time.Since(started) >= 500*time.Millisecond {
+			if time.Since(started) >= Budget+500*time.Millisecond {
 				t.Fatal("proxy failure exceeded bounded fallback budget")
 			}
 			if resolver.Suggest(context.Background(), "Press Continue", fixtureTree(), opts).Suggestion != nil || calls.Load() != 1 {

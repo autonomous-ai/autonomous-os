@@ -70,7 +70,7 @@ func executeSuggestion(parent context.Context, req suggestionRequest, opts buddy
 	if parent.Err() != nil {
 		return buddyjev.Result{Reason: "cancelled"}
 	}
-	ctx, cancel := context.WithTimeout(parent, 6*time.Second)
+	ctx, cancel := context.WithTimeout(parent, 5*time.Second+buddyjev.Budget)
 	defer cancel()
 	params := map[string]any{"max_nodes": 150, "max_depth": 12}
 	if req.App != "" {
