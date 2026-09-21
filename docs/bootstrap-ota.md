@@ -346,7 +346,7 @@ Product-specific values live only in the device package. For example:
 
 ```text
 robots/lamp/overrides/pro/
-  profile.json                # startup_volume 77, max_volume 77
+  profile.json                # startup_volume 35, max_volume 35 (softvol -40..0 dB, 35 ≈ -26 dB; tuned by ear on lamp-0c4e 2026-09-21)
   rootfs/opt/hal/.env          # XMOS AEC: software AEC off, Live on, uplink always
   rootfs/etc/asound.conf       # ReSpeaker Lite dmix/dsnoop + softvol "Speaker", processed left input
   rootfs/etc/udev/rules.d/     # 90-respeaker-lite (start softvol oneshot when card appears), 91-pulseaudio (base list + Lite)
@@ -359,7 +359,7 @@ left channel; its speaker must be wired through the Lite. The card has no ALSA
 mixer, so speaker volume is an ALSA softvol stage that only exists after the
 first PCM open — a udev-triggered oneshot opens it before `hal.service` so the
 boot volume restore has a control to write. The tested
-77% tuning is specific to that assembly, not an acoustic equivalence across
+35% tuning is specific to that assembly, not an acoustic equivalence across
 devices. Standard Lamp's existing files, defaults and ceiling remain unchanged.
 The renderer does not detect, flash or retune the attached hardware.
 
