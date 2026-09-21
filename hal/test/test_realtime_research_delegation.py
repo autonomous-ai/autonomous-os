@@ -16,6 +16,8 @@ PROMPTS = [
     "system_prompt_openai.md",
     "system_prompt_gemini.md",
     "system_prompt_pipecat.md",
+    # GPT-Live is two-stage: the voice half delegates, its backend half searches.
+    "system_prompt_gptlive.md",
 ]
 
 
@@ -27,10 +29,11 @@ def test_prompt_delegates_research_analysis_and_documents(name):
     assert "report" in text
 
 
-# The prompt that can search in-session: the boundary has to be stated there,
-# next to the grounding rule itself.
-def test_search_grounding_bullet_excludes_multi_step_work():
-    text = (RESOURCES_DIR / "system_prompt_gemini.md").read_text(encoding="utf-8")
+# The prompts that can search in-session: the boundary has to be stated there,
+# next to the grounding / web_search rule itself.
+@pytest.mark.parametrize("name", ["system_prompt_gemini.md", "system_prompt_gptlive_backend.md"])
+def test_search_grounding_bullet_excludes_multi_step_work(name):
+    text = (RESOURCES_DIR / name).read_text(encoding="utf-8")
     assert "Single facts only" in text
 
 

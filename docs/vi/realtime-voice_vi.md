@@ -70,8 +70,10 @@ so sánh, "nên chọn phương án nào", brainstorm, bất cứ gì kết thú
 cáo hay tài liệu — không phải là tra cứu, và trả lời nó bằng hai câu nói chính
 là lỗi mà quy tắc này loại bỏ. Nó nằm ở bullet **Research, analysis &
 documents** trong mọi prompt provider và một câu trong mô tả `delegate_to_main`
-dùng chung; bullet Google Search của Gemini mang thêm ranh giới "single facts
-only", vì đó là prompt duy nhất tìm kiếm được ngay trong phiên. Main agent xử lý
+dùng chung. Hai prompt tìm kiếm được ngay trong phiên mang thêm ranh giới
+"single facts only" ngay cạnh quy tắc tìm kiếm của chúng: bullet Google Search
+của Gemini, và quy tắc `web_search` ở tầng **backend** của GPT-Live (tầng voice
+không có tìm kiếm nên chỉ delegate). Main agent xử lý
 tiếp thế nào là việc của nó — có thể đã cài một skill research, cũng có thể trả
 lời trong khả năng và nói rõ phần nào chưa kiểm chứng được; kiểu gì việc đó cũng
 thuộc lane chính. `hal/test/test_realtime_research_delegation.py` pin phần text
